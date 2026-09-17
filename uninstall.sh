@@ -54,7 +54,7 @@ else
 fi
 
 if [[ -f "${LOCAL_SETTINGS}" ]]; then
-    BACKUP_DIR="${TEC_TAC_BACKUP_DIR:-${REPO_ROOT}/backups}"
+    BACKUP_DIR="${TEC_TAC_BACKUP_DIR:-/var/lib/tec-tac/backups}"
     mkdir -p "${BACKUP_DIR}"
     BACKUP_FILE="${BACKUP_DIR}/local_settings.py.$(date +%Y%m%dT%H%M%S).uninstall.bak"
     cp -a "${LOCAL_SETTINGS}" "${BACKUP_FILE}"
@@ -103,9 +103,11 @@ for svc in rmm daphne celery celerybeat; do
 done
 
 log "Uninstall complete."
+log "Bootstrap removed from Tactical local_settings.py."
 if ${PURGE_DATA}; then
-    log "Extension tables and data were removed."
+    log "Database migrations rolled back; extension tables and data were removed."
 else
-    log "Extension database tables and data were preserved."
+    log "Database tables and data were preserved."
 fi
-log "Repository files were left intact at ${REPO_ROOT}."
+log "Repository preserved: ${REPO_ROOT}"
+log "Persistent backups: ${TEC_TAC_BACKUP_DIR:-/var/lib/tec-tac/backups}"

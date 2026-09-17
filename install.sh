@@ -39,8 +39,24 @@ log "Detected Tec-Tac repository root: ${REPO_ROOT}"
 [[ -d "${TACTICAL_ROOT}/.git" ]] || fail "${TACTICAL_ROOT} is not a Tactical RMM Git checkout."
 [[ -f "${MANAGE_PY}" ]] || fail "Tactical manage.py was not found at ${MANAGE_PY}."
 [[ -x "${VENV_PYTHON}" ]] || fail "Tactical Python was not found at ${VENV_PYTHON}."
-[[ -f "${FRAMEWORK_DIR}/tec_tac/bootstrap.py" ]] || fail "Installer payload is missing ${FRAMEWORK_DIR}/tec_tac/bootstrap.py."
-[[ -f "${APP_DIR}/apps.py" ]] || fail "Installer payload is missing ${APP_DIR}/apps.py."
+REQUIRED_FILES=(
+    "${FRAMEWORK_DIR}/tec_tac/__init__.py"
+    "${FRAMEWORK_DIR}/tec_tac/bootstrap.py"
+    "${APP_DIR}/__init__.py"
+    "${APP_DIR}/apps.py"
+    "${APP_DIR}/models.py"
+    "${APP_DIR}/rbac.py"
+    "${APP_DIR}/serializers.py"
+    "${APP_DIR}/views.py"
+    "${APP_DIR}/urls.py"
+    "${APP_DIR}/migrations/0001_initial.py"
+    "${APP_DIR}/migrations/0002_extensionrolepermission.py"
+    "${APP_DIR}/migrations/0003_networkavailability_ingest_hardening.py"
+)
+for required_file in "${REQUIRED_FILES[@]}"; do
+    [[ -f "${required_file}" ]] || fail "Installer payload is missing ${required_file}."
+done
+log "Preflight repository layout: OK"
 [[ -f "${LOCAL_SETTINGS}" ]] || fail "Tactical local_settings.py was not found at ${LOCAL_SETTINGS}."
 [[ -f "${BACKEND_DIR}/ee/reporting/constants.py" ]] || fail "Tactical Report Manager (ee.reporting) was not found."
 
@@ -70,7 +86,7 @@ log "Confirmed local_settings.py is ignored by Tactical Git."
 # ownership. This is intentionally limited to read/execute permissions.
 chmod -R a+rX "${FRAMEWORK_DIR}" "${REPORTING_DIR}"
 
-BACKUP_DIR="${TEC_TAC_BACKUP_DIR:-${REPO_ROOT}/backups}"
+BACKUP_DIR="${TEC_TAC_BACKUP_DIR:-/var/lib/tec-tac/backups}"
 mkdir -p "${BACKUP_DIR}"
 BACKUP_FILE="${BACKUP_DIR}/local_settings.py.$(date +%Y%m%dT%H%M%S).bak"
 cp -a "${LOCAL_SETTINGS}" "${BACKUP_FILE}"

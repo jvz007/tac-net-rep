@@ -1,6 +1,6 @@
 # Tec-Tac Tactical RMM Extension POC
 
-Version **0.5.0** restructures the POC so Tec-Tac code no longer lives inside the Tactical RMM Git checkout.
+Version **0.5.1** restructures the POC so Tec-Tac code no longer lives inside the Tactical RMM Git checkout.
 
 The repository itself is the Tec-Tac runtime root. The scripts do **not** require the repository to be installed at a hardcoded path. `/opt/tec-tac` is the recommended location only.
 
@@ -76,7 +76,7 @@ The installer:
 1. discovers the Tec-Tac repository root from `install.sh`;
 2. validates the framework and reporting extension layout;
 3. verifies Tactical's `local_settings.py` is Git-ignored;
-4. backs up `local_settings.py`;
+4. backs up `local_settings.py` to `/var/lib/tec-tac/backups/` by default;
 5. writes only the minimal bootstrap using the resolved framework path;
 6. loads framework and extension code directly from the Git checkout;
 7. runs Django checks and migrations;
@@ -85,7 +85,42 @@ The installer:
 10. removes any legacy in-tree `/rmm/api/tacticalrmm/tfdreporting` copy and old Git exclude rule after successful verification;
 11. restarts Tactical services.
 
-The installer does not copy Tec-Tac code into another installation directory.
+The installer does not copy Tec-Tac code into another installation directory. Mutable backups are kept outside the Git checkout so `git clean -fd` cannot delete them.
+
+
+## Test scripts
+
+Version 0.5.1 adds reusable tests under `tests/`.
+
+Server-side framework/reporting verification:
+
+```bash
+cd /opt/tec-tac
+sudo bash tests/network-reporting-server.sh
+```
+
+API ingestion/idempotency/validation smoke test:
+
+```bash
+cd /opt/tec-tac
+export TEC_TAC_API_BASE="https://api.example.com"
+export TEC_TAC_API_KEY="<Tactical API key with reporting manage permission>"
+bash tests/network-reporting-api.sh
+unset TEC_TAC_API_KEY
+```
+
+The API test creates one valid `NetworkAvailability` row using a unique idempotency key, verifies exact replay behavior, then checks conflict and validation responses. The API key is read only from the environment and must not be committed to the repository.
+
+## Persistent state
+
+Tec-Tac source code stays in the Git checkout. Mutable state is stored separately:
+
+```text
+<repo-root>/                 Git-managed code
+/var/lib/tec-tac/backups/    local_settings.py backups
+```
+
+Set `TEC_TAC_BACKUP_DIR` when running install/uninstall if a different backup directory is required.
 
 ## What remains from v0.4.1
 
