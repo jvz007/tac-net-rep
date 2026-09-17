@@ -61,6 +61,11 @@ class NetworkAvailabilitySerializer(serializers.ModelSerializer):
             "received_at",
         )
         read_only_fields = ("id", "ingested_by", "received_at")
+        # Disable DRF's auto-generated UniqueTogetherValidator for
+        # source + idempotency_key. Idempotency semantics are handled by
+        # the view so exact replays can return 200 and conflicts can return 409.
+        # The database uniqueness constraint remains the race-condition guard.
+        validators = []
 
     def _strip_required_text(self, value, field_name):
         value = value.strip()

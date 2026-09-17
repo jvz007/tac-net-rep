@@ -2,7 +2,24 @@
 
 Upgrade-safe Django extension framework for Tactical RMM Report Manager.
 
-Current package version: **0.4.0**.
+Current package version: **0.4.1**.
+
+
+## v0.4.1 — idempotency replay fix
+
+This patch fixes an interaction between Django REST Framework and the database-level `source + idempotency_key` uniqueness constraint discovered during live POC testing.
+
+DRF automatically generated a uniqueness validator from the model constraint and returned `400 Bad Request` before the view could apply the intended idempotency semantics. The serializer now disables that automatic validator. The view remains responsible for distinguishing an exact replay from a conflicting reuse of the same key, while PostgreSQL keeps the uniqueness constraint as the final race-condition guard.
+
+Expected behaviour is now:
+
+```text
+first source/key/payload                  -> 201 Created
+exact replay of same source/key/payload   -> 200 OK + X-TFD-Idempotent-Replay: true
+same source/key with different payload    -> 409 Conflict
+```
+
+No database migration is required for v0.4.1.
 
 ## v0.4.0 — ingestion hardening
 
