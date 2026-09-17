@@ -2,7 +2,7 @@
 
 Upgrade-safe Django extension framework for Tactical RMM Report Manager.
 
-Current package version: **0.2.0**.
+Current package version: **0.2.1**.
 
 ## What this does
 
@@ -12,6 +12,20 @@ The installer adds the `tfdreporting` Django app without modifying Tactical's tr
 - `tacticalrmm/local_settings.py` is already ignored by Tactical and is used to install a small Django app-registry hook.
 
 The app's `AppConfig.ready()` extends Tactical Report Manager's in-memory model registry, so `ee/reporting/constants.py` remains untouched.
+
+
+## Version 0.2.1 installer hardening
+
+This version keeps the 0.2.0 RBAC POC unchanged and hardens the upgrade path discovered during the manual-to-repository migration test.
+
+Changes:
+
+- validates that the managed TFD loader markers are either absent or present as exactly one matching pair;
+- detects the legacy unmarked `_tfd_populate` / `Apps.populate = _tfd_populate` POC hook and fails safely instead of stacking another loader;
+- verifies that exactly one managed loader block exists after writing `local_settings.py`;
+- restores the pre-install `local_settings.py` backup if post-write marker verification fails;
+- verifies that `NetworkAvailability` remains queryable and reports its row count during installer verification;
+- repository shell scripts are shipped with normal executable/readable mode (`0755`).
 
 ## Version 0.2.0 security POC
 
@@ -62,12 +76,13 @@ The installer:
 2. detects the Tactical service user from `rmm.service`;
 3. protects `/rmm/api/tacticalrmm/tfdreporting/` in `.git/info/exclude`;
 4. backs up `local_settings.py`;
-5. installs/updates the TFD loader block;
-6. installs the Django app;
-7. runs `manage.py check`;
-8. runs the app migrations;
-9. verifies the reporting model, RBAC model, registered TFD permissions, and Tactical Report Manager resolution;
-10. restarts and validates `rmm`, `daphne`, `celery`, and `celerybeat`.
+5. validates existing TFD loader state and refuses unsafe legacy/malformed hooks;
+6. installs/updates exactly one managed TFD loader block;
+7. installs the Django app;
+8. runs `manage.py check`;
+9. runs the app migrations;
+10. verifies the reporting model, RBAC model, registered TFD permissions, Tactical Report Manager resolution, and current `NetworkAvailability` row count;
+11. restarts and validates `rmm`, `daphne`, `celery`, and `celerybeat`.
 
 Backups of `local_settings.py` are kept under `/opt/tfd-tactical/backups/`, outside Tactical's Git checkout.
 

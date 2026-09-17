@@ -78,6 +78,16 @@ BACKUP_FILE="${BACKUP_DIR}/local_settings.py.$(date +%Y%m%dT%H%M%S).bak"
 cp -a "${LOCAL_SETTINGS}" "${BACKUP_FILE}"
 log "Backed up local_settings.py to ${BACKUP_FILE}."
 
+# Validate the loader state before modifying local_settings.py. Older POC builds
+# used an unmarked _tfd_populate hook. Stacking another hook on top of that can
+# recurse indefinitely, so fail safely and require the legacy hook to be removed.
+BEGIN_COUNT="$(grep -Fxc "${BEGIN_MARKER}" "${LOCAL_SETTINGS}" || true)"
+END_COUNT="$(grep -Fxc "${END_MARKER}" "${LOCAL_SETTINGS}" || true)"
+
+if [[ "${BEGIN_COUNT}" -ne "${END_COUNT}" ]] || [[ "${BEGIN_COUNT}" -gt 1 ]]; then
+    fail "Malformed TFD loader markers in ${LOCAL_SETTINGS}. Expected zero or one matching marker pair. Restore the backup and inspect the file before retrying."
+fi
+
 TMP_SETTINGS="$(mktemp)"
 trap 'rm -f "${TMP_SETTINGS}"' EXIT
 
@@ -86,6 +96,10 @@ awk -v begin="${BEGIN_MARKER}" -v end="${END_MARKER}" '
     $0 == end {skip=0; next}
     !skip {print}
 ' "${LOCAL_SETTINGS}" > "${TMP_SETTINGS}"
+
+if grep -Eq '(^|[^[:alnum:]_])_tfd_populate([^[:alnum:]_]|$)|Apps\.populate[[:space:]]*=[[:space:]]*_tfd_populate' "${TMP_SETTINGS}"; then
+    fail "Legacy unmarked TFD loader detected in ${LOCAL_SETTINGS}. Remove the old _tfd_populate/Apps.populate hook before rerunning this installer. Backup: ${BACKUP_FILE}"
+fi
 
 cat >> "${TMP_SETTINGS}" <<'PYEOF'
 
@@ -115,6 +129,14 @@ PYEOF
 
 cat "${TMP_SETTINGS}" > "${LOCAL_SETTINGS}"
 chown "${TACTICAL_USER}:${TACTICAL_GROUP}" "${LOCAL_SETTINGS}"
+
+POST_BEGIN_COUNT="$(grep -Fxc "${BEGIN_MARKER}" "${LOCAL_SETTINGS}" || true)"
+POST_END_COUNT="$(grep -Fxc "${END_MARKER}" "${LOCAL_SETTINGS}" || true)"
+if [[ "${POST_BEGIN_COUNT}" -ne 1 ]] || [[ "${POST_END_COUNT}" -ne 1 ]]; then
+    cp -a "${BACKUP_FILE}" "${LOCAL_SETTINGS}"
+    chown "${TACTICAL_USER}:${TACTICAL_GROUP}" "${LOCAL_SETTINGS}"
+    fail "TFD loader verification failed after writing local_settings.py. The previous file was restored."
+fi
 log "Installed/updated the TFD loader in local_settings.py."
 
 STAGE_DIR="$(mktemp -d)"
@@ -133,7 +155,7 @@ log "Applying ${APP_NAME} migrations."
 run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' migrate '${APP_NAME}' --noinput"
 
 log "Verifying Django model and Tactical Report Manager registration."
-VERIFY_CODE="from django.apps import apps; m=apps.get_model('${APP_NAME}','${MODEL_NAME}'); p=apps.get_model('${APP_NAME}','ExtensionRolePermission'); from ee.reporting.utils import resolve_model; r=resolve_model(data_source={'model':'${MODEL_NAME}'}); assert r['model'] is m; from tfdreporting.rbac import REGISTERED_PERMISSIONS; assert len(REGISTERED_PERMISSIONS) >= 2; print('TFD verification OK:', m._meta.label, p._meta.label, sorted(REGISTERED_PERMISSIONS))"
+VERIFY_CODE="from django.apps import apps; m=apps.get_model('${APP_NAME}','${MODEL_NAME}'); p=apps.get_model('${APP_NAME}','ExtensionRolePermission'); from ee.reporting.utils import resolve_model; r=resolve_model(data_source={'model':'${MODEL_NAME}'}); assert r['model'] is m; from tfdreporting.rbac import REGISTERED_PERMISSIONS; assert len(REGISTERED_PERMISSIONS) >= 2; c=m.objects.count(); print('TFD verification OK:', m._meta.label, p._meta.label, sorted(REGISTERED_PERMISSIONS), 'network_rows=', c)"
 run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_CODE}\""
 
 log "Restarting Tactical Django/reporting services."
