@@ -168,18 +168,86 @@ VERIFY_CODE="import tfdreporting; from django.apps import apps; from django.urls
 run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_CODE}\""
 
 # Optional reporting permission assignment. Permissions are stored against the
-# Tactical role used by the named user, not against the user directly.
+# Tactical role used by the named user, not against the user directly. Existing
+# granted manage permissions are kept by default on repeat installs.
 REPORTING_USERNAME="${TEC_TAC_REPORTING_USERNAME:-}"
-if [[ -z "${REPORTING_USERNAME}" && -t 0 ]]; then
-    printf '[TEC-TAC] Tactical username to grant reporting ingest permission (leave blank to skip): '
-    read -r REPORTING_USERNAME
-fi
+EXISTING_PERMISSION_CODE=$(cat <<'PYEOF'
+from django.contrib.auth import get_user_model
+from tfdreporting.models import ExtensionRolePermission
+from tfdreporting.rbac import PERMISSION_NETWORK_AVAILABILITY_MANAGE
+
+rows = list(
+    ExtensionRolePermission.objects.filter(
+        codename=PERMISSION_NETWORK_AVAILABILITY_MANAGE,
+        granted=True,
+    ).order_by("role_id")
+)
+
+users_by_role = {}
+role_names = {}
+for user in get_user_model().objects.all().order_by("username"):
+    try:
+        role = user.get_and_set_role_cache()
+    except Exception:
+        continue
+    if not role:
+        continue
+    role_id = int(role.id)
+    role_names[role_id] = str(role.name)
+    users_by_role.setdefault(role_id, []).append(str(user.username))
+
+for row in rows:
+    role_id = int(row.role_id)
+    role_name = role_names.get(role_id, "unknown")
+    usernames = ",".join(users_by_role.get(role_id, ())) or "none"
+    print(f"FOUND|{role_id}|{role_name}|{usernames}")
+PYEOF
+)
+
+EXISTING_PERMISSIONS="$(run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell" <<< "${EXISTING_PERMISSION_CODE}")"
 
 if [[ -n "${REPORTING_USERNAME}" ]]; then
     log "Granting reporting ingest permission using Tactical user '${REPORTING_USERNAME}'."
     bash "${REPO_ROOT}/scripts/reporting-permission.sh" "${REPORTING_USERNAME}" manage
+elif [[ -n "${EXISTING_PERMISSIONS}" ]]; then
+    log "Existing reporting ingest permission assignment(s) found:"
+    while IFS='|' read -r marker role_id role_name usernames; do
+        [[ "${marker}" == "FOUND" ]] || continue
+        log "Role: ${role_name} (id=${role_id}); users: ${usernames}"
+    done <<< "${EXISTING_PERMISSIONS}"
+
+    CHANGE_PERMISSION="n"
+    if [[ -t 0 ]]; then
+        printf '[TEC-TAC] Change/add reporting ingest permission assignment? [y/N]: '
+        read -r CHANGE_PERMISSION
+    fi
+
+    case "${CHANGE_PERMISSION}" in
+        y|Y|yes|YES|Yes)
+            printf '[TEC-TAC] Tactical username whose role should receive reporting ingest permission: '
+            read -r REPORTING_USERNAME
+            if [[ -n "${REPORTING_USERNAME}" ]]; then
+                log "Granting reporting ingest permission using Tactical user '${REPORTING_USERNAME}'."
+                bash "${REPO_ROOT}/scripts/reporting-permission.sh" "${REPORTING_USERNAME}" manage
+            else
+                log "No username entered; existing reporting permission assignment(s) kept unchanged."
+            fi
+            ;;
+        *)
+            log "Keeping existing reporting permission assignment(s) unchanged."
+            ;;
+    esac
+elif [[ -t 0 ]]; then
+    printf '[TEC-TAC] Tactical username to grant reporting ingest permission (leave blank to skip): '
+    read -r REPORTING_USERNAME
+    if [[ -n "${REPORTING_USERNAME}" ]]; then
+        log "Granting reporting ingest permission using Tactical user '${REPORTING_USERNAME}'."
+        bash "${REPO_ROOT}/scripts/reporting-permission.sh" "${REPORTING_USERNAME}" manage
+    else
+        log "Reporting permission assignment skipped."
+    fi
 else
-    log "Reporting permission assignment skipped."
+    log "No existing reporting ingest permission found and no unattended username supplied; permission assignment skipped."
 fi
 
 # Remove any old in-tree extension copy only after the repository-loaded copy

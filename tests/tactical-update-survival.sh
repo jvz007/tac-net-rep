@@ -16,7 +16,7 @@ TACTICAL_USER="$(systemctl show rmm.service -p User --value 2>/dev/null || true)
 [[ -n "${TACTICAL_USER}" ]] || { echo '[TEST] FAIL could not determine Tactical service user' >&2; exit 1; }
 
 verify_now() {
-    git -C "${TACTICAL_ROOT}" check-ignore -q "api/tacticalrmm/tacticalrmm/local_settings.py" || { echo '[TEST] FAIL local_settings.py is not ignored' >&2; exit 1; }
+    runuser -u "${TACTICAL_USER}" -- git -C "${TACTICAL_ROOT}" check-ignore -q "api/tacticalrmm/tacticalrmm/local_settings.py" || { echo '[TEST] FAIL local_settings.py is not ignored' >&2; exit 1; }
     grep -Fq '# BEGIN TEC-TAC EXTENSION FRAMEWORK' "${LOCAL_SETTINGS}" || { echo '[TEST] FAIL bootstrap marker missing' >&2; exit 1; }
     CODE="import tfdreporting; assert tfdreporting.__file__.startswith('${REPO_ROOT}/extensions/reporting/'); print(tfdreporting.__file__)"
     runuser -u "${TACTICAL_USER}" -- bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${CODE}\""

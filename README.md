@@ -1,6 +1,6 @@
 # Tec-Tac Tactical RMM Extension Framework
 
-Version **0.5.4** finishes the current framework-foundation pass. Tec-Tac now has a validated convention for paired **extensions** and **reportsets**, reusable manifests/templates, plugin inspection and scaffolding tools, and lifecycle/upgrade-safety tests.
+Version **0.5.5** finishes the current framework-foundation pass and hardens repeat-install permission handling and upgrade-safety checks. Tec-Tac now has a validated convention for paired **extensions** and **reportsets**, reusable manifests/templates, plugin inspection and scaffolding tools, and lifecycle/upgrade-safety tests.
 
 The repository itself is the runtime root. It may be cloned anywhere; `/opt/tec-tac` is only the recommended location.
 
@@ -51,7 +51,7 @@ reportsets/networkprobe/
 └── device_health.py
 ```
 
-For convention-based plugins in 0.5.4, both sides of the pair are required. An orphan reportset or an extension without its matching reportset is rejected by the registry.
+For convention-based plugins in 0.5.5, both sides of the pair are required. An orphan reportset or an extension without its matching reportset is rejected by the registry.
 
 ## Plugin manifests
 
@@ -217,7 +217,7 @@ The scaffold contains no Django apps by default. Add implementation packages and
 
 ## Reporting permission management
 
-During an interactive install, Tec-Tac can ask for a Tactical username whose **role** should receive reporting ingest permission.
+During installation, Tec-Tac first checks whether the reporting ingest `manage` permission is already granted to one or more Tactical roles. Existing assignments are displayed and kept by default, so repeat installs do not require entering the same username again. If no assignment exists, an interactive install asks for a Tactical username whose **role** should receive the permission. You can also choose to add/change an assignment when an existing one is detected.
 
 After installation:
 
@@ -331,4 +331,4 @@ The uninstaller never deletes the Git checkout.
 
 ## Foundation status
 
-0.5.4 is still a foundation release. No new non-agent monitoring functionality is introduced here. The next functional work should consume this framework rather than modifying Tactical tracked source.
+0.5.5 is still a foundation release. No new non-agent monitoring functionality is introduced here. The next functional work should consume this framework rather than modifying Tactical tracked source.
