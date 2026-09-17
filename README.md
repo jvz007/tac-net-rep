@@ -2,14 +2,31 @@
 
 Upgrade-safe Django extension framework for Tactical RMM Report Manager.
 
+Current package version: **0.2.0**.
+
 ## What this does
 
-The installer adds the `tfdreporting` Django app without modifying Tactical's tracked source files. It relies on two persistence points that were validated against a real `update.sh --force` run on Tactical RMM 1.5.2:
+The installer adds the `tfdreporting` Django app without modifying Tactical's tracked source files. It relies on two persistence points that were validated against real `update.sh --force` runs on Tactical RMM 1.5.2:
 
 - `/rmm/.git/info/exclude` protects the custom app directory from Tactical's `git clean -df` update step.
 - `tacticalrmm/local_settings.py` is already ignored by Tactical and is used to install a small Django app-registry hook.
 
 The app's `AppConfig.ready()` extends Tactical Report Manager's in-memory model registry, so `ee/reporting/constants.py` remains untouched.
+
+## Version 0.2.0 security POC
+
+This version adds a TFD extension RBAC layer without modifying Tactical's `accounts.Role` model or frontend.
+
+It provides two registered permissions:
+
+```text
+tfdreporting.networkavailability.list
+tfdreporting.networkavailability.manage
+```
+
+Permissions are attached to an existing Tactical Role ID through the TFD-owned `ExtensionRolePermission` model.
+
+Authentication remains Tactical's responsibility. The RBAC helper is intended to be used by future TFD API endpoints after Tactical has authenticated the request and populated `request.user`.
 
 ## Repository layout
 
@@ -22,20 +39,22 @@ The app's `AppConfig.ready()` extends Tactical Report Manager's in-memory model 
     ├── __init__.py
     ├── apps.py
     ├── models.py
+    ├── rbac.py
     └── migrations/
         ├── __init__.py
-        └── 0001_initial.py
+        ├── 0001_initial.py
+        └── 0002_extensionrolepermission.py
 ```
 
 ## Install / upgrade
 
-Clone the repository onto the Tactical server and run:
+Clone or update the repository on the Tactical server and run:
 
 ```bash
 sudo ./install.sh
 ```
 
-Running `install.sh` again updates the app code and loader idempotently.
+Running `install.sh` again updates the app code and loader idempotently. Existing Django data is preserved; migrations apply only the schema changes required by the newer extension version.
 
 The installer:
 
@@ -47,10 +66,107 @@ The installer:
 6. installs the Django app;
 7. runs `manage.py check`;
 8. runs the app migrations;
-9. verifies that Tactical Report Manager resolves `NetworkAvailability`;
+9. verifies the reporting model, RBAC model, registered TFD permissions, and Tactical Report Manager resolution;
 10. restarts and validates `rmm`, `daphne`, `celery`, and `celerybeat`.
 
 Backups of `local_settings.py` are kept under `/opt/tfd-tactical/backups/`, outside Tactical's Git checkout.
+
+## Security POC management from Django shell
+
+Open the Tactical Django shell:
+
+```bash
+cd /rmm/api/tacticalrmm
+source /rmm/api/env/bin/activate
+python manage.py shell
+```
+
+List Tactical roles:
+
+```python
+from accounts.models import Role
+list(Role.objects.values("id", "name"))
+```
+
+Import the TFD RBAC helpers:
+
+```python
+from tfdreporting.rbac import (
+    PERMISSION_NETWORK_AVAILABILITY_LIST,
+    PERMISSION_NETWORK_AVAILABILITY_MANAGE,
+    get_role_permissions,
+    grant_extension_permission,
+    revoke_extension_permission,
+)
+```
+
+Choose an existing Tactical role:
+
+```python
+role = Role.objects.get(name="TFD Reporting Ingest")
+```
+
+Grant write/ingest permission:
+
+```python
+grant_extension_permission(
+    role,
+    PERMISSION_NETWORK_AVAILABILITY_MANAGE,
+)
+```
+
+Leave read permission denied, or explicitly revoke it:
+
+```python
+revoke_extension_permission(
+    role,
+    PERMISSION_NETWORK_AVAILABILITY_LIST,
+)
+```
+
+Show the role's current TFD permissions:
+
+```python
+get_role_permissions(role)
+```
+
+Expected example:
+
+```python
+{
+    "tfdreporting.networkavailability.list": False,
+    "tfdreporting.networkavailability.manage": True,
+}
+```
+
+Unknown permission codenames are rejected by the helper instead of being silently created.
+
+## Current database models
+
+### NetworkAvailability
+
+Proof-of-concept reporting data:
+
+- client name
+- site name
+- device name
+- source
+- timestamp
+- status
+- availability percentage
+- latency milliseconds
+- packet-loss percentage
+
+### ExtensionRolePermission
+
+TFD-owned extension authorization data:
+
+- Tactical `role_id`
+- registered TFD permission `codename`
+- `granted` state
+- created/updated timestamps
+
+`role_id` is intentionally not a Django ForeignKey. This keeps TFD migrations independent of Tactical's accounts migration graph. Runtime helper functions still require a valid Tactical `Role` object when permissions are managed.
 
 ## Uninstall
 
@@ -72,25 +188,9 @@ sudo ./uninstall.sh --purge-data
 
 Tactical's update process can reset tracked source files, clean untracked files, and rebuild `/rmm/api/env`. The extension does not rely on edits to Tactical tracked files, packages installed only into the venv, or systemd overrides.
 
-The current integration points are intentionally limited to:
+The integration points are intentionally limited to:
 
 - `/rmm/.git/info/exclude`
 - `/rmm/api/tacticalrmm/tacticalrmm/local_settings.py`
 - `/rmm/api/tacticalrmm/tfdreporting/`
 - Django/PostgreSQL migrations for the TFD app
-
-## Current model
-
-`NetworkAvailability` currently provides:
-
-- client name
-- site name
-- device name
-- source
-- timestamp
-- status
-- availability percentage
-- latency milliseconds
-- packet-loss percentage
-
-This is the proof-of-concept schema. Future versions should add normalized Tactical client/site relationships and production ingestion workflows as those are designed.

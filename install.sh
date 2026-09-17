@@ -133,7 +133,7 @@ log "Applying ${APP_NAME} migrations."
 run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' migrate '${APP_NAME}' --noinput"
 
 log "Verifying Django model and Tactical Report Manager registration."
-VERIFY_CODE="from django.apps import apps; m=apps.get_model('${APP_NAME}','${MODEL_NAME}'); from ee.reporting.utils import resolve_model; r=resolve_model(data_source={'model':'${MODEL_NAME}'}); assert r['model'] is m; print('TFD verification OK:', m._meta.label)"
+VERIFY_CODE="from django.apps import apps; m=apps.get_model('${APP_NAME}','${MODEL_NAME}'); p=apps.get_model('${APP_NAME}','ExtensionRolePermission'); from ee.reporting.utils import resolve_model; r=resolve_model(data_source={'model':'${MODEL_NAME}'}); assert r['model'] is m; from tfdreporting.rbac import REGISTERED_PERMISSIONS; assert len(REGISTERED_PERMISSIONS) >= 2; print('TFD verification OK:', m._meta.label, p._meta.label, sorted(REGISTERED_PERMISSIONS))"
 run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_CODE}\""
 
 log "Restarting Tactical Django/reporting services."
