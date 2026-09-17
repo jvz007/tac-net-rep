@@ -1,6 +1,6 @@
 # Tec-Tac Tactical RMM Extension POC
 
-Version **0.5.1** restructures the POC so Tec-Tac code no longer lives inside the Tactical RMM Git checkout.
+Version **0.5.2** keeps the external Tec-Tac extension architecture from 0.5.x and adds repeatable reporting-permission assignment for Tactical users/roles.
 
 The repository itself is the Tec-Tac runtime root. The scripts do **not** require the repository to be installed at a hardcoded path. `/opt/tec-tac` is the recommended location only.
 
@@ -17,9 +17,14 @@ The repository itself is the Tec-Tac runtime root. The scripts do **not** requir
 │   └── tec_tac/
 │       ├── __init__.py
 │       └── bootstrap.py
-└── extensions/
-    └── reporting/
-        └── tfdreporting/
+├── extensions/
+│   └── reporting/
+│       └── tfdreporting/
+├── scripts/
+│   └── reporting-permission.sh
+└── tests/
+    ├── network-reporting-server.sh
+    └── network-reporting-api.sh
 ```
 
 `framwork` is intentionally spelled exactly this way to match the agreed POC structure.
@@ -82,15 +87,56 @@ The installer:
 7. runs Django checks and migrations;
 8. verifies Python is loading `tfdreporting` from the repository's `extensions/reporting/` directory;
 9. verifies RBAC, Report Manager and the API route;
-10. removes any legacy in-tree `/rmm/api/tacticalrmm/tfdreporting` copy and old Git exclude rule after successful verification;
-11. restarts Tactical services.
+10. asks for the Tactical username whose role should receive reporting ingest permission (blank skips);
+11. grants `tfdreporting.networkavailability.manage` to that user's Tactical role;
+12. removes any legacy in-tree `/rmm/api/tacticalrmm/tfdreporting` copy and old Git exclude rule after successful verification;
+13. restarts Tactical services.
 
 The installer does not copy Tec-Tac code into another installation directory. Mutable backups are kept outside the Git checkout so `git clean -fd` cannot delete them.
 
 
+## Reporting permission assignment
+
+During an interactive install, `install.sh` asks for a Tactical username. If supplied, Tec-Tac resolves that user to its Tactical role and grants the reporting ingest permission:
+
+```text
+tfdreporting.networkavailability.manage
+```
+
+Leave the prompt blank to skip permission assignment. For unattended installation, set the username in the environment:
+
+```bash
+TEC_TAC_REPORTING_USERNAME="bob" sudo -E bash install.sh
+```
+
+Permissions are stored against the **Tactical role**, not the individual user. If multiple Tactical users share that role, they all inherit the granted Tec-Tac permission.
+
+To grant or inspect reporting permissions later without rerunning the installer:
+
+```bash
+cd /opt/tec-tac
+
+# Grant ingest/manage permission to the Tactical role used by bob
+sudo bash scripts/reporting-permission.sh bob
+
+# Equivalent explicit mode
+sudo bash scripts/reporting-permission.sh bob manage
+
+# Grant read/list permission only
+sudo bash scripts/reporting-permission.sh bob list
+
+# Grant both manage and list
+sudo bash scripts/reporting-permission.sh bob both
+
+# Show the current Tec-Tac reporting permissions for bob's Tactical role
+sudo bash scripts/reporting-permission.sh bob show
+```
+
+For the least-privilege API ingestion POC, use `manage` only. This permits POST ingestion while leaving the reporting `list` permission disabled.
+
 ## Test scripts
 
-Version 0.5.1 adds reusable tests under `tests/`.
+Version 0.5.1 added reusable tests under `tests/`. Version 0.5.2 adds a reusable permission-management script under `scripts/`.
 
 Server-side framework/reporting verification:
 

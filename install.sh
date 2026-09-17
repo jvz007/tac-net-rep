@@ -52,6 +52,7 @@ REQUIRED_FILES=(
     "${APP_DIR}/migrations/0001_initial.py"
     "${APP_DIR}/migrations/0002_extensionrolepermission.py"
     "${APP_DIR}/migrations/0003_networkavailability_ingest_hardening.py"
+    "${REPO_ROOT}/scripts/reporting-permission.sh"
 )
 for required_file in "${REQUIRED_FILES[@]}"; do
     [[ -f "${required_file}" ]] || fail "Installer payload is missing ${required_file}."
@@ -152,6 +153,21 @@ run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}'
 log "Verifying repository-loaded app, RBAC, Report Manager, and API route."
 VERIFY_CODE="import tfdreporting; from django.apps import apps; from django.urls import resolve; expected='${REPORTING_DIR}/'; assert tfdreporting.__file__.startswith(expected), tfdreporting.__file__; m=apps.get_model('${APP_NAME}','${MODEL_NAME}'); p=apps.get_model('${APP_NAME}','ExtensionRolePermission'); from ee.reporting.utils import resolve_model; r=resolve_model(data_source={'model':'${MODEL_NAME}'}); assert r['model'] is m; from tfdreporting.rbac import REGISTERED_PERMISSIONS; assert len(REGISTERED_PERMISSIONS) >= 2; match=resolve('/api/tfd/reporting/network-availability/'); assert match.url_name == 'network-availability'; fields={f.name for f in m._meta.fields}; assert {'idempotency_key','ingested_by','received_at'} <= fields; c=m.objects.count(); print('TEC-TAC verification OK:', 'module=', tfdreporting.__file__, m._meta.label, p._meta.label, 'endpoint=', match.route, 'network_rows=', c)"
 run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_CODE}\""
+
+# Optional reporting permission assignment. Permissions are stored against the
+# Tactical role used by the named user, not against the user directly.
+REPORTING_USERNAME="${TEC_TAC_REPORTING_USERNAME:-}"
+if [[ -z "${REPORTING_USERNAME}" && -t 0 ]]; then
+    printf '[TEC-TAC] Tactical username to grant reporting ingest permission (leave blank to skip): '
+    read -r REPORTING_USERNAME
+fi
+
+if [[ -n "${REPORTING_USERNAME}" ]]; then
+    log "Granting reporting ingest permission using Tactical user '${REPORTING_USERNAME}'."
+    bash "${REPO_ROOT}/scripts/reporting-permission.sh" "${REPORTING_USERNAME}" manage
+else
+    log "Reporting permission assignment skipped."
+fi
 
 # Remove any old in-tree extension copy only after the repository-loaded copy
 # has been verified successfully.
