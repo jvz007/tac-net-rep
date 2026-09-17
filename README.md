@@ -2,69 +2,91 @@
 
 Upgrade-safe Django extension framework for Tactical RMM Report Manager.
 
-Current package version: **0.3.0**.
+Current package version: **0.4.0**.
 
-## Version 0.3.0 - authenticated API + RBAC POC
+## v0.4.0 — ingestion hardening
 
-This release adds the first real TFD API endpoint and connects it to Tactical's native API-key authentication plus the TFD extension RBAC layer proven in 0.2.x.
+This release keeps the v0.3.0 Tactical API-key + TFD RBAC endpoint and hardens the write path before connecting a real telemetry source.
 
-Endpoint:
+### API endpoint
 
 ```text
 GET  /api/tfd/reporting/network-availability/
 POST /api/tfd/reporting/network-availability/
 ```
 
-Authentication is explicitly Tactical's existing `tacticalrmm.auth.APIAuthentication`, which expects the API key in the `X-API-KEY` request header.
+Authentication remains Tactical's native `X-API-KEY` mechanism.
 
-Authorization is separate from Tactical's native `can_*` role permissions:
-
-```text
-GET/HEAD/OPTIONS -> tfdreporting.networkavailability.list
-POST             -> tfdreporting.networkavailability.manage
-```
-
-Any other method is denied.
-
-The route is registered in memory by `TfdreportingConfig.ready()` and does not edit Tactical's tracked `tacticalrmm/urls.py`.
-
-Swagger/OpenAPI should discover the endpoint under the **TFD Reporting** tag when Tactical Swagger is enabled.
-
-## Existing upgrade-safe architecture
-
-The installer adds the `tfdreporting` Django app without modifying Tactical tracked source files.
-
-Persistence points:
-
-- `/rmm/.git/info/exclude` protects `/rmm/api/tacticalrmm/tfdreporting/` from Tactical `git clean -df` updates.
-- `tacticalrmm/local_settings.py` is already ignored by Tactical and contains one marked app-registry loader block.
-- `TfdreportingConfig.ready()` patches Tactical Report Manager's model allow-list in memory and registers the TFD API route in memory.
-
-The 0.2.1 loader protections remain in place: malformed markers or a legacy unmarked `_tfd_populate` hook cause the installer to fail safely instead of stacking loaders.
-
-## Repository layout
+Permissions remain:
 
 ```text
-.
-├── install.sh
-├── uninstall.sh
-├── VERSION
-└── tfdreporting/
-    ├── __init__.py
-    ├── apps.py
-    ├── models.py
-    ├── permissions.py
-    ├── rbac.py
-    ├── serializers.py
-    ├── urls.py
-    ├── views.py
-    └── migrations/
-        ├── __init__.py
-        ├── 0001_initial.py
-        └── 0002_extensionrolepermission.py
+GET  -> tfdreporting.networkavailability.list
+POST -> tfdreporting.networkavailability.manage
 ```
 
-There is no new database migration in 0.3.0.
+### New validation
+
+POST now enforces:
+
+- non-empty trimmed `client_name`, `site_name`, `device_name`, and `source`;
+- `status` must be one of `up`, `degraded`, `down`, or `unknown`;
+- availability and packet-loss percentages remain within 0..100;
+- latency cannot be negative;
+- timestamps more than 10 minutes in the future are rejected;
+- older historical timestamps remain allowed for backfill/import use.
+
+### Provenance
+
+Each new row now records:
+
+- `ingested_by` — the authenticated Tactical username, set server-side;
+- `received_at` — server-side receipt timestamp.
+
+The caller cannot override either field.
+
+### Idempotency / duplicate handling
+
+POST accepts an optional `idempotency_key` of up to 128 characters.
+
+The pair:
+
+```text
+source + idempotency_key
+```
+
+is unique when a key is supplied.
+
+Behaviour:
+
+- first request -> `201 Created`;
+- exact replay with the same source/key/payload -> `200 OK` with `X-TFD-Idempotent-Replay: true`;
+- same source/key with different data -> `409 Conflict` and `code=idempotency_conflict`;
+- requests without an idempotency key keep normal append-only behaviour.
+
+This allows a telemetry sender to retry safely after timeouts without creating duplicate report rows.
+
+## Security POC already proven
+
+The v0.3.0 POC demonstrated:
+
+- Tactical native API-key authentication;
+- a Tactical role with no unrelated native permissions;
+- TFD `manage=True`, `list=False`;
+- POST returned `201` and persisted a row;
+- GET returned `403`;
+- an unrelated Tactical endpoint returned `403`.
+
+## Upgrade-safe integration
+
+No Tactical tracked source files are modified.
+
+The extension uses:
+
+- `/rmm/.git/info/exclude` to protect `/rmm/api/tacticalrmm/tfdreporting/`;
+- Tactical's ignored `tacticalrmm/local_settings.py` to load the TFD app and register the TFD URL route;
+- Django migrations for TFD-owned database objects.
+
+Tactical's Report Manager model registry is extended in memory by `TfdreportingConfig.ready()`.
 
 ## Install / upgrade
 
@@ -72,40 +94,39 @@ On the Tactical server:
 
 ```bash
 cd /opt/tfd-tactical-reporting
-git pull
-sudo ./install.sh
+git fetch origin
+git reset --hard origin/main
+sudo bash install.sh
 ```
 
-If the repository executable-bit issue has not yet been fixed, `sudo bash install.sh` is functionally equivalent for this POC. The repository should ultimately store `install.sh` and `uninstall.sh` as mode `100755`.
+`sudo bash install.sh` is currently used while the repository executable-bit housekeeping is being handled separately.
 
-Expected installer verification includes:
+Expected migration on upgrade from v0.3.0:
 
 ```text
-TFD verification OK: ... endpoint= api/tfd/reporting/network-availability/ network_rows= <existing count>
+Applying tfdreporting.0003_networkavailability_ingest_hardening... OK
 ```
 
-No migration should be required when upgrading from 0.2.1:
+The installer verifies the model, RBAC registry, Report Manager resolution, API route, existing row count, and new ingest-hardening fields before restarting Tactical services.
 
-```text
-No migrations to apply.
+## Example POST
+
+```json
+{
+  "client_name": "TFD Test Client",
+  "site_name": "Head Office",
+  "device_name": "Internet",
+  "source": "poc-api",
+  "timestamp": "2026-09-17T14:20:00Z",
+  "status": "up",
+  "availability_pct": 99.980,
+  "latency_ms": 8.400,
+  "packet_loss_pct": 0.100,
+  "idempotency_key": "poc-20260917-142000-internet"
+}
 ```
 
-## RBAC POC role
-
-The dev POC created Tactical role ID `17` named:
-
-```text
-TFD Reporting Ingest POC
-```
-
-The intended state is:
-
-```text
-tfdreporting.networkavailability.list   = False
-tfdreporting.networkavailability.manage = True
-```
-
-Verify it from Django shell:
+## RBAC console management
 
 ```bash
 cd /rmm/api/tacticalrmm
@@ -115,125 +136,32 @@ python manage.py shell
 
 ```python
 from accounts.models import Role
-from tfdreporting.rbac import get_role_permissions
+from tfdreporting.rbac import (
+    PERMISSION_NETWORK_AVAILABILITY_LIST,
+    PERMISSION_NETWORK_AVAILABILITY_MANAGE,
+    get_role_permissions,
+    grant_extension_permission,
+    revoke_extension_permission,
+)
 
-role = Role.objects.get(id=17)
-print(get_role_permissions(role))
+role = Role.objects.get(name="TFD Reporting Ingest POC")
+grant_extension_permission(role, PERMISSION_NETWORK_AVAILABILITY_MANAGE)
+revoke_extension_permission(role, PERMISSION_NETWORK_AVAILABILITY_LIST)
+get_role_permissions(role)
 ```
-
-## API request body
-
-Example POST payload:
-
-```json
-{
-  "client_name": "TFD Test Client",
-  "site_name": "Head Office",
-  "device_name": "Internet",
-  "source": "poc",
-  "timestamp": "2026-09-17T14:00:00Z",
-  "status": "up",
-  "availability_pct": 99.980,
-  "latency_ms": 8.400,
-  "packet_loss_pct": 0.100
-}
-```
-
-Validation in 0.3.0:
-
-- availability percentage: `0..100` when supplied;
-- packet-loss percentage: `0..100` when supplied;
-- latency: `>= 0` when supplied;
-- `id` is read-only.
-
-## Security acceptance test
-
-Create or use a Tactical API user assigned to role 17 and create a Tactical API key for that user.
-
-Then test the following matrix with the same key:
-
-```text
-POST /api/tfd/reporting/network-availability/ -> expected 201
-GET  /api/tfd/reporting/network-availability/ -> expected 403
-GET  /clients/sites/                          -> expected 403
-script execution endpoint                     -> expected 403
-request without X-API-KEY                     -> expected authentication failure
-```
-
-Example POST:
-
-```bash
-curl -i \
-  -X POST \
-  -H 'X-API-KEY: REPLACE_WITH_TEST_KEY' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "client_name":"TFD Test Client",
-    "site_name":"Head Office",
-    "device_name":"Internet",
-    "source":"poc",
-    "timestamp":"2026-09-17T14:00:00Z",
-    "status":"up",
-    "availability_pct":99.980,
-    "latency_ms":8.400,
-    "packet_loss_pct":0.100
-  }' \
-  https://YOUR-TACTICAL-HOST/api/tfd/reporting/network-availability/
-```
-
-A successful POST proves the full chain:
-
-```text
-Tactical API key
-    -> Tactical user
-    -> Tactical role
-    -> TFD ExtensionRolePermission
-    -> NetworkAvailabilityPermission
-    -> serializer validation
-    -> Django ORM insert
-```
-
-## Swagger
-
-With `SWAGGER_ENABLED = True`, open Tactical's existing Swagger UI and look for the **TFD Reporting** tag.
-
-The endpoint should expose both GET and POST operations. Swagger authentication uses Tactical's existing API authentication schema; no second TFD token system is introduced.
-
-## Current models
-
-### NetworkAvailability
-
-- client name
-- site name
-- device name
-- source
-- timestamp
-- status
-- availability percentage
-- latency milliseconds
-- packet-loss percentage
-
-### ExtensionRolePermission
-
-- Tactical `role_id`
-- registered TFD permission `codename`
-- `granted` state
-- created/updated timestamps
-
-`role_id` remains an integer rather than a ForeignKey so TFD migrations remain independent of Tactical's accounts migration graph.
 
 ## Uninstall
 
 Preserve database data:
 
 ```bash
-sudo ./uninstall.sh
+sudo bash uninstall.sh
 ```
 
-Remove migration/database objects too:
+Purge TFD database objects as well:
 
 ```bash
-sudo ./uninstall.sh --purge-data
+sudo bash uninstall.sh --purge-data
 ```
 
 `--purge-data` is destructive.
