@@ -337,6 +337,104 @@ for config_path in declared:
 runuser -u "${TACTICAL_USER}" -- bash -lc \
     "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' check"
 
+
+# Extension-declared role permissions.
+PERMISSION_MANIFEST="${DEST_EXTENSION}/tec_tac.json"
+PERMISSION_GROUPS="$("${VENV_PYTHON}" - "${PERMISSION_MANIFEST}" <<'PY_PERM_GROUPS'
+import json, sys
+from pathlib import Path
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+for name in payload.get("permission_groups", {}):
+    print(name)
+PY_PERM_GROUPS
+)"
+
+if [[ -n "${PERMISSION_GROUPS}" ]]; then
+    log "Extension '${PLUGIN_ID}' declares role permission group(s):"
+    while IFS= read -r group; do [[ -n "${group}" ]] && log "  ${group}"; done <<< "${PERMISSION_GROUPS}"
+
+    EXISTING_PERMISSION_CODE=$(cat <<'PY_EXISTING_PERMS'
+import json, os
+from pathlib import Path
+from django.contrib.auth import get_user_model
+from tfdreporting.models import ExtensionRolePermission
+payload = json.loads(Path(os.environ["TEC_TAC_PERMISSION_MANIFEST"]).read_text(encoding="utf-8"))
+codenames = sorted({p for values in payload.get("permission_groups", {}).values() for p in values})
+rows = ExtensionRolePermission.objects.filter(codename__in=codenames, granted=True).order_by("role_id", "codename")
+by_role = {}
+for row in rows: by_role.setdefault(row.role_id, []).append(row.codename)
+User = get_user_model(); users_by_role = {}; role_names = {}
+for user in User.objects.all():
+    try: role = user.get_and_set_role_cache()
+    except Exception: continue
+    if not role: continue
+    role_names[role.id] = role.name
+    users_by_role.setdefault(role.id, []).append(user.username)
+for role_id, permissions in by_role.items():
+    print("FOUND|{}|{}|{}|{}".format(role_id, role_names.get(role_id, "unknown"), ",".join(sorted(users_by_role.get(role_id, []))) or "none", ",".join(permissions)))
+PY_EXISTING_PERMS
+)
+    EXISTING_PERMISSIONS="$(runuser -u "${TACTICAL_USER}" -- env TEC_TAC_PERMISSION_MANIFEST="${PERMISSION_MANIFEST}" bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell" <<< "${EXISTING_PERMISSION_CODE}")"
+    EXISTING_FOUND="$(printf '%s\n' "${EXISTING_PERMISSIONS}" | grep '^FOUND|' || true)"
+    PERMISSION_USERNAME="${TEC_TAC_EXTENSION_USERNAME:-}"
+    PERMISSION_GROUP="${TEC_TAC_EXTENSION_PERMISSION_GROUP:-}"
+    SHOULD_ASSIGN=0
+
+    if [[ -n "${PERMISSION_USERNAME}" ]]; then
+        SHOULD_ASSIGN=1
+    elif [[ -n "${EXISTING_FOUND}" ]]; then
+        log "Existing permission assignment(s) for '${PLUGIN_ID}' found:"
+        while IFS='|' read -r marker role_id role_name users permissions; do
+            [[ "${marker}" == "FOUND" ]] || continue
+            log "Role: ${role_name} (id=${role_id}); users: ${users}; permissions: ${permissions}"
+        done <<< "${EXISTING_FOUND}"
+        if [[ -t 0 ]]; then
+            printf "[TEC-TAC] Change/add '%s' extension permission assignment? [y/N]: " "${PLUGIN_ID}"
+            read -r answer
+            case "${answer}" in y|Y|yes|YES) SHOULD_ASSIGN=1 ;; *) log "Keeping existing extension permission assignment(s) unchanged." ;; esac
+        else
+            log "Keeping existing extension permission assignment(s) unchanged."
+        fi
+    elif [[ -t 0 ]]; then
+        printf "[TEC-TAC] Tactical username to receive '%s' extension permissions (blank to skip): " "${PLUGIN_ID}"
+        read -r PERMISSION_USERNAME
+        [[ -n "${PERMISSION_USERNAME}" ]] && SHOULD_ASSIGN=1
+    else
+        log "No existing extension permission assignment found; non-interactive install is skipping assignment."
+    fi
+
+    if [[ ${SHOULD_ASSIGN} -eq 1 ]]; then
+        if [[ -z "${PERMISSION_USERNAME}" ]]; then printf "[TEC-TAC] Tactical username: "; read -r PERMISSION_USERNAME; fi
+        [[ -n "${PERMISSION_USERNAME}" ]] || fail "A Tactical username is required to assign extension permissions."
+        if [[ -z "${PERMISSION_GROUP}" ]]; then
+            DEFAULT_GROUP="$(printf '%s\n' "${PERMISSION_GROUPS}" | grep -x 'manage' | head -n1 || true)"
+            [[ -n "${DEFAULT_GROUP}" ]] || DEFAULT_GROUP="$(printf '%s\n' "${PERMISSION_GROUPS}" | head -n1)"
+            if [[ -t 0 ]]; then
+                log "Available permission groups:"
+                while IFS= read -r group; do [[ -n "${group}" ]] && log "  ${group}"; done <<< "${PERMISSION_GROUPS}"
+                printf "[TEC-TAC] Permission group [%s]: " "${DEFAULT_GROUP}"
+                read -r PERMISSION_GROUP
+                PERMISSION_GROUP="${PERMISSION_GROUP:-${DEFAULT_GROUP}}"
+            else
+                PERMISSION_GROUP="${DEFAULT_GROUP}"
+            fi
+        fi
+        printf '%s\n' "${PERMISSION_GROUPS}" | grep -Fxq "${PERMISSION_GROUP}" || fail "Unknown permission group '${PERMISSION_GROUP}' for extension '${PLUGIN_ID}'."
+        runuser -u "${TACTICAL_USER}" -- env TEC_TAC_PERMISSION_USERNAME="${PERMISSION_USERNAME}" TEC_TAC_PERMISSION_PLUGIN="${PLUGIN_ID}" TEC_TAC_PERMISSION_GROUP="${PERMISSION_GROUP}" "${VENV_PYTHON}" "${MANAGE_PY}" shell -c '
+from django.contrib.auth import get_user_model
+import os
+from tec_tac.rbac import grant_permission_group, get_role_permissions
+username=os.environ["TEC_TAC_PERMISSION_USERNAME"]; plugin_id=os.environ["TEC_TAC_PERMISSION_PLUGIN"]; group_name=os.environ["TEC_TAC_PERMISSION_GROUP"]
+User=get_user_model(); user=User.objects.get(username=username); role=user.get_and_set_role_cache()
+if not role: raise RuntimeError(f"Tactical user {username!r} has no role assigned")
+grant_permission_group(role, plugin_id, group_name)
+print(f"[TEC-TAC] User: {user.username}"); print(f"[TEC-TAC] Tactical role: {role.name} (id={role.id})"); print(f"[TEC-TAC] Granted permission group: {group_name}")
+for codename, granted in get_role_permissions(role, plugin_id).items(): print(f"[TEC-TAC] {codename}={granted}")
+print("[TEC-TAC] NOTE: Tec-Tac permissions are role-based; all users sharing this role inherit the grants.")
+'
+    fi
+fi
+
 log "Restarting Tactical services."
 systemctl restart rmm daphne celery celerybeat
 

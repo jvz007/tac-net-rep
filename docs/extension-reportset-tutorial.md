@@ -199,7 +199,11 @@ Replace the original manifest with:
   "python_paths": ["."],
   "django_apps": [
     "tec_tac_networkprobe.apps.TecTacNetworkProbeConfig"
-  ]
+  ],
+  "permission_groups": {
+    "read": ["networkprobe.device.list"],
+    "manage": ["networkprobe.device.list", "networkprobe.device.manage", "networkprobe.ingest.manage"]
+  }
 }
 ```
 
@@ -1212,3 +1216,85 @@ preserve data
 because preserving customer/operational data is safer than automatically deleting it.
 
 Use `--purge-data` only when the database removal is intended and reviewed.
+
+
+---
+
+# Tutorial reference package: PackageTest
+
+Tec-Tac 1.0.2 includes a complete installable reference package under:
+
+```text
+docs/tutorial-packages/packagetest/
+```
+
+It demonstrates a matching extension + ReportSet, runtime API registration, ReportSet mapping, manifest-declared permission groups, role-based API authorization, ZIP installation, permission assignment, and safe removal.
+
+The source is under `docs/tutorial-packages/packagetest/source/` and a ready-built package is `docs/tutorial-packages/packagetest/packagetest-0.1.0.zip`. Rebuild it with:
+
+```bash
+cd /opt/tec-tac/docs/tutorial-packages/packagetest
+bash build.sh
+```
+
+Install interactively:
+
+```bash
+cd /opt/tec-tac
+sudo bash scripts/install-extension.sh docs/tutorial-packages/packagetest/packagetest-0.1.0.zip
+```
+
+PackageTest declares `read` and `manage` permission groups. The installer resolves the supplied Tactical username to its Tactical role and grants the selected group to that role.
+
+Unattended install:
+
+```bash
+TEC_TAC_EXTENSION_USERNAME="bob" \
+TEC_TAC_EXTENSION_PERMISSION_GROUP="manage" \
+sudo -E bash scripts/install-extension.sh docs/tutorial-packages/packagetest/packagetest-0.1.0.zip
+```
+
+API after install:
+
+```text
+GET  /api/tfd/packagetest/sample/   requires packagetest.api.read
+POST /api/tfd/packagetest/sample/   requires packagetest.api.manage
+```
+
+Remove it with:
+
+```bash
+sudo bash scripts/remove-extension.sh packagetest
+```
+
+Removal disables active grants declared by the extension before deleting the extension/reportset code.
+
+Run the package lifecycle test:
+
+```bash
+sudo bash tests/extension-package-lifecycle.sh
+```
+
+To exercise permission assignment too:
+
+```bash
+TEC_TAC_PACKAGE_TEST_USERNAME="bob" sudo -E bash tests/extension-package-lifecycle.sh
+```
+
+## Permission-group manifest contract
+
+Only the extension manifest may declare `permission_groups`. Permission codenames must begin with `<extension-id>.`. API code should check permissions through `tec_tac.rbac.has_extension_permission`, not by importing the persistence model directly.
+
+**File:** `extensions/networkprobe/tec_tac_networkprobe/permissions.py`
+
+```python
+from rest_framework.permissions import BasePermission
+from tec_tac.rbac import has_extension_permission
+
+class NetworkProbePermission(BasePermission):
+    def has_permission(self, request, view):
+        codename = "networkprobe.device.list" if request.method in ("GET", "HEAD", "OPTIONS") else "networkprobe.device.manage"
+        return has_extension_permission(request.user, codename)
+```
+
+Tec-Tac 1.0.x currently persists generic role grants in the existing shared `ExtensionRolePermission` compatibility table. Extension code should use `tec_tac.rbac` so that storage can change later without changing the extension.

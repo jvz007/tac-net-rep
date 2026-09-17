@@ -1,0 +1,11 @@
+{
+  "id": "packagetest",
+  "type": "reportset",
+  "version": "0.1.0",
+  "python_paths": [
+    "."
+  ],
+  "django_apps": [
+    "tec_tac_packagetest_reportset.apps.TecTacPackageTestReportsetConfig"
+  ]
+}

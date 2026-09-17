@@ -1,6 +1,6 @@
 # Tec-Tac Tactical RMM Extension Framework
 
-Version **1.0.1** builds on the stable Tec-Tac 1.0.0 foundation. It adds the complete extension/reportset developer tutorial plus generic package install and removal tooling for separately distributed extensions, while retaining the upgrade-safe bootstrap, validated paired **extensions** and **reportsets**, manifests/templates, inspection/scaffolding tools, lifecycle tests, and the working reference pair.
+Version **1.0.2** builds on the stable Tec-Tac 1.0.0 foundation. It adds the complete extension/reportset developer tutorial plus generic package install and removal tooling for separately distributed extensions, while retaining the upgrade-safe bootstrap, validated paired **extensions** and **reportsets**, manifests/templates, inspection/scaffolding tools, lifecycle tests, and the working reference pair.
 
 The repository itself is the runtime root. It may be cloned anywhere; `/opt/tec-tac` is only the recommended location.
 

@@ -169,6 +169,21 @@ for config_path in reversed(declared):
 '
 fi
 
+
+# Disable active role grants declared by this extension before removing code.
+runuser -u "${TACTICAL_USER}" -- env TEC_TAC_REMOVE_PERMISSION_MANIFEST="${EXT_DIR}/tec_tac.json" "${VENV_PYTHON}" "${MANAGE_PY}" shell -c '
+import json, os
+from pathlib import Path
+from tfdreporting.models import ExtensionRolePermission
+payload=json.loads(Path(os.environ["TEC_TAC_REMOVE_PERMISSION_MANIFEST"]).read_text(encoding="utf-8"))
+codenames=sorted({p for values in payload.get("permission_groups", {}).values() for p in values})
+if codenames:
+    updated=ExtensionRolePermission.objects.filter(codename__in=codenames, granted=True).update(granted=False)
+    print(f"[TEC-TAC] Revoked {updated} active extension permission grant(s).")
+else:
+    print("[TEC-TAC] Extension declares no permission groups; no grants to revoke.")
+'
+
 rm -rf "${EXT_DIR}" "${REP_DIR}"
 log "Removed extension code: ${EXT_DIR}"
 log "Removed reportset code: ${REP_DIR}"

@@ -1,0 +1,20 @@
+{
+  "id": "packagetest",
+  "type": "extension",
+  "version": "0.1.0",
+  "python_paths": [
+    "."
+  ],
+  "django_apps": [
+    "tec_tac_packagetest.apps.TecTacPackageTestConfig"
+  ],
+  "permission_groups": {
+    "read": [
+      "packagetest.api.read"
+    ],
+    "manage": [
+      "packagetest.api.read",
+      "packagetest.api.manage"
+    ]
+  }
+}

@@ -1,29 +1,4 @@
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Tec-Tac Extension & ReportSet Tutorial</title>
-<style>
-:root{--blue:#1C489B;--orange:#FC8127;--ink:#1f2937;--border:#e5e7eb;--soft:#f6f8fa}
-*{box-sizing:border-box}
-body{margin:0;font-family:Segoe UI,Arial,sans-serif;color:var(--ink);line-height:1.65;background:#fff}
-main{max-width:1040px;margin:0 auto;padding:48px 30px 90px}
-h1{color:var(--blue);font-size:2.35rem;margin:.2rem 0 1rem}
-h2{color:var(--blue);margin-top:2.6rem;padding-bottom:.35rem;border-bottom:1px solid var(--border)}
-h3{margin-top:1.8rem}
-hr{border:0;border-top:3px solid var(--orange);margin:2.2rem 0}
-p{margin:.65rem 0}
-ul{margin:.6rem 0 1rem 1.4rem}
-code{font-family:Consolas,Menlo,monospace;background:var(--soft);padding:.12rem .3rem;border-radius:4px}
-pre{background:#0f172a;color:#e5e7eb;padding:18px;border-radius:8px;overflow-x:auto;border-left:4px solid var(--orange)}
-pre code{background:transparent;padding:0;color:inherit}
-strong{color:#111827}
-@media print{main{max-width:none;padding:20px}pre{white-space:pre-wrap}}
-</style>
-</head>
-<body><main>
-<h1>Tec-Tac Extension &amp; ReportSet Tutorial</h1>
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Tec-Tac Extension & ReportSet Tutorial</title><style>:root{--blue:#1C489B;--orange:#FC8127;--ink:#1f2937;--border:#e5e7eb;--soft:#f6f8fa}*{box-sizing:border-box}body{margin:0;font-family:Segoe UI,Arial,sans-serif;color:var(--ink);line-height:1.65;background:#fff}main{max-width:1040px;margin:0 auto;padding:48px 30px 90px}h1{color:var(--blue);font-size:2.35rem}h2{color:var(--blue);margin-top:2.6rem;border-bottom:1px solid var(--border)}hr{border:0;border-top:3px solid var(--orange)}code{font-family:Consolas,Menlo,monospace;background:var(--soft);padding:.12rem .3rem;border-radius:4px}pre{background:#0f172a;color:#e5e7eb;padding:18px;border-radius:8px;overflow-x:auto;border-left:4px solid var(--orange)}pre code{background:transparent;padding:0;color:inherit}</style></head><body><main><h1>Tec-Tac Extension &amp; ReportSet Tutorial</h1>
 <p><strong>Framework baseline:</strong> Tec-Tac 1.0.0</p>
 <p><strong>Purpose:</strong> Create, package, deploy, upgrade, and validate your own Tec-Tac extension and matching ReportSet.</p>
 <p>This tutorial uses <code>networkprobe</code> as the example extension ID.</p>
@@ -148,7 +123,11 @@ class TecTacNetworkProbeConfig(AppConfig):
   &quot;python_paths&quot;: [&quot;.&quot;],
   &quot;django_apps&quot;: [
     &quot;tec_tac_networkprobe.apps.TecTacNetworkProbeConfig&quot;
-  ]
+  ],
+  &quot;permission_groups&quot;: {
+    &quot;read&quot;: [&quot;networkprobe.device.list&quot;],
+    &quot;manage&quot;: [&quot;networkprobe.device.list&quot;, &quot;networkprobe.device.manage&quot;, &quot;networkprobe.ingest.manage&quot;]
+  }
 }</code></pre>
 <p>Tec-Tac will make the declared Python path importable and add the AppConfig to the primary Django application registry.</p>
 <p>Do <strong>not</strong> edit Tactical tracked source files to register the app.</p>
@@ -743,5 +722,40 @@ sudo systemctl restart rmm daphne celery celerybeat</code></pre>
 preserve data</code></pre>
 <p>because preserving customer/operational data is safer than automatically deleting it.</p>
 <p>Use <code>--purge-data</code> only when the database removal is intended and reviewed.</p>
-</main></body>
-</html>
+<hr>
+<h1>Tutorial reference package: PackageTest</h1>
+<p>Tec-Tac 1.0.2 includes a complete installable reference package under:</p>
+<pre><code>docs/tutorial-packages/packagetest/</code></pre>
+<p>It demonstrates a matching extension + ReportSet, runtime API registration, ReportSet mapping, manifest-declared permission groups, role-based API authorization, ZIP installation, permission assignment, and safe removal.</p>
+<p>The source is under <code>docs/tutorial-packages/packagetest/source/</code> and a ready-built package is <code>docs/tutorial-packages/packagetest/packagetest-0.1.0.zip</code>. Rebuild it with:</p>
+<pre><code>cd /opt/tec-tac/docs/tutorial-packages/packagetest
+bash build.sh</code></pre>
+<p>Install interactively:</p>
+<pre><code>cd /opt/tec-tac
+sudo bash scripts/install-extension.sh docs/tutorial-packages/packagetest/packagetest-0.1.0.zip</code></pre>
+<p>PackageTest declares <code>read</code> and <code>manage</code> permission groups. The installer resolves the supplied Tactical username to its Tactical role and grants the selected group to that role.</p>
+<p>Unattended install:</p>
+<pre><code>TEC_TAC_EXTENSION_USERNAME=&quot;bob&quot; \
+TEC_TAC_EXTENSION_PERMISSION_GROUP=&quot;manage&quot; \
+sudo -E bash scripts/install-extension.sh docs/tutorial-packages/packagetest/packagetest-0.1.0.zip</code></pre>
+<p>API after install:</p>
+<pre><code>GET  /api/tfd/packagetest/sample/   requires packagetest.api.read
+POST /api/tfd/packagetest/sample/   requires packagetest.api.manage</code></pre>
+<p>Remove it with:</p>
+<pre><code>sudo bash scripts/remove-extension.sh packagetest</code></pre>
+<p>Removal disables active grants declared by the extension before deleting the extension/reportset code.</p>
+<p>Run the package lifecycle test:</p>
+<pre><code>sudo bash tests/extension-package-lifecycle.sh</code></pre>
+<p>To exercise permission assignment too:</p>
+<pre><code>TEC_TAC_PACKAGE_TEST_USERNAME=&quot;bob&quot; sudo -E bash tests/extension-package-lifecycle.sh</code></pre>
+<h2>Permission-group manifest contract</h2>
+<p>Only the extension manifest may declare <code>permission_groups</code>. Permission codenames must begin with <code>&lt;extension-id&gt;.</code>. API code should check permissions through <code>tec_tac.rbac.has_extension_permission</code>, not by importing the persistence model directly.</p>
+<p><strong>File:</strong> <code>extensions/networkprobe/tec_tac_networkprobe/permissions.py</code></p>
+<pre><code>from rest_framework.permissions import BasePermission
+from tec_tac.rbac import has_extension_permission
+
+class NetworkProbePermission(BasePermission):
+    def has_permission(self, request, view):
+        codename = &quot;networkprobe.device.list&quot; if request.method in (&quot;GET&quot;, &quot;HEAD&quot;, &quot;OPTIONS&quot;) else &quot;networkprobe.device.manage&quot;
+        return has_extension_permission(request.user, codename)</code></pre>
+<p>Tec-Tac 1.0.x currently persists generic role grants in the existing shared <code>ExtensionRolePermission</code> compatibility table. Extension code should use <code>tec_tac.rbac</code> so that storage can change later without changing the extension.</p></main></body></html>
