@@ -11,8 +11,10 @@ LOCAL_SETTINGS="${BACKEND_DIR}/tacticalrmm/local_settings.py"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FRAMEWORK_DIR="${REPO_ROOT}/framwork"
-REPORTING_DIR="${REPO_ROOT}/extensions/reporting"
-APP_DIR="${REPORTING_DIR}/${APP_NAME}"
+EXTENSIONS_DIR="${REPO_ROOT}/extensions"
+REPORTSETS_DIR="${REPO_ROOT}/reportsets"
+LEGACY_REPORTING_DIR="${EXTENSIONS_DIR}/reporting"
+APP_DIR="${LEGACY_REPORTING_DIR}/${APP_NAME}"
 VERSION_FILE="${REPO_ROOT}/VERSION"
 
 BEGIN_MARKER="# BEGIN TEC-TAC EXTENSION FRAMEWORK"
@@ -42,6 +44,7 @@ log "Detected Tec-Tac repository root: ${REPO_ROOT}"
 REQUIRED_FILES=(
     "${FRAMEWORK_DIR}/tec_tac/__init__.py"
     "${FRAMEWORK_DIR}/tec_tac/bootstrap.py"
+    "${FRAMEWORK_DIR}/tec_tac/registry.py"
     "${APP_DIR}/__init__.py"
     "${APP_DIR}/apps.py"
     "${APP_DIR}/models.py"
@@ -53,6 +56,8 @@ REQUIRED_FILES=(
     "${APP_DIR}/migrations/0002_extensionrolepermission.py"
     "${APP_DIR}/migrations/0003_networkavailability_ingest_hardening.py"
     "${REPO_ROOT}/scripts/reporting-permission.sh"
+    "${REPO_ROOT}/scripts/framework-info.sh"
+    "${REPO_ROOT}/tests/framework-foundation.sh"
 )
 for required_file in "${REQUIRED_FILES[@]}"; do
     [[ -f "${required_file}" ]] || fail "Installer payload is missing ${required_file}."
@@ -76,7 +81,9 @@ run_as_tactical() {
 log "Detected Tactical root: ${TACTICAL_ROOT}"
 log "Detected Tactical service user: ${TACTICAL_USER}"
 log "Tec-Tac framework: ${FRAMEWORK_DIR}"
-log "Reporting extension: ${REPORTING_DIR}"
+log "Extensions root: ${EXTENSIONS_DIR}"
+log "Reportsets root: ${REPORTSETS_DIR}"
+log "Legacy reporting POC: ${LEGACY_REPORTING_DIR}"
 
 if ! run_as_tactical git -C "${TACTICAL_ROOT}" check-ignore -q "api/tacticalrmm/tacticalrmm/local_settings.py"; then
     fail "Tactical no longer treats local_settings.py as ignored. Refusing to install because the bootstrap would not be upgrade-safe."
@@ -85,7 +92,7 @@ log "Confirmed local_settings.py is ignored by Tactical Git."
 
 # Ensure Tactical can traverse/read the checkout without changing repository
 # ownership. This is intentionally limited to read/execute permissions.
-chmod -R a+rX "${FRAMEWORK_DIR}" "${REPORTING_DIR}"
+chmod -R a+rX "${FRAMEWORK_DIR}" "${EXTENSIONS_DIR}" "${REPORTSETS_DIR}"
 
 BACKUP_DIR="${TEC_TAC_BACKUP_DIR:-/var/lib/tec-tac/backups}"
 mkdir -p "${BACKUP_DIR}"
@@ -151,7 +158,7 @@ log "Applying ${APP_NAME} migrations."
 run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' migrate '${APP_NAME}' --noinput"
 
 log "Verifying repository-loaded app, RBAC, Report Manager, and API route."
-VERIFY_CODE="import tfdreporting; from django.apps import apps; from django.urls import resolve; expected='${REPORTING_DIR}/'; assert tfdreporting.__file__.startswith(expected), tfdreporting.__file__; m=apps.get_model('${APP_NAME}','${MODEL_NAME}'); p=apps.get_model('${APP_NAME}','ExtensionRolePermission'); from ee.reporting.utils import resolve_model; r=resolve_model(data_source={'model':'${MODEL_NAME}'}); assert r['model'] is m; from tfdreporting.rbac import REGISTERED_PERMISSIONS; assert len(REGISTERED_PERMISSIONS) >= 2; match=resolve('/api/tfd/reporting/network-availability/'); assert match.url_name == 'network-availability'; fields={f.name for f in m._meta.fields}; assert {'idempotency_key','ingested_by','received_at'} <= fields; c=m.objects.count(); print('TEC-TAC verification OK:', 'module=', tfdreporting.__file__, m._meta.label, p._meta.label, 'endpoint=', match.route, 'network_rows=', c)"
+VERIFY_CODE="import tfdreporting; from django.apps import apps; from django.urls import resolve; expected='${LEGACY_REPORTING_DIR}/'; assert tfdreporting.__file__.startswith(expected), tfdreporting.__file__; m=apps.get_model('${APP_NAME}','${MODEL_NAME}'); p=apps.get_model('${APP_NAME}','ExtensionRolePermission'); from ee.reporting.utils import resolve_model; r=resolve_model(data_source={'model':'${MODEL_NAME}'}); assert r['model'] is m; from tfdreporting.rbac import REGISTERED_PERMISSIONS; assert len(REGISTERED_PERMISSIONS) >= 2; match=resolve('/api/tfd/reporting/network-availability/'); assert match.url_name == 'network-availability'; fields={f.name for f in m._meta.fields}; assert {'idempotency_key','ingested_by','received_at'} <= fields; c=m.objects.count(); print('TEC-TAC verification OK:', 'module=', tfdreporting.__file__, m._meta.label, p._meta.label, 'endpoint=', match.route, 'network_rows=', c)"
 run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_CODE}\""
 
 # Optional reporting permission assignment. Permissions are stored against the
@@ -198,5 +205,6 @@ done
 
 log "Installation complete."
 log "Framework: ${FRAMEWORK_DIR}"
-log "Reporting: ${REPORTING_DIR}"
+log "Extensions: ${EXTENSIONS_DIR}"
+log "Reportsets: ${REPORTSETS_DIR}"
 log "Swagger endpoint: /api/tfd/reporting/network-availability/"

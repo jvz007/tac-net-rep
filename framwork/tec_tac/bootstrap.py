@@ -1,41 +1,33 @@
-"""Tec-Tac bootstrap for Tactical RMM extensions.
+"""Upgrade-safe Tec-Tac bootstrap for Tactical RMM.
 
-Loaded from Tactical's ignored local_settings.py. Paths are discovered from the
-repository layout so the Tec-Tac checkout can live anywhere on the filesystem.
+Loaded from Tactical's ignored local_settings.py. Tec-Tac discovers its own
+repository root and loads extension/reportset plugins through the registry.
 """
 
 import sys
-from pathlib import Path
 
 from django.apps import apps as django_apps
 from django.apps.registry import Apps
 
-
-FRAMEWORK_ROOT = Path(__file__).resolve().parent.parent
-TEC_TAC_ROOT = FRAMEWORK_ROOT.parent
-EXTENSIONS_ROOT = TEC_TAC_ROOT / "extensions"
-
-# POC extension registry. Add future extension descriptors here, not in
-# Tactical's local_settings.py.
-EXTENSIONS = (
-    {
-        "name": "reporting",
-        "python_path": EXTENSIONS_ROOT / "reporting",
-        "django_apps": ("tfdreporting.apps.TfdreportingConfig",),
-    },
-)
+from tec_tac.registry import get_plugins, iter_python_paths
 
 
-def _register_extension_paths() -> None:
-    for extension in EXTENSIONS:
-        path = str(extension["python_path"])
+def _register_plugin_paths(plugins) -> None:
+    for plugin_path in iter_python_paths(plugins):
+        path = str(plugin_path)
         if path not in sys.path:
             sys.path.insert(0, path)
 
 
 def load_extensions() -> None:
-    """Register Tec-Tac extension paths and Django apps once per process."""
-    _register_extension_paths()
+    """Register Tec-Tac plugin paths and Django apps once per process.
+
+    ``load_extensions`` keeps its historical name because Tactical's ignored
+    local_settings.py already calls it. It now loads both extension and
+    reportset plugin types.
+    """
+    plugins = get_plugins()
+    _register_plugin_paths(plugins)
 
     if getattr(Apps.populate, "_tec_tac_extension_loader", False):
         return
@@ -46,8 +38,8 @@ def load_extensions() -> None:
         if self is django_apps and installed_apps is not None:
             installed_apps = list(installed_apps)
 
-            for extension in EXTENSIONS:
-                for app_config in extension["django_apps"]:
+            for plugin in plugins:
+                for app_config in plugin.django_apps:
                     if app_config not in installed_apps:
                         installed_apps.append(app_config)
 

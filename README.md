@@ -1,64 +1,94 @@
-# Tec-Tac Tactical RMM Extension POC
+# Tec-Tac Tactical RMM Extension Framework
 
-Version **0.5.2** keeps the external Tec-Tac extension architecture from 0.5.x and adds repeatable reporting-permission assignment for Tactical users/roles.
+Version **0.5.3** formalises the Tec-Tac foundation around two first-class plugin types: **extensions** and **reportsets**.
 
-The repository itself is the Tec-Tac runtime root. The scripts do **not** require the repository to be installed at a hardcoded path. `/opt/tec-tac` is the recommended location only.
+The repository itself is the runtime root. It may be cloned anywhere; `/opt/tec-tac` is only the recommended location.
 
-## Repository structure
+## Foundation layout
 
 ```text
 <repo-root>/
-├── install.sh
-├── uninstall.sh
-├── README.md
-├── VERSION
-├── LICENSE
 ├── framwork/
 │   └── tec_tac/
-│       ├── __init__.py
-│       └── bootstrap.py
+│       ├── bootstrap.py
+│       └── registry.py
 ├── extensions/
-│   └── reporting/
-│       └── tfdreporting/
+│   └── <extension-id>/
+├── reportsets/
+│   └── <extension-id>/
 ├── scripts/
-│   └── reporting-permission.sh
-└── tests/
-    ├── network-reporting-server.sh
-    └── network-reporting-api.sh
+├── tests/
+├── install.sh
+├── uninstall.sh
+└── VERSION
 ```
 
-`framwork` is intentionally spelled exactly this way to match the agreed POC structure.
+`framwork` remains intentionally spelled this way to preserve the established POC path.
 
-The installer discovers `<repo-root>` from the location of `install.sh`. The framework then discovers the extensions directory relative to its own file location.
+### Naming contract
 
-The only Tec-Tac code placed into Tactical configuration is a small bootstrap block in Tactical's already-ignored `local_settings.py`. The installer writes the resolved framework path automatically, for example:
+The stable extension ID is the directory name under `extensions/`.
 
-```python
-# BEGIN TEC-TAC EXTENSION FRAMEWORK
-import sys
+A reportset belonging to that extension uses **the exact same ID**:
 
-_TEC_TAC_FRAMEWORK = "/opt/tec-tac/framwork"
-if _TEC_TAC_FRAMEWORK not in sys.path:
-    sys.path.insert(0, _TEC_TAC_FRAMEWORK)
-
-from tec_tac.bootstrap import load_extensions
-load_extensions()
-# END TEC-TAC EXTENSION FRAMEWORK
+```text
+extensions/<extension-id>/
+reportsets/<extension-id>/
 ```
 
-No Tactical tracked source file is modified.
+The name identifies **which extension owns the component**, not what the data is about. Purpose-specific modules belong inside the matching reportset.
+
+Example only:
+
+```text
+extensions/networkprobe/
+reportsets/networkprobe/
+    availability.py
+    latency.py
+    packet_loss.py
+```
+
+## Plugin manifests
+
+Convention-based plugins use a `tec_tac.json` file inside their directory.
+
+Extension example:
+
+```json
+{
+  "id": "exampleextension",
+  "type": "extension",
+  "python_paths": ["."],
+  "django_apps": ["exampleextension.apps.ExampleExtensionConfig"]
+}
+```
+
+Matching reportset example:
+
+```json
+{
+  "id": "exampleextension",
+  "type": "reportset",
+  "python_paths": ["."],
+  "django_apps": ["exampleextension_reportset.apps.ExampleReportsetConfig"]
+}
+```
+
+The registry validates that a reportset has a matching extension. It also rejects duplicate Django app registrations and plugin paths that escape their plugin directory.
+
+## Current reporting POC compatibility
+
+The existing `tfdreporting` / `NetworkAvailability` POC predates the extension/reportset naming contract. Version 0.5.3 deliberately keeps it in its existing location so the proven migrations, RBAC and API behaviour are not broken during the framework refactor.
+
+It is loaded as `legacy-reporting-poc` by the framework registry. It should be migrated only when the first real extension receives its final extension ID; at that point its reportset will use that same ID.
 
 ## Get the repository
-
-Recommended location:
 
 ```bash
 cd /opt
 sudo git clone https://github.com/jvz007/tac-net-rep.git tec-tac
 cd /opt/tec-tac
 ```
-
-The repository may be cloned elsewhere. The installer will use its actual location automatically.
 
 For an existing checkout:
 
@@ -70,144 +100,58 @@ sudo git reset --hard origin/main
 
 ## Installation
 
-From the repository root:
-
 ```bash
 sudo bash install.sh
 ```
 
-The installer:
+The installer discovers its repository path, verifies the framework layout, backs up Tactical's ignored `local_settings.py` to `/var/lib/tec-tac/backups/`, installs the minimal bootstrap, runs Django checks/migrations, verifies the existing reporting POC, optionally assigns the reporting ingest role, and restarts Tactical services.
 
-1. discovers the Tec-Tac repository root from `install.sh`;
-2. validates the framework and reporting extension layout;
-3. verifies Tactical's `local_settings.py` is Git-ignored;
-4. backs up `local_settings.py` to `/var/lib/tec-tac/backups/` by default;
-5. writes only the minimal bootstrap using the resolved framework path;
-6. loads framework and extension code directly from the Git checkout;
-7. runs Django checks and migrations;
-8. verifies Python is loading `tfdreporting` from the repository's `extensions/reporting/` directory;
-9. verifies RBAC, Report Manager and the API route;
-10. asks for the Tactical username whose role should receive reporting ingest permission (blank skips);
-11. grants `tfdreporting.networkavailability.manage` to that user's Tactical role;
-12. removes any legacy in-tree `/rmm/api/tacticalrmm/tfdreporting` copy and old Git exclude rule after successful verification;
-13. restarts Tactical services.
+No tracked Tactical source file is modified.
 
-The installer does not copy Tec-Tac code into another installation directory. Mutable backups are kept outside the Git checkout so `git clean -fd` cannot delete them.
-
-
-## Reporting permission assignment
-
-During an interactive install, `install.sh` asks for a Tactical username. If supplied, Tec-Tac resolves that user to its Tactical role and grants the reporting ingest permission:
-
-```text
-tfdreporting.networkavailability.manage
-```
-
-Leave the prompt blank to skip permission assignment. For unattended installation, set the username in the environment:
+## Framework inspection
 
 ```bash
-TEC_TAC_REPORTING_USERNAME="bob" sudo -E bash install.sh
+sudo bash scripts/framework-info.sh
 ```
 
-Permissions are stored against the **Tactical role**, not the individual user. If multiple Tactical users share that role, they all inherit the granted Tec-Tac permission.
+This displays the discovered extension/reportset roots and every loaded Tec-Tac plugin.
 
-To grant or inspect reporting permissions later without rerunning the installer:
+## Foundation test
 
 ```bash
-cd /opt/tec-tac
-
-# Grant ingest/manage permission to the Tactical role used by bob
-sudo bash scripts/reporting-permission.sh bob
-
-# Equivalent explicit mode
-sudo bash scripts/reporting-permission.sh bob manage
-
-# Grant read/list permission only
-sudo bash scripts/reporting-permission.sh bob list
-
-# Grant both manage and list
-sudo bash scripts/reporting-permission.sh bob both
-
-# Show the current Tec-Tac reporting permissions for bob's Tactical role
-sudo bash scripts/reporting-permission.sh bob show
+sudo bash tests/framework-foundation.sh
 ```
 
-For the least-privilege API ingestion POC, use `manage` only. This permits POST ingestion while leaving the reporting `list` permission disabled.
-
-## Test scripts
-
-Version 0.5.1 added reusable tests under `tests/`. Version 0.5.2 adds a reusable permission-management script under `scripts/`.
-
-Server-side framework/reporting verification:
+Then run the existing reporting tests:
 
 ```bash
-cd /opt/tec-tac
 sudo bash tests/network-reporting-server.sh
+sudo -E bash tests/network-reporting-api.sh
 ```
 
-API ingestion/idempotency/validation smoke test:
+The API test requires:
 
 ```bash
-cd /opt/tec-tac
 export TEC_TAC_API_BASE="https://api.example.com"
-export TEC_TAC_API_KEY="<Tactical API key with reporting manage permission>"
-bash tests/network-reporting-api.sh
-unset TEC_TAC_API_KEY
+export TEC_TAC_API_KEY="YOUR_API_KEY"
 ```
 
-The API test creates one valid `NetworkAvailability` row using a unique idempotency key, verifies exact replay behavior, then checks conflict and validation responses. The API key is read only from the environment and must not be committed to the repository.
+## Reporting permission management
 
-## Persistent state
-
-Tec-Tac source code stays in the Git checkout. Mutable state is stored separately:
-
-```text
-<repo-root>/                 Git-managed code
-/var/lib/tec-tac/backups/    local_settings.py backups
-```
-
-Set `TEC_TAC_BACKUP_DIR` when running install/uninstall if a different backup directory is required.
-
-## What remains from v0.4.1
-
-The reporting extension still provides the existing POC functionality:
-
-- `NetworkAvailability` model and migrations.
-- `ExtensionRolePermission` and TFD RBAC helper.
-- Tactical API-key authenticated reporting endpoint.
-- least-privilege GET/POST permissions.
-- validation and idempotent ingestion.
-- server-generated `ingested_by` and `received_at` audit fields.
-- runtime registration with Tactical Report Manager.
-- runtime API URL registration.
-
-The internal Django app name remains `tfdreporting` so its migration identity stays stable.
-
-## Verification
+During an interactive install, Tec-Tac can ask for a Tactical username whose **role** should receive reporting ingest permission.
 
 After installation:
 
 ```bash
-grep -n "TEC-TAC" /rmm/api/tacticalrmm/tacticalrmm/local_settings.py
+sudo bash scripts/reporting-permission.sh bob show
+sudo bash scripts/reporting-permission.sh bob manage
+sudo bash scripts/reporting-permission.sh bob list
+sudo bash scripts/reporting-permission.sh bob both
 ```
 
-Then:
-
-```bash
-cd /rmm/api/tacticalrmm
-source /rmm/api/env/bin/activate
-python manage.py shell -c "import tfdreporting; print(tfdreporting.__file__)"
-```
-
-If the repository was cloned to `/opt/tec-tac`, the expected path begins with:
-
-```text
-/opt/tec-tac/extensions/reporting/tfdreporting/
-```
+Permissions are role-based; users sharing the same Tactical role share the Tec-Tac permissions.
 
 ## Updating
-
-Update the Git checkout, then rerun the installer:
 
 ```bash
 cd /opt/tec-tac
@@ -216,31 +160,32 @@ sudo git reset --hard origin/main
 sudo bash install.sh
 ```
 
-If the repository is located elsewhere, run the same commands from that checkout.
-
 ## Uninstall
 
-Preserve database tables/data:
+Preserve extension data:
 
 ```bash
 sudo bash uninstall.sh
 ```
 
-Full POC database removal:
+Purge the existing reporting POC database objects:
 
 ```bash
 sudo bash uninstall.sh --purge-data
 ```
 
-With `--purge-data`, the script first runs:
+The Git checkout is never deleted by the uninstaller.
 
-```bash
-python manage.py migrate tfdreporting zero --noinput
+## Persistent state
+
+Mutable/persistent Tec-Tac state lives outside the Git checkout:
+
+```text
+/var/lib/tec-tac/
+└── backups/
 ```
 
-while the extension is still loaded.
-
-The uninstall script removes the Tec-Tac bootstrap from Tactical but deliberately leaves the Git repository intact. Delete the checkout separately if it is no longer required.
+The repository remains code only.
 
 ## Current API
 
@@ -248,4 +193,4 @@ The uninstall script removes the Tec-Tac bootstrap from Tactical but deliberatel
 /api/tfd/reporting/network-availability/
 ```
 
-The next POC phase can add server-side infrastructure devices/checks while keeping the probe design separate.
+0.5.x remains foundation work. New functional extensions and matching reportsets should be added only after this framework lifecycle is proven.
