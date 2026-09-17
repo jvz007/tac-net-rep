@@ -8,10 +8,10 @@ VENV_PYTHON="${TACTICAL_ROOT}/api/env/bin/python"
 MANAGE_PY="${BACKEND_DIR}/manage.py"
 LOCAL_SETTINGS="${BACKEND_DIR}/tacticalrmm/local_settings.py"
 
-TEC_TAC_ROOT="${TEC_TAC_ROOT:-/opt/tec-tac}"
-FRAMEWORK_DIR="${TEC_TAC_ROOT}/framwork"
-REPORTING_DIR="${TEC_TAC_ROOT}/extensions/reporting"
-DEST_APP="${REPORTING_DIR}/${APP_NAME}"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FRAMEWORK_DIR="${REPO_ROOT}/framwork"
+REPORTING_DIR="${REPO_ROOT}/extensions/reporting"
+APP_DIR="${REPORTING_DIR}/${APP_NAME}"
 
 BEGIN_MARKER="# BEGIN TEC-TAC EXTENSION FRAMEWORK"
 END_MARKER="# END TEC-TAC EXTENSION FRAMEWORK"
@@ -43,8 +43,10 @@ run_as_tactical() {
     runuser -u "${TACTICAL_USER}" -- "$@"
 }
 
+log "Detected Tec-Tac repository root: ${REPO_ROOT}"
+
 if ${PURGE_DATA}; then
-    [[ -d "${DEST_APP}" || -d "${LEGACY_DEST_APP}" ]] || fail "${APP_NAME} code is missing; cannot safely run migration rollback."
+    [[ -f "${APP_DIR}/apps.py" || -d "${LEGACY_DEST_APP}" ]] || fail "${APP_NAME} code is missing; cannot safely run migration rollback."
     log "Purging ${APP_NAME} database objects via Django migrations."
     run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' migrate '${APP_NAME}' zero --noinput"
 else
@@ -52,7 +54,7 @@ else
 fi
 
 if [[ -f "${LOCAL_SETTINGS}" ]]; then
-    BACKUP_DIR="${TEC_TAC_BACKUP_DIR:-/opt/tec-tac/backups}"
+    BACKUP_DIR="${TEC_TAC_BACKUP_DIR:-${REPO_ROOT}/backups}"
     mkdir -p "${BACKUP_DIR}"
     BACKUP_FILE="${BACKUP_DIR}/local_settings.py.$(date +%Y%m%dT%H%M%S).uninstall.bak"
     cp -a "${LOCAL_SETTINGS}" "${BACKUP_FILE}"
@@ -74,13 +76,13 @@ if [[ -f "${LOCAL_SETTINGS}" ]]; then
     log "Removed Tec-Tac bootstrap block from local_settings.py."
 fi
 
-rm -rf "${REPORTING_DIR}" "${LEGACY_DEST_APP}"
-log "Removed reporting extension code."
-
-# v0.5.0 contains only the reporting extension. Remove the framework as part of
-# a complete POC uninstall, while leaving backups under /opt/tec-tac/backups.
-rm -rf "${FRAMEWORK_DIR}"
-log "Removed Tec-Tac framework code."
+# Repository-owned framework/extension files are intentionally not deleted.
+# Uninstall only disconnects Tec-Tac from Tactical. Delete the Git checkout
+# separately if the repository itself is no longer wanted.
+if [[ -d "${LEGACY_DEST_APP}" ]]; then
+    rm -rf "${LEGACY_DEST_APP}"
+    log "Removed legacy in-tree ${LEGACY_DEST_APP}."
+fi
 
 if [[ -f "${EXCLUDE_FILE}" ]]; then
     TMP_EXCLUDE="$(mktemp)"
@@ -106,3 +108,4 @@ if ${PURGE_DATA}; then
 else
     log "Extension database tables and data were preserved."
 fi
+log "Repository files were left intact at ${REPO_ROOT}."

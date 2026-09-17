@@ -9,15 +9,11 @@ VENV_PYTHON="${TACTICAL_ROOT}/api/env/bin/python"
 MANAGE_PY="${BACKEND_DIR}/manage.py"
 LOCAL_SETTINGS="${BACKEND_DIR}/tacticalrmm/local_settings.py"
 
-TEC_TAC_ROOT="${TEC_TAC_ROOT:-/opt/tec-tac}"
-FRAMEWORK_DIR="${TEC_TAC_ROOT}/framwork"
-REPORTING_DIR="${TEC_TAC_ROOT}/extensions/reporting"
-DEST_APP="${REPORTING_DIR}/${APP_NAME}"
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SOURCE_FRAMEWORK="${SCRIPT_DIR}/framwork/tec_tac"
-SOURCE_APP="${SCRIPT_DIR}/extensions/reporting/${APP_NAME}"
-VERSION_FILE="${SCRIPT_DIR}/VERSION"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FRAMEWORK_DIR="${REPO_ROOT}/framwork"
+REPORTING_DIR="${REPO_ROOT}/extensions/reporting"
+APP_DIR="${REPORTING_DIR}/${APP_NAME}"
+VERSION_FILE="${REPO_ROOT}/VERSION"
 
 BEGIN_MARKER="# BEGIN TEC-TAC EXTENSION FRAMEWORK"
 END_MARKER="# END TEC-TAC EXTENSION FRAMEWORK"
@@ -38,12 +34,13 @@ if [[ -f "${VERSION_FILE}" ]]; then
     PACKAGE_VERSION="$(tr -d '[:space:]' < "${VERSION_FILE}")"
 fi
 log "Installing Tec-Tac Tactical extension POC ${PACKAGE_VERSION}."
+log "Detected Tec-Tac repository root: ${REPO_ROOT}"
 
 [[ -d "${TACTICAL_ROOT}/.git" ]] || fail "${TACTICAL_ROOT} is not a Tactical RMM Git checkout."
 [[ -f "${MANAGE_PY}" ]] || fail "Tactical manage.py was not found at ${MANAGE_PY}."
 [[ -x "${VENV_PYTHON}" ]] || fail "Tactical Python was not found at ${VENV_PYTHON}."
-[[ -d "${SOURCE_FRAMEWORK}" ]] || fail "Installer payload is missing ${SOURCE_FRAMEWORK}."
-[[ -d "${SOURCE_APP}" ]] || fail "Installer payload is missing ${SOURCE_APP}."
+[[ -f "${FRAMEWORK_DIR}/tec_tac/bootstrap.py" ]] || fail "Installer payload is missing ${FRAMEWORK_DIR}/tec_tac/bootstrap.py."
+[[ -f "${APP_DIR}/apps.py" ]] || fail "Installer payload is missing ${APP_DIR}/apps.py."
 [[ -f "${LOCAL_SETTINGS}" ]] || fail "Tactical local_settings.py was not found at ${LOCAL_SETTINGS}."
 [[ -f "${BACKEND_DIR}/ee/reporting/constants.py" ]] || fail "Tactical Report Manager (ee.reporting) was not found."
 
@@ -69,7 +66,11 @@ if ! run_as_tactical git -C "${TACTICAL_ROOT}" check-ignore -q "api/tacticalrmm/
 fi
 log "Confirmed local_settings.py is ignored by Tactical Git."
 
-BACKUP_DIR="${TEC_TAC_BACKUP_DIR:-/opt/tec-tac/backups}"
+# Ensure Tactical can traverse/read the checkout without changing repository
+# ownership. This is intentionally limited to read/execute permissions.
+chmod -R a+rX "${FRAMEWORK_DIR}" "${REPORTING_DIR}"
+
+BACKUP_DIR="${TEC_TAC_BACKUP_DIR:-${REPO_ROOT}/backups}"
 mkdir -p "${BACKUP_DIR}"
 BACKUP_FILE="${BACKUP_DIR}/local_settings.py.$(date +%Y%m%dT%H%M%S).bak"
 cp -a "${LOCAL_SETTINGS}" "${BACKUP_FILE}"
@@ -80,15 +81,6 @@ END_COUNT="$(grep -Fxc "${END_MARKER}" "${LOCAL_SETTINGS}" || true)"
 if [[ "${BEGIN_COUNT}" -ne "${END_COUNT}" ]] || [[ "${BEGIN_COUNT}" -gt 1 ]]; then
     fail "Malformed Tec-Tac loader markers in ${LOCAL_SETTINGS}. Backup: ${BACKUP_FILE}"
 fi
-
-# Install all Tec-Tac code outside the Tactical source checkout.
-mkdir -p "${FRAMEWORK_DIR}" "${REPORTING_DIR}"
-rm -rf "${FRAMEWORK_DIR}/tec_tac" "${DEST_APP}"
-cp -a "${SOURCE_FRAMEWORK}" "${FRAMEWORK_DIR}/tec_tac"
-cp -a "${SOURCE_APP}" "${DEST_APP}"
-find "${TEC_TAC_ROOT}" -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
-chown -R "${TACTICAL_USER}:${TACTICAL_GROUP}" "${TEC_TAC_ROOT}"
-log "Installed Tec-Tac code outside /rmm."
 
 TMP_SETTINGS="$(mktemp)"
 trap 'rm -f "${TMP_SETTINGS}"' EXIT
@@ -111,7 +103,7 @@ fi
 cat >> "${TMP_SETTINGS}" <<PYEOF
 
 ${BEGIN_MARKER}
-# Minimal bootstrap only. Tec-Tac framework and extensions live under /opt/tec-tac.
+# Minimal bootstrap only. Path generated from the Tec-Tac repository location.
 import sys
 
 _TEC_TAC_FRAMEWORK = "${FRAMEWORK_DIR}"
@@ -141,17 +133,17 @@ run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}'
 log "Applying ${APP_NAME} migrations."
 run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' migrate '${APP_NAME}' --noinput"
 
-log "Verifying external app location, RBAC, Report Manager, and API route."
+log "Verifying repository-loaded app, RBAC, Report Manager, and API route."
 VERIFY_CODE="import tfdreporting; from django.apps import apps; from django.urls import resolve; expected='${REPORTING_DIR}/'; assert tfdreporting.__file__.startswith(expected), tfdreporting.__file__; m=apps.get_model('${APP_NAME}','${MODEL_NAME}'); p=apps.get_model('${APP_NAME}','ExtensionRolePermission'); from ee.reporting.utils import resolve_model; r=resolve_model(data_source={'model':'${MODEL_NAME}'}); assert r['model'] is m; from tfdreporting.rbac import REGISTERED_PERMISSIONS; assert len(REGISTERED_PERMISSIONS) >= 2; match=resolve('/api/tfd/reporting/network-availability/'); assert match.url_name == 'network-availability'; fields={f.name for f in m._meta.fields}; assert {'idempotency_key','ingested_by','received_at'} <= fields; c=m.objects.count(); print('TEC-TAC verification OK:', 'module=', tfdreporting.__file__, m._meta.label, p._meta.label, 'endpoint=', match.route, 'network_rows=', c)"
 run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_CODE}\""
 
-# The external copy is now proven. Remove any old in-tree extension copy.
+# Remove any old in-tree extension copy only after the repository-loaded copy
+# has been verified successfully.
 if [[ -d "${LEGACY_DEST_APP}" ]]; then
     rm -rf "${LEGACY_DEST_APP}"
     log "Removed legacy in-tree ${LEGACY_DEST_APP}."
 fi
 
-# No Tec-Tac app code lives inside /rmm anymore, so the old exclude is obsolete.
 if [[ -f "${EXCLUDE_FILE}" ]]; then
     TMP_EXCLUDE="$(mktemp)"
     grep -Fxv "/api/tacticalrmm/${APP_NAME}/" "${EXCLUDE_FILE}" > "${TMP_EXCLUDE}" || true

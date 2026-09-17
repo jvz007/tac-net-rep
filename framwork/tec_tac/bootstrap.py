@@ -1,8 +1,7 @@
 """Tec-Tac bootstrap for Tactical RMM extensions.
 
-Loaded from Tactical's ignored local_settings.py. The framework owns extension
-path discovery and Django app registration so Tactical tracked source remains
-untouched.
+Loaded from Tactical's ignored local_settings.py. Paths are discovered from the
+repository layout so the Tec-Tac checkout can live anywhere on the filesystem.
 """
 
 import sys
@@ -12,7 +11,8 @@ from django.apps import apps as django_apps
 from django.apps.registry import Apps
 
 
-TEC_TAC_ROOT = Path("/opt/tec-tac")
+FRAMEWORK_ROOT = Path(__file__).resolve().parent.parent
+TEC_TAC_ROOT = FRAMEWORK_ROOT.parent
 EXTENSIONS_ROOT = TEC_TAC_ROOT / "extensions"
 
 # POC extension registry. Add future extension descriptors here, not in

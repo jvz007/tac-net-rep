@@ -2,23 +2,31 @@
 
 Version **0.5.0** restructures the POC so Tec-Tac code no longer lives inside the Tactical RMM Git checkout.
 
-## Installed structure
+The repository itself is the Tec-Tac runtime root. The scripts do **not** require the repository to be installed at a hardcoded path. `/opt/tec-tac` is the recommended location only.
+
+## Repository structure
 
 ```text
-/opt/tec-tac/
+<repo-root>/
+├── install.sh
+├── uninstall.sh
+├── README.md
+├── VERSION
+├── LICENSE
 ├── framwork/
 │   └── tec_tac/
 │       ├── __init__.py
 │       └── bootstrap.py
-├── extensions/
-│   └── reporting/
-│       └── tfdreporting/
-└── backups/
+└── extensions/
+    └── reporting/
+        └── tfdreporting/
 ```
 
-`framwork` is intentionally spelled exactly this way to match the agreed POC path.
+`framwork` is intentionally spelled exactly this way to match the agreed POC structure.
 
-The only Tec-Tac code left inside the Tactical configuration is a small bootstrap block in Tactical's already-ignored `local_settings.py`:
+The installer discovers `<repo-root>` from the location of `install.sh`. The framework then discovers the extensions directory relative to its own file location.
+
+The only Tec-Tac code placed into Tactical configuration is a small bootstrap block in Tactical's already-ignored `local_settings.py`. The installer writes the resolved framework path automatically, for example:
 
 ```python
 # BEGIN TEC-TAC EXTENSION FRAMEWORK
@@ -35,6 +43,50 @@ load_extensions()
 
 No Tactical tracked source file is modified.
 
+## Get the repository
+
+Recommended location:
+
+```bash
+cd /opt
+sudo git clone https://github.com/jvz007/tac-net-rep.git tec-tac
+cd /opt/tec-tac
+```
+
+The repository may be cloned elsewhere. The installer will use its actual location automatically.
+
+For an existing checkout:
+
+```bash
+cd /opt/tec-tac
+sudo git fetch origin
+sudo git reset --hard origin/main
+```
+
+## Installation
+
+From the repository root:
+
+```bash
+sudo bash install.sh
+```
+
+The installer:
+
+1. discovers the Tec-Tac repository root from `install.sh`;
+2. validates the framework and reporting extension layout;
+3. verifies Tactical's `local_settings.py` is Git-ignored;
+4. backs up `local_settings.py`;
+5. writes only the minimal bootstrap using the resolved framework path;
+6. loads framework and extension code directly from the Git checkout;
+7. runs Django checks and migrations;
+8. verifies Python is loading `tfdreporting` from the repository's `extensions/reporting/` directory;
+9. verifies RBAC, Report Manager and the API route;
+10. removes any legacy in-tree `/rmm/api/tacticalrmm/tfdreporting` copy and old Git exclude rule after successful verification;
+11. restarts Tactical services.
+
+The installer does not copy Tec-Tac code into another installation directory.
+
 ## What remains from v0.4.1
 
 The reporting extension still provides the existing POC functionality:
@@ -50,26 +102,40 @@ The reporting extension still provides the existing POC functionality:
 
 The internal Django app name remains `tfdreporting` so its migration identity stays stable.
 
-## Installation
+## Verification
 
-After removing the previous POC, install with:
+After installation:
 
 ```bash
+grep -n "TEC-TAC" /rmm/api/tacticalrmm/tacticalrmm/local_settings.py
+```
+
+Then:
+
+```bash
+cd /rmm/api/tacticalrmm
+source /rmm/api/env/bin/activate
+python manage.py shell -c "import tfdreporting; print(tfdreporting.__file__)"
+```
+
+If the repository was cloned to `/opt/tec-tac`, the expected path begins with:
+
+```text
+/opt/tec-tac/extensions/reporting/tfdreporting/
+```
+
+## Updating
+
+Update the Git checkout, then rerun the installer:
+
+```bash
+cd /opt/tec-tac
+sudo git fetch origin
+sudo git reset --hard origin/main
 sudo bash install.sh
 ```
 
-The installer:
-
-1. verifies Tactical's `local_settings.py` is Git-ignored;
-2. backs it up;
-3. installs the framework to `/opt/tec-tac/framwork/`;
-4. installs reporting to `/opt/tec-tac/extensions/reporting/`;
-5. writes only the minimal bootstrap to `local_settings.py`;
-6. runs Django checks and migrations;
-7. verifies Python is loading `tfdreporting` from `/opt/tec-tac/extensions/reporting/`;
-8. verifies RBAC, Report Manager and the API route;
-9. removes any legacy in-tree `/rmm/api/tacticalrmm/tfdreporting` copy and old Git exclude rule after successful verification;
-10. restarts Tactical services.
+If the repository is located elsewhere, run the same commands from that checkout.
 
 ## Uninstall
 
@@ -79,7 +145,7 @@ Preserve database tables/data:
 sudo bash uninstall.sh
 ```
 
-Full POC removal including database tables and all extension records:
+Full POC database removal:
 
 ```bash
 sudo bash uninstall.sh --purge-data
@@ -91,7 +157,9 @@ With `--purge-data`, the script first runs:
 python manage.py migrate tfdreporting zero --noinput
 ```
 
-while the extension is still loaded, then removes the bootstrap and Tec-Tac code.
+while the extension is still loaded.
+
+The uninstall script removes the Tec-Tac bootstrap from Tactical but deliberately leaves the Git repository intact. Delete the checkout separately if it is no longer required.
 
 ## Current API
 
