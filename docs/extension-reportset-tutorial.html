@@ -1,0 +1,747 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tec-Tac Extension & ReportSet Tutorial</title>
+<style>
+:root{--blue:#1C489B;--orange:#FC8127;--ink:#1f2937;--border:#e5e7eb;--soft:#f6f8fa}
+*{box-sizing:border-box}
+body{margin:0;font-family:Segoe UI,Arial,sans-serif;color:var(--ink);line-height:1.65;background:#fff}
+main{max-width:1040px;margin:0 auto;padding:48px 30px 90px}
+h1{color:var(--blue);font-size:2.35rem;margin:.2rem 0 1rem}
+h2{color:var(--blue);margin-top:2.6rem;padding-bottom:.35rem;border-bottom:1px solid var(--border)}
+h3{margin-top:1.8rem}
+hr{border:0;border-top:3px solid var(--orange);margin:2.2rem 0}
+p{margin:.65rem 0}
+ul{margin:.6rem 0 1rem 1.4rem}
+code{font-family:Consolas,Menlo,monospace;background:var(--soft);padding:.12rem .3rem;border-radius:4px}
+pre{background:#0f172a;color:#e5e7eb;padding:18px;border-radius:8px;overflow-x:auto;border-left:4px solid var(--orange)}
+pre code{background:transparent;padding:0;color:inherit}
+strong{color:#111827}
+@media print{main{max-width:none;padding:20px}pre{white-space:pre-wrap}}
+</style>
+</head>
+<body><main>
+<h1>Tec-Tac Extension &amp; ReportSet Tutorial</h1>
+<p><strong>Framework baseline:</strong> Tec-Tac 1.0.0</p>
+<p><strong>Purpose:</strong> Create, package, deploy, upgrade, and validate your own Tec-Tac extension and matching ReportSet.</p>
+<p>This tutorial uses <code>networkprobe</code> as the example extension ID.</p>
+<hr>
+<h1>1. Understand the Tec-Tac plugin model</h1>
+<p>Every production extension is a matched pair:</p>
+<pre><code>extensions/&lt;extension-id&gt;/
+reportsets/&lt;extension-id&gt;/</code></pre>
+<p>The two directory names must be identical.</p>
+<p>For this tutorial:</p>
+<pre><code>extensions/networkprobe/
+reportsets/networkprobe/</code></pre>
+<p>The extension contains operational functionality and owns its source data. The ReportSet contains reporting mappings, enrichment, derived values, aggregation, and other report-facing logic.</p>
+<pre><code>Extension
+    |
+    | collects / owns / manages
+    v
+Operational data
+    |
+    | mapped / enriched / aggregated by
+    v
+ReportSet
+    |
+    v
+Reports / dashboards / exports</code></pre>
+<hr>
+<h1>2. Plan the extension</h1>
+<p>Before creating files, define:</p>
+<pre><code>Extension ID:
+networkprobe
+
+Extension responsibility:
+Receive and manage network-device observations.
+
+Extension-owned data:
+Device identity
+Device state
+Raw check results
+Measurements
+Timestamps
+
+ReportSet responsibility:
+Expose availability, latency, packet loss and device-health information for reporting.</code></pre>
+<p>Use the <strong>extension&#x27;s name</strong> as the ID. Do not name the pair after the type of report it happens to produce.</p>
+<hr>
+<h1>3. Scaffold the pair</h1>
+<p><strong>Run from:</strong> the Tec-Tac repository root.</p>
+<pre><code>cd /opt/tec-tac
+sudo bash scripts/scaffold-plugin.sh networkprobe 0.1.0</code></pre>
+<p>This creates:</p>
+<pre><code>extensions/networkprobe/
+├── README.md
+└── tec_tac.json
+
+reportsets/networkprobe/
+├── README.md
+└── tec_tac.json</code></pre>
+<p>The scaffold script currently creates the manifests and README files only. You add the actual Python/Django packages next.</p>
+<hr>
+<h1>4. Extension manifest</h1>
+<p><strong>File:</strong> <code>extensions/networkprobe/tec_tac.json</code></p>
+<pre><code>{
+  &quot;id&quot;: &quot;networkprobe&quot;,
+  &quot;type&quot;: &quot;extension&quot;,
+  &quot;version&quot;: &quot;0.1.0&quot;,
+  &quot;python_paths&quot;: [&quot;.&quot;],
+  &quot;django_apps&quot;: []
+}</code></pre>
+<p>At this stage there is no Django app yet, so <code>django_apps</code> is empty.</p>
+<p>Important manifest rules:</p>
+<pre><code>id             must match the directory name
+type           must be extension or reportset as appropriate
+version        must not be blank
+python_paths   must remain inside the plugin directory and must exist
+django_apps    must contain valid, unique Django AppConfig class paths</code></pre>
+<hr>
+<h1>5. ReportSet manifest</h1>
+<p><strong>File:</strong> <code>reportsets/networkprobe/tec_tac.json</code></p>
+<pre><code>{
+  &quot;id&quot;: &quot;networkprobe&quot;,
+  &quot;type&quot;: &quot;reportset&quot;,
+  &quot;version&quot;: &quot;0.1.0&quot;,
+  &quot;python_paths&quot;: [&quot;.&quot;],
+  &quot;django_apps&quot;: []
+}</code></pre>
+<p>The ReportSet ID is <code>networkprobe</code>, exactly matching the extension ID.</p>
+<hr>
+<h1>6. Create the extension Python package</h1>
+<p><strong>Run from:</strong> <code>/opt/tec-tac</code></p>
+<pre><code>mkdir -p extensions/networkprobe/tec_tac_networkprobe/migrations
+
+touch extensions/networkprobe/tec_tac_networkprobe/__init__.py
+touch extensions/networkprobe/tec_tac_networkprobe/migrations/__init__.py</code></pre>
+<p>Your extension now has this structure:</p>
+<pre><code>extensions/networkprobe/
+├── README.md
+├── tec_tac.json
+└── tec_tac_networkprobe/
+    ├── __init__.py
+    └── migrations/
+        └── __init__.py</code></pre>
+<hr>
+<h1>7. Add the extension AppConfig</h1>
+<p><strong>File:</strong> <code>extensions/networkprobe/tec_tac_networkprobe/apps.py</code></p>
+<pre><code>from django.apps import AppConfig
+
+
+class TecTacNetworkProbeConfig(AppConfig):
+    default_auto_field = &quot;django.db.models.BigAutoField&quot;
+    name = &quot;tec_tac_networkprobe&quot;
+    label = &quot;tec_tac_networkprobe&quot;
+    verbose_name = &quot;Tec-Tac Network Probe&quot;</code></pre>
+<p>The Django <code>label</code> must not collide with Tactical or another Tec-Tac Django application.</p>
+<hr>
+<h1>8. Register the extension Django app</h1>
+<p><strong>File:</strong> <code>extensions/networkprobe/tec_tac.json</code></p>
+<p>Replace the original manifest with:</p>
+<pre><code>{
+  &quot;id&quot;: &quot;networkprobe&quot;,
+  &quot;type&quot;: &quot;extension&quot;,
+  &quot;version&quot;: &quot;0.1.0&quot;,
+  &quot;python_paths&quot;: [&quot;.&quot;],
+  &quot;django_apps&quot;: [
+    &quot;tec_tac_networkprobe.apps.TecTacNetworkProbeConfig&quot;
+  ]
+}</code></pre>
+<p>Tec-Tac will make the declared Python path importable and add the AppConfig to the primary Django application registry.</p>
+<p>Do <strong>not</strong> edit Tactical tracked source files to register the app.</p>
+<hr>
+<h1>9. Create an extension-owned model</h1>
+<p><strong>File:</strong> <code>extensions/networkprobe/tec_tac_networkprobe/models.py</code></p>
+<p>Example:</p>
+<pre><code>from django.db import models
+
+
+class NetworkDevice(models.Model):
+    device_uid = models.CharField(max_length=128, unique=True)
+    name = models.CharField(max_length=255)
+    address = models.GenericIPAddressField()
+    device_type = models.CharField(max_length=64, blank=True)
+    last_seen = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = (&quot;name&quot;,)
+
+    def __str__(self):
+        return self.name</code></pre>
+<p>This belongs on the extension side because the extension owns the operational device record.</p>
+<p>Do not blindly copy this model for every plugin. Design models around the actual extension.</p>
+<hr>
+<h1>10. Create the ReportSet Python package</h1>
+<p><strong>Run from:</strong> <code>/opt/tec-tac</code></p>
+<pre><code>mkdir -p reportsets/networkprobe/tec_tac_networkprobe_reportset/migrations
+
+touch reportsets/networkprobe/tec_tac_networkprobe_reportset/__init__.py
+touch reportsets/networkprobe/tec_tac_networkprobe_reportset/migrations/__init__.py</code></pre>
+<p>Result:</p>
+<pre><code>reportsets/networkprobe/
+├── README.md
+├── tec_tac.json
+└── tec_tac_networkprobe_reportset/
+    ├── __init__.py
+    └── migrations/
+        └── __init__.py</code></pre>
+<hr>
+<h1>11. Add the ReportSet AppConfig</h1>
+<p><strong>File:</strong> <code>reportsets/networkprobe/tec_tac_networkprobe_reportset/apps.py</code></p>
+<pre><code>from django.apps import AppConfig
+
+
+class TecTacNetworkProbeReportsetConfig(AppConfig):
+    default_auto_field = &quot;django.db.models.BigAutoField&quot;
+    name = &quot;tec_tac_networkprobe_reportset&quot;
+    label = &quot;tec_tac_networkprobe_reportset&quot;
+    verbose_name = &quot;Tec-Tac Network Probe ReportSet&quot;</code></pre>
+<hr>
+<h1>12. Register the ReportSet Django app</h1>
+<p><strong>File:</strong> <code>reportsets/networkprobe/tec_tac.json</code></p>
+<p>Replace the original manifest with:</p>
+<pre><code>{
+  &quot;id&quot;: &quot;networkprobe&quot;,
+  &quot;type&quot;: &quot;reportset&quot;,
+  &quot;version&quot;: &quot;0.1.0&quot;,
+  &quot;python_paths&quot;: [&quot;.&quot;],
+  &quot;django_apps&quot;: [
+    &quot;tec_tac_networkprobe_reportset.apps.TecTacNetworkProbeReportsetConfig&quot;
+  ]
+}</code></pre>
+<hr>
+<h1>13. Add ReportSet mappings</h1>
+<p>A ReportSet should expose the reporting interpretation of extension-owned data.</p>
+<p>Good ReportSet responsibilities include:</p>
+<pre><code>friendly field labels
+relationships
+device-type enrichment
+vendor enrichment
+availability calculations
+latency summaries
+packet-loss summaries
+derived health states
+hour/day/week/month consolidation
+report-facing models</code></pre>
+<p>For simple Python mapping/enrichment logic:</p>
+<p><strong>File:</strong> <code>reportsets/networkprobe/tec_tac_networkprobe_reportset/mappings.py</code></p>
+<pre><code>def map_device(device):
+    return {
+        &quot;device_uid&quot;: device.device_uid,
+        &quot;device_name&quot;: device.name,
+        &quot;device_type&quot;: device.device_type or &quot;unknown&quot;,
+        &quot;address&quot;: device.address,
+        &quot;last_seen&quot;: device.last_seen,
+    }</code></pre>
+<p>For derived logic:</p>
+<p><strong>File:</strong> <code>reportsets/networkprobe/tec_tac_networkprobe_reportset/enrichment.py</code></p>
+<pre><code>def availability_status(availability_pct):
+    if availability_pct is None:
+        return &quot;unknown&quot;
+    if availability_pct &gt;= 99.0:
+        return &quot;healthy&quot;
+    if availability_pct &gt;= 95.0:
+        return &quot;degraded&quot;
+    return &quot;unhealthy&quot;</code></pre>
+<p>These are examples of where mapping and enrichment logic belongs. The exact reporting contract depends on the extension.</p>
+<hr>
+<h1>14. Add an API only when the extension needs one</h1>
+<p>Operational ingest and management APIs normally belong on the <strong>extension</strong> side.</p>
+<p>Typical files are:</p>
+<pre><code>extensions/networkprobe/tec_tac_networkprobe/
+├── serializers.py
+├── views.py
+├── urls.py
+├── permissions.py
+└── rbac.py</code></pre>
+<p>If you create a serializer:</p>
+<p><strong>File:</strong> <code>extensions/networkprobe/tec_tac_networkprobe/serializers.py</code></p>
+<pre><code>from rest_framework import serializers
+from .models import NetworkDevice
+
+
+class NetworkDeviceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = NetworkDevice
+        fields = (
+            &quot;id&quot;,
+            &quot;device_uid&quot;,
+            &quot;name&quot;,
+            &quot;address&quot;,
+            &quot;device_type&quot;,
+            &quot;last_seen&quot;,
+        )</code></pre>
+<p>If you create an API view:</p>
+<p><strong>File:</strong> <code>extensions/networkprobe/tec_tac_networkprobe/views.py</code></p>
+<pre><code>from rest_framework.generics import ListCreateAPIView
+
+from .models import NetworkDevice
+from .serializers import NetworkDeviceSerializer
+
+
+class NetworkDeviceListCreateView(ListCreateAPIView):
+    queryset = NetworkDevice.objects.all()
+    serializer_class = NetworkDeviceSerializer</code></pre>
+<p>If you create URL definitions:</p>
+<p><strong>File:</strong> <code>extensions/networkprobe/tec_tac_networkprobe/urls.py</code></p>
+<pre><code>from django.urls import path
+from .views import NetworkDeviceListCreateView
+
+
+urlpatterns = [
+    path(
+        &quot;devices/&quot;,
+        NetworkDeviceListCreateView.as_view(),
+        name=&quot;networkprobe-devices&quot;,
+    ),
+]</code></pre>
+<p>Creating <code>urls.py</code> does not by itself make a route public. The extension still needs a supported Tec-Tac/Tactical URL registration mechanism. Do not edit Tactical tracked URL files simply to make the route available.</p>
+<p>When building an ingest API, design these from the start:</p>
+<pre><code>authentication
+authorization
+input validation
+idempotency
+replay behaviour
+timestamp validation
+duplicate handling
+server-side audit fields
+HTTP status codes</code></pre>
+<hr>
+<h1>15. Permissions</h1>
+<p>Use explicit permission codenames owned by the extension.</p>
+<p>Example:</p>
+<pre><code>tec_tac_networkprobe.device.list
+tec_tac_networkprobe.device.manage
+tec_tac_networkprobe.ingest.manage</code></pre>
+<p>Keep permissions least-privilege.</p>
+<p>Tec-Tac&#x27;s current proven custom permission pattern is role-based. A grant to a Tactical role affects every Tactical user assigned to that role.</p>
+<p>Do not silently grant new extension permissions during installation.</p>
+<hr>
+<h1>16. Validate the plugin registry</h1>
+<p><strong>Run from:</strong> <code>/opt/tec-tac</code></p>
+<pre><code>sudo bash scripts/plugin-info.sh</code></pre>
+<p>You should eventually see both:</p>
+<pre><code>extension : networkprobe
+reportset : networkprobe</code></pre>
+<p>Inspect the pair directly:</p>
+<pre><code>sudo bash scripts/plugin-info.sh networkprobe extension
+sudo bash scripts/plugin-info.sh networkprobe reportset</code></pre>
+<p>Run framework registry validation:</p>
+<pre><code>sudo bash tests/registry-validation.sh</code></pre>
+<p>Do not continue until registry validation passes.</p>
+<hr>
+<h1>17. Run the Django system check</h1>
+<p><strong>Run from:</strong> <code>/rmm/api/tacticalrmm</code></p>
+<pre><code>cd /rmm/api/tacticalrmm
+sudo -u tactical /rmm/api/env/bin/python manage.py check</code></pre>
+<p>Expected result:</p>
+<pre><code>System check identified no issues</code></pre>
+<hr>
+<h1>18. Create extension migrations</h1>
+<p>After adding or changing extension models:</p>
+<p><strong>Generated files will be written under:</strong></p>
+<p><code>extensions/networkprobe/tec_tac_networkprobe/migrations/</code></p>
+<p><strong>Run from:</strong> <code>/rmm/api/tacticalrmm</code></p>
+<pre><code>sudo -u tactical /rmm/api/env/bin/python manage.py makemigrations tec_tac_networkprobe</code></pre>
+<p>Review every generated migration before committing it.</p>
+<p>Example generated filename:</p>
+<pre><code>extensions/networkprobe/tec_tac_networkprobe/migrations/0001_initial.py</code></pre>
+<p>Do not edit an already-deployed migration to represent a later schema change. Create a new migration.</p>
+<hr>
+<h1>19. Create ReportSet migrations when needed</h1>
+<p>Only do this if the ReportSet has database models.</p>
+<p><strong>Generated files will be written under:</strong></p>
+<p><code>reportsets/networkprobe/tec_tac_networkprobe_reportset/migrations/</code></p>
+<p><strong>Run from:</strong> <code>/rmm/api/tacticalrmm</code></p>
+<pre><code>sudo -u tactical /rmm/api/env/bin/python manage.py makemigrations tec_tac_networkprobe_reportset</code></pre>
+<hr>
+<h1>20. Apply migrations during development</h1>
+<p><strong>Run from:</strong> <code>/rmm/api/tacticalrmm</code></p>
+<p>Extension:</p>
+<pre><code>sudo -u tactical /rmm/api/env/bin/python manage.py migrate tec_tac_networkprobe</code></pre>
+<p>ReportSet, if it has migrations:</p>
+<pre><code>sudo -u tactical /rmm/api/env/bin/python manage.py migrate tec_tac_networkprobe_reportset</code></pre>
+<p>Then:</p>
+<pre><code>sudo -u tactical /rmm/api/env/bin/python manage.py check</code></pre>
+<hr>
+<h1>21. Add extension tests</h1>
+<p>Recommended test location:</p>
+<pre><code>tests/networkprobe/</code></pre>
+<p>Suggested files:</p>
+<pre><code>tests/networkprobe/
+├── server.sh
+├── api.sh
+└── reportset.sh</code></pre>
+<p>For server/model validation:</p>
+<p><strong>File:</strong> <code>tests/networkprobe/server.sh</code></p>
+<pre><code>#!/usr/bin/env bash
+set -euo pipefail
+
+cd /rmm/api/tacticalrmm
+
+sudo -u tactical /rmm/api/env/bin/python manage.py check
+sudo -u tactical /rmm/api/env/bin/python manage.py shell -c &quot;
+from django.apps import apps
+assert apps.get_model(&#x27;tec_tac_networkprobe&#x27;, &#x27;NetworkDevice&#x27;)
+print(&#x27;[TEST] PASS networkprobe server&#x27;)
+&quot;</code></pre>
+<p>For an ingest API, tests should normally cover:</p>
+<pre><code>valid create
+exact replay
+conflicting replay
+bad status/enum
+invalid numeric ranges
+future timestamp
+authentication failure
+authorization failure</code></pre>
+<p>For historical reporting, test the intended aggregation levels:</p>
+<pre><code>hour
+day
+week
+month</code></pre>
+<hr>
+<h1>22. Update the extension READMEs</h1>
+<p><strong>File:</strong> <code>extensions/networkprobe/README.md</code></p>
+<p>Document at least:</p>
+<pre><code>purpose
+version
+owned models
+API endpoints
+permissions
+configuration
+migration requirements
+dependencies
+deployment notes</code></pre>
+<p><strong>File:</strong> <code>reportsets/networkprobe/README.md</code></p>
+<p>Document at least:</p>
+<pre><code>source extension
+datasets exposed
+field mappings
+relationships
+enrichment
+aggregation
+report-facing models
+historical behaviour</code></pre>
+<hr>
+<h1>23. Package the extension for deployment</h1>
+<p>A Tec-Tac extension package must contain exactly one matching pair.</p>
+<p>Preferred archive layout:</p>
+<pre><code>networkprobe-0.1.0/
+├── extensions/
+│   └── networkprobe/
+│       ├── tec_tac.json
+│       ├── README.md
+│       └── tec_tac_networkprobe/
+│           └── ...
+└── reportsets/
+    └── networkprobe/
+        ├── tec_tac.json
+        ├── README.md
+        └── tec_tac_networkprobe_reportset/
+            └── ...</code></pre>
+<p>A wrapper directory such as <code>networkprobe-0.1.0/</code> is optional.</p>
+<p>Do <strong>not</strong> package:</p>
+<pre><code>__pycache__/
+*.pyc
+API keys
+passwords
+environment-specific secrets
+temporary output
+.git/</code></pre>
+<hr>
+<h1>24. Build a <code>.tar.gz</code> package</h1>
+<p><strong>Run from:</strong> the Tec-Tac repository root.</p>
+<pre><code>cd /opt/tec-tac
+
+mkdir -p /tmp/networkprobe-0.1.0/extensions
+mkdir -p /tmp/networkprobe-0.1.0/reportsets
+
+cp -a extensions/networkprobe /tmp/networkprobe-0.1.0/extensions/
+cp -a reportsets/networkprobe /tmp/networkprobe-0.1.0/reportsets/
+
+cd /tmp
+tar -czf networkprobe-0.1.0.tar.gz networkprobe-0.1.0</code></pre>
+<p>Result:</p>
+<pre><code>/tmp/networkprobe-0.1.0.tar.gz</code></pre>
+<hr>
+<h1>25. Build a <code>.zip</code> package</h1>
+<p><strong>Run from:</strong> <code>/tmp</code> after creating the package directory above.</p>
+<pre><code>cd /tmp
+zip -r networkprobe-0.1.0.zip networkprobe-0.1.0</code></pre>
+<p>Result:</p>
+<pre><code>/tmp/networkprobe-0.1.0.zip</code></pre>
+<hr>
+<h1>26. Install the extension package</h1>
+<p>Tec-Tac should keep the generic package installer at:</p>
+<p><strong>File:</strong> <code>scripts/install-extension.sh</code></p>
+<p>The installer accepts:</p>
+<pre><code>.zip
+.tar.gz
+.tgz</code></pre>
+<p>Install a new extension:</p>
+<pre><code>cd /opt/tec-tac
+sudo bash scripts/install-extension.sh /tmp/networkprobe-0.1.0.zip</code></pre>
+<p>or:</p>
+<pre><code>sudo bash scripts/install-extension.sh /tmp/networkprobe-0.1.0.tar.gz</code></pre>
+<p>The installer:</p>
+<pre><code>1. safely extracts the archive into a temporary directory
+2. rejects absolute paths, path traversal and archive links
+3. requires exactly one extension manifest and one ReportSet manifest
+4. confirms both IDs match
+5. validates the pair with the Tec-Tac registry
+6. refuses to overwrite an installed plugin by default
+7. copies both components into the Tec-Tac repository
+8. validates the complete live registry
+9. runs Django system checks
+10. applies conventional migrations belonging to the package&#x27;s declared Django apps
+11. runs Django checks again
+12. restarts Tactical services
+13. verifies the services returned to active state</code></pre>
+<hr>
+<h1>27. Upgrade an installed extension package</h1>
+<p>Build the new package with the updated version in both manifests.</p>
+<p>Example:</p>
+<p><strong>File:</strong> <code>extensions/networkprobe/tec_tac.json</code></p>
+<pre><code>{
+  &quot;id&quot;: &quot;networkprobe&quot;,
+  &quot;type&quot;: &quot;extension&quot;,
+  &quot;version&quot;: &quot;0.2.0&quot;,
+  &quot;python_paths&quot;: [&quot;.&quot;],
+  &quot;django_apps&quot;: [
+    &quot;tec_tac_networkprobe.apps.TecTacNetworkProbeConfig&quot;
+  ]
+}</code></pre>
+<p><strong>File:</strong> <code>reportsets/networkprobe/tec_tac.json</code></p>
+<pre><code>{
+  &quot;id&quot;: &quot;networkprobe&quot;,
+  &quot;type&quot;: &quot;reportset&quot;,
+  &quot;version&quot;: &quot;0.2.0&quot;,
+  &quot;python_paths&quot;: [&quot;.&quot;],
+  &quot;django_apps&quot;: [
+    &quot;tec_tac_networkprobe_reportset.apps.TecTacNetworkProbeReportsetConfig&quot;
+  ]
+}</code></pre>
+<p>Install the upgrade:</p>
+<pre><code>sudo bash scripts/install-extension.sh /tmp/networkprobe-0.2.0.tar.gz --replace</code></pre>
+<p>When <code>--replace</code> is used, the installer first backs up the currently installed extension and ReportSet under:</p>
+<pre><code>/var/lib/tec-tac/backups/plugins/&lt;extension-id&gt;/&lt;timestamp&gt;/</code></pre>
+<p>If validation, Django checks or migrations fail, the installer restores the previous plugin files.</p>
+<p>Database migrations that completed before a later failure are not automatically reversed. Schema changes therefore still need normal migration discipline and testing.</p>
+<hr>
+<h1>28. Verify the deployed extension</h1>
+<p>Framework checks:</p>
+<pre><code>cd /opt/tec-tac
+
+sudo bash scripts/framework-foundation.sh
+sudo bash tests/registry-validation.sh
+sudo bash tests/tactical-update-survival.sh</code></pre>
+<p>Inspect the installed pair:</p>
+<pre><code>sudo bash scripts/plugin-info.sh networkprobe extension
+sudo bash scripts/plugin-info.sh networkprobe reportset</code></pre>
+<p>Run the extension&#x27;s tests:</p>
+<pre><code>sudo bash tests/networkprobe/server.sh
+sudo -E bash tests/networkprobe/api.sh
+sudo bash tests/networkprobe/reportset.sh</code></pre>
+<p>Verify Tactical services:</p>
+<pre><code>systemctl is-active rmm
+systemctl is-active daphne
+systemctl is-active celery
+systemctl is-active celerybeat</code></pre>
+<p>Expected:</p>
+<pre><code>active
+active
+active
+active</code></pre>
+<hr>
+<h1>29. Git-based deployment is still supported</h1>
+<p>If the extension is developed directly inside the main Tec-Tac repository, you can still deploy through Git:</p>
+<pre><code>cd /opt/tec-tac
+git pull
+sudo bash install.sh</code></pre>
+<p>The package installer is useful when:</p>
+<pre><code>the extension is distributed separately
+the extension has its own release archive
+you do not want to merge extension source into the main framework branch first
+you want a controlled extension upgrade/replace operation</code></pre>
+<p>Be aware that installing an extension package directly into a Git checkout creates files that are not automatically part of Git history. Decide whether the deployed plugin should later be committed, ignored, or managed as a separately deployed artifact.</p>
+<hr>
+<h1>30. Versioning</h1>
+<p>Framework and extensions are separate concerns.</p>
+<p>Example:</p>
+<pre><code>Tec-Tac framework:       1.0.0
+networkprobe extension:  0.3.0
+networkprobe ReportSet:  0.3.0</code></pre>
+<p>When the extension and ReportSet are released as one package, keep their versions aligned.</p>
+<hr>
+<h1>31. Removing an extension</h1>
+<p>Treat removal as a controlled migration.</p>
+<p>Do not simply delete:</p>
+<pre><code>extensions/networkprobe/
+reportsets/networkprobe/</code></pre>
+<p>if the extension has database tables or live consumers.</p>
+<p>Recommended sequence:</p>
+<pre><code>1. stop new writes
+2. disable/remove consumers
+3. preserve/export required data
+4. remove or migrate database objects explicitly
+5. remove permission registrations
+6. remove extension and ReportSet code
+7. validate the registry
+8. run Django checks
+9. restart Tactical services</code></pre>
+<p>Data preservation should be the default unless a purge is explicitly intended.</p>
+<hr>
+<h1>36. Final development checklist</h1>
+<p>Before coding:</p>
+<pre><code>[ ] extension ID chosen
+[ ] operational ownership defined
+[ ] data ownership defined
+[ ] ReportSet responsibility defined</code></pre>
+<p>Before packaging:</p>
+<pre><code>[ ] extension and ReportSet IDs match
+[ ] both manifest versions are correct
+[ ] Django app labels are unique
+[ ] migrations are included and reviewed
+[ ] permissions follow least privilege
+[ ] tests pass
+[ ] READMEs are updated
+[ ] no secrets are present
+[ ] no Python cache files are present</code></pre>
+<p>After deployment:</p>
+<pre><code>[ ] package installer completed successfully
+[ ] framework foundation passes
+[ ] registry validation passes
+[ ] Tactical update-safety passes
+[ ] extension tests pass
+[ ] ReportSet tests pass
+[ ] all Tactical services are active
+[ ] existing production data is intact</code></pre>
+<hr>
+<h1>37. Reference implementations in Tec-Tac 1.0.0</h1>
+<p>Use:</p>
+<pre><code>extensions/example/
+reportsets/example/</code></pre>
+<p>to understand the basic paired-plugin contract.</p>
+<p>Use the existing legacy reporting POC when studying proven patterns for:</p>
+<pre><code>Django models
+migrations
+API validation
+idempotency
+role-based permissions
+Tactical Report Manager integration</code></pre>
+<p>The <code>example</code> pair is a reference implementation only. It is not a production extension.</p>
+<hr>
+<h1>38. Recommended end-to-end workflow</h1>
+<pre><code>Design
+  ↓
+Scaffold extension + ReportSet
+  ↓
+Create Python/Django packages
+  ↓
+Create models
+  ↓
+Create mappings/enrichment
+  ↓
+Create permissions/API if needed
+  ↓
+Validate registry
+  ↓
+Run Django check
+  ↓
+Create and review migrations
+  ↓
+Build tests
+  ↓
+Update READMEs
+  ↓
+Build ZIP or TAR.GZ
+  ↓
+Install with scripts/install-extension.sh
+  ↓
+Run framework tests
+  ↓
+Run extension tests
+  ↓
+Verify Tactical services
+  ↓
+Release</code></pre>
+<p>The design goal is simple: new functionality should consume the Tec-Tac foundation rather than modifying Tactical RMM tracked source files.</p>
+<hr>
+<h1>32. Remove an installed extension</h1>
+<p>Tec-Tac should keep the generic remover at:</p>
+<p><strong>File:</strong> <code>scripts/remove-extension.sh</code></p>
+<p>The remover expects the same paired convention:</p>
+<pre><code>extensions/&lt;extension-id&gt;/
+reportsets/&lt;extension-id&gt;/</code></pre>
+<p>Remove the plugin code while preserving its database objects:</p>
+<pre><code>cd /opt/tec-tac
+sudo bash scripts/remove-extension.sh networkprobe</code></pre>
+<p>This is the safer default.</p>
+<p>The remover will:</p>
+<pre><code>1. verify the extension and ReportSet exist
+2. verify both are registered
+3. show their current versions
+4. warn if the reference &quot;example&quot; plugin is being removed
+5. create a backup of both plugin directories
+6. preserve database objects by default
+7. remove both plugin directories
+8. validate the remaining registry
+9. run Django system checks
+10. restart Tactical services
+11. verify the services returned to active state</code></pre>
+<p>Backups are stored under:</p>
+<pre><code>/var/lib/tec-tac/backups/plugins/&lt;extension-id&gt;/removed-&lt;timestamp&gt;/</code></pre>
+<hr>
+<h1>33. Remove an extension and purge its database objects</h1>
+<p>Use <code>--purge-data</code> only when you explicitly intend to remove the plugin-owned database schema/data.</p>
+<pre><code>sudo bash scripts/remove-extension.sh networkprobe --purge-data</code></pre>
+<p>With <code>--purge-data</code>, the remover attempts to reverse conventional Django migrations for the ReportSet and extension before deleting the code.</p>
+<p>It reverses the declared Django apps in reverse order so the ReportSet is processed before the extension.</p>
+<p>This can permanently remove plugin-owned tables and data.</p>
+<p>For unattended/automation use:</p>
+<pre><code>sudo bash scripts/remove-extension.sh networkprobe --purge-data --yes</code></pre>
+<p>Do not use <code>--yes</code> casually. It skips the confirmation prompt.</p>
+<hr>
+<h1>34. Restore removed plugin code manually</h1>
+<p>The remover retains a full code backup.</p>
+<p>Example:</p>
+<pre><code>/var/lib/tec-tac/backups/plugins/networkprobe/removed-20260917T181500/
+├── extensions/
+│   └── networkprobe/
+└── reportsets/
+    └── networkprobe/</code></pre>
+<p>To restore the code manually:</p>
+<pre><code>cp -a \
+  /var/lib/tec-tac/backups/plugins/networkprobe/removed-20260917T181500/extensions/networkprobe \
+  /opt/tec-tac/extensions/
+
+cp -a \
+  /var/lib/tec-tac/backups/plugins/networkprobe/removed-20260917T181500/reportsets/networkprobe \
+  /opt/tec-tac/reportsets/</code></pre>
+<p>Then validate and restart:</p>
+<pre><code>cd /opt/tec-tac
+
+sudo bash tests/registry-validation.sh
+
+cd /rmm/api/tacticalrmm
+sudo -u tactical /rmm/api/env/bin/python manage.py check
+
+sudo systemctl restart rmm daphne celery celerybeat</code></pre>
+<p>If the plugin was removed with <code>--purge-data</code>, restoring only the files does <strong>not</strong> restore deleted database data.</p>
+<p>You would need to reapply migrations and restore data from an appropriate database backup if required.</p>
+<hr>
+<h1>35. Removal design rule</h1>
+<p>Treat plugin removal as a deployment operation, not as <code>rm -rf</code>.</p>
+<p>Use:</p>
+<pre><code>scripts/remove-extension.sh</code></pre>
+<p>rather than deleting plugin directories directly.</p>
+<p>The default behaviour is intentionally:</p>
+<pre><code>remove code
+preserve data</code></pre>
+<p>because preserving customer/operational data is safer than automatically deleting it.</p>
+<p>Use <code>--purge-data</code> only when the database removal is intended and reviewed.</p>
+</main></body>
+</html>

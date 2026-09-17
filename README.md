@@ -1,6 +1,6 @@
 # Tec-Tac Tactical RMM Extension Framework
 
-Version **1.0.0** is the first stable Tec-Tac framework baseline. It provides the upgrade-safe bootstrap, validated paired **extensions** and **reportsets**, reusable manifests/templates, plugin inspection and scaffolding tools, lifecycle/upgrade-safety tests, and a working reference extension/reportset pair.
+Version **1.0.1** builds on the stable Tec-Tac 1.0.0 foundation. It adds the complete extension/reportset developer tutorial plus generic package install and removal tooling for separately distributed extensions, while retaining the upgrade-safe bootstrap, validated paired **extensions** and **reportsets**, manifests/templates, inspection/scaffolding tools, lifecycle tests, and the working reference pair.
 
 The repository itself is the runtime root. It may be cloned anywhere; `/opt/tec-tac` is only the recommended location.
 
@@ -123,6 +123,48 @@ Test it with:
 ```bash
 sudo bash tests/example-plugin.sh
 ```
+
+
+## Extension developer tutorial
+
+The end-to-end extension and ReportSet tutorial is included in both Markdown and HTML:
+
+```text
+docs/extension-reportset-tutorial.md
+docs/extension-reportset-tutorial.html
+```
+
+It covers design, scaffolding, explicit file locations, Django app creation, models, migrations, APIs, permissions, ReportSet mappings/enrichment, testing, packaging, deployment, upgrades, removal and restore considerations.
+
+## Extension package install and removal
+
+Tec-Tac 1.0.1 includes generic package tooling for convention-based extension/reportset pairs.
+
+Install a `.zip`, `.tar.gz` or `.tgz` package:
+
+```bash
+sudo bash scripts/install-extension.sh ./networkprobe-0.1.0.tar.gz
+```
+
+Replace/upgrade an installed pair:
+
+```bash
+sudo bash scripts/install-extension.sh ./networkprobe-0.2.0.tar.gz --replace
+```
+
+Remove plugin code while preserving database objects:
+
+```bash
+sudo bash scripts/remove-extension.sh networkprobe
+```
+
+Explicitly reverse conventional plugin migrations before removal:
+
+```bash
+sudo bash scripts/remove-extension.sh networkprobe --purge-data
+```
+
+Plugin package/removed-code backups are kept under `/var/lib/tec-tac/backups/plugins/`. The default removal behavior preserves data. The package tools apply only to convention-based extension/reportset pairs and do not manage the legacy reporting POC.
 
 ## Current reporting POC compatibility
 

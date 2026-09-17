@@ -18,6 +18,10 @@ for path in \
     "${REPO_ROOT}/templates/plugin/reportset/tec_tac.json" \
     "${REPO_ROOT}/scripts/plugin-info.sh" \
     "${REPO_ROOT}/scripts/scaffold-plugin.sh" \
+    "${REPO_ROOT}/scripts/install-extension.sh" \
+    "${REPO_ROOT}/scripts/remove-extension.sh" \
+    "${REPO_ROOT}/docs/extension-reportset-tutorial.md" \
+    "${REPO_ROOT}/docs/extension-reportset-tutorial.html" \
     "${REPO_ROOT}/extensions/example/tec_tac.json" \
     "${REPO_ROOT}/reportsets/example/tec_tac.json" \
     "${REPO_ROOT}/tests/example-plugin.sh"; do

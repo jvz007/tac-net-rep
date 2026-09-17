@@ -59,6 +59,8 @@ REQUIRED_FILES=(
     "${REPO_ROOT}/scripts/framework-info.sh"
     "${REPO_ROOT}/scripts/plugin-info.sh"
     "${REPO_ROOT}/scripts/scaffold-plugin.sh"
+    "${REPO_ROOT}/scripts/install-extension.sh"
+    "${REPO_ROOT}/scripts/remove-extension.sh"
     "${REPO_ROOT}/tests/framework-foundation.sh"
     "${REPO_ROOT}/tests/registry-validation.sh"
     "${REPO_ROOT}/tests/tactical-update-survival.sh"
