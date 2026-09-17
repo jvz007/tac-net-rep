@@ -13,6 +13,7 @@ DEST_APP="${BACKEND_DIR}/${APP_NAME}"
 EXCLUDE_FILE="${TACTICAL_ROOT}/.git/info/exclude"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_APP="${SCRIPT_DIR}/${APP_NAME}"
+VERSION_FILE="${SCRIPT_DIR}/VERSION"
 BEGIN_MARKER="# BEGIN TFD REPORTING EXTENSION"
 END_MARKER="# END TFD REPORTING EXTENSION"
 
@@ -22,6 +23,12 @@ fail() { printf '[TFD] ERROR: %s\n' "$*" >&2; exit 1; }
 if [[ ${EUID} -ne 0 ]]; then
     fail "Run this installer as root (for example: sudo ./install.sh)."
 fi
+
+PACKAGE_VERSION="unknown"
+if [[ -f "${VERSION_FILE}" ]]; then
+    PACKAGE_VERSION="$(tr -d '[:space:]' < "${VERSION_FILE}")"
+fi
+log "Installing TFD Tactical Reporting Extension ${PACKAGE_VERSION}."
 
 [[ -d "${TACTICAL_ROOT}/.git" ]] || fail "${TACTICAL_ROOT} is not a Tactical RMM Git checkout."
 [[ -f "${MANAGE_PY}" ]] || fail "Tactical manage.py was not found at ${MANAGE_PY}."
@@ -45,8 +52,6 @@ run_as_tactical() {
 log "Detected Tactical root: ${TACTICAL_ROOT}"
 log "Detected Tactical service user: ${TACTICAL_USER}"
 
-# local_settings.py is our only Tactical-provided persistence hook. Refuse to
-# install if a future Tactical release starts tracking/cleaning it.
 if ! run_as_tactical git -C "${TACTICAL_ROOT}" check-ignore -q "api/tacticalrmm/tacticalrmm/local_settings.py"; then
     fail "Tactical no longer treats local_settings.py as ignored. Refusing to install because the extension would not be upgrade-safe."
 fi
@@ -65,7 +70,6 @@ else
 fi
 
 if ! run_as_tactical git -C "${TACTICAL_ROOT}" check-ignore -q "api/tacticalrmm/${APP_NAME}/models.py" 2>/dev/null; then
-    # models.py might not exist yet on a first install, so validate the directory rule instead.
     if ! run_as_tactical git -C "${TACTICAL_ROOT}" check-ignore -q "api/tacticalrmm/${APP_NAME}/"; then
         fail "Git exclude rule for ${APP_NAME} is not effective."
     fi
@@ -78,9 +82,6 @@ BACKUP_FILE="${BACKUP_DIR}/local_settings.py.$(date +%Y%m%dT%H%M%S).bak"
 cp -a "${LOCAL_SETTINGS}" "${BACKUP_FILE}"
 log "Backed up local_settings.py to ${BACKUP_FILE}."
 
-# Validate the loader state before modifying local_settings.py. Older POC builds
-# used an unmarked _tfd_populate hook. Stacking another hook on top of that can
-# recurse indefinitely, so fail safely and require the legacy hook to be removed.
 BEGIN_COUNT="$(grep -Fxc "${BEGIN_MARKER}" "${LOCAL_SETTINGS}" || true)"
 END_COUNT="$(grep -Fxc "${END_MARKER}" "${LOCAL_SETTINGS}" || true)"
 
@@ -154,8 +155,8 @@ run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}'
 log "Applying ${APP_NAME} migrations."
 run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' migrate '${APP_NAME}' --noinput"
 
-log "Verifying Django model and Tactical Report Manager registration."
-VERIFY_CODE="from django.apps import apps; m=apps.get_model('${APP_NAME}','${MODEL_NAME}'); p=apps.get_model('${APP_NAME}','ExtensionRolePermission'); from ee.reporting.utils import resolve_model; r=resolve_model(data_source={'model':'${MODEL_NAME}'}); assert r['model'] is m; from tfdreporting.rbac import REGISTERED_PERMISSIONS; assert len(REGISTERED_PERMISSIONS) >= 2; c=m.objects.count(); print('TFD verification OK:', m._meta.label, p._meta.label, sorted(REGISTERED_PERMISSIONS), 'network_rows=', c)"
+log "Verifying Django model, RBAC, Report Manager, and API route registration."
+VERIFY_CODE="from django.apps import apps; from django.urls import resolve; m=apps.get_model('${APP_NAME}','${MODEL_NAME}'); p=apps.get_model('${APP_NAME}','ExtensionRolePermission'); from ee.reporting.utils import resolve_model; r=resolve_model(data_source={'model':'${MODEL_NAME}'}); assert r['model'] is m; from tfdreporting.rbac import REGISTERED_PERMISSIONS; assert len(REGISTERED_PERMISSIONS) >= 2; match=resolve('/api/tfd/reporting/network-availability/'); assert match.url_name == 'network-availability'; c=m.objects.count(); print('TFD verification OK:', m._meta.label, p._meta.label, sorted(REGISTERED_PERMISSIONS), 'endpoint=', match.route, 'network_rows=', c)"
 run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_CODE}\""
 
 log "Restarting Tactical Django/reporting services."
@@ -170,3 +171,4 @@ for svc in rmm daphne celery celerybeat; do
 done
 
 log "Installation complete."
+log "Swagger should expose: /api/tfd/reporting/network-availability/"

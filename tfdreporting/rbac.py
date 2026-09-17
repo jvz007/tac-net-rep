@@ -20,11 +20,7 @@ def _validate_codename(codename: str) -> None:
 
 
 def has_extension_permission(user, codename: str) -> bool:
-    """Return whether a Tactical user has a registered TFD permission.
-
-    Tactical/Django superusers and Tactical roles marked is_superuser retain
-    their normal superuser behaviour. Users without a Tactical role are denied.
-    """
+    """Return whether a Tactical user has a registered TFD permission."""
 
     _validate_codename(codename)
 
@@ -49,8 +45,6 @@ def has_extension_permission(user, codename: str) -> bool:
 
 
 def set_extension_permission(role, codename: str, granted: bool):
-    """Grant or revoke one registered TFD permission for a Tactical role."""
-
     _validate_codename(codename)
 
     if not isinstance(role, Role):
@@ -73,8 +67,6 @@ def revoke_extension_permission(role, codename: str):
 
 
 def get_role_permissions(role):
-    """Return registered TFD permissions and their effective stored state."""
-
     if not isinstance(role, Role):
         raise TypeError("role must be an accounts.models.Role instance")
 

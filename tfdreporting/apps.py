@@ -1,4 +1,5 @@
 from django.apps import AppConfig
+from django.urls import include, path
 
 
 class TfdreportingConfig(AppConfig):
@@ -25,3 +26,18 @@ class TfdreportingConfig(AppConfig):
         for entry in reporting_models:
             if entry not in utils.REPORTING_MODELS:
                 utils.REPORTING_MODELS += (entry,)
+
+        # Register the TFD API route in memory. This deliberately avoids editing
+        # Tactical's tracked tacticalrmm/urls.py file and therefore survives
+        # Tactical git reset/clean updates together with the extension loader.
+        from tacticalrmm import urls as tactical_urls
+
+        route_prefix = "api/tfd/reporting/"
+        route_exists = any(
+            str(getattr(pattern, "pattern", "")) == route_prefix
+            for pattern in tactical_urls.urlpatterns
+        )
+        if not route_exists:
+            tactical_urls.urlpatterns.append(
+                path(route_prefix, include("tfdreporting.urls"))
+            )
