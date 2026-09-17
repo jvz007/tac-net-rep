@@ -57,7 +57,13 @@ REQUIRED_FILES=(
     "${APP_DIR}/migrations/0003_networkavailability_ingest_hardening.py"
     "${REPO_ROOT}/scripts/reporting-permission.sh"
     "${REPO_ROOT}/scripts/framework-info.sh"
+    "${REPO_ROOT}/scripts/plugin-info.sh"
+    "${REPO_ROOT}/scripts/scaffold-plugin.sh"
     "${REPO_ROOT}/tests/framework-foundation.sh"
+    "${REPO_ROOT}/tests/registry-validation.sh"
+    "${REPO_ROOT}/tests/tactical-update-survival.sh"
+    "${REPO_ROOT}/templates/plugin/extension/tec_tac.json"
+    "${REPO_ROOT}/templates/plugin/reportset/tec_tac.json"
 )
 for required_file in "${REQUIRED_FILES[@]}"; do
     [[ -f "${required_file}" ]] || fail "Installer payload is missing ${required_file}."
