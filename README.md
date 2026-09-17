@@ -1,184 +1,102 @@
-# TFD Tactical Reporting Extension
+# Tec-Tac Tactical RMM Extension POC
 
-Upgrade-safe Django extension framework for Tactical RMM Report Manager.
+Version **0.5.0** restructures the POC so Tec-Tac code no longer lives inside the Tactical RMM Git checkout.
 
-Current package version: **0.4.1**.
-
-
-## v0.4.1 — idempotency replay fix
-
-This patch fixes an interaction between Django REST Framework and the database-level `source + idempotency_key` uniqueness constraint discovered during live POC testing.
-
-DRF automatically generated a uniqueness validator from the model constraint and returned `400 Bad Request` before the view could apply the intended idempotency semantics. The serializer now disables that automatic validator. The view remains responsible for distinguishing an exact replay from a conflicting reuse of the same key, while PostgreSQL keeps the uniqueness constraint as the final race-condition guard.
-
-Expected behaviour is now:
+## Installed structure
 
 ```text
-first source/key/payload                  -> 201 Created
-exact replay of same source/key/payload   -> 200 OK + X-TFD-Idempotent-Replay: true
-same source/key with different payload    -> 409 Conflict
+/opt/tec-tac/
+├── framwork/
+│   └── tec_tac/
+│       ├── __init__.py
+│       └── bootstrap.py
+├── extensions/
+│   └── reporting/
+│       └── tfdreporting/
+└── backups/
 ```
 
-No database migration is required for v0.4.1.
+`framwork` is intentionally spelled exactly this way to match the agreed POC path.
 
-## v0.4.0 — ingestion hardening
+The only Tec-Tac code left inside the Tactical configuration is a small bootstrap block in Tactical's already-ignored `local_settings.py`:
 
-This release keeps the v0.3.0 Tactical API-key + TFD RBAC endpoint and hardens the write path before connecting a real telemetry source.
+```python
+# BEGIN TEC-TAC EXTENSION FRAMEWORK
+import sys
 
-### API endpoint
+_TEC_TAC_FRAMEWORK = "/opt/tec-tac/framwork"
+if _TEC_TAC_FRAMEWORK not in sys.path:
+    sys.path.insert(0, _TEC_TAC_FRAMEWORK)
 
-```text
-GET  /api/tfd/reporting/network-availability/
-POST /api/tfd/reporting/network-availability/
+from tec_tac.bootstrap import load_extensions
+load_extensions()
+# END TEC-TAC EXTENSION FRAMEWORK
 ```
 
-Authentication remains Tactical's native `X-API-KEY` mechanism.
+No Tactical tracked source file is modified.
 
-Permissions remain:
+## What remains from v0.4.1
 
-```text
-GET  -> tfdreporting.networkavailability.list
-POST -> tfdreporting.networkavailability.manage
-```
+The reporting extension still provides the existing POC functionality:
 
-### New validation
+- `NetworkAvailability` model and migrations.
+- `ExtensionRolePermission` and TFD RBAC helper.
+- Tactical API-key authenticated reporting endpoint.
+- least-privilege GET/POST permissions.
+- validation and idempotent ingestion.
+- server-generated `ingested_by` and `received_at` audit fields.
+- runtime registration with Tactical Report Manager.
+- runtime API URL registration.
 
-POST now enforces:
+The internal Django app name remains `tfdreporting` so its migration identity stays stable.
 
-- non-empty trimmed `client_name`, `site_name`, `device_name`, and `source`;
-- `status` must be one of `up`, `degraded`, `down`, or `unknown`;
-- availability and packet-loss percentages remain within 0..100;
-- latency cannot be negative;
-- timestamps more than 10 minutes in the future are rejected;
-- older historical timestamps remain allowed for backfill/import use.
+## Installation
 
-### Provenance
-
-Each new row now records:
-
-- `ingested_by` — the authenticated Tactical username, set server-side;
-- `received_at` — server-side receipt timestamp.
-
-The caller cannot override either field.
-
-### Idempotency / duplicate handling
-
-POST accepts an optional `idempotency_key` of up to 128 characters.
-
-The pair:
-
-```text
-source + idempotency_key
-```
-
-is unique when a key is supplied.
-
-Behaviour:
-
-- first request -> `201 Created`;
-- exact replay with the same source/key/payload -> `200 OK` with `X-TFD-Idempotent-Replay: true`;
-- same source/key with different data -> `409 Conflict` and `code=idempotency_conflict`;
-- requests without an idempotency key keep normal append-only behaviour.
-
-This allows a telemetry sender to retry safely after timeouts without creating duplicate report rows.
-
-## Security POC already proven
-
-The v0.3.0 POC demonstrated:
-
-- Tactical native API-key authentication;
-- a Tactical role with no unrelated native permissions;
-- TFD `manage=True`, `list=False`;
-- POST returned `201` and persisted a row;
-- GET returned `403`;
-- an unrelated Tactical endpoint returned `403`.
-
-## Upgrade-safe integration
-
-No Tactical tracked source files are modified.
-
-The extension uses:
-
-- `/rmm/.git/info/exclude` to protect `/rmm/api/tacticalrmm/tfdreporting/`;
-- Tactical's ignored `tacticalrmm/local_settings.py` to load the TFD app and register the TFD URL route;
-- Django migrations for TFD-owned database objects.
-
-Tactical's Report Manager model registry is extended in memory by `TfdreportingConfig.ready()`.
-
-## Install / upgrade
-
-On the Tactical server:
+After removing the previous POC, install with:
 
 ```bash
-cd /opt/tfd-tactical-reporting
-git fetch origin
-git reset --hard origin/main
 sudo bash install.sh
 ```
 
-`sudo bash install.sh` is currently used while the repository executable-bit housekeeping is being handled separately.
+The installer:
 
-Expected migration on upgrade from v0.3.0:
-
-```text
-Applying tfdreporting.0003_networkavailability_ingest_hardening... OK
-```
-
-The installer verifies the model, RBAC registry, Report Manager resolution, API route, existing row count, and new ingest-hardening fields before restarting Tactical services.
-
-## Example POST
-
-```json
-{
-  "client_name": "TFD Test Client",
-  "site_name": "Head Office",
-  "device_name": "Internet",
-  "source": "poc-api",
-  "timestamp": "2026-09-17T14:20:00Z",
-  "status": "up",
-  "availability_pct": 99.980,
-  "latency_ms": 8.400,
-  "packet_loss_pct": 0.100,
-  "idempotency_key": "poc-20260917-142000-internet"
-}
-```
-
-## RBAC console management
-
-```bash
-cd /rmm/api/tacticalrmm
-source /rmm/api/env/bin/activate
-python manage.py shell
-```
-
-```python
-from accounts.models import Role
-from tfdreporting.rbac import (
-    PERMISSION_NETWORK_AVAILABILITY_LIST,
-    PERMISSION_NETWORK_AVAILABILITY_MANAGE,
-    get_role_permissions,
-    grant_extension_permission,
-    revoke_extension_permission,
-)
-
-role = Role.objects.get(name="TFD Reporting Ingest POC")
-grant_extension_permission(role, PERMISSION_NETWORK_AVAILABILITY_MANAGE)
-revoke_extension_permission(role, PERMISSION_NETWORK_AVAILABILITY_LIST)
-get_role_permissions(role)
-```
+1. verifies Tactical's `local_settings.py` is Git-ignored;
+2. backs it up;
+3. installs the framework to `/opt/tec-tac/framwork/`;
+4. installs reporting to `/opt/tec-tac/extensions/reporting/`;
+5. writes only the minimal bootstrap to `local_settings.py`;
+6. runs Django checks and migrations;
+7. verifies Python is loading `tfdreporting` from `/opt/tec-tac/extensions/reporting/`;
+8. verifies RBAC, Report Manager and the API route;
+9. removes any legacy in-tree `/rmm/api/tacticalrmm/tfdreporting` copy and old Git exclude rule after successful verification;
+10. restarts Tactical services.
 
 ## Uninstall
 
-Preserve database data:
+Preserve database tables/data:
 
 ```bash
 sudo bash uninstall.sh
 ```
 
-Purge TFD database objects as well:
+Full POC removal including database tables and all extension records:
 
 ```bash
 sudo bash uninstall.sh --purge-data
 ```
 
-`--purge-data` is destructive.
+With `--purge-data`, the script first runs:
+
+```bash
+python manage.py migrate tfdreporting zero --noinput
+```
+
+while the extension is still loaded, then removes the bootstrap and Tec-Tac code.
+
+## Current API
+
+```text
+/api/tfd/reporting/network-availability/
+```
+
+The next POC phase can add server-side infrastructure devices/checks while keeping the probe design separate.
