@@ -1,6 +1,6 @@
 # Tec-Tac Tactical RMM Extension Framework
 
-Version **0.5.5** finishes the current framework-foundation pass and hardens repeat-install permission handling and upgrade-safety checks. Tec-Tac now has a validated convention for paired **extensions** and **reportsets**, reusable manifests/templates, plugin inspection and scaffolding tools, and lifecycle/upgrade-safety tests.
+Version **1.0.0** is the first stable Tec-Tac framework baseline. It provides the upgrade-safe bootstrap, validated paired **extensions** and **reportsets**, reusable manifests/templates, plugin inspection and scaffolding tools, lifecycle/upgrade-safety tests, and a working reference extension/reportset pair.
 
 The repository itself is the runtime root. It may be cloned anywhere; `/opt/tec-tac` is only the recommended location.
 
@@ -51,7 +51,7 @@ reportsets/networkprobe/
 └── device_health.py
 ```
 
-For convention-based plugins in 0.5.5, both sides of the pair are required. An orphan reportset or an extension without its matching reportset is rejected by the registry.
+For convention-based plugins in 1.0.0, both sides of the pair are required. An orphan reportset or an extension without its matching reportset is rejected by the registry.
 
 ## Plugin manifests
 
@@ -93,6 +93,36 @@ The registry validates:
 - duplicate Django app registrations.
 
 Reference manifests live under `templates/plugin/`.
+
+## Working reference pair
+
+Version 1.0.0 includes a deliberately small reference implementation:
+
+```text
+extensions/example/
+├── tec_tac.json
+└── tec_tac_example_extension/
+    ├── __init__.py
+    ├── apps.py
+    └── sample.py
+
+reportsets/example/
+├── tec_tac.json
+└── tec_tac_example_reportset/
+    ├── __init__.py
+    ├── apps.py
+    └── sample.py
+```
+
+Both plugins use the extension ID `example`. The extension provides a deterministic raw data record; the matching reportset maps it into a tiny report-facing representation. This proves Python-path discovery, paired manifest validation, Django app registration, and the extension-to-reportset data flow without introducing a production feature or database schema.
+
+The `example` pair is **reference implementation only**. Production extensions should use their own real extension ID and should not depend on the example packages.
+
+Test it with:
+
+```bash
+sudo bash tests/example-plugin.sh
+```
 
 ## Current reporting POC compatibility
 
@@ -244,6 +274,7 @@ Run the non-destructive foundation checks:
 sudo bash tests/framework-foundation.sh
 sudo bash tests/registry-validation.sh
 sudo bash tests/tactical-update-survival.sh check
+sudo bash tests/example-plugin.sh
 sudo bash tests/network-reporting-server.sh
 ```
 
@@ -329,6 +360,6 @@ The uninstaller never deletes the Git checkout.
 /api/tfd/reporting/network-availability/
 ```
 
-## Foundation status
+## Stable foundation status
 
-0.5.5 is still a foundation release. No new non-agent monitoring functionality is introduced here. The next functional work should consume this framework rather than modifying Tactical tracked source.
+1.0.0 is the stable Tec-Tac framework baseline. The included `example` pair is reference-only; no new production monitoring functionality is introduced by this release. New functional work should consume this framework through `extensions/<extension-id>/` and `reportsets/<extension-id>/` rather than modifying Tactical tracked source.

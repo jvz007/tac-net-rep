@@ -35,7 +35,7 @@ PACKAGE_VERSION="unknown"
 if [[ -f "${VERSION_FILE}" ]]; then
     PACKAGE_VERSION="$(tr -d '[:space:]' < "${VERSION_FILE}")"
 fi
-log "Installing Tec-Tac Tactical extension POC ${PACKAGE_VERSION}."
+log "Installing Tec-Tac framework ${PACKAGE_VERSION}."
 log "Detected Tec-Tac repository root: ${REPO_ROOT}"
 
 [[ -d "${TACTICAL_ROOT}/.git" ]] || fail "${TACTICAL_ROOT} is not a Tactical RMM Git checkout."
@@ -62,6 +62,15 @@ REQUIRED_FILES=(
     "${REPO_ROOT}/tests/framework-foundation.sh"
     "${REPO_ROOT}/tests/registry-validation.sh"
     "${REPO_ROOT}/tests/tactical-update-survival.sh"
+    "${REPO_ROOT}/tests/example-plugin.sh"
+    "${REPO_ROOT}/extensions/example/tec_tac.json"
+    "${REPO_ROOT}/extensions/example/tec_tac_example_extension/__init__.py"
+    "${REPO_ROOT}/extensions/example/tec_tac_example_extension/apps.py"
+    "${REPO_ROOT}/extensions/example/tec_tac_example_extension/sample.py"
+    "${REPO_ROOT}/reportsets/example/tec_tac.json"
+    "${REPO_ROOT}/reportsets/example/tec_tac_example_reportset/__init__.py"
+    "${REPO_ROOT}/reportsets/example/tec_tac_example_reportset/apps.py"
+    "${REPO_ROOT}/reportsets/example/tec_tac_example_reportset/sample.py"
     "${REPO_ROOT}/templates/plugin/extension/tec_tac.json"
     "${REPO_ROOT}/templates/plugin/reportset/tec_tac.json"
 )
