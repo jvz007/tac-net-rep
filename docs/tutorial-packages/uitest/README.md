@@ -14,3 +14,11 @@ It is intended to prove the browser-driven module lifecycle end to end:
 8. reload and confirm the runtime page/navigation disappears
 
 The package has no database models, so removal is safe for development testing.
+
+Public UI test route after installation and UI synchronization:
+
+```text
+/tec-tac/#/public/uitest
+```
+
+The public route must render without a Tactical session.

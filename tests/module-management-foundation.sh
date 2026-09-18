@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail(){ echo "[TEST] FAIL: $*" >&2; exit 1; }
 
-[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.2.0" ]] || fail "VERSION is not 1.2.0"
+[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.2.1" ]] || fail "VERSION is not 1.2.1"
 for f in \
   framwork/tec_tac/module_manager.py \
   scripts/module-job-helper.py \
@@ -41,12 +41,16 @@ assert result['id']=='packagetest'
 assert result['versions_match'] is True
 assert result['installable'] is True
 assert result['permission_count']==2
-ui_package=root/'docs/tutorial-packages/uitest/uitest-0.1.0.zip'
+ui_package=root/'docs/tutorial-packages/uitest/uitest-0.1.1.zip'
 ui_result=inspect_archive(ui_package)
 assert ui_result['id']=='uitest'
 assert ui_result['ui_enabled'] is True
 assert ui_result['ui']['entry']=='ui/index.js'
 assert ui_result['ui']['permissions']==['uitest.read']
+assert ui_result['authenticated_ui_enabled'] is True
+assert ui_result['public_ui_enabled'] is True
+assert ui_result['ui']['public']['entry']=='ui/public.js'
+assert ui_result['ui']['public']['base_path']=='/public/uitest'
 print('[TEST] package inspection OK')
 PY
 

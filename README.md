@@ -1,6 +1,6 @@
 # Tec-Tac Tactical RMM Extension Framework
 
-Version **1.2.0** adds framework-owned module discovery and controlled package lifecycle jobs while retaining the 1.1.0 access/RBAC API and the upgrade-safe extension/reportset foundation. It adds the complete extension/reportset developer tutorial plus generic package install and removal tooling for separately distributed extensions, while retaining the upgrade-safe bootstrap, validated paired **extensions** and **reportsets**, manifests/templates, inspection/scaffolding tools, lifecycle tests, and the working reference pair.
+Version **1.2.1** adds public extension UI support on top of the 1.2.0 framework-owned module discovery and controlled package lifecycle jobs while retaining the 1.1.0 access/RBAC API and the upgrade-safe extension/reportset foundation. It adds the complete extension/reportset developer tutorial plus generic package install and removal tooling for separately distributed extensions, while retaining the upgrade-safe bootstrap, validated paired **extensions** and **reportsets**, manifests/templates, inspection/scaffolding tools, lifecycle tests, and the working reference pair.
 
 The repository itself is the runtime root. It may be cloned anywhere; `/opt/tec-tac` is only the recommended location.
 
@@ -442,3 +442,24 @@ docs/tutorial-packages/uitest/uitest-0.1.0.zip
 ```
 
 It has no database models and is intended to test the complete 1.2.0 + UI 0.2.0 flow: browser upload, package inspection, install job, Tactical restart, UI synchronization, runtime route/navigation registration, RBAC permission discovery, and safe code removal.
+
+## Public extension UI in 1.2.1
+
+A first-class extension can expose an unauthenticated browser surface without making its authenticated administration UI public. Add an optional `public` object to `extensions/<id>/tec_tac_ui.json`:
+
+```json
+{
+  "id": "statusportal",
+  "version": "1.0.0",
+  "entry": "ui/index.js",
+  "public": {
+    "entry": "ui/public.js",
+    "base_path": "/public/statusportal"
+  },
+  "permissions": ["statusportal.manage"]
+}
+```
+
+`entry` is the authenticated UI module. `public.entry` is loaded before Tactical authentication and must export `registerPublic(context)`. A module may declare either surface or both. Public routes are restricted to `/public/<extension-id>` and its descendants.
+
+The public browser runtime deliberately receives a reduced contract: Vue, app, descriptor, `addPublicRoute(route)`, and `publicApi(path, options)`. The public API helper does not attach the Tactical browser token. Any corresponding backend endpoint remains private unless the extension explicitly configures anonymous access server-side.

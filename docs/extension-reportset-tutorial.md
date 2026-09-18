@@ -1298,3 +1298,65 @@ class NetworkProbePermission(BasePermission):
 ```
 
 Tec-Tac 1.0.x currently persists generic role grants in the existing shared `ExtensionRolePermission` compatibility table. Extension code should use `tec_tac.rbac` so that storage can change later without changing the extension.
+
+---
+
+# Public UI surfaces (Tec-Tac 1.2.1+)
+
+Extensions that need anonymous pages can declare a separate public UI entry. This is intentionally separate from the normal authenticated module entry.
+
+**File:** `extensions/<extension-id>/tec_tac_ui.json`
+
+```json
+{
+  "id": "example",
+  "version": "1.0.0",
+  "entry": "ui/index.js",
+  "public": {
+    "entry": "ui/public.js",
+    "base_path": "/public/example"
+  },
+  "navigation": {
+    "label": "Example",
+    "section": "Extensions",
+    "icon": "E",
+    "order": 100
+  },
+  "permissions": ["example.manage"]
+}
+```
+
+The authenticated entry exports `register(context)`. The public entry exports `registerPublic(context)`.
+
+Example public entry:
+
+```javascript
+export default {
+  async registerPublic(ctx) {
+    const { h } = ctx.Vue
+    ctx.addPublicRoute({
+      path: '/public/example',
+      name: 'example-public',
+      meta: { title: 'Example Public' },
+      component: {
+        setup() {
+          return () => h('section', [h('h1', 'Public example')])
+        },
+      },
+    })
+  },
+}
+```
+
+Public UI rules:
+
+```text
+public route namespace: /public/<extension-id>/...
+public runtime loads before Tactical authentication
+public runtime does not receive authenticated state, RBAC helpers, or the authenticated API helper
+publicApi() deliberately omits the Tactical Authorization token
+backend APIs remain private unless the extension explicitly allows anonymous access
+entry and public.entry must share the same UI bundle directory when both are present
+```
+
+A public page does not grant anonymous access to backend data. If an API endpoint is intended to be public, configure that endpoint explicitly (for example with DRF `AllowAny`) and validate all public inputs as untrusted.

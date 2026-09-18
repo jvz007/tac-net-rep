@@ -758,4 +758,13 @@ class NetworkProbePermission(BasePermission):
     def has_permission(self, request, view):
         codename = &quot;networkprobe.device.list&quot; if request.method in (&quot;GET&quot;, &quot;HEAD&quot;, &quot;OPTIONS&quot;) else &quot;networkprobe.device.manage&quot;
         return has_extension_permission(request.user, codename)</code></pre>
-<p>Tec-Tac 1.0.x currently persists generic role grants in the existing shared <code>ExtensionRolePermission</code> compatibility table. Extension code should use <code>tec_tac.rbac</code> so that storage can change later without changing the extension.</p></main></body></html>
+<p>Tec-Tac 1.0.x currently persists generic role grants in the existing shared <code>ExtensionRolePermission</code> compatibility table. Extension code should use <code>tec_tac.rbac</code> so that storage can change later without changing the extension.</p><hr><h2>Public UI surfaces (Tec-Tac 1.2.1+)</h2><p>Extensions can declare a separate unauthenticated UI entry in <code>tec_tac_ui.json</code>. Public routes are restricted to <code>/public/&lt;extension-id&gt;/...</code> and load before Tactical authentication.</p><pre><code>{
+  "id": "example",
+  "version": "1.0.0",
+  "entry": "ui/index.js",
+  "public": {
+    "entry": "ui/public.js",
+    "base_path": "/public/example"
+  },
+  "permissions": ["example.manage"]
+}</code></pre><p>The public entry exports <code>registerPublic(context)</code>. Its reduced runtime provides Vue, the app, the descriptor, <code>addPublicRoute(route)</code>, and <code>publicApi(path, options)</code>. The public API helper does not attach the Tactical browser token. Backend APIs remain private unless the extension explicitly configures anonymous access server-side.</p><p>When both authenticated and public entries are present, they must share the same UI bundle directory.</p></main></body></html>

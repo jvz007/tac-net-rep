@@ -136,15 +136,51 @@ def _read_ui_manifest(extension_root: Path, plugin_id: str, permission_codes: se
     if module_id != plugin_id:
         raise ModuleManagerError(f"UI manifest id {module_id!r} must match extension id {plugin_id!r}.")
     entry = str(payload.get("entry", "")).strip()
-    if not entry:
-        raise ModuleManagerError("UI manifest is missing entry.")
-    entry_path = (extension_root / entry).resolve()
-    try:
-        entry_path.relative_to(extension_root.resolve())
-    except ValueError as exc:
-        raise ModuleManagerError("UI entry escapes the extension root.") from exc
-    if not entry_path.is_file():
-        raise ModuleManagerError(f"UI entry does not exist: {entry}")
+    public = payload.get("public")
+    if public is not None and not isinstance(public, dict):
+        raise ModuleManagerError("UI manifest public must be an object when provided.")
+
+    public_entry = ""
+    public_base_path = ""
+    if public:
+        public_entry = str(public.get("entry", "")).strip()
+        if not public_entry:
+            raise ModuleManagerError("UI manifest public.entry is required when public UI is declared.")
+        expected_base = f"/public/{plugin_id}"
+        public_base_path = str(public.get("base_path", expected_base)).strip()
+        if public_base_path != expected_base:
+            raise ModuleManagerError(
+                f"Public UI base_path must be exactly {expected_base!r}."
+            )
+
+    if not entry and not public_entry:
+        raise ModuleManagerError("UI manifest must declare entry, public.entry, or both.")
+
+    entry_path = None
+    if entry:
+        entry_path = (extension_root / entry).resolve()
+        try:
+            entry_path.relative_to(extension_root.resolve())
+        except ValueError as exc:
+            raise ModuleManagerError("UI entry escapes the extension root.") from exc
+        if not entry_path.is_file():
+            raise ModuleManagerError(f"UI entry does not exist: {entry}")
+
+    public_entry_path = None
+    if public_entry:
+        public_entry_path = (extension_root / public_entry).resolve()
+        try:
+            public_entry_path.relative_to(extension_root.resolve())
+        except ValueError as exc:
+            raise ModuleManagerError("Public UI entry escapes the extension root.") from exc
+        if not public_entry_path.is_file():
+            raise ModuleManagerError(f"Public UI entry does not exist: {public_entry}")
+
+    if entry_path and public_entry_path and entry_path.parent != public_entry_path.parent:
+        raise ModuleManagerError(
+            "Authenticated and public UI entries must share the same bundle directory."
+        )
+
     permissions = payload.get("permissions") or []
     if not isinstance(permissions, list) or any(not isinstance(item, str) or not item.strip() for item in permissions):
         raise ModuleManagerError("UI manifest permissions must be an array of non-empty strings.")
@@ -156,9 +192,14 @@ def _read_ui_manifest(extension_root: Path, plugin_id: str, permission_codes: se
         raise ModuleManagerError("UI manifest navigation must be an object.")
     return {
         "version": str(payload.get("version", "0.0.0")),
-        "entry": entry,
+        "entry": entry or None,
         "navigation": navigation,
         "permissions": permissions,
+        "public": (
+            {"entry": public_entry, "base_path": public_base_path}
+            if public_entry
+            else None
+        ),
     }
 
 
@@ -180,6 +221,8 @@ def _pair_payload(extension, reportset, *, ui: dict | None = None, installed: bo
         "permission_count": len(permissions),
         "ui": ui,
         "ui_enabled": ui is not None,
+        "authenticated_ui_enabled": bool(ui and ui.get("entry")),
+        "public_ui_enabled": bool(ui and ui.get("public")),
         "installed": installed,
         "managed": extension.plugin_id not in PROTECTED_PLUGIN_IDS,
         "protected": extension.plugin_id in PROTECTED_PLUGIN_IDS,
@@ -216,6 +259,8 @@ def installed_catalog() -> list[dict]:
             "permission_count": 0,
             "ui": None,
             "ui_enabled": False,
+            "authenticated_ui_enabled": False,
+            "public_ui_enabled": False,
             "installed": True,
             "managed": False,
             "protected": True,
