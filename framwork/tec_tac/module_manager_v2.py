@@ -315,6 +315,41 @@ def resolve_install_plan(candidates: list[dict]) -> dict:
     }
 
 
+
+def _plan_with_requested_order(plan: dict, requested_order) -> dict:
+    """Return a copy of *plan* using a caller-selected dependency-safe order.
+
+    The dependency resolver remains authoritative: callers may only reorder
+    packages that are independent of one another. Every hard dependency that is
+    part of the staged install must still appear before its dependant.
+    """
+    if requested_order in (None, []):
+        return dict(plan)
+    if not isinstance(requested_order, list) or any(not isinstance(value, str) for value in requested_order):
+        raise ModuleManagerV2Error("Install order must be an array of module IDs.")
+    order = [value.strip() for value in requested_order]
+    if any(not value for value in order) or len(order) != len(set(order)):
+        raise ModuleManagerV2Error("Install order contains blank or duplicate module IDs.")
+
+    resolved = list(plan.get("order") or [])
+    if len(order) != len(resolved) or set(order) != set(resolved):
+        raise ModuleManagerV2Error("Install order must contain every staged module exactly once.")
+
+    actions_by_id = {item["id"]: item for item in plan.get("actions") or []}
+    position = {module_id: index for index, module_id in enumerate(order)}
+    for module_id in order:
+        action = actions_by_id.get(module_id) or {}
+        for dependency_id in (action.get("dependencies") or {}):
+            if dependency_id in position and position[dependency_id] > position[module_id]:
+                raise ModuleManagerV2Error(
+                    f"Install order is invalid: {module_id} requires {dependency_id} to be installed first."
+                )
+
+    updated = dict(plan)
+    updated["order"] = order
+    updated["actions"] = [actions_by_id[module_id] for module_id in order]
+    return updated
+
 def _hash_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -473,6 +508,33 @@ def stage_uploaded_artifact(upload) -> dict:
     return {key: value for key, value in payload.items() if key != "bundle_path"}
 
 
+
+def discard_v2_stage(upload_id: str) -> None:
+    """Discard any v2 staged artifact and its child v1 package stages."""
+    try:
+        batch = _load_batch(upload_id)
+    except ModuleManagerV2Error:
+        batch = None
+    if batch is not None:
+        for package in batch.get("packages") or []:
+            try:
+                discard_stage(package["upload_id"])
+            except Exception:
+                pass
+        (BATCHES_ROOT / f"{upload_id}.json").unlink(missing_ok=True)
+        return
+
+    try:
+        bundle = _load_bundle(upload_id)
+    except ModuleManagerV2Error:
+        bundle = None
+    if bundle is not None:
+        Path(str(bundle.get("bundle_path", ""))).unlink(missing_ok=True)
+        (BUNDLES_ROOT / f"{upload_id}.json").unlink(missing_ok=True)
+        return
+
+    discard_stage(upload_id)
+
 def _load_batch(batch_id: str) -> dict:
     try:
         uuid.UUID(str(batch_id))
@@ -521,7 +583,7 @@ def _queue_v2(payload: dict) -> dict:
     return public_job(job)
 
 
-def queue_v2_install(upload_id: str) -> dict:
+def queue_v2_install(upload_id: str, requested_order=None) -> dict:
     # Individual v1-staged package.
     try:
         meta = _load_stage(upload_id)
@@ -530,6 +592,7 @@ def queue_v2_install(upload_id: str) -> dict:
     if meta:
         preview = _package_metadata(Path(meta["package_path"]))
         plan = resolve_install_plan([preview])
+        plan = _plan_with_requested_order(plan, requested_order)
         if not preview.get("installable") or not plan["valid"]:
             raise ModuleManagerV2Error(preview.get("install_block_reason") or "Package dependency plan is not satisfiable.")
         replace = bool(preview.get("already_installed"))
@@ -542,6 +605,7 @@ def queue_v2_install(upload_id: str) -> dict:
     plan = bundle.get("preview", {}).get("plan") or {}
     if not plan.get("valid"):
         raise ModuleManagerV2Error("Bundle dependency plan is not satisfiable.")
+    plan = _plan_with_requested_order(plan, requested_order)
     return _queue_v2({
         "action": "bundle_install",
         "plugin_id": bundle["preview"]["id"],
@@ -552,11 +616,12 @@ def queue_v2_install(upload_id: str) -> dict:
     })
 
 
-def queue_batch_install(batch_id: str) -> dict:
+def queue_batch_install(batch_id: str, requested_order=None) -> dict:
     batch = _load_batch(batch_id)
     plan = batch.get("plan") or {}
     if not plan.get("valid"):
         raise ModuleManagerV2Error("Batch dependency plan is not satisfiable.")
+    plan = _plan_with_requested_order(plan, requested_order)
     package_paths = []
     for package in batch.get("packages", []):
         meta = _load_stage(package["upload_id"])

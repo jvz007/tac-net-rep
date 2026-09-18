@@ -7,6 +7,7 @@ from rest_framework.views import APIView
 from .module_manager import ModuleManagerError, discard_stage, get_job
 from .module_manager_v2 import (
     ModuleManagerV2Error,
+    discard_v2_stage,
     installed_catalog_v2,
     queue_batch_install,
     queue_set_enabled,
@@ -40,13 +41,27 @@ class ModuleV2InspectView(APIView):
             return Response({"detail": str(exc)}, status=400)
 
 
+class ModuleV2StageView(APIView):
+    permission_classes = [IsAuthenticated]
+    def delete(self, request, upload_id):
+        _require_module_manager(request.user)
+        try:
+            discard_v2_stage(str(upload_id))
+            return Response(status=204)
+        except (ModuleManagerError, ModuleManagerV2Error) as exc:
+            return Response({"detail": str(exc)}, status=400)
+
+
 class ModuleV2InstallView(APIView):
     permission_classes = [IsAuthenticated]
     def post(self, request, upload_id):
         _require_module_manager(request.user)
         try:
             kind = str(request.data.get("kind", "artifact"))
-            job = queue_batch_install(str(upload_id)) if kind == "batch" else queue_v2_install(str(upload_id))
+            order = request.data.get("order")
+            if order is not None and not isinstance(order, list):
+                return Response({"detail": "order must be an array of module IDs."}, status=400)
+            job = queue_batch_install(str(upload_id), requested_order=order) if kind == "batch" else queue_v2_install(str(upload_id), requested_order=order)
             return Response(job, status=202)
         except (ModuleManagerError, ModuleManagerV2Error) as exc:
             return Response({"detail": str(exc)}, status=400)

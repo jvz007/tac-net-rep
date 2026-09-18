@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail(){ echo "[TEST] FAIL: $*" >&2; exit 1; }
 
-[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.4.1" ]] || fail "VERSION is not 1.4.1"
+[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.5.0" ]] || fail "VERSION is not 1.5.0"
 for f in \
   framwork/tec_tac/module_manager.py \
   framwork/tec_tac/module_manager_v2.py \
@@ -94,3 +94,6 @@ bash -n "${ROOT}/scripts/install-extension.sh"
 bash -n "${ROOT}/scripts/remove-extension.sh"
 bash -n "${ROOT}/scripts/reload-rmm-uwsgi.sh"
 echo "[TEST] PASS module management foundation"
+
+grep -q '_plan_with_requested_order' "${ROOT}/framwork/tec_tac/module_manager_v2.py" || fail "dependency-safe requested install ordering missing"
+grep -q 'discard_v2_stage' "${ROOT}/framwork/tec_tac/module_v2_views.py" || fail "v2 staged artifact discard route missing"

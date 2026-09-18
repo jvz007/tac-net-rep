@@ -1,6 +1,6 @@
 # Tec-Tac Tactical RMM Extension Framework
 
-Version **1.4.1** adds Module Management v2 with enable/disable state, dependency and version resolution, multi-package/bundle planning, and dependency-safe lifecycle controls. It also corrects runtime module-state permissions across Tactical service identities and integrates the v2 privileged worker into the normal framework installer. Framework/UI self-update management from 1.3.0 remains intact.
+Version **1.5.0** modernizes Module Management v2 package installation with explicit operator-selected install sequencing for independent packages, server-enforced dependency ordering, and staged-artifact cleanup. The 1.4.x enable/disable, dependency/version resolution, bundle planning, and runtime-state permission fixes remain intact.
 
 The repository itself is the runtime root. It may be cloned anywhere; `/opt/tec-tac` is only the recommended location.
 
@@ -515,3 +515,8 @@ The normal installer owns both module workers:
 ```
 
 See `RELEASE_NOTES_1.4.0.md` and `RELEASE_NOTES_1.4.1.md`.
+
+
+## Module install ordering (1.5.0)
+
+Multi-package and bundle installs may submit an explicit package order. Tec-Tac validates that every staged hard dependency still appears before its dependant; invalid sequences are rejected before a privileged lifecycle job is queued. Packages with no dependency relationship may be arranged in operator-selected order. Cancelled v2 stages can also be discarded through the v2 package staging endpoint.
