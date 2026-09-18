@@ -193,6 +193,7 @@ MODULE_CONFIG_DIR="/etc/tec-tac"
 MODULE_CONFIG="${MODULE_CONFIG_DIR}/module-manager.conf"
 MODULE_SUDOERS="/etc/sudoers.d/tec-tac-module-manager"
 TEC_TAC_UI_REPO="${TEC_TAC_UI_REPO:-/opt/tec-tac-ui}"
+TEC_TAC_UI_ROOT="${TEC_TAC_UI_ROOT:-/var/lib/tec-tac/ui/tec-tac}"
 
 mkdir -p "${MODULE_STATE_ROOT}/staged" "${MODULE_STATE_ROOT}/jobs" "${MODULE_STATE_ROOT}/running" "${MODULE_STATE_ROOT}/logs"
 chown -R root:"${TACTICAL_GROUP}" "${MODULE_STATE_ROOT}"
@@ -204,6 +205,7 @@ mkdir -p "${MODULE_CONFIG_DIR}"
 cat > "${MODULE_CONFIG}" <<EOF
 REPO_ROOT=${REPO_ROOT}
 UI_SYNC_SCRIPT=${TEC_TAC_UI_REPO}/scripts/sync-modules.sh
+UI_ROOT=${TEC_TAC_UI_ROOT}
 TACTICAL_USER=${TACTICAL_USER}
 EOF
 chown root:root "${MODULE_CONFIG}"

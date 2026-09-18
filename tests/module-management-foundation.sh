@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail(){ echo "[TEST] FAIL: $*" >&2; exit 1; }
 
-[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.2.1" ]] || fail "VERSION is not 1.2.1"
+[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.2.2" ]] || fail "VERSION is not 1.2.2"
 for f in \
   framwork/tec_tac/module_manager.py \
   scripts/module-job-helper.py \
@@ -18,6 +18,8 @@ grep -q 'modules/packages/<uuid:upload_id>/install/' "${ROOT}/framwork/tec_tac/u
 grep -q 'modules/<str:plugin_id>/remove/' "${ROOT}/framwork/tec_tac/urls.py" || fail "module removal route missing"
 grep -q 'modules/jobs/<uuid:job_id>/' "${ROOT}/framwork/tec_tac/urls.py" || fail "module job route missing"
 grep -q '"manage_modules": allowed("can_do_server_maint")' "${ROOT}/framwork/tec_tac/views.py" || fail "module capability mapping missing"
+grep -q 'UI_ROOT=${TEC_TAC_UI_ROOT}' "${ROOT}/install.sh" || fail "persistent UI root config missing"
+grep -q 'TEC_TAC_UI_ROOT' "${ROOT}/scripts/module-job-helper.py" || fail "module sync UI root environment missing"
 grep -q '/usr/local/sbin/tec-tac-module-job' "${ROOT}/install.sh" || fail "privileged helper installer missing"
 grep -q '/etc/sudoers.d/tec-tac-module-manager' "${ROOT}/install.sh" || fail "sudoers installer missing"
 grep -q 'PROTECTED_PLUGIN_IDS' "${ROOT}/framwork/tec_tac/module_manager.py" || fail "protected module policy missing"

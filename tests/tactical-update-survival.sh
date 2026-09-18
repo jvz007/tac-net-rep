@@ -20,6 +20,9 @@ verify_now() {
     grep -Fq '# BEGIN TEC-TAC EXTENSION FRAMEWORK' "${LOCAL_SETTINGS}" || { echo '[TEST] FAIL bootstrap marker missing' >&2; exit 1; }
     CODE="import tfdreporting; assert tfdreporting.__file__.startswith('${REPO_ROOT}/extensions/reporting/'); print(tfdreporting.__file__)"
     runuser -u "${TACTICAL_USER}" -- bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${CODE}\""
+    if [[ -f /etc/tec-tac/module-manager.conf ]]; then
+        grep -Fq 'UI_ROOT=/var/lib/tec-tac/ui/tec-tac' /etc/tec-tac/module-manager.conf || { echo '[TEST] FAIL persistent UI root is not configured' >&2; exit 1; }
+    fi
 }
 
 case "${MODE}" in

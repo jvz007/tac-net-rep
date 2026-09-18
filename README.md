@@ -463,3 +463,8 @@ A first-class extension can expose an unauthenticated browser surface without ma
 `entry` is the authenticated UI module. `public.entry` is loaded before Tactical authentication and must export `registerPublic(context)`. A module may declare either surface or both. Public routes are restricted to `/public/<extension-id>` and its descendants.
 
 The public browser runtime deliberately receives a reduced contract: Vue, app, descriptor, `addPublicRoute(route)`, and `publicApi(path, options)`. The public API helper does not attach the Tactical browser token. Any corresponding backend endpoint remains private unless the extension explicitly configures anonymous access server-side.
+
+
+## 1.2.2 persistent UI deployment coordination
+
+The paired Tec-Tac UI 0.2.2 deployment lives at `/var/lib/tec-tac/ui/tec-tac` instead of Tactical's replaceable `/var/www/rmm/dist/tec-tac`. The module manager stores this as `UI_ROOT` in `/etc/tec-tac/module-manager.conf` and passes it to `scripts/sync-modules.sh` after successful extension install/remove jobs. Nginx integration and post-update repair are owned by the UI repository.

@@ -128,6 +128,7 @@ def run_job(job_id):
     config = load_config()
     repo_root = Path(config.get("REPO_ROOT", "/opt/tec-tac")).resolve()
     ui_sync = Path(config.get("UI_SYNC_SCRIPT", "/opt/tec-tac-ui/scripts/sync-modules.sh"))
+    ui_root = config.get("UI_ROOT", "/var/lib/tec-tac/ui/tec-tac")
     install_script = repo_root / "scripts/install-extension.sh"
     remove_script = repo_root / "scripts/remove-extension.sh"
     if not install_script.is_file() or not remove_script.is_file():
@@ -167,7 +168,9 @@ def run_job(job_id):
             if rc == 0 and ui_sync.is_file():
                 log.write("[TEC-TAC-MODULE] synchronizing deployed UI modules\n")
                 log.flush()
-                sync = subprocess.run(["bash", str(ui_sync)], stdout=log, stderr=subprocess.STDOUT, text=True)
+                sync_env = os.environ.copy()
+                sync_env["TEC_TAC_UI_ROOT"] = ui_root
+                sync = subprocess.run(["bash", str(ui_sync)], stdout=log, stderr=subprocess.STDOUT, text=True, env=sync_env)
                 if sync.returncode != 0:
                     rc = sync.returncode
                     log.write(f"[TEC-TAC-MODULE] UI module sync failed rc={rc}\n")
