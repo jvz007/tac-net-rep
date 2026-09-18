@@ -25,6 +25,19 @@ from .module_manager import (
 logger = logging.getLogger("tec_tac.module_manager")
 
 
+
+from .system_update import (
+    SystemUpdateError,
+    discard_stage as discard_system_stage,
+    get_job as get_system_update_job,
+    list_branches as system_update_branches,
+    online_status as system_update_online_status,
+    queue_install as queue_system_update,
+    stage_online_package,
+    stage_uploaded_package as stage_system_update_package,
+    system_status,
+)
+
 from .rbac import (
     effective_permissions,
     get_all_role_permissions,
@@ -322,3 +335,115 @@ class ModuleJobView(APIView):
             return Response(get_job(str(job_id)))
         except ModuleManagerError as exc:
             return Response({"detail": str(exc)}, status=404)
+
+
+@extend_schema_view(get=extend_schema(tags=["Tec-Tac System Updates"], summary="Get installed Tec-Tac system component versions"))
+class SystemUpdateStatusView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        _require_module_manager(request.user)
+        return Response(system_status())
+
+
+@extend_schema_view(post=extend_schema(tags=["Tec-Tac System Updates"], summary="Inspect and stage an offline Tec-Tac system update package"))
+class SystemUpdatePackageInspectView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        _require_module_manager(request.user)
+        upload = request.FILES.get("package")
+        if upload is None:
+            return Response({"detail": "A system update package upload is required."}, status=400)
+        try:
+            return Response(stage_system_update_package(upload), status=201)
+        except SystemUpdateError as exc:
+            return Response({"detail": str(exc)}, status=400)
+        except Exception as exc:
+            logger.exception("Tec-Tac system update package inspection failed")
+            return Response({"detail": "System update package inspection failed.", "error_type": exc.__class__.__name__, "error": str(exc) or exc.__class__.__name__}, status=500)
+
+
+@extend_schema_view(delete=extend_schema(tags=["Tec-Tac System Updates"], summary="Discard a staged Tec-Tac system update package"))
+class SystemUpdatePackageStageView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, upload_id):
+        _require_module_manager(request.user)
+        try:
+            discard_system_stage(str(upload_id))
+            return Response(status=204)
+        except SystemUpdateError as exc:
+            return Response({"detail": str(exc)}, status=404)
+
+
+@extend_schema_view(post=extend_schema(tags=["Tec-Tac System Updates"], summary="Install a staged Tec-Tac framework or UI update"))
+class SystemUpdatePackageInstallView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, upload_id):
+        _require_module_manager(request.user)
+        allow_downgrade = request.data.get("allow_downgrade", False)
+        if not isinstance(allow_downgrade, bool):
+            return Response({"detail": "allow_downgrade must be true or false."}, status=400)
+        try:
+            return Response(queue_system_update(str(upload_id), allow_downgrade=allow_downgrade, requested_by=str(request.user.username)), status=202)
+        except SystemUpdateError as exc:
+            return Response({"detail": str(exc)}, status=400)
+
+
+@extend_schema_view(get=extend_schema(tags=["Tec-Tac System Updates"], summary="Get a Tec-Tac system update job"))
+class SystemUpdateJobView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, job_id):
+        _require_module_manager(request.user)
+        try:
+            return Response(get_system_update_job(str(job_id)))
+        except SystemUpdateError as exc:
+            return Response({"detail": str(exc)}, status=404)
+
+
+@extend_schema_view(get=extend_schema(tags=["Tec-Tac System Updates"], summary="Check the latest stable repository release for a system component"))
+class SystemUpdateOnlineStatusView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        _require_module_manager(request.user)
+        component = str(request.query_params.get("component", "")).strip()
+        try:
+            return Response(system_update_online_status(component))
+        except SystemUpdateError as exc:
+            return Response({"detail": str(exc)}, status=400)
+
+
+@extend_schema_view(get=extend_schema(tags=["Tec-Tac System Updates"], summary="List repository branches for advanced system update sources"))
+class SystemUpdateBranchesView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        _require_module_manager(request.user)
+        component = str(request.query_params.get("component", "")).strip()
+        try:
+            return Response(system_update_branches(component))
+        except SystemUpdateError as exc:
+            return Response({"detail": str(exc)}, status=400)
+
+
+@extend_schema_view(post=extend_schema(tags=["Tec-Tac System Updates"], summary="Download, inspect, and stage an online release or branch system update"))
+class SystemUpdateOnlineStageView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        _require_module_manager(request.user)
+        component = str(request.data.get("component", "")).strip()
+        source_type = str(request.data.get("source_type", "release")).strip()
+        ref = request.data.get("ref")
+        try:
+            return Response(stage_online_package(component, source_type, str(ref).strip() if ref is not None else None), status=201)
+        except SystemUpdateError as exc:
+            return Response({"detail": str(exc)}, status=400)
+        except Exception as exc:
+            logger.exception("Tec-Tac online system update staging failed")
+            return Response({"detail": "Online system update staging failed.", "error_type": exc.__class__.__name__, "error": str(exc) or exc.__class__.__name__}, status=500)

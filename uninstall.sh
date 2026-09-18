@@ -82,9 +82,14 @@ MODULE_HELPER="/usr/local/sbin/tec-tac-module-job"
 MODULE_SUDOERS="/etc/sudoers.d/tec-tac-module-manager"
 MODULE_CONFIG="/etc/tec-tac/module-manager.conf"
 RMM_DROPIN="/etc/systemd/system/rmm.service.d/tec-tac.conf"
-rm -f "${MODULE_SUDOERS}" "${MODULE_HELPER}" "${MODULE_CONFIG}" "${RMM_DROPIN}"
+SYSTEM_UPDATE_HELPER="/usr/local/sbin/tec-tac-system-update"
+SYSTEM_UPDATE_LIB="/usr/local/lib/tec-tac-updater"
+SYSTEM_UPDATE_SUDOERS="/etc/sudoers.d/tec-tac-system-update"
+SYSTEM_UPDATE_CONFIG="/etc/tec-tac/system-update.conf"
+rm -f "${MODULE_SUDOERS}" "${MODULE_HELPER}" "${MODULE_CONFIG}" "${RMM_DROPIN}" "${SYSTEM_UPDATE_SUDOERS}" "${SYSTEM_UPDATE_HELPER}" "${SYSTEM_UPDATE_CONFIG}"
+rm -rf "${SYSTEM_UPDATE_LIB}"
 systemctl daemon-reload
-log "Removed Tec-Tac privileged module lifecycle helper, sudoers rule, and rmm.service drop-in."
+log "Removed Tec-Tac privileged lifecycle/update helpers, sudoers rules, and rmm.service drop-in."
 
 # Repository-owned framework/extension files are intentionally not deleted.
 # Uninstall only disconnects Tec-Tac from Tactical. Delete the Git checkout

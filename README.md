@@ -1,6 +1,6 @@
 # Tec-Tac Tactical RMM Extension Framework
 
-Version **1.2.1** adds public extension UI support on top of the 1.2.0 framework-owned module discovery and controlled package lifecycle jobs while retaining the 1.1.0 access/RBAC API and the upgrade-safe extension/reportset foundation. It adds the complete extension/reportset developer tutorial plus generic package install and removal tooling for separately distributed extensions, while retaining the upgrade-safe bootstrap, validated paired **extensions** and **reportsets**, manifests/templates, inspection/scaffolding tools, lifecycle tests, and the working reference pair.
+Version **1.3.0** adds framework/UI self-update management with stable GitHub releases, explicitly unlocked branch/custom builds, offline repository archives, independent privileged update workers, backup/rollback, history/provenance, and compatibility-aware package inspection. It retains the upgrade-safe extension/reportset framework, controlled module lifecycle, Tactical-native RBAC integration, public extension UI contract, graceful uWSGI reloads, and local TOTP QR support from earlier releases.
 
 The repository itself is the runtime root. It may be cloned anywhere; `/opt/tec-tac` is only the recommended location.
 
@@ -489,3 +489,13 @@ Tec-Tac 1.2.5 adds `GET /api/tfd/auth/totp/qr/` for the authenticated enrollment
 Tec-Tac 1.2.4 removes full Tactical service restarts from extension install/remove. The lifecycle scripts send `SIGHUP` to the active uWSGI master process, which gracefully reloads the Django stack while preserving the listening socket and keeping the `rmm.service` unit alive. Daphne, Celery, and Celery Beat are not restarted for normal extension lifecycle operations.
 
 `install.sh` also installs `/etc/systemd/system/rmm.service.d/tec-tac.conf` with the Tactical user's primary group as a supplementary group for the production `rmm` process. This gives the real uWSGI process access to `/var/lib/tec-tac/module-manager/` without widening the runtime directory permissions or changing `/opt/tec-tac` ownership. The installer verifies both the systemd setting and the live process group membership after restart.
+
+## System updates (1.3.0)
+
+Tec-Tac 1.3.0 can update both the framework and standalone UI through the web interface. The updater supports latest tagged GitHub releases, explicitly selected branches/custom builds, and offline `.zip`, `.tar.gz`, or `.tgz` repository archives. All sources converge into the same inspection, version comparison, backup, install, verification and rollback lifecycle.
+
+The privileged updater is installed outside `/opt/tec-tac` at `/usr/local/lib/tec-tac-updater/system-update-helper.py` with `/usr/local/sbin/tec-tac-system-update` as its command entrypoint. Jobs run in independent transient systemd units so replacing/restarting Tec-Tac cannot terminate its own update worker.
+
+State is stored below `/var/lib/tec-tac/system-updates/` (`staged`, `jobs`, `running`, `logs`, `backups`, and `history`). Only one system update can run at a time.
+
+The default repositories are configured in `/etc/tec-tac/system-update.conf`. A private GitHub repository may use a root-only token in `/etc/tec-tac/github-token`; browser clients never receive that token.

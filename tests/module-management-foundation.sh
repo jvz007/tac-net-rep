@@ -3,16 +3,24 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail(){ echo "[TEST] FAIL: $*" >&2; exit 1; }
 
-[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.2.5" ]] || fail "VERSION is not 1.2.5"
+[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.3.0" ]] || fail "VERSION is not 1.3.0"
 for f in \
   framwork/tec_tac/module_manager.py \
+  framwork/tec_tac/system_update.py \
   scripts/module-job-helper.py \
+  scripts/system-update-helper.py \
   scripts/reload-rmm-uwsgi.sh \
   framwork/tec_tac/views.py \
   framwork/tec_tac/urls.py; do
   [[ -f "${ROOT}/${f}" ]] || fail "missing ${f}"
 done
 
+
+grep -q 'system/updates/' "${ROOT}/framwork/tec_tac/urls.py" || fail "system update routes missing"
+grep -q '/usr/local/sbin/tec-tac-system-update' "${ROOT}/install.sh" || fail "system update helper installer missing"
+grep -q 'systemd-run' "${ROOT}/scripts/system-update-helper.py" || fail "independent system update worker missing"
+grep -q 'update.lock' "${ROOT}/scripts/system-update-helper.py" || fail "global system update lock missing"
+grep -q 'restoring previous component backup' "${ROOT}/scripts/system-update-helper.py" || fail "automatic rollback missing"
 grep -q 'modules/packages/inspect/' "${ROOT}/framwork/tec_tac/urls.py" || fail "package inspect route missing"
 grep -q 'modules/packages/<uuid:upload_id>/' "${ROOT}/framwork/tec_tac/urls.py" || fail "staged package route missing"
 grep -q 'modules/packages/<uuid:upload_id>/install/' "${ROOT}/framwork/tec_tac/urls.py" || fail "package install route missing"
@@ -41,8 +49,10 @@ grep -q 'kill -HUP' "${ROOT}/scripts/reload-rmm-uwsgi.sh" || fail "uWSGI gracefu
 
 python3 -m py_compile \
   "${ROOT}/framwork/tec_tac/module_manager.py" \
+  "${ROOT}/framwork/tec_tac/system_update.py" \
   "${ROOT}/framwork/tec_tac/views.py" \
-  "${ROOT}/scripts/module-job-helper.py"
+  "${ROOT}/scripts/module-job-helper.py" \
+  "${ROOT}/scripts/system-update-helper.py"
 
 PYTHONPATH="${ROOT}/framwork" python3 - "${ROOT}" <<'PY'
 import sys

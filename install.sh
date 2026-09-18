@@ -185,7 +185,7 @@ log "Applying ${APP_NAME} migrations."
 run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' migrate '${APP_NAME}' --noinput"
 
 log "Verifying framework API, repository-loaded app, RBAC, Report Manager, and API routes."
-VERIFY_CODE="import tfdreporting; from django.apps import apps; from django.urls import resolve; expected='${LEGACY_REPORTING_DIR}/'; assert tfdreporting.__file__.startswith(expected), tfdreporting.__file__; assert apps.is_installed('tec_tac'); m=apps.get_model('${APP_NAME}','${MODEL_NAME}'); p=apps.get_model('${APP_NAME}','ExtensionRolePermission'); from ee.reporting.utils import resolve_model; r=resolve_model(data_source={'model':'${MODEL_NAME}'}); assert r['model'] is m; from tec_tac.rbac import registered_permissions, permission_catalog; from tfdreporting.rbac import REGISTERED_PERMISSIONS; assert len(REGISTERED_PERMISSIONS) >= 2; match=resolve('/api/tfd/reporting/network-availability/'); assert match.url_name == 'network-availability'; ctx=resolve('/api/tfd/ui/context/'); assert ctx.url_name == 'tec-tac-ui-context'; access=resolve('/api/tfd/access/extensions/'); assert access.url_name == 'tec-tac-extension-permissions'; modules=resolve('/api/tfd/modules/'); assert modules.url_name == 'tec-tac-module-catalog'; fields={f.name for f in m._meta.fields}; assert {'idempotency_key','ingested_by','received_at'} <= fields; c=m.objects.count(); print('TEC-TAC verification OK:', 'module=', tfdreporting.__file__, m._meta.label, p._meta.label, 'context=', ctx.route, 'access=', access.route, 'modules=', modules.route, 'network_rows=', c)"
+VERIFY_CODE="import tfdreporting; from django.apps import apps; from django.urls import resolve; expected='${LEGACY_REPORTING_DIR}/'; assert tfdreporting.__file__.startswith(expected), tfdreporting.__file__; assert apps.is_installed('tec_tac'); m=apps.get_model('${APP_NAME}','${MODEL_NAME}'); p=apps.get_model('${APP_NAME}','ExtensionRolePermission'); from ee.reporting.utils import resolve_model; r=resolve_model(data_source={'model':'${MODEL_NAME}'}); assert r['model'] is m; from tec_tac.rbac import registered_permissions, permission_catalog; from tfdreporting.rbac import REGISTERED_PERMISSIONS; assert len(REGISTERED_PERMISSIONS) >= 2; match=resolve('/api/tfd/reporting/network-availability/'); assert match.url_name == 'network-availability'; ctx=resolve('/api/tfd/ui/context/'); assert ctx.url_name == 'tec-tac-ui-context'; access=resolve('/api/tfd/access/extensions/'); assert access.url_name == 'tec-tac-extension-permissions'; modules=resolve('/api/tfd/modules/'); assert modules.url_name == 'tec-tac-module-catalog'; updates=resolve('/api/tfd/system/updates/'); assert updates.url_name == 'tec-tac-system-update-status'; fields={f.name for f in m._meta.fields}; assert {'idempotency_key','ingested_by','received_at'} <= fields; c=m.objects.count(); print('TEC-TAC verification OK:', 'module=', tfdreporting.__file__, m._meta.label, p._meta.label, 'context=', ctx.route, 'access=', access.route, 'modules=', modules.route, 'updates=', updates.route, 'network_rows=', c)"
 run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_CODE}\""
 
 MODULE_STATE_ROOT="/var/lib/tec-tac/module-manager"
@@ -233,6 +233,46 @@ if command -v visudo >/dev/null 2>&1; then
     visudo -cf "${MODULE_SUDOERS}" >/dev/null || fail "Module manager sudoers validation failed."
 fi
 log "Installed privileged module lifecycle helper: ${MODULE_HELPER}"
+
+
+SYSTEM_UPDATE_ROOT="/var/lib/tec-tac/system-updates"
+SYSTEM_UPDATE_HELPER="/usr/local/sbin/tec-tac-system-update"
+SYSTEM_UPDATE_LIB="/usr/local/lib/tec-tac-updater"
+SYSTEM_UPDATE_CONFIG="/etc/tec-tac/system-update.conf"
+SYSTEM_UPDATE_SUDOERS="/etc/sudoers.d/tec-tac-system-update"
+FRAMEWORK_REPOSITORY="${TEC_TAC_FRAMEWORK_REPOSITORY:-jvz007/tac-net-rep}"
+UI_REPOSITORY="${TEC_TAC_UI_REPOSITORY:-jvz007/tec-tac-ui}"
+
+mkdir -p "${SYSTEM_UPDATE_ROOT}/staged" "${SYSTEM_UPDATE_ROOT}/jobs" "${SYSTEM_UPDATE_ROOT}/running" "${SYSTEM_UPDATE_ROOT}/logs" "${SYSTEM_UPDATE_ROOT}/backups" "${SYSTEM_UPDATE_ROOT}/history"
+chown -R root:"${TACTICAL_GROUP}" "${SYSTEM_UPDATE_ROOT}"
+chmod 2750 "${SYSTEM_UPDATE_ROOT}" "${SYSTEM_UPDATE_ROOT}/running" "${SYSTEM_UPDATE_ROOT}/logs" "${SYSTEM_UPDATE_ROOT}/backups" "${SYSTEM_UPDATE_ROOT}/history"
+chmod 2770 "${SYSTEM_UPDATE_ROOT}/staged" "${SYSTEM_UPDATE_ROOT}/jobs"
+
+mkdir -p "${SYSTEM_UPDATE_LIB}"
+install -o root -g root -m 0755 "${REPO_ROOT}/scripts/system-update-helper.py" "${SYSTEM_UPDATE_LIB}/system-update-helper.py"
+ln -sfn "${SYSTEM_UPDATE_LIB}/system-update-helper.py" "${SYSTEM_UPDATE_HELPER}"
+chown -h root:root "${SYSTEM_UPDATE_HELPER}"
+
+cat > "${SYSTEM_UPDATE_CONFIG}" <<EOF
+FRAMEWORK_ROOT=${REPO_ROOT}
+UI_REPO_ROOT=${TEC_TAC_UI_REPO}
+TACTICAL_USER=${TACTICAL_USER}
+FRAMEWORK_REPOSITORY=${FRAMEWORK_REPOSITORY}
+UI_REPOSITORY=${UI_REPOSITORY}
+GITHUB_TOKEN_FILE=/etc/tec-tac/github-token
+EOF
+chown root:root "${SYSTEM_UPDATE_CONFIG}"
+chmod 0644 "${SYSTEM_UPDATE_CONFIG}"
+
+cat > "${SYSTEM_UPDATE_SUDOERS}" <<EOF
+${TACTICAL_USER} ALL=(root) NOPASSWD: ${SYSTEM_UPDATE_HELPER} --dispatch *
+EOF
+chown root:root "${SYSTEM_UPDATE_SUDOERS}"
+chmod 0440 "${SYSTEM_UPDATE_SUDOERS}"
+if command -v visudo >/dev/null 2>&1; then
+    visudo -cf "${SYSTEM_UPDATE_SUDOERS}" >/dev/null || fail "System update sudoers validation failed."
+fi
+log "Installed independent Tec-Tac system update worker: ${SYSTEM_UPDATE_HELPER}"
 
 
 # Optional reporting permission assignment. Permissions are stored against the
