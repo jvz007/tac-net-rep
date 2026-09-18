@@ -1,26 +1,16 @@
 from django.urls import path
-
 from .views import (
-    ExtensionPermissionCatalogView,
-    ModuleCatalogView,
-    ModuleJobView,
-    ModulePackageInspectView,
-    ModulePackageStageView,
-    ModulePackageInstallView,
-    ModuleRemoveView,
-    RoleExtensionPermissionsView,
-    TotpQrView,
-    SystemUpdateStatusView,
-    SystemUpdatePackageInspectView,
-    SystemUpdatePackageStageView,
-    SystemUpdatePackageInstallView,
-    SystemUpdateJobView,
-    SystemUpdateOnlineStatusView,
-    SystemUpdateBranchesView,
-    SystemUpdateOnlineStageView,
-    UiContextView,
+    ExtensionPermissionCatalogView, ModuleCatalogView, ModuleJobView,
+    ModulePackageInspectView, ModulePackageStageView, ModulePackageInstallView,
+    ModuleRemoveView, RoleExtensionPermissionsView, TotpQrView,
+    SystemUpdateStatusView, SystemUpdatePackageInspectView, SystemUpdatePackageStageView,
+    SystemUpdatePackageInstallView, SystemUpdateJobView, SystemUpdateOnlineStatusView,
+    SystemUpdateBranchesView, SystemUpdateOnlineStageView, UiContextView,
 )
-
+from .module_v2_views import (
+    ModuleV2CatalogView, ModuleV2InspectView, ModuleV2InstallView,
+    ModuleV2StateView, ModuleV2RemoveCheckView, ModuleV2JobView,
+)
 urlpatterns = [
     path("ui/context/", UiContextView.as_view(), name="tec-tac-ui-context"),
     path("system/updates/", SystemUpdateStatusView.as_view(), name="tec-tac-system-update-status"),
@@ -39,9 +29,11 @@ urlpatterns = [
     path("modules/packages/<uuid:upload_id>/install/", ModulePackageInstallView.as_view(), name="tec-tac-module-package-install"),
     path("modules/<str:plugin_id>/remove/", ModuleRemoveView.as_view(), name="tec-tac-module-remove"),
     path("modules/jobs/<uuid:job_id>/", ModuleJobView.as_view(), name="tec-tac-module-job"),
-    path(
-        "access/roles/<int:role_id>/permissions/",
-        RoleExtensionPermissionsView.as_view(),
-        name="tec-tac-role-extension-permissions",
-    ),
+    path("modules/v2/", ModuleV2CatalogView.as_view(), name="tec-tac-module-v2-catalog"),
+    path("modules/v2/packages/inspect/", ModuleV2InspectView.as_view(), name="tec-tac-module-v2-inspect"),
+    path("modules/v2/packages/<uuid:upload_id>/install/", ModuleV2InstallView.as_view(), name="tec-tac-module-v2-install"),
+    path("modules/v2/<str:plugin_id>/state/", ModuleV2StateView.as_view(), name="tec-tac-module-v2-state"),
+    path("modules/v2/<str:plugin_id>/remove-check/", ModuleV2RemoveCheckView.as_view(), name="tec-tac-module-v2-remove-check"),
+    path("modules/v2/jobs/<uuid:job_id>/", ModuleV2JobView.as_view(), name="tec-tac-module-v2-job"),
+    path("access/roles/<int:role_id>/permissions/", RoleExtensionPermissionsView.as_view(), name="tec-tac-role-extension-permissions"),
 ]
