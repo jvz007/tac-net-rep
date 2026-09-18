@@ -1,5 +1,6 @@
 # Tec-Tac Tactical RMM Extension Framework
 
+Version **1.7.1** is a corrective release for repository-installed modules: the canonical registry accepts v2 dependency/runtime metadata in every install path.
 Version **1.7.0** adds multi-repository module sources, cached repository health, online catalog/update reporting, SHA-256 verified online staging, and installed source provenance while retaining the existing Module Management v2 installer.
 Version **1.6.1** fixes module visibility precedence so package-defined hidden/visible settings are defaults that can always be overridden by Module Manager.
 Version **1.6.0** adds independent module navigation visibility to Module Management v2. Modules can now remain enabled at runtime while being hidden from Tec-Tac navigation. The 1.5.0 package ordering, dependency enforcement, bundle planning, staged cleanup, and existing enable/disable lifecycle remain intact.

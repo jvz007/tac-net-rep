@@ -28,7 +28,10 @@ EXTENSIONS_ROOT = TEC_TAC_ROOT / "extensions"
 REPORTSETS_ROOT = TEC_TAC_ROOT / "reportsets"
 MANIFEST_NAME = "tec_tac.json"
 SUPPORTED_TYPES = frozenset({"extension", "reportset"})
-SUPPORTED_KEYS = frozenset({"id", "type", "version", "python_paths", "django_apps", "permission_groups"})
+SUPPORTED_KEYS = frozenset({
+    "id", "type", "version", "python_paths", "django_apps", "permission_groups",
+    "dependencies", "optional_dependencies", "requires",
+})
 
 class RegistryError(RuntimeError):
     """Raised when Tec-Tac plugin metadata is invalid."""

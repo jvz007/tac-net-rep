@@ -46,12 +46,6 @@ from .module_state import (
     version_satisfies,
 )
 
-# Permit v2 manifest metadata without forcing every existing PluginSpec consumer
-# to understand it. v2 reads these fields directly from extension manifests.
-registry_module.SUPPORTED_KEYS = frozenset(set(registry_module.SUPPORTED_KEYS) | {
-    "dependencies", "optional_dependencies", "requires",
-})
-
 V2_HELPER = Path("/usr/local/sbin/tec-tac-module-v2-job")
 BUNDLES_ROOT = STAGED_ROOT / "bundles"
 BATCHES_ROOT = STAGED_ROOT / "batches"

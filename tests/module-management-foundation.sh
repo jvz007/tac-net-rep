@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail(){ echo "[TEST] FAIL: $*" >&2; exit 1; }
 
-[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.7.0" ]] || fail "VERSION is not 1.7.0"
+[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.7.1" ]] || fail "VERSION is not 1.7.1"
 for f in \
   framwork/tec_tac/module_manager.py \
   framwork/tec_tac/module_manager_v2.py \
@@ -114,3 +114,37 @@ grep -q 'stage_repository_package' "${ROOT}/framwork/tec_tac/module_repository.p
 grep -q 'package_sha256' "${ROOT}/framwork/tec_tac/module_repository.py" || fail "online package provenance hash missing"
 grep -q 'repositories/cache' "${ROOT}/install.sh" || fail "repository cache runtime directory missing"
 grep -q 'source_provenance' "${ROOT}/framwork/tec_tac/module_manager_v2.py" || fail "online source provenance handoff missing"
+
+
+# Current registry schema must accept v2 dependency/runtime metadata even in a
+# fresh process that imports tec_tac.registry directly (the install-extension
+# lifecycle path does exactly this).
+PYTHONPATH="${ROOT}/framwork" python3 - <<'PY_REGISTRY_V2'
+import json
+import tempfile
+from pathlib import Path
+from tec_tac.registry import discover_plugins
+
+with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp)
+    for kind, ptype in (("extensions", "extension"), ("reportsets", "reportset")):
+        plugin = root / kind / "schema-test"
+        plugin.mkdir(parents=True)
+        manifest = {
+            "id": "schema-test",
+            "type": ptype,
+            "version": "1.0.0",
+            "python_paths": ["."],
+            "django_apps": [],
+        }
+        if ptype == "extension":
+            manifest.update({
+                "dependencies": {},
+                "optional_dependencies": {},
+                "requires": {"framework": ">=1.7.0,<2.0.0", "ui": ">=0.7.0,<1.0.0"},
+            })
+        (plugin / "tec_tac.json").write_text(json.dumps(manifest), encoding="utf-8")
+    plugins = discover_plugins(root / "extensions", root / "reportsets")
+    assert len(plugins) == 2
+print("[TEST] v2 registry schema accepted in fresh process")
+PY_REGISTRY_V2
