@@ -3,10 +3,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail(){ echo "[TEST] FAIL: $*" >&2; exit 1; }
 
-[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.2.3" ]] || fail "VERSION is not 1.2.3"
+[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.2.4" ]] || fail "VERSION is not 1.2.4"
 for f in \
   framwork/tec_tac/module_manager.py \
   scripts/module-job-helper.py \
+  scripts/reload-rmm-uwsgi.sh \
   framwork/tec_tac/views.py \
   framwork/tec_tac/urls.py; do
   [[ -f "${ROOT}/${f}" ]] || fail "missing ${f}"
@@ -31,6 +32,10 @@ grep -q 'Module package inspection failed.' "${ROOT}/framwork/tec_tac/views.py" 
 grep -q 'error_type' "${ROOT}/framwork/tec_tac/module_manager.py" || fail "structured job error type missing"
 grep -q 'Fresh-process verification OK' "${ROOT}/scripts/install-extension.sh" || fail "fresh-process lifecycle verification missing"
 grep -q 'UI verification OK' "${ROOT}/scripts/module-job-helper.py" || fail "UI deployment verification missing"
+grep -q 'SupplementaryGroups=${TACTICAL_GROUP}' "${ROOT}/install.sh" || fail "rmm supplementary-group drop-in missing"
+grep -q 'kill -HUP' "${ROOT}/scripts/reload-rmm-uwsgi.sh" || fail "uWSGI graceful reload signal missing"
+! grep -q 'systemctl restart rmm daphne celery celerybeat' "${ROOT}/scripts/install-extension.sh" || fail "extension install still performs full Tactical restart"
+! grep -q 'systemctl restart rmm daphne celery celerybeat' "${ROOT}/scripts/remove-extension.sh" || fail "extension removal still performs full Tactical restart"
 
 python3 -m py_compile \
   "${ROOT}/framwork/tec_tac/module_manager.py" \
@@ -64,4 +69,6 @@ PY
 bash -n "${ROOT}/install.sh"
 bash -n "${ROOT}/uninstall.sh"
 bash -n "${ROOT}/scripts/install-extension.sh"
+bash -n "${ROOT}/scripts/remove-extension.sh"
+bash -n "${ROOT}/scripts/reload-rmm-uwsgi.sh"
 echo "[TEST] PASS module management foundation"

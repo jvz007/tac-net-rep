@@ -487,15 +487,12 @@ print("[TEC-TAC] NOTE: Tec-Tac permissions are role-based; all users sharing thi
     fi
 fi
 
-log "Restarting Tactical services."
-systemctl restart rmm daphne celery celerybeat
+log "Reloading Tactical Django application without restarting the rmm service."
+bash "${REPO_ROOT}/scripts/reload-rmm-uwsgi.sh"
+systemctl is-active --quiet rmm || fail "rmm is not active after graceful uWSGI reload."
+log "rmm: active (graceful uWSGI reload complete)"
 
-for svc in rmm daphne celery celerybeat; do
-    systemctl is-active --quiet "${svc}" || fail "${svc} did not return to active state."
-    log "${svc}: active"
-done
-
-# Start a fresh Django process after the service restart. This catches bootstrap,
+# Start a fresh Django process after the graceful uWSGI reload. This catches bootstrap,
 # AppConfig, import, model-registry, and migration-state problems that only show
 # up after process recreation.
 runuser -u "${TACTICAL_USER}" -- env \

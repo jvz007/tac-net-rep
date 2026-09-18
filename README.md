@@ -434,7 +434,7 @@ GET    /api/tfd/modules/jobs/<job-id>/
 
 Catalog reads require an authenticated Tactical session. Installation, replacement, staging cleanup, removal, and job inspection require effective module-management access, mapped to Tactical `can_do_server_maint` (or effective superuser).
 
-The Tactical web process never runs the root lifecycle scripts directly. `install.sh` installs a root-owned helper at `/usr/local/sbin/tec-tac-module-job` plus a narrowly scoped sudoers rule that allows the Tactical service user to dispatch only opaque UUID jobs. The helper claims the staged package before execution, checks that lifecycle scripts are root-owned and not group/world writable, then runs the existing package installer/remover outside the Tactical web process. This lets the job survive the Tactical service restarts performed by the existing lifecycle scripts.
+The Tactical web process never runs the root lifecycle scripts directly. `install.sh` installs a root-owned helper at `/usr/local/sbin/tec-tac-module-job` plus a narrowly scoped sudoers rule that allows the Tactical service user to dispatch only opaque UUID jobs. The helper claims the staged package before execution, checks that lifecycle scripts are root-owned and not group/world writable, then runs the existing package installer/remover outside the Tactical web process. Extension install/remove now refreshes Django with a graceful uWSGI `SIGHUP` reload instead of restarting the `rmm` systemd service, so lifecycle jobs are not killed by their own deployment step.
 
 Packages are staged below `/var/lib/tec-tac/module-manager/`. Inspection enforces archive path/link checks, upload and expansion limits, exactly one matching extension/ReportSet pair, registry validation, optional `tec_tac_ui.json` validation, and declared-permission references. Extension and ReportSet versions must match before UI-driven installation is allowed.
 
@@ -450,7 +450,7 @@ A small reference package is included at:
 docs/tutorial-packages/uitest/uitest-0.1.0.zip
 ```
 
-It has no database models and is intended to test the complete 1.2.0 + UI 0.2.0 flow: browser upload, package inspection, install job, Tactical restart, UI synchronization, runtime route/navigation registration, RBAC permission discovery, and safe code removal.
+It has no database models and is intended to test the complete 1.2.0 + UI 0.2.0 flow: browser upload, package inspection, install job, graceful Django/uWSGI reload, UI synchronization, runtime route/navigation registration, RBAC permission discovery, and safe code removal.
 
 ## Public extension UI in 1.2.1
 
@@ -477,3 +477,10 @@ The public browser runtime deliberately receives a reduced contract: Vue, app, d
 ## 1.2.2 persistent UI deployment coordination
 
 The paired Tec-Tac UI 0.2.2 deployment lives at `/var/lib/tec-tac/ui/tec-tac` instead of Tactical's replaceable `/var/www/rmm/dist/tec-tac`. The module manager stores this as `UI_ROOT` in `/etc/tec-tac/module-manager.conf` and passes it to `scripts/sync-modules.sh` after successful extension install/remove jobs. Nginx integration and post-update repair are owned by the UI repository.
+
+
+## Graceful Django reload and runtime permissions (1.2.4)
+
+Tec-Tac 1.2.4 removes full Tactical service restarts from extension install/remove. The lifecycle scripts send `SIGHUP` to the active uWSGI master process, which gracefully reloads the Django stack while preserving the listening socket and keeping the `rmm.service` unit alive. Daphne, Celery, and Celery Beat are not restarted for normal extension lifecycle operations.
+
+`install.sh` also installs `/etc/systemd/system/rmm.service.d/tec-tac.conf` with the Tactical user's primary group as a supplementary group for the production `rmm` process. This gives the real uWSGI process access to `/var/lib/tec-tac/module-manager/` without widening the runtime directory permissions or changing `/opt/tec-tac` ownership. The installer verifies both the systemd setting and the live process group membership after restart.

@@ -1,18 +1,259 @@
-<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Tec-Tac Extension & ReportSet Tutorial</title><style>:root{--blue:#1C489B;--orange:#FC8127;--ink:#1f2937;--border:#e5e7eb;--soft:#f6f8fa}*{box-sizing:border-box}body{margin:0;font-family:Segoe UI,Arial,sans-serif;color:var(--ink);line-height:1.65;background:#fff}main{max-width:1040px;margin:0 auto;padding:48px 30px 90px}h1{color:var(--blue);font-size:2.35rem}h2{color:var(--blue);margin-top:2.6rem;border-bottom:1px solid var(--border)}hr{border:0;border-top:3px solid var(--orange)}code{font-family:Consolas,Menlo,monospace;background:var(--soft);padding:.12rem .3rem;border-radius:4px}pre{background:#0f172a;color:#e5e7eb;padding:18px;border-radius:8px;overflow-x:auto;border-left:4px solid var(--orange)}pre code{background:transparent;padding:0;color:inherit}</style></head><body><main><h1>Tec-Tac Extension &amp; ReportSet Tutorial</h1>
-<p><strong>Framework baseline:</strong> Tec-Tac 1.0.0</p>
-<p><strong>Purpose:</strong> Create, package, deploy, upgrade, and validate your own Tec-Tac extension and matching ReportSet.</p>
-<p>This tutorial uses <code>networkprobe</code> as the example extension ID.</p>
-<hr>
-<h1>1. Understand the Tec-Tac plugin model</h1>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>extension-reportset-tutorial</title>
+  <style>
+    html {
+      color: #1a1a1a;
+      background-color: #fdfdfd;
+    }
+    body {
+      margin: 0 auto;
+      max-width: 36em;
+      padding-left: 50px;
+      padding-right: 50px;
+      padding-top: 50px;
+      padding-bottom: 50px;
+      hyphens: auto;
+      overflow-wrap: break-word;
+      text-rendering: optimizeLegibility;
+      font-kerning: normal;
+    }
+    @media (max-width: 600px) {
+      body {
+        font-size: 0.9em;
+        padding: 12px;
+      }
+      h1 {
+        font-size: 1.8em;
+      }
+    }
+    @media print {
+      html {
+        background-color: white;
+      }
+      body {
+        background-color: transparent;
+        color: black;
+        font-size: 12pt;
+      }
+      p, h2, h3 {
+        orphans: 3;
+        widows: 3;
+      }
+      h2, h3, h4 {
+        page-break-after: avoid;
+      }
+    }
+    p {
+      margin: 1em 0;
+    }
+    a {
+      color: #1a1a1a;
+    }
+    a:visited {
+      color: #1a1a1a;
+    }
+    img {
+      max-width: 100%;
+    }
+    svg {
+      height: auto;
+      max-width: 100%;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      margin-top: 1.4em;
+    }
+    h5, h6 {
+      font-size: 1em;
+      font-style: italic;
+    }
+    h6 {
+      font-weight: normal;
+    }
+    ol, ul {
+      padding-left: 1.7em;
+      margin-top: 1em;
+    }
+    li > ol, li > ul {
+      margin-top: 0;
+    }
+    blockquote {
+      margin: 1em 0 1em 1.7em;
+      padding-left: 1em;
+      border-left: 2px solid #e6e6e6;
+      color: #606060;
+    }
+    code {
+      font-family: Menlo, Monaco, Consolas, 'Lucida Console', monospace;
+      font-size: 85%;
+      margin: 0;
+      hyphens: manual;
+    }
+    pre {
+      margin: 1em 0;
+      overflow: auto;
+    }
+    pre code {
+      padding: 0;
+      overflow: visible;
+      overflow-wrap: normal;
+    }
+    .sourceCode {
+     background-color: transparent;
+     overflow: visible;
+    }
+    hr {
+      background-color: #1a1a1a;
+      border: none;
+      height: 1px;
+      margin: 1em 0;
+    }
+    table {
+      margin: 1em 0;
+      border-collapse: collapse;
+      width: 100%;
+      overflow-x: auto;
+      display: block;
+      font-variant-numeric: lining-nums tabular-nums;
+    }
+    table caption {
+      margin-bottom: 0.75em;
+    }
+    tbody {
+      margin-top: 0.5em;
+      border-top: 1px solid #1a1a1a;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    th {
+      border-top: 1px solid #1a1a1a;
+      padding: 0.25em 0.5em 0.25em 0.5em;
+    }
+    td {
+      padding: 0.125em 0.5em 0.25em 0.5em;
+    }
+    header {
+      margin-bottom: 4em;
+      text-align: center;
+    }
+    #TOC li {
+      list-style: none;
+    }
+    #TOC ul {
+      padding-left: 1.3em;
+    }
+    #TOC > ul {
+      padding-left: 0;
+    }
+    #TOC a:not(:hover) {
+      text-decoration: none;
+    }
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+    /* CSS for syntax highlighting */
+    pre > code.sourceCode { white-space: pre; position: relative; }
+    pre > code.sourceCode > span { line-height: 1.25; }
+    pre > code.sourceCode > span:empty { height: 1.2em; }
+    .sourceCode { overflow: visible; }
+    code.sourceCode > span { color: inherit; text-decoration: inherit; }
+    div.sourceCode { margin: 1em 0; }
+    pre.sourceCode { margin: 0; }
+    @media screen {
+    div.sourceCode { overflow: auto; }
+    }
+    @media print {
+    pre > code.sourceCode { white-space: pre-wrap; }
+    pre > code.sourceCode > span { display: inline-block; text-indent: -5em; padding-left: 5em; }
+    }
+    pre.numberSource code
+      { counter-reset: source-line 0; }
+    pre.numberSource code > span
+      { position: relative; left: -4em; counter-increment: source-line; }
+    pre.numberSource code > span > a:first-child::before
+      { content: counter(source-line);
+        position: relative; left: -1em; text-align: right; vertical-align: baseline;
+        border: none; display: inline-block;
+        -webkit-touch-callout: none; -webkit-user-select: none;
+        -khtml-user-select: none; -moz-user-select: none;
+        -ms-user-select: none; user-select: none;
+        padding: 0 4px; width: 4em;
+        color: #aaaaaa;
+      }
+    pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa;  padding-left: 4px; }
+    div.sourceCode
+      {   }
+    @media screen {
+    pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+    }
+    code span.al { color: #ff0000; font-weight: bold; } /* Alert */
+    code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } /* Annotation */
+    code span.at { color: #7d9029; } /* Attribute */
+    code span.bn { color: #40a070; } /* BaseN */
+    code span.bu { color: #008000; } /* BuiltIn */
+    code span.cf { color: #007020; font-weight: bold; } /* ControlFlow */
+    code span.ch { color: #4070a0; } /* Char */
+    code span.cn { color: #880000; } /* Constant */
+    code span.co { color: #60a0b0; font-style: italic; } /* Comment */
+    code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } /* CommentVar */
+    code span.do { color: #ba2121; font-style: italic; } /* Documentation */
+    code span.dt { color: #902000; } /* DataType */
+    code span.dv { color: #40a070; } /* DecVal */
+    code span.er { color: #ff0000; font-weight: bold; } /* Error */
+    code span.ex { } /* Extension */
+    code span.fl { color: #40a070; } /* Float */
+    code span.fu { color: #06287e; } /* Function */
+    code span.im { color: #008000; font-weight: bold; } /* Import */
+    code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Information */
+    code span.kw { color: #007020; font-weight: bold; } /* Keyword */
+    code span.op { color: #666666; } /* Operator */
+    code span.ot { color: #007020; } /* Other */
+    code span.pp { color: #bc7a00; } /* Preprocessor */
+    code span.sc { color: #4070a0; } /* SpecialChar */
+    code span.ss { color: #bb6688; } /* SpecialString */
+    code span.st { color: #4070a0; } /* String */
+    code span.va { color: #19177c; } /* Variable */
+    code span.vs { color: #4070a0; } /* VerbatimString */
+    code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warning */
+  </style>
+</head>
+<body>
+<h1 id="tec-tac-extension-reportset-tutorial">Tec-Tac Extension &amp;
+ReportSet Tutorial</h1>
+<p><strong>Framework baseline:</strong> Tec-Tac 1.0.0<br />
+<strong>Purpose:</strong> Create, package, deploy, upgrade, and validate
+your own Tec-Tac extension and matching ReportSet.</p>
+<p>This tutorial uses <code>networkprobe</code> as the example extension
+ID.</p>
+<hr />
+<h1 id="understand-the-tec-tac-plugin-model">1. Understand the Tec-Tac
+plugin model</h1>
 <p>Every production extension is a matched pair:</p>
-<pre><code>extensions/&lt;extension-id&gt;/
+<pre class="text"><code>extensions/&lt;extension-id&gt;/
 reportsets/&lt;extension-id&gt;/</code></pre>
 <p>The two directory names must be identical.</p>
 <p>For this tutorial:</p>
-<pre><code>extensions/networkprobe/
+<pre class="text"><code>extensions/networkprobe/
 reportsets/networkprobe/</code></pre>
-<p>The extension contains operational functionality and owns its source data. The ReportSet contains reporting mappings, enrichment, derived values, aggregation, and other report-facing logic.</p>
-<pre><code>Extension
+<p>The extension contains operational functionality and owns its source
+data. The ReportSet contains reporting mappings, enrichment, derived
+values, aggregation, and other report-facing logic.</p>
+<pre class="text"><code>Extension
     |
     | collects / owns / manages
     v
@@ -24,10 +265,10 @@ ReportSet
     |
     v
 Reports / dashboards / exports</code></pre>
-<hr>
-<h1>2. Plan the extension</h1>
+<hr />
+<h1 id="plan-the-extension">2. Plan the extension</h1>
 <p>Before creating files, define:</p>
-<pre><code>Extension ID:
+<pre class="text"><code>Extension ID:
 networkprobe
 
 Extension responsibility:
@@ -42,160 +283,193 @@ Timestamps
 
 ReportSet responsibility:
 Expose availability, latency, packet loss and device-health information for reporting.</code></pre>
-<p>Use the <strong>extension&#x27;s name</strong> as the ID. Do not name the pair after the type of report it happens to produce.</p>
-<hr>
-<h1>3. Scaffold the pair</h1>
+<p>Use the <strong>extension’s name</strong> as the ID. Do not name the
+pair after the type of report it happens to produce.</p>
+<hr />
+<h1 id="scaffold-the-pair">3. Scaffold the pair</h1>
 <p><strong>Run from:</strong> the Tec-Tac repository root.</p>
-<pre><code>cd /opt/tec-tac
-sudo bash scripts/scaffold-plugin.sh networkprobe 0.1.0</code></pre>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> /opt/tec-tac</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> bash scripts/scaffold-plugin.sh networkprobe 0.1.0</span></code></pre></div>
 <p>This creates:</p>
-<pre><code>extensions/networkprobe/
+<pre class="text"><code>extensions/networkprobe/
 ├── README.md
 └── tec_tac.json
 
 reportsets/networkprobe/
 ├── README.md
 └── tec_tac.json</code></pre>
-<p>The scaffold script currently creates the manifests and README files only. You add the actual Python/Django packages next.</p>
-<hr>
-<h1>4. Extension manifest</h1>
-<p><strong>File:</strong> <code>extensions/networkprobe/tec_tac.json</code></p>
-<pre><code>{
-  &quot;id&quot;: &quot;networkprobe&quot;,
-  &quot;type&quot;: &quot;extension&quot;,
-  &quot;version&quot;: &quot;0.1.0&quot;,
-  &quot;python_paths&quot;: [&quot;.&quot;],
-  &quot;django_apps&quot;: []
-}</code></pre>
-<p>At this stage there is no Django app yet, so <code>django_apps</code> is empty.</p>
+<p>The scaffold script currently creates the manifests and README files
+only. You add the actual Python/Django packages next.</p>
+<hr />
+<h1 id="extension-manifest">4. Extension manifest</h1>
+<p><strong>File:</strong>
+<code>extensions/networkprobe/tec_tac.json</code></p>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;id&quot;</span><span class="fu">:</span> <span class="st">&quot;networkprobe&quot;</span><span class="fu">,</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;type&quot;</span><span class="fu">:</span> <span class="st">&quot;extension&quot;</span><span class="fu">,</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;version&quot;</span><span class="fu">:</span> <span class="st">&quot;0.1.0&quot;</span><span class="fu">,</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;python_paths&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="st">&quot;.&quot;</span><span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;django_apps&quot;</span><span class="fu">:</span> <span class="ot">[]</span></span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<p>At this stage there is no Django app yet, so <code>django_apps</code>
+is empty.</p>
 <p>Important manifest rules:</p>
-<pre><code>id             must match the directory name
+<pre class="text"><code>id             must match the directory name
 type           must be extension or reportset as appropriate
 version        must not be blank
 python_paths   must remain inside the plugin directory and must exist
 django_apps    must contain valid, unique Django AppConfig class paths</code></pre>
-<hr>
-<h1>5. ReportSet manifest</h1>
-<p><strong>File:</strong> <code>reportsets/networkprobe/tec_tac.json</code></p>
-<pre><code>{
-  &quot;id&quot;: &quot;networkprobe&quot;,
-  &quot;type&quot;: &quot;reportset&quot;,
-  &quot;version&quot;: &quot;0.1.0&quot;,
-  &quot;python_paths&quot;: [&quot;.&quot;],
-  &quot;django_apps&quot;: []
-}</code></pre>
-<p>The ReportSet ID is <code>networkprobe</code>, exactly matching the extension ID.</p>
-<hr>
-<h1>6. Create the extension Python package</h1>
+<hr />
+<h1 id="reportset-manifest">5. ReportSet manifest</h1>
+<p><strong>File:</strong>
+<code>reportsets/networkprobe/tec_tac.json</code></p>
+<div class="sourceCode" id="cb9"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;id&quot;</span><span class="fu">:</span> <span class="st">&quot;networkprobe&quot;</span><span class="fu">,</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;type&quot;</span><span class="fu">:</span> <span class="st">&quot;reportset&quot;</span><span class="fu">,</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;version&quot;</span><span class="fu">:</span> <span class="st">&quot;0.1.0&quot;</span><span class="fu">,</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;python_paths&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="st">&quot;.&quot;</span><span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;django_apps&quot;</span><span class="fu">:</span> <span class="ot">[]</span></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<p>The ReportSet ID is <code>networkprobe</code>, exactly matching the
+extension ID.</p>
+<hr />
+<h1 id="create-the-extension-python-package">6. Create the extension
+Python package</h1>
 <p><strong>Run from:</strong> <code>/opt/tec-tac</code></p>
-<pre><code>mkdir -p extensions/networkprobe/tec_tac_networkprobe/migrations
-
-touch extensions/networkprobe/tec_tac_networkprobe/__init__.py
-touch extensions/networkprobe/tec_tac_networkprobe/migrations/__init__.py</code></pre>
+<div class="sourceCode" id="cb10"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="fu">mkdir</span> <span class="at">-p</span> extensions/networkprobe/tec_tac_networkprobe/migrations</span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="fu">touch</span> extensions/networkprobe/tec_tac_networkprobe/__init__.py</span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a><span class="fu">touch</span> extensions/networkprobe/tec_tac_networkprobe/migrations/__init__.py</span></code></pre></div>
 <p>Your extension now has this structure:</p>
-<pre><code>extensions/networkprobe/
+<pre class="text"><code>extensions/networkprobe/
 ├── README.md
 ├── tec_tac.json
 └── tec_tac_networkprobe/
     ├── __init__.py
     └── migrations/
         └── __init__.py</code></pre>
-<hr>
-<h1>7. Add the extension AppConfig</h1>
-<p><strong>File:</strong> <code>extensions/networkprobe/tec_tac_networkprobe/apps.py</code></p>
-<pre><code>from django.apps import AppConfig
-
-
-class TecTacNetworkProbeConfig(AppConfig):
-    default_auto_field = &quot;django.db.models.BigAutoField&quot;
-    name = &quot;tec_tac_networkprobe&quot;
-    label = &quot;tec_tac_networkprobe&quot;
-    verbose_name = &quot;Tec-Tac Network Probe&quot;</code></pre>
-<p>The Django <code>label</code> must not collide with Tactical or another Tec-Tac Django application.</p>
-<hr>
-<h1>8. Register the extension Django app</h1>
-<p><strong>File:</strong> <code>extensions/networkprobe/tec_tac.json</code></p>
+<hr />
+<h1 id="add-the-extension-appconfig">7. Add the extension AppConfig</h1>
+<p><strong>File:</strong>
+<code>extensions/networkprobe/tec_tac_networkprobe/apps.py</code></p>
+<div class="sourceCode" id="cb12"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> django.apps <span class="im">import</span> AppConfig</span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> TecTacNetworkProbeConfig(AppConfig):</span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a>    default_auto_field <span class="op">=</span> <span class="st">&quot;django.db.models.BigAutoField&quot;</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>    name <span class="op">=</span> <span class="st">&quot;tec_tac_networkprobe&quot;</span></span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a>    label <span class="op">=</span> <span class="st">&quot;tec_tac_networkprobe&quot;</span></span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>    verbose_name <span class="op">=</span> <span class="st">&quot;Tec-Tac Network Probe&quot;</span></span></code></pre></div>
+<p>The Django <code>label</code> must not collide with Tactical or
+another Tec-Tac Django application.</p>
+<hr />
+<h1 id="register-the-extension-django-app">8. Register the extension
+Django app</h1>
+<p><strong>File:</strong>
+<code>extensions/networkprobe/tec_tac.json</code></p>
 <p>Replace the original manifest with:</p>
-<pre><code>{
-  &quot;id&quot;: &quot;networkprobe&quot;,
-  &quot;type&quot;: &quot;extension&quot;,
-  &quot;version&quot;: &quot;0.1.0&quot;,
-  &quot;python_paths&quot;: [&quot;.&quot;],
-  &quot;django_apps&quot;: [
-    &quot;tec_tac_networkprobe.apps.TecTacNetworkProbeConfig&quot;
-  ],
-  &quot;permission_groups&quot;: {
-    &quot;read&quot;: [&quot;networkprobe.device.list&quot;],
-    &quot;manage&quot;: [&quot;networkprobe.device.list&quot;, &quot;networkprobe.device.manage&quot;, &quot;networkprobe.ingest.manage&quot;]
-  }
-}</code></pre>
-<p>Tec-Tac will make the declared Python path importable and add the AppConfig to the primary Django application registry.</p>
-<p>Do <strong>not</strong> edit Tactical tracked source files to register the app.</p>
-<hr>
-<h1>9. Create an extension-owned model</h1>
-<p><strong>File:</strong> <code>extensions/networkprobe/tec_tac_networkprobe/models.py</code></p>
+<div class="sourceCode" id="cb13"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;id&quot;</span><span class="fu">:</span> <span class="st">&quot;networkprobe&quot;</span><span class="fu">,</span></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;type&quot;</span><span class="fu">:</span> <span class="st">&quot;extension&quot;</span><span class="fu">,</span></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;version&quot;</span><span class="fu">:</span> <span class="st">&quot;0.1.0&quot;</span><span class="fu">,</span></span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;python_paths&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="st">&quot;.&quot;</span><span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;django_apps&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;tec_tac_networkprobe.apps.TecTacNetworkProbeConfig&quot;</span></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a>  <span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;permission_groups&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;read&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="st">&quot;networkprobe.device.list&quot;</span><span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;manage&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="st">&quot;networkprobe.device.list&quot;</span><span class="ot">,</span> <span class="st">&quot;networkprobe.device.manage&quot;</span><span class="ot">,</span> <span class="st">&quot;networkprobe.ingest.manage&quot;</span><span class="ot">]</span></span>
+<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
+<span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<p>Tec-Tac will make the declared Python path importable and add the
+AppConfig to the primary Django application registry.</p>
+<p>Do <strong>not</strong> edit Tactical tracked source files to
+register the app.</p>
+<hr />
+<h1 id="create-an-extension-owned-model">9. Create an extension-owned
+model</h1>
+<p><strong>File:</strong>
+<code>extensions/networkprobe/tec_tac_networkprobe/models.py</code></p>
 <p>Example:</p>
-<pre><code>from django.db import models
-
-
-class NetworkDevice(models.Model):
-    device_uid = models.CharField(max_length=128, unique=True)
-    name = models.CharField(max_length=255)
-    address = models.GenericIPAddressField()
-    device_type = models.CharField(max_length=64, blank=True)
-    last_seen = models.DateTimeField(null=True, blank=True)
-
-    class Meta:
-        ordering = (&quot;name&quot;,)
-
-    def __str__(self):
-        return self.name</code></pre>
-<p>This belongs on the extension side because the extension owns the operational device record.</p>
-<p>Do not blindly copy this model for every plugin. Design models around the actual extension.</p>
-<hr>
-<h1>10. Create the ReportSet Python package</h1>
+<div class="sourceCode" id="cb14"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> django.db <span class="im">import</span> models</span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> NetworkDevice(models.Model):</span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a>    device_uid <span class="op">=</span> models.CharField(max_length<span class="op">=</span><span class="dv">128</span>, unique<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a>    name <span class="op">=</span> models.CharField(max_length<span class="op">=</span><span class="dv">255</span>)</span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a>    address <span class="op">=</span> models.GenericIPAddressField()</span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a>    device_type <span class="op">=</span> models.CharField(max_length<span class="op">=</span><span class="dv">64</span>, blank<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a>    last_seen <span class="op">=</span> models.DateTimeField(null<span class="op">=</span><span class="va">True</span>, blank<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a>    <span class="kw">class</span> Meta:</span>
+<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a>        ordering <span class="op">=</span> (<span class="st">&quot;name&quot;</span>,)</span>
+<span id="cb14-13"><a href="#cb14-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-14"><a href="#cb14-14" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> <span class="fu">__str__</span>(<span class="va">self</span>):</span>
+<span id="cb14-15"><a href="#cb14-15" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="va">self</span>.name</span></code></pre></div>
+<p>This belongs on the extension side because the extension owns the
+operational device record.</p>
+<p>Do not blindly copy this model for every plugin. Design models around
+the actual extension.</p>
+<hr />
+<h1 id="create-the-reportset-python-package">10. Create the ReportSet
+Python package</h1>
 <p><strong>Run from:</strong> <code>/opt/tec-tac</code></p>
-<pre><code>mkdir -p reportsets/networkprobe/tec_tac_networkprobe_reportset/migrations
-
-touch reportsets/networkprobe/tec_tac_networkprobe_reportset/__init__.py
-touch reportsets/networkprobe/tec_tac_networkprobe_reportset/migrations/__init__.py</code></pre>
+<div class="sourceCode" id="cb15"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="fu">mkdir</span> <span class="at">-p</span> reportsets/networkprobe/tec_tac_networkprobe_reportset/migrations</span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="fu">touch</span> reportsets/networkprobe/tec_tac_networkprobe_reportset/__init__.py</span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a><span class="fu">touch</span> reportsets/networkprobe/tec_tac_networkprobe_reportset/migrations/__init__.py</span></code></pre></div>
 <p>Result:</p>
-<pre><code>reportsets/networkprobe/
+<pre class="text"><code>reportsets/networkprobe/
 ├── README.md
 ├── tec_tac.json
 └── tec_tac_networkprobe_reportset/
     ├── __init__.py
     └── migrations/
         └── __init__.py</code></pre>
-<hr>
-<h1>11. Add the ReportSet AppConfig</h1>
-<p><strong>File:</strong> <code>reportsets/networkprobe/tec_tac_networkprobe_reportset/apps.py</code></p>
-<pre><code>from django.apps import AppConfig
-
-
-class TecTacNetworkProbeReportsetConfig(AppConfig):
-    default_auto_field = &quot;django.db.models.BigAutoField&quot;
-    name = &quot;tec_tac_networkprobe_reportset&quot;
-    label = &quot;tec_tac_networkprobe_reportset&quot;
-    verbose_name = &quot;Tec-Tac Network Probe ReportSet&quot;</code></pre>
-<hr>
-<h1>12. Register the ReportSet Django app</h1>
-<p><strong>File:</strong> <code>reportsets/networkprobe/tec_tac.json</code></p>
+<hr />
+<h1 id="add-the-reportset-appconfig">11. Add the ReportSet
+AppConfig</h1>
+<p><strong>File:</strong>
+<code>reportsets/networkprobe/tec_tac_networkprobe_reportset/apps.py</code></p>
+<div class="sourceCode" id="cb17"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> django.apps <span class="im">import</span> AppConfig</span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> TecTacNetworkProbeReportsetConfig(AppConfig):</span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a>    default_auto_field <span class="op">=</span> <span class="st">&quot;django.db.models.BigAutoField&quot;</span></span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a>    name <span class="op">=</span> <span class="st">&quot;tec_tac_networkprobe_reportset&quot;</span></span>
+<span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a>    label <span class="op">=</span> <span class="st">&quot;tec_tac_networkprobe_reportset&quot;</span></span>
+<span id="cb17-8"><a href="#cb17-8" aria-hidden="true" tabindex="-1"></a>    verbose_name <span class="op">=</span> <span class="st">&quot;Tec-Tac Network Probe ReportSet&quot;</span></span></code></pre></div>
+<hr />
+<h1 id="register-the-reportset-django-app">12. Register the ReportSet
+Django app</h1>
+<p><strong>File:</strong>
+<code>reportsets/networkprobe/tec_tac.json</code></p>
 <p>Replace the original manifest with:</p>
-<pre><code>{
-  &quot;id&quot;: &quot;networkprobe&quot;,
-  &quot;type&quot;: &quot;reportset&quot;,
-  &quot;version&quot;: &quot;0.1.0&quot;,
-  &quot;python_paths&quot;: [&quot;.&quot;],
-  &quot;django_apps&quot;: [
-    &quot;tec_tac_networkprobe_reportset.apps.TecTacNetworkProbeReportsetConfig&quot;
-  ]
-}</code></pre>
-<hr>
-<h1>13. Add ReportSet mappings</h1>
-<p>A ReportSet should expose the reporting interpretation of extension-owned data.</p>
+<div class="sourceCode" id="cb18"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;id&quot;</span><span class="fu">:</span> <span class="st">&quot;networkprobe&quot;</span><span class="fu">,</span></span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;type&quot;</span><span class="fu">:</span> <span class="st">&quot;reportset&quot;</span><span class="fu">,</span></span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;version&quot;</span><span class="fu">:</span> <span class="st">&quot;0.1.0&quot;</span><span class="fu">,</span></span>
+<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;python_paths&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="st">&quot;.&quot;</span><span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;django_apps&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb18-7"><a href="#cb18-7" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;tec_tac_networkprobe_reportset.apps.TecTacNetworkProbeReportsetConfig&quot;</span></span>
+<span id="cb18-8"><a href="#cb18-8" aria-hidden="true" tabindex="-1"></a>  <span class="ot">]</span></span>
+<span id="cb18-9"><a href="#cb18-9" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<hr />
+<h1 id="add-reportset-mappings">13. Add ReportSet mappings</h1>
+<p>A ReportSet should expose the reporting interpretation of
+extension-owned data.</p>
 <p>Good ReportSet responsibilities include:</p>
-<pre><code>friendly field labels
+<pre class="text"><code>friendly field labels
 relationships
 device-type enrichment
 vendor enrichment
@@ -206,80 +480,96 @@ derived health states
 hour/day/week/month consolidation
 report-facing models</code></pre>
 <p>For simple Python mapping/enrichment logic:</p>
-<p><strong>File:</strong> <code>reportsets/networkprobe/tec_tac_networkprobe_reportset/mappings.py</code></p>
-<pre><code>def map_device(device):
-    return {
-        &quot;device_uid&quot;: device.device_uid,
-        &quot;device_name&quot;: device.name,
-        &quot;device_type&quot;: device.device_type or &quot;unknown&quot;,
-        &quot;address&quot;: device.address,
-        &quot;last_seen&quot;: device.last_seen,
-    }</code></pre>
+<p><strong>File:</strong>
+<code>reportsets/networkprobe/tec_tac_networkprobe_reportset/mappings.py</code></p>
+<div class="sourceCode" id="cb20"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> map_device(device):</span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> {</span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;device_uid&quot;</span>: device.device_uid,</span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;device_name&quot;</span>: device.name,</span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;device_type&quot;</span>: device.device_type <span class="kw">or</span> <span class="st">&quot;unknown&quot;</span>,</span>
+<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;address&quot;</span>: device.address,</span>
+<span id="cb20-7"><a href="#cb20-7" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;last_seen&quot;</span>: device.last_seen,</span>
+<span id="cb20-8"><a href="#cb20-8" aria-hidden="true" tabindex="-1"></a>    }</span></code></pre></div>
 <p>For derived logic:</p>
-<p><strong>File:</strong> <code>reportsets/networkprobe/tec_tac_networkprobe_reportset/enrichment.py</code></p>
-<pre><code>def availability_status(availability_pct):
-    if availability_pct is None:
-        return &quot;unknown&quot;
-    if availability_pct &gt;= 99.0:
-        return &quot;healthy&quot;
-    if availability_pct &gt;= 95.0:
-        return &quot;degraded&quot;
-    return &quot;unhealthy&quot;</code></pre>
-<p>These are examples of where mapping and enrichment logic belongs. The exact reporting contract depends on the extension.</p>
-<hr>
-<h1>14. Add an API only when the extension needs one</h1>
-<p>Operational ingest and management APIs normally belong on the <strong>extension</strong> side.</p>
+<p><strong>File:</strong>
+<code>reportsets/networkprobe/tec_tac_networkprobe_reportset/enrichment.py</code></p>
+<div class="sourceCode" id="cb21"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> availability_status(availability_pct):</span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> availability_pct <span class="kw">is</span> <span class="va">None</span>:</span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="st">&quot;unknown&quot;</span></span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> availability_pct <span class="op">&gt;=</span> <span class="fl">99.0</span>:</span>
+<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="st">&quot;healthy&quot;</span></span>
+<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> availability_pct <span class="op">&gt;=</span> <span class="fl">95.0</span>:</span>
+<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="st">&quot;degraded&quot;</span></span>
+<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="st">&quot;unhealthy&quot;</span></span></code></pre></div>
+<p>These are examples of where mapping and enrichment logic belongs. The
+exact reporting contract depends on the extension.</p>
+<hr />
+<h1 id="add-an-api-only-when-the-extension-needs-one">14. Add an API
+only when the extension needs one</h1>
+<p>Operational ingest and management APIs normally belong on the
+<strong>extension</strong> side.</p>
 <p>Typical files are:</p>
-<pre><code>extensions/networkprobe/tec_tac_networkprobe/
+<pre class="text"><code>extensions/networkprobe/tec_tac_networkprobe/
 ├── serializers.py
 ├── views.py
 ├── urls.py
 ├── permissions.py
 └── rbac.py</code></pre>
 <p>If you create a serializer:</p>
-<p><strong>File:</strong> <code>extensions/networkprobe/tec_tac_networkprobe/serializers.py</code></p>
-<pre><code>from rest_framework import serializers
-from .models import NetworkDevice
-
-
-class NetworkDeviceSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = NetworkDevice
-        fields = (
-            &quot;id&quot;,
-            &quot;device_uid&quot;,
-            &quot;name&quot;,
-            &quot;address&quot;,
-            &quot;device_type&quot;,
-            &quot;last_seen&quot;,
-        )</code></pre>
+<p><strong>File:</strong>
+<code>extensions/networkprobe/tec_tac_networkprobe/serializers.py</code></p>
+<div class="sourceCode" id="cb23"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> rest_framework <span class="im">import</span> serializers</span>
+<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> .models <span class="im">import</span> NetworkDevice</span>
+<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> NetworkDeviceSerializer(serializers.ModelSerializer):</span>
+<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">class</span> Meta:</span>
+<span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a>        model <span class="op">=</span> NetworkDevice</span>
+<span id="cb23-8"><a href="#cb23-8" aria-hidden="true" tabindex="-1"></a>        fields <span class="op">=</span> (</span>
+<span id="cb23-9"><a href="#cb23-9" aria-hidden="true" tabindex="-1"></a>            <span class="st">&quot;id&quot;</span>,</span>
+<span id="cb23-10"><a href="#cb23-10" aria-hidden="true" tabindex="-1"></a>            <span class="st">&quot;device_uid&quot;</span>,</span>
+<span id="cb23-11"><a href="#cb23-11" aria-hidden="true" tabindex="-1"></a>            <span class="st">&quot;name&quot;</span>,</span>
+<span id="cb23-12"><a href="#cb23-12" aria-hidden="true" tabindex="-1"></a>            <span class="st">&quot;address&quot;</span>,</span>
+<span id="cb23-13"><a href="#cb23-13" aria-hidden="true" tabindex="-1"></a>            <span class="st">&quot;device_type&quot;</span>,</span>
+<span id="cb23-14"><a href="#cb23-14" aria-hidden="true" tabindex="-1"></a>            <span class="st">&quot;last_seen&quot;</span>,</span>
+<span id="cb23-15"><a href="#cb23-15" aria-hidden="true" tabindex="-1"></a>        )</span></code></pre></div>
 <p>If you create an API view:</p>
-<p><strong>File:</strong> <code>extensions/networkprobe/tec_tac_networkprobe/views.py</code></p>
-<pre><code>from rest_framework.generics import ListCreateAPIView
-
-from .models import NetworkDevice
-from .serializers import NetworkDeviceSerializer
-
-
-class NetworkDeviceListCreateView(ListCreateAPIView):
-    queryset = NetworkDevice.objects.all()
-    serializer_class = NetworkDeviceSerializer</code></pre>
+<p><strong>File:</strong>
+<code>extensions/networkprobe/tec_tac_networkprobe/views.py</code></p>
+<div class="sourceCode" id="cb24"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> rest_framework.generics <span class="im">import</span> ListCreateAPIView</span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> .models <span class="im">import</span> NetworkDevice</span>
+<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> .serializers <span class="im">import</span> NetworkDeviceSerializer</span>
+<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-6"><a href="#cb24-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-7"><a href="#cb24-7" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> NetworkDeviceListCreateView(ListCreateAPIView):</span>
+<span id="cb24-8"><a href="#cb24-8" aria-hidden="true" tabindex="-1"></a>    queryset <span class="op">=</span> NetworkDevice.objects.<span class="bu">all</span>()</span>
+<span id="cb24-9"><a href="#cb24-9" aria-hidden="true" tabindex="-1"></a>    serializer_class <span class="op">=</span> NetworkDeviceSerializer</span></code></pre></div>
 <p>If you create URL definitions:</p>
-<p><strong>File:</strong> <code>extensions/networkprobe/tec_tac_networkprobe/urls.py</code></p>
-<pre><code>from django.urls import path
-from .views import NetworkDeviceListCreateView
-
-
-urlpatterns = [
-    path(
-        &quot;devices/&quot;,
-        NetworkDeviceListCreateView.as_view(),
-        name=&quot;networkprobe-devices&quot;,
-    ),
-]</code></pre>
-<p>Creating <code>urls.py</code> does not by itself make a route public. The extension still needs a supported Tec-Tac/Tactical URL registration mechanism. Do not edit Tactical tracked URL files simply to make the route available.</p>
+<p><strong>File:</strong>
+<code>extensions/networkprobe/tec_tac_networkprobe/urls.py</code></p>
+<div class="sourceCode" id="cb25"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> django.urls <span class="im">import</span> path</span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> .views <span class="im">import</span> NetworkDeviceListCreateView</span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb25-5"><a href="#cb25-5" aria-hidden="true" tabindex="-1"></a>urlpatterns <span class="op">=</span> [</span>
+<span id="cb25-6"><a href="#cb25-6" aria-hidden="true" tabindex="-1"></a>    path(</span>
+<span id="cb25-7"><a href="#cb25-7" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;devices/&quot;</span>,</span>
+<span id="cb25-8"><a href="#cb25-8" aria-hidden="true" tabindex="-1"></a>        NetworkDeviceListCreateView.as_view(),</span>
+<span id="cb25-9"><a href="#cb25-9" aria-hidden="true" tabindex="-1"></a>        name<span class="op">=</span><span class="st">&quot;networkprobe-devices&quot;</span>,</span>
+<span id="cb25-10"><a href="#cb25-10" aria-hidden="true" tabindex="-1"></a>    ),</span>
+<span id="cb25-11"><a href="#cb25-11" aria-hidden="true" tabindex="-1"></a>]</span></code></pre></div>
+<p>Creating <code>urls.py</code> does not by itself make a route public.
+The extension still needs a supported Tec-Tac/Tactical URL registration
+mechanism. Do not edit Tactical tracked URL files simply to make the
+route available.</p>
 <p>When building an ingest API, design these from the start:</p>
-<pre><code>authentication
+<pre class="text"><code>authentication
 authorization
 input validation
 idempotency
@@ -288,87 +578,106 @@ timestamp validation
 duplicate handling
 server-side audit fields
 HTTP status codes</code></pre>
-<hr>
-<h1>15. Permissions</h1>
+<hr />
+<h1 id="permissions">15. Permissions</h1>
 <p>Use explicit permission codenames owned by the extension.</p>
 <p>Example:</p>
-<pre><code>tec_tac_networkprobe.device.list
+<pre class="text"><code>tec_tac_networkprobe.device.list
 tec_tac_networkprobe.device.manage
 tec_tac_networkprobe.ingest.manage</code></pre>
 <p>Keep permissions least-privilege.</p>
-<p>Tec-Tac&#x27;s current proven custom permission pattern is role-based. A grant to a Tactical role affects every Tactical user assigned to that role.</p>
-<p>Do not silently grant new extension permissions during installation.</p>
-<hr>
-<h1>16. Validate the plugin registry</h1>
+<p>Tec-Tac’s current proven custom permission pattern is role-based. A
+grant to a Tactical role affects every Tactical user assigned to that
+role.</p>
+<p>Do not silently grant new extension permissions during
+installation.</p>
+<hr />
+<h1 id="validate-the-plugin-registry">16. Validate the plugin
+registry</h1>
 <p><strong>Run from:</strong> <code>/opt/tec-tac</code></p>
-<pre><code>sudo bash scripts/plugin-info.sh</code></pre>
+<div class="sourceCode" id="cb28"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> bash scripts/plugin-info.sh</span></code></pre></div>
 <p>You should eventually see both:</p>
-<pre><code>extension : networkprobe
+<pre class="text"><code>extension : networkprobe
 reportset : networkprobe</code></pre>
 <p>Inspect the pair directly:</p>
-<pre><code>sudo bash scripts/plugin-info.sh networkprobe extension
-sudo bash scripts/plugin-info.sh networkprobe reportset</code></pre>
+<div class="sourceCode" id="cb30"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> bash scripts/plugin-info.sh networkprobe extension</span>
+<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> bash scripts/plugin-info.sh networkprobe reportset</span></code></pre></div>
 <p>Run framework registry validation:</p>
-<pre><code>sudo bash tests/registry-validation.sh</code></pre>
+<div class="sourceCode" id="cb31"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> bash tests/registry-validation.sh</span></code></pre></div>
 <p>Do not continue until registry validation passes.</p>
-<hr>
-<h1>17. Run the Django system check</h1>
+<hr />
+<h1 id="run-the-django-system-check">17. Run the Django system
+check</h1>
 <p><strong>Run from:</strong> <code>/rmm/api/tacticalrmm</code></p>
-<pre><code>cd /rmm/api/tacticalrmm
-sudo -u tactical /rmm/api/env/bin/python manage.py check</code></pre>
+<div class="sourceCode" id="cb32"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> /rmm/api/tacticalrmm</span>
+<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> <span class="at">-u</span> tactical /rmm/api/env/bin/python manage.py check</span></code></pre></div>
 <p>Expected result:</p>
-<pre><code>System check identified no issues</code></pre>
-<hr>
-<h1>18. Create extension migrations</h1>
+<pre class="text"><code>System check identified no issues</code></pre>
+<hr />
+<h1 id="create-extension-migrations">18. Create extension
+migrations</h1>
 <p>After adding or changing extension models:</p>
-<p><strong>Generated files will be written under:</strong></p>
-<p><code>extensions/networkprobe/tec_tac_networkprobe/migrations/</code></p>
+<p><strong>Generated files will be written under:</strong><br />
+<code>extensions/networkprobe/tec_tac_networkprobe/migrations/</code></p>
 <p><strong>Run from:</strong> <code>/rmm/api/tacticalrmm</code></p>
-<pre><code>sudo -u tactical /rmm/api/env/bin/python manage.py makemigrations tec_tac_networkprobe</code></pre>
+<div class="sourceCode" id="cb34"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> <span class="at">-u</span> tactical /rmm/api/env/bin/python manage.py makemigrations tec_tac_networkprobe</span></code></pre></div>
 <p>Review every generated migration before committing it.</p>
 <p>Example generated filename:</p>
-<pre><code>extensions/networkprobe/tec_tac_networkprobe/migrations/0001_initial.py</code></pre>
-<p>Do not edit an already-deployed migration to represent a later schema change. Create a new migration.</p>
-<hr>
-<h1>19. Create ReportSet migrations when needed</h1>
+<pre class="text"><code>extensions/networkprobe/tec_tac_networkprobe/migrations/0001_initial.py</code></pre>
+<p>Do not edit an already-deployed migration to represent a later schema
+change. Create a new migration.</p>
+<hr />
+<h1 id="create-reportset-migrations-when-needed">19. Create ReportSet
+migrations when needed</h1>
 <p>Only do this if the ReportSet has database models.</p>
-<p><strong>Generated files will be written under:</strong></p>
-<p><code>reportsets/networkprobe/tec_tac_networkprobe_reportset/migrations/</code></p>
+<p><strong>Generated files will be written under:</strong><br />
+<code>reportsets/networkprobe/tec_tac_networkprobe_reportset/migrations/</code></p>
 <p><strong>Run from:</strong> <code>/rmm/api/tacticalrmm</code></p>
-<pre><code>sudo -u tactical /rmm/api/env/bin/python manage.py makemigrations tec_tac_networkprobe_reportset</code></pre>
-<hr>
-<h1>20. Apply migrations during development</h1>
+<div class="sourceCode" id="cb36"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb36-1"><a href="#cb36-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> <span class="at">-u</span> tactical /rmm/api/env/bin/python manage.py makemigrations tec_tac_networkprobe_reportset</span></code></pre></div>
+<hr />
+<h1 id="apply-migrations-during-development">20. Apply migrations during
+development</h1>
 <p><strong>Run from:</strong> <code>/rmm/api/tacticalrmm</code></p>
 <p>Extension:</p>
-<pre><code>sudo -u tactical /rmm/api/env/bin/python manage.py migrate tec_tac_networkprobe</code></pre>
+<div class="sourceCode" id="cb37"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb37-1"><a href="#cb37-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> <span class="at">-u</span> tactical /rmm/api/env/bin/python manage.py migrate tec_tac_networkprobe</span></code></pre></div>
 <p>ReportSet, if it has migrations:</p>
-<pre><code>sudo -u tactical /rmm/api/env/bin/python manage.py migrate tec_tac_networkprobe_reportset</code></pre>
+<div class="sourceCode" id="cb38"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb38-1"><a href="#cb38-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> <span class="at">-u</span> tactical /rmm/api/env/bin/python manage.py migrate tec_tac_networkprobe_reportset</span></code></pre></div>
 <p>Then:</p>
-<pre><code>sudo -u tactical /rmm/api/env/bin/python manage.py check</code></pre>
-<hr>
-<h1>21. Add extension tests</h1>
+<div class="sourceCode" id="cb39"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb39-1"><a href="#cb39-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> <span class="at">-u</span> tactical /rmm/api/env/bin/python manage.py check</span></code></pre></div>
+<hr />
+<h1 id="add-extension-tests">21. Add extension tests</h1>
 <p>Recommended test location:</p>
-<pre><code>tests/networkprobe/</code></pre>
+<pre class="text"><code>tests/networkprobe/</code></pre>
 <p>Suggested files:</p>
-<pre><code>tests/networkprobe/
+<pre class="text"><code>tests/networkprobe/
 ├── server.sh
 ├── api.sh
 └── reportset.sh</code></pre>
 <p>For server/model validation:</p>
 <p><strong>File:</strong> <code>tests/networkprobe/server.sh</code></p>
-<pre><code>#!/usr/bin/env bash
-set -euo pipefail
-
-cd /rmm/api/tacticalrmm
-
-sudo -u tactical /rmm/api/env/bin/python manage.py check
-sudo -u tactical /rmm/api/env/bin/python manage.py shell -c &quot;
-from django.apps import apps
-assert apps.get_model(&#x27;tec_tac_networkprobe&#x27;, &#x27;NetworkDevice&#x27;)
-print(&#x27;[TEST] PASS networkprobe server&#x27;)
-&quot;</code></pre>
+<div class="sourceCode" id="cb42"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb42-1"><a href="#cb42-1" aria-hidden="true" tabindex="-1"></a><span class="co">#!/usr/bin/env bash</span></span>
+<span id="cb42-2"><a href="#cb42-2" aria-hidden="true" tabindex="-1"></a><span class="bu">set</span> <span class="at">-euo</span> pipefail</span>
+<span id="cb42-3"><a href="#cb42-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb42-4"><a href="#cb42-4" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> /rmm/api/tacticalrmm</span>
+<span id="cb42-5"><a href="#cb42-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb42-6"><a href="#cb42-6" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> <span class="at">-u</span> tactical /rmm/api/env/bin/python manage.py check</span>
+<span id="cb42-7"><a href="#cb42-7" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> <span class="at">-u</span> tactical /rmm/api/env/bin/python manage.py shell <span class="at">-c</span> <span class="st">&quot;</span></span>
+<span id="cb42-8"><a href="#cb42-8" aria-hidden="true" tabindex="-1"></a><span class="st">from django.apps import apps</span></span>
+<span id="cb42-9"><a href="#cb42-9" aria-hidden="true" tabindex="-1"></a><span class="st">assert apps.get_model(&#39;tec_tac_networkprobe&#39;, &#39;NetworkDevice&#39;)</span></span>
+<span id="cb42-10"><a href="#cb42-10" aria-hidden="true" tabindex="-1"></a><span class="st">print(&#39;[TEST] PASS networkprobe server&#39;)</span></span>
+<span id="cb42-11"><a href="#cb42-11" aria-hidden="true" tabindex="-1"></a><span class="st">&quot;</span></span></code></pre></div>
 <p>For an ingest API, tests should normally cover:</p>
-<pre><code>valid create
+<pre class="text"><code>valid create
 exact replay
 conflicting replay
 bad status/enum
@@ -377,15 +686,17 @@ future timestamp
 authentication failure
 authorization failure</code></pre>
 <p>For historical reporting, test the intended aggregation levels:</p>
-<pre><code>hour
+<pre class="text"><code>hour
 day
 week
 month</code></pre>
-<hr>
-<h1>22. Update the extension READMEs</h1>
-<p><strong>File:</strong> <code>extensions/networkprobe/README.md</code></p>
+<hr />
+<h1 id="update-the-extension-readmes">22. Update the extension
+READMEs</h1>
+<p><strong>File:</strong>
+<code>extensions/networkprobe/README.md</code></p>
 <p>Document at least:</p>
-<pre><code>purpose
+<pre class="text"><code>purpose
 version
 owned models
 API endpoints
@@ -394,9 +705,10 @@ configuration
 migration requirements
 dependencies
 deployment notes</code></pre>
-<p><strong>File:</strong> <code>reportsets/networkprobe/README.md</code></p>
+<p><strong>File:</strong>
+<code>reportsets/networkprobe/README.md</code></p>
 <p>Document at least:</p>
-<pre><code>source extension
+<pre class="text"><code>source extension
 datasets exposed
 field mappings
 relationships
@@ -404,11 +716,13 @@ enrichment
 aggregation
 report-facing models
 historical behaviour</code></pre>
-<hr>
-<h1>23. Package the extension for deployment</h1>
-<p>A Tec-Tac extension package must contain exactly one matching pair.</p>
+<hr />
+<h1 id="package-the-extension-for-deployment">23. Package the extension
+for deployment</h1>
+<p>A Tec-Tac extension package must contain exactly one matching
+pair.</p>
 <p>Preferred archive layout:</p>
-<pre><code>networkprobe-0.1.0/
+<pre class="text"><code>networkprobe-0.1.0/
 ├── extensions/
 │   └── networkprobe/
 │       ├── tec_tac.json
@@ -421,52 +735,60 @@ historical behaviour</code></pre>
         ├── README.md
         └── tec_tac_networkprobe_reportset/
             └── ...</code></pre>
-<p>A wrapper directory such as <code>networkprobe-0.1.0/</code> is optional.</p>
+<p>A wrapper directory such as <code>networkprobe-0.1.0/</code> is
+optional.</p>
 <p>Do <strong>not</strong> package:</p>
-<pre><code>__pycache__/
+<pre class="text"><code>__pycache__/
 *.pyc
 API keys
 passwords
 environment-specific secrets
 temporary output
 .git/</code></pre>
-<hr>
-<h1>24. Build a <code>.tar.gz</code> package</h1>
+<hr />
+<h1 id="build-a-.tar.gz-package">24. Build a <code>.tar.gz</code>
+package</h1>
 <p><strong>Run from:</strong> the Tec-Tac repository root.</p>
-<pre><code>cd /opt/tec-tac
-
-mkdir -p /tmp/networkprobe-0.1.0/extensions
-mkdir -p /tmp/networkprobe-0.1.0/reportsets
-
-cp -a extensions/networkprobe /tmp/networkprobe-0.1.0/extensions/
-cp -a reportsets/networkprobe /tmp/networkprobe-0.1.0/reportsets/
-
-cd /tmp
-tar -czf networkprobe-0.1.0.tar.gz networkprobe-0.1.0</code></pre>
+<div class="sourceCode" id="cb49"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb49-1"><a href="#cb49-1" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> /opt/tec-tac</span>
+<span id="cb49-2"><a href="#cb49-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb49-3"><a href="#cb49-3" aria-hidden="true" tabindex="-1"></a><span class="fu">mkdir</span> <span class="at">-p</span> /tmp/networkprobe-0.1.0/extensions</span>
+<span id="cb49-4"><a href="#cb49-4" aria-hidden="true" tabindex="-1"></a><span class="fu">mkdir</span> <span class="at">-p</span> /tmp/networkprobe-0.1.0/reportsets</span>
+<span id="cb49-5"><a href="#cb49-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb49-6"><a href="#cb49-6" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> <span class="at">-a</span> extensions/networkprobe /tmp/networkprobe-0.1.0/extensions/</span>
+<span id="cb49-7"><a href="#cb49-7" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> <span class="at">-a</span> reportsets/networkprobe /tmp/networkprobe-0.1.0/reportsets/</span>
+<span id="cb49-8"><a href="#cb49-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb49-9"><a href="#cb49-9" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> /tmp</span>
+<span id="cb49-10"><a href="#cb49-10" aria-hidden="true" tabindex="-1"></a><span class="fu">tar</span> <span class="at">-czf</span> networkprobe-0.1.0.tar.gz networkprobe-0.1.0</span></code></pre></div>
 <p>Result:</p>
-<pre><code>/tmp/networkprobe-0.1.0.tar.gz</code></pre>
-<hr>
-<h1>25. Build a <code>.zip</code> package</h1>
-<p><strong>Run from:</strong> <code>/tmp</code> after creating the package directory above.</p>
-<pre><code>cd /tmp
-zip -r networkprobe-0.1.0.zip networkprobe-0.1.0</code></pre>
+<pre class="text"><code>/tmp/networkprobe-0.1.0.tar.gz</code></pre>
+<hr />
+<h1 id="build-a-.zip-package">25. Build a <code>.zip</code> package</h1>
+<p><strong>Run from:</strong> <code>/tmp</code> after creating the
+package directory above.</p>
+<div class="sourceCode" id="cb51"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb51-1"><a href="#cb51-1" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> /tmp</span>
+<span id="cb51-2"><a href="#cb51-2" aria-hidden="true" tabindex="-1"></a><span class="fu">zip</span> <span class="at">-r</span> networkprobe-0.1.0.zip networkprobe-0.1.0</span></code></pre></div>
 <p>Result:</p>
-<pre><code>/tmp/networkprobe-0.1.0.zip</code></pre>
-<hr>
-<h1>26. Install the extension package</h1>
+<pre class="text"><code>/tmp/networkprobe-0.1.0.zip</code></pre>
+<hr />
+<h1 id="install-the-extension-package">26. Install the extension
+package</h1>
 <p>Tec-Tac should keep the generic package installer at:</p>
 <p><strong>File:</strong> <code>scripts/install-extension.sh</code></p>
 <p>The installer accepts:</p>
-<pre><code>.zip
+<pre class="text"><code>.zip
 .tar.gz
 .tgz</code></pre>
 <p>Install a new extension:</p>
-<pre><code>cd /opt/tec-tac
-sudo bash scripts/install-extension.sh /tmp/networkprobe-0.1.0.zip</code></pre>
+<div class="sourceCode" id="cb54"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb54-1"><a href="#cb54-1" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> /opt/tec-tac</span>
+<span id="cb54-2"><a href="#cb54-2" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> bash scripts/install-extension.sh /tmp/networkprobe-0.1.0.zip</span></code></pre></div>
 <p>or:</p>
-<pre><code>sudo bash scripts/install-extension.sh /tmp/networkprobe-0.1.0.tar.gz</code></pre>
+<div class="sourceCode" id="cb55"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb55-1"><a href="#cb55-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> bash scripts/install-extension.sh /tmp/networkprobe-0.1.0.tar.gz</span></code></pre></div>
 <p>The installer:</p>
-<pre><code>1. safely extracts the archive into a temporary directory
+<pre class="text"><code>1. safely extracts the archive into a temporary directory
 2. rejects absolute paths, path traversal and archive links
 3. requires exactly one extension manifest and one ReportSet manifest
 4. confirms both IDs match
@@ -475,94 +797,116 @@ sudo bash scripts/install-extension.sh /tmp/networkprobe-0.1.0.zip</code></pre>
 7. copies both components into the Tec-Tac repository
 8. validates the complete live registry
 9. runs Django system checks
-10. applies conventional migrations belonging to the package&#x27;s declared Django apps
+10. applies conventional migrations belonging to the package&#39;s declared Django apps
 11. runs Django checks again
 12. restarts Tactical services
 13. verifies the services returned to active state</code></pre>
-<hr>
-<h1>27. Upgrade an installed extension package</h1>
+<hr />
+<h1 id="upgrade-an-installed-extension-package">27. Upgrade an installed
+extension package</h1>
 <p>Build the new package with the updated version in both manifests.</p>
 <p>Example:</p>
-<p><strong>File:</strong> <code>extensions/networkprobe/tec_tac.json</code></p>
-<pre><code>{
-  &quot;id&quot;: &quot;networkprobe&quot;,
-  &quot;type&quot;: &quot;extension&quot;,
-  &quot;version&quot;: &quot;0.2.0&quot;,
-  &quot;python_paths&quot;: [&quot;.&quot;],
-  &quot;django_apps&quot;: [
-    &quot;tec_tac_networkprobe.apps.TecTacNetworkProbeConfig&quot;
-  ]
-}</code></pre>
-<p><strong>File:</strong> <code>reportsets/networkprobe/tec_tac.json</code></p>
-<pre><code>{
-  &quot;id&quot;: &quot;networkprobe&quot;,
-  &quot;type&quot;: &quot;reportset&quot;,
-  &quot;version&quot;: &quot;0.2.0&quot;,
-  &quot;python_paths&quot;: [&quot;.&quot;],
-  &quot;django_apps&quot;: [
-    &quot;tec_tac_networkprobe_reportset.apps.TecTacNetworkProbeReportsetConfig&quot;
-  ]
-}</code></pre>
+<p><strong>File:</strong>
+<code>extensions/networkprobe/tec_tac.json</code></p>
+<div class="sourceCode" id="cb57"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb57-1"><a href="#cb57-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb57-2"><a href="#cb57-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;id&quot;</span><span class="fu">:</span> <span class="st">&quot;networkprobe&quot;</span><span class="fu">,</span></span>
+<span id="cb57-3"><a href="#cb57-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;type&quot;</span><span class="fu">:</span> <span class="st">&quot;extension&quot;</span><span class="fu">,</span></span>
+<span id="cb57-4"><a href="#cb57-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;version&quot;</span><span class="fu">:</span> <span class="st">&quot;0.2.0&quot;</span><span class="fu">,</span></span>
+<span id="cb57-5"><a href="#cb57-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;python_paths&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="st">&quot;.&quot;</span><span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb57-6"><a href="#cb57-6" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;django_apps&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb57-7"><a href="#cb57-7" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;tec_tac_networkprobe.apps.TecTacNetworkProbeConfig&quot;</span></span>
+<span id="cb57-8"><a href="#cb57-8" aria-hidden="true" tabindex="-1"></a>  <span class="ot">]</span></span>
+<span id="cb57-9"><a href="#cb57-9" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<p><strong>File:</strong>
+<code>reportsets/networkprobe/tec_tac.json</code></p>
+<div class="sourceCode" id="cb58"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb58-1"><a href="#cb58-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb58-2"><a href="#cb58-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;id&quot;</span><span class="fu">:</span> <span class="st">&quot;networkprobe&quot;</span><span class="fu">,</span></span>
+<span id="cb58-3"><a href="#cb58-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;type&quot;</span><span class="fu">:</span> <span class="st">&quot;reportset&quot;</span><span class="fu">,</span></span>
+<span id="cb58-4"><a href="#cb58-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;version&quot;</span><span class="fu">:</span> <span class="st">&quot;0.2.0&quot;</span><span class="fu">,</span></span>
+<span id="cb58-5"><a href="#cb58-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;python_paths&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="st">&quot;.&quot;</span><span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb58-6"><a href="#cb58-6" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;django_apps&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb58-7"><a href="#cb58-7" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;tec_tac_networkprobe_reportset.apps.TecTacNetworkProbeReportsetConfig&quot;</span></span>
+<span id="cb58-8"><a href="#cb58-8" aria-hidden="true" tabindex="-1"></a>  <span class="ot">]</span></span>
+<span id="cb58-9"><a href="#cb58-9" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
 <p>Install the upgrade:</p>
-<pre><code>sudo bash scripts/install-extension.sh /tmp/networkprobe-0.2.0.tar.gz --replace</code></pre>
-<p>When <code>--replace</code> is used, the installer first backs up the currently installed extension and ReportSet under:</p>
-<pre><code>/var/lib/tec-tac/backups/plugins/&lt;extension-id&gt;/&lt;timestamp&gt;/</code></pre>
-<p>If validation, Django checks or migrations fail, the installer restores the previous plugin files.</p>
-<p>Database migrations that completed before a later failure are not automatically reversed. Schema changes therefore still need normal migration discipline and testing.</p>
-<hr>
-<h1>28. Verify the deployed extension</h1>
+<div class="sourceCode" id="cb59"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb59-1"><a href="#cb59-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> bash scripts/install-extension.sh /tmp/networkprobe-0.2.0.tar.gz <span class="at">--replace</span></span></code></pre></div>
+<p>When <code>--replace</code> is used, the installer first backs up the
+currently installed extension and ReportSet under:</p>
+<pre class="text"><code>/var/lib/tec-tac/backups/plugins/&lt;extension-id&gt;/&lt;timestamp&gt;/</code></pre>
+<p>If validation, Django checks or migrations fail, the installer
+restores the previous plugin files.</p>
+<p>Database migrations that completed before a later failure are not
+automatically reversed. Schema changes therefore still need normal
+migration discipline and testing.</p>
+<hr />
+<h1 id="verify-the-deployed-extension">28. Verify the deployed
+extension</h1>
 <p>Framework checks:</p>
-<pre><code>cd /opt/tec-tac
-
-sudo bash scripts/framework-foundation.sh
-sudo bash tests/registry-validation.sh
-sudo bash tests/tactical-update-survival.sh</code></pre>
+<div class="sourceCode" id="cb61"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb61-1"><a href="#cb61-1" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> /opt/tec-tac</span>
+<span id="cb61-2"><a href="#cb61-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb61-3"><a href="#cb61-3" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> bash scripts/framework-foundation.sh</span>
+<span id="cb61-4"><a href="#cb61-4" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> bash tests/registry-validation.sh</span>
+<span id="cb61-5"><a href="#cb61-5" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> bash tests/tactical-update-survival.sh</span></code></pre></div>
 <p>Inspect the installed pair:</p>
-<pre><code>sudo bash scripts/plugin-info.sh networkprobe extension
-sudo bash scripts/plugin-info.sh networkprobe reportset</code></pre>
-<p>Run the extension&#x27;s tests:</p>
-<pre><code>sudo bash tests/networkprobe/server.sh
-sudo -E bash tests/networkprobe/api.sh
-sudo bash tests/networkprobe/reportset.sh</code></pre>
+<div class="sourceCode" id="cb62"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb62-1"><a href="#cb62-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> bash scripts/plugin-info.sh networkprobe extension</span>
+<span id="cb62-2"><a href="#cb62-2" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> bash scripts/plugin-info.sh networkprobe reportset</span></code></pre></div>
+<p>Run the extension’s tests:</p>
+<div class="sourceCode" id="cb63"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb63-1"><a href="#cb63-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> bash tests/networkprobe/server.sh</span>
+<span id="cb63-2"><a href="#cb63-2" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> <span class="at">-E</span> bash tests/networkprobe/api.sh</span>
+<span id="cb63-3"><a href="#cb63-3" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> bash tests/networkprobe/reportset.sh</span></code></pre></div>
 <p>Verify Tactical services:</p>
-<pre><code>systemctl is-active rmm
-systemctl is-active daphne
-systemctl is-active celery
-systemctl is-active celerybeat</code></pre>
+<div class="sourceCode" id="cb64"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb64-1"><a href="#cb64-1" aria-hidden="true" tabindex="-1"></a><span class="ex">systemctl</span> is-active rmm</span>
+<span id="cb64-2"><a href="#cb64-2" aria-hidden="true" tabindex="-1"></a><span class="ex">systemctl</span> is-active daphne</span>
+<span id="cb64-3"><a href="#cb64-3" aria-hidden="true" tabindex="-1"></a><span class="ex">systemctl</span> is-active celery</span>
+<span id="cb64-4"><a href="#cb64-4" aria-hidden="true" tabindex="-1"></a><span class="ex">systemctl</span> is-active celerybeat</span></code></pre></div>
 <p>Expected:</p>
-<pre><code>active
+<pre class="text"><code>active
 active
 active
 active</code></pre>
-<hr>
-<h1>29. Git-based deployment is still supported</h1>
-<p>If the extension is developed directly inside the main Tec-Tac repository, you can still deploy through Git:</p>
-<pre><code>cd /opt/tec-tac
-git pull
-sudo bash install.sh</code></pre>
+<hr />
+<h1 id="git-based-deployment-is-still-supported">29. Git-based
+deployment is still supported</h1>
+<p>If the extension is developed directly inside the main Tec-Tac
+repository, you can still deploy through Git:</p>
+<div class="sourceCode" id="cb66"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb66-1"><a href="#cb66-1" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> /opt/tec-tac</span>
+<span id="cb66-2"><a href="#cb66-2" aria-hidden="true" tabindex="-1"></a><span class="fu">git</span> pull</span>
+<span id="cb66-3"><a href="#cb66-3" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> bash install.sh</span></code></pre></div>
 <p>The package installer is useful when:</p>
-<pre><code>the extension is distributed separately
+<pre class="text"><code>the extension is distributed separately
 the extension has its own release archive
 you do not want to merge extension source into the main framework branch first
 you want a controlled extension upgrade/replace operation</code></pre>
-<p>Be aware that installing an extension package directly into a Git checkout creates files that are not automatically part of Git history. Decide whether the deployed plugin should later be committed, ignored, or managed as a separately deployed artifact.</p>
-<hr>
-<h1>30. Versioning</h1>
+<p>Be aware that installing an extension package directly into a Git
+checkout creates files that are not automatically part of Git history.
+Decide whether the deployed plugin should later be committed, ignored,
+or managed as a separately deployed artifact.</p>
+<hr />
+<h1 id="versioning">30. Versioning</h1>
 <p>Framework and extensions are separate concerns.</p>
 <p>Example:</p>
-<pre><code>Tec-Tac framework:       1.0.0
+<pre class="text"><code>Tec-Tac framework:       1.0.0
 networkprobe extension:  0.3.0
 networkprobe ReportSet:  0.3.0</code></pre>
-<p>When the extension and ReportSet are released as one package, keep their versions aligned.</p>
-<hr>
-<h1>31. Removing an extension</h1>
+<p>When the extension and ReportSet are released as one package, keep
+their versions aligned.</p>
+<hr />
+<h1 id="removing-an-extension">31. Removing an extension</h1>
 <p>Treat removal as a controlled migration.</p>
 <p>Do not simply delete:</p>
-<pre><code>extensions/networkprobe/
+<pre class="text"><code>extensions/networkprobe/
 reportsets/networkprobe/</code></pre>
 <p>if the extension has database tables or live consumers.</p>
 <p>Recommended sequence:</p>
-<pre><code>1. stop new writes
+<pre class="text"><code>1. stop new writes
 2. disable/remove consumers
 3. preserve/export required data
 4. remove or migrate database objects explicitly
@@ -571,16 +915,18 @@ reportsets/networkprobe/</code></pre>
 7. validate the registry
 8. run Django checks
 9. restart Tactical services</code></pre>
-<p>Data preservation should be the default unless a purge is explicitly intended.</p>
-<hr>
-<h1>36. Final development checklist</h1>
+<p>Data preservation should be the default unless a purge is explicitly
+intended.</p>
+<hr />
+<h1 id="final-development-checklist">36. Final development
+checklist</h1>
 <p>Before coding:</p>
-<pre><code>[ ] extension ID chosen
+<pre class="text"><code>[ ] extension ID chosen
 [ ] operational ownership defined
 [ ] data ownership defined
 [ ] ReportSet responsibility defined</code></pre>
 <p>Before packaging:</p>
-<pre><code>[ ] extension and ReportSet IDs match
+<pre class="text"><code>[ ] extension and ReportSet IDs match
 [ ] both manifest versions are correct
 [ ] Django app labels are unique
 [ ] migrations are included and reviewed
@@ -590,7 +936,7 @@ reportsets/networkprobe/</code></pre>
 [ ] no secrets are present
 [ ] no Python cache files are present</code></pre>
 <p>After deployment:</p>
-<pre><code>[ ] package installer completed successfully
+<pre class="text"><code>[ ] package installer completed successfully
 [ ] framework foundation passes
 [ ] registry validation passes
 [ ] Tactical update-safety passes
@@ -598,23 +944,27 @@ reportsets/networkprobe/</code></pre>
 [ ] ReportSet tests pass
 [ ] all Tactical services are active
 [ ] existing production data is intact</code></pre>
-<hr>
-<h1>37. Reference implementations in Tec-Tac 1.0.0</h1>
+<hr />
+<h1 id="reference-implementations-in-tec-tac-1.0.0">37. Reference
+implementations in Tec-Tac 1.0.0</h1>
 <p>Use:</p>
-<pre><code>extensions/example/
+<pre class="text"><code>extensions/example/
 reportsets/example/</code></pre>
 <p>to understand the basic paired-plugin contract.</p>
-<p>Use the existing legacy reporting POC when studying proven patterns for:</p>
-<pre><code>Django models
+<p>Use the existing legacy reporting POC when studying proven patterns
+for:</p>
+<pre class="text"><code>Django models
 migrations
 API validation
 idempotency
 role-based permissions
 Tactical Report Manager integration</code></pre>
-<p>The <code>example</code> pair is a reference implementation only. It is not a production extension.</p>
-<hr>
-<h1>38. Recommended end-to-end workflow</h1>
-<pre><code>Design
+<p>The <code>example</code> pair is a reference implementation only. It
+is not a production extension.</p>
+<hr />
+<h1 id="recommended-end-to-end-workflow">38. Recommended end-to-end
+workflow</h1>
+<pre class="text"><code>Design
   ↓
 Scaffold extension + ReportSet
   ↓
@@ -647,20 +997,24 @@ Run extension tests
 Verify Tactical services
   ↓
 Release</code></pre>
-<p>The design goal is simple: new functionality should consume the Tec-Tac foundation rather than modifying Tactical RMM tracked source files.</p>
-<hr>
-<h1>32. Remove an installed extension</h1>
+<p>The design goal is simple: new functionality should consume the
+Tec-Tac foundation rather than modifying Tactical RMM tracked source
+files.</p>
+<hr />
+<h1 id="remove-an-installed-extension">32. Remove an installed
+extension</h1>
 <p>Tec-Tac should keep the generic remover at:</p>
 <p><strong>File:</strong> <code>scripts/remove-extension.sh</code></p>
 <p>The remover expects the same paired convention:</p>
-<pre><code>extensions/&lt;extension-id&gt;/
+<pre class="text"><code>extensions/&lt;extension-id&gt;/
 reportsets/&lt;extension-id&gt;/</code></pre>
 <p>Remove the plugin code while preserving its database objects:</p>
-<pre><code>cd /opt/tec-tac
-sudo bash scripts/remove-extension.sh networkprobe</code></pre>
+<div class="sourceCode" id="cb78"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb78-1"><a href="#cb78-1" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> /opt/tec-tac</span>
+<span id="cb78-2"><a href="#cb78-2" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> bash scripts/remove-extension.sh networkprobe</span></code></pre></div>
 <p>This is the safer default.</p>
 <p>The remover will:</p>
-<pre><code>1. verify the extension and ReportSet exist
+<pre class="text"><code>1. verify the extension and ReportSet exist
 2. verify both are registered
 3. show their current versions
 4. warn if the reference &quot;example&quot; plugin is being removed
@@ -672,99 +1026,230 @@ sudo bash scripts/remove-extension.sh networkprobe</code></pre>
 10. restart Tactical services
 11. verify the services returned to active state</code></pre>
 <p>Backups are stored under:</p>
-<pre><code>/var/lib/tec-tac/backups/plugins/&lt;extension-id&gt;/removed-&lt;timestamp&gt;/</code></pre>
-<hr>
-<h1>33. Remove an extension and purge its database objects</h1>
-<p>Use <code>--purge-data</code> only when you explicitly intend to remove the plugin-owned database schema/data.</p>
-<pre><code>sudo bash scripts/remove-extension.sh networkprobe --purge-data</code></pre>
-<p>With <code>--purge-data</code>, the remover attempts to reverse conventional Django migrations for the ReportSet and extension before deleting the code.</p>
-<p>It reverses the declared Django apps in reverse order so the ReportSet is processed before the extension.</p>
+<pre class="text"><code>/var/lib/tec-tac/backups/plugins/&lt;extension-id&gt;/removed-&lt;timestamp&gt;/</code></pre>
+<hr />
+<h1 id="remove-an-extension-and-purge-its-database-objects">33. Remove
+an extension and purge its database objects</h1>
+<p>Use <code>--purge-data</code> only when you explicitly intend to
+remove the plugin-owned database schema/data.</p>
+<div class="sourceCode" id="cb81"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb81-1"><a href="#cb81-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> bash scripts/remove-extension.sh networkprobe <span class="at">--purge-data</span></span></code></pre></div>
+<p>With <code>--purge-data</code>, the remover attempts to reverse
+conventional Django migrations for the ReportSet and extension before
+deleting the code.</p>
+<p>It reverses the declared Django apps in reverse order so the
+ReportSet is processed before the extension.</p>
 <p>This can permanently remove plugin-owned tables and data.</p>
 <p>For unattended/automation use:</p>
-<pre><code>sudo bash scripts/remove-extension.sh networkprobe --purge-data --yes</code></pre>
-<p>Do not use <code>--yes</code> casually. It skips the confirmation prompt.</p>
-<hr>
-<h1>34. Restore removed plugin code manually</h1>
+<div class="sourceCode" id="cb82"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb82-1"><a href="#cb82-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> bash scripts/remove-extension.sh networkprobe <span class="at">--purge-data</span> <span class="at">--yes</span></span></code></pre></div>
+<p>Do not use <code>--yes</code> casually. It skips the confirmation
+prompt.</p>
+<hr />
+<h1 id="restore-removed-plugin-code-manually">34. Restore removed plugin
+code manually</h1>
 <p>The remover retains a full code backup.</p>
 <p>Example:</p>
-<pre><code>/var/lib/tec-tac/backups/plugins/networkprobe/removed-20260917T181500/
+<pre class="text"><code>/var/lib/tec-tac/backups/plugins/networkprobe/removed-20260917T181500/
 ├── extensions/
 │   └── networkprobe/
 └── reportsets/
     └── networkprobe/</code></pre>
 <p>To restore the code manually:</p>
-<pre><code>cp -a \
-  /var/lib/tec-tac/backups/plugins/networkprobe/removed-20260917T181500/extensions/networkprobe \
-  /opt/tec-tac/extensions/
-
-cp -a \
-  /var/lib/tec-tac/backups/plugins/networkprobe/removed-20260917T181500/reportsets/networkprobe \
-  /opt/tec-tac/reportsets/</code></pre>
-<p>Then validate and restart:</p>
-<pre><code>cd /opt/tec-tac
-
-sudo bash tests/registry-validation.sh
-
-cd /rmm/api/tacticalrmm
-sudo -u tactical /rmm/api/env/bin/python manage.py check
-
-sudo systemctl restart rmm daphne celery celerybeat</code></pre>
-<p>If the plugin was removed with <code>--purge-data</code>, restoring only the files does <strong>not</strong> restore deleted database data.</p>
-<p>You would need to reapply migrations and restore data from an appropriate database backup if required.</p>
-<hr>
-<h1>35. Removal design rule</h1>
-<p>Treat plugin removal as a deployment operation, not as <code>rm -rf</code>.</p>
+<div class="sourceCode" id="cb84"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb84-1"><a href="#cb84-1" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> <span class="at">-a</span> <span class="dt">\</span></span>
+<span id="cb84-2"><a href="#cb84-2" aria-hidden="true" tabindex="-1"></a>  /var/lib/tec-tac/backups/plugins/networkprobe/removed-20260917T181500/extensions/networkprobe <span class="dt">\</span></span>
+<span id="cb84-3"><a href="#cb84-3" aria-hidden="true" tabindex="-1"></a>  /opt/tec-tac/extensions/</span>
+<span id="cb84-4"><a href="#cb84-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb84-5"><a href="#cb84-5" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> <span class="at">-a</span> <span class="dt">\</span></span>
+<span id="cb84-6"><a href="#cb84-6" aria-hidden="true" tabindex="-1"></a>  /var/lib/tec-tac/backups/plugins/networkprobe/removed-20260917T181500/reportsets/networkprobe <span class="dt">\</span></span>
+<span id="cb84-7"><a href="#cb84-7" aria-hidden="true" tabindex="-1"></a>  /opt/tec-tac/reportsets/</span></code></pre></div>
+<p>Then validate and gracefully reload Django:</p>
+<div class="sourceCode" id="cb85"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb85-1"><a href="#cb85-1" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> /opt/tec-tac</span>
+<span id="cb85-2"><a href="#cb85-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb85-3"><a href="#cb85-3" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> bash tests/registry-validation.sh</span>
+<span id="cb85-4"><a href="#cb85-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb85-5"><a href="#cb85-5" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> /rmm/api/tacticalrmm</span>
+<span id="cb85-6"><a href="#cb85-6" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> <span class="at">-u</span> tactical /rmm/api/env/bin/python manage.py check</span>
+<span id="cb85-7"><a href="#cb85-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb85-8"><a href="#cb85-8" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> bash /opt/tec-tac/scripts/reload-rmm-uwsgi.sh</span></code></pre></div>
+<p>If the plugin was removed with <code>--purge-data</code>, restoring
+only the files does <strong>not</strong> restore deleted database
+data.</p>
+<p>You would need to reapply migrations and restore data from an
+appropriate database backup if required.</p>
+<hr />
+<h1 id="removal-design-rule">35. Removal design rule</h1>
+<p>Treat plugin removal as a deployment operation, not as
+<code>rm -rf</code>.</p>
 <p>Use:</p>
-<pre><code>scripts/remove-extension.sh</code></pre>
+<pre class="text"><code>scripts/remove-extension.sh</code></pre>
 <p>rather than deleting plugin directories directly.</p>
 <p>The default behaviour is intentionally:</p>
-<pre><code>remove code
+<pre class="text"><code>remove code
 preserve data</code></pre>
-<p>because preserving customer/operational data is safer than automatically deleting it.</p>
-<p>Use <code>--purge-data</code> only when the database removal is intended and reviewed.</p>
-<hr>
-<h1>Tutorial reference package: PackageTest</h1>
-<p>Tec-Tac 1.0.2 includes a complete installable reference package under:</p>
-<pre><code>docs/tutorial-packages/packagetest/</code></pre>
-<p>It demonstrates a matching extension + ReportSet, runtime API registration, ReportSet mapping, manifest-declared permission groups, role-based API authorization, ZIP installation, permission assignment, and safe removal.</p>
-<p>The source is under <code>docs/tutorial-packages/packagetest/source/</code> and a ready-built package is <code>docs/tutorial-packages/packagetest/packagetest-0.1.0.zip</code>. Rebuild it with:</p>
-<pre><code>cd /opt/tec-tac/docs/tutorial-packages/packagetest
-bash build.sh</code></pre>
+<p>because preserving customer/operational data is safer than
+automatically deleting it.</p>
+<p>Use <code>--purge-data</code> only when the database removal is
+intended and reviewed.</p>
+<hr />
+<h1 id="tutorial-reference-package-packagetest">Tutorial reference
+package: PackageTest</h1>
+<p>Tec-Tac 1.0.2 includes a complete installable reference package
+under:</p>
+<pre class="text"><code>docs/tutorial-packages/packagetest/</code></pre>
+<p>It demonstrates a matching extension + ReportSet, runtime API
+registration, ReportSet mapping, manifest-declared permission groups,
+role-based API authorization, ZIP installation, permission assignment,
+and safe removal.</p>
+<p>The source is under
+<code>docs/tutorial-packages/packagetest/source/</code> and a
+ready-built package is
+<code>docs/tutorial-packages/packagetest/packagetest-0.1.0.zip</code>.
+Rebuild it with:</p>
+<div class="sourceCode" id="cb89"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb89-1"><a href="#cb89-1" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> /opt/tec-tac/docs/tutorial-packages/packagetest</span>
+<span id="cb89-2"><a href="#cb89-2" aria-hidden="true" tabindex="-1"></a><span class="fu">bash</span> build.sh</span></code></pre></div>
 <p>Install interactively:</p>
-<pre><code>cd /opt/tec-tac
-sudo bash scripts/install-extension.sh docs/tutorial-packages/packagetest/packagetest-0.1.0.zip</code></pre>
-<p>PackageTest declares <code>read</code> and <code>manage</code> permission groups. The installer resolves the supplied Tactical username to its Tactical role and grants the selected group to that role.</p>
+<div class="sourceCode" id="cb90"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb90-1"><a href="#cb90-1" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> /opt/tec-tac</span>
+<span id="cb90-2"><a href="#cb90-2" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> bash scripts/install-extension.sh docs/tutorial-packages/packagetest/packagetest-0.1.0.zip</span></code></pre></div>
+<p>PackageTest declares <code>read</code> and <code>manage</code>
+permission groups. The installer resolves the supplied Tactical username
+to its Tactical role and grants the selected group to that role.</p>
 <p>Unattended install:</p>
-<pre><code>TEC_TAC_EXTENSION_USERNAME=&quot;bob&quot; \
-TEC_TAC_EXTENSION_PERMISSION_GROUP=&quot;manage&quot; \
-sudo -E bash scripts/install-extension.sh docs/tutorial-packages/packagetest/packagetest-0.1.0.zip</code></pre>
+<div class="sourceCode" id="cb91"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb91-1"><a href="#cb91-1" aria-hidden="true" tabindex="-1"></a><span class="va">TEC_TAC_EXTENSION_USERNAME</span><span class="op">=</span><span class="st">&quot;bob&quot;</span> <span class="dt">\</span></span>
+<span id="cb91-2"><a href="#cb91-2" aria-hidden="true" tabindex="-1"></a><span class="va">TEC_TAC_EXTENSION_PERMISSION_GROUP</span><span class="op">=</span><span class="st">&quot;manage&quot;</span> <span class="dt">\</span></span>
+<span id="cb91-3"><a href="#cb91-3" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> <span class="at">-E</span> bash scripts/install-extension.sh docs/tutorial-packages/packagetest/packagetest-0.1.0.zip</span></code></pre></div>
 <p>API after install:</p>
-<pre><code>GET  /api/tfd/packagetest/sample/   requires packagetest.api.read
+<pre class="text"><code>GET  /api/tfd/packagetest/sample/   requires packagetest.api.read
 POST /api/tfd/packagetest/sample/   requires packagetest.api.manage</code></pre>
 <p>Remove it with:</p>
-<pre><code>sudo bash scripts/remove-extension.sh packagetest</code></pre>
-<p>Removal disables active grants declared by the extension before deleting the extension/reportset code.</p>
+<div class="sourceCode" id="cb93"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb93-1"><a href="#cb93-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> bash scripts/remove-extension.sh packagetest</span></code></pre></div>
+<p>Removal disables active grants declared by the extension before
+deleting the extension/reportset code.</p>
 <p>Run the package lifecycle test:</p>
-<pre><code>sudo bash tests/extension-package-lifecycle.sh</code></pre>
+<div class="sourceCode" id="cb94"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb94-1"><a href="#cb94-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> bash tests/extension-package-lifecycle.sh</span></code></pre></div>
 <p>To exercise permission assignment too:</p>
-<pre><code>TEC_TAC_PACKAGE_TEST_USERNAME=&quot;bob&quot; sudo -E bash tests/extension-package-lifecycle.sh</code></pre>
-<h2>Permission-group manifest contract</h2>
-<p>Only the extension manifest may declare <code>permission_groups</code>. Permission codenames must begin with <code>&lt;extension-id&gt;.</code>. API code should check permissions through <code>tec_tac.rbac.has_extension_permission</code>, not by importing the persistence model directly.</p>
-<p><strong>File:</strong> <code>extensions/networkprobe/tec_tac_networkprobe/permissions.py</code></p>
-<pre><code>from rest_framework.permissions import BasePermission
-from tec_tac.rbac import has_extension_permission
-
-class NetworkProbePermission(BasePermission):
-    def has_permission(self, request, view):
-        codename = &quot;networkprobe.device.list&quot; if request.method in (&quot;GET&quot;, &quot;HEAD&quot;, &quot;OPTIONS&quot;) else &quot;networkprobe.device.manage&quot;
-        return has_extension_permission(request.user, codename)</code></pre>
-<p>Tec-Tac 1.0.x currently persists generic role grants in the existing shared <code>ExtensionRolePermission</code> compatibility table. Extension code should use <code>tec_tac.rbac</code> so that storage can change later without changing the extension.</p><hr><h2>Public UI surfaces (Tec-Tac 1.2.1+)</h2><p>Extensions can declare a separate unauthenticated UI entry in <code>tec_tac_ui.json</code>. Public routes are restricted to <code>/public/&lt;extension-id&gt;/...</code> and load before Tactical authentication.</p><pre><code>{
-  "id": "example",
-  "version": "1.0.0",
-  "entry": "ui/index.js",
-  "public": {
-    "entry": "ui/public.js",
-    "base_path": "/public/example"
-  },
-  "permissions": ["example.manage"]
-}</code></pre><p>The public entry exports <code>registerPublic(context)</code>. Its reduced runtime provides Vue, the app, the descriptor, <code>addPublicRoute(route)</code>, and <code>publicApi(path, options)</code>. The public API helper does not attach the Tactical browser token. Backend APIs remain private unless the extension explicitly configures anonymous access server-side.</p><p>When both authenticated and public entries are present, they must share the same UI bundle directory.</p></main></body></html>
+<div class="sourceCode" id="cb95"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb95-1"><a href="#cb95-1" aria-hidden="true" tabindex="-1"></a><span class="va">TEC_TAC_PACKAGE_TEST_USERNAME</span><span class="op">=</span><span class="st">&quot;bob&quot;</span> <span class="fu">sudo</span> <span class="at">-E</span> bash tests/extension-package-lifecycle.sh</span></code></pre></div>
+<h2 id="permission-group-manifest-contract">Permission-group manifest
+contract</h2>
+<p>Only the extension manifest may declare
+<code>permission_groups</code>. Permission codenames must begin with
+<code>&lt;extension-id&gt;.</code>. API code should check permissions
+through <code>tec_tac.rbac.has_extension_permission</code>, not by
+importing the persistence model directly.</p>
+<p><strong>File:</strong>
+<code>extensions/networkprobe/tec_tac_networkprobe/permissions.py</code></p>
+<div class="sourceCode" id="cb96"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb96-1"><a href="#cb96-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> rest_framework.permissions <span class="im">import</span> BasePermission</span>
+<span id="cb96-2"><a href="#cb96-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> tec_tac.rbac <span class="im">import</span> has_extension_permission</span>
+<span id="cb96-3"><a href="#cb96-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb96-4"><a href="#cb96-4" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> NetworkProbePermission(BasePermission):</span>
+<span id="cb96-5"><a href="#cb96-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> has_permission(<span class="va">self</span>, request, view):</span>
+<span id="cb96-6"><a href="#cb96-6" aria-hidden="true" tabindex="-1"></a>        codename <span class="op">=</span> <span class="st">&quot;networkprobe.device.list&quot;</span> <span class="cf">if</span> request.method <span class="kw">in</span> (<span class="st">&quot;GET&quot;</span>, <span class="st">&quot;HEAD&quot;</span>, <span class="st">&quot;OPTIONS&quot;</span>) <span class="cf">else</span> <span class="st">&quot;networkprobe.device.manage&quot;</span></span>
+<span id="cb96-7"><a href="#cb96-7" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> has_extension_permission(request.user, codename)</span></code></pre></div>
+<p>Tec-Tac 1.0.x currently persists generic role grants in the existing
+shared <code>ExtensionRolePermission</code> compatibility table.
+Extension code should use <code>tec_tac.rbac</code> so that storage can
+change later without changing the extension.</p>
+<hr />
+<h1 id="public-ui-surfaces-tec-tac-1.2.1">Public UI surfaces (Tec-Tac
+1.2.1+)</h1>
+<p>Extensions that need anonymous pages can declare a separate public UI
+entry. This is intentionally separate from the normal authenticated
+module entry.</p>
+<p><strong>File:</strong>
+<code>extensions/&lt;extension-id&gt;/tec_tac_ui.json</code></p>
+<div class="sourceCode" id="cb97"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb97-1"><a href="#cb97-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb97-2"><a href="#cb97-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;id&quot;</span><span class="fu">:</span> <span class="st">&quot;example&quot;</span><span class="fu">,</span></span>
+<span id="cb97-3"><a href="#cb97-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;version&quot;</span><span class="fu">:</span> <span class="st">&quot;1.0.0&quot;</span><span class="fu">,</span></span>
+<span id="cb97-4"><a href="#cb97-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;entry&quot;</span><span class="fu">:</span> <span class="st">&quot;ui/index.js&quot;</span><span class="fu">,</span></span>
+<span id="cb97-5"><a href="#cb97-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;public&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb97-6"><a href="#cb97-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;entry&quot;</span><span class="fu">:</span> <span class="st">&quot;ui/public.js&quot;</span><span class="fu">,</span></span>
+<span id="cb97-7"><a href="#cb97-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;base_path&quot;</span><span class="fu">:</span> <span class="st">&quot;/public/example&quot;</span></span>
+<span id="cb97-8"><a href="#cb97-8" aria-hidden="true" tabindex="-1"></a>  <span class="fu">},</span></span>
+<span id="cb97-9"><a href="#cb97-9" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;navigation&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb97-10"><a href="#cb97-10" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;label&quot;</span><span class="fu">:</span> <span class="st">&quot;Example&quot;</span><span class="fu">,</span></span>
+<span id="cb97-11"><a href="#cb97-11" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;section&quot;</span><span class="fu">:</span> <span class="st">&quot;Extensions&quot;</span><span class="fu">,</span></span>
+<span id="cb97-12"><a href="#cb97-12" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;icon&quot;</span><span class="fu">:</span> <span class="st">&quot;E&quot;</span><span class="fu">,</span></span>
+<span id="cb97-13"><a href="#cb97-13" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;order&quot;</span><span class="fu">:</span> <span class="dv">100</span></span>
+<span id="cb97-14"><a href="#cb97-14" aria-hidden="true" tabindex="-1"></a>  <span class="fu">},</span></span>
+<span id="cb97-15"><a href="#cb97-15" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;permissions&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="st">&quot;example.manage&quot;</span><span class="ot">]</span></span>
+<span id="cb97-16"><a href="#cb97-16" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<p>The authenticated entry exports <code>register(context)</code>. The
+public entry exports <code>registerPublic(context)</code>.</p>
+<p>Example public entry:</p>
+<div class="sourceCode" id="cb98"><pre
+class="sourceCode javascript"><code class="sourceCode javascript"><span id="cb98-1"><a href="#cb98-1" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="im">default</span> {</span>
+<span id="cb98-2"><a href="#cb98-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">async</span> <span class="fu">registerPublic</span>(ctx) {</span>
+<span id="cb98-3"><a href="#cb98-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> { h } <span class="op">=</span> ctx<span class="op">.</span><span class="at">Vue</span></span>
+<span id="cb98-4"><a href="#cb98-4" aria-hidden="true" tabindex="-1"></a>    ctx<span class="op">.</span><span class="fu">addPublicRoute</span>({</span>
+<span id="cb98-5"><a href="#cb98-5" aria-hidden="true" tabindex="-1"></a>      <span class="dt">path</span><span class="op">:</span> <span class="st">&#39;/public/example&#39;</span><span class="op">,</span></span>
+<span id="cb98-6"><a href="#cb98-6" aria-hidden="true" tabindex="-1"></a>      <span class="dt">name</span><span class="op">:</span> <span class="st">&#39;example-public&#39;</span><span class="op">,</span></span>
+<span id="cb98-7"><a href="#cb98-7" aria-hidden="true" tabindex="-1"></a>      <span class="dt">meta</span><span class="op">:</span> { <span class="dt">title</span><span class="op">:</span> <span class="st">&#39;Example Public&#39;</span> }<span class="op">,</span></span>
+<span id="cb98-8"><a href="#cb98-8" aria-hidden="true" tabindex="-1"></a>      <span class="dt">component</span><span class="op">:</span> {</span>
+<span id="cb98-9"><a href="#cb98-9" aria-hidden="true" tabindex="-1"></a>        <span class="fu">setup</span>() {</span>
+<span id="cb98-10"><a href="#cb98-10" aria-hidden="true" tabindex="-1"></a>          <span class="cf">return</span> () <span class="kw">=&gt;</span> <span class="fu">h</span>(<span class="st">&#39;section&#39;</span><span class="op">,</span> [<span class="fu">h</span>(<span class="st">&#39;h1&#39;</span><span class="op">,</span> <span class="st">&#39;Public example&#39;</span>)])</span>
+<span id="cb98-11"><a href="#cb98-11" aria-hidden="true" tabindex="-1"></a>        }<span class="op">,</span></span>
+<span id="cb98-12"><a href="#cb98-12" aria-hidden="true" tabindex="-1"></a>      }<span class="op">,</span></span>
+<span id="cb98-13"><a href="#cb98-13" aria-hidden="true" tabindex="-1"></a>    })</span>
+<span id="cb98-14"><a href="#cb98-14" aria-hidden="true" tabindex="-1"></a>  }<span class="op">,</span></span>
+<span id="cb98-15"><a href="#cb98-15" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Public UI rules:</p>
+<pre class="text"><code>public route namespace: /public/&lt;extension-id&gt;/...
+public runtime loads before Tactical authentication
+public runtime does not receive authenticated state, RBAC helpers, or the authenticated API helper
+publicApi() deliberately omits the Tactical Authorization token
+backend APIs remain private unless the extension explicitly allows anonymous access
+entry and public.entry must share the same UI bundle directory when both are present</code></pre>
+<p>A public page does not grant anonymous access to backend data. If an
+API endpoint is intended to be public, configure that endpoint
+explicitly (for example with DRF <code>AllowAny</code>) and validate all
+public inputs as untrusted.</p>
+<hr />
+<h2 id="swagger-openapi-grouping-convention">Swagger / OpenAPI grouping
+convention</h2>
+<p>Every extension that exposes HTTP API endpoints must give its
+endpoints an explicit <code>drf_spectacular</code> tag. This keeps
+Tactical’s Swagger UI readable as more Tec-Tac extensions are
+installed.</p>
+<p>Use one stable tag for the extension, normally its display name. For
+example, UserInvite endpoints should use <code>UserInvite</code>;
+framework-owned endpoints use <code>Tec-Tac Framework</code>; TFD
+Reporting uses <code>TFD Reporting</code>.</p>
+<div class="sourceCode" id="cb100"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb100-1"><a href="#cb100-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> drf_spectacular.utils <span class="im">import</span> extend_schema, extend_schema_view</span>
+<span id="cb100-2"><a href="#cb100-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb100-3"><a href="#cb100-3" aria-hidden="true" tabindex="-1"></a><span class="at">@extend_schema_view</span>(</span>
+<span id="cb100-4"><a href="#cb100-4" aria-hidden="true" tabindex="-1"></a>    get<span class="op">=</span>extend_schema(tags<span class="op">=</span>[<span class="st">&quot;UserInvite&quot;</span>], summary<span class="op">=</span><span class="st">&quot;List user invitations&quot;</span>),</span>
+<span id="cb100-5"><a href="#cb100-5" aria-hidden="true" tabindex="-1"></a>    post<span class="op">=</span>extend_schema(tags<span class="op">=</span>[<span class="st">&quot;UserInvite&quot;</span>], summary<span class="op">=</span><span class="st">&quot;Create a user invitation&quot;</span>),</span>
+<span id="cb100-6"><a href="#cb100-6" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb100-7"><a href="#cb100-7" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> UserInviteListCreateView(...):</span>
+<span id="cb100-8"><a href="#cb100-8" aria-hidden="true" tabindex="-1"></a>    ...</span></code></pre></div>
+<p>Do not reuse <code>Tec-Tac Framework</code> for extension-owned
+endpoints. The framework tag is reserved for framework APIs such as
+module management, UI context, and extension RBAC.</p>
+<h2 id="graceful-django-reload">36. Graceful Django reload</h2>
+<p>Normal extension installation and removal must not restart the full
+Tactical service set. Tec-Tac 1.2.4 reloads the Django/uWSGI application
+with <code>scripts/reload-rmm-uwsgi.sh</code>, which sends
+<code>SIGHUP</code> to the current <code>rmm.service</code> uWSGI master
+and waits for the worker set to refresh. This allows newly installed or
+removed Django apps and URL registrations to take effect without
+terminating the lifecycle worker or restarting Daphne/Celery services
+that were not changed.</p>
+<p>The framework installer also ensures the production <code>rmm</code>
+process has the Tactical user’s primary group as a supplementary group
+so that browser/API package staging can write to
+<code>/var/lib/tec-tac/module-manager/</code>. Extension authors should
+not solve this by changing <code>/opt/tec-tac</code> ownership or making
+runtime directories world-writable.</p>
+</body>
+</html>

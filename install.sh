@@ -67,6 +67,7 @@ REQUIRED_FILES=(
     "${REPO_ROOT}/scripts/install-extension.sh"
     "${REPO_ROOT}/scripts/remove-extension.sh"
     "${REPO_ROOT}/scripts/module-job-helper.py"
+    "${REPO_ROOT}/scripts/reload-rmm-uwsgi.sh"
     "${REPO_ROOT}/tests/framework-foundation.sh"
     "${REPO_ROOT}/tests/access-api-foundation.sh"
     "${REPO_ROOT}/tests/module-management-foundation.sh"
@@ -192,8 +193,20 @@ MODULE_HELPER="/usr/local/sbin/tec-tac-module-job"
 MODULE_CONFIG_DIR="/etc/tec-tac"
 MODULE_CONFIG="${MODULE_CONFIG_DIR}/module-manager.conf"
 MODULE_SUDOERS="/etc/sudoers.d/tec-tac-module-manager"
+RMM_DROPIN_DIR="/etc/systemd/system/rmm.service.d"
+RMM_DROPIN="${RMM_DROPIN_DIR}/tec-tac.conf"
 TEC_TAC_UI_REPO="${TEC_TAC_UI_REPO:-/opt/tec-tac-ui}"
 TEC_TAC_UI_ROOT="${TEC_TAC_UI_ROOT:-/var/lib/tec-tac/ui/tec-tac}"
+
+mkdir -p "${RMM_DROPIN_DIR}"
+cat > "${RMM_DROPIN}" <<EOF
+[Service]
+SupplementaryGroups=${TACTICAL_GROUP}
+EOF
+chown root:root "${RMM_DROPIN}"
+chmod 0644 "${RMM_DROPIN}"
+systemctl daemon-reload
+log "Installed rmm.service supplementary-group drop-in for Tec-Tac runtime access: ${TACTICAL_GROUP}"
 
 mkdir -p "${MODULE_STATE_ROOT}/staged" "${MODULE_STATE_ROOT}/jobs" "${MODULE_STATE_ROOT}/running" "${MODULE_STATE_ROOT}/logs"
 chown -R root:"${TACTICAL_GROUP}" "${MODULE_STATE_ROOT}"
@@ -331,6 +344,22 @@ for svc in rmm daphne celery celerybeat; do
     fi
     log "${svc}: active"
 done
+
+RMM_SUPPLEMENTARY="$(systemctl show rmm.service -p SupplementaryGroups --value)"
+case " ${RMM_SUPPLEMENTARY} " in
+    *" ${TACTICAL_GROUP} "*) ;;
+    *) fail "rmm.service did not load required supplementary group '${TACTICAL_GROUP}'." ;;
+esac
+RMM_PID="$(systemctl show rmm.service -p MainPID --value)"
+TACTICAL_GID="$(id -g "${TACTICAL_USER}")"
+if [[ ! "${RMM_PID}" =~ ^[0-9]+$ || "${RMM_PID}" -le 1 || ! -r "/proc/${RMM_PID}/status" ]]; then
+    fail "Could not inspect live rmm process after restart."
+fi
+LIVE_GROUPS="$(awk '/^Groups:/ {$1=""; sub(/^ /, ""); print}' "/proc/${RMM_PID}/status")"
+case " ${LIVE_GROUPS} " in
+    *" ${TACTICAL_GID} "*) log "Verified live rmm process has Tec-Tac runtime group ${TACTICAL_GROUP} (gid ${TACTICAL_GID})." ;;
+    *) fail "Live rmm process is missing Tec-Tac runtime group ${TACTICAL_GROUP} (gid ${TACTICAL_GID})." ;;
+esac
 
 log "Installation complete."
 log "Framework: ${FRAMEWORK_DIR}"

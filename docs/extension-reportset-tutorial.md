@@ -1175,7 +1175,7 @@ cp -a \
   /opt/tec-tac/reportsets/
 ```
 
-Then validate and restart:
+Then validate and gracefully reload Django:
 
 ```bash
 cd /opt/tec-tac
@@ -1185,7 +1185,7 @@ sudo bash tests/registry-validation.sh
 cd /rmm/api/tacticalrmm
 sudo -u tactical /rmm/api/env/bin/python manage.py check
 
-sudo systemctl restart rmm daphne celery celerybeat
+sudo bash /opt/tec-tac/scripts/reload-rmm-uwsgi.sh
 ```
 
 If the plugin was removed with `--purge-data`, restoring only the files does **not** restore deleted database data.
@@ -1381,3 +1381,10 @@ class UserInviteListCreateView(...):
 ```
 
 Do not reuse `Tec-Tac Framework` for extension-owned endpoints. The framework tag is reserved for framework APIs such as module management, UI context, and extension RBAC.
+
+
+## 36. Graceful Django reload
+
+Normal extension installation and removal must not restart the full Tactical service set. Tec-Tac 1.2.4 reloads the Django/uWSGI application with `scripts/reload-rmm-uwsgi.sh`, which sends `SIGHUP` to the current `rmm.service` uWSGI master and waits for the worker set to refresh. This allows newly installed or removed Django apps and URL registrations to take effect without terminating the lifecycle worker or restarting Daphne/Celery services that were not changed.
+
+The framework installer also ensures the production `rmm` process has the Tactical user's primary group as a supplementary group so that browser/API package staging can write to `/var/lib/tec-tac/module-manager/`. Extension authors should not solve this by changing `/opt/tec-tac` ownership or making runtime directories world-writable.

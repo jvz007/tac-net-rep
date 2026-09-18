@@ -201,13 +201,10 @@ PY
 runuser -u "${TACTICAL_USER}" -- bash -lc \
     "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' check"
 
-log "Restarting Tactical services."
-systemctl restart rmm daphne celery celerybeat
-
-for svc in rmm daphne celery celerybeat; do
-    systemctl is-active --quiet "${svc}" || fail "${svc} did not return to active state."
-    log "${svc}: active"
-done
+log "Reloading Tactical Django application without restarting the rmm service."
+bash "${REPO_ROOT}/scripts/reload-rmm-uwsgi.sh"
+systemctl is-active --quiet rmm || fail "rmm is not active after graceful uWSGI reload."
+log "rmm: active (graceful uWSGI reload complete)"
 
 log "Extension/reportset '${PLUGIN_ID}' removed successfully."
 log "Backup retained at: ${BACKUP_DIR}"
