@@ -1,6 +1,6 @@
 # Tec-Tac Extension & ReportSet Tutorial
 
-**Framework baseline:** Tec-Tac 1.0.0  
+**Framework baseline:** Tec-Tac 1.8.0  
 **Purpose:** Create, package, deploy, upgrade, and validate your own Tec-Tac extension and matching ReportSet.
 
 This tutorial uses `networkprobe` as the example extension ID.
@@ -1388,3 +1388,84 @@ Do not reuse `Tec-Tac Framework` for extension-owned endpoints. The framework ta
 Normal extension installation and removal must not restart the full Tactical service set. Tec-Tac 1.2.4 reloads the Django/uWSGI application with `scripts/reload-rmm-uwsgi.sh`, which sends `SIGHUP` to the current `rmm.service` uWSGI master and waits for the worker set to refresh. This allows newly installed or removed Django apps and URL registrations to take effect without terminating the lifecycle worker or restarting Daphne/Celery services that were not changed.
 
 The framework installer also ensures the production `rmm` process has the Tactical user's primary group as a supplementary group so that browser/API package staging can write to `/var/lib/tec-tac/module-manager/`. Extension authors should not solve this by changing `/opt/tec-tac` ownership or making runtime directories world-writable.
+
+
+---
+
+# Scheduling module actions (Tec-Tac 1.8.0)
+
+If an extension needs user-configurable scheduled execution, do **not** add its own cron entry, timer, Celery Beat schedule, or browser timer. Register a schedulable action with the Tec-Tac framework.
+
+The architecture is:
+
+```text
+Module defines the action
+        |
+        v
+Tec-Tac Scheduler stores when/targets/parameters
+        |
+        v
+server-side scheduler timer
+        |
+        v
+Tactical Celery
+        |
+        v
+module handler
+        |
+        v
+shared execution history
+```
+
+A scheduled action is registered from the module's Django `AppConfig.ready()` so it exists even when no browser is open:
+
+```python
+from tec_tac.scheduler import register_scheduled_action
+
+register_scheduled_action(
+    id="networkprobe.discovery",
+    module_id="networkprobe",
+    label="Run network discovery",
+    target_types=("site", "client", "dynamic"),
+    permission="networkprobe.run",
+    handler=run_discovery_handler,
+)
+```
+
+The handler receives a single context dictionary:
+
+```python
+def run_discovery_handler(context):
+    targets = context["targets"]
+    parameters = context["parameters"]
+    manual = context["manual"]
+
+    # Resolve targets and execute the module's normal backend operation.
+    result = run_discovery(targets=targets, parameters=parameters)
+
+    return {
+        "ok": True,
+        "devices_seen": result.devices_seen,
+        "new_devices": result.new_devices,
+    }
+```
+
+Important rules:
+
+```text
+modules define WHAT can run
+Tec-Tac defines WHEN it runs
+handlers must work without request.user or a browser session
+target/parameter meaning belongs to the module
+raise exceptions to use the framework retry policy
+return JSON-safe structured results where possible
+keep action IDs stable across upgrades
+```
+
+Saved schedules run unattended. A user must be authenticated and authorized to create/manage/manual-run a schedule, but the scheduled execution itself is a system operation and does not require that user to remain logged in.
+
+For the complete contract, including snapshot/dynamic targets, permissions, retry/concurrency behaviour, Communicator and Patch Management examples, see:
+
+```text
+docs/module-scheduling.md
+```

@@ -1,6 +1,8 @@
 # Tec-Tac Tactical RMM Extension Framework
 
-Version **1.8.0** adds the first-class Tec-Tac Scheduler. See `docs/scheduler.md`.
+Version **1.8.0** adds the first-class Tec-Tac Scheduler. See `docs/scheduler.md` and `docs/module-scheduling.md`.
+
+Historical release notes are archived under `docs/releases/`; only the current release note remains at repository root.
 
 Version **1.7.1** is a corrective release for repository-installed modules: the canonical registry accepts v2 dependency/runtime metadata in every install path.
 Version **1.7.0** adds multi-repository module sources, cached repository health, online catalog/update reporting, SHA-256 verified online staging, and installed source provenance while retaining the existing Module Management v2 installer.
@@ -422,7 +424,7 @@ The uninstaller never deletes the Git checkout.
 
 ## Access API (1.1.0)
 
-The framework now exposes upgrade-safe authenticated endpoints under `/api/tfd/` for UI context and Tec-Tac extension role grants. Tactical's existing Role IDs remain the RBAC anchor; Tactical's own account and native role permissions remain authoritative. See `RELEASE_NOTES_1.1.0.md`.
+The framework now exposes upgrade-safe authenticated endpoints under `/api/tfd/` for UI context and Tec-Tac extension role grants. Tactical's existing Role IDs remain the RBAC anchor; Tactical's own account and native role permissions remain authoritative. See `docs/releases/RELEASE_NOTES_1.1.0.md`.
 
 ## Module lifecycle API (1.2.0)
 
@@ -519,7 +521,7 @@ The normal installer owns both module workers:
 /usr/local/sbin/tec-tac-module-v2-job
 ```
 
-See `RELEASE_NOTES_1.4.0.md` and `RELEASE_NOTES_1.4.1.md`.
+See `docs/releases/RELEASE_NOTES_1.4.0.md` and `docs/releases/RELEASE_NOTES_1.4.1.md`.
 
 
 ## Module install ordering (1.5.0)

@@ -235,7 +235,7 @@
 <body>
 <h1 id="tec-tac-extension-reportset-tutorial">Tec-Tac Extension &amp;
 ReportSet Tutorial</h1>
-<p><strong>Framework baseline:</strong> Tec-Tac 1.0.0<br />
+<p><strong>Framework baseline:</strong> Tec-Tac 1.8.0<br />
 <strong>Purpose:</strong> Create, package, deploy, upgrade, and validate
 your own Tec-Tac extension and matching ReportSet.</p>
 <p>This tutorial uses <code>networkprobe</code> as the example extension
@@ -1251,5 +1251,74 @@ so that browser/API package staging can write to
 <code>/var/lib/tec-tac/module-manager/</code>. Extension authors should
 not solve this by changing <code>/opt/tec-tac</code> ownership or making
 runtime directories world-writable.</p>
+<hr />
+<h1 id="scheduling-module-actions-tec-tac-1.8.0">Scheduling module
+actions (Tec-Tac 1.8.0)</h1>
+<p>If an extension needs user-configurable scheduled execution, do
+<strong>not</strong> add its own cron entry, timer, Celery Beat
+schedule, or browser timer. Register a schedulable action with the
+Tec-Tac framework.</p>
+<p>The architecture is:</p>
+<pre class="text"><code>Module defines the action
+        |
+        v
+Tec-Tac Scheduler stores when/targets/parameters
+        |
+        v
+server-side scheduler timer
+        |
+        v
+Tactical Celery
+        |
+        v
+module handler
+        |
+        v
+shared execution history</code></pre>
+<p>A scheduled action is registered from the module’s Django
+<code>AppConfig.ready()</code> so it exists even when no browser is
+open:</p>
+<div class="sourceCode" id="cb102"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb102-1"><a href="#cb102-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> tec_tac.scheduler <span class="im">import</span> register_scheduled_action</span>
+<span id="cb102-2"><a href="#cb102-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb102-3"><a href="#cb102-3" aria-hidden="true" tabindex="-1"></a>register_scheduled_action(</span>
+<span id="cb102-4"><a href="#cb102-4" aria-hidden="true" tabindex="-1"></a>    <span class="bu">id</span><span class="op">=</span><span class="st">&quot;networkprobe.discovery&quot;</span>,</span>
+<span id="cb102-5"><a href="#cb102-5" aria-hidden="true" tabindex="-1"></a>    module_id<span class="op">=</span><span class="st">&quot;networkprobe&quot;</span>,</span>
+<span id="cb102-6"><a href="#cb102-6" aria-hidden="true" tabindex="-1"></a>    label<span class="op">=</span><span class="st">&quot;Run network discovery&quot;</span>,</span>
+<span id="cb102-7"><a href="#cb102-7" aria-hidden="true" tabindex="-1"></a>    target_types<span class="op">=</span>(<span class="st">&quot;site&quot;</span>, <span class="st">&quot;client&quot;</span>, <span class="st">&quot;dynamic&quot;</span>),</span>
+<span id="cb102-8"><a href="#cb102-8" aria-hidden="true" tabindex="-1"></a>    permission<span class="op">=</span><span class="st">&quot;networkprobe.run&quot;</span>,</span>
+<span id="cb102-9"><a href="#cb102-9" aria-hidden="true" tabindex="-1"></a>    handler<span class="op">=</span>run_discovery_handler,</span>
+<span id="cb102-10"><a href="#cb102-10" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div>
+<p>The handler receives a single context dictionary:</p>
+<div class="sourceCode" id="cb103"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb103-1"><a href="#cb103-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> run_discovery_handler(context):</span>
+<span id="cb103-2"><a href="#cb103-2" aria-hidden="true" tabindex="-1"></a>    targets <span class="op">=</span> context[<span class="st">&quot;targets&quot;</span>]</span>
+<span id="cb103-3"><a href="#cb103-3" aria-hidden="true" tabindex="-1"></a>    parameters <span class="op">=</span> context[<span class="st">&quot;parameters&quot;</span>]</span>
+<span id="cb103-4"><a href="#cb103-4" aria-hidden="true" tabindex="-1"></a>    manual <span class="op">=</span> context[<span class="st">&quot;manual&quot;</span>]</span>
+<span id="cb103-5"><a href="#cb103-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb103-6"><a href="#cb103-6" aria-hidden="true" tabindex="-1"></a>    <span class="co"># Resolve targets and execute the module&#39;s normal backend operation.</span></span>
+<span id="cb103-7"><a href="#cb103-7" aria-hidden="true" tabindex="-1"></a>    result <span class="op">=</span> run_discovery(targets<span class="op">=</span>targets, parameters<span class="op">=</span>parameters)</span>
+<span id="cb103-8"><a href="#cb103-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb103-9"><a href="#cb103-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> {</span>
+<span id="cb103-10"><a href="#cb103-10" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;ok&quot;</span>: <span class="va">True</span>,</span>
+<span id="cb103-11"><a href="#cb103-11" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;devices_seen&quot;</span>: result.devices_seen,</span>
+<span id="cb103-12"><a href="#cb103-12" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;new_devices&quot;</span>: result.new_devices,</span>
+<span id="cb103-13"><a href="#cb103-13" aria-hidden="true" tabindex="-1"></a>    }</span></code></pre></div>
+<p>Important rules:</p>
+<pre class="text"><code>modules define WHAT can run
+Tec-Tac defines WHEN it runs
+handlers must work without request.user or a browser session
+target/parameter meaning belongs to the module
+raise exceptions to use the framework retry policy
+return JSON-safe structured results where possible
+keep action IDs stable across upgrades</code></pre>
+<p>Saved schedules run unattended. A user must be authenticated and
+authorized to create/manage/manual-run a schedule, but the scheduled
+execution itself is a system operation and does not require that user to
+remain logged in.</p>
+<p>For the complete contract, including snapshot/dynamic targets,
+permissions, retry/concurrency behaviour, Communicator and Patch
+Management examples, see:</p>
+<pre class="text"><code>docs/module-scheduling.md</code></pre>
 </body>
 </html>
