@@ -125,7 +125,7 @@ def is_enabled(module_id: str, state: dict | None = None) -> bool:
     return bool(record.get("enabled", True))
 
 
-def is_visible(module_id: str, state: dict | None = None) -> bool:
+def is_visible(module_id: str, state: dict | None = None, default: bool = True) -> bool:
     """Return whether an installed module should appear in Tec-Tac navigation.
 
     Visibility is independent from runtime enablement. Missing state defaults to
@@ -133,7 +133,7 @@ def is_visible(module_id: str, state: dict | None = None) -> bool:
     upgrading the framework.
     """
     record = module_record(module_id, state)
-    return bool(record.get("visible", True))
+    return bool(record["visible"]) if "visible" in record else bool(default)
 
 
 def set_enabled(module_id: str, enabled: bool) -> dict:
@@ -158,7 +158,6 @@ def remember_version(module_id: str, version: str) -> dict:
     state = load_state()
     record = dict(state["modules"].get(module_id) or {})
     record.setdefault("enabled", True)
-    record.setdefault("visible", True)
     record["version"] = str(version)
     state["modules"][module_id] = record
     save_state(state)

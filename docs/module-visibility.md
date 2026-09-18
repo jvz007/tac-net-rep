@@ -173,3 +173,15 @@ Automation may similarly remain enabled and hidden when its primary purpose is t
 ## Security note
 
 Visibility is presentation state only. It must never be used as an authorization control. A hidden module's backend endpoints remain protected by their normal Tactical/Tec-Tac RBAC requirements.
+## Visibility precedence (1.6.1)
+
+A module package may declare a default navigation visibility in its UI manifest. That value is a default only; it is never a permanent lock.
+
+Effective visibility is resolved in this order:
+
+1. Explicit operator override stored in `module-state.json` (`visible: true` or `visible: false`).
+2. Package UI visibility default.
+3. `true` when neither source specifies a value.
+
+This means a package can ship hidden by default (useful for support modules such as Checks), while an administrator can still choose **Show** in Module Manager. Package upgrades must preserve the administrator override. Runtime enablement remains independent from navigation visibility.
+

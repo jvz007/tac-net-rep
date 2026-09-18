@@ -97,7 +97,6 @@ def remember_version(module_id, version):
     state = load_module_state()
     record = dict(state["modules"].get(module_id) or {})
     record.setdefault("enabled", True)
-    record.setdefault("visible", True)
     record["version"] = str(version)
     state["modules"][module_id] = record
     save_module_state(state)

@@ -93,6 +93,24 @@ def _string_map(payload: dict, key: str) -> dict[str, str]:
     return result
 
 
+def _ui_default_visible(extension_root: Path) -> bool:
+    """Return the package-declared default navigation visibility.
+
+    The package may suggest a default, but persisted Module Manager state is the
+    operator override and therefore takes precedence once set.
+    """
+    path = extension_root / "tec_tac_ui.json"
+    if not path.is_file():
+        return True
+    payload = _read_json(path, "UI manifest")
+    if isinstance(payload.get("visible"), bool):
+        return payload["visible"]
+    navigation = payload.get("navigation")
+    if isinstance(navigation, dict) and isinstance(navigation.get("visible"), bool):
+        return navigation["visible"]
+    return True
+
+
 def _extension_metadata(extension_root: Path) -> dict:
     payload = _read_json(extension_root / "tec_tac.json", "extension manifest")
     return {
@@ -101,6 +119,7 @@ def _extension_metadata(extension_root: Path) -> dict:
         "dependencies": _string_map(payload, "dependencies"),
         "optional_dependencies": _string_map(payload, "optional_dependencies"),
         "requires": _string_map(payload, "requires"),
+        "default_visible": _ui_default_visible(extension_root),
     }
 
 
@@ -155,7 +174,7 @@ def installed_catalog_v2() -> list[dict]:
         try:
             metadata[item["id"]] = _installed_extension_metadata(item["id"])
         except Exception as exc:
-            metadata[item["id"]] = {"id": item["id"], "version": item.get("extension_version") or "0.0.0", "dependencies": {}, "optional_dependencies": {}, "requires": {}, "metadata_error": str(exc)}
+            metadata[item["id"]] = {"id": item["id"], "version": item.get("extension_version") or "0.0.0", "dependencies": {}, "optional_dependencies": {}, "requires": {}, "default_visible": True, "metadata_error": str(exc)}
 
     reverse = {item["id"]: [] for item in base}
     for module_id, meta in metadata.items():
@@ -171,7 +190,7 @@ def installed_catalog_v2() -> list[dict]:
             continue
         meta = metadata.get(item["id"], {})
         enabled = is_enabled(item["id"], state)
-        visible = is_visible(item["id"], state)
+        visible = is_visible(item["id"], state, default=meta.get("default_visible", True))
         hard = meta.get("dependencies", {})
         optional = meta.get("optional_dependencies", {})
         dep_status = []
@@ -193,6 +212,7 @@ def installed_catalog_v2() -> list[dict]:
             "dependencies": hard,
             "optional_dependencies": optional,
             "requires": meta.get("requires", {}),
+            "default_visible": meta.get("default_visible", True),
             "dependency_status": dep_status,
             "dependants": reverse.get(item["id"], []),
             "runtime_requirements": _check_runtime_requirements(meta.get("requires", {})),
