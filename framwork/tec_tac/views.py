@@ -1,10 +1,21 @@
 from django.shortcuts import get_object_or_404
 from accounts.models import Role
 from accounts.permissions import RolesPerms
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from .module_manager import (
+    ModuleManagerError,
+    discard_stage,
+    get_job,
+    installed_catalog,
+    queue_install,
+    queue_remove,
+    stage_uploaded_package,
+)
 from .rbac import (
     effective_permissions,
     get_all_role_permissions,
@@ -33,6 +44,8 @@ def _native_capabilities(user):
         "manage_accounts": allowed("can_manage_accounts"),
         "list_roles": allowed("can_list_roles"),
         "manage_roles": allowed("can_manage_roles"),
+        "list_modules": True,
+        "manage_modules": allowed("can_do_server_maint"),
     }
 
 
@@ -137,3 +150,91 @@ class RoleExtensionPermissionsView(APIView):
                 "permissions": get_all_role_permissions(role),
             }
         )
+
+
+def _can_manage_modules(user):
+    role = _role_for_user(user)
+    return bool(getattr(user, "is_superuser", False)) or bool(getattr(role, "is_superuser", False) if role else False) or bool(getattr(role, "can_do_server_maint", False) if role else False)
+
+
+def _require_module_manager(user):
+    if not _can_manage_modules(user):
+        raise PermissionDenied("Tactical can_do_server_maint is required to install or remove Tec-Tac modules.")
+
+
+class ModuleCatalogView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            modules = installed_catalog()
+        except Exception as exc:
+            return Response({"detail": str(exc)}, status=500)
+        return Response({
+            "modules": modules,
+            "count": len(modules),
+            "manage": _can_manage_modules(request.user),
+        })
+
+
+class ModulePackageInspectView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        _require_module_manager(request.user)
+        upload = request.FILES.get("package")
+        if upload is None:
+            return Response({"detail": "A package upload is required."}, status=400)
+        try:
+            return Response(stage_uploaded_package(upload), status=201)
+        except ModuleManagerError as exc:
+            return Response({"detail": str(exc)}, status=400)
+
+
+class ModulePackageStageView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, upload_id):
+        _require_module_manager(request.user)
+        try:
+            discard_stage(str(upload_id))
+            return Response(status=204)
+        except ModuleManagerError as exc:
+            return Response({"detail": str(exc)}, status=404)
+
+
+class ModulePackageInstallView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, upload_id):
+        _require_module_manager(request.user)
+        replace = request.data.get("replace", False)
+        if not isinstance(replace, bool):
+            return Response({"detail": "replace must be true or false."}, status=400)
+        try:
+            return Response(queue_install(str(upload_id), replace=replace), status=202)
+        except ModuleManagerError as exc:
+            return Response({"detail": str(exc)}, status=400)
+
+
+class ModuleRemoveView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, plugin_id):
+        _require_module_manager(request.user)
+        try:
+            return Response(queue_remove(plugin_id), status=202)
+        except ModuleManagerError as exc:
+            return Response({"detail": str(exc)}, status=400)
+
+
+class ModuleJobView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, job_id):
+        _require_module_manager(request.user)
+        try:
+            return Response(get_job(str(job_id)))
+        except ModuleManagerError as exc:
+            return Response({"detail": str(exc)}, status=404)

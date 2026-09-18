@@ -1,0 +1,11 @@
+{
+  "id": "uitest",
+  "type": "extension",
+  "version": "0.1.0",
+  "python_paths": ["."],
+  "django_apps": [],
+  "permission_groups": {
+    "read": ["uitest.read"],
+    "manage": ["uitest.read", "uitest.manage"]
+  }
+}

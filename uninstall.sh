@@ -78,6 +78,12 @@ if [[ -f "${LOCAL_SETTINGS}" ]]; then
     log "Removed Tec-Tac bootstrap block from local_settings.py."
 fi
 
+MODULE_HELPER="/usr/local/sbin/tec-tac-module-job"
+MODULE_SUDOERS="/etc/sudoers.d/tec-tac-module-manager"
+MODULE_CONFIG="/etc/tec-tac/module-manager.conf"
+rm -f "${MODULE_SUDOERS}" "${MODULE_HELPER}" "${MODULE_CONFIG}"
+log "Removed Tec-Tac privileged module lifecycle helper and sudoers rule."
+
 # Repository-owned framework/extension files are intentionally not deleted.
 # Uninstall only disconnects Tec-Tac from Tactical. Delete the Git checkout
 # separately if the repository itself is no longer wanted.

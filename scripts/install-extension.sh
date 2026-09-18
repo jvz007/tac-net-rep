@@ -93,9 +93,17 @@ def safe_name(name: str) -> Path:
 
 lower = archive.name.lower()
 
+MAX_EXTRACTED_BYTES = 512 * 1024 * 1024
+MAX_ARCHIVE_MEMBERS = 10000
+
 if lower.endswith(".zip"):
     with zipfile.ZipFile(archive) as zf:
-        for info in zf.infolist():
+        infos = zf.infolist()
+        if len(infos) > MAX_ARCHIVE_MEMBERS:
+            raise SystemExit("[TEC-TAC] ERROR: archive contains too many members")
+        if sum(info.file_size for info in infos) > MAX_EXTRACTED_BYTES:
+            raise SystemExit("[TEC-TAC] ERROR: archive expands beyond the allowed size limit")
+        for info in infos:
             rel = safe_name(info.filename)
             mode = (info.external_attr >> 16) & 0xFFFF
             if stat.S_ISLNK(mode):
@@ -114,11 +122,19 @@ if lower.endswith(".zip"):
 elif lower.endswith(".tar.gz") or lower.endswith(".tgz"):
     with tarfile.open(archive, "r:gz") as tf:
         members = tf.getmembers()
+        if len(members) > MAX_ARCHIVE_MEMBERS:
+            raise SystemExit("[TEC-TAC] ERROR: archive contains too many members")
+        if sum(member.size for member in members if member.isfile()) > MAX_EXTRACTED_BYTES:
+            raise SystemExit("[TEC-TAC] ERROR: archive expands beyond the allowed size limit")
         for member in members:
             safe_name(member.name)
             if member.issym() or member.islnk():
                 raise SystemExit(
                     f"[TEC-TAC] ERROR: archive contains a link: {member.name!r}"
+                )
+            if not (member.isdir() or member.isfile()):
+                raise SystemExit(
+                    f"[TEC-TAC] ERROR: archive contains an unsupported special file: {member.name!r}"
                 )
             target = (dest / Path(*PurePosixPath(member.name).parts)).resolve()
             try:

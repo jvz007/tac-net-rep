@@ -49,6 +49,7 @@ REQUIRED_FILES=(
     "${FRAMEWORK_DIR}/tec_tac/apps.py"
     "${FRAMEWORK_DIR}/tec_tac/urls.py"
     "${FRAMEWORK_DIR}/tec_tac/views.py"
+    "${FRAMEWORK_DIR}/tec_tac/module_manager.py"
     "${APP_DIR}/__init__.py"
     "${APP_DIR}/apps.py"
     "${APP_DIR}/models.py"
@@ -65,8 +66,10 @@ REQUIRED_FILES=(
     "${REPO_ROOT}/scripts/scaffold-plugin.sh"
     "${REPO_ROOT}/scripts/install-extension.sh"
     "${REPO_ROOT}/scripts/remove-extension.sh"
+    "${REPO_ROOT}/scripts/module-job-helper.py"
     "${REPO_ROOT}/tests/framework-foundation.sh"
     "${REPO_ROOT}/tests/access-api-foundation.sh"
+    "${REPO_ROOT}/tests/module-management-foundation.sh"
     "${REPO_ROOT}/tests/registry-validation.sh"
     "${REPO_ROOT}/tests/tactical-update-survival.sh"
     "${REPO_ROOT}/tests/example-plugin.sh"
@@ -103,6 +106,7 @@ run_as_tactical() {
 log "Detected Tactical root: ${TACTICAL_ROOT}"
 log "Detected Tactical service user: ${TACTICAL_USER}"
 log "Tec-Tac framework: ${FRAMEWORK_DIR}"
+
 log "Extensions root: ${EXTENSIONS_DIR}"
 log "Reportsets root: ${REPORTSETS_DIR}"
 log "Legacy reporting POC: ${LEGACY_REPORTING_DIR}"
@@ -180,8 +184,41 @@ log "Applying ${APP_NAME} migrations."
 run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' migrate '${APP_NAME}' --noinput"
 
 log "Verifying framework API, repository-loaded app, RBAC, Report Manager, and API routes."
-VERIFY_CODE="import tfdreporting; from django.apps import apps; from django.urls import resolve; expected='${LEGACY_REPORTING_DIR}/'; assert tfdreporting.__file__.startswith(expected), tfdreporting.__file__; assert apps.is_installed('tec_tac'); m=apps.get_model('${APP_NAME}','${MODEL_NAME}'); p=apps.get_model('${APP_NAME}','ExtensionRolePermission'); from ee.reporting.utils import resolve_model; r=resolve_model(data_source={'model':'${MODEL_NAME}'}); assert r['model'] is m; from tec_tac.rbac import registered_permissions, permission_catalog; from tfdreporting.rbac import REGISTERED_PERMISSIONS; assert len(REGISTERED_PERMISSIONS) >= 2; match=resolve('/api/tfd/reporting/network-availability/'); assert match.url_name == 'network-availability'; ctx=resolve('/api/tfd/ui/context/'); assert ctx.url_name == 'tec-tac-ui-context'; access=resolve('/api/tfd/access/extensions/'); assert access.url_name == 'tec-tac-extension-permissions'; fields={f.name for f in m._meta.fields}; assert {'idempotency_key','ingested_by','received_at'} <= fields; c=m.objects.count(); print('TEC-TAC verification OK:', 'module=', tfdreporting.__file__, m._meta.label, p._meta.label, 'context=', ctx.route, 'access=', access.route, 'network_rows=', c)"
+VERIFY_CODE="import tfdreporting; from django.apps import apps; from django.urls import resolve; expected='${LEGACY_REPORTING_DIR}/'; assert tfdreporting.__file__.startswith(expected), tfdreporting.__file__; assert apps.is_installed('tec_tac'); m=apps.get_model('${APP_NAME}','${MODEL_NAME}'); p=apps.get_model('${APP_NAME}','ExtensionRolePermission'); from ee.reporting.utils import resolve_model; r=resolve_model(data_source={'model':'${MODEL_NAME}'}); assert r['model'] is m; from tec_tac.rbac import registered_permissions, permission_catalog; from tfdreporting.rbac import REGISTERED_PERMISSIONS; assert len(REGISTERED_PERMISSIONS) >= 2; match=resolve('/api/tfd/reporting/network-availability/'); assert match.url_name == 'network-availability'; ctx=resolve('/api/tfd/ui/context/'); assert ctx.url_name == 'tec-tac-ui-context'; access=resolve('/api/tfd/access/extensions/'); assert access.url_name == 'tec-tac-extension-permissions'; modules=resolve('/api/tfd/modules/'); assert modules.url_name == 'tec-tac-module-catalog'; fields={f.name for f in m._meta.fields}; assert {'idempotency_key','ingested_by','received_at'} <= fields; c=m.objects.count(); print('TEC-TAC verification OK:', 'module=', tfdreporting.__file__, m._meta.label, p._meta.label, 'context=', ctx.route, 'access=', access.route, 'modules=', modules.route, 'network_rows=', c)"
 run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_CODE}\""
+
+MODULE_STATE_ROOT="/var/lib/tec-tac/module-manager"
+MODULE_HELPER="/usr/local/sbin/tec-tac-module-job"
+MODULE_CONFIG_DIR="/etc/tec-tac"
+MODULE_CONFIG="${MODULE_CONFIG_DIR}/module-manager.conf"
+MODULE_SUDOERS="/etc/sudoers.d/tec-tac-module-manager"
+TEC_TAC_UI_REPO="${TEC_TAC_UI_REPO:-/opt/tec-tac-ui}"
+
+mkdir -p "${MODULE_STATE_ROOT}/staged" "${MODULE_STATE_ROOT}/jobs" "${MODULE_STATE_ROOT}/running" "${MODULE_STATE_ROOT}/logs"
+chown -R root:"${TACTICAL_GROUP}" "${MODULE_STATE_ROOT}"
+chmod 2750 "${MODULE_STATE_ROOT}" "${MODULE_STATE_ROOT}/running" "${MODULE_STATE_ROOT}/logs"
+chmod 2770 "${MODULE_STATE_ROOT}/staged" "${MODULE_STATE_ROOT}/jobs"
+
+install -o root -g root -m 0755 "${REPO_ROOT}/scripts/module-job-helper.py" "${MODULE_HELPER}"
+mkdir -p "${MODULE_CONFIG_DIR}"
+cat > "${MODULE_CONFIG}" <<EOF
+REPO_ROOT=${REPO_ROOT}
+UI_SYNC_SCRIPT=${TEC_TAC_UI_REPO}/scripts/sync-modules.sh
+TACTICAL_USER=${TACTICAL_USER}
+EOF
+chown root:root "${MODULE_CONFIG}"
+chmod 0644 "${MODULE_CONFIG}"
+
+cat > "${MODULE_SUDOERS}" <<EOF
+${TACTICAL_USER} ALL=(root) NOPASSWD: ${MODULE_HELPER} --dispatch *
+EOF
+chown root:root "${MODULE_SUDOERS}"
+chmod 0440 "${MODULE_SUDOERS}"
+if command -v visudo >/dev/null 2>&1; then
+    visudo -cf "${MODULE_SUDOERS}" >/dev/null || fail "Module manager sudoers validation failed."
+fi
+log "Installed privileged module lifecycle helper: ${MODULE_HELPER}"
+
 
 # Optional reporting permission assignment. Permissions are stored against the
 # Tactical role used by the named user, not against the user directly. Existing

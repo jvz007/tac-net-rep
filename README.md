@@ -1,6 +1,6 @@
 # Tec-Tac Tactical RMM Extension Framework
 
-Version **1.1.0** adds the framework-owned access/RBAC API while retaining the extension/reportset packaging and upgrade-safe bootstrap introduced in 1.0.x. It adds the complete extension/reportset developer tutorial plus generic package install and removal tooling for separately distributed extensions, while retaining the upgrade-safe bootstrap, validated paired **extensions** and **reportsets**, manifests/templates, inspection/scaffolding tools, lifecycle tests, and the working reference pair.
+Version **1.2.0** adds framework-owned module discovery and controlled package lifecycle jobs while retaining the 1.1.0 access/RBAC API and the upgrade-safe extension/reportset foundation. It adds the complete extension/reportset developer tutorial plus generic package install and removal tooling for separately distributed extensions, while retaining the upgrade-safe bootstrap, validated paired **extensions** and **reportsets**, manifests/templates, inspection/scaffolding tools, lifecycle tests, and the working reference pair.
 
 The repository itself is the runtime root. It may be cloned anywhere; `/opt/tec-tac` is only the recommended location.
 
@@ -409,3 +409,36 @@ The uninstaller never deletes the Git checkout.
 ## Access API (1.1.0)
 
 The framework now exposes upgrade-safe authenticated endpoints under `/api/tfd/` for UI context and Tec-Tac extension role grants. Tactical's existing Role IDs remain the RBAC anchor; Tactical's own account and native role permissions remain authoritative. See `RELEASE_NOTES_1.1.0.md`.
+
+## Module lifecycle API (1.2.0)
+
+Tec-Tac 1.2.0 adds an authenticated module-management surface under `/api/tfd/modules/`:
+
+```text
+GET    /api/tfd/modules/
+POST   /api/tfd/modules/packages/inspect/
+DELETE /api/tfd/modules/packages/<upload-id>/
+POST   /api/tfd/modules/packages/<upload-id>/install/
+POST   /api/tfd/modules/<extension-id>/remove/
+GET    /api/tfd/modules/jobs/<job-id>/
+```
+
+Catalog reads require an authenticated Tactical session. Installation, replacement, staging cleanup, removal, and job inspection require effective module-management access, mapped to Tactical `can_do_server_maint` (or effective superuser).
+
+The Tactical web process never runs the root lifecycle scripts directly. `install.sh` installs a root-owned helper at `/usr/local/sbin/tec-tac-module-job` plus a narrowly scoped sudoers rule that allows the Tactical service user to dispatch only opaque UUID jobs. The helper claims the staged package before execution, checks that lifecycle scripts are root-owned and not group/world writable, then runs the existing package installer/remover outside the Tactical web process. This lets the job survive the Tactical service restarts performed by the existing lifecycle scripts.
+
+Packages are staged below `/var/lib/tec-tac/module-manager/`. Inspection enforces archive path/link checks, upload and expansion limits, exactly one matching extension/ReportSet pair, registry validation, optional `tec_tac_ui.json` validation, and declared-permission references. Extension and ReportSet versions must match before UI-driven installation is allowed.
+
+The UI-driven remover intentionally uses the safe default: remove code and preserve database objects/data. `--purge-data` remains a manual administrative operation and is not exposed through the web API.
+
+When `/opt/tec-tac-ui/scripts/sync-modules.sh` is present, a successful lifecycle job synchronizes runtime UI modules after the backend package operation.
+
+### Development UI lifecycle package
+
+A small reference package is included at:
+
+```text
+docs/tutorial-packages/uitest/uitest-0.1.0.zip
+```
+
+It has no database models and is intended to test the complete 1.2.0 + UI 0.2.0 flow: browser upload, package inspection, install job, Tactical restart, UI synchronization, runtime route/navigation registration, RBAC permission discovery, and safe code removal.

@@ -1,0 +1,12 @@
+{
+  "id": "uitest",
+  "version": "0.1.0",
+  "entry": "ui/index.js",
+  "navigation": {
+    "label": "UI Test",
+    "section": "Extensions",
+    "icon": "U",
+    "order": 900
+  },
+  "permissions": ["uitest.read"]
+}

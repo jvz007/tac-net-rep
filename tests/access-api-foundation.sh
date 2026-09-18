@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail(){ echo "[TEST] FAIL: $*" >&2; exit 1; }
 
-[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.1.0" ]] || fail "VERSION is not 1.1.0"
+[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.2.0" ]] || fail "VERSION is not 1.2.0"
 for f in \
   framwork/tec_tac/apps.py \
   framwork/tec_tac/urls.py \
