@@ -7,6 +7,10 @@ from .views import (
     SystemUpdatePackageInstallView, SystemUpdateJobView, SystemUpdateOnlineStatusView,
     SystemUpdateBranchesView, SystemUpdateOnlineStageView, UiContextView,
 )
+from .module_repository_views import (
+    ModuleRepositoryListView, ModuleRepositoryDetailView, ModuleRepositorySyncView,
+    ModuleRepositorySyncAllView, ModuleOnlineCatalogView, ModuleOnlineStageView,
+)
 from .module_v2_views import (
     ModuleV2CatalogView, ModuleV2InspectView, ModuleV2StageView, ModuleV2InstallView,
     ModuleV2StateView, ModuleV2VisibilityView, ModuleV2RemoveCheckView, ModuleV2JobView,
@@ -29,6 +33,12 @@ urlpatterns = [
     path("modules/packages/<uuid:upload_id>/install/", ModulePackageInstallView.as_view(), name="tec-tac-module-package-install"),
     path("modules/<str:plugin_id>/remove/", ModuleRemoveView.as_view(), name="tec-tac-module-remove"),
     path("modules/jobs/<uuid:job_id>/", ModuleJobView.as_view(), name="tec-tac-module-job"),
+    path("modules/repositories/", ModuleRepositoryListView.as_view(), name="tec-tac-module-repositories"),
+    path("modules/repositories/sync/", ModuleRepositorySyncAllView.as_view(), name="tec-tac-module-repositories-sync"),
+    path("modules/repositories/<str:repository_id>/", ModuleRepositoryDetailView.as_view(), name="tec-tac-module-repository-detail"),
+    path("modules/repositories/<str:repository_id>/sync/", ModuleRepositorySyncView.as_view(), name="tec-tac-module-repository-sync"),
+    path("modules/catalog/online/", ModuleOnlineCatalogView.as_view(), name="tec-tac-module-online-catalog"),
+    path("modules/catalog/online/stage/", ModuleOnlineStageView.as_view(), name="tec-tac-module-online-stage"),
     path("modules/v2/", ModuleV2CatalogView.as_view(), name="tec-tac-module-v2-catalog"),
     path("modules/v2/packages/inspect/", ModuleV2InspectView.as_view(), name="tec-tac-module-v2-inspect"),
     path("modules/v2/packages/<uuid:upload_id>/", ModuleV2StageView.as_view(), name="tec-tac-module-v2-stage"),

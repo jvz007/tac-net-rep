@@ -31,6 +31,8 @@ LOGS_ROOT = STATE_ROOT / "logs"
 BACKUP_ROOT = STATE_ROOT / "bundle-backups"
 MODULE_STATE = STATE_ROOT / "module-state.json"
 CONFIG = Path("/etc/tec-tac/module-manager.conf")
+BUNDLES_ROOT = STAGED_ROOT / "bundles"
+BATCHES_ROOT = STAGED_ROOT / "batches"
 ALLOWED_ACTIONS = {"enable", "disable", "visibility", "bundle_install", "batch_install"}
 
 
@@ -93,11 +95,14 @@ def set_visible(module_id, visible):
     save_module_state(state)
 
 
-def remember_version(module_id, version):
+def remember_version(module_id, version, source=None):
     state = load_module_state()
     record = dict(state["modules"].get(module_id) or {})
     record.setdefault("enabled", True)
     record["version"] = str(version)
+    if source:
+        record["source"] = dict(source)
+        record["source"]["installed_at"] = now()
     state["modules"][module_id] = record
     save_module_state(state)
 
@@ -280,9 +285,38 @@ def batch_packages(job, running_root):
         suffix = "".join(source.suffixes) or ".zip"
         target = running_root / f"{item['id']}{suffix}"
         shutil.copy2(source, target)
-        result.append({"id": item["id"], "path": str(target)})
+        result.append({"id": item["id"], "path": str(target), "source": item.get("source")})
     return result
 
+
+
+def cleanup_successful_stage(job, log):
+    """Remove staging artifacts after a successful v2 install job."""
+    if job.get("action") == "bundle_install":
+        source = Path(str(job.get("bundle_path", "")))
+        try:
+            source.resolve().relative_to(STAGED_ROOT.resolve())
+            source.unlink(missing_ok=True)
+        except Exception:
+            pass
+        upload_id = str(job.get("upload_id") or "")
+        if JOB_RE.fullmatch(upload_id):
+            (BUNDLES_ROOT / f"{upload_id}.json").unlink(missing_ok=True)
+    elif job.get("action") == "batch_install":
+        for item in job.get("packages") or []:
+            source = Path(str(item.get("path", "")))
+            try:
+                source.resolve().relative_to(STAGED_ROOT.resolve())
+                source.unlink(missing_ok=True)
+            except Exception:
+                pass
+            upload_id = str(item.get("upload_id") or "")
+            if JOB_RE.fullmatch(upload_id):
+                (STAGED_ROOT / f"{upload_id}.json").unlink(missing_ok=True)
+        batch_id = str(job.get("batch_id") or "")
+        if JOB_RE.fullmatch(batch_id):
+            (BATCHES_ROOT / f"{batch_id}.json").unlink(missing_ok=True)
+    log.write("[TEC-TAC-MODULE-V2] cleaned successful staged artifacts\n")
 
 def run_job(job_id):
     path, job = load_job(job_id)
@@ -334,11 +368,13 @@ def run_job(job_id):
                 touched = order
                 try:
                     install_packages(repo_root, packages, order, log, backup)
+                    sources = {item.get("id"): item.get("source") for item in packages}
                     for action in (job.get("plan") or {}).get("actions") or []:
-                        remember_version(action["id"], action.get("version") or "0.0.0")
+                        remember_version(action["id"], action.get("version") or "0.0.0", sources.get(action["id"]))
                     job["stage"] = "runtime-sync"
                     atomic_json(path, job)
                     sync_and_reload(config, log)
+                    cleanup_successful_stage(job, log)
                 except Exception:
                     job["stage"] = "rollback"
                     atomic_json(path, job)

@@ -3,12 +3,14 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail(){ echo "[TEST] FAIL: $*" >&2; exit 1; }
 
-[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.6.1" ]] || fail "VERSION is not 1.6.1"
+[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.7.0" ]] || fail "VERSION is not 1.7.0"
 for f in \
   framwork/tec_tac/module_manager.py \
   framwork/tec_tac/module_manager_v2.py \
   framwork/tec_tac/module_state.py \
   framwork/tec_tac/module_v2_views.py \
+  framwork/tec_tac/module_repository.py \
+  framwork/tec_tac/module_repository_views.py \
   framwork/tec_tac/system_update.py \
   scripts/module-job-helper.py \
   scripts/module-v2-job-helper.py \
@@ -59,6 +61,8 @@ python3 -m py_compile \
   "${ROOT}/framwork/tec_tac/module_manager_v2.py" \
   "${ROOT}/framwork/tec_tac/module_state.py" \
   "${ROOT}/framwork/tec_tac/module_v2_views.py" \
+  "${ROOT}/framwork/tec_tac/module_repository.py" \
+  "${ROOT}/framwork/tec_tac/module_repository_views.py" \
   "${ROOT}/framwork/tec_tac/system_update.py" \
   "${ROOT}/framwork/tec_tac/views.py" \
   "${ROOT}/scripts/module-job-helper.py" \
@@ -102,3 +106,11 @@ grep -q 'def is_visible' "${ROOT}/framwork/tec_tac/module_state.py" || fail "mod
 grep -q 'queue_set_visibility' "${ROOT}/framwork/tec_tac/module_manager_v2.py" || fail "module visibility queue missing"
 grep -q 'modules/v2/<str:plugin_id>/visibility/' "${ROOT}/framwork/tec_tac/urls.py" || fail "module visibility route missing"
 grep -q '"visibility"' "${ROOT}/scripts/module-v2-job-helper.py" || fail "visibility worker action missing"
+
+# 1.7.0 repository/catalog foundation
+grep -q 'modules/repositories/' "${ROOT}/framwork/tec_tac/urls.py" || fail "module repository routes missing"
+grep -q 'modules/catalog/online/' "${ROOT}/framwork/tec_tac/urls.py" || fail "online module catalog route missing"
+grep -q 'stage_repository_package' "${ROOT}/framwork/tec_tac/module_repository.py" || fail "online package staging missing"
+grep -q 'package_sha256' "${ROOT}/framwork/tec_tac/module_repository.py" || fail "online package provenance hash missing"
+grep -q 'repositories/cache' "${ROOT}/install.sh" || fail "repository cache runtime directory missing"
+grep -q 'source_provenance' "${ROOT}/framwork/tec_tac/module_manager_v2.py" || fail "online source provenance handoff missing"

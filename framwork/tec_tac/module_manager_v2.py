@@ -42,6 +42,7 @@ from .module_state import (
     is_enabled,
     is_visible,
     load_state,
+    module_record,
     version_satisfies,
 )
 
@@ -205,6 +206,7 @@ def installed_catalog_v2() -> list[dict]:
                 "enabled": bool(installed and is_enabled(dep_id, state)),
                 "satisfied": bool(installed and version_satisfies(installed.get("extension_version") or "0.0.0", constraint)),
             })
+        record = module_record(item["id"], state)
         item.update({
             "enabled": enabled,
             "visible": visible,
@@ -217,6 +219,7 @@ def installed_catalog_v2() -> list[dict]:
             "dependants": reverse.get(item["id"], []),
             "runtime_requirements": _check_runtime_requirements(meta.get("requires", {})),
             "metadata_error": meta.get("metadata_error"),
+            "source": record.get("source"),
         })
         result.append(item)
     return result
@@ -619,7 +622,31 @@ def queue_v2_install(upload_id: str, requested_order=None) -> dict:
         if not preview.get("installable") or not plan["valid"]:
             raise ModuleManagerV2Error(preview.get("install_block_reason") or "Package dependency plan is not satisfiable.")
         replace = bool(preview.get("already_installed"))
-        # Reuse proven v1 worker for single-package deployment.
+        source = meta.get("source_provenance")
+        if source:
+            # Online repository packages still use the proven extension install script,
+            # but run through the v2 worker so source provenance is committed only
+            # after a successful install.
+            action = {
+                "id": preview["id"],
+                "version": preview["extension_version"],
+                "action": "replace" if replace else "install",
+                "current_version": preview.get("installed_version"),
+                "dependencies": preview.get("dependencies", {}),
+            }
+            return _queue_v2({
+                "action": "batch_install",
+                "plugin_id": preview["id"],
+                "batch_id": upload_id,
+                "packages": [{
+                    "id": preview["id"],
+                    "path": meta["package_path"],
+                    "upload_id": upload_id,
+                    "source": source,
+                }],
+                "plan": {**plan, "actions": [action]},
+            })
+        # Local/offline single-package deployment keeps using the proven v1 worker.
         from .module_manager import queue_install
         return queue_install(upload_id, replace=replace)
 

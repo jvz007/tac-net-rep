@@ -53,6 +53,8 @@ REQUIRED_FILES=(
     "${FRAMEWORK_DIR}/tec_tac/module_manager_v2.py"
     "${FRAMEWORK_DIR}/tec_tac/module_state.py"
     "${FRAMEWORK_DIR}/tec_tac/module_v2_views.py"
+    "${FRAMEWORK_DIR}/tec_tac/module_repository.py"
+    "${FRAMEWORK_DIR}/tec_tac/module_repository_views.py"
     "${APP_DIR}/__init__.py"
     "${APP_DIR}/apps.py"
     "${APP_DIR}/models.py"
@@ -189,7 +191,7 @@ log "Applying ${APP_NAME} migrations."
 run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' migrate '${APP_NAME}' --noinput"
 
 log "Verifying framework API, repository-loaded app, RBAC, Report Manager, and API routes."
-VERIFY_CODE="import tfdreporting; from django.apps import apps; from django.urls import resolve; expected='${LEGACY_REPORTING_DIR}/'; assert tfdreporting.__file__.startswith(expected), tfdreporting.__file__; assert apps.is_installed('tec_tac'); m=apps.get_model('${APP_NAME}','${MODEL_NAME}'); p=apps.get_model('${APP_NAME}','ExtensionRolePermission'); from ee.reporting.utils import resolve_model; r=resolve_model(data_source={'model':'${MODEL_NAME}'}); assert r['model'] is m; from tec_tac.rbac import registered_permissions, permission_catalog; from tfdreporting.rbac import REGISTERED_PERMISSIONS; assert len(REGISTERED_PERMISSIONS) >= 2; match=resolve('/api/tfd/reporting/network-availability/'); assert match.url_name == 'network-availability'; ctx=resolve('/api/tfd/ui/context/'); assert ctx.url_name == 'tec-tac-ui-context'; access=resolve('/api/tfd/access/extensions/'); assert access.url_name == 'tec-tac-extension-permissions'; modules=resolve('/api/tfd/modules/'); assert modules.url_name == 'tec-tac-module-catalog'; updates=resolve('/api/tfd/system/updates/'); assert updates.url_name == 'tec-tac-system-update-status'; fields={f.name for f in m._meta.fields}; assert {'idempotency_key','ingested_by','received_at'} <= fields; c=m.objects.count(); print('TEC-TAC verification OK:', 'module=', tfdreporting.__file__, m._meta.label, p._meta.label, 'context=', ctx.route, 'access=', access.route, 'modules=', modules.route, 'updates=', updates.route, 'network_rows=', c)"
+VERIFY_CODE="import tfdreporting; from django.apps import apps; from django.urls import resolve; expected='${LEGACY_REPORTING_DIR}/'; assert tfdreporting.__file__.startswith(expected), tfdreporting.__file__; assert apps.is_installed('tec_tac'); m=apps.get_model('${APP_NAME}','${MODEL_NAME}'); p=apps.get_model('${APP_NAME}','ExtensionRolePermission'); from ee.reporting.utils import resolve_model; r=resolve_model(data_source={'model':'${MODEL_NAME}'}); assert r['model'] is m; from tec_tac.rbac import registered_permissions, permission_catalog; from tfdreporting.rbac import REGISTERED_PERMISSIONS; assert len(REGISTERED_PERMISSIONS) >= 2; match=resolve('/api/tfd/reporting/network-availability/'); assert match.url_name == 'network-availability'; ctx=resolve('/api/tfd/ui/context/'); assert ctx.url_name == 'tec-tac-ui-context'; access=resolve('/api/tfd/access/extensions/'); assert access.url_name == 'tec-tac-extension-permissions'; modules=resolve('/api/tfd/modules/'); assert modules.url_name == 'tec-tac-module-catalog'; updates=resolve('/api/tfd/system/updates/'); assert updates.url_name == 'tec-tac-system-update-status'; repos=resolve('/api/tfd/modules/repositories/'); assert repos.url_name == 'tec-tac-module-repositories'; online=resolve('/api/tfd/modules/catalog/online/'); assert online.url_name == 'tec-tac-module-online-catalog'; fields={f.name for f in m._meta.fields}; assert {'idempotency_key','ingested_by','received_at'} <= fields; c=m.objects.count(); print('TEC-TAC verification OK:', 'module=', tfdreporting.__file__, m._meta.label, p._meta.label, 'context=', ctx.route, 'access=', access.route, 'modules=', modules.route, 'updates=', updates.route, 'network_rows=', c)"
 run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_CODE}\""
 
 MODULE_STATE_ROOT="/var/lib/tec-tac/module-manager"
@@ -222,12 +224,21 @@ mkdir -p \
     "${MODULE_STATE_ROOT}/running-v2" \
     "${MODULE_STATE_ROOT}/logs" \
     "${MODULE_STATE_ROOT}/bundle-backups"
+    "${MODULE_STATE_ROOT}/repositories" \
+    "${MODULE_STATE_ROOT}/repositories/cache"
 chown -R root:"${TACTICAL_GROUP}" "${MODULE_STATE_ROOT}"
 # module-state.json is imported during Django/ASGI/Celery startup. Every Tactical
 # service identity must be able to traverse this directory and read that file.
 chmod 0755 "$(dirname "${MODULE_STATE_ROOT}")" "${MODULE_STATE_ROOT}"
 chmod 2770 "${MODULE_STATE_ROOT}/staged" "${MODULE_STATE_ROOT}/jobs"
 chmod 2750 "${MODULE_STATE_ROOT}/running" "${MODULE_STATE_ROOT}/running-v2" "${MODULE_STATE_ROOT}/logs" "${MODULE_STATE_ROOT}/bundle-backups"
+chmod 2770 "${MODULE_STATE_ROOT}/repositories" "${MODULE_STATE_ROOT}/repositories/cache"
+REPOSITORY_CONFIG="${MODULE_STATE_ROOT}/repositories/repositories.json"
+if [[ ! -f "${REPOSITORY_CONFIG}" ]]; then
+    printf '%s\n' '{"schema":1,"repositories":[]}' > "${REPOSITORY_CONFIG}"
+fi
+chown root:"${TACTICAL_GROUP}" "${REPOSITORY_CONFIG}"
+chmod 0660 "${REPOSITORY_CONFIG}"
 if [[ ! -f "${MODULE_STATE_FILE}" ]]; then
     printf '%s\n' '{"schema":1,"modules":{}}' > "${MODULE_STATE_FILE}"
 fi

@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "repository": {
+    "id": "example-repository",
+    "name": "Example Tec-Tac Repository"
+  },
+  "modules": [
+    {
+      "id": "example",
+      "name": "Example",
+      "description": "Example repository entry.",
+      "version": "1.0.0",
+      "download": "packages/example-1.0.0.zip",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "dependencies": {},
+      "optional_dependencies": {},
+      "requires": {
+        "framework": ">=1.7.0",
+        "ui": ">=0.7.0"
+      }
+    }
+  ]
+}

@@ -1,5 +1,6 @@
 # Tec-Tac Tactical RMM Extension Framework
 
+Version **1.7.0** adds multi-repository module sources, cached repository health, online catalog/update reporting, SHA-256 verified online staging, and installed source provenance while retaining the existing Module Management v2 installer.
 Version **1.6.1** fixes module visibility precedence so package-defined hidden/visible settings are defaults that can always be overridden by Module Manager.
 Version **1.6.0** adds independent module navigation visibility to Module Management v2. Modules can now remain enabled at runtime while being hidden from Tec-Tac navigation. The 1.5.0 package ordering, dependency enforcement, bundle planning, staged cleanup, and existing enable/disable lifecycle remain intact.
 
@@ -573,3 +574,7 @@ Module runtime state and navigation visibility are independent:
 - **Disabled** — excluded from runtime loading and therefore absent from navigation.
 
 Visibility is stored in `/var/lib/tec-tac/module-manager/module-state.json` as `visible: true|false`. Missing visibility state defaults to `true` for upgrade compatibility. Hiding a module does not weaken or change RBAC and does not affect dependency satisfaction. See `docs/module-visibility.md`.
+
+## Module repositories (1.7.0)
+
+Module Management v2 supports multiple enabled/disabled online repositories, explicit priority and trust labels, cached sync health, online catalog reporting, SHA-256 verified package staging, and installed source provenance. See `docs/module-repositories.md` and `examples/module-repository/index.json`.
