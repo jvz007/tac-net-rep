@@ -251,3 +251,7 @@ GET /api/tfd/capabilities/<capability-id>/?version=>=1,<2
 Use HTTP from the Tec-Tac browser UI, an external system, or another host/process.
 
 Inside the Tec-Tac Django/Celery backend, use Python imports from `tec_tac.capabilities`.
+## Live discovery/export
+
+Framework 1.10.0 includes registered capabilities in the Developer Contract catalog and its Markdown/Text exports. This is intended for module developers and coding agents; it does not expose provider-private implementation objects. See `docs/developer-contracts.md`.
+

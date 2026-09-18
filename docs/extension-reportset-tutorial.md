@@ -1556,3 +1556,20 @@ docs/module-interoperability.md
 If a scheduled action depends on another module, validate that dependency again when the run executes. A schedule may execute days or months after it was created.
 
 Permanent incompatibility should produce a clear scheduler-history diagnostic rather than repeated blind retries. Temporary provider outages may use the configured scheduler retry policy when recovery is realistic.
+
+## Live Developer Contract catalog (Framework 1.10.0+)
+
+Before integrating with another Tec-Tac module, inspect the live contract catalog rather than assuming an older module implementation is still current.
+
+```text
+GET /api/tfd/contracts/
+GET /api/tfd/contracts/export/?format=md
+GET /api/tfd/contracts/export/?format=txt
+```
+
+Tec-Tac UI 0.9.0 exposes the same catalog at **Administration -> Public Contracts**. The Markdown export is intended to be handed directly to module coding agents. It includes stable core Python contracts, live registered capabilities, live Scheduler actions, extension permissions, and the `/api/tfd/` HTTP boundary.
+
+The export is an integration contract, not permission to import provider internals. Backend modules still use Python `tec_tac.*` contracts, cross-module business operations use `tec_tac.capabilities`, and browser/external callers use authenticated HTTP.
+
+See `docs/developer-contracts.md`.
+

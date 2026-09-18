@@ -358,3 +358,7 @@ In particular:
 - do not blindly retry permanent version incompatibilities.
 
 A schedule may outlive the module/version state that existed when it was created, so dependency validation belongs in the execution path as well as package installation/enablement.
+## Live discovery/export
+
+Framework 1.10.0 includes registered scheduler actions in the Developer Contract catalog and Markdown/Text exports. Module authors can use `Administration -> Public Contracts` in UI 0.9.0 to produce a current handoff for another coding agent.
+

@@ -1,5 +1,7 @@
 # Tec-Tac Tactical RMM Extension Framework
 
+Version **1.10.0** adds a live Developer Contract catalog and Markdown/Text exports for module developers and coding agents. See `docs/developer-contracts.md`.
+
 Module interoperability: `docs/module-interoperability.md`.
 Core module developer reference: `docs/core-functions.md`.
 

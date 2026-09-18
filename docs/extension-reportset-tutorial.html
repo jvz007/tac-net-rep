@@ -1375,5 +1375,17 @@ communicator = get_capability(
   <p>If a scheduled action depends on another module, validate the dependency again when the run executes. A schedule may execute days or months after it was created. Permanent incompatibility should produce a clear scheduler-history diagnostic rather than repeated blind retries. Temporary provider outages may use the configured scheduler retry policy when recovery is realistic.</p>
 </section>
 
+
+<section id="developer-contract-catalog">
+  <h2>Live Developer Contract catalog (Framework 1.10.0+)</h2>
+  <p>Before integrating with another Tec-Tac module, inspect the live contract catalog rather than assuming an older module implementation is still current.</p>
+  <pre><code>GET /api/tfd/contracts/
+GET /api/tfd/contracts/export/?format=md
+GET /api/tfd/contracts/export/?format=txt</code></pre>
+  <p>Tec-Tac UI 0.9.0 exposes the same catalog at <strong>Administration -&gt; Public Contracts</strong>. The Markdown export is intended to be handed directly to module coding agents. It includes stable core Python contracts, live registered capabilities, live Scheduler actions, extension permissions, and the <code>/api/tfd/</code> HTTP boundary.</p>
+  <p>The export is an integration contract, not permission to import provider internals. Backend modules still use Python <code>tec_tac.*</code> contracts, cross-module business operations use <code>tec_tac.capabilities</code>, and browser/external callers use authenticated HTTP.</p>
+  <p>See <code>docs/developer-contracts.md</code>.</p>
+</section>
+
 </body>
 </html>

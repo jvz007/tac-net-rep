@@ -49,6 +49,8 @@ REQUIRED_FILES=(
     "${FRAMEWORK_DIR}/tec_tac/apps.py"
     "${FRAMEWORK_DIR}/tec_tac/urls.py"
     "${FRAMEWORK_DIR}/tec_tac/views.py"
+    "${FRAMEWORK_DIR}/tec_tac/contracts.py"
+    "${FRAMEWORK_DIR}/tec_tac/contract_views.py"
     "${FRAMEWORK_DIR}/tec_tac/module_manager.py"
     "${FRAMEWORK_DIR}/tec_tac/module_manager_v2.py"
     "${FRAMEWORK_DIR}/tec_tac/module_state.py"
@@ -78,6 +80,7 @@ REQUIRED_FILES=(
     "${REPO_ROOT}/tests/access-api-foundation.sh"
     "${REPO_ROOT}/tests/module-management-foundation.sh"
     "${REPO_ROOT}/tests/scheduler-foundation.sh"
+    "${REPO_ROOT}/tests/contracts-foundation.sh"
     "${FRAMEWORK_DIR}/tec_tac/scheduler.py"
     "${FRAMEWORK_DIR}/tec_tac/scheduler_views.py"
     "${FRAMEWORK_DIR}/tec_tac/tasks.py"
@@ -207,9 +210,15 @@ if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON
 fi
 
 log "Verifying Tec-Tac API routes."
-VERIFY_ROUTE_CODE="from django.urls import resolve; checks=[('/api/tfd/reporting/network-availability/','network-availability'),('/api/tfd/ui/context/','tec-tac-ui-context'),('/api/tfd/access/extensions/','tec-tac-extension-permissions'),('/api/tfd/modules/','tec-tac-module-catalog'),('/api/tfd/system/updates/','tec-tac-system-update-status'),('/api/tfd/capabilities/','tec-tac-capabilities'),('/api/tfd/scheduler/actions/','tec-tac-scheduler-actions'),('/api/tfd/scheduler/schedules/','tec-tac-scheduler-schedules'),('/api/tfd/scheduler/runs/','tec-tac-scheduler-runs'),('/api/tfd/modules/repositories/','tec-tac-module-repositories'),('/api/tfd/modules/catalog/online/','tec-tac-module-online-catalog')]; resolved=[(path, resolve(path).url_name) for path,_ in checks]; assert all(actual == expected for (path,actual),(_,expected) in zip(resolved,checks)), resolved; print('TEC-TAC route verification OK:', resolved)"
+VERIFY_ROUTE_CODE="from django.urls import resolve; checks=[('/api/tfd/reporting/network-availability/','network-availability'),('/api/tfd/ui/context/','tec-tac-ui-context'),('/api/tfd/access/extensions/','tec-tac-extension-permissions'),('/api/tfd/modules/','tec-tac-module-catalog'),('/api/tfd/system/updates/','tec-tac-system-update-status'),('/api/tfd/capabilities/','tec-tac-capabilities'),('/api/tfd/contracts/','tec-tac-contracts'),('/api/tfd/contracts/export/','tec-tac-contract-export'),('/api/tfd/scheduler/actions/','tec-tac-scheduler-actions'),('/api/tfd/scheduler/schedules/','tec-tac-scheduler-schedules'),('/api/tfd/scheduler/runs/','tec-tac-scheduler-runs'),('/api/tfd/modules/repositories/','tec-tac-module-repositories'),('/api/tfd/modules/catalog/online/','tec-tac-module-online-catalog')]; resolved=[(path, resolve(path).url_name) for path,_ in checks]; assert all(actual == expected for (path,actual),(_,expected) in zip(resolved,checks)), resolved; print('TEC-TAC route verification OK:', resolved)"
 if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_ROUTE_CODE}\""; then
     fail "Framework API route verification failed or timed out."
+fi
+
+log "Verifying Tec-Tac developer contract catalog."
+VERIFY_CONTRACT_CODE="from tec_tac.contracts import build_contract_catalog,render_markdown,render_text; c=build_contract_catalog(); assert c['framework_version']=='1.10.0', c['framework_version']; assert any(x['name']=='get_capability' for x in c['core']); assert any(x['route']=='/api/tfd/contracts/' for x in c['http']); assert '# Tec-Tac Public Contracts' in render_markdown(c); assert 'TEC-TAC PUBLIC CONTRACTS' in render_text(c); print('TEC-TAC developer contract catalog OK:', c['counts'])"
+if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_CONTRACT_CODE}\""; then
+    fail "Tec-Tac developer contract catalog verification failed or timed out."
 fi
 
 log "Verifying Tec-Tac scheduler/capability Celery task registration."

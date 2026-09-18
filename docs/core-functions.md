@@ -115,3 +115,7 @@ Do not POST from one Tec-Tac backend module to another module's localhost API me
 | Compare semantic version ranges | `version_satisfies()` |
 | Check Tec-Tac extension permission | `has_extension_permission()` |
 | Build cross-module audit source | `build_operation_context()` |
+## Live contract catalog
+
+Framework 1.10.0 exposes the current public core/runtime contracts through `GET /api/tfd/contracts/` and canonical Markdown/Text exports. See `docs/developer-contracts.md`.
+
