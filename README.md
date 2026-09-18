@@ -1,6 +1,6 @@
 # Tec-Tac Tactical RMM Extension Framework
 
-Version **1.0.2** builds on the stable Tec-Tac 1.0.0 foundation. It adds the complete extension/reportset developer tutorial plus generic package install and removal tooling for separately distributed extensions, while retaining the upgrade-safe bootstrap, validated paired **extensions** and **reportsets**, manifests/templates, inspection/scaffolding tools, lifecycle tests, and the working reference pair.
+Version **1.1.0** adds the framework-owned access/RBAC API while retaining the extension/reportset packaging and upgrade-safe bootstrap introduced in 1.0.x. It adds the complete extension/reportset developer tutorial plus generic package install and removal tooling for separately distributed extensions, while retaining the upgrade-safe bootstrap, validated paired **extensions** and **reportsets**, manifests/templates, inspection/scaffolding tools, lifecycle tests, and the working reference pair.
 
 The repository itself is the runtime root. It may be cloned anywhere; `/opt/tec-tac` is only the recommended location.
 
@@ -405,3 +405,7 @@ The uninstaller never deletes the Git checkout.
 ## Stable foundation status
 
 1.0.0 is the stable Tec-Tac framework baseline. The included `example` pair is reference-only; no new production monitoring functionality is introduced by this release. New functional work should consume this framework through `extensions/<extension-id>/` and `reportsets/<extension-id>/` rather than modifying Tactical tracked source.
+
+## Access API (1.1.0)
+
+The framework now exposes upgrade-safe authenticated endpoints under `/api/tfd/` for UI context and Tec-Tac extension role grants. Tactical's existing Role IDs remain the RBAC anchor; Tactical's own account and native role permissions remain authoritative. See `RELEASE_NOTES_1.1.0.md`.

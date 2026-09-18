@@ -1,7 +1,8 @@
 """Upgrade-safe Tec-Tac bootstrap for Tactical RMM.
 
 Loaded from Tactical's ignored local_settings.py. Tec-Tac discovers its own
-repository root and loads extension/reportset plugins through the registry.
+repository root, registers the framework API app, and loads extension/reportset
+plugins through the registry.
 """
 
 import sys
@@ -10,6 +11,8 @@ from django.apps import apps as django_apps
 from django.apps.registry import Apps
 
 from tec_tac.registry import get_plugins, iter_python_paths
+
+FRAMEWORK_APP = "tec_tac.apps.TecTacFrameworkConfig"
 
 
 def _register_plugin_paths(plugins) -> None:
@@ -20,12 +23,7 @@ def _register_plugin_paths(plugins) -> None:
 
 
 def load_extensions() -> None:
-    """Register Tec-Tac plugin paths and Django apps once per process.
-
-    ``load_extensions`` keeps its historical name because Tactical's ignored
-    local_settings.py already calls it. It now loads both extension and
-    reportset plugin types.
-    """
+    """Register Tec-Tac framework + plugin apps once per process."""
     plugins = get_plugins()
     _register_plugin_paths(plugins)
 
@@ -37,6 +35,9 @@ def load_extensions() -> None:
     def tec_tac_populate(self, installed_apps=None):
         if self is django_apps and installed_apps is not None:
             installed_apps = list(installed_apps)
+
+            if FRAMEWORK_APP not in installed_apps:
+                installed_apps.append(FRAMEWORK_APP)
 
             for plugin in plugins:
                 for app_config in plugin.django_apps:

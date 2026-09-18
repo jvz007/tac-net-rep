@@ -45,6 +45,10 @@ REQUIRED_FILES=(
     "${FRAMEWORK_DIR}/tec_tac/__init__.py"
     "${FRAMEWORK_DIR}/tec_tac/bootstrap.py"
     "${FRAMEWORK_DIR}/tec_tac/registry.py"
+    "${FRAMEWORK_DIR}/tec_tac/rbac.py"
+    "${FRAMEWORK_DIR}/tec_tac/apps.py"
+    "${FRAMEWORK_DIR}/tec_tac/urls.py"
+    "${FRAMEWORK_DIR}/tec_tac/views.py"
     "${APP_DIR}/__init__.py"
     "${APP_DIR}/apps.py"
     "${APP_DIR}/models.py"
@@ -62,6 +66,7 @@ REQUIRED_FILES=(
     "${REPO_ROOT}/scripts/install-extension.sh"
     "${REPO_ROOT}/scripts/remove-extension.sh"
     "${REPO_ROOT}/tests/framework-foundation.sh"
+    "${REPO_ROOT}/tests/access-api-foundation.sh"
     "${REPO_ROOT}/tests/registry-validation.sh"
     "${REPO_ROOT}/tests/tactical-update-survival.sh"
     "${REPO_ROOT}/tests/example-plugin.sh"
@@ -174,8 +179,8 @@ run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}'
 log "Applying ${APP_NAME} migrations."
 run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' migrate '${APP_NAME}' --noinput"
 
-log "Verifying repository-loaded app, RBAC, Report Manager, and API route."
-VERIFY_CODE="import tfdreporting; from django.apps import apps; from django.urls import resolve; expected='${LEGACY_REPORTING_DIR}/'; assert tfdreporting.__file__.startswith(expected), tfdreporting.__file__; m=apps.get_model('${APP_NAME}','${MODEL_NAME}'); p=apps.get_model('${APP_NAME}','ExtensionRolePermission'); from ee.reporting.utils import resolve_model; r=resolve_model(data_source={'model':'${MODEL_NAME}'}); assert r['model'] is m; from tfdreporting.rbac import REGISTERED_PERMISSIONS; assert len(REGISTERED_PERMISSIONS) >= 2; match=resolve('/api/tfd/reporting/network-availability/'); assert match.url_name == 'network-availability'; fields={f.name for f in m._meta.fields}; assert {'idempotency_key','ingested_by','received_at'} <= fields; c=m.objects.count(); print('TEC-TAC verification OK:', 'module=', tfdreporting.__file__, m._meta.label, p._meta.label, 'endpoint=', match.route, 'network_rows=', c)"
+log "Verifying framework API, repository-loaded app, RBAC, Report Manager, and API routes."
+VERIFY_CODE="import tfdreporting; from django.apps import apps; from django.urls import resolve; expected='${LEGACY_REPORTING_DIR}/'; assert tfdreporting.__file__.startswith(expected), tfdreporting.__file__; assert apps.is_installed('tec_tac'); m=apps.get_model('${APP_NAME}','${MODEL_NAME}'); p=apps.get_model('${APP_NAME}','ExtensionRolePermission'); from ee.reporting.utils import resolve_model; r=resolve_model(data_source={'model':'${MODEL_NAME}'}); assert r['model'] is m; from tec_tac.rbac import registered_permissions, permission_catalog; from tfdreporting.rbac import REGISTERED_PERMISSIONS; assert len(REGISTERED_PERMISSIONS) >= 2; match=resolve('/api/tfd/reporting/network-availability/'); assert match.url_name == 'network-availability'; ctx=resolve('/api/tfd/ui/context/'); assert ctx.url_name == 'tec-tac-ui-context'; access=resolve('/api/tfd/access/extensions/'); assert access.url_name == 'tec-tac-extension-permissions'; fields={f.name for f in m._meta.fields}; assert {'idempotency_key','ingested_by','received_at'} <= fields; c=m.objects.count(); print('TEC-TAC verification OK:', 'module=', tfdreporting.__file__, m._meta.label, p._meta.label, 'context=', ctx.route, 'access=', access.route, 'network_rows=', c)"
 run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_CODE}\""
 
 # Optional reporting permission assignment. Permissions are stored against the
