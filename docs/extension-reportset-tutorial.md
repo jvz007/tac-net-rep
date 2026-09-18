@@ -1469,3 +1469,90 @@ For the complete contract, including snapshot/dynamic targets, permissions, retr
 ```text
 docs/module-scheduling.md
 ```
+
+# Interdependent modules and soft failure
+
+When one extension integrates with another, depend on the provider's **public contract**, not its internal models, tables, helpers, views, or filesystem structure.
+
+Classify the relationship first:
+
+- **Hard dependency**: the module cannot fulfil its core purpose without the provider. Declare it in `dependencies` with an explicit compatible version range.
+- **Optional dependency**: the module works without the provider but enables extra features when it is available. Declare it in `optional_dependencies`.
+- **Framework service**: the capability is broadly useful across many modules and should live in Tec-Tac core rather than creating a dependency web. Scheduler is already a framework service; shared resource metadata/tags is the intended pattern for tag-based targeting.
+
+Example optional dependency:
+
+```json
+{
+  "optional_dependencies": {
+    "tags": ">=1.0.0,<2.0.0"
+  }
+}
+```
+
+## Required soft-failure behaviour
+
+A missing, disabled, broken, or incompatible dependency must not crash Tec-Tac or unrelated features in the consumer module.
+
+```text
+provider available
+    -> integration feature works
+
+provider unavailable
+    -> consumer still loads
+    -> unrelated features still work
+    -> dependent feature is disabled/degraded
+    -> UI states the reason
+    -> backend refuses the dependent operation cleanly
+```
+
+This applies even to hard dependencies after installation: Module Manager prevents known invalid dependency states, but runtime state can still drift because of faults, manual disablement, partial upgrades, or broken provider code.
+
+Do not put unguarded optional-provider imports in `AppConfig.ready()`.
+
+Do not hide a failed integration silently. Show whether the provider is missing, disabled, incompatible, unhealthy, or missing the required capability.
+
+## Current framework boundary
+
+Tec-Tac 1.9.0 implements the generic cross-module capability registry. Backend modules should consume provider contracts through `tec_tac.capabilities` rather than importing provider-private code or calling Tec-Tac HTTP APIs over localhost.
+
+Provider example:
+
+```python
+from tec_tac.capabilities import register_capability
+
+register_capability(
+    id="communicator.messaging",
+    module_id="communicator",
+    version="1.0.0",
+    provider=communicator_service,
+)
+```
+
+Consumer example:
+
+```python
+from tec_tac.capabilities import get_capability
+
+communicator = get_capability(
+    "communicator.messaging",
+    version=">=1,<2",
+    required=False,
+)
+```
+
+Use `capability_status()` to expose missing, disabled, unhealthy, incompatible, or unregistered states. Capability contract versions are independent from module package versions. Keep package lifecycle dependencies in `tec_tac.json` and re-check capability availability at execution time.
+
+See `docs/capabilities.md` and `docs/core-functions.md`.
+
+See the complete contract and examples in:
+
+```text
+docs/module-interoperability.md
+```
+
+## Scheduled integrations
+
+If a scheduled action depends on another module, validate that dependency again when the run executes. A schedule may execute days or months after it was created.
+
+Permanent incompatibility should produce a clear scheduler-history diagnostic rather than repeated blind retries. Temporary provider outages may use the configured scheduler retry policy when recovery is realistic.

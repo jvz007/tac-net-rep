@@ -1,6 +1,11 @@
 # Tec-Tac Tactical RMM Extension Framework
 
-Version **1.8.0** adds the first-class Tec-Tac Scheduler. See `docs/scheduler.md` and `docs/module-scheduling.md`.
+Module interoperability: `docs/module-interoperability.md`.
+Core module developer reference: `docs/core-functions.md`.
+
+Version **1.9.0** adds the cross-module capability registry. See `docs/capabilities.md`, `docs/core-functions.md`, and `docs/module-interoperability.md`.
+
+Version **1.8.0** added the first-class Tec-Tac Scheduler. See `docs/scheduler.md` and `docs/module-scheduling.md`.
 
 Historical release notes are archived under `docs/releases/`; only the current release note remains at repository root.
 

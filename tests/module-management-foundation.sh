@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail(){ echo "[TEST] FAIL: $*" >&2; exit 1; }
 
-[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.8.0" ]] || fail "VERSION is not 1.8.0"
+[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.9.0" ]] || fail "VERSION is not 1.9.0"
 for f in \
   framwork/tec_tac/module_manager.py \
   framwork/tec_tac/module_manager_v2.py \
@@ -12,6 +12,8 @@ for f in \
   framwork/tec_tac/module_repository.py \
   framwork/tec_tac/module_repository_views.py \
   framwork/tec_tac/system_update.py \
+  framwork/tec_tac/capabilities.py \
+  framwork/tec_tac/capability_views.py \
   scripts/module-job-helper.py \
   scripts/module-v2-job-helper.py \
   scripts/system-update-helper.py \
@@ -115,6 +117,15 @@ grep -q 'package_sha256' "${ROOT}/framwork/tec_tac/module_repository.py" || fail
 grep -q 'repositories/cache' "${ROOT}/install.sh" || fail "repository cache runtime directory missing"
 grep -q 'source_provenance' "${ROOT}/framwork/tec_tac/module_manager_v2.py" || fail "online source provenance handoff missing"
 
+
+# 1.9.0 capability registry foundation
+grep -q 'def register_capability' "${ROOT}/framwork/tec_tac/capabilities.py" || fail "capability registration missing"
+grep -q 'def get_capability' "${ROOT}/framwork/tec_tac/capabilities.py" || fail "capability lookup missing"
+grep -q 'def capability_status' "${ROOT}/framwork/tec_tac/capabilities.py" || fail "capability status missing"
+grep -q 'capabilities/' "${ROOT}/framwork/tec_tac/urls.py" || fail "capability API routes missing"
+grep -q 'tec_tac.capability_probe' "${ROOT}/framwork/tec_tac/tasks.py" || fail "capability Celery probe missing"
+grep -q 'systemctl restart celery' "${ROOT}/scripts/install-extension.sh" || fail "install lifecycle worker refresh missing"
+grep -q 'systemctl restart celery' "${ROOT}/scripts/remove-extension.sh" || fail "remove lifecycle worker refresh missing"
 
 # Current registry schema must accept v2 dependency/runtime metadata even in a
 # fresh process that imports tec_tac.registry directly (the install-extension

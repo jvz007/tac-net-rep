@@ -206,6 +206,16 @@ bash "${REPO_ROOT}/scripts/reload-rmm-uwsgi.sh"
 systemctl is-active --quiet rmm || fail "rmm is not active after graceful uWSGI reload."
 log "rmm: active (graceful uWSGI reload complete)"
 
+# Remove stale in-memory capability/action registrations from the worker.
+if [[ "${TEC_TAC_DEFER_WORKER_REFRESH:-0}" != "1" ]]; then
+    log "Restarting Tactical Celery worker to remove stale module capabilities/actions."
+    systemctl restart celery
+    systemctl is-active --quiet celery || fail "celery is not active after module runtime refresh."
+    log "celery: active (module runtime refreshed)"
+else
+    log "Celery worker refresh deferred to parent module lifecycle job."
+fi
+
 log "Extension/reportset '${PLUGIN_ID}' removed successfully."
 log "Backup retained at: ${BACKUP_DIR}"
 

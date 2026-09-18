@@ -527,6 +527,19 @@ for config_path in declared:
     print(f"[TEC-TAC] Fresh-process verification OK: {cfg.label}")
 '
 
+# Capability and scheduled-action registrations live in Django/Celery process
+# memory. Refresh the worker after extension install/upgrade so unattended
+# execution sees the same module contracts as the web runtime. Bundle installs
+# may defer this and refresh once after the complete dependency plan.
+if [[ "${TEC_TAC_DEFER_WORKER_REFRESH:-0}" != "1" ]]; then
+    log "Restarting Tactical Celery worker to refresh module capabilities/actions."
+    systemctl restart celery
+    systemctl is-active --quiet celery || fail "celery is not active after module runtime refresh."
+    log "celery: active (module runtime refreshed)"
+else
+    log "Celery worker refresh deferred to parent module lifecycle job."
+fi
+
 log "Installed extension/reportset '${PLUGIN_ID}' successfully."
 log "Extension: ${DEST_EXTENSION}"
 log "Reportset: ${DEST_REPORTSET}"

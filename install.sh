@@ -207,15 +207,21 @@ if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON
 fi
 
 log "Verifying Tec-Tac API routes."
-VERIFY_ROUTE_CODE="from django.urls import resolve; checks=[('/api/tfd/reporting/network-availability/','network-availability'),('/api/tfd/ui/context/','tec-tac-ui-context'),('/api/tfd/access/extensions/','tec-tac-extension-permissions'),('/api/tfd/modules/','tec-tac-module-catalog'),('/api/tfd/system/updates/','tec-tac-system-update-status'),('/api/tfd/scheduler/actions/','tec-tac-scheduler-actions'),('/api/tfd/scheduler/schedules/','tec-tac-scheduler-schedules'),('/api/tfd/scheduler/runs/','tec-tac-scheduler-runs'),('/api/tfd/modules/repositories/','tec-tac-module-repositories'),('/api/tfd/modules/catalog/online/','tec-tac-module-online-catalog')]; resolved=[(path, resolve(path).url_name) for path,_ in checks]; assert all(actual == expected for (path,actual),(_,expected) in zip(resolved,checks)), resolved; print('TEC-TAC route verification OK:', resolved)"
+VERIFY_ROUTE_CODE="from django.urls import resolve; checks=[('/api/tfd/reporting/network-availability/','network-availability'),('/api/tfd/ui/context/','tec-tac-ui-context'),('/api/tfd/access/extensions/','tec-tac-extension-permissions'),('/api/tfd/modules/','tec-tac-module-catalog'),('/api/tfd/system/updates/','tec-tac-system-update-status'),('/api/tfd/capabilities/','tec-tac-capabilities'),('/api/tfd/scheduler/actions/','tec-tac-scheduler-actions'),('/api/tfd/scheduler/schedules/','tec-tac-scheduler-schedules'),('/api/tfd/scheduler/runs/','tec-tac-scheduler-runs'),('/api/tfd/modules/repositories/','tec-tac-module-repositories'),('/api/tfd/modules/catalog/online/','tec-tac-module-online-catalog')]; resolved=[(path, resolve(path).url_name) for path,_ in checks]; assert all(actual == expected for (path,actual),(_,expected) in zip(resolved,checks)), resolved; print('TEC-TAC route verification OK:', resolved)"
 if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_ROUTE_CODE}\""; then
     fail "Framework API route verification failed or timed out."
 fi
 
-log "Verifying Tec-Tac scheduler Celery task registration."
-VERIFY_SCHEDULER_CODE="from tacticalrmm.celery import app; app.autodiscover_tasks(force=True); assert 'tec_tac.execute_schedule_run' in app.tasks, sorted(k for k in app.tasks if k.startswith('tec_tac')); print('TEC-TAC scheduler Celery task OK')"
+log "Verifying Tec-Tac scheduler/capability Celery task registration."
+VERIFY_SCHEDULER_CODE="from tacticalrmm.celery import app; app.autodiscover_tasks(force=True); assert 'tec_tac.execute_schedule_run' in app.tasks and 'tec_tac.capability_probe' in app.tasks, sorted(k for k in app.tasks if k.startswith('tec_tac')); print('TEC-TAC scheduler/capability Celery tasks OK')"
 if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_SCHEDULER_CODE}\""; then
-    fail "Tec-Tac scheduler Celery task registration failed or timed out."
+    fail "Tec-Tac scheduler/capability Celery task registration failed or timed out."
+fi
+
+log "Verifying Tec-Tac capability registry."
+VERIFY_CAPABILITY_CODE="from tec_tac.capabilities import register_capability,get_capability,capability_status; provider=object(); register_capability(id='tec-tac.install-probe',module_id='tec-tac',version='1.0.0',provider=provider); assert get_capability('tec-tac.install-probe',version='>=1,<2') is provider; status=capability_status('tec-tac.install-probe'); assert status['available'] and status['state']=='available', status; print('TEC-TAC capability registry OK:', status['id'], status['capability_version'])"
+if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_CAPABILITY_CODE}\""; then
+    fail "Tec-Tac capability registry verification failed or timed out."
 fi
 
 MODULE_STATE_ROOT="/var/lib/tec-tac/module-manager"

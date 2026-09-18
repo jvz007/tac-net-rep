@@ -165,7 +165,7 @@ def require_root_owned(path):
         raise RuntimeError(f"refusing non-root-owned or writable lifecycle script: {path}")
 
 
-def sync_and_reload(config, log):
+def sync_and_reload(config, log, *, refresh_workers=False):
     ui_sync = Path(config.get("UI_SYNC_SCRIPT", "/opt/tec-tac-ui/scripts/sync-modules.sh"))
     ui_root = config.get("UI_ROOT", "/var/lib/tec-tac/ui/tec-tac")
     reload_script = Path(config.get("REPO_ROOT", "/opt/tec-tac")) / "scripts/reload-rmm-uwsgi.sh"
@@ -181,6 +181,15 @@ def sync_and_reload(config, log):
         result = subprocess.run(["bash", str(reload_script)], stdout=log, stderr=subprocess.STDOUT, text=True)
         if result.returncode:
             raise RuntimeError(f"Tactical graceful reload failed with status {result.returncode}")
+    if refresh_workers:
+        log.write("[TEC-TAC-MODULE-V2] restarting Tactical Celery worker for module runtime refresh\n")
+        log.flush()
+        result = subprocess.run(["systemctl", "restart", "celery"], stdout=log, stderr=subprocess.STDOUT, text=True)
+        if result.returncode:
+            raise RuntimeError(f"Tactical Celery restart failed with status {result.returncode}")
+        result = subprocess.run(["systemctl", "is-active", "--quiet", "celery"], stdout=log, stderr=subprocess.STDOUT, text=True)
+        if result.returncode:
+            raise RuntimeError("Tactical Celery is not active after module runtime refresh")
 
 
 def backup_modules(repo_root, module_ids, backup_root):
@@ -238,7 +247,9 @@ def install_packages(repo_root, packages, order, log, backup_root):
             command.append("--replace")
         log.write(f"[TEC-TAC-MODULE-V2] {'replacing' if replace else 'installing'} {module_id}\n")
         log.flush()
-        result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, text=True)
+        env = os.environ.copy()
+        env["TEC_TAC_DEFER_WORKER_REFRESH"] = "1"
+        result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, text=True, env=env)
         if result.returncode:
             raise RuntimeError(f"install failed for {module_id} with status {result.returncode}")
 
@@ -350,7 +361,7 @@ def run_job(job_id):
                 touched = affected
                 job["stage"] = "runtime-sync"
                 atomic_json(path, job)
-                sync_and_reload(config, log)
+                sync_and_reload(config, log, refresh_workers=True)
             elif job["action"] == "visibility":
                 module_id = str(job.get("plugin_id") or "")
                 if not PLUGIN_RE.fullmatch(module_id):
@@ -373,14 +384,14 @@ def run_job(job_id):
                         remember_version(action["id"], action.get("version") or "0.0.0", sources.get(action["id"]))
                     job["stage"] = "runtime-sync"
                     atomic_json(path, job)
-                    sync_and_reload(config, log)
+                    sync_and_reload(config, log, refresh_workers=True)
                     cleanup_successful_stage(job, log)
                 except Exception:
                     job["stage"] = "rollback"
                     atomic_json(path, job)
                     restore_modules(repo_root, order, backup, log)
                     try:
-                        sync_and_reload(config, log)
+                        sync_and_reload(config, log, refresh_workers=True)
                     except Exception as rollback_exc:
                         log.write(f"[TEC-TAC-MODULE-V2] rollback runtime sync failed: {rollback_exc}\n")
                     raise

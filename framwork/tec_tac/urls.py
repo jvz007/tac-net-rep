@@ -1,3 +1,4 @@
+from .capability_views import CapabilityListView, CapabilityDetailView
 from django.urls import path
 from .views import (
     ExtensionPermissionCatalogView, ModuleCatalogView, ModuleJobView,
@@ -20,6 +21,8 @@ from .module_v2_views import (
     ModuleV2StateView, ModuleV2VisibilityView, ModuleV2RemoveCheckView, ModuleV2JobView,
 )
 urlpatterns = [
+    path("capabilities/", CapabilityListView.as_view(), name="tec-tac-capabilities"),
+    path("capabilities/<str:capability_id>/", CapabilityDetailView.as_view(), name="tec-tac-capability-detail"),
     path("scheduler/actions/", SchedulerActionListView.as_view(), name="tec-tac-scheduler-actions"),
     path("scheduler/schedules/", SchedulerListView.as_view(), name="tec-tac-scheduler-schedules"),
     path("scheduler/schedules/<uuid:schedule_id>/", SchedulerDetailView.as_view(), name="tec-tac-scheduler-schedule-detail"),

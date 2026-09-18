@@ -1320,5 +1320,60 @@ remain logged in.</p>
 permissions, retry/concurrency behaviour, Communicator and Patch
 Management examples, see:</p>
 <pre class="text"><code>docs/module-scheduling.md</code></pre>
+
+<section>
+  <h1>Interdependent modules and soft failure</h1>
+  <p>When one extension integrates with another, depend on the provider's <strong>public contract</strong>, not its internal models, tables, helpers, views, or filesystem structure.</p>
+  <p>Classify the relationship first:</p>
+  <ul>
+    <li><strong>Hard dependency:</strong> the module cannot fulfil its core purpose without the provider. Declare it in <code>dependencies</code> with an explicit compatible version range.</li>
+    <li><strong>Optional dependency:</strong> the module works without the provider but gains extra features when it is available. Declare it in <code>optional_dependencies</code>.</li>
+    <li><strong>Framework service:</strong> a capability used broadly across modules should live in Tec-Tac core. Scheduler is already a framework service; shared resource metadata/tags is the intended pattern for tag-based targeting.</li>
+  </ul>
+  <pre><code>{
+  "optional_dependencies": {
+    "tags": ">=1.0.0,&lt;2.0.0"
+  }
+}</code></pre>
+
+  <h2>Required soft-failure behaviour</h2>
+  <p>A missing, disabled, broken, or incompatible dependency must not crash Tec-Tac or unrelated features in the consumer module.</p>
+  <pre><code>provider available
+    -&gt; integration feature works
+
+provider unavailable
+    -&gt; consumer still loads
+    -&gt; unrelated features still work
+    -&gt; dependent feature is disabled/degraded
+    -&gt; UI states the reason
+    -&gt; backend refuses the dependent operation cleanly</code></pre>
+  <p>This applies even to hard dependencies after installation. Module Manager prevents known invalid dependency states, but runtime state can still drift because of faults, manual disablement, partial upgrades, or broken provider code.</p>
+  <p>Do not put unguarded optional-provider imports in <code>AppConfig.ready()</code>. Do not hide a failed integration silently; show whether the provider is missing, disabled, incompatible, unhealthy, or missing the required capability.</p>
+
+  <h2>Current framework boundary</h2>
+  <p>Tec-Tac 1.9.0 implements the generic cross-module capability registry. Backend modules should consume provider contracts through <code>tec_tac.capabilities</code> rather than importing provider-private code or calling Tec-Tac HTTP APIs over localhost.</p>
+  <pre><code>from tec_tac.capabilities import register_capability, get_capability
+
+register_capability(
+    id="communicator.messaging",
+    module_id="communicator",
+    version="1.0.0",
+    provider=communicator_service,
+)
+
+communicator = get_capability(
+    "communicator.messaging",
+    version=">=1,&lt;2",
+    required=False,
+)</code></pre>
+  <p>Use <code>capability_status()</code> for missing, disabled, unhealthy, incompatible, or unregistered states. Capability contract versions are independent from module package versions. Package lifecycle dependencies remain in <code>tec_tac.json</code>, and capability availability must be checked again at execution time.</p>
+  <p>See <code>docs/capabilities.md</code> and <code>docs/core-functions.md</code> for the supported functions and import paths.</p>
+  <p>Until that registry exists, keep integration behind a small adapter and use only a provider API/service contract explicitly documented by the provider. Guard availability and errors at that boundary.</p>
+  <p>See <code>docs/module-interoperability.md</code> for the full contract and examples.</p>
+
+  <h2>Scheduled integrations</h2>
+  <p>If a scheduled action depends on another module, validate the dependency again when the run executes. A schedule may execute days or months after it was created. Permanent incompatibility should produce a clear scheduler-history diagnostic rather than repeated blind retries. Temporary provider outages may use the configured scheduler retry policy when recovery is realistic.</p>
+</section>
+
 </body>
 </html>

@@ -6,6 +6,7 @@ from django.utils import timezone
 from tacticalrmm.celery import app
 
 from .models import TecTacScheduleRun
+from .capabilities import capability_status
 from .scheduler import SchedulerError, get_scheduled_action
 
 
@@ -70,3 +71,9 @@ def execute_schedule_run(self, run_id: str):
         schedule.last_run_at = run.finished_at
         schedule.save(update_fields=["last_run_at", "updated_at"])
         raise
+
+
+@app.task(name="tec_tac.capability_probe")
+def capability_probe(capability_id: str, version: str | None = None):
+    """Return capability state from the Celery worker process for diagnostics."""
+    return capability_status(capability_id, version=version)

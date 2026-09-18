@@ -317,3 +317,44 @@ Operations -> Schedules
 ```
 
 A module may also expose a context-specific `Schedule` button from its own page, but it should create/edit the same framework `TecTacSchedule` records rather than maintain a second schedule store.
+
+## Inter-module dependencies inside scheduled actions
+
+A scheduled action may depend on another module or framework capability, but it must follow the Tec-Tac interoperability rules in `docs/module-interoperability.md`.
+
+Framework 1.9.0 scheduled handlers resolve another module through the Python capability registry, not HTTP:
+
+```python
+from tec_tac.capabilities import get_capability, build_operation_context
+
+def install_approved_patches(context):
+    communicator = get_capability(
+        "communicator.messaging",
+        version=">=1,<2",
+        required=False,
+    )
+    if communicator:
+        communicator.send(
+            ...,
+            context=build_operation_context(
+                source_module="patching",
+                source_action=context["action_id"],
+                source_run_id=context["run_id"],
+                requested_by="system",
+            ),
+        )
+```
+
+The Scheduler does not resolve provider internals. The scheduled action owns the capability lookup and soft-failure decision.
+
+In particular:
+
+- do not import another module's private models/helpers as the integration contract;
+- declare hard or optional version dependencies in `tec_tac.json`;
+- re-check dependency availability when the scheduled run actually starts;
+- soft fail the dependent action if the provider is missing, disabled, incompatible, or unhealthy;
+- keep unrelated features in the consumer module available;
+- record a clear dependency error in scheduler history;
+- do not blindly retry permanent version incompatibilities.
+
+A schedule may outlive the module/version state that existed when it was created, so dependency validation belongs in the execution path as well as package installation/enablement.
