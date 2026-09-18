@@ -1,5 +1,7 @@
 # Tec-Tac Tactical RMM Extension Framework
 
+Version **1.8.0** adds the first-class Tec-Tac Scheduler. See `docs/scheduler.md`.
+
 Version **1.7.1** is a corrective release for repository-installed modules: the canonical registry accepts v2 dependency/runtime metadata in every install path.
 Version **1.7.0** adds multi-repository module sources, cached repository health, online catalog/update reporting, SHA-256 verified online staging, and installed source provenance while retaining the existing Module Management v2 installer.
 Version **1.6.1** fixes module visibility precedence so package-defined hidden/visible settings are defaults that can always be overridden by Module Manager.

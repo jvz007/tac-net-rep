@@ -2,12 +2,8 @@
 import sys
 from django.apps import apps as django_apps
 from django.apps.registry import Apps
-from tec_tac import registry as registry_module
 from tec_tac.module_state import filter_enabled_plugins
 
-registry_module.SUPPORTED_KEYS = frozenset(set(registry_module.SUPPORTED_KEYS) | {
-    "dependencies", "optional_dependencies", "requires",
-})
 from tec_tac.registry import get_plugins, iter_python_paths
 
 FRAMEWORK_APP = "tec_tac.apps.TecTacFrameworkConfig"

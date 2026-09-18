@@ -68,6 +68,7 @@ def _native_capabilities(user):
         "manage_roles": allowed("can_manage_roles"),
         "list_modules": True,
         "manage_modules": allowed("can_do_server_maint"),
+        "manage_schedules": allowed("can_do_server_maint"),
     }
 
 

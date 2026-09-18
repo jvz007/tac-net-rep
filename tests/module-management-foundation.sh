@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail(){ echo "[TEST] FAIL: $*" >&2; exit 1; }
 
-[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.7.1" ]] || fail "VERSION is not 1.7.1"
+[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.8.0" ]] || fail "VERSION is not 1.8.0"
 for f in \
   framwork/tec_tac/module_manager.py \
   framwork/tec_tac/module_manager_v2.py \
@@ -148,3 +148,11 @@ with tempfile.TemporaryDirectory() as tmp:
     assert len(plugins) == 2
 print("[TEST] v2 registry schema accepted in fresh process")
 PY_REGISTRY_V2
+
+
+# 1.8.0 scheduler foundation
+grep -q 'class TecTacSchedule' "${ROOT}/framwork/tec_tac/models.py" || fail "scheduler model missing"
+grep -q 'register_scheduled_action' "${ROOT}/framwork/tec_tac/scheduler.py" || fail "scheduled action registry missing"
+grep -q 'tec_tac.execute_schedule_run' "${ROOT}/framwork/tec_tac/tasks.py" || fail "scheduler Celery task missing"
+grep -q 'scheduler/schedules/' "${ROOT}/framwork/tec_tac/urls.py" || fail "scheduler routes missing"
+grep -q 'tec-tac-scheduler.timer' "${ROOT}/install.sh" || fail "scheduler timer installation missing"

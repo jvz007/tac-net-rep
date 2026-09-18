@@ -77,6 +77,13 @@ REQUIRED_FILES=(
     "${REPO_ROOT}/tests/framework-foundation.sh"
     "${REPO_ROOT}/tests/access-api-foundation.sh"
     "${REPO_ROOT}/tests/module-management-foundation.sh"
+    "${REPO_ROOT}/tests/scheduler-foundation.sh"
+    "${FRAMEWORK_DIR}/tec_tac/scheduler.py"
+    "${FRAMEWORK_DIR}/tec_tac/scheduler_views.py"
+    "${FRAMEWORK_DIR}/tec_tac/tasks.py"
+    "${FRAMEWORK_DIR}/tec_tac/models.py"
+    "${FRAMEWORK_DIR}/tec_tac/migrations/0001_scheduler.py"
+    "${FRAMEWORK_DIR}/tec_tac/management/commands/tec_tac_scheduler_tick.py"
     "${REPO_ROOT}/tests/registry-validation.sh"
     "${REPO_ROOT}/tests/tactical-update-survival.sh"
     "${REPO_ROOT}/tests/example-plugin.sh"
@@ -190,16 +197,25 @@ run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}'
 log "Applying ${APP_NAME} migrations."
 run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' migrate '${APP_NAME}' --noinput"
 
+log "Applying Tec-Tac framework migrations."
+run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' migrate tec_tac --noinput"
+
 log "Verifying framework models, RBAC, and Report Manager integration."
-VERIFY_MODEL_CODE="import tfdreporting; from django.apps import apps; expected='${LEGACY_REPORTING_DIR}/'; assert tfdreporting.__file__.startswith(expected), tfdreporting.__file__; assert apps.is_installed('tec_tac'); m=apps.get_model('${APP_NAME}','${MODEL_NAME}'); p=apps.get_model('${APP_NAME}','ExtensionRolePermission'); from ee.reporting.utils import resolve_model; r=resolve_model(data_source={'model':'${MODEL_NAME}'}); assert r['model'] is m; from tfdreporting.rbac import REGISTERED_PERMISSIONS; assert len(REGISTERED_PERMISSIONS) >= 2; fields={f.name for f in m._meta.fields}; assert {'idempotency_key','ingested_by','received_at'} <= fields; print('TEC-TAC model/RBAC verification OK:', tfdreporting.__file__, m._meta.label, p._meta.label)"
+VERIFY_MODEL_CODE="import tfdreporting; from django.apps import apps; expected='${LEGACY_REPORTING_DIR}/'; assert tfdreporting.__file__.startswith(expected), tfdreporting.__file__; assert apps.is_installed('tec_tac'); m=apps.get_model('${APP_NAME}','${MODEL_NAME}'); p=apps.get_model('${APP_NAME}','ExtensionRolePermission'); from ee.reporting.utils import resolve_model; r=resolve_model(data_source={'model':'${MODEL_NAME}'}); assert r['model'] is m; from tfdreporting.rbac import REGISTERED_PERMISSIONS; assert len(REGISTERED_PERMISSIONS) >= 2; fields={f.name for f in m._meta.fields}; assert {'idempotency_key','ingested_by','received_at'} <= fields; sm=apps.get_model('tec_tac','TecTacSchedule'); sr=apps.get_model('tec_tac','TecTacScheduleRun'); print('TEC-TAC model/RBAC verification OK:', tfdreporting.__file__, m._meta.label, p._meta.label, sm._meta.label, sr._meta.label)"
 if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_MODEL_CODE}\""; then
     fail "Framework model/RBAC verification failed or timed out."
 fi
 
 log "Verifying Tec-Tac API routes."
-VERIFY_ROUTE_CODE="from django.urls import resolve; checks=[('/api/tfd/reporting/network-availability/','network-availability'),('/api/tfd/ui/context/','tec-tac-ui-context'),('/api/tfd/access/extensions/','tec-tac-extension-permissions'),('/api/tfd/modules/','tec-tac-module-catalog'),('/api/tfd/system/updates/','tec-tac-system-update-status'),('/api/tfd/modules/repositories/','tec-tac-module-repositories'),('/api/tfd/modules/catalog/online/','tec-tac-module-online-catalog')]; resolved=[(path, resolve(path).url_name) for path,_ in checks]; assert all(actual == expected for (path,actual),(_,expected) in zip(resolved,checks)), resolved; print('TEC-TAC route verification OK:', resolved)"
+VERIFY_ROUTE_CODE="from django.urls import resolve; checks=[('/api/tfd/reporting/network-availability/','network-availability'),('/api/tfd/ui/context/','tec-tac-ui-context'),('/api/tfd/access/extensions/','tec-tac-extension-permissions'),('/api/tfd/modules/','tec-tac-module-catalog'),('/api/tfd/system/updates/','tec-tac-system-update-status'),('/api/tfd/scheduler/actions/','tec-tac-scheduler-actions'),('/api/tfd/scheduler/schedules/','tec-tac-scheduler-schedules'),('/api/tfd/scheduler/runs/','tec-tac-scheduler-runs'),('/api/tfd/modules/repositories/','tec-tac-module-repositories'),('/api/tfd/modules/catalog/online/','tec-tac-module-online-catalog')]; resolved=[(path, resolve(path).url_name) for path,_ in checks]; assert all(actual == expected for (path,actual),(_,expected) in zip(resolved,checks)), resolved; print('TEC-TAC route verification OK:', resolved)"
 if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_ROUTE_CODE}\""; then
     fail "Framework API route verification failed or timed out."
+fi
+
+log "Verifying Tec-Tac scheduler Celery task registration."
+VERIFY_SCHEDULER_CODE="from tacticalrmm.celery import app; app.autodiscover_tasks(force=True); assert 'tec_tac.execute_schedule_run' in app.tasks, sorted(k for k in app.tasks if k.startswith('tec_tac')); print('TEC-TAC scheduler Celery task OK')"
+if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_SCHEDULER_CODE}\""; then
+    fail "Tec-Tac scheduler Celery task registration failed or timed out."
 fi
 
 MODULE_STATE_ROOT="/var/lib/tec-tac/module-manager"
@@ -319,6 +335,40 @@ if command -v visudo >/dev/null 2>&1; then
     visudo -cf "${SYSTEM_UPDATE_SUDOERS}" >/dev/null || fail "System update sudoers validation failed."
 fi
 log "Installed independent Tec-Tac system update worker: ${SYSTEM_UPDATE_HELPER}"
+
+
+SCHEDULER_SERVICE="/etc/systemd/system/tec-tac-scheduler.service"
+SCHEDULER_TIMER="/etc/systemd/system/tec-tac-scheduler.timer"
+cat > "${SCHEDULER_SERVICE}" <<EOF
+[Unit]
+Description=Tec-Tac Scheduler Tick
+After=network.target redis-server.service
+
+[Service]
+Type=oneshot
+User=${TACTICAL_USER}
+Group=${TACTICAL_GROUP}
+WorkingDirectory=${BACKEND_DIR}
+ExecStart=${VENV_PYTHON} ${MANAGE_PY} tec_tac_scheduler_tick
+EOF
+cat > "${SCHEDULER_TIMER}" <<EOF
+[Unit]
+Description=Run Tec-Tac Scheduler every minute
+
+[Timer]
+OnCalendar=*-*-* *:*:00
+Persistent=true
+AccuracySec=1s
+Unit=tec-tac-scheduler.service
+
+[Install]
+WantedBy=timers.target
+EOF
+chown root:root "${SCHEDULER_SERVICE}" "${SCHEDULER_TIMER}"
+chmod 0644 "${SCHEDULER_SERVICE}" "${SCHEDULER_TIMER}"
+systemctl daemon-reload
+systemctl enable --now tec-tac-scheduler.timer >/dev/null
+log "Installed Tec-Tac scheduler timer: tec-tac-scheduler.timer"
 
 
 # Optional reporting permission assignment. Permissions are stored against the
