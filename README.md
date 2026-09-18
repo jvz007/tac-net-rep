@@ -4,6 +4,15 @@ Version **1.2.1** adds public extension UI support on top of the 1.2.0 framework
 
 The repository itself is the runtime root. It may be cloned anywhere; `/opt/tec-tac` is only the recommended location.
 
+## 1.2.3 highlights
+
+- Structured module-upload diagnostics for production HTTP failures.
+- Stronger AppConfig, model, migration, post-restart, and UI deployment verification.
+- Module jobs expose lifecycle stage and error type.
+- Framework APIs are grouped under `Tec-Tac Framework` in Swagger/OpenAPI.
+- Extension documentation now requires a stable extension-specific Swagger tag.
+
+
 ## Foundation layout
 
 ```text

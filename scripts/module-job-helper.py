@@ -103,6 +103,7 @@ def claim_job(job_id):
         job["package_path"] = str(target)
 
     job["status"] = "dispatched"
+    job["stage"] = "dispatched"
     atomic_json(path, job)
     os.chown(path, 0, gid)
     os.chmod(path, 0o640)
@@ -146,6 +147,7 @@ def run_job(job_id):
 
     log_path = LOGS_ROOT / f"{job_id}.log"
     job["status"] = "running"
+    job["stage"] = "lifecycle"
     job["started_at"] = now()
     atomic_json(path, job)
 
@@ -166,6 +168,8 @@ def run_job(job_id):
             result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, text=True)
             rc = result.returncode
             if rc == 0 and ui_sync.is_file():
+                job["stage"] = "ui-sync"
+                atomic_json(path, job)
                 log.write("[TEC-TAC-MODULE] synchronizing deployed UI modules\n")
                 log.flush()
                 sync_env = os.environ.copy()
@@ -174,12 +178,24 @@ def run_job(job_id):
                 if sync.returncode != 0:
                     rc = sync.returncode
                     log.write(f"[TEC-TAC-MODULE] UI module sync failed rc={rc}\n")
+                elif job["action"] == "install":
+                    manifest = repo_root / "extensions" / job["plugin_id"] / "tec_tac_ui.json"
+                    if manifest.is_file():
+                        module_dir = Path(ui_root) / "modules" / job["plugin_id"]
+                        if not module_dir.is_dir():
+                            rc = 1
+                            job["error"] = f"UI verification failed: {module_dir} was not deployed."
+                            job["error_type"] = "UiVerificationError"
+                            log.write(f"[TEC-TAC-MODULE] {job['error']}\n")
+                        else:
+                            log.write(f"[TEC-TAC-MODULE] UI verification OK: {module_dir}\n")
             elif rc == 0:
                 log.write(f"[TEC-TAC-MODULE] UI sync script not found at {ui_sync}; backend install succeeded\n")
     except Exception as exc:
         with log_path.open("a", encoding="utf-8") as log:
             log.write(f"[TEC-TAC-MODULE] worker exception: {exc}\n")
         job["error"] = str(exc)
+        job["error_type"] = exc.__class__.__name__
         rc = 1
 
     try:
@@ -190,7 +206,9 @@ def run_job(job_id):
     job["finished_at"] = now()
     if rc == 0:
         job["status"] = "succeeded"
+        job["stage"] = "complete"
         job["error"] = None
+        job["error_type"] = None
         if job["action"] == "install":
             try:
                 Path(job["package_path"]).unlink(missing_ok=True)
@@ -200,6 +218,7 @@ def run_job(job_id):
         job["status"] = "failed"
         if not job.get("error"):
             job["error"] = f"Lifecycle command exited with status {rc}. See log tail."
+            job["error_type"] = "LifecycleCommandError"
     atomic_json(path, job)
 
 
@@ -207,8 +226,10 @@ def mark_failed(job_id, error):
     try:
         path, job = load_job(job_id)
         job["status"] = "failed"
+        job["stage"] = job.get("stage") or "worker"
         job["finished_at"] = now()
         job["error"] = str(error) or error.__class__.__name__
+        job["error_type"] = error.__class__.__name__
         atomic_json(path, job)
     except Exception:
         pass

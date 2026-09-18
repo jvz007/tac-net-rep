@@ -1360,3 +1360,24 @@ entry and public.entry must share the same UI bundle directory when both are pre
 ```
 
 A public page does not grant anonymous access to backend data. If an API endpoint is intended to be public, configure that endpoint explicitly (for example with DRF `AllowAny`) and validate all public inputs as untrusted.
+
+---
+
+## Swagger / OpenAPI grouping convention
+
+Every extension that exposes HTTP API endpoints must give its endpoints an explicit `drf_spectacular` tag. This keeps Tactical's Swagger UI readable as more Tec-Tac extensions are installed.
+
+Use one stable tag for the extension, normally its display name. For example, UserInvite endpoints should use `UserInvite`; framework-owned endpoints use `Tec-Tac Framework`; TFD Reporting uses `TFD Reporting`.
+
+```python
+from drf_spectacular.utils import extend_schema, extend_schema_view
+
+@extend_schema_view(
+    get=extend_schema(tags=["UserInvite"], summary="List user invitations"),
+    post=extend_schema(tags=["UserInvite"], summary="Create a user invitation"),
+)
+class UserInviteListCreateView(...):
+    ...
+```
+
+Do not reuse `Tec-Tac Framework` for extension-owned endpoints. The framework tag is reserved for framework APIs such as module management, UI context, and extension RBAC.

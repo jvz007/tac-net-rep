@@ -403,7 +403,9 @@ def _new_job(payload: dict) -> dict:
         "created_at": _utcnow(),
         "started_at": None,
         "finished_at": None,
+        "stage": "queued",
         "error": None,
+        "error_type": None,
         **payload,
     }
     _atomic_json(JOBS_ROOT / f"{job_id}.json", job)
@@ -449,8 +451,10 @@ def queue_install(upload_id: str, replace: bool = False) -> dict:
         _dispatch(job["id"])
     except Exception as exc:
         job["status"] = "dispatch_failed"
+        job["stage"] = "dispatch"
         job["finished_at"] = _utcnow()
         job["error"] = str(exc)
+        job["error_type"] = exc.__class__.__name__
         _atomic_json(JOBS_ROOT / f"{job['id']}.json", job)
         raise
     return public_job(job)
@@ -474,8 +478,10 @@ def queue_remove(plugin_id: str) -> dict:
         _dispatch(job["id"])
     except Exception as exc:
         job["status"] = "dispatch_failed"
+        job["stage"] = "dispatch"
         job["finished_at"] = _utcnow()
         job["error"] = str(exc)
+        job["error_type"] = exc.__class__.__name__
         _atomic_json(JOBS_ROOT / f"{job['id']}.json", job)
         raise
     return public_job(job)
@@ -483,7 +489,7 @@ def queue_remove(plugin_id: str) -> dict:
 
 def public_job(job: dict) -> dict:
     allowed = {
-        "id", "status", "created_at", "started_at", "finished_at", "error",
+        "id", "status", "created_at", "started_at", "finished_at", "stage", "error", "error_type",
         "action", "plugin_id", "replace", "purge_data", "package_sha256", "package_filename",
     }
     result = {key: value for key, value in job.items() if key in allowed}

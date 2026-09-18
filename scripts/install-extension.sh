@@ -349,6 +349,42 @@ for config_path in declared:
         print(f"[TEC-TAC] No conventional migrations found for {cfg.label}; skipping")
 '
 
+# Verify declared AppConfigs, model registry, and migration state before restart.
+runuser -u "${TACTICAL_USER}" -- env \
+    TEC_TAC_PLUGIN_MANIFESTS="${MIGRATION_MANIFESTS}" \
+    "${VENV_PYTHON}" "${MANAGE_PY}" shell -c '
+import json
+import os
+from pathlib import Path
+from django.apps import apps
+from django.db import connection
+from django.db.migrations.executor import MigrationExecutor
+from django.utils.module_loading import import_string
+
+manifest_paths = os.environ["TEC_TAC_PLUGIN_MANIFESTS"].split(":")
+declared = []
+for manifest_path in manifest_paths:
+    payload = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    declared.extend(payload.get("django_apps", []))
+
+executor = MigrationExecutor(connection)
+for config_path in declared:
+    config_cls = import_string(config_path)
+    matches = [cfg for cfg in apps.get_app_configs() if isinstance(cfg, config_cls)]
+    if len(matches) != 1:
+        raise RuntimeError(f"Declared AppConfig is not registered exactly once: {config_path}")
+    cfg = matches[0]
+    models = list(cfg.get_models())
+    print(f"[TEC-TAC] AppConfig verification OK: {cfg.label}; models={len(models)}")
+    leaves = executor.loader.graph.leaf_nodes(cfg.label)
+    if leaves:
+        pending = executor.migration_plan(leaves)
+        if pending:
+            names = ", ".join(f"{m.app_label}.{m.name}" for m, backwards in pending if not backwards)
+            raise RuntimeError(f"Unapplied migrations remain for {cfg.label}: {names}")
+        print(f"[TEC-TAC] Migration verification OK: {cfg.label}")
+'
+
 # Re-run checks after migrations.
 runuser -u "${TACTICAL_USER}" -- bash -lc \
     "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' check"
@@ -458,6 +494,41 @@ for svc in rmm daphne celery celerybeat; do
     systemctl is-active --quiet "${svc}" || fail "${svc} did not return to active state."
     log "${svc}: active"
 done
+
+# Start a fresh Django process after the service restart. This catches bootstrap,
+# AppConfig, import, model-registry, and migration-state problems that only show
+# up after process recreation.
+runuser -u "${TACTICAL_USER}" -- env \
+    TEC_TAC_PLUGIN_MANIFESTS="${MIGRATION_MANIFESTS}" \
+    "${VENV_PYTHON}" "${MANAGE_PY}" shell -c '
+import json
+import os
+from pathlib import Path
+from django.apps import apps
+from django.db import connection
+from django.db.migrations.executor import MigrationExecutor
+from django.utils.module_loading import import_string
+
+manifest_paths = os.environ["TEC_TAC_PLUGIN_MANIFESTS"].split(":")
+declared = []
+for manifest_path in manifest_paths:
+    payload = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    declared.extend(payload.get("django_apps", []))
+executor = MigrationExecutor(connection)
+for config_path in declared:
+    config_cls = import_string(config_path)
+    matches = [cfg for cfg in apps.get_app_configs() if isinstance(cfg, config_cls)]
+    if len(matches) != 1:
+        raise RuntimeError(f"Fresh-process AppConfig verification failed: {config_path}")
+    cfg = matches[0]
+    list(cfg.get_models())
+    leaves = executor.loader.graph.leaf_nodes(cfg.label)
+    pending = executor.migration_plan(leaves) if leaves else []
+    if pending:
+        names = ", ".join(f"{m.app_label}.{m.name}" for m, backwards in pending if not backwards)
+        raise RuntimeError(f"Fresh-process migration verification failed for {cfg.label}: {names}")
+    print(f"[TEC-TAC] Fresh-process verification OK: {cfg.label}")
+'
 
 log "Installed extension/reportset '${PLUGIN_ID}' successfully."
 log "Extension: ${DEST_EXTENSION}"

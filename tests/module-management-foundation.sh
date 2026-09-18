@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail(){ echo "[TEST] FAIL: $*" >&2; exit 1; }
 
-[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.2.2" ]] || fail "VERSION is not 1.2.2"
+[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.2.3" ]] || fail "VERSION is not 1.2.3"
 for f in \
   framwork/tec_tac/module_manager.py \
   scripts/module-job-helper.py \
@@ -26,6 +26,11 @@ grep -q 'PROTECTED_PLUGIN_IDS' "${ROOT}/framwork/tec_tac/module_manager.py" || f
 grep -q 'MAX_PACKAGE_BYTES' "${ROOT}/framwork/tec_tac/module_manager.py" || fail "package size guard missing"
 grep -q 'MAX_EXTRACTED_BYTES' "${ROOT}/framwork/tec_tac/module_manager.py" || fail "archive expansion guard missing"
 grep -q 'refusing to execute non-root-owned or writable lifecycle script' "${ROOT}/scripts/module-job-helper.py" || fail "root helper ownership guard missing"
+grep -q 'tags=\["Tec-Tac Framework"\]' "${ROOT}/framwork/tec_tac/views.py" || fail "framework Swagger tag missing"
+grep -q 'Module package inspection failed.' "${ROOT}/framwork/tec_tac/views.py" || fail "structured upload diagnostics missing"
+grep -q 'error_type' "${ROOT}/framwork/tec_tac/module_manager.py" || fail "structured job error type missing"
+grep -q 'Fresh-process verification OK' "${ROOT}/scripts/install-extension.sh" || fail "fresh-process lifecycle verification missing"
+grep -q 'UI verification OK' "${ROOT}/scripts/module-job-helper.py" || fail "UI deployment verification missing"
 
 python3 -m py_compile \
   "${ROOT}/framwork/tec_tac/module_manager.py" \

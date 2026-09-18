@@ -1,3 +1,5 @@
+import logging
+
 from django.shortcuts import get_object_or_404
 from accounts.models import Role
 from accounts.permissions import RolesPerms
@@ -6,6 +8,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from drf_spectacular.utils import extend_schema, extend_schema_view
 
 from .module_manager import (
     ModuleManagerError,
@@ -16,6 +19,9 @@ from .module_manager import (
     queue_remove,
     stage_uploaded_package,
 )
+logger = logging.getLogger("tec_tac.module_manager")
+
+
 from .rbac import (
     effective_permissions,
     get_all_role_permissions,
@@ -72,6 +78,7 @@ def _user_payload(user):
     }
 
 
+@extend_schema_view(get=extend_schema(tags=["Tec-Tac Framework"], summary="Get Tec-Tac UI context"))
 class UiContextView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -86,6 +93,7 @@ class UiContextView(APIView):
         )
 
 
+@extend_schema_view(get=extend_schema(tags=["Tec-Tac Framework"], summary="List Tec-Tac extension permissions"))
 class ExtensionPermissionCatalogView(APIView):
     permission_classes = [IsAuthenticated, RolesPerms]
 
@@ -98,6 +106,10 @@ class ExtensionPermissionCatalogView(APIView):
         )
 
 
+@extend_schema_view(
+    get=extend_schema(tags=["Tec-Tac Framework"], summary="Get role extension permissions"),
+    put=extend_schema(tags=["Tec-Tac Framework"], summary="Update role extension permissions"),
+)
 class RoleExtensionPermissionsView(APIView):
     permission_classes = [IsAuthenticated, RolesPerms]
 
@@ -162,6 +174,7 @@ def _require_module_manager(user):
         raise PermissionDenied("Tactical can_do_server_maint is required to install or remove Tec-Tac modules.")
 
 
+@extend_schema_view(get=extend_schema(tags=["Tec-Tac Framework"], summary="List installed Tec-Tac modules"))
 class ModuleCatalogView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -177,21 +190,41 @@ class ModuleCatalogView(APIView):
         })
 
 
+@extend_schema_view(post=extend_schema(tags=["Tec-Tac Framework"], summary="Inspect and stage a Tec-Tac module package"))
 class ModulePackageInspectView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
 
     def post(self, request):
-        _require_module_manager(request.user)
-        upload = request.FILES.get("package")
-        if upload is None:
-            return Response({"detail": "A package upload is required."}, status=400)
+        stage = "permission-check"
         try:
-            return Response(stage_uploaded_package(upload), status=201)
+            _require_module_manager(request.user)
+            stage = "multipart-parse"
+            upload = request.FILES.get("package")
+            if upload is None:
+                return Response({"detail": "A package upload is required.", "stage": stage}, status=400)
+            stage = "stage-upload"
+            payload = stage_uploaded_package(upload)
+            stage = "response"
+            return Response(payload, status=201)
+        except PermissionDenied:
+            raise
         except ModuleManagerError as exc:
-            return Response({"detail": str(exc)}, status=400)
+            return Response({"detail": str(exc), "stage": stage}, status=400)
+        except Exception as exc:
+            logger.exception("Tec-Tac module package inspection failed at stage=%s", stage)
+            return Response(
+                {
+                    "detail": "Module package inspection failed.",
+                    "stage": stage,
+                    "error_type": exc.__class__.__name__,
+                    "error": str(exc) or exc.__class__.__name__,
+                },
+                status=500,
+            )
 
 
+@extend_schema_view(delete=extend_schema(tags=["Tec-Tac Framework"], summary="Discard a staged Tec-Tac module package"))
 class ModulePackageStageView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -204,6 +237,7 @@ class ModulePackageStageView(APIView):
             return Response({"detail": str(exc)}, status=404)
 
 
+@extend_schema_view(post=extend_schema(tags=["Tec-Tac Framework"], summary="Install a staged Tec-Tac module package"))
 class ModulePackageInstallView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -218,6 +252,7 @@ class ModulePackageInstallView(APIView):
             return Response({"detail": str(exc)}, status=400)
 
 
+@extend_schema_view(post=extend_schema(tags=["Tec-Tac Framework"], summary="Remove a Tec-Tac module"))
 class ModuleRemoveView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -229,6 +264,7 @@ class ModuleRemoveView(APIView):
             return Response({"detail": str(exc)}, status=400)
 
 
+@extend_schema_view(get=extend_schema(tags=["Tec-Tac Framework"], summary="Get a Tec-Tac module lifecycle job"))
 class ModuleJobView(APIView):
     permission_classes = [IsAuthenticated]
 
