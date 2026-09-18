@@ -1,7 +1,10 @@
+import io
 import logging
 
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from accounts.models import Role
+from accounts.serializers import TOTPSetupSerializer
 from accounts.permissions import RolesPerms
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
@@ -76,6 +79,51 @@ def _user_payload(user):
         "tactical_superuser": user_superuser,
         "role_superuser": role_superuser,
     }
+
+
+@extend_schema_view(get=extend_schema(tags=["Tec-Tac Framework"], summary="Get current user TOTP enrollment QR code"))
+class TotpQrView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not getattr(request.user, "totp_key", None):
+            return Response({"detail": "TOTP enrollment has not been initialized for this account."}, status=409)
+
+        # Reuse Tactical's own serializer so the issuer/account URI exactly matches
+        # the value Tactical uses for authenticator enrollment. The QR image is
+        # generated locally by Tactical's existing qrcode dependency; the secret
+        # never leaves this server.
+        qr_url = TOTPSetupSerializer(request.user).data.get("qr_url")
+        if not qr_url:
+            return Response({"detail": "Tactical did not provide a TOTP provisioning URI."}, status=500)
+
+        try:
+            import qrcode
+            import qrcode.image.svg
+
+            image = qrcode.make(
+                qr_url,
+                image_factory=qrcode.image.svg.SvgPathImage,
+                error_correction=qrcode.constants.ERROR_CORRECT_M,
+                border=4,
+            )
+            output = io.BytesIO()
+            image.save(output)
+            response = HttpResponse(output.getvalue(), content_type="image/svg+xml")
+            response["Cache-Control"] = "no-store, max-age=0"
+            response["Pragma"] = "no-cache"
+            response["X-Content-Type-Options"] = "nosniff"
+            return response
+        except Exception as exc:
+            logger.exception("Tec-Tac TOTP QR generation failed")
+            return Response(
+                {
+                    "detail": "TOTP QR generation failed.",
+                    "error_type": exc.__class__.__name__,
+                    "error": str(exc) or exc.__class__.__name__,
+                },
+                status=500,
+            )
 
 
 @extend_schema_view(get=extend_schema(tags=["Tec-Tac Framework"], summary="Get Tec-Tac UI context"))

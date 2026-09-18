@@ -9,11 +9,13 @@ from .views import (
     ModulePackageInstallView,
     ModuleRemoveView,
     RoleExtensionPermissionsView,
+    TotpQrView,
     UiContextView,
 )
 
 urlpatterns = [
     path("ui/context/", UiContextView.as_view(), name="tec-tac-ui-context"),
+    path("auth/totp/qr/", TotpQrView.as_view(), name="tec-tac-totp-qr"),
     path("access/extensions/", ExtensionPermissionCatalogView.as_view(), name="tec-tac-extension-permissions"),
     path("modules/", ModuleCatalogView.as_view(), name="tec-tac-module-catalog"),
     path("modules/packages/inspect/", ModulePackageInspectView.as_view(), name="tec-tac-module-package-inspect"),

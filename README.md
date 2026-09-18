@@ -479,6 +479,11 @@ The public browser runtime deliberately receives a reduced contract: Vue, app, d
 The paired Tec-Tac UI 0.2.2 deployment lives at `/var/lib/tec-tac/ui/tec-tac` instead of Tactical's replaceable `/var/www/rmm/dist/tec-tac`. The module manager stores this as `UI_ROOT` in `/etc/tec-tac/module-manager.conf` and passes it to `scripts/sync-modules.sh` after successful extension install/remove jobs. Nginx integration and post-update repair are owned by the UI repository.
 
 
+
+## Local TOTP QR endpoint (1.2.5)
+
+Tec-Tac 1.2.5 adds `GET /api/tfd/auth/totp/qr/` for the authenticated enrollment session. The framework reuses Tactical's own `TOTPSetupSerializer` provisioning URI and Tactical's installed Python `qrcode` package to generate an SVG QR code locally. No TOTP secret or provisioning URI is sent to an external QR service. The endpoint is `no-store` and requires an authenticated Tactical token.
+
 ## Graceful Django reload and runtime permissions (1.2.4)
 
 Tec-Tac 1.2.4 removes full Tactical service restarts from extension install/remove. The lifecycle scripts send `SIGHUP` to the active uWSGI master process, which gracefully reloads the Django stack while preserving the listening socket and keeping the `rmm.service` unit alive. Daphne, Celery, and Celery Beat are not restarted for normal extension lifecycle operations.
