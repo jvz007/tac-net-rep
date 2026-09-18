@@ -190,9 +190,17 @@ run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}'
 log "Applying ${APP_NAME} migrations."
 run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' migrate '${APP_NAME}' --noinput"
 
-log "Verifying framework API, repository-loaded app, RBAC, Report Manager, and API routes."
-VERIFY_CODE="import tfdreporting; from django.apps import apps; from django.urls import resolve; expected='${LEGACY_REPORTING_DIR}/'; assert tfdreporting.__file__.startswith(expected), tfdreporting.__file__; assert apps.is_installed('tec_tac'); m=apps.get_model('${APP_NAME}','${MODEL_NAME}'); p=apps.get_model('${APP_NAME}','ExtensionRolePermission'); from ee.reporting.utils import resolve_model; r=resolve_model(data_source={'model':'${MODEL_NAME}'}); assert r['model'] is m; from tec_tac.rbac import registered_permissions, permission_catalog; from tfdreporting.rbac import REGISTERED_PERMISSIONS; assert len(REGISTERED_PERMISSIONS) >= 2; match=resolve('/api/tfd/reporting/network-availability/'); assert match.url_name == 'network-availability'; ctx=resolve('/api/tfd/ui/context/'); assert ctx.url_name == 'tec-tac-ui-context'; access=resolve('/api/tfd/access/extensions/'); assert access.url_name == 'tec-tac-extension-permissions'; modules=resolve('/api/tfd/modules/'); assert modules.url_name == 'tec-tac-module-catalog'; updates=resolve('/api/tfd/system/updates/'); assert updates.url_name == 'tec-tac-system-update-status'; repos=resolve('/api/tfd/modules/repositories/'); assert repos.url_name == 'tec-tac-module-repositories'; online=resolve('/api/tfd/modules/catalog/online/'); assert online.url_name == 'tec-tac-module-online-catalog'; fields={f.name for f in m._meta.fields}; assert {'idempotency_key','ingested_by','received_at'} <= fields; c=m.objects.count(); print('TEC-TAC verification OK:', 'module=', tfdreporting.__file__, m._meta.label, p._meta.label, 'context=', ctx.route, 'access=', access.route, 'modules=', modules.route, 'updates=', updates.route, 'network_rows=', c)"
-run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_CODE}\""
+log "Verifying framework models, RBAC, and Report Manager integration."
+VERIFY_MODEL_CODE="import tfdreporting; from django.apps import apps; expected='${LEGACY_REPORTING_DIR}/'; assert tfdreporting.__file__.startswith(expected), tfdreporting.__file__; assert apps.is_installed('tec_tac'); m=apps.get_model('${APP_NAME}','${MODEL_NAME}'); p=apps.get_model('${APP_NAME}','ExtensionRolePermission'); from ee.reporting.utils import resolve_model; r=resolve_model(data_source={'model':'${MODEL_NAME}'}); assert r['model'] is m; from tfdreporting.rbac import REGISTERED_PERMISSIONS; assert len(REGISTERED_PERMISSIONS) >= 2; fields={f.name for f in m._meta.fields}; assert {'idempotency_key','ingested_by','received_at'} <= fields; print('TEC-TAC model/RBAC verification OK:', tfdreporting.__file__, m._meta.label, p._meta.label)"
+if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_MODEL_CODE}\""; then
+    fail "Framework model/RBAC verification failed or timed out."
+fi
+
+log "Verifying Tec-Tac API routes."
+VERIFY_ROUTE_CODE="from django.urls import resolve; checks=[('/api/tfd/reporting/network-availability/','network-availability'),('/api/tfd/ui/context/','tec-tac-ui-context'),('/api/tfd/access/extensions/','tec-tac-extension-permissions'),('/api/tfd/modules/','tec-tac-module-catalog'),('/api/tfd/system/updates/','tec-tac-system-update-status'),('/api/tfd/modules/repositories/','tec-tac-module-repositories'),('/api/tfd/modules/catalog/online/','tec-tac-module-online-catalog')]; resolved=[(path, resolve(path).url_name) for path,_ in checks]; assert all(actual == expected for (path,actual),(_,expected) in zip(resolved,checks)), resolved; print('TEC-TAC route verification OK:', resolved)"
+if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_ROUTE_CODE}\""; then
+    fail "Framework API route verification failed or timed out."
+fi
 
 MODULE_STATE_ROOT="/var/lib/tec-tac/module-manager"
 MODULE_HELPER="/usr/local/sbin/tec-tac-module-job"
@@ -223,7 +231,7 @@ mkdir -p \
     "${MODULE_STATE_ROOT}/running" \
     "${MODULE_STATE_ROOT}/running-v2" \
     "${MODULE_STATE_ROOT}/logs" \
-    "${MODULE_STATE_ROOT}/bundle-backups"
+    "${MODULE_STATE_ROOT}/bundle-backups" \
     "${MODULE_STATE_ROOT}/repositories" \
     "${MODULE_STATE_ROOT}/repositories/cache"
 chown -R root:"${TACTICAL_GROUP}" "${MODULE_STATE_ROOT}"
