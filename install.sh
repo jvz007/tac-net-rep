@@ -50,6 +50,9 @@ REQUIRED_FILES=(
     "${FRAMEWORK_DIR}/tec_tac/urls.py"
     "${FRAMEWORK_DIR}/tec_tac/views.py"
     "${FRAMEWORK_DIR}/tec_tac/module_manager.py"
+    "${FRAMEWORK_DIR}/tec_tac/module_manager_v2.py"
+    "${FRAMEWORK_DIR}/tec_tac/module_state.py"
+    "${FRAMEWORK_DIR}/tec_tac/module_v2_views.py"
     "${APP_DIR}/__init__.py"
     "${APP_DIR}/apps.py"
     "${APP_DIR}/models.py"
@@ -67,6 +70,7 @@ REQUIRED_FILES=(
     "${REPO_ROOT}/scripts/install-extension.sh"
     "${REPO_ROOT}/scripts/remove-extension.sh"
     "${REPO_ROOT}/scripts/module-job-helper.py"
+    "${REPO_ROOT}/scripts/module-v2-job-helper.py"
     "${REPO_ROOT}/scripts/reload-rmm-uwsgi.sh"
     "${REPO_ROOT}/tests/framework-foundation.sh"
     "${REPO_ROOT}/tests/access-api-foundation.sh"
@@ -190,9 +194,12 @@ run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}'
 
 MODULE_STATE_ROOT="/var/lib/tec-tac/module-manager"
 MODULE_HELPER="/usr/local/sbin/tec-tac-module-job"
+MODULE_V2_HELPER="/usr/local/sbin/tec-tac-module-v2-job"
 MODULE_CONFIG_DIR="/etc/tec-tac"
 MODULE_CONFIG="${MODULE_CONFIG_DIR}/module-manager.conf"
 MODULE_SUDOERS="/etc/sudoers.d/tec-tac-module-manager"
+MODULE_V2_SUDOERS="/etc/sudoers.d/tec-tac-module-manager-v2"
+MODULE_STATE_FILE="${MODULE_STATE_ROOT}/module-state.json"
 RMM_DROPIN_DIR="/etc/systemd/system/rmm.service.d"
 RMM_DROPIN="${RMM_DROPIN_DIR}/tec-tac.conf"
 TEC_TAC_UI_REPO="${TEC_TAC_UI_REPO:-/opt/tec-tac-ui}"
@@ -208,12 +215,27 @@ chmod 0644 "${RMM_DROPIN}"
 systemctl daemon-reload
 log "Installed rmm.service supplementary-group drop-in for Tec-Tac runtime access: ${TACTICAL_GROUP}"
 
-mkdir -p "${MODULE_STATE_ROOT}/staged" "${MODULE_STATE_ROOT}/jobs" "${MODULE_STATE_ROOT}/running" "${MODULE_STATE_ROOT}/logs"
+mkdir -p \
+    "${MODULE_STATE_ROOT}/staged" \
+    "${MODULE_STATE_ROOT}/jobs" \
+    "${MODULE_STATE_ROOT}/running" \
+    "${MODULE_STATE_ROOT}/running-v2" \
+    "${MODULE_STATE_ROOT}/logs" \
+    "${MODULE_STATE_ROOT}/bundle-backups"
 chown -R root:"${TACTICAL_GROUP}" "${MODULE_STATE_ROOT}"
-chmod 2750 "${MODULE_STATE_ROOT}" "${MODULE_STATE_ROOT}/running" "${MODULE_STATE_ROOT}/logs"
+# module-state.json is imported during Django/ASGI/Celery startup. Every Tactical
+# service identity must be able to traverse this directory and read that file.
+chmod 0755 "$(dirname "${MODULE_STATE_ROOT}")" "${MODULE_STATE_ROOT}"
 chmod 2770 "${MODULE_STATE_ROOT}/staged" "${MODULE_STATE_ROOT}/jobs"
+chmod 2750 "${MODULE_STATE_ROOT}/running" "${MODULE_STATE_ROOT}/running-v2" "${MODULE_STATE_ROOT}/logs" "${MODULE_STATE_ROOT}/bundle-backups"
+if [[ ! -f "${MODULE_STATE_FILE}" ]]; then
+    printf '%s\n' '{"schema":1,"modules":{}}' > "${MODULE_STATE_FILE}"
+fi
+chown root:root "${MODULE_STATE_FILE}"
+chmod 0644 "${MODULE_STATE_FILE}"
 
 install -o root -g root -m 0755 "${REPO_ROOT}/scripts/module-job-helper.py" "${MODULE_HELPER}"
+install -o root -g root -m 0755 "${REPO_ROOT}/scripts/module-v2-job-helper.py" "${MODULE_V2_HELPER}"
 mkdir -p "${MODULE_CONFIG_DIR}"
 cat > "${MODULE_CONFIG}" <<EOF
 REPO_ROOT=${REPO_ROOT}
@@ -227,12 +249,17 @@ chmod 0644 "${MODULE_CONFIG}"
 cat > "${MODULE_SUDOERS}" <<EOF
 ${TACTICAL_USER} ALL=(root) NOPASSWD: ${MODULE_HELPER} --dispatch *
 EOF
-chown root:root "${MODULE_SUDOERS}"
-chmod 0440 "${MODULE_SUDOERS}"
+cat > "${MODULE_V2_SUDOERS}" <<EOF
+${TACTICAL_USER} ALL=(root) NOPASSWD: ${MODULE_V2_HELPER} --dispatch *
+EOF
+chown root:root "${MODULE_SUDOERS}" "${MODULE_V2_SUDOERS}"
+chmod 0440 "${MODULE_SUDOERS}" "${MODULE_V2_SUDOERS}"
 if command -v visudo >/dev/null 2>&1; then
     visudo -cf "${MODULE_SUDOERS}" >/dev/null || fail "Module manager sudoers validation failed."
+    visudo -cf "${MODULE_V2_SUDOERS}" >/dev/null || fail "Module manager v2 sudoers validation failed."
 fi
 log "Installed privileged module lifecycle helper: ${MODULE_HELPER}"
+log "Installed privileged Module Management v2 helper: ${MODULE_V2_HELPER}"
 
 
 SYSTEM_UPDATE_ROOT="/var/lib/tec-tac/system-updates"
@@ -378,11 +405,26 @@ log "Restarting Tactical services."
 systemctl restart rmm daphne celery celerybeat
 
 for svc in rmm daphne celery celerybeat; do
-    if ! systemctl is-active --quiet "${svc}"; then
+    ACTIVE=0
+    for _attempt in $(seq 1 30); do
+        if systemctl is-active --quiet "${svc}"; then
+            ACTIVE=1
+            break
+        fi
+        sleep 1
+    done
+    if [[ "${ACTIVE}" -ne 1 ]]; then
         systemctl --no-pager --full status "${svc}" || true
         fail "${svc} did not return to active state."
     fi
     log "${svc}: active"
+
+    SERVICE_USER="$(systemctl show "${svc}.service" -p User --value 2>/dev/null || true)"
+    [[ -n "${SERVICE_USER}" ]] || SERVICE_USER="root"
+    if ! runuser -u "${SERVICE_USER}" -- test -r "${MODULE_STATE_FILE}"; then
+        fail "${svc} service user '${SERVICE_USER}' cannot read ${MODULE_STATE_FILE}."
+    fi
+    log "${svc}: module state readable by ${SERVICE_USER}"
 done
 
 RMM_SUPPLEMENTARY="$(systemctl show rmm.service -p SupplementaryGroups --value)"

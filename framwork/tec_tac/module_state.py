@@ -110,7 +110,7 @@ def save_state(payload: dict) -> None:
     STATE_ROOT.mkdir(parents=True, exist_ok=True)
     tmp = STATE_FILE.with_name(STATE_FILE.name + ".tmp")
     tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.chmod(tmp, 0o660)
+    os.chmod(tmp, 0o644)
     os.replace(tmp, STATE_FILE)
 
 

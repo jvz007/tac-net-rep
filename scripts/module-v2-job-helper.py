@@ -68,12 +68,11 @@ def load_module_state():
 
 
 def save_module_state(state):
-    atomic_json(MODULE_STATE, state, 0o660)
-    config = load_config()
+    atomic_json(MODULE_STATE, state, 0o644)
     try:
-        user = pwd.getpwnam(config.get("TACTICAL_USER", "tactical"))
-        os.chown(MODULE_STATE, user.pw_uid, user.pw_gid)
-    except Exception:
+        os.chown(MODULE_STATE, 0, 0)
+        os.chmod(MODULE_STATE, 0o644)
+    except OSError:
         pass
 
 

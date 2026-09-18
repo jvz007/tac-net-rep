@@ -3,11 +3,15 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail(){ echo "[TEST] FAIL: $*" >&2; exit 1; }
 
-[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.3.0" ]] || fail "VERSION is not 1.3.0"
+[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.4.1" ]] || fail "VERSION is not 1.4.1"
 for f in \
   framwork/tec_tac/module_manager.py \
+  framwork/tec_tac/module_manager_v2.py \
+  framwork/tec_tac/module_state.py \
+  framwork/tec_tac/module_v2_views.py \
   framwork/tec_tac/system_update.py \
   scripts/module-job-helper.py \
+  scripts/module-v2-job-helper.py \
   scripts/system-update-helper.py \
   scripts/reload-rmm-uwsgi.sh \
   framwork/tec_tac/views.py \
@@ -30,6 +34,9 @@ grep -q '"manage_modules": allowed("can_do_server_maint")' "${ROOT}/framwork/tec
 grep -q 'UI_ROOT=${TEC_TAC_UI_ROOT}' "${ROOT}/install.sh" || fail "persistent UI root config missing"
 grep -q 'TEC_TAC_UI_ROOT' "${ROOT}/scripts/module-job-helper.py" || fail "module sync UI root environment missing"
 grep -q '/usr/local/sbin/tec-tac-module-job' "${ROOT}/install.sh" || fail "privileged helper installer missing"
+grep -q '/usr/local/sbin/tec-tac-module-v2-job' "${ROOT}/install.sh" || fail "v2 privileged helper installer missing"
+grep -q 'chmod 0644 "${MODULE_STATE_FILE}"' "${ROOT}/install.sh" || fail "module state runtime read mode missing"
+grep -q 'atomic_json(MODULE_STATE, state, 0o644)' "${ROOT}/scripts/module-v2-job-helper.py" || fail "v2 helper state mode is not 0644"
 grep -q '/etc/sudoers.d/tec-tac-module-manager' "${ROOT}/install.sh" || fail "sudoers installer missing"
 grep -q 'PROTECTED_PLUGIN_IDS' "${ROOT}/framwork/tec_tac/module_manager.py" || fail "protected module policy missing"
 grep -q 'MAX_PACKAGE_BYTES' "${ROOT}/framwork/tec_tac/module_manager.py" || fail "package size guard missing"
@@ -49,6 +56,9 @@ grep -q 'kill -HUP' "${ROOT}/scripts/reload-rmm-uwsgi.sh" || fail "uWSGI gracefu
 
 python3 -m py_compile \
   "${ROOT}/framwork/tec_tac/module_manager.py" \
+  "${ROOT}/framwork/tec_tac/module_manager_v2.py" \
+  "${ROOT}/framwork/tec_tac/module_state.py" \
+  "${ROOT}/framwork/tec_tac/module_v2_views.py" \
   "${ROOT}/framwork/tec_tac/system_update.py" \
   "${ROOT}/framwork/tec_tac/views.py" \
   "${ROOT}/scripts/module-job-helper.py" \
