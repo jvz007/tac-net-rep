@@ -11,6 +11,7 @@ from .module_manager_v2 import (
     installed_catalog_v2,
     queue_batch_install,
     queue_set_enabled,
+    queue_set_visibility,
     queue_v2_install,
     stage_multiple_packages,
     validate_remove,
@@ -77,6 +78,19 @@ class ModuleV2StateView(APIView):
             return Response({"detail": "enabled must be true or false."}, status=400)
         try:
             return Response(queue_set_enabled(plugin_id, enabled, cascade=cascade), status=202)
+        except (ModuleManagerError, ModuleManagerV2Error) as exc:
+            return Response({"detail": str(exc)}, status=400)
+
+
+class ModuleV2VisibilityView(APIView):
+    permission_classes = [IsAuthenticated]
+    def post(self, request, plugin_id):
+        _require_module_manager(request.user)
+        visible = request.data.get("visible")
+        if not isinstance(visible, bool):
+            return Response({"detail": "visible must be true or false."}, status=400)
+        try:
+            return Response(queue_set_visibility(plugin_id, visible), status=202)
         except (ModuleManagerError, ModuleManagerV2Error) as exc:
             return Response({"detail": str(exc)}, status=400)
 

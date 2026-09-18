@@ -9,7 +9,7 @@ from .views import (
 )
 from .module_v2_views import (
     ModuleV2CatalogView, ModuleV2InspectView, ModuleV2StageView, ModuleV2InstallView,
-    ModuleV2StateView, ModuleV2RemoveCheckView, ModuleV2JobView,
+    ModuleV2StateView, ModuleV2VisibilityView, ModuleV2RemoveCheckView, ModuleV2JobView,
 )
 urlpatterns = [
     path("ui/context/", UiContextView.as_view(), name="tec-tac-ui-context"),
@@ -34,6 +34,7 @@ urlpatterns = [
     path("modules/v2/packages/<uuid:upload_id>/", ModuleV2StageView.as_view(), name="tec-tac-module-v2-stage"),
     path("modules/v2/packages/<uuid:upload_id>/install/", ModuleV2InstallView.as_view(), name="tec-tac-module-v2-install"),
     path("modules/v2/<str:plugin_id>/state/", ModuleV2StateView.as_view(), name="tec-tac-module-v2-state"),
+    path("modules/v2/<str:plugin_id>/visibility/", ModuleV2VisibilityView.as_view(), name="tec-tac-module-v2-visibility"),
     path("modules/v2/<str:plugin_id>/remove-check/", ModuleV2RemoveCheckView.as_view(), name="tec-tac-module-v2-remove-check"),
     path("modules/v2/jobs/<uuid:job_id>/", ModuleV2JobView.as_view(), name="tec-tac-module-v2-job"),
     path("access/roles/<int:role_id>/permissions/", RoleExtensionPermissionsView.as_view(), name="tec-tac-role-extension-permissions"),

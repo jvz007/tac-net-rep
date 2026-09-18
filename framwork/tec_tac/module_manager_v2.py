@@ -40,6 +40,7 @@ from .module_manager import (
 from .module_state import (
     ModuleStateError,
     is_enabled,
+    is_visible,
     load_state,
     version_satisfies,
 )
@@ -165,11 +166,12 @@ def installed_catalog_v2() -> list[dict]:
     for item in base:
         item = dict(item)
         if item.get("legacy"):
-            item.update({"enabled": True, "dependencies": {}, "optional_dependencies": {}, "requires": {}, "dependants": []})
+            item.update({"enabled": True, "visible": True, "dependencies": {}, "optional_dependencies": {}, "requires": {}, "dependants": []})
             result.append(item)
             continue
         meta = metadata.get(item["id"], {})
         enabled = is_enabled(item["id"], state)
+        visible = is_visible(item["id"], state)
         hard = meta.get("dependencies", {})
         optional = meta.get("optional_dependencies", {})
         dep_status = []
@@ -186,6 +188,7 @@ def installed_catalog_v2() -> list[dict]:
             })
         item.update({
             "enabled": enabled,
+            "visible": visible,
             "status": (item.get("status") if item.get("ui_error") else ("enabled" if enabled else "disabled")),
             "dependencies": hard,
             "optional_dependencies": optional,
@@ -705,6 +708,20 @@ def queue_set_enabled(module_id: str, enabled: bool, cascade: bool = False) -> d
         "enabled": bool(enabled),
         "cascade": bool(cascade),
         "affected_modules": affected,
+    })
+
+
+def queue_set_visibility(module_id: str, visible: bool) -> dict:
+    catalog = {item["id"]: item for item in installed_catalog_v2()}
+    target = catalog.get(module_id)
+    if not target:
+        raise ModuleManagerV2Error(f"Module {module_id!r} is not installed.")
+    if not target.get("managed"):
+        raise ModuleManagerV2Error("Protected modules cannot change navigation visibility from the UI.")
+    return _queue_v2({
+        "action": "visibility",
+        "plugin_id": module_id,
+        "visible": bool(visible),
     })
 
 

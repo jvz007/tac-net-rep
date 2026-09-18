@@ -31,7 +31,7 @@ LOGS_ROOT = STATE_ROOT / "logs"
 BACKUP_ROOT = STATE_ROOT / "bundle-backups"
 MODULE_STATE = STATE_ROOT / "module-state.json"
 CONFIG = Path("/etc/tec-tac/module-manager.conf")
-ALLOWED_ACTIONS = {"enable", "disable", "bundle_install", "batch_install"}
+ALLOWED_ACTIONS = {"enable", "disable", "visibility", "bundle_install", "batch_install"}
 
 
 def now():
@@ -85,10 +85,19 @@ def set_enabled(module_ids, enabled):
     save_module_state(state)
 
 
+def set_visible(module_id, visible):
+    state = load_module_state()
+    record = dict(state["modules"].get(module_id) or {})
+    record["visible"] = bool(visible)
+    state["modules"][module_id] = record
+    save_module_state(state)
+
+
 def remember_version(module_id, version):
     state = load_module_state()
     record = dict(state["modules"].get(module_id) or {})
     record.setdefault("enabled", True)
+    record.setdefault("visible", True)
     record["version"] = str(version)
     state["modules"][module_id] = record
     save_module_state(state)
@@ -307,6 +316,15 @@ def run_job(job_id):
                 set_enabled(affected, enabled)
                 touched = affected
                 job["stage"] = "runtime-sync"
+                atomic_json(path, job)
+                sync_and_reload(config, log)
+            elif job["action"] == "visibility":
+                module_id = str(job.get("plugin_id") or "")
+                if not PLUGIN_RE.fullmatch(module_id):
+                    raise RuntimeError("invalid module id")
+                set_visible(module_id, bool(job.get("visible", True)))
+                touched = [module_id]
+                job["stage"] = "ui-sync"
                 atomic_json(path, job)
                 sync_and_reload(config, log)
             else:

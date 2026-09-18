@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail(){ echo "[TEST] FAIL: $*" >&2; exit 1; }
 
-[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.5.0" ]] || fail "VERSION is not 1.5.0"
+[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.6.0" ]] || fail "VERSION is not 1.6.0"
 for f in \
   framwork/tec_tac/module_manager.py \
   framwork/tec_tac/module_manager_v2.py \
@@ -97,3 +97,8 @@ echo "[TEST] PASS module management foundation"
 
 grep -q '_plan_with_requested_order' "${ROOT}/framwork/tec_tac/module_manager_v2.py" || fail "dependency-safe requested install ordering missing"
 grep -q 'discard_v2_stage' "${ROOT}/framwork/tec_tac/module_v2_views.py" || fail "v2 staged artifact discard route missing"
+
+grep -q 'def is_visible' "${ROOT}/framwork/tec_tac/module_state.py" || fail "module visibility state helper missing"
+grep -q 'queue_set_visibility' "${ROOT}/framwork/tec_tac/module_manager_v2.py" || fail "module visibility queue missing"
+grep -q 'modules/v2/<str:plugin_id>/visibility/' "${ROOT}/framwork/tec_tac/urls.py" || fail "module visibility route missing"
+grep -q '"visibility"' "${ROOT}/scripts/module-v2-job-helper.py" || fail "visibility worker action missing"

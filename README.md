@@ -1,6 +1,6 @@
 # Tec-Tac Tactical RMM Extension Framework
 
-Version **1.5.0** modernizes Module Management v2 package installation with explicit operator-selected install sequencing for independent packages, server-enforced dependency ordering, and staged-artifact cleanup. The 1.4.x enable/disable, dependency/version resolution, bundle planning, and runtime-state permission fixes remain intact.
+Version **1.6.0** adds independent module navigation visibility to Module Management v2. Modules can now remain enabled at runtime while being hidden from Tec-Tac navigation. The 1.5.0 package ordering, dependency enforcement, bundle planning, staged cleanup, and existing enable/disable lifecycle remain intact.
 
 The repository itself is the runtime root. It may be cloned anywhere; `/opt/tec-tac` is only the recommended location.
 
@@ -520,3 +520,55 @@ See `RELEASE_NOTES_1.4.0.md` and `RELEASE_NOTES_1.4.1.md`.
 ## Module install ordering (1.5.0)
 
 Multi-package and bundle installs may submit an explicit package order. Tec-Tac validates that every staged hard dependency still appears before its dependant; invalid sequences are rejected before a privileged lifecycle job is queued. Packages with no dependency relationship may be arranged in operator-selected order. Cancelled v2 stages can also be discarded through the v2 package staging endpoint.
+
+## Module visibility state (planned)
+
+Tec-Tac distinguishes **runtime state** from **navigation visibility**. A module may be fully enabled and available to other modules without requiring a permanent entry in the Tec-Tac navigation rail.
+
+The intended states are:
+
+| Runtime | Visibility | Behaviour |
+| --- | --- | --- |
+| Enabled | Visible | Module is active and its declared navigation entry is shown. |
+| Enabled | Hidden | Module is active, its APIs/routes/background behaviour remain available, but its navigation entry is suppressed. |
+| Disabled | Hidden | Module is inactive at runtime and is not exposed in navigation. |
+
+`Hidden` is not a security or dependency state. It only controls whether the module contributes its normal navigation entry. Direct/internal routes may still be used by other Tec-Tac workflows when the module is enabled, and backend authorization remains authoritative.
+
+This is intended for supporting modules such as Checks or Automation that may provide functionality to Endpoints or other operator workflows without needing their own permanent left-rail destination.
+
+Existing modules default to:
+
+```text
+enabled = true
+visible = true
+```
+
+The Modules administration surface must always list hidden modules so an administrator can restore visibility. Dependency validation considers whether a dependency is installed and enabled; visibility does not satisfy or break a dependency.
+
+The planned persistent state shape is:
+
+```json
+{
+  "schema": 1,
+  "modules": {
+    "checks": {
+      "enabled": true,
+      "visible": false
+    }
+  }
+}
+```
+
+See `docs/module-visibility.md` for the complete behaviour contract.
+
+
+## Module visibility (1.6.0)
+
+Module runtime state and navigation visibility are independent:
+
+- **Enabled + Visible** — active at runtime and shown in Tec-Tac navigation.
+- **Enabled + Hidden** — active at runtime, dependencies and routes remain available, but the module does not add a top-level navigation entry.
+- **Disabled** — excluded from runtime loading and therefore absent from navigation.
+
+Visibility is stored in `/var/lib/tec-tac/module-manager/module-state.json` as `visible: true|false`. Missing visibility state defaults to `true` for upgrade compatibility. Hiding a module does not weaken or change RBAC and does not affect dependency satisfaction. See `docs/module-visibility.md`.
