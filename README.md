@@ -2,7 +2,7 @@ Version **1.13.2** hardens System Updates for the split Git-source/runtime archi
 
 # Tec-Tac
 
-Version **1.13.3** fixes identical offline System Update reinstalls by recording an auditable empty Git commit instead of treating `nothing to commit` as an update failure.
+Version **1.13.4** adds first-class source/runtime architecture diagnostics while retaining the hardened System Update transaction model introduced in 1.13.3.
 
  Framework
 
