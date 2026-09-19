@@ -18,4 +18,6 @@ grep -q 'repair_module_permissions' "${ROOT}/install.sh" || fail "installer is n
 grep -q 'staged/bundles' "${ROOT}/scripts/recovery/lib.sh" || fail "bundle staging permission repair missing"
 grep -q 'staged/batches' "${ROOT}/scripts/recovery/lib.sh" || fail "batch staging permission repair missing"
 grep -q 'Recover missing modules' "${ROOT}/scripts/recovery/tec-tac-repair.sh" || fail "interactive recovery menu missing module recovery"
+grep -q "find \"\${REPO_ROOT}/scripts/recovery\".*chmod 0755" "${ROOT}/install.sh" || fail "installer does not repair recovery script executable bits"
+! grep -q 'ln -sfn.*tec-tac-repair' "${ROOT}/install.sh" || fail "installer must not expose recovery toolkit in /usr/local/sbin"
 echo "[TEST] PASS recovery foundation"

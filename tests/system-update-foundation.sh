@@ -2,7 +2,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail(){ echo "[TEST] FAIL: $*" >&2; exit 1; }
-[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.12.0" ]] || fail "VERSION is not 1.12.0"
+[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.12.1" ]] || fail "VERSION is not 1.12.1"
 for f in framwork/tec_tac/system_update.py scripts/system-update-helper.py tec_tac_package.json; do
   [[ -f "${ROOT}/${f}" ]] || fail "missing ${f}"
 done

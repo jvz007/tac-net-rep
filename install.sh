@@ -227,7 +227,7 @@ if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON
 fi
 
 log "Verifying Tec-Tac developer contract catalog."
-VERIFY_CONTRACT_CODE="from tec_tac.contracts import build_contract_catalog,render_markdown,render_text; c=build_contract_catalog(); assert c['framework_version']=='1.12.0', c['framework_version']; assert any(x['name']=='get_capability' for x in c['core']); assert any(x['route']=='/api/tfd/contracts/' for x in c['http']); assert '# Tec-Tac Public Contracts' in render_markdown(c); assert 'TEC-TAC PUBLIC CONTRACTS' in render_text(c); print('TEC-TAC developer contract catalog OK:', c['counts'])"
+VERIFY_CONTRACT_CODE="from tec_tac.contracts import build_contract_catalog,render_markdown,render_text; c=build_contract_catalog(); assert c['framework_version']=='1.12.1', c['framework_version']; assert any(x['name']=='get_capability' for x in c['core']); assert any(x['route']=='/api/tfd/contracts/' for x in c['http']); assert '# Tec-Tac Public Contracts' in render_markdown(c); assert 'TEC-TAC PUBLIC CONTRACTS' in render_text(c); print('TEC-TAC developer contract catalog OK:', c['counts'])"
 if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_CONTRACT_CODE}\""; then
     fail "Tec-Tac developer contract catalog verification failed or timed out."
 fi
@@ -267,6 +267,15 @@ chmod 0644 "${RMM_DROPIN}"
 systemctl daemon-reload
 log "Installed rmm.service supplementary-group drop-in for Tec-Tac runtime access: ${TACTICAL_GROUP}"
 
+# ZIP extraction does not reliably preserve executable bits. Repair the
+# Recovery Toolkit scripts before sourcing/calling them so offline framework
+# updates remain self-healing. Keep the toolkit local to the framework tree.
+find "${REPO_ROOT}/scripts/recovery" -maxdepth 1 -type f -name '*.sh' -exec chmod 0755 {} +
+for recovery_script in "${REPO_ROOT}"/scripts/recovery/*.sh; do
+    [[ -x "${recovery_script}" ]] || fail "Recovery Toolkit script is not executable: ${recovery_script}"
+done
+log "Verified Tec-Tac Recovery Toolkit scripts are executable."
+
 # Use the same permission repair contract as the console recovery toolkit so
 # installer and recovery behavior cannot drift. This also repairs existing
 # directories whose modes were created incorrectly by earlier releases.
@@ -296,9 +305,19 @@ chmod 0644 "${MODULE_STATE_FILE}"
 
 install -o root -g root -m 0755 "${REPO_ROOT}/scripts/module-job-helper.py" "${MODULE_HELPER}"
 install -o root -g root -m 0755 "${REPO_ROOT}/scripts/module-v2-job-helper.py" "${MODULE_V2_HELPER}"
-ln -sfn "${REPO_ROOT}/scripts/recovery/tec-tac-repair.sh" /usr/local/sbin/tec-tac-repair
-ln -sfn "${REPO_ROOT}/scripts/recovery/tec-tac-diagnostics.sh" /usr/local/sbin/tec-tac-diagnostics
-log "Installed Tec-Tac recovery commands: tec-tac-repair, tec-tac-diagnostics"
+
+# Recovery scripts intentionally remain under /opt/tec-tac/scripts/recovery.
+# Remove convenience links created by 1.12.0 when they still point at this
+# framework's recovery scripts; do not remove unrelated administrator files.
+for recovery_link in /usr/local/sbin/tec-tac-repair /usr/local/sbin/tec-tac-diagnostics; do
+    if [[ -L "${recovery_link}" ]]; then
+        recovery_target="$(readlink -f "${recovery_link}" 2>/dev/null || true)"
+        case "${recovery_target}" in
+            "${REPO_ROOT}/scripts/recovery/"*) rm -f "${recovery_link}" ;;
+        esac
+    fi
+done
+log "Tec-Tac Recovery Toolkit retained under ${REPO_ROOT}/scripts/recovery."
 mkdir -p "${MODULE_CONFIG_DIR}"
 cat > "${MODULE_CONFIG}" <<EOF
 REPO_ROOT=${REPO_ROOT}

@@ -1,6 +1,8 @@
 # Tec-Tac Framework
 
-Version **1.12.0** adds framework self-update preservation checks, Module Manager staging repair and independent multi-package classification, the missing Scheduler model-options migration, and a console Recovery Toolkit under `scripts/recovery/`.
+Version **1.12.1** is a corrective release for the Recovery Toolkit packaging. It makes every recovery shell script executable during install/update, verifies executability, and keeps the toolkit exclusively under `/opt/tec-tac/scripts/recovery/` without `/usr/local/sbin` convenience links.
+
+Version **1.12.0** added framework self-update preservation checks, Module Manager staging repair and independent multi-package classification, the missing Scheduler model-options migration, and the console Recovery Toolkit.
 
 Version **1.11.1** is a corrective release for the 1.11.0 installer developer-contract verification. The installer now verifies the deployed framework version against 1.11.1 instead of the stale 1.10.3 assertion.
 
@@ -599,15 +601,17 @@ Visibility is stored in `/var/lib/tec-tac/module-manager/module-state.json` as `
 
 Module Management v2 supports multiple enabled/disabled online repositories, explicit priority and trust labels, cached sync health, online catalog reporting, SHA-256 verified package staging, and installed source provenance. See `docs/module-repositories.md` and `examples/module-repository/index.json`.
 
-## Recovery toolkit (1.12.0)
+## Recovery toolkit (1.12.1)
 
-Framework 1.12.0 installs an idempotent console recovery toolkit under `scripts/recovery/` and exposes the two common entry points as:
+Framework 1.12.1 keeps the Recovery Toolkit self-contained under `/opt/tec-tac/scripts/recovery/`. Offline ZIP updates may discard executable mode bits, so the framework installer now repairs every recovery `*.sh` file to `0755` before sourcing or invoking it and verifies the result. No recovery commands are installed into `/usr/local/sbin`.
+
+Run the common entry points with their framework-local paths:
 
 ```bash
-sudo tec-tac-diagnostics
-sudo tec-tac-repair
+sudo /opt/tec-tac/scripts/recovery/tec-tac-diagnostics.sh
+sudo /opt/tec-tac/scripts/recovery/tec-tac-repair.sh
 ```
 
-`tec-tac-repair` provides diagnostics, Module Manager permission repair, module pair/state validation, explicit missing-module restoration from framework backups, runtime/bootstrap repair, and Scheduler repair. The **Run all safe repairs** option deliberately does not restore backups or reinstall the framework without a separate explicit action.
+`tec-tac-repair.sh` provides diagnostics, Module Manager permission repair, module pair/state validation, explicit missing-module restoration from framework backups, runtime/bootstrap repair, and Scheduler repair. The **Run all safe repairs** option deliberately does not restore backups or reinstall the framework without a separate explicit action.
 
 For automation/support workflows, the focused scripts support `--check` / `--repair`; diagnostics and permission checks also support machine-readable `--json` output.
