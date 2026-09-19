@@ -20,6 +20,8 @@ grep -q 'restore_backup' "${ROOT}/scripts/system-update-helper.py" || fail "roll
 
 grep -q 'snapshot_dynamic_plugins' "${ROOT}/scripts/system-update-helper.py" || fail "dynamic module pre-update inventory missing"
 grep -q 'verify_dynamic_plugins' "${ROOT}/scripts/system-update-helper.py" || fail "dynamic module preservation verification missing"
+grep -q 'VOLATILE_PLUGIN_DIRS' "${ROOT}/scripts/system-update-helper.py" || fail "volatile plugin cache exclusion missing"
+grep -q 'VOLATILE_PLUGIN_SUFFIXES' "${ROOT}/scripts/system-update-helper.py" || fail "volatile plugin bytecode exclusion missing"
 grep -q 'FRAMEWORK_OWNED_PLUGIN_PATHS' "${ROOT}/scripts/system-update-helper.py" || fail "framework-owned plugin boundary missing"
 grep -q 'TEC_TAC_FRAMEWORK_SOURCE' "${ROOT}/install.sh" || fail "framework source layout config missing"
 grep -q 'TEC_TAC_UI_SOURCE' "${ROOT}/install.sh" || fail "UI source layout config missing"
@@ -45,6 +47,24 @@ with tempfile.TemporaryDirectory() as tmp:
     mod.deploy_framework(source,target)
     mod.verify_dynamic_plugins(target,before)
     assert (dyn/'tec_tac.json').is_file() and (rep/'tec_tac.json').is_file()
+
+    # Service restarts/imports may create or rewrite Python bytecode. These are
+    # runtime cache artifacts, not module package mutations, and must not trip
+    # framework preservation verification.
+    cache=dyn/'__pycache__'; cache.mkdir(); (cache/'apps.cpython-312.pyc').write_bytes(b'first-cache')
+    mod.verify_dynamic_plugins(target,before)
+    (cache/'apps.cpython-312.pyc').write_bytes(b'second-cache')
+    (dyn/'orphan.pyc').write_bytes(b'cache-outside-pycache')
+    mod.verify_dynamic_plugins(target,before)
+
+    # Real persistent module content must still be protected.
+    (dyn/'tec_tac.json').write_text('{"id":"customer-module","changed":true}')
+    try:
+        mod.verify_dynamic_plugins(target,before)
+    except RuntimeError as exc:
+        assert 'changed: extensions/customer-module' in str(exc), exc
+    else:
+        raise AssertionError('persistent module source mutation was not detected')
 print('[TEST] dynamic module preservation OK')
 PY_PRESERVE
 

@@ -385,14 +385,28 @@ FRAMEWORK_OWNED_PLUGIN_PATHS = {
 }
 
 
+VOLATILE_PLUGIN_DIRS = {"__pycache__"}
+VOLATILE_PLUGIN_SUFFIXES = {".pyc", ".pyo"}
+
+
+def _volatile_plugin_path(path, root):
+    """Return True for runtime-generated artifacts that are not package content."""
+    rel = path.relative_to(root)
+    if any(part in VOLATILE_PLUGIN_DIRS for part in rel.parts):
+        return True
+    return path.is_file() and path.suffix.lower() in VOLATILE_PLUGIN_SUFFIXES
+
+
 def _tree_digest(root):
-    """Stable digest for a plugin tree, including relative paths and file bytes."""
+    """Stable digest for persistent plugin content, excluding runtime bytecode caches."""
     import hashlib
     digest = hashlib.sha256()
     root = Path(root)
     if not root.exists():
         return None
     for path in sorted(root.rglob("*"), key=lambda p: p.as_posix()):
+        if _volatile_plugin_path(path, root):
+            continue
         rel = path.relative_to(root).as_posix().encode("utf-8")
         digest.update(b"P\0" + rel + b"\0")
         if path.is_symlink():
