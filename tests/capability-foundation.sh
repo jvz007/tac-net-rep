@@ -3,7 +3,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail(){ echo "[TEST] FAIL: $*" >&2; exit 1; }
 
-[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.12.1" ]] || fail "VERSION is not 1.12.1"
+VERSION="$(tr -d '\r\n' < "${ROOT}/VERSION")"
+PACKAGE_VERSION="$(python3 - "${ROOT}/tec_tac_package.json" <<'PY_VERSION'
+import json,sys
+print(json.load(open(sys.argv[1],encoding='utf-8'))['version'])
+PY_VERSION
+)"
+[[ "${PACKAGE_VERSION}" == "${VERSION}" ]] || fail "VERSION (${VERSION}) does not match tec_tac_package.json (${PACKAGE_VERSION})"
 [[ -f "${ROOT}/framwork/tec_tac/capabilities.py" ]] || fail "capabilities.py missing"
 [[ -f "${ROOT}/framwork/tec_tac/capability_views.py" ]] || fail "capability_views.py missing"
 grep -q 'capabilities/' "${ROOT}/framwork/tec_tac/urls.py" || fail "capability routes missing"

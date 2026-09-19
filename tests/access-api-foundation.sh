@@ -3,7 +3,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail(){ echo "[TEST] FAIL: $*" >&2; exit 1; }
 
-[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.2.0" ]] || fail "VERSION is not 1.2.0"
+VERSION="$(tr -d '\r\n' < "${ROOT}/VERSION")"
+PACKAGE_VERSION="$(python3 - "${ROOT}/tec_tac_package.json" <<'PY_VERSION'
+import json,sys
+print(json.load(open(sys.argv[1],encoding='utf-8'))['version'])
+PY_VERSION
+)"
+[[ "${PACKAGE_VERSION}" == "${VERSION}" ]] || fail "VERSION (${VERSION}) does not match tec_tac_package.json (${PACKAGE_VERSION})"
 for f in \
   framwork/tec_tac/apps.py \
   framwork/tec_tac/urls.py \
