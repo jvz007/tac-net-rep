@@ -1,7 +1,0 @@
-{
-  "id": "example",
-  "type": "reportset",
-  "version": "1.0.0",
-  "python_paths": ["."],
-  "django_apps": ["tec_tac_example_reportset.apps.TecTacExampleReportsetConfig"]
-}

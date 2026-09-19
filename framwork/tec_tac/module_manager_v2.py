@@ -486,24 +486,22 @@ def _inspect_bundle(path: Path) -> dict:
 
 def stage_uploaded_artifact(upload) -> dict:
     name = str(getattr(upload, "name", "package"))
-    # First stage using the hardened 1.3.x uploader. A bundle does not satisfy
-    # v1's exactly-one-pair rule, so bundle staging has its own bounded writer.
-    if "bundle" not in name.lower():
-        try:
-            staged = stage_uploaded_package(upload)
-            meta = _load_stage(staged["upload_id"])
-            preview = _package_metadata(Path(meta["package_path"]))
-            plan = resolve_install_plan([preview])
-            staged["preview"] = {**preview, "kind": "package", "plan": plan, "installable": bool(preview.get("installable")) and plan["valid"], "install_block_reason": preview.get("install_block_reason") if not preview.get("installable") else (None if plan["valid"] else "Dependency plan is not satisfiable.")}
-            _atomic_json(STAGED_ROOT / f"{staged['upload_id']}.json", {**meta, "preview": staged["preview"]})
-            return staged
-        except ModuleManagerError as first_error:
-            # A valid bundle may have an arbitrary filename; retry as bundle.
-            if not name.lower().endswith(".zip"):
-                raise
-            bundle_error = first_error
-    else:
-        bundle_error = None
+    # Classification is structural, never filename-based. Always let the
+    # hardened single-package parser inspect the archive first. A genuine
+    # bundle will fail the exactly-one extension/reportset pair contract and
+    # may then be retried as a bundle if it is a ZIP archive.
+    try:
+        staged = stage_uploaded_package(upload)
+        meta = _load_stage(staged["upload_id"])
+        preview = _package_metadata(Path(meta["package_path"]))
+        plan = resolve_install_plan([preview])
+        staged["preview"] = {**preview, "kind": "package", "plan": plan, "installable": bool(preview.get("installable")) and plan["valid"], "install_block_reason": preview.get("install_block_reason") if not preview.get("installable") else (None if plan["valid"] else "Dependency plan is not satisfiable.")}
+        _atomic_json(STAGED_ROOT / f"{staged['upload_id']}.json", {**meta, "preview": staged["preview"]})
+        return staged
+    except ModuleManagerError as first_error:
+        if not name.lower().endswith(".zip"):
+            raise
+        bundle_error = first_error
 
     size = int(getattr(upload, "size", 0) or 0)
     if size <= 0 or size > MAX_PACKAGE_BYTES:
