@@ -2,6 +2,7 @@
 """Root-owned asynchronous worker for Tec-Tac module lifecycle jobs."""
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import pwd
@@ -20,6 +21,23 @@ STAGED_ROOT = STATE_ROOT / "staged"
 RUNNING_ROOT = STATE_ROOT / "running"
 LOGS_ROOT = STATE_ROOT / "logs"
 CONFIG = Path(os.environ.get("TEC_TAC_CONFIG_FILE", "/opt/tec-tac/etc/tec-tac.conf"))
+LIFECYCLE_LOCK_PATH = Path("/var/lib/tec-tac/lifecycle.lock")
+_LIFECYCLE_LOCK_HANDLE = None
+
+
+def acquire_lifecycle_lock():
+    """Serialize module lifecycle work with framework/UI system updates."""
+    global _LIFECYCLE_LOCK_HANDLE
+    LIFECYCLE_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    handle = LIFECYCLE_LOCK_PATH.open("a+")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        handle.close()
+        raise RuntimeError("another Tec-Tac lifecycle operation is already running") from exc
+    _LIFECYCLE_LOCK_HANDLE = handle
+
+
 
 
 def now():
@@ -126,6 +144,7 @@ def run_job(job_id):
     path, job = load_job(job_id)
     if job.get("status") not in {"dispatched", "running"}:
         raise SystemExit("job was not dispatched")
+    acquire_lifecycle_lock()
     config = load_config()
     repo_root = Path(config.get("REPO_ROOT", "/opt/tec-tac")).resolve()
     ui_sync = Path(config.get("UI_SYNC_SCRIPT", "/opt/tec-tac-src/ui/scripts/sync-modules.sh"))

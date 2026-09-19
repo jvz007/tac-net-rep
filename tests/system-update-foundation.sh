@@ -136,3 +136,14 @@ grep -q 'source checkout is not clean' "${ROOT}/scripts/system-update-helper.py"
 grep -q 'tec-tac/offline/' "${ROOT}/scripts/system-update-helper.py" || fail "offline update Git branch missing"
 grep -q 'git.*fetch' "${ROOT}/scripts/system-update-helper.py" || fail "online exact-commit Git update missing"
 echo "[TEST] PASS source checkout hardening"
+
+# 1.13.5 cross-lifecycle serialization: module mutations and system updates must
+# never overlap because module preservation verification assumes a stable tree.
+for helper in scripts/system-update-helper.py scripts/module-job-helper.py scripts/module-v2-job-helper.py; do
+  grep -q 'LIFECYCLE_LOCK_PATH = Path("/var/lib/tec-tac/lifecycle.lock")' "${ROOT}/${helper}" || fail "shared lifecycle lock path missing from ${helper}"
+  grep -q 'acquire_lifecycle_lock()' "${ROOT}/${helper}" || fail "shared lifecycle lock acquisition missing from ${helper}"
+done
+grep -q 'another Tec-Tac lifecycle operation is already running' "${ROOT}/scripts/system-update-helper.py" || fail "system update lifecycle contention error missing"
+grep -q 'another Tec-Tac lifecycle operation is already running' "${ROOT}/scripts/module-job-helper.py" || fail "module v1 lifecycle contention error missing"
+grep -q 'another Tec-Tac lifecycle operation is already running' "${ROOT}/scripts/module-v2-job-helper.py" || fail "module v2 lifecycle contention error missing"
+echo "[TEST] PASS shared lifecycle serialization"

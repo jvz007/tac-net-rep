@@ -31,6 +31,8 @@ LOGS_ROOT = STATE_ROOT / "logs"
 BACKUPS_ROOT = STATE_ROOT / "backups"
 HISTORY_ROOT = STATE_ROOT / "history"
 LOCK_PATH = STATE_ROOT / "update.lock"
+LIFECYCLE_LOCK_PATH = Path("/var/lib/tec-tac/lifecycle.lock")
+_LIFECYCLE_LOCK_HANDLE = None
 CONFIG = Path(os.environ.get("TEC_TAC_CONFIG_FILE", "/opt/tec-tac/etc/tec-tac.conf"))
 SELF = Path("/usr/local/sbin/tec-tac-system-update")
 
@@ -83,6 +85,19 @@ def load_job(job_id):
 
 def tactical_gid(config):
     return pwd.getpwnam(config.get("TACTICAL_USER", "tactical")).pw_gid
+
+
+def acquire_lifecycle_lock():
+    """Serialize system updates with all module lifecycle mutations."""
+    global _LIFECYCLE_LOCK_HANDLE
+    LIFECYCLE_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    handle = LIFECYCLE_LOCK_PATH.open("a+")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        handle.close()
+        raise RuntimeError("another Tec-Tac lifecycle operation is already running") from exc
+    _LIFECYCLE_LOCK_HANDLE = handle
 
 
 def claim_job(job_id):
@@ -564,6 +579,7 @@ def run_job(job_id):
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise RuntimeError("another Tec-Tac system update is already running") from exc
+        acquire_lifecycle_lock()
 
         job["status"] = "running"
         job["started_at"] = now()

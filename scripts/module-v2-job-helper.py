@@ -9,6 +9,7 @@ migrations already applied by a package are intentionally not auto-reversed.
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import pwd
@@ -31,6 +32,23 @@ LOGS_ROOT = STATE_ROOT / "logs"
 BACKUP_ROOT = STATE_ROOT / "bundle-backups"
 MODULE_STATE = STATE_ROOT / "module-state.json"
 CONFIG = Path(os.environ.get("TEC_TAC_CONFIG_FILE", "/opt/tec-tac/etc/tec-tac.conf"))
+LIFECYCLE_LOCK_PATH = Path("/var/lib/tec-tac/lifecycle.lock")
+_LIFECYCLE_LOCK_HANDLE = None
+
+
+def acquire_lifecycle_lock():
+    """Serialize module lifecycle work with framework/UI system updates."""
+    global _LIFECYCLE_LOCK_HANDLE
+    LIFECYCLE_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    handle = LIFECYCLE_LOCK_PATH.open("a+")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        handle.close()
+        raise RuntimeError("another Tec-Tac lifecycle operation is already running") from exc
+    _LIFECYCLE_LOCK_HANDLE = handle
+
+
 BUNDLES_ROOT = STAGED_ROOT / "bundles"
 BATCHES_ROOT = STAGED_ROOT / "batches"
 ALLOWED_ACTIONS = {"enable", "disable", "visibility", "bundle_install", "batch_install"}
@@ -333,6 +351,7 @@ def run_job(job_id):
     path, job = load_job(job_id)
     if job.get("status") not in {"dispatched", "running"}:
         raise SystemExit("job was not dispatched")
+    acquire_lifecycle_lock()
     config = load_config()
     repo_root = Path(config.get("REPO_ROOT", "/opt/tec-tac")).resolve()
     log_path = LOGS_ROOT / f"{job_id}.log"
