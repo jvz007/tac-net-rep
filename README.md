@@ -644,3 +644,7 @@ Tec-Tac separates replaceable Git source from installed runtime code:
 ```
 
 Run `sudo bash scripts/migrate-layout.sh` once when upgrading a legacy installation where `/opt/tec-tac` or `/opt/tec-tac-ui` is still a Git checkout.
+
+## User preferences (1.13.9)
+
+Tec-Tac now stores durable per-user UI preferences server-side against the authenticated Tactical user. `GET`, `PUT`, and `DELETE /api/tfd/ui/preferences/` operate only on `request.user`, and `/api/tfd/ui/context/` includes the normalized preference profile and initialization metadata for efficient UI startup. See `docs/user-preferences.md`.

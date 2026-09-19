@@ -1,3 +1,4 @@
+from .preference_views import UserPreferencesView
 from .capability_views import CapabilityListView, CapabilityDetailView
 from .contract_views import ContractCatalogView, ContractExportView
 from django.urls import path
@@ -36,6 +37,7 @@ urlpatterns = [
     path("scheduler/self-test/", SchedulerSelfTestView.as_view(), name="tec-tac-scheduler-self-test"),
 
     path("ui/context/", UiContextView.as_view(), name="tec-tac-ui-context"),
+    path("ui/preferences/", UserPreferencesView.as_view(), name="tec-tac-user-preferences"),
     path("system/updates/", SystemUpdateStatusView.as_view(), name="tec-tac-system-update-status"),
     path("system/updates/packages/inspect/", SystemUpdatePackageInspectView.as_view(), name="tec-tac-system-update-package-inspect"),
     path("system/updates/packages/<uuid:upload_id>/", SystemUpdatePackageStageView.as_view(), name="tec-tac-system-update-package-stage"),

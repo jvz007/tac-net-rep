@@ -529,28 +529,7 @@ elif [[ -n "${EXISTING_PERMISSIONS}" ]]; then
         [[ "${marker}" == "FOUND" ]] || continue
         log "Role: ${role_name} (id=${role_id}); users: ${usernames}"
     done <<< "${EXISTING_PERMISSIONS}"
-
-    CHANGE_PERMISSION="n"
-    if [[ -t 0 ]]; then
-        printf '[TEC-TAC] Change/add reporting ingest permission assignment? [y/N]: '
-        read -r CHANGE_PERMISSION
-    fi
-
-    case "${CHANGE_PERMISSION}" in
-        y|Y|yes|YES|Yes)
-            printf '[TEC-TAC] Tactical username whose role should receive reporting ingest permission: '
-            read -r REPORTING_USERNAME
-            if [[ -n "${REPORTING_USERNAME}" ]]; then
-                log "Granting reporting ingest permission using Tactical user '${REPORTING_USERNAME}'."
-                bash "${REPO_ROOT}/scripts/reporting-permission.sh" "${REPORTING_USERNAME}" manage
-            else
-                log "No username entered; existing reporting permission assignment(s) kept unchanged."
-            fi
-            ;;
-        *)
-            log "Keeping existing reporting permission assignment(s) unchanged."
-            ;;
-    esac
+    log "Keeping existing reporting permission assignment(s) unchanged."
 elif [[ -t 0 ]]; then
     printf '[TEC-TAC] Tactical username to grant reporting ingest permission (leave blank to skip): '
     read -r REPORTING_USERNAME

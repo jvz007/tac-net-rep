@@ -140,3 +140,22 @@ class TecTacScheduleRun(models.Model):
 
     def __str__(self):
         return f"{self.schedule_snapshot_id or self.schedule_id}:{self.status}:{self.scheduled_for.isoformat()}"
+
+
+class TecTacUserPreferences(models.Model):
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="tec_tac_preferences",
+        primary_key=True,
+    )
+    preferences = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Tec-Tac user preferences"
+        verbose_name_plural = "Tec-Tac user preferences"
+
+    def __str__(self):
+        return f"Tec-Tac preferences: {self.user_id}"

@@ -38,6 +38,8 @@ from .system_update import (
     system_status,
 )
 
+from .preferences import get_user_preferences
+
 from .rbac import (
     effective_permissions,
     get_all_role_permissions,
@@ -145,12 +147,16 @@ class UiContextView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        preferences, preferences_initialized, preferences_updated_at = get_user_preferences(request.user)
         return Response(
             {
                 "user": _user_payload(request.user),
                 "permissions": sorted(effective_permissions(request.user)),
                 "extensions": permission_catalog(),
                 "capabilities": _native_capabilities(request.user),
+                "preferences": preferences,
+                "preferences_initialized": preferences_initialized,
+                "preferences_updated_at": preferences_updated_at,
             }
         )
 
