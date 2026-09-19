@@ -181,6 +181,9 @@ RULES = (
     "Optional integrations must soft-fail only the dependent feature when a provider is missing, disabled, unhealthy or incompatible.",
     "Modules define WHAT can run; the shared Scheduler owns WHEN it runs, recurrence, retry, concurrency and history.",
     "Backend authorization is authoritative; frontend visibility is never a substitute for permission checks.",
+    "Treat transport acknowledgement as transport state, not operation success; providers must verify downstream execution outcome before returning success.",
+    "Scheduled handlers must propagate downstream execution failures so Scheduler history and retry semantics reflect the real result.",
+    "When dispatching raw OS commands, build and test the command for the exact shell used by the agent; Windows cmd.exe quoting, especially Program Files paths, must be deliberate.",
 )
 
 

@@ -4,6 +4,7 @@ from django.http import HttpResponse
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.renderers import JSONRenderer
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -34,12 +35,20 @@ class ContractCatalogView(APIView):
 @extend_schema_view(get=extend_schema(tags=["Tec-Tac Developer Contracts"], summary="Export live public development contracts"))
 class ContractExportView(APIView):
     permission_classes = [IsAuthenticated]
+    renderer_classes = [JSONRenderer]
+
+    def perform_content_negotiation(self, request, force=False):
+        # Attachment format is selected explicitly by export_format=md|txt.
+        # Do not let DRF reject text/markdown or text/plain Accept headers before
+        # this view can return its HttpResponse attachment.
+        renderer = self.get_renderers()[0]
+        return renderer, renderer.media_type
 
     def get(self, request):
         _require_contract_access(request.user)
-        export_format = str(request.query_params.get("format") or "md").strip().lower()
+        export_format = str(request.query_params.get("export_format") or "md").strip().lower()
         if export_format not in {"md", "txt"}:
-            return Response({"detail": "format must be md or txt."}, status=400)
+            return Response({"detail": "export_format must be md or txt."}, status=400)
         catalog = build_contract_catalog()
         if export_format == "md":
             body = render_markdown(catalog)

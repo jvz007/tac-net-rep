@@ -1470,6 +1470,21 @@ For the complete contract, including snapshot/dynamic targets, permissions, retr
 docs/module-scheduling.md
 ```
 
+## Do not confuse dispatch with execution success
+
+When an extension sends work through Tactical raw commands, NATS, a queue, HTTP, a webhook, or another transport, a transport response does **not** automatically mean the requested operation succeeded.
+
+```text
+transport accepted/sent request  -> dispatched
+downstream command/app success   -> executed/delivered
+downstream command/app error     -> failed
+no final execution evidence      -> pending/unknown
+```
+
+A Scheduler handler returns success only when it can justify that result. If the endpoint or downstream application reports failure, propagate that failure so Scheduler history and retries are accurate. If only dispatch is known, return a dispatch state instead of claiming delivery.
+
+Raw OS commands must also be tested using the exact shell selected by the agent transport. For example, a Windows command sent with `shell: "cmd"` must follow `cmd.exe` quoting rules; executable paths containing spaces such as `C:\Program Files\...` require deliberate command construction and an end-to-end test through the same raw-command path used in production.
+
 # Interdependent modules and soft failure
 
 When one extension integrates with another, depend on the provider's **public contract**, not its internal models, tables, helpers, views, or filesystem structure.
@@ -1563,8 +1578,8 @@ Before integrating with another Tec-Tac module, inspect the live contract catalo
 
 ```text
 GET /api/tfd/contracts/
-GET /api/tfd/contracts/export/?format=md
-GET /api/tfd/contracts/export/?format=txt
+GET /api/tfd/contracts/export/?export_format=md
+GET /api/tfd/contracts/export/?export_format=txt
 ```
 
 Tec-Tac UI 0.9.0 exposes the same catalog at **Administration -> Public Contracts**. The Markdown export is intended to be handed directly to module coding agents. It includes stable core Python contracts, live registered capabilities, live Scheduler actions, extension permissions, and the `/api/tfd/` HTTP boundary.

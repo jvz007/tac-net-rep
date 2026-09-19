@@ -1320,25 +1320,59 @@ remain logged in.</p>
 permissions, retry/concurrency behaviour, Communicator and Patch
 Management examples, see:</p>
 <pre class="text"><code>docs/module-scheduling.md</code></pre>
-
-<section>
-  <h1>Interdependent modules and soft failure</h1>
-  <p>When one extension integrates with another, depend on the provider's <strong>public contract</strong>, not its internal models, tables, helpers, views, or filesystem structure.</p>
-  <p>Classify the relationship first:</p>
-  <ul>
-    <li><strong>Hard dependency:</strong> the module cannot fulfil its core purpose without the provider. Declare it in <code>dependencies</code> with an explicit compatible version range.</li>
-    <li><strong>Optional dependency:</strong> the module works without the provider but gains extra features when it is available. Declare it in <code>optional_dependencies</code>.</li>
-    <li><strong>Framework service:</strong> a capability used broadly across modules should live in Tec-Tac core. Scheduler is already a framework service; shared resource metadata/tags is the intended pattern for tag-based targeting.</li>
-  </ul>
-  <pre><code>{
-  "optional_dependencies": {
-    "tags": ">=1.0.0,&lt;2.0.0"
-  }
-}</code></pre>
-
-  <h2>Required soft-failure behaviour</h2>
-  <p>A missing, disabled, broken, or incompatible dependency must not crash Tec-Tac or unrelated features in the consumer module.</p>
-  <pre><code>provider available
+<h2 id="do-not-confuse-dispatch-with-execution-success">Do not confuse
+dispatch with execution success</h2>
+<p>When an extension sends work through Tactical raw commands, NATS, a
+queue, HTTP, a webhook, or another transport, a transport response does
+<strong>not</strong> automatically mean the requested operation
+succeeded.</p>
+<pre class="text"><code>transport accepted/sent request  -&gt; dispatched
+downstream command/app success   -&gt; executed/delivered
+downstream command/app error     -&gt; failed
+no final execution evidence      -&gt; pending/unknown</code></pre>
+<p>A Scheduler handler returns success only when it can justify that
+result. If the endpoint or downstream application reports failure,
+propagate that failure so Scheduler history and retries are accurate. If
+only dispatch is known, return a dispatch state instead of claiming
+delivery.</p>
+<p>Raw OS commands must also be tested using the exact shell selected by
+the agent transport. For example, a Windows command sent with
+<code>shell: "cmd"</code> must follow <code>cmd.exe</code> quoting
+rules; executable paths containing spaces such as
+<code>C:\Program Files\...</code> require deliberate command
+construction and an end-to-end test through the same raw-command path
+used in production.</p>
+<h1 id="interdependent-modules-and-soft-failure">Interdependent modules
+and soft failure</h1>
+<p>When one extension integrates with another, depend on the provider’s
+<strong>public contract</strong>, not its internal models, tables,
+helpers, views, or filesystem structure.</p>
+<p>Classify the relationship first:</p>
+<ul>
+<li><strong>Hard dependency</strong>: the module cannot fulfil its core
+purpose without the provider. Declare it in <code>dependencies</code>
+with an explicit compatible version range.</li>
+<li><strong>Optional dependency</strong>: the module works without the
+provider but enables extra features when it is available. Declare it in
+<code>optional_dependencies</code>.</li>
+<li><strong>Framework service</strong>: the capability is broadly useful
+across many modules and should live in Tec-Tac core rather than creating
+a dependency web. Scheduler is already a framework service; shared
+resource metadata/tags is the intended pattern for tag-based
+targeting.</li>
+</ul>
+<p>Example optional dependency:</p>
+<div class="sourceCode" id="cb107"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb107-1"><a href="#cb107-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb107-2"><a href="#cb107-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;optional_dependencies&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb107-3"><a href="#cb107-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;tags&quot;</span><span class="fu">:</span> <span class="st">&quot;&gt;=1.0.0,&lt;2.0.0&quot;</span></span>
+<span id="cb107-4"><a href="#cb107-4" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
+<span id="cb107-5"><a href="#cb107-5" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<h2 id="required-soft-failure-behaviour">Required soft-failure
+behaviour</h2>
+<p>A missing, disabled, broken, or incompatible dependency must not
+crash Tec-Tac or unrelated features in the consumer module.</p>
+<pre class="text"><code>provider available
     -&gt; integration feature works
 
 provider unavailable
@@ -1347,45 +1381,74 @@ provider unavailable
     -&gt; dependent feature is disabled/degraded
     -&gt; UI states the reason
     -&gt; backend refuses the dependent operation cleanly</code></pre>
-  <p>This applies even to hard dependencies after installation. Module Manager prevents known invalid dependency states, but runtime state can still drift because of faults, manual disablement, partial upgrades, or broken provider code.</p>
-  <p>Do not put unguarded optional-provider imports in <code>AppConfig.ready()</code>. Do not hide a failed integration silently; show whether the provider is missing, disabled, incompatible, unhealthy, or missing the required capability.</p>
-
-  <h2>Current framework boundary</h2>
-  <p>Tec-Tac 1.9.0 implements the generic cross-module capability registry. Backend modules should consume provider contracts through <code>tec_tac.capabilities</code> rather than importing provider-private code or calling Tec-Tac HTTP APIs over localhost.</p>
-  <pre><code>from tec_tac.capabilities import register_capability, get_capability
-
-register_capability(
-    id="communicator.messaging",
-    module_id="communicator",
-    version="1.0.0",
-    provider=communicator_service,
-)
-
-communicator = get_capability(
-    "communicator.messaging",
-    version=">=1,&lt;2",
-    required=False,
-)</code></pre>
-  <p>Use <code>capability_status()</code> for missing, disabled, unhealthy, incompatible, or unregistered states. Capability contract versions are independent from module package versions. Package lifecycle dependencies remain in <code>tec_tac.json</code>, and capability availability must be checked again at execution time.</p>
-  <p>See <code>docs/capabilities.md</code> and <code>docs/core-functions.md</code> for the supported functions and import paths.</p>
-  <p>Until that registry exists, keep integration behind a small adapter and use only a provider API/service contract explicitly documented by the provider. Guard availability and errors at that boundary.</p>
-  <p>See <code>docs/module-interoperability.md</code> for the full contract and examples.</p>
-
-  <h2>Scheduled integrations</h2>
-  <p>If a scheduled action depends on another module, validate the dependency again when the run executes. A schedule may execute days or months after it was created. Permanent incompatibility should produce a clear scheduler-history diagnostic rather than repeated blind retries. Temporary provider outages may use the configured scheduler retry policy when recovery is realistic.</p>
-</section>
-
-
-<section id="developer-contract-catalog">
-  <h2>Live Developer Contract catalog (Framework 1.10.0+)</h2>
-  <p>Before integrating with another Tec-Tac module, inspect the live contract catalog rather than assuming an older module implementation is still current.</p>
-  <pre><code>GET /api/tfd/contracts/
-GET /api/tfd/contracts/export/?format=md
-GET /api/tfd/contracts/export/?format=txt</code></pre>
-  <p>Tec-Tac UI 0.9.0 exposes the same catalog at <strong>Administration -&gt; Public Contracts</strong>. The Markdown export is intended to be handed directly to module coding agents. It includes stable core Python contracts, live registered capabilities, live Scheduler actions, extension permissions, and the <code>/api/tfd/</code> HTTP boundary.</p>
-  <p>The export is an integration contract, not permission to import provider internals. Backend modules still use Python <code>tec_tac.*</code> contracts, cross-module business operations use <code>tec_tac.capabilities</code>, and browser/external callers use authenticated HTTP.</p>
-  <p>See <code>docs/developer-contracts.md</code>.</p>
-</section>
-
+<p>This applies even to hard dependencies after installation: Module
+Manager prevents known invalid dependency states, but runtime state can
+still drift because of faults, manual disablement, partial upgrades, or
+broken provider code.</p>
+<p>Do not put unguarded optional-provider imports in
+<code>AppConfig.ready()</code>.</p>
+<p>Do not hide a failed integration silently. Show whether the provider
+is missing, disabled, incompatible, unhealthy, or missing the required
+capability.</p>
+<h2 id="current-framework-boundary">Current framework boundary</h2>
+<p>Tec-Tac 1.9.0 implements the generic cross-module capability
+registry. Backend modules should consume provider contracts through
+<code>tec_tac.capabilities</code> rather than importing provider-private
+code or calling Tec-Tac HTTP APIs over localhost.</p>
+<p>Provider example:</p>
+<div class="sourceCode" id="cb109"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb109-1"><a href="#cb109-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> tec_tac.capabilities <span class="im">import</span> register_capability</span>
+<span id="cb109-2"><a href="#cb109-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb109-3"><a href="#cb109-3" aria-hidden="true" tabindex="-1"></a>register_capability(</span>
+<span id="cb109-4"><a href="#cb109-4" aria-hidden="true" tabindex="-1"></a>    <span class="bu">id</span><span class="op">=</span><span class="st">&quot;communicator.messaging&quot;</span>,</span>
+<span id="cb109-5"><a href="#cb109-5" aria-hidden="true" tabindex="-1"></a>    module_id<span class="op">=</span><span class="st">&quot;communicator&quot;</span>,</span>
+<span id="cb109-6"><a href="#cb109-6" aria-hidden="true" tabindex="-1"></a>    version<span class="op">=</span><span class="st">&quot;1.0.0&quot;</span>,</span>
+<span id="cb109-7"><a href="#cb109-7" aria-hidden="true" tabindex="-1"></a>    provider<span class="op">=</span>communicator_service,</span>
+<span id="cb109-8"><a href="#cb109-8" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div>
+<p>Consumer example:</p>
+<div class="sourceCode" id="cb110"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb110-1"><a href="#cb110-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> tec_tac.capabilities <span class="im">import</span> get_capability</span>
+<span id="cb110-2"><a href="#cb110-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb110-3"><a href="#cb110-3" aria-hidden="true" tabindex="-1"></a>communicator <span class="op">=</span> get_capability(</span>
+<span id="cb110-4"><a href="#cb110-4" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;communicator.messaging&quot;</span>,</span>
+<span id="cb110-5"><a href="#cb110-5" aria-hidden="true" tabindex="-1"></a>    version<span class="op">=</span><span class="st">&quot;&gt;=1,&lt;2&quot;</span>,</span>
+<span id="cb110-6"><a href="#cb110-6" aria-hidden="true" tabindex="-1"></a>    required<span class="op">=</span><span class="va">False</span>,</span>
+<span id="cb110-7"><a href="#cb110-7" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div>
+<p>Use <code>capability_status()</code> to expose missing, disabled,
+unhealthy, incompatible, or unregistered states. Capability contract
+versions are independent from module package versions. Keep package
+lifecycle dependencies in <code>tec_tac.json</code> and re-check
+capability availability at execution time.</p>
+<p>See <code>docs/capabilities.md</code> and
+<code>docs/core-functions.md</code>.</p>
+<p>See the complete contract and examples in:</p>
+<pre class="text"><code>docs/module-interoperability.md</code></pre>
+<h2 id="scheduled-integrations">Scheduled integrations</h2>
+<p>If a scheduled action depends on another module, validate that
+dependency again when the run executes. A schedule may execute days or
+months after it was created.</p>
+<p>Permanent incompatibility should produce a clear scheduler-history
+diagnostic rather than repeated blind retries. Temporary provider
+outages may use the configured scheduler retry policy when recovery is
+realistic.</p>
+<h2 id="live-developer-contract-catalog-framework-1.10.0">Live Developer
+Contract catalog (Framework 1.10.0+)</h2>
+<p>Before integrating with another Tec-Tac module, inspect the live
+contract catalog rather than assuming an older module implementation is
+still current.</p>
+<pre class="text"><code>GET /api/tfd/contracts/
+GET /api/tfd/contracts/export/?export_format=md
+GET /api/tfd/contracts/export/?export_format=txt</code></pre>
+<p>Tec-Tac UI 0.9.0 exposes the same catalog at <strong>Administration
+-&gt; Public Contracts</strong>. The Markdown export is intended to be
+handed directly to module coding agents. It includes stable core Python
+contracts, live registered capabilities, live Scheduler actions,
+extension permissions, and the <code>/api/tfd/</code> HTTP boundary.</p>
+<p>The export is an integration contract, not permission to import
+provider internals. Backend modules still use Python
+<code>tec_tac.*</code> contracts, cross-module business operations use
+<code>tec_tac.capabilities</code>, and browser/external callers use
+authenticated HTTP.</p>
+<p>See <code>docs/developer-contracts.md</code>.</p>
 </body>
 </html>

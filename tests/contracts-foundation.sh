@@ -15,9 +15,21 @@ grep -q 'render_text' "${ROOT}/framwork/tec_tac/contracts.py" || fail "text expo
 grep -q 'path("contracts/"' "${ROOT}/framwork/tec_tac/urls.py" || fail "contract catalog route missing"
 grep -q 'path("contracts/export/"' "${ROOT}/framwork/tec_tac/urls.py" || fail "contract export route missing"
 grep -q 'server-maintenance authority' "${ROOT}/framwork/tec_tac/contract_views.py" || fail "contract access guard missing"
-grep -q 'format must be md or txt' "${ROOT}/framwork/tec_tac/contract_views.py" || fail "export format validation missing"
+grep -q 'export_format must be md or txt' "${ROOT}/framwork/tec_tac/contract_views.py" || fail "export format validation missing"
 python3 -m py_compile \
   "${ROOT}/framwork/tec_tac/contracts.py" \
   "${ROOT}/framwork/tec_tac/contract_views.py" \
   "${ROOT}/framwork/tec_tac/urls.py"
 echo "[TEST] PASS contracts foundation"
+
+grep -q 'request.query_params.get("export_format")' "${ROOT}/framwork/tec_tac/contract_views.py" || fail "contract export must avoid DRF reserved format query parameter"
+! grep -q 'request.query_params.get("format")' "${ROOT}/framwork/tec_tac/contract_views.py" || fail "reserved DRF format query parameter is still used"
+
+# 1.10.2 export content-negotiation regression
+grep -q "def perform_content_negotiation" "${ROOT}/framwork/tec_tac/contract_views.py" || fail "contract export must bypass DRF Accept negotiation"
+grep -q 'export_format' "${ROOT}/framwork/tec_tac/contract_views.py" || fail "contract export must use export_format selector"
+
+# 1.10.3 execution-result semantics
+grep -q "Treat transport acknowledgement as transport state" "${ROOT}/framwork/tec_tac/contracts.py" || fail "transport-vs-execution contract rule missing"
+grep -q "Scheduled handlers must propagate downstream execution failures" "${ROOT}/framwork/tec_tac/contracts.py" || fail "scheduled downstream failure propagation rule missing"
+grep -q "Windows cmd.exe quoting" "${ROOT}/framwork/tec_tac/contracts.py" || fail "raw command shell-safety rule missing"

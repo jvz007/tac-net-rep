@@ -211,6 +211,24 @@ Backend modules use the Python registry directly. Browser/external callers use H
 
 See `docs/capabilities.md` for the complete contract and `docs/core-functions.md` for the core-function index.
 
+## Cross-module operation result semantics
+
+A public capability or provider operation must distinguish **transport state** from **business/execution state**.
+
+A queue publish, NATS response, HTTP 2xx, webhook acknowledgement, or task ID normally proves only that a lower-level transport accepted or answered the request. It does not automatically prove that the remote application or endpoint command completed successfully.
+
+Provider contracts should expose the strongest state they can actually verify, for example:
+
+```text
+requested -> dispatched -> executed
+                      \-> failed
+                      \-> pending/unknown
+```
+
+Consumers and scheduled handlers must not translate `dispatched` into `succeeded` unless the provider contract explicitly guarantees that the returned result represents completed execution. Preserve downstream error text/exit status for diagnostics and propagate operation failure through the public contract.
+
+For raw endpoint commands, the provider also owns shell correctness. Build and test the final command against the exact shell used by the agent transport (`cmd.exe`, PowerShell, Bash, etc.). Paths containing spaces, nested quotes, environment expansion, redirection, and shell-specific escaping are part of the provider's execution contract, not incidental implementation details.
+
 ## Tags example
 
 Tags are a good example of a capability that should become framework-owned resource metadata because many modules can consume it:

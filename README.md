@@ -1,6 +1,6 @@
 # Tec-Tac Tactical RMM Extension Framework
 
-Version **1.10.0** adds a live Developer Contract catalog and Markdown/Text exports for module developers and coding agents. See `docs/developer-contracts.md`.
+Version **1.10.3** strengthens the module-development contract around downstream execution results: transport acknowledgement is not operation success, scheduled handlers must propagate downstream failures, and raw OS commands must be shell-safe and tested through the production agent path. Version 1.10.2 fixed Public Contracts attachment export content negotiation. See `docs/module-scheduling.md` and `docs/developer-contracts.md`.
 
 Module interoperability: `docs/module-interoperability.md`.
 Core module developer reference: `docs/core-functions.md`.

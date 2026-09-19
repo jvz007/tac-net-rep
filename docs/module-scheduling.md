@@ -152,7 +152,68 @@ retry_delay_seconds
 
 Do not implement a second retry loop inside the handler unless the module is retrying a lower-level operation within one scheduler attempt for a deliberate reason.
 
-## 5. Targets: snapshot vs dynamic
+## 5. Downstream dispatch and execution success
+
+**Transport acknowledgement is not operation success.**
+
+The Scheduler marks a run successful when the registered handler returns without raising an exception. Therefore the handler is responsible for distinguishing each lower-level state correctly.
+
+For endpoint, queue, NATS, API, webhook, or message-bus execution, use semantics such as:
+
+```text
+requested
+  -> dispatched        transport accepted/sent the request
+  -> executed          downstream operation completed successfully
+  -> failed            downstream operation returned an execution failure
+  -> unknown/pending   transport succeeded but final execution state is not yet known
+```
+
+Do **not** report `delivered`, `executed`, `succeeded`, or `ok: true` merely because a transport returned a response. A response may itself contain a shell error, application error, non-zero exit status, timeout, or partial failure.
+
+For synchronous endpoint commands:
+
+1. capture the raw transport response;
+2. inspect the downstream execution result/exit status when the transport exposes one;
+3. treat command/application failure as handler failure;
+4. raise an exception so Scheduler history and configured retry behaviour reflect the real result;
+5. return structured success only after execution success is verified.
+
+If the transport does not provide a final execution result, report only what is known, for example `dispatched: 1` with `execution_state: "unknown"`; do not upgrade transport success into delivery/execution success.
+
+Example:
+
+```python
+response = send_to_agent(...)
+
+if not response.transport_ok:
+    raise RuntimeError(f"Agent transport failed: {response.error}")
+
+if response.exit_code not in (0, None):
+    raise RuntimeError(
+        f"Endpoint command failed with exit code {response.exit_code}: {response.stderr}"
+    )
+
+if response.exit_code is None:
+    return {"ok": True, "dispatched": 1, "execution_state": "unknown"}
+
+return {"ok": True, "dispatched": 1, "executed": 1}
+```
+
+### Raw OS command shell safety
+
+When a module dispatches a raw operating-system command, build and test that command for the **exact shell selected by the agent transport**. Do not assume quoting rules are interchangeable between `cmd.exe`, PowerShell, Bash, or another shell.
+
+Windows executable paths containing spaces are a common failure point. For a Tactical raw command using `shell: "cmd"`, verify the exact command through `cmd.exe`. One robust pattern is to change directory first and invoke the executable by name:
+
+```cmd
+cd /d "C:\Program Files\Vendor Product\cli" && Product.Cli.exe send ...
+```
+
+If using `cmd /c` with a quoted executable path, apply `cmd.exe`'s nested-quote rules deliberately and test the final generated string end-to-end.
+
+Never mark a raw command as delivered merely because NATS/API transport returned text. Persist the response for diagnostics and classify the operation from the actual execution result.
+
+## 6. Targets: snapshot vs dynamic
 
 ### Snapshot
 
@@ -185,7 +246,7 @@ The scheduler stores/transports this object; the **module handler** owns the mea
 
 For patch policies, dynamic targeting will usually be preferable. For a one-time Communicator message to selected endpoints, snapshot targeting will usually be preferable.
 
-## 6. Parameters belong to the module
+## 7. Parameters belong to the module
 
 The scheduler intentionally treats `parameters` as opaque JSON. This lets each module evolve without adding module-specific columns to the framework scheduler.
 
@@ -210,7 +271,7 @@ Patch example:
 
 Validate required fields, allowed values, lengths, and safety constraints inside the module handler (and preferably in the module's schedule-creation UI before submission as well).
 
-## 7. Permissions and unattended execution
+## 8. Permissions and unattended execution
 
 The `permission` declared on the action controls who may see/use that action through the Scheduler API unless they have native server-maintenance/superuser scheduler authority.
 
@@ -226,13 +287,13 @@ Therefore, the handler must not depend on `request.user`, session state, browser
 
 If the underlying external integration needs credentials, use the module's normal server-side credential/configuration mechanism.
 
-## 8. Do not use JavaScript-only registration
+## 9. Do not use JavaScript-only registration
 
 A scheduler action must exist in server-side Python because scheduled work executes with no browser present.
 
 The module UI may provide a convenient schedule form or deep-link into Operations -> Schedules, but JavaScript registration is not authoritative for execution.
 
-## 9. Communicator example
+## 10. Communicator example
 
 Recommended action:
 
@@ -257,7 +318,7 @@ The handler should:
 
 Do not schedule PowerShell scripts merely to provide timing. The framework scheduler should call the Communicator module action directly.
 
-## 10. Patch Management example
+## 11. Patch Management example
 
 Recommended action:
 
@@ -286,13 +347,13 @@ The handler should resolve targets and then use the Patch Management module's no
 }
 ```
 
-## 11. Action availability during module lifecycle
+## 12. Action availability during module lifecycle
 
 The action registry exists in process memory. If a module is removed or its Django app no longer registers an action, a due schedule cannot execute that action. The framework records a skipped run with `ActionUnavailable` rather than silently doing nothing.
 
 Module upgrades should preserve stable action IDs where possible. Renaming an action ID is a schedule-breaking change unless migration/compatibility handling is provided.
 
-## 12. Testing checklist
+## 13. Testing checklist
 
 For every module action, test at least:
 
@@ -306,9 +367,12 @@ For every module action, test at least:
 - retry behaviour is correct;
 - duplicate/concurrent execution behaves as intended;
 - removing/disable-changing the module does not create silent scheduler failures;
-- handler result is JSON-safe and useful in history.
+- handler result is JSON-safe and useful in history;
+- transport acknowledgement is not mistaken for downstream execution success;
+- endpoint/shell/application failures propagate into Scheduler run failure;
+- raw OS commands are tested through the same shell selected by the production agent transport, including paths with spaces.
 
-## 13. Operator-facing schedule UI
+## 14. Operator-facing schedule UI
 
 The shared schedule administration surface is:
 

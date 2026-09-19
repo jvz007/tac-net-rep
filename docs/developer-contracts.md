@@ -14,8 +14,8 @@ The Developer Contract catalog combines stable framework contracts with the curr
 
 ```text
 GET /api/tfd/contracts/
-GET /api/tfd/contracts/export/?format=md
-GET /api/tfd/contracts/export/?format=txt
+GET /api/tfd/contracts/export/?export_format=md
+GET /api/tfd/contracts/export/?export_format=txt
 ```
 
 These endpoints require an authenticated Tactical user with server-maintenance/superuser authority.
@@ -121,6 +121,18 @@ docs/module-interoperability.md
 docs/module-scheduling.md
 docs/scheduler.md
 ```
+
+## Execution semantics in exported rules
+
+Framework 1.10.3 adds execution-result guidance to the generated Markdown/Text handoff. Coding agents should treat these rules as part of the public development contract:
+
+- transport acknowledgement is not operation success;
+- scheduled handlers must propagate downstream execution failure;
+- providers should distinguish `dispatched` from verified `executed`/`delivered`;
+- raw OS commands must be built and tested for the exact shell used by the production agent transport;
+- Windows `cmd.exe` quoting, especially executable paths under `Program Files`, must be tested end-to-end.
+
+These rules prevent a scheduler/capability operation from being recorded as successful when only the transport succeeded while the endpoint application or shell command actually failed.
 
 ## Important limitation
 
