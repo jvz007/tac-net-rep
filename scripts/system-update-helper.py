@@ -190,12 +190,151 @@ def detect_root(extracted, component):
     return matches[0]
 
 
+def _git(command, target, *, check=True, capture=True):
+    args = ["git", "-C", str(target), *command]
+    result = subprocess.run(
+        args,
+        stdout=subprocess.PIPE if capture else None,
+        stderr=subprocess.PIPE if capture else None,
+        text=True,
+    )
+    if check and result.returncode != 0:
+        detail = (result.stderr or result.stdout or "git command failed").strip()
+        raise RuntimeError(f"git {' '.join(command)} failed: {detail}")
+    return result
+
+
+def prepare_source_checkout(target, component):
+    """Validate the source checkout before any destructive update work."""
+    if not (target / ".git").is_dir():
+        raise RuntimeError(f"{component} source is not a Git checkout: {target}")
+
+    # UI 0.10.4 and earlier could leave this npm-generated file untracked.
+    # It is safe to remove only when Git confirms it is not tracked.
+    if component == "ui":
+        package_lock = target / "package-lock.json"
+        if package_lock.exists():
+            tracked = _git(["ls-files", "--error-unmatch", "package-lock.json"], target, check=False)
+            if tracked.returncode != 0:
+                package_lock.unlink()
+
+    if _git(["diff", "--quiet"], target, check=False, capture=False).returncode != 0:
+        raise RuntimeError(f"{component} source checkout has uncommitted tracked changes")
+    if _git(["diff", "--cached", "--quiet"], target, check=False, capture=False).returncode != 0:
+        raise RuntimeError(f"{component} source checkout has staged changes")
+    status = _git(["status", "--porcelain", "--untracked-files=all"], target).stdout.strip()
+    if status:
+        raise RuntimeError(f"{component} source checkout is not clean: {status.splitlines()[0]}")
+
+    head = _git(["rev-parse", "HEAD"], target).stdout.strip()
+    branch_result = _git(["symbolic-ref", "--quiet", "--short", "HEAD"], target, check=False)
+    branch = branch_result.stdout.strip() if branch_result.returncode == 0 else None
+    return {"head": head, "branch": branch}
+
+
+def _replace_checkout_contents(source, target):
+    """Replace a clean checkout worktree while retaining only its .git metadata."""
+    for item in list(target.iterdir()):
+        if item.name == ".git":
+            continue
+        remove_path(item)
+    copy_tree_contents(source, target)
+
+
+def apply_source_update(source, target, component, job):
+    """Move the source checkout to the staged update and return rollback metadata."""
+    previous = prepare_source_checkout(target, component)
+    source_meta = job.get("source") if isinstance(job.get("source"), dict) else {}
+    source_type = str(source_meta.get("type") or "offline")
+    commit = str(source_meta.get("commit") or "").strip()
+
+    if source_type in {"release", "branch"}:
+        if not re.fullmatch(r"[0-9a-fA-F]{40}", commit):
+            raise RuntimeError("online update is missing its resolved Git commit SHA")
+        _git(["fetch", "--quiet", "origin", commit], target)
+        _git(["cat-file", "-e", f"{commit}^{{commit}}"], target)
+        _git(["reset", "--hard", commit], target)
+        _git(["clean", "-fd"], target)
+        mode = "online"
+        update_branch = None
+    else:
+        safe_version = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(job.get("version") or "unknown"))
+        update_branch = f"tec-tac/offline/{component}-{safe_version}-{str(job.get('id') or '')[:8]}"
+        if _git(["show-ref", "--verify", "--quiet", f"refs/heads/{update_branch}"], target, check=False).returncode == 0:
+            raise RuntimeError(f"offline update branch already exists: {update_branch}")
+        _git(["checkout", "-b", update_branch], target)
+        _replace_checkout_contents(source, target)
+        _git(["add", "-A"], target)
+        commit_result = _git(
+            ["-c", "user.name=Tec-Tac System Update", "-c", "user.email=tec-tac@localhost",
+             "commit", "--quiet", "-m", f"Tec-Tac offline {component} update {job.get('version')}"],
+            target, check=False,
+        )
+        if commit_result.returncode != 0:
+            detail = (commit_result.stderr or commit_result.stdout or "unable to create offline update commit").strip()
+            raise RuntimeError(detail)
+        commit = _git(["rev-parse", "HEAD"], target).stdout.strip()
+        mode = "offline"
+
+    status = _git(["status", "--porcelain", "--untracked-files=all"], target).stdout.strip()
+    if status:
+        raise RuntimeError(f"{component} source checkout is dirty immediately after update: {status.splitlines()[0]}")
+    return {**previous, "mode": mode, "update_branch": update_branch, "update_head": commit}
+
+
+def restore_git_source(target, git_state):
+    """Restore the source checkout to its exact pre-update HEAD/branch."""
+    old_head = str((git_state or {}).get("head") or "").strip()
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", old_head):
+        raise RuntimeError("rollback Git state is missing the previous HEAD")
+    old_branch = (git_state or {}).get("branch")
+    update_branch = (git_state or {}).get("update_branch")
+
+    _git(["reset", "--hard"], target)
+    _git(["clean", "-fd"], target)
+    if old_branch:
+        _git(["checkout", "--quiet", old_branch], target)
+        _git(["reset", "--hard", old_head], target)
+    else:
+        _git(["checkout", "--quiet", "--detach", old_head], target)
+    if update_branch and update_branch != old_branch:
+        _git(["branch", "-D", update_branch], target, check=False)
+    _git(["clean", "-fd"], target)
+
+
+def verify_source_runtime_layout(component, source_root):
+    cfg = load_config()
+    runtime_root = Path(cfg.get("TEC_TAC_ROOT", "/opt/tec-tac")).resolve()
+    if (runtime_root / ".git").exists():
+        raise RuntimeError("Tec-Tac runtime unexpectedly contains Git metadata")
+    if not (source_root / ".git").is_dir():
+        raise RuntimeError(f"{component} source checkout lost Git metadata")
+    status = _git(["status", "--porcelain", "--untracked-files=all"], source_root).stdout.strip()
+    if status:
+        raise RuntimeError(f"{component} source checkout is dirty after update: {status.splitlines()[0]}")
+    runtime_framework = Path(cfg.get("TEC_TAC_FRAMEWORK_ROOT", "/opt/tec-tac/framework")).resolve()
+    if component == "framework" and runtime_framework == source_root.resolve():
+        raise RuntimeError("framework source and runtime resolve to the same path")
+
+
 def backup_root(target, component, old_version, job_id):
     BACKUPS_ROOT.mkdir(parents=True, exist_ok=True)
     safe_version = re.sub(r"[^A-Za-z0-9_.-]+", "_", old_version or "unknown")
     backup = BACKUPS_ROOT / f"{component}-{safe_version}-{stamp()}-{job_id[:8]}.tar.gz"
+
+    excluded_roots = {".git"}
+    if component == "ui":
+        excluded_roots.update({"node_modules", "dist"})
+
+    def archive_filter(info):
+        parts = Path(info.name).parts
+        # info.name starts with target.name because arcname=target.name.
+        if len(parts) > 1 and parts[1] in excluded_roots:
+            return None
+        return info
+
     with tarfile.open(backup, "w:gz") as tf:
-        tf.add(target, arcname=target.name)
+        tf.add(target, arcname=target.name, filter=archive_filter)
     os.chmod(backup, 0o640)
     return backup
 
@@ -396,7 +535,7 @@ def verify(component, target, expected, log):
         if missing_exec:
             raise RuntimeError("recovery script executable verification failed: " + ", ".join(missing_exec))
     else:
-        deployed = Path("/var/lib/tec-tac/ui/tec-tac")
+        deployed = Path(load_config().get("TEC_TAC_UI_DEPLOY_ROOT", "/var/lib/tec-tac/ui/tec-tac"))
         index = deployed / "index.html"
         deployed_version = deployed / "VERSION"
         if not index.is_file() or index.stat().st_size == 0:
@@ -445,6 +584,7 @@ def run_job(job_id):
         log.flush()
 
         dynamic_inventory = {}
+        git_state = None
         try:
             job["stage"] = "extract"
             atomic_json(path, job)
@@ -461,11 +601,11 @@ def run_job(job_id):
             atomic_json(path, job)
             runtime_root = Path(cfg.get("TEC_TAC_ROOT", "/opt/tec-tac")).resolve()
             dynamic_inventory = snapshot_dynamic_plugins(runtime_root) if component == "framework" else {}
+            git_state = apply_source_update(source, target, component, job)
+            job["source_git"] = {k: v for k, v in git_state.items() if v is not None}
+            atomic_json(path, job)
             if component == "framework":
-                deploy_framework(source, target)
                 verify_dynamic_plugins(runtime_root, dynamic_inventory)
-            else:
-                deploy_ui(source, target)
 
             job["stage"] = "install"
             atomic_json(path, job)
@@ -480,6 +620,7 @@ def run_job(job_id):
             verify(component, target, str(job.get("version")), log)
             if component == "framework":
                 verify_dynamic_plugins(runtime_root, dynamic_inventory)
+            verify_source_runtime_layout(component, target)
             job["rollback"] = {"performed": False, "status": "not-required"}
             job["status"] = "succeeded"
             job["stage"] = "complete"
@@ -497,12 +638,16 @@ def run_job(job_id):
             atomic_json(path, job)
             rollback_error = None
             try:
-                restore_backup(backup, target)
+                if git_state:
+                    restore_git_source(target, git_state)
+                else:
+                    restore_backup(backup, target)
                 rollback_rc = run_install(component, target, log)
                 if rollback_rc != 0:
                     raise RuntimeError(f"rollback installer exited with status {rollback_rc}")
                 if component == "framework":
                     verify_dynamic_plugins(Path(cfg.get("TEC_TAC_ROOT", "/opt/tec-tac")).resolve(), dynamic_inventory)
+                verify_source_runtime_layout(component, target)
                 job["rollback"] = {"performed": True, "status": "succeeded", "version": old_version}
             except Exception as rb_exc:
                 rollback_error = str(rb_exc)

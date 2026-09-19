@@ -1,3 +1,5 @@
+Version **1.13.2** hardens System Updates for the split Git-source/runtime architecture. Online updates track exact commits, offline packages remain auditable Git commits, and rollback restores source state before reinstalling runtime.
+
 # Tec-Tac Framework
 
 Version **1.13.1** hardens the source/runtime layout migration preflight by requiring persistent module state to match the physical extension/reportset trees before cutover.

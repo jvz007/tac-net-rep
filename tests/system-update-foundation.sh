@@ -63,3 +63,56 @@ grep -q 'TEC_TAC_FRAMEWORK_SOURCE' "${ROOT}/scripts/system-update-helper.py" || 
 grep -q 'TEC_TAC_UI_SOURCE' "${ROOT}/scripts/system-update-helper.py" || fail "system updater is not targeting UI source checkout"
 grep -q 'runtime_root = Path' "${ROOT}/scripts/system-update-helper.py" || fail "runtime module inventory verification missing"
 echo "[TEST] PASS source/runtime update layout"
+
+# 1.13.2 source checkout integrity: online updates must land on exact commits,
+# offline packages must become auditable local commits, and rollback must restore HEAD.
+python3 - "${ROOT}/scripts/system-update-helper.py" <<'PY_GIT_SOURCE'
+import importlib.util, json, subprocess, tempfile
+from pathlib import Path
+import sys
+spec=importlib.util.spec_from_file_location('tt_update_git', sys.argv[1]); mod=importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+
+def run(*args, cwd=None):
+    subprocess.run(args, cwd=cwd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+def out(*args, cwd=None):
+    return subprocess.check_output(args, cwd=cwd, text=True).strip()
+
+with tempfile.TemporaryDirectory() as tmp:
+    base=Path(tmp)
+    remote=base/'remote.git'; run('git','init','--bare',str(remote))
+    seed=base/'seed'; run('git','init',str(seed)); run('git','config','user.name','test',cwd=seed); run('git','config','user.email','test@example.invalid',cwd=seed)
+    (seed/'VERSION').write_text('1.0.0\n'); (seed/'install.sh').write_text('#!/bin/sh\n'); (seed/'framwork'/'tec_tac').mkdir(parents=True); (seed/'framwork'/'tec_tac'/'__init__.py').write_text('')
+    run('git','add','-A',cwd=seed); run('git','commit','-m','one',cwd=seed); run('git','branch','-M','main',cwd=seed); run('git','remote','add','origin',str(remote),cwd=seed); run('git','push','-u','origin','main',cwd=seed)
+    checkout=base/'checkout'; run('git','clone','-b','main',str(remote),str(checkout))
+    old=out('git','rev-parse','HEAD',cwd=checkout)
+
+    # Create a second exact online commit in origin.
+    (seed/'VERSION').write_text('1.0.1\n'); (seed/'online.txt').write_text('exact commit\n'); run('git','add','-A',cwd=seed); run('git','commit','-m','two',cwd=seed); run('git','push',cwd=seed)
+    online=out('git','rev-parse','HEAD',cwd=seed)
+    source=base/'online-source'; source.mkdir(); (source/'VERSION').write_text('1.0.1\n')
+    state=mod.apply_source_update(source,checkout,'framework',{'id':'12345678-x','version':'1.0.1','source':{'type':'branch','commit':online}})
+    assert out('git','rev-parse','HEAD',cwd=checkout)==online
+    assert not out('git','status','--porcelain',cwd=checkout)
+    mod.restore_git_source(checkout,state)
+    assert out('git','rev-parse','HEAD',cwd=checkout)==old
+    assert out('git','symbolic-ref','--short','HEAD',cwd=checkout)=='main'
+
+    # Offline package becomes its own clean local branch/commit.
+    offline=base/'offline'; offline.mkdir(); (offline/'VERSION').write_text('1.0.2\n'); (offline/'install.sh').write_text('#!/bin/sh\n'); (offline/'framwork'/'tec_tac').mkdir(parents=True); (offline/'framwork'/'tec_tac'/'__init__.py').write_text(''); (offline/'offline.txt').write_text('package\n')
+    state=mod.apply_source_update(offline,checkout,'framework',{'id':'abcdef12-0000','version':'1.0.2','source':{'type':'offline'}})
+    branch=out('git','symbolic-ref','--short','HEAD',cwd=checkout)
+    assert branch.startswith('tec-tac/offline/framework-1.0.2-abcdef12'), branch
+    assert not out('git','status','--porcelain',cwd=checkout)
+    assert (checkout/'offline.txt').read_text()=='package\n'
+    mod.restore_git_source(checkout,state)
+    assert out('git','rev-parse','HEAD',cwd=checkout)==old
+    assert out('git','symbolic-ref','--short','HEAD',cwd=checkout)=='main'
+print('[TEST] PASS source Git transaction and rollback')
+PY_GIT_SOURCE
+
+grep -q 'verify_source_runtime_layout' "${ROOT}/scripts/system-update-helper.py" || fail "post-update source/runtime separation verification missing"
+grep -q 'source checkout is not clean' "${ROOT}/scripts/system-update-helper.py" || fail "dirty source preflight missing"
+grep -q 'tec-tac/offline/' "${ROOT}/scripts/system-update-helper.py" || fail "offline update Git branch missing"
+grep -q 'git.*fetch' "${ROOT}/scripts/system-update-helper.py" || fail "online exact-commit Git update missing"
+echo "[TEST] PASS 1.13.2 source checkout hardening"
