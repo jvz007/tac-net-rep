@@ -108,6 +108,26 @@ with tempfile.TemporaryDirectory() as tmp:
     mod.restore_git_source(checkout,state)
     assert out('git','rev-parse','HEAD',cwd=checkout)==old
     assert out('git','symbolic-ref','--short','HEAD',cwd=checkout)=='main'
+
+    # Reinstalling an identical offline tree must still produce an auditable
+    # local commit instead of failing with 'nothing to commit'.
+    identical=base/'identical'; identical.mkdir()
+    for item in checkout.iterdir():
+        if item.name == '.git':
+            continue
+        dest=identical/item.name
+        if item.is_dir():
+            import shutil; shutil.copytree(item,dest)
+        else:
+            import shutil; shutil.copy2(item,dest)
+    state=mod.apply_source_update(identical,checkout,'framework',{'id':'feedbeef-0000','version':'1.0.0','source':{'type':'offline'}})
+    branch=out('git','symbolic-ref','--short','HEAD',cwd=checkout)
+    assert branch.startswith('tec-tac/offline/framework-1.0.0-feedbeef'), branch
+    assert out('git','rev-parse','HEAD',cwd=checkout) != old
+    assert not out('git','status','--porcelain',cwd=checkout)
+    mod.restore_git_source(checkout,state)
+    assert out('git','rev-parse','HEAD',cwd=checkout)==old
+    assert out('git','symbolic-ref','--short','HEAD',cwd=checkout)=='main'
 print('[TEST] PASS source Git transaction and rollback')
 PY_GIT_SOURCE
 
@@ -115,4 +135,4 @@ grep -q 'verify_source_runtime_layout' "${ROOT}/scripts/system-update-helper.py"
 grep -q 'source checkout is not clean' "${ROOT}/scripts/system-update-helper.py" || fail "dirty source preflight missing"
 grep -q 'tec-tac/offline/' "${ROOT}/scripts/system-update-helper.py" || fail "offline update Git branch missing"
 grep -q 'git.*fetch' "${ROOT}/scripts/system-update-helper.py" || fail "online exact-commit Git update missing"
-echo "[TEST] PASS 1.13.2 source checkout hardening"
+echo "[TEST] PASS 1.13.3 source checkout hardening"

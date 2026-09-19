@@ -267,7 +267,8 @@ def apply_source_update(source, target, component, job):
         _git(["add", "-A"], target)
         commit_result = _git(
             ["-c", "user.name=Tec-Tac System Update", "-c", "user.email=tec-tac@localhost",
-             "commit", "--quiet", "-m", f"Tec-Tac offline {component} update {job.get('version')}"],
+             "commit", "--allow-empty", "--quiet", "-m",
+             f"Tec-Tac offline {component} update {job.get('version')}"],
             target, check=False,
         )
         if commit_result.returncode != 0:
