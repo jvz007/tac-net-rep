@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail(){ echo "[TEST] FAIL: $*" >&2; exit 1; }
 
-[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.10.3" ]] || fail "VERSION is not 1.10.3"
+[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.11.0" ]] || fail "VERSION is not 1.11.0"
 for f in \
   framwork/tec_tac/module_manager.py \
   framwork/tec_tac/module_manager_v2.py \

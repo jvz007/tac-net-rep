@@ -119,3 +119,16 @@ Do not POST from one Tec-Tac backend module to another module's localhost API me
 
 Framework 1.10.0 exposes the current public core/runtime contracts through `GET /api/tfd/contracts/` and canonical Markdown/Text exports. See `docs/developer-contracts.md`.
 
+
+
+## Scheduler failure classification (Framework 1.11.0)
+
+Provider handlers may import:
+
+```python
+from tec_tac.scheduler import SchedulerPermanentError, SchedulerTransientError
+```
+
+Use `SchedulerPermanentError` when retry cannot repair the request (invalid parameters, unsupported target/operation, incompatible dependency). Use `SchedulerTransientError` when recovery is realistic (temporary transport/provider outage). The scheduler also treats disabled/missing/incompatible capability lookups and validation-style failures as non-retryable.
+
+The handler context includes `attempt`, starting at 1.

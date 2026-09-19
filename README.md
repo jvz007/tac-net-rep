@@ -1,3 +1,7 @@
+# Tec-Tac Framework
+
+Version **1.11.0** hardens the shared Scheduler with configurable one-off retention, preserved run history, diagnostics, self-tests and retry classification.
+
 # Tec-Tac Tactical RMM Extension Framework
 
 Version **1.10.3** strengthens the module-development contract around downstream execution results: transport acknowledgement is not operation success, scheduled handlers must propagate downstream failures, and raw OS commands must be shell-safe and tested through the production agent path. Version 1.10.2 fixed Public Contracts attachment export content negotiation. See `docs/module-scheduling.md` and `docs/developer-contracts.md`.

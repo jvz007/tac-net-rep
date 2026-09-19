@@ -1588,3 +1588,22 @@ The export is an integration contract, not permission to import provider interna
 
 See `docs/developer-contracts.md`.
 
+
+
+## Scheduler execution semantics (Framework 1.11.0)
+
+When an extension exposes a schedulable action, distinguish transport from operation completion. Queue/NATS/API acknowledgement alone does not prove the endpoint or downstream application succeeded. Return success only after the owned operation has succeeded; otherwise raise an error so Scheduler history reflects the real outcome.
+
+Classify known failures explicitly:
+
+```python
+from tec_tac.scheduler import SchedulerPermanentError, SchedulerTransientError
+
+if invalid_configuration:
+    raise SchedulerPermanentError("Configuration cannot be executed.")
+
+if temporary_provider_outage:
+    raise SchedulerTransientError("Provider is temporarily unavailable.")
+```
+
+The handler context includes `attempt`. One-off schedule definitions are automatically removed after the operator-configured retention period (default 48 hours), while run history remains available. Do not store permanent audit data in the schedule definition itself.

@@ -67,6 +67,43 @@ class TecTacSchedule(models.Model):
         return self.name
 
 
+class TecTacSchedulerConfig(models.Model):
+    singleton = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    once_retention_hours = models.PositiveIntegerField(default=48)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="tec_tac_scheduler_config_updates")
+
+    class Meta:
+        verbose_name = "Tec-Tac scheduler configuration"
+
+    @classmethod
+    def current(cls):
+        obj, _ = cls.objects.get_or_create(singleton=1)
+        return obj
+
+
+class TecTacSchedulerState(models.Model):
+    singleton = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    last_tick_at = models.DateTimeField(null=True, blank=True)
+    last_tick_completed_at = models.DateTimeField(null=True, blank=True)
+    last_tick_error = models.TextField(blank=True, default="")
+    last_checked = models.PositiveIntegerField(default=0)
+    last_queued = models.PositiveIntegerField(default=0)
+    last_skipped = models.PositiveIntegerField(default=0)
+    last_cleaned = models.PositiveIntegerField(default=0)
+    last_dispatch_at = models.DateTimeField(null=True, blank=True)
+    last_dispatch_error = models.TextField(blank=True, default="")
+
+    class Meta:
+        verbose_name = "Tec-Tac scheduler runtime state"
+
+    @classmethod
+    def current(cls):
+        obj, _ = cls.objects.get_or_create(singleton=1)
+        return obj
+
+
+
 class TecTacScheduleRun(models.Model):
     class Status(models.TextChoices):
         QUEUED = "queued", "Queued"
@@ -76,7 +113,11 @@ class TecTacScheduleRun(models.Model):
         SKIPPED = "skipped", "Skipped"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    schedule = models.ForeignKey(TecTacSchedule, on_delete=models.CASCADE, related_name="runs")
+    schedule = models.ForeignKey(TecTacSchedule, null=True, blank=True, on_delete=models.SET_NULL, related_name="runs")
+    schedule_snapshot_id = models.UUIDField(null=True, blank=True, db_index=True)
+    schedule_name = models.CharField(max_length=255, blank=True, default="")
+    module_id = models.CharField(max_length=100, blank=True, default="")
+    action_id = models.CharField(max_length=160, blank=True, default="")
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.QUEUED)
     scheduled_for = models.DateTimeField()
     manual = models.BooleanField(default=False)
@@ -98,4 +139,4 @@ class TecTacScheduleRun(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.schedule_id}:{self.status}:{self.scheduled_for.isoformat()}"
+        return f"{self.schedule_snapshot_id or self.schedule_id}:{self.status}:{self.scheduled_for.isoformat()}"

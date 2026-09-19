@@ -10,11 +10,19 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from django.db import transaction
 from django.utils import timezone
 
-from .models import TecTacSchedule, TecTacScheduleRun
+from .models import TecTacSchedule, TecTacScheduleRun, TecTacSchedulerConfig, TecTacSchedulerState
 
 
 class SchedulerError(RuntimeError):
     pass
+
+
+class SchedulerPermanentError(SchedulerError):
+    """A failure that retries cannot reasonably correct."""
+
+
+class SchedulerTransientError(SchedulerError):
+    """A failure that may recover and may use the configured retry policy."""
 
 
 @dataclass(frozen=True)
@@ -81,6 +89,40 @@ register_scheduled_action(
     description="Harmless framework action used to validate scheduling, Celery dispatch and execution history.",
     target_types=("none",),
     handler=_test_handler,
+)
+
+
+def _test_failure_handler(context):
+    raise SchedulerPermanentError("Intentional scheduler self-test failure.")
+
+
+def _test_retry_handler(context):
+    if int(context.get("attempt") or 1) < 2:
+        raise SchedulerTransientError("Intentional first-attempt failure for retry validation.")
+    return {
+        "ok": True,
+        "message": "Scheduler retry self-test recovered on retry.",
+        "attempt": int(context.get("attempt") or 1),
+        "run_id": str(context.get("run_id")),
+    }
+
+
+register_scheduled_action(
+    id="tec-tac.scheduler-test-failure",
+    module_id="tec-tac",
+    label="Scheduler deliberate failure test",
+    description="Framework diagnostic action that always fails permanently.",
+    target_types=("none",),
+    handler=_test_failure_handler,
+)
+
+register_scheduled_action(
+    id="tec-tac.scheduler-test-retry",
+    module_id="tec-tac",
+    label="Scheduler retry test",
+    description="Framework diagnostic action that fails once, then succeeds when retry_count is at least 1.",
+    target_types=("none",),
+    handler=_test_retry_handler,
 )
 
 
@@ -259,90 +301,169 @@ def _should_run_occurrence(schedule: TecTacSchedule, occurrence: datetime, now: 
     return grace == 0 or (now_min - occurrence) <= timedelta(minutes=grace)
 
 
-def dispatch_due_schedules(now: datetime | None = None) -> dict:
-    from .tasks import execute_schedule_run
+def _run_kwargs(schedule: TecTacSchedule, **extra):
+    values = {
+        "schedule": schedule,
+        "schedule_snapshot_id": schedule.id,
+        "schedule_name": schedule.name,
+        "module_id": schedule.module_id,
+        "action_id": schedule.action_id,
+    }
+    values.update(extra)
+    return values
 
+
+def cleanup_once_schedules(now: datetime | None = None) -> int:
     now = _as_utc(now or timezone.now())
+    config = TecTacSchedulerConfig.current()
+    retention = max(1, min(int(config.once_retention_hours or 48), 720))
+    cutoff = now - timedelta(hours=retention)
+    cleaned = 0
+    qs = TecTacSchedule.objects.filter(schedule_type=TecTacSchedule.ScheduleType.ONCE, enabled=False)
+    for schedule in qs.prefetch_related("runs"):
+        if schedule.runs.filter(status__in=[TecTacScheduleRun.Status.QUEUED, TecTacScheduleRun.Status.RUNNING]).exists():
+            continue
+        latest = schedule.runs.order_by("-finished_at", "-created_at").first()
+        terminal_at = (latest.finished_at if latest and latest.finished_at else None) or schedule.last_run_at or schedule.run_at or schedule.updated_at
+        if terminal_at and _as_utc(terminal_at) <= cutoff:
+            schedule.delete()
+            cleaned += 1
+    return cleaned
+
+
+def scheduler_health(now: datetime | None = None) -> dict:
+    now = _as_utc(now or timezone.now())
+    state = TecTacSchedulerState.current()
+    last_tick = _as_utc(state.last_tick_completed_at) if state.last_tick_completed_at else None
+    tick_age = int((now - last_tick).total_seconds()) if last_tick else None
+    tick_health = "healthy" if tick_age is not None and tick_age <= 180 and not state.last_tick_error else ("degraded" if last_tick else "unknown")
+    recent_cutoff = now - timedelta(hours=24)
+    runs = TecTacScheduleRun.objects.filter(created_at__gte=recent_cutoff)
+    return {
+        "tick_health": tick_health,
+        "last_tick_at": state.last_tick_at.isoformat() if state.last_tick_at else None,
+        "last_tick_completed_at": state.last_tick_completed_at.isoformat() if state.last_tick_completed_at else None,
+        "tick_age_seconds": tick_age,
+        "last_tick_error": state.last_tick_error,
+        "last_checked": state.last_checked,
+        "last_queued": state.last_queued,
+        "last_skipped": state.last_skipped,
+        "last_cleaned": state.last_cleaned,
+        "last_dispatch_at": state.last_dispatch_at.isoformat() if state.last_dispatch_at else None,
+        "last_dispatch_error": state.last_dispatch_error,
+        "enabled_schedules": TecTacSchedule.objects.filter(enabled=True).count(),
+        "queued_runs": TecTacScheduleRun.objects.filter(status=TecTacScheduleRun.Status.QUEUED).count(),
+        "running_runs": TecTacScheduleRun.objects.filter(status=TecTacScheduleRun.Status.RUNNING).count(),
+        "failed_last_24h": runs.filter(status=TecTacScheduleRun.Status.FAILED).count(),
+    }
+
+
+def _queue_run(run: TecTacScheduleRun):
+    from .tasks import execute_schedule_run
+    state = TecTacSchedulerState.current()
+    try:
+        async_result = execute_schedule_run.delay(str(run.id))
+        run.celery_task_id = str(async_result.id or "")
+        run.save(update_fields=["celery_task_id"])
+        state.last_dispatch_at = timezone.now()
+        state.last_dispatch_error = ""
+        state.save(update_fields=["last_dispatch_at", "last_dispatch_error"])
+        return run
+    except Exception as exc:
+        run.status = TecTacScheduleRun.Status.FAILED
+        run.error_type = "DispatchError"
+        run.error = f"{exc.__class__.__name__}: {exc}"
+        run.finished_at = timezone.now()
+        run.save(update_fields=["status", "error_type", "error", "finished_at"])
+        state.last_dispatch_at = timezone.now()
+        state.last_dispatch_error = run.error
+        state.save(update_fields=["last_dispatch_at", "last_dispatch_error"])
+        raise
+
+
+def dispatch_due_schedules(now: datetime | None = None) -> dict:
+    now = _as_utc(now or timezone.now())
+    state = TecTacSchedulerState.current()
+    state.last_tick_at = now
+    state.last_tick_error = ""
+    state.save(update_fields=["last_tick_at", "last_tick_error"])
     queued, skipped = [], []
     schedule_ids = list(TecTacSchedule.objects.filter(enabled=True).values_list("id", flat=True))
-    for schedule_id in schedule_ids:
-        with transaction.atomic():
-            schedule = TecTacSchedule.objects.select_for_update().get(pk=schedule_id)
-            if not schedule.enabled:
-                continue
-            occurrence = latest_occurrence(schedule, now)
-            if not occurrence:
-                continue
-            key = due_key(occurrence)
-            if schedule.last_due_key == key:
-                continue
-            if not _should_run_occurrence(schedule, occurrence, now):
-                if schedule.schedule_type == TecTacSchedule.ScheduleType.ONCE and occurrence < now.replace(second=0, microsecond=0):
+    try:
+        for schedule_id in schedule_ids:
+            with transaction.atomic():
+                schedule = TecTacSchedule.objects.select_for_update().get(pk=schedule_id)
+                if not schedule.enabled:
+                    continue
+                occurrence = latest_occurrence(schedule, now)
+                if not occurrence:
+                    continue
+                key = due_key(occurrence)
+                if schedule.last_due_key == key:
+                    continue
+                if not _should_run_occurrence(schedule, occurrence, now):
+                    if schedule.schedule_type == TecTacSchedule.ScheduleType.ONCE and occurrence < now.replace(second=0, microsecond=0):
+                        schedule.last_due_key = key
+                        schedule.enabled = False
+                        schedule.save(update_fields=["last_due_key", "enabled", "updated_at"])
+                    continue
+                try:
+                    get_scheduled_action(schedule.action_id)
+                except SchedulerError as exc:
+                    run = TecTacScheduleRun.objects.create(**_run_kwargs(
+                        schedule,
+                        status=TecTacScheduleRun.Status.SKIPPED, scheduled_for=occurrence,
+                        targets_snapshot=schedule.targets or {}, error=str(exc),
+                        error_type="ActionUnavailable", finished_at=now,
+                    ))
                     schedule.last_due_key = key
-                    schedule.enabled = False
+                    if schedule.schedule_type == TecTacSchedule.ScheduleType.ONCE:
+                        schedule.enabled = False
                     schedule.save(update_fields=["last_due_key", "enabled", "updated_at"])
-                continue
-            try:
-                get_scheduled_action(schedule.action_id)
-            except SchedulerError as exc:
-                run = TecTacScheduleRun.objects.create(
-                    schedule=schedule,
-                    status=TecTacScheduleRun.Status.SKIPPED,
-                    scheduled_for=occurrence,
-                    targets_snapshot=schedule.targets or {},
-                    error=str(exc),
-                    error_type="ActionUnavailable",
-                    finished_at=now,
-                )
+                    skipped.append(str(run.id))
+                    continue
+                active = schedule.runs.filter(status__in=[TecTacScheduleRun.Status.QUEUED, TecTacScheduleRun.Status.RUNNING]).exists()
+                if active and schedule.concurrency_policy == TecTacSchedule.ConcurrencyPolicy.SKIP:
+                    run = TecTacScheduleRun.objects.create(**_run_kwargs(
+                        schedule, status=TecTacScheduleRun.Status.SKIPPED, scheduled_for=occurrence,
+                        targets_snapshot=schedule.targets or {},
+                        error="Skipped because a previous run is still active.",
+                        error_type="ConcurrencySkip", finished_at=now,
+                    ))
+                    schedule.last_due_key = key
+                    schedule.save(update_fields=["last_due_key", "updated_at"])
+                    skipped.append(str(run.id))
+                    continue
+                run = TecTacScheduleRun.objects.create(**_run_kwargs(
+                    schedule, scheduled_for=occurrence, targets_snapshot=schedule.targets or {},
+                ))
                 schedule.last_due_key = key
                 if schedule.schedule_type == TecTacSchedule.ScheduleType.ONCE:
                     schedule.enabled = False
                 schedule.save(update_fields=["last_due_key", "enabled", "updated_at"])
-                skipped.append(str(run.id))
-                continue
-            active = schedule.runs.filter(status__in=[TecTacScheduleRun.Status.QUEUED, TecTacScheduleRun.Status.RUNNING]).exists()
-            if active and schedule.concurrency_policy == TecTacSchedule.ConcurrencyPolicy.SKIP:
-                run = TecTacScheduleRun.objects.create(
-                    schedule=schedule,
-                    status=TecTacScheduleRun.Status.SKIPPED,
-                    scheduled_for=occurrence,
-                    targets_snapshot=schedule.targets or {},
-                    error="Skipped because a previous run is still active.",
-                    error_type="ConcurrencySkip",
-                    finished_at=now,
-                )
-                schedule.last_due_key = key
-                schedule.save(update_fields=["last_due_key", "updated_at"])
-                skipped.append(str(run.id))
-                continue
-            run = TecTacScheduleRun.objects.create(
-                schedule=schedule,
-                scheduled_for=occurrence,
-                targets_snapshot=schedule.targets or {},
-            )
-            schedule.last_due_key = key
-            if schedule.schedule_type == TecTacSchedule.ScheduleType.ONCE:
-                schedule.enabled = False
-            schedule.save(update_fields=["last_due_key", "enabled", "updated_at"])
-        async_result = execute_schedule_run.delay(str(run.id))
-        TecTacScheduleRun.objects.filter(pk=run.id).update(celery_task_id=str(async_result.id or ""))
-        queued.append(str(run.id))
-    return {"queued": queued, "skipped": skipped, "checked": len(schedule_ids), "now": now.isoformat()}
+            _queue_run(run)
+            queued.append(str(run.id))
+        cleaned = cleanup_once_schedules(now)
+        state.last_tick_completed_at = timezone.now()
+        state.last_checked = len(schedule_ids)
+        state.last_queued = len(queued)
+        state.last_skipped = len(skipped)
+        state.last_cleaned = cleaned
+        state.last_tick_error = ""
+        state.save(update_fields=["last_tick_completed_at", "last_checked", "last_queued", "last_skipped", "last_cleaned", "last_tick_error"])
+        return {"queued": queued, "skipped": skipped, "cleaned": cleaned, "checked": len(schedule_ids), "now": now.isoformat()}
+    except Exception as exc:
+        state.last_tick_completed_at = timezone.now()
+        state.last_tick_error = f"{exc.__class__.__name__}: {exc}"
+        state.save(update_fields=["last_tick_completed_at", "last_tick_error"])
+        raise
 
 
 def queue_manual_run(schedule: TecTacSchedule):
-    from .tasks import execute_schedule_run
-
-    run = TecTacScheduleRun.objects.create(
-        schedule=schedule,
-        scheduled_for=timezone.now(),
-        manual=True,
-        targets_snapshot=schedule.targets or {},
-    )
-    async_result = execute_schedule_run.delay(str(run.id))
-    run.celery_task_id = str(async_result.id or "")
-    run.save(update_fields=["celery_task_id"])
-    return run
+    run = TecTacScheduleRun.objects.create(**_run_kwargs(
+        schedule, scheduled_for=timezone.now(), manual=True, targets_snapshot=schedule.targets or {},
+    ))
+    return _queue_run(run)
 
 
 def serialize_action(action: ScheduledAction) -> dict:
@@ -360,7 +481,10 @@ def serialize_action(action: ScheduledAction) -> dict:
 def serialize_run(run: TecTacScheduleRun) -> dict:
     return {
         "id": str(run.id),
-        "schedule_id": str(run.schedule_id),
+        "schedule_id": str(run.schedule_snapshot_id or run.schedule_id) if (run.schedule_snapshot_id or run.schedule_id) else None,
+        "schedule_name": run.schedule_name or (run.schedule.name if run.schedule else "Deleted schedule"),
+        "module_id": run.module_id or (run.schedule.module_id if run.schedule else ""),
+        "action_id": run.action_id or (run.schedule.action_id if run.schedule else ""),
         "status": run.status,
         "scheduled_for": run.scheduled_for.isoformat(),
         "manual": run.manual,
@@ -369,6 +493,7 @@ def serialize_run(run: TecTacScheduleRun) -> dict:
         "error": run.error,
         "error_type": run.error_type,
         "attempt": run.attempt,
+        "celery_task_id": run.celery_task_id,
         "created_at": run.created_at.isoformat(),
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,

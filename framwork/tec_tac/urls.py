@@ -15,7 +15,7 @@ from .module_repository_views import (
 )
 from .scheduler_views import (
     SchedulerActionListView, SchedulerListView, SchedulerDetailView,
-    SchedulerRunNowView, SchedulerRunListView,
+    SchedulerRunNowView, SchedulerRunListView, SchedulerConfigView, SchedulerHealthView, SchedulerSelfTestView,
 )
 from .module_v2_views import (
     ModuleV2CatalogView, ModuleV2InspectView, ModuleV2StageView, ModuleV2InstallView,
@@ -31,6 +31,9 @@ urlpatterns = [
     path("scheduler/schedules/<uuid:schedule_id>/", SchedulerDetailView.as_view(), name="tec-tac-scheduler-schedule-detail"),
     path("scheduler/schedules/<uuid:schedule_id>/run/", SchedulerRunNowView.as_view(), name="tec-tac-scheduler-run-now"),
     path("scheduler/runs/", SchedulerRunListView.as_view(), name="tec-tac-scheduler-runs"),
+    path("scheduler/config/", SchedulerConfigView.as_view(), name="tec-tac-scheduler-config"),
+    path("scheduler/health/", SchedulerHealthView.as_view(), name="tec-tac-scheduler-health"),
+    path("scheduler/self-test/", SchedulerSelfTestView.as_view(), name="tec-tac-scheduler-self-test"),
 
     path("ui/context/", UiContextView.as_view(), name="tec-tac-ui-context"),
     path("system/updates/", SystemUpdateStatusView.as_view(), name="tec-tac-system-update-status"),

@@ -426,3 +426,12 @@ A schedule may outlive the module/version state that existed when it was created
 
 Framework 1.10.0 includes registered scheduler actions in the Developer Contract catalog and Markdown/Text exports. Module authors can use `Administration -> Public Contracts` in UI 0.9.0 to produce a current handoff for another coding agent.
 
+
+
+## Scheduler hardening in Framework 1.11.0
+
+- Completed or expired one-off schedule definitions are cleaned automatically after the configured retention period. The default is 48 hours and operators may configure 1-720 hours from the Scheduler configuration surface. Run history is preserved independently of the schedule definition.
+- Scheduler diagnostics expose tick freshness, queue/dispatch state, enabled schedule count, queued/running runs and recent failures.
+- Framework self-tests cover immediate dispatch, true scheduled execution, deliberate permanent failure and retry/recovery.
+- Permanent failures must not be blindly retried. Module handlers may raise `SchedulerPermanentError` or `SchedulerTransientError`; capability unavailable/version mismatch/disabled and validation-style failures are treated as permanent.
+- A handler must only report success after its owned downstream operation has completed successfully. Transport acknowledgement alone is not business-operation success.

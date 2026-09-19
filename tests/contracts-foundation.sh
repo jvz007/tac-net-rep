@@ -33,3 +33,7 @@ grep -q 'export_format' "${ROOT}/framwork/tec_tac/contract_views.py" || fail "co
 grep -q "Treat transport acknowledgement as transport state" "${ROOT}/framwork/tec_tac/contracts.py" || fail "transport-vs-execution contract rule missing"
 grep -q "Scheduled handlers must propagate downstream execution failures" "${ROOT}/framwork/tec_tac/contracts.py" || fail "scheduled downstream failure propagation rule missing"
 grep -q "Windows cmd.exe quoting" "${ROOT}/framwork/tec_tac/contracts.py" || fail "raw command shell-safety rule missing"
+
+# 1.11.0 scheduler retry classification contract
+grep -q 'SchedulerPermanentError' "$ROOT/framwork/tec_tac/contracts.py" || fail "scheduler permanent failure contract missing"
+grep -q 'SchedulerTransientError' "$ROOT/framwork/tec_tac/contracts.py" || fail "scheduler transient failure contract missing"

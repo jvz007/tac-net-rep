@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from django.utils.dateparse import parse_datetime, parse_time
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework.permissions import IsAuthenticated
@@ -10,7 +11,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.exceptions import NotFound, PermissionDenied
 
-from .models import TecTacSchedule, TecTacScheduleRun
+from .models import TecTacSchedule, TecTacScheduleRun, TecTacSchedulerConfig
 from .rbac import has_extension_permission
 from .scheduler import (
     SchedulerError,
@@ -20,6 +21,7 @@ from .scheduler import (
     serialize_action,
     serialize_run,
     serialize_schedule,
+    scheduler_health,
     validate_schedule_payload,
 )
 from .views import _role_for_user
@@ -186,6 +188,8 @@ class SchedulerDetailView(APIView):
 
     def delete(self, request, schedule_id):
         schedule, _ = self.get_object(request, schedule_id)
+        if schedule.runs.filter(status__in=[TecTacScheduleRun.Status.QUEUED, TecTacScheduleRun.Status.RUNNING]).exists():
+            return Response({"detail": "Schedule cannot be deleted while a run is queued or running."}, status=409)
         schedule.delete()
         return Response(status=204)
 
@@ -205,16 +209,82 @@ class SchedulerRunListView(APIView):
         qs = TecTacScheduleRun.objects.select_related("schedule")
         schedule_id = request.query_params.get("schedule_id")
         if schedule_id:
-            qs = qs.filter(schedule_id=schedule_id)
+            qs = qs.filter(schedule_snapshot_id=schedule_id)
         rows = []
         for run in qs[:200]:
+            action_id = run.action_id or (run.schedule.action_id if run.schedule else "")
             try:
-                action = get_scheduled_action(run.schedule.action_id)
+                action = get_scheduled_action(action_id)
             except SchedulerError:
                 action = None
             if _native_scheduler_manager(request.user) or (action and _can_use_action(request.user, action)):
-                item = serialize_run(run)
-                item["schedule_name"] = run.schedule.name
-                item["action_id"] = run.schedule.action_id
-                rows.append(item)
+                rows.append(serialize_run(run))
         return Response({"runs": rows, "count": len(rows)})
+
+
+class SchedulerConfigView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not _native_scheduler_manager(request.user):
+            raise PermissionDenied("Scheduler configuration requires server-maintenance authority.")
+        config = TecTacSchedulerConfig.current()
+        return Response({
+            "once_retention_hours": config.once_retention_hours,
+            "minimum_once_retention_hours": 1,
+            "maximum_once_retention_hours": 720,
+            "updated_at": config.updated_at.isoformat(),
+            "updated_by": config.updated_by.username if config.updated_by else None,
+        })
+
+    def patch(self, request):
+        if not _native_scheduler_manager(request.user):
+            raise PermissionDenied("Scheduler configuration requires server-maintenance authority.")
+        try:
+            value = int(request.data.get("once_retention_hours"))
+        except (TypeError, ValueError):
+            return Response({"detail": "once_retention_hours must be an integer."}, status=400)
+        if value < 1 or value > 720:
+            return Response({"detail": "once_retention_hours must be between 1 and 720."}, status=400)
+        config = TecTacSchedulerConfig.current()
+        config.once_retention_hours = value
+        config.updated_by = request.user
+        config.save(update_fields=["once_retention_hours", "updated_by", "updated_at"])
+        return self.get(request)
+
+
+class SchedulerHealthView(APIView):
+    permission_classes = [IsAuthenticated]
+    def get(self, request):
+        if not _native_scheduler_manager(request.user):
+            raise PermissionDenied("Scheduler diagnostics require server-maintenance authority.")
+        return Response(scheduler_health())
+
+
+class SchedulerSelfTestView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if not _native_scheduler_manager(request.user):
+            raise PermissionDenied("Scheduler self-tests require server-maintenance authority.")
+        mode = str(request.data.get("mode") or "immediate")
+        if mode not in {"immediate", "scheduled", "failure", "retry"}:
+            return Response({"detail": "mode must be immediate, scheduled, failure, or retry."}, status=400)
+        action_id = {
+            "immediate": "tec-tac.scheduler-test",
+            "scheduled": "tec-tac.scheduler-test",
+            "failure": "tec-tac.scheduler-test-failure",
+            "retry": "tec-tac.scheduler-test-retry",
+        }[mode]
+        run_at = timezone.now() + timedelta(minutes=2)
+        schedule = TecTacSchedule.objects.create(
+            name=f"Scheduler self-test · {mode}", module_id="tec-tac", action_id=action_id,
+            targets={"type": "none"}, parameters={"message": f"Scheduler {mode} self-test"},
+            schedule_type=TecTacSchedule.ScheduleType.ONCE, timezone="UTC", run_at=run_at,
+            enabled=(mode == "scheduled"), retry_count=(1 if mode == "retry" else 0), retry_delay_seconds=5,
+            created_by=request.user, updated_by=request.user,
+        )
+        if mode == "scheduled":
+            return Response({"mode": mode, "schedule": serialize_schedule(schedule)}, status=201)
+        run = queue_manual_run(schedule)
+        return Response({"mode": mode, "schedule": serialize_schedule(schedule), "run": serialize_run(run)}, status=202)

@@ -6,8 +6,8 @@ from django.utils import timezone
 from tacticalrmm.celery import app
 
 from .models import TecTacScheduleRun
-from .capabilities import capability_status
-from .scheduler import SchedulerError, get_scheduled_action
+from .capabilities import capability_status, CapabilityDisabled, CapabilityUnavailable, CapabilityVersionMismatch, CapabilityUnhealthy
+from .scheduler import SchedulerError, SchedulerPermanentError, SchedulerTransientError, get_scheduled_action
 
 
 def _json_result(value):
@@ -20,6 +20,14 @@ def _json_result(value):
         except TypeError:
             pass
     return {"value": str(value)}
+
+
+def _retryable(exc) -> bool:
+    if isinstance(exc, (SchedulerTransientError, CapabilityUnhealthy)):
+        return True
+    if isinstance(exc, (SchedulerError, CapabilityDisabled, CapabilityVersionMismatch, CapabilityUnavailable, ValueError, TypeError)):
+        return False
+    return True
 
 
 @app.task(bind=True, name="tec_tac.execute_schedule_run")
@@ -47,6 +55,7 @@ def execute_schedule_run(self, run_id: str):
             "parameters": schedule.parameters or {},
             "scheduled_for": run.scheduled_for,
             "manual": run.manual,
+            "attempt": run.attempt,
         }
         result = action.handler(context)
         run.status = TecTacScheduleRun.Status.SUCCEEDED
@@ -62,7 +71,7 @@ def execute_schedule_run(self, run_id: str):
         run.finished_at = timezone.now()
         retries = int(schedule.retry_count or 0)
         current_retry = int(getattr(self.request, "retries", 0) or 0)
-        if current_retry < retries:
+        if _retryable(exc) and current_retry < retries:
             run.status = TecTacScheduleRun.Status.QUEUED
             run.save(update_fields=["status", "error", "error_type", "finished_at"])
             raise self.retry(exc=exc, countdown=int(schedule.retry_delay_seconds or 60), max_retries=retries)

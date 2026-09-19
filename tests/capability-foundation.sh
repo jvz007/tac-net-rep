@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail(){ echo "[TEST] FAIL: $*" >&2; exit 1; }
 
-[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.10.3" ]] || fail "VERSION is not 1.10.3"
+[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.11.0" ]] || fail "VERSION is not 1.11.0"
 [[ -f "${ROOT}/framwork/tec_tac/capabilities.py" ]] || fail "capabilities.py missing"
 [[ -f "${ROOT}/framwork/tec_tac/capability_views.py" ]] || fail "capability_views.py missing"
 grep -q 'capabilities/' "${ROOT}/framwork/tec_tac/urls.py" || fail "capability routes missing"
