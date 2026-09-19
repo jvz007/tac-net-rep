@@ -648,3 +648,14 @@ Run `sudo bash scripts/migrate-layout.sh` once when upgrading a legacy installat
 ## User preferences (1.13.9)
 
 Tec-Tac now stores durable per-user UI preferences server-side against the authenticated Tactical user. `GET`, `PUT`, and `DELETE /api/tfd/ui/preferences/` operate only on `request.user`, and `/api/tfd/ui/context/` includes the normalized preference profile and initialization metadata for efficient UI startup. See `docs/user-preferences.md`.
+
+## Dashboards (1.14.0)
+
+Core now persists user-owned dashboards. `private` dashboards are queryable only by their owner; `shared` dashboards are visible to all authenticated users. Owners may change visibility after creation. Shared dashboards may be managed by Tec-Tac administrators/server-maintenance roles, but other users' private dashboards remain outside their query set and only the owner may cross the shared/private visibility boundary.
+
+Authenticated endpoints:
+
+- `GET/POST /api/tfd/dashboards/`
+- `GET/PUT/DELETE /api/tfd/dashboards/<uuid>/`
+
+Dashboard layouts store bounded widget instance metadata while widget implementations remain UI-module contributions.

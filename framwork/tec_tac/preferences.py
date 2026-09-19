@@ -18,6 +18,7 @@ DEFAULT_PREFERENCES = {
     },
     "dashboard": {
         "default_dashboard_id": None,
+        "last_dashboard_id": None,
         "restore_last_dashboard": True,
     },
     "extensions": {},
@@ -100,6 +101,9 @@ def normalize_preferences(payload):
     dashboard_id = dashboard.get("default_dashboard_id")
     if dashboard_id is not None and not isinstance(dashboard_id, str):
         raise PreferenceValidationError("dashboard.default_dashboard_id must be a string or null.")
+    last_dashboard_id = dashboard.get("last_dashboard_id")
+    if last_dashboard_id is not None and not isinstance(last_dashboard_id, str):
+        raise PreferenceValidationError("dashboard.last_dashboard_id must be a string or null.")
     if not isinstance(dashboard.get("restore_last_dashboard"), bool):
         raise PreferenceValidationError("dashboard.restore_last_dashboard must be true or false.")
 

@@ -26,3 +26,5 @@ The Core schema currently reserves these sections:
 The `extensions` object is reserved for future module-specific user settings. Modules should not create separate browser-token or localStorage-based durable preference stores when Core preference storage is available.
 
 Preference payloads are normalized and limited to 128 KiB per user.
+
+Dashboard preferences include `default_dashboard_id`, `last_dashboard_id`, and `restore_last_dashboard`. Dashboard visibility itself is enforced by the dashboard API and is not a preference-layer authorization decision.

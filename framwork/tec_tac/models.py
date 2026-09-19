@@ -159,3 +159,30 @@ class TecTacUserPreferences(models.Model):
 
     def __str__(self):
         return f"Tec-Tac preferences: {self.user_id}"
+
+class TecTacDashboard(models.Model):
+    class Visibility(models.TextChoices):
+        PRIVATE = "private", "Private"
+        SHARED = "shared", "Shared"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=160)
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="tec_tac_dashboards",
+    )
+    visibility = models.CharField(max_length=16, choices=Visibility.choices, default=Visibility.PRIVATE)
+    layout = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("name", "id")
+        indexes = [
+            models.Index(fields=("visibility", "name"), name="tectac_dash_vis_name_idx"),
+            models.Index(fields=("owner", "name"), name="tectac_dash_owner_name_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.visibility})"

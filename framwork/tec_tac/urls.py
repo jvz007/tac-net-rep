@@ -1,3 +1,4 @@
+from .dashboard_views import DashboardListCreateView, DashboardDetailView
 from .preference_views import UserPreferencesView
 from .capability_views import CapabilityListView, CapabilityDetailView
 from .contract_views import ContractCatalogView, ContractExportView
@@ -23,6 +24,8 @@ from .module_v2_views import (
     ModuleV2StateView, ModuleV2VisibilityView, ModuleV2RemoveCheckView, ModuleV2JobView,
 )
 urlpatterns = [
+    path("dashboards/", DashboardListCreateView.as_view(), name="tec-tac-dashboards"),
+    path("dashboards/<uuid:dashboard_id>/", DashboardDetailView.as_view(), name="tec-tac-dashboard-detail"),
     path("contracts/", ContractCatalogView.as_view(), name="tec-tac-contracts"),
     path("contracts/export/", ContractExportView.as_view(), name="tec-tac-contract-export"),
     path("capabilities/", CapabilityListView.as_view(), name="tec-tac-capabilities"),
