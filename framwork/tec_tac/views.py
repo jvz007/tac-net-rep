@@ -1,5 +1,6 @@
 import io
 import logging
+from pathlib import Path
 
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
@@ -15,6 +16,7 @@ from drf_spectacular.utils import extend_schema, extend_schema_view
 
 from .module_manager import (
     ModuleManagerError,
+    _load_stage,
     discard_stage,
     get_job,
     installed_catalog,
@@ -273,10 +275,23 @@ class ModulePackageInspectView(APIView):
                 return Response({"detail": "A package upload is required.", "stage": stage}, status=400)
             stage = "stage-upload"
             payload = stage_uploaded_package(upload)
+            stage = "licensing-check"
+            from .module_manager_v2 import LicensingRequirementError, _enforce_candidate_licensing, _package_metadata
+            meta = _load_stage(payload["upload_id"])
+            candidate = _package_metadata(Path(meta["package_path"]))
+            _enforce_candidate_licensing(candidate)
+            payload["licensing"] = candidate.get("licensing_status")
             stage = "response"
             return Response(payload, status=201)
         except PermissionDenied:
             raise
+        except LicensingRequirementError as exc:
+            try:
+                if "payload" in locals() and payload.get("upload_id"):
+                    discard_stage(payload["upload_id"])
+            except Exception:
+                pass
+            return Response(exc.as_payload(), status=403)
         except ModuleManagerError as exc:
             return Response({"detail": str(exc), "stage": stage}, status=400)
         except Exception as exc:
@@ -315,7 +330,13 @@ class ModulePackageInstallView(APIView):
         if not isinstance(replace, bool):
             return Response({"detail": "replace must be true or false."}, status=400)
         try:
+            from .module_manager_v2 import LicensingRequirementError, _enforce_candidate_licensing, _package_metadata
+            meta = _load_stage(str(upload_id))
+            candidate = _package_metadata(Path(meta["package_path"]))
+            _enforce_candidate_licensing(candidate)
             return Response(queue_install(str(upload_id), replace=replace), status=202)
+        except LicensingRequirementError as exc:
+            return Response(exc.as_payload(), status=403)
         except ModuleManagerError as exc:
             return Response({"detail": str(exc)}, status=400)
 

@@ -3,6 +3,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from .module_manager_v2 import LicensingRequirementError
 from .module_repository import (
     ModuleRepositoryError,
     all_repository_status,
@@ -98,6 +99,8 @@ class ModuleOnlineStageView(APIView):
             return Response({"detail": "repository_id and module_id are required."}, status=400)
         try:
             return Response(stage_repository_package(repository_id, module_id, version, allow_source_change=allow_source_change), status=201)
+        except LicensingRequirementError as exc:
+            return Response(exc.as_payload(), status=403)
         except ModuleRepositoryError as exc:
             # Module Manager validation errors are intentionally returned as a
             # bounded client-visible staging failure, not an unhandled 500.

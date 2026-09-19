@@ -8,6 +8,7 @@ from rest_framework.views import APIView
 
 from .module_manager import ModuleManagerError, discard_stage, get_job
 from .module_manager_v2 import (
+    LicensingRequirementError,
     ModuleManagerV2Error,
     discard_v2_stage,
     installed_catalog_v2,
@@ -42,6 +43,8 @@ class ModuleV2InspectView(APIView):
             return Response({"detail": "At least one package or bundle upload is required."}, status=400)
         try:
             return Response(stage_multiple_packages(uploads), status=201)
+        except LicensingRequirementError as exc:
+            return Response(exc.as_payload(), status=403)
         except (ModuleManagerError, ModuleManagerV2Error) as exc:
             return Response({"detail": str(exc)}, status=400)
         except OSError as exc:
@@ -80,6 +83,8 @@ class ModuleV2InstallView(APIView):
                 return Response({"detail": "order must be an array of module IDs."}, status=400)
             job = queue_batch_install(str(upload_id), requested_order=order) if kind == "batch" else queue_v2_install(str(upload_id), requested_order=order)
             return Response(job, status=202)
+        except LicensingRequirementError as exc:
+            return Response(exc.as_payload(), status=403)
         except (ModuleManagerError, ModuleManagerV2Error) as exc:
             return Response({"detail": str(exc)}, status=400)
 

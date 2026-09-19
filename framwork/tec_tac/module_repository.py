@@ -19,6 +19,7 @@ from pathlib import Path
 
 from .module_manager import MAX_PACKAGE_BYTES, STAGED_ROOT, _atomic_json, _load_stage
 from .module_manager_v2 import (
+    LicensingRequirementError,
     ModuleManagerV2Error,
     _check_runtime_requirements,
     installed_catalog_v2,
@@ -462,7 +463,7 @@ def stage_repository_package(repository_id: str, module_id: str, version: str | 
             raise ModuleRepositoryError(
                 f"Downloaded package identity does not match repository metadata for {module_id} {candidate['version']}."
             )
-    except ModuleRepositoryError:
+    except (ModuleRepositoryError, LicensingRequirementError):
         raise
     except Exception as exc:
         raise ModuleRepositoryError(f"Downloaded package inspection failed: {exc}") from exc

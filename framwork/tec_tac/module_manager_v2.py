@@ -16,6 +16,7 @@ import zipfile
 from pathlib import Path
 
 from . import registry as registry_module
+from .capabilities import capability_status, get_capability
 from .module_manager import (
     HELPER as V1_HELPER,
     JOBS_ROOT,
@@ -59,6 +60,22 @@ class ModuleManagerV2Error(ModuleManagerError):
     pass
 
 
+class LicensingRequirementError(ModuleManagerV2Error):
+    """Raised when a package-declared licensing gate is not satisfied."""
+
+    def __init__(self, result: dict):
+        self.result = dict(result or {})
+        reason = self.result.get("reason") or "Module licensing requirement is not satisfied."
+        super().__init__(str(reason))
+
+    def as_payload(self) -> dict:
+        return {
+            "detail": str(self),
+            "code": "licensing_requirement_failed",
+            "licensing": self.result,
+        }
+
+
 def _read_json(path: Path, label: str) -> dict:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -88,6 +105,176 @@ def _string_map(payload: dict, key: str) -> dict[str, str]:
     return result
 
 
+def _licensing_metadata(payload: dict) -> dict:
+    raw = payload.get("licensing")
+    if raw in (None, {}):
+        return {"required": False}
+    if not isinstance(raw, dict):
+        raise ModuleManagerV2Error("Manifest key 'licensing' must be an object.")
+
+    required = raw.get("required", False)
+    if not isinstance(required, bool):
+        raise ModuleManagerV2Error("Manifest licensing.required must be true or false.")
+
+    product = str(raw.get("product", "")).strip()
+    capability = str(raw.get("capability", "")).strip()
+    capability_version = str(raw.get("capability_version", "")).strip()
+
+    if required:
+        if not product:
+            raise ModuleManagerV2Error("Licensed modules must declare licensing.product.")
+        if not capability or "." not in capability:
+            raise ModuleManagerV2Error("Licensed modules must declare a namespaced licensing.capability.")
+        allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.")
+        if any(ch not in allowed for ch in capability):
+            raise ModuleManagerV2Error("Manifest licensing.capability contains unsupported characters.")
+        if not capability_version:
+            raise ModuleManagerV2Error("Licensed modules must declare licensing.capability_version.")
+        try:
+            version_satisfies("0.0.0", capability_version)
+        except ModuleStateError as exc:
+            raise ModuleManagerV2Error(f"Invalid licensing capability version range: {exc}") from exc
+
+    return {
+        "required": required,
+        "product": product or None,
+        "capability": capability or None,
+        "capability_version": capability_version or None,
+    }
+
+
+def _normalize_entitlement_result(value, *, module_id: str, module_version: str, licensing: dict, cap_status: dict) -> dict:
+    if isinstance(value, bool):
+        licensed = value
+        reason = None if value else f"Product {licensing['product']!r} is not licensed."
+        details = {}
+    elif isinstance(value, dict):
+        details = dict(value)
+        if "licensed" in details:
+            licensed = bool(details.get("licensed"))
+        elif "entitled" in details:
+            licensed = bool(details.get("entitled"))
+        elif "allowed" in details:
+            licensed = bool(details.get("allowed"))
+        else:
+            licensed = False
+        reason = details.get("reason") or details.get("message")
+        if not licensed and not reason:
+            reason = f"Product {licensing['product']!r} is not licensed."
+    else:
+        licensed = False
+        details = {"provider_result": str(value)}
+        reason = "Licensing provider returned an unsupported entitlement result."
+
+    return {
+        "required": True,
+        "module": module_id,
+        "module_version": module_version,
+        "product": licensing.get("product"),
+        "capability": licensing.get("capability"),
+        "required_capability_version": licensing.get("capability_version"),
+        "capability_version": cap_status.get("capability_version"),
+        "provider_module": cap_status.get("module_id"),
+        "state": "licensed" if licensed else "unlicensed",
+        "licensed": licensed,
+        "reason": None if licensed else str(reason or "Module is not licensed."),
+        "details": details,
+    }
+
+
+def check_licensing_requirement(candidate: dict) -> dict:
+    licensing = dict(candidate.get("licensing") or {"required": False})
+    module_id = str(candidate.get("id") or candidate.get("plugin_id") or "").strip()
+    module_version = str(candidate.get("extension_version") or candidate.get("version") or "0.0.0").strip()
+    if not licensing.get("required"):
+        return {
+            "required": False,
+            "module": module_id,
+            "module_version": module_version,
+            "licensed": True,
+            "state": "not-required",
+            "reason": None,
+        }
+
+    capability_id = licensing.get("capability")
+    capability_version = licensing.get("capability_version")
+    cap_status = capability_status(capability_id, version=capability_version)
+    if not cap_status.get("available"):
+        result = {
+            "required": True,
+            "module": module_id,
+            "module_version": module_version,
+            "product": licensing.get("product"),
+            "capability": capability_id,
+            "required_capability_version": capability_version,
+            "capability_version": cap_status.get("capability_version"),
+            "provider_module": cap_status.get("module_id"),
+            "state": cap_status.get("state") or "capability-unavailable",
+            "licensed": False,
+            "reason": cap_status.get("reason") or "Licensing capability is unavailable.",
+            "capability_status": cap_status,
+        }
+        raise LicensingRequirementError(result)
+
+    provider = get_capability(capability_id, version=capability_version)
+    checker = getattr(provider, "check_entitlement", None)
+    if not callable(checker):
+        result = {
+            "required": True,
+            "module": module_id,
+            "module_version": module_version,
+            "product": licensing.get("product"),
+            "capability": capability_id,
+            "required_capability_version": capability_version,
+            "capability_version": cap_status.get("capability_version"),
+            "provider_module": cap_status.get("module_id"),
+            "state": "provider-contract-invalid",
+            "licensed": False,
+            "reason": "Licensing capability provider does not expose check_entitlement().",
+        }
+        raise LicensingRequirementError(result)
+
+    try:
+        value = checker(
+            product=licensing.get("product"),
+            module_id=module_id,
+            module_version=module_version,
+        )
+    except Exception as exc:
+        result = {
+            "required": True,
+            "module": module_id,
+            "module_version": module_version,
+            "product": licensing.get("product"),
+            "capability": capability_id,
+            "required_capability_version": capability_version,
+            "capability_version": cap_status.get("capability_version"),
+            "provider_module": cap_status.get("module_id"),
+            "state": "provider-error",
+            "licensed": False,
+            "reason": f"Licensing entitlement check failed: {exc.__class__.__name__}: {exc}",
+            "error_type": exc.__class__.__name__,
+        }
+        raise LicensingRequirementError(result) from exc
+
+    result = _normalize_entitlement_result(
+        value,
+        module_id=module_id,
+        module_version=module_version,
+        licensing=licensing,
+        cap_status=cap_status,
+    )
+    if not result["licensed"]:
+        raise LicensingRequirementError(result)
+    return result
+
+
+def _enforce_candidate_licensing(candidate: dict) -> dict:
+    result = check_licensing_requirement(candidate)
+    candidate["licensing_status"] = result
+    return result
+
+
 def _ui_default_visible(extension_root: Path) -> bool:
     """Return the package-declared default navigation visibility.
 
@@ -114,6 +301,7 @@ def _extension_metadata(extension_root: Path) -> dict:
         "dependencies": _string_map(payload, "dependencies"),
         "optional_dependencies": _string_map(payload, "optional_dependencies"),
         "requires": _string_map(payload, "requires"),
+        "licensing": _licensing_metadata(payload),
         "default_visible": _ui_default_visible(extension_root),
     }
 
@@ -208,6 +396,7 @@ def installed_catalog_v2() -> list[dict]:
             "dependencies": hard,
             "optional_dependencies": optional,
             "requires": meta.get("requires", {}),
+            "licensing": meta.get("licensing", {"required": False}),
             "default_visible": meta.get("default_visible", True),
             "dependency_status": dep_status,
             "dependants": reverse.get(item["id"], []),
@@ -233,6 +422,7 @@ def _package_metadata(archive: Path) -> dict:
         "optional_dependencies": metadata["optional_dependencies"],
         "requires": metadata["requires"],
         "runtime_requirements": _check_runtime_requirements(metadata["requires"]),
+        "licensing": metadata.get("licensing", {"required": False}),
     })
     return preview
 
@@ -465,6 +655,7 @@ def _inspect_bundle(path: Path) -> dict:
             if not candidate_path.is_file():
                 raise ModuleManagerV2Error(f"Bundle package not found: {filename}")
             preview = _package_metadata(candidate_path)
+            _enforce_candidate_licensing(preview)
             if expected_id and preview["id"] != expected_id:
                 raise ModuleManagerV2Error(f"Bundle expected module {expected_id!r} but {filename!r} contains {preview['id']!r}.")
             if expected_version and preview["extension_version"] != expected_version:
@@ -494,10 +685,15 @@ def stage_uploaded_artifact(upload) -> dict:
         staged = stage_uploaded_package(upload)
         meta = _load_stage(staged["upload_id"])
         preview = _package_metadata(Path(meta["package_path"]))
+        _enforce_candidate_licensing(preview)
         plan = resolve_install_plan([preview])
         staged["preview"] = {**preview, "kind": "package", "plan": plan, "installable": bool(preview.get("installable")) and plan["valid"], "install_block_reason": preview.get("install_block_reason") if not preview.get("installable") else (None if plan["valid"] else "Dependency plan is not satisfiable.")}
         _atomic_json(STAGED_ROOT / f"{staged['upload_id']}.json", {**meta, "preview": staged["preview"]})
         return staged
+    except LicensingRequirementError:
+        # A structurally valid package that fails licensing must not be retried
+        # as a bundle just because it is a ZIP archive.
+        raise
     except ModuleManagerError as first_error:
         if not name.lower().endswith(".zip"):
             raise
@@ -623,6 +819,7 @@ def queue_v2_install(upload_id: str, requested_order=None) -> dict:
         meta = None
     if meta:
         preview = _package_metadata(Path(meta["package_path"]))
+        _enforce_candidate_licensing(preview)
         plan = resolve_install_plan([preview])
         plan = _plan_with_requested_order(plan, requested_order)
         if not preview.get("installable") or not plan["valid"]:
@@ -658,7 +855,8 @@ def queue_v2_install(upload_id: str, requested_order=None) -> dict:
 
     # Bundle staging.
     bundle = _load_bundle(upload_id)
-    plan = bundle.get("preview", {}).get("plan") or {}
+    fresh_preview = _inspect_bundle(Path(bundle["bundle_path"]))
+    plan = fresh_preview.get("plan") or {}
     if not plan.get("valid"):
         raise ModuleManagerV2Error("Bundle dependency plan is not satisfiable.")
     plan = _plan_with_requested_order(plan, requested_order)
@@ -668,20 +866,24 @@ def queue_v2_install(upload_id: str, requested_order=None) -> dict:
         "upload_id": upload_id,
         "bundle_path": bundle["bundle_path"],
         "plan": plan,
-        "bundle": bundle["preview"],
+        "bundle": fresh_preview,
     })
 
 
 def queue_batch_install(batch_id: str, requested_order=None) -> dict:
     batch = _load_batch(batch_id)
-    plan = batch.get("plan") or {}
+    package_paths = []
+    candidates = []
+    for package in batch.get("packages", []):
+        meta = _load_stage(package["upload_id"])
+        candidate = _package_metadata(Path(meta["package_path"]))
+        _enforce_candidate_licensing(candidate)
+        candidates.append(candidate)
+        package_paths.append({"id": candidate["id"], "path": meta["package_path"], "upload_id": package["upload_id"]})
+    plan = resolve_install_plan(candidates)
     if not plan.get("valid"):
         raise ModuleManagerV2Error("Batch dependency plan is not satisfiable.")
     plan = _plan_with_requested_order(plan, requested_order)
-    package_paths = []
-    for package in batch.get("packages", []):
-        meta = _load_stage(package["upload_id"])
-        package_paths.append({"id": package["preview"]["id"], "path": meta["package_path"], "upload_id": package["upload_id"]})
     return _queue_v2({
         "action": "batch_install",
         "plugin_id": "batch",

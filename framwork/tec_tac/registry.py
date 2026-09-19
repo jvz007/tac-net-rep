@@ -30,7 +30,7 @@ MANIFEST_NAME = "tec_tac.json"
 SUPPORTED_TYPES = frozenset({"extension", "reportset"})
 SUPPORTED_KEYS = frozenset({
     "id", "type", "version", "python_paths", "django_apps", "permission_groups",
-    "dependencies", "optional_dependencies", "requires",
+    "dependencies", "optional_dependencies", "requires", "licensing",
 })
 
 class RegistryError(RuntimeError):
