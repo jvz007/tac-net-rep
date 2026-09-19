@@ -1,5 +1,7 @@
 # Tec-Tac Framework
 
+Version **1.13.1** hardens the source/runtime layout migration preflight by requiring persistent module state to match the physical extension/reportset trees before cutover.
+
 Version **1.12.3** hardens the offline System Updates path. Installer contract verification now derives the expected framework version from `VERSION` instead of a hardcoded release number, and post-install verification must pass package/version consistency, Django checks, Tec-Tac migration state, core route, public contract version, and recovery-script executability before an update is considered successful. Installer execution is bounded by a timeout and failures use the existing backup/rollback path.
 
 Version **1.12.2** cleaned up release-integrity/version drift tests and removed stale hardcoded UI/framework release assumptions.

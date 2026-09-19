@@ -14,4 +14,6 @@ grep -q 'Deployed framework-owned runtime code without altering dynamic modules'
 grep -q 'TEC_TAC_CONFIG_FILE=.*tec-tac.conf' "${ROOT}/install.sh" || fail "central config path missing"
 grep -q '/opt/tec-tac-src/framework' "${ROOT}/scripts/migrate-layout.sh" || fail "framework source migration target missing"
 grep -q '/opt/tec-tac-src/ui' "${ROOT}/scripts/migrate-layout.sh" || fail "UI source migration target missing"
+grep -q 'module state/filesystem consistency OK' "${ROOT}/scripts/migrate-layout.sh" || fail "module-state/filesystem preflight missing"
+grep -q 'persistent module state references module files that are absent' "${ROOT}/scripts/migrate-layout.sh" || fail "missing-state-module refusal missing"
 echo "[TEST] PASS layout foundation"

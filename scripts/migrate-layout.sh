@@ -101,27 +101,57 @@ if [[ -f "${BACKEND_ROOT}/tacticalrmm/local_settings.py" ]]; then
   cp -a "${BACKEND_ROOT}/tacticalrmm/local_settings.py" "${BACKUP_DIR}/local_settings.py"
 fi
 
-log "Validating currently installed module/reportset pairs before migration."
-python3 - "${OLD_FRAMEWORK_REPO}/extensions" "${OLD_FRAMEWORK_REPO}/reportsets" <<'PY'
+log "Validating currently installed module/reportset pairs and persistent module state before migration."
+python3 - "${OLD_FRAMEWORK_REPO}/extensions" "${OLD_FRAMEWORK_REPO}/reportsets" "${STATE_ROOT}/module-manager/module-state.json" <<'PY'
 import json, sys
 from pathlib import Path
-ext, rep = map(Path, sys.argv[1:])
+
+ext, rep, state_file = map(Path, sys.argv[1:])
+
 def manifests(root):
     out = {}
-    if not root.is_dir(): return out
+    if not root.is_dir():
+        return out
     for d in root.iterdir():
         p = d / "tec_tac.json"
         if d.is_dir() and p.is_file():
             data = json.loads(p.read_text(encoding="utf-8"))
             out[d.name] = data
     return out
+
+def state_modules(path):
+    if not path.is_file():
+        return set()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"module state is unreadable: {path}: {exc}")
+    modules = payload.get("modules", {}) if isinstance(payload, dict) else None
+    if not isinstance(modules, dict):
+        raise SystemExit(f"module state has invalid structure: {path}")
+    return {str(module_id) for module_id in modules if str(module_id).strip()}
+
 e, r = manifests(ext), manifests(rep)
 ignore = {"reporting"}
-missing_r = sorted((set(e)-ignore) - set(r))
+missing_r = sorted((set(e) - ignore) - set(r))
 missing_e = sorted(set(r) - set(e))
 if missing_r or missing_e:
-    raise SystemExit(f"module pairing is not clean; missing reportsets={missing_r}, missing extensions={missing_e}")
-print(f"module pairing OK: {len(set(e)&set(r))} pair(s)")
+    raise SystemExit(
+        f"module pairing is not clean; missing reportsets={missing_r}, missing extensions={missing_e}"
+    )
+
+state_ids = state_modules(state_file)
+missing_state_extensions = sorted(state_ids - set(e))
+missing_state_reportsets = sorted(state_ids - set(r))
+if missing_state_extensions or missing_state_reportsets:
+    raise SystemExit(
+        "persistent module state references module files that are absent; "
+        f"missing extensions={missing_state_extensions}, missing reportsets={missing_state_reportsets}. "
+        "Recover the missing module trees before running the layout migration."
+    )
+
+print(f"module pairing OK: {len(set(e) & set(r))} pair(s)")
+print(f"module state/filesystem consistency OK: {len(state_ids)} state record(s)")
 PY
 
 mkdir -p "${SOURCE_ROOT}"
