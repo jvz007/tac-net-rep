@@ -28,7 +28,7 @@ JOBS_ROOT = STATE_ROOT / "jobs"
 LOGS_ROOT = STATE_ROOT / "logs"
 HISTORY_ROOT = STATE_ROOT / "history"
 HELPER = Path("/usr/local/sbin/tec-tac-system-update")
-CONFIG = Path("/etc/tec-tac/system-update.conf")
+CONFIG = Path(os.environ.get("TEC_TAC_CONFIG_FILE", "/opt/tec-tac/etc/tec-tac.conf"))
 MAX_PACKAGE_BYTES = 250 * 1024 * 1024
 MAX_EXTRACTED_BYTES = 1024 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 20000
@@ -66,9 +66,9 @@ def _read_config() -> dict[str, str]:
 def _component_root(component: str) -> Path:
     cfg = _read_config()
     if component == "framework":
-        return Path(cfg.get("FRAMEWORK_ROOT", "/opt/tec-tac"))
+        return Path(cfg.get("TEC_TAC_FRAMEWORK_SOURCE", "/opt/tec-tac-src/framework"))
     if component == "ui":
-        return Path(cfg.get("UI_REPO_ROOT", "/opt/tec-tac-ui"))
+        return Path(cfg.get("TEC_TAC_UI_SOURCE", "/opt/tec-tac-src/ui"))
     raise SystemUpdateError("Unknown system component.")
 
 
@@ -88,7 +88,7 @@ def _github_headers() -> dict[str, str]:
         "User-Agent": "tec-tac-system-updater/1.3",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    token_file = cfg.get("GITHUB_TOKEN_FILE", "/etc/tec-tac/github-token")
+    token_file = cfg.get("GITHUB_TOKEN_FILE", "/opt/tec-tac/etc/github-token")
     path = Path(token_file)
     if path.is_file():
         token = path.read_text(encoding="utf-8").strip()

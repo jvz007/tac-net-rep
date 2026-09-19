@@ -8,10 +8,16 @@ VENV_PYTHON="${TACTICAL_ROOT}/api/env/bin/python"
 MANAGE_PY="${BACKEND_DIR}/manage.py"
 LOCAL_SETTINGS="${BACKEND_DIR}/tacticalrmm/local_settings.py"
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-FRAMEWORK_DIR="${REPO_ROOT}/framwork"
-EXTENSIONS_DIR="${REPO_ROOT}/extensions"
-REPORTSETS_DIR="${REPO_ROOT}/reportsets"
+SOURCE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TEC_TAC_CONFIG_FILE="${TEC_TAC_CONFIG_FILE:-/opt/tec-tac/etc/tec-tac.conf}"
+if [[ -f "${TEC_TAC_CONFIG_FILE}" ]]; then
+    # shellcheck disable=SC1090
+    source "${TEC_TAC_CONFIG_FILE}"
+fi
+REPO_ROOT="${TEC_TAC_ROOT:-/opt/tec-tac}"
+FRAMEWORK_DIR="${TEC_TAC_FRAMEWORK_ROOT:-${REPO_ROOT}/framework}"
+EXTENSIONS_DIR="${TEC_TAC_EXTENSIONS_ROOT:-${REPO_ROOT}/extensions}"
+REPORTSETS_DIR="${TEC_TAC_REPORTSETS_ROOT:-${REPO_ROOT}/reportsets}"
 LEGACY_REPORTING_DIR="${EXTENSIONS_DIR}/reporting"
 APP_DIR="${LEGACY_REPORTING_DIR}/${APP_NAME}"
 
@@ -45,7 +51,7 @@ run_as_tactical() {
     runuser -u "${TACTICAL_USER}" -- "$@"
 }
 
-log "Detected Tec-Tac repository root: ${REPO_ROOT}"
+log "Detected Tec-Tac runtime root: ${REPO_ROOT}"
 
 if ${PURGE_DATA}; then
     [[ -f "${APP_DIR}/apps.py" || -d "${LEGACY_DEST_APP}" ]] || fail "${APP_NAME} code is missing; cannot safely run migration rollback."
@@ -80,20 +86,19 @@ fi
 
 MODULE_HELPER="/usr/local/sbin/tec-tac-module-job"
 MODULE_SUDOERS="/etc/sudoers.d/tec-tac-module-manager"
-MODULE_CONFIG="/etc/tec-tac/module-manager.conf"
+MODULE_CONFIG="${TEC_TAC_CONFIG_FILE}"
 RMM_DROPIN="/etc/systemd/system/rmm.service.d/tec-tac.conf"
 SYSTEM_UPDATE_HELPER="/usr/local/sbin/tec-tac-system-update"
 SYSTEM_UPDATE_LIB="/usr/local/lib/tec-tac-updater"
 SYSTEM_UPDATE_SUDOERS="/etc/sudoers.d/tec-tac-system-update"
-SYSTEM_UPDATE_CONFIG="/etc/tec-tac/system-update.conf"
+SYSTEM_UPDATE_CONFIG="${TEC_TAC_CONFIG_FILE}"
 rm -f "${MODULE_SUDOERS}" "${MODULE_HELPER}" "${MODULE_CONFIG}" "${RMM_DROPIN}" "${SYSTEM_UPDATE_SUDOERS}" "${SYSTEM_UPDATE_HELPER}" "${SYSTEM_UPDATE_CONFIG}" /usr/local/sbin/tec-tac-repair /usr/local/sbin/tec-tac-diagnostics
 rm -rf "${SYSTEM_UPDATE_LIB}"
 systemctl daemon-reload
 log "Removed Tec-Tac privileged lifecycle/update helpers, sudoers rules, and rmm.service drop-in."
 
-# Repository-owned framework/extension files are intentionally not deleted.
-# Uninstall only disconnects Tec-Tac from Tactical. Delete the Git checkout
-# separately if the repository itself is no longer wanted.
+# Runtime code and installed modules are intentionally not deleted.
+# Uninstall disconnects Tec-Tac from Tactical; source checkouts under /opt/tec-tac-src remain separate.
 if [[ -d "${LEGACY_DEST_APP}" ]]; then
     rm -rf "${LEGACY_DEST_APP}"
     log "Removed legacy in-tree ${LEGACY_DEST_APP}."
@@ -124,5 +129,5 @@ if ${PURGE_DATA}; then
 else
     log "Database tables and data were preserved."
 fi
-log "Repository preserved: ${REPO_ROOT}"
+log "Runtime preserved: ${REPO_ROOT}"
 log "Persistent backups: ${TEC_TAC_BACKUP_DIR:-/var/lib/tec-tac/backups}"

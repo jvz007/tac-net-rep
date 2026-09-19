@@ -618,3 +618,21 @@ sudo /opt/tec-tac/scripts/recovery/tec-tac-repair.sh
 `tec-tac-repair.sh` provides diagnostics, Module Manager permission repair, module pair/state validation, explicit missing-module restoration from framework backups, runtime/bootstrap repair, and Scheduler repair. The **Run all safe repairs** option deliberately does not restore backups or reinstall the framework without a separate explicit action.
 
 For automation/support workflows, the focused scripts support `--check` / `--repair`; diagnostics and permission checks also support machine-readable `--json` output.
+
+
+## Installation layout (1.13.0+)
+
+Tec-Tac separates replaceable Git source from installed runtime code:
+
+```text
+/opt/tec-tac-src/framework   # tac-net-rep Git checkout
+/opt/tec-tac-src/ui          # tec-tac-ui Git checkout
+/opt/tec-tac/framework       # live framework runtime
+/opt/tec-tac/extensions      # installed extension code
+/opt/tec-tac/reportsets      # installed reportsets
+/opt/tec-tac/scripts         # installed admin/recovery scripts
+/opt/tec-tac/etc/tec-tac.conf
+/var/lib/tec-tac/ui/tec-tac  # compiled UI
+```
+
+Run `sudo bash scripts/migrate-layout.sh` once when upgrading a legacy installation where `/opt/tec-tac` or `/opt/tec-tac-ui` is still a Git checkout.

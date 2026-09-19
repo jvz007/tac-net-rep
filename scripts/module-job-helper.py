@@ -19,7 +19,7 @@ JOBS_ROOT = STATE_ROOT / "jobs"
 STAGED_ROOT = STATE_ROOT / "staged"
 RUNNING_ROOT = STATE_ROOT / "running"
 LOGS_ROOT = STATE_ROOT / "logs"
-CONFIG = Path("/etc/tec-tac/module-manager.conf")
+CONFIG = Path(os.environ.get("TEC_TAC_CONFIG_FILE", "/opt/tec-tac/etc/tec-tac.conf"))
 
 
 def now():
@@ -128,7 +128,7 @@ def run_job(job_id):
         raise SystemExit("job was not dispatched")
     config = load_config()
     repo_root = Path(config.get("REPO_ROOT", "/opt/tec-tac")).resolve()
-    ui_sync = Path(config.get("UI_SYNC_SCRIPT", "/opt/tec-tac-ui/scripts/sync-modules.sh"))
+    ui_sync = Path(config.get("UI_SYNC_SCRIPT", "/opt/tec-tac-src/ui/scripts/sync-modules.sh"))
     ui_root = config.get("UI_ROOT", "/var/lib/tec-tac/ui/tec-tac")
     install_script = repo_root / "scripts/install-extension.sh"
     remove_script = repo_root / "scripts/remove-extension.sh"

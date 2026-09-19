@@ -39,8 +39,18 @@ SAFETY="${SYSTEM_UPDATE_ROOT}/backups/recovery-modules-$(date -u +%Y%m%dT%H%M%SZ
 tar -czf "$SAFETY" -C "${TEC_TAC_ROOT}" extensions reportsets
 chmod 0640 "$SAFETY"
 for rel in "${missing[@]}"; do
-  mkdir -p "${TEC_TAC_ROOT}/$(dirname "$rel")"
-  cp -a "$BASE/$rel" "${TEC_TAC_ROOT}/$rel"
+  dst="${TEC_TAC_ROOT}/$rel"
+  mkdir -p "$(dirname "$dst")"
+  rm -rf "$dst"
+  cp -a "$BASE/$rel" "$dst"
 done
 chmod -R a+rX "${TEC_TAC_ROOT}/extensions" "${TEC_TAC_ROOT}/reportsets"
-recovery_log "Restored ${#missing[@]} tree(s). Safety backup: $SAFETY"
+if ! "${HERE}/tec-tac-repair-modules.sh" --check; then
+  recovery_err "Restored files failed module-pair validation. Safety backup: $SAFETY"
+  exit 1
+fi
+if ! run_manage "check"; then
+  recovery_err "Restored modules failed Django validation. Safety backup: $SAFETY"
+  exit 1
+fi
+recovery_log "Restored ${#missing[@]} tree(s) and validated module registry/Django. Safety backup: $SAFETY"

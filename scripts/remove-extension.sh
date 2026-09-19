@@ -16,10 +16,13 @@ set -euo pipefail
 # Optional:
 #   --yes      skip confirmation prompt
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-FRAMEWORK_DIR="${REPO_ROOT}/framwork"
-EXTENSIONS_ROOT="${REPO_ROOT}/extensions"
-REPORTSETS_ROOT="${REPO_ROOT}/reportsets"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "${HERE}/tec-tac-config.sh"
+REPO_ROOT="${TEC_TAC_ROOT}"
+FRAMEWORK_DIR="${TEC_TAC_FRAMEWORK_ROOT}"
+EXTENSIONS_ROOT="${TEC_TAC_EXTENSIONS_ROOT}"
+REPORTSETS_ROOT="${TEC_TAC_REPORTSETS_ROOT}"
 
 TACTICAL_ROOT="${TACTICAL_ROOT:-/rmm}"
 BACKEND_DIR="${TACTICAL_ROOT}/api/tacticalrmm"

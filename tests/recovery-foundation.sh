@@ -21,3 +21,9 @@ grep -q 'Recover missing modules' "${ROOT}/scripts/recovery/tec-tac-repair.sh" |
 grep -q "find \"\${REPO_ROOT}/scripts/recovery\".*chmod 0755" "${ROOT}/install.sh" || fail "installer does not repair recovery script executable bits"
 ! grep -q 'ln -sfn.*tec-tac-repair' "${ROOT}/install.sh" || fail "installer must not expose recovery toolkit in /usr/local/sbin"
 echo "[TEST] PASS recovery foundation"
+
+grep -q 'rm -rf "$dst"' "${ROOT}/scripts/recovery/tec-tac-recover-modules-from-backup.sh" || fail "recovery does not replace exact destination before restore"
+grep -q 'tec-tac-repair-modules.sh.*--check' "${ROOT}/scripts/recovery/tec-tac-recover-modules-from-backup.sh" || fail "post-restore module validation missing"
+grep -q 'run_manage "check"' "${ROOT}/scripts/recovery/tec-tac-recover-modules-from-backup.sh" || fail "post-restore Django validation missing"
+grep -q 'tec-tac.conf' "${ROOT}/scripts/recovery/lib.sh" || fail "recovery does not load central layout config"
+echo "[TEST] PASS recovery layout hardening"

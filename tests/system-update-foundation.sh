@@ -21,8 +21,8 @@ grep -q 'restore_backup' "${ROOT}/scripts/system-update-helper.py" || fail "roll
 grep -q 'snapshot_dynamic_plugins' "${ROOT}/scripts/system-update-helper.py" || fail "dynamic module pre-update inventory missing"
 grep -q 'verify_dynamic_plugins' "${ROOT}/scripts/system-update-helper.py" || fail "dynamic module preservation verification missing"
 grep -q 'FRAMEWORK_OWNED_PLUGIN_PATHS' "${ROOT}/scripts/system-update-helper.py" || fail "framework-owned plugin boundary missing"
-grep -q 'FRAMEWORK_REPOSITORY' "${ROOT}/install.sh" || fail "framework repository config missing"
-grep -q 'UI_REPOSITORY' "${ROOT}/install.sh" || fail "UI repository config missing"
+grep -q 'TEC_TAC_FRAMEWORK_SOURCE' "${ROOT}/install.sh" || fail "framework source layout config missing"
+grep -q 'TEC_TAC_UI_SOURCE' "${ROOT}/install.sh" || fail "UI source layout config missing"
 python3 -m py_compile "${ROOT}/framwork/tec_tac/system_update.py" "${ROOT}/scripts/system-update-helper.py"
 bash -n "${ROOT}/install.sh"
 bash -n "${ROOT}/uninstall.sh"
@@ -56,3 +56,10 @@ grep -q 'migrate.*tec_tac.*--check' "${ROOT}/scripts/system-update-helper.py" ||
 grep -q 'package manifest verification failed' "${ROOT}/scripts/system-update-helper.py" || fail "post-install package manifest verification missing"
 grep -q 'contract version OK' "${ROOT}/scripts/system-update-helper.py" || fail "post-install contract version verification missing"
 echo "[TEST] PASS system update transactional verification"
+
+# 1.13.0 source/runtime separation contract.
+grep -q '/opt/tec-tac/etc/tec-tac.conf' "${ROOT}/scripts/system-update-helper.py" || fail "system updater is not using central Tec-Tac config"
+grep -q 'TEC_TAC_FRAMEWORK_SOURCE' "${ROOT}/scripts/system-update-helper.py" || fail "system updater is not targeting framework source checkout"
+grep -q 'TEC_TAC_UI_SOURCE' "${ROOT}/scripts/system-update-helper.py" || fail "system updater is not targeting UI source checkout"
+grep -q 'runtime_root = Path' "${ROOT}/scripts/system-update-helper.py" || fail "runtime module inventory verification missing"
+echo "[TEST] PASS source/runtime update layout"

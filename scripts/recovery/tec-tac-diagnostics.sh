@@ -21,6 +21,11 @@ print(json.dumps({'framework':sys.argv[1],'ui':sys.argv[2],'permissions_ok':sys.
 PY
 else
   recovery_log "Framework: $fw"
+  recovery_log "Runtime root: ${TEC_TAC_ROOT}"
+  recovery_log "Framework runtime: ${TEC_TAC_FRAMEWORK_ROOT}"
+  recovery_log "Extensions: ${TEC_TAC_EXTENSIONS_ROOT}"
+  recovery_log "Reportsets: ${TEC_TAC_REPORTSETS_ROOT}"
+  recovery_log "Config: ${TEC_TAC_CONFIG_FILE}"
   recovery_log "UI: $ui"
   printf '%s\n' "${services[@]}" | sed 's/^/[SERVICE] /'
   printf '%s\n' "$perm"

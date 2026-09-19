@@ -31,7 +31,7 @@ LOGS_ROOT = STATE_ROOT / "logs"
 BACKUPS_ROOT = STATE_ROOT / "backups"
 HISTORY_ROOT = STATE_ROOT / "history"
 LOCK_PATH = STATE_ROOT / "update.lock"
-CONFIG = Path("/etc/tec-tac/system-update.conf")
+CONFIG = Path(os.environ.get("TEC_TAC_CONFIG_FILE", "/opt/tec-tac/etc/tec-tac.conf"))
 SELF = Path("/usr/local/sbin/tec-tac-system-update")
 
 
@@ -375,7 +375,8 @@ def verify(component, target, expected, log):
     if component == "framework":
         py = Path("/rmm/api/env/bin/python")
         manage = Path("/rmm/api/tacticalrmm/manage.py")
-        env = {**os.environ, "PYTHONPATH": str(target / "framwork")}
+        runtime_framework = Path(load_config().get("TEC_TAC_FRAMEWORK_ROOT", "/opt/tec-tac/framework"))
+        env = {**os.environ, "PYTHONPATH": str(runtime_framework)}
         checks = [
             ([str(py), str(manage), "check"], "Django system check"),
             ([str(py), str(manage), "migrate", "tec_tac", "--check"], "Tec-Tac migration check"),
@@ -390,7 +391,7 @@ def verify(component, target, expected, log):
             rc = _run_bounded(command, cwd="/rmm/api/tacticalrmm", log=log, env=env, timeout=VERIFY_TIMEOUT_SECONDS, label=label)
             if rc != 0:
                 raise RuntimeError(f"{label} failed with status {rc}")
-        recovery = target / "scripts" / "recovery"
+        recovery = Path(load_config().get("TEC_TAC_SCRIPTS_ROOT", "/opt/tec-tac/scripts")) / "recovery"
         missing_exec = [p.name for p in sorted(recovery.glob("*.sh")) if not os.access(p, os.X_OK)]
         if missing_exec:
             raise RuntimeError("recovery script executable verification failed: " + ", ".join(missing_exec))
@@ -413,7 +414,7 @@ def run_job(job_id):
         raise SystemExit("job was not dispatched")
     cfg = load_config()
     component = job["component"]
-    target = Path(cfg.get("FRAMEWORK_ROOT", "/opt/tec-tac") if component == "framework" else cfg.get("UI_REPO_ROOT", "/opt/tec-tac-ui")).resolve()
+    target = Path(cfg.get("TEC_TAC_FRAMEWORK_SOURCE", "/opt/tec-tac-src/framework") if component == "framework" else cfg.get("TEC_TAC_UI_SOURCE", "/opt/tec-tac-src/ui")).resolve()
     package = Path(job["package_path"])
     log_path = LOGS_ROOT / f"{job_id}.log"
     LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -443,6 +444,7 @@ def run_job(job_id):
         log.write(f"[TEC-TAC-UPDATE] backup={backup}\n")
         log.flush()
 
+        dynamic_inventory = {}
         try:
             job["stage"] = "extract"
             atomic_json(path, job)
@@ -457,10 +459,11 @@ def run_job(job_id):
 
             job["stage"] = "deploy"
             atomic_json(path, job)
-            dynamic_inventory = snapshot_dynamic_plugins(target) if component == "framework" else {}
+            runtime_root = Path(cfg.get("TEC_TAC_ROOT", "/opt/tec-tac")).resolve()
+            dynamic_inventory = snapshot_dynamic_plugins(runtime_root) if component == "framework" else {}
             if component == "framework":
                 deploy_framework(source, target)
-                verify_dynamic_plugins(target, dynamic_inventory)
+                verify_dynamic_plugins(runtime_root, dynamic_inventory)
             else:
                 deploy_ui(source, target)
 
@@ -475,6 +478,8 @@ def run_job(job_id):
             job["stage"] = "verify"
             atomic_json(path, job)
             verify(component, target, str(job.get("version")), log)
+            if component == "framework":
+                verify_dynamic_plugins(runtime_root, dynamic_inventory)
             job["rollback"] = {"performed": False, "status": "not-required"}
             job["status"] = "succeeded"
             job["stage"] = "complete"
@@ -496,6 +501,8 @@ def run_job(job_id):
                 rollback_rc = run_install(component, target, log)
                 if rollback_rc != 0:
                     raise RuntimeError(f"rollback installer exited with status {rollback_rc}")
+                if component == "framework":
+                    verify_dynamic_plugins(Path(cfg.get("TEC_TAC_ROOT", "/opt/tec-tac")).resolve(), dynamic_inventory)
                 job["rollback"] = {"performed": True, "status": "succeeded", "version": old_version}
             except Exception as rb_exc:
                 rollback_error = str(rb_exc)

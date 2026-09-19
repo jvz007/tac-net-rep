@@ -30,7 +30,7 @@ RUNNING_ROOT = STATE_ROOT / "running-v2"
 LOGS_ROOT = STATE_ROOT / "logs"
 BACKUP_ROOT = STATE_ROOT / "bundle-backups"
 MODULE_STATE = STATE_ROOT / "module-state.json"
-CONFIG = Path("/etc/tec-tac/module-manager.conf")
+CONFIG = Path(os.environ.get("TEC_TAC_CONFIG_FILE", "/opt/tec-tac/etc/tec-tac.conf"))
 BUNDLES_ROOT = STAGED_ROOT / "bundles"
 BATCHES_ROOT = STAGED_ROOT / "batches"
 ALLOWED_ACTIONS = {"enable", "disable", "visibility", "bundle_install", "batch_install"}
@@ -166,7 +166,7 @@ def require_root_owned(path):
 
 
 def sync_and_reload(config, log, *, refresh_workers=False):
-    ui_sync = Path(config.get("UI_SYNC_SCRIPT", "/opt/tec-tac-ui/scripts/sync-modules.sh"))
+    ui_sync = Path(config.get("UI_SYNC_SCRIPT", "/opt/tec-tac-src/ui/scripts/sync-modules.sh"))
     ui_root = config.get("UI_ROOT", "/var/lib/tec-tac/ui/tec-tac")
     reload_script = Path(config.get("REPO_ROOT", "/opt/tec-tac")) / "scripts/reload-rmm-uwsgi.sh"
     if ui_sync.is_file():

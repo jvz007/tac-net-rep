@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -o pipefail
 
-TEC_TAC_ROOT="${TEC_TAC_ROOT:-/opt/tec-tac}"
-TACTICAL_ROOT="${TACTICAL_ROOT:-/rmm}"
-BACKEND_DIR="${TACTICAL_ROOT}/api/tacticalrmm"
-VENV_PYTHON="${TACTICAL_ROOT}/api/env/bin/python"
+CONFIG_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/tec-tac-config.sh"
+# shellcheck source=/dev/null
+source "${CONFIG_HELPER}"
+BACKEND_DIR="${TACTICAL_BACKEND_ROOT}"
+VENV_PYTHON="${TACTICAL_PYTHON}"
 MANAGE_PY="${BACKEND_DIR}/manage.py"
-MODULE_ROOT="${MODULE_ROOT:-/var/lib/tec-tac/module-manager}"
-SYSTEM_UPDATE_ROOT="${SYSTEM_UPDATE_ROOT:-/var/lib/tec-tac/system-updates}"
+MODULE_ROOT="${MODULE_ROOT:-${TEC_TAC_MODULE_STATE_ROOT}}"
+SYSTEM_UPDATE_ROOT="${SYSTEM_UPDATE_ROOT:-${TEC_TAC_SYSTEM_UPDATE_ROOT}}"
 LOCAL_SETTINGS="${BACKEND_DIR}/tacticalrmm/local_settings.py"
 
 recovery_log(){ printf '[TEC-TAC-RECOVERY] %s\n' "$*"; }

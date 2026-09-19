@@ -9,13 +9,29 @@ VENV_PYTHON="${TACTICAL_ROOT}/api/env/bin/python"
 MANAGE_PY="${BACKEND_DIR}/manage.py"
 LOCAL_SETTINGS="${BACKEND_DIR}/tacticalrmm/local_settings.py"
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-FRAMEWORK_DIR="${REPO_ROOT}/framwork"
-EXTENSIONS_DIR="${REPO_ROOT}/extensions"
-REPORTSETS_DIR="${REPO_ROOT}/reportsets"
+SOURCE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TEC_TAC_CONFIG_FILE="${TEC_TAC_CONFIG_FILE:-/opt/tec-tac/etc/tec-tac.conf}"
+if [[ -f "${TEC_TAC_CONFIG_FILE}" ]]; then
+    # shellcheck disable=SC1090
+    source "${TEC_TAC_CONFIG_FILE}"
+fi
+TEC_TAC_ROOT="${TEC_TAC_ROOT:-/opt/tec-tac}"
+TEC_TAC_SOURCE_ROOT="${TEC_TAC_SOURCE_ROOT:-/opt/tec-tac-src}"
+TEC_TAC_FRAMEWORK_SOURCE="${TEC_TAC_FRAMEWORK_SOURCE:-${SOURCE_ROOT}}"
+TEC_TAC_UI_SOURCE="${TEC_TAC_UI_SOURCE:-${TEC_TAC_SOURCE_ROOT}/ui}"
+FRAMEWORK_DIR="${TEC_TAC_FRAMEWORK_ROOT:-${TEC_TAC_ROOT}/framework}"
+EXTENSIONS_DIR="${TEC_TAC_EXTENSIONS_ROOT:-${TEC_TAC_ROOT}/extensions}"
+REPORTSETS_DIR="${TEC_TAC_REPORTSETS_ROOT:-${TEC_TAC_ROOT}/reportsets}"
+RUNTIME_SCRIPTS_DIR="${TEC_TAC_SCRIPTS_ROOT:-${TEC_TAC_ROOT}/scripts}"
+SOURCE_FRAMEWORK_DIR="${SOURCE_ROOT}/framwork"
+SOURCE_EXTENSIONS_DIR="${SOURCE_ROOT}/extensions"
+SOURCE_REPORTSETS_DIR="${SOURCE_ROOT}/reportsets"
+SOURCE_SCRIPTS_DIR="${SOURCE_ROOT}/scripts"
+SOURCE_TEMPLATES_DIR="${SOURCE_ROOT}/templates"
 LEGACY_REPORTING_DIR="${EXTENSIONS_DIR}/reporting"
 APP_DIR="${LEGACY_REPORTING_DIR}/${APP_NAME}"
-VERSION_FILE="${REPO_ROOT}/VERSION"
+VERSION_FILE="${SOURCE_ROOT}/VERSION"
+REPO_ROOT="${TEC_TAC_ROOT}"
 
 BEGIN_MARKER="# BEGIN TEC-TAC EXTENSION FRAMEWORK"
 END_MARKER="# END TEC-TAC EXTENSION FRAMEWORK"
@@ -36,86 +52,112 @@ if [[ -f "${VERSION_FILE}" ]]; then
     PACKAGE_VERSION="$(tr -d '[:space:]' < "${VERSION_FILE}")"
 fi
 log "Installing Tec-Tac framework ${PACKAGE_VERSION}."
-log "Detected Tec-Tac repository root: ${REPO_ROOT}"
+log "Tec-Tac source: ${SOURCE_ROOT}"
+log "Tec-Tac runtime: ${TEC_TAC_ROOT}"
 
 [[ -d "${TACTICAL_ROOT}/.git" ]] || fail "${TACTICAL_ROOT} is not a Tactical RMM Git checkout."
 [[ -f "${MANAGE_PY}" ]] || fail "Tactical manage.py was not found at ${MANAGE_PY}."
 [[ -x "${VENV_PYTHON}" ]] || fail "Tactical Python was not found at ${VENV_PYTHON}."
 REQUIRED_FILES=(
-    "${FRAMEWORK_DIR}/tec_tac/__init__.py"
-    "${FRAMEWORK_DIR}/tec_tac/bootstrap.py"
-    "${FRAMEWORK_DIR}/tec_tac/registry.py"
-    "${FRAMEWORK_DIR}/tec_tac/rbac.py"
-    "${FRAMEWORK_DIR}/tec_tac/apps.py"
-    "${FRAMEWORK_DIR}/tec_tac/urls.py"
-    "${FRAMEWORK_DIR}/tec_tac/views.py"
-    "${FRAMEWORK_DIR}/tec_tac/contracts.py"
-    "${FRAMEWORK_DIR}/tec_tac/contract_views.py"
-    "${FRAMEWORK_DIR}/tec_tac/module_manager.py"
-    "${FRAMEWORK_DIR}/tec_tac/module_manager_v2.py"
-    "${FRAMEWORK_DIR}/tec_tac/module_state.py"
-    "${FRAMEWORK_DIR}/tec_tac/module_v2_views.py"
-    "${FRAMEWORK_DIR}/tec_tac/module_repository.py"
-    "${FRAMEWORK_DIR}/tec_tac/module_repository_views.py"
-    "${APP_DIR}/__init__.py"
-    "${APP_DIR}/apps.py"
-    "${APP_DIR}/models.py"
-    "${APP_DIR}/rbac.py"
-    "${APP_DIR}/serializers.py"
-    "${APP_DIR}/views.py"
-    "${APP_DIR}/urls.py"
-    "${APP_DIR}/migrations/0001_initial.py"
-    "${APP_DIR}/migrations/0002_extensionrolepermission.py"
-    "${APP_DIR}/migrations/0003_networkavailability_ingest_hardening.py"
-    "${REPO_ROOT}/scripts/reporting-permission.sh"
-    "${REPO_ROOT}/scripts/framework-info.sh"
-    "${REPO_ROOT}/scripts/plugin-info.sh"
-    "${REPO_ROOT}/scripts/scaffold-plugin.sh"
-    "${REPO_ROOT}/scripts/install-extension.sh"
-    "${REPO_ROOT}/scripts/remove-extension.sh"
-    "${REPO_ROOT}/scripts/module-job-helper.py"
-    "${REPO_ROOT}/scripts/module-v2-job-helper.py"
-    "${REPO_ROOT}/scripts/reload-rmm-uwsgi.sh"
-    "${REPO_ROOT}/tests/framework-foundation.sh"
-    "${REPO_ROOT}/tests/access-api-foundation.sh"
-    "${REPO_ROOT}/tests/module-management-foundation.sh"
-    "${REPO_ROOT}/tests/scheduler-foundation.sh"
-    "${REPO_ROOT}/tests/contracts-foundation.sh"
-    "${REPO_ROOT}/tests/recovery-foundation.sh"
-    "${FRAMEWORK_DIR}/tec_tac/scheduler.py"
-    "${FRAMEWORK_DIR}/tec_tac/scheduler_views.py"
-    "${FRAMEWORK_DIR}/tec_tac/tasks.py"
-    "${FRAMEWORK_DIR}/tec_tac/models.py"
-    "${FRAMEWORK_DIR}/tec_tac/migrations/0001_scheduler.py"
-    "${FRAMEWORK_DIR}/tec_tac/migrations/0002_scheduler_hardening.py"
-    "${FRAMEWORK_DIR}/tec_tac/migrations/0003_scheduler_model_options.py"
-    "${REPO_ROOT}/scripts/recovery/lib.sh"
-    "${REPO_ROOT}/scripts/recovery/tec-tac-repair.sh"
-    "${REPO_ROOT}/scripts/recovery/tec-tac-diagnostics.sh"
-    "${REPO_ROOT}/scripts/recovery/tec-tac-repair-permissions.sh"
-    "${REPO_ROOT}/scripts/recovery/tec-tac-repair-modules.sh"
-    "${REPO_ROOT}/scripts/recovery/tec-tac-recover-modules-from-backup.sh"
-    "${REPO_ROOT}/scripts/recovery/tec-tac-repair-runtime.sh"
-    "${REPO_ROOT}/scripts/recovery/tec-tac-repair-scheduler.sh"
-    "${FRAMEWORK_DIR}/tec_tac/management/commands/tec_tac_scheduler_tick.py"
-    "${REPO_ROOT}/tests/registry-validation.sh"
-    "${REPO_ROOT}/tests/tactical-update-survival.sh"
-    "${REPO_ROOT}/tests/example-plugin.sh"
-    "${REPO_ROOT}/extensions/example/tec_tac.json"
-    "${REPO_ROOT}/extensions/example/tec_tac_example_extension/__init__.py"
-    "${REPO_ROOT}/extensions/example/tec_tac_example_extension/apps.py"
-    "${REPO_ROOT}/extensions/example/tec_tac_example_extension/sample.py"
-    "${REPO_ROOT}/reportsets/example/tec_tac.json"
-    "${REPO_ROOT}/reportsets/example/tec_tac_example_reportset/__init__.py"
-    "${REPO_ROOT}/reportsets/example/tec_tac_example_reportset/apps.py"
-    "${REPO_ROOT}/reportsets/example/tec_tac_example_reportset/sample.py"
-    "${REPO_ROOT}/templates/plugin/extension/tec_tac.json"
-    "${REPO_ROOT}/templates/plugin/reportset/tec_tac.json"
+    "${SOURCE_FRAMEWORK_DIR}/tec_tac/__init__.py"
+    "${SOURCE_FRAMEWORK_DIR}/tec_tac/bootstrap.py"
+    "${SOURCE_FRAMEWORK_DIR}/tec_tac/registry.py"
+    "${SOURCE_FRAMEWORK_DIR}/tec_tac/rbac.py"
+    "${SOURCE_FRAMEWORK_DIR}/tec_tac/apps.py"
+    "${SOURCE_FRAMEWORK_DIR}/tec_tac/urls.py"
+    "${SOURCE_FRAMEWORK_DIR}/tec_tac/views.py"
+    "${SOURCE_FRAMEWORK_DIR}/tec_tac/contracts.py"
+    "${SOURCE_FRAMEWORK_DIR}/tec_tac/contract_views.py"
+    "${SOURCE_FRAMEWORK_DIR}/tec_tac/module_manager.py"
+    "${SOURCE_FRAMEWORK_DIR}/tec_tac/module_manager_v2.py"
+    "${SOURCE_FRAMEWORK_DIR}/tec_tac/module_state.py"
+    "${SOURCE_FRAMEWORK_DIR}/tec_tac/module_v2_views.py"
+    "${SOURCE_FRAMEWORK_DIR}/tec_tac/module_repository.py"
+    "${SOURCE_FRAMEWORK_DIR}/tec_tac/module_repository_views.py"
+    "${SOURCE_EXTENSIONS_DIR}/reporting/${APP_NAME}/__init__.py"
+    "${SOURCE_EXTENSIONS_DIR}/reporting/${APP_NAME}/apps.py"
+    "${SOURCE_EXTENSIONS_DIR}/reporting/${APP_NAME}/models.py"
+    "${SOURCE_EXTENSIONS_DIR}/reporting/${APP_NAME}/rbac.py"
+    "${SOURCE_EXTENSIONS_DIR}/reporting/${APP_NAME}/serializers.py"
+    "${SOURCE_EXTENSIONS_DIR}/reporting/${APP_NAME}/views.py"
+    "${SOURCE_EXTENSIONS_DIR}/reporting/${APP_NAME}/urls.py"
+    "${SOURCE_EXTENSIONS_DIR}/reporting/${APP_NAME}/migrations/0001_initial.py"
+    "${SOURCE_EXTENSIONS_DIR}/reporting/${APP_NAME}/migrations/0002_extensionrolepermission.py"
+    "${SOURCE_EXTENSIONS_DIR}/reporting/${APP_NAME}/migrations/0003_networkavailability_ingest_hardening.py"
+    "${SOURCE_ROOT}/scripts/reporting-permission.sh"
+    "${SOURCE_ROOT}/scripts/framework-info.sh"
+    "${SOURCE_ROOT}/scripts/plugin-info.sh"
+    "${SOURCE_ROOT}/scripts/scaffold-plugin.sh"
+    "${SOURCE_ROOT}/scripts/install-extension.sh"
+    "${SOURCE_ROOT}/scripts/remove-extension.sh"
+    "${SOURCE_ROOT}/scripts/module-job-helper.py"
+    "${SOURCE_ROOT}/scripts/module-v2-job-helper.py"
+    "${SOURCE_ROOT}/scripts/reload-rmm-uwsgi.sh"
+    "${SOURCE_ROOT}/scripts/tec-tac-config.sh"
+    "${SOURCE_ROOT}/framwork/tec_tac/config.py"
+    "${SOURCE_ROOT}/tests/framework-foundation.sh"
+    "${SOURCE_ROOT}/tests/access-api-foundation.sh"
+    "${SOURCE_ROOT}/tests/module-management-foundation.sh"
+    "${SOURCE_ROOT}/tests/scheduler-foundation.sh"
+    "${SOURCE_ROOT}/tests/contracts-foundation.sh"
+    "${SOURCE_ROOT}/tests/recovery-foundation.sh"
+    "${SOURCE_FRAMEWORK_DIR}/tec_tac/scheduler.py"
+    "${SOURCE_FRAMEWORK_DIR}/tec_tac/scheduler_views.py"
+    "${SOURCE_FRAMEWORK_DIR}/tec_tac/tasks.py"
+    "${SOURCE_FRAMEWORK_DIR}/tec_tac/models.py"
+    "${SOURCE_FRAMEWORK_DIR}/tec_tac/migrations/0001_scheduler.py"
+    "${SOURCE_FRAMEWORK_DIR}/tec_tac/migrations/0002_scheduler_hardening.py"
+    "${SOURCE_FRAMEWORK_DIR}/tec_tac/migrations/0003_scheduler_model_options.py"
+    "${SOURCE_ROOT}/scripts/recovery/lib.sh"
+    "${SOURCE_ROOT}/scripts/recovery/tec-tac-repair.sh"
+    "${SOURCE_ROOT}/scripts/recovery/tec-tac-diagnostics.sh"
+    "${SOURCE_ROOT}/scripts/recovery/tec-tac-repair-permissions.sh"
+    "${SOURCE_ROOT}/scripts/recovery/tec-tac-repair-modules.sh"
+    "${SOURCE_ROOT}/scripts/recovery/tec-tac-recover-modules-from-backup.sh"
+    "${SOURCE_ROOT}/scripts/recovery/tec-tac-repair-runtime.sh"
+    "${SOURCE_ROOT}/scripts/recovery/tec-tac-repair-scheduler.sh"
+    "${SOURCE_FRAMEWORK_DIR}/tec_tac/management/commands/tec_tac_scheduler_tick.py"
+    "${SOURCE_ROOT}/tests/registry-validation.sh"
+    "${SOURCE_ROOT}/tests/tactical-update-survival.sh"
+    "${SOURCE_ROOT}/tests/example-plugin.sh"
+    "${SOURCE_ROOT}/extensions/example/tec_tac.json"
+    "${SOURCE_ROOT}/extensions/example/tec_tac_example_extension/__init__.py"
+    "${SOURCE_ROOT}/extensions/example/tec_tac_example_extension/apps.py"
+    "${SOURCE_ROOT}/extensions/example/tec_tac_example_extension/sample.py"
+    "${SOURCE_ROOT}/reportsets/example/tec_tac.json"
+    "${SOURCE_ROOT}/reportsets/example/tec_tac_example_reportset/__init__.py"
+    "${SOURCE_ROOT}/reportsets/example/tec_tac_example_reportset/apps.py"
+    "${SOURCE_ROOT}/reportsets/example/tec_tac_example_reportset/sample.py"
+    "${SOURCE_ROOT}/templates/plugin/extension/tec_tac.json"
+    "${SOURCE_ROOT}/templates/plugin/reportset/tec_tac.json"
 )
 for required_file in "${REQUIRED_FILES[@]}"; do
     [[ -f "${required_file}" ]] || fail "Installer payload is missing ${required_file}."
 done
-log "Preflight repository layout: OK"
+log "Preflight source repository layout: OK"
+
+# Deploy framework-owned code into a Git-independent runtime tree. Dynamic
+# extensions/reportsets are deliberately preserved and never copied back into
+# the source checkout.
+mkdir -p "${TEC_TAC_ROOT}" "${EXTENSIONS_DIR}" "${REPORTSETS_DIR}" "${TEC_TAC_ROOT}/etc"
+rm -rf "${FRAMEWORK_DIR}" "${RUNTIME_SCRIPTS_DIR}" "${TEC_TAC_ROOT}/templates"
+cp -a "${SOURCE_FRAMEWORK_DIR}" "${FRAMEWORK_DIR}"
+cp -a "${SOURCE_SCRIPTS_DIR}" "${RUNTIME_SCRIPTS_DIR}"
+cp -a "${SOURCE_TEMPLATES_DIR}" "${TEC_TAC_ROOT}/templates"
+for rel in extensions/example extensions/reporting reportsets/example; do
+    source_path="${SOURCE_ROOT}/${rel}"
+    target_path="${TEC_TAC_ROOT}/${rel}"
+    if [[ -e "${source_path}" ]]; then
+        rm -rf "${target_path}"
+        mkdir -p "$(dirname "${target_path}")"
+        cp -a "${source_path}" "${target_path}"
+    fi
+done
+cp -a "${SOURCE_ROOT}/VERSION" "${TEC_TAC_ROOT}/VERSION"
+cp -a "${SOURCE_ROOT}/tec_tac_package.json" "${TEC_TAC_ROOT}/tec_tac_package.json"
+chmod -R a+rX "${FRAMEWORK_DIR}" "${EXTENSIONS_DIR}" "${REPORTSETS_DIR}" "${RUNTIME_SCRIPTS_DIR}"
+log "Deployed framework-owned runtime code without altering dynamic modules."
+
 [[ -f "${LOCAL_SETTINGS}" ]] || fail "Tactical local_settings.py was not found at ${LOCAL_SETTINGS}."
 [[ -f "${BACKEND_DIR}/ee/reporting/constants.py" ]] || fail "Tactical Report Manager (ee.reporting) was not found."
 
@@ -244,18 +286,18 @@ if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON
     fail "Tec-Tac capability registry verification failed or timed out."
 fi
 
-MODULE_STATE_ROOT="/var/lib/tec-tac/module-manager"
+MODULE_STATE_ROOT="${TEC_TAC_MODULE_STATE_ROOT:-/var/lib/tec-tac/module-manager}"
 MODULE_HELPER="/usr/local/sbin/tec-tac-module-job"
 MODULE_V2_HELPER="/usr/local/sbin/tec-tac-module-v2-job"
-MODULE_CONFIG_DIR="/etc/tec-tac"
-MODULE_CONFIG="${MODULE_CONFIG_DIR}/module-manager.conf"
+MODULE_CONFIG_DIR="${TEC_TAC_ROOT}/etc"
+MODULE_CONFIG="${TEC_TAC_CONFIG_FILE}"
 MODULE_SUDOERS="/etc/sudoers.d/tec-tac-module-manager"
 MODULE_V2_SUDOERS="/etc/sudoers.d/tec-tac-module-manager-v2"
 MODULE_STATE_FILE="${MODULE_STATE_ROOT}/module-state.json"
 RMM_DROPIN_DIR="/etc/systemd/system/rmm.service.d"
 RMM_DROPIN="${RMM_DROPIN_DIR}/tec-tac.conf"
-TEC_TAC_UI_REPO="${TEC_TAC_UI_REPO:-/opt/tec-tac-ui}"
-TEC_TAC_UI_ROOT="${TEC_TAC_UI_ROOT:-/var/lib/tec-tac/ui/tec-tac}"
+TEC_TAC_UI_REPO="${TEC_TAC_UI_SOURCE}"
+TEC_TAC_UI_ROOT="${TEC_TAC_UI_DEPLOY_ROOT:-/var/lib/tec-tac/ui/tec-tac}"
 
 mkdir -p "${RMM_DROPIN_DIR}"
 cat > "${RMM_DROPIN}" <<EOF
@@ -320,13 +362,34 @@ done
 log "Tec-Tac Recovery Toolkit retained under ${REPO_ROOT}/scripts/recovery."
 mkdir -p "${MODULE_CONFIG_DIR}"
 cat > "${MODULE_CONFIG}" <<EOF
-REPO_ROOT=${REPO_ROOT}
-UI_SYNC_SCRIPT=${TEC_TAC_UI_REPO}/scripts/sync-modules.sh
+# Tec-Tac installation layout. Managed by install.sh.
+TEC_TAC_ROOT=${TEC_TAC_ROOT}
+TEC_TAC_CONFIG_FILE=${TEC_TAC_CONFIG_FILE}
+TEC_TAC_SOURCE_ROOT=${TEC_TAC_SOURCE_ROOT}
+TEC_TAC_FRAMEWORK_SOURCE=${SOURCE_ROOT}
+TEC_TAC_UI_SOURCE=${TEC_TAC_UI_SOURCE}
+TEC_TAC_FRAMEWORK_ROOT=${FRAMEWORK_DIR}
+TEC_TAC_EXTENSIONS_ROOT=${EXTENSIONS_DIR}
+TEC_TAC_REPORTSETS_ROOT=${REPORTSETS_DIR}
+TEC_TAC_SCRIPTS_ROOT=${RUNTIME_SCRIPTS_DIR}
+TEC_TAC_STATE_ROOT=/var/lib/tec-tac
+TEC_TAC_MODULE_STATE_ROOT=${MODULE_STATE_ROOT}
+TEC_TAC_SYSTEM_UPDATE_ROOT=/var/lib/tec-tac/system-updates
+TEC_TAC_UI_DEPLOY_ROOT=${TEC_TAC_UI_ROOT}
+REPO_ROOT=${TEC_TAC_ROOT}
+UI_SYNC_SCRIPT=${TEC_TAC_UI_SOURCE}/scripts/sync-modules.sh
 UI_ROOT=${TEC_TAC_UI_ROOT}
+GITHUB_TOKEN_FILE=${TEC_TAC_ROOT}/etc/github-token
+TACTICAL_ROOT=${TACTICAL_ROOT}
+TACTICAL_BACKEND_ROOT=${BACKEND_DIR}
+TACTICAL_PYTHON=${VENV_PYTHON}
 TACTICAL_USER=${TACTICAL_USER}
+FRAMEWORK_REPOSITORY=${TEC_TAC_FRAMEWORK_REPOSITORY:-jvz007/tac-net-rep}
+UI_REPOSITORY=${TEC_TAC_UI_REPOSITORY:-jvz007/tec-tac-ui}
 EOF
 chown root:root "${MODULE_CONFIG}"
 chmod 0644 "${MODULE_CONFIG}"
+log "Wrote Tec-Tac installation config: ${MODULE_CONFIG}"
 
 cat > "${MODULE_SUDOERS}" <<EOF
 ${TACTICAL_USER} ALL=(root) NOPASSWD: ${MODULE_HELPER} --dispatch *
@@ -344,10 +407,10 @@ log "Installed privileged module lifecycle helper: ${MODULE_HELPER}"
 log "Installed privileged Module Management v2 helper: ${MODULE_V2_HELPER}"
 
 
-SYSTEM_UPDATE_ROOT="/var/lib/tec-tac/system-updates"
+SYSTEM_UPDATE_ROOT="${TEC_TAC_SYSTEM_UPDATE_ROOT:-/var/lib/tec-tac/system-updates}"
 SYSTEM_UPDATE_HELPER="/usr/local/sbin/tec-tac-system-update"
 SYSTEM_UPDATE_LIB="/usr/local/lib/tec-tac-updater"
-SYSTEM_UPDATE_CONFIG="/etc/tec-tac/system-update.conf"
+SYSTEM_UPDATE_CONFIG="${TEC_TAC_CONFIG_FILE}"
 SYSTEM_UPDATE_SUDOERS="/etc/sudoers.d/tec-tac-system-update"
 FRAMEWORK_REPOSITORY="${TEC_TAC_FRAMEWORK_REPOSITORY:-jvz007/tac-net-rep}"
 UI_REPOSITORY="${TEC_TAC_UI_REPOSITORY:-jvz007/tec-tac-ui}"
@@ -362,14 +425,14 @@ install -o root -g root -m 0755 "${REPO_ROOT}/scripts/system-update-helper.py" "
 ln -sfn "${SYSTEM_UPDATE_LIB}/system-update-helper.py" "${SYSTEM_UPDATE_HELPER}"
 chown -h root:root "${SYSTEM_UPDATE_HELPER}"
 
-cat > "${SYSTEM_UPDATE_CONFIG}" <<EOF
-FRAMEWORK_ROOT=${REPO_ROOT}
-UI_REPO_ROOT=${TEC_TAC_UI_REPO}
-TACTICAL_USER=${TACTICAL_USER}
-FRAMEWORK_REPOSITORY=${FRAMEWORK_REPOSITORY}
-UI_REPOSITORY=${UI_REPOSITORY}
-GITHUB_TOKEN_FILE=/etc/tec-tac/github-token
-EOF
+# System Update and Module Manager share the authoritative Tec-Tac config.
+# Keep repository identifiers current without relocating the config into /etc.
+if ! grep -q '^FRAMEWORK_REPOSITORY=' "${SYSTEM_UPDATE_CONFIG}"; then
+    printf 'FRAMEWORK_REPOSITORY=%s\n' "${FRAMEWORK_REPOSITORY}" >> "${SYSTEM_UPDATE_CONFIG}"
+fi
+if ! grep -q '^UI_REPOSITORY=' "${SYSTEM_UPDATE_CONFIG}"; then
+    printf 'UI_REPOSITORY=%s\n' "${UI_REPOSITORY}" >> "${SYSTEM_UPDATE_CONFIG}"
+fi
 chown root:root "${SYSTEM_UPDATE_CONFIG}"
 chmod 0644 "${SYSTEM_UPDATE_CONFIG}"
 
@@ -560,7 +623,8 @@ case " ${LIVE_GROUPS} " in
 esac
 
 log "Installation complete."
-log "Framework: ${FRAMEWORK_DIR}"
+log "Framework source: ${SOURCE_ROOT}"
+log "Framework runtime: ${FRAMEWORK_DIR}"
 log "Extensions: ${EXTENSIONS_DIR}"
 log "Reportsets: ${REPORTSETS_DIR}"
 log "Swagger endpoint: /api/tfd/reporting/network-availability/"

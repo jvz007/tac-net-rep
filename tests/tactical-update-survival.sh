@@ -6,7 +6,9 @@ BACKEND_DIR="${TACTICAL_ROOT}/api/tacticalrmm"
 LOCAL_SETTINGS="${BACKEND_DIR}/tacticalrmm/local_settings.py"
 VENV_PYTHON="${TACTICAL_ROOT}/api/env/bin/python"
 MANAGE_PY="${BACKEND_DIR}/manage.py"
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TEC_TAC_CONFIG_FILE="${TEC_TAC_CONFIG_FILE:-/opt/tec-tac/etc/tec-tac.conf}"
+[[ -f "${TEC_TAC_CONFIG_FILE}" ]] && source "${TEC_TAC_CONFIG_FILE}"
+REPO_ROOT="${TEC_TAC_ROOT:-/opt/tec-tac}"
 STATE_DIR="${TEC_TAC_STATE_DIR:-/var/lib/tec-tac/tests}"
 STATE_FILE="${STATE_DIR}/tactical-update-survival.state"
 MODE="${1:-check}"
@@ -20,8 +22,8 @@ verify_now() {
     grep -Fq '# BEGIN TEC-TAC EXTENSION FRAMEWORK' "${LOCAL_SETTINGS}" || { echo '[TEST] FAIL bootstrap marker missing' >&2; exit 1; }
     CODE="import tfdreporting; assert tfdreporting.__file__.startswith('${REPO_ROOT}/extensions/reporting/'); print(tfdreporting.__file__)"
     runuser -u "${TACTICAL_USER}" -- bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${CODE}\""
-    if [[ -f /etc/tec-tac/module-manager.conf ]]; then
-        grep -Fq 'UI_ROOT=/var/lib/tec-tac/ui/tec-tac' /etc/tec-tac/module-manager.conf || { echo '[TEST] FAIL persistent UI root is not configured' >&2; exit 1; }
+    if [[ -f "${TEC_TAC_CONFIG_FILE}" ]]; then
+        grep -Fq 'TEC_TAC_UI_DEPLOY_ROOT=/var/lib/tec-tac/ui/tec-tac' "${TEC_TAC_CONFIG_FILE}" || { echo '[TEST] FAIL persistent UI root is not configured' >&2; exit 1; }
     fi
 }
 
