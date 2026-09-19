@@ -1,3 +1,5 @@
+import logging
+
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
@@ -17,6 +19,8 @@ from .module_manager_v2 import (
     validate_remove,
 )
 from .views import _can_manage_modules, _require_module_manager
+
+logger = logging.getLogger(__name__)
 
 
 @extend_schema_view(get=extend_schema(tags=["Tec-Tac Framework"], summary="List Module Management v2 catalog"))
@@ -40,6 +44,18 @@ class ModuleV2InspectView(APIView):
             return Response(stage_multiple_packages(uploads), status=201)
         except (ModuleManagerError, ModuleManagerV2Error) as exc:
             return Response({"detail": str(exc)}, status=400)
+        except OSError as exc:
+            logger.exception("Tec-Tac Module Manager package staging failed")
+            return Response({
+                "detail": "Module package inspection could not access its staging area. Run the Tec-Tac permission recovery check.",
+                "error_type": exc.__class__.__name__,
+            }, status=503)
+        except Exception as exc:
+            logger.exception("Unexpected Tec-Tac Module Manager package inspection failure")
+            return Response({
+                "detail": "Module package inspection failed unexpectedly. Check Tec-Tac diagnostics/logs.",
+                "error_type": exc.__class__.__name__,
+            }, status=500)
 
 
 class ModuleV2StageView(APIView):
@@ -113,3 +129,4 @@ class ModuleV2JobView(APIView):
             return Response(get_job(str(job_id)))
         except ModuleManagerError as exc:
             return Response({"detail": str(exc)}, status=404)
+

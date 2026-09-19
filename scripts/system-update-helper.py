@@ -222,6 +222,69 @@ def copy_tree_contents(source, target):
             shutil.copy2(item, dest)
 
 
+
+FRAMEWORK_OWNED_PLUGIN_PATHS = {
+    ("extensions", "example"),
+    ("extensions", "reporting"),
+    ("reportsets", "example"),
+}
+
+
+def _tree_digest(root):
+    """Stable digest for a plugin tree, including relative paths and file bytes."""
+    import hashlib
+    digest = hashlib.sha256()
+    root = Path(root)
+    if not root.exists():
+        return None
+    for path in sorted(root.rglob("*"), key=lambda p: p.as_posix()):
+        rel = path.relative_to(root).as_posix().encode("utf-8")
+        digest.update(b"P\0" + rel + b"\0")
+        if path.is_symlink():
+            digest.update(b"L\0" + os.readlink(path).encode("utf-8") + b"\0")
+        elif path.is_file():
+            digest.update(b"F\0")
+            with path.open("rb") as handle:
+                for block in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(block)
+        elif path.is_dir():
+            digest.update(b"D\0")
+    return digest.hexdigest()
+
+
+def snapshot_dynamic_plugins(target):
+    """Inventory dynamically installed modules before a framework self-update."""
+    inventory = {}
+    for top in ("extensions", "reportsets"):
+        root = target / top
+        if not root.is_dir():
+            continue
+        for child in sorted(root.iterdir(), key=lambda p: p.name):
+            if not child.is_dir() or (top, child.name) in FRAMEWORK_OWNED_PLUGIN_PATHS:
+                continue
+            inventory[f"{top}/{child.name}"] = _tree_digest(child)
+    return inventory
+
+
+def verify_dynamic_plugins(target, inventory):
+    missing = []
+    changed = []
+    for relative, expected in inventory.items():
+        path = target / relative
+        if not path.is_dir():
+            missing.append(relative)
+            continue
+        actual = _tree_digest(path)
+        if actual != expected:
+            changed.append(relative)
+    if missing or changed:
+        details = []
+        if missing:
+            details.append("missing: " + ", ".join(missing))
+        if changed:
+            details.append("changed: " + ", ".join(changed))
+        raise RuntimeError("framework update altered dynamically installed modules (" + "; ".join(details) + ")")
+
 def deploy_framework(source, target):
     target.mkdir(parents=True, exist_ok=True)
     # Replace framework-owned roots, but preserve dynamically installed
@@ -233,7 +296,7 @@ def deploy_framework(source, target):
             continue
         if item.is_file() or item.is_symlink():
             item.unlink(missing_ok=True)
-    for relative in (("extensions", "example"), ("extensions", "reporting"), ("reportsets", "example")):
+    for relative in FRAMEWORK_OWNED_PLUGIN_PATHS:
         incoming = source.joinpath(*relative)
         existing = target.joinpath(*relative)
         if incoming.exists():
@@ -342,8 +405,10 @@ def run_job(job_id):
 
             job["stage"] = "deploy"
             atomic_json(path, job)
+            dynamic_inventory = snapshot_dynamic_plugins(target) if component == "framework" else {}
             if component == "framework":
                 deploy_framework(source, target)
+                verify_dynamic_plugins(target, dynamic_inventory)
             else:
                 deploy_ui(source, target)
 

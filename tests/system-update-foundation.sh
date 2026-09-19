@@ -2,7 +2,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail(){ echo "[TEST] FAIL: $*" >&2; exit 1; }
-[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.3.0" ]] || fail "VERSION is not 1.3.0"
+[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.12.0" ]] || fail "VERSION is not 1.12.0"
 for f in framwork/tec_tac/system_update.py scripts/system-update-helper.py tec_tac_package.json; do
   [[ -f "${ROOT}/${f}" ]] || fail "missing ${f}"
 done
@@ -11,9 +11,33 @@ grep -q 'systemd-run' "${ROOT}/scripts/system-update-helper.py" || fail "transie
 grep -q 'flock' "${ROOT}/scripts/system-update-helper.py" || fail "global update lock missing"
 grep -q 'backup_root' "${ROOT}/scripts/system-update-helper.py" || fail "backup lifecycle missing"
 grep -q 'restore_backup' "${ROOT}/scripts/system-update-helper.py" || fail "rollback lifecycle missing"
+
+grep -q 'snapshot_dynamic_plugins' "${ROOT}/scripts/system-update-helper.py" || fail "dynamic module pre-update inventory missing"
+grep -q 'verify_dynamic_plugins' "${ROOT}/scripts/system-update-helper.py" || fail "dynamic module preservation verification missing"
+grep -q 'FRAMEWORK_OWNED_PLUGIN_PATHS' "${ROOT}/scripts/system-update-helper.py" || fail "framework-owned plugin boundary missing"
 grep -q 'FRAMEWORK_REPOSITORY' "${ROOT}/install.sh" || fail "framework repository config missing"
 grep -q 'UI_REPOSITORY' "${ROOT}/install.sh" || fail "UI repository config missing"
 python3 -m py_compile "${ROOT}/framwork/tec_tac/system_update.py" "${ROOT}/scripts/system-update-helper.py"
 bash -n "${ROOT}/install.sh"
 bash -n "${ROOT}/uninstall.sh"
 echo "[TEST] PASS system update foundation"
+
+# Framework self-update must preserve dynamically installed module trees byte-for-byte.
+python3 - "${ROOT}/scripts/system-update-helper.py" <<'PY_PRESERVE'
+import importlib.util, tempfile
+from pathlib import Path
+import sys
+spec=importlib.util.spec_from_file_location('tt_update', sys.argv[1]); mod=importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+with tempfile.TemporaryDirectory() as tmp:
+    base=Path(tmp); target=base/'target'; source=base/'source'
+    for root in (target,source):
+        (root/'framwork').mkdir(parents=True); (root/'scripts').mkdir(); (root/'tests').mkdir(); (root/'docs').mkdir(); (root/'templates').mkdir(); (root/'extensions'/'example').mkdir(parents=True); (root/'extensions'/'reporting').mkdir(parents=True); (root/'reportsets'/'example').mkdir(parents=True)
+        (root/'VERSION').write_text('x')
+    dyn=target/'extensions'/'customer-module'; dyn.mkdir(parents=True); (dyn/'tec_tac.json').write_text('{"id":"customer-module"}')
+    rep=target/'reportsets'/'customer-module'; rep.mkdir(parents=True); (rep/'tec_tac.json').write_text('{"id":"customer-module"}')
+    before=mod.snapshot_dynamic_plugins(target)
+    mod.deploy_framework(source,target)
+    mod.verify_dynamic_plugins(target,before)
+    assert (dyn/'tec_tac.json').is_file() and (rep/'tec_tac.json').is_file()
+print('[TEST] dynamic module preservation OK')
+PY_PRESERVE

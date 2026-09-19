@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail(){ echo "[TEST] FAIL: $*" >&2; exit 1; }
 
-[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.11.1" ]] || fail "VERSION is not 1.11.1"
+[[ "$(tr -d '\r\n' < "${ROOT}/VERSION")" == "1.12.0" ]] || fail "VERSION is not 1.12.0"
 for f in \
   framwork/tec_tac/module_manager.py \
   framwork/tec_tac/module_manager_v2.py \
@@ -114,7 +114,7 @@ grep -q 'modules/repositories/' "${ROOT}/framwork/tec_tac/urls.py" || fail "modu
 grep -q 'modules/catalog/online/' "${ROOT}/framwork/tec_tac/urls.py" || fail "online module catalog route missing"
 grep -q 'stage_repository_package' "${ROOT}/framwork/tec_tac/module_repository.py" || fail "online package staging missing"
 grep -q 'package_sha256' "${ROOT}/framwork/tec_tac/module_repository.py" || fail "online package provenance hash missing"
-grep -q 'repositories/cache' "${ROOT}/install.sh" || fail "repository cache runtime directory missing"
+grep -q 'repositories/cache' "${ROOT}/scripts/recovery/lib.sh" || fail "repository cache runtime directory missing"
 grep -q 'source_provenance' "${ROOT}/framwork/tec_tac/module_manager_v2.py" || fail "online source provenance handoff missing"
 
 
@@ -167,3 +167,5 @@ grep -q 'register_scheduled_action' "${ROOT}/framwork/tec_tac/scheduler.py" || f
 grep -q 'tec_tac.execute_schedule_run' "${ROOT}/framwork/tec_tac/tasks.py" || fail "scheduler Celery task missing"
 grep -q 'scheduler/schedules/' "${ROOT}/framwork/tec_tac/urls.py" || fail "scheduler routes missing"
 grep -q 'tec-tac-scheduler.timer' "${ROOT}/install.sh" || fail "scheduler timer installation missing"
+
+grep -q 'f"{filename}: {exc}"' "${ROOT}/framwork/tec_tac/module_manager_v2.py" || fail "filename-scoped multi-package errors missing"

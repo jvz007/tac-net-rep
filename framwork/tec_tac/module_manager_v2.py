@@ -387,9 +387,23 @@ def stage_multiple_packages(uploads) -> dict:
     staged = []
     try:
         for upload in uploads:
-            stage = stage_uploaded_package(upload)
-            meta = _load_stage(stage["upload_id"])
-            preview = _package_metadata(Path(meta["package_path"]))
+            filename = str(getattr(upload, "name", "package"))
+            try:
+                # Classify every upload independently. This is intentionally the
+                # same artifact classifier used for single uploads so one package
+                # cannot change how a different, unrelated package is interpreted.
+                stage = stage_uploaded_artifact(upload)
+                if stage.get("kind") == "bundle" or (stage.get("preview") or {}).get("kind") == "bundle":
+                    discard_v2_stage(stage["upload_id"])
+                    raise ModuleManagerV2Error(
+                        "Bundle archives must be uploaded separately; multi-file upload is for independent module packages."
+                    )
+                preview = dict(stage.get("preview") or {})
+                if not preview.get("id"):
+                    meta = _load_stage(stage["upload_id"])
+                    preview = _package_metadata(Path(meta["package_path"]))
+            except (ModuleManagerError, ModuleManagerV2Error) as exc:
+                raise ModuleManagerV2Error(f"{filename}: {exc}") from exc
             staged.append({**stage, "preview": preview})
         plan = resolve_install_plan([item["preview"] for item in staged])
         batch_id = str(uuid.uuid4())

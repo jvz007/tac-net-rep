@@ -1,3 +1,5 @@
+Current release: [`RELEASE_NOTES_1.12.0.md`](../../RELEASE_NOTES_1.12.0.md).
+
 # Tec-Tac Framework Release Archive
 
 Only the current framework release note is kept at repository root. Historical notes are archived here.

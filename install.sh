@@ -81,11 +81,22 @@ REQUIRED_FILES=(
     "${REPO_ROOT}/tests/module-management-foundation.sh"
     "${REPO_ROOT}/tests/scheduler-foundation.sh"
     "${REPO_ROOT}/tests/contracts-foundation.sh"
+    "${REPO_ROOT}/tests/recovery-foundation.sh"
     "${FRAMEWORK_DIR}/tec_tac/scheduler.py"
     "${FRAMEWORK_DIR}/tec_tac/scheduler_views.py"
     "${FRAMEWORK_DIR}/tec_tac/tasks.py"
     "${FRAMEWORK_DIR}/tec_tac/models.py"
     "${FRAMEWORK_DIR}/tec_tac/migrations/0001_scheduler.py"
+    "${FRAMEWORK_DIR}/tec_tac/migrations/0002_scheduler_hardening.py"
+    "${FRAMEWORK_DIR}/tec_tac/migrations/0003_scheduler_model_options.py"
+    "${REPO_ROOT}/scripts/recovery/lib.sh"
+    "${REPO_ROOT}/scripts/recovery/tec-tac-repair.sh"
+    "${REPO_ROOT}/scripts/recovery/tec-tac-diagnostics.sh"
+    "${REPO_ROOT}/scripts/recovery/tec-tac-repair-permissions.sh"
+    "${REPO_ROOT}/scripts/recovery/tec-tac-repair-modules.sh"
+    "${REPO_ROOT}/scripts/recovery/tec-tac-recover-modules-from-backup.sh"
+    "${REPO_ROOT}/scripts/recovery/tec-tac-repair-runtime.sh"
+    "${REPO_ROOT}/scripts/recovery/tec-tac-repair-scheduler.sh"
     "${FRAMEWORK_DIR}/tec_tac/management/commands/tec_tac_scheduler_tick.py"
     "${REPO_ROOT}/tests/registry-validation.sh"
     "${REPO_ROOT}/tests/tactical-update-survival.sh"
@@ -216,7 +227,7 @@ if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON
 fi
 
 log "Verifying Tec-Tac developer contract catalog."
-VERIFY_CONTRACT_CODE="from tec_tac.contracts import build_contract_catalog,render_markdown,render_text; c=build_contract_catalog(); assert c['framework_version']=='1.11.1', c['framework_version']; assert any(x['name']=='get_capability' for x in c['core']); assert any(x['route']=='/api/tfd/contracts/' for x in c['http']); assert '# Tec-Tac Public Contracts' in render_markdown(c); assert 'TEC-TAC PUBLIC CONTRACTS' in render_text(c); print('TEC-TAC developer contract catalog OK:', c['counts'])"
+VERIFY_CONTRACT_CODE="from tec_tac.contracts import build_contract_catalog,render_markdown,render_text; c=build_contract_catalog(); assert c['framework_version']=='1.12.0', c['framework_version']; assert any(x['name']=='get_capability' for x in c['core']); assert any(x['route']=='/api/tfd/contracts/' for x in c['http']); assert '# Tec-Tac Public Contracts' in render_markdown(c); assert 'TEC-TAC PUBLIC CONTRACTS' in render_text(c); print('TEC-TAC developer contract catalog OK:', c['counts'])"
 if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_CONTRACT_CODE}\""; then
     fail "Tec-Tac developer contract catalog verification failed or timed out."
 fi
@@ -256,22 +267,21 @@ chmod 0644 "${RMM_DROPIN}"
 systemctl daemon-reload
 log "Installed rmm.service supplementary-group drop-in for Tec-Tac runtime access: ${TACTICAL_GROUP}"
 
-mkdir -p \
+# Use the same permission repair contract as the console recovery toolkit so
+# installer and recovery behavior cannot drift. This also repairs existing
+# directories whose modes were created incorrectly by earlier releases.
+# shellcheck source=/dev/null
+source "${REPO_ROOT}/scripts/recovery/lib.sh"
+repair_module_permissions
+chmod 0755 "$(dirname "${MODULE_STATE_ROOT}")"
+for writable_path in \
     "${MODULE_STATE_ROOT}/staged" \
-    "${MODULE_STATE_ROOT}/jobs" \
-    "${MODULE_STATE_ROOT}/running" \
-    "${MODULE_STATE_ROOT}/running-v2" \
-    "${MODULE_STATE_ROOT}/logs" \
-    "${MODULE_STATE_ROOT}/bundle-backups" \
-    "${MODULE_STATE_ROOT}/repositories" \
-    "${MODULE_STATE_ROOT}/repositories/cache"
-chown -R root:"${TACTICAL_GROUP}" "${MODULE_STATE_ROOT}"
-# module-state.json is imported during Django/ASGI/Celery startup. Every Tactical
-# service identity must be able to traverse this directory and read that file.
-chmod 0755 "$(dirname "${MODULE_STATE_ROOT}")" "${MODULE_STATE_ROOT}"
-chmod 2770 "${MODULE_STATE_ROOT}/staged" "${MODULE_STATE_ROOT}/jobs"
-chmod 2750 "${MODULE_STATE_ROOT}/running" "${MODULE_STATE_ROOT}/running-v2" "${MODULE_STATE_ROOT}/logs" "${MODULE_STATE_ROOT}/bundle-backups"
-chmod 2770 "${MODULE_STATE_ROOT}/repositories" "${MODULE_STATE_ROOT}/repositories/cache"
+    "${MODULE_STATE_ROOT}/staged/bundles" \
+    "${MODULE_STATE_ROOT}/staged/batches" \
+    "${MODULE_STATE_ROOT}/jobs"; do
+    run_as_tactical test -w "${writable_path}" || fail "Tactical service user cannot write ${writable_path} after permission repair."
+done
+log "Verified Module Manager staging paths are writable by ${TACTICAL_USER}."
 REPOSITORY_CONFIG="${MODULE_STATE_ROOT}/repositories/repositories.json"
 if [[ ! -f "${REPOSITORY_CONFIG}" ]]; then
     printf '%s\n' '{"schema":1,"repositories":[]}' > "${REPOSITORY_CONFIG}"
@@ -286,6 +296,9 @@ chmod 0644 "${MODULE_STATE_FILE}"
 
 install -o root -g root -m 0755 "${REPO_ROOT}/scripts/module-job-helper.py" "${MODULE_HELPER}"
 install -o root -g root -m 0755 "${REPO_ROOT}/scripts/module-v2-job-helper.py" "${MODULE_V2_HELPER}"
+ln -sfn "${REPO_ROOT}/scripts/recovery/tec-tac-repair.sh" /usr/local/sbin/tec-tac-repair
+ln -sfn "${REPO_ROOT}/scripts/recovery/tec-tac-diagnostics.sh" /usr/local/sbin/tec-tac-diagnostics
+log "Installed Tec-Tac recovery commands: tec-tac-repair, tec-tac-diagnostics"
 mkdir -p "${MODULE_CONFIG_DIR}"
 cat > "${MODULE_CONFIG}" <<EOF
 REPO_ROOT=${REPO_ROOT}
