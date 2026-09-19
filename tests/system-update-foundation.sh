@@ -47,3 +47,12 @@ with tempfile.TemporaryDirectory() as tmp:
     assert (dyn/'tec_tac.json').is_file() and (rep/'tec_tac.json').is_file()
 print('[TEST] dynamic module preservation OK')
 PY_PRESERVE
+
+# Release/install verification must never hardcode a prior framework version.
+! grep -Eq "framework_version'\][[:space:]]*==[[:space:]]*'1\\.[0-9]+\\.[0-9]+'" "${ROOT}/install.sh" || fail "installer contains a hardcoded framework contract version assertion"
+grep -q "expected='\${PACKAGE_VERSION}'" "${ROOT}/install.sh" || fail "installer contract verification is not driven by VERSION"
+grep -q 'INSTALL_TIMEOUT_SECONDS' "${ROOT}/scripts/system-update-helper.py" || fail "bounded installer timeout missing"
+grep -q 'migrate.*tec_tac.*--check' "${ROOT}/scripts/system-update-helper.py" || fail "post-install framework migration verification missing"
+grep -q 'package manifest verification failed' "${ROOT}/scripts/system-update-helper.py" || fail "post-install package manifest verification missing"
+grep -q 'contract version OK' "${ROOT}/scripts/system-update-helper.py" || fail "post-install contract version verification missing"
+echo "[TEST] PASS system update transactional verification"

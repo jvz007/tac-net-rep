@@ -227,7 +227,7 @@ if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON
 fi
 
 log "Verifying Tec-Tac developer contract catalog."
-VERIFY_CONTRACT_CODE="from tec_tac.contracts import build_contract_catalog,render_markdown,render_text; c=build_contract_catalog(); assert c['framework_version']=='1.12.1', c['framework_version']; assert any(x['name']=='get_capability' for x in c['core']); assert any(x['route']=='/api/tfd/contracts/' for x in c['http']); assert '# Tec-Tac Public Contracts' in render_markdown(c); assert 'TEC-TAC PUBLIC CONTRACTS' in render_text(c); print('TEC-TAC developer contract catalog OK:', c['counts'])"
+VERIFY_CONTRACT_CODE="from tec_tac.contracts import build_contract_catalog,render_markdown,render_text; c=build_contract_catalog(); expected='${PACKAGE_VERSION}'; assert c['framework_version']==expected, {'expected': expected, 'actual': c['framework_version']}; assert any(x['name']=='get_capability' for x in c['core']); assert any(x['route']=='/api/tfd/contracts/' for x in c['http']); assert '# Tec-Tac Public Contracts' in render_markdown(c); assert 'TEC-TAC PUBLIC CONTRACTS' in render_text(c); print('TEC-TAC developer contract catalog OK:', c['counts'], 'version='+expected)"
 if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_CONTRACT_CODE}\""; then
     fail "Tec-Tac developer contract catalog verification failed or timed out."
 fi

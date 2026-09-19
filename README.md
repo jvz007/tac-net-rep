@@ -1,5 +1,8 @@
 # Tec-Tac Framework
 
+Version **1.12.3** hardens the offline System Updates path. Installer contract verification now derives the expected framework version from `VERSION` instead of a hardcoded release number, and post-install verification must pass package/version consistency, Django checks, Tec-Tac migration state, core route, public contract version, and recovery-script executability before an update is considered successful. Installer execution is bounded by a timeout and failures use the existing backup/rollback path.
+
+Version **1.12.2** cleaned up release-integrity/version drift tests and removed stale hardcoded UI/framework release assumptions.
 Version **1.12.1** is a corrective release for the Recovery Toolkit packaging. It makes every recovery shell script executable during install/update, verifies executability, and keeps the toolkit exclusively under `/opt/tec-tac/scripts/recovery/` without `/usr/local/sbin` convenience links.
 
 Version **1.12.0** added framework self-update preservation checks, Module Manager staging repair and independent multi-package classification, the missing Scheduler model-options migration, and the console Recovery Toolkit.

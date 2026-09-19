@@ -330,29 +330,81 @@ def restore_backup(backup, target):
         remove_path(git_tmp)
 
 
+INSTALL_TIMEOUT_SECONDS = 1800
+VERIFY_TIMEOUT_SECONDS = 90
+
+
+def _run_bounded(command, *, log, timeout, cwd=None, env=None, label="command"):
+    try:
+        result = subprocess.run(
+            command, cwd=cwd, stdout=log, stderr=subprocess.STDOUT, text=True,
+            stdin=subprocess.DEVNULL, env=env, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"{label} timed out after {timeout} seconds") from exc
+    return result.returncode
+
+
 def run_install(component, target, log):
     if component == "framework":
         command = ["bash", str(target / "install.sh")]
     else:
         command = ["bash", str(target / "scripts" / "install.sh")]
-    return subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, text=True, stdin=subprocess.DEVNULL).returncode
+    return _run_bounded(command, log=log, timeout=INSTALL_TIMEOUT_SECONDS, label=f"{component} installer")
+
+
+def _read_package_version(target):
+    manifest = target / "tec_tac_package.json"
+    if not manifest.is_file():
+        raise RuntimeError("tec_tac_package.json is missing after deployment")
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"unable to read deployed tec_tac_package.json: {exc}") from exc
+    return str(data.get("version") or "").strip()
 
 
 def verify(component, target, expected, log):
     version = (target / "VERSION").read_text(encoding="utf-8").strip()
     if version != expected:
         raise RuntimeError(f"VERSION verification failed: expected {expected}, found {version}")
+    manifest_version = _read_package_version(target)
+    if manifest_version != expected:
+        raise RuntimeError(f"package manifest verification failed: expected {expected}, found {manifest_version or 'missing'}")
+
     if component == "framework":
         py = Path("/rmm/api/env/bin/python")
         manage = Path("/rmm/api/tacticalrmm/manage.py")
-        code = "from django.urls import resolve; assert resolve('/api/tfd/system/updates/').url_name == 'tec-tac-system-update-status'; print('system update route OK')"
-        result = subprocess.run([str(py), str(manage), "shell", "-c", code], cwd="/rmm/api/tacticalrmm", stdout=log, stderr=subprocess.STDOUT, text=True, env={**os.environ, "PYTHONPATH": str(target / "framwork")})
-        if result.returncode != 0:
-            raise RuntimeError("framework route verification failed")
+        env = {**os.environ, "PYTHONPATH": str(target / "framwork")}
+        checks = [
+            ([str(py), str(manage), "check"], "Django system check"),
+            ([str(py), str(manage), "migrate", "tec_tac", "--check"], "Tec-Tac migration check"),
+            ([str(py), str(manage), "shell", "-c",
+              "from django.urls import resolve; assert resolve('/api/tfd/system/updates/').url_name == 'tec-tac-system-update-status'; print('system update route OK')"],
+             "framework route verification"),
+            ([str(py), str(manage), "shell", "-c",
+              "from tec_tac.contracts import build_contract_catalog; c=build_contract_catalog(); expected=" + repr(expected) + "; assert c['framework_version']==expected, {'expected':expected,'actual':c['framework_version']}; print('contract version OK', expected)"],
+             "framework contract verification"),
+        ]
+        for command, label in checks:
+            rc = _run_bounded(command, cwd="/rmm/api/tacticalrmm", log=log, env=env, timeout=VERIFY_TIMEOUT_SECONDS, label=label)
+            if rc != 0:
+                raise RuntimeError(f"{label} failed with status {rc}")
+        recovery = target / "scripts" / "recovery"
+        missing_exec = [p.name for p in sorted(recovery.glob("*.sh")) if not os.access(p, os.X_OK)]
+        if missing_exec:
+            raise RuntimeError("recovery script executable verification failed: " + ", ".join(missing_exec))
     else:
         deployed = Path("/var/lib/tec-tac/ui/tec-tac")
-        if not (deployed / "index.html").is_file():
-            raise RuntimeError("deployed Tec-Tac UI index.html was not found")
+        index = deployed / "index.html"
+        deployed_version = deployed / "VERSION"
+        if not index.is_file() or index.stat().st_size == 0:
+            raise RuntimeError("deployed Tec-Tac UI index.html was not found or is empty")
+        if not deployed_version.is_file():
+            raise RuntimeError("deployed Tec-Tac UI VERSION file was not found")
+        actual = deployed_version.read_text(encoding="utf-8").strip()
+        if actual != expected:
+            raise RuntimeError(f"deployed UI VERSION verification failed: expected {expected}, found {actual}")
 
 
 def run_job(job_id):
