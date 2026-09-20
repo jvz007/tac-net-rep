@@ -14,6 +14,7 @@ import io
 import json
 import os
 import pwd
+import secrets
 import re
 import shutil
 import stat
@@ -28,7 +29,7 @@ from pathlib import Path, PurePosixPath
 
 JOB_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 ARCHIVE_RE = re.compile(r"^rmm-backup-[A-Za-z0-9_.-]+\.tar$")
-ALLOWED_ACTIONS = {"create_backup", "list_backups", "restore_backup", "apply_retention", "store_secret", "delete_secret"}
+ALLOWED_ACTIONS = {"create_backup", "list_backups", "restore_backup", "apply_retention", "validate_destination", "store_secret", "delete_secret"}
 BACKUP_CLASSES = {"daily", "weekly", "monthly", "manual"}
 DEST_TYPES = {"local", "sftp", "ftp", "scp", "webdav", "s3"}
 SAFE_DEST_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
@@ -151,6 +152,10 @@ def load_job(job_id, config=None):
         raise SystemExit("invalid server-backup job")
     if not isinstance(job.get("request"), dict) or not isinstance(job.get("context"), dict):
         raise SystemExit("invalid server-backup job schema")
+    if job.get("action") == "validate_destination":
+        request = job["request"]
+        if set(request) != {"destination"} or not isinstance(request.get("destination"), dict):
+            raise SystemExit("invalid validate_destination request schema")
     return path, job
 
 
@@ -205,6 +210,11 @@ def claim_job(job_id, config):
     validate_job_file(path, config)
     if job.get("status") != "queued":
         raise SystemExit("job is not queued")
+    if job.get("action") == "validate_destination":
+        try:
+            validate_destination(job["request"]["destination"], config)
+        except Exception as exc:
+            raise SystemExit(f"invalid validate_destination request: {exc}") from exc
 
     # Secret creation is the only operation whose request contains credential
     # material. Move it immediately into a root-only transient file and redact
@@ -384,14 +394,33 @@ def validate_destination(raw, config=None):
                 raise RuntimeError("destination port must be an integer") from exc
             if not 1 <= item["port"] <= 65535:
                 raise RuntimeError("destination port is out of range")
+        if item["type"] == "ftp":
+            tls_mode = str(item.get("tls_mode") or "none").strip().lower()
+            if tls_mode not in {"none", "implicit", "tls", "explicit", "starttls"}:
+                raise RuntimeError("ftp tls_mode must be none, implicit/tls, or explicit/starttls")
+            item["tls_mode"] = tls_mode
+        if item["type"] in {"sftp", "scp"}:
+            host_key_policy = str(item.get("host_key_policy") or "strict").strip().lower()
+            if host_key_policy not in {"strict", "insecure", "none", "off"}:
+                raise RuntimeError("SSH host_key_policy must be strict or insecure")
+            item["host_key_policy"] = host_key_policy
+            if item.get("host_key_fingerprint") or item.get("fingerprint"):
+                fingerprint = safe_config_value(item.get("host_key_fingerprint") or item.get("fingerprint"), "SSH host key fingerprint")
+                item["host_key_fingerprint"] = fingerprint
         if item["type"] == "webdav":
             item["url"] = safe_config_value(item.get("url"), "webdav url")
-            if not item["url"]:
-                raise RuntimeError("webdav destination requires url")
+            if not item["url"] or not re.match(r"^https?://", item["url"], re.I):
+                raise RuntimeError("webdav destination requires an http(s) url")
         if item["type"] == "s3":
+            item["provider"] = safe_config_value(item.get("provider") or "Other", "s3 provider")
             item["bucket"] = safe_config_value(item.get("bucket"), "s3 bucket")
+            item["prefix"] = normalize_remote_path(item.get("prefix") or item.get("remote_path"))
             if not item["bucket"]:
                 raise RuntimeError("s3 destination requires bucket")
+            if item.get("endpoint"):
+                item["endpoint"] = safe_config_value(item.get("endpoint"), "s3 endpoint")
+            if item.get("region"):
+                item["region"] = safe_config_value(item.get("region"), "s3 region")
         ref = str(item.get("secret_ref") or "").strip()
         if ref:
             try:
@@ -1283,6 +1312,304 @@ def delete_destination(config, destination, name, log):
     return delete_rclone(config, destination, name, log)
 
 
+VALIDATION_CHECKS = ("configuration", "connection", "authentication", "path_access", "write", "read", "integrity", "delete")
+
+
+def validation_result(destination):
+    return {
+        "ok": False,
+        "destination_id": str(destination.get("id") or ""),
+        "type": str(destination.get("type") or ""),
+        "validated_at": now(),
+        "checks": {name: "not_run" for name in VALIDATION_CHECKS},
+    }
+
+
+def _validation_fail(result, stage, reason):
+    result["checks"][stage] = "failed"
+    result["reason"] = str(reason)
+    result["validated_at"] = now()
+    raise OperationFailed(str(reason), result=result)
+
+
+def _capture_command(args, *, timeout=120):
+    try:
+        proc = subprocess.run(
+            [str(x) for x in args],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return 124, "", "timeout"
+    return proc.returncode, proc.stdout or "", proc.stderr or ""
+
+
+def _connection_failure_stage(stderr):
+    text = str(stderr or "").lower()
+    auth_words = (
+        "authentication", "login failed", "login incorrect", "invalid credentials",
+        "unauthorized", "forbidden", "incorrect password", "invalid access key",
+        "signaturedoesnotmatch", "invalidaccesskeyid", "530 login",
+        "no supported authentication methods", "publickey", "password failed",
+    )
+    return "authentication" if any(word in text for word in auth_words) else "connection"
+
+
+def _confirm_rclone_absent(base, object_name, cfg):
+    code, out, _err = _capture_command([
+        "rclone", "lsf", base, "--files-only", "--include", object_name, "--config", str(cfg)
+    ], timeout=60)
+    if code != 0:
+        return False
+    return not any(line.strip() == object_name for line in out.splitlines())
+
+
+def validate_rclone_roundtrip(config, destination, payload, expected_hash, result, log, temp, object_name):
+    try:
+        cfg = make_rclone_config(config, destination, temp, log)
+    except Exception as exc:
+        _validation_fail(result, "configuration", str(exc))
+    result["checks"]["configuration"] = "passed"
+    base = remote_base(destination)
+    remote = join_remote(base, object_name)
+    created = False
+    deleted = False
+    original_failure = None
+    try:
+        # mkdir both proves the configured target namespace can be addressed and
+        # mirrors the write semantics used by normal backup fan-out.
+        code, _out, err = _capture_command(["rclone", "mkdir", base, "--config", str(cfg)], timeout=120)
+        if code != 0:
+            stage = _connection_failure_stage(err)
+            result["checks"][stage] = "failed"
+            if stage == "authentication":
+                result["checks"]["connection"] = "passed"
+                reason = "authentication failed"
+            else:
+                reason = "connection failed"
+            result["reason"] = reason
+            raise OperationFailed(reason, result=result)
+        result["checks"]["connection"] = "passed"
+        result["checks"]["authentication"] = "passed"
+
+        code, _out, err = _capture_command(["rclone", "lsf", base, "--max-depth", "1", "--config", str(cfg)], timeout=120)
+        if code != 0:
+            result["checks"]["path_access"] = "failed"
+            result["reason"] = "configured path is inaccessible"
+            raise OperationFailed(result["reason"], result=result)
+        result["checks"]["path_access"] = "passed"
+
+        code, _out, err = _capture_command(["rclone", "copyto", str(payload), remote, "--config", str(cfg)], timeout=300)
+        if code != 0:
+            result["checks"]["write"] = "failed"
+            result["reason"] = "write failed"
+            raise OperationFailed(result["reason"], result=result)
+        created = True
+        result["checks"]["write"] = "passed"
+
+        downloaded = temp / "validation-download.bin"
+        code, _out, err = _capture_command(["rclone", "copyto", remote, str(downloaded), "--config", str(cfg)], timeout=300)
+        if code != 0 or not downloaded.is_file():
+            result["checks"]["read"] = "failed"
+            result["reason"] = "read failed"
+            raise OperationFailed(result["reason"], result=result)
+        result["checks"]["read"] = "passed"
+        if downloaded.stat().st_size != payload.stat().st_size or sha256_file(downloaded) != expected_hash:
+            result["checks"]["integrity"] = "failed"
+            result["reason"] = "round-trip integrity verification failed"
+            raise OperationFailed(result["reason"], result=result)
+        result["checks"]["integrity"] = "passed"
+
+        code, _out, err = _capture_command(["rclone", "deletefile", remote, "--config", str(cfg)], timeout=120)
+        if code != 0:
+            result["checks"]["delete"] = "failed"
+            result["reason"] = "delete failed"
+            raise OperationFailed(result["reason"], result=result)
+        if not _confirm_rclone_absent(base, object_name, cfg):
+            result["checks"]["delete"] = "failed"
+            result["reason"] = "delete could not be confirmed"
+            raise OperationFailed(result["reason"], result=result)
+        deleted = True
+        result["checks"]["delete"] = "passed"
+    except OperationFailed as exc:
+        original_failure = exc
+        raise
+    finally:
+        if created and not deleted:
+            code, _out, _err = _capture_command(["rclone", "deletefile", remote, "--config", str(cfg)], timeout=120)
+            if code == 0 and _confirm_rclone_absent(base, object_name, cfg):
+                result["checks"]["delete"] = "passed"
+            else:
+                result["checks"]["delete"] = "failed"
+                if original_failure is None:
+                    result["reason"] = "validation object cleanup failed"
+
+
+def validate_scp_roundtrip(config, destination, payload, expected_hash, result, log, temp, object_name):
+    try:
+        ssh_common, scp_common = scp_args(config, destination, temp, log)
+    except Exception as exc:
+        _validation_fail(result, "configuration", str(exc))
+    result["checks"]["configuration"] = "passed"
+    host = f"{destination['username']}@{destination['host']}"
+    remote_dir = destination["remote_path"]
+    remote_file = remote_dir.rstrip("/") + "/" + object_name
+    created = False
+    deleted = False
+    original_failure = None
+    try:
+        code, _out, err = _capture_command(["ssh", *ssh_common, host, "true"], timeout=120)
+        if code != 0:
+            stage = _connection_failure_stage(err)
+            result["checks"][stage] = "failed"
+            if stage == "authentication":
+                result["checks"]["connection"] = "passed"
+                reason = "authentication failed"
+            else:
+                reason = "connection failed"
+            result["reason"] = reason
+            raise OperationFailed(reason, result=result)
+        result["checks"]["connection"] = "passed"
+        result["checks"]["authentication"] = "passed"
+
+        code, _out, err = _capture_command(["ssh", *ssh_common, host, "mkdir", "-p", "--", remote_dir], timeout=120)
+        if code != 0:
+            result["checks"]["path_access"] = "failed"
+            result["reason"] = "configured path is inaccessible"
+            raise OperationFailed(result["reason"], result=result)
+        result["checks"]["path_access"] = "passed"
+
+        code, _out, err = _capture_command(["scp", *scp_common, str(payload), f"{host}:{remote_file}"], timeout=300)
+        if code != 0:
+            result["checks"]["write"] = "failed"
+            result["reason"] = "write failed"
+            raise OperationFailed(result["reason"], result=result)
+        created = True
+        result["checks"]["write"] = "passed"
+
+        downloaded = temp / "validation-download.bin"
+        code, _out, err = _capture_command(["scp", *scp_common, f"{host}:{remote_file}", str(downloaded)], timeout=300)
+        if code != 0 or not downloaded.is_file():
+            result["checks"]["read"] = "failed"
+            result["reason"] = "read failed"
+            raise OperationFailed(result["reason"], result=result)
+        result["checks"]["read"] = "passed"
+        if downloaded.stat().st_size != payload.stat().st_size or sha256_file(downloaded) != expected_hash:
+            result["checks"]["integrity"] = "failed"
+            result["reason"] = "round-trip integrity verification failed"
+            raise OperationFailed(result["reason"], result=result)
+        result["checks"]["integrity"] = "passed"
+
+        code, _out, err = _capture_command(["ssh", *ssh_common, host, "rm", "-f", "--", remote_file], timeout=120)
+        if code != 0:
+            result["checks"]["delete"] = "failed"
+            result["reason"] = "delete failed"
+            raise OperationFailed(result["reason"], result=result)
+        code, _out, err = _capture_command(["ssh", *ssh_common, host, "test", "!", "-e", remote_file], timeout=120)
+        if code != 0:
+            result["checks"]["delete"] = "failed"
+            result["reason"] = "delete could not be confirmed"
+            raise OperationFailed(result["reason"], result=result)
+        deleted = True
+        result["checks"]["delete"] = "passed"
+    except OperationFailed as exc:
+        original_failure = exc
+        raise
+    finally:
+        if created and not deleted:
+            code, _out, _err = _capture_command(["ssh", *ssh_common, host, "rm", "-f", "--", remote_file], timeout=120)
+            if code == 0:
+                result["checks"]["delete"] = "passed"
+            else:
+                result["checks"]["delete"] = "failed"
+                if original_failure is None:
+                    result["reason"] = "validation object cleanup failed"
+
+
+def validate_local_roundtrip(config, destination, payload, expected_hash, result, object_name):
+    try:
+        destination = validate_destination(destination, config)
+        result["checks"]["configuration"] = "passed"
+        result["checks"]["connection"] = "not_applicable"
+        result["checks"]["authentication"] = "not_applicable"
+        root = Path(destination["path"])
+        root.mkdir(parents=True, exist_ok=True)
+        if root.is_symlink():
+            _validation_fail(result, "path_access", "local destination root may not be a symlink")
+        result["checks"]["path_access"] = "passed"
+        target = root / object_name
+        created = False
+        try:
+            shutil.copy2(payload, target)
+            created = True
+            result["checks"]["write"] = "passed"
+            with target.open("rb") as fh:
+                while fh.read(1024 * 1024):
+                    pass
+            result["checks"]["read"] = "passed"
+            if target.stat().st_size != payload.stat().st_size or sha256_file(target) != expected_hash:
+                _validation_fail(result, "integrity", "round-trip integrity verification failed")
+            result["checks"]["integrity"] = "passed"
+            target.unlink()
+            if target.exists():
+                _validation_fail(result, "delete", "delete could not be confirmed")
+            result["checks"]["delete"] = "passed"
+        finally:
+            if created and target.exists():
+                try:
+                    target.unlink()
+                    if result["checks"]["delete"] == "not_run":
+                        result["checks"]["delete"] = "passed"
+                except OSError:
+                    result["checks"]["delete"] = "failed"
+    except OperationFailed:
+        raise
+    except Exception as exc:
+        stage = next((name for name in VALIDATION_CHECKS if result["checks"][name] == "not_run"), "configuration")
+        _validation_fail(result, stage, str(exc))
+
+
+def operation_validate_destination(config, job, log):
+    raw = job["request"].get("destination")
+    result = validation_result(raw if isinstance(raw, dict) else {})
+    try:
+        destination = validate_destination(raw, config)
+    except Exception as exc:
+        _validation_fail(result, "configuration", str(exc))
+
+    result["destination_id"] = destination["id"]
+    result["type"] = destination["type"]
+    object_name = f".tectac-validation-{job['id']}.bin"
+    with tempfile.TemporaryDirectory(prefix="tectac-validate-") as td:
+        temp = Path(td)
+        payload = temp / "validation.bin"
+        payload.write_bytes(secrets.token_bytes(64 * 1024))
+        expected_hash = sha256_file(payload)
+        try:
+            if destination["type"] == "local":
+                validate_local_roundtrip(config, destination, payload, expected_hash, result, object_name)
+            elif destination["type"] == "scp":
+                validate_scp_roundtrip(config, destination, payload, expected_hash, result, log, temp, object_name)
+            else:
+                validate_rclone_roundtrip(config, destination, payload, expected_hash, result, log, temp, object_name)
+        except OperationFailed as exc:
+            result.update(exc.result or {})
+            result["ok"] = False
+            result["validated_at"] = now()
+            raise OperationFailed(str(exc), result=result) from exc
+    if result["checks"]["delete"] != "passed":
+        result["ok"] = False
+        result["reason"] = "validation object cleanup was not confirmed"
+        raise OperationFailed(result["reason"], result=result)
+    result["ok"] = True
+    result["validated_at"] = now()
+    result.pop("reason", None)
+    log.write(f"[TEC-TAC-BACKUP] destination validation succeeded id={destination['id']} type={destination['type']}\n")
+    return result
+
+
 def operation_apply_retention(config, job, log):
     policies = job["request"].get("policies") or []
     if not isinstance(policies, list):
@@ -1353,6 +1680,7 @@ OPERATIONS = {
     "list_backups": operation_list_backups,
     "restore_backup": operation_restore_backup,
     "apply_retention": operation_apply_retention,
+    "validate_destination": operation_validate_destination,
     "store_secret": operation_store_secret,
     "delete_secret": operation_delete_secret,
 }

@@ -19,7 +19,7 @@ from .capabilities import register_capability
 from .config import load_layout
 
 CAPABILITY_ID = "core.server_backup"
-CAPABILITY_VERSION = "1.0.0"
+CAPABILITY_VERSION = "1.1.0"
 HELPER = Path("/usr/local/sbin/tec-tac-server-backup")
 DEFAULT_STATE_ROOT = Path("/var/lib/tec-tac/server-backup")
 TERMINAL_STATES = {"succeeded", "failed", "dispatch_failed"}
@@ -104,6 +104,7 @@ def _timeout_for(action: str) -> int:
         "list_backups": 20 * 60,
         "restore_backup": 12 * 60 * 60,
         "apply_retention": 2 * 60 * 60,
+        "validate_destination": 10 * 60,
         "store_secret": 120,
         "delete_secret": 120,
     }
@@ -240,6 +241,14 @@ class ServerBackupProvider:
             context=context,
         )
 
+    def validate_destination(self, *, destination: dict, context: dict) -> dict:
+        destinations = _validate_destinations([destination])
+        return _run(
+            "validate_destination",
+            {"destination": destinations[0]},
+            context=context,
+        )
+
     def apply_retention(self, *, policies: list[dict], context: dict) -> dict:
         if not isinstance(policies, list):
             raise ServerBackupError("policies must be a list.")
@@ -311,6 +320,7 @@ def register_core_server_backup_capability():
             "list_backups",
             "restore_backup",
             "apply_retention",
+            "validate_destination",
             "store_secret",
             "delete_secret",
         ),

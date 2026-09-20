@@ -691,3 +691,13 @@ not receive arbitrary `sudo` or shell access. Core uses a root-owned opaque-job
 helper, Tactical's normal backup/restore scripts, checksummed Tec-Tac payloads,
 root-only credential references and typed local/SFTP/FTP/SCP/WebDAV/S3
 adapters. See `docs/server-backup-capability.md`.
+
+
+## Remote backup destination validation (1.15.1)
+
+`core.server_backup` capability contract 1.1.0 adds `validate_destination(...)`.
+The Core-owned privileged helper performs a job-unique write/read/SHA-256/delete
+round trip using the same local/rclone/SCP adapters and opaque secret references
+used by normal backup operations. Structured partial check results are preserved
+on failure and no credential material is returned or logged. See
+`docs/server-backup-capability.md`.

@@ -1,12 +1,12 @@
 # Core privileged server backup capability
 
-**Framework baseline:** 1.15.0+
+**Framework baseline:** 1.15.1+
 
 Tec-Tac Core exposes one narrow privileged server-backup contract:
 
 ```text
 core.server_backup
-capability version 1.0.0
+capability version 1.1.0
 ```
 
 It exists so modules such as Backups can request Tactical-compatible backup,
@@ -20,7 +20,7 @@ from tec_tac.capabilities import get_capability
 
 backup = get_capability(
     "core.server_backup",
-    version=">=1.0.0,<2.0.0",
+    version=">=1.1.0,<2.0.0",
 )
 ```
 
@@ -169,6 +169,47 @@ job before detached execution, are never returned by list/backup operations and
 must never be written to module/browser logs.
 
 Common fields include `password`, `private_key`, `access_key` and `secret_key`.
+
+## Destination validation
+
+Framework 1.15.1 adds a real storage round-trip test:
+
+```python
+result = backup.validate_destination(
+    destination=destination,
+    context={...},
+)
+```
+
+Validation does not merely ping the host. Core creates a job-unique 64 KiB
+validation object, proves the configured destination can be addressed, writes
+the object, reads it back, verifies its size and SHA-256, deletes it and confirms
+cleanup. The object name is always `.tectac-validation-<job-uuid>.bin`; it never
+touches real `rmm-backup-*.tar` archives or `.tectac.json` metadata.
+
+The result uses these stable checks:
+
+```text
+configuration
+connection
+authentication
+path_access
+write
+read
+integrity
+delete
+```
+
+A failed operation raises `ServerBackupError` and preserves the partial result
+in `exc.result`, including the stages that passed/failed/not_run. Cleanup is
+best-effort in a `finally` path. If deletion cannot be completed or confirmed,
+validation fails because the destination is not suitable for retention.
+
+For local destinations `connection` and `authentication` are reported as
+`not_applicable`; the existing Core local-path allow-list is still enforced.
+SFTP/FTP/WebDAV/S3 reuse the existing rclone adapter. SCP reuses the existing
+SSH/SCP private-key and host-key verification path. Raw credentials and generated
+transport configuration are never returned in the validation result.
 
 ## Retention
 
