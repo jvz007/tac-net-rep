@@ -206,3 +206,25 @@ source_action
 source_run_id
 requested_by
 ```
+
+
+## Non-destructive restore validation (1.3.0)
+
+`validate_restore()` runs the same artifact validation used before destructive restore without crossing the mutation boundary:
+
+```python
+report = backup.validate_restore(
+    backup_ref="destination:3:tec-tac-backup-2026_09_20__08_24_22.tgz",
+    destination=destination,
+    restore_mode="full",   # full | tactical | tec_tac
+    context=context,
+)
+```
+
+The operation may download/copy the selected recovery object to Core-owned staging, read/verify archives, probe read-only host metadata and delete only its own staging directory. It must not stop/restart services, invoke Tactical `restore.sh`, mutate databases, move live Tactical/Tec-Tac trees, run package installation, migrations or integration installers, or change nginx/systemd/network state.
+
+The report separates `artifact_valid` from `target_ready`. `ok` is true only when both are true. This deliberately allows a dev/live server to prove that a bundle is structurally and cryptographically valid even when the current host is not a suitable restore target.
+
+For `tactical` mode only the Tactical component is hashed/validated; an unused corrupt Tec-Tac component does not fail the artifact result. `tec_tac` behaves symmetrically. Legacy native `rmm-backup-*.tar` files are valid only for `tactical` mode.
+
+Current Tactical compatibility reporting tracks the inspected upstream baseline of backup script v34 and restore script v67. Target preflight is read-only and covers OS/architecture, memory, staging disk space, required executables, Tactical identity/current installation requirements, DNS needed by the current Tactical restore path, and whether another Core backup/restore mutation is active.

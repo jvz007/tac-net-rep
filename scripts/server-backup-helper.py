@@ -9,15 +9,18 @@ from __future__ import annotations
 
 import fcntl
 import ftplib
+import gzip
 import grp
 import hashlib
 import io
 import json
 import os
 import pwd
+import platform
 import secrets
 import re
 import shutil
+import socket
 import stat
 import subprocess
 import sys
@@ -32,7 +35,7 @@ JOB_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 LEGACY_ARCHIVE_RE = re.compile(r"^rmm-backup-[A-Za-z0-9_.-]+\.tar$")
 BUNDLE_RE = re.compile(r"^tec-tac-backup-[A-Za-z0-9_.-]+\.tgz$")
 ARCHIVE_RE = BUNDLE_RE
-ALLOWED_ACTIONS = {"create_backup", "list_backups", "restore_backup", "apply_retention", "validate_destination", "store_secret", "delete_secret"}
+ALLOWED_ACTIONS = {"create_backup", "list_backups", "restore_backup", "apply_retention", "validate_destination", "validate_restore", "store_secret", "delete_secret"}
 BACKUP_CLASSES = {"daily", "weekly", "monthly", "manual"}
 DEST_TYPES = {"local", "sftp", "ftp", "scp", "webdav", "s3"}
 SAFE_DEST_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
@@ -159,6 +162,14 @@ def load_job(job_id, config=None):
         request = job["request"]
         if set(request) != {"destination"} or not isinstance(request.get("destination"), dict):
             raise SystemExit("invalid validate_destination request schema")
+    if job.get("action") == "validate_restore":
+        request = job["request"]
+        if set(request) != {"backup_ref", "destination", "restore_mode"}:
+            raise SystemExit("invalid validate_restore request schema")
+        if request.get("destination") is not None and not isinstance(request.get("destination"), dict):
+            raise SystemExit("invalid validate_restore destination schema")
+        if str(request.get("restore_mode") or "").strip().lower() not in {"full", "tactical", "tec_tac"}:
+            raise SystemExit("invalid validate_restore mode")
     return path, job
 
 
@@ -218,6 +229,15 @@ def claim_job(job_id, config):
             validate_destination(job["request"]["destination"], config)
         except Exception as exc:
             raise SystemExit(f"invalid validate_destination request: {exc}") from exc
+
+    if job.get("action") == "validate_restore":
+        request = job["request"]
+        try:
+            parse_backup_ref(request.get("backup_ref"))
+            if request.get("destination") is not None:
+                validate_destination(request["destination"], config)
+        except Exception as exc:
+            raise SystemExit(f"invalid validate_restore request: {exc}") from exc
 
     # Secret creation is the only operation whose request contains credential
     # material. Move it immediately into a root-only transient file and redact
@@ -1308,33 +1328,113 @@ def download_destination(config, destination, name, target, log):
     return download_rclone(config, destination, name, target, log)
 
 
+def _stream_gzip_member(tf, member, label):
+    source = tf.extractfile(member)
+    if source is None:
+        raise RuntimeError(f"{label} is unreadable")
+    try:
+        with gzip.GzipFile(fileobj=source, mode="rb") as gz:
+            for _ in iter(lambda: gz.read(1024 * 1024), b""):
+                pass
+    except Exception as exc:
+        raise RuntimeError(f"{label} gzip stream is corrupt: {exc}") from exc
+
+
+def _stream_tar_gzip_member(tf, member, label):
+    source = tf.extractfile(member)
+    if source is None:
+        raise RuntimeError(f"{label} is unreadable")
+    try:
+        with tarfile.open(fileobj=source, mode="r:gz") as nested:
+            safe_tar_members(nested)
+    except Exception as exc:
+        raise RuntimeError(f"{label} tar/gzip stream is corrupt: {exc}") from exc
+
+
 def validate_tactical_native_archive(archive: Path):
+    """Read-only compatibility validation for Tactical backup.sh v34 / restore.sh v67."""
     ensure_regular(archive, max_bytes=max_backup_bytes(load_config()))
-    required_exact = {"rmm/local_settings.py", "systemd/rmm.service", "meshcentral/mesh.tar.gz", "confd/etc-confd.tar.gz"}
+    required_exact = {
+        "rmm/local_settings.py",
+        "meshcentral/mesh.tar.gz",
+        "confd/etc-confd.tar.gz",
+        "nginx/rmm.conf",
+        "nginx/frontend.conf",
+        "nginx/meshcentral.conf",
+        "systemd/rmm.service",
+        "systemd/celery.service",
+        "systemd/celerybeat.service",
+        "systemd/meshcentral.service",
+        "systemd/nats.service",
+        "systemd/nats-api.service",
+    }
     with tarfile.open(archive, "r") as tf:
         members = safe_tar_members(tf)
-        names = {m.name.lstrip("./") for m in members}
+        by_name = {m.name.lstrip("./"): m for m in members}
+        names = set(by_name)
         missing = sorted(name for name in required_exact if name not in names)
         if missing:
             raise RuntimeError("Tactical backup is missing required members: " + ", ".join(missing))
-        if not any(re.fullmatch(r"postgres/db-[^/]+\.psql\.gz", name) for name in names):
+        # Current upstream backup uses daphne.service; accept uvicorn.service for
+        # forward-compatible restored backups where that service has migrated.
+        if not ({"systemd/daphne.service", "systemd/uvicorn.service"} & names):
+            raise RuntimeError("Tactical backup is missing its daphne/uvicorn systemd unit")
+        db_names = [name for name in names if re.fullmatch(r"postgres/db-[^/]+\.psql\.gz", name)]
+        if not db_names:
             raise RuntimeError("Tactical backup does not contain its tacticalrmm PostgreSQL dump")
+        mesh_db = [name for name in names if re.fullmatch(r"postgres/mesh-db-[^/]+\.psql\.gz", name)]
+        mongo_material = any(name == "meshcentral/mongo" or name.startswith("meshcentral/mongo/") for name in names)
+        if not mesh_db and not mongo_material:
+            raise RuntimeError("Tactical backup does not contain supported MeshCentral database material")
+        for name in db_names + mesh_db:
+            _stream_gzip_member(tf, by_name[name], name)
+        _stream_tar_gzip_member(tf, by_name["meshcentral/mesh.tar.gz"], "meshcentral/mesh.tar.gz")
+        _stream_tar_gzip_member(tf, by_name["confd/etc-confd.tar.gz"], "confd/etc-confd.tar.gz")
+        # Optional archives are validated when present, but absence follows
+        # Tactical restore fallback semantics.
+        for name in ("certs/etc-letsencrypt.tar.gz", "opt/opt-tactical.tar.gz"):
+            if name in by_name:
+                _stream_tar_gzip_member(tf, by_name[name], name)
     return True
 
 
-def validate_tec_tac_component(path: Path):
+def validate_tec_tac_component(path: Path, component_meta=None):
     ensure_regular(path, max_bytes=max_backup_bytes(load_config()))
+    meta = component_meta or {}
+    expected_paths = []
+    for value in (meta.get("paths") or {}).values():
+        text = str(value or "").strip()
+        if text.startswith("/"):
+            expected_paths.append(text.lstrip("/"))
     with tarfile.open(path, "r:gz") as tf:
-        members=safe_tar_members(tf)
+        members = safe_tar_members(tf)
         if not members:
             raise RuntimeError("Tec-Tac component is empty")
-        for member in members:
-            name=member.name.lstrip("./")
-            # Tec-Tac must remain external to Tactical's tracked /rmm tree.
+        names = {member.name.lstrip("./") for member in members}
+        for name in names:
             if name == "rmm" or name.startswith("rmm/"):
                 raise RuntimeError("Tec-Tac recovery component may not contain Tactical /rmm tracked source")
+            if "/server-backup/jobs/" in "/" + name or "/server-backup/logs/" in "/" + name or "/server-backup/staging/" in "/" + name:
+                raise RuntimeError("Tec-Tac recovery component contains transient backup runtime state")
+        # Paths recorded in the manifest must be structurally safe. At least
+        # one framework/runtime payload and persistent state/config payload are
+        # expected when those source paths existed at backup time.
+        for rel in expected_paths:
+            pp = PurePosixPath(rel)
+            if pp.is_absolute() or ".." in pp.parts:
+                raise RuntimeError("Tec-Tac component manifest contains an unsafe source path")
+        classes = {
+            "framework": any(name == "opt/tec-tac" or name.startswith("opt/tec-tac/") or name.startswith("opt/tec-tac-src/framework/") for name in names),
+            "state": any(name == "var/lib/tec-tac" or name.startswith("var/lib/tec-tac/") for name in names),
+            "config": any(name == "etc/tec-tac" or name.startswith("etc/tec-tac/") or name.startswith("opt/tec-tac/etc/") for name in names),
+        }
+        if not classes["framework"]:
+            raise RuntimeError("Tec-Tac component does not contain framework/runtime payload")
+        if not classes["state"]:
+            raise RuntimeError("Tec-Tac component does not contain persistent state payload")
+        if not classes["config"]:
+            raise RuntimeError("Tec-Tac component does not contain configuration payload")
     return True
-
 
 def parse_checksum_file(text):
     records={}
@@ -1369,7 +1469,7 @@ def extract_verified_bundle_member(tf, member, target, expected_hash, expected_s
     return target
 
 
-def validate_recovery_bundle(bundle: Path, restore_mode: str, stage: Path):
+def validate_recovery_bundle(bundle: Path, restore_mode: str, stage: Path, *, validate_components=True):
     ensure_regular(bundle, max_bytes=max_backup_bytes(load_config()))
     if not BUNDLE_RE.fullmatch(bundle.name):
         raise RuntimeError("recovery bundle filename is invalid")
@@ -1424,8 +1524,8 @@ def validate_recovery_bundle(bundle: Path, restore_mode: str, stage: Path):
             rel=str(meta.get("archive") or "")
             if not rel or str(checksums.get(rel) or "").lower()!=str(meta.get("sha256") or "").lower():
                 raise RuntimeError(f"recovery bundle metadata/checksum declaration is incomplete: {key}")
-    if "tactical" in extracted: validate_tactical_native_archive(extracted["tactical"])
-    if "tec_tac" in extracted: validate_tec_tac_component(extracted["tec_tac"])
+    if validate_components and "tactical" in extracted: validate_tactical_native_archive(extracted["tactical"])
+    if validate_components and "tec_tac" in extracted: validate_tec_tac_component(extracted["tec_tac"], (manifest.get("components") or {}).get("tec_tac") or {})
     return manifest,extracted
 
 
@@ -1482,6 +1582,241 @@ def run_post_restore_tec_tac(config, component_meta, component_archive, log):
     ui_root=Path(config.get("TEC_TAC_UI_DEPLOY_ROOT") or "/var/lib/tec-tac/ui/tec-tac")
     if not (ui_root/"index.html").is_file(): raise RuntimeError(f"post-restore Tec-Tac UI verification failed: {ui_root/'index.html'} is missing")
     verify_tactical_runtime(config,log)
+
+
+
+VALIDATE_RESTORE_STATUSES = {"passed", "warning", "failed", "not_applicable", "not_run"}
+
+
+def _vr_section():
+    return {"status": "not_run", "checks": []}
+
+
+def _vr_check(report, section, check_id, label, status, detail=""):
+    if status not in VALIDATE_RESTORE_STATUSES:
+        status = "failed"
+    sec = report["sections"][section]
+    sec["checks"].append({"id": check_id, "label": label, "status": status, "detail": str(detail or "")})
+    ranks = {"failed": 5, "warning": 4, "passed": 3, "not_run": 2, "not_applicable": 1}
+    current = sec.get("status", "not_run")
+    if ranks[status] > ranks.get(current, 0):
+        sec["status"] = status
+    if status == "failed":
+        report["errors"].append(str(detail or label))
+    elif status == "warning":
+        report["warnings"].append(str(detail or label))
+
+
+def _vr_new(request, name):
+    return {
+        "ok": False,
+        "artifact_valid": False,
+        "target_ready": False,
+        "restore_mode": str(request.get("restore_mode") or ""),
+        "backup_ref": str(request.get("backup_ref") or ""),
+        "archive_name": name,
+        "format_version": None,
+        "legacy": False,
+        "validated_at": now(),
+        "staged_bytes": 0,
+        "compatibility_baseline": {"tactical_backup_script": "34", "tactical_restore_script": "67"},
+        "sections": {key: _vr_section() for key in ("source", "bundle", "tactical", "tec_tac", "target")},
+        "warnings": [],
+        "errors": [],
+    }
+
+
+def _mutation_active(config):
+    try:
+        lock = acquire_lock(config)
+    except RuntimeError:
+        return True
+    else:
+        lock.close()
+        return False
+
+
+def _os_release():
+    values = {}
+    path = Path("/etc/os-release")
+    if path.is_file():
+        for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if "=" not in raw:
+                continue
+            k, v = raw.split("=", 1)
+            values[k] = v.strip().strip('"')
+    return values
+
+
+def validate_target_preflight(config, report, mode, staged_bytes):
+    target = report["sections"]["target"]
+    target["status"] = "passed"
+    if _mutation_active(config):
+        _vr_check(report, "target", "target.mutation_lock", "Backup/restore mutation", "failed", "another Core server backup/restore mutation is active")
+    else:
+        _vr_check(report, "target", "target.mutation_lock", "Backup/restore mutation", "passed", "No destructive backup/restore mutation is active.")
+
+    arch = platform.machine().lower()
+    if mode in {"full", "tactical"}:
+        _vr_check(report, "target", "target.arch", "CPU architecture", "passed" if arch in {"x86_64", "aarch64"} else "failed", arch)
+        osr = _os_release(); os_id = str(osr.get("ID") or "").lower(); ver = str(osr.get("VERSION_ID") or "")
+        supported = (os_id == "debian" and ver.split(".")[0] in {"11", "12"}) or (os_id == "ubuntu" and ver == "22.04")
+        _vr_check(report, "target", "target.os", "Operating system", "passed" if supported else "failed", f"{os_id or 'unknown'} {ver or 'unknown'}")
+        mem_kb = 0
+        try:
+            for line in Path("/proc/meminfo").read_text().splitlines():
+                if line.startswith("MemTotal:"):
+                    mem_kb = int(line.split()[1]); break
+        except Exception:
+            pass
+        _vr_check(report, "target", "target.memory", "System memory", "passed" if mem_kb >= 3627528 else "failed", f"{mem_kb} KiB detected; Tactical restore baseline requires at least 3627528 KiB")
+    else:
+        _vr_check(report, "target", "target.arch", "CPU architecture", "not_applicable", "Tactical restore.sh is not used for Tec-Tac-only recovery.")
+        _vr_check(report, "target", "target.os", "Operating system", "not_applicable", "Tactical restore.sh is not used for Tec-Tac-only recovery.")
+        _vr_check(report, "target", "target.memory", "System memory", "not_applicable", "Tactical restore.sh minimum is not applied to Tec-Tac-only recovery.")
+
+    rs = roots(config)
+    try:
+        usage = shutil.disk_usage(rs["staging"])
+        # Conservative read-only estimate: staged bundle + extracted selected
+        # components + one additional copy/safety margin, plus 2 GiB.
+        required = max(2 * 1024**3, int(staged_bytes) * 3)
+        _vr_check(report, "target", "target.disk", "Staging free space", "passed" if usage.free >= required else "failed", f"free={usage.free} required_estimate={required}")
+    except Exception as exc:
+        _vr_check(report, "target", "target.disk", "Staging free space", "failed", str(exc))
+
+    required_tools = ["tar", "gzip"]
+    if mode in {"full", "tactical"}:
+        required_tools += ["bash", "runuser", "systemctl", "curl", "wget", "git"]
+    if mode in {"full", "tec_tac"}:
+        required_tools += ["nginx"]
+    missing = sorted(tool for tool in set(required_tools) if shutil.which(tool) is None)
+    _vr_check(report, "target", "target.tools", "Required executables", "passed" if not missing else "failed", "all required executables found" if not missing else "missing: " + ", ".join(missing))
+
+    if mode in {"full", "tactical"}:
+        hosts = ["github.com", "deb.nodesource.com", "apt.postgresql.org"]
+        failed = []
+        for host in hosts:
+            try:
+                socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+            except OSError:
+                failed.append(host)
+        _vr_check(report, "target", "target.dns", "Restore dependency DNS", "passed" if not failed else "failed", "DNS resolution available" if not failed else "unable to resolve: " + ", ".join(failed))
+    else:
+        _vr_check(report, "target", "target.dns", "Restore dependency DNS", "not_applicable", "Tactical package/bootstrap restore is not used.")
+
+    if mode in {"full", "tactical"}:
+        try:
+            _, _, user, _ = tactical_identity(config)
+            _vr_check(report, "target", "target.user", "Tactical restore user", "passed", user)
+        except Exception as exc:
+            _vr_check(report, "target", "target.user", "Tactical restore user", "failed", str(exc))
+    else:
+        tactical_root = Path(config["TACTICAL_ROOT"])
+        healthy = (tactical_root / "api" / "tacticalrmm").exists()
+        _vr_check(report, "target", "target.tactical_present", "Existing Tactical installation", "passed" if healthy else "failed", str(tactical_root))
+
+
+def operation_validate_restore(config, job, log):
+    request = job["request"]
+    dest_id, name = parse_backup_ref(request.get("backup_ref"))
+    mode = str(request.get("restore_mode") or "").strip().lower()
+    destination = request.get("destination")
+    report = _vr_new(request, name)
+    if destination is None:
+        if dest_id not in {"local", "0", "native"}:
+            _vr_check(report, "source", "source.destination", "Backup destination", "failed", "destination configuration is required for this backup_ref")
+            return report
+        destination = {"id": dest_id, "type": "local", "name": "Tactical local backups", "path": "/rmmbackups"}
+    try:
+        destination = validate_destination(destination, config)
+        if destination["id"] != dest_id:
+            raise RuntimeError("backup_ref destination id does not match supplied destination")
+        _vr_check(report, "source", "source.destination", "Backup destination", "passed", f"{destination['type']}:{destination['id']}")
+    except Exception as exc:
+        _vr_check(report, "source", "source.destination", "Backup destination", "failed", str(exc))
+        return report
+
+    rs = roots(config)
+    stage = rs["staging"] / f"validate-restore-{job['id']}"
+    shutil.rmtree(stage, ignore_errors=True)
+    stage.mkdir(parents=True, exist_ok=True)
+    downloaded = stage / name
+    try:
+        try:
+            metadata = download_destination(config, destination, name, downloaded, log)
+            ensure_regular(downloaded, max_bytes=max_backup_bytes(config))
+            report["staged_bytes"] = downloaded.stat().st_size
+            _vr_check(report, "source", "source.object", "Recovery object", "passed", "Recovery object copied to protected validation staging.")
+            if metadata:
+                if not isinstance(metadata, dict):
+                    raise RuntimeError("backup sidecar metadata is invalid")
+                if metadata.get("size_bytes") is not None and int(metadata.get("size_bytes")) != downloaded.stat().st_size:
+                    raise RuntimeError("recovery object size does not match sidecar metadata")
+                if metadata.get("sha256") and str(metadata["sha256"]).lower() != sha256_file(downloaded).lower():
+                    raise RuntimeError("recovery object SHA-256 does not match sidecar metadata")
+                _vr_check(report, "source", "source.sidecar", "Sidecar metadata", "passed", "Sidecar structure/size/hash accepted.")
+            else:
+                _vr_check(report, "source", "source.sidecar", "Sidecar metadata", "warning", "No sidecar metadata was available; artifact integrity will be established from the recovery object itself.")
+        except Exception as exc:
+            _vr_check(report, "source", "source.object", "Recovery object", "failed", str(exc))
+            return report
+
+        if LEGACY_ARCHIVE_RE.fullmatch(name):
+            report["format_version"] = 1; report["legacy"] = True
+            if mode != "tactical":
+                _vr_check(report, "bundle", "bundle.mode", "Recovery mode", "failed", "legacy Tactical archives support only tactical restore mode")
+            else:
+                _vr_check(report, "bundle", "bundle.legacy", "Legacy Tactical archive", "passed", "Native Tactical archive selected for Tactical-only validation.")
+                try:
+                    validate_tactical_native_archive(downloaded)
+                    _vr_check(report, "tactical", "tactical.compatibility", "Tactical restore compatibility", "passed", "Validated against backup.sh v34 / restore.sh v67 compatibility baseline.")
+                except Exception as exc:
+                    _vr_check(report, "tactical", "tactical.compatibility", "Tactical restore compatibility", "failed", str(exc))
+            _vr_check(report, "tec_tac", "tec_tac.component", "Tec-Tac component", "not_applicable", "Legacy native Tactical archive has no independent Tec-Tac component.")
+        else:
+            try:
+                manifest, extracted = validate_recovery_bundle(downloaded, mode, stage, validate_components=False)
+                report["format_version"] = int(manifest.get("format_version") or 0)
+                report["legacy"] = False
+                _vr_check(report, "bundle", "bundle.structure", "Recovery bundle structure", "passed", "Manifest, checksums and selected component hash/size are valid.")
+            except Exception as exc:
+                _vr_check(report, "bundle", "bundle.structure", "Recovery bundle structure", "failed", str(exc))
+                manifest = {}; extracted = {}
+
+            if "tactical" in extracted:
+                try:
+                    validate_tactical_native_archive(extracted["tactical"])
+                    _vr_check(report, "tactical", "tactical.compatibility", "Tactical restore compatibility", "passed", "Native Tactical component is safe/readable and compatible with backup.sh v34 / restore.sh v67 requirements.")
+                except Exception as exc:
+                    _vr_check(report, "tactical", "tactical.compatibility", "Tactical restore compatibility", "failed", str(exc))
+            else:
+                _vr_check(report, "tactical", "tactical.component", "Tactical component", "not_applicable" if mode == "tec_tac" else "not_run", "Tactical component is not selected by this recovery mode.")
+
+            if "tec_tac" in extracted:
+                try:
+                    validate_tec_tac_component(extracted["tec_tac"], (manifest.get("components") or {}).get("tec_tac") or {})
+                    _vr_check(report, "tec_tac", "tec_tac.component", "Tec-Tac recovery component", "passed", "Tec-Tac component is safe/readable and contains required payload classes.")
+                except Exception as exc:
+                    _vr_check(report, "tec_tac", "tec_tac.component", "Tec-Tac recovery component", "failed", str(exc))
+            else:
+                _vr_check(report, "tec_tac", "tec_tac.component", "Tec-Tac component", "not_applicable" if mode == "tactical" else "not_run", "Tec-Tac component is not selected by this recovery mode.")
+
+        artifact_sections = ["bundle"] + (["tactical"] if mode in {"full", "tactical"} else []) + (["tec_tac"] if mode in {"full", "tec_tac"} else [])
+        report["artifact_valid"] = all(report["sections"][name]["status"] not in {"failed", "not_run"} for name in artifact_sections)
+        validate_target_preflight(config, report, mode, report["staged_bytes"])
+        report["target_ready"] = report["sections"]["target"]["status"] != "failed"
+        report["ok"] = bool(report["artifact_valid"] and report["target_ready"])
+        report["validated_at"] = now()
+        log.write(f"[TEC-TAC-BACKUP] non-destructive restore validation completed mode={mode} artifact_valid={report['artifact_valid']} target_ready={report['target_ready']}\n")
+        return report
+    finally:
+        try:
+            shutil.rmtree(stage)
+        except Exception as exc:
+            # The operation never expands cleanup scope beyond its job-owned
+            # validation staging directory.
+            report["warnings"].append(f"validation staging cleanup failed: {exc}")
 
 
 def operation_restore_backup(config, job, log):
@@ -2010,6 +2345,7 @@ OPERATIONS = {
     "restore_backup": operation_restore_backup,
     "apply_retention": operation_apply_retention,
     "validate_destination": operation_validate_destination,
+    "validate_restore": operation_validate_restore,
     "store_secret": operation_store_secret,
     "delete_secret": operation_delete_secret,
 }

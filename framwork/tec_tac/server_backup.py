@@ -19,7 +19,7 @@ from .capabilities import register_capability
 from .config import load_layout
 
 CAPABILITY_ID = "core.server_backup"
-CAPABILITY_VERSION = "1.2.0"
+CAPABILITY_VERSION = "1.3.0"
 HELPER = Path("/usr/local/sbin/tec-tac-server-backup")
 DEFAULT_STATE_ROOT = Path("/var/lib/tec-tac/server-backup")
 TERMINAL_STATES = {"succeeded", "failed", "dispatch_failed"}
@@ -105,6 +105,7 @@ def _timeout_for(action: str) -> int:
         "restore_backup": 12 * 60 * 60,
         "apply_retention": 2 * 60 * 60,
         "validate_destination": 10 * 60,
+        "validate_restore": 45 * 60,
         "store_secret": 120,
         "delete_secret": 120,
     }
@@ -259,6 +260,21 @@ class ServerBackupProvider:
             context=context,
         )
 
+    def validate_restore(self, *, backup_ref: str, destination: dict | None, restore_mode: str, context: dict) -> dict:
+        mode = str(restore_mode or "").strip().lower()
+        if mode not in {"full", "tactical", "tec_tac"}:
+            raise ServerBackupError("restore_mode must be full, tactical, or tec_tac.")
+        destinations = _validate_destinations([destination]) if destination is not None else []
+        return _run(
+            "validate_restore",
+            {
+                "backup_ref": str(backup_ref or "").strip(),
+                "destination": destinations[0] if destinations else None,
+                "restore_mode": mode,
+            },
+            context=context,
+        )
+
     def apply_retention(self, *, policies: list[dict], context: dict) -> dict:
         if not isinstance(policies, list):
             raise ServerBackupError("policies must be a list.")
@@ -331,6 +347,7 @@ def register_core_server_backup_capability():
             "restore_backup",
             "apply_retention",
             "validate_destination",
+            "validate_restore",
             "store_secret",
             "delete_secret",
         ),
