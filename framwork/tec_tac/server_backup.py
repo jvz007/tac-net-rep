@@ -198,6 +198,37 @@ def _run(action: str, request: dict, *, context: dict | None, timeout: int | Non
     )
 
 
+def _normalize_validation_overrides(overrides) -> list[str]:
+    if overrides in (None, []):
+        return []
+    if not isinstance(overrides, list) or any(not isinstance(item, str) for item in overrides):
+        raise ServerBackupError("validate_restore overrides must be an array of check IDs.")
+    result = []
+    seen = set()
+    for raw in overrides:
+        check_id = raw.strip()
+        if not check_id or check_id in seen:
+            raise ServerBackupError("validate_restore overrides contain a blank or duplicate check ID.")
+        seen.add(check_id)
+        result.append(check_id)
+    return result
+
+
+def _normalize_restore_overrides(overrides) -> dict[str, str]:
+    if overrides in (None, {}):
+        return {}
+    if not isinstance(overrides, dict):
+        raise ServerBackupError("restore_backup overrides must be an object mapping check IDs to audit IDs.")
+    result = {}
+    for raw_check, raw_audit in overrides.items():
+        check_id = str(raw_check or "").strip()
+        audit_id = str(raw_audit or "").strip()
+        if not check_id or not audit_id:
+            raise ServerBackupError("restore_backup overrides contain a blank check ID or audit ID.")
+        result[check_id] = audit_id
+    return result
+
+
 class ServerBackupProvider:
     """Stable public provider contract for ``core.server_backup`` version 1.x."""
 
@@ -233,7 +264,7 @@ class ServerBackupProvider:
             raise ServerBackupError("Core server-backup provider returned an invalid backup list.", result=result)
         return rows
 
-    def restore_backup(self, *, backup_ref: str, destination: dict | None, restore_mode: str | None = None, context: dict, restore_tec_tac: bool | None = None) -> dict:
+    def restore_backup(self, *, backup_ref: str, destination: dict | None, restore_mode: str | None = None, context: dict, restore_tec_tac: bool | None = None, overrides: dict | None = None) -> dict:
         # Compatibility bridge for 1.0/1.1 consumers. New modules must send
         # restore_mode explicitly; legacy bool maps to full/tactical only.
         if restore_mode in (None, "") and isinstance(restore_tec_tac, bool):
@@ -248,6 +279,7 @@ class ServerBackupProvider:
                 "backup_ref": str(backup_ref or "").strip(),
                 "destination": destinations[0] if destinations else None,
                 "restore_mode": mode,
+                "overrides": _normalize_restore_overrides(overrides),
             },
             context=context,
         )
@@ -260,7 +292,7 @@ class ServerBackupProvider:
             context=context,
         )
 
-    def validate_restore(self, *, backup_ref: str, destination: dict | None, restore_mode: str, context: dict) -> dict:
+    def validate_restore(self, *, backup_ref: str, destination: dict | None, restore_mode: str, context: dict, overrides: list[str] | None = None) -> dict:
         mode = str(restore_mode or "").strip().lower()
         if mode not in {"full", "tactical", "tec_tac"}:
             raise ServerBackupError("restore_mode must be full, tactical, or tec_tac.")
@@ -271,6 +303,7 @@ class ServerBackupProvider:
                 "backup_ref": str(backup_ref or "").strip(),
                 "destination": destinations[0] if destinations else None,
                 "restore_mode": mode,
+                "overrides": _normalize_validation_overrides(overrides),
             },
             context=context,
         )
@@ -357,6 +390,7 @@ def register_core_server_backup_capability():
             "backup_classes": sorted(BACKUP_CLASSES),
             "recovery_modes": ["full", "tactical", "tec_tac"],
             "format_version": 2,
+            "overrideable_restore_checks": ["target.os"],
         },
     )
 

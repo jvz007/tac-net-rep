@@ -11,6 +11,8 @@ grep -q 'core.server_backup' "${ROOT}/framwork/tec_tac/server_backup.py" || fail
 grep -q 'register_core_server_backup_capability' "${ROOT}/framwork/tec_tac/apps.py" || fail "Core server-backup capability is not registered by AppConfig"
 grep -q 'module_id in {"tec-tac", "core"}' "${ROOT}/framwork/tec_tac/capabilities.py" || fail "capability registry does not recognize Core-owned providers"
 grep -Fq '${SERVER_BACKUP_HELPER} --dispatch *' "${ROOT}/install.sh" || fail "narrow server-backup sudoers rule missing"
+grep -Fq '${SERVER_BACKUP_HELPER} --tactical-privileged *' "${ROOT}/install.sh" || fail "Tactical backup privilege bridge sudoers rule missing"
+[[ -f "${ROOT}/scripts/tactical-backup-sudo.py" ]] || fail "Tactical backup sudo shim missing"
 ! grep -Eq 'NOPASSWD:[[:space:]]*(ALL|/bin/(ba)?sh|/usr/bin/(ba)?sh)' "${ROOT}/install.sh" || fail "generic shell sudo permission detected"
 grep -q 'ALLOWED_ACTIONS.*create_backup.*restore_backup' "${ROOT}/scripts/server-backup-helper.py" || fail "privileged operation allow-list missing"
 grep -q 'systemd-run' "${ROOT}/scripts/server-backup-helper.py" || fail "server-backup helper must detach privileged work"
@@ -40,6 +42,7 @@ reg=register_core_server_backup_capability()
 assert reg.id == "core.server_backup" and reg.module_id == "core" and reg.version == "1.4.0"
 assert set(("create_backup","list_backups","restore_backup","apply_retention","validate_destination","validate_restore","store_secret","delete_secret")) <= set(reg.operations)
 assert reg.metadata["format_version"] == 2
+assert reg.metadata["overrideable_restore_checks"] == ["target.os"]
 assert set(reg.metadata["recovery_modes"]) == {"full","tactical","tec_tac"}
 provider=get_server_backup_provider()
 # Legacy restore bool remains a compatibility bridge into the new mode contract.
@@ -52,6 +55,49 @@ spec=importlib.util.spec_from_file_location("server_backup_helper",root/"scripts
 h=importlib.util.module_from_spec(spec); spec.loader.exec_module(h)
 assert h.ARCHIVE_RE.fullmatch("tec-tac-backup-2026_09_20__09_15_00.tgz")
 assert h.LEGACY_ARCHIVE_RE.fullmatch("rmm-backup-2026_09_20__09_14_32.tar")
+
+# create_tactical_component must validate the exact native archive before hashing/finalising it.
+import inspect
+source=inspect.getsource(h.create_tactical_component)
+assert source.index("validate_tactical_native_archive(archive)") < source.index("digest = sha256_file(archive)")
+assert "TEC_TAC_BACKUP_JOB_ID" in source and "Core narrow privilege bridge" in source
+
+with tempfile.TemporaryDirectory() as od:
+    od=pathlib.Path(od)
+    cfg={"TEC_TAC_SERVER_BACKUP_ROOT":str(od/"state"),"TACTICAL_USER":"root"}
+    report=h._vr_new({"backup_ref":"destination:x:tec-tac-backup-test.tgz","restore_mode":"full"},"tec-tac-backup-test.tgz")
+    report["sections"]["target"]["status"]="passed"
+    h._vr_check(report,"target","target.os","Operating system","failed","ubuntu 24.04")
+    h._vr_check(report,"target","target.memory","System memory","passed","ok")
+    job={"id":"44444444-4444-4444-8444-444444444444","context":{"requested_by":"alice","source_module":"backups","source_action":"restore"}}
+    accepted=h._accept_validation_overrides(cfg,job,report,["target.os"])
+    audit_id=accepted["target.os"]
+    audit=json.loads((od/"state"/"restore-overrides"/f"{audit_id}.json").read_text())
+    assert audit["accepted_by"]=="alice" and audit["check_id"]=="target.os"
+    assert audit["backup_ref"]==report["backup_ref"] and audit["restore_mode"]=="full"
+    assert audit["original_status"]=="failed" and audit["original_detail"]=="ubuntu 24.04"
+    assert h._target_effectively_ready(report) is True
+
+    execution=h._vr_new({"backup_ref":report["backup_ref"],"restore_mode":"full"},"tec-tac-backup-test.tgz")
+    execution["sections"]["target"]["status"]="passed"
+    h._vr_check(execution,"target","target.os","Operating system","failed","ubuntu 24.04")
+    h._authorize_restore_overrides(cfg,execution,{"target.os":audit_id})
+    assert h._target_effectively_ready(execution) is True
+    assert execution["sections"]["target"]["checks"][0]["overridden"] is True
+
+    stale=h._vr_new({"backup_ref":report["backup_ref"],"restore_mode":"tactical"},"tec-tac-backup-test.tgz")
+    stale["sections"]["target"]["status"]="passed"
+    h._vr_check(stale,"target","target.os","Operating system","failed","ubuntu 24.04")
+    try: h._authorize_restore_overrides(cfg,stale,{"target.os":audit_id})
+    except RuntimeError: pass
+    else: raise AssertionError("restore accepted an override bound to a different restore mode")
+
+    artifact=h._vr_new({"backup_ref":report["backup_ref"],"restore_mode":"full"},"tec-tac-backup-test.tgz")
+    artifact["sections"]["bundle"]["status"]="failed"
+    h._vr_check(artifact,"bundle","bundle.structure","Recovery bundle structure","failed","bad checksum")
+    try: h._accept_validation_overrides(cfg,job,artifact,["bundle.structure"])
+    except RuntimeError: pass
+    else: raise AssertionError("artifact-integrity check became overrideable")
 
 with tempfile.TemporaryDirectory() as td:
     td=pathlib.Path(td)

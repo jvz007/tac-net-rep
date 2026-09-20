@@ -247,3 +247,55 @@ The report separates `artifact_valid` from `target_ready`. `ok` is true only whe
 For `tactical` mode only the Tactical component is hashed/validated; an unused corrupt Tec-Tac component does not fail the artifact result. `tec_tac` behaves symmetrically. Legacy native `rmm-backup-*.tar` files are valid only for `tactical` mode.
 
 Current Tactical compatibility reporting tracks the inspected upstream baseline of backup script v34 and restore script v67. Target preflight is read-only and covers OS/architecture, memory, staging disk space, required executables, Tactical identity/current installation requirements, DNS needed by the current Tactical restore path, and whether another Core backup/restore mutation is active.
+
+## Restore overrides and native-backup trust boundary (1.4.0)
+
+`core.server_backup` 1.4.0 adds auditable per-check target overrides and tightens creation of Tactical-native backup components.
+
+### Target-check overrides
+
+Only checks explicitly advertised by Core are overrideable. The initial allow-list contains only `target.os`. Artifact-integrity checks are never overrideable.
+
+A module first performs normal validation. Each check now reports `overrideable` and `overridden` metadata. To accept a failed OS check, repeat validation with the requested check id and an authenticated `context.requested_by`:
+
+```python
+report = backup.validate_restore(
+    backup_ref=backup_ref,
+    destination=destination,
+    restore_mode="full",
+    overrides=["target.os"],
+    context={
+        "source_module": "backups",
+        "source_action": "restore.validate",
+        "requested_by": username,
+    },
+)
+
+audit_id = report["accepted_overrides"]["target.os"]
+```
+
+Core persists the accepted decision beneath its protected server-backup state. The audit record includes the accepting user, UTC timestamp, backup reference, restore mode, failed check id, original failure status/detail, source context and a fingerprint binding the decision to that exact validation condition.
+
+The destructive restore must send the returned audit token:
+
+```python
+result = backup.restore_backup(
+    backup_ref=backup_ref,
+    destination=destination,
+    restore_mode="full",
+    overrides={"target.os": audit_id},
+    context={
+        "source_module": "backups",
+        "source_action": "restore.execute",
+        "requested_by": username,
+    },
+)
+```
+
+`restore_backup()` reruns target preflight before destructive mutation. An override is honoured only when the persisted audit record still matches the same backup reference, restore mode, check id and original failed detail. Stale/mismatched tokens are rejected. A restore with any remaining non-overridden target failure is blocked before Tactical services are stopped or the live tree is moved.
+
+### Tactical native archive creation
+
+Core now validates the exact `rmm-backup-*.tar` emitted by Tactical `backup.sh` immediately after creation and before SHA-256 calculation, recovery-bundle finalisation or destination upload. A failed native validation fails the backup job and the invalid native TAR is removed.
+
+Tactical `backup.sh` v34 still uses `sudo` for a small fixed set of root-owned backup sources but does not fail closed when those commands fail. Core therefore supplies a narrow compatibility shim only while the Tactical backup is running. The shim can request only fixed collection operations for nginx configuration, Tactical systemd units, `/etc/conf.d`, optional `/etc/letsencrypt` and optional `/opt/tactical`. The privileged helper independently binds every request to the active opaque `create_backup` job and its job-owned Tactical temporary workspace. No caller-provided shell command, executable, arbitrary source path or arbitrary destination path is accepted.

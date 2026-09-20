@@ -36,6 +36,7 @@ LEGACY_ARCHIVE_RE = re.compile(r"^rmm-backup-[A-Za-z0-9_.-]+\.tar$")
 BUNDLE_RE = re.compile(r"^tec-tac-backup-[A-Za-z0-9_.-]+\.tgz$")
 ARCHIVE_RE = BUNDLE_RE
 ALLOWED_ACTIONS = {"create_backup", "list_backups", "restore_backup", "apply_retention", "validate_destination", "validate_restore", "store_secret", "delete_secret"}
+OVERRIDEABLE_RESTORE_CHECKS = {"target.os"}
 BACKUP_CLASSES = {"daily", "weekly", "monthly", "manual"}
 DEST_TYPES = {"local", "sftp", "ftp", "scp", "webdav", "s3"}
 SAFE_DEST_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
@@ -123,6 +124,7 @@ def roots(config=None):
         "staging": state / "staging",
         "secrets": state / "secrets",
         "pre_restore": state / "pre-restore",
+        "overrides": state / "restore-overrides",
         "lock": state / "server-backup.lock",
     }
 
@@ -164,12 +166,31 @@ def load_job(job_id, config=None):
             raise SystemExit("invalid validate_destination request schema")
     if job.get("action") == "validate_restore":
         request = job["request"]
-        if set(request) != {"backup_ref", "destination", "restore_mode"}:
+        if set(request) == {"backup_ref", "destination", "restore_mode"}:
+            request["overrides"] = []
+        if set(request) != {"backup_ref", "destination", "restore_mode", "overrides"}:
             raise SystemExit("invalid validate_restore request schema")
         if request.get("destination") is not None and not isinstance(request.get("destination"), dict):
             raise SystemExit("invalid validate_restore destination schema")
         if str(request.get("restore_mode") or "").strip().lower() not in {"full", "tactical", "tec_tac"}:
             raise SystemExit("invalid validate_restore mode")
+        overrides = request.get("overrides")
+        if not isinstance(overrides, list) or any(not isinstance(item, str) for item in overrides):
+            raise SystemExit("invalid validate_restore overrides schema")
+    if job.get("action") == "restore_backup":
+        request = job["request"]
+        if set(request) == {"backup_ref", "destination", "restore_mode"}:
+            request["overrides"] = {}
+        allowed = {"backup_ref", "destination", "restore_mode", "overrides"}
+        if set(request) != allowed:
+            raise SystemExit("invalid restore_backup request schema")
+        if request.get("destination") is not None and not isinstance(request.get("destination"), dict):
+            raise SystemExit("invalid restore_backup destination schema")
+        if str(request.get("restore_mode") or "").strip().lower() not in {"full", "tactical", "tec_tac"}:
+            raise SystemExit("invalid restore_backup mode")
+        overrides = request.get("overrides")
+        if not isinstance(overrides, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in overrides.items()):
+            raise SystemExit("invalid restore_backup overrides schema")
     return path, job
 
 
@@ -185,7 +206,7 @@ def validate_job_file(path: Path, config):
 def ensure_runtime_dirs(config):
     rs = roots(config)
     _, gid, _, _ = tactical_identity(config)
-    for key in ("state", "jobs", "logs", "staging", "pre_restore"):
+    for key in ("state", "jobs", "logs", "staging", "pre_restore", "overrides"):
         path = rs[key]
         path.mkdir(parents=True, exist_ok=True)
         os.chown(path, 0, gid)
@@ -958,18 +979,58 @@ def create_tec_tac_component(config, output: Path):
     }
 
 
-def create_tactical_component(config, log):
+def create_tactical_component(config, log, job_id):
     tactical_root = Path(config["TACTICAL_ROOT"])
     script = tactical_root / "backup.sh"
     ensure_regular(script)
     backup_root = Path("/rmmbackups")
     backup_root.mkdir(parents=True, exist_ok=True)
+    uid, gid, user, home = tactical_identity(config)
+    try:
+        os.chown(backup_root, uid, gid)
+    except PermissionError:
+        pass
     before = {p.name: p.stat().st_mtime_ns for p in backup_root.glob("rmm-backup-*.tar") if p.is_file()}
-    _, _, user, home = tactical_identity(config)
+
+    # Tactical backup.sh v34 still invokes sudo for a small set of root-owned
+    # files but does not fail closed if those sudo calls fail. Core supplies a
+    # narrow sudo shim which can request only those fixed collection operations
+    # through this helper. The Tactical-generated temporary workspace is bound
+    # to this opaque create_backup job and no caller-selected source path or
+    # command is ever accepted by the privileged helper.
+    rs = roots(config)
+    tmp_parent = rs["staging"] / f"tactical-native-{job_id}"
+    shutil.rmtree(tmp_parent, ignore_errors=True)
+    tmp_parent.mkdir(parents=True, exist_ok=True)
+    os.chown(tmp_parent, uid, gid)
+    os.chmod(tmp_parent, 0o700)
+    shim_dir = Path("/usr/local/lib/tec-tac-backup")
+    sudo_shim = shim_dir / "sudo"
+    ensure_regular(sudo_shim)
+
+    mesh_config = Path("/meshcentral/meshcentral-data/config.json")
+    if mesh_config.is_file():
+        try:
+            mesh_text = mesh_config.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            mesh_text = ""
+        if "postgres" in mesh_text and shutil.which("jq") is None:
+            raise RuntimeError("Tactical backup requires jq for MeshCentral PostgreSQL backup; install jq before running Core backup")
+
     env = os.environ.copy()
-    env.update({"HOME": home, "USER": user, "LOGNAME": user, "GROUP": grp.getgrgid(tactical_identity(config)[1]).gr_name})
-    log.write(f"[TEC-TAC-BACKUP] running Tactical backup as {user}\n")
-    run_logged([str(script)], log, env=env, cwd=str(tactical_root), timeout=6 * 60 * 60, user=user)
+    env.update({
+        "HOME": home, "USER": user, "LOGNAME": user,
+        "GROUP": grp.getgrgid(gid).gr_name,
+        "TMPDIR": str(tmp_parent),
+        "TEC_TAC_BACKUP_JOB_ID": str(job_id),
+        "PATH": str(shim_dir) + os.pathsep + env.get("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"),
+    })
+    log.write(f"[TEC-TAC-BACKUP] running Tactical backup as {user} with Core narrow privilege bridge\n")
+    try:
+        run_logged([str(script)], log, env=env, cwd=str(tactical_root), timeout=6 * 60 * 60, user=user)
+    finally:
+        shutil.rmtree(tmp_parent, ignore_errors=True)
+
     candidates = []
     for path in backup_root.glob("rmm-backup-*.tar"):
         if not path.is_file() or path.is_symlink():
@@ -981,6 +1042,14 @@ def create_tactical_component(config, log):
         raise RuntimeError("Tactical backup completed without a detectable new /rmmbackups/rmm-backup-*.tar archive")
     archive = max(candidates, key=lambda p: p.stat().st_mtime_ns)
     ensure_regular(archive, max_bytes=max_backup_bytes(config))
+    try:
+        # Mandatory trust boundary: never hash, bundle or upload a native
+        # Tactical archive until the exact artifact produced by backup.sh has
+        # passed restore-readiness validation.
+        validate_tactical_native_archive(archive)
+    except Exception:
+        archive.unlink(missing_ok=True)
+        raise
     digest = sha256_file(archive)
     return archive, {
         "included": True,
@@ -1074,7 +1143,7 @@ def operation_create_backup(config, job, log):
             temp=Path(td)
             tactical_archive=tactical_meta=None
             if include_tactical:
-                tactical_archive,tactical_meta=create_tactical_component(config,log)
+                tactical_archive,tactical_meta=create_tactical_component(config,log,job["id"])
             tec_archive=tec_meta=None
             if include_tec_tac:
                 tec_archive=temp/"tec-tac-backup.tar.gz"
@@ -1593,7 +1662,11 @@ def _vr_check(report, section, check_id, label, status, detail=""):
     if status not in VALIDATE_RESTORE_STATUSES:
         status = "failed"
     sec = report["sections"][section]
-    sec["checks"].append({"id": check_id, "label": label, "status": status, "detail": str(detail or "")})
+    sec["checks"].append({
+        "id": check_id, "label": label, "status": status, "detail": str(detail or ""),
+        "overrideable": bool(check_id in OVERRIDEABLE_RESTORE_CHECKS and section == "target"),
+        "overridden": False,
+    })
     ranks = {"failed": 5, "warning": 4, "passed": 3, "not_run": 2, "not_applicable": 1}
     current = sec.get("status", "not_run")
     if ranks[status] > ranks.get(current, 0):
@@ -1645,10 +1718,12 @@ def _os_release():
     return values
 
 
-def validate_target_preflight(config, report, mode, staged_bytes):
+def validate_target_preflight(config, report, mode, staged_bytes, *, mutation_lock_held=False):
     target = report["sections"]["target"]
     target["status"] = "passed"
-    if _mutation_active(config):
+    if mutation_lock_held:
+        _vr_check(report, "target", "target.mutation_lock", "Backup/restore mutation", "passed", "This restore job owns the Core mutation lock.")
+    elif _mutation_active(config):
         _vr_check(report, "target", "target.mutation_lock", "Backup/restore mutation", "failed", "another Core server backup/restore mutation is active")
     else:
         _vr_check(report, "target", "target.mutation_lock", "Backup/restore mutation", "passed", "No destructive backup/restore mutation is active.")
@@ -1712,6 +1787,143 @@ def validate_target_preflight(config, report, mode, staged_bytes):
         tactical_root = Path(config["TACTICAL_ROOT"])
         healthy = (tactical_root / "api" / "tacticalrmm").exists()
         _vr_check(report, "target", "target.tactical_present", "Existing Tactical installation", "passed" if healthy else "failed", str(tactical_root))
+
+
+def _find_vr_check(report, check_id):
+    for section_name, section in (report.get("sections") or {}).items():
+        for check in section.get("checks") or []:
+            if check.get("id") == check_id:
+                return section_name, check
+    return None, None
+
+
+def _recompute_vr_section(report, section_name):
+    section = report["sections"][section_name]
+    checks = section.get("checks") or []
+    if not checks:
+        section["status"] = "not_run"
+        return
+    effective = []
+    for check in checks:
+        status = check.get("status")
+        if status == "failed" and check.get("overridden"):
+            status = "warning"
+        effective.append(status)
+    if "failed" in effective:
+        section["status"] = "failed"
+    elif "warning" in effective:
+        section["status"] = "warning"
+    elif "passed" in effective:
+        section["status"] = "passed"
+    elif "not_run" in effective:
+        section["status"] = "not_run"
+    else:
+        section["status"] = "not_applicable"
+
+
+def _override_fingerprint(backup_ref, restore_mode, check_id, detail):
+    payload = {
+        "backup_ref": str(backup_ref or ""),
+        "restore_mode": str(restore_mode or ""),
+        "check_id": str(check_id or ""),
+        "original_detail": str(detail or ""),
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _persist_restore_override(config, job, report, check_id, check):
+    requested_by = str((job.get("context") or {}).get("requested_by") or "").strip()
+    if not requested_by:
+        raise RuntimeError("restore override acceptance requires context.requested_by for audit")
+    audit_id = str(uuid.uuid4())
+    record = {
+        "id": audit_id,
+        "accepted_by": requested_by,
+        "accepted_at": now(),
+        "backup_ref": str(report.get("backup_ref") or ""),
+        "restore_mode": str(report.get("restore_mode") or ""),
+        "check_id": check_id,
+        "original_status": "failed",
+        "original_detail": str(check.get("detail") or ""),
+        "fingerprint": _override_fingerprint(report.get("backup_ref"), report.get("restore_mode"), check_id, check.get("detail")),
+        "validation_job_id": str(job.get("id") or ""),
+        "source_module": (job.get("context") or {}).get("source_module"),
+        "source_action": (job.get("context") or {}).get("source_action"),
+        "source_run_id": (job.get("context") or {}).get("source_run_id"),
+    }
+    target = roots(config)["overrides"] / f"{audit_id}.json"
+    atomic_json(target, record, mode=0o640)
+    _, gid, _, _ = tactical_identity(config)
+    os.chown(target, 0, gid)
+    return record
+
+
+def _accept_validation_overrides(config, job, report, requested):
+    accepted = {}
+    for check_id in requested:
+        if check_id not in OVERRIDEABLE_RESTORE_CHECKS:
+            raise RuntimeError(f"restore check is not overrideable: {check_id}")
+        section_name, check = _find_vr_check(report, check_id)
+        if section_name != "target" or check is None:
+            raise RuntimeError(f"restore override check was not produced by validation: {check_id}")
+        if check.get("status") != "failed":
+            raise RuntimeError(f"restore override may only be accepted for a failed check: {check_id}")
+        record = _persist_restore_override(config, job, report, check_id, check)
+        check["overridden"] = True
+        check["override_audit_id"] = record["id"]
+        accepted[check_id] = record["id"]
+        detail = str(check.get("detail") or "")
+        try:
+            report["errors"].remove(detail)
+        except ValueError:
+            pass
+        report["warnings"].append(f"{check_id} failed but was explicitly overridden by {record['accepted_by']} (audit {record['id']})")
+        _recompute_vr_section(report, section_name)
+    report["accepted_overrides"] = accepted
+    return accepted
+
+
+def _authorize_restore_overrides(config, report, supplied):
+    authorized = {}
+    for check_id, audit_id in supplied.items():
+        if check_id not in OVERRIDEABLE_RESTORE_CHECKS:
+            raise RuntimeError(f"restore check is not overrideable: {check_id}")
+        try:
+            uuid.UUID(str(audit_id))
+        except ValueError as exc:
+            raise RuntimeError(f"invalid restore override audit id for {check_id}") from exc
+        section_name, check = _find_vr_check(report, check_id)
+        if section_name != "target" or check is None or check.get("status") != "failed":
+            raise RuntimeError(f"restore override does not match a current failed check: {check_id}")
+        path = roots(config)["overrides"] / f"{audit_id}.json"
+        if not path.is_file():
+            raise RuntimeError(f"restore override audit record was not found: {check_id}")
+        record = json.loads(path.read_text(encoding="utf-8"))
+        expected = _override_fingerprint(report.get("backup_ref"), report.get("restore_mode"), check_id, check.get("detail"))
+        if record.get("fingerprint") != expected:
+            raise RuntimeError(f"restore override is stale or belongs to a different backup/mode/check: {check_id}")
+        if record.get("backup_ref") != report.get("backup_ref") or record.get("restore_mode") != report.get("restore_mode") or record.get("check_id") != check_id:
+            raise RuntimeError(f"restore override audit binding mismatch: {check_id}")
+        check["overridden"] = True
+        check["override_audit_id"] = str(audit_id)
+        authorized[check_id] = str(audit_id)
+        detail = str(check.get("detail") or "")
+        try:
+            report["errors"].remove(detail)
+        except ValueError:
+            pass
+        report["warnings"].append(f"{check_id} failed but authorized override audit {audit_id} is being honoured for restore execution")
+        _recompute_vr_section(report, section_name)
+    report["accepted_overrides"] = authorized
+    return authorized
+
+
+def _target_effectively_ready(report):
+    for check in report["sections"]["target"].get("checks") or []:
+        if check.get("status") == "failed" and not check.get("overridden"):
+            return False
+    return True
 
 
 def operation_validate_restore(config, job, log):
@@ -1802,7 +2014,12 @@ def operation_validate_restore(config, job, log):
         artifact_sections = ["bundle"] + (["tactical"] if mode in {"full", "tactical"} else []) + (["tec_tac"] if mode in {"full", "tec_tac"} else [])
         report["artifact_valid"] = all(report["sections"][name]["status"] not in {"failed", "not_run"} for name in artifact_sections)
         validate_target_preflight(config, report, mode, report["staged_bytes"])
-        report["target_ready"] = report["sections"]["target"]["status"] != "failed"
+        requested_overrides = request.get("overrides") or []
+        if requested_overrides:
+            _accept_validation_overrides(config, job, report, requested_overrides)
+        else:
+            report["accepted_overrides"] = {}
+        report["target_ready"] = _target_effectively_ready(report)
         report["ok"] = bool(report["artifact_valid"] and report["target_ready"])
         report["validated_at"] = now()
         log.write(f"[TEC-TAC-BACKUP] non-destructive restore validation completed mode={mode} artifact_valid={report['artifact_valid']} target_ready={report['target_ready']}\n")
@@ -1847,6 +2064,26 @@ def operation_restore_backup(config, job, log):
         else:
             manifest,extracted=validate_recovery_bundle(downloaded,mode,stage)
 
+        # Destructive restore must enforce the same target-readiness policy as
+        # non-destructive validation. A persisted override token can waive only
+        # a specifically allow-listed target check; artifact validation above is
+        # never overrideable.
+        preflight = _vr_new(request, name)
+        preflight["artifact_valid"] = True
+        preflight["staged_bytes"] = downloaded.stat().st_size
+        validate_target_preflight(config, preflight, mode, preflight["staged_bytes"], mutation_lock_held=True)
+        supplied_overrides = request.get("overrides") or {}
+        if supplied_overrides:
+            _authorize_restore_overrides(config, preflight, supplied_overrides)
+        else:
+            preflight["accepted_overrides"] = {}
+        preflight["target_ready"] = _target_effectively_ready(preflight)
+        preflight["ok"] = bool(preflight["artifact_valid"] and preflight["target_ready"])
+        if not preflight["target_ready"]:
+            raise OperationFailed("Restore target preflight failed; resolve or explicitly override eligible checks before destructive restore.", result=preflight)
+        job["restore_preflight"] = preflight
+        atomic_json(job_path(job["id"],config),job)
+
         job["stage"]="restore-prepared"; atomic_json(job_path(job["id"],config),job)
         moved_root=None
         if mode in {"full","tactical"}:
@@ -1876,6 +2113,7 @@ def operation_restore_backup(config, job, log):
             "ok":True,"backup_ref":request.get("backup_ref"),"archive_name":name,"restore_mode":mode,
             "format_version":int(manifest.get("format_version") or 1),
             "pre_restore_tactical_path":str(moved_root) if moved_root else None,
+            "accepted_overrides":dict((job.get("restore_preflight") or {}).get("accepted_overrides") or {}),
             "completed_at":now(),
         }
     finally:
@@ -2381,6 +2619,107 @@ def run_job(job_id):
 
 
 
+def _validate_tactical_workspace(config, job_id, workspace):
+    rs = roots(config)
+    expected_parent = (rs["staging"] / f"tactical-native-{job_id}").resolve()
+    path = Path(workspace)
+    if path.is_symlink() or not path.is_dir():
+        raise SystemExit("invalid Tactical backup privileged workspace")
+    resolved = path.resolve()
+    if resolved.parent != expected_parent or not resolved.name.startswith("tacticalrmm-"):
+        raise SystemExit("Tactical backup privileged workspace is outside the active job staging root")
+    uid, _, _, _ = tactical_identity(config)
+    if path.stat().st_uid != uid:
+        raise SystemExit("Tactical backup privileged workspace is not owned by the Tactical service user")
+    return path
+
+
+def _open_workspace_dir(workspace: Path, relative):
+    parts = [part for part in PurePosixPath(relative).parts if part not in {"", "."}]
+    fd = os.open(workspace, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for part in parts:
+            if part in {".."}:
+                raise SystemExit("unsafe Tactical backup workspace path")
+            nxt = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = nxt
+        return fd
+    except Exception:
+        try: os.close(fd)
+        except Exception: pass
+        raise
+
+
+def _write_workspace_file(workspace: Path, relative_dir, filename, source: Path):
+    dirfd = _open_workspace_dir(workspace, relative_dir)
+    try:
+        outfd = os.open(filename, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600, dir_fd=dirfd)
+        try:
+            with source.open("rb") as src, os.fdopen(outfd, "wb", closefd=False) as out:
+                shutil.copyfileobj(src, out, length=1024 * 1024)
+            os.fchmod(outfd, 0o600)
+        finally:
+            os.close(outfd)
+    finally:
+        os.close(dirfd)
+
+
+def _archive_fixed_tree(source: Path):
+    fd, tmp_name = tempfile.mkstemp(prefix="tectac-priv-", suffix=".tar.gz")
+    os.close(fd)
+    tmp = Path(tmp_name)
+    try:
+        subprocess.run(["/usr/bin/tar", "-czf", str(tmp), "-C", str(source), "."], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=1800)
+        return tmp
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def tactical_privileged(job_id, operation, workspace):
+    config = load_config()
+    path, job = load_job(job_id, config)
+    validate_job_file(path, config)
+    if job.get("action") != "create_backup" or job.get("status") != "running":
+        raise SystemExit("Tactical privileged collection is only available to an active create_backup job")
+    ws = _validate_tactical_workspace(config, job_id, workspace)
+    nginx = {
+        "nginx-rmm": Path("/etc/nginx/sites-enabled/rmm.conf"),
+        "nginx-frontend": Path("/etc/nginx/sites-enabled/frontend.conf"),
+        "nginx-meshcentral": Path("/etc/nginx/sites-enabled/meshcentral.conf"),
+    }
+    if operation in nginx:
+        src = nginx[operation]; ensure_regular(src)
+        _write_workspace_file(ws, "nginx", src.name, src)
+        return
+    if operation == "systemd":
+        names = ["rmm.service", "celery.service", "celerybeat.service", "meshcentral.service", "nats.service", "nats-api.service"]
+        daphne = Path("/etc/systemd/system/daphne.service")
+        uvicorn = Path("/etc/systemd/system/uvicorn.service")
+        names.append("daphne.service" if daphne.is_file() else "uvicorn.service")
+        for name in names:
+            src = Path("/etc/systemd/system") / name; ensure_regular(src)
+            _write_workspace_file(ws, "systemd", name, src)
+        return
+    trees = {
+        "confd": (Path("/etc/conf.d"), "confd", "etc-confd.tar.gz"),
+        "letsencrypt": (Path("/etc/letsencrypt"), "certs", "etc-letsencrypt.tar.gz"),
+        "opt-tactical": (Path("/opt/tactical"), "opt", "opt-tactical.tar.gz"),
+    }
+    if operation in trees:
+        source, rel, filename = trees[operation]
+        if not source.is_dir() or source.is_symlink():
+            raise SystemExit(f"required privileged Tactical backup source is unavailable: {source}")
+        tmp = _archive_fixed_tree(source)
+        try:
+            _write_workspace_file(ws, rel, filename, tmp)
+        finally:
+            tmp.unlink(missing_ok=True)
+        return
+    raise SystemExit("unsupported Tactical backup privileged operation")
+
+
 def require_root_owned(path: Path):
     target = path.resolve()
     st = target.stat()
@@ -2391,8 +2730,14 @@ def main(argv):
     if os.geteuid() != 0:
         raise SystemExit("tec-tac-server-backup must run as root")
     require_root_owned(SELF)
+    if len(argv) == 5 and argv[1] == "--tactical-privileged":
+        job_id, operation, workspace = argv[2], argv[3], argv[4]
+        if not JOB_RE.fullmatch(job_id):
+            raise SystemExit("invalid job id")
+        tactical_privileged(job_id, operation, workspace)
+        return
     if len(argv) != 3 or argv[1] not in {"--dispatch", "--run"}:
-        raise SystemExit("usage: tec-tac-server-backup --dispatch <uuid> | --run <uuid>")
+        raise SystemExit("usage: tec-tac-server-backup --dispatch <uuid> | --run <uuid> | --tactical-privileged <uuid> <operation> <workspace>")
     job_id = argv[2]
     if not JOB_RE.fullmatch(job_id):
         raise SystemExit("invalid job id")

@@ -456,9 +456,9 @@ SERVER_BACKUP_HELPER="/usr/local/sbin/tec-tac-server-backup"
 SERVER_BACKUP_LIB="/usr/local/lib/tec-tac-backup"
 SERVER_BACKUP_SUDOERS="/etc/sudoers.d/tec-tac-server-backup"
 
-mkdir -p "${SERVER_BACKUP_ROOT}/jobs" "${SERVER_BACKUP_ROOT}/logs" "${SERVER_BACKUP_ROOT}/staging" "${SERVER_BACKUP_ROOT}/pre-restore" "${SERVER_BACKUP_ROOT}/secrets"
-chown root:"${TACTICAL_GROUP}" "${SERVER_BACKUP_ROOT}" "${SERVER_BACKUP_ROOT}/jobs" "${SERVER_BACKUP_ROOT}/logs" "${SERVER_BACKUP_ROOT}/staging" "${SERVER_BACKUP_ROOT}/pre-restore"
-chmod 2750 "${SERVER_BACKUP_ROOT}" "${SERVER_BACKUP_ROOT}/logs" "${SERVER_BACKUP_ROOT}/staging" "${SERVER_BACKUP_ROOT}/pre-restore"
+mkdir -p "${SERVER_BACKUP_ROOT}/jobs" "${SERVER_BACKUP_ROOT}/logs" "${SERVER_BACKUP_ROOT}/staging" "${SERVER_BACKUP_ROOT}/pre-restore" "${SERVER_BACKUP_ROOT}/restore-overrides" "${SERVER_BACKUP_ROOT}/secrets"
+chown root:"${TACTICAL_GROUP}" "${SERVER_BACKUP_ROOT}" "${SERVER_BACKUP_ROOT}/jobs" "${SERVER_BACKUP_ROOT}/logs" "${SERVER_BACKUP_ROOT}/staging" "${SERVER_BACKUP_ROOT}/pre-restore" "${SERVER_BACKUP_ROOT}/restore-overrides"
+chmod 2750 "${SERVER_BACKUP_ROOT}" "${SERVER_BACKUP_ROOT}/logs" "${SERVER_BACKUP_ROOT}/staging" "${SERVER_BACKUP_ROOT}/pre-restore" "${SERVER_BACKUP_ROOT}/restore-overrides"
 chmod 2770 "${SERVER_BACKUP_ROOT}/jobs"
 chown root:root "${SERVER_BACKUP_ROOT}/secrets"
 chmod 0700 "${SERVER_BACKUP_ROOT}/secrets"
@@ -466,10 +466,12 @@ run_as_tactical test -w "${SERVER_BACKUP_ROOT}/jobs" || fail "Tactical service u
 
 mkdir -p "${SERVER_BACKUP_LIB}"
 install -o root -g root -m 0755 "${REPO_ROOT}/scripts/server-backup-helper.py" "${SERVER_BACKUP_LIB}/server-backup-helper.py"
+install -o root -g root -m 0755 "${REPO_ROOT}/scripts/tactical-backup-sudo.py" "${SERVER_BACKUP_LIB}/sudo"
 ln -sfn "${SERVER_BACKUP_LIB}/server-backup-helper.py" "${SERVER_BACKUP_HELPER}"
 chown -h root:root "${SERVER_BACKUP_HELPER}"
 cat > "${SERVER_BACKUP_SUDOERS}" <<EOF
 ${TACTICAL_USER} ALL=(root) NOPASSWD: ${SERVER_BACKUP_HELPER} --dispatch *
+${TACTICAL_USER} ALL=(root) NOPASSWD: ${SERVER_BACKUP_HELPER} --tactical-privileged *
 EOF
 chown root:root "${SERVER_BACKUP_SUDOERS}"
 chmod 0440 "${SERVER_BACKUP_SUDOERS}"
@@ -479,7 +481,7 @@ fi
 log "Installed privileged Core server-backup helper: ${SERVER_BACKUP_HELPER}"
 
 log "Verifying Core server-backup capability registration."
-VERIFY_SERVER_BACKUP_CODE="from tec_tac.capabilities import capability_status,get_capability; s=capability_status('core.server_backup',version='>=1,<2'); assert s['available'], s; p=get_capability('core.server_backup',version='>=1,<2'); assert all(hasattr(p,n) for n in ('create_backup','list_backups','restore_backup','apply_retention','store_secret','delete_secret')); print('TEC-TAC core.server_backup OK:', s['capability_version'], s['operations'])"
+VERIFY_SERVER_BACKUP_CODE="from tec_tac.capabilities import capability_status,get_capability; s=capability_status('core.server_backup',version='>=1,<2'); assert s['available'], s; p=get_capability('core.server_backup',version='>=1,<2'); assert all(hasattr(p,n) for n in ('create_backup','list_backups','restore_backup','validate_restore','apply_retention','store_secret','delete_secret')); print('TEC-TAC core.server_backup OK:', s['capability_version'], s['operations'])"
 if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_SERVER_BACKUP_CODE}\""; then
     fail "Core server-backup capability verification failed or timed out."
 fi
