@@ -27,6 +27,8 @@ def load_layout(path: str | os.PathLike | None = None) -> dict[str, str]:
         "TEC_TAC_STATE_ROOT": "/var/lib/tec-tac",
         "TEC_TAC_MODULE_STATE_ROOT": "/var/lib/tec-tac/module-manager",
         "TEC_TAC_SYSTEM_UPDATE_ROOT": "/var/lib/tec-tac/system-updates",
+        "TEC_TAC_SERVER_BACKUP_ROOT": "/var/lib/tec-tac/server-backup",
+        "TEC_TAC_SERVER_BACKUP_LOCAL_ROOTS": "/rmmbackups,/mnt,/media,/srv,/backup,/backups",
         "TEC_TAC_UI_DEPLOY_ROOT": "/var/lib/tec-tac/ui/tec-tac",
         "TACTICAL_ROOT": "/rmm",
         "TACTICAL_BACKEND_ROOT": "/rmm/api/tacticalrmm",

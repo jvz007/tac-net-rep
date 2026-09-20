@@ -8,6 +8,12 @@ class TecTacFrameworkConfig(AppConfig):
     verbose_name = "Tec-Tac Framework"
 
     def ready(self):
+        # Framework-owned privileged capabilities are registered before module
+        # AppConfig.ready() consumers resolve them. The provider exposes only
+        # typed operations; privileged execution remains in the root helper.
+        from .server_backup import register_core_server_backup_capability
+        register_core_server_backup_capability()
+
         # Register framework-owned API routes in memory. This deliberately
         # avoids editing Tactical's tracked tacticalrmm/urls.py file.
         from tacticalrmm import urls as tactical_urls

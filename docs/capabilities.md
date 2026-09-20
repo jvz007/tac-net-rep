@@ -255,3 +255,8 @@ Inside the Tec-Tac Django/Celery backend, use Python imports from `tec_tac.capab
 
 Framework 1.10.0 includes registered capabilities in the Developer Contract catalog and its Markdown/Text exports. This is intended for module developers and coding agents; it does not expose provider-private implementation objects. See `docs/developer-contracts.md`.
 
+
+
+## Framework-owned Core capabilities
+
+Capability providers may also be owned directly by Tec-Tac Core rather than an installed extension. Core-owned IDs use the `core.` namespace and are always resolved against the framework runtime rather than Module Manager installed/enabled state. The first privileged Core provider is `core.server_backup` `1.x`; see `docs/server-backup-capability.md`.

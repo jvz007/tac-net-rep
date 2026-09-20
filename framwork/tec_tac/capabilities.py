@@ -185,7 +185,7 @@ def _registration(capability_id: str) -> CapabilityRegistration | None:
 
 def _provider_module_status(module_id: str) -> tuple[str, str | None, str | None]:
     """Return (state, installed_version, reason) for a provider module."""
-    if module_id == "tec-tac":
+    if module_id in {"tec-tac", "core"}:
         return "available", None, None
     try:
         plugin = get_plugin(module_id, "extension")
