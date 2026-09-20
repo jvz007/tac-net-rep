@@ -811,7 +811,7 @@ def _queue_v2(payload: dict) -> dict:
     return public_job(job)
 
 
-def queue_v2_install(upload_id: str, requested_order=None) -> dict:
+def queue_v2_install(upload_id: str, requested_order=None, requested_by: str | None = None) -> dict:
     # Individual v1-staged package.
     try:
         meta = _load_stage(upload_id)
@@ -848,10 +848,11 @@ def queue_v2_install(upload_id: str, requested_order=None) -> dict:
                     "source": source,
                 }],
                 "plan": {**plan, "actions": [action]},
+                "requested_by": str(requested_by) if requested_by else None,
             })
         # Local/offline single-package deployment keeps using the proven v1 worker.
         from .module_manager import queue_install
-        return queue_install(upload_id, replace=replace)
+        return queue_install(upload_id, replace=replace, requested_by=requested_by)
 
     # Bundle staging.
     bundle = _load_bundle(upload_id)
@@ -867,10 +868,11 @@ def queue_v2_install(upload_id: str, requested_order=None) -> dict:
         "bundle_path": bundle["bundle_path"],
         "plan": plan,
         "bundle": fresh_preview,
+        "requested_by": str(requested_by) if requested_by else None,
     })
 
 
-def queue_batch_install(batch_id: str, requested_order=None) -> dict:
+def queue_batch_install(batch_id: str, requested_order=None, requested_by: str | None = None) -> dict:
     batch = _load_batch(batch_id)
     package_paths = []
     candidates = []
@@ -890,6 +892,7 @@ def queue_batch_install(batch_id: str, requested_order=None) -> dict:
         "batch_id": batch_id,
         "packages": package_paths,
         "plan": plan,
+        "requested_by": str(requested_by) if requested_by else None,
     })
 
 
@@ -929,7 +932,7 @@ def validate_enable(module_id: str) -> dict:
     return {"valid": not problems, "problems": problems}
 
 
-def queue_set_enabled(module_id: str, enabled: bool, cascade: bool = False) -> dict:
+def queue_set_enabled(module_id: str, enabled: bool, cascade: bool = False, requested_by: str | None = None) -> dict:
     catalog = {item["id"]: item for item in installed_catalog_v2()}
     target = catalog.get(module_id)
     if not target:
@@ -963,10 +966,11 @@ def queue_set_enabled(module_id: str, enabled: bool, cascade: bool = False) -> d
         "enabled": bool(enabled),
         "cascade": bool(cascade),
         "affected_modules": affected,
+        "requested_by": str(requested_by) if requested_by else None,
     })
 
 
-def queue_set_visibility(module_id: str, visible: bool) -> dict:
+def queue_set_visibility(module_id: str, visible: bool, requested_by: str | None = None) -> dict:
     catalog = {item["id"]: item for item in installed_catalog_v2()}
     target = catalog.get(module_id)
     if not target:
@@ -977,6 +981,7 @@ def queue_set_visibility(module_id: str, visible: bool) -> dict:
         "action": "visibility",
         "plugin_id": module_id,
         "visible": bool(visible),
+        "requested_by": str(requested_by) if requested_by else None,
     })
 
 

@@ -6,7 +6,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .module_manager import ModuleManagerError, discard_stage, get_job
+from .module_manager import ModuleManagerError, discard_stage, get_job, list_jobs
 from .module_manager_v2 import (
     LicensingRequirementError,
     ModuleManagerV2Error,
@@ -81,7 +81,7 @@ class ModuleV2InstallView(APIView):
             order = request.data.get("order")
             if order is not None and not isinstance(order, list):
                 return Response({"detail": "order must be an array of module IDs."}, status=400)
-            job = queue_batch_install(str(upload_id), requested_order=order) if kind == "batch" else queue_v2_install(str(upload_id), requested_order=order)
+            job = queue_batch_install(str(upload_id), requested_order=order, requested_by=str(request.user.username)) if kind == "batch" else queue_v2_install(str(upload_id), requested_order=order, requested_by=str(request.user.username))
             return Response(job, status=202)
         except LicensingRequirementError as exc:
             return Response(exc.as_payload(), status=403)
@@ -98,7 +98,7 @@ class ModuleV2StateView(APIView):
         if not isinstance(enabled, bool):
             return Response({"detail": "enabled must be true or false."}, status=400)
         try:
-            return Response(queue_set_enabled(plugin_id, enabled, cascade=cascade), status=202)
+            return Response(queue_set_enabled(plugin_id, enabled, cascade=cascade, requested_by=str(request.user.username)), status=202)
         except (ModuleManagerError, ModuleManagerV2Error) as exc:
             return Response({"detail": str(exc)}, status=400)
 
@@ -111,7 +111,7 @@ class ModuleV2VisibilityView(APIView):
         if not isinstance(visible, bool):
             return Response({"detail": "visible must be true or false."}, status=400)
         try:
-            return Response(queue_set_visibility(plugin_id, visible), status=202)
+            return Response(queue_set_visibility(plugin_id, visible, requested_by=str(request.user.username)), status=202)
         except (ModuleManagerError, ModuleManagerV2Error) as exc:
             return Response({"detail": str(exc)}, status=400)
 
@@ -124,6 +124,19 @@ class ModuleV2RemoveCheckView(APIView):
             return Response(validate_remove(plugin_id))
         except (ModuleManagerError, ModuleManagerV2Error) as exc:
             return Response({"detail": str(exc)}, status=400)
+
+
+class ModuleV2JobHistoryView(APIView):
+    permission_classes = [IsAuthenticated]
+    def get(self, request):
+        _require_module_manager(request.user)
+        raw_limit = request.query_params.get("limit", 200)
+        try:
+            limit = int(raw_limit)
+        except (TypeError, ValueError):
+            return Response({"detail": "limit must be an integer."}, status=400)
+        rows = list_jobs(limit=limit)
+        return Response({"jobs": rows, "count": len(rows)})
 
 
 class ModuleV2JobView(APIView):

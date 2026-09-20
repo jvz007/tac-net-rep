@@ -334,7 +334,7 @@ class ModulePackageInstallView(APIView):
             meta = _load_stage(str(upload_id))
             candidate = _package_metadata(Path(meta["package_path"]))
             _enforce_candidate_licensing(candidate)
-            return Response(queue_install(str(upload_id), replace=replace), status=202)
+            return Response(queue_install(str(upload_id), replace=replace, requested_by=str(request.user.username)), status=202)
         except LicensingRequirementError as exc:
             return Response(exc.as_payload(), status=403)
         except ModuleManagerError as exc:
@@ -348,7 +348,7 @@ class ModuleRemoveView(APIView):
     def post(self, request, plugin_id):
         _require_module_manager(request.user)
         try:
-            return Response(queue_remove(plugin_id), status=202)
+            return Response(queue_remove(plugin_id, requested_by=str(request.user.username)), status=202)
         except ModuleManagerError as exc:
             return Response({"detail": str(exc)}, status=400)
 

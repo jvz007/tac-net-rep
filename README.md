@@ -676,3 +676,8 @@ Extension manifests can require a live entitlement before Module Manager will st
 ```
 
 Core resolves the declared capability and verifies entitlement during inspection and again when installation is requested. A prior successful inspection is never treated as proof of current entitlement. Missing, disabled, unhealthy, incompatible or unregistered providers, invalid provider contracts, provider errors and explicit license denials fail closed with a structured `403` response. The same gate applies to Module Management v2, online repository staging, bundles/batches and the compatibility v1 web install endpoints. See `docs/module-licensing.md`.
+
+
+## Module lifecycle history (1.14.2)
+
+Module Manager exposes `GET /api/tfd/modules/v2/jobs/` to review persistent lifecycle records, including status, action, affected module IDs, requesting user when known, errors and log tails.

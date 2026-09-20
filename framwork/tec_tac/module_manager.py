@@ -429,7 +429,7 @@ def _dispatch(job_id: str) -> None:
         raise ModuleManagerError(f"Unable to dispatch privileged module job: {detail.strip()}") from exc
 
 
-def queue_install(upload_id: str, replace: bool = False) -> dict:
+def queue_install(upload_id: str, replace: bool = False, requested_by: str | None = None) -> dict:
     meta = _load_stage(upload_id)
     preview = inspect_archive(Path(meta["package_path"]))
     if not preview.get("installable", False):
@@ -446,6 +446,7 @@ def queue_install(upload_id: str, replace: bool = False) -> dict:
         "replace": bool(replace),
         "package_sha256": meta.get("sha256"),
         "package_filename": meta.get("filename"),
+        "requested_by": str(requested_by) if requested_by else None,
     })
     try:
         _dispatch(job["id"])
@@ -460,7 +461,7 @@ def queue_install(upload_id: str, replace: bool = False) -> dict:
     return public_job(job)
 
 
-def queue_remove(plugin_id: str) -> dict:
+def queue_remove(plugin_id: str, requested_by: str | None = None) -> dict:
     if not plugin_id or any(ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for ch in plugin_id):
         raise ModuleManagerError("Invalid module id.")
     installed = {item["id"]: item for item in installed_catalog()}
@@ -473,6 +474,7 @@ def queue_remove(plugin_id: str) -> dict:
         "action": "remove",
         "plugin_id": plugin_id,
         "purge_data": False,
+        "requested_by": str(requested_by) if requested_by else None,
     })
     try:
         _dispatch(job["id"])
@@ -490,7 +492,7 @@ def queue_remove(plugin_id: str) -> dict:
 def public_job(job: dict) -> dict:
     allowed = {
         "id", "status", "created_at", "started_at", "finished_at", "stage", "error", "error_type",
-        "action", "plugin_id", "replace", "purge_data", "package_sha256", "package_filename",
+        "action", "plugin_id", "replace", "purge_data", "package_sha256", "package_filename", "requested_by",
     }
     result = {key: value for key, value in job.items() if key in allowed}
     log_path = LOGS_ROOT / f"{job.get('id')}.log"
@@ -518,3 +520,37 @@ def get_job(job_id: str) -> dict:
     except (OSError, json.JSONDecodeError) as exc:
         raise ModuleManagerError("Module job status is unreadable.") from exc
     return public_job(job)
+
+
+def list_jobs(*, limit: int = 200) -> list[dict]:
+    """Return persistent module lifecycle history, newest first.
+
+    Job JSON files are already the authoritative lifecycle records. History reads
+    those records instead of maintaining a second audit store, so old installs,
+    upgrades, removals and state changes remain visible after the active job UI
+    has gone away.
+    """
+    try:
+        limit = max(1, min(int(limit), 1000))
+    except (TypeError, ValueError):
+        limit = 200
+    if not JOBS_ROOT.is_dir():
+        return []
+    rows = []
+    for path in JOBS_ROOT.glob("*.json"):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                continue
+            row = public_job(payload)
+            actions = ((payload.get("plan") or {}).get("actions") or []) if isinstance(payload.get("plan"), dict) else []
+            module_ids = [str(item.get("id")) for item in actions if isinstance(item, dict) and item.get("id")]
+            if not module_ids and payload.get("plugin_id") and payload.get("plugin_id") != "batch":
+                module_ids = [str(payload.get("plugin_id"))]
+            row["module_ids"] = module_ids
+            row["batch"] = bool(payload.get("action") in {"batch_install", "bundle_install"} or payload.get("plugin_id") == "batch")
+            rows.append(row)
+        except (OSError, json.JSONDecodeError):
+            continue
+    rows.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+    return rows[:limit]
