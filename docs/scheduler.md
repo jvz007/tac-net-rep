@@ -48,10 +48,11 @@ The current framework supports:
 - Daily
 - Weekly
 - Monthly
+- Interval
 
 Each schedule stores an IANA timezone such as `Africa/Johannesburg`.
 
-One-time schedules use `run_at`. Recurring schedules use `run_time`; weekly schedules also use `weekdays` (`0` = Monday through `6` = Sunday), and monthly schedules use `day_of_month`.
+One-time schedules use `run_at`. Calendar-recurring schedules use `run_time`; weekly schedules also use `weekdays` (`0` = Monday through `6` = Sunday), and monthly schedules use `day_of_month`. Interval schedules use `interval_seconds` plus a stable `interval_anchor_at`.
 
 ## Targets
 
@@ -180,3 +181,66 @@ See [`module-scheduling.md`](module-scheduling.md) for the module integration co
 - Framework self-tests cover immediate dispatch, true scheduled execution, deliberate permanent failure and retry/recovery.
 - Permanent failures must not be blindly retried. Module handlers may raise `SchedulerPermanentError` or `SchedulerTransientError`; capability unavailable/version mismatch/disabled and validation-style failures are treated as permanent.
 - A handler must only report success after its owned downstream operation has completed successfully. Transport acknowledgement alone is not business-operation success.
+
+## Interval schedules and backend reconciliation (Framework 1.15.14)
+
+Framework 1.15.14 adds the `interval` schedule type for recurring module policy work such as Checks.
+
+An interval schedule stores:
+
+- `interval_seconds` — integer interval, minimum `60` seconds;
+- `interval_anchor_at` — stable UTC-capable anchor used to derive every occurrence.
+
+The system timer still evaluates schedules once per minute. Sub-60-second intervals are rejected. Interval timing is deterministic and does not drift with handler duration:
+
+```text
+occurrence(N) = interval_anchor_at + N * interval_seconds
+```
+
+`latest_occurrence()` selects the latest occurrence at or before the current scheduler tick. `next_occurrence()` returns the first occurrence at or after the requested point. The normal `last_due_key`, concurrency, missed-run, retry, diagnostics, Celery dispatch and `TecTacScheduleRun` history paths are reused unchanged.
+
+### Module-owned reconciliation
+
+Backend modules that own generated schedules must not import `TecTacSchedule`, write scheduler tables directly, or call the local HTTP API. Use the public Python contract from `tec_tac.scheduler`:
+
+```python
+from tec_tac.scheduler import reconcile_schedule
+
+schedule = reconcile_schedule(
+    owner_module="checks",
+    owner_key=f"provider-check:{check.uuid}",
+    name=f"Check · {check.name}",
+    action_id="checks.provider-run",
+    schedule_type="interval",
+    interval_seconds=300,
+    targets={"type": "none"},
+    parameters={"check_id": str(check.uuid)},
+    enabled=True,
+)
+```
+
+`(owner_module, owner_key)` is unique for non-empty owner keys. Repeating the same reconciliation updates the existing schedule. Changing `interval_seconds` retains the existing interval anchor unless the caller explicitly supplies a new `interval_anchor_at`, preventing timing drift and duplicate schedule creation.
+
+When a generated schedule should be disabled, modules may either reconcile the same definition with `enabled=False`, or use:
+
+```python
+from tec_tac.scheduler import disable_owned_schedule
+
+disable_owned_schedule(
+    owner_module="checks",
+    owner_key=f"provider-check:{check.uuid}",
+)
+```
+
+To remove an owned schedule definition entirely when no run is queued/running:
+
+```python
+from tec_tac.scheduler import remove_owned_schedule
+
+remove_owned_schedule(
+    owner_module="checks",
+    owner_key=f"provider-check:{check.uuid}",
+)
+```
+
+The owning module must match the registered action's `module_id`; a module cannot reconcile another module's scheduled action. These APIs are server-side framework APIs and intentionally do not depend on browser authentication.

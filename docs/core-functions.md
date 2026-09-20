@@ -9,13 +9,16 @@ Use Python framework contracts inside the Tec-Tac/Tactical backend. Use HTTP at 
 ```python
 from tec_tac.scheduler import (
     register_scheduled_action,
+    reconcile_schedule,
+    disable_owned_schedule,
+    remove_owned_schedule,
     get_scheduled_action,
     scheduled_actions,
     SchedulerError,
 )
 ```
 
-Primary module use: `register_scheduled_action(...)` from `AppConfig.ready()`.
+Primary module use: `register_scheduled_action(...)` from `AppConfig.ready()`. Modules that own generated recurring definitions use `reconcile_schedule(...)` with a stable `(owner_module, owner_key)` rather than importing scheduler models directly.
 
 The module defines **what** can run. Tec-Tac Scheduler defines **when** it runs.
 
@@ -107,6 +110,8 @@ Do not POST from one Tec-Tac backend module to another module's localhost API me
 | Need | Supported core function |
 |---|---|
 | Register a schedulable operation | `register_scheduled_action()` |
+| Create/update an owned schedule idempotently | `reconcile_schedule()` |
+| Disable/remove an owned schedule | `disable_owned_schedule()` / `remove_owned_schedule()` |
 | Consume another module's public backend contract | `get_capability()` |
 | Optional capability check | `has_capability()` / `capability_status()` |
 | Register provider contract | `register_capability()` |

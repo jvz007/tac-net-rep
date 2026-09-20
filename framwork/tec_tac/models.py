@@ -4,6 +4,7 @@ import uuid
 
 from django.conf import settings
 from django.db import models
+from django.db.models import Q
 
 
 class TecTacSchedule(models.Model):
@@ -12,6 +13,7 @@ class TecTacSchedule(models.Model):
         DAILY = "daily", "Daily"
         WEEKLY = "weekly", "Weekly"
         MONTHLY = "monthly", "Monthly"
+        INTERVAL = "interval", "Interval"
 
     class TargetMode(models.TextChoices):
         SNAPSHOT = "snapshot", "Snapshot"
@@ -41,6 +43,13 @@ class TecTacSchedule(models.Model):
     run_time = models.TimeField(null=True, blank=True)
     weekdays = models.JSONField(default=list, blank=True)
     day_of_month = models.PositiveSmallIntegerField(null=True, blank=True)
+    interval_seconds = models.PositiveIntegerField(null=True, blank=True)
+    interval_anchor_at = models.DateTimeField(null=True, blank=True)
+
+    # Backend-owned schedules use this stable ownership key for idempotent
+    # reconciliation. User-created schedules leave both fields blank.
+    owner_module = models.CharField(max_length=100, blank=True, default="")
+    owner_key = models.CharField(max_length=255, blank=True, default="")
 
     enabled = models.BooleanField(default=True)
     missed_policy = models.CharField(max_length=24, choices=MissedPolicy.choices, default=MissedPolicy.SKIP)
@@ -61,6 +70,14 @@ class TecTacSchedule(models.Model):
         indexes = [
             models.Index(fields=("enabled", "schedule_type"), name="tectac_sched_enabled_idx"),
             models.Index(fields=("module_id", "action_id"), name="tectac_sched_action_idx"),
+            models.Index(fields=("owner_module", "owner_key"), name="tectac_sched_owner_idx"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=("owner_module", "owner_key"),
+                condition=~Q(owner_key=""),
+                name="tectac_sched_owner_unique",
+            ),
         ]
 
     def __str__(self):

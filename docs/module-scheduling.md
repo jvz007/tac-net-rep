@@ -435,3 +435,45 @@ Framework 1.10.0 includes registered scheduler actions in the Developer Contract
 - Framework self-tests cover immediate dispatch, true scheduled execution, deliberate permanent failure and retry/recovery.
 - Permanent failures must not be blindly retried. Module handlers may raise `SchedulerPermanentError` or `SchedulerTransientError`; capability unavailable/version mismatch/disabled and validation-style failures are treated as permanent.
 - A handler must only report success after its owned downstream operation has completed successfully. Transport acknowledgement alone is not business-operation success.
+
+## 11. Interval policy schedules and reconciliation (Framework 1.15.14)
+
+For module-owned recurring policy work, use the framework `interval` schedule type instead of cron, Celery Beat, a module timer, or direct `TecTacSchedule` model access.
+
+```python
+from tec_tac.scheduler import reconcile_schedule
+
+reconcile_schedule(
+    owner_module="checks",
+    owner_key=f"provider-check:{check.uuid}",
+    action_id="checks.provider-run",
+    schedule_type="interval",
+    interval_seconds=check.effective_interval_seconds,
+    targets={"type": "none"},
+    parameters={"check_id": str(check.uuid)},
+    enabled=check.enabled,
+)
+```
+
+Rules:
+
+- `interval_seconds` must be an integer >= 60;
+- the Core scheduler still ticks once per minute;
+- interval occurrences are derived from a stable `interval_anchor_at`, never from handler completion time;
+- omitted `interval_anchor_at` is created once when the owned interval schedule is first created and is retained on later reconciliations;
+- `(owner_module, owner_key)` is the idempotency identity;
+- the registered action must belong to `owner_module`;
+- `enabled=False` disables an existing owned schedule and does not create a useless disabled row when none exists;
+- `disable_owned_schedule()` and `remove_owned_schedule()` are available for explicit lifecycle operations;
+- Core continues to own missed-run policy, concurrency, retry, diagnostics and run history.
+
+Checks acceptance examples:
+
+```text
+Ping default    -> interval_seconds=300
+TCP default     -> interval_seconds=900
+SNMP default    -> interval_seconds=900
+SNMP override   -> interval_seconds=60
+```
+
+When a check interval changes, reconcile the same `owner_key`; do not create a new schedule. When a definition is disabled, disable its owned schedule. Re-enabling reconciles/re-enables the same schedule. A global check-type default change should trigger reconciliation only for definitions that do not carry an explicit interval override.

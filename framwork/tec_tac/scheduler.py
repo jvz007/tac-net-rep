@@ -133,6 +133,9 @@ def _zone(value: str) -> ZoneInfo:
         raise SchedulerError(f"Unknown timezone: {value}") from exc
 
 
+MIN_INTERVAL_SECONDS = 60
+
+
 def validate_schedule_payload(data: dict, *, partial: bool = False) -> dict:
     if not isinstance(data, dict):
         raise SchedulerError("Schedule payload must be an object.")
@@ -154,7 +157,7 @@ def validate_schedule_payload(data: dict, *, partial: bool = False) -> dict:
     if "schedule_type" in out or not partial:
         schedule_type = str(out.get("schedule_type") or TecTacSchedule.ScheduleType.ONCE)
         if schedule_type not in TecTacSchedule.ScheduleType.values:
-            raise SchedulerError("schedule_type must be once, daily, weekly, or monthly.")
+            raise SchedulerError("schedule_type must be once, daily, weekly, monthly, or interval.")
         out["schedule_type"] = schedule_type
     if "target_mode" in out:
         if out["target_mode"] not in TecTacSchedule.TargetMode.values:
@@ -177,6 +180,17 @@ def validate_schedule_payload(data: dict, *, partial: bool = False) -> dict:
             if value < minimum or value > maximum:
                 raise SchedulerError(f"{key} must be between {minimum} and {maximum}.")
             out[key] = value
+    if "interval_seconds" in out and out["interval_seconds"] not in (None, ""):
+        value = out["interval_seconds"]
+        if isinstance(value, bool):
+            raise SchedulerError("interval_seconds must be an integer >= 60.")
+        try:
+            value = int(value)
+        except (TypeError, ValueError) as exc:
+            raise SchedulerError("interval_seconds must be an integer >= 60.") from exc
+        if value < MIN_INTERVAL_SECONDS:
+            raise SchedulerError(f"interval_seconds must be at least {MIN_INTERVAL_SECONDS}.")
+        out["interval_seconds"] = value
     if "weekdays" in out:
         if not isinstance(out["weekdays"], list) or any(not isinstance(v, int) or v < 0 or v > 6 for v in out["weekdays"]):
             raise SchedulerError("weekdays must be an array of integers 0-6.")
@@ -209,6 +223,16 @@ def latest_occurrence(schedule: TecTacSchedule, now: datetime) -> datetime | Non
     local_now = now.astimezone(tz)
     if schedule.schedule_type == TecTacSchedule.ScheduleType.ONCE:
         return _as_utc(schedule.run_at) if schedule.run_at else None
+    if schedule.schedule_type == TecTacSchedule.ScheduleType.INTERVAL:
+        if not schedule.interval_anchor_at or not schedule.interval_seconds:
+            return None
+        anchor = _as_utc(schedule.interval_anchor_at)
+        seconds = int(schedule.interval_seconds)
+        if seconds < MIN_INTERVAL_SECONDS or now < anchor:
+            return None
+        elapsed = (now - anchor).total_seconds()
+        steps = int(elapsed // seconds)
+        return anchor + timedelta(seconds=steps * seconds)
     if not schedule.run_time:
         return None
     hour, minute = schedule.run_time.hour, schedule.run_time.minute
@@ -253,6 +277,21 @@ def next_occurrence(schedule: TecTacSchedule, after: datetime | None = None) -> 
     if schedule.schedule_type == TecTacSchedule.ScheduleType.ONCE:
         when = _as_utc(schedule.run_at) if schedule.run_at else None
         return when if when and when >= now else None
+    if schedule.schedule_type == TecTacSchedule.ScheduleType.INTERVAL:
+        if not schedule.interval_anchor_at or not schedule.interval_seconds:
+            return None
+        anchor = _as_utc(schedule.interval_anchor_at)
+        seconds = int(schedule.interval_seconds)
+        if seconds < MIN_INTERVAL_SECONDS:
+            return None
+        if now <= anchor:
+            return anchor
+        elapsed = (now - anchor).total_seconds()
+        steps = int(elapsed // seconds)
+        candidate = anchor + timedelta(seconds=steps * seconds)
+        if candidate < now:
+            candidate += timedelta(seconds=seconds)
+        return candidate
     if not schedule.run_time:
         return None
     hour, minute = schedule.run_time.hour, schedule.run_time.minute
@@ -284,13 +323,29 @@ def next_occurrence(schedule: TecTacSchedule, after: datetime | None = None) -> 
     return None
 
 
-def due_key(when: datetime) -> str:
-    return _as_utc(when).replace(second=0, microsecond=0).isoformat()
+def due_key(when: datetime, *, exact: bool = False) -> str:
+    value = _as_utc(when)
+    if not exact:
+        value = value.replace(second=0, microsecond=0)
+    return value.isoformat()
 
 
 def _should_run_occurrence(schedule: TecTacSchedule, occurrence: datetime, now: datetime) -> bool:
-    occurrence = _as_utc(occurrence).replace(second=0, microsecond=0)
-    now_min = _as_utc(now).replace(second=0, microsecond=0)
+    occurrence = _as_utc(occurrence)
+    now_utc = _as_utc(now)
+    if schedule.schedule_type == TecTacSchedule.ScheduleType.INTERVAL:
+        if occurrence > now_utc:
+            return False
+        # The scheduler evaluates once per minute. An interval occurrence that
+        # happened since the preceding minute tick is current, not missed.
+        if (now_utc - occurrence) < timedelta(minutes=1):
+            return True
+        if schedule.missed_policy != TecTacSchedule.MissedPolicy.RUN_ON_RECOVERY:
+            return False
+        grace = int(schedule.missed_grace_minutes or 0)
+        return grace == 0 or (now_utc - occurrence) <= timedelta(minutes=grace)
+    occurrence = occurrence.replace(second=0, microsecond=0)
+    now_min = now_utc.replace(second=0, microsecond=0)
     if occurrence > now_min:
         return False
     if occurrence == now_min:
@@ -398,7 +453,7 @@ def dispatch_due_schedules(now: datetime | None = None) -> dict:
                 occurrence = latest_occurrence(schedule, now)
                 if not occurrence:
                     continue
-                key = due_key(occurrence)
+                key = due_key(occurrence, exact=(schedule.schedule_type == TecTacSchedule.ScheduleType.INTERVAL))
                 if schedule.last_due_key == key:
                     continue
                 if not _should_run_occurrence(schedule, occurrence, now):
@@ -466,6 +521,142 @@ def queue_manual_run(schedule: TecTacSchedule):
     return _queue_run(run)
 
 
+def _validate_owner(owner_module: str, owner_key: str) -> tuple[str, str]:
+    module = str(owner_module or "").strip()
+    key = str(owner_key or "").strip()
+    if not module:
+        raise SchedulerError("owner_module is required.")
+    if not key:
+        raise SchedulerError("owner_key is required.")
+    if len(module) > 100:
+        raise SchedulerError("owner_module exceeds 100 characters.")
+    if len(key) > 255:
+        raise SchedulerError("owner_key exceeds 255 characters.")
+    return module, key
+
+
+def reconcile_schedule(*, owner_module: str, owner_key: str, action_id: str, schedule_type: str,
+                       targets: dict | None = None, parameters: dict | None = None, enabled: bool = True,
+                       name: str | None = None, timezone_name: str = "UTC", run_at: datetime | None = None,
+                       run_time=None, weekdays: list[int] | None = None, day_of_month: int | None = None,
+                       interval_seconds: int | None = None, interval_anchor_at: datetime | None = None,
+                       target_mode: str = TecTacSchedule.TargetMode.SNAPSHOT,
+                       missed_policy: str = TecTacSchedule.MissedPolicy.SKIP, missed_grace_minutes: int = 60,
+                       concurrency_policy: str = TecTacSchedule.ConcurrencyPolicy.SKIP, retry_count: int = 0,
+                       retry_delay_seconds: int = 60) -> TecTacSchedule | None:
+    """Idempotently create/update a backend-module-owned scheduler definition.
+
+    The ownership tuple is the stable identity. ``enabled=False`` disables an
+    existing definition and is a no-op when one does not yet exist. Browser
+    authentication is intentionally not part of this server-side contract.
+    """
+    module, key = _validate_owner(owner_module, owner_key)
+    action = get_scheduled_action(str(action_id or "").strip())
+    if action.module_id != module:
+        raise SchedulerError(
+            f"Scheduled action {action.id!r} belongs to module {action.module_id!r}, not {module!r}."
+        )
+    if not isinstance(enabled, bool):
+        raise SchedulerError("enabled must be true or false.")
+
+    with transaction.atomic():
+        existing = TecTacSchedule.objects.select_for_update().filter(owner_module=module, owner_key=key).first()
+        if not enabled and existing is None:
+            return None
+
+        anchor = interval_anchor_at
+        if schedule_type == TecTacSchedule.ScheduleType.INTERVAL and anchor is None:
+            anchor = existing.interval_anchor_at if existing and existing.interval_anchor_at else timezone.now().replace(second=0, microsecond=0)
+
+        data = validate_schedule_payload({
+            "name": str(name or (existing.name if existing else f"{action.label} · {key}")),
+            "action_id": action.id,
+            "schedule_type": schedule_type,
+            "timezone": timezone_name,
+            "run_at": run_at,
+            "run_time": run_time,
+            "weekdays": weekdays or [],
+            "day_of_month": day_of_month,
+            "interval_seconds": interval_seconds,
+            "target_mode": target_mode,
+            "targets": targets or {"type": action.target_types[0]},
+            "parameters": parameters or {},
+            "enabled": enabled,
+            "missed_policy": missed_policy,
+            "missed_grace_minutes": missed_grace_minutes,
+            "concurrency_policy": concurrency_policy,
+            "retry_count": retry_count,
+            "retry_delay_seconds": retry_delay_seconds,
+        })
+        if data["schedule_type"] == TecTacSchedule.ScheduleType.ONCE and not data.get("run_at"):
+            raise SchedulerError("A one-time schedule requires run_at.")
+        if data["schedule_type"] in {TecTacSchedule.ScheduleType.DAILY, TecTacSchedule.ScheduleType.WEEKLY, TecTacSchedule.ScheduleType.MONTHLY} and not data.get("run_time"):
+            raise SchedulerError("Recurring calendar schedules require run_time.")
+        if data["schedule_type"] == TecTacSchedule.ScheduleType.WEEKLY and not data.get("weekdays"):
+            raise SchedulerError("Weekly schedules require at least one weekday.")
+        if data["schedule_type"] == TecTacSchedule.ScheduleType.MONTHLY and not data.get("day_of_month"):
+            raise SchedulerError("Monthly schedules require day_of_month.")
+        if data["schedule_type"] == TecTacSchedule.ScheduleType.INTERVAL and not data.get("interval_seconds"):
+            raise SchedulerError("Interval schedules require interval_seconds.")
+        target_type = str((data.get("targets") or {}).get("type") or "none")
+        if target_type not in action.target_types:
+            raise SchedulerError(f"Action {action.id} does not support target type {target_type!r}.")
+
+        schedule = existing or TecTacSchedule(owner_module=module, owner_key=key)
+        previous_signature = None
+        if existing:
+            previous_signature = (
+                existing.schedule_type, existing.interval_seconds, existing.interval_anchor_at, existing.run_at,
+                existing.run_time, tuple(existing.weekdays or []), existing.day_of_month, existing.enabled,
+            )
+        for field in (
+            "name", "module_id", "action_id", "target_mode", "targets", "parameters", "schedule_type",
+            "timezone", "run_at", "run_time", "weekdays", "day_of_month", "interval_seconds", "enabled",
+            "missed_policy", "missed_grace_minutes", "concurrency_policy", "retry_count", "retry_delay_seconds",
+        ):
+            if field in data:
+                setattr(schedule, field, data[field])
+        schedule.owner_module = module
+        schedule.owner_key = key
+        schedule.interval_anchor_at = _as_utc(anchor) if anchor else None
+        if schedule.schedule_type != TecTacSchedule.ScheduleType.INTERVAL:
+            schedule.interval_seconds = None
+            schedule.interval_anchor_at = None
+        schedule.module_id = action.module_id
+        new_signature = (
+            schedule.schedule_type, schedule.interval_seconds, schedule.interval_anchor_at, schedule.run_at,
+            schedule.run_time, tuple(schedule.weekdays or []), schedule.day_of_month, schedule.enabled,
+        )
+        if previous_signature is not None and previous_signature != new_signature:
+            schedule.last_due_key = ""
+        schedule.save()
+        return schedule
+
+
+def disable_owned_schedule(*, owner_module: str, owner_key: str) -> TecTacSchedule | None:
+    module, key = _validate_owner(owner_module, owner_key)
+    with transaction.atomic():
+        schedule = TecTacSchedule.objects.select_for_update().filter(owner_module=module, owner_key=key).first()
+        if schedule is None:
+            return None
+        if schedule.enabled:
+            schedule.enabled = False
+            schedule.save(update_fields=["enabled", "updated_at"])
+        return schedule
+
+
+def remove_owned_schedule(*, owner_module: str, owner_key: str) -> bool:
+    module, key = _validate_owner(owner_module, owner_key)
+    with transaction.atomic():
+        schedule = TecTacSchedule.objects.select_for_update().filter(owner_module=module, owner_key=key).first()
+        if schedule is None:
+            return False
+        if schedule.runs.filter(status__in=[TecTacScheduleRun.Status.QUEUED, TecTacScheduleRun.Status.RUNNING]).exists():
+            raise SchedulerError("Owned schedule cannot be removed while a run is queued or running.")
+        schedule.delete()
+        return True
+
+
 def serialize_action(action: ScheduledAction) -> dict:
     return {
         "id": action.id,
@@ -519,6 +710,10 @@ def serialize_schedule(schedule: TecTacSchedule, *, include_runs: bool = False) 
         "run_time": schedule.run_time.isoformat() if schedule.run_time else None,
         "weekdays": schedule.weekdays,
         "day_of_month": schedule.day_of_month,
+        "interval_seconds": schedule.interval_seconds,
+        "interval_anchor_at": schedule.interval_anchor_at.isoformat() if schedule.interval_anchor_at else None,
+        "owner_module": schedule.owner_module or None,
+        "owner_key": schedule.owner_key or None,
         "enabled": schedule.enabled,
         "missed_policy": schedule.missed_policy,
         "missed_grace_minutes": schedule.missed_grace_minutes,

@@ -63,6 +63,16 @@ Actions currently registered through:
 register_scheduled_action(...)
 ```
 
+Backend modules that own generated schedule definitions use the public scheduler reconciliation contract:
+
+```python
+reconcile_schedule(...)
+disable_owned_schedule(...)
+remove_owned_schedule(...)
+```
+
+This keeps schedule ownership/idempotency inside Core and avoids direct `TecTacSchedule` model imports or localhost HTTP calls.
+
 The catalog includes:
 
 ```text

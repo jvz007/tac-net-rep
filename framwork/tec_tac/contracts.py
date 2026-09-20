@@ -47,6 +47,30 @@ CORE_CONTRACTS = (
     {
         "area": "scheduler",
         "import_path": "tec_tac.scheduler",
+        "name": "reconcile_schedule",
+        "kind": "python",
+        "purpose": "Idempotently create/update a backend-module-owned schedule using owner_module + owner_key.",
+        "audience": "provider/backend",
+    },
+    {
+        "area": "scheduler",
+        "import_path": "tec_tac.scheduler",
+        "name": "disable_owned_schedule",
+        "kind": "python",
+        "purpose": "Disable a backend-module-owned schedule without direct model access.",
+        "audience": "provider/backend",
+    },
+    {
+        "area": "scheduler",
+        "import_path": "tec_tac.scheduler",
+        "name": "remove_owned_schedule",
+        "kind": "python",
+        "purpose": "Remove an idle backend-module-owned schedule without direct model access.",
+        "audience": "provider/backend",
+    },
+    {
+        "area": "scheduler",
+        "import_path": "tec_tac.scheduler",
         "name": "get_scheduled_action",
         "kind": "python",
         "purpose": "Resolve one registered scheduler action in the current backend process.",
@@ -379,6 +403,8 @@ def render_markdown(catalog: dict | None = None) -> str:
         "    handler=handler,",
         ")",
         "```",
+        "",
+        "Backend-owned recurring definitions should use `reconcile_schedule(...)` rather than importing TecTacSchedule directly.",
         "",
     ])
     return "\n".join(out)

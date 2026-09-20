@@ -63,6 +63,14 @@ def _parse_fields(payload: dict) -> dict:
             if not value:
                 raise SchedulerError("run_at must be an ISO-8601 datetime.")
             data["run_at"] = value
+    if "interval_anchor_at" in data:
+        if data["interval_anchor_at"] in (None, ""):
+            data["interval_anchor_at"] = None
+        elif isinstance(data["interval_anchor_at"], str):
+            value = parse_datetime(data["interval_anchor_at"])
+            if not value:
+                raise SchedulerError("interval_anchor_at must be an ISO-8601 datetime.")
+            data["interval_anchor_at"] = value
     if "run_time" in data:
         if data["run_time"] in (None, ""):
             data["run_time"] = None
@@ -78,12 +86,15 @@ def _apply_schedule_fields(schedule, data):
     allowed = {
         "name", "module_id", "action_id", "target_mode", "targets", "parameters",
         "schedule_type", "timezone", "run_at", "run_time", "weekdays", "day_of_month",
-        "enabled", "missed_policy", "missed_grace_minutes", "concurrency_policy",
+        "interval_seconds", "interval_anchor_at", "enabled", "missed_policy", "missed_grace_minutes", "concurrency_policy",
         "retry_count", "retry_delay_seconds",
     }
     for key in allowed:
         if key in data:
             setattr(schedule, key, data[key])
+    if schedule.schedule_type != TecTacSchedule.ScheduleType.INTERVAL:
+        schedule.interval_seconds = None
+        schedule.interval_anchor_at = None
 
 
 def _validate_shape(data):
@@ -91,7 +102,12 @@ def _validate_shape(data):
     if schedule_type == TecTacSchedule.ScheduleType.ONCE and not data.get("run_at"):
         raise SchedulerError("A one-time schedule requires run_at.")
     if schedule_type in {TecTacSchedule.ScheduleType.DAILY, TecTacSchedule.ScheduleType.WEEKLY, TecTacSchedule.ScheduleType.MONTHLY} and not data.get("run_time"):
-        raise SchedulerError("Recurring schedules require run_time.")
+        raise SchedulerError("Recurring calendar schedules require run_time.")
+    if schedule_type == TecTacSchedule.ScheduleType.INTERVAL:
+        if not data.get("interval_seconds"):
+            raise SchedulerError("Interval schedules require interval_seconds.")
+        if not data.get("interval_anchor_at"):
+            raise SchedulerError("Interval schedules require interval_anchor_at.")
     if schedule_type == TecTacSchedule.ScheduleType.WEEKLY and not data.get("weekdays"):
         raise SchedulerError("Weekly schedules require at least one weekday.")
     if schedule_type == TecTacSchedule.ScheduleType.MONTHLY and not data.get("day_of_month"):
@@ -141,6 +157,8 @@ class SchedulerListView(APIView):
             data.setdefault("concurrency_policy", TecTacSchedule.ConcurrencyPolicy.SKIP)
             data.setdefault("retry_count", 0)
             data.setdefault("retry_delay_seconds", 60)
+            if data.get("schedule_type") == TecTacSchedule.ScheduleType.INTERVAL and not data.get("interval_anchor_at"):
+                data["interval_anchor_at"] = timezone.now().replace(second=0, microsecond=0)
             _validate_shape(data)
             schedule = TecTacSchedule(created_by=request.user, updated_by=request.user)
             _apply_schedule_fields(schedule, data)
@@ -169,7 +187,8 @@ class SchedulerDetailView(APIView):
                 "target_mode": schedule.target_mode, "targets": schedule.targets, "parameters": schedule.parameters,
                 "schedule_type": schedule.schedule_type, "timezone": schedule.timezone,
                 "run_at": schedule.run_at, "run_time": schedule.run_time, "weekdays": schedule.weekdays,
-                "day_of_month": schedule.day_of_month, "enabled": schedule.enabled,
+                "day_of_month": schedule.day_of_month, "interval_seconds": schedule.interval_seconds,
+                "interval_anchor_at": schedule.interval_anchor_at, "enabled": schedule.enabled,
                 "missed_policy": schedule.missed_policy, "missed_grace_minutes": schedule.missed_grace_minutes,
                 "concurrency_policy": schedule.concurrency_policy, "retry_count": schedule.retry_count,
                 "retry_delay_seconds": schedule.retry_delay_seconds,

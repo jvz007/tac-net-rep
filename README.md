@@ -742,6 +742,6 @@ Core server backup now safely resolves the three fixed Tactical nginx `sites-ena
 `core.server_backup` 1.5.1 no longer rejects every TAR symlink/hardlink. Links are accepted only when both the member path and resolved target remain within the archive extraction namespace. Relative symlinks are resolved from the member parent and hardlinks from the archive root. Absolute/escaping links and unsafe special files remain blocked.
 
 
-## Canonical recovery payload roots (1.15.13)
+## Canonical recovery payload roots (1.15.14)
 
 `core.server_backup` 1.5.2 canonicalizes Tec-Tac payload roots before TAR creation. Requested descendants already recursively covered by an included ancestor are removed, preventing duplicate normalized archive members. The redundant `/opt/tec-tac/etc` include was removed from the Tec-Tac component. Duplicate-member validation remains enabled and authoritative.
