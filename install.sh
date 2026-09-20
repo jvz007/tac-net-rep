@@ -378,6 +378,7 @@ TEC_TAC_STATE_ROOT=/var/lib/tec-tac
 TEC_TAC_MODULE_STATE_ROOT=${MODULE_STATE_ROOT}
 TEC_TAC_SYSTEM_UPDATE_ROOT=/var/lib/tec-tac/system-updates
 TEC_TAC_SERVER_BACKUP_ROOT=/var/lib/tec-tac/server-backup
+TEC_TAC_HOUSEKEEPING_ROOT=/var/lib/tec-tac/housekeeping
 TEC_TAC_SERVER_BACKUP_LOCAL_ROOTS=${TEC_TAC_SERVER_BACKUP_LOCAL_ROOTS:-/rmmbackups,/mnt,/media,/srv,/backup,/backups}
 TEC_TAC_UI_DEPLOY_ROOT=${TEC_TAC_UI_ROOT}
 REPO_ROOT=${TEC_TAC_ROOT}
@@ -455,6 +456,10 @@ SERVER_BACKUP_ROOT="${TEC_TAC_SERVER_BACKUP_ROOT:-/var/lib/tec-tac/server-backup
 SERVER_BACKUP_HELPER="/usr/local/sbin/tec-tac-server-backup"
 SERVER_BACKUP_LIB="/usr/local/lib/tec-tac-backup"
 SERVER_BACKUP_SUDOERS="/etc/sudoers.d/tec-tac-server-backup"
+HOUSEKEEPING_ROOT="${TEC_TAC_HOUSEKEEPING_ROOT:-/var/lib/tec-tac/housekeeping}"
+HOUSEKEEPING_HELPER="/usr/local/sbin/tec-tac-housekeeping"
+HOUSEKEEPING_LIB="/usr/local/lib/tec-tac-housekeeping"
+HOUSEKEEPING_SUDOERS="/etc/sudoers.d/tec-tac-housekeeping"
 
 mkdir -p "${SERVER_BACKUP_ROOT}/jobs" "${SERVER_BACKUP_ROOT}/logs" "${SERVER_BACKUP_ROOT}/staging" "${SERVER_BACKUP_ROOT}/pre-restore" "${SERVER_BACKUP_ROOT}/restore-overrides" "${SERVER_BACKUP_ROOT}/secrets"
 chown root:"${TACTICAL_GROUP}" "${SERVER_BACKUP_ROOT}" "${SERVER_BACKUP_ROOT}/jobs" "${SERVER_BACKUP_ROOT}/logs" "${SERVER_BACKUP_ROOT}/staging" "${SERVER_BACKUP_ROOT}/pre-restore" "${SERVER_BACKUP_ROOT}/restore-overrides"
@@ -479,6 +484,24 @@ if command -v visudo >/dev/null 2>&1; then
     visudo -cf "${SERVER_BACKUP_SUDOERS}" >/dev/null || fail "Server backup sudoers validation failed."
 fi
 log "Installed privileged Core server-backup helper: ${SERVER_BACKUP_HELPER}"
+
+mkdir -p "${HOUSEKEEPING_ROOT}/requests" "${HOUSEKEEPING_ROOT}/results" "${HOUSEKEEPING_LIB}"
+chown -R root:"${TACTICAL_GROUP}" "${HOUSEKEEPING_ROOT}"
+chmod 2770 "${HOUSEKEEPING_ROOT}"
+chmod 2750 "${HOUSEKEEPING_ROOT}/results"
+chmod 2770 "${HOUSEKEEPING_ROOT}/requests"
+install -o root -g root -m 0755 "${REPO_ROOT}/scripts/housekeeping-helper.py" "${HOUSEKEEPING_LIB}/housekeeping-helper.py"
+ln -sfn "${HOUSEKEEPING_LIB}/housekeeping-helper.py" "${HOUSEKEEPING_HELPER}"
+chown -h root:root "${HOUSEKEEPING_HELPER}"
+cat > "${HOUSEKEEPING_SUDOERS}" <<EOF
+${TACTICAL_USER} ALL=(root) NOPASSWD: ${HOUSEKEEPING_HELPER} --scan *, ${HOUSEKEEPING_HELPER} --purge *
+EOF
+chown root:root "${HOUSEKEEPING_SUDOERS}"
+chmod 0440 "${HOUSEKEEPING_SUDOERS}"
+if command -v visudo >/dev/null 2>&1; then
+    visudo -cf "${HOUSEKEEPING_SUDOERS}" >/dev/null || fail "Housekeeping sudoers validation failed."
+fi
+log "Installed Core housekeeping helper: ${HOUSEKEEPING_HELPER}"
 
 log "Verifying Core server-backup capability registration."
 VERIFY_SERVER_BACKUP_CODE="from tec_tac.capabilities import capability_status,get_capability; s=capability_status('core.server_backup',version='>=1,<2'); assert s['available'], s; p=get_capability('core.server_backup',version='>=1,<2'); assert all(hasattr(p,n) for n in ('create_backup','list_backups','restore_backup','validate_restore','apply_retention','store_secret','delete_secret')); print('TEC-TAC core.server_backup OK:', s['capability_version'], s['operations'])"

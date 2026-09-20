@@ -1,5 +1,6 @@
 from .dashboard_views import DashboardListCreateView, DashboardDetailView
 from .preference_views import UserPreferencesView
+from .housekeeping_views import HousekeepingStatusView, HousekeepingPurgeView
 from .capability_views import CapabilityListView, CapabilityDetailView
 from .contract_views import ContractCatalogView, ContractExportView
 from django.urls import path
@@ -41,6 +42,8 @@ urlpatterns = [
 
     path("ui/context/", UiContextView.as_view(), name="tec-tac-ui-context"),
     path("ui/preferences/", UserPreferencesView.as_view(), name="tec-tac-user-preferences"),
+    path("system/storage/", HousekeepingStatusView.as_view(), name="tec-tac-housekeeping-status"),
+    path("system/storage/purge/", HousekeepingPurgeView.as_view(), name="tec-tac-housekeeping-purge"),
     path("system/updates/", SystemUpdateStatusView.as_view(), name="tec-tac-system-update-status"),
     path("system/updates/packages/inspect/", SystemUpdatePackageInspectView.as_view(), name="tec-tac-system-update-package-inspect"),
     path("system/updates/packages/<uuid:upload_id>/", SystemUpdatePackageStageView.as_view(), name="tec-tac-system-update-package-stage"),

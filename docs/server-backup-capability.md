@@ -299,3 +299,9 @@ result = backup.restore_backup(
 Core now validates the exact `rmm-backup-*.tar` emitted by Tactical `backup.sh` immediately after creation and before SHA-256 calculation, recovery-bundle finalisation or destination upload. A failed native validation fails the backup job and the invalid native TAR is removed.
 
 Tactical `backup.sh` v34 still uses `sudo` for a small fixed set of root-owned backup sources but does not fail closed when those commands fail. Core therefore supplies a narrow compatibility shim only while the Tactical backup is running. The shim can request only fixed collection operations for nginx configuration, Tactical systemd units, `/etc/conf.d`, optional `/etc/letsencrypt` and optional `/opt/tactical`. The privileged helper independently binds every request to the active opaque `create_backup` job and its job-owned Tactical temporary workspace. No caller-provided shell command, executable, arbitrary source path or arbitrary destination path is accepted.
+
+## 1.15.7 restore-script OS override execution
+
+When `target.os` has a valid persisted override audit ID, Core prepares a staged Tactical `restore.sh` before any destructive action. The patch is bound to the inspected Tactical restore baseline (`SCRIPT_VERSION=67`) and requires the exact known OS-support rejection block to occur once. Only that rejection block is removed; real `lsb_release` OS identity, release and codename variables remain unchanged and continue to drive repository/package logic.
+
+If the restore-script version or expected OS-check block differs, Core aborts before stopping services or moving `/rmm`. Without an authorized `target.os` override, Core copies Tactical `restore.sh` byte-for-byte unchanged.

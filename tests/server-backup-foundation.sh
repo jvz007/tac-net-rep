@@ -99,6 +99,39 @@ with tempfile.TemporaryDirectory() as od:
     except RuntimeError: pass
     else: raise AssertionError("artifact-integrity check became overrideable")
 
+    # Restore script override must be prepared before destructive work, must
+    # preserve real OS/codename detection, and must fail closed on drift.
+    restore_source=od/"restore.sh"
+    baseline=(
+        '#!/usr/bin/env bash\nSCRIPT_VERSION="67"\n'
+        'osname=$(lsb_release -si)\n'
+        'codename=$(lsb_release -sc)\n'
+        + h.TACTICAL_RESTORE_OS_GATE +
+        'echo "$osname $codename"\n'
+    )
+    restore_source.write_text(baseline)
+    class L:
+        def __init__(self): self.lines=[]
+        def write(self,v): self.lines.append(str(v))
+    log=L(); unchanged=od/"restore-original.sh"
+    result=h._prepare_tactical_restore_script(restore_source,unchanged,os_override_audit_id=None,log=log)
+    assert result["adjusted"] is False and unchanged.read_bytes()==restore_source.read_bytes()
+    patched=od/"restore-overridden.sh"
+    result=h._prepare_tactical_restore_script(restore_source,patched,os_override_audit_id=audit_id,log=log)
+    patched_text=patched.read_text()
+    assert result=={"adjusted":True,"baseline":"67","audit_id":audit_id}
+    assert h.TACTICAL_RESTORE_OS_GATE not in patched_text
+    assert 'osname=$(lsb_release -si)' in patched_text and 'codename=$(lsb_release -sc)' in patched_text
+    assert any(audit_id in line for line in log.lines)
+    drift=od/"restore-drift.sh"; drift.write_text(baseline.replace('if [[ "$fullrelno" != "22.04" ]]; then','if [[ "$fullrelno" != "22.04" ]];then'))
+    try: h._prepare_tactical_restore_script(drift,od/"bad.sh",os_override_audit_id=audit_id,log=log)
+    except RuntimeError: pass
+    else: raise AssertionError("restore override patch did not fail closed on OS-gate drift")
+    wrong=od/"restore-v68.sh"; wrong.write_text(baseline.replace('SCRIPT_VERSION="67"','SCRIPT_VERSION="68"'))
+    try: h._prepare_tactical_restore_script(wrong,od/"bad2.sh",os_override_audit_id=audit_id,log=log)
+    except RuntimeError: pass
+    else: raise AssertionError("restore override patch accepted an uninspected restore.sh version")
+
 with tempfile.TemporaryDirectory() as td:
     td=pathlib.Path(td)
     # Tec-Tac component creation must exclude the entire mutable state root,

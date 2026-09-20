@@ -37,6 +37,22 @@ BUNDLE_RE = re.compile(r"^tec-tac-backup-[A-Za-z0-9_.-]+\.tgz$")
 ARCHIVE_RE = BUNDLE_RE
 ALLOWED_ACTIONS = {"create_backup", "list_backups", "restore_backup", "apply_retention", "validate_destination", "validate_restore", "store_secret", "delete_secret"}
 OVERRIDEABLE_RESTORE_CHECKS = {"target.os"}
+TACTICAL_RESTORE_OVERRIDE_BASELINE = "67"
+TACTICAL_RESTORE_OS_GATE = """if [[ "$osname" == "debian" ]]; then
+  if [[ "$relno" -ne 11 && "$relno" -ne 12 ]]; then
+    not_supported
+    exit 1
+  fi
+elif [[ "$osname" == "ubuntu" ]]; then
+  if [[ "$fullrelno" != "22.04" ]]; then
+    not_supported
+    exit 1
+  fi
+else
+  not_supported
+  exit 1
+fi
+"""
 BACKUP_CLASSES = {"daily", "weekly", "monthly", "manual"}
 DEST_TYPES = {"local", "sftp", "ftp", "scp", "webdav", "s3"}
 SAFE_DEST_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
@@ -2033,6 +2049,54 @@ def operation_validate_restore(config, job, log):
             report["warnings"].append(f"validation staging cleanup failed: {exc}")
 
 
+def _prepare_tactical_restore_script(source: Path, staged: Path, *, os_override_audit_id: str | None, log):
+    """Prepare restore.sh before any destructive restore step.
+
+    No override means an exact byte-for-byte copy. An authorized target.os
+    override removes only the inspected Tactical v67 support rejection while
+    retaining the real lsb_release-derived identity and codename variables.
+    """
+    ensure_regular(source)
+    raw = source.read_bytes()
+    if not os_override_audit_id:
+        staged.write_bytes(raw)
+        os.chmod(staged, 0o755)
+        return {"adjusted": False, "baseline": None, "audit_id": None}
+
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise RuntimeError("Tactical restore.sh is not UTF-8; refusing target.os override patch") from exc
+
+    match = re.search(r'^SCRIPT_VERSION=["\']?([0-9]+)["\']?\s*$', text, re.MULTILINE)
+    version = match.group(1) if match else None
+    if version != TACTICAL_RESTORE_OVERRIDE_BASELINE:
+        raise RuntimeError(
+            f"target.os override is bound to Tactical restore.sh v{TACTICAL_RESTORE_OVERRIDE_BASELINE}; "
+            f"found {version or 'unknown'}"
+        )
+    if text.count(TACTICAL_RESTORE_OS_GATE) != 1:
+        raise RuntimeError(
+            "Tactical restore.sh v67 OS-support gate did not match the inspected baseline exactly; "
+            "refusing to prepare an override-aware restore script"
+        )
+
+    replacement = (
+        '# TEC-TAC: Tactical OS support rejection bypassed under an authorized target.os override.\n'
+        'printf >&2 "${YELLOW}Tec-Tac: continuing under authorized target.os restore override.${NC}\\n"\n'
+    )
+    patched = text.replace(TACTICAL_RESTORE_OS_GATE, replacement, 1)
+    if patched == text or 'osname=$(lsb_release -si)' not in patched or 'codename=$(lsb_release -sc)' not in patched:
+        raise RuntimeError("Unable to prove safe target.os override patch while preserving real OS identity")
+    staged.write_text(patched, encoding="utf-8")
+    os.chmod(staged, 0o755)
+    log.write(
+        f"[TEC-TAC-BACKUP] staged Tactical restore.sh v{version} adjusted only for target.os "
+        f"under authorized override audit {os_override_audit_id}\n"
+    )
+    return {"adjusted": True, "baseline": version, "audit_id": str(os_override_audit_id)}
+
+
 def operation_restore_backup(config, job, log):
     request=job["request"]
     dest_id,name=parse_backup_ref(request.get("backup_ref"))
@@ -2089,7 +2153,14 @@ def operation_restore_backup(config, job, log):
         if mode in {"full","tactical"}:
             tactical_root=Path(config["TACTICAL_ROOT"])
             restore_script_source=tactical_root/"restore.sh"; ensure_regular(restore_script_source)
-            restore_script=stage/"restore.sh"; shutil.copy2(restore_script_source,restore_script); os.chmod(restore_script,0o755)
+            restore_script=stage/"restore.sh"
+            os_override_audit_id = (preflight.get("accepted_overrides") or {}).get("target.os")
+            restore_script_preparation = _prepare_tactical_restore_script(
+                restore_script_source, restore_script,
+                os_override_audit_id=os_override_audit_id, log=log,
+            )
+            job["restore_script_preparation"] = restore_script_preparation
+            atomic_json(job_path(job["id"],config),job)
             service_stop_for_restore(log)
             if (tactical_root/"api"/"tacticalrmm").exists():
                 moved_root=Path(str(tactical_root)+f".tectac-pre-restore-{stamp()}")
