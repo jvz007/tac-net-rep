@@ -6,7 +6,7 @@ Tec-Tac Core exposes one narrow privileged recovery contract:
 
 ```text
 core.server_backup
-capability version 1.4.2
+capability version 1.5.0
 ```
 
 Modules request typed backup, inventory, restore, retention, destination-validation and secret-store operations. They never receive arbitrary `sudo`, shell, executable-path or unrestricted filesystem access.
@@ -317,3 +317,12 @@ The narrow privileged bridge writes nginx, systemd, conf.d, certificate and `/op
 ## Privileged nginx symlink handling (1.4.2)
 
 Tactical nginx `sites-enabled` entries are commonly symlinks. Core permits symlink resolution only for the fixed allow-listed `rmm.conf`, `frontend.conf`, and `meshcentral.conf` collection operations. Each source is resolved with `strict=True`; the final target must be a regular file beneath `/etc/nginx/sites-available`. The workspace member keeps the original filename and the existing Tactical account ownership with mode `0600`. No general privileged source may bypass `ensure_regular()` or traverse arbitrary symlinks.
+
+
+## Read-only job status (1.5.0)
+
+Core exposes `get_job_status(job_id=..., source_run_id=..., context=...)` so modules never need direct access to `/var/lib/tec-tac/server-backup`. At least one lookup key is required; if both are supplied they must identify the same Core job. `source_run_id` is read from the normalized job context and is intended for module-owned run identifiers.
+
+The response is intentionally small and sanitized: `job_id`, `source_run_id`, `status`, `action`, `stage`, `stage_label`, `started_at`, `finished_at`, `error`, `progress.current`, `progress.total`, and a bounded `log_tail`. Core strips common credential/token forms, URI passwords, authorization values, and private-key material before returning log or error text. Raw job requests, destination secrets, helper environment, and filesystem paths are not exposed.
+
+`create_backup` now publishes durable progress stages through its Core job document: `prepare`, `tactical.backup`, `tactical.validate`, `tec_tac.backup`, `bundle.create`, `bundle.validate`, `destination.upload`, `destination.verify`, and `complete`. The privileged Tactical collector may temporarily publish narrower sub-stages such as `tactical.collect.nginx`, `tactical.collect.systemd`, `tactical.collect.confd`, `tactical.collect.letsencrypt`, and `tactical.collect.opt_tactical`. These are observational only and do not change the backup trust boundaries.

@@ -6,7 +6,7 @@ fail(){ echo "[TEST] FAIL: $*" >&2; exit 1; }
 [[ -f "${ROOT}/framwork/tec_tac/server_backup.py" ]] || fail "Core server-backup provider missing"
 [[ -f "${ROOT}/scripts/server-backup-helper.py" ]] || fail "privileged server-backup helper missing"
 [[ -f "${ROOT}/docs/server-backup-capability.md" ]] || fail "server-backup developer contract missing"
-grep -q 'CAPABILITY_VERSION = "1.4.2"' "${ROOT}/framwork/tec_tac/server_backup.py" || fail "server-backup capability is not 1.4.2"
+grep -q 'CAPABILITY_VERSION = "1.5.0"' "${ROOT}/framwork/tec_tac/server_backup.py" || fail "server-backup capability is not 1.5.0"
 grep -q 'core.server_backup' "${ROOT}/framwork/tec_tac/server_backup.py" || fail "core.server_backup capability id missing"
 grep -q 'register_core_server_backup_capability' "${ROOT}/framwork/tec_tac/apps.py" || fail "Core server-backup capability is not registered by AppConfig"
 grep -q 'module_id in {"tec-tac", "core"}' "${ROOT}/framwork/tec_tac/capabilities.py" || fail "capability registry does not recognize Core-owned providers"
@@ -39,12 +39,32 @@ import tec_tac.capabilities as cap
 from tec_tac.server_backup import register_core_server_backup_capability, get_server_backup_provider
 cap._clear_capabilities_for_tests()
 reg=register_core_server_backup_capability()
-assert reg.id == "core.server_backup" and reg.module_id == "core" and reg.version == "1.4.2"
-assert set(("create_backup","list_backups","restore_backup","apply_retention","validate_destination","validate_restore","store_secret","delete_secret")) <= set(reg.operations)
+assert reg.id == "core.server_backup" and reg.module_id == "core" and reg.version == "1.5.0"
+assert set(("create_backup","get_job_status","list_backups","restore_backup","apply_retention","validate_destination","validate_restore","store_secret","delete_secret")) <= set(reg.operations)
 assert reg.metadata["format_version"] == 2
 assert reg.metadata["overrideable_restore_checks"] == ["target.os"]
 assert set(reg.metadata["recovery_modes"]) == {"full","tactical","tec_tac"}
 provider=get_server_backup_provider()
+# Read-only status lookup must not dispatch a privileged job and must sanitize logs.
+import tec_tac.server_backup as sb
+with tempfile.TemporaryDirectory() as sd:
+    sd=pathlib.Path(sd); (sd/"jobs").mkdir(); (sd/"logs").mkdir()
+    old_layout=sb.load_layout
+    sb.load_layout=lambda:{"TEC_TAC_SERVER_BACKUP_ROOT":str(sd)}
+    try:
+        jid="11111111-1111-4111-8111-111111111111"
+        job={"id":jid,"action":"create_backup","status":"running","stage":"tactical.collect.nginx","stage_label":"Collecting nginx configuration","created_at":"2026-09-20T10:00:00+00:00","started_at":"2026-09-20T10:00:01+00:00","finished_at":None,"error":None,"context":{"source_run_id":"backup-run-42"},"progress":{"current":3,"total":8},"request":{},"result":None}
+        (sd/"jobs"/f"{jid}.json").write_text(json.dumps(job))
+        (sd/"logs"/f"{jid}.log").write_text("normal line\npassword=hunter2\nhttps://alice:secret@example.invalid/path\nAuthorization: Bearer abc.def\n")
+        status=provider.get_job_status(job_id=jid,context={})
+        assert status["job_id"]==jid and status["stage"]=="tactical.collect.nginx"
+        assert status["stage_label"]=="Collecting nginx configuration"
+        assert status["progress"]=={"current":3,"total":8}
+        assert all("hunter2" not in line and "alice:secret@" not in line and "abc.def" not in line for line in status["log_tail"])
+        status2=provider.get_job_status(source_run_id="backup-run-42",context={})
+        assert status2["job_id"]==jid
+    finally:
+        sb.load_layout=old_layout
 # Legacy restore bool remains a compatibility bridge into the new mode contract.
 try:
     provider.restore_backup(backup_ref="bad", destination=None, restore_tec_tac=True, context={})
@@ -61,6 +81,9 @@ import inspect
 source=inspect.getsource(h.create_tactical_component)
 assert source.index("validate_tactical_native_archive(archive)") < source.index("digest = sha256_file(archive)")
 assert "TEC_TAC_BACKUP_JOB_ID" in source and "Core narrow privilege bridge" in source
+helper_source=(root/"scripts/server-backup-helper.py").read_text()
+for required_stage in ("prepare","tactical.backup","tactical.validate","tec_tac.backup","bundle.create","bundle.validate","destination.upload","destination.verify"):
+    assert required_stage in helper_source
 
 # Privileged collection output must be private but owned/readable by the
 # Tactical account that later creates the native TAR.

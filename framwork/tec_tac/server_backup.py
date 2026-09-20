@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import time
 import uuid
@@ -19,7 +20,7 @@ from .capabilities import register_capability
 from .config import load_layout
 
 CAPABILITY_ID = "core.server_backup"
-CAPABILITY_VERSION = "1.4.2"
+CAPABILITY_VERSION = "1.5.0"
 HELPER = Path("/usr/local/sbin/tec-tac-server-backup")
 DEFAULT_STATE_ROOT = Path("/var/lib/tec-tac/server-backup")
 TERMINAL_STATES = {"succeeded", "failed", "dispatch_failed"}
@@ -229,8 +230,119 @@ def _normalize_restore_overrides(overrides) -> dict[str, str]:
     return result
 
 
+_JOB_STAGE_LABELS = {
+    "queued": "Queued",
+    "dispatched": "Dispatched",
+    "running": "Running",
+    "prepare": "Preparing backup",
+    "tactical.backup": "Creating Tactical native backup",
+    "tactical.collect.nginx": "Collecting nginx configuration",
+    "tactical.collect.systemd": "Collecting systemd services",
+    "tactical.collect.confd": "Collecting Tactical conf.d configuration",
+    "tactical.collect.letsencrypt": "Collecting Let's Encrypt certificates",
+    "tactical.collect.opt_tactical": "Collecting Tactical reporting assets",
+    "tactical.validate": "Validating Tactical native backup",
+    "tec_tac.backup": "Creating Tec-Tac recovery component",
+    "bundle.create": "Creating recovery bundle",
+    "bundle.validate": "Validating recovery bundle",
+    "destination.upload": "Uploading recovery bundle",
+    "destination.verify": "Verifying destination copy",
+    "restore-prepared": "Restore prepared",
+    "complete": "Complete",
+    "failed": "Failed",
+    "dispatch": "Dispatch failed",
+}
+
+_SENSITIVE_LINE_PATTERNS = (
+    re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+\-/=]+"),
+    re.compile(r"(?i)(basic\s+)[A-Za-z0-9+/=]+"),
+    re.compile(r"(?i)(https?://[^:/\s]+:)([^@/\s]+)(@)"),
+    re.compile(r"(?i)(password|passwd|pass|secret|token|access[_-]?key(?:_id)?|secret[_-]?access[_-]?key|authorization)\s*[:=]\s*([^\s,;]+)"),
+)
+
+def _sanitize_log_line(value: str) -> str:
+    line = str(value).replace("\x00", "")[:4096]
+    if "-----BEGIN " in line or "PRIVATE KEY" in line:
+        return "[redacted private key material]"
+    for pattern in _SENSITIVE_LINE_PATTERNS:
+        if pattern.pattern.startswith("(?i)(https?"):
+            line = pattern.sub(r"\1<redacted>\3", line)
+        elif "bearer" in pattern.pattern.lower() or "basic" in pattern.pattern.lower():
+            line = pattern.sub(r"\1<redacted>", line)
+        else:
+            line = pattern.sub(r"\1=<redacted>", line)
+    return line
+
+def _safe_log_tail(job_id: str, *, lines: int = 80) -> list[str]:
+    path = _state_root() / "logs" / f"{job_id}.log"
+    if not path.is_file() or path.is_symlink():
+        return []
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace").splitlines()[-max(1, min(int(lines), 200)):]
+    except (OSError, ValueError):
+        return []
+    return [_sanitize_log_line(line) for line in raw]
+
+def _find_job_by_source_run_id(source_run_id: str) -> dict:
+    needle = str(source_run_id or "").strip()
+    if not needle:
+        raise ServerBackupError("source_run_id must not be blank.")
+    matches = []
+    root = _jobs_root()
+    if root.is_dir():
+        for path in root.glob("*.json"):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if str((payload.get("context") or {}).get("source_run_id") or "") == needle:
+                matches.append(payload)
+    if not matches:
+        raise ServerBackupError(f"No Core server-backup job was found for source_run_id {needle!r}.")
+    matches.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+    return matches[0]
+
+def _public_job_status(job: dict) -> dict:
+    progress = job.get("progress") if isinstance(job.get("progress"), dict) else {}
+    stage = str(job.get("stage") or "")
+    result = {
+        "job_id": str(job.get("id") or ""),
+        "source_run_id": (job.get("context") or {}).get("source_run_id"),
+        "status": str(job.get("status") or "unknown"),
+        "action": str(job.get("action") or ""),
+        "stage": stage,
+        "stage_label": str(job.get("stage_label") or _JOB_STAGE_LABELS.get(stage) or stage.replace(".", " ").replace("-", " ").title()),
+        "started_at": job.get("started_at"),
+        "finished_at": job.get("finished_at"),
+        "error": _sanitize_log_line(str(job.get("error"))) if job.get("error") else None,
+        "progress": {
+            "current": int(progress.get("current") or 0),
+            "total": int(progress.get("total") or 0),
+        },
+        "log_tail": _safe_log_tail(str(job.get("id") or "")),
+    }
+    return result
+
+
 class ServerBackupProvider:
     """Stable public provider contract for ``core.server_backup`` version 1.x."""
+
+
+    def get_job_status(self, *, job_id: str | None = None, source_run_id: str | None = None, context: dict | None = None) -> dict:
+        """Return sanitized read-only status for a Core backup/restore job.
+
+        At least one lookup key is required. When both are provided they must
+        resolve to the same job. No privileged helper is dispatched.
+        """
+        if not job_id and not source_run_id:
+            raise ServerBackupError("get_job_status requires job_id or source_run_id.")
+        if job_id:
+            job = _read_job(str(job_id))
+            if source_run_id is not None and str((job.get("context") or {}).get("source_run_id") or "") != str(source_run_id):
+                raise ServerBackupError("job_id and source_run_id do not identify the same Core server-backup job.")
+        else:
+            job = _find_job_by_source_run_id(str(source_run_id))
+        return _public_job_status(job)
 
     def create_backup(self, *, backup_class: str, destinations: list[dict], include_tactical: bool = True, include_tec_tac: bool = True, context: dict) -> dict:
         backup_class = str(backup_class or "").strip().lower()
@@ -376,6 +488,7 @@ def register_core_server_backup_capability():
         health=_PROVIDER.health,
         operations=(
             "create_backup",
+            "get_job_status",
             "list_backups",
             "restore_backup",
             "apply_retention",

@@ -66,6 +66,25 @@ MAX_LOG_BYTES = 2 * 1024 * 1024
 DEFAULT_MAX_BACKUP_BYTES = 1024 * 1024 * 1024 * 1024  # 1 TiB, override in config.
 
 
+CREATE_BACKUP_PROGRESS_TOTAL = 8
+CREATE_BACKUP_STAGE_LABELS = {
+    "prepare": "Preparing backup",
+    "tactical.backup": "Creating Tactical native backup",
+    "tactical.collect.nginx": "Collecting nginx configuration",
+    "tactical.collect.systemd": "Collecting systemd services",
+    "tactical.collect.confd": "Collecting Tactical conf.d configuration",
+    "tactical.collect.letsencrypt": "Collecting Let's Encrypt certificates",
+    "tactical.collect.opt_tactical": "Collecting Tactical reporting assets",
+    "tactical.validate": "Validating Tactical native backup",
+    "tec_tac.backup": "Creating Tec-Tac recovery component",
+    "bundle.create": "Creating recovery bundle",
+    "bundle.validate": "Validating recovery bundle",
+    "destination.upload": "Uploading recovery bundle",
+    "destination.verify": "Verifying destination copy",
+    "complete": "Complete",
+}
+
+
 class OperationFailed(RuntimeError):
     def __init__(self, message, *, result=None):
         super().__init__(message)
@@ -208,6 +227,21 @@ def load_job(job_id, config=None):
         if not isinstance(overrides, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in overrides.items()):
             raise SystemExit("invalid restore_backup overrides schema")
     return path, job
+
+
+def set_job_stage(config, job_id, stage, *, label=None, current=None, total=None):
+    """Persist a safe observable job stage for read-only status consumers."""
+    path, job = load_job(job_id, config)
+    job["stage"] = str(stage)
+    job["stage_label"] = str(label or CREATE_BACKUP_STAGE_LABELS.get(str(stage)) or str(stage).replace(".", " ").replace("-", " ").title())
+    if current is not None or total is not None:
+        prior = job.get("progress") if isinstance(job.get("progress"), dict) else {}
+        job["progress"] = {
+            "current": int(current if current is not None else prior.get("current") or 0),
+            "total": int(total if total is not None else prior.get("total") or 0),
+        }
+    atomic_json(path, job)
+    return job
 
 
 def validate_job_file(path: Path, config):
@@ -1041,6 +1075,7 @@ def create_tactical_component(config, log, job_id):
         "TEC_TAC_BACKUP_JOB_ID": str(job_id),
         "PATH": str(shim_dir) + os.pathsep + env.get("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"),
     })
+    set_job_stage(config, job_id, "tactical.backup", current=2, total=CREATE_BACKUP_PROGRESS_TOTAL)
     log.write(f"[TEC-TAC-BACKUP] running Tactical backup as {user} with Core narrow privilege bridge\n")
     try:
         run_logged([str(script)], log, env=env, cwd=str(tactical_root), timeout=6 * 60 * 60, user=user)
@@ -1058,6 +1093,7 @@ def create_tactical_component(config, log, job_id):
         raise RuntimeError("Tactical backup completed without a detectable new /rmmbackups/rmm-backup-*.tar archive")
     archive = max(candidates, key=lambda p: p.stat().st_mtime_ns)
     ensure_regular(archive, max_bytes=max_backup_bytes(config))
+    set_job_stage(config, job_id, "tactical.validate", current=3, total=CREATE_BACKUP_PROGRESS_TOTAL)
     try:
         # Mandatory trust boundary: never hash, bundle or upload a native
         # Tactical archive until the exact artifact produced by backup.sh has
@@ -1153,6 +1189,7 @@ def operation_create_backup(config, job, log):
     if not include_tactical and not include_tec_tac:
         raise RuntimeError("at least one recovery component must be included")
 
+    set_job_stage(config, job["id"], "prepare", current=1, total=CREATE_BACKUP_PROGRESS_TOTAL)
     lock = acquire_lock(config)
     try:
         with tempfile.TemporaryDirectory(prefix="tectac-recovery-bundle-") as td:
@@ -1160,15 +1197,27 @@ def operation_create_backup(config, job, log):
             tactical_archive=tactical_meta=None
             if include_tactical:
                 tactical_archive,tactical_meta=create_tactical_component(config,log,job["id"])
+            else:
+                set_job_stage(config, job["id"], "tactical.validate", current=3, total=CREATE_BACKUP_PROGRESS_TOTAL)
             tec_archive=tec_meta=None
+            set_job_stage(config, job["id"], "tec_tac.backup", current=4, total=CREATE_BACKUP_PROGRESS_TOTAL)
             if include_tec_tac:
                 tec_archive=temp/"tec-tac-backup.tar.gz"
                 tec_meta=create_tec_tac_component(config,tec_archive)
+            set_job_stage(config, job["id"], "bundle.create", current=5, total=CREATE_BACKUP_PROGRESS_TOTAL)
             bundle,manifest=create_recovery_bundle(
                 config,temp,backup_class=backup_class,
                 tactical_archive=tactical_archive,tactical_meta=tactical_meta,
                 tec_tac_archive=tec_archive,tec_tac_meta=tec_meta,
             )
+            set_job_stage(config, job["id"], "bundle.validate", current=6, total=CREATE_BACKUP_PROGRESS_TOTAL)
+            validation_stage=temp/"bundle-validation"
+            validation_stage.mkdir(parents=True,exist_ok=True)
+            try:
+                validation_mode="full" if include_tactical and include_tec_tac else ("tactical" if include_tactical else "tec_tac")
+                validate_recovery_bundle(bundle,validation_mode,validation_stage)
+            finally:
+                shutil.rmtree(validation_stage,ignore_errors=True)
             component_flags={key:{"included":bool(value.get("included"))} for key,value in manifest["components"].items()}
             metadata=metadata_for_archive(bundle,backup_class,config,components=component_flags,recovery_modes=manifest["recovery_modes"])
             write_sidecar(bundle,metadata)
@@ -1176,9 +1225,16 @@ def operation_create_backup(config, job, log):
                 tactical_archive.unlink()
                 log.write("[TEC-TAC-BACKUP] removed native source archive after byte-identical recovery bundle verification\n")
             results=[]; failed=[]
+            if not destinations:
+                set_job_stage(config, job["id"], "destination.upload", current=7, total=CREATE_BACKUP_PROGRESS_TOTAL)
+                set_job_stage(config, job["id"], "destination.verify", current=8, total=CREATE_BACKUP_PROGRESS_TOTAL)
             for destination in destinations:
+                set_job_stage(config, job["id"], "destination.upload", label=f"Uploading recovery bundle to {destination_name(destination)}", current=7, total=CREATE_BACKUP_PROGRESS_TOTAL)
                 try:
                     result=store_destination(config,destination,bundle,metadata,log)
+                    set_job_stage(config, job["id"], "destination.verify", label=f"Verifying destination copy at {destination_name(destination)}", current=8, total=CREATE_BACKUP_PROGRESS_TOTAL)
+                    if not isinstance(result,dict) or result.get("ok") is False:
+                        raise RuntimeError(str((result or {}).get("reason") if isinstance(result,dict) else "destination verification failed"))
                 except Exception as exc:
                     result={"id":destination.get("id"),"type":destination.get("type"),"name":destination_name(destination),"ok":False,"reason":str(exc)}
                     failed.append(result)
@@ -2664,23 +2720,25 @@ def run_job(job_id):
     if job.get("status") not in {"dispatched", "queued"}:
         raise SystemExit("job is not dispatchable")
     log = LimitedLog(rs["logs"] / f"{job_id}.log")
-    job.update(status="running", stage="running", started_at=job.get("started_at") or now(), error=None, error_type=None)
+    job.update(status="running", stage="running", stage_label="Running", started_at=job.get("started_at") or now(), error=None, error_type=None)
+    if job.get("action") == "create_backup": job["progress"]={"current":0,"total":CREATE_BACKUP_PROGRESS_TOTAL}
     atomic_json(path, job)
     try:
         log.write(f"[TEC-TAC-BACKUP] started {now()} action={job['action']} source={job.get('context', {}).get('source_module')}\n")
         result = OPERATIONS[job["action"]](config, job, log)
-        job.update(status="succeeded", stage="complete", finished_at=now(), result=result, error=None, error_type=None)
+        job.update(status="succeeded", stage="complete", stage_label="Complete", finished_at=now(), result=result, error=None, error_type=None)
+        if job.get("action") == "create_backup": job["progress"]={"current":CREATE_BACKUP_PROGRESS_TOTAL,"total":CREATE_BACKUP_PROGRESS_TOTAL}
         atomic_json(path, job)
         log.write(f"[TEC-TAC-BACKUP] completed {job['finished_at']}\n")
         if job["action"] == "restore_backup":
             stage = rs["staging"] / f"restore-{job_id}"
             shutil.rmtree(stage, ignore_errors=True)
     except OperationFailed as exc:
-        job.update(status="failed", stage="failed", finished_at=now(), result=exc.result, error=str(exc), error_type=exc.__class__.__name__)
+        job.update(status="failed", stage="failed", stage_label="Failed", finished_at=now(), result=exc.result, error=str(exc), error_type=exc.__class__.__name__)
         atomic_json(path, job)
         log.write(f"[TEC-TAC-BACKUP] failed {job['finished_at']}: {exc}\n")
     except Exception as exc:
-        job.update(status="failed", stage="failed", finished_at=now(), error=str(exc), error_type=exc.__class__.__name__)
+        job.update(status="failed", stage="failed", stage_label="Failed", finished_at=now(), error=str(exc), error_type=exc.__class__.__name__)
         atomic_json(path, job)
         log.write(f"[TEC-TAC-BACKUP] failed {job['finished_at']}: {exc.__class__.__name__}: {exc}\n")
     finally:
@@ -2792,6 +2850,7 @@ def tactical_privileged(job_id, operation, workspace):
         "nginx-meshcentral": Path("/etc/nginx/sites-enabled/meshcentral.conf"),
     }
     if operation in nginx:
+        set_job_stage(config, job_id, "tactical.collect.nginx", current=2, total=CREATE_BACKUP_PROGRESS_TOTAL)
         requested = nginx[operation]
         src = _resolve_fixed_nginx_site_source(requested)
         # Preserve Tactical's expected archive member name from sites-enabled,
@@ -2799,6 +2858,7 @@ def tactical_privileged(job_id, operation, workspace):
         _write_workspace_file(ws, "nginx", requested.name, src, tactical_uid, tactical_gid)
         return
     if operation == "systemd":
+        set_job_stage(config, job_id, "tactical.collect.systemd", current=2, total=CREATE_BACKUP_PROGRESS_TOTAL)
         names = ["rmm.service", "celery.service", "celerybeat.service", "meshcentral.service", "nats.service", "nats-api.service"]
         daphne = Path("/etc/systemd/system/daphne.service")
         uvicorn = Path("/etc/systemd/system/uvicorn.service")
@@ -2813,6 +2873,8 @@ def tactical_privileged(job_id, operation, workspace):
         "opt-tactical": (Path("/opt/tactical"), "opt", "opt-tactical.tar.gz"),
     }
     if operation in trees:
+        substage = {"confd":"tactical.collect.confd","letsencrypt":"tactical.collect.letsencrypt","opt-tactical":"tactical.collect.opt_tactical"}[operation]
+        set_job_stage(config, job_id, substage, current=2, total=CREATE_BACKUP_PROGRESS_TOTAL)
         source, rel, filename = trees[operation]
         if not source.is_dir() or source.is_symlink():
             raise SystemExit(f"required privileged Tactical backup source is unavailable: {source}")

@@ -730,3 +730,8 @@ Privileged backup members collected by Core are now transferred to the Tactical 
 ## Tactical nginx symlink backup fix (1.15.10)
 
 Core server backup now safely resolves the three fixed Tactical nginx `sites-enabled` symlinks to regular files under `/etc/nginx/sites-available` before collecting them. This exception is limited to `rmm.conf`, `frontend.conf`, and `meshcentral.conf`; all other privileged backup inputs keep the strict no-symlink policy.
+
+
+## Core server-backup observable job status (1.15.11)
+
+`core.server_backup` 1.5.0 adds a read-only `get_job_status()` operation for module-owned progress UIs. Jobs can be looked up by the opaque Core `job_id` or the caller's `source_run_id`. Core returns only sanitized status, stage, timestamps, progress and bounded log-tail data; modules do not read `/var/lib/tec-tac/server-backup` directly. Backup creation now persists the major creation/validation/upload stages and selected Tactical privileged-collection sub-stages.
