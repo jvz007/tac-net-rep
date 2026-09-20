@@ -710,3 +710,7 @@ on failure and no credential material is returned or logged. See
 ## Server backup restore validation (1.15.3)
 
 `core.server_backup` 1.3.0 adds a non-destructive, mode-aware `validate_restore()` readiness operation. See `docs/server-backup-capability.md`.
+
+## Independent multi-package installs (1.15.4)
+
+Module Manager batches do not require packages to have dependency relationships with one another. When several independent packages are uploaded together, the batch is valid and the original upload order is retained. Declared hard dependencies only constrain ordering for the packages involved in that dependency relationship.

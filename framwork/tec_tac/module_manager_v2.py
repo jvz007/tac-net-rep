@@ -484,7 +484,17 @@ def resolve_install_plan(candidates: list[dict]) -> dict:
             if not version_satisfies(dep_version, constraint):
                 problems.append({"module": module_id, "type": "breaks_dependant", "dependency": dep_id, "constraint": constraint, "version": dep_version})
 
+    # Build ordering constraints only from dependencies that are part of this
+    # staged batch.  A dependency declaration is a constraint when present; it
+    # is never a prerequisite for participating in a multi-package install.
+    #
+    # In particular, a batch of completely independent packages is valid and
+    # must preserve the operator's upload order.  This also gives us a stable
+    # topological order for mixed batches: among packages that are currently
+    # dependency-free, retain their original staged order instead of imposing
+    # an unrelated alphabetical sequence.
     graph = {item["id"]: set() for item in candidates}
+    input_position = {module_id: index for index, module_id in enumerate(ids)}
     for item in candidates:
         for dep_id in item.get("dependencies", {}):
             if dep_id in graph:
@@ -493,7 +503,8 @@ def resolve_install_plan(candidates: list[dict]) -> dict:
     order = []
     remaining = {key: set(value) for key, value in graph.items()}
     while remaining:
-        ready = sorted(key for key, deps in remaining.items() if not deps)
+        ready = [key for key, deps in remaining.items() if not deps]
+        ready.sort(key=lambda module_id: input_position[module_id])
         if not ready:
             problems.append({"type": "dependency_cycle", "modules": sorted(remaining)})
             break
