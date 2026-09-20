@@ -992,8 +992,51 @@ def safe_tar_members(tf: tarfile.TarFile):
     return members
 
 
+def _canonical_payload_roots(paths):
+    """Return unique existing roots with recursively-covered children removed.
+
+    Payload inputs are canonicalized with Path.resolve() first.  If an included
+    directory already recursively covers another requested path, the child is
+    discarded so tarfile cannot emit the same normalized archive member twice.
+    Input order is preserved for the remaining independent roots.
+    """
+    resolved_paths = []
+    seen = set()
+    for raw in paths:
+        path = Path(raw)
+        if not path.exists():
+            continue
+        resolved = path.resolve()
+        key = str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        resolved_paths.append(resolved)
+
+    roots = []
+    for candidate in resolved_paths:
+        covered = False
+        for ancestor in resolved_paths:
+            if ancestor == candidate or not ancestor.is_dir():
+                continue
+            try:
+                candidate.relative_to(ancestor)
+            except ValueError:
+                continue
+            covered = True
+            break
+        if not covered:
+            roots.append(candidate)
+    return roots
+
+
 def make_payload_tar(output: Path, paths, *, exclude_paths=()):
-    """Create a gzip tar preserving original absolute paths beneath payload root."""
+    """Create a gzip tar preserving original absolute paths beneath payload root.
+
+    Requested roots are canonicalized before archiving. Descendants already
+    covered recursively by another included directory are omitted; duplicate
+    member validation remains authoritative for the resulting archive.
+    """
     excluded = [str(Path(item).resolve()).lstrip("/").rstrip("/") for item in exclude_paths]
 
     def _filter(info):
@@ -1004,16 +1047,7 @@ def make_payload_tar(output: Path, paths, *, exclude_paths=()):
 
     with tarfile.open(output, "w:gz") as tf:
         tf.dereference = True
-        seen = set()
-        for raw in paths:
-            path = Path(raw)
-            if not path.exists():
-                continue
-            resolved = path.resolve()
-            key = str(resolved)
-            if key in seen:
-                continue
-            seen.add(key)
+        for resolved in _canonical_payload_roots(paths):
             arcname = str(resolved).lstrip("/")
             tf.add(resolved, arcname=arcname, recursive=True, filter=_filter)
 
@@ -1058,7 +1092,9 @@ def create_tec_tac_component(config, output: Path):
     # PostgreSQL backup; the deployed UI is rebuilt from ui_source on restore.
     include = [
         paths["runtime_root"], paths["framework_source"], paths["ui_source"], paths["legacy_ui_source"],
-        paths["etc_root"], paths["system_etc_root"], paths["nginx"],
+        # runtime_root already recursively includes runtime_root/etc. Keep the
+        # system-level /etc/tec-tac configuration as a separate root.
+        paths["system_etc_root"], paths["nginx"],
     ]
     make_payload_tar(output, include, exclude_paths=(paths["state_root"],))
     ensure_regular(output, max_bytes=max_backup_bytes(config))

@@ -6,7 +6,7 @@ Tec-Tac Core exposes one narrow privileged recovery contract:
 
 ```text
 core.server_backup
-capability version 1.5.1
+capability version 1.5.2
 ```
 
 Modules request typed backup, inventory, restore, retention, destination-validation and secret-store operations. They never receive arbitrary `sudo`, shell, executable-path or unrestricted filesystem access.
@@ -331,3 +331,10 @@ The response is intentionally small and sanitized: `job_id`, `source_run_id`, `s
 ## Archive-namespace TAR link safety (1.5.1)
 
 Tactical and Tec-Tac recovery TAR validation permits symbolic and hard links only when the member path and resolved link target remain inside the archive extraction namespace. Relative symlink targets are resolved from the link member's parent; hardlink targets are resolved from the archive root and must name an archive member. Absolute targets, namespace escapes, duplicate normalized paths, device/FIFO/socket entries and other special members remain rejected. This shared validation applies to Tactical native/nested archive validation and Tec-Tac recovery payload extraction.
+
+
+## Canonical payload roots (1.5.2)
+
+Tec-Tac recovery payload creation canonicalizes requested source roots before archiving. If a requested path is already recursively covered by an included ancestor directory, the child request is discarded. This prevents callers from emitting duplicate normalized TAR members while retaining duplicate-member validation as the final archive integrity check.
+
+`create_tec_tac_component()` no longer explicitly includes `/opt/tec-tac/etc` because `/opt/tec-tac` already contains it recursively.
