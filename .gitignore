@@ -1,8 +1,0 @@
-__pycache__/
-*.py[cod]
-*.pyo
-
-# Runtime/editor noise
-*.swp
-*.tmp
-.DS_Store

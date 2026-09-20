@@ -6,7 +6,7 @@ fail(){ echo "[TEST] FAIL: $*" >&2; exit 1; }
 [[ -f "${ROOT}/framwork/tec_tac/server_backup.py" ]] || fail "Core server-backup provider missing"
 [[ -f "${ROOT}/scripts/server-backup-helper.py" ]] || fail "privileged server-backup helper missing"
 [[ -f "${ROOT}/docs/server-backup-capability.md" ]] || fail "server-backup developer contract missing"
-grep -q 'CAPABILITY_VERSION = "1.4.0"' "${ROOT}/framwork/tec_tac/server_backup.py" || fail "server-backup capability is not 1.4.0"
+grep -q 'CAPABILITY_VERSION = "1.4.1"' "${ROOT}/framwork/tec_tac/server_backup.py" || fail "server-backup capability is not 1.4.1"
 grep -q 'core.server_backup' "${ROOT}/framwork/tec_tac/server_backup.py" || fail "core.server_backup capability id missing"
 grep -q 'register_core_server_backup_capability' "${ROOT}/framwork/tec_tac/apps.py" || fail "Core server-backup capability is not registered by AppConfig"
 grep -q 'module_id in {"tec-tac", "core"}' "${ROOT}/framwork/tec_tac/capabilities.py" || fail "capability registry does not recognize Core-owned providers"
@@ -33,13 +33,13 @@ grep -q 'operation_validate_restore' "${ROOT}/scripts/server-backup-helper.py" |
 grep -q 'artifact_valid' "${ROOT}/scripts/server-backup-helper.py" || fail "restore validation artifact/readiness split missing"
 
 PYTHONPATH="${ROOT}/framwork" python3 - "${ROOT}" <<'PY'
-import importlib.util, pathlib, tempfile, tarfile, io, hashlib, json, sys, gzip
+import importlib.util, pathlib, tempfile, tarfile, io, hashlib, json, sys, gzip, shutil
 root=pathlib.Path(sys.argv[1])
 import tec_tac.capabilities as cap
 from tec_tac.server_backup import register_core_server_backup_capability, get_server_backup_provider
 cap._clear_capabilities_for_tests()
 reg=register_core_server_backup_capability()
-assert reg.id == "core.server_backup" and reg.module_id == "core" and reg.version == "1.4.0"
+assert reg.id == "core.server_backup" and reg.module_id == "core" and reg.version == "1.4.1"
 assert set(("create_backup","list_backups","restore_backup","apply_retention","validate_destination","validate_restore","store_secret","delete_secret")) <= set(reg.operations)
 assert reg.metadata["format_version"] == 2
 assert reg.metadata["overrideable_restore_checks"] == ["target.os"]
@@ -61,6 +61,26 @@ import inspect
 source=inspect.getsource(h.create_tactical_component)
 assert source.index("validate_tactical_native_archive(archive)") < source.index("digest = sha256_file(archive)")
 assert "TEC_TAC_BACKUP_JOB_ID" in source and "Core narrow privilege bridge" in source
+
+# Privileged collection output must be private but owned/readable by the
+# Tactical account that later creates the native TAR.
+import os, pwd, stat, subprocess
+with tempfile.TemporaryDirectory() as wd:
+    wd=pathlib.Path(wd)
+    workspace=wd/"workspace"; (workspace/"nginx").mkdir(parents=True)
+    os.chmod(wd,0o755); os.chmod(workspace,0o755); os.chmod(workspace/"nginx",0o755)
+    src=wd/"source"; src.write_bytes(b"privileged-backup-material")
+    try:
+        acct=pwd.getpwnam("nobody")
+    except KeyError:
+        acct=pwd.getpwuid(os.getuid())
+    h._write_workspace_file(workspace,"nginx","rmm.conf",src,acct.pw_uid,acct.pw_gid)
+    out=workspace/"nginx"/"rmm.conf"
+    st=out.stat()
+    assert st.st_uid==acct.pw_uid and st.st_gid==acct.pw_gid
+    assert stat.S_IMODE(st.st_mode)==0o600
+    if os.geteuid()==0 and shutil.which("runuser"):
+        subprocess.run(["runuser","-u",acct.pw_name,"--","test","-r",str(out)],check=True)
 
 with tempfile.TemporaryDirectory() as od:
     od=pathlib.Path(od)

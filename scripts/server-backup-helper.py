@@ -2722,14 +2722,27 @@ def _open_workspace_dir(workspace: Path, relative):
         raise
 
 
-def _write_workspace_file(workspace: Path, relative_dir, filename, source: Path):
+def _write_workspace_file(workspace: Path, relative_dir, filename, source: Path, owner_uid: int, owner_gid: int):
     dirfd = _open_workspace_dir(workspace, relative_dir)
     try:
         outfd = os.open(filename, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600, dir_fd=dirfd)
         try:
             with source.open("rb") as src, os.fdopen(outfd, "wb", closefd=False) as out:
                 shutil.copyfileobj(src, out, length=1024 * 1024)
+            # The privileged bridge runs as root, but Tactical backup.sh later
+            # archives this workspace as the Tactical service account. Hand the
+            # completed file to that exact account while keeping it private.
+            os.fchown(outfd, owner_uid, owner_gid)
             os.fchmod(outfd, 0o600)
+            st = os.fstat(outfd)
+            if st.st_uid != owner_uid or st.st_gid != owner_gid:
+                raise SystemExit("privileged Tactical backup output ownership verification failed")
+            if stat.S_IMODE(st.st_mode) != 0o600:
+                raise SystemExit("privileged Tactical backup output mode verification failed")
+            if not (st.st_mode & stat.S_IRUSR):
+                raise SystemExit("privileged Tactical backup output is not readable by the Tactical service user")
+            if st.st_mode & (stat.S_IRWXG | stat.S_IRWXO):
+                raise SystemExit("privileged Tactical backup output is readable or writable by unintended accounts")
         finally:
             os.close(outfd)
     finally:
@@ -2755,6 +2768,7 @@ def tactical_privileged(job_id, operation, workspace):
     if job.get("action") != "create_backup" or job.get("status") != "running":
         raise SystemExit("Tactical privileged collection is only available to an active create_backup job")
     ws = _validate_tactical_workspace(config, job_id, workspace)
+    tactical_uid, tactical_gid, _, _ = tactical_identity(config)
     nginx = {
         "nginx-rmm": Path("/etc/nginx/sites-enabled/rmm.conf"),
         "nginx-frontend": Path("/etc/nginx/sites-enabled/frontend.conf"),
@@ -2762,7 +2776,7 @@ def tactical_privileged(job_id, operation, workspace):
     }
     if operation in nginx:
         src = nginx[operation]; ensure_regular(src)
-        _write_workspace_file(ws, "nginx", src.name, src)
+        _write_workspace_file(ws, "nginx", src.name, src, tactical_uid, tactical_gid)
         return
     if operation == "systemd":
         names = ["rmm.service", "celery.service", "celerybeat.service", "meshcentral.service", "nats.service", "nats-api.service"]
@@ -2771,7 +2785,7 @@ def tactical_privileged(job_id, operation, workspace):
         names.append("daphne.service" if daphne.is_file() else "uvicorn.service")
         for name in names:
             src = Path("/etc/systemd/system") / name; ensure_regular(src)
-            _write_workspace_file(ws, "systemd", name, src)
+            _write_workspace_file(ws, "systemd", name, src, tactical_uid, tactical_gid)
         return
     trees = {
         "confd": (Path("/etc/conf.d"), "confd", "etc-confd.tar.gz"),
@@ -2784,7 +2798,7 @@ def tactical_privileged(job_id, operation, workspace):
             raise SystemExit(f"required privileged Tactical backup source is unavailable: {source}")
         tmp = _archive_fixed_tree(source)
         try:
-            _write_workspace_file(ws, rel, filename, tmp)
+            _write_workspace_file(ws, rel, filename, tmp, tactical_uid, tactical_gid)
         finally:
             tmp.unlink(missing_ok=True)
         return

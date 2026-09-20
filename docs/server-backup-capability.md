@@ -6,7 +6,7 @@ Tec-Tac Core exposes one narrow privileged recovery contract:
 
 ```text
 core.server_backup
-capability version 1.4.0
+capability version 1.4.1
 ```
 
 Modules request typed backup, inventory, restore, retention, destination-validation and secret-store operations. They never receive arbitrary `sudo`, shell, executable-path or unrestricted filesystem access.
@@ -305,3 +305,10 @@ Tactical `backup.sh` v34 still uses `sudo` for a small fixed set of root-owned b
 When `target.os` has a valid persisted override audit ID, Core prepares a staged Tactical `restore.sh` before any destructive action. The patch is bound to the inspected Tactical restore baseline (`SCRIPT_VERSION=67`) and requires the exact known OS-support rejection block to occur once. Only that rejection block is removed; real `lsb_release` OS identity, release and codename variables remain unchanged and continue to drive repository/package logic.
 
 If the restore-script version or expected OS-check block differs, Core aborts before stopping services or moving `/rmm`. Without an authorized `target.os` override, Core copies Tactical `restore.sh` byte-for-byte unchanged.
+
+
+## Privileged Tactical collection ownership (1.4.1)
+
+The narrow privileged bridge writes nginx, systemd, conf.d, certificate and `/opt/tactical` backup material as root, then atomically hands each completed workspace file to the configured Tactical service UID/GID with mode `0600`. Before returning success the helper verifies the exact owner/group and mode and confirms that no group/other permission bits are present. This is required because upstream Tactical `backup.sh` creates the native TAR as the Tactical account.
+
+`validate_tactical_native_archive()` remains the authoritative post-collection trust boundary and is intentionally unchanged.
