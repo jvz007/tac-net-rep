@@ -2749,6 +2749,23 @@ def _write_workspace_file(workspace: Path, relative_dir, filename, source: Path,
         os.close(dirfd)
 
 
+def _resolve_fixed_nginx_site_source(source: Path, allowed_root: Path = Path("/etc/nginx/sites-available")):
+    """Resolve one fixed nginx sites-enabled source without relaxing symlink policy elsewhere."""
+    try:
+        root = allowed_root.resolve(strict=True)
+        target = source.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise SystemExit(f"required nginx backup source cannot be resolved safely: {source}") from exc
+    if not root.is_dir() or root.is_symlink():
+        raise SystemExit(f"allowed nginx configuration root is unavailable or unsafe: {root}")
+    try:
+        target.relative_to(root)
+    except ValueError as exc:
+        raise SystemExit(f"nginx backup source resolves outside the allowed configuration root: {source} -> {target}") from exc
+    ensure_regular(target)
+    return target
+
+
 def _archive_fixed_tree(source: Path):
     fd, tmp_name = tempfile.mkstemp(prefix="tectac-priv-", suffix=".tar.gz")
     os.close(fd)
@@ -2775,8 +2792,11 @@ def tactical_privileged(job_id, operation, workspace):
         "nginx-meshcentral": Path("/etc/nginx/sites-enabled/meshcentral.conf"),
     }
     if operation in nginx:
-        src = nginx[operation]; ensure_regular(src)
-        _write_workspace_file(ws, "nginx", src.name, src, tactical_uid, tactical_gid)
+        requested = nginx[operation]
+        src = _resolve_fixed_nginx_site_source(requested)
+        # Preserve Tactical's expected archive member name from sites-enabled,
+        # even though the bytes are read from the validated sites-available target.
+        _write_workspace_file(ws, "nginx", requested.name, src, tactical_uid, tactical_gid)
         return
     if operation == "systemd":
         names = ["rmm.service", "celery.service", "celerybeat.service", "meshcentral.service", "nats.service", "nats-api.service"]

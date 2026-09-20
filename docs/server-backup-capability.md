@@ -6,7 +6,7 @@ Tec-Tac Core exposes one narrow privileged recovery contract:
 
 ```text
 core.server_backup
-capability version 1.4.1
+capability version 1.4.2
 ```
 
 Modules request typed backup, inventory, restore, retention, destination-validation and secret-store operations. They never receive arbitrary `sudo`, shell, executable-path or unrestricted filesystem access.
@@ -312,3 +312,8 @@ If the restore-script version or expected OS-check block differs, Core aborts be
 The narrow privileged bridge writes nginx, systemd, conf.d, certificate and `/opt/tactical` backup material as root, then atomically hands each completed workspace file to the configured Tactical service UID/GID with mode `0600`. Before returning success the helper verifies the exact owner/group and mode and confirms that no group/other permission bits are present. This is required because upstream Tactical `backup.sh` creates the native TAR as the Tactical account.
 
 `validate_tactical_native_archive()` remains the authoritative post-collection trust boundary and is intentionally unchanged.
+
+
+## Privileged nginx symlink handling (1.4.2)
+
+Tactical nginx `sites-enabled` entries are commonly symlinks. Core permits symlink resolution only for the fixed allow-listed `rmm.conf`, `frontend.conf`, and `meshcentral.conf` collection operations. Each source is resolved with `strict=True`; the final target must be a regular file beneath `/etc/nginx/sites-available`. The workspace member keeps the original filename and the existing Tactical account ownership with mode `0600`. No general privileged source may bypass `ensure_regular()` or traverse arbitrary symlinks.

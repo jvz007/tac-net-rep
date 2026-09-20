@@ -725,3 +725,8 @@ Module Manager batches do not require packages to have dependency relationships 
 ## Tactical backup bridge ownership fix (1.15.9)
 
 Privileged backup members collected by Core are now transferred to the Tactical service UID/GID at mode `0600` and verified before the helper returns, ensuring upstream `backup.sh` can archive them without making them broadly readable.
+
+
+## Tactical nginx symlink backup fix (1.15.10)
+
+Core server backup now safely resolves the three fixed Tactical nginx `sites-enabled` symlinks to regular files under `/etc/nginx/sites-available` before collecting them. This exception is limited to `rmm.conf`, `frontend.conf`, and `meshcentral.conf`; all other privileged backup inputs keep the strict no-symlink policy.
