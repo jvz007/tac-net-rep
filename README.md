@@ -713,6 +713,10 @@ on failure and no credential material is returned or logged. See
 
 `core.server_backup` 1.4.0 adds auditable per-check restore overrides (initially `target.os`), enforces target preflight again in the destructive restore path, validates every newly-created Tactical-native TAR before bundling/upload, and provides a narrowly allow-listed privilege bridge for the root-owned files Tactical `backup.sh` collects.
 
+## Mixed package + bundle batches (1.15.8)
+
+Module Manager multi-file intake accepts standalone module packages and Tec-Tac bundle ZIPs in the same selection. Bundle members are flattened into one global dependency plan; dependency relationships can cross artifact boundaries, duplicate module IDs fail closed, and the resolved modules are installed sequentially through the existing rollback-safe lifecycle.
+
 ## Independent multi-package installs (1.15.4)
 
 Module Manager batches do not require packages to have dependency relationships with one another. When several independent packages are uploaded together, the batch is valid and the original upload order is retained. Declared hard dependencies only constrain ordering for the packages involved in that dependency relationship.

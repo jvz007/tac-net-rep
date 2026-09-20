@@ -585,43 +585,69 @@ def stage_multiple_packages(uploads) -> dict:
         raise ModuleManagerV2Error("At least one package is required.")
     if len(uploads) == 1:
         return stage_uploaded_artifact(uploads[0])
-    staged = []
+
+    # A multi-file intake may contain any mixture of normal module packages and
+    # Tec-Tac bundles. Bundles are staging containers only: their child module
+    # previews are flattened into one dependency plan with the standalone
+    # packages so dependency resolution is global across the entire selection.
+    artifacts = []
+    flattened = []
     try:
         for upload in uploads:
             filename = str(getattr(upload, "name", "package"))
             try:
-                # Classify every upload independently. This is intentionally the
-                # same artifact classifier used for single uploads so one package
-                # cannot change how a different, unrelated package is interpreted.
                 stage = stage_uploaded_artifact(upload)
-                if stage.get("kind") == "bundle" or (stage.get("preview") or {}).get("kind") == "bundle":
-                    discard_v2_stage(stage["upload_id"])
-                    raise ModuleManagerV2Error(
-                        "Bundle archives must be uploaded separately; multi-file upload is for independent module packages."
-                    )
                 preview = dict(stage.get("preview") or {})
-                if not preview.get("id"):
-                    meta = _load_stage(stage["upload_id"])
-                    preview = _package_metadata(Path(meta["package_path"]))
+                kind = str(stage.get("kind") or preview.get("kind") or "package")
+                artifact = {**stage, "preview": preview, "kind": kind}
+                artifacts.append(artifact)
+
+                if kind == "bundle":
+                    children = list(preview.get("packages") or [])
+                    if not children:
+                        raise ModuleManagerV2Error("Bundle contains no installable module packages.")
+                    for child in children:
+                        flattened.append({
+                            "preview": dict(child),
+                            "source_kind": "bundle",
+                            "source_upload_id": stage["upload_id"],
+                            "source_bundle_id": preview.get("id"),
+                            "source_filename": filename,
+                        })
+                else:
+                    if not preview.get("id"):
+                        meta = _load_stage(stage["upload_id"])
+                        preview = _package_metadata(Path(meta["package_path"]))
+                        artifact["preview"] = preview
+                    flattened.append({
+                        **stage,
+                        "preview": preview,
+                        "source_kind": "package",
+                        "source_upload_id": stage["upload_id"],
+                        "source_filename": filename,
+                    })
             except (ModuleManagerError, ModuleManagerV2Error) as exc:
                 raise ModuleManagerV2Error(f"{filename}: {exc}") from exc
-            staged.append({**stage, "preview": preview})
-        plan = resolve_install_plan([item["preview"] for item in staged])
+
+        plan = resolve_install_plan([item["preview"] for item in flattened])
         batch_id = str(uuid.uuid4())
         BATCHES_ROOT.mkdir(parents=True, exist_ok=True)
         payload = {
             "kind": "batch",
             "upload_id": batch_id,
             "created_at": _utcnow(),
-            "packages": staged,
+            "artifacts": artifacts,
+            # packages is intentionally flattened for the UI/install-order
+            # contract. One uploaded bundle may therefore contribute many rows.
+            "packages": flattened,
             "plan": plan,
         }
         _atomic_json(BATCHES_ROOT / f"{batch_id}.json", payload)
         return payload
     except Exception:
-        for item in staged:
+        for artifact in artifacts:
             try:
-                discard_stage(item["upload_id"])
+                discard_v2_stage(artifact["upload_id"])
             except Exception:
                 pass
         raise
@@ -755,9 +781,15 @@ def discard_v2_stage(upload_id: str) -> None:
     except ModuleManagerV2Error:
         batch = None
     if batch is not None:
-        for package in batch.get("packages") or []:
+        children = batch.get("artifacts") or batch.get("packages") or []
+        seen = set()
+        for artifact in children:
+            child_id = str(artifact.get("upload_id") or artifact.get("source_upload_id") or "")
+            if not child_id or child_id in seen or child_id == str(upload_id):
+                continue
+            seen.add(child_id)
             try:
-                discard_stage(package["upload_id"])
+                discard_v2_stage(child_id)
             except Exception:
                 pass
         (BATCHES_ROOT / f"{upload_id}.json").unlink(missing_ok=True)
@@ -885,14 +917,47 @@ def queue_v2_install(upload_id: str, requested_order=None, requested_by: str | N
 
 def queue_batch_install(batch_id: str, requested_order=None, requested_by: str | None = None) -> dict:
     batch = _load_batch(batch_id)
-    package_paths = []
+    job_artifacts = []
     candidates = []
-    for package in batch.get("packages", []):
-        meta = _load_stage(package["upload_id"])
+
+    artifacts = batch.get("artifacts")
+    if not isinstance(artifacts, list):
+        # Compatibility with batches staged by 1.15.7 and older.
+        artifacts = [{**item, "kind": "package"} for item in (batch.get("packages") or [])]
+
+    for artifact in artifacts:
+        kind = str(artifact.get("kind") or (artifact.get("preview") or {}).get("kind") or "package")
+        upload_id = str(artifact.get("upload_id") or "")
+        if kind == "bundle":
+            bundle = _load_bundle(upload_id)
+            fresh = _inspect_bundle(Path(bundle["bundle_path"]))
+            candidates.extend(fresh.get("packages") or [])
+            job_artifacts.append({
+                "kind": "bundle",
+                "upload_id": upload_id,
+                "bundle_path": bundle["bundle_path"],
+                "bundle_id": fresh.get("id"),
+                "package_files": fresh.get("package_files") or [],
+            })
+            continue
+
+        meta = _load_stage(upload_id)
         candidate = _package_metadata(Path(meta["package_path"]))
         _enforce_candidate_licensing(candidate)
         candidates.append(candidate)
-        package_paths.append({"id": candidate["id"], "path": meta["package_path"], "upload_id": package["upload_id"]})
+        job_artifacts.append({
+            "kind": "package",
+            "id": candidate["id"],
+            "path": meta["package_path"],
+            "upload_id": upload_id,
+            "source": meta.get("source_provenance"),
+        })
+
+    # Re-resolve from the freshly inspected child packages immediately before
+    # dispatch. This catches changed/corrupt staging and duplicate module IDs
+    # across two bundles or a bundle plus a standalone package.
+    for candidate in candidates:
+        _enforce_candidate_licensing(candidate)
     plan = resolve_install_plan(candidates)
     if not plan.get("valid"):
         raise ModuleManagerV2Error("Batch dependency plan is not satisfiable.")
@@ -901,7 +966,7 @@ def queue_batch_install(batch_id: str, requested_order=None, requested_by: str |
         "action": "batch_install",
         "plugin_id": "batch",
         "batch_id": batch_id,
-        "packages": package_paths,
+        "artifacts": job_artifacts,
         "plan": plan,
         "requested_by": str(requested_by) if requested_by else None,
     })

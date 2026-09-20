@@ -303,18 +303,53 @@ def bundle_packages(job, running_root):
 
 def batch_packages(job, running_root):
     result = []
-    for item in job.get("packages") or []:
-        source = Path(str(item.get("path", ""))).resolve()
+    artifacts = job.get("artifacts")
+    if not isinstance(artifacts, list):
+        # Compatibility with pre-1.15.8 jobs.
+        artifacts = [{**item, "kind": "package"} for item in (job.get("packages") or [])]
+
+    seen_ids = set()
+    for index, item in enumerate(artifacts):
+        kind = str(item.get("kind") or "package")
+        source = Path(str(item.get("bundle_path") if kind == "bundle" else item.get("path", ""))).resolve()
         try:
             source.relative_to(STAGED_ROOT.resolve())
         except ValueError as exc:
-            raise RuntimeError("invalid staged batch package path") from exc
+            raise RuntimeError("invalid staged batch artifact path") from exc
         if not source.is_file():
-            raise RuntimeError(f"staged batch package missing: {item.get('id')}")
+            raise RuntimeError(f"staged batch artifact missing: {item.get('id') or item.get('bundle_id') or index}")
+
+        if kind == "bundle":
+            copied = running_root / f"bundle-{index}.zip"
+            shutil.copy2(source, copied)
+            extract = running_root / f"bundle-{index}"
+            extract.mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(copied) as zf:
+                for member in zf.infolist():
+                    name = Path(member.filename)
+                    if name.is_absolute() or ".." in name.parts:
+                        raise RuntimeError("unsafe path in bundle")
+                zf.extractall(extract)
+            for package in item.get("package_files") or []:
+                module_id = str(package.get("id") or "")
+                filename = str(package.get("file") or "")
+                matches = list(extract.rglob(filename))
+                if len(matches) != 1:
+                    raise RuntimeError(f"bundle package file could not be uniquely resolved: {filename}")
+                if module_id in seen_ids:
+                    raise RuntimeError(f"duplicate module id in batch: {module_id}")
+                seen_ids.add(module_id)
+                result.append({"id": module_id, "path": str(matches[0]), "version": package.get("version")})
+            continue
+
+        module_id = str(item.get("id") or "")
+        if module_id in seen_ids:
+            raise RuntimeError(f"duplicate module id in batch: {module_id}")
+        seen_ids.add(module_id)
         suffix = "".join(source.suffixes) or ".zip"
-        target = running_root / f"{item['id']}{suffix}"
+        target = running_root / f"package-{index}-{module_id}{suffix}"
         shutil.copy2(source, target)
-        result.append({"id": item["id"], "path": str(target), "source": item.get("source")})
+        result.append({"id": module_id, "path": str(target), "source": item.get("source")})
     return result
 
 
@@ -332,8 +367,12 @@ def cleanup_successful_stage(job, log):
         if JOB_RE.fullmatch(upload_id):
             (BUNDLES_ROOT / f"{upload_id}.json").unlink(missing_ok=True)
     elif job.get("action") == "batch_install":
-        for item in job.get("packages") or []:
-            source = Path(str(item.get("path", "")))
+        artifacts = job.get("artifacts")
+        if not isinstance(artifacts, list):
+            artifacts = [{**item, "kind": "package"} for item in (job.get("packages") or [])]
+        for item in artifacts:
+            kind = str(item.get("kind") or "package")
+            source = Path(str(item.get("bundle_path") if kind == "bundle" else item.get("path", "")))
             try:
                 source.resolve().relative_to(STAGED_ROOT.resolve())
                 source.unlink(missing_ok=True)
@@ -341,7 +380,8 @@ def cleanup_successful_stage(job, log):
                 pass
             upload_id = str(item.get("upload_id") or "")
             if JOB_RE.fullmatch(upload_id):
-                (STAGED_ROOT / f"{upload_id}.json").unlink(missing_ok=True)
+                root = BUNDLES_ROOT if kind == "bundle" else STAGED_ROOT
+                (root / f"{upload_id}.json").unlink(missing_ok=True)
         batch_id = str(job.get("batch_id") or "")
         if JOB_RE.fullmatch(batch_id):
             (BATCHES_ROOT / f"{batch_id}.json").unlink(missing_ok=True)
