@@ -6,7 +6,7 @@ fail(){ echo "[TEST] FAIL: $*" >&2; exit 1; }
 [[ -f "${ROOT}/framwork/tec_tac/server_backup.py" ]] || fail "Core server-backup provider missing"
 [[ -f "${ROOT}/scripts/server-backup-helper.py" ]] || fail "privileged server-backup helper missing"
 [[ -f "${ROOT}/docs/server-backup-capability.md" ]] || fail "server-backup developer contract missing"
-grep -q 'CAPABILITY_VERSION = "1.3.0"' "${ROOT}/framwork/tec_tac/server_backup.py" || fail "server-backup capability is not 1.2.0"
+grep -q 'CAPABILITY_VERSION = "1.4.0"' "${ROOT}/framwork/tec_tac/server_backup.py" || fail "server-backup capability is not 1.4.0"
 grep -q 'core.server_backup' "${ROOT}/framwork/tec_tac/server_backup.py" || fail "core.server_backup capability id missing"
 grep -q 'register_core_server_backup_capability' "${ROOT}/framwork/tec_tac/apps.py" || fail "Core server-backup capability is not registered by AppConfig"
 grep -q 'module_id in {"tec-tac", "core"}' "${ROOT}/framwork/tec_tac/capabilities.py" || fail "capability registry does not recognize Core-owned providers"
@@ -37,7 +37,7 @@ import tec_tac.capabilities as cap
 from tec_tac.server_backup import register_core_server_backup_capability, get_server_backup_provider
 cap._clear_capabilities_for_tests()
 reg=register_core_server_backup_capability()
-assert reg.id == "core.server_backup" and reg.module_id == "core" and reg.version == "1.3.0"
+assert reg.id == "core.server_backup" and reg.module_id == "core" and reg.version == "1.4.0"
 assert set(("create_backup","list_backups","restore_backup","apply_retention","validate_destination","validate_restore","store_secret","delete_secret")) <= set(reg.operations)
 assert reg.metadata["format_version"] == 2
 assert set(reg.metadata["recovery_modes"]) == {"full","tactical","tec_tac"}
@@ -52,6 +52,29 @@ spec=importlib.util.spec_from_file_location("server_backup_helper",root/"scripts
 h=importlib.util.module_from_spec(spec); spec.loader.exec_module(h)
 assert h.ARCHIVE_RE.fullmatch("tec-tac-backup-2026_09_20__09_15_00.tgz")
 assert h.LEGACY_ARCHIVE_RE.fullmatch("rmm-backup-2026_09_20__09_14_32.tar")
+
+with tempfile.TemporaryDirectory() as td:
+    td=pathlib.Path(td)
+    # Tec-Tac component creation must exclude the entire mutable state root,
+    # even when it contains large historical installers/backups.
+    runtime=td/"runtime"; framework_src=td/"framework-src"; ui_src=td/"ui-src"; state=td/"state"
+    for path in (runtime,framework_src,ui_src,state): path.mkdir(parents=True,exist_ok=True)
+    (runtime/"VERSION").write_text("1.15.5\n"); (runtime/"etc").mkdir(); (runtime/"etc"/"tec-tac.conf").write_text("x")
+    (framework_src/"VERSION").write_text("1.15.5\n"); (framework_src/"install.sh").write_text("#!/bin/sh\n")
+    (ui_src/"VERSION").write_text("0.11.2\n"); (ui_src/"scripts").mkdir(); (ui_src/"scripts"/"install.sh").write_text("#!/bin/sh\n")
+    (state/"system-updates"/"backups").mkdir(parents=True); (state/"system-updates"/"backups"/"old-installer.zip").write_bytes(b"z"*1024)
+    (state/"server-backup"/"staging").mkdir(parents=True); (state/"server-backup"/"staging"/"old.tgz").write_bytes(b"b"*1024)
+    component=td/"component.tar.gz"
+    meta=h.create_tec_tac_component({
+      "TEC_TAC_ROOT":str(runtime),"TEC_TAC_FRAMEWORK_SOURCE":str(framework_src),"TEC_TAC_UI_SOURCE":str(ui_src),
+      "TEC_TAC_STATE_ROOT":str(state),"TEC_TAC_SERVER_BACKUP_ROOT":str(state/"server-backup"),
+      "TEC_TAC_UI_DEPLOY_ROOT":str(state/"ui"/"tec-tac"),
+    },component)
+    assert meta["state_policy"]["included"] is False
+    with tarfile.open(component,"r:gz") as tf:
+      names={m.name.lstrip("./") for m in tf.getmembers()}
+    state_rel=str(state.resolve()).lstrip("/")
+    assert not any(n==state_rel or n.startswith(state_rel+"/") for n in names), names
 
 with tempfile.TemporaryDirectory() as td:
     td=pathlib.Path(td)
@@ -88,14 +111,13 @@ with tempfile.TemporaryDirectory() as td:
     tec=td/"tec-tac-backup.tar.gz"
     with tarfile.open(tec,"w:gz") as tf:
       for name,data in {
-        "opt/tec-tac/VERSION":b"1.15.3\n",
-        "var/lib/tec-tac/module-manager/module-state.json":b"{}",
+        "opt/tec-tac/VERSION":b"1.15.5\n",
         "etc/tec-tac/config":b"x",
       }.items():
         ti=tarfile.TarInfo(name); ti.size=len(data); tf.addfile(ti,io.BytesIO(data))
     tec_hash=h.sha256_file(tec)
     tmeta={"included":True,"archive":f"tactical/{tactical.name}","archive_name":tactical.name,"sha256":native_hash,"size_bytes":tactical.stat().st_size}
-    cmeta={"included":True,"archive":"tec-tac/tec-tac-backup.tar.gz","archive_name":"tec-tac-backup.tar.gz","sha256":tec_hash,"size_bytes":tec.stat().st_size,"framework_version":"1.15.3","ui_version":"0.11.2","paths":{"framework_source":"/opt/tec-tac-src/framework","ui_source":"/opt/tec-tac-src/ui"}}
+    cmeta={"included":True,"archive":"tec-tac/tec-tac-backup.tar.gz","archive_name":"tec-tac-backup.tar.gz","sha256":tec_hash,"size_bytes":tec.stat().st_size,"framework_version":"1.15.5","ui_version":"0.11.2","paths":{"framework_source":"/opt/tec-tac-src/framework","ui_source":"/opt/tec-tac-src/ui","state_root":"/var/lib/tec-tac"},"state_policy":{"state_root":"/var/lib/tec-tac","included":False,"reason":"mutable runtime/cache/history/staging state is rebuilt after restore"}}
     manifest={"format_version":2,"artifact_type":"tec-tac-recovery-bundle","created_at":h.now(),"backup_class":"manual","components":{"tactical":tmeta,"tec_tac":cmeta},"recovery_modes":["full","tactical","tec_tac"]}
     (td/"manifest.json").write_text(json.dumps(manifest))
     (td/"checksums.sha256").write_text(f"{native_hash}  tactical/{tactical.name}\n{tec_hash}  tec-tac/tec-tac-backup.tar.gz\n")

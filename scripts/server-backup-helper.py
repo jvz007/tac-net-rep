@@ -930,22 +930,16 @@ def tec_tac_paths(config):
 
 def create_tec_tac_component(config, output: Path):
     paths = tec_tac_paths(config)
-    backup_runtime = Path(config.get("TEC_TAC_SERVER_BACKUP_ROOT") or "/var/lib/tec-tac/server-backup")
+    # /var/lib/tec-tac is intentionally excluded in full from recovery payloads.
+    # It contains mutable runtime/cache/history/staging data whose inclusion can
+    # recursively capture old installers and backup artifacts and cause runaway
+    # growth. Durable scheduler/dashboard/preferences data lives in Tactical's
+    # PostgreSQL backup; the deployed UI is rebuilt from ui_source on restore.
     include = [
         paths["runtime_root"], paths["framework_source"], paths["ui_source"], paths["legacy_ui_source"],
-        paths["state_root"], paths["etc_root"], paths["system_etc_root"], paths["nginx"],
+        paths["etc_root"], paths["system_etc_root"], paths["nginx"],
     ]
-    make_payload_tar(
-        output,
-        include,
-        exclude_paths=(
-            backup_runtime / "jobs",
-            backup_runtime / "logs",
-            backup_runtime / "staging",
-            backup_runtime / "pre-restore",
-            backup_runtime / "server-backup.lock",
-        ),
-    )
+    make_payload_tar(output, include, exclude_paths=(paths["state_root"],))
     ensure_regular(output, max_bytes=max_backup_bytes(config))
     return {
         "included": True,
@@ -956,6 +950,11 @@ def create_tec_tac_component(config, output: Path):
         "framework_version": detect_version(paths["framework_source"]) or detect_version(paths["runtime_root"]),
         "ui_version": detect_version(Path(config["TEC_TAC_UI_DEPLOY_ROOT"])) or detect_version(paths["ui_source"]),
         "paths": {key: str(value) for key, value in paths.items()},
+        "state_policy": {
+            "state_root": str(paths["state_root"]),
+            "included": False,
+            "reason": "mutable runtime/cache/history/staging state is rebuilt after restore",
+        },
     }
 
 
@@ -1411,27 +1410,25 @@ def validate_tec_tac_component(path: Path, component_meta=None):
         if not members:
             raise RuntimeError("Tec-Tac component is empty")
         names = {member.name.lstrip("./") for member in members}
+        state_root = str(((meta.get("state_policy") or {}).get("state_root")) or "/var/lib/tec-tac").strip().lstrip("/").rstrip("/")
         for name in names:
             if name == "rmm" or name.startswith("rmm/"):
                 raise RuntimeError("Tec-Tac recovery component may not contain Tactical /rmm tracked source")
-            if "/server-backup/jobs/" in "/" + name or "/server-backup/logs/" in "/" + name or "/server-backup/staging/" in "/" + name:
-                raise RuntimeError("Tec-Tac recovery component contains transient backup runtime state")
-        # Paths recorded in the manifest must be structurally safe. At least
-        # one framework/runtime payload and persistent state/config payload are
-        # expected when those source paths existed at backup time.
+            if state_root and (name == state_root or name.startswith(state_root + "/")):
+                raise RuntimeError("Tec-Tac recovery component may not contain /var/lib/tec-tac mutable state")
+        # Paths recorded in the manifest must be structurally safe. The
+        # recovery component intentionally excludes /var/lib/tec-tac and must
+        # still contain framework/runtime and configuration payloads.
         for rel in expected_paths:
             pp = PurePosixPath(rel)
             if pp.is_absolute() or ".." in pp.parts:
                 raise RuntimeError("Tec-Tac component manifest contains an unsafe source path")
         classes = {
             "framework": any(name == "opt/tec-tac" or name.startswith("opt/tec-tac/") or name.startswith("opt/tec-tac-src/framework/") for name in names),
-            "state": any(name == "var/lib/tec-tac" or name.startswith("var/lib/tec-tac/") for name in names),
             "config": any(name == "etc/tec-tac" or name.startswith("etc/tec-tac/") or name.startswith("opt/tec-tac/etc/") for name in names),
         }
         if not classes["framework"]:
             raise RuntimeError("Tec-Tac component does not contain framework/runtime payload")
-        if not classes["state"]:
-            raise RuntimeError("Tec-Tac component does not contain persistent state payload")
         if not classes["config"]:
             raise RuntimeError("Tec-Tac component does not contain configuration payload")
     return True

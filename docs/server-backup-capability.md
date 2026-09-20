@@ -1,12 +1,12 @@
 # Core privileged server backup capability
 
-**Framework baseline:** 1.15.2+
+**Framework baseline:** 1.15.5+
 
 Tec-Tac Core exposes one narrow privileged recovery contract:
 
 ```text
 core.server_backup
-capability version 1.2.0
+capability version 1.4.0
 ```
 
 Modules request typed backup, inventory, restore, retention, destination-validation and secret-store operations. They never receive arbitrary `sudo`, shell, executable-path or unrestricted filesystem access.
@@ -16,7 +16,7 @@ from tec_tac.capabilities import get_capability
 
 backup = get_capability(
     "core.server_backup",
-    version=">=1.2.0,<2.0.0",
+    version=">=1.4.0,<2.0.0",
 )
 ```
 
@@ -46,7 +46,11 @@ tec-tac-backup-YYYY_MM_DD__HH_MM_SS.tgz
 
 The Tactical member is byte-for-byte the exact archive created by `/rmm/backup.sh`. Core hashes it before bundling and verifies the copied inner member against that same SHA-256. It is never appended to, unpacked/repacked, or otherwise changed.
 
-The Tec-Tac component contains resolved framework runtime/source, UI source, persistent state, `/etc/tec-tac`, installed module/runtime state and Tec-Tac nginx configuration. Active backup jobs/logs/staging/locks are excluded. No second PostgreSQL dump is created because Tec-Tac Django tables already live in Tactical's `tacticalrmm` database dump.
+The Tec-Tac component contains resolved framework runtime/source, UI source, `/etc/tec-tac` and Tec-Tac nginx configuration. **`/var/lib/tec-tac` is excluded in full** and is never copied into the recovery component. This prevents staged installers, update rollback trees, lifecycle history/logs, validation staging and prior backup artifacts from being recursively captured into later backups.
+
+Scheduler schedules/configuration, dashboards and user preferences live in Tactical's `tacticalrmm` PostgreSQL database and are therefore protected by Tactical's native backup. The deployed UI below `/var/lib/tec-tac/ui/tec-tac` is rebuilt from the backed-up UI source during Tec-Tac reintegration. Module Manager mutable state below `/var/lib/tec-tac/module-manager` is not restored; installed module code remains in `/opt/tec-tac/extensions` and Core rebuilds/defaults module runtime state during installation/reintegration.
+
+No second PostgreSQL dump is created because Tec-Tac Django tables already live in Tactical's `tacticalrmm` database dump.
 
 `manifest.json` is format version `2` and records selected components, hashes/sizes, framework/UI versions, resolved Tec-Tac paths, backup class, creation time and supported recovery modes. `checksums.sha256` records the component hashes.
 
@@ -111,9 +115,24 @@ Legacy native Tactical archives can only use this mode.
 
 ### `tec_tac`
 
-Requires Tec-Tac only. Core does not run Tactical `restore.sh`, does not replace the Tactical PostgreSQL database, restores Tec-Tac code/config/state and reruns framework/UI integration against the existing Tactical installation. If Tec-Tac database tables themselves need recovery, use `full`/`tactical` because those tables live in Tactical's database dump.
+Requires Tec-Tac only. Core does not run Tactical `restore.sh`, does not replace the Tactical PostgreSQL database, restores Tec-Tac code/configuration and reruns framework/UI integration against the existing Tactical installation. `/var/lib/tec-tac` is not restored from the recovery component and mutable runtime state is rebuilt. If Tec-Tac database tables themselves need recovery, use `full`/`tactical` because those tables live in Tactical's database dump.
 
 For compatibility with 1.0/1.1 callers, the provider still accepts `restore_tec_tac=True|False` and maps it to `full|tactical`; new modules must use `restore_mode`.
+
+## Mutable state exclusion (1.4.0)
+
+The Tec-Tac component has an explicit state policy in its manifest:
+
+```json
+{
+  "state_policy": {
+    "state_root": "/var/lib/tec-tac",
+    "included": false
+  }
+}
+```
+
+Creation never adds that state root to the payload. Restore validation also rejects a Tec-Tac component that contains the declared excluded state root. This is a hard boundary rather than a best-effort list of transient subdirectories, so newly introduced cache/staging/history folders under `/var/lib/tec-tac` cannot silently re-enter backups later.
 
 ## Destinations
 
