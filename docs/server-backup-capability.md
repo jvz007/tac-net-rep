@@ -6,7 +6,7 @@ Tec-Tac Core exposes one narrow privileged recovery contract:
 
 ```text
 core.server_backup
-capability version 1.5.0
+capability version 1.5.1
 ```
 
 Modules request typed backup, inventory, restore, retention, destination-validation and secret-store operations. They never receive arbitrary `sudo`, shell, executable-path or unrestricted filesystem access.
@@ -326,3 +326,8 @@ Core exposes `get_job_status(job_id=..., source_run_id=..., context=...)` so mod
 The response is intentionally small and sanitized: `job_id`, `source_run_id`, `status`, `action`, `stage`, `stage_label`, `started_at`, `finished_at`, `error`, `progress.current`, `progress.total`, and a bounded `log_tail`. Core strips common credential/token forms, URI passwords, authorization values, and private-key material before returning log or error text. Raw job requests, destination secrets, helper environment, and filesystem paths are not exposed.
 
 `create_backup` now publishes durable progress stages through its Core job document: `prepare`, `tactical.backup`, `tactical.validate`, `tec_tac.backup`, `bundle.create`, `bundle.validate`, `destination.upload`, `destination.verify`, and `complete`. The privileged Tactical collector may temporarily publish narrower sub-stages such as `tactical.collect.nginx`, `tactical.collect.systemd`, `tactical.collect.confd`, `tactical.collect.letsencrypt`, and `tactical.collect.opt_tactical`. These are observational only and do not change the backup trust boundaries.
+
+
+## Archive-namespace TAR link safety (1.5.1)
+
+Tactical and Tec-Tac recovery TAR validation permits symbolic and hard links only when the member path and resolved link target remain inside the archive extraction namespace. Relative symlink targets are resolved from the link member's parent; hardlink targets are resolved from the archive root and must name an archive member. Absolute targets, namespace escapes, duplicate normalized paths, device/FIFO/socket entries and other special members remain rejected. This shared validation applies to Tactical native/nested archive validation and Tec-Tac recovery payload extraction.

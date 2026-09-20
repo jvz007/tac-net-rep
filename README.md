@@ -735,3 +735,8 @@ Core server backup now safely resolves the three fixed Tactical nginx `sites-ena
 ## Core server-backup observable job status (1.15.11)
 
 `core.server_backup` 1.5.0 adds a read-only `get_job_status()` operation for module-owned progress UIs. Jobs can be looked up by the opaque Core `job_id` or the caller's `source_run_id`. Core returns only sanitized status, stage, timestamps, progress and bounded log-tail data; modules do not read `/var/lib/tec-tac/server-backup` directly. Backup creation now persists the major creation/validation/upload stages and selected Tactical privileged-collection sub-stages.
+
+
+## TAR link-safe recovery validation (1.15.12)
+
+`core.server_backup` 1.5.1 no longer rejects every TAR symlink/hardlink. Links are accepted only when both the member path and resolved target remain within the archive extraction namespace. Relative symlinks are resolved from the member parent and hardlinks from the archive root. Absolute/escaping links and unsafe special files remain blocked.

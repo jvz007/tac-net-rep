@@ -6,7 +6,7 @@ fail(){ echo "[TEST] FAIL: $*" >&2; exit 1; }
 [[ -f "${ROOT}/framwork/tec_tac/server_backup.py" ]] || fail "Core server-backup provider missing"
 [[ -f "${ROOT}/scripts/server-backup-helper.py" ]] || fail "privileged server-backup helper missing"
 [[ -f "${ROOT}/docs/server-backup-capability.md" ]] || fail "server-backup developer contract missing"
-grep -q 'CAPABILITY_VERSION = "1.5.0"' "${ROOT}/framwork/tec_tac/server_backup.py" || fail "server-backup capability is not 1.5.0"
+grep -q 'CAPABILITY_VERSION = "1.5.1"' "${ROOT}/framwork/tec_tac/server_backup.py" || fail "server-backup capability is not 1.5.0"
 grep -q 'core.server_backup' "${ROOT}/framwork/tec_tac/server_backup.py" || fail "core.server_backup capability id missing"
 grep -q 'register_core_server_backup_capability' "${ROOT}/framwork/tec_tac/apps.py" || fail "Core server-backup capability is not registered by AppConfig"
 grep -q 'module_id in {"tec-tac", "core"}' "${ROOT}/framwork/tec_tac/capabilities.py" || fail "capability registry does not recognize Core-owned providers"
@@ -39,7 +39,7 @@ import tec_tac.capabilities as cap
 from tec_tac.server_backup import register_core_server_backup_capability, get_server_backup_provider
 cap._clear_capabilities_for_tests()
 reg=register_core_server_backup_capability()
-assert reg.id == "core.server_backup" and reg.module_id == "core" and reg.version == "1.5.0"
+assert reg.id == "core.server_backup" and reg.module_id == "core" and reg.version == "1.5.1"
 assert set(("create_backup","get_job_status","list_backups","restore_backup","apply_retention","validate_destination","validate_restore","store_secret","delete_secret")) <= set(reg.operations)
 assert reg.metadata["format_version"] == 2
 assert reg.metadata["overrideable_restore_checks"] == ["target.os"]
@@ -75,6 +75,69 @@ spec=importlib.util.spec_from_file_location("server_backup_helper",root/"scripts
 h=importlib.util.module_from_spec(spec); spec.loader.exec_module(h)
 assert h.ARCHIVE_RE.fullmatch("tec-tac-backup-2026_09_20__09_15_00.tgz")
 assert h.LEGACY_ARCHIVE_RE.fullmatch("rmm-backup-2026_09_20__09_14_32.tar")
+
+# TAR links are safe when both the member path and resolved link target remain
+# inside the archive namespace.  Internal symlinks/hardlinks are accepted;
+# absolute or escaping targets and special files remain blocked.
+def _tar_with(entries, mode="w"):
+    bio=io.BytesIO()
+    with tarfile.open(fileobj=bio,mode=mode) as tf:
+        for entry in entries:
+            kind=entry[0]; name=entry[1]
+            info=tarfile.TarInfo(name)
+            if kind=="file":
+                data=entry[2]; info.size=len(data); tf.addfile(info,io.BytesIO(data))
+            elif kind=="dir":
+                info.type=tarfile.DIRTYPE; tf.addfile(info)
+            elif kind=="symlink":
+                info.type=tarfile.SYMTYPE; info.linkname=entry[2]; tf.addfile(info)
+            elif kind=="hardlink":
+                info.type=tarfile.LNKTYPE; info.linkname=entry[2]; tf.addfile(info)
+            elif kind=="fifo":
+                info.type=tarfile.FIFOTYPE; tf.addfile(info)
+    bio.seek(0); return bio
+
+safe=_tar_with([
+    ("dir","nginx/sites-available/"),
+    ("file","nginx/sites-available/rmm.conf",b"server {}\n"),
+    ("dir","nginx/sites-enabled/"),
+    ("symlink","nginx/sites-enabled/rmm.conf","../sites-available/rmm.conf"),
+    ("hardlink","nginx/rmm-copy.conf","nginx/sites-available/rmm.conf"),
+])
+with tarfile.open(fileobj=safe,mode="r:") as tf:
+    assert len(h.safe_tar_members(tf))==5
+
+for target in ("../../../../etc/passwd","/etc/passwd"):
+    bad=_tar_with([("symlink","nginx/sites-enabled/rmm.conf",target)])
+    with tarfile.open(fileobj=bad,mode="r:") as tf:
+        try: h.safe_tar_members(tf)
+        except RuntimeError: pass
+        else: raise AssertionError(f"unsafe TAR symlink target accepted: {target}")
+
+missing_hardlink=_tar_with([("hardlink","copy.conf","missing.conf")])
+with tarfile.open(fileobj=missing_hardlink,mode="r:") as tf:
+    try: h.safe_tar_members(tf)
+    except RuntimeError: pass
+    else: raise AssertionError("hardlink to missing archive member was accepted")
+
+special=_tar_with([("fifo","pipe")])
+with tarfile.open(fileobj=special,mode="r:") as tf:
+    try: h.safe_tar_members(tf)
+    except RuntimeError: pass
+    else: raise AssertionError("TAR FIFO was accepted")
+
+with tempfile.TemporaryDirectory() as xd:
+    xd=pathlib.Path(xd)
+    payload=xd/"payload.tar.gz"
+    with tarfile.open(payload,"w:gz") as tf:
+        data=b"server {}\n"
+        info=tarfile.TarInfo("etc/tec-tac/sites-available/rmm.conf"); info.size=len(data); tf.addfile(info,io.BytesIO(data))
+        link=tarfile.TarInfo("etc/tec-tac/sites-enabled/rmm.conf"); link.type=tarfile.SYMTYPE; link.linkname="../sites-available/rmm.conf"; tf.addfile(link)
+    dest=xd/"extract"; dest.mkdir()
+    h.safe_extract_payload_tar(payload,dest)
+    link=dest/"etc/tec-tac/sites-enabled/rmm.conf"
+    assert link.is_symlink() and link.resolve()==(dest/"etc/tec-tac/sites-available/rmm.conf").resolve()
+    assert link.read_text()=="server {}\n"
 
 # create_tactical_component must validate the exact native archive before hashing/finalising it.
 import inspect
@@ -217,10 +280,12 @@ with tempfile.TemporaryDirectory() as td:
     td=pathlib.Path(td)
     # Build a valid native Tactical archive and prove byte identity after outer bundling/extraction.
     tactical=td/"rmm-backup-test.tar"
-    def tgz_bytes(name="payload.txt", data=b"x"):
+    def tgz_bytes(name="payload.txt", data=b"x", safe_link=False):
       bio=io.BytesIO()
       with tarfile.open(fileobj=bio,mode="w:gz") as nt:
         ti=tarfile.TarInfo(name); ti.size=len(data); nt.addfile(ti,io.BytesIO(data))
+        if safe_link:
+          link=tarfile.TarInfo("links/payload-link.txt"); link.type=tarfile.SYMTYPE; link.linkname="../payload.txt"; nt.addfile(link)
       return bio.getvalue()
     required={
       "rmm/local_settings.py":b"x",
@@ -234,7 +299,7 @@ with tempfile.TemporaryDirectory() as td:
       "nginx/rmm.conf":b"x",
       "nginx/frontend.conf":b"x",
       "nginx/meshcentral.conf":b"x",
-      "meshcentral/mesh.tar.gz":tgz_bytes(),
+      "meshcentral/mesh.tar.gz":tgz_bytes(safe_link=True),
       "confd/etc-confd.tar.gz":tgz_bytes(),
       "postgres/db-test.psql.gz":gzip.compress(b"select 1;"),
       "postgres/mesh-db-test.psql.gz":gzip.compress(b"select 1;"),

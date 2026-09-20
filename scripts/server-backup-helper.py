@@ -930,15 +930,65 @@ def store_destination(config, destination, archive, metadata, log):
     return store_rclone(config, destination, archive, metadata, log)
 
 
+def _normalize_tar_namespace_path(raw: str, *, base: PurePosixPath | None = None, label: str = "archive path") -> PurePosixPath:
+    """Resolve a TAR path inside the archive namespace without touching the host filesystem."""
+    text = str(raw or "").replace("\\", "/")
+    if not text or "\x00" in text:
+        raise RuntimeError(f"unsafe {label}: {raw!r}")
+    path = PurePosixPath(text)
+    if path.is_absolute():
+        raise RuntimeError(f"unsafe {label}: {raw!r}")
+
+    parts = []
+    if base is not None:
+        parts.extend(part for part in base.parts if part not in ("", "."))
+    for part in path.parts:
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if not parts:
+                raise RuntimeError(f"unsafe {label}: {raw!r}")
+            parts.pop()
+            continue
+        parts.append(part)
+    if not parts:
+        return PurePosixPath(".")
+    return PurePosixPath(*parts)
+
+
 def safe_tar_members(tf: tarfile.TarFile):
+    """Validate TAR members and links strictly within the archive namespace.
+
+    Symlinks and hardlinks are allowed only when both their member path and
+    resolved target stay inside the archive extraction namespace.  This is a
+    namespace check only: no host filesystem symlink is followed here.
+    """
     members = tf.getmembers()
+    normalized = {}
     for member in members:
-        name = member.name.replace("\\", "/")
-        p = PurePosixPath(name)
-        if p.is_absolute() or ".." in p.parts:
-            raise RuntimeError(f"unsafe archive member: {member.name}")
-        if member.issym() or member.islnk() or not (member.isfile() or member.isdir()):
+        member_path = _normalize_tar_namespace_path(member.name, label="archive member")
+        key = member_path.as_posix()
+        if key in normalized:
+            raise RuntimeError(f"duplicate archive member path: {member.name}")
+        normalized[key] = member
+        if not (member.isfile() or member.isdir() or member.issym() or member.islnk()):
             raise RuntimeError(f"unsupported archive member type: {member.name}")
+
+    for member in members:
+        member_path = _normalize_tar_namespace_path(member.name, label="archive member")
+        if member.issym():
+            _normalize_tar_namespace_path(
+                member.linkname,
+                base=member_path.parent,
+                label=f"symlink target for {member.name}",
+            )
+        elif member.islnk():
+            target = _normalize_tar_namespace_path(
+                member.linkname,
+                label=f"hardlink target for {member.name}",
+            )
+            if target.as_posix() not in normalized:
+                raise RuntimeError(f"hardlink target is not present in archive: {member.name} -> {member.linkname}")
     return members
 
 
