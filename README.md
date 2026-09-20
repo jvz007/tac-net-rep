@@ -701,3 +701,7 @@ round trip using the same local/rclone/SCP adapters and opaque secret references
 used by normal backup operations. Structured partial check results are preserved
 on failure and no credential material is returned or logged. See
 `docs/server-backup-capability.md`.
+
+## Recovery bundles and restore modes (1.15.2)
+
+`core.server_backup` capability contract `1.2.0` replaces the old archive-appending format with a portable `tec-tac-backup-*.tgz` recovery bundle. Tactical's native `rmm-backup-*.tar` remains byte-for-byte untouched inside `tactical/`; Tec-Tac filesystem/runtime state is stored independently as `tec-tac/tec-tac-backup.tar.gz`. The bundle supports `full`, `tactical`, and `tec_tac` recovery modes and exposes component/recovery-mode metadata through inventory. FTP/explicit-FTPS storage now uses Python `ftplib` rather than rclone. See `docs/server-backup-capability.md`.

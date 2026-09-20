@@ -1,131 +1,119 @@
 # Core privileged server backup capability
 
-**Framework baseline:** 1.15.1+
+**Framework baseline:** 1.15.2+
 
-Tec-Tac Core exposes one narrow privileged server-backup contract:
+Tec-Tac Core exposes one narrow privileged recovery contract:
 
 ```text
 core.server_backup
-capability version 1.1.0
+capability version 1.2.0
 ```
 
-It exists so modules such as Backups can request Tactical-compatible backup,
-restore, remote transfer and retention operations without receiving arbitrary
-`sudo`, shell, executable-path or filesystem privileges.
-
-Resolve it through the normal capability registry:
+Modules request typed backup, inventory, restore, retention, destination-validation and secret-store operations. They never receive arbitrary `sudo`, shell, executable-path or unrestricted filesystem access.
 
 ```python
 from tec_tac.capabilities import get_capability
 
 backup = get_capability(
     "core.server_backup",
-    version=">=1.1.0,<2.0.0",
+    version=">=1.2.0,<2.0.0",
 )
 ```
 
 ## Security boundary
 
-The Django/Celery process writes a validated opaque job under:
-
-```text
-/var/lib/tec-tac/server-backup/jobs/
-```
-
-and may sudo only:
+Django/Celery writes a validated opaque job below `/var/lib/tec-tac/server-backup/jobs/` and may sudo only:
 
 ```text
 /usr/local/sbin/tec-tac-server-backup --dispatch <UUID>
 ```
 
-The root-owned helper validates job ownership/mode, action allow-list and typed
-arguments, then starts an independent systemd transient worker. No public
-operation accepts a command, shell fragment or executable path.
+The root-owned helper validates job ownership/mode, operation allow-list and typed arguments, then runs the worker independently through systemd. No public operation accepts a browser/module supplied command or executable path. Backup/restore mutation uses a Core lock. Remote restores are fully downloaded and validated before destructive work begins.
 
-Backup mutation/restore operations use a Core lock so destructive restore and
-archive mutation cannot overlap.
+## Recovery bundle format
 
-## Operations
+Core 1.2 no longer modifies Tactical's native backup archive. The portable artifact is:
 
-### `create_backup(...)`
+```text
+tec-tac-backup-YYYY_MM_DD__HH_MM_SS.tgz
+├── manifest.json
+├── checksums.sha256
+├── tactical/
+│   └── rmm-backup-YYYY_MM_DD__HH_MM_SS.tar
+└── tec-tac/
+    └── tec-tac-backup.tar.gz
+```
+
+The Tactical member is byte-for-byte the exact archive created by `/rmm/backup.sh`. Core hashes it before bundling and verifies the copied inner member against that same SHA-256. It is never appended to, unpacked/repacked, or otherwise changed.
+
+The Tec-Tac component contains resolved framework runtime/source, UI source, persistent state, `/etc/tec-tac`, installed module/runtime state and Tec-Tac nginx configuration. Active backup jobs/logs/staging/locks are excluded. No second PostgreSQL dump is created because Tec-Tac Django tables already live in Tactical's `tacticalrmm` database dump.
+
+`manifest.json` is format version `2` and records selected components, hashes/sizes, framework/UI versions, resolved Tec-Tac paths, backup class, creation time and supported recovery modes. `checksums.sha256` records the component hashes.
+
+## `create_backup(...)`
 
 ```python
 result = backup.create_backup(
     backup_class="daily",            # daily|weekly|monthly|manual
     destinations=[...],
+    include_tactical=True,
     include_tec_tac=True,
     context={...},
 )
 ```
 
-Core runs Tactical's current `/rmm/backup.sh` as the configured Tactical user
-with neither `--auto` nor `--schedule`, detects the newly-created
-`/rmmbackups/rmm-backup-*.tar`, optionally appends a `tec-tac/` payload, hashes
-it, writes a `.tectac.json` sidecar, fans the same archive out to every selected
-destination, and verifies each copy. A requested destination failure makes the
-overall operation fail while retaining structured per-destination results.
+Both include flags are booleans and at least one must be true. Tactical backup creation always uses the current `/rmm/backup.sh` as the Tactical installation owner, without `--auto` or `--schedule`. Core does not reimplement Tactical backup logic.
 
-### `list_backups(...)`
+The completed outer `.tgz` is hashed once and the same artifact is copied to every selected destination. Each destination also receives the small `.tectac.json` inventory/retention sidecar. Any requested destination failure fails the overall operation while preserving per-destination results.
+
+## `list_backups(...)`
 
 ```python
 rows = backup.list_backups(destinations=[...], context={...})
 ```
 
-Restore points contain an opaque `backup_ref`, destination metadata, size,
-modified time, persisted backup class and SHA-256 when sidecar metadata exists.
-Legacy Tactical archives without a sidecar are exposed as `unclassified`.
+Version-2 inventory rows expose:
 
-### `restore_backup(...)`
+```text
+format_version
+components
+tactical/tec_tac included flags
+recovery_modes
+backup_class
+sha256
+size/timestamps/destination metadata
+```
+
+Legacy native `rmm-backup-*.tar` files may remain visible but are explicitly marked `legacy: true`, `format_version: 1`, and advertise `recovery_modes: ["tactical"]`. Core never silently treats them as version-2 full bundles.
+
+## `restore_backup(...)`
 
 ```python
 result = backup.restore_backup(
-    backup_ref="destination:3:rmm-backup-2026_09_20__07_30_00.tar",
+    backup_ref="destination:3:tec-tac-backup-2026_09_20__09_15_00.tgz",
     destination=destination,
-    restore_tec_tac=True,
+    restore_mode="full",             # full|tactical|tec_tac
     context={...},
 )
 ```
 
-Restore is a dangerous Core operation. Remote archives are downloaded into a
-protected local staging directory first. Before any destructive work Core
-validates:
+Before restore Core validates the outer archive, safe member paths/types, root manifest/checksum records, requested component hash/size and the selected inner archive format. Components not required by an emergency restore mode are not extracted or hashed, but their manifest/checksum declaration must still be structurally valid.
 
-- regular `.tar` archive and configured size limit;
-- safe member paths/types;
-- Tactical PostgreSQL dump;
-- Tactical `local_settings.py`, systemd, MeshCentral and conf.d members;
-- optional Tec-Tac manifest and member checksums.
+### `full`
 
-The helper preserves the existing `/rmm` tree outside `/rmm`, runs Tactical's
-official `restore.sh` as the configured Tactical installation owner, then (when
-requested) restores the Tec-Tac payload, runs the framework/UI reintegration
-installers, checks nginx and verifies Tactical/Tec-Tac runtime services.
+Requires Tactical + Tec-Tac. Core extracts the exact native Tactical `.tar`, preserves the existing Tactical tree, runs Tactical's official `restore.sh` against that exact file, restores the independent Tec-Tac component, runs framework/UI reintegration, validates nginx and verifies runtime health.
 
-A restore job is persisted before dispatch and final success is written only
-after the restore and post-restore verification finish.
+### `tactical`
 
-## Tec-Tac payload
+Requires Tactical only. Core runs Tactical's official restore and verifies the standard Tactical frontend/services. It does **not** restore Tec-Tac files or run Tec-Tac reintegration. A corrupt unused Tec-Tac component cannot block this emergency Tactical-only path.
 
-When `include_tec_tac=True`, the Tactical archive receives:
+Legacy native Tactical archives can only use this mode.
 
-```text
-tec-tac/
-├── manifest.json
-├── backend.tar.gz
-├── ui-source.tar.gz
-├── state.tar.gz
-├── etc.tar.gz
-└── nginx/
-    └── tec-tac.conf
-```
+### `tec_tac`
 
-Core resolves source/runtime paths from `/opt/tec-tac/etc/tec-tac.conf`; it does
-not assume the framework checkout lives at one fixed path. `manifest.json`
-records format/framework/UI versions, source paths, creation time and SHA-256 +
-size for every Tec-Tac payload member.
+Requires Tec-Tac only. Core does not run Tactical `restore.sh`, does not replace the Tactical PostgreSQL database, restores Tec-Tac code/config/state and reruns framework/UI integration against the existing Tactical installation. If Tec-Tac database tables themselves need recovery, use `full`/`tactical` because those tables live in Tactical's database dump.
 
-Tec-Tac does **not** create another PostgreSQL dump. Tec-Tac models already live
-inside Tactical's `tacticalrmm` database and Tactical `backup.sh` owns that dump.
+For compatibility with 1.0/1.1 callers, the provider still accepts `restore_tec_tac=True|False` and maps it to `full|tactical`; new modules must use `restore_mode`.
 
 ## Destinations
 
@@ -140,54 +128,43 @@ webdav
 s3
 ```
 
-Local copies use filesystem operations and are restricted to Core's configured local destination allow-list (`TEC_TAC_SERVER_BACKUP_LOCAL_ROOTS`, defaulting to `/rmmbackups,/mnt,/media,/srv,/backup,/backups`). SFTP, FTP, WebDAV and S3/S3-compatible
-storage use Core-generated temporary `rclone` configuration. SCP uses dedicated
-`scp`/`ssh` operations and requires a private key secret. Remote path values are
-normalized and are never interpolated into a local shell command.
+Local paths remain restricted by `TEC_TAC_SERVER_BACKUP_LOCAL_ROOTS`.
 
-Remote adapters require the relevant server tools (`rclone` for its adapters;
-`ssh`/`scp` for SCP). Missing tooling fails the requested destination rather
-than silently falling back to another transport.
+- SFTP, WebDAV and S3/S3-compatible use Core-generated temporary `rclone` configuration.
+- SCP uses dedicated `ssh`/`scp`, private-key secrets and host-key policy/fingerprint checks.
+- FTP/FTPS uses Python's standard-library `ftplib` and does not require rclone.
+
+FTP TLS modes currently accepted:
+
+```text
+none
+explicit
+starttls
+tls        # compatibility alias for explicit FTPS
+```
+
+Implicit FTPS is intentionally not advertised until Core provides a dedicated correct implicit-TLS connection path.
+
+The native FTP adapter implements path preparation, upload, listing/stat, download, deletion and the validation round trip. Remote paths are normalized and are not interpolated into a local shell command.
 
 ## Secrets
 
-Modules persist only opaque `secret_ref` values. Core additionally exposes:
+Modules persist only opaque `secret_ref` values:
 
 ```python
 secret_ref = backup.store_secret(secret={...}, context={...})
 backup.delete_secret(secret_ref=secret_ref, context={...})
 ```
 
-Secret files live below:
-
-```text
-/var/lib/tec-tac/server-backup/secrets/
-```
-
-and are root-owned mode `0600`. Raw credentials are moved out of the transient
-job before detached execution, are never returned by list/backup operations and
-must never be written to module/browser logs.
-
-Common fields include `password`, `private_key`, `access_key` and `secret_key`.
+Secret files live below `/var/lib/tec-tac/server-backup/secrets/`, are root-owned mode `0600`, and raw credential material is never returned in normal backup/inventory/validation results or logs.
 
 ## Destination validation
 
-Framework 1.15.1 adds a real storage round-trip test:
-
 ```python
-result = backup.validate_destination(
-    destination=destination,
-    context={...},
-)
+result = backup.validate_destination(destination=destination, context={...})
 ```
 
-Validation does not merely ping the host. Core creates a job-unique 64 KiB
-validation object, proves the configured destination can be addressed, writes
-the object, reads it back, verifies its size and SHA-256, deletes it and confirms
-cleanup. The object name is always `.tectac-validation-<job-uuid>.bin`; it never
-touches real `rmm-backup-*.tar` archives or `.tectac.json` metadata.
-
-The result uses these stable checks:
+Validation creates a job-unique `.tectac-validation-<uuid>.bin`, performs a real write/read/SHA-256/delete round trip and reports:
 
 ```text
 configuration
@@ -200,16 +177,7 @@ integrity
 delete
 ```
 
-A failed operation raises `ServerBackupError` and preserves the partial result
-in `exc.result`, including the stages that passed/failed/not_run. Cleanup is
-best-effort in a `finally` path. If deletion cannot be completed or confirmed,
-validation fails because the destination is not suitable for retention.
-
-For local destinations `connection` and `authentication` are reported as
-`not_applicable`; the existing Core local-path allow-list is still enforced.
-SFTP/FTP/WebDAV/S3 reuse the existing rclone adapter. SCP reuses the existing
-SSH/SCP private-key and host-key verification path. Raw credentials and generated
-transport configuration are never returned in the validation result.
+A delete/cleanup failure makes validation fail because normal retention requires delete permission. `ServerBackupError.result` preserves the structured partial result. FTP validation uses the same native ftplib adapter as real FTP backup operations; SFTP/WebDAV/S3 and SCP use their normal adapters.
 
 ## Retention
 
@@ -226,19 +194,11 @@ backup.apply_retention(
 )
 ```
 
-Classification comes from the `.tectac.json` sidecar and is not inferred from
-age. Retention is evaluated independently per destination. Removing a local
-copy does not implicitly remove a remote copy.
+Retention operates on the **outer recovery bundle as one object**. Deleting a recovery bundle also deletes its `.tectac.json` sidecar. Inner Tactical/Tec-Tac members are never independently deleted. Classification remains sidecar-driven and independent per destination.
 
-## Scheduling
+## Scheduling and audit
 
-Core does not create cron entries for Backups. The Backups module registers
-`backups.create` and `backups.retention` with the shared Tec-Tac Scheduler. The
-server-backup capability performs exactly one requested operation.
-
-## Audit context
-
-Every privileged job stores only the standard source context:
+Core creates no backup cron entries. The Backups module registers its actions with the shared Tec-Tac Scheduler. Every privileged job retains the standard source context:
 
 ```text
 source_module
@@ -246,6 +206,3 @@ source_action
 source_run_id
 requested_by
 ```
-
-This lets module/Scheduler history correlate an operation without exposing
-provider-private objects or credentials.

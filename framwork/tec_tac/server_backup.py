@@ -19,7 +19,7 @@ from .capabilities import register_capability
 from .config import load_layout
 
 CAPABILITY_ID = "core.server_backup"
-CAPABILITY_VERSION = "1.1.0"
+CAPABILITY_VERSION = "1.2.0"
 HELPER = Path("/usr/local/sbin/tec-tac-server-backup")
 DEFAULT_STATE_ROOT = Path("/var/lib/tec-tac/server-backup")
 TERMINAL_STATES = {"succeeded", "failed", "dispatch_failed"}
@@ -200,17 +200,22 @@ def _run(action: str, request: dict, *, context: dict | None, timeout: int | Non
 class ServerBackupProvider:
     """Stable public provider contract for ``core.server_backup`` version 1.x."""
 
-    def create_backup(self, *, backup_class: str, destinations: list[dict], include_tec_tac: bool, context: dict) -> dict:
+    def create_backup(self, *, backup_class: str, destinations: list[dict], include_tactical: bool = True, include_tec_tac: bool = True, context: dict) -> dict:
         backup_class = str(backup_class or "").strip().lower()
         if backup_class not in BACKUP_CLASSES:
             raise ServerBackupError("backup_class must be daily, weekly, monthly, or manual.")
+        if not isinstance(include_tactical, bool):
+            raise ServerBackupError("include_tactical must be true or false.")
         if not isinstance(include_tec_tac, bool):
             raise ServerBackupError("include_tec_tac must be true or false.")
+        if not include_tactical and not include_tec_tac:
+            raise ServerBackupError("At least one recovery component must be included.")
         return _run(
             "create_backup",
             {
                 "backup_class": backup_class,
                 "destinations": _validate_destinations(destinations),
+                "include_tactical": include_tactical,
                 "include_tec_tac": include_tec_tac,
             },
             context=context,
@@ -227,16 +232,21 @@ class ServerBackupProvider:
             raise ServerBackupError("Core server-backup provider returned an invalid backup list.", result=result)
         return rows
 
-    def restore_backup(self, *, backup_ref: str, destination: dict | None, restore_tec_tac: bool, context: dict) -> dict:
-        if not isinstance(restore_tec_tac, bool):
-            raise ServerBackupError("restore_tec_tac must be true or false.")
+    def restore_backup(self, *, backup_ref: str, destination: dict | None, restore_mode: str | None = None, context: dict, restore_tec_tac: bool | None = None) -> dict:
+        # Compatibility bridge for 1.0/1.1 consumers. New modules must send
+        # restore_mode explicitly; legacy bool maps to full/tactical only.
+        if restore_mode in (None, "") and isinstance(restore_tec_tac, bool):
+            restore_mode = "full" if restore_tec_tac else "tactical"
+        mode = str(restore_mode or "").strip().lower()
+        if mode not in {"full", "tactical", "tec_tac"}:
+            raise ServerBackupError("restore_mode must be full, tactical, or tec_tac.")
         destinations = _validate_destinations([destination]) if destination is not None else []
         return _run(
             "restore_backup",
             {
                 "backup_ref": str(backup_ref or "").strip(),
                 "destination": destinations[0] if destinations else None,
-                "restore_tec_tac": restore_tec_tac,
+                "restore_mode": mode,
             },
             context=context,
         )
@@ -313,7 +323,7 @@ def register_core_server_backup_capability():
         module_id="core",
         version=CAPABILITY_VERSION,
         provider=_PROVIDER,
-        description="Privileged Tactical/Tec-Tac server backup, restore, remote transfer and retention operations.",
+        description="Privileged Tactical/Tec-Tac recovery-bundle backup, restore, remote transfer and retention operations.",
         health=_PROVIDER.health,
         operations=(
             "create_backup",
@@ -328,6 +338,8 @@ def register_core_server_backup_capability():
             "dangerous_operations": ["restore_backup"],
             "destination_types": sorted(DESTINATION_TYPES),
             "backup_classes": sorted(BACKUP_CLASSES),
+            "recovery_modes": ["full", "tactical", "tec_tac"],
+            "format_version": 2,
         },
     )
 

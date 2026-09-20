@@ -8,6 +8,7 @@ vectors itself; no module/browser supplied command or executable is executed.
 from __future__ import annotations
 
 import fcntl
+import ftplib
 import grp
 import hashlib
 import io
@@ -28,7 +29,9 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 JOB_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
-ARCHIVE_RE = re.compile(r"^rmm-backup-[A-Za-z0-9_.-]+\.tar$")
+LEGACY_ARCHIVE_RE = re.compile(r"^rmm-backup-[A-Za-z0-9_.-]+\.tar$")
+BUNDLE_RE = re.compile(r"^tec-tac-backup-[A-Za-z0-9_.-]+\.tgz$")
+ARCHIVE_RE = BUNDLE_RE
 ALLOWED_ACTIONS = {"create_backup", "list_backups", "restore_backup", "apply_retention", "validate_destination", "store_secret", "delete_secret"}
 BACKUP_CLASSES = {"daily", "weekly", "monthly", "manual"}
 DEST_TYPES = {"local", "sftp", "ftp", "scp", "webdav", "s3"}
@@ -396,8 +399,8 @@ def validate_destination(raw, config=None):
                 raise RuntimeError("destination port is out of range")
         if item["type"] == "ftp":
             tls_mode = str(item.get("tls_mode") or "none").strip().lower()
-            if tls_mode not in {"none", "implicit", "tls", "explicit", "starttls"}:
-                raise RuntimeError("ftp tls_mode must be none, implicit/tls, or explicit/starttls")
+            if tls_mode not in {"none", "tls", "explicit", "starttls"}:
+                raise RuntimeError("ftp tls_mode must be none or explicit/starttls/tls")
             item["tls_mode"] = tls_mode
         if item["type"] in {"sftp", "scp"}:
             host_key_policy = str(item.get("host_key_policy") or "strict").strip().lower()
@@ -507,16 +510,6 @@ def make_rclone_config(config, destination, temp: Path, log: LimitedLog):
         known = ssh_known_hosts(destination, temp, log)
         if known:
             lines.append(f"known_hosts_file = {known}")
-    elif dtype == "ftp":
-        lines += [f"host = {destination['host']}", f"user = {destination['username']}", f"port = {destination['port']}"]
-        if secret.get("password"):
-            password = safe_config_value(secret["password"], "password")
-            lines.append(f"pass = {rclone_obscure(password)}")
-        tls = str(destination.get("tls_mode") or "none").lower()
-        if tls in {"implicit", "tls"}:
-            lines.append("tls = true")
-        elif tls in {"explicit", "starttls"}:
-            lines.append("explicit_tls = true")
     elif dtype == "webdav":
         lines += [f"url = {str(destination.get('url')).strip()}", f"vendor = {str(destination.get('vendor') or 'other').strip()}"]
         if destination.get("username"):
@@ -560,15 +553,165 @@ def join_remote(base, name):
     return base.rstrip("/") + "/" + name
 
 
-def metadata_for_archive(path, backup_class, config):
+def ftp_connect(config, destination, *, timeout=60):
+    destination = validate_destination(destination, config)
+    secret = load_secret(config, destination)
+    password = str(secret.get("password") or "")
+    tls_mode = str(destination.get("tls_mode") or "none").lower()
+    cls = ftplib.FTP_TLS if tls_mode in {"explicit", "starttls", "tls"} else ftplib.FTP
+    ftp = cls(timeout=timeout)
+    try:
+        ftp.connect(destination["host"], destination["port"], timeout=timeout)
+        ftp.login(destination["username"], password)
+        if isinstance(ftp, ftplib.FTP_TLS):
+            ftp.prot_p()
+        ftp.set_pasv(True)
+        return ftp
+    except Exception:
+        try: ftp.close()
+        except Exception: pass
+        raise
+
+
+def ftp_prepare_path(ftp, remote_path, *, create=False):
+    normalized = normalize_remote_path(remote_path)
+    if normalized.startswith("/"):
+        ftp.cwd("/")
+    parts = [p for p in normalized.strip("/").split("/") if p and p != "."]
+    for part in parts:
+        try:
+            ftp.cwd(part)
+        except ftplib.error_perm:
+            if not create:
+                raise
+            try:
+                ftp.mkd(part)
+            except ftplib.error_perm:
+                # A racing creator may have made it; cwd remains authoritative.
+                pass
+            ftp.cwd(part)
+
+
+def ftp_store(config, destination, archive, metadata, log):
+    ftp = ftp_connect(config, destination, timeout=120)
+    try:
+        ftp_prepare_path(ftp, destination["remote_path"], create=True)
+        with archive.open("rb") as fh:
+            ftp.storbinary(f"STOR {archive.name}", fh, blocksize=1024 * 1024)
+        side_bytes = (json.dumps(metadata, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        ftp.storbinary(f"STOR {archive.name}.tectac.json", io.BytesIO(side_bytes))
+        try:
+            remote_size = ftp.size(archive.name)
+        except Exception:
+            remote_size = None
+        if remote_size is not None and int(remote_size) != int(metadata["size_bytes"]):
+            raise RuntimeError("FTP backup size verification failed")
+        # Strong verification: download and hash the stored object.
+        digest = hashlib.sha256(); size = 0
+        def consume(block):
+            nonlocal size
+            digest.update(block); size += len(block)
+        ftp.retrbinary(f"RETR {archive.name}", consume, blocksize=1024 * 1024)
+        if size != int(metadata["size_bytes"]) or digest.hexdigest().lower() != str(metadata["sha256"]).lower():
+            raise RuntimeError("FTP backup SHA-256 verification failed")
+        return {
+            "id": destination["id"], "type": "ftp", "name": destination_name(destination), "ok": True,
+            "location": f"ftp://{destination['host']}:{destination['port']}/{destination['remote_path'].strip('/')}/{archive.name}",
+            "size_verified": True, "hash_verified": True,
+        }
+    finally:
+        try: ftp.quit()
+        except Exception:
+            try: ftp.close()
+            except Exception: pass
+
+
+def ftp_read_json(ftp, name):
+    chunks=[]
+    try:
+        ftp.retrbinary(f"RETR {name}", chunks.append)
+        value=json.loads(b"".join(chunks).decode("utf-8"))
+        return value if isinstance(value, dict) else None
+    except Exception:
+        return None
+
+
+def ftp_list(config, destination, log):
+    ftp = ftp_connect(config, destination, timeout=120)
+    try:
+        try:
+            ftp_prepare_path(ftp, destination["remote_path"], create=False)
+        except ftplib.error_perm:
+            raise RuntimeError("FTP configured path is inaccessible")
+        entries=[]
+        try:
+            for name, facts in ftp.mlsd():
+                entries.append((name, facts or {}))
+        except Exception:
+            for name in ftp.nlst():
+                entries.append((Path(name).name, {}))
+        rows=[]
+        for name, facts in entries:
+            if not (BUNDLE_RE.fullmatch(name) or LEGACY_ARCHIVE_RE.fullmatch(name)):
+                continue
+            try: size=int(facts.get("size") or ftp.size(name) or 0)
+            except Exception: size=0
+            modified=None
+            raw_modify=str(facts.get("modify") or "")
+            if re.fullmatch(r"\d{14}(?:\.\d+)?", raw_modify):
+                try: modified=datetime.strptime(raw_modify[:14], "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc).isoformat()
+                except Exception: modified=None
+            metadata=ftp_read_json(ftp, name + ".tectac.json")
+            location=f"ftp://{destination['host']}:{destination['port']}/{destination['remote_path'].strip('/')}/{name}"
+            rows.append(backup_item(destination,name,location,size,modified or (metadata or {}).get("created_at"),metadata))
+        return rows
+    finally:
+        try: ftp.quit()
+        except Exception:
+            try: ftp.close()
+            except Exception: pass
+
+
+def ftp_download(config, destination, name, target, log):
+    ftp=ftp_connect(config,destination,timeout=120)
+    try:
+        ftp_prepare_path(ftp,destination["remote_path"],create=False)
+        with target.open("wb") as fh:
+            ftp.retrbinary(f"RETR {name}",fh.write,blocksize=1024*1024)
+        return ftp_read_json(ftp,name+".tectac.json")
+    finally:
+        try: ftp.quit()
+        except Exception:
+            try: ftp.close()
+            except Exception: pass
+
+
+def ftp_delete(config, destination, name, log):
+    ftp=ftp_connect(config,destination,timeout=120)
+    try:
+        ftp_prepare_path(ftp,destination["remote_path"],create=False)
+        ftp.delete(name)
+        try: ftp.delete(name+".tectac.json")
+        except ftplib.error_perm: pass
+    finally:
+        try: ftp.quit()
+        except Exception:
+            try: ftp.close()
+            except Exception: pass
+
+
+def metadata_for_archive(path, backup_class, config, *, components=None, recovery_modes=None):
     server_id = str(config.get("TEC_TAC_INSTALLATION_ID") or "").strip() or None
     return {
-        "format_version": 1,
+        "format_version": 2,
+        "artifact_type": "tec-tac-recovery-bundle",
         "backup_class": backup_class,
         "created_at": now(),
         "size_bytes": path.stat().st_size,
         "sha256": sha256_file(path),
         "server_id": server_id,
+        "components": dict(components or {}),
+        "recovery_modes": list(recovery_modes or []),
     }
 
 
@@ -691,6 +834,8 @@ def store_destination(config, destination, archive, metadata, log):
         return store_local(destination, archive, metadata)
     if destination["type"] == "scp":
         return store_scp(config, destination, archive, metadata, log)
+    if destination["type"] == "ftp":
+        return ftp_store(config, destination, archive, metadata, log)
     return store_rclone(config, destination, archive, metadata, log)
 
 
@@ -742,7 +887,7 @@ def detect_version(path: Path):
     return None
 
 
-def create_tec_tac_payload(config, temp: Path):
+def tec_tac_paths(config):
     runtime_root = Path(config["TEC_TAC_ROOT"])
     framework_source = Path(config["TEC_TAC_FRAMEWORK_SOURCE"])
     ui_source = Path(config["TEC_TAC_UI_SOURCE"])
@@ -751,21 +896,28 @@ def create_tec_tac_payload(config, temp: Path):
     etc_root = runtime_root / "etc"
     system_etc_root = Path("/etc/tec-tac")
     nginx = Path("/etc/nginx/snippets/tec-tac.conf")
+    return {
+        "runtime_root": runtime_root,
+        "framework_source": framework_source,
+        "ui_source": ui_source,
+        "legacy_ui_source": legacy_ui_source,
+        "state_root": state_root,
+        "etc_root": etc_root,
+        "system_etc_root": system_etc_root,
+        "nginx": nginx,
+    }
 
-    files = {}
-    backend = temp / "backend.tar.gz"
-    make_payload_tar(backend, [runtime_root, framework_source])
-    if backend.stat().st_size > 0:
-        files["backend.tar.gz"] = backend
-    ui = temp / "ui-source.tar.gz"
-    make_payload_tar(ui, [ui_source, legacy_ui_source])
-    if ui.stat().st_size > 0:
-        files["ui-source.tar.gz"] = ui
-    state = temp / "state.tar.gz"
+
+def create_tec_tac_component(config, output: Path):
+    paths = tec_tac_paths(config)
     backup_runtime = Path(config.get("TEC_TAC_SERVER_BACKUP_ROOT") or "/var/lib/tec-tac/server-backup")
+    include = [
+        paths["runtime_root"], paths["framework_source"], paths["ui_source"], paths["legacy_ui_source"],
+        paths["state_root"], paths["etc_root"], paths["system_etc_root"], paths["nginx"],
+    ]
     make_payload_tar(
-        state,
-        [state_root],
+        output,
+        include,
         exclude_paths=(
             backup_runtime / "jobs",
             backup_runtime / "logs",
@@ -774,49 +926,111 @@ def create_tec_tac_payload(config, temp: Path):
             backup_runtime / "server-backup.lock",
         ),
     )
-    if state.stat().st_size > 0:
-        files["state.tar.gz"] = state
-    etc = temp / "etc.tar.gz"
-    make_payload_tar(etc, [etc_root, system_etc_root])
-    if etc.stat().st_size > 0:
-        files["etc.tar.gz"] = etc
-    if nginx.is_file():
-        nginx_copy = temp / "tec-tac.conf"
-        shutil.copy2(nginx, nginx_copy)
-        files["nginx/tec-tac.conf"] = nginx_copy
-
-    manifest = {
-        "format_version": 1,
-        "framework_version": detect_version(framework_source) or detect_version(runtime_root),
-        "ui_version": detect_version(Path(config["TEC_TAC_UI_DEPLOY_ROOT"])) or detect_version(ui_source),
-        "created_at": now(),
-        "paths": {
-            "runtime_root": str(runtime_root),
-            "framework_source": str(framework_source),
-            "ui_source": str(ui_source),
-            "legacy_ui_source": str(legacy_ui_source),
-            "state_root": str(state_root),
-            "etc_root": str(etc_root),
-            "system_etc_root": str(system_etc_root),
-            "nginx": str(nginx),
-        },
-        "members": {name: {"sha256": sha256_file(path), "size_bytes": path.stat().st_size} for name, path in files.items()},
+    ensure_regular(output, max_bytes=max_backup_bytes(config))
+    return {
+        "included": True,
+        "archive": "tec-tac/tec-tac-backup.tar.gz",
+        "archive_name": "tec-tac-backup.tar.gz",
+        "sha256": sha256_file(output),
+        "size_bytes": output.stat().st_size,
+        "framework_version": detect_version(paths["framework_source"]) or detect_version(paths["runtime_root"]),
+        "ui_version": detect_version(Path(config["TEC_TAC_UI_DEPLOY_ROOT"])) or detect_version(paths["ui_source"]),
+        "paths": {key: str(value) for key, value in paths.items()},
     }
-    manifest_path = temp / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    files["manifest.json"] = manifest_path
-    return files, manifest
 
 
-def append_tec_tac_payload(archive: Path, config, log):
-    with tempfile.TemporaryDirectory(prefix="tectac-payload-") as td:
-        temp = Path(td)
-        files, manifest = create_tec_tac_payload(config, temp)
-        with tarfile.open(archive, "a") as tf:
-            for name, source in files.items():
-                tf.add(source, arcname=f"tec-tac/{name}", recursive=False)
-        log.write(f"[TEC-TAC-BACKUP] appended Tec-Tac payload ({len(files)} members)\n")
-        return manifest
+def create_tactical_component(config, log):
+    tactical_root = Path(config["TACTICAL_ROOT"])
+    script = tactical_root / "backup.sh"
+    ensure_regular(script)
+    backup_root = Path("/rmmbackups")
+    backup_root.mkdir(parents=True, exist_ok=True)
+    before = {p.name: p.stat().st_mtime_ns for p in backup_root.glob("rmm-backup-*.tar") if p.is_file()}
+    _, _, user, home = tactical_identity(config)
+    env = os.environ.copy()
+    env.update({"HOME": home, "USER": user, "LOGNAME": user, "GROUP": grp.getgrgid(tactical_identity(config)[1]).gr_name})
+    log.write(f"[TEC-TAC-BACKUP] running Tactical backup as {user}\n")
+    run_logged([str(script)], log, env=env, cwd=str(tactical_root), timeout=6 * 60 * 60, user=user)
+    candidates = []
+    for path in backup_root.glob("rmm-backup-*.tar"):
+        if not path.is_file() or path.is_symlink():
+            continue
+        mtime = path.stat().st_mtime_ns
+        if path.name not in before or mtime > before.get(path.name, -1):
+            candidates.append(path)
+    if not candidates:
+        raise RuntimeError("Tactical backup completed without a detectable new /rmmbackups/rmm-backup-*.tar archive")
+    archive = max(candidates, key=lambda p: p.stat().st_mtime_ns)
+    ensure_regular(archive, max_bytes=max_backup_bytes(config))
+    digest = sha256_file(archive)
+    return archive, {
+        "included": True,
+        "archive": f"tactical/{archive.name}",
+        "archive_name": archive.name,
+        "sha256": digest,
+        "size_bytes": archive.stat().st_size,
+    }
+
+
+def bundle_recovery_modes(include_tactical, include_tec_tac):
+    modes=[]
+    if include_tactical and include_tec_tac: modes.append("full")
+    if include_tactical: modes.append("tactical")
+    if include_tec_tac: modes.append("tec_tac")
+    return modes
+
+
+def create_recovery_bundle(config, temp: Path, *, backup_class, tactical_archive=None, tactical_meta=None, tec_tac_archive=None, tec_tac_meta=None):
+    created_at=now()
+    components={
+        "tactical": tactical_meta or {"included": False},
+        "tec_tac": tec_tac_meta or {"included": False},
+    }
+    modes=bundle_recovery_modes(bool(tactical_meta), bool(tec_tac_meta))
+    manifest={
+        "format_version": 2,
+        "artifact_type": "tec-tac-recovery-bundle",
+        "created_at": created_at,
+        "installation_id": str(config.get("TEC_TAC_INSTALLATION_ID") or "").strip() or None,
+        "backup_class": backup_class,
+        "components": components,
+        "recovery_modes": modes,
+    }
+    manifest_path=temp/"manifest.json"
+    manifest_path.write_text(json.dumps(manifest,indent=2,sort_keys=True)+"\n",encoding="utf-8")
+    checksum_lines=[]
+    if tactical_archive is not None:
+        checksum_lines.append(f"{tactical_meta['sha256']}  tactical/{tactical_archive.name}")
+    if tec_tac_archive is not None:
+        checksum_lines.append(f"{tec_tac_meta['sha256']}  tec-tac/tec-tac-backup.tar.gz")
+    checksums=temp/"checksums.sha256"
+    checksums.write_text("\n".join(checksum_lines)+"\n",encoding="utf-8")
+    bundle_name=datetime.now(timezone.utc).strftime("tec-tac-backup-%Y_%m_%d__%H_%M_%S.tgz")
+    output=Path("/rmmbackups")/bundle_name
+    output.parent.mkdir(parents=True,exist_ok=True)
+    partial=output.with_name(output.name+".partial")
+    partial.unlink(missing_ok=True)
+    with tarfile.open(partial,"w:gz") as tf:
+        tf.add(manifest_path,arcname="manifest.json",recursive=False)
+        tf.add(checksums,arcname="checksums.sha256",recursive=False)
+        if tactical_archive is not None:
+            tf.add(tactical_archive,arcname=f"tactical/{tactical_archive.name}",recursive=False)
+        if tec_tac_archive is not None:
+            tf.add(tec_tac_archive,arcname="tec-tac/tec-tac-backup.tar.gz",recursive=False)
+    os.replace(partial,output)
+    ensure_regular(output,max_bytes=max_backup_bytes(config))
+    # Prove the copied Tactical member is byte-identical to the authoritative native archive.
+    if tactical_archive is not None:
+        with tarfile.open(output,"r:gz") as tf:
+            member=tf.getmember(f"tactical/{tactical_archive.name}")
+            fh=tf.extractfile(member)
+            if fh is None: raise RuntimeError("recovery bundle Tactical component is unreadable")
+            digest=hashlib.sha256(); size=0
+            for block in iter(lambda:fh.read(1024*1024),b""):
+                digest.update(block); size+=len(block)
+            if digest.hexdigest()!=tactical_meta["sha256"] or size!=tactical_meta["size_bytes"]:
+                raise RuntimeError("Tactical archive changed while creating recovery bundle")
+    return output, manifest
 
 
 def operation_create_backup(config, job, log):
@@ -828,65 +1042,58 @@ def operation_create_backup(config, job, log):
     if not isinstance(destinations, list):
         raise RuntimeError("destinations must be a list")
     destinations = [validate_destination(item, config) for item in destinations]
-    include = request.get("include_tec_tac")
-    if not isinstance(include, bool):
-        raise RuntimeError("include_tec_tac must be boolean")
+    include_tactical=request.get("include_tactical")
+    include_tec_tac=request.get("include_tec_tac")
+    if not isinstance(include_tactical,bool) or not isinstance(include_tec_tac,bool):
+        raise RuntimeError("include_tactical and include_tec_tac must be boolean")
+    if not include_tactical and not include_tec_tac:
+        raise RuntimeError("at least one recovery component must be included")
 
     lock = acquire_lock(config)
     try:
-        tactical_root = Path(config["TACTICAL_ROOT"])
-        script = tactical_root / "backup.sh"
-        ensure_regular(script)
-        backup_root = Path("/rmmbackups")
-        backup_root.mkdir(parents=True, exist_ok=True)
-        before = {p.name: p.stat().st_mtime_ns for p in backup_root.glob("rmm-backup-*.tar") if p.is_file()}
-        _, _, user, home = tactical_identity(config)
-        env = os.environ.copy()
-        env.update({"HOME": home, "USER": user, "LOGNAME": user, "GROUP": grp.getgrgid(tactical_identity(config)[1]).gr_name})
-        log.write(f"[TEC-TAC-BACKUP] running Tactical backup as {user}\n")
-        run_logged([str(script)], log, env=env, cwd=str(tactical_root), timeout=6 * 60 * 60, user=user)
-        candidates = []
-        for path in backup_root.glob("rmm-backup-*.tar"):
-            if not path.is_file() or path.is_symlink():
-                continue
-            mtime = path.stat().st_mtime_ns
-            if path.name not in before or mtime > before.get(path.name, -1):
-                candidates.append(path)
-        if not candidates:
-            raise RuntimeError("Tactical backup completed without a detectable new /rmmbackups/rmm-backup-*.tar archive")
-        archive = max(candidates, key=lambda p: p.stat().st_mtime_ns)
-        ensure_regular(archive, max_bytes=max_backup_bytes(config))
-        if include:
-            append_tec_tac_payload(archive, config, log)
-            ensure_regular(archive, max_bytes=max_backup_bytes(config))
-        metadata = metadata_for_archive(archive, backup_class, config)
-        write_sidecar(archive, metadata)
-
-        results = []
-        failed = []
-        for destination in destinations:
-            try:
-                result = store_destination(config, destination, archive, metadata, log)
-            except Exception as exc:
-                result = {
-                    "id": destination.get("id"), "type": destination.get("type"), "name": destination_name(destination),
-                    "ok": False, "reason": str(exc),
-                }
-                failed.append(result)
-            results.append(result)
-        overall = {
-            "ok": not failed,
-            "archive_name": archive.name,
-            "local_path": str(archive),
-            "size_bytes": metadata["size_bytes"],
-            "sha256": metadata["sha256"],
-            "backup_class": backup_class,
-            "tec_tac_included": include,
-            "destinations": results,
-        }
-        if failed:
-            raise OperationFailed("One or more requested backup destinations failed verification.", result=overall)
-        return overall
+        with tempfile.TemporaryDirectory(prefix="tectac-recovery-bundle-") as td:
+            temp=Path(td)
+            tactical_archive=tactical_meta=None
+            if include_tactical:
+                tactical_archive,tactical_meta=create_tactical_component(config,log)
+            tec_archive=tec_meta=None
+            if include_tec_tac:
+                tec_archive=temp/"tec-tac-backup.tar.gz"
+                tec_meta=create_tec_tac_component(config,tec_archive)
+            bundle,manifest=create_recovery_bundle(
+                config,temp,backup_class=backup_class,
+                tactical_archive=tactical_archive,tactical_meta=tactical_meta,
+                tec_tac_archive=tec_archive,tec_tac_meta=tec_meta,
+            )
+            component_flags={key:{"included":bool(value.get("included"))} for key,value in manifest["components"].items()}
+            metadata=metadata_for_archive(bundle,backup_class,config,components=component_flags,recovery_modes=manifest["recovery_modes"])
+            write_sidecar(bundle,metadata)
+            if tactical_archive is not None and tactical_archive.exists():
+                tactical_archive.unlink()
+                log.write("[TEC-TAC-BACKUP] removed native source archive after byte-identical recovery bundle verification\n")
+            results=[]; failed=[]
+            for destination in destinations:
+                try:
+                    result=store_destination(config,destination,bundle,metadata,log)
+                except Exception as exc:
+                    result={"id":destination.get("id"),"type":destination.get("type"),"name":destination_name(destination),"ok":False,"reason":str(exc)}
+                    failed.append(result)
+                results.append(result)
+            overall={
+                "ok":not failed,
+                "archive_name":bundle.name,
+                "local_path":str(bundle),
+                "size_bytes":metadata["size_bytes"],
+                "sha256":metadata["sha256"],
+                "backup_class":backup_class,
+                "format_version":2,
+                "components":manifest["components"],
+                "recovery_modes":manifest["recovery_modes"],
+                "destinations":results,
+            }
+            if failed:
+                raise OperationFailed("One or more requested backup destinations failed verification.",result=overall)
+            return overall
     finally:
         lock.close()
 
@@ -903,9 +1110,19 @@ def sidecar_metadata_local(archive):
 
 
 def backup_item(destination, archive_name, location, size, modified, metadata=None):
-    cls = str((metadata or {}).get("backup_class") or "unclassified")
+    metadata = metadata or {}
+    cls = str(metadata.get("backup_class") or "unclassified")
     if cls not in BACKUP_CLASSES:
         cls = "unclassified"
+    legacy = bool(LEGACY_ARCHIVE_RE.fullmatch(archive_name))
+    if legacy:
+        format_version = int(metadata.get("format_version") or 1)
+        components = metadata.get("components") if isinstance(metadata.get("components"), dict) else {"tactical": {"included": True}, "tec_tac": {"included": False}}
+        modes = metadata.get("recovery_modes") if isinstance(metadata.get("recovery_modes"), list) else ["tactical"]
+    else:
+        format_version = int(metadata.get("format_version") or 2)
+        components = metadata.get("components") if isinstance(metadata.get("components"), dict) else {}
+        modes = metadata.get("recovery_modes") if isinstance(metadata.get("recovery_modes"), list) else []
     return {
         "backup_ref": f"destination:{destination['id']}:{archive_name}",
         "archive_name": archive_name,
@@ -916,8 +1133,12 @@ def backup_item(destination, archive_name, location, size, modified, metadata=No
         "size_bytes": int(size or 0),
         "modified_at": modified,
         "backup_class": cls,
-        "sha256": (metadata or {}).get("sha256"),
-        "created_at": (metadata or {}).get("created_at"),
+        "sha256": metadata.get("sha256"),
+        "created_at": metadata.get("created_at"),
+        "format_version": format_version,
+        "legacy": legacy,
+        "components": components,
+        "recovery_modes": modes,
     }
 
 
@@ -930,8 +1151,10 @@ def list_local(destination):
     if not root.is_dir():
         return []
     rows = []
-    for archive in sorted(root.glob("rmm-backup-*.tar")):
-        if not archive.is_file() or archive.is_symlink() or not ARCHIVE_RE.fullmatch(archive.name):
+    for archive in sorted(root.iterdir()):
+        if not archive.is_file() or archive.is_symlink():
+            continue
+        if not (BUNDLE_RE.fullmatch(archive.name) or LEGACY_ARCHIVE_RE.fullmatch(archive.name)):
             continue
         st = archive.stat()
         rows.append(backup_item(destination, archive.name, str(archive), st.st_size, iso_mtime(st.st_mtime), sidecar_metadata_local(archive)))
@@ -961,7 +1184,7 @@ def list_rclone(config, destination, log):
         rows = []
         for item in data:
             name = str(item.get("Name") or item.get("Path") or "")
-            if not ARCHIVE_RE.fullmatch(name):
+            if not (BUNDLE_RE.fullmatch(name) or LEGACY_ARCHIVE_RE.fullmatch(name)):
                 continue
             metadata = rclone_cat_json(cfg, join_remote(base, name + ".tectac.json"))
             modified = item.get("ModTime") or (metadata or {}).get("created_at")
@@ -983,7 +1206,7 @@ def list_scp(config, destination, log):
         rows = []
         for line in proc.stdout.splitlines():
             parts = line.split("\t")
-            if len(parts) != 3 or not ARCHIVE_RE.fullmatch(parts[0]):
+            if len(parts) != 3 or not (BUNDLE_RE.fullmatch(parts[0]) or LEGACY_ARCHIVE_RE.fullmatch(parts[0])):
                 continue
             name, size, mtime = parts
             side_local = temp / (name + ".tectac.json")
@@ -1005,6 +1228,8 @@ def list_destination(config, destination, log):
         return list_local(destination)
     if destination["type"] == "scp":
         return list_scp(config, destination, log)
+    if destination["type"] == "ftp":
+        return ftp_list(config, destination, log)
     return list_rclone(config, destination, log)
 
 
@@ -1033,7 +1258,7 @@ def parse_backup_ref(value):
     if len(parts) != 3 or parts[0] != "destination":
         raise RuntimeError("backup_ref is invalid")
     dest_id, name = parts[1], parts[2]
-    if not SAFE_DEST_ID_RE.fullmatch(dest_id) or not ARCHIVE_RE.fullmatch(name):
+    if not SAFE_DEST_ID_RE.fullmatch(dest_id) or not (BUNDLE_RE.fullmatch(name) or LEGACY_ARCHIVE_RE.fullmatch(name)):
         raise RuntimeError("backup_ref is invalid")
     return dest_id, name
 
@@ -1078,11 +1303,13 @@ def download_destination(config, destination, name, target, log):
         return download_local(destination, name, target)
     if destination["type"] == "scp":
         return download_scp(config, destination, name, target, log)
+    if destination["type"] == "ftp":
+        return ftp_download(config, destination, name, target, log)
     return download_rclone(config, destination, name, target, log)
 
 
-def validate_tactical_archive(archive: Path, *, restore_tec_tac: bool):
-    ensure_regular(archive)
+def validate_tactical_native_archive(archive: Path):
+    ensure_regular(archive, max_bytes=max_backup_bytes(load_config()))
     required_exact = {"rmm/local_settings.py", "systemd/rmm.service", "meshcentral/mesh.tar.gz", "confd/etc-confd.tar.gz"}
     with tarfile.open(archive, "r") as tf:
         members = safe_tar_members(tf)
@@ -1092,51 +1319,114 @@ def validate_tactical_archive(archive: Path, *, restore_tec_tac: bool):
             raise RuntimeError("Tactical backup is missing required members: " + ", ".join(missing))
         if not any(re.fullmatch(r"postgres/db-[^/]+\.psql\.gz", name) for name in names):
             raise RuntimeError("Tactical backup does not contain its tacticalrmm PostgreSQL dump")
-        has_manifest = "tec-tac/manifest.json" in names
-        if restore_tec_tac and not has_manifest:
-            raise RuntimeError("restore_tec_tac was requested but this archive has no Tec-Tac payload")
-        manifest = None
-        if has_manifest:
-            fh = tf.extractfile(next(m for m in members if m.name.lstrip("./") == "tec-tac/manifest.json"))
-            if fh is None:
-                raise RuntimeError("Tec-Tac payload manifest is unreadable")
-            manifest = json.loads(fh.read().decode("utf-8"))
-            if not isinstance(manifest, dict) or int(manifest.get("format_version", 0)) != 1:
-                raise RuntimeError("Tec-Tac payload manifest format is unsupported")
-            for rel, info in (manifest.get("members") or {}).items():
-                full = "tec-tac/" + str(rel)
-                matches = [m for m in members if m.name.lstrip("./") == full]
-                if len(matches) != 1:
-                    raise RuntimeError(f"Tec-Tac payload member is missing: {rel}")
-                member_fh = tf.extractfile(matches[0])
-                if member_fh is None:
-                    raise RuntimeError(f"Tec-Tac payload member is unreadable: {rel}")
-                digest = hashlib.sha256()
-                size = 0
-                for block in iter(lambda: member_fh.read(1024 * 1024), b""):
-                    digest.update(block); size += len(block)
-                if digest.hexdigest() != str(info.get("sha256") or "") or size != int(info.get("size_bytes", -1)):
-                    raise RuntimeError(f"Tec-Tac payload checksum failed: {rel}")
-        return manifest
+    return True
 
 
-def extract_payload_members(archive, target):
-    target.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(archive, "r") as tf:
-        safe_tar_members(tf)
-        for member in tf.getmembers():
-            name = member.name.lstrip("./")
-            if not name.startswith("tec-tac/") or not member.isfile():
-                continue
-            rel = Path(*PurePosixPath(name).parts[1:])
-            out = target / rel
-            out.parent.mkdir(parents=True, exist_ok=True)
-            source = tf.extractfile(member)
-            if source is None:
-                raise RuntimeError(f"unable to extract Tec-Tac payload member {name}")
-            with out.open("wb") as dest:
-                shutil.copyfileobj(source, dest)
+def validate_tec_tac_component(path: Path):
+    ensure_regular(path, max_bytes=max_backup_bytes(load_config()))
+    with tarfile.open(path, "r:gz") as tf:
+        members=safe_tar_members(tf)
+        if not members:
+            raise RuntimeError("Tec-Tac component is empty")
+        for member in members:
+            name=member.name.lstrip("./")
+            # Tec-Tac must remain external to Tactical's tracked /rmm tree.
+            if name == "rmm" or name.startswith("rmm/"):
+                raise RuntimeError("Tec-Tac recovery component may not contain Tactical /rmm tracked source")
+    return True
+
+
+def parse_checksum_file(text):
+    records={}
+    for raw in str(text or "").splitlines():
+        line=raw.strip()
+        if not line: continue
+        match=re.fullmatch(r"([0-9a-fA-F]{64})\s{2}([^\s].*)",line)
+        if not match:
+            raise RuntimeError("recovery bundle checksums.sha256 contains an invalid line")
+        rel=match.group(2).strip().replace("\\","/")
+        pp=PurePosixPath(rel)
+        if pp.is_absolute() or ".." in pp.parts:
+            raise RuntimeError("recovery bundle checksum path is unsafe")
+        if rel in records:
+            raise RuntimeError("recovery bundle checksum file contains duplicate paths")
+        records[rel]=match.group(1).lower()
+    return records
+
+
+def extract_verified_bundle_member(tf, member, target, expected_hash, expected_size):
+    source=tf.extractfile(member)
+    if source is None:
+        raise RuntimeError(f"recovery bundle member is unreadable: {member.name}")
+    target.parent.mkdir(parents=True,exist_ok=True)
+    digest=hashlib.sha256(); size=0
+    with target.open("wb") as out:
+        for block in iter(lambda:source.read(1024*1024),b""):
+            out.write(block); digest.update(block); size+=len(block)
+    if size != int(expected_size) or digest.hexdigest().lower() != str(expected_hash).lower():
+        target.unlink(missing_ok=True)
+        raise RuntimeError(f"recovery bundle component checksum failed: {member.name}")
     return target
+
+
+def validate_recovery_bundle(bundle: Path, restore_mode: str, stage: Path):
+    ensure_regular(bundle, max_bytes=max_backup_bytes(load_config()))
+    if not BUNDLE_RE.fullmatch(bundle.name):
+        raise RuntimeError("recovery bundle filename is invalid")
+    with tarfile.open(bundle,"r:gz") as tf:
+        members=safe_tar_members(tf)
+        names=[m.name.lstrip("./") for m in members]
+        if len(names) != len(set(names)):
+            raise RuntimeError("recovery bundle contains duplicate member paths")
+        by_name={m.name.lstrip("./"):m for m in members}
+        if "manifest.json" not in by_name or "checksums.sha256" not in by_name:
+            raise RuntimeError("recovery bundle requires manifest.json and checksums.sha256")
+        mf=tf.extractfile(by_name["manifest.json"]); cf=tf.extractfile(by_name["checksums.sha256"])
+        if mf is None or cf is None: raise RuntimeError("recovery bundle metadata is unreadable")
+        manifest=json.loads(mf.read().decode("utf-8"))
+        if not isinstance(manifest,dict) or int(manifest.get("format_version",0)) != 2:
+            raise RuntimeError("recovery bundle format is unsupported")
+        if manifest.get("artifact_type") not in (None,"tec-tac-recovery-bundle"):
+            raise RuntimeError("recovery bundle artifact type is invalid")
+        checksums=parse_checksum_file(cf.read().decode("utf-8"))
+        modes=manifest.get("recovery_modes") or []
+        if restore_mode not in modes:
+            raise RuntimeError(f"recovery bundle does not support restore mode {restore_mode}")
+        components=manifest.get("components") or {}
+        required=[]
+        if restore_mode in {"full","tactical"}: required.append("tactical")
+        if restore_mode in {"full","tec_tac"}: required.append("tec_tac")
+        extracted={}
+        for key in required:
+            meta=components.get(key) or {}
+            if not meta.get("included"):
+                raise RuntimeError(f"recovery bundle does not include required component: {key}")
+            rel=str(meta.get("archive") or "")
+            expected = "tec-tac/tec-tac-backup.tar.gz" if key=="tec_tac" else rel
+            if key=="tactical" and not re.fullmatch(r"tactical/rmm-backup-[A-Za-z0-9_.-]+\.tar",rel):
+                raise RuntimeError("recovery bundle Tactical component path is invalid")
+            if key=="tec_tac" and rel != expected:
+                raise RuntimeError("recovery bundle Tec-Tac component path is invalid")
+            member=by_name.get(rel)
+            if member is None or not member.isfile():
+                raise RuntimeError(f"recovery bundle component is missing: {key}")
+            manifest_hash=str(meta.get("sha256") or "").lower()
+            checksum_hash=str(checksums.get(rel) or "").lower()
+            if not manifest_hash or checksum_hash != manifest_hash:
+                raise RuntimeError(f"recovery bundle checksum record mismatch: {key}")
+            target=stage/("tactical-native.tar" if key=="tactical" else "tec-tac-backup.tar.gz")
+            extract_verified_bundle_member(tf,member,target,manifest_hash,int(meta.get("size_bytes",-1)))
+            extracted[key]=target
+        # Every declared included component must have a checksum record even when
+        # the selected emergency mode does not read/hash that component.
+        for key,meta in components.items():
+            if not isinstance(meta,dict) or not meta.get("included"): continue
+            rel=str(meta.get("archive") or "")
+            if not rel or str(checksums.get(rel) or "").lower()!=str(meta.get("sha256") or "").lower():
+                raise RuntimeError(f"recovery bundle metadata/checksum declaration is incomplete: {key}")
+    if "tactical" in extracted: validate_tactical_native_archive(extracted["tactical"])
+    if "tec_tac" in extracted: validate_tec_tac_component(extracted["tec_tac"])
+    return manifest,extracted
 
 
 def safe_extract_payload_tar(path, root=Path("/")):
@@ -1145,6 +1435,9 @@ def safe_extract_payload_tar(path, root=Path("/")):
         for member in members:
             target = (root / member.name).resolve()
             target.relative_to(root.resolve())
+            name=member.name.lstrip("./")
+            if name == "rmm" or name.startswith("rmm/"):
+                raise RuntimeError("Tec-Tac payload may not overwrite Tactical tracked source")
         tf.extractall(root, members=members, numeric_owner=True)
 
 
@@ -1155,131 +1448,105 @@ def service_stop_for_restore(log):
     log.write("[TEC-TAC-BACKUP] stopped Tactical services for destructive restore\n")
 
 
-def run_post_restore_tec_tac(config, manifest, payload_root, log):
-    if not manifest:
-        return
-    for name in ("backend.tar.gz", "ui-source.tar.gz", "state.tar.gz", "etc.tar.gz"):
-        path = payload_root / name
-        if path.is_file():
-            safe_extract_payload_tar(path)
-    nginx = payload_root / "nginx" / "tec-tac.conf"
-    if nginx.is_file():
-        target = Path("/etc/nginx/snippets/tec-tac.conf")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(nginx, target)
+def verify_tactical_runtime(config, log):
+    run_logged(["nginx","-t"],log,timeout=60)
+    standard_ui=Path("/var/www/rmm/dist/index.html")
+    if not standard_ui.is_file():
+        raise RuntimeError(f"standard Tactical UI verification failed: {standard_ui} is missing")
+    tactical_python=Path(config["TACTICAL_PYTHON"]); manage=Path(config["TACTICAL_BACKEND_ROOT"])/"manage.py"
+    if tactical_python.is_file() and manage.is_file():
+        run_logged([str(tactical_python),str(manage),"check"],log,cwd=str(manage.parent),timeout=300,user=config["TACTICAL_USER"])
+    for service in ("rmm","celery","celerybeat","nginx"):
+        if subprocess.run(["systemctl","is-active","--quiet",service]).returncode:
+            raise RuntimeError(f"post-restore Tactical service verification failed: {service}")
 
-    paths = manifest.get("paths") or {}
-    framework_source = Path(str(paths.get("framework_source") or config["TEC_TAC_FRAMEWORK_SOURCE"]))
-    ui_source = Path(str(paths.get("ui_source") or config["TEC_TAC_UI_SOURCE"]))
-    backend_installer = framework_source / "install.sh"
+
+def run_post_restore_tec_tac(config, component_meta, component_archive, log):
+    safe_extract_payload_tar(component_archive)
+    paths=(component_meta or {}).get("paths") or {}
+    framework_source=Path(str(paths.get("framework_source") or config["TEC_TAC_FRAMEWORK_SOURCE"]))
+    ui_source=Path(str(paths.get("ui_source") or config["TEC_TAC_UI_SOURCE"]))
+    backend_installer=framework_source/"install.sh"
     if not backend_installer.is_file():
         raise RuntimeError(f"restored Tec-Tac framework installer not found at {backend_installer}")
-    run_logged(["bash", str(backend_installer)], log, timeout=2 * 60 * 60)
-    ui_installer = ui_source / "scripts" / "install.sh"
-    if ui_installer.is_file():
-        run_logged(["bash", str(ui_installer)], log, timeout=2 * 60 * 60)
-    run_logged(["nginx", "-t"], log, timeout=60)
-    subprocess.run(["systemctl", "reload", "nginx"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-    tactical_python = Path(config["TACTICAL_PYTHON"])
-    manage = Path(config["TACTICAL_BACKEND_ROOT"]) / "manage.py"
+    run_logged(["bash",str(backend_installer)],log,timeout=2*60*60)
+    ui_installer=ui_source/"scripts"/"install.sh"
+    if ui_installer.is_file(): run_logged(["bash",str(ui_installer)],log,timeout=2*60*60)
+    run_logged(["nginx","-t"],log,timeout=60)
+    subprocess.run(["systemctl","reload","nginx"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    tactical_python=Path(config["TACTICAL_PYTHON"]); manage=Path(config["TACTICAL_BACKEND_ROOT"])/"manage.py"
     if tactical_python.is_file() and manage.is_file():
-        run_logged([str(tactical_python), str(manage), "check"], log, cwd=str(manage.parent), timeout=300, user=config["TACTICAL_USER"])
-        route_probe = "from django.urls import reverse; p=reverse('tec-tac-ui-context'); assert p.startswith('/api/tfd/'), p; print(p)"
-        run_logged([str(tactical_python), str(manage), "shell", "-c", route_probe], log, cwd=str(manage.parent), timeout=300, user=config["TACTICAL_USER"])
-    ui_root = Path(config.get("TEC_TAC_UI_DEPLOY_ROOT") or "/var/lib/tec-tac/ui/tec-tac")
-    if not (ui_root / "index.html").is_file():
-        raise RuntimeError(f"post-restore Tec-Tac UI verification failed: {ui_root / 'index.html'} is missing")
-    for service in ("rmm", "celery", "celerybeat", "nginx"):
-        result = subprocess.run(["systemctl", "is-active", "--quiet", service])
-        if result.returncode:
-            raise RuntimeError(f"post-restore service verification failed: {service}")
+        run_logged([str(tactical_python),str(manage),"check"],log,cwd=str(manage.parent),timeout=300,user=config["TACTICAL_USER"])
+        route_probe="from django.urls import reverse; p=reverse('tec-tac-ui-context'); assert p.startswith('/api/tfd/'), p; print(p)"
+        run_logged([str(tactical_python),str(manage),"shell","-c",route_probe],log,cwd=str(manage.parent),timeout=300,user=config["TACTICAL_USER"])
+    ui_root=Path(config.get("TEC_TAC_UI_DEPLOY_ROOT") or "/var/lib/tec-tac/ui/tec-tac")
+    if not (ui_root/"index.html").is_file(): raise RuntimeError(f"post-restore Tec-Tac UI verification failed: {ui_root/'index.html'} is missing")
+    verify_tactical_runtime(config,log)
 
 
 def operation_restore_backup(config, job, log):
-    request = job["request"]
-    dest_id, name = parse_backup_ref(request.get("backup_ref"))
-    destination = request.get("destination")
-    restore_tec_tac = request.get("restore_tec_tac")
-    if not isinstance(restore_tec_tac, bool):
-        raise RuntimeError("restore_tec_tac must be boolean")
+    request=job["request"]
+    dest_id,name=parse_backup_ref(request.get("backup_ref"))
+    destination=request.get("destination")
+    mode=str(request.get("restore_mode") or "").strip().lower()
+    if mode not in {"full","tactical","tec_tac"}: raise RuntimeError("restore_mode must be full, tactical, or tec_tac")
     if destination is None:
-        # A local reference can omit destination only for Tactical's native
-        # /rmmbackups root, using destination id "local" or "0".
-        if dest_id not in {"local", "0", "native"}:
-            raise RuntimeError("destination configuration is required for this backup_ref")
-        destination = {"id": dest_id, "type": "local", "name": "Tactical local backups", "path": "/rmmbackups"}
-    destination = validate_destination(destination, config)
-    if destination["id"] != dest_id:
-        raise RuntimeError("backup_ref destination id does not match supplied destination")
+        if dest_id not in {"local","0","native"}: raise RuntimeError("destination configuration is required for this backup_ref")
+        destination={"id":dest_id,"type":"local","name":"Tactical local backups","path":"/rmmbackups"}
+    destination=validate_destination(destination,config)
+    if destination["id"]!=dest_id: raise RuntimeError("backup_ref destination id does not match supplied destination")
 
-    lock = acquire_lock(config)
-    rs = roots(config)
-    stage = rs["staging"] / f"restore-{job['id']}"
-    shutil.rmtree(stage, ignore_errors=True)
-    stage.mkdir(parents=True, exist_ok=True)
-    archive = stage / name
+    lock=acquire_lock(config)
+    rs=roots(config); stage=rs["staging"]/f"restore-{job['id']}"
+    shutil.rmtree(stage,ignore_errors=True); stage.mkdir(parents=True,exist_ok=True)
+    downloaded=stage/name
     try:
-        metadata = download_destination(config, destination, name, archive, log)
-        ensure_regular(archive, max_bytes=max_backup_bytes(config))
+        metadata=download_destination(config,destination,name,downloaded,log)
+        ensure_regular(downloaded,max_bytes=max_backup_bytes(config))
         if metadata:
-            if int(metadata.get("size_bytes", -1)) != archive.stat().st_size:
-                raise RuntimeError("restore archive size does not match backup metadata")
-            if metadata.get("sha256") and str(metadata["sha256"]).lower() != sha256_file(archive).lower():
-                raise RuntimeError("restore archive SHA-256 does not match backup metadata")
-        manifest = validate_tactical_archive(archive, restore_tec_tac=restore_tec_tac)
-        payload_root = stage / "tec-tac-payload"
-        if manifest:
-            extract_payload_members(archive, payload_root)
+            if int(metadata.get("size_bytes",-1))!=downloaded.stat().st_size: raise RuntimeError("restore artifact size does not match backup metadata")
+            if metadata.get("sha256") and str(metadata["sha256"]).lower()!=sha256_file(downloaded).lower(): raise RuntimeError("restore artifact SHA-256 does not match backup metadata")
 
-        tactical_root = Path(config["TACTICAL_ROOT"])
-        restore_script_source = tactical_root / "restore.sh"
-        ensure_regular(restore_script_source)
-        restore_script = stage / "restore.sh"
-        shutil.copy2(restore_script_source, restore_script)
-        os.chmod(restore_script, 0o755)
+        if LEGACY_ARCHIVE_RE.fullmatch(name):
+            if mode!="tactical": raise RuntimeError("legacy Tactical archives support only tactical restore mode")
+            validate_tactical_native_archive(downloaded)
+            manifest={"format_version":1,"legacy":True,"components":{"tactical":{"included":True}},"recovery_modes":["tactical"]}
+            extracted={"tactical":downloaded}
+        else:
+            manifest,extracted=validate_recovery_bundle(downloaded,mode,stage)
 
-        job["stage"] = "restore-prepared"
-        atomic_json(job_path(job["id"], config), job)
-        service_stop_for_restore(log)
+        job["stage"]="restore-prepared"; atomic_json(job_path(job["id"],config),job)
+        moved_root=None
+        if mode in {"full","tactical"}:
+            tactical_root=Path(config["TACTICAL_ROOT"])
+            restore_script_source=tactical_root/"restore.sh"; ensure_regular(restore_script_source)
+            restore_script=stage/"restore.sh"; shutil.copy2(restore_script_source,restore_script); os.chmod(restore_script,0o755)
+            service_stop_for_restore(log)
+            if (tactical_root/"api"/"tacticalrmm").exists():
+                moved_root=Path(str(tactical_root)+f".tectac-pre-restore-{stamp()}")
+                if moved_root.exists(): raise RuntimeError(f"pre-restore Tactical preservation path already exists: {moved_root}")
+                os.replace(tactical_root,moved_root)
+                job["result"]={"ok":False,"backup_ref":request.get("backup_ref"),"archive_name":name,"restore_mode":mode,"pre_restore_tactical_path":str(moved_root)}
+                atomic_json(job_path(job["id"],config),job)
+                log.write(f"[TEC-TAC-BACKUP] preserved existing Tactical tree at {moved_root}\n")
+            _,_,user,home=tactical_identity(config)
+            env=os.environ.copy(); env.update({"HOME":home,"USER":user,"LOGNAME":user,"GROUP":grp.getgrgid(tactical_identity(config)[1]).gr_name})
+            run_logged([str(restore_script),str(extracted["tactical"])],log,env=env,cwd=home,timeout=10*60*60,user=user)
+            if mode=="full":
+                run_post_restore_tec_tac(config,(manifest.get("components") or {}).get("tec_tac") or {},extracted["tec_tac"],log)
+            else:
+                verify_tactical_runtime(config,log)
+        else:
+            # Tec-Tac-only recovery deliberately leaves Tactical and its database intact.
+            run_post_restore_tec_tac(config,(manifest.get("components") or {}).get("tec_tac") or {},extracted["tec_tac"],log)
 
-        moved_root = None
-        if (tactical_root / "api" / "tacticalrmm").exists():
-            moved_root = Path(str(tactical_root) + f".tectac-pre-restore-{stamp()}")
-            if moved_root.exists():
-                raise RuntimeError(f"pre-restore Tactical preservation path already exists: {moved_root}")
-            os.replace(tactical_root, moved_root)
-            job["result"] = {
-                "ok": False,
-                "backup_ref": request.get("backup_ref"),
-                "archive_name": name,
-                "pre_restore_tactical_path": str(moved_root),
-                "restore_tec_tac": restore_tec_tac,
-            }
-            atomic_json(job_path(job["id"], config), job)
-            log.write(f"[TEC-TAC-BACKUP] preserved existing Tactical tree at {moved_root}\n")
-
-        _, _, user, home = tactical_identity(config)
-        env = os.environ.copy(); env.update({"HOME": home, "USER": user, "LOGNAME": user, "GROUP": grp.getgrgid(tactical_identity(config)[1]).gr_name})
-        # Official Tactical restore.sh insists on the same installation owner
-        # and a clean /rmm tree. The old tree was atomically preserved above;
-        # the root-owned worker remains outside /rmm while restore executes.
-        run_logged([str(restore_script), str(archive)], log, env=env, cwd=home, timeout=10 * 60 * 60, user=user)
-        if restore_tec_tac:
-            run_post_restore_tec_tac(config, manifest, payload_root, log)
-        run_logged(["nginx", "-t"], log, timeout=60)
-        result = {
-            "ok": True,
-            "backup_ref": request.get("backup_ref"),
-            "archive_name": name,
-            "restore_tec_tac": restore_tec_tac,
-            "pre_restore_tactical_path": str(moved_root) if moved_root else None,
-            "completed_at": now(),
+        return {
+            "ok":True,"backup_ref":request.get("backup_ref"),"archive_name":name,"restore_mode":mode,
+            "format_version":int(manifest.get("format_version") or 1),
+            "pre_restore_tactical_path":str(moved_root) if moved_root else None,
+            "completed_at":now(),
         }
-        return result
     finally:
-        # Preserve failed restore staging for diagnostics; successful jobs are
-        # cleaned by run_job after result persistence.
         lock.close()
 
 
@@ -1309,6 +1576,7 @@ def delete_destination(config, destination, name, log):
     destination = validate_destination(destination, config)
     if destination["type"] == "local": return delete_local(destination, name)
     if destination["type"] == "scp": return delete_scp(config, destination, name, log)
+    if destination["type"] == "ftp": return ftp_delete(config, destination, name, log)
     return delete_rclone(config, destination, name, log)
 
 
@@ -1528,6 +1796,65 @@ def validate_scp_roundtrip(config, destination, payload, expected_hash, result, 
                     result["reason"] = "validation object cleanup failed"
 
 
+def validate_ftp_roundtrip(config, destination, payload, expected_hash, result, object_name):
+    ftp=None; created=False
+    try:
+        try:
+            destination=validate_destination(destination,config)
+            result["checks"]["configuration"]="passed"
+        except Exception as exc:
+            _validation_fail(result,"configuration",str(exc))
+        try:
+            ftp=ftp_connect(config,destination,timeout=60)
+            result["checks"]["connection"]="passed"
+            result["checks"]["authentication"]="passed"
+        except ftplib.error_perm as exc:
+            result["checks"]["connection"]="passed"
+            _validation_fail(result,"authentication","authentication failed")
+        except Exception as exc:
+            _validation_fail(result,"connection","connection failed")
+        try:
+            ftp_prepare_path(ftp,destination["remote_path"],create=True)
+            result["checks"]["path_access"]="passed"
+        except Exception:
+            _validation_fail(result,"path_access","configured path is inaccessible")
+        try:
+            with payload.open("rb") as fh:
+                ftp.storbinary(f"STOR {object_name}",fh,blocksize=65536)
+            created=True; result["checks"]["write"]="passed"
+        except Exception:
+            _validation_fail(result,"write","write failed")
+        downloaded=bytearray()
+        try:
+            ftp.retrbinary(f"RETR {object_name}",downloaded.extend,blocksize=65536)
+            result["checks"]["read"]="passed"
+        except Exception:
+            _validation_fail(result,"read","read failed")
+        if len(downloaded)!=payload.stat().st_size or hashlib.sha256(downloaded).hexdigest()!=expected_hash:
+            _validation_fail(result,"integrity","round-trip integrity verification failed")
+        result["checks"]["integrity"]="passed"
+        try:
+            ftp.delete(object_name)
+            names=[Path(x).name for x in ftp.nlst()]
+            if object_name in names:
+                raise RuntimeError("delete could not be confirmed")
+            created=False; result["checks"]["delete"]="passed"
+        except Exception:
+            _validation_fail(result,"delete","delete failed")
+    finally:
+        if ftp is not None and created:
+            try:
+                ftp.delete(object_name)
+                result["checks"]["delete"]="passed"
+            except Exception:
+                result["checks"]["delete"]="failed"
+        if ftp is not None:
+            try: ftp.quit()
+            except Exception:
+                try: ftp.close()
+                except Exception: pass
+
+
 def validate_local_roundtrip(config, destination, payload, expected_hash, result, object_name):
     try:
         destination = validate_destination(destination, config)
@@ -1592,6 +1919,8 @@ def operation_validate_destination(config, job, log):
                 validate_local_roundtrip(config, destination, payload, expected_hash, result, object_name)
             elif destination["type"] == "scp":
                 validate_scp_roundtrip(config, destination, payload, expected_hash, result, log, temp, object_name)
+            elif destination["type"] == "ftp":
+                validate_ftp_roundtrip(config, destination, payload, expected_hash, result, object_name)
             else:
                 validate_rclone_roundtrip(config, destination, payload, expected_hash, result, log, temp, object_name)
         except OperationFailed as exc:
