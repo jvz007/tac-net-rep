@@ -1,3 +1,5 @@
+Version **1.15.21** corrects release-integrity validation so the repository may retain the current and immediately previous root release notes while older notes remain archived under `docs/releases/`.
+
 Version **1.15.20** hardens module removal so successful deletes clear persistent module state before UI synchronization, preventing stale enabled records from breaking later UI/system updates.
 
 Version **1.15.19** adds first-class module identity rename-upgrades and hardens module lifecycle runtime refresh handling. See `docs/module-identifiers.md`.

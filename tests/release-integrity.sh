@@ -9,10 +9,20 @@ print(json.load(open(sys.argv[1],encoding='utf-8'))['version'])
 PY
 )"
 [[ "${PACKAGE_VERSION}" == "${VERSION}" ]] || fail "package version ${PACKAGE_VERSION} != VERSION ${VERSION}"
-[[ -f "${ROOT}/RELEASE_NOTES_${VERSION}.md" ]] || fail "current release note missing"
-mapfile -t ROOT_NOTES < <(find "${ROOT}" -maxdepth 1 -type f -name 'RELEASE_NOTES_*.md' -printf '%f\n' | sort)
-[[ ${#ROOT_NOTES[@]} -eq 1 ]] || fail "expected exactly one root release note, found ${#ROOT_NOTES[@]}"
-[[ "${ROOT_NOTES[0]}" == "RELEASE_NOTES_${VERSION}.md" ]] || fail "root release note does not match current version"
+
+mapfile -t ROOT_NOTES < <(
+  find "${ROOT}" -maxdepth 1 -type f \
+    -name 'RELEASE_NOTES_*.md' \
+    -printf '%f\n' | sort
+)
+
+[[ ${#ROOT_NOTES[@]} -le 2 ]] || \
+  fail "expected no more than two root release notes, found ${#ROOT_NOTES[@]}"
+
+CURRENT_NOTE="RELEASE_NOTES_${VERSION}.md"
+printf '%s\n' "${ROOT_NOTES[@]}" | grep -Fxq "${CURRENT_NOTE}" || \
+  fail "current release note ${CURRENT_NOTE} not found"
+
 find "${ROOT}/scripts/recovery" -maxdepth 1 -type f -name '*.sh' -print0 | while IFS= read -r -d '' script; do
   [[ -x "${script}" ]] || fail "recovery script is not executable: ${script}"
 done
