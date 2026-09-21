@@ -59,6 +59,9 @@ grep -q 'Module package inspection failed.' "${ROOT}/framwork/tec_tac/views.py" 
 grep -q 'error_type' "${ROOT}/framwork/tec_tac/module_manager.py" || fail "structured job error type missing"
 grep -q 'Fresh-process verification OK' "${ROOT}/scripts/install-extension.sh" || fail "fresh-process lifecycle verification missing"
 grep -q 'UI verification OK' "${ROOT}/scripts/module-job-helper.py" || fail "UI deployment verification missing"
+grep -q 'def forget_module_state' "${ROOT}/scripts/module-job-helper.py" || fail "module removal state cleanup helper missing"
+grep -q 'forget_module_state(job\["plugin_id"\], log)' "${ROOT}/scripts/module-job-helper.py" || fail "successful module removal does not clear persistent state"
+grep -q 'os.chmod(tmp, 0o644)' "${ROOT}/scripts/module-job-helper.py" || fail "module removal state cleanup does not preserve runtime-readable mode"
 grep -q 'SupplementaryGroups=${TACTICAL_GROUP}' "${ROOT}/install.sh" || fail "rmm supplementary-group drop-in missing"
 grep -q 'kill -HUP' "${ROOT}/scripts/reload-rmm-uwsgi.sh" || fail "uWSGI graceful reload signal missing"
 ! grep -q 'systemctl restart rmm daphne celery celerybeat' "${ROOT}/scripts/install-extension.sh" || fail "extension install still performs full Tactical restart"
@@ -105,6 +108,32 @@ bash -n "${ROOT}/uninstall.sh"
 bash -n "${ROOT}/scripts/install-extension.sh"
 bash -n "${ROOT}/scripts/remove-extension.sh"
 bash -n "${ROOT}/scripts/reload-rmm-uwsgi.sh"
+
+python3 - "${ROOT}" <<'PY_REMOVE_STATE'
+import importlib.util
+import json
+import sys
+import tempfile
+from pathlib import Path
+
+root = Path(sys.argv[1])
+helper_path = root / "scripts/module-job-helper.py"
+spec = importlib.util.spec_from_file_location("tec_tac_module_job_helper_test", helper_path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+with tempfile.TemporaryDirectory() as tmp:
+    state_file = Path(tmp) / "module-state.json"
+    state_file.write_text(json.dumps({"schema": 1, "modules": {"keep": {"enabled": True}, "removed": {"enabled": True, "version": "1.2.3"}}}), encoding="utf-8")
+    module.STATE_FILE = state_file
+    assert module.forget_module_state("removed") is True
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    assert "removed" not in state["modules"]
+    assert "keep" in state["modules"]
+    assert (state_file.stat().st_mode & 0o777) == 0o644
+    assert module.forget_module_state("missing") is False
+print("[TEST] module removal persistent state cleanup OK")
+PY_REMOVE_STATE
+
 echo "[TEST] PASS module management foundation"
 
 grep -q '_plan_with_requested_order' "${ROOT}/framwork/tec_tac/module_manager_v2.py" || fail "dependency-safe requested install ordering missing"

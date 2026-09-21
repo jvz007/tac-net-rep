@@ -1,3 +1,5 @@
+Version **1.15.20** hardens module removal so successful deletes clear persistent module state before UI synchronization, preventing stale enabled records from breaking later UI/system updates.
+
 Version **1.15.19** adds first-class module identity rename-upgrades and hardens module lifecycle runtime refresh handling. See `docs/module-identifiers.md`.
 
 Module IDs are case-sensitive and case-preserving; see `docs/module-identifiers.md`.

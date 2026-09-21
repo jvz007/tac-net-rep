@@ -16,6 +16,7 @@ from pathlib import Path
 JOB_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 PLUGIN_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 STATE_ROOT = Path("/var/lib/tec-tac/module-manager")
+STATE_FILE = STATE_ROOT / "module-state.json"
 JOBS_ROOT = STATE_ROOT / "jobs"
 STAGED_ROOT = STATE_ROOT / "staged"
 RUNNING_ROOT = STATE_ROOT / "running"
@@ -61,6 +62,30 @@ def atomic_json(path, payload):
     tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.chmod(tmp, 0o640)
     os.replace(tmp, path)
+
+
+def forget_module_state(plugin_id, log=None):
+    """Remove lifecycle state for a module whose files were successfully removed."""
+    if not STATE_FILE.is_file():
+        return False
+    try:
+        state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"module state is unreadable after removal: {exc}") from exc
+    modules = state.get("modules")
+    if not isinstance(modules, dict):
+        raise RuntimeError("module state has an invalid structure after removal")
+    if plugin_id not in modules:
+        return False
+    del modules[plugin_id]
+    tmp = STATE_FILE.with_name(STATE_FILE.name + ".tmp")
+    tmp.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, STATE_FILE)
+    if log is not None:
+        log.write(f"[TEC-TAC-MODULE] removed stale runtime state for {plugin_id}\n")
+        log.flush()
+    return True
 
 
 def job_path(job_id):
@@ -186,6 +211,11 @@ def run_job(job_id):
             log.flush()
             result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, text=True)
             rc = result.returncode
+            if rc == 0 and job["action"] == "remove":
+                # Removal is not complete until its persistent runtime state is
+                # cleared. Otherwise later UI/system updates can fail because
+                # module-state.json still marks a deleted extension as enabled.
+                forget_module_state(job["plugin_id"], log)
             if rc == 0 and ui_sync.is_file():
                 job["stage"] = "ui-sync"
                 atomic_json(path, job)
