@@ -2,9 +2,10 @@ import logging
 
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework.parsers import FormParser, MultiPartParser
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
+from .session_security import SessionAuthenticated
 
 from .module_manager import ModuleManagerError, discard_stage, get_job, list_jobs
 from .module_manager_v2 import (
@@ -26,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 @extend_schema_view(get=extend_schema(tags=["Tec-Tac Framework"], summary="List Module Management v2 catalog"))
 class ModuleV2CatalogView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
     def get(self, request):
         modules = installed_catalog_v2()
         return Response({"modules": modules, "count": len(modules), "manage": _can_manage_modules(request.user), "schema": 2})
@@ -34,7 +35,7 @@ class ModuleV2CatalogView(APIView):
 
 @extend_schema_view(post=extend_schema(tags=["Tec-Tac Framework"], summary="Inspect one or more packages or a bundle"))
 class ModuleV2InspectView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
     def post(self, request):
         _require_module_manager(request.user)
@@ -62,7 +63,7 @@ class ModuleV2InspectView(APIView):
 
 
 class ModuleV2StageView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
     def delete(self, request, upload_id):
         _require_module_manager(request.user)
         try:
@@ -73,7 +74,7 @@ class ModuleV2StageView(APIView):
 
 
 class ModuleV2InstallView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
     def post(self, request, upload_id):
         _require_module_manager(request.user)
         try:
@@ -90,7 +91,7 @@ class ModuleV2InstallView(APIView):
 
 
 class ModuleV2StateView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
     def post(self, request, plugin_id):
         _require_module_manager(request.user)
         enabled = request.data.get("enabled")
@@ -104,7 +105,7 @@ class ModuleV2StateView(APIView):
 
 
 class ModuleV2VisibilityView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
     def post(self, request, plugin_id):
         _require_module_manager(request.user)
         visible = request.data.get("visible")
@@ -117,7 +118,7 @@ class ModuleV2VisibilityView(APIView):
 
 
 class ModuleV2RemoveCheckView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
     def get(self, request, plugin_id):
         _require_module_manager(request.user)
         try:
@@ -127,7 +128,7 @@ class ModuleV2RemoveCheckView(APIView):
 
 
 class ModuleV2JobHistoryView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
     def get(self, request):
         _require_module_manager(request.user)
         raw_limit = request.query_params.get("limit", 200)
@@ -140,7 +141,7 @@ class ModuleV2JobHistoryView(APIView):
 
 
 class ModuleV2JobView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
     def get(self, request, job_id):
         _require_module_manager(request.user)
         try:

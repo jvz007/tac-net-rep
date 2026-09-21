@@ -145,7 +145,7 @@ def _extract_raw_token(request) -> str:
     session_key = getattr(session, "session_key", None) if session is not None else None
     if session_key:
         return f"django-session:{session_key}"
-    raise SessionSecurityDenied("session_identity_unavailable", "Authenticated session identity is unavailable.")
+    raise SessionSecurityDenied("session_invalid_state", "Authenticated session state is invalid. Cannot identify the credential.")
 
 
 def token_fingerprint(request) -> str:
@@ -297,7 +297,7 @@ def ensure_request_session(request, *, create: bool = True) -> TecTacSessionTrus
             session = TecTacSessionTrust.objects.select_for_update().get(token_fingerprint=fingerprint)
         except TecTacSessionTrust.DoesNotExist:
             if not create:
-                raise SessionSecurityDenied("session_not_registered")
+                raise SessionSecurityDenied("session_invalid_state")
             absolute = now + timedelta(minutes=int(policy["absolute_lifetime_minutes"]))
             idle = now + timedelta(minutes=int(policy["idle_timeout_minutes"]))
             session, created = TecTacSessionTrust.objects.get_or_create(
@@ -323,7 +323,7 @@ def ensure_request_session(request, *, create: bool = True) -> TecTacSessionTrus
             raise SessionSecurityDenied("session_revoked")
         if session.user_id != getattr(user, "pk", None) or session.username != username:
             _revoke_locked(session, reason="credential-user-mismatch", event_type="session_revoked", policy=policy)
-            raise SessionSecurityDenied("session_identity_mismatch")
+            raise SessionSecurityDenied("session_invalid_state")
 
         _refresh_expiry(session, policy)
         if now >= session.absolute_expires_at:
@@ -340,7 +340,7 @@ def ensure_request_session(request, *, create: bool = True) -> TecTacSessionTrus
             if mode in {"reauthenticate", "terminate"}:
                 reason = "ip-change-reauthenticate" if mode == "reauthenticate" else "ip-change-terminate"
                 _revoke_locked(session, reason=reason, event_type="session_reauthentication_required" if mode == "reauthenticate" else "session_revoked", policy=policy)
-                raise SessionSecurityDenied("session_ip_changed")
+                raise SessionSecurityDenied("session_ip_change")
             session.last_ip = client_ip
 
         session.last_seen_at = now

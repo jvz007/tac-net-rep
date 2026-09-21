@@ -1,11 +1,12 @@
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
+from .session_security import SessionAuthenticated
 from .housekeeping import HousekeepingError, status, dry_run, purge, save_config
 from .views import _require_module_manager
 
 class HousekeepingStatusView(APIView):
-    permission_classes=[IsAuthenticated]
+    permission_classes=[SessionAuthenticated]
     def get(self,request):
         _require_module_manager(request.user)
         try:return Response(status())
@@ -16,7 +17,7 @@ class HousekeepingStatusView(APIView):
         except (HousekeepingError,ValueError,TypeError) as exc:return Response({'detail':str(exc)},status=400)
 
 class HousekeepingPurgeView(APIView):
-    permission_classes=[IsAuthenticated]
+    permission_classes=[SessionAuthenticated]
     def post(self,request):
         _require_module_manager(request.user)
         cats=request.data.get('categories') or None; simulate=bool(request.data.get('dry_run',False))

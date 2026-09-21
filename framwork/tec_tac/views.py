@@ -41,6 +41,7 @@ from .system_update import (
 )
 
 from .preferences import get_user_preferences
+from .session_security import SessionAuthenticated
 
 from .rbac import (
     effective_permissions,
@@ -146,7 +147,7 @@ class TotpQrView(APIView):
 
 @extend_schema_view(get=extend_schema(tags=["Tec-Tac Framework"], summary="Get Tec-Tac UI context"))
 class UiContextView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
 
     def get(self, request):
         preferences, preferences_initialized, preferences_updated_at = get_user_preferences(request.user)
@@ -165,7 +166,7 @@ class UiContextView(APIView):
 
 @extend_schema_view(get=extend_schema(tags=["Tec-Tac Framework"], summary="List Tec-Tac extension permissions"))
 class ExtensionPermissionCatalogView(APIView):
-    permission_classes = [IsAuthenticated, RolesPerms]
+    permission_classes = [SessionAuthenticated, RolesPerms]
 
     def get(self, request):
         return Response(
@@ -181,7 +182,7 @@ class ExtensionPermissionCatalogView(APIView):
     put=extend_schema(tags=["Tec-Tac Framework"], summary="Update role extension permissions"),
 )
 class RoleExtensionPermissionsView(APIView):
-    permission_classes = [IsAuthenticated, RolesPerms]
+    permission_classes = [SessionAuthenticated, RolesPerms]
 
     def get(self, request, role_id):
         role = get_object_or_404(Role, pk=role_id)
@@ -246,7 +247,7 @@ def _require_module_manager(user):
 
 @extend_schema_view(get=extend_schema(tags=["Tec-Tac Framework"], summary="List installed Tec-Tac modules"))
 class ModuleCatalogView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
 
     def get(self, request):
         try:
@@ -262,7 +263,7 @@ class ModuleCatalogView(APIView):
 
 @extend_schema_view(post=extend_schema(tags=["Tec-Tac Framework"], summary="Inspect and stage a Tec-Tac module package"))
 class ModulePackageInspectView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
 
     def post(self, request):
@@ -309,7 +310,7 @@ class ModulePackageInspectView(APIView):
 
 @extend_schema_view(delete=extend_schema(tags=["Tec-Tac Framework"], summary="Discard a staged Tec-Tac module package"))
 class ModulePackageStageView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
 
     def delete(self, request, upload_id):
         _require_module_manager(request.user)
@@ -322,7 +323,7 @@ class ModulePackageStageView(APIView):
 
 @extend_schema_view(post=extend_schema(tags=["Tec-Tac Framework"], summary="Install a staged Tec-Tac module package"))
 class ModulePackageInstallView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
 
     def post(self, request, upload_id):
         _require_module_manager(request.user)
@@ -343,7 +344,7 @@ class ModulePackageInstallView(APIView):
 
 @extend_schema_view(post=extend_schema(tags=["Tec-Tac Framework"], summary="Remove a Tec-Tac module"))
 class ModuleRemoveView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
 
     def post(self, request, plugin_id):
         _require_module_manager(request.user)
@@ -355,7 +356,7 @@ class ModuleRemoveView(APIView):
 
 @extend_schema_view(get=extend_schema(tags=["Tec-Tac Framework"], summary="Get a Tec-Tac module lifecycle job"))
 class ModuleJobView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
 
     def get(self, request, job_id):
         _require_module_manager(request.user)
@@ -367,7 +368,7 @@ class ModuleJobView(APIView):
 
 @extend_schema_view(get=extend_schema(tags=["Tec-Tac System Updates"], summary="Get installed Tec-Tac system component versions"))
 class SystemUpdateStatusView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
 
     def get(self, request):
         _require_module_manager(request.user)
@@ -376,7 +377,7 @@ class SystemUpdateStatusView(APIView):
 
 @extend_schema_view(post=extend_schema(tags=["Tec-Tac System Updates"], summary="Inspect and stage an offline Tec-Tac system update package"))
 class SystemUpdatePackageInspectView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
 
     def post(self, request):
@@ -395,7 +396,7 @@ class SystemUpdatePackageInspectView(APIView):
 
 @extend_schema_view(delete=extend_schema(tags=["Tec-Tac System Updates"], summary="Discard a staged Tec-Tac system update package"))
 class SystemUpdatePackageStageView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
 
     def delete(self, request, upload_id):
         _require_module_manager(request.user)
@@ -408,7 +409,7 @@ class SystemUpdatePackageStageView(APIView):
 
 @extend_schema_view(post=extend_schema(tags=["Tec-Tac System Updates"], summary="Install a staged Tec-Tac framework or UI update"))
 class SystemUpdatePackageInstallView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
 
     def post(self, request, upload_id):
         _require_module_manager(request.user)
@@ -423,7 +424,7 @@ class SystemUpdatePackageInstallView(APIView):
 
 @extend_schema_view(get=extend_schema(tags=["Tec-Tac System Updates"], summary="Get a Tec-Tac system update job"))
 class SystemUpdateJobView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
 
     def get(self, request, job_id):
         _require_module_manager(request.user)
@@ -435,7 +436,7 @@ class SystemUpdateJobView(APIView):
 
 @extend_schema_view(get=extend_schema(tags=["Tec-Tac System Updates"], summary="Check the latest stable repository release for a system component"))
 class SystemUpdateOnlineStatusView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
 
     def get(self, request):
         _require_module_manager(request.user)
@@ -448,7 +449,7 @@ class SystemUpdateOnlineStatusView(APIView):
 
 @extend_schema_view(get=extend_schema(tags=["Tec-Tac System Updates"], summary="List repository branches for advanced system update sources"))
 class SystemUpdateBranchesView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
 
     def get(self, request):
         _require_module_manager(request.user)
@@ -461,7 +462,7 @@ class SystemUpdateBranchesView(APIView):
 
 @extend_schema_view(post=extend_schema(tags=["Tec-Tac System Updates"], summary="Download, inspect, and stage an online release or branch system update"))
 class SystemUpdateOnlineStageView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
 
     def post(self, request):
         _require_module_manager(request.user)

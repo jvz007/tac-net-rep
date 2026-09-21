@@ -1,4 +1,4 @@
-Version **1.15.16** adds the Core Session Security API/capability foundation (`core.session_security` v1.0.0) for server-side session policy, trusted client-IP resolution, revocation, audit and future Security-module integration. See `docs/session-security.md`.
+Version **1.15.17** completes the Core Session Security interactive rollout: Core browser APIs enforce `SessionAuthenticated`, while the Core UI shell provides meaningful-activity heartbeats and stable session-failure handling. The `core.session_security` public capability remains v1.0.0. See `docs/session-security.md`.
 
 Version **1.13.2** hardens System Updates for the split Git-source/runtime architecture. Online updates track exact commits, offline packages remain auditable Git commits, and rollback restores source state before reinstalling runtime.
 

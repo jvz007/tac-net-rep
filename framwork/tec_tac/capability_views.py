@@ -2,16 +2,17 @@ from __future__ import annotations
 
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework.exceptions import NotFound
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
+from .session_security import SessionAuthenticated
 
 from .capabilities import capability_status, list_capabilities
 
 
 @extend_schema_view(get=extend_schema(tags=["Tec-Tac Capabilities"], summary="List module capabilities"))
 class CapabilityListView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
 
     def get(self, request):
         rows = list_capabilities()
@@ -20,7 +21,7 @@ class CapabilityListView(APIView):
 
 @extend_schema_view(get=extend_schema(tags=["Tec-Tac Capabilities"], summary="Inspect module capability"))
 class CapabilityDetailView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
 
     def get(self, request, capability_id):
         required_version = request.query_params.get("version") or None

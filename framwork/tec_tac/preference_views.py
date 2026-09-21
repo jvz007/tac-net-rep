@@ -1,7 +1,8 @@
 from drf_spectacular.utils import extend_schema, extend_schema_view
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
+from .session_security import SessionAuthenticated
 
 from .preferences import (
     PreferenceValidationError,
@@ -17,7 +18,7 @@ from .preferences import (
     delete=extend_schema(tags=["Tec-Tac Framework"], summary="Reset current Tec-Tac user preferences"),
 )
 class UserPreferencesView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
 
     def get(self, request):
         preferences, initialized, updated_at = get_user_preferences(request.user)

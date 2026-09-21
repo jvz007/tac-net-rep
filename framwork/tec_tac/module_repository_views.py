@@ -1,7 +1,8 @@
 from drf_spectacular.utils import extend_schema, extend_schema_view
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
+from .session_security import SessionAuthenticated
 
 from .module_manager_v2 import LicensingRequirementError
 from .module_repository import (
@@ -19,7 +20,7 @@ from .views import _can_manage_modules, _require_module_manager
 
 @extend_schema_view(get=extend_schema(tags=["Tec-Tac Framework"], summary="List module repositories"), post=extend_schema(tags=["Tec-Tac Framework"], summary="Add module repository"))
 class ModuleRepositoryListView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
 
     def get(self, request):
         repos = all_repository_status()
@@ -34,7 +35,7 @@ class ModuleRepositoryListView(APIView):
 
 
 class ModuleRepositoryDetailView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
 
     def patch(self, request, repository_id):
         _require_module_manager(request.user)
@@ -53,7 +54,7 @@ class ModuleRepositoryDetailView(APIView):
 
 
 class ModuleRepositorySyncView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
 
     def post(self, request, repository_id):
         _require_module_manager(request.user)
@@ -64,7 +65,7 @@ class ModuleRepositorySyncView(APIView):
 
 
 class ModuleRepositorySyncAllView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
 
     def post(self, request):
         _require_module_manager(request.user)
@@ -73,7 +74,7 @@ class ModuleRepositorySyncAllView(APIView):
 
 @extend_schema_view(get=extend_schema(tags=["Tec-Tac Framework"], summary="List online module catalog"))
 class ModuleOnlineCatalogView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
 
     def get(self, request):
         try:
@@ -85,7 +86,7 @@ class ModuleOnlineCatalogView(APIView):
 
 
 class ModuleOnlineStageView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
 
     def post(self, request):
         _require_module_manager(request.user)

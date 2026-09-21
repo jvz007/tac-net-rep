@@ -6,9 +6,10 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime, parse_time
 from drf_spectacular.utils import extend_schema, extend_schema_view
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
+from .session_security import SessionAuthenticated
 from rest_framework.exceptions import NotFound, PermissionDenied
 
 from .models import TecTacSchedule, TecTacScheduleRun, TecTacSchedulerConfig
@@ -121,7 +122,7 @@ def _validate_shape(data):
 
 @extend_schema_view(get=extend_schema(tags=["Tec-Tac Scheduler"], summary="List schedulable actions"))
 class SchedulerActionListView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
     def get(self, request):
         items = [serialize_action(a) for a in scheduled_actions() if _can_use_action(request.user, a)]
         return Response({"actions": items, "count": len(items), "manage": _native_scheduler_manager(request.user)})
@@ -132,7 +133,7 @@ class SchedulerActionListView(APIView):
     post=extend_schema(tags=["Tec-Tac Scheduler"], summary="Create schedule"),
 )
 class SchedulerListView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
     def get(self, request):
         rows = []
         for schedule in TecTacSchedule.objects.select_related("created_by", "updated_by").prefetch_related("runs"):
@@ -169,7 +170,7 @@ class SchedulerListView(APIView):
 
 
 class SchedulerDetailView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
     def get_object(self, request, schedule_id):
         schedule = get_object_or_404(TecTacSchedule.objects.select_related("created_by", "updated_by"), pk=schedule_id)
         action = _require_action(request.user, schedule.action_id)
@@ -214,7 +215,7 @@ class SchedulerDetailView(APIView):
 
 
 class SchedulerRunNowView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
     def post(self, request, schedule_id):
         schedule = get_object_or_404(TecTacSchedule, pk=schedule_id)
         _require_action(request.user, schedule.action_id)
@@ -223,7 +224,7 @@ class SchedulerRunNowView(APIView):
 
 
 class SchedulerRunListView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
     def get(self, request):
         qs = TecTacScheduleRun.objects.select_related("schedule")
         schedule_id = request.query_params.get("schedule_id")
@@ -242,7 +243,7 @@ class SchedulerRunListView(APIView):
 
 
 class SchedulerConfigView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
 
     def get(self, request):
         if not _native_scheduler_manager(request.user):
@@ -273,7 +274,7 @@ class SchedulerConfigView(APIView):
 
 
 class SchedulerHealthView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
     def get(self, request):
         if not _native_scheduler_manager(request.user):
             raise PermissionDenied("Scheduler diagnostics require server-maintenance authority.")
@@ -281,7 +282,7 @@ class SchedulerHealthView(APIView):
 
 
 class SchedulerSelfTestView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
 
     def post(self, request):
         if not _native_scheduler_manager(request.user):

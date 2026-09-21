@@ -33,9 +33,17 @@ grep -q 'path("session/diagnostics/"' "${ROOT}/framwork/tec_tac/urls.py" || fail
 grep -q '"name": "revoke_user_sessions"' "${ROOT}/framwork/tec_tac/contracts.py" || fail "revocation contract missing"
 grep -q '"name": "SessionAuthenticated"' "${ROOT}/framwork/tec_tac/contracts.py" || fail "permission contract missing"
 
-# Existing Core endpoints are deliberately not switched in this foundation
-# release; the browser heartbeat must be deployed first.
-grep -q 'permission_classes = \[IsAuthenticated\]' "${ROOT}/framwork/tec_tac/views.py" || fail "existing Core auth rollout changed prematurely"
+# Core browser endpoints now enforce Core session trust. The TOTP enrollment
+# endpoint intentionally remains Tactical-auth-only for setup-stage access.
+grep -q 'class TotpQrView' "${ROOT}/framwork/tec_tac/views.py" || fail "TOTP setup endpoint missing"
+grep -A3 'class TotpQrView' "${ROOT}/framwork/tec_tac/views.py" | grep -q 'permission_classes = \[IsAuthenticated\]' || fail "TOTP setup must remain Tactical-auth-only"
+grep -A3 'class UiContextView' "${ROOT}/framwork/tec_tac/views.py" | grep -q 'permission_classes = \[SessionAuthenticated\]' || fail "UI context must enforce Core session trust"
+for f in capability_views.py contract_views.py dashboard_views.py housekeeping_views.py module_repository_views.py module_v2_views.py preference_views.py scheduler_views.py session_security_views.py; do
+  if grep -q 'permission_classes = \[IsAuthenticated\]' "${ROOT}/framwork/tec_tac/${f}"; then fail "${f} still uses Tactical-only IsAuthenticated"; fi
+done
+[[ $(grep -c 'permission_classes = \[IsAuthenticated\]' "${ROOT}/framwork/tec_tac/views.py") -eq 1 ]] || fail "views.py must retain Tactical-only auth only for TOTP setup"
+grep -q 'session_ip_change' "${ROOT}/framwork/tec_tac/session_security.py" || fail "stable IP-change failure code missing"
+grep -q 'session_invalid_state' "${ROOT}/framwork/tec_tac/session_security.py" || fail "stable invalid-state failure code missing"
 
 python3 -m py_compile \
   "${ROOT}/framwork/tec_tac/session_security.py" \

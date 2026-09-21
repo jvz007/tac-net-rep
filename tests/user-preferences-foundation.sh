@@ -7,7 +7,7 @@ fail(){ echo "[TEST] FAIL: $*" >&2; exit 1; }
 [[ -f "${ROOT}/framwork/tec_tac/preference_views.py" ]] || fail "preferences API view missing"
 [[ -f "${ROOT}/framwork/tec_tac/migrations/0004_user_preferences.py" ]] || fail "user preferences migration missing"
 grep -q 'class TecTacUserPreferences' "${ROOT}/framwork/tec_tac/models.py" || fail "user preferences model missing"
-grep -q 'permission_classes = \[IsAuthenticated\]' "${ROOT}/framwork/tec_tac/preference_views.py" || fail "preference endpoint must require authentication"
+grep -q 'permission_classes = \[SessionAuthenticated\]' "${ROOT}/framwork/tec_tac/preference_views.py" || fail "preference endpoint must require Core session authentication"
 grep -q 'path("ui/preferences/"' "${ROOT}/framwork/tec_tac/urls.py" || fail "preference route missing"
 grep -q 'preferences_initialized' "${ROOT}/framwork/tec_tac/views.py" || fail "UI context preference metadata missing"
 grep -q 'MAX_PREFERENCE_BYTES = 128 \* 1024' "${ROOT}/framwork/tec_tac/preferences.py" || fail "preference payload bound missing"

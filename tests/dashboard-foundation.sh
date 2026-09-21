@@ -13,7 +13,7 @@ grep -q 'Q(owner=user).*Q(visibility=TecTacDashboard.Visibility.SHARED)' "${ROOT
 grep -q 'dashboard.owner_id == user.id' "${ROOT}/framwork/tec_tac/dashboards.py" || fail "owner edit rule missing"
 grep -q 'path("dashboards/"' "${ROOT}/framwork/tec_tac/urls.py" || fail "dashboard list route missing"
 grep -q 'path("dashboards/<uuid:dashboard_id>/"' "${ROOT}/framwork/tec_tac/urls.py" || fail "dashboard detail route missing"
-grep -q 'permission_classes = \[IsAuthenticated\]' "${ROOT}/framwork/tec_tac/dashboard_views.py" || fail "dashboard APIs must require authentication"
+grep -q 'permission_classes = \[SessionAuthenticated\]' "${ROOT}/framwork/tec_tac/dashboard_views.py" || fail "dashboard APIs must require Core session authentication"
 grep -q 'MAX_LAYOUT_BYTES = 512 \* 1024' "${ROOT}/framwork/tec_tac/dashboards.py" || fail "dashboard layout bound missing"
 grep -q '"last_dashboard_id": None' "${ROOT}/framwork/tec_tac/preferences.py" || fail "last dashboard preference missing"
 python3 -m py_compile \

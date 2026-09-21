@@ -3,10 +3,11 @@ from __future__ import annotations
 from django.http import HttpResponse
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework.exceptions import PermissionDenied
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.renderers import JSONRenderer
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
+from .session_security import SessionAuthenticated
 
 from .contracts import build_contract_catalog, render_markdown, render_text
 from .views import _role_for_user
@@ -25,7 +26,7 @@ def _require_contract_access(user):
 
 @extend_schema_view(get=extend_schema(tags=["Tec-Tac Developer Contracts"], summary="List live public development contracts"))
 class ContractCatalogView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
 
     def get(self, request):
         _require_contract_access(request.user)
@@ -34,7 +35,7 @@ class ContractCatalogView(APIView):
 
 @extend_schema_view(get=extend_schema(tags=["Tec-Tac Developer Contracts"], summary="Export live public development contracts"))
 class ContractExportView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
     renderer_classes = [JSONRenderer]
 
     def perform_content_negotiation(self, request, force=False):

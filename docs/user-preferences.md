@@ -10,7 +10,7 @@ Framework 1.13.9 adds a Core-owned per-user preference profile backed by Tactica
 
 `DELETE /api/tfd/ui/preferences/` deletes the stored profile and returns Core defaults.
 
-All methods use `permission_classes = [IsAuthenticated]` and operate only on `request.user`.
+All methods use `permission_classes = [SessionAuthenticated]` and operate only on `request.user`, so a valid Tactical credential must also pass Core session trust.
 
 `GET /api/tfd/ui/context/` also includes `preferences`, `preferences_initialized`, and `preferences_updated_at` so the UI can hydrate preferences during its existing startup context request.
 

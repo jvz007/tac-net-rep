@@ -1,6 +1,7 @@
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
+from .session_security import SessionAuthenticated
 from drf_spectacular.utils import extend_schema, extend_schema_view
 
 from .dashboards import (
@@ -19,7 +20,7 @@ from .models import TecTacDashboard
     post=extend_schema(tags=["Tec-Tac Dashboards"], summary="Create a dashboard"),
 )
 class DashboardListCreateView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
 
     def get(self, request):
         dashboards = [dashboard_payload(item, request.user) for item in visible_dashboards(request.user)]
@@ -41,7 +42,7 @@ class DashboardListCreateView(APIView):
     delete=extend_schema(tags=["Tec-Tac Dashboards"], summary="Delete a dashboard"),
 )
 class DashboardDetailView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
 
     def _get(self, request, dashboard_id):
         try:

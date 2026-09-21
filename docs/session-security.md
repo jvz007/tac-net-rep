@@ -9,12 +9,13 @@ separate Tec-Tac trust record keyed by a one-way HMAC fingerprint of the
 presented Tactical credential. Raw Tactical tokens are never stored, returned
 or written to audit records.
 
-This release provides the server-side API and capability contract that the
-Security module will consume. Existing Tec-Tac endpoints continue using their
-current Tactical authentication permission until the Core UI activity heartbeat
-is deployed and global enforcement is intentionally enabled in a later rollout.
-The `SessionAuthenticated` permission is the supported enforcement primitive for
-new Core/module endpoints that are ready for this policy.
+Core-owned authenticated `/api/tfd/` browser endpoints now use the
+`SessionAuthenticated` permission so Tactical token validity alone is not enough
+for Tec-Tac interactive trust. The TOTP enrollment QR endpoint remains on native
+Tactical authentication because it is intentionally used during pre-operational
+TOTP setup. Public endpoints remain public. Backend/module endpoints should opt
+into `SessionAuthenticated` when they represent interactive browser trust;
+service/API-key contracts must keep their non-interactive authentication path.
 
 ## Built-in policy
 
@@ -197,3 +198,24 @@ geo/ASN intelligence
 
 The module must consume Core contracts; it must not become the enforcement
 boundary.
+
+## Interactive shell rollout
+
+The Core UI shell reads `activity_heartbeat_seconds` from `GET session/current/`
+and reports explicit activity to `POST session/activity/`. Only meaningful human
+interaction marks the browser active (`keydown`, `pointerdown`, `touchstart`,
+and `scroll`). Background polling never counts as activity.
+
+The authenticated UI API client recognizes these stable failure codes:
+
+```text
+session_idle_timeout
+session_absolute_timeout
+session_ip_change
+session_revoked
+session_invalid_state
+```
+
+A matching 401 retires the browser Tactical credential and returns the shell to
+the normal sign-in flow. This handling is Core-owned and does not depend on the
+optional `coreusersecurity` module.
