@@ -1,3 +1,5 @@
+Version **1.15.23** narrows GitHub release validation to release/package correctness and no longer treats recovery-script executable bits as a release-publication failure.
+
 Version **1.15.22** adds the public durable `core.server_maintenance` capability for registered privileged maintenance jobs with global locking and audited systemd-detached execution. See `docs/server-maintenance-capability.md`.
 
 Version **1.15.21** corrects release-integrity validation so the repository may retain the current and immediately previous root release notes while older notes remain archived under `docs/releases/`.
