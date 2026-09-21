@@ -13,8 +13,10 @@ class TecTacFrameworkConfig(AppConfig):
         # typed operations; privileged execution remains in the root helper.
         from .session_security import register_core_session_security_capability
         from .server_backup import register_core_server_backup_capability
+        from .server_maintenance import register_core_server_maintenance_capability
         register_core_session_security_capability()
         register_core_server_backup_capability()
+        register_core_server_maintenance_capability()
 
         # Register framework-owned API routes in memory. This deliberately
         # avoids editing Tactical's tracked tacticalrmm/urls.py file.

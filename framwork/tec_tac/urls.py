@@ -1,3 +1,7 @@
+from .server_maintenance_views import (
+    ServerMaintenanceActionListView, ServerMaintenanceJobListView,
+    ServerMaintenanceJobDetailView, ServerMaintenanceJobCancelView,
+)
 from .session_security_views import (
     CurrentSessionView, SessionActivityView, SessionListView, SessionRevokeView,
     RevokeOtherSessionsView, SessionPolicyView, SessionAuditView, SessionDiagnosticsView,
@@ -56,6 +60,10 @@ urlpatterns = [
     path("ui/preferences/", UserPreferencesView.as_view(), name="tec-tac-user-preferences"),
     path("system/storage/", HousekeepingStatusView.as_view(), name="tec-tac-housekeeping-status"),
     path("system/storage/purge/", HousekeepingPurgeView.as_view(), name="tec-tac-housekeeping-purge"),
+    path("system/maintenance/actions/", ServerMaintenanceActionListView.as_view(), name="tec-tac-server-maintenance-actions"),
+    path("system/maintenance/jobs/", ServerMaintenanceJobListView.as_view(), name="tec-tac-server-maintenance-jobs"),
+    path("system/maintenance/jobs/<uuid:job_id>/", ServerMaintenanceJobDetailView.as_view(), name="tec-tac-server-maintenance-job-detail"),
+    path("system/maintenance/jobs/<uuid:job_id>/cancel/", ServerMaintenanceJobCancelView.as_view(), name="tec-tac-server-maintenance-job-cancel"),
     path("system/updates/", SystemUpdateStatusView.as_view(), name="tec-tac-system-update-status"),
     path("system/updates/packages/inspect/", SystemUpdatePackageInspectView.as_view(), name="tec-tac-system-update-package-inspect"),
     path("system/updates/packages/<uuid:upload_id>/", SystemUpdatePackageStageView.as_view(), name="tec-tac-system-update-package-stage"),

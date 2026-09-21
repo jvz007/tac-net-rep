@@ -260,3 +260,8 @@ Framework 1.10.0 includes registered capabilities in the Developer Contract cata
 ## Framework-owned Core capabilities
 
 Capability providers may also be owned directly by Tec-Tac Core rather than an installed extension. Core-owned IDs use the `core.` namespace and are always resolved against the framework runtime rather than Module Manager installed/enabled state. The first privileged Core provider is `core.server_backup` `1.x`; see `docs/server-backup-capability.md`.
+
+
+## Core server maintenance
+
+`core.server_maintenance` is the generic durable privileged-job capability. See `docs/server-maintenance-capability.md`. It exposes registered actions only; it does not provide arbitrary root-shell execution.

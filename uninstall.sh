@@ -95,10 +95,13 @@ SYSTEM_UPDATE_CONFIG="${TEC_TAC_CONFIG_FILE}"
 SERVER_BACKUP_HELPER="/usr/local/sbin/tec-tac-server-backup"
 SERVER_BACKUP_LIB="/usr/local/lib/tec-tac-backup"
 SERVER_BACKUP_SUDOERS="/etc/sudoers.d/tec-tac-server-backup"
-rm -f "${MODULE_SUDOERS}" "${MODULE_HELPER}" "${MODULE_CONFIG}" "${RMM_DROPIN}" "${SYSTEM_UPDATE_SUDOERS}" "${SYSTEM_UPDATE_HELPER}" "${SYSTEM_UPDATE_CONFIG}" "${SERVER_BACKUP_SUDOERS}" "${SERVER_BACKUP_HELPER}" /usr/local/sbin/tec-tac-repair /usr/local/sbin/tec-tac-diagnostics
-rm -rf "${SYSTEM_UPDATE_LIB}" "${SERVER_BACKUP_LIB}"
+SERVER_MAINTENANCE_HELPER="/usr/local/sbin/tec-tac-server-maintenance"
+SERVER_MAINTENANCE_LIB="/usr/local/lib/tec-tac-server-maintenance"
+SERVER_MAINTENANCE_SUDOERS="/etc/sudoers.d/tec-tac-server-maintenance"
+rm -f "${MODULE_SUDOERS}" "${MODULE_HELPER}" "${MODULE_CONFIG}" "${RMM_DROPIN}" "${SYSTEM_UPDATE_SUDOERS}" "${SYSTEM_UPDATE_HELPER}" "${SYSTEM_UPDATE_CONFIG}" "${SERVER_BACKUP_SUDOERS}" "${SERVER_BACKUP_HELPER}" "${SERVER_MAINTENANCE_SUDOERS}" "${SERVER_MAINTENANCE_HELPER}" /usr/local/sbin/tec-tac-repair /usr/local/sbin/tec-tac-diagnostics
+rm -rf "${SYSTEM_UPDATE_LIB}" "${SERVER_BACKUP_LIB}" "${SERVER_MAINTENANCE_LIB}"
 systemctl daemon-reload
-log "Removed Tec-Tac privileged lifecycle/update/backup helpers, sudoers rules, and rmm.service drop-in."
+log "Removed Tec-Tac privileged lifecycle/update/backup/maintenance helpers, sudoers rules, and rmm.service drop-in."
 
 # Runtime code and installed modules are intentionally not deleted.
 # Uninstall disconnects Tec-Tac from Tactical; source checkouts under /opt/tec-tac-src remain separate.

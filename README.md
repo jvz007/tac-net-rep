@@ -1,3 +1,5 @@
+Version **1.15.22** adds the public durable `core.server_maintenance` capability for registered privileged maintenance jobs with global locking and audited systemd-detached execution. See `docs/server-maintenance-capability.md`.
+
 Version **1.15.21** corrects release-integrity validation so the repository may retain the current and immediately previous root release notes while older notes remain archived under `docs/releases/`.
 
 Version **1.15.20** hardens module removal so successful deletes clear persistent module state before UI synchronization, preventing stale enabled records from breaking later UI/system updates.

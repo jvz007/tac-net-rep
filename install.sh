@@ -384,6 +384,9 @@ TEC_TAC_STATE_ROOT=/var/lib/tec-tac
 TEC_TAC_MODULE_STATE_ROOT=${MODULE_STATE_ROOT}
 TEC_TAC_SYSTEM_UPDATE_ROOT=/var/lib/tec-tac/system-updates
 TEC_TAC_SERVER_BACKUP_ROOT=/var/lib/tec-tac/server-backup
+TEC_TAC_SERVER_MAINTENANCE_ROOT=/var/lib/tec-tac/server-maintenance
+TEC_TAC_SERVER_MAINTENANCE_REGISTRY_ROOT=/etc/tec-tac/server-maintenance/actions.d
+TEC_TAC_SERVER_MAINTENANCE_ACTION_ROOT=/usr/local/lib/tec-tac/server-maintenance/actions
 TEC_TAC_HOUSEKEEPING_ROOT=/var/lib/tec-tac/housekeeping
 TEC_TAC_SERVER_BACKUP_LOCAL_ROOTS=${TEC_TAC_SERVER_BACKUP_LOCAL_ROOTS:-/rmmbackups,/mnt,/media,/srv,/backup,/backups}
 TEC_TAC_UI_DEPLOY_ROOT=${TEC_TAC_UI_ROOT}
@@ -462,6 +465,12 @@ SERVER_BACKUP_ROOT="${TEC_TAC_SERVER_BACKUP_ROOT:-/var/lib/tec-tac/server-backup
 SERVER_BACKUP_HELPER="/usr/local/sbin/tec-tac-server-backup"
 SERVER_BACKUP_LIB="/usr/local/lib/tec-tac-backup"
 SERVER_BACKUP_SUDOERS="/etc/sudoers.d/tec-tac-server-backup"
+SERVER_MAINTENANCE_ROOT="${TEC_TAC_SERVER_MAINTENANCE_ROOT:-/var/lib/tec-tac/server-maintenance}"
+SERVER_MAINTENANCE_REGISTRY_ROOT="${TEC_TAC_SERVER_MAINTENANCE_REGISTRY_ROOT:-/etc/tec-tac/server-maintenance/actions.d}"
+SERVER_MAINTENANCE_ACTION_ROOT="${TEC_TAC_SERVER_MAINTENANCE_ACTION_ROOT:-/usr/local/lib/tec-tac/server-maintenance/actions}"
+SERVER_MAINTENANCE_HELPER="/usr/local/sbin/tec-tac-server-maintenance"
+SERVER_MAINTENANCE_LIB="/usr/local/lib/tec-tac-server-maintenance"
+SERVER_MAINTENANCE_SUDOERS="/etc/sudoers.d/tec-tac-server-maintenance"
 HOUSEKEEPING_ROOT="${TEC_TAC_HOUSEKEEPING_ROOT:-/var/lib/tec-tac/housekeeping}"
 HOUSEKEEPING_HELPER="/usr/local/sbin/tec-tac-housekeeping"
 HOUSEKEEPING_LIB="/usr/local/lib/tec-tac-housekeeping"
@@ -491,6 +500,27 @@ if command -v visudo >/dev/null 2>&1; then
 fi
 log "Installed privileged Core server-backup helper: ${SERVER_BACKUP_HELPER}"
 
+mkdir -p "${SERVER_MAINTENANCE_ROOT}/jobs" "${SERVER_MAINTENANCE_ROOT}/cancel-requests" "${SERVER_MAINTENANCE_ROOT}/logs" "${SERVER_MAINTENANCE_REGISTRY_ROOT}" "${SERVER_MAINTENANCE_ACTION_ROOT}" "${SERVER_MAINTENANCE_LIB}"
+chown root:"${TACTICAL_GROUP}" "${SERVER_MAINTENANCE_ROOT}" "${SERVER_MAINTENANCE_ROOT}/jobs" "${SERVER_MAINTENANCE_ROOT}/cancel-requests" "${SERVER_MAINTENANCE_ROOT}/logs"
+chmod 2750 "${SERVER_MAINTENANCE_ROOT}" "${SERVER_MAINTENANCE_ROOT}/logs"
+chmod 2770 "${SERVER_MAINTENANCE_ROOT}/jobs" "${SERVER_MAINTENANCE_ROOT}/cancel-requests"
+chown root:root "${SERVER_MAINTENANCE_REGISTRY_ROOT}" "${SERVER_MAINTENANCE_ACTION_ROOT}" "${SERVER_MAINTENANCE_LIB}"
+chmod 0755 "${SERVER_MAINTENANCE_REGISTRY_ROOT}" "${SERVER_MAINTENANCE_ACTION_ROOT}" "${SERVER_MAINTENANCE_LIB}"
+run_as_tactical test -w "${SERVER_MAINTENANCE_ROOT}/jobs" || fail "Tactical service user cannot write ${SERVER_MAINTENANCE_ROOT}/jobs."
+run_as_tactical test -w "${SERVER_MAINTENANCE_ROOT}/cancel-requests" || fail "Tactical service user cannot write ${SERVER_MAINTENANCE_ROOT}/cancel-requests."
+install -o root -g root -m 0755 "${REPO_ROOT}/scripts/server-maintenance-helper.py" "${SERVER_MAINTENANCE_LIB}/server-maintenance-helper.py"
+ln -sfn "${SERVER_MAINTENANCE_LIB}/server-maintenance-helper.py" "${SERVER_MAINTENANCE_HELPER}"
+chown -h root:root "${SERVER_MAINTENANCE_HELPER}"
+cat > "${SERVER_MAINTENANCE_SUDOERS}" <<EOF
+${TACTICAL_USER} ALL=(root) NOPASSWD: ${SERVER_MAINTENANCE_HELPER} --dispatch *, ${SERVER_MAINTENANCE_HELPER} --cancel *
+EOF
+chown root:root "${SERVER_MAINTENANCE_SUDOERS}"
+chmod 0440 "${SERVER_MAINTENANCE_SUDOERS}"
+if command -v visudo >/dev/null 2>&1; then
+    visudo -cf "${SERVER_MAINTENANCE_SUDOERS}" >/dev/null || fail "Server maintenance sudoers validation failed."
+fi
+log "Installed durable Core server-maintenance helper: ${SERVER_MAINTENANCE_HELPER}"
+
 mkdir -p "${HOUSEKEEPING_ROOT}/requests" "${HOUSEKEEPING_ROOT}/results" "${HOUSEKEEPING_LIB}"
 chown -R root:"${TACTICAL_GROUP}" "${HOUSEKEEPING_ROOT}"
 chmod 2770 "${HOUSEKEEPING_ROOT}"
@@ -513,6 +543,13 @@ log "Verifying Core server-backup capability registration."
 VERIFY_SERVER_BACKUP_CODE="from tec_tac.capabilities import capability_status,get_capability; s=capability_status('core.server_backup',version='>=1,<2'); assert s['available'], s; p=get_capability('core.server_backup',version='>=1,<2'); assert all(hasattr(p,n) for n in ('create_backup','list_backups','restore_backup','validate_restore','apply_retention','store_secret','delete_secret')); print('TEC-TAC core.server_backup OK:', s['capability_version'], s['operations'])"
 if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_SERVER_BACKUP_CODE}\""; then
     fail "Core server-backup capability verification failed or timed out."
+fi
+
+
+log "Verifying Core server-maintenance capability registration."
+VERIFY_SERVER_MAINTENANCE_CODE="from tec_tac.capabilities import capability_status,get_capability; s=capability_status('core.server_maintenance',version='>=1,<2'); assert s['available'], s; p=get_capability('core.server_maintenance',version='>=1,<2'); assert all(hasattr(p,n) for n in ('start','get_job','cancel','list_jobs')); print('TEC-TAC core.server_maintenance OK:', s['capability_version'], s['operations'])"
+if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_SERVER_MAINTENANCE_CODE}\""; then
+    fail "Core server-maintenance capability verification failed or timed out."
 fi
 
 
