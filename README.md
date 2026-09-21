@@ -1,4 +1,6 @@
-Version **1.15.17** completes the Core Session Security interactive rollout: Core browser APIs enforce `SessionAuthenticated`, while the Core UI shell provides meaningful-activity heartbeats and stable session-failure handling. The `core.session_security` public capability remains v1.0.0. See `docs/session-security.md`.
+Version **1.15.18** completes the Core Session Security interactive rollout: Core browser APIs enforce `SessionAuthenticated`, while the Core UI shell provides meaningful-activity heartbeats and stable session-failure handling. The `core.session_security` public capability remains v1.0.0. See `docs/session-security.md`.
+
+Module IDs are case-sensitive and case-preserving; see `docs/module-identifiers.md`.
 
 Version **1.13.2** hardens System Updates for the split Git-source/runtime architecture. Online updates track exact commits, offline packages remain auditable Git commits, and rollback restores source state before reinstalling runtime.
 
