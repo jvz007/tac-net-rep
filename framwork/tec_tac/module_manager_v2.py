@@ -105,6 +105,64 @@ def _string_map(payload: dict, key: str) -> dict[str, str]:
     return result
 
 
+
+def _identity_migration_metadata(payload: dict, module_id: str) -> dict:
+    raw = payload.get("migration") or {}
+    if not raw:
+        return {"previous_module_ids": [], "permissions": {}, "scheduler_actions": {}, "ui_routes": {}, "dashboard_widgets": {}}
+    if not isinstance(raw, dict):
+        raise ModuleManagerV2Error("Manifest migration must be a JSON object.")
+    previous = raw.get("previous_module_ids") or []
+    if not isinstance(previous, list) or not previous:
+        raise ModuleManagerV2Error("Manifest migration.previous_module_ids must be a non-empty array.")
+    previous = [str(value or "").strip() for value in previous]
+    allowed_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
+    if any(not value or any(ch not in allowed_chars for ch in value) for value in previous):
+        raise ModuleManagerV2Error("Manifest migration.previous_module_ids contains an invalid module ID.")
+    if len(set(previous)) != len(previous) or module_id in previous:
+        raise ModuleManagerV2Error("Manifest migration.previous_module_ids must be unique and may not include the current module ID.")
+
+    def mapping(name):
+        value = raw.get(name) or {}
+        if not isinstance(value, dict):
+            raise ModuleManagerV2Error(f"Manifest migration.{name} must be an object.")
+        result = {}
+        for old, new in value.items():
+            old = str(old or "").strip(); new = str(new or "").strip()
+            if not old or not new:
+                raise ModuleManagerV2Error(f"Manifest migration.{name} contains a blank mapping.")
+            result[old] = new
+        return result
+
+    permissions = mapping("permissions")
+    actions = mapping("scheduler_actions")
+    routes = mapping("ui_routes")
+    widgets = mapping("dashboard_widgets")
+    old_prefixes = tuple(value + "." for value in previous)
+    for old, new in permissions.items():
+        if not old.startswith(old_prefixes) or not new.startswith(module_id + "."):
+            raise ModuleManagerV2Error("Permission migration entries must map a previous module namespace to the current module namespace.")
+    for old, new in actions.items():
+        if not old.startswith(old_prefixes) or not new.startswith(module_id + "."):
+            raise ModuleManagerV2Error("Scheduler action migration entries must map a previous module namespace to the current module namespace.")
+    return {
+        "previous_module_ids": previous,
+        "permissions": permissions,
+        "scheduler_actions": actions,
+        "ui_routes": routes,
+        "dashboard_widgets": widgets,
+    }
+
+def _installed_rename_source(candidate: dict, installed_by_id: dict) -> str | None:
+    migration = candidate.get("migration") or {}
+    previous = list(migration.get("previous_module_ids") or [])
+    matches = [module_id for module_id in previous if module_id in installed_by_id]
+    if len(matches) > 1:
+        raise ModuleManagerV2Error(
+            f"Module {candidate['id']!r} declares multiple previous IDs that are installed: {', '.join(matches)}."
+        )
+    return matches[0] if matches else None
+
 def _licensing_metadata(payload: dict) -> dict:
     raw = payload.get("licensing")
     if raw in (None, {}):
@@ -302,6 +360,7 @@ def _extension_metadata(extension_root: Path) -> dict:
         "optional_dependencies": _string_map(payload, "optional_dependencies"),
         "requires": _string_map(payload, "requires"),
         "licensing": _licensing_metadata(payload),
+        "migration": _identity_migration_metadata(payload, str(payload.get("id", "")).strip()),
         "default_visible": _ui_default_visible(extension_root),
     }
 
@@ -423,13 +482,21 @@ def _package_metadata(archive: Path) -> dict:
         "requires": metadata["requires"],
         "runtime_requirements": _check_runtime_requirements(metadata["requires"]),
         "licensing": metadata.get("licensing", {"required": False}),
+        "migration": metadata.get("migration", {}),
     })
     return preview
 
 
 def _future_catalog(candidates: list[dict]) -> dict[str, dict]:
     current = {item["id"]: dict(item) for item in installed_catalog_v2() if not item.get("legacy")}
+    installed_snapshot = dict(current)
     for candidate in candidates:
+        rename_from = _installed_rename_source(candidate, installed_snapshot)
+        if rename_from and candidate["id"] in installed_snapshot:
+            # Ambiguous merge: both identities are deployed. Require operator cleanup.
+            continue
+        if rename_from:
+            current.pop(rename_from, None)
         current[candidate["id"]] = {
             "id": candidate["id"],
             "extension_version": candidate["extension_version"],
@@ -447,9 +514,49 @@ def resolve_install_plan(candidates: list[dict]) -> dict:
     ids = [item["id"] for item in candidates]
     if len(set(ids)) != len(ids):
         raise ModuleManagerV2Error("Install plan contains duplicate module IDs.")
+    installed = {item["id"]: item for item in installed_catalog_v2() if not item.get("legacy")}
     future = _future_catalog(candidates)
     problems = []
     optional = []
+    rename_sources = {}
+    for candidate in candidates:
+        rename_from = _installed_rename_source(candidate, installed)
+        if rename_from and candidate["id"] in installed:
+            problems.append({"module": candidate["id"], "type": "rename_destination_exists", "previous_module_id": rename_from})
+        elif rename_from:
+            rename_sources[candidate["id"]] = rename_from
+
+    # A rename removes the old identity. Existing enabled modules that are not
+    # part of this transaction may not continue depending on that old ID.
+    candidate_ids_for_rename = {item["id"] for item in candidates}
+    for new_id, old_id in rename_sources.items():
+        for module_id, item in installed.items():
+            if module_id in candidate_ids_for_rename or not item.get("enabled", True):
+                continue
+            constraint = (item.get("dependencies") or {}).get(old_id)
+            if constraint is not None:
+                problems.append({"module": module_id, "type": "rename_breaks_dependant", "dependency": old_id, "replacement": new_id, "constraint": constraint})
+
+    if rename_sources:
+        try:
+            from .module_identity import preflight_identity_migration
+            by_candidate_id = {item["id"]: item for item in candidates}
+            for new_id, old_id in rename_sources.items():
+                try:
+                    preflight_identity_migration(
+                        old_id=old_id,
+                        new_id=new_id,
+                        migration=by_candidate_id[new_id].get("migration") or {},
+                    )
+                except Exception as exc:
+                    problems.append({
+                        "module": new_id,
+                        "type": "identity_migration_preflight",
+                        "previous_module_id": old_id,
+                        "reason": str(exc),
+                    })
+        except ImportError:
+            problems.append({"type": "identity_migration_unavailable", "reason": "Core identity migration contract is unavailable."})
 
     for candidate in candidates:
         runtime = candidate.get("runtime_requirements", [])
@@ -515,16 +622,20 @@ def resolve_install_plan(candidates: list[dict]) -> dict:
             deps.difference_update(ready)
 
     by_id = {item["id"]: item for item in candidates}
-    installed = {item["id"]: item for item in installed_catalog_v2()}
     actions = []
     for module_id in order:
         candidate = by_id[module_id]
+        rename_from = rename_sources.get(module_id)
+        action_name = "rename" if rename_from else ("replace" if module_id in installed else "install")
+        current = installed.get(rename_from or module_id, {})
         actions.append({
             "id": module_id,
             "version": candidate["extension_version"],
-            "action": "replace" if module_id in installed else "install",
-            "current_version": installed.get(module_id, {}).get("extension_version"),
+            "action": action_name,
+            "previous_module_id": rename_from,
+            "current_version": current.get("extension_version"),
             "dependencies": candidate.get("dependencies", {}),
+            "migration": candidate.get("migration", {}),
         })
 
     return {
@@ -868,11 +979,12 @@ def queue_v2_install(upload_id: str, requested_order=None, requested_by: str | N
         if not preview.get("installable") or not plan["valid"]:
             raise ModuleManagerV2Error(preview.get("install_block_reason") or "Package dependency plan is not satisfiable.")
         replace = bool(preview.get("already_installed"))
+        rename_action = next((item for item in plan.get("actions", []) if item.get("action") == "rename"), None)
         source = meta.get("source_provenance")
-        if source:
-            # Online repository packages still use the proven extension install script,
-            # but run through the v2 worker so source provenance is committed only
-            # after a successful install.
+        if source or rename_action:
+            # Online repository packages and identity-renaming upgrades use the
+            # v2 worker so provenance/identity state is committed atomically only
+            # after a successful lifecycle transaction.
             action = {
                 "id": preview["id"],
                 "version": preview["extension_version"],

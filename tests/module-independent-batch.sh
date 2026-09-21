@@ -32,11 +32,15 @@ def _future_catalog(candidates):
 def installed_catalog_v2():
     return []
 
+def _installed_rename_source(candidate, installed_by_id):
+    return None
+
 ns = {
     'ModuleManagerV2Error': ModuleManagerV2Error,
     'version_satisfies': version_satisfies,
     '_future_catalog': _future_catalog,
     'installed_catalog_v2': installed_catalog_v2,
+    '_installed_rename_source': _installed_rename_source,
 }
 exec(compile(module, '<resolve_install_plan>', 'exec'), ns)
 resolve = ns['resolve_install_plan']

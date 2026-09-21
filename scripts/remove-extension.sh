@@ -38,6 +38,28 @@ ASSUME_YES="${3:-}"
 log()  { printf '[TEC-TAC] %s\n' "$*"; }
 fail() { printf '[TEC-TAC] ERROR: %s\n' "$*" >&2; exit 1; }
 
+refresh_celery_worker() {
+    local attempt wait_count rc
+    for attempt in 1 2 3; do
+        log "Refreshing Tactical Celery worker (attempt ${attempt}/3)."
+        rc=0
+        systemctl restart celery || rc=$?
+        for wait_count in 1 2 3 4 5 6 7 8 9 10; do
+            if systemctl is-active --quiet celery; then
+                log "celery: active (module runtime refreshed)"
+                return 0
+            fi
+            sleep 1
+        done
+        log "Celery refresh attempt ${attempt} did not reach active state (restart status ${rc})."
+        systemctl status celery --no-pager -l 2>&1 | tail -n 25 || true
+        journalctl -u celery -n 25 --no-pager 2>&1 || true
+        systemctl reset-failed celery >/dev/null 2>&1 || true
+        sleep 2
+    done
+    fail "celery is not active after three module runtime refresh attempts."
+}
+
 usage() {
     cat >&2 <<'EOF'
 Usage:
@@ -212,9 +234,7 @@ log "rmm: active (graceful uWSGI reload complete)"
 # Remove stale in-memory capability/action registrations from the worker.
 if [[ "${TEC_TAC_DEFER_WORKER_REFRESH:-0}" != "1" ]]; then
     log "Restarting Tactical Celery worker to remove stale module capabilities/actions."
-    systemctl restart celery
-    systemctl is-active --quiet celery || fail "celery is not active after module runtime refresh."
-    log "celery: active (module runtime refreshed)"
+    refresh_celery_worker
 else
     log "Celery worker refresh deferred to parent module lifecycle job."
 fi

@@ -30,7 +30,7 @@ MANIFEST_NAME = "tec_tac.json"
 SUPPORTED_TYPES = frozenset({"extension", "reportset"})
 SUPPORTED_KEYS = frozenset({
     "id", "type", "version", "python_paths", "django_apps", "permission_groups",
-    "dependencies", "optional_dependencies", "requires", "licensing",
+    "dependencies", "optional_dependencies", "requires", "licensing", "migration",
 })
 
 class RegistryError(RuntimeError):
@@ -95,6 +95,37 @@ def _permission_groups(payload: dict, plugin_type: str, plugin_id: str) -> tuple
         groups.append((name, values))
     return tuple(groups)
 
+
+
+def _identity_migration(payload: dict, plugin_type: str, plugin_id: str) -> dict:
+    raw = payload.get("migration")
+    if raw in (None, {}):
+        return {}
+    if plugin_type != "extension":
+        raise RegistryError(f"Reportset {plugin_id!r} may not declare migration metadata; identity migration belongs to the extension.")
+    if not isinstance(raw, dict):
+        raise RegistryError("Manifest key 'migration' must be a JSON object.")
+    allowed = {"previous_module_ids", "permissions", "scheduler_actions", "ui_routes", "dashboard_widgets"}
+    unknown = sorted(set(raw) - allowed)
+    if unknown:
+        raise RegistryError(f"Manifest migration contains unsupported keys {unknown!r}.")
+    previous = raw.get("previous_module_ids") or []
+    if not isinstance(previous, list) or not previous:
+        raise RegistryError("Manifest migration.previous_module_ids must be a non-empty JSON array.")
+    values = tuple(_safe_plugin_id(str(item)) for item in previous)
+    if len(set(values)) != len(values):
+        raise RegistryError("Manifest migration.previous_module_ids contains duplicates.")
+    if plugin_id in values:
+        raise RegistryError("Manifest migration.previous_module_ids may not contain the current module ID.")
+    for key in ("permissions", "scheduler_actions", "ui_routes", "dashboard_widgets"):
+        mapping = raw.get(key) or {}
+        if not isinstance(mapping, dict):
+            raise RegistryError(f"Manifest migration.{key} must be a JSON object.")
+        for old, new in mapping.items():
+            if not isinstance(old, str) or not old.strip() or not isinstance(new, str) or not new.strip():
+                raise RegistryError(f"Manifest migration.{key} must map non-empty strings to non-empty strings.")
+    return raw
+
 def _load_manifest(plugin_type: str, plugin_dir: Path) -> PluginSpec | None:
     if plugin_type not in SUPPORTED_TYPES:
         raise RegistryError(f"Unsupported plugin type: {plugin_type!r}")
@@ -116,6 +147,7 @@ def _load_manifest(plugin_type: str, plugin_dir: Path) -> PluginSpec | None:
     declared_type = str(payload.get("type", plugin_type)).strip()
     if declared_type != plugin_type:
         raise RegistryError(f"Plugin {plugin_id!r} declares type {declared_type!r}; expected {plugin_type!r}.")
+    _identity_migration(payload, plugin_type, plugin_id)
     version = str(payload.get("version", "0.0.0")).strip()
     if not version:
         raise RegistryError(f"Plugin {plugin_id!r} version must not be blank.")

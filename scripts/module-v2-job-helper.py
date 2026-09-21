@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -124,6 +125,52 @@ def remember_version(module_id, version, source=None):
     state["modules"][module_id] = record
     save_module_state(state)
 
+def migrate_module_state_identity(old_id, new_id):
+    state = load_module_state()
+    if new_id in state["modules"]:
+        raise RuntimeError(f"destination module state already exists: {new_id}")
+    record = state["modules"].pop(old_id, None)
+    if record is not None:
+        state["modules"][new_id] = record
+        save_module_state(state)
+
+
+def run_identity_migration(config, action, log, *, reverse=False):
+    old_id = str(action.get("previous_module_id") or "")
+    new_id = str(action.get("id") or "")
+    migration = action.get("migration") or {}
+    if not old_id or not new_id:
+        raise RuntimeError("rename action is missing module identities")
+    tactical_root = config.get("TACTICAL_ROOT", "/rmm")
+    python = Path(tactical_root) / "api/env/bin/python"
+    manage = Path(tactical_root) / "api/tacticalrmm/manage.py"
+    if not python.is_file() or not manage.is_file():
+        raise RuntimeError("Tactical Python/manage.py is unavailable for module identity migration")
+    tactical_user = config.get("TACTICAL_USER", "tactical")
+    env = os.environ.copy()
+    env["TEC_TAC_IDENTITY_OLD"] = old_id
+    env["TEC_TAC_IDENTITY_NEW"] = new_id
+    env["TEC_TAC_IDENTITY_MIGRATION"] = json.dumps(migration, separators=(",", ":"))
+    env["TEC_TAC_IDENTITY_REVERSE"] = "1" if reverse else "0"
+    code = (
+        "import json,os; "
+        "from tec_tac.module_identity import apply_identity_migration; "
+        "apply_identity_migration("
+        "old_id=os.environ['TEC_TAC_IDENTITY_OLD'],"
+        "new_id=os.environ['TEC_TAC_IDENTITY_NEW'],"
+        "migration=json.loads(os.environ['TEC_TAC_IDENTITY_MIGRATION']),"
+        "reverse=os.environ.get('TEC_TAC_IDENTITY_REVERSE')=='1')"
+    )
+    direction = "rollback" if reverse else "apply"
+    log.write(f"[TEC-TAC-MODULE-V2] {direction} identity migration {old_id} -> {new_id}\n")
+    log.flush()
+    result = subprocess.run(
+        ["runuser", "-u", tactical_user, "--", str(python), str(manage), "shell", "-c", code],
+        stdout=log, stderr=subprocess.STDOUT, text=True, env=env,
+    )
+    if result.returncode:
+        raise RuntimeError(f"module identity migration {direction} failed with status {result.returncode}")
+
 
 def job_path(job_id):
     if not JOB_RE.fullmatch(job_id):
@@ -202,12 +249,26 @@ def sync_and_reload(config, log, *, refresh_workers=False):
     if refresh_workers:
         log.write("[TEC-TAC-MODULE-V2] restarting Tactical Celery worker for module runtime refresh\n")
         log.flush()
-        result = subprocess.run(["systemctl", "restart", "celery"], stdout=log, stderr=subprocess.STDOUT, text=True)
-        if result.returncode:
-            raise RuntimeError(f"Tactical Celery restart failed with status {result.returncode}")
-        result = subprocess.run(["systemctl", "is-active", "--quiet", "celery"], stdout=log, stderr=subprocess.STDOUT, text=True)
-        if result.returncode:
-            raise RuntimeError("Tactical Celery is not active after module runtime refresh")
+        last_restart_rc = 0
+        for attempt in range(1, 4):
+            log.write(f"[TEC-TAC-MODULE-V2] Celery refresh attempt {attempt}/3\n")
+            log.flush()
+            result = subprocess.run(["systemctl", "restart", "celery"], stdout=log, stderr=subprocess.STDOUT, text=True)
+            last_restart_rc = result.returncode
+            for _ in range(10):
+                active = subprocess.run(["systemctl", "is-active", "--quiet", "celery"], stdout=log, stderr=subprocess.STDOUT, text=True)
+                if active.returncode == 0:
+                    log.write("[TEC-TAC-MODULE-V2] celery: active (module runtime refreshed)\n")
+                    log.flush()
+                    return
+                time.sleep(1)
+            log.write(f"[TEC-TAC-MODULE-V2] Celery did not become active after attempt {attempt}; restart status={last_restart_rc}\n")
+            subprocess.run(["systemctl", "status", "celery", "--no-pager", "-l"], stdout=log, stderr=subprocess.STDOUT, text=True)
+            subprocess.run(["journalctl", "-u", "celery", "-n", "25", "--no-pager"], stdout=log, stderr=subprocess.STDOUT, text=True)
+            subprocess.run(["systemctl", "reset-failed", "celery"], stdout=log, stderr=subprocess.STDOUT, text=True)
+            log.flush()
+            time.sleep(2)
+        raise RuntimeError(f"Tactical Celery is not active after three refresh attempts (last restart status {last_restart_rc})")
 
 
 def backup_modules(repo_root, module_ids, backup_root):
@@ -247,29 +308,46 @@ def restore_modules(repo_root, module_ids, backup_root, log):
         MODULE_STATE.unlink()
 
 
-def install_packages(repo_root, packages, order, log, backup_root):
+def install_packages(repo_root, packages, order, actions, log, backup_root):
     install_script = repo_root / "scripts/install-extension.sh"
     if not install_script.is_file():
         raise RuntimeError("Tec-Tac install-extension.sh is missing")
     require_root_owned(install_script)
     package_by_id = {item["id"]: Path(item["path"]) for item in packages}
-    module_ids = list(order)
-    backup_modules(repo_root, module_ids, backup_root)
+    actions_by_id = {item["id"]: item for item in actions}
+    backup_ids = list(order)
+    for action in actions:
+        previous = str(action.get("previous_module_id") or "")
+        if previous and previous not in backup_ids:
+            backup_ids.append(previous)
+    backup_modules(repo_root, backup_ids, backup_root)
     for module_id in order:
         package = package_by_id[module_id]
         if not package.is_file():
             raise RuntimeError(f"staged package missing for {module_id}: {package}")
-        replace = (repo_root / "extensions" / module_id).is_dir()
+        action = actions_by_id.get(module_id) or {}
+        rename_from = str(action.get("previous_module_id") or "") if action.get("action") == "rename" else ""
+        if rename_from:
+            for kind in ("extensions", "reportsets"):
+                old_root = repo_root / kind / rename_from
+                if old_root.exists():
+                    shutil.rmtree(old_root)
+            log.write(f"[TEC-TAC-MODULE-V2] renaming module identity {rename_from} -> {module_id}\n")
+            replace = False
+        else:
+            replace = (repo_root / "extensions" / module_id).is_dir()
         command = ["bash", str(install_script), str(package)]
         if replace:
             command.append("--replace")
-        log.write(f"[TEC-TAC-MODULE-V2] {'replacing' if replace else 'installing'} {module_id}\n")
+        verb = "renaming" if rename_from else ("replacing" if replace else "installing")
+        log.write(f"[TEC-TAC-MODULE-V2] {verb} {module_id}\n")
         log.flush()
         env = os.environ.copy()
         env["TEC_TAC_DEFER_WORKER_REFRESH"] = "1"
         result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, text=True, env=env)
         if result.returncode:
             raise RuntimeError(f"install failed for {module_id} with status {result.returncode}")
+    return backup_ids
 
 
 def bundle_packages(job, running_root):
@@ -436,10 +514,17 @@ def run_job(job_id):
                     raise RuntimeError("invalid install order")
                 packages = bundle_packages(job, running) if job["action"] == "bundle_install" else batch_packages(job, running)
                 touched = order
+                actions = list((job.get("plan") or {}).get("actions") or [])
+                applied_renames = []
+                backup_ids = list(order)
                 try:
-                    install_packages(repo_root, packages, order, log, backup)
+                    backup_ids = install_packages(repo_root, packages, order, actions, log, backup)
                     sources = {item.get("id"): item.get("source") for item in packages}
-                    for action in (job.get("plan") or {}).get("actions") or []:
+                    for action in actions:
+                        if action.get("action") == "rename":
+                            run_identity_migration(config, action, log)
+                            migrate_module_state_identity(action["previous_module_id"], action["id"])
+                            applied_renames.append(action)
                         remember_version(action["id"], action.get("version") or "0.0.0", sources.get(action["id"]))
                     job["stage"] = "runtime-sync"
                     atomic_json(path, job)
@@ -448,7 +533,12 @@ def run_job(job_id):
                 except Exception:
                     job["stage"] = "rollback"
                     atomic_json(path, job)
-                    restore_modules(repo_root, order, backup, log)
+                    for action in reversed(applied_renames):
+                        try:
+                            run_identity_migration(config, action, log, reverse=True)
+                        except Exception as identity_rollback_exc:
+                            log.write(f"[TEC-TAC-MODULE-V2] identity rollback failed: {identity_rollback_exc}\n")
+                    restore_modules(repo_root, backup_ids, backup, log)
                     try:
                         sync_and_reload(config, log, refresh_workers=True)
                     except Exception as rollback_exc:
