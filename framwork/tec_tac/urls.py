@@ -1,3 +1,7 @@
+from .session_security_views import (
+    CurrentSessionView, SessionActivityView, SessionListView, SessionRevokeView,
+    RevokeOtherSessionsView, SessionPolicyView, SessionAuditView, SessionDiagnosticsView,
+)
 from .dashboard_views import DashboardListCreateView, DashboardDetailView
 from .preference_views import UserPreferencesView
 from .housekeeping_views import HousekeepingStatusView, HousekeepingPurgeView
@@ -25,6 +29,14 @@ from .module_v2_views import (
     ModuleV2StateView, ModuleV2VisibilityView, ModuleV2RemoveCheckView, ModuleV2JobHistoryView, ModuleV2JobView,
 )
 urlpatterns = [
+    path("session/current/", CurrentSessionView.as_view(), name="tec-tac-session-current"),
+    path("session/activity/", SessionActivityView.as_view(), name="tec-tac-session-activity"),
+    path("session/sessions/", SessionListView.as_view(), name="tec-tac-session-list"),
+    path("session/sessions/<uuid:session_id>/revoke/", SessionRevokeView.as_view(), name="tec-tac-session-revoke"),
+    path("session/revoke-others/", RevokeOtherSessionsView.as_view(), name="tec-tac-session-revoke-others"),
+    path("session/policy/", SessionPolicyView.as_view(), name="tec-tac-session-policy"),
+    path("session/audit/", SessionAuditView.as_view(), name="tec-tac-session-audit"),
+    path("session/diagnostics/", SessionDiagnosticsView.as_view(), name="tec-tac-session-diagnostics"),
     path("dashboards/", DashboardListCreateView.as_view(), name="tec-tac-dashboards"),
     path("dashboards/<uuid:dashboard_id>/", DashboardDetailView.as_view(), name="tec-tac-dashboard-detail"),
     path("contracts/", ContractCatalogView.as_view(), name="tec-tac-contracts"),

@@ -1,0 +1,199 @@
+# Core Session Security
+
+Framework contract: `core.session_security` v1.0.0
+
+## Scope
+
+Tactical remains the authentication authority. Core Session Security adds a
+separate Tec-Tac trust record keyed by a one-way HMAC fingerprint of the
+presented Tactical credential. Raw Tactical tokens are never stored, returned
+or written to audit records.
+
+This release provides the server-side API and capability contract that the
+Security module will consume. Existing Tec-Tac endpoints continue using their
+current Tactical authentication permission until the Core UI activity heartbeat
+is deployed and global enforcement is intentionally enabled in a later rollout.
+The `SessionAuthenticated` permission is the supported enforcement primitive for
+new Core/module endpoints that are ready for this policy.
+
+## Built-in policy
+
+The Core policy model defaults to:
+
+```text
+idle_timeout_minutes        30
+absolute_lifetime_minutes   480
+ip_change_policy            reauthenticate
+session_audit_enabled       true
+activity_heartbeat_seconds  60
+trusted_proxies             127.0.0.1/32, ::1/128
+```
+
+Supported IP policies:
+
+```text
+off
+audit
+reauthenticate
+terminate
+```
+
+Forwarding headers are ignored unless the immediate peer belongs to a configured
+trusted proxy network. Loopback is trusted by default because Tactical/Tec-Tac
+is normally reached through the local nginx reverse proxy.
+
+## Server-side Python contract
+
+Backend modules should resolve the versioned capability instead of importing
+models:
+
+```python
+from tec_tac.capabilities import get_capability
+
+provider = get_capability("core.session_security", version=">=1.0.0,<2.0.0")
+```
+
+Supported provider operations:
+
+```text
+get_policy
+update_policy
+list_sessions
+list_audit_events
+revoke_session
+revoke_user_sessions
+cleanup
+diagnostics
+```
+
+Directly supported framework helpers are catalogued under `tec_tac.session_security`:
+
+```python
+get_effective_policy(...)
+update_global_policy(...)
+list_sessions(...)
+list_audit_events(...)
+revoke_session(...)
+revoke_user_sessions(...)
+SessionAuthenticated
+```
+
+A Security module must not import `TecTacSessionTrust`,
+`TecTacSessionSecurityConfig` or `TecTacSessionAudit` directly.
+
+## Browser/Core HTTP API
+
+All endpoints are under `/api/tfd/`:
+
+```text
+GET  session/current/
+POST session/activity/
+GET  session/sessions/
+POST session/sessions/<session_id>/revoke/
+POST session/revoke-others/
+GET  session/policy/
+PUT  session/policy/
+GET  session/audit/
+GET  session/diagnostics/
+```
+
+`session/policy/`, `session/audit/` and `session/diagnostics/` require Core
+session-security administration rights (Tactical superuser, superuser role, or
+`can_do_server_maint`).
+
+`session/sessions/` returns the current user's sessions by default. An
+administrator may supply `?username=<name>`.
+
+## Activity semantics
+
+The activity endpoint is explicit by design. Normal background API polling does
+not update `last_activity_at`.
+
+The Core UI should send `POST /api/tfd/session/activity/` at most once per policy
+heartbeat period and only when real browser interaction has occurred since the
+previous heartbeat.
+
+`last_seen_at` is request observation. It is not user activity and must never be
+used to extend idle expiry.
+
+Absolute expiry remains anchored to Core session creation time. Handler
+completion time and activity heartbeat time cannot move the absolute deadline.
+
+## Revocation semantics
+
+A revoked credential fingerprint is not silently recreated. Continued use of
+the same Tactical credential remains rejected by `SessionAuthenticated`.
+A genuinely new Tactical credential produces a new fingerprint and may create a
+new Core trust record.
+
+Revocation can target one session or all sessions for a username, optionally
+preserving the current session.
+
+## Trusted client IP resolution
+
+Core starts from `REMOTE_ADDR`.
+
+- If the peer is not trusted, forwarded headers are ignored.
+- If the peer is trusted, Core evaluates `X-Forwarded-For`, then RFC-style
+  `Forwarded`, then `X-Real-IP`.
+- The forwarding chain is walked from the nearest proxy toward the client and
+  stops when the current hop is not trusted.
+
+This prevents an external client from choosing its own effective IP by simply
+sending `X-Forwarded-For`.
+
+## Audit events
+
+Core records security transitions such as:
+
+```text
+session_created
+session_idle_timeout
+session_absolute_timeout
+session_ip_changed
+session_reauthentication_required
+session_revoked
+user_sessions_revoked
+```
+
+The activity heartbeat intentionally does not create a high-volume audit row.
+
+Audit rows never contain the raw Tactical token or the stored token fingerprint.
+
+## Cleanup
+
+The capability exposes `cleanup(retention_days=30)` for expired/revoked session
+and audit history retention. This is the backend cleanup contract for the
+Security module and future Core housekeeping integration.
+
+## Security module boundary
+
+Core owns:
+
+```text
+credential fingerprinting
+session trust records
+policy validation/storage
+client-IP resolution
+idle/absolute expiry calculations
+IP-change enforcement primitive
+revocation
+session/audit APIs
+backend capability
+```
+
+The Security module may own:
+
+```text
+policy UI
+active-session UI
+per-role policy design
+security dashboards
+alerting
+reporting
+risk analytics
+geo/ASN intelligence
+```
+
+The module must consume Core contracts; it must not become the enforcement
+boundary.

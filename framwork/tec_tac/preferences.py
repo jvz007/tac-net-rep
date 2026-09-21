@@ -9,6 +9,7 @@ from .models import TecTacUserPreferences
 DEFAULT_PREFERENCES = {
     "appearance": {
         "theme": "dark",
+        "font_scale": 1.0,
     },
     "navigation": {
         "order": {},
@@ -25,6 +26,7 @@ DEFAULT_PREFERENCES = {
 }
 
 THEMES = {"dark", "light", "high-contrast"}
+FONT_SCALES = {0.9, 1.0, 1.1, 1.2}
 MAX_PREFERENCE_BYTES = 128 * 1024
 
 
@@ -75,6 +77,13 @@ def normalize_preferences(payload):
         raise PreferenceValidationError("appearance must be an object.")
     if appearance.get("theme") not in THEMES:
         raise PreferenceValidationError("appearance.theme must be dark, light, or high-contrast.")
+    font_scale = appearance.get("font_scale")
+    if isinstance(font_scale, bool) or not isinstance(font_scale, (int, float)):
+        raise PreferenceValidationError("appearance.font_scale must be a supported numeric scale.")
+    font_scale = float(font_scale)
+    if font_scale not in FONT_SCALES:
+        raise PreferenceValidationError("appearance.font_scale must be one of 0.9, 1.0, 1.1, or 1.2.")
+    appearance["font_scale"] = font_scale
 
     navigation = merged["navigation"]
     if not isinstance(navigation, dict):

@@ -7,6 +7,12 @@ from django.db import models
 from django.db.models import Q
 
 
+def default_session_trusted_proxies():
+    # Tec-Tac is normally served by a local nginx reverse proxy. Trust only
+    # loopback by default so external clients cannot spoof forwarding headers.
+    return ["127.0.0.1/32", "::1/128"]
+
+
 class TecTacSchedule(models.Model):
     class ScheduleType(models.TextChoices):
         ONCE = "once", "Once"
@@ -203,3 +209,79 @@ class TecTacDashboard(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.visibility})"
+
+
+class TecTacSessionSecurityConfig(models.Model):
+    class IpChangePolicy(models.TextChoices):
+        OFF = "off", "Off"
+        AUDIT = "audit", "Audit only"
+        REAUTHENTICATE = "reauthenticate", "Require re-authentication"
+        TERMINATE = "terminate", "Terminate session"
+
+    singleton = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    idle_timeout_minutes = models.PositiveIntegerField(default=30)
+    absolute_lifetime_minutes = models.PositiveIntegerField(default=480)
+    ip_change_policy = models.CharField(max_length=20, choices=IpChangePolicy.choices, default=IpChangePolicy.REAUTHENTICATE)
+    session_audit_enabled = models.BooleanField(default=True)
+    activity_heartbeat_seconds = models.PositiveIntegerField(default=60)
+    trusted_proxies = models.JSONField(default=default_session_trusted_proxies, blank=True)
+    updated_by_label = models.CharField(max_length=150, blank=True, default="")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Tec-Tac session security configuration"
+
+    @classmethod
+    def current(cls):
+        obj, _ = cls.objects.get_or_create(singleton=1)
+        return obj
+
+
+class TecTacSessionTrust(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    token_fingerprint = models.CharField(max_length=64, unique=True)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="tec_tac_trusted_sessions")
+    username = models.CharField(max_length=150, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    last_activity_at = models.DateTimeField()
+    last_seen_at = models.DateTimeField()
+    initial_ip = models.CharField(max_length=64, blank=True, default="")
+    last_ip = models.CharField(max_length=64, blank=True, default="")
+    user_agent_hash = models.CharField(max_length=64, blank=True, default="")
+    absolute_expires_at = models.DateTimeField(db_index=True)
+    idle_expires_at = models.DateTimeField(db_index=True)
+    revoked = models.BooleanField(default=False, db_index=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revoked_by = models.CharField(max_length=150, blank=True, default="")
+    revocation_reason = models.CharField(max_length=255, blank=True, default="")
+
+    class Meta:
+        ordering = ("-last_seen_at", "-created_at")
+        indexes = [
+            models.Index(fields=("user", "revoked"), name="tectac_sess_user_rev_idx"),
+            models.Index(fields=("username", "last_seen_at"), name="tectac_sess_user_seen_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.username}:{self.id}"
+
+
+class TecTacSessionAudit(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    session = models.ForeignKey(TecTacSessionTrust, null=True, blank=True, on_delete=models.SET_NULL, related_name="audit_events")
+    username = models.CharField(max_length=150, blank=True, default="", db_index=True)
+    event_type = models.CharField(max_length=64, db_index=True)
+    previous_ip = models.CharField(max_length=64, blank=True, default="")
+    new_ip = models.CharField(max_length=64, blank=True, default="")
+    reason = models.CharField(max_length=255, blank=True, default="")
+    requested_by = models.CharField(max_length=150, blank=True, default="")
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+        indexes = [models.Index(fields=("event_type", "created_at"), name="tectac_sess_audit_evt_idx")]
+
+    def __str__(self):
+        return f"{self.event_type}:{self.username}:{self.created_at.isoformat()}"

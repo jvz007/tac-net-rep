@@ -168,3 +168,16 @@ A consumer should only rely on the public contract shown by the catalog and the 
 - Framework self-tests cover immediate dispatch, true scheduled execution, deliberate permanent failure and retry/recovery.
 - Permanent failures must not be blindly retried. Module handlers may raise `SchedulerPermanentError` or `SchedulerTransientError`; capability unavailable/version mismatch/disabled and validation-style failures are treated as permanent.
 - A handler must only report success after its owned downstream operation has completed successfully. Transport acknowledgement alone is not business-operation success.
+
+## Core session-security contract
+
+Framework 1.15.16 registers `core.session_security` v1.0.0. It is a Core-owned
+backend capability for policy inspection/update, safe session enumeration,
+audit-event retrieval, session/user revocation, retention cleanup and
+diagnostics.
+
+The live contract catalog also exposes the supported Python helpers under
+`tec_tac.session_security` and the `/api/tfd/session/...` HTTP boundary.
+
+A module must not import `TecTacSessionTrust`, `TecTacSessionSecurityConfig` or
+`TecTacSessionAudit` directly. See `docs/session-security.md`.

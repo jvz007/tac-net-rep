@@ -137,3 +137,26 @@ from tec_tac.scheduler import SchedulerPermanentError, SchedulerTransientError
 Use `SchedulerPermanentError` when retry cannot repair the request (invalid parameters, unsupported target/operation, incompatible dependency). Use `SchedulerTransientError` when recovery is realistic (temporary transport/provider outage). The scheduler also treats disabled/missing/incompatible capability lookups and validation-style failures as non-retryable.
 
 The handler context includes `attempt`, starting at 1.
+
+## Session security — `tec_tac.session_security`
+
+Framework 1.15.16 adds the Core-owned server-side session-security contract used
+by the future Security module.
+
+```python
+from tec_tac.session_security import (
+    get_effective_policy,
+    update_global_policy,
+    list_sessions,
+    list_audit_events,
+    revoke_session,
+    revoke_user_sessions,
+    SessionAuthenticated,
+)
+```
+
+Backend modules should normally consume the versioned `core.session_security`
+capability instead of importing implementation details. Do not import Core
+session models directly.
+
+See `docs/session-security.md` for policy, trusted-proxy and revocation semantics.
