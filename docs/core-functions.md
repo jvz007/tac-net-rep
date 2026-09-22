@@ -166,3 +166,8 @@ See `docs/session-security.md` for policy, trusted-proxy and revocation semantic
 Urgent module fixes may use the Core-managed hotfix package contract instead of shipping module-owned privileged patch/revert scripts. Hotfixes are exact-module-version, before/after-SHA-256-bound replacements of existing files inside the owning extension/reportset roots. Core owns staging, backup, privileged application, validation, UI sync/Django reload, history and reverse-order rollback.
 
 Module authors should read [`module-hotfixes.md`](module-hotfixes.md) before creating a hotfix. A normal module release remains the authoritative long-term delivery mechanism and automatically supersedes active hotfix state.
+
+
+## Optional module integrations
+
+Optional cross-module enrichment must degrade cleanly when its provider is missing or disabled. UI code uses the Core `modules` runtime service for presentation; backend code uses optional capability resolution (`get_capability(..., required=False)`) for execution. See `docs/optional-module-integrations.md`.

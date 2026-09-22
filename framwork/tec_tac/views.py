@@ -40,6 +40,7 @@ from .system_update import (
     system_status,
 )
 
+from .module_runtime import module_runtime_snapshot
 from .preferences import get_user_preferences
 from .session_security import SessionAuthenticated
 
@@ -158,6 +159,7 @@ class UiContextView(APIView):
                 "permissions": sorted(effective_permissions(request.user)),
                 "extensions": permission_catalog(),
                 "capabilities": _native_capabilities(request.user),
+                "module_status": module_runtime_snapshot(),
                 "preferences": preferences,
                 "preferences_initialized": preferences_initialized,
                 "preferences_updated_at": preferences_updated_at,

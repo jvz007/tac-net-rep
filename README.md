@@ -1,3 +1,5 @@
+Version **1.15.27** adds the lightweight authenticated module-runtime snapshot used by optional UI integrations. See `docs/optional-module-integrations.md`.
+
 Version **1.15.26** caches stable Framework/UI release discovery for 24 hours so System Updates can show the last known available builds immediately while retaining an explicit forced refresh.
 
 Version **1.15.25** adds Core-managed module hotfixes: exact-version/hash-bound file overlays with privileged apply/rollback jobs, automatic failure rollback, normal-release supersession, Module Manager API status, and a developer packaging contract. See `docs/module-hotfixes.md`.

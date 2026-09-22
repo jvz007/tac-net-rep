@@ -349,3 +349,12 @@ grep -q 'sha256_after' "${ROOT}/scripts/module-hotfix-job-helper.py" || fail "ma
 grep -q 'another Tec-Tac lifecycle operation is already running' "${ROOT}/scripts/module-hotfix-job-helper.py" || fail "managed hotfix global lifecycle lock missing"
 grep -q -- '--supersede' "${ROOT}/scripts/install-extension.sh" || fail "normal module releases do not retire hotfixes"
 echo "[TEST] PASS managed module hotfix lifecycle"
+
+# 1.15.27 lightweight module runtime snapshot + optional integration docs
+[[ -f "${ROOT}/framwork/tec_tac/module_runtime.py" ]] || fail "module runtime snapshot helper missing"
+[[ -f "${ROOT}/docs/optional-module-integrations.md" ]] || fail "optional module integration documentation missing"
+grep -q '"module_status": module_runtime_snapshot()' "${ROOT}/framwork/tec_tac/views.py" || fail "UI context module status snapshot missing"
+grep -q "def module_runtime_snapshot" "${ROOT}/framwork/tec_tac/module_runtime.py" || fail "module runtime snapshot function missing"
+grep -q "get_capability(.*required=False\|required=False" "${ROOT}/docs/optional-module-integrations.md" || fail "optional backend capability contract missing"
+python3 -m py_compile "${ROOT}/framwork/tec_tac/module_runtime.py"
+echo "[TEST] PASS lightweight module runtime snapshot"

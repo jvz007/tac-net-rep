@@ -374,3 +374,8 @@ Before shipping an interdependent module:
 - Can the provider change its internal storage without breaking the consumer?
 
 If any answer is no, the modules are too tightly coupled.
+
+
+## Optional module integrations
+
+Optional cross-module enrichment must degrade cleanly when its provider is missing or disabled. UI code uses the Core `modules` runtime service for presentation; backend code uses optional capability resolution (`get_capability(..., required=False)`) for execution. See `docs/optional-module-integrations.md`.
