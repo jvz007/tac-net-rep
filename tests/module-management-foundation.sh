@@ -335,3 +335,17 @@ grep -q 'queue_batch_install' "${ROOT}/framwork/tec_tac/management/commands/tec_
 grep -q 'queue_v2_install' "${ROOT}/framwork/tec_tac/management/commands/tec_tac_install_bootstrap_modules.py" || fail "bootstrap single-package lifecycle dispatch missing"
 grep -q 'get_job' "${ROOT}/framwork/tec_tac/management/commands/tec_tac_install_bootstrap_modules.py" || fail "bootstrap lifecycle completion polling missing"
 echo "[TEST] PASS initial-install bootstrap module intake"
+
+# 1.15.25 managed module hotfix lifecycle
+[[ -f "${ROOT}/framwork/tec_tac/module_hotfix.py" ]] || fail "managed hotfix contract missing"
+[[ -f "${ROOT}/framwork/tec_tac/module_hotfix_views.py" ]] || fail "managed hotfix API views missing"
+[[ -f "${ROOT}/scripts/module-hotfix-job-helper.py" ]] || fail "managed hotfix root worker missing"
+[[ -f "${ROOT}/docs/module-hotfixes.md" ]] || fail "managed hotfix developer documentation missing"
+grep -q 'modules/hotfixes/inspect/' "${ROOT}/framwork/tec_tac/urls.py" || fail "managed hotfix inspect route missing"
+grep -q 'queue_apply_hotfix' "${ROOT}/framwork/tec_tac/module_hotfix.py" || fail "managed hotfix apply queue missing"
+grep -q 'queue_rollback_hotfix' "${ROOT}/framwork/tec_tac/module_hotfix.py" || fail "managed hotfix rollback queue missing"
+grep -q 'sha256_before' "${ROOT}/framwork/tec_tac/module_hotfix.py" || fail "managed hotfix before-hash guard missing"
+grep -q 'sha256_after' "${ROOT}/scripts/module-hotfix-job-helper.py" || fail "managed hotfix after-hash guard missing"
+grep -q 'another Tec-Tac lifecycle operation is already running' "${ROOT}/scripts/module-hotfix-job-helper.py" || fail "managed hotfix global lifecycle lock missing"
+grep -q -- '--supersede' "${ROOT}/scripts/install-extension.sh" || fail "normal module releases do not retire hotfixes"
+echo "[TEST] PASS managed module hotfix lifecycle"

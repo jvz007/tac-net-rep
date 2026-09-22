@@ -86,6 +86,8 @@ fi
 
 MODULE_HELPER="/usr/local/sbin/tec-tac-module-job"
 MODULE_SUDOERS="/etc/sudoers.d/tec-tac-module-manager"
+MODULE_HOTFIX_HELPER="/usr/local/sbin/tec-tac-module-hotfix"
+MODULE_HOTFIX_SUDOERS="/etc/sudoers.d/tec-tac-module-hotfix"
 MODULE_CONFIG="${TEC_TAC_CONFIG_FILE}"
 RMM_DROPIN="/etc/systemd/system/rmm.service.d/tec-tac.conf"
 SYSTEM_UPDATE_HELPER="/usr/local/sbin/tec-tac-system-update"
@@ -98,7 +100,7 @@ SERVER_BACKUP_SUDOERS="/etc/sudoers.d/tec-tac-server-backup"
 SERVER_MAINTENANCE_HELPER="/usr/local/sbin/tec-tac-server-maintenance"
 SERVER_MAINTENANCE_LIB="/usr/local/lib/tec-tac-server-maintenance"
 SERVER_MAINTENANCE_SUDOERS="/etc/sudoers.d/tec-tac-server-maintenance"
-rm -f "${MODULE_SUDOERS}" "${MODULE_HELPER}" "${MODULE_CONFIG}" "${RMM_DROPIN}" "${SYSTEM_UPDATE_SUDOERS}" "${SYSTEM_UPDATE_HELPER}" "${SYSTEM_UPDATE_CONFIG}" "${SERVER_BACKUP_SUDOERS}" "${SERVER_BACKUP_HELPER}" "${SERVER_MAINTENANCE_SUDOERS}" "${SERVER_MAINTENANCE_HELPER}" /usr/local/sbin/tec-tac-repair /usr/local/sbin/tec-tac-diagnostics
+rm -f "${MODULE_SUDOERS}" "${MODULE_HELPER}" "${MODULE_HOTFIX_SUDOERS}" "${MODULE_HOTFIX_HELPER}" "${MODULE_CONFIG}" "${RMM_DROPIN}" "${SYSTEM_UPDATE_SUDOERS}" "${SYSTEM_UPDATE_HELPER}" "${SYSTEM_UPDATE_CONFIG}" "${SERVER_BACKUP_SUDOERS}" "${SERVER_BACKUP_HELPER}" "${SERVER_MAINTENANCE_SUDOERS}" "${SERVER_MAINTENANCE_HELPER}" /usr/local/sbin/tec-tac-repair /usr/local/sbin/tec-tac-diagnostics
 rm -rf "${SYSTEM_UPDATE_LIB}" "${SERVER_BACKUP_LIB}" "${SERVER_MAINTENANCE_LIB}"
 systemctl daemon-reload
 log "Removed Tec-Tac privileged lifecycle/update/backup/maintenance helpers, sudoers rules, and rmm.service drop-in."

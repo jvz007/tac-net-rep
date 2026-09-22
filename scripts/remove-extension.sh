@@ -239,6 +239,10 @@ else
     log "Celery worker refresh deferred to parent module lifecycle job."
 fi
 
+if [[ -x /usr/local/sbin/tec-tac-module-hotfix ]]; then
+    /usr/local/sbin/tec-tac-module-hotfix --supersede "${PLUGIN_ID}" "removed"
+fi
+
 log "Extension/reportset '${PLUGIN_ID}' removed successfully."
 log "Backup retained at: ${BACKUP_DIR}"
 

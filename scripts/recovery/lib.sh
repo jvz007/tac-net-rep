@@ -51,6 +51,14 @@ ${MODULE_ROOT}/running|root:${group}|2750
 ${MODULE_ROOT}/running-v2|root:${group}|2750
 ${MODULE_ROOT}/logs|root:${group}|2750
 ${MODULE_ROOT}/bundle-backups|root:${group}|2750
+${MODULE_ROOT}/hotfixes|root:${group}|2750
+${MODULE_ROOT}/hotfixes/staged|root:${group}|2770
+${MODULE_ROOT}/hotfixes/jobs|root:${group}|2770
+${MODULE_ROOT}/hotfixes/running|root:${group}|2750
+${MODULE_ROOT}/hotfixes/logs|root:${group}|2750
+${MODULE_ROOT}/hotfixes/backups|root:${group}|2750
+${MODULE_ROOT}/hotfixes/applied|root:${group}|2750
+${MODULE_ROOT}/hotfixes/history|root:${group}|2750
 ${MODULE_ROOT}/repositories|root:${group}|2770
 ${MODULE_ROOT}/repositories/cache|root:${group}|2770
 SPECS
@@ -90,7 +98,7 @@ check_module_permissions(){
     fi
   fi
 
-  for writable in "${MODULE_ROOT}/staged" "${MODULE_ROOT}/staged/bundles" "${MODULE_ROOT}/staged/batches" "${MODULE_ROOT}/jobs"; do
+  for writable in "${MODULE_ROOT}/staged" "${MODULE_ROOT}/staged/bundles" "${MODULE_ROOT}/staged/batches" "${MODULE_ROOT}/jobs" "${MODULE_ROOT}/hotfixes/staged" "${MODULE_ROOT}/hotfixes/jobs"; do
     if ! runuser -u "$user" -- test -w "$writable" 2>/dev/null; then
       printf 'FAIL|runtime-write|%s|user=%s|not-writable\n' "$writable" "$user"
       failures=$((failures+1))

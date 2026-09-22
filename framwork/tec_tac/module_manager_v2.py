@@ -448,10 +448,16 @@ def installed_catalog_v2() -> list[dict]:
                 "satisfied": bool(installed and version_satisfies(installed.get("extension_version") or "0.0.0", constraint)),
             })
         record = module_record(item["id"], state)
+        try:
+            from .module_hotfix import hotfix_summary
+            hotfixes = hotfix_summary(item["id"])
+        except Exception:
+            hotfixes = {"count": 0, "ids": [], "latest": None}
         item.update({
             "enabled": enabled,
             "visible": visible,
             "status": (item.get("status") if item.get("ui_error") else ("enabled" if enabled else "disabled")),
+            "hotfixes": hotfixes,
             "dependencies": hard,
             "optional_dependencies": optional,
             "requires": meta.get("requires", {}),

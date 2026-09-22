@@ -32,6 +32,10 @@ from .module_v2_views import (
     ModuleV2CatalogView, ModuleV2InspectView, ModuleV2StageView, ModuleV2InstallView,
     ModuleV2StateView, ModuleV2VisibilityView, ModuleV2RemoveCheckView, ModuleV2JobHistoryView, ModuleV2JobView,
 )
+from .module_hotfix_views import (
+    ModuleHotfixInspectView, ModuleHotfixStageView, ModuleHotfixApplyView,
+    ModuleHotfixListView, ModuleHotfixRollbackView, ModuleHotfixJobView,
+)
 urlpatterns = [
     path("session/current/", CurrentSessionView.as_view(), name="tec-tac-session-current"),
     path("session/activity/", SessionActivityView.as_view(), name="tec-tac-session-activity"),
@@ -95,5 +99,11 @@ urlpatterns = [
     path("modules/v2/<str:plugin_id>/remove-check/", ModuleV2RemoveCheckView.as_view(), name="tec-tac-module-v2-remove-check"),
     path("modules/v2/jobs/", ModuleV2JobHistoryView.as_view(), name="tec-tac-module-v2-job-history"),
     path("modules/v2/jobs/<uuid:job_id>/", ModuleV2JobView.as_view(), name="tec-tac-module-v2-job"),
+    path("modules/hotfixes/inspect/", ModuleHotfixInspectView.as_view(), name="tec-tac-module-hotfix-inspect"),
+    path("modules/hotfixes/<uuid:upload_id>/", ModuleHotfixStageView.as_view(), name="tec-tac-module-hotfix-stage"),
+    path("modules/hotfixes/<uuid:upload_id>/apply/", ModuleHotfixApplyView.as_view(), name="tec-tac-module-hotfix-apply"),
+    path("modules/hotfixes/jobs/<uuid:job_id>/", ModuleHotfixJobView.as_view(), name="tec-tac-module-hotfix-job"),
+    path("modules/v2/<str:plugin_id>/hotfixes/", ModuleHotfixListView.as_view(), name="tec-tac-module-hotfix-list"),
+    path("modules/v2/<str:plugin_id>/hotfixes/<str:hotfix_id>/rollback/", ModuleHotfixRollbackView.as_view(), name="tec-tac-module-hotfix-rollback"),
     path("access/roles/<int:role_id>/permissions/", RoleExtensionPermissionsView.as_view(), name="tec-tac-role-extension-permissions"),
 ]

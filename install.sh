@@ -73,6 +73,8 @@ REQUIRED_FILES=(
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/module_manager_v2.py"
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/module_state.py"
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/module_v2_views.py"
+    "${SOURCE_FRAMEWORK_DIR}/tec_tac/module_hotfix.py"
+    "${SOURCE_FRAMEWORK_DIR}/tec_tac/module_hotfix_views.py"
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/module_repository.py"
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/module_repository_views.py"
     "${SOURCE_EXTENSIONS_DIR}/reporting/${APP_NAME}/__init__.py"
@@ -93,6 +95,7 @@ REQUIRED_FILES=(
     "${SOURCE_ROOT}/scripts/remove-extension.sh"
     "${SOURCE_ROOT}/scripts/module-job-helper.py"
     "${SOURCE_ROOT}/scripts/module-v2-job-helper.py"
+    "${SOURCE_ROOT}/scripts/module-hotfix-job-helper.py"
     "${SOURCE_ROOT}/scripts/server-backup-helper.py"
     "${SOURCE_ROOT}/scripts/reload-rmm-uwsgi.sh"
     "${SOURCE_ROOT}/scripts/tec-tac-config.sh"
@@ -100,6 +103,8 @@ REQUIRED_FILES=(
     "${SOURCE_ROOT}/tests/framework-foundation.sh"
     "${SOURCE_ROOT}/tests/access-api-foundation.sh"
     "${SOURCE_ROOT}/tests/module-management-foundation.sh"
+    "${SOURCE_ROOT}/tests/module-hotfix-foundation.sh"
+    "${SOURCE_ROOT}/docs/module-hotfixes.md"
     "${SOURCE_ROOT}/tests/scheduler-foundation.sh"
     "${SOURCE_ROOT}/tests/contracts-foundation.sh"
     "${SOURCE_ROOT}/tests/recovery-foundation.sh"
@@ -267,7 +272,7 @@ if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON
 fi
 
 log "Verifying Tec-Tac API routes."
-VERIFY_ROUTE_CODE="from django.urls import resolve; checks=[('/api/tfd/reporting/network-availability/','network-availability'),('/api/tfd/ui/context/','tec-tac-ui-context'),('/api/tfd/access/extensions/','tec-tac-extension-permissions'),('/api/tfd/modules/','tec-tac-module-catalog'),('/api/tfd/system/updates/','tec-tac-system-update-status'),('/api/tfd/capabilities/','tec-tac-capabilities'),('/api/tfd/contracts/','tec-tac-contracts'),('/api/tfd/contracts/export/','tec-tac-contract-export'),('/api/tfd/scheduler/actions/','tec-tac-scheduler-actions'),('/api/tfd/scheduler/schedules/','tec-tac-scheduler-schedules'),('/api/tfd/scheduler/runs/','tec-tac-scheduler-runs'),('/api/tfd/modules/repositories/','tec-tac-module-repositories'),('/api/tfd/modules/catalog/online/','tec-tac-module-online-catalog'),('/api/tfd/session/current/','tec-tac-session-current'),('/api/tfd/session/activity/','tec-tac-session-activity'),('/api/tfd/session/policy/','tec-tac-session-policy'),('/api/tfd/session/audit/','tec-tac-session-audit'),('/api/tfd/session/diagnostics/','tec-tac-session-diagnostics')]; resolved=[(path, resolve(path).url_name) for path,_ in checks]; assert all(actual == expected for (path,actual),(_,expected) in zip(resolved,checks)), resolved; print('TEC-TAC route verification OK:', resolved)"
+VERIFY_ROUTE_CODE="from django.urls import resolve; checks=[('/api/tfd/reporting/network-availability/','network-availability'),('/api/tfd/ui/context/','tec-tac-ui-context'),('/api/tfd/access/extensions/','tec-tac-extension-permissions'),('/api/tfd/modules/','tec-tac-module-catalog'),('/api/tfd/system/updates/','tec-tac-system-update-status'),('/api/tfd/capabilities/','tec-tac-capabilities'),('/api/tfd/contracts/','tec-tac-contracts'),('/api/tfd/contracts/export/','tec-tac-contract-export'),('/api/tfd/scheduler/actions/','tec-tac-scheduler-actions'),('/api/tfd/scheduler/schedules/','tec-tac-scheduler-schedules'),('/api/tfd/scheduler/runs/','tec-tac-scheduler-runs'),('/api/tfd/modules/repositories/','tec-tac-module-repositories'),('/api/tfd/modules/catalog/online/','tec-tac-module-online-catalog'),('/api/tfd/modules/hotfixes/inspect/','tec-tac-module-hotfix-inspect'),('/api/tfd/session/current/','tec-tac-session-current'),('/api/tfd/session/activity/','tec-tac-session-activity'),('/api/tfd/session/policy/','tec-tac-session-policy'),('/api/tfd/session/audit/','tec-tac-session-audit'),('/api/tfd/session/diagnostics/','tec-tac-session-diagnostics')]; resolved=[(path, resolve(path).url_name) for path,_ in checks]; assert all(actual == expected for (path,actual),(_,expected) in zip(resolved,checks)), resolved; print('TEC-TAC route verification OK:', resolved)"
 if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_ROUTE_CODE}\""; then
     fail "Framework API route verification failed or timed out."
 fi
@@ -299,10 +304,12 @@ fi
 MODULE_STATE_ROOT="${TEC_TAC_MODULE_STATE_ROOT:-/var/lib/tec-tac/module-manager}"
 MODULE_HELPER="/usr/local/sbin/tec-tac-module-job"
 MODULE_V2_HELPER="/usr/local/sbin/tec-tac-module-v2-job"
+MODULE_HOTFIX_HELPER="/usr/local/sbin/tec-tac-module-hotfix"
 MODULE_CONFIG_DIR="${TEC_TAC_ROOT}/etc"
 MODULE_CONFIG="${TEC_TAC_CONFIG_FILE}"
 MODULE_SUDOERS="/etc/sudoers.d/tec-tac-module-manager"
 MODULE_V2_SUDOERS="/etc/sudoers.d/tec-tac-module-manager-v2"
+MODULE_HOTFIX_SUDOERS="/etc/sudoers.d/tec-tac-module-hotfix"
 MODULE_STATE_FILE="${MODULE_STATE_ROOT}/module-state.json"
 RMM_DROPIN_DIR="/etc/systemd/system/rmm.service.d"
 RMM_DROPIN="${RMM_DROPIN_DIR}/tec-tac.conf"
@@ -335,11 +342,20 @@ log "Verified Tec-Tac Recovery Toolkit scripts are executable."
 source "${REPO_ROOT}/scripts/recovery/lib.sh"
 repair_module_permissions
 chmod 0755 "$(dirname "${MODULE_STATE_ROOT}")"
+HOTFIX_ROOT="${MODULE_STATE_ROOT}/hotfixes"
+mkdir -p "${HOTFIX_ROOT}/staged" "${HOTFIX_ROOT}/jobs" "${HOTFIX_ROOT}/running" "${HOTFIX_ROOT}/logs" "${HOTFIX_ROOT}/backups" "${HOTFIX_ROOT}/applied" "${HOTFIX_ROOT}/history"
+chown root:"${TACTICAL_GROUP}" "${HOTFIX_ROOT}" "${HOTFIX_ROOT}/running" "${HOTFIX_ROOT}/logs" "${HOTFIX_ROOT}/backups" "${HOTFIX_ROOT}/applied" "${HOTFIX_ROOT}/history"
+chmod 2750 "${HOTFIX_ROOT}" "${HOTFIX_ROOT}/running" "${HOTFIX_ROOT}/logs" "${HOTFIX_ROOT}/backups" "${HOTFIX_ROOT}/applied" "${HOTFIX_ROOT}/history"
+chown root:"${TACTICAL_GROUP}" "${HOTFIX_ROOT}/staged" "${HOTFIX_ROOT}/jobs"
+chmod 2770 "${HOTFIX_ROOT}/staged" "${HOTFIX_ROOT}/jobs"
+
 for writable_path in \
     "${MODULE_STATE_ROOT}/staged" \
     "${MODULE_STATE_ROOT}/staged/bundles" \
     "${MODULE_STATE_ROOT}/staged/batches" \
-    "${MODULE_STATE_ROOT}/jobs"; do
+    "${MODULE_STATE_ROOT}/jobs" \
+    "${HOTFIX_ROOT}/staged" \
+    "${HOTFIX_ROOT}/jobs"; do
     run_as_tactical test -w "${writable_path}" || fail "Tactical service user cannot write ${writable_path} after permission repair."
 done
 log "Verified Module Manager staging paths are writable by ${TACTICAL_USER}."
@@ -357,6 +373,7 @@ chmod 0644 "${MODULE_STATE_FILE}"
 
 install -o root -g root -m 0755 "${REPO_ROOT}/scripts/module-job-helper.py" "${MODULE_HELPER}"
 install -o root -g root -m 0755 "${REPO_ROOT}/scripts/module-v2-job-helper.py" "${MODULE_V2_HELPER}"
+install -o root -g root -m 0755 "${REPO_ROOT}/scripts/module-hotfix-job-helper.py" "${MODULE_HOTFIX_HELPER}"
 
 # Recovery scripts intentionally remain under /opt/tec-tac/scripts/recovery.
 # Remove convenience links created by 1.12.0 when they still point at this
@@ -413,14 +430,19 @@ EOF
 cat > "${MODULE_V2_SUDOERS}" <<EOF
 ${TACTICAL_USER} ALL=(root) NOPASSWD: ${MODULE_V2_HELPER} --dispatch *
 EOF
-chown root:root "${MODULE_SUDOERS}" "${MODULE_V2_SUDOERS}"
-chmod 0440 "${MODULE_SUDOERS}" "${MODULE_V2_SUDOERS}"
+cat > "${MODULE_HOTFIX_SUDOERS}" <<EOF
+${TACTICAL_USER} ALL=(root) NOPASSWD: ${MODULE_HOTFIX_HELPER} --dispatch *
+EOF
+chown root:root "${MODULE_SUDOERS}" "${MODULE_V2_SUDOERS}" "${MODULE_HOTFIX_SUDOERS}"
+chmod 0440 "${MODULE_SUDOERS}" "${MODULE_V2_SUDOERS}" "${MODULE_HOTFIX_SUDOERS}"
 if command -v visudo >/dev/null 2>&1; then
     visudo -cf "${MODULE_SUDOERS}" >/dev/null || fail "Module manager sudoers validation failed."
     visudo -cf "${MODULE_V2_SUDOERS}" >/dev/null || fail "Module manager v2 sudoers validation failed."
+    visudo -cf "${MODULE_HOTFIX_SUDOERS}" >/dev/null || fail "Module hotfix sudoers validation failed."
 fi
 log "Installed privileged module lifecycle helper: ${MODULE_HELPER}"
 log "Installed privileged Module Management v2 helper: ${MODULE_V2_HELPER}"
+log "Installed privileged module hotfix helper: ${MODULE_HOTFIX_HELPER}"
 
 
 SYSTEM_UPDATE_ROOT="${TEC_TAC_SYSTEM_UPDATE_ROOT:-/var/lib/tec-tac/system-updates}"

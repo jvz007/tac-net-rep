@@ -563,6 +563,10 @@ else
     log "Celery worker refresh deferred to parent module lifecycle job."
 fi
 
+if [[ -x /usr/local/sbin/tec-tac-module-hotfix ]]; then
+    /usr/local/sbin/tec-tac-module-hotfix --supersede "${PLUGIN_ID}" "${EXT_VERSION}"
+fi
+
 log "Installed extension/reportset '${PLUGIN_ID}' successfully."
 log "Extension: ${DEST_EXTENSION}"
 log "Reportset: ${DEST_REPORTSET}"
