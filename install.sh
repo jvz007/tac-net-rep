@@ -28,6 +28,7 @@ SOURCE_EXTENSIONS_DIR="${SOURCE_ROOT}/extensions"
 SOURCE_REPORTSETS_DIR="${SOURCE_ROOT}/reportsets"
 SOURCE_SCRIPTS_DIR="${SOURCE_ROOT}/scripts"
 SOURCE_TEMPLATES_DIR="${SOURCE_ROOT}/templates"
+BOOTSTRAP_MODULE_DIR="${TEC_TAC_BOOTSTRAP_MODULE_DIR:-${SOURCE_ROOT}/bootstrap-modules}"
 LEGACY_REPORTING_DIR="${EXTENSIONS_DIR}/reporting"
 APP_DIR="${LEGACY_REPORTING_DIR}/${APP_NAME}"
 VERSION_FILE="${SOURCE_ROOT}/VERSION"
@@ -119,6 +120,7 @@ REQUIRED_FILES=(
     "${SOURCE_ROOT}/scripts/recovery/tec-tac-repair-runtime.sh"
     "${SOURCE_ROOT}/scripts/recovery/tec-tac-repair-scheduler.sh"
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/management/commands/tec_tac_scheduler_tick.py"
+    "${SOURCE_FRAMEWORK_DIR}/tec_tac/management/commands/tec_tac_install_bootstrap_modules.py"
     "${SOURCE_ROOT}/tests/registry-validation.sh"
     "${SOURCE_ROOT}/tests/tactical-update-survival.sh"
     "${SOURCE_ROOT}/tests/example-plugin.sh"
@@ -663,6 +665,21 @@ if [[ -f "${EXCLUDE_FILE}" ]]; then
     rm -f "${TMP_EXCLUDE}"
     chown "${TACTICAL_USER}:${TACTICAL_GROUP}" "${EXCLUDE_FILE}"
     log "Removed obsolete ${APP_NAME} Git exclude rule if present."
+fi
+
+# Optional first-install module intake. Packages placed in bootstrap-modules/ are
+# not unpacked directly: they are staged, dependency-planned, license-checked,
+# audited and installed through the same Module Manager lifecycle used by the UI.
+if [[ -d "${BOOTSTRAP_MODULE_DIR}" ]]; then
+    chmod a+rx "${BOOTSTRAP_MODULE_DIR}"
+    find "${BOOTSTRAP_MODULE_DIR}" -maxdepth 1 -type f \
+        \( -iname '*.zip' -o -iname '*.tgz' -o -iname '*.tar.gz' \) -exec chmod a+r {} +
+    log "Checking bootstrap module intake: ${BOOTSTRAP_MODULE_DIR}"
+    run_as_tactical "${VENV_PYTHON}" "${MANAGE_PY}" tec_tac_install_bootstrap_modules \
+        --path "${BOOTSTRAP_MODULE_DIR}" \
+        --requested-by "bootstrap:install.sh"
+else
+    log "Bootstrap module directory not present; Core-only installation continues."
 fi
 
 log "Restarting Tactical services."

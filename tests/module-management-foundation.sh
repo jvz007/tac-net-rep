@@ -324,3 +324,14 @@ grep -q 'except LicensingRequirementError' "${ROOT}/framwork/tec_tac/module_repo
 grep -q 'except (ModuleRepositoryError, LicensingRequirementError)' "${ROOT}/framwork/tec_tac/module_repository.py" || fail "online repository staging wraps licensing failures"
 
 echo "[TEST] PASS manifest licensing enforcement"
+
+# 1.15.24 initial-install bootstrap module intake
+[[ -f "${ROOT}/framwork/tec_tac/management/commands/tec_tac_install_bootstrap_modules.py" ]] || fail "bootstrap module management command missing"
+[[ -f "${ROOT}/bootstrap-modules/README.md" ]] || fail "bootstrap module intake documentation missing"
+grep -q 'BOOTSTRAP_MODULE_DIR=.*bootstrap-modules' "${ROOT}/install.sh" || fail "Core installer bootstrap module path missing"
+grep -q 'tec_tac_install_bootstrap_modules' "${ROOT}/install.sh" || fail "Core installer does not invoke bootstrap module lifecycle"
+grep -q 'stage_multiple_packages' "${ROOT}/framwork/tec_tac/management/commands/tec_tac_install_bootstrap_modules.py" || fail "bootstrap modules do not use Module Manager staging"
+grep -q 'queue_batch_install' "${ROOT}/framwork/tec_tac/management/commands/tec_tac_install_bootstrap_modules.py" || fail "bootstrap multi-package lifecycle dispatch missing"
+grep -q 'queue_v2_install' "${ROOT}/framwork/tec_tac/management/commands/tec_tac_install_bootstrap_modules.py" || fail "bootstrap single-package lifecycle dispatch missing"
+grep -q 'get_job' "${ROOT}/framwork/tec_tac/management/commands/tec_tac_install_bootstrap_modules.py" || fail "bootstrap lifecycle completion polling missing"
+echo "[TEST] PASS initial-install bootstrap module intake"

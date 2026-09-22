@@ -1,3 +1,5 @@
+Version **1.15.24** adds optional initial-install bootstrap module intake through the normal dependency-aware Module Manager lifecycle. Place trusted module packages under `bootstrap-modules/` before running `install.sh`.
+
 Version **1.15.23** narrows GitHub release validation to release/package correctness and no longer treats recovery-script executable bits as a release-publication failure.
 
 Version **1.15.22** adds the public durable `core.server_maintenance` capability for registered privileged maintenance jobs with global locking and audited systemd-detached execution. See `docs/server-maintenance-capability.md`.
@@ -42,7 +44,7 @@ Version **1.9.0** adds the cross-module capability registry. See `docs/capabilit
 
 Version **1.8.0** added the first-class Tec-Tac Scheduler. See `docs/scheduler.md` and `docs/module-scheduling.md`.
 
-Historical release notes are archived under `docs/releases/`; only the current release note remains at repository root.
+Historical release notes are archived under `docs/releases/`; the current and immediately previous release notes may remain at repository root.
 
 Version **1.7.1** is a corrective release for repository-installed modules: the canonical registry accepts v2 dependency/runtime metadata in every install path.
 Version **1.7.0** adds multi-repository module sources, cached repository health, online catalog/update reporting, SHA-256 verified online staging, and installed source provenance while retaining the existing Module Management v2 installer.
@@ -50,6 +52,15 @@ Version **1.6.1** fixes module visibility precedence so package-defined hidden/v
 Version **1.6.0** adds independent module navigation visibility to Module Management v2. Modules can now remain enabled at runtime while being hidden from Tec-Tac navigation. The 1.5.0 package ordering, dependency enforcement, bundle planning, staged cleanup, and existing enable/disable lifecycle remain intact.
 
 The repository itself is the runtime root. It may be cloned anywhere; `/opt/tec-tac` is only the recommended location.
+
+## Bootstrap modules during initial installation (1.15.24)
+
+Place trusted Tec-Tac module package archives in `bootstrap-modules/` before
+running `install.sh` to install Core and foundational modules in one operation.
+Core installs its Module Manager infrastructure first, then submits the staged
+packages through the normal dependency-aware Module Manager lifecycle. An empty
+folder keeps the existing Core-only installation behavior. See
+`bootstrap-modules/README.md`.
 
 ## 1.2.3 highlights
 
