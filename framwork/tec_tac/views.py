@@ -442,8 +442,9 @@ class SystemUpdateOnlineStatusView(APIView):
     def get(self, request):
         _require_module_manager(request.user)
         component = str(request.query_params.get("component", "")).strip()
+        force = str(request.query_params.get("force", "")).strip().lower() in {"1", "true", "yes", "on"}
         try:
-            return Response(system_update_online_status(component))
+            return Response(system_update_online_status(component, force=force))
         except SystemUpdateError as exc:
             return Response({"detail": str(exc)}, status=400)
 

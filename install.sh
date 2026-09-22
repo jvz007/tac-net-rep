@@ -453,10 +453,10 @@ SYSTEM_UPDATE_SUDOERS="/etc/sudoers.d/tec-tac-system-update"
 FRAMEWORK_REPOSITORY="${TEC_TAC_FRAMEWORK_REPOSITORY:-jvz007/tac-net-rep}"
 UI_REPOSITORY="${TEC_TAC_UI_REPOSITORY:-jvz007/tec-tac-ui}"
 
-mkdir -p "${SYSTEM_UPDATE_ROOT}/staged" "${SYSTEM_UPDATE_ROOT}/jobs" "${SYSTEM_UPDATE_ROOT}/running" "${SYSTEM_UPDATE_ROOT}/logs" "${SYSTEM_UPDATE_ROOT}/backups" "${SYSTEM_UPDATE_ROOT}/history"
+mkdir -p "${SYSTEM_UPDATE_ROOT}/staged" "${SYSTEM_UPDATE_ROOT}/jobs" "${SYSTEM_UPDATE_ROOT}/cache" "${SYSTEM_UPDATE_ROOT}/running" "${SYSTEM_UPDATE_ROOT}/logs" "${SYSTEM_UPDATE_ROOT}/backups" "${SYSTEM_UPDATE_ROOT}/history"
 chown -R root:"${TACTICAL_GROUP}" "${SYSTEM_UPDATE_ROOT}"
 chmod 2750 "${SYSTEM_UPDATE_ROOT}" "${SYSTEM_UPDATE_ROOT}/running" "${SYSTEM_UPDATE_ROOT}/logs" "${SYSTEM_UPDATE_ROOT}/backups" "${SYSTEM_UPDATE_ROOT}/history"
-chmod 2770 "${SYSTEM_UPDATE_ROOT}/staged" "${SYSTEM_UPDATE_ROOT}/jobs"
+chmod 2770 "${SYSTEM_UPDATE_ROOT}/staged" "${SYSTEM_UPDATE_ROOT}/jobs" "${SYSTEM_UPDATE_ROOT}/cache"
 
 mkdir -p "${SYSTEM_UPDATE_LIB}"
 install -o root -g root -m 0755 "${REPO_ROOT}/scripts/system-update-helper.py" "${SYSTEM_UPDATE_LIB}/system-update-helper.py"

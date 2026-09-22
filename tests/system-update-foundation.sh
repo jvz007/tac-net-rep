@@ -17,6 +17,11 @@ grep -q 'systemd-run' "${ROOT}/scripts/system-update-helper.py" || fail "transie
 grep -q 'flock' "${ROOT}/scripts/system-update-helper.py" || fail "global update lock missing"
 grep -q 'backup_root' "${ROOT}/scripts/system-update-helper.py" || fail "backup lifecycle missing"
 grep -q 'restore_backup' "${ROOT}/scripts/system-update-helper.py" || fail "rollback lifecycle missing"
+grep -q 'RELEASE_CACHE_TTL = timedelta(hours=24)' "${ROOT}/framwork/tec_tac/system_update.py" || fail "24-hour stable release cache TTL missing"
+grep -q 'release-cache.json' "${ROOT}/framwork/tec_tac/system_update.py" || fail "stable release cache file missing"
+grep -q '"release_cache"' "${ROOT}/framwork/tec_tac/system_update.py" || fail "system status does not expose cached release discovery"
+grep -q 'force=force' "${ROOT}/framwork/tec_tac/views.py" || fail "manual stable release refresh does not bypass cache"
+grep -q 'SYSTEM_UPDATE_ROOT}/cache' "${ROOT}/install.sh" || fail "system update cache runtime directory missing"
 
 grep -q 'snapshot_dynamic_plugins' "${ROOT}/scripts/system-update-helper.py" || fail "dynamic module pre-update inventory missing"
 grep -q 'verify_dynamic_plugins' "${ROOT}/scripts/system-update-helper.py" || fail "dynamic module preservation verification missing"

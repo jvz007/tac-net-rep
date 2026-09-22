@@ -19,10 +19,13 @@ import urllib.parse
 import urllib.request
 import uuid
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 
 STATE_ROOT = Path("/var/lib/tec-tac/system-updates")
+CACHE_ROOT = STATE_ROOT / "cache"
+RELEASE_CACHE = CACHE_ROOT / "release-cache.json"
+RELEASE_CACHE_TTL = timedelta(hours=24)
 STAGED_ROOT = STATE_ROOT / "staged"
 JOBS_ROOT = STATE_ROOT / "jobs"
 LOGS_ROOT = STATE_ROOT / "logs"
@@ -391,30 +394,134 @@ def _download_to_stage(url: str, *, filename: str, source: dict, component: str)
         return _stage_bytes(response.read, filename=filename, source=source, expected_component=component)
 
 
-def online_status(component: str) -> dict:
+def _read_release_cache() -> dict:
+    if not RELEASE_CACHE.is_file():
+        return {"schema": 1, "components": {}}
+    try:
+        payload = json.loads(RELEASE_CACHE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"schema": 1, "components": {}}
+    if not isinstance(payload, dict) or not isinstance(payload.get("components"), dict):
+        return {"schema": 1, "components": {}}
+    payload.setdefault("schema", 1)
+    return payload
+
+
+def _write_release_cache(payload: dict) -> None:
+    CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+    _atomic_json(RELEASE_CACHE, payload)
+
+
+def _parse_cached_at(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _release_from_cache(component: str, *, installed: str | None = None) -> dict | None:
+    repo = _repo_name(component)
+    row = (_read_release_cache().get("components") or {}).get(component)
+    if not isinstance(row, dict) or row.get("repository") != repo:
+        return None
+    release = row.get("latest_release")
+    if not isinstance(release, dict) or not str(release.get("tag") or "").strip():
+        return None
+    tag = str(release.get("tag") or "").strip()
+    return {
+        "component": component,
+        "repository": repo,
+        "installed_version": installed if installed is not None else _installed_version(component),
+        "latest_release": {
+            "tag": tag,
+            "name": release.get("name") or tag,
+            "published_at": release.get("published_at"),
+            "html_url": release.get("html_url"),
+            "operation": _operation(installed if installed is not None else _installed_version(component), tag.lstrip("v")),
+        },
+        "checked_at": row.get("checked_at"),
+        "release_error": None,
+        "cache": {"hit": True, "stale": False, "ttl_hours": 24},
+    }
+
+
+def cached_online_status(component: str) -> dict:
+    if component not in COMPONENTS:
+        raise SystemUpdateError("component must be framework or ui")
+    installed = _installed_version(component)
+    cached = _release_from_cache(component, installed=installed)
+    if cached is not None:
+        checked = _parse_cached_at(cached.get("checked_at"))
+        cached["cache"]["stale"] = checked is None or datetime.now(timezone.utc) - checked >= RELEASE_CACHE_TTL
+        return cached
+    return {
+        "component": component,
+        "repository": _repo_name(component),
+        "installed_version": installed,
+        "latest_release": None,
+        "checked_at": None,
+        "release_error": None,
+        "cache": {"hit": False, "stale": True, "ttl_hours": 24},
+    }
+
+
+def online_status(component: str, *, force: bool = False) -> dict:
     if component not in COMPONENTS:
         raise SystemUpdateError("component must be framework or ui")
     repo = _repo_name(component)
     installed = _installed_version(component)
+    cached = cached_online_status(component)
+    checked = _parse_cached_at(cached.get("checked_at"))
+    fresh = checked is not None and datetime.now(timezone.utc) - checked < RELEASE_CACHE_TTL
+    if cached.get("latest_release") and fresh and not force:
+        return cached
+
     payload = {
         "component": component,
         "repository": repo,
         "installed_version": installed,
         "latest_release": None,
+        "checked_at": None,
         "release_error": None,
+        "cache": {"hit": False, "stale": False, "ttl_hours": 24},
     }
     try:
         release = _github_json(f"https://api.github.com/repos/{repo}/releases/latest")
-        if isinstance(release, dict):
-            tag = str(release.get("tag_name", "")).strip()
-            payload["latest_release"] = {
-                "tag": tag,
-                "name": release.get("name") or tag,
-                "published_at": release.get("published_at"),
-                "html_url": release.get("html_url"),
-                "operation": _operation(installed, tag.lstrip("v")) if tag else None,
-            }
+        if not isinstance(release, dict):
+            raise SystemUpdateError("GitHub returned an unexpected release response.")
+        tag = str(release.get("tag_name", "")).strip()
+        if not tag:
+            raise SystemUpdateError("GitHub did not return a stable release tag.")
+        checked_at = _utcnow()
+        release_row = {
+            "tag": tag,
+            "name": release.get("name") or tag,
+            "published_at": release.get("published_at"),
+            "html_url": release.get("html_url"),
+        }
+        cache_doc = _read_release_cache()
+        cache_doc.setdefault("components", {})[component] = {
+            "repository": repo,
+            "checked_at": checked_at,
+            "latest_release": release_row,
+        }
+        _write_release_cache(cache_doc)
+        payload["checked_at"] = checked_at
+        payload["latest_release"] = {
+            **release_row,
+            "operation": _operation(installed, tag.lstrip("v")),
+        }
     except SystemUpdateError as exc:
+        # A transient repository failure must not erase the last known stable
+        # release. Return the persisted value as stale telemetry when available.
+        if cached.get("latest_release"):
+            payload = cached
+            payload["cache"] = {"hit": True, "stale": True, "ttl_hours": 24}
         payload["release_error"] = str(exc)
     return payload
 
@@ -626,6 +733,9 @@ def system_status() -> dict:
             "version": _installed_version("ui"),
             "repository": _repo_name("ui"),
         },
+        # Read-only persisted release discovery lets the UI show the last known
+        # stable versions immediately, before any GitHub request is necessary.
+        "release_cache": {component: cached_online_status(component) for component in sorted(COMPONENTS)},
         "accepted_archives": [".zip", ".tar.gz", ".tgz"],
         "advanced_sources": {"branch_requires_unlock": True},
         "history": _recent_history(),

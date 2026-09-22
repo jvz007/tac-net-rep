@@ -1,3 +1,5 @@
+Version **1.15.26** caches stable Framework/UI release discovery for 24 hours so System Updates can show the last known available builds immediately while retaining an explicit forced refresh.
+
 Version **1.15.25** adds Core-managed module hotfixes: exact-version/hash-bound file overlays with privileged apply/rollback jobs, automatic failure rollback, normal-release supersession, Module Manager API status, and a developer packaging contract. See `docs/module-hotfixes.md`.
 
 Version **1.15.24** adds optional initial-install bootstrap module intake through the normal dependency-aware Module Manager lifecycle. Place trusted module packages under `bootstrap-modules/` before running `install.sh`.
