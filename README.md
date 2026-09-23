@@ -1,3 +1,5 @@
+Version **1.15.30** makes ReportSets optional for Tec-Tac modules. Extension-only operational modules are valid; any ReportSet that is present must still match an installed extension ID and version.
+
 Version **1.15.29** makes Module Management v2 classify Tec-Tac bundles before legacy single-package validation and allows repository-backed updates to stage a bundle when it contains the requested module/version.
 
 Version **1.15.28** extends server-backed user navigation preferences with validated per-user section ordering for the Menu Layout UI.
@@ -128,7 +130,7 @@ reportsets/networkprobe/
 └── device_health.py
 ```
 
-For convention-based plugins in 1.0.0, both sides of the pair are required. An orphan reportset or an extension without its matching reportset is rejected by the registry.
+ReportSets are optional reporting companions. Every package must contain exactly one extension; it may contain zero or one matching ReportSet. Orphan ReportSets are rejected by the registry.
 
 ## Plugin manifests
 
@@ -165,7 +167,7 @@ The registry validates:
 - supported manifest keys;
 - manifest list types and blank values;
 - Python paths remain inside the plugin directory and exist;
-- extension/reportset pairing;
+- extension identity and optional ReportSet ownership;
 - duplicate plugin registrations;
 - duplicate Django app registrations.
 
@@ -215,7 +217,7 @@ It covers design, scaffolding, explicit file locations, Django app creation, mod
 
 ## Extension package install and removal
 
-Tec-Tac 1.0.1 includes generic package tooling for convention-based extension/reportset pairs.
+Tec-Tac includes generic package tooling for convention-based extensions with optional matching ReportSets.
 
 Install a `.zip`, `.tar.gz` or `.tgz` package:
 
@@ -241,7 +243,7 @@ Explicitly reverse conventional plugin migrations before removal:
 sudo bash scripts/remove-extension.sh networkprobe --purge-data
 ```
 
-Plugin package/removed-code backups are kept under `/var/lib/tec-tac/backups/plugins/`. The default removal behavior preserves data. The package tools apply only to convention-based extension/reportset pairs and do not manage the legacy reporting POC.
+Plugin package/removed-code backups are kept under `/var/lib/tec-tac/backups/plugins/`. The default removal behavior preserves data. The package tools apply only to convention-based Tec-Tac extensions (with optional matching ReportSets) and do not manage the legacy reporting POC.
 
 ## Current reporting POC compatibility
 

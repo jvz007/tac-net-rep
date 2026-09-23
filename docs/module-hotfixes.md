@@ -151,7 +151,7 @@ Core verifies:
 2. archive paths are safe and contain no symlinks;
 3. exactly one `tec_tac_hotfix.json` exists;
 4. the manifest schema and target list are valid;
-5. the target module is installed as a matching extension/reportset pair;
+5. the target module extension is installed, with an optional matching ReportSet;
 6. extension and reportset versions match;
 7. the installed version equals `base_version` exactly;
 8. every target remains inside the owning module root;

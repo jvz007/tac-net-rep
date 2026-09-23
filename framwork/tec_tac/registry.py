@@ -6,7 +6,7 @@ First-class plugin types use a shared extension ID:
 * reportsets/<extension-id>/
 
 Each plugin directory contains a ``tec_tac.json`` manifest. The directory name
-is the stable extension ID and the matching reportset must use the same ID.
+is the stable extension ID. A reportset is optional; when present it must use the same ID.
 
 Extensions may declare role-based permission groups in their manifest. Reportsets
 do not own permissions.
@@ -187,14 +187,17 @@ def _discover_root(plugin_type: str, root: Path) -> list[PluginSpec]:
     return plugins
 
 def _validate_pairs(extensions: Iterable[PluginSpec], reportsets: Iterable[PluginSpec]) -> None:
+    """Validate optional reportset ownership.
+
+    Every reportset must belong to an installed extension, but an extension does
+    not need a reportset. This keeps reporting optional for operational modules
+    such as Notifications while still rejecting orphan reportset code.
+    """
     extension_ids = {plugin.plugin_id for plugin in extensions}
     reportset_ids = {plugin.plugin_id for plugin in reportsets}
     orphan_reportsets = sorted(reportset_ids - extension_ids)
     if orphan_reportsets:
         raise RegistryError("Reportset(s) without matching extension: " + ", ".join(orphan_reportsets))
-    missing_reportsets = sorted(extension_ids - reportset_ids)
-    if missing_reportsets:
-        raise RegistryError("Extension(s) without matching reportset: " + ", ".join(missing_reportsets))
 
 def discover_plugins(extensions_root: Path | None = None, reportsets_root: Path | None = None) -> tuple[PluginSpec, ...]:
     extensions = _discover_root("extension", extensions_root or EXTENSIONS_ROOT)

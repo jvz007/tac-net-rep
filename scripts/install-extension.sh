@@ -208,31 +208,36 @@ if len(ext) != 1:
     raise SystemExit(
         f"[TEC-TAC] ERROR: package must contain exactly one extension manifest; found {len(ext)}"
     )
-if len(rep) != 1:
+if len(rep) > 1:
     raise SystemExit(
-        f"[TEC-TAC] ERROR: package must contain exactly one reportset manifest; found {len(rep)}"
+        f"[TEC-TAC] ERROR: package may contain at most one reportset manifest; found {len(rep)}"
     )
 
 ext_manifest, ext_payload = ext[0]
-rep_manifest, rep_payload = rep[0]
+rep_manifest = rep[0][0] if rep else None
+rep_payload = rep[0][1] if rep else None
 
 ext_id = str(ext_payload.get("id", "")).strip()
-rep_id = str(rep_payload.get("id", "")).strip()
-
-if not ext_id or ext_id != rep_id:
+if not ext_id or ext_manifest.parent.name != ext_id:
     raise SystemExit(
-        f"[TEC-TAC] ERROR: extension/reportset IDs do not match: {ext_id!r} vs {rep_id!r}"
+        "[TEC-TAC] ERROR: extension manifest ID must match its directory name"
     )
-if ext_manifest.parent.name != ext_id or rep_manifest.parent.name != ext_id:
-    raise SystemExit(
-        "[TEC-TAC] ERROR: manifest ID must match its extension/reportset directory name"
-    )
+if rep_manifest is not None:
+    rep_id = str(rep_payload.get("id", "")).strip()
+    if ext_id != rep_id:
+        raise SystemExit(
+            f"[TEC-TAC] ERROR: extension/reportset IDs do not match: {ext_id!r} vs {rep_id!r}"
+        )
+    if rep_manifest.parent.name != ext_id:
+        raise SystemExit(
+            "[TEC-TAC] ERROR: reportset manifest ID must match its directory name"
+        )
 
 print(ext_id)
 print(ext_manifest.parent)
-print(rep_manifest.parent)
+print(rep_manifest.parent if rep_manifest is not None else "-")
 print(str(ext_payload.get("version", "0.0.0")).strip())
-print(str(rep_payload.get("version", "0.0.0")).strip())
+print(str(rep_payload.get("version", "0.0.0")).strip() if rep_payload is not None else "-")
 PY
 )"
 
@@ -248,7 +253,7 @@ DEST_REPORTSET="${REPORTSETS_ROOT}/${PLUGIN_ID}"
 
 log "Package extension ID: ${PLUGIN_ID}"
 log "Extension version: ${EXT_VERSION}"
-log "Reportset version: ${REP_VERSION}"
+if [[ "${REP_VERSION}" != "-" ]]; then log "Reportset version: ${REP_VERSION}"; else log "Reportset: not included"; fi
 
 if [[ -e "${DEST_EXTENSION}" || -e "${DEST_REPORTSET}" ]]; then
     [[ "${MODE}" == "--replace" ]] || fail \
@@ -260,7 +265,9 @@ fi
 STAGE_ROOT="${TMP_ROOT}/stage"
 mkdir -p "${STAGE_ROOT}/extensions" "${STAGE_ROOT}/reportsets"
 cp -a "${SOURCE_EXTENSION}" "${STAGE_ROOT}/extensions/${PLUGIN_ID}"
-cp -a "${SOURCE_REPORTSET}" "${STAGE_ROOT}/reportsets/${PLUGIN_ID}"
+if [[ "${SOURCE_REPORTSET}" != "-" ]]; then
+    cp -a "${SOURCE_REPORTSET}" "${STAGE_ROOT}/reportsets/${PLUGIN_ID}"
+fi
 
 PYTHONPATH="${FRAMEWORK_DIR}" \
 "${VENV_PYTHON}" - "${STAGE_ROOT}" <<'PY'
@@ -274,8 +281,7 @@ pairs = {(p.plugin_type, p.plugin_id) for p in plugins}
 plugin_id = next(p.plugin_id for p in plugins if p.plugin_type == "extension")
 
 assert ("extension", plugin_id) in pairs
-assert ("reportset", plugin_id) in pairs
-print(f"[TEC-TAC] Package registry validation OK: {plugin_id}")
+print(f"[TEC-TAC] Package registry validation OK: {plugin_id}; reportset={'yes' if ('reportset', plugin_id) in pairs else 'no'}")
 PY
 
 BACKUP_DIR=""
@@ -312,8 +318,11 @@ trap 'status=$?; if [[ $status -ne 0 ]]; then rollback; fi; cleanup; exit $statu
 
 rm -rf "${DEST_EXTENSION}" "${DEST_REPORTSET}"
 cp -a "${STAGE_ROOT}/extensions/${PLUGIN_ID}" "${DEST_EXTENSION}"
-cp -a "${STAGE_ROOT}/reportsets/${PLUGIN_ID}" "${DEST_REPORTSET}"
-chmod -R a+rX "${DEST_EXTENSION}" "${DEST_REPORTSET}"
+if [[ -d "${STAGE_ROOT}/reportsets/${PLUGIN_ID}" ]]; then
+    cp -a "${STAGE_ROOT}/reportsets/${PLUGIN_ID}" "${DEST_REPORTSET}"
+fi
+chmod -R a+rX "${DEST_EXTENSION}"
+if [[ -d "${DEST_REPORTSET}" ]]; then chmod -R a+rX "${DEST_REPORTSET}"; fi
 
 # Validate the complete live registry, including conflicts with already
 # installed plugins.
@@ -332,7 +341,10 @@ runuser -u "${TACTICAL_USER}" -- bash -lc \
 
 # Apply migrations only for Django apps declared by this package and only when
 # the app has a conventional migrations package containing migration files.
-MIGRATION_MANIFESTS="${DEST_EXTENSION}/tec_tac.json:${DEST_REPORTSET}/tec_tac.json"
+MIGRATION_MANIFESTS="${DEST_EXTENSION}/tec_tac.json"
+if [[ -f "${DEST_REPORTSET}/tec_tac.json" ]]; then
+    MIGRATION_MANIFESTS="${MIGRATION_MANIFESTS}:${DEST_REPORTSET}/tec_tac.json"
+fi
 
 runuser -u "${TACTICAL_USER}" -- env \
     TEC_TAC_PLUGIN_MANIFESTS="${MIGRATION_MANIFESTS}" \
@@ -569,7 +581,7 @@ fi
 
 log "Installed extension/reportset '${PLUGIN_ID}' successfully."
 log "Extension: ${DEST_EXTENSION}"
-log "Reportset: ${DEST_REPORTSET}"
+if [[ -d "${DEST_REPORTSET}" ]]; then log "Reportset: ${DEST_REPORTSET}"; else log "Reportset: not installed"; fi
 [[ -n "${BACKUP_DIR}" ]] && log "Previous version backup: ${BACKUP_DIR}"
 
 # Success: replace the rollback trap with normal cleanup.

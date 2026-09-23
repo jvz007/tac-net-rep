@@ -102,7 +102,7 @@ def _extract_archive(archive: Path, dest: Path) -> None:
     raise ModuleManagerError("Package must end in .zip, .tar.gz, or .tgz")
 
 
-def _find_pair(extracted: Path) -> tuple[Path, Path]:
+def _find_pair(extracted: Path) -> tuple[Path, Path | None]:
     extensions = []
     reportsets = []
     for manifest in extracted.rglob("tec_tac.json"):
@@ -117,9 +117,9 @@ def _find_pair(extracted: Path) -> tuple[Path, Path]:
             reportsets.append(parent)
     if len(extensions) != 1:
         raise ModuleManagerError(f"Package must contain exactly one extension manifest; found {len(extensions)}")
-    if len(reportsets) != 1:
-        raise ModuleManagerError(f"Package must contain exactly one reportset manifest; found {len(reportsets)}")
-    return extensions[0], reportsets[0]
+    if len(reportsets) > 1:
+        raise ModuleManagerError(f"Package may contain at most one reportset manifest; found {len(reportsets)}")
+    return extensions[0], reportsets[0] if reportsets else None
 
 
 def _read_ui_manifest(extension_root: Path, plugin_id: str, permission_codes: set[str]) -> dict | None:
@@ -207,14 +207,17 @@ def _permission_codes(plugin) -> set[str]:
     return {code for _, values in plugin.permission_groups for code in values}
 
 
-def _pair_payload(extension, reportset, *, ui: dict | None = None, installed: bool = True) -> dict:
+def _pair_payload(extension, reportset=None, *, ui: dict | None = None, installed: bool = True) -> dict:
     permissions = _permission_codes(extension)
+    reportset_version = reportset.version if reportset is not None else None
+    versions_match = True if reportset is None else extension.version == reportset.version
     return {
         "id": extension.plugin_id,
         "extension_version": extension.version,
-        "reportset_version": reportset.version,
-        "versions_match": extension.version == reportset.version,
-        "django_apps": list(extension.django_apps) + list(reportset.django_apps),
+        "reportset_version": reportset_version,
+        "has_reportset": reportset is not None,
+        "versions_match": versions_match,
+        "django_apps": list(extension.django_apps) + (list(reportset.django_apps) if reportset is not None else []),
         "permission_groups": [
             {"name": name, "permissions": list(values)} for name, values in extension.permission_groups
         ],
@@ -236,8 +239,6 @@ def installed_catalog() -> list[dict]:
     result = []
     for plugin_id, extension in sorted(extensions.items()):
         reportset = reportsets.get(plugin_id)
-        if reportset is None:
-            continue
         ui_error = None
         try:
             ui = _read_ui_manifest(extension.root, plugin_id, _permission_codes(extension))
@@ -279,19 +280,20 @@ def inspect_archive(archive: Path) -> dict:
         extracted.mkdir()
         _extract_archive(archive, extracted)
         ext_root, rep_root = _find_pair(extracted)
-        if ext_root.name != rep_root.name:
+        if rep_root is not None and ext_root.name != rep_root.name:
             raise ModuleManagerError("Extension and ReportSet IDs do not match.")
         stage = Path(tmp) / "registry"
         (stage / "extensions").mkdir(parents=True)
         (stage / "reportsets").mkdir(parents=True)
         shutil.copytree(ext_root, stage / "extensions" / ext_root.name)
-        shutil.copytree(rep_root, stage / "reportsets" / rep_root.name)
+        if rep_root is not None:
+            shutil.copytree(rep_root, stage / "reportsets" / rep_root.name)
         try:
             discovered = discover_plugins(stage / "extensions", stage / "reportsets")
         except RegistryError as exc:
             raise ModuleManagerError(str(exc)) from exc
         extension = next(p for p in discovered if p.plugin_type == "extension")
-        reportset = next(p for p in discovered if p.plugin_type == "reportset")
+        reportset = next((p for p in discovered if p.plugin_type == "reportset"), None)
         ui = _read_ui_manifest(extension.root, extension.plugin_id, _permission_codes(extension))
         package = _pair_payload(extension, reportset, ui=ui, installed=False)
 
@@ -307,7 +309,7 @@ def inspect_archive(archive: Path) -> dict:
     if protected:
         package["install_block_reason"] = "This module ID is framework-protected and cannot be installed or replaced from the UI."
     elif not package["versions_match"]:
-        package["install_block_reason"] = "Extension and ReportSet versions must match."
+        package["install_block_reason"] = "Extension and ReportSet versions must match when a ReportSet is included."
     else:
         package["install_block_reason"] = None
     return package

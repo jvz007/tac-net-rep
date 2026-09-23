@@ -185,3 +185,18 @@ A module must not import `TecTacSessionTrust`, `TecTacSessionSecurityConfig` or
 ## Bundle intake rule
 
 Module tooling must classify an incoming artifact before applying single-package assumptions. A ZIP containing exactly one `tec_tac_bundle.json` is a Tec-Tac bundle and must enter the Module Management v2 bundle lifecycle. Do not run the outer bundle ZIP through the legacy exactly-one-extension/reportset package parser.
+
+## Optional ReportSet contract
+
+A Tec-Tac module package MUST contain exactly one extension manifest and MAY contain one matching ReportSet manifest. A ReportSet is not required for operational modules that do not expose reporting data.
+
+Rules:
+
+- exactly one `extensions/<module-id>/tec_tac.json` is required;
+- zero or one `reportsets/<module-id>/tec_tac.json` is allowed;
+- when a ReportSet exists, its ID and version must match the extension;
+- a ReportSet without its owning extension is invalid;
+- do not create empty placeholder ReportSets merely to satisfy packaging;
+- install, update, remove, bundle, hotfix and runtime discovery must work for extension-only modules.
+
+Use a ReportSet only when the module actually contributes report-facing mappings, datasets, or report logic.

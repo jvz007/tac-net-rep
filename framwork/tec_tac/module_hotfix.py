@@ -239,8 +239,9 @@ def inspect_hotfix_archive(path: Path) -> dict:
             payload_members[name] = info
         roots = _module_roots(manifest["module_id"])
         extension_version = _manifest_version(roots["extension"], manifest["module_id"])
-        reportset_version = _manifest_version(roots["reportset"], manifest["module_id"])
-        if extension_version != reportset_version:
+        reportset_manifest = roots["reportset"] / "tec_tac.json"
+        reportset_version = _manifest_version(roots["reportset"], manifest["module_id"]) if reportset_manifest.is_file() else None
+        if reportset_version is not None and extension_version != reportset_version:
             raise ModuleHotfixError("Installed extension/reportset versions do not match.")
         if extension_version != manifest["base_version"]:
             raise ModuleHotfixError(

@@ -90,9 +90,7 @@ EXT_DIR="${EXTENSIONS_ROOT}/${PLUGIN_ID}"
 REP_DIR="${REPORTSETS_ROOT}/${PLUGIN_ID}"
 
 [[ -d "${EXT_DIR}" ]] || fail "Extension not found: ${EXT_DIR}"
-[[ -d "${REP_DIR}" ]] || fail "Matching reportset not found: ${REP_DIR}"
 [[ -f "${EXT_DIR}/tec_tac.json" ]] || fail "Missing extension manifest."
-[[ -f "${REP_DIR}/tec_tac.json" ]] || fail "Missing reportset manifest."
 [[ -x "${VENV_PYTHON}" ]] || fail "Tactical Python not found."
 [[ -f "${MANAGE_PY}" ]] || fail "Tactical manage.py not found."
 
@@ -107,13 +105,17 @@ from tec_tac.registry import get_plugin
 
 plugin_id = sys.argv[1]
 ext = get_plugin(plugin_id, "extension")
-rep = get_plugin(plugin_id, "reportset")
+try:
+    rep = get_plugin(plugin_id, "reportset")
+except Exception:
+    rep = None
 
 assert ext.plugin_id == plugin_id
-assert rep.plugin_id == plugin_id
-
 print(f"[TEC-TAC] Found extension: {ext.plugin_id} {ext.version}")
-print(f"[TEC-TAC] Found reportset: {rep.plugin_id} {rep.version}")
+if rep is not None:
+    print(f"[TEC-TAC] Found reportset: {rep.plugin_id} {rep.version}")
+else:
+    print("[TEC-TAC] Reportset: not installed")
 PY
 
 if [[ "${PLUGIN_ID}" == "example" ]]; then
@@ -121,18 +123,18 @@ if [[ "${PLUGIN_ID}" == "example" ]]; then
 fi
 
 if [[ "${PLUGIN_ID}" == "legacy-reporting-poc" || "${PLUGIN_ID}" == "reporting" ]]; then
-    fail "This script is for convention-based extension/reportset pairs, not the legacy reporting POC."
+    fail "This script is for convention-based Tec-Tac extensions, not the legacy reporting POC."
 fi
 
 if [[ "${MODE}" == "--purge-data" ]]; then
-    log "WARNING: --purge-data will attempt to reverse migrations for Django apps declared by this extension/reportset."
+    log "WARNING: --purge-data will attempt to reverse migrations for Django apps declared by this extension and optional reportset."
     log "This may permanently delete plugin-owned database tables/data."
 else
     log "Database objects will be preserved."
 fi
 
 if [[ "${ASSUME_YES}" != "--yes" && -t 0 ]]; then
-    printf "[TEC-TAC] Remove extension/reportset '%s'? [y/N]: " "${PLUGIN_ID}"
+    printf "[TEC-TAC] Remove module '%s'? [y/N]: " "${PLUGIN_ID}"
     read -r answer
     case "${answer}" in
         y|Y|yes|YES) ;;
@@ -144,12 +146,13 @@ STAMP="$(date +%Y%m%dT%H%M%S)"
 BACKUP_DIR="${BACKUP_ROOT}/${PLUGIN_ID}/removed-${STAMP}"
 mkdir -p "${BACKUP_DIR}/extensions" "${BACKUP_DIR}/reportsets"
 cp -a "${EXT_DIR}" "${BACKUP_DIR}/extensions/${PLUGIN_ID}"
-cp -a "${REP_DIR}" "${BACKUP_DIR}/reportsets/${PLUGIN_ID}"
+if [[ -d "${REP_DIR}" ]]; then cp -a "${REP_DIR}" "${BACKUP_DIR}/reportsets/${PLUGIN_ID}"; fi
 log "Backed up plugin code to ${BACKUP_DIR}"
 
 if [[ "${MODE}" == "--purge-data" ]]; then
     # Reverse migrations for declared Django apps before removing code.
-    MANIFESTS="${EXT_DIR}/tec_tac.json:${REP_DIR}/tec_tac.json"
+    MANIFESTS="${EXT_DIR}/tec_tac.json"
+    if [[ -f "${REP_DIR}/tec_tac.json" ]]; then MANIFESTS="${MANIFESTS}:${REP_DIR}/tec_tac.json"; fi
 
     runuser -u "${TACTICAL_USER}" -- env \
         TEC_TAC_PLUGIN_MANIFESTS="${MANIFESTS}" \
@@ -211,7 +214,7 @@ else:
 
 rm -rf "${EXT_DIR}" "${REP_DIR}"
 log "Removed extension code: ${EXT_DIR}"
-log "Removed reportset code: ${REP_DIR}"
+if [[ -d "${BACKUP_DIR}/reportsets/${PLUGIN_ID}" ]]; then log "Removed reportset code: ${REP_DIR}"; fi
 
 # Validate remaining convention-based plugins after removal.
 PYTHONPATH="${FRAMEWORK_DIR}" \
@@ -243,7 +246,7 @@ if [[ -x /usr/local/sbin/tec-tac-module-hotfix ]]; then
     /usr/local/sbin/tec-tac-module-hotfix --supersede "${PLUGIN_ID}" "removed"
 fi
 
-log "Extension/reportset '${PLUGIN_ID}' removed successfully."
+log "Module '${PLUGIN_ID}' removed successfully."
 log "Backup retained at: ${BACKUP_DIR}"
 
 if [[ "${MODE}" == "--purge-data" ]]; then
