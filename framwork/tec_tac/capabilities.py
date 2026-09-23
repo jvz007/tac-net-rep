@@ -239,8 +239,15 @@ def capability_status(
     *,
     version: str | None = None,
     module_id: str | None = None,
+    check_health: bool = True,
 ) -> dict:
-    """Return a structured runtime availability result for one capability."""
+    """Return a structured runtime availability result for one capability.
+
+    ``check_health=False`` is for metadata/discovery surfaces such as the
+    developer contract catalogue. It deliberately avoids provider callbacks,
+    which may perform network I/O. Runtime resolution keeps the default
+    ``check_health=True`` and remains authoritative.
+    """
     capability_id = _clean_identifier(capability_id, "Capability id")
     registration = _registration(capability_id)
     owner = registration.module_id if registration else str(module_id or capability_id.split(".", 1)[0]).strip()
@@ -259,6 +266,7 @@ def capability_status(
         "metadata": dict(registration.metadata) if registration else {},
         "reason": module_reason,
         "health": {},
+        "health_checked": bool(check_health),
     }
 
     if module_state != "available":
@@ -286,11 +294,14 @@ def capability_status(
             )
             return base
 
-    healthy, health_reason, health_details = _health_status(registration)
-    base["health"] = health_details
-    if not healthy:
-        base.update(state="unhealthy", reason=health_reason or "Capability provider is unhealthy.")
-        return base
+    if check_health:
+        healthy, health_reason, health_details = _health_status(registration)
+        base["health"] = health_details
+        if not healthy:
+            base.update(state="unhealthy", reason=health_reason or "Capability provider is unhealthy.")
+            return base
+    else:
+        base["health"] = {"checked": False}
 
     base.update(available=True, state="available", reason=None)
     return base
@@ -338,11 +349,16 @@ def has_capability(capability_id: str, *, version: str | None = None, module_id:
     return bool(capability_status(capability_id, version=version, module_id=module_id)["available"])
 
 
-def list_capabilities(*, include_unavailable: bool = True) -> list[dict]:
-    """List registered capability metadata with live runtime status."""
+def list_capabilities(*, include_unavailable: bool = True, check_health: bool = True) -> list[dict]:
+    """List registered capability metadata.
+
+    Live health checks remain enabled by default. Discovery/documentation
+    callers may pass ``check_health=False`` so listing contracts can never be
+    blocked by a slow or unavailable external provider.
+    """
     with _CAPABILITY_LOCK:
         ids = sorted(_CAPABILITIES)
-    rows = [capability_status(capability_id) for capability_id in ids]
+    rows = [capability_status(capability_id, check_health=check_health) for capability_id in ids]
     if not include_unavailable:
         rows = [row for row in rows if row["available"]]
     return rows

@@ -80,6 +80,41 @@ cap.register_capability(
 )
 status = cap.capability_status("communicator.messaging")
 assert status["state"] == "unhealthy" and status["health"]["queue"] == "down"
+
+# Metadata-only discovery must not execute provider health callbacks. This is
+# used by Public Contracts and framework installer verification so a slow
+# external integration cannot block Core deployment.
+health_calls = {"count": 0}
+def slow_or_remote_health():
+    health_calls["count"] += 1
+    raise AssertionError("metadata discovery executed a live health callback")
+cap._clear_capabilities_for_tests()
+cap.register_capability(
+    id="communicator.messaging",
+    module_id="communicator",
+    version="1.1.0",
+    provider=provider,
+    health=slow_or_remote_health,
+)
+metadata_rows = cap.list_capabilities(check_health=False)
+assert health_calls["count"] == 0
+assert metadata_rows[0]["available"] is True
+assert metadata_rows[0]["health_checked"] is False
+assert metadata_rows[0]["health"] == {"checked": False}
+
+# Runtime resolution remains authoritative and still executes health checks.
+status = cap.capability_status("communicator.messaging")
+assert health_calls["count"] == 1
+assert status["state"] == "unhealthy"
+
+cap._clear_capabilities_for_tests()
+cap.register_capability(
+    id="communicator.messaging",
+    module_id="communicator",
+    version="1.1.0",
+    provider=provider,
+    health=lambda: {"healthy": False, "reason": "provider offline", "queue": "down"},
+)
 try:
     cap.get_capability("communicator.messaging")
 except cap.CapabilityUnhealthy:

@@ -331,7 +331,10 @@ def _http_contracts() -> list[dict]:
 
 
 def build_contract_catalog() -> dict:
-    capabilities = list_capabilities()
+    # Contract discovery must be side-effect free and fast. Capability health
+    # callbacks can perform provider/network I/O, so do not execute them while
+    # rendering documentation or during framework install verification.
+    capabilities = list_capabilities(check_health=False)
     actions = [serialize_action(action) for action in scheduled_actions()]
     permissions = permission_catalog()
     http = _http_contracts()

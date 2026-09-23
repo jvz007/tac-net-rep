@@ -20,6 +20,10 @@ python3 -m py_compile \
   "${ROOT}/framwork/tec_tac/contracts.py" \
   "${ROOT}/framwork/tec_tac/contract_views.py" \
   "${ROOT}/framwork/tec_tac/urls.py"
+
+# Contract/catalog discovery is metadata-only: never execute provider health callbacks.
+grep -q 'list_capabilities(check_health=False)' "${ROOT}/framwork/tec_tac/contracts.py" || fail "contract catalog must not execute live capability health checks"
+grep -q 'check_health: bool = True' "${ROOT}/framwork/tec_tac/capabilities.py" || fail "capability health-check control missing"
 echo "[TEST] PASS contracts foundation"
 
 grep -q 'request.query_params.get("export_format")' "${ROOT}/framwork/tec_tac/contract_views.py" || fail "contract export must avoid DRF reserved format query parameter"
