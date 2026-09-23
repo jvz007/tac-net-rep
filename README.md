@@ -780,3 +780,7 @@ Core server backup now safely resolves the three fixed Tactical nginx `sites-ena
 ## Canonical recovery payload roots (1.15.14)
 
 `core.server_backup` 1.5.2 canonicalizes Tec-Tac payload roots before TAR creation. Requested descendants already recursively covered by an included ancestor are removed, preventing duplicate normalized archive members. The redundant `/opt/tec-tac/etc` include was removed from the Tec-Tac component. Duplicate-member validation remains enabled and authoritative.
+
+## Core Report Manager registration (1.15.35)
+
+Tec-Tac modules can expose Django models to Tactical Report Manager through the Core-owned `tec_tac.reporting` contract. Core synchronizes Tactical's runtime allow-lists and augments the existing Report Manager query-schema response dynamically, so modules do not edit Tactical source, mutate `ee.reporting.*`, or rewrite `query_schema.json`. See `docs/module-reporting.md`.

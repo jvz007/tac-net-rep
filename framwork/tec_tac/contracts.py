@@ -15,6 +15,7 @@ from django.utils import timezone
 
 from .capabilities import list_capabilities
 from .rbac import permission_catalog
+from .reporting import list_reporting_models
 from .registry import TEC_TAC_ROOT
 from .scheduler import scheduled_actions, serialize_action
 
@@ -27,6 +28,38 @@ CORE_CONTRACTS = (
         "kind": "python",
         "purpose": "Record a Tec-Tac module event through Core into Tactical's unified AuditLog trail.",
         "audience": "provider/backend",
+    },
+    {
+        "area": "reporting",
+        "import_path": "tec_tac.reporting",
+        "name": "register_reporting_model",
+        "kind": "python",
+        "purpose": "Register a module-owned Django model with Tactical Report Manager through Core.",
+        "audience": "provider/backend",
+    },
+    {
+        "area": "reporting",
+        "import_path": "tec_tac.reporting",
+        "name": "unregister_reporting_model",
+        "kind": "python",
+        "purpose": "Remove a module reporting-model registration and resynchronize Tactical runtime state.",
+        "audience": "provider/backend",
+    },
+    {
+        "area": "reporting",
+        "import_path": "tec_tac.reporting",
+        "name": "list_reporting_models",
+        "kind": "python",
+        "purpose": "List registered report-facing models with provider and availability metadata.",
+        "audience": "backend/diagnostics",
+    },
+    {
+        "area": "reporting",
+        "import_path": "tec_tac.reporting",
+        "name": "reporting_model_status",
+        "kind": "python",
+        "purpose": "Return live availability for one public reporting-model registration.",
+        "audience": "backend/diagnostics",
     },
     {
         "area": "scheduler",
@@ -286,6 +319,7 @@ RULES = (
     "Modules define WHAT can run; the shared Scheduler owns WHEN it runs, recurrence, retry, concurrency and history.",
     "Backend authorization is authoritative; frontend visibility is never a substitute for permission checks.",
     "Tec-Tac authenticated backend endpoints must use the Core session-security guard; Tactical token validity alone is not sufficient for Tec-Tac trust.",
+    "Report-facing module models must register through tec_tac.reporting; modules must not import or mutate ee.reporting internals or Tactical schema files.",
     "One-off schedule definitions are operational state, not permanent history; the Scheduler may remove completed one-off definitions after the configured retention period while preserving run history.",
     "Scheduler handlers must distinguish permanent from transient failures so retries are not wasted on invalid parameters, unavailable contracts, or incompatible dependencies.",
     "Treat transport acknowledgement as transport state, not operation success; providers must verify downstream execution outcome before returning success.",
@@ -337,6 +371,7 @@ def build_contract_catalog() -> dict:
     capabilities = list_capabilities(check_health=False)
     actions = [serialize_action(action) for action in scheduled_actions()]
     permissions = permission_catalog()
+    reporting_models = list_reporting_models()
     http = _http_contracts()
     core = []
     for source in CORE_CONTRACTS:
@@ -357,12 +392,14 @@ def build_contract_catalog() -> dict:
         "capabilities": capabilities,
         "scheduler_actions": actions,
         "permissions": permissions,
+        "reporting_models": reporting_models,
         "http": http,
         "counts": {
             "core": len(core),
             "capabilities": len(capabilities),
             "scheduler_actions": len(actions),
             "permission_modules": len(permissions),
+            "reporting_models": len(reporting_models),
             "http": len(http),
         },
     }
@@ -436,6 +473,18 @@ def render_markdown(catalog: dict | None = None) -> str:
         for group in module.get("groups", []):
             out.append(f"- **{group['name']}**: " + ", ".join(f"`{code}`" for code in group.get("permissions", [])))
         out.append("")
+
+    out.extend(["## Registered reporting models", ""])
+    if not data.get("reporting_models"):
+        out.append("_No Tec-Tac reporting models are currently registered._")
+    else:
+        out.extend(["| Reporting ID | Provider | Django model | State | Fields | Description |", "| --- | --- | --- | --- | --- | --- |"])
+        for row in data["reporting_models"]:
+            fields = ", ".join(f"`{field}`" for field in row.get("queryable_fields", [])) or "_none_"
+            out.append(
+                f"| `{row['id']}` | `{row['module_id']}` | `{row['app_label']}.{row['model']}` | "
+                f"`{row.get('state')}` | {fields} | {row.get('description') or ''} |"
+            )
 
     out.extend(["## HTTP boundary", "", "Use these endpoints from the browser or an external process. Backend Tec-Tac modules should prefer the Python contracts above.", "", "| Methods | Endpoint | Route name |", "| --- | --- | --- |"])
     for row in data["http"]:
@@ -525,6 +574,16 @@ def render_text(catalog: dict | None = None) -> str:
         out.append(f"- {module['id']} package {module['version']}")
         for group in module.get("groups", []):
             out.append(f"  {group['name']}: {', '.join(group.get('permissions', []))}")
+
+    out.extend(["", "REGISTERED REPORTING MODELS"])
+    if not data.get("reporting_models"):
+        out.append("- none")
+    for row in data.get("reporting_models", []):
+        fields = ",".join(row.get("queryable_fields", [])) or "none"
+        out.append(
+            f"- {row['id']} | module={row['module_id']} | model={row['app_label']}.{row['model']} | "
+            f"state={row.get('state')} | fields={fields}"
+        )
 
     out.extend(["", "HTTP BOUNDARY"])
     for row in data["http"]:

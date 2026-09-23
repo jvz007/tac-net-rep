@@ -14,9 +14,15 @@ class TecTacFrameworkConfig(AppConfig):
         from .session_security import register_core_session_security_capability
         from .server_backup import register_core_server_backup_capability
         from .server_maintenance import register_core_server_maintenance_capability
+        from .reporting import install_tactical_reporting_bridge
         register_core_session_security_capability()
         register_core_server_backup_capability()
         register_core_server_maintenance_capability()
+
+        # Core owns the compatibility boundary with Tactical Report Manager.
+        # Install this before module AppConfig.ready() registrations execute so
+        # modules never need to import ee.reporting internals themselves.
+        install_tactical_reporting_bridge()
 
         # Register framework-owned API routes in memory. This deliberately
         # avoids editing Tactical's tracked tacticalrmm/urls.py file.

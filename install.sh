@@ -68,6 +68,7 @@ REQUIRED_FILES=(
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/urls.py"
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/views.py"
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/contracts.py"
+    "${SOURCE_FRAMEWORK_DIR}/tec_tac/reporting.py"
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/contract_views.py"
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/module_manager.py"
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/module_manager_v2.py"
@@ -312,6 +313,12 @@ log "Verifying Tec-Tac developer contract catalog."
 VERIFY_CONTRACT_CODE="from tec_tac.contracts import build_contract_catalog,render_markdown,render_text; c=build_contract_catalog(); expected='${PACKAGE_VERSION}'; assert c['framework_version']==expected, {'expected': expected, 'actual': c['framework_version']}; assert any(x['name']=='get_capability' for x in c['core']); assert any(x['name']=='revoke_user_sessions' and x['area']=='session-security' for x in c['core']); assert any(x['name']=='record' and x['area']=='audit' for x in c['core']); assert all(x.get('health_checked') is False for x in c['capabilities']); assert any(x['route']=='/api/tfd/contracts/' for x in c['http']); assert any(x['route']=='/api/tfd/audit/record/' for x in c['http']); assert any(x['route']=='/api/tfd/session/current/' for x in c['http']); assert '# Tec-Tac Public Contracts' in render_markdown(c); assert 'TEC-TAC PUBLIC CONTRACTS' in render_text(c); print('TEC-TAC developer contract catalog OK:', c['counts'], 'version='+expected)"
 if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_CONTRACT_CODE}\""; then
     fail "Tec-Tac developer contract catalog verification failed or timed out."
+fi
+
+log "Verifying Core Tactical Report Manager bridge."
+VERIFY_REPORTING_CODE="from tec_tac.reporting import reporting_bridge_status; from ee.reporting import constants as c,utils as u,views as v; s=reporting_bridge_status(); assert s['available'], s; assert c.REPORTING_MODELS == u.REPORTING_MODELS; assert getattr(v.QuerySchema.get,'_tec_tac_reporting_bridge',False); assert getattr(u.resolve_model,'_tec_tac_reporting_bridge',False); print('TEC-TAC reporting bridge OK:', s)"
+if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_REPORTING_CODE}\""; then
+    fail "Tec-Tac Tactical Report Manager bridge verification failed or timed out."
 fi
 
 log "Verifying Tec-Tac scheduler/capability Celery task registration."

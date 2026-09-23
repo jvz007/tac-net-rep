@@ -41,3 +41,10 @@ grep -q "Windows cmd.exe quoting" "${ROOT}/framwork/tec_tac/contracts.py" || fai
 # 1.11.0 scheduler retry classification contract
 grep -q 'SchedulerPermanentError' "$ROOT/framwork/tec_tac/contracts.py" || fail "scheduler permanent failure contract missing"
 grep -q 'SchedulerTransientError' "$ROOT/framwork/tec_tac/contracts.py" || fail "scheduler transient failure contract missing"
+
+# 1.15.35 Core Tactical Report Manager registration contract
+grep -q 'register_reporting_model' "${ROOT}/framwork/tec_tac/contracts.py" || fail "reporting registration public contract missing"
+grep -q 'list_reporting_models' "${ROOT}/framwork/tec_tac/contracts.py" || fail "reporting discovery public contract missing"
+grep -q '"reporting_models": reporting_models' "${ROOT}/framwork/tec_tac/contracts.py" || fail "reporting models missing from live contract catalog"
+grep -q 'Registered reporting models' "${ROOT}/framwork/tec_tac/contracts.py" || fail "reporting models missing from Markdown export"
+echo "[TEST] PASS reporting public contracts"

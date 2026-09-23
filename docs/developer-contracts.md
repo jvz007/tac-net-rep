@@ -205,3 +205,19 @@ Use a ReportSet only when the module actually contributes report-facing mappings
 ## Audit write contract
 
 Tec-Tac modules must write audit events through Core. Server-side code uses `tec_tac.audit.record(...)`; authenticated UI modules receive `audit.record(event)` from the shell runtime. Direct imports or writes to Tactical `logs.models.AuditLog` from modules are unsupported. See `docs/module-audit.md`.
+
+## Tactical Report Manager registration
+
+Report-facing module models MUST register through Core rather than importing Tactical reporting internals:
+
+```python
+from tec_tac.reporting import register_reporting_model
+
+register_reporting_model(
+    module_id="scoutdns",
+    app_label="tec_tac_scoutdns",
+    model="ScoutDNSReportDataset",
+)
+```
+
+Core owns synchronization with Tactical's runtime reporting allow-list and live query schema. Disabled or removed providers are unavailable. See `docs/module-reporting.md` for lifecycle, uniqueness and discovery rules.
