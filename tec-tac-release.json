@@ -1,0 +1,1330 @@
+{
+  "schema": 2,
+  "component": "framework",
+  "version": "1.15.36",
+  "publisher_id": "tech_flow_dynamics-dev",
+  "key_id": "tech-key-dev-1025",
+  "algorithm": "Ed25519",
+  "files": [
+    {
+      "path": ".github/workflows/release.yml",
+      "size": 1997,
+      "sha256": "e2cf53605ef35de664599555b6ea3f9a79d6047b06f05c88828b510ed4953d97"
+    },
+    {
+      "path": ".gitignore",
+      "size": 75,
+      "sha256": "f3cbabfcac079c08adbcde5865dac72e19d017f49f12bd00e56e788f01ebf6b1"
+    },
+    {
+      "path": "LICENSE",
+      "size": 1062,
+      "sha256": "4d626dca378b6c65feef2ae025f84b274b8932f6a2234bd447eecf5218b358b1"
+    },
+    {
+      "path": "README.md",
+      "size": 38721,
+      "sha256": "95c8221f16646ac37c071f4ab4120665615afabaec231ad09c4cadd802206430"
+    },
+    {
+      "path": "RELEASE_NOTES_1.15.35.md",
+      "size": 1452,
+      "sha256": "7b5a56b844862cd5a0a0f23a9b417125bed4b587daf2c8e8d3bf5dd34674290c"
+    },
+    {
+      "path": "RELEASE_NOTES_1.15.36.md",
+      "size": 1725,
+      "sha256": "437b453074e525916b8f260d776cf7f37c2373e6eb0265682e33913888aeb397"
+    },
+    {
+      "path": "VERSION",
+      "size": 8,
+      "sha256": "6868098b69624d34eea375d61b01376745a13d203cf854a982840d447640c547"
+    },
+    {
+      "path": "bootstrap-modules/.gitkeep",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "bootstrap-modules/README.md",
+      "size": 748,
+      "sha256": "615a0a1571aff4ee9c415859b332528c0ef76748874708d8e95b3fde4f094caa"
+    },
+    {
+      "path": "docs/capabilities.md",
+      "size": 7269,
+      "sha256": "0f7a756584aa84a84df8107752973bf09c744e64c5c3d6a684f32a0734ba30aa"
+    },
+    {
+      "path": "docs/core-functions.md",
+      "size": 5889,
+      "sha256": "d010e2b73abaf993a1200c5693a7980e7846d67309483f7ddee5c47234d66db0"
+    },
+    {
+      "path": "docs/developer-contracts.md",
+      "size": 7930,
+      "sha256": "68301c41f970665c3c07a05c307c93b2987c56031ccd6dcac4b15eeee1152bae"
+    },
+    {
+      "path": "docs/extension-reportset-tutorial.html",
+      "size": 100176,
+      "sha256": "7451e4c13be4f160ac976e38d7572bd112f14f1f2ba4562da4dc6b3802754ea0"
+    },
+    {
+      "path": "docs/extension-reportset-tutorial.md",
+      "size": 39758,
+      "sha256": "0261cfbb25c153872b9748c10b74b3d28ec6b9c8e630fb96195694b9fcc6b20a"
+    },
+    {
+      "path": "docs/housekeeping.md",
+      "size": 953,
+      "sha256": "d230610748983f7644addba664b811c4f2a041950ede52638497b41095275a21"
+    },
+    {
+      "path": "docs/module-audit.md",
+      "size": 5925,
+      "sha256": "668ae0a13992e92274eb8163f0510179443f0d654cf7fe519acabc43bd2ddc15"
+    },
+    {
+      "path": "docs/module-hotfixes.md",
+      "size": 11637,
+      "sha256": "2e5740f19f33778828b5d9801b8c560fbc74c4d18d1f30ab250f3d9bd7b71800"
+    },
+    {
+      "path": "docs/module-identifiers.md",
+      "size": 4670,
+      "sha256": "a2d34a0a8cb88523377292095b1a26e88616088113db1cef0b46cef9d2dc31a6"
+    },
+    {
+      "path": "docs/module-interoperability.md",
+      "size": 12495,
+      "sha256": "c191250b6fba554b9ac1a18c8aff5af895c55d85ddf90af71026b7f160f1da9c"
+    },
+    {
+      "path": "docs/module-licensing.md",
+      "size": 3174,
+      "sha256": "cc6ae5d77b7b3d089bb228104320f27cacc0b1e026148dfad873ab09508575df"
+    },
+    {
+      "path": "docs/module-reporting.md",
+      "size": 3647,
+      "sha256": "4fcd1d4de708d71bca19dfb1534ddfd4ad98c7d279971e248eb968f6317e165b"
+    },
+    {
+      "path": "docs/module-repositories.md",
+      "size": 4039,
+      "sha256": "4068399202d460f38230806ea646dc95d4d843df77bea479a62fc083aa507a9d"
+    },
+    {
+      "path": "docs/module-scheduling.md",
+      "size": 18056,
+      "sha256": "bf3912dc21b7070b35a0b4abedc468e9d440d2c1caf0f1355fdc34989beb7a74"
+    },
+    {
+      "path": "docs/module-visibility.md",
+      "size": 6687,
+      "sha256": "aefe75d01e60da2fd56727124e1e5050817294138dcede7a0c2d7cc4602f0e07"
+    },
+    {
+      "path": "docs/optional-module-integrations.md",
+      "size": 4253,
+      "sha256": "d2818fd19d6f7d8b22c6e44dad9b7294f7b1ee0d2ced6d51eb9340b9edb4fb28"
+    },
+    {
+      "path": "docs/releases/README.md",
+      "size": 295,
+      "sha256": "1f353be108622a66db16c5f0b84440d79d9e4a2e563671b65d81d66a5bf705ee"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.1.0.md",
+      "size": 1560,
+      "sha256": "8576fa8ac4fa2d0a92c384aac3cebaa9191349da8266ef6d8b68d92e23cf4e36"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.10.0.md",
+      "size": 1260,
+      "sha256": "865b337822a1cf486aaf6b67d8a680a3c7a7244be10ee3e8be5e48cf5538be21"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.10.1.md",
+      "size": 575,
+      "sha256": "ccfa4577cc0918b9316e9cc7f96c7c1fe8587b2b8e3994f688848ed5527bce27"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.10.2.md",
+      "size": 412,
+      "sha256": "a68d7fd2d5af2f59b0025b0cacfd1a9a78f2d44ef365b1b3b80731bf860dcbb8"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.10.3.md",
+      "size": 1327,
+      "sha256": "b68c42a1b28f91d4a24f3e9e3750bb1f22508740e9c635a4bf6a0a8b9711a0d6"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.11.0.md",
+      "size": 589,
+      "sha256": "16bc868adc42361cdac550d2bcfa3efae23ab49ed22f8b76fee9d64a9cc8e6e7"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.11.1.md",
+      "size": 398,
+      "sha256": "63d58acb27c04c0c7aece5e396022588868ae5f4f41f7418d69c66fc10af2368"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.11.2.md",
+      "size": 595,
+      "sha256": "a209a57e93657c214a25412647b0aa019a4e847f7bac78b200b6590135ede2d4"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.12.0.md",
+      "size": 2421,
+      "sha256": "48968526e353f0ebc70a5459530a1158c5a798fb4c96c5e12abf622d73a07043"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.12.1.md",
+      "size": 1153,
+      "sha256": "69d58b0b40beea14f63ae96d336c16751c372aa269a11567e2bbef3519ceda89"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.12.2.md",
+      "size": 846,
+      "sha256": "ee0b9212642993a8582736dc5e2bcf5b842d61e015196c602e04b18783b99f2c"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.12.3.md",
+      "size": 1611,
+      "sha256": "16af6d6c27ea28b9662f57c095cb1e9846e5704e945a112b738d5eb4fceb1f5e"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.13.0.md",
+      "size": 1147,
+      "sha256": "64ef41f327c499cb8c9e9998fb9c3af1a298f1174d980fd0be2e46ea46281069"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.13.1.md",
+      "size": 598,
+      "sha256": "cb0b3c01551d03d18bd9302eaa08afb4c5a675be181b52d57f9ab9418f32f76d"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.13.2.md",
+      "size": 1264,
+      "sha256": "b33443a386f281a20b0f86b5c43895c8b90c73072320b822bff582bb43435e57"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.13.8.md",
+      "size": 553,
+      "sha256": "2b57e97f69706dcaebfb6a31f1dd11153bf43d39b6f0d0f3066a9d6f0b5a2b32"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.13.9.md",
+      "size": 606,
+      "sha256": "9e4a40c17828c1bababcff7e11ad5a60e3ed72f33d09e068fbdd01460a799579"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.14.0.md",
+      "size": 856,
+      "sha256": "038613b46d8353e39ff5cffe166d30119d12d9b1cc5a4be1360a0257b82ec4e2"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.0.md",
+      "size": 2166,
+      "sha256": "d65518bc0cdafa17c20f5c956eef9b05b917eb8cfad7bacc0c8ed394714e8e44"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.1.md",
+      "size": 1160,
+      "sha256": "0146abb84c255e0390d0a9bf1bda0aad03a2eb0570df57b93ad73b80a9dcaa86"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.19.md",
+      "size": 1248,
+      "sha256": "b9934bcfd38415b74e6005a74d9d6d384513f01b414bed4c30fda3dc31ada503"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.2.md",
+      "size": 2190,
+      "sha256": "ff4be2bb337a5a440b6894c0f46395f9c72993df1e9013686a130ddc06267bd2"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.20.md",
+      "size": 525,
+      "sha256": "f7db77246a8e3c9cf8a18dca467ceb3cd3043d5479cb17e33fcb3c1d077c8a9c"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.21.md",
+      "size": 455,
+      "sha256": "48b530ca3b08ae52cb194965330a2b588774245f102214408213c69240c5c272"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.22.md",
+      "size": 1275,
+      "sha256": "871ea538d90a88f5e9ec53f1558a6fe13e404c2f8a994e2ba88864cb113cda8c"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.23.md",
+      "size": 556,
+      "sha256": "7b4154324a7fffd413ff1196fd57b121b179e16c40380dd2b4ba0ac6a357ba87"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.24.md",
+      "size": 1416,
+      "sha256": "ed83029b710aa1f959367b5d0ae9b1cc3da89d7e1af426567afa95dc20019a59"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.25.md",
+      "size": 2541,
+      "sha256": "f3da3f7f2f881345730ea60a71e3bd5b697d3632262985ee82e7eb4aacc51c10"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.26.md",
+      "size": 703,
+      "sha256": "641774575391eb626dda6737165f0947fd315c1a7e3d3af6ae1a0ca9af1374cd"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.27.md",
+      "size": 631,
+      "sha256": "2eb93c96210eea6cb4983f213ddc5c33d28322ffd8957bb54a7d68cfb293fb37"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.28.md",
+      "size": 425,
+      "sha256": "1ef33105ac152ec33186b6a9865b272f697addcb466c386d7b6bda8051ed7975"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.29.md",
+      "size": 1342,
+      "sha256": "d3ddf54e59ce0617906abb7d2f142621c8aa413f8166a698e2d32ea0b796ef67"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.30.md",
+      "size": 870,
+      "sha256": "ad6d72d058d30261246a36cfee65f8cbeeffdb6770493cd5b65a6a476a8b3fe2"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.31.md",
+      "size": 1061,
+      "sha256": "a7e6265b23f294838fecefcfe391fb87d0c16c978d27b84f8ed3e0107d6985bf"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.32.md",
+      "size": 947,
+      "sha256": "b003e4674aa266ba5467d708b26b5094693393df2c2563512d7738f2df4fb27e"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.33.md",
+      "size": 656,
+      "sha256": "e141481133b02a94b3c56c81f61b1f8fdf2ea3c317eab52940be97b768be123a"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.34.md",
+      "size": 1024,
+      "sha256": "35ee442d32e6e524317bfe2c553480e61b43f2cb19012e0b62a58613f24bb2fc"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.2.0.md",
+      "size": 1977,
+      "sha256": "7d78abb704c7a3e459f7437cb0bdcc7ea738f76e97b925f2b4e16466a812cd54"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.2.1.md",
+      "size": 1385,
+      "sha256": "fd708e70d7cfeaf83483cc183faba66068cff13c88c919e6aa94d099314953dc"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.2.2.md",
+      "size": 727,
+      "sha256": "d78fa9aef5721d89c52e312abce8a51fe0ab8c2cedcd2e9074ca35d4c8d0a9ee"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.2.3.md",
+      "size": 1835,
+      "sha256": "d2d97b0ba674bd4822629830ab225a14f189aeb3da8e96fba4efe9df9153f39f"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.2.4.md",
+      "size": 1646,
+      "sha256": "67bd54af0dd8f1fbe348c4b3fb77fad3851ec803bbf518506ea50a11661ff095"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.2.5.md",
+      "size": 620,
+      "sha256": "d16e7b6db8c25ec4e234deca827d882e19a852b1a1f615b986374d6f4ef9b92c"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.3.0.md",
+      "size": 2847,
+      "sha256": "a36250899f374049f17c47657ab49cf975cec4b09c3a3fd0fececd005a27ae7b"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.4.0.md",
+      "size": 1256,
+      "sha256": "a83cf702b740c11caafdc550cadc3cb2883db80595a668dc5e8a7d015ea8ff07"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.4.1.md",
+      "size": 1753,
+      "sha256": "c4d93ec078216bfb7036e4218f6610e99365ebc66c69bd0c71760fe058a85ffd"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.5.0.md",
+      "size": 704,
+      "sha256": "b7af948ccfac023371032966a2ca45650da3339689581ec0422c097778c42e77"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.6.0.md",
+      "size": 762,
+      "sha256": "65125407f873622d027ff1e74d2efeeb64f5f8953cbca2ff11d1dcf0a09d9717"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.6.1.md",
+      "size": 541,
+      "sha256": "282f2204e21c8ea1f775027c8179a19e0da88bd479b4021c67800146881e98fb"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.7.0.md",
+      "size": 938,
+      "sha256": "8fe7779337d864faeea434d395fad3d016c3aa3dbec662b4adeafd1ca90c2424"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.7.1.md",
+      "size": 481,
+      "sha256": "a63f85f0b720a758cc4049ee300a9c8f31d2c79de2416763d13f95a6662178b6"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.8.0.md",
+      "size": 525,
+      "sha256": "09279f91f9cb9b070df167d85aaaf1b837206513b77b1e398858e5dcf1abafec"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.9.0.md",
+      "size": 1792,
+      "sha256": "a7546976e7a0635ca7188b5558d0e063a81e89d57c68ce5df9dc3caac2d765af"
+    },
+    {
+      "path": "docs/scheduler.md",
+      "size": 9475,
+      "sha256": "b1c3bf1ccab602c1d8e40ccf27be4011f4862cf8dbae20dbe17735e6b01f1bc8"
+    },
+    {
+      "path": "docs/server-backup-capability.md",
+      "size": 18683,
+      "sha256": "4cbc7720697bf47b09f567b6ec4c8a5fae3f255b515b34f5c3b1cce18f601922"
+    },
+    {
+      "path": "docs/server-maintenance-capability.md",
+      "size": 4243,
+      "sha256": "daa410fb9d86ec43e353bcd9ce59f961aefbbaf5086e4d4e81c02865ea98dcc3"
+    },
+    {
+      "path": "docs/session-security.md",
+      "size": 6150,
+      "sha256": "7583b18cf4e642f63429f763f846a13bbf9fdd721f9b9d02797c3c7e8e0b0864"
+    },
+    {
+      "path": "docs/troubleshooting-diagnostics.md",
+      "size": 1703,
+      "sha256": "a894b3187b6040bb2000c937f42436c959c74dbd11ae40c83f386130d5f853c0"
+    },
+    {
+      "path": "docs/trusted-publisher-verification.md",
+      "size": 6346,
+      "sha256": "a3a31746f12470715f12dc8a099800993408a18cf90cf61ad33a677411b446ef"
+    },
+    {
+      "path": "docs/tutorial-packages/packagetest/README.md",
+      "size": 332,
+      "sha256": "2073b889eda29c268f07db16cd004c9e9db8a7a379ff9886f815f3b72f4225cc"
+    },
+    {
+      "path": "docs/tutorial-packages/packagetest/build.sh",
+      "size": 424,
+      "sha256": "2f43c9bc994683accfe717f61270373523bb041466caaa516dbf3bee2b6a643e"
+    },
+    {
+      "path": "docs/tutorial-packages/packagetest/packagetest-0.1.0.zip",
+      "size": 4493,
+      "sha256": "87d72d2edc08a2fd0a059d010eea678ceba89e2a360927cc65123b868ac056ba"
+    },
+    {
+      "path": "docs/tutorial-packages/packagetest/source/extensions/packagetest/README.md",
+      "size": 115,
+      "sha256": "2f6f0ee61de3a22f4ecf91f4a2b42b9d3b089d2ab24ec67a58b5c59308bb5dee"
+    },
+    {
+      "path": "docs/tutorial-packages/packagetest/source/extensions/packagetest/tec_tac.json",
+      "size": 346,
+      "sha256": "96c525b2ca65916c7d6561cfbab0ed36c629bfd72164f842926acd92512152b9"
+    },
+    {
+      "path": "docs/tutorial-packages/packagetest/source/extensions/packagetest/tec_tac_packagetest/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "docs/tutorial-packages/packagetest/source/extensions/packagetest/tec_tac_packagetest/apps.py",
+      "size": 607,
+      "sha256": "0c5adb826cb9c42923f526f17a22d1421468f5d1b0b5a47f7eb2da946c4987af"
+    },
+    {
+      "path": "docs/tutorial-packages/packagetest/source/extensions/packagetest/tec_tac_packagetest/permissions.py",
+      "size": 374,
+      "sha256": "ace90561a0ad59a67d08691912126a13cb8717a6348012214e7adbadaa7a157c"
+    },
+    {
+      "path": "docs/tutorial-packages/packagetest/source/extensions/packagetest/tec_tac_packagetest/sample.py",
+      "size": 101,
+      "sha256": "b8837ceeb0eaa7136e6ae871a2587c0f81f1d1ad5d7d62426f22c39b35e98206"
+    },
+    {
+      "path": "docs/tutorial-packages/packagetest/source/extensions/packagetest/tec_tac_packagetest/urls.py",
+      "size": 184,
+      "sha256": "db3186a02b415e91dcd3630b9fe1114ee60692955688e6ad3e2c60a436ccd051"
+    },
+    {
+      "path": "docs/tutorial-packages/packagetest/source/extensions/packagetest/tec_tac_packagetest/views.py",
+      "size": 658,
+      "sha256": "6995c9dd83f16b10d36c8d80ee4d3f240c52711a392a39185874c2e4cf44b0ae"
+    },
+    {
+      "path": "docs/tutorial-packages/packagetest/source/reportsets/packagetest/README.md",
+      "size": 112,
+      "sha256": "b07dbc87d3c2df15ad93797da4b156e8bc6ff850f788e248df4a918aca22bc58"
+    },
+    {
+      "path": "docs/tutorial-packages/packagetest/source/reportsets/packagetest/tec_tac.json",
+      "size": 202,
+      "sha256": "53791ec393d5e140e7ca6d1fe893f676534c8812e2505f9b55322fc7a8d5cf05"
+    },
+    {
+      "path": "docs/tutorial-packages/packagetest/source/reportsets/packagetest/tec_tac_packagetest_reportset/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "docs/tutorial-packages/packagetest/source/reportsets/packagetest/tec_tac_packagetest_reportset/apps.py",
+      "size": 273,
+      "sha256": "47d9f8bb6e6df74c7bc814e4acae03257417dd67277d5d23c57c07ade688dc71"
+    },
+    {
+      "path": "docs/tutorial-packages/packagetest/source/reportsets/packagetest/tec_tac_packagetest_reportset/sample.py",
+      "size": 153,
+      "sha256": "1c307e2df0474c44d2ff5778dba0084576945241e778f511e011c8b1e5d14e90"
+    },
+    {
+      "path": "docs/tutorial-packages/uitest/README.md",
+      "size": 814,
+      "sha256": "a4a70d1390a961a74a4136f162a5268024168bd65b1c18680114a2ce9f6067cd"
+    },
+    {
+      "path": "docs/tutorial-packages/uitest/build.sh",
+      "size": 617,
+      "sha256": "0733fdbc82a5fe2c9aaf8b24e64e8531944fbeed6da3e6b1fb1705ac29a3f7cf"
+    },
+    {
+      "path": "docs/tutorial-packages/uitest/source/extensions/uitest/README.md",
+      "size": 253,
+      "sha256": "059c49ef4d7230732d89136f6c15588d6c081dcd8c90652dec5c0d946bfc7de0"
+    },
+    {
+      "path": "docs/tutorial-packages/uitest/source/extensions/uitest/tec_tac.json",
+      "size": 256,
+      "sha256": "4495ea7643a3cd1edc501714ed732b84e759a5734e4c6dccd3ccc16a1e415ef2"
+    },
+    {
+      "path": "docs/tutorial-packages/uitest/source/extensions/uitest/tec_tac_ui.json",
+      "size": 303,
+      "sha256": "3ddcdff25bb146f62abc06b23d4b30d51d06b8f00e3dfbaedb153dc82cce8edf"
+    },
+    {
+      "path": "docs/tutorial-packages/uitest/source/extensions/uitest/ui/index.js",
+      "size": 1439,
+      "sha256": "d71cc303b60b5cd126c5a4d998093fbadad934018aac94634b83f42af20f3b82"
+    },
+    {
+      "path": "docs/tutorial-packages/uitest/source/extensions/uitest/ui/public.js",
+      "size": 1290,
+      "sha256": "fe42717ad44bd46aa1e237a2689a042d94c0c08d6d04377e0119a78154f3529c"
+    },
+    {
+      "path": "docs/tutorial-packages/uitest/source/reportsets/uitest/README.md",
+      "size": 157,
+      "sha256": "6367c3feaa2f23003d387f827cd88e16bd1e0894977395df583d8d08858c9f0e"
+    },
+    {
+      "path": "docs/tutorial-packages/uitest/source/reportsets/uitest/tec_tac.json",
+      "size": 120,
+      "sha256": "7e97a2a303402ecf615a05992a5892c52ff22d66e79c0f0dd9f7d2b8cb65e57b"
+    },
+    {
+      "path": "docs/tutorial-packages/uitest/uitest-0.1.0.zip",
+      "size": 2165,
+      "sha256": "339250a1fd66a71c415a208c24858113c46f0ef2d837cd03dc286d44edc614a9"
+    },
+    {
+      "path": "docs/tutorial-packages/uitest/uitest-0.1.1.zip",
+      "size": 2874,
+      "sha256": "eeeb2715c08656a36940a4e8a942164a7bf7ca539c45e96b67493479a6fe3863"
+    },
+    {
+      "path": "docs/user-preferences.md",
+      "size": 1806,
+      "sha256": "e3281c2dbf6604d31d861fbb5c1c58a0edff8d03eb50e8efd01059ae8906cf45"
+    },
+    {
+      "path": "examples/module-repository/index.json",
+      "size": 547,
+      "sha256": "5a6b796a7d112c9492cd35c44def7482e025d4a435dd22c85eb184c92b0d736f"
+    },
+    {
+      "path": "extensions/example/README.md",
+      "size": 491,
+      "sha256": "fb29aa4eaf9a50240c1a2ca67180ed23f39417d8d15dbfa3ca2ef667e10bb39e"
+    },
+    {
+      "path": "extensions/example/tec_tac.json",
+      "size": 174,
+      "sha256": "2a69d3c561f4678a89d5d47f0f2e9ae34d063610821586f0ab89a85e06a26b2a"
+    },
+    {
+      "path": "extensions/example/tec_tac_example_extension/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "extensions/example/tec_tac_example_extension/apps.py",
+      "size": 289,
+      "sha256": "a0bd9843a3a27d6c61483760a436a077b3b689bcec94f5e847ac346404406d9d"
+    },
+    {
+      "path": "extensions/example/tec_tac_example_extension/sample.py",
+      "size": 215,
+      "sha256": "c79895aae6598ba43b5d58480d95bbfe1d61e54f20be1d362d85fb79898291f4"
+    },
+    {
+      "path": "extensions/reporting/tfdreporting/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "extensions/reporting/tfdreporting/apps.py",
+      "size": 1639,
+      "sha256": "42eda2f96fce88df3b6eef3b508e3d1051fd1ba2de64821a56af85c7356909f3"
+    },
+    {
+      "path": "extensions/reporting/tfdreporting/migrations/0001_initial.py",
+      "size": 1150,
+      "sha256": "2541f8d1e3ef4691a544594e8f510af62d03b7d47ec27ec74cc205f757b3529e"
+    },
+    {
+      "path": "extensions/reporting/tfdreporting/migrations/0002_extensionrolepermission.py",
+      "size": 1201,
+      "sha256": "f6a492ea0719fe2ed4b263515eaeb3a5a057ab11248e8b206d9dba7c553e8d4c"
+    },
+    {
+      "path": "extensions/reporting/tfdreporting/migrations/0003_networkavailability_ingest_hardening.py",
+      "size": 1383,
+      "sha256": "edad572314da8e5664bb07a67d93413dc2b638061c4729c3e52a286c051f43de"
+    },
+    {
+      "path": "extensions/reporting/tfdreporting/migrations/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "extensions/reporting/tfdreporting/models.py",
+      "size": 2373,
+      "sha256": "f71a16dbdd0f7d0ff0cfa28af9530342a223008be711c18278196973efe52f74"
+    },
+    {
+      "path": "extensions/reporting/tfdreporting/permissions.py",
+      "size": 985,
+      "sha256": "b24d3027588dccbfca258bf1c4ba956a8526ed9f14df35609d8e824d9a22bd07"
+    },
+    {
+      "path": "extensions/reporting/tfdreporting/rbac.py",
+      "size": 2228,
+      "sha256": "3d4470431aed71a125872ae2cfc6e33003b834c7eaa5203c4842b07c163d7cbb"
+    },
+    {
+      "path": "extensions/reporting/tfdreporting/serializers.py",
+      "size": 3023,
+      "sha256": "973ae1c105b1590f47a3a7f4fc314d019003bcb8757808d2b4a2d815718e1e0e"
+    },
+    {
+      "path": "extensions/reporting/tfdreporting/urls.py",
+      "size": 282,
+      "sha256": "3896f3ce13005b684af09d6cfa9f8a80afcb4e936f7e9612b79775e9857380ce"
+    },
+    {
+      "path": "extensions/reporting/tfdreporting/views.py",
+      "size": 4139,
+      "sha256": "4bfbd84f585946a7b756523948f5d2d554ad04886703edb4a4750460a4a89035"
+    },
+    {
+      "path": "framwork/tec_tac/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "framwork/tec_tac/apps.py",
+      "size": 1761,
+      "sha256": "85eaafe47df14514c8002b0479d7e5ba81750dd8b7426cdb6738ba5866d5575f"
+    },
+    {
+      "path": "framwork/tec_tac/audit.py",
+      "size": 9189,
+      "sha256": "6d3d3e1b001488d78f5056caff4484406713eef63638213906732db1e9319fee"
+    },
+    {
+      "path": "framwork/tec_tac/audit_views.py",
+      "size": 2216,
+      "sha256": "66c720ab7de64c03500b50b259b3c8170ed9075cad2f26f291d14ff172e7239a"
+    },
+    {
+      "path": "framwork/tec_tac/bootstrap.py",
+      "size": 1385,
+      "sha256": "d2c2b2d1236d0e351eb17aeabfdd52ce895e8102969329037b4a647c8d8698e8"
+    },
+    {
+      "path": "framwork/tec_tac/capabilities.py",
+      "size": 14547,
+      "sha256": "4dc9c1573ff5ffb83d78e4f6d2bd224f8585a97a7d965cb99d8e1e8fc19b9474"
+    },
+    {
+      "path": "framwork/tec_tac/capability_views.py",
+      "size": 1480,
+      "sha256": "b71159cf8c43f41b049da2e9cb1a9c311f99a77ec1328a93147b30a8a9550bea"
+    },
+    {
+      "path": "framwork/tec_tac/config.py",
+      "size": 2208,
+      "sha256": "64665f1460841224dec100cc46e97d61abab7fa8a2992baba92a352676b25530"
+    },
+    {
+      "path": "framwork/tec_tac/contract_views.py",
+      "size": 2787,
+      "sha256": "5532590f23c189f471800add2240003f127584c4a7c2fbb105f2c49388d362ce"
+    },
+    {
+      "path": "framwork/tec_tac/contracts.py",
+      "size": 24773,
+      "sha256": "c828593268b930cee56086480347c7af18916d0aa4c5865e96f13caa88738aa7"
+    },
+    {
+      "path": "framwork/tec_tac/dashboard_views.py",
+      "size": 3666,
+      "sha256": "3f3cbf12329321d6c9d15915b7bb773fa9f8ca7a8105e75a00d2412d2bd90dc9"
+    },
+    {
+      "path": "framwork/tec_tac/dashboards.py",
+      "size": 5483,
+      "sha256": "27f8093413bfefd3c42282aba214506ebe966e9b2fdf3178b062e29ad6932090"
+    },
+    {
+      "path": "framwork/tec_tac/diagnostic_views.py",
+      "size": 791,
+      "sha256": "9f0103d889a181a870445e88f6d87de028958554b754412b4895ecf3ccad9cd7"
+    },
+    {
+      "path": "framwork/tec_tac/diagnostics.py",
+      "size": 16946,
+      "sha256": "1798a7b0d98294a2cd5ffe1159fe20c72641a2cde9cfc4aca8137f741f6f4ed1"
+    },
+    {
+      "path": "framwork/tec_tac/housekeeping.py",
+      "size": 4063,
+      "sha256": "7d4a902a18a5eae262d5a9dad5561a36c5ab85c3940d59e07d1ae15e64e16c5a"
+    },
+    {
+      "path": "framwork/tec_tac/housekeeping_views.py",
+      "size": 1207,
+      "sha256": "d9aefb5e864ca620309a35eac59c85bef2f0aa487e4e4b8bbf5b6613cc25ec18"
+    },
+    {
+      "path": "framwork/tec_tac/management/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "framwork/tec_tac/management/commands/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "framwork/tec_tac/management/commands/tec_tac_install_bootstrap_modules.py",
+      "size": 7192,
+      "sha256": "6ba80a6348f7f7f05721884a6018f13e5e3c3231e8a15c2bd886be19adad588a"
+    },
+    {
+      "path": "framwork/tec_tac/management/commands/tec_tac_scheduler_tick.py",
+      "size": 633,
+      "sha256": "c4181c081018e299930dc6c681c80214f24c077c8a115ac2a8ae96d9629f7380"
+    },
+    {
+      "path": "framwork/tec_tac/migrations/0001_scheduler.py",
+      "size": 5038,
+      "sha256": "676a35468f14f2ab7eb15e24c60f5f0f9d5e0ab85c41db97031948109e8202dd"
+    },
+    {
+      "path": "framwork/tec_tac/migrations/0002_scheduler_hardening.py",
+      "size": 3282,
+      "sha256": "611e0ebbd0f59cdd1f96c407bf671ba949d025822bcacbcc210ede5fc157140c"
+    },
+    {
+      "path": "framwork/tec_tac/migrations/0003_scheduler_model_options.py",
+      "size": 528,
+      "sha256": "29f64ea250738af0f95dc6c51729c48817c25d2200b388bfa280cb2f73984b29"
+    },
+    {
+      "path": "framwork/tec_tac/migrations/0004_user_preferences.py",
+      "size": 1261,
+      "sha256": "d1175e76bdfed76d356112f262b01afe4b72507a2ff12f1bd01bf2edb4d349d1"
+    },
+    {
+      "path": "framwork/tec_tac/migrations/0005_dashboards.py",
+      "size": 1526,
+      "sha256": "4a9c74ad1ddc8b59a0b77d018423e6e04869b280d0e300dcc69ce5074cbe7ade"
+    },
+    {
+      "path": "framwork/tec_tac/migrations/0006_scheduler_interval_reconciliation.py",
+      "size": 1945,
+      "sha256": "ede6a4802fcc0b22a47ac251cffe497c5cedec6c3c96e820578af56ae8470fc6"
+    },
+    {
+      "path": "framwork/tec_tac/migrations/0007_session_security.py",
+      "size": 4845,
+      "sha256": "e05853e5134e33fe845e1dfcdab0231fe60a458d89ce72cb4c75e4479d4f8972"
+    },
+    {
+      "path": "framwork/tec_tac/migrations/0008_alter_tectacsessionsecurityconfig_trusted_proxies.py",
+      "size": 547,
+      "sha256": "a2e01a06929f7b03b8f75be4ec5e8fc1438f8137264d53f68e3c30d67549249e"
+    },
+    {
+      "path": "framwork/tec_tac/migrations/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "framwork/tec_tac/models.py",
+      "size": 12961,
+      "sha256": "9e120bbe972c1970454fc7e24a9e7d637ae7f18664d688613ef2c962c183b233"
+    },
+    {
+      "path": "framwork/tec_tac/module_hotfix.py",
+      "size": 21287,
+      "sha256": "e6bbda0de5bac22ca9903800fa25d43a51e8e912b4ff7c82f140e7b633cb7c00"
+    },
+    {
+      "path": "framwork/tec_tac/module_hotfix_views.py",
+      "size": 4592,
+      "sha256": "69022711af652524cd1e46daaad3f7641e9b35f6d4f38edb4959f3a843fbf727"
+    },
+    {
+      "path": "framwork/tec_tac/module_identity.py",
+      "size": 8667,
+      "sha256": "f6b7bed579608747d5ef5ed93a14b86ac75d3c7307cb97c223ba7a6daa1cfb38"
+    },
+    {
+      "path": "framwork/tec_tac/module_manager.py",
+      "size": 28125,
+      "sha256": "39ca63c9c8a85726d7da1b0ccded227e1876db75550aada9a163587b7515a989"
+    },
+    {
+      "path": "framwork/tec_tac/module_manager_v2.py",
+      "size": 59164,
+      "sha256": "cf78007c065e160520e85bf76d584ea055440a6aa67240749ad85bd5cbb7e861"
+    },
+    {
+      "path": "framwork/tec_tac/module_repository.py",
+      "size": 24348,
+      "sha256": "7197b7e96b5b2f984c11717c931f7c14a74d7381a6d1fae020853a256b1a6c8c"
+    },
+    {
+      "path": "framwork/tec_tac/module_repository_views.py",
+      "size": 4351,
+      "sha256": "e5df12090d0792266b110242b4bcd478288c38ba8237623b8e3555a4ec98cb1a"
+    },
+    {
+      "path": "framwork/tec_tac/module_runtime.py",
+      "size": 1337,
+      "sha256": "660423d4f409b6ef329a785aa342bc2a22f6005085c27def4e6e35f14e341122"
+    },
+    {
+      "path": "framwork/tec_tac/module_state.py",
+      "size": 5768,
+      "sha256": "f9b4b47e682487a5e4a14b237e90bdce507343c439b0f713041dd9000f355ddb"
+    },
+    {
+      "path": "framwork/tec_tac/module_v2_views.py",
+      "size": 7279,
+      "sha256": "7e570b48211485b739952f5d7d8195ac50b0449aa8c541dff5bf3260f3a603fc"
+    },
+    {
+      "path": "framwork/tec_tac/preference_views.py",
+      "size": 1711,
+      "sha256": "60f9e7e9396e6a990a125bd1eab15bc01b7b62f9f941b218f88a04857c17c2ce"
+    },
+    {
+      "path": "framwork/tec_tac/preferences.py",
+      "size": 6355,
+      "sha256": "4f3962307fb8f9f30904d89856efcbb4bf29c159f5c92227574fa6a92d28ccb3"
+    },
+    {
+      "path": "framwork/tec_tac/rbac.py",
+      "size": 5021,
+      "sha256": "9181777199d4ffe3ea875bef297d7820c20683a91daeae03b59d2971f2bd2e31"
+    },
+    {
+      "path": "framwork/tec_tac/registry.py",
+      "size": 13453,
+      "sha256": "ea275bf3fa54e56d73192e4f05a605211e3766fa6851591bb3e9200fb77ea5e5"
+    },
+    {
+      "path": "framwork/tec_tac/reporting.py",
+      "size": 20585,
+      "sha256": "a190e761464d34aa2868bccd1c4c34b8230faeb4c31aa40bbcda5149a25988ef"
+    },
+    {
+      "path": "framwork/tec_tac/scheduler.py",
+      "size": 34404,
+      "sha256": "0b871e0234d79233c45cc9c7224bb55e64906968c411efbe0a9b643eb078835f"
+    },
+    {
+      "path": "framwork/tec_tac/scheduler_views.py",
+      "size": 14759,
+      "sha256": "22bee949c9eab17c59571050c8aa3f0e61d83430334ff4fcc9c70c9e3c7e6c9a"
+    },
+    {
+      "path": "framwork/tec_tac/server_backup.py",
+      "size": 21641,
+      "sha256": "262a13527960599486f3dd5fa9388fcc6478328540bac497a43e7f0cf0e21703"
+    },
+    {
+      "path": "framwork/tec_tac/server_maintenance.py",
+      "size": 19871,
+      "sha256": "6d59d14af02dca400c2fd036e1b190235fad95212d43856ba4bfc974ff0b4639"
+    },
+    {
+      "path": "framwork/tec_tac/server_maintenance_views.py",
+      "size": 4886,
+      "sha256": "b1e9faa11dd147f3b8c5531f96ef4c5d1f532acb5beb15e7486d930922a922cc"
+    },
+    {
+      "path": "framwork/tec_tac/session_security.py",
+      "size": 24421,
+      "sha256": "9bf588a6f85c05fbc9826a7d5f7c2bb55e954ef7cbdb8a8e3d46fd223e0b680e"
+    },
+    {
+      "path": "framwork/tec_tac/session_security_views.py",
+      "size": 4680,
+      "sha256": "bdaa788810ba0145af2e2ee3d198566d39e30023777bddaf2bea63bf137eaa96"
+    },
+    {
+      "path": "framwork/tec_tac/system_update.py",
+      "size": 30282,
+      "sha256": "ff59edb491fb06fd2e9f7b7f39677002abdc68f829b87b1c6641825f00abc24d"
+    },
+    {
+      "path": "framwork/tec_tac/tasks.py",
+      "size": 3560,
+      "sha256": "39d2781a484997d44cd51e8dd16c29da5f513b7c975e71d70c37cc178f15e07e"
+    },
+    {
+      "path": "framwork/tec_tac/trusted_publishers.py",
+      "size": 15071,
+      "sha256": "8644a40f4703322e876dd5e1ebd6ac132d839c0fe633495a365aafd91dbf8c4d"
+    },
+    {
+      "path": "framwork/tec_tac/urls.py",
+      "size": 9867,
+      "sha256": "3e8e656a731a3dccc32dac6b8ca718d371906f7c74a69b5ceb4f70c020fd79ac"
+    },
+    {
+      "path": "framwork/tec_tac/views.py",
+      "size": 19720,
+      "sha256": "718db929dc1743a0dfd86e459f337bdf189b7d08e4d5e1dca007c4e15a136a34"
+    },
+    {
+      "path": "install.sh",
+      "size": 45915,
+      "sha256": "a3d01b4352d4341919c5cc65ab89681f5678f3ef1914ee05d14c7402b92c885c"
+    },
+    {
+      "path": "reportsets/.gitkeep",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "reportsets/example/README.md",
+      "size": 526,
+      "sha256": "c1e521477d5a7d78d09111e24bc55135390e2ddc836ca57e9fdb4f1540f6fe0f"
+    },
+    {
+      "path": "reportsets/example/tec_tac.json",
+      "size": 174,
+      "sha256": "a6322e1d4f64ca10e508317f06a26c5e517c1dc8b72fda2eb608312dcd43ae9f"
+    },
+    {
+      "path": "reportsets/example/tec_tac_example_reportset/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "reportsets/example/tec_tac_example_reportset/apps.py",
+      "size": 289,
+      "sha256": "e7f76c10484961c0899440864f9f38db3269485da73635866c041bea29bfba0c"
+    },
+    {
+      "path": "reportsets/example/tec_tac_example_reportset/sample.py",
+      "size": 269,
+      "sha256": "c3f2820bbc9b4007ededb81ee0fb78ec92f24281ed6b6b57426a960cde7ff5e8"
+    },
+    {
+      "path": "scripts/framework-info.sh",
+      "size": 1161,
+      "sha256": "13c7e50b6ac0bab7338037b90e3058c0a4867fd905ea51b8b1ae2ec960ab78ea"
+    },
+    {
+      "path": "scripts/housekeeping-helper.py",
+      "size": 5367,
+      "sha256": "a4f56164e51bf6bff72d532fa51fde70e88d74283e84fb8c84660564a5bc1a8c"
+    },
+    {
+      "path": "scripts/install-extension.sh",
+      "size": 24398,
+      "sha256": "fd5c1a196dbbf0346c2b621f3f46baed3e327f26449247eb28ec3dfc8d937edb"
+    },
+    {
+      "path": "scripts/migrate-layout.sh",
+      "size": 12166,
+      "sha256": "ded55c2efe4c424122fa45d2fac64ff2f67e2c47c55250d76cb780d415216689"
+    },
+    {
+      "path": "scripts/module-hotfix-job-helper.py",
+      "size": 24423,
+      "sha256": "fed8a77e09293d391ee8f86477cebc375b6c537dd3800b377e322c1680e17537"
+    },
+    {
+      "path": "scripts/module-job-helper.py",
+      "size": 12490,
+      "sha256": "d3aeeffe4e8a8d1c52049ed5ecdcd162343cf8e5510c9a9c32a36d5c35a58312"
+    },
+    {
+      "path": "scripts/module-v2-job-helper.py",
+      "size": 26844,
+      "sha256": "7e4b07b194739a714c3195faf0bc82624844b6178191abc81a3799256521986a"
+    },
+    {
+      "path": "scripts/plugin-info.sh",
+      "size": 1543,
+      "sha256": "6b8b262fc1dfaef469d7f14c6031b295ffc9c446b630215a0b95844b230b0f04"
+    },
+    {
+      "path": "scripts/recovery/lib.sh",
+      "size": 4954,
+      "sha256": "2ab2d61248ef2b0df36756888544c559fb29c743cb39ebe2037952fdeb0708f3"
+    },
+    {
+      "path": "scripts/recovery/tec-tac-diagnostics.sh",
+      "size": 6044,
+      "sha256": "3c7f5b23111f31b735885a23662c39a7a7232f69500b4929c5bd3ce07fe0897e"
+    },
+    {
+      "path": "scripts/recovery/tec-tac-recover-modules-from-backup.sh",
+      "size": 2539,
+      "sha256": "331ae60e791ff37e330e125730f9ad833f0816aa5757b0c81f7a04e5b9e1f073"
+    },
+    {
+      "path": "scripts/recovery/tec-tac-repair-modules.sh",
+      "size": 2525,
+      "sha256": "e909fd5e370b445da7070a862adfcee899b77c704e74c159ad21c7a3a4c95287"
+    },
+    {
+      "path": "scripts/recovery/tec-tac-repair-permissions.sh",
+      "size": 1425,
+      "sha256": "572623436f6bf3152163ee400557e795ad80beecff5cad95a09bdcedf4981342"
+    },
+    {
+      "path": "scripts/recovery/tec-tac-repair-runtime.sh",
+      "size": 1387,
+      "sha256": "a31f8336e2a033b5f54f09844a7d30560a7a0c42feaf0486ccce24bbdc517c15"
+    },
+    {
+      "path": "scripts/recovery/tec-tac-repair-scheduler.sh",
+      "size": 1299,
+      "sha256": "2062c2af3b648b0733d54f4db261edba7d7d2cbfa903a9338bb823c64535954c"
+    },
+    {
+      "path": "scripts/recovery/tec-tac-repair.sh",
+      "size": 1265,
+      "sha256": "b4b1910710514cf40081176d4d28f517c25ec5941db3740a2e3fbcb54cbdda05"
+    },
+    {
+      "path": "scripts/reload-rmm-uwsgi.sh",
+      "size": 1814,
+      "sha256": "1fd7053c87ed75daf3f6c3229099edc4e7dc1d71b3b56ffa6fb09548e0a2a833"
+    },
+    {
+      "path": "scripts/remove-extension.sh",
+      "size": 9074,
+      "sha256": "68afd4983a40f67c415e4114690809e0536639e04c0a8f8c90637242d115f259"
+    },
+    {
+      "path": "scripts/reporting-permission.sh",
+      "size": 3001,
+      "sha256": "ece32df33cedc6a600b31575ef342f2ab4deb9b7c972da51ca9e4c59ae521cdb"
+    },
+    {
+      "path": "scripts/scaffold-plugin.sh",
+      "size": 1568,
+      "sha256": "d4501b0ea843753c614835fbb784eb048a2a809bce6744517e0862d01888a5bf"
+    },
+    {
+      "path": "scripts/server-backup-helper.py",
+      "size": 144747,
+      "sha256": "1c482b5670aca832c2c1436f76adbd3c1b663347ca3ca060e1aa0c26d8a3518a"
+    },
+    {
+      "path": "scripts/server-maintenance-helper.py",
+      "size": 23499,
+      "sha256": "79b1030f33ab7e050d7645d2c185766139b181d69a8fb1327364edea52c25d42"
+    },
+    {
+      "path": "scripts/system-update-helper.py",
+      "size": 30079,
+      "sha256": "22cdc45384d03c64091c9c37fd9d40b4d1f5e3fdae16df7164b733382181735e"
+    },
+    {
+      "path": "scripts/tactical-backup-sudo.py",
+      "size": 3710,
+      "sha256": "a30e8568ec212d390debb4e7682f0efee8c35ec2166281cd16b2256b2a0ee542"
+    },
+    {
+      "path": "scripts/tec-tac-config.sh",
+      "size": 1362,
+      "sha256": "0a3b2501e790053993398268e109aaf127ba045b8e70918115ceaaa9814074f1"
+    },
+    {
+      "path": "tec_tac_package.json",
+      "size": 77,
+      "sha256": "90383be16fd763d2272627073c312c96cd67eeff13af40810e431cdf7a668cf2"
+    },
+    {
+      "path": "templates/plugin/extension/tec_tac.json",
+      "size": 122,
+      "sha256": "b78cc3241dd4f7a90a8d1c9ac3080237c3bcf5d57a08a63b2820a503a38c65d0"
+    },
+    {
+      "path": "templates/plugin/reportset/tec_tac.json",
+      "size": 122,
+      "sha256": "4621b37e41d087134bc4c96b7e989fb0b4db3fbda15a1425495c6a5a1d4c6ff8"
+    },
+    {
+      "path": "tests/access-api-foundation.sh",
+      "size": 1653,
+      "sha256": "8ecdfb896dfb15bdc3a482fb8748b14789f6ddec39849a85de874502b8380f7c"
+    },
+    {
+      "path": "tests/audit-contract-foundation.py",
+      "size": 4772,
+      "sha256": "65559c70b5df25e6369b66577269df7df7efaea2214c1a62432634c9d221d71d"
+    },
+    {
+      "path": "tests/audit-contract-foundation.sh",
+      "size": 727,
+      "sha256": "9705e5013c1335763a617b858678e29bcaf0ca516ff783892d2b470c4ba07210"
+    },
+    {
+      "path": "tests/capability-foundation.sh",
+      "size": 6159,
+      "sha256": "67eeb798e6500c36a427caab008bfaaff8323516a474835e9d0fa1ef3e7a2476"
+    },
+    {
+      "path": "tests/contracts-foundation.sh",
+      "size": 4569,
+      "sha256": "7b4a5935d0abed78ac88dfbc9910fae27e10e59937ee63f273306710fa71e7bf"
+    },
+    {
+      "path": "tests/dashboard-foundation.sh",
+      "size": 1911,
+      "sha256": "5b9804e9c1907b2640a65debedbb162f7111e112ee97eecbf4fb1536a4c5c3a9"
+    },
+    {
+      "path": "tests/diagnostics-foundation.sh",
+      "size": 1090,
+      "sha256": "98dbf8ed01a8b223f51fe3690188d48a2f34ba9a71ceb7b35f1268c914acce07"
+    },
+    {
+      "path": "tests/example-plugin.sh",
+      "size": 1525,
+      "sha256": "4508eb8365da2275cbadbd716dfa60a05ecfd94e06f5562b5ece9dc1f64065c8"
+    },
+    {
+      "path": "tests/extension-package-lifecycle.sh",
+      "size": 1763,
+      "sha256": "416f9346812940dbb5fda0570db972ea77f39f427269b874b2ea91f99bef4bf7"
+    },
+    {
+      "path": "tests/framework-foundation.sh",
+      "size": 3085,
+      "sha256": "90e12c563fe6da75d1a8143fe78d0ec809a268e8691a1130fcf8b89373b606b8"
+    },
+    {
+      "path": "tests/housekeeping-foundation.sh",
+      "size": 1060,
+      "sha256": "0d4f0773179fc0266360521af83a7ca7d8133b743531c01cc4cf2e1ff453b9dd"
+    },
+    {
+      "path": "tests/layout-foundation.sh",
+      "size": 1496,
+      "sha256": "5b166951ef0f801ebf49295f404539e4e2ffde970da28e103983f2cbfde8788a"
+    },
+    {
+      "path": "tests/lifecycle.sh",
+      "size": 1364,
+      "sha256": "2fc8a2cedd93c272a0b4baaf683de8abc767f3df681eb9b8a4121f1f3dbd58d7"
+    },
+    {
+      "path": "tests/migration-hygiene-foundation.sh",
+      "size": 1013,
+      "sha256": "bcfc9ef093367452381b32c310208510336f20d5743712c3b855c2586d9e2ec4"
+    },
+    {
+      "path": "tests/module-bundle-first-intake.sh",
+      "size": 4696,
+      "sha256": "9f916db31f964f5c26abfd0c6670c9c9f6a08da645e176b4a72b0ed9328fa677"
+    },
+    {
+      "path": "tests/module-history.sh",
+      "size": 675,
+      "sha256": "e6b15a8682280cd810f6453538cc77245ee835db2985a2445fb89f38ab22df9f"
+    },
+    {
+      "path": "tests/module-hotfix-foundation.sh",
+      "size": 7711,
+      "sha256": "ed9b8ac011ff706aec51f6f9c1c9763dbb8eb3ef806ea2ec34feb54927459ab9"
+    },
+    {
+      "path": "tests/module-identifier-case-foundation.sh",
+      "size": 3783,
+      "sha256": "78fe578c0966b1f1dc29b3599d52800aaaeb0423226a2813af8136ef991fce15"
+    },
+    {
+      "path": "tests/module-identity-migration-foundation.sh",
+      "size": 2731,
+      "sha256": "ef6a5b1ae80dca4d7e5cd8fe21df9e4c58224667f9f15242cc7141ce9c5f60b2"
+    },
+    {
+      "path": "tests/module-independent-batch.sh",
+      "size": 2512,
+      "sha256": "a3d61ce27ac887dc92aae4f8969657fd29fd4ebca064a927e72a2f8bf397fc96"
+    },
+    {
+      "path": "tests/module-management-foundation.sh",
+      "size": 23493,
+      "sha256": "fe507161a4d7c07cc6b961d542aa15c6b2623f8481c7492b22ef5c6519ab4a7d"
+    },
+    {
+      "path": "tests/module-mixed-artifact-batch.sh",
+      "size": 5117,
+      "sha256": "2674c3b287d4bc82e990f8150ea819d79eb47df8896682098d4e3e83af7171a2"
+    },
+    {
+      "path": "tests/module-repository-bundle-stage.sh",
+      "size": 2205,
+      "sha256": "e994253a07216b23f05b0b8aa30dab038615d8f156aa01dd416d98d0285dbadb"
+    },
+    {
+      "path": "tests/network-reporting-api.sh",
+      "size": 3157,
+      "sha256": "b314bf84b3347cfff824f28ee24898b3b582093e4599171d30d10f7851a1c401"
+    },
+    {
+      "path": "tests/network-reporting-server.sh",
+      "size": 1435,
+      "sha256": "af013ca5e1c35209033cf7dedd136555f0907381f0e38d04f5d88e26299bd600"
+    },
+    {
+      "path": "tests/optional-reportset-foundation.sh",
+      "size": 2107,
+      "sha256": "15e2f42c2650de7156d4b85d8c5a3e42b9b7e2876b35946bb3bbc805b96eaec7"
+    },
+    {
+      "path": "tests/recovery-foundation.sh",
+      "size": 3141,
+      "sha256": "7c70dd10675af9e6f62b4a16bb5c3d067e74ae86f5c627557ceec08be81cd76e"
+    },
+    {
+      "path": "tests/registry-validation.sh",
+      "size": 2468,
+      "sha256": "b75ab0806d06a9d0fd020bd2e39b63bf7d85da0f9f73d5564d60abb36b903bd2"
+    },
+    {
+      "path": "tests/release-integrity.sh",
+      "size": 925,
+      "sha256": "262aa64dc2be821adcff1ee7d1621c8b45bee192cf7e1c0e1b3d579f84fe709e"
+    },
+    {
+      "path": "tests/reporting-registration-foundation.sh",
+      "size": 3485,
+      "sha256": "c33c6650255b7d60755469a6b15d3246509da7802c80eba16779534549eb201a"
+    },
+    {
+      "path": "tests/reporting-registration-runtime.py",
+      "size": 5746,
+      "sha256": "25fb51ed373d8a0f2c22c4043224103740b3fa71814d522aa7890c47969d48fe"
+    },
+    {
+      "path": "tests/scheduler-foundation.sh",
+      "size": 1683,
+      "sha256": "38b606bf14ec7f427735652b276f5e3a1949505caa42285744b52d013fcad16f"
+    },
+    {
+      "path": "tests/scheduler-interval-foundation.py",
+      "size": 1404,
+      "sha256": "258a38af273d93d96abb18a1b34f2e2f5c28e2320056d1d350066bc403e1e818"
+    },
+    {
+      "path": "tests/server-backup-foundation.sh",
+      "size": 27134,
+      "sha256": "11077d0ba39d32c78fb4076a7be469a8f3781ab4ff90f385062db0ce3cd20bf5"
+    },
+    {
+      "path": "tests/server-maintenance-foundation.sh",
+      "size": 6786,
+      "sha256": "15e45ed47830de548d7888ea8083c6214fce767aab7c267f7d2413532f72665a"
+    },
+    {
+      "path": "tests/session-security-foundation.sh",
+      "size": 4548,
+      "sha256": "06240c94eade09909cc459386a8dd34f0d4f88249aebd4c235d612213f48f67d"
+    },
+    {
+      "path": "tests/system-update-foundation.sh",
+      "size": 12856,
+      "sha256": "64212f985a57c0e624a0426e7c23260195fb7a7255bd952d1e17e8a3d06cba44"
+    },
+    {
+      "path": "tests/tactical-update-survival.sh",
+      "size": 2484,
+      "sha256": "5d93d43f92957f4d0ea2233f5608ffa1b9420f33edafbf21f356a7ab3890b419"
+    },
+    {
+      "path": "tests/trusted-publisher-foundation.sh",
+      "size": 4158,
+      "sha256": "16cacadf9ad48b4a883be319165e59446c3c3e47896cab4a3777e09d0e467ea8"
+    },
+    {
+      "path": "tests/user-preferences-foundation.sh",
+      "size": 2122,
+      "sha256": "9fc70da5923a2808e009896ff1fce0abb1ae507e847cf28b05faea1575d30714"
+    },
+    {
+      "path": "uninstall.sh",
+      "size": 6054,
+      "sha256": "d4f802add2ba8759e3f6d6cbb8613e0620b556e9a61db440da18828f8f43e9ed"
+    }
+  ]
+}
