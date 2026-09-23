@@ -9,6 +9,7 @@ from .session_security_views import (
 from .dashboard_views import DashboardListCreateView, DashboardDetailView
 from .preference_views import UserPreferencesView
 from .housekeeping_views import HousekeepingStatusView, HousekeepingPurgeView
+from .diagnostic_views import SystemDiagnosticsView
 from .capability_views import CapabilityListView, CapabilityDetailView
 from .contract_views import ContractCatalogView, ContractExportView
 from .audit_views import AuditRecordView
@@ -64,6 +65,7 @@ urlpatterns = [
 
     path("ui/context/", UiContextView.as_view(), name="tec-tac-ui-context"),
     path("ui/preferences/", UserPreferencesView.as_view(), name="tec-tac-user-preferences"),
+    path("system/diagnostics/", SystemDiagnosticsView.as_view(), name="tec-tac-system-diagnostics"),
     path("system/storage/", HousekeepingStatusView.as_view(), name="tec-tac-housekeeping-status"),
     path("system/storage/purge/", HousekeepingPurgeView.as_view(), name="tec-tac-housekeeping-purge"),
     path("system/maintenance/actions/", ServerMaintenanceActionListView.as_view(), name="tec-tac-server-maintenance-actions"),
