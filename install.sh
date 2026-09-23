@@ -265,6 +265,37 @@ run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}'
 log "Applying Tec-Tac framework migrations."
 run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' migrate tec_tac --noinput"
 
+# Core-owned migrations must always match the shipped Core models. Dynamic
+# module apps are reported separately so their own release lifecycle can fix
+# drift without blocking a framework upgrade.
+log "Verifying Tec-Tac Core migration state."
+CORE_MIGRATION_OUTPUT=""
+if ! CORE_MIGRATION_OUTPUT="$(run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' makemigrations tec_tac --check --dry-run --verbosity 1" 2>&1)"; then
+    printf '%s\n' "${CORE_MIGRATION_OUTPUT}"
+    fail "Tec-Tac Core models have changes that are not represented by committed migrations."
+fi
+log "Tec-Tac Core migration state: clean."
+
+log "Checking installed module migration state."
+MODULE_MIGRATION_OUTPUT=""
+if MODULE_MIGRATION_OUTPUT="$(run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' makemigrations --dry-run --verbosity 1" 2>&1)"; then
+    mapfile -t MODULE_MIGRATION_APPS < <(printf '%s\n' "${MODULE_MIGRATION_OUTPUT}" | sed -n "s/^Migrations for '\([^']*\)':$/\1/p")
+    MODULE_DRIFT_COUNT=0
+    for migration_app in "${MODULE_MIGRATION_APPS[@]}"; do
+        [[ "${migration_app}" == "tec_tac" ]] && continue
+        MODULE_DRIFT_COUNT=$((MODULE_DRIFT_COUNT + 1))
+        log "WARNING: Module migration drift detected: ${migration_app}"
+    done
+    if [[ "${MODULE_DRIFT_COUNT}" -eq 0 ]]; then
+        log "Installed module migration state: clean."
+    else
+        log "WARNING: ${MODULE_DRIFT_COUNT} installed module app(s) need committed migrations in their own module releases."
+    fi
+else
+    log "WARNING: Installed module migration drift check could not complete; framework installation will continue."
+    printf '%s\n' "${MODULE_MIGRATION_OUTPUT}"
+fi
+
 log "Verifying framework models, RBAC, and Report Manager integration."
 VERIFY_MODEL_CODE="import tfdreporting; from django.apps import apps; expected='${LEGACY_REPORTING_DIR}/'; assert tfdreporting.__file__.startswith(expected), tfdreporting.__file__; assert apps.is_installed('tec_tac'); m=apps.get_model('${APP_NAME}','${MODEL_NAME}'); p=apps.get_model('${APP_NAME}','ExtensionRolePermission'); from ee.reporting.utils import resolve_model; r=resolve_model(data_source={'model':'${MODEL_NAME}'}); assert r['model'] is m; from tfdreporting.rbac import REGISTERED_PERMISSIONS; assert len(REGISTERED_PERMISSIONS) >= 2; fields={f.name for f in m._meta.fields}; assert {'idempotency_key','ingested_by','received_at'} <= fields; sm=apps.get_model('tec_tac','TecTacSchedule'); sr=apps.get_model('tec_tac','TecTacScheduleRun'); ss=apps.get_model('tec_tac','TecTacSessionTrust'); sc=apps.get_model('tec_tac','TecTacSessionSecurityConfig'); sa=apps.get_model('tec_tac','TecTacSessionAudit'); print('TEC-TAC model/RBAC verification OK:', tfdreporting.__file__, m._meta.label, p._meta.label, sm._meta.label, sr._meta.label, ss._meta.label, sc._meta.label, sa._meta.label)"
 if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_MODEL_CODE}\""; then
