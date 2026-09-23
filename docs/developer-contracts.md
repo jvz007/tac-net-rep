@@ -200,3 +200,8 @@ Rules:
 - install, update, remove, bundle, hotfix and runtime discovery must work for extension-only modules.
 
 Use a ReportSet only when the module actually contributes report-facing mappings, datasets, or report logic.
+
+
+## Audit write contract
+
+Tec-Tac modules must write audit events through Core. Server-side code uses `tec_tac.audit.record(...)`; authenticated UI modules receive `audit.record(event)` from the shell runtime. Direct imports or writes to Tactical `logs.models.AuditLog` from modules are unsupported. See `docs/module-audit.md`.

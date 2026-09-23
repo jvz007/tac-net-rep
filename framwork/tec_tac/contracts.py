@@ -21,6 +21,14 @@ from .scheduler import scheduled_actions, serialize_action
 
 CORE_CONTRACTS = (
     {
+        "area": "audit",
+        "import_path": "tec_tac.audit",
+        "name": "record",
+        "kind": "python",
+        "purpose": "Record a Tec-Tac module event through Core into Tactical's unified AuditLog trail.",
+        "audience": "provider/backend",
+    },
+    {
         "area": "scheduler",
         "import_path": "tec_tac.scheduler",
         "name": "SchedulerPermanentError",

@@ -11,6 +11,7 @@ from .preference_views import UserPreferencesView
 from .housekeeping_views import HousekeepingStatusView, HousekeepingPurgeView
 from .capability_views import CapabilityListView, CapabilityDetailView
 from .contract_views import ContractCatalogView, ContractExportView
+from .audit_views import AuditRecordView
 from django.urls import path
 from .views import (
     ExtensionPermissionCatalogView, ModuleCatalogView, ModuleJobView,
@@ -49,6 +50,7 @@ urlpatterns = [
     path("dashboards/<uuid:dashboard_id>/", DashboardDetailView.as_view(), name="tec-tac-dashboard-detail"),
     path("contracts/", ContractCatalogView.as_view(), name="tec-tac-contracts"),
     path("contracts/export/", ContractExportView.as_view(), name="tec-tac-contract-export"),
+    path("audit/record/", AuditRecordView.as_view(), name="tec-tac-audit-record"),
     path("capabilities/", CapabilityListView.as_view(), name="tec-tac-capabilities"),
     path("capabilities/<str:capability_id>/", CapabilityDetailView.as_view(), name="tec-tac-capability-detail"),
     path("scheduler/actions/", SchedulerActionListView.as_view(), name="tec-tac-scheduler-actions"),

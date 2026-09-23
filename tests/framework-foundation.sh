@@ -25,6 +25,7 @@ for path in \
     "${REPO_ROOT}/docs/capabilities.md" \
     "${REPO_ROOT}/docs/core-functions.md" \
     "${REPO_ROOT}/docs/module-interoperability.md" \
+    "${REPO_ROOT}/docs/module-audit.md" \
     "${REPO_ROOT}/extensions/example/tec_tac.json" \
     "${REPO_ROOT}/reportsets/example/tec_tac.json" \
     "${REPO_ROOT}/tests/example-plugin.sh"; do
