@@ -22,6 +22,8 @@ import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 
+from .trusted_publishers import PublisherTrustError, verify_release_tree
+
 STATE_ROOT = Path("/var/lib/tec-tac/system-updates")
 CACHE_ROOT = STATE_ROOT / "cache"
 RELEASE_CACHE = CACHE_ROOT / "release-cache.json"
@@ -36,6 +38,7 @@ MAX_PACKAGE_BYTES = 250 * 1024 * 1024
 MAX_EXTRACTED_BYTES = 1024 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 20000
 COMPONENTS = {"framework", "ui"}
+DEFAULT_SIGNED_RELEASE_MIN_VERSION = {"framework": "1.15.37", "ui": None}
 
 
 class SystemUpdateError(RuntimeError):
@@ -82,6 +85,46 @@ def _repo_name(component: str) -> str:
     if component == "ui":
         return cfg.get("UI_REPOSITORY", "jvz007/tec-tac-ui")
     raise SystemUpdateError("Unknown system component.")
+
+
+
+def _signed_release_min_version(component: str) -> str | None:
+    defaults = DEFAULT_SIGNED_RELEASE_MIN_VERSION.get(component)
+    env_key = f"TEC_TAC_{component.upper()}_SIGNED_RELEASE_MIN_VERSION"
+    value = str(os.environ.get(env_key, "")).strip()
+    if not value:
+        value = str(_read_config().get(env_key, "")).strip()
+    if not value:
+        value = str(defaults or "").strip()
+    return value or None
+
+
+def _release_requires_signature(component: str, version: str, source: dict | None) -> tuple[bool, str | None]:
+    source_type = str((source or {}).get("type") or "offline")
+    minimum = _signed_release_min_version(component)
+    if source_type != "release" or not minimum:
+        return False, minimum
+    return _version_key(version) >= _version_key(minimum), minimum
+
+
+def _unsigned_release_trust(*, component: str, version: str, source: dict | None) -> dict:
+    required, minimum = _release_requires_signature(component, version, source)
+    source_type = str((source or {}).get("type") or "offline")
+    if required:
+        raise SystemUpdateError(
+            f"Signed {component} releases are required from version {minimum}; this release has no v0.2.0 signed-tree metadata."
+        )
+    legacy = source_type == "release"
+    return {
+        "signed": False,
+        "verified": False,
+        "trusted": False,
+        "state": "unsigned",
+        "label": "Unsigned / legacy" if legacy else "Unsigned",
+        "legacy": legacy,
+        "signed_release_min_version": minimum,
+        "details": "No signed-tree metadata was present; legacy release fallback is permitted." if legacy else "No signed-tree metadata was present.",
+    }
 
 
 def _github_headers() -> dict[str, str]:
@@ -253,6 +296,7 @@ def _installed_version(component: str) -> str | None:
 def inspect_archive(archive: Path, *, source: dict | None = None) -> dict:
     if not archive.is_file():
         raise SystemUpdateError("Staged system update package was not found.")
+    source = source or {"type": "offline"}
     with tempfile.TemporaryDirectory(prefix="tec-tac-system-inspect-") as tmp:
         extracted = Path(tmp) / "payload"
         extracted.mkdir()
@@ -276,6 +320,20 @@ def inspect_archive(archive: Path, *, source: dict | None = None) -> dict:
             if declared_version != version:
                 raise SystemUpdateError("Package manifest version does not match VERSION.")
 
+        signed_manifest = root / "tec-tac-release.json"
+        signed_signature = root / "tec-tac-release.json.sig"
+        if signed_manifest.exists() or signed_signature.exists():
+            try:
+                release_trust = verify_release_tree(root=root, expected_component=component)
+            except PublisherTrustError as exc:
+                raise SystemUpdateError(f"Signed release verification failed [{exc.code}]: {exc}") from exc
+            release_trust["label"] = "Verified"
+            release_trust["legacy"] = False
+            release_trust["signed_release_min_version"] = _signed_release_min_version(component)
+            release_trust["details"] = f"Verified manifest signature and {release_trust.get('file_count', 0)} release files."
+        else:
+            release_trust = _unsigned_release_trust(component=component, version=version, source=source)
+
     installed = _installed_version(component)
     installable = True
     block_reason = None
@@ -297,7 +355,8 @@ def inspect_archive(archive: Path, *, source: dict | None = None) -> dict:
         "installed_version": installed,
         "operation": _operation(installed, version),
         "manifest": package_manifest,
-        "source": source or {"type": "offline"},
+        "source": source,
+        "release_trust": release_trust,
         "compatibility": compatibility,
         "installable": installable,
         "install_block_reason": block_reason,
@@ -658,6 +717,7 @@ def queue_install(upload_id: str, *, allow_downgrade: bool = False, requested_by
         "package_filename": meta.get("filename"),
         "package_sha256": meta.get("sha256"),
         "source": preview.get("source") or {"type": "offline"},
+        "release_trust": preview.get("release_trust") or {"state": "unsigned", "signed": False, "verified": False},
         "requested_by": requested_by or None,
     })
     try:
@@ -672,7 +732,7 @@ def public_job(job: dict) -> dict:
     allowed = {
         "id", "status", "created_at", "started_at", "finished_at", "stage", "error", "error_type",
         "rollback", "action", "component", "version", "installed_version", "operation", "package_sha256",
-        "package_filename", "source", "backup_path", "requested_by",
+        "package_filename", "source", "release_trust", "backup_path", "requested_by", "source_git",
     }
     result = {k: v for k, v in job.items() if k in allowed}
     log_path = LOGS_ROOT / f"{job.get('id')}.log"
@@ -738,5 +798,6 @@ def system_status() -> dict:
         "release_cache": {component: cached_online_status(component) for component in sorted(COMPONENTS)},
         "accepted_archives": [".zip", ".tar.gz", ".tgz"],
         "advanced_sources": {"branch_requires_unlock": True},
+        "signed_release_policy": {component: {"minimum_version": _signed_release_min_version(component)} for component in sorted(COMPONENTS)},
         "history": _recent_history(),
     }

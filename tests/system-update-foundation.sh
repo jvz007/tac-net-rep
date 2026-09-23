@@ -172,3 +172,12 @@ grep -q 'another Tec-Tac lifecycle operation is already running' "${ROOT}/script
 grep -q 'another Tec-Tac lifecycle operation is already running' "${ROOT}/scripts/module-job-helper.py" || fail "module v1 lifecycle contention error missing"
 grep -q 'another Tec-Tac lifecycle operation is already running' "${ROOT}/scripts/module-v2-job-helper.py" || fail "module v2 lifecycle contention error missing"
 echo "[TEST] PASS shared lifecycle serialization"
+
+# 1.15.37 publisher-tool v0.2.0 signed source releases
+python3 "${ROOT}/tests/system-update-signed-tree.py"
+grep -q 'verify_release_tree' "${ROOT}/framwork/tec_tac/system_update.py" || fail "signed source-tree verifier not wired into System Updates"
+grep -q 'verify-staged-signature-tree' "${ROOT}/scripts/system-update-helper.py" || fail "worker staged tree re-verification missing"
+grep -q 'verify-execution-signature-tree' "${ROOT}/scripts/system-update-helper.py" || fail "worker checkout tree re-verification missing"
+grep -q 'SIGNED_RELEASE_MIN_VERSION' "${ROOT}/framwork/tec_tac/system_update.py" || fail "Framework signed release cutoff missing"
+grep -q 'release_trust' "${ROOT}/framwork/tec_tac/system_update.py" || fail "signed release provenance not retained in jobs"
+echo "[TEST] PASS signed source release integration"

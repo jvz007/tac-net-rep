@@ -8,6 +8,7 @@ without terminating the update worker itself.
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import pwd
@@ -21,6 +22,11 @@ import tempfile
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+
+TREE_MANIFEST = "tec-tac-release.json"
+TREE_SIGNATURE = "tec-tac-release.json.sig"
+MAX_TREE_FILES = 20000
+DEFAULT_SIGNED_RELEASE_MIN_VERSION = {"framework": "1.15.37", "ui": None}
 
 JOB_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 STATE_ROOT = Path("/var/lib/tec-tac/system-updates")
@@ -217,6 +223,154 @@ def _git(command, target, *, check=True, capture=True):
         detail = (result.stderr or result.stdout or "git command failed").strip()
         raise RuntimeError(f"git {' '.join(command)} failed: {detail}")
     return result
+
+
+
+def _version_key(value):
+    match = re.match(r"^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(.*)$", str(value or "").strip(), re.I)
+    if not match:
+        return (0, 0, 0, 0, str(value or "").lower())
+    nums = tuple(int(x or 0) for x in match.groups()[:3])
+    suffix = (match.group(4) or "").strip()
+    return (*nums, 1 if not suffix else 0, suffix.lower())
+
+
+def _signed_release_min_version(component):
+    cfg = load_config()
+    key = f"TEC_TAC_{component.upper()}_SIGNED_RELEASE_MIN_VERSION"
+    value = str(os.environ.get(key) or cfg.get(key) or DEFAULT_SIGNED_RELEASE_MIN_VERSION.get(component) or "").strip()
+    return value or None
+
+
+def _safe_tree_rel(value):
+    if not isinstance(value, str) or not value or "\\" in value or "\x00" in value or value.startswith("/"):
+        raise RuntimeError(f"unsafe signed release path: {value!r}")
+    pure = PurePosixPath(value)
+    parts = pure.parts
+    if not parts or any(part in {"", ".", "..", ".git"} for part in parts):
+        raise RuntimeError(f"unsafe signed release path: {value!r}")
+    normalized = "/".join(parts)
+    if normalized != value:
+        raise RuntimeError(f"non-canonical signed release path: {value!r}")
+    if len(parts) == 1 and normalized in {TREE_MANIFEST, TREE_SIGNATURE}:
+        raise RuntimeError(f"signing output cannot be listed in signed tree: {value}")
+    return normalized
+
+
+def _digest_file(path):
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode):
+        raise RuntimeError(f"signed release entry must be a regular file: {path}")
+    digest = hashlib.sha256()
+    size = 0
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+            size += len(block)
+    if size != info.st_size:
+        raise RuntimeError(f"signed release file changed while hashing: {path}")
+    return size, digest.hexdigest()
+
+
+def _tree_inventory(root):
+    root = Path(root).resolve()
+    found = {}
+    pending = [(root, "")]
+    while pending:
+        directory, prefix = pending.pop()
+        for entry in directory.iterdir():
+            name = entry.name
+            if not prefix and (name == ".git" or name in {TREE_MANIFEST, TREE_SIGNATURE}):
+                continue
+            rel = _safe_tree_rel(f"{prefix}/{name}" if prefix else name)
+            info = entry.lstat()
+            if stat.S_ISDIR(info.st_mode):
+                pending.append((entry, rel))
+            elif stat.S_ISREG(info.st_mode):
+                found[rel] = _digest_file(entry)
+                if len(found) > MAX_TREE_FILES:
+                    raise RuntimeError("signed release contains too many files")
+            else:
+                raise RuntimeError(f"signed release contains a link or special file: {rel}")
+    return dict(sorted(found.items()))
+
+
+def verify_signed_tree_snapshot(root, component, expected_version, trust):
+    """Reconfirm the exact signed manifest/signature and complete tree before install."""
+    if not isinstance(trust, dict) or not trust.get("verified") or not trust.get("signed"):
+        raise RuntimeError("signed release verification context is missing")
+    manifest_path = Path(root) / TREE_MANIFEST
+    signature_path = Path(root) / TREE_SIGNATURE
+    for path, label in ((manifest_path, "manifest"), (signature_path, "signature")):
+        try:
+            info = path.lstat()
+        except OSError as exc:
+            raise RuntimeError(f"signed release {label} is missing from execution tree") from exc
+        if not stat.S_ISREG(info.st_mode):
+            raise RuntimeError(f"signed release {label} is not a regular file")
+    manifest_bytes = manifest_path.read_bytes()
+    signature_bytes = signature_path.read_bytes()
+    if hashlib.sha256(manifest_bytes).hexdigest() != str(trust.get("manifest_sha256") or ""):
+        raise RuntimeError("execution checkout signed manifest differs from inspected manifest")
+    if hashlib.sha256(signature_bytes).hexdigest() != str(trust.get("signature_sha256") or ""):
+        raise RuntimeError("execution checkout signed signature differs from inspected signature")
+    try:
+        manifest = json.loads(manifest_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("execution checkout signed manifest is invalid") from exc
+    if not isinstance(manifest, dict) or manifest.get("schema") != 2:
+        raise RuntimeError("execution checkout signed manifest schema mismatch")
+    expected = {
+        "component": component,
+        "version": str(expected_version),
+        "publisher_id": str(trust.get("publisher_id") or ""),
+        "key_id": str(trust.get("key_id") or ""),
+        "algorithm": "Ed25519",
+    }
+    for field, value in expected.items():
+        if str(manifest.get(field) or "") != value:
+            raise RuntimeError(f"execution checkout signed manifest {field} mismatch")
+    files = manifest.get("files")
+    if not isinstance(files, list) or not files or len(files) > MAX_TREE_FILES:
+        raise RuntimeError("execution checkout signed file list is invalid")
+    declared = {}
+    previous = None
+    for entry in files:
+        if not isinstance(entry, dict) or set(entry) != {"path", "size", "sha256"}:
+            raise RuntimeError("execution checkout signed file entry is invalid")
+        rel = _safe_tree_rel(entry.get("path"))
+        if previous is not None and rel < previous:
+            raise RuntimeError("execution checkout signed file list is not sorted")
+        previous = rel
+        if rel in declared:
+            raise RuntimeError(f"duplicate execution checkout signed path: {rel}")
+        size = entry.get("size")
+        digest = str(entry.get("sha256") or "").strip().lower()
+        if isinstance(size, bool) or not isinstance(size, int) or size < 0 or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise RuntimeError(f"invalid execution checkout signed metadata for {rel}")
+        declared[rel] = (size, digest)
+    actual = _tree_inventory(root)
+    if declared != actual:
+        missing = len(set(declared) - set(actual))
+        extra = len(set(actual) - set(declared))
+        changed = sum(1 for key in set(declared) & set(actual) if declared[key] != actual[key])
+        raise RuntimeError(f"execution checkout differs from verified signed tree (missing={missing}, extra={extra}, changed={changed})")
+    if len(actual) != int(trust.get("file_count") or 0):
+        raise RuntimeError("execution checkout signed file count differs from inspected release")
+    return len(actual)
+
+
+def _enforce_release_signature_cutoff(job):
+    source = job.get("source") if isinstance(job.get("source"), dict) else {}
+    if str(source.get("type") or "") != "release":
+        return
+    component = str(job.get("component") or "")
+    minimum = _signed_release_min_version(component)
+    if not minimum or _version_key(job.get("version")) < _version_key(minimum):
+        return
+    trust = job.get("release_trust") if isinstance(job.get("release_trust"), dict) else {}
+    if not trust.get("verified") or not trust.get("signed"):
+        raise RuntimeError(f"signed {component} release required from version {minimum}")
 
 
 def prepare_source_checkout(target, component):
@@ -605,6 +759,12 @@ def run_job(job_id):
         if not target.is_dir():
             raise RuntimeError(f"installed component root is missing: {target}")
         old_version = (target / "VERSION").read_text(encoding="utf-8").strip() if (target / "VERSION").is_file() else "unknown"
+        expected_package_sha = str(job.get("package_sha256") or "").strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", expected_package_sha):
+            raise RuntimeError("staged package SHA-256 is missing from job metadata")
+        if _digest_file(package)[1] != expected_package_sha:
+            raise RuntimeError("staged package bytes changed after inspection")
+        _enforce_release_signature_cutoff(job)
 
         job["stage"] = "backup"
         atomic_json(path, job)
@@ -627,6 +787,13 @@ def run_job(job_id):
             package_version = (source / "VERSION").read_text(encoding="utf-8").strip()
             if package_version != job.get("version"):
                 raise RuntimeError("package VERSION changed after inspection")
+            trust = job.get("release_trust") if isinstance(job.get("release_trust"), dict) else {}
+            if trust.get("signed") or trust.get("verified"):
+                job["stage"] = "verify-staged-signature-tree"
+                atomic_json(path, job)
+                file_count = verify_signed_tree_snapshot(source, component, package_version, trust)
+                log.write(f"[TEC-TAC-UPDATE] verified staged signed tree files={file_count} publisher={trust.get('publisher_id')} key={trust.get('key_id')}\n")
+                log.flush()
 
             job["stage"] = "deploy"
             atomic_json(path, job)
@@ -635,6 +802,12 @@ def run_job(job_id):
             git_state = apply_source_update(source, target, component, job)
             job["source_git"] = {k: v for k, v in git_state.items() if v is not None}
             atomic_json(path, job)
+            if trust.get("signed") or trust.get("verified"):
+                job["stage"] = "verify-execution-signature-tree"
+                atomic_json(path, job)
+                file_count = verify_signed_tree_snapshot(target, component, package_version, trust)
+                log.write(f"[TEC-TAC-UPDATE] verified execution checkout signed tree files={file_count} commit={job.get('source_git', {}).get('update_head')}\n")
+                log.flush()
             if component == "framework":
                 verify_dynamic_plugins(runtime_root, dynamic_inventory)
 

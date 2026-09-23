@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.36",
+  "version": "1.15.37",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -27,19 +27,19 @@
       "sha256": "95c8221f16646ac37c071f4ab4120665615afabaec231ad09c4cadd802206430"
     },
     {
-      "path": "RELEASE_NOTES_1.15.35.md",
-      "size": 1452,
-      "sha256": "7b5a56b844862cd5a0a0f23a9b417125bed4b587daf2c8e8d3bf5dd34674290c"
-    },
-    {
       "path": "RELEASE_NOTES_1.15.36.md",
       "size": 1725,
       "sha256": "437b453074e525916b8f260d776cf7f37c2373e6eb0265682e33913888aeb397"
     },
     {
+      "path": "RELEASE_NOTES_1.15.37.md",
+      "size": 847,
+      "sha256": "eee25bc50cfaf7641adcb5b909e4dff4f58e8ce2cc35a3bac07c922faeb2c4ad"
+    },
+    {
       "path": "VERSION",
       "size": 8,
-      "sha256": "6868098b69624d34eea375d61b01376745a13d203cf854a982840d447640c547"
+      "sha256": "369e3d0cda0a0d8c8df41163058f84fed8243c587b66fcc967b706d773c412d5"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -322,6 +322,11 @@
       "sha256": "35ee442d32e6e524317bfe2c553480e61b43f2cb19012e0b62a58613f24bb2fc"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.15.35.md",
+      "size": 1452,
+      "sha256": "7b5a56b844862cd5a0a0f23a9b417125bed4b587daf2c8e8d3bf5dd34674290c"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.2.0.md",
       "size": 1977,
       "sha256": "7d78abb704c7a3e459f7437cb0bdcc7ea738f76e97b925f2b4e16466a812cd54"
@@ -422,14 +427,19 @@
       "sha256": "7583b18cf4e642f63429f763f846a13bbf9fdd721f9b9d02797c3c7e8e0b0864"
     },
     {
+      "path": "docs/system-update-signed-releases.md",
+      "size": 1849,
+      "sha256": "646acc9c45805d44cdc0f06bcbd553851695c2046fd11c688c97e5c536501e48"
+    },
+    {
       "path": "docs/troubleshooting-diagnostics.md",
       "size": 1703,
       "sha256": "a894b3187b6040bb2000c937f42436c959c74dbd11ae40c83f386130d5f853c0"
     },
     {
       "path": "docs/trusted-publisher-verification.md",
-      "size": 6346,
-      "sha256": "a3a31746f12470715f12dc8a099800993408a18cf90cf61ad33a677411b446ef"
+      "size": 7002,
+      "sha256": "e515d7c5012afcb894b8642da6ca080c88e1fbc31bb8e8f1dc21aa16993dae1c"
     },
     {
       "path": "docs/tutorial-packages/packagetest/README.md",
@@ -923,8 +933,8 @@
     },
     {
       "path": "framwork/tec_tac/system_update.py",
-      "size": 30282,
-      "sha256": "ff59edb491fb06fd2e9f7b7f39677002abdc68f829b87b1c6641825f00abc24d"
+      "size": 33336,
+      "sha256": "561f3099ee3acf5a95c99a489f6b8a06c803eb00c0f21f34abf60b554627d7a0"
     },
     {
       "path": "framwork/tec_tac/tasks.py",
@@ -933,8 +943,8 @@
     },
     {
       "path": "framwork/tec_tac/trusted_publishers.py",
-      "size": 15071,
-      "sha256": "8644a40f4703322e876dd5e1ebd6ac132d839c0fe633495a365aafd91dbf8c4d"
+      "size": 28671,
+      "sha256": "b6859558ca7c2432b5083bc51a9978e82e6c295b62ead5ee14be24773a8c75ff"
     },
     {
       "path": "framwork/tec_tac/urls.py",
@@ -1093,8 +1103,8 @@
     },
     {
       "path": "scripts/system-update-helper.py",
-      "size": 30079,
-      "sha256": "22cdc45384d03c64091c9c37fd9d40b4d1f5e3fdae16df7164b733382181735e"
+      "size": 38874,
+      "sha256": "cecfa841681a80202e79b0678644776b50736006763e4ccd07793ec94f038ac5"
     },
     {
       "path": "scripts/tactical-backup-sudo.py",
@@ -1109,7 +1119,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "90383be16fd763d2272627073c312c96cd67eeff13af40810e431cdf7a668cf2"
+      "sha256": "55ef0a533440743ce684b1126e8462243ef59ac95897e3896ba94a7cdf215932"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -1303,8 +1313,13 @@
     },
     {
       "path": "tests/system-update-foundation.sh",
-      "size": 12856,
-      "sha256": "64212f985a57c0e624a0426e7c23260195fb7a7255bd952d1e17e8a3d06cba44"
+      "size": 13689,
+      "sha256": "2812248a828dd989085a2ff80151d50d1404727dc5d6af6374d618b108e6c56f"
+    },
+    {
+      "path": "tests/system-update-signed-tree.py",
+      "size": 5095,
+      "sha256": "0a26e1edc002ddb77f3cf8940d4b9ace8b38ed71d66e6f043d6e26b2f9474d68"
     },
     {
       "path": "tests/tactical-update-survival.sh",

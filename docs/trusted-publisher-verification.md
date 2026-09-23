@@ -203,3 +203,7 @@ Troubleshooting & Diagnostics exposes `core.security.publisher-trust`, including
 - Invalid signed packages never fall back to unsigned handling.
 - Unsigned privileged packages are rejected.
 - Exact package bytes are verified before module code executes.
+
+## Signed Framework source trees (publisher tool v0.2.0)
+
+System Updates also understands the publisher tool's schema-2 source-tree format. A signed repository root contains `tec-tac-release.json` and `tec-tac-release.json.sig`. Core verifies the exact manifest bytes with the locally trusted active Ed25519 key, then requires the manifest to match the complete source tree by canonical relative path, byte size, and SHA-256. The execution worker pins the verified manifest/signature hashes into the update job and re-checks both the extracted staged tree and the Git checkout that will execute the installer. See `docs/system-update-signed-releases.md`.
