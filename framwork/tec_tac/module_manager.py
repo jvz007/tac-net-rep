@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import shutil
 import stat
@@ -20,6 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 from .registry import RegistryError, discover_plugins, get_plugins
+from .trusted_publishers import PublisherTrustError, verify_release_files
 
 STATE_ROOT = Path("/var/lib/tec-tac/module-manager")
 STAGED_ROOT = STATE_ROOT / "staged"
@@ -30,6 +32,7 @@ MAX_PACKAGE_BYTES = 100 * 1024 * 1024
 MAX_EXTRACTED_BYTES = 512 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 10000
 PROTECTED_PLUGIN_IDS = frozenset({"example", "legacy-reporting-poc"})
+logger = logging.getLogger(__name__)
 
 
 class ModuleManagerError(RuntimeError):
@@ -222,6 +225,7 @@ def _pair_payload(extension, reportset=None, *, ui: dict | None = None, installe
             {"name": name, "permissions": list(values)} for name, values in extension.permission_groups
         ],
         "permission_count": len(permissions),
+        "publisher_permissions": list(getattr(extension, "publisher_permissions", ()) or ()),
         "ui": ui,
         "ui_enabled": ui is not None,
         "authenticated_ui_enabled": bool(ui and ui.get("entry")),
@@ -326,7 +330,47 @@ def _allowed_suffix(filename: str) -> str:
     raise ModuleManagerError("Package must end in .zip, .tar.gz, or .tgz")
 
 
-def stage_uploaded_package(upload) -> dict:
+def _copy_sidecar(upload, path: Path, maximum: int = 1024 * 1024) -> tuple[int, str]:
+    size = int(getattr(upload, "size", 0) or 0)
+    if size <= 0 or size > maximum:
+        raise ModuleManagerError("Package trust sidecar is empty or exceeds the allowed size limit.")
+    digest = hashlib.sha256()
+    written = 0
+    with path.open("wb") as handle:
+        for chunk in upload.chunks():
+            written += len(chunk)
+            if written > maximum:
+                handle.close(); path.unlink(missing_ok=True)
+                raise ModuleManagerError("Package trust sidecar exceeds the allowed size limit.")
+            digest.update(chunk); handle.write(chunk)
+    os.chmod(path, 0o640)
+    return written, digest.hexdigest()
+
+
+def _verify_stage_trust(meta: dict, *, require_signed: bool = False, required_permissions=("module.install",)) -> dict:
+    try:
+        return verify_release_files(
+            package_path=Path(meta["package_path"]),
+            package_filename=str(meta.get("filename") or Path(meta["package_path"]).name),
+            signature_path=Path(meta["signature_path"]) if meta.get("signature_path") else None,
+            signature_filename=meta.get("signature_filename"),
+            metadata_path=Path(meta["release_metadata_path"]) if meta.get("release_metadata_path") else None,
+            required_permissions=required_permissions,
+            require_signed=require_signed,
+        )
+    except PublisherTrustError as exc:
+        logger.warning(
+            "Tec-Tac publisher trust rejected package=%s code=%s require_signed=%s required_permissions=%s detail=%s",
+            str(meta.get("filename") or Path(str(meta.get("package_path") or "package")).name),
+            exc.code,
+            bool(require_signed),
+            ",".join(sorted(set(required_permissions))),
+            str(exc),
+        )
+        raise ModuleManagerError(f"Publisher trust verification failed [{exc.code}]: {exc}") from exc
+
+
+def stage_uploaded_package(upload, signature_upload=None, metadata_upload=None) -> dict:
     size = int(getattr(upload, "size", 0) or 0)
     if size <= 0:
         raise ModuleManagerError("Package is empty.")
@@ -362,8 +406,37 @@ def stage_uploaded_package(upload) -> dict:
         "created_at": _utcnow(),
         "preview": preview,
     }
+    sidecars = []
+    try:
+        if signature_upload is not None:
+            sig_name = str(getattr(signature_upload, "name", "package.zip.sig"))
+            sig_path = STAGED_ROOT / f"{upload_id}.sig"
+            _copy_sidecar(signature_upload, sig_path)
+            metadata["signature_path"] = str(sig_path)
+            metadata["signature_filename"] = sig_name
+            sidecars.append(sig_path)
+        if metadata_upload is not None:
+            release_name = str(getattr(metadata_upload, "name", "package.release.json"))
+            release_path = STAGED_ROOT / f"{upload_id}.release.json"
+            _copy_sidecar(metadata_upload, release_path)
+            metadata["release_metadata_path"] = str(release_path)
+            metadata["release_metadata_filename"] = release_name
+            sidecars.append(release_path)
+        requested_publisher_permissions = set(preview.get("publisher_permissions") or [])
+        required_permissions = {"module.install", *requested_publisher_permissions}
+        require_signed = bool(requested_publisher_permissions - {"module.install"})
+        metadata["publisher_trust"] = _verify_stage_trust(
+            metadata,
+            require_signed=require_signed,
+            required_permissions=tuple(sorted(required_permissions)),
+        )
+    except Exception:
+        package_path.unlink(missing_ok=True)
+        for path in sidecars:
+            path.unlink(missing_ok=True)
+        raise
     _atomic_json(STAGED_ROOT / f"{upload_id}.json", metadata)
-    return {k: v for k, v in metadata.items() if k != "package_path"}
+    return {k: v for k, v in metadata.items() if k not in {"package_path", "signature_path", "release_metadata_path"}}
 
 
 def _load_stage(upload_id: str) -> dict:
@@ -386,14 +459,28 @@ def _load_stage(upload_id: str) -> dict:
     if not path.is_file():
         raise ModuleManagerError("Staged package file is missing.")
     meta["package_path"] = str(path)
+    for key in ("signature_path", "release_metadata_path"):
+        if not meta.get(key):
+            continue
+        sidecar = Path(str(meta[key])).resolve()
+        try:
+            sidecar.relative_to(STAGED_ROOT.resolve())
+        except ValueError as exc:
+            raise ModuleManagerError(f"Staged trust sidecar path is invalid: {key}.") from exc
+        if not sidecar.is_file():
+            raise ModuleManagerError(f"Staged trust sidecar is missing: {key}.")
+        meta[key] = str(sidecar)
     return meta
 
 
 
 def discard_stage(upload_id: str) -> None:
     meta = _load_stage(upload_id)
-    package = Path(meta["package_path"])
-    package.unlink(missing_ok=True)
+    Path(meta["package_path"]).unlink(missing_ok=True)
+    if meta.get("signature_path"):
+        Path(meta["signature_path"]).unlink(missing_ok=True)
+    if meta.get("release_metadata_path"):
+        Path(meta["release_metadata_path"]).unlink(missing_ok=True)
     (STAGED_ROOT / f"{upload_id}.json").unlink(missing_ok=True)
 
 def _new_job(payload: dict) -> dict:
@@ -434,6 +521,12 @@ def _dispatch(job_id: str) -> None:
 def queue_install(upload_id: str, replace: bool = False, requested_by: str | None = None) -> dict:
     meta = _load_stage(upload_id)
     preview = inspect_archive(Path(meta["package_path"]))
+    requested_publisher_permissions = set(preview.get("publisher_permissions") or [])
+    trust = _verify_stage_trust(
+        meta,
+        require_signed=bool(requested_publisher_permissions - {"module.install"}),
+        required_permissions=tuple(sorted({"module.install", *requested_publisher_permissions})),
+    )
     if not preview.get("installable", False):
         raise ModuleManagerError(preview.get("install_block_reason") or "Package is not installable.")
     if preview["already_installed"] and not replace:
@@ -448,6 +541,7 @@ def queue_install(upload_id: str, replace: bool = False, requested_by: str | Non
         "replace": bool(replace),
         "package_sha256": meta.get("sha256"),
         "package_filename": meta.get("filename"),
+        "publisher_trust": trust,
         "requested_by": str(requested_by) if requested_by else None,
     })
     try:

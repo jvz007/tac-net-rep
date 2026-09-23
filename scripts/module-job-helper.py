@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import pwd
@@ -142,6 +143,13 @@ def claim_job(job_id):
         os.chmod(target, 0o640)
         meta = STAGED_ROOT / f"{job.get('upload_id')}.json"
         if meta.is_file():
+            try:
+                stage_meta = json.loads(meta.read_text(encoding="utf-8"))
+                for key in ("signature_path", "release_metadata_path"):
+                    if stage_meta.get(key):
+                        Path(str(stage_meta[key])).unlink(missing_ok=True)
+            except Exception:
+                pass
             meta.unlink()
         job["package_path"] = str(target)
 
@@ -165,11 +173,34 @@ def dispatch(job_id):
     )
 
 
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _verify_job_package_hash(job):
+    if job.get("action") != "install":
+        return
+    expected = str(job.get("package_sha256") or "").strip().lower()
+    if not expected:
+        raise RuntimeError("install job is missing package_sha256")
+    package = Path(str(job.get("package_path") or ""))
+    if not package.is_file():
+        raise RuntimeError("staged package is missing")
+    actual = _sha256_file(package)
+    if actual != expected:
+        raise RuntimeError("staged package SHA-256 changed after trust verification")
+
+
 def run_job(job_id):
     path, job = load_job(job_id)
     if job.get("status") not in {"dispatched", "running"}:
         raise SystemExit("job was not dispatched")
     acquire_lifecycle_lock()
+    _verify_job_package_hash(job)
     config = load_config()
     repo_root = Path(config.get("REPO_ROOT", "/opt/tec-tac")).resolve()
     ui_sync = Path(config.get("UI_SYNC_SCRIPT", "/opt/tec-tac-src/ui/scripts/sync-modules.sh"))
@@ -208,6 +239,8 @@ def run_job(job_id):
     try:
         with log_path.open("a", encoding="utf-8") as log:
             log.write(f"[TEC-TAC-MODULE] started {now()} action={job['action']} plugin={job['plugin_id']}\n")
+            trust = job.get("publisher_trust") if isinstance(job.get("publisher_trust"), dict) else {}
+            log.write(f"[TEC-TAC-MODULE] publisher_trust state={trust.get('state','unknown')} publisher={trust.get('publisher_id','')} key={trust.get('key_id','')} sha256={job.get('package_sha256','')}\n")
             log.flush()
             result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, text=True)
             rc = result.returncode

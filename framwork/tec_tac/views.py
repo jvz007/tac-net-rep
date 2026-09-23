@@ -277,8 +277,10 @@ class ModulePackageInspectView(APIView):
             upload = request.FILES.get("package")
             if upload is None:
                 return Response({"detail": "A package upload is required.", "stage": stage}, status=400)
+            signature = request.FILES.get("signature")
+            release_metadata = request.FILES.get("metadata") or request.FILES.get("release_metadata")
             stage = "stage-upload"
-            payload = stage_uploaded_package(upload)
+            payload = stage_uploaded_package(upload, signature_upload=signature, metadata_upload=release_metadata)
             stage = "licensing-check"
             from .module_manager_v2 import LicensingRequirementError, _enforce_candidate_licensing, _package_metadata
             meta = _load_stage(payload["upload_id"])

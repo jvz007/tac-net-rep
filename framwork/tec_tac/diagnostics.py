@@ -24,6 +24,7 @@ from .capabilities import list_capabilities
 from .contracts import build_contract_catalog, framework_version
 from .module_manager_v2 import installed_catalog_v2
 from .scheduler import scheduler_health
+from .trusted_publishers import TRUST_ROOT, list_trusted_publishers
 
 STATUS_ORDER = {"pass": 0, "warning": 1, "fail": 2, "unknown": 1}
 
@@ -272,6 +273,30 @@ def _audit_check() -> dict:
         return _check("core.audit.contract", "Audit write contract", "fail", f"Audit contract inspection failed: {exc.__class__.__name__}: {exc}")
 
 
+
+def _publisher_trust_check() -> dict:
+    rows = list_trusted_publishers()
+    invalid = [row for row in rows if str(row.get("status") or "").lower() not in {"trusted"}]
+    if not TRUST_ROOT.exists():
+        return _check(
+            "core.security.publisher-trust",
+            "Trusted publishers",
+            "warning",
+            f"Trusted publisher store is not present at {TRUST_ROOT}; unsigned non-privileged modules remain transitional-only.",
+            details={"trust_root": str(TRUST_ROOT), "publishers": []},
+            help_id="core.public-contracts",
+        )
+    status = "warning" if invalid else "pass"
+    summary = f"{len(rows)} publisher trust record(s) loaded; {len(invalid)} invalid or untrusted."
+    return _check(
+        "core.security.publisher-trust",
+        "Trusted publishers",
+        status,
+        summary,
+        details={"trust_root": str(TRUST_ROOT), "publishers": rows},
+        help_id="core.public-contracts",
+    )
+
 def _helper_check() -> dict:
     paths = [
         "/usr/local/sbin/tec-tac-module-job",
@@ -324,7 +349,7 @@ def diagnostic_report(*, live_capabilities: bool = False) -> dict:
         _section("django", "Django & database", [_django_check(), *_migration_checks()]),
         _section("runtime", "Runtime services", [_service_check(), _scheduler_check(), _helper_check()]),
         _section("modules", "Modules & capabilities", [_module_check(), _capability_check(live=live_capabilities)]),
-        _section("contracts", "Contracts & audit", [_contract_check(), _audit_check()]),
+        _section("contracts", "Contracts & audit", [_contract_check(), _audit_check(), _publisher_trust_check()]),
         _section("storage", "Storage", [_storage_check()]),
     ]
     checks_flat = [item for section in sections for item in section["checks"]]

@@ -365,3 +365,11 @@ echo "[TEST] PASS lightweight module runtime snapshot"
 grep -q "_bundle_manifest_count" "${ROOT}/framwork/tec_tac/module_manager_v2.py" || fail "bundle-first classifier missing"
 grep -q "Downloaded artifact does not contain repository module" "${ROOT}/framwork/tec_tac/module_repository.py" || fail "repository bundle identity validation missing"
 echo "[TEST] PASS bundle-aware module update intake"
+
+# 1.15.36 trusted publisher module intake
+grep -q 'publisher_permissions' "${ROOT}/framwork/tec_tac/registry.py" || fail "publisher permission manifest contract missing"
+grep -q '_verify_stage_trust' "${ROOT}/framwork/tec_tac/module_manager.py" || fail "v1 publisher trust gate missing"
+grep -q '_verify_stage_trust' "${ROOT}/framwork/tec_tac/module_manager_v2.py" || fail "v2 publisher trust gate missing"
+grep -q 'staged package SHA-256 changed after trust verification' "${ROOT}/scripts/module-job-helper.py" || fail "v1 root worker post-verification hash guard missing"
+grep -q 'changed after trust verification' "${ROOT}/scripts/module-v2-job-helper.py" || fail "v2 root worker post-verification hash guard missing"
+echo "[TEST] PASS trusted publisher module intake"

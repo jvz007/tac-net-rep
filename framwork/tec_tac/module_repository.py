@@ -223,6 +223,15 @@ def _validate_release(raw: dict, repo_url: str) -> dict:
                 raise ModuleRepositoryError(str(exc)) from exc
     absolute = urllib.parse.urljoin(repo_url, download)
     _clean_url(absolute)
+    signature_ref = str(raw.get("signature") or "").strip()
+    metadata_ref = str(raw.get("release_metadata") or raw.get("metadata") or "").strip()
+    signature_url = urllib.parse.urljoin(repo_url, signature_ref) if signature_ref else None
+    metadata_url = urllib.parse.urljoin(repo_url, metadata_ref) if metadata_ref else None
+    if bool(signature_url) != bool(metadata_url):
+        raise ModuleRepositoryError(f"Repository module {module_id} {version} must publish both signature and release_metadata together.")
+    if signature_url:
+        _clean_url(signature_url)
+        _clean_url(metadata_url)
     return {
         "id": module_id,
         "name": str(raw.get("name") or module_id),
@@ -231,6 +240,8 @@ def _validate_release(raw: dict, repo_url: str) -> dict:
         "download": download,
         "download_url": absolute,
         "sha256": sha256,
+        "signature_url": signature_url,
+        "release_metadata_url": metadata_url,
         "dependencies": {str(k): str(v) for k, v in dependencies.items()},
         "optional_dependencies": {str(k): str(v) for k, v in optional.items()},
         "requires": {str(k): str(v) for k, v in requires.items()},
@@ -454,7 +465,20 @@ def stage_repository_package(repository_id: str, module_id: str, version: str | 
         with tempfile.TemporaryDirectory(prefix="tec-tac-online-module-") as tmp:
             package_path = Path(tmp) / suffix
             package_path.write_bytes(data)
-            staged = stage_uploaded_artifact(_PathUpload(package_path, suffix))
+            signature_upload = None
+            metadata_upload = None
+            if candidate.get("signature_url"):
+                signature_data = _fetch(candidate["signature_url"], 1024 * 1024)
+                signature_name = Path(urllib.parse.urlparse(candidate["signature_url"]).path).name or f"{suffix}.sig"
+                signature_path = Path(tmp) / signature_name
+                signature_path.write_bytes(signature_data)
+                signature_upload = _PathUpload(signature_path, signature_name)
+                metadata_data = _fetch(candidate["release_metadata_url"], 1024 * 1024)
+                metadata_name = Path(urllib.parse.urlparse(candidate["release_metadata_url"]).path).name or f"{suffix}.release.json"
+                metadata_path = Path(tmp) / metadata_name
+                metadata_path.write_bytes(metadata_data)
+                metadata_upload = _PathUpload(metadata_path, metadata_name)
+            staged = stage_uploaded_artifact(_PathUpload(package_path, suffix), signature_upload=signature_upload, metadata_upload=metadata_upload)
         preview = staged.get("preview") or {}
         kind = str(staged.get("kind") or preview.get("kind") or "package")
         if kind == "bundle":
@@ -484,6 +508,7 @@ def stage_repository_package(repository_id: str, module_id: str, version: str | 
         "package_sha256": digest,
         "repository_url": repo["url"],
         "artifact_kind": str(staged.get("kind") or "package"),
+        "publisher_trust": staged.get("publisher_trust") or (staged.get("preview") or {}).get("publisher_trust"),
         "requested_module_id": module_id,
         "requested_version": candidate["version"],
         "version": candidate["version"],

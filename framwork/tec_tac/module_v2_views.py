@@ -42,7 +42,14 @@ class ModuleV2InspectView(APIView):
         uploads = request.FILES.getlist("packages") or request.FILES.getlist("package")
         if not uploads:
             return Response({"detail": "At least one package or bundle upload is required."}, status=400)
+        signature = request.FILES.get("signature")
+        release_metadata = request.FILES.get("metadata") or request.FILES.get("release_metadata")
+        if (signature is not None or release_metadata is not None) and len(uploads) != 1:
+            return Response({"detail": "Detached signature/release metadata companions are supported only for a single uploaded artifact."}, status=400)
         try:
+            if len(uploads) == 1 and (signature is not None or release_metadata is not None):
+                from .module_manager_v2 import stage_uploaded_artifact
+                return Response(stage_uploaded_artifact(uploads[0], signature_upload=signature, metadata_upload=release_metadata), status=201)
             return Response(stage_multiple_packages(uploads), status=201)
         except LicensingRequirementError as exc:
             return Response(exc.as_payload(), status=403)

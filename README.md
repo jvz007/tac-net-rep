@@ -784,3 +784,7 @@ Core server backup now safely resolves the three fixed Tactical nginx `sites-ena
 ## Core Report Manager registration (1.15.35)
 
 Tec-Tac modules can expose Django models to Tactical Report Manager through the Core-owned `tec_tac.reporting` contract. Core synchronizes Tactical's runtime allow-lists and augments the existing Report Manager query-schema response dynamically, so modules do not edit Tactical source, mutate `ee.reporting.*`, or rewrite `query_schema.json`. See `docs/module-reporting.md`.
+
+## Trusted publisher verification (1.15.36)
+
+Tec-Tac Core verifies signed module releases through `tec_tac.trusted_publishers`. Signed packages are checked against the local root-managed publisher trust store, exact package SHA-256, active Ed25519 key, environment and capability-specific publisher permissions. Unsigned normal modules remain transitional-only; privileged publisher permissions require a trusted signature. See `docs/trusted-publisher-verification.md`.

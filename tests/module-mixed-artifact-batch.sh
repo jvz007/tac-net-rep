@@ -3,6 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 python3 - "$ROOT/framwork/tec_tac/module_manager_v2.py" "$ROOT/scripts/module-v2-job-helper.py" <<'PY'
 import ast
+import hashlib
 import shutil
 import sys
 import tempfile
@@ -84,8 +85,8 @@ with tempfile.TemporaryDirectory() as td:
 # three concrete install packages in a single batch.
 source = helper_path.read_text(encoding='utf-8')
 tree = ast.parse(source)
-node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'batch_packages')
-module = ast.Module(body=[node], type_ignores=[])
+nodes = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in {'_sha256_file','_require_expected_hash','batch_packages'}]
+module = ast.Module(body=nodes, type_ignores=[])
 ast.fix_missing_locations(module)
 
 with tempfile.TemporaryDirectory() as td:
@@ -100,12 +101,12 @@ with tempfile.TemporaryDirectory() as td:
         zf.writestr('packages/base.zip', b'base')
         zf.writestr('packages/consumer.zip', b'consumer')
 
-    ns = {'Path': Path, 'shutil': shutil, 'zipfile': zipfile, 'STAGED_ROOT': staged}
+    ns = {'Path': Path, 'hashlib': hashlib, 'shutil': shutil, 'zipfile': zipfile, 'STAGED_ROOT': staged}
     exec(compile(module, '<batch_packages>', 'exec'), ns)
     result = ns['batch_packages']({
         'artifacts': [
-            {'kind': 'package', 'id': 'standalone', 'path': str(standalone), 'upload_id': str(uuid.uuid4())},
-            {'kind': 'bundle', 'bundle_id': 'suite', 'bundle_path': str(bundle), 'upload_id': str(uuid.uuid4()),
+            {'kind': 'package', 'id': 'standalone', 'path': str(standalone), 'upload_id': str(uuid.uuid4()), 'package_sha256': hashlib.sha256(standalone.read_bytes()).hexdigest()},
+            {'kind': 'bundle', 'bundle_id': 'suite', 'bundle_path': str(bundle), 'upload_id': str(uuid.uuid4()), 'package_sha256': hashlib.sha256(bundle.read_bytes()).hexdigest(),
              'package_files': [
                  {'id': 'base', 'file': 'packages/base.zip', 'version': '2.0.0'},
                  {'id': 'consumer', 'file': 'packages/consumer.zip', 'version': '2.0.0'},

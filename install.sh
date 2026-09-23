@@ -150,6 +150,10 @@ log "Preflight source repository layout: OK"
 # extensions/reportsets are deliberately preserved and never copied back into
 # the source checkout.
 mkdir -p "${TEC_TAC_ROOT}" "${EXTENSIONS_DIR}" "${REPORTSETS_DIR}" "${TEC_TAC_ROOT}/etc"
+TRUSTED_PUBLISHERS_ROOT="${TEC_TAC_TRUSTED_PUBLISHERS_ROOT:-/etc/tec-tac/trusted-publishers}"
+mkdir -p "${TRUSTED_PUBLISHERS_ROOT}"
+chown root:root "${TRUSTED_PUBLISHERS_ROOT}"
+chmod 0755 "${TRUSTED_PUBLISHERS_ROOT}"
 rm -rf "${FRAMEWORK_DIR}" "${RUNTIME_SCRIPTS_DIR}" "${TEC_TAC_ROOT}/templates"
 cp -a "${SOURCE_FRAMEWORK_DIR}" "${FRAMEWORK_DIR}"
 cp -a "${SOURCE_SCRIPTS_DIR}" "${RUNTIME_SCRIPTS_DIR}"
@@ -439,6 +443,8 @@ TEC_TAC_REPORTSETS_ROOT=${REPORTSETS_DIR}
 TEC_TAC_SCRIPTS_ROOT=${RUNTIME_SCRIPTS_DIR}
 TEC_TAC_STATE_ROOT=/var/lib/tec-tac
 TEC_TAC_MODULE_STATE_ROOT=${MODULE_STATE_ROOT}
+TEC_TAC_TRUSTED_PUBLISHERS_ROOT=${TRUSTED_PUBLISHERS_ROOT}
+TEC_TAC_ENVIRONMENT=${TEC_TAC_ENVIRONMENT:-production}
 TEC_TAC_SYSTEM_UPDATE_ROOT=/var/lib/tec-tac/system-updates
 TEC_TAC_SERVER_BACKUP_ROOT=/var/lib/tec-tac/server-backup
 TEC_TAC_SERVER_MAINTENANCE_ROOT=/var/lib/tec-tac/server-maintenance

@@ -48,3 +48,8 @@ grep -q 'list_reporting_models' "${ROOT}/framwork/tec_tac/contracts.py" || fail 
 grep -q '"reporting_models": reporting_models' "${ROOT}/framwork/tec_tac/contracts.py" || fail "reporting models missing from live contract catalog"
 grep -q 'Registered reporting models' "${ROOT}/framwork/tec_tac/contracts.py" || fail "reporting models missing from Markdown export"
 echo "[TEST] PASS reporting public contracts"
+
+# 1.15.36 trusted publisher public contracts
+grep -q 'list_trusted_publishers' "${ROOT}/framwork/tec_tac/contracts.py" || fail "trusted publisher discovery contract missing"
+grep -q 'verify_release_files' "${ROOT}/framwork/tec_tac/contracts.py" || fail "trusted publisher verification contract missing"
+echo "[TEST] PASS trusted publisher public contracts"

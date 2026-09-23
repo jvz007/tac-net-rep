@@ -10,6 +10,7 @@ migrations already applied by a package are intentionally not auto-reversed.
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import pwd
@@ -350,10 +351,28 @@ def install_packages(repo_root, packages, order, actions, log, backup_root):
     return backup_ids
 
 
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _require_expected_hash(path, expected, label):
+    expected = str(expected or "").strip().lower()
+    if not expected:
+        raise RuntimeError(f"{label} is missing package_sha256")
+    actual = _sha256_file(path)
+    if actual != expected:
+        raise RuntimeError(f"{label} SHA-256 changed after trust verification")
+
+
 def bundle_packages(job, running_root):
     source = Path(str(job.get("bundle_path", ""))).resolve()
     if not source.is_file():
         raise RuntimeError("staged bundle is missing")
+    _require_expected_hash(source, job.get("package_sha256"), "staged bundle")
     try:
         source.relative_to(STAGED_ROOT.resolve())
     except ValueError as exc:
@@ -396,6 +415,7 @@ def batch_packages(job, running_root):
             raise RuntimeError("invalid staged batch artifact path") from exc
         if not source.is_file():
             raise RuntimeError(f"staged batch artifact missing: {item.get('id') or item.get('bundle_id') or index}")
+        _require_expected_hash(source, item.get("package_sha256"), f"staged batch artifact {item.get('id') or item.get('bundle_id') or index}")
 
         if kind == "bundle":
             copied = running_root / f"bundle-{index}.zip"
@@ -441,6 +461,10 @@ def cleanup_successful_stage(job, log):
             source.unlink(missing_ok=True)
         except Exception:
             pass
+        for key in ("signature_path", "release_metadata_path"):
+            if job.get(key):
+                try: Path(str(job[key])).unlink(missing_ok=True)
+                except OSError: pass
         upload_id = str(job.get("upload_id") or "")
         if JOB_RE.fullmatch(upload_id):
             (BUNDLES_ROOT / f"{upload_id}.json").unlink(missing_ok=True)
@@ -456,6 +480,10 @@ def cleanup_successful_stage(job, log):
                 source.unlink(missing_ok=True)
             except Exception:
                 pass
+            for key in ("signature_path", "release_metadata_path"):
+                if item.get(key):
+                    try: Path(str(item[key])).unlink(missing_ok=True)
+                    except OSError: pass
             upload_id = str(item.get("upload_id") or "")
             if JOB_RE.fullmatch(upload_id):
                 root = BUNDLES_ROOT if kind == "bundle" else STAGED_ROOT
@@ -488,6 +516,9 @@ def run_job(job_id):
     try:
         with log_path.open("a", encoding="utf-8") as log:
             log.write(f"[TEC-TAC-MODULE-V2] started {now()} action={job['action']} target={job.get('plugin_id')}\n")
+            trust = job.get("publisher_trust") if isinstance(job.get("publisher_trust"), dict) else {}
+            if trust:
+                log.write(f"[TEC-TAC-MODULE-V2] publisher_trust state={trust.get('state','unknown')} publisher={trust.get('publisher_id','')} key={trust.get('key_id','')} sha256={job.get('package_sha256','')}\n")
             if job["action"] in {"enable", "disable"}:
                 affected = [str(value) for value in job.get("affected_modules") or [job["plugin_id"]]]
                 if any(not PLUGIN_RE.fullmatch(value) for value in affected):

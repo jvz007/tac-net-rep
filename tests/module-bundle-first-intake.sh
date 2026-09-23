@@ -51,7 +51,7 @@ with tempfile.TemporaryDirectory() as td:
     def _inspect_bundle(path):
         calls['bundle']+=1
         return {'kind':'bundle','id':'suite','version':'1.0.0','packages':[{'id':'a','extension_version':'1.0.0'}], 'plan':{'valid':True}}
-    def stage_uploaded_package(upload):
+    def stage_uploaded_package(upload, signature_upload=None, metadata_upload=None):
         calls['package']+=1
         # This is the legacy failure a valid bundle must never reach.
         if upload.name == 'suite.zip':
@@ -66,6 +66,9 @@ with tempfile.TemporaryDirectory() as td:
     def _package_metadata(path): return {'id':'single','extension_version':'1.0.0','installable':True}
     def _enforce_candidate_licensing(preview): return None
     def resolve_install_plan(candidates): return {'valid':True,'order':[c['id'] for c in candidates],'actions':[]}
+    def _copy_sidecar(upload, path): raise AssertionError('unexpected sidecar in structural classification test')
+    def _verify_stage_trust(meta, **kwargs):
+        return {'signed':False,'verified':False,'trusted':False,'state':'unsigned','package_sha256':'test'}
 
     ns={
       'Path':Path,'hashlib':hashlib,'os':os,'uuid':uuid,'zipfile':zipfile,
@@ -75,7 +78,7 @@ with tempfile.TemporaryDirectory() as td:
       '_atomic_json':_atomic_json,'_utcnow':_utcnow,'_inspect_bundle':_inspect_bundle,
       'stage_uploaded_package':stage_uploaded_package,'_load_stage':_load_stage,
       '_package_metadata':_package_metadata,'_enforce_candidate_licensing':_enforce_candidate_licensing,
-      'resolve_install_plan':resolve_install_plan,
+      'resolve_install_plan':resolve_install_plan,'_copy_sidecar':_copy_sidecar,'_verify_stage_trust':_verify_stage_trust,
     }
     exec(compile(module,'<bundle-intake>','exec'),ns)
 

@@ -22,6 +22,22 @@ from .scheduler import scheduled_actions, serialize_action
 
 CORE_CONTRACTS = (
     {
+        "area": "publisher-trust",
+        "import_path": "tec_tac.trusted_publishers",
+        "name": "list_trusted_publishers",
+        "kind": "python",
+        "purpose": "List root-managed trusted publisher policy metadata without exposing private signing material.",
+        "audience": "backend/diagnostics",
+    },
+    {
+        "area": "publisher-trust",
+        "import_path": "tec_tac.trusted_publishers",
+        "name": "verify_release_files",
+        "kind": "python",
+        "purpose": "Verify exact package bytes, detached Ed25519 signature and local publisher policy before installation.",
+        "audience": "framework/internal",
+    },
+    {
         "area": "audit",
         "import_path": "tec_tac.audit",
         "name": "record",

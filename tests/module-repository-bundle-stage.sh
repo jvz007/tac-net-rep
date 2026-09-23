@@ -25,7 +25,7 @@ def installed_catalog_v2(): return []
 def _cached_modules(repo): return [{'id':'alerts','version':'0.4.0','download_url':'https://repo/alerts-suite.zip','sha256':digest}]
 def version_satisfies(a,b): return False
 def _fetch(url,maxsize): return payload
-def stage_uploaded_artifact(upload):
+def stage_uploaded_artifact(upload, signature_upload=None, metadata_upload=None):
     return {'kind':'bundle','upload_id':'u1','preview':{'kind':'bundle','id':'alerts-suite','version':'0.4.0','packages':[{'id':'alerts','extension_version':'0.4.0'},{'id':'notifications','extension_version':'0.1.0'}]}}
 def discard_v2_stage(uid): raise AssertionError('valid bundle should not be discarded')
 def attach_source_provenance(uid,source): attached.update(source)

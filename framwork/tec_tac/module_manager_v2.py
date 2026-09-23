@@ -30,6 +30,8 @@ from .module_manager import (
     _find_pair,
     _load_stage,
     _new_job,
+    _copy_sidecar,
+    _verify_stage_trust,
     _utcnow,
     discard_stage,
     get_job,
@@ -873,7 +875,7 @@ def _bundle_manifest_count(path: Path) -> int:
         raise ModuleManagerV2Error(f"Unable to inspect ZIP artifact: {exc}") from exc
 
 
-def stage_uploaded_artifact(upload) -> dict:
+def stage_uploaded_artifact(upload, signature_upload=None, metadata_upload=None) -> dict:
     # Classification is structural, never filename-based. Bundle manifests are
     # detected before legacy single-package validation.
     """Classify one upload before applying package-specific validation.
@@ -906,16 +908,44 @@ def stage_uploaded_artifact(upload) -> dict:
                     "created_at": _utcnow(),
                     "preview": preview,
                 }
+                sidecars = []
+                try:
+                    if signature_upload is not None:
+                        sig_path = BUNDLES_ROOT / f"{intake_id}.sig"
+                        _copy_sidecar(signature_upload, sig_path)
+                        payload["signature_path"] = str(sig_path)
+                        payload["signature_filename"] = str(getattr(signature_upload, "name", "bundle.zip.sig"))
+                        sidecars.append(sig_path)
+                    if metadata_upload is not None:
+                        rel_path = BUNDLES_ROOT / f"{intake_id}.release.json"
+                        _copy_sidecar(metadata_upload, rel_path)
+                        payload["release_metadata_path"] = str(rel_path)
+                        payload["release_metadata_filename"] = str(getattr(metadata_upload, "name", "bundle.release.json"))
+                        sidecars.append(rel_path)
+                    requested_permissions = set()
+                    for child in preview.get("packages") or []:
+                        requested_permissions.update(child.get("publisher_permissions") or [])
+                    payload["publisher_trust"] = _verify_stage_trust({
+                        "package_path": payload["bundle_path"],
+                        "filename": payload["filename"],
+                        "signature_path": payload.get("signature_path"),
+                        "signature_filename": payload.get("signature_filename"),
+                        "release_metadata_path": payload.get("release_metadata_path"),
+                    }, require_signed=bool(requested_permissions - {"module.install"}), required_permissions=tuple(sorted({"module.install", *requested_permissions})))
+                except Exception:
+                    for path in sidecars:
+                        path.unlink(missing_ok=True)
+                    raise
                 _atomic_json(BUNDLES_ROOT / f"{intake_id}.json", payload)
-                return {key: value for key, value in payload.items() if key != "bundle_path"}
+                return {key: value for key, value in payload.items() if key not in {"bundle_path", "signature_path", "release_metadata_path"}}
 
-            staged = stage_uploaded_package(_PathUpload(intake_path, name))
+            staged = stage_uploaded_package(_PathUpload(intake_path, name), signature_upload=signature_upload, metadata_upload=metadata_upload)
         finally:
             # Valid bundles return before this point and retain their staged ZIP.
             if intake_path.is_file() and not (BUNDLES_ROOT / f"{intake_id}.json").is_file():
                 intake_path.unlink(missing_ok=True)
     else:
-        staged = stage_uploaded_package(upload)
+        staged = stage_uploaded_package(upload, signature_upload=signature_upload, metadata_upload=metadata_upload)
 
     meta = _load_stage(staged["upload_id"])
     preview = _package_metadata(Path(meta["package_path"]))
@@ -977,6 +1007,10 @@ def discard_v2_stage(upload_id: str) -> None:
         bundle = None
     if bundle is not None:
         Path(str(bundle.get("bundle_path", ""))).unlink(missing_ok=True)
+        if bundle.get("signature_path"):
+            Path(str(bundle.get("signature_path"))).unlink(missing_ok=True)
+        if bundle.get("release_metadata_path"):
+            Path(str(bundle.get("release_metadata_path"))).unlink(missing_ok=True)
         (BUNDLES_ROOT / f"{upload_id}.json").unlink(missing_ok=True)
         return
 
@@ -1038,6 +1072,8 @@ def queue_v2_install(upload_id: str, requested_order=None, requested_by: str | N
         meta = None
     if meta:
         preview = _package_metadata(Path(meta["package_path"]))
+        requested_permissions = set(preview.get("publisher_permissions") or [])
+        trust = _verify_stage_trust(meta, require_signed=bool(requested_permissions - {"module.install"}), required_permissions=tuple(sorted({"module.install", *requested_permissions})))
         _enforce_candidate_licensing(preview)
         plan = resolve_install_plan([preview])
         plan = _plan_with_requested_order(plan, requested_order)
@@ -1066,6 +1102,10 @@ def queue_v2_install(upload_id: str, requested_order=None, requested_by: str | N
                     "path": meta["package_path"],
                     "upload_id": upload_id,
                     "source": source,
+                    "publisher_trust": trust,
+                    "package_sha256": meta.get("sha256"),
+                    "signature_path": meta.get("signature_path"),
+                    "release_metadata_path": meta.get("release_metadata_path"),
                 }],
                 "plan": {**plan, "actions": [action]},
                 "requested_by": str(requested_by) if requested_by else None,
@@ -1077,6 +1117,16 @@ def queue_v2_install(upload_id: str, requested_order=None, requested_by: str | N
     # Bundle staging.
     bundle = _load_bundle(upload_id)
     fresh_preview = _inspect_bundle(Path(bundle["bundle_path"]))
+    bundle_permissions = set()
+    for child in fresh_preview.get("packages") or []:
+        bundle_permissions.update(child.get("publisher_permissions") or [])
+    bundle_trust = _verify_stage_trust({
+        "package_path": bundle["bundle_path"],
+        "filename": bundle.get("filename"),
+        "signature_path": bundle.get("signature_path"),
+        "signature_filename": bundle.get("signature_filename"),
+        "release_metadata_path": bundle.get("release_metadata_path"),
+    }, require_signed=bool(bundle_permissions - {"module.install"}), required_permissions=tuple(sorted({"module.install", *bundle_permissions})))
     plan = fresh_preview.get("plan") or {}
     if not plan.get("valid"):
         raise ModuleManagerV2Error("Bundle dependency plan is not satisfiable.")
@@ -1089,6 +1139,10 @@ def queue_v2_install(upload_id: str, requested_order=None, requested_by: str | N
         "plan": plan,
         "bundle": fresh_preview,
         "source": bundle.get("source_provenance"),
+        "publisher_trust": bundle_trust,
+        "package_sha256": bundle.get("sha256"),
+        "signature_path": bundle.get("signature_path"),
+        "release_metadata_path": bundle.get("release_metadata_path"),
         "requested_by": str(requested_by) if requested_by else None,
     })
 
@@ -1109,6 +1163,16 @@ def queue_batch_install(batch_id: str, requested_order=None, requested_by: str |
         if kind == "bundle":
             bundle = _load_bundle(upload_id)
             fresh = _inspect_bundle(Path(bundle["bundle_path"]))
+            bundle_permissions = set()
+            for child in fresh.get("packages") or []:
+                bundle_permissions.update(child.get("publisher_permissions") or [])
+            bundle_trust = _verify_stage_trust({
+                "package_path": bundle["bundle_path"],
+                "filename": bundle.get("filename"),
+                "signature_path": bundle.get("signature_path"),
+                "signature_filename": bundle.get("signature_filename"),
+                "release_metadata_path": bundle.get("release_metadata_path"),
+            }, require_signed=bool(bundle_permissions - {"module.install"}), required_permissions=tuple(sorted({"module.install", *bundle_permissions})))
             candidates.extend(fresh.get("packages") or [])
             job_artifacts.append({
                 "kind": "bundle",
@@ -1116,11 +1180,17 @@ def queue_batch_install(batch_id: str, requested_order=None, requested_by: str |
                 "bundle_path": bundle["bundle_path"],
                 "bundle_id": fresh.get("id"),
                 "package_files": fresh.get("package_files") or [],
+                "package_sha256": bundle.get("sha256"),
+                "publisher_trust": bundle_trust,
+                "signature_path": bundle.get("signature_path"),
+                "release_metadata_path": bundle.get("release_metadata_path"),
             })
             continue
 
         meta = _load_stage(upload_id)
         candidate = _package_metadata(Path(meta["package_path"]))
+        requested_permissions = set(candidate.get("publisher_permissions") or [])
+        trust = _verify_stage_trust(meta, require_signed=bool(requested_permissions - {"module.install"}), required_permissions=tuple(sorted({"module.install", *requested_permissions})))
         _enforce_candidate_licensing(candidate)
         candidates.append(candidate)
         job_artifacts.append({
@@ -1129,6 +1199,10 @@ def queue_batch_install(batch_id: str, requested_order=None, requested_by: str |
             "path": meta["package_path"],
             "upload_id": upload_id,
             "source": meta.get("source_provenance"),
+            "publisher_trust": trust,
+            "package_sha256": meta.get("sha256"),
+            "signature_path": meta.get("signature_path"),
+            "release_metadata_path": meta.get("release_metadata_path"),
         })
 
     # Re-resolve from the freshly inspected child packages immediately before

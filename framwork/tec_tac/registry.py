@@ -31,6 +31,7 @@ SUPPORTED_TYPES = frozenset({"extension", "reportset"})
 SUPPORTED_KEYS = frozenset({
     "id", "type", "version", "python_paths", "django_apps", "permission_groups",
     "dependencies", "optional_dependencies", "requires", "licensing", "migration",
+    "publisher_permissions",
 })
 
 class RegistryError(RuntimeError):
@@ -45,6 +46,7 @@ class PluginSpec:
     python_paths: tuple[Path, ...] = ()
     django_apps: tuple[str, ...] = ()
     permission_groups: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    publisher_permissions: tuple[str, ...] = ()
     legacy: bool = False
 
     def permission_group_map(self) -> dict[str, tuple[str, ...]]:
@@ -95,6 +97,22 @@ def _permission_groups(payload: dict, plugin_type: str, plugin_id: str) -> tuple
         groups.append((name, values))
     return tuple(groups)
 
+
+
+def _publisher_permissions(payload: dict, plugin_type: str, plugin_id: str) -> tuple[str, ...]:
+    raw = payload.get("publisher_permissions") or []
+    if not isinstance(raw, list) or any(not isinstance(value, str) or not value.strip() for value in raw):
+        raise RegistryError("Manifest publisher_permissions must be an array of non-empty strings.")
+    if plugin_type != "extension" and raw:
+        raise RegistryError(f"Reportset {plugin_id!r} may not declare publisher_permissions.")
+    values = tuple(value.strip() for value in raw)
+    if len(set(values)) != len(values):
+        raise RegistryError("Manifest publisher_permissions contains duplicates.")
+    allowed = {"module.install", "server_maintenance.register"}
+    unknown = sorted(set(values) - allowed)
+    if unknown:
+        raise RegistryError(f"Manifest publisher_permissions contains unsupported permission(s): {unknown!r}.")
+    return values
 
 
 def _identity_migration(payload: dict, plugin_type: str, plugin_id: str) -> dict:
@@ -165,7 +183,8 @@ def _load_manifest(plugin_type: str, plugin_dir: Path) -> PluginSpec | None:
         python_paths.append(path)
     django_apps = _string_list(payload, "django_apps")
     permission_groups = _permission_groups(payload, plugin_type, plugin_id)
-    return PluginSpec(plugin_id=plugin_id, plugin_type=plugin_type, root=plugin_root, version=version, python_paths=tuple(python_paths), django_apps=django_apps, permission_groups=permission_groups)
+    publisher_permissions = _publisher_permissions(payload, plugin_type, plugin_id)
+    return PluginSpec(plugin_id=plugin_id, plugin_type=plugin_type, root=plugin_root, version=version, python_paths=tuple(python_paths), django_apps=django_apps, permission_groups=permission_groups, publisher_permissions=publisher_permissions)
 
 def _discover_root(plugin_type: str, root: Path) -> list[PluginSpec]:
     if not root.exists():
