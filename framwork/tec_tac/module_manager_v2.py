@@ -829,65 +829,124 @@ def _inspect_bundle(path: Path) -> dict:
         }
 
 
-def stage_uploaded_artifact(upload) -> dict:
-    name = str(getattr(upload, "name", "package"))
-    # Classification is structural, never filename-based. Always let the
-    # hardened single-package parser inspect the archive first. A genuine
-    # bundle will fail the exactly-one extension/reportset pair contract and
-    # may then be retried as a bundle if it is a ZIP archive.
-    try:
-        staged = stage_uploaded_package(upload)
-        meta = _load_stage(staged["upload_id"])
-        preview = _package_metadata(Path(meta["package_path"]))
-        _enforce_candidate_licensing(preview)
-        plan = resolve_install_plan([preview])
-        staged["preview"] = {**preview, "kind": "package", "plan": plan, "installable": bool(preview.get("installable")) and plan["valid"], "install_block_reason": preview.get("install_block_reason") if not preview.get("installable") else (None if plan["valid"] else "Dependency plan is not satisfiable.")}
-        _atomic_json(STAGED_ROOT / f"{staged['upload_id']}.json", {**meta, "preview": staged["preview"]})
-        return staged
-    except LicensingRequirementError:
-        # A structurally valid package that fails licensing must not be retried
-        # as a bundle just because it is a ZIP archive.
-        raise
-    except ModuleManagerError as first_error:
-        if not name.lower().endswith(".zip"):
-            raise
-        bundle_error = first_error
+class _PathUpload:
+    """Replayable upload facade used after v2 intake stages an archive once."""
+    def __init__(self, path: Path, name: str):
+        self.path = Path(path)
+        self.name = str(name or self.path.name)
+        self.size = self.path.stat().st_size
 
+    def chunks(self, chunk_size=64 * 1024):
+        with self.path.open("rb") as handle:
+            while True:
+                chunk = handle.read(chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+
+
+def _copy_upload(upload, target: Path) -> tuple[int, str]:
     size = int(getattr(upload, "size", 0) or 0)
     if size <= 0 or size > MAX_PACKAGE_BYTES:
-        raise ModuleManagerV2Error("Bundle is empty or exceeds the package size limit.")
-    BUNDLES_ROOT.mkdir(parents=True, exist_ok=True)
-    upload_id = str(uuid.uuid4())
-    path = BUNDLES_ROOT / f"{upload_id}.zip"
+        raise ModuleManagerV2Error("Artifact is empty or exceeds the package size limit.")
     digest = hashlib.sha256()
     written = 0
+    with target.open("wb") as handle:
+        for chunk in upload.chunks():
+            written += len(chunk)
+            if written > MAX_PACKAGE_BYTES:
+                raise ModuleManagerV2Error("Artifact exceeds the package size limit.")
+            digest.update(chunk)
+            handle.write(chunk)
+    os.chmod(target, 0o640)
+    return written, digest.hexdigest()
+
+
+def _bundle_manifest_count(path: Path) -> int:
     try:
-        with path.open("wb") as handle:
-            for chunk in upload.chunks():
-                written += len(chunk)
-                if written > MAX_PACKAGE_BYTES:
-                    raise ModuleManagerV2Error("Bundle exceeds the package size limit.")
-                digest.update(chunk)
-                handle.write(chunk)
-        os.chmod(path, 0o640)
-        preview = _inspect_bundle(path)
-    except Exception as exc:
-        path.unlink(missing_ok=True)
-        if bundle_error is not None and not isinstance(exc, ModuleManagerV2Error):
-            raise bundle_error
-        raise
-    payload = {
-        "kind": "bundle",
-        "upload_id": upload_id,
-        "filename": name,
-        "bundle_path": str(path),
-        "sha256": digest.hexdigest(),
-        "size": written,
-        "created_at": _utcnow(),
-        "preview": preview,
+        with zipfile.ZipFile(path) as archive:
+            return sum(
+                1 for member in archive.infolist()
+                if not member.is_dir() and Path(member.filename).name == BUNDLE_MANIFEST
+            )
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise ModuleManagerV2Error(f"Unable to inspect ZIP artifact: {exc}") from exc
+
+
+def stage_uploaded_artifact(upload) -> dict:
+    # Classification is structural, never filename-based. Bundle manifests are
+    # detected before legacy single-package validation.
+    """Classify one upload before applying package-specific validation.
+
+    ZIP bundle detection happens before the legacy single-package parser. This
+    prevents a valid bundle from failing with the misleading v1 error
+    'exactly one extension manifest; found 0'. The upload is copied once and a
+    replayable path-backed facade is used for normal package staging.
+    """
+    name = str(getattr(upload, "name", "package"))
+
+    if name.lower().endswith(".zip"):
+        BUNDLES_ROOT.mkdir(parents=True, exist_ok=True)
+        intake_id = str(uuid.uuid4())
+        intake_path = BUNDLES_ROOT / f"{intake_id}.zip"
+        try:
+            written, digest = _copy_upload(upload, intake_path)
+            manifest_count = _bundle_manifest_count(intake_path)
+            if manifest_count:
+                if manifest_count != 1:
+                    raise ModuleManagerV2Error(f"Bundle must contain exactly one {BUNDLE_MANIFEST}.")
+                preview = _inspect_bundle(intake_path)
+                payload = {
+                    "kind": "bundle",
+                    "upload_id": intake_id,
+                    "filename": name,
+                    "bundle_path": str(intake_path),
+                    "sha256": digest,
+                    "size": written,
+                    "created_at": _utcnow(),
+                    "preview": preview,
+                }
+                _atomic_json(BUNDLES_ROOT / f"{intake_id}.json", payload)
+                return {key: value for key, value in payload.items() if key != "bundle_path"}
+
+            staged = stage_uploaded_package(_PathUpload(intake_path, name))
+        finally:
+            # Valid bundles return before this point and retain their staged ZIP.
+            if intake_path.is_file() and not (BUNDLES_ROOT / f"{intake_id}.json").is_file():
+                intake_path.unlink(missing_ok=True)
+    else:
+        staged = stage_uploaded_package(upload)
+
+    meta = _load_stage(staged["upload_id"])
+    preview = _package_metadata(Path(meta["package_path"]))
+    _enforce_candidate_licensing(preview)
+    plan = resolve_install_plan([preview])
+    staged["preview"] = {
+        **preview,
+        "kind": "package",
+        "plan": plan,
+        "installable": bool(preview.get("installable")) and plan["valid"],
+        "install_block_reason": preview.get("install_block_reason")
+        if not preview.get("installable")
+        else (None if plan["valid"] else "Dependency plan is not satisfiable."),
     }
-    _atomic_json(BUNDLES_ROOT / f"{upload_id}.json", payload)
-    return {key: value for key, value in payload.items() if key != "bundle_path"}
+    _atomic_json(STAGED_ROOT / f"{staged['upload_id']}.json", {**meta, "preview": staged["preview"]})
+    return staged
+
+
+def attach_source_provenance(upload_id: str, source: dict) -> None:
+    """Attach repository provenance to either a staged package or bundle."""
+    try:
+        meta = _load_stage(upload_id)
+    except ModuleManagerError:
+        meta = None
+    if meta is not None:
+        meta["source_provenance"] = dict(source or {})
+        _atomic_json(STAGED_ROOT / f"{upload_id}.json", meta)
+        return
+    bundle = _load_bundle(upload_id)
+    bundle["source_provenance"] = dict(source or {})
+    _atomic_json(BUNDLES_ROOT / f"{upload_id}.json", bundle)
 
 
 
@@ -1029,6 +1088,7 @@ def queue_v2_install(upload_id: str, requested_order=None, requested_by: str | N
         "bundle_path": bundle["bundle_path"],
         "plan": plan,
         "bundle": fresh_preview,
+        "source": bundle.get("source_provenance"),
         "requested_by": str(requested_by) if requested_by else None,
     })
 

@@ -181,3 +181,7 @@ The live contract catalog also exposes the supported Python helpers under
 
 A module must not import `TecTacSessionTrust`, `TecTacSessionSecurityConfig` or
 `TecTacSessionAudit` directly. See `docs/session-security.md`.
+
+## Bundle intake rule
+
+Module tooling must classify an incoming artifact before applying single-package assumptions. A ZIP containing exactly one `tec_tac_bundle.json` is a Tec-Tac bundle and must enter the Module Management v2 bundle lifecycle. Do not run the outer bundle ZIP through the legacy exactly-one-extension/reportset package parser.

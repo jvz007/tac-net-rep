@@ -1,3 +1,5 @@
+Version **1.15.29** makes Module Management v2 classify Tec-Tac bundles before legacy single-package validation and allows repository-backed updates to stage a bundle when it contains the requested module/version.
+
 Version **1.15.28** extends server-backed user navigation preferences with validated per-user section ordering for the Menu Layout UI.
 
 Version **1.15.27** adds the lightweight authenticated module-runtime snapshot used by optional UI integrations. See `docs/optional-module-integrations.md`.

@@ -25,6 +25,7 @@ from .module_manager_v2 import (
     installed_catalog_v2,
     stage_uploaded_artifact,
     discard_v2_stage,
+    attach_source_provenance,
 )
 from .module_state import ModuleStateError, version_satisfies
 
@@ -455,29 +456,42 @@ def stage_repository_package(repository_id: str, module_id: str, version: str | 
             package_path.write_bytes(data)
             staged = stage_uploaded_artifact(_PathUpload(package_path, suffix))
         preview = staged.get("preview") or {}
-        if staged.get("kind") == "bundle" or preview.get("id") != module_id or preview.get("extension_version") != candidate["version"]:
+        kind = str(staged.get("kind") or preview.get("kind") or "package")
+        if kind == "bundle":
+            child = next((
+                item for item in (preview.get("packages") or [])
+                if item.get("id") == module_id and item.get("extension_version") == candidate["version"]
+            ), None)
+            identity_matches = child is not None
+        else:
+            identity_matches = preview.get("id") == module_id and preview.get("extension_version") == candidate["version"]
+        if not identity_matches:
             try:
                 discard_v2_stage(staged["upload_id"])
             except Exception:
                 pass
             raise ModuleRepositoryError(
-                f"Downloaded package identity does not match repository metadata for {module_id} {candidate['version']}."
+                f"Downloaded artifact does not contain repository module {module_id} {candidate['version']}."
             )
     except (ModuleRepositoryError, LicensingRequirementError):
         raise
     except Exception as exc:
         raise ModuleRepositoryError(f"Downloaded package inspection failed: {exc}") from exc
-    meta = _load_stage(staged["upload_id"])
     source = {
         "repository_id": repository_id,
         "repository_name": repo["name"],
         "repository_trust": repo["trust"],
         "package_sha256": digest,
         "repository_url": repo["url"],
+        "artifact_kind": str(staged.get("kind") or "package"),
+        "requested_module_id": module_id,
+        "requested_version": candidate["version"],
         "version": candidate["version"],
         "staged_at": _utcnow(),
     }
-    meta["source_provenance"] = source
-    _atomic_json(STAGED_ROOT / f"{staged['upload_id']}.json", meta)
+    if staged.get("kind") == "bundle":
+        source["bundle_id"] = (preview or {}).get("id")
+        source["bundle_version"] = (preview or {}).get("version")
+    attach_source_provenance(staged["upload_id"], source)
     staged["source"] = source
     return staged

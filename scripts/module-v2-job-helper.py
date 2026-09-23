@@ -375,7 +375,7 @@ def bundle_packages(job, running_root):
         matches = list(extract.rglob(filename))
         if len(matches) != 1:
             raise RuntimeError(f"bundle package file could not be uniquely resolved: {filename}")
-        result.append({"id": item["id"], "path": str(matches[0]), "version": item.get("version")})
+        result.append({"id": item["id"], "path": str(matches[0]), "version": item.get("version"), "source": job.get("source")})
     return result
 
 
@@ -417,7 +417,7 @@ def batch_packages(job, running_root):
                 if module_id in seen_ids:
                     raise RuntimeError(f"duplicate module id in batch: {module_id}")
                 seen_ids.add(module_id)
-                result.append({"id": module_id, "path": str(matches[0]), "version": package.get("version")})
+                result.append({"id": module_id, "path": str(matches[0]), "version": package.get("version"), "source": item.get("source")})
             continue
 
         module_id = str(item.get("id") or "")

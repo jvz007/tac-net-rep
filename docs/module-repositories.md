@@ -88,3 +88,11 @@ Source provenance committed after success
 ```
 
 A failed download, digest mismatch, package inspection error, dependency failure, or install failure does not change the installed module's recorded source.
+
+## Bundle artifacts in repositories (1.15.29)
+
+A repository module entry may point to a normal single-module package or to a Tec-Tac bundle ZIP. Core classifies the downloaded artifact structurally after SHA-256 verification.
+
+For a bundle-backed repository entry, the bundle must contain the module ID and exact version advertised by that repository entry. Staging returns the complete bundle preview and dependency plan, so installing an update may also install or update other modules declared by the same bundle.
+
+A repository that wants each member of a suite to appear independently in the online catalog should publish one index entry per member/version. Those entries may reference the same bundle download and SHA-256. The bundle remains a distribution container; dependency, enable/disable, visibility and lifecycle state remain per module.

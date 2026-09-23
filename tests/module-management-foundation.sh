@@ -358,3 +358,10 @@ grep -q "def module_runtime_snapshot" "${ROOT}/framwork/tec_tac/module_runtime.p
 grep -q "get_capability(.*required=False\|required=False" "${ROOT}/docs/optional-module-integrations.md" || fail "optional backend capability contract missing"
 python3 -m py_compile "${ROOT}/framwork/tec_tac/module_runtime.py"
 echo "[TEST] PASS lightweight module runtime snapshot"
+
+# 1.15.29 bundle-first artifact classification and repository bundle staging
+[[ -x "${ROOT}/tests/module-bundle-first-intake.sh" ]] || fail "bundle-first intake regression test missing"
+[[ -x "${ROOT}/tests/module-repository-bundle-stage.sh" ]] || fail "repository bundle staging regression test missing"
+grep -q "_bundle_manifest_count" "${ROOT}/framwork/tec_tac/module_manager_v2.py" || fail "bundle-first classifier missing"
+grep -q "Downloaded artifact does not contain repository module" "${ROOT}/framwork/tec_tac/module_repository.py" || fail "repository bundle identity validation missing"
+echo "[TEST] PASS bundle-aware module update intake"
