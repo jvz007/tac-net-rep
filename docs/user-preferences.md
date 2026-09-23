@@ -28,3 +28,7 @@ The `extensions` object is reserved for future module-specific user settings. Mo
 Preference payloads are normalized and limited to 128 KiB per user.
 
 Dashboard preferences include `default_dashboard_id`, `last_dashboard_id`, and `restore_last_dashboard`. Dashboard visibility itself is enforced by the dashboard API and is not a preference-layer authorization decision.
+
+## Navigation section ordering (1.15.28)
+
+The server-backed navigation preference document supports `navigation.section_order`, an ordered de-duplicated list of category names. Core validates and persists this value alongside per-category route order, Favorites, collapsed categories, and rail state. No schema migration is required because `TecTacUserPreferences.preferences` remains JSON-backed.

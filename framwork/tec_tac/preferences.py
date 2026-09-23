@@ -13,6 +13,7 @@ DEFAULT_PREFERENCES = {
     },
     "navigation": {
         "order": {},
+        "section_order": [],
         "favorites": [],
         "collapsed_sections": {},
         "rail_collapsed": False,
@@ -66,7 +67,7 @@ def normalize_preferences(payload):
     # These maps intentionally have dynamic keys, so preserve the caller's
     # values rather than treating the empty Core defaults as a closed schema.
     source_navigation = payload.get("navigation") if isinstance(payload.get("navigation"), dict) else {}
-    for field in ("order", "favorites", "collapsed_sections", "rail_collapsed"):
+    for field in ("order", "section_order", "favorites", "collapsed_sections", "rail_collapsed"):
         if field in source_navigation:
             merged["navigation"][field] = deepcopy(source_navigation[field])
     if "extensions" in payload:
@@ -97,6 +98,7 @@ def normalize_preferences(payload):
             raise PreferenceValidationError("navigation.order section names must be strings.")
         clean_order[section] = _string_list(routes, f"navigation.order.{section}")
     navigation["order"] = clean_order
+    navigation["section_order"] = _string_list(navigation.get("section_order"), "navigation.section_order")
     navigation["favorites"] = _string_list(navigation.get("favorites"), "navigation.favorites")
     collapsed = navigation.get("collapsed_sections")
     if not isinstance(collapsed, dict) or any(not isinstance(k, str) or not isinstance(v, bool) for k, v in collapsed.items()):

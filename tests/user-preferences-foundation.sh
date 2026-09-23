@@ -13,6 +13,8 @@ grep -q 'preferences_initialized' "${ROOT}/framwork/tec_tac/views.py" || fail "U
 grep -q 'MAX_PREFERENCE_BYTES = 128 \* 1024' "${ROOT}/framwork/tec_tac/preferences.py" || fail "preference payload bound missing"
 grep -q '"extensions": {}' "${ROOT}/framwork/tec_tac/preferences.py" || fail "extension preference namespace missing"
 grep -q '"font_scale": 1.0' "${ROOT}/framwork/tec_tac/preferences.py" || fail "font scale default missing"
+grep -q '"section_order": \[\]' "${ROOT}/framwork/tec_tac/preferences.py" || fail "navigation section order default missing"
+grep -q 'navigation.section_order' "${ROOT}/framwork/tec_tac/preferences.py" || fail "navigation section order validation missing"
 grep -q 'FONT_SCALES = {0.9, 1.0, 1.1, 1.2}' "${ROOT}/framwork/tec_tac/preferences.py" || fail "font scale validation set missing"
 grep -q 'appearance.font_scale must be one of 0.9, 1.0, 1.1, or 1.2.' "${ROOT}/framwork/tec_tac/preferences.py" || fail "font scale validation missing"
 python3 -m py_compile \
