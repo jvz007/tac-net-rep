@@ -353,7 +353,7 @@ echo "[TEST] PASS managed module hotfix lifecycle"
 # 1.15.27 lightweight module runtime snapshot + optional integration docs
 [[ -f "${ROOT}/framwork/tec_tac/module_runtime.py" ]] || fail "module runtime snapshot helper missing"
 [[ -f "${ROOT}/docs/optional-module-integrations.md" ]] || fail "optional module integration documentation missing"
-grep -q '"module_status": module_runtime_snapshot()' "${ROOT}/framwork/tec_tac/views.py" || fail "UI context module status snapshot missing"
+grep -Eq '"module_status": module_runtime_snapshot\((plugins)?\)' "${ROOT}/framwork/tec_tac/views.py" || fail "UI context module status snapshot missing"
 grep -q "def module_runtime_snapshot" "${ROOT}/framwork/tec_tac/module_runtime.py" || fail "module runtime snapshot function missing"
 grep -q "get_capability(.*required=False\|required=False" "${ROOT}/docs/optional-module-integrations.md" || fail "optional backend capability contract missing"
 python3 -m py_compile "${ROOT}/framwork/tec_tac/module_runtime.py"

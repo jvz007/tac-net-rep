@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.39",
+  "version": "1.15.40",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -27,19 +27,19 @@
       "sha256": "95c8221f16646ac37c071f4ab4120665615afabaec231ad09c4cadd802206430"
     },
     {
-      "path": "RELEASE_NOTES_1.15.38.md",
-      "size": 900,
-      "sha256": "9634301057a402ba5df33f42b25f76a4d5442df67800106e48bc24a3d6c3b3f8"
-    },
-    {
       "path": "RELEASE_NOTES_1.15.39.md",
       "size": 1313,
       "sha256": "44003c33890dc1c237fb5508907378449dccd486e5736b984991e7a03f8810e3"
     },
     {
+      "path": "RELEASE_NOTES_1.15.40.md",
+      "size": 1140,
+      "sha256": "d8a9dd987b35e42004be3fbf0de6304fd52e1bac7d5c0c9ad7392eff1a684af2"
+    },
+    {
       "path": "VERSION",
       "size": 8,
-      "sha256": "c73269a3052a78ab509d16a3c9e67cec07964713a11a793bcc7184f632955884"
+      "sha256": "541a867030a527899743798e3cf01f7b7ea364dec13c3fa98495a75b15328a4f"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -822,14 +822,19 @@
       "sha256": "a2e01a06929f7b03b8f75be4ec5e8fc1438f8137264d53f68e3c30d67549249e"
     },
     {
+      "path": "framwork/tec_tac/migrations/0009_user_notice_center.py",
+      "size": 2305,
+      "sha256": "d553ba3926b912c4745e79070448da63ddb8dd3aac8c778cbc8f3aaaf062ce65"
+    },
+    {
       "path": "framwork/tec_tac/migrations/__init__.py",
       "size": 0,
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "path": "framwork/tec_tac/models.py",
-      "size": 12961,
-      "sha256": "9e120bbe972c1970454fc7e24a9e7d637ae7f18664d688613ef2c962c183b233"
+      "size": 14704,
+      "sha256": "663a66696b311f6eba9044d49a1f252496abd9ba18bca9e292f686e0aa5cc49c"
     },
     {
       "path": "framwork/tec_tac/module_hotfix.py",
@@ -868,8 +873,8 @@
     },
     {
       "path": "framwork/tec_tac/module_runtime.py",
-      "size": 1337,
-      "sha256": "660423d4f409b6ef329a785aa342bc2a22f6005085c27def4e6e35f14e341122"
+      "size": 1401,
+      "sha256": "9b0ff05a633464f0f47400730e5870eb744b3f3d39fb2d5cf992da61c106409b"
     },
     {
       "path": "framwork/tec_tac/module_state.py",
@@ -880,6 +885,16 @@
       "path": "framwork/tec_tac/module_v2_views.py",
       "size": 7279,
       "sha256": "7e570b48211485b739952f5d7d8195ac50b0449aa8c541dff5bf3260f3a603fc"
+    },
+    {
+      "path": "framwork/tec_tac/notice_views.py",
+      "size": 2468,
+      "sha256": "5daebd58a07c90d116d0ad10e762c6106df264f96b27c80e8c28ed83aa170904"
+    },
+    {
+      "path": "framwork/tec_tac/notices.py",
+      "size": 5275,
+      "sha256": "03c0168644e4e4539727e1451b4a5dbcbd5ee3377197d8c128cf4f47481935a1"
     },
     {
       "path": "framwork/tec_tac/preference_views.py",
@@ -893,8 +908,8 @@
     },
     {
       "path": "framwork/tec_tac/rbac.py",
-      "size": 5021,
-      "sha256": "9181777199d4ffe3ea875bef297d7820c20683a91daeae03b59d2971f2bd2e31"
+      "size": 5188,
+      "sha256": "ff8a228864f49c8ee26c9763d37e49a276dc088f588edd6917765aecd6376af5"
     },
     {
       "path": "framwork/tec_tac/registry.py",
@@ -963,13 +978,13 @@
     },
     {
       "path": "framwork/tec_tac/urls.py",
-      "size": 10020,
-      "sha256": "02811cdd5eed3bae920a77a4a30ff708158bf563618949cc5988fe5369882e95"
+      "size": 10503,
+      "sha256": "3d27cb6b066d22dd6c2c3cb2d54c5d1cf52181eb3de848fc99deba6ff3fac402"
     },
     {
       "path": "framwork/tec_tac/views.py",
-      "size": 21041,
-      "sha256": "4babcaae88057a0a31335e93497b5ac070dbed6ecd7ed487a6633cd9e798ae25"
+      "size": 21652,
+      "sha256": "24a832b382cc7686143673557158c04dbf8ecb7f9c12f29e335c3cdc0420f414"
     },
     {
       "path": "install.sh",
@@ -1134,7 +1149,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "919c5bc11179c55ede4b74114c73233d69d45cb07d47b447278caabf3b295b43"
+      "sha256": "eff7802e55201c7facea8f30bbac7a729d21a7904ab97de2289477afa234a95c"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -1248,8 +1263,8 @@
     },
     {
       "path": "tests/module-management-foundation.sh",
-      "size": 23493,
-      "sha256": "fe507161a4d7c07cc6b961d542aa15c6b2623f8481c7492b22ef5c6519ab4a7d"
+      "size": 23506,
+      "sha256": "ff8941c11c2ee27ab5a0a2f5bdc181b13f68e2fb89c480f1a2688024fba8fe9c"
     },
     {
       "path": "tests/module-mixed-artifact-batch.sh",
@@ -1270,6 +1285,11 @@
       "path": "tests/network-reporting-server.sh",
       "size": 1435,
       "sha256": "af013ca5e1c35209033cf7dedd136555f0907381f0e38d04f5d88e26299bd600"
+    },
+    {
+      "path": "tests/notice-center-foundation.sh",
+      "size": 1411,
+      "sha256": "da0c41c25349d0da7f859241f2014f31990b0077d30d51d8444f0fb18146c3a0"
     },
     {
       "path": "tests/optional-reportset-foundation.sh",

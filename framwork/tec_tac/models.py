@@ -285,3 +285,44 @@ class TecTacSessionAudit(models.Model):
 
     def __str__(self):
         return f"{self.event_type}:{self.username}:{self.created_at.isoformat()}"
+
+class TecTacUserNotice(models.Model):
+    class Level(models.TextChoices):
+        INFO = "info", "Info"
+        SUCCESS = "success", "Success"
+        WARNING = "warning", "Warning"
+        ERROR = "error", "Error"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="tec_tac_notices",
+    )
+    client_id = models.CharField(max_length=64, blank=True, default="")
+    source = models.CharField(max_length=100, default="core")
+    level = models.CharField(max_length=12, choices=Level.choices, default=Level.INFO)
+    title = models.CharField(max_length=120, blank=True, default="")
+    message = models.CharField(max_length=1000)
+    action_label = models.CharField(max_length=60, blank=True, default="")
+    action_route = models.CharField(max_length=500, blank=True, default="")
+    read_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+        indexes = [
+            models.Index(fields=("user", "read_at", "created_at"), name="tectac_notice_unread_idx"),
+            models.Index(fields=("user", "created_at"), name="tectac_notice_user_idx"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=("user", "client_id"),
+                condition=~Q(client_id=""),
+                name="tectac_notice_client_unique",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.user_id}:{self.level}:{self.source}:{self.created_at.isoformat() if self.created_at else 'new'}"

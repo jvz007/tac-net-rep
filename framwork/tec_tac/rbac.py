@@ -10,21 +10,22 @@ from accounts.models import Role
 from tec_tac.registry import get_plugins
 
 
-def _extension_plugins():
-    return tuple(plugin for plugin in get_plugins() if plugin.plugin_type == "extension")
+def _extension_plugins(plugins=None):
+    source = get_plugins() if plugins is None else plugins
+    return tuple(plugin for plugin in source if plugin.plugin_type == "extension")
 
 
-def registered_permissions() -> frozenset[str]:
+def registered_permissions(plugins=None) -> frozenset[str]:
     values = set()
-    for plugin in _extension_plugins():
+    for plugin in _extension_plugins(plugins):
         for _, permissions in plugin.permission_groups:
             values.update(permissions)
     return frozenset(values)
 
 
-def permission_catalog() -> list[dict]:
+def permission_catalog(plugins=None) -> list[dict]:
     catalog = []
-    for plugin in _extension_plugins():
+    for plugin in _extension_plugins(plugins):
         groups = [
             {"name": name, "permissions": list(permissions)}
             for name, permissions in plugin.permission_groups
@@ -77,13 +78,13 @@ def has_extension_permission(user, codename: str) -> bool:
     ).exists()
 
 
-def effective_permissions(user) -> frozenset[str]:
-    known = registered_permissions()
+def effective_permissions(user, *, plugins=None, role=None) -> frozenset[str]:
+    known = registered_permissions(plugins)
     if not getattr(user, "is_authenticated", False):
         return frozenset()
     if getattr(user, "is_superuser", False):
         return known
-    role = user.get_and_set_role_cache()
+    role = role if role is not None else user.get_and_set_role_cache()
     if not role:
         return frozenset()
     if role.is_superuser:

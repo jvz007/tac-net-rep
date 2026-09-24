@@ -8,6 +8,7 @@ from .session_security_views import (
 )
 from .dashboard_views import DashboardListCreateView, DashboardDetailView
 from .preference_views import UserPreferencesView
+from .notice_views import NoticeListCreateView, NoticeReadView, NoticeReadAllView, NoticeClearReadView
 from .housekeeping_views import HousekeepingStatusView, HousekeepingPurgeView
 from .diagnostic_views import SystemDiagnosticsView
 from .capability_views import CapabilityListView, CapabilityDetailView
@@ -65,6 +66,10 @@ urlpatterns = [
 
     path("ui/context/", UiContextView.as_view(), name="tec-tac-ui-context"),
     path("ui/preferences/", UserPreferencesView.as_view(), name="tec-tac-user-preferences"),
+    path("ui/notices/", NoticeListCreateView.as_view(), name="tec-tac-notices"),
+    path("ui/notices/<uuid:notice_id>/read/", NoticeReadView.as_view(), name="tec-tac-notice-read"),
+    path("ui/notices/read-all/", NoticeReadAllView.as_view(), name="tec-tac-notices-read-all"),
+    path("ui/notices/clear-read/", NoticeClearReadView.as_view(), name="tec-tac-notices-clear-read"),
     path("system/diagnostics/", SystemDiagnosticsView.as_view(), name="tec-tac-system-diagnostics"),
     path("system/storage/", HousekeepingStatusView.as_view(), name="tec-tac-housekeeping-status"),
     path("system/storage/purge/", HousekeepingPurgeView.as_view(), name="tec-tac-housekeeping-purge"),

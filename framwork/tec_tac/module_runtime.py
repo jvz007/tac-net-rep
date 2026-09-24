@@ -10,12 +10,13 @@ from .module_state import is_enabled, load_state
 from .registry import get_plugins
 
 
-def module_runtime_snapshot() -> list[dict]:
+def module_runtime_snapshot(plugins=None) -> list[dict]:
     """Return one lightweight row for every installed extension/legacy plugin."""
     state = load_state()
+    source = get_plugins() if plugins is None else plugins
     rows: list[dict] = []
     seen: set[str] = set()
-    for plugin in get_plugins():
+    for plugin in source:
         if plugin.plugin_type not in {"extension", "legacy"}:
             continue
         module_id = str(plugin.plugin_id)

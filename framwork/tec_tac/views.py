@@ -42,6 +42,8 @@ from .system_update import (
 )
 
 from .module_runtime import module_runtime_snapshot
+from .registry import get_plugins
+from .notices import unread_count as notice_unread_count
 from .preferences import get_user_preferences
 from .session_security import SessionAuthenticated
 from .trust_policy import TrustPolicyError, get_policy as get_update_trust_policy, set_policy as set_update_trust_policy
@@ -62,8 +64,8 @@ def _role_for_user(user):
         return getattr(user, "role", None)
 
 
-def _native_capabilities(user):
-    role = _role_for_user(user)
+def _native_capabilities(user, role=None):
+    role = role if role is not None else _role_for_user(user)
     unrestricted = bool(getattr(user, "is_superuser", False)) or bool(getattr(role, "is_superuser", False) if role else False)
 
     def allowed(field):
@@ -81,8 +83,8 @@ def _native_capabilities(user):
     }
 
 
-def _user_payload(user):
-    role = _role_for_user(user)
+def _user_payload(user, role=None):
+    role = role if role is not None else _role_for_user(user)
     user_superuser = bool(getattr(user, "is_superuser", False))
     role_superuser = bool(getattr(role, "is_superuser", False)) if role else False
     display_name = " ".join(
@@ -154,14 +156,20 @@ class UiContextView(APIView):
     permission_classes = [SessionAuthenticated]
 
     def get(self, request):
+        # Startup is a hot path. Discover module manifests once and share that
+        # immutable snapshot across permission, catalogue and runtime derivation
+        # instead of rescanning the extension tree three times.
+        plugins = get_plugins()
+        role = _role_for_user(request.user)
         preferences, preferences_initialized, preferences_updated_at = get_user_preferences(request.user)
         return Response(
             {
-                "user": _user_payload(request.user),
-                "permissions": sorted(effective_permissions(request.user)),
-                "extensions": permission_catalog(),
-                "capabilities": _native_capabilities(request.user),
-                "module_status": module_runtime_snapshot(),
+                "user": _user_payload(request.user, role=role),
+                "permissions": sorted(effective_permissions(request.user, plugins=plugins, role=role)),
+                "extensions": permission_catalog(plugins),
+                "capabilities": _native_capabilities(request.user, role=role),
+                "module_status": module_runtime_snapshot(plugins),
+                "notice_unread_count": notice_unread_count(request.user),
                 "preferences": preferences,
                 "preferences_initialized": preferences_initialized,
                 "preferences_updated_at": preferences_updated_at,
