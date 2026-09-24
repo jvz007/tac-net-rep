@@ -6,6 +6,7 @@ root-owned helper installed outside /opt/tec-tac so it survives self-updates.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -22,7 +23,7 @@ import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 
-from .trusted_publishers import PublisherTrustError, verify_release_tree
+from .trusted_publishers import PublisherTrustError, verify_release_manifest_signature, verify_release_tree
 
 STATE_ROOT = Path("/var/lib/tec-tac/system-updates")
 CACHE_ROOT = STATE_ROOT / "cache"
@@ -153,6 +154,71 @@ def _github_json(url: str) -> object:
         raise SystemUpdateError(f"GitHub request failed ({exc.code}): {body or exc.reason}") from exc
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
         raise SystemUpdateError(f"GitHub request failed: {exc}") from exc
+
+
+def _github_content_bytes(repo: str, path: str, ref: str) -> bytes | None:
+    encoded_path = urllib.parse.quote(path, safe="/")
+    encoded_ref = urllib.parse.quote(ref, safe="")
+    url = f"https://api.github.com/repos/{repo}/contents/{encoded_path}?ref={encoded_ref}"
+    request = urllib.request.Request(url, headers=_github_headers())
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None
+        body = exc.read().decode("utf-8", errors="replace")[:500]
+        raise SystemUpdateError(f"GitHub request failed ({exc.code}): {body or exc.reason}") from exc
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        raise SystemUpdateError(f"GitHub request failed: {exc}") from exc
+    if not isinstance(payload, dict) or payload.get("type") != "file" or payload.get("encoding") != "base64":
+        raise SystemUpdateError(f"GitHub returned unexpected content metadata for {path}.")
+    try:
+        return base64.b64decode(str(payload.get("content") or ""), validate=False)
+    except Exception as exc:
+        raise SystemUpdateError(f"GitHub returned invalid Base64 content for {path}.") from exc
+
+
+def _release_signature_preview(component: str, repo: str, commit: str) -> dict:
+    manifest = _github_content_bytes(repo, "tec-tac-release.json", commit)
+    signature = _github_content_bytes(repo, "tec-tac-release.json.sig", commit)
+    if manifest is None and signature is None:
+        return {
+            "signed": False,
+            "verified": False,
+            "manifest_verified": False,
+            "tree_verified": False,
+            "trusted": False,
+            "state": "unsigned",
+            "details": "No signed-tree manifest or signature is present on this release.",
+        }
+    if manifest is None or signature is None:
+        return {
+            "signed": True,
+            "verified": False,
+            "manifest_verified": False,
+            "tree_verified": False,
+            "trusted": False,
+            "state": "invalid",
+            "details": "Release signing metadata is incomplete; both manifest and detached signature are required.",
+        }
+    try:
+        return verify_release_manifest_signature(
+            manifest_bytes=manifest,
+            signature_bytes=signature,
+            expected_component=component,
+        )
+    except PublisherTrustError as exc:
+        return {
+            "signed": True,
+            "verified": False,
+            "manifest_verified": False,
+            "tree_verified": False,
+            "trusted": False,
+            "state": "invalid",
+            "error_code": exc.code,
+            "details": str(exc),
+        }
 
 
 def _safe_archive_name(name: str) -> Path:
@@ -501,6 +567,8 @@ def _release_from_cache(component: str, *, installed: str | None = None) -> dict
             "name": release.get("name") or tag,
             "published_at": release.get("published_at"),
             "html_url": release.get("html_url"),
+            "release_trust": release.get("release_trust"),
+            "commit": release.get("commit"),
             "operation": _operation(installed if installed is not None else _installed_version(component), tag.lstrip("v")),
         },
         "checked_at": row.get("checked_at"),
@@ -556,12 +624,20 @@ def online_status(component: str, *, force: bool = False) -> dict:
         tag = str(release.get("tag_name", "")).strip()
         if not tag:
             raise SystemUpdateError("GitHub did not return a stable release tag.")
+        encoded_tag = urllib.parse.quote(tag, safe="")
+        commit_info = _github_json(f"https://api.github.com/repos/{repo}/commits/{encoded_tag}")
+        commit = str(commit_info.get("sha", "")) if isinstance(commit_info, dict) else ""
+        if not re.fullmatch(r"[0-9a-fA-F]{40}", commit):
+            raise SystemUpdateError("Unable to resolve stable release to an exact commit SHA.")
+        trust_preview = _release_signature_preview(component, repo, commit)
         checked_at = _utcnow()
         release_row = {
             "tag": tag,
             "name": release.get("name") or tag,
             "published_at": release.get("published_at"),
             "html_url": release.get("html_url"),
+            "commit": commit,
+            "release_trust": trust_preview,
         }
         cache_doc = _read_release_cache()
         cache_doc.setdefault("components", {})[component] = {

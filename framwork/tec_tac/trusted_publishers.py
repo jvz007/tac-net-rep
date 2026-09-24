@@ -390,6 +390,112 @@ def _actual_release_tree(root: Path) -> dict[str, tuple[int, str]]:
     return dict(sorted(found.items()))
 
 
+
+def verify_release_manifest_signature(
+    *,
+    manifest_bytes: bytes,
+    signature_bytes: bytes,
+    expected_component: str | None = None,
+    required_permissions: Iterable[str] = (),
+    trust_root: Path | None = None,
+    server_environment: str | None = None,
+) -> dict:
+    """Verify signed-tree manifest identity/signature without verifying tree bytes.
+
+    This is intended for release discovery UI. It proves that the manifest was
+    signed by a locally trusted publisher key, but it deliberately does not
+    claim that the downloadable source tree matches the manifest. Full
+    ``verify_release_tree`` verification remains mandatory after staging.
+    """
+    if len(manifest_bytes) > MAX_TREE_MANIFEST_BYTES:
+        raise PublisherTrustError("Release tree manifest exceeds its size limit.", code="tree_signature_material_invalid")
+    if len(signature_bytes) > 256:
+        raise PublisherTrustError("Release tree signature exceeds its size limit.", code="tree_signature_material_invalid")
+    try:
+        manifest = json.loads(manifest_bytes)
+    except json.JSONDecodeError as exc:
+        raise PublisherTrustError(f"Release tree manifest is invalid: {exc}", code="tree_manifest_invalid") from exc
+    if not isinstance(manifest, dict):
+        raise PublisherTrustError("Release tree manifest must contain a JSON object.", code="tree_manifest_invalid")
+    allowed = {"schema", "component", "version", "publisher_id", "key_id", "algorithm", "files"}
+    unknown = sorted(set(manifest) - allowed)
+    missing_fields = sorted(allowed - set(manifest))
+    if unknown or missing_fields:
+        detail = []
+        if unknown:
+            detail.append("unknown fields: " + ", ".join(unknown))
+        if missing_fields:
+            detail.append("missing fields: " + ", ".join(missing_fields))
+        raise PublisherTrustError("Release tree manifest fields are invalid (" + "; ".join(detail) + ").", code="tree_manifest_invalid")
+    if manifest.get("schema") != TREE_SCHEMA:
+        raise PublisherTrustError("Release tree manifest schema must be 2.", code="tree_manifest_invalid")
+    algorithm = str(manifest.get("algorithm") or "")
+    if algorithm.lower() != SUPPORTED_ALGORITHM.lower():
+        raise PublisherTrustError("Release tree manifest algorithm must be Ed25519.", code="algorithm_mismatch")
+    component = str(manifest.get("component") or "").strip()
+    if component not in {"framework", "ui"}:
+        raise PublisherTrustError("Release tree manifest component must be framework or ui.", code="tree_component_invalid")
+    if expected_component and component != expected_component:
+        raise PublisherTrustError(
+            f"Signed release component mismatch: expected {expected_component}, manifest declares {component}.",
+            code="tree_component_mismatch",
+        )
+    version = str(manifest.get("version") or "").strip()
+    if not version or len(version) > 80 or not re.fullmatch(r"[A-Za-z0-9._-]+", version):
+        raise PublisherTrustError("Release tree manifest version is invalid.", code="tree_version_invalid")
+    files = manifest.get("files")
+    if not isinstance(files, list) or not files or len(files) > MAX_TREE_FILES:
+        raise PublisherTrustError("Release tree file list is invalid.", code="tree_file_count_invalid")
+
+    publisher_id = str(manifest.get("publisher_id") or "").strip()
+    key_id = str(manifest.get("key_id") or "").strip()
+    policy, key_record, public_key_path = _publisher_policy(publisher_id, key_id, trust_root=trust_root)
+    effective_environment = str(server_environment or _server_environment()).strip().lower()
+    policy_environment = str(policy.get("environment") or "production").strip().lower()
+    if policy_environment != effective_environment:
+        raise PublisherTrustError(
+            f"Publisher environment mismatch: server={effective_environment}, publisher={policy_environment}.",
+            code="environment_mismatch",
+        )
+    granted = _permissions(policy, key_record)
+    required = {str(v).strip() for v in required_permissions if str(v).strip()}
+    missing_permissions = sorted(required - granted)
+    if missing_permissions:
+        raise PublisherTrustError(
+            "Publisher policy does not grant required permission(s): " + ", ".join(missing_permissions),
+            code="publisher_permission_denied",
+        )
+    try:
+        public_key = _decode_public_key(public_key_path.read_bytes())
+    except OSError as exc:
+        raise PublisherTrustError(f"Trusted publisher public key is unavailable: {exc}", code="trust_material_missing") from exc
+    signature = _decode_signature(signature_bytes)
+    try:
+        public_key.verify(signature, manifest_bytes)
+    except InvalidSignature as exc:
+        raise PublisherTrustError("Release tree Ed25519 signature is invalid.", code="tree_signature_invalid") from exc
+
+    return {
+        "signed": True,
+        "verified": False,
+        "manifest_verified": True,
+        "tree_verified": False,
+        "trusted": True,
+        "state": "signed",
+        "schema": TREE_SCHEMA,
+        "component": component,
+        "version": version,
+        "publisher_id": publisher_id,
+        "publisher_display_name": str(policy.get("display_name") or publisher_id),
+        "key_id": key_id,
+        "algorithm": SUPPORTED_ALGORITHM,
+        "file_count": len(files),
+        "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "signature_sha256": hashlib.sha256(signature_bytes).hexdigest(),
+        "server_environment": effective_environment,
+        "details": "Trusted manifest signature verified. Full source-tree verification occurs after download and inspection.",
+    }
+
 def verify_release_tree(
     *,
     root: Path,

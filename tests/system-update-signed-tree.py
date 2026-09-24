@@ -7,7 +7,7 @@ from cryptography.hazmat.primitives import serialization
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'framwork'))
 os.environ['TEC_TAC_ENVIRONMENT']='development'
-from tec_tac.trusted_publishers import PublisherTrustError, verify_release_tree
+from tec_tac.trusted_publishers import PublisherTrustError, verify_release_manifest_signature, verify_release_tree
 from tec_tac import system_update
 
 spec=importlib.util.spec_from_file_location('system_update_helper',ROOT/'scripts/system-update-helper.py')
@@ -38,6 +38,9 @@ def expect_code(fn, code):
 
 with tempfile.TemporaryDirectory() as tmp:
     base=Path(tmp); root, trustroot=make_tree(base)
+    manifest_bytes=(root/'tec-tac-release.json').read_bytes(); signature_bytes=(root/'tec-tac-release.json.sig').read_bytes()
+    preview=verify_release_manifest_signature(manifest_bytes=manifest_bytes,signature_bytes=signature_bytes,expected_component='framework',trust_root=trustroot,server_environment='development')
+    assert preview['signed'] and preview['manifest_verified'] and not preview['tree_verified'] and preview['state']=='signed'
     result=verify_release_tree(root=root,expected_component='framework',trust_root=trustroot,server_environment='development')
     assert result['verified'] and result['file_count']==3 and result['publisher_id']=='publisher-dev'
     helper.verify_signed_tree_snapshot(root,'framework','1.15.36',result)
