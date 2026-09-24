@@ -20,7 +20,7 @@ from .views import (
     ModuleRemoveView, RoleExtensionPermissionsView, TotpQrView,
     SystemUpdateStatusView, SystemUpdatePackageInspectView, SystemUpdatePackageStageView,
     SystemUpdatePackageInstallView, SystemUpdateJobView, SystemUpdateOnlineStatusView,
-    SystemUpdateBranchesView, SystemUpdateOnlineStageView, UiContextView,
+    SystemUpdateBranchesView, SystemUpdateOnlineStageView, SystemUpdateTrustPolicyView, UiContextView,
 )
 from .module_repository_views import (
     ModuleRepositoryListView, ModuleRepositoryDetailView, ModuleRepositorySyncView,
@@ -73,6 +73,7 @@ urlpatterns = [
     path("system/maintenance/jobs/<uuid:job_id>/", ServerMaintenanceJobDetailView.as_view(), name="tec-tac-server-maintenance-job-detail"),
     path("system/maintenance/jobs/<uuid:job_id>/cancel/", ServerMaintenanceJobCancelView.as_view(), name="tec-tac-server-maintenance-job-cancel"),
     path("system/updates/", SystemUpdateStatusView.as_view(), name="tec-tac-system-update-status"),
+    path("system/updates/trust-policy/", SystemUpdateTrustPolicyView.as_view(), name="tec-tac-system-update-trust-policy"),
     path("system/updates/packages/inspect/", SystemUpdatePackageInspectView.as_view(), name="tec-tac-system-update-package-inspect"),
     path("system/updates/packages/<uuid:upload_id>/", SystemUpdatePackageStageView.as_view(), name="tec-tac-system-update-package-stage"),
     path("system/updates/packages/<uuid:upload_id>/install/", SystemUpdatePackageInstallView.as_view(), name="tec-tac-system-update-package-install"),

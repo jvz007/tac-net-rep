@@ -24,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 
 from .trusted_publishers import PublisherTrustError, verify_release_manifest_signature, verify_release_tree
+from .trust_policy import TrustPolicyError, acceptance as trust_acceptance, get_policy as get_trust_policy, require_accepted as require_trust_accepted
 
 STATE_ROOT = Path("/var/lib/tec-tac/system-updates")
 CACHE_ROOT = STATE_ROOT / "cache"
@@ -221,6 +222,23 @@ def _release_signature_preview(component: str, repo: str, commit: str) -> dict:
         }
 
 
+def _annotate_trust_acceptance(trust: dict | None) -> dict:
+    row = dict(trust) if isinstance(trust, dict) else {}
+    try:
+        row["acceptance_policy"] = trust_acceptance(row)
+    except TrustPolicyError as exc:
+        policy = get_trust_policy()
+        row["acceptance_policy"] = {
+            "minimum_level": policy["minimum_level"],
+            "minimum_label": policy["minimum_label"],
+            "actual_level": None,
+            "actual_label": "Invalid / untrusted",
+            "accepted": False,
+            "detail": str(exc),
+        }
+    return row
+
+
 def _safe_archive_name(name: str) -> Path:
     value = PurePosixPath(name.replace("\\", "/"))
     if value.is_absolute() or ".." in value.parts:
@@ -399,6 +417,10 @@ def inspect_archive(archive: Path, *, source: dict | None = None) -> dict:
             release_trust["details"] = f"Verified manifest signature and {release_trust.get('file_count', 0)} release files."
         else:
             release_trust = _unsigned_release_trust(component=component, version=version, source=source)
+        try:
+            release_trust["acceptance_policy"] = require_trust_accepted(release_trust, subject=f"{component.title()} update")
+        except TrustPolicyError as exc:
+            raise SystemUpdateError(f"Update trust policy rejected {component} package: {exc}") from exc
 
     installed = _installed_version(component)
     installable = True
@@ -585,6 +607,9 @@ def cached_online_status(component: str) -> dict:
     if cached is not None:
         checked = _parse_cached_at(cached.get("checked_at"))
         cached["cache"]["stale"] = checked is None or datetime.now(timezone.utc) - checked >= RELEASE_CACHE_TTL
+        latest = cached.get("latest_release")
+        if isinstance(latest, dict):
+            latest["release_trust"] = _annotate_trust_acceptance(latest.get("release_trust"))
         return cached
     return {
         "component": component,
@@ -629,7 +654,7 @@ def online_status(component: str, *, force: bool = False) -> dict:
         commit = str(commit_info.get("sha", "")) if isinstance(commit_info, dict) else ""
         if not re.fullmatch(r"[0-9a-fA-F]{40}", commit):
             raise SystemUpdateError("Unable to resolve stable release to an exact commit SHA.")
-        trust_preview = _release_signature_preview(component, repo, commit)
+        trust_preview = _annotate_trust_acceptance(_release_signature_preview(component, repo, commit))
         checked_at = _utcnow()
         release_row = {
             "tag": tag,
@@ -778,6 +803,12 @@ def queue_install(upload_id: str, *, allow_downgrade: bool = False, requested_by
     meta = _load_stage(upload_id)
     preview = meta.get("preview") or {}
     operation = preview.get("operation")
+    try:
+        current_acceptance = require_trust_accepted(preview.get("release_trust"), subject="System update")
+        if isinstance(preview.get("release_trust"), dict):
+            preview["release_trust"]["acceptance_policy"] = current_acceptance
+    except TrustPolicyError as exc:
+        raise SystemUpdateError(f"Update trust policy rejected staged system update: {exc}") from exc
     if not preview.get("installable", False):
         raise SystemUpdateError(preview.get("install_block_reason") or "System update package is not compatible with this installation.")
     if operation == "downgrade" and not allow_downgrade:
@@ -875,5 +906,6 @@ def system_status() -> dict:
         "accepted_archives": [".zip", ".tar.gz", ".tgz"],
         "advanced_sources": {"branch_requires_unlock": True},
         "signed_release_policy": {component: {"minimum_version": _signed_release_min_version(component)} for component in sorted(COMPONENTS)},
+        "update_trust_policy": get_trust_policy(),
         "history": _recent_history(),
     }

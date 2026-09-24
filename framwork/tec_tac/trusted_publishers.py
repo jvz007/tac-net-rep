@@ -167,6 +167,15 @@ def _publisher_policy(publisher_id: str, key_id: str, trust_root: Path | None = 
     return policy, key_record, publisher_dir / key_name
 
 
+def _assurance(policy: dict, key_record: dict) -> str:
+    """Return the local assurance classification for a trusted signing key."""
+    value = key_record.get("assurance", policy.get("assurance", "standard"))
+    assurance = str(value or "standard").strip().lower().replace("-", "_").replace(" ", "_")
+    if assurance in {"secure", "secure_signed", "high_assurance"}:
+        return "secure"
+    return "standard"
+
+
 def _permissions(policy: dict, key_record: dict) -> set[str]:
     publisher = policy.get("permissions") or []
     key_permissions = key_record.get("permissions")
@@ -285,6 +294,7 @@ def verify_release_files(
         "approved_permissions": sorted(granted),
         "publisher_environment": policy_environment,
         "release_environment": metadata_environment,
+        "assurance": _assurance(policy, key_record),
         "server_environment": effective_environment,
     }
 
@@ -492,6 +502,8 @@ def verify_release_manifest_signature(
         "file_count": len(files),
         "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
         "signature_sha256": hashlib.sha256(signature_bytes).hexdigest(),
+        "publisher_environment": policy_environment,
+        "assurance": _assurance(policy, key_record),
         "server_environment": effective_environment,
         "details": "Trusted manifest signature verified. Full source-tree verification occurs after download and inspection.",
     }
@@ -685,5 +697,6 @@ def verify_release_tree(
         "required_permissions": sorted(required),
         "approved_permissions": sorted(granted),
         "publisher_environment": policy_environment,
+        "assurance": _assurance(policy, key_record),
         "server_environment": effective_environment,
     }

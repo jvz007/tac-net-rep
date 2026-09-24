@@ -1,5 +1,6 @@
 import io
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
 from django.http import HttpResponse
@@ -43,6 +44,7 @@ from .system_update import (
 from .module_runtime import module_runtime_snapshot
 from .preferences import get_user_preferences
 from .session_security import SessionAuthenticated
+from .trust_policy import TrustPolicyError, get_policy as get_update_trust_policy, set_policy as set_update_trust_policy
 
 from .rbac import (
     effective_permissions,
@@ -378,6 +380,35 @@ class SystemUpdateStatusView(APIView):
     def get(self, request):
         _require_module_manager(request.user)
         return Response(system_status())
+
+
+@extend_schema_view(
+    get=extend_schema(tags=["Tec-Tac System Updates"], summary="Get global update/module trust acceptance policy"),
+    put=extend_schema(tags=["Tec-Tac System Updates"], summary="Set global update/module trust acceptance policy"),
+)
+class SystemUpdateTrustPolicyView(APIView):
+    permission_classes = [SessionAuthenticated]
+
+    def get(self, request):
+        _require_module_manager(request.user)
+        try:
+            return Response(get_update_trust_policy())
+        except TrustPolicyError as exc:
+            return Response({"detail": str(exc)}, status=500)
+
+    def put(self, request):
+        _require_module_manager(request.user)
+        level = request.data.get("minimum_level")
+        if level is None:
+            return Response({"detail": "minimum_level is required."}, status=400)
+        try:
+            return Response(set_update_trust_policy(
+                str(level),
+                updated_by=str(request.user.username),
+                updated_at=datetime.now(timezone.utc).isoformat(),
+            ))
+        except TrustPolicyError as exc:
+            return Response({"detail": str(exc)}, status=400)
 
 
 @extend_schema_view(post=extend_schema(tags=["Tec-Tac System Updates"], summary="Inspect and stage an offline Tec-Tac system update package"))

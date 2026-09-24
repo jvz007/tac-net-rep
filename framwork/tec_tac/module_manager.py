@@ -22,6 +22,7 @@ from pathlib import Path, PurePosixPath
 
 from .registry import RegistryError, discover_plugins, get_plugins
 from .trusted_publishers import PublisherTrustError, verify_release_files
+from .trust_policy import TrustPolicyError, require_accepted as require_trust_accepted
 
 STATE_ROOT = Path("/var/lib/tec-tac/module-manager")
 STAGED_ROOT = STATE_ROOT / "staged"
@@ -349,7 +350,7 @@ def _copy_sidecar(upload, path: Path, maximum: int = 1024 * 1024) -> tuple[int, 
 
 def _verify_stage_trust(meta: dict, *, require_signed: bool = False, required_permissions=("module.install",)) -> dict:
     try:
-        return verify_release_files(
+        trust = verify_release_files(
             package_path=Path(meta["package_path"]),
             package_filename=str(meta.get("filename") or Path(meta["package_path"]).name),
             signature_path=Path(meta["signature_path"]) if meta.get("signature_path") else None,
@@ -358,6 +359,15 @@ def _verify_stage_trust(meta: dict, *, require_signed: bool = False, required_pe
             required_permissions=required_permissions,
             require_signed=require_signed,
         )
+        trust["acceptance_policy"] = require_trust_accepted(trust, subject="Module package")
+        return trust
+    except TrustPolicyError as exc:
+        logger.warning(
+            "Tec-Tac update trust policy rejected module package=%s detail=%s",
+            str(meta.get("filename") or Path(str(meta.get("package_path") or "package")).name),
+            str(exc),
+        )
+        raise ModuleManagerError(f"Update trust policy rejected module package: {exc}") from exc
     except PublisherTrustError as exc:
         logger.warning(
             "Tec-Tac publisher trust rejected package=%s code=%s require_signed=%s required_permissions=%s detail=%s",

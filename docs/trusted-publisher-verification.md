@@ -207,3 +207,41 @@ Troubleshooting & Diagnostics exposes `core.security.publisher-trust`, including
 ## Signed Framework source trees (publisher tool v0.2.0)
 
 System Updates also understands the publisher tool's schema-2 source-tree format. A signed repository root contains `tec-tac-release.json` and `tec-tac-release.json.sig`. Core verifies the exact manifest bytes with the locally trusted active Ed25519 key, then requires the manifest to match the complete source tree by canonical relative path, byte size, and SHA-256. The execution worker pins the verified manifest/signature hashes into the update job and re-checks both the extracted staged tree and the Git checkout that will execute the installer. See `docs/system-update-signed-releases.md`.
+
+## Global acceptance policy
+
+Tec-Tac also maintains one global minimum acceptance level for both System Updates and Module Management. The policy is stored under the configured `TEC_TAC_POLICY_ROOT` (default `/var/lib/tec-tac/policy`) and is managed through Core rather than by individual modules.
+
+Ordered levels:
+
+1. `unsigned`
+2. `signed_development`
+3. `signed_production`
+4. `secure_signed`
+
+A package must meet the configured global floor **and** every component/module-specific rule. Lowering the global floor never disables existing requirements such as privileged module publisher permissions or component-specific signed-release enforcement.
+
+Publisher environment isolation remains independent. A development signing identity is not accepted on a production server simply because the global floor is `signed_development`.
+
+### Secure Signed
+
+`secure_signed` is a high-assurance production signing tier. It requires:
+
+- a valid trusted Ed25519 signature;
+- publisher environment `production`; and
+- `assurance: "secure"` on either the selected key record or the publisher policy in the local trusted-publisher store.
+
+Key-level assurance takes precedence over publisher-level assurance. This flag is local trust policy; it is deliberately not asserted by untrusted package metadata.
+
+Example key record:
+
+```json
+{
+  "key_id": "tech-key-prod-2026",
+  "status": "active",
+  "algorithm": "Ed25519",
+  "public_key": "public.key",
+  "assurance": "secure",
+  "permissions": ["module.install", "system.update"]
+}
+```

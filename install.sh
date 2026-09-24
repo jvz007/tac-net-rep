@@ -442,6 +442,7 @@ TEC_TAC_EXTENSIONS_ROOT=${EXTENSIONS_DIR}
 TEC_TAC_REPORTSETS_ROOT=${REPORTSETS_DIR}
 TEC_TAC_SCRIPTS_ROOT=${RUNTIME_SCRIPTS_DIR}
 TEC_TAC_STATE_ROOT=/var/lib/tec-tac
+TEC_TAC_POLICY_ROOT=/var/lib/tec-tac/policy
 TEC_TAC_MODULE_STATE_ROOT=${MODULE_STATE_ROOT}
 TEC_TAC_TRUSTED_PUBLISHERS_ROOT=${TRUSTED_PUBLISHERS_ROOT}
 TEC_TAC_ENVIRONMENT=${TEC_TAC_ENVIRONMENT:-production}
@@ -488,6 +489,11 @@ log "Installed privileged module lifecycle helper: ${MODULE_HELPER}"
 log "Installed privileged Module Management v2 helper: ${MODULE_V2_HELPER}"
 log "Installed privileged module hotfix helper: ${MODULE_HOTFIX_HELPER}"
 
+
+POLICY_ROOT="${TEC_TAC_POLICY_ROOT:-/var/lib/tec-tac/policy}"
+mkdir -p "${POLICY_ROOT}"
+chown root:"${TACTICAL_GROUP}" "${POLICY_ROOT}"
+chmod 2770 "${POLICY_ROOT}"
 
 SYSTEM_UPDATE_ROOT="${TEC_TAC_SYSTEM_UPDATE_ROOT:-/var/lib/tec-tac/system-updates}"
 SYSTEM_UPDATE_HELPER="/usr/local/sbin/tec-tac-system-update"

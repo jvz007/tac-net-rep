@@ -181,3 +181,10 @@ grep -q 'verify-execution-signature-tree' "${ROOT}/scripts/system-update-helper.
 grep -q 'SIGNED_RELEASE_MIN_VERSION' "${ROOT}/framwork/tec_tac/system_update.py" || fail "Framework signed release cutoff missing"
 grep -q 'release_trust' "${ROOT}/framwork/tec_tac/system_update.py" || fail "signed release provenance not retained in jobs"
 echo "[TEST] PASS signed source release integration"
+
+# Shared System Update / Module Management acceptance policy.
+grep -q 'system/updates/trust-policy/' "${ROOT}/framwork/tec_tac/urls.py" || fail "update trust policy route missing"
+grep -q 'update_trust_policy' "${ROOT}/framwork/tec_tac/system_update.py" || fail "system status trust policy visibility missing"
+grep -q 'require_trust_accepted' "${ROOT}/framwork/tec_tac/system_update.py" || fail "system update trust floor enforcement missing"
+grep -q 'require_trust_accepted' "${ROOT}/framwork/tec_tac/module_manager.py" || fail "module trust floor enforcement missing"
+PYTHONPATH="${ROOT}/framwork" python3 "${ROOT}/tests/update-trust-policy.py"
