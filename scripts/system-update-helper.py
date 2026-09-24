@@ -423,7 +423,13 @@ def apply_source_update(source, target, component, job):
         _git(["fetch", "--quiet", "origin", commit], target)
         _git(["cat-file", "-e", f"{commit}^{{commit}}"], target)
         _git(["reset", "--hard", commit], target)
-        _git(["clean", "-fd"], target)
+        # UI installs intentionally generate ignored build/dependency trees
+        # (node_modules, dist, .vite, .env). They are not release content and
+        # must not survive into the execution checkout that is re-verified
+        # against the signed source manifest. Framework source may contain
+        # operator-managed ignored paths, so keep its historical -fd behavior.
+        clean_args = ["clean", "-fdx"] if component == "ui" else ["clean", "-fd"]
+        _git(clean_args, target)
         mode = "online"
         update_branch = None
     else:

@@ -363,6 +363,9 @@ def _run_kwargs(schedule: TecTacSchedule, **extra):
         "schedule_name": schedule.name,
         "module_id": schedule.module_id,
         "action_id": schedule.action_id,
+        "owner_type": schedule.owner_type,
+        "owner_module": schedule.owner_module,
+        "owner_key": schedule.owner_key,
     }
     values.update(extra)
     return values
@@ -602,7 +605,7 @@ def reconcile_schedule(*, owner_module: str, owner_key: str, action_id: str, sch
         if target_type not in action.target_types:
             raise SchedulerError(f"Action {action.id} does not support target type {target_type!r}.")
 
-        schedule = existing or TecTacSchedule(owner_module=module, owner_key=key)
+        schedule = existing or TecTacSchedule(owner_type=TecTacSchedule.OwnerType.MODULE, owner_module=module, owner_key=key)
         previous_signature = None
         if existing:
             previous_signature = (
@@ -616,6 +619,7 @@ def reconcile_schedule(*, owner_module: str, owner_key: str, action_id: str, sch
         ):
             if field in data:
                 setattr(schedule, field, data[field])
+        schedule.owner_type = TecTacSchedule.OwnerType.MODULE
         schedule.owner_module = module
         schedule.owner_key = key
         schedule.interval_anchor_at = _as_utc(anchor) if anchor else None
@@ -676,6 +680,9 @@ def serialize_run(run: TecTacScheduleRun) -> dict:
         "schedule_name": run.schedule_name or (run.schedule.name if run.schedule else "Deleted schedule"),
         "module_id": run.module_id or (run.schedule.module_id if run.schedule else ""),
         "action_id": run.action_id or (run.schedule.action_id if run.schedule else ""),
+        "owner_type": run.owner_type,
+        "owner_module": run.owner_module or None,
+        "owner_key": run.owner_key or None,
         "status": run.status,
         "scheduled_for": run.scheduled_for.isoformat(),
         "manual": run.manual,
@@ -712,8 +719,11 @@ def serialize_schedule(schedule: TecTacSchedule, *, include_runs: bool = False) 
         "day_of_month": schedule.day_of_month,
         "interval_seconds": schedule.interval_seconds,
         "interval_anchor_at": schedule.interval_anchor_at.isoformat() if schedule.interval_anchor_at else None,
+        "owner_type": schedule.owner_type,
         "owner_module": schedule.owner_module or None,
         "owner_key": schedule.owner_key or None,
+        "owner_label": (schedule.owner_module if schedule.owner_type == TecTacSchedule.OwnerType.MODULE else (schedule.created_by.username if schedule.created_by else "User")),
+        "managed_by_module": schedule.owner_type == TecTacSchedule.OwnerType.MODULE,
         "enabled": schedule.enabled,
         "missed_policy": schedule.missed_policy,
         "missed_grace_minutes": schedule.missed_grace_minutes,

@@ -23,4 +23,11 @@ grep -q '^def reconcile_schedule' "$ROOT/framwork/tec_tac/scheduler.py"
 grep -q '^def disable_owned_schedule' "$ROOT/framwork/tec_tac/scheduler.py"
 grep -q '^def remove_owned_schedule' "$ROOT/framwork/tec_tac/scheduler.py"
 grep -qi 'interval policy schedules and reconciliation' "$ROOT/docs/module-scheduling.md"
+
+grep -q 'class OwnerType' "$ROOT/framwork/tec_tac/models.py"
+grep -q 'owner_type = models.CharField' "$ROOT/framwork/tec_tac/models.py"
+grep -q '_require_user_managed' "$ROOT/framwork/tec_tac/scheduler_views.py"
+grep -q 'owner_type must be user or module' "$ROOT/framwork/tec_tac/scheduler_views.py"
+grep -q '0010_scheduler_ownership_split' <(find "$ROOT/framwork/tec_tac/migrations" -maxdepth 1 -type f -printf '%f\n')
+grep -qi 'Schedule ownership surfaces' "$ROOT/docs/module-scheduling.md"
 echo 'scheduler foundation: PASS'

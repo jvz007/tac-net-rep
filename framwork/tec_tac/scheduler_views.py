@@ -54,6 +54,23 @@ def _require_action(user, action_id):
     return action
 
 
+
+
+def _owner_type_filter(request):
+    value = str(request.query_params.get("owner_type") or "").strip().lower()
+    if not value:
+        return None
+    if value not in {TecTacSchedule.OwnerType.USER, TecTacSchedule.OwnerType.MODULE}:
+        raise SchedulerError("owner_type must be user or module.")
+    return value
+
+
+def _require_user_managed(schedule):
+    if schedule.owner_type == TecTacSchedule.OwnerType.MODULE:
+        raise PermissionDenied(
+            f"Schedule is managed by module {schedule.owner_module!r}. Change it from the owning module instead."
+        )
+
 def _parse_fields(payload: dict) -> dict:
     data = dict(payload)
     if "run_at" in data:
@@ -135,15 +152,25 @@ class SchedulerActionListView(APIView):
 class SchedulerListView(APIView):
     permission_classes = [SessionAuthenticated]
     def get(self, request):
+        try:
+            owner_type = _owner_type_filter(request)
+        except SchedulerError as exc:
+            return Response({"detail": str(exc)}, status=400)
+        qs = TecTacSchedule.objects.select_related("created_by", "updated_by").prefetch_related("runs")
+        if owner_type:
+            qs = qs.filter(owner_type=owner_type)
         rows = []
-        for schedule in TecTacSchedule.objects.select_related("created_by", "updated_by").prefetch_related("runs"):
+        for schedule in qs:
             try:
                 action = get_scheduled_action(schedule.action_id)
             except SchedulerError:
                 action = None
             if _native_scheduler_manager(request.user) or (action and _can_use_action(request.user, action)):
                 rows.append(serialize_schedule(schedule))
-        return Response({"schedules": rows, "count": len(rows), "manage": _native_scheduler_manager(request.user)})
+        return Response({
+            "schedules": rows, "count": len(rows), "manage": _native_scheduler_manager(request.user),
+            "owner_type": owner_type,
+        })
 
     def post(self, request):
         try:
@@ -161,7 +188,7 @@ class SchedulerListView(APIView):
             if data.get("schedule_type") == TecTacSchedule.ScheduleType.INTERVAL and not data.get("interval_anchor_at"):
                 data["interval_anchor_at"] = timezone.now().replace(second=0, microsecond=0)
             _validate_shape(data)
-            schedule = TecTacSchedule(created_by=request.user, updated_by=request.user)
+            schedule = TecTacSchedule(owner_type=TecTacSchedule.OwnerType.USER, created_by=request.user, updated_by=request.user)
             _apply_schedule_fields(schedule, data)
             schedule.save()
             return Response(serialize_schedule(schedule, include_runs=True), status=201)
@@ -182,6 +209,7 @@ class SchedulerDetailView(APIView):
 
     def patch(self, request, schedule_id):
         schedule, _ = self.get_object(request, schedule_id)
+        _require_user_managed(schedule)
         try:
             merged = {
                 "name": schedule.name, "action_id": schedule.action_id, "module_id": schedule.module_id,
@@ -208,6 +236,7 @@ class SchedulerDetailView(APIView):
 
     def delete(self, request, schedule_id):
         schedule, _ = self.get_object(request, schedule_id)
+        _require_user_managed(schedule)
         if schedule.runs.filter(status__in=[TecTacScheduleRun.Status.QUEUED, TecTacScheduleRun.Status.RUNNING]).exists():
             return Response({"detail": "Schedule cannot be deleted while a run is queued or running."}, status=409)
         schedule.delete()
@@ -226,10 +255,16 @@ class SchedulerRunNowView(APIView):
 class SchedulerRunListView(APIView):
     permission_classes = [SessionAuthenticated]
     def get(self, request):
+        try:
+            owner_type = _owner_type_filter(request)
+        except SchedulerError as exc:
+            return Response({"detail": str(exc)}, status=400)
         qs = TecTacScheduleRun.objects.select_related("schedule")
         schedule_id = request.query_params.get("schedule_id")
         if schedule_id:
             qs = qs.filter(schedule_snapshot_id=schedule_id)
+        if owner_type:
+            qs = qs.filter(owner_type=owner_type)
         rows = []
         for run in qs[:200]:
             action_id = run.action_id or (run.schedule.action_id if run.schedule else "")
@@ -239,7 +274,7 @@ class SchedulerRunListView(APIView):
                 action = None
             if _native_scheduler_manager(request.user) or (action and _can_use_action(request.user, action)):
                 rows.append(serialize_run(run))
-        return Response({"runs": rows, "count": len(rows)})
+        return Response({"runs": rows, "count": len(rows), "owner_type": owner_type})
 
 
 class SchedulerConfigView(APIView):
@@ -298,7 +333,7 @@ class SchedulerSelfTestView(APIView):
         }[mode]
         run_at = timezone.now() + timedelta(minutes=2)
         schedule = TecTacSchedule.objects.create(
-            name=f"Scheduler self-test · {mode}", module_id="tec-tac", action_id=action_id,
+            name=f"Scheduler self-test · {mode}", module_id="tec-tac", action_id=action_id, owner_type=TecTacSchedule.OwnerType.USER,
             targets={"type": "none"}, parameters={"message": f"Scheduler {mode} self-test"},
             schedule_type=TecTacSchedule.ScheduleType.ONCE, timezone="UTC", run_at=run_at,
             enabled=(mode == "scheduled"), retry_count=(1 if mode == "retry" else 0), retry_delay_seconds=5,

@@ -477,3 +477,15 @@ SNMP override   -> interval_seconds=60
 ```
 
 When a check interval changes, reconcile the same `owner_key`; do not create a new schedule. When a definition is disabled, disable its owned schedule. Re-enabling reconciles/re-enables the same schedule. A global check-type default change should trigger reconciliation only for definitions that do not carry an explicit interval override.
+
+## Schedule ownership surfaces
+
+Core uses one scheduling engine but exposes two ownership classes:
+
+- `user` — created explicitly by an operator through the Core Scheduler UI/API;
+- `module` — reconciled by backend modules through `reconcile_schedule()`.
+
+Module-owned schedules are read-only through the generic Scheduler management API. Their owning module remains authoritative for edits and removal. `Run now` remains available when the caller has permission for the registered action. Execution history snapshots ownership so deleted schedules remain attributable.
+
+List APIs accept `?owner_type=user` or `?owner_type=module` for clean separation without creating a second scheduler runtime.
+

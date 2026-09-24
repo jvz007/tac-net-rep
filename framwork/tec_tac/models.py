@@ -14,6 +14,10 @@ def default_session_trusted_proxies():
 
 
 class TecTacSchedule(models.Model):
+    class OwnerType(models.TextChoices):
+        USER = "user", "User"
+        MODULE = "module", "Module"
+
     class ScheduleType(models.TextChoices):
         ONCE = "once", "Once"
         DAILY = "daily", "Daily"
@@ -52,6 +56,9 @@ class TecTacSchedule(models.Model):
     interval_seconds = models.PositiveIntegerField(null=True, blank=True)
     interval_anchor_at = models.DateTimeField(null=True, blank=True)
 
+    # Ownership is explicit so operator-created and module-managed schedules can
+    # share one execution engine without sharing one management surface.
+    owner_type = models.CharField(max_length=16, choices=OwnerType.choices, default=OwnerType.USER)
     # Backend-owned schedules use this stable ownership key for idempotent
     # reconciliation. User-created schedules leave both fields blank.
     owner_module = models.CharField(max_length=100, blank=True, default="")
@@ -76,6 +83,7 @@ class TecTacSchedule(models.Model):
         indexes = [
             models.Index(fields=("enabled", "schedule_type"), name="tectac_sched_enabled_idx"),
             models.Index(fields=("module_id", "action_id"), name="tectac_sched_action_idx"),
+            models.Index(fields=("owner_type", "enabled"), name="tectac_sched_owner_type_idx"),
             models.Index(fields=("owner_module", "owner_key"), name="tectac_sched_owner_idx"),
         ]
         constraints = [
@@ -141,6 +149,9 @@ class TecTacScheduleRun(models.Model):
     schedule_name = models.CharField(max_length=255, blank=True, default="")
     module_id = models.CharField(max_length=100, blank=True, default="")
     action_id = models.CharField(max_length=160, blank=True, default="")
+    owner_type = models.CharField(max_length=16, choices=TecTacSchedule.OwnerType.choices, default=TecTacSchedule.OwnerType.USER)
+    owner_module = models.CharField(max_length=100, blank=True, default="")
+    owner_key = models.CharField(max_length=255, blank=True, default="")
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.QUEUED)
     scheduled_for = models.DateTimeField()
     manual = models.BooleanField(default=False)
@@ -158,6 +169,7 @@ class TecTacScheduleRun(models.Model):
         ordering = ("-created_at",)
         indexes = [
             models.Index(fields=("schedule", "status"), name="tectac_run_status_idx"),
+            models.Index(fields=("owner_type", "created_at"), name="tectac_run_owner_type_idx"),
             models.Index(fields=("scheduled_for",), name="tectac_run_due_idx"),
         ]
 

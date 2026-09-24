@@ -123,6 +123,27 @@ with tempfile.TemporaryDirectory() as tmp:
     assert out('git','rev-parse','HEAD',cwd=checkout)==old
     assert out('git','symbolic-ref','--short','HEAD',cwd=checkout)=='main'
 
+    # UI online updates must remove ignored build/dependency residue before the
+    # signed execution-tree verification. git clean -fd is insufficient because
+    # node_modules is ignored and contains symlinks such as .bin/rollup.
+    ui_remote=base/'ui-remote.git'; run('git','init','--bare',str(ui_remote))
+    ui_seed=base/'ui-seed'; run('git','init',str(ui_seed)); run('git','config','user.name','test',cwd=ui_seed); run('git','config','user.email','test@example.invalid',cwd=ui_seed)
+    (ui_seed/'VERSION').write_text('0.1.0\n'); (ui_seed/'package.json').write_text('{}\n'); (ui_seed/'src').mkdir(); (ui_seed/'src'/'App.vue').write_text('<template/>\n'); (ui_seed/'scripts').mkdir(); (ui_seed/'scripts'/'install.sh').write_text('#!/bin/sh\n'); (ui_seed/'.gitignore').write_text('node_modules/\ndist/\n.env\n')
+    run('git','add','-A',cwd=ui_seed); run('git','commit','-m','ui one',cwd=ui_seed); run('git','branch','-M','main',cwd=ui_seed); run('git','remote','add','origin',str(ui_remote),cwd=ui_seed); run('git','push','-u','origin','main',cwd=ui_seed)
+    ui_checkout=base/'ui-checkout'; run('git','clone','-b','main',str(ui_remote),str(ui_checkout))
+    (ui_checkout/'node_modules'/'.bin').mkdir(parents=True); (ui_checkout/'node_modules'/'rollup').write_text('binary')
+    (ui_checkout/'node_modules'/'.bin'/'rollup').symlink_to('../rollup')
+    (ui_checkout/'dist').mkdir(); (ui_checkout/'dist'/'index.html').write_text('generated')
+    (ui_checkout/'.env').write_text('SHOULD_NOT_SURVIVE=1\n')
+    (ui_seed/'VERSION').write_text('0.1.1\n'); (ui_seed/'src'/'App.vue').write_text('<template>updated</template>\n'); run('git','add','-A',cwd=ui_seed); run('git','commit','-m','ui two',cwd=ui_seed); run('git','push',cwd=ui_seed)
+    ui_online=out('git','rev-parse','HEAD',cwd=ui_seed)
+    ui_source=base/'ui-source'; ui_source.mkdir(); (ui_source/'VERSION').write_text('0.1.1\n')
+    mod.apply_source_update(ui_source,ui_checkout,'ui',{'id':'ui-clean-1','version':'0.1.1','source':{'type':'release','commit':ui_online}})
+    assert not (ui_checkout/'node_modules').exists()
+    assert not (ui_checkout/'dist').exists()
+    assert not (ui_checkout/'.env').exists()
+    assert not out('git','status','--porcelain',cwd=ui_checkout)
+
     # Offline package becomes its own clean local branch/commit.
     offline=base/'offline'; offline.mkdir(); (offline/'VERSION').write_text('1.0.2\n'); (offline/'install.sh').write_text('#!/bin/sh\n'); (offline/'framwork'/'tec_tac').mkdir(parents=True); (offline/'framwork'/'tec_tac'/'__init__.py').write_text(''); (offline/'offline.txt').write_text('package\n')
     state=mod.apply_source_update(offline,checkout,'framework',{'id':'abcdef12-0000','version':'1.0.2','source':{'type':'offline'}})

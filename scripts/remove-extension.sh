@@ -198,6 +198,16 @@ for config_path in reversed(declared):
 fi
 
 
+# Disable Core schedules owned by this module before its action registrations disappear.
+# Definitions and run history are preserved for audit/reinstall reconciliation.
+runuser -u "${TACTICAL_USER}" -- env TEC_TAC_REMOVE_MODULE_ID="${PLUGIN_ID}" "${VENV_PYTHON}" "${MANAGE_PY}" shell -c '
+import os
+from tec_tac.models import TecTacSchedule
+module_id = os.environ["TEC_TAC_REMOVE_MODULE_ID"]
+updated = TecTacSchedule.objects.filter(owner_type=TecTacSchedule.OwnerType.MODULE, owner_module=module_id, enabled=True).update(enabled=False, last_due_key="")
+print(f"[TEC-TAC] Disabled {updated} module-owned schedule(s) for {module_id}.")
+'
+
 # Disable active role grants declared by this extension before removing code.
 runuser -u "${TACTICAL_USER}" -- env TEC_TAC_REMOVE_PERMISSION_MANIFEST="${EXT_DIR}/tec_tac.json" "${VENV_PYTHON}" "${MANAGE_PY}" shell -c '
 import json, os
