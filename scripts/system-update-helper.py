@@ -231,7 +231,7 @@ def extract_archive(archive, dest):
                     raise RuntimeError(f"archive contains unsupported member: {member.name}")
                 target = (dest / rel).resolve()
                 target.relative_to(dest.resolve())
-            tf.extractall(dest)
+            tf.extractall(dest, filter="data")
         return
     raise RuntimeError("unsupported package archive")
 
@@ -711,7 +711,7 @@ def restore_backup(backup, target):
         os.replace(preserved_git, git_tmp)
     remove_path(target)
     with tarfile.open(backup, "r:gz") as tf:
-        tf.extractall(parent)
+        tf.extractall(parent, filter="data")
     if git_tmp and git_tmp.exists() and not (target / ".git").exists():
         os.replace(git_tmp, target / ".git")
     elif git_tmp:

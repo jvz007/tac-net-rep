@@ -6,7 +6,7 @@ fail(){ echo "[TEST] FAIL: $*" >&2; exit 1; }
 [[ -f "${ROOT}/framwork/tec_tac/server_backup.py" ]] || fail "Core server-backup provider missing"
 [[ -f "${ROOT}/scripts/server-backup-helper.py" ]] || fail "privileged server-backup helper missing"
 [[ -f "${ROOT}/docs/server-backup-capability.md" ]] || fail "server-backup developer contract missing"
-grep -q 'CAPABILITY_VERSION = "1.5.2"' "${ROOT}/framwork/tec_tac/server_backup.py" || fail "server-backup capability is not 1.5.2"
+grep -q 'CAPABILITY_VERSION = "1.6.0"' "${ROOT}/framwork/tec_tac/server_backup.py" || fail "server-backup capability is not 1.5.2"
 grep -q 'core.server_backup' "${ROOT}/framwork/tec_tac/server_backup.py" || fail "core.server_backup capability id missing"
 grep -q 'register_core_server_backup_capability' "${ROOT}/framwork/tec_tac/apps.py" || fail "Core server-backup capability is not registered by AppConfig"
 grep -q 'module_id in {"tec-tac", "core"}' "${ROOT}/framwork/tec_tac/capabilities.py" || fail "capability registry does not recognize Core-owned providers"
@@ -39,7 +39,7 @@ import tec_tac.capabilities as cap
 from tec_tac.server_backup import register_core_server_backup_capability, get_server_backup_provider
 cap._clear_capabilities_for_tests()
 reg=register_core_server_backup_capability()
-assert reg.id == "core.server_backup" and reg.module_id == "core" and reg.version == "1.5.2"
+assert reg.id == "core.server_backup" and reg.module_id == "core" and reg.version == "1.6.0"
 assert set(("create_backup","get_job_status","list_backups","restore_backup","apply_retention","validate_destination","validate_restore","store_secret","delete_secret")) <= set(reg.operations)
 assert reg.metadata["format_version"] == 2
 assert reg.metadata["overrideable_restore_checks"] == ["target.os"]
@@ -255,8 +255,8 @@ with tempfile.TemporaryDirectory() as od:
 
 with tempfile.TemporaryDirectory() as td:
     td=pathlib.Path(td)
-    # Tec-Tac component creation must exclude the entire mutable state root,
-    # even when it contains large historical installers/backups.
+    # Tec-Tac component creation keeps only a durable state allow-list while
+    # excluding historical installers, staging and other mutable state.
     runtime=td/"runtime"; framework_src=td/"framework-src"; ui_src=td/"ui-src"; state=td/"state"
     for path in (runtime,framework_src,ui_src,state): path.mkdir(parents=True,exist_ok=True)
     (runtime/"VERSION").write_text("1.15.5\n"); (runtime/"etc").mkdir(); (runtime/"etc"/"tec-tac.conf").write_text("x")
@@ -264,13 +264,16 @@ with tempfile.TemporaryDirectory() as td:
     (ui_src/"VERSION").write_text("0.11.2\n"); (ui_src/"scripts").mkdir(); (ui_src/"scripts"/"install.sh").write_text("#!/bin/sh\n")
     (state/"system-updates"/"backups").mkdir(parents=True); (state/"system-updates"/"backups"/"old-installer.zip").write_bytes(b"z"*1024)
     (state/"server-backup"/"staging").mkdir(parents=True); (state/"server-backup"/"staging"/"old.tgz").write_bytes(b"b"*1024)
+    (state/"module-manager"/"repositories").mkdir(parents=True)
+    (state/"module-manager"/"module-state.json").write_text('{"schema":1}')
+    (state/"module-manager"/"repositories"/"repositories.json").write_text('{"schema":1,"repositories":[]}')
     component=td/"component.tar.gz"
     meta=h.create_tec_tac_component({
       "TEC_TAC_ROOT":str(runtime),"TEC_TAC_FRAMEWORK_SOURCE":str(framework_src),"TEC_TAC_UI_SOURCE":str(ui_src),
       "TEC_TAC_STATE_ROOT":str(state),"TEC_TAC_SERVER_BACKUP_ROOT":str(state/"server-backup"),
       "TEC_TAC_UI_DEPLOY_ROOT":str(state/"ui"/"tec-tac"),
     },component)
-    assert meta["state_policy"]["included"] is False
+    assert meta["state_policy"]["included"] == "allow-list"
     with tarfile.open(component,"r:gz") as tf:
       # Duplicate-member validation must remain enabled and accept the component.
       members=h.safe_tar_members(tf)
@@ -280,7 +283,10 @@ with tempfile.TemporaryDirectory() as td:
     runtime_etc=runtime_rel+"/etc"
     assert names.count(runtime_etc)==1, names
     state_rel=str(state.resolve()).lstrip("/")
-    assert not any(n==state_rel or n.startswith(state_rel+"/") for n in names), names
+    assert state_rel+"/module-manager/module-state.json" in names
+    assert state_rel+"/module-manager/repositories/repositories.json" in names
+    assert state_rel+"/system-updates/backups/old-installer.zip" not in names
+    assert state_rel+"/server-backup/staging/old.tgz" not in names
 
     # make_payload_tar() itself must canonicalize parent/child inputs so callers
     # cannot accidentally emit recursively duplicated archive members.

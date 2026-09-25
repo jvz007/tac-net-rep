@@ -6,7 +6,7 @@ Tec-Tac Core exposes one narrow privileged recovery contract:
 
 ```text
 core.server_backup
-capability version 1.5.2
+capability version 1.6.0
 ```
 
 Modules request typed backup, inventory, restore, retention, destination-validation and secret-store operations. They never receive arbitrary `sudo`, shell, executable-path or unrestricted filesystem access.
@@ -333,8 +333,19 @@ The response is intentionally small and sanitized: `job_id`, `source_run_id`, `s
 Tactical and Tec-Tac recovery TAR validation permits symbolic and hard links only when the member path and resolved link target remain inside the archive extraction namespace. Relative symlink targets are resolved from the link member's parent; hardlink targets are resolved from the archive root and must name an archive member. Absolute targets, namespace escapes, duplicate normalized paths, device/FIFO/socket entries and other special members remain rejected. This shared validation applies to Tactical native/nested archive validation and Tec-Tac recovery payload extraction.
 
 
-## Canonical payload roots (1.5.2)
+## Canonical payload roots (1.6.0)
 
 Tec-Tac recovery payload creation canonicalizes requested source roots before archiving. If a requested path is already recursively covered by an included ancestor directory, the child request is discarded. This prevents callers from emitting duplicate normalized TAR members while retaining duplicate-member validation as the final archive integrity check.
 
 `create_tec_tac_component()` no longer explicitly includes `/opt/tec-tac/etc` because `/opt/tec-tac` already contains it recursively.
+
+
+## 1.6.0 hardening
+
+- Destructive Tactical/full restores take root-only PostgreSQL snapshots before services are stopped. A restore or post-restore verification failure attempts automatic tree/database rollback and records `rollback_performed`.
+- Remote FTP/SCP/rclone uploads publish through `.partial` names and are renamed only after verification.
+- Retention distinguishes missing metadata from unreadable metadata. Unreadable sidecars are protected fail-safe and reported rather than deleted. `keep_unclassified` must be explicit.
+- SCP listing discovers both legacy `rmm-backup-*.tar` and Tec-Tac `tec-tac-backup-*.tgz` archives.
+- Relative rclone remote paths remain relative.
+- Command timeouts are wall-clock enforced even when a child process is silent; timeout kills the child process group.
+- Tec-Tac recovery components retain an allow-list of durable state: module state, repository configuration and publisher trust. Cache/history/staging data remains excluded.

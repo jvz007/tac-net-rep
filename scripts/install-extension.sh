@@ -168,7 +168,7 @@ elif lower.endswith(".tar.gz") or lower.endswith(".tgz"):
                 raise SystemExit(
                     f"[TEC-TAC] ERROR: archive path escapes extraction root: {member.name!r}"
                 )
-        tf.extractall(dest)
+        tf.extractall(dest, filter="data")
 
 else:
     raise SystemExit(

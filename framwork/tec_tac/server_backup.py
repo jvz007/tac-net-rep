@@ -20,7 +20,7 @@ from .capabilities import register_capability
 from .config import load_layout
 
 CAPABILITY_ID = "core.server_backup"
-CAPABILITY_VERSION = "1.5.2"
+CAPABILITY_VERSION = "1.6.0"
 HELPER = Path("/usr/local/sbin/tec-tac-server-backup")
 DEFAULT_STATE_ROOT = Path("/var/lib/tec-tac/server-backup")
 TERMINAL_STATES = {"succeeded", "failed", "dispatch_failed"}
@@ -431,6 +431,8 @@ class ServerBackupProvider:
             if not isinstance(destination, dict):
                 raise ServerBackupError("Each retention policy requires a destination object.")
             policy = {"destination": _validate_destinations([destination])[0]}
+            if "keep_unclassified" not in raw:
+                raise ServerBackupError("keep_unclassified must be set explicitly; Core will not default unclassified backups to deletion.")
             for key in ("keep_daily", "keep_weekly", "keep_monthly", "keep_unclassified"):
                 try:
                     value = int(raw.get(key, 0))

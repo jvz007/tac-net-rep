@@ -307,7 +307,7 @@ def _extract_archive(archive: Path, dest: Path) -> None:
                     target.relative_to(dest.resolve())
                 except ValueError as exc:
                     raise SystemUpdateError(f"Archive path escapes extraction root: {member.name!r}") from exc
-            tf.extractall(dest)
+            tf.extractall(dest, filter="data")
         return
     raise SystemUpdateError("Package must end in .zip, .tar.gz, or .tgz")
 

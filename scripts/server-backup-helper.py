@@ -20,7 +20,11 @@ import platform
 import secrets
 import re
 import shutil
+import signal
+import shlex
 import socket
+import queue
+import threading
 import stat
 import subprocess
 import sys
@@ -393,21 +397,47 @@ def run_logged(args, log: LimitedLog, *, env=None, cwd=None, timeout=None, user=
     if user:
         argv = ["runuser", "-u", str(user), "--", *argv]
     log.write("[TEC-TAC-BACKUP] exec: " + " ".join(_redact_arg(x) for x in argv) + "\n")
-    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, cwd=cwd)
+    # Read output on a dedicated thread so a child that produces no newline (or
+    # no output at all) cannot block timeout enforcement in readline(). Start a
+    # new process group so a timeout kills descendants such as rclone/ssh too.
+    proc = subprocess.Popen(
+        argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        env=env, cwd=cwd, start_new_session=True,
+    )
     started = time.monotonic()
-    assert proc.stdout is not None
+    output = queue.Queue()
+    sentinel = object()
+
+    def _reader():
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                output.put(line)
+        finally:
+            output.put(sentinel)
+
+    reader = threading.Thread(target=_reader, name="tec-tac-backup-output", daemon=True)
+    reader.start()
+    stream_done = False
     while True:
-        line = proc.stdout.readline()
-        if line:
-            log.write(line)
-        if proc.poll() is not None:
-            for remainder in proc.stdout:
-                log.write(remainder)
-            break
         if timeout and time.monotonic() - started > timeout:
-            proc.kill()
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
             proc.wait()
             raise RuntimeError(f"command exceeded {timeout} seconds")
+        try:
+            item = output.get(timeout=0.20)
+            if item is sentinel:
+                stream_done = True
+            else:
+                log.write(item)
+        except queue.Empty:
+            pass
+        if proc.poll() is not None and stream_done:
+            break
+    reader.join(timeout=1)
     if proc.returncode:
         raise RuntimeError(f"command failed with status {proc.returncode}: {Path(argv[0]).name}")
     return proc.returncode
@@ -636,8 +666,12 @@ def remote_base(destination):
         prefix = normalize_remote_path(destination.get("prefix") or path)
         suffix = "" if prefix in {".", ""} else "/" + prefix.strip("/")
         return f"tectac:{bucket}{suffix}"
-    suffix = "" if path in {".", ""} else "/" + str(path).strip("/")
-    return f"tectac:{suffix}"
+    normalized = normalize_remote_path(path)
+    # Preserve the configured absolute/relative distinction. rclone interprets
+    # remote:/path as absolute and remote:path as relative.
+    if normalized in {".", ""}:
+        return "tectac:"
+    return f"tectac:{normalized}"
 
 
 def join_remote(base, name):
@@ -685,31 +719,43 @@ def ftp_prepare_path(ftp, remote_path, *, create=False):
 
 def ftp_store(config, destination, archive, metadata, log):
     ftp = ftp_connect(config, destination, timeout=120)
+    partial_name = archive.name + ".partial"
+    partial_sidecar = archive.name + ".tectac.json.partial"
     try:
         ftp_prepare_path(ftp, destination["remote_path"], create=True)
         with archive.open("rb") as fh:
-            ftp.storbinary(f"STOR {archive.name}", fh, blocksize=1024 * 1024)
+            ftp.storbinary(f"STOR {partial_name}", fh, blocksize=1024 * 1024)
         side_bytes = (json.dumps(metadata, indent=2, sort_keys=True) + "\n").encode("utf-8")
-        ftp.storbinary(f"STOR {archive.name}.tectac.json", io.BytesIO(side_bytes))
+        ftp.storbinary(f"STOR {partial_sidecar}", io.BytesIO(side_bytes))
         try:
-            remote_size = ftp.size(archive.name)
+            remote_size = ftp.size(partial_name)
         except Exception:
             remote_size = None
         if remote_size is not None and int(remote_size) != int(metadata["size_bytes"]):
             raise RuntimeError("FTP backup size verification failed")
-        # Strong verification: download and hash the stored object.
         digest = hashlib.sha256(); size = 0
         def consume(block):
             nonlocal size
             digest.update(block); size += len(block)
-        ftp.retrbinary(f"RETR {archive.name}", consume, blocksize=1024 * 1024)
+        ftp.retrbinary(f"RETR {partial_name}", consume, blocksize=1024 * 1024)
         if size != int(metadata["size_bytes"]) or digest.hexdigest().lower() != str(metadata["sha256"]).lower():
             raise RuntimeError("FTP backup SHA-256 verification failed")
+        # Publish only after the partial object has been strongly verified.
+        for final in (archive.name, archive.name + ".tectac.json"):
+            try: ftp.delete(final)
+            except Exception: pass
+        ftp.rename(partial_name, archive.name)
+        ftp.rename(partial_sidecar, archive.name + ".tectac.json")
         return {
             "id": destination["id"], "type": "ftp", "name": destination_name(destination), "ok": True,
             "location": f"ftp://{destination['host']}:{destination['port']}/{destination['remote_path'].strip('/')}/{archive.name}",
             "size_verified": True, "hash_verified": True,
         }
+    except Exception:
+        for name in (partial_name, partial_sidecar):
+            try: ftp.delete(name)
+            except Exception: pass
+        raise
     finally:
         try: ftp.quit()
         except Exception:
@@ -722,10 +768,11 @@ def ftp_read_json(ftp, name):
     try:
         ftp.retrbinary(f"RETR {name}", chunks.append)
         value=json.loads(b"".join(chunks).decode("utf-8"))
-        return value if isinstance(value, dict) else None
+        return (value if isinstance(value, dict) else None), "ok" if isinstance(value, dict) else "unreadable"
+    except ftplib.error_perm as exc:
+        return (None, "missing") if str(exc).startswith("550") else (None, "unreadable")
     except Exception:
-        return None
-
+        return None, "unreadable"
 
 def ftp_list(config, destination, log):
     ftp = ftp_connect(config, destination, timeout=120)
@@ -752,9 +799,9 @@ def ftp_list(config, destination, log):
             if re.fullmatch(r"\d{14}(?:\.\d+)?", raw_modify):
                 try: modified=datetime.strptime(raw_modify[:14], "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc).isoformat()
                 except Exception: modified=None
-            metadata=ftp_read_json(ftp, name + ".tectac.json")
+            metadata, sidecar_status=ftp_read_json(ftp, name + ".tectac.json")
             location=f"ftp://{destination['host']}:{destination['port']}/{destination['remote_path'].strip('/')}/{name}"
-            rows.append(backup_item(destination,name,location,size,modified or (metadata or {}).get("created_at"),metadata))
+            rows.append(backup_item(destination,name,location,size,modified or (metadata or {}).get("created_at"),metadata,sidecar_status=sidecar_status))
         return rows
     finally:
         try: ftp.quit()
@@ -769,7 +816,8 @@ def ftp_download(config, destination, name, target, log):
         ftp_prepare_path(ftp,destination["remote_path"],create=False)
         with target.open("wb") as fh:
             ftp.retrbinary(f"RETR {name}",fh.write,blocksize=1024*1024)
-        return ftp_read_json(ftp,name+".tectac.json")
+        metadata, _status = ftp_read_json(ftp,name+".tectac.json")
+        return metadata
     finally:
         try: ftp.quit()
         except Exception:
@@ -843,35 +891,43 @@ def store_rclone(config, destination, archive, metadata, log):
         cfg = make_rclone_config(config, destination, temp, log)
         base = remote_base(destination)
         archive_remote = join_remote(base, archive.name)
+        partial_remote = archive_remote + ".partial"
+        sidecar_remote = archive_remote + ".tectac.json"
+        partial_sidecar = sidecar_remote + ".partial"
         sidecar = temp / (archive.name + ".tectac.json")
         sidecar.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        run_logged(["rclone", "copyto", str(archive), archive_remote, "--config", str(cfg)], log, timeout=6 * 60 * 60)
-        run_logged(["rclone", "copyto", str(sidecar), archive_remote + ".tectac.json", "--config", str(cfg)], log, timeout=30 * 60)
-        stat_result = subprocess.run(["rclone", "lsjson", archive_remote, "--config", str(cfg)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
-        size_ok = False
-        if stat_result.returncode == 0:
-            try:
-                rows = json.loads(stat_result.stdout)
-                row = rows[0] if isinstance(rows, list) and rows else rows
-                size_ok = int(row.get("Size", -1)) == int(metadata["size_bytes"])
-            except Exception:
-                size_ok = False
-        if not size_ok:
-            raise RuntimeError("remote backup size verification failed")
-        hash_ok = False
-        hash_supported = False
-        hash_result = subprocess.run(["rclone", "hash", "SHA-256", archive_remote, "--config", str(cfg)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=300)
-        if hash_result.returncode == 0 and hash_result.stdout.strip():
-            hash_supported = True
-            remote_hash = hash_result.stdout.strip().split()[0].lower()
-            hash_ok = remote_hash == str(metadata["sha256"]).lower()
-            if not hash_ok:
-                raise RuntimeError("remote backup SHA-256 verification failed")
-        return {
-            "id": destination["id"], "type": destination["type"], "name": destination_name(destination), "ok": True,
-            "location": archive_remote, "size_verified": True, "hash_verified": hash_ok, "hash_supported": hash_supported,
-        }
-
+        try:
+            run_logged(["rclone", "copyto", str(archive), partial_remote, "--config", str(cfg)], log, timeout=6 * 60 * 60)
+            run_logged(["rclone", "copyto", str(sidecar), partial_sidecar, "--config", str(cfg)], log, timeout=30 * 60)
+            stat_result = subprocess.run(["rclone", "lsjson", partial_remote, "--config", str(cfg)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
+            size_ok = False
+            if stat_result.returncode == 0:
+                try:
+                    rows = json.loads(stat_result.stdout)
+                    row = rows[0] if isinstance(rows, list) and rows else rows
+                    size_ok = int(row.get("Size", -1)) == int(metadata["size_bytes"])
+                except Exception:
+                    size_ok = False
+            if not size_ok:
+                raise RuntimeError("remote backup size verification failed")
+            hash_ok = False; hash_supported = False
+            hash_result = subprocess.run(["rclone", "hash", "SHA-256", partial_remote, "--config", str(cfg)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=300)
+            if hash_result.returncode == 0 and hash_result.stdout.strip():
+                hash_supported = True
+                remote_hash = hash_result.stdout.strip().split()[0].lower()
+                hash_ok = remote_hash == str(metadata["sha256"]).lower()
+                if not hash_ok:
+                    raise RuntimeError("remote backup SHA-256 verification failed")
+            run_logged(["rclone", "moveto", partial_remote, archive_remote, "--config", str(cfg)], log, timeout=300)
+            run_logged(["rclone", "moveto", partial_sidecar, sidecar_remote, "--config", str(cfg)], log, timeout=300)
+            return {
+                "id": destination["id"], "type": destination["type"], "name": destination_name(destination), "ok": True,
+                "location": archive_remote, "size_verified": True, "hash_verified": hash_ok, "hash_supported": hash_supported,
+            }
+        except Exception:
+            for remote in (partial_remote, partial_sidecar):
+                subprocess.run(["rclone", "deletefile", remote, "--config", str(cfg)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+            raise
 
 def scp_args(config, destination, temp, log):
     if not shutil.which("scp") or not shutil.which("ssh"):
@@ -900,24 +956,33 @@ def store_scp(config, destination, archive, metadata, log):
         ssh_common, scp_common = scp_args(config, destination, temp, log)
         remote_dir = destination["remote_path"]
         host = f"{destination['username']}@{destination['host']}"
-        # Create only the validated configured directory; module cannot supply a command.
         run_logged(["ssh", *ssh_common, host, "mkdir", "-p", "--", remote_dir], log, timeout=120)
         remote_file = remote_dir.rstrip("/") + "/" + archive.name
-        run_logged(["scp", *scp_common, str(archive), f"{host}:{remote_file}"], log, timeout=6 * 60 * 60)
+        partial_file = remote_file + ".partial"
+        sidecar_file = remote_file + ".tectac.json"
+        partial_sidecar = sidecar_file + ".partial"
         sidecar = temp / (archive.name + ".tectac.json")
         sidecar.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        run_logged(["scp", *scp_common, str(sidecar), f"{host}:{remote_file}.tectac.json"], log, timeout=30 * 60)
-        # Download to a temporary file for strong size/hash verification. SCP has
-        # no portable remote hash primitive and verification must not be guessed.
-        verify = temp / archive.name
-        run_logged(["scp", *scp_common, f"{host}:{remote_file}", str(verify)], log, timeout=6 * 60 * 60)
-        if verify.stat().st_size != metadata["size_bytes"] or sha256_file(verify) != metadata["sha256"]:
-            raise RuntimeError("SCP backup verification failed")
-        return {
-            "id": destination["id"], "type": "scp", "name": destination_name(destination), "ok": True,
-            "location": f"scp://{destination['host']}:{destination['port']}{remote_file}", "size_verified": True, "hash_verified": True,
-        }
-
+        try:
+            run_logged(["scp", *scp_common, str(archive), f"{host}:{partial_file}"], log, timeout=6 * 60 * 60)
+            run_logged(["scp", *scp_common, str(sidecar), f"{host}:{partial_sidecar}"], log, timeout=30 * 60)
+            verify = temp / archive.name
+            run_logged(["scp", *scp_common, f"{host}:{partial_file}", str(verify)], log, timeout=6 * 60 * 60)
+            if verify.stat().st_size != metadata["size_bytes"] or sha256_file(verify) != metadata["sha256"]:
+                raise RuntimeError("SCP backup verification failed")
+            publish = "mv -f -- {p} {f} && mv -f -- {ps} {s}".format(
+                p=shlex.quote(partial_file), f=shlex.quote(remote_file),
+                ps=shlex.quote(partial_sidecar), s=shlex.quote(sidecar_file),
+            )
+            run_logged(["ssh", *ssh_common, host, publish], log, timeout=120)
+            return {
+                "id": destination["id"], "type": "scp", "name": destination_name(destination), "ok": True,
+                "location": f"scp://{destination['host']}:{destination['port']}{remote_file}", "size_verified": True, "hash_verified": True,
+            }
+        except Exception:
+            cleanup = "rm -f -- {p} {ps}".format(p=shlex.quote(partial_file), ps=shlex.quote(partial_sidecar))
+            subprocess.run(["ssh", *ssh_common, host, cleanup], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+            raise
 
 def store_destination(config, destination, archive, metadata, log):
     destination = validate_destination(destination, config)
@@ -974,8 +1039,18 @@ def safe_tar_members(tf: tarfile.TarFile):
         if not (member.isfile() or member.isdir() or member.issym() or member.islnk()):
             raise RuntimeError(f"unsupported archive member type: {member.name}")
 
+    symlink_paths = {
+        _normalize_tar_namespace_path(member.name, label="archive member").as_posix()
+        for member in members if member.issym()
+    }
     for member in members:
         member_path = _normalize_tar_namespace_path(member.name, label="archive member")
+        # A later member beneath a symlink can escape the intended filesystem
+        # target even when each archive path is individually normalized.
+        parent_parts = member_path.parts[:-1]
+        for index in range(1, len(parent_parts) + 1):
+            if PurePosixPath(*parent_parts[:index]).as_posix() in symlink_paths:
+                raise RuntimeError(f"archive member sits beneath a symlink: {member.name}")
         if member.issym():
             _normalize_tar_namespace_path(
                 member.linkname,
@@ -1077,6 +1152,8 @@ def tec_tac_paths(config):
         "ui_source": ui_source,
         "legacy_ui_source": legacy_ui_source,
         "state_root": state_root,
+        "module_state": state_root / "module-manager" / "module-state.json",
+        "repository_config": state_root / "module-manager" / "repositories" / "repositories.json",
         "etc_root": etc_root,
         "system_etc_root": system_etc_root,
         "nginx": nginx,
@@ -1095,8 +1172,13 @@ def create_tec_tac_component(config, output: Path):
         # runtime_root already recursively includes runtime_root/etc. Keep the
         # system-level /etc/tec-tac configuration as a separate root.
         paths["system_etc_root"], paths["nginx"],
+        # Durable Core state required to reconstruct module enablement and
+        # repository configuration on a replacement server. Caches/history and
+        # staging remain excluded. Publisher trust is under /etc/tec-tac and is
+        # already covered by system_etc_root.
+        paths["module_state"], paths["repository_config"],
     ]
-    make_payload_tar(output, include, exclude_paths=(paths["state_root"],))
+    make_payload_tar(output, include)
     ensure_regular(output, max_bytes=max_backup_bytes(config))
     return {
         "included": True,
@@ -1109,8 +1191,9 @@ def create_tec_tac_component(config, output: Path):
         "paths": {key: str(value) for key, value in paths.items()},
         "state_policy": {
             "state_root": str(paths["state_root"]),
-            "included": False,
-            "reason": "mutable runtime/cache/history/staging state is rebuilt after restore",
+            "included": "allow-list",
+            "included_paths": [str(paths["module_state"]), str(paths["repository_config"]), str(paths["system_etc_root"] / "trusted-publishers")],
+            "reason": "only durable module/repository/publisher state is retained; caches/history/staging are rebuilt",
         },
     }
 
@@ -1278,7 +1361,7 @@ def operation_create_backup(config, job, log):
     set_job_stage(config, job["id"], "prepare", current=1, total=CREATE_BACKUP_PROGRESS_TOTAL)
     lock = acquire_lock(config)
     try:
-        with tempfile.TemporaryDirectory(prefix="tectac-recovery-bundle-") as td:
+        with tempfile.TemporaryDirectory(prefix="tectac-recovery-bundle-", dir=str(roots(config)["staging"])) as td:
             temp=Path(td)
             tactical_archive=tactical_meta=None
             if include_tactical:
@@ -1339,6 +1422,21 @@ def operation_create_backup(config, job, log):
             }
             if failed:
                 raise OperationFailed("One or more requested backup destinations failed verification.",result=overall)
+            # /rmmbackups is a staging source for remote destinations, not an
+            # implicit second retention target. Remove the local bundle after
+            # every requested destination has verified, unless the requested
+            # local destination is exactly that file.
+            same_local_target = any(
+                d.get("type") == "local" and (Path(d["path"]) / bundle.name).resolve() == bundle.resolve()
+                for d in destinations
+            )
+            if destinations and not same_local_target:
+                bundle.unlink(missing_ok=True); sidecar_path(bundle).unlink(missing_ok=True)
+                overall["local_path"] = None
+                overall["local_staging_removed"] = True
+                log.write("[TEC-TAC-BACKUP] removed verified local staging bundle after destination upload\n")
+            else:
+                overall["local_staging_removed"] = False
             return overall
     finally:
         lock.close()
@@ -1346,16 +1444,18 @@ def operation_create_backup(config, job, log):
 
 def sidecar_metadata_local(archive):
     sidecar = sidecar_path(archive)
-    if not sidecar.is_file():
-        return None
+    if not sidecar.exists():
+        return None, "missing"
+    if not sidecar.is_file() or sidecar.is_symlink():
+        return None, "unreadable"
     try:
         value = json.loads(sidecar.read_text(encoding="utf-8"))
-        return value if isinstance(value, dict) else None
+        return (value, "ok") if isinstance(value, dict) else (None, "unreadable")
     except Exception:
-        return None
+        return None, "unreadable"
 
 
-def backup_item(destination, archive_name, location, size, modified, metadata=None):
+def backup_item(destination, archive_name, location, size, modified, metadata=None, *, sidecar_status="ok"):
     metadata = metadata or {}
     cls = str(metadata.get("backup_class") or "unclassified")
     if cls not in BACKUP_CLASSES:
@@ -1385,6 +1485,7 @@ def backup_item(destination, archive_name, location, size, modified, metadata=No
         "legacy": legacy,
         "components": components,
         "recovery_modes": modes,
+        "sidecar_status": sidecar_status,
     }
 
 
@@ -1403,19 +1504,22 @@ def list_local(destination):
         if not (BUNDLE_RE.fullmatch(archive.name) or LEGACY_ARCHIVE_RE.fullmatch(archive.name)):
             continue
         st = archive.stat()
-        rows.append(backup_item(destination, archive.name, str(archive), st.st_size, iso_mtime(st.st_mtime), sidecar_metadata_local(archive)))
+        metadata, sidecar_status = sidecar_metadata_local(archive)
+        rows.append(backup_item(destination, archive.name, str(archive), st.st_size, iso_mtime(st.st_mtime), metadata, sidecar_status=sidecar_status))
     return rows
 
 
 def rclone_cat_json(cfg, remote):
-    proc = subprocess.run(["rclone", "cat", remote, "--config", str(cfg)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=60)
+    proc = subprocess.run(["rclone", "cat", remote, "--config", str(cfg)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60)
     if proc.returncode:
-        return None
+        detail = (proc.stderr or "").lower()
+        status = "missing" if any(token in detail for token in ("not found", "object not found", "directory not found")) else "unreadable"
+        return None, status
     try:
         value = json.loads(proc.stdout)
-        return value if isinstance(value, dict) else None
+        return (value, "ok") if isinstance(value, dict) else (None, "unreadable")
     except Exception:
-        return None
+        return None, "unreadable"
 
 
 def list_rclone(config, destination, log):
@@ -1432,9 +1536,9 @@ def list_rclone(config, destination, log):
             name = str(item.get("Name") or item.get("Path") or "")
             if not (BUNDLE_RE.fullmatch(name) or LEGACY_ARCHIVE_RE.fullmatch(name)):
                 continue
-            metadata = rclone_cat_json(cfg, join_remote(base, name + ".tectac.json"))
+            metadata, sidecar_status = rclone_cat_json(cfg, join_remote(base, name + ".tectac.json"))
             modified = item.get("ModTime") or (metadata or {}).get("created_at")
-            rows.append(backup_item(destination, name, join_remote(base, name), item.get("Size", 0), modified, metadata))
+            rows.append(backup_item(destination, name, join_remote(base, name), item.get("Size", 0), modified, metadata, sidecar_status=sidecar_status))
         return rows
 
 
@@ -1444,9 +1548,12 @@ def list_scp(config, destination, log):
         ssh_common, scp_common = scp_args(config, destination, temp, log)
         host = f"{destination['username']}@{destination['host']}"
         remote = destination["remote_path"]
-        # Fixed find invocation. Path is passed as its own SSH argument and has
-        # already been normalized/rejected for '..'.
-        proc = subprocess.run(["ssh", *ssh_common, host, "find", remote, "-maxdepth", "1", "-type", "f", "-name", "rmm-backup-*.tar", "-printf", "%f\\t%s\\t%T@\\n"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=180)
+        command = (
+            f"find {shlex.quote(remote)} -maxdepth 1 -type f "
+            "\\( -name 'rmm-backup-*.tar' -o -name 'tec-tac-backup-*.tgz' \\) "
+            "-printf '%f\t%s\t%T@\n'"
+        )
+        proc = subprocess.run(["ssh", *ssh_common, host, command], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=180)
         if proc.returncode:
             raise RuntimeError("SCP destination listing failed")
         rows = []
@@ -1457,16 +1564,23 @@ def list_scp(config, destination, log):
             name, size, mtime = parts
             side_local = temp / (name + ".tectac.json")
             remote_file = remote.rstrip("/") + "/" + name
-            side_proc = subprocess.run(["scp", *scp_common, f"{host}:{remote_file}.tectac.json", str(side_local)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+            exists_cmd = f"test -f {shlex.quote(remote_file + '.tectac.json')}"
+            exists_proc = subprocess.run(["ssh", *ssh_common, host, exists_cmd], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
             metadata = None
-            if side_proc.returncode == 0:
-                try:
-                    metadata = json.loads(side_local.read_text(encoding="utf-8"))
-                except Exception:
-                    metadata = None
-            rows.append(backup_item(destination, name, f"scp://{destination['host']}:{destination['port']}{remote_file}", int(size), iso_mtime(float(mtime)), metadata))
+            sidecar_status = "missing" if exists_proc.returncode == 1 else "unreadable" if exists_proc.returncode else "ok"
+            if exists_proc.returncode == 0:
+                side_proc = subprocess.run(["scp", *scp_common, f"{host}:{remote_file}.tectac.json", str(side_local)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+                if side_proc.returncode == 0:
+                    try:
+                        value = json.loads(side_local.read_text(encoding="utf-8"))
+                        if isinstance(value, dict): metadata = value
+                        else: sidecar_status = "unreadable"
+                    except Exception:
+                        sidecar_status = "unreadable"
+                else:
+                    sidecar_status = "unreadable"
+            rows.append(backup_item(destination, name, f"scp://{destination['host']}:{destination['port']}{remote_file}", int(size), iso_mtime(float(mtime)), metadata, sidecar_status=sidecar_status))
         return rows
-
 
 def list_destination(config, destination, log):
     destination = validate_destination(destination, config)
@@ -1513,7 +1627,7 @@ def download_local(destination, name, target):
     source = Path(destination["path"]) / name
     ensure_regular(source, max_bytes=max_backup_bytes(load_config()))
     shutil.copy2(source, target)
-    meta = sidecar_metadata_local(source)
+    meta, _status = sidecar_metadata_local(source)
     return meta
 
 
@@ -1523,7 +1637,8 @@ def download_rclone(config, destination, name, target, log):
         cfg = make_rclone_config(config, destination, temp, log)
         remote = join_remote(remote_base(destination), name)
         run_logged(["rclone", "copyto", remote, str(target), "--config", str(cfg)], log, timeout=6 * 60 * 60)
-        return rclone_cat_json(cfg, remote + ".tectac.json")
+        metadata, _status = rclone_cat_json(cfg, remote + ".tectac.json")
+        return metadata
 
 
 def download_scp(config, destination, name, target, log):
@@ -1762,7 +1877,7 @@ def safe_extract_payload_tar(path, root=Path("/")):
             name=member.name.lstrip("./")
             if name == "rmm" or name.startswith("rmm/"):
                 raise RuntimeError("Tec-Tac payload may not overwrite Tactical tracked source")
-        tf.extractall(root, members=members, numeric_owner=True)
+        tf.extractall(root, members=members, numeric_owner=True, filter="data")
 
 
 def service_stop_for_restore(log):
@@ -1770,6 +1885,115 @@ def service_stop_for_restore(log):
     for service in services:
         subprocess.run(["systemctl", "stop", service], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     log.write("[TEC-TAC-BACKUP] stopped Tactical services for destructive restore\n")
+
+
+RESTORE_SERVICES = ["rmm", "celery", "celerybeat", "daphne", "nats-api", "nats", "meshcentral", "nginx"]
+
+
+def service_start_after_restore(log):
+    failures = []
+    for service in RESTORE_SERVICES:
+        result = subprocess.run(["systemctl", "start", service], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if result.returncode and service in {"rmm", "celery", "celerybeat", "nginx"}:
+            failures.append(service)
+    if failures:
+        raise RuntimeError("failed to restart required Tactical service(s): " + ", ".join(failures))
+    log.write("[TEC-TAC-BACKUP] restarted Tactical services after restore/rollback\n")
+
+
+def _postgres_query(sql):
+    proc = subprocess.run(
+        ["runuser", "-u", "postgres", "--", "psql", "-d", "postgres", "-Atqc", sql],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120,
+    )
+    if proc.returncode:
+        raise RuntimeError("PostgreSQL pre-restore query failed")
+    return proc.stdout.strip()
+
+
+def _run_to_file(argv, target: Path, *, timeout):
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("wb") as output:
+        proc = subprocess.Popen(argv, stdout=output, stderr=subprocess.PIPE, start_new_session=True)
+        try:
+            _stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try: os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError: pass
+            proc.wait()
+            raise RuntimeError(f"command exceeded {timeout} seconds")
+    if proc.returncode:
+        target.unlink(missing_ok=True)
+        detail = (stderr or b"").decode("utf-8", errors="replace").strip()
+        raise RuntimeError("pre-restore database snapshot failed" + (f": {detail[:300]}" if detail else ""))
+
+
+def create_pre_restore_snapshot(config, job_id, log):
+    root = roots(config)["pre_restore"] / str(job_id)
+    if root.exists():
+        shutil.rmtree(root)
+    root.mkdir(parents=True, exist_ok=True)
+    os.chown(root, 0, 0); os.chmod(root, 0o700)
+    databases = []
+    for name in ("tacticalrmm", "meshcentral"):
+        exists = _postgres_query("SELECT 1 FROM pg_database WHERE datname='" + name + "'") == "1"
+        if not exists:
+            if name == "tacticalrmm":
+                raise RuntimeError("pre-restore snapshot refused: tacticalrmm database is missing")
+            continue
+        owner = _postgres_query("SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname='" + name + "'")
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", owner or ""):
+            raise RuntimeError(f"pre-restore snapshot refused: invalid owner for {name}")
+        dump = root / f"{name}.dump"
+        _run_to_file(["runuser", "-u", "postgres", "--", "pg_dump", "-Fc", "-d", name], dump, timeout=2 * 60 * 60)
+        os.chown(dump, 0, 0); os.chmod(dump, 0o600)
+        databases.append({"name": name, "owner": owner, "dump": str(dump), "sha256": sha256_file(dump)})
+    snapshot = {"root": str(root), "created_at": now(), "databases": databases}
+    atomic_json(root / "snapshot.json", snapshot, mode=0o600)
+    os.chown(root / "snapshot.json", 0, 0)
+    log.write("[TEC-TAC-BACKUP] created root-only pre-restore database snapshot\n")
+    return snapshot
+
+
+def rollback_failed_restore(config, moved_root, snapshot, log):
+    tactical_root = Path(config["TACTICAL_ROOT"])
+    snapshot_root = Path(snapshot["root"])
+    result = {"rollback_performed": False, "rollback_tree_restored": False, "rollback_databases": [], "rollback_error": None}
+    try:
+        service_stop_for_restore(log)
+        failed_root = snapshot_root / "failed-restored-rmm"
+        if tactical_root.exists():
+            if failed_root.exists(): shutil.rmtree(failed_root, ignore_errors=True)
+            os.replace(tactical_root, failed_root)
+        if moved_root and Path(moved_root).exists():
+            os.replace(Path(moved_root), tactical_root)
+            result["rollback_tree_restored"] = True
+        elif not tactical_root.exists():
+            raise RuntimeError("original Tactical tree is unavailable for rollback")
+        subprocess.run(["systemctl", "start", "postgresql"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for row in snapshot.get("databases") or []:
+            name = str(row["name"]); owner = str(row["owner"]); dump = Path(row["dump"])
+            ensure_regular(dump)
+            if sha256_file(dump) != row.get("sha256"):
+                raise RuntimeError(f"pre-restore database snapshot hash mismatch: {name}")
+            _postgres_query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='" + name + "' AND pid <> pg_backend_pid()")
+            subprocess.run(["runuser", "-u", "postgres", "--", "dropdb", "--if-exists", name], check=True, timeout=300)
+            subprocess.run(["runuser", "-u", "postgres", "--", "createdb", "-O", owner, name], check=True, timeout=300)
+            proc = subprocess.run(["runuser", "-u", "postgres", "--", "pg_restore", "--exit-on-error", "-d", name, str(dump)], timeout=2 * 60 * 60)
+            if proc.returncode:
+                raise RuntimeError(f"database rollback failed: {name}")
+            result["rollback_databases"].append(name)
+        service_start_after_restore(log)
+        verify_tactical_runtime(config, log)
+        if failed_root.exists(): shutil.rmtree(failed_root, ignore_errors=True)
+        result["rollback_performed"] = True
+        log.write("[TEC-TAC-BACKUP] failed restore rolled back to the original Tactical tree/database\n")
+    except BaseException as exc:
+        result["rollback_error"] = f"{exc.__class__.__name__}: {exc}"
+        log.write(f"[TEC-TAC-BACKUP] CRITICAL rollback failure: {result['rollback_error']}\n")
+        try: service_start_after_restore(log)
+        except Exception: pass
+    return result
 
 
 def verify_tactical_runtime(config, log):
@@ -2292,6 +2516,7 @@ def operation_restore_backup(config, job, log):
 
         job["stage"]="restore-prepared"; atomic_json(job_path(job["id"],config),job)
         moved_root=None
+        snapshot=None
         if mode in {"full","tactical"}:
             tactical_root=Path(config["TACTICAL_ROOT"])
             restore_script_source=tactical_root/"restore.sh"; ensure_regular(restore_script_source)
@@ -2302,22 +2527,37 @@ def operation_restore_backup(config, job, log):
                 os_override_audit_id=os_override_audit_id, log=log,
             )
             job["restore_script_preparation"] = restore_script_preparation
+            # Snapshot the live database before the first destructive action.
+            snapshot = create_pre_restore_snapshot(config, job["id"], log)
+            job["pre_restore_snapshot"] = {"root": snapshot["root"], "created_at": snapshot["created_at"], "databases": [r["name"] for r in snapshot["databases"]]}
             atomic_json(job_path(job["id"],config),job)
-            service_stop_for_restore(log)
-            if (tactical_root/"api"/"tacticalrmm").exists():
-                moved_root=Path(str(tactical_root)+f".tectac-pre-restore-{stamp()}")
-                if moved_root.exists(): raise RuntimeError(f"pre-restore Tactical preservation path already exists: {moved_root}")
-                os.replace(tactical_root,moved_root)
-                job["result"]={"ok":False,"backup_ref":request.get("backup_ref"),"archive_name":name,"restore_mode":mode,"pre_restore_tactical_path":str(moved_root)}
-                atomic_json(job_path(job["id"],config),job)
-                log.write(f"[TEC-TAC-BACKUP] preserved existing Tactical tree at {moved_root}\n")
-            _,_,user,home=tactical_identity(config)
-            env=os.environ.copy(); env.update({"HOME":home,"USER":user,"LOGNAME":user,"GROUP":grp.getgrgid(tactical_identity(config)[1]).gr_name})
-            run_logged([str(restore_script),str(extracted["tactical"])],log,env=env,cwd=home,timeout=10*60*60,user=user)
-            if mode=="full":
-                run_post_restore_tec_tac(config,(manifest.get("components") or {}).get("tec_tac") or {},extracted["tec_tac"],log)
-            else:
-                verify_tactical_runtime(config,log)
+            try:
+                service_stop_for_restore(log)
+                if (tactical_root/"api"/"tacticalrmm").exists():
+                    moved_root=Path(str(tactical_root)+f".tectac-pre-restore-{stamp()}")
+                    if moved_root.exists(): raise RuntimeError(f"pre-restore Tactical preservation path already exists: {moved_root}")
+                    os.replace(tactical_root,moved_root)
+                    job["result"]={"ok":False,"backup_ref":request.get("backup_ref"),"archive_name":name,"restore_mode":mode,"pre_restore_tactical_path":str(moved_root),"rollback_performed":False}
+                    atomic_json(job_path(job["id"],config),job)
+                    log.write(f"[TEC-TAC-BACKUP] preserved existing Tactical tree at {moved_root}\n")
+                _,_,user,home=tactical_identity(config)
+                env=os.environ.copy(); env.update({"HOME":home,"USER":user,"LOGNAME":user,"GROUP":grp.getgrgid(tactical_identity(config)[1]).gr_name})
+                run_logged([str(restore_script),str(extracted["tactical"])],log,env=env,cwd=home,timeout=10*60*60,user=user)
+                if mode=="full":
+                    run_post_restore_tec_tac(config,(manifest.get("components") or {}).get("tec_tac") or {},extracted["tec_tac"],log)
+                else:
+                    verify_tactical_runtime(config,log)
+            except BaseException as exc:
+                rollback = rollback_failed_restore(config, moved_root, snapshot, log)
+                failure = {
+                    "ok": False, "backup_ref": request.get("backup_ref"), "archive_name": name, "restore_mode": mode,
+                    "restore_error": f"{exc.__class__.__name__}: {exc}", **rollback,
+                }
+                raise OperationFailed("Destructive restore failed; Core attempted rollback to the pre-restore state.", result=failure) from exc
+            # The restored runtime has passed verification; the old tree and
+            # database snapshot are no longer rollback candidates.
+            if moved_root and moved_root.exists(): shutil.rmtree(moved_root, ignore_errors=True)
+            if snapshot and Path(snapshot["root"]).exists(): shutil.rmtree(Path(snapshot["root"]), ignore_errors=True)
         else:
             # Tec-Tac-only recovery deliberately leaves Tactical and its database intact.
             run_post_restore_tec_tac(config,(manifest.get("components") or {}).get("tec_tac") or {},extracted["tec_tac"],log)
@@ -2325,7 +2565,8 @@ def operation_restore_backup(config, job, log):
         return {
             "ok":True,"backup_ref":request.get("backup_ref"),"archive_name":name,"restore_mode":mode,
             "format_version":int(manifest.get("format_version") or 1),
-            "pre_restore_tactical_path":str(moved_root) if moved_root else None,
+            "pre_restore_tactical_path":None,
+            "rollback_performed":False,
             "accepted_overrides":dict((job.get("restore_preflight") or {}).get("accepted_overrides") or {}),
             "completed_at":now(),
         }
@@ -2730,10 +2971,13 @@ def operation_apply_retention(config, job, log):
     try:
         deleted = []
         failures = []
+        protected_unreadable = []
         for raw in policies:
             if not isinstance(raw, dict):
                 raise RuntimeError("retention policy must be an object")
             destination = validate_destination(raw.get("destination"), config)
+            if "keep_unclassified" not in raw:
+                raise RuntimeError("keep_unclassified must be set explicitly; Core will not default unclassified backups to deletion")
             keep = {}
             for cls in ("daily", "weekly", "monthly", "unclassified"):
                 value = int(raw.get("keep_" + cls, 0))
@@ -2743,6 +2987,12 @@ def operation_apply_retention(config, job, log):
             rows = list_destination(config, destination, log)
             grouped = {key: [] for key in keep}
             for item in rows:
+                if item.get("sidecar_status") == "unreadable":
+                    protected_unreadable.append({
+                        "destination_id": destination["id"], "archive_name": item.get("archive_name"),
+                        "reason": "metadata sidecar could not be read; retention skipped fail-safe",
+                    })
+                    continue
                 cls = item.get("backup_class") if item.get("backup_class") in BACKUP_CLASSES else "unclassified"
                 grouped[cls].append(item)
             for cls, items in grouped.items():
@@ -2753,7 +3003,7 @@ def operation_apply_retention(config, job, log):
                         deleted.append({"destination_id": destination["id"], "backup_class": cls, "archive_name": item["archive_name"]})
                     except Exception as exc:
                         failures.append({"destination_id": destination["id"], "archive_name": item["archive_name"], "reason": str(exc)})
-        result = {"ok": not failures, "deleted": deleted, "failures": failures}
+        result = {"ok": not failures, "deleted": deleted, "failures": failures, "protected_unreadable": protected_unreadable}
         if failures:
             raise OperationFailed("One or more retention deletions failed.", result=result)
         return result
@@ -2823,7 +3073,7 @@ def run_job(job_id):
         job.update(status="failed", stage="failed", stage_label="Failed", finished_at=now(), result=exc.result, error=str(exc), error_type=exc.__class__.__name__)
         atomic_json(path, job)
         log.write(f"[TEC-TAC-BACKUP] failed {job['finished_at']}: {exc}\n")
-    except Exception as exc:
+    except BaseException as exc:
         job.update(status="failed", stage="failed", stage_label="Failed", finished_at=now(), error=str(exc), error_type=exc.__class__.__name__)
         atomic_json(path, job)
         log.write(f"[TEC-TAC-BACKUP] failed {job['finished_at']}: {exc.__class__.__name__}: {exc}\n")
