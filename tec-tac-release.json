@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.57",
+  "version": "1.15.58",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -27,14 +27,14 @@
       "sha256": "7acd5f22138138348d5123fc22c210724ca10ce86f05da7b77c68fc89952319a"
     },
     {
-      "path": "RELEASE_NOTES_1.15.57.md",
-      "size": 1184,
-      "sha256": "7882fe995451e9d26740b3ce2650557a3d1278895ce89f56dc52dde1aeed2091"
+      "path": "RELEASE_NOTES_1.15.58.md",
+      "size": 1408,
+      "sha256": "68436656adf1b151381f868ebf83519365ce6581132e74e9492844c8b9c19590"
     },
     {
       "path": "VERSION",
       "size": 8,
-      "sha256": "24808f4cb80e47c0343ac46b6fdec9debbeebad124ef23663459cbec97773590"
+      "sha256": "e148b4a113788f9ee631c7f5bb6e3c0c6b60a1916e6e5568be9808e6a0c570ad"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -447,6 +447,11 @@
       "sha256": "a7546976e7a0635ca7188b5558d0e063a81e89d57c68ce5df9dc3caac2d765af"
     },
     {
+      "path": "docs/resource-directory.md",
+      "size": 5602,
+      "sha256": "0be778c38f8bf61098a49f68e2789709e3cd1fa71c1fcfc514242310b5c21b3f"
+    },
+    {
       "path": "docs/scheduler.md",
       "size": 9475,
       "sha256": "b1c3bf1ccab602c1d8e40ccf27be4011f4862cf8dbae20dbe17735e6b01f1bc8"
@@ -718,8 +723,8 @@
     },
     {
       "path": "framwork/tec_tac/apps.py",
-      "size": 1761,
-      "sha256": "85eaafe47df14514c8002b0479d7e5ba81750dd8b7426cdb6738ba5866d5575f"
+      "size": 1872,
+      "sha256": "9811f2c7c018a5020ae77fb668eaf54638105ce035be28ffbcf1a510886d0ea3"
     },
     {
       "path": "framwork/tec_tac/audit.py",
@@ -758,8 +763,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 24773,
-      "sha256": "c828593268b930cee56086480347c7af18916d0aa4c5865e96f13caa88738aa7"
+      "size": 29371,
+      "sha256": "2c4e7283e56cfb1c520afbd695b199e52d2a192542f82ac5ca8c538df1897459"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -992,6 +997,21 @@
       "sha256": "a190e761464d34aa2868bccd1c4c34b8230faeb4c31aa40bbcda5149a25988ef"
     },
     {
+      "path": "framwork/tec_tac/resource_views.py",
+      "size": 2856,
+      "sha256": "898408793ac29355b1dfcdec4142049772f64f15534bf13cb4fba485375e2369"
+    },
+    {
+      "path": "framwork/tec_tac/resources.py",
+      "size": 12891,
+      "sha256": "b60b3116195e694b4cbf6f4cc3952547048791964c3c0f16c5d7d18a2528afce"
+    },
+    {
+      "path": "framwork/tec_tac/resources_adapter.py",
+      "size": 5422,
+      "sha256": "3582012d96e2bfd065038ddfb1133796b51e0c09b0214b5cd8c7ab7b4cbbd6fc"
+    },
+    {
       "path": "framwork/tec_tac/scheduler.py",
       "size": 43197,
       "sha256": "d54a4ee4c271c903ea2daa7512452e7b47ef82b3f4b592d88e5d6cf82d80afd6"
@@ -1068,8 +1088,8 @@
     },
     {
       "path": "framwork/tec_tac/urls.py",
-      "size": 11379,
-      "sha256": "7b54e4fb70df56affb266ac165cfcd795d7ab00b954f3c88588012b61940144c"
+      "size": 12194,
+      "sha256": "d577b2ade5fc749f2be769fb58b8a9afe88689201c09b9f7ff1ad3156df4199c"
     },
     {
       "path": "framwork/tec_tac/views.py",
@@ -1078,8 +1098,8 @@
     },
     {
       "path": "install.sh",
-      "size": 53149,
-      "sha256": "0bcc3bd7685c563c266cb7544868351f763b55e342196f42a418dc9b1ae73437"
+      "size": 54615,
+      "sha256": "023d465c5af367a28a4faf7ee5509f20457b758ea9ca242e1042f61c1e6e8af3"
     },
     {
       "path": "reportsets/.gitkeep",
@@ -1249,7 +1269,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "bcee04a6ed813e0eda5893ef136d257ed7428d81843bf8a749d485fd882bd79e"
+      "sha256": "dbfec203a26c16e337c7490dd27f4ca07e8e2cd54e27f803e6869573800e62bf"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -1288,8 +1308,8 @@
     },
     {
       "path": "tests/contracts-foundation.sh",
-      "size": 4569,
-      "sha256": "7b4a5935d0abed78ac88dfbc9910fae27e10e59937ee63f273306710fa71e7bf"
+      "size": 5613,
+      "sha256": "6ad0b73f28ef7f8306d60a1547eed90aa8fb813dbd0b8c54d5a3dd3994291171"
     },
     {
       "path": "tests/dashboard-foundation.sh",
@@ -1440,6 +1460,16 @@
       "path": "tests/reporting-registration-runtime.py",
       "size": 5746,
       "sha256": "25fb51ed373d8a0f2c22c4043224103740b3fa71814d522aa7890c47969d48fe"
+    },
+    {
+      "path": "tests/resource-directory-foundation.py",
+      "size": 8574,
+      "sha256": "049eaf66badf2511d12a21586f96dfb61dfb0af572b6e4f9064cf735665b705b"
+    },
+    {
+      "path": "tests/resource-directory-foundation.sh",
+      "size": 746,
+      "sha256": "b2ebe3c291628d7a2b96287cd272ab8a87aca697612c67c82d10a8cda8fa2540"
     },
     {
       "path": "tests/review-1.15.52-rebuild.sh",

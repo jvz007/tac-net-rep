@@ -18,7 +18,20 @@ from .rbac import permission_catalog
 from .reporting import list_reporting_models
 from .registry import TEC_TAC_ROOT
 from .scheduler import scheduled_actions, serialize_action
+from .resources import resource_contract_metadata
 
+
+CORE_RESOURCE_CONTRACTS = (
+    {"area":"resources","import_path":"tec_tac.resources","name":"user_context","kind":"python","purpose":"Create a Resource Directory authority context from an authenticated Tactical user.","audience":"consumer/backend"},
+    {"area":"resources","import_path":"tec_tac.resources","name":"trusted_service_context","kind":"python","purpose":"Create an explicit trusted non-interactive Resource Directory context; global access is never implicit.","audience":"trusted backend/service"},
+    {"area":"resources","import_path":"tec_tac.resources","name":"list_clients","kind":"python","purpose":"List Tactical clients through the stable scoped Core Resource Directory.","audience":"consumer/backend"},
+    {"area":"resources","import_path":"tec_tac.resources","name":"get_client","kind":"python","purpose":"Resolve one scoped Tactical client as a stable Core record.","audience":"consumer/backend"},
+    {"area":"resources","import_path":"tec_tac.resources","name":"list_sites","kind":"python","purpose":"List Tactical sites globally or by client through the stable scoped Core Resource Directory.","audience":"consumer/backend"},
+    {"area":"resources","import_path":"tec_tac.resources","name":"get_site","kind":"python","purpose":"Resolve one scoped Tactical site as a stable Core record.","audience":"consumer/backend"},
+    {"area":"resources","import_path":"tec_tac.resources","name":"list_agents","kind":"python","purpose":"List Tactical agents globally or by client/site through the stable scoped Core Resource Directory.","audience":"consumer/backend"},
+    {"area":"resources","import_path":"tec_tac.resources","name":"get_agent","kind":"python","purpose":"Resolve one scoped Tactical agent using its stable agent_id.","audience":"consumer/backend"},
+    {"area":"resources","import_path":"tec_tac.resources","name":"resolve_resource","kind":"python","purpose":"Resolve a client, site or agent through one generic Core operation.","audience":"consumer/backend"},
+)
 
 CORE_CONTRACTS = (
     {
@@ -330,6 +343,7 @@ CORE_CONTRACTS = (
 RULES = (
     "Use Python tec_tac.* contracts inside the Tec-Tac/Tactical backend; use HTTP only at browser/external process boundaries.",
     "Do not import another module's private models, helpers, services, filesystem layout or database tables.",
+    "Feature modules must consume Tactical clients/sites/agents through tec_tac.resources; direct Tactical resource-model imports are a Core-only compatibility boundary.",
     "Resolve cross-module business operations through the capability registry and re-check runtime availability at execution time.",
     "Optional integrations must soft-fail only the dependent feature when a provider is missing, disabled, unhealthy or incompatible.",
     "Modules define WHAT can run; the shared Scheduler owns WHEN it runs, recurrence, retry, concurrency and history.",
@@ -390,7 +404,7 @@ def build_contract_catalog() -> dict:
     reporting_models = list_reporting_models()
     http = _http_contracts()
     core = []
-    for source in CORE_CONTRACTS:
+    for source in (*CORE_RESOURCE_CONTRACTS, *CORE_CONTRACTS):
         row = dict(source)
         try:
             obj = getattr(import_module(row["import_path"]), row["name"])
@@ -410,6 +424,7 @@ def build_contract_catalog() -> dict:
         "permissions": permissions,
         "reporting_models": reporting_models,
         "http": http,
+        "resource_directory": resource_contract_metadata(),
         "counts": {
             "core": len(core),
             "capabilities": len(capabilities),
@@ -445,6 +460,18 @@ def render_markdown(catalog: dict | None = None) -> str:
     out.extend(["", "## Core Python contracts", "", "| Import | Function / signature | Audience | Purpose |", "| --- | --- | --- | --- |"])
     for row in data["core"]:
         out.append(f"| `{row['import_path']}` | `{row['name']}{row.get('signature') or '()'}` | {row['audience']} | {row['purpose']} |")
+
+    resource = data.get("resource_directory") or {}
+    if resource:
+        out.extend(["", "## Core Resource Directory", "", f"Contract: **`{resource.get('id')}`** version **`{resource.get('version')}`**  ", f"Namespace: **`{resource.get('namespace')}`**  ", f"Read-only: **`{str(bool(resource.get('read_only'))).lower()}`**", ""])
+        out.append("Backend modules should import `tec_tac.resources` directly. Browser/external callers use the `/api/tfd/resources/...` HTTP representation. Raw Tactical ORM objects are never part of this contract.")
+        out.extend(["", "### Resource shapes", "", "| Type | Public ID | Stable fields | Filters |", "| --- | --- | --- | --- |"] )
+        for rtype, spec in (resource.get("resource_types") or {}).items():
+            out.append(f"| `{rtype}` | `{spec.get('id_type')}` | {', '.join(f'`{v}`' for v in spec.get('fields', []))} | {', '.join(f'`{v}`' for v in spec.get('filters', []))} |")
+        out.extend(["", "### Authorization", "", f"- Interactive: {resource.get('authorization', {}).get('interactive')}", f"- Service: {resource.get('authorization', {}).get('service')}", "", "### Error semantics", ""] )
+        for code, description in (resource.get("errors") or {}).items():
+            out.append(f"- `{code}` — {description}")
+        out.extend(["", f"Active-state semantics: {resource.get('active_semantics')}", "", f"Compatibility: {resource.get('compatibility')}", ""])
 
     out.extend(["", "## Registered capabilities", ""])
     if not data["capabilities"]:
@@ -556,6 +583,17 @@ def render_text(catalog: dict | None = None) -> str:
     out.extend(["", "CORE PYTHON CONTRACTS"])
     for row in data["core"]:
         out.append(f"- {row['import_path']}.{row['name']}{row.get('signature') or '()'} [{row['audience']}] - {row['purpose']}")
+
+    resource = data.get("resource_directory") or {}
+    if resource:
+        out.extend(["", "CORE RESOURCE DIRECTORY"])
+        out.append(f"- contract={resource.get('id')} version={resource.get('version')} namespace={resource.get('namespace')} read_only={str(bool(resource.get('read_only'))).lower()}")
+        for rtype, spec in (resource.get("resource_types") or {}).items():
+            out.append(f"  {rtype}: id={spec.get('id_type')} fields={','.join(spec.get('fields', []))} filters={','.join(spec.get('filters', []))}")
+        out.append(f"  interactive_auth: {resource.get('authorization', {}).get('interactive')}")
+        out.append(f"  service_auth: {resource.get('authorization', {}).get('service')}")
+        for code, description in (resource.get("errors") or {}).items():
+            out.append(f"  error {code}: {description}")
 
     out.extend(["", "REGISTERED CAPABILITIES"])
     if not data["capabilities"]:

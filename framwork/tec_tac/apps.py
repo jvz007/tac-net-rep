@@ -14,10 +14,12 @@ class TecTacFrameworkConfig(AppConfig):
         from .session_security import register_core_session_security_capability
         from .server_backup import register_core_server_backup_capability
         from .server_maintenance import register_core_server_maintenance_capability
+        from .resources import register_core_resources_capability
         from .reporting import install_tactical_reporting_bridge
         register_core_session_security_capability()
         register_core_server_backup_capability()
         register_core_server_maintenance_capability()
+        register_core_resources_capability()
 
         # Core owns the compatibility boundary with Tactical Report Manager.
         # Install this before module AppConfig.ready() registrations execute so
