@@ -45,6 +45,8 @@ class TecTacSchedule(models.Model):
     action_id = models.CharField(max_length=160)
     target_mode = models.CharField(max_length=16, choices=TargetMode.choices, default=TargetMode.SNAPSHOT)
     targets = models.JSONField(default=dict, blank=True)
+    target_state = models.CharField(max_length=24, default="valid")
+    target_state_detail = models.CharField(max_length=500, blank=True, default="")
     parameters = models.JSONField(default=dict, blank=True)
 
     schedule_type = models.CharField(max_length=16, choices=ScheduleType.choices, default=ScheduleType.ONCE)

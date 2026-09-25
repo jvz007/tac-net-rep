@@ -13,6 +13,7 @@ from django.utils import timezone
 
 from .models import TecTacSchedule, TecTacScheduleRun, TecTacSchedulerConfig, TecTacSchedulerState
 from .scheduler_timing import queued_stale_deadline
+from .scheduler_targets import SchedulerTargetShapeError, normalize_scheduler_targets
 
 
 class SchedulerError(RuntimeError):
@@ -545,6 +546,25 @@ def dispatch_due_schedules(now: datetime | None = None) -> dict:
                 schedule = TecTacSchedule.objects.select_for_update().get(pk=schedule_id)
                 if not schedule.enabled:
                     continue
+                try:
+                    canonical_targets = normalize_scheduler_targets(schedule.targets or {})
+                except SchedulerTargetShapeError as exc:
+                    schedule.enabled = False
+                    schedule.target_state = "invalid"
+                    schedule.target_state_detail = str(exc)[:500]
+                    schedule.save(update_fields=["enabled", "target_state", "target_state_detail", "updated_at"])
+                    run = TecTacScheduleRun.objects.create(**_run_kwargs(
+                        schedule, status=TecTacScheduleRun.Status.SKIPPED, scheduled_for=now,
+                        targets_snapshot=schedule.targets or {}, error=str(exc),
+                        error_type="InvalidTargetShape", finished_at=now,
+                    ))
+                    skipped.append(str(run.id))
+                    continue
+                if canonical_targets != (schedule.targets or {}):
+                    schedule.targets = canonical_targets
+                    schedule.target_state = "valid"
+                    schedule.target_state_detail = ""
+                    schedule.save(update_fields=["targets", "target_state", "target_state_detail", "updated_at"])
                 occurrence = latest_occurrence(schedule, now)
                 if not occurrence:
                     continue
@@ -709,6 +729,11 @@ def reconcile_schedule(*, owner_module: str, owner_key: str, action_id: str, sch
             "retry_count": retry_count,
             "retry_delay_seconds": retry_delay_seconds,
         })
+        try:
+            data["targets"] = normalize_scheduler_targets(data.get("targets"))
+        except SchedulerTargetShapeError as exc:
+            raise SchedulerError(str(exc)) from exc
+
         if data["schedule_type"] == TecTacSchedule.ScheduleType.ONCE and not data.get("run_at"):
             raise SchedulerError("A one-time schedule requires run_at.")
         if data["schedule_type"] in {TecTacSchedule.ScheduleType.DAILY, TecTacSchedule.ScheduleType.WEEKLY, TecTacSchedule.ScheduleType.MONTHLY} and not data.get("run_time"):
@@ -745,6 +770,8 @@ def reconcile_schedule(*, owner_module: str, owner_key: str, action_id: str, sch
             schedule.interval_seconds = None
             schedule.interval_anchor_at = None
         schedule.module_id = action.module_id
+        schedule.target_state = "valid"
+        schedule.target_state_detail = ""
         new_signature = (
             schedule.schedule_type, schedule.interval_seconds, schedule.interval_anchor_at, schedule.run_at,
             schedule.run_time, tuple(schedule.weekdays or []), schedule.day_of_month, schedule.enabled,
@@ -831,6 +858,8 @@ def serialize_schedule(schedule: TecTacSchedule, *, include_runs: bool = False) 
         "action_available": bool(action),
         "target_mode": schedule.target_mode,
         "targets": schedule.targets,
+        "target_state": getattr(schedule, "target_state", "valid"),
+        "target_state_detail": getattr(schedule, "target_state_detail", ""),
         "parameters": schedule.parameters,
         "schedule_type": schedule.schedule_type,
         "timezone": schedule.timezone,

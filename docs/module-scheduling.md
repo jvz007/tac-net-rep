@@ -215,9 +215,11 @@ Never mark a raw command as delivered merely because NATS/API transport returned
 
 ## 6. Targets: snapshot vs dynamic
 
+Core has a canonical shape for Tactical-native client, site and endpoint targets so the values checked by scheduler authorization are the same values delivered to a handler. Module-specific/custom target types remain module-owned.
+
 ### Snapshot
 
-Use when the exact targets selected at schedule creation should remain fixed.
+Use when the exact targets selected at schedule creation should remain fixed. Tactical-native snapshot targets use `type` plus an `ids` array.
 
 Example:
 
@@ -230,19 +232,46 @@ Example:
 
 ### Dynamic
 
-Use when membership should be resolved at execution time.
+Use when membership should be resolved at execution time. The canonical Tactical scope is `scope: {type, ids}` and the optional `filter` remains module-owned.
 
-Example conceptual definition:
+Canonical example:
+
+```json
+{
+  "type": "dynamic",
+  "scope": {"type": "client", "ids": [17]},
+  "filter": {"os": "windows", "online": true}
+}
+```
+
+For backwards compatibility, Core also accepts the established legacy scope aliases as **input** and normalizes them before authorization, persistence and handler dispatch. Supported legacy scope aliases include `client_id` / `client_ids`, `site_id` / `site_ids`, and `agent_id` / `agent_ids` (plus the equivalent endpoint aliases). For example, this remains valid input:
 
 ```json
 {
   "type": "dynamic",
   "scope": {"client_id": 17},
-  "filter": {"os": "windows", "online": true}
+  "filter": {"os": "windows"}
 }
 ```
 
-The scheduler stores/transports this object; the **module handler** owns the meaning of `scope` and `filter` and resolves the final targets.
+Core stores/delivers that definition in canonical form:
+
+```json
+{
+  "type": "dynamic",
+  "scope": {"type": "client", "ids": [17]},
+  "filter": {"os": "windows"}
+}
+```
+
+Rules for Tactical-native dynamic targets:
+
+- `scope` must resolve unambiguously to exactly one client, site or endpoint scope; conflicting aliases are rejected.
+- Tactical target identifiers belong in `scope`, not at the top level of `filter`. Top-level filter keys that are Tactical target aliases are rejected.
+- Nested filter objects are module-owned and may use ordinary fields such as `id`, `ids` or names that resemble Tactical scope fields. Core does not recursively reinterpret nested filter data as target scope.
+- `reconcile_schedule()` accepts the legacy scope aliases above and persists the canonical form.
+
+The module handler owns the meaning of `filter` and resolves final dynamic membership **within the canonical Tactical scope**.
 
 For patch policies, dynamic targeting will usually be preferable. For a one-time Communicator message to selected endpoints, snapshot targeting will usually be preferable.
 
@@ -496,3 +525,42 @@ List APIs accept `?owner_type=user` or `?owner_type=module` for clean separation
 Core 1.15.48 adds durable run snapshots and stale-run recovery. Each registered action may declare `timeout_seconds` (default 3600). Queued runs that remain undispatched past the configured queue-stale window and running jobs beyond the action timeout plus recovery grace are failed with `error_type=Stale`, allowing later occurrences to proceed. Missed occurrences are written to history as `SKIPPED`, including `MissedSkip`, `MissedExpired`, or `MissedRecoveryWindowExpired`. A three-minute scheduler lateness tolerance prevents short timer/broker delays from being classified as missed.
 
 User schedules can only be changed/run/deleted by their creator or a scheduler manager. A force delete explicitly fails active runs as `ForceDeleted` before removing the definition; historical runs retain their snapshot fields after the schedule is gone. Terminal run history is retained according to Core scheduler configuration instead of growing without bound.
+
+## Tactical target-scope authorization
+
+Framework 1.15.54 enforces Tactical client/site visibility at the Scheduler API boundary for Tactical-native targets.
+
+Tactical-native target objects have a strict canonical shape. Core normalises and stores only these fields so authorization is performed over the exact values delivered to a module handler:
+
+```json
+{"type": "clients", "ids": [17, 21]}
+{"type": "sites", "ids": [31, 32]}
+{"type": "endpoints", "ids": ["agent-uuid-a", "agent-uuid-b"]}
+```
+
+The singular aliases (`client`, `site`, `endpoint`, `agent`) are also valid target types, but the identifier field is always `ids`. Client/site IDs are positive Tactical database IDs. Endpoint/agent IDs are stored as strings and may identify a Tactical `agent_id` or a positive database ID. No extra keys are accepted on Tactical-native static targets.
+
+Dynamic Tactical targeting has one explicit canonical scope plus an optional non-scope filter:
+
+```json
+{
+  "type": "dynamic",
+  "scope": {"type": "client", "ids": [17]},
+  "filter": {"os": "windows", "online": true}
+}
+```
+
+The canonical dynamic target root contains only `type`, `scope`, and optional `filter`, and canonical `scope` contains only `type` and `ids`. For backwards compatibility, Core accepts the established Tactical scope aliases (`client_id` / `client_ids`, `site_id` / `site_ids`, `agent_id` / `agent_ids`, and endpoint equivalents) as input in `scope` and converts them before persistence/dispatch. Known legacy root scope aliases are also consumed and canonicalized rather than forwarded to handlers. Conflicting or ambiguous scope aliases are rejected. Tactical identity aliases are forbidden only at the **top level** of `filter`; nested filter objects remain module-owned and may contain ordinary fields such as `id` or `site_id`. This prevents alternate top-level target fields from carrying unauthorized scope past Core without breaking module-specific nested filter schemas.
+
+For non-manager operators:
+
+- `client` / `clients` targets require explicit Tactical `can_view_clients` membership; site-only access to part of a client does not authorize a whole-client target;
+- `site` / `sites` targets may reference only sites visible through Tactical role scope;
+- `endpoint` / `endpoints` / `agent` / `agents` targets may reference only agents visible through Tactical role scope;
+- `dynamic` targets require exactly one explicit client, site, endpoint, or agent scope.
+
+Core re-checks target scope when a user schedule is created or edited, when a schedule is read or manually run, when it is deleted, and when schedule/run history is listed. A user who later loses Tactical access to a target no longer gains visibility or Run-now access through Scheduler simply because the schedule was created earlier.
+
+Effective Tactical/role superusers and Core scheduler managers retain global Scheduler target authority. Module-specific target types such as custom groups remain the owning module's responsibility because Core cannot infer their membership safely.
+
+Scheduled unattended execution remains a system automation operation: it uses the already-authorized saved target definition and does not require the creator to remain logged in.

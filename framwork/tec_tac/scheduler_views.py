@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, time, timedelta
 
 from django.db import transaction
-from django.db.models import OuterRef, Subquery
+from django.db.models import OuterRef, Q, Subquery
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime, parse_time
@@ -56,6 +56,92 @@ def _require_action(user, action_id):
     return action
 
 
+from .scheduler_targets import (
+    SchedulerTargetShapeError,
+    normalize_scheduler_targets,
+    tactical_scope_ref,
+)
+
+
+def _normalize_targets(targets):
+    try:
+        return normalize_scheduler_targets(targets)
+    except SchedulerTargetShapeError as exc:
+        raise SchedulerError(str(exc)) from exc
+
+
+def _scope_target_refs(targets):
+    try:
+        return [tactical_scope_ref(targets)]
+    except SchedulerTargetShapeError as exc:
+        raise SchedulerError(str(exc)) from exc
+
+
+def _require_target_scope(user, targets, *, payload=False):
+    # Managers must be able to inspect and repair legacy/module schedules even
+    # when their saved target object predates the canonical target contract.
+    if _native_scheduler_manager(user):
+        return
+    try:
+        refs = _scope_target_refs(targets)
+    except SchedulerError as exc:
+        if payload:
+            raise
+        raise PermissionDenied("The saved scheduler target definition is not in the supported canonical format.") from exc
+    if payload:
+        for ref in refs:
+            if ref["kind"] in {"client", "site", "endpoint"} and not ref["values"]:
+                raise SchedulerError(f"{ref['kind'].capitalize()} scheduler targets require at least one target identifier.")
+    for ref in refs:
+        kind, values = ref["kind"], ref["values"]
+        if kind in {"none", "module"}:
+            continue
+        if kind == "dynamic_unscoped":
+            raise PermissionDenied("Dynamic scheduler targets require an explicit client, site, or endpoint scope.")
+        if not values:
+            raise PermissionDenied("The saved schedule target scope is not available to this account.")
+
+        try:
+            if kind == "client":
+                # A user with access to one site can see that site's parent client
+                # in Tactical, but that does not authorize targeting every site in
+                # the client. Whole-client targets therefore require explicit
+                # role.can_view_clients membership.
+                role = _role_for_user(user)
+                allowed = set(role.can_view_clients.filter(pk__in=values).values_list("pk", flat=True)) if role else set()
+                requested = set(values)
+            elif kind == "site":
+                from clients.models import Site
+                allowed = set(Site.objects.filter_by_role(user).filter(pk__in=values).values_list("pk", flat=True))
+                requested = set(values)
+            else:
+                from agents.models import Agent
+                requested_text = {str(v) for v in values}
+                numeric = {int(v) for v in values if str(v).isdigit() and int(v) > 0}
+                qs = Agent.objects.filter_by_role(user).filter(Q(agent_id__in=requested_text) | Q(pk__in=numeric))
+                allowed = set()
+                for pk, agent_id in qs.values_list("pk", "agent_id"):
+                    allowed.add(str(pk))
+                    allowed.add(str(agent_id))
+                requested = requested_text
+        except SchedulerError:
+            raise
+        except Exception as exc:
+            # Authorization must fail closed if Tactical scope resolution is unavailable.
+            raise PermissionDenied("Unable to verify the scheduler target scope for this account.") from exc
+
+        if not requested.issubset(allowed):
+            raise PermissionDenied("One or more scheduler targets are outside your Tactical client/site access scope.")
+
+
+def _can_access_target_scope(user, targets) -> bool:
+    if _native_scheduler_manager(user):
+        return True
+    try:
+        _require_target_scope(user, targets, payload=False)
+        return True
+    except (PermissionDenied, SchedulerError):
+        return False
 
 
 def _owner_type_filter(request):
@@ -176,7 +262,7 @@ class SchedulerListView(APIView):
                 action = get_scheduled_action(schedule.action_id)
             except SchedulerError:
                 action = None
-            if _native_scheduler_manager(request.user) or (action and _can_use_action(request.user, action)):
+            if (_native_scheduler_manager(request.user) or (action and _can_use_action(request.user, action))) and _can_access_target_scope(request.user, schedule.targets):
                 rows.append(serialize_schedule(schedule))
         return Response({
             "schedules": rows, "count": len(rows), "manage": _native_scheduler_manager(request.user),
@@ -198,9 +284,13 @@ class SchedulerListView(APIView):
             data.setdefault("retry_delay_seconds", 60)
             if data.get("schedule_type") == TecTacSchedule.ScheduleType.INTERVAL and not data.get("interval_anchor_at"):
                 data["interval_anchor_at"] = timezone.now().replace(second=0, microsecond=0)
+            data["targets"] = _normalize_targets(data.get("targets"))
             _validate_shape(data)
+            _require_target_scope(request.user, data.get("targets"), payload=True)
             schedule = TecTacSchedule(owner_type=TecTacSchedule.OwnerType.USER, created_by=request.user, updated_by=request.user)
             _apply_schedule_fields(schedule, data)
+            schedule.target_state = "valid"
+            schedule.target_state_detail = ""
             schedule.save()
             return Response(serialize_schedule(schedule, include_runs=True), status=201)
         except SchedulerError as exc:
@@ -212,6 +302,7 @@ class SchedulerDetailView(APIView):
     def get_object(self, request, schedule_id):
         schedule = get_object_or_404(TecTacSchedule.objects.select_related("created_by", "updated_by"), pk=schedule_id)
         action = _require_action(request.user, schedule.action_id)
+        _require_target_scope(request.user, schedule.targets, payload=False)
         return schedule, action
 
     def get(self, request, schedule_id):
@@ -237,8 +328,12 @@ class SchedulerDetailView(APIView):
             merged.update(_parse_fields(dict(request.data)))
             data = validate_schedule_payload(merged)
             _require_action(request.user, data["action_id"])
+            data["targets"] = _normalize_targets(data.get("targets"))
             _validate_shape(data)
+            _require_target_scope(request.user, data.get("targets"), payload=True)
             _apply_schedule_fields(schedule, data)
+            schedule.target_state = "valid"
+            schedule.target_state_detail = ""
             schedule.updated_by = request.user
             schedule.last_due_key = ""
             schedule.save()
@@ -254,6 +349,7 @@ class SchedulerDetailView(APIView):
             )
             _require_user_managed(schedule)
             _require_schedule_owner_or_manager(request.user, schedule)
+            _require_target_scope(request.user, schedule.targets, payload=False)
             active = list(schedule.runs.select_for_update().filter(
                 status__in=[TecTacScheduleRun.Status.QUEUED, TecTacScheduleRun.Status.RUNNING]
             ))
@@ -281,6 +377,7 @@ class SchedulerRunNowView(APIView):
         schedule = get_object_or_404(TecTacSchedule, pk=schedule_id)
         _require_action(request.user, schedule.action_id)
         _require_schedule_owner_or_manager(request.user, schedule)
+        _require_target_scope(request.user, schedule.targets, payload=False)
         run = queue_manual_run(schedule)
         return Response(serialize_run(run), status=202)
 
@@ -305,7 +402,8 @@ class SchedulerRunListView(APIView):
                 action = get_scheduled_action(action_id)
             except SchedulerError:
                 action = None
-            if _native_scheduler_manager(request.user) or (action and _can_use_action(request.user, action)):
+            run_targets = run.targets_snapshot or (run.schedule.targets if run.schedule else {})
+            if (_native_scheduler_manager(request.user) or (action and _can_use_action(request.user, action))) and _can_access_target_scope(request.user, run_targets):
                 rows.append(serialize_run(run))
         return Response({"runs": rows, "count": len(rows), "owner_type": owner_type})
 
