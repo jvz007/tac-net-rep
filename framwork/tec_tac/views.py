@@ -1,12 +1,14 @@
 import io
 import logging
 from datetime import datetime, timezone
+from urllib.parse import urlsplit, urlunsplit
+
+import pyotp
 from pathlib import Path
 
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from accounts.models import Role
-from accounts.serializers import TOTPSetupSerializer
 from accounts.permissions import RolesPerms
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
@@ -106,6 +108,60 @@ def _user_payload(user, role=None):
     }
 
 
+def _normalize_tec_tac_ui_url(value: str | None) -> str | None:
+    text = str(value or "").strip()
+    if not text or len(text) > 500:
+        return None
+    try:
+        parsed = urlsplit(text)
+    except ValueError:
+        return None
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return None
+    if parsed.username or parsed.password:
+        return None
+    path = parsed.path or "/tec-tac/"
+    if not path.endswith("/"):
+        path += "/"
+    return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
+
+def _tec_tac_ui_url(request) -> str:
+    # The browser sends its actual Tec-Tac base explicitly. Origin/Referer are
+    # safe fallbacks, while request.get_host() is only the last resort because
+    # API and UI hosts can differ behind a reverse proxy.
+    explicit = _normalize_tec_tac_ui_url(request.query_params.get("ui_url"))
+    if explicit:
+        return explicit
+
+    origin = _normalize_tec_tac_ui_url(request.META.get("HTTP_ORIGIN"))
+    if origin:
+        parsed = urlsplit(origin)
+        return urlunsplit((parsed.scheme, parsed.netloc, "/tec-tac/", "", ""))
+
+    referer = _normalize_tec_tac_ui_url(request.META.get("HTTP_REFERER"))
+    if referer:
+        parsed = urlsplit(referer)
+        path = parsed.path or "/tec-tac/"
+        marker = "/tec-tac/"
+        if marker in path:
+            path = path[: path.index(marker) + len(marker)]
+        else:
+            path = marker
+        return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
+    scheme = "https" if request.is_secure() else "http"
+    return f"{scheme}://{request.get_host()}/tec-tac/"
+
+
+def _tec_tac_totp_uri(request) -> str:
+    issuer = _tec_tac_ui_url(request)
+    return pyotp.TOTP(request.user.totp_key).provisioning_uri(
+        str(request.user.username),
+        issuer_name=issuer,
+    )
+
+
 @extend_schema_view(get=extend_schema(tags=["Tec-Tac Framework"], summary="Get current user TOTP enrollment QR code"))
 class TotpQrView(APIView):
     permission_classes = [IsAuthenticated]
@@ -114,13 +170,7 @@ class TotpQrView(APIView):
         if not getattr(request.user, "totp_key", None):
             return Response({"detail": "TOTP enrollment has not been initialized for this account."}, status=409)
 
-        # Reuse Tactical's own serializer so the issuer/account URI exactly matches
-        # the value Tactical uses for authenticator enrollment. The QR image is
-        # generated locally by Tactical's existing qrcode dependency; the secret
-        # never leaves this server.
-        qr_url = TOTPSetupSerializer(request.user).data.get("qr_url")
-        if not qr_url:
-            return Response({"detail": "Tactical did not provide a TOTP provisioning URI."}, status=500)
+        qr_url = _tec_tac_totp_uri(request)
 
         try:
             import qrcode
@@ -138,6 +188,7 @@ class TotpQrView(APIView):
             response["Cache-Control"] = "no-store, max-age=0"
             response["Pragma"] = "no-cache"
             response["X-Content-Type-Options"] = "nosniff"
+            response["X-Tec-Tac-MFA-Issuer"] = _tec_tac_ui_url(request)
             return response
         except Exception as exc:
             logger.exception("Tec-Tac TOTP QR generation failed")

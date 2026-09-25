@@ -219,3 +219,15 @@ session_invalid_state
 A matching 401 retires the browser Tactical credential and returns the shell to
 the normal sign-in flow. This handling is Core-owned and does not depend on the
 optional `coreusersecurity` module.
+
+## MFA backup codes
+
+Tec-Tac adds one-time MFA backup codes without changing Tactical's user model or TOTP secret. Backup codes are stored in `TecTacMfaBackupCode` using Django password hashes; plaintext codes are returned only once when a user generates a new set. Generating a set requires the user's current password and a current TOTP code and invalidates every previous unused code.
+
+Recovery sign-in uses `POST /api/tfd/auth/login/backup-code/`. The endpoint revalidates the Tactical username/password, applies Tactical's local-login restrictions and login throttles, atomically consumes one backup code, and then issues the normal Tactical Knox token. It does not create a parallel Tec-Tac session credential.
+
+## Administrative login-session management
+
+`GET /api/tfd/access/sessions/` lists active Tactical Knox tokens for account administrators. Tec-Tac adds last activity/IP metadata when a token has been observed by the Core session guard. Session identifiers exposed to the browser are HMAC-derived opaque references; raw bearer tokens and Knox digests are not returned.
+
+Revoking a login session deletes the underlying Tactical Knox token and revokes the correlated Tec-Tac trust record. `POST /api/tfd/access/users/<user_id>/sessions/revoke/` revokes every active Tactical token for the selected user. These controls require Tactical account-management permission (or superuser authority).

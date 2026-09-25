@@ -16,6 +16,7 @@ from django.conf import settings
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
+from knox.models import AuthToken
 from rest_framework.exceptions import APIException
 from rest_framework.permissions import IsAuthenticated
 
@@ -25,6 +26,7 @@ from .models import TecTacSessionAudit, TecTacSessionSecurityConfig, TecTacSessi
 CAPABILITY_ID = "core.session_security"
 CAPABILITY_VERSION = "1.0.0"
 TOKEN_NAMESPACE = b"tec-tac-session-security:v1\x00"
+LOGIN_SESSION_NAMESPACE = b"tec-tac-login-session-ref:v1\x00"
 DEFAULT_IDLE_TIMEOUT_MINUTES = 30
 DEFAULT_ABSOLUTE_LIFETIME_MINUTES = 8 * 60
 DEFAULT_ACTIVITY_HEARTBEAT_SECONDS = 60
@@ -59,6 +61,16 @@ def can_manage_session_security(user) -> bool:
         return True
     role = _role_for_user(user)
     return bool(getattr(role, "is_superuser", False) or getattr(role, "can_do_server_maint", False)) if role else False
+
+
+def can_manage_login_sessions(user) -> bool:
+    """Account administrators may enumerate and revoke real Tactical sessions."""
+    if not getattr(user, "is_authenticated", False):
+        return False
+    if bool(getattr(user, "is_superuser", False)):
+        return True
+    role = _role_for_user(user)
+    return bool(getattr(role, "is_superuser", False) or getattr(role, "can_manage_accounts", False)) if role else False
 
 
 def _policy_dict(config: TecTacSessionSecurityConfig | None = None) -> dict[str, Any]:
@@ -152,6 +164,18 @@ def token_fingerprint(request) -> str:
     raw = _extract_raw_token(request).encode("utf-8")
     secret = str(settings.SECRET_KEY).encode("utf-8")
     return hmac.new(secret, TOKEN_NAMESPACE + raw, hashlib.sha256).hexdigest()
+
+
+def request_knox_digest(request) -> str:
+    auth = getattr(request, "auth", None)
+    digest = getattr(auth, "digest", None)
+    return str(digest or "")[:128]
+
+
+def _login_session_ref(digest: str) -> str:
+    secret = str(settings.SECRET_KEY).encode("utf-8")
+    value = str(digest or "").encode("utf-8")
+    return hmac.new(secret, LOGIN_SESSION_NAMESPACE + value, hashlib.sha256).hexdigest()
 
 
 def user_agent_hash(request) -> str:
@@ -264,6 +288,7 @@ def _serialize_session(session: TecTacSessionTrust, *, current: bool = False) ->
         "idle_expires_at": session.idle_expires_at.isoformat() if session.idle_expires_at else None,
         "initial_ip": session.initial_ip,
         "last_ip": session.last_ip,
+        "tactical_session_linked": bool(session.knox_digest),
         "current": bool(current),
         "revoked": bool(session.revoked),
         "revoked_at": session.revoked_at.isoformat() if session.revoked_at else None,
@@ -310,6 +335,7 @@ def ensure_request_session(request, *, create: bool = True) -> TecTacSessionTrus
                     "initial_ip": client_ip,
                     "last_ip": client_ip,
                     "user_agent_hash": user_agent_hash(request),
+                    "knox_digest": request_knox_digest(request),
                     "absolute_expires_at": absolute,
                     "idle_expires_at": idle,
                 },
@@ -344,8 +370,13 @@ def ensure_request_session(request, *, create: bool = True) -> TecTacSessionTrus
             session.last_ip = client_ip
 
         session.last_seen_at = now
+        digest = request_knox_digest(request)
+        update_fields = ["last_seen_at", "last_ip", "absolute_expires_at", "idle_expires_at", "updated_at"]
+        if digest and session.knox_digest != digest:
+            session.knox_digest = digest
+            update_fields.append("knox_digest")
         _refresh_expiry(session, policy)
-        session.save(update_fields=["last_seen_at", "last_ip", "absolute_expires_at", "idle_expires_at", "updated_at"])
+        session.save(update_fields=update_fields)
         return session
 
 
@@ -409,6 +440,92 @@ def revoke_user_sessions(username: str, *, except_session_id=None, reason: str =
     if count:
         _audit("user_sessions_revoked", username=username, reason=reason, requested_by=requested_by, metadata={"count": count, "session_ids": ids})
     return {"username": username, "revoked": count, "session_ids": ids}
+
+
+def _active_knox_tokens():
+    now = timezone.now()
+    return AuthToken.objects.select_related("user").filter(expiry__gt=now).order_by("-created")
+
+
+def list_active_login_sessions(*, current_request=None) -> list[dict[str, Any]]:
+    tokens = list(_active_knox_tokens()[:2000])
+    digests = [str(item.digest) for item in tokens]
+    trust_by_digest = {
+        item.knox_digest: item
+        for item in TecTacSessionTrust.objects.filter(knox_digest__in=digests).order_by("-last_seen_at")
+        if item.knox_digest
+    }
+    current_digest = request_knox_digest(current_request) if current_request is not None else ""
+    rows = []
+    for token in tokens:
+        digest = str(token.digest)
+        trust = trust_by_digest.get(digest)
+        rows.append({
+            "id": _login_session_ref(digest),
+            "user_id": token.user_id,
+            "username": str(getattr(token.user, "username", "") or ""),
+            "created_at": token.created.isoformat() if token.created else None,
+            "expires_at": token.expiry.isoformat() if token.expiry else None,
+            "current": bool(current_digest and hmac.compare_digest(digest, current_digest)),
+            "tec_tac_observed": trust is not None,
+            "last_activity_at": trust.last_activity_at.isoformat() if trust and trust.last_activity_at else None,
+            "last_seen_at": trust.last_seen_at.isoformat() if trust and trust.last_seen_at else None,
+            "last_ip": trust.last_ip if trust else "",
+        })
+    return rows
+
+
+def _find_active_knox_token(session_ref: str):
+    target = str(session_ref or "").strip().lower()
+    if len(target) != 64:
+        return None
+    for token in _active_knox_tokens():
+        if hmac.compare_digest(_login_session_ref(str(token.digest)), target):
+            return token
+    return None
+
+
+def revoke_active_login_session(session_ref: str, *, reason: str = "administrator-request", requested_by: str = "") -> dict[str, Any]:
+    with transaction.atomic():
+        token = _find_active_knox_token(session_ref)
+        if token is None:
+            raise SessionSecurityError("Active login session was not found.")
+        digest = str(token.digest)
+        username = str(getattr(token.user, "username", "") or "")
+        trust_rows = list(TecTacSessionTrust.objects.select_for_update().filter(knox_digest=digest, revoked=False))
+        for trust in trust_rows:
+            _revoke_locked(trust, reason=reason, requested_by=requested_by, event_type="session_revoked")
+        token.delete()
+        _audit(
+            "tactical_login_session_revoked",
+            username=username,
+            reason=reason,
+            requested_by=requested_by,
+            metadata={"session_ref": str(session_ref), "tec_tac_sessions": len(trust_rows)},
+        )
+        return {"id": str(session_ref), "username": username, "revoked": True}
+
+
+def revoke_user_login_sessions(user_id: int, *, reason: str = "administrator-request", requested_by: str = "") -> dict[str, Any]:
+    with transaction.atomic():
+        tokens = list(_active_knox_tokens().filter(user_id=user_id))
+        if not tokens:
+            return {"user_id": int(user_id), "username": "", "revoked": 0}
+        username = str(getattr(tokens[0].user, "username", "") or "")
+        digests = [str(token.digest) for token in tokens]
+        trust_rows = list(TecTacSessionTrust.objects.select_for_update().filter(knox_digest__in=digests, revoked=False))
+        for trust in trust_rows:
+            _revoke_locked(trust, reason=reason, requested_by=requested_by, event_type="session_revoked")
+        count = len(tokens)
+        AuthToken.objects.filter(digest__in=digests).delete()
+        _audit(
+            "tactical_user_sessions_revoked",
+            username=username,
+            reason=reason,
+            requested_by=requested_by,
+            metadata={"user_id": int(user_id), "count": count},
+        )
+        return {"user_id": int(user_id), "username": username, "revoked": count}
 
 
 def list_audit_events(*, username: str | None = None, event_type: str | None = None, limit: int = 200) -> list[dict[str, Any]]:

@@ -9,13 +9,17 @@ from .session_security import (
     SessionAuthenticated,
     SessionSecurityError,
     can_manage_session_security,
+    can_manage_login_sessions,
     diagnostics,
     get_current_session,
     get_effective_policy,
     list_audit_events,
+    list_active_login_sessions,
     list_sessions,
     record_activity,
+    revoke_active_login_session,
     revoke_session,
+    revoke_user_login_sessions,
     revoke_user_sessions,
     update_global_policy,
 )
@@ -129,3 +133,48 @@ class SessionDiagnosticsView(APIView):
         if not can_manage_session_security(request.user):
             return _forbidden()
         return Response(diagnostics())
+
+def _login_sessions_forbidden():
+    return Response({"detail": "Login session administration requires Tactical account-management permission."}, status=403)
+
+
+class AdminLoginSessionListView(APIView):
+    permission_classes = [SessionAuthenticated]
+
+    def get(self, request):
+        if not can_manage_login_sessions(request.user):
+            return _login_sessions_forbidden()
+        rows = list_active_login_sessions(current_request=request)
+        return Response({"sessions": rows, "count": len(rows)})
+
+
+class AdminLoginSessionRevokeView(APIView):
+    permission_classes = [SessionAuthenticated]
+
+    def delete(self, request, session_ref):
+        if not can_manage_login_sessions(request.user):
+            return _login_sessions_forbidden()
+        try:
+            result = revoke_active_login_session(
+                session_ref,
+                reason=str(request.data.get("reason") or "administrator-request")[:255],
+                requested_by=request.user.username,
+            )
+        except SessionSecurityError as exc:
+            return Response({"detail": str(exc)}, status=404)
+        return Response(result)
+
+
+class AdminUserLoginSessionsRevokeView(APIView):
+    permission_classes = [SessionAuthenticated]
+
+    def post(self, request, user_id):
+        if not can_manage_login_sessions(request.user):
+            return _login_sessions_forbidden()
+        result = revoke_user_login_sessions(
+            int(user_id),
+            reason=str(request.data.get("reason") or "administrator-request")[:255],
+            requested_by=request.user.username,
+        )
+        return Response(result)
+

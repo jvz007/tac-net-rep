@@ -252,6 +252,10 @@ class TecTacSessionSecurityConfig(models.Model):
 class TecTacSessionTrust(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     token_fingerprint = models.CharField(max_length=64, unique=True)
+    # Hash identifier of the underlying Tactical Knox token. This is never the
+    # bearer token itself and exists only to correlate Core trust metadata with
+    # Tactical session administration.
+    knox_digest = models.CharField(max_length=128, blank=True, default="", db_index=True)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="tec_tac_trusted_sessions")
     username = models.CharField(max_length=150, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -297,6 +301,33 @@ class TecTacSessionAudit(models.Model):
 
     def __str__(self):
         return f"{self.event_type}:{self.username}:{self.created_at.isoformat()}"
+
+class TecTacMfaBackupCode(models.Model):
+    """One-time MFA recovery code owned by a Tactical user.
+
+    Only Django password hashes are stored. The plaintext recovery code is
+    returned once at generation time and cannot be recovered from the database.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="tec_tac_mfa_backup_codes",
+    )
+    code_hash = models.CharField(max_length=255)
+    used_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("created_at", "id")
+        indexes = [
+            models.Index(fields=("user", "used_at"), name="tectac_mfa_code_user_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.user_id}:{'used' if self.used_at else 'available'}:{self.id}"
+
 
 class TecTacUserNotice(models.Model):
     class Level(models.TextChoices):

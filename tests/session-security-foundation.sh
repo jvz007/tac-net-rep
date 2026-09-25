@@ -37,6 +37,9 @@ grep -q '"name": "SessionAuthenticated"' "${ROOT}/framwork/tec_tac/contracts.py"
 # endpoint intentionally remains Tactical-auth-only for setup-stage access.
 grep -q 'class TotpQrView' "${ROOT}/framwork/tec_tac/views.py" || fail "TOTP setup endpoint missing"
 grep -A3 'class TotpQrView' "${ROOT}/framwork/tec_tac/views.py" | grep -q 'permission_classes = \[IsAuthenticated\]' || fail "TOTP setup must remain Tactical-auth-only"
+grep -q '_tec_tac_ui_url' "${ROOT}/framwork/tec_tac/views.py" || fail "TOTP issuer must resolve the Tec-Tac UI URL"
+grep -q 'query_params.get("ui_url")' "${ROOT}/framwork/tec_tac/views.py" || fail "TOTP issuer must accept the browser UI base URL"
+if grep -q 'TOTPSetupSerializer' "${ROOT}/framwork/tec_tac/views.py"; then fail "TOTP QR must not inherit Tactical first-CORS issuer"; fi
 grep -A3 'class UiContextView' "${ROOT}/framwork/tec_tac/views.py" | grep -q 'permission_classes = \[SessionAuthenticated\]' || fail "UI context must enforce Core session trust"
 for f in capability_views.py contract_views.py dashboard_views.py housekeeping_views.py module_repository_views.py module_v2_views.py preference_views.py scheduler_views.py session_security_views.py; do
   if grep -q 'permission_classes = \[IsAuthenticated\]' "${ROOT}/framwork/tec_tac/${f}"; then fail "${f} still uses Tactical-only IsAuthenticated"; fi

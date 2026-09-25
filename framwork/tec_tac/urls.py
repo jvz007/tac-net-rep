@@ -5,10 +5,12 @@ from .server_maintenance_views import (
 from .session_security_views import (
     CurrentSessionView, SessionActivityView, SessionListView, SessionRevokeView,
     RevokeOtherSessionsView, SessionPolicyView, SessionAuditView, SessionDiagnosticsView,
+    AdminLoginSessionListView, AdminLoginSessionRevokeView, AdminUserLoginSessionsRevokeView,
 )
 from .dashboard_views import DashboardListCreateView, DashboardDetailView
 from .preference_views import UserPreferencesView
 from .notice_views import NoticeListCreateView, NoticeReadView, NoticeReadAllView, NoticeClearReadView
+from .mfa_backup_views import MfaBackupCodesView, BackupCodeLoginView
 from .housekeeping_views import HousekeepingStatusView, HousekeepingPurgeView
 from .diagnostic_views import SystemDiagnosticsView
 from .capability_views import CapabilityListView, CapabilityDetailView
@@ -48,6 +50,11 @@ urlpatterns = [
     path("session/policy/", SessionPolicyView.as_view(), name="tec-tac-session-policy"),
     path("session/audit/", SessionAuditView.as_view(), name="tec-tac-session-audit"),
     path("session/diagnostics/", SessionDiagnosticsView.as_view(), name="tec-tac-session-diagnostics"),
+    path("access/sessions/", AdminLoginSessionListView.as_view(), name="tec-tac-access-login-sessions"),
+    path("access/sessions/<str:session_ref>/revoke/", AdminLoginSessionRevokeView.as_view(), name="tec-tac-access-login-session-revoke"),
+    path("access/users/<int:user_id>/sessions/revoke/", AdminUserLoginSessionsRevokeView.as_view(), name="tec-tac-access-user-login-sessions-revoke"),
+    path("auth/mfa/backup-codes/", MfaBackupCodesView.as_view(), name="tec-tac-mfa-backup-codes"),
+    path("auth/login/backup-code/", BackupCodeLoginView.as_view(), name="tec-tac-backup-code-login"),
     path("dashboards/", DashboardListCreateView.as_view(), name="tec-tac-dashboards"),
     path("dashboards/<uuid:dashboard_id>/", DashboardDetailView.as_view(), name="tec-tac-dashboard-detail"),
     path("contracts/", ContractCatalogView.as_view(), name="tec-tac-contracts"),
