@@ -18,7 +18,7 @@ logger = logging.getLogger("tec_tac.audit")
 STANDARD_ACTIONS = frozenset({
     "add", "modify", "delete", "run", "approve", "deny", "enable", "disable",
     "install", "uninstall", "view", "export", "import", "sync", "test",
-    "acknowledge", "resolve",
+    "acknowledge", "resolve", "console_change_requested",
 })
 _CUSTOM_ACTION_RE = re.compile(r"^custom:[a-z0-9][a-z0-9_-]{0,63}$")
 _OBJECT_TYPE_RE = re.compile(r"^[a-z][a-z0-9_-]{0,99}$")

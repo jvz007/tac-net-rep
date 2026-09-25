@@ -11,7 +11,6 @@ import argparse
 import fcntl
 import json
 import os
-import subprocess
 import sys
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -22,7 +21,6 @@ POLICY_FILE = POLICY_ROOT / 'update-trust-policy.json'
 PENDING_FILE = POLICY_ROOT / 'pending-trust-policy-revert.json'
 AUDIT_DIR = Path('/var/log/tec-tac')
 AUDIT_FILE = AUDIT_DIR / 'trust-policy-audit.jsonl'
-CLI_PATH = Path('/usr/local/sbin/tec-tac-trust-policy')
 LEVELS = ('unsigned', 'signed_development', 'signed_production', 'secure_signed')
 LEVEL_RANK = {name: idx for idx, name in enumerate(LEVELS)}
 DEFAULT_HOURS = 8
@@ -121,26 +119,36 @@ def clear_pending() -> None:
     PENDING_FILE.unlink(missing_ok=True)
 
 
-def timer_base(change_id: str) -> str:
-    return f'tec-tac-trust-policy-revert-{change_id[:12]}'
+def parse_iso(value: str) -> datetime:
+    text = str(value or '').strip()
+    if text.endswith('Z'):
+        text = text[:-1] + '+00:00'
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise RuntimeError('pending trust-policy revert expires_at is invalid') from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
-def stop_timer(change_id: str) -> None:
-    base = timer_base(change_id)
-    subprocess.run(['systemctl', 'stop', f'{base}.timer', f'{base}.service'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-
-
-def schedule_revert(change_id: str, expires_at: datetime) -> None:
-    base = timer_base(change_id)
-    calendar = expires_at.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
-    command = [
-        'systemd-run', '--quiet', '--collect', f'--unit={base}',
-        f'--on-calendar={calendar}', '--timer-property=Persistent=true',
-        str(CLI_PATH), '_revert', '--change-id', change_id,
-    ]
-    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if result.returncode != 0:
-        raise RuntimeError((result.stderr or result.stdout or 'unable to schedule trust-policy revert').strip())
+def check_revert_due() -> dict:
+    pending = read_pending()
+    if not pending:
+        return {'status': 'no_pending_revert'}
+    change_id = str(pending.get('change_id') or '').strip()
+    if not change_id:
+        raise RuntimeError('pending trust-policy revert is missing change_id')
+    expires_at = parse_iso(str(pending.get('expires_at') or ''))
+    if now() < expires_at:
+        return {
+            'status': 'pending',
+            'change_id': change_id,
+            'expires_at': iso(expires_at),
+            'temporary_level': pending.get('temporary_level'),
+            'previous_level': pending.get('previous_level'),
+        }
+    return revert_due(change_id)
 
 
 def confirm(current: str, target: str, hours: int, reason: str) -> None:
@@ -180,9 +188,6 @@ def set_level(target: str, *, reason: str, hours: int) -> dict:
         pending_previous = str(existing_pending.get('previous_level') or '')
         if pending_previous in LEVEL_RANK and LEVEL_RANK[pending_previous] > LEVEL_RANK[previous_level]:
             previous_level = pending_previous
-        old_id = str(existing_pending.get('change_id') or '')
-        if old_id:
-            stop_timer(old_id)
 
     updated = write_policy(target, updated_by=f'console:{actor()}')
     append_audit(
@@ -207,14 +212,6 @@ def set_level(target: str, *, reason: str, hours: int) -> dict:
         'actor': actor(),
     }
     write_pending(pending)
-    try:
-        schedule_revert(change_id, expires)
-    except Exception as exc:
-        write_policy(previous_level, updated_by='console:auto-rollback-schedule-failed')
-        clear_pending()
-        append_audit('policy_change_reverted_schedule_failure', change_id=change_id, requested_level=target, restored_level=previous_level, reason=reason, error=str(exc))
-        raise
-
     append_audit('policy_revert_scheduled', change_id=change_id, requested_level=target, previous_level=previous_level, expires_at=iso(expires), hours=hours)
     return {**updated, 'status': 'applied', 'temporary': True, 'revert_at': iso(expires), 'revert_level': previous_level, 'change_id': change_id}
 
@@ -248,6 +245,7 @@ def main() -> int:
     p.add_argument('level', choices=LEVELS)
     p.add_argument('--reason', required=True, help='Reason for the policy change (recorded in the root audit log).')
     p.add_argument('--hours', type=int, default=DEFAULT_HOURS, help=f'Hours before automatic revert when lowering (default {DEFAULT_HOURS}, max {MAX_HOURS}).')
+    sub.add_parser('check-revert', help='Apply a pending temporary trust-policy revert when it is due.')
     p = sub.add_parser('_revert', help=argparse.SUPPRESS)
     p.add_argument('--change-id', required=True)
     args = parser.parse_args()
@@ -259,6 +257,8 @@ def main() -> int:
             result = {**result, 'pending_revert': pending}
     elif args.command == 'set':
         result = set_level(args.level, reason=args.reason, hours=args.hours)
+    elif args.command == 'check-revert':
+        result = check_revert_due()
     else:
         result = revert_due(args.change_id)
     print(json.dumps(result, sort_keys=True))

@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.50",
+  "version": "1.15.51",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -27,19 +27,19 @@
       "sha256": "7acd5f22138138348d5123fc22c210724ca10ce86f05da7b77c68fc89952319a"
     },
     {
-      "path": "RELEASE_NOTES_1.15.49.md",
-      "size": 1117,
-      "sha256": "d89f55fba7340ba7d2dc8b858d55653bbae581b0feaf85f70b1db35b9762f448"
-    },
-    {
       "path": "RELEASE_NOTES_1.15.50.md",
       "size": 895,
       "sha256": "3f7c75d92854418999869916017c83cc5d25028eeea06f852369bd9c67fdfda4"
     },
     {
+      "path": "RELEASE_NOTES_1.15.51.md",
+      "size": 1612,
+      "sha256": "4e34839880430ad965974619a04708588aa842e0d519682970733edd1944bebd"
+    },
+    {
       "path": "VERSION",
       "size": 8,
-      "sha256": "864662a48a876d896cbbbf2b379f95e3a9587adaf21deacde066af0748b350ae"
+      "sha256": "607780fb5209dc0ffef2487bf31b031526bd4df59ccb96b4e00ef8a113d9198f"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -708,8 +708,8 @@
     },
     {
       "path": "framwork/tec_tac/audit.py",
-      "size": 9189,
-      "sha256": "6d3d3e1b001488d78f5056caff4484406713eef63638213906732db1e9319fee"
+      "size": 9217,
+      "sha256": "55c6041c186f617957a3fd1bc75b19f382bc238f821d1cdc9de91212dbe803d1"
     },
     {
       "path": "framwork/tec_tac/audit_views.py",
@@ -973,8 +973,13 @@
     },
     {
       "path": "framwork/tec_tac/scheduler.py",
-      "size": 40723,
-      "sha256": "0e7db9a7b8e4b3b44f517ffbd0095f0a2f5507cbb67c70b73689a0a610e13f44"
+      "size": 41475,
+      "sha256": "8091d3e4f62fb4d15a00e799c8e73de0602fd654dd487a495a6bf307aa88465f"
+    },
+    {
+      "path": "framwork/tec_tac/scheduler_timing.py",
+      "size": 1132,
+      "sha256": "e614c39121981121bdf5dbd83465118c1b347198fb9a4d89cc214259b5d12d44"
     },
     {
       "path": "framwork/tec_tac/scheduler_views.py",
@@ -1038,8 +1043,8 @@
     },
     {
       "path": "install.sh",
-      "size": 50420,
-      "sha256": "b5a51d25179e398def9b50e7db62370c951d137ddafa7a45acb2c7f4aa4144b5"
+      "size": 51664,
+      "sha256": "f617dd375a0ea7ae534536e8445ace5f9ee016822a6aa0fbb85b6f31e430bfbb"
     },
     {
       "path": "reportsets/.gitkeep",
@@ -1203,13 +1208,13 @@
     },
     {
       "path": "scripts/trust-policy-cli.py",
-      "size": 10976,
-      "sha256": "300560e79e374c9a6f5812147f5325b6a193921aecd7be5317eee190f0c6f42c"
+      "size": 10743,
+      "sha256": "a8da5374f1004a6e042cce2046d719daf873e29fbcd30d3820c84da24be5cddc"
     },
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "a56184a14f91efc100877f6297b45a512485a528ce79430098341651a2792b55"
+      "sha256": "fd04d91921adfaf628f87918fae8388234b68a363f862c903cb211bc0277008a"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -1393,8 +1398,13 @@
     },
     {
       "path": "tests/review-regressions-1.15.50.py",
-      "size": 3340,
-      "sha256": "dab3148130aaf9f6f05e3ad13a13e52038a5181cae0ef468552c9836e39add51"
+      "size": 1502,
+      "sha256": "10e4fd392141b2e231fcb5a735563b0e1dffcea6ab03a0d4c572909ee40b17ad"
+    },
+    {
+      "path": "tests/review-regressions-1.15.51.py",
+      "size": 3890,
+      "sha256": "1235c27a263bffdbdc7f9aded815a3ef71f362024c9cfaad6aa037cc84722638"
     },
     {
       "path": "tests/scheduler-durability-review.sh",

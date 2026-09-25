@@ -582,6 +582,46 @@ chown root:root /var/log/tec-tac/trust-policy-audit.jsonl
 chmod 0640 /var/log/tec-tac/trust-policy-audit.jsonl
 log "Installed root-console trust policy CLI: ${TRUST_POLICY_CLI}"
 
+TRUST_POLICY_REVERT_SERVICE="/etc/systemd/system/tec-tac-trust-policy-revert.service"
+TRUST_POLICY_REVERT_TIMER="/etc/systemd/system/tec-tac-trust-policy-revert.timer"
+cat > "${TRUST_POLICY_REVERT_SERVICE}" <<EOF
+[Unit]
+Description=Tec-Tac Trust Policy Temporary Revert Check
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=${TRUST_POLICY_CLI} check-revert
+
+[Install]
+WantedBy=multi-user.target
+EOF
+cat > "${TRUST_POLICY_REVERT_TIMER}" <<EOF
+[Unit]
+Description=Check Tec-Tac temporary trust-policy reverts
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+Persistent=true
+AccuracySec=15s
+Unit=tec-tac-trust-policy-revert.service
+
+[Install]
+WantedBy=timers.target
+EOF
+chown root:root "${TRUST_POLICY_REVERT_SERVICE}" "${TRUST_POLICY_REVERT_TIMER}"
+chmod 0644 "${TRUST_POLICY_REVERT_SERVICE}" "${TRUST_POLICY_REVERT_TIMER}"
+systemctl daemon-reload
+systemctl enable tec-tac-trust-policy-revert.service >/dev/null
+systemctl enable --now tec-tac-trust-policy-revert.timer >/dev/null
+# Run one immediate check during upgrade so an already-expired 1.15.50
+# pending revert is not left lowered until the next timer tick.
+${TRUST_POLICY_CLI} check-revert >/dev/null
+log "Installed persistent trust-policy revert service/timer."
+
 SYSTEM_UPDATE_ROOT="${TEC_TAC_SYSTEM_UPDATE_ROOT:-/var/lib/tec-tac/system-updates}"
 SYSTEM_UPDATE_HELPER="/usr/local/sbin/tec-tac-system-update"
 SYSTEM_UPDATE_LIB="/usr/local/lib/tec-tac-updater"

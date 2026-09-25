@@ -12,6 +12,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from .models import TecTacSchedule, TecTacScheduleRun, TecTacSchedulerConfig, TecTacSchedulerState
+from .scheduler_timing import queued_stale_deadline
 
 
 class SchedulerError(RuntimeError):
@@ -398,13 +399,26 @@ def recover_stale_runs(now: datetime | None = None) -> dict[str, int]:
     with transaction.atomic():
         queued = list(TecTacScheduleRun.objects.select_for_update().filter(
             status=TecTacScheduleRun.Status.QUEUED,
-        ).filter(
-            Q(last_queued_at__lt=queued_cutoff) | Q(last_queued_at__isnull=True, created_at__lt=queued_cutoff)
         ))
         for run in queued:
+            queued_at = _as_utc(run.last_queued_at or run.created_at)
+            # A retrying Celery task is intentionally invisible until its countdown
+            # expires. Do not classify that expected wait as stale. Initial queueing
+            # has attempt=0 and therefore keeps the normal dispatch stale window.
+            stale_after = queued_stale_deadline(
+                queued_at=queued_at,
+                queued_stale_minutes=queued_minutes,
+                attempt=int(run.attempt or 0),
+                retry_delay_seconds=int(run.retry_delay_seconds_snapshot or 0),
+            )
+            if now <= stale_after:
+                continue
             run.status = TecTacScheduleRun.Status.FAILED
             run.error_type = "Stale"
-            run.error = f"Stale queued run exceeded {queued_minutes} minute dispatch window."
+            run.error = (
+                f"Stale queued run exceeded {queued_minutes} minute dispatch window"
+                + (f" after {int(run.retry_delay_seconds_snapshot or 0)} second retry countdown." if int(run.attempt or 0) > 0 else ".")
+            )
             run.finished_at = now
             run.save(update_fields=["status", "error_type", "error", "finished_at"])
             recovered_queued += 1
