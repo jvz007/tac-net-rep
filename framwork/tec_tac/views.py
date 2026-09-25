@@ -48,9 +48,12 @@ from .registry import get_plugins
 from .notices import unread_count as notice_unread_count
 from .preferences import get_user_preferences
 from .session_security import SessionAuthenticated
-from .trust_policy import TrustPolicyError, get_policy as get_update_trust_policy, set_policy as set_update_trust_policy
+from .trust_policy import TrustPolicyError, LEVEL_RANK, get_policy as get_update_trust_policy, set_policy as set_update_trust_policy
 
 from .rbac import (
+    CORE_PRIVILEGED_PERMISSION,
+    can_manage_privileged_operations,
+    is_effective_superuser,
     effective_permissions,
     get_all_role_permissions,
     permission_catalog,
@@ -79,9 +82,9 @@ def _native_capabilities(user, role=None):
         "list_roles": allowed("can_list_roles"),
         "manage_roles": allowed("can_manage_roles"),
         "list_modules": True,
-        "manage_modules": allowed("can_do_server_maint"),
+        "manage_modules": can_manage_privileged_operations(user),
         "manage_schedules": allowed("can_do_server_maint"),
-        "server_maintenance": allowed("can_do_server_maint"),
+        "server_maintenance": can_manage_privileged_operations(user),
     }
 
 
@@ -290,6 +293,13 @@ class RoleExtensionPermissionsView(APIView):
                 status=400,
             )
 
+        if CORE_PRIVILEGED_PERMISSION in payload and not is_effective_superuser(request.user):
+            raise PermissionDenied("Only a Tactical or role superuser may grant or revoke Tec-Tac privileged-operations access.")
+
+        if CORE_PRIVILEGED_PERMISSION in payload:
+            _audit_privileged(request.user, "modify", "privileged_permission", object_id=str(role.id),
+                              metadata={"codename": CORE_PRIVILEGED_PERMISSION, "granted": payload[CORE_PRIVILEGED_PERMISSION], "role": role.name})
+
         for codename, granted in payload.items():
             if not isinstance(granted, bool):
                 return Response(
@@ -311,13 +321,21 @@ class RoleExtensionPermissionsView(APIView):
 
 
 def _can_manage_modules(user):
-    role = _role_for_user(user)
-    return bool(getattr(user, "is_superuser", False)) or bool(getattr(role, "is_superuser", False) if role else False) or bool(getattr(role, "can_do_server_maint", False) if role else False)
+    return can_manage_privileged_operations(user)
 
 
 def _require_module_manager(user):
     if not _can_manage_modules(user):
-        raise PermissionDenied("Tactical can_do_server_maint is required to install or remove Tec-Tac modules.")
+        raise PermissionDenied("Tec-Tac core.privileged_operations permission is required for privileged lifecycle operations.")
+
+
+def _audit_privileged(actor, action, object_type, *, object_id=None, metadata=None):
+    try:
+        from .audit import record
+        record(actor=actor, module_id="core", action=action, object_type=object_type,
+               object_id=object_id, metadata=metadata or {}, strict=False)
+    except Exception:
+        logger.exception("Unable to persist privileged-operation audit event")
 
 
 @extend_schema_view(get=extend_schema(tags=["Tec-Tac Framework"], summary="List installed Tec-Tac modules"))
@@ -472,11 +490,24 @@ class SystemUpdateTrustPolicyView(APIView):
         if level is None:
             return Response({"detail": "minimum_level is required."}, status=400)
         try:
-            return Response(set_update_trust_policy(
-                str(level),
+            current = get_update_trust_policy()
+            target = str(level).strip().lower().replace("-", "_").replace(" ", "_")
+            if target not in LEVEL_RANK:
+                raise TrustPolicyError("Invalid update trust level.")
+            lowering = LEVEL_RANK[target] < LEVEL_RANK[current["minimum_level"]]
+            if lowering:
+                _audit_privileged(request.user, "modify", "update_trust_policy", object_id=target,
+                                  metadata={"previous": current["minimum_level"], "lowering": True, "outcome": "requested"})
+            if lowering and not is_effective_superuser(request.user):
+                raise PermissionDenied("Only a Tactical or role superuser may request a lower global trust policy.")
+            result = set_update_trust_policy(
+                target,
                 updated_by=str(request.user.username),
                 updated_at=datetime.now(timezone.utc).isoformat(),
-            ))
+            )
+            _audit_privileged(request.user, "modify", "update_trust_policy", object_id=target,
+                              metadata={"previous": current["minimum_level"], "lowering": lowering, "outcome": "applied"})
+            return Response(result)
         except TrustPolicyError as exc:
             return Response({"detail": str(exc)}, status=400)
 
@@ -522,8 +553,17 @@ class SystemUpdatePackageInstallView(APIView):
         allow_downgrade = request.data.get("allow_downgrade", False)
         if not isinstance(allow_downgrade, bool):
             return Response({"detail": "allow_downgrade must be true or false."}, status=400)
+        if allow_downgrade:
+            _audit_privileged(request.user, "install", "system_update_downgrade", object_id=str(upload_id),
+                              metadata={"allow_downgrade": True, "outcome": "requested"})
+        if allow_downgrade and not is_effective_superuser(request.user):
+            raise PermissionDenied("Only a Tactical or role superuser may authorize a system downgrade.")
         try:
-            return Response(queue_system_update(str(upload_id), allow_downgrade=allow_downgrade, requested_by=str(request.user.username)), status=202)
+            result = queue_system_update(str(upload_id), allow_downgrade=allow_downgrade, requested_by=str(request.user.username))
+            if allow_downgrade:
+                _audit_privileged(request.user, "install", "system_update_downgrade", object_id=str(upload_id),
+                                  metadata={"allow_downgrade": True, "outcome": "queued"})
+            return Response(result, status=202)
         except SystemUpdateError as exc:
             return Response({"detail": str(exc)}, status=400)
 

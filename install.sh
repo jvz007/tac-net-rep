@@ -95,6 +95,7 @@ REQUIRED_FILES=(
     "${SOURCE_ROOT}/scripts/install-extension.sh"
     "${SOURCE_ROOT}/scripts/remove-extension.sh"
     "${SOURCE_ROOT}/scripts/module-job-helper.py"
+    "${SOURCE_ROOT}/scripts/privileged-trust.py"
     "${SOURCE_ROOT}/scripts/module-v2-job-helper.py"
     "${SOURCE_ROOT}/scripts/module-hotfix-job-helper.py"
     "${SOURCE_ROOT}/scripts/server-backup-helper.py"
@@ -150,7 +151,7 @@ log "Preflight source repository layout: OK"
 # extensions/reportsets are deliberately preserved and never copied back into
 # the source checkout.
 mkdir -p "${TEC_TAC_ROOT}" "${EXTENSIONS_DIR}" "${REPORTSETS_DIR}" "${TEC_TAC_ROOT}/etc"
-TRUSTED_PUBLISHERS_ROOT="${TEC_TAC_TRUSTED_PUBLISHERS_ROOT:-/etc/tec-tac/trusted-publishers}"
+TRUSTED_PUBLISHERS_ROOT="/etc/tec-tac/trusted-publishers"
 mkdir -p "${TRUSTED_PUBLISHERS_ROOT}"
 chown root:root "${TRUSTED_PUBLISHERS_ROOT}"
 chmod 0755 "${TRUSTED_PUBLISHERS_ROOT}"
@@ -442,10 +443,13 @@ TEC_TAC_EXTENSIONS_ROOT=${EXTENSIONS_DIR}
 TEC_TAC_REPORTSETS_ROOT=${REPORTSETS_DIR}
 TEC_TAC_SCRIPTS_ROOT=${RUNTIME_SCRIPTS_DIR}
 TEC_TAC_STATE_ROOT=/var/lib/tec-tac
-TEC_TAC_POLICY_ROOT=/var/lib/tec-tac/policy
+TEC_TAC_POLICY_ROOT=/etc/tec-tac/policy
 TEC_TAC_MODULE_STATE_ROOT=${MODULE_STATE_ROOT}
 TEC_TAC_TRUSTED_PUBLISHERS_ROOT=${TRUSTED_PUBLISHERS_ROOT}
 TEC_TAC_ENVIRONMENT=${TEC_TAC_ENVIRONMENT:-production}
+TEC_TAC_ALLOW_UNSIGNED_DEVELOPMENT_UPDATES=${TEC_TAC_ALLOW_UNSIGNED_DEVELOPMENT_UPDATES:-false}
+TEC_TAC_ALLOW_UNSIGNED_DEVELOPMENT_PACKAGES=${TEC_TAC_ALLOW_UNSIGNED_DEVELOPMENT_PACKAGES:-false}
+TEC_TAC_ALLOW_SYSTEM_DOWNGRADES=${TEC_TAC_ALLOW_SYSTEM_DOWNGRADES:-false}
 TEC_TAC_SYSTEM_UPDATE_ROOT=/var/lib/tec-tac/system-updates
 TEC_TAC_SERVER_BACKUP_ROOT=/var/lib/tec-tac/server-backup
 TEC_TAC_SERVER_MAINTENANCE_ROOT=/var/lib/tec-tac/server-maintenance
@@ -490,10 +494,76 @@ log "Installed privileged Module Management v2 helper: ${MODULE_V2_HELPER}"
 log "Installed privileged module hotfix helper: ${MODULE_HOTFIX_HELPER}"
 
 
-POLICY_ROOT="${TEC_TAC_POLICY_ROOT:-/var/lib/tec-tac/policy}"
+POLICY_ROOT="/etc/tec-tac/policy"
 mkdir -p "${POLICY_ROOT}"
-chown root:"${TACTICAL_GROUP}" "${POLICY_ROOT}"
-chmod 2770 "${POLICY_ROOT}"
+chown root:root "${POLICY_ROOT}"
+chmod 0755 "${POLICY_ROOT}"
+POLICY_FILE="${POLICY_ROOT}/update-trust-policy.json"
+if [[ ! -f "${POLICY_FILE}" ]]; then
+    if [[ "${TEC_TAC_ENVIRONMENT:-production}" == "development" ]]; then
+        DEFAULT_TRUST_LEVEL="signed_development"
+    else
+        DEFAULT_TRUST_LEVEL="signed_production"
+    fi
+    printf '{"schema":1,"minimum_level":"%s","updated_at":null,"updated_by":"installer"}
+' "${DEFAULT_TRUST_LEVEL}" > "${POLICY_FILE}"
+fi
+chown root:root "${POLICY_FILE}"
+chmod 0644 "${POLICY_FILE}"
+
+# Security migration: pre-1.15.46 installs defaulted to unsigned. Raise only an
+# existing unsigned floor to the environment-appropriate signed default; never
+# lower a stronger administrator policy.
+python3 - "${POLICY_FILE}" "${TEC_TAC_ENVIRONMENT:-production}" <<'PY_POLICY'
+import json, os, sys
+path, environment = sys.argv[1], sys.argv[2].strip().lower()
+default = "signed_development" if environment == "development" else "signed_production"
+try:
+    data = json.load(open(path, encoding="utf-8"))
+except Exception:
+    raise SystemExit("Tec-Tac trust policy is unreadable; refusing to continue")
+if not isinstance(data, dict) or int(data.get("schema", 0) or 0) != 1:
+    raise SystemExit("Tec-Tac trust policy schema is invalid; refusing to continue")
+if str(data.get("minimum_level") or "").strip().lower() == "unsigned":
+    data["minimum_level"] = default
+    data["updated_by"] = "installer-security-migration"
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(data, handle, indent=2, sort_keys=True); handle.write("\n")
+    os.chmod(tmp, 0o644); os.replace(tmp, path)
+PY_POLICY
+chown root:root "${POLICY_FILE}"
+chmod 0644 "${POLICY_FILE}"
+
+# Narrow the legacy broad system.update publisher permission into explicit
+# component permissions. Publishers without system.update are not granted new
+# authority automatically.
+python3 - "${TRUSTED_PUBLISHERS_ROOT}" <<'PY_PUBLISHERS'
+import json, os, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+for path in root.glob("*/publisher.json"):
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        continue
+    perms = data.get("permissions")
+    if not isinstance(perms, list) or "system.update" not in perms:
+        continue
+    values = [str(v) for v in perms if str(v) != "system.update"]
+    for value in ("framework.update", "ui.update"):
+        if value not in values:
+            values.append(value)
+    data["permissions"] = values
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.chmod(tmp, 0o644); os.replace(tmp, path)
+PY_PUBLISHERS
+
+PRIVILEGED_TRUST_DIR="/usr/local/lib/tec-tac-security"
+PRIVILEGED_TRUST_HELPER="${PRIVILEGED_TRUST_DIR}/privileged-trust.py"
+python3 -c 'import cryptography' >/dev/null 2>&1 || fail "System Python cryptography support is required for root-side Tec-Tac signature verification."
+mkdir -p "${PRIVILEGED_TRUST_DIR}"
+install -o root -g root -m 0755 "${REPO_ROOT}/scripts/privileged-trust.py" "${PRIVILEGED_TRUST_HELPER}"
 
 SYSTEM_UPDATE_ROOT="${TEC_TAC_SYSTEM_UPDATE_ROOT:-/var/lib/tec-tac/system-updates}"
 SYSTEM_UPDATE_HELPER="/usr/local/sbin/tec-tac-system-update"
@@ -526,6 +596,7 @@ chmod 0644 "${SYSTEM_UPDATE_CONFIG}"
 
 cat > "${SYSTEM_UPDATE_SUDOERS}" <<EOF
 ${TACTICAL_USER} ALL=(root) NOPASSWD: ${SYSTEM_UPDATE_HELPER} --dispatch *
+${TACTICAL_USER} ALL=(root) NOPASSWD: ${SYSTEM_UPDATE_HELPER} --set-trust-policy *
 EOF
 chown root:root "${SYSTEM_UPDATE_SUDOERS}"
 chmod 0440 "${SYSTEM_UPDATE_SUDOERS}"

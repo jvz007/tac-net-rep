@@ -10,7 +10,7 @@ fail(){ echo "[TEST] FAIL: $*" >&2; exit 1; }
 grep -q 'core.server_maintenance' "${ROOT}/framwork/tec_tac/server_maintenance.py" || fail "capability id missing"
 grep -q 'register_core_server_maintenance_capability' "${ROOT}/framwork/tec_tac/apps.py" || fail "AppConfig registration missing"
 grep -q 'system/maintenance/jobs/' "${ROOT}/framwork/tec_tac/urls.py" || fail "job API routes missing"
-grep -q 'can_do_server_maint' "${ROOT}/framwork/tec_tac/server_maintenance_views.py" || fail "server maintenance RBAC guard missing"
+grep -q 'can_manage_privileged_operations' "${ROOT}/framwork/tec_tac/server_maintenance_views.py" || fail "server maintenance privileged RBAC guard missing"
 grep -q 'systemd-run' "${ROOT}/scripts/server-maintenance-helper.py" || fail "durable systemd execution missing"
 grep -q 'server-maintenance.lock' "${ROOT}/scripts/server-maintenance-helper.py" || fail "global maintenance lock missing"
 grep -q 'flock.*LOCK_EX' "${ROOT}/scripts/server-maintenance-helper.py" || fail "exclusive maintenance lock missing"

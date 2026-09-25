@@ -20,7 +20,7 @@ def make_tree(base, *, key_id='key-dev', status='active'):
     (root/'VERSION').write_text('1.15.36\n'); (root/'install.sh').write_text('#!/bin/sh\n'); (root/'framwork'/'tec_tac').mkdir(parents=True); (root/'framwork'/'tec_tac'/'__init__.py').write_text('x=1\n')
     private=Ed25519PrivateKey.generate(); public=private.public_key().public_bytes(serialization.Encoding.Raw,serialization.PublicFormat.Raw)
     (trust/'public.key').write_text('ed25519:'+base64.b64encode(public).decode()+'\n')
-    policy={'schema':1,'publisher_id':'publisher-dev','display_name':'Publisher Dev','status':'trusted','permissions':['module.install'],'environment':'development','keys':[{'key_id':key_id,'status':status,'algorithm':'Ed25519','public_key_file':'public.key'}]}
+    policy={'schema':1,'publisher_id':'publisher-dev','display_name':'Publisher Dev','status':'trusted','permissions':['module.install','framework.update'],'environment':'development','keys':[{'key_id':key_id,'status':status,'algorithm':'Ed25519','public_key_file':'public.key'}]}
     (trust/'publisher.json').write_text(json.dumps(policy,indent=2)+'\n')
     files=[]
     for path in sorted(p for p in root.rglob('*') if p.is_file()):
@@ -39,14 +39,14 @@ def expect_code(fn, code):
 with tempfile.TemporaryDirectory() as tmp:
     base=Path(tmp); root, trustroot=make_tree(base)
     manifest_bytes=(root/'tec-tac-release.json').read_bytes(); signature_bytes=(root/'tec-tac-release.json.sig').read_bytes()
-    preview=verify_release_manifest_signature(manifest_bytes=manifest_bytes,signature_bytes=signature_bytes,expected_component='framework',trust_root=trustroot,server_environment='development')
+    preview=verify_release_manifest_signature(manifest_bytes=manifest_bytes,signature_bytes=signature_bytes,expected_component='framework',required_permissions=('framework.update',),trust_root=trustroot,server_environment='development')
     assert preview['signed'] and preview['manifest_verified'] and not preview['tree_verified'] and preview['state']=='signed'
-    result=verify_release_tree(root=root,expected_component='framework',trust_root=trustroot,server_environment='development')
+    result=verify_release_tree(root=root,expected_component='framework',required_permissions=('framework.update',),trust_root=trustroot,server_environment='development')
     assert result['verified'] and result['file_count']==3 and result['publisher_id']=='publisher-dev'
     helper.verify_signed_tree_snapshot(root,'framework','1.15.36',result)
     # changed bytes
     (root/'install.sh').write_text('tampered\n')
-    expect_code(lambda: verify_release_tree(root=root,expected_component='framework',trust_root=trustroot,server_environment='development'),'tree_mismatch')
+    expect_code(lambda: verify_release_tree(root=root,expected_component='framework',required_permissions=('framework.update',),trust_root=trustroot,server_environment='development'),'tree_mismatch')
     try: helper.verify_signed_tree_snapshot(root,'framework','1.15.36',result)
     except RuntimeError as exc: assert 'differs' in str(exc)
     else: raise AssertionError('worker accepted changed checkout')
@@ -54,16 +54,16 @@ with tempfile.TemporaryDirectory() as tmp:
 with tempfile.TemporaryDirectory() as tmp:
     base=Path(tmp); root, trustroot=make_tree(base)
     (root/'tec-tac-release.json.sig').unlink()
-    expect_code(lambda: verify_release_tree(root=root,expected_component='framework',trust_root=trustroot,server_environment='development'),'tree_signature_material_incomplete')
+    expect_code(lambda: verify_release_tree(root=root,expected_component='framework',required_permissions=('framework.update',),trust_root=trustroot,server_environment='development'),'tree_signature_material_incomplete')
 
 with tempfile.TemporaryDirectory() as tmp:
     base=Path(tmp); root, trustroot=make_tree(base,status='revoked')
-    expect_code(lambda: verify_release_tree(root=root,expected_component='framework',trust_root=trustroot,server_environment='development'),'key_revoked')
+    expect_code(lambda: verify_release_tree(root=root,expected_component='framework',required_permissions=('framework.update',),trust_root=trustroot,server_environment='development'),'key_revoked')
 
 with tempfile.TemporaryDirectory() as tmp:
     base=Path(tmp); root, trustroot=make_tree(base)
     policy=json.loads((trustroot/'publisher-dev'/'publisher.json').read_text()); policy['keys'][0]['key_id']='other'; (trustroot/'publisher-dev'/'publisher.json').write_text(json.dumps(policy))
-    expect_code(lambda: verify_release_tree(root=root,expected_component='framework',trust_root=trustroot,server_environment='development'),'key_unknown')
+    expect_code(lambda: verify_release_tree(root=root,expected_component='framework',required_permissions=('framework.update',),trust_root=trustroot,server_environment='development'),'key_unknown')
 
 # Stable release cutoff: old unsigned allowed, new unsigned rejected; branches remain transitional.
 old=system_update._unsigned_release_trust(component='framework',version='1.15.36',source={'type':'release'})

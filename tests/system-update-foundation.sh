@@ -89,8 +89,9 @@ grep -q 'TEC_TAC_UI_SOURCE' "${ROOT}/scripts/system-update-helper.py" || fail "s
 grep -q 'runtime_root = Path' "${ROOT}/scripts/system-update-helper.py" || fail "runtime module inventory verification missing"
 echo "[TEST] PASS source/runtime update layout"
 
-# 1.13.2 source checkout integrity: online updates must land on exact commits,
-# offline packages must become auditable local commits, and rollback must restore HEAD.
+# Source checkout integrity: privileged execution uses only the root-verified
+# staged source bytes. Web-tier online/offline provenance is non-authoritative;
+# every update becomes an auditable local verified-package commit.
 python3 - "${ROOT}/scripts/system-update-helper.py" <<'PY_GIT_SOURCE'
 import importlib.util, json, subprocess, tempfile
 from pathlib import Path
@@ -112,12 +113,16 @@ with tempfile.TemporaryDirectory() as tmp:
     checkout=base/'checkout'; run('git','clone','-b','main',str(remote),str(checkout))
     old=out('git','rev-parse','HEAD',cwd=checkout)
 
-    # Create a second exact online commit in origin.
-    (seed/'VERSION').write_text('1.0.1\n'); (seed/'online.txt').write_text('exact commit\n'); run('git','add','-A',cwd=seed); run('git','commit','-m','two',cwd=seed); run('git','push',cwd=seed)
+    # Even when web metadata claims an online branch/commit, privileged
+    # deployment commits only the already root-verified staged bytes.
+    (seed/'VERSION').write_text('1.0.1\n'); (seed/'online.txt').write_text('remote-only\n'); run('git','add','-A',cwd=seed); run('git','commit','-m','two',cwd=seed); run('git','push',cwd=seed)
     online=out('git','rev-parse','HEAD',cwd=seed)
-    source=base/'online-source'; source.mkdir(); (source/'VERSION').write_text('1.0.1\n')
+    source=base/'online-source'; source.mkdir(); (source/'VERSION').write_text('1.0.1\n'); (source/'verified.txt').write_text('signed bytes\n')
     state=mod.apply_source_update(source,checkout,'framework',{'id':'12345678-x','version':'1.0.1','source':{'type':'branch','commit':online}})
-    assert out('git','rev-parse','HEAD',cwd=checkout)==online
+    branch=out('git','symbolic-ref','--short','HEAD',cwd=checkout)
+    assert branch.startswith('tec-tac/verified/framework-1.0.1-12345678'), branch
+    assert (checkout/'verified.txt').read_text()=='signed bytes\n'
+    assert not (checkout/'online.txt').exists()
     assert not out('git','status','--porcelain',cwd=checkout)
     mod.restore_git_source(checkout,state)
     assert out('git','rev-parse','HEAD',cwd=checkout)==old
@@ -148,7 +153,7 @@ with tempfile.TemporaryDirectory() as tmp:
     offline=base/'offline'; offline.mkdir(); (offline/'VERSION').write_text('1.0.2\n'); (offline/'install.sh').write_text('#!/bin/sh\n'); (offline/'framwork'/'tec_tac').mkdir(parents=True); (offline/'framwork'/'tec_tac'/'__init__.py').write_text(''); (offline/'offline.txt').write_text('package\n')
     state=mod.apply_source_update(offline,checkout,'framework',{'id':'abcdef12-0000','version':'1.0.2','source':{'type':'offline'}})
     branch=out('git','symbolic-ref','--short','HEAD',cwd=checkout)
-    assert branch.startswith('tec-tac/offline/framework-1.0.2-abcdef12'), branch
+    assert branch.startswith('tec-tac/verified/framework-1.0.2-abcdef12'), branch
     assert not out('git','status','--porcelain',cwd=checkout)
     assert (checkout/'offline.txt').read_text()=='package\n'
     mod.restore_git_source(checkout,state)
@@ -168,7 +173,7 @@ with tempfile.TemporaryDirectory() as tmp:
             import shutil; shutil.copy2(item,dest)
     state=mod.apply_source_update(identical,checkout,'framework',{'id':'feedbeef-0000','version':'1.0.0','source':{'type':'offline'}})
     branch=out('git','symbolic-ref','--short','HEAD',cwd=checkout)
-    assert branch.startswith('tec-tac/offline/framework-1.0.0-feedbeef'), branch
+    assert branch.startswith('tec-tac/verified/framework-1.0.0-feedbeef'), branch
     assert out('git','rev-parse','HEAD',cwd=checkout) != old
     assert not out('git','status','--porcelain',cwd=checkout)
     mod.restore_git_source(checkout,state)
@@ -179,8 +184,8 @@ PY_GIT_SOURCE
 
 grep -q 'verify_source_runtime_layout' "${ROOT}/scripts/system-update-helper.py" || fail "post-update source/runtime separation verification missing"
 grep -q 'source checkout is not clean' "${ROOT}/scripts/system-update-helper.py" || fail "dirty source preflight missing"
-grep -q 'tec-tac/offline/' "${ROOT}/scripts/system-update-helper.py" || fail "offline update Git branch missing"
-grep -q 'git.*fetch' "${ROOT}/scripts/system-update-helper.py" || fail "online exact-commit Git update missing"
+grep -q 'tec-tac/verified/' "${ROOT}/scripts/system-update-helper.py" || fail "verified source update Git branch missing"
+! grep -A60 'def apply_source_update' "${ROOT}/scripts/system-update-helper.py" | grep -q 'source_meta' || fail "web-tier source metadata still controls privileged deployment"
 echo "[TEST] PASS source checkout hardening"
 
 # 1.13.5 cross-lifecycle serialization: module mutations and system updates must
@@ -197,10 +202,10 @@ echo "[TEST] PASS shared lifecycle serialization"
 # 1.15.37 publisher-tool v0.2.0 signed source releases
 python3 "${ROOT}/tests/system-update-signed-tree.py"
 grep -q 'verify_release_tree' "${ROOT}/framwork/tec_tac/system_update.py" || fail "signed source-tree verifier not wired into System Updates"
-grep -q 'verify-staged-signature-tree' "${ROOT}/scripts/system-update-helper.py" || fail "worker staged tree re-verification missing"
-grep -q 'verify-execution-signature-tree' "${ROOT}/scripts/system-update-helper.py" || fail "worker checkout tree re-verification missing"
+grep -q 'root-verify-staged' "${ROOT}/scripts/system-update-helper.py" || fail "root worker staged tree verification missing"
+grep -q 'root-verify-execution' "${ROOT}/scripts/system-update-helper.py" || fail "root worker checkout tree verification missing"
 grep -q 'SIGNED_RELEASE_MIN_VERSION' "${ROOT}/framwork/tec_tac/system_update.py" || fail "Framework signed release cutoff missing"
-grep -q 'release_trust' "${ROOT}/framwork/tec_tac/system_update.py" || fail "signed release provenance not retained in jobs"
+! sed -n '/def queue_install/,/def public_job/p' "${ROOT}/framwork/tec_tac/system_update.py" | grep -A8 '_new_job({' | grep -q '"release_trust"' || fail "mutable release trust leaked into privileged job request"
 echo "[TEST] PASS signed source release integration"
 
 # Shared System Update / Module Management acceptance policy.

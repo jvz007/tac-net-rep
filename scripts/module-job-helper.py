@@ -24,6 +24,8 @@ RUNNING_ROOT = STATE_ROOT / "running"
 LOGS_ROOT = STATE_ROOT / "logs"
 CONFIG = Path(os.environ.get("TEC_TAC_CONFIG_FILE", "/opt/tec-tac/etc/tec-tac.conf"))
 LIFECYCLE_LOCK_PATH = Path("/var/lib/tec-tac/lifecycle.lock")
+PRIVILEGED_TRUST = Path("/usr/local/lib/tec-tac-security/privileged-trust.py")
+RUNNING_REQUEST_ROOT = RUNNING_ROOT / "requests"
 _LIFECYCLE_LOCK_HANDLE = None
 
 
@@ -117,49 +119,87 @@ def tactical_identity(config=None):
     return user.pw_uid, user.pw_gid
 
 
+def running_request_path(job_id):
+    if not JOB_RE.fullmatch(job_id):
+        raise SystemExit("invalid job id")
+    return RUNNING_REQUEST_ROOT / f"{job_id}.json"
+
+
+def load_running_request(job_id):
+    path = running_request_path(job_id)
+    if not path.is_file():
+        raise SystemExit("claimed module request not found")
+    job = json.loads(path.read_text(encoding="utf-8"))
+    if job.get("id") != job_id or job.get("action") not in {"install", "remove"}:
+        raise SystemExit("claimed module request is invalid")
+    return path, job
+
+
 def claim_job(job_id):
     path, job = load_job(job_id)
     if job.get("status") != "queued":
         raise SystemExit("job is not queued")
     uid, gid = tactical_identity()
     RUNNING_ROOT.mkdir(parents=True, exist_ok=True)
+    RUNNING_REQUEST_ROOT.mkdir(parents=True, exist_ok=True)
     LOGS_ROOT.mkdir(parents=True, exist_ok=True)
-    os.chown(RUNNING_ROOT, 0, gid)
-    os.chmod(RUNNING_ROOT, 0o2750)
-    os.chown(LOGS_ROOT, 0, gid)
-    os.chmod(LOGS_ROOT, 0o2750)
+    os.chown(RUNNING_ROOT, 0, gid); os.chmod(RUNNING_ROOT, 0o2750)
+    os.chown(RUNNING_REQUEST_ROOT, 0, 0); os.chmod(RUNNING_REQUEST_ROOT, 0o700)
+    os.chown(LOGS_ROOT, 0, gid); os.chmod(LOGS_ROOT, 0o2750)
 
+    immutable = {
+        "id": job_id,
+        "action": job["action"],
+        "plugin_id": str(job.get("plugin_id") or ""),
+        "replace": bool(job.get("replace", False)),
+    }
     if job["action"] == "install":
-        package_path = Path(str(job.get("package_path", ""))).resolve()
+        upload_id = str(job.get("upload_id") or "")
+        if not JOB_RE.fullmatch(upload_id):
+            raise SystemExit("invalid module upload id")
+        meta = STAGED_ROOT / f"{upload_id}.json"
+        if not meta.is_file():
+            raise SystemExit("staged module metadata missing")
+        stage_meta = json.loads(meta.read_text(encoding="utf-8"))
+        package_path = Path(str(stage_meta.get("package_path") or "")).resolve()
         try:
             package_path.relative_to(STAGED_ROOT.resolve())
         except ValueError:
             raise SystemExit("invalid staged package path")
         if not package_path.is_file():
             raise SystemExit("staged package missing")
-        target = RUNNING_ROOT / f"{job_id}{''.join(package_path.suffixes)}"
-        os.replace(package_path, target)
-        os.chown(target, 0, gid)
-        os.chmod(target, 0o640)
-        meta = STAGED_ROOT / f"{job.get('upload_id')}.json"
-        if meta.is_file():
+        run_dir = RUNNING_ROOT / job_id
+        run_dir.mkdir(parents=True, exist_ok=False)
+        os.chown(run_dir, 0, 0); os.chmod(run_dir, 0o700)
+        package_target = run_dir / ("package" + ("".join(package_path.suffixes) or ".zip"))
+        os.replace(package_path, package_target)
+        os.chown(package_target, 0, 0); os.chmod(package_target, 0o600)
+        immutable["upload_id"] = upload_id
+        immutable["package_path"] = str(package_target)
+        for source_key, target_key in (("signature_path", "signature_path"), ("release_metadata_path", "release_metadata_path")):
+            raw = stage_meta.get(source_key)
+            if not raw:
+                continue
+            source = Path(str(raw)).resolve()
             try:
-                stage_meta = json.loads(meta.read_text(encoding="utf-8"))
-                for key in ("signature_path", "release_metadata_path"):
-                    if stage_meta.get(key):
-                        Path(str(stage_meta[key])).unlink(missing_ok=True)
-            except Exception:
-                pass
-            meta.unlink()
-        job["package_path"] = str(target)
+                source.relative_to(STAGED_ROOT.resolve())
+            except ValueError:
+                raise SystemExit(f"invalid staged {source_key}")
+            if not source.is_file():
+                raise SystemExit(f"staged {source_key} missing")
+            target = run_dir / source.name
+            os.replace(source, target)
+            os.chown(target, 0, 0); os.chmod(target, 0o600)
+            immutable[target_key] = str(target)
+        meta.unlink(missing_ok=True)
 
-    job["status"] = "dispatched"
-    job["stage"] = "dispatched"
+    req_path = running_request_path(job_id)
+    atomic_json(req_path, immutable)
+    os.chown(req_path, 0, 0); os.chmod(req_path, 0o600)
+    job["status"] = "dispatched"; job["stage"] = "dispatched"
     atomic_json(path, job)
-    os.chown(path, 0, gid)
-    os.chmod(path, 0o640)
-    return path, job
-
+    os.chown(path, 0, gid); os.chmod(path, 0o640)
+    return path, immutable
 
 def dispatch(job_id):
     claim_job(job_id)
@@ -173,35 +213,41 @@ def dispatch(job_id):
     )
 
 
-def _sha256_file(path):
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
-def _verify_job_package_hash(job):
+def _privileged_verify_package(config, job):
     if job.get("action") != "install":
-        return
-    expected = str(job.get("package_sha256") or "").strip().lower()
-    if not expected:
-        raise RuntimeError("install job is missing package_sha256")
-    package = Path(str(job.get("package_path") or ""))
-    if not package.is_file():
-        raise RuntimeError("staged package is missing")
-    actual = _sha256_file(package)
-    if actual != expected:
-        raise RuntimeError("staged package SHA-256 changed after trust verification")
-
+        return None
+    if not PRIVILEGED_TRUST.is_file():
+        raise RuntimeError(f"privileged trust verifier is missing: {PRIVILEGED_TRUST}")
+    info = PRIVILEGED_TRUST.stat()
+    if info.st_uid != 0 or info.st_mode & 0o022:
+        raise RuntimeError("privileged trust verifier is not root-owned or is writable")
+    command = [sys.executable, str(PRIVILEGED_TRUST), "verify-package", str(job["package_path"])]
+    if job.get("signature_path"):
+        command += ["--signature", str(job["signature_path"])]
+    if job.get("release_metadata_path"):
+        command += ["--metadata", str(job["release_metadata_path"])]
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or "root module trust verification failed").strip())
+    try:
+        trust = json.loads(result.stdout.strip())
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("root module trust verifier returned invalid output") from exc
+    if not isinstance(trust, dict):
+        raise RuntimeError("root module trust verifier returned invalid data")
+    return trust
 
 def run_job(job_id):
-    path, job = load_job(job_id)
-    if job.get("status") not in {"dispatched", "running"}:
+    path, status = load_job(job_id)
+    if status.get("status") not in {"dispatched", "running"}:
         raise SystemExit("job was not dispatched")
+    _, immutable = load_running_request(job_id)
+    job = {**immutable, "status": status.get("status"), "stage": status.get("stage"), "created_at": status.get("created_at")}
     acquire_lifecycle_lock()
-    _verify_job_package_hash(job)
     config = load_config()
+    root_trust = _privileged_verify_package(config, job)
+    if root_trust is not None:
+        job["publisher_trust"] = root_trust
     repo_root = Path(config.get("REPO_ROOT", "/opt/tec-tac")).resolve()
     ui_sync = Path(config.get("UI_SYNC_SCRIPT", "/opt/tec-tac-src/ui/scripts/sync-modules.sh"))
     ui_root = config.get("UI_ROOT", "/var/lib/tec-tac/ui/tec-tac")
@@ -302,6 +348,13 @@ def run_job(job_id):
             job["error"] = f"Lifecycle command exited with status {rc}. See log tail."
             job["error_type"] = "LifecycleCommandError"
     atomic_json(path, job)
+    try:
+        running_request_path(job_id).unlink(missing_ok=True)
+        run_dir = RUNNING_ROOT / job_id
+        if run_dir.is_dir():
+            shutil.rmtree(run_dir)
+    except OSError:
+        pass
 
 
 def mark_failed(job_id, error):

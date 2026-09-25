@@ -21,8 +21,8 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.exceptions import InvalidSignature
 
-TRUST_ROOT = Path(os.environ.get("TEC_TAC_TRUSTED_PUBLISHERS_ROOT", "/etc/tec-tac/trusted-publishers"))
-CONFIG_FILE = Path(os.environ.get("TEC_TAC_CONFIG_FILE", "/opt/tec-tac/etc/tec-tac.conf"))
+TRUST_ROOT = Path("/etc/tec-tac/trusted-publishers")
+CONFIG_FILE = Path("/opt/tec-tac/etc/tec-tac.conf")
 SUPPORTED_SCHEMA = 1
 SUPPORTED_ALGORITHM = "Ed25519"
 TREE_SCHEMA = 2
@@ -42,9 +42,8 @@ class PublisherTrustError(RuntimeError):
 
 
 def _server_environment() -> str:
-    explicit = str(os.environ.get("TEC_TAC_ENVIRONMENT", "")).strip().lower()
-    if explicit:
-        return explicit
+    # Trust environment is resolved only from the root-owned Tec-Tac config.
+    # Process environment variables are deliberately ignored at this boundary.
     if CONFIG_FILE.is_file():
         try:
             for line in CONFIG_FILE.read_text(encoding="utf-8").splitlines():

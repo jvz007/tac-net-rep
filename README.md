@@ -502,7 +502,7 @@ POST   /api/tfd/modules/<extension-id>/remove/
 GET    /api/tfd/modules/jobs/<job-id>/
 ```
 
-Catalog reads require an authenticated Tactical session. Installation, replacement, staging cleanup, removal, and job inspection require effective module-management access, mapped to Tactical `can_do_server_maint` (or effective superuser).
+Catalog reads require an authenticated Tactical session. Installation, replacement, staging cleanup, removal, repository/hotfix management and privileged lifecycle job inspection require the Tec-Tac `core.privileged_operations` permission (or effective superuser). This permission is not granted merely because a Tactical role has `can_do_server_maint`.
 
 The Tactical web process never runs the root lifecycle scripts directly. `install.sh` installs a root-owned helper at `/usr/local/sbin/tec-tac-module-job` plus a narrowly scoped sudoers rule that allows the Tactical service user to dispatch only opaque UUID jobs. The helper claims the staged package before execution, checks that lifecycle scripts are root-owned and not group/world writable, then runs the existing package installer/remover outside the Tactical web process. Extension install/remove now refreshes Django with a graceful uWSGI `SIGHUP` reload instead of restarting the `rmm` systemd service, so lifecycle jobs are not killed by their own deployment step.
 
@@ -564,7 +564,7 @@ Tec-Tac 1.2.4 removes full Tactical service restarts from extension install/remo
 
 Tec-Tac 1.3.0 can update both the framework and standalone UI through the web interface. The updater supports latest tagged GitHub releases, explicitly selected branches/custom builds, and offline `.zip`, `.tar.gz`, or `.tgz` repository archives. All sources converge into the same inspection, version comparison, backup, install, verification and rollback lifecycle.
 
-The privileged updater is installed outside `/opt/tec-tac` at `/usr/local/lib/tec-tac-updater/system-update-helper.py` with `/usr/local/sbin/tec-tac-system-update` as its command entrypoint. Jobs run in independent transient systemd units so replacing/restarting Tec-Tac cannot terminate its own update worker.
+The privileged updater is installed outside `/opt/tec-tac` at `/usr/local/lib/tec-tac-updater/system-update-helper.py` with `/usr/local/sbin/tec-tac-system-update` as its command entrypoint. Jobs run in independent transient systemd units so replacing/restarting Tec-Tac cannot terminate its own update worker. The root worker treats the web job as a request only and independently verifies signed source bytes against root-owned publisher trust and policy before any installer is executed.
 
 State is stored below `/var/lib/tec-tac/system-updates/` (`staged`, `jobs`, `running`, `logs`, `backups`, and `history`). Only one system update can run at a time.
 

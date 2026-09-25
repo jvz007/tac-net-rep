@@ -27,6 +27,7 @@ TREE_MANIFEST = "tec-tac-release.json"
 TREE_SIGNATURE = "tec-tac-release.json.sig"
 MAX_TREE_FILES = 20000
 DEFAULT_SIGNED_RELEASE_MIN_VERSION = {"framework": "1.15.37", "ui": None}
+TRUST_LEVEL_RANK = {"unsigned": 0, "signed_development": 1, "signed_production": 2, "secure_signed": 3}
 
 JOB_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 STATE_ROOT = Path("/var/lib/tec-tac/system-updates")
@@ -41,6 +42,8 @@ LIFECYCLE_LOCK_PATH = Path("/var/lib/tec-tac/lifecycle.lock")
 _LIFECYCLE_LOCK_HANDLE = None
 CONFIG = Path(os.environ.get("TEC_TAC_CONFIG_FILE", "/opt/tec-tac/etc/tec-tac.conf"))
 SELF = Path("/usr/local/sbin/tec-tac-system-update")
+PRIVILEGED_TRUST = Path("/usr/local/lib/tec-tac-security/privileged-trust.py")
+RUNNING_REQUEST_ROOT = RUNNING_ROOT / "requests"
 
 
 def now():
@@ -106,17 +109,43 @@ def acquire_lifecycle_lock():
     _LIFECYCLE_LOCK_HANDLE = handle
 
 
+def running_request_path(job_id):
+    if not JOB_RE.fullmatch(job_id):
+        raise SystemExit("invalid job id")
+    return RUNNING_REQUEST_ROOT / f"{job_id}.json"
+
+
+def load_running_request(job_id):
+    path = running_request_path(job_id)
+    if not path.is_file():
+        raise SystemExit("claimed update request not found")
+    request = json.loads(path.read_text(encoding="utf-8"))
+    if request.get("id") != job_id or request.get("action") != "install":
+        raise SystemExit("claimed update request is invalid")
+    if request.get("component") not in {"framework", "ui"}:
+        raise SystemExit("claimed update component is invalid")
+    return path, request
+
+
 def claim_job(job_id):
-    path, job = load_job(job_id)
-    if job.get("status") != "queued":
+    status_path, request = load_job(job_id)
+    if request.get("status") != "queued":
         raise SystemExit("job is not queued")
     cfg = load_config()
     gid = tactical_gid(cfg)
-    for root, mode in ((RUNNING_ROOT, 0o2750), (LOGS_ROOT, 0o2750), (BACKUPS_ROOT, 0o2750), (HISTORY_ROOT, 0o2750)):
+    for root, mode in ((RUNNING_ROOT, 0o2750), (RUNNING_REQUEST_ROOT, 0o2750), (LOGS_ROOT, 0o2750), (BACKUPS_ROOT, 0o2750), (HISTORY_ROOT, 0o2750)):
         root.mkdir(parents=True, exist_ok=True)
-        os.chown(root, 0, gid)
-        os.chmod(root, mode)
-    package = Path(str(job.get("package_path", ""))).resolve()
+        os.chown(root, 0, gid if root != RUNNING_REQUEST_ROOT else 0)
+        os.chmod(root, mode if root != RUNNING_REQUEST_ROOT else 0o700)
+
+    upload_id = str(request.get("upload_id") or "")
+    if not JOB_RE.fullmatch(upload_id):
+        raise SystemExit("invalid staged upload id")
+    meta_path = STAGED_ROOT / f"{upload_id}.json"
+    if not meta_path.is_file():
+        raise SystemExit("staged update metadata missing")
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    package = Path(str(meta.get("package_path") or "")).resolve()
     try:
         package.relative_to(STAGED_ROOT.resolve())
     except ValueError:
@@ -125,17 +154,33 @@ def claim_job(job_id):
         raise SystemExit("staged package missing")
     target = RUNNING_ROOT / f"{job_id}{''.join(package.suffixes)}"
     os.replace(package, target)
-    os.chown(target, 0, gid)
-    os.chmod(target, 0o640)
-    meta = STAGED_ROOT / f"{job.get('upload_id')}.json"
-    meta.unlink(missing_ok=True)
-    job["package_path"] = str(target)
-    job["status"] = "dispatched"
-    job["stage"] = "dispatched"
-    atomic_json(path, job)
-    os.chown(path, 0, gid)
-    return path, job
+    os.chown(target, 0, 0)
+    os.chmod(target, 0o600)
 
+    preview = meta.get("preview") if isinstance(meta.get("preview"), dict) else {}
+    if str(preview.get("component") or request.get("component")) != str(request.get("component")):
+        raise SystemExit("staged component does not match request")
+    immutable = {
+        "id": job_id,
+        "action": "install",
+        "component": str(request.get("component")),
+        "upload_id": upload_id,
+        "allow_downgrade": bool(request.get("allow_downgrade", False)),
+        "package_path": str(target),
+        "package_filename": str(meta.get("filename") or target.name),
+    }
+    req_path = running_request_path(job_id)
+    atomic_json(req_path, immutable)
+    os.chown(req_path, 0, 0)
+    os.chmod(req_path, 0o600)
+    meta_path.unlink(missing_ok=True)
+
+    request["status"] = "dispatched"
+    request["stage"] = "dispatched"
+    atomic_json(status_path, request)
+    os.chown(status_path, 0, gid)
+    os.chmod(status_path, 0o640)
+    return status_path, immutable
 
 def dispatch(job_id):
     claim_job(job_id)
@@ -360,17 +405,48 @@ def verify_signed_tree_snapshot(root, component, expected_version, trust):
     return len(actual)
 
 
-def _enforce_release_signature_cutoff(job):
-    source = job.get("source") if isinstance(job.get("source"), dict) else {}
-    if str(source.get("type") or "") != "release":
-        return
-    component = str(job.get("component") or "")
-    minimum = _signed_release_min_version(component)
-    if not minimum or _version_key(job.get("version")) < _version_key(minimum):
-        return
-    trust = job.get("release_trust") if isinstance(job.get("release_trust"), dict) else {}
-    if not trust.get("verified") or not trust.get("signed"):
-        raise RuntimeError(f"signed {component} release required from version {minimum}")
+def _privileged_trust_command(config, *args):
+    if not PRIVILEGED_TRUST.is_file():
+        raise RuntimeError(f"privileged trust verifier is missing: {PRIVILEGED_TRUST}")
+    info = PRIVILEGED_TRUST.stat()
+    if info.st_uid != 0 or info.st_mode & 0o022:
+        raise RuntimeError("privileged trust verifier is not root-owned or is writable")
+    result = subprocess.run([sys.executable, str(PRIVILEGED_TRUST), *map(str, args)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or "root trust verification failed").strip())
+    try:
+        payload = json.loads(result.stdout.strip())
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("root trust verifier returned invalid output") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("root trust verifier returned invalid data")
+    return payload
+
+
+def _root_verify_tree(config, root, component):
+    return _privileged_trust_command(config, "verify-tree", str(root), str(component))
+
+
+def set_root_trust_policy(level, actor=""):
+    cfg = load_config()
+    current = _privileged_trust_command(cfg, "get-policy")
+    requested = str(level or "").strip().lower()
+    if requested not in TRUST_LEVEL_RANK:
+        raise RuntimeError("invalid trust policy level")
+    existing = str(current.get("minimum_level") or "")
+    if existing not in TRUST_LEVEL_RANK:
+        raise RuntimeError("current root trust policy is invalid")
+    # The Tactical service account is allowed to strengthen policy through this
+    # sudo verb, but never weaken it. Lowering requires direct root execution of
+    # privileged-trust.py so compromise of `tactical` cannot disable signing.
+    if TRUST_LEVEL_RANK[requested] < TRUST_LEVEL_RANK[existing]:
+        raise RuntimeError("lowering the root trust policy requires direct root console access")
+    args = ["set-policy", requested]
+    if actor:
+        args += ["--updated-by", str(actor)]
+    args += ["--updated-at", now()]
+    return _privileged_trust_command(cfg, *args)
+
 
 
 def prepare_source_checkout(target, component):
@@ -411,51 +487,34 @@ def _replace_checkout_contents(source, target):
 
 
 def apply_source_update(source, target, component, job):
-    """Move the source checkout to the staged update and return rollback metadata."""
+    """Commit the root-verified source bytes into the local source checkout.
+
+    Online/offline provenance supplied by the web tier is deliberately not an
+    execution authority. The root worker has already verified ``source`` and
+    always deploys those exact bytes into a local update branch.
+    """
     previous = prepare_source_checkout(target, component)
-    source_meta = job.get("source") if isinstance(job.get("source"), dict) else {}
-    source_type = str(source_meta.get("type") or "offline")
-    commit = str(source_meta.get("commit") or "").strip()
-
-    if source_type in {"release", "branch"}:
-        if not re.fullmatch(r"[0-9a-fA-F]{40}", commit):
-            raise RuntimeError("online update is missing its resolved Git commit SHA")
-        _git(["fetch", "--quiet", "origin", commit], target)
-        _git(["cat-file", "-e", f"{commit}^{{commit}}"], target)
-        _git(["reset", "--hard", commit], target)
-        # UI installs intentionally generate ignored build/dependency trees
-        # (node_modules, dist, .vite, .env). They are not release content and
-        # must not survive into the execution checkout that is re-verified
-        # against the signed source manifest. Framework source may contain
-        # operator-managed ignored paths, so keep its historical -fd behavior.
-        clean_args = ["clean", "-fdx"] if component == "ui" else ["clean", "-fd"]
-        _git(clean_args, target)
-        mode = "online"
-        update_branch = None
-    else:
-        safe_version = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(job.get("version") or "unknown"))
-        update_branch = f"tec-tac/offline/{component}-{safe_version}-{str(job.get('id') or '')[:8]}"
-        if _git(["show-ref", "--verify", "--quiet", f"refs/heads/{update_branch}"], target, check=False).returncode == 0:
-            raise RuntimeError(f"offline update branch already exists: {update_branch}")
-        _git(["checkout", "-b", update_branch], target)
-        _replace_checkout_contents(source, target)
-        _git(["add", "-A"], target)
-        commit_result = _git(
-            ["-c", "user.name=Tec-Tac System Update", "-c", "user.email=tec-tac@localhost",
-             "commit", "--allow-empty", "--quiet", "-m",
-             f"Tec-Tac offline {component} update {job.get('version')}"],
-            target, check=False,
-        )
-        if commit_result.returncode != 0:
-            detail = (commit_result.stderr or commit_result.stdout or "unable to create offline update commit").strip()
-            raise RuntimeError(detail)
-        commit = _git(["rev-parse", "HEAD"], target).stdout.strip()
-        mode = "offline"
-
+    safe_version = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(job.get("version") or "unknown"))
+    update_branch = f"tec-tac/verified/{component}-{safe_version}-{str(job.get('id') or '')[:8]}"
+    if _git(["show-ref", "--verify", "--quiet", f"refs/heads/{update_branch}"], target, check=False).returncode == 0:
+        raise RuntimeError(f"verified update branch already exists: {update_branch}")
+    _git(["checkout", "-b", update_branch], target)
+    _replace_checkout_contents(source, target)
+    _git(["add", "-A"], target)
+    commit_result = _git(
+        ["-c", "user.name=Tec-Tac System Update", "-c", "user.email=tec-tac@localhost",
+         "commit", "--allow-empty", "--quiet", "-m",
+         f"Tec-Tac verified {component} update {job.get('version')}"],
+        target, check=False,
+    )
+    if commit_result.returncode != 0:
+        detail = (commit_result.stderr or commit_result.stdout or "unable to create verified update commit").strip()
+        raise RuntimeError(detail)
+    commit = _git(["rev-parse", "HEAD"], target).stdout.strip()
     status = _git(["status", "--porcelain", "--untracked-files=all"], target).stdout.strip()
     if status:
         raise RuntimeError(f"{component} source checkout is dirty immediately after update: {status.splitlines()[0]}")
-    return {**previous, "mode": mode, "update_branch": update_branch, "update_head": commit}
+    return {**previous, "mode": "verified-package", "update_branch": update_branch, "update_head": commit}
 
 
 def restore_git_source(target, git_state):
@@ -738,9 +797,11 @@ def verify(component, target, expected, log):
 
 
 def run_job(job_id):
-    path, job = load_job(job_id)
-    if job.get("status") not in {"dispatched", "running"}:
+    path, status = load_job(job_id)
+    if status.get("status") not in {"dispatched", "running"}:
         raise SystemExit("job was not dispatched")
+    _, immutable = load_running_request(job_id)
+    job = {**immutable, "status": status.get("status"), "stage": status.get("stage"), "created_at": status.get("created_at")}
     cfg = load_config()
     component = job["component"]
     target = Path(cfg.get("TEC_TAC_FRAMEWORK_SOURCE", "/opt/tec-tac-src/framework") if component == "framework" else cfg.get("TEC_TAC_UI_SOURCE", "/opt/tec-tac-src/ui")).resolve()
@@ -765,23 +826,9 @@ def run_job(job_id):
         if not target.is_dir():
             raise RuntimeError(f"installed component root is missing: {target}")
         old_version = (target / "VERSION").read_text(encoding="utf-8").strip() if (target / "VERSION").is_file() else "unknown"
-        expected_package_sha = str(job.get("package_sha256") or "").strip().lower()
-        if not re.fullmatch(r"[0-9a-f]{64}", expected_package_sha):
-            raise RuntimeError("staged package SHA-256 is missing from job metadata")
-        if _digest_file(package)[1] != expected_package_sha:
-            raise RuntimeError("staged package bytes changed after inspection")
-        _enforce_release_signature_cutoff(job)
-
-        job["stage"] = "backup"
-        atomic_json(path, job)
-        backup = backup_root(target, component, old_version, job_id)
-        job["backup_path"] = str(backup)
-        atomic_json(path, job)
-        log.write(f"[TEC-TAC-UPDATE] backup={backup}\n")
-        log.flush()
-
         dynamic_inventory = {}
         git_state = None
+        backup = None
         try:
             job["stage"] = "extract"
             atomic_json(path, job)
@@ -791,15 +838,32 @@ def run_job(job_id):
             extract_archive(package, work)
             source = detect_root(work, component)
             package_version = (source / "VERSION").read_text(encoding="utf-8").strip()
-            if package_version != job.get("version"):
-                raise RuntimeError("package VERSION changed after inspection")
-            trust = job.get("release_trust") if isinstance(job.get("release_trust"), dict) else {}
-            if trust.get("signed") or trust.get("verified"):
-                job["stage"] = "verify-staged-signature-tree"
-                atomic_json(path, job)
-                file_count = verify_signed_tree_snapshot(source, component, package_version, trust)
-                log.write(f"[TEC-TAC-UPDATE] verified staged signed tree files={file_count} publisher={trust.get('publisher_id')} key={trust.get('key_id')}\n")
-                log.flush()
+            job["version"] = package_version
+            job["stage"] = "root-verify-staged"
+            atomic_json(path, job)
+            trust = _root_verify_tree(cfg, source, component)
+            job["release_trust"] = trust
+            log.write(f"[TEC-TAC-UPDATE] root verified staged tree publisher={trust.get('publisher_id','')} key={trust.get('key_id','')} level={trust.get('root_policy',{}).get('actual_level')}\n")
+            if trust.get("root_policy", {}).get("development_unsigned_override"):
+                log.write("[TEC-TAC-SECURITY] WARNING: unsigned system update accepted by root-owned DEVELOPMENT override.\n")
+            log.flush()
+
+            installed_key = _version_key(old_version)
+            requested_key = _version_key(package_version)
+            if requested_key < installed_key:
+                if not bool(job.get("allow_downgrade")):
+                    raise RuntimeError("downgrade requires explicit allow_downgrade request")
+                root_allow = str(cfg.get("TEC_TAC_ALLOW_SYSTEM_DOWNGRADES") or "").strip().lower() in {"1", "true", "yes", "on"}
+                if not root_allow:
+                    raise RuntimeError("system downgrade is blocked by root-owned policy; set TEC_TAC_ALLOW_SYSTEM_DOWNGRADES=true in the root-owned Tec-Tac config for a controlled downgrade")
+
+            job["stage"] = "backup"
+            atomic_json(path, job)
+            backup = backup_root(target, component, old_version, job_id)
+            job["backup_path"] = str(backup)
+            atomic_json(path, job)
+            log.write(f"[TEC-TAC-UPDATE] backup={backup}\n")
+            log.flush()
 
             job["stage"] = "deploy"
             atomic_json(path, job)
@@ -808,12 +872,14 @@ def run_job(job_id):
             git_state = apply_source_update(source, target, component, job)
             job["source_git"] = {k: v for k, v in git_state.items() if v is not None}
             atomic_json(path, job)
-            if trust.get("signed") or trust.get("verified"):
-                job["stage"] = "verify-execution-signature-tree"
-                atomic_json(path, job)
-                file_count = verify_signed_tree_snapshot(target, component, package_version, trust)
-                log.write(f"[TEC-TAC-UPDATE] verified execution checkout signed tree files={file_count} commit={job.get('source_git', {}).get('update_head')}\n")
-                log.flush()
+            job["stage"] = "root-verify-execution"
+            atomic_json(path, job)
+            execution_trust = _root_verify_tree(cfg, target, component)
+            if execution_trust.get("manifest_sha256") != trust.get("manifest_sha256"):
+                raise RuntimeError("execution checkout signed manifest differs from staged verified manifest")
+            job["release_trust"] = execution_trust
+            log.write(f"[TEC-TAC-UPDATE] root verified execution tree files={execution_trust.get('file_count',0)} commit={job.get('source_git', {}).get('update_head')}\n")
+            log.flush()
             if component == "framework":
                 verify_dynamic_plugins(runtime_root, dynamic_inventory)
 
@@ -840,31 +906,40 @@ def run_job(job_id):
             log.write(f"[TEC-TAC-UPDATE] completed {now()}\n")
         except Exception as exc:
             log.write(f"[TEC-TAC-UPDATE] update failed: {exc}\n")
-            log.write("[TEC-TAC-UPDATE] restoring previous component backup\n")
             log.flush()
-            job["stage"] = "rollback"
             job["error"] = str(exc)
             job["error_type"] = exc.__class__.__name__
-            atomic_json(path, job)
             rollback_error = None
-            try:
-                if git_state:
-                    restore_git_source(target, git_state)
-                else:
-                    restore_backup(backup, target)
-                rollback_rc = run_install(component, target, log)
-                if rollback_rc != 0:
-                    raise RuntimeError(f"rollback installer exited with status {rollback_rc}")
-                if component == "framework":
-                    verify_dynamic_plugins(Path(cfg.get("TEC_TAC_ROOT", "/opt/tec-tac")).resolve(), dynamic_inventory)
-                verify_source_runtime_layout(component, target)
-                job["rollback"] = {"performed": True, "status": "succeeded", "version": old_version}
-            except Exception as rb_exc:
-                rollback_error = str(rb_exc)
-                job["rollback"] = {"performed": True, "status": "failed", "version": old_version, "error": rollback_error}
-                log.write(f"[TEC-TAC-UPDATE] ROLLBACK FAILED: {rollback_error}\n")
+            if backup is None and not git_state:
+                # Root verification/downgrade policy failed before the installed
+                # source was mutated. Nothing needs rolling back.
+                job["rollback"] = {"performed": False, "status": "not-required"}
+                job["stage"] = "failed-pre-mutation"
+            else:
+                log.write("[TEC-TAC-UPDATE] restoring previous component backup\n")
+                log.flush()
+                job["stage"] = "rollback"
+                atomic_json(path, job)
+                try:
+                    if git_state:
+                        restore_git_source(target, git_state)
+                    elif backup is not None:
+                        restore_backup(backup, target)
+                    else:
+                        raise RuntimeError("rollback source is unavailable")
+                    rollback_rc = run_install(component, target, log)
+                    if rollback_rc != 0:
+                        raise RuntimeError(f"rollback installer exited with status {rollback_rc}")
+                    if component == "framework":
+                        verify_dynamic_plugins(Path(cfg.get("TEC_TAC_ROOT", "/opt/tec-tac")).resolve(), dynamic_inventory)
+                    verify_source_runtime_layout(component, target)
+                    job["rollback"] = {"performed": True, "status": "succeeded", "version": old_version}
+                except Exception as rb_exc:
+                    rollback_error = str(rb_exc)
+                    job["rollback"] = {"performed": True, "status": "failed", "version": old_version, "error": rollback_error}
+                    log.write(f"[TEC-TAC-UPDATE] ROLLBACK FAILED: {rollback_error}\n")
+                job["stage"] = "rolled-back" if rollback_error is None else "rollback-failed"
             job["status"] = "failed"
-            job["stage"] = "rolled-back" if rollback_error is None else "rollback-failed"
             job["finished_at"] = now()
         finally:
             atomic_json(path, job)
@@ -872,6 +947,10 @@ def run_job(job_id):
             shutil.copy2(path, HISTORY_ROOT / path.name)
             try:
                 package.unlink(missing_ok=True)
+            except OSError:
+                pass
+            try:
+                running_request_path(job_id).unlink(missing_ok=True)
             except OSError:
                 pass
             try:
@@ -897,13 +976,18 @@ def mark_failed(job_id, error):
 if __name__ == "__main__":
     if os.geteuid() != 0:
         raise SystemExit("must run as root")
-    if len(sys.argv) != 3 or sys.argv[1] not in {"--dispatch", "--run"}:
-        raise SystemExit("usage: tec-tac-system-update --dispatch|--run <job-id>")
-    if sys.argv[1] == "--dispatch":
-        dispatch(sys.argv[2])
+    if len(sys.argv) >= 3 and sys.argv[1] == "--set-trust-policy":
+        level = sys.argv[2]
+        actor = sys.argv[3] if len(sys.argv) >= 4 else ""
+        print(json.dumps(set_root_trust_policy(level, actor), sort_keys=True))
+    elif len(sys.argv) == 3 and sys.argv[1] in {"--dispatch", "--run"}:
+        if sys.argv[1] == "--dispatch":
+            dispatch(sys.argv[2])
+        else:
+            try:
+                run_job(sys.argv[2])
+            except BaseException as exc:
+                mark_failed(sys.argv[2], exc)
+                raise
     else:
-        try:
-            run_job(sys.argv[2])
-        except BaseException as exc:
-            mark_failed(sys.argv[2], exc)
-            raise
+        raise SystemExit("usage: tec-tac-system-update --dispatch|--run <job-id> | --set-trust-policy <level> [actor]")

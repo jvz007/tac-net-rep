@@ -71,6 +71,27 @@ def _read_config() -> dict[str, str]:
     return values
 
 
+def _development_unsigned_update_allowed() -> bool:
+    cfg = _read_config()
+    environment = str(cfg.get("TEC_TAC_ENVIRONMENT") or "production").strip().lower()
+    flag = str(cfg.get("TEC_TAC_ALLOW_UNSIGNED_DEVELOPMENT_UPDATES") or "").strip().lower()
+    return environment == "development" and flag in {"1", "true", "yes", "on"}
+
+
+def _accept_update_trust(trust: dict, *, subject: str) -> dict:
+    try:
+        return require_trust_accepted(trust, subject=subject)
+    except TrustPolicyError:
+        if not bool((trust or {}).get("signed")) and _development_unsigned_update_allowed():
+            return {
+                "minimum_level": get_trust_policy()["minimum_level"],
+                "actual_level": "unsigned",
+                "accepted": True,
+                "development_unsigned_override": True,
+            }
+        raise
+
+
 def _component_root(component: str) -> Path:
     cfg = _read_config()
     if component == "framework":
@@ -208,6 +229,7 @@ def _release_signature_preview(component: str, repo: str, commit: str) -> dict:
             manifest_bytes=manifest,
             signature_bytes=signature,
             expected_component=component,
+            required_permissions=(f"{component}.update",),
         )
     except PublisherTrustError as exc:
         return {
@@ -408,7 +430,7 @@ def inspect_archive(archive: Path, *, source: dict | None = None) -> dict:
         signed_signature = root / "tec-tac-release.json.sig"
         if signed_manifest.exists() or signed_signature.exists():
             try:
-                release_trust = verify_release_tree(root=root, expected_component=component)
+                release_trust = verify_release_tree(root=root, expected_component=component, required_permissions=(f"{component}.update",))
             except PublisherTrustError as exc:
                 raise SystemUpdateError(f"Signed release verification failed [{exc.code}]: {exc}") from exc
             release_trust["label"] = "Verified"
@@ -418,7 +440,7 @@ def inspect_archive(archive: Path, *, source: dict | None = None) -> dict:
         else:
             release_trust = _unsigned_release_trust(component=component, version=version, source=source)
         try:
-            release_trust["acceptance_policy"] = require_trust_accepted(release_trust, subject=f"{component.title()} update")
+            release_trust["acceptance_policy"] = _accept_update_trust(release_trust, subject=f"{component.title()} update")
         except TrustPolicyError as exc:
             raise SystemUpdateError(f"Update trust policy rejected {component} package: {exc}") from exc
 
@@ -804,7 +826,7 @@ def queue_install(upload_id: str, *, allow_downgrade: bool = False, requested_by
     preview = meta.get("preview") or {}
     operation = preview.get("operation")
     try:
-        current_acceptance = require_trust_accepted(preview.get("release_trust"), subject="System update")
+        current_acceptance = _accept_update_trust(preview.get("release_trust"), subject="System update")
         if isinstance(preview.get("release_trust"), dict):
             preview["release_trust"]["acceptance_policy"] = current_acceptance
     except TrustPolicyError as exc:
@@ -813,19 +835,13 @@ def queue_install(upload_id: str, *, allow_downgrade: bool = False, requested_by
         raise SystemUpdateError(preview.get("install_block_reason") or "System update package is not compatible with this installation.")
     if operation == "downgrade" and not allow_downgrade:
         raise SystemUpdateError("Downgrade requires explicit allow_downgrade=true confirmation.")
+    # The privileged helper treats this file as a request only. It resolves the
+    # staged package from upload_id and independently re-verifies trust as root.
     job = _new_job({
         "action": "install",
         "component": preview.get("component"),
-        "version": preview.get("version"),
-        "installed_version": preview.get("installed_version"),
-        "operation": operation,
         "upload_id": upload_id,
-        "package_path": meta["package_path"],
-        "package_filename": meta.get("filename"),
-        "package_sha256": meta.get("sha256"),
-        "source": preview.get("source") or {"type": "offline"},
-        "release_trust": preview.get("release_trust") or {"state": "unsigned", "signed": False, "verified": False},
-        "requested_by": requested_by or None,
+        "allow_downgrade": bool(allow_downgrade),
     })
     try:
         _dispatch(job["id"])

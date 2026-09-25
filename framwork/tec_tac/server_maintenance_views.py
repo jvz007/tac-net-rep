@@ -8,24 +8,12 @@ from rest_framework.views import APIView
 from .capabilities import build_operation_context
 from .server_maintenance import ServerMaintenanceError, get_server_maintenance_provider
 from .session_security import SessionAuthenticated
-
-
-def _role_for_user(user):
-    try:
-        return user.get_and_set_role_cache()
-    except Exception:
-        return getattr(user, "role", None)
+from .rbac import can_manage_privileged_operations
 
 
 def _require_server_maintenance(user):
-    role = _role_for_user(user)
-    allowed = (
-        bool(getattr(user, "is_superuser", False))
-        or bool(getattr(role, "is_superuser", False) if role else False)
-        or bool(getattr(role, "can_do_server_maint", False) if role else False)
-    )
-    if not allowed:
-        raise PermissionDenied("Tactical can_do_server_maint is required for Core server maintenance.")
+    if not can_manage_privileged_operations(user):
+        raise PermissionDenied("Tec-Tac core.privileged_operations permission is required for Core server maintenance.")
 
 
 def _context(request, source_action: str) -> dict:

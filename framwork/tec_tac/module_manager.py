@@ -36,6 +36,24 @@ PROTECTED_PLUGIN_IDS = frozenset({"example", "legacy-reporting-poc"})
 logger = logging.getLogger(__name__)
 
 
+def _development_unsigned_package_allowed() -> bool:
+    config = Path("/opt/tec-tac/etc/tec-tac.conf")
+    values = {}
+    if config.is_file():
+        try:
+            for raw in config.read_text(encoding="utf-8").splitlines():
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                values[key.strip()] = value.strip()
+        except OSError:
+            return False
+    env = str(values.get("TEC_TAC_ENVIRONMENT") or "production").strip().lower()
+    flag = str(values.get("TEC_TAC_ALLOW_UNSIGNED_DEVELOPMENT_PACKAGES") or "").strip().lower()
+    return env == "development" and flag in {"1", "true", "yes", "on"}
+
+
 class ModuleManagerError(RuntimeError):
     pass
 
@@ -359,7 +377,16 @@ def _verify_stage_trust(meta: dict, *, require_signed: bool = False, required_pe
             required_permissions=required_permissions,
             require_signed=require_signed,
         )
-        trust["acceptance_policy"] = require_trust_accepted(trust, subject="Module package")
+        try:
+            trust["acceptance_policy"] = require_trust_accepted(trust, subject="Module package")
+        except TrustPolicyError:
+            if not trust.get("signed") and _development_unsigned_package_allowed():
+                trust["acceptance_policy"] = {
+                    "actual_level": "unsigned", "accepted": True,
+                    "development_unsigned_override": True,
+                }
+            else:
+                raise
         return trust
     except TrustPolicyError as exc:
         logger.warning(

@@ -91,15 +91,16 @@ Before module installation Core:
 7. checks server, publisher, and release environment consistency;
 8. enforces required publisher permissions;
 9. verifies the detached signature against the exact archive bytes;
-10. re-runs trust verification immediately before install dispatch;
-11. records package SHA-256 and the trust result in the durable lifecycle job;
-12. has the root-owned lifecycle worker re-hash staged bytes before executing the installer.
+10. re-runs web-tier trust verification immediately before install dispatch as defence in depth;
+11. sends only an opaque staged upload id and requested operation into the privileged boundary;
+12. the root-owned worker claims the package and signing sidecars into a root-only running area; and
+13. the root-owned worker independently verifies the actual package bytes, active key, publisher environment, publisher permissions, and root-owned acceptance policy before executing lifecycle code.
 
-A changed package therefore fails even if the staging metadata itself is modified after initial inspection.
+A forged `publisher_trust`/`release_trust` claim in a Tactical-writable job file is not an execution authority. Changed, unsigned, or untrusted bytes fail in the root worker even if Django previously accepted them.
 
-## Transitional unsigned policy
+## Unsigned development override
 
-Unsigned normal modules remain temporarily installable and are returned with:
+Fresh installs are signed-by-default. Production defaults to `signed_production`; development defaults to `signed_development`. An unsigned module is executable only when the server is in development mode **and** the root-owned Tec-Tac configuration explicitly enables `TEC_TAC_ALLOW_UNSIGNED_DEVELOPMENT_PACKAGES=true`. Unsigned production installs are rejected. An unsigned package is represented as:
 
 ```json
 {
@@ -137,11 +138,7 @@ This is intentionally a narrow signing/trust contract. Broader module capability
 
 ## Server environment
 
-Core reads the environment from:
-
-1. `TEC_TAC_ENVIRONMENT` process environment;
-2. `TEC_TAC_ENVIRONMENT` in `/opt/tec-tac/etc/tec-tac.conf`;
-3. default `production`.
+Core reads the security environment from the root-owned `/opt/tec-tac/etc/tec-tac.conf`, defaulting to `production`. Privileged trust verification deliberately ignores process-environment overrides for the environment and trust-store path.
 
 The installer writes the selected value into the managed Tec-Tac configuration. Development servers should explicitly set:
 
@@ -206,11 +203,11 @@ Troubleshooting & Diagnostics exposes `core.security.publisher-trust`, including
 
 ## Signed Framework source trees (publisher tool v0.2.0)
 
-System Updates also understands the publisher tool's schema-2 source-tree format. A signed repository root contains `tec-tac-release.json` and `tec-tac-release.json.sig`. Core verifies the exact manifest bytes with the locally trusted active Ed25519 key, then requires the manifest to match the complete source tree by canonical relative path, byte size, and SHA-256. The execution worker pins the verified manifest/signature hashes into the update job and re-checks both the extracted staged tree and the Git checkout that will execute the installer. See `docs/system-update-signed-releases.md`.
+System Updates also understands the publisher tool's schema-2 source-tree format. A signed repository root contains `tec-tac-release.json` and `tec-tac-release.json.sig`. The web tier verifies it for inspection, but the root worker does not trust that result: it independently verifies the extracted staged tree against `/etc/tec-tac/trusted-publishers`, applies the root-owned trust floor, deploys only those verified bytes into the local source checkout, and verifies that execution checkout again before `install.sh`. Framework releases require publisher permission `framework.update`; UI releases require `ui.update`. See `docs/system-update-signed-releases.md`.
 
 ## Global acceptance policy
 
-Tec-Tac also maintains one global minimum acceptance level for both System Updates and Module Management. The policy is stored under the configured `TEC_TAC_POLICY_ROOT` (default `/var/lib/tec-tac/policy`) and is managed through Core rather than by individual modules.
+Tec-Tac maintains one global minimum acceptance level for System Updates and Module Management. The authoritative policy is `/etc/tec-tac/policy/update-trust-policy.json`, owned by `root:root` and not writable by the Tactical service account. Production defaults to `signed_production`; development defaults to `signed_development`. The web tier may request a stronger policy through the narrow root helper. Lowering the root trust floor requires direct root-console administration so compromise of the `tactical` account cannot disable signing.
 
 Ordered levels:
 
@@ -242,6 +239,6 @@ Example key record:
   "algorithm": "Ed25519",
   "public_key": "public.key",
   "assurance": "secure",
-  "permissions": ["module.install", "system.update"]
+  "permissions": ["module.install", "framework.update", "ui.update"]
 }
 ```

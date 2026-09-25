@@ -172,27 +172,60 @@ def update_global_policy(policy: dict, *, requested_by: str = "") -> dict[str, A
     return _policy_dict(config)
 
 
-def _extract_raw_token(request) -> str:
-    header = str(request.META.get("HTTP_AUTHORIZATION") or "").strip()
-    if header:
-        parts = header.split(None, 1)
-        if len(parts) == 2 and parts[1].strip():
-            return parts[1].strip()
-        return header
+def _credential_identity(request) -> str:
+    """Bind Tec-Tac session trust to the authenticator DRF actually accepted."""
+    authenticator = getattr(request, "successful_authenticator", None)
     auth = getattr(request, "auth", None)
-    if isinstance(auth, str) and auth.strip():
-        return auth.strip()
+    auth_name = authenticator.__class__.__name__ if authenticator is not None else ""
+    auth_module = authenticator.__class__.__module__ if authenticator is not None else ""
+    authorization = str(request.META.get("HTTP_AUTHORIZATION") or "").strip()
+    api_header = str(request.META.get("HTTP_X_API_KEY") or "").strip()
+
+    # Tactical APIAuthentication returns the raw API key as request.auth. Resolve
+    # it to the database key id so a credential fingerprint never depends on a
+    # caller-supplied unrelated Authorization header.
+    if auth_name == "APIAuthentication" or auth_module.endswith("tacticalrmm.auth"):
+        if authorization:
+            raise SessionSecurityDenied("session_invalid_state", "Conflicting authentication headers were supplied.")
+        if not isinstance(auth, str) or not auth or not api_header or not hmac.compare_digest(auth, api_header):
+            raise SessionSecurityDenied("session_invalid_state", "Authenticated API key state does not match the request credential.")
+        try:
+            from accounts.models import APIKey
+            row = APIKey.objects.only("id", "key", "user_id").get(key=auth, user_id=getattr(request.user, "pk", None))
+        except Exception as exc:
+            raise SessionSecurityDenied("session_invalid_state", "Authenticated API key could not be resolved.") from exc
+        return f"api-key:{row.pk}"
+
+    digest = str(getattr(auth, "digest", "") or "")
+    if digest:
+        if api_header:
+            raise SessionSecurityDenied("session_invalid_state", "Conflicting authentication headers were supplied.")
+        parts = authorization.split(None, 1)
+        if len(parts) != 2 or not parts[1].strip():
+            raise SessionSecurityDenied("session_invalid_state", "Authenticated Knox token header is missing.")
+        try:
+            from knox.crypto import hash_token
+            header_digest = str(hash_token(parts[1].strip()))
+        except Exception as exc:
+            raise SessionSecurityDenied("session_invalid_state", "Authenticated Knox token header is invalid.") from exc
+        if not hmac.compare_digest(header_digest, digest):
+            raise SessionSecurityDenied("session_invalid_state", "Authenticated Knox token does not match the request credential.")
+        return f"knox:{digest}"
+
+    # A Django session may be used by bounded authentication/setup flows. Bind to
+    # the authenticated session key only when no token/API-key authenticator won.
     session = getattr(request, "session", None)
     session_key = getattr(session, "session_key", None) if session is not None else None
-    if session_key:
+    if authenticator is None and session_key and not authorization and not api_header:
         return f"django-session:{session_key}"
-    raise SessionSecurityDenied("session_invalid_state", "Authenticated session state is invalid. Cannot identify the credential.")
+
+    raise SessionSecurityDenied("session_invalid_state", "Authenticated session state is invalid. Cannot identify the credential used by authentication.")
 
 
 def token_fingerprint(request) -> str:
-    raw = _extract_raw_token(request).encode("utf-8")
+    identity = _credential_identity(request).encode("utf-8")
     secret = str(settings.SECRET_KEY).encode("utf-8")
-    return hmac.new(secret, TOKEN_NAMESPACE + raw, hashlib.sha256).hexdigest()
+    return hmac.new(secret, TOKEN_NAMESPACE + identity, hashlib.sha256).hexdigest()
 
 
 def request_knox_digest(request) -> str:

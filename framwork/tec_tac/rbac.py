@@ -9,6 +9,9 @@ from __future__ import annotations
 from accounts.models import Role
 from tec_tac.registry import get_plugins
 
+CORE_PRIVILEGED_PERMISSION = "core.privileged_operations"
+CORE_PERMISSION_GROUPS = {"Privileged operations": (CORE_PRIVILEGED_PERMISSION,)}
+
 
 def _extension_plugins(plugins=None):
     source = get_plugins() if plugins is None else plugins
@@ -16,7 +19,7 @@ def _extension_plugins(plugins=None):
 
 
 def registered_permissions(plugins=None) -> frozenset[str]:
-    values = set()
+    values = {CORE_PRIVILEGED_PERMISSION}
     for plugin in _extension_plugins(plugins):
         for _, permissions in plugin.permission_groups:
             values.update(permissions)
@@ -24,7 +27,12 @@ def registered_permissions(plugins=None) -> frozenset[str]:
 
 
 def permission_catalog(plugins=None) -> list[dict]:
-    catalog = []
+    catalog = [{
+        "id": "core",
+        "version": "1",
+        "groups": [{"name": name, "permissions": list(permissions)} for name, permissions in CORE_PERMISSION_GROUPS.items()],
+        "permissions": [CORE_PRIVILEGED_PERMISSION],
+    }]
     for plugin in _extension_plugins(plugins):
         groups = [
             {"name": name, "permissions": list(permissions)}
@@ -42,6 +50,8 @@ def permission_catalog(plugins=None) -> list[dict]:
 
 
 def permission_groups(plugin_id: str) -> dict[str, tuple[str, ...]]:
+    if plugin_id == "core":
+        return dict(CORE_PERMISSION_GROUPS)
     for plugin in _extension_plugins():
         if plugin.plugin_id == plugin_id:
             return plugin.permission_group_map()
@@ -97,6 +107,27 @@ def effective_permissions(user, *, plugins=None, role=None) -> frozenset[str]:
     ).values_list("codename", flat=True)
     return frozenset(granted)
 
+
+
+def is_effective_superuser(user) -> bool:
+    if not getattr(user, "is_authenticated", False):
+        return False
+    if bool(getattr(user, "is_superuser", False)):
+        return True
+    try:
+        role = user.get_and_set_role_cache()
+    except Exception:
+        role = getattr(user, "role", None)
+    return bool(getattr(role, "is_superuser", False)) if role else False
+
+
+def can_manage_privileged_operations(user) -> bool:
+    if is_effective_superuser(user):
+        return True
+    try:
+        return has_extension_permission(user, CORE_PRIVILEGED_PERMISSION)
+    except Exception:
+        return False
 
 def set_extension_permission(role, codename: str, granted: bool):
     _validate_codename(codename)

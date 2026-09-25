@@ -35,6 +35,8 @@ BACKUP_ROOT = STATE_ROOT / "bundle-backups"
 MODULE_STATE = STATE_ROOT / "module-state.json"
 CONFIG = Path(os.environ.get("TEC_TAC_CONFIG_FILE", "/opt/tec-tac/etc/tec-tac.conf"))
 LIFECYCLE_LOCK_PATH = Path("/var/lib/tec-tac/lifecycle.lock")
+PRIVILEGED_TRUST = Path("/usr/local/lib/tec-tac-security/privileged-trust.py")
+RUNNING_REQUEST_ROOT = RUNNING_ROOT / "requests"
 _LIFECYCLE_LOCK_HANDLE = None
 
 
@@ -194,6 +196,38 @@ def tactical_gid(config=None):
     return pwd.getpwnam(config.get("TACTICAL_USER", "tactical")).pw_gid
 
 
+def running_request_path(job_id):
+    if not JOB_RE.fullmatch(job_id):
+        raise SystemExit("invalid job id")
+    return RUNNING_REQUEST_ROOT / f"{job_id}.json"
+
+
+def load_running_request(job_id):
+    path = running_request_path(job_id)
+    if not path.is_file():
+        raise SystemExit("claimed v2 request not found")
+    job = json.loads(path.read_text(encoding="utf-8"))
+    if job.get("id") != job_id or job.get("action") not in ALLOWED_ACTIONS:
+        raise SystemExit("claimed v2 request is invalid")
+    return path, job
+
+
+def _claim_artifact(source_value, claim_dir, label):
+    source = Path(str(source_value or "")).resolve()
+    try:
+        source.relative_to(STAGED_ROOT.resolve())
+    except ValueError as exc:
+        raise SystemExit(f"invalid staged {label} path") from exc
+    if not source.is_file():
+        raise SystemExit(f"staged {label} missing")
+    target = claim_dir / source.name
+    if target.exists():
+        target = claim_dir / f"{label}-{source.name}"
+    os.replace(source, target)
+    os.chown(target, 0, 0); os.chmod(target, 0o600)
+    return str(target)
+
+
 def claim_job(job_id):
     path, job = load_job(job_id)
     if job.get("status") != "queued":
@@ -201,20 +235,42 @@ def claim_job(job_id):
     gid = tactical_gid()
     for directory in (RUNNING_ROOT, LOGS_ROOT, BACKUP_ROOT):
         directory.mkdir(parents=True, exist_ok=True)
-        try:
-            os.chown(directory, 0, gid)
-            os.chmod(directory, 0o2750)
-        except OSError:
-            pass
-    job["status"] = "dispatched"
-    job["stage"] = "dispatched"
-    atomic_json(path, job)
-    try:
-        os.chown(path, 0, gid)
-    except OSError:
-        pass
-    return path, job
+        os.chown(directory, 0, gid); os.chmod(directory, 0o2750)
+    RUNNING_REQUEST_ROOT.mkdir(parents=True, exist_ok=True)
+    os.chown(RUNNING_REQUEST_ROOT, 0, 0); os.chmod(RUNNING_REQUEST_ROOT, 0o700)
+    claim_dir = RUNNING_ROOT / f"{job_id}.claimed"
+    claim_dir.mkdir(parents=True, exist_ok=False)
+    os.chown(claim_dir, 0, 0); os.chmod(claim_dir, 0o700)
 
+    immutable = {key: value for key, value in job.items() if key not in {"status", "stage", "created_at", "started_at", "finished_at", "error", "error_type", "publisher_trust"}}
+    immutable["id"] = job_id
+    if job.get("action") == "bundle_install":
+        immutable["bundle_path"] = _claim_artifact(job.get("bundle_path"), claim_dir, "bundle")
+        for key in ("signature_path", "release_metadata_path"):
+            if job.get(key):
+                immutable[key] = _claim_artifact(job.get(key), claim_dir, key)
+    elif job.get("action") == "batch_install":
+        artifacts = []
+        source_artifacts = job.get("artifacts") if isinstance(job.get("artifacts"), list) else [{**item, "kind": "package"} for item in (job.get("packages") or [])]
+        for index, item in enumerate(source_artifacts):
+            row = {k: v for k, v in item.items() if k not in {"publisher_trust", "package_sha256"}}
+            kind = str(row.get("kind") or "package")
+            path_key = "bundle_path" if kind == "bundle" else "path"
+            row[path_key] = _claim_artifact(item.get(path_key), claim_dir, f"artifact-{index}")
+            for key in ("signature_path", "release_metadata_path"):
+                if item.get(key):
+                    row[key] = _claim_artifact(item.get(key), claim_dir, f"{key}-{index}")
+            artifacts.append(row)
+        immutable["artifacts"] = artifacts
+        immutable.pop("packages", None)
+
+    req_path = running_request_path(job_id)
+    atomic_json(req_path, immutable, 0o600)
+    os.chown(req_path, 0, 0); os.chmod(req_path, 0o600)
+    job["status"] = "dispatched"; job["stage"] = "dispatched"
+    atomic_json(path, job)
+    os.chown(path, 0, gid); os.chmod(path, 0o640)
+    return path, immutable
 
 def dispatch(job_id):
     claim_job(job_id)
@@ -368,15 +424,101 @@ def _require_expected_hash(path, expected, label):
         raise RuntimeError(f"{label} SHA-256 changed after trust verification")
 
 
+def _privileged_verify_artifact(config, path, signature=None, metadata=None):
+    if not PRIVILEGED_TRUST.is_file():
+        raise RuntimeError(f"privileged trust verifier is missing: {PRIVILEGED_TRUST}")
+    st = PRIVILEGED_TRUST.stat()
+    if st.st_uid != 0 or st.st_mode & 0o022:
+        raise RuntimeError("privileged trust verifier is not root-owned or is writable")
+    command = [sys.executable, str(PRIVILEGED_TRUST), "verify-package", str(path)]
+    if signature: command += ["--signature", str(signature)]
+    if metadata: command += ["--metadata", str(metadata)]
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or "root v2 trust verification failed").strip())
+    try:
+        payload = json.loads(result.stdout.strip())
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("root v2 trust verifier returned invalid output") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("root v2 trust verifier returned invalid data")
+    return payload
+
+
+def _verify_v2_job_trust(config, job):
+    if job.get("action") == "bundle_install":
+        return [_privileged_verify_artifact(config, job["bundle_path"], job.get("signature_path"), job.get("release_metadata_path"))]
+    if job.get("action") == "batch_install":
+        rows = []
+        for item in job.get("artifacts") or []:
+            kind = str(item.get("kind") or "package")
+            path = item.get("bundle_path") if kind == "bundle" else item.get("path")
+            rows.append(_privileged_verify_artifact(config, path, item.get("signature_path"), item.get("release_metadata_path")))
+        return rows
+    return []
+
+
+
+def _authenticated_module_facts(root_trust):
+    facts = {}
+    for trust in root_trust or []:
+        for row in trust.get("artifact_modules") or []:
+            module_id = str(row.get("id") or "")
+            if not PLUGIN_RE.fullmatch(module_id):
+                raise RuntimeError("root verifier returned invalid module identity")
+            if module_id in facts:
+                raise RuntimeError(f"duplicate authenticated module id: {module_id}")
+            facts[module_id] = {
+                "version": str(row.get("version") or ""),
+                "previous_module_ids": set(str(v) for v in (row.get("previous_module_ids") or [])),
+            }
+    return facts
+
+
+def _validate_install_plan_against_signed_artifacts(job, packages, root_trust):
+    """Bind mutable orchestration fields to facts extracted from signed bytes."""
+    facts = _authenticated_module_facts(root_trust)
+    package_ids = {str(item.get("id") or "") for item in packages}
+    if not package_ids or package_ids != set(facts):
+        raise RuntimeError("install plan package identities do not match root-verified signed artifacts")
+    for item in packages:
+        module_id = str(item.get("id") or "")
+        supplied_version = str(item.get("version") or "").strip()
+        signed_version = facts[module_id]["version"]
+        if supplied_version and supplied_version != signed_version:
+            raise RuntimeError(f"install plan version mismatch for {module_id}")
+        item["version"] = signed_version
+
+    plan = job.get("plan") if isinstance(job.get("plan"), dict) else {}
+    order = [str(value) for value in (plan.get("order") or [])]
+    if len(order) != len(set(order)) or set(order) != package_ids:
+        raise RuntimeError("install order does not exactly match root-verified signed artifacts")
+    actions = plan.get("actions") or []
+    if not isinstance(actions, list):
+        raise RuntimeError("install actions are invalid")
+    action_ids = []
+    for action in actions:
+        if not isinstance(action, dict):
+            raise RuntimeError("install action is invalid")
+        module_id = str(action.get("id") or "")
+        if module_id not in facts:
+            raise RuntimeError("install action targets an unauthenticated module")
+        action_ids.append(module_id)
+        supplied_version = str(action.get("version") or "").strip()
+        if supplied_version and supplied_version != facts[module_id]["version"]:
+            raise RuntimeError(f"install action version mismatch for {module_id}")
+        action["version"] = facts[module_id]["version"]
+        previous = str(action.get("previous_module_id") or "").strip()
+        if previous and previous not in facts[module_id]["previous_module_ids"]:
+            raise RuntimeError(f"rename source for {module_id} is not authorized by the signed module manifest")
+    if set(action_ids) != package_ids or len(action_ids) != len(package_ids):
+        raise RuntimeError("install actions do not exactly match root-verified signed artifacts")
+    return order, actions
+
 def bundle_packages(job, running_root):
     source = Path(str(job.get("bundle_path", ""))).resolve()
     if not source.is_file():
         raise RuntimeError("staged bundle is missing")
-    _require_expected_hash(source, job.get("package_sha256"), "staged bundle")
-    try:
-        source.relative_to(STAGED_ROOT.resolve())
-    except ValueError as exc:
-        raise RuntimeError("invalid staged bundle path") from exc
     copied = running_root / "bundle.zip"
     shutil.copy2(source, copied)
     extract = running_root / "bundle"
@@ -409,13 +551,8 @@ def batch_packages(job, running_root):
     for index, item in enumerate(artifacts):
         kind = str(item.get("kind") or "package")
         source = Path(str(item.get("bundle_path") if kind == "bundle" else item.get("path", ""))).resolve()
-        try:
-            source.relative_to(STAGED_ROOT.resolve())
-        except ValueError as exc:
-            raise RuntimeError("invalid staged batch artifact path") from exc
         if not source.is_file():
             raise RuntimeError(f"staged batch artifact missing: {item.get('id') or item.get('bundle_id') or index}")
-        _require_expected_hash(source, item.get("package_sha256"), f"staged batch artifact {item.get('id') or item.get('bundle_id') or index}")
 
         if kind == "bundle":
             copied = running_root / f"bundle-{index}.zip"
@@ -494,11 +631,16 @@ def cleanup_successful_stage(job, log):
     log.write("[TEC-TAC-MODULE-V2] cleaned successful staged artifacts\n")
 
 def run_job(job_id):
-    path, job = load_job(job_id)
-    if job.get("status") not in {"dispatched", "running"}:
+    path, status = load_job(job_id)
+    if status.get("status") not in {"dispatched", "running"}:
         raise SystemExit("job was not dispatched")
+    _, immutable = load_running_request(job_id)
+    job = {**immutable, "status": status.get("status"), "stage": status.get("stage"), "created_at": status.get("created_at")}
     acquire_lifecycle_lock()
     config = load_config()
+    root_trust = _verify_v2_job_trust(config, job)
+    if root_trust:
+        job["root_publisher_trust"] = root_trust
     repo_root = Path(config.get("REPO_ROOT", "/opt/tec-tac")).resolve()
     log_path = LOGS_ROOT / f"{job_id}.log"
     running = RUNNING_ROOT / job_id
@@ -540,12 +682,11 @@ def run_job(job_id):
                 atomic_json(path, job)
                 sync_and_reload(config, log)
             else:
-                order = list((job.get("plan") or {}).get("order") or [])
-                if not order or any(not PLUGIN_RE.fullmatch(value) for value in order):
-                    raise RuntimeError("invalid install order")
                 packages = bundle_packages(job, running) if job["action"] == "bundle_install" else batch_packages(job, running)
+                order, actions = _validate_install_plan_against_signed_artifacts(job, packages, root_trust)
+                if any(not PLUGIN_RE.fullmatch(value) for value in order):
+                    raise RuntimeError("invalid install order")
                 touched = order
-                actions = list((job.get("plan") or {}).get("actions") or [])
                 applied_renames = []
                 backup_ids = list(order)
                 try:
@@ -596,6 +737,13 @@ def run_job(job_id):
         if not job.get("stage"):
             job["stage"] = "failed"
     atomic_json(path, job)
+    try:
+        running_request_path(job_id).unlink(missing_ok=True)
+        claim_dir = RUNNING_ROOT / f"{job_id}.claimed"
+        if claim_dir.is_dir():
+            shutil.rmtree(claim_dir)
+    except OSError:
+        pass
 
 
 def mark_failed(job_id, error):

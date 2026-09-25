@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import io
+import json
 import os
 import tempfile
 import zipfile
@@ -21,12 +21,29 @@ def write_framework_zip(path: Path, version: str = "1.15.36") -> None:
         zf.writestr(f"{root}/tec_tac_package.json", '{"type":"tec-tac-framework","version":"%s"}' % version)
 
 
+def write_policy(root: Path, level: str) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / trust_policy.POLICY_FILENAME).write_text(json.dumps({
+        "schema": 1,
+        "minimum_level": level,
+        "updated_at": None,
+        "updated_by": "test-root",
+    }), encoding="utf-8")
+
+
 with tempfile.TemporaryDirectory() as td:
     root = Path(td)
-    os.environ["TEC_TAC_POLICY_ROOT"] = str(root / "policy")
+    policy_root = root / "policy"
+    config = root / "tec-tac.conf"
+    config.write_text("TEC_TAC_ENVIRONMENT=production\n", encoding="utf-8")
+    trust_policy.DEFAULT_POLICY_ROOT = policy_root
+    trust_policy.CONFIG_FILE = config
 
+    # Fresh production installs are signed-by-default and the policy is read
+    # from the root-owned policy location (the test substitutes a temp root).
     policy = trust_policy.get_policy()
-    assert policy["minimum_level"] == "unsigned"
+    assert policy["minimum_level"] == "signed_production"
+    assert policy["root_owned"] is True
     assert policy["applies_to"] == ["system_updates", "modules"]
 
     unsigned = {"signed": False, "trusted": False, "state": "unsigned"}
@@ -39,35 +56,32 @@ with tempfile.TemporaryDirectory() as td:
     assert trust_policy.classify_trust(prod) == "signed_production"
     assert trust_policy.classify_trust(secure) == "secure_signed"
 
-    trust_policy.set_policy("signed_development", updated_by="test")
+    write_policy(policy_root, "signed_development")
     assert trust_policy.acceptance(unsigned)["accepted"] is False
     assert trust_policy.acceptance(dev)["accepted"] is True
     assert trust_policy.acceptance(prod)["accepted"] is True
-    assert trust_policy.acceptance(secure)["accepted"] is True
 
-    trust_policy.set_policy("signed_production", updated_by="test")
+    write_policy(policy_root, "signed_production")
     assert trust_policy.acceptance(dev)["accepted"] is False
     assert trust_policy.acceptance(prod)["accepted"] is True
     assert trust_policy.acceptance(secure)["accepted"] is True
 
-    trust_policy.set_policy("secure_signed", updated_by="test")
+    write_policy(policy_root, "secure_signed")
     assert trust_policy.acceptance(prod)["accepted"] is False
     assert trust_policy.acceptance(secure)["accepted"] is True
 
-    # Module Manager v1/v2 share _verify_stage_trust. Prove the global floor
-    # blocks a normal unsigned module even when no privileged permission itself
-    # requires a signature.
+    # The shared web-tier floor blocks unsigned content before root dispatch as
+    # defence in depth. Root helpers independently repeat signature/policy checks.
     module_zip = Path(__file__).resolve().parents[1] / "docs/tutorial-packages/packagetest/packagetest-0.1.0.zip"
     meta = {"package_path": str(module_zip), "filename": module_zip.name}
-    trust_policy.set_policy("signed_development", updated_by="test")
+    write_policy(policy_root, "signed_development")
     try:
         _verify_stage_trust(meta, require_signed=False, required_permissions=("module.install",))
     except ModuleManagerError as exc:
         assert "Update trust policy rejected module package" in str(exc), exc
     else:
-        raise AssertionError("unsigned module was not blocked by signed_development policy")
+        raise AssertionError("unsigned module was not blocked by signed policy")
 
-    # System Updates enforce the same floor during archive inspection.
     system_zip = root / "framework-1.15.36.zip"
     write_framework_zip(system_zip)
     try:
@@ -75,11 +89,11 @@ with tempfile.TemporaryDirectory() as td:
     except SystemUpdateError as exc:
         assert "Update trust policy rejected framework package" in str(exc), exc
     else:
-        raise AssertionError("unsigned framework update was not blocked by signed_development policy")
+        raise AssertionError("unsigned framework update was not blocked by signed policy")
 
-    trust_policy.set_policy("unsigned", updated_by="test")
-    preview = inspect_archive(system_zip, source={"type": "offline"})
-    assert preview["release_trust"]["acceptance_policy"]["accepted"] is True
-    assert preview["release_trust"]["acceptance_policy"]["actual_level"] == "unsigned"
+    # Development defaults to Signed Development, not Unsigned.
+    config.write_text("TEC_TAC_ENVIRONMENT=development\n", encoding="utf-8")
+    (policy_root / trust_policy.POLICY_FILENAME).unlink(missing_ok=True)
+    assert trust_policy.get_policy()["minimum_level"] == "signed_development"
 
-print("[TEST] PASS shared update/module trust policy")
+print("[TEST] PASS root-owned shared update/module trust policy")
