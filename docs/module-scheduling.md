@@ -489,3 +489,10 @@ Module-owned schedules are read-only through the generic Scheduler management AP
 
 List APIs accept `?owner_type=user` or `?owner_type=module` for clean separation without creating a second scheduler runtime.
 
+
+
+## Scheduler durability and recovery
+
+Core 1.15.48 adds durable run snapshots and stale-run recovery. Each registered action may declare `timeout_seconds` (default 3600). Queued runs that remain undispatched past the configured queue-stale window and running jobs beyond the action timeout plus recovery grace are failed with `error_type=Stale`, allowing later occurrences to proceed. Missed occurrences are written to history as `SKIPPED`, including `MissedSkip`, `MissedExpired`, or `MissedRecoveryWindowExpired`. A three-minute scheduler lateness tolerance prevents short timer/broker delays from being classified as missed.
+
+User schedules can only be changed/run/deleted by their creator or a scheduler manager. A force delete explicitly fails active runs as `ForceDeleted` before removing the definition; historical runs retain their snapshot fields after the schedule is gone. Terminal run history is retained according to Core scheduler configuration instead of growing without bound.

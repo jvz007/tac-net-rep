@@ -101,6 +101,8 @@ class TecTacSchedule(models.Model):
 class TecTacSchedulerConfig(models.Model):
     singleton = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
     once_retention_hours = models.PositiveIntegerField(default=48)
+    run_retention_days = models.PositiveIntegerField(default=90)
+    queued_stale_minutes = models.PositiveIntegerField(default=10)
     updated_at = models.DateTimeField(auto_now=True)
     updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="tec_tac_scheduler_config_updates")
 
@@ -156,6 +158,10 @@ class TecTacScheduleRun(models.Model):
     scheduled_for = models.DateTimeField()
     manual = models.BooleanField(default=False)
     targets_snapshot = models.JSONField(default=dict, blank=True)
+    target_mode_snapshot = models.CharField(max_length=16, choices=TecTacSchedule.TargetMode.choices, default=TecTacSchedule.TargetMode.SNAPSHOT)
+    parameters_snapshot = models.JSONField(default=dict, blank=True)
+    retry_count_snapshot = models.PositiveSmallIntegerField(default=0)
+    retry_delay_seconds_snapshot = models.PositiveIntegerField(default=60)
     result = models.JSONField(default=dict, blank=True)
     error = models.TextField(blank=True, default="")
     error_type = models.CharField(max_length=120, blank=True, default="")

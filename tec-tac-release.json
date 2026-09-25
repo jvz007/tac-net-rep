@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.47",
+  "version": "1.15.48",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -27,19 +27,19 @@
       "sha256": "7acd5f22138138348d5123fc22c210724ca10ce86f05da7b77c68fc89952319a"
     },
     {
-      "path": "RELEASE_NOTES_1.15.46.md",
-      "size": 4070,
-      "sha256": "43de5d3b6a692f3f32e86a71441cf28ba885eb7beb9353ea261e71269a7699c2"
-    },
-    {
       "path": "RELEASE_NOTES_1.15.47.md",
       "size": 1377,
       "sha256": "f620ce19d049da77e603ccfad0330714888798be2c4fc67bb9f861025c08e152"
     },
     {
+      "path": "RELEASE_NOTES_1.15.48.md",
+      "size": 1582,
+      "sha256": "776d14b755bc31404f2bcaa8b56e578f9df6df0eaf4722ae08d4c6259b2384a7"
+    },
+    {
       "path": "VERSION",
       "size": 8,
-      "sha256": "e59fbb83d9404a71522e6f78ec5a20d2efa90957b03f1429952c7366b8a3c072"
+      "sha256": "05871c3c29d8edc69af96051d2aa114e7723253b23d3c189a94dd01deb34791b"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -118,8 +118,8 @@
     },
     {
       "path": "docs/module-scheduling.md",
-      "size": 18759,
-      "sha256": "55cf8ea1b0841bc9dc9b8e9828b29e58f0d507aa09bbb024f0d1af60898ecfe6"
+      "size": 19754,
+      "sha256": "9c1421fdd7ccbb627b61279cd0feea06d58c1509d10815413a2e8b88cb7f2b15"
     },
     {
       "path": "docs/module-visibility.md",
@@ -867,14 +867,19 @@
       "sha256": "7a3ac636723d2562f1336df387bbde0a55513a05a48d0ab57c60934f96576e0f"
     },
     {
+      "path": "framwork/tec_tac/migrations/0013_scheduler_durability.py",
+      "size": 2055,
+      "sha256": "5b4c5bd6adc8fdb4738de1e4542cef0b27051246e139fefcb3a25c864b8a16dd"
+    },
+    {
       "path": "framwork/tec_tac/migrations/__init__.py",
       "size": 0,
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "path": "framwork/tec_tac/models.py",
-      "size": 16868,
-      "sha256": "0633620957e2ab9361656286de2b2d6676a5100d04c482c9c822d58a94c2ea60"
+      "size": 17361,
+      "sha256": "79afcef4c89b6708f2b96ecd8dc60f58908417d77f8dcfd71eab4a9586c9277a"
     },
     {
       "path": "framwork/tec_tac/module_hotfix.py",
@@ -963,13 +968,13 @@
     },
     {
       "path": "framwork/tec_tac/scheduler.py",
-      "size": 35078,
-      "sha256": "3484624de5c1be855636dbed0ec403079cdd8888564f6fbb9c82a5b869b5c0ca"
+      "size": 40563,
+      "sha256": "34ea451a60ea5f166378c581ff1e17a15afec26e1fdaa190c5225b0eb6c60318"
     },
     {
       "path": "framwork/tec_tac/scheduler_views.py",
-      "size": 16084,
-      "sha256": "77e74f0c918656168c98570cad945507812f43a1881a65c5a3ad0851aad8bf74"
+      "size": 18480,
+      "sha256": "a863a2efadf2b120b0f2f7ab2e51c8324ff30caefcfa8b8089081a4d1a904630"
     },
     {
       "path": "framwork/tec_tac/server_backup.py",
@@ -1003,8 +1008,8 @@
     },
     {
       "path": "framwork/tec_tac/tasks.py",
-      "size": 3560,
-      "sha256": "39d2781a484997d44cd51e8dd16c29da5f513b7c975e71d70c37cc178f15e07e"
+      "size": 5055,
+      "sha256": "68ab5fd6981338a92ed4c0b766189aad9e15cdd0ff440fd552bd287dd56bc3ef"
     },
     {
       "path": "framwork/tec_tac/trust_policy.py",
@@ -1194,7 +1199,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "270564a3f923e2e3e78cedc35da7eac2b362727f94485b6c555a0d8b96f257a6"
+      "sha256": "48430b967a81e6c20d4d7c8c00991a816c0feb66ec6a34bbd08e28c0619f10ae"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -1377,9 +1382,14 @@
       "sha256": "25fb51ed373d8a0f2c22c4043224103740b3fa71814d522aa7890c47969d48fe"
     },
     {
+      "path": "tests/scheduler-durability-review.sh",
+      "size": 868,
+      "sha256": "2e9359d6222154f46f1db0ab470cba12369ee056bcb1092138aba45abb11e152"
+    },
+    {
       "path": "tests/scheduler-foundation.sh",
-      "size": 2177,
-      "sha256": "2fc0f95a5edeb955bda16d96c60ec4fd32d0386e580848c072751cd8bd628b41"
+      "size": 2707,
+      "sha256": "0237d63d09b110c793bd30e69e6fedb5254befc7e4e1810b7f00bc9ca0b37c45"
     },
     {
       "path": "tests/scheduler-interval-foundation.py",

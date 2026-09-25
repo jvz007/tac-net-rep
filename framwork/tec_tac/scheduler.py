@@ -35,13 +35,14 @@ class ScheduledAction:
     target_types: tuple[str, ...] = ("none",)
     permission: str | None = None
     dangerous: bool = False
+    timeout_seconds: int = 3600
 
 
 _ACTIONS: dict[str, ScheduledAction] = {}
 _ACTION_LOCK = RLock()
 
 
-def register_scheduled_action(*, id: str, module_id: str, label: str, handler, description: str = "", target_types=("none",), permission: str | None = None, dangerous: bool = False):
+def register_scheduled_action(*, id: str, module_id: str, label: str, handler, description: str = "", target_types=("none",), permission: str | None = None, dangerous: bool = False, timeout_seconds: int = 3600):
     action_id = str(id or "").strip()
     module = str(module_id or "").strip()
     if not action_id or "." not in action_id:
@@ -51,7 +52,13 @@ def register_scheduled_action(*, id: str, module_id: str, label: str, handler, d
     if not callable(handler):
         raise SchedulerError("Scheduled action handler must be callable.")
     targets = tuple(str(v).strip() for v in target_types if str(v).strip()) or ("none",)
-    action = ScheduledAction(action_id, module, str(label or action_id), handler, str(description or ""), targets, permission, bool(dangerous))
+    try:
+        timeout = int(timeout_seconds)
+    except (TypeError, ValueError) as exc:
+        raise SchedulerError("Scheduled action timeout_seconds must be an integer.") from exc
+    if timeout < 60 or timeout > 7 * 24 * 60 * 60:
+        raise SchedulerError("Scheduled action timeout_seconds must be between 60 and 604800.")
+    action = ScheduledAction(action_id, module, str(label or action_id), handler, str(description or ""), targets, permission, bool(dangerous), timeout)
     with _ACTION_LOCK:
         previous = _ACTIONS.get(action_id)
         if previous and previous != action:
@@ -134,6 +141,8 @@ def _zone(value: str) -> ZoneInfo:
 
 
 MIN_INTERVAL_SECONDS = 60
+MISSED_LATE_TOLERANCE = timedelta(minutes=3)
+DEFAULT_RUNNING_STALE_GRACE = timedelta(minutes=5)
 
 
 def validate_schedule_payload(data: dict, *, partial: bool = False) -> dict:
@@ -338,7 +347,7 @@ def _should_run_occurrence(schedule: TecTacSchedule, occurrence: datetime, now: 
             return False
         # The scheduler evaluates once per minute. An interval occurrence that
         # happened since the preceding minute tick is current, not missed.
-        if (now_utc - occurrence) < timedelta(minutes=1):
+        if (now_utc - occurrence) <= MISSED_LATE_TOLERANCE:
             return True
         if schedule.missed_policy != TecTacSchedule.MissedPolicy.RUN_ON_RECOVERY:
             return False
@@ -348,7 +357,7 @@ def _should_run_occurrence(schedule: TecTacSchedule, occurrence: datetime, now: 
     now_min = now_utc.replace(second=0, microsecond=0)
     if occurrence > now_min:
         return False
-    if occurrence == now_min:
+    if occurrence == now_min or (now_min - occurrence) <= MISSED_LATE_TOLERANCE:
         return True
     if schedule.missed_policy != TecTacSchedule.MissedPolicy.RUN_ON_RECOVERY:
         return False
@@ -366,9 +375,74 @@ def _run_kwargs(schedule: TecTacSchedule, **extra):
         "owner_type": schedule.owner_type,
         "owner_module": schedule.owner_module,
         "owner_key": schedule.owner_key,
+        "target_mode_snapshot": schedule.target_mode,
+        "parameters_snapshot": schedule.parameters or {},
+        "retry_count_snapshot": int(schedule.retry_count or 0),
+        "retry_delay_seconds_snapshot": int(schedule.retry_delay_seconds or 60),
     }
     values.update(extra)
     return values
+
+
+def recover_stale_runs(now: datetime | None = None) -> dict[str, int]:
+    """Fail abandoned queued/running runs so they cannot block a schedule forever."""
+    now = _as_utc(now or timezone.now())
+    config = TecTacSchedulerConfig.current()
+    queued_minutes = max(1, min(int(config.queued_stale_minutes or 10), 1440))
+    queued_cutoff = now - timedelta(minutes=queued_minutes)
+    recovered_queued = 0
+    recovered_running = 0
+
+    with transaction.atomic():
+        queued = list(TecTacScheduleRun.objects.select_for_update().filter(
+            status=TecTacScheduleRun.Status.QUEUED,
+            created_at__lt=queued_cutoff,
+        ))
+        for run in queued:
+            run.status = TecTacScheduleRun.Status.FAILED
+            run.error_type = "Stale"
+            run.error = f"Stale queued run exceeded {queued_minutes} minute dispatch window."
+            run.finished_at = now
+            run.save(update_fields=["status", "error_type", "error", "finished_at"])
+            recovered_queued += 1
+
+    # Running timeout is action-specific. Unknown actions use the conservative
+    # one-hour default plus a small recovery grace period.
+    candidates = list(TecTacScheduleRun.objects.filter(
+        status=TecTacScheduleRun.Status.RUNNING,
+        started_at__isnull=False,
+    ).only("id", "action_id", "started_at"))
+    for candidate in candidates:
+        action = _ACTIONS.get(candidate.action_id)
+        timeout_seconds = int(action.timeout_seconds if action else 3600)
+        if now - _as_utc(candidate.started_at) <= timedelta(seconds=timeout_seconds) + DEFAULT_RUNNING_STALE_GRACE:
+            continue
+        with transaction.atomic():
+            run = TecTacScheduleRun.objects.select_for_update().get(pk=candidate.pk)
+            if run.status != TecTacScheduleRun.Status.RUNNING:
+                continue
+            run.status = TecTacScheduleRun.Status.FAILED
+            run.error_type = "Stale"
+            run.error = f"Stale running run exceeded action timeout of {timeout_seconds} seconds."
+            run.finished_at = now
+            run.save(update_fields=["status", "error_type", "error", "finished_at"])
+            recovered_running += 1
+    return {"queued": recovered_queued, "running": recovered_running}
+
+
+def cleanup_run_history(now: datetime | None = None) -> int:
+    now = _as_utc(now or timezone.now())
+    config = TecTacSchedulerConfig.current()
+    days = max(1, min(int(config.run_retention_days or 90), 3650))
+    cutoff = now - timedelta(days=days)
+    qs = TecTacScheduleRun.objects.filter(
+        created_at__lt=cutoff,
+        status__in=[
+            TecTacScheduleRun.Status.SUCCEEDED, TecTacScheduleRun.Status.FAILED, TecTacScheduleRun.Status.SKIPPED,
+        ],
+    )
+    deleted, _ = qs.delete()
+    return int(deleted)
 
 
 def cleanup_once_schedules(now: datetime | None = None) -> int:
@@ -445,7 +519,8 @@ def dispatch_due_schedules(now: datetime | None = None) -> dict:
     state.last_tick_at = now
     state.last_tick_error = ""
     state.save(update_fields=["last_tick_at", "last_tick_error"])
-    queued, skipped = [], []
+    queued, skipped, dispatch_failed = [], [], []
+    stale = recover_stale_runs(now)
     schedule_ids = list(TecTacSchedule.objects.filter(enabled=True).values_list("id", flat=True))
     try:
         for schedule_id in schedule_ids:
@@ -460,10 +535,24 @@ def dispatch_due_schedules(now: datetime | None = None) -> dict:
                 if schedule.last_due_key == key:
                     continue
                 if not _should_run_occurrence(schedule, occurrence, now):
-                    if schedule.schedule_type == TecTacSchedule.ScheduleType.ONCE and occurrence < now.replace(second=0, microsecond=0):
-                        schedule.last_due_key = key
+                    if schedule.missed_policy == TecTacSchedule.MissedPolicy.EXPIRE:
+                        error_type = "MissedExpired"
+                        message = "Occurrence expired after the scheduler lateness window."
+                    elif schedule.missed_policy == TecTacSchedule.MissedPolicy.RUN_ON_RECOVERY:
+                        error_type = "MissedRecoveryWindowExpired"
+                        message = "Occurrence was outside the configured recovery grace window."
+                    else:
+                        error_type = "MissedSkip"
+                        message = "Occurrence was missed and the schedule policy is skip."
+                    run = TecTacScheduleRun.objects.create(**_run_kwargs(
+                        schedule, status=TecTacScheduleRun.Status.SKIPPED, scheduled_for=occurrence,
+                        targets_snapshot=schedule.targets or {}, error=message, error_type=error_type, finished_at=now,
+                    ))
+                    schedule.last_due_key = key
+                    if schedule.schedule_type == TecTacSchedule.ScheduleType.ONCE:
                         schedule.enabled = False
-                        schedule.save(update_fields=["last_due_key", "enabled", "updated_at"])
+                    schedule.save(update_fields=["last_due_key", "enabled", "updated_at"])
+                    skipped.append(str(run.id))
                     continue
                 try:
                     get_scheduled_action(schedule.action_id)
@@ -499,9 +588,17 @@ def dispatch_due_schedules(now: datetime | None = None) -> dict:
                 if schedule.schedule_type == TecTacSchedule.ScheduleType.ONCE:
                     schedule.enabled = False
                 schedule.save(update_fields=["last_due_key", "enabled", "updated_at"])
-            _queue_run(run)
-            queued.append(str(run.id))
-        cleaned = cleanup_once_schedules(now)
+            try:
+                _queue_run(run)
+                queued.append(str(run.id))
+            except Exception:
+                # _queue_run records the failed dispatch on the run and scheduler
+                # state. A broker outage for one schedule must not abort the tick.
+                dispatch_failed.append(str(run.id))
+                continue
+        cleaned_once = cleanup_once_schedules(now)
+        cleaned_runs = cleanup_run_history(now)
+        cleaned = cleaned_once + cleaned_runs
         state.last_tick_completed_at = timezone.now()
         state.last_checked = len(schedule_ids)
         state.last_queued = len(queued)
@@ -509,7 +606,11 @@ def dispatch_due_schedules(now: datetime | None = None) -> dict:
         state.last_cleaned = cleaned
         state.last_tick_error = ""
         state.save(update_fields=["last_tick_completed_at", "last_checked", "last_queued", "last_skipped", "last_cleaned", "last_tick_error"])
-        return {"queued": queued, "skipped": skipped, "cleaned": cleaned, "checked": len(schedule_ids), "now": now.isoformat()}
+        return {
+            "queued": queued, "skipped": skipped, "dispatch_failed": dispatch_failed,
+            "stale_recovered": stale, "cleaned": cleaned, "cleaned_once": cleaned_once,
+            "cleaned_runs": cleaned_runs, "checked": len(schedule_ids), "now": now.isoformat(),
+        }
     except Exception as exc:
         state.last_tick_completed_at = timezone.now()
         state.last_tick_error = f"{exc.__class__.__name__}: {exc}"
@@ -670,6 +771,7 @@ def serialize_action(action: ScheduledAction) -> dict:
         "target_types": list(action.target_types),
         "permission": action.permission,
         "dangerous": action.dangerous,
+        "timeout_seconds": action.timeout_seconds,
     }
 
 
@@ -687,6 +789,8 @@ def serialize_run(run: TecTacScheduleRun) -> dict:
         "scheduled_for": run.scheduled_for.isoformat(),
         "manual": run.manual,
         "targets_snapshot": run.targets_snapshot,
+        "target_mode_snapshot": run.target_mode_snapshot,
+        "parameters_snapshot": run.parameters_snapshot,
         "result": run.result,
         "error": run.error,
         "error_type": run.error_type,
@@ -700,7 +804,7 @@ def serialize_run(run: TecTacScheduleRun) -> dict:
 
 def serialize_schedule(schedule: TecTacSchedule, *, include_runs: bool = False) -> dict:
     action = _ACTIONS.get(schedule.action_id)
-    latest = schedule.runs.first()
+    latest = None if hasattr(schedule, "latest_status") else schedule.runs.first()
     payload = {
         "id": str(schedule.id),
         "name": schedule.name,
@@ -732,7 +836,7 @@ def serialize_schedule(schedule: TecTacSchedule, *, include_runs: bool = False) 
         "retry_delay_seconds": schedule.retry_delay_seconds,
         "last_run_at": schedule.last_run_at.isoformat() if schedule.last_run_at else None,
         "next_run_at": (next_occurrence(schedule).isoformat() if schedule.enabled and next_occurrence(schedule) else None),
-        "last_status": latest.status if latest else None,
+        "last_status": getattr(schedule, "latest_status", None) if hasattr(schedule, "latest_status") else (latest.status if latest else None),
         "created_by": schedule.created_by.username if schedule.created_by else None,
         "updated_by": schedule.updated_by.username if schedule.updated_by else None,
         "created_at": schedule.created_at.isoformat(),

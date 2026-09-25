@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, time, timedelta
 
+from django.db import transaction
+from django.db.models import OuterRef, Subquery
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime, parse_time
@@ -70,6 +72,15 @@ def _require_user_managed(schedule):
         raise PermissionDenied(
             f"Schedule is managed by module {schedule.owner_module!r}. Change it from the owning module instead."
         )
+
+
+def _require_schedule_owner_or_manager(user, schedule):
+    if schedule.owner_type == TecTacSchedule.OwnerType.MODULE:
+        return
+    if _native_scheduler_manager(user):
+        return
+    if schedule.created_by_id != getattr(user, "id", None):
+        raise PermissionDenied("Only the schedule owner or a scheduler manager may change this user schedule.")
 
 def _parse_fields(payload: dict) -> dict:
     data = dict(payload)
@@ -210,6 +221,7 @@ class SchedulerDetailView(APIView):
     def patch(self, request, schedule_id):
         schedule, _ = self.get_object(request, schedule_id)
         _require_user_managed(schedule)
+        _require_schedule_owner_or_manager(request.user, schedule)
         try:
             merged = {
                 "name": schedule.name, "action_id": schedule.action_id, "module_id": schedule.module_id,
@@ -235,11 +247,31 @@ class SchedulerDetailView(APIView):
             return Response({"detail": str(exc)}, status=400)
 
     def delete(self, request, schedule_id):
-        schedule, _ = self.get_object(request, schedule_id)
-        _require_user_managed(schedule)
-        if schedule.runs.filter(status__in=[TecTacScheduleRun.Status.QUEUED, TecTacScheduleRun.Status.RUNNING]).exists():
-            return Response({"detail": "Schedule cannot be deleted while a run is queued or running."}, status=409)
-        schedule.delete()
+        force = str(request.query_params.get("force") or "").strip().lower() in {"1", "true", "yes", "on"}
+        with transaction.atomic():
+            schedule = get_object_or_404(
+                TecTacSchedule.objects.select_for_update().select_related("created_by", "updated_by"), pk=schedule_id
+            )
+            _require_user_managed(schedule)
+            _require_schedule_owner_or_manager(request.user, schedule)
+            active = list(schedule.runs.select_for_update().filter(
+                status__in=[TecTacScheduleRun.Status.QUEUED, TecTacScheduleRun.Status.RUNNING]
+            ))
+            if active and not force:
+                return Response({
+                    "detail": "Schedule has active runs. Use force=true to fail those runs and delete the schedule.",
+                    "code": "active_runs",
+                    "active_runs": len(active),
+                }, status=409)
+            if active:
+                finished = timezone.now()
+                for run in active:
+                    run.status = TecTacScheduleRun.Status.FAILED
+                    run.error_type = "ForceDeleted"
+                    run.error = "Schedule was force-deleted while this run was active."
+                    run.finished_at = finished
+                    run.save(update_fields=["status", "error_type", "error", "finished_at"])
+            schedule.delete()
         return Response(status=204)
 
 
@@ -248,6 +280,7 @@ class SchedulerRunNowView(APIView):
     def post(self, request, schedule_id):
         schedule = get_object_or_404(TecTacSchedule, pk=schedule_id)
         _require_action(request.user, schedule.action_id)
+        _require_schedule_owner_or_manager(request.user, schedule)
         run = queue_manual_run(schedule)
         return Response(serialize_run(run), status=202)
 
@@ -286,8 +319,14 @@ class SchedulerConfigView(APIView):
         config = TecTacSchedulerConfig.current()
         return Response({
             "once_retention_hours": config.once_retention_hours,
+            "run_retention_days": config.run_retention_days,
+            "queued_stale_minutes": config.queued_stale_minutes,
             "minimum_once_retention_hours": 1,
             "maximum_once_retention_hours": 720,
+            "minimum_run_retention_days": 1,
+            "maximum_run_retention_days": 3650,
+            "minimum_queued_stale_minutes": 1,
+            "maximum_queued_stale_minutes": 1440,
             "updated_at": config.updated_at.isoformat(),
             "updated_by": config.updated_by.username if config.updated_by else None,
         })
@@ -295,16 +334,28 @@ class SchedulerConfigView(APIView):
     def patch(self, request):
         if not _native_scheduler_manager(request.user):
             raise PermissionDenied("Scheduler configuration requires server-maintenance authority.")
-        try:
-            value = int(request.data.get("once_retention_hours"))
-        except (TypeError, ValueError):
-            return Response({"detail": "once_retention_hours must be an integer."}, status=400)
-        if value < 1 or value > 720:
-            return Response({"detail": "once_retention_hours must be between 1 and 720."}, status=400)
         config = TecTacSchedulerConfig.current()
-        config.once_retention_hours = value
+        updates = []
+        rules = {
+            "once_retention_hours": (1, 720),
+            "run_retention_days": (1, 3650),
+            "queued_stale_minutes": (1, 1440),
+        }
+        for field, (minimum, maximum) in rules.items():
+            if field not in request.data:
+                continue
+            try:
+                value = int(request.data.get(field))
+            except (TypeError, ValueError):
+                return Response({"detail": f"{field} must be an integer."}, status=400)
+            if value < minimum or value > maximum:
+                return Response({"detail": f"{field} must be between {minimum} and {maximum}."}, status=400)
+            setattr(config, field, value)
+            updates.append(field)
+        if not updates:
+            return Response({"detail": "At least one scheduler configuration field is required."}, status=400)
         config.updated_by = request.user
-        config.save(update_fields=["once_retention_hours", "updated_by", "updated_at"])
+        config.save(update_fields=[*updates, "updated_by", "updated_at"])
         return self.get(request)
 
 
