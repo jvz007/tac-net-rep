@@ -82,16 +82,56 @@ def atomic_json(path, payload, mode=0o640):
     os.replace(tmp, path)
 
 
-def load_module_state():
+def module_state_lock(exclusive=True):
+    MODULE_STATE.parent.mkdir(parents=True, exist_ok=True)
+    path = MODULE_STATE.with_name("module-state.lock")
+    if not path.exists():
+        # Root helper may repair a missing lock, but it must remain writable by
+        # the Tactical runtime group for future privileged/non-privileged use.
+        path.touch(mode=0o664, exist_ok=True)
+        cfg = load_config()
+        tactical_user = str(cfg.get("TACTICAL_USER") or "tactical").strip() or "tactical"
+        try:
+            import pwd
+            gid = pwd.getpwnam(tactical_user).pw_gid
+            os.chown(path, 0, gid)
+        except (KeyError, OSError):
+            pass
+        os.chmod(path, 0o664)
+    handle = path.open("r+" if exclusive else "r")
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+    return handle
+
+
+def load_module_state_unlocked(*, mutation=False):
     if not MODULE_STATE.is_file():
         return {"schema": 1, "modules": {}}
-    payload = json.loads(MODULE_STATE.read_text(encoding="utf-8"))
+    try:
+        payload = json.loads(MODULE_STATE.read_text(encoding="utf-8"))
+    except Exception as exc:
+        if mutation:
+            raise RuntimeError(f"module-state.json is unreadable; refusing to overwrite it: {exc}") from exc
+        return {"schema": 1, "modules": {}, "_corrupt": True, "_error": str(exc)}
+    if not isinstance(payload, dict) or not isinstance(payload.get("modules", {}), dict):
+        if mutation:
+            raise RuntimeError("module-state.json has an invalid structure; refusing to overwrite it")
+        return {"schema": 1, "modules": {}, "_corrupt": True, "_error": "invalid structure"}
     payload.setdefault("schema", 1)
     payload.setdefault("modules", {})
     return payload
 
 
-def save_module_state(state):
+def load_module_state():
+    handle = module_state_lock(False)
+    try:
+        return load_module_state_unlocked()
+    finally:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN); handle.close()
+
+
+def save_module_state_unlocked(state):
+    if state.get("_corrupt"):
+        raise RuntimeError("corrupt module state cannot be saved")
     atomic_json(MODULE_STATE, state, 0o644)
     try:
         os.chown(MODULE_STATE, 0, 0)
@@ -100,43 +140,52 @@ def save_module_state(state):
         pass
 
 
+def mutate_module_state(callback):
+    handle = module_state_lock(True)
+    try:
+        state = load_module_state_unlocked(mutation=True)
+        callback(state)
+        save_module_state_unlocked(state)
+    finally:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN); handle.close()
+
+
 def set_enabled(module_ids, enabled):
-    state = load_module_state()
-    for module_id in module_ids:
-        record = dict(state["modules"].get(module_id) or {})
-        record["enabled"] = bool(enabled)
-        state["modules"][module_id] = record
-    save_module_state(state)
+    def apply(state):
+        for module_id in module_ids:
+            record = dict(state["modules"].get(module_id) or {})
+            record["enabled"] = bool(enabled)
+            state["modules"][module_id] = record
+    mutate_module_state(apply)
 
 
 def set_visible(module_id, visible):
-    state = load_module_state()
-    record = dict(state["modules"].get(module_id) or {})
-    record["visible"] = bool(visible)
-    state["modules"][module_id] = record
-    save_module_state(state)
+    def apply(state):
+        record = dict(state["modules"].get(module_id) or {})
+        record["visible"] = bool(visible)
+        state["modules"][module_id] = record
+    mutate_module_state(apply)
 
 
 def remember_version(module_id, version, source=None):
-    state = load_module_state()
-    record = dict(state["modules"].get(module_id) or {})
-    record.setdefault("enabled", True)
-    record["version"] = str(version)
-    if source:
-        record["source"] = dict(source)
-        record["source"]["installed_at"] = now()
-    state["modules"][module_id] = record
-    save_module_state(state)
+    def apply(state):
+        record = dict(state["modules"].get(module_id) or {})
+        record.setdefault("enabled", True)
+        record["version"] = str(version)
+        if source:
+            record["source"] = dict(source)
+            record["source"]["installed_at"] = now()
+        state["modules"][module_id] = record
+    mutate_module_state(apply)
 
 def migrate_module_state_identity(old_id, new_id):
-    state = load_module_state()
-    if new_id in state["modules"]:
-        raise RuntimeError(f"destination module state already exists: {new_id}")
-    record = state["modules"].pop(old_id, None)
-    if record is not None:
-        state["modules"][new_id] = record
-        save_module_state(state)
-
+    def apply(state):
+        if new_id in state["modules"]:
+            raise RuntimeError(f"destination module state already exists: {new_id}")
+        record = state["modules"].pop(old_id, None)
+        if record is not None:
+            state["modules"][new_id] = record
+    mutate_module_state(apply)
 
 def run_identity_migration(config, action, log, *, reverse=False):
     old_id = str(action.get("previous_module_id") or "")

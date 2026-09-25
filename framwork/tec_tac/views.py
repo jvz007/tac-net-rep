@@ -211,7 +211,6 @@ class TotpQrView(APIView):
                 {
                     "detail": "TOTP QR generation failed.",
                     "error_type": exc.__class__.__name__,
-                    "error": str(exc) or exc.__class__.__name__,
                 },
                 status=500,
             )
@@ -347,7 +346,7 @@ class ModuleCatalogView(APIView):
         try:
             modules = installed_catalog()
         except Exception as exc:
-            return Response({"detail": str(exc)}, status=500)
+            return Response({"detail": "Unable to load module catalog.", "error_type": exc.__class__.__name__}, status=500)
         return Response({
             "modules": modules,
             "count": len(modules),
@@ -398,7 +397,6 @@ class ModulePackageInspectView(APIView):
                     "detail": "Module package inspection failed.",
                     "stage": stage,
                     "error_type": exc.__class__.__name__,
-                    "error": str(exc) or exc.__class__.__name__,
                 },
                 status=500,
             )
@@ -489,7 +487,8 @@ class SystemUpdateTrustPolicyView(APIView):
         try:
             return Response(get_update_trust_policy())
         except TrustPolicyError as exc:
-            return Response({"detail": str(exc)}, status=500)
+            logger.exception("Unable to read root update trust policy")
+            return Response({"detail": "Unable to read update trust policy.", "error_type": exc.__class__.__name__}, status=500)
 
     def put(self, request):
         _require_module_manager(request.user)
@@ -542,7 +541,7 @@ class SystemUpdatePackageInspectView(APIView):
             return Response({"detail": str(exc)}, status=400)
         except Exception as exc:
             logger.exception("Tec-Tac system update package inspection failed")
-            return Response({"detail": "System update package inspection failed.", "error_type": exc.__class__.__name__, "error": str(exc) or exc.__class__.__name__}, status=500)
+            return Response({"detail": "System update package inspection failed.", "error_type": exc.__class__.__name__}, status=500)
 
 
 @extend_schema_view(delete=extend_schema(tags=["Tec-Tac System Updates"], summary="Discard a staged Tec-Tac system update package"))
@@ -636,4 +635,4 @@ class SystemUpdateOnlineStageView(APIView):
             return Response({"detail": str(exc)}, status=400)
         except Exception as exc:
             logger.exception("Tec-Tac online system update staging failed")
-            return Response({"detail": "Online system update staging failed.", "error_type": exc.__class__.__name__, "error": str(exc) or exc.__class__.__name__}, status=500)
+            return Response({"detail": "Online system update staging failed.", "error_type": exc.__class__.__name__}, status=500)

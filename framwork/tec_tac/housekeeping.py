@@ -19,11 +19,11 @@ LABELS={
 class HousekeepingError(RuntimeError): pass
 
 def _load_config():
-    if not CONFIG.is_file(): return {'policies':DEFAULT_POLICIES}
+    if not CONFIG.is_file(): return {'policies':DEFAULT_POLICIES, 'allow_zero_destructive':False}
     try: raw=json.loads(CONFIG.read_text())
-    except Exception: return {'policies':DEFAULT_POLICIES}
+    except Exception: return {'policies':DEFAULT_POLICIES, 'allow_zero_destructive':False}
     policies={k:{**v,**((raw.get('policies') or {}).get(k) or {})} for k,v in DEFAULT_POLICIES.items()}
-    return {'policies':policies}
+    return {'policies':policies, 'allow_zero_destructive': raw.get('allow_zero_destructive') is True}
 
 def save_config(payload):
     incoming=payload.get('policies') if isinstance(payload,dict) else None
@@ -36,14 +36,27 @@ def save_config(payload):
         field='days' if item['mode']=='age_days' else 'keep'; value=int(item[field])
         if value<0 or value>3650: raise HousekeepingError(f'{k}.{field} is outside allowed range')
         item[field]=value; policies[k]=item
-    ROOT.mkdir(parents=True,exist_ok=True); CONFIG.write_text(json.dumps({'policies':policies},indent=2)); CONFIG.chmod(0o640)
-    return {'policies':policies}
+    allow_zero = payload.get('allow_zero_destructive') is True
+    current = _load_config()
+    zero_fields = []
+    for k, item in policies.items():
+        field = 'days' if item['mode'] == 'age_days' else 'keep'
+        if int(item[field]) != 0:
+            continue
+        prior = current.get('policies', {}).get(k, {})
+        prior_field = 'days' if prior.get('mode') == 'age_days' else 'keep'
+        if prior.get('mode') != item['mode'] or int(prior.get(prior_field, -1)) != 0:
+            zero_fields.append(k)
+    if zero_fields and not allow_zero:
+        raise HousekeepingError('New zero-value destructive policies require allow_zero_destructive=true: ' + ', '.join(zero_fields))
+    ROOT.mkdir(parents=True,exist_ok=True); CONFIG.write_text(json.dumps({'policies':policies,'allow_zero_destructive':allow_zero},indent=2)); CONFIG.chmod(0o640)
+    return {'policies':policies,'allow_zero_destructive':allow_zero}
 
 def _run(action, *, dry_run=True, categories=None):
     if not HELPER.is_file(): raise HousekeepingError(f'housekeeping helper missing: {HELPER}')
     cfg=_load_config(); reqid=str(uuid.uuid4()); REQUESTS.mkdir(parents=True,exist_ok=True); RESULTS.mkdir(parents=True,exist_ok=True)
     req=REQUESTS/f'{reqid}.json'; result=RESULTS/f'{reqid}.json'
-    data={'dry_run':bool(dry_run),'categories':categories or list(DEFAULT_POLICIES),'policies':cfg['policies']}; req.write_text(json.dumps(data)); req.chmod(0o660)
+    data={'dry_run':bool(dry_run),'categories':categories or list(DEFAULT_POLICIES),'policies':cfg['policies'],'allow_zero_destructive':cfg.get('allow_zero_destructive') is True}; req.write_text(json.dumps(data)); req.chmod(0o660)
     try:
         cp=subprocess.run(['sudo','-n',str(HELPER),action,str(req)],capture_output=True,text=True,timeout=180)
         if cp.returncode: raise HousekeepingError((cp.stderr or cp.stdout or 'housekeeping helper failed').strip())
@@ -52,7 +65,7 @@ def _run(action, *, dry_run=True, categories=None):
         req.unlink(missing_ok=True)
         result.unlink(missing_ok=True)
     report['categories']=[{**row,'label':LABELS.get(row.get('id'),row.get('id'))} for row in report.get('categories',[])]
-    report['policies']=cfg['policies']; report['protected']=['/var/lib/tec-tac/ui','/var/lib/tec-tac/module-manager/module-state.json','/var/lib/tec-tac/module-manager/repositories','/var/lib/tec-tac/server-backup/secrets','configured backup destinations','/opt/tec-tac','/opt/tec-tac-src']
+    report['policies']=cfg['policies']; report['allow_zero_destructive']=cfg.get('allow_zero_destructive') is True; report['protected']=['/var/lib/tec-tac/ui','/var/lib/tec-tac/module-manager/module-state.json','/var/lib/tec-tac/module-manager/repositories','/var/lib/tec-tac/server-backup/secrets','configured backup destinations','/opt/tec-tac','/opt/tec-tac-src']
     return report
 
 def status(): return _run('--scan',dry_run=True)

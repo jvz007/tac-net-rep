@@ -10,7 +10,7 @@ class HousekeepingStatusView(APIView):
     def get(self,request):
         _require_module_manager(request.user)
         try:return Response(status())
-        except HousekeepingError as exc:return Response({'detail':str(exc)},status=500)
+        except HousekeepingError as exc:return Response({'detail':'Unable to read housekeeping status.','error_type':exc.__class__.__name__},status=500)
     def put(self,request):
         _require_module_manager(request.user)
         try:return Response(save_config(request.data))

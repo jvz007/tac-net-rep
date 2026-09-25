@@ -6,9 +6,13 @@ and then passed into the existing Module Management v2 staging/install pipeline.
 from __future__ import annotations
 
 import hashlib
+import http.client
+import ipaddress
 import json
 import os
 import re
+import socket
+import ssl
 import tempfile
 import urllib.error
 import urllib.parse
@@ -74,11 +78,117 @@ def load_repositories() -> dict:
 def _clean_url(value: str) -> str:
     url = str(value or "").strip()
     parsed = urllib.parse.urlparse(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or not parsed.hostname:
         raise ModuleRepositoryError("Repository URL must be an absolute http:// or https:// URL.")
     if parsed.username or parsed.password:
         raise ModuleRepositoryError("Credentials must not be embedded in repository URLs.")
     return url
+
+
+def _normalize_address(address: ipaddress._BaseAddress) -> ipaddress._BaseAddress:
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+        return address.ipv4_mapped
+    return address
+
+
+_CGNAT = ipaddress.ip_network("100.64.0.0/10")
+
+
+def _always_blocked_address(address: ipaddress._BaseAddress) -> bool:
+    address = _normalize_address(address)
+    return bool(
+        address.is_loopback or address.is_link_local or address.is_multicast
+        or address.is_reserved or address.is_unspecified
+    )
+
+
+def _private_address(address: ipaddress._BaseAddress) -> bool:
+    address = _normalize_address(address)
+    return bool(address.is_private or (isinstance(address, ipaddress.IPv4Address) and address in _CGNAT))
+
+
+def _resolve_remote_url(value: str, *, trust: str = "custom") -> tuple[str, urllib.parse.ParseResult, tuple[ipaddress._BaseAddress, ...]]:
+    url = _clean_url(value)
+    parsed = urllib.parse.urlparse(url)
+    host = str(parsed.hostname or "").strip().rstrip(".")
+    if not host or host.lower() == "localhost":
+        raise ModuleRepositoryError("Repository URL resolves to a prohibited local address.")
+    addresses = set()
+    try:
+        addresses.add(_normalize_address(ipaddress.ip_address(host)))
+    except ValueError:
+        try:
+            for row in socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM):
+                addresses.add(_normalize_address(ipaddress.ip_address(row[4][0].split("%", 1)[0])))
+        except (OSError, ValueError) as exc:
+            raise ModuleRepositoryError("Repository hostname could not be resolved.") from exc
+    if not addresses:
+        raise ModuleRepositoryError("Repository hostname did not resolve to an address.")
+    if any(_always_blocked_address(address) for address in addresses):
+        raise ModuleRepositoryError("Repository URL resolves to a prohibited local, link-local, or reserved address.")
+    if trust != "internal" and any(_private_address(address) for address in addresses):
+        raise ModuleRepositoryError("Repository URL resolves to a private or carrier-grade NAT address. Mark an administrator-controlled LAN repository as trust=internal to permit private addressing.")
+    return url, parsed, tuple(sorted(addresses, key=lambda value: (value.version, str(value))))
+
+
+def _validate_remote_url(value: str, *, trust: str = "custom") -> str:
+    return _resolve_remote_url(value, trust=trust)[0]
+
+
+def _pinned_get(url: str, address: ipaddress._BaseAddress, *, maximum: int, timeout: int) -> tuple[int, str | None, bytes]:
+    parsed = urllib.parse.urlparse(url)
+    host = str(parsed.hostname or "")
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    raw = socket.create_connection((str(address), port), timeout=timeout)
+    conn = None
+    try:
+        if parsed.scheme == "https":
+            context = ssl.create_default_context()
+            wrapped = context.wrap_socket(raw, server_hostname=host)
+            conn = http.client.HTTPSConnection(host, port, timeout=timeout, context=context)
+            conn.sock = wrapped
+        else:
+            conn = http.client.HTTPConnection(host, port, timeout=timeout)
+            conn.sock = raw
+        path = urllib.parse.urlunparse(("", "", parsed.path or "/", parsed.params, parsed.query, ""))
+        conn.request("GET", path, headers={"User-Agent": "Tec-Tac-Module-Repository/1.8", "Accept": "application/json, application/octet-stream;q=0.9, */*;q=0.1"})
+        response = conn.getresponse()
+        location = response.getheader("Location")
+        body = _read_bounded(response, maximum)
+        return int(response.status), location, body
+    finally:
+        if conn is not None:
+            conn.close()
+        else:
+            raw.close()
+
+
+def _fetch(url: str, maximum: int, timeout: int = 12, *, trust: str = "custom") -> bytes:
+    current = str(url)
+    for redirect_count in range(6):
+        safe_url, _, addresses = _resolve_remote_url(current, trust=trust)
+        last_error = None
+        result = None
+        for address in addresses:
+            try:
+                result = _pinned_get(safe_url, address, maximum=maximum, timeout=timeout)
+                break
+            except (OSError, ssl.SSLError, http.client.HTTPException) as exc:
+                last_error = exc
+        if result is None:
+            raise ModuleRepositoryError("Repository request failed due to a network or TLS error.") from last_error
+        status, location, body = result
+        if status in {301, 302, 303, 307, 308}:
+            if not location:
+                raise ModuleRepositoryError(f"Repository request returned HTTP {status} without a redirect target.")
+            if redirect_count >= 5:
+                raise ModuleRepositoryError("Repository request exceeded the redirect limit.")
+            current = urllib.parse.urljoin(safe_url, location)
+            continue
+        if status < 200 or status >= 300:
+            raise ModuleRepositoryError(f"Repository request returned HTTP {status}.")
+        return body
+    raise ModuleRepositoryError("Repository request exceeded the redirect limit.")
 
 
 def _clean_repo_id(value: str | None, name: str) -> str:
@@ -116,10 +226,10 @@ def upsert_repository(data: dict, repository_id: str | None = None) -> dict:
         raise ModuleRepositoryError("Repository id cannot be changed.")
     if not current and any(item.get("id") == rid for item in repos):
         raise ModuleRepositoryError(f"Repository {rid!r} already exists.")
-    url = _clean_url(data.get("url", current.get("url") if current else ""))
     trust = str(data.get("trust", current.get("trust") if current else "custom") or "custom").strip().lower()
     if trust not in TRUST_LEVELS:
         raise ModuleRepositoryError("Repository trust must be official, internal, or custom.")
+    url = _validate_remote_url(data.get("url", current.get("url") if current else ""), trust=trust)
     try:
         priority = int(data.get("priority", current.get("priority") if current else 100))
     except (TypeError, ValueError) as exc:
@@ -179,20 +289,7 @@ def _read_bounded(response, maximum: int) -> bytes:
     return b"".join(chunks)
 
 
-def _fetch(url: str, maximum: int, timeout: int = 12) -> bytes:
-    request = urllib.request.Request(url, headers={"User-Agent": "Tec-Tac-Module-Repository/1.7"})
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            _clean_url(response.geturl())
-            status = getattr(response, "status", 200)
-            if status < 200 or status >= 300:
-                raise ModuleRepositoryError(f"Repository request returned HTTP {status}.")
-            return _read_bounded(response, maximum)
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise ModuleRepositoryError(f"Repository request failed: {exc}") from exc
-
-
-def _validate_release(raw: dict, repo_url: str) -> dict:
+def _validate_release(raw: dict, repo_url: str, *, trust: str = "custom") -> dict:
     if not isinstance(raw, dict):
         raise ModuleRepositoryError("Repository modules entries must be objects.")
     module_id = str(raw.get("id", "")).strip()
@@ -222,7 +319,7 @@ def _validate_release(raw: dict, repo_url: str) -> dict:
             except ModuleStateError as exc:
                 raise ModuleRepositoryError(str(exc)) from exc
     absolute = urllib.parse.urljoin(repo_url, download)
-    _clean_url(absolute)
+    _validate_remote_url(absolute, trust=trust)
     signature_ref = str(raw.get("signature") or "").strip()
     metadata_ref = str(raw.get("release_metadata") or raw.get("metadata") or "").strip()
     signature_url = urllib.parse.urljoin(repo_url, signature_ref) if signature_ref else None
@@ -230,8 +327,8 @@ def _validate_release(raw: dict, repo_url: str) -> dict:
     if bool(signature_url) != bool(metadata_url):
         raise ModuleRepositoryError(f"Repository module {module_id} {version} must publish both signature and release_metadata together.")
     if signature_url:
-        _clean_url(signature_url)
-        _clean_url(metadata_url)
+        _validate_remote_url(signature_url, trust=trust)
+        _validate_remote_url(metadata_url, trust=trust)
     return {
         "id": module_id,
         "name": str(raw.get("name") or module_id),
@@ -252,14 +349,14 @@ def sync_repository(repository_id: str) -> dict:
     repo = _repo(repository_id)
     started = _utcnow()
     try:
-        body = _fetch(repo["url"], MAX_INDEX_BYTES)
+        body = _fetch(repo["url"], MAX_INDEX_BYTES, trust=repo.get("trust", "custom"))
         payload = json.loads(body.decode("utf-8"))
         if not isinstance(payload, dict) or int(payload.get("schema", 0)) != 1:
             raise ModuleRepositoryError("Repository index must be a schema 1 JSON object.")
         raw_modules = payload.get("modules")
         if not isinstance(raw_modules, list):
             raise ModuleRepositoryError("Repository index modules must be an array.")
-        modules = [_validate_release(item, repo["url"]) for item in raw_modules]
+        modules = [_validate_release(item, repo["url"], trust=repo.get("trust", "custom")) for item in raw_modules]
         identities = [(item["id"], item["version"]) for item in modules]
         if len(identities) != len(set(identities)):
             raise ModuleRepositoryError("Repository index contains duplicate module id/version entries.")
@@ -456,7 +553,7 @@ def stage_repository_package(repository_id: str, module_id: str, version: str | 
     for item in candidates[1:]:
         if version_satisfies(item["version"], f">{candidate['version']}"):
             candidate = item
-    data = _fetch(candidate["download_url"], MAX_PACKAGE_BYTES)
+    data = _fetch(candidate["download_url"], MAX_PACKAGE_BYTES, trust=repo.get("trust", "custom"))
     digest = hashlib.sha256(data).hexdigest()
     if digest != candidate["sha256"]:
         raise ModuleRepositoryError(f"Package SHA-256 mismatch for {module_id} {candidate['version']}.")
@@ -468,12 +565,12 @@ def stage_repository_package(repository_id: str, module_id: str, version: str | 
             signature_upload = None
             metadata_upload = None
             if candidate.get("signature_url"):
-                signature_data = _fetch(candidate["signature_url"], 1024 * 1024)
+                signature_data = _fetch(candidate["signature_url"], 1024 * 1024, trust=repo.get("trust", "custom"))
                 signature_name = Path(urllib.parse.urlparse(candidate["signature_url"]).path).name or f"{suffix}.sig"
                 signature_path = Path(tmp) / signature_name
                 signature_path.write_bytes(signature_data)
                 signature_upload = _PathUpload(signature_path, signature_name)
-                metadata_data = _fetch(candidate["release_metadata_url"], 1024 * 1024)
+                metadata_data = _fetch(candidate["release_metadata_url"], 1024 * 1024, trust=repo.get("trust", "custom"))
                 metadata_name = Path(urllib.parse.urlparse(candidate["release_metadata_url"]).path).name or f"{suffix}.release.json"
                 metadata_path = Path(tmp) / metadata_name
                 metadata_path.write_bytes(metadata_data)

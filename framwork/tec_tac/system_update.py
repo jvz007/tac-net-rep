@@ -10,6 +10,7 @@ import base64
 import hashlib
 import json
 import os
+import pwd
 import re
 import stat
 import subprocess
@@ -159,8 +160,21 @@ def _github_headers() -> dict[str, str]:
     }
     token_file = cfg.get("GITHUB_TOKEN_FILE", "/opt/tec-tac/etc/github-token")
     path = Path(token_file)
-    if path.is_file():
-        token = path.read_text(encoding="utf-8").strip()
+    if path.exists():
+        if path.is_symlink() or not path.is_file():
+            raise SystemUpdateError("GitHub token path must be a regular non-symlink file.")
+        st = path.stat()
+        tactical_user = str(cfg.get("TACTICAL_USER") or "tactical").strip() or "tactical"
+        try:
+            tactical_gid = pwd.getpwnam(tactical_user).pw_gid
+        except KeyError as exc:
+            raise SystemUpdateError("Configured Tactical service account does not exist.") from exc
+        if st.st_uid != 0 or st.st_gid != tactical_gid or (st.st_mode & 0o007) or (st.st_mode & 0o020):
+            raise SystemUpdateError("GitHub token file must be root-owned, assigned to the Tactical group, not group-writable, and inaccessible to other users.")
+        try:
+            token = path.read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise SystemUpdateError("GitHub token file cannot be read by the Tec-Tac runtime.") from exc
         if token:
             headers["Authorization"] = f"Bearer {token}"
     return headers
@@ -352,6 +366,9 @@ def _version_key(value: str) -> tuple:
         return (0, 0, 0, 0, value.lower())
     nums = tuple(int(x or 0) for x in match.groups()[:3])
     suffix = (match.group(4) or "").strip()
+    rebuild = re.fullmatch(r"-(\d+)", suffix)
+    if rebuild:
+        return (*nums, 2, int(rebuild.group(1)))
     return (*nums, 1 if not suffix else 0, suffix.lower())
 
 

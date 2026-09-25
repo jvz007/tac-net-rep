@@ -11,10 +11,22 @@ LOCAL_SETTINGS="${BACKEND_DIR}/tacticalrmm/local_settings.py"
 
 SOURCE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEC_TAC_CONFIG_FILE="${TEC_TAC_CONFIG_FILE:-/opt/tec-tac/etc/tec-tac.conf}"
-if [[ -f "${TEC_TAC_CONFIG_FILE}" ]]; then
-    # shellcheck disable=SC1090
-    source "${TEC_TAC_CONFIG_FILE}"
-fi
+load_tec_tac_config() {
+    local file="$1" line key value
+    [[ -f "$file" ]] || return 0
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ -z "$line" || "$line" == \#* ]] && continue
+        [[ "$line" == *=* ]] || { printf '[TEC-TAC] ERROR: Malformed Tec-Tac config line in %s\n' "$file" >&2; return 1; }
+        key="${line%%=*}"; value="${line#*=}"
+        [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] || { printf '[TEC-TAC] ERROR: Invalid Tec-Tac config key: %s\n' "$key" >&2; return 1; }
+        case "$key" in
+            TEC_TAC_*|TACTICAL_*|FRAMEWORK_REPOSITORY|UI_REPOSITORY|REPO_ROOT|UI_SYNC_SCRIPT|UI_ROOT|GITHUB_TOKEN_FILE) ;;
+            *) printf '[TEC-TAC] ERROR: Unsupported Tec-Tac config key: %s\n' "$key" >&2; return 1 ;;
+        esac
+        printf -v "$key" '%s' "$value"
+    done < "$file"
+}
+load_tec_tac_config "${TEC_TAC_CONFIG_FILE}" || exit 1
 TEC_TAC_ROOT="${TEC_TAC_ROOT:-/opt/tec-tac}"
 TEC_TAC_SOURCE_ROOT="${TEC_TAC_SOURCE_ROOT:-/opt/tec-tac-src}"
 TEC_TAC_FRAMEWORK_SOURCE="${TEC_TAC_FRAMEWORK_SOURCE:-${SOURCE_ROOT}}"
@@ -184,6 +196,17 @@ fi
 id "${TACTICAL_USER}" >/dev/null 2>&1 || fail "Detected Tactical user '${TACTICAL_USER}' does not exist."
 TACTICAL_GROUP="$(id -gn "${TACTICAL_USER}")"
 
+# The Tec-Tac bootstrap imports module state during the very first Django
+# settings load. Create the cross-privilege lock before local_settings.py is
+# modified or any manage.py command is run so upgrades from pre-lock releases
+# and fresh installs cannot fail during settings import.
+MODULE_STATE_ROOT="${TEC_TAC_MODULE_STATE_ROOT:-/var/lib/tec-tac/module-manager}"
+MODULE_STATE_LOCK="${MODULE_STATE_ROOT}/module-state.lock"
+install -d -o root -g "${TACTICAL_GROUP}" -m 2755 "${MODULE_STATE_ROOT}"
+touch "${MODULE_STATE_LOCK}"
+chown root:"${TACTICAL_GROUP}" "${MODULE_STATE_LOCK}"
+chmod 0664 "${MODULE_STATE_LOCK}"
+
 run_as_tactical() {
     runuser -u "${TACTICAL_USER}" -- "$@"
 }
@@ -344,7 +367,6 @@ if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON
     fail "Tec-Tac session-security capability verification failed or timed out."
 fi
 
-MODULE_STATE_ROOT="${TEC_TAC_MODULE_STATE_ROOT:-/var/lib/tec-tac/module-manager}"
 MODULE_HELPER="/usr/local/sbin/tec-tac-module-job"
 MODULE_V2_HELPER="/usr/local/sbin/tec-tac-module-v2-job"
 MODULE_HOTFIX_HELPER="/usr/local/sbin/tec-tac-module-hotfix"
@@ -413,6 +435,9 @@ if [[ ! -f "${MODULE_STATE_FILE}" ]]; then
 fi
 chown root:root "${MODULE_STATE_FILE}"
 chmod 0644 "${MODULE_STATE_FILE}"
+touch "${MODULE_STATE_LOCK}"
+chown root:"${TACTICAL_GROUP}" "${MODULE_STATE_LOCK}"
+chmod 0664 "${MODULE_STATE_LOCK}"
 
 install -o root -g root -m 0755 "${REPO_ROOT}/scripts/module-job-helper.py" "${MODULE_HELPER}"
 install -o root -g root -m 0755 "${REPO_ROOT}/scripts/module-v2-job-helper.py" "${MODULE_V2_HELPER}"
@@ -478,6 +503,12 @@ UI_REPOSITORY=${TEC_TAC_UI_REPOSITORY:-jvz007/tec-tac-ui}
 EOF
 chown root:root "${MODULE_CONFIG}"
 chmod 0644 "${MODULE_CONFIG}"
+GITHUB_TOKEN_PATH="${TEC_TAC_ROOT}/etc/github-token"
+if [[ -e "${GITHUB_TOKEN_PATH}" ]]; then
+    [[ -f "${GITHUB_TOKEN_PATH}" && ! -L "${GITHUB_TOKEN_PATH}" ]] || fail "GitHub token path must be a regular non-symlink file: ${GITHUB_TOKEN_PATH}"
+    chown root:"${TACTICAL_GROUP}" "${GITHUB_TOKEN_PATH}"
+    chmod 0640 "${GITHUB_TOKEN_PATH}"
+fi
 log "Wrote Tec-Tac installation config: ${MODULE_CONFIG}"
 
 cat > "${MODULE_SUDOERS}" <<EOF

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -107,22 +108,18 @@ def _normalize_object_type(value: Any) -> str:
     return object_type
 
 
-def _correlation_id(request=None, explicit: Any = None) -> str | None:
+def _correlation_id(request=None, explicit: Any = None) -> str:
     value = str(explicit or "").strip()
     if value:
         return value[:255]
-    if request is None:
-        return None
-    for attr in ("tec_tac_request_id", "correlation_id", "request_id"):
-        value = str(getattr(request, attr, "") or "").strip()
-        if value:
-            return value[:255]
-    meta = getattr(request, "META", {}) or {}
-    for key in ("HTTP_X_REQUEST_ID", "HTTP_X_CORRELATION_ID"):
-        value = str(meta.get(key) or "").strip()
-        if value:
-            return value[:255]
-    return None
+    if request is not None:
+        for attr in ("tec_tac_request_id", "correlation_id", "request_id"):
+            value = str(getattr(request, attr, "") or "").strip()
+            if value:
+                return value[:255]
+    # Never trust browser-supplied X-Request-ID/X-Correlation-ID as audit
+    # provenance. If Core middleware did not assign one, mint it here.
+    return str(uuid.uuid4())
 
 
 def _safe_metadata(metadata: Any) -> Any:
@@ -148,6 +145,23 @@ def _safe_metadata(metadata: Any) -> Any:
             "original_bytes": len(encoded),
         }
     return metadata
+
+
+def _bounded_value(value: Any, label: str, *, maximum: int | None = None) -> Any:
+    if value is None:
+        return None
+    try:
+        from django.conf import settings
+        limit = int(maximum or getattr(settings, "AUDIT_MAX_VALUE_BYTES", 512 * 2**10))
+    except Exception:
+        limit = int(maximum or 512 * 2**10)
+    try:
+        encoded = json.dumps(value, ensure_ascii=False, default=str).encode("utf-8")
+    except Exception as exc:
+        raise AuditContractError(f"{label} could not be serialized.") from exc
+    if len(encoded) > limit:
+        raise AuditContractError(f"{label} exceeds the audit size limit ({limit} bytes).")
+    return value
 
 
 def _auditlog_model():
@@ -190,6 +204,10 @@ def record(
     normalized_action = _normalize_action(action)
     normalized_object_type = _normalize_object_type(object_type)
     oid = None if object_id is None else str(object_id)[:255]
+    if message is not None and len(str(message).encode("utf-8")) > 4096:
+        raise AuditContractError("message exceeds the audit size limit (4096 bytes).")
+    before = _bounded_value(before, "before")
+    after = _bounded_value(after, "after")
     cid = _correlation_id(request, correlation_id)
 
     debug_info = {

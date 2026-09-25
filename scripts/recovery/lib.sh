@@ -61,12 +61,20 @@ ${MODULE_ROOT}/hotfixes/applied|root:${group}|2750
 ${MODULE_ROOT}/hotfixes/history|root:${group}|2750
 ${MODULE_ROOT}/repositories|root:${group}|2770
 ${MODULE_ROOT}/repositories/cache|root:${group}|2770
+${MODULE_ROOT}/module-state.lock|root:${group}|664
 SPECS
 }
 
 ensure_path_spec(){
   local path="$1" owner="$2" mode="$3"
-  install -d -o "${owner%%:*}" -g "${owner##*:}" -m "$mode" "$path"
+  if [[ "$path" == "${MODULE_ROOT}/module-state.lock" ]]; then
+    install -d -o root -g "${owner##*:}" -m 2755 "${MODULE_ROOT}"
+    touch "$path"
+    chown "${owner}" "$path"
+    chmod "$mode" "$path"
+  else
+    install -d -o "${owner%%:*}" -g "${owner##*:}" -m "$mode" "$path"
+  fi
 }
 
 check_module_permissions(){
@@ -75,7 +83,9 @@ check_module_permissions(){
   group="$(detect_tactical_group "$user")"
   while IFS='|' read -r path owner expected_mode; do
     [[ -n "$path" ]] || continue
-    if [[ ! -d "$path" ]]; then
+    if [[ "$path" == "${MODULE_ROOT}/module-state.lock" ]]; then
+      [[ -f "$path" ]] || { printf 'FAIL|missing|%s|%s|%s\n' "$path" "$owner" "$expected_mode"; failures=$((failures+1)); continue; }
+    elif [[ ! -d "$path" ]]; then
       printf 'FAIL|missing|%s|%s|%s\n' "$path" "$owner" "$expected_mode"
       failures=$((failures+1)); continue
     fi

@@ -576,6 +576,9 @@ def resolve_install_plan(candidates: list[dict]) -> dict:
             if not dep:
                 problems.append({"module": candidate["id"], "type": "missing_dependency", "dependency": dep_id, "constraint": constraint})
                 continue
+            if not dep.get("enabled", True):
+                problems.append({"module": candidate["id"], "type": "disabled_dependency", "dependency": dep_id, "constraint": constraint})
+                continue
             version = dep.get("extension_version") or "0.0.0"
             if not version_satisfies(version, constraint):
                 problems.append({"module": candidate["id"], "type": "dependency_version", "dependency": dep_id, "constraint": constraint, "version": version})

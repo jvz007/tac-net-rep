@@ -12,7 +12,7 @@ with tempfile.TemporaryDirectory() as td:
   base=pathlib.Path(td); h.STATE=base; h.ROOT=base/'housekeeping'; h.RESULTS=h.ROOT/'results'
   h.CATEGORY_PATHS={'x':[(base/'x','files','*')]}; h.DEFAULTS={'x':{'mode':'keep_count','keep':1}}
   (base/'x').mkdir(); (base/'x'/'a').write_bytes(b'a'*10); time.sleep(.01); (base/'x'/'b').write_bytes(b'b'*20)
-  items,purge=h.select('x',{'mode':'keep_count','keep':1})
-  assert len(items)==2 and len(purge)==1 and purge[0]['path'].name=='a'
+  items,purge,protected,active_ids,unreadable,zero_blocked,zero_reason=h.select('x',{'mode':'keep_count','keep':1})
+  assert len(items)==2 and len(purge)==1 and purge[0]['path'].name=='a' and not protected and not active_ids and not unreadable and not zero_blocked and zero_reason is None
 print('housekeeping foundation: PASS')
 PY

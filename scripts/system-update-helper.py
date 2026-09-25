@@ -277,6 +277,9 @@ def _version_key(value):
         return (0, 0, 0, 0, str(value or "").lower())
     nums = tuple(int(x or 0) for x in match.groups()[:3])
     suffix = (match.group(4) or "").strip()
+    rebuild = re.fullmatch(r"-(\d+)", suffix)
+    if rebuild:
+        return (*nums, 2, int(rebuild.group(1)))
     return (*nums, 1 if not suffix else 0, suffix.lower())
 
 

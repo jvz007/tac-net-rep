@@ -128,6 +128,7 @@ def update_global_policy(policy: dict, *, requested_by: str = "") -> dict[str, A
     if not isinstance(policy, dict):
         raise SessionSecurityError("policy must be an object.")
     config = TecTacSessionSecurityConfig.current()
+    before_policy = _policy_dict(config)
     fields = []
     if "idle_timeout_minutes" in policy:
         value = int(policy["idle_timeout_minutes"])
@@ -161,14 +162,26 @@ def update_global_policy(policy: dict, *, requested_by: str = "") -> dict[str, A
             if not text:
                 continue
             try:
-                normalized.append(str(ipaddress.ip_network(text, strict=False)))
+                network = ipaddress.ip_network(text, strict=False)
             except ValueError as exc:
                 raise SessionSecurityError(f"Invalid trusted proxy network: {text}") from exc
+            if network.prefixlen == 0:
+                raise SessionSecurityError("trusted_proxies may not trust the entire IPv4 or IPv6 address space.")
+            normalized.append(str(network))
         config.trusted_proxies = sorted(set(normalized)); fields.append("trusted_proxies")
     if fields:
         config.updated_by_label = str(requested_by or "")[:150]
         fields.extend(["updated_by_label", "updated_at"])
         config.save(update_fields=fields)
+        after_policy = _policy_dict(config)
+        _audit(
+            "session_policy_changed",
+            requested_by=requested_by,
+            reason="global-session-policy-update",
+            metadata={"before": before_policy, "after": after_policy, "fields": sorted(set(fields) - {"updated_by_label", "updated_at"})},
+            policy=after_policy,
+            force=True,
+        )
     return _policy_dict(config)
 
 
@@ -625,8 +638,14 @@ def cleanup_session_history(*, retention_days: int = 30) -> dict[str, int]:
     if days < 1 or days > 3650:
         raise SessionSecurityError("retention_days must be between 1 and 3650.")
     cutoff = timezone.now() - timedelta(days=days)
+    active_knox_digests = set(
+        str(value) for value in _active_knox_tokens().values_list("digest", flat=True)
+    )
+    revoked_q = Q(revoked=True, revoked_at__lt=cutoff)
+    if active_knox_digests:
+        revoked_q &= ~Q(knox_digest__in=active_knox_digests)
     sessions_qs = TecTacSessionTrust.objects.filter(
-        Q(revoked=True, revoked_at__lt=cutoff)
+        revoked_q
         | Q(revoked=False, absolute_expires_at__lt=cutoff)
         | Q(revoked=False, idle_expires_at__lt=cutoff)
     )

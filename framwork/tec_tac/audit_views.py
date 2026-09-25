@@ -29,6 +29,8 @@ class AuditRecordView(APIView):
         unknown = sorted(set(payload) - _ALLOWED_FIELDS)
         if unknown:
             return Response({"detail": "Unknown audit event field(s): " + ", ".join(unknown)}, status=400)
+        if str(payload.get("module_id") or "").strip() == "core":
+            return Response({"detail": "Browser audit events may not claim Core provenance."}, status=403)
         try:
             result = record(
                 actor=request.user,
