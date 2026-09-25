@@ -54,7 +54,7 @@ grep -q 'list_trusted_publishers' "${ROOT}/framwork/tec_tac/contracts.py" || fai
 grep -q 'verify_release_files' "${ROOT}/framwork/tec_tac/contracts.py" || fail "trusted publisher verification contract missing"
 echo "[TEST] PASS trusted publisher public contracts"
 
-# 1.15.58 Core Resource Directory public contract
+# 1.15.58+ Core Resource Directory public contract
 [[ -f "${ROOT}/framwork/tec_tac/resources.py" ]] || fail "Core Resource Directory missing"
 [[ -f "${ROOT}/framwork/tec_tac/resources_adapter.py" ]] || fail "Core Tactical resource adapter missing"
 grep -q 'core.resources' "${ROOT}/framwork/tec_tac/resources.py" || fail "core.resources contract id missing"
@@ -62,4 +62,7 @@ grep -q 'resource_contract_metadata' "${ROOT}/framwork/tec_tac/contracts.py" || 
 grep -q 'Core Resource Directory' "${ROOT}/framwork/tec_tac/contracts.py" || fail "Resource Directory missing from Markdown public-contract export"
 grep -q 'CORE RESOURCE DIRECTORY' "${ROOT}/framwork/tec_tac/contracts.py" || fail "Resource Directory missing from text public-contract export"
 grep -q 'Feature modules must consume Tactical clients/sites/agents through tec_tac.resources' "${ROOT}/framwork/tec_tac/contracts.py" || fail "resource abstraction development rule missing"
+grep -q 'create_client' "${ROOT}/framwork/tec_tac/contracts.py" || fail "Resource Directory client write contract missing"
+grep -q 'create_site' "${ROOT}/framwork/tec_tac/contracts.py" || fail "Resource Directory site write contract missing"
+grep -q 'Resource write RBAC' "${ROOT}/framwork/tec_tac/contracts.py" || fail "Resource Directory RBAC documentation missing from Markdown export"
 echo "[TEST] PASS Core Resource Directory public contracts"

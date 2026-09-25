@@ -1,4 +1,4 @@
-from .resource_views import ResourceListView, ResourceDetailView
+from .resource_views import ResourceListView, ResourceDetailView, ResourceMutableListView, ResourceMutableDetailView
 from .server_maintenance_views import (
     ServerMaintenanceActionListView, ServerMaintenanceJobListView,
     ServerMaintenanceJobDetailView, ServerMaintenanceJobCancelView,
@@ -60,10 +60,10 @@ urlpatterns = [
     path("dashboards/<uuid:dashboard_id>/", DashboardDetailView.as_view(), name="tec-tac-dashboard-detail"),
     path("contracts/", ContractCatalogView.as_view(), name="tec-tac-contracts"),
     path("contracts/export/", ContractExportView.as_view(), name="tec-tac-contract-export"),
-    path("resources/clients/", ResourceListView.as_view(resource_type="client"), name="tec-tac-resource-clients"),
-    path("resources/clients/<int:resource_id>/", ResourceDetailView.as_view(resource_type="client"), name="tec-tac-resource-client-detail"),
-    path("resources/sites/", ResourceListView.as_view(resource_type="site"), name="tec-tac-resource-sites"),
-    path("resources/sites/<int:resource_id>/", ResourceDetailView.as_view(resource_type="site"), name="tec-tac-resource-site-detail"),
+    path("resources/clients/", ResourceMutableListView.as_view(resource_type="client"), name="tec-tac-resource-clients"),
+    path("resources/clients/<int:resource_id>/", ResourceMutableDetailView.as_view(resource_type="client"), name="tec-tac-resource-client-detail"),
+    path("resources/sites/", ResourceMutableListView.as_view(resource_type="site"), name="tec-tac-resource-sites"),
+    path("resources/sites/<int:resource_id>/", ResourceMutableDetailView.as_view(resource_type="site"), name="tec-tac-resource-site-detail"),
     path("resources/agents/", ResourceListView.as_view(resource_type="agent"), name="tec-tac-resource-agents"),
     path("resources/agents/<str:resource_id>/", ResourceDetailView.as_view(resource_type="agent"), name="tec-tac-resource-agent-detail"),
     path("audit/record/", AuditRecordView.as_view(), name="tec-tac-audit-record"),

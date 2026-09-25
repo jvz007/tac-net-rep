@@ -26,8 +26,12 @@ CORE_RESOURCE_CONTRACTS = (
     {"area":"resources","import_path":"tec_tac.resources","name":"trusted_service_context","kind":"python","purpose":"Create an explicit trusted non-interactive Resource Directory context; global access is never implicit.","audience":"trusted backend/service"},
     {"area":"resources","import_path":"tec_tac.resources","name":"list_clients","kind":"python","purpose":"List Tactical clients through the stable scoped Core Resource Directory.","audience":"consumer/backend"},
     {"area":"resources","import_path":"tec_tac.resources","name":"get_client","kind":"python","purpose":"Resolve one scoped Tactical client as a stable Core record.","audience":"consumer/backend"},
+    {"area":"resources","import_path":"tec_tac.resources","name":"create_client","kind":"python","purpose":"Create a Tactical client through the Core resource write boundary.","audience":"authorized backend"},
+    {"area":"resources","import_path":"tec_tac.resources","name":"update_client","kind":"python","purpose":"Update a scoped Tactical client through the Core resource write boundary.","audience":"authorized backend"},
     {"area":"resources","import_path":"tec_tac.resources","name":"list_sites","kind":"python","purpose":"List Tactical sites globally or by client through the stable scoped Core Resource Directory.","audience":"consumer/backend"},
     {"area":"resources","import_path":"tec_tac.resources","name":"get_site","kind":"python","purpose":"Resolve one scoped Tactical site as a stable Core record.","audience":"consumer/backend"},
+    {"area":"resources","import_path":"tec_tac.resources","name":"create_site","kind":"python","purpose":"Create a Tactical site inside the caller's client scope through Core.","audience":"authorized backend"},
+    {"area":"resources","import_path":"tec_tac.resources","name":"update_site","kind":"python","purpose":"Update a scoped Tactical site through the Core resource write boundary.","audience":"authorized backend"},
     {"area":"resources","import_path":"tec_tac.resources","name":"list_agents","kind":"python","purpose":"List Tactical agents globally or by client/site through the stable scoped Core Resource Directory.","audience":"consumer/backend"},
     {"area":"resources","import_path":"tec_tac.resources","name":"get_agent","kind":"python","purpose":"Resolve one scoped Tactical agent using its stable agent_id.","audience":"consumer/backend"},
     {"area":"resources","import_path":"tec_tac.resources","name":"resolve_resource","kind":"python","purpose":"Resolve a client, site or agent through one generic Core operation.","audience":"consumer/backend"},
@@ -465,10 +469,16 @@ def render_markdown(catalog: dict | None = None) -> str:
     if resource:
         out.extend(["", "## Core Resource Directory", "", f"Contract: **`{resource.get('id')}`** version **`{resource.get('version')}`**  ", f"Namespace: **`{resource.get('namespace')}`**  ", f"Read-only: **`{str(bool(resource.get('read_only'))).lower()}`**", ""])
         out.append("Backend modules should import `tec_tac.resources` directly. Browser/external callers use the `/api/tfd/resources/...` HTTP representation. Raw Tactical ORM objects are never part of this contract.")
-        out.extend(["", "### Resource shapes", "", "| Type | Public ID | Stable fields | Filters |", "| --- | --- | --- | --- |"] )
+        out.extend(["", "### Resource shapes", "", "| Type | Public ID | Stable fields | Filters | Writes |", "| --- | --- | --- | --- | --- |"] )
         for rtype, spec in (resource.get("resource_types") or {}).items():
-            out.append(f"| `{rtype}` | `{spec.get('id_type')}` | {', '.join(f'`{v}`' for v in spec.get('fields', []))} | {', '.join(f'`{v}`' for v in spec.get('filters', []))} |")
-        out.extend(["", "### Authorization", "", f"- Interactive: {resource.get('authorization', {}).get('interactive')}", f"- Service: {resource.get('authorization', {}).get('service')}", "", "### Error semantics", ""] )
+            writes = (resource.get("write_support") or {}).get(rtype) or []
+            out.append(f"| `{rtype}` | `{spec.get('id_type')}` | {', '.join(f'`{v}`' for v in spec.get('fields', []))} | {', '.join(f'`{v}`' for v in spec.get('filters', []))} | {', '.join(f'`{v}`' for v in writes) or '_none_'} |")
+        out.extend(["", "### Authorization", "", f"- Interactive reads: {resource.get('authorization', {}).get('interactive')}", f"- Service reads: {resource.get('authorization', {}).get('service')}", f"- Writes: {resource.get('authorization', {}).get('write')}"])
+        if resource.get("rbac"):
+            out.extend(["", "### Resource write RBAC", ""] )
+            for name, codename in resource.get("rbac", {}).items():
+                out.append(f"- `{name}`: `{codename}`")
+        out.extend(["", "### Error semantics", ""] )
         for code, description in (resource.get("errors") or {}).items():
             out.append(f"- `{code}` — {description}")
         out.extend(["", f"Active-state semantics: {resource.get('active_semantics')}", "", f"Compatibility: {resource.get('compatibility')}", ""])
@@ -589,9 +599,13 @@ def render_text(catalog: dict | None = None) -> str:
         out.extend(["", "CORE RESOURCE DIRECTORY"])
         out.append(f"- contract={resource.get('id')} version={resource.get('version')} namespace={resource.get('namespace')} read_only={str(bool(resource.get('read_only'))).lower()}")
         for rtype, spec in (resource.get("resource_types") or {}).items():
-            out.append(f"  {rtype}: id={spec.get('id_type')} fields={','.join(spec.get('fields', []))} filters={','.join(spec.get('filters', []))}")
+            writes = ','.join((resource.get("write_support") or {}).get(rtype) or []) or 'none'
+            out.append(f"  {rtype}: id={spec.get('id_type')} fields={','.join(spec.get('fields', []))} filters={','.join(spec.get('filters', []))} writes={writes}")
         out.append(f"  interactive_auth: {resource.get('authorization', {}).get('interactive')}")
         out.append(f"  service_auth: {resource.get('authorization', {}).get('service')}")
+        out.append(f"  write_auth: {resource.get('authorization', {}).get('write')}")
+        for name, codename in (resource.get("rbac") or {}).items():
+            out.append(f"  rbac.{name}: {codename}")
         for code, description in (resource.get("errors") or {}).items():
             out.append(f"  error {code}: {description}")
 

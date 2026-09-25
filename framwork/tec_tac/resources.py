@@ -13,10 +13,12 @@ from . import resources_adapter as adapter
 from .capabilities import register_capability
 
 CONTRACT_ID = "core.resources"
-CONTRACT_VERSION = "1.0.0"
+CONTRACT_VERSION = "1.1.0"
 RESOURCE_TYPES = ("client", "site", "agent")
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 500
+CLIENT_MANAGE_PERMISSION = "core.resources.clients.manage"
+SITE_MANAGE_PERMISSION = "core.resources.sites.manage"
 
 CLIENT_FIELDS = ("type", "id", "name", "active")
 SITE_FIELDS = ("type", "id", "name", "client_id", "active")
@@ -40,6 +42,10 @@ class ResourcePermissionDenied(ResourceDirectoryError):
 
 class ResourceNotFound(ResourceDirectoryError):
     code = "resource_not_found"
+
+
+class ResourceConflict(ResourceDirectoryError):
+    code = "resource_conflict"
 
 
 @dataclass(frozen=True)
@@ -119,6 +125,60 @@ def _authorize(context: ResourceAccessContext, resource_type: str) -> tuple[Any 
     if not bool(getattr(role, permission, False)):
         raise ResourcePermissionDenied(f"Tactical permission {permission} is required.")
     return user, False
+
+
+
+def _authorize_write(context: ResourceAccessContext, resource_type: str) -> Any:
+    if not isinstance(context, ResourceAccessContext):
+        raise ResourcePermissionDenied("A ResourceAccessContext is required.")
+    if context.is_service:
+        raise ResourcePermissionDenied("Trusted service contexts are read-only in core.resources 1.x write operations.")
+    user = context.user
+    if user is None or not bool(getattr(user, "is_authenticated", False)):
+        raise ResourcePermissionDenied("An authenticated Tactical user is required.")
+    if _is_superuser(user):
+        return user
+    role = _role(user)
+    if role is None:
+        raise ResourcePermissionDenied("The Tactical user has no role assigned.")
+    tactical_permission = {
+        "client": "can_manage_clients",
+        "site": "can_manage_sites",
+    }.get(resource_type)
+    core_permission = {
+        "client": CLIENT_MANAGE_PERMISSION,
+        "site": SITE_MANAGE_PERMISSION,
+    }.get(resource_type)
+    if not tactical_permission or not core_permission:
+        raise ResourceValidationError(f"Unsupported writable resource type: {resource_type!r}.")
+    if not bool(getattr(role, tactical_permission, False)):
+        raise ResourcePermissionDenied(f"Tactical permission {tactical_permission} is required.")
+    try:
+        from .rbac import has_extension_permission
+        allowed = has_extension_permission(user, core_permission)
+    except Exception as exc:
+        raise ResourcePermissionDenied("Unable to resolve Tec-Tac Resource Directory write permission.") from exc
+    if not allowed:
+        raise ResourcePermissionDenied(f"Tec-Tac permission {core_permission} is required.")
+    return user
+
+
+def _clean_name(value: Any, label: str) -> str:
+    if not isinstance(value, str):
+        raise ResourceValidationError(f"{label} must be a string.")
+    value = value.strip()
+    if not value:
+        raise ResourceValidationError(f"{label} is required.")
+    if len(value) > 255:
+        raise ResourceValidationError(f"{label} may not exceed 255 characters.")
+    return value
+
+
+def _adapter_write(callable_obj, **kwargs):
+    try:
+        return callable_obj(**kwargs)
+    except getattr(adapter, "TacticalResourceConflictError", adapter.TacticalResourceAdapterError) as exc:
+        raise ResourceConflict(str(exc)) from exc
 
 
 def _clean_positive_int(value: Any, label: str) -> int:
@@ -232,6 +292,59 @@ def get_agent(agent_id: Any, *, context: ResourceAccessContext) -> dict[str, Any
     return row
 
 
+
+def create_client(*, name: str, context: ResourceAccessContext) -> dict[str, Any]:
+    _authorize_write(context, "client")
+    return _adapter_write(adapter.create_client_row, name=_clean_name(name, "name"))
+
+
+def update_client(client_id: Any, *, name: str, context: ResourceAccessContext) -> dict[str, Any]:
+    user = _authorize_write(context, "client")
+    resource_id = _clean_positive_int(client_id, "client_id")
+    row = _adapter_write(
+        adapter.update_client_row,
+        user=user,
+        client_id=resource_id,
+        name=_clean_name(name, "name"),
+    )
+    if row is None:
+        raise ResourceNotFound("Client was not found in the caller's resource scope.")
+    return row
+
+
+def create_site(*, client_id: Any, name: str, context: ResourceAccessContext) -> dict[str, Any]:
+    user = _authorize_write(context, "site")
+    target_client_id = _clean_positive_int(client_id, "client_id")
+    if not adapter.client_write_in_scope(user=user, client_id=target_client_id):
+        raise ResourceNotFound("Client was not found in the caller's resource scope.")
+    return _adapter_write(
+        adapter.create_site_row,
+        client_id=target_client_id,
+        name=_clean_name(name, "name"),
+    )
+
+
+def update_site(site_id: Any, *, name: str | None = None, client_id: Any | None = None, context: ResourceAccessContext) -> dict[str, Any]:
+    user = _authorize_write(context, "site")
+    resource_id = _clean_positive_int(site_id, "site_id")
+    if name is None and client_id in (None, ""):
+        raise ResourceValidationError("At least one of name or client_id is required.")
+    clean_name = _clean_name(name, "name") if name is not None else None
+    target_client_id = _clean_positive_int(client_id, "client_id") if client_id not in (None, "") else None
+    if target_client_id is not None and not adapter.client_write_in_scope(user=user, client_id=target_client_id):
+        raise ResourceNotFound("Client was not found in the caller's resource scope.")
+    row = _adapter_write(
+        adapter.update_site_row,
+        user=user,
+        site_id=resource_id,
+        name=clean_name,
+        client_id=target_client_id,
+    )
+    if row is None:
+        raise ResourceNotFound("Site was not found in the caller's resource scope.")
+    return row
+
+
 def resolve_resource(resource_type: str, resource_id: Any, *, context: ResourceAccessContext) -> dict[str, Any]:
     resource_type = str(resource_type or "").strip().lower()
     if resource_type == "client":
@@ -248,24 +361,28 @@ def resource_contract_metadata() -> dict[str, Any]:
         "id": CONTRACT_ID,
         "version": CONTRACT_VERSION,
         "namespace": "tec_tac.resources",
-        "read_only": True,
+        "read_only": False,
+        "write_support": {"client": ["create", "update"], "site": ["create", "update"], "agent": []},
         "resource_types": {
             "client": {"id_type": "integer", "fields": list(CLIENT_FIELDS), "filters": ["search", "active", "page", "page_size"]},
             "site": {"id_type": "integer", "fields": list(SITE_FIELDS), "filters": ["client_id", "search", "active", "page", "page_size"]},
             "agent": {"id_type": "string", "fields": list(AGENT_FIELDS), "filters": ["client_id", "site_id", "search", "active", "page", "page_size"]},
         },
-        "operations": ["list_clients", "get_client", "list_sites", "get_site", "list_agents", "get_agent", "resolve_resource"],
+        "operations": ["list_clients", "get_client", "create_client", "update_client", "list_sites", "get_site", "create_site", "update_site", "list_agents", "get_agent", "resolve_resource"],
         "pagination": {"default_page_size": DEFAULT_PAGE_SIZE, "maximum_page_size": MAX_PAGE_SIZE},
         "errors": {
             ResourceValidationError.code: "Invalid type, identifier, filter or pagination input.",
             ResourcePermissionDenied.code: "Caller lacks Tactical read permission/scope or a trusted service context.",
             ResourceNotFound.code: "Resource does not exist or is outside the caller's visible scope.",
+            ResourceConflict.code: "Requested resource name conflicts with an existing Tactical resource.",
         },
         "authorization": {
             "interactive": "Authenticated Tactical user + can_list_<resource> + Tactical filter_by_role scope.",
-            "service": "Explicit trusted_service_context(..., global_access=True); never implicit when user is absent.",
+            "service": "Explicit trusted_service_context(..., global_access=True) for reads only; service contexts cannot mutate resources in contract 1.x.",
+            "write": "Authenticated Tactical user + Tactical can_manage_clients/can_manage_sites + Tec-Tac Core resource-manage RBAC permission + Tactical native object write scope (_has_perm_on_client/_has_perm_on_site semantics).",
         },
         "active_semantics": "Tactical currently hard-deletes client/site/agent rows; existing rows are active in contract v1. active=false returns no rows.",
+        "rbac": {"client_write": CLIENT_MANAGE_PERMISSION, "site_write": SITE_MANAGE_PERMISSION},
         "compatibility": "Additive changes are preferred within 1.x. Tactical ORM changes are adapter-internal unless the public representation changes incompatibly.",
     }
 
@@ -273,8 +390,12 @@ def resource_contract_metadata() -> dict[str, Any]:
 class _CoreResourceProvider:
     list_clients = staticmethod(list_clients)
     get_client = staticmethod(get_client)
+    create_client = staticmethod(create_client)
+    update_client = staticmethod(update_client)
     list_sites = staticmethod(list_sites)
     get_site = staticmethod(get_site)
+    create_site = staticmethod(create_site)
+    update_site = staticmethod(update_site)
     list_agents = staticmethod(list_agents)
     get_agent = staticmethod(get_agent)
     resolve_resource = staticmethod(resolve_resource)
@@ -291,9 +412,10 @@ def register_core_resources_capability():
         module_id="core",
         version=CONTRACT_VERSION,
         provider=_RESOURCE_PROVIDER,
-        description="Stable read-only Core directory for Tactical clients, sites and agents.",
+        description="Stable Core directory for Tactical clients, sites and agents with scoped client/site management.",
         operations=(
-            "list_clients", "get_client", "list_sites", "get_site",
+            "list_clients", "get_client", "create_client", "update_client",
+            "list_sites", "get_site", "create_site", "update_site",
             "list_agents", "get_agent", "resolve_resource",
             "user_context", "trusted_service_context",
         ),

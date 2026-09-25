@@ -8,10 +8,16 @@ from __future__ import annotations
 
 from typing import Any
 
+from django.db import IntegrityError, transaction
 from django.db.models import Q
+from django.http import Http404
 
 
 class TacticalResourceAdapterError(RuntimeError):
+    pass
+
+
+class TacticalResourceConflictError(TacticalResourceAdapterError):
     pass
 
 
@@ -148,3 +154,95 @@ def get_agent_row(queryset, agent_id: str) -> dict[str, Any] | None:
         "monitoring_type", "last_seen",
     ).first()
     return agent_row(row) if row else None
+
+
+
+def client_write_in_scope(*, user, client_id: int) -> bool:
+    """Mirror Tactical's native client-object write scope.
+
+    Do not use ``filter_by_role`` here.  Client read visibility is deliberately
+    broader because Tactical includes the parent client of explicitly-visible
+    sites.  Native object permission checks do not grant that transitive client
+    write authority.
+    """
+    from tacticalrmm.permissions import _has_perm_on_client  # noqa: PLC0415
+
+    try:
+        return bool(_has_perm_on_client(user, client_id))
+    except Http404:
+        return False
+
+
+def site_write_in_scope(*, user, site_id: int) -> bool:
+    """Mirror Tactical's native site-object write scope."""
+    from tacticalrmm.permissions import _has_perm_on_site  # noqa: PLC0415
+
+    try:
+        return bool(_has_perm_on_site(user, site_id))
+    except Http404:
+        return False
+
+
+def create_client_row(*, name: str) -> dict[str, Any]:
+    Client, _, _ = _models()
+    try:
+        with transaction.atomic():
+            obj = Client(name=name)
+            obj.full_clean(exclude=None, validate_unique=False)
+            obj.save()
+    except IntegrityError as exc:
+        raise TacticalResourceConflictError("A client with that name already exists.") from exc
+    return client_row({"pk": obj.pk, "name": obj.name})
+
+
+def update_client_row(*, user, client_id: int, name: str) -> dict[str, Any] | None:
+    Client, _, _ = _models()
+    try:
+        with transaction.atomic():
+            if not client_write_in_scope(user=user, client_id=client_id):
+                return None
+            obj = Client.objects.select_for_update().filter(pk=client_id).first()
+            if obj is None:
+                return None
+            obj.name = name
+            obj.full_clean(exclude=None, validate_unique=False)
+            obj.save(update_fields=["name"])
+    except IntegrityError as exc:
+        raise TacticalResourceConflictError("A client with that name already exists.") from exc
+    return client_row({"pk": obj.pk, "name": obj.name})
+
+
+def create_site_row(*, client_id: int, name: str) -> dict[str, Any]:
+    _, Site, _ = _models()
+    try:
+        with transaction.atomic():
+            obj = Site(client_id=client_id, name=name)
+            obj.full_clean(exclude=None, validate_unique=False)
+            obj.save()
+    except IntegrityError as exc:
+        raise TacticalResourceConflictError("A site with that name already exists for the selected client.") from exc
+    return site_row({"pk": obj.pk, "name": obj.name, "client_id": obj.client_id})
+
+
+def update_site_row(*, user, site_id: int, name: str | None = None, client_id: int | None = None) -> dict[str, Any] | None:
+    _, Site, _ = _models()
+    try:
+        with transaction.atomic():
+            if not site_write_in_scope(user=user, site_id=site_id):
+                return None
+            obj = Site.objects.select_for_update().filter(pk=site_id).first()
+            if obj is None:
+                return None
+            update_fields: list[str] = []
+            if name is not None and name != obj.name:
+                obj.name = name
+                update_fields.append("name")
+            if client_id is not None and client_id != obj.client_id:
+                obj.client_id = client_id
+                update_fields.append("client")
+            if update_fields:
+                obj.full_clean(exclude=None, validate_unique=False)
+                obj.save(update_fields=update_fields)
+    except IntegrityError as exc:
+        raise TacticalResourceConflictError("A site with that name already exists for the selected client.") from exc
+    return site_row({"pk": obj.pk, "name": obj.name, "client_id": obj.client_id})

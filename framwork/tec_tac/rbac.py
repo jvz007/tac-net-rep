@@ -10,7 +10,13 @@ from accounts.models import Role
 from tec_tac.registry import get_plugins
 
 CORE_PRIVILEGED_PERMISSION = "core.privileged_operations"
-CORE_PERMISSION_GROUPS = {"Privileged operations": (CORE_PRIVILEGED_PERMISSION,)}
+CORE_RESOURCES_CLIENTS_MANAGE_PERMISSION = "core.resources.clients.manage"
+CORE_RESOURCES_SITES_MANAGE_PERMISSION = "core.resources.sites.manage"
+CORE_PERMISSION_GROUPS = {
+    "Privileged operations": (CORE_PRIVILEGED_PERMISSION,),
+    "Client resource management": (CORE_RESOURCES_CLIENTS_MANAGE_PERMISSION,),
+    "Site resource management": (CORE_RESOURCES_SITES_MANAGE_PERMISSION,),
+}
 
 
 def _extension_plugins(plugins=None):
@@ -19,7 +25,7 @@ def _extension_plugins(plugins=None):
 
 
 def registered_permissions(plugins=None) -> frozenset[str]:
-    values = {CORE_PRIVILEGED_PERMISSION}
+    values = {code for permissions in CORE_PERMISSION_GROUPS.values() for code in permissions}
     for plugin in _extension_plugins(plugins):
         for _, permissions in plugin.permission_groups:
             values.update(permissions)
@@ -31,7 +37,7 @@ def permission_catalog(plugins=None) -> list[dict]:
         "id": "core",
         "version": "1",
         "groups": [{"name": name, "permissions": list(permissions)} for name, permissions in CORE_PERMISSION_GROUPS.items()],
-        "permissions": [CORE_PRIVILEGED_PERMISSION],
+        "permissions": sorted({code for permissions in CORE_PERMISSION_GROUPS.values() for code in permissions}),
     }]
     for plugin in _extension_plugins(plugins):
         groups = [
