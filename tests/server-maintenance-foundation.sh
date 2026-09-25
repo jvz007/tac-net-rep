@@ -58,8 +58,8 @@ with tempfile.TemporaryDirectory() as td:
     exe.write_text('#!/usr/bin/env python3\nimport sys\nprint("OUT:"+sys.argv[1])\nprint("ERR",file=sys.stderr)\n')
     exe.chmod(0o755)
     if os.geteuid()==0: os.chown(exe,0,0)
-    h.STATE_ROOT=state; h.JOBS_ROOT=state/"jobs"; h.CANCEL_ROOT=state/"cancel-requests"; h.LOGS_ROOT=state/"logs"; h.AUDIT_FILE=state/"audit.jsonl"; h.LOCK_FILE=state/"server-maintenance.lock"; h.REGISTRY_ROOT=registry; h.ACTION_ROOT=action_root
-    (state/"jobs").mkdir(); (state/"cancel-requests").mkdir(); (state/"logs").mkdir()
+    h.STATE_ROOT=state; h.JOBS_ROOT=state/"jobs"; h.CANCEL_ROOT=state/"cancel-requests"; h.LOGS_ROOT=state/"logs"; h.RUNNING_ROOT=state/"running"; h.AUDIT_FILE=state/"audit.jsonl"; h.LOCK_FILE=state/"server-maintenance.lock"; h.REGISTRY_ROOT=registry; h.ACTION_ROOT=action_root
+    (state/"jobs").mkdir(); (state/"cancel-requests").mkdir(); (state/"logs").mkdir(); (state/"running").mkdir()
     manifest={"id":"test.echo","revision":"1","executable":str(exe),"argv":[{"param":"value"}],"parameters":{"value":{"type":"string","required":True,"max_length":20}},"timeout_seconds":5,"success_exit_codes":[0],"enabled":True}
     validated=h.validate_manifest(manifest)
     assert validated["id"]=="test.echo"
@@ -81,6 +81,7 @@ with tempfile.TemporaryDirectory() as td:
     jid="55555555-5555-4555-8555-555555555555"
     job={"schema":1,"id":jid,"action":"test.echo","action_revision":"1","status":"dispatched","stage":"dispatched","created_at":"2026-09-21T00:00:00+00:00","started_at":None,"finished_at":None,"cancel_requested_at":None,"context":{"source_module":"test","source_action":"test.run","requested_by":"tester"},"parameters":{"value":"hello"},"public_parameters":{"value":"hello"},"lock":{"scope":"global","state":"pending","acquired_at":None},"exit_result":None,"failure":None}
     (state/"jobs"/f"{jid}.json").write_text(json.dumps(job))
+    h.claim_job(jid)
     h.run_job(jid)
     finished=json.loads((state/"jobs"/f"{jid}.json").read_text())
     assert finished["status"]=="succeeded" and finished["exit_result"]["exit_code"]==0

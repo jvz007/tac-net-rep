@@ -13,8 +13,10 @@ import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from datetime import datetime, timezone
@@ -27,6 +29,7 @@ CONFIG = Path(os.environ.get("TEC_TAC_CONFIG_FILE", "/opt/tec-tac/etc/tec-tac.co
 JOBS_ROOT = STATE_ROOT / "jobs"
 CANCEL_ROOT = STATE_ROOT / "cancel-requests"
 LOGS_ROOT = STATE_ROOT / "logs"
+RUNNING_ROOT = STATE_ROOT / "running"
 AUDIT_FILE = STATE_ROOT / "audit.jsonl"
 LOCK_FILE = STATE_ROOT / "server-maintenance.lock"
 ACTION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
@@ -65,10 +68,10 @@ def tactical_gid():
 
 def ensure_layout():
     gid = tactical_gid()
-    for path, mode in ((STATE_ROOT, 0o2750), (JOBS_ROOT, 0o2770), (CANCEL_ROOT, 0o2770), (LOGS_ROOT, 0o2750)):
+    for path, mode in ((STATE_ROOT, 0o2750), (JOBS_ROOT, 0o2770), (CANCEL_ROOT, 0o2770), (LOGS_ROOT, 0o2750), (RUNNING_ROOT, 0o700)):
         path.mkdir(parents=True, exist_ok=True)
         try:
-            os.chown(path, 0, gid)
+            os.chown(path, 0, 0 if path == RUNNING_ROOT else gid)
         except PermissionError:
             pass
         os.chmod(path, mode)
@@ -76,14 +79,90 @@ def ensure_layout():
     ACTION_ROOT.mkdir(parents=True, exist_ok=True)
 
 
-def atomic_json(path, payload, mode=0o640):
+def atomic_json(path, payload, mode=0o640, *, uid=None, gid=None):
+    """Atomically write JSON without following attacker-controlled temp symlinks."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
-    os.chmod(tmp, mode)
-    if os.geteuid() == 0 and path.parent == JOBS_ROOT:
-        os.chown(tmp, 0, tactical_gid())
-    os.replace(tmp, path)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    tmp = Path(tmp_name)
+    try:
+        data = (json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n").encode("utf-8")
+        with os.fdopen(fd, "wb", closefd=False) as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.fchmod(fd, mode)
+        if uid is not None or gid is not None:
+            os.fchown(fd, -1 if uid is None else int(uid), -1 if gid is None else int(gid))
+        os.close(fd)
+        fd = -1
+        os.replace(tmp, path)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        tmp.unlink(missing_ok=True)
+
+
+def mirror_job(job):
+    atomic_json(job_path(job["id"]), job, mode=0o640, uid=0 if os.geteuid() == 0 else None, gid=tactical_gid() if os.geteuid() == 0 else None)
+
+
+def claimed_dir(job_id):
+    if not JOB_RE.fullmatch(str(job_id or "")):
+        raise RuntimeError("invalid job id")
+    return RUNNING_ROOT / str(job_id)
+
+
+def claimed_job_path(job_id):
+    return claimed_dir(job_id) / "job.json"
+
+
+def _read_json_nofollow(path):
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise RuntimeError(f"state file is not a regular file: {path}")
+        with os.fdopen(os.dup(fd), "r", encoding="utf-8") as handle:
+            return json.load(handle)
+    finally:
+        os.close(fd)
+
+
+def claim_job(job_id):
+    source = job_path(job_id)
+    try:
+        job = _read_json_nofollow(source)
+    except FileNotFoundError as exc:
+        raise RuntimeError("job not found") from exc
+    if not isinstance(job, dict) or str(job.get("id")) != str(job_id):
+        raise RuntimeError("job file is invalid")
+    root = claimed_dir(job_id)
+    root.mkdir(parents=True, exist_ok=False)
+    if os.geteuid() == 0:
+        os.chown(root, 0, 0)
+    os.chmod(root, 0o700)
+    path = claimed_job_path(job_id)
+    atomic_json(path, job, mode=0o600, uid=0 if os.geteuid() == 0 else None, gid=0 if os.geteuid() == 0 else None)
+    return path, job
+
+
+def load_claimed_job(job_id):
+    path = claimed_job_path(job_id)
+    try:
+        job = _read_json_nofollow(path)
+    except FileNotFoundError as exc:
+        raise RuntimeError("claimed job not found") from exc
+    if not isinstance(job, dict) or str(job.get("id")) != str(job_id):
+        raise RuntimeError("claimed job is invalid")
+    return path, job
+
+
+def write_claimed_job(path, job, **changes):
+    job.update(changes)
+    atomic_json(path, job, mode=0o600, uid=0 if os.geteuid() == 0 else None, gid=0 if os.geteuid() == 0 else None)
+    mirror_job(job)
+    return job
 
 
 def append_audit(event, *, job=None, detail=None):
@@ -125,7 +204,10 @@ def load_job(job_id):
 
 def update_job(path, job, **changes):
     job.update(changes)
-    atomic_json(path, job)
+    if path.parent == JOBS_ROOT:
+        mirror_job(job)
+    else:
+        atomic_json(path, job)
     return job
 
 
@@ -305,7 +387,11 @@ def _systemd_unit(job_id):
 
 def dispatch(job_id):
     ensure_layout()
-    path, job = load_job(job_id)
+    public_path = job_path(job_id)
+    try:
+        path, job = claim_job(job_id)
+    except FileExistsError as exc:
+        raise RuntimeError("job has already been claimed") from exc
     if job.get("status") != "queued":
         raise RuntimeError("job is not queued")
     try:
@@ -316,17 +402,14 @@ def dispatch(job_id):
         job["parameters"] = normalized
         job["public_parameters"] = public
     except Exception as exc:
-        update_job(path, job,
+        write_claimed_job(path, job,
             status="failed", stage="validation", finished_at=now(),
             failure={"classification":"validation_failed","message":str(exc),"error_type":exc.__class__.__name__},
         )
         append_audit("job.validation_failed", job=job, detail={"message": str(exc)})
         raise
 
-    gid = tactical_gid()
-    os.chown(path, 0, gid)
-    os.chmod(path, 0o640)
-    update_job(path, job, status="dispatched", stage="dispatched", unit=_systemd_unit(job_id))
+    write_claimed_job(path, job, status="dispatched", stage="dispatched", unit=_systemd_unit(job_id))
     append_audit("job.dispatched", job=job)
     command = [
         "systemd-run",
@@ -341,7 +424,7 @@ def dispatch(job_id):
     try:
         subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=20)
     except Exception as exc:
-        update_job(path, job,
+        write_claimed_job(path, job,
             status="dispatch_failed", stage="dispatch", finished_at=now(),
             failure={"classification":"dispatch_failed","message":str(getattr(exc,"stderr","") or exc),"error_type":exc.__class__.__name__},
         )
@@ -363,7 +446,7 @@ def _signal_cancel(signum, frame):
 def run_job(job_id):
     global _child, _cancel_requested
     ensure_layout()
-    path, job = load_job(job_id)
+    path, job = load_claimed_job(job_id)
     if job.get("status") not in {"dispatched", "waiting_for_lock", "running", "cancelling"}:
         raise RuntimeError("job is not in a runnable state")
     action = load_action(str(job.get("action") or ""))
@@ -376,24 +459,24 @@ def run_job(job_id):
     signal.signal(signal.SIGTERM, _signal_cancel)
     signal.signal(signal.SIGINT, _signal_cancel)
     lock_handle = LOCK_FILE.open("a+")
-    update_job(path, job, status="waiting_for_lock", stage="waiting_for_lock", lock={"scope":"global","state":"waiting","acquired_at":None})
+    write_claimed_job(path, job, status="waiting_for_lock", stage="waiting_for_lock", lock={"scope":"global","state":"waiting","acquired_at":None})
     append_audit("job.waiting_for_lock", job=job)
     try:
         fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
     except Exception as exc:
-        update_job(path, job, status="failed", stage="lock", finished_at=now(), failure={"classification":"lock_failed","message":str(exc),"error_type":exc.__class__.__name__})
+        write_claimed_job(path, job, status="failed", stage="lock", finished_at=now(), failure={"classification":"lock_failed","message":str(exc),"error_type":exc.__class__.__name__})
         append_audit("job.lock_failed", job=job, detail={"message": str(exc)})
         raise
 
-    current = json.loads(path.read_text(encoding="utf-8"))
+    current = load_claimed_job(job_id)[1]
     if current.get("cancel_requested_at") or _cancel_requested:
-        update_job(path, current, status="cancelled", stage="cancelled", finished_at=now(), lock={"scope":"global","state":"released","acquired_at":None}, exit_result={"success":False,"exit_code":None,"signal":None,"timed_out":False}, failure={"classification":"cancelled","message":"Job was cancelled before execution."})
+        write_claimed_job(path, current, status="cancelled", stage="cancelled", finished_at=now(), lock={"scope":"global","state":"released","acquired_at":None}, exit_result={"success":False,"exit_code":None,"signal":None,"timed_out":False}, failure={"classification":"cancelled","message":"Job was cancelled before execution."})
         append_audit("job.cancelled", job=current, detail={"before_execution": True})
         return
 
     acquired = now()
     job = current
-    update_job(path, job, status="running", stage="running", started_at=job.get("started_at") or acquired, lock={"scope":"global","state":"acquired","acquired_at":acquired})
+    write_claimed_job(path, job, status="running", stage="running", started_at=job.get("started_at") or acquired, lock={"scope":"global","state":"acquired","acquired_at":acquired})
     append_audit("job.started", job=job)
 
     stdout_path = LOGS_ROOT / f"{job_id}.stdout.log"
@@ -435,8 +518,8 @@ def run_job(job_id):
             lifecycle.write(f"[{now()}] exit_code={exit_code} timed_out={timed_out} cancel_requested={_cancel_requested}\n")
             lifecycle.flush()
     except Exception as exc:
-        job = json.loads(path.read_text(encoding="utf-8"))
-        update_job(path, job,
+        job = load_claimed_job(job_id)[1]
+        write_claimed_job(path, job,
             status="failed", stage="failed", finished_at=now(),
             lock={"scope":"global","state":"released","acquired_at":acquired},
             exit_result={"success":False,"exit_code":exit_code,"signal":term_signal,"timed_out":timed_out},
@@ -450,7 +533,7 @@ def run_job(job_id):
         except Exception: pass
         lock_handle.close()
 
-    job = json.loads(path.read_text(encoding="utf-8"))
+    job = load_claimed_job(job_id)[1]
     cancelled = bool(job.get("cancel_requested_at")) or _cancel_requested
     success = (exit_code in set(action["success_exit_codes"])) and not timed_out and not cancelled
     if cancelled:
@@ -464,7 +547,7 @@ def run_job(job_id):
     else:
         status, stage = "failed", "failed"
         failure = {"classification":"execution_failed","message":f"Registered action exited with status {exit_code}."}
-    update_job(path, job,
+    write_claimed_job(path, job,
         status=status, stage=stage, finished_at=now(),
         lock={"scope":"global","state":"released","acquired_at":acquired},
         exit_result={"success":success,"exit_code":exit_code,"signal":term_signal,"timed_out":timed_out},
@@ -475,43 +558,46 @@ def run_job(job_id):
 
 def cancel_job(job_id):
     ensure_layout()
-    path, job = load_job(job_id)
+    try:
+        path, job = load_claimed_job(job_id)
+    except RuntimeError:
+        # A cancellation can race with the short pre-claim dispatch window.
+        public_path, public_job = load_job(job_id)
+        if public_job.get("status") in {"succeeded", "failed", "cancelled", "dispatch_failed"}:
+            return
+        raise RuntimeError("job has not reached the claimed execution state")
     cancel_context = None
     cancel_request = CANCEL_ROOT / f"{job_id}.json"
-    if cancel_request.is_file():
+    if cancel_request.is_file() and not cancel_request.is_symlink():
         try:
-            payload = json.loads(cancel_request.read_text(encoding="utf-8"))
+            payload = _read_json_nofollow(cancel_request)
             if isinstance(payload, dict) and str(payload.get("job_id")) == str(job_id) and isinstance(payload.get("context"), dict):
                 cancel_context = dict(payload["context"])
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError, json.JSONDecodeError, RuntimeError):
             cancel_context = None
         cancel_request.unlink(missing_ok=True)
     if job.get("status") in {"succeeded", "failed", "cancelled", "dispatch_failed"}:
         return
     requested_at = now()
-    update_job(path, job, status="cancelling", stage="cancelling", cancel_requested_at=requested_at, cancel_context=cancel_context)
+    write_claimed_job(path, job, status="cancelling", stage="cancelling", cancel_requested_at=requested_at, cancel_context=cancel_context)
     append_audit("job.cancel_requested", job=job, detail={"cancel_context": cancel_context or {}})
     unit = str(job.get("unit") or _systemd_unit(job_id))
     result = subprocess.run(["systemctl", "stop", unit], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     if result.returncode != 0:
-        # A unit may already have completed between reading the job and stop.
-        current = json.loads(path.read_text(encoding="utf-8"))
+        current = load_claimed_job(job_id)[1]
         if current.get("status") not in {"succeeded", "failed", "cancelled", "dispatch_failed"}:
-            update_job(path, current, status="failed", stage="cancel", finished_at=now(), failure={"classification":"cancel_failed","message":(result.stderr or "Unable to stop maintenance unit.").strip()})
+            write_claimed_job(path, current, status="failed", stage="cancel", finished_at=now(), failure={"classification":"cancel_failed","message":(result.stderr or "Unable to stop maintenance unit.").strip()})
             append_audit("job.cancel_failed", job=current, detail={"message": result.stderr.strip()})
             raise RuntimeError((result.stderr or "Unable to stop maintenance unit.").strip())
-    # If systemd terminated the worker before it could persist cancellation,
-    # finalize the durable record here after stop returns.
-    current = json.loads(path.read_text(encoding="utf-8"))
+    current = load_claimed_job(job_id)[1]
     if current.get("status") not in {"succeeded", "failed", "cancelled", "dispatch_failed"}:
-        update_job(path, current,
+        write_claimed_job(path, current,
             status="cancelled", stage="cancelled", finished_at=now(),
             lock={"scope":"global","state":"released","acquired_at":(current.get("lock") or {}).get("acquired_at")},
             exit_result=current.get("exit_result") or {"success":False,"exit_code":None,"signal":signal.SIGTERM,"timed_out":False},
             failure={"classification":"cancelled","message":"Job was cancelled."},
         )
         append_audit("job.cancelled", job=current)
-
 
 def usage():
     raise SystemExit("usage: tec-tac-server-maintenance --dispatch|--run|--cancel <job-id> | --register <manifest.json> | --unregister <action-id>")
