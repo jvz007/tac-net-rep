@@ -20,7 +20,7 @@ from django.urls import path
 from .views import (
     ExtensionPermissionCatalogView, ModuleCatalogView, ModuleJobView,
     ModulePackageInspectView, ModulePackageStageView, ModulePackageInstallView,
-    ModuleRemoveView, RoleExtensionPermissionsView, TotpQrView,
+    ModuleRemoveView, RoleExtensionPermissionsView, TotpEnrollmentView, TotpQrView,
     SystemUpdateStatusView, SystemUpdatePackageInspectView, SystemUpdatePackageStageView,
     SystemUpdatePackageInstallView, SystemUpdateJobView, SystemUpdateOnlineStatusView,
     SystemUpdateBranchesView, SystemUpdateOnlineStageView, SystemUpdateTrustPolicyView, UiContextView,
@@ -93,6 +93,7 @@ urlpatterns = [
     path("system/updates/online/", SystemUpdateOnlineStatusView.as_view(), name="tec-tac-system-update-online-status"),
     path("system/updates/branches/", SystemUpdateBranchesView.as_view(), name="tec-tac-system-update-branches"),
     path("system/updates/online/stage/", SystemUpdateOnlineStageView.as_view(), name="tec-tac-system-update-online-stage"),
+    path("auth/totp/enrollment/", TotpEnrollmentView.as_view(), name="tec-tac-totp-enrollment"),
     path("auth/totp/qr/", TotpQrView.as_view(), name="tec-tac-totp-qr"),
     path("access/extensions/", ExtensionPermissionCatalogView.as_view(), name="tec-tac-extension-permissions"),
     path("modules/", ModuleCatalogView.as_view(), name="tec-tac-module-catalog"),

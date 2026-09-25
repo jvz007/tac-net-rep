@@ -679,6 +679,16 @@ class SessionAuthenticated(IsAuthenticated):
     def has_permission(self, request, view):
         if not super().has_permission(request, view):
             return False
+        # Tactical's credential-check endpoint issues a short-lived Knox token
+        # before local TOTP enrollment exists. That token is authentication
+        # proof for the enrollment flow only; it must never unlock Tec-Tac's
+        # operational APIs. SSO accounts are exempt because their MFA lifecycle
+        # is owned by the external identity provider.
+        if request_knox_digest(request) and not bool(getattr(request.user, "is_sso_user", False)) and not getattr(request.user, "totp_key", None):
+            raise SessionSecurityDenied(
+                "mfa_enrollment_required",
+                "Complete authenticator enrollment before using Tec-Tac.",
+            )
         request.tec_tac_session = ensure_request_session(request)
         return True
 

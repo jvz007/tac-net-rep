@@ -9,13 +9,16 @@ separate Tec-Tac trust record keyed by a one-way HMAC fingerprint of the
 presented Tactical credential. Raw Tactical tokens are never stored, returned
 or written to audit records.
 
-Core-owned authenticated `/api/tfd/` browser endpoints now use the
+Core-owned authenticated `/api/tfd/` browser endpoints use the
 `SessionAuthenticated` permission so Tactical token validity alone is not enough
-for Tec-Tac interactive trust. The TOTP enrollment QR endpoint remains on native
-Tactical authentication because it is intentionally used during pre-operational
-TOTP setup. Public endpoints remain public. Backend/module endpoints should opt
-into `SessionAuthenticated` when they represent interactive browser trust;
-service/API-key contracts must keep their non-interactive authentication path.
+for Tec-Tac interactive trust. Local Knox sessions without configured TOTP are
+rejected with `mfa_enrollment_required`. The sole pre-operational exception is
+`POST auth/totp/enrollment/`, which accepts Tactical's short-lived setup token,
+requires a fresh password proof, returns the TOTP seed once, and destroys the
+setup token before responding. Public endpoints remain public. Backend/module
+endpoints should opt into `SessionAuthenticated` when they represent interactive
+browser trust; service/API-key contracts must keep their non-interactive
+authentication path.
 
 ## Built-in policy
 
@@ -214,11 +217,46 @@ session_absolute_timeout
 session_ip_change
 session_revoked
 session_invalid_state
+mfa_enrollment_required
 ```
 
 A matching 401 retires the browser Tactical credential and returns the shell to
 the normal sign-in flow. This handling is Core-owned and does not depend on the
 optional `coreusersecurity` module.
+
+## One-time TOTP enrollment
+
+First-time local authenticator enrollment uses Tactical's existing
+`POST /v2/checkcreds/` credential check to obtain the upstream 180-second Knox
+setup token. Tec-Tac never treats that token as an operational session.
+
+The UI then requires the operator to enter the current password again and sends
+that proof to:
+
+```text
+POST /api/tfd/auth/totp/enrollment/
+```
+
+Core accepts only a short-lived Knox credential, confirms the account is local
+and has no active TOTP secret, revalidates the password under a database row
+lock, generates the TOTP secret and provisioning QR, stores the Tactical
+`totp_key`, and deletes the setup Knox token in the same transaction. The
+secret, provisioning URI and QR SVG are returned once with `Cache-Control:
+no-store`. They cannot be retrieved again from Core.
+
+The legacy `GET /api/tfd/auth/totp/qr/` route is retained only as a compatibility
+endpoint and returns `410 totp_qr_retired`; it never exports the account's active
+secret.
+
+Seed issuance does not log the user into Tec-Tac. The operator must prove a code
+from the newly enrolled authenticator through Tactical's normal `/v2/login/`
+endpoint, which issues the operational Knox token. If enrollment is abandoned
+after seed issuance, the setup token is already invalid and the account must
+complete TOTP login or have 2FA reset by an administrator.
+
+Core force-audits rejected setup/password proofs as
+`mfa_enrollment_proof_failed` and successful one-time issuance as
+`mfa_enrollment_seed_issued`. Audit records never contain the TOTP seed.
 
 ## MFA backup codes
 
@@ -237,4 +275,4 @@ Revoking a login session deletes the underlying Tactical Knox token and revokes 
 
 MFA recovery-code sets are cryptographically bound to the Tactical TOTP secret present at generation time. A reset or replacement of the TOTP secret invalidates the previous recovery set. Recovery-code regeneration is throttled and failed password/TOTP proofs are always security-audited.
 
-Non-superuser account administrators cannot enumerate or revoke root/effective-superuser Knox sessions. Individual admin revocation accepts both POST and legacy DELETE. The TOTP enrollment QR requires `SessionAuthenticated`, and its issuer is derived from the Tec-Tac UI host/path without colon characters.
+Non-superuser account administrators cannot enumerate or revoke root/effective-superuser Knox sessions. Individual admin revocation accepts both POST and legacy DELETE. The legacy TOTP QR endpoint no longer exposes an active seed; first-time seed issuance uses the one-time enrollment flow described above.

@@ -1,11 +1,12 @@
 import io
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit, urlunsplit
 
 import pyotp
 from pathlib import Path
 
+from django.db import transaction
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from accounts.models import Role
@@ -48,7 +49,7 @@ from .module_runtime import module_runtime_snapshot
 from .registry import get_plugins
 from .notices import unread_count as notice_unread_count
 from .preferences import get_user_preferences
-from .session_security import SessionAuthenticated
+from .session_security import SessionAuthenticated, _audit
 from .trust_policy import TrustPolicyError, LEVEL_RANK, console_guidance as trust_policy_console_guidance, get_policy as get_update_trust_policy, set_policy as set_update_trust_policy
 
 from .rbac import (
@@ -169,51 +170,170 @@ def _tec_tac_totp_issuer(request) -> str:
     return issuer[:160] or "tec-tac"
 
 
-def _tec_tac_totp_uri(request) -> str:
+def _tec_tac_totp_uri(request, secret: str | None = None) -> str:
     issuer = _tec_tac_totp_issuer(request)
-    return pyotp.TOTP(request.user.totp_key).provisioning_uri(
+    key = str(secret if secret is not None else getattr(request.user, "totp_key", "") or "")
+    return pyotp.TOTP(key).provisioning_uri(
         str(request.user.username),
         issuer_name=issuer,
     )
 
 
-@extend_schema_view(get=extend_schema(tags=["Tec-Tac Framework"], summary="Get current user TOTP enrollment QR code"))
+def _is_short_lived_knox_setup_token(request) -> bool:
+    """Return True only for the bounded Knox token Tactical issues from checkcreds.
+
+    Upstream Tactical currently gives that token a 180-second TTL. Keep a small
+    tolerance so a harmless upstream adjustment does not break enrollment, while
+    normal operational Knox sessions remain ineligible for this endpoint.
+    """
+    auth = getattr(request, "auth", None)
+    digest = str(getattr(auth, "digest", "") or "")
+    created = getattr(auth, "created", None)
+    expiry = getattr(auth, "expiry", None)
+    if not digest or created is None or expiry is None:
+        return False
+    try:
+        seconds = (expiry - created).total_seconds()
+    except Exception:
+        return False
+    return 0 < seconds <= 5 * 60
+
+
+def _render_totp_qr_svg(provisioning_uri: str) -> str:
+    import qrcode
+    import qrcode.image.svg
+
+    image = qrcode.make(
+        provisioning_uri,
+        image_factory=qrcode.image.svg.SvgPathImage,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        border=4,
+    )
+    output = io.BytesIO()
+    image.save(output)
+    return output.getvalue().decode("utf-8")
+
+
+@extend_schema_view(post=extend_schema(tags=["Tec-Tac Framework"], summary="Begin one-time local TOTP enrollment"))
+class TotpEnrollmentView(APIView):
+    """Issue the local TOTP seed exactly once from Tactical's setup credential.
+
+    Tactical remains the authentication authority. Core requires the short-lived
+    Knox setup token plus the current password, sets the Tactical user's TOTP
+    secret atomically, returns the provisioning material once, and immediately
+    destroys the setup token. The operator must then prove the new code through
+    Tactical's normal /v2/login/ flow to receive an operational Knox token.
+    """
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [LoginMinThrottle, LoginDayThrottle]
+
+    def post(self, request):
+        username = str(getattr(request.user, "username", "") or "")
+        client_ip = str(getattr(request, "_client_ip", "") or "")[:64]
+        if bool(getattr(request.user, "is_sso_user", False)):
+            return Response({"detail": "Authenticator enrollment is managed by SSO for this account."}, status=409)
+        if not _is_short_lived_knox_setup_token(request):
+            _audit(
+                "mfa_enrollment_proof_failed",
+                username=username,
+                new_ip=client_ip,
+                reason="setup-token-required",
+                requested_by=username,
+                force=True,
+            )
+            return Response({"detail": "A fresh Tactical authenticator setup session is required."}, status=403)
+
+        password = str(request.data.get("password") or "")
+        if not password or not request.user.check_password(password):
+            _audit(
+                "mfa_enrollment_proof_failed",
+                username=username,
+                new_ip=client_ip,
+                reason="password-proof-rejected",
+                requested_by=username,
+                force=True,
+            )
+            return Response({"detail": "Current password was not accepted."}, status=400)
+
+        # Build the secret and QR before committing it. The row lock guarantees
+        # that two concurrent setup requests cannot both receive a usable seed.
+        secret = pyotp.random_base32()
+        provisioning_uri = _tec_tac_totp_uri(request, secret)
+        try:
+            qr_svg = _render_totp_qr_svg(provisioning_uri)
+        except Exception as exc:
+            logger.exception("Tec-Tac one-time TOTP enrollment QR generation failed")
+            return Response({"detail": "Authenticator enrollment could not be prepared.", "error_type": exc.__class__.__name__}, status=500)
+
+        from django.contrib.auth import get_user_model
+
+        with transaction.atomic():
+            user = get_user_model().objects.select_for_update().get(pk=request.user.pk)
+            if getattr(user, "totp_key", None):
+                return Response({"detail": "Authenticator enrollment is already configured for this account."}, status=409)
+            # Re-check the password on the locked row so password changes racing
+            # this request cannot leave a newly issued seed behind.
+            if not user.check_password(password):
+                _audit(
+                    "mfa_enrollment_proof_failed",
+                    username=username,
+                    new_ip=client_ip,
+                    reason="password-proof-changed",
+                    requested_by=username,
+                    force=True,
+                )
+                return Response({"detail": "Current password was not accepted."}, status=400)
+            user.totp_key = secret
+            user.save(update_fields=["totp_key"])
+
+            # The checkcreds token is only a setup credential. Destroy it before
+            # leaving the transaction so it cannot be reused against Tec-Tac or
+            # any other Knox-authenticated endpoint after the seed is disclosed.
+            auth = getattr(request, "auth", None)
+            if auth is not None and getattr(auth, "pk", None) is not None:
+                auth.delete()
+
+            _audit(
+                "mfa_enrollment_seed_issued",
+                username=username,
+                new_ip=client_ip,
+                reason="one-time-enrollment",
+                requested_by=username,
+                metadata={"issuer": _tec_tac_totp_issuer(request), "setup_token_revoked": True},
+                force=True,
+            )
+
+        response = Response({
+            "username": username,
+            "totp_key": secret,
+            "qr_url": provisioning_uri,
+            "qr_svg": qr_svg,
+            "issuer": _tec_tac_totp_issuer(request),
+            "ui_url": _tec_tac_ui_url(request),
+            "verification": "Tactical /v2/login/",
+            "one_time": True,
+        }, status=201)
+        response["Cache-Control"] = "no-store, max-age=0"
+        response["Pragma"] = "no-cache"
+        response["X-Content-Type-Options"] = "nosniff"
+        return response
+
+
+@extend_schema_view(get=extend_schema(tags=["Tec-Tac Framework"], summary="Legacy TOTP QR endpoint"))
 class TotpQrView(APIView):
     permission_classes = [SessionAuthenticated]
 
     def get(self, request):
-        if not getattr(request.user, "totp_key", None):
-            return Response({"detail": "TOTP enrollment has not been initialized for this account."}, status=409)
-
-        qr_url = _tec_tac_totp_uri(request)
-
-        try:
-            import qrcode
-            import qrcode.image.svg
-
-            image = qrcode.make(
-                qr_url,
-                image_factory=qrcode.image.svg.SvgPathImage,
-                error_correction=qrcode.constants.ERROR_CORRECT_M,
-                border=4,
-            )
-            output = io.BytesIO()
-            image.save(output)
-            response = HttpResponse(output.getvalue(), content_type="image/svg+xml")
-            response["Cache-Control"] = "no-store, max-age=0"
-            response["Pragma"] = "no-cache"
-            response["X-Content-Type-Options"] = "nosniff"
-            response["X-Tec-Tac-MFA-Issuer"] = _tec_tac_totp_issuer(request)
-            return response
-        except Exception as exc:
-            logger.exception("Tec-Tac TOTP QR generation failed")
-            return Response(
-                {
-                    "detail": "TOTP QR generation failed.",
-                    "error_type": exc.__class__.__name__,
-                },
-                status=500,
-            )
+        # Never re-export an account's active TOTP secret. Enrollment material is
+        # returned once by TotpEnrollmentView and cannot be retrieved afterward.
+        response = Response({
+            "detail": "Direct TOTP QR retrieval has been retired. Start a fresh authenticator enrollment session instead.",
+            "code": "totp_qr_retired",
+        }, status=410)
+        response["Cache-Control"] = "no-store, max-age=0"
+        response["Pragma"] = "no-cache"
+        return response
 
 
 @extend_schema_view(get=extend_schema(tags=["Tec-Tac Framework"], summary="Get Tec-Tac UI context"))
