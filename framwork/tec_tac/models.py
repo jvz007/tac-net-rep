@@ -168,6 +168,7 @@ class TecTacScheduleRun(models.Model):
     celery_task_id = models.CharField(max_length=80, blank=True, default="")
     attempt = models.PositiveSmallIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
+    last_queued_at = models.DateTimeField(null=True, blank=True, db_index=True)
     started_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)
 

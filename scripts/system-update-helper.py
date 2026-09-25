@@ -405,13 +405,13 @@ def verify_signed_tree_snapshot(root, component, expected_version, trust):
     return len(actual)
 
 
-def _privileged_trust_command(config, *args):
+def _privileged_trust_command(config, *args, input_text=None):
     if not PRIVILEGED_TRUST.is_file():
         raise RuntimeError(f"privileged trust verifier is missing: {PRIVILEGED_TRUST}")
     info = PRIVILEGED_TRUST.stat()
     if info.st_uid != 0 or info.st_mode & 0o022:
         raise RuntimeError("privileged trust verifier is not root-owned or is writable")
-    result = subprocess.run([sys.executable, str(PRIVILEGED_TRUST), *map(str, args)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
+    result = subprocess.run([sys.executable, str(PRIVILEGED_TRUST), *map(str, args)], input=input_text, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
     if result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout or "root trust verification failed").strip())
     try:
@@ -436,17 +436,13 @@ def set_root_trust_policy(level, actor=""):
     existing = str(current.get("minimum_level") or "")
     if existing not in TRUST_LEVEL_RANK:
         raise RuntimeError("current root trust policy is invalid")
-    # The Tactical service account is allowed to strengthen policy through this
-    # sudo verb, but never weaken it. Lowering requires direct root execution of
-    # privileged-trust.py so compromise of `tactical` cannot disable signing.
     if TRUST_LEVEL_RANK[requested] < TRUST_LEVEL_RANK[existing]:
-        raise RuntimeError("lowering the root trust policy requires direct root console access")
+        raise RuntimeError("lowering the root trust policy requires the root console command tec-tac-trust-policy")
     args = ["set-policy", requested]
     if actor:
         args += ["--updated-by", str(actor)]
     args += ["--updated-at", now()]
     return _privileged_trust_command(cfg, *args)
-
 
 
 def prepare_source_checkout(target, component):
@@ -979,7 +975,10 @@ if __name__ == "__main__":
     if len(sys.argv) >= 3 and sys.argv[1] == "--set-trust-policy":
         level = sys.argv[2]
         actor = sys.argv[3] if len(sys.argv) >= 4 else ""
-        print(json.dumps(set_root_trust_policy(level, actor), sort_keys=True))
+        try:
+            print(json.dumps(set_root_trust_policy(level, actor), sort_keys=True))
+        except RuntimeError as exc:
+            raise SystemExit(str(exc))
     elif len(sys.argv) == 3 and sys.argv[1] in {"--dispatch", "--run"}:
         if sys.argv[1] == "--dispatch":
             dispatch(sys.argv[2])

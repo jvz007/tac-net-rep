@@ -15,6 +15,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from tacticalrmm.throttles import LoginDayThrottle, LoginMinThrottle
 from drf_spectacular.utils import extend_schema, extend_schema_view
 
 from .module_manager import (
@@ -48,7 +49,7 @@ from .registry import get_plugins
 from .notices import unread_count as notice_unread_count
 from .preferences import get_user_preferences
 from .session_security import SessionAuthenticated
-from .trust_policy import TrustPolicyError, LEVEL_RANK, get_policy as get_update_trust_policy, set_policy as set_update_trust_policy
+from .trust_policy import TrustPolicyError, LEVEL_RANK, console_guidance as trust_policy_console_guidance, get_policy as get_update_trust_policy, set_policy as set_update_trust_policy
 
 from .rbac import (
     CORE_PRIVILEGED_PERMISSION,
@@ -476,6 +477,12 @@ class SystemUpdateStatusView(APIView):
 )
 class SystemUpdateTrustPolicyView(APIView):
     permission_classes = [SessionAuthenticated]
+    throttle_classes = [LoginMinThrottle, LoginDayThrottle]
+
+    def get_throttles(self):
+        if getattr(self.request, "method", "GET").upper() == "PUT":
+            return super().get_throttles()
+        return []
 
     def get(self, request):
         _require_module_manager(request.user)
@@ -496,17 +503,24 @@ class SystemUpdateTrustPolicyView(APIView):
                 raise TrustPolicyError("Invalid update trust level.")
             lowering = LEVEL_RANK[target] < LEVEL_RANK[current["minimum_level"]]
             if lowering:
-                _audit_privileged(request.user, "modify", "update_trust_policy", object_id=target,
-                                  metadata={"previous": current["minimum_level"], "lowering": True, "outcome": "requested"})
-            if lowering and not is_effective_superuser(request.user):
-                raise PermissionDenied("Only a Tactical or role superuser may request a lower global trust policy.")
+                guidance = trust_policy_console_guidance(target)
+                _audit_privileged(
+                    request.user, "console_change_requested", "update_trust_policy", object_id=target,
+                    metadata={
+                        "previous": current["minimum_level"],
+                        "requested": target,
+                        "environment": guidance.get("environment"),
+                        "outcome": "console_required",
+                    },
+                )
+                return Response(guidance, status=200)
             result = set_update_trust_policy(
                 target,
                 updated_by=str(request.user.username),
                 updated_at=datetime.now(timezone.utc).isoformat(),
             )
             _audit_privileged(request.user, "modify", "update_trust_policy", object_id=target,
-                              metadata={"previous": current["minimum_level"], "lowering": lowering, "outcome": "applied"})
+                              metadata={"previous": current["minimum_level"], "lowering": False, "outcome": "applied"})
             return Response(result)
         except TrustPolicyError as exc:
             return Response({"detail": str(exc)}, status=400)

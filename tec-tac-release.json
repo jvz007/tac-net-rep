@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.48",
+  "version": "1.15.50",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -27,19 +27,19 @@
       "sha256": "7acd5f22138138348d5123fc22c210724ca10ce86f05da7b77c68fc89952319a"
     },
     {
-      "path": "RELEASE_NOTES_1.15.47.md",
-      "size": 1377,
-      "sha256": "f620ce19d049da77e603ccfad0330714888798be2c4fc67bb9f861025c08e152"
+      "path": "RELEASE_NOTES_1.15.49.md",
+      "size": 1117,
+      "sha256": "d89f55fba7340ba7d2dc8b858d55653bbae581b0feaf85f70b1db35b9762f448"
     },
     {
-      "path": "RELEASE_NOTES_1.15.48.md",
-      "size": 1582,
-      "sha256": "776d14b755bc31404f2bcaa8b56e578f9df6df0eaf4722ae08d4c6259b2384a7"
+      "path": "RELEASE_NOTES_1.15.50.md",
+      "size": 895,
+      "sha256": "3f7c75d92854418999869916017c83cc5d25028eeea06f852369bd9c67fdfda4"
     },
     {
       "path": "VERSION",
       "size": 8,
-      "sha256": "05871c3c29d8edc69af96051d2aa114e7723253b23d3c189a94dd01deb34791b"
+      "sha256": "864662a48a876d896cbbbf2b379f95e3a9587adaf21deacde066af0748b350ae"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -872,14 +872,19 @@
       "sha256": "5b4c5bd6adc8fdb4738de1e4542cef0b27051246e139fefcb3a25c864b8a16dd"
     },
     {
+      "path": "framwork/tec_tac/migrations/0014_scheduler_last_queued_at.py",
+      "size": 796,
+      "sha256": "5dd5a89437a9418e6163ae957761a63b8fae61bb7f3eabb2a6070a92b77c7e1c"
+    },
+    {
       "path": "framwork/tec_tac/migrations/__init__.py",
       "size": 0,
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "path": "framwork/tec_tac/models.py",
-      "size": 17361,
-      "sha256": "79afcef4c89b6708f2b96ecd8dc60f58908417d77f8dcfd71eab4a9586c9277a"
+      "size": 17441,
+      "sha256": "eeac87e31983226e0c7300390cebfe8d7fe1da60c4e3792f5352520d9ae5c91b"
     },
     {
       "path": "framwork/tec_tac/module_hotfix.py",
@@ -968,8 +973,8 @@
     },
     {
       "path": "framwork/tec_tac/scheduler.py",
-      "size": 40563,
-      "sha256": "34ea451a60ea5f166378c581ff1e17a15afec26e1fdaa190c5225b0eb6c60318"
+      "size": 40723,
+      "sha256": "0e7db9a7b8e4b3b44f517ffbd0095f0a2f5507cbb67c70b73689a0a610e13f44"
     },
     {
       "path": "framwork/tec_tac/scheduler_views.py",
@@ -1008,13 +1013,13 @@
     },
     {
       "path": "framwork/tec_tac/tasks.py",
-      "size": 5055,
-      "sha256": "68ab5fd6981338a92ed4c0b766189aad9e15cdd0ff440fd552bd287dd56bc3ef"
+      "size": 5214,
+      "sha256": "87b003ddb4f3eb0fba113efa46f4f654c845d4436cdf12b3c219dd51ac46fcb1"
     },
     {
       "path": "framwork/tec_tac/trust_policy.py",
-      "size": 6577,
-      "sha256": "6cd1df8d95247949a6af2cf571a0a8ded0e118e5dcadf9976d9fb023d11b5f05"
+      "size": 7464,
+      "sha256": "92c68e644f6f3da3f3eefbf905223a5b0b8eafe0d37b7beda8a4d750375a7511"
     },
     {
       "path": "framwork/tec_tac/trusted_publishers.py",
@@ -1028,13 +1033,13 @@
     },
     {
       "path": "framwork/tec_tac/views.py",
-      "size": 26183,
-      "sha256": "a3f9444dc84542c7abb2dc072667212783a50d023847e41cd98975fe66889133"
+      "size": 26667,
+      "sha256": "9c9dba60477d85f2513014b80003a3ef942896efef57cc9e3c6dae6ab013fe76"
     },
     {
       "path": "install.sh",
-      "size": 49515,
-      "sha256": "85e1ef8e06f58feed2016e5bd4560d9a82536f1322a96cfe45f64b2f31041860"
+      "size": 50420,
+      "sha256": "b5a51d25179e398def9b50e7db62370c951d137ddafa7a45acb2c7f4aa4144b5"
     },
     {
       "path": "reportsets/.gitkeep",
@@ -1108,8 +1113,8 @@
     },
     {
       "path": "scripts/privileged-trust.py",
-      "size": 19229,
-      "sha256": "facc817cfd9e8f1b72a0f483e7671fb6b6fb5cfd95a9085dea64ef6f5bfc0ad1"
+      "size": 19354,
+      "sha256": "027405d6281229f844c509ec5d83ac26cd4c912fbef400f8537378bf2a566b03"
     },
     {
       "path": "scripts/recovery/lib.sh",
@@ -1183,8 +1188,8 @@
     },
     {
       "path": "scripts/system-update-helper.py",
-      "size": 43583,
-      "sha256": "4f09bf9a70cf8d0f9c7db94f99d1aac0d9295f7bb2b09d40d2b1c30cc28a2c6f"
+      "size": 43489,
+      "sha256": "9ee6b281f464a04eb069d9a62cd258953c01f5595fbdb90a1c09258d1d4e1603"
     },
     {
       "path": "scripts/tactical-backup-sudo.py",
@@ -1197,9 +1202,14 @@
       "sha256": "0a3b2501e790053993398268e109aaf127ba045b8e70918115ceaaa9814074f1"
     },
     {
+      "path": "scripts/trust-policy-cli.py",
+      "size": 10976,
+      "sha256": "300560e79e374c9a6f5812147f5325b6a193921aecd7be5317eee190f0c6f42c"
+    },
+    {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "48430b967a81e6c20d4d7c8c00991a816c0feb66ec6a34bbd08e28c0619f10ae"
+      "sha256": "a56184a14f91efc100877f6297b45a512485a528ce79430098341651a2792b55"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -1382,6 +1392,11 @@
       "sha256": "25fb51ed373d8a0f2c22c4043224103740b3fa71814d522aa7890c47969d48fe"
     },
     {
+      "path": "tests/review-regressions-1.15.50.py",
+      "size": 3340,
+      "sha256": "dab3148130aaf9f6f05e3ad13a13e52038a5181cae0ef468552c9836e39add51"
+    },
+    {
       "path": "tests/scheduler-durability-review.sh",
       "size": 868,
       "sha256": "2e9359d6222154f46f1db0ab470cba12369ee056bcb1092138aba45abb11e152"
@@ -1418,8 +1433,8 @@
     },
     {
       "path": "tests/system-update-foundation.sh",
-      "size": 17126,
-      "sha256": "9adffe93d9529d568c2898b4375957d0ab68529d439fbda44724e0646bf7d232"
+      "size": 17180,
+      "sha256": "b6ff61e987b9a8d6768cf5f79586f0680927eeb31ce4d0a74252c8e2d0a23269"
     },
     {
       "path": "tests/system-update-signed-tree.py",
@@ -1438,8 +1453,8 @@
     },
     {
       "path": "tests/update-trust-policy.py",
-      "size": 4576,
-      "sha256": "9d436044ef9fe2ffc50297b45ed5e06d82591684338d0de78160d94a73fad1c9"
+      "size": 5031,
+      "sha256": "fee7665243873d1ad60d6c1c6cb6d6094cbc99e523cae5b161d6dbde3205418c"
     },
     {
       "path": "tests/user-preferences-foundation.sh",

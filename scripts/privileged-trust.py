@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import tempfile
 import tarfile
@@ -120,6 +121,7 @@ def write_policy(level: str, *, updated_by: str = '', updated_at: str = '') -> d
     os.chmod(tmp, 0o644)
     os.replace(tmp, POLICY_FILE)
     return read_policy()
+
 
 
 def _classify(trust: dict) -> str:
@@ -401,4 +403,8 @@ def main() -> int:
 
 
 if __name__ == '__main__':
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(1)

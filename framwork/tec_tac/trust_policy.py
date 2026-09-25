@@ -15,6 +15,7 @@ CONFIG_FILE = Path('/opt/tec-tac/etc/tec-tac.conf')
 DEFAULT_POLICY_ROOT = Path('/etc/tec-tac/policy')
 POLICY_FILENAME = 'update-trust-policy.json'
 SYSTEM_UPDATE_HELPER = Path('/usr/local/sbin/tec-tac-system-update')
+DEFAULT_HELP_URL = '/tec-tac/help/system-updates#trust-policy'
 
 LEVELS = ('unsigned', 'signed_development', 'signed_production', 'secure_signed')
 LEVEL_RANK = {name: index for index, name in enumerate(LEVELS)}
@@ -94,6 +95,21 @@ def get_policy() -> dict:
         'updated_by': updated_by,
         'environment_isolation': True,
         'root_owned': True,
+        'environment': _server_environment(),
+        'help_url': str(_config_values().get('TEC_TAC_HELP_TRUST_POLICY_URL') or DEFAULT_HELP_URL),
+        'ui_lowering_allowed': False,
+    }
+
+
+def console_guidance(level: str) -> dict:
+    target = _normalize_level(level)
+    cfg = _config_values()
+    return {
+        'status': 'console_required',
+        'requested_level': target,
+        'environment': _server_environment(),
+        'command': f'sudo tec-tac-trust-policy set {target} --reason "<why>" --hours 8',
+        'help_url': str(cfg.get('TEC_TAC_HELP_TRUST_POLICY_URL') or DEFAULT_HELP_URL),
     }
 
 
@@ -104,6 +120,9 @@ def set_policy(level: str, *, updated_by: str | None = None, updated_at: str | N
         raise TrustPolicyError('updated_by contains unsupported characters for privileged policy update.')
     if not SYSTEM_UPDATE_HELPER.is_file():
         raise TrustPolicyError(f'Privileged policy helper is unavailable at {SYSTEM_UPDATE_HELPER}.')
+    current = get_policy()
+    if LEVEL_RANK[normalized] < LEVEL_RANK[current['minimum_level']]:
+        raise TrustPolicyError('Lowering the root trust policy requires the root console command tec-tac-trust-policy.')
     command = ['sudo', '-n', str(SYSTEM_UPDATE_HELPER), '--set-trust-policy', normalized]
     if actor:
         command.append(actor)

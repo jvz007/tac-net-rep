@@ -96,7 +96,9 @@ def execute_schedule_run(self, run_id: str):
             current.error_type = exc.__class__.__name__
             current.finished_at = None if retry else timezone.now()
             current.status = TecTacScheduleRun.Status.QUEUED if retry else TecTacScheduleRun.Status.FAILED
-            current.save(update_fields=["status", "error", "error_type", "finished_at"])
+            if retry:
+                current.last_queued_at = timezone.now()
+            current.save(update_fields=["status", "error", "error_type", "finished_at", "last_queued_at"] if retry else ["status", "error", "error_type", "finished_at"])
             if not retry and current.schedule_id:
                 current.schedule.last_run_at = current.finished_at
                 current.schedule.save(update_fields=["last_run_at", "updated_at"])

@@ -430,6 +430,12 @@ for recovery_link in /usr/local/sbin/tec-tac-repair /usr/local/sbin/tec-tac-diag
     fi
 done
 log "Tec-Tac Recovery Toolkit retained under ${REPO_ROOT}/scripts/recovery."
+EXISTING_TRUST_POLICY_HELP_URL=""
+if [[ -f "${MODULE_CONFIG}" ]]; then
+    EXISTING_TRUST_POLICY_HELP_URL="$(awk -F= '$1=="TEC_TAC_HELP_TRUST_POLICY_URL"{sub(/^[^=]*=/,""); print; exit}' "${MODULE_CONFIG}" 2>/dev/null || true)"
+fi
+TEC_TAC_HELP_TRUST_POLICY_URL="${TEC_TAC_HELP_TRUST_POLICY_URL:-${EXISTING_TRUST_POLICY_HELP_URL:-/tec-tac/help/system-updates#trust-policy}}"
+
 mkdir -p "${MODULE_CONFIG_DIR}"
 cat > "${MODULE_CONFIG}" <<EOF
 # Tec-Tac installation layout. Managed by install.sh.
@@ -450,6 +456,7 @@ TEC_TAC_ENVIRONMENT=${TEC_TAC_ENVIRONMENT:-production}
 TEC_TAC_ALLOW_UNSIGNED_DEVELOPMENT_UPDATES=${TEC_TAC_ALLOW_UNSIGNED_DEVELOPMENT_UPDATES:-false}
 TEC_TAC_ALLOW_UNSIGNED_DEVELOPMENT_PACKAGES=${TEC_TAC_ALLOW_UNSIGNED_DEVELOPMENT_PACKAGES:-false}
 TEC_TAC_ALLOW_SYSTEM_DOWNGRADES=${TEC_TAC_ALLOW_SYSTEM_DOWNGRADES:-false}
+TEC_TAC_HELP_TRUST_POLICY_URL=${TEC_TAC_HELP_TRUST_POLICY_URL}
 TEC_TAC_SYSTEM_UPDATE_ROOT=/var/lib/tec-tac/system-updates
 TEC_TAC_SERVER_BACKUP_ROOT=/var/lib/tec-tac/server-backup
 TEC_TAC_SERVER_MAINTENANCE_ROOT=/var/lib/tec-tac/server-maintenance
@@ -564,6 +571,16 @@ PRIVILEGED_TRUST_HELPER="${PRIVILEGED_TRUST_DIR}/privileged-trust.py"
 python3 -c 'import cryptography' >/dev/null 2>&1 || fail "System Python cryptography support is required for root-side Tec-Tac signature verification."
 mkdir -p "${PRIVILEGED_TRUST_DIR}"
 install -o root -g root -m 0755 "${REPO_ROOT}/scripts/privileged-trust.py" "${PRIVILEGED_TRUST_HELPER}"
+
+TRUST_POLICY_CLI="/usr/local/sbin/tec-tac-trust-policy"
+install -o root -g root -m 0755 "${REPO_ROOT}/scripts/trust-policy-cli.py" "${TRUST_POLICY_CLI}"
+mkdir -p /var/log/tec-tac
+chown root:root /var/log/tec-tac
+chmod 0750 /var/log/tec-tac
+touch /var/log/tec-tac/trust-policy-audit.jsonl
+chown root:root /var/log/tec-tac/trust-policy-audit.jsonl
+chmod 0640 /var/log/tec-tac/trust-policy-audit.jsonl
+log "Installed root-console trust policy CLI: ${TRUST_POLICY_CLI}"
 
 SYSTEM_UPDATE_ROOT="${TEC_TAC_SYSTEM_UPDATE_ROOT:-/var/lib/tec-tac/system-updates}"
 SYSTEM_UPDATE_HELPER="/usr/local/sbin/tec-tac-system-update"

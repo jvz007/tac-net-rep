@@ -8,6 +8,7 @@ from threading import RLock
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from .models import TecTacSchedule, TecTacScheduleRun, TecTacSchedulerConfig, TecTacSchedulerState
@@ -379,6 +380,7 @@ def _run_kwargs(schedule: TecTacSchedule, **extra):
         "parameters_snapshot": schedule.parameters or {},
         "retry_count_snapshot": int(schedule.retry_count or 0),
         "retry_delay_seconds_snapshot": int(schedule.retry_delay_seconds or 60),
+        "last_queued_at": timezone.now(),
     }
     values.update(extra)
     return values
@@ -396,7 +398,8 @@ def recover_stale_runs(now: datetime | None = None) -> dict[str, int]:
     with transaction.atomic():
         queued = list(TecTacScheduleRun.objects.select_for_update().filter(
             status=TecTacScheduleRun.Status.QUEUED,
-            created_at__lt=queued_cutoff,
+        ).filter(
+            Q(last_queued_at__lt=queued_cutoff) | Q(last_queued_at__isnull=True, created_at__lt=queued_cutoff)
         ))
         for run in queued:
             run.status = TecTacScheduleRun.Status.FAILED

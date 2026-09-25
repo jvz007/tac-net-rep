@@ -46,6 +46,14 @@ with tempfile.TemporaryDirectory() as td:
     assert policy["root_owned"] is True
     assert policy["applies_to"] == ["system_updates", "modules"]
 
+    guidance = trust_policy.console_guidance("signed_development")
+    assert guidance["status"] == "console_required"
+    assert guidance["requested_level"] == "signed_development"
+    assert "sudo tec-tac-trust-policy set signed_development" in guidance["command"]
+    assert guidance["command"].endswith('--hours 8')
+    assert guidance["help_url"] == trust_policy.DEFAULT_HELP_URL
+    assert trust_policy.get_policy()["ui_lowering_allowed"] is False
+
     unsigned = {"signed": False, "trusted": False, "state": "unsigned"}
     dev = {"signed": True, "trusted": True, "publisher_environment": "development", "assurance": "standard"}
     prod = {"signed": True, "trusted": True, "publisher_environment": "production", "assurance": "standard"}
