@@ -51,7 +51,7 @@ with tempfile.TemporaryDirectory() as td:
     assert guidance["requested_level"] == "signed_development"
     assert "sudo tec-tac-trust-policy set signed_development" in guidance["command"]
     assert guidance["command"].endswith('--hours 8')
-    assert guidance["help_url"] == trust_policy.DEFAULT_HELP_URL
+    assert guidance["help_article"] == "core.trust-policy"
     assert trust_policy.get_policy()["ui_lowering_allowed"] is False
 
     unsigned = {"signed": False, "trusted": False, "state": "unsigned"}
@@ -105,3 +105,6 @@ with tempfile.TemporaryDirectory() as td:
     assert trust_policy.get_policy()["minimum_level"] == "signed_development"
 
 print("[TEST] PASS root-owned shared update/module trust policy")
+
+# Built-in Help article contract: Core must not emit a server-supplied URL.
+assert "help_url" not in trust_policy.console_guidance("signed_development")

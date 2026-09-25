@@ -15,7 +15,7 @@ CONFIG_FILE = Path('/opt/tec-tac/etc/tec-tac.conf')
 DEFAULT_POLICY_ROOT = Path('/etc/tec-tac/policy')
 POLICY_FILENAME = 'update-trust-policy.json'
 SYSTEM_UPDATE_HELPER = Path('/usr/local/sbin/tec-tac-system-update')
-DEFAULT_HELP_URL = '/tec-tac/help/system-updates#trust-policy'
+HELP_ARTICLE = 'core.trust-policy'
 
 LEVELS = ('unsigned', 'signed_development', 'signed_production', 'secure_signed')
 LEVEL_RANK = {name: index for index, name in enumerate(LEVELS)}
@@ -96,20 +96,19 @@ def get_policy() -> dict:
         'environment_isolation': True,
         'root_owned': True,
         'environment': _server_environment(),
-        'help_url': str(_config_values().get('TEC_TAC_HELP_TRUST_POLICY_URL') or DEFAULT_HELP_URL),
+        'help_article': HELP_ARTICLE,
         'ui_lowering_allowed': False,
     }
 
 
 def console_guidance(level: str) -> dict:
     target = _normalize_level(level)
-    cfg = _config_values()
     return {
         'status': 'console_required',
         'requested_level': target,
         'environment': _server_environment(),
         'command': f'sudo tec-tac-trust-policy set {target} --reason "<why>" --hours 8',
-        'help_url': str(cfg.get('TEC_TAC_HELP_TRUST_POLICY_URL') or DEFAULT_HELP_URL),
+        'help_article': HELP_ARTICLE,
     }
 
 

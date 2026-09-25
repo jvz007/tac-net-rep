@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.52",
+  "version": "1.15.53",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -27,14 +27,14 @@
       "sha256": "7acd5f22138138348d5123fc22c210724ca10ce86f05da7b77c68fc89952319a"
     },
     {
-      "path": "RELEASE_NOTES_1.15.52.md",
-      "size": 965,
-      "sha256": "ef8ea465bec1588b1b0ad055f7c77eb387ac0f9a63c18dba7acd39505e9d8ef0"
+      "path": "RELEASE_NOTES_1.15.53.md",
+      "size": 537,
+      "sha256": "0ff89e1baa0b759fa523d4072cd7eb56e74148b32f549ba304ba95a7e54a76f2"
     },
     {
       "path": "VERSION",
-      "size": 9,
-      "sha256": "9b5ac47b079f96d70dc5a627772c2d08cf19639c3b617c974f60e703659cbe04"
+      "size": 8,
+      "sha256": "b5c8573176eceb9dc3bc623dcf4a177f571e2a528d0af5d7437891256a63e5c7"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -1018,8 +1018,8 @@
     },
     {
       "path": "framwork/tec_tac/trust_policy.py",
-      "size": 7464,
-      "sha256": "92c68e644f6f3da3f3eefbf905223a5b0b8eafe0d37b7beda8a4d750375a7511"
+      "size": 7298,
+      "sha256": "e4eee628f0c2173fd54b5f19eef6516693478558e18ea942b88b35aa2d969797"
     },
     {
       "path": "framwork/tec_tac/trusted_publishers.py",
@@ -1038,8 +1038,8 @@
     },
     {
       "path": "install.sh",
-      "size": 53422,
-      "sha256": "4e63e2dbc3112816e596dd6a95fcdfd17b423a7e5891fccefed23f5fe93c85a3"
+      "size": 52984,
+      "sha256": "90388da443e225ec8ae3d09bffad867b0141283ad345dc826ce48d7fe11cccc0"
     },
     {
       "path": "reportsets/.gitkeep",
@@ -1208,8 +1208,8 @@
     },
     {
       "path": "tec_tac_package.json",
-      "size": 82,
-      "sha256": "3b1e2d4c042d32b80babe6215aebcbfcce96984a59eac82397988d611cc9eff3"
+      "size": 77,
+      "sha256": "4fac881e0831e307848a6a03b095228204be6387c8e06303b820d4dedcccbf25"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -1468,8 +1468,8 @@
     },
     {
       "path": "tests/update-trust-policy.py",
-      "size": 5031,
-      "sha256": "fee7665243873d1ad60d6c1c6cb6d6094cbc99e523cae5b161d6dbde3205418c"
+      "size": 5179,
+      "sha256": "c2c95f490de437d9d826d32367e79af60e3f7fc7343616ae6589a921e4642b68"
     },
     {
       "path": "tests/user-preferences-foundation.sh",
