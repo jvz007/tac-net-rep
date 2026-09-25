@@ -144,14 +144,14 @@ class AdminLoginSessionListView(APIView):
     def get(self, request):
         if not can_manage_login_sessions(request.user):
             return _login_sessions_forbidden()
-        rows = list_active_login_sessions(current_request=request)
+        rows = list_active_login_sessions(current_request=request, requester=request.user)
         return Response({"sessions": rows, "count": len(rows)})
 
 
 class AdminLoginSessionRevokeView(APIView):
     permission_classes = [SessionAuthenticated]
 
-    def delete(self, request, session_ref):
+    def _revoke(self, request, session_ref):
         if not can_manage_login_sessions(request.user):
             return _login_sessions_forbidden()
         try:
@@ -159,10 +159,19 @@ class AdminLoginSessionRevokeView(APIView):
                 session_ref,
                 reason=str(request.data.get("reason") or "administrator-request")[:255],
                 requested_by=request.user.username,
+                requester=request.user,
             )
+        except PermissionError as exc:
+            return Response({"detail": str(exc)}, status=403)
         except SessionSecurityError as exc:
             return Response({"detail": str(exc)}, status=404)
         return Response(result)
+
+    def post(self, request, session_ref):
+        return self._revoke(request, session_ref)
+
+    def delete(self, request, session_ref):
+        return self._revoke(request, session_ref)
 
 
 class AdminUserLoginSessionsRevokeView(APIView):
@@ -171,10 +180,14 @@ class AdminUserLoginSessionsRevokeView(APIView):
     def post(self, request, user_id):
         if not can_manage_login_sessions(request.user):
             return _login_sessions_forbidden()
-        result = revoke_user_login_sessions(
-            int(user_id),
-            reason=str(request.data.get("reason") or "administrator-request")[:255],
-            requested_by=request.user.username,
-        )
+        try:
+            result = revoke_user_login_sessions(
+                int(user_id),
+                reason=str(request.data.get("reason") or "administrator-request")[:255],
+                requested_by=request.user.username,
+                requester=request.user,
+            )
+        except PermissionError as exc:
+            return Response({"detail": str(exc)}, status=403)
         return Response(result)
 

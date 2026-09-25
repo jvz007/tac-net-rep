@@ -14,7 +14,10 @@ from tacticalrmm.throttles import LoginDayThrottle, LoginMinThrottle
 from tacticalrmm.utils import get_core_settings
 
 from .mfa_backup import (
+    MfaBackupProofError,
+    audit_generation_proof_failure,
     backup_code_status,
+    burn_backup_code_hash_cost,
     consume_backup_code,
     generate_backup_codes,
     verify_generation_proof,
@@ -24,6 +27,12 @@ from .session_security import SessionAuthenticated, SessionSecurityError
 
 class MfaBackupCodesView(APIView):
     permission_classes = [SessionAuthenticated]
+    throttle_classes = [LoginMinThrottle, LoginDayThrottle]
+
+    def get_throttles(self):
+        if getattr(self.request, "method", "GET").upper() == "POST":
+            return super().get_throttles()
+        return []
 
     def get(self, request):
         response = Response({"status": backup_code_status(request.user)})
@@ -38,6 +47,13 @@ class MfaBackupCodesView(APIView):
                 totp_code=str(request.data.get("totp") or ""),
             )
             payload = generate_backup_codes(request.user, requested_by=request.user.username)
+        except MfaBackupProofError as exc:
+            audit_generation_proof_failure(
+                request.user,
+                requested_by=request.user.username,
+                client_ip=str(getattr(request, "_client_ip", "") or ""),
+            )
+            return Response({"detail": str(exc)}, status=400)
         except SessionSecurityError as exc:
             return Response({"detail": str(exc)}, status=400)
         response = Response(payload, status=201)
@@ -60,6 +76,7 @@ class BackupCodeLoginView(KnoxLoginView):
     def post(self, request, format=None):
         serializer = AuthTokenSerializer(data=request.data)
         if not serializer.is_valid():
+            burn_backup_code_hash_cost()
             AuditLog.audit_user_failed_login(
                 str(request.data.get("username") or ""),
                 debug_info={"ip": getattr(request, "_client_ip", "")},
@@ -68,13 +85,16 @@ class BackupCodeLoginView(KnoxLoginView):
 
         user = serializer.validated_data["user"]
         if user.block_dashboard_login or user.is_sso_user:
+            burn_backup_code_hash_cost()
             return notify_error("Bad credentials")
 
         core_settings = get_core_settings()
         if not user.is_superuser and core_settings.block_local_user_logon:
+            burn_backup_code_hash_cost()
             return notify_error("Bad credentials")
 
         if not getattr(user, "totp_key", None):
+            burn_backup_code_hash_cost()
             return notify_error("Bad credentials")
 
         code = str(request.data.get("backup_code") or "")

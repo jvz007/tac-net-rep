@@ -13,6 +13,7 @@ from datetime import timedelta
 from typing import Any
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
@@ -63,14 +64,42 @@ def can_manage_session_security(user) -> bool:
     return bool(getattr(role, "is_superuser", False) or getattr(role, "can_do_server_maint", False)) if role else False
 
 
-def can_manage_login_sessions(user) -> bool:
-    """Account administrators may enumerate and revoke real Tactical sessions."""
+def _is_effective_superuser(user) -> bool:
     if not getattr(user, "is_authenticated", False):
         return False
     if bool(getattr(user, "is_superuser", False)):
         return True
+    if str(getattr(user, "username", "") or "") == str(getattr(settings, "ROOT_USER", "") or ""):
+        return True
     role = _role_for_user(user)
-    return bool(getattr(role, "is_superuser", False) or getattr(role, "can_manage_accounts", False)) if role else False
+    return bool(getattr(role, "is_superuser", False)) if role else False
+
+
+def _is_protected_login_account(user) -> bool:
+    if user is None:
+        return False
+    if bool(getattr(user, "is_superuser", False)):
+        return True
+    if str(getattr(user, "username", "") or "") == str(getattr(settings, "ROOT_USER", "") or ""):
+        return True
+    role = _role_for_user(user)
+    return bool(getattr(role, "is_superuser", False)) if role else False
+
+
+def _can_administer_login_target(requester, target_user) -> bool:
+    if _is_protected_login_account(target_user) and not _is_effective_superuser(requester):
+        return False
+    return True
+
+
+def can_manage_login_sessions(user) -> bool:
+    """Account administrators may enumerate and revoke real Tactical sessions."""
+    if not getattr(user, "is_authenticated", False):
+        return False
+    if _is_effective_superuser(user):
+        return True
+    role = _role_for_user(user)
+    return bool(getattr(role, "can_manage_accounts", False)) if role else False
 
 
 def _policy_dict(config: TecTacSessionSecurityConfig | None = None) -> dict[str, Any]:
@@ -256,9 +285,9 @@ def effective_client_ip(request, *, policy: dict[str, Any] | None = None) -> str
     return str(current)
 
 
-def _audit(event_type: str, *, session=None, username: str = "", previous_ip: str = "", new_ip: str = "", reason: str = "", requested_by: str = "", metadata: dict | None = None, policy: dict | None = None):
+def _audit(event_type: str, *, session=None, username: str = "", previous_ip: str = "", new_ip: str = "", reason: str = "", requested_by: str = "", metadata: dict | None = None, policy: dict | None = None, force: bool = False):
     policy = policy or _policy_dict()
-    if not policy.get("session_audit_enabled", True):
+    if not force and not policy.get("session_audit_enabled", True):
         return None
     return TecTacSessionAudit.objects.create(
         session=session,
@@ -447,8 +476,9 @@ def _active_knox_tokens():
     return AuthToken.objects.select_related("user").filter(expiry__gt=now).order_by("-created")
 
 
-def list_active_login_sessions(*, current_request=None) -> list[dict[str, Any]]:
-    tokens = list(_active_knox_tokens()[:2000])
+def list_active_login_sessions(*, current_request=None, requester=None) -> list[dict[str, Any]]:
+    requester = requester or getattr(current_request, "user", None)
+    tokens = [token for token in _active_knox_tokens()[:2000] if _can_administer_login_target(requester, token.user)]
     digests = [str(item.digest) for item in tokens]
     trust_by_digest = {
         item.knox_digest: item
@@ -485,11 +515,13 @@ def _find_active_knox_token(session_ref: str):
     return None
 
 
-def revoke_active_login_session(session_ref: str, *, reason: str = "administrator-request", requested_by: str = "") -> dict[str, Any]:
+def revoke_active_login_session(session_ref: str, *, reason: str = "administrator-request", requested_by: str = "", requester=None) -> dict[str, Any]:
     with transaction.atomic():
         token = _find_active_knox_token(session_ref)
         if token is None:
             raise SessionSecurityError("Active login session was not found.")
+        if not _can_administer_login_target(requester, token.user):
+            raise PermissionError("Superuser or root login sessions require superuser authority.")
         digest = str(token.digest)
         username = str(getattr(token.user, "username", "") or "")
         trust_rows = list(TecTacSessionTrust.objects.select_for_update().filter(knox_digest=digest, revoked=False))
@@ -506,8 +538,11 @@ def revoke_active_login_session(session_ref: str, *, reason: str = "administrato
         return {"id": str(session_ref), "username": username, "revoked": True}
 
 
-def revoke_user_login_sessions(user_id: int, *, reason: str = "administrator-request", requested_by: str = "") -> dict[str, Any]:
+def revoke_user_login_sessions(user_id: int, *, reason: str = "administrator-request", requested_by: str = "", requester=None) -> dict[str, Any]:
     with transaction.atomic():
+        target_user = get_user_model().objects.select_related("role").filter(pk=user_id).first()
+        if target_user is not None and not _can_administer_login_target(requester, target_user):
+            raise PermissionError("Superuser or root login sessions require superuser authority.")
         tokens = list(_active_knox_tokens().filter(user_id=user_id))
         if not tokens:
             return {"user_id": int(user_id), "username": "", "revoked": 0}

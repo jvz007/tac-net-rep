@@ -231,3 +231,10 @@ Recovery sign-in uses `POST /api/tfd/auth/login/backup-code/`. The endpoint reva
 `GET /api/tfd/access/sessions/` lists active Tactical Knox tokens for account administrators. Tec-Tac adds last activity/IP metadata when a token has been observed by the Core session guard. Session identifiers exposed to the browser are HMAC-derived opaque references; raw bearer tokens and Knox digests are not returned.
 
 Revoking a login session deletes the underlying Tactical Knox token and revokes the correlated Tec-Tac trust record. `POST /api/tfd/access/users/<user_id>/sessions/revoke/` revokes every active Tactical token for the selected user. These controls require Tactical account-management permission (or superuser authority).
+
+
+## 1.15.45 access hardening
+
+MFA recovery-code sets are cryptographically bound to the Tactical TOTP secret present at generation time. A reset or replacement of the TOTP secret invalidates the previous recovery set. Recovery-code regeneration is throttled and failed password/TOTP proofs are always security-audited.
+
+Non-superuser account administrators cannot enumerate or revoke root/effective-superuser Knox sessions. Individual admin revocation accepts both POST and legacy DELETE. The TOTP enrollment QR requires `SessionAuthenticated`, and its issuer is derived from the Tec-Tac UI host/path without colon characters.

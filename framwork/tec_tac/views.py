@@ -154,8 +154,19 @@ def _tec_tac_ui_url(request) -> str:
     return f"{scheme}://{request.get_host()}/tec-tac/"
 
 
+def _tec_tac_totp_issuer(request) -> str:
+    parsed = urlsplit(_tec_tac_ui_url(request))
+    host = str(parsed.hostname or "tec-tac")
+    path = (parsed.path or "/tec-tac/").rstrip("/")
+    # otpauth labels use ':' as the issuer/account separator. Keep the issuer
+    # itself colon-free so authenticators do not parse a URL scheme or port as
+    # part of the separator grammar.
+    issuer = f"{host}{path}".replace(":", "-")
+    return issuer[:160] or "tec-tac"
+
+
 def _tec_tac_totp_uri(request) -> str:
-    issuer = _tec_tac_ui_url(request)
+    issuer = _tec_tac_totp_issuer(request)
     return pyotp.TOTP(request.user.totp_key).provisioning_uri(
         str(request.user.username),
         issuer_name=issuer,
@@ -164,7 +175,7 @@ def _tec_tac_totp_uri(request) -> str:
 
 @extend_schema_view(get=extend_schema(tags=["Tec-Tac Framework"], summary="Get current user TOTP enrollment QR code"))
 class TotpQrView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [SessionAuthenticated]
 
     def get(self, request):
         if not getattr(request.user, "totp_key", None):
@@ -188,7 +199,7 @@ class TotpQrView(APIView):
             response["Cache-Control"] = "no-store, max-age=0"
             response["Pragma"] = "no-cache"
             response["X-Content-Type-Options"] = "nosniff"
-            response["X-Tec-Tac-MFA-Issuer"] = _tec_tac_ui_url(request)
+            response["X-Tec-Tac-MFA-Issuer"] = _tec_tac_totp_issuer(request)
             return response
         except Exception as exc:
             logger.exception("Tec-Tac TOTP QR generation failed")

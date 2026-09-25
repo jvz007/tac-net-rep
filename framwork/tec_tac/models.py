@@ -316,6 +316,7 @@ class TecTacMfaBackupCode(models.Model):
         related_name="tec_tac_mfa_backup_codes",
     )
     code_hash = models.CharField(max_length=255)
+    totp_fingerprint = models.CharField(max_length=64, blank=True, default="", db_index=True)
     used_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 

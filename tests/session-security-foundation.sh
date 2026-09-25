@@ -33,10 +33,9 @@ grep -q 'path("session/diagnostics/"' "${ROOT}/framwork/tec_tac/urls.py" || fail
 grep -q '"name": "revoke_user_sessions"' "${ROOT}/framwork/tec_tac/contracts.py" || fail "revocation contract missing"
 grep -q '"name": "SessionAuthenticated"' "${ROOT}/framwork/tec_tac/contracts.py" || fail "permission contract missing"
 
-# Core browser endpoints now enforce Core session trust. The TOTP enrollment
-# endpoint intentionally remains Tactical-auth-only for setup-stage access.
+# Core browser endpoints, including TOTP enrollment QR, enforce Core session trust.
 grep -q 'class TotpQrView' "${ROOT}/framwork/tec_tac/views.py" || fail "TOTP setup endpoint missing"
-grep -A3 'class TotpQrView' "${ROOT}/framwork/tec_tac/views.py" | grep -q 'permission_classes = \[IsAuthenticated\]' || fail "TOTP setup must remain Tactical-auth-only"
+grep -A3 'class TotpQrView' "${ROOT}/framwork/tec_tac/views.py" | grep -q 'permission_classes = \[SessionAuthenticated\]' || fail "TOTP QR must require Core session guard"
 grep -q '_tec_tac_ui_url' "${ROOT}/framwork/tec_tac/views.py" || fail "TOTP issuer must resolve the Tec-Tac UI URL"
 grep -q 'query_params.get("ui_url")' "${ROOT}/framwork/tec_tac/views.py" || fail "TOTP issuer must accept the browser UI base URL"
 if grep -q 'TOTPSetupSerializer' "${ROOT}/framwork/tec_tac/views.py"; then fail "TOTP QR must not inherit Tactical first-CORS issuer"; fi
@@ -44,7 +43,7 @@ grep -A3 'class UiContextView' "${ROOT}/framwork/tec_tac/views.py" | grep -q 'pe
 for f in capability_views.py contract_views.py dashboard_views.py housekeeping_views.py module_repository_views.py module_v2_views.py preference_views.py scheduler_views.py session_security_views.py; do
   if grep -q 'permission_classes = \[IsAuthenticated\]' "${ROOT}/framwork/tec_tac/${f}"; then fail "${f} still uses Tactical-only IsAuthenticated"; fi
 done
-[[ $(grep -c 'permission_classes = \[IsAuthenticated\]' "${ROOT}/framwork/tec_tac/views.py") -eq 1 ]] || fail "views.py must retain Tactical-only auth only for TOTP setup"
+[[ $(grep -c 'permission_classes = \[IsAuthenticated\]' "${ROOT}/framwork/tec_tac/views.py") -eq 0 ]] || fail "views.py still contains Tactical-only IsAuthenticated endpoints"
 grep -q 'session_ip_change' "${ROOT}/framwork/tec_tac/session_security.py" || fail "stable IP-change failure code missing"
 grep -q 'session_invalid_state' "${ROOT}/framwork/tec_tac/session_security.py" || fail "stable invalid-state failure code missing"
 
