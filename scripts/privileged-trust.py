@@ -350,6 +350,31 @@ def verify_tree(root: Path, component: str) -> dict:
     return trust
 
 
+def verify_hotfix(package: Path, signature: Path | None, metadata: Path | None) -> dict:
+    """Root-side verification for managed module hotfix archives."""
+    _, verify_release_files, _ = _imports()
+    cfg = _config()
+    release_meta = {}
+    if metadata:
+        try:
+            release_meta = json.loads(Path(metadata).read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise RuntimeError(f"hotfix release metadata is unreadable: {exc}") from exc
+        if not isinstance(release_meta, dict):
+            raise RuntimeError("hotfix release metadata must contain an object")
+    package_filename = str(release_meta.get("filename") or Path(package).name)
+    signature_filename = str(release_meta.get("signature") or (Path(signature).name if signature else "")) or None
+    trust = verify_release_files(
+        package_path=Path(package), package_filename=package_filename,
+        signature_path=Path(signature) if signature else None,
+        signature_filename=signature_filename,
+        metadata_path=Path(metadata) if metadata else None,
+        required_permissions=("module.install",), require_signed=False,
+        trust_root=TRUST_ROOT, server_environment=_environment(cfg),
+    )
+    return enforce_policy(trust, kind="package")
+
+
 def verify_package(package: Path, signature: Path | None, metadata: Path | None) -> dict:
     _, verify_release_files, _ = _imports()
     cfg = _config()
@@ -384,6 +409,8 @@ def main() -> int:
     p.add_argument('root'); p.add_argument('component', choices=('framework', 'ui'))
     p = sub.add_parser('verify-package')
     p.add_argument('package'); p.add_argument('--signature'); p.add_argument('--metadata')
+    p = sub.add_parser('verify-hotfix')
+    p.add_argument('package'); p.add_argument('--signature'); p.add_argument('--metadata')
     sub.add_parser('get-policy')
     p = sub.add_parser('set-policy')
     p.add_argument('level', choices=LEVELS); p.add_argument('--updated-by', default=''); p.add_argument('--updated-at', default='')
@@ -394,6 +421,8 @@ def main() -> int:
         result = verify_tree(Path(args.root), args.component)
     elif args.command == 'verify-package':
         result = verify_package(Path(args.package), Path(args.signature) if args.signature else None, Path(args.metadata) if args.metadata else None)
+    elif args.command == 'verify-hotfix':
+        result = verify_hotfix(Path(args.package), Path(args.signature) if args.signature else None, Path(args.metadata) if args.metadata else None)
     elif args.command == 'get-policy':
         result = read_policy()
     else:

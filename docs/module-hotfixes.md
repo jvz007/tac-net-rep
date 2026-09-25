@@ -39,7 +39,7 @@ If one of those changes is required, publish a normal module release instead.
 
 ## Package layout
 
-A managed hotfix is a ZIP containing exactly one `tec_tac_hotfix.json`. A single top-level wrapper directory is allowed and recommended.
+A managed hotfix is a ZIP containing exactly one `tec_tac_hotfix.json`. A single top-level wrapper directory is allowed and recommended. The ZIP follows the same detached Ed25519 release-signing model as module packages: upload the hotfix ZIP together with its `.sig` and `.release.json` sidecars. Production systems normally require a production-trusted signature through the root-owned trust policy; development systems follow their configured trust floor.
 
 ```text
 cybercns-0.1.13-HF001/
@@ -158,7 +158,8 @@ Core verifies:
 9. every target already exists as a regular file;
 10. every installed target matches `sha256_before`;
 11. every payload member matches `sha256_after`;
-12. the same hotfix ID is not already applied.
+12. the same hotfix ID is not already applied;
+13. detached publisher signature, publisher environment, key status and `module.install` permission satisfy the current trust policy.
 
 No installed files are changed during inspection.
 
@@ -166,10 +167,14 @@ No installed files are changed during inspection.
 
 Applying a staged hotfix queues a privileged Core lifecycle job. The Tactical web process never directly writes module code.
 
+The worker does not trust Django's inspection result as an authorization decision. Root claims an immutable job copy into a root-only running directory, derives the staged package/sidecar paths from the upload UUID, and independently verifies the exact package bytes against the root-owned publisher store and trust policy before any file mutation.
+
 The worker:
 
 ```text
-acquire global Tec-Tac lifecycle lock
+claim root-private job + acquire global Tec-Tac lifecycle lock
+    ↓
+root reverify detached signature + publisher policy
     ↓
 revalidate package + module version + before hashes
     ↓
@@ -232,9 +237,11 @@ All hotfix management endpoints require an authenticated Tactical session and ef
 POST /api/tfd/modules/hotfixes/inspect/
 Content-Type: multipart/form-data
 field: hotfix=<zip>
+field: signature=<detached .sig>
+field: metadata=<release .json>
 ```
 
-`package` is also accepted as the upload field for generic tooling.
+`package` is also accepted as the hotfix ZIP field and `release_metadata` as the metadata field for generic tooling. The stage response includes `publisher_trust`. Unsigned uploads are accepted only when the root-owned trust policy explicitly permits their trust level.
 
 ### Discard staged hotfix
 

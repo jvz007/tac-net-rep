@@ -30,8 +30,10 @@ class ModuleHotfixInspectView(APIView):
         upload = request.FILES.get("hotfix") or request.FILES.get("package")
         if upload is None:
             return Response({"detail": "A hotfix ZIP upload is required."}, status=400)
+        signature = request.FILES.get("signature")
+        release_metadata = request.FILES.get("metadata") or request.FILES.get("release_metadata")
         try:
-            return Response(stage_uploaded_hotfix(upload), status=201)
+            return Response(stage_uploaded_hotfix(upload, signature_upload=signature, metadata_upload=release_metadata), status=201)
         except ModuleHotfixError as exc:
             return Response({"detail": str(exc)}, status=400)
         except OSError as exc:
@@ -83,6 +85,7 @@ class ModuleHotfixListView(APIView):
                 "applied_at": row.get("applied_at"),
                 "applied_by": row.get("applied_by"),
                 "package_sha256": row.get("package_sha256"),
+                "publisher_trust": row.get("publisher_trust"),
                 "reload": row.get("reload"),
                 "ui_sync": bool(row.get("ui_sync")),
                 "targets": row.get("targets") or [],

@@ -54,7 +54,7 @@ ${MODULE_ROOT}/bundle-backups|root:${group}|2750
 ${MODULE_ROOT}/hotfixes|root:${group}|2750
 ${MODULE_ROOT}/hotfixes/staged|root:${group}|2770
 ${MODULE_ROOT}/hotfixes/jobs|root:${group}|2770
-${MODULE_ROOT}/hotfixes/running|root:${group}|2750
+${MODULE_ROOT}/hotfixes/running|root:root|0700
 ${MODULE_ROOT}/hotfixes/logs|root:${group}|2750
 ${MODULE_ROOT}/hotfixes/backups|root:${group}|2750
 ${MODULE_ROOT}/hotfixes/applied|root:${group}|2750

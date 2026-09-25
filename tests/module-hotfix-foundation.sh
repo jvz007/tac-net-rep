@@ -109,12 +109,14 @@ with tempfile.TemporaryDirectory() as tmp:
     target=ext/'cybercns/secrets.py'; target.parent.mkdir(); original=b"VALUE='old'\n"; replacement=b"VALUE='new'\n"; target.write_bytes(original)
     before=hashlib.sha256(original).hexdigest(); after=hashlib.sha256(replacement).hexdigest()
     manifest={'type':'tec-tac-hotfix','schema':1,'id':'HF001','module_id':'cybercns','base_version':'0.1.13','targets':[{'component':'extension','path':'cybercns/secrets.py','sha256_before':before,'sha256_after':after}]}
-    package=helper.STAGED_ROOT/'package.zip'
+    upload_id='00000000-0000-0000-0000-000000000002'
+    package=helper.STAGED_ROOT/(upload_id+'.zip')
     with zipfile.ZipFile(package,'w') as archive:
         archive.writestr('wrapper/tec_tac_hotfix.json',json.dumps(manifest)); archive.writestr('wrapper/payload/extension/cybercns/secrets.py',replacement)
     config={'TEC_TAC_EXTENSIONS_ROOT':str(base/'extensions'),'TEC_TAC_REPORTSETS_ROOT':str(base/'reportsets'),'TACTICAL_USER':'root'}
     helper.validate_runtime=lambda *args,**kwargs: None; helper.sync_reload=lambda *args,**kwargs: None
-    apply={'id':'00000000-0000-0000-0000-000000000001','module_id':'cybercns','hotfix_id':'HF001','package_path':str(package),'package_sha256':helper.sha256_file(package),'base_version':'0.1.13','requested_by':'test','upload_id':'00000000-0000-0000-0000-000000000002'}
+    helper.privileged_verify_hotfix=lambda *args,**kwargs: {'signed':True,'trusted':True,'root_policy':{'accepted':True}}
+    apply={'id':'00000000-0000-0000-0000-000000000001','module_id':'cybercns','hotfix_id':'HF001','package_path':str(package),'package_sha256':helper.sha256_file(package),'base_version':'0.1.13','requested_by':'test','upload_id':upload_id}
     apply_path=helper.JOBS_ROOT/(apply['id']+'.json'); helper.atomic_json(apply_path,apply)
     with (helper.LOGS_ROOT/'apply.log').open('w',encoding='utf-8') as log: helper.apply_job(apply_path,apply,config,log)
     assert target.read_bytes()==replacement

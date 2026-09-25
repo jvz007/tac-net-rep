@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.55",
+  "version": "1.15.56",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -27,14 +27,14 @@
       "sha256": "7acd5f22138138348d5123fc22c210724ca10ce86f05da7b77c68fc89952319a"
     },
     {
-      "path": "RELEASE_NOTES_1.15.55.md",
-      "size": 974,
-      "sha256": "79865a977c7396ca8ff1eaa324cf4e04badeaa9b981f3096049e2e32756da912"
+      "path": "RELEASE_NOTES_1.15.56.md",
+      "size": 1445,
+      "sha256": "3789e8a98cff72ed548cc8272aa9c29b92298b231c56f2b005451b037d4824d5"
     },
     {
       "path": "VERSION",
-      "size": 8,
-      "sha256": "dcf7333944e6f18a5936a2a5613f342fd241b4e7185a66d113611802b6243a61"
+      "size": 9,
+      "sha256": "027cbede9149be854e84d9ac5f05b5662560ec675f367a75bf41775dad166637"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -83,8 +83,8 @@
     },
     {
       "path": "docs/module-hotfixes.md",
-      "size": 11637,
-      "sha256": "2e5740f19f33778828b5d9801b8c560fbc74c4d18d1f30ab250f3d9bd7b71800"
+      "size": 12795,
+      "sha256": "1c89c894f8a64a9499a15bfbf971973ced6bd73cca7c1bfd53b974f346815634"
     },
     {
       "path": "docs/module-identifiers.md",
@@ -355,6 +355,11 @@
       "path": "docs/releases/RELEASE_NOTES_1.15.54.md",
       "size": 2022,
       "sha256": "01ddca380441a01af159a050ab0279f146844e3d5a3370799244dece5dd84375"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.55.md",
+      "size": 974,
+      "sha256": "79865a977c7396ca8ff1eaa324cf4e04badeaa9b981f3096049e2e32756da912"
     },
     {
       "path": "docs/releases/RELEASE_NOTES_1.2.0.md",
@@ -898,13 +903,13 @@
     },
     {
       "path": "framwork/tec_tac/module_hotfix.py",
-      "size": 21287,
-      "sha256": "e6bbda0de5bac22ca9903800fa25d43a51e8e912b4ff7c82f140e7b633cb7c00"
+      "size": 24965,
+      "sha256": "7fe87d3965195f524d23a1f513f1cc6a3d31b997bbe744452246beaad5f03d70"
     },
     {
       "path": "framwork/tec_tac/module_hotfix_views.py",
-      "size": 4592,
-      "sha256": "69022711af652524cd1e46daaad3f7641e9b35f6d4f38edb4959f3a843fbf727"
+      "size": 4866,
+      "sha256": "8d2b4cb59e5f47481724adab95ac851042dbc4d51ee55ab0a6d87dca134dd0c4"
     },
     {
       "path": "framwork/tec_tac/module_identity.py",
@@ -1068,8 +1073,8 @@
     },
     {
       "path": "install.sh",
-      "size": 52984,
-      "sha256": "90388da443e225ec8ae3d09bffad867b0141283ad345dc826ce48d7fe11cccc0"
+      "size": 53011,
+      "sha256": "30a7f345222256761db2dc13686a3013cd1d34c982699a7292e682464615eeb5"
     },
     {
       "path": "reportsets/.gitkeep",
@@ -1123,8 +1128,8 @@
     },
     {
       "path": "scripts/module-hotfix-job-helper.py",
-      "size": 24423,
-      "sha256": "fed8a77e09293d391ee8f86477cebc375b6c537dd3800b377e322c1680e17537"
+      "size": 31123,
+      "sha256": "4b34b17cbcd93e65399c7c76389c8e139f66464161ece0a140b4bf38f593162e"
     },
     {
       "path": "scripts/module-job-helper.py",
@@ -1143,13 +1148,13 @@
     },
     {
       "path": "scripts/privileged-trust.py",
-      "size": 19354,
-      "sha256": "027405d6281229f844c509ec5d83ac26cd4c912fbef400f8537378bf2a566b03"
+      "size": 20949,
+      "sha256": "8d7e43107a17512d08318aa11d786587c473a63884095f6e6bcc2043a6c48b37"
     },
     {
       "path": "scripts/recovery/lib.sh",
-      "size": 5422,
-      "sha256": "3ae1d085748e14574d7c4b4823727b6a7cf8b65d1b2787bd5483189316160905"
+      "size": 5418,
+      "sha256": "fbaaf968074f083a493e734792074acc0743f29c7824594627a6dc03abacb0ab"
     },
     {
       "path": "scripts/recovery/tec-tac-diagnostics.sh",
@@ -1238,8 +1243,8 @@
     },
     {
       "path": "tec_tac_package.json",
-      "size": 77,
-      "sha256": "f5b1b1a1816994f90aa5ca1ea532216e1b0b1ce9ec0b1c0ba2ad62594e50c972"
+      "size": 82,
+      "sha256": "dd7f26206c0a319f127720b7b118919b8f6159a3265c66ba84cb63b0fe8b459f"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -1343,8 +1348,13 @@
     },
     {
       "path": "tests/module-hotfix-foundation.sh",
-      "size": 7711,
-      "sha256": "ed9b8ac011ff706aec51f6f9c1c9763dbb8eb3ef806ea2ec34feb54927459ab9"
+      "size": 7862,
+      "sha256": "61f0e83b56f0c6c53a84abc05fd085b4de6000342fe46ee49cc7ed22d0a0b3bc"
+    },
+    {
+      "path": "tests/module-hotfix-privilege-boundary.py",
+      "size": 11826,
+      "sha256": "904829e3689a120fd97cbcfcedf5ee99627761a494e0c8d43ae8121335c80e70"
     },
     {
       "path": "tests/module-identifier-case-foundation.sh",

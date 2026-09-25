@@ -17,6 +17,8 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 from .module_manager import ModuleManagerError, _atomic_json, _utcnow
+from .trusted_publishers import PublisherTrustError, verify_release_files
+from .trust_policy import TrustPolicyError, require_accepted as require_trust_accepted
 
 HOTFIX_ROOT = Path("/var/lib/tec-tac/module-manager/hotfixes")
 HOTFIX_STAGED_ROOT = HOTFIX_ROOT / "staged"
@@ -286,10 +288,41 @@ def inspect_hotfix_archive(path: Path) -> dict:
     }
 
 
-def stage_uploaded_hotfix(upload) -> dict:
+def _copy_hotfix_sidecar(upload, destination: Path, *, limit: int = 1024 * 1024) -> None:
+    written = 0
+    with destination.open("wb") as handle:
+        for chunk in upload.chunks():
+            written += len(chunk)
+            if written > limit:
+                handle.close()
+                destination.unlink(missing_ok=True)
+                raise ModuleHotfixError("Hotfix trust sidecar exceeds the 1 MiB limit.")
+            handle.write(chunk)
+    os.chmod(destination, 0o640)
+
+
+def _verify_hotfix_trust(*, package_path: Path, package_filename: str, signature_path: Path | None, signature_filename: str | None, metadata_path: Path | None) -> dict:
+    try:
+        trust = verify_release_files(
+            package_path=package_path,
+            package_filename=package_filename,
+            signature_path=signature_path,
+            signature_filename=signature_filename,
+            metadata_path=metadata_path,
+            required_permissions=("module.install",),
+            require_signed=False,
+        )
+        trust["acceptance_policy"] = require_trust_accepted(trust, subject="Module hotfix")
+        return trust
+    except (PublisherTrustError, TrustPolicyError) as exc:
+        raise ModuleHotfixError(f"Hotfix publisher trust verification failed: {exc}") from exc
+
+
+def stage_uploaded_hotfix(upload, signature_upload=None, metadata_upload=None) -> dict:
     HOTFIX_STAGED_ROOT.mkdir(parents=True, exist_ok=True)
     upload_id = str(uuid.uuid4())
     package_path = HOTFIX_STAGED_ROOT / f"{upload_id}.zip"
+    original_filename = str(getattr(upload, "name", "hotfix.zip"))
     total = 0
     with package_path.open("wb") as handle:
         for chunk in upload.chunks():
@@ -298,21 +331,47 @@ def stage_uploaded_hotfix(upload) -> dict:
                 package_path.unlink(missing_ok=True)
                 raise ModuleHotfixError("Hotfix package exceeds the 25 MiB limit.")
             handle.write(chunk)
+    os.chmod(package_path, 0o640)
+    sig_path = None
+    metadata_path = None
     try:
         preview = inspect_hotfix_archive(package_path)
+        if signature_upload is not None:
+            sig_path = HOTFIX_STAGED_ROOT / f"{upload_id}.sig"
+            _copy_hotfix_sidecar(signature_upload, sig_path)
+        if metadata_upload is not None:
+            metadata_path = HOTFIX_STAGED_ROOT / f"{upload_id}.release.json"
+            _copy_hotfix_sidecar(metadata_upload, metadata_path)
+        signature_filename = str(getattr(signature_upload, "name", "")) or None if signature_upload is not None else None
+        publisher_trust = _verify_hotfix_trust(
+            package_path=package_path,
+            package_filename=original_filename,
+            signature_path=sig_path,
+            signature_filename=signature_filename,
+            metadata_path=metadata_path,
+        )
     except Exception:
         package_path.unlink(missing_ok=True)
+        if sig_path: sig_path.unlink(missing_ok=True)
+        if metadata_path: metadata_path.unlink(missing_ok=True)
         raise
     meta = {
         "upload_id": upload_id,
-        "filename": str(getattr(upload, "name", "hotfix.zip")),
+        "filename": original_filename,
         "package_path": str(package_path),
         "sha256": preview["package_sha256"],
         "preview": preview,
+        "publisher_trust": publisher_trust,
         "created_at": _utcnow(),
     }
+    if sig_path is not None:
+        meta["signature_path"] = str(sig_path)
+        meta["signature_filename"] = str(getattr(signature_upload, "name", sig_path.name))
+    if metadata_path is not None:
+        meta["release_metadata_path"] = str(metadata_path)
+        meta["release_metadata_filename"] = str(getattr(metadata_upload, "name", metadata_path.name))
     _atomic_json(HOTFIX_STAGED_ROOT / f"{upload_id}.json", meta)
-    return meta
+    return {key: value for key, value in meta.items() if key not in {"package_path", "signature_path", "release_metadata_path"}}
 
 
 def _load_stage(upload_id: str) -> dict:
@@ -332,7 +391,9 @@ def _load_stage(upload_id: str) -> dict:
 
 def discard_hotfix_stage(upload_id: str) -> None:
     meta = _load_stage(upload_id)
-    Path(meta["package_path"]).unlink(missing_ok=True)
+    for key in ("package_path", "signature_path", "release_metadata_path"):
+        if meta.get(key):
+            Path(str(meta[key])).unlink(missing_ok=True)
     (HOTFIX_STAGED_ROOT / f"{upload_id}.json").unlink(missing_ok=True)
 
 
@@ -386,11 +447,21 @@ def queue_apply_hotfix(upload_id: str, *, requested_by: str | None = None) -> di
     meta = _load_stage(upload_id)
     package = Path(meta["package_path"])
     preview = inspect_hotfix_archive(package)
+    trust = _verify_hotfix_trust(
+        package_path=package,
+        package_filename=str(meta.get("filename") or package.name),
+        signature_path=Path(meta["signature_path"]) if meta.get("signature_path") else None,
+        signature_filename=str(meta.get("signature_filename") or "") or None,
+        metadata_path=Path(meta["release_metadata_path"]) if meta.get("release_metadata_path") else None,
+    )
     return _queue({
         "action": "apply",
         "upload_id": str(upload_id),
         "package_path": str(package),
         "package_sha256": preview["package_sha256"],
+        "signature_path": meta.get("signature_path"),
+        "release_metadata_path": meta.get("release_metadata_path"),
+        "publisher_trust": trust,
         "module_id": preview["module_id"],
         "hotfix_id": preview["id"],
         "base_version": preview["base_version"],

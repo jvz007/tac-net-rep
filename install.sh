@@ -409,8 +409,10 @@ repair_module_permissions
 chmod 0755 "$(dirname "${MODULE_STATE_ROOT}")"
 HOTFIX_ROOT="${MODULE_STATE_ROOT}/hotfixes"
 mkdir -p "${HOTFIX_ROOT}/staged" "${HOTFIX_ROOT}/jobs" "${HOTFIX_ROOT}/running" "${HOTFIX_ROOT}/logs" "${HOTFIX_ROOT}/backups" "${HOTFIX_ROOT}/applied" "${HOTFIX_ROOT}/history"
-chown root:"${TACTICAL_GROUP}" "${HOTFIX_ROOT}" "${HOTFIX_ROOT}/running" "${HOTFIX_ROOT}/logs" "${HOTFIX_ROOT}/backups" "${HOTFIX_ROOT}/applied" "${HOTFIX_ROOT}/history"
-chmod 2750 "${HOTFIX_ROOT}" "${HOTFIX_ROOT}/running" "${HOTFIX_ROOT}/logs" "${HOTFIX_ROOT}/backups" "${HOTFIX_ROOT}/applied" "${HOTFIX_ROOT}/history"
+chown root:"${TACTICAL_GROUP}" "${HOTFIX_ROOT}" "${HOTFIX_ROOT}/logs" "${HOTFIX_ROOT}/backups" "${HOTFIX_ROOT}/applied" "${HOTFIX_ROOT}/history"
+chmod 2750 "${HOTFIX_ROOT}" "${HOTFIX_ROOT}/logs" "${HOTFIX_ROOT}/backups" "${HOTFIX_ROOT}/applied" "${HOTFIX_ROOT}/history"
+chown root:root "${HOTFIX_ROOT}/running"
+chmod 0700 "${HOTFIX_ROOT}/running"
 chown root:"${TACTICAL_GROUP}" "${HOTFIX_ROOT}/staged" "${HOTFIX_ROOT}/jobs"
 chmod 2770 "${HOTFIX_ROOT}/staged" "${HOTFIX_ROOT}/jobs"
 

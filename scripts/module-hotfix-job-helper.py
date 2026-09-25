@@ -27,7 +27,8 @@ RUNNING_ROOT = HOTFIX_ROOT / "running"
 BACKUPS_ROOT = HOTFIX_ROOT / "backups"
 APPLIED_ROOT = HOTFIX_ROOT / "applied"
 HISTORY_ROOT = HOTFIX_ROOT / "history"
-CONFIG = Path(os.environ.get("TEC_TAC_CONFIG_FILE", "/opt/tec-tac/etc/tec-tac.conf"))
+CONFIG = Path("/opt/tec-tac/etc/tec-tac.conf")
+PRIVILEGED_TRUST = Path("/usr/local/lib/tec-tac-security/privileged-trust.py")
 LIFECYCLE_LOCK = Path("/var/lib/tec-tac/lifecycle.lock")
 JOB_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 MODULE_RE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -44,6 +45,9 @@ def now():
 def load_config():
     values = {}
     if CONFIG.is_file():
+        info = CONFIG.stat()
+        if info.st_uid != 0 or info.st_mode & 0o022:
+            raise RuntimeError("Tec-Tac config must be root-owned and not group/world writable")
         for raw in CONFIG.read_text(encoding="utf-8").splitlines():
             line = raw.strip()
             if not line or line.startswith("#") or "=" not in line:
@@ -53,12 +57,32 @@ def load_config():
     return values
 
 
-def atomic_json(path: Path, payload: dict, mode=0o640):
+def atomic_json(path: Path, payload: dict, mode=0o640, *, uid=None, gid=None):
+    """Atomically write JSON without following attacker-controlled temp symlinks."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.chmod(tmp, mode)
-    os.replace(tmp, path)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    try:
+        os.fchmod(fd, mode)
+        if uid is not None or gid is not None:
+            os.fchown(fd, -1 if uid is None else int(uid), -1 if gid is None else int(gid))
+        data = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        view = memoryview(data)
+        while view:
+            written = os.write(fd, view)
+            if written <= 0:
+                raise OSError("short write while storing hotfix JSON")
+            view = view[written:]
+        os.fsync(fd)
+        os.close(fd)
+        fd = -1
+        os.replace(tmp_name, path)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        try:
+            os.unlink(tmp_name)
+        except FileNotFoundError:
+            pass
 
 
 def sha256_file(path: Path):
@@ -91,37 +115,51 @@ def job_path(job_id):
     return JOBS_ROOT / f"{job_id}.json"
 
 
-def load_job(job_id):
-    path = job_path(job_id)
-    if not path.is_file():
+def load_job(job_id, *, claimed=False):
+    path = (RUNNING_ROOT if claimed else JOBS_ROOT) / f"{job_id}.json"
+    if not JOB_RE.fullmatch(job_id or ""):
+        raise SystemExit("invalid hotfix job id")
+    if not path.is_file() or path.is_symlink():
         raise SystemExit("hotfix job not found")
+    if claimed:
+        info = path.stat()
+        if info.st_uid != 0 or info.st_mode & 0o077:
+            raise SystemExit("claimed hotfix job is not root-private")
     payload = json.loads(path.read_text(encoding="utf-8"))
     if payload.get("id") != job_id or payload.get("action") not in ALLOWED_ACTIONS:
         raise SystemExit("invalid hotfix job")
     return path, payload
 
 
+def mirror_job(job_id, payload, gid):
+    path = JOBS_ROOT / f"{job_id}.json"
+    atomic_json(path, payload, mode=0o640, uid=0, gid=gid)
+
+
 def claim_job(job_id):
-    path, job = load_job(job_id)
+    source, job = load_job(job_id)
     if job.get("status") != "queued":
         raise SystemExit("hotfix job is not queued")
     config = load_config()
     gid = tactical_gid(config)
     for directory in (RUNNING_ROOT, LOGS_ROOT, BACKUPS_ROOT, APPLIED_ROOT, HISTORY_ROOT):
         directory.mkdir(parents=True, exist_ok=True)
+    os.chown(RUNNING_ROOT, 0, 0)
+    os.chmod(RUNNING_ROOT, 0o700)
+    for directory in (LOGS_ROOT, BACKUPS_ROOT, APPLIED_ROOT, HISTORY_ROOT):
         try:
             os.chown(directory, 0, gid)
             os.chmod(directory, 0o2750)
         except OSError:
             pass
+    claimed = RUNNING_ROOT / f"{job_id}.json"
+    if claimed.exists():
+        raise SystemExit("hotfix job is already claimed")
     job["status"] = "dispatched"
     job["stage"] = "dispatched"
-    atomic_json(path, job)
-    try:
-        os.chown(path, 0, gid)
-    except OSError:
-        pass
-    return path, job
+    atomic_json(claimed, job, mode=0o600, uid=0, gid=0)
+    mirror_job(job_id, job, gid)
+    return claimed, job
 
 
 def dispatch(job_id):
@@ -134,6 +172,104 @@ def dispatch(job_id):
         start_new_session=True,
         close_fds=True,
     )
+
+
+def write_claimed_job(path: Path, job: dict, config: dict):
+    atomic_json(path, job, mode=0o600, uid=0, gid=0)
+    mirror_job(str(job["id"]), job, tactical_gid(config))
+
+
+
+
+def _copy_nofollow_to_private(source: Path, destination: Path, *, required: bool = True) -> Path | None:
+    """Copy one staged artifact into root-private storage without following links."""
+    source = Path(source)
+    destination = Path(destination)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        src_fd = os.open(source, flags)
+    except FileNotFoundError:
+        if required:
+            raise RuntimeError(f"staged hotfix artifact is missing: {source.name}")
+        return None
+    except OSError as exc:
+        raise RuntimeError(f"staged hotfix artifact is unsafe or unreadable: {source.name}") from exc
+    try:
+        src_stat = os.fstat(src_fd)
+        if not stat.S_ISREG(src_stat.st_mode):
+            raise RuntimeError(f"staged hotfix artifact is not a regular file: {source.name}")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        parent_stat = destination.parent.stat()
+        if parent_stat.st_uid != 0 or parent_stat.st_mode & 0o077:
+            raise RuntimeError("root-private hotfix working directory has unsafe ownership or permissions")
+        out_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            dst_fd = os.open(destination, out_flags, 0o600)
+        except OSError as exc:
+            raise RuntimeError(f"unable to create root-private hotfix artifact: {destination.name}") from exc
+        try:
+            os.fchmod(dst_fd, 0o600)
+            os.fchown(dst_fd, 0, 0)
+            while True:
+                block = os.read(src_fd, 1024 * 1024)
+                if not block:
+                    break
+                view = memoryview(block)
+                while view:
+                    written = os.write(dst_fd, view)
+                    if written <= 0:
+                        raise OSError("short write while claiming hotfix artifact")
+                    view = view[written:]
+            os.fsync(dst_fd)
+        finally:
+            os.close(dst_fd)
+    finally:
+        os.close(src_fd)
+    return destination
+
+
+def claim_staged_artifacts(job: dict) -> tuple[Path, Path | None, Path | None]:
+    """Freeze Tactical-writable hotfix artifacts before root verifies or executes them."""
+    upload_id = str(job.get("upload_id") or "")
+    job_id = str(job.get("id") or "")
+    if not JOB_RE.fullmatch(upload_id) or not JOB_RE.fullmatch(job_id):
+        raise RuntimeError("invalid staged hotfix/job identity")
+    expected_package = STAGED_ROOT / f"{upload_id}.zip"
+    declared = Path(str(job.get("package_path") or ""))
+    if declared != expected_package:
+        raise RuntimeError("hotfix package path does not match managed staging identity")
+
+    work = RUNNING_ROOT / job_id
+    work.mkdir(parents=True, exist_ok=False, mode=0o700) if not work.exists() else None
+    os.chown(work, 0, 0)
+    os.chmod(work, 0o700)
+    package = _copy_nofollow_to_private(expected_package, work / "hotfix.zip", required=True)
+    signature = _copy_nofollow_to_private(STAGED_ROOT / f"{upload_id}.sig", work / "hotfix.sig", required=False)
+    metadata = _copy_nofollow_to_private(STAGED_ROOT / f"{upload_id}.release.json", work / "hotfix.release.json", required=False)
+    expected_sha = str(job.get("package_sha256") or "").lower()
+    if not SHA256_RE.fullmatch(expected_sha) or sha256_file(package) != expected_sha:
+        raise RuntimeError("root-private hotfix package hash does not match queued job")
+    return package, signature, metadata
+
+def privileged_verify_hotfix(package: Path, signature: Path | None, metadata: Path | None):
+    if not PRIVILEGED_TRUST.is_file():
+        raise RuntimeError(f"privileged trust verifier is missing: {PRIVILEGED_TRUST}")
+    require_root_owned(PRIVILEGED_TRUST)
+    command = [sys.executable, str(PRIVILEGED_TRUST), "verify-hotfix", str(package)]
+    if signature is not None:
+        command += ["--signature", str(signature)]
+    if metadata is not None:
+        command += ["--metadata", str(metadata)]
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or "root hotfix trust verification failed").strip())
+    try:
+        payload = json.loads(result.stdout.strip())
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("root hotfix trust verifier returned invalid output") from exc
+    if not isinstance(payload, dict) or not payload.get("root_policy", {}).get("accepted"):
+        raise RuntimeError("root hotfix trust verifier did not return an accepted policy result")
+    return payload
 
 
 def require_root_owned(path: Path):
@@ -310,13 +446,11 @@ def sync_reload(config, effective, log):
 def apply_job(path, job, config, log):
     module_id = str(job.get("module_id") or "")
     hotfix_id = str(job.get("hotfix_id") or "")
-    package = Path(str(job.get("package_path") or "")).resolve()
-    try:
-        package.relative_to(STAGED_ROOT.resolve())
-    except ValueError as exc:
-        raise RuntimeError("staged hotfix path is outside the managed staging root") from exc
-    if not package.is_file() or sha256_file(package) != job.get("package_sha256"):
-        raise RuntimeError("staged hotfix package is missing or changed")
+    upload_id = str(job.get("upload_id") or "")
+    package, signature_path, metadata_path = claim_staged_artifacts(job)
+    root_trust = privileged_verify_hotfix(package, signature_path, metadata_path)
+    job["root_publisher_trust"] = root_trust
+    write_claimed_job(path, job, config)
     prefix, manifest = load_archive_manifest(package)
     parsed_module, parsed_hotfix, base_version, targets, effective = normalize_targets(manifest, prefix)
     if parsed_module != module_id or parsed_hotfix != hotfix_id or base_version != job.get("base_version"):
@@ -330,7 +464,6 @@ def apply_job(path, job, config, log):
         raise RuntimeError("hotfix is already applied")
     running = RUNNING_ROOT / job["id"]
     backup_root = BACKUPS_ROOT / module_id / hotfix_id / job["id"]
-    running.mkdir(parents=True, exist_ok=True)
     backup_root.mkdir(parents=True, exist_ok=True)
     extracted = extract_payload(package, targets, running)
     resolved = []
@@ -349,7 +482,7 @@ def apply_job(path, job, config, log):
     mutated = []
     try:
         job["stage"] = "apply-files"
-        atomic_json(path, job)
+        write_claimed_job(path, job, config)
         for row in resolved:
             st = row["target_path"].stat()
             copy_atomic(row["payload_path"], row["target_path"], st)
@@ -357,10 +490,10 @@ def apply_job(path, job, config, log):
                 raise RuntimeError(f"post-write hash mismatch: {row['component']}/{row['path']}")
             mutated.append(row)
         job["stage"] = "validate"
-        atomic_json(path, job)
+        write_claimed_job(path, job, config)
         validate_runtime(config, resolved, effective, log)
         job["stage"] = "runtime-sync"
-        atomic_json(path, job)
+        write_claimed_job(path, job, config)
         sync_reload(config, effective, log)
     except Exception:
         log.write("[TEC-TAC-HOTFIX] apply failed; restoring original files\n")
@@ -376,7 +509,7 @@ def apply_job(path, job, config, log):
         except Exception as refresh_exc:
             log.write(f"[TEC-TAC-HOTFIX] rollback runtime refresh failed: {refresh_exc}\n")
         job["rolled_back"] = True
-        atomic_json(path, job)
+        write_claimed_job(path, job, config)
         raise
     record = {
         "id": hotfix_id,
@@ -387,20 +520,19 @@ def apply_job(path, job, config, log):
         "applied_by": job.get("requested_by"),
         "job_id": job["id"],
         "package_sha256": job.get("package_sha256"),
+        "publisher_trust": root_trust,
         "reload": effective["reload"],
         "ui_sync": effective["ui_sync"],
         "validation": {"python_compile": effective["python_compile"], "django_check": effective["django_check"]},
         "targets": [{key: row[key] for key in ("component", "path", "sha256_before", "sha256_after")} for row in resolved],
         "backup_root": str(backup_root),
     }
-    atomic_json(record_path, record)
-    try:
-        os.chown(record_path, 0, tactical_gid(config))
-    except OSError:
-        pass
+    atomic_json(record_path, record, mode=0o640, uid=0, gid=tactical_gid(config))
     upload_id = str(job.get("upload_id") or "")
     package.unlink(missing_ok=True)
     if JOB_RE.fullmatch(upload_id):
+        (STAGED_ROOT / f"{upload_id}.sig").unlink(missing_ok=True)
+        (STAGED_ROOT / f"{upload_id}.release.json").unlink(missing_ok=True)
         (STAGED_ROOT / f"{upload_id}.json").unlink(missing_ok=True)
     return record
 
@@ -454,7 +586,7 @@ def rollback_job(path, job, config, log):
             raise RuntimeError(f"hotfix backup hash is invalid: {component}/{rel}")
         targets.append({**row, "component": component, "path": rel, "target_path": target, "backup_path": backup})
     job["stage"] = "restore-files"
-    atomic_json(path, job)
+    write_claimed_job(path, job, config)
     for row in reversed(targets):
         st = row["target_path"].stat()
         copy_atomic(row["backup_path"], row["target_path"], st)
@@ -467,10 +599,10 @@ def rollback_job(path, job, config, log):
         "django_check": bool((record.get("validation") or {}).get("django_check")),
     }
     job["stage"] = "validate"
-    atomic_json(path, job)
+    write_claimed_job(path, job, config)
     validate_runtime(config, targets, effective, log)
     job["stage"] = "runtime-sync"
-    atomic_json(path, job)
+    write_claimed_job(path, job, config)
     sync_reload(config, effective, log)
     history = dict(record)
     history["status"] = "rolled_back"
@@ -479,7 +611,7 @@ def rollback_job(path, job, config, log):
     history["rollback_job_id"] = job["id"]
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     history_path = HISTORY_ROOT / module_id / f"{hotfix_id}.{stamp}.json"
-    atomic_json(history_path, history)
+    atomic_json(history_path, history, mode=0o640, uid=0, gid=tactical_gid(config))
     record_path.unlink(missing_ok=True)
     return history
 
@@ -514,7 +646,7 @@ def supersede(module_id, new_version):
 
 
 def run_job(job_id):
-    path, job = load_job(job_id)
+    path, job = load_job(job_id, claimed=True)
     if job.get("status") not in {"dispatched", "running"}:
         raise SystemExit("hotfix job was not dispatched")
     acquire_lock()
@@ -523,7 +655,7 @@ def run_job(job_id):
     job["status"] = "running"
     job["stage"] = "preflight"
     job["started_at"] = now()
-    atomic_json(path, job)
+    write_claimed_job(path, job, config)
     try:
         with log_path.open("a", encoding="utf-8") as log:
             log.write(f"[TEC-TAC-HOTFIX] started {job['started_at']} action={job['action']} module={job.get('module_id')} hotfix={job.get('hotfix_id')}\n")
@@ -537,7 +669,7 @@ def run_job(job_id):
             job["finished_at"] = now()
             job["error"] = None
             job["error_type"] = None
-            atomic_json(path, job)
+            write_claimed_job(path, job, config)
             log.write(f"[TEC-TAC-HOTFIX] completed {job['finished_at']}\n")
     except Exception as exc:
         job["status"] = "failed"
@@ -545,7 +677,7 @@ def run_job(job_id):
         job["finished_at"] = now()
         job["error"] = str(exc)
         job["error_type"] = exc.__class__.__name__
-        atomic_json(path, job)
+        write_claimed_job(path, job, config)
         try:
             with log_path.open("a", encoding="utf-8") as log:
                 log.write(f"[TEC-TAC-HOTFIX] FAILED {job['finished_at']}: {exc.__class__.__name__}: {exc}\n")
