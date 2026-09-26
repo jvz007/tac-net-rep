@@ -166,6 +166,10 @@ Example parameters:
 - `GET|PATCH|DELETE /api/tfd/scheduler/schedules/<id>/`
 - `POST /api/tfd/scheduler/schedules/<id>/run/`
 - `GET /api/tfd/scheduler/runs/`
+  - paged callers may use `page`, `page_size` (max 100), `owner_type`, `schedule_id`, `status`, and `search`;
+  - paged responses include `total`, `page`, `page_size`, `pages`, `next_page`, and `previous_page`;
+  - scoped users are counted only after action and Tactical target-scope authorization;
+  - the legacy unpaged response remains bounded for compatibility with older consumers.
 
 ## Module developers
 

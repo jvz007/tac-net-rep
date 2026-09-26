@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime, time, timedelta
+from uuid import UUID
 
 from django.db import transaction
-from django.db.models import OuterRef, Subquery
+from django.db.models import OuterRef, Q, Subquery
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime, parse_time
@@ -375,26 +376,134 @@ class SchedulerRunNowView(APIView):
 
 class SchedulerRunListView(APIView):
     permission_classes = [SessionAuthenticated]
+
+    @staticmethod
+    def _positive_int(raw, *, default, maximum):
+        if raw in (None, ""):
+            return default
+        try:
+            value = int(raw)
+        except (TypeError, ValueError) as exc:
+            raise SchedulerError("page and page_size must be integers.") from exc
+        if value < 1:
+            raise SchedulerError("page and page_size must be positive integers.")
+        return min(value, maximum)
+
+    def _base_queryset(self, request, owner_type):
+        qs = TecTacScheduleRun.objects.select_related("schedule")
+        schedule_id = str(request.query_params.get("schedule_id") or "").strip()
+        if schedule_id:
+            try:
+                schedule_uuid = UUID(schedule_id)
+            except (TypeError, ValueError) as exc:
+                raise SchedulerError("schedule_id must be a UUID.") from exc
+            qs = qs.filter(schedule_snapshot_id=schedule_uuid)
+        if owner_type:
+            qs = qs.filter(owner_type=owner_type)
+
+        status_value = str(request.query_params.get("status") or "").strip().lower()
+        if status_value:
+            valid = {value for value, _label in TecTacScheduleRun.Status.choices}
+            if status_value not in valid:
+                raise SchedulerError("status is not a supported scheduler run state.")
+            qs = qs.filter(status=status_value)
+
+        search = str(request.query_params.get("search") or "").strip()
+        if search:
+            query = (
+                Q(schedule_name__icontains=search)
+                | Q(action_id__icontains=search)
+                | Q(status__icontains=search)
+                | Q(owner_module__icontains=search)
+                | Q(owner_key__icontains=search)
+                | Q(error_type__icontains=search)
+                | Q(error__icontains=search)
+                | Q(celery_task_id__icontains=search)
+            )
+            try:
+                query |= Q(id=UUID(search))
+            except (TypeError, ValueError):
+                pass
+            qs = qs.filter(query)
+        return qs
+
+    def _row_visible(self, request, run, *, manager, action_cache):
+        user = request.user
+        if not manager:
+            action_id = run.action_id or (run.schedule.action_id if run.schedule else "")
+            allowed = action_cache.get(action_id)
+            if allowed is None:
+                try:
+                    action = get_scheduled_action(action_id)
+                except SchedulerError:
+                    action = None
+                allowed = bool(action and _can_use_action(user, action))
+                action_cache[action_id] = allowed
+            if not allowed:
+                return False
+        run_targets = run.targets_snapshot or (run.schedule.targets if run.schedule else {})
+        return _can_access_target_scope(request.user, run_targets)
+
+    def _paged_response(self, request, qs, owner_type):
+        page = self._positive_int(request.query_params.get("page"), default=1, maximum=1_000_000)
+        page_size = self._positive_int(request.query_params.get("page_size"), default=50, maximum=100)
+        manager = _native_scheduler_manager(request.user)
+
+        # Scheduler managers can see the complete filtered queryset, so let the
+        # database perform count/offset/limit directly. Scoped operators require
+        # per-run target authorization; scan with an iterator so retained history
+        # is never materialized as one large Python list.
+        if manager:
+            total = qs.count()
+            offset = (page - 1) * page_size
+            visible = list(qs[offset:offset + page_size])
+        else:
+            total = 0
+            start = (page - 1) * page_size
+            stop = start + page_size
+            visible = []
+            action_cache = {}
+            for run in qs.iterator(chunk_size=200):
+                if not self._row_visible(request, run, manager=False, action_cache=action_cache):
+                    continue
+                if start <= total < stop:
+                    visible.append(run)
+                total += 1
+
+        pages = (total + page_size - 1) // page_size if total else 0
+        return Response({
+            "runs": [serialize_run(run) for run in visible],
+            "count": total,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "pages": pages,
+            "next_page": page + 1 if page < pages else None,
+            "previous_page": page - 1 if page > 1 and pages else None,
+            "owner_type": owner_type,
+        })
+
     def get(self, request):
         try:
             owner_type = _owner_type_filter(request)
-        except SchedulerError as exc:
+            qs = self._base_queryset(request, owner_type)
+        except (SchedulerError, ValueError) as exc:
             return Response({"detail": str(exc)}, status=400)
-        qs = TecTacScheduleRun.objects.select_related("schedule")
-        schedule_id = request.query_params.get("schedule_id")
-        if schedule_id:
-            qs = qs.filter(schedule_snapshot_id=schedule_id)
-        if owner_type:
-            qs = qs.filter(owner_type=owner_type)
-        rows = []
-        for run in qs[:200]:
-            action_id = run.action_id or (run.schedule.action_id if run.schedule else "")
+
+        paged = any(key in request.query_params for key in ("page", "page_size", "search", "status"))
+        if paged:
             try:
-                action = get_scheduled_action(action_id)
-            except SchedulerError:
-                action = None
-            run_targets = run.targets_snapshot or (run.schedule.targets if run.schedule else {})
-            if (_native_scheduler_manager(request.user) or (action and _can_use_action(request.user, action))) and _can_access_target_scope(request.user, run_targets):
+                return self._paged_response(request, qs, owner_type)
+            except SchedulerError as exc:
+                return Response({"detail": str(exc)}, status=400)
+
+        # Compatibility path for older Core/UI consumers. Preserve the original
+        # bounded response shape and 200-candidate behavior exactly.
+        rows = []
+        manager = _native_scheduler_manager(request.user)
+        action_cache = {}
+        for run in qs[:200]:
+            if self._row_visible(request, run, manager=manager, action_cache=action_cache):
                 rows.append(serialize_run(run))
         return Response({"runs": rows, "count": len(rows), "owner_type": owner_type})
 

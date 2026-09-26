@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.83",
+  "version": "1.15.84",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -27,19 +27,19 @@
       "sha256": "b16e78b37eecd6b4690403b4725a0b9977c7e8e9eca51b6cb4493166c952f243"
     },
     {
-      "path": "RELEASE_NOTES_1.15.82.md",
-      "size": 925,
-      "sha256": "0c0585fd49657aa004fe8610b7ee6dccebe372d02d5f3a16a39ec68d3136cba8"
-    },
-    {
       "path": "RELEASE_NOTES_1.15.83.md",
       "size": 974,
       "sha256": "33b2580dce37bbb74d1e64ced60ecaed8a3eaeb09869ff79de43fad11ed3435f"
     },
     {
+      "path": "RELEASE_NOTES_1.15.84.md",
+      "size": 765,
+      "sha256": "75e688da95fed16de54c571969a6d74f784bfbaa645d587cacd9e46d877e3329"
+    },
+    {
       "path": "VERSION",
       "size": 8,
-      "sha256": "b1f008deab11fcd8363e84fa9121330a04dc7b97b93a8242f0ef0051af403d42"
+      "sha256": "050daaf1bbc5f360ed2dc7c4952e93894987862656a4d2d05256b363fa78a34f"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -548,8 +548,8 @@
     },
     {
       "path": "docs/scheduler.md",
-      "size": 9475,
-      "sha256": "b1c3bf1ccab602c1d8e40ccf27be4011f4862cf8dbae20dbe17735e6b01f1bc8"
+      "size": 9862,
+      "sha256": "c1834ba3e0846852f4356b5ddf66055a5e62f6dac7bb0a1ec038956a1e563e82"
     },
     {
       "path": "docs/server-backup-capability.md",
@@ -1123,8 +1123,8 @@
     },
     {
       "path": "framwork/tec_tac/scheduler_views.py",
-      "size": 22570,
-      "sha256": "764e3d9812bf9f5f7343479e64f63f17a49d2c8654588a537153dbaa3149f513"
+      "size": 27091,
+      "sha256": "c1718b6b8cacbba75d9ba8e32f8a150c3661c916a2afb5cb984f2380bed00ff8"
     },
     {
       "path": "framwork/tec_tac/server_backup.py",
@@ -1379,7 +1379,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "d1991d67aa519c64919549d460f0094b745245da7f3f5bbf20ea412374c2507e"
+      "sha256": "0993d4997a296b05437a20836fbd91d6f689a5ae835a9789f5b915d024d0e6a0"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -1700,6 +1700,11 @@
       "path": "tests/scheduler-legacy-target-regression.py",
       "size": 4130,
       "sha256": "bad86c2050434270bd7622ec5829f961183d4872daed8ca8c3d34532e85a18d8"
+    },
+    {
+      "path": "tests/scheduler-run-pagination.py",
+      "size": 1085,
+      "sha256": "8c6edfa15c94f5b6b657769bc617249590ae629b1df42bab2a3af78371587f80"
     },
     {
       "path": "tests/scheduler-scope-foundation.py",
