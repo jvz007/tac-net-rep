@@ -27,6 +27,11 @@ grep -q 'AuthToken.objects.filter(digest__in=digests).delete()' "${ROOT}/framwor
 grep -q 'LOGIN_SESSION_NAMESPACE' "${ROOT}/framwork/tec_tac/session_security.py" || fail "opaque session reference missing"
 grep -q 'can_manage_accounts' "${ROOT}/framwork/tec_tac/session_security.py" || fail "account-management authorization missing"
 grep -q 'path("auth/mfa/backup-codes/"' "${ROOT}/framwork/tec_tac/urls.py" || fail "backup-code endpoint missing"
+grep -q 'path("access/users/<int:user_id>/mfa/"' "${ROOT}/framwork/tec_tac/urls.py" || fail "admin MFA recovery endpoint missing"
+grep -q 'class AdminUserMfaRecoveryView' "${ROOT}/framwork/tec_tac/mfa_backup_views.py" || fail "admin MFA recovery view missing"
+grep -q 'can_manage_account_security' "${ROOT}/framwork/tec_tac/mfa_backup_views.py" || fail "admin MFA recovery authorization missing"
+grep -q 'can_administer_account_security_target' "${ROOT}/framwork/tec_tac/mfa_backup_views.py" || fail "protected-account MFA recovery guard missing"
+grep -q 'def invalidate_backup_codes' "${ROOT}/framwork/tec_tac/mfa_backup.py" || fail "explicit backup-code invalidation primitive missing"
 grep -q 'path("auth/login/backup-code/"' "${ROOT}/framwork/tec_tac/urls.py" || fail "backup-code login endpoint missing"
 grep -q 'path("access/sessions/"' "${ROOT}/framwork/tec_tac/urls.py" || fail "admin session list endpoint missing"
 

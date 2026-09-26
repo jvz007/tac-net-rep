@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from django.contrib.auth import login
+from django.contrib.auth import get_user_model, login
 from knox.views import LoginView as KnoxLoginView
 from python_ipware import IpWare
 from rest_framework.authtoken.serializers import AuthTokenSerializer
@@ -20,9 +20,15 @@ from .mfa_backup import (
     burn_backup_code_hash_cost,
     consume_backup_code,
     generate_backup_codes,
+    invalidate_backup_codes,
     verify_generation_proof,
 )
-from .session_security import SessionAuthenticated, SessionSecurityError
+from .session_security import (
+    SessionAuthenticated,
+    SessionSecurityError,
+    can_administer_account_security_target,
+    can_manage_account_security,
+)
 
 
 class MfaBackupCodesView(APIView):
@@ -57,6 +63,53 @@ class MfaBackupCodesView(APIView):
         except SessionSecurityError as exc:
             return Response({"detail": str(exc)}, status=400)
         response = Response(payload, status=201)
+        response["Cache-Control"] = "no-store, max-age=0"
+        response["Pragma"] = "no-cache"
+        return response
+
+
+class AdminUserMfaRecoveryView(APIView):
+    """Account-admin status and invalidation for another user's recovery codes.
+
+    Plaintext recovery codes are intentionally never returned here. Creation and
+    rotation remain self-service operations requiring the target user's password
+    and current TOTP proof.
+    """
+
+    permission_classes = [SessionAuthenticated]
+
+    @staticmethod
+    def _target(user_id):
+        return get_user_model().objects.filter(pk=int(user_id)).first()
+
+    def get(self, request, user_id):
+        if not can_manage_account_security(request.user):
+            return Response({"detail": "Account-management permission is required."}, status=403)
+        target = self._target(user_id)
+        if target is None:
+            return Response({"detail": "User not found."}, status=404)
+        response = Response({
+            "user": {"id": target.pk, "username": target.username},
+            "status": backup_code_status(target, requested_by=request.user.username),
+            "can_invalidate": can_administer_account_security_target(request.user, target),
+        })
+        response["Cache-Control"] = "no-store, max-age=0"
+        return response
+
+    def delete(self, request, user_id):
+        if not can_manage_account_security(request.user):
+            return Response({"detail": "Account-management permission is required."}, status=403)
+        target = self._target(user_id)
+        if target is None:
+            return Response({"detail": "User not found."}, status=404)
+        if not can_administer_account_security_target(request.user, target):
+            return Response({"detail": "This protected account requires effective superuser authority."}, status=403)
+        payload = invalidate_backup_codes(
+            target,
+            requested_by=request.user.username,
+            reason=str(request.data.get("reason") or "administrator-request")[:255],
+        )
+        response = Response(payload)
         response["Cache-Control"] = "no-store, max-age=0"
         response["Pragma"] = "no-cache"
         return response

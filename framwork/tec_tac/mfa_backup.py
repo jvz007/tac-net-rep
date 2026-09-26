@@ -78,10 +78,11 @@ def _delete_stale_codes_locked(user, current_fingerprint: str, *, requested_by: 
     return count
 
 
-def backup_code_status(user) -> dict[str, Any]:
+def backup_code_status(user, *, requested_by: str = "") -> dict[str, Any]:
     current_fingerprint = _totp_fingerprint(user)
+    actor = str(requested_by or getattr(user, "username", "") or "")
     with transaction.atomic():
-        _delete_stale_codes_locked(user, current_fingerprint, requested_by=str(getattr(user, "username", "") or ""))
+        _delete_stale_codes_locked(user, current_fingerprint, requested_by=actor)
         qs = TecTacMfaBackupCode.objects.filter(user=user, totp_fingerprint=current_fingerprint)
         total = qs.count()
         unused = qs.filter(used_at__isnull=True).count()
@@ -114,6 +115,26 @@ def burn_backup_code_hash_cost(*, checks: int = BACKUP_CODE_COUNT) -> None:
     dummy = _DUMMY_CODE_HASH
     for _ in range(max(0, int(checks))):
         check_password("TEC-TAC-INVALID-CODE", dummy)
+
+
+def invalidate_backup_codes(user, *, requested_by: str = "", reason: str = "administrator-request") -> dict[str, Any]:
+    """Invalidate every Tec-Tac recovery code for a user without revealing code material."""
+    with transaction.atomic():
+        rows = TecTacMfaBackupCode.objects.select_for_update().filter(user=user)
+        count = rows.count()
+        if count:
+            rows.delete()
+        _security_audit(
+            "mfa_backup_codes_invalidated",
+            user,
+            requested_by=requested_by,
+            reason=str(reason or "administrator-request")[:255],
+            metadata={"count": count, "explicit": True},
+        )
+    return {
+        "invalidated": count,
+        "status": backup_code_status(user),
+    }
 
 
 def generate_backup_codes(user, *, requested_by: str = "") -> dict[str, Any]:

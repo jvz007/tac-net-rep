@@ -92,14 +92,24 @@ def _can_administer_login_target(requester, target_user) -> bool:
     return True
 
 
-def can_manage_login_sessions(user) -> bool:
-    """Account administrators may enumerate and revoke real Tactical sessions."""
+def can_administer_account_security_target(requester, target_user) -> bool:
+    """Return whether requester may perform destructive auth actions on target_user."""
+    return _can_administer_login_target(requester, target_user)
+
+
+def can_manage_account_security(user) -> bool:
+    """Account administrators may manage session and MFA recovery state."""
     if not getattr(user, "is_authenticated", False):
         return False
     if _is_effective_superuser(user):
         return True
     role = _role_for_user(user)
     return bool(getattr(role, "can_manage_accounts", False)) if role else False
+
+
+def can_manage_login_sessions(user) -> bool:
+    """Backward-compatible account-admin authority for Tactical login sessions."""
+    return can_manage_account_security(user)
 
 
 def _policy_dict(config: TecTacSessionSecurityConfig | None = None) -> dict[str, Any]:

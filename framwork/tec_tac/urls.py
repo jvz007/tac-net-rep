@@ -11,7 +11,7 @@ from .session_security_views import (
 from .dashboard_views import DashboardListCreateView, DashboardDetailView
 from .preference_views import UserPreferencesView
 from .notice_views import NoticeListCreateView, NoticeReadView, NoticeReadAllView, NoticeClearReadView
-from .mfa_backup_views import MfaBackupCodesView, BackupCodeLoginView
+from .mfa_backup_views import MfaBackupCodesView, AdminUserMfaRecoveryView, BackupCodeLoginView
 from .housekeeping_views import HousekeepingStatusView, HousekeepingPurgeView
 from .diagnostic_views import SystemDiagnosticsView
 from .capability_views import CapabilityListView, CapabilityDetailView
@@ -55,6 +55,7 @@ urlpatterns = [
     path("access/sessions/<str:session_ref>/revoke/", AdminLoginSessionRevokeView.as_view(), name="tec-tac-access-login-session-revoke"),
     path("access/users/<int:user_id>/sessions/revoke/", AdminUserLoginSessionsRevokeView.as_view(), name="tec-tac-access-user-login-sessions-revoke"),
     path("auth/mfa/backup-codes/", MfaBackupCodesView.as_view(), name="tec-tac-mfa-backup-codes"),
+    path("access/users/<int:user_id>/mfa/", AdminUserMfaRecoveryView.as_view(), name="tec-tac-access-user-mfa-recovery"),
     path("auth/login/backup-code/", BackupCodeLoginView.as_view(), name="tec-tac-backup-code-login"),
     path("dashboards/", DashboardListCreateView.as_view(), name="tec-tac-dashboards"),
     path("dashboards/<uuid:dashboard_id>/", DashboardDetailView.as_view(), name="tec-tac-dashboard-detail"),
