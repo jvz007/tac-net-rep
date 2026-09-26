@@ -367,6 +367,100 @@ def _claim_artifact(source_value, claim_dir, label):
         os.close(staged_fd)
     return str(target)
 
+
+def _execution_artifact_copy(source_value, claim_dir, execution_root, label):
+    """Copy one already-claimed artifact into the final root-private execution set.
+
+    Verification, extraction and installation must all operate on this new inode.
+    The claimed request path is used only as an input to this copy step and is
+    never reopened later in the lifecycle.
+    """
+    source = Path(os.path.abspath(str(source_value or "")))
+    expected_parent = Path(os.path.abspath(str(claim_dir)))
+    if source.parent != expected_parent:
+        raise RuntimeError(f"{label} is outside the root-private v2 claim directory")
+    name = source.name
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,254}", name):
+        raise RuntimeError(f"invalid claimed {label} filename")
+
+    execution_root.mkdir(parents=True, exist_ok=True)
+    root_stat = execution_root.stat()
+    if root_stat.st_uid != 0 or root_stat.st_mode & 0o077:
+        raise RuntimeError("root-private v2 execution directory has unsafe ownership or permissions")
+
+    dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        claim_fd = os.open(expected_parent, dir_flags)
+    except OSError as exc:
+        raise RuntimeError("root-private v2 claim directory is unsafe or unreadable") from exc
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        try:
+            src_fd = os.open(name, flags, dir_fd=claim_fd)
+        except OSError as exc:
+            raise RuntimeError(f"claimed {label} is unsafe or unreadable") from exc
+        try:
+            src_stat = os.fstat(src_fd)
+            if not stat.S_ISREG(src_stat.st_mode):
+                raise RuntimeError(f"claimed {label} is not a regular file")
+            if src_stat.st_uid != 0 or src_stat.st_mode & 0o022:
+                raise RuntimeError(f"claimed {label} is not root-owned and immutable")
+
+            target = execution_root / f"{label}-{name}"
+            out_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+            try:
+                dst_fd = os.open(target, out_flags, 0o600)
+            except OSError as exc:
+                raise RuntimeError(f"unable to create root-private execution snapshot for {label}") from exc
+            try:
+                os.fchmod(dst_fd, 0o600)
+                os.fchown(dst_fd, 0, 0)
+                while True:
+                    block = os.read(src_fd, 1024 * 1024)
+                    if not block:
+                        break
+                    view = memoryview(block)
+                    while view:
+                        written = os.write(dst_fd, view)
+                        if written <= 0:
+                            raise OSError("short write while snapshotting v2 execution artifact")
+                        view = view[written:]
+                os.fsync(dst_fd)
+            finally:
+                os.close(dst_fd)
+        finally:
+            os.close(src_fd)
+    finally:
+        os.close(claim_fd)
+    return str(target)
+
+
+def _snapshot_v2_job_artifacts(job_id, job, execution_root):
+    """Return a job whose artifact paths are final root-private execution copies."""
+    claim_dir = RUNNING_ROOT / f"{job_id}.claimed"
+    snap = json.loads(json.dumps(job))
+    action = snap.get("action")
+    if action == "bundle_install":
+        snap["bundle_path"] = _execution_artifact_copy(snap.get("bundle_path"), claim_dir, execution_root, "bundle")
+        for key in ("signature_path", "release_metadata_path"):
+            if snap.get(key):
+                snap[key] = _execution_artifact_copy(snap.get(key), claim_dir, execution_root, key)
+    elif action == "batch_install":
+        artifacts = snap.get("artifacts") if isinstance(snap.get("artifacts"), list) else [{**item, "kind": "package"} for item in (snap.get("packages") or [])]
+        rewritten = []
+        for index, item in enumerate(artifacts):
+            row = dict(item)
+            kind = str(row.get("kind") or "package")
+            path_key = "bundle_path" if kind == "bundle" else "path"
+            row[path_key] = _execution_artifact_copy(row.get(path_key), claim_dir, execution_root, f"artifact-{index}")
+            for key in ("signature_path", "release_metadata_path"):
+                if row.get(key):
+                    row[key] = _execution_artifact_copy(row.get(key), claim_dir, execution_root, f"{key}-{index}")
+            rewritten.append(row)
+        snap["artifacts"] = rewritten
+        snap.pop("packages", None)
+    return snap
+
 def claim_job(job_id):
     path, job = load_job(job_id)
     if job.get("status") != "queued":
@@ -652,32 +746,68 @@ def _validate_install_plan_against_signed_artifacts(job, packages, root_trust):
         raise RuntimeError("install actions do not exactly match root-verified signed artifacts")
     return order, actions
 
-def bundle_packages(job, running_root):
-    source = Path(str(job.get("bundle_path", ""))).resolve()
+def _authenticated_bundle_files(trust):
+    rows = trust.get("artifact_package_files") if isinstance(trust, dict) else None
+    if not isinstance(rows, list) or not rows:
+        raise RuntimeError("root verifier did not return authenticated bundle package mapping")
+    result = []
+    seen_ids = set()
+    seen_files = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            raise RuntimeError("root verifier returned invalid bundle package mapping")
+        module_id = str(row.get("id") or "")
+        filename = str(row.get("file") or "")
+        version = str(row.get("version") or "")
+        if not PLUGIN_RE.fullmatch(module_id) or not filename or not version:
+            raise RuntimeError("root verifier returned invalid bundle package mapping")
+        normalized = Path(filename)
+        if normalized.is_absolute() or ".." in normalized.parts or len(normalized.parts) < 1:
+            raise RuntimeError("root verifier returned unsafe bundle package path")
+        if module_id in seen_ids or filename in seen_files:
+            raise RuntimeError("root verifier returned duplicate bundle package mapping")
+        seen_ids.add(module_id); seen_files.add(filename)
+        result.append({"id": module_id, "file": filename, "version": version})
+    return result
+
+
+def _extract_verified_bundle(source, extract, expected_hash, label):
     if not source.is_file():
-        raise RuntimeError("staged bundle is missing")
-    copied = running_root / "bundle.zip"
-    shutil.copy2(source, copied)
-    extract = running_root / "bundle"
+        raise RuntimeError("root-private bundle snapshot is missing")
+    _require_expected_hash(source, expected_hash, label)
     extract.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(copied) as zf:
+    with zipfile.ZipFile(source) as zf:
         for member in zf.infolist():
             name = Path(member.filename)
             if name.is_absolute() or ".." in name.parts:
                 raise RuntimeError("unsafe path in bundle")
         zf.extractall(extract)
-    package_files = job.get("bundle", {}).get("package_files") or []
+
+
+def _resolve_authenticated_bundle_packages(extract, mapping, source_label):
     result = []
-    for item in package_files:
-        filename = str(item.get("file", ""))
-        matches = list(extract.rglob(filename))
-        if len(matches) != 1:
-            raise RuntimeError(f"bundle package file could not be uniquely resolved: {filename}")
-        result.append({"id": item["id"], "path": str(matches[0]), "version": item.get("version"), "source": job.get("source")})
+    for item in mapping:
+        filename = str(item["file"])
+        candidate = (extract / filename).resolve()
+        try:
+            candidate.relative_to(extract.resolve())
+        except ValueError as exc:
+            raise RuntimeError(f"authenticated bundle package path escapes bundle: {filename}") from exc
+        if not candidate.is_file():
+            raise RuntimeError(f"authenticated bundle package file is missing: {filename}")
+        result.append({"id": item["id"], "path": str(candidate), "version": item["version"], "source": source_label})
     return result
 
 
-def batch_packages(job, running_root):
+def bundle_packages(job, running_root, root_trust):
+    source = Path(str(job.get("bundle_path", ""))).resolve()
+    extract = running_root / "bundle"
+    _extract_verified_bundle(source, extract, root_trust.get("package_sha256"), "bundle")
+    mapping = _authenticated_bundle_files(root_trust)
+    return _resolve_authenticated_bundle_packages(extract, mapping, job.get("source"))
+
+
+def batch_packages(job, running_root, root_trust):
     result = []
     artifacts = job.get("artifacts")
     if not isinstance(artifacts, list):
@@ -685,43 +815,34 @@ def batch_packages(job, running_root):
         artifacts = [{**item, "kind": "package"} for item in (job.get("packages") or [])]
 
     seen_ids = set()
+    if not isinstance(root_trust, list) or len(root_trust) != len(artifacts):
+        raise RuntimeError("root trust results do not match staged batch artifacts")
     for index, item in enumerate(artifacts):
         kind = str(item.get("kind") or "package")
+        artifact_trust = root_trust[index]
         source = Path(str(item.get("bundle_path") if kind == "bundle" else item.get("path", ""))).resolve()
         if not source.is_file():
             raise RuntimeError(f"staged batch artifact missing: {item.get('id') or item.get('bundle_id') or index}")
 
         if kind == "bundle":
-            copied = running_root / f"bundle-{index}.zip"
-            shutil.copy2(source, copied)
             extract = running_root / f"bundle-{index}"
-            extract.mkdir(parents=True, exist_ok=True)
-            with zipfile.ZipFile(copied) as zf:
-                for member in zf.infolist():
-                    name = Path(member.filename)
-                    if name.is_absolute() or ".." in name.parts:
-                        raise RuntimeError("unsafe path in bundle")
-                zf.extractall(extract)
-            for package in item.get("package_files") or []:
-                module_id = str(package.get("id") or "")
-                filename = str(package.get("file") or "")
-                matches = list(extract.rglob(filename))
-                if len(matches) != 1:
-                    raise RuntimeError(f"bundle package file could not be uniquely resolved: {filename}")
+            _extract_verified_bundle(source, extract, artifact_trust.get("package_sha256"), f"batch bundle {index}")
+            mapping = _authenticated_bundle_files(artifact_trust)
+            expanded = _resolve_authenticated_bundle_packages(extract, mapping, item.get("source"))
+            for package in expanded:
+                module_id = str(package["id"])
                 if module_id in seen_ids:
                     raise RuntimeError(f"duplicate module id in batch: {module_id}")
                 seen_ids.add(module_id)
-                result.append({"id": module_id, "path": str(matches[0]), "version": package.get("version"), "source": item.get("source")})
+                result.append(package)
             continue
 
         module_id = str(item.get("id") or "")
         if module_id in seen_ids:
             raise RuntimeError(f"duplicate module id in batch: {module_id}")
         seen_ids.add(module_id)
-        suffix = "".join(source.suffixes) or ".zip"
-        target = running_root / f"package-{index}-{module_id}{suffix}"
-        shutil.copy2(source, target)
-        result.append({"id": module_id, "path": str(target), "source": item.get("source")})
+        _require_expected_hash(source, artifact_trust.get("package_sha256"), f"batch package {module_id or index}")
+        result.append({"id": module_id, "path": str(source), "source": item.get("source")})
     return result
 
 
@@ -775,15 +896,21 @@ def run_job(job_id):
     job = {**immutable, "status": status.get("status"), "stage": status.get("stage"), "created_at": status.get("created_at")}
     acquire_lifecycle_lock()
     config = load_config()
-    root_trust = _verify_v2_job_trust(config, job)
-    if root_trust:
-        job["root_publisher_trust"] = root_trust
     repo_root = Path(config.get("REPO_ROOT", "/opt/tec-tac")).resolve()
     log_path = LOGS_ROOT / f"{job_id}.log"
     running = RUNNING_ROOT / job_id
     backup = BACKUP_ROOT / job_id
-    running.mkdir(parents=True, exist_ok=True)
+    running.mkdir(parents=True, exist_ok=False)
+    os.chown(running, 0, 0); os.chmod(running, 0o700)
     backup.mkdir(parents=True, exist_ok=True)
+
+    # Finalize the immutable execution set before invoking any trust verifier.
+    # Every later verification, extraction and install consumes only these
+    # root-owned 0600 snapshots, never the claimed/request staging paths.
+    job = _snapshot_v2_job_artifacts(job_id, job, running)
+    root_trust = _verify_v2_job_trust(config, job)
+    if root_trust:
+        job["root_publisher_trust"] = root_trust
 
     job["status"] = "running"
     job["stage"] = "lifecycle"
@@ -819,7 +946,7 @@ def run_job(job_id):
                 atomic_json(path, job)
                 sync_and_reload(config, log)
             else:
-                packages = bundle_packages(job, running) if job["action"] == "bundle_install" else batch_packages(job, running)
+                packages = bundle_packages(job, running, root_trust[0]) if job["action"] == "bundle_install" else batch_packages(job, running, root_trust)
                 order, actions = _validate_install_plan_against_signed_artifacts(job, packages, root_trust)
                 if any(not PLUGIN_RE.fullmatch(value) for value in order):
                     raise RuntimeError("invalid install order")

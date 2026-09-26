@@ -385,6 +385,81 @@ def verify_hotfix(package: Path, signature: Path | None, metadata: Path | None) 
     return enforce_policy(trust, kind="package")
 
 
+
+def _artifact_bundle_package_files(path: Path) -> list[dict]:
+    """Return authenticated bundle child-file -> module identity mappings.
+
+    The outer bundle manifest is part of the package bytes verified by the
+    privileged trust boundary. Mutable v2 job metadata must never decide which
+    child filename maps to which module identity.
+    """
+    if not zipfile.is_zipfile(path):
+        return []
+    with zipfile.ZipFile(path) as zf:
+        infos = [i for i in zf.infolist() if not i.is_dir()]
+        for info in infos:
+            _safe_zip_name(info.filename)
+            mode = (info.external_attr >> 16) & 0xFFFF
+            if mode and (mode & 0o170000) == 0o120000:
+                raise RuntimeError(f"module archive contains symlink: {info.filename}")
+        bundle_manifests = [i for i in infos if PurePosixPath(i.filename).name == "tec_tac_bundle.json"]
+        if not bundle_manifests:
+            return []
+        if len(bundle_manifests) != 1:
+            raise RuntimeError("module archive contains multiple bundle manifests")
+        manifest_info = bundle_manifests[0]
+        manifest = json.loads(zf.read(manifest_info).decode("utf-8"))
+        if not isinstance(manifest, dict) or str(manifest.get("type") or "").strip() != "bundle":
+            raise RuntimeError("bundle manifest type must be 'bundle'")
+        entries = manifest.get("packages")
+        if not isinstance(entries, list) or not entries:
+            raise RuntimeError("bundle manifest has no packages")
+        base = PurePosixPath(manifest_info.filename).parent
+        rows = []
+        seen_files = set()
+        seen_ids = set()
+        for entry in entries:
+            if isinstance(entry, str):
+                filename = entry.strip()
+                expected_id = ""
+                expected_version = ""
+            elif isinstance(entry, dict):
+                filename = str(entry.get("file") or "").strip()
+                expected_id = str(entry.get("id") or "").strip()
+                expected_version = str(entry.get("version") or "").strip()
+            else:
+                raise RuntimeError("bundle package entry is invalid")
+            if not filename:
+                raise RuntimeError("bundle package entry is invalid")
+            rel = _safe_zip_name(filename)
+            member = (base / rel).as_posix()
+            if member in seen_files:
+                raise RuntimeError(f"duplicate bundle package file: {filename}")
+            seen_files.add(member)
+            matching_members = [info for info in infos if info.filename == member]
+            if len(matching_members) != 1:
+                raise RuntimeError(f"bundle child package must resolve exactly once: {filename}")
+            child_bytes = zf.read(matching_members[0])
+            suffix = ''.join(Path(filename).suffixes) or '.zip'
+            with tempfile.NamedTemporaryFile(suffix=suffix) as tmp:
+                tmp.write(child_bytes)
+                tmp.flush()
+                child_modules = _artifact_modules_from_archive(Path(tmp.name))
+            if len(child_modules) != 1:
+                raise RuntimeError(f"bundle child package must contain exactly one module: {filename}")
+            child = child_modules[0]
+            module_id = str(child.get("id") or "")
+            version = str(child.get("version") or "")
+            if expected_id and expected_id != module_id:
+                raise RuntimeError(f"bundle expected module {expected_id!r} but {filename!r} contains {module_id!r}")
+            if expected_version and expected_version != version:
+                raise RuntimeError(f"bundle expected {module_id} version {expected_version}, found {version}")
+            if module_id in seen_ids:
+                raise RuntimeError(f"duplicate bundle module id: {module_id}")
+            seen_ids.add(module_id)
+            rows.append({"id": module_id, "file": member, "version": version})
+        return rows
+
 def verify_package(package: Path, signature: Path | None, metadata: Path | None) -> dict:
     _, verify_release_files, _ = _imports()
     cfg = _config()
@@ -409,6 +484,7 @@ def verify_package(package: Path, signature: Path | None, metadata: Path | None)
     )
     trust = enforce_policy(trust, kind='package')
     trust['artifact_modules'] = _artifact_modules_from_archive(Path(package))
+    trust['artifact_package_files'] = _artifact_bundle_package_files(Path(package))
     return trust
 
 

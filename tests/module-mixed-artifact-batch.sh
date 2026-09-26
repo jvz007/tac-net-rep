@@ -4,6 +4,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 python3 - "$ROOT/framwork/tec_tac/module_manager_v2.py" "$ROOT/scripts/module-v2-job-helper.py" <<'PY'
 import ast
 import hashlib
+import re
 import shutil
 import sys
 import tempfile
@@ -85,7 +86,7 @@ with tempfile.TemporaryDirectory() as td:
 # three concrete install packages in a single batch.
 source = helper_path.read_text(encoding='utf-8')
 tree = ast.parse(source)
-nodes = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in {'_sha256_file','_require_expected_hash','batch_packages'}]
+nodes = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in {'_sha256_file','_require_expected_hash','_authenticated_bundle_files','_extract_verified_bundle','_resolve_authenticated_bundle_packages','batch_packages'}]
 module = ast.Module(body=nodes, type_ignores=[])
 ast.fix_missing_locations(module)
 
@@ -101,7 +102,7 @@ with tempfile.TemporaryDirectory() as td:
         zf.writestr('packages/base.zip', b'base')
         zf.writestr('packages/consumer.zip', b'consumer')
 
-    ns = {'Path': Path, 'hashlib': hashlib, 'shutil': shutil, 'zipfile': zipfile, 'STAGED_ROOT': staged}
+    ns = {'Path': Path, 'hashlib': hashlib, 'shutil': shutil, 'zipfile': zipfile, 'STAGED_ROOT': staged, 'PLUGIN_RE': re.compile(r'^[A-Za-z0-9_-]+$')}
     exec(compile(module, '<batch_packages>', 'exec'), ns)
     result = ns['batch_packages']({
         'artifacts': [
@@ -112,7 +113,13 @@ with tempfile.TemporaryDirectory() as td:
                  {'id': 'consumer', 'file': 'packages/consumer.zip', 'version': '2.0.0'},
              ]},
         ]
-    }, running)
+    }, running, [
+        {'artifact_package_files': [], 'package_sha256': hashlib.sha256(standalone.read_bytes()).hexdigest()},
+        {'artifact_package_files': [
+            {'id': 'base', 'file': 'packages/base.zip', 'version': '2.0.0'},
+            {'id': 'consumer', 'file': 'packages/consumer.zip', 'version': '2.0.0'},
+        ], 'package_sha256': hashlib.sha256(bundle.read_bytes()).hexdigest()},
+    ])
     assert [x['id'] for x in result] == ['standalone', 'base', 'consumer'], result
     assert all(Path(x['path']).is_file() for x in result)
 

@@ -374,3 +374,15 @@ grep -q '_verify_stage_trust' "${ROOT}/framwork/tec_tac/module_manager_v2.py" ||
 grep -q '_privileged_verify_package' "${ROOT}/scripts/module-job-helper.py" || fail "v1 root worker independent publisher verification missing"
 grep -q '_verify_v2_job_trust' "${ROOT}/scripts/module-v2-job-helper.py" || fail "v2 root worker independent publisher verification missing"
 echo "[TEST] PASS trusted publisher module intake"
+
+# 1.15.78 v2 signed bundle file-to-module identity boundary
+[[ -x "${ROOT}/tests/module-v2-signed-bundle-mapping.py" ]] || fail "v2 signed bundle mapping regression test missing"
+grep -q "artifact_package_files" "${ROOT}/scripts/privileged-trust.py" || fail "privileged verifier does not publish authenticated bundle file mapping"
+grep -q "_authenticated_bundle_files" "${ROOT}/scripts/module-v2-job-helper.py" || fail "v2 worker does not consume authenticated bundle file mapping"
+python3 "${ROOT}/tests/module-v2-signed-bundle-mapping.py"
+echo "[TEST] PASS v2 signed bundle file-to-module mapping"
+[[ -x "${ROOT}/tests/module-v2-verified-bytes-boundary.py" ]] || fail "v2 verified-bytes boundary regression test missing"
+grep -q "_snapshot_v2_job_artifacts" "${ROOT}/scripts/module-v2-job-helper.py" || fail "v2 final root-private execution snapshot missing"
+grep -q "_require_expected_hash" "${ROOT}/scripts/module-v2-job-helper.py" || fail "v2 post-verification hash boundary missing"
+python3 "${ROOT}/tests/module-v2-verified-bytes-boundary.py"
+echo "[TEST] PASS v2 verified-bytes lifecycle boundary"
