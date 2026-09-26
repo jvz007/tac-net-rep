@@ -760,11 +760,46 @@ if command -v visudo >/dev/null 2>&1; then
 fi
 log "Installed durable Core server-maintenance helper: ${SERVER_MAINTENANCE_HELPER}"
 
-mkdir -p "${HOUSEKEEPING_ROOT}/requests" "${HOUSEKEEPING_ROOT}/results" "${HOUSEKEEPING_LIB}"
-chown -R root:"${TACTICAL_GROUP}" "${HOUSEKEEPING_ROOT}"
-chmod 2770 "${HOUSEKEEPING_ROOT}"
-chmod 2750 "${HOUSEKEEPING_ROOT}/results"
-chmod 2770 "${HOUSEKEEPING_ROOT}/requests"
+# Housekeeping trust boundary: the parent must not be writable by Tactical,
+# otherwise Tactical can replace root-owned running/results entries with
+# symlinks before the privileged helper touches them.
+if [[ -L "${HOUSEKEEPING_ROOT}" ]]; then
+    fail "Housekeeping root may not be a symlink: ${HOUSEKEEPING_ROOT}"
+fi
+mkdir -p "${HOUSEKEEPING_ROOT}" "${HOUSEKEEPING_LIB}"
+[[ -d "${HOUSEKEEPING_ROOT}" && ! -L "${HOUSEKEEPING_ROOT}" ]] || fail "Housekeeping root is not a real directory: ${HOUSEKEEPING_ROOT}"
+chown root:root "${HOUSEKEEPING_ROOT}"
+chmod 00755 "${HOUSEKEEPING_ROOT}"
+
+# The parent is now root-only for directory-entry mutation, so it is safe to
+# repair legacy/malicious child entries without a Tactical rename race.
+for hk_dir in requests results running config; do
+    hk_path="${HOUSEKEEPING_ROOT}/${hk_dir}"
+    if [[ -L "${hk_path}" || ( -e "${hk_path}" && ! -d "${hk_path}" ) ]]; then
+        rm -rf -- "${hk_path}"
+    fi
+    mkdir -p "${hk_path}"
+done
+chown root:"${TACTICAL_GROUP}" "${HOUSEKEEPING_ROOT}/requests" "${HOUSEKEEPING_ROOT}/results" "${HOUSEKEEPING_ROOT}/config"
+chmod 2770 "${HOUSEKEEPING_ROOT}/requests" "${HOUSEKEEPING_ROOT}/results" "${HOUSEKEEPING_ROOT}/config"
+chown root:root "${HOUSEKEEPING_ROOT}/running"
+chmod 00700 "${HOUSEKEEPING_ROOT}/running"
+
+# Migrate the pre-1.15.63-2 housekeeping config out of the root-owned parent.
+# The parent has already been locked to root:root 0755, so Tactical cannot swap
+# the legacy entry while it is inspected or moved. Symlinked/non-regular legacy
+# entries are discarded rather than followed.
+LEGACY_HOUSEKEEPING_CONFIG="${HOUSEKEEPING_ROOT}/config.json"
+HOUSEKEEPING_CONFIG="${HOUSEKEEPING_ROOT}/config/config.json"
+if [[ -L "${LEGACY_HOUSEKEEPING_CONFIG}" || ( -e "${LEGACY_HOUSEKEEPING_CONFIG}" && ! -f "${LEGACY_HOUSEKEEPING_CONFIG}" ) ]]; then
+    rm -f -- "${LEGACY_HOUSEKEEPING_CONFIG}"
+elif [[ -f "${LEGACY_HOUSEKEEPING_CONFIG}" && ! -e "${HOUSEKEEPING_CONFIG}" ]]; then
+    mv -- "${LEGACY_HOUSEKEEPING_CONFIG}" "${HOUSEKEEPING_CONFIG}"
+fi
+if [[ -f "${HOUSEKEEPING_CONFIG}" && ! -L "${HOUSEKEEPING_CONFIG}" ]]; then
+    chown root:"${TACTICAL_GROUP}" "${HOUSEKEEPING_CONFIG}"
+    chmod 0640 "${HOUSEKEEPING_CONFIG}"
+fi
 install -o root -g root -m 0755 "${REPO_ROOT}/scripts/housekeeping-helper.py" "${HOUSEKEEPING_LIB}/housekeeping-helper.py"
 ln -sfn "${HOUSEKEEPING_LIB}/housekeeping-helper.py" "${HOUSEKEEPING_HELPER}"
 chown -h root:root "${HOUSEKEEPING_HELPER}"

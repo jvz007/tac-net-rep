@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import json, os, shutil, sys, time
+import json, os, shutil, stat, sys, tempfile, time, uuid
 from pathlib import Path
 
 STATE = Path('/var/lib/tec-tac')
 ROOT = STATE / 'housekeeping'
 RESULTS = ROOT / 'results'
+RUNNING = ROOT / 'running'
 DEFAULTS = {
   'local_settings_backups': {'mode':'keep_count','keep':10},
   'module_staging': {'mode':'age_days','days':7},
@@ -36,6 +37,113 @@ JOB_ROOTS = {
 STAGING_CATEGORIES = {'module_staging','system_update_staging','server_backup_staging'}
 HISTORY_CATEGORIES = {'module_history','system_update_history','server_backup_history'}
 TERMINAL_STATUSES = {'succeeded','failed','cancelled','canceled','complete','completed','skipped','expired','rolled-back','rollback-failed'}
+
+
+
+def _read_request_nofollow(path: Path) -> bytes:
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+    fd = os.open(path, flags)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise RuntimeError('housekeeping request is not a regular file')
+        if st.st_size > 256 * 1024:
+            raise RuntimeError('housekeeping request exceeds the size limit')
+        chunks=[]
+        remaining=256 * 1024 + 1
+        while remaining > 0:
+            chunk=os.read(fd, min(65536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk); remaining -= len(chunk)
+        data=b''.join(chunks)
+        if len(data) > 256 * 1024:
+            raise RuntimeError('housekeeping request exceeds the size limit')
+        return data
+    finally:
+        os.close(fd)
+
+
+def _require_trusted_directory(path: Path, *, private: bool = False) -> os.stat_result:
+    try:
+        st = path.lstat()
+    except FileNotFoundError as exc:
+        raise RuntimeError(f'trusted housekeeping directory is missing: {path}') from exc
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+        raise RuntimeError(f'trusted housekeeping path is not a real directory: {path}')
+    expected_uid = 0 if os.geteuid() == 0 else os.geteuid()
+    if st.st_uid != expected_uid:
+        raise RuntimeError(f'trusted housekeeping directory has the wrong owner: {path}')
+    mode = stat.S_IMODE(st.st_mode)
+    if private and mode != 0o700:
+        raise RuntimeError(f'private housekeeping directory must be mode 0700: {path}')
+    if not private and (mode & 0o002):
+        raise RuntimeError(f'trusted housekeeping directory may not be world-writable: {path}')
+    return st
+
+
+def _ensure_running_directory() -> None:
+    # ROOT is installed root:root 0755, so Tactical cannot replace entries below
+    # it. Never chmod/chown RUNNING here: validate before use and fail closed.
+    _require_trusted_directory(ROOT)
+    try:
+        RUNNING.mkdir(mode=0o700, exist_ok=True)
+    except FileExistsError:
+        pass
+    _require_trusted_directory(RUNNING, private=True)
+
+
+def _write_result(request_id: str, payload: dict) -> Path:
+    _require_trusted_directory(ROOT)
+    result_dir = _require_trusted_directory(RESULTS)
+    target = RESULTS / f'{request_id}.json'
+    fd, tmp_name = tempfile.mkstemp(prefix=f'.{request_id}.', suffix='.tmp', dir=str(RESULTS))
+    tmp = Path(tmp_name)
+    try:
+        data = (json.dumps(payload, indent=2) + '\n').encode('utf-8')
+        with os.fdopen(fd, 'wb', closefd=False) as handle:
+            handle.write(data); handle.flush(); os.fsync(handle.fileno())
+        os.fchmod(fd, 0o640)
+        try:
+            os.fchown(fd, 0 if os.geteuid() == 0 else os.geteuid(), result_dir.st_gid)
+        except PermissionError:
+            pass
+        os.close(fd); fd = -1
+        os.replace(tmp, target)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        tmp.unlink(missing_ok=True)
+    return target
+
+
+def claim_request(req: Path) -> Path:
+    try:
+        request_id=str(uuid.UUID(req.stem))
+    except (ValueError, TypeError) as exc:
+        raise RuntimeError('housekeeping request filename must be a UUID') from exc
+    expected=(ROOT/'requests'/f'{request_id}.json')
+    if req != expected:
+        raise RuntimeError('invalid request path')
+    data=_read_request_nofollow(req)
+    _ensure_running_directory()
+    fd,tmp_name=tempfile.mkstemp(prefix=f'.{request_id}.',suffix='.tmp',dir=str(RUNNING))
+    tmp=Path(tmp_name); target=RUNNING/f'{request_id}.json'
+    try:
+        with os.fdopen(fd,'wb',closefd=False) as handle:
+            handle.write(data); handle.flush(); os.fsync(handle.fileno())
+        os.fchmod(fd,0o600)
+        try:
+            os.fchown(fd,0,0)
+        except PermissionError:
+            pass
+        os.close(fd); fd=-1
+        os.replace(tmp,target)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        tmp.unlink(missing_ok=True)
+    return target
 
 def safe_child(p: Path):
     try: p.resolve(strict=False).relative_to(STATE.resolve())
@@ -132,26 +240,32 @@ def remove_path(p: Path):
 def main():
     if len(sys.argv)!=3 or sys.argv[1] not in {'--scan','--purge'}: raise SystemExit('usage: tec-tac-housekeeping --scan|--purge <request-json>')
     req=Path(sys.argv[2]); safe_child(req)
-    if req.parent != ROOT/'requests' or not req.name.endswith('.json') or req.is_symlink() or not req.is_file(): raise SystemExit('invalid request path')
-    payload=json.loads(req.read_text())
-    selected=payload.get('categories') or list(DEFAULTS)
-    if any(c not in DEFAULTS for c in selected): raise SystemExit('unknown housekeeping category')
-    policies=dict(DEFAULTS)
-    for c,v in (payload.get('policies') or {}).items():
-        if c not in DEFAULTS or not isinstance(v,dict): raise SystemExit('invalid housekeeping policy')
-        policies[c]={**DEFAULTS[c],**v}
-    allow_zero = payload.get('allow_zero_destructive') is True
-    dry = sys.argv[1]=='--scan' or bool(payload.get('dry_run',False))
-    rows=[]; reclaimed=0; deleted=0; scanned=0
-    for c in selected:
-        items,purge,protected,active_ids,unreadable,zero_blocked,zero_reason=select(c,policies[c],allow_zero=allow_zero,dry_run=dry); scanned += sum(x['bytes'] for x in items)
-        row={'id':c,'policy':policies[c],'total_items':len(items),'total_bytes':sum(x['bytes'] for x in items),'purge_items':len(purge),'purge_bytes':sum(x['bytes'] for x in purge),'protected_active_items':len(protected),'active_jobs':len(active_ids),'unreadable_job_state':bool(unreadable),'blocked_zero_destructive':zero_blocked,'blocked_reason':zero_reason}
-        if not dry:
-            for x in purge:
-                remove_path(x['path']); reclaimed+=x['bytes']; deleted+=1
-        rows.append(row)
-    result={'ok':True,'dry_run':dry,'generated_at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),'categories':rows,'scanned_bytes':scanned,'deleted_items':deleted,'reclaimed_bytes':reclaimed,'allow_zero_destructive':allow_zero}
-    RESULTS.mkdir(parents=True,exist_ok=True)
-    out=RESULTS/(req.stem+'.json'); tmp=out.with_suffix('.tmp'); tmp.write_text(json.dumps(result,indent=2)); os.replace(tmp,out); os.chmod(out,0o644)
+    if req.parent != ROOT/'requests' or not req.name.endswith('.json'): raise SystemExit('invalid request path')
+    claimed=None
+    try:
+        claimed=claim_request(req)
+        payload=json.loads(claimed.read_text(encoding='utf-8'))
+        if not isinstance(payload,dict): raise SystemExit('housekeeping request must be an object')
+        selected=payload.get('categories') or list(DEFAULTS)
+        if not isinstance(selected,list) or any(c not in DEFAULTS for c in selected): raise SystemExit('unknown housekeeping category')
+        policies=dict(DEFAULTS)
+        for c,v in (payload.get('policies') or {}).items():
+            if c not in DEFAULTS or not isinstance(v,dict): raise SystemExit('invalid housekeeping policy')
+            policies[c]={**DEFAULTS[c],**v}
+        allow_zero = payload.get('allow_zero_destructive') is True
+        dry = sys.argv[1]=='--scan' or bool(payload.get('dry_run',False))
+        rows=[]; reclaimed=0; deleted=0; scanned=0
+        for c in selected:
+            items,purge,protected,active_ids,unreadable,zero_blocked,zero_reason=select(c,policies[c],allow_zero=allow_zero,dry_run=dry); scanned += sum(x['bytes'] for x in items)
+            row={'id':c,'policy':policies[c],'total_items':len(items),'total_bytes':sum(x['bytes'] for x in items),'purge_items':len(purge),'purge_bytes':sum(x['bytes'] for x in purge),'protected_active_items':len(protected),'active_jobs':len(active_ids),'unreadable_job_state':bool(unreadable),'blocked_zero_destructive':zero_blocked,'blocked_reason':zero_reason}
+            if not dry:
+                for x in purge:
+                    remove_path(x['path']); reclaimed+=x['bytes']; deleted+=1
+            rows.append(row)
+        result={'ok':True,'dry_run':dry,'generated_at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),'categories':rows,'scanned_bytes':scanned,'deleted_items':deleted,'reclaimed_bytes':reclaimed,'allow_zero_destructive':allow_zero}
+        _write_result(req.stem, result)
+    finally:
+        if claimed is not None:
+            claimed.unlink(missing_ok=True)
 
 if __name__=='__main__': main()

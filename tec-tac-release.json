@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.62",
+  "version": "1.15.63",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -27,19 +27,19 @@
       "sha256": "7acd5f22138138348d5123fc22c210724ca10ce86f05da7b77c68fc89952319a"
     },
     {
-      "path": "RELEASE_NOTES_1.15.61.md",
-      "size": 827,
-      "sha256": "ac5027d9d527ab49a6f48e248a1554e6114227aa21e9ee82e2f92fcbe14d05a4"
-    },
-    {
       "path": "RELEASE_NOTES_1.15.62.md",
       "size": 628,
       "sha256": "b6d73ea380b956e325355e7bc4170ef2161e0df8744563d3c0a9e7e9c4bd7db3"
     },
     {
+      "path": "RELEASE_NOTES_1.15.63.md",
+      "size": 3348,
+      "sha256": "c23a33409991db418889c7717deaffe3ecb6dd26a851c88e8b0af55bfd42edf8"
+    },
+    {
       "path": "VERSION",
-      "size": 8,
-      "sha256": "f55011bbbddf09f489119f056b24a7a7816f21c4036a84b1d2f7dd366caab3e6"
+      "size": 9,
+      "sha256": "46af34b220ea996c3639044b66f0fa5087c33799e11ba2ebe5fa9d8deec046d7"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -380,6 +380,11 @@
       "path": "docs/releases/RELEASE_NOTES_1.15.60-1.md",
       "size": 1272,
       "sha256": "8cac38337d9d5313beda55fd5ea124f50930e13d0cfcfa3eec4d9204f5315306"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.61.md",
+      "size": 827,
+      "sha256": "ac5027d9d527ab49a6f48e248a1554e6114227aa21e9ee82e2f92fcbe14d05a4"
     },
     {
       "path": "docs/releases/RELEASE_NOTES_1.2.0.md",
@@ -803,8 +808,8 @@
     },
     {
       "path": "framwork/tec_tac/housekeeping.py",
-      "size": 5105,
-      "sha256": "17d654517b4231120fadc4732aa1b0591d4a0d2ec2c9210db3002f5d358ce6df"
+      "size": 5826,
+      "sha256": "3cad1054e3c4240c032c0c9c67681546e33f2cc1dbe9a03488aeb4d49e6520aa"
     },
     {
       "path": "framwork/tec_tac/housekeeping_views.py",
@@ -1113,8 +1118,8 @@
     },
     {
       "path": "install.sh",
-      "size": 54675,
-      "sha256": "4eb8f35d16f298cd08cc0ba0a40561f9b02aea83c351f28ad29e11337d768a62"
+      "size": 56620,
+      "sha256": "1fbe83f72ea9293606475ffd0c47111dbe833f7e85860a14b145ecb259968c79"
     },
     {
       "path": "reportsets/.gitkeep",
@@ -1153,8 +1158,8 @@
     },
     {
       "path": "scripts/housekeeping-helper.py",
-      "size": 8503,
-      "sha256": "ccc4d88d6c2f4d7de7de8f6529b55cc8f7e78ea7b4e76f5c21b362b57542eecd"
+      "size": 12735,
+      "sha256": "d56bcd22382312aa8b7a8c6a4bbc1c7afae3c7b1b0f37f0f632a89a1cb394f42"
     },
     {
       "path": "scripts/install-extension.sh",
@@ -1283,8 +1288,8 @@
     },
     {
       "path": "tec_tac_package.json",
-      "size": 77,
-      "sha256": "39f03d9125042d0b25b6643daf004065cb80de588c24324be317808b6f2b7e4f"
+      "size": 82,
+      "sha256": "9dc3865f354ca2cd832e5d23892a6923838cbd6bdda6476a6a48b8fbd3db4c9d"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -1357,9 +1362,24 @@
       "sha256": "90e12c563fe6da75d1a8143fe78d0ec809a268e8691a1130fcf8b89373b606b8"
     },
     {
+      "path": "tests/housekeeping-claim-security.py",
+      "size": 3547,
+      "sha256": "7642e0107aafcf174d61690a4420e90c9383d2b52f2a163b5b199922ad647cc5"
+    },
+    {
+      "path": "tests/housekeeping-config-storage.py",
+      "size": 2608,
+      "sha256": "2d73b760181a0069460859e75c3e3e67ebd0c1587f47c618930a1eee2301a488"
+    },
+    {
       "path": "tests/housekeeping-foundation.sh",
       "size": 1218,
       "sha256": "f4a58854640508b7c485dd6435a56109dbadbb96114e52c28b56d3eb21f9c4be"
+    },
+    {
+      "path": "tests/housekeeping-upgrade-modes.sh",
+      "size": 898,
+      "sha256": "12aca1d0b5e65f637e8d40dd7b37ef75bce62c19c5b5ccb81d019b6ffebbdb05"
     },
     {
       "path": "tests/layout-foundation.sh",

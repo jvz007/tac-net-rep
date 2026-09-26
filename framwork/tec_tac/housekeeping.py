@@ -1,9 +1,9 @@
 from __future__ import annotations
-import json, subprocess, uuid
+import json, os, subprocess, tempfile, uuid
 from pathlib import Path
 
 ROOT=Path('/var/lib/tec-tac/housekeeping')
-REQUESTS=ROOT/'requests'; RESULTS=ROOT/'results'; CONFIG=ROOT/'config.json'; HELPER=Path('/usr/local/sbin/tec-tac-housekeeping')
+REQUESTS=ROOT/'requests'; RESULTS=ROOT/'results'; CONFIG_DIR=ROOT/'config'; CONFIG=CONFIG_DIR/'config.json'; HELPER=Path('/usr/local/sbin/tec-tac-housekeeping')
 DEFAULT_POLICIES={
  'local_settings_backups': {'mode':'keep_count','keep':10}, 'module_staging': {'mode':'age_days','days':7},
  'module_history': {'mode':'age_days','days':30}, 'system_update_staging': {'mode':'age_days','days':7},
@@ -49,8 +49,25 @@ def save_config(payload):
             zero_fields.append(k)
     if zero_fields and not allow_zero:
         raise HousekeepingError('New zero-value destructive policies require allow_zero_destructive=true: ' + ', '.join(zero_fields))
-    ROOT.mkdir(parents=True,exist_ok=True); CONFIG.write_text(json.dumps({'policies':policies,'allow_zero_destructive':allow_zero},indent=2)); CONFIG.chmod(0o640)
-    return {'policies':policies,'allow_zero_destructive':allow_zero}
+    payload_out={'policies':policies,'allow_zero_destructive':allow_zero}
+    try:
+        if not CONFIG_DIR.is_dir() or CONFIG_DIR.is_symlink():
+            raise OSError(f'housekeeping config directory is unavailable: {CONFIG_DIR}')
+        fd,tmp_name=tempfile.mkstemp(prefix='.config.',suffix='.tmp',dir=str(CONFIG_DIR))
+        tmp=Path(tmp_name)
+        try:
+            data=(json.dumps(payload_out,indent=2)+'\n').encode('utf-8')
+            with os.fdopen(fd,'wb',closefd=False) as handle:
+                handle.write(data); handle.flush(); os.fsync(handle.fileno())
+            os.fchmod(fd,0o640)
+            os.close(fd); fd=-1
+            os.replace(tmp,CONFIG)
+        finally:
+            if fd >= 0: os.close(fd)
+            tmp.unlink(missing_ok=True)
+    except OSError as exc:
+        raise HousekeepingError('Unable to save housekeeping configuration.') from exc
+    return payload_out
 
 def _run(action, *, dry_run=True, categories=None):
     if not HELPER.is_file(): raise HousekeepingError(f'housekeeping helper missing: {HELPER}')
