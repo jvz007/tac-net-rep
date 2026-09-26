@@ -28,6 +28,7 @@ REPORTSETS_ROOT="${TEC_TAC_REPORTSETS_ROOT}"
 TACTICAL_ROOT="${TACTICAL_ROOT:-/rmm}"
 BACKEND_DIR="${TACTICAL_ROOT}/api/tacticalrmm"
 VENV_PYTHON="${TACTICAL_ROOT}/api/env/bin/python"
+SYSTEM_PYTHON="/usr/bin/python3"
 MANAGE_PY="${BACKEND_DIR}/manage.py"
 
 BACKUP_ROOT="${TEC_TAC_BACKUP_DIR:-/var/lib/tec-tac/backups}/plugins"
@@ -82,6 +83,7 @@ EOF
 [[ -d "${EXTENSIONS_ROOT}" ]] || fail "Extensions root not found: ${EXTENSIONS_ROOT}"
 [[ -d "${REPORTSETS_ROOT}" ]] || fail "Reportsets root not found: ${REPORTSETS_ROOT}"
 [[ -x "${VENV_PYTHON}" ]] || fail "Tactical Python not found: ${VENV_PYTHON}"
+[[ -x "${SYSTEM_PYTHON}" ]] || fail "System Python not found: ${SYSTEM_PYTHON}"
 [[ -f "${MANAGE_PY}" ]] || fail "Tactical manage.py not found: ${MANAGE_PY}"
 
 TACTICAL_USER="$(systemctl show rmm.service -p User --value 2>/dev/null || true)"
@@ -98,7 +100,7 @@ trap cleanup EXIT
 
 # Use Python's archive readers so member names can be validated before
 # extraction. Symlinks and hardlinks are rejected.
-"${VENV_PYTHON}" - "${PACKAGE}" "${PAYLOAD_ROOT}" <<'PY'
+"${SYSTEM_PYTHON}" -I - "${PACKAGE}" "${PAYLOAD_ROOT}" <<'PY'
 import os
 import stat
 import sys
@@ -178,7 +180,7 @@ PY
 
 # Discover exactly one extension manifest and one reportset manifest and verify
 # that the pair uses the same extension ID.
-DISCOVERY="$("${VENV_PYTHON}" - "${PAYLOAD_ROOT}" <<'PY'
+DISCOVERY="$("${SYSTEM_PYTHON}" -I - "${PAYLOAD_ROOT}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -269,13 +271,14 @@ if [[ "${SOURCE_REPORTSET}" != "-" ]]; then
     cp -a "${SOURCE_REPORTSET}" "${STAGE_ROOT}/reportsets/${PLUGIN_ID}"
 fi
 
-PYTHONPATH="${FRAMEWORK_DIR}" \
-"${VENV_PYTHON}" - "${STAGE_ROOT}" <<'PY'
+"${SYSTEM_PYTHON}" -I - "${FRAMEWORK_DIR}" "${STAGE_ROOT}" <<'PY'
 import sys
 from pathlib import Path
+framework = Path(sys.argv[1]).resolve()
+sys.path.insert(0, str(framework))
 from tec_tac.registry import discover_plugins
 
-root = Path(sys.argv[1])
+root = Path(sys.argv[2])
 plugins = discover_plugins(root / "extensions", root / "reportsets")
 pairs = {(p.plugin_type, p.plugin_id) for p in plugins}
 plugin_id = next(p.plugin_id for p in plugins if p.plugin_type == "extension")
@@ -326,8 +329,11 @@ if [[ -d "${DEST_REPORTSET}" ]]; then chmod -R a+rX "${DEST_REPORTSET}"; fi
 
 # Validate the complete live registry, including conflicts with already
 # installed plugins.
-PYTHONPATH="${FRAMEWORK_DIR}" \
-"${VENV_PYTHON}" - <<'PY'
+"${SYSTEM_PYTHON}" -I - "${FRAMEWORK_DIR}" <<'PY'
+import sys
+from pathlib import Path
+framework = Path(sys.argv[1]).resolve()
+sys.path.insert(0, str(framework))
 from tec_tac.registry import get_plugins
 plugins = get_plugins()
 print("[TEC-TAC] Live registry validation OK:")
@@ -429,7 +435,7 @@ runuser -u "${TACTICAL_USER}" -- bash -lc \
 
 # Extension-declared role permissions.
 PERMISSION_MANIFEST="${DEST_EXTENSION}/tec_tac.json"
-PERMISSION_GROUPS="$("${VENV_PYTHON}" - "${PERMISSION_MANIFEST}" <<'PY_PERM_GROUPS'
+PERMISSION_GROUPS="$("${SYSTEM_PYTHON}" -I - "${PERMISSION_MANIFEST}" <<'PY_PERM_GROUPS'
 import json, sys
 from pathlib import Path
 payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))

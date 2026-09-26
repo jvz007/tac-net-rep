@@ -775,9 +775,11 @@ def verify(component, target, expected, log):
         raise RuntimeError(f"package manifest verification failed: expected {expected}, found {manifest_version or 'missing'}")
 
     if component == "framework":
-        py = Path("/rmm/api/env/bin/python")
-        manage = Path("/rmm/api/tacticalrmm/manage.py")
-        runtime_framework = Path(load_config().get("TEC_TAC_FRAMEWORK_ROOT", "/opt/tec-tac/framework"))
+        config = load_config()
+        tactical_user = config.get("TACTICAL_USER", "tactical")
+        py = Path(config.get("TACTICAL_PYTHON", "/rmm/api/env/bin/python"))
+        manage = Path(config.get("TACTICAL_BACKEND_ROOT", "/rmm/api/tacticalrmm")) / "manage.py"
+        runtime_framework = Path(config.get("TEC_TAC_FRAMEWORK_ROOT", "/opt/tec-tac/framework"))
         env = privileged_env({"PYTHONPATH": str(runtime_framework)})
         checks = [
             ([str(py), str(manage), "check"], "Django system check"),
@@ -790,7 +792,10 @@ def verify(component, target, expected, log):
              "framework contract verification"),
         ]
         for command, label in checks:
-            rc = _run_bounded(command, cwd="/rmm/api/tacticalrmm", log=log, env=env, timeout=VERIFY_TIMEOUT_SECONDS, label=label)
+            # manage.py imports Tactical local_settings.py and the Tactical virtualenv.
+            # Both are Tactical-owned, so they must never execute in the root helper.
+            command = ["runuser", "-u", tactical_user, "--", *command]
+            rc = _run_bounded(command, cwd=str(manage.parent), log=log, env=env, timeout=VERIFY_TIMEOUT_SECONDS, label=label)
             if rc != 0:
                 raise RuntimeError(f"{label} failed with status {rc}")
         recovery = Path(load_config().get("TEC_TAC_SCRIPTS_ROOT", "/opt/tec-tac/scripts")) / "recovery"

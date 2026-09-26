@@ -27,6 +27,7 @@ REPORTSETS_ROOT="${TEC_TAC_REPORTSETS_ROOT}"
 TACTICAL_ROOT="${TACTICAL_ROOT:-/rmm}"
 BACKEND_DIR="${TACTICAL_ROOT}/api/tacticalrmm"
 VENV_PYTHON="${TACTICAL_ROOT}/api/env/bin/python"
+SYSTEM_PYTHON="/usr/bin/python3"
 MANAGE_PY="${BACKEND_DIR}/manage.py"
 
 BACKUP_ROOT="${TEC_TAC_BACKUP_DIR:-/var/lib/tec-tac/backups}/plugins"
@@ -92,18 +93,21 @@ REP_DIR="${REPORTSETS_ROOT}/${PLUGIN_ID}"
 [[ -d "${EXT_DIR}" ]] || fail "Extension not found: ${EXT_DIR}"
 [[ -f "${EXT_DIR}/tec_tac.json" ]] || fail "Missing extension manifest."
 [[ -x "${VENV_PYTHON}" ]] || fail "Tactical Python not found."
+[[ -x "${SYSTEM_PYTHON}" ]] || fail "System Python not found: ${SYSTEM_PYTHON}"
 [[ -f "${MANAGE_PY}" ]] || fail "Tactical manage.py not found."
 
 TACTICAL_USER="$(systemctl show rmm.service -p User --value 2>/dev/null || true)"
 [[ -n "${TACTICAL_USER}" ]] || fail "Could not determine Tactical service user."
 
 # Verify that the live pair resolves and matches the requested ID.
-PYTHONPATH="${FRAMEWORK_DIR}" \
-"${VENV_PYTHON}" - "${PLUGIN_ID}" <<'PY'
+"${SYSTEM_PYTHON}" -I - "${FRAMEWORK_DIR}" "${PLUGIN_ID}" <<'PY'
 import sys
+from pathlib import Path
+framework = Path(sys.argv[1]).resolve()
+sys.path.insert(0, str(framework))
 from tec_tac.registry import get_plugin
 
-plugin_id = sys.argv[1]
+plugin_id = sys.argv[2]
 ext = get_plugin(plugin_id, "extension")
 try:
     rep = get_plugin(plugin_id, "reportset")
@@ -227,8 +231,11 @@ log "Removed extension code: ${EXT_DIR}"
 if [[ -d "${BACKUP_DIR}/reportsets/${PLUGIN_ID}" ]]; then log "Removed reportset code: ${REP_DIR}"; fi
 
 # Validate remaining convention-based plugins after removal.
-PYTHONPATH="${FRAMEWORK_DIR}" \
-"${VENV_PYTHON}" - <<'PY'
+"${SYSTEM_PYTHON}" -I - "${FRAMEWORK_DIR}" <<'PY'
+import sys
+from pathlib import Path
+framework = Path(sys.argv[1]).resolve()
+sys.path.insert(0, str(framework))
 from tec_tac.registry import get_plugins
 plugins = get_plugins()
 print("[TEC-TAC] Remaining plugin registry:")

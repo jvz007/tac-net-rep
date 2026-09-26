@@ -47,6 +47,8 @@ command -v tar >/dev/null 2>&1 || fail "tar is required"
 [[ -d "${OLD_UI_REPO}/.git" ]] || fail "Legacy UI Git checkout not found at ${OLD_UI_REPO}"
 [[ -x "${TACTICAL_PYTHON}" ]] || fail "Tactical Python not found: ${TACTICAL_PYTHON}"
 [[ -f "${MANAGE_PY}" ]] || fail "Tactical manage.py not found: ${MANAGE_PY}"
+TACTICAL_USER="$(systemctl show rmm.service -p User --value 2>/dev/null || true)"
+[[ -n "${TACTICAL_USER}" ]] || fail "Could not determine Tactical service user."
 
 mkdir -p "${BACKUP_DIR}"
 chmod 0700 "${BACKUP_DIR}"
@@ -214,8 +216,8 @@ TEC_TAC_CONFIG_FILE="${CONFIG_FILE}" bash "${UI_SOURCE}/scripts/install.sh"
 
 log "Verifying Django against the new runtime path."
 cd "${BACKEND_ROOT}"
-"${TACTICAL_PYTHON}" "${MANAGE_PY}" check
-"${TACTICAL_PYTHON}" "${MANAGE_PY}" shell -c "import tec_tac; p=tec_tac.__file__; assert p.startswith('${RUNTIME_ROOT}/framework/'), p; print('Tec-Tac runtime import OK:', p)"
+runuser -u "${TACTICAL_USER}" -- "${TACTICAL_PYTHON}" "${MANAGE_PY}" check
+runuser -u "${TACTICAL_USER}" -- "${TACTICAL_PYTHON}" "${MANAGE_PY}" shell -c "import tec_tac; p=tec_tac.__file__; assert p.startswith('${RUNTIME_ROOT}/framework/'), p; print('Tec-Tac runtime import OK:', p)"
 
 if [[ -x "${RUNTIME_ROOT}/scripts/recovery/tec-tac-repair-modules.sh" ]]; then
   "${RUNTIME_ROOT}/scripts/recovery/tec-tac-repair-modules.sh" --check

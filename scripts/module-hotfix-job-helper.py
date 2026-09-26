@@ -422,18 +422,19 @@ def copy_atomic(source, target, stat_from):
 
 def validate_runtime(config, targets, effective, log):
     tactical_root = Path(config.get("TACTICAL_ROOT", "/rmm"))
-    python = Path(config.get("TACTICAL_PYTHON", tactical_root / "api/env/bin/python"))
+    tactical_python = Path(config.get("TACTICAL_PYTHON", tactical_root / "api/env/bin/python"))
+    system_python = Path("/usr/bin/python3")
     manage = Path(config.get("TACTICAL_BACKEND_ROOT", tactical_root / "api/tacticalrmm")) / "manage.py"
     tactical_user = config.get("TACTICAL_USER", "tactical")
     if effective.get("python_compile"):
         for target in targets:
             if not target["path"].endswith(".py"):
                 continue
-            result = subprocess.run([str(python), "-m", "py_compile", str(target["target_path"])], stdout=log, stderr=subprocess.STDOUT, text=True, env=privileged_env())
+            result = subprocess.run([str(system_python), "-I", "-m", "py_compile", str(target["target_path"])], stdout=log, stderr=subprocess.STDOUT, text=True, env=privileged_env())
             if result.returncode:
                 raise RuntimeError(f"Python compile validation failed: {target['component']}/{target['path']}")
     if effective.get("django_check"):
-        result = subprocess.run(["runuser", "-u", tactical_user, "--", str(python), str(manage), "check"], cwd=str(manage.parent), stdout=log, stderr=subprocess.STDOUT, text=True, env=privileged_env())
+        result = subprocess.run(["runuser", "-u", tactical_user, "--", str(tactical_python), str(manage), "check"], cwd=str(manage.parent), stdout=log, stderr=subprocess.STDOUT, text=True, env=privileged_env())
         if result.returncode:
             raise RuntimeError(f"Django system check failed with status {result.returncode}")
 
