@@ -114,6 +114,7 @@ REQUIRED_FILES=(
     "${SOURCE_ROOT}/scripts/privileged-trust.py"
     "${SOURCE_ROOT}/scripts/module-v2-job-helper.py"
     "${SOURCE_ROOT}/scripts/module-hotfix-job-helper.py"
+    "${SOURCE_ROOT}/scripts/trust-policy-migration.py"
     "${SOURCE_ROOT}/scripts/server-backup-helper.py"
     "${SOURCE_ROOT}/scripts/reload-rmm-uwsgi.sh"
     "${SOURCE_ROOT}/scripts/tec-tac-config.sh"
@@ -549,39 +550,16 @@ mkdir -p "${POLICY_ROOT}"
 chown root:root "${POLICY_ROOT}"
 chmod 0755 "${POLICY_ROOT}"
 POLICY_FILE="${POLICY_ROOT}/update-trust-policy.json"
-if [[ ! -f "${POLICY_FILE}" ]]; then
-    if [[ "${TEC_TAC_ENVIRONMENT:-production}" == "development" ]]; then
-        DEFAULT_TRUST_LEVEL="signed_development"
-    else
-        DEFAULT_TRUST_LEVEL="signed_production"
-    fi
-    printf '{"schema":1,"minimum_level":"%s","updated_at":null,"updated_by":"installer"}
-' "${DEFAULT_TRUST_LEVEL}" > "${POLICY_FILE}"
+LEGACY_POLICY_FILE="/var/lib/tec-tac/policy/update-trust-policy.json"
+# Monotonic policy migration: preserve the strongest valid floor across the
+# historic /var/lib location, the current root-owned policy and the secure
+# environment default. An upgrade may strengthen policy, never weaken it.
+if ! /usr/bin/python3 -I "${SOURCE_ROOT}/scripts/trust-policy-migration.py" \
+    --current "${POLICY_FILE}" \
+    --legacy "${LEGACY_POLICY_FILE}" \
+    --environment "${TEC_TAC_ENVIRONMENT:-production}" >/dev/null; then
+    fail "Tec-Tac trust-policy upgrade migration failed; refusing to continue."
 fi
-chown root:root "${POLICY_FILE}"
-chmod 0644 "${POLICY_FILE}"
-
-# Security migration: pre-1.15.46 installs defaulted to unsigned. Raise only an
-# existing unsigned floor to the environment-appropriate signed default; never
-# lower a stronger administrator policy.
-python3 - "${POLICY_FILE}" "${TEC_TAC_ENVIRONMENT:-production}" <<'PY_POLICY'
-import json, os, sys
-path, environment = sys.argv[1], sys.argv[2].strip().lower()
-default = "signed_development" if environment == "development" else "signed_production"
-try:
-    data = json.load(open(path, encoding="utf-8"))
-except Exception:
-    raise SystemExit("Tec-Tac trust policy is unreadable; refusing to continue")
-if not isinstance(data, dict) or int(data.get("schema", 0) or 0) != 1:
-    raise SystemExit("Tec-Tac trust policy schema is invalid; refusing to continue")
-if str(data.get("minimum_level") or "").strip().lower() == "unsigned":
-    data["minimum_level"] = default
-    data["updated_by"] = "installer-security-migration"
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as handle:
-        json.dump(data, handle, indent=2, sort_keys=True); handle.write("\n")
-    os.chmod(tmp, 0o644); os.replace(tmp, path)
-PY_POLICY
 chown root:root "${POLICY_FILE}"
 chmod 0644 "${POLICY_FILE}"
 
