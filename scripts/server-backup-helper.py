@@ -2012,49 +2012,274 @@ def _run_to_file(argv, target: Path, *, timeout):
         raise RuntimeError("pre-restore database snapshot failed" + (f": {detail[:300]}" if detail else ""))
 
 
-def create_pre_restore_snapshot(config, job_id, log):
+TACTICAL_RESTORE_HOST_PATHS = (
+    "/etc/nginx/nginx.conf",
+    "/etc/nginx/sites-available/rmm.conf",
+    "/etc/nginx/sites-available/frontend.conf",
+    "/etc/nginx/sites-available/meshcentral.conf",
+    "/etc/nginx/sites-enabled/rmm.conf",
+    "/etc/nginx/sites-enabled/frontend.conf",
+    "/etc/nginx/sites-enabled/meshcentral.conf",
+    "/etc/letsencrypt",
+    "/etc/ssl/tactical",
+    "/etc/conf.d",
+    "/etc/systemd/system/rmm.service",
+    "/etc/systemd/system/celery.service",
+    "/etc/systemd/system/celerybeat.service",
+    "/etc/systemd/system/daphne.service",
+    "/etc/systemd/system/uvicorn.service",
+    "/etc/systemd/system/meshcentral.service",
+    "/etc/systemd/system/nats.service",
+    "/etc/systemd/system/nats-api.service",
+    "/meshcentral",
+    "/opt/tactical",
+    "/var/www/rmm",
+    "/etc/hosts",
+    "/etc/cloud/cloud.cfg",
+    "/usr/local/bin/nats-server",
+    "/usr/local/bin/nats-api",
+)
+
+
+TEC_TAC_PRIVILEGED_INSTALL_PATHS = (
+    # Root-owned helper/library targets written by install.sh. Keep this list
+    # regression-checked against installer literals so rollback coverage cannot drift.
+    "/usr/local/lib/tec-tac",
+    "/usr/local/lib/tec-tac-backup",
+    "/usr/local/lib/tec-tac-server-maintenance",
+    "/usr/local/lib/tec-tac-housekeeping",
+    "/usr/local/lib/tec-tac-security",
+    "/usr/local/lib/tec-tac-updater",
+    "/usr/local/sbin/tec-tac-module-job",
+    "/usr/local/sbin/tec-tac-module-v2-job",
+    "/usr/local/sbin/tec-tac-module-hotfix",
+    "/usr/local/sbin/tec-tac-trust-policy",
+    "/usr/local/sbin/tec-tac-system-update",
+    "/usr/local/sbin/tec-tac-server-backup",
+    "/usr/local/sbin/tec-tac-server-maintenance",
+    "/usr/local/sbin/tec-tac-housekeeping",
+    "/usr/local/sbin/tec-tac-repair",
+    "/usr/local/sbin/tec-tac-diagnostics",
+    "/etc/sudoers.d/tec-tac-module-manager",
+    "/etc/sudoers.d/tec-tac-module-manager-v2",
+    "/etc/sudoers.d/tec-tac-module-hotfix",
+    "/etc/sudoers.d/tec-tac-system-update",
+    "/etc/sudoers.d/tec-tac-server-backup",
+    "/etc/sudoers.d/tec-tac-server-maintenance",
+    "/etc/sudoers.d/tec-tac-housekeeping",
+)
+
+
+def _tec_tac_restore_host_paths(config):
+    state_root = Path(config["TEC_TAC_STATE_ROOT"])
+    return (
+        config["TEC_TAC_ROOT"],
+        config["TEC_TAC_FRAMEWORK_SOURCE"],
+        config["TEC_TAC_UI_SOURCE"],
+        config["TEC_TAC_UI_DEPLOY_ROOT"],
+        "/opt/tec-tac-ui",
+        "/etc/tec-tac",
+        "/etc/nginx/snippets/tec-tac.conf",
+        str(state_root / "module-manager" / "module-state.json"),
+        str(state_root / "module-manager" / "repositories" / "repositories.json"),
+        *TEC_TAC_PRIVILEGED_INSTALL_PATHS,
+    )
+
+
+def _canonical_snapshot_targets(paths):
+    """Return fixed absolute rollback targets with nested duplicates removed."""
+    normalized = []
+    for raw in paths:
+        value = os.path.normpath(str(raw or ""))
+        if not value.startswith("/") or value == "/":
+            raise RuntimeError(f"unsafe pre-restore snapshot target: {raw!r}")
+        path = Path(value)
+        if path in normalized:
+            continue
+        normalized.append(path)
+    normalized.sort(key=lambda item: (len(item.parts), str(item)))
+    result = []
+    for path in normalized:
+        covered = False
+        for parent in result:
+            try:
+                path.relative_to(parent)
+                covered = True
+                break
+            except ValueError:
+                pass
+        if not covered:
+            result.append(path)
+    return result
+
+
+def _require_safe_parent_chain(path: Path, *, create_missing=False):
+    """Require every parent component to be a real directory, never a symlink."""
+    parent = path.parent
+    current = Path("/")
+    for part in parent.parts[1:]:
+        current = current / part
+        if os.path.lexists(current):
+            info = current.lstat()
+            if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                raise RuntimeError(f"unsafe symlink/non-directory in restore target parent: {current}")
+        elif create_missing:
+            current.mkdir(mode=0o755)
+            os.chown(current, 0, 0)
+        else:
+            # A missing parent means the final path cannot exist either. There
+            # is nothing unsafe to traverse during snapshot capture.
+            break
+
+
+def _snapshot_host_paths(snapshot_root: Path, paths):
+    """Snapshot fixed live host paths beneath a root-only transaction directory.
+
+    cp -a is used deliberately: rollback needs ownership, modes, timestamps and
+    symlink identity, not merely file contents. The parent directory is 0700 so
+    preserved unprivileged ownership inside it does not expose snapshot data.
+    """
+    host_root = snapshot_root / "host-paths"
+    host_root.mkdir(parents=True, exist_ok=True)
+    os.chown(host_root, 0, 0)
+    os.chmod(host_root, 0o700)
+    records = []
+    for index, path in enumerate(_canonical_snapshot_targets(paths)):
+        _require_safe_parent_chain(path, create_missing=False)
+        existed = os.path.lexists(path)
+        row = {"path": str(path), "existed": bool(existed), "slot": None}
+        if existed:
+            slot = host_root / f"{index:03d}"
+            proc = subprocess.run(
+                ["cp", "-a", "--", str(path), str(slot)],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                timeout=30 * 60,
+            )
+            if proc.returncode:
+                raise RuntimeError(f"pre-restore host snapshot failed for {path}: {(proc.stderr or '').strip()[:300]}")
+            if not os.path.lexists(slot):
+                raise RuntimeError(f"pre-restore host snapshot did not create a copy for {path}")
+            row["slot"] = str(slot)
+        records.append(row)
+    return records
+
+
+def _validate_restored_tec_tac_sudoers(records):
+    restored_paths = {str(row.get("path") or "") for row in records}
+    restored_sudoers = sorted(path for path in restored_paths if path.startswith("/etc/sudoers.d/tec-tac-"))
+    if not restored_sudoers:
+        return
+    visudo = shutil.which("visudo")
+    if not visudo:
+        raise RuntimeError("host rollback restored Tec-Tac sudoers rules but visudo is unavailable")
+    proc = subprocess.run(
+        [visudo, "-c"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60
+    )
+    if proc.returncode:
+        detail = (proc.stderr or proc.stdout or "sudoers validation failed").strip()
+        raise RuntimeError(f"restored Tec-Tac sudoers validation failed: {detail[:300]}")
+
+
+def _restore_host_paths(snapshot, log):
+    records = snapshot.get("host_paths") or []
+    for row in sorted(records, key=lambda item: len(Path(str(item.get("path") or "/")).parts), reverse=True):
+        target = Path(str(row.get("path") or ""))
+        if not target.is_absolute() or str(target) == "/":
+            raise RuntimeError("pre-restore host snapshot contains an unsafe target")
+        _require_safe_parent_chain(target, create_missing=True)
+        if os.path.lexists(target):
+            info = target.lstat()
+            if stat.S_ISDIR(info.st_mode) and not stat.S_ISLNK(info.st_mode):
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+        if row.get("existed"):
+            slot = Path(str(row.get("slot") or ""))
+            if not os.path.lexists(slot):
+                raise RuntimeError(f"pre-restore host snapshot member is missing: {target}")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            proc = subprocess.run(
+                ["cp", "-a", "--", str(slot), str(target)],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                timeout=30 * 60,
+            )
+            if proc.returncode:
+                raise RuntimeError(f"host rollback failed for {target}: {(proc.stderr or '').strip()[:300]}")
+    if records:
+        _validate_restored_tec_tac_sudoers(records)
+        subprocess.run(["systemctl", "daemon-reload"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        log.write(f"[TEC-TAC-BACKUP] restored {len(records)} host path snapshot entries\n")
+
+
+def create_pre_restore_snapshot(config, job_id, log, *, include_databases=True, include_tactical_host=True, include_tec_tac=False):
     root = roots(config)["pre_restore"] / str(job_id)
     if root.exists():
         shutil.rmtree(root)
     root.mkdir(parents=True, exist_ok=True)
     os.chown(root, 0, 0); os.chmod(root, 0o700)
-    databases = []
-    for name in ("tacticalrmm", "meshcentral"):
-        exists = _postgres_query("SELECT 1 FROM pg_database WHERE datname='" + name + "'") == "1"
-        if not exists:
-            if name == "tacticalrmm":
-                raise RuntimeError("pre-restore snapshot refused: tacticalrmm database is missing")
-            continue
-        owner = _postgres_query("SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname='" + name + "'")
-        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", owner or ""):
-            raise RuntimeError(f"pre-restore snapshot refused: invalid owner for {name}")
-        dump = root / f"{name}.dump"
-        _run_to_file(["runuser", "-u", "postgres", "--", "pg_dump", "-Fc", "-d", name], dump, timeout=2 * 60 * 60)
-        os.chown(dump, 0, 0); os.chmod(dump, 0o600)
-        databases.append({"name": name, "owner": owner, "dump": str(dump), "sha256": sha256_file(dump)})
-    snapshot = {"root": str(root), "created_at": now(), "databases": databases}
-    atomic_json(root / "snapshot.json", snapshot, mode=0o600)
-    os.chown(root / "snapshot.json", 0, 0)
-    log.write("[TEC-TAC-BACKUP] created root-only pre-restore database snapshot\n")
-    return snapshot
+    try:
 
+        host_targets = []
+        if include_tactical_host:
+            host_targets.extend(TACTICAL_RESTORE_HOST_PATHS)
+        if include_tec_tac:
+            host_targets.extend(_tec_tac_restore_host_paths(config))
+        host_paths = _snapshot_host_paths(root, host_targets) if host_targets else []
 
-def rollback_failed_restore(config, moved_root, snapshot, log):
+        databases = []
+        if include_databases:
+            for name in ("tacticalrmm", "meshcentral"):
+                exists = _postgres_query("SELECT 1 FROM pg_database WHERE datname='" + name + "'") == "1"
+                if not exists:
+                    if name == "tacticalrmm":
+                        raise RuntimeError("pre-restore snapshot refused: tacticalrmm database is missing")
+                    continue
+                owner = _postgres_query("SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname='" + name + "'")
+                if not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", owner or ""):
+                    raise RuntimeError(f"pre-restore snapshot refused: invalid owner for {name}")
+                dump = root / f"{name}.dump"
+                _run_to_file(["runuser", "-u", "postgres", "--", "pg_dump", "-Fc", "-d", name], dump, timeout=2 * 60 * 60)
+                os.chown(dump, 0, 0); os.chmod(dump, 0o600)
+                databases.append({"name": name, "owner": owner, "dump": str(dump), "sha256": sha256_file(dump)})
+        snapshot = {"root": str(root), "created_at": now(), "databases": databases, "host_paths": host_paths}
+        atomic_json(root / "snapshot.json", snapshot, mode=0o600)
+        os.chown(root / "snapshot.json", 0, 0)
+        log.write(
+            f"[TEC-TAC-BACKUP] created root-only pre-restore snapshot databases={len(databases)} host_paths={len(host_paths)}\n"
+        )
+        return snapshot
+    except BaseException:
+        shutil.rmtree(root, ignore_errors=True)
+        raise
+
+def rollback_failed_restore(config, moved_root, snapshot, log, *, restore_tactical_tree=True):
     tactical_root = Path(config["TACTICAL_ROOT"])
     snapshot_root = Path(snapshot["root"])
-    result = {"rollback_performed": False, "rollback_tree_restored": False, "rollback_databases": [], "rollback_error": None}
+    result = {
+        "rollback_performed": False,
+        "rollback_tree_restored": False,
+        "rollback_host_paths_restored": False,
+        "rollback_databases": [],
+        "rollback_error": None,
+    }
     try:
         service_stop_for_restore(log)
         failed_root = snapshot_root / "failed-restored-rmm"
-        if tactical_root.exists():
-            if failed_root.exists(): shutil.rmtree(failed_root, ignore_errors=True)
-            os.replace(tactical_root, failed_root)
-        if moved_root and Path(moved_root).exists():
-            os.replace(Path(moved_root), tactical_root)
-            result["rollback_tree_restored"] = True
-        elif not tactical_root.exists():
-            raise RuntimeError("original Tactical tree is unavailable for rollback")
-        subprocess.run(["systemctl", "start", "postgresql"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if restore_tactical_tree:
+            if tactical_root.exists():
+                if failed_root.exists(): shutil.rmtree(failed_root, ignore_errors=True)
+                os.replace(tactical_root, failed_root)
+            if moved_root and Path(moved_root).exists():
+                os.replace(Path(moved_root), tactical_root)
+                result["rollback_tree_restored"] = True
+            elif not tactical_root.exists():
+                raise RuntimeError("original Tactical tree is unavailable for rollback")
+
+        _restore_host_paths(snapshot, log)
+        result["rollback_host_paths_restored"] = True
+
+        if snapshot.get("databases"):
+            subprocess.run(["systemctl", "start", "postgresql"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         for row in snapshot.get("databases") or []:
             name = str(row["name"]); owner = str(row["owner"]); dump = Path(row["dump"])
             ensure_regular(dump)
@@ -2069,9 +2294,9 @@ def rollback_failed_restore(config, moved_root, snapshot, log):
             result["rollback_databases"].append(name)
         service_start_after_restore(log)
         verify_tactical_runtime(config, log)
-        if failed_root.exists(): shutil.rmtree(failed_root, ignore_errors=True)
+        if restore_tactical_tree and failed_root.exists(): shutil.rmtree(failed_root, ignore_errors=True)
         result["rollback_performed"] = True
-        log.write("[TEC-TAC-BACKUP] failed restore rolled back to the original Tactical tree/database\n")
+        log.write("[TEC-TAC-BACKUP] failed restore rolled back to the original host/Tactical/database state\n")
     except BaseException as exc:
         result["rollback_error"] = f"{exc.__class__.__name__}: {exc}"
         log.write(f"[TEC-TAC-BACKUP] CRITICAL rollback failure: {result['rollback_error']}\n")
@@ -2611,9 +2836,17 @@ def operation_restore_backup(config, job, log):
                 os_override_audit_id=os_override_audit_id, log=log,
             )
             job["restore_script_preparation"] = restore_script_preparation
-            # Snapshot the live database before the first destructive action.
-            snapshot = create_pre_restore_snapshot(config, job["id"], log)
-            job["pre_restore_snapshot"] = {"root": snapshot["root"], "created_at": snapshot["created_at"], "databases": [r["name"] for r in snapshot["databases"]]}
+            # Snapshot databases and every Core allow-listed host path that the
+            # Tactical/full restore may overwrite before the first destructive action.
+            snapshot = create_pre_restore_snapshot(
+                config, job["id"], log,
+                include_databases=True, include_tactical_host=True, include_tec_tac=(mode == "full"),
+            )
+            job["pre_restore_snapshot"] = {
+                "root": snapshot["root"], "created_at": snapshot["created_at"],
+                "databases": [r["name"] for r in snapshot["databases"]],
+                "host_paths": len(snapshot.get("host_paths") or []),
+            }
             atomic_json(job_path(job["id"],config),job)
             try:
                 service_stop_for_restore(log)
@@ -2632,7 +2865,7 @@ def operation_restore_backup(config, job, log):
                 else:
                     verify_tactical_runtime(config,log)
             except BaseException as exc:
-                rollback = rollback_failed_restore(config, moved_root, snapshot, log)
+                rollback = rollback_failed_restore(config, moved_root, snapshot, log, restore_tactical_tree=True)
                 failure = {
                     "ok": False, "backup_ref": request.get("backup_ref"), "archive_name": name, "restore_mode": mode,
                     "restore_error": f"{exc.__class__.__name__}: {exc}", **rollback,
@@ -2643,8 +2876,29 @@ def operation_restore_backup(config, job, log):
             if moved_root and moved_root.exists(): shutil.rmtree(moved_root, ignore_errors=True)
             if snapshot and Path(snapshot["root"]).exists(): shutil.rmtree(Path(snapshot["root"]), ignore_errors=True)
         else:
-            # Tec-Tac-only recovery deliberately leaves Tactical and its database intact.
-            run_post_restore_tec_tac(config,(manifest.get("components") or {}).get("tec_tac") or {},extracted["tec_tac"],log)
+            # Tec-Tac-only recovery leaves Tactical/database intact, but install.sh
+            # still mutates Tec-Tac/nginx state. Snapshot those fixed Core-owned
+            # paths so a partial reintegration can be rolled back transactionally.
+            snapshot = create_pre_restore_snapshot(
+                config, job["id"], log,
+                include_databases=False, include_tactical_host=False, include_tec_tac=True,
+            )
+            job["pre_restore_snapshot"] = {
+                "root": snapshot["root"], "created_at": snapshot["created_at"],
+                "databases": [], "host_paths": len(snapshot.get("host_paths") or []),
+            }
+            atomic_json(job_path(job["id"],config),job)
+            try:
+                run_post_restore_tec_tac(config,(manifest.get("components") or {}).get("tec_tac") or {},extracted["tec_tac"],log)
+            except BaseException as exc:
+                rollback = rollback_failed_restore(config, None, snapshot, log, restore_tactical_tree=False)
+                failure = {
+                    "ok": False, "backup_ref": request.get("backup_ref"), "archive_name": name, "restore_mode": mode,
+                    "restore_error": f"{exc.__class__.__name__}: {exc}", **rollback,
+                }
+                raise OperationFailed("Tec-Tac restore failed; Core attempted rollback to the pre-restore host state.", result=failure) from exc
+            if snapshot and Path(snapshot["root"]).exists():
+                shutil.rmtree(Path(snapshot["root"]), ignore_errors=True)
 
         return {
             "ok":True,"backup_ref":request.get("backup_ref"),"archive_name":name,"restore_mode":mode,

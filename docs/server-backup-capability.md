@@ -350,7 +350,7 @@ Tec-Tac recovery payload creation canonicalizes requested source roots before ar
 
 ## 1.6.0 hardening
 
-- Destructive Tactical/full restores take root-only PostgreSQL snapshots before services are stopped. A restore or post-restore verification failure attempts automatic tree/database rollback and records `rollback_performed`.
+- Destructive Tactical/full restores take root-only PostgreSQL and fixed host-path snapshots before services are stopped. The host snapshot covers the Tactical nginx configuration, Let's Encrypt state, Tactical systemd units, MeshCentral, `/opt/tactical`, frontend state and other fixed restore targets. Full restore additionally snapshots Core-configured Tec-Tac runtime/source/UI state, `/etc/tec-tac`, the Tec-Tac nginx snippet and the fixed durable Module Manager state files. A restore or post-restore verification failure restores host paths, the original `/rmm` tree and databases before services are restarted. Tec-Tac-only restore uses the same host transaction without touching Tactical databases or moving `/rmm`. Snapshot targets are Core-fixed/root-config-derived; recovery-manifest paths are not used as rollback authority.
 - Remote FTP/SCP/rclone uploads publish through `.partial` names and are renamed only after verification.
 - Retention distinguishes missing metadata from unreadable metadata. Unreadable sidecars are protected fail-safe and reported rather than deleted. `keep_unclassified` must be explicit.
 - SCP listing discovers both legacy `rmm-backup-*.tar` and Tec-Tac `tec-tac-backup-*.tgz` archives.

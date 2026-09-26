@@ -3,10 +3,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail(){ echo "[TEST] FAIL: $*" >&2; exit 1; }
 HELPER="${ROOT}/scripts/server-backup-helper.py"
+python3 "${ROOT}/tests/server-backup-host-rollback.py"
 
 grep -q 'rollback_failed_restore' "${HELPER}" || fail "restore rollback helper missing"
 grep -q 'create_pre_restore_snapshot' "${HELPER}" || fail "pre-restore database snapshot missing"
 grep -q 'rollback_performed' "${HELPER}" || fail "rollback result marker missing"
+grep -q 'rollback_host_paths_restored' "${HELPER}" || fail "host path rollback marker missing"
+grep -q 'TACTICAL_RESTORE_HOST_PATHS' "${HELPER}" || fail "fixed Tactical host rollback allow-list missing"
 grep -q 'pg_dump' "${HELPER}" || fail "pre-restore pg_dump missing"
 grep -q 'tec-tac-backup-\*\.tgz' "${HELPER}" || fail "SCP list does not include Tec-Tac bundles"
 grep -q '\.partial' "${HELPER}" || fail "partial remote publishing missing"
