@@ -9,6 +9,7 @@ import os
 import pwd
 import re
 import shutil
+import stat
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -134,6 +135,79 @@ def tactical_identity(config=None):
     return user.pw_uid, user.pw_gid
 
 
+def _private_artifact_copy(source_value, destination: Path, label: str) -> Path:
+    """Snapshot one direct staged file into a new root-private inode.
+
+    The Tactical-writable metadata may name only one plain file directly below
+    ``STAGED_ROOT``.  The directory itself is opened once without following a
+    symlink, then the source is opened and (when safe) unlinked relative to that
+    directory fd.  This prevents a symlinked intermediate directory from
+    redirecting root to an arbitrary host file.
+    """
+    source = Path(os.path.abspath(str(source_value or "")))
+    staged_root = Path(os.path.abspath(str(STAGED_ROOT)))
+    name = source.name
+    if source.parent != staged_root or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,254}", name):
+        raise SystemExit(f"invalid staged {label} path")
+
+    dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        root_fd = os.open(staged_root, dir_flags)
+    except OSError as exc:
+        raise SystemExit("managed module staging root is unsafe or unreadable") from exc
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        try:
+            src_fd = os.open(name, flags, dir_fd=root_fd)
+        except OSError as exc:
+            raise SystemExit(f"staged {label} is unsafe or unreadable") from exc
+        try:
+            src_stat = os.fstat(src_fd)
+            if not stat.S_ISREG(src_stat.st_mode):
+                raise SystemExit(f"staged {label} is not a regular file")
+
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            parent_stat = destination.parent.stat()
+            if parent_stat.st_uid != 0 or parent_stat.st_mode & 0o077:
+                raise SystemExit("root-private module claim directory has unsafe ownership or permissions")
+
+            out_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+            try:
+                dst_fd = os.open(destination, out_flags, 0o600)
+            except OSError as exc:
+                raise SystemExit(f"unable to create root-private {label} snapshot") from exc
+            try:
+                os.fchmod(dst_fd, 0o600)
+                os.fchown(dst_fd, 0, 0)
+                while True:
+                    block = os.read(src_fd, 1024 * 1024)
+                    if not block:
+                        break
+                    view = memoryview(block)
+                    while view:
+                        written = os.write(dst_fd, view)
+                        if written <= 0:
+                            raise OSError("short write while claiming module artifact")
+                        view = view[written:]
+                os.fsync(dst_fd)
+            finally:
+                os.close(dst_fd)
+
+            # Only unlink the exact directory entry we opened.  If Tactical
+            # races the name after open, leave the replacement for unprivileged
+            # cleanup instead of deleting an unverified inode as root.
+            try:
+                current = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                current = None
+            if current is not None and current.st_dev == src_stat.st_dev and current.st_ino == src_stat.st_ino:
+                os.unlink(name, dir_fd=root_fd)
+        finally:
+            os.close(src_fd)
+    finally:
+        os.close(root_fd)
+    return destination
+
 def running_request_path(job_id):
     if not JOB_RE.fullmatch(job_id):
         raise SystemExit("invalid job id")
@@ -176,35 +250,21 @@ def claim_job(job_id):
         if not meta.is_file():
             raise SystemExit("staged module metadata missing")
         stage_meta = json.loads(meta.read_text(encoding="utf-8"))
-        package_path = Path(str(stage_meta.get("package_path") or "")).resolve()
-        try:
-            package_path.relative_to(STAGED_ROOT.resolve())
-        except ValueError:
-            raise SystemExit("invalid staged package path")
-        if not package_path.is_file():
-            raise SystemExit("staged package missing")
+        package_path = Path(str(stage_meta.get("package_path") or ""))
         run_dir = RUNNING_ROOT / job_id
         run_dir.mkdir(parents=True, exist_ok=False)
         os.chown(run_dir, 0, 0); os.chmod(run_dir, 0o700)
         package_target = run_dir / ("package" + ("".join(package_path.suffixes) or ".zip"))
-        os.replace(package_path, package_target)
-        os.chown(package_target, 0, 0); os.chmod(package_target, 0o600)
+        _private_artifact_copy(package_path, package_target, "module package")
         immutable["upload_id"] = upload_id
         immutable["package_path"] = str(package_target)
         for source_key, target_key in (("signature_path", "signature_path"), ("release_metadata_path", "release_metadata_path")):
             raw = stage_meta.get(source_key)
             if not raw:
                 continue
-            source = Path(str(raw)).resolve()
-            try:
-                source.relative_to(STAGED_ROOT.resolve())
-            except ValueError:
-                raise SystemExit(f"invalid staged {source_key}")
-            if not source.is_file():
-                raise SystemExit(f"staged {source_key} missing")
+            source = Path(str(raw))
             target = run_dir / source.name
-            os.replace(source, target)
-            os.chown(target, 0, 0); os.chmod(target, 0o600)
+            _private_artifact_copy(source, target, source_key)
             immutable[target_key] = str(target)
         meta.unlink(missing_ok=True)
 

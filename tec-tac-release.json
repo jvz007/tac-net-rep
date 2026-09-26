@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.69",
+  "version": "1.15.70",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -27,19 +27,19 @@
       "sha256": "7acd5f22138138348d5123fc22c210724ca10ce86f05da7b77c68fc89952319a"
     },
     {
-      "path": "RELEASE_NOTES_1.15.68.md",
-      "size": 1420,
-      "sha256": "27b5c2c3b96fc011bd6d3c87a191b23f76a2ec74858e849b66041d9a186c7be0"
-    },
-    {
       "path": "RELEASE_NOTES_1.15.69.md",
       "size": 1871,
       "sha256": "50f502311aa9eb40a4975d2e1778028c5a200aa58c6fbc3885cb237cee9e8c8c"
     },
     {
+      "path": "RELEASE_NOTES_1.15.70.md",
+      "size": 2209,
+      "sha256": "6914339967267d5fb9a271085d9297ac5fd24e4dfa5a35d6d1e477a94699dbcc"
+    },
+    {
       "path": "VERSION",
-      "size": 8,
-      "sha256": "b6e3a905407451597e76c3ac8db2956fdecf54738779790334ed5e3be53b853a"
+      "size": 9,
+      "sha256": "5bd5d440b0b92f0373e89217479c1f7e409c8d4abb6b3744a6037970c2797d2e"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -415,6 +415,11 @@
       "path": "docs/releases/RELEASE_NOTES_1.15.67.md",
       "size": 1217,
       "sha256": "fe3dde573c519283bb79f72eae223e4ad3f7e4591d9790931edf260d03edebe1"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.68.md",
+      "size": 1420,
+      "sha256": "27b5c2c3b96fc011bd6d3c87a191b23f76a2ec74858e849b66041d9a186c7be0"
     },
     {
       "path": "docs/releases/RELEASE_NOTES_1.2.0.md",
@@ -1208,13 +1213,13 @@
     },
     {
       "path": "scripts/module-job-helper.py",
-      "size": 16291,
-      "sha256": "02892760812fc4cf150d1f3550ffb1a042d3912a3323a38241e39080d16cb70c"
+      "size": 19127,
+      "sha256": "0074c5c1da12a4c22ec086e057090c7a1595b48fe65e48a33f71f7bf14216c5f"
     },
     {
       "path": "scripts/module-v2-job-helper.py",
-      "size": 37410,
-      "sha256": "bef9685fe90d581f7d5268c855a02eda8a61fa63f49bbcb2df05cf2defd1c50a"
+      "size": 40649,
+      "sha256": "4cd76fb2f2c6d14f344e6b14d70e990d52a45ad197829587e62eb6a0999f36d9"
     },
     {
       "path": "scripts/plugin-info.sh",
@@ -1318,8 +1323,8 @@
     },
     {
       "path": "tec_tac_package.json",
-      "size": 77,
-      "sha256": "151ad1b8472c769a97b957b3abbb5111e421e10b7ba17543abef8b94ce74e2e6"
+      "size": 82,
+      "sha256": "e9a886eeb2f2c3e9e8780236faf88ce6b1661b62300e401f8245c445f3b0bba2"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -1435,6 +1440,11 @@
       "path": "tests/migration-hygiene-foundation.sh",
       "size": 1013,
       "sha256": "bcfc9ef093367452381b32c310208510336f20d5743712c3b855c2586d9e2ec4"
+    },
+    {
+      "path": "tests/module-artifact-immutable-claim.py",
+      "size": 6789,
+      "sha256": "ca2ca63d225c32978611440d4341daa3e4c42f0f55a205744ebe216e2c5e3743"
     },
     {
       "path": "tests/module-bundle-first-intake.sh",

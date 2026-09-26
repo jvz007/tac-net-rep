@@ -16,6 +16,7 @@ import os
 import pwd
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -278,20 +279,93 @@ def load_running_request(job_id):
 
 
 def _claim_artifact(source_value, claim_dir, label):
-    source = Path(str(source_value or "")).resolve()
-    try:
-        source.relative_to(STAGED_ROOT.resolve())
-    except ValueError as exc:
-        raise SystemExit(f"invalid staged {label} path") from exc
-    if not source.is_file():
-        raise SystemExit(f"staged {label} missing")
-    target = claim_dir / source.name
-    if target.exists():
-        target = claim_dir / f"{label}-{source.name}"
-    os.replace(source, target)
-    os.chown(target, 0, 0); os.chmod(target, 0o600)
-    return str(target)
+    """Snapshot one direct staged artifact into a new root-private inode.
 
+    Standalone package artifacts may be direct children of ``STAGED_ROOT``;
+    bundles and their sidecars may be direct children of ``BUNDLES_ROOT``.
+    No deeper path is accepted.  Source open/stat/unlink operations are all
+    relative to directory fds opened with ``O_NOFOLLOW``.
+    """
+    source = Path(os.path.abspath(str(source_value or "")))
+    staged_root = Path(os.path.abspath(str(STAGED_ROOT)))
+    bundles_root = Path(os.path.abspath(str(BUNDLES_ROOT)))
+    name = source.name
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,254}", name):
+        raise SystemExit(f"invalid staged {label} path")
+    if source.parent == staged_root:
+        root_kind = "staged"
+    elif source.parent == bundles_root:
+        root_kind = "bundles"
+    else:
+        raise SystemExit(f"invalid staged {label} path")
+
+    dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        staged_fd = os.open(staged_root, dir_flags)
+    except OSError as exc:
+        raise SystemExit("managed v2 staging root is unsafe or unreadable") from exc
+    root_fd = staged_fd
+    bundles_fd = None
+    try:
+        if root_kind == "bundles":
+            try:
+                bundles_fd = os.open("bundles", dir_flags, dir_fd=staged_fd)
+            except OSError as exc:
+                raise SystemExit("managed v2 bundle staging root is unsafe or unreadable") from exc
+            root_fd = bundles_fd
+
+        target = claim_dir / name
+        if target.exists():
+            target = claim_dir / f"{label}-{name}"
+
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        try:
+            src_fd = os.open(name, flags, dir_fd=root_fd)
+        except OSError as exc:
+            raise SystemExit(f"staged {label} is unsafe or unreadable") from exc
+        try:
+            src_stat = os.fstat(src_fd)
+            if not stat.S_ISREG(src_stat.st_mode):
+                raise SystemExit(f"staged {label} is not a regular file")
+            parent_stat = claim_dir.stat()
+            if parent_stat.st_uid != 0 or parent_stat.st_mode & 0o077:
+                raise SystemExit("root-private v2 claim directory has unsafe ownership or permissions")
+
+            out_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+            try:
+                dst_fd = os.open(target, out_flags, 0o600)
+            except OSError as exc:
+                raise SystemExit(f"unable to create root-private {label} snapshot") from exc
+            try:
+                os.fchmod(dst_fd, 0o600)
+                os.fchown(dst_fd, 0, 0)
+                while True:
+                    block = os.read(src_fd, 1024 * 1024)
+                    if not block:
+                        break
+                    view = memoryview(block)
+                    while view:
+                        written = os.write(dst_fd, view)
+                        if written <= 0:
+                            raise OSError("short write while claiming v2 artifact")
+                        view = view[written:]
+                os.fsync(dst_fd)
+            finally:
+                os.close(dst_fd)
+
+            try:
+                current = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                current = None
+            if current is not None and current.st_dev == src_stat.st_dev and current.st_ino == src_stat.st_ino:
+                os.unlink(name, dir_fd=root_fd)
+        finally:
+            os.close(src_fd)
+    finally:
+        if bundles_fd is not None:
+            os.close(bundles_fd)
+        os.close(staged_fd)
+    return str(target)
 
 def claim_job(job_id):
     path, job = load_job(job_id)
