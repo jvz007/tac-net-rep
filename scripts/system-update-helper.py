@@ -21,6 +21,7 @@ import tarfile
 import tempfile
 import zipfile
 from datetime import datetime, timezone
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 
 TREE_MANIFEST = "tec-tac-release.json"
@@ -595,6 +596,66 @@ def remove_path(path):
         shutil.rmtree(path)
 
 
+@contextmanager
+def private_update_work_dir(job_id):
+    """Create a root-private extraction directory and always remove it.
+
+    RUNNING_ROOT is intentionally readable/traversable by the Tactical group for
+    status artifacts, so update payload extraction must live below a 0700
+    root-owned child.  The context manager guarantees cleanup on both normal
+    completion and exceptions.
+    """
+    if not JOB_RE.fullmatch(str(job_id)):
+        raise RuntimeError("invalid system update job id for private work directory")
+    work = RUNNING_ROOT / f"{job_id}.work"
+    remove_path(work)
+    work.mkdir(parents=False, mode=0o700)
+    os.chown(work, 0, 0)
+    os.chmod(work, 0o700)
+    try:
+        yield work
+    finally:
+        remove_path(work)
+
+
+def normalize_release_tree_security(root):
+    """Normalize verified release content before any root installer runs.
+
+    Release signatures cover bytes, not filesystem ownership or mode metadata.
+    Reject links/special files, make every release path root-owned, and strip
+    setuid/setgid plus group/other write bits without changing legitimate
+    executable/read bits.  Git metadata is excluded because it is retained from
+    the pre-existing root-managed checkout and is not release payload content.
+    """
+    root = Path(root)
+    info = os.lstat(root)
+    if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
+        raise RuntimeError("release execution root must be a real directory")
+
+    def normalize_one(path):
+        st = os.lstat(path)
+        if stat.S_ISLNK(st.st_mode) or not (stat.S_ISDIR(st.st_mode) or stat.S_ISREG(st.st_mode)):
+            raise RuntimeError(f"release execution tree contains unsupported path: {path}")
+        os.chown(path, 0, 0, follow_symlinks=False)
+        mode = stat.S_IMODE(st.st_mode)
+        safe_mode = mode & ~(stat.S_ISUID | stat.S_ISGID | stat.S_IWGRP | stat.S_IWOTH)
+        if safe_mode != mode:
+            os.chmod(path, safe_mode, follow_symlinks=False)
+
+    normalize_one(root)
+    stack = [root]
+    while stack:
+        current = stack.pop()
+        with os.scandir(current) as entries:
+            for entry in entries:
+                if current == root and entry.name == ".git":
+                    continue
+                path = Path(entry.path)
+                normalize_one(path)
+                if entry.is_dir(follow_symlinks=False):
+                    stack.append(path)
+
+
 def copy_tree_contents(source, target):
     for item in source.iterdir():
         if item.name == ".git":
@@ -851,44 +912,42 @@ def run_job(job_id):
         try:
             job["stage"] = "extract"
             atomic_json(path, job)
-            work = RUNNING_ROOT / f"{job_id}.work"
-            remove_path(work)
-            work.mkdir(parents=True)
-            extract_archive(package, work)
-            source = detect_root(work, component)
-            package_version = (source / "VERSION").read_text(encoding="utf-8").strip()
-            job["version"] = package_version
-            job["stage"] = "root-verify-staged"
-            atomic_json(path, job)
-            trust = _root_verify_tree(cfg, source, component)
-            job["release_trust"] = trust
-            log.write(f"[TEC-TAC-UPDATE] root verified staged tree publisher={trust.get('publisher_id','')} key={trust.get('key_id','')} level={trust.get('root_policy',{}).get('actual_level')}\n")
-            if trust.get("root_policy", {}).get("development_unsigned_override"):
-                log.write("[TEC-TAC-SECURITY] WARNING: unsigned system update accepted by root-owned DEVELOPMENT override.\n")
-            log.flush()
+            with private_update_work_dir(job_id) as work:
+                extract_archive(package, work)
+                source = detect_root(work, component)
+                package_version = (source / "VERSION").read_text(encoding="utf-8").strip()
+                job["version"] = package_version
+                job["stage"] = "root-verify-staged"
+                atomic_json(path, job)
+                trust = _root_verify_tree(cfg, source, component)
+                job["release_trust"] = trust
+                log.write(f"[TEC-TAC-UPDATE] root verified staged tree publisher={trust.get('publisher_id','')} key={trust.get('key_id','')} level={trust.get('root_policy',{}).get('actual_level')}\n")
+                if trust.get("root_policy", {}).get("development_unsigned_override"):
+                    log.write("[TEC-TAC-SECURITY] WARNING: unsigned system update accepted by root-owned DEVELOPMENT override.\n")
+                log.flush()
 
-            installed_key = _version_key(old_version)
-            requested_key = _version_key(package_version)
-            if requested_key < installed_key:
-                if not bool(job.get("allow_downgrade")):
-                    raise RuntimeError("downgrade requires explicit allow_downgrade request")
-                root_allow = str(cfg.get("TEC_TAC_ALLOW_SYSTEM_DOWNGRADES") or "").strip().lower() in {"1", "true", "yes", "on"}
-                if not root_allow:
-                    raise RuntimeError("system downgrade is blocked by root-owned policy; set TEC_TAC_ALLOW_SYSTEM_DOWNGRADES=true in the root-owned Tec-Tac config for a controlled downgrade")
+                installed_key = _version_key(old_version)
+                requested_key = _version_key(package_version)
+                if requested_key < installed_key:
+                    if not bool(job.get("allow_downgrade")):
+                        raise RuntimeError("downgrade requires explicit allow_downgrade request")
+                    root_allow = str(cfg.get("TEC_TAC_ALLOW_SYSTEM_DOWNGRADES") or "").strip().lower() in {"1", "true", "yes", "on"}
+                    if not root_allow:
+                        raise RuntimeError("system downgrade is blocked by root-owned policy; set TEC_TAC_ALLOW_SYSTEM_DOWNGRADES=true in the root-owned Tec-Tac config for a controlled downgrade")
 
-            job["stage"] = "backup"
-            atomic_json(path, job)
-            backup = backup_root(target, component, old_version, job_id)
-            job["backup_path"] = str(backup)
-            atomic_json(path, job)
-            log.write(f"[TEC-TAC-UPDATE] backup={backup}\n")
-            log.flush()
+                job["stage"] = "backup"
+                atomic_json(path, job)
+                backup = backup_root(target, component, old_version, job_id)
+                job["backup_path"] = str(backup)
+                atomic_json(path, job)
+                log.write(f"[TEC-TAC-UPDATE] backup={backup}\n")
+                log.flush()
 
-            job["stage"] = "deploy"
-            atomic_json(path, job)
-            runtime_root = Path(cfg.get("TEC_TAC_ROOT", "/opt/tec-tac")).resolve()
-            dynamic_inventory = snapshot_dynamic_plugins(runtime_root) if component == "framework" else {}
-            git_state = apply_source_update(source, target, component, job)
+                job["stage"] = "deploy"
+                atomic_json(path, job)
+                runtime_root = Path(cfg.get("TEC_TAC_ROOT", "/opt/tec-tac")).resolve()
+                dynamic_inventory = snapshot_dynamic_plugins(runtime_root) if component == "framework" else {}
+                git_state = apply_source_update(source, target, component, job)
             job["source_git"] = {k: v for k, v in git_state.items() if v is not None}
             atomic_json(path, job)
             job["stage"] = "root-verify-execution"
@@ -898,6 +957,9 @@ def run_job(job_id):
                 raise RuntimeError("execution checkout signed manifest differs from staged verified manifest")
             job["release_trust"] = execution_trust
             log.write(f"[TEC-TAC-UPDATE] root verified execution tree files={execution_trust.get('file_count',0)} commit={job.get('source_git', {}).get('update_head')}\n")
+            log.flush()
+            normalize_release_tree_security(target)
+            log.write("[TEC-TAC-SECURITY] normalized verified execution tree to root ownership with dangerous mode bits removed\n")
             log.flush()
             if component == "framework":
                 verify_dynamic_plugins(runtime_root, dynamic_inventory)

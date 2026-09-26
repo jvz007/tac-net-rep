@@ -215,3 +215,10 @@ grep -q 'require_trust_accepted' "${ROOT}/framwork/tec_tac/system_update.py" || 
 grep -q 'require_trust_accepted' "${ROOT}/framwork/tec_tac/module_manager.py" || fail "module trust floor enforcement missing"
 PYTHONPATH="${ROOT}/framwork" python3 "${ROOT}/tests/update-trust-policy.py"
 python3 "${ROOT}/tests/review-regressions-1.15.50.py"
+
+# R2: privileged extraction is root-private, ephemeral, and release mode metadata
+# cannot carry setuid/setgid or group/world-write bits into root installer execution.
+python3 "${ROOT}/tests/system-update-root-extraction-boundary.py"
+grep -q 'with private_update_work_dir(job_id) as work:' "${ROOT}/scripts/system-update-helper.py" || fail "root-private update work context missing"
+grep -q 'normalize_release_tree_security(target)' "${ROOT}/scripts/system-update-helper.py" || fail "execution tree ownership/mode normalization missing"
+echo "[TEST] PASS system update R2 extraction boundary"
