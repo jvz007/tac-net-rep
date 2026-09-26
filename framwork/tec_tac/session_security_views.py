@@ -16,6 +16,7 @@ from .session_security import (
     list_audit_events,
     page_audit_events,
     list_active_login_sessions,
+    page_active_login_sessions,
     list_sessions,
     record_activity,
     revoke_active_login_session,
@@ -162,8 +163,29 @@ class AdminLoginSessionListView(APIView):
     def get(self, request):
         if not can_manage_login_sessions(request.user):
             return _login_sessions_forbidden()
-        rows = list_active_login_sessions(current_request=request, requester=request.user)
-        return Response({"sessions": rows, "count": len(rows)})
+        if not any(key in request.query_params for key in ("page", "page_size", "search")):
+            rows = list_active_login_sessions(current_request=request, requester=request.user)
+            return Response({"sessions": rows, "count": len(rows)})
+        try:
+            result = page_active_login_sessions(
+                current_request=request,
+                requester=request.user,
+                search=str(request.query_params.get("search") or "").strip() or None,
+                page=int(request.query_params.get("page") or 1),
+                page_size=int(request.query_params.get("page_size") or 50),
+            )
+        except (TypeError, ValueError, SessionSecurityError) as exc:
+            return Response({"detail": str(exc) or "Invalid pagination parameters."}, status=400)
+        return Response({
+            "sessions": result["items"],
+            "count": len(result["items"]),
+            "total": result["count"],
+            "page": result["page"],
+            "page_size": result["page_size"],
+            "pages": result["pages"],
+            "next_page": result["next_page"],
+            "previous_page": result["previous_page"],
+        })
 
 
 class AdminLoginSessionRevokeView(APIView):

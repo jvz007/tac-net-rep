@@ -604,9 +604,24 @@ def _active_knox_tokens():
     return AuthToken.objects.select_related("user").filter(expiry__gt=now).order_by("-created")
 
 
-def list_active_login_sessions(*, current_request=None, requester=None) -> list[dict[str, Any]]:
-    requester = requester or getattr(current_request, "user", None)
-    tokens = [token for token in _active_knox_tokens()[:2000] if _can_administer_login_target(requester, token.user)]
+def _visible_active_knox_tokens(*, requester=None, search: str | None = None):
+    qs = _active_knox_tokens()
+    if not _is_effective_superuser(requester):
+        protected_users = get_user_model().objects.filter(
+            Q(is_superuser=True)
+            | Q(username=str(getattr(settings, "ROOT_USER", "") or ""))
+            | Q(role__is_superuser=True)
+        ).values("pk")
+        qs = qs.exclude(user_id__in=protected_users)
+    term = str(search or "").strip()
+    if term:
+        observed_digests = TecTacSessionTrust.objects.filter(last_ip__icontains=term).exclude(knox_digest="").values("knox_digest")
+        qs = qs.filter(Q(user__username__icontains=term) | Q(digest__in=observed_digests))
+    return qs
+
+
+def _serialize_active_login_sessions(tokens, *, current_request=None) -> list[dict[str, Any]]:
+    tokens = list(tokens)
     digests = [str(item.digest) for item in tokens]
     trust_by_digest = {
         item.knox_digest: item
@@ -631,6 +646,37 @@ def list_active_login_sessions(*, current_request=None, requester=None) -> list[
             "last_ip": trust.last_ip if trust else "",
         })
     return rows
+
+
+def list_active_login_sessions(*, current_request=None, requester=None) -> list[dict[str, Any]]:
+    requester = requester or getattr(current_request, "user", None)
+    return _serialize_active_login_sessions(
+        _visible_active_knox_tokens(requester=requester)[:2000],
+        current_request=current_request,
+    )
+
+
+def page_active_login_sessions(*, current_request=None, requester=None, search: str | None = None, page: int = 1, page_size: int = 50) -> dict[str, Any]:
+    requester = requester or getattr(current_request, "user", None)
+    try:
+        page = max(1, int(page))
+        page_size = max(1, min(int(page_size), 100))
+    except (TypeError, ValueError) as exc:
+        raise SessionSecurityError("page and page_size must be integers.") from exc
+    qs = _visible_active_knox_tokens(requester=requester, search=search)
+    total = qs.count()
+    pages = (total + page_size - 1) // page_size if total else 0
+    offset = (page - 1) * page_size
+    items = _serialize_active_login_sessions(qs[offset:offset + page_size], current_request=current_request)
+    return {
+        "items": items,
+        "count": total,
+        "page": page,
+        "page_size": page_size,
+        "pages": pages,
+        "next_page": page + 1 if page < pages else None,
+        "previous_page": page - 1 if page > 1 and pages else None,
+    }
 
 
 def _find_active_knox_token(session_ref: str):

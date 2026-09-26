@@ -275,7 +275,7 @@ Recovery sign-in uses `POST /api/tfd/auth/login/backup-code/`. The endpoint reva
 
 ## Administrative login-session management
 
-`GET /api/tfd/access/sessions/` lists active Tactical Knox tokens for account administrators. Tec-Tac adds last activity/IP metadata when a token has been observed by the Core session guard. Session identifiers exposed to the browser are HMAC-derived opaque references; raw bearer tokens and Knox digests are not returned.
+`GET /api/tfd/access/sessions/` lists active Tactical Knox tokens for account administrators. The paged contract accepts `page`, `page_size` (maximum 100), and optional `search`; search covers Tactical username and Core-observed last IP. Tec-Tac adds last activity/IP metadata when a token has been observed by the Core session guard. Protected root/effective-superuser accounts are excluded before count and pagination for non-superuser administrators. A request with no paging/search parameters retains the legacy bounded-list response for compatibility. Session identifiers exposed to the browser are HMAC-derived opaque references; raw bearer tokens and Knox digests are not returned.
 
 Revoking a login session deletes the underlying Tactical Knox token and revokes the correlated Tec-Tac trust record. `POST /api/tfd/access/users/<user_id>/sessions/revoke/` revokes every active Tactical token for the selected user. These controls require Tactical account-management permission (or superuser authority).
 
