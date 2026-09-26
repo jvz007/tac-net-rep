@@ -1212,11 +1212,12 @@ def tec_tac_paths(config):
 
 def create_tec_tac_component(config, output: Path):
     paths = tec_tac_paths(config)
-    # /var/lib/tec-tac is intentionally excluded in full from recovery payloads.
-    # It contains mutable runtime/cache/history/staging data whose inclusion can
-    # recursively capture old installers and backup artifacts and cause runaway
-    # growth. Durable scheduler/dashboard/preferences data lives in Tactical's
-    # PostgreSQL backup; the deployed UI is rebuilt from ui_source on restore.
+    # /var/lib/tec-tac remains default-deny in recovery payloads. Only the two
+    # fixed durable Module Manager state files below are retained. Cache,
+    # history, staging, prior backup data and other mutable runtime state stay
+    # excluded so old installers/artifacts cannot recursively enter new backups.
+    # Scheduler/dashboard/preferences data lives in Tactical's PostgreSQL backup;
+    # the deployed UI is rebuilt from ui_source on restore.
     include = [
         paths["runtime_root"], paths["framework_source"], paths["ui_source"], paths["legacy_ui_source"],
         # runtime_root already recursively includes runtime_root/etc. Keep the
@@ -1789,6 +1790,30 @@ def validate_tactical_native_archive(archive: Path):
     return True
 
 
+TEC_TAC_DURABLE_STATE_RELATIVE_PATHS = frozenset({
+    "module-manager/module-state.json",
+    "module-manager/repositories/repositories.json",
+})
+TEC_TAC_CANONICAL_STATE_ROOT = "var/lib/tec-tac"
+
+
+def _validated_tec_tac_state_roots(meta):
+    # The canonical state root is always protected, regardless of recovery
+    # manifest contents. A source installation may have used a non-default
+    # state root, so the manifest may add that root to the protected set only
+    # after structural validation. It can never remove the canonical boundary.
+    roots = {TEC_TAC_CANONICAL_STATE_ROOT}
+    raw = str(((meta.get("state_policy") or {}).get("state_root")) or "/var/lib/tec-tac").strip()
+    if not raw.startswith("/"):
+        raise RuntimeError("Tec-Tac component manifest contains an unsafe state root")
+    rel = raw.lstrip("/").rstrip("/")
+    pp = PurePosixPath(rel)
+    if not rel or pp.is_absolute() or ".." in pp.parts:
+        raise RuntimeError("Tec-Tac component manifest contains an unsafe state root")
+    roots.add(rel)
+    return roots
+
+
 def validate_tec_tac_component(path: Path, component_meta=None):
     ensure_regular(path, max_bytes=max_backup_bytes(load_config()))
     meta = component_meta or {}
@@ -1797,20 +1822,29 @@ def validate_tec_tac_component(path: Path, component_meta=None):
         text = str(value or "").strip()
         if text.startswith("/"):
             expected_paths.append(text.lstrip("/"))
+    state_roots = _validated_tec_tac_state_roots(meta)
+    allowed_state_paths = {
+        f"{root}/{relative}"
+        for root in state_roots
+        for relative in TEC_TAC_DURABLE_STATE_RELATIVE_PATHS
+    }
     with tarfile.open(path, "r:gz") as tf:
         members = safe_tar_members(tf)
         if not members:
             raise RuntimeError("Tec-Tac component is empty")
         names = {member.name.lstrip("./") for member in members}
-        state_root = str(((meta.get("state_policy") or {}).get("state_root")) or "/var/lib/tec-tac").strip().lstrip("/").rstrip("/")
         for name in names:
             if name == "rmm" or name.startswith("rmm/"):
                 raise RuntimeError("Tec-Tac recovery component may not contain Tactical /rmm tracked source")
-            if state_root and (name == state_root or name.startswith(state_root + "/")):
-                raise RuntimeError("Tec-Tac recovery component may not contain /var/lib/tec-tac mutable state")
-        # Paths recorded in the manifest must be structurally safe. The
-        # recovery component intentionally excludes /var/lib/tec-tac and must
-        # still contain framework/runtime and configuration payloads.
+            for state_root in state_roots:
+                if name == state_root or name.startswith(state_root + "/"):
+                    if name not in allowed_state_paths:
+                        raise RuntimeError("Tec-Tac recovery component may not contain non-allow-listed /var/lib/tec-tac mutable state")
+                    break
+        # Paths recorded in the manifest must be structurally safe. Mutable
+        # state remains default-deny; only Core's fixed durable state file names
+        # above are accepted. state_policy.included_paths is descriptive only
+        # and is never used as the validator security allow-list.
         for rel in expected_paths:
             pp = PurePosixPath(rel)
             if pp.is_absolute() or ".." in pp.parts:

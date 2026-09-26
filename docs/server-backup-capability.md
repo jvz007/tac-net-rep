@@ -48,9 +48,9 @@ tec-tac-backup-YYYY_MM_DD__HH_MM_SS.tgz
 
 The Tactical member is byte-for-byte the exact archive created by `/rmm/backup.sh`. Core hashes it before bundling and verifies the copied inner member against that same SHA-256. It is never appended to, unpacked/repacked, or otherwise changed.
 
-The Tec-Tac component contains resolved framework runtime/source, UI source, `/etc/tec-tac` and Tec-Tac nginx configuration. **`/var/lib/tec-tac` is excluded in full** and is never copied into the recovery component. This prevents staged installers, update rollback trees, lifecycle history/logs, validation staging and prior backup artifacts from being recursively captured into later backups.
+The Tec-Tac component contains resolved framework runtime/source, UI source, `/etc/tec-tac` and Tec-Tac nginx configuration. `/var/lib/tec-tac` remains a **default-deny recovery boundary**: Core retains only the two fixed durable Module Manager files `/var/lib/tec-tac/module-manager/module-state.json` and `/var/lib/tec-tac/module-manager/repositories/repositories.json`. Staged installers, update rollback trees, lifecycle history/logs, caches, validation staging, server-backup data and all other mutable state remain excluded so they cannot be recursively captured into later backups.
 
-Scheduler schedules/configuration, dashboards and user preferences live in Tactical's `tacticalrmm` PostgreSQL database and are therefore protected by Tactical's native backup. The deployed UI below `/var/lib/tec-tac/ui/tec-tac` is rebuilt from the backed-up UI source during Tec-Tac reintegration. Module Manager mutable state below `/var/lib/tec-tac/module-manager` is not restored; installed module code remains in `/opt/tec-tac/extensions` and Core rebuilds/defaults module runtime state during installation/reintegration.
+Scheduler schedules/configuration, dashboards and user preferences live in Tactical's `tacticalrmm` PostgreSQL database and are therefore protected by Tactical's native backup. The deployed UI below `/var/lib/tec-tac/ui/tec-tac` is rebuilt from the backed-up UI source during Tec-Tac reintegration. The retained Module Manager files reconstruct module enablement and repository configuration; installed module code remains in `/opt/tec-tac/extensions`.
 
 No second PostgreSQL dump is created because Tec-Tac Django tables already live in Tactical's `tacticalrmm` database dump.
 
@@ -117,24 +117,28 @@ Legacy native Tactical archives can only use this mode.
 
 ### `tec_tac`
 
-Requires Tec-Tac only. Core does not run Tactical `restore.sh`, does not replace the Tactical PostgreSQL database, restores Tec-Tac code/configuration and reruns framework/UI integration against the existing Tactical installation. `/var/lib/tec-tac` is not restored from the recovery component and mutable runtime state is rebuilt. If Tec-Tac database tables themselves need recovery, use `full`/`tactical` because those tables live in Tactical's database dump.
+Requires Tec-Tac only. Core does not run Tactical `restore.sh`, does not replace the Tactical PostgreSQL database, restores Tec-Tac code/configuration and reruns framework/UI integration against the existing Tactical installation. Only the fixed durable Module Manager state files in the Tec-Tac component are eligible for restoration; all other `/var/lib/tec-tac` mutable runtime state is rebuilt. If Tec-Tac database tables themselves need recovery, use `full`/`tactical` because those tables live in Tactical's database dump.
 
 For compatibility with 1.0/1.1 callers, the provider still accepts `restore_tec_tac=True|False` and maps it to `full|tactical`; new modules must use `restore_mode`.
 
-## Mutable state exclusion (1.4.0)
+## Mutable state allow-list
 
-The Tec-Tac component has an explicit state policy in its manifest:
+The Tec-Tac component records an explicit state policy in its manifest:
 
 ```json
 {
   "state_policy": {
     "state_root": "/var/lib/tec-tac",
-    "included": false
+    "included": "allow-list",
+    "included_paths": [
+      "/var/lib/tec-tac/module-manager/module-state.json",
+      "/var/lib/tec-tac/module-manager/repositories/repositories.json"
+    ]
   }
 }
 ```
 
-Creation never adds that state root to the payload. Restore validation also rejects a Tec-Tac component that contains the declared excluded state root. This is a hard boundary rather than a best-effort list of transient subdirectories, so newly introduced cache/staging/history folders under `/var/lib/tec-tac` cannot silently re-enter backups later.
+The manifest list is descriptive, not authoritative. Restore validation uses Core's own fixed durable-state allow-list and always protects the canonical `/var/lib/tec-tac` boundary even if manifest metadata claims another state root. Only the two durable Module Manager files are accepted beneath that boundary; directories, caches, history, staging, system-update rollback data, server-backup data and any future mutable state remain rejected by default.
 
 ## Destinations
 

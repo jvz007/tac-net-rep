@@ -288,6 +288,100 @@ with tempfile.TemporaryDirectory() as td:
     assert state_rel+"/system-updates/backups/old-installer.zip" not in names
     assert state_rel+"/server-backup/staging/old.tgz" not in names
 
+    # Production component roots are canonical host paths (for example
+    # /opt/tec-tac and /var/lib/tec-tac). The temporary roots above are used to
+    # verify creation policy without writing into host paths. Simulate the
+    # production archive namespace through create_tec_tac_component() and prove
+    # that a Core-generated component passes Core's own validator.
+    original_make_payload_tar=h.make_payload_tar
+    def make_production_namespace_payload(output, paths, **kwargs):
+      mapping={
+        str(runtime.resolve()):"opt/tec-tac",
+        str(framework_src.resolve()):"opt/tec-tac-src/framework",
+        str(ui_src.resolve()):"opt/tec-tac-src/ui",
+        str((state/"module-manager"/"module-state.json").resolve()):"var/lib/tec-tac/module-manager/module-state.json",
+        str((state/"module-manager"/"repositories"/"repositories.json").resolve()):"var/lib/tec-tac/module-manager/repositories/repositories.json",
+      }
+      with tarfile.open(output,"w:gz") as tf:
+        for source in paths:
+          source=pathlib.Path(source)
+          resolved=str(source.resolve()) if source.exists() else str(source)
+          arcname=mapping.get(resolved)
+          if not arcname or not source.exists():
+            continue
+          tf.add(source,arcname=arcname,recursive=True)
+    h.make_payload_tar=make_production_namespace_payload
+    generated=td/"generated-production-namespace.tar.gz"
+    try:
+      generated_meta=h.create_tec_tac_component({
+        "TEC_TAC_ROOT":str(runtime),"TEC_TAC_FRAMEWORK_SOURCE":str(framework_src),"TEC_TAC_UI_SOURCE":str(ui_src),
+        "TEC_TAC_STATE_ROOT":str(state),"TEC_TAC_SERVER_BACKUP_ROOT":str(state/"server-backup"),
+        "TEC_TAC_UI_DEPLOY_ROOT":str(state/"ui"/"tec-tac"),
+      },generated)
+    finally:
+      h.make_payload_tar=original_make_payload_tar
+    # The metadata records the temporary source state root, but the canonical
+    # /var/lib/tec-tac boundary remains independently protected/allow-listed.
+    assert h.validate_tec_tac_component(generated,generated_meta) is True
+
+    def make_state_component(target, state_names):
+      with tarfile.open(target,"w:gz") as tf:
+        for name,data in {
+          "opt/tec-tac/VERSION":b"1.15.67\n",
+          "etc/tec-tac/config":b"x",
+          **{name:b"{}" for name in state_names},
+        }.items():
+          ti=tarfile.TarInfo(name); ti.size=len(data); tf.addfile(ti,io.BytesIO(data))
+
+    canonical_meta={
+      "paths":{"state_root":"/var/lib/tec-tac"},
+      "state_policy":{
+        "state_root":"/var/lib/tec-tac",
+        "included":"allow-list",
+        "included_paths":[
+          "/var/lib/tec-tac/module-manager/module-state.json",
+          "/var/lib/tec-tac/module-manager/repositories/repositories.json",
+          "/var/lib/tec-tac/cache/attacker-selected.json",
+        ],
+      },
+    }
+    approved=td/"approved-state.tar.gz"
+    make_state_component(approved,[
+      "var/lib/tec-tac/module-manager/module-state.json",
+      "var/lib/tec-tac/module-manager/repositories/repositories.json",
+    ])
+    assert h.validate_tec_tac_component(approved,canonical_meta) is True
+
+    rejected_state_names=[
+      "var/lib/tec-tac/cache/attacker-selected.json",
+      "var/lib/tec-tac/history/event.json",
+      "var/lib/tec-tac/staging/payload.zip",
+      "var/lib/tec-tac/server-backup/jobs/old.json",
+      "var/lib/tec-tac/module-manager/repositories/cache.json",
+      "var/lib/tec-tac/module-manager",
+    ]
+    for index,bad_name in enumerate(rejected_state_names):
+      bad=td/f"rejected-state-{index}.tar.gz"
+      make_state_component(bad,[bad_name])
+      try: h.validate_tec_tac_component(bad,canonical_meta)
+      except RuntimeError as exc: assert "non-allow-listed" in str(exc)
+      else: raise AssertionError(f"Tec-Tac component accepted mutable state member: {bad_name}")
+
+    # Lying in state_policy.included_paths must not expand Core's security allow-list.
+    attacker=td/"attacker-included-path.tar.gz"
+    make_state_component(attacker,["var/lib/tec-tac/cache/attacker-selected.json"])
+    try: h.validate_tec_tac_component(attacker,canonical_meta)
+    except RuntimeError as exc: assert "non-allow-listed" in str(exc)
+    else: raise AssertionError("manifest included_paths expanded the Core state allow-list")
+
+    # The manifest cannot move the canonical /var/lib/tec-tac protection boundary.
+    moved_meta={"state_policy":{"state_root":"/tmp/claimed-state","included":"allow-list"}}
+    canonical_evil=td/"canonical-state-with-moved-manifest.tar.gz"
+    make_state_component(canonical_evil,["var/lib/tec-tac/cache/evil.json"])
+    try: h.validate_tec_tac_component(canonical_evil,moved_meta)
+    except RuntimeError as exc: assert "non-allow-listed" in str(exc)
+    else: raise AssertionError("manifest state_root bypassed canonical mutable-state protection")
+
     # make_payload_tar() itself must canonicalize parent/child inputs so callers
     # cannot accidentally emit recursively duplicated archive members.
     redundant=td/"redundant.tar.gz"
@@ -336,13 +430,15 @@ with tempfile.TemporaryDirectory() as td:
     tec=td/"tec-tac-backup.tar.gz"
     with tarfile.open(tec,"w:gz") as tf:
       for name,data in {
-        "opt/tec-tac/VERSION":b"1.15.5\n",
+        "opt/tec-tac/VERSION":b"1.15.67\n",
         "etc/tec-tac/config":b"x",
+        "var/lib/tec-tac/module-manager/module-state.json":b'{"schema":1}',
+        "var/lib/tec-tac/module-manager/repositories/repositories.json":b'{"schema":1,"repositories":[]}',
       }.items():
         ti=tarfile.TarInfo(name); ti.size=len(data); tf.addfile(ti,io.BytesIO(data))
     tec_hash=h.sha256_file(tec)
     tmeta={"included":True,"archive":f"tactical/{tactical.name}","archive_name":tactical.name,"sha256":native_hash,"size_bytes":tactical.stat().st_size}
-    cmeta={"included":True,"archive":"tec-tac/tec-tac-backup.tar.gz","archive_name":"tec-tac-backup.tar.gz","sha256":tec_hash,"size_bytes":tec.stat().st_size,"framework_version":"1.15.5","ui_version":"0.11.2","paths":{"framework_source":"/opt/tec-tac-src/framework","ui_source":"/opt/tec-tac-src/ui","state_root":"/var/lib/tec-tac"},"state_policy":{"state_root":"/var/lib/tec-tac","included":False,"reason":"mutable runtime/cache/history/staging state is rebuilt after restore"}}
+    cmeta={"included":True,"archive":"tec-tac/tec-tac-backup.tar.gz","archive_name":"tec-tac-backup.tar.gz","sha256":tec_hash,"size_bytes":tec.stat().st_size,"framework_version":"1.15.67","ui_version":"0.11.2","paths":{"framework_source":"/opt/tec-tac-src/framework","ui_source":"/opt/tec-tac-src/ui","state_root":"/var/lib/tec-tac"},"state_policy":{"state_root":"/var/lib/tec-tac","included":"allow-list","included_paths":["/var/lib/tec-tac/module-manager/module-state.json","/var/lib/tec-tac/module-manager/repositories/repositories.json"],"reason":"only fixed durable state files are retained"}}
     manifest={"format_version":2,"artifact_type":"tec-tac-recovery-bundle","created_at":h.now(),"backup_class":"manual","components":{"tactical":tmeta,"tec_tac":cmeta},"recovery_modes":["full","tactical","tec_tac"]}
     (td/"manifest.json").write_text(json.dumps(manifest))
     (td/"checksums.sha256").write_text(f"{native_hash}  tactical/{tactical.name}\n{tec_hash}  tec-tac/tec-tac-backup.tar.gz\n")
