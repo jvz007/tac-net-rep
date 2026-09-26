@@ -179,6 +179,58 @@ TRUSTED_PUBLISHERS_ROOT="/etc/tec-tac/trusted-publishers"
 mkdir -p "${TRUSTED_PUBLISHERS_ROOT}"
 chown root:root "${TRUSTED_PUBLISHERS_ROOT}"
 chmod 0755 "${TRUSTED_PUBLISHERS_ROOT}"
+
+# Recovery bundles have their own server identity. The private key stays on the
+# source server and is never included in a backup; the public key is copied to a
+# separate trust store so a replacement server can trust only explicitly
+# imported source identities. Existing installations keep their original key.
+RECOVERY_SIGNING_ROOT="/etc/tec-tac/recovery-signing"
+RECOVERY_TRUST_ROOT="/etc/tec-tac/recovery-trust"
+RECOVERY_INSTALLATION_ID_FILE="${RECOVERY_SIGNING_ROOT}/installation-id"
+RECOVERY_PRIVATE_KEY="${RECOVERY_SIGNING_ROOT}/private.pem"
+RECOVERY_PUBLIC_KEY="${RECOVERY_SIGNING_ROOT}/public.pem"
+mkdir -p "${RECOVERY_SIGNING_ROOT}" "${RECOVERY_TRUST_ROOT}"
+chown root:root "${RECOVERY_SIGNING_ROOT}" "${RECOVERY_TRUST_ROOT}"
+chmod 0700 "${RECOVERY_SIGNING_ROOT}"
+chmod 0755 "${RECOVERY_TRUST_ROOT}"
+/usr/bin/python3 -I - "${RECOVERY_INSTALLATION_ID_FILE}" "${RECOVERY_PRIVATE_KEY}" "${RECOVERY_PUBLIC_KEY}" "${RECOVERY_TRUST_ROOT}" <<'PY_RECOVERY_KEYS'
+import os, pathlib, re, sys, uuid
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+id_path, private_path, public_path, trust_root = map(pathlib.Path, sys.argv[1:])
+id_path.parent.mkdir(parents=True, exist_ok=True)
+trust_root.mkdir(parents=True, exist_ok=True)
+if id_path.exists():
+    installation_id = id_path.read_text(encoding='utf-8').strip()
+    if not re.fullmatch(r'[A-Za-z0-9_.-]{1,128}', installation_id):
+        raise SystemExit('existing recovery installation id is invalid')
+else:
+    installation_id = str(uuid.uuid4())
+    id_path.write_text(installation_id + '\n', encoding='utf-8')
+if private_path.exists():
+    key = serialization.load_pem_private_key(private_path.read_bytes(), password=None)
+    if not isinstance(key, Ed25519PrivateKey):
+        raise SystemExit('existing Tec-Tac recovery private key is not Ed25519')
+else:
+    key = Ed25519PrivateKey.generate()
+    private_path.write_bytes(key.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+    ))
+public_bytes = key.public_key().public_bytes(
+    serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+)
+public_path.write_bytes(public_bytes)
+trusted = trust_root / f'{installation_id}.pub'
+if trusted.exists() and trusted.read_bytes() != public_bytes:
+    raise SystemExit('recovery trust anchor conflicts with this server recovery identity')
+trusted.write_bytes(public_bytes)
+for path, mode in ((id_path,0o600),(private_path,0o600),(public_path,0o644),(trusted,0o644)):
+    os.chown(path,0,0); os.chmod(path,mode)
+PY_RECOVERY_KEYS
+TEC_TAC_INSTALLATION_ID="$(tr -d '\r\n' < "${RECOVERY_INSTALLATION_ID_FILE}")"
+[[ -n "${TEC_TAC_INSTALLATION_ID}" ]] || fail "Tec-Tac recovery installation identity could not be created."
+log "Recovery signing identity/trust anchor: OK (${TEC_TAC_INSTALLATION_ID})"
 rm -rf "${FRAMEWORK_DIR}" "${RUNTIME_SCRIPTS_DIR}" "${TEC_TAC_ROOT}/templates"
 cp -a "${SOURCE_FRAMEWORK_DIR}" "${FRAMEWORK_DIR}"
 cp -a "${SOURCE_SCRIPTS_DIR}" "${RUNTIME_SCRIPTS_DIR}"
@@ -485,7 +537,8 @@ for config_value in \
     "${RUNTIME_SCRIPTS_DIR}" "${MODULE_STATE_ROOT}" "${TRUSTED_PUBLISHERS_ROOT}" \
     "${TEC_TAC_UI_ROOT}" "${TACTICAL_ROOT}" "${BACKEND_DIR}" "${VENV_PYTHON}" "${TACTICAL_USER}" \
     "${TEC_TAC_ENVIRONMENT:-production}" "${TEC_TAC_SERVER_BACKUP_LOCAL_ROOTS:-/rmmbackups,/mnt,/media,/srv,/backup,/backups}" \
-    "${TEC_TAC_FRAMEWORK_REPOSITORY:-jvz007/tac-net-rep}" "${TEC_TAC_UI_REPOSITORY:-jvz007/tec-tac-ui}"; do
+    "${TEC_TAC_FRAMEWORK_REPOSITORY:-jvz007/tac-net-rep}" "${TEC_TAC_UI_REPOSITORY:-jvz007/tec-tac-ui}" \
+    "${TEC_TAC_INSTALLATION_ID}" "${RECOVERY_PRIVATE_KEY}" "${RECOVERY_TRUST_ROOT}"; do
     [[ "${config_value}" != *$'\n'* && "${config_value}" != *$'\r'* ]] || fail "Tec-Tac config values may not contain CR/LF characters."
 done
 cat > "${MODULE_CONFIG}" <<EOF
@@ -503,6 +556,9 @@ TEC_TAC_STATE_ROOT=/var/lib/tec-tac
 TEC_TAC_POLICY_ROOT=/etc/tec-tac/policy
 TEC_TAC_MODULE_STATE_ROOT=${MODULE_STATE_ROOT}
 TEC_TAC_TRUSTED_PUBLISHERS_ROOT=${TRUSTED_PUBLISHERS_ROOT}
+TEC_TAC_INSTALLATION_ID=${TEC_TAC_INSTALLATION_ID}
+TEC_TAC_RECOVERY_SIGNING_KEY=${RECOVERY_PRIVATE_KEY}
+TEC_TAC_RECOVERY_TRUST_ROOT=${RECOVERY_TRUST_ROOT}
 TEC_TAC_ENVIRONMENT=${TEC_TAC_ENVIRONMENT:-production}
 TEC_TAC_ALLOW_UNSIGNED_DEVELOPMENT_UPDATES=${TEC_TAC_ALLOW_UNSIGNED_DEVELOPMENT_UPDATES:-false}
 TEC_TAC_ALLOW_UNSIGNED_DEVELOPMENT_PACKAGES=${TEC_TAC_ALLOW_UNSIGNED_DEVELOPMENT_PACKAGES:-false}

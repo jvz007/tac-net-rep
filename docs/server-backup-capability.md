@@ -357,3 +357,17 @@ Tec-Tac recovery payload creation canonicalizes requested source roots before ar
 - Relative rclone remote paths remain relative.
 - Command timeouts are wall-clock enforced even when a child process is silent; timeout kills the child process group.
 - Tec-Tac recovery components retain an allow-list of durable state: module state, repository configuration and publisher trust. Cache/history/staging data remains excluded.
+
+## Recovery-bundle authenticity and fixed restore destinations (Core 1.15.80)
+
+Version-2 recovery bundles now carry a mandatory `recovery-signature.json` envelope. Core signs the exact `manifest.json` and `checksums.sha256` bytes with a server-specific Ed25519 recovery key stored at `/etc/tec-tac/recovery-signing/private.pem` (`root:root 0600`). The installer preserves an existing key across upgrades and creates one only when no recovery identity exists.
+
+The signature envelope records the source installation key ID, public-key fingerprint and candidate public key. The candidate key is provided only for disaster-recovery portability; **it is never trusted automatically**. Restore verification loads the authoritative public key from the target server's root-owned `/etc/tec-tac/recovery-trust/<key-id>.pub`. A bundle from an unknown key is rejected until an administrator explicitly provisions the source public key into that trust store.
+
+The source server trusts its own recovery public key automatically at installation, so locally created backups validate without an extra step. For replacement-server recovery, preserve or export `/etc/tec-tac/recovery-signing/public.pem` (public material only) and install it as `/etc/tec-tac/recovery-trust/<source-installation-id>.pub` on the recovery target after verifying its fingerprint out of band. The private recovery key is never required on the target.
+
+Recovery signing and recovery trust are target-local security state. `/etc/tec-tac/recovery-signing` and `/etc/tec-tac/recovery-trust` are explicitly excluded from Tec-Tac recovery payloads and may not be restored from a bundle.
+
+Before any Tec-Tac payload extraction, Core also enforces a fixed destination allow-list derived only from the target's root-owned Tec-Tac configuration plus fixed Core paths. Signed payload members such as `/etc/cron.d/*`, `/root/.ssh/*`, arbitrary systemd units, or recovery-trust/signing files are rejected. Manifest `paths` remain descriptive metadata only; post-restore framework and UI installers are selected exclusively from the target's root-owned local configuration.
+
+This intentionally makes older unsigned version-2 Tec-Tac recovery bundles fail authenticity validation. Legacy native Tactical `rmm-backup-*.tar` remains supported only for `tactical` restore mode and does not gain Tec-Tac payload privileges.

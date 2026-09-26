@@ -442,11 +442,25 @@ with tempfile.TemporaryDirectory() as td:
     manifest={"format_version":2,"artifact_type":"tec-tac-recovery-bundle","created_at":h.now(),"backup_class":"manual","components":{"tactical":tmeta,"tec_tac":cmeta},"recovery_modes":["full","tactical","tec_tac"]}
     (td/"manifest.json").write_text(json.dumps(manifest))
     (td/"checksums.sha256").write_text(f"{native_hash}  tactical/{tactical.name}\n{tec_hash}  tec-tac/tec-tac-backup.tar.gz\n")
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    signing=td/"recovery-signing"; trust=td/"recovery-trust"; signing.mkdir(); trust.mkdir(); signing.chmod(0o700); trust.chmod(0o755)
+    private=signing/"private.pem"; key=Ed25519PrivateKey.generate()
+    private.write_bytes(key.private_bytes(serialization.Encoding.PEM,serialization.PrivateFormat.PKCS8,serialization.NoEncryption())); private.chmod(0o600)
+    pub=key.public_key().public_bytes(serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo)
+    (trust/"test-server.pub").write_bytes(pub); (trust/"test-server.pub").chmod(0o644)
+    verify_cfg={
+      "TEC_TAC_INSTALLATION_ID":"test-server", "TEC_TAC_RECOVERY_SIGNING_KEY":str(private), "TEC_TAC_RECOVERY_TRUST_ROOT":str(trust),
+      "TEC_TAC_ROOT":"/opt/tec-tac", "TEC_TAC_FRAMEWORK_SOURCE":"/opt/tec-tac-src/framework", "TEC_TAC_UI_SOURCE":"/opt/tec-tac-src/ui",
+      "TEC_TAC_STATE_ROOT":"/var/lib/tec-tac",
+    }
+    sig=td/h.RECOVERY_SIGNATURE_MEMBER
+    sig.write_text(json.dumps(h.create_recovery_signature(verify_cfg,(td/"manifest.json").read_bytes(),(td/"checksums.sha256").read_bytes())))
     bundle=td/"tec-tac-backup-test.tgz"
     with tarfile.open(bundle,"w:gz") as tf:
-      tf.add(td/"manifest.json",arcname="manifest.json"); tf.add(td/"checksums.sha256",arcname="checksums.sha256")
+      tf.add(td/"manifest.json",arcname="manifest.json"); tf.add(td/"checksums.sha256",arcname="checksums.sha256"); tf.add(sig,arcname=h.RECOVERY_SIGNATURE_MEMBER)
       tf.add(tactical,arcname=f"tactical/{tactical.name}"); tf.add(tec,arcname="tec-tac/tec-tac-backup.tar.gz")
-    stage=td/"stage"; stage.mkdir(); m,parts=h.validate_recovery_bundle(bundle,"full",stage)
+    stage=td/"stage"; stage.mkdir(); m,parts=h.validate_recovery_bundle(bundle,"full",stage,config=verify_cfg)
     assert hashlib.sha256(parts["tactical"].read_bytes()).hexdigest()==native_hash
     assert set(m["recovery_modes"])=={"full","tactical","tec_tac"}
 
@@ -454,11 +468,11 @@ with tempfile.TemporaryDirectory() as td:
     badtec=td/"bad.bin"; badtec.write_bytes(b"corrupt")
     bad=td/"tec-tac-backup-bad.tgz"
     with tarfile.open(bad,"w:gz") as tf:
-      tf.add(td/"manifest.json",arcname="manifest.json"); tf.add(td/"checksums.sha256",arcname="checksums.sha256")
+      tf.add(td/"manifest.json",arcname="manifest.json"); tf.add(td/"checksums.sha256",arcname="checksums.sha256"); tf.add(sig,arcname=h.RECOVERY_SIGNATURE_MEMBER)
       tf.add(tactical,arcname=f"tactical/{tactical.name}"); tf.add(badtec,arcname="tec-tac/tec-tac-backup.tar.gz")
-    st2=td/"st2"; st2.mkdir(); h.validate_recovery_bundle(bad,"tactical",st2)
+    st2=td/"st2"; st2.mkdir(); h.validate_recovery_bundle(bad,"tactical",st2,config=verify_cfg)
     st3=td/"st3"; st3.mkdir()
-    try: h.validate_recovery_bundle(bad,"full",st3)
+    try: h.validate_recovery_bundle(bad,"full",st3,config=verify_cfg)
     except RuntimeError: pass
     else: raise AssertionError("full restore accepted corrupt Tec-Tac component")
 
@@ -466,12 +480,13 @@ with tempfile.TemporaryDirectory() as td:
     # target readiness, and unused component corruption must remain isolated.
     class Log:
       def write(self, value): pass
-    cfg={
+    cfg=dict(verify_cfg)
+    cfg.update({
       "TEC_TAC_SERVER_BACKUP_ROOT":str(td/"state"),
       "TEC_TAC_SERVER_BACKUP_LOCAL_ROOTS":str(td),
       "TACTICAL_ROOT":"/rmm",
       "TACTICAL_USER":"__tectac_missing_test_user__",
-    }
+    })
     (td/"state"/"staging").mkdir(parents=True)
     job={"id":"11111111-1111-4111-8111-111111111111","request":{"backup_ref":f"destination:x:{bundle.name}","destination":{"id":"x","type":"local","path":str(td)},"restore_mode":"full"}}
     report=h.operation_validate_restore(cfg,job,Log())
