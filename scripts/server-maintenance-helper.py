@@ -22,10 +22,49 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-STATE_ROOT = Path(os.environ.get("TEC_TAC_SERVER_MAINTENANCE_ROOT", "/var/lib/tec-tac/server-maintenance"))
-REGISTRY_ROOT = Path(os.environ.get("TEC_TAC_SERVER_MAINTENANCE_REGISTRY_ROOT", "/etc/tec-tac/server-maintenance/actions.d"))
-ACTION_ROOT = Path(os.environ.get("TEC_TAC_SERVER_MAINTENANCE_ACTION_ROOT", "/usr/local/lib/tec-tac/server-maintenance/actions"))
-CONFIG = Path(os.environ.get("TEC_TAC_CONFIG_FILE", "/opt/tec-tac/etc/tec-tac.conf"))
+CONFIG = Path("/opt/tec-tac/etc/tec-tac.conf")
+DEFAULT_STATE_ROOT = Path("/var/lib/tec-tac/server-maintenance")
+DEFAULT_REGISTRY_ROOT = Path("/etc/tec-tac/server-maintenance/actions.d")
+DEFAULT_ACTION_ROOT = Path("/usr/local/lib/tec-tac/server-maintenance/actions")
+
+
+def _root_owned_layout():
+    """Load helper trust roots only from the fixed root-owned Tec-Tac config.
+
+    Privileged helper trust roots must never come from process environment.
+    The config is optional for bootstrap/tests; when present it must be a
+    regular root-owned file that is not group/world writable or a symlink.
+    """
+    values = {}
+    try:
+        st = CONFIG.lstat()
+    except FileNotFoundError:
+        return values
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+        raise RuntimeError(f"Tec-Tac config is not a regular file: {CONFIG}")
+    if st.st_uid != 0 or (st.st_mode & 0o022):
+        raise RuntimeError(f"Tec-Tac config must be root-owned and not group/world writable: {CONFIG}")
+    for raw in CONFIG.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip()
+    return values
+
+
+def _trusted_root(layout, key, default):
+    raw = str(layout.get(key) or default)
+    path = Path(raw)
+    if not path.is_absolute():
+        raise RuntimeError(f"{key} must be an absolute path in the root-owned Tec-Tac config")
+    return path
+
+
+_ROOT_LAYOUT = _root_owned_layout()
+STATE_ROOT = _trusted_root(_ROOT_LAYOUT, "TEC_TAC_SERVER_MAINTENANCE_ROOT", DEFAULT_STATE_ROOT)
+REGISTRY_ROOT = _trusted_root(_ROOT_LAYOUT, "TEC_TAC_SERVER_MAINTENANCE_REGISTRY_ROOT", DEFAULT_REGISTRY_ROOT)
+ACTION_ROOT = _trusted_root(_ROOT_LAYOUT, "TEC_TAC_SERVER_MAINTENANCE_ACTION_ROOT", DEFAULT_ACTION_ROOT)
 JOBS_ROOT = STATE_ROOT / "jobs"
 CANCEL_ROOT = STATE_ROOT / "cancel-requests"
 LOGS_ROOT = STATE_ROOT / "logs"
@@ -45,15 +84,7 @@ def now():
 
 
 def load_config():
-    values = {}
-    if CONFIG.is_file():
-        for raw in CONFIG.read_text(encoding="utf-8").splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            values[key.strip()] = value.strip()
-    return values
+    return dict(_ROOT_LAYOUT)
 
 
 def tactical_gid():

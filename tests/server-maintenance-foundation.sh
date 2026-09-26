@@ -94,3 +94,7 @@ print("server maintenance capability foundation: PASS")
 PY
 
 echo "[TEST] PASS server maintenance foundation"
+! grep -q 'os.environ.get("TEC_TAC_SERVER_MAINTENANCE_ROOT"' "${ROOT}/scripts/server-maintenance-helper.py" || fail "server maintenance helper still trusts environment state root"
+! grep -q 'os.environ.get("TEC_TAC_SERVER_MAINTENANCE_REGISTRY_ROOT"' "${ROOT}/scripts/server-maintenance-helper.py" || fail "server maintenance helper still trusts environment registry root"
+! grep -q 'os.environ.get("TEC_TAC_SERVER_MAINTENANCE_ACTION_ROOT"' "${ROOT}/scripts/server-maintenance-helper.py" || fail "server maintenance helper still trusts environment action root"
+grep -q 'CONFIG = Path("/opt/tec-tac/etc/tec-tac.conf")' "${ROOT}/scripts/server-maintenance-helper.py" || fail "server maintenance helper fixed config path missing"
