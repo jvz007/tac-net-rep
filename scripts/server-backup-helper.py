@@ -214,12 +214,60 @@ def roots(config=None):
     }
 
 
-def atomic_json(path: Path, payload: dict, mode=0o640):
+def atomic_json(path: Path, payload: dict, mode=0o640, *, uid=None, gid=None):
+    """Atomically write JSON using an unguessable, already-open temp inode."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
-    os.chmod(tmp, mode)
-    os.replace(tmp, path)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    tmp = Path(tmp_name)
+    try:
+        data = (json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n").encode("utf-8")
+        with os.fdopen(fd, "wb", closefd=False) as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.fchmod(fd, mode)
+        if uid is not None or gid is not None:
+            os.fchown(fd, -1 if uid is None else int(uid), -1 if gid is None else int(gid))
+        os.close(fd)
+        fd = -1
+        os.replace(tmp, path)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        tmp.unlink(missing_ok=True)
+
+
+def _read_json_nofollow(path: Path, *, max_bytes=2 * 1024 * 1024, label="job file"):
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise SystemExit(f"{label} is unsafe or unreadable") from exc
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise SystemExit(f"{label} is not a regular file")
+        if info.st_size > max_bytes:
+            raise SystemExit(f"{label} is unexpectedly large")
+        chunks=[]
+        remaining=max_bytes + 1
+        while remaining > 0:
+            block=os.read(fd, min(65536, remaining))
+            if not block:
+                break
+            chunks.append(block); remaining -= len(block)
+        data=b"".join(chunks)
+        if len(data) > max_bytes:
+            raise SystemExit(f"{label} is unexpectedly large")
+        try:
+            value=json.loads(data.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SystemExit(f"{label} is invalid") from exc
+        if not isinstance(value, dict):
+            raise SystemExit(f"{label} is invalid")
+        return value
+    finally:
+        os.close(fd)
 
 
 def tactical_identity(config):
@@ -235,12 +283,12 @@ def job_path(job_id, config=None):
 
 def load_job(job_id, config=None):
     path = job_path(job_id, config)
-    if not path.is_file():
-        raise SystemExit("job not found")
     try:
-        job = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise SystemExit(f"invalid job document: {exc}")
+        job = _read_json_nofollow(path, label="server-backup job")
+    except SystemExit as exc:
+        if not path.exists():
+            raise SystemExit("job not found") from exc
+        raise
     if job.get("id") != str(job_id) or job.get("action") not in ALLOWED_ACTIONS:
         raise SystemExit("invalid server-backup job")
     if not isinstance(job.get("request"), dict) or not isinstance(job.get("context"), dict):
@@ -366,15 +414,13 @@ def claim_job(job_id, config):
     if job.get("action") == "store_secret":
         secret = validate_secret(job["request"].get("secret"))
         transient = rs["staging"] / f"secret-{job_id}.json"
-        atomic_json(transient, secret, mode=0o600)
-        os.chown(transient, 0, 0)
+        atomic_json(transient, secret, mode=0o600, uid=0, gid=0)
         job["request"] = {"secret_transient": str(transient), "redacted": True}
 
     _, gid, _, _ = tactical_identity(config)
     job["status"] = "dispatched"
     job["stage"] = "dispatched"
-    atomic_json(path, job, mode=0o640)
-    os.chown(path, 0, gid)
+    atomic_json(path, job, mode=0o640, uid=0, gid=gid)
     return path, job
 
 

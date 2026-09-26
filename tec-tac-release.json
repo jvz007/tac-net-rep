@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.84",
+  "version": "1.15.85",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -27,19 +27,19 @@
       "sha256": "b16e78b37eecd6b4690403b4725a0b9977c7e8e9eca51b6cb4493166c952f243"
     },
     {
-      "path": "RELEASE_NOTES_1.15.83.md",
-      "size": 974,
-      "sha256": "33b2580dce37bbb74d1e64ced60ecaed8a3eaeb09869ff79de43fad11ed3435f"
-    },
-    {
       "path": "RELEASE_NOTES_1.15.84.md",
       "size": 765,
       "sha256": "75e688da95fed16de54c571969a6d74f784bfbaa645d587cacd9e46d877e3329"
     },
     {
+      "path": "RELEASE_NOTES_1.15.85.md",
+      "size": 1060,
+      "sha256": "00fdd05c7fd4fcccc5312bc940beb3a10f3bf68b276ba907f34e0db78cf0e1f5"
+    },
+    {
       "path": "VERSION",
       "size": 8,
-      "sha256": "050daaf1bbc5f360ed2dc7c4952e93894987862656a4d2d05256b363fa78a34f"
+      "sha256": "438d4cc6decc7a5ea14c56c1a32076b551af4c013aa35495a2a8cb0fb27b36b0"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -1263,13 +1263,13 @@
     },
     {
       "path": "scripts/module-job-helper.py",
-      "size": 20055,
-      "sha256": "76e99eedc94c2ed8ed3503c66424acb58e1e7fb646b9880b0b4cf4edcc9dfae7"
+      "size": 21545,
+      "sha256": "85ba770283b1b84f8c99cbd4c6abc40d048341cbfc53198c83cc982f5821313a"
     },
     {
       "path": "scripts/module-v2-job-helper.py",
-      "size": 47128,
-      "sha256": "257d9847f3f1c72f3e46766909713267a07cb365476901d5dc10830895a25395"
+      "size": 48589,
+      "sha256": "858cec1c63f1ab7cc9f43dbf437703a79a55da1343fa0183b76b50f735729a89"
     },
     {
       "path": "scripts/plugin-info.sh",
@@ -1343,8 +1343,8 @@
     },
     {
       "path": "scripts/server-backup-helper.py",
-      "size": 185054,
-      "sha256": "28dc8c48714b57e3910e84bf5b0324893dc6220ce6651bd4855579e5f3043181"
+      "size": 186859,
+      "sha256": "c3ec59aefee70e2cf1fe37d43397af4b67d73523d8f91d9decdbfb041c53e861"
     },
     {
       "path": "scripts/server-maintenance-helper.py",
@@ -1353,8 +1353,8 @@
     },
     {
       "path": "scripts/system-update-helper.py",
-      "size": 53239,
-      "sha256": "26452988980a12d2c1b27e0a099f6b305a99a5ab189b45fce091b8643cd68e3c"
+      "size": 55548,
+      "sha256": "b4ab4ef04082dc698bbef296e1904f65134307520d9a227c91ee1f43c928b4ba"
     },
     {
       "path": "scripts/tactical-backup-sudo.py",
@@ -1379,7 +1379,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "0993d4997a296b05437a20836fbd91d6f689a5ae835a9789f5b915d024d0e6a0"
+      "sha256": "7d6d4c04f8063b698a7f705613ed8d13ce7fe00e4624a641d81e3bccfcb86d78"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -1675,6 +1675,11 @@
       "path": "tests/role-permission-save-regression.py",
       "size": 4669,
       "sha256": "fae3fcb8832fe07160d514e6003249158b890c4476cebaffed724dcada7af185"
+    },
+    {
+      "path": "tests/root-job-file-symlink-boundary.py",
+      "size": 3755,
+      "sha256": "a98be1bfffcfdf158615bcfcf998091ad305876a0f1b946c5f79db44472b7d81"
     },
     {
       "path": "tests/root-python-boundary.sh",

@@ -90,7 +90,7 @@ def privileged_env(extra=None):
     return env
 
 
-def atomic_json(path, payload, mode=0o640):
+def atomic_json(path, payload, mode=0o640, *, uid=None, gid=None):
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
     tmp = Path(tmp_name)
@@ -99,6 +99,8 @@ def atomic_json(path, payload, mode=0o640):
         with os.fdopen(fd, "wb", closefd=False) as handle:
             handle.write(data); handle.flush(); os.fsync(handle.fileno())
         os.fchmod(fd, mode)
+        if uid is not None or gid is not None:
+            os.fchown(fd, -1 if uid is None else int(uid), -1 if gid is None else int(gid))
         os.close(fd); fd = -1
         os.replace(tmp, path)
     finally:
@@ -243,6 +245,37 @@ def run_identity_migration(config, action, log, *, reverse=False):
         raise RuntimeError(f"module identity migration {direction} failed with status {result.returncode}")
 
 
+def _read_json_nofollow(path, *, max_bytes=4 * 1024 * 1024, label="job file"):
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise SystemExit(f"{label} is unsafe or unreadable") from exc
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise SystemExit(f"{label} is not a regular file")
+        if info.st_size > max_bytes:
+            raise SystemExit(f"{label} is unexpectedly large")
+        data = bytearray()
+        while len(data) <= max_bytes:
+            block = os.read(fd, min(65536, max_bytes + 1 - len(data)))
+            if not block:
+                break
+            data.extend(block)
+        if len(data) > max_bytes:
+            raise SystemExit(f"{label} is unexpectedly large")
+        try:
+            value = json.loads(bytes(data).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SystemExit(f"{label} is invalid") from exc
+        if not isinstance(value, dict):
+            raise SystemExit(f"{label} is invalid")
+        return value
+    finally:
+        os.close(fd)
+
+
 def job_path(job_id):
     if not JOB_RE.fullmatch(job_id):
         raise SystemExit("invalid job id")
@@ -251,9 +284,12 @@ def job_path(job_id):
 
 def load_job(job_id):
     path = job_path(job_id)
-    if not path.is_file():
-        raise SystemExit("job not found")
-    job = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        job = _read_json_nofollow(path, label="module v2 job")
+    except SystemExit as exc:
+        if not path.exists():
+            raise SystemExit("job not found") from exc
+        raise
     if job.get("id") != job_id or job.get("action") not in ALLOWED_ACTIONS:
         raise SystemExit("invalid v2 job")
     return path, job
@@ -272,9 +308,12 @@ def running_request_path(job_id):
 
 def load_running_request(job_id):
     path = running_request_path(job_id)
-    if not path.is_file():
-        raise SystemExit("claimed v2 request not found")
-    job = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        job = _read_json_nofollow(path, label="claimed v2 request")
+    except SystemExit as exc:
+        if not path.exists():
+            raise SystemExit("claimed v2 request not found") from exc
+        raise
     if job.get("id") != job_id or job.get("action") not in ALLOWED_ACTIONS:
         raise SystemExit("claimed v2 request is invalid")
     return path, job
@@ -500,11 +539,9 @@ def claim_job(job_id):
         immutable.pop("packages", None)
 
     req_path = running_request_path(job_id)
-    atomic_json(req_path, immutable, 0o600)
-    os.chown(req_path, 0, 0); os.chmod(req_path, 0o600)
+    atomic_json(req_path, immutable, 0o600, uid=0, gid=0)
     job["status"] = "dispatched"; job["stage"] = "dispatched"
-    atomic_json(path, job)
-    os.chown(path, 0, gid); os.chmod(path, 0o640)
+    atomic_json(path, job, 0o640, uid=0, gid=gid)
     return path, immutable
 
 def dispatch(job_id):

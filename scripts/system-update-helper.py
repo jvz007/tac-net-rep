@@ -82,12 +82,66 @@ def privileged_env(extra=None):
     return env
 
 
-def atomic_json(path, payload):
+def atomic_json(path, payload, mode=0o640, *, uid=None, gid=None):
+    """Atomically write JSON without following attacker-controlled temp paths.
+
+    Ownership and mode are applied to the already-open temporary inode before
+    publication, so callers never chmod/chown a name in a Tactical-writable
+    directory after the atomic rename.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.chmod(tmp, 0o640)
-    os.replace(tmp, path)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    tmp = Path(tmp_name)
+    try:
+        data = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        with os.fdopen(fd, "wb", closefd=False) as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.fchmod(fd, mode)
+        if uid is not None or gid is not None:
+            os.fchown(fd, -1 if uid is None else int(uid), -1 if gid is None else int(gid))
+        os.close(fd)
+        fd = -1
+        os.replace(tmp, path)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        tmp.unlink(missing_ok=True)
+
+
+def _read_json_nofollow(path, *, max_bytes=1024 * 1024, label="job file"):
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise SystemExit(f"{label} is unsafe or unreadable") from exc
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise SystemExit(f"{label} is not a regular file")
+        if info.st_size > max_bytes:
+            raise SystemExit(f"{label} is unexpectedly large")
+        chunks = []
+        remaining = max_bytes + 1
+        while remaining > 0:
+            block = os.read(fd, min(65536, remaining))
+            if not block:
+                break
+            chunks.append(block)
+            remaining -= len(block)
+        data = b"".join(chunks)
+        if len(data) > max_bytes:
+            raise SystemExit(f"{label} is unexpectedly large")
+        try:
+            value = json.loads(data.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SystemExit(f"{label} is invalid") from exc
+        if not isinstance(value, dict):
+            raise SystemExit(f"{label} is invalid")
+        return value
+    finally:
+        os.close(fd)
 
 
 def job_path(job_id):
@@ -98,9 +152,12 @@ def job_path(job_id):
 
 def load_job(job_id):
     path = job_path(job_id)
-    if not path.is_file():
-        raise SystemExit("job not found")
-    job = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        job = _read_json_nofollow(path, label="system update job")
+    except SystemExit as exc:
+        if not path.exists():
+            raise SystemExit("job not found") from exc
+        raise
     if job.get("id") != job_id or job.get("action") != "install":
         raise SystemExit("invalid system update job")
     if job.get("component") not in {"framework", "ui"}:
@@ -133,9 +190,12 @@ def running_request_path(job_id):
 
 def load_running_request(job_id):
     path = running_request_path(job_id)
-    if not path.is_file():
-        raise SystemExit("claimed update request not found")
-    request = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        request = _read_json_nofollow(path, label="claimed update request")
+    except SystemExit as exc:
+        if not path.exists():
+            raise SystemExit("claimed update request not found") from exc
+        raise
     if request.get("id") != job_id or request.get("action") != "install":
         raise SystemExit("claimed update request is invalid")
     if request.get("component") not in {"framework", "ui"}:
@@ -306,18 +366,14 @@ def claim_job(job_id):
             "package_filename": str(meta.get("filename") or source_name),
         }
         req_path = running_request_path(job_id)
-        atomic_json(req_path, immutable)
-        os.chown(req_path, 0, 0)
-        os.chmod(req_path, 0o600)
+        atomic_json(req_path, immutable, mode=0o600, uid=0, gid=0)
         _unlink_staged_metadata_if_same(root_fd, upload_id, meta_info)
     finally:
         os.close(root_fd)
 
     request["status"] = "dispatched"
     request["stage"] = "dispatched"
-    atomic_json(status_path, request)
-    os.chown(status_path, 0, gid)
-    os.chmod(status_path, 0o640)
+    atomic_json(status_path, request, mode=0o640, uid=0, gid=gid)
     return status_path, immutable
 
 def dispatch(job_id):
@@ -1153,9 +1209,11 @@ def run_job(job_id):
             job["status"] = "failed"
             job["finished_at"] = now()
         finally:
-            atomic_json(path, job)
+            cfg = load_config()
+            gid = tactical_gid(cfg)
+            atomic_json(path, job, mode=0o640, uid=0, gid=gid)
             HISTORY_ROOT.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(path, HISTORY_ROOT / path.name)
+            atomic_json(HISTORY_ROOT / path.name, job, mode=0o640, uid=0, gid=gid)
             try:
                 package.unlink(missing_ok=True)
             except OSError:
