@@ -64,6 +64,7 @@ get_policy
 update_policy
 list_sessions
 list_audit_events
+page_audit_events
 revoke_session
 revoke_user_sessions
 cleanup
@@ -77,6 +78,7 @@ get_effective_policy(...)
 update_global_policy(...)
 list_sessions(...)
 list_audit_events(...)
+page_audit_events(...)
 revoke_session(...)
 revoke_user_sessions(...)
 SessionAuthenticated
@@ -107,6 +109,13 @@ session-security administration rights (Tactical superuser, superuser role, or
 
 `session/sessions/` returns the current user's sessions by default. An
 administrator may supply `?username=<name>`.
+
+`session/audit/` supports bounded pagination with `?page=1&page_size=50`;
+`page_size` is capped at 100. The response includes `total`, `pages`,
+`next_page` and `previous_page`. The legacy `limit` query remains accepted as a
+first-page compatibility alias. Backend providers that need pagination should
+use `page_audit_events(...)`; `list_audit_events(...)` remains available for
+existing bounded-list consumers.
 
 ## Activity semantics
 

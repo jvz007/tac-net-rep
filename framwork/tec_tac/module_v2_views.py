@@ -7,7 +7,7 @@ from rest_framework.views import APIView
 
 from .session_security import SessionAuthenticated
 
-from .module_manager import ModuleManagerError, discard_stage, get_job, list_jobs
+from .module_manager import ModuleManagerError, discard_stage, get_job, list_jobs, page_jobs
 from .module_manager_v2 import (
     LicensingRequirementError,
     ModuleManagerV2Error,
@@ -138,13 +138,31 @@ class ModuleV2JobHistoryView(APIView):
     permission_classes = [SessionAuthenticated]
     def get(self, request):
         _require_module_manager(request.user)
-        raw_limit = request.query_params.get("limit", 200)
         try:
-            limit = int(raw_limit)
-        except (TypeError, ValueError):
-            return Response({"detail": "limit must be an integer."}, status=400)
-        rows = list_jobs(limit=limit)
-        return Response({"jobs": rows, "count": len(rows)})
+            if "limit" in request.query_params and "page" not in request.query_params and "page_size" not in request.query_params:
+                # Exact compatibility path for pre-pagination callers (historically up to 1000 rows).
+                limit = int(request.query_params.get("limit") or 200)
+                rows = list_jobs(limit=limit)
+                return Response({"jobs": rows, "count": len(rows)})
+            result = page_jobs(
+                page=int(request.query_params.get("page") or 1),
+                page_size=int(request.query_params.get("page_size") or 50),
+                status=request.query_params.get("status"),
+                action=request.query_params.get("action"),
+                search=request.query_params.get("search"),
+            )
+        except (TypeError, ValueError, ModuleManagerError) as exc:
+            return Response({"detail": str(exc) or "Invalid pagination parameters."}, status=400)
+        return Response({
+            "jobs": result["items"],
+            "count": len(result["items"]),
+            "total": result["count"],
+            "page": result["page"],
+            "page_size": result["page_size"],
+            "pages": result["pages"],
+            "next_page": result["next_page"],
+            "previous_page": result["previous_page"],
+        })
 
 
 class ModuleV2JobView(APIView):

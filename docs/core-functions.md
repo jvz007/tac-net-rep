@@ -149,6 +149,7 @@ from tec_tac.session_security import (
     update_global_policy,
     list_sessions,
     list_audit_events,
+    page_audit_events,
     revoke_session,
     revoke_user_sessions,
     SessionAuthenticated,

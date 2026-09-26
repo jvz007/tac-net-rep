@@ -715,7 +715,7 @@ Core resolves the declared capability and verifies entitlement during inspection
 
 ## Module lifecycle history (1.14.2)
 
-Module Manager exposes `GET /api/tfd/modules/v2/jobs/` to review persistent lifecycle records, including status, action, affected module IDs, requesting user when known, errors and log tails.
+Module Manager exposes `GET /api/tfd/modules/v2/jobs/` to review persistent lifecycle records, including status, action, affected module IDs, requesting user when known, errors and log tails. History is paged with `page` / `page_size` (maximum 100) and returns total/page metadata; the older `limit` query remains a first-page compatibility alias.
 
 ## Core server backup capability (1.15.0)
 

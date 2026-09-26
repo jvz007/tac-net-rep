@@ -655,18 +655,7 @@ def get_job(job_id: str) -> dict:
     return public_job(job)
 
 
-def list_jobs(*, limit: int = 200) -> list[dict]:
-    """Return persistent module lifecycle history, newest first.
-
-    Job JSON files are already the authoritative lifecycle records. History reads
-    those records instead of maintaining a second audit store, so old installs,
-    upgrades, removals and state changes remain visible after the active job UI
-    has gone away.
-    """
-    try:
-        limit = max(1, min(int(limit), 1000))
-    except (TypeError, ValueError):
-        limit = 200
+def _load_job_history_rows() -> list[dict]:
     if not JOBS_ROOT.is_dir():
         return []
     rows = []
@@ -686,4 +675,62 @@ def list_jobs(*, limit: int = 200) -> list[dict]:
         except (OSError, json.JSONDecodeError):
             continue
     rows.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
-    return rows[:limit]
+    return rows
+
+
+def list_jobs(*, limit: int = 200) -> list[dict]:
+    """Return persistent module lifecycle history, newest first.
+
+    This compatibility helper preserves the original bounded-list contract. New
+    HTTP callers should use ``page_jobs`` so large histories are transferred in
+    predictable pages.
+    """
+    try:
+        limit = max(1, min(int(limit), 1000))
+    except (TypeError, ValueError):
+        limit = 200
+    return _load_job_history_rows()[:limit]
+
+
+def page_jobs(*, page: int = 1, page_size: int = 50, status: str | None = None, action: str | None = None, search: str | None = None) -> dict:
+    """Return one filtered lifecycle-history page without changing job records."""
+    try:
+        page = max(1, int(page))
+        page_size = max(1, min(int(page_size), 100))
+    except (TypeError, ValueError) as exc:
+        raise ModuleManagerError("page and page_size must be integers.") from exc
+
+    status = str(status or "").strip().lower()
+    action = str(action or "").strip().lower()
+    search = str(search or "").strip().lower()
+    rows = _load_job_history_rows()
+    if status:
+        rows = [row for row in rows if str(row.get("status") or "").lower() == status]
+    if action:
+        rows = [row for row in rows if str(row.get("action") or "").lower() == action]
+    if search:
+        def matches(row):
+            haystack = " ".join([
+                str(row.get("id") or ""),
+                str(row.get("plugin_id") or ""),
+                str(row.get("requested_by") or ""),
+                str(row.get("action") or ""),
+                str(row.get("status") or ""),
+                " ".join(str(value) for value in (row.get("module_ids") or [])),
+            ]).lower()
+            return search in haystack
+        rows = [row for row in rows if matches(row)]
+
+    total = len(rows)
+    pages = (total + page_size - 1) // page_size if total else 0
+    offset = (page - 1) * page_size
+    items = rows[offset:offset + page_size]
+    return {
+        "items": items,
+        "count": total,
+        "page": page,
+        "page_size": page_size,
+        "pages": pages,
+        "next_page": page + 1 if page < pages else None,
+        "previous_page": page - 1 if page > 1 and pages else None,
+    }

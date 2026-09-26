@@ -691,28 +691,56 @@ def revoke_user_login_sessions(user_id: int, *, reason: str = "administrator-req
         return {"user_id": int(user_id), "username": username, "revoked": count}
 
 
-def list_audit_events(*, username: str | None = None, event_type: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
-    size = max(1, min(int(limit), 1000))
+def _serialize_audit_event(item: TecTacSessionAudit) -> dict[str, Any]:
+    return {
+        "id": str(item.id),
+        "session_id": str(item.session_id) if item.session_id else None,
+        "username": item.username,
+        "event_type": item.event_type,
+        "previous_ip": item.previous_ip,
+        "new_ip": item.new_ip,
+        "reason": item.reason,
+        "requested_by": item.requested_by,
+        "metadata": dict(item.metadata or {}),
+        "created_at": item.created_at.isoformat() if item.created_at else None,
+    }
+
+
+def _audit_queryset(*, username: str | None = None, event_type: str | None = None):
     qs = TecTacSessionAudit.objects.all().order_by("-created_at")
     if username:
         qs = qs.filter(username=str(username))
     if event_type:
         qs = qs.filter(event_type=str(event_type))
-    rows = []
-    for item in qs[:size]:
-        rows.append({
-            "id": str(item.id),
-            "session_id": str(item.session_id) if item.session_id else None,
-            "username": item.username,
-            "event_type": item.event_type,
-            "previous_ip": item.previous_ip,
-            "new_ip": item.new_ip,
-            "reason": item.reason,
-            "requested_by": item.requested_by,
-            "metadata": dict(item.metadata or {}),
-            "created_at": item.created_at.isoformat() if item.created_at else None,
-        })
-    return rows
+    return qs
+
+
+def list_audit_events(*, username: str | None = None, event_type: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+    """Compatibility bounded-list contract for backend providers."""
+    size = max(1, min(int(limit), 1000))
+    return [_serialize_audit_event(item) for item in _audit_queryset(username=username, event_type=event_type)[:size]]
+
+
+def page_audit_events(*, username: str | None = None, event_type: str | None = None, page: int = 1, page_size: int = 50) -> dict[str, Any]:
+    try:
+        page = max(1, int(page))
+        page_size = max(1, min(int(page_size), 100))
+    except (TypeError, ValueError) as exc:
+        raise SessionSecurityError("page and page_size must be integers.") from exc
+    qs = _audit_queryset(username=username, event_type=event_type)
+    total = qs.count()
+    pages = (total + page_size - 1) // page_size if total else 0
+    offset = (page - 1) * page_size
+    items = [_serialize_audit_event(item) for item in qs[offset:offset + page_size]]
+    return {
+        "items": items,
+        "count": total,
+        "page": page,
+        "page_size": page_size,
+        "pages": pages,
+        "next_page": page + 1 if page < pages else None,
+        "previous_page": page - 1 if page > 1 and pages else None,
+    }
 
 
 def cleanup_session_history(*, retention_days: int = 30) -> dict[str, int]:
@@ -785,6 +813,9 @@ class SessionSecurityProvider:
 
     def list_audit_events(self, *, username: str | None = None, event_type: str | None = None, limit: int = 200, context: dict | None = None) -> list[dict[str, Any]]:
         return list_audit_events(username=username, event_type=event_type, limit=limit)
+
+    def page_audit_events(self, *, username: str | None = None, event_type: str | None = None, page: int = 1, page_size: int = 50, context: dict | None = None) -> dict[str, Any]:
+        return page_audit_events(username=username, event_type=event_type, page=page, page_size=page_size)
 
     def revoke_session(self, *, session_id: str, reason: str = "module-request", context: dict) -> dict[str, Any]:
         return revoke_session(session_id, reason=reason, requested_by=str((context or {}).get("requested_by") or (context or {}).get("username") or "module"))

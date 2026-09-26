@@ -185,6 +185,14 @@ CORE_CONTRACTS = (
     {
         "area": "session-security",
         "import_path": "tec_tac.session_security",
+        "name": "page_audit_events",
+        "kind": "python",
+        "purpose": "Read one bounded page of sanitized Core session-security audit events with total-count metadata.",
+        "audience": "provider/backend",
+    },
+    {
+        "area": "session-security",
+        "import_path": "tec_tac.session_security",
         "name": "revoke_session",
         "kind": "python",
         "purpose": "Revoke one Core Tec-Tac session independently of Tactical token validity.",

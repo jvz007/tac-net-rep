@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.81",
+  "version": "1.15.82",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -23,13 +23,8 @@
     },
     {
       "path": "README.md",
-      "size": 39015,
-      "sha256": "7acd5f22138138348d5123fc22c210724ca10ce86f05da7b77c68fc89952319a"
-    },
-    {
-      "path": "RELEASE_NOTES_1.15.80.md",
-      "size": 1387,
-      "sha256": "3e4354a8dae09f527c9505fdf297b40a7acaefed5a240179df7b446224c80236"
+      "size": 39171,
+      "sha256": "b16e78b37eecd6b4690403b4725a0b9977c7e8e9eca51b6cb4493166c952f243"
     },
     {
       "path": "RELEASE_NOTES_1.15.81.md",
@@ -37,9 +32,14 @@
       "sha256": "ecd8b5304e9e08eb113368840ace0d3004f2b7970a4c145527ca94e9484f3d9e"
     },
     {
+      "path": "RELEASE_NOTES_1.15.82.md",
+      "size": 925,
+      "sha256": "0c0585fd49657aa004fe8610b7ee6dccebe372d02d5f3a16a39ec68d3136cba8"
+    },
+    {
       "path": "VERSION",
       "size": 8,
-      "sha256": "f29c95706a2e30f4563a1912f711b2b000757fd6ccb10c95a4e7a2f8d28dba6c"
+      "sha256": "525c5f1fb29b9438512554c5422a8289bd7b558d886f5c1b9041ceaea83f2af3"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -58,8 +58,8 @@
     },
     {
       "path": "docs/core-functions.md",
-      "size": 5889,
-      "sha256": "d010e2b73abaf993a1200c5693a7980e7846d67309483f7ddee5c47234d66db0"
+      "size": 5912,
+      "sha256": "778661b1d22678c7c6c04a5f09c1eacda6c983f6add9e2f2cd7847e5cf5938cb"
     },
     {
       "path": "docs/developer-contracts.md",
@@ -563,8 +563,8 @@
     },
     {
       "path": "docs/session-security.md",
-      "size": 10683,
-      "sha256": "8f8088633d21f01149c321695df7dc30a0d70a5b300e7651430882b89827c428"
+      "size": 11137,
+      "sha256": "b0283159732c4a8879e6be4525583f0202b79f7738b927b2bc9293e13a3a9e6b"
     },
     {
       "path": "docs/system-update-signed-releases.md",
@@ -858,8 +858,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 30998,
-      "sha256": "99aa7cbb0d5415306494fdd4dd9593099858badbaa605448026822ef12f11934"
+      "size": 31320,
+      "sha256": "68b748b2e0b6d9f96e5fcd1d7b244ebd541470262eb3c67661a252ca95b579b4"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -1023,8 +1023,8 @@
     },
     {
       "path": "framwork/tec_tac/module_manager.py",
-      "size": 29836,
-      "sha256": "e01e3f1321463c790508e651ae9183e6b6aa443a92aeabb5e21ba99a4029f70b"
+      "size": 31612,
+      "sha256": "83b1a2a007e391d44b9a54dbbba50d4e844021366dbd5b490b09906e094cdcc9"
     },
     {
       "path": "framwork/tec_tac/module_manager_v2.py",
@@ -1053,8 +1053,8 @@
     },
     {
       "path": "framwork/tec_tac/module_v2_views.py",
-      "size": 7279,
-      "sha256": "7e570b48211485b739952f5d7d8195ac50b0449aa8c541dff5bf3260f3a603fc"
+      "size": 8298,
+      "sha256": "37737ffc09cd56a8345f1826a2748d290f6226d1f8b08ec683eacc7dfe59d9ff"
     },
     {
       "path": "framwork/tec_tac/notice_views.py",
@@ -1143,13 +1143,13 @@
     },
     {
       "path": "framwork/tec_tac/session_security.py",
-      "size": 38953,
-      "sha256": "a51fd0080ed8be1d0a88929a452820baf50cb4c2d76b62679493cc1747fb75bc"
+      "size": 40400,
+      "sha256": "5a298f0bbd8781b40284c3cde281d315eb8ac3056f186c9773b75f8302db91ad"
     },
     {
       "path": "framwork/tec_tac/session_security_views.py",
-      "size": 6965,
-      "sha256": "d28f3b6e830c74ff4fcd6474f06bba694cc25c375be2e7a32450b5a65e217374"
+      "size": 7831,
+      "sha256": "459f96da5f61c25e151ead73eaa0ae9a28a6b00562f505fe2ce22151a3a2f151"
     },
     {
       "path": "framwork/tec_tac/system_update.py",
@@ -1379,7 +1379,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "a80dcfa7babc7898aed933bc8d465d12aa33e1d821940cc05aa99bd32001f4d4"
+      "sha256": "57c7aebc534905551c74fd88f9dac2aae5d6f527e41dd4dcdcb44e5cd50b773b"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -1450,6 +1450,11 @@
       "path": "tests/framework-foundation.sh",
       "size": 3085,
       "sha256": "90e12c563fe6da75d1a8143fe78d0ec809a268e8691a1130fcf8b89373b606b8"
+    },
+    {
+      "path": "tests/history-pagination-foundation.py",
+      "size": 1166,
+      "sha256": "58e693aa106ce9ed34c3f9cb9490f26e428f30dac22f41c2d4cce67b16b7d88c"
     },
     {
       "path": "tests/housekeeping-claim-security.py",
