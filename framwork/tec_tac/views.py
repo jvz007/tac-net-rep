@@ -17,7 +17,8 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from tacticalrmm.throttles import LoginDayThrottle, LoginMinThrottle
-from drf_spectacular.utils import extend_schema, extend_schema_view
+from .throttles import TotpEnrollmentDayThrottle, TotpEnrollmentMinThrottle
+from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 
 from .module_manager import (
     ModuleManagerError,
@@ -214,7 +215,11 @@ def _render_totp_qr_svg(provisioning_uri: str) -> str:
     return output.getvalue().decode("utf-8")
 
 
-@extend_schema_view(post=extend_schema(tags=["Tec-Tac Framework"], summary="Begin one-time local TOTP enrollment"))
+@extend_schema_view(post=extend_schema(
+    tags=["Tec-Tac Framework"],
+    summary="Begin one-time local TOTP enrollment",
+    parameters=[OpenApiParameter(name="ui_url", type=str, location=OpenApiParameter.QUERY, required=False, description="Tec-Tac UI base URL used to build the authenticator issuer label.")],
+))
 class TotpEnrollmentView(APIView):
     """Issue the local TOTP seed exactly once from Tactical's setup credential.
 
@@ -226,7 +231,7 @@ class TotpEnrollmentView(APIView):
     """
 
     permission_classes = [IsAuthenticated]
-    throttle_classes = [LoginMinThrottle, LoginDayThrottle]
+    throttle_classes = [TotpEnrollmentMinThrottle, TotpEnrollmentDayThrottle]
 
     def post(self, request):
         username = str(getattr(request.user, "username", "") or "")

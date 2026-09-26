@@ -109,6 +109,13 @@ def _state_lock(exclusive: bool):
         logger.warning("Module state lock is missing at %s; reading state without a shared lock", STATE_LOCK)
         yield
         return
+    except PermissionError:
+        if not exclusive:
+            # Root owns the mutation lock. Readers are safe without flock because
+            # state is replaced atomically and a partial JSON file is never exposed.
+            yield
+            return
+        raise
     except OSError as exc:
         raise ModuleStateError(
             f"Module state lock is unavailable at {STATE_LOCK}; run the Tec-Tac permission repair: {exc}"

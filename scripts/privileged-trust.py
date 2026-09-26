@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """Root-side Tec-Tac publisher verification.
 
 This helper is deliberately independent of request/job trust metadata. It reads
@@ -62,8 +62,11 @@ def _require_root_owned_nonwritable(path: Path, label: str) -> None:
 def _imports():
     root = _framework_root().resolve()
     trust_module = root / "tec_tac" / "trusted_publishers.py"
-    _require_root_owned_nonwritable(root, "Framework runtime root")
+    for parent in (Path("/opt"), Path("/opt/tec-tac"), root):
+        if parent.exists():
+            _require_root_owned_nonwritable(parent, f"Framework runtime parent {parent}")
     _require_root_owned_nonwritable(root / "tec_tac", "Framework package root")
+    _require_root_owned_nonwritable(root / "tec_tac" / "__init__.py", "Framework package initializer")
     _require_root_owned_nonwritable(trust_module, "Publisher verifier module")
     sys.path.insert(0, str(root))
     from tec_tac.trusted_publishers import (  # noqa: PLC0415

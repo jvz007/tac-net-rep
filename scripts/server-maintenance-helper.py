@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """Root-owned worker for durable Core server-maintenance jobs.
 
 The helper executes only administrator-registered manifests.  It never accepts

@@ -18,13 +18,31 @@ from .module_repository import (
 from .views import _can_manage_modules, _require_module_manager
 
 
+_SENSITIVE_REPOSITORY_KEYS = {"url", "download_url", "signature_url", "release_metadata_url", "source_url", "repository_url"}
+
+def _redact_repository_urls(value):
+    if isinstance(value, dict):
+        return {k: _redact_repository_urls(v) for k, v in value.items() if k not in _SENSITIVE_REPOSITORY_KEYS and not k.endswith("_url")}
+    if isinstance(value, list):
+        return [_redact_repository_urls(v) for v in value]
+    return value
+
+def _repository_error(request, exc):
+    if _can_manage_modules(request.user):
+        return Response({"detail": str(exc)}, status=400)
+    return Response({"detail": "Repository operation failed."}, status=400)
+
+
 @extend_schema_view(get=extend_schema(tags=["Tec-Tac Framework"], summary="List module repositories"), post=extend_schema(tags=["Tec-Tac Framework"], summary="Add module repository"))
 class ModuleRepositoryListView(APIView):
     permission_classes = [SessionAuthenticated]
 
     def get(self, request):
+        manage = _can_manage_modules(request.user)
         repos = all_repository_status()
-        return Response({"schema": 1, "repositories": repos, "count": len(repos), "manage": _can_manage_modules(request.user)})
+        if not manage:
+            repos = _redact_repository_urls(repos)
+        return Response({"schema": 1, "repositories": repos, "count": len(repos), "manage": manage})
 
     def post(self, request):
         _require_module_manager(request.user)
@@ -78,11 +96,15 @@ class ModuleOnlineCatalogView(APIView):
 
     def get(self, request):
         try:
+            manage = _can_manage_modules(request.user)
             payload = online_catalog()
-            payload["manage"] = _can_manage_modules(request.user)
+            payload["manage"] = manage
+            if not manage:
+                payload = _redact_repository_urls(payload)
+                payload["manage"] = False
             return Response(payload)
         except ModuleRepositoryError as exc:
-            return Response({"detail": str(exc)}, status=400)
+            return _repository_error(request, exc)
 
 
 class ModuleOnlineStageView(APIView):

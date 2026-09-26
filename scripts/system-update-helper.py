@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """Root-owned Tec-Tac self-update worker.
 
 Installed outside both replaceable repositories. Dispatch creates an independent
@@ -395,7 +395,7 @@ def detect_root(extracted, component):
 
 
 def _git(command, target, *, check=True, capture=True):
-    args = ["git", "-C", str(target), *command]
+    args = ["/usr/bin/git", "-C", str(target), *command]
     result = subprocess.run(
         args,
         stdout=subprocess.PIPE if capture else None,
@@ -908,7 +908,15 @@ def restore_backup(backup, target):
         os.replace(preserved_git, git_tmp)
     remove_path(target)
     with tarfile.open(backup, "r:gz") as tf:
-        tf.extractall(parent, filter="data")
+        members = tf.getmembers()
+        expected_top = target.name
+        for member in members:
+            rel = safe_name(member.name)
+            if not rel.parts or rel.parts[0] != expected_top:
+                raise RuntimeError(f"rollback backup contains an unexpected top-level path: {member.name}")
+            if member.issym() or member.islnk() or not (member.isdir() or member.isfile()):
+                raise RuntimeError(f"rollback backup contains an unsupported member: {member.name}")
+        tf.extractall(parent, members=members, filter="data")
     if git_tmp and git_tmp.exists() and not (target / ".git").exists():
         os.replace(git_tmp, target / ".git")
     elif git_tmp:
@@ -932,9 +940,9 @@ def _run_bounded(command, *, log, timeout, cwd=None, env=None, label="command"):
 
 def run_install(component, target, log):
     if component == "framework":
-        command = ["bash", str(target / "install.sh")]
+        command = ["/usr/bin/bash", str(target / "install.sh")]
     else:
-        command = ["bash", str(target / "scripts" / "install.sh")]
+        command = ["/usr/bin/bash", str(target / "scripts" / "install.sh")]
     return _run_bounded(command, log=log, timeout=INSTALL_TIMEOUT_SECONDS, env=privileged_env(), label=f"{component} installer")
 
 

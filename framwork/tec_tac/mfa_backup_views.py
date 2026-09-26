@@ -23,6 +23,7 @@ from .mfa_backup import (
     invalidate_backup_codes,
     verify_generation_proof,
 )
+from .throttles import MfaBackupProofDayThrottle, MfaBackupProofMinThrottle
 from .session_security import (
     SessionAuthenticated,
     SessionSecurityError,
@@ -33,7 +34,7 @@ from .session_security import (
 
 class MfaBackupCodesView(APIView):
     permission_classes = [SessionAuthenticated]
-    throttle_classes = [LoginMinThrottle, LoginDayThrottle]
+    throttle_classes = [MfaBackupProofMinThrottle, MfaBackupProofDayThrottle]
 
     def get_throttles(self):
         if getattr(self.request, "method", "GET").upper() == "POST":

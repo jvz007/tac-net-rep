@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """Root-owned Tec-Tac Module Management v2 lifecycle worker.
 
 This worker handles enable/disable and multi-package/bundle orchestration. Single
@@ -92,28 +92,30 @@ def privileged_env(extra=None):
 
 def atomic_json(path, payload, mode=0o640):
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.chmod(tmp, mode)
-    os.replace(tmp, path)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    tmp = Path(tmp_name)
+    try:
+        data = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        with os.fdopen(fd, "wb", closefd=False) as handle:
+            handle.write(data); handle.flush(); os.fsync(handle.fileno())
+        os.fchmod(fd, mode)
+        os.close(fd); fd = -1
+        os.replace(tmp, path)
+    finally:
+        if fd >= 0: os.close(fd)
+        tmp.unlink(missing_ok=True)
 
 
 def module_state_lock(exclusive=True):
     MODULE_STATE.parent.mkdir(parents=True, exist_ok=True)
     path = MODULE_STATE.with_name("module-state.lock")
     if not path.exists():
-        # Root helper may repair a missing lock, but it must remain writable by
-        # the Tactical runtime group for future privileged/non-privileged use.
-        path.touch(mode=0o664, exist_ok=True)
-        cfg = load_config()
-        tactical_user = str(cfg.get("TACTICAL_USER") or "tactical").strip() or "tactical"
-        try:
-            import pwd
-            gid = pwd.getpwnam(tactical_user).pw_gid
-            os.chown(path, 0, gid)
-        except (KeyError, OSError):
-            pass
-        os.chmod(path, 0o664)
+        # This is a root-only mutation lock. Tactical readers rely on atomic
+        # module-state.json replacement and must not be able to hold an
+        # exclusive flock that stalls privileged lifecycle workers.
+        path.touch(mode=0o600, exist_ok=True)
+        os.chown(path, 0, 0)
+        os.chmod(path, 0o600)
     handle = path.open("r+" if exclusive else "r")
     fcntl.flock(handle.fileno(), fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
     return handle
@@ -527,12 +529,12 @@ def sync_and_reload(config, log, *, refresh_workers=False):
     if ui_sync.is_file():
         require_root_owned(ui_sync)
         env = privileged_env({"TEC_TAC_UI_ROOT": ui_root})
-        result = subprocess.run(["bash", str(ui_sync)], stdout=log, stderr=subprocess.STDOUT, text=True, env=env)
+        result = subprocess.run(["/usr/bin/bash", str(ui_sync)], stdout=log, stderr=subprocess.STDOUT, text=True, env=env)
         if result.returncode:
             raise RuntimeError(f"UI module synchronization failed with status {result.returncode}")
     if reload_script.is_file():
         require_root_owned(reload_script)
-        result = subprocess.run(["bash", str(reload_script)], stdout=log, stderr=subprocess.STDOUT, text=True, env=privileged_env())
+        result = subprocess.run(["/usr/bin/bash", str(reload_script)], stdout=log, stderr=subprocess.STDOUT, text=True, env=privileged_env())
         if result.returncode:
             raise RuntimeError(f"Tactical graceful reload failed with status {result.returncode}")
     if refresh_workers:
@@ -625,7 +627,7 @@ def install_packages(repo_root, packages, order, actions, log, backup_root):
             replace = False
         else:
             replace = (repo_root / "extensions" / module_id).is_dir()
-        command = ["bash", str(install_script), str(package)]
+        command = ["/usr/bin/bash", str(install_script), str(package)]
         if replace:
             command.append("--replace")
         verb = "renaming" if rename_from else ("replacing" if replace else "installing")

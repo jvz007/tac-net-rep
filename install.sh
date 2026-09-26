@@ -216,8 +216,8 @@ MODULE_STATE_ROOT="${TEC_TAC_MODULE_STATE_ROOT:-/var/lib/tec-tac/module-manager}
 MODULE_STATE_LOCK="${MODULE_STATE_ROOT}/module-state.lock"
 install -d -o root -g "${TACTICAL_GROUP}" -m 2755 "${MODULE_STATE_ROOT}"
 touch "${MODULE_STATE_LOCK}"
-chown root:"${TACTICAL_GROUP}" "${MODULE_STATE_LOCK}"
-chmod 0664 "${MODULE_STATE_LOCK}"
+chown root:root "${MODULE_STATE_LOCK}"
+chmod 0600 "${MODULE_STATE_LOCK}"
 
 run_as_tactical() {
     runuser -u "${TACTICAL_USER}" -- "$@"
@@ -456,8 +456,8 @@ fi
 chown root:root "${MODULE_STATE_FILE}"
 chmod 0644 "${MODULE_STATE_FILE}"
 touch "${MODULE_STATE_LOCK}"
-chown root:"${TACTICAL_GROUP}" "${MODULE_STATE_LOCK}"
-chmod 0664 "${MODULE_STATE_LOCK}"
+chown root:root "${MODULE_STATE_LOCK}"
+chmod 0600 "${MODULE_STATE_LOCK}"
 
 install -o root -g root -m 0755 "${REPO_ROOT}/scripts/module-job-helper.py" "${MODULE_HELPER}"
 install -o root -g root -m 0755 "${REPO_ROOT}/scripts/module-v2-job-helper.py" "${MODULE_V2_HELPER}"
@@ -476,6 +476,18 @@ for recovery_link in /usr/local/sbin/tec-tac-repair /usr/local/sbin/tec-tac-diag
 done
 log "Tec-Tac Recovery Toolkit retained under ${REPO_ROOT}/scripts/recovery."
 mkdir -p "${MODULE_CONFIG_DIR}"
+# The runtime parses this file as key=value data rather than sourcing it. Keep
+# each value on exactly one line so an environment/path cannot inject another
+# privileged configuration key. Shell metacharacters are therefore literal.
+for config_value in \
+    "${TEC_TAC_ROOT}" "${TEC_TAC_CONFIG_FILE}" "${TEC_TAC_SOURCE_ROOT}" "${SOURCE_ROOT}" \
+    "${TEC_TAC_UI_SOURCE}" "${FRAMEWORK_DIR}" "${EXTENSIONS_DIR}" "${REPORTSETS_DIR}" \
+    "${RUNTIME_SCRIPTS_DIR}" "${MODULE_STATE_ROOT}" "${TRUSTED_PUBLISHERS_ROOT}" \
+    "${TEC_TAC_UI_ROOT}" "${TACTICAL_ROOT}" "${BACKEND_DIR}" "${VENV_PYTHON}" "${TACTICAL_USER}" \
+    "${TEC_TAC_ENVIRONMENT:-production}" "${TEC_TAC_SERVER_BACKUP_LOCAL_ROOTS:-/rmmbackups,/mnt,/media,/srv,/backup,/backups}" \
+    "${TEC_TAC_FRAMEWORK_REPOSITORY:-jvz007/tac-net-rep}" "${TEC_TAC_UI_REPOSITORY:-jvz007/tec-tac-ui}"; do
+    [[ "${config_value}" != *$'\n'* && "${config_value}" != *$'\r'* ]] || fail "Tec-Tac config values may not contain CR/LF characters."
+done
 cat > "${MODULE_CONFIG}" <<EOF
 # Tec-Tac installation layout. Managed by install.sh.
 TEC_TAC_ROOT=${TEC_TAC_ROOT}

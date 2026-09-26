@@ -859,6 +859,9 @@ def queue_install(upload_id: str, *, allow_downgrade: bool = False, requested_by
         "component": preview.get("component"),
         "upload_id": upload_id,
         "allow_downgrade": bool(allow_downgrade),
+        "requested_by": str(requested_by or ""),
+        "version": preview.get("version"),
+        "operation": operation,
     })
     try:
         _dispatch(job["id"])

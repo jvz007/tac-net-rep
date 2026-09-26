@@ -253,7 +253,10 @@ class SchedulerListView(APIView):
             owner_type = _owner_type_filter(request)
         except SchedulerError as exc:
             return Response({"detail": str(exc)}, status=400)
-        qs = TecTacSchedule.objects.select_related("created_by", "updated_by").prefetch_related("runs")
+        latest_status = TecTacScheduleRun.objects.filter(schedule_id=OuterRef("pk")).order_by("-created_at").values("status")[:1]
+        qs = TecTacSchedule.objects.select_related("created_by", "updated_by").annotate(
+            latest_status=Subquery(latest_status)
+        )
         if owner_type:
             qs = qs.filter(owner_type=owner_type)
         rows = []

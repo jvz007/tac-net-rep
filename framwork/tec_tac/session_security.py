@@ -61,7 +61,7 @@ def can_manage_session_security(user) -> bool:
     if bool(getattr(user, "is_superuser", False)):
         return True
     role = _role_for_user(user)
-    return bool(getattr(role, "is_superuser", False) or getattr(role, "can_do_server_maint", False)) if role else False
+    return bool(getattr(role, "is_superuser", False)) if role else False
 
 
 def _is_effective_superuser(user) -> bool:
@@ -175,8 +175,11 @@ def update_global_policy(policy: dict, *, requested_by: str = "") -> dict[str, A
                 network = ipaddress.ip_network(text, strict=False)
             except ValueError as exc:
                 raise SessionSecurityError(f"Invalid trusted proxy network: {text}") from exc
-            if network.prefixlen == 0:
-                raise SessionSecurityError("trusted_proxies may not trust the entire IPv4 or IPv6 address space.")
+            min_prefix = 8 if network.version == 4 else 32
+            if network.prefixlen < min_prefix:
+                raise SessionSecurityError(f"trusted_proxies network is too broad: {network}")
+            if not (network.is_private or network.is_loopback or network.is_link_local):
+                raise SessionSecurityError(f"trusted_proxies must use private/local address space: {network}")
             normalized.append(str(network))
         config.trusted_proxies = sorted(set(normalized)); fields.append("trusted_proxies")
     if fields:
@@ -717,15 +720,13 @@ def cleanup_session_history(*, retention_days: int = 30) -> dict[str, int]:
     if days < 1 or days > 3650:
         raise SessionSecurityError("retention_days must be between 1 and 3650.")
     cutoff = timezone.now() - timedelta(days=days)
-    active_knox_digests = set(
-        str(value) for value in _active_knox_tokens().values_list("digest", flat=True)
-    )
-    revoked_q = Q(revoked=True, revoked_at__lt=cutoff)
-    if active_knox_digests:
-        revoked_q &= ~Q(knox_digest__in=active_knox_digests)
+    # Revoked credential fingerprints are security tombstones. API keys and
+    # Django sessions can outlive Core's history-retention window, so deleting
+    # their revoked rows would allow the same credential to create a fresh
+    # trusted session later. Keep all revoked rows until an explicit credential
+    # lifecycle operation removes the underlying credential/tombstone.
     sessions_qs = TecTacSessionTrust.objects.filter(
-        revoked_q
-        | Q(revoked=False, absolute_expires_at__lt=cutoff)
+        Q(revoked=False, absolute_expires_at__lt=cutoff)
         | Q(revoked=False, idle_expires_at__lt=cutoff)
     )
     sessions = sessions_qs.count()
@@ -733,7 +734,7 @@ def cleanup_session_history(*, retention_days: int = 30) -> dict[str, int]:
     audits_qs = TecTacSessionAudit.objects.filter(created_at__lt=cutoff)
     audits = audits_qs.count()
     audits_qs.delete()
-    return {"sessions_deleted": sessions, "audit_events_deleted": audits, "retention_days": days}
+    return {"sessions_deleted": sessions, "audit_events_deleted": audits, "retention_days": days, "revoked_tombstones_preserved": TecTacSessionTrust.objects.filter(revoked=True).count()}
 
 
 def diagnostics() -> dict[str, Any]:

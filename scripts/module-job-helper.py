@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """Root-owned asynchronous worker for Tec-Tac module lifecycle jobs."""
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import pwd
 import re
 import shutil
 import stat
+import tempfile
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -19,6 +20,7 @@ JOB_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 PLUGIN_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 STATE_ROOT = Path("/var/lib/tec-tac/module-manager")
 STATE_FILE = STATE_ROOT / "module-state.json"
+MODULE_STATE_LOCK = STATE_ROOT / "module-state.lock"
 JOBS_ROOT = STATE_ROOT / "jobs"
 STAGED_ROOT = STATE_ROOT / "staged"
 RUNNING_ROOT = STATE_ROOT / "running"
@@ -77,30 +79,48 @@ def privileged_env(extra=None):
 
 
 def atomic_json(path, payload):
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.chmod(tmp, 0o640)
-    os.replace(tmp, path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    tmp = Path(tmp_name)
+    try:
+        data = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        with os.fdopen(fd, "wb", closefd=False) as handle:
+            handle.write(data); handle.flush(); os.fsync(handle.fileno())
+        os.fchmod(fd, 0o640)
+        os.close(fd); fd = -1
+        os.replace(tmp, path)
+    finally:
+        if fd >= 0: os.close(fd)
+        tmp.unlink(missing_ok=True)
 
 
 def forget_module_state(plugin_id, log=None):
     """Remove lifecycle state for a module whose files were successfully removed."""
-    if not STATE_FILE.is_file():
-        return False
-    try:
-        state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"module state is unreadable after removal: {exc}") from exc
-    modules = state.get("modules")
-    if not isinstance(modules, dict):
-        raise RuntimeError("module state has an invalid structure after removal")
-    if plugin_id not in modules:
-        return False
-    del modules[plugin_id]
-    tmp = STATE_FILE.with_name(STATE_FILE.name + ".tmp")
-    tmp.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.chmod(tmp, 0o644)
-    os.replace(tmp, STATE_FILE)
+    STATE_ROOT.mkdir(parents=True, exist_ok=True)
+    if not MODULE_STATE_LOCK.exists():
+        MODULE_STATE_LOCK.touch(mode=0o600, exist_ok=True)
+        os.chown(MODULE_STATE_LOCK, 0, 0)
+        os.chmod(MODULE_STATE_LOCK, 0o600)
+    with MODULE_STATE_LOCK.open("r+") as lock_handle:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        try:
+            if not STATE_FILE.is_file():
+                return False
+            try:
+                state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise RuntimeError(f"module state is unreadable after removal: {exc}") from exc
+            modules = state.get("modules")
+            if not isinstance(modules, dict):
+                raise RuntimeError("module state has an invalid structure after removal")
+            if plugin_id not in modules:
+                return False
+            del modules[plugin_id]
+            atomic_json(STATE_FILE, state)
+            os.chown(STATE_FILE, 0, 0)
+            os.chmod(STATE_FILE, 0o644)
+        finally:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
     if log is not None:
         log.write(f"[TEC-TAC-MODULE] removed stale runtime state for {plugin_id}\n")
         log.flush()
@@ -351,11 +371,11 @@ def run_job(job_id):
     command = None
     if job["action"] == "install":
         package = Path(job["package_path"])
-        command = ["bash", str(install_script), str(package)]
+        command = ["/usr/bin/bash", str(install_script), str(package)]
         if job.get("replace"):
             command.append("--replace")
     else:
-        command = ["bash", str(remove_script), job["plugin_id"], "", "--yes"]
+        command = ["/usr/bin/bash", str(remove_script), job["plugin_id"], "", "--yes"]
 
     rc = 1
     try:
@@ -377,7 +397,7 @@ def run_job(job_id):
                 log.write("[TEC-TAC-MODULE] synchronizing deployed UI modules\n")
                 log.flush()
                 sync_env = privileged_env({"TEC_TAC_UI_ROOT": ui_root})
-                sync = subprocess.run(["bash", str(ui_sync)], stdout=log, stderr=subprocess.STDOUT, text=True, env=sync_env)
+                sync = subprocess.run(["/usr/bin/bash", str(ui_sync)], stdout=log, stderr=subprocess.STDOUT, text=True, env=sync_env)
                 if sync.returncode != 0:
                     rc = sync.returncode
                     log.write(f"[TEC-TAC-MODULE] UI module sync failed rc={rc}\n")

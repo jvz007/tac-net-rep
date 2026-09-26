@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """Root-owned Tec-Tac Tactical/Tec-Tac server backup worker.
 
 Only opaque UUID jobs created by ``tec_tac.server_backup`` are accepted. The
@@ -1001,7 +1001,7 @@ def scp_args(config, destination, temp, log):
 
 
 def store_scp(config, destination, archive, metadata, log):
-    with tempfile.TemporaryDirectory(prefix="tectac-scp-") as td:
+    with tempfile.TemporaryDirectory(prefix="tectac-scp-", dir=str(roots(config)["staging"])) as td:
         temp = Path(td)
         ssh_common, scp_common = scp_args(config, destination, temp, log)
         remote_dir = destination["remote_path"]
@@ -1370,27 +1370,33 @@ def create_recovery_bundle(config, temp: Path, *, backup_class, tactical_archive
     output.parent.mkdir(parents=True,exist_ok=True)
     partial=output.with_name(output.name+".partial")
     partial.unlink(missing_ok=True)
-    with tarfile.open(partial,"w:gz") as tf:
-        tf.add(manifest_path,arcname="manifest.json",recursive=False)
-        tf.add(checksums,arcname="checksums.sha256",recursive=False)
+    try:
+        with tarfile.open(partial,"w:gz") as tf:
+            tf.add(manifest_path,arcname="manifest.json",recursive=False)
+            tf.add(checksums,arcname="checksums.sha256",recursive=False)
+            if tactical_archive is not None:
+                tf.add(tactical_archive,arcname=f"tactical/{tactical_archive.name}",recursive=False)
+            if tec_tac_archive is not None:
+                tf.add(tec_tac_archive,arcname="tec-tac/tec-tac-backup.tar.gz",recursive=False)
+        os.replace(partial,output)
+        ensure_regular(output,max_bytes=max_backup_bytes(config))
+        # Prove the copied Tactical member is byte-identical to the authoritative native archive.
         if tactical_archive is not None:
-            tf.add(tactical_archive,arcname=f"tactical/{tactical_archive.name}",recursive=False)
-        if tec_tac_archive is not None:
-            tf.add(tec_tac_archive,arcname="tec-tac/tec-tac-backup.tar.gz",recursive=False)
-    os.replace(partial,output)
-    ensure_regular(output,max_bytes=max_backup_bytes(config))
-    # Prove the copied Tactical member is byte-identical to the authoritative native archive.
-    if tactical_archive is not None:
-        with tarfile.open(output,"r:gz") as tf:
-            member=tf.getmember(f"tactical/{tactical_archive.name}")
-            fh=tf.extractfile(member)
-            if fh is None: raise RuntimeError("recovery bundle Tactical component is unreadable")
-            digest=hashlib.sha256(); size=0
-            for block in iter(lambda:fh.read(1024*1024),b""):
-                digest.update(block); size+=len(block)
-            if digest.hexdigest()!=tactical_meta["sha256"] or size!=tactical_meta["size_bytes"]:
-                raise RuntimeError("Tactical archive changed while creating recovery bundle")
-    return output, manifest
+            with tarfile.open(output,"r:gz") as tf:
+                member=tf.getmember(f"tactical/{tactical_archive.name}")
+                fh=tf.extractfile(member)
+                if fh is None: raise RuntimeError("recovery bundle Tactical component is unreadable")
+                digest=hashlib.sha256(); size=0
+                for block in iter(lambda:fh.read(1024*1024),b""):
+                    digest.update(block); size+=len(block)
+                if digest.hexdigest()!=tactical_meta["sha256"] or size!=tactical_meta["size_bytes"]:
+                    raise RuntimeError("Tactical archive changed while creating recovery bundle")
+        return output, manifest
+    except Exception:
+        partial.unlink(missing_ok=True)
+        output.unlink(missing_ok=True)
+        sidecar_path(output).unlink(missing_ok=True)
+        raise
 
 
 def operation_create_backup(config, job, log):
@@ -1436,11 +1442,15 @@ def operation_create_backup(config, job, log):
             try:
                 validation_mode="full" if include_tactical and include_tec_tac else ("tactical" if include_tactical else "tec_tac")
                 validate_recovery_bundle(bundle,validation_mode,validation_stage)
+                component_flags={key:{"included":bool(value.get("included"))} for key,value in manifest["components"].items()}
+                metadata=metadata_for_archive(bundle,backup_class,config,components=component_flags,recovery_modes=manifest["recovery_modes"])
+                write_sidecar(bundle,metadata)
+            except Exception:
+                bundle.unlink(missing_ok=True)
+                sidecar_path(bundle).unlink(missing_ok=True)
+                raise
             finally:
                 shutil.rmtree(validation_stage,ignore_errors=True)
-            component_flags={key:{"included":bool(value.get("included"))} for key,value in manifest["components"].items()}
-            metadata=metadata_for_archive(bundle,backup_class,config,components=component_flags,recovery_modes=manifest["recovery_modes"])
-            write_sidecar(bundle,metadata)
             if tactical_archive is not None and tactical_archive.exists():
                 tactical_archive.unlink()
                 log.write("[TEC-TAC-BACKUP] removed native source archive after byte-identical recovery bundle verification\n")
@@ -1472,6 +1482,7 @@ def operation_create_backup(config, job, log):
                 "destinations":results,
             }
             if failed:
+                overall["local_staging_removed"] = False
                 raise OperationFailed("One or more requested backup destinations failed verification.",result=overall)
             # /rmmbackups is a staging source for remote destinations, not an
             # implicit second retention target. Remove the local bundle after
@@ -2326,9 +2337,9 @@ def run_post_restore_tec_tac(config, component_meta, component_archive, log):
     backend_installer=framework_source/"install.sh"
     if not backend_installer.is_file():
         raise RuntimeError(f"restored Tec-Tac framework installer not found at {backend_installer}")
-    run_logged(["bash",str(backend_installer)],log,timeout=2*60*60)
+    run_logged(["/usr/bin/bash",str(backend_installer)],log,timeout=2*60*60)
     ui_installer=ui_source/"scripts"/"install.sh"
-    if ui_installer.is_file(): run_logged(["bash",str(ui_installer)],log,timeout=2*60*60)
+    if ui_installer.is_file(): run_logged(["/usr/bin/bash",str(ui_installer)],log,timeout=2*60*60)
     run_logged(["nginx","-t"],log,timeout=60)
     subprocess.run(["systemctl","reload","nginx"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     tactical_python=Path(config["TACTICAL_PYTHON"]); manage=Path(config["TACTICAL_BACKEND_ROOT"])/"manage.py"
@@ -2450,7 +2461,7 @@ def validate_target_preflight(config, report, mode, staged_bytes, *, mutation_lo
 
     required_tools = ["tar", "gzip"]
     if mode in {"full", "tactical"}:
-        required_tools += ["bash", "runuser", "systemctl", "curl", "wget", "git"]
+        required_tools += ["/usr/bin/bash", "runuser", "systemctl", "curl", "wget", "git"]
     if mode in {"full", "tec_tac"}:
         required_tools += ["nginx"]
     missing = sorted(tool for tool in set(required_tools) if shutil.which(tool) is None)
@@ -3498,8 +3509,9 @@ def _resolve_fixed_nginx_site_source(source: Path, allowed_root: Path = Path("/e
     return target
 
 
-def _archive_fixed_tree(source: Path):
-    fd, tmp_name = tempfile.mkstemp(prefix="tectac-priv-", suffix=".tar.gz")
+def _archive_fixed_tree(source: Path, temp_root: Path):
+    temp_root.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix="tectac-priv-", suffix=".tar.gz", dir=str(temp_root))
     os.close(fd)
     tmp = Path(tmp_name)
     try:
@@ -3552,7 +3564,7 @@ def tactical_privileged(job_id, operation, workspace):
         source, rel, filename = trees[operation]
         if not source.is_dir() or source.is_symlink():
             raise SystemExit(f"required privileged Tactical backup source is unavailable: {source}")
-        tmp = _archive_fixed_tree(source)
+        tmp = _archive_fixed_tree(source, roots(config)["staging"])
         try:
             _write_workspace_file(ws, rel, filename, tmp, tactical_uid, tactical_gid)
         finally:

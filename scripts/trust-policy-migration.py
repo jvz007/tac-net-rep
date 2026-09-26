@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """Monotonic installer migration for the root-owned Tec-Tac trust policy.
 
 The historic policy lived below /var/lib/tec-tac/policy and was writable by

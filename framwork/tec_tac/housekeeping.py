@@ -34,21 +34,9 @@ def save_config(payload):
         if not isinstance(raw,dict) or raw.get('mode',default['mode'])!=default['mode']: raise HousekeepingError(f'invalid policy for {k}')
         item={**default,**raw}
         field='days' if item['mode']=='age_days' else 'keep'; value=int(item[field])
-        if value<0 or value>3650: raise HousekeepingError(f'{k}.{field} is outside allowed range')
+        if value<1 or value>3650: raise HousekeepingError(f'{k}.{field} must be between 1 and 3650')
         item[field]=value; policies[k]=item
-    allow_zero = payload.get('allow_zero_destructive') is True
-    current = _load_config()
-    zero_fields = []
-    for k, item in policies.items():
-        field = 'days' if item['mode'] == 'age_days' else 'keep'
-        if int(item[field]) != 0:
-            continue
-        prior = current.get('policies', {}).get(k, {})
-        prior_field = 'days' if prior.get('mode') == 'age_days' else 'keep'
-        if prior.get('mode') != item['mode'] or int(prior.get(prior_field, -1)) != 0:
-            zero_fields.append(k)
-    if zero_fields and not allow_zero:
-        raise HousekeepingError('New zero-value destructive policies require allow_zero_destructive=true: ' + ', '.join(zero_fields))
+    allow_zero = False
     payload_out={'policies':policies,'allow_zero_destructive':allow_zero}
     try:
         if not CONFIG_DIR.is_dir() or CONFIG_DIR.is_symlink():

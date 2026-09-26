@@ -12,7 +12,21 @@ if [[ -z "$BACKUP" ]]; then
 fi
 [[ -f "$BACKUP" ]] || { recovery_err "No framework backup found. Use --backup=/path/file.tar.gz"; exit 1; }
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
-tar -xzf "$BACKUP" -C "$TMP"
+/usr/bin/python3 -I - "$BACKUP" "$TMP" <<'PY_SAFE_EXTRACT'
+import sys, tarfile
+from pathlib import Path, PurePosixPath
+archive=Path(sys.argv[1]); dest=Path(sys.argv[2])
+with tarfile.open(archive, 'r:gz') as tf:
+    members=tf.getmembers()
+    for member in members:
+        raw=member.name.replace('\\','/')
+        rel=PurePosixPath(raw)
+        if rel.is_absolute() or not rel.parts or '..' in rel.parts or '.' in rel.parts:
+            raise SystemExit(f'unsafe backup member: {member.name}')
+        if member.issym() or member.islnk() or not (member.isdir() or member.isfile()):
+            raise SystemExit(f'unsupported backup member: {member.name}')
+    tf.extractall(dest, members=members, filter='data')
+PY_SAFE_EXTRACT
 BASE="$(find "$TMP" -mindepth 1 -maxdepth 1 -type d | head -1)"
 [[ -d "$BASE/extensions" ]] || { recovery_err "Backup does not contain a framework extensions tree."; exit 1; }
 missing=()

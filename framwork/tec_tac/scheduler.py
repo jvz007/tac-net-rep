@@ -470,7 +470,7 @@ def cleanup_once_schedules(now: datetime | None = None) -> int:
     cutoff = now - timedelta(hours=retention)
     cleaned = 0
     qs = TecTacSchedule.objects.filter(schedule_type=TecTacSchedule.ScheduleType.ONCE, enabled=False)
-    for schedule in qs.prefetch_related("runs"):
+    for schedule in qs:
         if schedule.runs.filter(status__in=[TecTacScheduleRun.Status.QUEUED, TecTacScheduleRun.Status.RUNNING]).exists():
             continue
         latest = schedule.runs.order_by("-finished_at", "-created_at").first()
@@ -531,6 +531,31 @@ def _queue_run(run: TecTacScheduleRun):
         raise
 
 
+def _runtime_authorization_error(schedule: TecTacSchedule) -> str | None:
+    """Re-check the saved actor, action permission and Tactical target scope.
+
+    Save-time authorization is not durable authority. User-owned schedules run
+    only while the original actor remains active and still has permission for
+    both the registered action and the saved client/site/endpoint scope.
+    """
+    if schedule.owner_type != TecTacSchedule.OwnerType.USER:
+        return None
+    actor = schedule.created_by
+    if actor is None or not bool(getattr(actor, "is_active", False)):
+        return "Schedule owner is missing or inactive."
+    try:
+        action = get_scheduled_action(schedule.action_id)
+        # Runtime import avoids a scheduler <-> scheduler_views import cycle.
+        from .scheduler_views import _can_use_action, _can_access_target_scope
+        if not _can_use_action(actor, action):
+            return "Schedule owner no longer has permission to run this action."
+        if not _can_access_target_scope(actor, schedule.targets or {}):
+            return "Schedule targets are no longer within the owner's Tactical scope."
+    except Exception:
+        return "Schedule authorization could not be verified at run time."
+    return None
+
+
 def dispatch_due_schedules(now: datetime | None = None) -> dict:
     now = _as_utc(now or timezone.now())
     state = TecTacSchedulerState.current()
@@ -542,96 +567,123 @@ def dispatch_due_schedules(now: datetime | None = None) -> dict:
     schedule_ids = list(TecTacSchedule.objects.filter(enabled=True).values_list("id", flat=True))
     try:
         for schedule_id in schedule_ids:
-            with transaction.atomic():
-                schedule = TecTacSchedule.objects.select_for_update().get(pk=schedule_id)
-                if not schedule.enabled:
-                    continue
-                try:
-                    canonical_targets = normalize_scheduler_targets(schedule.targets or {})
-                except SchedulerTargetShapeError as exc:
-                    schedule.enabled = False
-                    schedule.target_state = "invalid"
-                    schedule.target_state_detail = str(exc)[:500]
-                    schedule.save(update_fields=["enabled", "target_state", "target_state_detail", "updated_at"])
-                    run = TecTacScheduleRun.objects.create(**_run_kwargs(
-                        schedule, status=TecTacScheduleRun.Status.SKIPPED, scheduled_for=now,
-                        targets_snapshot=schedule.targets or {}, error=str(exc),
-                        error_type="InvalidTargetShape", finished_at=now,
-                    ))
-                    skipped.append(str(run.id))
-                    continue
-                if canonical_targets != (schedule.targets or {}):
-                    schedule.targets = canonical_targets
-                    schedule.target_state = "valid"
-                    schedule.target_state_detail = ""
-                    schedule.save(update_fields=["targets", "target_state", "target_state_detail", "updated_at"])
-                occurrence = latest_occurrence(schedule, now)
-                if not occurrence:
-                    continue
-                key = due_key(occurrence, exact=(schedule.schedule_type == TecTacSchedule.ScheduleType.INTERVAL))
-                if schedule.last_due_key == key:
-                    continue
-                if not _should_run_occurrence(schedule, occurrence, now):
-                    if schedule.missed_policy == TecTacSchedule.MissedPolicy.EXPIRE:
-                        error_type = "MissedExpired"
-                        message = "Occurrence expired after the scheduler lateness window."
-                    elif schedule.missed_policy == TecTacSchedule.MissedPolicy.RUN_ON_RECOVERY:
-                        error_type = "MissedRecoveryWindowExpired"
-                        message = "Occurrence was outside the configured recovery grace window."
-                    else:
-                        error_type = "MissedSkip"
-                        message = "Occurrence was missed and the schedule policy is skip."
-                    run = TecTacScheduleRun.objects.create(**_run_kwargs(
-                        schedule, status=TecTacScheduleRun.Status.SKIPPED, scheduled_for=occurrence,
-                        targets_snapshot=schedule.targets or {}, error=message, error_type=error_type, finished_at=now,
-                    ))
-                    schedule.last_due_key = key
-                    if schedule.schedule_type == TecTacSchedule.ScheduleType.ONCE:
-                        schedule.enabled = False
-                    schedule.save(update_fields=["last_due_key", "enabled", "updated_at"])
-                    skipped.append(str(run.id))
-                    continue
-                try:
-                    get_scheduled_action(schedule.action_id)
-                except SchedulerError as exc:
-                    run = TecTacScheduleRun.objects.create(**_run_kwargs(
-                        schedule,
-                        status=TecTacScheduleRun.Status.SKIPPED, scheduled_for=occurrence,
-                        targets_snapshot=schedule.targets or {}, error=str(exc),
-                        error_type="ActionUnavailable", finished_at=now,
-                    ))
-                    schedule.last_due_key = key
-                    if schedule.schedule_type == TecTacSchedule.ScheduleType.ONCE:
-                        schedule.enabled = False
-                    schedule.save(update_fields=["last_due_key", "enabled", "updated_at"])
-                    skipped.append(str(run.id))
-                    continue
-                active = schedule.runs.filter(status__in=[TecTacScheduleRun.Status.QUEUED, TecTacScheduleRun.Status.RUNNING]).exists()
-                if active and schedule.concurrency_policy == TecTacSchedule.ConcurrencyPolicy.SKIP:
-                    run = TecTacScheduleRun.objects.create(**_run_kwargs(
-                        schedule, status=TecTacScheduleRun.Status.SKIPPED, scheduled_for=occurrence,
-                        targets_snapshot=schedule.targets or {},
-                        error="Skipped because a previous run is still active.",
-                        error_type="ConcurrencySkip", finished_at=now,
-                    ))
-                    schedule.last_due_key = key
-                    schedule.save(update_fields=["last_due_key", "updated_at"])
-                    skipped.append(str(run.id))
-                    continue
-                run = TecTacScheduleRun.objects.create(**_run_kwargs(
-                    schedule, scheduled_for=occurrence, targets_snapshot=schedule.targets or {},
-                ))
-                schedule.last_due_key = key
-                if schedule.schedule_type == TecTacSchedule.ScheduleType.ONCE:
-                    schedule.enabled = False
-                schedule.save(update_fields=["last_due_key", "enabled", "updated_at"])
             try:
-                _queue_run(run)
-                queued.append(str(run.id))
-            except Exception:
-                # _queue_run records the failed dispatch on the run and scheduler
-                # state. A broker outage for one schedule must not abort the tick.
-                dispatch_failed.append(str(run.id))
+                with transaction.atomic():
+                    try:
+                        schedule = TecTacSchedule.objects.select_for_update().get(pk=schedule_id)
+                    except TecTacSchedule.DoesNotExist:
+                        continue
+                    if not schedule.enabled:
+                        continue
+                    try:
+                        canonical_targets = normalize_scheduler_targets(schedule.targets or {})
+                    except SchedulerTargetShapeError as exc:
+                        schedule.enabled = False
+                        schedule.target_state = "invalid"
+                        schedule.target_state_detail = str(exc)[:500]
+                        schedule.save(update_fields=["enabled", "target_state", "target_state_detail", "updated_at"])
+                        run = TecTacScheduleRun.objects.create(**_run_kwargs(
+                            schedule, status=TecTacScheduleRun.Status.SKIPPED, scheduled_for=now,
+                            targets_snapshot=schedule.targets or {}, error=str(exc),
+                            error_type="InvalidTargetShape", finished_at=now,
+                        ))
+                        skipped.append(str(run.id))
+                        continue
+                    if canonical_targets != (schedule.targets or {}):
+                        schedule.targets = canonical_targets
+                        schedule.target_state = "valid"
+                        schedule.target_state_detail = ""
+                        schedule.save(update_fields=["targets", "target_state", "target_state_detail", "updated_at"])
+                    authorization_error = _runtime_authorization_error(schedule)
+                    if authorization_error:
+                        occurrence = latest_occurrence(schedule, now)
+                        if occurrence:
+                            key = due_key(occurrence, exact=(schedule.schedule_type == TecTacSchedule.ScheduleType.INTERVAL))
+                            if schedule.last_due_key != key:
+                                run = TecTacScheduleRun.objects.create(**_run_kwargs(
+                                    schedule, status=TecTacScheduleRun.Status.SKIPPED, scheduled_for=occurrence,
+                                    targets_snapshot=schedule.targets or {}, error=authorization_error,
+                                    error_type="AuthorizationRevoked", finished_at=now,
+                                ))
+                                schedule.last_due_key = key
+                                schedule.save(update_fields=["last_due_key", "updated_at"])
+                                skipped.append(str(run.id))
+                        continue
+                    occurrence = latest_occurrence(schedule, now)
+                    if not occurrence:
+                        continue
+                    key = due_key(occurrence, exact=(schedule.schedule_type == TecTacSchedule.ScheduleType.INTERVAL))
+                    if schedule.last_due_key == key:
+                        continue
+                    if not _should_run_occurrence(schedule, occurrence, now):
+                        if schedule.missed_policy == TecTacSchedule.MissedPolicy.EXPIRE:
+                            error_type = "MissedExpired"
+                            message = "Occurrence expired after the scheduler lateness window."
+                        elif schedule.missed_policy == TecTacSchedule.MissedPolicy.RUN_ON_RECOVERY:
+                            error_type = "MissedRecoveryWindowExpired"
+                            message = "Occurrence was outside the configured recovery grace window."
+                        else:
+                            error_type = "MissedSkip"
+                            message = "Occurrence was missed and the schedule policy is skip."
+                        run = TecTacScheduleRun.objects.create(**_run_kwargs(
+                            schedule, status=TecTacScheduleRun.Status.SKIPPED, scheduled_for=occurrence,
+                            targets_snapshot=schedule.targets or {}, error=message, error_type=error_type, finished_at=now,
+                        ))
+                        schedule.last_due_key = key
+                        if schedule.schedule_type == TecTacSchedule.ScheduleType.ONCE:
+                            schedule.enabled = False
+                        schedule.save(update_fields=["last_due_key", "enabled", "updated_at"])
+                        skipped.append(str(run.id))
+                        continue
+                    try:
+                        get_scheduled_action(schedule.action_id)
+                    except SchedulerError as exc:
+                        run = TecTacScheduleRun.objects.create(**_run_kwargs(
+                            schedule,
+                            status=TecTacScheduleRun.Status.SKIPPED, scheduled_for=occurrence,
+                            targets_snapshot=schedule.targets or {}, error=str(exc),
+                            error_type="ActionUnavailable", finished_at=now,
+                        ))
+                        schedule.last_due_key = key
+                        if schedule.schedule_type == TecTacSchedule.ScheduleType.ONCE:
+                            schedule.enabled = False
+                        schedule.save(update_fields=["last_due_key", "enabled", "updated_at"])
+                        skipped.append(str(run.id))
+                        continue
+                    active = schedule.runs.filter(status__in=[TecTacScheduleRun.Status.QUEUED, TecTacScheduleRun.Status.RUNNING]).exists()
+                    if active and schedule.concurrency_policy == TecTacSchedule.ConcurrencyPolicy.SKIP:
+                        run = TecTacScheduleRun.objects.create(**_run_kwargs(
+                            schedule, status=TecTacScheduleRun.Status.SKIPPED, scheduled_for=occurrence,
+                            targets_snapshot=schedule.targets or {},
+                            error="Skipped because a previous run is still active.",
+                            error_type="ConcurrencySkip", finished_at=now,
+                        ))
+                        schedule.last_due_key = key
+                        schedule.save(update_fields=["last_due_key", "updated_at"])
+                        skipped.append(str(run.id))
+                        continue
+                    run = TecTacScheduleRun.objects.create(**_run_kwargs(
+                        schedule, scheduled_for=occurrence, targets_snapshot=schedule.targets or {},
+                    ))
+                    schedule.last_due_key = key
+                    if schedule.schedule_type == TecTacSchedule.ScheduleType.ONCE:
+                        schedule.enabled = False
+                    schedule.save(update_fields=["last_due_key", "enabled", "updated_at"])
+                try:
+                    _queue_run(run)
+                    queued.append(str(run.id))
+                except Exception:
+                    # _queue_run records the failed dispatch on the run and scheduler
+                    # state. A broker outage for one schedule must not abort the tick.
+                    dispatch_failed.append(str(run.id))
+                    continue
+            except Exception as exc:
+                # A malformed/deleted schedule or one broken module action must
+                # never prevent unrelated schedules from being processed.
+                state.last_dispatch_at = timezone.now()
+                state.last_dispatch_error = f"schedule {schedule_id}: {exc.__class__.__name__}: {exc}"[:1000]
+                state.save(update_fields=["last_dispatch_at", "last_dispatch_error"])
+                dispatch_failed.append(f"schedule:{schedule_id}")
                 continue
         cleaned_once = cleanup_once_schedules(now)
         cleaned_runs = cleanup_run_history(now)

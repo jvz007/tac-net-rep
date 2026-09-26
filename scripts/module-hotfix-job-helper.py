@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """Root-owned worker for managed Tec-Tac module hotfixes."""
 from __future__ import annotations
 
@@ -445,13 +445,13 @@ def sync_reload(config, effective, log):
         if ui_sync.is_file():
             require_root_owned(ui_sync)
             env = privileged_env({"TEC_TAC_UI_ROOT": config.get("UI_ROOT", "/var/lib/tec-tac/ui/tec-tac")})
-            result = subprocess.run(["bash", str(ui_sync)], stdout=log, stderr=subprocess.STDOUT, text=True, env=env)
+            result = subprocess.run(["/usr/bin/bash", str(ui_sync)], stdout=log, stderr=subprocess.STDOUT, text=True, env=env)
             if result.returncode:
                 raise RuntimeError(f"UI module synchronization failed with status {result.returncode}")
     if effective.get("reload") == "django":
         reload_script = Path(config.get("REPO_ROOT", "/opt/tec-tac")) / "scripts/reload-rmm-uwsgi.sh"
         require_root_owned(reload_script)
-        result = subprocess.run(["bash", str(reload_script)], stdout=log, stderr=subprocess.STDOUT, text=True, env=privileged_env())
+        result = subprocess.run(["/usr/bin/bash", str(reload_script)], stdout=log, stderr=subprocess.STDOUT, text=True, env=privileged_env())
         if result.returncode:
             raise RuntimeError(f"Tactical graceful reload failed with status {result.returncode}")
 

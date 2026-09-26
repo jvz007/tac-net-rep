@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """Narrow sudo compatibility shim for Tactical backup.sh.
 
 Tactical backup.sh v34 invokes sudo for a fixed set of root-owned backup

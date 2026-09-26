@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """Root-console trust-policy management for Tec-Tac.
 
 Lowering the package/update trust floor is intentionally a console operation.

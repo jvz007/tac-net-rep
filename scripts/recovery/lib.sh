@@ -61,7 +61,7 @@ ${MODULE_ROOT}/hotfixes/applied|root:${group}|2750
 ${MODULE_ROOT}/hotfixes/history|root:${group}|2750
 ${MODULE_ROOT}/repositories|root:${group}|2770
 ${MODULE_ROOT}/repositories/cache|root:${group}|2770
-${MODULE_ROOT}/module-state.lock|root:${group}|664
+${MODULE_ROOT}/module-state.lock|root:root|600
 SPECS
 }
 

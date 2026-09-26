@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 from __future__ import annotations
 import json, os, shutil, stat, sys, tempfile, time, uuid
 from pathlib import Path
@@ -31,11 +31,13 @@ CATEGORY_PATHS = {
 }
 JOB_ROOTS = {
   'module_staging': STATE/'module-manager'/'jobs', 'module_history': STATE/'module-manager'/'jobs',
-  'system_update_staging': STATE/'system-updates'/'jobs', 'system_update_history': STATE/'system-updates'/'jobs',
+  'system_update_staging': STATE/'system-updates'/'jobs', 'system_update_backups': STATE/'system-updates'/'jobs', 'system_update_history': STATE/'system-updates'/'jobs',
   'server_backup_staging': STATE/'server-backup'/'jobs', 'server_backup_history': STATE/'server-backup'/'jobs',
+  'server_backup_pre_restore': STATE/'server-backup'/'jobs',
 }
 STAGING_CATEGORIES = {'module_staging','system_update_staging','server_backup_staging'}
 HISTORY_CATEGORIES = {'module_history','system_update_history','server_backup_history'}
+ACTIVE_GUARD_CATEGORIES = STAGING_CATEGORIES | HISTORY_CATEGORIES | {'system_update_backups','server_backup_pre_restore'}
 TERMINAL_STATUSES = {'succeeded','failed','cancelled','canceled','complete','completed','skipped','expired','rolled-back','rollback-failed'}
 
 
@@ -192,6 +194,8 @@ def candidates(category):
     return out
 
 def protected_for_active_job(category, item, active_ids, unreadable):
+    if category in {'system_update_backups','server_backup_pre_restore'}:
+        return bool(active_ids or unreadable)
     if category in STAGING_CATEGORIES:
         # Staging paths are mutable request/work areas. If any job is active (or
         # a job record is unreadable), preserve the whole staging category rather
@@ -208,24 +212,16 @@ def select(category, policy, *, allow_zero=False, dry_run=False):
     mode=policy.get('mode')
     zero_blocked=False; zero_reason=None
     if mode=='age_days':
-        days=max(0,int(policy.get('days',0)))
-        if days == 0 and not allow_zero:
-            if dry_run:
-                purge=[]; zero_blocked=True; zero_reason=f'{category}.days=0 requires explicit allow_zero_destructive=true'
-            else:
-                raise RuntimeError(f'{category}.days=0 requires explicit allow_zero_destructive=true')
-        else:
-            cutoff=time.time()-days*86400
-            purge=[x for x in items if x['mtime'] < cutoff]
+        days=int(policy.get('days',0))
+        if days < 1:
+            raise RuntimeError(f'{category}.days must be at least 1')
+        cutoff=time.time()-days*86400
+        purge=[x for x in items if x['mtime'] < cutoff]
     elif mode=='keep_count':
-        keep=max(0,int(policy.get('keep',0)))
-        if keep == 0 and not allow_zero:
-            if dry_run:
-                purge=[]; zero_blocked=True; zero_reason=f'{category}.keep=0 requires explicit allow_zero_destructive=true'
-            else:
-                raise RuntimeError(f'{category}.keep=0 requires explicit allow_zero_destructive=true')
-        else:
-            ordered=sorted(items,key=lambda x:x['mtime'],reverse=True); purge=ordered[keep:]
+        keep=int(policy.get('keep',0))
+        if keep < 1:
+            raise RuntimeError(f'{category}.keep must be at least 1')
+        ordered=sorted(items,key=lambda x:x['mtime'],reverse=True); purge=ordered[keep:]
     else: raise RuntimeError(f'unsupported policy mode for {category}')
     active_ids, unreadable = active_jobs(category)
     protected=[x for x in purge if protected_for_active_job(category,x,active_ids,unreadable)]

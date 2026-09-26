@@ -92,6 +92,17 @@ def can_record(actor, module_id: str) -> bool:
     return _actor_can_use_module(actor, module)
 
 
+def can_record_from_browser(actor, module_id: str) -> bool:
+    """Browser writers require an explicitly permissioned non-Core module."""
+    try:
+        module = _resolve_module(module_id)
+    except AuditContractError:
+        return False
+    if module.get("id") == "core" or not tuple(module.get("permissions") or ()):
+        return False
+    return _actor_can_use_module(actor, module)
+
+
 def _normalize_action(value: Any) -> str:
     action = str(value or "").strip().lower()
     if action in STANDARD_ACTIONS or _CUSTOM_ACTION_RE.fullmatch(action):

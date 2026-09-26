@@ -6,8 +6,9 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from drf_spectacular.utils import extend_schema, extend_schema_view
 
-from .audit import AuditContractError, record
+from .audit import AuditContractError, can_record_from_browser, record
 from .session_security import SessionAuthenticated
+from .throttles import AuditWriteDayThrottle, AuditWriteMinThrottle
 
 logger = logging.getLogger("tec_tac.audit")
 
@@ -18,6 +19,7 @@ _FORBIDDEN_IDENTITY_FIELDS = {"username", "actor", "user", "module_version", "so
 @extend_schema_view(post=extend_schema(tags=["Tec-Tac Framework"], summary="Record a Tec-Tac module audit event"))
 class AuditRecordView(APIView):
     permission_classes = [SessionAuthenticated]
+    throttle_classes = [AuditWriteMinThrottle, AuditWriteDayThrottle]
 
     def post(self, request):
         payload = request.data
@@ -29,8 +31,11 @@ class AuditRecordView(APIView):
         unknown = sorted(set(payload) - _ALLOWED_FIELDS)
         if unknown:
             return Response({"detail": "Unknown audit event field(s): " + ", ".join(unknown)}, status=400)
-        if str(payload.get("module_id") or "").strip() == "core":
+        module_id = str(payload.get("module_id") or "").strip()
+        if module_id == "core":
             return Response({"detail": "Browser audit events may not claim Core provenance."}, status=403)
+        if not can_record_from_browser(request.user, module_id):
+            return Response({"detail": "Browser audit events require an explicitly permissioned module available to this account."}, status=403)
         try:
             result = record(
                 actor=request.user,
