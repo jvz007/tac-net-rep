@@ -33,7 +33,7 @@ RUNNING_ROOT = STATE_ROOT / "running-v2"
 LOGS_ROOT = STATE_ROOT / "logs"
 BACKUP_ROOT = STATE_ROOT / "bundle-backups"
 MODULE_STATE = STATE_ROOT / "module-state.json"
-CONFIG = Path(os.environ.get("TEC_TAC_CONFIG_FILE", "/opt/tec-tac/etc/tec-tac.conf"))
+CONFIG = Path("/opt/tec-tac/etc/tec-tac.conf")
 LIFECYCLE_LOCK_PATH = Path("/var/lib/tec-tac/lifecycle.lock")
 PRIVILEGED_TRUST = Path("/usr/local/lib/tec-tac-security/privileged-trust.py")
 RUNNING_REQUEST_ROOT = RUNNING_ROOT / "requests"
@@ -64,7 +64,14 @@ def now():
 
 def load_config():
     values = {}
-    if CONFIG.is_file():
+    if CONFIG.is_symlink():
+        raise RuntimeError("Tec-Tac config must be a regular non-symlink file")
+    if CONFIG.exists():
+        if not CONFIG.is_file():
+            raise RuntimeError("Tec-Tac config must be a regular non-symlink file")
+        info = CONFIG.stat()
+        if info.st_uid != 0 or info.st_mode & 0o022:
+            raise RuntimeError("Tec-Tac config must be root-owned and not group/world writable")
         for line in CONFIG.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:
@@ -72,6 +79,14 @@ def load_config():
             key, value = line.split("=", 1)
             values[key.strip()] = value.strip()
     return values
+
+
+def privileged_env(extra=None):
+    """Return a child environment with caller-controlled Tec-Tac overrides removed."""
+    env = {key: value for key, value in os.environ.items() if not key.startswith("TEC_TAC_")}
+    if extra:
+        env.update({str(key): str(value) for key, value in extra.items()})
+    return env
 
 
 def atomic_json(path, payload, mode=0o640):
@@ -199,11 +214,12 @@ def run_identity_migration(config, action, log, *, reverse=False):
     if not python.is_file() or not manage.is_file():
         raise RuntimeError("Tactical Python/manage.py is unavailable for module identity migration")
     tactical_user = config.get("TACTICAL_USER", "tactical")
-    env = os.environ.copy()
-    env["TEC_TAC_IDENTITY_OLD"] = old_id
-    env["TEC_TAC_IDENTITY_NEW"] = new_id
-    env["TEC_TAC_IDENTITY_MIGRATION"] = json.dumps(migration, separators=(",", ":"))
-    env["TEC_TAC_IDENTITY_REVERSE"] = "1" if reverse else "0"
+    env = privileged_env({
+        "TEC_TAC_IDENTITY_OLD": old_id,
+        "TEC_TAC_IDENTITY_NEW": new_id,
+        "TEC_TAC_IDENTITY_MIGRATION": json.dumps(migration, separators=(",", ":")),
+        "TEC_TAC_IDENTITY_REVERSE": "1" if reverse else "0",
+    })
     code = (
         "import json,os; "
         "from tec_tac.module_identity import apply_identity_migration; "
@@ -326,7 +342,7 @@ def dispatch(job_id):
     subprocess.Popen(
         [sys.executable, str(Path(__file__).resolve()), "--run", job_id],
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        start_new_session=True, close_fds=True,
+        start_new_session=True, close_fds=True, env=privileged_env(),
     )
 
 
@@ -342,14 +358,13 @@ def sync_and_reload(config, log, *, refresh_workers=False):
     reload_script = Path(config.get("REPO_ROOT", "/opt/tec-tac")) / "scripts/reload-rmm-uwsgi.sh"
     if ui_sync.is_file():
         require_root_owned(ui_sync)
-        env = os.environ.copy()
-        env["TEC_TAC_UI_ROOT"] = ui_root
+        env = privileged_env({"TEC_TAC_UI_ROOT": ui_root})
         result = subprocess.run(["bash", str(ui_sync)], stdout=log, stderr=subprocess.STDOUT, text=True, env=env)
         if result.returncode:
             raise RuntimeError(f"UI module synchronization failed with status {result.returncode}")
     if reload_script.is_file():
         require_root_owned(reload_script)
-        result = subprocess.run(["bash", str(reload_script)], stdout=log, stderr=subprocess.STDOUT, text=True)
+        result = subprocess.run(["bash", str(reload_script)], stdout=log, stderr=subprocess.STDOUT, text=True, env=privileged_env())
         if result.returncode:
             raise RuntimeError(f"Tactical graceful reload failed with status {result.returncode}")
     if refresh_workers:
@@ -448,8 +463,7 @@ def install_packages(repo_root, packages, order, actions, log, backup_root):
         verb = "renaming" if rename_from else ("replacing" if replace else "installing")
         log.write(f"[TEC-TAC-MODULE-V2] {verb} {module_id}\n")
         log.flush()
-        env = os.environ.copy()
-        env["TEC_TAC_DEFER_WORKER_REFRESH"] = "1"
+        env = privileged_env({"TEC_TAC_DEFER_WORKER_REFRESH": "1"})
         result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, text=True, env=env)
         if result.returncode:
             raise RuntimeError(f"install failed for {module_id} with status {result.returncode}")
@@ -482,7 +496,7 @@ def _privileged_verify_artifact(config, path, signature=None, metadata=None):
     command = [sys.executable, str(PRIVILEGED_TRUST), "verify-package", str(path)]
     if signature: command += ["--signature", str(signature)]
     if metadata: command += ["--metadata", str(metadata)]
-    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120, env=privileged_env())
     if result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout or "root v2 trust verification failed").strip())
     try:

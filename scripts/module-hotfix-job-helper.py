@@ -44,7 +44,11 @@ def now():
 
 def load_config():
     values = {}
-    if CONFIG.is_file():
+    if CONFIG.is_symlink():
+        raise RuntimeError("Tec-Tac config must be a regular non-symlink file")
+    if CONFIG.exists():
+        if not CONFIG.is_file():
+            raise RuntimeError("Tec-Tac config must be a regular non-symlink file")
         info = CONFIG.stat()
         if info.st_uid != 0 or info.st_mode & 0o022:
             raise RuntimeError("Tec-Tac config must be root-owned and not group/world writable")
@@ -55,6 +59,14 @@ def load_config():
             key, value = line.split("=", 1)
             values[key.strip()] = value.strip()
     return values
+
+
+def privileged_env(extra=None):
+    """Return a child environment with caller-controlled Tec-Tac overrides removed."""
+    env = {key: value for key, value in os.environ.items() if not key.startswith("TEC_TAC_")}
+    if extra:
+        env.update({str(key): str(value) for key, value in extra.items()})
+    return env
 
 
 def atomic_json(path: Path, payload: dict, mode=0o640, *, uid=None, gid=None):
@@ -171,6 +183,7 @@ def dispatch(job_id):
         stderr=subprocess.DEVNULL,
         start_new_session=True,
         close_fds=True,
+        env=privileged_env(),
     )
 
 
@@ -260,7 +273,7 @@ def privileged_verify_hotfix(package: Path, signature: Path | None, metadata: Pa
         command += ["--signature", str(signature)]
     if metadata is not None:
         command += ["--metadata", str(metadata)]
-    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120, env=privileged_env())
     if result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout or "root hotfix trust verification failed").strip())
     try:
@@ -416,11 +429,11 @@ def validate_runtime(config, targets, effective, log):
         for target in targets:
             if not target["path"].endswith(".py"):
                 continue
-            result = subprocess.run([str(python), "-m", "py_compile", str(target["target_path"])], stdout=log, stderr=subprocess.STDOUT, text=True)
+            result = subprocess.run([str(python), "-m", "py_compile", str(target["target_path"])], stdout=log, stderr=subprocess.STDOUT, text=True, env=privileged_env())
             if result.returncode:
                 raise RuntimeError(f"Python compile validation failed: {target['component']}/{target['path']}")
     if effective.get("django_check"):
-        result = subprocess.run(["runuser", "-u", tactical_user, "--", str(python), str(manage), "check"], cwd=str(manage.parent), stdout=log, stderr=subprocess.STDOUT, text=True)
+        result = subprocess.run(["runuser", "-u", tactical_user, "--", str(python), str(manage), "check"], cwd=str(manage.parent), stdout=log, stderr=subprocess.STDOUT, text=True, env=privileged_env())
         if result.returncode:
             raise RuntimeError(f"Django system check failed with status {result.returncode}")
 
@@ -430,15 +443,14 @@ def sync_reload(config, effective, log):
         ui_sync = Path(config.get("UI_SYNC_SCRIPT", "/opt/tec-tac-src/ui/scripts/sync-modules.sh"))
         if ui_sync.is_file():
             require_root_owned(ui_sync)
-            env = os.environ.copy()
-            env["TEC_TAC_UI_ROOT"] = config.get("UI_ROOT", "/var/lib/tec-tac/ui/tec-tac")
+            env = privileged_env({"TEC_TAC_UI_ROOT": config.get("UI_ROOT", "/var/lib/tec-tac/ui/tec-tac")})
             result = subprocess.run(["bash", str(ui_sync)], stdout=log, stderr=subprocess.STDOUT, text=True, env=env)
             if result.returncode:
                 raise RuntimeError(f"UI module synchronization failed with status {result.returncode}")
     if effective.get("reload") == "django":
         reload_script = Path(config.get("REPO_ROOT", "/opt/tec-tac")) / "scripts/reload-rmm-uwsgi.sh"
         require_root_owned(reload_script)
-        result = subprocess.run(["bash", str(reload_script)], stdout=log, stderr=subprocess.STDOUT, text=True)
+        result = subprocess.run(["bash", str(reload_script)], stdout=log, stderr=subprocess.STDOUT, text=True, env=privileged_env())
         if result.returncode:
             raise RuntimeError(f"Tactical graceful reload failed with status {result.returncode}")
 

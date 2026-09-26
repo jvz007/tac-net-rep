@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.65",
+  "version": "1.15.66",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -27,19 +27,19 @@
       "sha256": "7acd5f22138138348d5123fc22c210724ca10ce86f05da7b77c68fc89952319a"
     },
     {
-      "path": "RELEASE_NOTES_1.15.64.md",
-      "size": 1006,
-      "sha256": "c9a4f121b6b1bc3ee7e58c95eb8370e5722a24003a0a5284f7f6837b07a3a5f8"
-    },
-    {
       "path": "RELEASE_NOTES_1.15.65.md",
       "size": 998,
       "sha256": "2c298d935823ddeedbce156674748dfb7f0d3799178e13dab4ae23042af72613"
     },
     {
+      "path": "RELEASE_NOTES_1.15.66.md",
+      "size": 1302,
+      "sha256": "a04ba756b4b32eab9e9c5623a3975ae318176bae46db78f4313861e0c2942e2b"
+    },
+    {
       "path": "VERSION",
       "size": 8,
-      "sha256": "478884639573ab95af2bbc9df6a9234c84e35a9480dc787a078687187d23f14c"
+      "sha256": "a04ab8f5c20ae7fd583bfdc53a043a830a8d07dcd08b50a8db4b60b5d33f1047"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -397,6 +397,11 @@
       "sha256": "9a24560bbd7c7123649388a15d17c9a341bdfe289fc17cbd277c28f69342bc71"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.15.64.md",
+      "size": 1006,
+      "sha256": "c9a4f121b6b1bc3ee7e58c95eb8370e5722a24003a0a5284f7f6837b07a3a5f8"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.2.0.md",
       "size": 1977,
       "sha256": "7d78abb704c7a3e459f7437cb0bdcc7ea738f76e97b925f2b4e16466a812cd54"
@@ -513,8 +518,8 @@
     },
     {
       "path": "docs/trusted-publisher-verification.md",
-      "size": 9647,
-      "sha256": "d68dd5881559134b6cfe6c41be6c82cfd677ac337f0ede93d7909a9aadc8cf06"
+      "size": 10107,
+      "sha256": "1b9d6fdc1a394b2c27b9a32da455f4fc8e3d65ae7d80606ecc52e287d7e512ef"
     },
     {
       "path": "docs/tutorial-packages/packagetest/README.md",
@@ -1183,18 +1188,18 @@
     },
     {
       "path": "scripts/module-hotfix-job-helper.py",
-      "size": 31123,
-      "sha256": "4b34b17cbcd93e65399c7c76389c8e139f66464161ece0a140b4bf38f593162e"
+      "size": 31766,
+      "sha256": "9a09767a3b338cff872fd4e67d8b70f7ed6557778cd9a983f1fccdc2878d9d51"
     },
     {
       "path": "scripts/module-job-helper.py",
-      "size": 15561,
-      "sha256": "d1edf759778fe966c712f80c496086c39cbc5907f58633faf666cdf5805e1c61"
+      "size": 16291,
+      "sha256": "02892760812fc4cf150d1f3550ffb1a042d3912a3323a38241e39080d16cb70c"
     },
     {
       "path": "scripts/module-v2-job-helper.py",
-      "size": 36687,
-      "sha256": "a501a64a6577a0b9192416ccee1f9213d6a2b1e33b17658ca94cbac01abbd85d"
+      "size": 37410,
+      "sha256": "bef9685fe90d581f7d5268c855a02eda8a61fa63f49bbcb2df05cf2defd1c50a"
     },
     {
       "path": "scripts/plugin-info.sh",
@@ -1203,8 +1208,8 @@
     },
     {
       "path": "scripts/privileged-trust.py",
-      "size": 20949,
-      "sha256": "8d7e43107a17512d08318aa11d786587c473a63884095f6e6bcc2043a6c48b37"
+      "size": 21553,
+      "sha256": "71273f1db09d1c697a69cf58aa18b531794bcc86403fd058a1280ebf4156ff3f"
     },
     {
       "path": "scripts/recovery/lib.sh",
@@ -1278,8 +1283,8 @@
     },
     {
       "path": "scripts/system-update-helper.py",
-      "size": 43600,
-      "sha256": "af6d70d396eb63c3ccc015435ec1679095c545729d56970af0532c370991e4ec"
+      "size": 44328,
+      "sha256": "590c7766b37e99426c3322dab6510e2dc46c99c80a949bb693263af181cad842"
     },
     {
       "path": "scripts/tactical-backup-sudo.py",
@@ -1299,7 +1304,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "88f6a3a80561e717963c3b7a8f967b1472feba6eaba162d78d00cc36d614b1bf"
+      "sha256": "a13e45e3527e27573291e63256d7407ca05eb19fd8c4d3afd54ece474b039032"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -1495,6 +1500,11 @@
       "path": "tests/p0-privilege-boundary.py",
       "size": 9833,
       "sha256": "bf132372d19d066b8d85c5f0c8dc71d31b563d188657efed598d6f86575f792c"
+    },
+    {
+      "path": "tests/privileged-helper-environment.py",
+      "size": 3466,
+      "sha256": "e788265e34819f4b5f3ff0966a4221b3c72d908f27ade98ab3b559b12ded0b31"
     },
     {
       "path": "tests/recovery-foundation.sh",

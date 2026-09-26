@@ -27,7 +27,12 @@ LEVEL_RANK = {name: idx for idx, name in enumerate(LEVELS)}
 
 def _config() -> dict[str, str]:
     values: dict[str, str] = {}
-    if CONFIG.is_file():
+    if CONFIG.is_symlink():
+        raise RuntimeError('Tec-Tac config must be a regular non-symlink file')
+    if CONFIG.exists():
+        if not CONFIG.is_file():
+            raise RuntimeError('Tec-Tac config must be a regular non-symlink file')
+        _require_root_owned_nonwritable(CONFIG, 'Tec-Tac config')
         for raw in CONFIG.read_text(encoding='utf-8').splitlines():
             line = raw.strip()
             if not line or line.startswith('#') or '=' not in line:
@@ -84,7 +89,12 @@ def read_policy(cfg: dict[str, str] | None = None) -> dict:
     level = _default_policy(environment)
     updated_at = None
     updated_by = None
-    if POLICY_FILE.is_file():
+    if POLICY_FILE.is_symlink():
+        raise RuntimeError('root trust policy must be a regular non-symlink file')
+    if POLICY_FILE.exists():
+        if not POLICY_FILE.is_file():
+            raise RuntimeError('root trust policy must be a regular non-symlink file')
+        _require_root_owned_nonwritable(POLICY_FILE, 'Root trust policy')
         payload = json.loads(POLICY_FILE.read_text(encoding='utf-8'))
         if not isinstance(payload, dict) or int(payload.get('schema', 0) or 0) != 1:
             raise RuntimeError('root trust policy schema is invalid')

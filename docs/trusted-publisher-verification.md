@@ -140,6 +140,8 @@ This is intentionally a narrow signing/trust contract. Broader module capability
 
 Core reads the security environment from the root-owned `/opt/tec-tac/etc/tec-tac.conf`, defaulting to `production`. Privileged trust verification deliberately ignores process-environment overrides for the environment and trust-store path.
 
+All privileged lifecycle helpers follow the same rule: caller-supplied `TEC_TAC_*` environment variables are stripped before privileged child processes are launched. Only narrowly scoped values constructed from root-owned Core state (for example the deployed UI root for a UI sync) are added back explicitly. System Update signed-release minimum-version policy is likewise read only from the root-owned configuration/defaults, never from process environment.
+
 The installer writes the selected value into the managed Tec-Tac configuration. Development servers should explicitly set:
 
 ```text

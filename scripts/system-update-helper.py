@@ -40,7 +40,7 @@ HISTORY_ROOT = STATE_ROOT / "history"
 LOCK_PATH = STATE_ROOT / "update.lock"
 LIFECYCLE_LOCK_PATH = Path("/var/lib/tec-tac/lifecycle.lock")
 _LIFECYCLE_LOCK_HANDLE = None
-CONFIG = Path(os.environ.get("TEC_TAC_CONFIG_FILE", "/opt/tec-tac/etc/tec-tac.conf"))
+CONFIG = Path("/opt/tec-tac/etc/tec-tac.conf")
 SELF = Path("/usr/local/sbin/tec-tac-system-update")
 PRIVILEGED_TRUST = Path("/usr/local/lib/tec-tac-security/privileged-trust.py")
 RUNNING_REQUEST_ROOT = RUNNING_ROOT / "requests"
@@ -56,7 +56,14 @@ def stamp():
 
 def load_config():
     values = {}
-    if CONFIG.is_file():
+    if CONFIG.is_symlink():
+        raise RuntimeError("Tec-Tac config must be a regular non-symlink file")
+    if CONFIG.exists():
+        if not CONFIG.is_file():
+            raise RuntimeError("Tec-Tac config must be a regular non-symlink file")
+        info = CONFIG.stat()
+        if info.st_uid != 0 or info.st_mode & 0o022:
+            raise RuntimeError("Tec-Tac config must be root-owned and not group/world writable")
         for line in CONFIG.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:
@@ -64,6 +71,14 @@ def load_config():
             key, value = line.split("=", 1)
             values[key.strip()] = value.strip()
     return values
+
+
+def privileged_env(extra=None):
+    """Return a child environment with caller-controlled Tec-Tac overrides removed."""
+    env = {key: value for key, value in os.environ.items() if not key.startswith("TEC_TAC_")}
+    if extra:
+        env.update({str(key): str(value) for key, value in extra.items()})
+    return env
 
 
 def atomic_json(path, payload):
@@ -190,7 +205,7 @@ def dispatch(job_id):
         "--property=Type=exec", "--property=Nice=5",
         str(SELF), "--run", job_id,
     ]
-    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=privileged_env())
     if result.returncode != 0:
         message = (result.stderr or "unable to create system update worker unit").strip()
         path, job = load_job(job_id)
@@ -286,7 +301,7 @@ def _version_key(value):
 def _signed_release_min_version(component):
     cfg = load_config()
     key = f"TEC_TAC_{component.upper()}_SIGNED_RELEASE_MIN_VERSION"
-    value = str(os.environ.get(key) or cfg.get(key) or DEFAULT_SIGNED_RELEASE_MIN_VERSION.get(component) or "").strip()
+    value = str(cfg.get(key) or DEFAULT_SIGNED_RELEASE_MIN_VERSION.get(component) or "").strip()
     return value or None
 
 
@@ -414,7 +429,7 @@ def _privileged_trust_command(config, *args, input_text=None):
     info = PRIVILEGED_TRUST.stat()
     if info.st_uid != 0 or info.st_mode & 0o022:
         raise RuntimeError("privileged trust verifier is not root-owned or is writable")
-    result = subprocess.run([sys.executable, str(PRIVILEGED_TRUST), *map(str, args)], input=input_text, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
+    result = subprocess.run([sys.executable, str(PRIVILEGED_TRUST), *map(str, args)], input=input_text, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120, env=privileged_env())
     if result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout or "root trust verification failed").strip())
     try:
@@ -737,7 +752,7 @@ def run_install(component, target, log):
         command = ["bash", str(target / "install.sh")]
     else:
         command = ["bash", str(target / "scripts" / "install.sh")]
-    return _run_bounded(command, log=log, timeout=INSTALL_TIMEOUT_SECONDS, label=f"{component} installer")
+    return _run_bounded(command, log=log, timeout=INSTALL_TIMEOUT_SECONDS, env=privileged_env(), label=f"{component} installer")
 
 
 def _read_package_version(target):
@@ -763,7 +778,7 @@ def verify(component, target, expected, log):
         py = Path("/rmm/api/env/bin/python")
         manage = Path("/rmm/api/tacticalrmm/manage.py")
         runtime_framework = Path(load_config().get("TEC_TAC_FRAMEWORK_ROOT", "/opt/tec-tac/framework"))
-        env = {**os.environ, "PYTHONPATH": str(runtime_framework)}
+        env = privileged_env({"PYTHONPATH": str(runtime_framework)})
         checks = [
             ([str(py), str(manage), "check"], "Django system check"),
             ([str(py), str(manage), "migrate", "tec_tac", "--check"], "Tec-Tac migration check"),

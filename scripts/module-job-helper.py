@@ -22,7 +22,7 @@ JOBS_ROOT = STATE_ROOT / "jobs"
 STAGED_ROOT = STATE_ROOT / "staged"
 RUNNING_ROOT = STATE_ROOT / "running"
 LOGS_ROOT = STATE_ROOT / "logs"
-CONFIG = Path(os.environ.get("TEC_TAC_CONFIG_FILE", "/opt/tec-tac/etc/tec-tac.conf"))
+CONFIG = Path("/opt/tec-tac/etc/tec-tac.conf")
 LIFECYCLE_LOCK_PATH = Path("/var/lib/tec-tac/lifecycle.lock")
 PRIVILEGED_TRUST = Path("/usr/local/lib/tec-tac-security/privileged-trust.py")
 RUNNING_REQUEST_ROOT = RUNNING_ROOT / "requests"
@@ -50,7 +50,14 @@ def now():
 
 def load_config():
     values = {}
-    if CONFIG.is_file():
+    if CONFIG.is_symlink():
+        raise RuntimeError("Tec-Tac config must be a regular non-symlink file")
+    if CONFIG.exists():
+        if not CONFIG.is_file():
+            raise RuntimeError("Tec-Tac config must be a regular non-symlink file")
+        info = CONFIG.stat()
+        if info.st_uid != 0 or info.st_mode & 0o022:
+            raise RuntimeError("Tec-Tac config must be root-owned and not group/world writable")
         for line in CONFIG.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:
@@ -58,6 +65,14 @@ def load_config():
             key, value = line.split("=", 1)
             values[key.strip()] = value.strip()
     return values
+
+
+def privileged_env(extra=None):
+    """Return a child environment with caller-controlled Tec-Tac overrides removed."""
+    env = {key: value for key, value in os.environ.items() if not key.startswith("TEC_TAC_")}
+    if extra:
+        env.update({str(key): str(value) for key, value in extra.items()})
+    return env
 
 
 def atomic_json(path, payload):
@@ -210,6 +225,7 @@ def dispatch(job_id):
         stderr=subprocess.DEVNULL,
         start_new_session=True,
         close_fds=True,
+        env=privileged_env(),
     )
 
 
@@ -226,7 +242,7 @@ def _privileged_verify_package(config, job):
         command += ["--signature", str(job["signature_path"])]
     if job.get("release_metadata_path"):
         command += ["--metadata", str(job["release_metadata_path"])]
-    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120, env=privileged_env())
     if result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout or "root module trust verification failed").strip())
     try:
@@ -288,7 +304,7 @@ def run_job(job_id):
             trust = job.get("publisher_trust") if isinstance(job.get("publisher_trust"), dict) else {}
             log.write(f"[TEC-TAC-MODULE] publisher_trust state={trust.get('state','unknown')} publisher={trust.get('publisher_id','')} key={trust.get('key_id','')} sha256={job.get('package_sha256','')}\n")
             log.flush()
-            result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, text=True)
+            result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, text=True, env=privileged_env())
             rc = result.returncode
             if rc == 0 and job["action"] == "remove":
                 # Removal is not complete until its persistent runtime state is
@@ -300,8 +316,7 @@ def run_job(job_id):
                 atomic_json(path, job)
                 log.write("[TEC-TAC-MODULE] synchronizing deployed UI modules\n")
                 log.flush()
-                sync_env = os.environ.copy()
-                sync_env["TEC_TAC_UI_ROOT"] = ui_root
+                sync_env = privileged_env({"TEC_TAC_UI_ROOT": ui_root})
                 sync = subprocess.run(["bash", str(ui_sync)], stdout=log, stderr=subprocess.STDOUT, text=True, env=sync_env)
                 if sync.returncode != 0:
                     rc = sync.returncode
