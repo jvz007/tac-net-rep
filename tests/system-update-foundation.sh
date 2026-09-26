@@ -222,3 +222,7 @@ python3 "${ROOT}/tests/system-update-root-extraction-boundary.py"
 grep -q 'with private_update_work_dir(job_id) as work:' "${ROOT}/scripts/system-update-helper.py" || fail "root-private update work context missing"
 grep -q 'normalize_release_tree_security(target)' "${ROOT}/scripts/system-update-helper.py" || fail "execution tree ownership/mode normalization missing"
 echo "[TEST] PASS system update R2 extraction boundary"
+
+# Privileged claim must never follow Tactical-controlled staged symlinks or
+# retain the original writable inode across root verification/install.
+python3 "${ROOT}/tests/system-update-claim-security.py"

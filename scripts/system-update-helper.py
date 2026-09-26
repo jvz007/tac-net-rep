@@ -143,6 +143,131 @@ def load_running_request(job_id):
     return path, request
 
 
+def _open_staged_root_fd():
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(STAGED_ROOT, flags)
+    except OSError as exc:
+        raise SystemExit("managed system-update staging root is unsafe or unreadable") from exc
+    info = os.fstat(fd)
+    if not stat.S_ISDIR(info.st_mode):
+        os.close(fd)
+        raise SystemExit("managed system-update staging root is not a directory")
+    return fd
+
+
+def _read_staged_metadata(root_fd: int, upload_id: str):
+    name = f"{upload_id}.json"
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(name, flags, dir_fd=root_fd)
+    except OSError as exc:
+        raise SystemExit("staged update metadata is unsafe or missing") from exc
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise SystemExit("staged update metadata is not a regular file")
+        if info.st_size > 1024 * 1024:
+            raise SystemExit("staged update metadata is unexpectedly large")
+        chunks = []
+        remaining = 1024 * 1024 + 1
+        while remaining > 0:
+            block = os.read(fd, min(65536, remaining))
+            if not block:
+                break
+            chunks.append(block)
+            remaining -= len(block)
+        if remaining <= 0:
+            raise SystemExit("staged update metadata is unexpectedly large")
+        try:
+            payload = json.loads(b"".join(chunks).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SystemExit("staged update metadata is invalid") from exc
+        if not isinstance(payload, dict):
+            raise SystemExit("staged update metadata is invalid")
+        if payload.get("upload_id") not in (None, upload_id):
+            raise SystemExit("staged update metadata upload id mismatch")
+        return payload, info
+    finally:
+        os.close(fd)
+
+
+def _select_staged_package(root_fd: int, upload_id: str):
+    candidates = [f"{upload_id}.zip", f"{upload_id}.tgz", f"{upload_id}.tar.gz"]
+    found = []
+    for name in candidates:
+        try:
+            info = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise SystemExit("unable to inspect staged system-update package") from exc
+        if not stat.S_ISREG(info.st_mode):
+            raise SystemExit("staged system-update package is not a regular file")
+        found.append((name, info))
+    if len(found) != 1:
+        raise SystemExit("staged system-update package is missing or ambiguous")
+    return found[0]
+
+
+def _copy_staged_package(root_fd: int, source_name: str, expected_info, destination: Path) -> Path:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        src_fd = os.open(source_name, flags, dir_fd=root_fd)
+    except OSError as exc:
+        raise SystemExit("staged system-update package is unsafe or unreadable") from exc
+    try:
+        src_info = os.fstat(src_fd)
+        if not stat.S_ISREG(src_info.st_mode):
+            raise SystemExit("staged system-update package is not a regular file")
+        if (src_info.st_dev, src_info.st_ino) != (expected_info.st_dev, expected_info.st_ino):
+            raise SystemExit("staged system-update package changed during claim")
+        out_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            dst_fd = os.open(destination, out_flags, 0o600)
+        except OSError as exc:
+            raise SystemExit("unable to create root-private system-update package") from exc
+        try:
+            os.fchmod(dst_fd, 0o600)
+            os.fchown(dst_fd, 0, 0)
+            while True:
+                block = os.read(src_fd, 1024 * 1024)
+                if not block:
+                    break
+                view = memoryview(block)
+                while view:
+                    written = os.write(dst_fd, view)
+                    if written <= 0:
+                        raise OSError("short write while claiming system-update package")
+                    view = view[written:]
+            os.fsync(dst_fd)
+        finally:
+            os.close(dst_fd)
+
+        # Unlink only the exact directory entry opened above. If the Tactical
+        # account raced the name after open, leave its replacement in staging
+        # for unprivileged cleanup rather than deleting an unverified inode.
+        try:
+            current = os.stat(source_name, dir_fd=root_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            current = None
+        if current is not None and current.st_dev == src_info.st_dev and current.st_ino == src_info.st_ino:
+            os.unlink(source_name, dir_fd=root_fd)
+    finally:
+        os.close(src_fd)
+    return destination
+
+
+def _unlink_staged_metadata_if_same(root_fd: int, upload_id: str, expected_info) -> None:
+    name = f"{upload_id}.json"
+    try:
+        current = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if current.st_dev == expected_info.st_dev and current.st_ino == expected_info.st_ino:
+        os.unlink(name, dir_fd=root_fd)
+
+
 def claim_job(job_id):
     status_path, request = load_job(job_id)
     if request.get("status") != "queued":
@@ -157,39 +282,36 @@ def claim_job(job_id):
     upload_id = str(request.get("upload_id") or "")
     if not JOB_RE.fullmatch(upload_id):
         raise SystemExit("invalid staged upload id")
-    meta_path = STAGED_ROOT / f"{upload_id}.json"
-    if not meta_path.is_file():
-        raise SystemExit("staged update metadata missing")
-    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    package = Path(str(meta.get("package_path") or "")).resolve()
-    try:
-        package.relative_to(STAGED_ROOT.resolve())
-    except ValueError:
-        raise SystemExit("invalid staged package path")
-    if not package.is_file():
-        raise SystemExit("staged package missing")
-    target = RUNNING_ROOT / f"{job_id}{''.join(package.suffixes)}"
-    os.replace(package, target)
-    os.chown(target, 0, 0)
-    os.chmod(target, 0o600)
 
-    preview = meta.get("preview") if isinstance(meta.get("preview"), dict) else {}
-    if str(preview.get("component") or request.get("component")) != str(request.get("component")):
-        raise SystemExit("staged component does not match request")
-    immutable = {
-        "id": job_id,
-        "action": "install",
-        "component": str(request.get("component")),
-        "upload_id": upload_id,
-        "allow_downgrade": bool(request.get("allow_downgrade", False)),
-        "package_path": str(target),
-        "package_filename": str(meta.get("filename") or target.name),
-    }
-    req_path = running_request_path(job_id)
-    atomic_json(req_path, immutable)
-    os.chown(req_path, 0, 0)
-    os.chmod(req_path, 0o600)
-    meta_path.unlink(missing_ok=True)
+    root_fd = _open_staged_root_fd()
+    try:
+        meta, meta_info = _read_staged_metadata(root_fd, upload_id)
+        source_name, source_info = _select_staged_package(root_fd, upload_id)
+        suffix = ".tar.gz" if source_name.endswith(".tar.gz") else Path(source_name).suffix
+        target = RUNNING_ROOT / f"{job_id}{suffix}"
+        _copy_staged_package(root_fd, source_name, source_info, target)
+
+        preview = meta.get("preview") if isinstance(meta.get("preview"), dict) else {}
+        if str(preview.get("component") or request.get("component")) != str(request.get("component")):
+            target.unlink(missing_ok=True)
+            raise SystemExit("staged component does not match request")
+
+        immutable = {
+            "id": job_id,
+            "action": "install",
+            "component": str(request.get("component")),
+            "upload_id": upload_id,
+            "allow_downgrade": bool(request.get("allow_downgrade", False)),
+            "package_path": str(target),
+            "package_filename": str(meta.get("filename") or source_name),
+        }
+        req_path = running_request_path(job_id)
+        atomic_json(req_path, immutable)
+        os.chown(req_path, 0, 0)
+        os.chmod(req_path, 0o600)
+        _unlink_staged_metadata_if_same(root_fd, upload_id, meta_info)
+    finally:
+        os.close(root_fd)
 
     request["status"] = "dispatched"
     request["stage"] = "dispatched"
