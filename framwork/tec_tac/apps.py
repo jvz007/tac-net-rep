@@ -16,10 +16,16 @@ class TecTacFrameworkConfig(AppConfig):
         from .server_maintenance import register_core_server_maintenance_capability
         from .resources import register_core_resources_capability
         from .reporting import install_tactical_reporting_bridge
+        from .tactical_account_guard import install_tactical_account_guard
         register_core_session_security_capability()
         register_core_server_backup_capability()
         register_core_server_maintenance_capability()
         register_core_resources_capability()
+
+        # Tactical's native role/account editors can otherwise grant effective
+        # superuser authority to mid-level managers. Install the Core-owned,
+        # authenticated mutation guard without modifying upstream Tactical code.
+        install_tactical_account_guard()
 
         # Core owns the compatibility boundary with Tactical Report Manager.
         # Install this before module AppConfig.ready() registrations execute so

@@ -6,6 +6,7 @@ fail(){ echo "[TEST] FAIL: $*" >&2; exit 1; }
 for f in \
   framwork/tec_tac/mfa_backup.py \
   framwork/tec_tac/mfa_backup_views.py \
+  framwork/tec_tac/tactical_account_guard.py \
   framwork/tec_tac/migrations/0011_access_security.py \
   framwork/tec_tac/migrations/0012_mfa_backup_totp_binding.py; do
   [[ -f "${ROOT}/${f}" ]] || fail "missing ${f}"
@@ -47,11 +48,16 @@ grep -A30 'class AdminLoginSessionRevokeView' "${ROOT}/framwork/tec_tac/session_
 grep -A3 'class TotpQrView' "${ROOT}/framwork/tec_tac/views.py" | grep -q 'permission_classes = \[SessionAuthenticated\]' || fail "TOTP QR must require Core SessionAuthenticated"
 grep -q 'def _tec_tac_totp_issuer' "${ROOT}/framwork/tec_tac/views.py" || fail "colon-free TOTP issuer helper missing"
 
+grep -q 'install_tactical_account_guard' "${ROOT}/framwork/tec_tac/apps.py" || fail "Tactical role/account privilege guard is not installed"
+grep -q 'select_for_update' "${ROOT}/framwork/tec_tac/tactical_account_guard.py" || fail "Tactical role/account privilege guard is not race-safe"
+python3 "${ROOT}/tests/tactical-superuser-guard.py"
+
 python3 -m py_compile \
   "${ROOT}/framwork/tec_tac/mfa_backup.py" \
   "${ROOT}/framwork/tec_tac/mfa_backup_views.py" \
   "${ROOT}/framwork/tec_tac/session_security.py" \
   "${ROOT}/framwork/tec_tac/session_security_views.py" \
+  "${ROOT}/framwork/tec_tac/tactical_account_guard.py" \
   "${ROOT}/framwork/tec_tac/migrations/0011_access_security.py" \
   "${ROOT}/framwork/tec_tac/migrations/0012_mfa_backup_totp_binding.py" \
   "${ROOT}/framwork/tec_tac/urls.py"

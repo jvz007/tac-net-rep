@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.70",
+  "version": "1.15.71",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -27,19 +27,19 @@
       "sha256": "7acd5f22138138348d5123fc22c210724ca10ce86f05da7b77c68fc89952319a"
     },
     {
-      "path": "RELEASE_NOTES_1.15.69.md",
-      "size": 1871,
-      "sha256": "50f502311aa9eb40a4975d2e1778028c5a200aa58c6fbc3885cb237cee9e8c8c"
+      "path": "RELEASE_NOTES_1.15.70-1.md",
+      "size": 2183,
+      "sha256": "85760d187765167ec477d295c804a3ec155d929e950f3e89150cfca4f4e29ffd"
     },
     {
-      "path": "RELEASE_NOTES_1.15.70.md",
-      "size": 2209,
-      "sha256": "6914339967267d5fb9a271085d9297ac5fd24e4dfa5a35d6d1e477a94699dbcc"
+      "path": "RELEASE_NOTES_1.15.71.md",
+      "size": 1947,
+      "sha256": "3a70b335ee8d75535452b3c8776cfea68dc080975f0557924f367c8a410c231c"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "5bd5d440b0b92f0373e89217479c1f7e409c8d4abb6b3744a6037970c2797d2e"
+      "sha256": "269d2f84958b2c79c8f26e9991188bc30991d0250978209a5d03fc0bb7db739a"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -422,6 +422,11 @@
       "sha256": "27b5c2c3b96fc011bd6d3c87a191b23f76a2ec74858e849b66041d9a186c7be0"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.15.69.md",
+      "size": 1871,
+      "sha256": "50f502311aa9eb40a4975d2e1778028c5a200aa58c6fbc3885cb237cee9e8c8c"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.2.0.md",
       "size": 1977,
       "sha256": "7d78abb704c7a3e459f7437cb0bdcc7ea738f76e97b925f2b4e16466a812cd54"
@@ -778,8 +783,8 @@
     },
     {
       "path": "framwork/tec_tac/apps.py",
-      "size": 1872,
-      "sha256": "9811f2c7c018a5020ae77fb668eaf54638105ce035be28ffbcf1a510886d0ea3"
+      "size": 2226,
+      "sha256": "df686d146231097ab75ed228b753dd04bdf45bf7fcf94c8d9bdf51be66908e5d"
     },
     {
       "path": "framwork/tec_tac/audit.py",
@@ -1117,6 +1122,11 @@
       "sha256": "883e7d35a02442726733fdfde03081c6fc072ed71cab4708f46b2dcd8b247999"
     },
     {
+      "path": "framwork/tec_tac/tactical_account_guard.py",
+      "size": 10143,
+      "sha256": "ae645d997ec743dfc8cf5bd203866d1e41015f2c56ef6eb978da2535237aec68"
+    },
+    {
       "path": "framwork/tec_tac/tasks.py",
       "size": 5214,
       "sha256": "87b003ddb4f3eb0fba113efa46f4f654c845d4436cdf12b3c219dd51ac46fcb1"
@@ -1153,8 +1163,8 @@
     },
     {
       "path": "install.sh",
-      "size": 56620,
-      "sha256": "1fbe83f72ea9293606475ffd0c47111dbe833f7e85860a14b145ecb259968c79"
+      "size": 56684,
+      "sha256": "2262e81ad6c03ab8ce97bc2f490f01f91096108f743e07b1a3ae1c11f4743f26"
     },
     {
       "path": "reportsets/.gitkeep",
@@ -1324,7 +1334,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 82,
-      "sha256": "e9a886eeb2f2c3e9e8780236faf88ce6b1661b62300e401f8245c445f3b0bba2"
+      "sha256": "2b60d4567ec37fe2d18f2d240f8a2746fcfdb59ba910cb8364689c0d0390c1ed"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -1343,8 +1353,8 @@
     },
     {
       "path": "tests/access-security-foundation.sh",
-      "size": 5410,
-      "sha256": "9f6e2c436ebbbf68a488fc50d8b6b8addd73a490335c978eeb23ef46dc3422db"
+      "size": 5854,
+      "sha256": "b74b546b725fdf66439a66ec794beeecd2237fec268688ac8c12ae857a08546f"
     },
     {
       "path": "tests/audit-contract-foundation.py",
@@ -1675,6 +1685,11 @@
       "path": "tests/system-update-signed-tree.py",
       "size": 5853,
       "sha256": "8b4a67280e34df068dddc77a3ae09844695f5ef39ecdbc6ef64e3d8ee98b06f0"
+    },
+    {
+      "path": "tests/tactical-superuser-guard.py",
+      "size": 8598,
+      "sha256": "a0ee8ce12eec21315d8022d8c7903906ede9cf9db8e2bf4d1fafc086b2d53c43"
     },
     {
       "path": "tests/tactical-update-survival.sh",

@@ -76,6 +76,7 @@ REQUIRED_FILES=(
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/bootstrap.py"
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/registry.py"
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/rbac.py"
+    "${SOURCE_FRAMEWORK_DIR}/tec_tac/tactical_account_guard.py"
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/apps.py"
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/urls.py"
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/views.py"
