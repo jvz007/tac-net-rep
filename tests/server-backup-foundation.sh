@@ -412,7 +412,7 @@ with tempfile.TemporaryDirectory() as td:
     payload=td/"probe"; payload.write_bytes(b"abc"*100)
     result=h.validation_result({"id":"f","type":"ftp"})
     try:
-      h.validate_ftp_roundtrip({}, {"id":"f","type":"ftp","host":"example","username":"u","port":21,"remote_path":"backups","tls_mode":"none"}, payload, h.sha256_file(payload), result, ".tectac-validation-test.bin")
+      h.validate_ftp_roundtrip({}, {"id":"f","type":"ftp","host":"example","username":"u","port":21,"remote_path":"backups","tls_mode":"none","allow_insecure_transport":True}, payload, h.sha256_file(payload), result, ".tectac-validation-test.bin")
     finally: h.ftp_connect=old
     assert result["checks"]["write"]=="passed" and result["checks"]["delete"]=="passed" and fake.files=={}
 

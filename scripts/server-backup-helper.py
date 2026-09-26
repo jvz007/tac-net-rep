@@ -23,6 +23,7 @@ import shutil
 import signal
 import shlex
 import socket
+import ssl
 import queue
 import threading
 import stat
@@ -63,7 +64,7 @@ SAFE_DEST_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 SAFE_HOST_RE = re.compile(r"^[A-Za-z0-9._:-]{1,255}$")
 SAFE_USER_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 SAFE_SCP_PATH_RE = re.compile(r"^/[A-Za-z0-9._/-]*$|^[A-Za-z0-9._/-]+$")
-CONFIG = Path(os.environ.get("TEC_TAC_CONFIG_FILE", "/opt/tec-tac/etc/tec-tac.conf"))
+CONFIG = Path("/opt/tec-tac/etc/tec-tac.conf")
 DEFAULT_STATE_ROOT = Path("/var/lib/tec-tac/server-backup")
 SELF = Path("/usr/local/sbin/tec-tac-server-backup")
 MAX_LOG_BYTES = 2 * 1024 * 1024
@@ -130,15 +131,43 @@ def stamp():
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
-def load_config():
+def _root_owned_layout(config_path=CONFIG):
+    """Load privileged backup layout only from the fixed root-owned config.
+
+    Caller environment must never choose the helper config or privileged roots.
+    The config is optional for bootstrap/tests; when present it must be a regular
+    root-owned file that is not group/world writable or a symlink.
+    """
     values = {}
-    if CONFIG.is_file():
-        for raw in CONFIG.read_text(encoding="utf-8").splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            values[key.strip()] = value.strip()
+    try:
+        st = config_path.lstat()
+    except FileNotFoundError:
+        return values
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+        raise RuntimeError(f"Tec-Tac config is not a regular file: {config_path}")
+    if st.st_uid != 0 or (st.st_mode & 0o022):
+        raise RuntimeError(f"Tec-Tac config must be root-owned and not group/world writable: {config_path}")
+    for raw in config_path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip()
+    return values
+
+
+def _absolute_config_path(values, key, default):
+    path = Path(str(values.get(key) or default))
+    if not path.is_absolute():
+        raise RuntimeError(f"{key} must be an absolute path in the root-owned Tec-Tac config")
+    return str(path)
+
+
+_ROOT_LAYOUT = _root_owned_layout()
+
+
+def load_config():
+    values = dict(_ROOT_LAYOUT)
     values.setdefault("TEC_TAC_ROOT", "/opt/tec-tac")
     values.setdefault("TEC_TAC_FRAMEWORK_SOURCE", "/opt/tec-tac-src/framework")
     values.setdefault("TEC_TAC_UI_SOURCE", "/opt/tec-tac-src/ui")
@@ -150,6 +179,12 @@ def load_config():
     values.setdefault("TACTICAL_PYTHON", "/rmm/api/env/bin/python")
     values.setdefault("TACTICAL_USER", "tactical")
     values.setdefault("TEC_TAC_SERVER_BACKUP_LOCAL_ROOTS", "/rmmbackups,/mnt,/media,/srv,/backup,/backups")
+    for key in (
+        "TEC_TAC_ROOT", "TEC_TAC_FRAMEWORK_SOURCE", "TEC_TAC_UI_SOURCE",
+        "TEC_TAC_STATE_ROOT", "TEC_TAC_SERVER_BACKUP_ROOT", "TEC_TAC_UI_DEPLOY_ROOT",
+        "TACTICAL_ROOT", "TACTICAL_BACKEND_ROOT", "TACTICAL_PYTHON",
+    ):
+        values[key] = _absolute_config_path(values, key, values[key])
     return values
 
 
@@ -519,10 +554,14 @@ def validate_destination(raw, config=None):
             if not 1 <= item["port"] <= 65535:
                 raise RuntimeError("destination port is out of range")
         if item["type"] == "ftp":
-            tls_mode = str(item.get("tls_mode") or "none").strip().lower()
+            allow_insecure = item.get("allow_insecure_transport") is True
+            tls_mode = str(item.get("tls_mode") or "explicit").strip().lower()
             if tls_mode not in {"none", "tls", "explicit", "starttls"}:
                 raise RuntimeError("ftp tls_mode must be none or explicit/starttls/tls")
+            if tls_mode == "none" and not allow_insecure:
+                raise RuntimeError("plaintext FTP is disabled; set allow_insecure_transport=true explicitly to permit it")
             item["tls_mode"] = tls_mode
+            item["allow_insecure_transport"] = allow_insecure
         if item["type"] in {"sftp", "scp"}:
             host_key_policy = str(item.get("host_key_policy") or "strict").strip().lower()
             if host_key_policy not in {"strict", "insecure", "none", "off"}:
@@ -535,6 +574,10 @@ def validate_destination(raw, config=None):
             item["url"] = safe_config_value(item.get("url"), "webdav url")
             if not item["url"] or not re.match(r"^https?://", item["url"], re.I):
                 raise RuntimeError("webdav destination requires an http(s) url")
+            allow_insecure = item.get("allow_insecure_transport") is True
+            if item["url"].lower().startswith("http://") and not allow_insecure:
+                raise RuntimeError("plaintext WebDAV is disabled; use https:// or set allow_insecure_transport=true explicitly")
+            item["allow_insecure_transport"] = allow_insecure
         if item["type"] == "s3":
             item["provider"] = safe_config_value(item.get("provider") or "Other", "s3 provider")
             item["bucket"] = safe_config_value(item.get("bucket"), "s3 bucket")
@@ -678,13 +721,20 @@ def join_remote(base, name):
     return base.rstrip("/") + "/" + name
 
 
+def ftp_tls_context():
+    """Return a certificate- and hostname-verifying context for FTPS."""
+    return ssl.create_default_context()
+
+
 def ftp_connect(config, destination, *, timeout=60):
     destination = validate_destination(destination, config)
     secret = load_secret(config, destination)
     password = str(secret.get("password") or "")
-    tls_mode = str(destination.get("tls_mode") or "none").lower()
-    cls = ftplib.FTP_TLS if tls_mode in {"explicit", "starttls", "tls"} else ftplib.FTP
-    ftp = cls(timeout=timeout)
+    tls_mode = str(destination.get("tls_mode") or "explicit").lower()
+    if tls_mode in {"explicit", "starttls", "tls"}:
+        ftp = ftplib.FTP_TLS(timeout=timeout, context=ftp_tls_context())
+    else:
+        ftp = ftplib.FTP(timeout=timeout)
     try:
         ftp.connect(destination["host"], destination["port"], timeout=timeout)
         ftp.login(destination["username"], password)

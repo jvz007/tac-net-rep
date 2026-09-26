@@ -30,6 +30,8 @@ Django/Celery writes a validated opaque job below `/var/lib/tec-tac/server-backu
 
 The root-owned helper validates job ownership/mode, operation allow-list and typed arguments, then runs the worker independently through systemd. No public operation accepts a browser/module supplied command or executable path. Backup/restore mutation uses a Core lock. Remote restores are fully downloaded and validated before destructive work begins.
 
+The privileged helper ignores process-environment attempts to redirect its config or state roots. Layout is read only from the fixed `/opt/tec-tac/etc/tec-tac.conf`; when present that file must be a regular root-owned non-writable file.
+
 ## Recovery bundle format
 
 Core 1.2 no longer modifies Tactical's native backup archive. The portable artifact is:
@@ -156,13 +158,15 @@ Local paths remain restricted by `TEC_TAC_SERVER_BACKUP_LOCAL_ROOTS`.
 FTP TLS modes currently accepted:
 
 ```text
-none
-explicit
+explicit   # default
 starttls
 tls        # compatibility alias for explicit FTPS
+none       # only with allow_insecure_transport: true
 ```
 
-Implicit FTPS is intentionally not advertised until Core provides a dedicated correct implicit-TLS connection path.
+FTPS uses normal CA and hostname verification. Plaintext FTP is never selected by omission; it requires the destination to explicitly set `allow_insecure_transport: true`. Implicit FTPS is intentionally not advertised until Core provides a dedicated correct implicit-TLS connection path.
+
+WebDAV should use `https://`. Plain `http://` WebDAV is rejected unless the destination explicitly sets `allow_insecure_transport: true`. This override is intended for deliberate legacy/lab use and should not be used where credentials cross an untrusted network.
 
 The native FTP adapter implements path preparation, upload, listing/stat, download, deletion and the validation round trip. Remote paths are normalized and are not interpolated into a local shell command.
 
