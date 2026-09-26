@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, time, timedelta
 
 from django.db import transaction
-from django.db.models import OuterRef, Q, Subquery
+from django.db.models import OuterRef, Subquery
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime, parse_time
@@ -16,6 +16,7 @@ from rest_framework.exceptions import NotFound, PermissionDenied
 
 from .models import TecTacSchedule, TecTacScheduleRun, TecTacSchedulerConfig
 from .rbac import has_extension_permission
+from . import resources_adapter
 from .scheduler import (
     SchedulerError,
     get_scheduled_action,
@@ -103,27 +104,14 @@ def _require_target_scope(user, targets, *, payload=False):
 
         try:
             if kind == "client":
-                # A user with access to one site can see that site's parent client
-                # in Tactical, but that does not authorize targeting every site in
-                # the client. Whole-client targets therefore require explicit
-                # role.can_view_clients membership.
-                role = _role_for_user(user)
-                allowed = set(role.can_view_clients.filter(pk__in=values).values_list("pk", flat=True)) if role else set()
+                allowed = resources_adapter.explicit_client_target_ids_in_scope(user=user, client_ids=values)
                 requested = set(values)
             elif kind == "site":
-                from clients.models import Site
-                allowed = set(Site.objects.filter_by_role(user).filter(pk__in=values).values_list("pk", flat=True))
+                allowed = resources_adapter.site_target_ids_in_scope(user=user, site_ids=values)
                 requested = set(values)
             else:
-                from agents.models import Agent
-                requested_text = {str(v) for v in values}
-                numeric = {int(v) for v in values if str(v).isdigit() and int(v) > 0}
-                qs = Agent.objects.filter_by_role(user).filter(Q(agent_id__in=requested_text) | Q(pk__in=numeric))
-                allowed = set()
-                for pk, agent_id in qs.values_list("pk", "agent_id"):
-                    allowed.add(str(pk))
-                    allowed.add(str(agent_id))
-                requested = requested_text
+                requested = {str(v) for v in values}
+                allowed = resources_adapter.agent_target_identifiers_in_scope(user=user, identifiers=values)
         except SchedulerError:
             raise
         except Exception as exc:

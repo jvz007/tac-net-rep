@@ -40,6 +40,66 @@ def _scope_queryset(queryset, *, user=None, trusted: bool = False):
     return filter_by_role(user)
 
 
+
+
+def _role_for_user(user):
+    try:
+        getter = getattr(user, "get_and_set_role_cache", None)
+        if callable(getter):
+            return getter()
+    except Exception:
+        pass
+    return getattr(user, "role", None)
+
+
+def explicit_client_target_ids_in_scope(*, user, client_ids) -> set[int]:
+    """Return explicitly granted client ids suitable for whole-client targeting.
+
+    Tactical read visibility is intentionally broader than whole-client action
+    scope because ``filter_by_role`` includes a parent client when only one of
+    its sites is granted. Scheduler whole-client targets must therefore use the
+    role's explicit ``can_view_clients`` relation instead.
+    """
+    requested = {int(value) for value in client_ids if int(value) > 0}
+    if not requested:
+        return set()
+    role = _role_for_user(user)
+    relation = getattr(role, "can_view_clients", None) if role is not None else None
+    if relation is None or not hasattr(relation, "filter"):
+        return set()
+    return set(relation.filter(pk__in=requested).values_list("pk", flat=True))
+
+
+def site_target_ids_in_scope(*, user, site_ids) -> set[int]:
+    """Return site ids visible through Tactical's native role scope."""
+    requested = {int(value) for value in site_ids if int(value) > 0}
+    if not requested:
+        return set()
+    _, Site, _ = _models()
+    return set(
+        _scope_queryset(Site.objects.all(), user=user, trusted=False)
+        .filter(pk__in=requested)
+        .values_list("pk", flat=True)
+    )
+
+
+def agent_target_identifiers_in_scope(*, user, identifiers) -> set[str]:
+    """Return both pk and agent_id identifiers for endpoints in user scope."""
+    requested_text = {str(value) for value in identifiers}
+    if not requested_text:
+        return set()
+    numeric = {int(value) for value in requested_text if value.isdigit() and int(value) > 0}
+    _, _, Agent = _models()
+    qs = _scope_queryset(Agent.objects.all(), user=user, trusted=False).filter(
+        Q(agent_id__in=requested_text) | Q(pk__in=numeric)
+    )
+    allowed: set[str] = set()
+    for pk, agent_id in qs.values_list("pk", "agent_id"):
+        allowed.add(str(pk))
+        allowed.add(str(agent_id))
+    return allowed
+
+
 def _active_filter(queryset, active: bool | None):
     # Tactical currently hard-deletes these resource rows and exposes no
     # soft-disabled field. Existing rows are therefore active in contract v1.

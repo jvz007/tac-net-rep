@@ -228,3 +228,7 @@ If Tactical later changes model/table/field layout, update the Core adapter whil
 `core.resources` follows semantic contract versioning.
 
 Contract `1.1.0` is additive over `1.0.0`: it preserves all read operations and resource shapes while adding client/site create/update operations, write authorization metadata and stable conflict errors. A Tactical internal schema change alone is not a reason to change this contract version.
+
+## Core consumers
+
+Core subsystems that need Tactical client, site, or agent scope should use this Resource Directory boundary or its internal adapter rather than importing Tactical resource ORM models directly. Scheduler target authorization follows this rule so Tactical model compatibility and scope behavior remain centralized.

@@ -21,9 +21,16 @@ source = (ROOT / "framwork/tec_tac/scheduler_views.py").read_text(encoding="utf-
 manager_pos = source.index("if _native_scheduler_manager(user):", source.index("def _require_target_scope"))
 refs_pos = source.index("refs = _scope_target_refs(targets)", source.index("def _require_target_scope"))
 assert manager_pos < refs_pos
-assert "role.can_view_clients.filter(pk__in=values)" in source
-assert "Site.objects.filter_by_role(user)" in source
-assert "Agent.objects.filter_by_role(user)" in source
+assert "resources_adapter.explicit_client_target_ids_in_scope" in source
+assert "resources_adapter.site_target_ids_in_scope" in source
+assert "resources_adapter.agent_target_identifiers_in_scope" in source
+assert "from clients.models" not in source
+assert "from agents.models" not in source
+
+adapter_source = (ROOT / "framwork/tec_tac/resources_adapter.py").read_text(encoding="utf-8")
+assert "def explicit_client_target_ids_in_scope" in adapter_source
+assert "def site_target_ids_in_scope" in adapter_source
+assert "def agent_target_identifiers_in_scope" in adapter_source
 
 # Integration guards: create/edit/detail/delete/run-now/list/history retain scope enforcement.
 assert source.count("_require_target_scope(request.user") >= 5
