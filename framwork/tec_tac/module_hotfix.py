@@ -489,6 +489,8 @@ def applied_hotfix(module_id: str, hotfix_id: str) -> dict | None:
 
 
 def list_applied_hotfixes(module_id: str | None = None) -> list[dict]:
+    if module_id is not None and not MODULE_RE.fullmatch(module_id or ""):
+        raise ModuleHotfixError("Invalid module id.")
     roots = [HOTFIX_APPLIED_ROOT / module_id] if module_id else list(HOTFIX_APPLIED_ROOT.glob("*")) if HOTFIX_APPLIED_ROOT.is_dir() else []
     rows = []
     for root in roots:

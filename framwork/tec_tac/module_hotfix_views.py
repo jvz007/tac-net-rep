@@ -74,7 +74,10 @@ class ModuleHotfixListView(APIView):
 
     def get(self, request, plugin_id):
         _require_module_manager(request.user)
-        rows = list_applied_hotfixes(plugin_id)
+        try:
+            rows = list_applied_hotfixes(plugin_id)
+        except ModuleHotfixError as exc:
+            return Response({"detail": str(exc)}, status=400)
         public = []
         for row in rows:
             public.append({
