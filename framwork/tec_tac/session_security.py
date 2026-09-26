@@ -251,6 +251,30 @@ def token_fingerprint(request) -> str:
     return hmac.new(secret, TOKEN_NAMESPACE + identity, hashlib.sha256).hexdigest()
 
 
+def _legacy_knox_fingerprint(request) -> str:
+    """Return the pre-S6 Knox fingerprint for an already validated credential.
+
+    Older Core releases fingerprinted the raw bearer token. The current S6
+    boundary fingerprints ``knox:<digest>`` instead. We only reproduce the old
+    value after ``_credential_identity`` has independently proved that the
+    Authorization bearer hashes to ``request.auth.digest``. This keeps the
+    compatibility bridge from re-introducing the old arbitrary-header bug.
+    """
+    digest = request_knox_digest(request)
+    if not digest:
+        return ""
+    identity = _credential_identity(request)
+    if identity != f"knox:{digest}":
+        return ""
+    authorization = str(request.META.get("HTTP_AUTHORIZATION") or "").strip()
+    parts = authorization.split(None, 1)
+    if len(parts) != 2 or not parts[1].strip():
+        return ""
+    raw = parts[1].strip().encode("utf-8")
+    secret = str(settings.SECRET_KEY).encode("utf-8")
+    return hmac.new(secret, TOKEN_NAMESPACE + raw, hashlib.sha256).hexdigest()
+
+
 def request_knox_digest(request) -> str:
     auth = getattr(request, "auth", None)
     digest = getattr(auth, "digest", None)
@@ -392,6 +416,52 @@ def _revoke_locked(session: TecTacSessionTrust, *, reason: str, requested_by: st
     return session
 
 
+def _existing_session_for_credential(request, *, current_fingerprint: str):
+    """Resolve trust state across current and pre-S6 fingerprint formats.
+
+    Knox digest is the stable non-secret credential identifier. Any revoked row
+    for the same digest dominates *even a current-fingerprint active row*, so a
+    credential cannot come back merely because the fingerprint representation
+    changed. Rows created before the digest field was populated are recovered
+    through the old raw-bearer HMAC, but only after S6 has validated that bearer
+    against the authenticated Knox digest.
+    """
+    digest = request_knox_digest(request)
+    digest_rows = []
+    if digest:
+        digest_rows = list(
+            TecTacSessionTrust.objects.select_for_update()
+            .filter(knox_digest=digest)
+            .order_by("-revoked", "-last_seen_at", "-created_at")
+        )
+        revoked = next((row for row in digest_rows if row.revoked), None)
+        if revoked is not None:
+            return revoked
+
+    try:
+        current = TecTacSessionTrust.objects.select_for_update().get(token_fingerprint=current_fingerprint)
+    except TecTacSessionTrust.DoesNotExist:
+        current = None
+    if current is not None:
+        return current
+
+    if digest_rows:
+        return digest_rows[0]
+
+    legacy = _legacy_knox_fingerprint(request)
+    if legacy and legacy != current_fingerprint:
+        try:
+            session = TecTacSessionTrust.objects.select_for_update().get(token_fingerprint=legacy)
+        except TecTacSessionTrust.DoesNotExist:
+            session = None
+        if session is not None:
+            if digest and session.knox_digest != digest:
+                session.knox_digest = digest
+                session.save(update_fields=["knox_digest", "updated_at"])
+            return session
+    return None
+
+
 def ensure_request_session(request, *, create: bool = True) -> TecTacSessionTrust:
     user = getattr(request, "user", None)
     if not getattr(user, "is_authenticated", False):
@@ -403,9 +473,8 @@ def ensure_request_session(request, *, create: bool = True) -> TecTacSessionTrus
     username = str(getattr(user, "username", "") or "")
 
     with transaction.atomic():
-        try:
-            session = TecTacSessionTrust.objects.select_for_update().get(token_fingerprint=fingerprint)
-        except TecTacSessionTrust.DoesNotExist:
+        session = _existing_session_for_credential(request, current_fingerprint=fingerprint)
+        if session is None:
             if not create:
                 raise SessionSecurityDenied("session_invalid_state")
             absolute = now + timedelta(minutes=int(policy["absolute_lifetime_minutes"]))

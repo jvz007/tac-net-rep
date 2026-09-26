@@ -53,6 +53,8 @@ done
 grep -q 'session_ip_change' "${ROOT}/framwork/tec_tac/session_security.py" || fail "stable IP-change failure code missing"
 grep -q 'session_invalid_state' "${ROOT}/framwork/tec_tac/session_security.py" || fail "stable invalid-state failure code missing"
 
+python3 "${ROOT}/tests/session-fingerprint-upgrade.py"
+
 python3 -m py_compile \
   "${ROOT}/framwork/tec_tac/session_security.py" \
   "${ROOT}/framwork/tec_tac/session_security_views.py" \

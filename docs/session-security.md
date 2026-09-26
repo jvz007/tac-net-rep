@@ -276,3 +276,16 @@ Revoking a login session deletes the underlying Tactical Knox token and revokes 
 MFA recovery-code sets are cryptographically bound to the Tactical TOTP secret present at generation time. A reset or replacement of the TOTP secret invalidates the previous recovery set. Recovery-code regeneration is throttled and failed password/TOTP proofs are always security-audited.
 
 Non-superuser account administrators cannot enumerate or revoke root/effective-superuser Knox sessions. Individual admin revocation accepts both POST and legacy DELETE. The legacy TOTP QR endpoint no longer exposes an active seed; first-time seed issuance uses the one-time enrollment flow described above.
+
+## Credential fingerprint upgrade compatibility (1.15.75)
+
+Core session trust is now correlated by the stable Tactical Knox digest before a
+new fingerprint row is created. This preserves explicit revocations and timeout
+state across the pre-S6 raw-bearer fingerprint format and the current
+`knox:<digest>` fingerprint format. A revoked row for the same Knox digest is
+authoritative even if a second active row exists. Older rows whose `knox_digest`
+was never populated are lazily linked by reproducing the legacy bearer HMAC only
+after the current S6 credential binding has proved that the bearer hashes to the
+authenticated Knox digest. Arbitrary or conflicting Authorization headers are
+therefore not accepted by the compatibility path.
+
