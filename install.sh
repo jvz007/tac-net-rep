@@ -163,6 +163,13 @@ for required_file in "${REQUIRED_FILES[@]}"; do
 done
 log "Preflight source repository layout: OK"
 
+# Root-side signature verification depends on the system Python cryptography
+# package. This is a hard preflight requirement: fail before any runtime,
+# migration, policy, sudoers or helper mutation occurs.
+[[ -x /usr/bin/python3 ]] || fail "System Python was not found at /usr/bin/python3."
+/usr/bin/python3 -I -c 'import cryptography' >/dev/null 2>&1 || fail "System Python cryptography support is required for root-side Tec-Tac signature verification."
+log "Preflight system Python cryptography support: OK"
+
 # Deploy framework-owned code into a Git-independent runtime tree. Dynamic
 # extensions/reportsets are deliberately preserved and never copied back into
 # the source checkout.
@@ -604,7 +611,6 @@ PY_PUBLISHERS
 
 PRIVILEGED_TRUST_DIR="/usr/local/lib/tec-tac-security"
 PRIVILEGED_TRUST_HELPER="${PRIVILEGED_TRUST_DIR}/privileged-trust.py"
-python3 -c 'import cryptography' >/dev/null 2>&1 || fail "System Python cryptography support is required for root-side Tec-Tac signature verification."
 mkdir -p "${PRIVILEGED_TRUST_DIR}"
 install -o root -g root -m 0755 "${REPO_ROOT}/scripts/privileged-trust.py" "${PRIVILEGED_TRUST_HELPER}"
 

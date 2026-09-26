@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.73",
+  "version": "1.15.74",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -27,19 +27,19 @@
       "sha256": "7acd5f22138138348d5123fc22c210724ca10ce86f05da7b77c68fc89952319a"
     },
     {
-      "path": "RELEASE_NOTES_1.15.72-1.md",
-      "size": 2579,
-      "sha256": "454a0fe772162563965e4f9cb5c4ab032d1cc09a57afbcbbe685fc7053d1f612"
-    },
-    {
       "path": "RELEASE_NOTES_1.15.73.md",
       "size": 1331,
       "sha256": "9c80bc9abb7b7b7dbd246cbfea64a3339550be7c416b9956ecd8af82a1917eb4"
     },
     {
+      "path": "RELEASE_NOTES_1.15.74.md",
+      "size": 1033,
+      "sha256": "2c5e91f28e514332f5d1b607825510a479919f02a23b1937c0c95f0eccb5879a"
+    },
+    {
       "path": "VERSION",
       "size": 8,
-      "sha256": "bb1917f2287fa532e227c6ce8635ba5eb35bd5cedda5c4b3436dc178961b46a0"
+      "sha256": "abc0377176996b3d321395d2849e8c1853a9fb0ce35b345dfe760fc9a11179d0"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -435,6 +435,11 @@
       "path": "docs/releases/RELEASE_NOTES_1.15.71-1.md",
       "size": 1917,
       "sha256": "e33b1750c5349b3fa7e3658599030d57cb65c1496394bb53eadd8bff12d97666"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.72-1.md",
+      "size": 2579,
+      "sha256": "454a0fe772162563965e4f9cb5c4ab032d1cc09a57afbcbbe685fc7053d1f612"
     },
     {
       "path": "docs/releases/RELEASE_NOTES_1.2.0.md",
@@ -1173,8 +1178,8 @@
     },
     {
       "path": "install.sh",
-      "size": 56684,
-      "sha256": "2262e81ad6c03ab8ce97bc2f490f01f91096108f743e07b1a3ae1c11f4743f26"
+      "size": 57044,
+      "sha256": "272f11a0892cf03c13e55e2ccbaea09bfa14d9f37e9d6b6cfa097277c6297a0a"
     },
     {
       "path": "reportsets/.gitkeep",
@@ -1344,7 +1349,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "8e6a4d440e20f96130be3ed339682f4164dde9c86926b6f9a5b7694a6cb7efa2"
+      "sha256": "572049fd9140722da20a7dc6b9bbbf5663833c46bce8665c029b620a7cefa024"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -1435,6 +1440,11 @@
       "path": "tests/housekeeping-upgrade-modes.sh",
       "size": 898,
       "sha256": "12aca1d0b5e65f637e8d40dd7b37ef75bce62c19c5b5ccb81d019b6ffebbdb05"
+    },
+    {
+      "path": "tests/installer-cryptography-preflight.sh",
+      "size": 1923,
+      "sha256": "6de6ccc2b3fb443dd6d170650192e085e0ca2ffc84c310fe4eea526705ae2a4a"
     },
     {
       "path": "tests/layout-foundation.sh",
@@ -1608,8 +1618,8 @@
     },
     {
       "path": "tests/root-python-boundary.sh",
-      "size": 3946,
-      "sha256": "473cd2237b8c92eabe4b7fe06077e70591ab5a42e7d797d4f8031c698aacf498"
+      "size": 3999,
+      "sha256": "9135047285d147c69abe983b13181f0e6cdc7fc2fa8a2f71cf23aaa6ff4d3aff"
     },
     {
       "path": "tests/scheduler-durability-review.sh",

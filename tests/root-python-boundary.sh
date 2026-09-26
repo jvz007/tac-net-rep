@@ -55,3 +55,5 @@ PYTHONPATH="${tmp}" /usr/bin/python3 -I -c 'print("isolated")' >/dev/null
 [[ ! -e /tmp/tec-tac-r1-sitecustomize-hit ]] || fail 'system Python isolated mode loaded hostile PYTHONPATH sitecustomize'
 
 printf '[TEST] PASS root Python privilege boundary\n'
+
+"${ROOT}/tests/installer-cryptography-preflight.sh"
