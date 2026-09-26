@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.76",
+  "version": "1.15.77",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -27,19 +27,19 @@
       "sha256": "7acd5f22138138348d5123fc22c210724ca10ce86f05da7b77c68fc89952319a"
     },
     {
-      "path": "RELEASE_NOTES_1.15.75.md",
-      "size": 1058,
-      "sha256": "0ad3d74eccf4b5d1d5613bcd97a355e04996610c7b251929c138accecb615f52"
-    },
-    {
       "path": "RELEASE_NOTES_1.15.76.md",
       "size": 1261,
       "sha256": "e5605d17f5a5198969e4c03c8e10bc2b968fd722306067abbbb0f73b259dbeb6"
     },
     {
+      "path": "RELEASE_NOTES_1.15.77.md",
+      "size": 944,
+      "sha256": "036f5074913506a17cb52fca6234194bb028cf02258d83d24b404923dacc2cba"
+    },
+    {
       "path": "VERSION",
       "size": 8,
-      "sha256": "df339d191ae95caf158f0bd0b0addcd1e4f3e64b1c1674302864510a6bcbd1d6"
+      "sha256": "dfaa4169401d44f498021b1644ebe5ed7f180763a57e2e922bac907450e66eca"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -450,6 +450,11 @@
       "path": "docs/releases/RELEASE_NOTES_1.15.74.md",
       "size": 1033,
       "sha256": "2c5e91f28e514332f5d1b607825510a479919f02a23b1937c0c95f0eccb5879a"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.75.md",
+      "size": 1058,
+      "sha256": "0ad3d74eccf4b5d1d5613bcd97a355e04996610c7b251929c138accecb615f52"
     },
     {
       "path": "docs/releases/RELEASE_NOTES_1.2.0.md",
@@ -1183,8 +1188,8 @@
     },
     {
       "path": "framwork/tec_tac/views.py",
-      "size": 32130,
-      "sha256": "20ca363707fd748be2d7008efbccbaf85e2e5be31c836e3f53100bc33c8c6af1"
+      "size": 32680,
+      "sha256": "2b6509d5448aaf0c8eb364cd529edf7055cce48e2c73f242021e7df4da5eb684"
     },
     {
       "path": "install.sh",
@@ -1364,7 +1369,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "01b91b17e62c2702e710464b558cea1ac65fc3812957cea03883df2128d72008"
+      "sha256": "74d31127b4f64f32d7faaf3857240e087e743100486a2b005e26e8862190d672"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -1378,8 +1383,8 @@
     },
     {
       "path": "tests/access-api-foundation.sh",
-      "size": 1653,
-      "sha256": "8ecdfb896dfb15bdc3a482fb8748b14789f6ddec39849a85de874502b8380f7c"
+      "size": 1712,
+      "sha256": "1ccaa17322ad810af0c33b69a061f7a644b0e6794fb523f93a3f89e561a455ae"
     },
     {
       "path": "tests/access-security-foundation.sh",
@@ -1630,6 +1635,11 @@
       "path": "tests/review-regressions-1.15.52.py",
       "size": 3510,
       "sha256": "9cd067b9f161eb6cd6b9b07efb5fe0b12a729411e5c9fdd184456fa3c17ac1f1"
+    },
+    {
+      "path": "tests/role-permission-save-regression.py",
+      "size": 4669,
+      "sha256": "fae3fcb8832fe07160d514e6003249158b890c4476cebaffed724dcada7af185"
     },
     {
       "path": "tests/root-python-boundary.sh",

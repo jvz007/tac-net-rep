@@ -32,4 +32,5 @@ python3 -m py_compile \
   "${ROOT}/framwork/tec_tac/urls.py" \
   "${ROOT}/framwork/tec_tac/views.py"
 bash -n "${ROOT}/install.sh"
+python3 "${ROOT}/tests/role-permission-save-regression.py"
 echo "[TEST] PASS access API foundation"

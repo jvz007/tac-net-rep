@@ -413,19 +413,37 @@ class RoleExtensionPermissionsView(APIView):
                 status=400,
             )
 
-        if CORE_PRIVILEGED_PERMISSION in payload and not is_effective_superuser(request.user):
-            raise PermissionDenied("Only a Tactical or role superuser may grant or revoke Tec-Tac privileged-operations access.")
-
-        if CORE_PRIVILEGED_PERMISSION in payload:
-            _audit_privileged(request.user, "modify", "privileged_permission", object_id=str(role.id),
-                              metadata={"codename": CORE_PRIVILEGED_PERMISSION, "granted": payload[CORE_PRIVILEGED_PERMISSION], "role": role.name})
-
         for codename, granted in payload.items():
             if not isinstance(granted, bool):
                 return Response(
                     {"detail": f"Permission {codename} must be true or false."},
                     status=400,
                 )
+
+        current_permissions = get_all_role_permissions(role)
+        privileged_change = (
+            CORE_PRIVILEGED_PERMISSION in payload
+            and bool(payload[CORE_PRIVILEGED_PERMISSION])
+            != bool(current_permissions.get(CORE_PRIVILEGED_PERMISSION, False))
+        )
+        if privileged_change and not is_effective_superuser(request.user):
+            raise PermissionDenied("Only a Tactical or role superuser may grant or revoke Tec-Tac privileged-operations access.")
+
+        if privileged_change:
+            _audit_privileged(
+                request.user,
+                "modify",
+                "privileged_permission",
+                object_id=str(role.id),
+                metadata={
+                    "codename": CORE_PRIVILEGED_PERMISSION,
+                    "previous_granted": bool(current_permissions.get(CORE_PRIVILEGED_PERMISSION, False)),
+                    "granted": payload[CORE_PRIVILEGED_PERMISSION],
+                    "role": role.name,
+                },
+            )
+
+        for codename, granted in payload.items():
             set_extension_permission(role, codename, granted)
 
         return Response(
