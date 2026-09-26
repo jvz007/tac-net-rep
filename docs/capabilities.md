@@ -240,13 +240,24 @@ The Scheduler still owns recurrence, execution, retry, history and concurrency. 
 
 ## HTTP boundary
 
-Authenticated diagnostic endpoints:
+Authenticated capability discovery endpoints:
 
 ```text
 GET /api/tfd/capabilities/
 GET /api/tfd/capabilities/<capability-id>/
 GET /api/tfd/capabilities/<capability-id>/?version=>=1,<2
 ```
+
+These endpoints are metadata-only by default and do not execute provider health callbacks. This keeps ordinary authenticated discovery read-only with respect to downstream systems.
+
+Operators with `core.privileged_operations` may explicitly request live provider health evaluation:
+
+```text
+GET /api/tfd/capabilities/?live=true
+GET /api/tfd/capabilities/<capability-id>/?live=true
+```
+
+A non-privileged caller that requests `live=true` receives HTTP 403 before any provider health callback is executed. Payloads expose `health_checked` (and list responses also expose `live`) so callers can distinguish metadata-only state from an active provider-health result.
 
 Use HTTP from the Tec-Tac browser UI, an external system, or another host/process.
 
