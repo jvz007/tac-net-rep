@@ -8,7 +8,6 @@ Tactical-writable file.
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 from pathlib import Path
 
@@ -75,8 +74,8 @@ def protection_enabled(*, fail_closed: bool = True) -> bool:
 def set_policy(enabled, *, updated_by: str = "") -> dict:
     protect = _coerce_bool(enabled)
     actor = str(updated_by or "").strip()
-    if actor and not re.fullmatch(r"[A-Za-z0-9@._-]{1,150}", actor):
-        raise AccountSecurityPolicyError("updated_by contains unsupported characters.")
+    if len(actor) > 150 or "\x00" in actor:
+        raise AccountSecurityPolicyError("updated_by is invalid.")
     if not SYSTEM_UPDATE_HELPER.is_file():
         raise AccountSecurityPolicyError(f"Privileged policy helper is unavailable at {SYSTEM_UPDATE_HELPER}.")
     command = [
