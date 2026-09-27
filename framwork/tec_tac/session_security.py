@@ -32,6 +32,7 @@ DEFAULT_IDLE_TIMEOUT_MINUTES = 30
 DEFAULT_ABSOLUTE_LIFETIME_MINUTES = 8 * 60
 DEFAULT_ACTIVITY_HEARTBEAT_SECONDS = 60
 DEFAULT_HISTORY_RETENTION_DAYS = 30
+SESSION_PAGINATION_MAX_PAGE = 10000
 DEFAULT_IP_CHANGE_POLICY = "reauthenticate"
 ALLOWED_IP_CHANGE_POLICIES = {"off", "audit", "reauthenticate", "terminate"}
 
@@ -689,6 +690,8 @@ def page_active_login_sessions(*, current_request=None, requester=None, search: 
     try:
         page = max(1, int(page))
         page_size = max(1, min(int(page_size), 100))
+        if page > SESSION_PAGINATION_MAX_PAGE:
+            raise SessionSecurityError(f"page may not exceed {SESSION_PAGINATION_MAX_PAGE}.")
     except (TypeError, ValueError) as exc:
         raise SessionSecurityError("page and page_size must be integers.") from exc
     qs = _visible_active_knox_tokens(requester=requester, search=search)
@@ -799,6 +802,8 @@ def page_audit_events(*, username: str | None = None, event_type: str | None = N
     try:
         page = max(1, int(page))
         page_size = max(1, min(int(page_size), 100))
+        if page > SESSION_PAGINATION_MAX_PAGE:
+            raise SessionSecurityError(f"page may not exceed {SESSION_PAGINATION_MAX_PAGE}.")
     except (TypeError, ValueError) as exc:
         raise SessionSecurityError("page and page_size must be integers.") from exc
     qs = _audit_queryset(username=username, event_type=event_type)

@@ -1,30 +1,40 @@
-# Review scope: Core 1.15.111
+# FIXING.md — Core 1.15.114
 
-## Tracker item in this release
+Reviewer scope for this release: **M16 + L42 + L43 + L44 + L45 + L08 remainder** only.
 
-- **M13 — Scheduler dynamic-filter scope checks inspect keys but not values.**
+## M16 — Client/site invariants and creator scope
+- Creating a client now atomically creates a `Default Site`.
+- A restricted creator is added to the new client's Tactical `can_view_clients` scope inside the same transaction.
+- Moving the final remaining site out of a client is rejected; every client must retain at least one site.
 
-## Expected behavior
+## L42 — Bounded pagination
+- `core.resources` rejects page numbers above 10000 and page sizes above 500.
+- Session Security paged login-session and audit-history helpers reject page numbers above 10000; their existing 100-row page-size cap remains.
 
-- Tactical client/site/endpoint identifiers remain authoritative only through canonical `targets.scope`.
-- Dynamic filter top-level keys may not be Tactical target aliases.
-- Dynamic filter values/tokens at any depth may not equal Tactical target aliases such as `client_id`, `site_id`, `agent_id`, `endpoint_id`, `id`, or `ids`.
-- This blocks generic filter DSL forms such as `{"field":"site_id","value":999}` from becoming an alternate Tactical scope channel.
-- Nested module-owned filter **keys** may still use ordinary names such as `id` or `site_id`; Core does not reinterpret those nested keys as scope.
+## L43 — Audit global trusted service contexts
+- `trusted_service_context(..., global_access=True)` writes a strict Core/Tactical audit event before returning global authority.
+- If that audit cannot be persisted, the global service context is denied.
 
-## Files/areas changed
+## L44 — Preserve Tactical audit fields
+- Client/site updates include Tactical `BaseAuditModel.modified_by` and `modified_time` in `update_fields`, allowing Tactical's own save/audit hooks to persist them.
 
-- `framwork/tec_tac/scheduler_targets.py`
-- `tests/scheduler-target-shape.py`
-- `docs/module-scheduling.md`
+## L45 — Stable Tactical validation errors
+- Django `ValidationError` from Tactical Client/Site model validation is converted to `TacticalResourceValidationError`, then to the stable `ResourceValidationError`/HTTP 400 boundary.
 
-## Regression coverage
+## L08 remainder — Publish Clients/Sites paging contract
+- `core.resources` is now contract version 1.2.0.
+- Clients/Sites list query and response paging fields are explicitly published in contract metadata, Markdown export and text export.
+- Behavioral regression verifies the published rows.
 
-- `tests/scheduler-target-shape.py` exercises direct top-level aliases, generic field/value DSLs, nested/list value tokens, valid nested module-owned keys, canonical scope, and legacy aliases.
-- Existing Scheduler foundation, durability, scope, run-now, stale-run, unrestricted-role, pagination and interval tests remain green.
+## Behavioral coverage
+- `tests/resource-directory-foundation.py`
+- `tests/resource-directory-write-hardening.py`
+- `tests/resource-directory-site-move-postgres.py` (real Django/PostgreSQL HTTP regression)
+- `tests/pagination-upper-bounds.py`
+- `tests/resource-contract-paging.py`
+- existing Session Security and contract foundation suites
 
-## Explicitly not in scope
-
-- M14 and later Medium items.
-- Module-specific custom target-type semantics.
-- UI changes.
+## Explicitly out of scope
+- M17 and later Mediums.
+- M31 stale Resource Directory shell greps are intentionally not changed in this release.
+- No UI changes.

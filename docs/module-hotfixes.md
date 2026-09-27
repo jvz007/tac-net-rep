@@ -159,7 +159,7 @@ Core verifies:
 10. every installed target matches `sha256_before`;
 11. every payload member matches `sha256_after`;
 12. the same hotfix ID is not already applied;
-13. detached publisher signature, publisher environment, key status and `module.install` permission satisfy the current trust policy.
+13. detached publisher signature, publisher environment, key status, `module.install`, and every publisher permission declared by the installed target extension satisfy the current trust policy.
 
 No installed files are changed during inspection.
 
@@ -174,7 +174,7 @@ The worker:
 ```text
 claim root-private job + acquire global Tec-Tac lifecycle lock
     ↓
-root reverify detached signature + publisher policy
+root reverify detached signature + target module publisher permissions
     ↓
 revalidate package + module version + before hashes
     ↓

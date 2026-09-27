@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 
@@ -17,6 +18,10 @@ class TacticalResourceAdapterError(RuntimeError):
 
 
 class TacticalResourceConflictError(TacticalResourceAdapterError):
+    pass
+
+
+class TacticalResourceValidationError(TacticalResourceAdapterError):
     pass
 
 
@@ -88,6 +93,39 @@ def tactical_scope_unrestricted(*, user) -> bool:
     Tactical role-relation semantics locally.
     """
     return _role_scope_unrestricted(user=user)
+
+
+def scheduler_scope_snapshot(*, user) -> dict[str, object]:
+    """Resolve Scheduler-visible Tactical scope once for a request."""
+    role = _role_for_user(user)
+    if _role_scope_unrestricted(user=user, role=role):
+        return {
+            "unrestricted": True,
+            "client_ids": frozenset(),
+            "site_ids": frozenset(),
+            "endpoint_ids": frozenset(),
+        }
+
+    _, Site, Agent = _models()
+    client_relation = getattr(role, "can_view_clients", None) if role is not None else None
+    if client_relation is not None and hasattr(client_relation, "values_list"):
+        client_ids = frozenset(int(v) for v in client_relation.values_list("pk", flat=True))
+    else:
+        client_ids = frozenset()
+    site_ids = frozenset(
+        int(v)
+        for v in _scope_queryset(Site.objects.all(), user=user, trusted=False).values_list("pk", flat=True)
+    )
+    endpoint_ids = set()
+    for pk, agent_id in _scope_queryset(Agent.objects.all(), user=user, trusted=False).values_list("pk", "agent_id"):
+        endpoint_ids.add(str(pk))
+        endpoint_ids.add(str(agent_id))
+    return {
+        "unrestricted": False,
+        "client_ids": client_ids,
+        "site_ids": site_ids,
+        "endpoint_ids": frozenset(endpoint_ids),
+    }
 
 
 def explicit_client_target_ids_in_scope(*, user, client_ids) -> set[int]:
@@ -295,15 +333,31 @@ def site_write_in_scope(*, user, site_id: int) -> bool:
     return bool(client_relation is not None and client_relation.filter(pk=site["client_id"]).exists())
 
 
-def create_client_row(*, name: str) -> dict[str, Any]:
-    Client, _, _ = _models()
+def create_client_row(*, user, name: str, default_site_name: str = "Default Site") -> dict[str, Any]:
+    Client, Site, _ = _models()
     try:
         with transaction.atomic():
             obj = Client(name=name)
             obj.full_clean(exclude=None, validate_unique=False)
             obj.save()
+
+            site = Site(client=obj, name=default_site_name)
+            site.full_clean(exclude=None, validate_unique=False)
+            site.save()
+
+            role = _role_for_user(user)
+            if not _role_scope_unrestricted(user=user, role=role):
+                relation = getattr(role, "can_view_clients", None) if role is not None else None
+                add = getattr(relation, "add", None)
+                if not callable(add):
+                    raise TacticalResourceValidationError(
+                        "Restricted creator role does not expose a writable client-scope relation."
+                    )
+                add(obj)
     except IntegrityError as exc:
         raise TacticalResourceConflictError("A client with that name already exists.") from exc
+    except ValidationError as exc:
+        raise TacticalResourceValidationError("Client or default site failed Tactical validation.") from exc
     return client_row({"pk": obj.pk, "name": obj.name})
 
 
@@ -318,9 +372,16 @@ def update_client_row(*, user, client_id: int, name: str) -> dict[str, Any] | No
                 return None
             obj.name = name
             obj.full_clean(exclude=None, validate_unique=False)
-            obj.save(update_fields=["name"])
+            update_fields = ["name"]
+            if hasattr(obj, "modified_by"):
+                update_fields.append("modified_by")
+            if hasattr(obj, "modified_time"):
+                update_fields.append("modified_time")
+            obj.save(update_fields=update_fields)
     except IntegrityError as exc:
         raise TacticalResourceConflictError("A client with that name already exists.") from exc
+    except ValidationError as exc:
+        raise TacticalResourceValidationError("Client failed Tactical validation.") from exc
     return client_row({"pk": obj.pk, "name": obj.name})
 
 
@@ -333,11 +394,13 @@ def create_site_row(*, client_id: int, name: str) -> dict[str, Any]:
             obj.save()
     except IntegrityError as exc:
         raise TacticalResourceConflictError("A site with that name already exists for the selected client.") from exc
+    except ValidationError as exc:
+        raise TacticalResourceValidationError("Site failed Tactical validation.") from exc
     return site_row({"pk": obj.pk, "name": obj.name, "client_id": obj.client_id})
 
 
 def update_site_row(*, user, site_id: int, name: str | None = None, client_id: int | None = None) -> dict[str, Any] | None:
-    _, Site, _ = _models()
+    Client, Site, _ = _models()
     try:
         with transaction.atomic():
             if not site_write_in_scope(user=user, site_id=site_id):
@@ -350,11 +413,25 @@ def update_site_row(*, user, site_id: int, name: str | None = None, client_id: i
                 obj.name = name
                 update_fields.append("name")
             if client_id is not None and client_id != obj.client_id:
+                source_client_id = obj.client_id
+                # Serialize site moves through the source client row, then count
+                # sites without SELECT ... FOR UPDATE. PostgreSQL rejects FOR
+                # UPDATE on aggregate queries such as COUNT(*).
+                Client.objects.select_for_update().filter(pk=source_client_id).first()
+                remaining = Site.objects.filter(client_id=source_client_id).count()
+                if remaining <= 1:
+                    raise TacticalResourceValidationError("A client must retain at least one site.")
                 obj.client_id = client_id
                 update_fields.append("client")
             if update_fields:
                 obj.full_clean(exclude=None, validate_unique=False)
+                if hasattr(obj, "modified_by"):
+                    update_fields.append("modified_by")
+                if hasattr(obj, "modified_time"):
+                    update_fields.append("modified_time")
                 obj.save(update_fields=update_fields)
     except IntegrityError as exc:
         raise TacticalResourceConflictError("A site with that name already exists for the selected client.") from exc
+    except ValidationError as exc:
+        raise TacticalResourceValidationError("Site failed Tactical validation.") from exc
     return site_row({"pk": obj.pk, "name": obj.name, "client_id": obj.client_id})

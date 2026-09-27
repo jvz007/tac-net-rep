@@ -35,6 +35,8 @@ assert "def agent_target_identifiers_in_scope" in adapter_source
 # Integration guards: create/edit/detail/delete/run-now/list/history retain scope enforcement.
 assert source.count("_require_target_scope(request.user") >= 5
 assert "_can_access_target_scope(request.user, schedule.targets)" in source
-assert "_can_access_target_scope(request.user, run_targets)" in source
+assert "resources_adapter.scheduler_scope_snapshot(user=request.user)" in source
+assert "_sql_scope_prefilter(qs, scope_snapshot)" in source
+assert "_scope_snapshot_allows(run_targets, scope_snapshot" in source
 
 print("scheduler scope foundation: PASS")

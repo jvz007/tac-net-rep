@@ -120,6 +120,7 @@ with tempfile.TemporaryDirectory() as tmp:
     apply_path=helper.JOBS_ROOT/(apply['id']+'.json'); helper.atomic_json(apply_path,apply)
     with (helper.LOGS_ROOT/'apply.log').open('w',encoding='utf-8') as log: helper.apply_job(apply_path,apply,config,log)
     assert target.read_bytes()==replacement
+    assert not package.exists(), 'successful apply left the staged hotfix ZIP behind'
     rollback={'id':'00000000-0000-0000-0000-000000000003','module_id':'cybercns','hotfix_id':'HF001','requested_by':'test'}
     rollback_path=helper.JOBS_ROOT/(rollback['id']+'.json'); helper.atomic_json(rollback_path,rollback)
     with (helper.LOGS_ROOT/'rollback.log').open('w',encoding='utf-8') as log: helper.rollback_job(rollback_path,rollback,config,log)

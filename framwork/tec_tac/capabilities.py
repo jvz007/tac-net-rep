@@ -300,10 +300,15 @@ def capability_status(
         if not healthy:
             base.update(state="unhealthy", reason=health_reason or "Capability provider is unhealthy.")
             return base
-    else:
-        base["health"] = {"checked": False}
+        base.update(available=True, state="available", reason=None)
+        return base
 
-    base.update(available=True, state="available", reason=None)
+    base["health"] = {"checked": False}
+    base.update(
+        available=False,
+        state="health-unchecked",
+        reason="Capability metadata is present, but runtime health was not checked.",
+    )
     return base
 
 

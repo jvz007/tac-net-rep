@@ -519,6 +519,23 @@ def render_markdown(catalog: dict | None = None) -> str:
             writes = (resource.get("write_support") or {}).get(rtype) or []
             out.append(f"| `{rtype}` | `{spec.get('id_type')}` | {', '.join(f'`{v}`' for v in spec.get('fields', []))} | {', '.join(f'`{v}`' for v in spec.get('filters', []))} | {', '.join(f'`{v}`' for v in writes) or '_none_'} |")
         out.extend(["", "### Authorization", "", f"- Interactive reads: {resource.get('authorization', {}).get('interactive')}", f"- Service reads: {resource.get('authorization', {}).get('service')}", f"- Writes: {resource.get('authorization', {}).get('write')}"])
+        pagination = resource.get("pagination") or {}
+        if pagination:
+            out.extend([
+                "",
+                "### Pagination",
+                "",
+                f"- Default page size: `{pagination.get('default_page_size')}`",
+                f"- Maximum page size: `{pagination.get('maximum_page_size')}`",
+                f"- Maximum page number: `{pagination.get('maximum_page_number')}`",
+            ])
+        list_contracts = resource.get("list_contracts") or {}
+        if list_contracts:
+            out.extend(["", "### List contracts", "", "| Resource | HTTP | Query | Response |", "| --- | --- | --- | --- |"] )
+            for name, spec in list_contracts.items():
+                query = ", ".join(f"`{key}`={value}" for key, value in (spec.get("query") or {}).items())
+                response = ", ".join(f"`{key}`={value}" for key, value in (spec.get("response") or {}).items())
+                out.append(f"| `{name}` | `{spec.get('http')}` | {query} | {response} |")
         if resource.get("rbac"):
             out.extend(["", "### Resource write RBAC", ""] )
             for name, codename in resource.get("rbac", {}).items():
@@ -649,6 +666,15 @@ def render_text(catalog: dict | None = None) -> str:
         out.append(f"  interactive_auth: {resource.get('authorization', {}).get('interactive')}")
         out.append(f"  service_auth: {resource.get('authorization', {}).get('service')}")
         out.append(f"  write_auth: {resource.get('authorization', {}).get('write')}")
+        pagination = resource.get("pagination") or {}
+        if pagination:
+            out.append(
+                f"  pagination: default={pagination.get('default_page_size')} max_size={pagination.get('maximum_page_size')} max_page={pagination.get('maximum_page_number')}"
+            )
+        for name, spec in (resource.get("list_contracts") or {}).items():
+            query = ",".join(f"{key}={value}" for key, value in (spec.get("query") or {}).items())
+            response = ",".join(f"{key}={value}" for key, value in (spec.get("response") or {}).items())
+            out.append(f"  list.{name}: {spec.get('http')} query[{query}] response[{response}]")
         for name, codename in (resource.get("rbac") or {}).items():
             out.append(f"  rbac.{name}: {codename}")
         for code, description in (resource.get("errors") or {}).items():

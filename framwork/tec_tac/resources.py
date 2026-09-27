@@ -13,10 +13,11 @@ from . import resources_adapter as adapter
 from .capabilities import register_capability
 
 CONTRACT_ID = "core.resources"
-CONTRACT_VERSION = "1.1.0"
+CONTRACT_VERSION = "1.2.0"
 RESOURCE_TYPES = ("client", "site", "agent")
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 500
+MAX_PAGE_NUMBER = 10000
 CLIENT_MANAGE_PERMISSION = "core.resources.clients.manage"
 SITE_MANAGE_PERMISSION = "core.resources.sites.manage"
 
@@ -69,10 +70,11 @@ def user_context(user) -> ResourceAccessContext:
 
 
 def trusted_service_context(*, actor: str, purpose: str, global_access: bool = False) -> ResourceAccessContext:
-    """Create an explicit non-interactive trusted execution context.
+    """Create an explicit audited non-interactive trusted execution context.
 
-    Global resource visibility is deliberately opt-in.  This context is for
-    trusted in-process Core/module automation only; browser callers never use it.
+    Global resource visibility is deliberately opt-in.  Granting it is a
+    security-relevant event, so Core writes a strict Tactical audit record
+    before returning the context. Browser callers never use this path.
     """
     actor = str(actor or "").strip()
     purpose = str(purpose or "").strip()
@@ -80,6 +82,30 @@ def trusted_service_context(*, actor: str, purpose: str, global_access: bool = F
         raise ResourceValidationError("Trusted service contexts require actor and purpose.")
     if not global_access:
         raise ResourcePermissionDenied("Trusted service resource access requires explicit global_access=True in contract v1.")
+
+    class _ServiceAuditActor:
+        is_authenticated = True
+        is_superuser = False
+        role = None
+
+        def __init__(self, username: str):
+            self.username = username
+
+    try:
+        from .audit import AuditContractError, AuditWriteError, record
+        record(
+            actor=_ServiceAuditActor(actor[:160]),
+            module_id="core",
+            action="custom:resource-global-context",
+            object_type="resource_service_context",
+            object_id=actor[:160],
+            message="Trusted global Resource Directory service context granted.",
+            metadata={"purpose": purpose[:500], "global_access": True},
+            strict=True,
+        )
+    except Exception as exc:
+        raise ResourcePermissionDenied("Trusted global resource access requires a persisted Core audit record.") from exc
+
     return ResourceAccessContext(
         service_actor=actor[:160], service_purpose=purpose[:500], trusted_global=True,
     )
@@ -179,6 +205,8 @@ def _adapter_write(callable_obj, **kwargs):
         return callable_obj(**kwargs)
     except getattr(adapter, "TacticalResourceConflictError", adapter.TacticalResourceAdapterError) as exc:
         raise ResourceConflict(str(exc)) from exc
+    except getattr(adapter, "TacticalResourceValidationError", adapter.TacticalResourceAdapterError) as exc:
+        raise ResourceValidationError(str(exc)) from exc
 
 
 def _clean_positive_int(value: Any, label: str) -> int:
@@ -196,6 +224,8 @@ def _clean_positive_int(value: Any, label: str) -> int:
 def _pagination(page: Any, page_size: Any) -> tuple[int, int, int]:
     page = _clean_positive_int(page, "page")
     page_size = _clean_positive_int(page_size, "page_size")
+    if page > MAX_PAGE_NUMBER:
+        raise ResourceValidationError(f"page may not exceed {MAX_PAGE_NUMBER}.")
     if page_size > MAX_PAGE_SIZE:
         raise ResourceValidationError(f"page_size may not exceed {MAX_PAGE_SIZE}.")
     return page, page_size, (page - 1) * page_size
@@ -294,8 +324,8 @@ def get_agent(agent_id: Any, *, context: ResourceAccessContext) -> dict[str, Any
 
 
 def create_client(*, name: str, context: ResourceAccessContext) -> dict[str, Any]:
-    _authorize_write(context, "client")
-    return _adapter_write(adapter.create_client_row, name=_clean_name(name, "name"))
+    user = _authorize_write(context, "client")
+    return _adapter_write(adapter.create_client_row, user=user, name=_clean_name(name, "name"))
 
 
 def update_client(client_id: Any, *, name: str, context: ResourceAccessContext) -> dict[str, Any]:
@@ -369,7 +399,25 @@ def resource_contract_metadata() -> dict[str, Any]:
             "agent": {"id_type": "string", "fields": list(AGENT_FIELDS), "filters": ["client_id", "site_id", "search", "active", "page", "page_size"]},
         },
         "operations": ["list_clients", "get_client", "create_client", "update_client", "list_sites", "get_site", "create_site", "update_site", "list_agents", "get_agent", "resolve_resource"],
-        "pagination": {"default_page_size": DEFAULT_PAGE_SIZE, "maximum_page_size": MAX_PAGE_SIZE},
+        "pagination": {
+            "default_page_size": DEFAULT_PAGE_SIZE,
+            "maximum_page_size": MAX_PAGE_SIZE,
+            "maximum_page_number": MAX_PAGE_NUMBER,
+        },
+        "list_contracts": {
+            "clients": {
+                "python": "list_clients",
+                "http": "GET /api/tfd/resources/clients/",
+                "query": {"search": "optional string", "active": "optional boolean", "page": f"integer 1..{MAX_PAGE_NUMBER}", "page_size": f"integer 1..{MAX_PAGE_SIZE}"},
+                "response": {"items": "array[client]", "count": "integer", "page": "integer", "page_size": "integer", "pages": "integer", "next_page": "integer|null", "previous_page": "integer|null"},
+            },
+            "sites": {
+                "python": "list_sites",
+                "http": "GET /api/tfd/resources/sites/",
+                "query": {"client_id": "optional positive integer", "search": "optional string", "active": "optional boolean", "page": f"integer 1..{MAX_PAGE_NUMBER}", "page_size": f"integer 1..{MAX_PAGE_SIZE}"},
+                "response": {"items": "array[site]", "count": "integer", "page": "integer", "page_size": "integer", "pages": "integer", "next_page": "integer|null", "previous_page": "integer|null"},
+            },
+        },
         "errors": {
             ResourceValidationError.code: "Invalid type, identifier, filter or pagination input.",
             ResourcePermissionDenied.code: "Caller lacks Tactical read permission/scope or a trusted service context.",

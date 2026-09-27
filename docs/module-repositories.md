@@ -96,3 +96,7 @@ A repository module entry may point to a normal single-module package or to a Te
 For a bundle-backed repository entry, the bundle must contain the module ID and exact version advertised by that repository entry. Staging returns the complete bundle preview and dependency plan, so installing an update may also install or update other modules declared by the same bundle.
 
 A repository that wants each member of a suite to appear independently in the online catalog should publish one index entry per member/version. Those entries may reference the same bundle download and SHA-256. The bundle remains a distribution container; dependency, enable/disable, visibility and lifecycle state remain per module.
+
+### Proxy-aware fetches
+
+Repository fetches honor the service environment's `HTTP_PROXY` / `HTTPS_PROXY` and `NO_PROXY` settings. Core still resolves and validates every repository or redirect target against the SSRF policy before contacting the configured proxy. When a proxy is used, Core sends the proxy a connection to the already-approved pinned destination address rather than allowing the proxy to choose a different target address. Proxy URLs must use an `http://` proxy endpoint.

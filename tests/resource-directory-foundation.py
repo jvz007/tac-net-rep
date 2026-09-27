@@ -25,6 +25,18 @@ rbac = types.ModuleType("tec_tac.rbac")
 rbac.has_extension_permission = lambda user, codename: codename in getattr(user, "core_permissions", set())
 sys.modules["tec_tac.rbac"] = rbac
 
+AUDITS = []
+audit = types.ModuleType("tec_tac.audit")
+class AuditContractError(ValueError): pass
+class AuditWriteError(RuntimeError): pass
+audit.AuditContractError = AuditContractError
+audit.AuditWriteError = AuditWriteError
+def audit_record(**kwargs):
+    AUDITS.append(kwargs)
+    return {"recorded": True}
+audit.record = audit_record
+sys.modules["tec_tac.audit"] = audit
+
 DATA = {
     "clients": [
         {"type": "client", "id": 1, "name": "Alpha", "active": True},
@@ -47,8 +59,10 @@ class FakeQS:
 adapter = types.ModuleType("tec_tac.resources_adapter")
 class TacticalResourceAdapterError(RuntimeError): pass
 class TacticalResourceConflictError(TacticalResourceAdapterError): pass
+class TacticalResourceValidationError(TacticalResourceAdapterError): pass
 adapter.TacticalResourceAdapterError = TacticalResourceAdapterError
 adapter.TacticalResourceConflictError = TacticalResourceConflictError
+adapter.TacticalResourceValidationError = TacticalResourceValidationError
 
 def scoped(rows, user, trusted, kind):
     if trusted: return list(rows)
@@ -97,12 +111,15 @@ def site_write_in_scope(*, user, site_id):
         return False
     return site_id in user.allowed_sites or site["client_id"] in user.allowed_clients
 
-def create_client_row(*, name):
+def create_client_row(*, user, name):
     if any(r["name"].lower() == name.lower() for r in DATA["clients"]):
         raise TacticalResourceConflictError("A client with that name already exists.")
     new_id = max(r["id"] for r in DATA["clients"]) + 1
     row = {"type":"client","id":new_id,"name":name,"active":True}
     DATA["clients"].append(row)
+    site_id = max(r["id"] for r in DATA["sites"]) + 1
+    DATA["sites"].append({"type":"site","id":site_id,"name":"Default Site","client_id":new_id,"active":True})
+    user.allowed_clients.add(new_id)
     return dict(row)
 
 def update_client_row(*, user, client_id, name):
@@ -115,6 +132,8 @@ def update_client_row(*, user, client_id, name):
     return dict(row)
 
 def create_site_row(*, client_id, name):
+    if name == "INVALID":
+        raise TacticalResourceValidationError("Site failed Tactical validation.")
     if any(r["client_id"] == client_id and r["name"].lower() == name.lower() for r in DATA["sites"]):
         raise TacticalResourceConflictError("A site with that name already exists for the selected client.")
     new_id = max(r["id"] for r in DATA["sites"]) + 1
@@ -130,6 +149,9 @@ def update_site_row(*, user, site_id, name=None, client_id=None):
     target_name = name if name is not None else row["name"]
     if any(r["id"] != site_id and r["client_id"] == target_client and r["name"].lower() == target_name.lower() for r in DATA["sites"]):
         raise TacticalResourceConflictError("A site with that name already exists for the selected client.")
+    if client_id is not None and client_id != row["client_id"]:
+        if sum(1 for item in DATA["sites"] if item["client_id"] == row["client_id"]) <= 1:
+            raise TacticalResourceValidationError("A client must retain at least one site.")
     if name is not None: row["name"] = name
     if client_id is not None: row["client_id"] = client_id
     return dict(row)
@@ -191,9 +213,22 @@ assert resources.get_agent("a-1", context=ctx)["hostname"] == "ALPHA-PC"
 # Create/update is additive and preserves stable record shapes.
 created_client = resources.create_client(name="Gamma", context=ctx)
 assert tuple(created_client) == resources.CLIENT_FIELDS and created_client["name"] == "Gamma"
-u.allowed_clients.add(created_client["id"])
+assert created_client["id"] in u.allowed_clients
+assert any(row["client_id"] == created_client["id"] and row["name"] == "Default Site" for row in DATA["sites"])
 updated_client = resources.update_client(created_client["id"], name="Gamma Renamed", context=ctx)
 assert updated_client["name"] == "Gamma Renamed"
+
+default_site = next(row for row in DATA["sites"] if row["client_id"] == created_client["id"] and row["name"] == "Default Site")
+try:
+    resources.update_site(default_site["id"], client_id=1, context=ctx)
+    raise AssertionError("last site moved away through Resource Directory")
+except resources.ResourceValidationError:
+    pass
+try:
+    resources.create_site(client_id=1, name="INVALID", context=ctx)
+    raise AssertionError("Tactical ValidationError was not normalized")
+except resources.ResourceValidationError:
+    pass
 
 created_site = resources.create_site(client_id=1, name="Alpha Three", context=ctx)
 assert tuple(created_site) == resources.SITE_FIELDS and created_site["client_id"] == 1
@@ -277,17 +312,36 @@ except resources.ResourcePermissionDenied:
 
 # Pagination and filtering.
 service = resources.trusted_service_context(actor="governance", purpose="test", global_access=True)
+assert AUDITS and AUDITS[-1]["action"] == "custom:resource-global-context"
+assert AUDITS[-1]["metadata"]["global_access"] is True
+original_record = audit.record
+def failed_audit(**kwargs):
+    raise AuditWriteError("audit unavailable")
+audit.record = failed_audit
+try:
+    resources.trusted_service_context(actor="broken-service", purpose="test", global_access=True)
+    raise AssertionError("global service context survived audit failure")
+except resources.ResourcePermissionDenied:
+    pass
+finally:
+    audit.record = original_record
 try:
     resources.create_client(name="Service Write", context=service)
     raise AssertionError("trusted read service unexpectedly received write authority")
 except resources.ResourcePermissionDenied:
     pass
 p1 = resources.list_sites(context=service, page=1, page_size=2)
-assert p1["count"] == 4 and len(p1["items"]) == 2 and p1["next_page"] == 2
+assert p1["count"] == len(DATA["sites"]) and len(p1["items"]) == 2 and p1["next_page"] == 2
 p2 = resources.list_sites(context=service, page=2, page_size=2)
 assert len(p2["items"]) == 2 and p2["previous_page"] == 1
 assert resources.list_clients(context=service, search="bet")["items"][0]["id"] == 2
 assert resources.list_agents(context=service, active=False)["count"] == 0
+for bad_page, bad_size in ((10001, 100), (1, 501)):
+    try:
+        resources.list_clients(context=service, page=bad_page, page_size=bad_size)
+        raise AssertionError("unbounded resource pagination unexpectedly accepted")
+    except resources.ResourceValidationError:
+        pass
 
 # Generic resolver and context safety.
 assert resources.resolve_resource("site", 21, context=service)["id"] == 21
@@ -305,7 +359,10 @@ except resources.ResourcePermissionDenied:
 
 # Contract metadata is versioned and discoverable.
 meta = resources.resource_contract_metadata()
-assert meta["id"] == "core.resources" and meta["version"] == "1.1.0"
+assert meta["id"] == "core.resources" and meta["version"] == "1.2.0"
+assert meta["pagination"]["maximum_page_number"] == 10000
+assert meta["list_contracts"]["clients"]["http"] == "GET /api/tfd/resources/clients/"
+assert meta["list_contracts"]["sites"]["response"]["pages"] == "integer"
 registration = resources.register_core_resources_capability()
 assert registration["module_id"] == "core" and registration["id"] == "core.resources"
 assert set(meta["resource_types"]) == {"client", "site", "agent"}

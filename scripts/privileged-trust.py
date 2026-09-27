@@ -266,6 +266,59 @@ def _module_permissions_from_archive(path: Path) -> set[str]:
 
 
 
+def _hotfix_target_permissions(path: Path, cfg: dict[str, str]) -> set[str]:
+    """Return the installed target module's declared publisher permissions.
+
+    The hotfix package is authenticated before these permissions are enforced.
+    The installed extension manifest is the authority for the target module's
+    permission declaration; mutable job metadata is never consulted.
+    """
+    if not zipfile.is_zipfile(path):
+        raise RuntimeError("hotfix package must be a ZIP archive")
+    with zipfile.ZipFile(path) as zf:
+        infos = [i for i in zf.infolist() if not i.is_dir()]
+        for info in infos:
+            _safe_zip_name(info.filename)
+            mode = (info.external_attr >> 16) & 0xFFFF
+            if mode and (mode & 0o170000) == 0o120000:
+                raise RuntimeError(f"hotfix archive contains symlink: {info.filename}")
+        manifests = [i for i in infos if PurePosixPath(i.filename).name == "tec_tac_hotfix.json"]
+        if len(manifests) != 1:
+            raise RuntimeError("hotfix archive must contain exactly one tec_tac_hotfix.json")
+        try:
+            payload = json.loads(zf.read(manifests[0]).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("hotfix manifest is unreadable") from exc
+    if not isinstance(payload, dict) or payload.get("type") != "tec-tac-hotfix" or payload.get("schema") != 1:
+        raise RuntimeError("hotfix manifest is invalid")
+    module_id = str(payload.get("module_id") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", module_id):
+        raise RuntimeError("hotfix module_id is invalid")
+
+    extensions_root = Path(cfg.get("TEC_TAC_EXTENSIONS_ROOT", "/opt/tec-tac/extensions"))
+    manifest_path = extensions_root / module_id / "tec_tac.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        raise RuntimeError("installed target module manifest is unavailable")
+    _require_root_owned_nonwritable(manifest_path, "Installed target module manifest")
+    try:
+        installed = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("installed target module manifest is unreadable") from exc
+    if not isinstance(installed, dict) or str(installed.get("id") or "").strip() != module_id:
+        raise RuntimeError("installed target module identity mismatch")
+    if str(installed.get("type") or "extension").strip() != "extension":
+        raise RuntimeError("installed target module manifest is not an extension")
+    requested = installed.get("publisher_permissions") or []
+    if not isinstance(requested, list) or any(not isinstance(v, str) or not v.strip() for v in requested):
+        raise RuntimeError("installed target module publisher_permissions is invalid")
+    values = {v.strip() for v in requested}
+    allowed = {"module.install", "server_maintenance.register"}
+    unknown = sorted(values - allowed)
+    if unknown:
+        raise RuntimeError("installed target module declares unsupported publisher permission(s): " + ", ".join(unknown))
+    return {"module.install", *values}
+
+
 def _artifact_modules_from_archive(path: Path) -> list[dict]:
     """Return signed module identities/version/migration facts from archive bytes."""
     modules: list[dict] = []
@@ -385,6 +438,24 @@ def verify_hotfix(package: Path, signature: Path | None, metadata: Path | None) 
         required_permissions=("module.install",), require_signed=False,
         trust_root=TRUST_ROOT, server_environment=_environment(cfg),
     )
+    required = _hotfix_target_permissions(Path(package), cfg)
+    extra_required = required - {"module.install"}
+    if extra_required and not trust.get("signed"):
+        PublisherTrustError, _, _ = _imports()
+        raise PublisherTrustError(
+            "This hotfix targets a module that requires a trusted publisher signature.",
+            code="signature_required",
+        )
+    approved = {str(v).strip() for v in (trust.get("approved_permissions") or []) if str(v).strip()}
+    missing = sorted(required - approved) if trust.get("signed") else []
+    if missing:
+        PublisherTrustError, _, _ = _imports()
+        raise PublisherTrustError(
+            "Publisher policy does not grant required permission(s): " + ", ".join(missing),
+            code="publisher_permission_denied",
+        )
+    trust = dict(trust)
+    trust["required_permissions"] = sorted(required)
     return enforce_policy(trust, kind="package")
 
 

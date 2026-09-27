@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, time, timedelta
 from uuid import UUID
 
-from django.db import transaction
+from django.db import connection, transaction
 from django.db.models import OuterRef, Q, Subquery
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -442,22 +442,107 @@ class SchedulerRunListView(APIView):
             qs = qs.filter(query)
         return qs
 
-    def _row_visible(self, request, run, *, manager, action_cache):
-        user = request.user
-        if not manager:
-            action_id = run.action_id or (run.schedule.action_id if run.schedule else "")
-            allowed = action_cache.get(action_id)
-            if allowed is None:
-                try:
-                    action = get_scheduled_action(action_id)
-                except SchedulerError:
-                    action = None
-                allowed = bool(action and _can_use_action(user, action))
-                action_cache[action_id] = allowed
-            if not allowed:
-                return False
+    @staticmethod
+    def _permitted_action_ids(user):
+        return {action.id for action in scheduled_actions() if _can_use_action(user, action)}
+
+    @staticmethod
+    def _scope_snapshot_allows(targets, scope_snapshot):
+        if scope_snapshot.get("unrestricted"):
+            return True
+        try:
+            ref = tactical_scope_ref(targets)
+        except SchedulerTargetShapeError:
+            return False
+        kind, values = ref["kind"], ref["values"]
+        if kind in {"none", "module"}:
+            return True
+        if kind == "dynamic_unscoped" or not values:
+            return False
+        if kind == "client":
+            return set(int(v) for v in values).issubset(scope_snapshot["client_ids"])
+        if kind == "site":
+            return set(int(v) for v in values).issubset(scope_snapshot["site_ids"])
+        return {str(v) for v in values}.issubset(scope_snapshot["endpoint_ids"])
+
+    @staticmethod
+    def _sql_scope_prefilter(qs, scope_snapshot):
+        """Apply exact PostgreSQL JSONB scope filtering before count/paging."""
+        if scope_snapshot.get("unrestricted") or connection.vendor != "postgresql":
+            return qs
+
+        clients = [str(v) for v in scope_snapshot["client_ids"]]
+        sites = [str(v) for v in scope_snapshot["site_ids"]]
+        endpoints = [str(v) for v in scope_snapshot["endpoint_ids"]]
+        table = TecTacScheduleRun._meta.db_table
+        target = f'{table}."targets_snapshot"'
+        sql = f"""
+        (
+          COALESCE({target}->>'type', 'none') = 'none'
+          OR COALESCE({target}->>'type', 'none') NOT IN ('client','clients','site','sites','endpoint','endpoints','agent','agents','dynamic')
+          OR (
+            COALESCE({target}->>'type', '') IN ('client','clients')
+            AND jsonb_typeof({target}->'ids') = 'array'
+            AND jsonb_array_length({target}->'ids') > 0
+            AND NOT EXISTS (
+              SELECT 1 FROM jsonb_array_elements_text({target}->'ids') AS e(v)
+              WHERE NOT (e.v = ANY(%s::text[]))
+            )
+          )
+          OR (
+            COALESCE({target}->>'type', '') IN ('site','sites')
+            AND jsonb_typeof({target}->'ids') = 'array'
+            AND jsonb_array_length({target}->'ids') > 0
+            AND NOT EXISTS (
+              SELECT 1 FROM jsonb_array_elements_text({target}->'ids') AS e(v)
+              WHERE NOT (e.v = ANY(%s::text[]))
+            )
+          )
+          OR (
+            COALESCE({target}->>'type', '') IN ('endpoint','endpoints','agent','agents')
+            AND jsonb_typeof({target}->'ids') = 'array'
+            AND jsonb_array_length({target}->'ids') > 0
+            AND NOT EXISTS (
+              SELECT 1 FROM jsonb_array_elements_text({target}->'ids') AS e(v)
+              WHERE NOT (e.v = ANY(%s::text[]))
+            )
+          )
+          OR (
+            COALESCE({target}->>'type', '') = 'dynamic'
+            AND jsonb_typeof({target}->'scope') = 'object'
+            AND (
+              (
+                ({target}->'scope'->>'type') IN ('client','clients')
+                AND jsonb_typeof({target}->'scope'->'ids') = 'array'
+                AND jsonb_array_length({target}->'scope'->'ids') > 0
+                AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements_text({target}->'scope'->'ids') AS e(v) WHERE NOT (e.v = ANY(%s::text[])))
+              )
+              OR (
+                ({target}->'scope'->>'type') IN ('site','sites')
+                AND jsonb_typeof({target}->'scope'->'ids') = 'array'
+                AND jsonb_array_length({target}->'scope'->'ids') > 0
+                AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements_text({target}->'scope'->'ids') AS e(v) WHERE NOT (e.v = ANY(%s::text[])))
+              )
+              OR (
+                ({target}->'scope'->>'type') IN ('endpoint','endpoints','agent','agents')
+                AND jsonb_typeof({target}->'scope'->'ids') = 'array'
+                AND jsonb_array_length({target}->'scope'->'ids') > 0
+                AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements_text({target}->'scope'->'ids') AS e(v) WHERE NOT (e.v = ANY(%s::text[])))
+              )
+            )
+          )
+        )
+        """
+        return qs.extra(where=[sql], params=[clients, sites, endpoints, clients, sites, endpoints])
+
+    def _row_visible(self, request, run, *, manager, permitted_actions=None, scope_snapshot=None):
+        if manager:
+            return True
+        action_id = run.action_id or (run.schedule.action_id if run.schedule else "")
+        if action_id not in (permitted_actions or set()):
+            return False
         run_targets = run.targets_snapshot or (run.schedule.targets if run.schedule else {})
-        return _can_access_target_scope(request.user, run_targets)
+        return self._scope_snapshot_allows(run_targets, scope_snapshot or {})
 
     def _paged_response(self, request, qs, owner_type):
         page = self._positive_int(request.query_params.get("page"), default=1, maximum=1_000_000)
@@ -473,17 +558,22 @@ class SchedulerRunListView(APIView):
             offset = (page - 1) * page_size
             visible = list(qs[offset:offset + page_size])
         else:
-            total = 0
-            start = (page - 1) * page_size
-            stop = start + page_size
-            visible = []
-            action_cache = {}
-            for run in qs.iterator(chunk_size=200):
-                if not self._row_visible(request, run, manager=False, action_cache=action_cache):
-                    continue
-                if start <= total < stop:
-                    visible.append(run)
-                total += 1
+            permitted_actions = self._permitted_action_ids(request.user)
+            scope_snapshot = resources_adapter.scheduler_scope_snapshot(user=request.user)
+            qs = qs.filter(Q(action_id__in=permitted_actions) | Q(action_id="", schedule__action_id__in=permitted_actions))
+            qs = self._sql_scope_prefilter(qs, scope_snapshot)
+            if connection.vendor == "postgresql":
+                total = qs.count()
+                offset = (page - 1) * page_size
+                visible = list(qs[offset:offset + page_size])
+            else:
+                rows = [
+                    run for run in qs.iterator(chunk_size=200)
+                    if self._row_visible(request, run, manager=False, permitted_actions=permitted_actions, scope_snapshot=scope_snapshot)
+                ]
+                total = len(rows)
+                offset = (page - 1) * page_size
+                visible = rows[offset:offset + page_size]
 
         pages = (total + page_size - 1) // page_size if total else 0
         return Response({
@@ -516,9 +606,10 @@ class SchedulerRunListView(APIView):
         # bounded response shape and 200-candidate behavior exactly.
         rows = []
         manager = _native_scheduler_manager(request.user)
-        action_cache = {}
+        permitted_actions = None if manager else self._permitted_action_ids(request.user)
+        scope_snapshot = None if manager else resources_adapter.scheduler_scope_snapshot(user=request.user)
         for run in qs[:200]:
-            if self._row_visible(request, run, manager=manager, action_cache=action_cache):
+            if self._row_visible(request, run, manager=manager, permitted_actions=permitted_actions, scope_snapshot=scope_snapshot):
                 rows.append(serialize_run(run))
         return Response({"runs": rows, "count": len(rows), "owner_type": owner_type})
 

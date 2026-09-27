@@ -435,14 +435,21 @@ def copy_atomic(source, target, stat_from):
 def validate_runtime(config, targets, effective, log):
     tactical_root = Path(config.get("TACTICAL_ROOT", "/rmm"))
     tactical_python = Path(config.get("TACTICAL_PYTHON", tactical_root / "api/env/bin/python"))
-    system_python = Path("/usr/bin/python3")
     manage = Path(config.get("TACTICAL_BACKEND_ROOT", tactical_root / "api/tacticalrmm")) / "manage.py"
     tactical_user = config.get("TACTICAL_USER", "tactical")
     if effective.get("python_compile"):
+        syntax_check = (
+            "import ast,pathlib,sys; "
+            "p=pathlib.Path(sys.argv[1]); "
+            "compile(p.read_bytes(), str(p), 'exec', ast.PyCF_ONLY_AST)"
+        )
         for target in targets:
             if not target["path"].endswith(".py"):
                 continue
-            result = subprocess.run([str(system_python), "-I", "-m", "py_compile", str(target["target_path"])], stdout=log, stderr=subprocess.STDOUT, text=True, env=privileged_env())
+            result = subprocess.run(
+                ["runuser", "-u", tactical_user, "--", str(tactical_python), "-I", "-c", syntax_check, str(target["target_path"])],
+                stdout=log, stderr=subprocess.STDOUT, text=True, env=privileged_env(),
+            )
             if result.returncode:
                 raise RuntimeError(f"Python compile validation failed: {target['component']}/{target['path']}")
     if effective.get("django_check"):
@@ -556,6 +563,7 @@ def apply_job(path, job, config, log):
     upload_id = str(job.get("upload_id") or "")
     package.unlink(missing_ok=True)
     if JOB_RE.fullmatch(upload_id):
+        (STAGED_ROOT / f"{upload_id}.zip").unlink(missing_ok=True)
         (STAGED_ROOT / f"{upload_id}.sig").unlink(missing_ok=True)
         (STAGED_ROOT / f"{upload_id}.release.json").unlink(missing_ok=True)
         (STAGED_ROOT / f"{upload_id}.json").unlink(missing_ok=True)

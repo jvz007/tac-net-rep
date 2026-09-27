@@ -98,7 +98,8 @@ cap.register_capability(
 )
 metadata_rows = cap.list_capabilities(check_health=False)
 assert health_calls["count"] == 0
-assert metadata_rows[0]["available"] is True
+assert metadata_rows[0]["available"] is False
+assert metadata_rows[0]["state"] == "health-unchecked"
 assert metadata_rows[0]["health_checked"] is False
 assert metadata_rows[0]["health"] == {"checked": False}
 

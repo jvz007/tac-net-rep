@@ -276,3 +276,7 @@ Capability providers may also be owned directly by Tec-Tac Core rather than an i
 ## Core server maintenance
 
 `core.server_maintenance` is the generic durable privileged-job capability. See `docs/server-maintenance-capability.md`. It exposes registered actions only; it does not provide arbitrary root-shell execution.
+
+### Metadata-only discovery
+
+`check_health=false` is discovery-only. Core returns registered capability metadata without calling provider health callbacks, but it reports `available=false`, `state=health-unchecked`, and `health_checked=false`. Runtime callers must use the default live health check before treating a capability as available.

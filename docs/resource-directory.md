@@ -1,7 +1,7 @@
 # Core Resource Directory
 
 Contract ID: `core.resources`  
-Contract version: `1.1.0`  
+Contract version: `1.2.0`  
 Python namespace: `tec_tac.resources`
 
 ## Purpose
@@ -24,7 +24,7 @@ tec_tac.resources           <- stable public contract
         +-- Alerts / Automation / other modules
 ```
 
-Contract 1.1 remains read-oriented for all three resource types and adds narrowly scoped create/update support for clients and sites. Agent mutation and resource deletion are not part of this version.
+Contract 1.2 keeps scoped reads for all three resource types and the existing client/site create-update boundary. It additionally guarantees that a new client is created atomically with a `Default Site`, restricted creators are granted scope to the client they create, clients retain at least one site, trusted global service contexts are audited, and list pagination bounds are published. Agent mutation and resource deletion are not part of this version.
 
 ## Stable resource records
 
@@ -140,7 +140,7 @@ List operations return:
 }
 ```
 
-`page_size` is limited to 500.
+`page_size` is limited to 500 and `page` is limited to 10000.
 
 ## Authorization
 
@@ -170,7 +170,7 @@ Updates use the same centralized Tactical client/site scope rule as Scheduler au
 
 Creating a new client has no pre-existing resource against which to apply scope; it therefore requires the two manage permissions above and creates a new top-level resource.
 
-Trusted service contexts cannot mutate resources in contract 1.x. A future unattended write mechanism must establish explicit non-self-asserted service authority rather than reusing global read authority.
+Creating a trusted global service context writes a strict Core audit event before authority is returned. Trusted service contexts cannot mutate resources in contract 1.x. A future unattended write mechanism must establish explicit non-self-asserted service authority rather than reusing global read authority.
 
 ## Core RBAC groups
 

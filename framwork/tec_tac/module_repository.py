@@ -5,6 +5,7 @@ and then passed into the existing Module Management v2 staging/install pipeline.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import http.client
 import ipaddress
@@ -75,11 +76,22 @@ def load_repositories() -> dict:
     return payload
 
 
+def _validated_port(parsed: urllib.parse.ParseResult, *, label: str) -> int | None:
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ModuleRepositoryError(f"{label} contains an invalid port.") from exc
+    if port is not None and not (1 <= int(port) <= 65535):
+        raise ModuleRepositoryError(f"{label} contains an invalid port.")
+    return port
+
+
 def _clean_url(value: str) -> str:
     url = str(value or "").strip()
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc or not parsed.hostname:
         raise ModuleRepositoryError("Repository URL must be an absolute http:// or https:// URL.")
+    _validated_port(parsed, label="Repository URL")
     if parsed.username or parsed.password:
         raise ModuleRepositoryError("Credentials must not be embedded in repository URLs.")
     return url
@@ -118,7 +130,7 @@ def _resolve_remote_url(value: str, *, trust: str = "custom") -> tuple[str, urll
         addresses.add(_normalize_address(ipaddress.ip_address(host)))
     except ValueError:
         try:
-            for row in socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM):
+            for row in socket.getaddrinfo(host, _validated_port(parsed, label="Repository URL") or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM):
                 addresses.add(_normalize_address(ipaddress.ip_address(row[4][0].split("%", 1)[0])))
         except (OSError, ValueError) as exc:
             raise ModuleRepositoryError("Repository hostname could not be resolved.") from exc
@@ -135,10 +147,82 @@ def _validate_remote_url(value: str, *, trust: str = "custom") -> str:
     return _resolve_remote_url(value, trust=trust)[0]
 
 
+def _proxy_url_for(parsed: urllib.parse.ParseResult) -> str | None:
+    host = str(parsed.hostname or "")
+    if not host or urllib.request.proxy_bypass(host):
+        return None
+    proxy = str((urllib.request.getproxies() or {}).get(parsed.scheme) or "").strip()
+    if not proxy:
+        return None
+    proxy_parsed = urllib.parse.urlparse(proxy if "://" in proxy else f"http://{proxy}")
+    if proxy_parsed.scheme != "http" or not proxy_parsed.hostname:
+        raise ModuleRepositoryError("Repository proxy must be an absolute http:// proxy URL.")
+    _validated_port(proxy_parsed, label="Repository proxy URL")
+    return urllib.parse.urlunparse(proxy_parsed)
+
+
+def _authority(host: str, port: int, scheme: str) -> str:
+    default = 443 if scheme == "https" else 80
+    rendered = f"[{host}]" if ":" in host and not host.startswith("[") else host
+    return rendered if port == default else f"{rendered}:{port}"
+
+
+def _proxy_authorization(parsed: urllib.parse.ParseResult) -> str | None:
+    if parsed.username is None:
+        return None
+    username = urllib.parse.unquote(parsed.username)
+    password = urllib.parse.unquote(parsed.password or "")
+    token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+    return f"Basic {token}"
+
+
+def _pinned_proxy_get(url: str, address: ipaddress._BaseAddress, proxy_url: str, *, maximum: int, timeout: int) -> tuple[int, str | None, bytes]:
+    parsed = urllib.parse.urlparse(url)
+    host = str(parsed.hostname or "")
+    port = _validated_port(parsed, label="Repository URL") or (443 if parsed.scheme == "https" else 80)
+    proxy = urllib.parse.urlparse(proxy_url)
+    proxy_host = str(proxy.hostname or "")
+    proxy_port = _validated_port(proxy, label="Repository proxy URL") or 80
+    proxy_auth = _proxy_authorization(proxy)
+    conn = http.client.HTTPConnection(proxy_host, proxy_port, timeout=timeout)
+    path = urllib.parse.urlunparse(("", "", parsed.path or "/", parsed.params, parsed.query, ""))
+    target_authority = _authority(host, port, parsed.scheme)
+    headers = {
+        "User-Agent": "Tec-Tac-Module-Repository/1.8",
+        "Accept": "application/json, application/octet-stream;q=0.9, */*;q=0.1",
+        "Host": target_authority,
+    }
+    try:
+        if parsed.scheme == "https":
+            tunnel_headers = {"Host": target_authority}
+            if proxy_auth:
+                tunnel_headers["Proxy-Authorization"] = proxy_auth
+            pinned_host = f"[{address}]" if address.version == 6 else str(address)
+            conn.set_tunnel(pinned_host, port, headers=tunnel_headers)
+            conn.connect()
+            context = ssl.create_default_context()
+            conn.sock = context.wrap_socket(conn.sock, server_hostname=host)
+            conn.request("GET", path, headers=headers)
+        else:
+            if proxy_auth:
+                headers["Proxy-Authorization"] = proxy_auth
+            pinned_host = f"[{address}]" if address.version == 6 else str(address)
+            pinned_url = urllib.parse.urlunparse((
+                "http", f"{pinned_host}:{port}", parsed.path or "/", parsed.params, parsed.query, ""
+            ))
+            conn.request("GET", pinned_url, headers=headers)
+        response = conn.getresponse()
+        location = response.getheader("Location")
+        body = _read_bounded(response, maximum)
+        return int(response.status), location, body
+    finally:
+        conn.close()
+
+
 def _pinned_get(url: str, address: ipaddress._BaseAddress, *, maximum: int, timeout: int) -> tuple[int, str | None, bytes]:
     parsed = urllib.parse.urlparse(url)
     host = str(parsed.hostname or "")
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    port = _validated_port(parsed, label="Repository URL") or (443 if parsed.scheme == "https" else 80)
     raw = socket.create_connection((str(address), port), timeout=timeout)
     conn = None
     try:
@@ -169,9 +253,13 @@ def _fetch(url: str, maximum: int, timeout: int = 12, *, trust: str = "custom") 
         safe_url, _, addresses = _resolve_remote_url(current, trust=trust)
         last_error = None
         result = None
+        proxy_url = _proxy_url_for(urllib.parse.urlparse(safe_url))
         for address in addresses:
             try:
-                result = _pinned_get(safe_url, address, maximum=maximum, timeout=timeout)
+                if proxy_url:
+                    result = _pinned_proxy_get(safe_url, address, proxy_url, maximum=maximum, timeout=timeout)
+                else:
+                    result = _pinned_get(safe_url, address, maximum=maximum, timeout=timeout)
                 break
             except (OSError, ssl.SSLError, http.client.HTTPException) as exc:
                 last_error = exc

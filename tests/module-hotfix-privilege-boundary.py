@@ -56,9 +56,10 @@ def test_privileged_verifier_exposes_hotfix_command():
 
 
 
-def test_root_hotfix_verifier_checks_exact_signed_bytes():
+def test_root_hotfix_verifier_checks_exact_signed_bytes_and_module_permissions():
     import base64
     import hashlib
+    import zipfile
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     from tec_tac.trusted_publishers import PublisherTrustError, verify_release_files
@@ -71,16 +72,34 @@ def test_root_hotfix_verifier_checks_exact_signed_bytes():
         trust_root = base / "trust"
         pubdir = trust_root / "tech-flow"
         pubdir.mkdir(parents=True)
+        ext = base / "extensions" / "safe"
+        ext.mkdir(parents=True)
+        (ext / "tec_tac.json").write_text(json.dumps({
+            "id": "safe", "type": "extension", "version": "1.0.0",
+            "publisher_permissions": ["server_maintenance.register"],
+        }), encoding="utf-8")
         package = base / "module-HF001.zip"
-        package.write_bytes(b"signed hotfix bytes")
+        manifest = {
+            "type": "tec-tac-hotfix", "schema": 1, "id": "HF001",
+            "module_id": "safe", "base_version": "1.0.0",
+            "targets": [{
+                "component": "extension", "path": "payload.txt",
+                "sha256_before": "0" * 64, "sha256_after": "1" * 64,
+            }],
+        }
+        with zipfile.ZipFile(package, "w") as zf:
+            zf.writestr("tec_tac_hotfix.json", json.dumps(manifest))
+            zf.writestr("payload/extension/payload.txt", b"replacement")
         key = Ed25519PrivateKey.generate()
         public = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
         (pubdir / "public.key").write_text("ed25519:" + base64.b64encode(public).decode() + "\n")
-        (pubdir / "publisher.json").write_text(json.dumps({
+        publisher_path = pubdir / "publisher.json"
+        publisher = {
             "schema": 1, "publisher_id": "tech-flow", "status": "trusted", "environment": "development",
             "permissions": ["module.install"],
             "keys": [{"key_id": "dev", "status": "active", "algorithm": "Ed25519", "public_key_file": "public.key"}],
-        }))
+        }
+        publisher_path.write_text(json.dumps(publisher))
         signature = base / "module-HF001.zip.sig"
         signature.write_text("ed25519:" + base64.b64encode(key.sign(package.read_bytes())).decode() + "\n")
         metadata = base / "module-HF001.release.json"
@@ -91,10 +110,27 @@ def test_root_hotfix_verifier_checks_exact_signed_bytes():
         }))
         trust_helper.TRUST_ROOT = trust_root
         trust_helper._imports = lambda: (PublisherTrustError, verify_release_files, None)
-        trust_helper._config = lambda: {"TEC_TAC_ENVIRONMENT": "development"}
+        trust_helper._config = lambda: {
+            "TEC_TAC_ENVIRONMENT": "development",
+            "TEC_TAC_EXTENSIONS_ROOT": str(base / "extensions"),
+        }
+        trust_helper._require_root_owned_nonwritable = lambda *args, **kwargs: None
         trust_helper.enforce_policy = lambda trust, kind: {**trust, "root_policy": {"accepted": True}}
+
+        try:
+            trust_helper.verify_hotfix(package, signature, metadata)
+        except PublisherTrustError as exc:
+            assert exc.code == "publisher_permission_denied"
+            assert "server_maintenance.register" in str(exc)
+        else:
+            raise AssertionError("hotfix signer lacking the target module permission was accepted")
+
+        publisher["permissions"].append("server_maintenance.register")
+        publisher_path.write_text(json.dumps(publisher))
         ok = trust_helper.verify_hotfix(package, signature, metadata)
         assert ok["verified"] and ok["trusted"] and ok["publisher_id"] == "tech-flow"
+        assert ok["required_permissions"] == ["module.install", "server_maintenance.register"]
+
         package.write_bytes(package.read_bytes() + b"tampered")
         try:
             trust_helper.verify_hotfix(package, signature, metadata)
@@ -227,7 +263,7 @@ if __name__ == "__main__":
     test_claim_is_root_private_and_public_job_is_not_authoritative()
     test_root_verifier_is_mandatory_before_apply_source()
     test_privileged_verifier_exposes_hotfix_command()
-    test_root_hotfix_verifier_checks_exact_signed_bytes()
+    test_root_hotfix_verifier_checks_exact_signed_bytes_and_module_permissions()
     test_verified_private_copy_survives_staged_swap()
     test_symlinked_staged_zip_is_rejected()
     test_job_mirror_temp_symlink_cannot_clobber_canary()
