@@ -43,7 +43,7 @@ TERMINAL_STATUSES = {'succeeded','failed','cancelled','canceled','complete','com
 
 
 def _read_request_nofollow(path: Path) -> bytes:
-    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
     fd = os.open(path, flags)
     try:
         st = os.fstat(fd)

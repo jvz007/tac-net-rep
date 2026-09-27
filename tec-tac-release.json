@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.137",
+  "version": "1.15.138",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -18,8 +18,8 @@
     },
     {
       "path": "FIXING.md",
-      "size": 1182,
-      "sha256": "c01b6fd390ee362543b0abdef9284b1ba3455704546708eff17dbfa6ce4efc12"
+      "size": 1364,
+      "sha256": "d7af8c5df2a359530bd0e28dcb84fa17a4306b004656e3f3a2723786cb2ee1cf"
     },
     {
       "path": "LICENSE",
@@ -37,14 +37,14 @@
       "sha256": "f4f304390f9a3e8ebb9ba84ecef8275ddc2ed7ed130f860f52caa668dd70bfe5"
     },
     {
-      "path": "RELEASE_NOTES_1.15.137.md",
-      "size": 1454,
-      "sha256": "2f992d0a78ae21a3bb5e23768948f006141982cd72a32bb4b6a4c75d616bd97e"
+      "path": "RELEASE_NOTES_1.15.138.md",
+      "size": 1856,
+      "sha256": "c23f777fd87e2b3148c5146cdc627f9e89ef86b6d632a3a3d61c5f6335fe52ea"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "beda3a26e87994c506494d4bc2ac0ae4bf5d3fad8596af64b6517abb012a58fa"
+      "sha256": "b610d984e7d20b8f82a4aa52c5d45cc0f1f628829ba4729f4388cbb51859e7ff"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -1373,8 +1373,8 @@
     },
     {
       "path": "install.sh",
-      "size": 64003,
-      "sha256": "e0f95f36c1c018469ac5fdc93646022c4bf21240d4a02206552133299852eb79"
+      "size": 64384,
+      "sha256": "c232a8b0d22ff0637566713a952bdc95df12628fb608a68fcf2664c351d3af1d"
     },
     {
       "path": "reportsets/.gitkeep",
@@ -1413,8 +1413,8 @@
     },
     {
       "path": "scripts/housekeeping-helper.py",
-      "size": 14452,
-      "sha256": "30f66559ea70c296f91e1cbe5c3baf8b5f2d04aadecb4f9c9fec809fbddaef19"
+      "size": 14483,
+      "sha256": "99d343541a7ae35d8887b79c1dfb1dbcc39617f98483ca8262df0aa4be14821e"
     },
     {
       "path": "scripts/install-extension.sh",
@@ -1518,13 +1518,13 @@
     },
     {
       "path": "scripts/server-backup-helper.py",
-      "size": 222344,
-      "sha256": "72242153c10aeec2c4512e8f2603c9c02a872b0861e083cae6c42e02a7f33e00"
+      "size": 224968,
+      "sha256": "9d33c9888a43a5fe47091fc84f5dfdaf2a14fefe5d72ae8216eef48d5ac69771"
     },
     {
       "path": "scripts/server-maintenance-helper.py",
-      "size": 28856,
-      "sha256": "cc160e2c7e2109f325bda2cf29f2e10d539685dcc90e55e64f556ee6239d7065"
+      "size": 29685,
+      "sha256": "cef1fc16b8f392a22960c15049b68246a66947716864587da2992b7778eb2568"
     },
     {
       "path": "scripts/system-update-helper.py",
@@ -1554,7 +1554,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "eeba302f9aaf297d43baf8816e46d101a62cbe966138739d3b02276b02472971"
+      "sha256": "ab1a08f644c087fdc7e923857d2f1b942861477ee8f7d574209e6360092cb958"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -1680,6 +1680,11 @@
       "path": "tests/history-pagination-foundation.py",
       "size": 1562,
       "sha256": "33b69191f504423dbd7d1e55cc3b461affe30cce83f2124e5ecfc3b5bbdbc02e"
+    },
+    {
+      "path": "tests/housekeeping-backup-hardening-1.15.138.py",
+      "size": 4753,
+      "sha256": "8d44d76311619b70902bbfc3d85637dbeca21c0061311424ec97cf63e76e8d5a"
     },
     {
       "path": "tests/housekeeping-claim-security.py",
@@ -2138,8 +2143,8 @@
     },
     {
       "path": "tests/server-backup-host-rollback.py",
-      "size": 19916,
-      "sha256": "8966ee669220c1ec19f465b9b5ff818fe2a5b2adc6f73231764a5feb0b9d81f3"
+      "size": 20976,
+      "sha256": "1d234d8eceebaa7c2ca3985e97fb89cc58d3d827289b5b147b87410fc3ec34fc"
     },
     {
       "path": "tests/server-backup-recovery-trust-capability-boundary.py",
@@ -2275,6 +2280,11 @@
       "path": "tests/tactical-update-survival.sh",
       "size": 2484,
       "sha256": "5d93d43f92957f4d0ea2233f5608ffa1b9420f33edafbf21f356a7ab3890b419"
+    },
+    {
+      "path": "tests/test_housekeeping_claim_security.py",
+      "size": 221,
+      "sha256": "acd331f08c2d27f682a934da78b013f34a2a9e771cd05cc51258dca48c1e3414"
     },
     {
       "path": "tests/tracker-test-doc-closure-1.15.129.py",

@@ -751,6 +751,14 @@ fi
 chown root:root "${SYSTEM_UPDATE_CONFIG}"
 chmod 0644 "${SYSTEM_UPDATE_CONFIG}"
 
+# Privileged helpers cannot trust TEC_TAC_CONFIG_FILE from a sudo environment.
+# Persist the installer-selected path in a fixed root-owned pointer instead.
+TEC_TAC_CONFIG_POINTER="/etc/tec-tac/config-path"
+mkdir -p /etc/tec-tac
+printf '%s\n' "${TEC_TAC_CONFIG_FILE}" > "${TEC_TAC_CONFIG_POINTER}"
+chown root:root "${TEC_TAC_CONFIG_POINTER}"
+chmod 0644 "${TEC_TAC_CONFIG_POINTER}"
+
 cat > "${SYSTEM_UPDATE_SUDOERS}" <<EOF
 ${TACTICAL_USER} ALL=(root) NOPASSWD: ${SYSTEM_UPDATE_HELPER} --dispatch *
 ${TACTICAL_USER} ALL=(root) NOPASSWD: ${SYSTEM_UPDATE_HELPER} --set-trust-policy *

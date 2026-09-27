@@ -76,7 +76,28 @@ RECOVERY_AUDIT_FILE = Path("/var/log/tec-tac/recovery-audit.jsonl")
 ACCOUNT_SECURITY_AUDIT_FILE = Path("/var/log/tec-tac/account-security-policy-audit.jsonl")
 TRUST_LEVELS = ("unsigned", "signed_development", "signed_production", "secure_signed")
 TRUST_LEVEL_RANK = {name: idx for idx, name in enumerate(TRUST_LEVELS)}
-CONFIG = Path("/opt/tec-tac/etc/tec-tac.conf")
+DEFAULT_CONFIG = Path("/opt/tec-tac/etc/tec-tac.conf")
+CONFIG_POINTER = Path("/etc/tec-tac/config-path")
+
+
+def _installed_config_path(pointer=CONFIG_POINTER, default=DEFAULT_CONFIG):
+    """Resolve the installer-selected config path from a fixed root-owned pointer."""
+    try:
+        st = pointer.lstat()
+    except FileNotFoundError:
+        return default
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+        raise RuntimeError(f"Tec-Tac config-path pointer is not a regular file: {pointer}")
+    if st.st_uid != 0 or (st.st_mode & 0o022):
+        raise RuntimeError(f"Tec-Tac config-path pointer must be root-owned and not group/world writable: {pointer}")
+    raw = pointer.read_text(encoding="utf-8").strip()
+    path = Path(raw)
+    if not raw or "\n" in raw or "\r" in raw or not path.is_absolute():
+        raise RuntimeError(f"Tec-Tac config-path pointer is invalid: {pointer}")
+    return path
+
+
+CONFIG = _installed_config_path()
 DEFAULT_STATE_ROOT = Path("/var/lib/tec-tac/server-backup")
 SELF = Path("/usr/local/sbin/tec-tac-server-backup")
 MAX_LOG_BYTES = 2 * 1024 * 1024
@@ -2839,6 +2860,43 @@ def _tec_tac_restore_host_paths(config, systemd_root=Path("/etc/systemd/system")
     )
 
 
+def _snapshot_source_bytes(paths):
+    """Estimate bytes copied into a host-path rollback snapshot without following links."""
+    total = 0
+    for path in _canonical_snapshot_targets(paths):
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(info.st_mode) or stat.S_ISREG(info.st_mode):
+            total += max(0, int(info.st_size))
+            continue
+        if not stat.S_ISDIR(info.st_mode):
+            continue
+        for root, dirs, files in os.walk(path, followlinks=False):
+            root_path = Path(root)
+            # Do not descend through symlinked directories. os.walk with
+            # followlinks=False already avoids traversal; count the link itself.
+            for name in dirs + files:
+                child = root_path / name
+                try:
+                    child_info = child.lstat()
+                except OSError:
+                    continue
+                if stat.S_ISREG(child_info.st_mode) or stat.S_ISLNK(child_info.st_mode):
+                    total += max(0, int(child_info.st_size))
+    return total
+
+
+def _preflight_host_snapshot_bytes(config, mode):
+    targets = []
+    if mode in {"full", "tactical"}:
+        targets.extend(TACTICAL_RESTORE_HOST_PATHS)
+    if mode in {"full", "tec_tac"}:
+        targets.extend(_tec_tac_restore_host_paths(config))
+    return _snapshot_source_bytes(targets) if targets else 0
+
+
 def _canonical_snapshot_targets(paths):
     """Return fixed absolute rollback targets with nested duplicates removed."""
     normalized = []
@@ -3230,9 +3288,15 @@ def validate_target_preflight(config, report, mode, staged_bytes, *, mutation_lo
     try:
         usage = shutil.disk_usage(rs["staging"])
         # Conservative read-only estimate: staged bundle + extracted selected
-        # components + one additional copy/safety margin, plus 2 GiB.
-        required = max(2 * 1024**3, int(staged_bytes) * 3)
-        _vr_check(report, "target", "target.disk", "Staging free space", "passed" if usage.free >= required else "failed", f"free={usage.free} required_estimate={required}")
+        # components + one additional copy/safety margin, plus the host paths
+        # that will be copied into the pre-restore rollback snapshot.
+        host_snapshot_bytes = _preflight_host_snapshot_bytes(config, mode)
+        required = max(2 * 1024**3, int(staged_bytes) * 3 + host_snapshot_bytes)
+        _vr_check(
+            report, "target", "target.disk", "Staging free space",
+            "passed" if usage.free >= required else "failed",
+            f"free={usage.free} required_estimate={required} host_snapshot_estimate={host_snapshot_bytes}",
+        )
     except Exception as exc:
         _vr_check(report, "target", "target.disk", "Staging free space", "failed", str(exc))
 

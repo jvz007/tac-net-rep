@@ -22,7 +22,27 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-CONFIG = Path("/opt/tec-tac/etc/tec-tac.conf")
+DEFAULT_CONFIG = Path("/opt/tec-tac/etc/tec-tac.conf")
+CONFIG_POINTER = Path("/etc/tec-tac/config-path")
+
+
+def _installed_config_path(pointer=CONFIG_POINTER, default=DEFAULT_CONFIG):
+    try:
+        st = pointer.lstat()
+    except FileNotFoundError:
+        return default
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+        raise RuntimeError(f"Tec-Tac config-path pointer is not a regular file: {pointer}")
+    if st.st_uid != 0 or (st.st_mode & 0o022):
+        raise RuntimeError(f"Tec-Tac config-path pointer must be root-owned and not group/world writable: {pointer}")
+    raw = pointer.read_text(encoding="utf-8").strip()
+    path = Path(raw)
+    if not raw or "\n" in raw or "\r" in raw or not path.is_absolute():
+        raise RuntimeError(f"Tec-Tac config-path pointer is invalid: {pointer}")
+    return path
+
+
+CONFIG = _installed_config_path()
 DEFAULT_STATE_ROOT = Path("/var/lib/tec-tac/server-maintenance")
 DEFAULT_REGISTRY_ROOT = Path("/etc/tec-tac/server-maintenance/actions.d")
 DEFAULT_ACTION_ROOT = Path("/usr/local/lib/tec-tac/server-maintenance/actions")
