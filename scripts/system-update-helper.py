@@ -1042,29 +1042,70 @@ def deploy_ui(source, target):
     copy_tree_contents(source, target)
 
 
+def _validated_rollback_members(tf, target):
+    members = tf.getmembers()
+    expected_top = target.name
+    if not members:
+        raise RuntimeError("rollback backup is empty")
+    for member in members:
+        rel = safe_name(member.name)
+        if not rel.parts or rel.parts[0] != expected_top:
+            raise RuntimeError(f"rollback backup contains an unexpected top-level path: {member.name}")
+        if member.issym() or member.islnk() or not (member.isdir() or member.isfile()):
+            raise RuntimeError(f"rollback backup contains an unsupported member: {member.name}")
+    return members
+
+
 def restore_backup(backup, target):
+    """Restore a rollback archive without destroying the live tree first.
+
+    The complete archive is validated and extracted into a sibling staging
+    directory before the installed checkout is touched.  Only then do we use
+    same-filesystem renames to quarantine the live tree and publish the staged
+    rollback tree.  The live quarantine remains available until the swap has
+    completed, so malformed/truncated archives cannot erase a working install.
+    """
+    backup = Path(backup)
+    target = Path(target)
     parent = target.parent
-    preserved_git = target / ".git"
-    git_tmp = None
-    if preserved_git.exists():
-        git_tmp = parent / f".{target.name}.git.rollback"
-        remove_path(git_tmp)
-        os.replace(preserved_git, git_tmp)
-    remove_path(target)
-    with tarfile.open(backup, "r:gz") as tf:
-        members = tf.getmembers()
-        expected_top = target.name
-        for member in members:
-            rel = safe_name(member.name)
-            if not rel.parts or rel.parts[0] != expected_top:
-                raise RuntimeError(f"rollback backup contains an unexpected top-level path: {member.name}")
-            if member.issym() or member.islnk() or not (member.isdir() or member.isfile()):
-                raise RuntimeError(f"rollback backup contains an unsupported member: {member.name}")
-        tf.extractall(parent, members=members, filter="data")
-    if git_tmp and git_tmp.exists() and not (target / ".git").exists():
-        os.replace(git_tmp, target / ".git")
-    elif git_tmp:
-        remove_path(git_tmp)
+    if backup.is_symlink() or not backup.is_file():
+        raise RuntimeError("rollback backup is missing or is not a regular file")
+
+    with tempfile.TemporaryDirectory(prefix=f".{target.name}.rollback-stage-", dir=parent) as raw_stage:
+        stage_parent = Path(raw_stage)
+        with tarfile.open(backup, "r:gz") as tf:
+            members = _validated_rollback_members(tf, target)
+            tf.extractall(stage_parent, members=members, filter="data")
+
+        staged_target = stage_parent / target.name
+        if staged_target.is_symlink() or not staged_target.is_dir():
+            raise RuntimeError("rollback backup did not produce the expected component directory")
+
+        quarantine = None
+        moved_git = False
+        if target.exists() or target.is_symlink():
+            raw_quarantine = Path(tempfile.mkdtemp(prefix=f".{target.name}.rollback-live-", dir=parent))
+            raw_quarantine.rmdir()
+            quarantine = raw_quarantine
+            os.replace(target, quarantine)
+
+        try:
+            if quarantine is not None:
+                preserved_git = quarantine / ".git"
+                if preserved_git.exists() and not (staged_target / ".git").exists():
+                    os.replace(preserved_git, staged_target / ".git")
+                    moved_git = True
+            os.replace(staged_target, target)
+        except Exception:
+            if quarantine is not None:
+                if moved_git and not (quarantine / ".git").exists() and (staged_target / ".git").exists():
+                    os.replace(staged_target / ".git", quarantine / ".git")
+                if not target.exists() and quarantine.exists():
+                    os.replace(quarantine, target)
+            raise
+        else:
+            if quarantine is not None:
+                remove_path(quarantine)
 
 
 INSTALL_TIMEOUT_SECONDS = 1800

@@ -1,20 +1,29 @@
-# FIXING.md — Core 1.15.103
+# FIXING.md — Core 1.15.104
 
 ## Review scope
 
-This release is intentionally scoped to **M5** from Claude's Tec-Tac Medium/Low tracker.
+This release is intentionally scoped to **M6** from Claude's Tec-Tac Medium/Low tracker.
 
-### M5 — Tec-Tac-only rollback host coverage
+### M6 — validate System Update rollback source before swapping the live tree
 
-Review that a Tec-Tac-only pre-restore transaction snapshots and can restore:
+Review that `scripts/system-update-helper.py::restore_backup()` now:
 
-- Tactical `local_settings.py` at `<TACTICAL_ROOT>/api/tacticalrmm/tacticalrmm/local_settings.py`.
-- `/etc/systemd/system/rmm.service.d`.
-- Persistent `tec-tac-*` systemd units, including known installer units even when absent before restore so a failed restore cannot leave newly introduced units behind.
-- Any additional existing `tec-tac-*` unit files/symlinks discovered at transaction start.
+- refuses missing/non-regular rollback archives before touching the installed component tree;
+- validates every tar member before publication and rejects unexpected top-level paths, links, and special files;
+- fully extracts the rollback archive into a sibling staging directory before the live tree is renamed or removed;
+- keeps the current live component tree in a same-filesystem quarantine until the staged rollback tree is successfully published;
+- preserves the live checkout's `.git` metadata because system-update backups intentionally exclude `.git`;
+- restores the quarantined live tree if the final staged-tree publication fails;
+- removes staging/quarantine artifacts after a successful restore.
 
-The behavioral regression is `tests/server-backup-host-rollback.py`, section `M5 Tec-Tac host integration rollback surface`. It mutates/deletes/adds those surfaces and verifies exact pre-restore state is recovered.
+Behavioral regression: `tests/system-update-rollback-backup-safety.py`.
+
+The test proves that missing, malformed and truncated/corrupt rollback archives leave the live component tree and `.git` metadata untouched, while a valid archive is staged and then swapped successfully.
+
+## Test-environment note
+
+`tests/tactical-update-survival.sh` reaches its environment prerequisite check and cannot determine the real Tactical service user in the packaging container. The M6-specific regression and System Update extraction/signed-tree/foundation suites pass independently; do not treat the missing service-account environment as an M6 behavior failure.
 
 ## Out of scope
 
-No M6+ Mediums or unrelated Low items are intentionally addressed in this release.
+No M7+ Mediums or unrelated Low items are intentionally addressed in this release.
