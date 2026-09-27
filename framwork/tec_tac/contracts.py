@@ -361,6 +361,37 @@ HTTP_CONTRACT_DETAILS = {
         "query": {"page": "integer >=1", "page_size": "integer 1..100", "status": "optional string", "search": "optional string"},
         "response": {"items": "array", "total": "integer", "page": "integer", "page_size": "integer", "pages": "integer", "next_page": "integer|null", "previous_page": "integer|null"},
     },
+    "/api/tfd/system/updates/trust-policy/": {
+        "GET": {
+            "authorization": "authenticated Tec-Tac session",
+            "response": {
+                "minimum_level": "unsigned|signed_development|signed_production|secure_signed",
+                "minimum_label": "display label for the current floor",
+                "levels": "ordered trust-level metadata",
+                "environment": "production|development",
+                "help_article": "core.trust-policy",
+                "help_url": "compatible help URL",
+            },
+        },
+        "PUT": {
+            "authorization": "authenticated Tec-Tac session with trust-policy authority",
+            "request": {"minimum_level": "unsigned|signed_development|signed_production|secure_signed"},
+            "responses": {
+                "applied": {
+                    "shape": "effective trust-policy object",
+                    "meaning": "requested level was applied through the privileged helper",
+                },
+                "console_required": {
+                    "status": "console_required",
+                    "requested_level": "requested lower trust level",
+                    "environment": "production|development",
+                    "command": "root-console command that must be run explicitly",
+                    "help_article": "core.trust-policy",
+                    "help_url": "compatible help URL",
+                },
+            },
+        },
+    },
     "/api/tfd/system/recovery/trust/": {
         "GET": {
             "authorization": "effective Tactical superuser",

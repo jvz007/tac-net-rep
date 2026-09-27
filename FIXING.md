@@ -1,19 +1,16 @@
-# FIXING.md — Core 1.15.140
+# FIXING.md — Core 1.15.141
 
 ## Review scope
 
-This release is intentionally limited to **L01, L02, L03 and L04** from the current Core tracker.
+This release is intentionally limited to **U2, L06 and L07** from the current Core/UI tracker.
 
-### L01 — standalone batch package identity comes from verified bytes
-Standalone Module Management v2 batch artifacts no longer trust the mutable job/request `id`. The worker takes the module id and version from the root verifier's authenticated `artifact_modules` result and requires exactly one authenticated module for a standalone package.
+### U2 — publish the `console_required` trust-policy response
+The live Core public-contract catalog now includes the exact response object returned when the authenticated trust-policy PUT cannot lower the root-owned trust floor. The documented fields are `status`, `requested_level`, `environment`, `command`, `help_article`, and `help_url`.
 
-### L02 — uninstaller config is data, not shell
-The existing safe config-loader behavior is now covered by a behavioral regression. `uninstall.sh` sources only `scripts/tec-tac-config.sh`; a config value containing command substitution remains literal data and is not executed.
+### L06 — preserve legacy 200-row history behavior
+The existing compatibility paths are now covered by executable view-level tests. Requests without pagination/filter parameters still call the legacy Module v2 job-history and session-audit list functions with a default limit of 200; paged calls retain the newer page-size behavior.
 
-### L03 — fixed Python interpreter paths
-The existing recovery/install hardening is now covered by an executable regression that rejects any return to bare `python3` from `PATH`. Recovery scripts use `/usr/bin/python3 -I` or Tactical's configured virtualenv Python.
+### L07 — trusted Bash portability is part of the normal suite
+All privileged helpers continue to resolve Bash from the fixed `/bin/bash`, `/usr/bin/bash` candidate list and require a root-owned, non-writable regular file. The existing boundary tests are now wired into the ordinary contract foundation runner so this cannot regress silently.
 
-### L04 — no-follow v1 staged metadata
-The v1 module worker reads `staged/<upload_id>.json` through the existing `O_NOFOLLOW|O_NONBLOCK` bounded JSON reader. A staged metadata symlink/FIFO is rejected rather than followed or blocked on.
-
-No other tracker findings are intentionally changed.
+No other tracker findings are intentionally changed. U1 remains a UI/server-installer repository finding and is not claimed by this Core release.

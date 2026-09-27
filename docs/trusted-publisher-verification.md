@@ -252,3 +252,20 @@ Example key record:
 A root-console trust-floor lowering writes a root-owned pending-revert record and is automatically restored after the requested window. All console trust-policy mutation, pending-revert checks and corrupt-state recovery are serialized by a root-owned advisory lock so `set` and `check-revert` cannot race. If the pending record becomes unreadable or structurally invalid, the console helper fails closed instead of treating it as absent: it moves the active policy to the strongest supported floor (`secure_signed`), records the recovery in the root trust-policy audit, and only then clears the corrupt pending state.
 
 The authenticated trust-policy PUT endpoint uses Tec-Tac authenticated-operation throttles (10/minute and 100/day per signed-in actor/address), not Tactical's anonymous login throttles. API responses expose both the built-in `help_article` identifier and the legacy `help_url` field for compatible clients. During install, the immediate revert check is best-effort; the persistent systemd timer remains the durable recovery path, so a transient one-shot check failure cannot abort an otherwise valid Core upgrade.
+
+### Trust-policy HTTP guidance contract
+
+`PUT /api/tfd/system/updates/trust-policy/` is part of the generated public HTTP contract. When a requested change cannot be made by the web tier because it lowers the root-owned trust floor, the endpoint returns the stable guidance object below instead of treating the request as a generic failure:
+
+```json
+{
+  "status": "console_required",
+  "requested_level": "signed_development",
+  "environment": "production",
+  "command": "sudo tec-tac-trust-policy set signed_development --reason \"<why>\" --hours 8",
+  "help_article": "core.trust-policy",
+  "help_url": "/tec-tac/help/system-updates#trust-policy"
+}
+```
+
+Consumers may rely on those field names. The generated `/api/tfd/contracts/` catalog publishes the same `console_required` shape under the trust-policy endpoint.
