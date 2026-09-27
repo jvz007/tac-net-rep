@@ -130,7 +130,7 @@ case "$import_path" in
 esac
 
 if [[ "$JSON" -eq 1 ]]; then
-  ARCH_LINES="$(printf '%s\n' "${arch_lines[@]}")" python3 - "$fw" "$fw_source" "$ui" "$ui_source" "$prc" "$mrc" "$migrations" "$arch_rc" "${services[*]}" "$import_path" <<'PY'
+  ARCH_LINES="$(printf '%s\n' "${arch_lines[@]}")" /usr/bin/python3 -I - "$fw" "$fw_source" "$ui" "$ui_source" "$prc" "$mrc" "$migrations" "$arch_rc" "${services[*]}" "$import_path" <<'PY'
 import json,os,sys
 architecture_lines=[line for line in os.environ.get('ARCH_LINES','').splitlines() if line]
 print(json.dumps({

@@ -45,6 +45,7 @@ CONFIG = Path("/opt/tec-tac/etc/tec-tac.conf")
 SELF = Path("/usr/local/sbin/tec-tac-system-update")
 PRIVILEGED_TRUST = Path("/usr/local/lib/tec-tac-security/privileged-trust.py")
 RUNNING_REQUEST_ROOT = RUNNING_ROOT / "requests"
+ACCOUNT_SECURITY_POLICY = Path("/etc/tec-tac/policy/account-security-policy.json")
 
 
 def now():
@@ -640,6 +641,24 @@ def set_root_trust_policy(level, actor=""):
         args += ["--updated-by", str(actor)]
     args += ["--updated-at", now()]
     return _privileged_trust_command(cfg, *args)
+
+
+def set_root_account_security_policy(value, actor=""):
+    requested = str(value or "").strip().lower()
+    if requested not in {"true", "false"}:
+        raise RuntimeError("account security policy value must be true or false")
+    POLICY_ROOT = ACCOUNT_SECURITY_POLICY.parent
+    POLICY_ROOT.mkdir(parents=True, exist_ok=True)
+    os.chown(POLICY_ROOT, 0, 0)
+    os.chmod(POLICY_ROOT, 0o755)
+    payload = {
+        "schema": 1,
+        "protect_superuser_accounts": requested == "true",
+        "updated_at": now(),
+        "updated_by": str(actor or "")[:150] or None,
+    }
+    atomic_json(ACCOUNT_SECURITY_POLICY, payload, mode=0o644, uid=0, gid=0)
+    return payload
 
 
 def prepare_source_checkout(target, component):
@@ -1252,6 +1271,13 @@ if __name__ == "__main__":
             print(json.dumps(set_root_trust_policy(level, actor), sort_keys=True))
         except RuntimeError as exc:
             raise SystemExit(str(exc))
+    elif len(sys.argv) >= 3 and sys.argv[1] == "--set-account-security-policy":
+        value = sys.argv[2]
+        actor = sys.argv[3] if len(sys.argv) >= 4 else ""
+        try:
+            print(json.dumps(set_root_account_security_policy(value, actor), sort_keys=True))
+        except RuntimeError as exc:
+            raise SystemExit(str(exc))
     elif len(sys.argv) == 3 and sys.argv[1] in {"--dispatch", "--run"}:
         if sys.argv[1] == "--dispatch":
             dispatch(sys.argv[2])
@@ -1262,4 +1288,4 @@ if __name__ == "__main__":
                 mark_failed(sys.argv[2], exc)
                 raise
     else:
-        raise SystemExit("usage: tec-tac-system-update --dispatch|--run <job-id> | --set-trust-policy <level> [actor]")
+        raise SystemExit("usage: tec-tac-system-update --dispatch|--run <job-id> | --set-trust-policy <level> [actor] | --set-account-security-policy <true|false> [actor]")

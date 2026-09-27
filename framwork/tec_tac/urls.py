@@ -1,3 +1,4 @@
+from .account_security_views import AccountSecurityPolicyView
 from .resource_views import ResourceListView, ResourceDetailView, ResourceMutableListView, ResourceMutableDetailView
 from .server_maintenance_views import (
     ServerMaintenanceActionListView, ServerMaintenanceJobListView,
@@ -51,6 +52,7 @@ urlpatterns = [
     path("session/policy/", SessionPolicyView.as_view(), name="tec-tac-session-policy"),
     path("session/audit/", SessionAuditView.as_view(), name="tec-tac-session-audit"),
     path("session/diagnostics/", SessionDiagnosticsView.as_view(), name="tec-tac-session-diagnostics"),
+    path("access/security-policy/", AccountSecurityPolicyView.as_view(), name="tec-tac-access-security-policy"),
     path("access/sessions/", AdminLoginSessionListView.as_view(), name="tec-tac-access-login-sessions"),
     path("access/sessions/<str:session_ref>/revoke/", AdminLoginSessionRevokeView.as_view(), name="tec-tac-access-login-session-revoke"),
     path("access/users/<int:user_id>/sessions/revoke/", AdminUserLoginSessionsRevokeView.as_view(), name="tec-tac-access-user-login-sessions-revoke"),

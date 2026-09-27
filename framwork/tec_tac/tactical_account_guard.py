@@ -19,8 +19,9 @@ from django.db import transaction
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.fields import BooleanField
 
-from accounts.models import Role, User
+from accounts.models import APIKey, Role, User
 
+from .account_security_policy import protection_enabled
 from .rbac import is_effective_superuser
 
 logger = logging.getLogger("tec_tac.tactical_account_guard")
@@ -92,6 +93,79 @@ def _raise_violation(actor, violation: dict) -> None:
     raise PermissionDenied(violation["detail"])
 
 
+def _is_superuser_account(user) -> bool:
+    if user is None:
+        return False
+    if bool(getattr(user, "is_superuser", False)):
+        return True
+    role = getattr(user, "role", None)
+    if role is not None:
+        return bool(getattr(role, "is_superuser", False))
+    role_id = getattr(user, "role_id", None)
+    if not role_id:
+        return False
+    try:
+        return bool(Role.objects.only("is_superuser").get(pk=role_id).is_superuser)
+    except Exception:
+        return False
+
+
+def _protected_account_violation(actor, target_user, *, operation: str):
+    if not protection_enabled():
+        return None
+    if target_user is None or not _is_superuser_account(target_user):
+        return None
+    if is_effective_superuser(actor):
+        return None
+    target_id = getattr(target_user, "pk", getattr(target_user, "id", None))
+    return {
+        "object_type": "superuser_account_protection",
+        "object_id": target_id if target_id is not None else "unknown",
+        "detail": "Superuser account protection requires effective superuser authority for this action.",
+        "metadata": {"operation": operation},
+    }
+
+
+def _locked_user(user_id):
+    try:
+        return (
+            User.objects.select_for_update(of=("self",))
+            .only("id", "is_superuser", "role_id")
+            .filter(pk=user_id)
+            .first()
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def _user_id_from_payload(payload):
+    """Resolve Tactical UserActions' request.data["id"] target only."""
+    if not _payload_has(payload, "id"):
+        return None
+    raw = _payload_get(payload, "id")
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _api_key_user_id_from_payload(payload):
+    """Resolve the APIKeySerializer owner field exactly as Tactical saves it.
+
+    Tactical's APIKeySerializer persists ``user``.  ``id`` is the API-key
+    object's read-only identifier and must never influence owner authorization.
+    A malformed explicit ``user`` is denied by the guard instead of being
+    passed through to a later serializer stage, keeping the D1 boundary closed.
+    """
+    if not _payload_has(payload, "user"):
+        return None, False
+    raw = _payload_get(payload, "user")
+    try:
+        return int(raw), False
+    except (TypeError, ValueError):
+        return None, True
+
+
 def _role_flag_violation(actor, *, role, requested: bool, operation: str):
     if is_effective_superuser(actor):
         return None
@@ -156,6 +230,9 @@ def _user_create_violation(actor, payload, *, role=None):
 
 
 def _user_update_violation(actor, user, payload, *, role=None):
+    protected = _protected_account_violation(actor, user, operation="update_user")
+    if protected:
+        return protected
     if user is None or not _payload_has(payload, "role"):
         return None
     role = role if role is not None else _role_from_payload(payload)
@@ -250,7 +327,7 @@ def _wrap_user_update(original):
     def guarded(self, request, pk, *args, **kwargs):
         violation = None
         with transaction.atomic():
-            user = User.objects.select_for_update().only("id", "role_id").filter(pk=pk).first()
+            user = _locked_user(pk)
             role = _role_from_payload(request.data, for_update=True) if _payload_has(request.data, "role") else None
             violation = _user_update_violation(request.user, user, request.data, role=role)
             if violation is None:
@@ -259,15 +336,142 @@ def _wrap_user_update(original):
     return _mark_guarded(guarded)
 
 
+def _wrap_user_delete(original):
+    @wraps(original)
+    def guarded(self, request, pk, *args, **kwargs):
+        with transaction.atomic():
+            user = _locked_user(pk)
+            violation = _protected_account_violation(request.user, user, operation="delete_user")
+            if violation is None:
+                return original(self, request, pk, *args, **kwargs)
+        _raise_violation(request.user, violation)
+    return _mark_guarded(guarded)
+
+
+def _wrap_user_action(original, operation: str):
+    @wraps(original)
+    def guarded(self, request, *args, **kwargs):
+        user_id = _user_id_from_payload(request.data)
+        if user_id is None:
+            return original(self, request, *args, **kwargs)
+        with transaction.atomic():
+            user = _locked_user(user_id)
+            violation = _protected_account_violation(request.user, user, operation=operation)
+            if violation is None:
+                return original(self, request, *args, **kwargs)
+        _raise_violation(request.user, violation)
+    return _mark_guarded(guarded)
+
+
+def _wrap_self_user_action(original, operation: str):
+    @wraps(original)
+    def guarded(self, request, *args, **kwargs):
+        violation = _protected_account_violation(request.user, request.user, operation=operation)
+        if violation:
+            _raise_violation(request.user, violation)
+        return original(self, request, *args, **kwargs)
+    return _mark_guarded(guarded)
+
+
+def _api_key_target(apikey=None, payload=None, *, for_update=False):
+    payload = payload or {}
+    if _payload_has(payload, "user"):
+        user_id, invalid = _api_key_user_id_from_payload(payload)
+        if invalid:
+            raise PermissionDenied("Invalid API key user target.")
+        if user_id is not None:
+            return _locked_user(user_id) if for_update else User.objects.select_related("role").filter(pk=user_id).first()
+    if apikey is None:
+        return None
+    try:
+        return apikey.user
+    except Exception:
+        return None
+
+
+def _wrap_api_key_list(original):
+    @wraps(original)
+    def guarded(self, request, *args, **kwargs):
+        response = original(self, request, *args, **kwargs)
+        if not protection_enabled() or is_effective_superuser(request.user):
+            return response
+
+        data = getattr(response, "data", None)
+        if not isinstance(data, list):
+            return response
+
+        protected_owner_ids = {}
+        for item in data:
+            if not isinstance(item, dict) or "user" not in item:
+                continue
+            raw_user_id = item.get("user")
+            try:
+                user_id = int(raw_user_id)
+            except (TypeError, ValueError):
+                continue
+            if user_id not in protected_owner_ids:
+                user = User.objects.select_related("role").filter(pk=user_id).first()
+                protected_owner_ids[user_id] = bool(user and _is_superuser_account(user))
+            if protected_owner_ids[user_id] and "key" in item:
+                item["key"] = "[REDACTED]"
+        return response
+    return _mark_guarded(guarded)
+
+
+def _wrap_api_key_create(original):
+    @wraps(original)
+    def guarded(self, request, *args, **kwargs):
+        user_id, invalid = _api_key_user_id_from_payload(request.data)
+        if invalid:
+            raise PermissionDenied("Invalid API key user target.")
+        if user_id is None:
+            return original(self, request, *args, **kwargs)
+        with transaction.atomic():
+            target = _locked_user(user_id)
+            violation = _protected_account_violation(request.user, target, operation="create_api_key")
+            if violation is None:
+                return original(self, request, *args, **kwargs)
+        _raise_violation(request.user, violation)
+    return _mark_guarded(guarded)
+
+
+def _wrap_api_key_mutation(original, operation: str):
+    @wraps(original)
+    def guarded(self, request, pk, *args, **kwargs):
+        with transaction.atomic():
+            apikey = APIKey.objects.select_for_update(of=("self",)).select_related("user").filter(pk=pk).first()
+            current_target = _api_key_target(apikey)
+            violation = _protected_account_violation(request.user, current_target, operation=operation)
+            if violation is None and operation == "update_api_key":
+                requested_target = _api_key_target(apikey, request.data, for_update=True)
+                violation = _protected_account_violation(request.user, requested_target, operation=operation)
+            if violation is None:
+                return original(self, request, pk, *args, **kwargs)
+        _raise_violation(request.user, violation)
+    return _mark_guarded(guarded)
+
+
 def install_tactical_account_guard() -> None:
-    """Install idempotent wrappers around Tactical's native role/user editors."""
+    """Install idempotent wrappers around Tactical's native account security mutations."""
     from accounts import views as tactical_views
 
-    if not _already_guarded(tactical_views.GetAddRoles.post):
-        tactical_views.GetAddRoles.post = _wrap_role_create(tactical_views.GetAddRoles.post)
-    if not _already_guarded(tactical_views.GetUpdateDeleteRole.put):
-        tactical_views.GetUpdateDeleteRole.put = _wrap_role_update(tactical_views.GetUpdateDeleteRole.put)
-    if not _already_guarded(tactical_views.GetAddUsers.post):
-        tactical_views.GetAddUsers.post = _wrap_user_create(tactical_views.GetAddUsers.post)
-    if not _already_guarded(tactical_views.GetUpdateDeleteUser.put):
-        tactical_views.GetUpdateDeleteUser.put = _wrap_user_update(tactical_views.GetUpdateDeleteUser.put)
+    wrappers = [
+        (tactical_views.GetAddRoles, "post", _wrap_role_create),
+        (tactical_views.GetUpdateDeleteRole, "put", _wrap_role_update),
+        (tactical_views.GetAddUsers, "post", _wrap_user_create),
+        (tactical_views.GetUpdateDeleteUser, "put", _wrap_user_update),
+        (tactical_views.GetUpdateDeleteUser, "delete", _wrap_user_delete),
+        (tactical_views.UserActions, "post", lambda fn: _wrap_user_action(fn, "reset_password")),
+        (tactical_views.UserActions, "put", lambda fn: _wrap_user_action(fn, "reset_totp")),
+        (tactical_views.GetAddAPIKeys, "get", _wrap_api_key_list),
+        (tactical_views.GetAddAPIKeys, "post", _wrap_api_key_create),
+        (tactical_views.GetUpdateDeleteAPIKey, "put", lambda fn: _wrap_api_key_mutation(fn, "update_api_key")),
+        (tactical_views.GetUpdateDeleteAPIKey, "delete", lambda fn: _wrap_api_key_mutation(fn, "delete_api_key")),
+        (tactical_views.TOTPSetup, "post", lambda fn: _wrap_self_user_action(fn, "setup_totp")),
+        (tactical_views.ResetPass, "put", lambda fn: _wrap_self_user_action(fn, "reset_self_password")),
+        (tactical_views.Reset2FA, "put", lambda fn: _wrap_self_user_action(fn, "reset_self_totp")),
+    ]
+    for view_cls, method, wrapper in wrappers:
+        original = getattr(view_cls, method)
+        if not _already_guarded(original):
+            setattr(view_cls, method, wrapper(original))

@@ -10,7 +10,7 @@ done
 require_root
 if [[ "$MODE" == repair ]]; then repair_module_permissions >/dev/null; fi
 EXT="${TEC_TAC_ROOT}/extensions"; REP="${TEC_TAC_ROOT}/reportsets"; STATE="${MODULE_ROOT}/module-state.json"
-python3 - "$EXT" "$REP" "$STATE" "$JSON" <<'PY'
+/usr/bin/python3 -I - "$EXT" "$REP" "$STATE" "$JSON" <<'PY'
 import json,sys
 from pathlib import Path
 ext,rep,state=map(Path,sys.argv[1:4]); as_json=sys.argv[4]=='1'

@@ -10,10 +10,10 @@ LOCAL_SETTINGS="${BACKEND_DIR}/tacticalrmm/local_settings.py"
 
 SOURCE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEC_TAC_CONFIG_FILE="${TEC_TAC_CONFIG_FILE:-/opt/tec-tac/etc/tec-tac.conf}"
-if [[ -f "${TEC_TAC_CONFIG_FILE}" ]]; then
-    # shellcheck disable=SC1090
-    source "${TEC_TAC_CONFIG_FILE}"
-fi
+CONFIG_LOADER="${SOURCE_ROOT}/scripts/tec-tac-config.sh"
+[[ -f "${CONFIG_LOADER}" ]] || { printf '[TEC-TAC] ERROR: Safe Tec-Tac config loader is missing: %s\n' "${CONFIG_LOADER}" >&2; exit 1; }
+# shellcheck disable=SC1090
+source "${CONFIG_LOADER}"
 REPO_ROOT="${TEC_TAC_ROOT:-/opt/tec-tac}"
 FRAMEWORK_DIR="${TEC_TAC_FRAMEWORK_ROOT:-${REPO_ROOT}/framework}"
 EXTENSIONS_DIR="${TEC_TAC_EXTENSIONS_ROOT:-${REPO_ROOT}/extensions}"

@@ -77,6 +77,8 @@ REQUIRED_FILES=(
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/registry.py"
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/rbac.py"
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/tactical_account_guard.py"
+    "${SOURCE_FRAMEWORK_DIR}/tec_tac/account_security_policy.py"
+    "${SOURCE_FRAMEWORK_DIR}/tec_tac/account_security_views.py"
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/apps.py"
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/urls.py"
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/views.py"
@@ -396,7 +398,7 @@ if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON
 fi
 
 log "Verifying Tec-Tac API routes."
-VERIFY_ROUTE_CODE="from django.urls import resolve; checks=[('/api/tfd/reporting/network-availability/','network-availability'),('/api/tfd/ui/context/','tec-tac-ui-context'),('/api/tfd/access/extensions/','tec-tac-extension-permissions'),('/api/tfd/modules/','tec-tac-module-catalog'),('/api/tfd/system/updates/','tec-tac-system-update-status'),('/api/tfd/system/diagnostics/','tec-tac-system-diagnostics'),('/api/tfd/capabilities/','tec-tac-capabilities'),('/api/tfd/contracts/','tec-tac-contracts'),('/api/tfd/contracts/export/','tec-tac-contract-export'),('/api/tfd/resources/clients/','tec-tac-resource-clients'),('/api/tfd/resources/sites/','tec-tac-resource-sites'),('/api/tfd/resources/agents/','tec-tac-resource-agents'),('/api/tfd/audit/record/','tec-tac-audit-record'),('/api/tfd/scheduler/actions/','tec-tac-scheduler-actions'),('/api/tfd/scheduler/schedules/','tec-tac-scheduler-schedules'),('/api/tfd/scheduler/runs/','tec-tac-scheduler-runs'),('/api/tfd/modules/repositories/','tec-tac-module-repositories'),('/api/tfd/modules/catalog/online/','tec-tac-module-online-catalog'),('/api/tfd/modules/hotfixes/inspect/','tec-tac-module-hotfix-inspect'),('/api/tfd/session/current/','tec-tac-session-current'),('/api/tfd/session/activity/','tec-tac-session-activity'),('/api/tfd/session/policy/','tec-tac-session-policy'),('/api/tfd/session/audit/','tec-tac-session-audit'),('/api/tfd/session/diagnostics/','tec-tac-session-diagnostics')]; resolved=[(path, resolve(path).url_name) for path,_ in checks]; assert all(actual == expected for (path,actual),(_,expected) in zip(resolved,checks)), resolved; print('TEC-TAC route verification OK:', resolved)"
+VERIFY_ROUTE_CODE="from django.urls import resolve; checks=[('/api/tfd/reporting/network-availability/','network-availability'),('/api/tfd/ui/context/','tec-tac-ui-context'),('/api/tfd/access/extensions/','tec-tac-extension-permissions'),('/api/tfd/access/security-policy/','tec-tac-access-security-policy'),('/api/tfd/modules/','tec-tac-module-catalog'),('/api/tfd/system/updates/','tec-tac-system-update-status'),('/api/tfd/system/diagnostics/','tec-tac-system-diagnostics'),('/api/tfd/capabilities/','tec-tac-capabilities'),('/api/tfd/contracts/','tec-tac-contracts'),('/api/tfd/contracts/export/','tec-tac-contract-export'),('/api/tfd/resources/clients/','tec-tac-resource-clients'),('/api/tfd/resources/sites/','tec-tac-resource-sites'),('/api/tfd/resources/agents/','tec-tac-resource-agents'),('/api/tfd/audit/record/','tec-tac-audit-record'),('/api/tfd/scheduler/actions/','tec-tac-scheduler-actions'),('/api/tfd/scheduler/schedules/','tec-tac-scheduler-schedules'),('/api/tfd/scheduler/runs/','tec-tac-scheduler-runs'),('/api/tfd/modules/repositories/','tec-tac-module-repositories'),('/api/tfd/modules/catalog/online/','tec-tac-module-online-catalog'),('/api/tfd/modules/hotfixes/inspect/','tec-tac-module-hotfix-inspect'),('/api/tfd/session/current/','tec-tac-session-current'),('/api/tfd/session/activity/','tec-tac-session-activity'),('/api/tfd/session/policy/','tec-tac-session-policy'),('/api/tfd/session/audit/','tec-tac-session-audit'),('/api/tfd/session/diagnostics/','tec-tac-session-diagnostics')]; resolved=[(path, resolve(path).url_name) for path,_ in checks]; assert all(actual == expected for (path,actual),(_,expected) in zip(resolved,checks)), resolved; print('TEC-TAC route verification OK:', resolved)"
 if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_ROUTE_CODE}\""; then
     fail "Framework API route verification failed or timed out."
 fi
@@ -634,7 +636,7 @@ chmod 0644 "${POLICY_FILE}"
 # Narrow the legacy broad system.update publisher permission into explicit
 # component permissions. Publishers without system.update are not granted new
 # authority automatically.
-python3 - "${TRUSTED_PUBLISHERS_ROOT}" <<'PY_PUBLISHERS'
+/usr/bin/python3 -I - "${TRUSTED_PUBLISHERS_ROOT}" <<'PY_PUBLISHERS'
 import json, os, pathlib, sys
 root = pathlib.Path(sys.argv[1])
 for path in root.glob("*/publisher.json"):
@@ -742,6 +744,7 @@ chmod 0644 "${SYSTEM_UPDATE_CONFIG}"
 cat > "${SYSTEM_UPDATE_SUDOERS}" <<EOF
 ${TACTICAL_USER} ALL=(root) NOPASSWD: ${SYSTEM_UPDATE_HELPER} --dispatch *
 ${TACTICAL_USER} ALL=(root) NOPASSWD: ${SYSTEM_UPDATE_HELPER} --set-trust-policy *
+${TACTICAL_USER} ALL=(root) NOPASSWD: ${SYSTEM_UPDATE_HELPER} --set-account-security-policy *
 EOF
 chown root:root "${SYSTEM_UPDATE_SUDOERS}"
 chmod 0440 "${SYSTEM_UPDATE_SUDOERS}"

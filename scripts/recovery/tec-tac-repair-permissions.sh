@@ -23,7 +23,7 @@ set +e
 OUTPUT="$(check_module_permissions)"; RC=$?
 set -e
 if [[ "$JSON" -eq 1 ]]; then
-  RECOVERY_OUTPUT="$OUTPUT" python3 - "$RC" <<'PY'
+  RECOVERY_OUTPUT="$OUTPUT" /usr/bin/python3 -I - "$RC" <<'PY'
 import json,os,sys
 rc=int(sys.argv[1]); rows=[]
 for line in os.environ.get('RECOVERY_OUTPUT','').splitlines():
