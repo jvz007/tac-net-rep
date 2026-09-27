@@ -97,7 +97,11 @@ def _require_target_scope(user, targets, *, payload=False):
     for ref in refs:
         kind, values = ref["kind"], ref["values"]
         if kind in {"none", "module"}:
-            continue
+            if resources_adapter.tactical_scope_unrestricted(user=user):
+                continue
+            raise PermissionDenied(
+                "Non-Tactical scheduler targets require unrestricted Tactical client/site scope."
+            )
         if kind == "dynamic_unscoped":
             if resources_adapter.tactical_scope_unrestricted(user=user):
                 continue
@@ -342,6 +346,7 @@ class SchedulerDetailView(APIView):
                 TecTacSchedule.objects.select_for_update().select_related("created_by", "updated_by"), pk=schedule_id
             )
             _require_user_managed(schedule)
+            _require_action(request.user, schedule.action_id)
             _require_schedule_owner_or_manager(request.user, schedule)
             _require_target_scope(request.user, schedule.targets, payload=False)
             active = list(schedule.runs.select_for_update().filter(
@@ -361,6 +366,19 @@ class SchedulerDetailView(APIView):
                     run.error = "Schedule was force-deleted while this run was active."
                     run.finished_at = finished
                     run.save(update_fields=["status", "error_type", "error", "finished_at"])
+            if force:
+                from .audit import record as audit_record
+                audit_record(
+                    actor=request.user,
+                    module_id="core",
+                    action="delete",
+                    object_type="scheduler_schedule",
+                    object_id=str(schedule.pk),
+                    message="Scheduler schedule force-deleted.",
+                    before=serialize_schedule(schedule, include_runs=False),
+                    metadata={"force": True, "active_runs_failed": len(active)},
+                    strict=True,
+                )
             schedule.delete()
         return Response(status=204)
 

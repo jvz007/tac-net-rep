@@ -206,6 +206,8 @@ Create payloads:
 
 Update payloads accept only writable fields. Unknown fields are rejected. Agent HTTP resources remain read-only.
 
+Client and site create/update operations are transaction-audited through Core using the authenticated Tactical actor. The audit write is strict: if Tactical audit persistence fails, the resource mutation is rolled back rather than succeeding without an investigation trail. Update events include before/after resource snapshots when the prior row is visible through the caller's Tactical read scope.
+
 ## Errors
 
 Python errors are typed:

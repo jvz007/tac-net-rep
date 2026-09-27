@@ -137,7 +137,11 @@ A user may manage an action when either:
 - the user/effective Tactical role has server-maintenance/superuser scheduler management authority; or
 - the action declares an extension permission and the user's effective Tec-Tac extension permissions include it.
 
-The framework checks this when schedules are listed/created/edited/deleted or manually executed.
+The framework checks this when schedules are listed/created/edited/deleted or manually executed. Deleting a schedule re-checks the action permission at deletion time; ownership alone is not sufficient.
+
+Targets that do not carry a Tactical client/site/endpoint scope (`none` and module-defined target types) require unrestricted Tactical client/site scope unless the caller has native Scheduler manager authority. Core cannot prove a narrower Tactical scope for those target shapes, so restricted operators must use explicitly scoped target types.
+
+A forced delete that fails active queued/running rows is transaction-audited before the schedule is removed. If the strict Core audit write fails, the force-delete transaction fails rather than leaving unaudited run mutations.
 
 Scheduled execution itself is a **system execution**. It does not replay the creator's browser token and does not require the creator to be logged in at execution time. Creator/updater identity remains stored on the schedule for audit.
 

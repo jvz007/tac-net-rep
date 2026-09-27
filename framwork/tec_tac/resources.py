@@ -6,6 +6,7 @@ this module and must not depend on Tactical ORM implementation details.
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any
 
@@ -209,6 +210,37 @@ def _adapter_write(callable_obj, **kwargs):
         raise ResourceValidationError(str(exc)) from exc
 
 
+
+
+def _transaction_atomic():
+    try:
+        from django.db import transaction
+    except ModuleNotFoundError:
+        # Lightweight contract tests import this module without Django. Tactical
+        # production always provides Django, where the real transaction applies.
+        return nullcontext()
+    return transaction.atomic()
+
+
+def _record_resource_change(*, actor, action: str, resource_type: str, resource_id: Any, before=None, after=None, metadata=None) -> None:
+    """Persist a transaction-critical Core audit row for Resource Directory writes."""
+    try:
+        from .audit import record
+        record(
+            actor=actor,
+            module_id="core",
+            action=action,
+            object_type=f"resource_{resource_type}",
+            object_id=str(resource_id),
+            message=f"Tec-Tac Resource Directory {action} {resource_type}.",
+            before=before,
+            after=after,
+            metadata=metadata or {},
+            strict=True,
+        )
+    except Exception as exc:
+        raise ResourceDirectoryError("Resource change requires a persisted Core audit record.") from exc
+
 def _clean_positive_int(value: Any, label: str) -> int:
     if isinstance(value, bool):
         raise ResourceValidationError(f"{label} must be a positive integer.")
@@ -325,21 +357,34 @@ def get_agent(agent_id: Any, *, context: ResourceAccessContext) -> dict[str, Any
 
 def create_client(*, name: str, context: ResourceAccessContext) -> dict[str, Any]:
     user = _authorize_write(context, "client")
-    return _adapter_write(adapter.create_client_row, user=user, name=_clean_name(name, "name"))
+    clean_name = _clean_name(name, "name")
+    with _transaction_atomic():
+        row = _adapter_write(adapter.create_client_row, user=user, name=clean_name)
+        _record_resource_change(
+            actor=user, action="add", resource_type="client", resource_id=row["id"],
+            after=row, metadata={"default_site_created": True},
+        )
+        return row
 
 
 def update_client(client_id: Any, *, name: str, context: ResourceAccessContext) -> dict[str, Any]:
     user = _authorize_write(context, "client")
     resource_id = _clean_positive_int(client_id, "client_id")
-    row = _adapter_write(
-        adapter.update_client_row,
-        user=user,
-        client_id=resource_id,
-        name=_clean_name(name, "name"),
-    )
-    if row is None:
-        raise ResourceNotFound("Client was not found in the caller's resource scope.")
-    return row
+    before = adapter.get_client_row(adapter.clients_queryset(user=user, trusted=False), resource_id)
+    with _transaction_atomic():
+        row = _adapter_write(
+            adapter.update_client_row,
+            user=user,
+            client_id=resource_id,
+            name=_clean_name(name, "name"),
+        )
+        if row is None:
+            raise ResourceNotFound("Client was not found in the caller's resource scope.")
+        _record_resource_change(
+            actor=user, action="modify", resource_type="client", resource_id=resource_id,
+            before=before, after=row,
+        )
+        return row
 
 
 def create_site(*, client_id: Any, name: str, context: ResourceAccessContext) -> dict[str, Any]:
@@ -347,11 +392,17 @@ def create_site(*, client_id: Any, name: str, context: ResourceAccessContext) ->
     target_client_id = _clean_positive_int(client_id, "client_id")
     if not adapter.client_write_in_scope(user=user, client_id=target_client_id):
         raise ResourceNotFound("Client was not found in the caller's resource scope.")
-    return _adapter_write(
-        adapter.create_site_row,
-        client_id=target_client_id,
-        name=_clean_name(name, "name"),
-    )
+    with _transaction_atomic():
+        row = _adapter_write(
+            adapter.create_site_row,
+            client_id=target_client_id,
+            name=_clean_name(name, "name"),
+        )
+        _record_resource_change(
+            actor=user, action="add", resource_type="site", resource_id=row["id"],
+            after=row,
+        )
+        return row
 
 
 def update_site(site_id: Any, *, name: str | None = None, client_id: Any | None = None, context: ResourceAccessContext) -> dict[str, Any]:
@@ -363,16 +414,22 @@ def update_site(site_id: Any, *, name: str | None = None, client_id: Any | None 
     target_client_id = _clean_positive_int(client_id, "client_id") if client_id not in (None, "") else None
     if target_client_id is not None and not adapter.client_write_in_scope(user=user, client_id=target_client_id):
         raise ResourceNotFound("Client was not found in the caller's resource scope.")
-    row = _adapter_write(
-        adapter.update_site_row,
-        user=user,
-        site_id=resource_id,
-        name=clean_name,
-        client_id=target_client_id,
-    )
-    if row is None:
-        raise ResourceNotFound("Site was not found in the caller's resource scope.")
-    return row
+    before = adapter.get_site_row(adapter.sites_queryset(user=user, trusted=False), resource_id)
+    with _transaction_atomic():
+        row = _adapter_write(
+            adapter.update_site_row,
+            user=user,
+            site_id=resource_id,
+            name=clean_name,
+            client_id=target_client_id,
+        )
+        if row is None:
+            raise ResourceNotFound("Site was not found in the caller's resource scope.")
+        _record_resource_change(
+            actor=user, action="modify", resource_type="site", resource_id=resource_id,
+            before=before, after=row,
+        )
+        return row
 
 
 def resolve_resource(resource_type: str, resource_id: Any, *, context: ResourceAccessContext) -> dict[str, Any]:

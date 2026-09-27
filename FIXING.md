@@ -1,16 +1,18 @@
-# FIXING.md — Core 1.15.130
+# FIXING.md - Core 1.15.131
 
 ## Review scope
 
-This release is intentionally limited to one Medium plus five Low tracker items in the session/MFA subsystem:
+This release is intentionally limited to tracker items **M17, L18, L20 and L23**.
 
-- M30 — `core.session_security` breaking API change was versioned as 1.1.0 instead of a new major.
-- L47 — non-superuser administrators can read protected accounts' MFA status.
-- L48 — administrator MFA GET/status mutates data and attributes that mutation to the reader.
-- L49 — explicit invalidation and TOTP-change invalidation share an audit event name.
-- L52 — legacy session relinking can overwrite an existing Knox digest.
-- L53 — stricter trusted-proxy validation applies only to new saves, not legacy stored policy.
+Review that:
 
-## Expected outcome
+1. Client/site create and update changes cannot succeed without a persisted Core audit record.
+2. Schedule DELETE requires current permission to use the schedule's action.
+3. `force=true` schedule deletion is strictly audited before deletion.
+4. Restricted Tactical users cannot create/edit/delete/run schedules whose `none` or module-defined targets provide no enforceable Tactical resource scope.
+5. Native Scheduler managers retain their existing repair/management bypass.
 
-Review should verify the new 2.0.0 session-security contract boundary, protected/read-only MFA administration, immutable credential binding, distinct MFA invalidation audit provenance, and fail-closed handling of unsafe legacy proxy configuration. No unrelated subsystem changes are intended.
+## Explicitly out of scope
+
+- Other Scheduler Low findings (L19, L21-L25).
+- Backup, trust-policy, module-install, housekeeping, MFA and UI tracker items.
