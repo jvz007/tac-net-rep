@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.108",
+  "version": "1.15.109",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -18,8 +18,8 @@
     },
     {
       "path": "FIXING.md",
-      "size": 1485,
-      "sha256": "b768529b2f52dee3877ee8f69252a4f997b1910db69fa588778d2f8316f9cd4e"
+      "size": 1724,
+      "sha256": "83646619e4b108a69a2343134ea6d8fca780d8b54ba6d56dd4912f03073d3a12"
     },
     {
       "path": "LICENSE",
@@ -32,19 +32,19 @@
       "sha256": "b16e78b37eecd6b4690403b4725a0b9977c7e8e9eca51b6cb4493166c952f243"
     },
     {
-      "path": "RELEASE_NOTES_1.15.107.md",
-      "size": 1198,
-      "sha256": "8c21cf57705b8140f49057886b9ee062648c09eecfe67350093e61de5baf52f5"
-    },
-    {
       "path": "RELEASE_NOTES_1.15.108.md",
       "size": 804,
       "sha256": "5190467cabd003ad90d60aa348e97bdee970d186c08e15845d711a154937223b"
     },
     {
+      "path": "RELEASE_NOTES_1.15.109.md",
+      "size": 926,
+      "sha256": "d4290372c73cf1f4a7d61d5de3ba2eaa9a8792f4f8d0f12fb09aec790aafaa83"
+    },
+    {
       "path": "VERSION",
       "size": 9,
-      "sha256": "09592620859e272c557a88c5698c1e00111493484aaa80e742c36559c3ad3d74"
+      "sha256": "f4b7167a441b7504c17ddcbf045fd0515568fbc4e73261361b8e6fa7ef1b8160"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -285,6 +285,11 @@
       "path": "docs/releases/RELEASE_NOTES_1.15.106.md",
       "size": 655,
       "sha256": "5b1c9b8deb5c73ee66ce201af993b5d34565d62a734eacb8284ccb0b66fbc029"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.107.md",
+      "size": 1198,
+      "sha256": "8c21cf57705b8140f49057886b9ee062648c09eecfe67350093e61de5baf52f5"
     },
     {
       "path": "docs/releases/RELEASE_NOTES_1.15.19.md",
@@ -1228,8 +1233,8 @@
     },
     {
       "path": "framwork/tec_tac/scheduler.py",
-      "size": 47358,
-      "sha256": "7f4bfe58db9c9aaaee4369f20f47b15e7b11b93b4432260cb10a24fb16cdadc4"
+      "size": 48324,
+      "sha256": "7c25408e5a96c98e6ad8d483d1514d8b9454ece0283d9f4b631d4d911384b429"
     },
     {
       "path": "framwork/tec_tac/scheduler_targets.py",
@@ -1293,8 +1298,8 @@
     },
     {
       "path": "framwork/tec_tac/tasks.py",
-      "size": 5214,
-      "sha256": "87b003ddb4f3eb0fba113efa46f4f654c845d4436cdf12b3c219dd51ac46fcb1"
+      "size": 5233,
+      "sha256": "0f7fee60fedaf603986601c10164f381c941f629bf8b4d2d9245c58b46c97459"
     },
     {
       "path": "framwork/tec_tac/tests/__init__.py",
@@ -1514,7 +1519,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "cd7079df435a19ac31a221dd3fdd191b48f98c04a247667a0602171395835012"
+      "sha256": "70cb3f1c0ef2bceaec130c58c3ce556dae877923b4b1fce59bdcd2f3c2381194"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -1915,6 +1920,11 @@
       "path": "tests/scheduler-scope-foundation.py",
       "size": 2210,
       "sha256": "441a9d2f69fa6e46ac0e9ef8c1075aa96b35e2662d1d2045377f6967bb207417"
+    },
+    {
+      "path": "tests/scheduler-stale-revocation.py",
+      "size": 6485,
+      "sha256": "32b8326f95e5f7528d9ebbb4071b04941a921bca6ed58446c1260f1700482f47"
     },
     {
       "path": "tests/scheduler-target-shape.py",

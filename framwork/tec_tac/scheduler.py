@@ -146,6 +146,7 @@ def _zone(value: str) -> ZoneInfo:
 MIN_INTERVAL_SECONDS = 60
 MISSED_LATE_TOLERANCE = timedelta(minutes=3)
 DEFAULT_RUNNING_STALE_GRACE = timedelta(minutes=5)
+MAX_ACTION_TIMEOUT_SECONDS = 604800
 
 
 def validate_schedule_payload(data: dict, *, partial: bool = False) -> dict:
@@ -439,6 +440,17 @@ def recover_stale_runs(now: datetime | None = None) -> dict[str, int]:
             run = TecTacScheduleRun.objects.select_for_update().get(pk=candidate.pk)
             if run.status != TecTacScheduleRun.Status.RUNNING:
                 continue
+            task_id = str(run.celery_task_id or "").strip()
+            if task_id:
+                try:
+                    from tacticalrmm.celery import app as celery_app
+                    celery_app.control.revoke(task_id, terminate=True, signal="SIGTERM")
+                except Exception:
+                    # Do not release the Scheduler concurrency lock if Core cannot
+                    # request termination of the still-running worker task. A later
+                    # recovery tick will retry revocation instead of allowing SKIP
+                    # schedules to overlap the abandoned execution.
+                    continue
             run.status = TecTacScheduleRun.Status.FAILED
             run.error_type = "Stale"
             run.error = f"Stale running run exceeded action timeout of {timeout_seconds} seconds."
@@ -529,7 +541,10 @@ def _queue_run(run: TecTacScheduleRun):
     from .tasks import execute_schedule_run
     state = TecTacSchedulerState.current()
     try:
-        async_result = execute_schedule_run.delay(str(run.id))
+        action = _ACTIONS.get(run.action_id)
+        timeout_seconds = int(action.timeout_seconds if action else 3600)
+        hard_time_limit = min(MAX_ACTION_TIMEOUT_SECONDS, timeout_seconds) + int(DEFAULT_RUNNING_STALE_GRACE.total_seconds())
+        async_result = execute_schedule_run.apply_async(args=[str(run.id)], time_limit=hard_time_limit)
         run.celery_task_id = str(async_result.id or "")
         run.save(update_fields=["celery_task_id"])
         state.last_dispatch_at = timezone.now()

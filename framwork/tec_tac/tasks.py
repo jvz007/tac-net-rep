@@ -31,7 +31,7 @@ def _retryable(exc) -> bool:
     return True
 
 
-@app.task(bind=True, name="tec_tac.execute_schedule_run")
+@app.task(bind=True, name="tec_tac.execute_schedule_run", time_limit=605100)
 def execute_schedule_run(self, run_id: str):
     # Claim exactly once. Duplicate broker delivery must not execute an action
     # twice, and a stale-recovery decision must not be overwritten by a late task.

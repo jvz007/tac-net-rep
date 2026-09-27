@@ -1,30 +1,31 @@
-# FIXING.md — Core 1.15.108
+# FIXING.md — Core 1.15.109
 
 ## Review scope
 
-This release is intentionally scoped to **M10** from the 27 September 2026 Claude tracker.
+This release is intentionally scoped to **M11** from Claude's Core tracker.
 
-### M10 — invalid legacy `/var/lib` trust-policy state blocks Core upgrades
+### M11 — stop stale RUNNING Celery tasks before releasing Scheduler concurrency
 
-Review that this release:
+Problem being fixed:
+- a Scheduler run could be marked stale/FAILED in Core while the underlying Celery task continued executing;
+- a `SKIP` schedule could then see no RUNNING row and dispatch a replacement, causing overlapping execution.
 
-1. Treats the historic `/var/lib/tec-tac/policy/update-trust-policy.json` as migration input only, not current authority.
-2. Quarantines an invalid legacy policy beside the legacy path and continues migration rather than aborting the upgrade.
-3. Covers malformed JSON, invalid/non-numeric schema, invalid level, final-component symlink, and non-regular legacy files through the same invalid-legacy path.
-4. Does not follow a quarantined legacy symlink or alter its target.
-5. Continues with the stricter of the valid current `/etc` policy and the environment default when legacy state is invalid.
-6. Preserves a stronger valid current policy byte-for-byte.
-7. Still fails closed if the authoritative current `/etc/tec-tac/policy/update-trust-policy.json` is corrupt.
-8. Logs the legacy quarantine to stderr/install logs, including source, quarantine path, and bounded reason.
-9. Includes executable behavioral coverage in `tests/trust-policy-upgrade-migration.py`.
+Expected behavior in this release:
+1. A stale RUNNING row with a Celery task id requests `app.control.revoke(task_id, terminate=True, signal="SIGTERM")` before Core marks the run FAILED.
+2. If the revoke request itself fails, the row remains RUNNING so `SKIP` continues to block a replacement and a later recovery tick retries.
+3. Scheduler dispatch uses an action-specific hard Celery `time_limit` equal to the declared action timeout plus the existing five-minute stale grace.
+4. `execute_schedule_run` also has a framework-level hard ceiling of 605100 seconds as a second worker-side backstop.
+5. Existing retry, stale-queue, interval, target-scope and Session-retention behavior must remain unchanged.
 
-## Primary files changed
+## Behavioral regression
 
-- `scripts/trust-policy-migration.py`
-- `tests/trust-policy-upgrade-migration.py`
-- `install.sh`
-- `docs/trusted-publisher-verification.md`
+`tests/scheduler-stale-revocation.py` exercises the real `recover_stale_runs()` and `_queue_run()` function bodies and verifies:
+- exact Celery task id is revoked with termination;
+- failed revoke keeps the run RUNNING;
+- successful revoke permits stale transition to FAILED;
+- dispatch passes the expected action-specific hard time limit;
+- the task declaration retains the framework maximum ceiling.
 
 ## Explicitly out of scope
 
-No other Medium or Low tracker item is intended to be closed by this release.
+No other Medium or Low tracker item is intentionally changed in this release. In particular, M12+ remain open.
