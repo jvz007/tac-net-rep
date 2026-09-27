@@ -291,7 +291,7 @@ GET    /api/tfd/access/users/<user_id>/mfa/
 DELETE /api/tfd/access/users/<user_id>/mfa/
 ```
 
-`GET` returns the target user, backup-code status, and whether the requester may invalidate the protected account's recovery codes. `DELETE` invalidates the target user's current backup-code set and accepts an optional `reason`. Both operations require account-management permission; protected superuser/root targets additionally require effective-superuser authority. Responses are marked `no-store` so MFA recovery state is not cached by the browser or intermediaries.
+`GET` is read-only. It returns `user.id`, `user.username`, `can_invalidate`, and a `status` object containing `totp_configured`, `sso_user`, `configured`, `total`, `unused`, `used`, and `generated_at`. It does not delete stale rows, mutate recovery state, or write an invalidation audit event. `DELETE` invalidates the target user's current backup-code set and accepts an optional `reason`. Both operations require account-management permission; protected superuser/root targets additionally require effective-superuser authority **before** status is read or mutation occurs. Responses are marked `no-store` so MFA recovery state is not cached by the browser or intermediaries.
 
 ## MFA backup codes
 

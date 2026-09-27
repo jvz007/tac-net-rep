@@ -361,6 +361,42 @@ HTTP_CONTRACT_DETAILS = {
         "query": {"page": "integer >=1", "page_size": "integer 1..100", "status": "optional string", "search": "optional string"},
         "response": {"items": "array", "total": "integer", "page": "integer", "page_size": "integer", "pages": "integer", "next_page": "integer|null", "previous_page": "integer|null"},
     },
+    "/api/tfd/access/security-policy/": {
+        "GET": {
+            "authorization": "authenticated Tec-Tac session with account-security administration permission",
+            "response": {
+                "policy": {
+                    "schema": "integer policy schema version",
+                    "protect_superuser_accounts": "boolean",
+                    "updated_at": "UTC timestamp",
+                    "updated_by": "actor username",
+                },
+                "can_change": "boolean; true only for an effective superuser",
+            },
+            "errors": {
+                "403": "account-security administration permission denied",
+                "500": "root-owned policy could not be read",
+            },
+        },
+        "PUT": {
+            "authorization": "effective Tactical superuser",
+            "request": {"protect_superuser_accounts": "boolean"},
+            "response": {
+                "policy": {
+                    "schema": "integer policy schema version",
+                    "protect_superuser_accounts": "boolean",
+                    "updated_at": "UTC timestamp",
+                    "updated_by": "actor username",
+                },
+                "can_change": True,
+            },
+            "errors": {
+                "400": "missing/invalid boolean or privileged policy helper validation failure",
+                "403": "effective-superuser authority required",
+                "500": "strict Core audit failed and the requested policy change was rolled back/fail-closed",
+            },
+        },
+    },
     "/api/tfd/system/updates/trust-policy/": {
         "GET": {
             "authorization": "authenticated Tec-Tac session",

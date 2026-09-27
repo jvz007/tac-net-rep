@@ -75,3 +75,5 @@ python3 -m py_compile \
   "${ROOT}/framwork/tec_tac/contracts.py"
 
 echo '[TEST] PASS session security foundation'
+
+python3 "${ROOT}/tests/access-contract-hygiene-1.15.142.py"

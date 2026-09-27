@@ -1,16 +1,8 @@
-# FIXING.md — Core 1.15.141
+# FIXING.md — Core 1.15.142
 
-## Review scope
+Review-hygiene release closing U4, L50, L51 and L54.
 
-This release is intentionally limited to **U2, L06 and L07** from the current Core/UI tracker.
-
-### U2 — publish the `console_required` trust-policy response
-The live Core public-contract catalog now includes the exact response object returned when the authenticated trust-policy PUT cannot lower the root-owned trust floor. The documented fields are `status`, `requested_level`, `environment`, `command`, `help_article`, and `help_url`.
-
-### L06 — preserve legacy 200-row history behavior
-The existing compatibility paths are now covered by executable view-level tests. Requests without pagination/filter parameters still call the legacy Module v2 job-history and session-audit list functions with a default limit of 200; paged calls retain the newer page-size behavior.
-
-### L07 — trusted Bash portability is part of the normal suite
-All privileged helpers continue to resolve Bash from the fixed `/bin/bash`, `/usr/bin/bash` candidate list and require a root-owned, non-writable regular file. The existing boundary tests are now wired into the ordinary contract foundation runner so this cannot regress silently.
-
-No other tracker findings are intentionally changed. U1 remains a UI/server-installer repository finding and is not claimed by this Core release.
+- Publishes `/api/tfd/access/security-policy/` in the live HTTP contract catalog with GET/PUT authorization, request/response shapes and error semantics.
+- Documents the administrator MFA recovery endpoint's exact read-only GET response and protected-account authorization boundary.
+- Locks out the stale unused `timedelta` import regression.
+- Adds behavioral coverage proving malformed session-history/login-session pagination returns fixed 400 text rather than raw Python conversion errors.
