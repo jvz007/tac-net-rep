@@ -1,31 +1,19 @@
-# FIXING.md — Core 1.15.98
+# FIXING — Core 1.15.99
 
-## Review scope
+Review scope for this release: **D6a only**.
 
-This release is intentionally limited to **D5 completion** from Claude's tracker.
+## Tracker items
 
-### D5 — unrestricted Tactical scope and Scheduler health coverage
+- **M26** — invalid UTF-8 in Tec-Tac extension registry manifests or module-state data must never stop Tactical starting. Decode failures are converted into `RegistryError` / `ModuleStateError`, which the existing bootstrap boundary degrades to Core-only extension loading.
+- **M27** — the precise Tactical account-guard import is now inside its startup try boundary, and the emergency fail-closed installer lives in the independent `tactical_account_guard_fallback.py` module. A precise-guard import/runtime failure therefore cannot take out both protection layers.
 
-Review that:
+## Behavioural regressions
 
-1. A Tactical role with both `can_view_clients` and `can_view_sites` empty is treated as unrestricted for `dynamic_unscoped` Scheduler targets.
-2. A role with either relation populated is still denied `dynamic_unscoped` unless it uses an explicit supported resource scope.
-3. Save-time and runtime authorization use the same Resource Directory unrestricted-scope decision.
-4. `AuthorizationRevoked` health output is exercised behaviorally, including count and latest-run detail.
+- `tests/d6a-invalid-utf8.py` exercises the real registry and module-state readers with invalid UTF-8.
+- `tests/d6a-guard-import-isolation.py` simulates a precise-guard import failure and proves AppConfig continues through the separate fallback, reporting bridge and Core route registration.
+- `tests/apps-ready-startup-safety.py` covers precise wrapper-install failure with the independent fallback.
+- `tests/tactical-superuser-guard.py` executes the independent fallback against native role/user/API-key/self-service handlers and verifies idempotence, non-superuser denial, API-key redaction and effective-superuser access.
 
-## Files/areas changed
+## Not in scope
 
-- `framwork/tec_tac/resources_adapter.py`
-- `framwork/tec_tac/scheduler_views.py`
-- `framwork/tec_tac/scheduler.py`
-- `tests/d5-completion.py`
-
-## Expected outcome
-
-D5's remaining tracker gaps are closed without widening scope for restricted Tactical roles.
-
-## Explicitly out of scope
-
-- D6a and later Medium items.
-- Other Scheduler Low findings.
-- Historical release-note archive cleanup beyond the normal current-release housekeeping.
+No M2+ Medium backlog work, UI work, or unrelated Low items are included.

@@ -131,6 +131,7 @@ spec.loader.exec_module(mod)
 class Actor:
     def __init__(self, effective=False, username="operator"):
         self.effective_superuser = effective
+        self.is_superuser = effective
         self.is_authenticated = True
         self.username = username
 
@@ -391,10 +392,20 @@ policy_state["enabled"] = False
 print("tactical superuser/account-protection guard regression OK")
 
 
+# Load the independent D6a fail-closed module separately.  It must not depend
+# on importing the precise guard module.
+fallback_spec = importlib.util.spec_from_file_location(
+    "tec_tac.tactical_account_guard_fallback",
+    ROOT / "framwork" / "tec_tac" / "tactical_account_guard_fallback.py",
+)
+fallback_mod = importlib.util.module_from_spec(fallback_spec)
+sys.modules[fallback_spec.name] = fallback_mod
+fallback_spec.loader.exec_module(fallback_mod)
+
 # D6a startup fallback: if the precise compatibility guard cannot install,
 # Core must keep Tactical starting while failing closed for non-superuser
 # role/user mutations. The coarse fallback must remain idempotent.
-assert mod.install_tactical_account_guard_fail_closed() is True
+assert fallback_mod.install_tactical_account_guard_fail_closed() is True
 fallback_first = (
     views.GetAddRoles.post,
     views.GetUpdateDeleteRole.put,
@@ -412,7 +423,7 @@ fallback_first = (
     views.ResetPass.put,
     views.Reset2FA.put,
 )
-assert mod.install_tactical_account_guard_fail_closed() is True
+assert fallback_mod.install_tactical_account_guard_fail_closed() is True
 fallback_second = (
     views.GetAddRoles.post,
     views.GetUpdateDeleteRole.put,

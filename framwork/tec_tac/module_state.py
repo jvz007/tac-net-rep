@@ -135,6 +135,11 @@ def _load_state_unlocked(*, mutation: bool = False) -> dict:
         return _default_state()
     try:
         payload = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+    except UnicodeDecodeError as exc:
+        # Startup safety: invalid UTF-8 is not a recoverable JSON-state condition.
+        # Convert it to the domain error bootstrap already handles so Tactical
+        # starts with Core only instead of propagating UnicodeDecodeError.
+        raise ModuleStateError(f"Module state is not valid UTF-8: {exc}") from exc
     except (OSError, json.JSONDecodeError) as exc:
         if mutation:
             raise ModuleStateError(f"Module state is unreadable; refusing to overwrite it: {exc}") from exc

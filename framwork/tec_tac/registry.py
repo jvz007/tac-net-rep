@@ -152,7 +152,7 @@ def _load_manifest(plugin_type: str, plugin_dir: Path) -> PluginSpec | None:
         return None
     try:
         payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise RegistryError(f"Unable to read {manifest_path}: {exc}") from exc
     if not isinstance(payload, dict):
         raise RegistryError(f"Plugin manifest must contain a JSON object: {manifest_path}")

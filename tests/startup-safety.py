@@ -81,7 +81,8 @@ for failure in ("registry", "state"):
     assert result.count("tec_tac.apps.TecTacFrameworkConfig") == 1
 
 apps_source = (root / "framwork" / "tec_tac" / "apps.py").read_text()
-assert "install_tactical_account_guard_fail_closed" in apps_source
+assert "from .tactical_account_guard import install_tactical_account_guard" in apps_source
+assert "from .tactical_account_guard_fallback import install_tactical_account_guard_fail_closed" in apps_source
 assert "except Exception:" in apps_source
 assert "Tec-Tac precise Tactical account guard failed" in apps_source
 

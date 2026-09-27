@@ -64,9 +64,12 @@ def fallback_guard():
     calls["api_guarded"] = True
     return True
 
+# Precise guard and fail-closed fallback are separate modules.  Simulate an
+# import/compatibility failure in the precise module while keeping the fallback
+# independently importable.
+stub_module("tec_tac.tactical_account_guard", install_tactical_account_guard=precise_guard)
 stub_module(
-    "tec_tac.tactical_account_guard",
-    install_tactical_account_guard=precise_guard,
+    "tec_tac.tactical_account_guard_fallback",
     install_tactical_account_guard_fail_closed=fallback_guard,
 )
 
