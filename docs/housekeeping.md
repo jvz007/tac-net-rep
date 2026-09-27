@@ -21,3 +21,7 @@ API:
 - `GET /api/tfd/system/storage/` scans and returns dry-run candidates.
 - `PUT /api/tfd/system/storage/` saves retention policies.
 - `POST /api/tfd/system/storage/purge/` accepts `dry_run` and optional category IDs.
+
+## Legacy zero-value policy compatibility
+
+Core no longer permits newly saved retention values below 1. On upgrade, an older stored policy whose active retention field is exactly `0` is repaired on read to that category's current built-in default. The privileged helper applies the same repair to an already-queued legacy request. This compatibility rule applies only to zero; negative, malformed, or unsupported policy values are not silently repaired.

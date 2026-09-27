@@ -18,12 +18,29 @@ LABELS={
 }
 class HousekeepingError(RuntimeError): pass
 
+def _repair_legacy_zero_policy(category, policy):
+    default=DEFAULT_POLICIES[category]
+    item={**default,**(policy if isinstance(policy,dict) else {})}
+    field='days' if default['mode']=='age_days' else 'keep'
+    try:
+        value=int(item.get(field,default[field]))
+    except (TypeError,ValueError):
+        return item
+    # Older Core builds allowed a stored zero with a separate destructive-zero
+    # acknowledgement. Current housekeeping deliberately rejects zero. Repair
+    # only that legacy value to the category's current safe default so status
+    # and runs recover automatically after upgrade. Other invalid values remain
+    # visible to normal validation rather than being silently rewritten.
+    if value==0:
+        item[field]=default[field]
+    return item
+
 def _load_config():
     if not CONFIG.is_file(): return {'policies':DEFAULT_POLICIES, 'allow_zero_destructive':False}
     try: raw=json.loads(CONFIG.read_text())
     except Exception: return {'policies':DEFAULT_POLICIES, 'allow_zero_destructive':False}
-    policies={k:{**v,**((raw.get('policies') or {}).get(k) or {})} for k,v in DEFAULT_POLICIES.items()}
-    return {'policies':policies, 'allow_zero_destructive': raw.get('allow_zero_destructive') is True}
+    policies={k:_repair_legacy_zero_policy(k,((raw.get('policies') or {}).get(k) or {})) for k in DEFAULT_POLICIES}
+    return {'policies':policies, 'allow_zero_destructive':False}
 
 def save_config(payload):
     incoming=payload.get('policies') if isinstance(payload,dict) else None

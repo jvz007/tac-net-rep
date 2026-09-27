@@ -1,31 +1,33 @@
-# FIXING - Core 1.15.105
+# FIXING.md — Core 1.15.106
 
 ## Review scope
 
-This release addresses **M7 only** from Claude's Tec-Tac Medium/Low tracker.
+This release is intentionally scoped to **M8** from the 27 September 2026 Claude tracker.
 
-### M7 - legacy backup retention compatibility
+### M8 — legacy zero-value housekeeping policies
 
-Older saved retention policies may not contain `keep_unclassified`. Core must not reject those policies or interpret omission as deletion.
+Older saved housekeeping policies may contain `0` in their active `days` or `keep` field. Core 1.15.105 passes those values through to the privileged helper, while the current helper rejects values below 1. That makes housekeeping status/dry-run/purge fail immediately after upgrade for affected installations.
 
-Expected behavior:
+Review that this release:
 
-- Provider-side normalization accepts a legacy policy with `keep_daily`, `keep_weekly`, and `keep_monthly` but no `keep_unclassified`.
-- Omitted `keep_unclassified` normalizes to `10000`, the existing supported maximum, so legacy/no-sidecar backups are retained rather than deleted after upgrade.
-- The privileged helper independently applies the same safe legacy default if it receives an older request shape.
-- New/updated callers should continue to send `keep_unclassified` explicitly.
-- An explicit `keep_unclassified` value is still honored exactly; the compatibility default does not override explicit policy.
+1. Repairs only an exact legacy zero on config read, replacing it with that category's current built-in default.
+2. Applies the same repair in the privileged helper for an already-queued request created by an older Core.
+3. Does **not** re-enable destructive-zero semantics (`allow_zero_destructive` remains false).
+4. Keeps new/updated policy writes strict: values must remain between 1 and 3650.
+5. Does not silently repair negative, malformed, or unsupported values.
+6. Includes an executable behavioral regression covering the Core config path and the privileged helper's actual request-processing path.
 
-## Behavioral regression
+## Primary files changed
 
-`tests/server-backup-retention-compat.py` verifies:
+- `framwork/tec_tac/housekeeping.py`
+- `scripts/housekeeping-helper.py`
+- `tests/housekeeping-legacy-zero-compat.py`
+- `docs/housekeeping.md`
 
-1. provider normalization of a legacy policy to `keep_unclassified=10000`;
-2. helper execution does not delete unclassified backups for the legacy shape;
-3. explicit `keep_unclassified=1` still deletes older unclassified backups according to policy.
+## Explicitly out of scope
 
-The older grep assertion requiring the previous error string was removed from `server-backup-review-hardening.sh` and replaced with this behavioral test.
+No other Medium or Low tracker item is intended to be closed by this release.
 
-## Not in scope
+## Test-environment / legacy-suite note
 
-No other Medium or Low tracker items are intentionally addressed by this release.
+`tests/review-followup-1.15.79.py` is not used as an M8 acceptance gate because its C16 assertion still greps for the pre-1.15.104 System Update rollback extraction expression. M6 intentionally replaced that implementation with validated sibling staging and atomic swap. This release does not modify that unrelated stale review test.

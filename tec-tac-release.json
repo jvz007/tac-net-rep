@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.105",
+  "version": "1.15.106",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -18,8 +18,8 @@
     },
     {
       "path": "FIXING.md",
-      "size": 1530,
-      "sha256": "bb21e3d321bcc4f8877de5cd23583c5fd23c1a679609a53f6388924c23fa3f79"
+      "size": 1790,
+      "sha256": "d89fe323d663981e515efc390311479624fad31587d8f796a8c30bc57fcbc083"
     },
     {
       "path": "LICENSE",
@@ -32,19 +32,19 @@
       "sha256": "b16e78b37eecd6b4690403b4725a0b9977c7e8e9eca51b6cb4493166c952f243"
     },
     {
-      "path": "RELEASE_NOTES_1.15.104.md",
-      "size": 830,
-      "sha256": "fb7946e026ddc79be0afef0db363070473a33b77d0980c6f98b3d85e5acb0aac"
-    },
-    {
       "path": "RELEASE_NOTES_1.15.105.md",
       "size": 623,
       "sha256": "1eb4c4a5006d75e3770aa6e276118d114936620efa508aff2d9b172f7a6b4305"
     },
     {
+      "path": "RELEASE_NOTES_1.15.106.md",
+      "size": 655,
+      "sha256": "5b1c9b8deb5c73ee66ce201af993b5d34565d62a734eacb8284ccb0b66fbc029"
+    },
+    {
       "path": "VERSION",
       "size": 9,
-      "sha256": "5caa560989f79c8d6d9c156dda8bc5c67254a7955aab76dd111a490bea93b2f1"
+      "sha256": "cd6c846b64d2d9963a9a82707d38d0af6b60945217c40130d6311ff51136f3dc"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -88,8 +88,8 @@
     },
     {
       "path": "docs/housekeeping.md",
-      "size": 953,
-      "sha256": "d230610748983f7644addba664b811c4f2a041950ede52638497b41095275a21"
+      "size": 1408,
+      "sha256": "783ef21a81b05ba21bc4f0e43937aac40ac36a3780dd56d8fec0f85905c3b8ef"
     },
     {
       "path": "docs/module-audit.md",
@@ -270,6 +270,11 @@
       "path": "docs/releases/RELEASE_NOTES_1.15.103.md",
       "size": 645,
       "sha256": "cbe7855c2ad9681852da9a1c56f7c64958139cf7434ca9b07547ba0237c9e1e5"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.104.md",
+      "size": 830,
+      "sha256": "fb7946e026ddc79be0afef0db363070473a33b77d0980c6f98b3d85e5acb0aac"
     },
     {
       "path": "docs/releases/RELEASE_NOTES_1.15.19.md",
@@ -978,8 +983,8 @@
     },
     {
       "path": "framwork/tec_tac/housekeeping.py",
-      "size": 5157,
-      "sha256": "4f3dab103f66547e3aa22af58adf1bfda527751a3f8ac3fb8ac1868e4573301b"
+      "size": 5919,
+      "sha256": "29f944c0fcabad884a6bc0949a473f9bb51fb0a07b6090f72ea5f1fc2a86ba8d"
     },
     {
       "path": "framwork/tec_tac/housekeeping_views.py",
@@ -1358,8 +1363,8 @@
     },
     {
       "path": "scripts/housekeeping-helper.py",
-      "size": 12598,
-      "sha256": "597162647bf4269ae3d608b7806fcf588ce4a198ba2ec05dda656e29bf81d9e7"
+      "size": 13145,
+      "sha256": "878010650a320d255b53593f93d2ef5ad803d2ce8b52c42c8826ab3221bdaa45"
     },
     {
       "path": "scripts/install-extension.sh",
@@ -1499,7 +1504,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "5684555bfa81c6077466b4af2959bc24d21145353b84addf4fb5fd2a71ef9307"
+      "sha256": "7885b4cd441039c6ef7ef8653bccc4bdffc9cde6a9470ef5e6807db433457238"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -1625,6 +1630,11 @@
       "path": "tests/housekeeping-foundation.sh",
       "size": 1218,
       "sha256": "f4a58854640508b7c485dd6435a56109dbadbb96114e52c28b56d3eb21f9c4be"
+    },
+    {
+      "path": "tests/housekeeping-legacy-zero-compat.py",
+      "size": 3551,
+      "sha256": "b029682276d435b3ba84a4297303a195ae7234da3e60a0bcb140cf932127b9b8"
     },
     {
       "path": "tests/housekeeping-upgrade-modes.sh",

@@ -244,11 +244,22 @@ def main():
         if not isinstance(payload,dict): raise SystemExit('housekeeping request must be an object')
         selected=payload.get('categories') or list(DEFAULTS)
         if not isinstance(selected,list) or any(c not in DEFAULTS for c in selected): raise SystemExit('unknown housekeeping category')
-        policies=dict(DEFAULTS)
+        policies={c:dict(v) for c,v in DEFAULTS.items()}
         for c,v in (payload.get('policies') or {}).items():
             if c not in DEFAULTS or not isinstance(v,dict): raise SystemExit('invalid housekeeping policy')
             policies[c]={**DEFAULTS[c],**v}
-        allow_zero = payload.get('allow_zero_destructive') is True
+            default=DEFAULTS[c]
+            field='days' if default['mode']=='age_days' else 'keep'
+            try:
+                value=int(policies[c].get(field,default[field]))
+            except (TypeError,ValueError):
+                value=None
+            # Accept an in-flight request created by an older Core that still
+            # contains the historical destructive-zero value. Repair zero only;
+            # select() continues to reject negatives and malformed policies.
+            if value==0:
+                policies[c][field]=default[field]
+        allow_zero = False
         dry = sys.argv[1]=='--scan' or bool(payload.get('dry_run',False))
         rows=[]; reclaimed=0; deleted=0; scanned=0
         for c in selected:
