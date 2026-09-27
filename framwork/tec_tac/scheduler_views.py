@@ -371,7 +371,20 @@ class SchedulerRunNowView(APIView):
         schedule = get_object_or_404(TecTacSchedule, pk=schedule_id)
         _require_action(request.user, schedule.action_id)
         _require_schedule_owner_or_manager(request.user, schedule)
-        _require_target_scope(request.user, schedule.targets, payload=False)
+        try:
+            canonical_targets = _normalize_targets(schedule.targets or {})
+        except SchedulerError as exc:
+            schedule.enabled = False
+            schedule.target_state = "invalid"
+            schedule.target_state_detail = str(exc)[:500]
+            schedule.save(update_fields=["enabled", "target_state", "target_state_detail", "updated_at"])
+            return Response({"detail": str(exc)}, status=400)
+        if canonical_targets != (schedule.targets or {}):
+            schedule.targets = canonical_targets
+            schedule.target_state = "valid"
+            schedule.target_state_detail = ""
+            schedule.save(update_fields=["targets", "target_state", "target_state_detail", "updated_at"])
+        _require_target_scope(request.user, canonical_targets, payload=False)
         run = queue_manual_run(schedule)
         return Response(serialize_run(run), status=202)
 
