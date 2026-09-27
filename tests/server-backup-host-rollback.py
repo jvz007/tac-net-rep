@@ -103,7 +103,7 @@ with tempfile.TemporaryDirectory(prefix="tectac-b1-coordinator-") as td:
     old_run = mod.subprocess.run
     try:
         mod.service_stop_for_restore = lambda log: None
-        mod.service_start_after_restore = lambda log: None
+        mod.service_start_after_restore = lambda log, service_state=None: None
         mod.verify_tactical_runtime = lambda config, log: None
         def run(argv, *args, **kwargs):
             if list(argv[:2]) == ["systemctl", "daemon-reload"]:
@@ -245,7 +245,7 @@ with tempfile.TemporaryDirectory(prefix="tectac-m3-rollback-") as td:
     replacements = []
     try:
         mod.service_stop_for_restore = lambda log: None
-        mod.service_start_after_restore = lambda log: None
+        mod.service_start_after_restore = lambda log, service_state=None: None
         mod.verify_tactical_runtime = lambda config, log: None
         mod._restore_host_paths = lambda snapshot, log: None
 
@@ -308,7 +308,7 @@ with tempfile.TemporaryDirectory(prefix="tectac-m4-db-without-tree-") as td:
     calls = []
     try:
         mod.service_stop_for_restore = lambda log: None
-        mod.service_start_after_restore = lambda log: calls.append(["service-start"])
+        mod.service_start_after_restore = lambda log, service_state=None: calls.append(["service-start"])
         mod.verify_tactical_runtime = lambda config, log: calls.append(["verify"])
         mod._restore_host_paths = lambda snapshot, log: None
         mod._postgres_query = lambda query: calls.append(["query", query])

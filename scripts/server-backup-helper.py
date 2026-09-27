@@ -2589,17 +2589,40 @@ def service_stop_for_restore(log):
 
 
 RESTORE_SERVICES = ["rmm", "celery", "celerybeat", "daphne", "nats-api", "nats", "meshcentral", "nginx"]
+REQUIRED_RESTORE_SERVICES = {"rmm", "celery", "celerybeat", "nginx"}
 
 
-def service_start_after_restore(log):
+def capture_restore_service_state():
+    """Capture pre-restore runtime activity without changing service state."""
+    state = {}
+    for service in RESTORE_SERVICES:
+        result = subprocess.run(
+            ["systemctl", "is-active", "--quiet", service],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        state[service] = bool(result.returncode == 0)
+    return state
+
+
+def service_start_after_restore(log, service_state=None):
+    """Restore the pre-operation runtime state and require core services healthy.
+
+    Tactical's restore/install scripts may start optional services as a side effect.
+    D3 requires recovery to be operationally seamless, so optional services that
+    were inactive before the restore are stopped again before success is reported.
+    Required Tactical services must always be active after a successful restore.
+    """
+    expected = dict(service_state or {})
     failures = []
     for service in RESTORE_SERVICES:
-        result = subprocess.run(["systemctl", "start", service], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if result.returncode and service in {"rmm", "celery", "celerybeat", "nginx"}:
-            failures.append(service)
+        should_run = expected.get(service, service in REQUIRED_RESTORE_SERVICES)
+        action = "start" if should_run else "stop"
+        result = subprocess.run(["systemctl", action, service], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if result.returncode and (service in REQUIRED_RESTORE_SERVICES or should_run):
+            failures.append(f"{service}:{action}")
     if failures:
-        raise RuntimeError("failed to restart required Tactical service(s): " + ", ".join(failures))
-    log.write("[TEC-TAC-BACKUP] restarted Tactical services after restore/rollback\n")
+        raise RuntimeError("failed to restore Tactical service runtime state: " + ", ".join(failures))
+    log.write("[TEC-TAC-BACKUP] restored Tactical service runtime state after restore/rollback\n")
 
 
 def _postgres_query(sql):
@@ -2895,7 +2918,13 @@ def create_pre_restore_snapshot(config, job_id, log, *, include_databases=True, 
                 _run_to_file(["runuser", "-u", "postgres", "--", "pg_dump", "-Fc", "-d", name], dump, timeout=2 * 60 * 60)
                 os.chown(dump, 0, 0); os.chmod(dump, 0o600)
                 databases.append({"name": name, "owner": owner, "dump": str(dump), "sha256": sha256_file(dump)})
-        snapshot = {"root": str(root), "created_at": now(), "databases": databases, "host_paths": host_paths}
+        snapshot = {
+            "root": str(root),
+            "created_at": now(),
+            "databases": databases,
+            "host_paths": host_paths,
+            "service_state": capture_restore_service_state(),
+        }
         atomic_json(root / "snapshot.json", snapshot, mode=0o600)
         os.chown(root / "snapshot.json", 0, 0)
         log.write(
@@ -2970,7 +2999,7 @@ def rollback_failed_restore(config, moved_root, snapshot, log, *, restore_tactic
                 "Tactical tree rollback failed after host/database rollback: "
                 f"{tree_rollback_error.__class__.__name__}: {tree_rollback_error}"
             )
-        service_start_after_restore(log)
+        service_start_after_restore(log, snapshot.get("service_state"))
         verify_tactical_runtime(config, log)
         if restore_tactical_tree and failed_root.exists(): shutil.rmtree(failed_root, ignore_errors=True)
         result["rollback_performed"] = True
@@ -2978,7 +3007,7 @@ def rollback_failed_restore(config, moved_root, snapshot, log, *, restore_tactic
     except BaseException as exc:
         result["rollback_error"] = f"{exc.__class__.__name__}: {exc}"
         log.write(f"[TEC-TAC-BACKUP] CRITICAL rollback failure: {result['rollback_error']}\n")
-        try: service_start_after_restore(log)
+        try: service_start_after_restore(log, snapshot.get("service_state"))
         except Exception: pass
     return result
 
@@ -3552,6 +3581,7 @@ def operation_restore_backup(config, job, log):
                 "root": snapshot["root"], "created_at": snapshot["created_at"],
                 "databases": [r["name"] for r in snapshot["databases"]],
                 "host_paths": len(snapshot.get("host_paths") or []),
+                "service_state": dict(snapshot.get("service_state") or {}),
             }
             atomic_json(job_path(job["id"],config),job)
             try:
@@ -3572,6 +3602,10 @@ def operation_restore_backup(config, job, log):
                         job["version_transition"]["effective_core_version"] = effective_core_version
                         job["version_transition"]["version_verified"] = bool(effective_core_version)
                 else:
+                    service_start_after_restore(log, snapshot.get("service_state"))
+                    verify_tactical_runtime(config,log)
+                if mode == "full":
+                    service_start_after_restore(log, snapshot.get("service_state"))
                     verify_tactical_runtime(config,log)
             except BaseException as exc:
                 rollback = rollback_failed_restore(config, moved_root, snapshot, log, restore_tactical_tree=True)
@@ -3595,6 +3629,7 @@ def operation_restore_backup(config, job, log):
             job["pre_restore_snapshot"] = {
                 "root": snapshot["root"], "created_at": snapshot["created_at"],
                 "databases": [], "host_paths": len(snapshot.get("host_paths") or []),
+                "service_state": dict(snapshot.get("service_state") or {}),
             }
             atomic_json(job_path(job["id"],config),job)
             try:
@@ -3602,6 +3637,8 @@ def operation_restore_backup(config, job, log):
                 if job.get("version_transition") is not None:
                     job["version_transition"]["effective_core_version"] = effective_core_version
                     job["version_transition"]["version_verified"] = bool(effective_core_version)
+                service_start_after_restore(log, snapshot.get("service_state"))
+                verify_tactical_runtime(config,log)
             except BaseException as exc:
                 rollback = rollback_failed_restore(config, None, snapshot, log, restore_tactical_tree=False)
                 failure = {
