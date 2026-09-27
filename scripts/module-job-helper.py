@@ -320,7 +320,7 @@ def claim_job(job_id):
         meta = STAGED_ROOT / f"{upload_id}.json"
         if not meta.is_file():
             raise SystemExit("staged module metadata missing")
-        stage_meta = json.loads(meta.read_text(encoding="utf-8"))
+        stage_meta = _read_json_nofollow(meta, label="staged module metadata")
         package_path = Path(str(stage_meta.get("package_path") or ""))
         run_dir = RUNNING_ROOT / job_id
         run_dir.mkdir(parents=True, exist_ok=False)

@@ -928,12 +928,21 @@ def batch_packages(job, running_root, root_trust):
                 result.append(package)
             continue
 
-        module_id = str(item.get("id") or "")
+        authenticated_modules = artifact_trust.get("artifact_modules") if isinstance(artifact_trust, dict) else None
+        if not isinstance(authenticated_modules, list) or len(authenticated_modules) != 1:
+            raise RuntimeError("root verifier must return exactly one authenticated module for a standalone batch package")
+        authenticated = authenticated_modules[0]
+        if not isinstance(authenticated, dict):
+            raise RuntimeError("root verifier returned invalid standalone module identity")
+        module_id = str(authenticated.get("id") or "")
+        version = str(authenticated.get("version") or "")
+        if not PLUGIN_RE.fullmatch(module_id) or not version:
+            raise RuntimeError("root verifier returned invalid standalone module identity")
         if module_id in seen_ids:
             raise RuntimeError(f"duplicate module id in batch: {module_id}")
         seen_ids.add(module_id)
-        _require_expected_hash(source, artifact_trust.get("package_sha256"), f"batch package {module_id or index}")
-        result.append({"id": module_id, "path": str(source), "source": item.get("source")})
+        _require_expected_hash(source, artifact_trust.get("package_sha256"), f"batch package {module_id}")
+        result.append({"id": module_id, "version": version, "path": str(source), "source": item.get("source")})
     return result
 
 

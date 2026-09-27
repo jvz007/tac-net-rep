@@ -218,6 +218,8 @@ grep -q 'f"{filename}: {exc}"' "${ROOT}/framwork/tec_tac/module_manager_v2.py" |
 grep -q 'Classification is structural, never filename-based' "${ROOT}/framwork/tec_tac/module_manager_v2.py" || fail "structural package/bundle classification guard missing"
 echo "[TEST] PASS structural module artifact classification"
 
+python3 "${ROOT}/tests/test_core_leftovers_1_15_139.py"
+
 # 1.14.1 manifest-declared licensing enforcement
 [[ -f "${ROOT}/docs/module-licensing.md" ]] || fail "module licensing contract missing"
 grep -q '"licensing"' "${ROOT}/framwork/tec_tac/registry.py" || fail "registry does not accept licensing manifest metadata"

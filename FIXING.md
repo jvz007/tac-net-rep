@@ -1,22 +1,19 @@
-# FIXING.md — Core 1.15.138
+# FIXING.md — Core 1.15.139
 
 ## Review scope
 
-This release is intentionally limited to **L40, L41, L14, L15 and L16** from the current Core tracker.
+This release is intentionally limited to **L01, L02, L03 and L04** from the current Core tracker.
 
-### L40 — FIFO-safe housekeeping request open
-Housekeeping request files are opened with `O_NOFOLLOW|O_NONBLOCK` and must pass an `fstat()` regular-file check before any read.
+### L01 — standalone batch package identity comes from verified bytes
+Standalone Module Management v2 batch artifacts no longer trust the mutable job/request `id`. The worker takes the module id and version from the root verifier's authenticated `artifact_modules` result and requires exactly one authenticated module for a standalone package.
 
-### L41 — pytest-discoverable claim regression
-`tests/test_housekeeping_claim_security.py` exposes the existing behavioral claim-security test to normal pytest discovery.
+### L02 — uninstaller config is data, not shell
+The existing safe config-loader behavior is now covered by a behavioral regression. `uninstall.sh` sources only `scripts/tec-tac-config.sh`; a config value containing command substitution remains literal data and is not executed.
 
-### L14 — custom installer config path
-The installer records the selected config location in the fixed root-owned `/etc/tec-tac/config-path` pointer. Privileged backup/maintenance helpers validate that pointer and use the selected config without trusting caller-controlled environment variables.
+### L03 — fixed Python interpreter paths
+The existing recovery/install hardening is now covered by an executable regression that rejects any return to bare `python3` from `PATH`. Recovery scripts use `/usr/bin/python3 -I` or Tactical's configured virtualenv Python.
 
-### L15 — host snapshot in disk preflight
-Restore disk preflight adds an estimate of the existing host paths that will be copied into the pre-restore rollback snapshot.
-
-### L16 — detect newly added installer rollback targets
-The rollback regression discovers privileged Tec-Tac install literals from `install.sh` and requires rollback coverage for every newly introduced target. The existing L77 `/usr/local/sbin/tec-tac-recovery-key` gap remains an explicit known exception for its own tracker pass.
+### L04 — no-follow v1 staged metadata
+The v1 module worker reads `staged/<upload_id>.json` through the existing `O_NOFOLLOW|O_NONBLOCK` bounded JSON reader. A staged metadata symlink/FIFO is rejected rather than followed or blocked on.
 
 No other tracker findings are intentionally changed.
