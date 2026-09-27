@@ -277,7 +277,11 @@ Core force-audits rejected setup/password proofs as
 
 Tec-Tac adds one-time MFA backup codes without changing Tactical's user model or TOTP secret. Backup codes are stored in `TecTacMfaBackupCode` using Django password hashes; plaintext codes are returned only once when a user generates a new set. Generating a set requires the user's current password and a current TOTP code and invalidates every previous unused code.
 
-Recovery sign-in uses `POST /api/tfd/auth/login/backup-code/`. The endpoint revalidates the Tactical username/password, applies Tactical's local-login restrictions and login throttles, atomically consumes one backup code, and then issues the normal Tactical Knox token. It does not create a parallel Tec-Tac session credential.
+`GET /api/tfd/auth/mfa/backup-codes/` returns backup-code status for the signed-in account. `POST /api/tfd/auth/mfa/backup-codes/` verifies the current password and TOTP before rotating the set. Failed proof attempts are keyed only to the account: five failures are allowed in a 15-minute window, after which Core returns HTTP 429 with `Retry-After`. A successful proof clears the failure budget. Successful rotations use a separate account-only budget of 20 per day, so failed proofs never consume the success allowance.
+
+Recovery sign-in uses `POST /api/tfd/auth/login/backup-code/`. The endpoint revalidates the Tactical username/password, applies Tactical's local-login restrictions and Tactical's normal login throttles, and additionally applies a Tec-Tac failure budget keyed to the normalized username only. Five failed recovery logins in 15 minutes block subsequent recovery attempts with HTTP 429 and `Retry-After`; a successful recovery clears that username failure budget. Core then atomically consumes one backup code and issues the normal Tactical Knox token. It does not create a parallel Tec-Tac session credential.
+
+`GET /api/tfd/access/users/<user_id>/mfa/` exposes only recovery-code status to an authorized account administrator. `DELETE /api/tfd/access/users/<user_id>/mfa/` invalidates the target user's recovery codes subject to the protected-account guard; neither administrative endpoint exposes plaintext codes or password hashes.
 
 ## Administrative login-session management
 

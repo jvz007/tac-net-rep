@@ -23,7 +23,16 @@ from .mfa_backup import (
     invalidate_backup_codes,
     verify_generation_proof,
 )
-from .throttles import MfaBackupProofDayThrottle, MfaBackupProofMinThrottle
+from .throttles import (
+    backup_code_login_failure_retry_after,
+    mfa_backup_proof_failure_retry_after,
+    mfa_backup_proof_success_retry_after,
+    record_backup_code_login_failure,
+    record_mfa_backup_proof_failure,
+    record_mfa_backup_proof_success,
+    reset_backup_code_login_failures,
+    reset_mfa_backup_proof_failures,
+)
 from .session_security import (
     SessionAuthenticated,
     SessionSecurityError,
@@ -32,14 +41,15 @@ from .session_security import (
 )
 
 
+def _mfa_rate_limited(wait: int, detail: str) -> Response:
+    response = Response({"detail": detail}, status=429)
+    response["Retry-After"] = str(max(1, int(wait)))
+    response["Cache-Control"] = "no-store, max-age=0"
+    return response
+
+
 class MfaBackupCodesView(APIView):
     permission_classes = [SessionAuthenticated]
-    throttle_classes = [MfaBackupProofMinThrottle, MfaBackupProofDayThrottle]
-
-    def get_throttles(self):
-        if getattr(self.request, "method", "GET").upper() == "POST":
-            return super().get_throttles()
-        return []
 
     def get(self, request):
         response = Response({"status": backup_code_status(request.user)})
@@ -47,6 +57,12 @@ class MfaBackupCodesView(APIView):
         return response
 
     def post(self, request):
+        failure_wait = mfa_backup_proof_failure_retry_after(request.user)
+        if failure_wait is not None:
+            return _mfa_rate_limited(failure_wait, "Too many failed backup-code proof attempts.")
+        success_wait = mfa_backup_proof_success_retry_after(request.user)
+        if success_wait is not None:
+            return _mfa_rate_limited(success_wait, "Backup-code generation rate limit exceeded.")
         try:
             verify_generation_proof(
                 request.user,
@@ -55,6 +71,7 @@ class MfaBackupCodesView(APIView):
             )
             payload = generate_backup_codes(request.user, requested_by=request.user.username)
         except MfaBackupProofError as exc:
+            record_mfa_backup_proof_failure(request.user)
             audit_generation_proof_failure(
                 request.user,
                 requested_by=request.user.username,
@@ -63,6 +80,8 @@ class MfaBackupCodesView(APIView):
             return Response({"detail": str(exc)}, status=400)
         except SessionSecurityError as exc:
             return Response({"detail": str(exc)}, status=400)
+        reset_mfa_backup_proof_failures(request.user)
+        record_mfa_backup_proof_success(request.user)
         response = Response(payload, status=201)
         response["Cache-Control"] = "no-store, max-age=0"
         response["Pragma"] = "no-cache"
@@ -128,9 +147,15 @@ class BackupCodeLoginView(KnoxLoginView):
     throttle_classes = [LoginMinThrottle, LoginDayThrottle]
 
     def post(self, request, format=None):
+        username = str(request.data.get("username") or "")
+        failure_wait = backup_code_login_failure_retry_after(username)
+        if failure_wait is not None:
+            return _mfa_rate_limited(failure_wait, "Too many failed backup-code login attempts.")
+
         serializer = AuthTokenSerializer(data=request.data)
         if not serializer.is_valid():
             burn_backup_code_hash_cost()
+            record_backup_code_login_failure(username)
             AuditLog.audit_user_failed_login(
                 str(request.data.get("username") or ""),
                 debug_info={"ip": getattr(request, "_client_ip", "")},
@@ -140,25 +165,30 @@ class BackupCodeLoginView(KnoxLoginView):
         user = serializer.validated_data["user"]
         if user.block_dashboard_login or user.is_sso_user:
             burn_backup_code_hash_cost()
+            record_backup_code_login_failure(username)
             return notify_error("Bad credentials")
 
         core_settings = get_core_settings()
         if not user.is_superuser and core_settings.block_local_user_logon:
             burn_backup_code_hash_cost()
+            record_backup_code_login_failure(username)
             return notify_error("Bad credentials")
 
         if not getattr(user, "totp_key", None):
             burn_backup_code_hash_cost()
+            record_backup_code_login_failure(username)
             return notify_error("Bad credentials")
 
         code = str(request.data.get("backup_code") or "")
         if not consume_backup_code(user, code, requested_by=user.username):
+            record_backup_code_login_failure(username)
             AuditLog.audit_user_failed_twofactor(
                 str(request.data.get("username") or ""),
                 debug_info={"ip": getattr(request, "_client_ip", "")},
             )
             return notify_error("Bad credentials")
 
+        reset_backup_code_login_failures(username)
         login(request, user)
         ipw = IpWare()
         client_ip, _ = ipw.get_client_ip(request.META)

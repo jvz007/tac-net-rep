@@ -29,9 +29,12 @@ aud = text('framwork/tec_tac/audit.py')
 require('AuditWriteMinThrottle' in av and 'AuditWriteDayThrottle' in av, 'audit writer lacks dedicated throttles')
 require('module.get("id") == "core" or not tuple(module.get("permissions") or ())' in aud, 'browser audit must reject Core and permissionless modules')
 
-# MFA-1 proof attempts use a dedicated authenticated throttle.
+# MFA-1 proof/login attempts use account-only failure budgets and a separate success budget.
 mfa = text('framwork/tec_tac/mfa_backup_views.py')
-require('MfaBackupProofMinThrottle' in mfa and 'MfaBackupProofDayThrottle' in mfa, 'MFA backup generation lacks dedicated proof throttle')
+thr = text('framwork/tec_tac/throttles.py')
+require('MFA_BACKUP_FAILURE_LIMIT = 5' in thr and 'MFA_BACKUP_FAILURE_WINDOW_SECONDS = 15 * 60' in thr, 'MFA backup failure budget missing')
+require('MFA_BACKUP_SUCCESS_LIMIT = 20' in thr and 'record_mfa_backup_proof_success' in mfa, 'MFA backup success budget missing')
+require('backup_code_login_failure_retry_after(username)' in mfa and 'Retry-After' in mfa, 'backup-code login username throttle missing')
 
 # C9 superuser-only session policy management + conservative private proxy ranges.
 ss = text('framwork/tec_tac/session_security.py')
