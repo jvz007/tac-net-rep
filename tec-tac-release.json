@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.124",
+  "version": "1.15.125",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -18,8 +18,8 @@
     },
     {
       "path": "FIXING.md",
-      "size": 870,
-      "sha256": "9cf3ff22e761dad62a4048d81032055482b13fd9f3bfc9f34f9c9cbf7238434a"
+      "size": 923,
+      "sha256": "0470ae4d34a8aab478467026079243d7b540addb91139f8c952454503d239c75"
     },
     {
       "path": "LICENSE",
@@ -37,14 +37,14 @@
       "sha256": "f4f304390f9a3e8ebb9ba84ecef8275ddc2ed7ed130f860f52caa668dd70bfe5"
     },
     {
-      "path": "RELEASE_NOTES_1.15.124.md",
-      "size": 1470,
-      "sha256": "c0bafff222eaf764c79c7d68300ee8d7eaf3ef454d3f80d633fa528242481c1f"
+      "path": "RELEASE_NOTES_1.15.125.md",
+      "size": 1542,
+      "sha256": "d248fc79f19d34511b6fef22237b7749d1dc290bc578771863e99fa8af57840e"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "61b96c0d372c5bd337817d4a1af3221dd60650b948e005185525b13e541d6438"
+      "sha256": "5c49f7b3869db74288ab5101406689ae3d0c7c1ea92daf567270e4092a25b46a"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -1549,7 +1549,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "ae4be14061f52d81ebfe0863739976536ea6a338fe85a5c5c7ac568195a9e6fc"
+      "sha256": "20acdbe3d33147d3473ac8ef44c6722c37c81815b42942cceb73914582c816c1"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -1620,6 +1620,11 @@
       "path": "tests/d5-completion.py",
       "size": 4078,
       "sha256": "d3b15b9540478b4caedaf0f745135ed9fea7a69636dfe30b76dcd7264bfa540f"
+    },
+    {
+      "path": "tests/d5-scope-boundary.py",
+      "size": 2783,
+      "sha256": "2060de5ec6fab87f50a2d58663991e6136f3612021f71fe395092887c9377600"
     },
     {
       "path": "tests/d6a-guard-import-isolation.py",

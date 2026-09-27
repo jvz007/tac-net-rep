@@ -1,18 +1,18 @@
-# FIXING.md — Core 1.15.124
+# FIXING.md — Core 1.15.125
 
-This build continues from the review-passed 1.15.123 baseline.
+This build continues from the review-passed 1.15.124 baseline.
 
-## D4 — session history retention is a Tec-Tac policy setting
+## D5 — follow Tactical's scope rule everywhere
 
-- `history_retention_days` remains Core-owned session-security policy state with a default of 30 days and supported range of 1–3650 days.
-- The administrator `session/policy/` HTTP boundary is now explicitly regression-tested to expose and mutate retention policy.
-- Non-superusers remain unable to read or modify the global policy.
-- Invalid retention values return HTTP 400 through the policy boundary.
-- The built-in Core policy documentation now includes the retention setting and default.
+- Core already centralizes Tactical Client/Site/Agent model access and `filter_by_role(user)` scope in `resources_adapter.py`.
+- Scheduler save-time checks, execution-time checks and scoped run-history snapshots continue to consume the same Resource Directory scope decisions.
+- A new release invariant now rejects direct Tactical resource-model imports or direct `filter_by_role` scope calls anywhere else in Core.
+- The guard also requires Scheduler and the Resource Directory HTTP layer to keep using the centralized adapter helpers.
 
 ## Regression coverage
 
-- `tests/session-retention-http-policy.py`
-- existing `tests/session-retention-policy.py`
-- existing `tests/session-retention-deletion.py`
-- existing `tests/session-retention-scheduler.py`
+- `tests/d5-scope-boundary.py`
+- existing `tests/d5-completion.py`
+- existing `tests/resource-directory-foundation.py`
+- existing `tests/resource-directory-write-hardening.py`
+- existing Scheduler scope foundations
