@@ -38,8 +38,8 @@
     },
     {
       "path": "RELEASE_NOTES_1.15.115.md",
-      "size": 1023,
-      "sha256": "713dbde2221d5f64bd7afc844fdd83f44be89c7f0b2119b89d78b7b0e30f2ade"
+      "size": 1960,
+      "sha256": "12c81211042a775377da6ce7323989de419521c4c8bbfa6c7efe405d4f69569e"
     },
     {
       "path": "VERSION",
@@ -1368,8 +1368,8 @@
     },
     {
       "path": "install.sh",
-      "size": 61423,
-      "sha256": "930cd75fe9780add466def4b014bbedc4707683d17393679f875a75b716d355f"
+      "size": 63547,
+      "sha256": "5b91c6c85b9bcc4faeb21a7955bbbee55552f23a63952324ac4a8a90c4ac29d9"
     },
     {
       "path": "reportsets/.gitkeep",
@@ -1692,6 +1692,16 @@
       "sha256": "6de6ccc2b3fb443dd6d170650192e085e0ca2ffc84c310fe4eea526705ae2a4a"
     },
     {
+      "path": "tests/installer-resource-contract-version.py",
+      "size": 3151,
+      "sha256": "badd9f7f16de44e31d8c9789c73ae64cf4fd3aee8fbb9b21560a4228cbf140e3"
+    },
+    {
+      "path": "tests/installer-resource-contract-version.sh",
+      "size": 157,
+      "sha256": "e4b95204e6e7992a8f259fc292c063d0a7b0c5788e8dc75579d8ab1d1fb89106"
+    },
+    {
       "path": "tests/layout-foundation.sh",
       "size": 1496,
       "sha256": "5b166951ef0f801ebf49295f404539e4e2ffde970da28e103983f2cbfde8788a"
@@ -1888,8 +1898,8 @@
     },
     {
       "path": "tests/resource-directory-foundation.sh",
-      "size": 1733,
-      "sha256": "4075c6fccf58d212417bb8fd6a2f035460cafa5820b828df95c9a05fb12c7521"
+      "size": 1804,
+      "sha256": "8a01069b7e25d97a46bdabd037a431779b33d16c2e4ea7d145d991658f251ba0"
     },
     {
       "path": "tests/resource-directory-site-move-postgres.py",

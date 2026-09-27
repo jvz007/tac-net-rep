@@ -21,8 +21,9 @@ grep -q 'ResourceMutableListView' framwork/tec_tac/resource_views.py
 grep -q 'ResourceMutableDetailView' framwork/tec_tac/resource_views.py
 grep -q 'def client_write_in_scope' framwork/tec_tac/resources_adapter.py
 grep -q 'def site_write_in_scope' framwork/tec_tac/resources_adapter.py
-grep -q '_has_perm_on_client' framwork/tec_tac/resources_adapter.py
-grep -q '_has_perm_on_site' framwork/tec_tac/resources_adapter.py
+grep -q 'def _role_scope_unrestricted' framwork/tec_tac/resources_adapter.py
+grep -q 'can_view_clients' framwork/tec_tac/resources_adapter.py
+grep -q 'can_view_sites' framwork/tec_tac/resources_adapter.py
 ! grep -q 'qs = _scope_queryset(Client.objects.select_for_update()' framwork/tec_tac/resources_adapter.py
 ! grep -q 'qs = _scope_queryset(Site.objects.select_for_update()' framwork/tec_tac/resources_adapter.py
 
