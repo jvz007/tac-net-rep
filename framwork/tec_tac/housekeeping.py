@@ -85,7 +85,12 @@ def _run(action, *, dry_run=True, categories=None):
         report=json.loads(result.read_text())
     finally:
         req.unlink(missing_ok=True)
-        result.unlink(missing_ok=True)
+        # Result files are root-owned and the results directory is deliberately
+        # read-only to Tactical.  The root helper prunes stale results.
+        try:
+            result.unlink(missing_ok=True)
+        except PermissionError:
+            pass
     report['categories']=[{**row,'label':LABELS.get(row.get('id'),row.get('id'))} for row in report.get('categories',[])]
     report['policies']=cfg['policies']; report['allow_zero_destructive']=cfg.get('allow_zero_destructive') is True; report['protected']=['/var/lib/tec-tac/ui','/var/lib/tec-tac/module-manager/module-state.json','/var/lib/tec-tac/module-manager/repositories','/var/lib/tec-tac/server-backup/secrets','configured backup destinations','/opt/tec-tac','/opt/tec-tac-src']
     return report

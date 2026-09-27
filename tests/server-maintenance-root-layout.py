@@ -34,5 +34,7 @@ for bad in (
     assert bad not in text, bad
 assert 'CONFIG = Path("/opt/tec-tac/etc/tec-tac.conf")' in text
 assert 'st.st_uid != 0 or (st.st_mode & 0o022)' in text
-assert 'stat.S_ISLNK(st.st_mode)' in text
+assert 'getattr(os, "O_NOFOLLOW", 0)' in text
+assert 'st = os.fstat(fd)' in text
+assert 'CONFIG.read_text' not in text
 print('server maintenance root layout: PASS')

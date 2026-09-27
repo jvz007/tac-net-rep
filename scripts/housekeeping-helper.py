@@ -66,7 +66,7 @@ def _read_request_nofollow(path: Path) -> bytes:
         os.close(fd)
 
 
-def _require_trusted_directory(path: Path, *, private: bool = False) -> os.stat_result:
+def _require_trusted_directory(path: Path, *, private: bool = False, root_publish_only: bool = False) -> os.stat_result:
     try:
         st = path.lstat()
     except FileNotFoundError as exc:
@@ -79,7 +79,9 @@ def _require_trusted_directory(path: Path, *, private: bool = False) -> os.stat_
     mode = stat.S_IMODE(st.st_mode)
     if private and mode != 0o700:
         raise RuntimeError(f'private housekeeping directory must be mode 0700: {path}')
-    if not private and (mode & 0o002):
+    if root_publish_only and (mode & 0o022):
+        raise RuntimeError(f'root-published housekeeping directory may not be group/world writable: {path}')
+    if not private and not root_publish_only and (mode & 0o002):
         raise RuntimeError(f'trusted housekeeping directory may not be world-writable: {path}')
     return st
 
@@ -97,7 +99,7 @@ def _ensure_running_directory() -> None:
 
 def _write_result(request_id: str, payload: dict) -> Path:
     _require_trusted_directory(ROOT)
-    result_dir = _require_trusted_directory(RESULTS)
+    result_dir = _require_trusted_directory(RESULTS, root_publish_only=True)
     target = RESULTS / f'{request_id}.json'
     fd, tmp_name = tempfile.mkstemp(prefix=f'.{request_id}.', suffix='.tmp', dir=str(RESULTS))
     tmp = Path(tmp_name)
@@ -140,12 +142,35 @@ def claim_request(req: Path) -> Path:
         except PermissionError:
             pass
         os.close(fd); fd=-1
-        os.replace(tmp,target)
+        # Atomic no-clobber publication.  A second invocation with the same
+        # request id must fail instead of replacing the first root-owned claim.
+        try:
+            os.link(tmp, target, follow_symlinks=False)
+        except FileExistsError as exc:
+            raise RuntimeError('housekeeping request is already claimed') from exc
     finally:
         if fd >= 0:
             os.close(fd)
         tmp.unlink(missing_ok=True)
     return target
+
+def _prune_results(*, max_age_seconds: int = 86400, keep_newest: int = 200) -> None:
+    """Bound root-owned result retention now that Tactical has read-only access."""
+    _require_trusted_directory(ROOT)
+    _require_trusted_directory(RESULTS, root_publish_only=True)
+    now_ts=time.time()
+    rows=[]
+    for path in RESULTS.glob('*.json'):
+        try:
+            st=path.lstat()
+        except OSError:
+            continue
+        if stat.S_ISREG(st.st_mode) and not stat.S_ISLNK(st.st_mode):
+            rows.append((st.st_mtime,path))
+    rows.sort(reverse=True)
+    for index,(mtime,path) in enumerate(rows):
+        if index >= keep_newest or now_ts-mtime > max_age_seconds:
+            path.unlink(missing_ok=True)
 
 def safe_child(p: Path):
     try: p.resolve(strict=False).relative_to(STATE.resolve())
@@ -270,6 +295,7 @@ def main():
                     remove_path(x['path']); reclaimed+=x['bytes']; deleted+=1
             rows.append(row)
         result={'ok':True,'dry_run':dry,'generated_at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),'categories':rows,'scanned_bytes':scanned,'deleted_items':deleted,'reclaimed_bytes':reclaimed,'allow_zero_destructive':allow_zero}
+        _prune_results()
         _write_result(req.stem, result)
     finally:
         if claimed is not None:

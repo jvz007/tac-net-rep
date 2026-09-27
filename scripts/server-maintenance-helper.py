@@ -29,22 +29,24 @@ DEFAULT_ACTION_ROOT = Path("/usr/local/lib/tec-tac/server-maintenance/actions")
 
 
 def _root_owned_layout():
-    """Load helper trust roots only from the fixed root-owned Tec-Tac config.
-
-    Privileged helper trust roots must never come from process environment.
-    The config is optional for bootstrap/tests; when present it must be a
-    regular root-owned file that is not group/world writable or a symlink.
-    """
+    """Load helper trust roots from one verified, no-follow config descriptor."""
     values = {}
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
-        st = CONFIG.lstat()
+        fd = os.open(CONFIG, flags)
     except FileNotFoundError:
         return values
-    if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
-        raise RuntimeError(f"Tec-Tac config is not a regular file: {CONFIG}")
-    if st.st_uid != 0 or (st.st_mode & 0o022):
-        raise RuntimeError(f"Tec-Tac config must be root-owned and not group/world writable: {CONFIG}")
-    for raw in CONFIG.read_text(encoding="utf-8").splitlines():
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise RuntimeError(f"Tec-Tac config is not a regular file: {CONFIG}")
+        if st.st_uid != 0 or (st.st_mode & 0o022):
+            raise RuntimeError(f"Tec-Tac config must be root-owned and not group/world writable: {CONFIG}")
+        with os.fdopen(os.dup(fd), "r", encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+    finally:
+        os.close(fd)
+    for raw in lines:
         line = raw.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
@@ -160,7 +162,9 @@ def claimed_job_path(job_id):
 
 
 def _read_json_nofollow(path):
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    # O_NONBLOCK prevents a malicious FIFO/device substitution from hanging a
+    # privileged helper before fstat() can reject the non-regular object.
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     fd = os.open(path, flags)
     try:
         st = os.fstat(fd)
@@ -601,14 +605,18 @@ def run_job(job_id):
 
 def cancel_job(job_id):
     ensure_layout()
+    legacy_public_only = False
     try:
         path, job = load_claimed_job(job_id)
     except RuntimeError:
-        # A cancellation can race with the short pre-claim dispatch window.
-        public_path, public_job = load_job(job_id)
-        if public_job.get("status") in {"succeeded", "failed", "cancelled", "dispatch_failed"}:
+        # Jobs dispatched by pre-claim Core releases have only the public job
+        # record.  They still use the UUID-derived systemd unit, so cancellation
+        # can safely stop that exact unit without trusting mutable argv/action
+        # fields from the legacy public record.
+        path, job = load_job(job_id)
+        if job.get("status") in {"succeeded", "failed", "cancelled", "dispatch_failed"}:
             return
-        raise RuntimeError("job has not reached the claimed execution state")
+        legacy_public_only = True
     cancel_context = None
     cancel_request = CANCEL_ROOT / f"{job_id}.json"
     if cancel_request.is_file() and not cancel_request.is_symlink():
@@ -622,19 +630,22 @@ def cancel_job(job_id):
     if job.get("status") in {"succeeded", "failed", "cancelled", "dispatch_failed"}:
         return
     requested_at = now()
-    write_claimed_job(path, job, status="cancelling", stage="cancelling", cancel_requested_at=requested_at, cancel_context=cancel_context)
-    append_audit("job.cancel_requested", job=job, detail={"cancel_context": cancel_context or {}})
-    unit = str(job.get("unit") or _systemd_unit(job_id))
+    writer = update_job if legacy_public_only else write_claimed_job
+    writer(path, job, status="cancelling", stage="cancelling", cancel_requested_at=requested_at, cancel_context=cancel_context)
+    append_audit("job.cancel_requested", job=job, detail={"cancel_context": cancel_context or {}, "legacy_public_only": legacy_public_only})
+    # Never trust a mutable legacy job's unit name.  Server-maintenance units
+    # are always derived from the validated UUID.
+    unit = _systemd_unit(job_id)
     result = subprocess.run(["systemctl", "stop", unit], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     if result.returncode != 0:
-        current = load_claimed_job(job_id)[1]
+        current = (load_job(job_id)[1] if legacy_public_only else load_claimed_job(job_id)[1])
         if current.get("status") not in {"succeeded", "failed", "cancelled", "dispatch_failed"}:
-            write_claimed_job(path, current, status="failed", stage="cancel", finished_at=now(), failure={"classification":"cancel_failed","message":(result.stderr or "Unable to stop maintenance unit.").strip()})
+            writer(path, current, status="failed", stage="cancel", finished_at=now(), failure={"classification":"cancel_failed","message":(result.stderr or "Unable to stop maintenance unit.").strip()})
             append_audit("job.cancel_failed", job=current, detail={"message": result.stderr.strip()})
             raise RuntimeError((result.stderr or "Unable to stop maintenance unit.").strip())
-    current = load_claimed_job(job_id)[1]
+    current = (load_job(job_id)[1] if legacy_public_only else load_claimed_job(job_id)[1])
     if current.get("status") not in {"succeeded", "failed", "cancelled", "dispatch_failed"}:
-        write_claimed_job(path, current,
+        writer(path, current,
             status="cancelled", stage="cancelled", finished_at=now(),
             lock={"scope":"global","state":"released","acquired_at":(current.get("lock") or {}).get("acquired_at")},
             exit_result=current.get("exit_result") or {"success":False,"exit_code":None,"signal":signal.SIGTERM,"timed_out":False},

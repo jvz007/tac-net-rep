@@ -846,8 +846,12 @@ for hk_dir in requests results running config; do
     fi
     mkdir -p "${hk_path}"
 done
-chown root:"${TACTICAL_GROUP}" "${HOUSEKEEPING_ROOT}/requests" "${HOUSEKEEPING_ROOT}/results" "${HOUSEKEEPING_ROOT}/config"
-chmod 2770 "${HOUSEKEEPING_ROOT}/requests" "${HOUSEKEEPING_ROOT}/results" "${HOUSEKEEPING_ROOT}/config"
+chown root:"${TACTICAL_GROUP}" "${HOUSEKEEPING_ROOT}/requests" "${HOUSEKEEPING_ROOT}/config"
+chmod 2770 "${HOUSEKEEPING_ROOT}/requests" "${HOUSEKEEPING_ROOT}/config"
+# Results are root-published and Tactical-readable only.  This prevents the
+# service account from replacing result entries before Django consumes them.
+chown root:"${TACTICAL_GROUP}" "${HOUSEKEEPING_ROOT}/results"
+chmod 2750 "${HOUSEKEEPING_ROOT}/results"
 chown root:root "${HOUSEKEEPING_ROOT}/running"
 chmod 00700 "${HOUSEKEEPING_ROOT}/running"
 

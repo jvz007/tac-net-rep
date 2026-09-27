@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.136",
+  "version": "1.15.137",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -18,8 +18,8 @@
     },
     {
       "path": "FIXING.md",
-      "size": 2135,
-      "sha256": "22a9eb856e69cb543bded73b44e44a22378db334f688e119da344d39c2da6add"
+      "size": 1182,
+      "sha256": "c01b6fd390ee362543b0abdef9284b1ba3455704546708eff17dbfa6ce4efc12"
     },
     {
       "path": "LICENSE",
@@ -37,14 +37,14 @@
       "sha256": "f4f304390f9a3e8ebb9ba84ecef8275ddc2ed7ed130f860f52caa668dd70bfe5"
     },
     {
-      "path": "RELEASE_NOTES_1.15.136.md",
-      "size": 1560,
-      "sha256": "5912e99abf39da997d58fded9948208348d8940edc3d240944fbc30f7dd9ed05"
+      "path": "RELEASE_NOTES_1.15.137.md",
+      "size": 1454,
+      "sha256": "2f992d0a78ae21a3bb5e23768948f006141982cd72a32bb4b6a4c75d616bd97e"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "b45950231b13ff792bd9c564d52dad46f4fd98dbd69204b0c8ef5f0cd48b3913"
+      "sha256": "beda3a26e87994c506494d4bc2ac0ae4bf5d3fad8596af64b6517abb012a58fa"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -1028,8 +1028,8 @@
     },
     {
       "path": "framwork/tec_tac/housekeeping.py",
-      "size": 5919,
-      "sha256": "29f944c0fcabad884a6bc0949a473f9bb51fb0a07b6090f72ea5f1fc2a86ba8d"
+      "size": 6137,
+      "sha256": "f0decbc9f3855c00356331e5bff88aa676d46d14c53c66a4c9c3ecaad1cb4450"
     },
     {
       "path": "framwork/tec_tac/housekeeping_views.py",
@@ -1373,8 +1373,8 @@
     },
     {
       "path": "install.sh",
-      "size": 63808,
-      "sha256": "55de898a43929c5b64e9eef2f44577312816d1edfe4fe6fdf39118e0795678e5"
+      "size": 64003,
+      "sha256": "e0f95f36c1c018469ac5fdc93646022c4bf21240d4a02206552133299852eb79"
     },
     {
       "path": "reportsets/.gitkeep",
@@ -1413,8 +1413,8 @@
     },
     {
       "path": "scripts/housekeeping-helper.py",
-      "size": 13145,
-      "sha256": "878010650a320d255b53593f93d2ef5ad803d2ce8b52c42c8826ab3221bdaa45"
+      "size": 14452,
+      "sha256": "30f66559ea70c296f91e1cbe5c3baf8b5f2d04aadecb4f9c9fec809fbddaef19"
     },
     {
       "path": "scripts/install-extension.sh",
@@ -1523,8 +1523,8 @@
     },
     {
       "path": "scripts/server-maintenance-helper.py",
-      "size": 28222,
-      "sha256": "4ed76c39149439c64a72fe02a4a9d189e2ac28306a35d7fa378b085c26e696bc"
+      "size": 28856,
+      "sha256": "cc160e2c7e2109f325bda2cf29f2e10d539685dcc90e55e64f556ee6239d7065"
     },
     {
       "path": "scripts/system-update-helper.py",
@@ -1554,7 +1554,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "135efe71159a2a89c27ea37c21a8d80f415dafa02ba6a35bba3271428b853c90"
+      "sha256": "eeba302f9aaf297d43baf8816e46d101a62cbe966138739d3b02276b02472971"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -1693,8 +1693,8 @@
     },
     {
       "path": "tests/housekeeping-foundation.sh",
-      "size": 1218,
-      "sha256": "f4a58854640508b7c485dd6435a56109dbadbb96114e52c28b56d3eb21f9c4be"
+      "size": 1288,
+      "sha256": "9f2d496205d33c4cb55f79a30cd32394e468c45e619745956c5588cbd78e33e7"
     },
     {
       "path": "tests/housekeeping-legacy-zero-compat.py",
@@ -1740,6 +1740,11 @@
       "path": "tests/m15-low-batch.py",
       "size": 5492,
       "sha256": "5d4ebc17acf1b5f355b7793f45506fa4d34ebe2d7e753c1bbac7020dfeab84e1"
+    },
+    {
+      "path": "tests/maintenance-housekeeping-hardening-1.15.137.py",
+      "size": 5562,
+      "sha256": "3c0e88c983bd92437fb41e11a7c8df356539de6c738384ea85519b08e2dcefb5"
     },
     {
       "path": "tests/mfa-admin-readonly-review.py",
@@ -2178,8 +2183,8 @@
     },
     {
       "path": "tests/server-maintenance-root-layout.py",
-      "size": 1626,
-      "sha256": "65a2a4dc01d6ccd50f5750f11c16ab69d9604982cf345d11ad50d9d0dafd43a3"
+      "size": 1703,
+      "sha256": "4f889a43df521a160524ab62f83929efdd006cfed191d21d94685c92d65decd4"
     },
     {
       "path": "tests/session-fingerprint-upgrade.py",

@@ -16,3 +16,5 @@ with tempfile.TemporaryDirectory() as td:
   assert len(items)==2 and len(purge)==1 and purge[0]['path'].name=='a' and not protected and not active_ids and not unreadable and not zero_blocked and zero_reason is None
 print('housekeeping foundation: PASS')
 PY
+
+python3 "$ROOT/tests/maintenance-housekeeping-hardening-1.15.137.py"
