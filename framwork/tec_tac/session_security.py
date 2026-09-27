@@ -584,7 +584,13 @@ def list_sessions(*, username: str | None = None, user=None, include_revoked: bo
 def revoke_session(session_id, *, reason: str = "administrator-request", requested_by: str = "") -> dict[str, Any]:
     with transaction.atomic():
         session = TecTacSessionTrust.objects.select_for_update().get(pk=session_id)
+        knox_digest = str(session.knox_digest or "")
         _revoke_locked(session, reason=reason, requested_by=requested_by)
+        if knox_digest:
+            # A Tec-Tac trust row is linked to the Tactical Knox credential that
+            # authenticated it. Explicit session revocation must invalidate both
+            # layers so the credential cannot continue on Tactical-native APIs.
+            AuthToken.objects.filter(digest=knox_digest).delete()
         return _serialize_session(session)
 
 
@@ -594,13 +600,28 @@ def revoke_user_sessions(username: str, *, except_session_id=None, reason: str =
         raise SessionSecurityError("username is required.")
     count = 0
     ids = []
+    revoked_digests: set[str] = set()
     with transaction.atomic():
         qs = TecTacSessionTrust.objects.select_for_update().filter(username=username, revoked=False)
         if except_session_id:
             qs = qs.exclude(pk=except_session_id)
         for session in qs:
+            digest = str(session.knox_digest or "")
+            if digest:
+                revoked_digests.add(digest)
             _revoke_locked(session, reason=reason, requested_by=requested_by)
             count += 1; ids.append(str(session.id))
+        if revoked_digests:
+            # Preserve a credential only if another still-active trust row refers
+            # to it (most importantly the session excluded by "revoke others").
+            retained_digests = set(
+                TecTacSessionTrust.objects
+                .filter(knox_digest__in=revoked_digests, revoked=False)
+                .values_list("knox_digest", flat=True)
+            )
+            delete_digests = revoked_digests - retained_digests
+            if delete_digests:
+                AuthToken.objects.filter(digest__in=delete_digests).delete()
     if count:
         _audit("user_sessions_revoked", username=username, reason=reason, requested_by=requested_by, metadata={"count": count, "session_ids": ids})
     return {"username": username, "revoked": count, "session_ids": ids}

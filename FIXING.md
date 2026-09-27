@@ -1,19 +1,26 @@
-# FIXING — Core 1.15.99
+# FIXING — Core 1.15.100
 
-Review scope for this release: **D6a only**.
+Review scope for this release: **M2 only**.
 
-## Tracker items
+## Tracker item
 
-- **M26** — invalid UTF-8 in Tec-Tac extension registry manifests or module-state data must never stop Tactical starting. Decode failures are converted into `RegistryError` / `ModuleStateError`, which the existing bootstrap boundary degrades to Core-only extension loading.
-- **M27** — the precise Tactical account-guard import is now inside its startup try boundary, and the emergency fail-closed installer lives in the independent `tactical_account_guard_fallback.py` module. A precise-guard import/runtime failure therefore cannot take out both protection layers.
+- **M2** — revoking a Tec-Tac session must invalidate the linked Tactical Knox token so the same bearer credential cannot continue authenticating against Tactical-native endpoints.
 
-## Behavioural regressions
+## Behavioural changes
 
-- `tests/d6a-invalid-utf8.py` exercises the real registry and module-state readers with invalid UTF-8.
-- `tests/d6a-guard-import-isolation.py` simulates a precise-guard import failure and proves AppConfig continues through the separate fallback, reporting bridge and Core route registration.
-- `tests/apps-ready-startup-safety.py` covers precise wrapper-install failure with the independent fallback.
-- `tests/tactical-superuser-guard.py` executes the independent fallback against native role/user/API-key/self-service handlers and verifies idempotence, non-superuser denial, API-key redaction and effective-superuser access.
+- `revoke_session()` now deletes the linked Knox `AuthToken` inside the same database transaction as the Tec-Tac trust-row revocation.
+- `revoke_user_sessions()` now deletes the Knox credentials linked to every revoked trust row.
+- The explicitly excluded/current session credential is preserved when another still-active trust row references that digest.
+- Legacy Tec-Tac trust rows with no Knox digest still revoke without deleting unrelated credentials.
+
+## Behavioural regression
+
+- `tests/session-knox-revocation.py` executes the real public revocation functions with in-memory trust/token managers and proves:
+  - single-session revoke removes the linked Knox token;
+  - revoke-other-sessions removes only the revoked sessions' tokens;
+  - the excluded current token survives;
+  - a legacy digest-less trust row does not trigger token deletion.
 
 ## Not in scope
 
-No M2+ Medium backlog work, UI work, or unrelated Low items are included.
+No M3+ Mediums, UI changes, or unrelated Low items are included.
