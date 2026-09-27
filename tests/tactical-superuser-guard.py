@@ -153,6 +153,14 @@ ordinary = Role(10, False)
 admin_role = Role(11, True)
 mod._guard_role_update(normal, ordinary, {"name": "Helpdesk", "is_superuser": False})
 mod._guard_role_update(normal, admin_role, {"name": "Admins", "is_superuser": True})
+# Full PUT omission of a BooleanField is persisted by Tactical as False.  It
+# must therefore be treated as a demotion for an existing superuser role.
+try:
+    mod._guard_role_update(normal, admin_role, {"name": "Admins"})
+except PermissionDenied:
+    pass
+else:
+    raise AssertionError("form-encoded/full PUT omission silently demoted a superuser role")
 for role, requested in ((ordinary, True), (admin_role, False)):
     try:
         mod._guard_role_update(normal, role, {"is_superuser": requested})
@@ -269,6 +277,7 @@ mod.install_tactical_account_guard()
 first = (
     views.GetAddRoles.post,
     views.GetUpdateDeleteRole.put,
+    views.GetUpdateDeleteRole.delete,
     views.GetAddUsers.post,
     views.GetUpdateDeleteUser.put,
     views.GetUpdateDeleteUser.delete,
@@ -283,6 +292,7 @@ mod.install_tactical_account_guard()
 second = (
     views.GetAddRoles.post,
     views.GetUpdateDeleteRole.put,
+    views.GetUpdateDeleteRole.delete,
     views.GetAddUsers.post,
     views.GetUpdateDeleteUser.put,
     views.GetUpdateDeleteUser.delete,
@@ -311,6 +321,21 @@ except PermissionDenied:
     pass
 else:
     raise AssertionError("wrapped Tactical role endpoint allowed escalation")
+
+# M28/M29: normal role managers cannot delete or silently demote a superuser role.
+Role.objects.rows = {10: ordinary, 11: admin_role}
+for call, message in (
+    (lambda: GetUpdateDeleteRole().delete(Request(normal, {}), 11), "normal role manager deleted a superuser role"),
+    (lambda: GetUpdateDeleteRole().put(Request(normal, {"name": "Admins"}), 11), "full PUT omission silently demoted a superuser role"),
+):
+    try:
+        call()
+    except PermissionDenied:
+        pass
+    else:
+        raise AssertionError(message)
+assert GetUpdateDeleteRole().delete(Request(normal, {}), 10) == "role-delete-10"
+assert GetUpdateDeleteRole().delete(Request(superuser, {}), 11) == "role-delete-11"
 
 User.objects.rows = {50: existing}
 assert GetUpdateDeleteUser().put(Request(normal, {"email": "x@example.invalid", "role": 11}), 50) == "user-update-50"

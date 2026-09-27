@@ -207,15 +207,28 @@ def _role_create_violation(actor, payload):
 
 
 def _role_update_violation(actor, role, payload):
-    if role is None or not _payload_has(payload, "is_superuser"):
-        return None
-    requested = _validated_bool(_payload_get(payload, "is_superuser"))
-    if requested is None:
+    if role is None:
         return None
     current = bool(getattr(role, "is_superuser", False))
+    # Tactical's RoleSerializer handles PUT as a full update.  A missing
+    # BooleanField therefore resolves to False rather than preserving the
+    # current value.  Mirror that persisted result here so form-encoded PUTs
+    # cannot silently demote a superuser role outside the R5 guard.
+    if _payload_has(payload, "is_superuser"):
+        requested = _validated_bool(_payload_get(payload, "is_superuser"))
+        if requested is None:
+            return None
+    else:
+        requested = False
     if requested == current:
         return None
     return _role_flag_violation(actor, role=role, requested=requested, operation="update")
+
+
+def _role_delete_violation(actor, role):
+    if role is None or not bool(getattr(role, "is_superuser", False)):
+        return None
+    return _role_flag_violation(actor, role=role, requested=False, operation="delete")
 
 
 def _user_create_violation(actor, payload, *, role=None):
@@ -302,6 +315,19 @@ def _wrap_role_update(original):
         with transaction.atomic():
             role = Role.objects.select_for_update().only("id", "is_superuser").filter(pk=pk).first()
             violation = _role_update_violation(request.user, role, request.data)
+            if violation is None:
+                return original(self, request, pk, *args, **kwargs)
+        _raise_violation(request.user, violation)
+    return _mark_guarded(guarded)
+
+
+def _wrap_role_delete(original):
+    @wraps(original)
+    def guarded(self, request, pk, *args, **kwargs):
+        violation = None
+        with transaction.atomic():
+            role = Role.objects.select_for_update().only("id", "is_superuser").filter(pk=pk).first()
+            violation = _role_delete_violation(request.user, role)
             if violation is None:
                 return original(self, request, pk, *args, **kwargs)
         _raise_violation(request.user, violation)
@@ -459,6 +485,7 @@ def install_tactical_account_guard() -> None:
     wrappers = [
         (tactical_views.GetAddRoles, "post", _wrap_role_create),
         (tactical_views.GetUpdateDeleteRole, "put", _wrap_role_update),
+        (tactical_views.GetUpdateDeleteRole, "delete", _wrap_role_delete),
         (tactical_views.GetAddUsers, "post", _wrap_user_create),
         (tactical_views.GetUpdateDeleteUser, "put", _wrap_user_update),
         (tactical_views.GetUpdateDeleteUser, "delete", _wrap_user_delete),

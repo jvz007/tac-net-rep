@@ -41,7 +41,13 @@ def get_policy() -> dict:
             payload = json.loads(POLICY_FILE.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise AccountSecurityPolicyError(f"Account security policy is unreadable: {exc}") from exc
-        if not isinstance(payload, dict) or int(payload.get("schema", 0) or 0) != 1:
+        if not isinstance(payload, dict):
+            raise AccountSecurityPolicyError("Account security policy schema is invalid.")
+        try:
+            schema = int(payload.get("schema", 0) or 0)
+        except (TypeError, ValueError) as exc:
+            raise AccountSecurityPolicyError("Account security policy schema is invalid.") from exc
+        if schema != 1:
             raise AccountSecurityPolicyError("Account security policy schema is invalid.")
         enabled = _coerce_bool(payload.get("protect_superuser_accounts", False))
         updated_at = payload.get("updated_at")
