@@ -548,8 +548,16 @@ def _authorization_revoked_health(authorization_revoked) -> dict:
     return {
         "authorization_revoked_last_24h": authorization_revoked.count(),
         "last_authorization_revoked": ({
-            "schedule_id": str(latest.schedule_id),
-            "schedule_name": str(getattr(latest.schedule, "name", "") or ""),
+            "schedule_id": (
+                str(latest.schedule_snapshot_id or latest.schedule_id)
+                if (latest.schedule_snapshot_id or latest.schedule_id)
+                else None
+            ),
+            "schedule_name": str(
+                latest.schedule_name
+                or (getattr(latest.schedule, "name", "") if latest.schedule else "")
+                or "Deleted schedule"
+            ),
             "created_at": latest.created_at.isoformat(),
             "error": latest.error,
         } if latest else None),

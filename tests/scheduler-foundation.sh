@@ -39,4 +39,5 @@ grep -q 'run_retention_days' "$ROOT/framwork/tec_tac/models.py"
 grep -qi 'Schedule ownership surfaces' "$ROOT/docs/module-scheduling.md"
 python3 "$ROOT/tests/scheduler-hardening-1.15.134.py"
 python3 "$ROOT/tests/scheduler-filter-value-compat-1.15.134-2.py"
+python3 "$ROOT/tests/scheduler-history-health-1.15.135.py"
 echo 'scheduler foundation: PASS'

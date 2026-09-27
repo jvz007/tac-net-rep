@@ -1,26 +1,21 @@
-# FIXING.md — Core 1.15.134
+# FIXING.md — Core 1.15.135
 
 ## Review scope
 
-Blocking rebuild of Core 1.15.134-1 for the HIGH finding that the dynamic-filter scope-alias guard treated ordinary descriptive values as Tactical scope references and could disable existing schedules during dispatch.
+This release is intentionally limited to **M14 + L79** from the current Core tracker.
 
-Review that:
+### M14 — scoped run-history query efficiency
 
-1. `normalize_scheduler_targets()` accepts `Main Site`, `Johannesburg site`, `ssh agent`, `backup-client` and `windows_agent` as ordinary filter values.
-2. It still rejects explicit Tactical scope field references including `site.id`, `site__id`, `siteId`, `payload.clientIds` and `agent.id`.
-3. Bare scope nouns inside a longer module path such as `ticket.client` are not treated as alternate scope selectors.
-4. A saved dynamic schedule with `filter.name="Main Site"` remains enabled when `dispatch_due_schedules()` processes it and queues normally.
-5. Existing M13 scope-channel protections and the 1.15.134-1 endpoint-PK compatibility fix remain intact.
+The production PostgreSQL history path already resolves `resources_adapter.scheduler_scope_snapshot()` once per request and applies action/target filtering before count and pagination through the JSONB SQL scope prefilter. The compatibility fallback is bounded to 5,000 candidates and reuses the same scope snapshot. This release adds behavioral coverage proving that neither path performs Tactical scope resolution per row.
 
-## Files changed
+### L79 — deleted schedule health identity
 
-- `framwork/tec_tac/scheduler_targets.py`
-- `tests/scheduler-filter-value-compat-1.15.134.py`
-- `tests/scheduler-hardening-1.15.134.py`
-- `tests/scheduler-foundation.sh`
-- release metadata/notes only
+`_authorization_revoked_health()` now uses the run's immutable `schedule_snapshot_id` and `schedule_name` before consulting the nullable live schedule relation. A deleted schedule therefore retains a meaningful health identity.
 
-## Explicitly out of scope
+## Expected review outcome
 
-- Held-back non-blocking review findings.
-- Other Scheduler behavior or contract changes.
+- A scoped PostgreSQL history page resolves Tactical scope exactly once and does not call per-row scope evaluation.
+- The bounded alternate-backend path may evaluate rows locally, but still resolves Tactical scope exactly once for the request.
+- A deleted schedule's latest `AuthorizationRevoked` health record reports the saved schedule id/name rather than `None`/blank.
+
+No other tracker findings are intentionally changed.

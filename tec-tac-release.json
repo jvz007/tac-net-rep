@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.134",
+  "version": "1.15.135",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -18,8 +18,8 @@
     },
     {
       "path": "FIXING.md",
-      "size": 1277,
-      "sha256": "96a9a99d17b25712130a8093ac373bd44971d72578189ce00c5bd80ff5f365f0"
+      "size": 1339,
+      "sha256": "2cd22d20936078b3b2dce9fef40d311a651459ba4164caf25897f614b7d08b86"
     },
     {
       "path": "LICENSE",
@@ -37,14 +37,14 @@
       "sha256": "f4f304390f9a3e8ebb9ba84ecef8275ddc2ed7ed130f860f52caa668dd70bfe5"
     },
     {
-      "path": "RELEASE_NOTES_1.15.134.md",
-      "size": 1351,
-      "sha256": "dcc0d234fc83716cac7d01b1c60720bc976147a96d43fd2082f3512c104645ba"
+      "path": "RELEASE_NOTES_1.15.135.md",
+      "size": 1075,
+      "sha256": "20ddc25cbfc72547aca0e16c046962b304e1593a9fc6c22beb6f57b73e59b287"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "90b9098f84b0b86d5652f9aa54973520da6e31cd5edbc82161d2947b5e8d9008"
+      "sha256": "89307968e3ad3f98df62aae653e23ee0f123036ffc2c3b099d3bf2d27b212c7f"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -683,8 +683,8 @@
     },
     {
       "path": "docs/scheduler.md",
-      "size": 11079,
-      "sha256": "c5f7525de470591993c50816eabb3f09610d0c752385a479309e288b71c2038e"
+      "size": 11261,
+      "sha256": "972119b05dd880ba0f4f45b04bc57ce7cdcf3ed2fe68f9bd16b21a2979d364da"
     },
     {
       "path": "docs/server-backup-capability.md",
@@ -1268,8 +1268,8 @@
     },
     {
       "path": "framwork/tec_tac/scheduler.py",
-      "size": 49968,
-      "sha256": "eb4177ea513b988f4b3e2b92fc5cc3a1438c5f89bc323b98c01972bb7c35b5bd"
+      "size": 50259,
+      "sha256": "06eb331c14d12db5bd255c750b17c1cf9db4cc0df73ef18f4eba19038ea31f1b"
     },
     {
       "path": "framwork/tec_tac/scheduler_targets.py",
@@ -1554,7 +1554,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "38a13cabc889b7b4111da0546bcdd588d3ca30f41ec2ee809d4a51295f220e83"
+      "sha256": "2524003760cb6438ce8b14b942201b0a53ce72ed965d8e5358bfd00665df71df"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2023,8 +2023,8 @@
     },
     {
       "path": "tests/scheduler-foundation.sh",
-      "size": 2827,
-      "sha256": "3cce2a3c30a69a4ed18a639c27a2a2762d653f3c575a28eafc6aed0d02fbde2c"
+      "size": 2886,
+      "sha256": "978a0b908086619cb680270c9763edad43dd8b1db676c3aef340e8934fff6c41"
     },
     {
       "path": "tests/scheduler-hardening-1.15.134.py",
@@ -2035,6 +2035,11 @@
       "path": "tests/scheduler-history-bounded-scope-scan.py",
       "size": 1131,
       "sha256": "c8fc7094fcfad588275482aa8776008f47442bb0538e4f4eec9a290655cbf8bf"
+    },
+    {
+      "path": "tests/scheduler-history-health-1.15.135.py",
+      "size": 5356,
+      "sha256": "66c6397f0b84b0fc26042d94ae3df6bb4e51ca7d63d056a98961e93c1b682bcf"
     },
     {
       "path": "tests/scheduler-history-query-efficiency.py",

@@ -186,6 +186,7 @@ See [`module-scheduling.md`](module-scheduling.md) for the module integration co
 
 - Completed or expired one-off schedule definitions are cleaned automatically after the configured retention period. The default is 48 hours and operators may configure 1-720 hours from the Scheduler configuration surface. Run history is preserved independently of the schedule definition.
 - Scheduler diagnostics expose tick freshness, queue/dispatch state, enabled schedule count, queued/running runs, recent failures, and `AuthorizationRevoked` skips from the last 24 hours.
+  Deleted schedule definitions keep their immutable run snapshot id/name in health output, so retained `AuthorizationRevoked` history remains identifiable after cleanup or deletion.
 - Tactical scope follows one rule everywhere: roles with both client and site restrictions empty have full scope; once either relation is populated, saved Scheduler targets are constrained to those explicit grants.
 - Framework self-tests cover immediate dispatch, true scheduled execution, deliberate permanent failure and retry/recovery.
 - Permanent failures must not be blindly retried. Module handlers may raise `SchedulerPermanentError` or `SchedulerTransientError`; capability unavailable/version mismatch/disabled and validation-style failures are treated as permanent.
