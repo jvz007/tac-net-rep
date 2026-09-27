@@ -374,6 +374,10 @@ def claim_job(job_id):
     root_fd = _open_staged_root_fd()
     try:
         meta, meta_info = _read_staged_metadata(root_fd, upload_id)
+        preview = meta.get("preview") if isinstance(meta.get("preview"), dict) else {}
+        if str(preview.get("component") or request.get("component")) != str(request.get("component")):
+            raise SystemExit("staged component does not match request")
+
         source_name, source_info = _select_staged_package(root_fd, upload_id)
         suffix = ".tar.gz" if source_name.endswith(".tar.gz") else Path(source_name).suffix
         target = RUNNING_ROOT / f"{job_id}{suffix}"
@@ -393,11 +397,6 @@ def claim_job(job_id):
             running_signature = RUNNING_ROOT / f"{job_id}.release.json.sig"
             _copy_staged_package(root_fd, manifest_source, manifest_info, running_manifest)
             _copy_staged_package(root_fd, signature_source, signature_info, running_signature)
-
-        preview = meta.get("preview") if isinstance(meta.get("preview"), dict) else {}
-        if str(preview.get("component") or request.get("component")) != str(request.get("component")):
-            target.unlink(missing_ok=True)
-            raise SystemExit("staged component does not match request")
 
         immutable = {
             "id": job_id,

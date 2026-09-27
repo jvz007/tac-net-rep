@@ -556,6 +556,22 @@ def claim_job(job_id):
     atomic_json(path, job, 0o640, uid=0, gid=gid)
     return path, immutable
 
+def _cleanup_claimed_job_inputs(job_id):
+    # These inputs exist only to bridge the Tactical-writable staging area to
+    # the root-private execution set. They must not survive a failed snapshot
+    # or trust-verification step.
+    try:
+        running_request_path(job_id).unlink(missing_ok=True)
+    except OSError:
+        pass
+    claim_dir = RUNNING_ROOT / f"{job_id}.claimed"
+    try:
+        if claim_dir.is_dir():
+            shutil.rmtree(claim_dir)
+    except OSError:
+        pass
+
+
 def dispatch(job_id):
     claim_job(job_id)
     subprocess.Popen(
@@ -822,16 +838,40 @@ def _authenticated_bundle_files(trust):
     return result
 
 
+def _validated_bundle_member_name(raw_name):
+    # ZIP paths are POSIX paths regardless of the host platform. Reject path
+    # aliases (for example ./x.zip, a//b or a/./b) instead of letting
+    # ZipFile.extractall collapse them onto an already verified child path.
+    raw = str(raw_name or "")
+    if not raw or "\\" in raw or raw.startswith("/"):
+        raise RuntimeError("unsafe path in bundle")
+    directory = raw.endswith("/")
+    body = raw[:-1] if directory else raw
+    parts = body.split("/")
+    if not body or any(part in {"", ".", ".."} for part in parts):
+        raise RuntimeError("unsafe or aliased path in bundle")
+    canonical = "/".join(parts)
+    return canonical + ("/" if directory else "")
+
+
 def _extract_verified_bundle(source, extract, expected_hash, label):
     if not source.is_file():
         raise RuntimeError("root-private bundle snapshot is missing")
     _require_expected_hash(source, expected_hash, label)
     extract.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(source) as zf:
+        seen = set()
         for member in zf.infolist():
-            name = Path(member.filename)
-            if name.is_absolute() or ".." in name.parts:
-                raise RuntimeError("unsafe path in bundle")
+            canonical = _validated_bundle_member_name(member.filename)
+            collision_key = canonical.rstrip("/")
+            if collision_key in seen:
+                raise RuntimeError("duplicate or aliased path in bundle")
+            seen.add(collision_key)
+            # Symlink entries are not valid bundle content. Their external
+            # attributes encode the Unix file type when created on Unix.
+            mode = (member.external_attr >> 16) & 0o170000
+            if mode == stat.S_IFLNK:
+                raise RuntimeError("symlink entry in bundle is not allowed")
         zf.extractall(extract)
 
 
@@ -958,8 +998,12 @@ def run_job(job_id):
     # Finalize the immutable execution set before invoking any trust verifier.
     # Every later verification, extraction and install consumes only these
     # root-owned 0600 snapshots, never the claimed/request staging paths.
-    job = _snapshot_v2_job_artifacts(job_id, job, running)
-    root_trust = _verify_v2_job_trust(config, job)
+    try:
+        job = _snapshot_v2_job_artifacts(job_id, job, running)
+        root_trust = _verify_v2_job_trust(config, job)
+    except BaseException:
+        _cleanup_claimed_job_inputs(job_id)
+        raise
     if root_trust:
         job["root_publisher_trust"] = root_trust
 
@@ -1052,13 +1096,7 @@ def run_job(job_id):
         if not job.get("stage"):
             job["stage"] = "failed"
     atomic_json(path, job)
-    try:
-        running_request_path(job_id).unlink(missing_ok=True)
-        claim_dir = RUNNING_ROOT / f"{job_id}.claimed"
-        if claim_dir.is_dir():
-            shutil.rmtree(claim_dir)
-    except OSError:
-        pass
+    _cleanup_claimed_job_inputs(job_id)
 
 
 def mark_failed(job_id, error):

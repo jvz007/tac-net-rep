@@ -387,3 +387,6 @@ grep -q "_snapshot_v2_job_artifacts" "${ROOT}/scripts/module-v2-job-helper.py" |
 grep -q "_require_expected_hash" "${ROOT}/scripts/module-v2-job-helper.py" || fail "v2 post-verification hash boundary missing"
 python3 "${ROOT}/tests/module-v2-verified-bytes-boundary.py"
 echo "[TEST] PASS v2 verified-bytes lifecycle boundary"
+[[ -x "${ROOT}/tests/module-install-hardening-1.15.136.py" ]] || fail "1.15.136 module/install hardening regression missing"
+python3 "${ROOT}/tests/module-install-hardening-1.15.136.py"
+echo "[TEST] PASS 1.15.136 module/install hardening"

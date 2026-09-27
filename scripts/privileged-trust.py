@@ -43,6 +43,12 @@ def _config() -> dict[str, str]:
 
 
 def _framework_root() -> Path:
+    configured = str(_config().get('TEC_TAC_FRAMEWORK_ROOT') or '').strip()
+    if configured:
+        root = Path(configured)
+        if root.is_dir():
+            return root
+        raise RuntimeError(f'configured Tec-Tac framework runtime is unavailable: {root}')
     if FRAMEWORK_ROOT.is_dir():
         return FRAMEWORK_ROOT
     # Source-tree fallback is only for tests/development of this helper. The
@@ -62,7 +68,11 @@ def _require_root_owned_nonwritable(path: Path, label: str) -> None:
 def _imports():
     root = _framework_root().resolve()
     trust_module = root / "tec_tac" / "trusted_publishers.py"
-    for parent in (Path("/opt"), Path("/opt/tec-tac"), root):
+    # Validate the real configured path, not an assumed /opt/tec-tac layout.
+    # Every existing ancestor through the runtime root must remain root-owned
+    # and non-writable so import resolution cannot be redirected by a lower
+    # privileged account.
+    for parent in [*reversed(root.parents), root]:
         if parent.exists():
             _require_root_owned_nonwritable(parent, f"Framework runtime parent {parent}")
     _require_root_owned_nonwritable(root / "tec_tac", "Framework package root")

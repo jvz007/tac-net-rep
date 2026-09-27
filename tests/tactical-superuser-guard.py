@@ -80,12 +80,40 @@ django_core = types.ModuleType("django.core")
 django_exc = types.ModuleType("django.core.exceptions")
 django_exc.ObjectDoesNotExist = ObjectDoesNotExist
 django_db = types.ModuleType("django.db")
+class Connection:
+    def __init__(self):
+        self.depth = 0
+        self.callbacks = []
+    @property
+    def in_atomic_block(self):
+        return self.depth > 0
+connection = Connection()
 class Atomic:
-    def __enter__(self): return self
-    def __exit__(self, exc_type, exc, tb): return False
+    def __enter__(self):
+        connection.depth += 1
+        return self
+    def __exit__(self, exc_type, exc, tb):
+        connection.depth -= 1
+        if exc_type is not None:
+            if connection.depth == 0:
+                connection.callbacks.clear()
+            return False
+        if connection.depth == 0:
+            callbacks, connection.callbacks = connection.callbacks, []
+            for callback in callbacks:
+                callback()
+        return False
 class Transaction:
     @staticmethod
     def atomic(): return Atomic()
+    @staticmethod
+    def get_connection(): return connection
+    @staticmethod
+    def on_commit(callback):
+        if connection.in_atomic_block:
+            connection.callbacks.append(callback)
+        else:
+            callback()
 django_db.transaction = Transaction
 sys.modules.update({"django": django, "django.core": django_core, "django.core.exceptions": django_exc, "django.db": django_db})
 
@@ -233,7 +261,9 @@ class GetUpdateDeleteRole:
 class GetAddUsers:
     def post(self, request, *args, **kwargs): return "user-create-ok"
 class GetUpdateDeleteUser:
-    def put(self, request, pk, *args, **kwargs): return f"user-update-{pk}"
+    def put(self, request, pk, *args, **kwargs):
+        views.sync_mesh_perms_task.delay()
+        return f"user-update-{pk}"
     def delete(self, request, pk, *args, **kwargs): return f"user-delete-{pk}"
 class UserActions:
     def post(self, request, *args, **kwargs): return "password-reset-ok"
@@ -269,6 +299,13 @@ views.GetUpdateDeleteAPIKey = GetUpdateDeleteAPIKey
 views.TOTPSetup = TOTPSetup
 views.ResetPass = ResetPass
 views.Reset2FA = Reset2FA
+class FakeMeshTask:
+    def __init__(self): self.calls = []
+    def delay(self, *args, **kwargs):
+        self.calls.append({"depth": connection.depth, "args": args, "kwargs": kwargs})
+        return "queued"
+fake_mesh_task = FakeMeshTask()
+views.sync_mesh_perms_task = fake_mesh_task
 accounts.views = views
 sys.modules["accounts.views"] = views
 
@@ -340,6 +377,8 @@ assert GetUpdateDeleteRole().delete(Request(superuser, {}), 11) == "role-delete-
 
 User.objects.rows = {50: existing}
 assert GetUpdateDeleteUser().put(Request(normal, {"email": "x@example.invalid", "role": 11}), 50) == "user-update-50"
+assert fake_mesh_task.calls, "Tactical mesh permission sync was not queued"
+assert all(call["depth"] == 0 for call in fake_mesh_task.calls), "mesh permission sync was queued before transaction commit"
 
 assert len(audits) >= 4
 print("[TEST] PASS Tactical native superuser role/account guard")

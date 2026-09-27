@@ -26,6 +26,35 @@ from .rbac import is_effective_superuser
 
 logger = logging.getLogger("tec_tac.tactical_account_guard")
 _GUARD_MARKER = "_tec_tac_superuser_guard"
+_MESH_TASK_PROXY_MARKER = "_tec_tac_commit_aware_mesh_sync"
+
+
+class _CommitAwareTaskProxy:
+    """Defer Tactical's Mesh permission sync until the guard transaction commits."""
+
+    def __init__(self, task):
+        self._task = task
+        setattr(self, _MESH_TASK_PROXY_MARKER, True)
+
+    def delay(self, *args, **kwargs):
+        connection = transaction.get_connection()
+        if bool(getattr(connection, "in_atomic_block", False)):
+            saved_kwargs = dict(kwargs)
+            transaction.on_commit(
+                lambda task=self._task, args=tuple(args), kwargs=saved_kwargs: task.delay(*args, **kwargs)
+            )
+            return None
+        return self._task.delay(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._task, name)
+
+
+def _install_commit_aware_mesh_sync(tactical_views) -> None:
+    task = getattr(tactical_views, "sync_mesh_perms_task", None)
+    if task is None or bool(getattr(task, _MESH_TASK_PROXY_MARKER, False)):
+        return
+    tactical_views.sync_mesh_perms_task = _CommitAwareTaskProxy(task)
 
 
 def _payload_has(payload, key: str) -> bool:
@@ -481,6 +510,7 @@ def install_tactical_account_guard() -> None:
     """Install idempotent wrappers around Tactical's native account security mutations."""
     from accounts import views as tactical_views
 
+    _install_commit_aware_mesh_sync(tactical_views)
     wrappers = [
         (tactical_views.GetAddRoles, "post", _wrap_role_create),
         (tactical_views.GetUpdateDeleteRole, "put", _wrap_role_update),
