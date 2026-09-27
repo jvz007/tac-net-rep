@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.119",
+  "version": "1.15.120",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -18,8 +18,8 @@
     },
     {
       "path": "FIXING.md",
-      "size": 943,
-      "sha256": "05e03275a1eb92f9ce92e72ca1da8208372966fe6f29802a97cfe9fc0b45630e"
+      "size": 979,
+      "sha256": "d77d88715276e8c636a763842d59f727ca5709e25653d565d22cd91cb9c12ce0"
     },
     {
       "path": "LICENSE",
@@ -37,14 +37,14 @@
       "sha256": "f4f304390f9a3e8ebb9ba84ecef8275ddc2ed7ed130f860f52caa668dd70bfe5"
     },
     {
-      "path": "RELEASE_NOTES_1.15.119.md",
-      "size": 1791,
-      "sha256": "33c6a11211cb3ff3b5a1463e962f19c5ac4e88983614ef111268f2f5b21896ad"
+      "path": "RELEASE_NOTES_1.15.120.md",
+      "size": 1659,
+      "sha256": "5bac65799c0fe8b372b73261f015741f2567ee860aa1ff595e201e42b35922fe"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "66a498b3577c33d92eb16d8d53df37ad59d970cb8a6966fc106ae2351508cd8e"
+      "sha256": "50c619607a12639501094aa571e7563f7df8e695b0cdfd486e76150bebd22577"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -1278,8 +1278,8 @@
     },
     {
       "path": "framwork/tec_tac/scheduler_views.py",
-      "size": 32696,
-      "sha256": "93764d7e52d4cc0824bb2dc27ff5a6f37a83bc9db292a71d748bec64c1f061c3"
+      "size": 33896,
+      "sha256": "438a5003100ae8979bfa05d1b49edc60d3feb7dfc3b4f673e8bd68be627fec62"
     },
     {
       "path": "framwork/tec_tac/server_backup.py",
@@ -1549,7 +1549,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "830d0b93b578115f901c88ea08f9942338f460aaea46da9f5ebd75beab5ab420"
+      "sha256": "664df4a92cadaa628565cfed50b1e2374bc9fa64c6350366a321199bf77af204"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -1982,6 +1982,11 @@
       "sha256": "0237d63d09b110c793bd30e69e6fedb5254befc7e4e1810b7f00bc9ca0b37c45"
     },
     {
+      "path": "tests/scheduler-history-bounded-scope-scan.py",
+      "size": 1131,
+      "sha256": "c8fc7094fcfad588275482aa8776008f47442bb0538e4f4eec9a290655cbf8bf"
+    },
+    {
       "path": "tests/scheduler-history-query-efficiency.py",
       "size": 1388,
       "sha256": "bc3e4e0e0154c01fd8c6a581be8d251a6469274f38661484fdb489c6b597fd89"
@@ -2013,8 +2018,8 @@
     },
     {
       "path": "tests/scheduler-run-pagination.py",
-      "size": 1085,
-      "sha256": "8c6edfa15c94f5b6b657769bc617249590ae629b1df42bab2a3af78371587f80"
+      "size": 1391,
+      "sha256": "7810126bc2fc44d2b66cf0271a8863178aa0fb40716d9db488d209bc0e3acc91"
     },
     {
       "path": "tests/scheduler-scope-foundation.py",

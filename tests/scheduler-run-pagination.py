@@ -8,7 +8,10 @@ view = (root / 'framwork/tec_tac/scheduler_views.py').read_text(encoding='utf-8'
 assert 'class SchedulerRunListView(APIView):' in view
 assert 'page_size = self._positive_int' in view
 assert 'maximum=100' in view
-assert 'qs.iterator(chunk_size=200)' in view, 'scoped pagination must not materialize retained history'
+assert 'FALLBACK_SCOPE_SCAN_LIMIT = 5000' in view, 'scoped fallback scan must have an explicit candidate bound'
+assert 'qs[: self.FALLBACK_SCOPE_SCAN_LIMIT + 1]' in view, 'fallback history scan must enforce the bound in SQL'
+assert 'candidate_qs.iterator(chunk_size=200)' in view, 'bounded fallback scan should stream real querysets'
+assert 'Scoped run history exceeds the bounded fallback scan limit' in view
 assert 'total = qs.count()' in view, 'manager paging should use database count'
 assert '"next_page": page + 1 if page < pages else None' in view
 assert '"previous_page": page - 1 if page > 1 and pages else None' in view

@@ -1,16 +1,17 @@
-# FIXING.md — Core 1.15.119
+# FIXING.md — Core 1.15.120
 
-This build continues from the review-passed 1.15.118 baseline and respects the agreed maximum of **1 Medium + 5 Low** findings per pass.
+This build continues from the review-passed 1.15.119 baseline and respects the agreed maximum of **1 Medium + 5 Low** findings per pass.
 
-## M9 — trust-policy corrupt pending revert fails fully closed
+## M14 — scoped run-history fallback is now bounded
 
-- A corrupt `pending-trust-policy-revert.json` no longer restores only to the environment default.
-- Because corruption removes the trustworthy record of the previous trust floor, Core now raises the policy to the strongest supported level, `secure_signed`.
-- The pending file is cleared after the stronger policy is written.
-- Root audit output records `recovery_mode=fail_closed_strongest` so operators can distinguish emergency fail-closed recovery from a normal timed revert.
-- A subsequent trust-policy operation observes the recovered `secure_signed` floor before applying any requested change.
+- PostgreSQL continues to use the set-based JSONB scope prefilter for scoped Scheduler run history.
+- Alternate/test database backends no longer walk an unbounded retained-history queryset in Python.
+- The fallback query is sliced in SQL to at most 5,001 candidates: 5,000 permitted candidates plus one sentinel used to detect overflow.
+- If the fallback ceiling is exceeded, Core returns an explicit Scheduler error instead of continuing an unbounded scan.
+- The normal paged response remains unchanged when the candidate set is within the bounded fallback limit.
 
 ## Regression coverage
 
-- `tests/trust-policy-corrupt-pending.py`
-- `tests/open-list-closure-1.15.119.py`
+- `tests/scheduler-history-bounded-scope-scan.py`
+- `tests/scheduler-run-pagination.py`
+- existing Scheduler scope-snapshot and history-query-efficiency regressions

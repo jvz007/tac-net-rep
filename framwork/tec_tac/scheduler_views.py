@@ -391,6 +391,12 @@ class SchedulerRunNowView(APIView):
 
 class SchedulerRunListView(APIView):
     permission_classes = [SessionAuthenticated]
+    # Tactical production uses PostgreSQL and therefore the set-based JSONB
+    # scope prefilter above. Keep alternate/test database backends safe too:
+    # never allow a scoped history request to walk unbounded retained history
+    # in Python. One extra candidate lets us detect truncation without a full
+    # queryset count/scan.
+    FALLBACK_SCOPE_SCAN_LIMIT = 5000
 
     @staticmethod
     def _positive_int(raw, *, default, maximum):
@@ -567,10 +573,29 @@ class SchedulerRunListView(APIView):
                 offset = (page - 1) * page_size
                 visible = list(qs[offset:offset + page_size])
             else:
-                rows = [
-                    run for run in qs.iterator(chunk_size=200)
-                    if self._row_visible(request, run, manager=False, permitted_actions=permitted_actions, scope_snapshot=scope_snapshot)
-                ]
+                rows = []
+                candidate_count = 0
+                candidate_qs = qs[: self.FALLBACK_SCOPE_SCAN_LIMIT + 1]
+                candidate_iter = (
+                    candidate_qs.iterator(chunk_size=200)
+                    if hasattr(candidate_qs, "iterator")
+                    else iter(candidate_qs)
+                )
+                for run in candidate_iter:
+                    candidate_count += 1
+                    if candidate_count > self.FALLBACK_SCOPE_SCAN_LIMIT:
+                        raise SchedulerError(
+                            "Scoped run history exceeds the bounded fallback scan limit; "
+                            "use PostgreSQL for complete scoped history queries."
+                        )
+                    if self._row_visible(
+                        request,
+                        run,
+                        manager=False,
+                        permitted_actions=permitted_actions,
+                        scope_snapshot=scope_snapshot,
+                    ):
+                        rows.append(run)
                 total = len(rows)
                 offset = (page - 1) * page_size
                 visible = rows[offset:offset + page_size]
