@@ -76,21 +76,65 @@ with tempfile.TemporaryDirectory() as td:
     write(legacy, "signed_development", "old-admin")
     assert mod.migrate(current, legacy, "production")["minimum_level"] == "signed_production"
 
-    # Policy files are read without following final-component symlinks.
+    # Invalid legacy state is upgrade input, not authority. A final-component
+    # symlink is quarantined without following it, and the valid environment
+    # floor is installed instead of blocking the upgrade.
     victim = base / "victim.json"
     write(victim, "secure_signed", "victim")
     current = base / "link/etc/update-trust-policy.json"
     legacy = base / "link/var/update-trust-policy.json"
     legacy.parent.mkdir(parents=True, exist_ok=True)
     legacy.symlink_to(victim)
+    result = mod.migrate(current, legacy, "production")
+    assert result["minimum_level"] == "signed_production"
+    assert victim.exists()
+    assert read(victim)["minimum_level"] == "secure_signed"
+    assert not legacy.exists()
+    quarantined = list(legacy.parent.glob(legacy.name + ".invalid.*"))
+    assert len(quarantined) == 1 and quarantined[0].is_symlink()
+    assert read(current)["minimum_level"] == "signed_production"
+
+    # Malformed legacy JSON is likewise quarantined while a stronger valid
+    # current root-owned policy remains untouched.
+    current = base / "bad-json/etc/update-trust-policy.json"
+    legacy = base / "bad-json/var/update-trust-policy.json"
+    write(current, "secure_signed", "current-security-admin")
+    before = current.read_bytes()
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text("{not-json", encoding="utf-8")
+    result = mod.migrate(current, legacy, "production")
+    assert result["minimum_level"] == "secure_signed"
+    assert current.read_bytes() == before
+    assert not legacy.exists()
+    assert len(list(legacy.parent.glob(legacy.name + ".invalid.*"))) == 1
+
+    # Non-numeric schema data used to escape as ValueError and abort install.
+    # It is now treated as invalid legacy state and quarantined.
+    current = base / "bad-schema/etc/update-trust-policy.json"
+    legacy = base / "bad-schema/var/update-trust-policy.json"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(json.dumps({"schema": "not-a-number", "minimum_level": "secure_signed"}), encoding="utf-8")
+    result = mod.migrate(current, legacy, "development")
+    assert result["minimum_level"] == "signed_development"
+    assert read(current)["minimum_level"] == "signed_development"
+    assert not legacy.exists()
+    assert len(list(legacy.parent.glob(legacy.name + ".invalid.*"))) == 1
+
+    # The current root-owned policy remains authoritative: corruption there
+    # must still fail the migration rather than being silently discarded.
+    current = base / "bad-current/etc/update-trust-policy.json"
+    legacy = base / "bad-current/var/update-trust-policy.json"
+    current.parent.mkdir(parents=True, exist_ok=True)
+    current.write_text("{broken", encoding="utf-8")
+    write(legacy, "secure_signed", "legacy-admin")
     try:
         mod.migrate(current, legacy, "production")
     except mod.PolicyMigrationError:
         pass
     else:
-        raise AssertionError("legacy policy symlink was accepted")
-    assert victim.exists()
-    assert not current.exists()
+        raise AssertionError("corrupt current root-owned policy was ignored")
+    assert current.exists()
+    assert legacy.exists()
 
 install = INSTALL.read_text(encoding="utf-8")
 assert 'LEGACY_POLICY_FILE="/var/lib/tec-tac/policy/update-trust-policy.json"' in install

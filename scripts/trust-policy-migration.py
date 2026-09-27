@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import stat
+import sys
 from pathlib import Path
 
 LEVELS = ("unsigned", "signed_development", "signed_production", "secure_signed")
@@ -44,7 +45,13 @@ def _read_policy(path: Path, *, required: bool) -> dict | None:
                 raise PolicyMigrationError(f"trust policy is unreadable: {path}: {exc}") from exc
     finally:
         os.close(fd)
-    if not isinstance(payload, dict) or int(payload.get("schema", 0) or 0) != 1:
+    if not isinstance(payload, dict):
+        raise PolicyMigrationError(f"trust policy schema is invalid: {path}")
+    try:
+        schema = int(payload.get("schema", 0) or 0)
+    except (TypeError, ValueError) as exc:
+        raise PolicyMigrationError(f"trust policy schema is invalid: {path}") from exc
+    if schema != 1:
         raise PolicyMigrationError(f"trust policy schema is invalid: {path}")
     level = str(payload.get("minimum_level") or "").strip().lower()
     if level not in LEVEL_RANK:
@@ -87,6 +94,34 @@ def _write_policy(path: Path, payload: dict) -> None:
             pass
 
 
+def _quarantine_invalid_legacy(path: Path, reason: str) -> Path:
+    """Move an invalid legacy policy aside without following the path target."""
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        raise PolicyMigrationError(f"invalid legacy trust policy disappeared before quarantine: {path}")
+
+    for suffix in range(1000):
+        label = f".invalid.{os.getpid()}" + (f".{suffix}" if suffix else "")
+        quarantine = path.with_name(path.name + label)
+        try:
+            os.lstat(quarantine)
+        except FileNotFoundError:
+            try:
+                os.replace(path, quarantine)
+            except OSError as exc:
+                raise PolicyMigrationError(
+                    f"could not quarantine invalid legacy trust policy {path}: {exc}"
+                ) from exc
+            print(
+                f"[TEC-TAC-TRUST] quarantined invalid legacy trust policy "
+                f"{path} -> {quarantine}: {reason}",
+                file=sys.stderr,
+            )
+            return quarantine
+    raise PolicyMigrationError(f"could not allocate quarantine name for invalid legacy trust policy: {path}")
+
+
 def migrate(current: Path, legacy: Path, environment: str) -> dict:
     env = str(environment or "production").strip().lower()
     if env not in {"production", "development"}:
@@ -94,7 +129,11 @@ def migrate(current: Path, legacy: Path, environment: str) -> dict:
     default_level = "signed_development" if env == "development" else "signed_production"
 
     current_payload = _read_policy(current, required=False)
-    legacy_payload = _read_policy(legacy, required=False)
+    try:
+        legacy_payload = _read_policy(legacy, required=False)
+    except PolicyMigrationError as exc:
+        _quarantine_invalid_legacy(legacy, str(exc))
+        legacy_payload = None
 
     candidates: list[tuple[str, dict]] = [
         ("environment-default", {

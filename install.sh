@@ -628,7 +628,9 @@ POLICY_FILE="${POLICY_ROOT}/update-trust-policy.json"
 LEGACY_POLICY_FILE="/var/lib/tec-tac/policy/update-trust-policy.json"
 # Monotonic policy migration: preserve the strongest valid floor across the
 # historic /var/lib location, the current root-owned policy and the secure
-# environment default. An upgrade may strengthen policy, never weaken it.
+# environment default. Invalid legacy input is quarantined by the migration
+# helper; corruption of the authoritative current /etc policy remains fatal.
+# An upgrade may strengthen policy, never weaken it.
 if ! /usr/bin/python3 -I "${SOURCE_ROOT}/scripts/trust-policy-migration.py" \
     --current "${POLICY_FILE}" \
     --legacy "${LEGACY_POLICY_FILE}" \

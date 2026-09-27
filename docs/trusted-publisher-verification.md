@@ -211,6 +211,8 @@ System Updates also understands the publisher tool's schema-2 source-tree format
 
 Tec-Tac maintains one global minimum acceptance level for System Updates and Module Management. The authoritative policy is `/etc/tec-tac/policy/update-trust-policy.json`, owned by `root:root` and not writable by the Tactical service account. Production defaults to `signed_production`; development defaults to `signed_development`. The web tier may request a stronger policy through the narrow root helper. Lowering the root trust floor requires direct root-console administration so compromise of the `tactical` account cannot disable signing.
 
+During upgrade, the installer may import a stronger valid historic policy from `/var/lib/tec-tac/policy/update-trust-policy.json`. That legacy file is migration input only, not authority: if it is unreadable, malformed, has an invalid schema/level, or is a final-component symlink/non-regular file, the installer quarantines it beside the legacy path and continues using the stricter of the valid current `/etc` policy and the environment default. A corrupt current `/etc` policy still fails the migration.
+
 Ordered levels:
 
 1. `unsigned`

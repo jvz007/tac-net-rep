@@ -1,27 +1,28 @@
-# FIXING.md — Core 1.15.107
+# FIXING.md — Core 1.15.108
 
 ## Review scope
 
-This release is intentionally scoped to **M9** from the 27 September 2026 Claude tracker.
+This release is intentionally scoped to **M10** from the 27 September 2026 Claude tracker.
 
-### M9 — corrupt pending trust-policy auto-revert fails open
-
-Core 1.15.106 treats an unreadable pending revert file as `None`, so `check-revert` reports `no_pending_revert`. If the trust floor was temporarily lowered, corruption of that state can therefore leave the weaker floor in place indefinitely.
+### M10 — invalid legacy `/var/lib` trust-policy state blocks Core upgrades
 
 Review that this release:
 
-1. Treats malformed JSON, Unicode/read errors, invalid schema, missing change id, invalid previous/temporary levels, and invalid expiry timestamps as corrupt pending state.
-2. Recovers to at least the environment default floor (`signed_production` for production, `signed_development` for development).
-3. Never lowers a current valid floor that is already stronger than the environment default.
-4. Writes the safe floor before clearing the corrupt pending file.
-5. Writes root audit event `policy_pending_revert_corrupt_recovered` with current/default/restored levels and a bounded error description.
-6. Validates/repairs pending state before `set_level()` decides whether interactive lowering confirmation is required.
-7. Includes executable behavioral regression `tests/trust-policy-corrupt-pending.py`.
+1. Treats the historic `/var/lib/tec-tac/policy/update-trust-policy.json` as migration input only, not current authority.
+2. Quarantines an invalid legacy policy beside the legacy path and continues migration rather than aborting the upgrade.
+3. Covers malformed JSON, invalid/non-numeric schema, invalid level, final-component symlink, and non-regular legacy files through the same invalid-legacy path.
+4. Does not follow a quarantined legacy symlink or alter its target.
+5. Continues with the stricter of the valid current `/etc` policy and the environment default when legacy state is invalid.
+6. Preserves a stronger valid current policy byte-for-byte.
+7. Still fails closed if the authoritative current `/etc/tec-tac/policy/update-trust-policy.json` is corrupt.
+8. Logs the legacy quarantine to stderr/install logs, including source, quarantine path, and bounded reason.
+9. Includes executable behavioral coverage in `tests/trust-policy-upgrade-migration.py`.
 
 ## Primary files changed
 
-- `scripts/trust-policy-cli.py`
-- `tests/trust-policy-corrupt-pending.py`
+- `scripts/trust-policy-migration.py`
+- `tests/trust-policy-upgrade-migration.py`
+- `install.sh`
 - `docs/trusted-publisher-verification.md`
 
 ## Explicitly out of scope
