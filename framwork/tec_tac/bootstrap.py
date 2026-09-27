@@ -1,10 +1,13 @@
 """Upgrade-safe Tec-Tac bootstrap with Module Management v2 enable state."""
+import logging
 import sys
 from django.apps import apps as django_apps
 from django.apps.registry import Apps
-from tec_tac.module_state import filter_enabled_plugins
+from tec_tac.module_state import ModuleStateError, filter_enabled_plugins
 
-from tec_tac.registry import get_plugins, iter_python_paths
+from tec_tac.registry import RegistryError, get_plugins, iter_python_paths
+
+logger = logging.getLogger("tec_tac.bootstrap")
 
 FRAMEWORK_APP = "tec_tac.apps.TecTacFrameworkConfig"
 
@@ -15,7 +18,15 @@ def _register_plugin_paths(plugins):
             sys.path.insert(0, path)
 
 def load_extensions():
-    plugins = filter_enabled_plugins(get_plugins())
+    # Tec-Tac extensions are additive. A corrupt/invalid extension registry or
+    # module-state file must never prevent Tactical itself from starting.
+    try:
+        plugins = filter_enabled_plugins(get_plugins())
+    except (RegistryError, ModuleStateError):
+        logger.exception(
+            "Tec-Tac extension discovery failed; starting Tactical with Core only and no extension apps"
+        )
+        plugins = []
     _register_plugin_paths(plugins)
     if getattr(Apps.populate, "_tec_tac_extension_loader", False):
         return

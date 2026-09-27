@@ -12,10 +12,13 @@ assert 'page_size = max(1, min(int(page_size), 100))' in manager
 assert '"total": result["count"]' in view
 assert 'request.query_params.get("page_size")' in view
 assert 'rows = list_jobs(limit=limit)' in view, 'legacy module-history limit path must remain'
+assert 'if not (paged_keys & set(request.query_params.keys())):' in view, 'no-param module-history path must remain legacy/unpaged'
+assert 'limit = int(request.query_params.get("limit") or 200)' in view, 'legacy module-history default must remain 200'
 assert 'def page_audit_events(' in session
 assert 'total = qs.count()' in session
 assert 'page_audit_events(' in session_view
 assert 'rows = list_audit_events(username=username, event_type=event_type, limit=limit)' in session_view, 'legacy audit limit path must remain'
+assert 'paged_keys = {"page", "page_size", "username", "event_type"}' in session_view, 'no-param session-audit path must remain legacy/unpaged'
 assert '"name": "page_audit_events"' in contracts
 assert 'def list_audit_events(' in session, 'legacy list contract must remain available'
 print('history-pagination-foundation: PASS')

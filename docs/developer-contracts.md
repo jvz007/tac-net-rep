@@ -221,3 +221,9 @@ register_reporting_model(
 ```
 
 Core owns synchronization with Tactical's runtime reporting allow-list and live query schema. Disabled or removed providers are unavailable. See `docs/module-reporting.md` for lifecycle, uniqueness and discovery rules.
+
+## Tactical startup is never a Tec-Tac dependency
+
+Core extensions are additive. A Tec-Tac registry, module-state, compatibility-hook, or optional integration failure must not prevent Tactical Django from starting. Bootstrap therefore degrades to Core-only extension loading when registry/module-state discovery is invalid.
+
+The native Tactical account guard is the security exception to ordinary best-effort integration: if the precise compatibility wrapper cannot install, Core keeps startup alive but switches the native role/user write handlers into a coarse fail-closed mode. In that mode only effective superusers may mutate Tactical roles/users until the compatibility issue is repaired. Startup availability must never be recovered by silently dropping the privilege boundary.

@@ -1,5 +1,9 @@
+import logging
+
 from django.apps import AppConfig
 from django.urls import include, path
+
+logger = logging.getLogger("tec_tac.apps")
 
 
 class TecTacFrameworkConfig(AppConfig):
@@ -16,7 +20,10 @@ class TecTacFrameworkConfig(AppConfig):
         from .server_maintenance import register_core_server_maintenance_capability
         from .resources import register_core_resources_capability
         from .reporting import install_tactical_reporting_bridge
-        from .tactical_account_guard import install_tactical_account_guard
+        from .tactical_account_guard import (
+            install_tactical_account_guard,
+            install_tactical_account_guard_fail_closed,
+        )
         register_core_session_security_capability()
         register_core_server_backup_capability()
         register_core_server_maintenance_capability()
@@ -25,7 +32,23 @@ class TecTacFrameworkConfig(AppConfig):
         # Tactical's native role/account editors can otherwise grant effective
         # superuser authority to mid-level managers. Install the Core-owned,
         # authenticated mutation guard without modifying upstream Tactical code.
-        install_tactical_account_guard()
+        try:
+            install_tactical_account_guard()
+        except Exception:
+            # Tec-Tac must never make Tactical unavailable because an upstream
+            # account view changed. Fall back to a deliberately coarse boundary:
+            # only effective superusers may mutate Tactical roles/users.
+            logger.exception(
+                "Tec-Tac precise Tactical account guard failed; enabling fail-closed compatibility guard"
+            )
+            try:
+                install_tactical_account_guard_fail_closed()
+            except Exception:
+                # Last-resort startup safety: log loudly but never abort Tactical.
+                # The fallback installer is itself best-effort and normally does
+                # not raise; this catch protects against unexpected import/runtime
+                # changes in future Tactical releases.
+                logger.exception("Tec-Tac fail-closed Tactical account guard installation failed")
 
         # Core owns the compatibility boundary with Tactical Report Manager.
         # Install this before module AppConfig.ready() registrations execute so

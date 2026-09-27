@@ -220,6 +220,7 @@ class GetAddRoles:
     def post(self, request, *args, **kwargs): return "role-create-ok"
 class GetUpdateDeleteRole:
     def put(self, request, pk, *args, **kwargs): return f"role-update-{pk}"
+    def delete(self, request, pk, *args, **kwargs): return f"role-delete-{pk}"
 class GetAddUsers:
     def post(self, request, *args, **kwargs): return "user-create-ok"
 class GetUpdateDeleteUser:
@@ -363,3 +364,89 @@ assert any(row.get("id") == 5 and row.get("key") == "SUPERUSER-SECRET" for row i
 assert GetUpdateDeleteUser().delete(Request(superuser, {}), 70) == "user-delete-70"
 policy_state["enabled"] = False
 print("tactical superuser/account-protection guard regression OK")
+
+
+# D6a startup fallback: if the precise compatibility guard cannot install,
+# Core must keep Tactical starting while failing closed for non-superuser
+# role/user mutations. The coarse fallback must remain idempotent.
+assert mod.install_tactical_account_guard_fail_closed() is True
+fallback_first = (
+    views.GetAddRoles.post,
+    views.GetUpdateDeleteRole.put,
+    views.GetUpdateDeleteRole.delete,
+    views.GetAddUsers.post,
+    views.GetUpdateDeleteUser.put,
+    views.GetUpdateDeleteUser.delete,
+    views.UserActions.post,
+    views.UserActions.put,
+    views.GetAddAPIKeys.get,
+    views.GetAddAPIKeys.post,
+    views.GetUpdateDeleteAPIKey.put,
+    views.GetUpdateDeleteAPIKey.delete,
+    views.TOTPSetup.post,
+    views.ResetPass.put,
+    views.Reset2FA.put,
+)
+assert mod.install_tactical_account_guard_fail_closed() is True
+fallback_second = (
+    views.GetAddRoles.post,
+    views.GetUpdateDeleteRole.put,
+    views.GetUpdateDeleteRole.delete,
+    views.GetAddUsers.post,
+    views.GetUpdateDeleteUser.put,
+    views.GetUpdateDeleteUser.delete,
+    views.UserActions.post,
+    views.UserActions.put,
+    views.GetAddAPIKeys.get,
+    views.GetAddAPIKeys.post,
+    views.GetUpdateDeleteAPIKey.put,
+    views.GetUpdateDeleteAPIKey.delete,
+    views.TOTPSetup.post,
+    views.ResetPass.put,
+    views.Reset2FA.put,
+)
+assert fallback_first == fallback_second, "fail-closed account guard is not idempotent"
+
+for call in (
+    lambda: GetAddRoles().post(Request(normal, {"name": "Ops"})),
+    lambda: GetUpdateDeleteRole().put(Request(normal, {"name": "Ops"}), 10),
+    lambda: GetUpdateDeleteRole().delete(Request(normal, {}), 10),
+    lambda: GetAddUsers().post(Request(normal, {"username": "user"})),
+    lambda: GetUpdateDeleteUser().put(Request(normal, {"email": "x@example.invalid"}), 71),
+    lambda: GetUpdateDeleteUser().delete(Request(normal, {}), 71),
+    lambda: UserActions().post(Request(normal, {"id": 71, "password": "x"})),
+    lambda: UserActions().put(Request(normal, {"id": 71})),
+):
+    try:
+        call()
+    except PermissionDenied:
+        pass
+    else:
+        raise AssertionError("D6a fail-closed fallback allowed a non-superuser role/user mutation")
+
+# Fail-closed compatibility mode must cover the API-key privilege boundary too.
+for call in (
+    lambda: GetAddAPIKeys().post(Request(normal, {"user": 70, "name": "blocked"})),
+    lambda: GetUpdateDeleteAPIKey().put(Request(normal, {"user": 70}), 6),
+    lambda: GetUpdateDeleteAPIKey().delete(Request(normal, {}), 6),
+    lambda: TOTPSetup().post(Request(normal, {})),
+    lambda: ResetPass().put(Request(normal, {"password": "x"})),
+    lambda: Reset2FA().put(Request(normal, {})),
+):
+    try:
+        call()
+    except PermissionDenied:
+        pass
+    else:
+        raise AssertionError("D6a fail-closed fallback left an account/API-key mutation unprotected")
+
+APIKey.objects.rows = {5: APIKey(5, existing_admin, "SUPERUSER-SECRET"), 6: APIKey(6, normal_user, "NORMAL-SECRET")}
+fallback_list = GetAddAPIKeys().get(Request(normal, {}))
+assert all(row.get("key") == "[REDACTED]" for row in fallback_list.data), "fail-closed API-key list leaked a secret"
+fallback_super_list = GetAddAPIKeys().get(Request(superuser, {}))
+assert any(row.get("key") == "SUPERUSER-SECRET" for row in fallback_super_list.data), "effective superuser lost API-key visibility in fallback mode"
+
+assert GetAddRoles().post(Request(superuser, {"name": "Root Ops"})) == "role-create-ok"
+assert GetUpdateDeleteRole().delete(Request(superuser, {}), 10) == "role-delete-10"
+assert GetAddAPIKeys().post(Request(superuser, {"user": 70, "name": "allowed"})) == "api-key-create-ok"
+print("startup fail-closed Tactical account/API-key guard regression OK")

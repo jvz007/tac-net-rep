@@ -121,7 +121,8 @@ class SessionAuditView(APIView):
         username = str(request.query_params.get("username") or "").strip() or None
         event_type = str(request.query_params.get("event_type") or "").strip() or None
         try:
-            if "limit" in request.query_params and "page" not in request.query_params and "page_size" not in request.query_params:
+            paged_keys = {"page", "page_size", "username", "event_type"}
+            if not (paged_keys & set(request.query_params.keys())):
                 limit = int(request.query_params.get("limit") or 200)
                 rows = list_audit_events(username=username, event_type=event_type, limit=limit)
                 return Response({"events": rows, "count": len(rows)})

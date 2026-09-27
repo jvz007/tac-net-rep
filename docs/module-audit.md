@@ -174,5 +174,6 @@ The endpoint requires the normal authenticated Tec-Tac session guard. It derives
 - Never let a module override `source`, `module_version`, or request/correlation provenance.
 - The requested module must exist and be enabled.
 - Users without access to a permission-bearing module cannot use its browser audit writer.
+- The UI may hide a module audit affordance when the user lacks that module permission, but Core remains authoritative: direct `POST /api/tfd/audit/record/` attempts still return HTTP 403. Modules must treat that 403 as an authorization result, not as an audit-service failure.
 - Audit records describe an action; they do not authorize that action.
 - Never place secrets, passwords, API tokens, private keys, or full credential payloads in `before`, `after`, or `metadata`.

@@ -139,8 +139,11 @@ class ModuleV2JobHistoryView(APIView):
     def get(self, request):
         _require_module_manager(request.user)
         try:
-            if "limit" in request.query_params and "page" not in request.query_params and "page_size" not in request.query_params:
-                # Exact compatibility path for pre-pagination callers (historically up to 1000 rows).
+            paged_keys = {"page", "page_size", "status", "action", "search"}
+            if not (paged_keys & set(request.query_params.keys())):
+                # Exact compatibility path for pre-pagination callers. No params
+                # historically returned the bounded 200-row list, and limit=
+                # callers retain the same legacy response shape.
                 limit = int(request.query_params.get("limit") or 200)
                 rows = list_jobs(limit=limit)
                 return Response({"jobs": rows, "count": len(rows)})
