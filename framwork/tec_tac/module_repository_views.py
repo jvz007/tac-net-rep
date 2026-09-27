@@ -27,6 +27,24 @@ def _redact_repository_urls(value):
         return [_redact_repository_urls(v) for v in value]
     return value
 
+
+def _redact_repository_status_for_non_manager(value):
+    def scrub(node):
+        if isinstance(node, list):
+            return [scrub(item) for item in node]
+        if not isinstance(node, dict):
+            return node
+        clean = {
+            key: scrub(item)
+            for key, item in node.items()
+            if key not in _SENSITIVE_REPOSITORY_KEYS and not key.endswith("_url")
+        }
+        sync = clean.get("sync")
+        if isinstance(sync, dict) and sync.get("error"):
+            sync["error"] = "Repository synchronization failed."
+        return clean
+    return scrub(value)
+
 def _repository_error(request, exc):
     if _can_manage_modules(request.user):
         return Response({"detail": str(exc)}, status=400)
@@ -41,7 +59,7 @@ class ModuleRepositoryListView(APIView):
         manage = _can_manage_modules(request.user)
         repos = all_repository_status()
         if not manage:
-            repos = _redact_repository_urls(repos)
+            repos = _redact_repository_status_for_non_manager(repos)
         return Response({"schema": 1, "repositories": repos, "count": len(repos), "manage": manage})
 
     def post(self, request):
@@ -100,7 +118,7 @@ class ModuleOnlineCatalogView(APIView):
             payload = online_catalog()
             payload["manage"] = manage
             if not manage:
-                payload = _redact_repository_urls(payload)
+                payload = _redact_repository_status_for_non_manager(payload)
                 payload["manage"] = False
             return Response(payload)
         except ModuleRepositoryError as exc:

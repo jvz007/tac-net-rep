@@ -175,10 +175,20 @@ def _absolute_config_path(values, key, default):
     return str(path)
 
 
-_ROOT_LAYOUT = _root_owned_layout()
+_ROOT_LAYOUT_ERROR = None
+try:
+    _ROOT_LAYOUT = _root_owned_layout()
+except (OSError, UnicodeError, RuntimeError, ValueError) as exc:
+    # Importing the helper must remain safe so diagnostics/release validation can
+    # load it even when the on-disk config is damaged. Privileged operations
+    # still fail closed when load_config() is called.
+    _ROOT_LAYOUT = {}
+    _ROOT_LAYOUT_ERROR = exc
 
 
 def load_config():
+    if _ROOT_LAYOUT_ERROR is not None:
+        raise RuntimeError(f"Tec-Tac config is invalid: {_ROOT_LAYOUT_ERROR}") from _ROOT_LAYOUT_ERROR
     values = dict(_ROOT_LAYOUT)
     values.setdefault("TEC_TAC_ROOT", "/opt/tec-tac")
     values.setdefault("TEC_TAC_FRAMEWORK_SOURCE", "/opt/tec-tac-src/framework")
@@ -636,7 +646,9 @@ def validate_destination(raw, config=None):
                 raise RuntimeError("destination port is out of range")
         if item["type"] == "ftp":
             allow_insecure = item.get("allow_insecure_transport") is True
-            tls_mode = str(item.get("tls_mode") or "explicit").strip().lower()
+            if item.get("tls_mode") in (None, ""):
+                raise RuntimeError("ftp tls_mode is required; choose explicit/starttls/tls or none explicitly")
+            tls_mode = str(item.get("tls_mode")).strip().lower()
             if tls_mode not in {"none", "tls", "explicit", "starttls"}:
                 raise RuntimeError("ftp tls_mode must be none or explicit/starttls/tls")
             if tls_mode == "none" and not allow_insecure:
@@ -868,7 +880,9 @@ def ftp_connect(config, destination, *, timeout=60):
     destination = validate_destination(destination, config)
     secret = load_secret(config, destination)
     password = str(secret.get("password") or "")
-    tls_mode = str(destination.get("tls_mode") or "explicit").lower()
+    tls_mode = str(destination.get("tls_mode") or "").lower()
+    if not tls_mode:
+        raise RuntimeError("ftp tls_mode is required before connecting")
     if tls_mode in {"explicit", "starttls", "tls"}:
         ftp = ftplib.FTP_TLS(timeout=timeout, context=ftp_tls_context())
     else:
@@ -932,8 +946,14 @@ def ftp_store(config, destination, archive, metadata, log):
         for final in (archive.name, archive.name + ".tectac.json"):
             try: ftp.delete(final)
             except Exception: pass
-        ftp.rename(partial_name, archive.name)
-        ftp.rename(partial_sidecar, archive.name + ".tectac.json")
+        final_sidecar = archive.name + ".tectac.json"
+        ftp.rename(partial_sidecar, final_sidecar)
+        try:
+            ftp.rename(partial_name, archive.name)
+        except Exception:
+            try: ftp.delete(final_sidecar)
+            except Exception: pass
+            raise
         return {
             "id": destination["id"], "type": "ftp", "name": destination_name(destination), "ok": True,
             "location": f"ftp://{destination['host']}:{destination['port']}/{destination['remote_path'].strip('/')}/{archive.name}",
@@ -1064,13 +1084,28 @@ def store_local(destination, archive: Path, metadata):
     if root.is_symlink():
         raise RuntimeError("local destination root may not be a symlink")
     target = root / archive.name
-    if archive.resolve() != target.resolve():
-        tmp = target.with_name(target.name + ".partial")
-        shutil.copy2(archive, tmp)
-        os.replace(tmp, target)
-    write_sidecar(target, metadata)
-    if target.stat().st_size != metadata["size_bytes"] or sha256_file(target) != metadata["sha256"]:
-        raise RuntimeError("local backup copy verification failed")
+    target_sidecar = sidecar_path(target)
+    archive_tmp = target.with_name(target.name + ".partial")
+    sidecar_tmp = target_sidecar.with_name(target_sidecar.name + ".partial")
+    same_target = archive.resolve() == target.resolve()
+    try:
+        if not same_target:
+            shutil.copy2(archive, archive_tmp)
+            verify_path = archive_tmp
+        else:
+            verify_path = archive
+        atomic_json(sidecar_tmp, metadata, mode=0o640)
+        if verify_path.stat().st_size != metadata["size_bytes"] or sha256_file(verify_path) != metadata["sha256"]:
+            raise RuntimeError("local backup copy verification failed")
+        # Publish the sidecar first. A crash/failure may leave an orphan sidecar,
+        # but never a newly published recovery archive without its metadata.
+        os.replace(sidecar_tmp, target_sidecar)
+        if not same_target:
+            os.replace(archive_tmp, target)
+    except Exception:
+        archive_tmp.unlink(missing_ok=True)
+        sidecar_tmp.unlink(missing_ok=True)
+        raise
     return {
         "id": destination["id"], "type": "local", "name": destination_name(destination), "ok": True,
         "location": str(target), "size_verified": True, "hash_verified": True,
@@ -1088,6 +1123,7 @@ def store_rclone(config, destination, archive, metadata, log):
         partial_sidecar = sidecar_remote + ".partial"
         sidecar = temp / (archive.name + ".tectac.json")
         sidecar.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        sidecar_published = False
         try:
             run_logged(["rclone", "copyto", str(archive), partial_remote, "--config", str(cfg)], log, timeout=6 * 60 * 60)
             run_logged(["rclone", "copyto", str(sidecar), partial_sidecar, "--config", str(cfg)], log, timeout=30 * 60)
@@ -1110,14 +1146,21 @@ def store_rclone(config, destination, archive, metadata, log):
                 hash_ok = remote_hash == str(metadata["sha256"]).lower()
                 if not hash_ok:
                     raise RuntimeError("remote backup SHA-256 verification failed")
-            run_logged(["rclone", "moveto", partial_remote, archive_remote, "--config", str(cfg)], log, timeout=300)
+            # Publish metadata first so the archive is never visible without its
+            # matching sidecar. If archive publication fails, remove the newly
+            # published sidecar again.
             run_logged(["rclone", "moveto", partial_sidecar, sidecar_remote, "--config", str(cfg)], log, timeout=300)
+            sidecar_published = True
+            run_logged(["rclone", "moveto", partial_remote, archive_remote, "--config", str(cfg)], log, timeout=300)
             return {
                 "id": destination["id"], "type": destination["type"], "name": destination_name(destination), "ok": True,
                 "location": archive_remote, "size_verified": True, "hash_verified": hash_ok, "hash_supported": hash_supported,
             }
         except Exception:
-            for remote in (partial_remote, partial_sidecar):
+            cleanup_targets = [partial_remote, partial_sidecar]
+            if sidecar_published:
+                cleanup_targets.append(sidecar_remote)
+            for remote in cleanup_targets:
                 subprocess.run(["rclone", "deletefile", remote, "--config", str(cfg)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
             raise
 
@@ -1162,7 +1205,10 @@ def store_scp(config, destination, archive, metadata, log):
             run_logged(["scp", *scp_common, f"{host}:{partial_file}", str(verify)], log, timeout=6 * 60 * 60)
             if verify.stat().st_size != metadata["size_bytes"] or sha256_file(verify) != metadata["sha256"]:
                 raise RuntimeError("SCP backup verification failed")
-            publish = "mv -f -- {p} {f} && mv -f -- {ps} {s}".format(
+            publish = (
+                "mv -f -- {ps} {s} && "
+                "(mv -f -- {p} {f} || {{ rm -f -- {s}; exit 1; }})"
+            ).format(
                 p=shlex.quote(partial_file), f=shlex.quote(remote_file),
                 ps=shlex.quote(partial_sidecar), s=shlex.quote(sidecar_file),
             )
@@ -1175,6 +1221,16 @@ def store_scp(config, destination, archive, metadata, log):
             cleanup = "rm -f -- {p} {ps}".format(p=shlex.quote(partial_file), ps=shlex.quote(partial_sidecar))
             subprocess.run(["ssh", *ssh_common, host, cleanup], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
             raise
+
+def destination_results_strongly_verified(results):
+    return bool(results) and all(
+        isinstance(result, dict)
+        and result.get("ok") is True
+        and result.get("size_verified") is True
+        and result.get("hash_verified") is True
+        for result in results
+    )
+
 
 def store_destination(config, destination, archive, metadata, log):
     destination = validate_destination(destination, config)
@@ -1976,10 +2032,11 @@ def operation_create_backup(config, job, log):
 
     set_job_stage(config, job["id"], "prepare", current=1, total=CREATE_BACKUP_PROGRESS_TOTAL)
     lock = acquire_lock(config)
+    tactical_archive = None
+    tactical_meta = None
     try:
         with tempfile.TemporaryDirectory(prefix="tectac-recovery-bundle-", dir=str(roots(config)["staging"])) as td:
             temp=Path(td)
-            tactical_archive=tactical_meta=None
             if include_tactical:
                 tactical_archive,tactical_meta=create_tactical_component(config,log,job["id"])
             else:
@@ -2010,9 +2067,6 @@ def operation_create_backup(config, job, log):
                 raise
             finally:
                 shutil.rmtree(validation_stage,ignore_errors=True)
-            if tactical_archive is not None and tactical_archive.exists():
-                tactical_archive.unlink()
-                log.write("[TEC-TAC-BACKUP] removed native source archive after byte-identical recovery bundle verification\n")
             results=[]; failed=[]
             if not destinations:
                 set_job_stage(config, job["id"], "destination.upload", current=7, total=CREATE_BACKUP_PROGRESS_TOTAL)
@@ -2051,15 +2105,22 @@ def operation_create_backup(config, job, log):
                 d.get("type") == "local" and (Path(d["path"]) / bundle.name).resolve() == bundle.resolve()
                 for d in destinations
             )
-            if destinations and not same_local_target:
+            strongly_verified = destination_results_strongly_verified(results) if destinations else False
+            if destinations and not same_local_target and strongly_verified:
                 bundle.unlink(missing_ok=True); sidecar_path(bundle).unlink(missing_ok=True)
                 overall["local_path"] = None
                 overall["local_staging_removed"] = True
-                log.write("[TEC-TAC-BACKUP] removed verified local staging bundle after destination upload\n")
+                log.write("[TEC-TAC-BACKUP] removed strongly verified local staging bundle after destination upload\n")
             else:
                 overall["local_staging_removed"] = False
+                if destinations and not same_local_target and not strongly_verified:
+                    overall["local_staging_retained_reason"] = "one or more destination copies lack strong SHA-256 verification"
+                    log.write("[TEC-TAC-BACKUP] retained local staging bundle because a destination copy lacks strong hash verification\n")
             return overall
     finally:
+        if tactical_archive is not None and tactical_archive.exists():
+            tactical_archive.unlink(missing_ok=True)
+            log.write("[TEC-TAC-BACKUP] removed native Tactical source archive during create-backup cleanup\n")
         lock.close()
 
 
@@ -2565,6 +2626,21 @@ def _validate_tec_tac_restore_member(name, config):
         raise RuntimeError(f"Tec-Tac recovery payload path is not allow-listed: {rel}")
 
 
+def _data_filter_preserve_numeric_owner(member, destination_path):
+    """Apply Python's safe data filter without discarding numeric ownership."""
+    filtered = tarfile.data_filter(member, destination_path)
+    if filtered is None:
+        return None
+    # data_filter deliberately clears ownership metadata. Recovery needs the
+    # validated payload's numeric uid/gid, so restore only those fields after
+    # the safety filter has accepted/normalized the member.
+    filtered.uid = member.uid
+    filtered.gid = member.gid
+    filtered.uname = member.uname
+    filtered.gname = member.gname
+    return filtered
+
+
 def safe_extract_payload_tar(path, root=Path("/"), config=None):
     root = Path(root)
     config = config or (load_config() if root.resolve() == Path("/") else None)
@@ -2578,7 +2654,7 @@ def safe_extract_payload_tar(path, root=Path("/"), config=None):
                 raise RuntimeError("Tec-Tac payload may not overwrite Tactical tracked source")
             if config is not None:
                 _validate_tec_tac_restore_member(name, config)
-        tf.extractall(root, members=members, numeric_owner=True, filter="data")
+        tf.extractall(root, members=members, numeric_owner=True, filter=_data_filter_preserve_numeric_owner)
 
 
 def service_stop_for_restore(log):

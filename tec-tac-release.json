@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.127",
+  "version": "1.15.128",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -18,8 +18,8 @@
     },
     {
       "path": "FIXING.md",
-      "size": 1449,
-      "sha256": "4874ac1d080e9bd01c27bd9a8f477ed3496e838f3f3b678ba0daa657c7b4b79c"
+      "size": 824,
+      "sha256": "ada1b555971d37ad2ec915a9e84b8e208195abdf438949a83e4d6be22dd2f06d"
     },
     {
       "path": "LICENSE",
@@ -37,14 +37,14 @@
       "sha256": "f4f304390f9a3e8ebb9ba84ecef8275ddc2ed7ed130f860f52caa668dd70bfe5"
     },
     {
-      "path": "RELEASE_NOTES_1.15.127.md",
-      "size": 1549,
-      "sha256": "fdd1f1dfea872d77470c9a32ba9d9b83e6fd1bf589a764bfc9cafeaa6f710168"
+      "path": "RELEASE_NOTES_1.15.128.md",
+      "size": 2549,
+      "sha256": "b7a639279046e474d6d1606ed657817bfe4a83c5b2a86de457d7391ced4dfb6a"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "48b982b2c775c24d9e849c3a9391bb87dcc49780f4e3dd00e0fa4f2dcfe506ce"
+      "sha256": "214250e7767331c1283c42dc2025b1fc623a5f3bed24f1242e3ea9cee746ffb1"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -683,8 +683,8 @@
     },
     {
       "path": "docs/server-backup-capability.md",
-      "size": 28732,
-      "sha256": "3c54cec688a764dff8c7b8b3fc8777e5fc4c7f398eb3e839622f5e01f6060deb"
+      "size": 29022,
+      "sha256": "0fc38b7b3d3ba1b1b4765e9141c7b8d3ea58c3695744a7e2f9987692d8b94abf"
     },
     {
       "path": "docs/server-maintenance-capability.md",
@@ -1193,8 +1193,8 @@
     },
     {
       "path": "framwork/tec_tac/module_repository_views.py",
-      "size": 5252,
-      "sha256": "9ad4bc7321d654da80993db2482b1b5b756a53bf8dda278c31c1b880d576d3ff"
+      "size": 5894,
+      "sha256": "26e867967beee46d4041f2cce3fb09a553e302ff2238505dea17f980dd5cea09"
     },
     {
       "path": "framwork/tec_tac/module_runtime.py",
@@ -1513,13 +1513,13 @@
     },
     {
       "path": "scripts/server-backup-helper.py",
-      "size": 218837,
-      "sha256": "78d1818f682c12b86253059cf07f5678fe59ae3ec563d0a3123b8be28af0197b"
+      "size": 222344,
+      "sha256": "72242153c10aeec2c4512e8f2603c9c02a872b0861e083cae6c42e02a7f33e00"
     },
     {
       "path": "scripts/server-maintenance-helper.py",
-      "size": 27643,
-      "sha256": "db7f7b7ebd2944184ce59243d4bac866dfee8b48fb668c0431570c1211dcd8f0"
+      "size": 28222,
+      "sha256": "4ed76c39149439c64a72fe02a4a9d189e2ac28306a35d7fa378b085c26e696bc"
     },
     {
       "path": "scripts/system-update-helper.py",
@@ -1549,7 +1549,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "bbd47cca43b17d6019f1035fb73001623bb0ff0cbc790e235171f2852f9b2f1f"
+      "sha256": "911385451e8d7da78716cf4f34a69c2f1c148a50da4c7b7d6cb82e8f4b8febff"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -1947,6 +1947,11 @@
       "sha256": "d5c6c5068628ee4201884a7ffa7feb273e34ab258156871429f77daf785eac26"
     },
     {
+      "path": "tests/review-batch-1.15.128.py",
+      "size": 6843,
+      "sha256": "8a875de91017db2d270316242d19a38b5a39450a5c14cd69cf376dd935059ec4"
+    },
+    {
       "path": "tests/review-followup-1.15.79.py",
       "size": 6164,
       "sha256": "92a666d8bab5ff34f7bb877e672d7645b56acec4f1d383d29a1c672c88b364a4"
@@ -2103,8 +2108,8 @@
     },
     {
       "path": "tests/server-backup-review-hardening.sh",
-      "size": 4290,
-      "sha256": "b8f451b0fdcff2747a0a11c99c7ef87ad09f7e515f9839067bf8aa72b39262b0"
+      "size": 4312,
+      "sha256": "ded23545ae606184da69d71afbe2ecc0ff1abb53e0532e9972c002c570357e24"
     },
     {
       "path": "tests/server-backup-root-layout.py",
@@ -2113,8 +2118,8 @@
     },
     {
       "path": "tests/server-backup-transport-security.py",
-      "size": 1867,
-      "sha256": "a39929cc6eb70cc2bc9c20a7b59377dc016e64d87f214a9ad83e53e167da0cd5"
+      "size": 2098,
+      "sha256": "b0e51c8c03011b9a55a095c59b916fc853fe9908b499a09b90d5165d5b8298a5"
     },
     {
       "path": "tests/server-maintenance-foundation.sh",

@@ -1,23 +1,20 @@
-# FIXING.md — Core 1.15.127
+# FIXING.md — Core 1.15.128
 
-This is a blocking rebuild of 1.15.127 only. No unrelated review items are included.
+## Review scope
 
-## HIGH — browser audit writer reopened C8
+This release is intentionally limited to the tracker batch:
 
-1.15.127 incorrectly allowed authenticated browser callers to submit audit rows for permissionless extensions and legacy plugins. Because those modules have no permission surface, Core could not prove that module code rather than an arbitrary authenticated user originated the browser event.
+- M19 — native Tactical archive cleanup and raw repository sync error disclosure.
+- L09 — local staging deletion after size-only remote verification.
+- L10 — archive publication before sidecar publication.
+- L11 — `filter="data"` cancelling `numeric_owner` restore semantics.
+- L12 — FTP destinations missing `tls_mode` silently switching transport.
+- L13 — malformed root-owned config crashing privileged helpers at import time.
 
-### Fix
+## Expected outcome
 
-- `can_record_from_browser()` again rejects:
-  - `core` provenance; and
-  - any module whose resolved permission set is empty.
-- Permission-bearing modules continue through the existing `_actor_can_use_module()` effective-grant check.
-- Backend `record()` remains unchanged so trusted server-side module code can use the audit contract.
-- Enabled permissionless modules exposed through the browser runtime emit a warning that browser audit POSTs will receive HTTP 403 until an explicit module permission is declared.
-- `docs/module-audit.md` documents the 403 behavior and warning.
+Backup staging, destination publication and restore metadata handling remain fail-safe, and non-manager repository status no longer exposes raw synchronization errors.
 
-### Regression coverage
+## Explicitly out of scope
 
-- `tests/audit-browser-provenance-hardening.py` uses the real `_actor_can_use_module` and real registry resolution with one permissionless extension and one legacy plugin.
-- It verifies both `can_record_from_browser()` denials and HTTP 403 from the real `AuditRecordView.post()` path.
-- `tests/audit-contract-foundation.py` again enforces the C8 permissionless-browser block.
+All other Medium, Low, UI and Decision tracker items.

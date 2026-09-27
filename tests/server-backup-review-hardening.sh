@@ -13,7 +13,7 @@ grep -q 'TACTICAL_RESTORE_HOST_PATHS' "${HELPER}" || fail "fixed Tactical host r
 grep -q 'pg_dump' "${HELPER}" || fail "pre-restore pg_dump missing"
 grep -q 'tec-tac-backup-\*\.tgz' "${HELPER}" || fail "SCP list does not include Tec-Tac bundles"
 grep -q '\.partial' "${HELPER}" || fail "partial remote publishing missing"
-grep -q 'filter="data"' "${HELPER}" || fail "safe TAR data filter missing"
+grep -q '_data_filter_preserve_numeric_owner' "${HELPER}" || fail "safe TAR data filter missing"
 grep -q 'except BaseException as exc' "${HELPER}" || fail "final job status does not catch BaseException"
 grep -q 'module-state.json' "${HELPER}" || fail "durable module state is not backed up"
 grep -q 'repositories.json' "${HELPER}" || fail "durable repository configuration is not backed up"

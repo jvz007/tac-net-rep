@@ -186,13 +186,13 @@ Local paths remain restricted by `TEC_TAC_SERVER_BACKUP_LOCAL_ROOTS`.
 FTP TLS modes currently accepted:
 
 ```text
-explicit   # default
+explicit
 starttls
 tls        # compatibility alias for explicit FTPS
 none       # only with allow_insecure_transport: true
 ```
 
-FTPS uses normal CA and hostname verification. Plaintext FTP is never selected by omission; it requires the destination to explicitly set `allow_insecure_transport: true`. Implicit FTPS is intentionally not advertised until Core provides a dedicated correct implicit-TLS connection path.
+`tls_mode` is required for FTP destinations. Core does not infer a transport mode for older saved records because silently changing plaintext FTP to FTPS can break an existing destination, while silently choosing plaintext would weaken transport security. Re-save legacy FTP destinations with an explicit mode. FTPS uses normal CA and hostname verification. Plaintext FTP requires the destination to explicitly set both `tls_mode=none` and `allow_insecure_transport: true`. Implicit FTPS is intentionally not advertised until Core provides a dedicated correct implicit-TLS connection path.
 
 WebDAV should use `https://`. Plain `http://` WebDAV is rejected unless the destination explicitly sets `allow_insecure_transport: true`. This override is intended for deliberate legacy/lab use and should not be used where credentials cross an untrusted network.
 

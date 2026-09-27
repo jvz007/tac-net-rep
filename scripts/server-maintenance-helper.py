@@ -61,10 +61,20 @@ def _trusted_root(layout, key, default):
     return path
 
 
-_ROOT_LAYOUT = _root_owned_layout()
-STATE_ROOT = _trusted_root(_ROOT_LAYOUT, "TEC_TAC_SERVER_MAINTENANCE_ROOT", DEFAULT_STATE_ROOT)
-REGISTRY_ROOT = _trusted_root(_ROOT_LAYOUT, "TEC_TAC_SERVER_MAINTENANCE_REGISTRY_ROOT", DEFAULT_REGISTRY_ROOT)
-ACTION_ROOT = _trusted_root(_ROOT_LAYOUT, "TEC_TAC_SERVER_MAINTENANCE_ACTION_ROOT", DEFAULT_ACTION_ROOT)
+_ROOT_LAYOUT_ERROR = None
+try:
+    _ROOT_LAYOUT = _root_owned_layout()
+    STATE_ROOT = _trusted_root(_ROOT_LAYOUT, "TEC_TAC_SERVER_MAINTENANCE_ROOT", DEFAULT_STATE_ROOT)
+    REGISTRY_ROOT = _trusted_root(_ROOT_LAYOUT, "TEC_TAC_SERVER_MAINTENANCE_REGISTRY_ROOT", DEFAULT_REGISTRY_ROOT)
+    ACTION_ROOT = _trusted_root(_ROOT_LAYOUT, "TEC_TAC_SERVER_MAINTENANCE_ACTION_ROOT", DEFAULT_ACTION_ROOT)
+except (OSError, UnicodeError, RuntimeError, ValueError) as exc:
+    # Keep imports/diagnostics safe while ensuring every privileged operation
+    # fails closed through load_config() when the root-owned config is invalid.
+    _ROOT_LAYOUT = {}
+    _ROOT_LAYOUT_ERROR = exc
+    STATE_ROOT = DEFAULT_STATE_ROOT
+    REGISTRY_ROOT = DEFAULT_REGISTRY_ROOT
+    ACTION_ROOT = DEFAULT_ACTION_ROOT
 JOBS_ROOT = STATE_ROOT / "jobs"
 CANCEL_ROOT = STATE_ROOT / "cancel-requests"
 LOGS_ROOT = STATE_ROOT / "logs"
@@ -84,6 +94,8 @@ def now():
 
 
 def load_config():
+    if _ROOT_LAYOUT_ERROR is not None:
+        raise RuntimeError(f"Tec-Tac config is invalid: {_ROOT_LAYOUT_ERROR}") from _ROOT_LAYOUT_ERROR
     return dict(_ROOT_LAYOUT)
 
 

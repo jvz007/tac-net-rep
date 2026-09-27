@@ -5,7 +5,13 @@ ROOT=Path(sys.argv[1]).resolve()
 spec=importlib.util.spec_from_file_location('sb', ROOT/'scripts/server-backup-helper.py')
 h=importlib.util.module_from_spec(spec); spec.loader.exec_module(h)
 base={'id':'ftp1','type':'ftp','host':'backup.example','username':'backup','remote_path':'backups'}
-ftp=h.validate_destination(base, {})
+try:
+    h.validate_destination(base, {})
+except RuntimeError as exc:
+    assert 'tls_mode is required' in str(exc)
+else:
+    raise AssertionError('FTP destination without tls_mode was silently accepted')
+ftp=h.validate_destination({**base,'tls_mode':'explicit'}, {})
 assert ftp['tls_mode']=='explicit', ftp
 assert ftp['allow_insecure_transport'] is False
 try:
