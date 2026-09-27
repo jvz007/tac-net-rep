@@ -2841,15 +2841,27 @@ def rollback_failed_restore(config, moved_root, snapshot, log, *, restore_tactic
         failed_root = tactical_root.with_name(
             tactical_root.name + f".tectac-failed-restore-{stamp()}"
         )
+        tree_rollback_error = None
         if restore_tactical_tree:
-            if tactical_root.exists():
-                if failed_root.exists(): shutil.rmtree(failed_root, ignore_errors=True)
-                os.replace(tactical_root, failed_root)
-            if moved_root and Path(moved_root).exists():
-                os.replace(Path(moved_root), tactical_root)
-                result["rollback_tree_restored"] = True
-            elif not tactical_root.exists():
-                raise RuntimeError("original Tactical tree is unavailable for rollback")
+            try:
+                if tactical_root.exists():
+                    if failed_root.exists(): shutil.rmtree(failed_root, ignore_errors=True)
+                    os.replace(tactical_root, failed_root)
+                if moved_root and Path(moved_root).exists():
+                    os.replace(Path(moved_root), tactical_root)
+                    result["rollback_tree_restored"] = True
+                elif not tactical_root.exists():
+                    raise RuntimeError("original Tactical tree is unavailable for rollback")
+            except BaseException as exc:
+                # M4: database rollback is an independent recovery phase.  A
+                # missing/unrestorable Tactical tree must not prevent the
+                # pre-restore PostgreSQL dumps from being replayed.  Preserve
+                # the tree failure and report it after host/database recovery.
+                tree_rollback_error = exc
+                log.write(
+                    "[TEC-TAC-BACKUP] CRITICAL Tactical tree rollback failed; "
+                    f"continuing host/database rollback: {exc.__class__.__name__}: {exc}\n"
+                )
 
         _restore_host_paths(snapshot, log)
         result["rollback_host_paths_restored"] = True
@@ -2868,6 +2880,11 @@ def rollback_failed_restore(config, moved_root, snapshot, log, *, restore_tactic
             if proc.returncode:
                 raise RuntimeError(f"database rollback failed: {name}")
             result["rollback_databases"].append(name)
+        if tree_rollback_error is not None:
+            raise RuntimeError(
+                "Tactical tree rollback failed after host/database rollback: "
+                f"{tree_rollback_error.__class__.__name__}: {tree_rollback_error}"
+            )
         service_start_after_restore(log)
         verify_tactical_runtime(config, log)
         if restore_tactical_tree and failed_root.exists(): shutil.rmtree(failed_root, ignore_errors=True)

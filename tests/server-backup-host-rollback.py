@@ -275,3 +275,75 @@ with tempfile.TemporaryDirectory(prefix="tectac-m3-rollback-") as td:
     must(not any(tactical_parent.glob("rmm.tectac-failed-restore-*")), "M3 failed restored tree quarantine was not cleaned")
 
 print("[TEST] PASS M3 same-filesystem restore rollback")
+
+# M4: a missing preserved Tactical tree must not short-circuit database
+# rollback.  The coordinator should replay every valid pre-restore DB dump,
+# then report the tree rollback as incomplete.
+with tempfile.TemporaryDirectory(prefix="tectac-m4-db-without-tree-") as td:
+    base = Path(td)
+    tactical_root = base / "rmm"
+    tactical_root.mkdir()
+    (tactical_root / "marker").write_text("failed-restore\n", encoding="utf-8")
+    snapshot_root = base / "snapshot"
+    snapshot_root.mkdir()
+    dump = snapshot_root / "tacticalrmm.dump"
+    dump.write_bytes(b"postgres-dump")
+    snapshot = {
+        "root": str(snapshot_root),
+        "host_paths": [],
+        "databases": [{
+            "name": "tacticalrmm",
+            "owner": "tactical",
+            "dump": str(dump),
+            "sha256": mod.sha256_file(dump),
+        }],
+    }
+
+    old_stop = mod.service_stop_for_restore
+    old_start = mod.service_start_after_restore
+    old_verify = mod.verify_tactical_runtime
+    old_restore_hosts = mod._restore_host_paths
+    old_pg_query = mod._postgres_query
+    old_run = mod.subprocess.run
+    calls = []
+    try:
+        mod.service_stop_for_restore = lambda log: None
+        mod.service_start_after_restore = lambda log: calls.append(["service-start"])
+        mod.verify_tactical_runtime = lambda config, log: calls.append(["verify"])
+        mod._restore_host_paths = lambda snapshot, log: None
+        mod._postgres_query = lambda query: calls.append(["query", query])
+
+        class R:
+            returncode = 0
+
+        def run(argv, *args, **kwargs):
+            calls.append(list(argv))
+            return R()
+
+        mod.subprocess.run = run
+        result = mod.rollback_failed_restore(
+            {"TACTICAL_ROOT": str(tactical_root)},
+            None,  # no preserved pre-restore Tactical tree
+            snapshot,
+            io.StringIO(),
+            restore_tactical_tree=True,
+        )
+    finally:
+        mod.service_stop_for_restore = old_stop
+        mod.service_start_after_restore = old_start
+        mod.verify_tactical_runtime = old_verify
+        mod._restore_host_paths = old_restore_hosts
+        mod._postgres_query = old_pg_query
+        mod.subprocess.run = old_run
+
+    must(result["rollback_performed"] is False, "missing Tactical tree should keep rollback incomplete")
+    must(result["rollback_tree_restored"] is False, "missing Tactical tree was incorrectly marked restored")
+    must(result["rollback_databases"] == ["tacticalrmm"], f"database rollback was skipped: {result}")
+    must("Tactical tree rollback failed" in (result["rollback_error"] or ""), f"tree error was not retained: {result}")
+    flat = [" ".join(str(x) for x in call) for call in calls if isinstance(call, list)]
+    must(any("dropdb --if-exists tacticalrmm" in call for call in flat), f"dropdb not executed after tree failure: {calls}")
+    must(any("createdb -O tactical tacticalrmm" in call for call in flat), f"createdb not executed after tree failure: {calls}")
+    must(any("pg_restore --exit-on-error -d tacticalrmm" in call for call in flat), f"pg_restore not executed after tree failure: {calls}")
+    must(not any(call == "verify" for call in flat), "runtime verification should not run after incomplete tree rollback")
+
+print("[TEST] PASS M4 database rollback independent of Tactical tree preservation")

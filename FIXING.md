@@ -1,22 +1,33 @@
-# FIXING — Core 1.15.101
+# FIXING.md — Core 1.15.102
 
-Review scope for this release: **M3 only**.
+## Review scope
 
-## Tracker item
+This release is intentionally scoped to **M4 only** from the Claude/Sol medium tracker.
 
-- **M3** — restore rollback must not move `/rmm` across filesystems with `os.replace()`, because a cross-device rename can fail with `EXDEV` before the original Tactical tree is restored.
+### M4 — database rollback must not depend on a preserved Tactical tree
 
-## Behavioural change
+**Problem**
+`rollback_failed_restore()` restored the Tactical tree first inside the same exception boundary as host/database rollback. If the pre-restore Tactical tree was unavailable, the function raised before replaying the pre-restore PostgreSQL dumps.
 
-- The failed restored Tactical tree is quarantined to a unique sibling of `TACTICAL_ROOT` instead of the pre-restore snapshot directory.
-- Both rollback renames therefore remain on the same filesystem as `TACTICAL_ROOT`.
-- The failed restored tree is removed only after the original Tactical tree, host state, databases and runtime verification have succeeded.
+**Expected behaviour**
+- Tactical tree rollback may fail independently.
+- A Tactical tree failure must be retained and reported.
+- Host rollback and valid pre-restore database dumps must still be processed.
+- Overall rollback remains incomplete/failed when the Tactical tree could not be restored.
+- Runtime verification must not claim success after an incomplete tree rollback.
 
-## Behavioural regression
+**Implementation areas**
+- `scripts/server-backup-helper.py`
+- `tests/server-backup-host-rollback.py`
 
-- `tests/server-backup-host-rollback.py` now emulates `EXDEV` for every rename whose source and destination parents differ.
-- The test runs the real `rollback_failed_restore()` coordinator and proves the original Tactical tree is restored, no cross-filesystem rename is attempted, the preserved tree is consumed, and the failed-tree quarantine is cleaned after success.
+**Behavioural regression**
+The M4 regression invokes the real rollback coordinator with:
+- a failed live Tactical tree;
+- no preserved pre-restore Tactical tree;
+- one valid pre-restore PostgreSQL dump.
 
-## Not in scope
+It verifies that `dropdb`, `createdb`, and `pg_restore` still execute, the database is reported in `rollback_databases`, the tree failure is retained in `rollback_error`, and the overall rollback is not marked successful.
 
-No M4+ Mediums, UI changes, or unrelated Low items are included.
+## Explicitly out of scope
+
+No M5+ work, UI changes, scheduler changes, trust-policy changes, or unrelated Low items are part of this release.
