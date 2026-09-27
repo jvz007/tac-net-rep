@@ -146,7 +146,6 @@ by the future Security module.
 ```python
 from tec_tac.session_security import (
     get_effective_policy,
-    update_global_policy,
     list_sessions,
     list_audit_events,
     page_audit_events,

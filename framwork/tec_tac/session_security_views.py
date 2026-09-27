@@ -23,7 +23,7 @@ from .session_security import (
     revoke_session,
     revoke_user_login_sessions,
     revoke_user_sessions,
-    update_global_policy,
+    _update_global_policy,
 )
 
 
@@ -106,7 +106,7 @@ class SessionPolicyView(APIView):
             return _forbidden()
         payload = request.data.get("policy", request.data)
         try:
-            policy = update_global_policy(payload, requested_by=request.user.username)
+            policy = _update_global_policy(payload, requested_by=request.user.username)
         except (SessionSecurityError, TypeError, ValueError) as exc:
             return Response({"detail": str(exc)}, status=400)
         return Response({"policy": policy})
@@ -133,7 +133,7 @@ class SessionAuditView(APIView):
                 page_size=int(request.query_params.get("page_size") or 50),
             )
         except (TypeError, ValueError, SessionSecurityError) as exc:
-            return Response({"detail": str(exc) or "Invalid pagination parameters."}, status=400)
+            return Response({"detail": "Invalid pagination parameters."}, status=400)
         return Response({
             "events": result["items"],
             "count": len(result["items"]),
@@ -176,7 +176,7 @@ class AdminLoginSessionListView(APIView):
                 page_size=int(request.query_params.get("page_size") or 50),
             )
         except (TypeError, ValueError, SessionSecurityError) as exc:
-            return Response({"detail": str(exc) or "Invalid pagination parameters."}, status=400)
+            return Response({"detail": "Invalid pagination parameters."}, status=400)
         return Response({
             "sessions": result["items"],
             "count": len(result["items"]),

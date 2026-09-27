@@ -209,14 +209,6 @@ CORE_CONTRACTS = (
     {
         "area": "session-security",
         "import_path": "tec_tac.session_security",
-        "name": "update_global_policy",
-        "kind": "python",
-        "purpose": "Update validated Core session-security policy for backend administration modules.",
-        "audience": "provider/backend",
-    },
-    {
-        "area": "session-security",
-        "import_path": "tec_tac.session_security",
         "name": "SessionAuthenticated",
         "kind": "python",
         "purpose": "DRF permission enforcing Tactical authentication plus Core Tec-Tac session trust.",

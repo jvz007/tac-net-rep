@@ -1,6 +1,6 @@
 # Core Session Security
 
-Framework contract: `core.session_security` v1.0.0
+Framework contract: `core.session_security` v1.1.0
 
 ## Scope
 
@@ -54,14 +54,13 @@ models:
 ```python
 from tec_tac.capabilities import get_capability
 
-provider = get_capability("core.session_security", version=">=1.0.0,<2.0.0")
+provider = get_capability("core.session_security", version=">=1.1.0,<2.0.0")
 ```
 
 Supported provider operations:
 
 ```text
 get_policy
-update_policy
 list_sessions
 list_audit_events
 page_audit_events
@@ -71,11 +70,10 @@ cleanup
 diagnostics
 ```
 
-Directly supported framework helpers are catalogued under `tec_tac.session_security`:
+Directly supported read/enforcement helpers are catalogued under `tec_tac.session_security`. Policy mutation is intentionally HTTP-only behind `SessionAuthenticated` plus effective-superuser authorization:
 
 ```python
 get_effective_policy(...)
-update_global_policy(...)
 list_sessions(...)
 list_audit_events(...)
 page_audit_events(...)
@@ -175,9 +173,17 @@ Audit rows never contain the raw Tactical token or the stored token fingerprint.
 
 ## Cleanup
 
-The capability exposes `cleanup(retention_days=30)` for expired/revoked session
-and audit history retention. This is the backend cleanup contract for the
-Security module and future Core housekeeping integration.
+Session/audit history retention is owned by Tec-Tac because both tables are
+Tec-Tac-owned. `history_retention_days` is part of the global Core session
+policy (default 30 days, range 1–3650) and may only be changed through the
+superuser-only policy boundary; every change is audited.
+
+The capability exposes `cleanup()` and always uses that configured policy. A
+revoked trust row is preserved beyond the history window only while its
+underlying credential could still authenticate: an unexpired Knox token, a
+present Tactical API key, or an unexpired Django session. After that credential
+is gone/expired, the tombstone is deleted once the configured history window
+has elapsed. Tactical-owned authentication tables keep Tactical's own retention.
 
 ## Security module boundary
 

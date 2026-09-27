@@ -171,10 +171,12 @@ A consumer should only rely on the public contract shown by the catalog and the 
 
 ## Core session-security contract
 
-Framework 1.15.16 registers `core.session_security` v1.0.0. It is a Core-owned
-backend capability for policy inspection/update, safe session enumeration,
-audit-event retrieval, session/user revocation, retention cleanup and
-diagnostics.
+Framework 1.15.90 registers `core.session_security` v1.1.0. It is a Core-owned
+backend capability for policy inspection, safe session enumeration, audit-event
+retrieval, session/user revocation, policy-driven retention cleanup and
+diagnostics. Policy mutation is deliberately not module-callable; only the
+Core HTTP policy boundary may change it after live session and effective-superuser
+authorization.
 
 The live contract catalog also exposes the supported Python helpers under
 `tec_tac.session_security` and the `/api/tfd/session/...` HTTP boundary.

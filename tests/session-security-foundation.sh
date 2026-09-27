@@ -12,10 +12,13 @@ for f in \
 done
 
 grep -q 'CAPABILITY_ID = "core.session_security"' "${ROOT}/framwork/tec_tac/session_security.py" || fail "capability id missing"
-grep -q 'CAPABILITY_VERSION = "1.0.0"' "${ROOT}/framwork/tec_tac/session_security.py" || fail "capability version missing"
+grep -q 'CAPABILITY_VERSION = "1.1.0"' "${ROOT}/framwork/tec_tac/session_security.py" || fail "capability version missing"
 grep -q 'DEFAULT_IDLE_TIMEOUT_MINUTES = 30' "${ROOT}/framwork/tec_tac/session_security.py" || fail "idle default missing"
 grep -q 'DEFAULT_ABSOLUTE_LIFETIME_MINUTES = 8 \* 60' "${ROOT}/framwork/tec_tac/session_security.py" || fail "absolute default missing"
 grep -q 'DEFAULT_ACTIVITY_HEARTBEAT_SECONDS = 60' "${ROOT}/framwork/tec_tac/session_security.py" || fail "heartbeat default missing"
+grep -q 'DEFAULT_HISTORY_RETENTION_DAYS = 30' "${ROOT}/framwork/tec_tac/session_security.py" || fail "history retention default missing"
+grep -q 'history_retention_days' "${ROOT}/framwork/tec_tac/models.py" || fail "history retention model setting missing"
+[[ -f "${ROOT}/framwork/tec_tac/migrations/0016_session_history_retention.py" ]] || fail "history retention migration missing"
 grep -q 'DEFAULT_IP_CHANGE_POLICY = "reauthenticate"' "${ROOT}/framwork/tec_tac/session_security.py" || fail "IP default missing"
 grep -q 'hmac.new' "${ROOT}/framwork/tec_tac/session_security.py" || fail "HMAC credential fingerprint missing"
 grep -q 'successful_authenticator' "${ROOT}/framwork/tec_tac/session_security.py" || fail "session fingerprint is not bound to the successful authenticator"
@@ -54,6 +57,7 @@ grep -q 'session_ip_change' "${ROOT}/framwork/tec_tac/session_security.py" || fa
 grep -q 'session_invalid_state' "${ROOT}/framwork/tec_tac/session_security.py" || fail "stable invalid-state failure code missing"
 
 python3 "${ROOT}/tests/session-fingerprint-upgrade.py"
+python3 "${ROOT}/tests/session-retention-policy.py"
 
 python3 -m py_compile \
   "${ROOT}/framwork/tec_tac/session_security.py" \

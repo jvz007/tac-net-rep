@@ -37,7 +37,7 @@ require('MfaBackupProofMinThrottle' in mfa and 'MfaBackupProofDayThrottle' in mf
 ss = text('framwork/tec_tac/session_security.py')
 require('can_do_server_maint' not in ss[ss.index('def can_manage_session_security'):ss.index('def _is_effective_superuser')], 'server-maint permission must not manage session security')
 require('network.prefixlen < min_prefix' in ss and 'network.is_private or network.is_loopback or network.is_link_local' in ss, 'trusted proxy validation is not restrictive enough')
-require('force=True' in ss[ss.index('def update_global_policy'):ss.index('def _credential_identity')], 'session policy changes must always be audited')
+require('force=True' in ss[ss.index('def _update_global_policy'):ss.index('def _credential_identity')], 'session policy changes must always be audited')
 
 # C10 revoked session fingerprints are preserved as security tombstones.
 require('revoked_tombstones_preserved' in ss and 'Q(revoked=False' in ss, 'revoked session tombstones are not preserved')

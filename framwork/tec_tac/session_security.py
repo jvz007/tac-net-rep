@@ -25,12 +25,13 @@ from .capabilities import register_capability
 from .models import TecTacSessionAudit, TecTacSessionSecurityConfig, TecTacSessionTrust
 
 CAPABILITY_ID = "core.session_security"
-CAPABILITY_VERSION = "1.0.0"
+CAPABILITY_VERSION = "1.1.0"
 TOKEN_NAMESPACE = b"tec-tac-session-security:v1\x00"
 LOGIN_SESSION_NAMESPACE = b"tec-tac-login-session-ref:v1\x00"
 DEFAULT_IDLE_TIMEOUT_MINUTES = 30
 DEFAULT_ABSOLUTE_LIFETIME_MINUTES = 8 * 60
 DEFAULT_ACTIVITY_HEARTBEAT_SECONDS = 60
+DEFAULT_HISTORY_RETENTION_DAYS = 30
 DEFAULT_IP_CHANGE_POLICY = "reauthenticate"
 ALLOWED_IP_CHANGE_POLICIES = {"off", "audit", "reauthenticate", "terminate"}
 
@@ -120,6 +121,7 @@ def _policy_dict(config: TecTacSessionSecurityConfig | None = None) -> dict[str,
         "ip_change_policy": str(config.ip_change_policy),
         "session_audit_enabled": bool(config.session_audit_enabled),
         "activity_heartbeat_seconds": int(config.activity_heartbeat_seconds),
+        "history_retention_days": int(config.history_retention_days),
         "trusted_proxies": list(config.trusted_proxies or []),
     }
 
@@ -134,7 +136,7 @@ def get_effective_policy(user=None, request=None) -> dict[str, Any]:
     return _policy_dict()
 
 
-def update_global_policy(policy: dict, *, requested_by: str = "") -> dict[str, Any]:
+def _update_global_policy(policy: dict, *, requested_by: str = "") -> dict[str, Any]:
     if not isinstance(policy, dict):
         raise SessionSecurityError("policy must be an object.")
     config = TecTacSessionSecurityConfig.current()
@@ -155,6 +157,11 @@ def update_global_policy(policy: dict, *, requested_by: str = "") -> dict[str, A
         if value < 30 or value > 3600:
             raise SessionSecurityError("activity_heartbeat_seconds must be between 30 and 3600.")
         config.activity_heartbeat_seconds = value; fields.append("activity_heartbeat_seconds")
+    if "history_retention_days" in policy:
+        value = int(policy["history_retention_days"])
+        if value < 1 or value > 3650:
+            raise SessionSecurityError("history_retention_days must be between 1 and 3650.")
+        config.history_retention_days = value; fields.append("history_retention_days")
     if "ip_change_policy" in policy:
         value = str(policy["ip_change_policy"] or "").strip().lower()
         if value not in ALLOWED_IP_CHANGE_POLICIES:
@@ -789,26 +796,92 @@ def page_audit_events(*, username: str | None = None, event_type: str | None = N
     }
 
 
-def cleanup_session_history(*, retention_days: int = 30) -> dict[str, int]:
-    days = int(retention_days)
+def _fingerprint_for_identity(identity: str) -> str:
+    secret = str(settings.SECRET_KEY).encode("utf-8")
+    return hmac.new(secret, TOKEN_NAMESPACE + str(identity).encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _active_non_knox_credential_fingerprints(*, now) -> set[str] | None:
+    """Return fingerprints for API keys and unexpired Django sessions.
+
+    These credentials do not have a stable secondary identifier on older
+    TecTacSessionTrust rows. Reconstructing the same HMAC identity lets cleanup
+    preserve a revoked tombstone only while the credential could still log in.
+    """
+    fingerprints: set[str] = set()
+    try:
+        from accounts.models import APIKey
+        for key_id in APIKey.objects.values_list("id", flat=True).iterator():
+            fingerprints.add(_fingerprint_for_identity(f"api-key:{key_id}"))
+    except Exception:
+        # Fail closed for retention: if Tactical's API-key model cannot be read,
+        # do not infer those tombstones are safe to delete.
+        return None
+    try:
+        from django.contrib.sessions.models import Session
+        for session_key in Session.objects.filter(expire_date__gt=now).values_list("session_key", flat=True).iterator():
+            fingerprints.add(_fingerprint_for_identity(f"django-session:{session_key}"))
+    except Exception:
+        # Same retention-safe behavior for Django's session store.
+        return None
+    return fingerprints
+
+
+def _revoked_tombstone_is_live(session: TecTacSessionTrust, *, now, active_non_knox: set[str] | None) -> bool:
+    if session.knox_digest:
+        try:
+            return AuthToken.objects.filter(digest=session.knox_digest).filter(Q(expiry__isnull=True) | Q(expiry__gt=now)).exists()
+        except Exception:
+            return True
+    if active_non_knox is None:
+        return True
+    return session.token_fingerprint in active_non_knox
+
+
+def cleanup_session_history(*, retention_days: int | None = None) -> dict[str, int]:
+    config = TecTacSessionSecurityConfig.current()
+    days = int(config.history_retention_days if retention_days is None else retention_days)
     if days < 1 or days > 3650:
         raise SessionSecurityError("retention_days must be between 1 and 3650.")
-    cutoff = timezone.now() - timedelta(days=days)
-    # Revoked credential fingerprints are security tombstones. API keys and
-    # Django sessions can outlive Core's history-retention window, so deleting
-    # their revoked rows would allow the same credential to create a fresh
-    # trusted session later. Keep all revoked rows until an explicit credential
-    # lifecycle operation removes the underlying credential/tombstone.
-    sessions_qs = TecTacSessionTrust.objects.filter(
+    now = timezone.now()
+    cutoff = now - timedelta(days=days)
+
+    stale_unrevoked = TecTacSessionTrust.objects.filter(
         Q(revoked=False, absolute_expires_at__lt=cutoff)
         | Q(revoked=False, idle_expires_at__lt=cutoff)
     )
-    sessions = sessions_qs.count()
-    sessions_qs.delete()
+    sessions_deleted = stale_unrevoked.count()
+    stale_unrevoked.delete()
+
+    # Revoked trust rows are security tombstones only while the underlying
+    # credential can still authenticate. Once the credential is gone/expired,
+    # retain the tombstone for the configured history window and then remove it.
+    active_non_knox: set[str] | None = None
+    try:
+        active_non_knox = _active_non_knox_credential_fingerprints(now=now)
+    except Exception:
+        active_non_knox = None
+    revoked_deleted = 0
+    revoked_qs = TecTacSessionTrust.objects.filter(revoked=True).filter(
+        Q(revoked_at__lt=cutoff) | Q(revoked_at__isnull=True, updated_at__lt=cutoff)
+    )
+    for row in revoked_qs.iterator():
+        if _revoked_tombstone_is_live(row, now=now, active_non_knox=active_non_knox):
+            continue
+        row.delete()
+        revoked_deleted += 1
+
     audits_qs = TecTacSessionAudit.objects.filter(created_at__lt=cutoff)
-    audits = audits_qs.count()
+    audits_deleted = audits_qs.count()
     audits_qs.delete()
-    return {"sessions_deleted": sessions, "audit_events_deleted": audits, "retention_days": days, "revoked_tombstones_preserved": TecTacSessionTrust.objects.filter(revoked=True).count()}
+    return {
+        "sessions_deleted": sessions_deleted + revoked_deleted,
+        "expired_sessions_deleted": sessions_deleted,
+        "revoked_tombstones_deleted": revoked_deleted,
+        "audit_events_deleted": audits_deleted,
+        "retention_days": days,
+        "revoked_tombstones_preserved": TecTacSessionTrust.objects.filter(revoked=True).count(),
+    }
 
 
 def diagnostics() -> dict[str, Any]:
@@ -851,9 +924,6 @@ class SessionSecurityProvider:
     def get_policy(self, *, context: dict | None = None) -> dict[str, Any]:
         return _policy_dict()
 
-    def update_policy(self, *, policy: dict, context: dict) -> dict[str, Any]:
-        return update_global_policy(policy, requested_by=str((context or {}).get("requested_by") or (context or {}).get("username") or "module"))
-
     def list_sessions(self, *, username: str | None = None, include_revoked: bool = True, context: dict | None = None) -> list[dict[str, Any]]:
         return list_sessions(username=username, include_revoked=include_revoked)
 
@@ -869,8 +939,8 @@ class SessionSecurityProvider:
     def revoke_user_sessions(self, *, username: str, except_session_id: str | None = None, reason: str = "module-request", context: dict) -> dict[str, Any]:
         return revoke_user_sessions(username, except_session_id=except_session_id, reason=reason, requested_by=str((context or {}).get("requested_by") or (context or {}).get("username") or "module"))
 
-    def cleanup(self, *, retention_days: int = 30, context: dict | None = None) -> dict[str, int]:
-        return cleanup_session_history(retention_days=retention_days)
+    def cleanup(self, *, context: dict | None = None) -> dict[str, int]:
+        return cleanup_session_history()
 
     def diagnostics(self, *, context: dict | None = None) -> dict[str, Any]:
         return diagnostics()
@@ -896,7 +966,6 @@ def register_core_session_security_capability():
         health=_PROVIDER.health,
         operations=(
             "get_policy",
-            "update_policy",
             "list_sessions",
             "list_audit_events",
             "revoke_session",
@@ -908,6 +977,7 @@ def register_core_session_security_capability():
             "ip_change_policies": sorted(ALLOWED_IP_CHANGE_POLICIES),
             "default_idle_timeout_minutes": DEFAULT_IDLE_TIMEOUT_MINUTES,
             "default_absolute_lifetime_minutes": DEFAULT_ABSOLUTE_LIFETIME_MINUTES,
+            "default_history_retention_days": DEFAULT_HISTORY_RETENTION_DAYS,
             "default_activity_heartbeat_seconds": DEFAULT_ACTIVITY_HEARTBEAT_SECONDS,
             "enforcement": "core",
         },
