@@ -1824,8 +1824,26 @@ def _restore_version_transition(config, manifest: dict) -> dict:
         "current_core_version": current,
         "restored_core_version": restored,
         "is_core_downgrade": older,
+        "version_verified": False,
+        "effective_core_version": None,
         "notice": (f"This restore puts Core back to {restored}. Current Core is {current}." if older else None),
     }
+
+
+def _verify_restored_core_version(config, component_meta: dict, log) -> str | None:
+    expected = str((component_meta or {}).get("framework_version") or "").strip() or None
+    if not expected:
+        log.write("[TEC-TAC-BACKUP] restored Core bundle has no framework_version; skipping exact version assertion\n")
+        return None
+    framework_source = Path(config["TEC_TAC_FRAMEWORK_SOURCE"])
+    runtime_root = Path(config["TEC_TAC_ROOT"])
+    effective = detect_version(framework_source) or detect_version(runtime_root)
+    if effective != expected:
+        raise RuntimeError(
+            f"post-restore Core version verification failed: backup declares {expected}, installed Core reports {effective or 'unknown'}"
+        )
+    log.write(f"[TEC-TAC-BACKUP] verified restored Core version: {effective}\n")
+    return effective
 
 def create_recovery_signature(config, manifest_bytes: bytes, checksums_bytes: bytes) -> dict:
     key_id = str(config.get("TEC_TAC_INSTALLATION_ID") or "").strip()
@@ -3003,6 +3021,7 @@ def run_post_restore_tec_tac(config, component_meta, component_archive, log, *, 
     ui_root=Path(config.get("TEC_TAC_UI_DEPLOY_ROOT") or "/var/lib/tec-tac/ui/tec-tac")
     if not (ui_root/"index.html").is_file(): raise RuntimeError(f"post-restore Tec-Tac UI verification failed: {ui_root/'index.html'} is missing")
     verify_tactical_runtime(config,log)
+    return _verify_restored_core_version(config, component_meta, log)
 
 
 
@@ -3548,7 +3567,10 @@ def operation_restore_backup(config, job, log):
                 env=os.environ.copy(); env.update({"HOME":home,"USER":user,"LOGNAME":user,"GROUP":grp.getgrgid(tactical_identity(config)[1]).gr_name})
                 run_logged([str(restore_script),str(extracted["tactical"])],log,env=env,cwd=home,timeout=10*60*60,user=user)
                 if mode=="full":
-                    run_post_restore_tec_tac(config,(manifest.get("components") or {}).get("tec_tac") or {},extracted["tec_tac"],log,security_snapshot=security_snapshot,actor=(job.get("context") or {}).get("requested_by") or "restore")
+                    effective_core_version = run_post_restore_tec_tac(config,(manifest.get("components") or {}).get("tec_tac") or {},extracted["tec_tac"],log,security_snapshot=security_snapshot,actor=(job.get("context") or {}).get("requested_by") or "restore")
+                    if job.get("version_transition") is not None:
+                        job["version_transition"]["effective_core_version"] = effective_core_version
+                        job["version_transition"]["version_verified"] = bool(effective_core_version)
                 else:
                     verify_tactical_runtime(config,log)
             except BaseException as exc:
@@ -3576,7 +3598,10 @@ def operation_restore_backup(config, job, log):
             }
             atomic_json(job_path(job["id"],config),job)
             try:
-                run_post_restore_tec_tac(config,(manifest.get("components") or {}).get("tec_tac") or {},extracted["tec_tac"],log,security_snapshot=security_snapshot,actor=(job.get("context") or {}).get("requested_by") or "restore")
+                effective_core_version = run_post_restore_tec_tac(config,(manifest.get("components") or {}).get("tec_tac") or {},extracted["tec_tac"],log,security_snapshot=security_snapshot,actor=(job.get("context") or {}).get("requested_by") or "restore")
+                if job.get("version_transition") is not None:
+                    job["version_transition"]["effective_core_version"] = effective_core_version
+                    job["version_transition"]["version_verified"] = bool(effective_core_version)
             except BaseException as exc:
                 rollback = rollback_failed_restore(config, None, snapshot, log, restore_tactical_tree=False)
                 failure = {
@@ -3593,6 +3618,7 @@ def operation_restore_backup(config, job, log):
             "pre_restore_tactical_path":None,
             "rollback_performed":False,
             "accepted_overrides":dict((job.get("restore_preflight") or {}).get("accepted_overrides") or {}),
+            "version_transition":job.get("version_transition"),
             "completed_at":now(),
         }
     finally:

@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.121",
+  "version": "1.15.122",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -18,8 +18,8 @@
     },
     {
       "path": "FIXING.md",
-      "size": 942,
-      "sha256": "1c1ad10a0df08e29bdaf892f7bd8ee8a4a37ddde3f25430a040b966bc14a7fdd"
+      "size": 817,
+      "sha256": "c399df9c98cc7bb55e991ed0e4cc44b86ab5b92384c1502dec9566366f99e64d"
     },
     {
       "path": "LICENSE",
@@ -37,14 +37,14 @@
       "sha256": "f4f304390f9a3e8ebb9ba84ecef8275ddc2ed7ed130f860f52caa668dd70bfe5"
     },
     {
-      "path": "RELEASE_NOTES_1.15.121.md",
-      "size": 1578,
-      "sha256": "eb638094eaba97a8db8215d142169f1a373c92e3979352f686e15c68749f6262"
+      "path": "RELEASE_NOTES_1.15.122.md",
+      "size": 1570,
+      "sha256": "971fd42a055d4c47223ac5e9ca944f756efc4738caa61ff49371df26a5f2c2a0"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "0dd3af1b0f4daac60e347677e276521c2c48acb11db6acdc92e10104e7642dd5"
+      "sha256": "805a5f9663c1bbed5afbb425780690dfaaf804a87e16326d1c7900b1f8bc00aa"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -683,8 +683,8 @@
     },
     {
       "path": "docs/server-backup-capability.md",
-      "size": 27957,
-      "sha256": "9d6a5748edb1f016e9623c7b8ce3540f36663bc5e05dcd1bcf08b52eb449fb68"
+      "size": 28156,
+      "sha256": "a435d2e3b82b9fa865c0f9d7ef17f0fae0be1fb49b485e8068a5ba9076cd6b47"
     },
     {
       "path": "docs/server-maintenance-capability.md",
@@ -1513,8 +1513,8 @@
     },
     {
       "path": "scripts/server-backup-helper.py",
-      "size": 215369,
-      "sha256": "27b2022707d7d4aa9e11798cc1dde88e5dc97caf07a18afde0fb51ba05603be9"
+      "size": 216990,
+      "sha256": "899065bbd1e2ab7d1d7ddfe4078ae4f970cb18fa0e82235a8d137c2cf24126de"
     },
     {
       "path": "scripts/server-maintenance-helper.py",
@@ -1549,7 +1549,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "a234a6e5798e10b129c85c39cd3702822b7c314922d041b81655dee2047870d4"
+      "sha256": "40e89d25124ab7cdf42e413559bdc6bd4489fcb0680456d005890243ba876110"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2050,6 +2050,11 @@
       "path": "tests/server-backup-d2-d3.py",
       "size": 11484,
       "sha256": "41dfe2441377e3b5214bff255ba5203589d48fd8e2815381488e14c3f44c14f7"
+    },
+    {
+      "path": "tests/server-backup-d2-version-transition.py",
+      "size": 2224,
+      "sha256": "45fe9d099c9d07baa89d13653ade1cebfee22c2ecb9a13110e9f78ca16aa71ea"
     },
     {
       "path": "tests/server-backup-foundation.sh",
