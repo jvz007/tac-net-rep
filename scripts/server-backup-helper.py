@@ -2833,7 +2833,14 @@ def rollback_failed_restore(config, moved_root, snapshot, log, *, restore_tactic
     }
     try:
         service_stop_for_restore(log)
-        failed_root = snapshot_root / "failed-restored-rmm"
+        # Keep the failed restored tree on the Tactical filesystem.  The
+        # pre-restore snapshot root may live on a different mount; moving
+        # /rmm into it with os.replace() can fail with EXDEV precisely when
+        # rollback is needed.  A sibling quarantine path guarantees that both
+        # rollback renames stay on the same filesystem as TACTICAL_ROOT.
+        failed_root = tactical_root.with_name(
+            tactical_root.name + f".tectac-failed-restore-{stamp()}"
+        )
         if restore_tactical_tree:
             if tactical_root.exists():
                 if failed_root.exists(): shutil.rmtree(failed_root, ignore_errors=True)

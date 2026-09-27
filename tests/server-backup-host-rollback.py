@@ -217,3 +217,61 @@ finally:
     mod.subprocess.run = old_run
 
 print("[TEST] PASS server backup host rollback transaction")
+
+# M3: rollback tree renames must never cross from the Tactical filesystem into
+# the pre-restore snapshot filesystem.  Emulate EXDEV for any os.replace whose
+# source/destination parents differ; the coordinator must still restore the
+# original tree successfully.
+with tempfile.TemporaryDirectory(prefix="tectac-m3-rollback-") as td:
+    base = Path(td)
+    tactical_parent = base / "tactical-fs"
+    snapshot_parent = base / "snapshot-fs"
+    tactical_parent.mkdir(); snapshot_parent.mkdir()
+    tactical_root = tactical_parent / "rmm"
+    tactical_root.mkdir()
+    (tactical_root / "marker").write_text("failed-restore\n", encoding="utf-8")
+    moved_root = tactical_parent / "rmm.tectac-pre-restore-test"
+    moved_root.mkdir()
+    (moved_root / "marker").write_text("original\n", encoding="utf-8")
+    snapshot_root = snapshot_parent / "snapshot"
+    snapshot_root.mkdir()
+    snapshot = {"root": str(snapshot_root), "host_paths": [], "databases": []}
+
+    old_stop = mod.service_stop_for_restore
+    old_start = mod.service_start_after_restore
+    old_verify = mod.verify_tactical_runtime
+    old_restore_hosts = mod._restore_host_paths
+    old_replace = mod.os.replace
+    replacements = []
+    try:
+        mod.service_stop_for_restore = lambda log: None
+        mod.service_start_after_restore = lambda log: None
+        mod.verify_tactical_runtime = lambda config, log: None
+        mod._restore_host_paths = lambda snapshot, log: None
+
+        def replace(src, dst):
+            src = Path(src); dst = Path(dst)
+            replacements.append((src, dst))
+            if src.parent != dst.parent:
+                raise OSError(18, "Invalid cross-device link")
+            return old_replace(src, dst)
+
+        mod.os.replace = replace
+        result = mod.rollback_failed_restore(
+            {"TACTICAL_ROOT": str(tactical_root)}, moved_root, snapshot, io.StringIO(), restore_tactical_tree=True
+        )
+    finally:
+        mod.service_stop_for_restore = old_stop
+        mod.service_start_after_restore = old_start
+        mod.verify_tactical_runtime = old_verify
+        mod._restore_host_paths = old_restore_hosts
+        mod.os.replace = old_replace
+
+    must(result["rollback_performed"] is True, f"M3 rollback failed: {result}")
+    must(result["rollback_tree_restored"] is True, "M3 original Tactical tree was not restored")
+    must((tactical_root / "marker").read_text(encoding="utf-8") == "original\n", "M3 restored wrong Tactical tree")
+    must(all(src.parent == dst.parent for src, dst in replacements), f"M3 attempted cross-filesystem rename: {replacements}")
+    must(not moved_root.exists(), "M3 preserved original path should have been consumed")
+    must(not any(tactical_parent.glob("rmm.tectac-failed-restore-*")), "M3 failed restored tree quarantine was not cleaned")
+
+print("[TEST] PASS M3 same-filesystem restore rollback")

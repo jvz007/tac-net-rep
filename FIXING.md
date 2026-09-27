@@ -1,26 +1,22 @@
-# FIXING — Core 1.15.100
+# FIXING — Core 1.15.101
 
-Review scope for this release: **M2 only**.
+Review scope for this release: **M3 only**.
 
 ## Tracker item
 
-- **M2** — revoking a Tec-Tac session must invalidate the linked Tactical Knox token so the same bearer credential cannot continue authenticating against Tactical-native endpoints.
+- **M3** — restore rollback must not move `/rmm` across filesystems with `os.replace()`, because a cross-device rename can fail with `EXDEV` before the original Tactical tree is restored.
 
-## Behavioural changes
+## Behavioural change
 
-- `revoke_session()` now deletes the linked Knox `AuthToken` inside the same database transaction as the Tec-Tac trust-row revocation.
-- `revoke_user_sessions()` now deletes the Knox credentials linked to every revoked trust row.
-- The explicitly excluded/current session credential is preserved when another still-active trust row references that digest.
-- Legacy Tec-Tac trust rows with no Knox digest still revoke without deleting unrelated credentials.
+- The failed restored Tactical tree is quarantined to a unique sibling of `TACTICAL_ROOT` instead of the pre-restore snapshot directory.
+- Both rollback renames therefore remain on the same filesystem as `TACTICAL_ROOT`.
+- The failed restored tree is removed only after the original Tactical tree, host state, databases and runtime verification have succeeded.
 
 ## Behavioural regression
 
-- `tests/session-knox-revocation.py` executes the real public revocation functions with in-memory trust/token managers and proves:
-  - single-session revoke removes the linked Knox token;
-  - revoke-other-sessions removes only the revoked sessions' tokens;
-  - the excluded current token survives;
-  - a legacy digest-less trust row does not trigger token deletion.
+- `tests/server-backup-host-rollback.py` now emulates `EXDEV` for every rename whose source and destination parents differ.
+- The test runs the real `rollback_failed_restore()` coordinator and proves the original Tactical tree is restored, no cross-filesystem rename is attempted, the preserved tree is consumed, and the failed-tree quarantine is cleaned after success.
 
 ## Not in scope
 
-No M3+ Mediums, UI changes, or unrelated Low items are included.
+No M4+ Mediums, UI changes, or unrelated Low items are included.
