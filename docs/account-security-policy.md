@@ -19,3 +19,11 @@ When protection is enabled, only an effective native or role superuser may act o
 Account managers can read the current policy from `GET /api/tfd/access/security-policy/`. Only an effective superuser can change it with `PUT /api/tfd/access/security-policy/`. The UI exposes the setting under **Access -> Account protection**.
 
 The Django process never writes the policy file directly. Changes are delegated to the root-owned Tec-Tac privileged helper and are audited through the Core audit contract.
+
+The privileged helper also writes a second root-owned audit trail before every policy mutation at:
+
+```text
+/var/log/tec-tac/account-security-policy-audit.jsonl
+```
+
+That root audit records the real sudo invoker (`SUDO_USER`/`SUDO_UID`) separately from the application actor label, the previous policy state, and the requested state. If the root audit cannot be written safely, the helper refuses the policy mutation. This means a direct privileged invocation cannot change D1 silently even though the Django service and a shell both run as the `tactical` OS account.

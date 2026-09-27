@@ -46,6 +46,7 @@ SELF = Path("/usr/local/sbin/tec-tac-system-update")
 PRIVILEGED_TRUST = Path("/usr/local/lib/tec-tac-security/privileged-trust.py")
 RUNNING_REQUEST_ROOT = RUNNING_ROOT / "requests"
 ACCOUNT_SECURITY_POLICY = Path("/etc/tec-tac/policy/account-security-policy.json")
+ACCOUNT_SECURITY_AUDIT = Path("/var/log/tec-tac/account-security-policy-audit.jsonl")
 
 
 
@@ -655,6 +656,47 @@ def set_root_trust_policy(level, actor=""):
     return _privileged_trust_command(cfg, *args)
 
 
+def _account_security_current_state():
+    if not ACCOUNT_SECURITY_POLICY.exists():
+        return {"state": "missing", "protect_superuser_accounts": False}
+    try:
+        payload = _read_json_nofollow(ACCOUNT_SECURITY_POLICY, max_bytes=64 * 1024, label="account security policy")
+    except SystemExit:
+        return {"state": "unreadable", "protect_superuser_accounts": None}
+    value = payload.get("protect_superuser_accounts")
+    if isinstance(value, bool):
+        return {"state": "readable", "protect_superuser_accounts": value}
+    return {"state": "unreadable", "protect_superuser_accounts": None}
+
+
+def _append_root_account_security_audit(payload):
+    audit_root = ACCOUNT_SECURITY_AUDIT.parent
+    audit_root.mkdir(parents=True, exist_ok=True)
+    os.chown(audit_root, 0, 0)
+    os.chmod(audit_root, 0o755)
+    flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(ACCOUNT_SECURITY_AUDIT, flags, 0o600)
+    except OSError as exc:
+        raise RuntimeError("root account security audit is unavailable") from exc
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or (info.st_mode & 0o077):
+            raise RuntimeError("root account security audit has unsafe ownership or mode")
+        os.fchmod(fd, 0o600)
+        os.fchown(fd, 0, 0)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        line = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+        os.write(fd, line)
+        os.fsync(fd)
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        os.close(fd)
+
+
 def set_root_account_security_policy(value, actor=""):
     requested = str(value or "").strip().lower()
     if requested not in {"true", "false"}:
@@ -663,12 +705,27 @@ def set_root_account_security_policy(value, actor=""):
     POLICY_ROOT.mkdir(parents=True, exist_ok=True)
     os.chown(POLICY_ROOT, 0, 0)
     os.chmod(POLICY_ROOT, 0o755)
+    previous = _account_security_current_state()
     payload = {
         "schema": 1,
         "protect_superuser_accounts": requested == "true",
         "updated_at": now(),
         "updated_by": str(actor or "")[:150] or None,
     }
+    # L85: a direct sudo invocation must never create an invisible policy
+    # mutation. The root-owned audit intent is durable before the policy write,
+    # and records the actual sudo invoker independently of the caller-supplied
+    # application actor label.
+    _append_root_account_security_audit({
+        "schema": 1,
+        "event": "account_security_policy_change_requested",
+        "timestamp": payload["updated_at"],
+        "sudo_user": str(os.environ.get("SUDO_USER") or "root")[:150],
+        "sudo_uid": str(os.environ.get("SUDO_UID") or os.getuid())[:32],
+        "actor_label": payload["updated_by"],
+        "before": previous,
+        "requested": {"protect_superuser_accounts": payload["protect_superuser_accounts"]},
+    })
     atomic_json(ACCOUNT_SECURITY_POLICY, payload, mode=0o644, uid=0, gid=0)
     return payload
 

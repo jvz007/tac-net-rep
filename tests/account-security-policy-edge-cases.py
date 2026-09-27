@@ -109,6 +109,35 @@ class Request:
     def __init__(self, requested):
         self.data = {"protect_superuser_accounts": requested}
 
+
+# L86: a non-superuser cannot change policy through the actual view.
+class NonSuperUser:
+    effective_superuser = False
+    username = "operator"
+
+class NonSuperRequest:
+    user = NonSuperUser()
+    data = {"protect_superuser_accounts": True}
+
+response = views.AccountSecurityPolicyView().put(NonSuperRequest())
+require(response.status_code == 403, "non-superuser policy PUT was not denied")
+
+# L86: successful mutation writes the strict Core audit with actor and before/after.
+recorded_success = {}
+views.get_policy = lambda: {"protect_superuser_accounts": False}
+def set_success(value, *, updated_by=""):
+    return {"protect_superuser_accounts": bool(value)}
+def record_success(**kwargs):
+    recorded_success.update(kwargs)
+views.set_policy = set_success
+views.record = record_success
+response = views.AccountSecurityPolicyView().put(Request(True))
+require(response.status_code == 200, "effective-superuser policy PUT failed")
+require(recorded_success.get("strict") is True, "policy audit is not strict")
+require(recorded_success.get("actor") is Request.user, "policy audit actor mismatch")
+require(recorded_success.get("before") == {"protect_superuser_accounts": False}, "policy audit before state mismatch")
+require(recorded_success.get("after") == {"protect_superuser_accounts": True}, "policy audit after state mismatch")
+
 # L81: any strict audit failure, including AuditContractError, rolls back the
 # requested change instead of returning with an unaudited policy state.
 calls = []

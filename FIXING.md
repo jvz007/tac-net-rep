@@ -1,45 +1,28 @@
-# Review scope: Tec-Tac Core 1.15.93
+# FIXING.md — Core 1.15.94
 
-This release is intentionally narrow. Review the items below and do not treat unrelated tracker items as part of this build.
+## Review scope
 
-## Tracker items in this release
+This release is the final D1 account-security-policy hardening pass. Review only the tracker items below plus regressions caused by these changes.
 
-### L81 - account-security audit rollback
+### L85 — privileged policy mutation had no root audit
+- Every `--set-account-security-policy` root-helper mutation now requires a durable root-owned audit intent before the policy file is written.
+- Root audit path: `/var/log/tec-tac/account-security-policy-audit.jsonl`.
+- The audit records the actual sudo invoker, application actor label, prior state, requested state and timestamp.
+- If the root audit cannot be written safely, the policy mutation is refused.
+- The existing strict Core audit remains a separate second record for API-driven changes.
 
-Expected result:
-- `AccountSecurityPolicyView.put()` treats both `AuditWriteError` and `AuditContractError` as a failed audited mutation.
-- The requested policy value is not retained without a strict Core audit record.
-- If the prior policy was readable, the previous logical value is restored.
-
-Primary files:
-- `framwork/tec_tac/account_security_views.py`
-- `tests/account-security-policy-edge-cases.py`
-
-### L82 - valid Tactical usernames rejected as policy actor
-
-Expected result:
-- Usernames containing `+` and Unicode characters are accepted as `updated_by`.
-- Actor data remains bounded to Tactical's 150-character username limit and rejects NUL.
-- The helper is still invoked with a subprocess argv list; no shell interpolation is introduced.
-
-Primary files:
-- `framwork/tec_tac/account_security_policy.py`
-- `tests/account-security-policy-edge-cases.py`
-
-### L84 - corrupt policy cannot be repaired through API
-
-Expected result:
-- An effective superuser can replace an unreadable/corrupt policy with a valid requested policy.
-- The audit `before` value records `policy_state=unreadable` and metadata records `repaired_corrupt_policy=true`.
-- If the strict audit cannot be written, the requested unaudited repair is not retained; Core forces protection ON as the fail-closed state.
-
-Primary files:
-- `framwork/tec_tac/account_security_views.py`
-- `tests/account-security-policy-edge-cases.py`
+### L86 — policy test depended on root / grep checks
+- `tests/account-security-policy.py` now runs without root and behaviorally exercises the privileged mutation/audit boundary with narrow filesystem privilege stubs.
+- `tests/account-security-policy-edge-cases.py` now behaviorally checks non-superuser denial, effective-superuser success, strict audit contents, and audit-failure rollback.
 
 ## Explicitly not in this release
+- D2–D6a follow-up items.
+- M2–M31 outside already-completed M28/M29.
+- Other Low items.
 
-- L85: sudo authority for the `tactical` OS user.
-- L86: replacement of remaining root/grep-only D1 tests.
-- U3 is in the paired UI 0.12.41 package, not this Core package.
-- No M2+ work is included.
+## Primary files to inspect
+- `scripts/system-update-helper.py`
+- `framwork/tec_tac/account_security_views.py` (regression target; no new behavior beyond 1.15.93)
+- `tests/account-security-policy.py`
+- `tests/account-security-policy-edge-cases.py`
+- `docs/account-security-policy.md`
