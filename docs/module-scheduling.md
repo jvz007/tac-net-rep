@@ -267,8 +267,8 @@ Core stores/delivers that definition in canonical form:
 Rules for Tactical-native dynamic targets:
 
 - `scope` must resolve unambiguously to exactly one client, site or endpoint scope; conflicting aliases are rejected.
-- Tactical target identifiers belong in `scope`, not at the top level of `filter`. Top-level filter keys that are Tactical target aliases are rejected.
-- Nested filter objects are module-owned and may use ordinary fields such as `id`, `ids` or names that resemble Tactical scope fields. Core does not recursively reinterpret nested filter data as target scope.
+- Tactical target identifiers belong in `scope`, not in `filter`. Top-level filter keys that are Tactical target aliases are rejected. Tactical scope aliases are also rejected when they appear as filter value tokens (for example `{"field":"site_id"}` in a generic filter DSL).
+- Nested filter objects are module-owned and may use ordinary **keys** such as `id`, `ids` or names that resemble Tactical scope fields. Core does not reinterpret those nested keys as target scope, but reserved Tactical scope aliases may not be carried as filter values.
 - `reconcile_schedule()` accepts the legacy scope aliases above and persists the canonical form.
 
 The module handler owns the meaning of `filter` and resolves final dynamic membership **within the canonical Tactical scope**.
@@ -550,7 +550,7 @@ Dynamic Tactical targeting has one explicit canonical scope plus an optional non
 }
 ```
 
-The canonical dynamic target root contains only `type`, `scope`, and optional `filter`, and canonical `scope` contains only `type` and `ids`. For backwards compatibility, Core accepts the established Tactical scope aliases (`client_id` / `client_ids`, `site_id` / `site_ids`, `agent_id` / `agent_ids`, and endpoint equivalents) as input in `scope` and converts them before persistence/dispatch. Known legacy root scope aliases are also consumed and canonicalized rather than forwarded to handlers. Conflicting or ambiguous scope aliases are rejected. Tactical identity aliases are forbidden only at the **top level** of `filter`; nested filter objects remain module-owned and may contain ordinary fields such as `id` or `site_id`. This prevents alternate top-level target fields from carrying unauthorized scope past Core without breaking module-specific nested filter schemas.
+The canonical dynamic target root contains only `type`, `scope`, and optional `filter`, and canonical `scope` contains only `type` and `ids`. For backwards compatibility, Core accepts the established Tactical scope aliases (`client_id` / `client_ids`, `site_id` / `site_ids`, `agent_id` / `agent_ids`, and endpoint equivalents) as input in `scope` and converts them before persistence/dispatch. Known legacy root scope aliases are also consumed and canonicalized rather than forwarded to handlers. Conflicting or ambiguous scope aliases are rejected. Tactical identity aliases are forbidden as **top-level filter keys** and as **filter value tokens at any depth**; nested filter objects remain module-owned and may contain ordinary keys such as `id` or `site_id`. This blocks generic field/value filter DSLs from carrying unauthorized Tactical scope past Core without reinterpreting nested module-owned keys as target scope.
 
 For non-manager operators:
 

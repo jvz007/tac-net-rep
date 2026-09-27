@@ -28,6 +28,23 @@ assert rejected({
     "filter": {"site_id": 999},
 })
 
+# Generic filter DSLs may not smuggle Tactical scope aliases as values.
+assert rejected({
+    "type": "dynamic",
+    "scope": {"type": "client", "ids": [1]},
+    "filter": {"field": "site_id", "value": 999},
+})
+assert rejected({
+    "type": "dynamic",
+    "scope": {"type": "client", "ids": [1]},
+    "filter": {"any": [{"field": "os", "value": "windows"}, {"field": "agent_id", "value": "foreign"}]},
+})
+assert rejected({
+    "type": "dynamic",
+    "scope": {"type": "client", "ids": [1]},
+    "filter": {"fields": ["os", "client_id"]},
+})
+
 # Accepted static targets are stored only in canonical type+ids form.
 assert normalize({"type": "endpoints", "ids": ["a", "a", 42]}) == {
     "type": "endpoints", "ids": ["a", "42"]

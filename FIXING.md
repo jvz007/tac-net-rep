@@ -1,29 +1,30 @@
-# FIXING.md — Core 1.15.110
+# Review scope: Core 1.15.111
 
-## Review scope
+## Tracker item in this release
 
-This release is intentionally scoped to **M12** from Claude's Core tracker.
+- **M13 — Scheduler dynamic-filter scope checks inspect keys but not values.**
 
-### M12 — run-now must canonicalise Scheduler targets before execution
+## Expected behavior
 
-Problem being fixed:
-- scheduled dispatch canonicalises saved targets before authorization and queueing;
-- the manual `run now` path previously authorized and queued the raw saved target object, so legacy aliases or malformed target shapes could behave differently from scheduled execution.
+- Tactical client/site/endpoint identifiers remain authoritative only through canonical `targets.scope`.
+- Dynamic filter top-level keys may not be Tactical target aliases.
+- Dynamic filter values/tokens at any depth may not equal Tactical target aliases such as `client_id`, `site_id`, `agent_id`, `endpoint_id`, `id`, or `ids`.
+- This blocks generic filter DSL forms such as `{"field":"site_id","value":999}` from becoming an alternate Tactical scope channel.
+- Nested module-owned filter **keys** may still use ordinary names such as `id` or `site_id`; Core does not reinterpret those nested keys as scope.
 
-Expected behavior in this release:
-1. `SchedulerRunNowView.post()` canonicalises the saved target object before scope authorization or queueing.
-2. A successful canonicalisation is persisted to the schedule before the manual run is created.
-3. Already-canonical targets are not rewritten unnecessarily.
-4. Invalid saved targets follow scheduled-dispatch quarantine semantics: the schedule is disabled, target state is marked invalid, HTTP 400 is returned, and no manual run is queued.
-5. Scope authorization and the manual run snapshot both receive the canonical target object.
+## Files/areas changed
 
-## Behavioral regression
+- `framwork/tec_tac/scheduler_targets.py`
+- `tests/scheduler-target-shape.py`
+- `docs/module-scheduling.md`
 
-`tests/scheduler-run-now-canonicalization.py` executes the production `SchedulerRunNowView.post()` method body and verifies:
-- documented legacy dynamic scope aliases become canonical before authorization and queueing;
-- canonical targets are left unchanged;
-- invalid legacy/static aliases disable the schedule, return 400 and never authorize/queue a run.
+## Regression coverage
 
-## Explicitly out of scope
+- `tests/scheduler-target-shape.py` exercises direct top-level aliases, generic field/value DSLs, nested/list value tokens, valid nested module-owned keys, canonical scope, and legacy aliases.
+- Existing Scheduler foundation, durability, scope, run-now, stale-run, unrestricted-role, pagination and interval tests remain green.
 
-No other Medium or Low tracker item is intentionally changed in this release. In particular, M13+ remain open.
+## Explicitly not in scope
+
+- M14 and later Medium items.
+- Module-specific custom target-type semantics.
+- UI changes.

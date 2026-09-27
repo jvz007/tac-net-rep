@@ -23,8 +23,11 @@ _ALIASES = {
 }
 
 # Dynamic filters are module-owned, but Tactical scope identifiers belong in
-# targets.scope. Check only the filter's top level: nested objects may contain
-# ordinary domain keys such as id/ids without becoming scheduler target scope.
+# targets.scope. Nested objects may contain ordinary domain keys such as id/ids,
+# but Tactical scope aliases may not be used as filter keys at the top level or
+# as filter value tokens anywhere in the expression. Generic filter DSLs often
+# encode a selected field as a value (for example {"field": "site_id"}),
+# which must not become an alternate scope channel.
 _RESERVED_FILTER_SCOPE_KEYS = {
     "id", "ids",
     *(_ALIASES["client"]),
@@ -32,6 +35,28 @@ _RESERVED_FILTER_SCOPE_KEYS = {
     *(_ALIASES["endpoint"]),
 }
 
+
+
+def _reserved_filter_value(value):
+    """Return the first Tactical scope alias used as a filter value token."""
+    if isinstance(value, str):
+        token = value.strip().lower()
+        return token if token in _RESERVED_FILTER_SCOPE_KEYS else None
+    if isinstance(value, list):
+        for item in value:
+            reserved = _reserved_filter_value(item)
+            if reserved:
+                return reserved
+        return None
+    if isinstance(value, dict):
+        # Nested keys are module-owned; inspect only their values so generic
+        # field/operator DSLs cannot encode Tactical scope through a value.
+        for item in value.values():
+            reserved = _reserved_filter_value(item)
+            if reserved:
+                return reserved
+        return None
+    return None
 
 def _dedupe(values):
     out = []
@@ -213,6 +238,11 @@ def normalize_scheduler_targets(targets):
     if reserved:
         raise SchedulerTargetShapeError(
             f"Dynamic targets.filter may not contain top-level Tactical target key {reserved!r}; put client/site/endpoint scope in targets.scope."
+        )
+    reserved_value = _reserved_filter_value(filt)
+    if reserved_value:
+        raise SchedulerTargetShapeError(
+            f"Dynamic targets.filter may not use Tactical target alias {reserved_value!r} as a filter value; put client/site/endpoint scope in targets.scope."
         )
 
     result = {"type": "dynamic", "scope": scope}
