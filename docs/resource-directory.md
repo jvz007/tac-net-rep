@@ -166,7 +166,7 @@ Client/site mutation requires both Tactical authority and Tec-Tac Core RBAC:
 
 Effective superusers retain the normal override behavior.
 
-Updates are write-scope constrained using Tactical's native object-permission semantics, not the broader read-only `filter_by_role()` visibility. Client write targets and site destination clients must pass Tactical's `_has_perm_on_client` semantics; site write targets must pass `_has_perm_on_site` semantics. This distinction is intentional because client read visibility can include the parent client of an explicitly visible site, while Tactical does not grant that transitive relationship as client write authority. This prevents a write permission from becoming a scope bypass.
+Updates use the same centralized Tactical client/site scope rule as Scheduler authorization. A role with both `can_view_clients` and `can_view_sites` empty is unrestricted. Once either relation contains entries, client mutations require an explicit client grant; a site-only grant never becomes parent-client write authority. Site mutations are allowed by an explicit site grant or an explicit grant to that site's client. This preserves Tactical's unrestricted-role behavior without letting broader client read visibility become write authority.
 
 Creating a new client has no pre-existing resource against which to apply scope; it therefore requires the two manage permissions above and creates a new top-level resource.
 

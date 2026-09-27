@@ -1,6 +1,6 @@
 import io
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from urllib.parse import urlsplit, urlunsplit
 
 import pyotp
@@ -87,6 +87,7 @@ def _native_capabilities(user, role=None):
         "list_modules": True,
         "manage_modules": can_manage_privileged_operations(user),
         "manage_schedules": allowed("can_do_server_maint"),
+        "list_clients": allowed("can_list_clients"),
         "server_maintenance": can_manage_privileged_operations(user),
     }
 

@@ -489,6 +489,8 @@ def scheduler_health(now: datetime | None = None) -> dict:
     tick_health = "healthy" if tick_age is not None and tick_age <= 180 and not state.last_tick_error else ("degraded" if last_tick else "unknown")
     recent_cutoff = now - timedelta(hours=24)
     runs = TecTacScheduleRun.objects.filter(created_at__gte=recent_cutoff)
+    authorization_revoked = runs.filter(error_type="AuthorizationRevoked")
+    latest_authorization_revoked = authorization_revoked.order_by("-created_at").first()
     return {
         "tick_health": tick_health,
         "last_tick_at": state.last_tick_at.isoformat() if state.last_tick_at else None,
@@ -505,6 +507,13 @@ def scheduler_health(now: datetime | None = None) -> dict:
         "queued_runs": TecTacScheduleRun.objects.filter(status=TecTacScheduleRun.Status.QUEUED).count(),
         "running_runs": TecTacScheduleRun.objects.filter(status=TecTacScheduleRun.Status.RUNNING).count(),
         "failed_last_24h": runs.filter(status=TecTacScheduleRun.Status.FAILED).count(),
+        "authorization_revoked_last_24h": authorization_revoked.count(),
+        "last_authorization_revoked": ({
+            "schedule_id": str(latest_authorization_revoked.schedule_id),
+            "schedule_name": str(getattr(latest_authorization_revoked.schedule, "name", "") or ""),
+            "created_at": latest_authorization_revoked.created_at.isoformat(),
+            "error": latest_authorization_revoked.error,
+        } if latest_authorization_revoked else None),
     }
 
 

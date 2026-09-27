@@ -10,7 +10,6 @@ from typing import Any
 
 from django.db import IntegrityError, transaction
 from django.db.models import Q
-from django.http import Http404
 
 
 class TacticalResourceAdapterError(RuntimeError):
@@ -52,18 +51,51 @@ def _role_for_user(user):
     return getattr(user, "role", None)
 
 
-def explicit_client_target_ids_in_scope(*, user, client_ids) -> set[int]:
-    """Return explicitly granted client ids suitable for whole-client targeting.
+def _relation_has_any(relation) -> bool:
+    if relation is None:
+        return False
+    exists = getattr(relation, "exists", None)
+    if callable(exists):
+        return bool(exists())
+    all_rows = getattr(relation, "all", None)
+    if callable(all_rows):
+        return bool(all_rows())
+    return bool(relation)
 
-    Tactical read visibility is intentionally broader than whole-client action
-    scope because ``filter_by_role`` includes a parent client when only one of
-    its sites is granted. Scheduler whole-client targets must therefore use the
-    role's explicit ``can_view_clients`` relation instead.
+
+def _role_scope_unrestricted(*, user, role=None) -> bool:
+    """Return Tactical's native unrestricted client/site scope state.
+
+    Tactical treats a role with *both* client and site relations empty as full
+    resource scope. A site-only role is therefore restricted even though its
+    explicit client relation is empty. Keep that rule centralized here so
+    Scheduler target checks and Resource Directory writes cannot diverge.
+    """
+    role = role if role is not None else _role_for_user(user)
+    if bool(getattr(user, "is_superuser", False)) or bool(getattr(role, "is_superuser", False) if role else False):
+        return True
+    if role is None:
+        return False
+    return not _relation_has_any(getattr(role, "can_view_clients", None)) and not _relation_has_any(
+        getattr(role, "can_view_sites", None)
+    )
+
+
+def explicit_client_target_ids_in_scope(*, user, client_ids) -> set[int]:
+    """Return client ids authorized for whole-client targeting.
+
+    A Tactical role with no client *or* site restrictions has full scope. Once
+    either relation is populated, whole-client actions require an explicit
+    ``can_view_clients`` grant; site visibility alone never expands to
+    whole-client authority.
     """
     requested = {int(value) for value in client_ids if int(value) > 0}
     if not requested:
         return set()
     role = _role_for_user(user)
+    Client, _, _ = _models()
+    if _role_scope_unrestricted(user=user, role=role):
+        return set(Client.objects.filter(pk__in=requested).values_list("pk", flat=True))
     relation = getattr(role, "can_view_clients", None) if role is not None else None
     if relation is None or not hasattr(relation, "filter"):
         return set()
@@ -218,29 +250,40 @@ def get_agent_row(queryset, agent_id: str) -> dict[str, Any] | None:
 
 
 def client_write_in_scope(*, user, client_id: int) -> bool:
-    """Mirror Tactical's native client-object write scope.
+    """Apply the same Tactical client/site scope rule used by reads and Scheduler.
 
-    Do not use ``filter_by_role`` here.  Client read visibility is deliberately
-    broader because Tactical includes the parent client of explicitly-visible
-    sites.  Native object permission checks do not grant that transitive client
-    write authority.
+    Parent-client read visibility derived from a site grant is not client write
+    authority. Only a fully-unrestricted role or an explicit client grant may
+    mutate a client row.
     """
-    from tacticalrmm.permissions import _has_perm_on_client  # noqa: PLC0415
-
-    try:
-        return bool(_has_perm_on_client(user, client_id))
-    except Http404:
+    Client, _, _ = _models()
+    role = _role_for_user(user)
+    if role is None and not bool(getattr(user, "is_superuser", False)):
         return False
+    if not Client.objects.filter(pk=client_id).exists():
+        return False
+    if _role_scope_unrestricted(user=user, role=role):
+        return True
+    relation = getattr(role, "can_view_clients", None) if role is not None else None
+    return bool(relation is not None and relation.filter(pk=client_id).exists())
 
 
 def site_write_in_scope(*, user, site_id: int) -> bool:
-    """Mirror Tactical's native site-object write scope."""
-    from tacticalrmm.permissions import _has_perm_on_site  # noqa: PLC0415
-
-    try:
-        return bool(_has_perm_on_site(user, site_id))
-    except Http404:
+    """Apply Tactical's one client/site scope rule to site mutations."""
+    _, Site, _ = _models()
+    role = _role_for_user(user)
+    if role is None and not bool(getattr(user, "is_superuser", False)):
         return False
+    site = Site.objects.filter(pk=site_id).values("pk", "client_id").first()
+    if site is None:
+        return False
+    if _role_scope_unrestricted(user=user, role=role):
+        return True
+    site_relation = getattr(role, "can_view_sites", None) if role is not None else None
+    if site_relation is not None and site_relation.filter(pk=site_id).exists():
+        return True
+    client_relation = getattr(role, "can_view_clients", None) if role is not None else None
+    return bool(client_relation is not None and client_relation.filter(pk=site["client_id"]).exists())
 
 
 def create_client_row(*, name: str) -> dict[str, Any]:
