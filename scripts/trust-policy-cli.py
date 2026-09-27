@@ -154,7 +154,14 @@ def default_level() -> str:
 def recover_corrupt_pending(error: Exception) -> dict:
     current = str(read_policy()['minimum_level'])
     floor = default_level()
-    target = current if LEVEL_RANK[current] >= LEVEL_RANK[floor] else floor
+    # A corrupt pending revert destroys the only trustworthy record of the
+    # pre-change policy. Restoring merely to the environment default can still
+    # leave the server below its previous trust floor (for example when the
+    # original policy was secure_signed). Fail closed by moving to the strongest
+    # supported floor until an administrator explicitly chooses otherwise.
+    target = LEVELS[-1]
+    if LEVEL_RANK[current] > LEVEL_RANK[target]:
+        target = current
     if target != current:
         write_policy(target, updated_by='system:corrupt-pending-recovery')
     append_audit(
@@ -162,6 +169,7 @@ def recover_corrupt_pending(error: Exception) -> dict:
         current_level=current,
         default_level=floor,
         restored_level=target,
+        recovery_mode='fail_closed_strongest',
         error=str(error)[:500],
     )
     clear_pending()
@@ -170,6 +178,7 @@ def recover_corrupt_pending(error: Exception) -> dict:
         'previous_level': current,
         'minimum_level': target,
         'default_level': floor,
+        'recovery_mode': 'fail_closed_strongest',
     }
 
 

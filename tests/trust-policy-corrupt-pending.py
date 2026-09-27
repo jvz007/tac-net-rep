@@ -31,11 +31,12 @@ with tempfile.TemporaryDirectory(prefix='tec-tac-m9-') as raw:
     configure(td, env='production', level='unsigned')
     result=mod.check_revert_due()
     assert result['status']=='corrupt_pending_recovered', result
-    assert result['minimum_level']=='signed_production', result
-    assert mod.read_policy()['minimum_level']=='signed_production'
+    assert result['minimum_level']=='secure_signed', result
+    assert mod.read_policy()['minimum_level']=='secure_signed'
     assert not mod.PENDING_FILE.exists()
     rows=audit_rows(); assert rows[-1]['event']=='policy_pending_revert_corrupt_recovered'
-    assert rows[-1]['restored_level']=='signed_production'
+    assert rows[-1]['restored_level']=='secure_signed'
+    assert rows[-1]['recovery_mode']=='fail_closed_strongest'
 
 with tempfile.TemporaryDirectory(prefix='tec-tac-m9-strong-') as raw:
     td=Path(raw)
@@ -49,7 +50,7 @@ with tempfile.TemporaryDirectory(prefix='tec-tac-m9-dev-') as raw:
     td=Path(raw)
     configure(td, env='development', level='unsigned')
     result=mod.check_revert_due()
-    assert result['minimum_level']=='signed_development', result
+    assert result['minimum_level']=='secure_signed', result
 
 print('M9 corrupt pending trust-policy recovery: PASS')
 
@@ -58,7 +59,7 @@ with tempfile.TemporaryDirectory(prefix='tec-tac-m9-semantic-') as raw:
     configure(td, env='production', level='unsigned')
     mod.PENDING_FILE.write_text(json.dumps({'schema':1,'change_id':'x','previous_level':'bogus','temporary_level':'unsigned','expires_at':'bad'})+'\n')
     result=mod.check_revert_due()
-    assert result['minimum_level']=='signed_production', result
+    assert result['minimum_level']=='secure_signed', result
     assert not mod.PENDING_FILE.exists()
 
 with tempfile.TemporaryDirectory(prefix='tec-tac-m9-set-order-') as raw:
@@ -67,8 +68,23 @@ with tempfile.TemporaryDirectory(prefix='tec-tac-m9-set-order-') as raw:
     confirmations=[]
     mod.confirm=lambda current,target,hours,reason: confirmations.append((current,target))
     result=mod.set_level('signed_development', reason='test', hours=8)
-    assert confirmations==[('signed_production','signed_development')], confirmations
+    assert confirmations==[('secure_signed','signed_development')], confirmations
     assert result['temporary'] is True
-    assert result['revert_level']=='signed_production'
+    assert result['revert_level']=='secure_signed'
 
 print('M9 semantic corruption and set ordering: PASS')
+
+with tempfile.TemporaryDirectory(prefix='tec-tac-m9-get-') as raw:
+    td=Path(raw)
+    configure(td, env='production', level='signed_development')
+    try:
+        mod.read_pending()
+    except mod.PendingRevertError as exc:
+        recovery=mod.recover_corrupt_pending(exc)
+    else:
+        raise AssertionError('corrupt pending revert unexpectedly parsed')
+    assert recovery['minimum_level']=='secure_signed', recovery
+    assert recovery['recovery_mode']=='fail_closed_strongest', recovery
+    assert mod.read_policy()['minimum_level']=='secure_signed'
+
+print('M9 fail-closed strongest-floor recovery: PASS')

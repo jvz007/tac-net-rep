@@ -1,24 +1,16 @@
-# FIXING.md — Core 1.15.118
+# FIXING.md — Core 1.15.119
 
-This build continues from the review-passed 1.15.117 baseline and respects the agreed maximum of **1 Medium + 5 Low** findings per pass.
+This build continues from the review-passed 1.15.118 baseline and respects the agreed maximum of **1 Medium + 5 Low** findings per pass.
 
-## M2 — revoke Tec-Tac sessions at the Tactical Knox credential layer
+## M9 — trust-policy corrupt pending revert fails fully closed
 
-- `revoke_user_sessions()` now deletes all other Tactical Knox credentials belonging to the target username, not only credentials already observed by Tec-Tac.
-- When `except_session_id` is supplied, only the Knox digest linked to that excluded/current session is preserved.
-- Existing individual-session revocation continues to delete the directly linked Knox credential.
-
-## L06 — preserve historical no-parameter history limits
-
-- Added closure guards requiring Module Management v2 job history and session audit history to retain the legacy no-parameter 200-row bound.
-- Explicit paginated requests retain the 50-row page default.
-
-## L07 — trusted Bash path portability
-
-- Added closure guards across all privileged Core helpers requiring `_trusted_bash()` resolution from `/bin/bash` or `/usr/bin/bash`.
-- Guards reject direct subprocess command construction that pins only `/usr/bin/bash`.
+- A corrupt `pending-trust-policy-revert.json` no longer restores only to the environment default.
+- Because corruption removes the trustworthy record of the previous trust floor, Core now raises the policy to the strongest supported level, `secure_signed`.
+- The pending file is cleared after the stronger policy is written.
+- Root audit output records `recovery_mode=fail_closed_strongest` so operators can distinguish emergency fail-closed recovery from a normal timed revert.
+- A subsequent trust-policy operation observes the recovered `secure_signed` floor before applying any requested change.
 
 ## Regression coverage
 
-- `tests/session-knox-revocation.py`
-- `tests/open-list-closure-1.15.118.py`
+- `tests/trust-policy-corrupt-pending.py`
+- `tests/open-list-closure-1.15.119.py`
