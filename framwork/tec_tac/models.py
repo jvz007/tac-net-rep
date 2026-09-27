@@ -179,6 +179,8 @@ class TecTacScheduleRun(models.Model):
         indexes = [
             models.Index(fields=("schedule", "status"), name="tectac_run_status_idx"),
             models.Index(fields=("owner_type", "created_at"), name="tectac_run_owner_type_idx"),
+            models.Index(fields=("status", "-created_at"), name="tectac_run_hist_status_idx"),
+            models.Index(fields=("action_id", "-created_at"), name="tectac_run_hist_action_idx"),
             models.Index(fields=("scheduled_for",), name="tectac_run_due_idx"),
         ]
 

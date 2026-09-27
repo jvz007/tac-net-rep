@@ -676,11 +676,49 @@ class SystemUpdatePackageInspectView(APIView):
 
     def post(self, request):
         _require_module_manager(request.user)
-        upload = request.FILES.get("package")
-        if upload is None:
+        uploads = []
+        for key in request.FILES.keys():
+            uploads.extend(request.FILES.getlist(key))
+        if not uploads:
             return Response({"detail": "A system update package upload is required."}, status=400)
+
+        package = None
+        release_manifest = None
+        release_signature = None
+        unsupported = []
+        for upload in uploads:
+            name = str(getattr(upload, "name", "")).strip()
+            lower = name.lower()
+            if lower.endswith(".tar.gz") or lower.endswith(".tgz") or lower.endswith(".zip"):
+                if package is not None:
+                    return Response({"detail": "Upload exactly one system update archive per inspection."}, status=400)
+                package = upload
+            elif name == "tec-tac-release.json":
+                if release_manifest is not None:
+                    return Response({"detail": "Upload only one tec-tac-release.json file."}, status=400)
+                release_manifest = upload
+            elif name == "tec-tac-release.json.sig":
+                if release_signature is not None:
+                    return Response({"detail": "Upload only one tec-tac-release.json.sig file."}, status=400)
+                release_signature = upload
+            else:
+                unsupported.append(name or "unnamed upload")
+
+        if unsupported:
+            return Response({"detail": "Unsupported system update upload(s): " + ", ".join(unsupported)}, status=400)
+        if package is None:
+            return Response({"detail": "A .zip, .tar.gz, or .tgz system update package is required."}, status=400)
+        if (release_manifest is None) != (release_signature is None):
+            return Response({"detail": "Detached signed updates require both tec-tac-release.json and tec-tac-release.json.sig."}, status=400)
         try:
-            return Response(stage_system_update_package(upload), status=201)
+            return Response(
+                stage_system_update_package(
+                    package,
+                    release_manifest_upload=release_manifest,
+                    release_signature_upload=release_signature,
+                ),
+                status=201,
+            )
         except SystemUpdateError as exc:
             return Response({"detail": str(exc)}, status=400)
         except Exception as exc:

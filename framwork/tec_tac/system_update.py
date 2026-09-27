@@ -12,6 +12,7 @@ import json
 import os
 import pwd
 import re
+import shutil
 import stat
 import subprocess
 import tarfile
@@ -416,7 +417,7 @@ def _installed_version(component: str) -> str | None:
         return None
 
 
-def inspect_archive(archive: Path, *, source: dict | None = None) -> dict:
+def inspect_archive(archive: Path, *, source: dict | None = None, release_manifest: Path | None = None, release_signature: Path | None = None) -> dict:
     if not archive.is_file():
         raise SystemUpdateError("Staged system update package was not found.")
     source = source or {"type": "offline"}
@@ -445,6 +446,13 @@ def inspect_archive(archive: Path, *, source: dict | None = None) -> dict:
 
         signed_manifest = root / "tec-tac-release.json"
         signed_signature = root / "tec-tac-release.json.sig"
+        if release_manifest is not None or release_signature is not None:
+            if release_manifest is None or release_signature is None:
+                raise SystemUpdateError("Both tec-tac-release.json and tec-tac-release.json.sig are required for a detached signed update.")
+            if signed_manifest.exists() or signed_signature.exists():
+                raise SystemUpdateError("Signed release metadata is ambiguous: provide it either inside the archive or as detached uploads, not both.")
+            shutil.copyfile(release_manifest, signed_manifest)
+            shutil.copyfile(release_signature, signed_signature)
         if signed_manifest.exists() or signed_signature.exists():
             try:
                 release_trust = verify_release_tree(root=root, expected_component=component, required_permissions=(f"{component}.update",))
@@ -501,35 +509,80 @@ def _allowed_suffix(filename: str) -> str:
     raise SystemUpdateError("Package must end in .zip, .tar.gz, or .tgz")
 
 
-def _stage_bytes(reader, *, filename: str, source: dict, expected_component: str | None = None) -> dict:
-    suffix = _allowed_suffix(filename)
-    STAGED_ROOT.mkdir(parents=True, exist_ok=True)
-    upload_id = str(uuid.uuid4())
-    package_path = STAGED_ROOT / f"{upload_id}{suffix}"
+def _copy_uploaded_sidecar(upload, destination: Path, *, maximum: int = 1024 * 1024) -> tuple[int, str]:
+    size = int(getattr(upload, "size", 0) or 0)
+    if size <= 0:
+        raise SystemUpdateError(f"{getattr(upload, 'name', 'Signed release sidecar')} is empty.")
+    if size > maximum:
+        raise SystemUpdateError("Signed release sidecar exceeds the 1 MiB limit.")
     digest = hashlib.sha256()
     written = 0
-    with package_path.open("wb") as handle:
-        while True:
-            chunk = reader(1024 * 1024)
-            if not chunk:
-                break
+    with destination.open("wb") as handle:
+        for chunk in upload.chunks():
             written += len(chunk)
-            if written > MAX_PACKAGE_BYTES:
+            if written > maximum:
                 handle.close()
-                package_path.unlink(missing_ok=True)
-                raise SystemUpdateError(f"Package exceeds the {MAX_PACKAGE_BYTES // (1024 * 1024)} MiB limit.")
+                destination.unlink(missing_ok=True)
+                raise SystemUpdateError("Signed release sidecar exceeds the 1 MiB limit.")
             digest.update(chunk)
             handle.write(chunk)
     if written <= 0:
-        package_path.unlink(missing_ok=True)
-        raise SystemUpdateError("Package is empty.")
-    os.chmod(package_path, 0o640)
+        destination.unlink(missing_ok=True)
+        raise SystemUpdateError("Signed release sidecar is empty.")
+    os.chmod(destination, 0o640)
+    return written, digest.hexdigest()
+
+
+def _stage_bytes(reader, *, filename: str, source: dict, expected_component: str | None = None, release_manifest_upload=None, release_signature_upload=None) -> dict:
+    suffix = _allowed_suffix(filename)
+    if (release_manifest_upload is None) != (release_signature_upload is None):
+        raise SystemUpdateError("Both tec-tac-release.json and tec-tac-release.json.sig must be uploaded together.")
+    STAGED_ROOT.mkdir(parents=True, exist_ok=True)
+    upload_id = str(uuid.uuid4())
+    package_path = STAGED_ROOT / f"{upload_id}{suffix}"
+    manifest_path = STAGED_ROOT / f"{upload_id}.release.json" if release_manifest_upload is not None else None
+    signature_path = STAGED_ROOT / f"{upload_id}.release.json.sig" if release_signature_upload is not None else None
+    digest = hashlib.sha256()
+    written = 0
     try:
-        preview = inspect_archive(package_path, source=source)
+        with package_path.open("wb") as handle:
+            while True:
+                chunk = reader(1024 * 1024)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > MAX_PACKAGE_BYTES:
+                    raise SystemUpdateError(f"Package exceeds the {MAX_PACKAGE_BYTES // (1024 * 1024)} MiB limit.")
+                digest.update(chunk)
+                handle.write(chunk)
+        if written <= 0:
+            raise SystemUpdateError("Package is empty.")
+        os.chmod(package_path, 0o640)
+        sidecars = {}
+        if manifest_path is not None and signature_path is not None:
+            manifest_size, manifest_sha256 = _copy_uploaded_sidecar(release_manifest_upload, manifest_path)
+            signature_size, signature_sha256 = _copy_uploaded_sidecar(release_signature_upload, signature_path)
+            sidecars = {
+                "release_manifest_path": str(manifest_path),
+                "release_manifest_filename": str(getattr(release_manifest_upload, "name", "tec-tac-release.json")),
+                "release_manifest_size": manifest_size,
+                "release_manifest_sha256": manifest_sha256,
+                "release_signature_path": str(signature_path),
+                "release_signature_filename": str(getattr(release_signature_upload, "name", "tec-tac-release.json.sig")),
+                "release_signature_size": signature_size,
+                "release_signature_sha256": signature_sha256,
+            }
+        preview = inspect_archive(
+            package_path, source=source, release_manifest=manifest_path, release_signature=signature_path
+        )
         if expected_component and preview["component"] != expected_component:
             raise SystemUpdateError(f"Repository returned {preview['component']} package while {expected_component} was requested.")
     except Exception:
         package_path.unlink(missing_ok=True)
+        if manifest_path is not None:
+            manifest_path.unlink(missing_ok=True)
+        if signature_path is not None:
+            signature_path.unlink(missing_ok=True)
         raise
     metadata = {
         "upload_id": upload_id,
@@ -539,12 +592,13 @@ def _stage_bytes(reader, *, filename: str, source: dict, expected_component: str
         "size": written,
         "created_at": _utcnow(),
         "preview": preview,
+        **sidecars,
     }
     _atomic_json(STAGED_ROOT / f"{upload_id}.json", metadata)
-    return {k: v for k, v in metadata.items() if k != "package_path"}
+    return {k: v for k, v in metadata.items() if not k.endswith("_path") and k != "package_path"}
 
 
-def stage_uploaded_package(upload) -> dict:
+def stage_uploaded_package(upload, *, release_manifest_upload=None, release_signature_upload=None) -> dict:
     size = int(getattr(upload, "size", 0) or 0)
     if size <= 0:
         raise SystemUpdateError("Package is empty.")
@@ -564,7 +618,13 @@ def stage_uploaded_package(upload) -> dict:
         except StopIteration:
             return b""
 
-    return _stage_bytes(reader, filename=str(getattr(upload, "name", "package.zip")), source={"type": "offline"})
+    return _stage_bytes(
+        reader,
+        filename=str(getattr(upload, "name", "package.zip")),
+        source={"type": "offline"},
+        release_manifest_upload=release_manifest_upload,
+        release_signature_upload=release_signature_upload,
+    )
 
 
 def _download_to_stage(url: str, *, filename: str, source: dict, component: str) -> dict:
@@ -799,12 +859,27 @@ def _load_stage(upload_id: str) -> dict:
     if not package_path.is_file():
         raise SystemUpdateError("Staged package file is missing.")
     meta["package_path"] = str(package_path)
+    for key in ("release_manifest_path", "release_signature_path"):
+        raw = meta.get(key)
+        if not raw:
+            continue
+        sidecar = Path(str(raw)).resolve()
+        try:
+            sidecar.relative_to(STAGED_ROOT.resolve())
+        except ValueError as exc:
+            raise SystemUpdateError("Staged signed release sidecar path is invalid.") from exc
+        if not sidecar.is_file():
+            raise SystemUpdateError("Staged signed release sidecar file is missing.")
+        meta[key] = str(sidecar)
     return meta
 
 
 def discard_stage(upload_id: str) -> None:
     meta = _load_stage(upload_id)
     Path(meta["package_path"]).unlink(missing_ok=True)
+    for key in ("release_manifest_path", "release_signature_path"):
+        if meta.get(key):
+            Path(meta[key]).unlink(missing_ok=True)
     (STAGED_ROOT / f"{upload_id}.json").unlink(missing_ok=True)
 
 

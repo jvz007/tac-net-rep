@@ -111,6 +111,27 @@ with tempfile.TemporaryDirectory(prefix="tt-system-update-claim-") as tmp:
     finally:
         os.close(root_fd)
 
+    # Detached signing sidecars use the same no-follow inode claim boundary.
+    upload_sidecar = "55555555-5555-5555-5555-555555555555"
+    write_meta(staged, upload_sidecar)
+    manifest = staged / f"{upload_sidecar}.release.json"
+    signature = staged / f"{upload_sidecar}.release.json.sig"
+    manifest.write_bytes(b"manifest")
+    signature.write_bytes(b"signature")
+    root_fd = helper._open_staged_root_fd()
+    try:
+        manifest_info = helper._select_optional_staged_file(root_fd, manifest.name)
+        signature_info = helper._select_optional_staged_file(root_fd, signature.name)
+        assert manifest_info is not None and signature_info is not None
+        claimed_manifest = running / "claimed.release.json"
+        claimed_signature = running / "claimed.release.json.sig"
+        helper._copy_staged_package(root_fd, manifest.name, manifest_info, claimed_manifest)
+        helper._copy_staged_package(root_fd, signature.name, signature_info, claimed_signature)
+        assert claimed_manifest.read_bytes() == b"manifest"
+        assert claimed_signature.read_bytes() == b"signature"
+    finally:
+        os.close(root_fd)
+
     # The managed staging root itself must not be a symlink.
     real_staged = base / "real-staged"
     real_staged.mkdir()

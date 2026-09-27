@@ -1065,3 +1065,10 @@ log "Framework runtime: ${FRAMEWORK_DIR}"
 log "Extensions: ${EXTENSIONS_DIR}"
 log "Reportsets: ${REPORTSETS_DIR}"
 log "Swagger endpoint: /api/tfd/reporting/network-availability/"
+
+# Reaching this point means every installer verification and service restart
+# succeeded. Clear the temporary-file EXIT trap explicitly so cleanup cannot
+# turn a completed self-update into a non-zero installer result.
+rm -f "${TMP_SETTINGS}" || true
+trap - EXIT
+exit 0

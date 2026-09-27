@@ -284,6 +284,20 @@ def _select_staged_package(root_fd: int, upload_id: str):
     return found[0]
 
 
+def _select_optional_staged_file(root_fd: int, name: str):
+    try:
+        info = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise SystemExit("unable to inspect staged signed release sidecar") from exc
+    if not stat.S_ISREG(info.st_mode):
+        raise SystemExit("staged signed release sidecar is not a regular file")
+    if info.st_size <= 0 or info.st_size > 1024 * 1024:
+        raise SystemExit("staged signed release sidecar has an invalid size")
+    return info
+
+
 def _copy_staged_package(root_fd: int, source_name: str, expected_info, destination: Path) -> Path:
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
@@ -365,6 +379,21 @@ def claim_job(job_id):
         target = RUNNING_ROOT / f"{job_id}{suffix}"
         _copy_staged_package(root_fd, source_name, source_info, target)
 
+        manifest_source = f"{upload_id}.release.json"
+        signature_source = f"{upload_id}.release.json.sig"
+        manifest_info = _select_optional_staged_file(root_fd, manifest_source)
+        signature_info = _select_optional_staged_file(root_fd, signature_source)
+        if (manifest_info is None) != (signature_info is None):
+            target.unlink(missing_ok=True)
+            raise SystemExit("detached signed update sidecars are incomplete")
+        running_manifest = None
+        running_signature = None
+        if manifest_info is not None and signature_info is not None:
+            running_manifest = RUNNING_ROOT / f"{job_id}.release.json"
+            running_signature = RUNNING_ROOT / f"{job_id}.release.json.sig"
+            _copy_staged_package(root_fd, manifest_source, manifest_info, running_manifest)
+            _copy_staged_package(root_fd, signature_source, signature_info, running_signature)
+
         preview = meta.get("preview") if isinstance(meta.get("preview"), dict) else {}
         if str(preview.get("component") or request.get("component")) != str(request.get("component")):
             target.unlink(missing_ok=True)
@@ -378,6 +407,8 @@ def claim_job(job_id):
             "allow_downgrade": bool(request.get("allow_downgrade", False)),
             "package_path": str(target),
             "package_filename": str(meta.get("filename") or source_name),
+            "release_manifest_path": str(running_manifest) if running_manifest is not None else None,
+            "release_signature_path": str(running_signature) if running_signature is not None else None,
         }
         req_path = running_request_path(job_id)
         atomic_json(req_path, immutable, mode=0o600, uid=0, gid=0)
@@ -1230,6 +1261,19 @@ def run_job(job_id):
             with private_update_work_dir(job_id) as work:
                 extract_archive(package, work)
                 source = detect_root(work, component)
+                detached_manifest = Path(str(job.get("release_manifest_path") or "")) if job.get("release_manifest_path") else None
+                detached_signature = Path(str(job.get("release_signature_path") or "")) if job.get("release_signature_path") else None
+                if (detached_manifest is None) != (detached_signature is None):
+                    raise RuntimeError("detached signed update sidecars are incomplete")
+                if detached_manifest is not None and detached_signature is not None:
+                    manifest_target = source / TREE_MANIFEST
+                    signature_target = source / TREE_SIGNATURE
+                    if manifest_target.exists() or signature_target.exists():
+                        raise RuntimeError("signed release metadata is ambiguous between archive and detached uploads")
+                    shutil.copyfile(detached_manifest, manifest_target)
+                    shutil.copyfile(detached_signature, signature_target)
+                    os.chmod(manifest_target, 0o600)
+                    os.chmod(signature_target, 0o600)
                 package_version = (source / "VERSION").read_text(encoding="utf-8").strip()
                 job["version"] = package_version
                 job["stage"] = "root-verify-staged"
@@ -1347,6 +1391,14 @@ def run_job(job_id):
                 package.unlink(missing_ok=True)
             except OSError:
                 pass
+            for sidecar_key in ("release_manifest_path", "release_signature_path"):
+                raw_sidecar = job.get(sidecar_key)
+                if not raw_sidecar:
+                    continue
+                try:
+                    Path(str(raw_sidecar)).unlink(missing_ok=True)
+                except OSError:
+                    pass
             try:
                 running_request_path(job_id).unlink(missing_ok=True)
             except OSError:
