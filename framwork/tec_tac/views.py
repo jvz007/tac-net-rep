@@ -16,8 +16,10 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from tacticalrmm.throttles import LoginDayThrottle, LoginMinThrottle
-from .throttles import TotpEnrollmentDayThrottle, TotpEnrollmentMinThrottle
+from .throttles import (
+    TotpEnrollmentDayThrottle, TotpEnrollmentMinThrottle,
+    TrustPolicyDayThrottle, TrustPolicyMinThrottle,
+)
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 
 from .module_manager import (
@@ -619,7 +621,7 @@ class SystemUpdateStatusView(APIView):
 )
 class SystemUpdateTrustPolicyView(APIView):
     permission_classes = [SessionAuthenticated]
-    throttle_classes = [LoginMinThrottle, LoginDayThrottle]
+    throttle_classes = [TrustPolicyMinThrottle, TrustPolicyDayThrottle]
 
     def get_throttles(self):
         if getattr(self.request, "method", "GET").upper() == "PUT":

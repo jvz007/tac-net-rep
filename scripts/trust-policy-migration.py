@@ -148,7 +148,14 @@ def migrate(current: Path, legacy: Path, environment: str) -> dict:
     if legacy_payload is not None:
         candidates.append(("legacy", legacy_payload))
 
-    source, winner = max(candidates, key=lambda item: LEVEL_RANK[item[1]["minimum_level"]])
+    # On equal trust floors, preserve the current root-owned policy exactly.
+    # A tie with the environment default or legacy state must not rewrite an
+    # administrator's metadata/timestamp on every upgrade.
+    source_preference = {"environment-default": 0, "legacy": 1, "current": 2}
+    source, winner = max(
+        candidates,
+        key=lambda item: (LEVEL_RANK[item[1]["minimum_level"]], source_preference[item[0]]),
+    )
     out = dict(winner)
     out["schema"] = 1
     if source == "legacy":

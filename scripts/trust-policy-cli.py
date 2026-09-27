@@ -13,6 +13,7 @@ import json
 import os
 import sys
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -30,6 +31,37 @@ MAX_HOURS = 168
 
 class PendingRevertError(RuntimeError):
     pass
+
+
+@contextmanager
+def policy_lock():
+    """Serialize all root trust-policy mutations and pending-revert recovery."""
+    POLICY_ROOT.mkdir(parents=True, exist_ok=True)
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0)
+    path = POLICY_ROOT / '.trust-policy.lock'
+    fd = os.open(path, flags, 0o600)
+    try:
+        st = os.fstat(fd)
+        if not stat_is_regular(st.st_mode):
+            raise RuntimeError('trust-policy lock must be a regular file')
+        os.fchmod(fd, 0o600)
+        try:
+            os.fchown(fd, 0, 0)
+        except PermissionError:
+            if os.environ.get('TEC_TAC_TEST_ALLOW_NONROOT') != '1':
+                raise
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
+def stat_is_regular(mode: int) -> bool:
+    import stat
+    return stat.S_ISREG(mode)
 
 
 def now() -> datetime:
@@ -207,7 +239,7 @@ def parse_iso(value: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
-def check_revert_due() -> dict:
+def _check_revert_due_locked() -> dict:
     try:
         pending = read_pending()
     except PendingRevertError as exc:
@@ -226,7 +258,12 @@ def check_revert_due() -> dict:
             'temporary_level': pending.get('temporary_level'),
             'previous_level': pending.get('previous_level'),
         }
-    return revert_due(change_id)
+    return _revert_due_locked(change_id)
+
+
+def check_revert_due() -> dict:
+    with policy_lock():
+        return _check_revert_due_locked()
 
 
 def confirm(current: str, target: str, hours: int, reason: str) -> None:
@@ -242,7 +279,7 @@ def confirm(current: str, target: str, hours: int, reason: str) -> None:
         raise RuntimeError('confirmation did not match; policy was not changed')
 
 
-def set_level(target: str, *, reason: str, hours: int) -> dict:
+def _set_level_locked(target: str, *, reason: str, hours: int) -> dict:
     current_payload = read_policy()
     current = str(current_payload['minimum_level'])
     try:
@@ -300,7 +337,12 @@ def set_level(target: str, *, reason: str, hours: int) -> dict:
     return {**updated, 'status': 'applied', 'temporary': True, 'revert_at': iso(expires), 'revert_level': previous_level, 'change_id': change_id}
 
 
-def revert_due(change_id: str) -> dict:
+def set_level(target: str, *, reason: str, hours: int) -> dict:
+    with policy_lock():
+        return _set_level_locked(target, reason=reason, hours=hours)
+
+
+def _revert_due_locked(change_id: str) -> dict:
     pending = read_pending()
     if not pending or str(pending.get('change_id') or '') != str(change_id or ''):
         return {'status': 'superseded_or_missing'}
@@ -321,6 +363,11 @@ def revert_due(change_id: str) -> dict:
     return {**restored, 'status': 'reverted', 'from_level': current}
 
 
+def revert_due(change_id: str) -> dict:
+    with policy_lock():
+        return _revert_due_locked(change_id)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog='tec-tac-trust-policy', description='Manage the root-owned Tec-Tac package/update trust floor.')
     sub = parser.add_subparsers(dest='command', required=True)
@@ -339,8 +386,16 @@ def main() -> int:
         try:
             pending = read_pending()
         except PendingRevertError as exc:
-            recovery = recover_corrupt_pending(exc)
-            result = {**read_policy(), 'pending_revert_recovery': recovery}
+            with policy_lock():
+                # Re-read under the mutation lock: another process may have
+                # repaired or replaced the pending state after the first read.
+                try:
+                    pending = read_pending()
+                except PendingRevertError as locked_exc:
+                    recovery = recover_corrupt_pending(locked_exc)
+                    result = {**read_policy(), 'pending_revert_recovery': recovery}
+                else:
+                    result = read_policy() if not pending else {**read_policy(), 'pending_revert': pending}
         else:
             if pending:
                 result = {**result, 'pending_revert': pending}

@@ -714,9 +714,12 @@ chmod 0644 "${TRUST_POLICY_REVERT_SERVICE}" "${TRUST_POLICY_REVERT_TIMER}"
 systemctl daemon-reload
 systemctl enable tec-tac-trust-policy-revert.service >/dev/null
 systemctl enable --now tec-tac-trust-policy-revert.timer >/dev/null
-# Run one immediate check during upgrade so an already-expired 1.15.50
-# pending revert is not left lowered until the next timer tick.
-${TRUST_POLICY_CLI} check-revert >/dev/null
+# Run one immediate check during upgrade so an already-expired pending revert
+# is not left lowered until the next timer tick. The timer is the durable
+# recovery path, so an unexpected one-shot failure must not abort Core install.
+if ! TRUST_POLICY_CHECK_OUTPUT="$(${TRUST_POLICY_CLI} check-revert 2>&1)"; then
+    log "WARNING: immediate trust-policy revert check failed; the persistent timer will retry: ${TRUST_POLICY_CHECK_OUTPUT}"
+fi
 log "Installed persistent trust-policy revert service/timer."
 
 SYSTEM_UPDATE_ROOT="${TEC_TAC_SYSTEM_UPDATE_ROOT:-/var/lib/tec-tac/system-updates}"

@@ -51,6 +51,27 @@ with tempfile.TemporaryDirectory() as td:
     assert saved["minimum_level"] == "secure_signed"
     assert str(saved["updated_by"]).startswith("installer-legacy-policy-migration")
 
+    # L29: when current equals the environment default, the current policy is
+    # authoritative and must not be rewritten on every upgrade.
+    current = base / "equal-default/etc/update-trust-policy.json"
+    legacy = base / "equal-default/var/update-trust-policy.json"
+    write(current, "signed_production", "security-admin")
+    before = current.read_bytes()
+    result = mod.migrate(current, legacy, "production")
+    assert result["minimum_level"] == "signed_production"
+    assert result["updated_by"] == "security-admin"
+    assert current.read_bytes() == before
+
+    # A current policy also wins an equal-strength tie with legacy state.
+    current = base / "equal-legacy/etc/update-trust-policy.json"
+    legacy = base / "equal-legacy/var/update-trust-policy.json"
+    write(current, "secure_signed", "current-admin")
+    write(legacy, "secure_signed", "legacy-admin")
+    before = current.read_bytes()
+    result = mod.migrate(current, legacy, "production")
+    assert result["updated_by"] == "current-admin"
+    assert current.read_bytes() == before
+
     # A stronger legacy floor wins over an existing weaker current floor.
     current = base / "merge/etc/update-trust-policy.json"
     legacy = base / "merge/var/update-trust-policy.json"

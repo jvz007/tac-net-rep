@@ -1,18 +1,20 @@
-# FIXING.md — Core 1.15.132
+# FIXING.md — Core 1.15.133
 
 ## Review scope
 
-This release is intentionally limited to the session/MFA tracker batch: **M2, L80, L88 and L89**.
+This release is intentionally limited to the tracker trust-policy batch: **M9, L26, L27, L28, L29 and L30**.
 
 Review that:
 
-1. Every Tec-Tac trust-row revocation path invalidates Tactical Knox at the common `_revoke_locked` boundary.
-2. A legacy revoked row without `knox_digest` fails closed rather than leaving an identifiable user's Tactical tokens live.
-3. Retention preserves an old empty-digest tombstone while that username still has a live Knox credential.
-4. Backup-code verification reserves the tight five-attempt budget before `consume_backup_code` executes.
-5. Wrong-password failures use a separate, looser per-username budget and do not consume the five backup-code verification slots.
-6. Existing session/MFA, System Update, Module Management and release-integrity regressions remain green.
+1. `set`, `check-revert`, explicit revert and corrupt-pending recovery cannot race each other.
+2. Corrupt pending state still moves the active policy to `secure_signed` before clearing the pending file.
+3. Trust-policy PUT is protected by authenticated Tec-Tac throttles rather than Tactical login throttles.
+4. A failed immediate installer `check-revert` cannot abort installation; the timer remains enabled for retry.
+5. Equal-strength migration ties preserve the current root-owned policy bytes and administrator metadata.
+6. Both `help_article` and `help_url` are present in trust-policy/help responses.
 
 ## Explicitly out of scope
 
-No unrelated tracker findings are included in this release.
+- Scheduler findings M13/M14 and scheduler Low findings.
+- Backup, maintenance, housekeeping and module-install findings.
+- UI findings.

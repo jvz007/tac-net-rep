@@ -107,4 +107,6 @@ with tempfile.TemporaryDirectory() as td:
 print("[TEST] PASS root-owned shared update/module trust policy")
 
 # Built-in Help article contract: Core must not emit a server-supplied URL.
-assert "help_url" not in trust_policy.console_guidance("signed_development")
+guidance = trust_policy.console_guidance("signed_development")
+assert guidance["help_url"] == "/tec-tac/help/system-updates#trust-policy"
+assert trust_policy.get_policy()["help_url"] == "/tec-tac/help/system-updates#trust-policy"

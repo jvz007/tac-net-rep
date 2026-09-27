@@ -44,6 +44,16 @@ class AuditWriteDayThrottle(_AuthenticatedAttemptThrottle):
     rate = "1000/day"
 
 
+class TrustPolicyMinThrottle(_AuthenticatedAttemptThrottle):
+    scope = "tec_tac_trust_policy_min"
+    rate = "10/min"
+
+
+class TrustPolicyDayThrottle(_AuthenticatedAttemptThrottle):
+    scope = "tec_tac_trust_policy_day"
+    rate = "100/day"
+
+
 def _account_token(value: object) -> str:
     raw = str(value or "").strip().casefold()
     return hashlib.sha256(raw.encode("utf-8", errors="ignore")).hexdigest()
