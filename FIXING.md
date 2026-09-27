@@ -1,4 +1,4 @@
-# FIXING.md — Core 1.15.116
+# FIXING.md — Core 1.15.117
 
 This build continues from the review-passed 1.15.115-1 baseline and respects the agreed maximum of **1 Medium + 5 Low** findings per pass.
 

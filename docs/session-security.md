@@ -278,6 +278,17 @@ Core force-audits rejected setup/password proofs as
 `mfa_enrollment_proof_failed` and successful one-time issuance as
 `mfa_enrollment_seed_issued`. Audit records never contain the TOTP seed.
 
+## Administrator MFA recovery endpoint
+
+Account administrators can inspect and invalidate a Tactical user's Tec-Tac MFA backup-code state through the Core account-security boundary:
+
+```text
+GET    /api/tfd/access/users/<user_id>/mfa/
+DELETE /api/tfd/access/users/<user_id>/mfa/
+```
+
+`GET` returns the target user, backup-code status, and whether the requester may invalidate the protected account's recovery codes. `DELETE` invalidates the target user's current backup-code set and accepts an optional `reason`. Both operations require account-management permission; protected superuser/root targets additionally require effective-superuser authority. Responses are marked `no-store` so MFA recovery state is not cached by the browser or intermediaries.
+
 ## MFA backup codes
 
 Tec-Tac adds one-time MFA backup codes without changing Tactical's user model or TOTP secret. Backup codes are stored in `TecTacMfaBackupCode` using Django password hashes; plaintext codes are returned only once when a user generates a new set. Generating a set requires the user's current password and a current TOTP code and invalidates every previous unused code.

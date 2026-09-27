@@ -1,4 +1,4 @@
-# Tec-Tac Core 1.15.116
+# Tec-Tac Core 1.15.117
 
 ## Scope
 
@@ -12,7 +12,7 @@ Core's shared module/capability/repository version comparator treated a numeric 
 
 Tec-Tac uses numeric `-N` suffixes as release rebuilds. The shared comparator now follows the same ordering already used by System Updates:
 
-- `1.15.115 < 1.15.115-1 < 1.15.115-2 < 1.15.115-10 < 1.15.116`;
+- `1.15.115 < 1.15.115-1 < 1.15.115-2 < 1.15.115-10 < 1.15.117`;
 - ordinary nonnumeric prerelease suffixes remain below the suffix-free release;
 - dependency constraints, capability constraints and online module update selection therefore agree with release-pipeline ordering.
 
@@ -24,3 +24,12 @@ The module-management foundation still required the old inline `os.chmod(tmp, 0o
 
 - `tests/version-rebuild-ordering.py` verifies base-to-rebuild ordering, numeric rebuild ordering, next-core-version ordering, prerelease compatibility and exact rebuild constraints.
 - `tests/module-management-foundation.sh` now validates the current atomic module-state cleanup implementation and runtime-readable final mode.
+
+## Review follow-up
+
+- M13: added regression coverage proving dynamic scheduler filters reject Tactical scope aliases when they are encoded as nested filter values, while ordinary module-owned filter fields remain valid.
+- L02: added a release guard proving uninstall uses the safe config loader and never sources the Tec-Tac config file as shell code.
+- L03: added a release guard requiring fixed `/usr/bin/python3` for privileged installer and recovery Python calls.
+- L50: documented the administrator MFA recovery status/invalidation endpoint and its authorization boundary.
+- L51: guarded removal of the obsolete `timedelta` import from `views.py`.
+- L54: added a release guard for stable pagination validation messages so raw `int()` exception text is never returned.

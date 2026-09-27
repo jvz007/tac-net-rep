@@ -56,6 +56,30 @@ class SchedulerTargetShapeApiTests(SimpleTestCase):
         })
         self.assertEqual(response.status_code, 400)
 
+    def test_rejects_scope_aliases_in_nested_dynamic_filter_values(self):
+        cases = [
+            {"field": "site_id", "operator": "eq", "value": 99},
+            {"and": [{"field": "CLIENT_IDS", "operator": "in", "value": [1, 2]}]},
+            {"rules": [{"lhs": " agent_id ", "rhs": "abc"}]},
+            {"selector": {"column": "endpoints"}},
+        ]
+        for filt in cases:
+            with self.subTest(filter=filt):
+                response = self._post({
+                    "type": "dynamic",
+                    "scope": {"type": "client", "ids": [1]},
+                    "filter": filt,
+                })
+                self.assertEqual(response.status_code, 400)
+
+    def test_allows_non_scope_nested_dynamic_filter_values(self):
+        response = self._post({
+            "type": "dynamic",
+            "scope": {"type": "client", "ids": [1]},
+            "filter": {"and": [{"field": "os", "operator": "eq", "value": "windows"}]},
+        })
+        self.assertEqual(response.status_code, 201)
+
     def test_saved_native_targets_are_canonical(self):
         response = self._post({"type": "endpoints", "ids": ["agent-a", "agent-a", 42]})
         self.assertEqual(response.status_code, 201)

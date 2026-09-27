@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.116",
+  "version": "1.15.117",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -19,7 +19,7 @@
     {
       "path": "FIXING.md",
       "size": 1034,
-      "sha256": "82cd28321abbfedae3e47e2efd49853f2f57936d0349fbd895b7d6e52d26c7e3"
+      "sha256": "b914e392fcfdd5ecfcce3a3d575a6b6693bdaca6a6b9171aee6d39f871df3679"
     },
     {
       "path": "LICENSE",
@@ -37,14 +37,14 @@
       "sha256": "f4f304390f9a3e8ebb9ba84ecef8275ddc2ed7ed130f860f52caa668dd70bfe5"
     },
     {
-      "path": "RELEASE_NOTES_1.15.116.md",
-      "size": 1803,
-      "sha256": "d2701cb3d31277162c6416ccf176ee85cd5848ea78315df460eaef84000a50e7"
+      "path": "RELEASE_NOTES_1.15.117.md",
+      "size": 2578,
+      "sha256": "08d7a90e1c24a58884a7a21bd1b47ac45f328b424d9a0196c0b185885b1780c1"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "c2cb2de146ff829c627718842b6f129b3fa06ca7087c9bc02c90a6b07b866244"
+      "sha256": "fe0d3c1b52495f2adfe21213e0cb6c68edb8d2365244c961dc9b0fb8cc6b9bf1"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -693,8 +693,8 @@
     },
     {
       "path": "docs/session-security.md",
-      "size": 13565,
-      "sha256": "edbe63dea873e7fcbe32bcbfb7d5315db63094521aadb7cc7d699283fa438138"
+      "size": 14321,
+      "sha256": "157764e41473ee53b35f19f08b1e15554287554b15200d5c8816ed26927e0dd2"
     },
     {
       "path": "docs/system-update-signed-releases.md",
@@ -1338,8 +1338,8 @@
     },
     {
       "path": "framwork/tec_tac/tests/test_scheduler_target_scope.py",
-      "size": 4819,
-      "sha256": "dbb58fe4fceb932daccc1c3598d89cc03e287a1f0b5a4fa2c913735794c40f4e"
+      "size": 5843,
+      "sha256": "632bcca8b7e495a1f09c5256a45f4adae9614621fbc1ed3bdbe8a8f218457ee7"
     },
     {
       "path": "framwork/tec_tac/throttles.py",
@@ -1549,7 +1549,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "2299281f205ca9b91eefcf0502714ea97fca628886dd8632135db91e0c4254ee"
+      "sha256": "1e60a0876dbce57f08daf7b9adb1b302126690d954b1d8d41295ecd7f4918ac6"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -1825,6 +1825,11 @@
       "path": "tests/notice-center-foundation.sh",
       "size": 1411,
       "sha256": "da0c41c25349d0da7f859241f2014f31990b0077d30d51d8444f0fb18146c3a0"
+    },
+    {
+      "path": "tests/open-list-closure-1.15.117.py",
+      "size": 1873,
+      "sha256": "f60e50a3394851455bb2f1edaebe98f028f19573be8b5159c5c2fa881d151494"
     },
     {
       "path": "tests/optional-reportset-foundation.sh",
