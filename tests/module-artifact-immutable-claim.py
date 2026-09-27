@@ -6,9 +6,38 @@ import importlib.util
 import os
 import stat
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@contextmanager
+def root_private_fixture(path: Path):
+    """Model the root-owned claim directory in non-root CI only."""
+    if os.geteuid() == 0:
+        yield
+        return
+    real_stat = Path.stat
+    real_fchown = os.fchown
+    target = path.resolve()
+    def fake_stat(self, *args, **kwargs):
+        info = real_stat(self, *args, **kwargs)
+        try:
+            current = Path(self).resolve()
+        except OSError:
+            current = Path(self)
+        if current == target:
+            values = list(info); values[4] = 0
+            return os.stat_result(values)
+        return info
+    Path.stat = fake_stat
+    os.fchown = lambda fd, uid, gid: None
+    try:
+        yield
+    finally:
+        Path.stat = real_stat
+        os.fchown = real_fchown
 
 
 def load(name: str, path: Path):
@@ -40,50 +69,51 @@ def exercise_v1():
         os.chmod(private, 0o700)
         mod.STAGED_ROOT = staged
 
-        source = staged / "package.zip"
-        source.write_bytes(b"SIGNED-BYTES")
-        original_inode = source.stat().st_ino
-        fd = os.open(source, os.O_RDWR)
-        try:
-            target = private / "package.zip"
-            claimed = mod._private_artifact_copy(source, target, "module package")
-            assert claimed == target
-            assert not source.exists(), "staged pathname must be removed after snapshot"
-            assert target.stat().st_ino != original_inode, "claim must create a new inode"
-            assert_private(target)
-            before = target.read_bytes()
-            os.lseek(fd, 0, os.SEEK_SET)
-            os.write(fd, b"ATTACKED!!!!")
-            os.fsync(fd)
-            assert target.read_bytes() == before == b"SIGNED-BYTES", "old writable fd changed privileged snapshot"
-        finally:
-            os.close(fd)
+        with root_private_fixture(private):
+            source = staged / "package.zip"
+            source.write_bytes(b"SIGNED-BYTES")
+            original_inode = source.stat().st_ino
+            fd = os.open(source, os.O_RDWR)
+            try:
+                target = private / "package.zip"
+                claimed = mod._private_artifact_copy(source, target, "module package")
+                assert claimed == target
+                assert not source.exists(), "staged pathname must be removed after snapshot"
+                assert target.stat().st_ino != original_inode, "claim must create a new inode"
+                assert_private(target)
+                before = target.read_bytes()
+                os.lseek(fd, 0, os.SEEK_SET)
+                os.write(fd, b"ATTACKED!!!!")
+                os.fsync(fd)
+                assert target.read_bytes() == before == b"SIGNED-BYTES", "old writable fd changed privileged snapshot"
+            finally:
+                os.close(fd)
 
-        victim = staged / "victim.zip"
-        victim.write_bytes(b"victim")
-        link = staged / "link.zip"
-        link.symlink_to(victim.name)
-        try:
-            mod._private_artifact_copy(link, private / "link-copy.zip", "module package")
-        except SystemExit:
-            pass
-        else:
-            raise AssertionError("v1 claim followed a staged symlink")
+            victim = staged / "victim.zip"
+            victim.write_bytes(b"victim")
+            link = staged / "link.zip"
+            link.symlink_to(victim.name)
+            try:
+                mod._private_artifact_copy(link, private / "link-copy.zip", "module package")
+            except SystemExit:
+                pass
+            else:
+                raise AssertionError("v1 claim followed a staged symlink")
 
-        # A Tactical-controlled intermediate directory symlink must not let the
-        # root helper reach or unlink an arbitrary host file.
-        outside = base / "outside"
-        outside.mkdir()
-        outside_victim = outside / "shadow"
-        outside_victim.write_bytes(b"do-not-delete")
-        (staged / "sub").symlink_to(outside, target_is_directory=True)
-        try:
-            mod._private_artifact_copy(staged / "sub" / outside_victim.name, private / "victim-copy", "module package")
-        except SystemExit:
-            pass
-        else:
-            raise AssertionError("v1 claim accepted a symlinked staging subdirectory")
-        assert outside_victim.read_bytes() == b"do-not-delete", "v1 claim deleted or changed external victim"
+            # A Tactical-controlled intermediate directory symlink must not let the
+            # root helper reach or unlink an arbitrary host file.
+            outside = base / "outside"
+            outside.mkdir()
+            outside_victim = outside / "shadow"
+            outside_victim.write_bytes(b"do-not-delete")
+            (staged / "sub").symlink_to(outside, target_is_directory=True)
+            try:
+                mod._private_artifact_copy(staged / "sub" / outside_victim.name, private / "victim-copy", "module package")
+            except SystemExit:
+                pass
+            else:
+                raise AssertionError("v1 claim accepted a symlinked staging subdirectory")
+            assert outside_victim.read_bytes() == b"do-not-delete", "v1 claim deleted or changed external victim"
 
 
 def exercise_v2():
@@ -101,54 +131,55 @@ def exercise_v2():
         mod.BUNDLES_ROOT = staged / "bundles"
         mod.BUNDLES_ROOT.mkdir(mode=0o770)
 
-        source = staged / "bundle.zip"
-        source.write_bytes(b"SIGNED-BUNDLE")
-        original_inode = source.stat().st_ino
-        fd = os.open(source, os.O_RDWR)
-        try:
-            target = Path(mod._claim_artifact(source, private, "bundle"))
-            assert not source.exists(), "staged pathname must be removed after snapshot"
-            assert target.stat().st_ino != original_inode, "v2 claim must create a new inode"
-            assert_private(target)
-            before = target.read_bytes()
-            os.lseek(fd, 0, os.SEEK_SET)
-            os.write(fd, b"ATTACKED-BUNDLE")
-            os.fsync(fd)
-            assert target.read_bytes() == before == b"SIGNED-BUNDLE", "old writable fd changed v2 snapshot"
-        finally:
-            os.close(fd)
+        with root_private_fixture(private):
+            source = staged / "bundle.zip"
+            source.write_bytes(b"SIGNED-BUNDLE")
+            original_inode = source.stat().st_ino
+            fd = os.open(source, os.O_RDWR)
+            try:
+                target = Path(mod._claim_artifact(source, private, "bundle"))
+                assert not source.exists(), "staged pathname must be removed after snapshot"
+                assert target.stat().st_ino != original_inode, "v2 claim must create a new inode"
+                assert_private(target)
+                before = target.read_bytes()
+                os.lseek(fd, 0, os.SEEK_SET)
+                os.write(fd, b"ATTACKED-BUNDLE")
+                os.fsync(fd)
+                assert target.read_bytes() == before == b"SIGNED-BUNDLE", "old writable fd changed v2 snapshot"
+            finally:
+                os.close(fd)
 
-        victim = staged / "victim.zip"
-        victim.write_bytes(b"victim")
-        link = staged / "link.zip"
-        link.symlink_to(victim.name)
-        try:
-            mod._claim_artifact(link, private, "bundle")
-        except SystemExit:
-            pass
-        else:
-            raise AssertionError("v2 claim followed a staged symlink")
+            victim = staged / "victim.zip"
+            victim.write_bytes(b"victim")
+            link = staged / "link.zip"
+            link.symlink_to(victim.name)
+            try:
+                mod._claim_artifact(link, private, "bundle")
+            except SystemExit:
+                pass
+            else:
+                raise AssertionError("v2 claim followed a staged symlink")
 
-        outside = base / "outside"
-        outside.mkdir()
-        outside_victim = outside / "shadow"
-        outside_victim.write_bytes(b"do-not-delete")
-        (staged / "sub").symlink_to(outside, target_is_directory=True)
-        try:
-            mod._claim_artifact(staged / "sub" / outside_victim.name, private, "bundle")
-        except SystemExit:
-            pass
-        else:
-            raise AssertionError("v2 claim accepted a symlinked staging subdirectory")
-        assert outside_victim.read_bytes() == b"do-not-delete", "v2 claim deleted or changed external victim"
+            outside = base / "outside"
+            outside.mkdir()
+            outside_victim = outside / "shadow"
+            outside_victim.write_bytes(b"do-not-delete")
+            (staged / "sub").symlink_to(outside, target_is_directory=True)
+            try:
+                mod._claim_artifact(staged / "sub" / outside_victim.name, private, "bundle")
+            except SystemExit:
+                pass
+            else:
+                raise AssertionError("v2 claim accepted a symlinked staging subdirectory")
+            assert outside_victim.read_bytes() == b"do-not-delete", "v2 claim deleted or changed external victim"
 
-        # Legitimate signed bundle artifacts are direct children of bundles/.
-        bundle_source = mod.BUNDLES_ROOT / "12345678-1234-1234-1234-123456789abc.zip"
-        bundle_source.write_bytes(b"SIGNED-BUNDLE-ROOT")
-        bundle_target = Path(mod._claim_artifact(bundle_source, private, "bundle-root"))
-        assert bundle_target.read_bytes() == b"SIGNED-BUNDLE-ROOT"
-        assert not bundle_source.exists()
-        assert_private(bundle_target)
+            # Legitimate signed bundle artifacts are direct children of bundles/.
+            bundle_source = mod.BUNDLES_ROOT / "12345678-1234-1234-1234-123456789abc.zip"
+            bundle_source.write_bytes(b"SIGNED-BUNDLE-ROOT")
+            bundle_target = Path(mod._claim_artifact(bundle_source, private, "bundle-root"))
+            assert bundle_target.read_bytes() == b"SIGNED-BUNDLE-ROOT"
+            assert not bundle_source.exists()
+            assert_private(bundle_target)
 
 
 def static_guards():

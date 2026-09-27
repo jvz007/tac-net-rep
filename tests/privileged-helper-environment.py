@@ -5,10 +5,30 @@ import importlib.util
 import os
 import stat
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXED_CONFIG = Path('/opt/tec-tac/etc/tec-tac.conf')
+
+
+@contextmanager
+def root_owned_fixture_stats():
+    """Let an unprivileged CI fixture model a root-owned config without sudo."""
+    if os.geteuid() == 0:
+        yield
+        return
+    original = Path.stat
+    def fake_stat(self, *args, **kwargs):
+        info = original(self, *args, **kwargs)
+        values = list(info)
+        values[4] = 0  # st_uid only; modes/symlink checks remain real.
+        return os.stat_result(values)
+    Path.stat = fake_stat
+    try:
+        yield
+    finally:
+        Path.stat = original
 
 
 def load(name: str, relative: str):
@@ -43,55 +63,55 @@ for helper in helpers:
     assert allowed['TEC_TAC_UI_ROOT'] == '/safe/ui'
     assert 'TEC_TAC_ATTACKER_OVERRIDE' not in allowed
 
-with tempfile.TemporaryDirectory(prefix='tectac-env-test-') as td:
-    root = Path(td)
-    safe = root / 'tec-tac.conf'
-    safe.write_text('TEC_TAC_FRAMEWORK_SIGNED_RELEASE_MIN_VERSION=9.9.9\nTACTICAL_USER=tactical\n', encoding='utf-8')
-    safe.chmod(0o644)
+with root_owned_fixture_stats():
+    with tempfile.TemporaryDirectory(prefix='tectac-env-test-') as td:
+        root = Path(td)
+        safe = root / 'tec-tac.conf'
+        safe.write_text('TEC_TAC_FRAMEWORK_SIGNED_RELEASE_MIN_VERSION=9.9.9\nTACTICAL_USER=tactical\n', encoding='utf-8')
+        safe.chmod(0o644)
 
-    for helper in helpers:
-        helper.CONFIG = safe
-        parsed = helper.load_config()
+        for helper in helpers:
+            helper.CONFIG = safe
+            parsed = helper.load_config()
+            assert parsed.get('TACTICAL_USER') == 'tactical'
+
+        system_update = helpers[-1]
+        assert system_update._signed_release_min_version('framework') == '9.9.9'
+
+        writable = root / 'writable.conf'
+        writable.write_text('TACTICAL_USER=tactical\n', encoding='utf-8')
+        writable.chmod(0o666)
+        for helper in helpers:
+            helper.CONFIG = writable
+            try:
+                helper.load_config()
+            except RuntimeError as exc:
+                assert 'root-owned' in str(exc) or 'writable' in str(exc)
+            else:
+                raise AssertionError(f'{helper.__name__} accepted group/world-writable config')
+
+        target = root / 'target.conf'
+        target.write_text('TACTICAL_USER=tactical\n', encoding='utf-8')
+        target.chmod(0o644)
+        link = root / 'link.conf'
+        link.symlink_to(target)
+        for helper in helpers:
+            helper.CONFIG = link
+            try:
+                helper.load_config()
+            except RuntimeError as exc:
+                assert 'non-symlink' in str(exc)
+            else:
+                raise AssertionError(f'{helper.__name__} accepted symlinked config')
+
+        trust.CONFIG = safe
+        parsed = trust._config()
         assert parsed.get('TACTICAL_USER') == 'tactical'
-
-    system_update = helpers[-1]
-    assert system_update._signed_release_min_version('framework') == '9.9.9'
-
-    writable = root / 'writable.conf'
-    writable.write_text('TACTICAL_USER=tactical\n', encoding='utf-8')
-    writable.chmod(0o666)
-    for helper in helpers:
-        helper.CONFIG = writable
+        trust.CONFIG = link
         try:
-            helper.load_config()
-        except RuntimeError as exc:
-            assert 'root-owned' in str(exc) or 'writable' in str(exc)
-        else:
-            raise AssertionError(f'{helper.__name__} accepted group/world-writable config')
-
-    target = root / 'target.conf'
-    target.write_text('TACTICAL_USER=tactical\n', encoding='utf-8')
-    target.chmod(0o644)
-    link = root / 'link.conf'
-    link.symlink_to(target)
-    for helper in helpers:
-        helper.CONFIG = link
-        try:
-            helper.load_config()
+            trust._config()
         except RuntimeError as exc:
             assert 'non-symlink' in str(exc)
         else:
-            raise AssertionError(f'{helper.__name__} accepted symlinked config')
-
-    trust.CONFIG = safe
-    parsed = trust._config()
-    assert parsed.get('TACTICAL_USER') == 'tactical'
-    trust.CONFIG = link
-    try:
-        trust._config()
-    except RuntimeError as exc:
-        assert 'non-symlink' in str(exc)
-    else:
-        raise AssertionError('privileged trust helper accepted symlinked config')
-
+            raise AssertionError('privileged trust helper accepted symlinked config')
 print('[TEST] PASS privileged helper environment/config trust boundary')

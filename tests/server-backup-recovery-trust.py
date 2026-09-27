@@ -17,6 +17,29 @@ h = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(h)
 
 
+# Recovery trust production paths are intentionally root-owned. For non-root CI,
+# retain the real type/symlink/mode checks while modelling only st_uid == 0.
+if os.geteuid() != 0:
+    def _fixture_secure_dir(path, *, private=False):
+        info = path.lstat()
+        if not h.stat.S_ISDIR(info.st_mode) or h.stat.S_ISLNK(info.st_mode):
+            raise RuntimeError(f"recovery trust directory is not a real directory: {path}")
+        forbidden = 0o077 if private else 0o022
+        if info.st_mode & forbidden:
+            raise RuntimeError(f"recovery trust directory permissions are unsafe: {path}")
+        return info
+    def _fixture_secure_file(path, *, private=False):
+        info = path.lstat()
+        if not h.stat.S_ISREG(info.st_mode) or h.stat.S_ISLNK(info.st_mode):
+            raise RuntimeError(f"recovery trust file is not a regular file: {path}")
+        forbidden = 0o077 if private else 0o022
+        if info.st_mode & forbidden:
+            raise RuntimeError(f"recovery trust file permissions are unsafe: {path}")
+        return info
+    h._secure_root_directory = _fixture_secure_dir
+    h._secure_regular_root_file = _fixture_secure_file
+
+
 def make_identity(base: pathlib.Path, key_id: str, *, trust=True):
     signing = base / f"sign-{key_id}"
     trust_root = base / f"trust-{key_id}"

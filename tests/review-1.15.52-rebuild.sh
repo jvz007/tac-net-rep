@@ -104,35 +104,39 @@ assert 'socket.create_connection((str(address), port)' in source
 assert 'opener.open(' not in source
 PY
 
-# 5. A legacy zero housekeeping policy is visible in scans but remains blocked
-#    from destructive purge unless explicitly acknowledged.
+# 5. Zero housekeeping retention is invalid at the helper boundary. Historical
+#    callers must be repaired by the policy layer before reaching the root helper.
 python3 - "$ROOT" <<'PY'
 import importlib.util, pathlib, tempfile, sys
 root=pathlib.Path(sys.argv[1])
 spec=importlib.util.spec_from_file_location('hk',root/'scripts/housekeeping-helper.py'); h=importlib.util.module_from_spec(spec); spec.loader.exec_module(h)
 with tempfile.TemporaryDirectory() as td:
     base=pathlib.Path(td); h.STATE=base; h.ROOT=base/'housekeeping'; h.RESULTS=h.ROOT/'results'
-    h.CATEGORY_PATHS={'x':[(base/'x','files','*')]}; h.DEFAULTS={'x':{'mode':'keep_count','keep':0}}
+    h.CATEGORY_PATHS={'x':[(base/'x','files','*')]}; h.DEFAULTS={'x':{'mode':'keep_count','keep':1}}
     (base/'x').mkdir(); (base/'x'/'a').write_text('a')
-    items,purge,protected,active,unreadable,blocked,reason=h.select('x',{'mode':'keep_count','keep':0},dry_run=True)
-    assert len(items)==1 and purge==[] and blocked and 'allow_zero_destructive' in reason
-    try: h.select('x',{'mode':'keep_count','keep':0},dry_run=False)
-    except RuntimeError: pass
-    else: raise AssertionError('destructive zero policy was not blocked')
+    items,purge,protected,active,unreadable,blocked,reason=h.select('x',{'mode':'keep_count','keep':1},dry_run=True)
+    assert len(items)==1 and purge==[] and not blocked and reason is None
+    for dry_run in (True, False):
+        try: h.select('x',{'mode':'keep_count','keep':0},dry_run=dry_run)
+        except RuntimeError: pass
+        else: raise AssertionError('zero housekeeping retention was accepted')
 PY
 
-# Legacy zero policies may be re-saved unchanged without authorizing purge.
+# Legacy stored zero policies are repaired on read; a new explicit zero save is rejected.
 python3 - "$ROOT" <<'PY'
 import importlib.util, json, pathlib, tempfile, sys
 root=pathlib.Path(sys.argv[1])
 spec=importlib.util.spec_from_file_location('hkcore',root/'framwork/tec_tac/housekeeping.py'); h=importlib.util.module_from_spec(spec); spec.loader.exec_module(h)
 with tempfile.TemporaryDirectory() as td:
-    base=pathlib.Path(td); h.ROOT=base; h.CONFIG=base/'config.json'
+    base=pathlib.Path(td); h.ROOT=base; h.CONFIG_DIR=base; h.CONFIG=base/'config.json'
     legacy={k:dict(v) for k,v in h.DEFAULT_POLICIES.items()}
     first=next(iter(legacy)); field='days' if legacy[first]['mode']=='age_days' else 'keep'; legacy[first][field]=0
     h.CONFIG.write_text(json.dumps({'policies':legacy}))
-    saved=h.save_config({'policies':legacy})
-    assert saved['policies'][first][field] == 0 and saved['allow_zero_destructive'] is False
+    repaired=h._load_config()
+    assert repaired['policies'][first][field] == h.DEFAULT_POLICIES[first][field]
+    try: h.save_config({'policies':legacy})
+    except h.HousekeepingError: pass
+    else: raise AssertionError('new explicit zero policy was accepted')
 PY
 
 # 6. Shared config loader must propagate malformed-config failure.
