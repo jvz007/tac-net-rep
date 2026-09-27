@@ -16,6 +16,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+CONFIG_FILE = Path('/opt/tec-tac/etc/tec-tac.conf')
 POLICY_ROOT = Path('/etc/tec-tac/policy')
 POLICY_FILE = POLICY_ROOT / 'update-trust-policy.json'
 PENDING_FILE = POLICY_ROOT / 'pending-trust-policy-revert.json'
@@ -25,6 +26,10 @@ LEVELS = ('unsigned', 'signed_development', 'signed_production', 'secure_signed'
 LEVEL_RANK = {name: idx for idx, name in enumerate(LEVELS)}
 DEFAULT_HOURS = 8
 MAX_HOURS = 168
+
+
+class PendingRevertError(RuntimeError):
+    pass
 
 
 def now() -> datetime:
@@ -102,9 +107,70 @@ def read_pending() -> dict | None:
         return None
     try:
         payload = json.loads(PENDING_FILE.read_text(encoding='utf-8'))
-    except (OSError, json.JSONDecodeError):
-        return None
-    return payload if isinstance(payload, dict) else None
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise PendingRevertError(f'pending trust-policy revert is unreadable: {exc}') from exc
+    if not isinstance(payload, dict):
+        raise PendingRevertError('pending trust-policy revert must contain a JSON object')
+    try:
+        if int(payload.get('schema', 0) or 0) != 1:
+            raise PendingRevertError('pending trust-policy revert schema is invalid')
+    except (TypeError, ValueError) as exc:
+        raise PendingRevertError('pending trust-policy revert schema is invalid') from exc
+    if not str(payload.get('change_id') or '').strip():
+        raise PendingRevertError('pending trust-policy revert is missing change_id')
+    previous = str(payload.get('previous_level') or '').strip().lower()
+    temporary = str(payload.get('temporary_level') or '').strip().lower()
+    if previous not in LEVEL_RANK or temporary not in LEVEL_RANK:
+        raise PendingRevertError('pending trust-policy revert levels are invalid')
+    try:
+        parse_iso(str(payload.get('expires_at') or ''))
+    except RuntimeError as exc:
+        raise PendingRevertError(str(exc)) from exc
+    return payload
+
+
+def server_environment() -> str:
+    value = 'production'
+    try:
+        if CONFIG_FILE.is_file():
+            for raw in CONFIG_FILE.read_text(encoding='utf-8').splitlines():
+                line = raw.strip()
+                if not line or line.startswith('#') or '=' not in line:
+                    continue
+                key, item = line.split('=', 1)
+                if key.strip() == 'TEC_TAC_ENVIRONMENT':
+                    value = item.strip().lower()
+                    break
+    except (OSError, UnicodeError):
+        # A missing/unreadable config must never weaken the recovery floor.
+        value = 'production'
+    return value if value in {'production', 'development'} else 'production'
+
+
+def default_level() -> str:
+    return 'signed_development' if server_environment() == 'development' else 'signed_production'
+
+
+def recover_corrupt_pending(error: Exception) -> dict:
+    current = str(read_policy()['minimum_level'])
+    floor = default_level()
+    target = current if LEVEL_RANK[current] >= LEVEL_RANK[floor] else floor
+    if target != current:
+        write_policy(target, updated_by='system:corrupt-pending-recovery')
+    append_audit(
+        'policy_pending_revert_corrupt_recovered',
+        current_level=current,
+        default_level=floor,
+        restored_level=target,
+        error=str(error)[:500],
+    )
+    clear_pending()
+    return {
+        'status': 'corrupt_pending_recovered',
+        'previous_level': current,
+        'minimum_level': target,
+        'default_level': floor,
+    }
 
 
 def write_pending(payload: dict) -> None:
@@ -133,7 +199,10 @@ def parse_iso(value: str) -> datetime:
 
 
 def check_revert_due() -> dict:
-    pending = read_pending()
+    try:
+        pending = read_pending()
+    except PendingRevertError as exc:
+        return recover_corrupt_pending(exc)
     if not pending:
         return {'status': 'no_pending_revert'}
     change_id = str(pending.get('change_id') or '').strip()
@@ -167,6 +236,13 @@ def confirm(current: str, target: str, hours: int, reason: str) -> None:
 def set_level(target: str, *, reason: str, hours: int) -> dict:
     current_payload = read_policy()
     current = str(current_payload['minimum_level'])
+    try:
+        existing_pending = read_pending()
+    except PendingRevertError as exc:
+        recover_corrupt_pending(exc)
+        current = str(read_policy()['minimum_level'])
+        existing_pending = None
+
     target = str(target or '').strip().lower()
     if target not in LEVEL_RANK:
         raise RuntimeError('invalid trust policy level')
@@ -182,7 +258,6 @@ def set_level(target: str, *, reason: str, hours: int) -> dict:
     if lowering:
         confirm(current, target, hours, reason)
 
-    existing_pending = read_pending()
     previous_level = current
     if lowering and existing_pending:
         pending_previous = str(existing_pending.get('previous_level') or '')
@@ -252,9 +327,14 @@ def main() -> int:
     require_root()
     if args.command == 'get':
         result = read_policy()
-        pending = read_pending()
-        if pending:
-            result = {**result, 'pending_revert': pending}
+        try:
+            pending = read_pending()
+        except PendingRevertError as exc:
+            recovery = recover_corrupt_pending(exc)
+            result = {**read_policy(), 'pending_revert_recovery': recovery}
+        else:
+            if pending:
+                result = {**result, 'pending_revert': pending}
     elif args.command == 'set':
         result = set_level(args.level, reason=args.reason, hours=args.hours)
     elif args.command == 'check-revert':

@@ -244,3 +244,7 @@ Example key record:
   "permissions": ["module.install", "framework.update", "ui.update"]
 }
 ```
+
+### Temporary trust-floor recovery
+
+A root-console trust-floor lowering writes a root-owned pending-revert record and is automatically restored after the requested window. If that pending record becomes unreadable or structurally invalid, the console helper fails closed instead of treating it as absent: it restores at least the server environment default (`signed_production` in production or `signed_development` in development), preserves any stronger current valid floor, records the recovery in the root trust-policy audit, and only then clears the corrupt pending state.
