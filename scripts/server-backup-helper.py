@@ -73,6 +73,7 @@ SAFE_RECOVERY_KEY_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 RECOVERY_SIGNATURE_MEMBER = "recovery-signature.json"
 RECOVERY_SIGNATURE_DOMAIN = b"TEC-TAC-RECOVERY-BUNDLE-V1\0"
 RECOVERY_AUDIT_FILE = Path("/var/log/tec-tac/recovery-audit.jsonl")
+ACCOUNT_SECURITY_AUDIT_FILE = Path("/var/log/tec-tac/account-security-policy-audit.jsonl")
 TRUST_LEVELS = ("unsigned", "signed_development", "signed_production", "secure_signed")
 TRUST_LEVEL_RANK = {name: idx for idx, name in enumerate(TRUST_LEVELS)}
 CONFIG = Path("/opt/tec-tac/etc/tec-tac.conf")
@@ -1585,35 +1586,124 @@ def _write_trust_floor(path: Path, level: str, *, actor: str):
     atomic_json(path, payload, mode=0o644, uid=0, gid=0)
 
 
+def _read_account_security_protection(path: Path) -> bool | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    try:
+        if int(payload.get("schema", 0) or 0) != 1:
+            return None
+    except (TypeError, ValueError):
+        return None
+    value = payload.get("protect_superuser_accounts", False)
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    if text in {"1", "true", "yes", "on", "enabled"}:
+        return True
+    if text in {"0", "false", "no", "off", "disabled", ""}:
+        return False
+    return None
+
+
+def _append_account_security_restore_audit(*, actor: str, before: bool | None, restored: bool | None, effective: bool):
+    ACCOUNT_SECURITY_AUDIT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chown(ACCOUNT_SECURITY_AUDIT_FILE.parent, 0, 0)
+        os.chmod(ACCOUNT_SECURITY_AUDIT_FILE.parent, 0o750)
+    except PermissionError:
+        pass
+    row = {
+        "schema": 1,
+        "event": "account_security_policy_restore_merge",
+        "timestamp": now(),
+        "sudo_user": "root",
+        "sudo_uid": str(os.getuid()),
+        "actor_label": str(actor or "restore")[:150],
+        "before": {"protect_superuser_accounts": before},
+        "restored": {"protect_superuser_accounts": restored},
+        "requested": {"protect_superuser_accounts": effective},
+    }
+    fd = os.open(ACCOUNT_SECURITY_AUDIT_FILE, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0), 0o640)
+    try:
+        os.fchown(fd, 0, 0); os.fchmod(fd, 0o640)
+        os.write(fd, (json.dumps(row, sort_keys=True, default=str) + "\n").encode("utf-8"))
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _write_account_security_protection(path: Path, enabled: bool, *, actor: str):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema": 1,
+        "protect_superuser_accounts": bool(enabled),
+        "updated_at": now(),
+        "updated_by": str(actor or "restore-security-merge")[:150],
+    }
+    atomic_json(path, payload, mode=0o644, uid=0, gid=0)
+
+
 def _capture_restore_security_state(config, stage: Path) -> dict:
     snapshot = stage / "current-security-state"
     snapshot.mkdir(parents=True, exist_ok=True)
     trust_src = Path("/etc/tec-tac/trusted-publishers")
     trust_dst = snapshot / "trusted-publishers"
-    if trust_src.is_dir() and not trust_src.is_symlink():
+    trust_authoritative = bool(trust_src.is_dir() and not trust_src.is_symlink())
+    trust_entries = []
+    if trust_authoritative:
         shutil.copytree(trust_src, trust_dst, symlinks=False, dirs_exist_ok=True)
+        trust_entries = sorted(entry.name for entry in trust_src.iterdir() if not entry.is_symlink())
     policy_src = Path("/etc/tec-tac/policy/update-trust-policy.json")
     if policy_src.is_file() and not policy_src.is_symlink():
         shutil.copy2(policy_src, snapshot / "update-trust-policy.json")
-    return {"root": str(snapshot), "trust_root": str(trust_dst), "policy": str(snapshot / "update-trust-policy.json")}
+    account_policy_src = Path("/etc/tec-tac/policy/account-security-policy.json")
+    if account_policy_src.is_file() and not account_policy_src.is_symlink():
+        shutil.copy2(account_policy_src, snapshot / "account-security-policy.json")
+    return {
+        "root": str(snapshot),
+        "trust_root": str(trust_dst),
+        "trust_authoritative": trust_authoritative,
+        "trust_entries": trust_entries,
+        "policy": str(snapshot / "update-trust-policy.json"),
+        "account_policy": str(snapshot / "account-security-policy.json"),
+    }
 
 
-def _merge_restore_security_state(snapshot: dict, *, actor: str, log, restored_trust: Path | None = None, restored_policy: Path | None = None):
-    # Current target trust wins for publishers already known on the target. This
-    # preserves key/publisher revocations made after the backup. Restored-only
-    # publishers remain available, which keeps replacement-server recovery useful.
+def _merge_restore_security_state(snapshot: dict, *, actor: str, log, restored_trust: Path | None = None, restored_policy: Path | None = None, restored_account_policy: Path | None = None):
+    # The target trust store is authoritative. Current entries overwrite restored
+    # copies, and restored-only publishers are removed so an administrator's
+    # post-backup publisher deletion cannot be undone by restore. Recovery signer
+    # trust is a separate D3 mechanism and is not sourced from this publisher set.
     current_trust = Path(snapshot.get("trust_root") or "")
     restored_trust = Path(restored_trust or "/etc/tec-tac/trusted-publishers")
-    if current_trust.is_dir():
+    if snapshot.get("trust_authoritative") and current_trust.is_dir():
         restored_trust.mkdir(parents=True, exist_ok=True)
+        current_names = {entry.name for entry in current_trust.iterdir() if not entry.is_symlink()}
+        removed = []
+        for entry in list(restored_trust.iterdir()):
+            if entry.name in current_names:
+                continue
+            removed.append(entry.name)
+            if entry.is_dir() and not entry.is_symlink(): shutil.rmtree(entry)
+            else: entry.unlink()
         for entry in current_trust.iterdir():
+            if entry.is_symlink():
+                continue
             target = restored_trust / entry.name
             if target.exists() or target.is_symlink():
                 if target.is_dir() and not target.is_symlink(): shutil.rmtree(target)
                 else: target.unlink()
-            if entry.is_dir() and not entry.is_symlink(): shutil.copytree(entry, target, symlinks=False)
-            elif entry.is_file() and not entry.is_symlink(): shutil.copy2(entry, target)
-        log.write("[TEC-TAC-BACKUP] merged target publisher trust over restored publisher state\n")
+            if entry.is_dir(): shutil.copytree(entry, target, symlinks=False)
+            elif entry.is_file(): shutil.copy2(entry, target)
+        log.write("[TEC-TAC-BACKUP] target publisher trust preserved over restored publisher state")
+        if removed:
+            log.write(f"; removed restored-only publishers: {', '.join(sorted(removed))}")
+        log.write("\n")
+
     current_policy = Path(snapshot.get("policy") or "")
     restored_policy = Path(restored_policy or "/etc/tec-tac/policy/update-trust-policy.json")
     current_level = _read_trust_floor(current_policy)
@@ -1624,6 +1714,31 @@ def _merge_restore_security_state(snapshot: dict, *, actor: str, log, restored_t
         if restored_level != strictest:
             _write_trust_floor(restored_policy, strictest, actor=actor or "restore-security-merge")
         log.write(f"[TEC-TAC-BACKUP] restore trust floor preserved at {strictest}\n")
+
+    # D2/M25: account protection uses stricter-wins restore semantics too. An
+    # enabled target policy must never be turned off by an older backup. Invalid
+    # policy data is treated fail-closed as enabled, matching the runtime guard.
+    current_account_policy = Path(snapshot.get("account_policy") or "")
+    restored_account_policy = Path(restored_account_policy or "/etc/tec-tac/policy/account-security-policy.json")
+    current_protection = _read_account_security_protection(current_account_policy)
+    restored_protection = _read_account_security_protection(restored_account_policy)
+    if current_protection is not None or restored_protection is not None:
+        effective = bool(current_protection is True or restored_protection is True)
+        if current_protection is None and current_account_policy.exists():
+            effective = True
+        if restored_protection is None and restored_account_policy.exists():
+            effective = True
+        if restored_protection is not effective:
+            _append_account_security_restore_audit(actor=actor, before=current_protection, restored=restored_protection, effective=effective)
+            _write_account_security_protection(restored_account_policy, effective, actor=actor or "restore-security-merge")
+            _append_recovery_audit(
+                "account_security_policy_restore_merge",
+                actor=actor,
+                current_protection=current_protection,
+                restored_protection=restored_protection,
+                effective_protection=effective,
+            )
+        log.write(f"[TEC-TAC-BACKUP] account protection preserved at {'on' if effective else 'off'}\n")
 
 
 def _version_key(value: object):

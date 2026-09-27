@@ -114,7 +114,7 @@ The export contains **public trust material only**. It never exports the private
 
 ### Older Core versions in backups
 
-A valid recovery bundle may intentionally restore an older Core version. Validation and restore results expose `version_transition` with current/restored versions and a clear notice when the operation rolls Core back. The event is durably audited. The restore does not weaken security state merely because the backup is older: current target publisher trust takes precedence for publishers already known on the target, preserving revocations, and the update trust floor is merged using the stricter of the current and restored values. Recovery signing/trust directories remain target-local and are never restored from a bundle.
+A valid recovery bundle may intentionally restore an older Core version. Validation and restore results expose `version_transition` with current/restored versions and a clear notice when the operation rolls Core back. The event is durably audited. The restore does not weaken security state merely because the backup is older: the current target publisher set is authoritative, so current publisher/key state overwrites restored copies and publishers deliberately removed from the target are not resurrected; the update trust floor is merged using the stricter of the current and restored values; and the D1 account-protection policy uses stricter-wins semantics so protection `on` cannot be turned off by an older backup. Account-protection merge changes are written to both the root-owned account-policy audit and the recovery audit. Recovery signing/trust directories remain target-local and are never restored from a bundle.
 
 ## `restore_backup(...)`
 

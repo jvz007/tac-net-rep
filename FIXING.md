@@ -1,28 +1,33 @@
-# FIXING.md — Core 1.15.94
+# Review brief — Core 1.15.95
 
-## Review scope
+This is a narrow D2 restore-safety release. Review only the tracker items below plus regressions caused by these changes.
 
-This release is the final D1 account-security-policy hardening pass. Review only the tracker items below plus regressions caused by these changes.
+## In scope
 
-### L85 — privileged policy mutation had no root audit
-- Every `--set-account-security-policy` root-helper mutation now requires a durable root-owned audit intent before the policy file is written.
-- Root audit path: `/var/log/tec-tac/account-security-policy-audit.jsonl`.
-- The audit records the actual sudo invoker, application actor label, prior state, requested state and timestamp.
-- If the root audit cannot be written safely, the policy mutation is refused.
-- The existing strict Core audit remains a separate second record for API-driven changes.
+### M25 — restore must not turn D1 protection off
+- Capture the target `account-security-policy.json` before restore.
+- Merge current/restored D1 policy with stricter-wins semantics: protection `on` wins.
+- Treat malformed present policy data fail-closed as protection `on`.
+- Audit an effective merge through the root-owned account-security-policy audit and recovery audit.
 
-### L86 — policy test depended on root / grep checks
-- `tests/account-security-policy.py` now runs without root and behaviorally exercises the privileged mutation/audit boundary with narrow filesystem privilege stubs.
-- `tests/account-security-policy-edge-cases.py` now behaviorally checks non-superuser denial, effective-superuser success, strict audit contents, and audit-failure rollback.
+### L75 — deleted publishers must not come back
+- Treat the current target `/etc/tec-tac/trusted-publishers` set as authoritative.
+- Current publisher/key contents overwrite restored copies.
+- Restored-only publishers are removed when absent from the current target set.
+- Recovery signer trust remains a separate D3 mechanism and is not sourced from publisher trust restoration.
 
-## Explicitly not in this release
-- D2–D6a follow-up items.
-- M2–M31 outside already-completed M28/M29.
-- Other Low items.
+## Behavioural regression
 
-## Primary files to inspect
-- `scripts/system-update-helper.py`
-- `framwork/tec_tac/account_security_views.py` (regression target; no new behavior beyond 1.15.93)
-- `tests/account-security-policy.py`
-- `tests/account-security-policy-edge-cases.py`
-- `docs/account-security-policy.md`
+`tests/server-backup-d2-d3.py` now restores a deliberately older/weaker security state and proves that:
+- a target-revoked key stays revoked;
+- a publisher deleted after backup stays deleted;
+- the stricter target trust floor survives;
+- target D1 protection `on` survives restored `off`;
+- the D1 merge writes both required audit records.
+
+## Explicitly not in scope
+
+- D2 backup-module/UI downgrade confirmation notice. Core already exposes `version_transition.notice`; the consuming backup UI still needs to display it before restore.
+- D3 / M20–M24.
+- D4, D5, D6a.
+- M2 onward outside the D2 decision work.

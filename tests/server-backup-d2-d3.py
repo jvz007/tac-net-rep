@@ -66,18 +66,54 @@ with tempfile.TemporaryDirectory() as td:
     audit=(td/'recovery-audit.jsonl').read_text()
     assert 'recovery_signer_trusted' in audit and 'admin' in audit
 
-    # Trust-floor merge: target/current secure_signed must survive an older restored signed_production policy.
+    # D2 trust/account-policy merge: target state must win over an older backup.
+    # This preserves publisher/key revocations, does not resurrect publishers
+    # deleted after the backup, keeps the stricter trust floor, and keeps D1 on.
     snap=td/'snap'; (snap/'trusted-publishers'/'pub-a').mkdir(parents=True)
     (snap/'trusted-publishers'/'pub-a'/'publisher.json').write_text(json.dumps({'schema':1,'publisher_id':'pub-a','status':'trusted','keys':[{'key_id':'k','status':'revoked'}]}))
     current_policy=snap/'update-trust-policy.json'; current_policy.write_text(json.dumps({'schema':1,'minimum_level':'secure_signed'}))
+    current_account_policy=snap/'account-security-policy.json'; current_account_policy.write_text(json.dumps({'schema':1,'protect_superuser_accounts':True}))
+
     restored_trust=td/'restored-trust'; (restored_trust/'pub-a').mkdir(parents=True)
     (restored_trust/'pub-a'/'publisher.json').write_text(json.dumps({'schema':1,'publisher_id':'pub-a','status':'trusted','keys':[{'key_id':'k','status':'active'}]}))
+    # pub-deleted existed in the backup but is absent from the current target.
+    (restored_trust/'pub-deleted').mkdir()
+    (restored_trust/'pub-deleted'/'publisher.json').write_text(json.dumps({'schema':1,'publisher_id':'pub-deleted','status':'trusted'}))
     restored_policy=td/'restored-policy.json'; restored_policy.write_text(json.dumps({'schema':1,'minimum_level':'signed_production'}))
+    restored_account_policy=td/'restored-account-policy.json'; restored_account_policy.write_text(json.dumps({'schema':1,'protect_superuser_accounts':False}))
+
+    old_recovery_audit=h.RECOVERY_AUDIT_FILE; old_account_audit=h.ACCOUNT_SECURITY_AUDIT_FILE
+    h.RECOVERY_AUDIT_FILE=td/'restore-recovery-audit.jsonl'
+    h.ACCOUNT_SECURITY_AUDIT_FILE=td/'account-security-policy-audit.jsonl'
     log=io.StringIO()
-    h._merge_restore_security_state({'trust_root':str(snap/'trusted-publishers'),'policy':str(current_policy)},actor='tester',log=log,restored_trust=restored_trust,restored_policy=restored_policy)
+    try:
+        h._merge_restore_security_state(
+            {
+                'trust_root':str(snap/'trusted-publishers'),
+                'trust_authoritative':True,
+                'trust_entries':['pub-a'],
+                'policy':str(current_policy),
+                'account_policy':str(current_account_policy),
+            },
+            actor='tester',
+            log=log,
+            restored_trust=restored_trust,
+            restored_policy=restored_policy,
+            restored_account_policy=restored_account_policy,
+        )
+    finally:
+        h.RECOVERY_AUDIT_FILE=old_recovery_audit
+        h.ACCOUNT_SECURITY_AUDIT_FILE=old_account_audit
     merged=json.loads((restored_trust/'pub-a'/'publisher.json').read_text())
     assert merged['keys'][0]['status']=='revoked'
+    assert not (restored_trust/'pub-deleted').exists(), 'deleted publisher was resurrected by restore'
     assert json.loads(restored_policy.read_text())['minimum_level']=='secure_signed'
+    assert json.loads(restored_account_policy.read_text())['protect_superuser_accounts'] is True
+    account_audit=(td/'account-security-policy-audit.jsonl').read_text()
+    recovery_audit=(td/'restore-recovery-audit.jsonl').read_text()
+    assert 'account_security_policy_restore_merge' in account_audit
+    assert 'account_security_policy_restore_merge' in recovery_audit
+    assert 'removed restored-only publishers: pub-deleted' in log.getvalue()
 
     # An older Core restore is allowed but must produce a clear transition notice.
     original=h.detect_version
