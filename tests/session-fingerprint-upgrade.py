@@ -153,6 +153,24 @@ assert found is legacy_row, "legacy fingerprint row was not recovered"
 assert legacy_row.knox_digest == digest, "legacy row was not bound to stable Knox digest"
 assert legacy_row.saved and "knox_digest" in legacy_row.saved[-1]
 
+# A legacy/current row already bound to another Knox digest must never be rebound.
+wrong_bound = Session(legacy, digest="different-digest", revoked=False, marker="bound")
+TecTacSessionTrust.objects.rows = [wrong_bound]
+try:
+    mod._existing_session_for_credential(request, current_fingerprint=current)
+except mod.SessionSecurityDenied as exc:
+    assert exc.session_code == "session_invalid_state"
+else:
+    raise AssertionError("legacy session row was rebound from an existing Knox digest")
+assert wrong_bound.knox_digest == "different-digest"
+
+try:
+    mod._bind_knox_digest(types.SimpleNamespace(knox_digest="other"), digest)
+except mod.SessionSecurityDenied:
+    pass
+else:
+    raise AssertionError("current session binding helper allowed Knox digest replacement")
+
 # A different/unrelated Authorization bearer cannot be used as the legacy bridge.
 bad = Request("different-bearer")
 bad.auth.digest = digest  # authenticator says original credential, header says another

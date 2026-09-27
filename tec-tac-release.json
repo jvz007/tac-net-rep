@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.129",
+  "version": "1.15.130",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -18,8 +18,8 @@
     },
     {
       "path": "FIXING.md",
-      "size": 808,
-      "sha256": "c8188eb69c973f60a1e3ee37f51277c2de7b425f6a9e931981df745632c960b9"
+      "size": 1010,
+      "sha256": "0dc126e8fb85749c2ce458c98927808663b981fe7569bb8eee7bdb3db7331e9b"
     },
     {
       "path": "LICENSE",
@@ -37,14 +37,14 @@
       "sha256": "f4f304390f9a3e8ebb9ba84ecef8275ddc2ed7ed130f860f52caa668dd70bfe5"
     },
     {
-      "path": "RELEASE_NOTES_1.15.129.md",
-      "size": 1800,
-      "sha256": "d8d05fcabab177ab0075b64c1ad6a57c0c95c3059172f355128e68f55a283929"
+      "path": "RELEASE_NOTES_1.15.130.md",
+      "size": 1384,
+      "sha256": "05a6b9bd812ac8928e92bce8070820743ed0a64fdd1e138536b67a577c001607"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "763c22d782aa66852ef3d8062d47be37d3a2c1737bed0108a28d810ffe3bdd36"
+      "sha256": "36487fedcace709fa3c1518fc203ac3cf1ed656df215ecca6d75e7ad0d8df962"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -73,8 +73,8 @@
     },
     {
       "path": "docs/developer-contracts.md",
-      "size": 9231,
-      "sha256": "9f8b687fa1e652d3f54abbaaf14593d2902707877fbbf166246df0dd50dca447"
+      "size": 9232,
+      "sha256": "0a0c5109ba6628da6c3b8dc6a91be2a9613176d277b645e53a36caee3cee99b5"
     },
     {
       "path": "docs/extension-reportset-tutorial.html",
@@ -698,8 +698,8 @@
     },
     {
       "path": "docs/session-security.md",
-      "size": 14352,
-      "sha256": "0e24236daac0c7cb60fb62d0db3656c8766a8023e4ae7fd18035e2958a4cfde7"
+      "size": 14605,
+      "sha256": "39c4e34bb6697692e7575e20f1b0636b49f772f6a31bd9b5d9f23d6dc2f4a669"
     },
     {
       "path": "docs/system-update-signed-releases.md",
@@ -1058,13 +1058,13 @@
     },
     {
       "path": "framwork/tec_tac/mfa_backup.py",
-      "size": 8424,
-      "sha256": "a27792c9875b568e6ce34a770152e0b9437ec91923be168d8998361cb9378956"
+      "size": 8320,
+      "sha256": "0c5045a9fed1fc8aaf7c0606f2d5e2d67c47b5b2a318a1fd7490643986ca51d0"
     },
     {
       "path": "framwork/tec_tac/mfa_backup_views.py",
-      "size": 8493,
-      "sha256": "1d9472ef976cc5fb1c214ffd96648ee92902f49ba43808cfe17d156d0eafaf7e"
+      "size": 8596,
+      "sha256": "7acc61bb3087acbc907c0520d08e97ef01fa5ad0d501d72e3601be7662962b2a"
     },
     {
       "path": "framwork/tec_tac/migrations/0001_scheduler.py",
@@ -1308,8 +1308,8 @@
     },
     {
       "path": "framwork/tec_tac/session_security.py",
-      "size": 48004,
-      "sha256": "3894bd2e9358265ed7816a40b528a56f69f9115aa5bb8d035e28a79909221b61"
+      "size": 48957,
+      "sha256": "e11006c6269867dedc00f4393af91b477f8faa51561668bc40b8506a03ac3ada"
     },
     {
       "path": "framwork/tec_tac/session_security_views.py",
@@ -1374,7 +1374,7 @@
     {
       "path": "install.sh",
       "size": 63547,
-      "sha256": "5b91c6c85b9bcc4faeb21a7955bbbee55552f23a63952324ac4a8a90c4ac29d9"
+      "sha256": "b42b3a1dedcfc5ffa0b7c14f0e7a4685212811099a4b8b00139a0947a99379ca"
     },
     {
       "path": "reportsets/.gitkeep",
@@ -1554,7 +1554,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "60bac0fd3827cca4ee1355c797cd3b27f0cca9ff350a077d4f740e8d45934173"
+      "sha256": "0e121657004f1be48cd0e48de17f389b4d9b9551def92b6b5574d17c8ef74570"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -1740,6 +1740,11 @@
       "path": "tests/m15-low-batch.py",
       "size": 5492,
       "sha256": "5d4ebc17acf1b5f355b7793f45506fa4d34ebe2d7e753c1bbac7020dfeab84e1"
+    },
+    {
+      "path": "tests/mfa-admin-readonly-review.py",
+      "size": 2041,
+      "sha256": "8130008a7015b7404b4a47c430a35f20f83931cecb373a2e67c6f812865d71bd"
     },
     {
       "path": "tests/mfa-admin-recovery-foundation.sh",
@@ -2148,8 +2153,8 @@
     },
     {
       "path": "tests/session-fingerprint-upgrade.py",
-      "size": 7382,
-      "sha256": "71076a5ab423dd2d82c3e91eac722f95ed8d2cf7043da97de118e0f8bf23e38b"
+      "size": 8153,
+      "sha256": "e0a07404d77e308875bf26f4b2c032f733397d473a459cd38c38cda27b812f83"
     },
     {
       "path": "tests/session-knox-revocation.py",
@@ -2168,8 +2173,8 @@
     },
     {
       "path": "tests/session-retention-policy.py",
-      "size": 6056,
-      "sha256": "e92a98a9a43490d25a33c6c48fc7050dc9596527879e21c4e5eb135167402e95"
+      "size": 6470,
+      "sha256": "9ad5bf44bf5860d13da1b05a8899bc4ce9c499965e4d26c26c7c833c1a5d1f24"
     },
     {
       "path": "tests/session-retention-scheduler.py",
@@ -2177,9 +2182,14 @@
       "sha256": "335b8e364c6ffa1e9fd003eab4cf6707c47cceb8bd1d7066ea6e082d20c7eb9f"
     },
     {
+      "path": "tests/session-security-contract-version.py",
+      "size": 1082,
+      "sha256": "7ea4c2b7ff9b8d77679d26cd31e30dcdcb48d4f7e2c06f2823007548ac977733"
+    },
+    {
       "path": "tests/session-security-foundation.sh",
       "size": 6988,
-      "sha256": "6d746187f495f46ad129decd8bdfa244c4af17d422403f497ac2c6c6427e753e"
+      "sha256": "d8f7092c37975d94272114827455ef0b3cfe6a307a4d7962c622822d1b9e883b"
     },
     {
       "path": "tests/startup-safety.py",

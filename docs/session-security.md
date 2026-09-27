@@ -1,6 +1,6 @@
 # Core Session Security
 
-Framework contract: `core.session_security` v1.1.0
+Framework contract: `core.session_security` v2.0.0
 
 ## Scope
 
@@ -55,8 +55,10 @@ models:
 ```python
 from tec_tac.capabilities import get_capability
 
-provider = get_capability("core.session_security", version=">=1.1.0,<2.0.0")
+provider = get_capability("core.session_security", version=">=2.0.0,<3.0.0")
 ```
+
+Version 2.0.0 is the breaking-contract correction for the earlier removal of module-callable policy mutation and the `cleanup(retention_days=...)` override. Policy mutation remains HTTP-only and `cleanup()` always uses the Core-owned retention policy.
 
 Supported provider operations:
 

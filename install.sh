@@ -433,7 +433,7 @@ if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON
 fi
 
 log "Verifying Core session-security capability."
-VERIFY_SESSION_SECURITY_CODE="from tec_tac.capabilities import get_capability,capability_status; p=get_capability('core.session_security',version='>=1.1.0,<2.0.0'); policy=p.get_policy(context={'source':'installer'}); assert policy['idle_timeout_minutes']>=1 and policy['absolute_lifetime_minutes']>=1, f'invalid session-security policy: {policy}'; status=capability_status('core.session_security'); assert status['available'] and status['capability_version']=='1.1.0', status; print('TEC-TAC session-security capability OK:', policy['ip_change_policy'])"
+VERIFY_SESSION_SECURITY_CODE="from tec_tac.capabilities import get_capability,capability_status; p=get_capability('core.session_security',version='>=2.0.0,<3.0.0'); policy=p.get_policy(context={'source':'installer'}); assert policy['idle_timeout_minutes']>=1 and policy['absolute_lifetime_minutes']>=1, f'invalid session-security policy: {policy}'; status=capability_status('core.session_security'); assert status['available'] and status['capability_version']=='2.0.0', status; print('TEC-TAC session-security capability OK:', policy['ip_change_policy'])"
 if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_SESSION_SECURITY_CODE}\""; then
     fail "Tec-Tac session-security capability verification failed or timed out."
 fi

@@ -25,7 +25,7 @@ from .capabilities import register_capability
 from .models import TecTacSessionAudit, TecTacSessionSecurityConfig, TecTacSessionTrust
 
 CAPABILITY_ID = "core.session_security"
-CAPABILITY_VERSION = "1.1.0"
+CAPABILITY_VERSION = "2.0.0"
 TOKEN_NAMESPACE = b"tec-tac-session-security:v1\x00"
 LOGIN_SESSION_NAMESPACE = b"tec-tac-login-session-ref:v1\x00"
 DEFAULT_IDLE_TIMEOUT_MINUTES = 30
@@ -114,6 +114,35 @@ def can_manage_login_sessions(user) -> bool:
     return can_manage_account_security(user)
 
 
+def _normalized_trusted_proxies(raw, *, strict: bool) -> list[str]:
+    if not isinstance(raw, list):
+        if strict:
+            raise SessionSecurityError("trusted_proxies must be a list of IP addresses or CIDR networks.")
+        return []
+    normalized = []
+    for item in raw:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        try:
+            network = ipaddress.ip_network(text, strict=False)
+        except ValueError as exc:
+            if strict:
+                raise SessionSecurityError(f"Invalid trusted proxy network: {text}") from exc
+            continue
+        min_prefix = 8 if network.version == 4 else 32
+        if network.prefixlen < min_prefix:
+            if strict:
+                raise SessionSecurityError(f"trusted_proxies network is too broad: {network}")
+            continue
+        if not (network.is_private or network.is_loopback or network.is_link_local):
+            if strict:
+                raise SessionSecurityError(f"trusted_proxies must use private/local address space: {network}")
+            continue
+        normalized.append(str(network))
+    return sorted(set(normalized))
+
+
 def _policy_dict(config: TecTacSessionSecurityConfig | None = None) -> dict[str, Any]:
     config = config or TecTacSessionSecurityConfig.current()
     return {
@@ -123,7 +152,9 @@ def _policy_dict(config: TecTacSessionSecurityConfig | None = None) -> dict[str,
         "session_audit_enabled": bool(config.session_audit_enabled),
         "activity_heartbeat_seconds": int(config.activity_heartbeat_seconds),
         "history_retention_days": int(config.history_retention_days),
-        "trusted_proxies": list(config.trusted_proxies or []),
+        # Stored legacy rows predate the stricter proxy validator. Never trust
+        # an unsafe legacy network merely because it was accepted by an older Core.
+        "trusted_proxies": _normalized_trusted_proxies(config.trusted_proxies, strict=False),
     }
 
 
@@ -171,25 +202,8 @@ def _update_global_policy(policy: dict, *, requested_by: str = "") -> dict[str, 
     if "session_audit_enabled" in policy:
         config.session_audit_enabled = bool(policy["session_audit_enabled"]); fields.append("session_audit_enabled")
     if "trusted_proxies" in policy:
-        raw = policy["trusted_proxies"]
-        if not isinstance(raw, list):
-            raise SessionSecurityError("trusted_proxies must be a list of IP addresses or CIDR networks.")
-        normalized = []
-        for item in raw:
-            text = str(item or "").strip()
-            if not text:
-                continue
-            try:
-                network = ipaddress.ip_network(text, strict=False)
-            except ValueError as exc:
-                raise SessionSecurityError(f"Invalid trusted proxy network: {text}") from exc
-            min_prefix = 8 if network.version == 4 else 32
-            if network.prefixlen < min_prefix:
-                raise SessionSecurityError(f"trusted_proxies network is too broad: {network}")
-            if not (network.is_private or network.is_loopback or network.is_link_local):
-                raise SessionSecurityError(f"trusted_proxies must use private/local address space: {network}")
-            normalized.append(str(network))
-        config.trusted_proxies = sorted(set(normalized)); fields.append("trusted_proxies")
+        config.trusted_proxies = _normalized_trusted_proxies(policy["trusted_proxies"], strict=True)
+        fields.append("trusted_proxies")
     if fields:
         config.updated_by_label = str(requested_by or "")[:150]
         fields.extend(["updated_by_label", "updated_at"])
@@ -427,6 +441,24 @@ def _revoke_locked(session: TecTacSessionTrust, *, reason: str, requested_by: st
     return session
 
 
+
+
+def _bind_knox_digest(session: TecTacSessionTrust, digest: str) -> bool:
+    """Bind a legacy row once; never rebind an already-bound credential row."""
+    digest = str(digest or "")
+    if not digest:
+        return False
+    existing = str(getattr(session, "knox_digest", "") or "")
+    if existing:
+        if not hmac.compare_digest(existing, digest):
+            raise SessionSecurityDenied(
+                "session_invalid_state",
+                "Stored session credential binding does not match the authenticated Knox token.",
+            )
+        return False
+    session.knox_digest = digest
+    return True
+
 def _existing_session_for_credential(request, *, current_fingerprint: str):
     """Resolve trust state across current and pre-S6 fingerprint formats.
 
@@ -466,8 +498,7 @@ def _existing_session_for_credential(request, *, current_fingerprint: str):
         except TecTacSessionTrust.DoesNotExist:
             session = None
         if session is not None:
-            if digest and session.knox_digest != digest:
-                session.knox_digest = digest
+            if _bind_knox_digest(session, digest):
                 session.save(update_fields=["knox_digest", "updated_at"])
             return session
     return None
@@ -537,8 +568,7 @@ def ensure_request_session(request, *, create: bool = True) -> TecTacSessionTrus
         session.last_seen_at = now
         digest = request_knox_digest(request)
         update_fields = ["last_seen_at", "last_ip", "absolute_expires_at", "idle_expires_at", "updated_at"]
-        if digest and session.knox_digest != digest:
-            session.knox_digest = digest
+        if _bind_knox_digest(session, digest):
             update_fields.append("knox_digest")
         _refresh_expiry(session, policy)
         session.save(update_fields=update_fields)

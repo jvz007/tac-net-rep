@@ -116,9 +116,16 @@ else:
 
 # Policy mutation must not be module-callable through the capability provider.
 mod.register_core_session_security_capability()
-assert mod.CAPABILITY_VERSION == "1.1.0"
+assert mod.CAPABILITY_VERSION == "2.0.0"
 assert "update_policy" not in captured["operations"]
 assert not hasattr(mod.SessionSecurityProvider(), "update_policy")
+assert mod.SessionSecurityProvider.cleanup.__code__.co_varnames[:2] == ("self", "context")
+
+# Legacy stored proxy values are revalidated on every read; unsafe entries do not
+# become trusted merely because an older Core accepted them.
+CONFIG.trusted_proxies = ["10.0.0.0/8", "8.8.8.8/32", "0.0.0.0/0", "not-a-network"]
+policy = mod.get_effective_policy()
+assert policy["trusted_proxies"] == ["10.0.0.0/8"], policy
 
 # Revoked Knox tombstone survives only while Tactical's token remains live.
 row=types.SimpleNamespace(knox_digest="digest-1", token_fingerprint="fp")

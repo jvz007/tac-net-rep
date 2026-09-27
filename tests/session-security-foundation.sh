@@ -12,7 +12,7 @@ for f in \
 done
 
 grep -q 'CAPABILITY_ID = "core.session_security"' "${ROOT}/framwork/tec_tac/session_security.py" || fail "capability id missing"
-grep -q 'CAPABILITY_VERSION = "1.1.0"' "${ROOT}/framwork/tec_tac/session_security.py" || fail "capability version missing"
+grep -q 'CAPABILITY_VERSION = "2.0.0"' "${ROOT}/framwork/tec_tac/session_security.py" || fail "capability version missing"
 grep -q 'DEFAULT_IDLE_TIMEOUT_MINUTES = 30' "${ROOT}/framwork/tec_tac/session_security.py" || fail "idle default missing"
 grep -q 'DEFAULT_ABSOLUTE_LIFETIME_MINUTES = 8 \* 60' "${ROOT}/framwork/tec_tac/session_security.py" || fail "absolute default missing"
 grep -q 'DEFAULT_ACTIVITY_HEARTBEAT_SECONDS = 60' "${ROOT}/framwork/tec_tac/session_security.py" || fail "heartbeat default missing"

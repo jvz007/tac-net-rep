@@ -69,7 +69,7 @@ def _delete_stale_codes_locked(user, current_fingerprint: str, *, requested_by: 
     if count:
         stale.delete()
         _security_audit(
-            "mfa_backup_codes_invalidated",
+            "mfa_backup_codes_invalidated_totp_change",
             user,
             requested_by=requested_by,
             reason="totp-key-changed",
@@ -79,14 +79,12 @@ def _delete_stale_codes_locked(user, current_fingerprint: str, *, requested_by: 
 
 
 def backup_code_status(user, *, requested_by: str = "") -> dict[str, Any]:
+    """Return recovery-code status without mutating or auditing account state."""
     current_fingerprint = _totp_fingerprint(user)
-    actor = str(requested_by or getattr(user, "username", "") or "")
-    with transaction.atomic():
-        _delete_stale_codes_locked(user, current_fingerprint, requested_by=actor)
-        qs = TecTacMfaBackupCode.objects.filter(user=user, totp_fingerprint=current_fingerprint)
-        total = qs.count()
-        unused = qs.filter(used_at__isnull=True).count()
-        latest = qs.order_by("-created_at").values_list("created_at", flat=True).first()
+    qs = TecTacMfaBackupCode.objects.filter(user=user, totp_fingerprint=current_fingerprint)
+    total = qs.count()
+    unused = qs.filter(used_at__isnull=True).count()
+    latest = qs.order_by("-created_at").values_list("created_at", flat=True).first()
     return {
         "totp_configured": bool(getattr(user, "totp_key", None)),
         "sso_user": bool(getattr(user, "is_sso_user", False)),

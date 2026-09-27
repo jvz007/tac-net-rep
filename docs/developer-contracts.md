@@ -171,7 +171,7 @@ A consumer should only rely on the public contract shown by the catalog and the 
 
 ## Core session-security contract
 
-Framework 1.15.90 registers `core.session_security` v1.1.0. It is a Core-owned
+Framework 1.15.130 registers `core.session_security` v2.0.0. It is a Core-owned
 backend capability for policy inspection, safe session enumeration, audit-event
 retrieval, session/user revocation, policy-driven retention cleanup and
 diagnostics. Policy mutation is deliberately not module-callable; only the

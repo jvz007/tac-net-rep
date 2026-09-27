@@ -108,10 +108,12 @@ class AdminUserMfaRecoveryView(APIView):
         target = self._target(user_id)
         if target is None:
             return Response({"detail": "User not found."}, status=404)
+        if not can_administer_account_security_target(request.user, target):
+            return Response({"detail": "This protected account requires effective superuser authority."}, status=403)
         response = Response({
             "user": {"id": target.pk, "username": target.username},
-            "status": backup_code_status(target, requested_by=request.user.username),
-            "can_invalidate": can_administer_account_security_target(request.user, target),
+            "status": backup_code_status(target),
+            "can_invalidate": True,
         })
         response["Cache-Control"] = "no-store, max-age=0"
         return response
