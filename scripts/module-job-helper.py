@@ -32,6 +32,18 @@ RUNNING_REQUEST_ROOT = RUNNING_ROOT / "requests"
 _LIFECYCLE_LOCK_HANDLE = None
 
 
+
+def _trusted_bash() -> str:
+    for raw in ("/bin/bash", "/usr/bin/bash"):
+        path = Path(raw)
+        try:
+            info = path.stat()
+        except OSError:
+            continue
+        if stat.S_ISREG(info.st_mode) and info.st_uid == 0 and not (info.st_mode & 0o022) and os.access(path, os.X_OK):
+            return str(path)
+    raise RuntimeError("trusted root-owned bash executable was not found in /bin/bash or /usr/bin/bash")
+
 def acquire_lifecycle_lock():
     """Serialize module lifecycle work with framework/UI system updates."""
     global _LIFECYCLE_LOCK_HANDLE
@@ -408,11 +420,11 @@ def run_job(job_id):
     command = None
     if job["action"] == "install":
         package = Path(job["package_path"])
-        command = ["/usr/bin/bash", str(install_script), str(package)]
+        command = [_trusted_bash(), str(install_script), str(package)]
         if job.get("replace"):
             command.append("--replace")
     else:
-        command = ["/usr/bin/bash", str(remove_script), job["plugin_id"], "", "--yes"]
+        command = [_trusted_bash(), str(remove_script), job["plugin_id"], "", "--yes"]
 
     rc = 1
     try:
@@ -434,7 +446,7 @@ def run_job(job_id):
                 log.write("[TEC-TAC-MODULE] synchronizing deployed UI modules\n")
                 log.flush()
                 sync_env = privileged_env({"TEC_TAC_UI_ROOT": ui_root})
-                sync = subprocess.run(["/usr/bin/bash", str(ui_sync)], stdout=log, stderr=subprocess.STDOUT, text=True, env=sync_env)
+                sync = subprocess.run([_trusted_bash(), str(ui_sync)], stdout=log, stderr=subprocess.STDOUT, text=True, env=sync_env)
                 if sync.returncode != 0:
                     rc = sync.returncode
                     log.write(f"[TEC-TAC-MODULE] UI module sync failed rc={rc}\n")

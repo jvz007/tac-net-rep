@@ -38,6 +38,18 @@ ALLOWED_ACTIONS = {"apply", "rollback"}
 _LOCK_HANDLE = None
 
 
+
+def _trusted_bash() -> str:
+    for raw in ("/bin/bash", "/usr/bin/bash"):
+        path = Path(raw)
+        try:
+            info = path.stat()
+        except OSError:
+            continue
+        if stat.S_ISREG(info.st_mode) and info.st_uid == 0 and not (info.st_mode & 0o022) and os.access(path, os.X_OK):
+            return str(path)
+    raise RuntimeError("trusted root-owned bash executable was not found in /bin/bash or /usr/bin/bash")
+
 def now():
     return datetime.now(timezone.utc).isoformat()
 
@@ -445,13 +457,13 @@ def sync_reload(config, effective, log):
         if ui_sync.is_file():
             require_root_owned(ui_sync)
             env = privileged_env({"TEC_TAC_UI_ROOT": config.get("UI_ROOT", "/var/lib/tec-tac/ui/tec-tac")})
-            result = subprocess.run(["/usr/bin/bash", str(ui_sync)], stdout=log, stderr=subprocess.STDOUT, text=True, env=env)
+            result = subprocess.run([_trusted_bash(), str(ui_sync)], stdout=log, stderr=subprocess.STDOUT, text=True, env=env)
             if result.returncode:
                 raise RuntimeError(f"UI module synchronization failed with status {result.returncode}")
     if effective.get("reload") == "django":
         reload_script = Path(config.get("REPO_ROOT", "/opt/tec-tac")) / "scripts/reload-rmm-uwsgi.sh"
         require_root_owned(reload_script)
-        result = subprocess.run(["/usr/bin/bash", str(reload_script)], stdout=log, stderr=subprocess.STDOUT, text=True, env=privileged_env())
+        result = subprocess.run([_trusted_bash(), str(reload_script)], stdout=log, stderr=subprocess.STDOUT, text=True, env=privileged_env())
         if result.returncode:
             raise RuntimeError(f"Tactical graceful reload failed with status {result.returncode}")
 

@@ -6,7 +6,7 @@ Tec-Tac Core exposes one narrow privileged recovery contract:
 
 ```text
 core.server_backup
-capability version 1.6.0
+capability version 1.7.0
 ```
 
 Modules request typed backup, inventory, restore, retention, destination-validation and secret-store operations. They never receive arbitrary `sudo`, shell, executable-path or unrestricted filesystem access.
@@ -40,6 +40,7 @@ Core 1.2 no longer modifies Tactical's native backup archive. The portable artif
 tec-tac-backup-YYYY_MM_DD__HH_MM_SS.tgz
 ├── manifest.json
 ├── checksums.sha256
+├── recovery-signature.json
 ├── tactical/
 │   └── rmm-backup-YYYY_MM_DD__HH_MM_SS.tar
 └── tec-tac/
@@ -54,7 +55,7 @@ Scheduler schedules/configuration, dashboards and user preferences live in Tacti
 
 No second PostgreSQL dump is created because Tec-Tac Django tables already live in Tactical's `tacticalrmm` database dump.
 
-`manifest.json` is format version `2` and records selected components, hashes/sizes, framework/UI versions, resolved Tec-Tac paths, backup class, creation time and supported recovery modes. `checksums.sha256` records the component hashes.
+`manifest.json` is format version `2` and records selected components, hashes/sizes, framework/UI versions, resolved Tec-Tac paths, backup class, creation time, supported recovery modes, the source installation ID/server name and recovery signer fingerprint. `checksums.sha256` records the component hashes. `recovery-signature.json` is a detached Ed25519 envelope over the exact manifest and checksum bytes. The candidate public key carried in that envelope is portability material only and never self-authorizes a restore.
 
 ## `create_backup(...)`
 
@@ -87,10 +88,33 @@ tactical/tec_tac included flags
 recovery_modes
 backup_class
 sha256
+installation_id
+server_name
+recovery_signer.key_id / recovery_signer.public_key_sha256
 size/timestamps/destination metadata
 ```
 
 Legacy native `rmm-backup-*.tar` files may remain visible but are explicitly marked `legacy: true`, `format_version: 1`, and advertise `recovery_modes: ["tactical"]`. Core never silently treats them as version-2 full bundles.
+
+## Recovery signer trust and disaster recovery
+
+Recovery bundles are signed by a server-specific Ed25519 identity. `validate_restore(...)` reports a `recovery_signer` object with the source installation ID, source server name, key ID, SHA-256 fingerprint, bundle signing date, and whether the target already trusts that signer. An unknown but cryptographically valid signer is inspectable during non-destructive validation but remains a **failed restore prerequisite** until explicitly trusted.
+
+The authenticated Core boundary `GET /api/tfd/system/recovery/trust/` returns the target server's recovery identity. `POST /api/tfd/system/recovery/trust/` accepts a `backup_ref` plus its destination, requires an effective Tactical superuser, verifies the bundle signature with its candidate key, then records that exact public key in the root-owned recovery trust store. The trust decision is appended to `/var/log/tec-tac/recovery-audit.jsonl`. Recovery identity and signer-trust are Core-internal operations and are deliberately not registered on the public `core.server_backup` capability provider; modules must use the authenticated Core HTTP boundary and cannot obtain a trust primitive through `get_capability()`.
+
+Admins who want to prepare replacement servers ahead of time can use the root console command:
+
+```text
+sudo tec-tac-recovery-key status
+sudo tec-tac-recovery-key export /secure/source-recovery-key.json
+sudo tec-tac-recovery-key import /secure/source-recovery-key.json
+```
+
+The export contains **public trust material only**. It never exports the private recovery signing key.
+
+### Older Core versions in backups
+
+A valid recovery bundle may intentionally restore an older Core version. Validation and restore results expose `version_transition` with current/restored versions and a clear notice when the operation rolls Core back. The event is durably audited. The restore does not weaken security state merely because the backup is older: current target publisher trust takes precedence for publishers already known on the target, preserving revocations, and the update trust floor is merged using the stricter of the current and restored values. Recovery signing/trust directories remain target-local and are never restored from a bundle.
 
 ## `restore_backup(...)`
 

@@ -48,6 +48,18 @@ RUNNING_REQUEST_ROOT = RUNNING_ROOT / "requests"
 ACCOUNT_SECURITY_POLICY = Path("/etc/tec-tac/policy/account-security-policy.json")
 
 
+
+def _trusted_bash() -> str:
+    for raw in ("/bin/bash", "/usr/bin/bash"):
+        path = Path(raw)
+        try:
+            info = path.stat()
+        except OSError:
+            continue
+        if stat.S_ISREG(info.st_mode) and info.st_uid == 0 and not (info.st_mode & 0o022) and os.access(path, os.X_OK):
+            return str(path)
+    raise RuntimeError("trusted root-owned bash executable was not found in /bin/bash or /usr/bin/bash")
+
 def now():
     return datetime.now(timezone.utc).isoformat()
 
@@ -1015,9 +1027,9 @@ def _run_bounded(command, *, log, timeout, cwd=None, env=None, label="command"):
 
 def run_install(component, target, log):
     if component == "framework":
-        command = ["/usr/bin/bash", str(target / "install.sh")]
+        command = [_trusted_bash(), str(target / "install.sh")]
     else:
-        command = ["/usr/bin/bash", str(target / "scripts" / "install.sh")]
+        command = [_trusted_bash(), str(target / "scripts" / "install.sh")]
     return _run_bounded(command, log=log, timeout=INSTALL_TIMEOUT_SECONDS, env=privileged_env(), label=f"{component} installer")
 
 

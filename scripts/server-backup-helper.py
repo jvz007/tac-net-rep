@@ -45,7 +45,7 @@ JOB_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 LEGACY_ARCHIVE_RE = re.compile(r"^rmm-backup-[A-Za-z0-9_.-]+\.tar$")
 BUNDLE_RE = re.compile(r"^tec-tac-backup-[A-Za-z0-9_.-]+\.tgz$")
 ARCHIVE_RE = BUNDLE_RE
-ALLOWED_ACTIONS = {"create_backup", "list_backups", "restore_backup", "apply_retention", "validate_destination", "validate_restore", "store_secret", "delete_secret"}
+ALLOWED_ACTIONS = {"create_backup", "list_backups", "restore_backup", "apply_retention", "validate_destination", "validate_restore", "store_secret", "delete_secret", "recovery_identity", "trust_recovery_signer"}
 OVERRIDEABLE_RESTORE_CHECKS = {"target.os"}
 TACTICAL_RESTORE_OVERRIDE_BASELINE = "67"
 TACTICAL_RESTORE_OS_GATE = """if [[ "$osname" == "debian" ]]; then
@@ -72,6 +72,9 @@ SAFE_SCP_PATH_RE = re.compile(r"^/[A-Za-z0-9._/-]*$|^[A-Za-z0-9._/-]+$")
 SAFE_RECOVERY_KEY_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 RECOVERY_SIGNATURE_MEMBER = "recovery-signature.json"
 RECOVERY_SIGNATURE_DOMAIN = b"TEC-TAC-RECOVERY-BUNDLE-V1\0"
+RECOVERY_AUDIT_FILE = Path("/var/log/tec-tac/recovery-audit.jsonl")
+TRUST_LEVELS = ("unsigned", "signed_development", "signed_production", "secure_signed")
+TRUST_LEVEL_RANK = {name: idx for idx, name in enumerate(TRUST_LEVELS)}
 CONFIG = Path("/opt/tec-tac/etc/tec-tac.conf")
 DEFAULT_STATE_ROOT = Path("/var/lib/tec-tac/server-backup")
 SELF = Path("/usr/local/sbin/tec-tac-server-backup")
@@ -310,6 +313,16 @@ def load_job(job_id, config=None):
         overrides = request.get("overrides")
         if not isinstance(overrides, list) or any(not isinstance(item, str) for item in overrides):
             raise SystemExit("invalid validate_restore overrides schema")
+    if job.get("action") == "recovery_identity":
+        if request not in ({}, None):
+            raise SystemExit("invalid recovery_identity request schema")
+    if job.get("action") == "trust_recovery_signer":
+        if not isinstance(request, dict) or set(request) not in ({"backup_ref", "destination"}, {"backup_ref"}):
+            raise SystemExit("invalid trust_recovery_signer request schema")
+        if not str(request.get("backup_ref") or "").strip():
+            raise SystemExit("invalid trust_recovery_signer backup_ref")
+        if request.get("destination") is not None and not isinstance(request.get("destination"), dict):
+            raise SystemExit("invalid trust_recovery_signer destination")
     if job.get("action") == "restore_backup":
         request = job["request"]
         if set(request) == {"backup_ref", "destination", "restore_mode"}:
@@ -947,7 +960,8 @@ def ftp_delete(config, destination, name, log):
 
 
 def metadata_for_archive(path, backup_class, config, *, components=None, recovery_modes=None):
-    server_id = str(config.get("TEC_TAC_INSTALLATION_ID") or "").strip() or None
+    identity = recovery_identity(config)
+    server_id = identity["installation_id"]
     return {
         "format_version": 2,
         "artifact_type": "tec-tac-recovery-bundle",
@@ -956,6 +970,9 @@ def metadata_for_archive(path, backup_class, config, *, components=None, recover
         "size_bytes": path.stat().st_size,
         "sha256": sha256_file(path),
         "server_id": server_id,
+        "installation_id": server_id,
+        "server_name": identity["server_name"],
+        "recovery_signer": {"key_id": identity["key_id"], "public_key_sha256": identity["public_key_sha256"]},
         "components": dict(components or {}),
         "recovery_modes": list(recovery_modes or []),
     }
@@ -1440,6 +1457,194 @@ def _secure_regular_root_file(path: Path, *, private=False):
     return info
 
 
+
+def recovery_identity(config) -> dict:
+    key_id = str(config.get("TEC_TAC_INSTALLATION_ID") or "").strip()
+    if not SAFE_RECOVERY_KEY_ID_RE.fullmatch(key_id):
+        raise RuntimeError("TEC_TAC_INSTALLATION_ID is missing or invalid")
+    key_path = Path(str(config.get("TEC_TAC_RECOVERY_SIGNING_KEY") or "/etc/tec-tac/recovery-signing/private.pem"))
+    _secure_root_directory(key_path.parent, private=True)
+    _secure_regular_root_file(key_path, private=True)
+    key = serialization.load_pem_private_key(key_path.read_bytes(), password=None)
+    if not isinstance(key, Ed25519PrivateKey):
+        raise RuntimeError("Tec-Tac recovery signing key must be Ed25519")
+    public = key.public_key()
+    raw = public.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    pem = public.public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+    return {
+        "installation_id": key_id,
+        "server_name": socket.gethostname(),
+        "key_id": key_id,
+        "public_key_sha256": hashlib.sha256(raw).hexdigest(),
+        "public_key_pem": pem.decode("ascii"),
+    }
+
+
+def _inspect_recovery_signature(manifest_bytes: bytes, checksums_bytes: bytes, envelope_bytes: bytes) -> dict:
+    try:
+        envelope = json.loads(envelope_bytes.decode("utf-8"))
+    except Exception as exc:
+        raise RuntimeError("recovery bundle signature envelope is invalid") from exc
+    if not isinstance(envelope, dict) or int(envelope.get("schema") or 0) != 1 or envelope.get("algorithm") != "ed25519":
+        raise RuntimeError("recovery bundle signature envelope is unsupported")
+    key_id = str(envelope.get("key_id") or "").strip()
+    if not SAFE_RECOVERY_KEY_ID_RE.fullmatch(key_id):
+        raise RuntimeError("recovery bundle signing key id is invalid")
+    if str(envelope.get("manifest_sha256") or "").lower() != hashlib.sha256(manifest_bytes).hexdigest():
+        raise RuntimeError("recovery bundle signed manifest hash does not match")
+    if str(envelope.get("checksums_sha256") or "").lower() != hashlib.sha256(checksums_bytes).hexdigest():
+        raise RuntimeError("recovery bundle signed checksum hash does not match")
+    candidate_pem = str(envelope.get("public_key_pem") or "").encode("ascii", errors="strict")
+    try:
+        candidate_key = serialization.load_pem_public_key(candidate_pem)
+    except Exception as exc:
+        raise RuntimeError("recovery bundle candidate public key is invalid") from exc
+    if not isinstance(candidate_key, Ed25519PublicKey):
+        raise RuntimeError("recovery bundle candidate public key must be Ed25519")
+    candidate_raw = candidate_key.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    fingerprint = hashlib.sha256(candidate_raw).hexdigest()
+    if str(envelope.get("public_key_sha256") or "").lower() != fingerprint:
+        raise RuntimeError("recovery bundle candidate public key fingerprint is invalid")
+    try:
+        signature = base64.b64decode(str(envelope.get("signature") or ""), validate=True)
+        candidate_key.verify(signature, _recovery_signing_message(manifest_bytes, checksums_bytes))
+    except (ValueError, InvalidSignature) as exc:
+        raise RuntimeError("recovery bundle signature verification failed") from exc
+    return {
+        "verified": True,
+        "trusted": False,
+        "key_id": key_id,
+        "installation_id": key_id,
+        "public_key_sha256": fingerprint,
+        "public_key_pem": candidate_pem.decode("ascii"),
+    }
+
+
+def _recovery_trust_status(config, signer: dict) -> dict:
+    trust_root = Path(str(config.get("TEC_TAC_RECOVERY_TRUST_ROOT") or "/etc/tec-tac/recovery-trust"))
+    if not trust_root.is_absolute():
+        raise RuntimeError("TEC_TAC_RECOVERY_TRUST_ROOT must be absolute")
+    _secure_root_directory(trust_root, private=False)
+    key_path = trust_root / f"{signer['key_id']}.pub"
+    try:
+        _secure_regular_root_file(key_path, private=False)
+        trusted_key = serialization.load_pem_public_key(key_path.read_bytes())
+    except FileNotFoundError:
+        return {**signer, "trusted": False, "trust_required": True}
+    except Exception as exc:
+        raise RuntimeError(f"trusted recovery public key could not be loaded: {signer['key_id']}") from exc
+    if not isinstance(trusted_key, Ed25519PublicKey):
+        raise RuntimeError("trusted recovery key must be Ed25519")
+    raw = trusted_key.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    if hashlib.sha256(raw).hexdigest() != signer["public_key_sha256"]:
+        raise RuntimeError("recovery bundle signer fingerprint conflicts with trusted key id")
+    return {**signer, "trusted": True, "trust_required": False}
+
+
+def _append_recovery_audit(event: str, *, actor="root", **detail):
+    RECOVERY_AUDIT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chown(RECOVERY_AUDIT_FILE.parent, 0, 0)
+        os.chmod(RECOVERY_AUDIT_FILE.parent, 0o750)
+    except PermissionError:
+        pass
+    row = {"at": now(), "event": event, "actor": str(actor or "root")[:150], **detail}
+    fd = os.open(RECOVERY_AUDIT_FILE, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0), 0o640)
+    try:
+        os.fchown(fd, 0, 0); os.fchmod(fd, 0o640)
+        os.write(fd, (json.dumps(row, sort_keys=True, default=str) + "\n").encode("utf-8"))
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _trusted_bash() -> str:
+    for raw in ("/bin/bash", "/usr/bin/bash"):
+        path = Path(raw)
+        try:
+            info = path.stat()
+        except OSError:
+            continue
+        if stat.S_ISREG(info.st_mode) and info.st_uid == 0 and not (info.st_mode & 0o022) and os.access(path, os.X_OK):
+            return str(path)
+    raise RuntimeError("trusted root-owned bash executable was not found in /bin/bash or /usr/bin/bash")
+
+
+def _read_trust_floor(path: Path) -> str | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return None
+    level = str(payload.get("minimum_level") or "").strip().lower()
+    return level if level in TRUST_LEVEL_RANK else None
+
+
+def _write_trust_floor(path: Path, level: str, *, actor: str):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"schema": 1, "minimum_level": level, "updated_at": now(), "updated_by": actor[:150]}
+    atomic_json(path, payload, mode=0o644, uid=0, gid=0)
+
+
+def _capture_restore_security_state(config, stage: Path) -> dict:
+    snapshot = stage / "current-security-state"
+    snapshot.mkdir(parents=True, exist_ok=True)
+    trust_src = Path("/etc/tec-tac/trusted-publishers")
+    trust_dst = snapshot / "trusted-publishers"
+    if trust_src.is_dir() and not trust_src.is_symlink():
+        shutil.copytree(trust_src, trust_dst, symlinks=False, dirs_exist_ok=True)
+    policy_src = Path("/etc/tec-tac/policy/update-trust-policy.json")
+    if policy_src.is_file() and not policy_src.is_symlink():
+        shutil.copy2(policy_src, snapshot / "update-trust-policy.json")
+    return {"root": str(snapshot), "trust_root": str(trust_dst), "policy": str(snapshot / "update-trust-policy.json")}
+
+
+def _merge_restore_security_state(snapshot: dict, *, actor: str, log, restored_trust: Path | None = None, restored_policy: Path | None = None):
+    # Current target trust wins for publishers already known on the target. This
+    # preserves key/publisher revocations made after the backup. Restored-only
+    # publishers remain available, which keeps replacement-server recovery useful.
+    current_trust = Path(snapshot.get("trust_root") or "")
+    restored_trust = Path(restored_trust or "/etc/tec-tac/trusted-publishers")
+    if current_trust.is_dir():
+        restored_trust.mkdir(parents=True, exist_ok=True)
+        for entry in current_trust.iterdir():
+            target = restored_trust / entry.name
+            if target.exists() or target.is_symlink():
+                if target.is_dir() and not target.is_symlink(): shutil.rmtree(target)
+                else: target.unlink()
+            if entry.is_dir() and not entry.is_symlink(): shutil.copytree(entry, target, symlinks=False)
+            elif entry.is_file() and not entry.is_symlink(): shutil.copy2(entry, target)
+        log.write("[TEC-TAC-BACKUP] merged target publisher trust over restored publisher state\n")
+    current_policy = Path(snapshot.get("policy") or "")
+    restored_policy = Path(restored_policy or "/etc/tec-tac/policy/update-trust-policy.json")
+    current_level = _read_trust_floor(current_policy)
+    restored_level = _read_trust_floor(restored_policy)
+    levels = [v for v in (current_level, restored_level) if v in TRUST_LEVEL_RANK]
+    if levels:
+        strictest = max(levels, key=lambda v: TRUST_LEVEL_RANK[v])
+        if restored_level != strictest:
+            _write_trust_floor(restored_policy, strictest, actor=actor or "restore-security-merge")
+        log.write(f"[TEC-TAC-BACKUP] restore trust floor preserved at {strictest}\n")
+
+
+def _version_key(value: object):
+    text = str(value or "").strip()
+    m = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:-(\d+))?", text)
+    if not m: return None
+    return tuple(int(x or 0) for x in m.groups())
+
+
+def _restore_version_transition(config, manifest: dict) -> dict:
+    current = detect_version(Path(config["TEC_TAC_FRAMEWORK_SOURCE"])) or detect_version(Path(config["TEC_TAC_ROOT"]))
+    restored = str((((manifest.get("components") or {}).get("tec_tac") or {}).get("framework_version") or "").strip()) or None
+    ck, rk = _version_key(current), _version_key(restored)
+    older = bool(ck and rk and rk < ck)
+    return {
+        "current_core_version": current,
+        "restored_core_version": restored,
+        "is_core_downgrade": older,
+        "notice": (f"This restore puts Core back to {restored}. Current Core is {current}." if older else None),
+    }
+
 def create_recovery_signature(config, manifest_bytes: bytes, checksums_bytes: bytes) -> dict:
     key_id = str(config.get("TEC_TAC_INSTALLATION_ID") or "").strip()
     if not SAFE_RECOVERY_KEY_ID_RE.fullmatch(key_id):
@@ -1473,54 +1678,12 @@ def create_recovery_signature(config, manifest_bytes: bytes, checksums_bytes: by
     }
 
 
-def verify_recovery_signature(config, manifest_bytes: bytes, checksums_bytes: bytes, envelope_bytes: bytes) -> dict:
-    try:
-        envelope = json.loads(envelope_bytes.decode("utf-8"))
-    except Exception as exc:
-        raise RuntimeError("recovery bundle signature envelope is invalid") from exc
-    if not isinstance(envelope, dict) or int(envelope.get("schema") or 0) != 1 or envelope.get("algorithm") != "ed25519":
-        raise RuntimeError("recovery bundle signature envelope is unsupported")
-    key_id = str(envelope.get("key_id") or "").strip()
-    if not SAFE_RECOVERY_KEY_ID_RE.fullmatch(key_id):
-        raise RuntimeError("recovery bundle signing key id is invalid")
-    if str(envelope.get("manifest_sha256") or "").lower() != hashlib.sha256(manifest_bytes).hexdigest():
-        raise RuntimeError("recovery bundle signed manifest hash does not match")
-    if str(envelope.get("checksums_sha256") or "").lower() != hashlib.sha256(checksums_bytes).hexdigest():
-        raise RuntimeError("recovery bundle signed checksum hash does not match")
-    candidate_pem = str(envelope.get("public_key_pem") or "").encode("ascii", errors="strict")
-    try:
-        candidate_key = serialization.load_pem_public_key(candidate_pem)
-    except Exception as exc:
-        raise RuntimeError("recovery bundle candidate public key is invalid") from exc
-    if not isinstance(candidate_key, Ed25519PublicKey):
-        raise RuntimeError("recovery bundle candidate public key must be Ed25519")
-    candidate_raw = candidate_key.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
-    if str(envelope.get("public_key_sha256") or "").lower() != hashlib.sha256(candidate_raw).hexdigest():
-        raise RuntimeError("recovery bundle candidate public key fingerprint is invalid")
-
-    trust_root = Path(str(config.get("TEC_TAC_RECOVERY_TRUST_ROOT") or "/etc/tec-tac/recovery-trust"))
-    if not trust_root.is_absolute():
-        raise RuntimeError("TEC_TAC_RECOVERY_TRUST_ROOT must be absolute")
-    _secure_root_directory(trust_root, private=False)
-    key_path = trust_root / f"{key_id}.pub"
-    try:
-        _secure_regular_root_file(key_path, private=False)
-        key = serialization.load_pem_public_key(key_path.read_bytes())
-    except FileNotFoundError as exc:
-        raise RuntimeError(f"recovery bundle signer is not trusted by this server: {key_id}") from exc
-    except Exception as exc:
-        raise RuntimeError(f"trusted recovery public key could not be loaded: {key_id}") from exc
-    if not isinstance(key, Ed25519PublicKey):
-        raise RuntimeError("trusted recovery key must be Ed25519")
-    public_raw = key.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
-    if public_raw != candidate_raw or str(envelope.get("public_key_sha256") or "").lower() != hashlib.sha256(public_raw).hexdigest():
-        raise RuntimeError("recovery bundle signer fingerprint does not match trusted key")
-    try:
-        signature = base64.b64decode(str(envelope.get("signature") or ""), validate=True)
-        key.verify(signature, _recovery_signing_message(manifest_bytes, checksums_bytes))
-    except (ValueError, InvalidSignature) as exc:
-        raise RuntimeError("recovery bundle signature verification failed") from exc
-    return {"verified": True, "key_id": key_id, "public_key_sha256": envelope["public_key_sha256"]}
+def verify_recovery_signature(config, manifest_bytes: bytes, checksums_bytes: bytes, envelope_bytes: bytes, *, allow_untrusted=False) -> dict:
+    signer = _inspect_recovery_signature(manifest_bytes, checksums_bytes, envelope_bytes)
+    status = _recovery_trust_status(config, signer)
+    if not status["trusted"] and not allow_untrusted:
+        raise RuntimeError(f"recovery bundle signer is not trusted by this server: {signer['key_id']}")
+    return status
 
 
 def create_recovery_bundle(config, temp: Path, *, backup_class, tactical_archive=None, tactical_meta=None, tec_tac_archive=None, tec_tac_meta=None):
@@ -1530,11 +1693,14 @@ def create_recovery_bundle(config, temp: Path, *, backup_class, tactical_archive
         "tec_tac": tec_tac_meta or {"included": False},
     }
     modes=bundle_recovery_modes(bool(tactical_meta), bool(tec_tac_meta))
+    identity = recovery_identity(config)
     manifest={
         "format_version": 2,
         "artifact_type": "tec-tac-recovery-bundle",
         "created_at": created_at,
-        "installation_id": str(config.get("TEC_TAC_INSTALLATION_ID") or "").strip() or None,
+        "installation_id": identity["installation_id"],
+        "server_name": identity["server_name"],
+        "recovery_signer": {"key_id": identity["key_id"], "public_key_sha256": identity["public_key_sha256"]},
         "backup_class": backup_class,
         "components": components,
         "recovery_modes": modes,
@@ -1740,6 +1906,9 @@ def backup_item(destination, archive_name, location, size, modified, metadata=No
         "legacy": legacy,
         "components": components,
         "recovery_modes": modes,
+        "installation_id": metadata.get("installation_id") or metadata.get("server_id"),
+        "server_name": metadata.get("server_name"),
+        "recovery_signer": metadata.get("recovery_signer") if isinstance(metadata.get("recovery_signer"), dict) else None,
         "sidecar_status": sidecar_status,
     }
 
@@ -2098,7 +2267,7 @@ def extract_verified_bundle_member(tf, member, target, expected_hash, expected_s
     return target
 
 
-def validate_recovery_bundle(bundle: Path, restore_mode: str, stage: Path, *, validate_components=True, config=None):
+def validate_recovery_bundle(bundle: Path, restore_mode: str, stage: Path, *, validate_components=True, config=None, allow_untrusted_signer=False):
     ensure_regular(bundle, max_bytes=max_backup_bytes(load_config()))
     if not BUNDLE_RE.fullmatch(bundle.name):
         raise RuntimeError("recovery bundle filename is invalid")
@@ -2113,7 +2282,7 @@ def validate_recovery_bundle(bundle: Path, restore_mode: str, stage: Path, *, va
         mf=tf.extractfile(by_name["manifest.json"]); cf=tf.extractfile(by_name["checksums.sha256"]); sf=tf.extractfile(by_name[RECOVERY_SIGNATURE_MEMBER])
         if mf is None or cf is None or sf is None: raise RuntimeError("recovery bundle metadata is unreadable")
         manifest_bytes=mf.read(); checksums_bytes=cf.read(); signature_bytes=sf.read()
-        recovery_trust=verify_recovery_signature(config or load_config(), manifest_bytes, checksums_bytes, signature_bytes)
+        recovery_trust=verify_recovery_signature(config or load_config(), manifest_bytes, checksums_bytes, signature_bytes, allow_untrusted=allow_untrusted_signer)
         manifest=json.loads(manifest_bytes.decode("utf-8"))
         if not isinstance(manifest,dict) or int(manifest.get("format_version",0)) != 2:
             raise RuntimeError("recovery bundle format is unsupported")
@@ -2566,19 +2735,21 @@ def verify_tactical_runtime(config, log):
             raise RuntimeError(f"post-restore Tactical service verification failed: {service}")
 
 
-def run_post_restore_tec_tac(config, component_meta, component_archive, log):
+def run_post_restore_tec_tac(config, component_meta, component_archive, log, *, security_snapshot=None, actor="restore"):
     # Destination paths and executable installers are chosen exclusively from
     # the root-owned local config. Manifest paths are descriptive metadata and
     # can never redirect a privileged restore.
     safe_extract_payload_tar(component_archive, config=config)
+    if security_snapshot:
+        _merge_restore_security_state(security_snapshot, actor=actor, log=log)
     framework_source=Path(config["TEC_TAC_FRAMEWORK_SOURCE"])
     ui_source=Path(config["TEC_TAC_UI_SOURCE"])
     backend_installer=framework_source/"install.sh"
     if not backend_installer.is_file():
         raise RuntimeError(f"restored Tec-Tac framework installer not found at {backend_installer}")
-    run_logged(["/usr/bin/bash",str(backend_installer)],log,timeout=2*60*60)
+    run_logged([_trusted_bash(),str(backend_installer)],log,timeout=2*60*60)
     ui_installer=ui_source/"scripts"/"install.sh"
-    if ui_installer.is_file(): run_logged(["/usr/bin/bash",str(ui_installer)],log,timeout=2*60*60)
+    if ui_installer.is_file(): run_logged([_trusted_bash(),str(ui_installer)],log,timeout=2*60*60)
     run_logged(["nginx","-t"],log,timeout=60)
     subprocess.run(["systemctl","reload","nginx"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     tactical_python=Path(config["TACTICAL_PYTHON"]); manage=Path(config["TACTICAL_BACKEND_ROOT"])/"manage.py"
@@ -2700,7 +2871,7 @@ def validate_target_preflight(config, report, mode, staged_bytes, *, mutation_lo
 
     required_tools = ["tar", "gzip"]
     if mode in {"full", "tactical"}:
-        required_tools += ["/usr/bin/bash", "runuser", "systemctl", "curl", "wget", "git"]
+        required_tools += [_trusted_bash(), "runuser", "systemctl", "curl", "wget", "git"]
     if mode in {"full", "tec_tac"}:
         required_tools += ["nginx"]
     missing = sorted(tool for tool in set(required_tools) if shutil.which(tool) is None)
@@ -2926,10 +3097,27 @@ def operation_validate_restore(config, job, log):
             _vr_check(report, "tec_tac", "tec_tac.component", "Tec-Tac component", "not_applicable", "Legacy native Tactical archive has no independent Tec-Tac component.")
         else:
             try:
-                manifest, extracted = validate_recovery_bundle(downloaded, mode, stage, validate_components=False, config=config)
+                manifest, extracted = validate_recovery_bundle(downloaded, mode, stage, validate_components=False, config=config, allow_untrusted_signer=True)
                 report["format_version"] = int(manifest.get("format_version") or 0)
                 report["legacy"] = False
                 _vr_check(report, "bundle", "bundle.structure", "Recovery bundle structure", "passed", "Manifest, checksums and selected component hash/size are valid.")
+                signer = manifest.get("recovery_trust") or {}
+                report["recovery_signer"] = {
+                    "installation_id": manifest.get("installation_id") or signer.get("installation_id"),
+                    "server_name": manifest.get("server_name"),
+                    "key_id": signer.get("key_id"),
+                    "public_key_sha256": signer.get("public_key_sha256"),
+                    "signed_at": manifest.get("created_at"),
+                    "trusted": bool(signer.get("trusted")),
+                    "trust_required": bool(signer.get("trust_required")),
+                }
+                if signer.get("trusted"):
+                    _vr_check(report, "bundle", "bundle.signer_trust", "Recovery signer trust", "passed", f"Trusted signer {signer.get('key_id')} fingerprint {signer.get('public_key_sha256')}")
+                else:
+                    _vr_check(report, "bundle", "bundle.signer_trust", "Recovery signer trust", "failed", f"Signer {signer.get('key_id')} is valid but not yet trusted; superuser confirmation or root key import is required.")
+                report["version_transition"] = _restore_version_transition(config, manifest)
+                if report["version_transition"].get("is_core_downgrade"):
+                    report["warnings"].append(report["version_transition"]["notice"])
             except Exception as exc:
                 _vr_check(report, "bundle", "bundle.structure", "Recovery bundle structure", "failed", str(exc))
                 manifest = {}; extracted = {}
@@ -3052,6 +3240,11 @@ def operation_restore_backup(config, job, log):
             extracted={"tactical":downloaded}
         else:
             manifest,extracted=validate_recovery_bundle(downloaded,mode,stage,config=config)
+            transition = _restore_version_transition(config, manifest)
+            job["version_transition"] = transition
+            if transition.get("is_core_downgrade"):
+                log.write(f"[TEC-TAC-BACKUP] NOTICE {transition['notice']}\n")
+                _append_recovery_audit("core_version_restore", actor=(job.get("context") or {}).get("requested_by") or "unknown", **transition)
 
         # Destructive restore must enforce the same target-readiness policy as
         # non-destructive validation. A persisted override token can waive only
@@ -3074,6 +3267,7 @@ def operation_restore_backup(config, job, log):
         atomic_json(job_path(job["id"],config),job)
 
         job["stage"]="restore-prepared"; atomic_json(job_path(job["id"],config),job)
+        security_snapshot = _capture_restore_security_state(config, stage) if mode in {"full", "tec_tac"} else None
         moved_root=None
         snapshot=None
         if mode in {"full","tactical"}:
@@ -3111,7 +3305,7 @@ def operation_restore_backup(config, job, log):
                 env=os.environ.copy(); env.update({"HOME":home,"USER":user,"LOGNAME":user,"GROUP":grp.getgrgid(tactical_identity(config)[1]).gr_name})
                 run_logged([str(restore_script),str(extracted["tactical"])],log,env=env,cwd=home,timeout=10*60*60,user=user)
                 if mode=="full":
-                    run_post_restore_tec_tac(config,(manifest.get("components") or {}).get("tec_tac") or {},extracted["tec_tac"],log)
+                    run_post_restore_tec_tac(config,(manifest.get("components") or {}).get("tec_tac") or {},extracted["tec_tac"],log,security_snapshot=security_snapshot,actor=(job.get("context") or {}).get("requested_by") or "restore")
                 else:
                     verify_tactical_runtime(config,log)
             except BaseException as exc:
@@ -3139,7 +3333,7 @@ def operation_restore_backup(config, job, log):
             }
             atomic_json(job_path(job["id"],config),job)
             try:
-                run_post_restore_tec_tac(config,(manifest.get("components") or {}).get("tec_tac") or {},extracted["tec_tac"],log)
+                run_post_restore_tec_tac(config,(manifest.get("components") or {}).get("tec_tac") or {},extracted["tec_tac"],log,security_snapshot=security_snapshot,actor=(job.get("context") or {}).get("requested_by") or "restore")
             except BaseException as exc:
                 rollback = rollback_failed_restore(config, None, snapshot, log, restore_tactical_tree=False)
                 failure = {
@@ -3160,6 +3354,71 @@ def operation_restore_backup(config, job, log):
         }
     finally:
         lock.close()
+
+
+
+def _bundle_signer_from_download(config, destination, name, stage, log):
+    downloaded = stage / name
+    metadata = download_destination(config, destination, name, downloaded, log)
+    ensure_regular(downloaded, max_bytes=max_backup_bytes(config))
+    with tarfile.open(downloaded, "r:gz") as tf:
+        members = safe_tar_members(tf); by_name = {m.name.lstrip("./"): m for m in members}
+        for required in ("manifest.json", "checksums.sha256", RECOVERY_SIGNATURE_MEMBER):
+            if required not in by_name: raise RuntimeError(f"recovery bundle is missing {required}")
+        mf=tf.extractfile(by_name["manifest.json"]); cf=tf.extractfile(by_name["checksums.sha256"]); sf=tf.extractfile(by_name[RECOVERY_SIGNATURE_MEMBER])
+        if mf is None or cf is None or sf is None: raise RuntimeError("recovery bundle metadata is unreadable")
+        manifest_bytes, checksums_bytes, envelope_bytes = mf.read(), cf.read(), sf.read()
+    signer = _inspect_recovery_signature(manifest_bytes, checksums_bytes, envelope_bytes)
+    manifest = json.loads(manifest_bytes.decode("utf-8"))
+    signer.update({"server_name": manifest.get("server_name"), "signed_at": manifest.get("created_at"), "installation_id": manifest.get("installation_id") or signer["key_id"]})
+    signer.update(_recovery_trust_status(config, signer))
+    return signer
+
+
+def operation_recovery_identity(config, job, log):
+    identity = recovery_identity(config)
+    identity.pop("public_key_pem", None)
+    identity["trusted_locally"] = True
+    return identity
+
+
+def operation_trust_recovery_signer(config, job, log):
+    request = job["request"]
+    dest_id, name = parse_backup_ref(request.get("backup_ref"))
+    destination = request.get("destination")
+    if destination is None:
+        if dest_id not in {"local", "0", "native"}: raise RuntimeError("destination configuration is required for this backup_ref")
+        destination={"id":dest_id,"type":"local","name":"Tactical local backups","path":"/rmmbackups"}
+    destination=validate_destination(destination,config)
+    if destination["id"] != dest_id: raise RuntimeError("backup_ref destination id does not match supplied destination")
+    rs=roots(config); stage=rs["staging"]/f"trust-signer-{job['id']}"
+    shutil.rmtree(stage, ignore_errors=True); stage.mkdir(parents=True, exist_ok=True)
+    try:
+        signer = _bundle_signer_from_download(config, destination, name, stage, log)
+        if signer.get("trusted"):
+            signer.pop("public_key_pem", None)
+            return {"ok": True, "already_trusted": True, "signer": signer}
+        trust_root = Path(str(config.get("TEC_TAC_RECOVERY_TRUST_ROOT") or "/etc/tec-tac/recovery-trust"))
+        _secure_root_directory(trust_root, private=False)
+        key_path = trust_root / f"{signer['key_id']}.pub"
+        if key_path.exists():
+            raise RuntimeError("recovery trust key id already exists with different material")
+        pem = signer["public_key_pem"].encode("ascii")
+        fd, tmp_name = tempfile.mkstemp(prefix=f".{signer['key_id']}.", suffix=".pub", dir=str(trust_root))
+        tmp=Path(tmp_name)
+        try:
+            os.write(fd, pem); os.fsync(fd); os.fchmod(fd,0o644); os.fchown(fd,0,0); os.close(fd); fd=-1
+            os.replace(tmp,key_path)
+        finally:
+            if fd >= 0: os.close(fd)
+            tmp.unlink(missing_ok=True)
+        actor=(job.get("context") or {}).get("requested_by") or "unknown"
+        _append_recovery_audit("recovery_signer_trusted", actor=actor, key_id=signer["key_id"], public_key_sha256=signer["public_key_sha256"], backup_ref=request.get("backup_ref"), signed_at=signer.get("signed_at"), server_name=signer.get("server_name"))
+        log.write(f"[TEC-TAC-BACKUP] trusted recovery signer {signer['key_id']} fingerprint={signer['public_key_sha256']} actor={actor}\n")
+        signer["trusted"] = True; signer["trust_required"] = False; signer.pop("public_key_pem", None)
+        return {"ok": True, "already_trusted": False, "signer": signer}
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
 
 
 def delete_local(destination, name):
@@ -3632,6 +3891,8 @@ OPERATIONS = {
     "apply_retention": operation_apply_retention,
     "validate_destination": operation_validate_destination,
     "validate_restore": operation_validate_restore,
+    "recovery_identity": operation_recovery_identity,
+    "trust_recovery_signer": operation_trust_recovery_signer,
     "store_secret": operation_store_secret,
     "delete_secret": operation_delete_secret,
 }

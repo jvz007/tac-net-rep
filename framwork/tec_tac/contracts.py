@@ -352,6 +352,29 @@ CORE_CONTRACTS = (
     },
 )
 
+HTTP_CONTRACT_DETAILS = {
+    "/api/tfd/modules/v2/jobs/": {
+        "query": {"page": "integer >=1", "page_size": "integer 1..100", "status": "optional string", "action": "optional string", "search": "optional string"},
+        "response": {"items": "array", "total": "integer", "page": "integer", "page_size": "integer", "pages": "integer", "next_page": "integer|null", "previous_page": "integer|null"},
+    },
+    "/api/tfd/session/audit/": {
+        "query": {"page": "integer >=1", "page_size": "integer 1..100", "username": "optional string", "event_type": "optional string"},
+        "response": {"items": "array", "total": "integer", "page": "integer", "page_size": "integer", "pages": "integer", "next_page": "integer|null", "previous_page": "integer|null"},
+    },
+    "/api/tfd/access/sessions/": {
+        "query": {"page": "integer >=1", "page_size": "integer 1..100", "search": "optional username/IP string"},
+        "response": {"items": "array", "total": "integer", "page": "integer", "page_size": "integer", "pages": "integer", "next_page": "integer|null", "previous_page": "integer|null"},
+    },
+    "/api/tfd/scheduler/runs/": {
+        "query": {"page": "integer >=1", "page_size": "integer 1..100", "status": "optional string", "search": "optional string"},
+        "response": {"items": "array", "total": "integer", "page": "integer", "page_size": "integer", "pages": "integer", "next_page": "integer|null", "previous_page": "integer|null"},
+    },
+    "/api/tfd/system/recovery/trust/": {
+        "GET": {"response": {"identity": "installation/server recovery signer metadata", "can_trust_signer": "boolean"}},
+        "POST": {"request": {"backup_ref": "string", "destination": "object|null"}, "authorization": "effective Tactical superuser", "response": {"signer": "validated trusted signer metadata"}},
+    },
+}
+
 RULES = (
     "Use Python tec_tac.* contracts inside the Tec-Tac/Tactical backend; use HTTP only at browser/external process boundaries.",
     "Do not import another module's private models, helpers, services, filesystem layout or database tables.",
@@ -394,15 +417,17 @@ def _http_contracts() -> list[dict]:
             for method in ("get", "post", "put", "patch", "delete"):
                 if method in view_class.__dict__:
                     methods.append(method.upper())
-        rows.append(
-            {
-                "route": f"/api/tfd/{route}",
-                "name": getattr(entry, "name", None),
-                "methods": methods or ["GET"],
-                "kind": "http",
-                "audience": "browser/external",
-            }
-        )
+        row = {
+            "route": f"/api/tfd/{route}",
+            "name": getattr(entry, "name", None),
+            "methods": methods or ["GET"],
+            "kind": "http",
+            "audience": "browser/external",
+        }
+        detail = HTTP_CONTRACT_DETAILS.get(row["route"])
+        if detail:
+            row["contract"] = detail
+        rows.append(row)
     return sorted(rows, key=lambda row: row["route"])
 
 

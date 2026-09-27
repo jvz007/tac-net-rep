@@ -20,7 +20,7 @@ from .capabilities import register_capability
 from .config import load_layout
 
 CAPABILITY_ID = "core.server_backup"
-CAPABILITY_VERSION = "1.6.0"
+CAPABILITY_VERSION = "1.7.0"
 HELPER = Path("/usr/local/sbin/tec-tac-server-backup")
 DEFAULT_STATE_ROOT = Path("/var/lib/tec-tac/server-backup")
 TERMINAL_STATES = {"succeeded", "failed", "dispatch_failed"}
@@ -109,6 +109,8 @@ def _timeout_for(action: str) -> int:
         "validate_restore": 45 * 60,
         "store_secret": 120,
         "delete_secret": 120,
+        "recovery_identity": 120,
+        "trust_recovery_signer": 45 * 60,
     }
     env_key = "TEC_TAC_SERVER_BACKUP_TIMEOUT_" + action.upper()
     try:
@@ -477,6 +479,30 @@ class ServerBackupProvider:
         }
 
 
+def recovery_identity_core(*, context: dict | None = None) -> dict:
+    """Core-internal recovery identity lookup. Not exposed as a capability operation."""
+    return _run("recovery_identity", {}, context=context or {})
+
+
+def trust_recovery_signer_core(*, backup_ref: str, destination: dict | None, context: dict) -> dict:
+    """Core-internal recovery trust operation.
+
+    Callers must enforce the Tec-Tac session and effective-superuser boundary
+    before invoking this function. It is intentionally absent from
+    ``ServerBackupProvider`` and from the public capability operation list so a
+    module cannot obtain a trust primitive through ``core.server_backup``.
+    """
+    destinations = _validate_destinations([destination]) if destination is not None else []
+    return _run(
+        "trust_recovery_signer",
+        {
+            "backup_ref": str(backup_ref or "").strip(),
+            "destination": destinations[0] if destinations else None,
+        },
+        context=context,
+    )
+
+
 _PROVIDER = ServerBackupProvider()
 
 
@@ -505,6 +531,9 @@ def register_core_server_backup_capability():
             "backup_classes": sorted(BACKUP_CLASSES),
             "recovery_modes": ["full", "tactical", "tec_tac"],
             "format_version": 2,
+            "recovery_signature_member": "recovery-signature.json",
+            "backup_inventory_identity_fields": ["installation_id", "server_name", "recovery_signer"],
+            "restore_validation_fields": ["recovery_signer", "version_transition"],
             "overrideable_restore_checks": ["target.os"],
         },
     )
