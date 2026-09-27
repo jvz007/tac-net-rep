@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.139",
+  "version": "1.15.140",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -19,7 +19,7 @@
     {
       "path": "FIXING.md",
       "size": 1337,
-      "sha256": "96833a89ea0644fdc86743c42592748715f7640afb0fcd9a56e257ea7526e654"
+      "sha256": "05f97f442ab99e3c8df0cce43efd8fef959dfd0ec12e8afac414a53d92c7788f"
     },
     {
       "path": "LICENSE",
@@ -37,14 +37,14 @@
       "sha256": "f4f304390f9a3e8ebb9ba84ecef8275ddc2ed7ed130f860f52caa668dd70bfe5"
     },
     {
-      "path": "RELEASE_NOTES_1.15.139.md",
-      "size": 1095,
-      "sha256": "991d707c47cba0dd2f32a9e7e53f8270aff606101b3108be2480df095728adaf"
+      "path": "RELEASE_NOTES_1.15.140.md",
+      "size": 1446,
+      "sha256": "d40bf477fbaebebbaaed54006dff618da635a05ebd06103309925184c583d2d0"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "2390e0c693d8016ab17ff6d10d417fed6a1a4a41af822012456a26f447b198ef"
+      "sha256": "0f632803e2fd34c962105653fce1e3be98ec277b93e4636ee08067d17821a551"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -1453,8 +1453,8 @@
     },
     {
       "path": "scripts/recovery-key-cli.py",
-      "size": 6243,
-      "sha256": "8e8b3d86154a2ca9eca8656195655b8901542ae3864b412a8da31df0c8142a4b"
+      "size": 9360,
+      "sha256": "56a01447001ff2e760ba74ad7341a53f5e96bbc3439363d55d43cafce05d0c21"
     },
     {
       "path": "scripts/recovery/lib.sh",
@@ -1518,8 +1518,8 @@
     },
     {
       "path": "scripts/server-backup-helper.py",
-      "size": 224968,
-      "sha256": "9d33c9888a43a5fe47091fc84f5dfdaf2a14fefe5d72ae8216eef48d5ac69771"
+      "size": 225369,
+      "sha256": "00df700c96bd2709c75b8797589773d0a4070bb0941decb5d199a30525ec8576"
     },
     {
       "path": "scripts/server-maintenance-helper.py",
@@ -1528,8 +1528,8 @@
     },
     {
       "path": "scripts/system-update-helper.py",
-      "size": 64761,
-      "sha256": "02449c45740b3311529d9e8c44d4d65c28dd1ff6362b355c09bc7d624ebf0579"
+      "size": 64976,
+      "sha256": "478936e4acebebdf2600fb7bc4f419823ffce516fb2bd9c1366e8b719b2830a4"
     },
     {
       "path": "scripts/tactical-backup-sudo.py",
@@ -1554,7 +1554,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "3c97320405a7cf7ee7feac3f98a52f4180768eddb9c2ec709b4da9860b6a5cc5"
+      "sha256": "e922386458f8212b5e45b679f868604c22b09d4cfc329ac26743ce9d1610d79b"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -1610,6 +1610,11 @@
       "path": "tests/audit-contract-foundation.sh",
       "size": 727,
       "sha256": "9705e5013c1335763a617b858678e29bcaf0ca516ff783892d2b470c4ba07210"
+    },
+    {
+      "path": "tests/backup-recovery-system-update-1.15.140.py",
+      "size": 8113,
+      "sha256": "d459a58eec133564cf51ae52af3e1fb8a3ba22632476b759c78816e8a582dbc9"
     },
     {
       "path": "tests/capability-foundation.sh",
@@ -1903,8 +1908,8 @@
     },
     {
       "path": "tests/recovery-foundation.sh",
-      "size": 3141,
-      "sha256": "7c70dd10675af9e6f62b4a16bb5c3d067e74ae86f5c627557ceec08be81cd76e"
+      "size": 3275,
+      "sha256": "cc37043034598986a25c0be45a65bfe19c16559d32f89b387a2456d1f4717beb"
     },
     {
       "path": "tests/recovery-trust-async-core.py",
@@ -2143,8 +2148,8 @@
     },
     {
       "path": "tests/server-backup-host-rollback.py",
-      "size": 20976,
-      "sha256": "1d234d8eceebaa7c2ca3985e97fb89cc58d3d827289b5b147b87410fc3ec34fc"
+      "size": 20584,
+      "sha256": "6d07aad553632f4500c2cba2cfedba6ba49554cfe529f8909495297c424d9cd0"
     },
     {
       "path": "tests/server-backup-recovery-trust-capability-boundary.py",

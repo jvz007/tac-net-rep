@@ -1228,6 +1228,7 @@ def run_job(job_id):
     _, immutable = load_running_request(job_id)
     job = {**immutable, "status": status.get("status"), "stage": status.get("stage"), "created_at": status.get("created_at")}
     cfg = load_config()
+    result_gid = tactical_gid(cfg)
     component = job["component"]
     target = Path(cfg.get("TEC_TAC_FRAMEWORK_SOURCE", "/opt/tec-tac-src/framework") if component == "framework" else cfg.get("TEC_TAC_UI_SOURCE", "/opt/tec-tac-src/ui")).resolve()
     package = Path(job["package_path"])
@@ -1381,11 +1382,12 @@ def run_job(job_id):
             job["status"] = "failed"
             job["finished_at"] = now()
         finally:
-            cfg = load_config()
-            gid = tactical_gid(cfg)
-            atomic_json(path, job, mode=0o640, uid=0, gid=gid)
+            # Reuse the config-derived Tactical gid captured before the update
+            # starts. Re-reading config/user identity here can fail after an
+            # otherwise handled update error and leave the job stuck running.
+            atomic_json(path, job, mode=0o640, uid=0, gid=result_gid)
             HISTORY_ROOT.mkdir(parents=True, exist_ok=True)
-            atomic_json(HISTORY_ROOT / path.name, job, mode=0o640, uid=0, gid=gid)
+            atomic_json(HISTORY_ROOT / path.name, job, mode=0o640, uid=0, gid=result_gid)
             try:
                 package.unlink(missing_ok=True)
             except OSError:

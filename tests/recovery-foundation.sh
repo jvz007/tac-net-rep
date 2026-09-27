@@ -41,3 +41,5 @@ grep -q '/opt/tec-tac-src/framework' "$DIAG" || fail "expected framework source 
 grep -q '/opt/tec-tac-src/ui' "$DIAG" || fail "expected UI source path assertion missing"
 grep -q '/var/lib/tec-tac/ui/tec-tac' "$DIAG" || fail "expected deployed UI path assertion missing"
 echo "[TEST] PASS recovery architecture diagnostics"
+python3 "${ROOT}/tests/backup-recovery-system-update-1.15.140.py"
+echo "[TEST] PASS backup/recovery/system-update 1.15.140 hardening"

@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/python3 -I
 """Root console management for Tec-Tac recovery signing trust.
 
 Exports/imports the public recovery trust identity only. The private signing key
@@ -20,12 +20,99 @@ from pathlib import Path
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-SIGNING_ROOT = Path('/etc/tec-tac/recovery-signing')
-TRUST_ROOT = Path('/etc/tec-tac/recovery-trust')
-ID_FILE = SIGNING_ROOT / 'installation-id'
-PUBLIC_FILE = SIGNING_ROOT / 'public.pem'
+DEFAULT_CONFIG = Path('/opt/tec-tac/etc/tec-tac.conf')
+CONFIG_POINTER = Path('/etc/tec-tac/config-path')
 AUDIT_FILE = Path('/var/log/tec-tac/recovery-audit.jsonl')
 SAFE_ID = re.compile(r'^[A-Za-z0-9_.-]{1,128}$')
+
+
+def _read_bounded_fd(fd: int, max_bytes: int = 1024 * 1024) -> bytes:
+    chunks = []
+    remaining = max_bytes + 1
+    while remaining > 0:
+        block = os.read(fd, min(65536, remaining))
+        if not block:
+            break
+        chunks.append(block)
+        remaining -= len(block)
+    data = b''.join(chunks)
+    if len(data) > max_bytes:
+        raise RuntimeError('trusted recovery configuration file is unexpectedly large')
+    return data
+
+
+def _read_root_regular(path: Path, *, max_bytes: int = 1024 * 1024) -> bytes:
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise RuntimeError(f'root-owned recovery file is unsafe or unreadable: {path}') from exc
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or (info.st_mode & 0o022):
+            raise RuntimeError(f'recovery file must be root-owned regular and not group/world writable: {path}')
+        return _read_bounded_fd(fd, max_bytes=max_bytes)
+    finally:
+        os.close(fd)
+
+
+def _installed_config_path(pointer: Path = CONFIG_POINTER, default: Path = DEFAULT_CONFIG) -> Path:
+    try:
+        raw = _read_root_regular(pointer, max_bytes=4096).decode('utf-8').strip()
+    except RuntimeError:
+        if not os.path.lexists(pointer):
+            return default
+        raise
+    path = Path(raw)
+    if not raw or '\n' in raw or '\r' in raw or not path.is_absolute():
+        raise RuntimeError(f'Tec-Tac config-path pointer is invalid: {pointer}')
+    return path
+
+
+def _root_layout() -> dict[str, str]:
+    config = _installed_config_path()
+    if not os.path.lexists(config):
+        return {}
+    text = _read_root_regular(config).decode('utf-8')
+    values: dict[str, str] = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            continue
+        key, value = line.split('=', 1)
+        values[key.strip()] = value.strip()
+    return values
+
+
+def _absolute_layout_path(layout: dict[str, str], key: str, default: str) -> Path:
+    path = Path(str(layout.get(key) or default))
+    if not path.is_absolute():
+        raise RuntimeError(f'{key} must be absolute in the root-owned Tec-Tac config')
+    return path
+
+
+def _trusted_root_dir(path: Path, *, create: bool = False, mode: int = 0o755) -> None:
+    if create and not os.path.lexists(path):
+        path.mkdir(parents=True, mode=mode)
+        try:
+            os.chown(path, 0, 0)
+        except PermissionError:
+            pass
+        os.chmod(path, mode)
+    try:
+        info = path.lstat()
+    except FileNotFoundError as exc:
+        raise RuntimeError(f'recovery trust directory is missing: {path}') from exc
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or (info.st_mode & 0o022):
+        raise RuntimeError(f'recovery trust directory must be root-owned, real, and not group/world writable: {path}')
+
+
+_LAYOUT = _root_layout()
+_SIGNING_KEY = _absolute_layout_path(_LAYOUT, 'TEC_TAC_RECOVERY_SIGNING_KEY', '/etc/tec-tac/recovery-signing/private.pem')
+SIGNING_ROOT = _SIGNING_KEY.parent
+TRUST_ROOT = _absolute_layout_path(_LAYOUT, 'TEC_TAC_RECOVERY_TRUST_ROOT', '/etc/tec-tac/recovery-trust')
+ID_FILE = SIGNING_ROOT / 'installation-id'
+PUBLIC_FILE = SIGNING_ROOT / 'public.pem'
 
 
 def now():
@@ -55,13 +142,11 @@ def _public_identity(key_id: str, pem: bytes, *, server_name=None, exported_at=N
 
 
 def local_identity():
-    key_id = ID_FILE.read_text(encoding='utf-8').strip()
+    key_id = _read_root_regular(ID_FILE, max_bytes=4096).decode('utf-8').strip()
     if not SAFE_ID.fullmatch(key_id):
         raise RuntimeError('local recovery installation id is invalid')
-    st = PUBLIC_FILE.lstat()
-    if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o022:
-        raise RuntimeError('local recovery public key file is unsafe')
-    return _public_identity(key_id, PUBLIC_FILE.read_bytes())
+    pem = _read_root_regular(PUBLIC_FILE, max_bytes=64 * 1024)
+    return _public_identity(key_id, pem)
 
 
 def append_audit(event, **detail):
@@ -113,13 +198,10 @@ def cmd_import(args):
     expected = str(payload.get('public_key_sha256') or '').lower()
     if expected != identity['public_key_sha256']:
         raise RuntimeError('recovery public-key fingerprint does not match export metadata')
-    TRUST_ROOT.mkdir(parents=True, exist_ok=True)
-    os.chmod(TRUST_ROOT, 0o755)
-    try: os.chown(TRUST_ROOT, 0, 0)
-    except PermissionError: pass
+    _trusted_root_dir(TRUST_ROOT, create=True, mode=0o755)
     target = TRUST_ROOT / f'{key_id}.pub'
-    if target.exists():
-        if target.is_symlink() or target.read_bytes() != pem:
+    if os.path.lexists(target):
+        if _read_root_regular(target, max_bytes=64 * 1024) != pem:
             raise RuntimeError('recovery trust key id already exists with different key material')
         print(f'already trusted: {key_id} {expected}')
         return

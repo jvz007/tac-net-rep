@@ -1412,6 +1412,7 @@ def tec_tac_paths(config):
     ui_source = Path(config["TEC_TAC_UI_SOURCE"])
     legacy_ui_source = Path("/opt/tec-tac-ui")
     state_root = Path(config["TEC_TAC_STATE_ROOT"])
+    module_state_root = Path(config.get("TEC_TAC_MODULE_STATE_ROOT") or (state_root / "module-manager"))
     etc_root = runtime_root / "etc"
     system_etc_root = Path("/etc/tec-tac")
     nginx = Path("/etc/nginx/snippets/tec-tac.conf")
@@ -1421,8 +1422,9 @@ def tec_tac_paths(config):
         "ui_source": ui_source,
         "legacy_ui_source": legacy_ui_source,
         "state_root": state_root,
-        "module_state": state_root / "module-manager" / "module-state.json",
-        "repository_config": state_root / "module-manager" / "repositories" / "repositories.json",
+        "module_state_root": module_state_root,
+        "module_state": module_state_root / "module-state.json",
+        "repository_config": module_state_root / "repositories" / "repositories.json",
         "etc_root": etc_root,
         "system_etc_root": system_etc_root,
         "nginx": nginx,
@@ -1471,6 +1473,7 @@ def create_tec_tac_component(config, output: Path):
         "paths": {key: str(value) for key, value in paths.items()},
         "state_policy": {
             "state_root": str(paths["state_root"]),
+            "module_state_root": str(paths["module_state_root"]),
             "included": "allow-list",
             "included_paths": [str(paths["module_state"]), str(paths["repository_config"]), str(paths["system_etc_root"] / "trusted-publishers")],
             "reason": "only durable module/repository/publisher state is retained; caches/history/staging are rebuilt",
@@ -2614,6 +2617,7 @@ def validate_recovery_bundle(bundle: Path, restore_mode: str, stage: Path, *, va
 
 def _tec_tac_restore_allowed_roots(config):
     state_root = Path(config["TEC_TAC_STATE_ROOT"])
+    module_state_root = Path(config.get("TEC_TAC_MODULE_STATE_ROOT") or (state_root / "module-manager"))
     roots = (
         config["TEC_TAC_ROOT"],
         config["TEC_TAC_FRAMEWORK_SOURCE"],
@@ -2621,8 +2625,8 @@ def _tec_tac_restore_allowed_roots(config):
         "/opt/tec-tac-ui",
         "/etc/tec-tac",
         "/etc/nginx/snippets/tec-tac.conf",
-        str(state_root / "module-manager" / "module-state.json"),
-        str(state_root / "module-manager" / "repositories" / "repositories.json"),
+        str(module_state_root / "module-state.json"),
+        str(module_state_root / "repositories" / "repositories.json"),
     )
     result=[]
     for raw in roots:
@@ -2808,6 +2812,7 @@ TEC_TAC_PRIVILEGED_INSTALL_PATHS = (
     "/usr/local/sbin/tec-tac-housekeeping",
     "/usr/local/sbin/tec-tac-repair",
     "/usr/local/sbin/tec-tac-diagnostics",
+    "/usr/local/sbin/tec-tac-recovery-key",
     "/etc/sudoers.d/tec-tac-module-manager",
     "/etc/sudoers.d/tec-tac-module-manager-v2",
     "/etc/sudoers.d/tec-tac-module-hotfix",
@@ -2841,6 +2846,7 @@ def _tec_tac_systemd_unit_paths(systemd_root=Path("/etc/systemd/system")):
 
 def _tec_tac_restore_host_paths(config, systemd_root=Path("/etc/systemd/system")):
     state_root = Path(config["TEC_TAC_STATE_ROOT"])
+    module_state_root = Path(config.get("TEC_TAC_MODULE_STATE_ROOT") or (state_root / "module-manager"))
     tactical_root = Path(config["TACTICAL_ROOT"])
     systemd_root = Path(systemd_root)
     return (
@@ -2854,8 +2860,8 @@ def _tec_tac_restore_host_paths(config, systemd_root=Path("/etc/systemd/system")
         str(tactical_root / "api" / "tacticalrmm" / "tacticalrmm" / "local_settings.py"),
         str(systemd_root / "rmm.service.d"),
         *_tec_tac_systemd_unit_paths(systemd_root),
-        str(state_root / "module-manager" / "module-state.json"),
-        str(state_root / "module-manager" / "repositories" / "repositories.json"),
+        str(module_state_root / "module-state.json"),
+        str(module_state_root / "repositories" / "repositories.json"),
         *TEC_TAC_PRIVILEGED_INSTALL_PATHS,
     )
 

@@ -190,18 +190,14 @@ installer_discovered_paths = set(re.findall(
     r"/(?:usr/local/(?:lib|sbin)|etc/sudoers\.d)/tec-tac[A-Za-z0-9_./-]*",
     install_text,
 ))
-# Known pre-existing gap tracked separately as L77. Keep the exception explicit
-# so this L16 regression catches every newly introduced privileged target while
-# not silently claiming recovery-key rollback coverage before L77 is fixed.
-known_uncovered_installer_paths = {"/usr/local/sbin/tec-tac-recovery-key"}
-for raw in sorted(installer_discovered_paths - known_uncovered_installer_paths):
+# Every privileged installer target must participate in rollback coverage.
+known_uncovered_installer_paths = set()
+for raw in sorted(installer_discovered_paths):
     path = Path(raw)
     must(
         any(path == root or root in path.parents for root in rollback_roots),
         f"new privileged installer target is not covered by rollback snapshot: {path}",
     )
-for raw in known_uncovered_installer_paths:
-    must(raw in installer_discovered_paths, f"known L77 exception disappeared; update rollback coverage/test: {raw}")
 
 # Restored Tec-Tac sudoers rules must force a full visudo validation before the
 # rollback can be considered successful. Exercise both success and failure.
