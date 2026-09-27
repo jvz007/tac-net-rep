@@ -4063,11 +4063,14 @@ def operation_apply_retention(config, job, log):
             if not isinstance(raw, dict):
                 raise RuntimeError("retention policy must be an object")
             destination = validate_destination(raw.get("destination"), config)
-            if "keep_unclassified" not in raw:
-                raise RuntimeError("keep_unclassified must be set explicitly; Core will not default unclassified backups to deletion")
             keep = {}
+            legacy_unclassified = "keep_unclassified" not in raw
             for cls in ("daily", "weekly", "monthly", "unclassified"):
-                value = int(raw.get("keep_" + cls, 0))
+                if cls == "unclassified" and legacy_unclassified:
+                    # Pre-keep_unclassified policies must remain non-destructive.
+                    value = 10000
+                else:
+                    value = int(raw.get("keep_" + cls, 0))
                 if value < 0 or value > 10000:
                     raise RuntimeError("retention keep values must be between 0 and 10000")
                 keep[cls] = value

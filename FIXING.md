@@ -1,29 +1,31 @@
-# FIXING.md — Core 1.15.104
+# FIXING - Core 1.15.105
 
 ## Review scope
 
-This release is intentionally scoped to **M6** from Claude's Tec-Tac Medium/Low tracker.
+This release addresses **M7 only** from Claude's Tec-Tac Medium/Low tracker.
 
-### M6 — validate System Update rollback source before swapping the live tree
+### M7 - legacy backup retention compatibility
 
-Review that `scripts/system-update-helper.py::restore_backup()` now:
+Older saved retention policies may not contain `keep_unclassified`. Core must not reject those policies or interpret omission as deletion.
 
-- refuses missing/non-regular rollback archives before touching the installed component tree;
-- validates every tar member before publication and rejects unexpected top-level paths, links, and special files;
-- fully extracts the rollback archive into a sibling staging directory before the live tree is renamed or removed;
-- keeps the current live component tree in a same-filesystem quarantine until the staged rollback tree is successfully published;
-- preserves the live checkout's `.git` metadata because system-update backups intentionally exclude `.git`;
-- restores the quarantined live tree if the final staged-tree publication fails;
-- removes staging/quarantine artifacts after a successful restore.
+Expected behavior:
 
-Behavioral regression: `tests/system-update-rollback-backup-safety.py`.
+- Provider-side normalization accepts a legacy policy with `keep_daily`, `keep_weekly`, and `keep_monthly` but no `keep_unclassified`.
+- Omitted `keep_unclassified` normalizes to `10000`, the existing supported maximum, so legacy/no-sidecar backups are retained rather than deleted after upgrade.
+- The privileged helper independently applies the same safe legacy default if it receives an older request shape.
+- New/updated callers should continue to send `keep_unclassified` explicitly.
+- An explicit `keep_unclassified` value is still honored exactly; the compatibility default does not override explicit policy.
 
-The test proves that missing, malformed and truncated/corrupt rollback archives leave the live component tree and `.git` metadata untouched, while a valid archive is staged and then swapped successfully.
+## Behavioral regression
 
-## Test-environment note
+`tests/server-backup-retention-compat.py` verifies:
 
-`tests/tactical-update-survival.sh` reaches its environment prerequisite check and cannot determine the real Tactical service user in the packaging container. The M6-specific regression and System Update extraction/signed-tree/foundation suites pass independently; do not treat the missing service-account environment as an M6 behavior failure.
+1. provider normalization of a legacy policy to `keep_unclassified=10000`;
+2. helper execution does not delete unclassified backups for the legacy shape;
+3. explicit `keep_unclassified=1` still deletes older unclassified backups according to policy.
 
-## Out of scope
+The older grep assertion requiring the previous error string was removed from `server-backup-review-hardening.sh` and replaced with this behavioral test.
 
-No M7+ Mediums or unrelated Low items are intentionally addressed in this release.
+## Not in scope
+
+No other Medium or Low tracker items are intentionally addressed by this release.

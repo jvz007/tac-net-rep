@@ -440,11 +440,16 @@ class ServerBackupProvider:
             if not isinstance(destination, dict):
                 raise ServerBackupError("Each retention policy requires a destination object.")
             policy = {"destination": _validate_destinations([destination])[0]}
-            if "keep_unclassified" not in raw:
-                raise ServerBackupError("keep_unclassified must be set explicitly; Core will not default unclassified backups to deletion.")
+            # Backward compatibility for policies saved before keep_unclassified
+            # became part of the public shape. Omission must never imply deletion
+            # of legacy/no-sidecar backups, so retain the full supported window.
+            legacy_keep_unclassified = 10000 if "keep_unclassified" not in raw else None
             for key in ("keep_daily", "keep_weekly", "keep_monthly", "keep_unclassified"):
                 try:
-                    value = int(raw.get(key, 0))
+                    if key == "keep_unclassified" and legacy_keep_unclassified is not None:
+                        value = legacy_keep_unclassified
+                    else:
+                        value = int(raw.get(key, 0))
                 except (TypeError, ValueError) as exc:
                     raise ServerBackupError(f"{key} must be an integer.") from exc
                 if value < 0 or value > 10000:

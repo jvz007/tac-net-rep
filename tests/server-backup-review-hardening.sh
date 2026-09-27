@@ -17,7 +17,7 @@ grep -q 'filter="data"' "${HELPER}" || fail "safe TAR data filter missing"
 grep -q 'except BaseException as exc' "${HELPER}" || fail "final job status does not catch BaseException"
 grep -q 'module-state.json' "${HELPER}" || fail "durable module state is not backed up"
 grep -q 'repositories.json' "${HELPER}" || fail "durable repository configuration is not backed up"
-grep -q 'keep_unclassified must be set explicitly' "${ROOT}/framwork/tec_tac/server_backup.py" || fail "retention still silently defaults unclassified backups to zero"
+PYTHONPATH="${ROOT}/framwork" python3 "${ROOT}/tests/server-backup-retention-compat.py"
 grep -q 'filter="data"' "${ROOT}/framwork/tec_tac/system_update.py" || fail "system update TAR extraction lacks data filter"
 
 python3 - "${ROOT}" <<'PY'
