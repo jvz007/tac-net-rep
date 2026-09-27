@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.117",
+  "version": "1.15.118",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -18,8 +18,8 @@
     },
     {
       "path": "FIXING.md",
-      "size": 1034,
-      "sha256": "b914e392fcfdd5ecfcce3a3d575a6b6693bdaca6a6b9171aee6d39f871df3679"
+      "size": 1244,
+      "sha256": "2b0dfb314052dee5582d382547cdb91348fdc3610c3e152cfa5d1d79cb9d0cd5"
     },
     {
       "path": "LICENSE",
@@ -37,14 +37,14 @@
       "sha256": "f4f304390f9a3e8ebb9ba84ecef8275ddc2ed7ed130f860f52caa668dd70bfe5"
     },
     {
-      "path": "RELEASE_NOTES_1.15.117.md",
-      "size": 2578,
-      "sha256": "08d7a90e1c24a58884a7a21bd1b47ac45f328b424d9a0196c0b185885b1780c1"
+      "path": "RELEASE_NOTES_1.15.118.md",
+      "size": 2124,
+      "sha256": "6045f09c00f3ef91a0bc503b418c15128bc73ba9adb971d0b1c8b991d05a2891"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "fe0d3c1b52495f2adfe21213e0cb6c68edb8d2365244c961dc9b0fb8cc6b9bf1"
+      "sha256": "d39edf006b5e002819b03cab510f20c6c9f3876f57d2c43fe004b2355077bfdb"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -1303,8 +1303,8 @@
     },
     {
       "path": "framwork/tec_tac/session_security.py",
-      "size": 47833,
-      "sha256": "2ca8a85e184aba2a743d79829d5464b0f3904a0caf45c22cf9fdd723c5015812"
+      "size": 48004,
+      "sha256": "3894bd2e9358265ed7816a40b528a56f69f9115aa5bb8d035e28a79909221b61"
     },
     {
       "path": "framwork/tec_tac/session_security_views.py",
@@ -1549,7 +1549,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "1e60a0876dbce57f08daf7b9adb1b302126690d954b1d8d41295ecd7f4918ac6"
+      "sha256": "fe7bb53b30df8fb8ec30f38cc91d7280519555db314be8a486ff00aa077e933f"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -1832,6 +1832,11 @@
       "sha256": "f60e50a3394851455bb2f1edaebe98f028f19573be8b5159c5c2fa881d151494"
     },
     {
+      "path": "tests/open-list-closure-1.15.118.py",
+      "size": 1799,
+      "sha256": "019f94c179527b4ba70050527b436a50fb65dbb4fb9d49cb2a5037431a3dfd79"
+    },
+    {
       "path": "tests/optional-reportset-foundation.sh",
       "size": 2107,
       "sha256": "15e2f42c2650de7156d4b85d8c5a3e42b9b7e2876b35946bb3bbc805b96eaec7"
@@ -2093,8 +2098,8 @@
     },
     {
       "path": "tests/session-knox-revocation.py",
-      "size": 7526,
-      "sha256": "f1a4f8d93e4ddf7d2b684841c54c6847e7245edb9546bf11915102f2a471aef4"
+      "size": 8155,
+      "sha256": "4603467c8e6d7ec5b309b1fce7624b0583c77f59fde03c70a6e207dbaa3311a3"
     },
     {
       "path": "tests/session-retention-deletion.py",

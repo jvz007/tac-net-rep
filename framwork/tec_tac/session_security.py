@@ -601,28 +601,31 @@ def revoke_user_sessions(username: str, *, except_session_id=None, reason: str =
         raise SessionSecurityError("username is required.")
     count = 0
     ids = []
-    revoked_digests: set[str] = set()
+    preserved_digests: set[str] = set()
     with transaction.atomic():
-        qs = TecTacSessionTrust.objects.select_for_update().filter(username=username, revoked=False)
+        base_qs = TecTacSessionTrust.objects.select_for_update().filter(username=username, revoked=False)
         if except_session_id:
-            qs = qs.exclude(pk=except_session_id)
+            # Revoke-others is a credential-level operation as well as a Tec-Tac
+            # trust-row operation. Preserve only the Knox credential linked to
+            # the explicitly excluded/current session; every other Tactical Knox
+            # token for the user must be invalidated, even if Tec-Tac has never
+            # observed it and therefore has no trust row for it.
+            current = base_qs.filter(pk=except_session_id).first()
+            current_digest = str(getattr(current, "knox_digest", "") or "")
+            if current_digest:
+                preserved_digests.add(current_digest)
+            qs = base_qs.exclude(pk=except_session_id)
+        else:
+            qs = base_qs
         for session in qs:
-            digest = str(session.knox_digest or "")
-            if digest:
-                revoked_digests.add(digest)
             _revoke_locked(session, reason=reason, requested_by=requested_by)
-            count += 1; ids.append(str(session.id))
-        if revoked_digests:
-            # Preserve a credential only if another still-active trust row refers
-            # to it (most importantly the session excluded by "revoke others").
-            retained_digests = set(
-                TecTacSessionTrust.objects
-                .filter(knox_digest__in=revoked_digests, revoked=False)
-                .values_list("knox_digest", flat=True)
-            )
-            delete_digests = revoked_digests - retained_digests
-            if delete_digests:
-                AuthToken.objects.filter(digest__in=delete_digests).delete()
+            count += 1
+            ids.append(str(session.id))
+
+        token_qs = AuthToken.objects.filter(user__username=username)
+        if preserved_digests:
+            token_qs = token_qs.exclude(digest__in=preserved_digests)
+        token_qs.delete()
     if count:
         _audit("user_sessions_revoked", username=username, reason=reason, requested_by=requested_by, metadata={"count": count, "session_ids": ids})
     return {"username": username, "revoked": count, "session_ids": ids}

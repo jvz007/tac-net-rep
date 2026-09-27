@@ -39,15 +39,21 @@ sys.modules.update({
 
 class TokenQuery:
     def __init__(self, manager, digests): self.manager=manager; self.digests=set(digests)
+    def exclude(self, **kwargs):
+        digests=set(self.digests)
+        if "digest__in" in kwargs: digests -= {str(v) for v in kwargs["digest__in"]}
+        else: raise AssertionError(f"unsupported token exclude {kwargs}")
+        return TokenQuery(self.manager, digests)
     def delete(self):
         self.manager.deleted.append(set(self.digests))
         self.manager.live -= self.digests
         return (len(self.digests), {})
 class TokenManager:
-    def __init__(self): self.live=set(); self.deleted=[]
+    def __init__(self): self.live=set(); self.deleted=[]; self.user_tokens={}
     def filter(self, **kwargs):
         if "digest" in kwargs: return TokenQuery(self, {str(kwargs["digest"])})
         if "digest__in" in kwargs: return TokenQuery(self, {str(v) for v in kwargs["digest__in"]})
+        if "user__username" in kwargs: return TokenQuery(self, set(self.user_tokens.get(str(kwargs["user__username"]), set())))
         return TokenQuery(self, set())
 knox = types.ModuleType("knox")
 knox_models = types.ModuleType("knox.models")
@@ -100,6 +106,7 @@ class QuerySet:
     def values_list(self, field, flat=False):
         assert flat is True
         return [getattr(r, field) for r in self.rows]
+    def first(self): return self.rows[0] if self.rows else None
     def __iter__(self): return iter(list(self.rows))
 
 class TrustManager:
@@ -147,18 +154,19 @@ current=Row("current", "alice", "keep-digest")
 other1=Row("s2", "alice", "drop-a")
 other2=Row("s3", "alice", "drop-b")
 TRUST.rows[:] = [current, other1, other2]
-AuthToken.objects.live={"keep-digest", "drop-a", "drop-b"}; AuthToken.objects.deleted=[]
+AuthToken.objects.live={"keep-digest", "drop-a", "drop-b", "unobserved-knox"}; AuthToken.objects.deleted=[]
+AuthToken.objects.user_tokens={"alice": set(AuthToken.objects.live)}
 result=mod.revoke_user_sessions("alice", except_session_id="current", reason="others", requested_by="alice")
 assert result["revoked"] == 2, result
 assert current.revoked is False and other1.revoked is True and other2.revoked is True
 assert AuthToken.objects.live == {"keep-digest"}, AuthToken.objects.live
-assert {"drop-a", "drop-b"} in AuthToken.objects.deleted
+assert {"drop-a", "drop-b", "unobserved-knox"} in AuthToken.objects.deleted
 
 # A legacy trust row without a Knox digest still revokes cleanly and does not
 # cause a broad or empty Knox deletion.
 legacy=Row("legacy", "alice", "")
 TRUST.rows[:] = [legacy]
-AuthToken.objects.live={"unrelated"}; AuthToken.objects.deleted=[]
+AuthToken.objects.live={"unrelated"}; AuthToken.objects.deleted=[]; AuthToken.objects.user_tokens={}
 mod.revoke_session("legacy", requested_by="root")
 assert legacy.revoked is True
 assert AuthToken.objects.live == {"unrelated"}
