@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.131",
+  "version": "1.15.132",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -18,8 +18,8 @@
     },
     {
       "path": "FIXING.md",
-      "size": 775,
-      "sha256": "ddaf1e879a585a2e431e64dca1e93d0f804736c4f33462d0faff202cc44be641"
+      "size": 933,
+      "sha256": "2417ceb7a784c619235105af86bff8cc6ae73663f5c7609b3234dc42723a7b95"
     },
     {
       "path": "LICENSE",
@@ -37,14 +37,14 @@
       "sha256": "f4f304390f9a3e8ebb9ba84ecef8275ddc2ed7ed130f860f52caa668dd70bfe5"
     },
     {
-      "path": "RELEASE_NOTES_1.15.131.md",
-      "size": 1078,
-      "sha256": "1b399c7254706b3e8b373e596834d1556295139301f756b24fead8f5e8716b7c"
+      "path": "RELEASE_NOTES_1.15.132.md",
+      "size": 895,
+      "sha256": "6ab8d3d8927f614d52f5d915dfb375603862f2c81cd166f61529c7eb0090968f"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "18d243eaa0db03bd9fb82e8bbde0769dcee482a38bac19c7b7119669ee100db3"
+      "sha256": "aba1a49c5fa0bddbc2c5dd1b21b7e1ee828a5cf5efe848cad5d7353d33d96b71"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -698,8 +698,8 @@
     },
     {
       "path": "docs/session-security.md",
-      "size": 14605,
-      "sha256": "39c4e34bb6697692e7575e20f1b0636b49f772f6a31bd9b5d9f23d6dc2f4a669"
+      "size": 15236,
+      "sha256": "c5cc33c7b4d660e13d1b10f3a4c6cd07b5cdfbff38989f84a5d3a7ce7725a242"
     },
     {
       "path": "docs/system-update-signed-releases.md",
@@ -1063,8 +1063,8 @@
     },
     {
       "path": "framwork/tec_tac/mfa_backup_views.py",
-      "size": 8596,
-      "sha256": "7acc61bb3087acbc907c0520d08e97ef01fa5ad0d501d72e3601be7662962b2a"
+      "size": 9414,
+      "sha256": "5c451da14d9d3dfcf9a82273edc5b47b2f8ff399733a5bbb96585fe29fe2c1d1"
     },
     {
       "path": "framwork/tec_tac/migrations/0001_scheduler.py",
@@ -1308,8 +1308,8 @@
     },
     {
       "path": "framwork/tec_tac/session_security.py",
-      "size": 48957,
-      "sha256": "e11006c6269867dedc00f4393af91b477f8faa51561668bc40b8506a03ac3ada"
+      "size": 50099,
+      "sha256": "bb19e2241da4073259f0d3049bcdb662ed33b49fcd60051066c9088351bb7085"
     },
     {
       "path": "framwork/tec_tac/session_security_views.py",
@@ -1348,8 +1348,8 @@
     },
     {
       "path": "framwork/tec_tac/throttles.py",
-      "size": 4576,
-      "sha256": "fed8e2e72fcc7eaa24c02f653f8ccc5afd8d01401f5029ae48cbace45aa63b7b"
+      "size": 6709,
+      "sha256": "abed20666b7734369c67752fcaeedc998781a3b775f3fbbeeed7bb81f318c21d"
     },
     {
       "path": "framwork/tec_tac/trust_policy.py",
@@ -1554,7 +1554,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "2c6d3fb2902d9c55af17e2c21562d5553c36cfb4b677bc143efa1e5982b522ae"
+      "sha256": "e856f736b215091b7867807ada9351e96a43700d937bd73eb894a3b497b36493"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -1753,8 +1753,8 @@
     },
     {
       "path": "tests/mfa-backup-throttling.py",
-      "size": 3403,
-      "sha256": "f029663a178d04fdd884651d888bc3055526f636989e94f4b0c7231b47dad1d1"
+      "size": 4181,
+      "sha256": "56438a5ebe4cec42709dc40c586b5b00017c4ae0fe8c541f7efd462f4768d368"
     },
     {
       "path": "tests/mfa-enrollment-hardening.py",
@@ -1968,8 +1968,8 @@
     },
     {
       "path": "tests/review-followup-1.15.79.py",
-      "size": 6164,
-      "sha256": "92a666d8bab5ff34f7bb877e672d7645b56acec4f1d383d29a1c672c88b364a4"
+      "size": 6250,
+      "sha256": "9ed25c6d8e336b78068cc1fcf5363386756f0e6eba9e71f00c7e86780d9411c0"
     },
     {
       "path": "tests/review-hygiene-foundation.sh",
@@ -2163,13 +2163,13 @@
     },
     {
       "path": "tests/session-knox-revocation.py",
-      "size": 8155,
-      "sha256": "4603467c8e6d7ec5b309b1fce7624b0583c77f59fde03c70a6e207dbaa3311a3"
+      "size": 8778,
+      "sha256": "d9290255b960ebbb3bc8bc55fbf1fadaec6b3cb4497e02a18dc56859d446bef8"
     },
     {
       "path": "tests/session-retention-deletion.py",
-      "size": 8563,
-      "sha256": "564ed8d65dfc8c8e390c7e49cad11550ddf0d7561269f482285bd699f343048b"
+      "size": 9414,
+      "sha256": "bc91dd904a26a0854f45d62228dbad1771bc9f1eeddbf4c86b109f19a749dd4c"
     },
     {
       "path": "tests/session-retention-http-policy.py",

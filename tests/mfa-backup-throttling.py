@@ -56,17 +56,27 @@ wait = mod.mfa_backup_proof_success_retry_after(u)
 assert 86399 <= wait <= 86400, wait
 assert mod.mfa_backup_proof_failure_retry_after(u) is None
 
-# Login failure budget is per normalized username, not IP/request identity.
-for _ in range(5): mod.record_backup_code_login_failure('Alice')
-wait = mod.backup_code_login_failure_retry_after('  ALICE  ')
+# Tight backup-code budget is reserved before verification. Five concurrent-like
+# admissions are allowed; the sixth is rejected before it can verify a code.
+for _ in range(mod.MFA_BACKUP_FAILURE_LIMIT):
+    assert mod.claim_backup_code_login_attempt('Alice') is None
+wait = mod.claim_backup_code_login_attempt('  ALICE  ')
 assert 899 <= wait <= 900, wait
+assert mod.backup_code_login_failure_retry_after('ALICE') is not None
 mod.reset_backup_code_login_failures('alice')
 assert mod.backup_code_login_failure_retry_after('ALICE') is None
 
-# Window expiry clears the block.
-for _ in range(5): mod.record_backup_code_login_failure('bob')
-now[0] += 901
+# Wrong passwords use a distinct, looser per-username budget and do not consume
+# the tight backup-code verification allowance.
+assert mod.MFA_BACKUP_PASSWORD_FAILURE_LIMIT > mod.MFA_BACKUP_FAILURE_LIMIT
+for _ in range(mod.MFA_BACKUP_PASSWORD_FAILURE_LIMIT):
+    mod.record_backup_code_password_failure('Bob')
+assert mod.backup_code_password_failure_retry_after(' bob ') is not None
 assert mod.backup_code_login_failure_retry_after('bob') is None
+
+# Window expiry clears both kinds of block.
+now[0] += 901
+assert mod.backup_code_password_failure_retry_after('bob') is None
 
 view = (ROOT/'framwork/tec_tac/mfa_backup_views.py').read_text()
 assert 'response["Retry-After"]' in view
@@ -74,6 +84,9 @@ assert 'record_mfa_backup_proof_failure(request.user)' in view
 assert 'reset_mfa_backup_proof_failures(request.user)' in view
 assert 'record_mfa_backup_proof_success(request.user)' in view
 assert 'backup_code_login_failure_retry_after(username)' in view
-assert 'record_backup_code_login_failure(username)' in view
+assert 'claim_backup_code_login_attempt(username)' in view
+assert 'record_backup_code_password_failure(username)' in view
+assert 'record_backup_code_login_failure(username)' not in view
 assert 'reset_backup_code_login_failures(username)' in view
+assert 'reset_backup_code_password_failures(username)' in view
 print('mfa backup throttling regression: PASS')

@@ -10,6 +10,8 @@ from rest_framework.throttling import SimpleRateThrottle
 
 MFA_BACKUP_FAILURE_LIMIT = 5
 MFA_BACKUP_FAILURE_WINDOW_SECONDS = 15 * 60
+MFA_BACKUP_PASSWORD_FAILURE_LIMIT = 20
+MFA_BACKUP_PASSWORD_FAILURE_WINDOW_SECONDS = 15 * 60
 MFA_BACKUP_SUCCESS_LIMIT = 20
 MFA_BACKUP_SUCCESS_WINDOW_SECONDS = 24 * 60 * 60
 
@@ -82,6 +84,30 @@ def _bucket_retry_after(kind: str, token: str, *, limit: int, window: int) -> in
     return max(1, int(math.ceil(reset_at - now)))
 
 
+def _bucket_claim(kind: str, token: str, *, limit: int, window: int) -> int | None:
+    """Atomically reserve one attempt. Return Retry-After when the limit was exceeded."""
+    count_key, reset_key = _bucket_keys(kind, token)
+    now = time.time()
+    if cache.add(count_key, 1, timeout=window):
+        cache.set(reset_key, now + window, timeout=window)
+        return None
+    try:
+        count = int(cache.incr(count_key))
+    except (ValueError, TypeError):
+        cache.set(count_key, 1, timeout=window)
+        cache.set(reset_key, now + window, timeout=window)
+        return None
+    if cache.get(reset_key) is None:
+        cache.set(reset_key, now + window, timeout=window)
+    if count <= limit:
+        return None
+    try:
+        reset_at = float(cache.get(reset_key, 0) or 0)
+    except (TypeError, ValueError):
+        reset_at = 0
+    return max(1, int(math.ceil(reset_at - now))) if reset_at > now else window
+
+
 def _bucket_record(kind: str, token: str, *, window: int) -> None:
     count_key, reset_key = _bucket_keys(kind, token)
     now = time.time()
@@ -133,7 +159,17 @@ def record_mfa_backup_proof_success(user: object) -> None:
 
 def backup_code_login_failure_retry_after(username: object) -> int | None:
     return _bucket_retry_after(
-        "login-failure",
+        "login-code-failure",
+        _username_token(username),
+        limit=MFA_BACKUP_FAILURE_LIMIT,
+        window=MFA_BACKUP_FAILURE_WINDOW_SECONDS,
+    )
+
+
+def claim_backup_code_login_attempt(username: object) -> int | None:
+    """Reserve one backup-code verification slot before doing password-equivalent hash work."""
+    return _bucket_claim(
+        "login-code-failure",
         _username_token(username),
         limit=MFA_BACKUP_FAILURE_LIMIT,
         window=MFA_BACKUP_FAILURE_WINDOW_SECONDS,
@@ -141,8 +177,30 @@ def backup_code_login_failure_retry_after(username: object) -> int | None:
 
 
 def record_backup_code_login_failure(username: object) -> None:
-    _bucket_record("login-failure", _username_token(username), window=MFA_BACKUP_FAILURE_WINDOW_SECONDS)
+    # Compatibility helper for callers/tests that record an already-failed code.
+    _bucket_record("login-code-failure", _username_token(username), window=MFA_BACKUP_FAILURE_WINDOW_SECONDS)
 
 
 def reset_backup_code_login_failures(username: object) -> None:
-    _bucket_clear("login-failure", _username_token(username))
+    _bucket_clear("login-code-failure", _username_token(username))
+
+
+def backup_code_password_failure_retry_after(username: object) -> int | None:
+    return _bucket_retry_after(
+        "login-password-failure",
+        _username_token(username),
+        limit=MFA_BACKUP_PASSWORD_FAILURE_LIMIT,
+        window=MFA_BACKUP_PASSWORD_FAILURE_WINDOW_SECONDS,
+    )
+
+
+def record_backup_code_password_failure(username: object) -> None:
+    _bucket_record(
+        "login-password-failure",
+        _username_token(username),
+        window=MFA_BACKUP_PASSWORD_FAILURE_WINDOW_SECONDS,
+    )
+
+
+def reset_backup_code_password_failures(username: object) -> None:
+    _bucket_clear("login-password-failure", _username_token(username))

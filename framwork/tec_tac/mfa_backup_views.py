@@ -25,12 +25,16 @@ from .mfa_backup import (
 )
 from .throttles import (
     backup_code_login_failure_retry_after,
+    backup_code_password_failure_retry_after,
+    claim_backup_code_login_attempt,
     mfa_backup_proof_failure_retry_after,
     mfa_backup_proof_success_retry_after,
     record_backup_code_login_failure,
+    record_backup_code_password_failure,
     record_mfa_backup_proof_failure,
     record_mfa_backup_proof_success,
     reset_backup_code_login_failures,
+    reset_backup_code_password_failures,
     reset_mfa_backup_proof_failures,
 )
 from .session_security import (
@@ -150,14 +154,14 @@ class BackupCodeLoginView(KnoxLoginView):
 
     def post(self, request, format=None):
         username = str(request.data.get("username") or "")
-        failure_wait = backup_code_login_failure_retry_after(username)
-        if failure_wait is not None:
-            return _mfa_rate_limited(failure_wait, "Too many failed backup-code login attempts.")
+        password_wait = backup_code_password_failure_retry_after(username)
+        if password_wait is not None:
+            return _mfa_rate_limited(password_wait, "Too many failed backup-code login attempts.")
 
         serializer = AuthTokenSerializer(data=request.data)
         if not serializer.is_valid():
             burn_backup_code_hash_cost()
-            record_backup_code_login_failure(username)
+            record_backup_code_password_failure(username)
             AuditLog.audit_user_failed_login(
                 str(request.data.get("username") or ""),
                 debug_info={"ip": getattr(request, "_client_ip", "")},
@@ -167,23 +171,32 @@ class BackupCodeLoginView(KnoxLoginView):
         user = serializer.validated_data["user"]
         if user.block_dashboard_login or user.is_sso_user:
             burn_backup_code_hash_cost()
-            record_backup_code_login_failure(username)
+            record_backup_code_password_failure(username)
             return notify_error("Bad credentials")
 
         core_settings = get_core_settings()
         if not user.is_superuser and core_settings.block_local_user_logon:
             burn_backup_code_hash_cost()
-            record_backup_code_login_failure(username)
+            record_backup_code_password_failure(username)
             return notify_error("Bad credentials")
 
         if not getattr(user, "totp_key", None):
             burn_backup_code_hash_cost()
-            record_backup_code_login_failure(username)
+            record_backup_code_password_failure(username)
             return notify_error("Bad credentials")
+
+        # Reserve a tight per-username backup-code verification slot before
+        # verification. This closes the check-then-record race where many
+        # concurrent wrong codes could all enter verification below the limit.
+        failure_wait = backup_code_login_failure_retry_after(username)
+        if failure_wait is not None:
+            return _mfa_rate_limited(failure_wait, "Too many failed backup-code login attempts.")
+        claimed_wait = claim_backup_code_login_attempt(username)
+        if claimed_wait is not None:
+            return _mfa_rate_limited(claimed_wait, "Too many failed backup-code login attempts.")
 
         code = str(request.data.get("backup_code") or "")
         if not consume_backup_code(user, code, requested_by=user.username):
-            record_backup_code_login_failure(username)
             AuditLog.audit_user_failed_twofactor(
                 str(request.data.get("username") or ""),
                 debug_info={"ip": getattr(request, "_client_ip", "")},
@@ -191,6 +204,7 @@ class BackupCodeLoginView(KnoxLoginView):
             return notify_error("Bad credentials")
 
         reset_backup_code_login_failures(username)
+        reset_backup_code_password_failures(username)
         login(request, user)
         ipw = IpWare()
         client_ip, _ = ipw.get_client_ip(request.META)

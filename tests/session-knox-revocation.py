@@ -80,6 +80,8 @@ sys.modules["tec_tac.capabilities"] = caps
 class Row:
     def __init__(self, id, username, digest, revoked=False):
         self.id=id; self.pk=id; self.username=username; self.knox_digest=digest; self.revoked=revoked
+        self.revoked_at=None; self.revoked_by=""; self.revocation_reason=""
+    def save(self, update_fields=None): self.saved_fields=tuple(update_fields or ())
 
 class QuerySet:
     def __init__(self, manager, rows): self.manager=manager; self.rows=list(rows)
@@ -130,10 +132,7 @@ sys.modules["tec_tac.models"] = models_mod
 spec=importlib.util.spec_from_file_location("tec_tac.session_security", MODULE)
 mod=importlib.util.module_from_spec(spec); sys.modules[spec.name]=mod; spec.loader.exec_module(mod)
 
-# Isolate this regression to the public revocation behavior while preserving the
-# real function's transaction/query/token-deletion control flow.
-def revoke_locked(row, **kwargs): row.revoked=True
-mod._revoke_locked = revoke_locked
+# Exercise the real revocation helper, including Tactical Knox invalidation.
 mod._serialize_session = lambda row, **kwargs: {"id": str(row.id), "revoked": row.revoked}
 audits=[]
 mod._audit = lambda *args, **kwargs: audits.append((args, kwargs))
@@ -162,14 +161,25 @@ assert current.revoked is False and other1.revoked is True and other2.revoked is
 assert AuthToken.objects.live == {"keep-digest"}, AuthToken.objects.live
 assert {"drop-a", "drop-b", "unobserved-knox"} in AuthToken.objects.deleted
 
-# A legacy trust row without a Knox digest still revokes cleanly and does not
-# cause a broad or empty Knox deletion.
+# A legacy trust row without a Knox digest cannot safely identify one Tactical
+# token. Fail closed by invalidating that user's Knox credentials instead of
+# leaving a native Tactical session alive.
 legacy=Row("legacy", "alice", "")
 TRUST.rows[:] = [legacy]
-AuthToken.objects.live={"unrelated"}; AuthToken.objects.deleted=[]; AuthToken.objects.user_tokens={}
+AuthToken.objects.live={"legacy-live", "unrelated"}; AuthToken.objects.deleted=[]
+AuthToken.objects.user_tokens={"alice": {"legacy-live"}, "bob": {"unrelated"}}
 mod.revoke_session("legacy", requested_by="root")
 assert legacy.revoked is True
 assert AuthToken.objects.live == {"unrelated"}
-assert AuthToken.objects.deleted == []
+assert {"legacy-live"} in AuthToken.objects.deleted
+
+# Automatic revocation paths use the same helper, so an idle/IP/absolute revoke
+# also invalidates the linked Tactical credential rather than only the Tec-Tac row.
+auto=Row("auto", "alice", "auto-digest")
+AuthToken.objects.live={"auto-digest"}; AuthToken.objects.deleted=[]
+mod._revoke_locked(auto, reason="idle-timeout", requested_by="core")
+assert auto.revoked is True
+assert AuthToken.objects.live == set()
+assert {"auto-digest"} in AuthToken.objects.deleted
 
 print("[TEST] PASS M2 Tec-Tac revocation invalidates linked Knox credentials")

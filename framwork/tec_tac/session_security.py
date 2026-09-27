@@ -430,13 +430,41 @@ def _serialize_session(session: TecTacSessionTrust, *, current: bool = False) ->
     }
 
 
-def _revoke_locked(session: TecTacSessionTrust, *, reason: str, requested_by: str = "", event_type: str = "session_revoked", policy: dict | None = None):
+def _invalidate_knox_for_session(session: TecTacSessionTrust) -> None:
+    """Invalidate the Tactical credential represented by a revoked trust row.
+
+    Current rows carry a stable Knox digest and can revoke exactly one token.
+    Legacy rows may predate that binding; for those rows Core cannot safely
+    distinguish the credential, so revocation fails closed by invalidating all
+    Knox tokens for the recorded username rather than leaving a live Tactical
+    credential behind.
+    """
+    digest = str(getattr(session, "knox_digest", "") or "")
+    if digest:
+        AuthToken.objects.filter(digest=digest).delete()
+        return
+    username = str(getattr(session, "username", "") or "").strip()
+    if username:
+        AuthToken.objects.filter(user__username=username).delete()
+
+
+def _revoke_locked(
+    session: TecTacSessionTrust,
+    *,
+    reason: str,
+    requested_by: str = "",
+    event_type: str = "session_revoked",
+    policy: dict | None = None,
+    invalidate_knox: bool = True,
+):
     if not session.revoked:
         session.revoked = True
         session.revoked_at = timezone.now()
         session.revoked_by = str(requested_by or "")[:150]
         session.revocation_reason = str(reason or "revoked")[:255]
         session.save(update_fields=["revoked", "revoked_at", "revoked_by", "revocation_reason", "updated_at"])
+        if invalidate_knox:
+            _invalidate_knox_for_session(session)
         _audit(event_type, session=session, reason=reason, requested_by=requested_by, policy=policy)
     return session
 
@@ -615,13 +643,7 @@ def list_sessions(*, username: str | None = None, user=None, include_revoked: bo
 def revoke_session(session_id, *, reason: str = "administrator-request", requested_by: str = "") -> dict[str, Any]:
     with transaction.atomic():
         session = TecTacSessionTrust.objects.select_for_update().get(pk=session_id)
-        knox_digest = str(session.knox_digest or "")
         _revoke_locked(session, reason=reason, requested_by=requested_by)
-        if knox_digest:
-            # A Tec-Tac trust row is linked to the Tactical Knox credential that
-            # authenticated it. Explicit session revocation must invalidate both
-            # layers so the credential cannot continue on Tactical-native APIs.
-            AuthToken.objects.filter(digest=knox_digest).delete()
         return _serialize_session(session)
 
 
@@ -648,7 +670,7 @@ def revoke_user_sessions(username: str, *, except_session_id=None, reason: str =
         else:
             qs = base_qs
         for session in qs:
-            _revoke_locked(session, reason=reason, requested_by=requested_by)
+            _revoke_locked(session, reason=reason, requested_by=requested_by, invalidate_knox=False)
             count += 1
             ids.append(str(session.id))
 
@@ -890,6 +912,18 @@ def _revoked_tombstone_is_live(session: TecTacSessionTrust, *, now, active_non_k
     if session.knox_digest:
         try:
             return AuthToken.objects.filter(digest=session.knox_digest).filter(Q(expiry__isnull=True) | Q(expiry__gt=now)).exists()
+        except Exception:
+            return True
+    # Legacy rows may have no stable digest. Preserve the tombstone while any
+    # Knox token for the recorded user can still authenticate; otherwise an old
+    # revoked row could age out while its Tactical-native credential remained live.
+    username = str(getattr(session, "username", "") or "").strip()
+    if username:
+        try:
+            if AuthToken.objects.filter(user__username=username).filter(
+                Q(expiry__isnull=True) | Q(expiry__gt=now)
+            ).exists():
+                return True
         except Exception:
             return True
     if active_non_knox is None:

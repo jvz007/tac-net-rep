@@ -1,18 +1,18 @@
-# FIXING.md - Core 1.15.131
+# FIXING.md — Core 1.15.132
 
 ## Review scope
 
-This release is intentionally limited to tracker items **M17, L18, L20 and L23**.
+This release is intentionally limited to the session/MFA tracker batch: **M2, L80, L88 and L89**.
 
 Review that:
 
-1. Client/site create and update changes cannot succeed without a persisted Core audit record.
-2. Schedule DELETE requires current permission to use the schedule's action.
-3. `force=true` schedule deletion is strictly audited before deletion.
-4. Restricted Tactical users cannot create/edit/delete/run schedules whose `none` or module-defined targets provide no enforceable Tactical resource scope.
-5. Native Scheduler managers retain their existing repair/management bypass.
+1. Every Tec-Tac trust-row revocation path invalidates Tactical Knox at the common `_revoke_locked` boundary.
+2. A legacy revoked row without `knox_digest` fails closed rather than leaving an identifiable user's Tactical tokens live.
+3. Retention preserves an old empty-digest tombstone while that username still has a live Knox credential.
+4. Backup-code verification reserves the tight five-attempt budget before `consume_backup_code` executes.
+5. Wrong-password failures use a separate, looser per-username budget and do not consume the five backup-code verification slots.
+6. Existing session/MFA, System Update, Module Management and release-integrity regressions remain green.
 
 ## Explicitly out of scope
 
-- Other Scheduler Low findings (L19, L21-L25).
-- Backup, trust-policy, module-install, housekeeping, MFA and UI tracker items.
+No unrelated tracker findings are included in this release.

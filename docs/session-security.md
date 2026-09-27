@@ -189,6 +189,7 @@ successful cleanup, so a failure is retried on the next scheduler tick.
 
 A revoked trust row is preserved beyond the history window only while its
 underlying credential could still authenticate: an unexpired Knox token, a
+legacy empty-digest row with any live Knox token for the same recorded username, a
 present Tactical API key, or an unexpired Django session. After that credential
 is gone/expired, the tombstone is deleted once the configured history window
 has elapsed. Tactical-owned authentication tables keep Tactical's own retention.
@@ -298,7 +299,7 @@ Tec-Tac adds one-time MFA backup codes without changing Tactical's user model or
 
 `GET /api/tfd/auth/mfa/backup-codes/` returns backup-code status for the signed-in account. `POST /api/tfd/auth/mfa/backup-codes/` verifies the current password and TOTP before rotating the set. Failed proof attempts are keyed only to the account: five failures are allowed in a 15-minute window, after which Core returns HTTP 429 with `Retry-After`. A successful proof clears the failure budget. Successful rotations use a separate account-only budget of 20 per day, so failed proofs never consume the success allowance.
 
-Recovery sign-in uses `POST /api/tfd/auth/login/backup-code/`. The endpoint revalidates the Tactical username/password, applies Tactical's local-login restrictions and Tactical's normal login throttles, and additionally applies a Tec-Tac failure budget keyed to the normalized username only. Five failed recovery logins in 15 minutes block subsequent recovery attempts with HTTP 429 and `Retry-After`; a successful recovery clears that username failure budget. Core then atomically consumes one backup code and issues the normal Tactical Knox token. It does not create a parallel Tec-Tac session credential.
+Recovery sign-in uses `POST /api/tfd/auth/login/backup-code/`. The endpoint revalidates the Tactical username/password, applies Tactical's local-login restrictions and Tactical's normal login throttles, and uses two Tec-Tac budgets keyed only to the normalized username. Wrong-password attempts use a looser 20-attempt / 15-minute budget. After the password and local-login checks succeed, Core atomically reserves one of five backup-code verification slots for the 15-minute window **before** verifying the backup code; a sixth concurrent or subsequent verification is rejected with HTTP 429 and `Retry-After` without checking a code. A successful recovery clears both budgets. Core then atomically consumes one backup code and issues the normal Tactical Knox token. It does not create a parallel Tec-Tac session credential.
 
 `GET /api/tfd/access/users/<user_id>/mfa/` exposes only recovery-code status to an authorized account administrator. `DELETE /api/tfd/access/users/<user_id>/mfa/` invalidates the target user's recovery codes subject to the protected-account guard; neither administrative endpoint exposes plaintext codes or password hashes.
 
@@ -306,7 +307,7 @@ Recovery sign-in uses `POST /api/tfd/auth/login/backup-code/`. The endpoint reva
 
 `GET /api/tfd/access/sessions/` lists active Tactical Knox tokens for account administrators. The paged contract accepts `page`, `page_size` (maximum 100), and optional `search`; search covers Tactical username and Core-observed last IP. Tec-Tac adds last activity/IP metadata when a token has been observed by the Core session guard. Protected root/effective-superuser accounts are excluded before count and pagination for non-superuser administrators. A request with no paging/search parameters retains the legacy bounded-list response for compatibility. Session identifiers exposed to the browser are HMAC-derived opaque references; raw bearer tokens and Knox digests are not returned.
 
-Revoking a login session deletes the underlying Tactical Knox token and revokes the correlated Tec-Tac trust record. `POST /api/tfd/access/users/<user_id>/sessions/revoke/` revokes every active Tactical token for the selected user. These controls require Tactical account-management permission (or superuser authority).
+Revoking a Tec-Tac trust session invalidates the underlying Tactical Knox credential at the common revocation boundary, including administrator revocation, idle/absolute timeout, IP-change termination and other Core revocation paths. Current rows revoke the exact bound Knox digest. A legacy row that predates the digest binding fails closed by invalidating the recorded user's Knox tokens because Core cannot safely identify only one credential. `POST /api/tfd/access/users/<user_id>/sessions/revoke/` revokes every active Tactical token for the selected user. These controls require Tactical account-management permission (or superuser authority).
 
 
 ## 1.15.45 access hardening

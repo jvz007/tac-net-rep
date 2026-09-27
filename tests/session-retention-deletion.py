@@ -68,12 +68,15 @@ sys.modules.update({
 })
 
 class TokenQuery:
-    def __init__(self, digest, live): self.digest=digest; self.live=live
+    def __init__(self, digests, live): self.digests=set(digests); self.live=live
     def filter(self, *args, **kwargs): return self
-    def exists(self): return self.digest in self.live
+    def exists(self): return bool(self.digests & self.live)
 class TokenManager:
-    def __init__(self): self.live=set()
-    def filter(self, **kwargs): return TokenQuery(kwargs.get("digest"), self.live)
+    def __init__(self): self.live=set(); self.user_tokens={}
+    def filter(self, **kwargs):
+        if "digest" in kwargs: return TokenQuery({kwargs.get("digest")}, self.live)
+        if "user__username" in kwargs: return TokenQuery(self.user_tokens.get(str(kwargs["user__username"]), set()), self.live)
+        return TokenQuery(set(), self.live)
 knox = types.ModuleType("knox")
 knox_models = types.ModuleType("knox.models")
 class AuthToken: pass
@@ -155,23 +158,31 @@ recent = NOW - timedelta(days=2)
 # Expired unrevoked row: must be deleted by queryset.delete().
 TecTacSessionTrust.objects.add(
     revoked=False, absolute_expires_at=old, idle_expires_at=old,
-    revoked_at=None, updated_at=old, knox_digest="", token_fingerprint="expired",
+    revoked_at=None, updated_at=old, knox_digest="", token_fingerprint="expired", username="expired-user",
 )
 # Old revoked row with no live credential: must be individually deleted.
 TecTacSessionTrust.objects.add(
     revoked=True, absolute_expires_at=old, idle_expires_at=old,
-    revoked_at=old, updated_at=old, knox_digest="dead-token", token_fingerprint="dead",
+    revoked_at=old, updated_at=old, knox_digest="dead-token", token_fingerprint="dead", username="dead-user",
 )
 # Old revoked row with a live Knox credential: must remain as a tombstone.
 TecTacSessionTrust.objects.add(
     revoked=True, absolute_expires_at=old, idle_expires_at=old,
-    revoked_at=old, updated_at=old, knox_digest="live-token", token_fingerprint="live",
+    revoked_at=old, updated_at=old, knox_digest="live-token", token_fingerprint="live", username="live-user",
 )
 AuthToken.objects.live.add("live-token")
+# Old revoked legacy row with no digest but a still-live Knox token for the same
+# username: must remain even after retention because Tactical can still accept it.
+TecTacSessionTrust.objects.add(
+    revoked=True, absolute_expires_at=old, idle_expires_at=old,
+    revoked_at=old, updated_at=old, knox_digest="", token_fingerprint="legacy-live", username="legacy-user",
+)
+AuthToken.objects.live.add("legacy-user-token")
+AuthToken.objects.user_tokens["legacy-user"] = {"legacy-user-token"}
 # Recent revoked row: inside retention and must remain.
 TecTacSessionTrust.objects.add(
     revoked=True, absolute_expires_at=recent, idle_expires_at=recent,
-    revoked_at=recent, updated_at=recent, knox_digest="", token_fingerprint="recent",
+    revoked_at=recent, updated_at=recent, knox_digest="", token_fingerprint="recent", username="recent-user",
 )
 TecTacSessionAudit.objects.add(created_at=old)
 TecTacSessionAudit.objects.add(created_at=recent)
@@ -183,12 +194,12 @@ assert result["revoked_tombstones_deleted"] == 1, result
 assert result["audit_events_deleted"] == 1, result
 assert CONFIG.last_history_cleanup_at == NOW
 assert CONFIG.saved_fields == ("last_history_cleanup_at",)
-assert sorted(row.token_fingerprint for row in TecTacSessionTrust.objects.rows) == ["live", "recent"]
+assert sorted(row.token_fingerprint for row in TecTacSessionTrust.objects.rows) == ["legacy-live", "live", "recent"]
 assert len(TecTacSessionAudit.objects.rows) == 1 and TecTacSessionAudit.objects.rows[0].created_at == recent
 
 # A second scheduler tick inside 24h must not rerun retention or alter rows.
 second = mod.cleanup_session_history_if_due(now=NOW + timedelta(hours=1))
 assert second["ran"] is False and second["reason"] == "not_due", second
-assert sorted(row.token_fingerprint for row in TecTacSessionTrust.objects.rows) == ["live", "recent"]
+assert sorted(row.token_fingerprint for row in TecTacSessionTrust.objects.rows) == ["legacy-live", "live", "recent"]
 
 print("[TEST] PASS D4 scheduled cleanup deletes expired rows and preserves live tombstones")

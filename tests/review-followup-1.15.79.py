@@ -60,14 +60,14 @@ require('fcntl.LOCK_EX' in text('scripts/module-job-helper.py'), 'v1 module stat
 # C16 rollback/recovery extraction uses explicit validation + data filter.
 su=text('scripts/system-update-helper.py')
 rec=text('scripts/recovery/tec-tac-recover-modules-from-backup.sh')
-require('tf.extractall(parent, members=members, filter="data")' in su, 'system update rollback extraction not hardened')
+require('members = _validated_rollback_members(tf, target)' in su and 'tf.extractall(stage_parent, members=members, filter="data")' in su, 'system update rollback extraction not hardened')
 require("filter='data'" in rec and 'member.issym() or member.islnk()' in rec, 'module recovery extraction not hardened')
 
 # C2 privileged archives are staged under the server-backup state root rather than /tmp.
 sb=text('scripts/server-backup-helper.py')
 require('_archive_fixed_tree(source, roots(config)["staging"])' in sb, 'privileged backup archive still uses global temp storage')
 require('TemporaryDirectory(prefix="tectac-scp-", dir=str(roots(config)["staging"]))' in sb, 'SCP verification still uses global temp storage')
-require('removed verified local staging bundle after destination upload' in sb, 'verified remote backups must clean local staging')
+require('removed strongly verified local staging bundle after destination upload' in sb, 'strongly verified remote backups must clean local staging')
 
 # C5: helper rejects destructive zero retention and protects active staging.
 spec=importlib.util.spec_from_file_location('hk179', ROOT/'scripts/housekeeping-helper.py')
