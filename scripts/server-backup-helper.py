@@ -212,6 +212,7 @@ def roots(config=None):
         "logs": state / "logs",
         "staging": state / "staging",
         "secrets": state / "secrets",
+        "destinations": state / "destinations",
         "pre_restore": state / "pre-restore",
         "overrides": state / "restore-overrides",
         "lock": state / "server-backup.lock",
@@ -318,12 +319,16 @@ def load_job(job_id, config=None):
         if request not in ({}, None):
             raise SystemExit("invalid recovery_identity request schema")
     if job.get("action") == "trust_recovery_signer":
-        if not isinstance(request, dict) or set(request) not in ({"backup_ref", "destination"}, {"backup_ref"}):
+        required = {
+            "backup_ref", "destination_id", "expected_key_id",
+            "expected_fingerprint", "expected_server_name",
+            "expected_installation_id",
+        }
+        if not isinstance(request, dict) or set(request) != required:
             raise SystemExit("invalid trust_recovery_signer request schema")
-        if not str(request.get("backup_ref") or "").strip():
-            raise SystemExit("invalid trust_recovery_signer backup_ref")
-        if request.get("destination") is not None and not isinstance(request.get("destination"), dict):
-            raise SystemExit("invalid trust_recovery_signer destination")
+        for key in required:
+            if not str(request.get(key) or "").strip():
+                raise SystemExit(f"invalid trust_recovery_signer {key}")
     if job.get("action") == "restore_backup":
         request = job["request"]
         if set(request) == {"backup_ref", "destination", "restore_mode"}:
@@ -373,9 +378,10 @@ def ensure_runtime_dirs(config):
         path.mkdir(parents=True, exist_ok=True)
         os.chown(path, 0, gid)
         os.chmod(path, 0o2750 if key not in {"jobs"} else 0o2770)
-    rs["secrets"].mkdir(parents=True, exist_ok=True)
-    os.chown(rs["secrets"], 0, 0)
-    os.chmod(rs["secrets"], 0o700)
+    for key in ("secrets", "destinations"):
+        rs[key].mkdir(parents=True, exist_ok=True)
+        os.chown(rs[key], 0, 0)
+        os.chmod(rs[key], 0o700)
     return rs
 
 
@@ -670,6 +676,37 @@ def validate_destination(raw, config=None):
             raise RuntimeError("SCP remote_path may contain only letters, numbers, dot, underscore, dash and slash")
     return item
 
+
+
+def _registered_destination_path(config, destination_id: str) -> Path:
+    dest_id = str(destination_id or "").strip()
+    if not SAFE_DEST_ID_RE.fullmatch(dest_id):
+        raise RuntimeError("registered destination id is invalid")
+    return roots(config)["destinations"] / f"{dest_id}.json"
+
+
+def register_destination(config, destination: dict) -> None:
+    """Persist a root-owned destination only after successful round-trip validation."""
+    item = validate_destination(destination, config)
+    path = _registered_destination_path(config, item["id"])
+    atomic_json(path, item, mode=0o600, uid=0, gid=0)
+
+
+def load_registered_destination(config, destination_id: str) -> dict:
+    path = _registered_destination_path(config, destination_id)
+    if not path.is_file() or path.is_symlink():
+        raise RuntimeError("backup destination is not registered; validate it before trusting a recovery signer")
+    st = path.stat()
+    if st.st_uid != 0 or stat.S_IMODE(st.st_mode) != 0o600:
+        raise RuntimeError("registered backup destination permissions are unsafe")
+    try:
+        item = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("registered backup destination is unreadable") from exc
+    item = validate_destination(item, config)
+    if item["id"] != str(destination_id):
+        raise RuntimeError("registered backup destination id mismatch")
+    return item
 
 def secret_path(config, secret_ref):
     try:
@@ -3500,16 +3537,37 @@ def operation_recovery_identity(config, job, log):
 def operation_trust_recovery_signer(config, job, log):
     request = job["request"]
     dest_id, name = parse_backup_ref(request.get("backup_ref"))
-    destination = request.get("destination")
-    if destination is None:
-        if dest_id not in {"local", "0", "native"}: raise RuntimeError("destination configuration is required for this backup_ref")
-        destination={"id":dest_id,"type":"local","name":"Tactical local backups","path":"/rmmbackups"}
-    destination=validate_destination(destination,config)
-    if destination["id"] != dest_id: raise RuntimeError("backup_ref destination id does not match supplied destination")
+    requested_dest_id = str(request.get("destination_id") or "").strip()
+    if requested_dest_id != dest_id:
+        raise RuntimeError("backup_ref destination id does not match requested destination id")
+    if dest_id in {"local", "0", "native"}:
+        registered = _registered_destination_path(config, requested_dest_id)
+        if registered.is_file() and not registered.is_symlink():
+            destination=load_registered_destination(config, requested_dest_id)
+        else:
+            destination={"id":dest_id,"type":"local","name":"Tactical local backups","path":"/rmmbackups"}
+            destination=validate_destination(destination,config)
+    else:
+        destination=load_registered_destination(config, requested_dest_id)
     rs=roots(config); stage=rs["staging"]/f"trust-signer-{job['id']}"
     shutil.rmtree(stage, ignore_errors=True); stage.mkdir(parents=True, exist_ok=True)
     try:
         signer = _bundle_signer_from_download(config, destination, name, stage, log)
+        expected = {
+            "key_id": str(request.get("expected_key_id") or "").strip(),
+            "public_key_sha256": str(request.get("expected_fingerprint") or "").strip().lower(),
+            "server_name": str(request.get("expected_server_name") or "").strip(),
+            "installation_id": str(request.get("expected_installation_id") or "").strip(),
+        }
+        actual = {
+            "key_id": str(signer.get("key_id") or "").strip(),
+            "public_key_sha256": str(signer.get("public_key_sha256") or "").strip().lower(),
+            "server_name": str(signer.get("server_name") or "").strip(),
+            "installation_id": str(signer.get("installation_id") or "").strip(),
+        }
+        for field in ("key_id", "public_key_sha256", "server_name", "installation_id"):
+            if expected[field] != actual[field]:
+                raise RuntimeError(f"recovery signer {field} changed since confirmation; trust was not written")
         if signer.get("trusted"):
             signer.pop("public_key_pem", None)
             return {"ok": True, "already_trusted": True, "signer": signer}
@@ -3528,7 +3586,12 @@ def operation_trust_recovery_signer(config, job, log):
             if fd >= 0: os.close(fd)
             tmp.unlink(missing_ok=True)
         actor=(job.get("context") or {}).get("requested_by") or "unknown"
-        _append_recovery_audit("recovery_signer_trusted", actor=actor, key_id=signer["key_id"], public_key_sha256=signer["public_key_sha256"], backup_ref=request.get("backup_ref"), signed_at=signer.get("signed_at"), server_name=signer.get("server_name"))
+        _append_recovery_audit(
+            "recovery_signer_trusted", actor=actor, key_id=signer["key_id"],
+            public_key_sha256=signer["public_key_sha256"], backup_ref=request.get("backup_ref"),
+            signed_at=signer.get("signed_at"), server_name=signer.get("server_name"),
+            installation_id=signer.get("installation_id"), destination_id=requested_dest_id,
+        )
         log.write(f"[TEC-TAC-BACKUP] trusted recovery signer {signer['key_id']} fingerprint={signer['public_key_sha256']} actor={actor}\n")
         signer["trusted"] = True; signer["trust_required"] = False; signer.pop("public_key_pem", None)
         return {"ok": True, "already_trusted": False, "signer": signer}
@@ -3921,7 +3984,8 @@ def operation_validate_destination(config, job, log):
     result["ok"] = True
     result["validated_at"] = now()
     result.pop("reason", None)
-    log.write(f"[TEC-TAC-BACKUP] destination validation succeeded id={destination['id']} type={destination['type']}\n")
+    register_destination(config, destination)
+    log.write(f"[TEC-TAC-BACKUP] destination validation succeeded and registered id={destination['id']} type={destination['type']}\n")
     return result
 
 

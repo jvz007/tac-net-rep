@@ -54,7 +54,16 @@ with tempfile.TemporaryDirectory() as td:
         tf.add(mpath,arcname='manifest.json'); tf.add(cpath,arcname='checksums.sha256'); tf.add(epath,arcname=h.RECOVERY_SIGNATURE_MEMBER)
     state=td/'state'
     config.update({'TEC_TAC_SERVER_BACKUP_ROOT':str(state),'TEC_TAC_SERVER_BACKUP_LOCAL_ROOTS':str(td),'TACTICAL_USER':'root'})
-    job={'id':'11111111-1111-4111-8111-111111111111','request':{'backup_ref':'destination:local:tec-tac-backup-d3.tgz','destination':{'id':'local','type':'local','name':'test','path':str(td)}},'context':{'requested_by':'admin'}}
+    h.ensure_runtime_dirs(config)
+    h.register_destination(config, {'id':'local','type':'local','name':'test','path':str(td)})
+    job={'id':'11111111-1111-4111-8111-111111111111','request':{
+        'backup_ref':'destination:local:tec-tac-backup-d3.tgz',
+        'destination_id':'local',
+        'expected_key_id':'source-a',
+        'expected_fingerprint':env['public_key_sha256'],
+        'expected_server_name':'old-rmm',
+        'expected_installation_id':'source-a',
+    },'context':{'requested_by':'admin'}}
     old_audit=h.RECOVERY_AUDIT_FILE; h.RECOVERY_AUDIT_FILE=td/'recovery-audit.jsonl'
     try:
         result=h.operation_trust_recovery_signer(config,job,io.StringIO())
@@ -65,6 +74,58 @@ with tempfile.TemporaryDirectory() as td:
     assert trusted.read_bytes()==public
     audit=(td/'recovery-audit.jsonl').read_text()
     assert 'recovery_signer_trusted' in audit and 'admin' in audit
+
+    # The helper must re-check the exact identity confirmed by the superuser.
+    mismatch_trust=td/'mismatch-trust'; mismatch_trust.mkdir()
+    target_mismatch_cfg=dict(config); target_mismatch_cfg['TEC_TAC_RECOVERY_TRUST_ROOT']=str(mismatch_trust)
+    bad_job=json.loads(json.dumps(job)); bad_job['id']='22222222-2222-4222-8222-222222222222'
+    bad_job['request']['expected_fingerprint']='00'*32
+    try:
+        h.operation_trust_recovery_signer(target_mismatch_cfg,bad_job,io.StringIO())
+    except RuntimeError as exc:
+        assert 'changed since confirmation' in str(exc)
+    else:
+        raise AssertionError('recovery signer fingerprint change was accepted')
+    assert not (mismatch_trust/'source-a.pub').exists(), 'mismatched signer was trusted'
+
+    # Remote recovery trust resolves only a root-registered destination id; the
+    # trust job itself carries no browser-supplied host/secret destination.
+    remote_cfg=dict(config)
+    h.register_destination(remote_cfg, {
+        'id':'remote-a','type':'webdav','url':'https://backup.example.invalid/d3',
+        'remote_path':'backups','secret_ref':'11111111-1111-4111-8111-111111111111',
+    })
+    captured={}
+    original_bundle=h._bundle_signer_from_download
+    try:
+        def fake_bundle(_cfg, destination, _name, _stage, _log):
+            captured.update(destination)
+            return {
+                'key_id':'source-a','public_key_sha256':env['public_key_sha256'],
+                'server_name':'old-rmm','installation_id':'source-a',
+                'signed_at':h.now(),'trusted':True,'trust_required':False,
+                'public_key_pem':public.decode('ascii'),
+            }
+        h._bundle_signer_from_download=fake_bundle
+        remote_job={'id':'33333333-3333-4333-8333-333333333333','request':{
+            'backup_ref':'destination:remote-a:tec-tac-backup-remote-d3.tgz','destination_id':'remote-a',
+            'expected_key_id':'source-a','expected_fingerprint':env['public_key_sha256'],
+            'expected_server_name':'old-rmm','expected_installation_id':'source-a',
+        },'context':{'requested_by':'admin'}}
+        result=h.operation_trust_recovery_signer(remote_cfg,remote_job,io.StringIO())
+        assert result['already_trusted'] is True
+        assert captured['id']=='remote-a' and captured['url']=='https://backup.example.invalid/d3'
+        assert captured['secret_ref']=='11111111-1111-4111-8111-111111111111'
+        missing=json.loads(json.dumps(remote_job)); missing['id']='44444444-4444-4444-8444-444444444444'
+        missing['request']['backup_ref']='destination:missing:tec-tac-backup-remote-d3.tgz'; missing['request']['destination_id']='missing'
+        try:
+            h.operation_trust_recovery_signer(remote_cfg,missing,io.StringIO())
+        except RuntimeError as exc:
+            assert 'not registered' in str(exc)
+        else:
+            raise AssertionError('unregistered remote destination was accepted for recovery trust')
+    finally:
+        h._bundle_signer_from_download=original_bundle
 
     # D2 trust/account-policy merge: target state must win over an older backup.
     # This preserves publisher/key revocations, does not resurrect publishers

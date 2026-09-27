@@ -1,33 +1,50 @@
-# Review brief — Core 1.15.95
+# Review scope: Core 1.15.96
 
-This is a narrow D2 restore-safety release. Review only the tracker items below plus regressions caused by these changes.
+This unsigned review build is intentionally narrow. Review the D3 recovery-trust items below only unless a regression is directly caused by these changes.
 
-## In scope
+## Tracker items in scope
 
-### M25 — restore must not turn D1 protection off
-- Capture the target `account-security-policy.json` before restore.
-- Merge current/restored D1 policy with stricter-wins semantics: protection `on` wins.
-- Treat malformed present policy data fail-closed as protection `on`.
-- Audit an effective merge through the root-owned account-security-policy audit and recovery audit.
+### M20 — Browser trust request can redirect stored backup credentials
+- `POST /api/tfd/system/recovery/trust/` no longer accepts a destination object.
+- Successful `validate_destination(...)` now registers the validated destination in a root-owned Core registry.
+- Recovery trust submits only `destination_id`; the privileged helper resolves the registered destination server-side.
+- An unregistered remote destination is refused before any backup download/credential use.
 
-### L75 — deleted publishers must not come back
-- Treat the current target `/etc/tec-tac/trusted-publishers` set as authoritative.
-- Current publisher/key contents overwrite restored copies.
-- Restored-only publishers are removed when absent from the current target set.
-- Recovery signer trust remains a separate D3 mechanism and is not sourced from publisher trust restoration.
+### M21 — Trust decision not bound to displayed signer fingerprint
+- Trust approval now includes the exact confirmed installation ID, server name, key ID and SHA-256 fingerprint.
+- The privileged helper re-downloads/verifies the bundle and compares all four values before writing trust.
+- Any mismatch fails without creating a trust key.
 
-## Behavioural regression
+### M22 — Recovery identity GET authorization
+- Recovery identity and trust-job status now require an effective Tactical superuser in addition to `SessionAuthenticated`.
+- Unauthorized callers are denied before a privileged recovery-identity job can be dispatched.
 
-`tests/server-backup-d2-d3.py` now restores a deliberately older/weaker security state and proves that:
-- a target-revoked key stays revoked;
-- a publisher deleted after backup stays deleted;
-- the stricter target trust floor survives;
-- target D1 protection `on` survives restored `off`;
-- the D1 merge writes both required audit records.
+### M23 — Missing Core audit record for signer trust
+- Core writes a strict Tactical audit record for the exact superuser approval before privileged dispatch.
+- The existing root-owned `/var/log/tec-tac/recovery-audit.jsonl` success record remains the second audit layer.
 
-## Explicitly not in scope
+### M24 — Synchronous recovery trust web request
+- Trust POST now queues the privileged operation and returns HTTP 202 with a job ID.
+- `GET /api/tfd/system/recovery/trust/?job_id=<uuid>` returns sanitized polling status.
+- The web request no longer waits for the remote backup verification/download job to finish.
 
-- D2 backup-module/UI downgrade confirmation notice. Core already exposes `version_transition.notice`; the consuming backup UI still needs to display it before restore.
-- D3 / M20–M24.
-- D4, D5, D6a.
-- M2 onward outside the D2 decision work.
+## Regression coverage
+- `tests/recovery-trust-http-boundary.py`
+  - non-superuser GET denied before root work;
+  - raw destination payload rejected;
+  - strict Core audit exercised;
+  - valid POST returns 202 and passes only destination ID + confirmed identity;
+  - trust-job polling exercised.
+- `tests/recovery-trust-async-core.py`
+  - proves Core queues without synchronous job polling.
+- `tests/server-backup-d2-d3.py`
+  - actual helper signer verification/trust;
+  - confirmed fingerprint mismatch refused before trust write;
+  - registered remote destination resolution exercised;
+  - unregistered remote destination refused.
+- Existing recovery/capability/foundation suites are also run for regression coverage.
+
+## Explicitly not in this release
+- The backup module/UI work to display installation ID, server name and fingerprint before confirmation is not part of the base Core/UI repositories in this package.
+- D2 backup-UI downgrade notice is still owned by the consuming backup module/UI.
+- M2–M19, M25–M31, U1–U4 and unrelated Low items are not being addressed here.

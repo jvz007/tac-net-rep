@@ -151,7 +151,8 @@ def _dispatch(job_id: str) -> None:
         raise ServerBackupError(f"Unable to dispatch Core server-backup job: {detail}", job_id=job_id) from exc
 
 
-def _run(action: str, request: dict, *, context: dict | None, timeout: int | None = None) -> dict:
+def _start(action: str, request: dict, *, context: dict | None) -> dict:
+    """Queue one privileged backup job and return immediately with its id."""
     job_id = str(uuid.uuid4())
     payload = {
         "id": job_id,
@@ -180,6 +181,12 @@ def _run(action: str, request: dict, *, context: dict | None, timeout: int | Non
             payload["request"] = {"redacted": True}
         _atomic_job(_jobs_root() / f"{job_id}.json", payload)
         raise
+    return {"job_id": job_id, "status": "queued", "action": action}
+
+
+def _run(action: str, request: dict, *, context: dict | None, timeout: int | None = None) -> dict:
+    started = _start(action, request, context=context)
+    job_id = started["job_id"]
 
     deadline = time.monotonic() + int(timeout or _timeout_for(action))
     while time.monotonic() < deadline:
@@ -484,23 +491,54 @@ def recovery_identity_core(*, context: dict | None = None) -> dict:
     return _run("recovery_identity", {}, context=context or {})
 
 
-def trust_recovery_signer_core(*, backup_ref: str, destination: dict | None, context: dict) -> dict:
-    """Core-internal recovery trust operation.
+def trust_recovery_signer_core(
+    *,
+    backup_ref: str,
+    destination_id: str,
+    expected_key_id: str,
+    expected_fingerprint: str,
+    expected_server_name: str,
+    expected_installation_id: str,
+    context: dict,
+) -> dict:
+    """Queue a Core-internal recovery signer trust job.
 
-    Callers must enforce the Tec-Tac session and effective-superuser boundary
-    before invoking this function. It is intentionally absent from
-    ``ServerBackupProvider`` and from the public capability operation list so a
-    module cannot obtain a trust primitive through ``core.server_backup``.
+    The browser may identify only a previously registered destination id. The
+    privileged helper resolves the validated destination server-side and binds
+    the write to the exact signer identity the superuser confirmed.
     """
-    destinations = _validate_destinations([destination]) if destination is not None else []
-    return _run(
-        "trust_recovery_signer",
-        {
-            "backup_ref": str(backup_ref or "").strip(),
-            "destination": destinations[0] if destinations else None,
-        },
-        context=context,
-    )
+    request = {
+        "backup_ref": str(backup_ref or "").strip(),
+        "destination_id": str(destination_id or "").strip(),
+        "expected_key_id": str(expected_key_id or "").strip(),
+        "expected_fingerprint": str(expected_fingerprint or "").strip().lower(),
+        "expected_server_name": str(expected_server_name or "").strip(),
+        "expected_installation_id": str(expected_installation_id or "").strip(),
+    }
+    if any(not value for value in request.values()):
+        raise ServerBackupError("Recovery trust confirmation requires backup_ref, destination_id and the complete expected signer identity.")
+    return _start("trust_recovery_signer", request, context=context)
+
+
+def recovery_trust_job_status_core(*, job_id: str) -> dict:
+    """Return sanitized status for one recovery-trust job only."""
+    job = _read_job(str(job_id or "").strip())
+    if str(job.get("action") or "") != "trust_recovery_signer":
+        raise ServerBackupError("The requested job is not a recovery signer trust job.", job_id=str(job_id))
+    result = _public_job_status(job)
+    if job.get("status") == "succeeded" and isinstance(job.get("result"), dict):
+        signer = job["result"].get("signer") if isinstance(job["result"].get("signer"), dict) else None
+        if signer:
+            result["signer"] = {
+                key: signer.get(key)
+                for key in (
+                    "installation_id", "server_name", "key_id",
+                    "public_key_sha256", "signed_at", "trusted",
+                    "trust_required",
+                )
+            }
+            result["already_trusted"] = bool(job["result"].get("already_trusted"))
+    return result
 
 
 _PROVIDER = ServerBackupProvider()
