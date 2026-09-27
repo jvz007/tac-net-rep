@@ -8,9 +8,9 @@ _NATIVE = {
     "agent": "endpoint", "agents": "endpoint",
 }
 _ALIASES = {
-    "client": ("ids", "client_ids", "client_id", "clients", "client", "id"),
-    "site": ("ids", "site_ids", "site_id", "sites", "site", "id"),
-    "endpoint": ("ids", "agent_ids", "agent_id", "endpoint_ids", "endpoint_id", "agents", "agent", "endpoints", "endpoint", "id"),
+    "client": ("client_ids", "client_id", "clients", "client"),
+    "site": ("site_ids", "site_id", "sites", "site"),
+    "endpoint": ("agent_ids", "agent_id", "endpoint_ids", "endpoint_id", "agents", "agent", "endpoints", "endpoint"),
 }
 
 
@@ -65,6 +65,12 @@ def _legacy_normalize(targets):
         return {"type": "none"}
     kind = _NATIVE.get(target_type)
     if kind:
+        if "ids" in targets:
+            ids = _ids(kind, targets.get("ids"))
+            legacy = [key for key in _ALIASES[kind] if key in targets]
+            if legacy and _extract_native(targets, kind) != ids:
+                raise ValueError("conflicting canonical ids and legacy target aliases")
+            return {"type": target_type, "ids": ids}
         return {"type": target_type, "ids": _extract_native(targets, kind)}
     if target_type != "dynamic":
         return targets
@@ -78,7 +84,7 @@ def _legacy_normalize(targets):
 
         found = []
         for candidate_type, candidate_kind in (("client", "client"), ("site", "site"), ("endpoint", "endpoint")):
-            keys = [key for key in _ALIASES[candidate_kind] if key != "ids" and key in scope]
+            keys = [key for key in _ALIASES[candidate_kind] if key in scope]
             if keys:
                 found.append((candidate_type, candidate_kind, keys))
 
@@ -88,7 +94,13 @@ def _legacy_normalize(targets):
                 raise ValueError("dynamic scope contains multiple Tactical scope types")
             scope_type = "endpoint" if explicit_kind == "endpoint" else explicit_kind
             scope_kind = explicit_kind
-            ids = _extract_native(scope, scope_kind)
+            if "ids" in scope:
+                alias_values = [key for key in _ALIASES[scope_kind] if key in scope]
+                ids = _ids(scope_kind, scope.get("ids"))
+                if alias_values and _extract_native(scope, scope_kind) != ids:
+                    raise ValueError("dynamic scope contains conflicting ids and legacy aliases")
+            else:
+                ids = _extract_native(scope, scope_kind)
         else:
             if len(found) != 1:
                 raise ValueError("dynamic scope has no unambiguous Tactical scope alias")
@@ -97,7 +109,7 @@ def _legacy_normalize(targets):
     else:
         found = []
         for scope_type, scope_kind in (("client", "client"), ("site", "site"), ("endpoint", "endpoint")):
-            keys = [key for key in _ALIASES[scope_kind] if key != "ids" and key in targets]
+            keys = [key for key in _ALIASES[scope_kind] if key in targets]
             if keys:
                 found.append((scope_type, scope_kind, keys))
         if len(found) != 1:
@@ -134,16 +146,8 @@ def canonicalize_existing_targets(apps, schema_editor):
         schedule.target_state_detail = ""
         schedule.save(update_fields=["targets", "target_state", "target_state_detail"])
 
-    # History is immutable evidence. Canonicalize snapshots only when the old
-    # shape can be converted without guessing; otherwise retain the original.
-    for run in Run.objects.all().iterator():
-        try:
-            canonical = _legacy_normalize(run.targets_snapshot or {})
-        except Exception:
-            continue
-        if canonical != (run.targets_snapshot or {}):
-            run.targets_snapshot = canonical
-            run.save(update_fields=["targets_snapshot"])
+    # Run history is immutable evidence. Never rewrite targets_snapshot in a migration.
+
 
 
 class Migration(migrations.Migration):

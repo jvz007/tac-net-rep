@@ -72,6 +72,29 @@ def _normalize_targets(targets):
         raise SchedulerError(str(exc)) from exc
 
 
+
+
+def _canonicalize_endpoint_targets_for_user(user, targets):
+    canonical = dict(targets or {})
+    target_type = str(canonical.get("type") or "none").strip().lower()
+    if target_type in {"endpoint", "endpoints", "agent", "agents"}:
+        values = list(canonical.get("ids") or [])
+        resolved = resources_adapter.canonical_agent_target_ids_in_scope(user=user, identifiers=values)
+        if len(resolved) != len(dict.fromkeys(str(v).strip() for v in values)):
+            raise PermissionDenied("One or more scheduler endpoints are outside your Tactical access scope.")
+        canonical["ids"] = resolved
+    elif target_type == "dynamic":
+        scope = dict(canonical.get("scope") or {})
+        if str(scope.get("type") or "").strip().lower() in {"endpoint", "agent"}:
+            values = list(scope.get("ids") or [])
+            resolved = resources_adapter.canonical_agent_target_ids_in_scope(user=user, identifiers=values)
+            if len(resolved) != len(dict.fromkeys(str(v).strip() for v in values)):
+                raise PermissionDenied("One or more scheduler endpoints are outside your Tactical access scope.")
+            scope["type"] = "endpoint"
+            scope["ids"] = resolved
+            canonical["scope"] = scope
+    return canonical
+
 def _scope_target_refs(targets):
     try:
         return [tactical_scope_ref(targets)]
@@ -283,6 +306,7 @@ class SchedulerListView(APIView):
             if data.get("schedule_type") == TecTacSchedule.ScheduleType.INTERVAL and not data.get("interval_anchor_at"):
                 data["interval_anchor_at"] = timezone.now().replace(second=0, microsecond=0)
             data["targets"] = _normalize_targets(data.get("targets"))
+            data["targets"] = _canonicalize_endpoint_targets_for_user(request.user, data["targets"])
             _validate_shape(data)
             _require_target_scope(request.user, data.get("targets"), payload=True)
             schedule = TecTacSchedule(owner_type=TecTacSchedule.OwnerType.USER, created_by=request.user, updated_by=request.user)
@@ -327,6 +351,7 @@ class SchedulerDetailView(APIView):
             data = validate_schedule_payload(merged)
             _require_action(request.user, data["action_id"])
             data["targets"] = _normalize_targets(data.get("targets"))
+            data["targets"] = _canonicalize_endpoint_targets_for_user(request.user, data["targets"])
             _validate_shape(data)
             _require_target_scope(request.user, data.get("targets"), payload=True)
             _apply_schedule_fields(schedule, data)

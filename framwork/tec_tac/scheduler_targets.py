@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 
 class SchedulerTargetShapeError(ValueError):
     pass
@@ -37,11 +39,57 @@ _RESERVED_FILTER_SCOPE_KEYS = {
 
 
 
+def _scope_alias_token(value: str):
+    """Return a Tactical scope alias only for an explicit field reference.
+
+    Dynamic filters are module-owned data.  Descriptive values such as
+    ``Main Site`` or ``windows_agent`` must never be interpreted as Tactical
+    scope merely because their normalized text ends with a scope noun.
+
+    Scope-field spellings are rejected only when the complete value is an
+    exact scope alias, or when an explicit path/reference encodes one (for
+    example ``site.id``, ``selector/site_id`` or ``payload.clientIds``).
+    Bare scope nouns inside a longer path such as ``ticket.client`` remain
+    module-owned fields rather than alternate Tactical scope selectors.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+
+    def normalize(token: str) -> str:
+        token = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", token)
+        token = re.sub(r"[^a-zA-Z0-9]+", "_", token).strip("_").lower()
+        return re.sub(r"_+", "_", token)
+
+    whole = normalize(raw)
+    if whole in _RESERVED_FILTER_SCOPE_KEYS:
+        return whole
+
+    # Path references are explicit only when a segment itself names an ID
+    # alias, or when two adjacent segments compose <scope>.id(s).  Do not
+    # reject a bare scope noun merely because it appears in a longer path.
+    raw_parts = [part for part in re.split(r"[./:\[\]]+", raw) if part]
+    parts = [normalize(part) for part in raw_parts]
+    specific = _RESERVED_FILTER_SCOPE_KEYS - {
+        "id", "ids", "client", "clients", "site", "sites",
+        "agent", "agents", "endpoint", "endpoints",
+    }
+    for token in parts:
+        if token in specific:
+            return token
+    scope_nouns = {"client", "clients", "site", "sites", "agent", "agents", "endpoint", "endpoints"}
+    for left, right in zip(parts, parts[1:]):
+        if left in scope_nouns and right in {"id", "ids"}:
+            alias = f"{left.rstrip('s')}_id{'s' if right == 'ids' else ''}"
+            if alias in specific:
+                return alias
+    return None
+
+
 def _reserved_filter_value(value):
     """Return the first Tactical scope alias used as a filter value token."""
     if isinstance(value, str):
-        token = value.strip().lower()
-        return token if token in _RESERVED_FILTER_SCOPE_KEYS else None
+        return _scope_alias_token(value)
     if isinstance(value, list):
         for item in value:
             reserved = _reserved_filter_value(item)

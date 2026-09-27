@@ -117,9 +117,13 @@ def scheduler_scope_snapshot(*, user) -> dict[str, object]:
         for v in _scope_queryset(Site.objects.all(), user=user, trusted=False).values_list("pk", flat=True)
     )
     endpoint_ids = set()
+    # Compatibility boundary: scheduler targets saved before Core 1.15.134 may
+    # contain Tactical Agent database PKs. Keep those aliases visible for
+    # authorization/history reads while all new/edited schedules canonicalize
+    # to agent_id.
     for pk, agent_id in _scope_queryset(Agent.objects.all(), user=user, trusted=False).values_list("pk", "agent_id"):
-        endpoint_ids.add(str(pk))
         endpoint_ids.add(str(agent_id))
+        endpoint_ids.add(str(pk))
     return {
         "unrestricted": False,
         "client_ids": client_ids,
@@ -162,20 +166,61 @@ def site_target_ids_in_scope(*, user, site_ids) -> set[int]:
     )
 
 
-def agent_target_identifiers_in_scope(*, user, identifiers) -> set[str]:
-    """Return both pk and agent_id identifiers for endpoints in user scope."""
-    requested_text = {str(value) for value in identifiers}
-    if not requested_text:
-        return set()
-    numeric = {int(value) for value in requested_text if value.isdigit() and int(value) > 0}
+def canonical_agent_target_ids_in_scope(*, user, identifiers) -> list[str]:
+    """Resolve endpoint references to the one canonical scheduler identity: agent_id.
+
+    Legacy database PKs are accepted only when they resolve unambiguously to one
+    visible Agent. A numeric token that simultaneously names a different
+    ``agent_id`` and a PK is rejected rather than guessed.
+    """
+    requested = [str(value).strip() for value in identifiers]
+    if not requested:
+        return []
+    numeric = {int(value) for value in requested if value.isdigit() and int(value) > 0}
     _, _, Agent = _models()
-    qs = _scope_queryset(Agent.objects.all(), user=user, trusted=False).filter(
-        Q(agent_id__in=requested_text) | Q(pk__in=numeric)
+    rows = list(
+        _scope_queryset(Agent.objects.all(), user=user, trusted=False)
+        .filter(Q(agent_id__in=set(requested)) | Q(pk__in=numeric))
+        .values_list("pk", "agent_id")
     )
-    allowed: set[str] = set()
-    for pk, agent_id in qs.values_list("pk", "agent_id"):
-        allowed.add(str(pk))
-        allowed.add(str(agent_id))
+    resolved = []
+    for token in requested:
+        matches = {(int(pk), str(agent_id)) for pk, agent_id in rows if str(agent_id) == token or str(pk) == token}
+        if not matches:
+            continue
+        if len(matches) != 1:
+            raise TacticalResourceAdapterError(f"Endpoint identifier {token!r} is ambiguous; use the canonical agent_id.")
+        resolved.append(next(iter(matches))[1])
+    return list(dict.fromkeys(resolved))
+
+
+def agent_target_identifiers_in_scope(*, user, identifiers) -> set[str]:
+    """Return in-scope endpoint identifiers, including legacy PK aliases.
+
+    Core 1.15.134 made ``agent_id`` the canonical persisted Scheduler identity,
+    but older schedules may still contain Tactical Agent database PKs.  This
+    read/authorization helper intentionally accepts the original visible alias
+    while save/edit paths continue to use ``canonical_agent_target_ids_in_scope``
+    and therefore write only canonical ``agent_id`` values.
+    """
+    requested = [str(value).strip() for value in identifiers]
+    if not requested:
+        return set()
+    numeric = {int(value) for value in requested if value.isdigit() and int(value) > 0}
+    _, _, Agent = _models()
+    rows = list(
+        _scope_queryset(Agent.objects.all(), user=user, trusted=False)
+        .filter(Q(agent_id__in=set(requested)) | Q(pk__in=numeric))
+        .values_list("pk", "agent_id")
+    )
+    allowed = set()
+    for token in requested:
+        matches = {(int(pk), str(agent_id)) for pk, agent_id in rows if str(agent_id) == token or str(pk) == token}
+        if not matches:
+            continue
+        if len(matches) != 1:
+            raise TacticalResourceAdapterError(f"Endpoint identifier {token!r} is ambiguous; use the canonical agent_id.")
+        allowed.add(token)
     return allowed
 
 

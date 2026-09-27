@@ -46,8 +46,13 @@ class State:
 class QS:
     def __init__(self, items):
         self.items = list(items)
-    def filter(self, **kwargs):
+    def filter(self, *args, **kwargs):
         status = kwargs.get("status")
+        if args and status is None:
+            return QS([])
+        # The production stale-queue path now prefilters with a Django Q object.
+        # This lightweight harness already supplies only stale RUNNING rows, so
+        # positional predicates can be ignored here.
         started_not_null = kwargs.get("started_at__isnull")
         rows = self.items
         if status is not None:
@@ -121,6 +126,11 @@ def as_utc(value):
 def queued_deadline(**kwargs):
     return kwargs["queued_at"] + dt.timedelta(minutes=kwargs["queued_stale_minutes"])
 
+class FakeQ:
+    def __init__(self, *args, **kwargs): pass
+    def __and__(self, other): return self
+    def __or__(self, other): return self
+
 ns = {
     "__name__": "tec_tac.scheduler_test",
     "__package__": "tec_tac",
@@ -128,6 +138,7 @@ ns = {
     "timedelta": dt.timedelta,
     "timezone": types.SimpleNamespace(now=lambda: now),
     "transaction": types.SimpleNamespace(atomic=lambda: nullcontext()),
+    "Q": FakeQ,
     "TecTacScheduleRun": RunModel,
     "TecTacSchedulerConfig": Config,
     "TecTacSchedulerState": State,
@@ -136,6 +147,7 @@ ns = {
     "_ACTIONS": {"test.action": Action()},
     "_as_utc": as_utc,
     "queued_stale_deadline": queued_deadline,
+    "DEFAULT_RETRY_DELAY_SECONDS": 60,
 }
 exec(compile(MODULE, str(SOURCE), "exec"), ns)
 

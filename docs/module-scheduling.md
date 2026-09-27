@@ -538,7 +538,7 @@ Tactical-native target objects have a strict canonical shape. Core normalises an
 {"type": "endpoints", "ids": ["agent-uuid-a", "agent-uuid-b"]}
 ```
 
-The singular aliases (`client`, `site`, `endpoint`, `agent`) are also valid target types, but the identifier field is always `ids`. Client/site IDs are positive Tactical database IDs. Endpoint/agent IDs are stored as strings and may identify a Tactical `agent_id` or a positive database ID. No extra keys are accepted on Tactical-native static targets.
+The singular aliases (`client`, `site`, `endpoint`, `agent`) are also valid target types, but the identifier field is always `ids`. Client/site IDs are positive Tactical database IDs. Endpoint/agent IDs are stored canonically as Tactical `agent_id` strings. Legacy database PK input is resolved to `agent_id` at the authenticated Scheduler boundary only when it identifies exactly one visible Agent; ambiguous numeric identifiers are rejected. No extra keys are accepted on Tactical-native static targets.
 
 Dynamic Tactical targeting has one explicit canonical scope plus an optional non-scope filter:
 
@@ -550,7 +550,7 @@ Dynamic Tactical targeting has one explicit canonical scope plus an optional non
 }
 ```
 
-The canonical dynamic target root contains only `type`, `scope`, and optional `filter`, and canonical `scope` contains only `type` and `ids`. For backwards compatibility, Core accepts the established Tactical scope aliases (`client_id` / `client_ids`, `site_id` / `site_ids`, `agent_id` / `agent_ids`, and endpoint equivalents) as input in `scope` and converts them before persistence/dispatch. Known legacy root scope aliases are also consumed and canonicalized rather than forwarded to handlers. Conflicting or ambiguous scope aliases are rejected. Tactical identity aliases are forbidden as **top-level filter keys** and as **filter value tokens at any depth**; nested filter objects remain module-owned and may contain ordinary keys such as `id` or `site_id`. This blocks generic field/value filter DSLs from carrying unauthorized Tactical scope past Core without reinterpreting nested module-owned keys as target scope.
+The canonical dynamic target root contains only `type`, `scope`, and optional `filter`, and canonical `scope` contains only `type` and `ids`. For backwards compatibility, Core accepts the established Tactical scope aliases (`client_id` / `client_ids`, `site_id` / `site_ids`, `agent_id` / `agent_ids`, and endpoint equivalents) as input in `scope` and converts them before persistence/dispatch. Known legacy root scope aliases are also consumed and canonicalized rather than forwarded to handlers. Conflicting or ambiguous scope aliases are rejected. Tactical identity aliases are forbidden as **top-level filter keys** and as **filter value tokens at any depth**. Equivalent field-reference spellings such as `site.id`, `site__id`, `siteId`, `clientIds`, and `agent.id` are treated as the same Tactical scope channel. Nested filter objects remain module-owned and may contain ordinary keys such as `id` or `site_id`; generic module references such as `ticket.id` remain valid values. This blocks generic field/value filter DSLs from carrying unauthorized Tactical scope past Core without reinterpreting nested module-owned keys as target scope.
 
 For non-manager operators:
 
@@ -564,3 +564,11 @@ Core re-checks target scope when a user schedule is created or edited, when a sc
 Effective Tactical/role superusers and Core scheduler managers retain global Scheduler target authority. Module-specific target types such as custom groups remain the owning module's responsibility because Core cannot infer their membership safely.
 
 Scheduled unattended execution remains a system automation operation: it uses the already-authorized saved target definition and does not require the creator to remain logged in.
+
+### Scheduler revision and history invariants
+
+Creating or materially editing a schedule establishes a new scheduling baseline. An occurrence that predates that revision is marked consumed without creating a synthetic `MissedSkip`/`MissedExpired` row for work that was never scheduled under the new definition.
+
+Migration `0015_scheduler_target_canonicalization` may repair mutable schedule definitions, but run-history `targets_snapshot` values are immutable evidence and are never rewritten by the migration.
+
+Queued stale-run recovery applies a database timestamp prefilter before row locking, then evaluates the authoritative retry-aware deadline per candidate. Retry recovery and Celery execution share the same 60-second fallback when an old run has no stored retry delay.
