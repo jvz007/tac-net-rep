@@ -2610,6 +2610,17 @@ TACTICAL_RESTORE_HOST_PATHS = (
 )
 
 
+TEC_TAC_SYSTEMD_INSTALL_UNIT_NAMES = (
+    # Persistent Core-owned units written by install.sh. Keep absent entries in
+    # the snapshot inventory too so rollback removes a unit introduced by a
+    # failed restore when it did not exist before the transaction.
+    "tec-tac-trust-policy-revert.service",
+    "tec-tac-trust-policy-revert.timer",
+    "tec-tac-scheduler.service",
+    "tec-tac-scheduler.timer",
+)
+
+
 TEC_TAC_PRIVILEGED_INSTALL_PATHS = (
     # Root-owned helper/library targets written by install.sh. Keep this list
     # regression-checked against installer literals so rollback coverage cannot drift.
@@ -2639,8 +2650,31 @@ TEC_TAC_PRIVILEGED_INSTALL_PATHS = (
 )
 
 
-def _tec_tac_restore_host_paths(config):
+def _tec_tac_systemd_unit_paths(systemd_root=Path("/etc/systemd/system")):
+    """Return the persistent Core-owned systemd unit rollback inventory.
+
+    Include known installer units even when absent so the host snapshot records
+    that absence and can remove a unit introduced by a failed restore.  Also
+    include any additional existing tec-tac-* unit files/symlinks so newer units
+    automatically participate in rollback before this fixed inventory is updated.
+    """
+    root = Path(systemd_root)
+    rows = {str(root / name) for name in TEC_TAC_SYSTEMD_INSTALL_UNIT_NAMES}
+    if root.exists():
+        for path in root.glob("tec-tac-*"):
+            try:
+                info = path.lstat()
+            except FileNotFoundError:
+                continue
+            if stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+                rows.add(str(path))
+    return tuple(sorted(rows))
+
+
+def _tec_tac_restore_host_paths(config, systemd_root=Path("/etc/systemd/system")):
     state_root = Path(config["TEC_TAC_STATE_ROOT"])
+    tactical_root = Path(config["TACTICAL_ROOT"])
+    systemd_root = Path(systemd_root)
     return (
         config["TEC_TAC_ROOT"],
         config["TEC_TAC_FRAMEWORK_SOURCE"],
@@ -2649,6 +2683,9 @@ def _tec_tac_restore_host_paths(config):
         "/opt/tec-tac-ui",
         "/etc/tec-tac",
         "/etc/nginx/snippets/tec-tac.conf",
+        str(tactical_root / "api" / "tacticalrmm" / "tacticalrmm" / "local_settings.py"),
+        str(systemd_root / "rmm.service.d"),
+        *_tec_tac_systemd_unit_paths(systemd_root),
         str(state_root / "module-manager" / "module-state.json"),
         str(state_root / "module-manager" / "repositories" / "repositories.json"),
         *TEC_TAC_PRIVILEGED_INSTALL_PATHS,

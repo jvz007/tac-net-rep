@@ -347,3 +347,77 @@ with tempfile.TemporaryDirectory(prefix="tectac-m4-db-without-tree-") as td:
     must(not any(call == "verify" for call in flat), "runtime verification should not run after incomplete tree rollback")
 
 print("[TEST] PASS M4 database rollback independent of Tactical tree preservation")
+
+# M5: Tec-Tac-only rollback must include the Tactical bootstrap local_settings,
+# the rmm.service.d drop-in directory, and every existing tec-tac-* systemd
+# unit. Exercise the real target builder and snapshot/restore primitives against
+# a temporary systemd root so this regression remains unprivileged.
+with tempfile.TemporaryDirectory(prefix="tectac-m5-host-surface-") as td:
+    base = Path(td)
+    tactical_root = base / "rmm"
+    local_settings = tactical_root / "api" / "tacticalrmm" / "tacticalrmm" / "local_settings.py"
+    local_settings.parent.mkdir(parents=True)
+    local_settings.write_text("before-local-settings\n", encoding="utf-8")
+
+    systemd_root = base / "systemd"
+    systemd_root.mkdir()
+    rmm_dropin = systemd_root / "rmm.service.d"
+    rmm_dropin.mkdir()
+    (rmm_dropin / "tec-tac.conf").write_text("before-dropin\n", encoding="utf-8")
+    scheduler_unit = systemd_root / "tec-tac-scheduler.service"
+    scheduler_unit.write_text("before-scheduler\n", encoding="utf-8")
+    timer_unit = systemd_root / "tec-tac-scheduler.timer"
+    timer_unit.write_text("before-timer\n", encoding="utf-8")
+    absent_known_unit = systemd_root / "tec-tac-trust-policy-revert.timer"
+    unrelated_unit = systemd_root / "other.service"
+    unrelated_unit.write_text("unrelated\n", encoding="utf-8")
+
+    config = {
+        "TACTICAL_ROOT": str(tactical_root),
+        "TEC_TAC_STATE_ROOT": str(base / "state"),
+        "TEC_TAC_ROOT": str(base / "tec-tac"),
+        "TEC_TAC_FRAMEWORK_SOURCE": str(base / "framework-source"),
+        "TEC_TAC_UI_SOURCE": str(base / "ui-source"),
+        "TEC_TAC_UI_DEPLOY_ROOT": str(base / "ui-deploy"),
+    }
+    targets = mod._tec_tac_restore_host_paths(config, systemd_root=systemd_root)
+    target_set = set(targets)
+    must(str(local_settings) in target_set, "M5 local_settings.py is missing from Tec-Tac rollback targets")
+    must(str(rmm_dropin) in target_set, "M5 rmm.service.d is missing from Tec-Tac rollback targets")
+    must(str(scheduler_unit) in target_set, "M5 tec-tac service unit is missing from rollback targets")
+    must(str(timer_unit) in target_set, "M5 tec-tac timer unit is missing from rollback targets")
+    must(str(absent_known_unit) in target_set, "M5 absent known tec-tac unit is missing from rollback inventory")
+    must(str(unrelated_unit) not in target_set, "non-Tec-Tac systemd unit leaked into rollback targets")
+
+    snap = base / "snapshot-m5"
+    snap.mkdir()
+    records = mod._snapshot_host_paths(snap, [local_settings, rmm_dropin, scheduler_unit, timer_unit, absent_known_unit])
+
+    # Simulate a failed Tec-Tac restore changing all three integration surfaces.
+    local_settings.write_text("after-local-settings\n", encoding="utf-8")
+    (rmm_dropin / "tec-tac.conf").write_text("after-dropin\n", encoding="utf-8")
+    (rmm_dropin / "new.conf").write_text("created-by-failed-restore\n", encoding="utf-8")
+    scheduler_unit.write_text("after-scheduler\n", encoding="utf-8")
+    timer_unit.unlink()
+    absent_known_unit.write_text("created-by-failed-restore\n", encoding="utf-8")
+
+    old_run = mod.subprocess.run
+    try:
+        def run(argv, *args, **kwargs):
+            if list(argv[:2]) == ["systemctl", "daemon-reload"]:
+                class R: returncode = 0
+                return R()
+            return old_run(argv, *args, **kwargs)
+        mod.subprocess.run = run
+        mod._restore_host_paths({"host_paths": records}, io.StringIO())
+    finally:
+        mod.subprocess.run = old_run
+
+    must(local_settings.read_text(encoding="utf-8") == "before-local-settings\n", "M5 local_settings.py was not rolled back")
+    must((rmm_dropin / "tec-tac.conf").read_text(encoding="utf-8") == "before-dropin\n", "M5 rmm.service.d content was not rolled back")
+    must(not (rmm_dropin / "new.conf").exists(), "M5 failed-restore rmm drop-in survived rollback")
+    must(scheduler_unit.read_text(encoding="utf-8") == "before-scheduler\n", "M5 tec-tac service unit was not rolled back")
+    must(timer_unit.read_text(encoding="utf-8") == "before-timer\n", "M5 deleted tec-tac timer unit was not restored")
+    must(not absent_known_unit.exists(), "M5 tec-tac unit absent before restore was not removed")
+
+print("[TEST] PASS M5 Tec-Tac host integration rollback surface")
