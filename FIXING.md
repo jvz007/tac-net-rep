@@ -1,33 +1,31 @@
-# FIXING — Core 1.15.97
+# FIXING.md — Core 1.15.98
 
 ## Review scope
 
-This release is intentionally limited to finishing **D4 — Tec-Tac-owned Session Security retention** from Claude's tracker.
+This release is intentionally limited to **D5 completion** from Claude's tracker.
 
-### D4
+### D5 — unrestricted Tactical scope and Scheduler health coverage
 
-Problem: `cleanup_session_history()` existed and used the Core retention policy, but nothing invoked it periodically. History therefore never aged out unless a module called the capability manually. The previous test also mocked the ORM without exercising deletion behavior.
+Review that:
 
-Expected result:
-- the existing `tec-tac-scheduler.timer` path invokes a due-check every minute;
-- cleanup runs at most once per 24 hours after a successful run;
-- failed cleanup does not advance the timestamp and is retried on the next tick;
-- Scheduler dispatch continues even when retention cleanup fails;
-- expired unrevoked trust rows, dead revoked tombstones and old audit rows are actually deleted;
-- live revoked credentials remain protected.
+1. A Tactical role with both `can_view_clients` and `can_view_sites` empty is treated as unrestricted for `dynamic_unscoped` Scheduler targets.
+2. A role with either relation populated is still denied `dynamic_unscoped` unless it uses an explicit supported resource scope.
+3. Save-time and runtime authorization use the same Resource Directory unrestricted-scope decision.
+4. `AuthorizationRevoked` health output is exercised behaviorally, including count and latest-run detail.
 
-## Files/areas to inspect
+## Files/areas changed
 
-- `framwork/tec_tac/session_security.py`
-- `framwork/tec_tac/models.py`
-- `framwork/tec_tac/migrations/0017_session_history_cleanup_schedule.py`
-- `framwork/tec_tac/management/commands/tec_tac_scheduler_tick.py`
-- `tests/session-retention-deletion.py`
-- `tests/session-retention-scheduler.py`
-- `tests/session-security-foundation.sh`
-- `docs/session-security.md`
-- `docs/scheduler.md`
+- `framwork/tec_tac/resources_adapter.py`
+- `framwork/tec_tac/scheduler_views.py`
+- `framwork/tec_tac/scheduler.py`
+- `tests/d5-completion.py`
+
+## Expected outcome
+
+D5's remaining tracker gaps are closed without widening scope for restricted Tactical roles.
 
 ## Explicitly out of scope
 
-No other Medium/Low tracker IDs are being claimed closed in this release. In particular, M30 capability-version compatibility and L80 ambiguous empty Knox digest retention remain separate tracker items.
+- D6a and later Medium items.
+- Other Scheduler Low findings.
+- Historical release-note archive cleanup beyond the normal current-release housekeeping.

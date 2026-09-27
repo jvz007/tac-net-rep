@@ -99,7 +99,9 @@ def _require_target_scope(user, targets, *, payload=False):
         if kind in {"none", "module"}:
             continue
         if kind == "dynamic_unscoped":
-            raise PermissionDenied("Dynamic scheduler targets require an explicit client, site, or endpoint scope.")
+            if resources_adapter.tactical_scope_unrestricted(user=user):
+                continue
+            raise PermissionDenied("Dynamic scheduler targets require unrestricted Tactical client/site scope or an explicit client, site, or endpoint scope.")
         if not values:
             raise PermissionDenied("The saved schedule target scope is not available to this account.")
 

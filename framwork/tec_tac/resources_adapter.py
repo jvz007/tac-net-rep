@@ -81,6 +81,15 @@ def _role_scope_unrestricted(*, user, role=None) -> bool:
     )
 
 
+def tactical_scope_unrestricted(*, user) -> bool:
+    """Public Resource Directory decision for Tactical client/site scope.
+
+    Scheduler and other Core consumers must use this rather than reproducing
+    Tactical role-relation semantics locally.
+    """
+    return _role_scope_unrestricted(user=user)
+
+
 def explicit_client_target_ids_in_scope(*, user, client_ids) -> set[int]:
     """Return client ids authorized for whole-client targeting.
 
