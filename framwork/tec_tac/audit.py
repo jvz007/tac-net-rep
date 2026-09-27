@@ -93,7 +93,15 @@ def can_record(actor, module_id: str) -> bool:
 
 
 def can_record_from_browser(actor, module_id: str) -> bool:
-    """Browser writers require an explicitly permissioned non-Core module."""
+    """Return whether an authenticated actor may write browser audit for a module.
+
+    Browser provenance is intentionally stricter than the backend ``record``
+    contract.  Core provenance and modules without an explicit permission surface
+    are never available to browser callers because Core cannot prove that module
+    code, rather than an arbitrary authenticated user, originated the event.
+    Permission-bearing modules additionally require one of their effective grants
+    through ``_actor_can_use_module``.
+    """
     try:
         module = _resolve_module(module_id)
     except AuditContractError:

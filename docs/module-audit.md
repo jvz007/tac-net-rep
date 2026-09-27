@@ -173,7 +173,9 @@ The endpoint requires the normal authenticated Tec-Tac session guard. It derives
 - Never accept `username` from a module event.
 - Never let a module override `source`, `module_version`, or request/correlation provenance.
 - The requested module must exist and be enabled.
+- Browser audit writes are allowed only for modules that declare an explicit module permission surface. Core and permissionless/legacy modules are rejected with HTTP 403 because Core cannot prove module provenance for a browser-originated request.
 - Users without access to a permission-bearing module cannot use its browser audit writer.
-- The UI may hide a module audit affordance when the user lacks that module permission, but Core remains authoritative: direct `POST /api/tfd/audit/record/` attempts still return HTTP 403. Modules must treat that 403 as an authorization result, not as an audit-service failure.
+- When an enabled module with no declared permissions is exposed to the browser runtime, Core logs a warning that `/api/tfd/audit/record/` will return HTTP 403 for that module. The module must declare an explicit permission before exposing a browser audit surface.
+- The UI may hide a module audit affordance when the user lacks a module grant, but Core remains authoritative: direct `POST /api/tfd/audit/record/` attempts return HTTP 403 for Core, permissionless/legacy modules, or actors without an effective module grant. Modules must treat that 403 as an authorization result, not as an audit-service failure.
 - Audit records describe an action; they do not authorize that action.
 - Never place secrets, passwords, API tokens, private keys, or full credential payloads in `before`, `after`, or `metadata`.

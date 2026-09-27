@@ -111,4 +111,25 @@ try:
 except audit.AuditWriteError:
     pass
 
+
+# Browser audit authorization is stricter than backend audit authorization.
+# Core and permissionless module provenance are never available to browser callers.
+class BrowserActor:
+    is_authenticated = True
+    is_superuser = False
+    username = "browser"
+
+audit._resolve_module = lambda mid: {
+    "id": mid, "version": "1.0.0", "permissions": (), "legacy": False
+}
+audit._actor_can_use_module = lambda actor, module: bool(getattr(actor, "is_authenticated", False))
+assert audit.can_record_from_browser(BrowserActor(), "permissionless") is False
+assert audit.can_record_from_browser(BrowserActor(), "core") is False
+
+audit._resolve_module = lambda mid: {
+    "id": mid, "version": "1.0.0", "permissions": ("demo.use",), "legacy": False
+}
+audit._actor_can_use_module = lambda actor, module: False
+assert audit.can_record_from_browser(BrowserActor(), "permissioned") is False
+
 print("[TEST] PASS Tec-Tac audit write contract behavior")

@@ -1,20 +1,23 @@
-# FIXING.md — Core 1.15.126
+# FIXING.md — Core 1.15.127
 
-This build continues from the review-passed 1.15.125 baseline.
+This is a blocking rebuild of 1.15.127 only. No unrelated review items are included.
 
-## D1 — superuser account protection is a policy setting
+## HIGH — browser audit writer reopened C8
 
-- Core already stores `protect_superuser_accounts` as a root-owned global policy and exposes it through `/api/tfd/access/security-policy/`.
-- The policy remains default-off when no policy file exists, so existing Tactical account-management behaviour is preserved unless protection is explicitly enabled.
-- Existing-superuser account edit/delete/reset/API-key protections continue to consult the policy at the native Tactical mutation boundary.
-- The separate privilege-grant boundary remains unconditional: ordinary administrators still cannot grant/revoke Tactical superuser authority regardless of the optional D1 policy.
-- Corrupt explicit policy data continues to fail closed, while policy mutation remains effective-superuser-only and strictly audited.
-- A new release invariant now fails if those D1 decision boundaries drift.
+1.15.127 incorrectly allowed authenticated browser callers to submit audit rows for permissionless extensions and legacy plugins. Because those modules have no permission surface, Core could not prove that module code rather than an arbitrary authenticated user originated the browser event.
 
-## Regression coverage
+### Fix
 
-- `tests/d1-account-protection-policy-boundary.py`
-- existing `tests/tactical-superuser-guard.py`
-- existing `tests/account-security-policy.py`
-- existing `tests/account-security-policy-edge-cases.py`
-- existing `tests/account-security-policy-corrupt-schema.py`
+- `can_record_from_browser()` again rejects:
+  - `core` provenance; and
+  - any module whose resolved permission set is empty.
+- Permission-bearing modules continue through the existing `_actor_can_use_module()` effective-grant check.
+- Backend `record()` remains unchanged so trusted server-side module code can use the audit contract.
+- Enabled permissionless modules exposed through the browser runtime emit a warning that browser audit POSTs will receive HTTP 403 until an explicit module permission is declared.
+- `docs/module-audit.md` documents the 403 behavior and warning.
+
+### Regression coverage
+
+- `tests/audit-browser-provenance-hardening.py` uses the real `_actor_can_use_module` and real registry resolution with one permissionless extension and one legacy plugin.
+- It verifies both `can_record_from_browser()` denials and HTTP 403 from the real `AuditRecordView.post()` path.
+- `tests/audit-contract-foundation.py` again enforces the C8 permissionless-browser block.

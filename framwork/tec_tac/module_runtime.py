@@ -6,8 +6,12 @@ degrade cleanly without making extra HTTP requests or scanning Public Contracts.
 """
 from __future__ import annotations
 
+import logging
+
 from .module_state import is_enabled, load_state
 from .registry import get_plugins
+
+logger = logging.getLogger("tec_tac.module_runtime")
 
 
 def module_runtime_snapshot(plugins=None) -> list[dict]:
@@ -25,6 +29,12 @@ def module_runtime_snapshot(plugins=None) -> list[dict]:
         seen.add(module_id)
         legacy = bool(plugin.legacy or plugin.plugin_type == "legacy")
         enabled = True if legacy else bool(is_enabled(module_id, state))
+        if enabled and not tuple(plugin.permission_groups or ()):
+            logger.warning(
+                "Tec-Tac module %s has no declared permissions; browser audit POSTs for this module are blocked with HTTP 403. "
+                "Declare an explicit module permission before exposing a browser audit surface.",
+                module_id,
+            )
         rows.append({
             "id": module_id,
             "version": str(plugin.version or "0.0.0"),
