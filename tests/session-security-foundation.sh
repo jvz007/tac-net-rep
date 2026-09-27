@@ -17,6 +17,7 @@ grep -q 'DEFAULT_IDLE_TIMEOUT_MINUTES = 30' "${ROOT}/framwork/tec_tac/session_se
 grep -q 'DEFAULT_ABSOLUTE_LIFETIME_MINUTES = 8 \* 60' "${ROOT}/framwork/tec_tac/session_security.py" || fail "absolute default missing"
 grep -q 'DEFAULT_ACTIVITY_HEARTBEAT_SECONDS = 60' "${ROOT}/framwork/tec_tac/session_security.py" || fail "heartbeat default missing"
 grep -q 'DEFAULT_HISTORY_RETENTION_DAYS = 30' "${ROOT}/framwork/tec_tac/session_security.py" || fail "history retention default missing"
+grep -q '^history_retention_days      30$' "${ROOT}/docs/session-security.md" || fail "history retention missing from built-in policy documentation"
 grep -q 'history_retention_days' "${ROOT}/framwork/tec_tac/models.py" || fail "history retention model setting missing"
 [[ -f "${ROOT}/framwork/tec_tac/migrations/0016_session_history_retention.py" ]] || fail "history retention migration missing"
 [[ -f "${ROOT}/framwork/tec_tac/migrations/0017_session_history_cleanup_schedule.py" ]] || fail "scheduled history cleanup migration missing"
@@ -60,6 +61,7 @@ grep -q 'session_invalid_state' "${ROOT}/framwork/tec_tac/session_security.py" |
 
 python3 "${ROOT}/tests/session-fingerprint-upgrade.py"
 python3 "${ROOT}/tests/session-retention-policy.py"
+python3 "${ROOT}/tests/session-retention-http-policy.py"
 python3 "${ROOT}/tests/session-retention-deletion.py"
 python3 "${ROOT}/tests/session-retention-scheduler.py"
 

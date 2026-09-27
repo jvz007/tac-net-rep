@@ -30,6 +30,7 @@ absolute_lifetime_minutes   480
 ip_change_policy            reauthenticate
 session_audit_enabled       true
 activity_heartbeat_seconds  60
+history_retention_days      30
 trusted_proxies             127.0.0.1/32, ::1/128
 ```
 

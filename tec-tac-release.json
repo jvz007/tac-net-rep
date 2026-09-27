@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.123",
+  "version": "1.15.124",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -18,8 +18,8 @@
     },
     {
       "path": "FIXING.md",
-      "size": 817,
-      "sha256": "99bfd3b52b0c5d1699c4e695993efc76a343eea3d884a4908c52b57898df952e"
+      "size": 870,
+      "sha256": "9cf3ff22e761dad62a4048d81032055482b13fd9f3bfc9f34f9c9cbf7238434a"
     },
     {
       "path": "LICENSE",
@@ -37,14 +37,14 @@
       "sha256": "f4f304390f9a3e8ebb9ba84ecef8275ddc2ed7ed130f860f52caa668dd70bfe5"
     },
     {
-      "path": "RELEASE_NOTES_1.15.123.md",
-      "size": 1729,
-      "sha256": "333006b7493e6b8f7edf80f07c3d6a575d40576adeca9d6768f4d90c80858b2d"
+      "path": "RELEASE_NOTES_1.15.124.md",
+      "size": 1470,
+      "sha256": "c0bafff222eaf764c79c7d68300ee8d7eaf3ef454d3f80d633fa528242481c1f"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "958543cd2bd936ce47ea98af04ad7ad9aee629030543aca54f158c08eadebdb6"
+      "sha256": "61b96c0d372c5bd337817d4a1af3221dd60650b948e005185525b13e541d6438"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -693,8 +693,8 @@
     },
     {
       "path": "docs/session-security.md",
-      "size": 14321,
-      "sha256": "157764e41473ee53b35f19f08b1e15554287554b15200d5c8816ed26927e0dd2"
+      "size": 14352,
+      "sha256": "0e24236daac0c7cb60fb62d0db3656c8766a8023e4ae7fd18035e2958a4cfde7"
     },
     {
       "path": "docs/system-update-signed-releases.md",
@@ -1549,7 +1549,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "eac7d253fc05a766537ea8dfb13bfeb2d9a9e141cc7a45bd7df2935604598414"
+      "sha256": "ae4be14061f52d81ebfe0863739976536ea6a338fe85a5c5c7ac568195a9e6fc"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2132,6 +2132,11 @@
       "sha256": "564ed8d65dfc8c8e390c7e49cad11550ddf0d7561269f482285bd699f343048b"
     },
     {
+      "path": "tests/session-retention-http-policy.py",
+      "size": 4957,
+      "sha256": "dee67a6417664b36a03e9b137bbc657715085f5a2082194c5c077489029c67e4"
+    },
+    {
       "path": "tests/session-retention-policy.py",
       "size": 6056,
       "sha256": "e92a98a9a43490d25a33c6c48fc7050dc9596527879e21c4e5eb135167402e95"
@@ -2143,8 +2148,8 @@
     },
     {
       "path": "tests/session-security-foundation.sh",
-      "size": 6782,
-      "sha256": "2ee1fc16b6266a346c0b8f058482af3b22f02aa7cac5f393e48d8d1c51af0013"
+      "size": 6988,
+      "sha256": "6d746187f495f46ad129decd8bdfa244c4af17d422403f497ac2c6c6427e753e"
     },
     {
       "path": "tests/startup-safety.py",
