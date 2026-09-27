@@ -20,7 +20,7 @@ from .capabilities import register_capability
 from .config import load_layout
 
 CAPABILITY_ID = "core.server_backup"
-CAPABILITY_VERSION = "1.7.0"
+CAPABILITY_VERSION = "1.8.0"
 HELPER = Path("/usr/local/sbin/tec-tac-server-backup")
 DEFAULT_STATE_ROOT = Path("/var/lib/tec-tac/server-backup")
 TERMINAL_STATES = {"succeeded", "failed", "dispatch_failed"}
@@ -458,13 +458,16 @@ class ServerBackupProvider:
             normalized.append(policy)
         return _run("apply_retention", {"policies": normalized}, context=context)
 
-    def store_secret(self, *, secret: dict, context: dict) -> str:
+    def store_secret(self, *, secret: dict, destination: dict | None = None, context: dict) -> str:
         if not isinstance(secret, dict) or not secret:
             raise ServerBackupError("secret must be a non-empty object.")
+        if destination is not None:
+            destination = _validate_destinations([destination])[0]
+            destination.pop("secret_ref", None)
         # The transient job is mode 0600. The privileged helper moves the raw
         # value into a root-only secret file and redacts the job before worker
         # execution so credentials never appear in history/log responses.
-        result = _run("store_secret", {"secret": dict(secret)}, context=context)
+        result = _run("store_secret", {"secret": dict(secret), "destination": destination}, context=context)
         secret_ref = str(result.get("secret_ref") or "")
         if not secret_ref:
             raise ServerBackupError("Core did not return a secret reference.", result=result)
@@ -578,6 +581,7 @@ def register_core_server_backup_capability():
             "backup_inventory_identity_fields": ["installation_id", "server_name", "recovery_signer"],
             "restore_validation_fields": ["recovery_signer", "version_transition"],
             "overrideable_restore_checks": ["target.os"],
+            "credential_binding_required": True,
         },
     )
 

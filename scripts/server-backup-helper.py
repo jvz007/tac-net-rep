@@ -433,9 +433,13 @@ def claim_job(job_id, config):
     # the durable job before the detached worker is launched.
     if job.get("action") == "store_secret":
         secret = validate_secret(job["request"].get("secret"))
+        destination = job["request"].get("destination")
+        binding = None
+        if destination is not None:
+            binding = destination_credential_binding(destination, config)
         transient = rs["staging"] / f"secret-{job_id}.json"
         atomic_json(transient, secret, mode=0o600, uid=0, gid=0)
-        job["request"] = {"secret_transient": str(transient), "redacted": True}
+        job["request"] = {"secret_transient": str(transient), "binding": binding, "redacted": True}
 
     _, gid, _, _ = tactical_identity(config)
     job["status"] = "dispatched"
@@ -708,6 +712,27 @@ def load_registered_destination(config, destination_id: str) -> dict:
         raise RuntimeError("registered backup destination id mismatch")
     return item
 
+
+
+def destination_credential_binding(destination, config=None):
+    """Return the immutable endpoint identity a credential is allowed to reach."""
+    item = validate_destination(destination, config or load_config())
+    dtype = item["type"]
+    if dtype == "local":
+        return {"type": "local", "path": item["path"]}
+    if dtype in {"sftp", "scp", "ftp"}:
+        return {"type": dtype, "host": item["host"].lower(), "port": int(item["port"]), "username": item["username"]}
+    if dtype == "webdav":
+        from urllib.parse import urlsplit, urlunsplit
+        parts = urlsplit(item["url"])
+        host = (parts.hostname or "").lower()
+        port = parts.port or (443 if parts.scheme.lower() == "https" else 80)
+        path = parts.path.rstrip("/") or "/"
+        return {"type": dtype, "scheme": parts.scheme.lower(), "host": host, "port": port, "path": path}
+    if dtype == "s3":
+        return {"type": dtype, "provider": str(item.get("provider") or "Other"), "endpoint": str(item.get("endpoint") or "").strip().lower(), "region": str(item.get("region") or "").strip(), "bucket": item["bucket"]}
+    raise RuntimeError("unsupported destination type for credential binding")
+
 def secret_path(config, secret_ref):
     try:
         uuid.UUID(str(secret_ref))
@@ -731,7 +756,12 @@ def load_secret(config, destination):
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise RuntimeError("backup destination secret is unreadable") from exc
-    return validate_secret(value)
+    if not isinstance(value, dict) or value.get("version") != 1 or not isinstance(value.get("secret"), dict):
+        raise RuntimeError("backup credential is legacy/unbound; re-save it for this destination before use")
+    expected = destination_credential_binding(destination, config)
+    if value.get("binding") != expected:
+        raise RuntimeError("backup credential is bound to a different destination endpoint")
+    return validate_secret(value["secret"])
 
 
 def rclone_obscure(value):
@@ -4110,9 +4140,10 @@ def operation_store_secret(config, job, log):
         raise RuntimeError("secret transient path is invalid") from exc
     ensure_regular(transient)
     secret = validate_secret(json.loads(transient.read_text(encoding="utf-8")))
+    binding = job["request"].get("binding")
     ref = str(uuid.uuid4())
     target = rs["secrets"] / f"{ref}.json"
-    atomic_json(target, secret, mode=0o600)
+    atomic_json(target, {"version": 1, "binding": binding, "secret": secret}, mode=0o600)
     os.chown(target, 0, 0); os.chmod(target, 0o600)
     transient.unlink(missing_ok=True)
     log.write("[TEC-TAC-BACKUP] stored root-only backup credential reference\n")

@@ -6,7 +6,7 @@ Tec-Tac Core exposes one narrow privileged recovery contract:
 
 ```text
 core.server_backup
-capability version 1.7.0
+capability version 1.8.0
 ```
 
 Modules request typed backup, inventory, restore, retention, destination-validation and secret-store operations. They never receive arbitrary `sudo`, shell, executable-path or unrestricted filesystem access.
@@ -203,11 +203,11 @@ The native FTP adapter implements path preparation, upload, listing/stat, downlo
 Modules persist only opaque `secret_ref` values:
 
 ```python
-secret_ref = backup.store_secret(secret={...}, context={...})
+secret_ref = backup.store_secret(secret={...}, destination=destination_without_secret_ref, context={...})
 backup.delete_secret(secret_ref=secret_ref, context={...})
 ```
 
-Secret files live below `/var/lib/tec-tac/server-backup/secrets/`, are root-owned mode `0600`, and raw credential material is never returned in normal backup/inventory/validation results or logs.
+Secret files live below `/var/lib/tec-tac/server-backup/secrets/`, are root-owned mode `0600`, and raw credential material is never returned in normal backup/inventory/validation results or logs. Remote credentials are bound when stored to a canonical destination endpoint identity. A credential cannot be reused against a different host/URL/S3 endpoint or bucket, and legacy unbound remote credentials must be re-saved before use.
 
 ## Destination validation
 
