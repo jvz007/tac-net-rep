@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.115",
+  "version": "1.15.116",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -18,8 +18,8 @@
     },
     {
       "path": "FIXING.md",
-      "size": 1502,
-      "sha256": "af2fde4baf5744097dfbcbe99efc5d7d5d565e7f93920f43ffef9194ebc775ff"
+      "size": 1034,
+      "sha256": "82cd28321abbfedae3e47e2efd49853f2f57936d0349fbd895b7d6e52d26c7e3"
     },
     {
       "path": "LICENSE",
@@ -37,14 +37,14 @@
       "sha256": "f4f304390f9a3e8ebb9ba84ecef8275ddc2ed7ed130f860f52caa668dd70bfe5"
     },
     {
-      "path": "RELEASE_NOTES_1.15.115.md",
-      "size": 1960,
-      "sha256": "12c81211042a775377da6ce7323989de419521c4c8bbfa6c7efe405d4f69569e"
+      "path": "RELEASE_NOTES_1.15.116.md",
+      "size": 1803,
+      "sha256": "d2701cb3d31277162c6416ccf176ee85cd5848ea78315df460eaef84000a50e7"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "183de789292dad8fe23773150f8419bb46928c6b2b7ebbc8d33baba8d3e4b2d6"
+      "sha256": "c2cb2de146ff829c627718842b6f129b3fa06ca7087c9bc02c90a6b07b866244"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -1203,8 +1203,8 @@
     },
     {
       "path": "framwork/tec_tac/module_state.py",
-      "size": 8497,
-      "sha256": "63c5a0c98c4a1194f3badfe892f944e4d195acff6a58b7404be952e1a086a402"
+      "size": 9550,
+      "sha256": "9d5022f1c7a8623b304d35865f012d85a105d1e23e38ee95040c6e5647c2c4f0"
     },
     {
       "path": "framwork/tec_tac/module_v2_views.py",
@@ -1549,7 +1549,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "2b23b5f0f13b1bbc36debf95cc84a7eb75766407e41fee25596da0f98c8556ec"
+      "sha256": "2299281f205ca9b91eefcf0502714ea97fca628886dd8632135db91e0c4254ee"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -1788,8 +1788,8 @@
     },
     {
       "path": "tests/module-management-foundation.sh",
-      "size": 24751,
-      "sha256": "25e8f0e6bf32d230a910aee962225afd65b0900c81ca31c82de2eb4eef9394ee"
+      "size": 24915,
+      "sha256": "c026ecc9a50033f84e62ac8037dc5dba40e6ccc021af7736843792deb7da8b49"
     },
     {
       "path": "tests/module-mixed-artifact-batch.sh",
@@ -2185,6 +2185,11 @@
       "path": "tests/user-preferences-foundation.sh",
       "size": 2122,
       "sha256": "9fc70da5923a2808e009896ff1fce0abb1ae507e847cf28b05faea1575d30714"
+    },
+    {
+      "path": "tests/version-rebuild-ordering.py",
+      "size": 1356,
+      "sha256": "afdc5eae4adfc994dd328ce111c925fd4b0aaefea3593cee5880276be1e0b342"
     },
     {
       "path": "uninstall.sh",

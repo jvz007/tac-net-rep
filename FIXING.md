@@ -1,22 +1,20 @@
-# FIXING.md — Core 1.15.115
+# FIXING.md — Core 1.15.116
 
-This build starts the next release line after the reviewed 1.15.114 release.
+This build continues from the review-passed 1.15.115-1 baseline and respects the agreed maximum of **1 Medium + 5 Low** findings per pass.
 
-## System Update installer lifecycle
-- A Framework installer that reaches the final successful verification boundary now clears its temporary EXIT trap and returns status 0 explicitly.
-- This prevents a completed install from being misreported as `framework installer exited with status 1` and unnecessarily rolled back.
+## M18 — shared version ordering for release rebuilds
 
-## Detached signed System Update uploads
-- Offline System Updates accept one release archive plus `tec-tac-release.json` and `tec-tac-release.json.sig` in the same multipart request.
-- The API accepts repeated multipart file fields and classifies the archive/signing sidecars by filename.
-- Both signing sidecars are required together; duplicate archives, duplicate signing files, unsupported extras, and archive+detached signing ambiguity fail closed.
-- Signing sidecars are independently size-bounded and staged as managed files.
-- The root update helper claims the sidecars through the same no-follow/inode snapshot boundary used for update archives.
-- Detached sidecars are injected only into the root-private extracted release tree before the existing root signed-tree verification runs.
-- Existing embedded signed-tree archives and online GitHub update staging remain supported.
+- Numeric `-N` release rebuild suffixes now sort after the suffix-free base release.
+- Rebuild suffixes compare numerically (`-10` is newer than `-2`).
+- Ordinary nonnumeric prerelease suffixes retain below-release ordering.
+- Module dependency resolution, capability version checks, repository candidate selection and System Update release ordering now use compatible rebuild semantics.
+
+## L61 — module-management foundation follows the current atomic state writer
+
+- Removed the stale structural assertion for the superseded inline temporary-file chmod implementation.
+- The foundation now requires `atomic_json(STATE_FILE, state)` and verifies the final module-state file is restored to `0644`.
 
 ## Regression coverage
-- `tests/system-update-detached-upload.py`
-- `tests/system-update-claim-security.py`
-- `tests/system-update-signed-tree.py`
-- `tests/system-update-foundation.sh`
+
+- `tests/version-rebuild-ordering.py`
+- `tests/module-management-foundation.sh`

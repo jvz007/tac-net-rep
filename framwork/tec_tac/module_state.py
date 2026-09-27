@@ -21,7 +21,7 @@ STATE_ROOT = Path("/var/lib/tec-tac/module-manager")
 STATE_FILE = STATE_ROOT / "module-state.json"
 STATE_LOCK = STATE_ROOT / "module-state.lock"
 logger = logging.getLogger("tec_tac.module_state")
-_VERSION_RE = re.compile(r"^\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-+.]([0-9A-Za-z.-]+))?\s*$")
+_VERSION_RE = re.compile(r"^\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?([-+.][0-9A-Za-z.-]+)?\s*$")
 _CONSTRAINT_RE = re.compile(r"^\s*(==|!=|>=|<=|>|<)?\s*([^\s,]+)\s*$")
 
 
@@ -55,6 +55,26 @@ def _compare(left: Version, right: Version) -> int:
         return 1
     if left.suffix == right.suffix:
         return 0
+
+    # Tec-Tac uses a numeric ``-N`` suffix for release rebuilds, not SemVer
+    # prereleases. A rebuild is newer than the suffix-free release and rebuild
+    # numbers compare numerically (``-10`` > ``-2``). Other suffixes retain
+    # prerelease-style ordering below the suffix-free release. This mirrors
+    # System Update's version ordering so module dependencies, capabilities and
+    # repository update selection all agree with the release pipeline.
+    left_rebuild = re.fullmatch(r"-(\d+)", left.suffix or "")
+    right_rebuild = re.fullmatch(r"-(\d+)", right.suffix or "")
+    if left_rebuild or right_rebuild:
+        if left_rebuild and right_rebuild:
+            left_number = int(left_rebuild.group(1))
+            right_number = int(right_rebuild.group(1))
+            return (left_number > right_number) - (left_number < right_number)
+        if left_rebuild:
+            # Numeric rebuilds sort after the base release and after ordinary
+            # prerelease suffixes for the same core version.
+            return 1
+        return -1
+
     if not left.suffix:
         return 1
     if not right.suffix:
