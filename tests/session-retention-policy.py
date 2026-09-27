@@ -77,6 +77,7 @@ class Config:
     session_audit_enabled=True
     activity_heartbeat_seconds=60
     history_retention_days=30
+    last_history_cleanup_at=None
     trusted_proxies=[]
     updated_by_label=""
     def save(self, update_fields=None): self.saved=tuple(update_fields or [])

@@ -178,8 +178,13 @@ Tec-Tac-owned. `history_retention_days` is part of the global Core session
 policy (default 30 days, range 1–3650) and may only be changed through the
 superuser-only policy boundary; every change is audited.
 
-The capability exposes `cleanup()` and always uses that configured policy. A
-revoked trust row is preserved beyond the history window only while its
+The capability exposes `cleanup()` and always uses that configured policy. Core
+also runs this retention automatically from the existing `tec-tac-scheduler.timer`
+path. The scheduler tick checks `last_history_cleanup_at` every minute and runs
+cleanup only when 24 hours have elapsed. The timestamp advances only after a
+successful cleanup, so a failure is retried on the next scheduler tick.
+
+A revoked trust row is preserved beyond the history window only while its
 underlying credential could still authenticate: an unexpired Knox token, a
 present Tactical API key, or an unexpired Django session. After that credential
 is gone/expired, the tombstone is deleted once the configured history window

@@ -884,6 +884,35 @@ def cleanup_session_history(*, retention_days: int | None = None) -> dict[str, i
     }
 
 
+def cleanup_session_history_if_due(*, now=None, interval: timedelta = timedelta(days=1)) -> dict[str, Any]:
+    """Run Core-owned session history retention at most once per interval.
+
+    The Tec-Tac scheduler timer invokes this every minute. The persisted marker
+    is advanced only after a successful cleanup, so failures are retried by the
+    next scheduler tick rather than silently delaying retention for another day.
+    """
+    current_time = now or timezone.now()
+    config = TecTacSessionSecurityConfig.current()
+    last_run = getattr(config, "last_history_cleanup_at", None)
+    if last_run is not None and last_run > current_time - interval:
+        return {
+            "ran": False,
+            "reason": "not_due",
+            "last_history_cleanup_at": last_run,
+            "next_due_at": last_run + interval,
+        }
+
+    result = cleanup_session_history()
+    config.last_history_cleanup_at = current_time
+    config.save(update_fields=["last_history_cleanup_at"])
+    return {
+        "ran": True,
+        "last_history_cleanup_at": current_time,
+        "next_due_at": current_time + interval,
+        **result,
+    }
+
+
 def diagnostics() -> dict[str, Any]:
     policy = _policy_dict()
     now = timezone.now()
@@ -892,6 +921,7 @@ def diagnostics() -> dict[str, Any]:
         "capability": CAPABILITY_ID,
         "version": CAPABILITY_VERSION,
         "policy": policy,
+        "last_history_cleanup_at": TecTacSessionSecurityConfig.current().last_history_cleanup_at,
         "counts": {
             "active": TecTacSessionTrust.objects.filter(revoked=False, absolute_expires_at__gt=now, idle_expires_at__gt=now).count(),
             "revoked": TecTacSessionTrust.objects.filter(revoked=True).count(),

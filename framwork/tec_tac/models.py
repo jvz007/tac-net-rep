@@ -246,6 +246,7 @@ class TecTacSessionSecurityConfig(models.Model):
     session_audit_enabled = models.BooleanField(default=True)
     activity_heartbeat_seconds = models.PositiveIntegerField(default=60)
     history_retention_days = models.PositiveIntegerField(default=30)
+    last_history_cleanup_at = models.DateTimeField(null=True, blank=True)
     trusted_proxies = models.JSONField(default=default_session_trusted_proxies, blank=True)
     updated_by_label = models.CharField(max_length=150, blank=True, default="")
     updated_at = models.DateTimeField(auto_now=True)

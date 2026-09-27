@@ -36,7 +36,7 @@ The unattended path was validated on Framework 1.8.0 using the built-in `tec-tac
 
 ## Runtime
 
-`tec-tac-scheduler.timer` evaluates due schedules every minute. Due runs are dispatched into Tactical's existing Celery worker through `tec_tac.execute_schedule_run`. Tec-Tac does not modify Tactical tracked source files to provide scheduling.
+`tec-tac-scheduler.timer` evaluates due schedules every minute. Due runs are dispatched into Tactical's existing Celery worker through `tec_tac.execute_schedule_run`. The same tick also invokes Core-owned periodic maintenance that is due, including Session Security history retention. Session retention itself is limited to one successful run per 24 hours using a persisted Core timestamp; a failed cleanup is retried on the next tick. Tec-Tac does not modify Tactical tracked source files to provide scheduling.
 
 The framework installer creates/enables the timer and verifies that the Celery task is registered.
 

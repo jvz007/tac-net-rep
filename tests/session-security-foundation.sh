@@ -19,6 +19,8 @@ grep -q 'DEFAULT_ACTIVITY_HEARTBEAT_SECONDS = 60' "${ROOT}/framwork/tec_tac/sess
 grep -q 'DEFAULT_HISTORY_RETENTION_DAYS = 30' "${ROOT}/framwork/tec_tac/session_security.py" || fail "history retention default missing"
 grep -q 'history_retention_days' "${ROOT}/framwork/tec_tac/models.py" || fail "history retention model setting missing"
 [[ -f "${ROOT}/framwork/tec_tac/migrations/0016_session_history_retention.py" ]] || fail "history retention migration missing"
+[[ -f "${ROOT}/framwork/tec_tac/migrations/0017_session_history_cleanup_schedule.py" ]] || fail "scheduled history cleanup migration missing"
+grep -q 'last_history_cleanup_at' "${ROOT}/framwork/tec_tac/models.py" || fail "scheduled history cleanup marker missing"
 grep -q 'DEFAULT_IP_CHANGE_POLICY = "reauthenticate"' "${ROOT}/framwork/tec_tac/session_security.py" || fail "IP default missing"
 grep -q 'hmac.new' "${ROOT}/framwork/tec_tac/session_security.py" || fail "HMAC credential fingerprint missing"
 grep -q 'successful_authenticator' "${ROOT}/framwork/tec_tac/session_security.py" || fail "session fingerprint is not bound to the successful authenticator"
@@ -58,6 +60,8 @@ grep -q 'session_invalid_state' "${ROOT}/framwork/tec_tac/session_security.py" |
 
 python3 "${ROOT}/tests/session-fingerprint-upgrade.py"
 python3 "${ROOT}/tests/session-retention-policy.py"
+python3 "${ROOT}/tests/session-retention-deletion.py"
+python3 "${ROOT}/tests/session-retention-scheduler.py"
 
 python3 -m py_compile \
   "${ROOT}/framwork/tec_tac/session_security.py" \
