@@ -18,7 +18,8 @@ assert 'tec-tac-trust-policy-revert.timer' in installer
 assert 'WantedBy=multi-user.target' in installer
 assert 'OnBootSec=2min' in installer
 assert 'OnUnitActiveSec=2min' in installer
-assert '${TRUST_POLICY_CLI} check-revert >/dev/null' in installer
+assert 'if ! TRUST_POLICY_CHECK_OUTPUT="$(${TRUST_POLICY_CLI} check-revert 2>&1)"; then' in installer
+assert 'the persistent timer will retry' in installer
 
 # Exercise an expired pending revert as the static service would after reboot.
 path = ROOT / 'scripts/trust-policy-cli.py'
@@ -72,7 +73,7 @@ assert retry_deadline > queued_at + timedelta(hours=1)
 
 scheduler_source = (ROOT / 'framwork/tec_tac/scheduler.py').read_text(encoding='utf-8')
 assert 'queued_stale_deadline(' in scheduler_source
-assert 'retry_delay_seconds=int(run.retry_delay_seconds_snapshot or 0)' in scheduler_source
+assert 'retry_delay_seconds=effective_retry_delay_seconds(run.retry_delay_seconds_snapshot)' in scheduler_source
 assert 'attempt=int(run.attempt or 0)' in scheduler_source
 
 print('[TEST] PASS 1.15.51 persistent trust revert + audit + retry-aware B4')

@@ -216,6 +216,8 @@ grep -q 'require_trust_accepted' "${ROOT}/framwork/tec_tac/module_manager.py" ||
 PYTHONPATH="${ROOT}/framwork" python3 "${ROOT}/tests/update-trust-policy.py"
 python3 "${ROOT}/tests/trust-policy-upgrade-migration.py"
 python3 "${ROOT}/tests/trust-policy-batch-1.15.133.py"
+python3 "${ROOT}/tests/trust-policy-closure-1.15.150.py"
+python3 "${ROOT}/tests/review-regressions-1.15.51.py"
 python3 "${ROOT}/tests/review-regressions-1.15.50.py"
 
 # R2: privileged extraction is root-private, ephemeral, and release mode metadata

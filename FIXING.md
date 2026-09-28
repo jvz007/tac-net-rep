@@ -1,16 +1,17 @@
-# Fixing — Core 1.15.149
+# Fixing — Core 1.15.150
 
-This release closes the remaining Scheduler review items L19, L24, and L25.
+This release closes the remaining Trust Policy review items L26, L27, and L28.
 
 ## In scope
 
-- L19 — prove behaviorally that occurrences predating a schedule revision are consumed before missed/grace evaluation and never create synthetic missed rows.
-- L24 — align migration-time Scheduler target canonicalisation with the runtime target contract while preserving immutable run-history snapshots.
-- L25 — make `agent_id` the persisted endpoint identity for existing saved schedules, with ambiguous numeric PK/agent-id references failing closed.
+- L26 — behaviorally prove that signed-in trust-policy PUTs use dedicated authenticated throttles with non-empty per-user cache keys.
+- L27 — behaviorally prove a failed install-time `check-revert` remains non-fatal after the persistent timer is enabled.
+- L28 — behaviorally prove `set_level()` and `check_revert_due()` serialize through the same cross-process policy lock.
+- Repair the stale 1.15.51 regression so it asserts the current non-fatal trust-policy check and shared Scheduler retry-delay helper.
 
 ## Out of scope
 
-- Trust-policy closure items.
 - Backup/archive-history closure items.
-- UI changes.
+- Remaining UI closure items.
 - D2/D3 restore decision cleanup.
+- Unrelated Core behavior changes.
