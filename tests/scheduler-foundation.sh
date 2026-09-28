@@ -41,4 +41,5 @@ python3 "$ROOT/tests/scheduler-hardening-1.15.134.py"
 python3 "$ROOT/tests/scheduler-closure-1.15.144.py"
 python3 "$ROOT/tests/scheduler-filter-value-compat-1.15.134-2.py"
 python3 "$ROOT/tests/scheduler-history-health-1.15.135.py"
+python3 "$ROOT/tests/scheduler-closure-1.15.149.py"
 echo 'scheduler foundation: PASS'

@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.148",
+  "version": "1.15.149",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -18,8 +18,8 @@
     },
     {
       "path": "FIXING.md",
-      "size": 1532,
-      "sha256": "a3801dc41153b48cfcd34555b2c885b07fb0236a502dcea08d0ec0631cc38101"
+      "size": 712,
+      "sha256": "6e9165d7d65f4413b4252819e1fabff11a87289afe72245ecebd05c1a99230d4"
     },
     {
       "path": "LICENSE",
@@ -32,14 +32,14 @@
       "sha256": "b16e78b37eecd6b4690403b4725a0b9977c7e8e9eca51b6cb4493166c952f243"
     },
     {
-      "path": "RELEASE_NOTES_1.15.148.md",
-      "size": 1691,
-      "sha256": "4e812721fb7501802731288890c89c3bc21095d46a8ba4c0569e227d0bf7bd7d"
+      "path": "RELEASE_NOTES_1.15.149.md",
+      "size": 988,
+      "sha256": "bbcb18f3e09dddac14d1ae91aa118c5dfcb0948a859645894b41a5b33eeb7252"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "2d9f75cfe546e2c4eb1e35710edf1a0b610280a35e77a03966325a0b31f4a782"
+      "sha256": "452c82335005b122a7100ee2990187b9c472ce6d89f33cb61af244d2cf56240f"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -480,6 +480,11 @@
       "path": "docs/releases/RELEASE_NOTES_1.15.147.md",
       "size": 1209,
       "sha256": "c9e98c8b4cbdfc5eb81e571f54e2a09628f9968532a3fe1dc2b975c04cb3bbbc"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.148.md",
+      "size": 1691,
+      "sha256": "4e812721fb7501802731288890c89c3bc21095d46a8ba4c0569e227d0bf7bd7d"
     },
     {
       "path": "docs/releases/RELEASE_NOTES_1.15.19.md",
@@ -1308,8 +1313,8 @@
     },
     {
       "path": "framwork/tec_tac/migrations/0015_scheduler_target_canonicalization.py",
-      "size": 6850,
-      "sha256": "ade7cc36791bc6387b08fc299b64e919a12265232a7cf99c174cb9174874e71d"
+      "size": 8546,
+      "sha256": "19bad5b88444e18cf4bd84ba60741c8da11296d9fab502ffc75061993e813915"
     },
     {
       "path": "framwork/tec_tac/migrations/0016_session_history_retention.py",
@@ -1325,6 +1330,11 @@
       "path": "framwork/tec_tac/migrations/0018_scheduler_history_indexes.py",
       "size": 555,
       "sha256": "f5f46406d244b2eef869c24b1a26f3ea5bd5ac7905a9e87e84c22498ae24b8cd"
+    },
+    {
+      "path": "framwork/tec_tac/migrations/0019_scheduler_endpoint_identity.py",
+      "size": 3231,
+      "sha256": "063fb6c3eba458836ec1c6865ec0dd6821527b89bbc389a858a454433fd5f347"
     },
     {
       "path": "framwork/tec_tac/migrations/__init__.py",
@@ -1724,7 +1734,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "888d5691f60e7e4f5af559630fe835952c0997f752dce5df91fa05085a8f317a"
+      "sha256": "8937305bec769048c6a837d883514bfcadfb2fad36b8bae4ef4899e79980efac"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2247,6 +2257,11 @@
       "sha256": "6be9915e2735adb40457fcd88d0d6c49440f1b135d34d7e915b0ca6d135dd8a3"
     },
     {
+      "path": "tests/scheduler-closure-1.15.149.py",
+      "size": 7843,
+      "sha256": "7331e0c9da27840a6d189a4a95a07604a69114afc400baa847d49f545511cafc"
+    },
+    {
       "path": "tests/scheduler-durability-review.sh",
       "size": 868,
       "sha256": "2e9359d6222154f46f1db0ab470cba12369ee056bcb1092138aba45abb11e152"
@@ -2258,8 +2273,8 @@
     },
     {
       "path": "tests/scheduler-foundation.sh",
-      "size": 2938,
-      "sha256": "6ba5fc40042c971ab63e21422c3e2cde7d198428ae3e7410740fd6050e6761eb"
+      "size": 2990,
+      "sha256": "fd557fbb0338aeec66a27a8aae6448c7b0f0d32c8547fd529834698249fc0714"
     },
     {
       "path": "tests/scheduler-hardening-1.15.134.py",
@@ -2298,8 +2313,8 @@
     },
     {
       "path": "tests/scheduler-legacy-target-regression.py",
-      "size": 4130,
-      "sha256": "bad86c2050434270bd7622ec5829f961183d4872daed8ca8c3d34532e85a18d8"
+      "size": 4269,
+      "sha256": "ca852837dc57c4095f60c060aa1e99b5229aeab83424d759495c4a7339e22b64"
     },
     {
       "path": "tests/scheduler-permitted-action-ids.py",

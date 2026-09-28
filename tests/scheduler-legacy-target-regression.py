@@ -45,7 +45,7 @@ import ast
 migration_path = ROOT / "framwork" / "tec_tac" / "migrations" / "0015_scheduler_target_canonicalization.py"
 tree = ast.parse(migration_path.read_text())
 keep_names = {"_NATIVE", "_ALIASES"}
-keep_funcs = {"_values", "_ids", "_extract_native", "_legacy_normalize", "canonicalize_existing_targets"}
+keep_funcs = {"_values", "_ids", "_extract_native", "_legacy_normalize", "_endpoint_rows", "_canonical_endpoint_ids", "_canonicalize_endpoint_identity", "canonicalize_existing_targets"}
 nodes = []
 for node in tree.body:
     if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id in keep_names for t in node.targets):
@@ -62,6 +62,7 @@ class _Rows:
     def __init__(self, rows): self.rows = rows
     def all(self): return self
     def iterator(self): return iter(self.rows)
+    def values_list(self, *fields): return list(self.rows)
 
 class _Model:
     def __init__(self, rows): self.objects = _Rows(rows)

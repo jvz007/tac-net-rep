@@ -126,13 +126,56 @@ def _legacy_normalize(targets):
     return result
 
 
+
+def _endpoint_rows(apps):
+    Agent = apps.get_model("agents", "Agent")
+    return list(Agent.objects.all().values_list("pk", "agent_id"))
+
+
+def _canonical_endpoint_ids(values, rows):
+    out = []
+    for raw in _values(values):
+        if isinstance(raw, bool) or raw in (None, ""):
+            raise ValueError("empty endpoint identifier")
+        token = str(raw).strip()
+        if not token:
+            raise ValueError("empty endpoint identifier")
+        matches = {(int(pk), str(agent_id)) for pk, agent_id in rows if str(agent_id) == token or str(pk) == token}
+        if not matches:
+            raise ValueError(f"unknown endpoint identifier {token!r}")
+        if len(matches) != 1:
+            raise ValueError(f"ambiguous endpoint identifier {token!r}")
+        agent_id = next(iter(matches))[1]
+        if agent_id not in out:
+            out.append(agent_id)
+    return out
+
+
+def _canonicalize_endpoint_identity(targets, rows):
+    result = dict(targets)
+    target_type = str(result.get("type") or "none").strip().lower()
+    kind = _NATIVE.get(target_type)
+    if kind == "endpoint":
+        result["ids"] = _canonical_endpoint_ids(result.get("ids", []), rows)
+        return result
+    if target_type == "dynamic":
+        scope = dict(result.get("scope") or {})
+        scope_kind = _NATIVE.get(str(scope.get("type") or "").strip().lower())
+        if scope_kind == "endpoint":
+            scope["type"] = "endpoint"
+            scope["ids"] = _canonical_endpoint_ids(scope.get("ids", []), rows)
+            result["scope"] = scope
+    return result
+
 def canonicalize_existing_targets(apps, schema_editor):
     Schedule = apps.get_model("tec_tac", "TecTacSchedule")
     Run = apps.get_model("tec_tac", "TecTacScheduleRun")
+    endpoint_rows = _endpoint_rows(apps)
 
     for schedule in Schedule.objects.all().iterator():
         try:
             canonical = _legacy_normalize(schedule.targets or {})
+            canonical = _canonicalize_endpoint_identity(canonical, endpoint_rows)
         except Exception as exc:
             target_type = str((schedule.targets or {}).get("type") or "none").strip().lower() if isinstance(schedule.targets, dict) else "invalid"
             if target_type in set(_NATIVE) | {"dynamic", "none", ""}:
