@@ -57,6 +57,25 @@ def _read_root_regular(path: Path, *, max_bytes: int = 1024 * 1024) -> bytes:
         os.close(fd)
 
 
+
+
+def _read_import_regular(path: Path, *, max_bytes: int = 256 * 1024) -> bytes:
+    raw = path.expanduser()
+    if not raw.is_absolute():
+        raw = Path.cwd() / raw
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+    try:
+        fd = os.open(raw, flags)
+    except OSError as exc:
+        raise RuntimeError(f'recovery import source must be a readable regular file: {raw}') from exc
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise RuntimeError(f'recovery import source must be a regular file: {raw}')
+        return _read_bounded_fd(fd, max_bytes=max_bytes)
+    finally:
+        os.close(fd)
+
 def _installed_config_path(pointer: Path = CONFIG_POINTER, default: Path = DEFAULT_CONFIG) -> Path:
     try:
         raw = _read_root_regular(pointer, max_bytes=4096).decode('utf-8').strip()
@@ -222,8 +241,13 @@ def cmd_export(args):
 
 
 def cmd_import(args):
-    source = Path(args.path).expanduser().resolve()
-    payload = json.loads(source.read_text(encoding='utf-8'))
+    source = Path(args.path).expanduser()
+    if not source.is_absolute():
+        source = Path.cwd() / source
+    try:
+        payload = json.loads(_read_import_regular(source).decode('utf-8'))
+    except UnicodeDecodeError as exc:
+        raise RuntimeError('recovery public-key export must be UTF-8 JSON') from exc
     if not isinstance(payload, dict) or int(payload.get('schema') or 0) != 1 or payload.get('artifact_type') != 'tec-tac-recovery-public-key':
         raise RuntimeError('recovery public-key export format is invalid')
     key_id = str(payload.get('key_id') or payload.get('installation_id') or '').strip()
@@ -248,6 +272,11 @@ def cmd_import(args):
         except PermissionError: pass
     finally:
         os.close(fd)
+    dir_fd = os.open(TRUST_ROOT, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
     append_audit('recovery_public_key_imported', key_id=key_id, public_key_sha256=expected, source=str(source), source_server=identity.get('server_name'))
     print(f'trusted: {key_id} {expected}')
 

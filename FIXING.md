@@ -1,5 +1,5 @@
-# Fixing — Core 1.15.156
+# Fixing — Core 1.15.157
 
-This release hardens trust-policy state publication. The root trust-policy CLI and upgrade migration must use unique, same-directory temporary files for atomic replacement; predictable `.tmp` or PID-derived names are not permitted.
+Recovery-key import no longer follows the final import path or reads an unbounded source as root. Imported trust-key publication also fsyncs the trust directory.
 
-Regression: `tests/trust-policy-atomic-state-1.15.156.py`.
+Regression: `tests/recovery-key-import-1.15.157.py`.
