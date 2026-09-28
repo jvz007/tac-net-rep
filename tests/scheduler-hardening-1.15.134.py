@@ -58,11 +58,12 @@ assert "last_queued_at__lt=queued_cutoff" in scheduler_source
 assert "created_at__lt=queued_cutoff" in scheduler_source
 assert "select_for_update().filter" in scheduler_source
 
-# L22: scheduler recovery and worker retry execution share one 60-second
-# fallback constant rather than disagreeing on 0 vs 60.
+# L22: scheduler recovery and worker retry execution share the tested retry
+# fallback helper rather than maintaining independent 0/60 fallbacks.
 tasks_source = (ROOT / "framwork/tec_tac/tasks.py").read_text(encoding="utf-8")
 assert "DEFAULT_RETRY_DELAY_SECONDS = 60" in scheduler_source
-assert "from .scheduler import DEFAULT_RETRY_DELAY_SECONDS" in tasks_source
+assert "effective_retry_delay_seconds" in tasks_source
+assert "effective_retry_delay_seconds(run.retry_delay_seconds_snapshot)" in tasks_source
 assert "retry_delay_seconds_snapshot or 0" not in scheduler_source
 
 # L24: migration 0015 must not rewrite immutable run history and its aliases

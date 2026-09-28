@@ -65,11 +65,24 @@ def _scope_alias_token(value: str):
     if whole in _RESERVED_FILTER_SCOPE_KEYS:
         return whole
 
-    # Path references are explicit only when a segment itself names an ID
-    # alias, or when two adjacent segments compose <scope>.id(s).  Do not
-    # reject a bare scope noun merely because it appears in a longer path.
-    raw_parts = [part for part in re.split(r"[./:\[\]]+", raw) if part]
+    # Explicit field references can use path separators or Django-style
+    # ``__lookup`` suffixes.  Split those syntaxes before checking aliases so
+    # selectors such as ``site_id__in``, ``payload__clientIds__exact`` and
+    # ``site.pk`` cannot become a second Tactical scope channel.  A bare scope
+    # noun inside a module-owned path (for example ``ticket.client``) remains
+    # valid because it does not identify a Tactical id field.
+    raw_parts = [part for part in re.split(r"(?:__|[./:\[\]]+)", raw) if part]
     parts = [normalize(part) for part in raw_parts]
+    lookup_suffixes = {
+        "exact", "iexact", "contains", "icontains", "in", "gt", "gte",
+        "lt", "lte", "startswith", "istartswith", "endswith", "iendswith",
+        "range", "date", "year", "iso_year", "month", "day", "week",
+        "week_day", "iso_week_day", "quarter", "time", "hour", "minute",
+        "second", "isnull", "regex", "iregex",
+    }
+    while parts and parts[-1] in lookup_suffixes:
+        parts.pop()
+
     specific = _RESERVED_FILTER_SCOPE_KEYS - {
         "id", "ids", "client", "clients", "site", "sites",
         "agent", "agents", "endpoint", "endpoints",
@@ -79,8 +92,9 @@ def _scope_alias_token(value: str):
             return token
     scope_nouns = {"client", "clients", "site", "sites", "agent", "agents", "endpoint", "endpoints"}
     for left, right in zip(parts, parts[1:]):
-        if left in scope_nouns and right in {"id", "ids"}:
-            alias = f"{left.rstrip('s')}_id{'s' if right == 'ids' else ''}"
+        if left in scope_nouns and right in {"id", "ids", "pk"}:
+            suffix = "ids" if right == "ids" else "id"
+            alias = f"{left.rstrip('s')}_{suffix}"
             if alias in specific:
                 return alias
     return None

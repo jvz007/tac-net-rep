@@ -8,7 +8,7 @@ from tacticalrmm.celery import app
 
 from .models import TecTacScheduleRun
 from .capabilities import capability_status, CapabilityDisabled, CapabilityUnavailable, CapabilityVersionMismatch, CapabilityUnhealthy
-from .scheduler import DEFAULT_RETRY_DELAY_SECONDS, SchedulerError, SchedulerPermanentError, SchedulerTransientError, get_scheduled_action
+from .scheduler import SchedulerError, SchedulerPermanentError, SchedulerTransientError, effective_retry_delay_seconds, get_scheduled_action
 
 
 def _json_result(value):
@@ -57,7 +57,7 @@ def execute_schedule_run(self, run_id: str):
     target_mode = run.target_mode_snapshot or (schedule.target_mode if schedule else "snapshot")
     parameters = run.parameters_snapshot if isinstance(run.parameters_snapshot, dict) else {}
     retries = int(run.retry_count_snapshot or 0)
-    retry_delay = int(run.retry_delay_seconds_snapshot or DEFAULT_RETRY_DELAY_SECONDS)
+    retry_delay = effective_retry_delay_seconds(run.retry_delay_seconds_snapshot)
 
     try:
         action = get_scheduled_action(action_id)

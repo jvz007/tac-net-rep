@@ -48,10 +48,15 @@ def _can_use_action(user, action) -> bool:
         return False
 
 
-def _require_action(user, action_id):
+def _require_action(user, action_id, *, allow_unregistered_manager=False):
     try:
         action = get_scheduled_action(action_id)
     except SchedulerError as exc:
+        # Managers must be able to remove an orphaned schedule after its owning
+        # module/action has disappeared. Non-managers still fail closed because
+        # there is no action permission left to authorize against.
+        if allow_unregistered_manager and _native_scheduler_manager(user):
+            return None
         raise NotFound(str(exc)) from exc
     if not _can_use_action(user, action):
         raise PermissionDenied("You do not have permission to schedule this action.")
@@ -371,7 +376,7 @@ class SchedulerDetailView(APIView):
                 TecTacSchedule.objects.select_for_update().select_related("created_by", "updated_by"), pk=schedule_id
             )
             _require_user_managed(schedule)
-            _require_action(request.user, schedule.action_id)
+            _require_action(request.user, schedule.action_id, allow_unregistered_manager=True)
             _require_schedule_owner_or_manager(request.user, schedule)
             _require_target_scope(request.user, schedule.targets, payload=False)
             active = list(schedule.runs.select_for_update().filter(

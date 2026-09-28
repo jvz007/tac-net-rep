@@ -31,6 +31,15 @@ class SchedulerTransientError(SchedulerError):
 DEFAULT_RETRY_DELAY_SECONDS = 60
 
 
+def effective_retry_delay_seconds(value) -> int:
+    """Return the one scheduler retry-delay fallback used by queue and worker paths."""
+    try:
+        delay = int(value or 0)
+    except (TypeError, ValueError):
+        delay = 0
+    return delay if delay > 0 else DEFAULT_RETRY_DELAY_SECONDS
+
+
 @dataclass(frozen=True)
 class ScheduledAction:
     id: str
@@ -384,6 +393,17 @@ def _occurrence_predates_schedule_revision(schedule: TecTacSchedule, occurrence:
     return _as_utc(occurrence) < _as_utc(schedule.updated_at)
 
 
+def _consume_revision_baseline(schedule: TecTacSchedule, occurrence: datetime, key: str) -> bool:
+    """Consume an occurrence that belongs to the schedule's pre-edit baseline."""
+    if not _occurrence_predates_schedule_revision(schedule, occurrence):
+        return False
+    schedule.last_due_key = key
+    if schedule.schedule_type == TecTacSchedule.ScheduleType.ONCE:
+        schedule.enabled = False
+    schedule.save(update_fields=["last_due_key", "enabled", "updated_at"])
+    return True
+
+
 def _run_kwargs(schedule: TecTacSchedule, **extra):
     values = {
         "schedule": schedule,
@@ -397,7 +417,7 @@ def _run_kwargs(schedule: TecTacSchedule, **extra):
         "target_mode_snapshot": schedule.target_mode,
         "parameters_snapshot": schedule.parameters or {},
         "retry_count_snapshot": int(schedule.retry_count or 0),
-        "retry_delay_seconds_snapshot": int(schedule.retry_delay_seconds or DEFAULT_RETRY_DELAY_SECONDS),
+        "retry_delay_seconds_snapshot": effective_retry_delay_seconds(schedule.retry_delay_seconds),
         "last_queued_at": timezone.now(),
     }
     values.update(extra)
@@ -430,7 +450,7 @@ def recover_stale_runs(now: datetime | None = None) -> dict[str, int]:
                 queued_at=queued_at,
                 queued_stale_minutes=queued_minutes,
                 attempt=int(run.attempt or 0),
-                retry_delay_seconds=int(run.retry_delay_seconds_snapshot or DEFAULT_RETRY_DELAY_SECONDS),
+                retry_delay_seconds=effective_retry_delay_seconds(run.retry_delay_seconds_snapshot),
             )
             if now <= stale_after:
                 continue
@@ -438,7 +458,7 @@ def recover_stale_runs(now: datetime | None = None) -> dict[str, int]:
             run.error_type = "Stale"
             run.error = (
                 f"Stale queued run exceeded {queued_minutes} minute dispatch window"
-                + (f" after {int(run.retry_delay_seconds_snapshot or DEFAULT_RETRY_DELAY_SECONDS)} second retry countdown." if int(run.attempt or 0) > 0 else ".")
+                + (f" after {effective_retry_delay_seconds(run.retry_delay_seconds_snapshot)} second retry countdown." if int(run.attempt or 0) > 0 else ".")
             )
             run.finished_at = now
             run.save(update_fields=["status", "error_type", "error", "finished_at"])
@@ -658,7 +678,7 @@ def dispatch_due_schedules(now: datetime | None = None) -> dict:
                         occurrence = latest_occurrence(schedule, now)
                         if occurrence:
                             key = due_key(occurrence, exact=(schedule.schedule_type == TecTacSchedule.ScheduleType.INTERVAL))
-                            if schedule.last_due_key != key:
+                            if schedule.last_due_key != key and not _consume_revision_baseline(schedule, occurrence, key):
                                 run = TecTacScheduleRun.objects.create(**_run_kwargs(
                                     schedule, status=TecTacScheduleRun.Status.SKIPPED, scheduled_for=occurrence,
                                     targets_snapshot=schedule.targets or {}, error=authorization_error,
@@ -674,16 +694,12 @@ def dispatch_due_schedules(now: datetime | None = None) -> dict:
                     key = due_key(occurrence, exact=(schedule.schedule_type == TecTacSchedule.ScheduleType.INTERVAL))
                     if schedule.last_due_key == key:
                         continue
+                    # A create/edit is a new scheduling baseline. Consume any
+                    # occurrence from before that revision before lateness/grace
+                    # evaluation so it can neither run nor become a missed row.
+                    if _consume_revision_baseline(schedule, occurrence, key):
+                        continue
                     if not _should_run_occurrence(schedule, occurrence, now):
-                        # A create/edit is a new scheduling baseline. Do not emit
-                        # a synthetic missed row for an occurrence that predates
-                        # that revision; simply mark that occurrence consumed.
-                        if _occurrence_predates_schedule_revision(schedule, occurrence):
-                            schedule.last_due_key = key
-                            if schedule.schedule_type == TecTacSchedule.ScheduleType.ONCE:
-                                schedule.enabled = False
-                            schedule.save(update_fields=["last_due_key", "enabled", "updated_at"])
-                            continue
                         if schedule.missed_policy == TecTacSchedule.MissedPolicy.EXPIRE:
                             error_type = "MissedExpired"
                             message = "Occurrence expired after the scheduler lateness window."

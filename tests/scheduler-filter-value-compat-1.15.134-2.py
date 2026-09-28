@@ -140,6 +140,7 @@ ns = {
     "due_key": lambda occurrence, exact=False: "due-1",
     "_should_run_occurrence": lambda sched, occurrence, value: True,
     "_occurrence_predates_schedule_revision": lambda *args: False,
+    "_consume_revision_baseline": lambda *args: False,
     "get_scheduled_action": lambda action_id: object(),
     "SchedulerError": RuntimeError,
     "_run_kwargs": lambda sched, **kwargs: kwargs,

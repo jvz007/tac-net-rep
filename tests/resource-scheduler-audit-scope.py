@@ -133,8 +133,8 @@ tree = ast.parse(scheduler_path.read_text(encoding='utf-8'))
 cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'SchedulerDetailView')
 delete = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == 'delete')
 text = ast.unparse(delete)
-assert '_require_action(request.user, schedule.action_id)' in text
-assert text.index('_require_action(request.user, schedule.action_id)') < text.index('_require_target_scope(request.user, schedule.targets, payload=False)')
+assert '_require_action(request.user, schedule.action_id, allow_unregistered_manager=True)' in text
+assert text.index('_require_action(request.user, schedule.action_id, allow_unregistered_manager=True)') < text.index('_require_target_scope(request.user, schedule.targets, payload=False)')
 assert 'audit_record(' in text and 'strict=True' in text and "'force': True" in text
 
 print('resource-scheduler-audit-scope: PASS')

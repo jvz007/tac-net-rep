@@ -1,8 +1,16 @@
-# FIXING.md — Core 1.15.143
+# FIXING.md — Core 1.15.145
 
-Release-archive integrity release closing L63.
+## Scope
 
-- Canonicalizes archived release notes to clean release identities rather than internal rebuild suffixes.
-- Restores the authoritative clean-release archive continuously from 1.15.113 through 1.15.142 using retained project artifacts.
-- Enforces archive continuity/heading rules and exactly one current root release note in release integrity.
-- Extends build-junk rejection to pytest/mypy/ruff cache directories.
+Review closure release for **M19 + L10 + L14 + L15 + L76** from the Core/UI tracker.
+
+The production behavior for these findings was already present in the review-passed 1.15.144 baseline. This release deliberately avoids unrelated production changes and replaces structural/partial evidence with executable failure-injection and behavior tests.
+
+## Validation intent
+
+- native Tactical archive cleanup survives later failures;
+- non-manager repository synchronization errors never expose raw details;
+- destination archive publication cannot become visible before its sidecar;
+- custom installer config pointers are honored and symlink pointers rejected;
+- host rollback snapshot size is included in restore disk preflight;
+- recovery-key trust/identity reads are isolated, config-derived and no-follow/root-owned.
