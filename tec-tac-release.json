@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.155",
+  "version": "1.15.156",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -19,7 +19,7 @@
     {
       "path": "FIXING.md",
       "size": 320,
-      "sha256": "61cbc7ffd36a2f078f8aa2731de6501a7eff0e3c5ebab0e253ca25b32adbe130"
+      "sha256": "befe65c6d2efd20278e479687e1926212cb92e694e7b0aac75d43332f6c3939a"
     },
     {
       "path": "LICENSE",
@@ -32,14 +32,14 @@
       "sha256": "b16e78b37eecd6b4690403b4725a0b9977c7e8e9eca51b6cb4493166c952f243"
     },
     {
-      "path": "RELEASE_NOTES_1.15.155.md",
-      "size": 716,
-      "sha256": "0e58c845f2cb96c1706fffce27766a867270ed8c2ad3013d323ca41bb1bc3d5c"
+      "path": "RELEASE_NOTES_1.15.156.md",
+      "size": 959,
+      "sha256": "5082a2fe144cf8a221e4d80f8f6b1d24f1fe824b0f7360f68c076b822a77fdb6"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "f5ad093f8860e9d6ac647c127e30dc592f9894f6148e54650cba1c48512f639c"
+      "sha256": "b594fe296891fbb045fe161a7dfdd250ddcf6eb83fdd531d68425f5c39d949f9"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -515,6 +515,11 @@
       "path": "docs/releases/RELEASE_NOTES_1.15.154.md",
       "size": 830,
       "sha256": "ab535f603bb582641d9ce24ddb6efcd1a7ff0326dc74e5afcb7d454b87255e15"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.155.md",
+      "size": 716,
+      "sha256": "0e58c845f2cb96c1706fffce27766a867270ed8c2ad3013d323ca41bb1bc3d5c"
     },
     {
       "path": "docs/releases/RELEASE_NOTES_1.15.19.md",
@@ -1478,8 +1483,8 @@
     },
     {
       "path": "framwork/tec_tac/safe_files.py",
-      "size": 1337,
-      "sha256": "8a0ac6ae5b05b5cd6425fec68c6bb3d3c5d63672abb1b7b7e0926e7ce34142af"
+      "size": 1654,
+      "sha256": "21b0e6baa7a82137b9524c78de0bd977a5bde6275c8ccc1aa849c59997431c5e"
     },
     {
       "path": "framwork/tec_tac/scheduler.py",
@@ -1769,7 +1774,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "973f08fe9849799b4a51697847f59380c647567b5f524b5cbee3a28016520efe"
+      "sha256": "1562ae93c7c0529f64d55b4173a076ca508b361934386ad058e50f2a4f29dab7"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2300,6 +2305,11 @@
       "path": "tests/safe-files-atomic-json.sh",
       "size": 142,
       "sha256": "7e93f0bd21d3061b374a25d965f4ba9a5359f920f690d8e9f13c8454b4a809bf"
+    },
+    {
+      "path": "tests/safe-files-durability-1.15.156.py",
+      "size": 1855,
+      "sha256": "077d664bbb477e667ea2a1247b8abc91152df733c394eb1d5e472266a8cce196"
     },
     {
       "path": "tests/scheduler-closure-1.15.144.py",

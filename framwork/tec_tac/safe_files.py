@@ -8,6 +8,16 @@ from pathlib import Path
 from typing import Any
 
 
+def _fsync_directory(path: Path) -> None:
+    """Flush a directory entry update so an atomic replace survives a host crash."""
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    fd = os.open(path, flags)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def atomic_json(path: Path, payload: Any, *, mode: int = 0o660, default=None) -> None:
     """Atomically replace *path* with JSON using a unique sibling temp file.
 
@@ -30,6 +40,7 @@ def atomic_json(path: Path, payload: Any, *, mode: int = 0o660, default=None) ->
             os.fsync(handle.fileno())
         os.replace(tmp_path, path)
         tmp_path = None
+        _fsync_directory(path.parent)
     finally:
         if fd is not None:
             os.close(fd)
