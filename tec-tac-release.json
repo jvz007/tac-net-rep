@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.154",
+  "version": "1.15.155",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -19,7 +19,7 @@
     {
       "path": "FIXING.md",
       "size": 320,
-      "sha256": "9ed132003013bcb55bef7271c3bfadf41f20632ba2872e602e644a6938a28889"
+      "sha256": "61cbc7ffd36a2f078f8aa2731de6501a7eff0e3c5ebab0e253ca25b32adbe130"
     },
     {
       "path": "LICENSE",
@@ -32,14 +32,14 @@
       "sha256": "b16e78b37eecd6b4690403b4725a0b9977c7e8e9eca51b6cb4493166c952f243"
     },
     {
-      "path": "RELEASE_NOTES_1.15.154.md",
-      "size": 830,
-      "sha256": "ab535f603bb582641d9ce24ddb6efcd1a7ff0326dc74e5afcb7d454b87255e15"
+      "path": "RELEASE_NOTES_1.15.155.md",
+      "size": 716,
+      "sha256": "0e58c845f2cb96c1706fffce27766a867270ed8c2ad3013d323ca41bb1bc3d5c"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "62d9c1d7e300aed7a6405c27baf3ec9ff11f65a1886aec442abd8e8bbc7eea9c"
+      "sha256": "f5ad093f8860e9d6ac647c127e30dc592f9894f6148e54650cba1c48512f639c"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -510,6 +510,11 @@
       "path": "docs/releases/RELEASE_NOTES_1.15.153.md",
       "size": 731,
       "sha256": "e4a9dd3c74ce9541a958784da6b4de958d9d530f483d9142dd9a7aab9294f077"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.154.md",
+      "size": 830,
+      "sha256": "ab535f603bb582641d9ce24ddb6efcd1a7ff0326dc74e5afcb7d454b87255e15"
     },
     {
       "path": "docs/releases/RELEASE_NOTES_1.15.19.md",
@@ -1663,8 +1668,8 @@
     },
     {
       "path": "scripts/recovery-key-cli.py",
-      "size": 9360,
-      "sha256": "56a01447001ff2e760ba74ad7341a53f5e96bbc3439363d55d43cafce05d0c21"
+      "size": 10508,
+      "sha256": "48f29f638cfa4f00b968802d76637a2829c08a93c855ab0e9739afab906c460d"
     },
     {
       "path": "scripts/recovery/lib.sh",
@@ -1764,7 +1769,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "f7d52bd7ce8942803d0aa0e46dd052c7de39874d5a8ad7508bcf3d7130b2e80c"
+      "sha256": "973f08fe9849799b4a51697847f59380c647567b5f524b5cbee3a28016520efe"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2145,6 +2150,11 @@
       "path": "tests/recovery-foundation.sh",
       "size": 3275,
       "sha256": "cc37043034598986a25c0be45a65bfe19c16559d32f89b387a2456d1f4717beb"
+    },
+    {
+      "path": "tests/recovery-key-export-1.15.155.py",
+      "size": 1743,
+      "sha256": "cf44dfd81a1adde0e862ac39f560299a38848945dab108db5f33cb3d99d5cd91"
     },
     {
       "path": "tests/recovery-trust-async-core.py",

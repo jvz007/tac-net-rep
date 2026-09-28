@@ -14,6 +14,7 @@ import re
 import socket
 import stat
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -172,15 +173,50 @@ def cmd_status(_args):
     print(json.dumps(data, indent=2, sort_keys=True))
 
 
+def _atomic_write_public_export(path: Path, text: str) -> Path:
+    raw = path.expanduser()
+    if not raw.is_absolute():
+        raw = Path.cwd() / raw
+    parent = raw.parent.resolve(strict=True)
+    target = parent / raw.name
+    if os.path.lexists(target):
+        info = os.lstat(target)
+        if not stat.S_ISREG(info.st_mode):
+            raise RuntimeError(f'recovery export target must be a regular file: {target}')
+    fd = -1
+    tmp = None
+    try:
+        fd, tmp_name = tempfile.mkstemp(prefix=f'.{target.name}.', suffix='.tmp', dir=str(parent))
+        tmp = Path(tmp_name)
+        payload = text.encode('utf-8')
+        os.fchmod(fd, 0o644)
+        with os.fdopen(fd, 'wb', closefd=False) as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.close(fd)
+        fd = -1
+        os.replace(tmp, target)
+        dir_fd = os.open(parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+        return target
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
+
+
 def cmd_export(args):
     data = local_identity()
     text = json.dumps(data, indent=2, sort_keys=True) + '\n'
     if args.path == '-':
         sys.stdout.write(text)
     else:
-        target = Path(args.path).expanduser().resolve()
-        target.write_text(text, encoding='utf-8')
-        os.chmod(target, 0o644)
+        target = _atomic_write_public_export(Path(args.path), text)
         print(target)
     append_audit('recovery_public_key_exported', key_id=data['key_id'], public_key_sha256=data['public_key_sha256'], path=args.path)
 
