@@ -125,6 +125,36 @@ def read_policy(cfg: dict[str, str] | None = None) -> dict:
     }
 
 
+
+
+def _atomic_root_json(path: Path, payload: dict, *, mode: int = 0o644) -> None:
+    """Publish root-owned JSON without predictable temp-file collisions."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = None
+    tmp_path = None
+    try:
+        fd, raw_tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+        tmp_path = Path(raw_tmp)
+        os.fchown(fd, 0, 0)
+        os.fchmod(fd, mode)
+        data = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = None
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+        tmp_path = None
+    finally:
+        if fd is not None:
+            os.close(fd)
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink()
+            except FileNotFoundError:
+                pass
+
+
 def write_policy(level: str, *, updated_by: str = '', updated_at: str = '') -> dict:
     level = str(level or '').strip().lower()
     if level not in LEVEL_RANK:
@@ -138,11 +168,7 @@ def write_policy(level: str, *, updated_by: str = '', updated_at: str = '') -> d
         'updated_at': str(updated_at or '') or None,
         'updated_by': str(updated_by or '')[:150] or None,
     }
-    tmp = POLICY_FILE.with_name(POLICY_FILE.name + '.tmp')
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8')
-    os.chown(tmp, 0, 0)
-    os.chmod(tmp, 0o644)
-    os.replace(tmp, POLICY_FILE)
+    _atomic_root_json(POLICY_FILE, payload, mode=0o644)
     return read_policy()
 
 

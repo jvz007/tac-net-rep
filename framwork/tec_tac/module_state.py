@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+from .safe_files import atomic_json
+
 STATE_ROOT = Path("/var/lib/tec-tac/module-manager")
 STATE_FILE = STATE_ROOT / "module-state.json"
 STATE_LOCK = STATE_ROOT / "module-state.lock"
@@ -181,11 +183,7 @@ def load_state() -> dict:
 def _save_state_unlocked(payload: dict) -> None:
     if payload.get("_corrupt"):
         raise ModuleStateError("Corrupt module state cannot be saved. Repair or restore module-state.json first.")
-    STATE_ROOT.mkdir(parents=True, exist_ok=True)
-    tmp = STATE_FILE.with_name(STATE_FILE.name + f".tmp.{os.getpid()}")
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.chmod(tmp, 0o644)
-    os.replace(tmp, STATE_FILE)
+    atomic_json(STATE_FILE, payload, mode=0o644)
 
 
 def save_state(payload: dict) -> None:
