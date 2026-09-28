@@ -22,7 +22,7 @@ assert 'scope = "tec_tac_trust_policy_day"' in throttles
 
 # L27: the install-time immediate check is non-fatal; the timer is durable.
 install = (ROOT / "install.sh").read_text(encoding="utf-8")
-assert 'if ! TRUST_POLICY_CHECK_OUTPUT="$(${TRUST_POLICY_CLI} check-revert 2>&1)"; then' in install
+assert 'timeout --signal=TERM --kill-after=5s' in install and '"${TRUST_POLICY_CLI}" check-revert' in install
 assert "the persistent timer will retry" in install
 
 # M9/L28: all mutation/recovery entry points serialize on policy_lock.

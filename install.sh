@@ -717,8 +717,12 @@ systemctl enable --now tec-tac-trust-policy-revert.timer >/dev/null
 # Run one immediate check during upgrade so an already-expired pending revert
 # is not left lowered until the next timer tick. The timer is the durable
 # recovery path, so an unexpected one-shot failure must not abort Core install.
-if ! TRUST_POLICY_CHECK_OUTPUT="$(${TRUST_POLICY_CLI} check-revert 2>&1)"; then
-    log "WARNING: immediate trust-policy revert check failed; the persistent timer will retry: ${TRUST_POLICY_CHECK_OUTPUT}"
+TRUST_POLICY_CHECK_TIMEOUT_SECONDS="${TEC_TAC_TRUST_POLICY_CHECK_TIMEOUT_SECONDS:-30}"
+if ! [[ "${TRUST_POLICY_CHECK_TIMEOUT_SECONDS}" =~ ^[0-9]+$ ]] || (( TRUST_POLICY_CHECK_TIMEOUT_SECONDS < 1 || TRUST_POLICY_CHECK_TIMEOUT_SECONDS > 300 )); then
+    TRUST_POLICY_CHECK_TIMEOUT_SECONDS=30
+fi
+if ! TRUST_POLICY_CHECK_OUTPUT="$(timeout --signal=TERM --kill-after=5s "${TRUST_POLICY_CHECK_TIMEOUT_SECONDS}s" "${TRUST_POLICY_CLI}" check-revert 2>&1)"; then
+    log "WARNING: immediate trust-policy revert check failed or timed out; the persistent timer will retry: ${TRUST_POLICY_CHECK_OUTPUT}"
 fi
 log "Installed persistent trust-policy revert service/timer."
 

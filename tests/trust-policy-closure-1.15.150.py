@@ -50,13 +50,13 @@ def test_l26_authenticated_throttle_keys() -> None:
 def test_l27_failed_immediate_check_is_nonfatal() -> None:
     install = INSTALL.read_text(encoding="utf-8")
     match = re.search(
-        r'if ! TRUST_POLICY_CHECK_OUTPUT="\$\(\$\{TRUST_POLICY_CLI\} check-revert 2>&1\)"; then\n'
-        r'.*?\nfi',
+        r'TRUST_POLICY_CHECK_TIMEOUT_SECONDS="\$\{TEC_TAC_TRUST_POLICY_CHECK_TIMEOUT_SECONDS:-30\}".*?\nfi\nlog "Installed persistent trust-policy revert service/timer\."',
         install,
         re.S,
     )
     assert match, "installer immediate trust-policy check block not found"
     block = match.group(0)
+    assert 'timeout --signal=TERM --kill-after=5s' in block
     assert install.index("systemctl enable --now tec-tac-trust-policy-revert.timer") < install.index(block)
 
     with tempfile.TemporaryDirectory(prefix="trust-policy-install-150-") as raw:
@@ -68,6 +68,7 @@ def test_l27_failed_immediate_check_is_nonfatal() -> None:
         script.write_text(
             "#!/bin/bash\nset -e\n"
             f"TRUST_POLICY_CLI={fail_cli!s}\n"
+            "TEC_TAC_TRUST_POLICY_CHECK_TIMEOUT_SECONDS=1\n"
             "log(){ printf '%s\\n' \"$*\"; }\n"
             + block
             + "\nprintf 'AFTER-CHECK\\n'\n",

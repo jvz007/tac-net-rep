@@ -18,7 +18,7 @@ assert 'tec-tac-trust-policy-revert.timer' in installer
 assert 'WantedBy=multi-user.target' in installer
 assert 'OnBootSec=2min' in installer
 assert 'OnUnitActiveSec=2min' in installer
-assert 'if ! TRUST_POLICY_CHECK_OUTPUT="$(${TRUST_POLICY_CLI} check-revert 2>&1)"; then' in installer
+assert 'timeout --signal=TERM --kill-after=5s' in installer and '"${TRUST_POLICY_CLI}" check-revert' in installer
 assert 'the persistent timer will retry' in installer
 
 # Exercise an expired pending revert as the static service would after reboot.
