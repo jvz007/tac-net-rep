@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .safe_files import atomic_json
 from .capabilities import build_operation_context, register_capability
 from .config import load_layout
 
@@ -189,11 +190,7 @@ def _normalize_parameters(action: dict, parameters: dict | None) -> tuple[dict, 
 
 
 def _atomic_job(path: Path, payload: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
-    os.chmod(tmp, 0o640)
-    os.replace(tmp, path)
+    atomic_json(path, payload, mode=0o640, default=str)
 
 
 def _read_job(job_id: str) -> dict:

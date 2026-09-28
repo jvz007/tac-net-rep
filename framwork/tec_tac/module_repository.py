@@ -22,6 +22,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .safe_files import atomic_json
 from .module_manager import MAX_PACKAGE_BYTES, STAGED_ROOT, _atomic_json, _load_stage
 from .module_manager_v2 import (
     LicensingRequirementError,
@@ -55,11 +56,7 @@ def _default_config() -> dict:
 
 
 def _atomic_repo_json(path: Path, payload: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.chmod(tmp, 0o660)
-    os.replace(tmp, path)
+    atomic_json(path, payload, mode=0o660)
 
 
 def load_repositories() -> dict:

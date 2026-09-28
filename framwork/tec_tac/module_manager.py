@@ -20,6 +20,7 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
+from .safe_files import atomic_json
 from .registry import RegistryError, discover_plugins, get_plugins
 from .trusted_publishers import PublisherTrustError, verify_release_files
 from .trust_policy import TrustPolicyError, require_accepted as require_trust_accepted
@@ -63,11 +64,7 @@ def _utcnow() -> str:
 
 
 def _atomic_json(path: Path, payload: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.chmod(tmp, 0o660)
-    os.replace(tmp, path)
+    atomic_json(path, payload, mode=0o660)
 
 
 def _safe_archive_name(name: str) -> Path:

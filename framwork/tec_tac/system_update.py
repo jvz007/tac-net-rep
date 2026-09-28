@@ -25,6 +25,7 @@ import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 
+from .safe_files import atomic_json
 from .trusted_publishers import PublisherTrustError, verify_release_manifest_signature, verify_release_tree
 from .trust_policy import TrustPolicyError, acceptance as trust_acceptance, get_policy as get_trust_policy, require_accepted as require_trust_accepted
 
@@ -54,11 +55,7 @@ def _utcnow() -> str:
 
 
 def _atomic_json(path: Path, payload: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.chmod(tmp, 0o660)
-    os.replace(tmp, path)
+    atomic_json(path, payload, mode=0o660)
 
 
 def _read_config() -> dict[str, str]:

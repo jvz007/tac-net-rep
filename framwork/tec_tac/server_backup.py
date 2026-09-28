@@ -16,6 +16,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from .safe_files import atomic_json
 from .capabilities import register_capability
 from .config import load_layout
 
@@ -56,11 +57,7 @@ def _jobs_root() -> Path:
 
 
 def _atomic_job(path: Path, payload: dict, *, mode: int = 0o600) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
-    os.chmod(tmp, mode)
-    os.replace(tmp, path)
+    atomic_json(path, payload, mode=mode, default=str)
 
 
 def _normalize_context(context: dict | None) -> dict:
