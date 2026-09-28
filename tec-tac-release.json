@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.157",
+  "version": "1.15.158",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -19,7 +19,7 @@
     {
       "path": "FIXING.md",
       "size": 244,
-      "sha256": "9e4158d40fa7d3a3d1d718b3e475b4d11f974e00c5c387d951e2edfc2bb086ed"
+      "sha256": "a4125cbe544fa63a3fc68a7338f7bab949c842206c9193cf59a49802031bf0f8"
     },
     {
       "path": "LICENSE",
@@ -32,14 +32,14 @@
       "sha256": "b16e78b37eecd6b4690403b4725a0b9977c7e8e9eca51b6cb4493166c952f243"
     },
     {
-      "path": "RELEASE_NOTES_1.15.157.md",
-      "size": 909,
-      "sha256": "e70a0fa2880187e31be17e8db03c735f945e08fe7e75cd5321bb64bc9a6b0592"
+      "path": "RELEASE_NOTES_1.15.158.md",
+      "size": 1786,
+      "sha256": "af1be121fb771218a6874b5d747f8467748b539b866d80a2f50d0ed08653f5be"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "8ae749e35c8da5a2d5b821365b22597ca97faf4484bf9f04bea9f87c49da559d"
+      "sha256": "d9b298f24611e11224f5dccd260fce6e6ae0c33c6b0f45d0baee7025f8c66003"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -525,6 +525,11 @@
       "path": "docs/releases/RELEASE_NOTES_1.15.156.md",
       "size": 959,
       "sha256": "5082a2fe144cf8a221e4d80f8f6b1d24f1fe824b0f7360f68c076b822a77fdb6"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.157.md",
+      "size": 909,
+      "sha256": "e70a0fa2880187e31be17e8db03c735f945e08fe7e75cd5321bb64bc9a6b0592"
     },
     {
       "path": "docs/releases/RELEASE_NOTES_1.15.19.md",
@@ -1779,7 +1784,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "4be6cde4152f0827ce931635b96377805df86c2c832fc852aa83489a99b2c889"
+      "sha256": "982a05bb6ec2ed08448ee2c7f6b635c2e7a645548b47d55ae05e34ba0dfd4072"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2248,8 +2253,8 @@
     },
     {
       "path": "tests/review-1.15.52-rebuild.sh",
-      "size": 7696,
-      "sha256": "e13637edd8d288dd3da919f235d7793a4a3748a038820395f6a038e15054efa8"
+      "size": 7802,
+      "sha256": "526ad06ae4e5d6b49a1739899112dcdf00b3b0747181bbe11cf98d8972b840ae"
     },
     {
       "path": "tests/review-batch-1.15.128.py",
@@ -2278,8 +2283,8 @@
     },
     {
       "path": "tests/review-regressions-1.15.52.py",
-      "size": 4035,
-      "sha256": "491738ca021e731ff8252ce40a3b4529d05cb139ea1e29941a822f76113dc3c1"
+      "size": 4057,
+      "sha256": "773e2a9b362323ad65c3c10987d6294912abb59ef4f4d16f40002ce807575b15"
     },
     {
       "path": "tests/role-permission-save-regression.py",
@@ -2607,6 +2612,11 @@
       "sha256": "fc5a093760cb565b4a96b7cf9b2deb828946610d92adc6e3778e43d4e6db30d9"
     },
     {
+      "path": "tests/tracker-open-closure-1.15.158.py",
+      "size": 1650,
+      "sha256": "777f531ff18f25907abbe9523f9cac239e44aa8cc4e22615998684ec537774a0"
+    },
+    {
       "path": "tests/tracker-partial-closure-1.15.151.py",
       "size": 5880,
       "sha256": "3c283a6d73a18a1f49f77155c5adb37d21134f2a567a7e4777d0eaf2f9286201"
@@ -2635,6 +2645,11 @@
       "path": "tests/trust-policy-corrupt-pending.py",
       "size": 4109,
       "sha256": "a86a717e4eee343c5c9cbb30f2a0e8e0109edcfac31ba99ba2da823ad166bbc5"
+    },
+    {
+      "path": "tests/trust-policy-tracker-closure-1.15.158.py",
+      "size": 2822,
+      "sha256": "b37e9357cf2e82cbee7bb75dcfeb5fedaee2fa9ab19a1c38b5686f551c83ceb4"
     },
     {
       "path": "tests/trust-policy-upgrade-migration.py",

@@ -6,7 +6,8 @@ def load(name, path):
     spec=importlib.util.spec_from_file_location(name,path); m=importlib.util.module_from_spec(spec); sys.modules[name]=m; spec.loader.exec_module(m); return m
 
 # C14: corrupt module state fails closed and cannot be overwritten by mutation.
-ms=load('ms152', ROOT/'framwork/tec_tac/module_state.py')
+sys.path.insert(0, str(ROOT/'framwork'))
+from tec_tac import module_state as ms
 with tempfile.TemporaryDirectory() as td:
     base=pathlib.Path(td); ms.STATE_ROOT=base; ms.STATE_FILE=base/'module-state.json'; ms.STATE_LOCK=base/'module-state.lock'
     ms.STATE_FILE.write_text('{bad json')

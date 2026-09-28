@@ -88,6 +88,7 @@ mv=types.ModuleType('tec_tac.module_manager_v2')
 class E(Exception): pass
 mv.LicensingRequirementError=E; mv.ModuleManagerV2Error=E; mv._check_runtime_requirements=lambda *a,**k:[]; mv.installed_catalog_v2=lambda:[]; mv.stage_uploaded_artifact=lambda *a,**k:{}; mv.discard_v2_stage=lambda *a,**k:None; mv.attach_source_provenance=lambda *a,**k:None; sys.modules[mv.__name__]=mv
 ms=types.ModuleType('tec_tac.module_state'); ms.ModuleStateError=E; ms.version_satisfies=lambda *a,**k:True; sys.modules[ms.__name__]=ms
+sf=types.ModuleType('tec_tac.safe_files'); sf.atomic_json=lambda *a,**k:None; sys.modules[sf.__name__]=sf
 spec=importlib.util.spec_from_file_location('tec_tac.module_repository', root/'framwork/tec_tac/module_repository.py')
 m=importlib.util.module_from_spec(spec); sys.modules[spec.name]=m; spec.loader.exec_module(m)
 assert m._validate_remote_url('http://10.1.2.3/repository.json', trust='internal')
