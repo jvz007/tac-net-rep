@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.160",
+  "version": "1.15.161",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -32,14 +32,14 @@
       "sha256": "b16e78b37eecd6b4690403b4725a0b9977c7e8e9eca51b6cb4493166c952f243"
     },
     {
-      "path": "RELEASE_NOTES_1.15.160.md",
-      "size": 1399,
-      "sha256": "782cd7ced574e282ca6fca9036dc0b88a29a52018dc5a74514e96f3e13ae4b7f"
+      "path": "RELEASE_NOTES_1.15.161.md",
+      "size": 1617,
+      "sha256": "c777cd2778a475e172d760f4c3b33d8782fd25993361ea82254c22ea64fc66ce"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "918c53af82a913e825949abec5d10235e44d8782be5c402888ab848837a7969e"
+      "sha256": "a1a61465536e3e19dd7f19374e02e374a36a13305bc7a8444f1e705026cd3d7e"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -540,6 +540,11 @@
       "path": "docs/releases/RELEASE_NOTES_1.15.159.md",
       "size": 729,
       "sha256": "5bb8c3910afc7291b124b72f375a321e8cf2d0cedaa11a032171dade0e8fa083"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.160.md",
+      "size": 1399,
+      "sha256": "782cd7ced574e282ca6fca9036dc0b88a29a52018dc5a74514e96f3e13ae4b7f"
     },
     {
       "path": "docs/releases/RELEASE_NOTES_1.15.19.md",
@@ -1819,7 +1824,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "90b9706ceadae646b564f4ff38ee6d97593eab97e892a8b41d894f9c9447e5e5"
+      "sha256": "0a43aed9d42ed7643c66218bb0399b07e9c583ad0ab7114da3f4b0cb61ea4cfe"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2313,8 +2318,8 @@
     },
     {
       "path": "tests/review-hygiene-foundation.sh",
-      "size": 870,
-      "sha256": "f64c711f904ffc19c066f017f9461639be1091f1fe587d8315fbfcd26ed3dbb6"
+      "size": 931,
+      "sha256": "7722af78c2a5f6755d35585091e4a16dc20d8c95d28414861b8e607d1dd5c9e2"
     },
     {
       "path": "tests/review-regressions-1.15.50.py",
@@ -2655,6 +2660,11 @@
       "path": "tests/test_housekeeping_claim_security.py",
       "size": 221,
       "sha256": "acd331f08c2d27f682a934da78b013f34a2a9e771cd05cc51258dca48c1e3414"
+    },
+    {
+      "path": "tests/tracker-behavior-closure-1.15.161.py",
+      "size": 17565,
+      "sha256": "8b4375f35c1f7a3b58fb27b5076ca73b3655bf56e0adaf8d89fafe75e3bfac8f"
     },
     {
       "path": "tests/tracker-closure-1.15.146.py",

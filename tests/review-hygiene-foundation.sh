@@ -7,6 +7,7 @@ bash "${ROOT}/tests/review-1.15.52-rebuild.sh"
 python3 "${ROOT}/tests/tracker-test-doc-closure-1.15.129.py"
 python3 "${ROOT}/tests/tracker-closure-1.15.146.py"
 python3 "${ROOT}/tests/infrastructure-closure-1.15.148.py"
+python3 "${ROOT}/tests/tracker-behavior-closure-1.15.161.py"
 
 # Portable privileged-boundary coverage delegated to portable-privileged-foundation.sh:
 # tests/privileged-helper-environment.py
