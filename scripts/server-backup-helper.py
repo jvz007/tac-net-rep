@@ -1729,15 +1729,24 @@ def _append_recovery_audit(event: str, *, actor="root", **detail):
 
 
 def _resolve_trusted_bash() -> str:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
     for raw in ("/bin/bash", "/usr/bin/bash"):
-        path = Path(raw)
         try:
-            info = path.stat()
+            fd = os.open(raw, flags)
         except OSError:
             continue
-        if stat.S_ISREG(info.st_mode) and info.st_uid == 0 and not (info.st_mode & 0o022) and os.access(path, os.X_OK):
-            return str(path)
-    raise RuntimeError("trusted root-owned bash executable was not found in /bin/bash or /usr/bin/bash")
+        try:
+            info = os.fstat(fd)
+            if (
+                stat.S_ISREG(info.st_mode)
+                and info.st_uid == 0
+                and not (info.st_mode & 0o022)
+                and (info.st_mode & 0o111)
+            ):
+                return raw
+        finally:
+            os.close(fd)
+    raise RuntimeError("trusted root-owned executable bash was not found in /bin/bash or /usr/bin/bash")
 
 TRUSTED_BASH = _resolve_trusted_bash()
 

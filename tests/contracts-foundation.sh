@@ -26,6 +26,7 @@ grep -q 'list_capabilities(check_health=False)' "${ROOT}/framwork/tec_tac/contra
 grep -q 'check_health: bool = True' "${ROOT}/framwork/tec_tac/capabilities.py" || fail "capability health-check control missing"
 python3 "${ROOT}/tests/core-contract-compat-1.15.141.py"
 python3 "${ROOT}/tests/root-bash-boundary.py"
+python3 "${ROOT}/tests/recovery-key-boundary-1.15.163.py"
 python3 "${ROOT}/tests/open-list-closure-1.15.118.py"
 echo "[TEST] PASS contracts foundation"
 
@@ -69,4 +70,5 @@ grep -q 'create_client' "${ROOT}/framwork/tec_tac/contracts.py" || fail "Resourc
 grep -q 'create_site' "${ROOT}/framwork/tec_tac/contracts.py" || fail "Resource Directory site write contract missing"
 grep -q 'Resource write RBAC' "${ROOT}/framwork/tec_tac/contracts.py" || fail "Resource Directory RBAC documentation missing from Markdown export"
 python3 "${ROOT}/tests/access-contract-hygiene-1.15.142.py"
+python3 "${ROOT}/tests/backup-restore-contract-1.15.162-1.py"
 echo "[TEST] PASS Core Resource Directory public contracts"

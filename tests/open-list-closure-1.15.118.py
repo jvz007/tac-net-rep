@@ -26,7 +26,8 @@ helpers = [
 for name in helpers:
     text = (ROOT / "scripts" / name).read_text(encoding="utf-8")
     assert 'for raw in ("/bin/bash", "/usr/bin/bash")' in text, f"{name}: trusted bash resolver missing"
-    assert "def _trusted_bash" in text, f"{name}: trusted bash helper missing"
+    assert "def _resolve_trusted_bash" in text, f"{name}: trusted bash resolver missing"
+    assert "TRUSTED_BASH = _resolve_trusted_bash()" in text, f"{name}: trusted bash must be resolved once"
     # Reject direct subprocess command construction that pins only /usr/bin/bash.
     for line in text.splitlines():
         stripped = line.strip()

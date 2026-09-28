@@ -397,6 +397,47 @@ HTTP_CONTRACT_DETAILS = {
             },
         },
     },
+    "/api/tfd/system/backups/restore/": {
+        "GET": {
+            "authorization": "effective Tactical superuser with a valid Tec-Tac session",
+            "response": {"destinations": "array of server-registered backup destinations; browser cannot supply arbitrary destination configuration"},
+            "errors": {"403": "effective-superuser authority required"},
+        },
+        "POST": {
+            "authorization": "effective Tactical superuser with a valid Tec-Tac session",
+            "request": {
+                "action": "list|validate|restore",
+                "destination_ids": "list action: array of registered destination ids",
+                "backup_ref": "validate/restore: selected backup reference",
+                "destination_id": "validate/restore: registered destination id",
+                "restore_mode": "full|tactical|tec_tac",
+                "validation_job_id": "restore only: successful matching validation job id",
+                "overrides": "validate: array of check ids; restore: object mapping check ids to audit ids",
+                "confirmed": "restore only: literal true",
+            },
+            "response": {"job_id": "UUID", "status": "queued/dispatched job state"},
+            "errors": {
+                "400": "invalid action/input, missing explicit confirmation, or validation mismatch",
+                "403": "effective-superuser authority required",
+            },
+        },
+    },
+    "/api/tfd/system/backups/restore/jobs/<uuid:job_id>/": {
+        "GET": {
+            "authorization": "effective Tactical superuser with a valid Tec-Tac session",
+            "response": {
+                "job": {
+                    "job_id": "UUID",
+                    "action": "list_registered_backups|validate_registered_restore|restore_registered_backup",
+                    "status": "queued|dispatched|running|succeeded|failed",
+                    "request": "sanitized job request metadata",
+                    "result": "operation result; validation includes recovery signer/source identity and version_transition",
+                    "error": "sanitized error text when failed",
+                }
+            },
+            "errors": {"403": "effective-superuser authority required or job is not a native Backup & Restore UI job"},
+        },
+    },
     "/api/tfd/system/updates/trust-policy/": {
         "GET": {
             "authorization": "authenticated Tec-Tac session",

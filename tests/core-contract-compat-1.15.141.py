@@ -116,6 +116,7 @@ for rel in (
 ):
     text = (ROOT / rel).read_text(encoding="utf-8")
     assert 'for raw in ("/bin/bash", "/usr/bin/bash")' in text, rel
-    assert "def _trusted_bash" in text, rel
+    assert "def _resolve_trusted_bash" in text, rel
+    assert "TRUSTED_BASH = _resolve_trusted_bash()" in text, rel
 
 print("core-contract-compat-1.15.141: PASS")

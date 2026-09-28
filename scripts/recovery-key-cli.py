@@ -89,8 +89,8 @@ def _installed_config_path(pointer: Path = CONFIG_POINTER, default: Path = DEFAU
     return path
 
 
-def _root_layout() -> dict[str, str]:
-    config = _installed_config_path()
+def _root_layout(pointer: Path = CONFIG_POINTER, default: Path = DEFAULT_CONFIG) -> dict[str, str]:
+    config = _installed_config_path(pointer=pointer, default=default)
     if not os.path.lexists(config):
         return {}
     text = _read_root_regular(config).decode('utf-8')
@@ -112,8 +112,25 @@ def _absolute_layout_path(layout: dict[str, str], key: str, default: str) -> Pat
 
 
 def _trusted_root_dir(path: Path, *, create: bool = False, mode: int = 0o755) -> None:
+    parent = path.parent
+    try:
+        parent_info = parent.lstat()
+    except FileNotFoundError as exc:
+        raise RuntimeError(f'recovery trust directory parent is missing: {parent}') from exc
+    if (
+        stat.S_ISLNK(parent_info.st_mode)
+        or not stat.S_ISDIR(parent_info.st_mode)
+        or parent_info.st_uid != 0
+        or (parent_info.st_mode & 0o022)
+    ):
+        raise RuntimeError(
+            f'recovery trust directory parent must be root-owned, real, and not group/world writable: {parent}'
+        )
     if create and not os.path.lexists(path):
-        path.mkdir(parents=True, mode=mode)
+        try:
+            path.mkdir(mode=mode)
+        except FileExistsError:
+            pass
         try:
             os.chown(path, 0, 0)
         except PermissionError:
