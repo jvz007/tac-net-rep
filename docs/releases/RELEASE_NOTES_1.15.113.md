@@ -1,4 +1,4 @@
-# Tec-Tac Core 1.15.113-1
+# Tec-Tac Core 1.15.113
 
 ## Scope
 

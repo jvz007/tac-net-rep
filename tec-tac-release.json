@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.142",
+  "version": "1.15.143",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -18,8 +18,8 @@
     },
     {
       "path": "FIXING.md",
-      "size": 579,
-      "sha256": "695602871a4a1d8dc294b3bbb6f5c72d1767b93dd2ea7b042b87ab99e6409086"
+      "size": 492,
+      "sha256": "60ee235329ba6dc7bc951feeee72655a2e5fe5e118e164eb83238c649dc89920"
     },
     {
       "path": "LICENSE",
@@ -32,19 +32,14 @@
       "sha256": "b16e78b37eecd6b4690403b4725a0b9977c7e8e9eca51b6cb4493166c952f243"
     },
     {
-      "path": "RELEASE_NOTES_1.15.113-1.md",
-      "size": 3105,
-      "sha256": "f4f304390f9a3e8ebb9ba84ecef8275ddc2ed7ed130f860f52caa668dd70bfe5"
-    },
-    {
-      "path": "RELEASE_NOTES_1.15.142.md",
-      "size": 1179,
-      "sha256": "005f0a101d50a0358401e592a10120083984806c7f18c410c5774673c697f4f9"
+      "path": "RELEASE_NOTES_1.15.143.md",
+      "size": 1229,
+      "sha256": "f2e41f58f9dcf83e96f6db3f5e1aab34db415e44c5cfec1dd68039c3e2305be0"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "e7027da7046217fd0121eb28df25adefef23c6bddbc820aee8670a09d1249c33"
+      "sha256": "fee11b399887c82a4bbed7ed6fe794c262636eb6b8c490d5365a956cf0909681"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -142,14 +137,9 @@
       "sha256": "d2818fd19d6f7d8b22c6e44dad9b7294f7b1ee0d2ced6d51eb9340b9edb4fb28"
     },
     {
-      "path": "docs/releases/1.15.96.md",
-      "size": 1253,
-      "sha256": "f30b47b2a5e116d2f3a5b7dbfab97daf4c082a2ec86a657fdb7959f4ffd705c1"
-    },
-    {
       "path": "docs/releases/README.md",
-      "size": 295,
-      "sha256": "1f353be108622a66db16c5f0b84440d79d9e4a2e563671b65d81d66a5bf705ee"
+      "size": 1072,
+      "sha256": "41b986a9ab06a4cb1d8f07d122bbf7d19573096b0b5171dafddfcf371a46faaf"
     },
     {
       "path": "docs/releases/RELEASE_NOTES_1.1.0.md",
@@ -317,6 +307,156 @@
       "sha256": "4b862711ef94a49917af7e0dfff7048033770f474c1a300877665401d04afa18"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.15.113.md",
+      "size": 3103,
+      "sha256": "46897325cd147df1412abca036c7f65a203f1049002384ee55b7e8f02783fafb"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.114.md",
+      "size": 895,
+      "sha256": "2c38eac9a69f856efcae51569508f7902610e21cbf36602b1d5bbd87dd36337d"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.115.md",
+      "size": 1962,
+      "sha256": "fa5bc878c77a61b2945e21ee2cd09ed6faf0cde29051d41aba3377de4adbe099"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.116.md",
+      "size": 1803,
+      "sha256": "d2701cb3d31277162c6416ccf176ee85cd5848ea78315df460eaef84000a50e7"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.117.md",
+      "size": 2578,
+      "sha256": "08d7a90e1c24a58884a7a21bd1b47ac45f328b424d9a0196c0b185885b1780c1"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.118.md",
+      "size": 2124,
+      "sha256": "6045f09c00f3ef91a0bc503b418c15128bc73ba9adb971d0b1c8b991d05a2891"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.119.md",
+      "size": 1791,
+      "sha256": "33c6a11211cb3ff3b5a1463e962f19c5ac4e88983614ef111268f2f5b21896ad"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.120.md",
+      "size": 1659,
+      "sha256": "5bac65799c0fe8b372b73261f015741f2567ee860aa1ff595e201e42b35922fe"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.121.md",
+      "size": 1578,
+      "sha256": "eb638094eaba97a8db8215d142169f1a373c92e3979352f686e15c68749f6262"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.122.md",
+      "size": 1570,
+      "sha256": "971fd42a055d4c47223ac5e9ca944f756efc4738caa61ff49371df26a5f2c2a0"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.123.md",
+      "size": 1729,
+      "sha256": "333006b7493e6b8f7edf80f07c3d6a575d40576adeca9d6768f4d90c80858b2d"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.124.md",
+      "size": 1470,
+      "sha256": "c0bafff222eaf764c79c7d68300ee8d7eaf3ef454d3f80d633fa528242481c1f"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.125.md",
+      "size": 1542,
+      "sha256": "d248fc79f19d34511b6fef22237b7749d1dc290bc578771863e99fa8af57840e"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.126.md",
+      "size": 960,
+      "sha256": "469070d1709c7881b61ec5630d550d321249e54fdf00f0a2366a81ef171bdb0b"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.127.md",
+      "size": 1549,
+      "sha256": "fdd1f1dfea872d77470c9a32ba9d9b83e6fd1bf589a764bfc9cafeaa6f710168"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.128.md",
+      "size": 2549,
+      "sha256": "b7a639279046e474d6d1606ed657817bfe4a83c5b2a86de457d7391ced4dfb6a"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.129.md",
+      "size": 1800,
+      "sha256": "d8d05fcabab177ab0075b64c1ad6a57c0c95c3059172f355128e68f55a283929"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.130.md",
+      "size": 1392,
+      "sha256": "8e8fde1aff1cf28a4aff21eb0ddadaebee6c0a4076139364f3ea5a633db18dde"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.131.md",
+      "size": 1078,
+      "sha256": "1b399c7254706b3e8b373e596834d1556295139301f756b24fead8f5e8716b7c"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.132.md",
+      "size": 895,
+      "sha256": "6ab8d3d8927f614d52f5d915dfb375603862f2c81cd166f61529c7eb0090968f"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.133.md",
+      "size": 1155,
+      "sha256": "cd3b8248be58f4a21804e25603b7361e4572a211f600b1deb5d084822cd8e8c1"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.134.md",
+      "size": 1353,
+      "sha256": "0ab2490131e09dca2a967e69217804ea371a3cc80e31099880d3b0f2b2fb757a"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.135.md",
+      "size": 1075,
+      "sha256": "20ddc25cbfc72547aca0e16c046962b304e1593a9fc6c22beb6f57b73e59b287"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.136.md",
+      "size": 1560,
+      "sha256": "5912e99abf39da997d58fded9948208348d8940edc3d240944fbc30f7dd9ed05"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.137.md",
+      "size": 1454,
+      "sha256": "2f992d0a78ae21a3bb5e23768948f006141982cd72a32bb4b6a4c75d616bd97e"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.138.md",
+      "size": 1856,
+      "sha256": "c23f777fd87e2b3148c5146cdc627f9e89ef86b6d632a3a3d61c5f6335fe52ea"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.139.md",
+      "size": 1095,
+      "sha256": "991d707c47cba0dd2f32a9e7e53f8270aff606101b3108be2480df095728adaf"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.140.md",
+      "size": 1446,
+      "sha256": "d40bf477fbaebebbaaed54006dff618da635a05ebd06103309925184c583d2d0"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.141.md",
+      "size": 1099,
+      "sha256": "d04a86f4d2a1ab80026c1a99471ccd829c45c41d40b2187e02047965aefb9340"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.142.md",
+      "size": 1187,
+      "sha256": "1d7ff87516b3dff5ee14234b5429fd5dfb096e498715203064fdd2992a94dd45"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.15.19.md",
       "size": 1248,
       "sha256": "b9934bcfd38415b74e6005a74d9d6d384513f01b414bed4c30fda3dc31ada503"
@@ -452,12 +592,12 @@
       "sha256": "3e474a2a0441ac974ebff4ba7ebdc305d60285042313570b18c03d8f29e293dd"
     },
     {
-      "path": "docs/releases/RELEASE_NOTES_1.15.59-1.md",
+      "path": "docs/releases/RELEASE_NOTES_1.15.59.md",
       "size": 2555,
       "sha256": "45380e36057a5175a373dd14337cfec48dbd91e348f99ffe4fc9dbac67d6aa66"
     },
     {
-      "path": "docs/releases/RELEASE_NOTES_1.15.60-1.md",
+      "path": "docs/releases/RELEASE_NOTES_1.15.60.md",
       "size": 1272,
       "sha256": "8cac38337d9d5313beda55fd5ea124f50930e13d0cfcfa3eec4d9204f5315306"
     },
@@ -472,7 +612,7 @@
       "sha256": "b6d73ea380b956e325355e7bc4170ef2161e0df8744563d3c0a9e7e9c4bd7db3"
     },
     {
-      "path": "docs/releases/RELEASE_NOTES_1.15.63-3.md",
+      "path": "docs/releases/RELEASE_NOTES_1.15.63.md",
       "size": 3313,
       "sha256": "9a24560bbd7c7123649388a15d17c9a341bdfe289fc17cbd277c28f69342bc71"
     },
@@ -507,19 +647,19 @@
       "sha256": "50f502311aa9eb40a4975d2e1778028c5a200aa58c6fbc3885cb237cee9e8c8c"
     },
     {
-      "path": "docs/releases/RELEASE_NOTES_1.15.70-1.md",
-      "size": 2183,
-      "sha256": "85760d187765167ec477d295c804a3ec155d929e950f3e89150cfca4f4e29ffd"
+      "path": "docs/releases/RELEASE_NOTES_1.15.70.md",
+      "size": 2181,
+      "sha256": "5fa7ef0cd251ade48ac0977e26f84b26da7c3249f0190913f2a9727c00b29699"
     },
     {
-      "path": "docs/releases/RELEASE_NOTES_1.15.71-1.md",
-      "size": 1917,
-      "sha256": "e33b1750c5349b3fa7e3658599030d57cb65c1496394bb53eadd8bff12d97666"
+      "path": "docs/releases/RELEASE_NOTES_1.15.71.md",
+      "size": 1915,
+      "sha256": "4306fc83af3317c636766c91a33f42f12bbd1bb5533ca55e725697b352a3ee3a"
     },
     {
-      "path": "docs/releases/RELEASE_NOTES_1.15.72-1.md",
-      "size": 2579,
-      "sha256": "454a0fe772162563965e4f9cb5c4ab032d1cc09a57afbcbbe685fc7053d1f612"
+      "path": "docs/releases/RELEASE_NOTES_1.15.72.md",
+      "size": 2577,
+      "sha256": "ef339cc4e200eaccfb5da75187fb5fa10d3bec869306ef691a954cabe234a0a0"
     },
     {
       "path": "docs/releases/RELEASE_NOTES_1.15.73.md",
@@ -580,6 +720,11 @@
       "path": "docs/releases/RELEASE_NOTES_1.15.95.md",
       "size": 912,
       "sha256": "94daa6371b31e932e81e79afa8784e44901acecd5703d6a36c69c2d625aff8af"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.96.md",
+      "size": 1253,
+      "sha256": "f30b47b2a5e116d2f3a5b7dbfab97daf4c082a2ec86a657fdb7959f4ffd705c1"
     },
     {
       "path": "docs/releases/RELEASE_NOTES_1.15.97.md",
@@ -1554,7 +1699,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "da82ca6e4a0bfa82039240836f76182a2139d995089e1414e2ade923268183c9"
+      "sha256": "5429d32470414bdcf0c9b4997c2d8814de3d6aa9eadb97f744f52743610a9e7d"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -1942,9 +2087,19 @@
       "sha256": "b75ab0806d06a9d0fd020bd2e39b63bf7d85da0f9f73d5564d60abb36b903bd2"
     },
     {
+      "path": "tests/release-archive-integrity-regression.py",
+      "size": 1836,
+      "sha256": "47385dd5c6021d2214cc78b7e337513c6bb017649f5ecc0a4b76508011b46c27"
+    },
+    {
+      "path": "tests/release-archive-integrity.py",
+      "size": 2205,
+      "sha256": "fbe8eb92ba2dc357fe2cfe2b086fa6c134d873deab89482ff0b1ccc6c409c1b5"
+    },
+    {
       "path": "tests/release-integrity.sh",
-      "size": 1323,
-      "sha256": "41debb5048c374b6293247671dfde31f0f31311d7540bb7278894138d7c85401"
+      "size": 1448,
+      "sha256": "0262a55901a939d79904ecf3ffeca429f249bbed0be7b1c643090aa91b71d167"
     },
     {
       "path": "tests/reporting-registration-foundation.sh",

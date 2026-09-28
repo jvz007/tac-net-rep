@@ -1,4 +1,4 @@
-# Tec-Tac Core 1.15.70-1
+# Tec-Tac Core 1.15.70
 
 ## Security: immutable module artifact claims (R3)
 

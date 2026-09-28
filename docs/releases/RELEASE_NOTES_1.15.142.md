@@ -1,4 +1,4 @@
-# Core 1.15.142
+# Tec-Tac Core 1.15.142
 
 ## Public contract and access/session hygiene
 

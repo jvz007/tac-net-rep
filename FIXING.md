@@ -1,8 +1,8 @@
-# FIXING.md — Core 1.15.142
+# FIXING.md — Core 1.15.143
 
-Review-hygiene release closing U4, L50, L51 and L54.
+Release-archive integrity release closing L63.
 
-- Publishes `/api/tfd/access/security-policy/` in the live HTTP contract catalog with GET/PUT authorization, request/response shapes and error semantics.
-- Documents the administrator MFA recovery endpoint's exact read-only GET response and protected-account authorization boundary.
-- Locks out the stale unused `timedelta` import regression.
-- Adds behavioral coverage proving malformed session-history/login-session pagination returns fixed 400 text rather than raw Python conversion errors.
+- Canonicalizes archived release notes to clean release identities rather than internal rebuild suffixes.
+- Restores the authoritative clean-release archive continuously from 1.15.113 through 1.15.142 using retained project artifacts.
+- Enforces archive continuity/heading rules and exactly one current root release note in release integrity.
+- Extends build-junk rejection to pytest/mypy/ruff cache directories.

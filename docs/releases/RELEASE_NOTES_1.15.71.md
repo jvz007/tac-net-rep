@@ -1,4 +1,4 @@
-# Tec-Tac Core 1.15.71-1
+# Tec-Tac Core 1.15.71
 
 ## Security: Tactical native superuser-role guard (R5)
 

@@ -1,4 +1,4 @@
-# Tec-Tac Core 1.15.72-1
+# Tec-Tac Core 1.15.72
 
 ## Server Backup: complete host rollback transaction (B1 remainder)
 

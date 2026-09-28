@@ -12,7 +12,7 @@ PY_VERSION
 
 mapfile -t BUILD_JUNK < <(
   find "${ROOT}" \
-    \( -type d -name '__pycache__' -o \
+    \( -type d \( -name '__pycache__' -o -name '.pytest_cache' -o -name '.mypy_cache' -o -name '.ruff_cache' \) -o \
        -type f \( -name '*.pyc' -o -name '*.pyo' -o -name '*.tmp' -o -name '*.swp' -o -name '.DS_Store' \) \) \
     -print | sort
 )
@@ -29,11 +29,13 @@ mapfile -t ROOT_NOTES < <(
     -printf '%f\n' | sort
 )
 
-[[ ${#ROOT_NOTES[@]} -le 2 ]] || \
-  fail "expected no more than two root release notes, found ${#ROOT_NOTES[@]}"
+[[ ${#ROOT_NOTES[@]} -eq 1 ]] || \
+  fail "expected exactly one root release note, found ${#ROOT_NOTES[@]}"
 
 CURRENT_NOTE="RELEASE_NOTES_${VERSION}.md"
 printf '%s\n' "${ROOT_NOTES[@]}" | grep -Fxq "${CURRENT_NOTE}" || \
   fail "current release note ${CURRENT_NOTE} not found"
+
+python3 "${ROOT}/tests/release-archive-integrity.py"
 
 echo "[TEST] PASS release integrity ${VERSION}"
