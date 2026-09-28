@@ -13,6 +13,7 @@ import json
 import os
 import stat
 import sys
+import tempfile
 from pathlib import Path
 
 LEVELS = ("unsigned", "signed_development", "signed_production", "secure_signed")
@@ -65,10 +66,11 @@ def _write_policy(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.parent.is_symlink():
         raise PolicyMigrationError(f"trust policy directory must not be a symlink: {path.parent}")
-    tmp = path.with_name(path.name + f".tmp.{os.getpid()}")
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(tmp, flags, 0o600)
+    fd = -1
+    tmp = None
     try:
+        fd, raw_tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+        tmp = Path(raw_tmp)
         data = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
         view = memoryview(data)
         while view:
@@ -78,20 +80,23 @@ def _write_policy(path: Path, payload: dict) -> None:
             view = view[written:]
         os.fsync(fd)
         os.fchmod(fd, 0o644)
-    finally:
         os.close(fd)
-    try:
+        fd = -1
         os.replace(tmp, path)
+        tmp = None
         dir_fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
         try:
             os.fsync(dir_fd)
         finally:
             os.close(dir_fd)
     finally:
-        try:
-            tmp.unlink()
-        except FileNotFoundError:
-            pass
+        if fd >= 0:
+            os.close(fd)
+        if tmp is not None:
+            try:
+                tmp.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def _quarantine_invalid_legacy(path: Path, reason: str) -> Path:

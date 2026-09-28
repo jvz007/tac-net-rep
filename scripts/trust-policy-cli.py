@@ -12,6 +12,7 @@ import fcntl
 import json
 import os
 import sys
+import tempfile
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -96,6 +97,46 @@ def read_policy() -> dict:
     return payload
 
 
+def _atomic_root_json(path: Path, payload: dict, *, mode: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = -1
+    tmp_path = None
+    try:
+        fd, raw_tmp = tempfile.mkstemp(prefix=f'.{path.name}.', suffix='.tmp', dir=str(path.parent))
+        tmp_path = Path(raw_tmp)
+        os.fchmod(fd, mode)
+        try:
+            os.fchown(fd, 0, 0)
+        except PermissionError:
+            if os.environ.get('TEC_TAC_TEST_ALLOW_NONROOT') != '1':
+                raise
+        data = (json.dumps(payload, indent=2, sort_keys=True) + '\n').encode('utf-8')
+        view = memoryview(data)
+        while view:
+            written = os.write(fd, view)
+            if written <= 0:
+                raise RuntimeError('short write while persisting trust policy state')
+            view = view[written:]
+        os.fsync(fd)
+        os.close(fd)
+        fd = -1
+        os.replace(tmp_path, path)
+        tmp_path = None
+        dir_fd = os.open(path.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_NOFOLLOW', 0))
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink()
+            except FileNotFoundError:
+                pass
+
+
 def write_policy(level: str, *, updated_by: str) -> dict:
     if level not in LEVEL_RANK:
         raise RuntimeError('invalid trust policy level')
@@ -108,11 +149,7 @@ def write_policy(level: str, *, updated_by: str) -> dict:
         'updated_at': iso(),
         'updated_by': str(updated_by or actor())[:150],
     }
-    tmp = POLICY_FILE.with_name(POLICY_FILE.name + '.tmp')
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8')
-    os.chown(tmp, 0, 0)
-    os.chmod(tmp, 0o644)
-    os.replace(tmp, POLICY_FILE)
+    _atomic_root_json(POLICY_FILE, payload, mode=0o644)
     return payload
 
 
@@ -215,11 +252,7 @@ def recover_corrupt_pending(error: Exception) -> dict:
 
 
 def write_pending(payload: dict) -> None:
-    tmp = PENDING_FILE.with_name(PENDING_FILE.name + '.tmp')
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8')
-    os.chown(tmp, 0, 0)
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, PENDING_FILE)
+    _atomic_root_json(PENDING_FILE, payload, mode=0o600)
 
 
 def clear_pending() -> None:
