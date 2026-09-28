@@ -45,7 +45,7 @@ JOB_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 LEGACY_ARCHIVE_RE = re.compile(r"^rmm-backup-[A-Za-z0-9_.-]+\.tar$")
 BUNDLE_RE = re.compile(r"^tec-tac-backup-[A-Za-z0-9_.-]+\.tgz$")
 ARCHIVE_RE = BUNDLE_RE
-ALLOWED_ACTIONS = {"create_backup", "list_backups", "restore_backup", "apply_retention", "validate_destination", "validate_restore", "store_secret", "delete_secret", "recovery_identity", "trust_recovery_signer"}
+ALLOWED_ACTIONS = {"create_backup", "list_backups", "restore_backup", "apply_retention", "validate_destination", "validate_restore", "store_secret", "delete_secret", "recovery_identity", "trust_recovery_signer", "list_registered_destinations", "list_registered_backups", "validate_registered_restore", "restore_registered_backup"}
 OVERRIDEABLE_RESTORE_CHECKS = {"target.os"}
 TACTICAL_RESTORE_OVERRIDE_BASELINE = "67"
 TACTICAL_RESTORE_OS_GATE = """if [[ "$osname" == "debian" ]]; then
@@ -374,6 +374,28 @@ def load_job(job_id, config=None):
         overrides = request.get("overrides")
         if not isinstance(overrides, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in overrides.items()):
             raise SystemExit("invalid restore_backup overrides schema")
+    if job.get("action") == "list_registered_destinations":
+        if request not in ({}, None):
+            raise SystemExit("invalid list_registered_destinations request schema")
+    if job.get("action") == "list_registered_backups":
+        if not isinstance(request, dict) or set(request) != {"destination_ids"}:
+            raise SystemExit("invalid list_registered_backups request schema")
+        ids = request.get("destination_ids")
+        if not isinstance(ids, list) or not ids or any(not isinstance(item, str) or not SAFE_DEST_ID_RE.fullmatch(item) for item in ids):
+            raise SystemExit("invalid registered destination ids")
+    if job.get("action") in {"validate_registered_restore", "restore_registered_backup"}:
+        required = {"backup_ref", "destination_id", "restore_mode", "overrides"}
+        if not isinstance(request, dict) or set(request) != required:
+            raise SystemExit(f"invalid {job.get('action')} request schema")
+        if not SAFE_DEST_ID_RE.fullmatch(str(request.get("destination_id") or "")):
+            raise SystemExit("invalid registered restore destination id")
+        if str(request.get("restore_mode") or "").strip().lower() not in {"full", "tactical", "tec_tac"}:
+            raise SystemExit("invalid registered restore mode")
+        if job.get("action") == "validate_registered_restore":
+            if not isinstance(request.get("overrides"), list) or any(not isinstance(item, str) for item in request.get("overrides")):
+                raise SystemExit("invalid registered restore validation overrides")
+        elif not isinstance(request.get("overrides"), dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in request.get("overrides").items()):
+            raise SystemExit("invalid registered restore overrides")
     return path, job
 
 
@@ -2302,6 +2324,69 @@ def list_destination(config, destination, log):
     if destination["type"] == "ftp":
         return ftp_list(config, destination, log)
     return list_rclone(config, destination, log)
+
+
+def _registered_destination_public(item: dict) -> dict:
+    public = {"id": str(item.get("id") or ""), "type": str(item.get("type") or "")}
+    if item.get("name"):
+        public["name"] = str(item.get("name"))[:160]
+    if item.get("type") == "local":
+        public["location"] = str(item.get("path") or "")[:512]
+    elif item.get("type") == "scp":
+        public["location"] = f"{item.get('host','')}:{item.get('remote_path','')}"[:512]
+    elif item.get("type") == "ftp":
+        public["location"] = f"{item.get('host','')}:{item.get('port','')}/{item.get('remote_path','')}"[:512]
+    else:
+        public["location"] = str(item.get("remote") or item.get("bucket") or "")[:512]
+    return public
+
+
+def operation_list_registered_destinations(config, job, log):
+    rows = []
+    root = roots(config)["destinations"]
+    if root.is_dir():
+        for path in sorted(root.glob("*.json")):
+            dest_id = path.stem
+            try:
+                item = load_registered_destination(config, dest_id)
+            except Exception as exc:
+                log.write(f"[TEC-TAC-BACKUP] registered destination skipped id={dest_id}: {exc}\n")
+                continue
+            rows.append(_registered_destination_public(item))
+    return {"destinations": rows}
+
+
+def operation_list_registered_backups(config, job, log):
+    ids = job["request"].get("destination_ids") or []
+    proxy = dict(job)
+    proxy["request"] = {"destinations": [load_registered_destination(config, item) for item in ids]}
+    return operation_list_backups(config, proxy, log)
+
+
+def operation_validate_registered_restore(config, job, log):
+    request = job["request"]
+    destination = load_registered_destination(config, request["destination_id"])
+    proxy = dict(job)
+    proxy["request"] = {
+        "backup_ref": request["backup_ref"],
+        "destination": destination,
+        "restore_mode": request["restore_mode"],
+        "overrides": request.get("overrides") or [],
+    }
+    return operation_validate_restore(config, proxy, log)
+
+
+def operation_restore_registered_backup(config, job, log):
+    request = job["request"]
+    destination = load_registered_destination(config, request["destination_id"])
+    proxy = dict(job)
+    proxy["request"] = {
+        "backup_ref": request["backup_ref"],
+        "destination": destination,
+        "restore_mode": request["restore_mode"],
+        "overrides": request.get("overrides") or {},
+    }
+    return operation_restore_backup(config, proxy, log)
 
 
 def operation_list_backups(config, job, log):
@@ -4380,6 +4465,10 @@ OPERATIONS = {
     "trust_recovery_signer": operation_trust_recovery_signer,
     "store_secret": operation_store_secret,
     "delete_secret": operation_delete_secret,
+    "list_registered_destinations": operation_list_registered_destinations,
+    "list_registered_backups": operation_list_registered_backups,
+    "validate_registered_restore": operation_validate_registered_restore,
+    "restore_registered_backup": operation_restore_registered_backup,
 }
 
 

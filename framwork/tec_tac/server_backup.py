@@ -27,6 +27,7 @@ DEFAULT_STATE_ROOT = Path("/var/lib/tec-tac/server-backup")
 TERMINAL_STATES = {"succeeded", "failed", "dispatch_failed"}
 BACKUP_CLASSES = frozenset({"daily", "weekly", "monthly", "manual"})
 DESTINATION_TYPES = frozenset({"local", "sftp", "ftp", "scp", "webdav", "s3"})
+SAFE_DEST_ID_RE = re.compile(r"[A-Za-z0-9_.-]{1,128}")
 
 
 class ServerBackupError(RuntimeError):
@@ -108,6 +109,10 @@ def _timeout_for(action: str) -> int:
         "delete_secret": 120,
         "recovery_identity": 120,
         "trust_recovery_signer": 45 * 60,
+        "list_registered_destinations": 120,
+        "list_registered_backups": 20 * 60,
+        "validate_registered_restore": 45 * 60,
+        "restore_registered_backup": 12 * 60 * 60,
     }
     env_key = "TEC_TAC_SERVER_BACKUP_TIMEOUT_" + action.upper()
     try:
@@ -327,6 +332,10 @@ def _public_job_status(job: dict) -> dict:
         },
         "log_tail": _safe_log_tail(str(job.get("id") or "")),
     }
+    if str(job.get("action") or "") in {"list_registered_backups", "validate_registered_restore", "restore_registered_backup"}:
+        safe_result = job.get("result") if isinstance(job.get("result"), dict) else None
+        if safe_result is not None:
+            result["result"] = safe_result
     return result
 
 
@@ -544,6 +553,57 @@ def recovery_trust_job_status_core(*, job_id: str) -> dict:
             }
             result["already_trusted"] = bool(job["result"].get("already_trusted"))
     return result
+
+
+def list_registered_destinations_core(*, context: dict) -> list[dict]:
+    result = _run("list_registered_destinations", {}, context=context)
+    rows = result.get("destinations") or []
+    if not isinstance(rows, list):
+        raise ServerBackupError("Core returned an invalid registered destination list.", result=result)
+    return rows
+
+
+def list_registered_backups_core(*, destination_ids: list[str], context: dict) -> dict:
+    ids = [str(item or "").strip() for item in (destination_ids or [])]
+    if not ids or any(not SAFE_DEST_ID_RE.fullmatch(item) for item in ids):
+        raise ServerBackupError("At least one valid registered destination id is required.")
+    return _start("list_registered_backups", {"destination_ids": ids}, context=context)
+
+
+def validate_registered_restore_core(*, backup_ref: str, destination_id: str, restore_mode: str, overrides: list[str] | None, context: dict) -> dict:
+    mode = str(restore_mode or "").strip().lower()
+    if mode not in {"full", "tactical", "tec_tac"}:
+        raise ServerBackupError("restore_mode must be full, tactical, or tec_tac.")
+    dest_id = str(destination_id or "").strip()
+    if not SAFE_DEST_ID_RE.fullmatch(dest_id):
+        raise ServerBackupError("A valid registered destination id is required.")
+    return _start("validate_registered_restore", {"backup_ref": str(backup_ref or "").strip(), "destination_id": dest_id, "restore_mode": mode, "overrides": _normalize_validation_overrides(overrides)}, context=context)
+
+
+def require_successful_restore_validation_core(*, validation_job_id: str, backup_ref: str, destination_id: str, restore_mode: str) -> dict:
+    job = _read_job(str(validation_job_id or "").strip())
+    request = job.get("request") if isinstance(job.get("request"), dict) else {}
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    if job.get("action") != "validate_registered_restore" or job.get("status") != "succeeded" or result.get("ok") is not True:
+        raise ServerBackupError("A successful restore validation job is required before restore.", job_id=str(validation_job_id or ""))
+    expected_ref = str(backup_ref or "").strip()
+    expected_dest = str(destination_id or "").strip()
+    expected_mode = str(restore_mode or "").strip().lower()
+    if (str(request.get("backup_ref") or "").strip() != expected_ref or
+            str(request.get("destination_id") or "").strip() != expected_dest or
+            str(request.get("restore_mode") or "").strip().lower() != expected_mode):
+        raise ServerBackupError("Restore request does not match the successful validation job.", job_id=str(validation_job_id or ""))
+    return result
+
+
+def restore_registered_backup_core(*, backup_ref: str, destination_id: str, restore_mode: str, overrides: dict | None, context: dict) -> dict:
+    mode = str(restore_mode or "").strip().lower()
+    if mode not in {"full", "tactical", "tec_tac"}:
+        raise ServerBackupError("restore_mode must be full, tactical, or tec_tac.")
+    dest_id = str(destination_id or "").strip()
+    if not SAFE_DEST_ID_RE.fullmatch(dest_id):
+        raise ServerBackupError("A valid registered destination id is required.")
+    return _start("restore_registered_backup", {"backup_ref": str(backup_ref or "").strip(), "destination_id": dest_id, "restore_mode": mode, "overrides": _normalize_restore_overrides(overrides)}, context=context)
 
 
 _PROVIDER = ServerBackupProvider()

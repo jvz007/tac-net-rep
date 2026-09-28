@@ -47,6 +47,14 @@ def recovery_identity_core(**kwargs): calls["identity"] += 1; return {"installat
 def recovery_trust_job_status_core(*, job_id): calls["status"].append(job_id); return {"job_id":job_id,"status":"running"}
 def trust_recovery_signer_core(**kwargs): calls["trust"].append(kwargs); return {"job_id":"11111111-1111-4111-8111-111111111111","status":"queued","action":"trust_recovery_signer"}
 sb.ServerBackupError=ServerBackupError; sb.recovery_identity_core=recovery_identity_core; sb.recovery_trust_job_status_core=recovery_trust_job_status_core; sb.trust_recovery_signer_core=trust_recovery_signer_core
+# Keep this historical RecoveryTrustView harness compatible with newer sibling
+# BackupRestoreView imports without exercising those paths here.
+sb.get_server_backup_provider=lambda: None
+sb.list_registered_destinations_core=lambda **kwargs: []
+sb.list_registered_backups_core=lambda **kwargs: {}
+sb.validate_registered_restore_core=lambda **kwargs: {}
+sb.restore_registered_backup_core=lambda **kwargs: {}
+sb.require_successful_restore_validation_core=lambda **kwargs: {}
 sys.modules["tec_tac.server_backup"] = sb
 
 ss=types.ModuleType("tec_tac.session_security")
