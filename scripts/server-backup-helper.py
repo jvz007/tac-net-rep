@@ -1706,12 +1706,7 @@ def _append_recovery_audit(event: str, *, actor="root", **detail):
         os.close(fd)
 
 
-_TRUSTED_BASH_CACHE: str | None = None
-
-def _trusted_bash() -> str:
-    global _TRUSTED_BASH_CACHE
-    if _TRUSTED_BASH_CACHE is not None:
-        return _TRUSTED_BASH_CACHE
+def _resolve_trusted_bash() -> str:
     for raw in ("/bin/bash", "/usr/bin/bash"):
         path = Path(raw)
         try:
@@ -1719,9 +1714,10 @@ def _trusted_bash() -> str:
         except OSError:
             continue
         if stat.S_ISREG(info.st_mode) and info.st_uid == 0 and not (info.st_mode & 0o022) and os.access(path, os.X_OK):
-            _TRUSTED_BASH_CACHE = str(path)
-            return _TRUSTED_BASH_CACHE
+            return str(path)
     raise RuntimeError("trusted root-owned bash executable was not found in /bin/bash or /usr/bin/bash")
+
+TRUSTED_BASH = _resolve_trusted_bash()
 
 
 def _read_trust_floor(path: Path) -> str | None:
@@ -3183,9 +3179,9 @@ def run_post_restore_tec_tac(config, component_meta, component_archive, log, *, 
     backend_installer=framework_source/"install.sh"
     if not backend_installer.is_file():
         raise RuntimeError(f"restored Tec-Tac framework installer not found at {backend_installer}")
-    run_logged([_trusted_bash(),str(backend_installer)],log,timeout=2*60*60)
+    run_logged([TRUSTED_BASH,str(backend_installer)],log,timeout=2*60*60)
     ui_installer=ui_source/"scripts"/"install.sh"
-    if ui_installer.is_file(): run_logged([_trusted_bash(),str(ui_installer)],log,timeout=2*60*60)
+    if ui_installer.is_file(): run_logged([TRUSTED_BASH,str(ui_installer)],log,timeout=2*60*60)
     run_logged(["nginx","-t"],log,timeout=60)
     subprocess.run(["systemctl","reload","nginx"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     tactical_python=Path(config["TACTICAL_PYTHON"]); manage=Path(config["TACTICAL_BACKEND_ROOT"])/"manage.py"
@@ -3314,7 +3310,7 @@ def validate_target_preflight(config, report, mode, staged_bytes, *, mutation_lo
 
     required_tools = ["tar", "gzip"]
     if mode in {"full", "tactical"}:
-        required_tools += [_trusted_bash(), "runuser", "systemctl", "curl", "wget", "git"]
+        required_tools += [TRUSTED_BASH, "runuser", "systemctl", "curl", "wget", "git"]
     if mode in {"full", "tec_tac"}:
         required_tools += ["nginx"]
     missing = sorted(tool for tool in set(required_tools) if shutil.which(tool) is None)

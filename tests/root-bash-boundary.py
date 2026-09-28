@@ -1,35 +1,57 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import importlib.util, os, stat
+import importlib.util
+import os
+import pathlib
+import stat
 from pathlib import Path
 from types import SimpleNamespace
-ROOT=Path(__file__).resolve().parents[1]
-FILES=[
- 'scripts/server-backup-helper.py','scripts/system-update-helper.py','scripts/module-v2-job-helper.py',
- 'scripts/module-hotfix-job-helper.py','scripts/module-job-helper.py',
+
+ROOT = Path(__file__).resolve().parents[1]
+FILES = [
+    'scripts/server-backup-helper.py',
+    'scripts/system-update-helper.py',
+    'scripts/module-v2-job-helper.py',
+    'scripts/module-hotfix-job-helper.py',
+    'scripts/module-job-helper.py',
 ]
 
-def load(rel,idx):
-    spec=importlib.util.spec_from_file_location(f'bash_boundary_{idx}', ROOT/rel)
-    mod=importlib.util.module_from_spec(spec); spec.loader.exec_module(mod); return mod
 
-for idx,rel in enumerate(FILES):
-    mod=load(rel,idx)
-    calls=[]
-    class FakePath:
-        def __init__(self,raw): self.raw=str(raw)
-        def stat(self):
-            calls.append(self.raw)
-            return SimpleNamespace(st_mode=stat.S_IFREG|0o755, st_uid=0)
-        def __str__(self): return self.raw
-    real_path,real_access=mod.Path,mod.os.access
+def load_with_counted_bash_boundary(rel: str, idx: int):
+    calls = []
+    real_stat = pathlib.Path.stat
+    real_access = os.access
+
+    def fake_stat(self, *args, **kwargs):
+        raw = str(self)
+        if raw in {'/bin/bash', '/usr/bin/bash'}:
+            calls.append(raw)
+            return SimpleNamespace(st_mode=stat.S_IFREG | 0o755, st_uid=0)
+        return real_stat(self, *args, **kwargs)
+
+    def fake_access(path, mode):
+        if str(path) in {'/bin/bash', '/usr/bin/bash'}:
+            return True
+        return real_access(path, mode)
+
+    pathlib.Path.stat = fake_stat
+    os.access = fake_access
     try:
-        mod.Path=FakePath
-        mod.os.access=lambda path,mode: True
-        mod._TRUSTED_BASH_CACHE=None
-        first=mod._trusted_bash(); second=mod._trusted_bash()
+        spec = importlib.util.spec_from_file_location(f'bash_boundary_{idx}', ROOT / rel)
+        mod = importlib.util.module_from_spec(spec)
+        assert spec and spec.loader
+        spec.loader.exec_module(mod)
     finally:
-        mod.Path,mod.os.access=real_path,real_access
-    assert first=='/bin/bash' and second=='/bin/bash', (rel,first,second)
-    assert calls==['/bin/bash'], f'{rel} resolved Bash more than once: {calls}'
-print('[TEST] PASS L07 trusted Bash resolves once per helper process and enforces fixed-list boundary')
+        pathlib.Path.stat = real_stat
+        os.access = real_access
+    return mod, calls
+
+
+for idx, rel in enumerate(FILES):
+    mod, calls = load_with_counted_bash_boundary(rel, idx)
+    assert mod.TRUSTED_BASH == '/bin/bash', (rel, mod.TRUSTED_BASH)
+    assert calls == ['/bin/bash'], f'{rel} did not resolve Bash exactly once at process/module startup: {calls}'
+    # Runtime use is the prevalidated immutable path; no resolver remains callable.
+    assert not hasattr(mod, '_trusted_bash'), f'{rel} still exposes a per-call Bash resolver'
+
+print('[TEST] PASS L07 trusted Bash is resolved exactly once per helper process from the fixed root-owned boundary')

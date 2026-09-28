@@ -42,12 +42,7 @@ _LIFECYCLE_LOCK_HANDLE = None
 
 
 
-_TRUSTED_BASH_CACHE: str | None = None
-
-def _trusted_bash() -> str:
-    global _TRUSTED_BASH_CACHE
-    if _TRUSTED_BASH_CACHE is not None:
-        return _TRUSTED_BASH_CACHE
+def _resolve_trusted_bash() -> str:
     for raw in ("/bin/bash", "/usr/bin/bash"):
         path = Path(raw)
         try:
@@ -55,9 +50,10 @@ def _trusted_bash() -> str:
         except OSError:
             continue
         if stat.S_ISREG(info.st_mode) and info.st_uid == 0 and not (info.st_mode & 0o022) and os.access(path, os.X_OK):
-            _TRUSTED_BASH_CACHE = str(path)
-            return _TRUSTED_BASH_CACHE
+            return str(path)
     raise RuntimeError("trusted root-owned bash executable was not found in /bin/bash or /usr/bin/bash")
+
+TRUSTED_BASH = _resolve_trusted_bash()
 
 def acquire_lifecycle_lock():
     """Serialize module lifecycle work with framework/UI system updates."""
@@ -600,12 +596,12 @@ def sync_and_reload(config, log, *, refresh_workers=False):
     if ui_sync.is_file():
         require_root_owned(ui_sync)
         env = privileged_env({"TEC_TAC_UI_ROOT": ui_root})
-        result = subprocess.run([_trusted_bash(), str(ui_sync)], stdout=log, stderr=subprocess.STDOUT, text=True, env=env)
+        result = subprocess.run([TRUSTED_BASH, str(ui_sync)], stdout=log, stderr=subprocess.STDOUT, text=True, env=env)
         if result.returncode:
             raise RuntimeError(f"UI module synchronization failed with status {result.returncode}")
     if reload_script.is_file():
         require_root_owned(reload_script)
-        result = subprocess.run([_trusted_bash(), str(reload_script)], stdout=log, stderr=subprocess.STDOUT, text=True, env=privileged_env())
+        result = subprocess.run([TRUSTED_BASH, str(reload_script)], stdout=log, stderr=subprocess.STDOUT, text=True, env=privileged_env())
         if result.returncode:
             raise RuntimeError(f"Tactical graceful reload failed with status {result.returncode}")
     if refresh_workers:
@@ -698,7 +694,7 @@ def install_packages(repo_root, packages, order, actions, log, backup_root):
             replace = False
         else:
             replace = (repo_root / "extensions" / module_id).is_dir()
-        command = [_trusted_bash(), str(install_script), str(package)]
+        command = [TRUSTED_BASH, str(install_script), str(package)]
         if replace:
             command.append("--replace")
         verb = "renaming" if rename_from else ("replacing" if replace else "installing")

@@ -17,7 +17,7 @@ def make_root() -> Path:
     archive = base / "docs" / "releases"
     archive.mkdir(parents=True)
     (base / "VERSION").write_text("1.15.116\n", encoding="utf-8")
-    for patch in range(113, 116):
+    for patch in range(83, 116):
         version = f"1.15.{patch}"
         (archive / f"RELEASE_NOTES_{version}.md").write_text(
             f"# Tec-Tac Core {version}\n\nfixture\n", encoding="utf-8"

@@ -50,12 +50,7 @@ ACCOUNT_SECURITY_AUDIT = Path("/var/log/tec-tac/account-security-policy-audit.js
 
 
 
-_TRUSTED_BASH_CACHE: str | None = None
-
-def _trusted_bash() -> str:
-    global _TRUSTED_BASH_CACHE
-    if _TRUSTED_BASH_CACHE is not None:
-        return _TRUSTED_BASH_CACHE
+def _resolve_trusted_bash() -> str:
     for raw in ("/bin/bash", "/usr/bin/bash"):
         path = Path(raw)
         try:
@@ -63,9 +58,10 @@ def _trusted_bash() -> str:
         except OSError:
             continue
         if stat.S_ISREG(info.st_mode) and info.st_uid == 0 and not (info.st_mode & 0o022) and os.access(path, os.X_OK):
-            _TRUSTED_BASH_CACHE = str(path)
-            return _TRUSTED_BASH_CACHE
+            return str(path)
     raise RuntimeError("trusted root-owned bash executable was not found in /bin/bash or /usr/bin/bash")
+
+TRUSTED_BASH = _resolve_trusted_bash()
 
 def now():
     return datetime.now(timezone.utc).isoformat()
@@ -1161,9 +1157,9 @@ def _run_bounded(command, *, log, timeout, cwd=None, env=None, label="command"):
 
 def run_install(component, target, log):
     if component == "framework":
-        command = [_trusted_bash(), str(target / "install.sh")]
+        command = [TRUSTED_BASH, str(target / "install.sh")]
     else:
-        command = [_trusted_bash(), str(target / "scripts" / "install.sh")]
+        command = [TRUSTED_BASH, str(target / "scripts" / "install.sh")]
     return _run_bounded(command, log=log, timeout=INSTALL_TIMEOUT_SECONDS, env=privileged_env(), label=f"{component} installer")
 
 

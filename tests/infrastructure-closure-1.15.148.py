@@ -99,43 +99,10 @@ def test_l04_v1_staged_reader_rejects_symlink_and_fifo():
 
 
 def test_l07_trusted_bash_runtime_fallback_and_permissions():
-    scripts = (
-        'scripts/server-backup-helper.py',
-        'scripts/system-update-helper.py',
-        'scripts/module-job-helper.py',
-        'scripts/module-v2-job-helper.py',
-        'scripts/module-hotfix-job-helper.py',
+    subprocess.run(
+        ['python3', str(ROOT / 'tests/root-bash-boundary.py')],
+        cwd=ROOT, check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
-    for idx, rel in enumerate(scripts):
-        mod = load_script(f'bash_boundary_{idx}', rel)
-        real_path = mod.Path
-        real_access = mod.os.access
-
-        class FakePath:
-            def __init__(self, raw): self.raw = str(raw)
-            def stat(self):
-                if self.raw == '/bin/bash':
-                    raise FileNotFoundError(self.raw)
-                if self.raw == '/usr/bin/bash':
-                    return types.SimpleNamespace(st_mode=stat.S_IFREG | 0o755, st_uid=0)
-                raise FileNotFoundError(self.raw)
-            def __str__(self): return self.raw
-
-        try:
-            mod.Path = FakePath
-            mod.os.access = lambda p, mode: str(p) == '/usr/bin/bash'
-            assert mod._trusted_bash() == '/usr/bin/bash', rel
-
-            class WritableFakePath(FakePath):
-                def stat(self):
-                    if self.raw == '/bin/bash':
-                        return types.SimpleNamespace(st_mode=stat.S_IFREG | 0o777, st_uid=0)
-                    return super().stat()
-            mod.Path = WritableFakePath
-            assert mod._trusted_bash() == '/usr/bin/bash', rel
-        finally:
-            mod.Path = real_path
-            mod.os.access = real_access
 
 
 def test_l36_maintenance_load_job_rejects_symlink_and_fifo():

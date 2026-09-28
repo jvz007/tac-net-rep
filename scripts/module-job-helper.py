@@ -33,12 +33,7 @@ _LIFECYCLE_LOCK_HANDLE = None
 
 
 
-_TRUSTED_BASH_CACHE: str | None = None
-
-def _trusted_bash() -> str:
-    global _TRUSTED_BASH_CACHE
-    if _TRUSTED_BASH_CACHE is not None:
-        return _TRUSTED_BASH_CACHE
+def _resolve_trusted_bash() -> str:
     for raw in ("/bin/bash", "/usr/bin/bash"):
         path = Path(raw)
         try:
@@ -46,9 +41,10 @@ def _trusted_bash() -> str:
         except OSError:
             continue
         if stat.S_ISREG(info.st_mode) and info.st_uid == 0 and not (info.st_mode & 0o022) and os.access(path, os.X_OK):
-            _TRUSTED_BASH_CACHE = str(path)
-            return _TRUSTED_BASH_CACHE
+            return str(path)
     raise RuntimeError("trusted root-owned bash executable was not found in /bin/bash or /usr/bin/bash")
+
+TRUSTED_BASH = _resolve_trusted_bash()
 
 def acquire_lifecycle_lock():
     """Serialize module lifecycle work with framework/UI system updates."""
@@ -324,9 +320,12 @@ def claim_job(job_id):
         if not JOB_RE.fullmatch(upload_id):
             raise SystemExit("invalid module upload id")
         meta = STAGED_ROOT / f"{upload_id}.json"
-        if not meta.is_file():
-            raise SystemExit("staged module metadata missing")
-        stage_meta = _read_json_nofollow(meta, label="staged module metadata")
+        try:
+            stage_meta = _read_json_nofollow(meta, label="staged module metadata")
+        except SystemExit as exc:
+            if not os.path.lexists(meta):
+                raise SystemExit("staged module metadata missing") from exc
+            raise
         package_path = Path(str(stage_meta.get("package_path") or ""))
         run_dir = RUNNING_ROOT / job_id
         run_dir.mkdir(parents=True, exist_ok=False)
@@ -426,11 +425,11 @@ def run_job(job_id):
     command = None
     if job["action"] == "install":
         package = Path(job["package_path"])
-        command = [_trusted_bash(), str(install_script), str(package)]
+        command = [TRUSTED_BASH, str(install_script), str(package)]
         if job.get("replace"):
             command.append("--replace")
     else:
-        command = [_trusted_bash(), str(remove_script), job["plugin_id"], "", "--yes"]
+        command = [TRUSTED_BASH, str(remove_script), job["plugin_id"], "", "--yes"]
 
     rc = 1
     try:
@@ -452,7 +451,7 @@ def run_job(job_id):
                 log.write("[TEC-TAC-MODULE] synchronizing deployed UI modules\n")
                 log.flush()
                 sync_env = privileged_env({"TEC_TAC_UI_ROOT": ui_root})
-                sync = subprocess.run([_trusted_bash(), str(ui_sync)], stdout=log, stderr=subprocess.STDOUT, text=True, env=sync_env)
+                sync = subprocess.run([TRUSTED_BASH, str(ui_sync)], stdout=log, stderr=subprocess.STDOUT, text=True, env=sync_env)
                 if sync.returncode != 0:
                     rc = sync.returncode
                     log.write(f"[TEC-TAC-MODULE] UI module sync failed rc={rc}\n")

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import importlib.util
 import os
 import re
@@ -61,20 +62,43 @@ def test_l04_staged_metadata_reader_rejects_symlink_and_claim_uses_it():
     mod = load_module(ROOT / "scripts/module-job-helper.py", "module_job_helper_l04")
     with tempfile.TemporaryDirectory() as td:
         base = Path(td)
-        target = base / "real.json"
-        target.write_text('{"package_path":"/tmp/package.zip"}', encoding="utf-8")
-        link = base / "staged.json"
-        link.symlink_to(target)
+        jobs = base / "jobs"
+        staged = base / "staged"
+        running = base / "running"
+        requests = base / "running-requests"
+        logs = base / "logs"
+        for directory in (jobs, staged):
+            directory.mkdir()
+        job_id = "11111111-1111-1111-1111-111111111111"
+        upload_id = "22222222-2222-2222-2222-222222222222"
+        (jobs / f"{job_id}.json").write_text(json.dumps({
+            "id": job_id, "action": "install", "plugin_id": "demo",
+            "upload_id": upload_id, "status": "queued"
+        }), encoding="utf-8")
+        real_meta = base / "real-meta.json"
+        real_meta.write_text(json.dumps({"package_path": str(staged / f"{upload_id}.zip")}), encoding="utf-8")
+        (staged / f"{upload_id}.json").symlink_to(real_meta)
+        (staged / f"{upload_id}.zip").write_bytes(b"package")
+
+        mod.JOBS_ROOT = jobs
+        mod.STAGED_ROOT = staged
+        mod.RUNNING_ROOT = running
+        mod.RUNNING_REQUEST_ROOT = requests
+        mod.LOGS_ROOT = logs
+        mod.tactical_identity = lambda config=None: (1234, 1234)
+        real_chown = mod.os.chown
+        mod.os.chown = lambda *args, **kwargs: None
         try:
-            mod._read_json_nofollow(link, label="staged module metadata")
-        except SystemExit as exc:
-            assert "unsafe or unreadable" in str(exc)
-        else:
-            raise AssertionError("symlink staged metadata was followed")
-    source = (ROOT / "scripts/module-job-helper.py").read_text(encoding="utf-8")
-    claim_body = source[source.index("def claim_job("):source.index("def load_running_request(") if source.index("def load_running_request(") > source.index("def claim_job(") else len(source)] if False else source
-    assert '_read_json_nofollow(meta, label="staged module metadata")' in claim_body
-    assert 'json.loads(meta.read_text' not in claim_body
+            try:
+                mod.claim_job(job_id)
+            except SystemExit as exc:
+                assert "unsafe or unreadable" in str(exc)
+            else:
+                raise AssertionError("claim_job followed symlinked staged metadata")
+        finally:
+            mod.os.chown = real_chown
+        assert real_meta.exists(), "claim must not alter the symlink target"
+        assert not requests.exists() or not any(requests.iterdir()), "unsafe metadata must not create a claimed request"
 
 
 def test_l02_config_loader_treats_values_as_data_not_shell():
