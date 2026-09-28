@@ -1,4 +1,4 @@
-# Tec-Tac Core 1.15.112-1
+# Tec-Tac Core 1.15.112
 
 ## Review rebuild
 

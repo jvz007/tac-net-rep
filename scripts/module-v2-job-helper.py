@@ -42,7 +42,12 @@ _LIFECYCLE_LOCK_HANDLE = None
 
 
 
+_TRUSTED_BASH_CACHE: str | None = None
+
 def _trusted_bash() -> str:
+    global _TRUSTED_BASH_CACHE
+    if _TRUSTED_BASH_CACHE is not None:
+        return _TRUSTED_BASH_CACHE
     for raw in ("/bin/bash", "/usr/bin/bash"):
         path = Path(raw)
         try:
@@ -50,7 +55,8 @@ def _trusted_bash() -> str:
         except OSError:
             continue
         if stat.S_ISREG(info.st_mode) and info.st_uid == 0 and not (info.st_mode & 0o022) and os.access(path, os.X_OK):
-            return str(path)
+            _TRUSTED_BASH_CACHE = str(path)
+            return _TRUSTED_BASH_CACHE
     raise RuntimeError("trusted root-owned bash executable was not found in /bin/bash or /usr/bin/bash")
 
 def acquire_lifecycle_lock():

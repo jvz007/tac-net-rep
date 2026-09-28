@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-START_PATCH = 113
+START_PATCH = 83
 
 
 def fail(message: str) -> None:
@@ -43,9 +43,9 @@ def validate(root: Path) -> None:
                 missing.append(note.name)
                 continue
             first_line = note.read_text(encoding="utf-8").splitlines()[0:1]
-            expected = f"# Tec-Tac Core {archived_version}"
-            if first_line != [expected]:
-                bad_headings.append((note.name, first_line[0] if first_line else "<empty>", expected))
+            heading = first_line[0] if first_line else ""
+            if not re.fullmatch(rf"# (?:Tec-Tac (?:Core|Framework)|Core) {re.escape(archived_version)}", heading):
+                bad_headings.append((note.name, heading or "<empty>", archived_version))
         if missing:
             fail(f"release archive is missing clean releases: {missing}")
         if bad_headings:
