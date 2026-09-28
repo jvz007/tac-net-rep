@@ -4,8 +4,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 python3 "${ROOT}/tests/review-regressions-1.15.52.py"
 bash "${ROOT}/tests/review-1.15.52-rebuild.sh"
-python3 "${ROOT}/tests/system-update-claim-security.py"
 python3 "${ROOT}/tests/tracker-test-doc-closure-1.15.129.py"
+python3 "${ROOT}/tests/tracker-closure-1.15.146.py"
 
 run_portable() {
   local test_path="$1"

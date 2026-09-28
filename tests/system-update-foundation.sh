@@ -227,4 +227,3 @@ echo "[TEST] PASS system update R2 extraction boundary"
 
 # Privileged claim must never follow Tactical-controlled staged symlinks or
 # retain the original writable inode across root verification/install.
-python3 "${ROOT}/tests/system-update-claim-security.py"

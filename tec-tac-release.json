@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.145",
+  "version": "1.15.146",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -18,8 +18,8 @@
     },
     {
       "path": "FIXING.md",
-      "size": 857,
-      "sha256": "9f5808f01b18792b0b420b7d00fb3de349ed427619332805278668fc6db453cd"
+      "size": 1296,
+      "sha256": "7ab0c24127e836d726a43499e5bc5859aca0a60bb5754a5e7da3fa44a4f64f59"
     },
     {
       "path": "LICENSE",
@@ -32,14 +32,14 @@
       "sha256": "b16e78b37eecd6b4690403b4725a0b9977c7e8e9eca51b6cb4493166c952f243"
     },
     {
-      "path": "RELEASE_NOTES_1.15.145.md",
-      "size": 1199,
-      "sha256": "b0ff95f0ec9a6f8c1fa22a65f99cf3804461d900db22799a4693db171a04dba5"
+      "path": "RELEASE_NOTES_1.15.146.md",
+      "size": 1329,
+      "sha256": "2993213ab0c5cf55df4c44749ae90144c3b40752ea34d4d60892c92bd2de41c0"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "6f04834b12afb6d61617c6d11567244260af13d37292ee5e0f617633161919cc"
+      "sha256": "03c8404f11e25267ec2c451b60c6c7bf04fb6242e878fab310410ac0c038df9a"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -465,6 +465,11 @@
       "path": "docs/releases/RELEASE_NOTES_1.15.144.md",
       "size": 1827,
       "sha256": "0e069d56423811b6362f0c5c14248a847d8406cbf40797eac6090911d5016bbf"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.145.md",
+      "size": 1199,
+      "sha256": "b0ff95f0ec9a6f8c1fa22a65f99cf3804461d900db22799a4693db171a04dba5"
     },
     {
       "path": "docs/releases/RELEASE_NOTES_1.15.19.md",
@@ -1709,7 +1714,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "efc536a24ec4b649bf429d6bcf95092f2ba870471937a0e1816ea1ec654ac0f9"
+      "sha256": "88927008fb32dd14ce9973ea37e9f0a1b6172f7d49d3d5bace66fbe3a41e1871"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2003,8 +2008,8 @@
     },
     {
       "path": "tests/module-management-foundation.sh",
-      "size": 25211,
-      "sha256": "6d41da950e346cd1e4477668f5237861a0decfefe8f46ef0cb179af506a858e5"
+      "size": 25150,
+      "sha256": "e88c4ebea073fd23c5c60d5a40defe684f71ac66a9d320232d688bebac40ea3a"
     },
     {
       "path": "tests/module-mixed-artifact-batch.sh",
@@ -2173,8 +2178,8 @@
     },
     {
       "path": "tests/review-hygiene-foundation.sh",
-      "size": 778,
-      "sha256": "e41c73c642546357697bec79cc9566ae94f406aa594b9fce1c47924d78c448b4"
+      "size": 774,
+      "sha256": "c3bc6b818ccd895cde93782a11109e7e7942033f4de8110b31c1017991ba548f"
     },
     {
       "path": "tests/review-regressions-1.15.50.py",
@@ -2210,6 +2215,11 @@
       "path": "tests/root-python-boundary.sh",
       "size": 3999,
       "sha256": "9135047285d147c69abe983b13181f0e6cdc7fc2fa8a2f71cf23aaa6ff4d3aff"
+    },
+    {
+      "path": "tests/root-required-foundation.sh",
+      "size": 374,
+      "sha256": "06de7c954c07628ac79d124be4c46e72ded9af1b62ea99dd24ba0fe45380ffa6"
     },
     {
       "path": "tests/scheduler-closure-1.15.144.py",
@@ -2328,8 +2338,8 @@
     },
     {
       "path": "tests/server-backup-foundation.sh",
-      "size": 34341,
-      "sha256": "2e6427d18372be5a89e8d897f57db4f1e71b90538356b35b967fb6029ad5bcb3"
+      "size": 34510,
+      "sha256": "ae4fb1cdb5142fce15efff155d5cf8984b96e9c9bc55059db6e0cdc05f88ecd9"
     },
     {
       "path": "tests/server-backup-host-rollback.py",
@@ -2438,8 +2448,8 @@
     },
     {
       "path": "tests/system-update-foundation.sh",
-      "size": 18091,
-      "sha256": "03daa7a6bd8e5dd4d9662f1f4346cd437dbc485641e6f4cd855cd868c1324b1f"
+      "size": 18035,
+      "sha256": "bd437d2a502bdeae2e214bb3f50965bc2b067ae9850d0205dc699a91eea7befe"
     },
     {
       "path": "tests/system-update-rollback-backup-safety.py",
@@ -2480,6 +2490,11 @@
       "path": "tests/test_housekeeping_claim_security.py",
       "size": 221,
       "sha256": "acd331f08c2d27f682a934da78b013f34a2a9e771cd05cc51258dca48c1e3414"
+    },
+    {
+      "path": "tests/tracker-closure-1.15.146.py",
+      "size": 2361,
+      "sha256": "fc5a093760cb565b4a96b7cf9b2deb828946610d92adc6e3778e43d4e6db30d9"
     },
     {
       "path": "tests/tracker-test-doc-closure-1.15.129.py",

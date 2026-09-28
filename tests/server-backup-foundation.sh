@@ -536,4 +536,8 @@ python3 -m py_compile "${ROOT}/framwork/tec_tac/server_backup.py" "${ROOT}/scrip
 bash -n "${ROOT}/install.sh"
 bash -n "${ROOT}/uninstall.sh"
 python3 "${ROOT}/tests/backup-closure-1.15.145.py"
+python3 "${ROOT}/tests/server-backup-d2-d3.py"
+python3 "${ROOT}/tests/server-backup-d2-version-transition.py"
+python3 "${ROOT}/tests/server-backup-d3-service-state.py"
+
 echo "[TEST] PASS Core recovery-bundle server-backup capability"
