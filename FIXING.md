@@ -1,20 +1,20 @@
-# FIXING.md — Core 1.15.146
+# FIXING.md — Core 1.15.147
 
 ## Scope
 
-Review closure release for **D2 + D3 + M18 + L61 + L62** from the Core/UI tracker.
+Review closure release for **L47 + L48 + L49 + L88 + L89** from the Core/UI tracker.
 
-Production restore behavior was already present in the review-passed 1.15.145 baseline. This release deliberately avoids unrelated production changes and strengthens runner/test/document closure:
+The review-passed 1.15.146 production MFA behavior already implements the intended security boundaries. This release deliberately avoids unrelated production changes and adds executable closure coverage against the real MFA admin/login functions.
 
-- D2/D3 behavioral restore suites are wired into the normal server-backup foundation;
-- the two intentionally root-required security tests are removed from normal foundations and centralized in a dedicated root-required runner;
-- portable L61 tests stay in review hygiene and execute with only narrow ownership fixtures;
-- the corrected 1.15.83 release-note wording is regression-guarded so structural assertions are not overclaimed as full behavioral coverage.
+- L47: protected-account authorization is behaviorally proven to run before any administrator status read.
+- L48: administrator GET status is behaviorally proven read-only: no stale-code deletion and no mutation audit.
+- L49: automatic TOTP-change invalidation and explicit administrator invalidation are behaviorally proven to emit distinct audit events.
+- L88: the tight per-username backup-code attempt slot is behaviorally proven to be reserved before recovery-code verification, so the sixth concurrent-like attempt is rejected before verification.
+- L89: wrong-password failures are behaviorally proven to use only the separate looser password-failure bucket, while correct-password/wrong-code attempts consume only the tight recovery-code bucket.
 
 ## Validation intent
 
-- restore downgrade/version-transition behavior remains executable in the normal backup suite;
-- recovery identity/trust and service-state continuity remain executable in the normal backup suite;
-- ordinary runners no longer accidentally require root for the two M18 security tests;
-- the dedicated root runner clearly skips when non-root and runs both privileged tests when root;
-- 1.15.83 documentation continues to distinguish structural assertions from behavioral regression coverage.
+- execute the real AdminUserMfaRecoveryView GET method with narrow Django/DRF test doubles;
+- execute the real backup_code_status, automatic stale-code invalidation, and explicit invalidation functions;
+- execute the real BackupCodeLoginView.post method across wrong-password, wrong-code, and rate-limited paths;
+- keep the closure regression in the normal Access/MFA foundation.

@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.146",
+  "version": "1.15.147",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -18,8 +18,8 @@
     },
     {
       "path": "FIXING.md",
-      "size": 1296,
-      "sha256": "7ab0c24127e836d726a43499e5bc5859aca0a60bb5754a5e7da3fa44a4f64f59"
+      "size": 1532,
+      "sha256": "a0d43698c7f878e20e0bec0bca8b38dd5bc215ed18c669f32bf81f4127cdf0da"
     },
     {
       "path": "LICENSE",
@@ -32,14 +32,14 @@
       "sha256": "b16e78b37eecd6b4690403b4725a0b9977c7e8e9eca51b6cb4493166c952f243"
     },
     {
-      "path": "RELEASE_NOTES_1.15.146.md",
-      "size": 1329,
-      "sha256": "2993213ab0c5cf55df4c44749ae90144c3b40752ea34d4d60892c92bd2de41c0"
+      "path": "RELEASE_NOTES_1.15.147.md",
+      "size": 1209,
+      "sha256": "c9e98c8b4cbdfc5eb81e571f54e2a09628f9968532a3fe1dc2b975c04cb3bbbc"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "03c8404f11e25267ec2c451b60c6c7bf04fb6242e878fab310410ac0c038df9a"
+      "sha256": "c8235802c09dac34ddb292eccd13566bc2fc4b2a7592cb0da5111c1885605168"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -470,6 +470,11 @@
       "path": "docs/releases/RELEASE_NOTES_1.15.145.md",
       "size": 1199,
       "sha256": "b0ff95f0ec9a6f8c1fa22a65f99cf3804461d900db22799a4693db171a04dba5"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.146.md",
+      "size": 1329,
+      "sha256": "2993213ab0c5cf55df4c44749ae90144c3b40752ea34d4d60892c92bd2de41c0"
     },
     {
       "path": "docs/releases/RELEASE_NOTES_1.15.19.md",
@@ -1714,7 +1719,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "88927008fb32dd14ce9973ea37e9f0a1b6172f7d49d3d5bace66fbe3a41e1871"
+      "sha256": "7e312fdfbd56aacee0dfce283f1bd14a996b075dfe7130b5334c4d4c9162f498"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -1738,8 +1743,8 @@
     },
     {
       "path": "tests/access-security-foundation.sh",
-      "size": 6266,
-      "sha256": "05aa48b370eeb034655e9b2bb648948dfcf85486eadb9d19c306bf653f638cfe"
+      "size": 6314,
+      "sha256": "6bdd349bdb2452a99531eb164fdc2244d10e07e2d0fda6fddb9f8e371931d9cf"
     },
     {
       "path": "tests/account-security-policy-corrupt-schema.py",
@@ -1945,6 +1950,11 @@
       "path": "tests/mfa-backup-throttling.py",
       "size": 4181,
       "sha256": "56438a5ebe4cec42709dc40c586b5b00017c4ae0fe8c541f7efd462f4768d368"
+    },
+    {
+      "path": "tests/mfa-closure-1.15.147.py",
+      "size": 9715,
+      "sha256": "952effbf7304b8042989658a62aa74140027579c7d9763ecd081f86c13276026"
     },
     {
       "path": "tests/mfa-enrollment-hardening.py",

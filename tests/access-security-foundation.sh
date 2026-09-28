@@ -46,6 +46,7 @@ grep -q 'MFA_BACKUP_FAILURE_LIMIT = 5' "${ROOT}/framwork/tec_tac/throttles.py" |
 grep -q 'MFA_BACKUP_SUCCESS_LIMIT = 20' "${ROOT}/framwork/tec_tac/throttles.py" || fail "separate MFA backup success limit missing"
 grep -q 'response\["Retry-After"\]' "${ROOT}/framwork/tec_tac/mfa_backup_views.py" || fail "MFA backup 429 Retry-After missing"
 python3 "${ROOT}/tests/mfa-backup-throttling.py"
+python3 "${ROOT}/tests/mfa-closure-1.15.147.py"
 grep -q '_is_protected_login_account' "${ROOT}/framwork/tec_tac/session_security.py" || fail "protected login-account guard missing"
 grep -q 'Superuser or root login sessions require superuser authority' "${ROOT}/framwork/tec_tac/session_security.py" || fail "privileged-session revoke guard missing"
 grep -A30 'class AdminLoginSessionRevokeView' "${ROOT}/framwork/tec_tac/session_security_views.py" | grep -q 'def post' || fail "POST login-session revoke route handler missing"
