@@ -93,6 +93,7 @@ with tempfile.TemporaryDirectory() as td:
 print("server maintenance capability foundation: PASS")
 PY
 
+python3 "${ROOT}/tests/infrastructure-closure-1.15.148.py"
 echo "[TEST] PASS server maintenance foundation"
 ! grep -q 'os.environ.get("TEC_TAC_SERVER_MAINTENANCE_ROOT"' "${ROOT}/scripts/server-maintenance-helper.py" || fail "server maintenance helper still trusts environment state root"
 ! grep -q 'os.environ.get("TEC_TAC_SERVER_MAINTENANCE_REGISTRY_ROOT"' "${ROOT}/scripts/server-maintenance-helper.py" || fail "server maintenance helper still trusts environment registry root"

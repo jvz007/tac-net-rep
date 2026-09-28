@@ -261,7 +261,7 @@ def job_path(job_id):
 def load_job(job_id):
     path = job_path(job_id)
     try:
-        job = json.loads(path.read_text(encoding="utf-8"))
+        job = _read_json_nofollow(path)
     except FileNotFoundError as exc:
         raise RuntimeError("job not found") from exc
     if not isinstance(job, dict) or str(job.get("id")) != str(job_id):
