@@ -232,6 +232,8 @@ def _pair_payload(extension, reportset=None, *, ui: dict | None = None, installe
     versions_match = True if reportset is None else extension.version == reportset.version
     return {
         "id": extension.plugin_id,
+        "name": getattr(extension, "name", "") or extension.plugin_id,
+        "category": getattr(extension, "category", "") or None,
         "extension_version": extension.version,
         "reportset_version": reportset_version,
         "has_reportset": reportset is not None,

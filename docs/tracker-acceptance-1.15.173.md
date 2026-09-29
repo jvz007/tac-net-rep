@@ -16,6 +16,6 @@ This release pair exists only to close the 13 tracker rows that were still open/
 | F8 | public SSO provider hook | companion UI 0.12.67 tracker acceptance runner |
 | F9 | authenticated module header contribution | companion UI 0.12.67 tracker acceptance runner |
 | F10 | client/site context-menu module actions | companion UI 0.12.67 tracker acceptance runner |
-| F11 | Core-owned OpenAPI grouping including route-prefix/module-ID mismatches | `tests/f11-openapi-ownership-1.15.172.py` |
+| F11 | Core-owned OpenAPI grouping including route-prefix/module-ID mismatches | `tests/f11-openapi-final-1.15.178.py` |
 
 `tests/tracker-acceptance-1.15.173.py` is the single Core acceptance entrypoint for the rows above.

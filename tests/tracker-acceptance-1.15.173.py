@@ -15,8 +15,8 @@ TESTS = [
     "d2-d3-restore-orchestration-1.15.173.py",
     "l10-publication-final-1.15.173.py",
     "tracker-http-feature-boundary-1.15.172.py",
-    "tracker-feature-closure-1.15.169.py",
-    "f11-openapi-ownership-1.15.172.py",
+    "f4-core-ui-context-1.15.178.py",
+    "f11-openapi-final-1.15.178.py",
 ]
 
 for name in TESTS:

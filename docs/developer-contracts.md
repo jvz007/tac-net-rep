@@ -127,16 +127,13 @@ The page provides:
 
 ## Swagger / OpenAPI grouping
 
-Core owns Swagger grouping for the Tec-Tac HTTP surface. Module authors do not need to repeat generic `tags=` annotations merely to make their endpoints discoverable. Endpoint ownership is derived from the installed extension Django app that owns the drf-spectacular callback, so a module may use an API path segment that differs from its stable module ID (for example `serverhealth` owning `/api/tfd/server-health/`). Unknown Tec-Tac paths remain in the Framework catch-all.
+Core owns Swagger grouping for the complete Tec-Tac HTTP surface. Module authors do not add generic group tags. Ownership comes from the installed extension Django app that owns the drf-spectacular callback, so callback ownership wins even when a module mounts below a Core-looking URL prefix.
 
-The generated schema groups routes as follows:
+Module manifests may declare a readable `name` and `category: "core"`. Core uses `Core module · <name>` for Core modules and `Module · <name>` for all other modules. Older modules that omit `name` use their stable module ID.
 
-- known Core areas below `/api/tfd/` use their named `Tec-Tac · <area>` group;
-- routes whose first path segment matches a registered extension ID use `Tec-Tac Module · <module-id>`;
-- any other `/api/tfd/` route uses the `Tec-Tac · Framework` catch-all so a future Core route is never mislabeled as a module;
-- Tactical endpoints outside `/api/tfd/` are left unchanged.
+Core endpoints use explicit subsystem groups, including separate groups for System Updates, Backup & Restore, Server Maintenance, Storage, Module Repository and Module Hotfixes. There is no generic Framework catch-all: a new `/api/tfd/` Core surface must be explicitly classified so schema coverage detects drift. Tactical endpoints outside `/api/tfd/` are left unchanged.
 
-Modules should still provide useful summaries, request/response schemas and operation documentation where appropriate. Group ownership is the part supplied automatically by Core.
+Modules still own useful summaries, request/response schemas and operation descriptions. Group ownership is supplied automatically by Core.
 
 ## Recommended coding-agent workflow
 

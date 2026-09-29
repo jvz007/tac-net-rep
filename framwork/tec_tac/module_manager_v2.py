@@ -357,6 +357,8 @@ def _extension_metadata(extension_root: Path) -> dict:
     payload = _read_json(extension_root / "tec_tac.json", "extension manifest")
     return {
         "id": str(payload.get("id", "")).strip(),
+        "name": str(payload.get("name") or payload.get("id") or "").strip(),
+        "category": str(payload.get("category") or "").strip().lower(),
         "version": str(payload.get("version", "0.0.0")).strip(),
         "dependencies": _string_map(payload, "dependencies"),
         "optional_dependencies": _string_map(payload, "optional_dependencies"),

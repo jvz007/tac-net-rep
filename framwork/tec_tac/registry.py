@@ -31,7 +31,7 @@ SUPPORTED_TYPES = frozenset({"extension", "reportset"})
 SUPPORTED_KEYS = frozenset({
     "id", "type", "version", "python_paths", "django_apps", "permission_groups",
     "dependencies", "optional_dependencies", "requires", "licensing", "migration",
-    "publisher_permissions",
+    "publisher_permissions", "name", "category",
 })
 
 class RegistryError(RuntimeError):
@@ -47,6 +47,8 @@ class PluginSpec:
     django_apps: tuple[str, ...] = ()
     permission_groups: tuple[tuple[str, tuple[str, ...]], ...] = ()
     publisher_permissions: tuple[str, ...] = ()
+    name: str = ""
+    category: str = ""
     legacy: bool = False
 
     def permission_group_map(self) -> dict[str, tuple[str, ...]]:
@@ -169,6 +171,18 @@ def _load_manifest(plugin_type: str, plugin_dir: Path) -> PluginSpec | None:
     version = str(payload.get("version", "0.0.0")).strip()
     if not version:
         raise RegistryError(f"Plugin {plugin_id!r} version must not be blank.")
+    raw_name = payload.get("name", plugin_id)
+    if not isinstance(raw_name, str) or not raw_name.strip():
+        raise RegistryError(f"Plugin {plugin_id!r} name must be a non-empty string.")
+    name = raw_name.strip()
+    raw_category = payload.get("category", "")
+    if not isinstance(raw_category, str):
+        raise RegistryError(f"Plugin {plugin_id!r} category must be a string.")
+    category = raw_category.strip().lower()
+    if category and plugin_type != "extension":
+        raise RegistryError(f"Reportset {plugin_id!r} may not declare category metadata.")
+    if category not in {"", "core"}:
+        raise RegistryError(f"Plugin {plugin_id!r} category must be 'core' when provided.")
     raw_python_paths = _string_list(payload, "python_paths", (".",))
     python_paths = []
     plugin_root = plugin_dir.resolve()
@@ -184,7 +198,7 @@ def _load_manifest(plugin_type: str, plugin_dir: Path) -> PluginSpec | None:
     django_apps = _string_list(payload, "django_apps")
     permission_groups = _permission_groups(payload, plugin_type, plugin_id)
     publisher_permissions = _publisher_permissions(payload, plugin_type, plugin_id)
-    return PluginSpec(plugin_id=plugin_id, plugin_type=plugin_type, root=plugin_root, version=version, python_paths=tuple(python_paths), django_apps=django_apps, permission_groups=permission_groups, publisher_permissions=publisher_permissions)
+    return PluginSpec(plugin_id=plugin_id, plugin_type=plugin_type, root=plugin_root, version=version, python_paths=tuple(python_paths), django_apps=django_apps, permission_groups=permission_groups, publisher_permissions=publisher_permissions, name=name, category=category)
 
 def _discover_root(plugin_type: str, root: Path) -> list[PluginSpec]:
     if not root.exists():

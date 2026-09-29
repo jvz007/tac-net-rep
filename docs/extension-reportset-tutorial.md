@@ -1365,22 +1365,11 @@ A public page does not grant anonymous access to backend data. If an API endpoin
 
 ## Swagger / OpenAPI grouping convention
 
-Every extension that exposes HTTP API endpoints must give its endpoints an explicit `drf_spectacular` tag. This keeps Tactical's Swagger UI readable as more Tec-Tac extensions are installed.
+Core owns Swagger/OpenAPI grouping for all Tec-Tac HTTP endpoints. Modules **MUST NOT** choose their own generic group tag. Core determines ownership from the installed Django app callback, so module ownership remains correct even when the URL prefix differs from the stable module ID.
 
-Use one stable tag for the extension, normally its display name. For example, UserInvite endpoints should use `UserInvite`; framework-owned endpoints use `Tec-Tac Framework`; TFD Reporting uses `TFD Reporting`.
+Declare a readable `name` in `tec_tac.json`. Core modules also declare `"category": "core"`; other modules omit `category`. Swagger groups are rendered as `Core module · <name>` or `Module · <name>`.
 
-```python
-from drf_spectacular.utils import extend_schema, extend_schema_view
-
-@extend_schema_view(
-    get=extend_schema(tags=["UserInvite"], summary="List user invitations"),
-    post=extend_schema(tags=["UserInvite"], summary="Create a user invitation"),
-)
-class UserInviteListCreateView(...):
-    ...
-```
-
-Do not reuse `Tec-Tac Framework` for extension-owned endpoints. The framework tag is reserved for framework APIs such as module management, UI context, and extension RBAC.
+Module authors still provide operation summaries, request/response schemas and descriptions with `drf_spectacular`; omit generic `tags=` solely for grouping.
 
 
 ## 36. Graceful Django reload
