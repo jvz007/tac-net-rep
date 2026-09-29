@@ -33,6 +33,72 @@ class AuditWriteError(RuntimeError):
     """Tactical AuditLog persistence failed in strict mode."""
 
 
+class AuditActor:
+    """Core-owned non-human audit provenance for trusted backend work."""
+
+    __slots__ = ("kind", "module_id", "identity", "service", "device_id")
+
+    def __init__(self, *, kind: str, module_id: str, identity: str, service: str | None = None, device_id: str | None = None):
+        self.kind = kind
+        self.module_id = module_id
+        self.identity = identity
+        self.service = service
+        self.device_id = device_id
+
+
+def _actor_part(value: Any, label: str, *, maximum: int = 128) -> str:
+    value = str(value or "").strip()
+    if not value:
+        raise AuditContractError(f"{label} is required.")
+    if len(value.encode("utf-8")) > maximum:
+        raise AuditContractError(f"{label} exceeds {maximum} bytes.")
+    if any(ord(ch) < 32 for ch in value):
+        raise AuditContractError(f"{label} contains control characters.")
+    return value
+
+
+def service_audit_actor(*, module_id: str, service: str, identity: str | None = None) -> AuditActor:
+    """Create service/system provenance for scheduled or background module work."""
+    module = _resolve_module(module_id)
+    service_name = _actor_part(service, "service")
+    actor_identity = _actor_part(identity or f"{module['id']}.{service_name}", "identity", maximum=255)
+    return AuditActor(kind="service", module_id=module["id"], service=service_name, identity=actor_identity)
+
+
+def device_audit_actor(*, module_id: str, device_id: str, identity: str | None = None, service: str | None = None) -> AuditActor:
+    """Create device/probe provenance for agent or probe result callbacks."""
+    module = _resolve_module(module_id)
+    did = _actor_part(device_id, "device_id", maximum=255)
+    service_name = _actor_part(service, "service") if service not in (None, "") else None
+    actor_identity = _actor_part(identity or did, "identity", maximum=255)
+    return AuditActor(kind="device", module_id=module["id"], service=service_name, identity=actor_identity, device_id=did)
+
+
+def _actor_provenance(actor, module: dict) -> tuple[str, dict[str, Any]]:
+    if isinstance(actor, AuditActor):
+        if actor.module_id != module["id"]:
+            raise AuditContractError("non-human audit actor module_id must match the audit event module_id.")
+        prefix = "service" if actor.kind == "service" else "device"
+        username = f"{prefix}:{actor.identity}"[:255]
+        details = {
+            "actor_kind": actor.kind,
+            "actor_identity": actor.identity,
+            "actor_module_id": actor.module_id,
+            "actor_service": actor.service,
+            "actor_device_id": actor.device_id,
+        }
+        return username, {k: v for k, v in details.items() if v is not None}
+
+    if not getattr(actor, "is_authenticated", False):
+        raise AuditContractError("actor must be an authenticated Tactical user or a Core-owned audit actor.")
+    if not _actor_can_use_module(actor, module):
+        raise AuditContractError(f"actor is not permitted to use Tec-Tac module {module['id']!r}.")
+    username = str(getattr(actor, "username", "") or "").strip()
+    if not username:
+        raise AuditContractError("authenticated actor does not expose a username.")
+    return username, {"actor_kind": "human", "actor_identity": username}
+
+
 def _framework_version() -> str:
     try:
         return (Path(__file__).resolve().parents[2] / "VERSION").read_text(encoding="utf-8").strip() or "unknown"
@@ -200,6 +266,7 @@ def record(
     before: Any = None,
     after: Any = None,
     metadata: dict | None = None,
+    operation_context: dict | None = None,
     request=None,
     correlation_id: Any = None,
     strict: bool = False,
@@ -212,14 +279,7 @@ def record(
     explicitly decided audit persistence is transaction-critical.
     """
     module = _resolve_module(module_id)
-    if not getattr(actor, "is_authenticated", False):
-        raise AuditContractError("actor must be an authenticated Tactical user.")
-    if not _actor_can_use_module(actor, module):
-        raise AuditContractError(f"actor is not permitted to use Tec-Tac module {module_id!r}.")
-
-    username = str(getattr(actor, "username", "") or "").strip()
-    if not username:
-        raise AuditContractError("authenticated actor does not expose a username.")
+    username, actor_info = _actor_provenance(actor, module)
     normalized_action = _normalize_action(action)
     normalized_object_type = _normalize_object_type(object_type)
     oid = None if object_id is None else str(object_id)[:255]
@@ -227,7 +287,13 @@ def record(
         raise AuditContractError("message exceeds the audit size limit (4096 bytes).")
     before = _bounded_value(before, "before")
     after = _bounded_value(after, "after")
-    cid = _correlation_id(request, correlation_id)
+    if operation_context is None:
+        operation_context = {}
+    if not isinstance(operation_context, dict):
+        raise AuditContractError("operation_context must be an object when provided.")
+    op_context = _safe_metadata(operation_context)
+    op_correlation = op_context.get("correlation_id") if isinstance(op_context, dict) else None
+    cid = _correlation_id(request, correlation_id or op_correlation)
 
     debug_info = {
         "source": "tec-tac",
@@ -236,6 +302,8 @@ def record(
         "object_id": oid,
         "correlation_id": cid,
         "metadata": _safe_metadata(metadata),
+        "operation_context": op_context,
+        **actor_info,
     }
     # Keep null provenance keys out of Tactical output without losing stable fields.
     debug_info = {key: value for key, value in debug_info.items() if value is not None}
@@ -280,6 +348,12 @@ class AuditProvider:
 
     def record(self, *, actor, module_id: str, **event):
         return record(actor=actor, module_id=module_id, **event)
+
+    def service_actor(self, *, module_id: str, service: str, identity: str | None = None):
+        return service_audit_actor(module_id=module_id, service=service, identity=identity)
+
+    def device_actor(self, *, module_id: str, device_id: str, identity: str | None = None, service: str | None = None):
+        return device_audit_actor(module_id=module_id, device_id=device_id, identity=identity, service=service)
 
 
 _PROVIDER = AuditProvider()

@@ -179,3 +179,20 @@ The endpoint requires the normal authenticated Tec-Tac session guard. It derives
 - The UI may hide a module audit affordance when the user lacks a module grant, but Core remains authoritative: direct `POST /api/tfd/audit/record/` attempts return HTTP 403 for Core, permissionless/legacy modules, or actors without an effective module grant. Modules must treat that 403 as an authorization result, not as an audit-service failure.
 - Audit records describe an action; they do not authorize that action.
 - Never place secrets, passwords, API tokens, private keys, or full credential payloads in `before`, `after`, or `metadata`.
+
+
+## Non-human audit actors
+
+Scheduled jobs, background workers and device/probe callbacks must not create fake Tactical users. Core exposes two public constructors:
+
+```python
+from tec_tac.audit import record, service_audit_actor, device_audit_actor
+
+actor = service_audit_actor(module_id="networkprobe", service="scheduler", identity="networkprobe.scan")
+record(actor=actor, module_id="networkprobe", action="run", object_type="network_scan")
+
+probe = device_audit_actor(module_id="networkprobe", device_id="probe-42", identity="branch-probe-42", service="callback")
+record(actor=probe, module_id="networkprobe", action="sync", object_type="probe_result")
+```
+
+Core stores human/service/device provenance in Tactical AuditLog-compatible rows. Non-human actors are module-bound: their `module_id` must match the event's `module_id`. The readable Tactical `username` is prefixed `service:` or `device:`, while structured provenance is retained in `debug_info`. `build_operation_context(...)` may be passed directly as `operation_context=...`; Core retains source/run/requested-by fields and uses an included `correlation_id` when no explicit correlation ID is supplied.

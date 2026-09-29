@@ -6,7 +6,9 @@ from urllib.parse import urlsplit, urlunsplit
 import pyotp
 from pathlib import Path
 
+from django.conf import settings
 from django.db import transaction
+from django.utils.translation import get_language
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from accounts.models import Role
@@ -67,6 +69,20 @@ from .rbac import (
     set_extension_permission,
 )
 
+
+
+
+def _runtime_localization(request):
+    """Return stable locale/time-zone/date-format fields for module runtime context."""
+    try:
+        from tacticalrmm.utils import get_core_settings
+        core_settings = get_core_settings()
+    except Exception:
+        core_settings = None
+    locale = str(getattr(request, "LANGUAGE_CODE", "") or get_language() or getattr(settings, "LANGUAGE_CODE", "en-us") or "en-us")
+    time_zone = str(getattr(core_settings, "default_time_zone", "") or getattr(settings, "TIME_ZONE", "UTC") or "UTC")
+    date_time_format = str(getattr(core_settings, "date_format", "") or "MMM-DD-YYYY - HH:mm")
+    return {"locale": locale, "timeZone": time_zone, "dateTimeFormat": date_time_format}
 
 def _role_for_user(user):
     try:
@@ -365,6 +381,7 @@ class UiContextView(APIView):
                 "module_status": module_runtime_snapshot(plugins),
                 "notice_unread_count": notice_unread_count(request.user),
                 "preferences": preferences,
+                **_runtime_localization(request),
                 "tactical_ui": tactical_ui_context(request.user),
                 "preferences_initialized": preferences_initialized,
                 "preferences_updated_at": preferences_updated_at,
