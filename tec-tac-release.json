@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.171",
+  "version": "1.15.172",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -18,8 +18,8 @@
     },
     {
       "path": "FIXING.md",
-      "size": 2742,
-      "sha256": "1d9a4d0f92a2c81f5e2b0d0ffa5429864db64e2ae23820d898a3427e5cccbb2e"
+      "size": 2962,
+      "sha256": "0789bc99bd0778d125eb6e82de102f1f37983fdc656eb58be7242f0051f151ed"
     },
     {
       "path": "LICENSE",
@@ -32,14 +32,14 @@
       "sha256": "b16e78b37eecd6b4690403b4725a0b9977c7e8e9eca51b6cb4493166c952f243"
     },
     {
-      "path": "RELEASE_NOTES_1.15.171.md",
-      "size": 1682,
-      "sha256": "52c71d8c555c0a73ba0134818c78ca925d994173f85906568d57587c3bd37131"
+      "path": "RELEASE_NOTES_1.15.172.md",
+      "size": 1826,
+      "sha256": "b57d3483e84638ce0ba7c5e4c0a3b2eaefb22a7a9dc9e05088d212cfeae9f4da"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "341b1cb55ceef5bc74786019083ec1463fcd977e0da4da633508855daf85c82e"
+      "sha256": "35740b121ab172daf0b7dc41bf518b1d76f6133be4ae00c5bfeef85f9d4cae42"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -68,8 +68,8 @@
     },
     {
       "path": "docs/developer-contracts.md",
-      "size": 11062,
-      "sha256": "df765f0e64815f179621223f38e5f08206a09fbb35d817863674f7e2525a93f1"
+      "size": 11371,
+      "sha256": "fb038b778ba31e92a23d35dbdfb57b2ca8d08ec55f406e924bd0e782e98a20ad"
     },
     {
       "path": "docs/extension-reportset-tutorial.html",
@@ -605,6 +605,11 @@
       "path": "docs/releases/RELEASE_NOTES_1.15.170.md",
       "size": 1424,
       "sha256": "f0d920aa6c4020b2a5477efcd02acd60a7c18c7c4d5f9dd77b7741592fda4b26"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.171.md",
+      "size": 1682,
+      "sha256": "52c71d8c555c0a73ba0134818c78ca925d994173f85906568d57587c3bd37131"
     },
     {
       "path": "docs/releases/RELEASE_NOTES_1.15.19.md",
@@ -1333,8 +1338,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 52333,
-      "sha256": "c706d455ba9aa9d7096106f5b76dd921d4817c5ec9d417aabf6eb3caa15ea688"
+      "size": 52388,
+      "sha256": "51e828ba3faa0df5f73baeb5bb4bfca1911be444a1c8e985bb0e74d0a22495bb"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -1568,8 +1573,8 @@
     },
     {
       "path": "framwork/tec_tac/openapi.py",
-      "size": 4455,
-      "sha256": "7852ee89f28380efc63fb2918ac313c475c7e34e6124590fc6eea2d672fccc66"
+      "size": 7701,
+      "sha256": "4fd466bc9ebf5d91b1618eeb3d3b72cf519d9fc94c3576cd9af20f68d8bc7110"
     },
     {
       "path": "framwork/tec_tac/preference_views.py",
@@ -1904,7 +1909,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "84a5a98ddee9c4156a648bb8dfdd8deb6aa223ff7b9af58deaaa4d884fb7cea7"
+      "sha256": "3f3acda11efd6e5d1b8bc0adf7a037a1426cfcd7b25e0665d711b5760766224d"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2017,6 +2022,11 @@
       "sha256": "9c711fb590868b137bc1fc5b0262775e36a962f178fc36d4160684a19bea6d67"
     },
     {
+      "path": "tests/d2-d3-final-acceptance-1.15.172.py",
+      "size": 1789,
+      "sha256": "452f5ea332c990cd78e6338e08612544c39c011606f8d873e17c59f2024fb434"
+    },
+    {
       "path": "tests/d5-completion.py",
       "size": 4078,
       "sha256": "d3b15b9540478b4caedaf0f745135ed9fea7a69636dfe30b76dcd7264bfa540f"
@@ -2055,6 +2065,11 @@
       "path": "tests/extension-package-lifecycle.sh",
       "size": 1763,
       "sha256": "416f9346812940dbb5fda0570db972ea77f39f427269b874b2ea91f99bef4bf7"
+    },
+    {
+      "path": "tests/f11-openapi-ownership-1.15.172.py",
+      "size": 3896,
+      "sha256": "01c1974aad63a71828ea47c3ae48552c24685ceec54dc5b30713b5fb156267ad"
     },
     {
       "path": "tests/framework-foundation.sh",
@@ -2120,6 +2135,11 @@
       "path": "tests/l10-publication-atomicity-1.15.171.py",
       "size": 950,
       "sha256": "e74dce4d1f218378bcb321442d8f09843c43b6412af224ae4d87c15bdd6ba276"
+    },
+    {
+      "path": "tests/l10-publication-atomicity-1.15.172.py",
+      "size": 8313,
+      "sha256": "345344904e80ddd35db262752b40807edd361668be4d3766e5b5a2c2db01c40d"
     },
     {
       "path": "tests/layout-foundation.sh",
@@ -2428,8 +2448,8 @@
     },
     {
       "path": "tests/review-hygiene-foundation.sh",
-      "size": 2333,
-      "sha256": "b05739718c2f7c5ba370937415f011625e8946a5144f7affa1db45215876b47b"
+      "size": 2578,
+      "sha256": "50d8e68674002420cab241fe7f0d4df8c3d239dfa03b093bcdab7516f50812c9"
     },
     {
       "path": "tests/review-regressions-1.15.50.py",
@@ -2820,6 +2840,11 @@
       "path": "tests/tracker-final-review-1.15.164.py",
       "size": 15396,
       "sha256": "0eaff5f60f59d6f1c15cbc900788f6a886b6c122e3e814a3adf12981b2d46418"
+    },
+    {
+      "path": "tests/tracker-http-feature-boundary-1.15.172.py",
+      "size": 9047,
+      "sha256": "f75713cf94936fe46ea19c7a4cd8a6859d5bdd90cd5b8447381dc1dcae392b3d"
     },
     {
       "path": "tests/tracker-open-closure-1.15.158.py",

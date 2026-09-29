@@ -1,4 +1,6 @@
-# Fixing / review notes — Core 1.15.171
+# Fixing / review notes — Core 1.15.172
+
+Tracker done-when closure: real L10 transport failure regression, callback-owned F11 Swagger grouping for path/module-ID mismatches, actual DRF boundary coverage for F1/F2/F5-F7, and a portable D2/D3 acceptance runner.
 
 
 Tracker acceptance closure: fixes the F4 browser-context propagation gap, makes F11 module ownership registry-backed with a real Framework fallback, and adds final behavioral closure tests for F1-F11 plus D2/D3/L10 evidence. Regressions: `tests/tracker-final-closure-1.15.171.py`, `tests/l10-publication-atomicity-1.15.171.py`.

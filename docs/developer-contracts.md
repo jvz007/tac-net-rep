@@ -127,7 +127,7 @@ The page provides:
 
 ## Swagger / OpenAPI grouping
 
-Core owns Swagger grouping for the Tec-Tac HTTP surface. Module authors do not need to repeat generic `tags=` annotations merely to make their endpoints discoverable.
+Core owns Swagger grouping for the Tec-Tac HTTP surface. Module authors do not need to repeat generic `tags=` annotations merely to make their endpoints discoverable. Endpoint ownership is derived from the installed extension Django app that owns the drf-spectacular callback, so a module may use an API path segment that differs from its stable module ID (for example `serverhealth` owning `/api/tfd/server-health/`). Unknown Tec-Tac paths remain in the Framework catch-all.
 
 The generated schema groups routes as follows:
 

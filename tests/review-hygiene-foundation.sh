@@ -13,6 +13,10 @@ python3 "${ROOT}/tests/scheduler-native-type-compat-1.15.164-1.py"
 python3 "${ROOT}/tests/tracker-closure-1.15.165.py"
 python3 "${ROOT}/tests/scheduler-run-now-scope-1.15.165-1.py"
 python3 "${ROOT}/tests/my-account-features-1.15.167.py"
+python3 "${ROOT}/tests/tracker-http-feature-boundary-1.15.172.py"
+python3 "${ROOT}/tests/f11-openapi-ownership-1.15.172.py"
+python3 "${ROOT}/tests/l10-publication-atomicity-1.15.172.py"
+python3 "${ROOT}/tests/d2-d3-final-acceptance-1.15.172.py"
 
 
 # D2/D3 recovery continuity must be ordinary-CI portable; run it explicitly as
