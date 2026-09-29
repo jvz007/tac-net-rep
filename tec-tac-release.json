@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.184",
+  "version": "1.15.185",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -32,14 +32,14 @@
       "sha256": "b16e78b37eecd6b4690403b4725a0b9977c7e8e9eca51b6cb4493166c952f243"
     },
     {
-      "path": "RELEASE_NOTES_1.15.184.md",
-      "size": 659,
-      "sha256": "dce6f889a00753779f3ab01b81b405ef949e3ba07a82d72cebca9764fe06fbe8"
+      "path": "RELEASE_NOTES_1.15.185.md",
+      "size": 971,
+      "sha256": "d086ca2854b53258987d374d2dc09a3135764cc6131f2844d7094eed13f682ed"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "28cd17b4ff6c3bb3733af17bf8db13f77b99c20567641e451d7ba2bbcc06d4f1"
+      "sha256": "7eb13509226491ee19c82dcbf5c01278ea910c7a6e4f9b4d62495583f6fed9de"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -672,6 +672,11 @@
       "sha256": "813904b60f2e9cc5f12b1fc78faa6444b9a0f76c6e07f00f624a6522672dc2b3"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.15.184.md",
+      "size": 659,
+      "sha256": "dce6f889a00753779f3ab01b81b405ef949e3ba07a82d72cebca9764fe06fbe8"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.15.19.md",
       "size": 1248,
       "sha256": "b9934bcfd38415b74e6005a74d9d6d384513f01b414bed4c30fda3dc31ada503"
@@ -1083,8 +1088,8 @@
     },
     {
       "path": "docs/session-security.md",
-      "size": 15443,
-      "sha256": "90fc9e419a48a8f3301720f992276aaf32dd6f304e9599e3de8197fb24bfef70"
+      "size": 16027,
+      "sha256": "914e9c34fbe819253f6af73dcba73a13714115968270fc5b03be417c4e876faf"
     },
     {
       "path": "docs/system-update-signed-releases.md",
@@ -1974,7 +1979,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "af43ef02bc5ecbc8227262dd2876f2821dae79509609fbbd72828f39b45fba81"
+      "sha256": "8229b41b70f845e3e2e5837f24acca028838a54feaa8e00b84a149091285c769"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2165,6 +2170,11 @@
       "path": "tests/f8-sso-contract-1.15.180.py",
       "size": 565,
       "sha256": "54af312f82df49fed4b14c6287d1a833ce0240fd051153c4037b53d866df68ab"
+    },
+    {
+      "path": "tests/f8-sso-session-pipeline-1.15.185.py",
+      "size": 8944,
+      "sha256": "db28ee9e169faa0f859be6a1d0b27a2989d4f345b2307cb185332d91e18a6c2f"
     },
     {
       "path": "tests/f9-f10-browser-contract-1.15.175.py",
@@ -2583,8 +2593,8 @@
     },
     {
       "path": "tests/review-hygiene-foundation.sh",
-      "size": 3020,
-      "sha256": "19a76f10df52e4e29b18fa9bc4d7f134378f5b890d02f848b5caae7da7459272"
+      "size": 2751,
+      "sha256": "2938fd925fc82db5b073fabdc67f45f5027a57a7360c2dd5dbe073eda06d8065"
     },
     {
       "path": "tests/review-regressions-1.15.50.py",

@@ -327,4 +327,7 @@ was never populated are lazily linked by reproducing the legacy bearer HMAC only
 after the current S6 credential binding has proved that the bearer hashes to the
 authenticated Knox digest. Arbitrary or conflicting Authorization headers are
 therefore not accepted by the compatibility path.
+## SSO completion boundary
+
+SSO authentication remains owned by Tactical/allauth and the external identity provider. After the Core UI exchanges Tactical's pending SSO session for a Knox token, it must cross `GET /api/tfd/ui/context/`. That endpoint is protected by `SessionAuthenticated`, so SSO does not bypass Tec-Tac session security: a trust row is created/validated and a new session records the normal `session_created` audit event. SSO users are exempt only from Tec-Tac's local-TOTP enrollment gate because their MFA lifecycle is delegated to the external identity provider.
 
