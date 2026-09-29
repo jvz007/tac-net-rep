@@ -116,14 +116,21 @@ def scheduler_scope_snapshot(*, user) -> dict[str, object]:
         int(v)
         for v in _scope_queryset(Site.objects.all(), user=user, trusted=False).values_list("pk", flat=True)
     )
-    endpoint_ids = set()
     # Compatibility boundary: scheduler targets saved before Core 1.15.134 may
-    # contain Tactical Agent database PKs. Keep those aliases visible for
-    # authorization/history reads while all new/edited schedules canonicalize
-    # to agent_id.
-    for pk, agent_id in _scope_queryset(Agent.objects.all(), user=user, trusted=False).values_list("pk", "agent_id"):
-        endpoint_ids.add(str(agent_id))
-        endpoint_ids.add(str(pk))
+    # contain Tactical Agent database PKs.  Preserve an alias only when that
+    # token resolves to exactly one visible Agent.  A numeric agent_id can
+    # otherwise collide with another Agent's PK; treating that token as
+    # authorized would make history visibility disagree with the save/edit
+    # resolver, which correctly fails closed on ambiguity.
+    endpoint_rows = list(
+        _scope_queryset(Agent.objects.all(), user=user, trusted=False).values_list("pk", "agent_id")
+    )
+    token_rows = {}
+    for pk, agent_id in endpoint_rows:
+        row = (int(pk), str(agent_id))
+        for token in {str(pk), str(agent_id)}:
+            token_rows.setdefault(token, set()).add(row)
+    endpoint_ids = {token for token, rows in token_rows.items() if len(rows) == 1}
     return {
         "unrestricted": False,
         "client_ids": client_ids,

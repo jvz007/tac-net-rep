@@ -170,7 +170,9 @@ def migration_namespace(path: Path, names: set[str]):
     tree = ast.parse(path.read_text(encoding="utf-8"))
     nodes = []
     for node in tree.body:
-        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id in names for t in node.targets):
+        if isinstance(node, ast.Import):
+            nodes.append(node)
+        elif isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id in names for t in node.targets):
             nodes.append(node)
         elif isinstance(node, ast.FunctionDef) and node.name in names:
             nodes.append(node)
@@ -179,8 +181,8 @@ def migration_namespace(path: Path, names: set[str]):
     return ns
 
 ns15 = migration_namespace(MIG15, {
-    "_NATIVE", "_ALIASES", "_values", "_ids", "_extract_native", "_legacy_normalize",
-    "_canonical_endpoint_ids", "_canonicalize_endpoint_identity",
+    "_NATIVE", "_ALIASES", "_RESERVED_FILTER_SCOPE_KEYS", "_scope_alias_token", "_reserved_filter_value",
+    "_values", "_ids", "_extract_native", "_legacy_normalize", "_canonical_endpoint_ids", "_canonicalize_endpoint_identity",
 })
 rows = [(42, "agent-42"), (77, "agent-77"), (88, "77")]
 static = ns15["_legacy_normalize"]({"type": "endpoint", "ids": ["42"]})

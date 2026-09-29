@@ -13,6 +13,44 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('server_backup_helper_d2d3', ROOT / 'scripts' / 'server-backup-helper.py')
 h = importlib.util.module_from_spec(spec); spec.loader.exec_module(h)
 
+# This regression must be ordinary-CI portable. Production requires root-owned
+# recovery material; when the test itself is non-root, stub only that ownership
+# boundary while retaining the real type/symlink/mode checks and cryptography.
+if os.geteuid() != 0:
+    import stat
+    def _portable_secure_dir(path, *, private=False):
+        info = pathlib.Path(path).lstat()
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            raise RuntimeError(f"recovery trust directory is not a real directory: {path}")
+        forbidden = 0o077 if private else 0o022
+        if info.st_mode & forbidden:
+            raise RuntimeError(f"recovery trust directory permissions are unsafe: {path}")
+        return info
+    def _portable_secure_file(path, *, private=False):
+        info = pathlib.Path(path).lstat()
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+            raise RuntimeError(f"recovery trust file is not a regular file: {path}")
+        forbidden = 0o077 if private else 0o022
+        if info.st_mode & forbidden:
+            raise RuntimeError(f"recovery trust file permissions are unsafe: {path}")
+        return info
+    h._secure_root_directory = _portable_secure_dir
+    h._secure_regular_root_file = _portable_secure_file
+    h.os.chown = lambda *_a, **_k: None
+    h.os.fchown = lambda *_a, **_k: None
+    def _portable_load_registered_destination(config, destination_id):
+        path = h._registered_destination_path(config, destination_id)
+        if not path.is_file() or path.is_symlink():
+            raise RuntimeError("backup destination is not registered; validate it before trusting a recovery signer")
+        if stat.S_IMODE(path.stat().st_mode) != 0o600:
+            raise RuntimeError("registered backup destination permissions are unsafe")
+        item = json.loads(path.read_text(encoding="utf-8"))
+        item = h.validate_destination(item, config)
+        if item["id"] != str(destination_id):
+            raise RuntimeError("registered backup destination id mismatch")
+        return item
+    h.load_registered_destination = _portable_load_registered_destination
+
 
 def make_identity(base, key_id='source-a', trust=True):
     signing=base/'sign'; trust_root=base/'recovery-trust'; signing.mkdir(); trust_root.mkdir()

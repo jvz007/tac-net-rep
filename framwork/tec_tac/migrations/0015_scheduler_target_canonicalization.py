@@ -1,4 +1,5 @@
 from django.db import migrations, models
+import re
 
 
 _NATIVE = {
@@ -13,6 +14,57 @@ _ALIASES = {
     "endpoint": ("agent_ids", "agent_id", "endpoint_ids", "endpoint_id", "agents", "agent", "endpoints", "endpoint"),
 }
 
+
+
+_RESERVED_FILTER_SCOPE_KEYS = {
+    "id", "ids",
+    *(_ALIASES["client"]), *(_ALIASES["site"]), *(_ALIASES["endpoint"]),
+}
+
+def _scope_alias_token(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    def normalize(token):
+        token = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", token)
+        token = re.sub(r"[^a-zA-Z0-9]+", "_", token).strip("_").lower()
+        return re.sub(r"_+", "_", token)
+    whole = normalize(raw)
+    if whole in _RESERVED_FILTER_SCOPE_KEYS:
+        return whole
+    raw_parts = [part for part in re.split(r"(?:__|[./:\[\]]+)", raw) if part]
+    parts = [normalize(part) for part in raw_parts]
+    lookup_suffixes = {"exact","iexact","contains","icontains","in","gt","gte","lt","lte","startswith","istartswith","endswith","iendswith","range","date","year","iso_year","month","day","week","week_day","iso_week_day","quarter","time","hour","minute","second","isnull","regex","iregex"}
+    while parts and parts[-1] in lookup_suffixes:
+        parts.pop()
+    specific = _RESERVED_FILTER_SCOPE_KEYS - {"id","ids","client","clients","site","sites","agent","agents","endpoint","endpoints"}
+    for token in parts:
+        if token in specific:
+            return token
+    scope_nouns = {"client","clients","site","sites","agent","agents","endpoint","endpoints"}
+    for left, right in zip(parts, parts[1:]):
+        if left in scope_nouns and right in {"id","ids","pk"}:
+            suffix = "ids" if right == "ids" else "id"
+            alias = f"{left.rstrip('s')}_{suffix}"
+            if alias in specific:
+                return alias
+    return None
+
+def _reserved_filter_value(value):
+    if isinstance(value, str):
+        return _scope_alias_token(value)
+    if isinstance(value, list):
+        for item in value:
+            found = _reserved_filter_value(item)
+            if found:
+                return found
+        return None
+    if isinstance(value, dict):
+        for item in value.values():
+            found = _reserved_filter_value(item)
+            if found:
+                return found
+    return None
 
 def _values(value):
     if isinstance(value, list):
@@ -70,6 +122,10 @@ def _legacy_normalize(targets):
             legacy = [key for key in _ALIASES[kind] if key in targets]
             if legacy and _extract_native(targets, kind) != ids:
                 raise ValueError("conflicting canonical ids and legacy target aliases")
+            # Keep the submitted native target type. Existing modules may
+            # declare plural/agent aliases in target_types and consume that
+            # exact vocabulary at dispatch time. Singularisation is an
+            # internal Core concern only.
             return {"type": target_type, "ids": ids}
         return {"type": target_type, "ids": _extract_native(targets, kind)}
     if target_type != "dynamic":
@@ -120,6 +176,12 @@ def _legacy_normalize(targets):
     filt = targets.get("filter", {})
     if not isinstance(filt, dict):
         raise ValueError("dynamic filter is not an object")
+    reserved = next((str(key).strip().lower() for key in filt if str(key).strip().lower() in _RESERVED_FILTER_SCOPE_KEYS), None)
+    if reserved:
+        raise ValueError(f"dynamic filter contains Tactical scope key {reserved!r}")
+    reserved_value = _reserved_filter_value(filt)
+    if reserved_value:
+        raise ValueError(f"dynamic filter uses Tactical scope alias {reserved_value!r} as a value")
     result = {"type": "dynamic", "scope": {"type": scope_type, "ids": ids}}
     if filt:
         result["filter"] = filt

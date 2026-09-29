@@ -8,6 +8,17 @@ python3 "${ROOT}/tests/tracker-test-doc-closure-1.15.129.py"
 python3 "${ROOT}/tests/tracker-closure-1.15.146.py"
 python3 "${ROOT}/tests/infrastructure-closure-1.15.148.py"
 python3 "${ROOT}/tests/tracker-behavior-closure-1.15.161.py"
+python3 "${ROOT}/tests/tracker-final-review-1.15.164.py"
+python3 "${ROOT}/tests/scheduler-native-type-compat-1.15.164-1.py"
+
+
+# D2/D3 recovery continuity must be ordinary-CI portable; run it explicitly as
+# an unprivileged account when the test host permits that.
+if [[ "$(id -u)" -eq 0 ]] && command -v runuser >/dev/null 2>&1 && id nobody >/dev/null 2>&1; then
+  runuser -u nobody -- python3 "${ROOT}/tests/server-backup-d2-d3.py"
+else
+  python3 "${ROOT}/tests/server-backup-d2-d3.py"
+fi
 
 # Portable privileged-boundary coverage delegated to portable-privileged-foundation.sh:
 # tests/privileged-helper-environment.py

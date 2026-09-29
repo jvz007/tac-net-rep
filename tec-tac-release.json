@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.163",
+  "version": "1.15.164",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -18,8 +18,8 @@
     },
     {
       "path": "FIXING.md",
-      "size": 694,
-      "sha256": "8c0a0016828b88e3aefad30cf3c7f60ec97c2f76360d3407a94538d38411c7c2"
+      "size": 1031,
+      "sha256": "e0eabf92606043453dbd7a0c3ef146eaa77e14933a1e7dcebef9e7d7a2ea07c4"
     },
     {
       "path": "LICENSE",
@@ -32,14 +32,14 @@
       "sha256": "b16e78b37eecd6b4690403b4725a0b9977c7e8e9eca51b6cb4493166c952f243"
     },
     {
-      "path": "RELEASE_NOTES_1.15.163.md",
-      "size": 1025,
-      "sha256": "87c85c82608eb0a922178df28a1bc7c6eda3e4d1b99bada89c9e9daf4b46b7cc"
+      "path": "RELEASE_NOTES_1.15.164.md",
+      "size": 840,
+      "sha256": "9820e433ecdc771b829c0f815f637dbeb62b4022db0ada6c542a91c3232fa031"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "212f44f0fa2c9cf83801d22e9d81a7b6b2e1fd7235fd40b9e52593b34b85de9e"
+      "sha256": "bf7ae833b49f537b20571c20505a1fed8fa00b7ccc6b6f292a4b375d017a772d"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -555,6 +555,16 @@
       "path": "docs/releases/RELEASE_NOTES_1.15.162.md",
       "size": 621,
       "sha256": "579a9df38d6912cc75e3d520d0689fa3373a6d747a53a78a916be2d86d6a2f4e"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.163.md",
+      "size": 1025,
+      "sha256": "87c85c82608eb0a922178df28a1bc7c6eda3e4d1b99bada89c9e9daf4b46b7cc"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.164.md",
+      "size": 1546,
+      "sha256": "d4555b6f835d0949e064089d49dd46e111ae3dc754346457e0fe50d22fee97a5"
     },
     {
       "path": "docs/releases/RELEASE_NOTES_1.15.19.md",
@@ -1408,8 +1418,8 @@
     },
     {
       "path": "framwork/tec_tac/migrations/0015_scheduler_target_canonicalization.py",
-      "size": 8546,
-      "sha256": "19bad5b88444e18cf4bd84ba60741c8da11296d9fab502ffc75061993e813915"
+      "size": 11306,
+      "sha256": "493f17acf783740353e0eb0e945ef007595446ccc8dfb1b4ddb85e2cc5ac056d"
     },
     {
       "path": "framwork/tec_tac/migrations/0016_session_history_retention.py",
@@ -1430,6 +1440,11 @@
       "path": "framwork/tec_tac/migrations/0019_scheduler_endpoint_identity.py",
       "size": 3231,
       "sha256": "063fb6c3eba458836ec1c6865ec0dd6821527b89bbc389a858a454433fd5f347"
+    },
+    {
+      "path": "framwork/tec_tac/migrations/0020_scheduler_target_parity_repair.py",
+      "size": 776,
+      "sha256": "9f12d9a12a36debd0fe5fbe0e42698fe58e4e5092952df9fb38cd7012832bff0"
     },
     {
       "path": "framwork/tec_tac/migrations/__init__.py",
@@ -1538,8 +1553,8 @@
     },
     {
       "path": "framwork/tec_tac/resources_adapter.py",
-      "size": 19678,
-      "sha256": "fafcce3c649f431a2610c557d2cfecb3aa5963bde69bbbb7b0ca9687b8808f0a"
+      "size": 20066,
+      "sha256": "e38b57b7fd433269fd98bcbbc31b6033e39e481176ba710b7d23581eab7aebaf"
     },
     {
       "path": "framwork/tec_tac/safe_files.py",
@@ -1553,8 +1568,8 @@
     },
     {
       "path": "framwork/tec_tac/scheduler_targets.py",
-      "size": 13502,
-      "sha256": "9904c6896832089095f235324f0359e14be1438bd83b4f41eaf75879131a9d29"
+      "size": 13722,
+      "sha256": "71154f54a311caf5160f623f09db22f1fcd8805685806e377e17714d4a2a5d99"
     },
     {
       "path": "framwork/tec_tac/scheduler_timing.py",
@@ -1798,8 +1813,8 @@
     },
     {
       "path": "scripts/server-backup-helper.py",
-      "size": 230342,
-      "sha256": "6f460407fb029da57ec2dfdb17025994d8f53f8864971b89853212c0e77878dd"
+      "size": 233041,
+      "sha256": "36dd1fe3b082c65621be54a12c4549ef1b7dc2655b24c61d1473cba2c8285e7e"
     },
     {
       "path": "scripts/server-maintenance-helper.py",
@@ -1834,7 +1849,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "0659d5ebbf8b610ead3abd562fed7cbeab3f7f66515d04504344d3662835e38d"
+      "sha256": "eb8a22869c1015fa9b45cd707dc166a95941616ffa5791e314e7d3a9ed8bce8f"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2343,8 +2358,8 @@
     },
     {
       "path": "tests/review-hygiene-foundation.sh",
-      "size": 1065,
-      "sha256": "9963caa3a108b684b292ed8f1c072cf793f542eb549d9102f63a949b0edcb71a"
+      "size": 1555,
+      "sha256": "0346d638e88770ed87441188ac8ae2cfbf04b55e64756e8d35a7bf52d48d72d7"
     },
     {
       "path": "tests/review-regressions-1.15.50.py",
@@ -2413,8 +2428,8 @@
     },
     {
       "path": "tests/scheduler-closure-1.15.149.py",
-      "size": 7843,
-      "sha256": "7331e0c9da27840a6d189a4a95a07604a69114afc400baa847d49f545511cafc"
+      "size": 7996,
+      "sha256": "1e0db71e235906f76a89be4bf33d5bd1341df8ff0f9be0b87819705b4e511c75"
     },
     {
       "path": "tests/scheduler-durability-review.sh",
@@ -2463,13 +2478,18 @@
     },
     {
       "path": "tests/scheduler-legacy-endpoint-pk-compat.py",
-      "size": 4206,
-      "sha256": "6c574c45de863472d4ce293040bca4b591b82a3fe745adc4d05aeafa01444a8c"
+      "size": 5045,
+      "sha256": "c8a5b979b30d46bc5a311d8b2ab08c158dcadf8b0a4a938a933161bde86a8a02"
     },
     {
       "path": "tests/scheduler-legacy-target-regression.py",
-      "size": 4269,
-      "sha256": "ca852837dc57c4095f60c060aa1e99b5229aeab83424d759495c4a7339e22b64"
+      "size": 4414,
+      "sha256": "e6880e09c798fc1f2c952941f6ca03052cded4aff735aa9c431f189e8bdf483f"
+    },
+    {
+      "path": "tests/scheduler-native-type-compat-1.15.164-1.py",
+      "size": 6028,
+      "sha256": "59884915611f8d32f358bd6cc11e7a6cf8ecfab91c7c15cb38ac5259e36c9dea"
     },
     {
       "path": "tests/scheduler-permitted-action-ids.py",
@@ -2513,8 +2533,8 @@
     },
     {
       "path": "tests/server-backup-d2-d3.py",
-      "size": 11484,
-      "sha256": "41dfe2441377e3b5214bff255ba5203589d48fd8e2815381488e14c3f44c14f7"
+      "size": 13634,
+      "sha256": "40e0a5ade813626766b574c5f169271703ea42146a2a994191014437190dc451"
     },
     {
       "path": "tests/server-backup-d2-version-transition.py",
@@ -2693,13 +2713,18 @@
     },
     {
       "path": "tests/tracker-behavior-closure-1.15.161.py",
-      "size": 17565,
-      "sha256": "8b4375f35c1f7a3b58fb27b5076ca73b3655bf56e0adaf8d89fafe75e3bfac8f"
+      "size": 17709,
+      "sha256": "af905a821809f46633bae791262998fb22dd88f012daab072b92bad5d744da25"
     },
     {
       "path": "tests/tracker-closure-1.15.146.py",
       "size": 2361,
       "sha256": "fc5a093760cb565b4a96b7cf9b2deb828946610d92adc6e3778e43d4e6db30d9"
+    },
+    {
+      "path": "tests/tracker-final-review-1.15.164.py",
+      "size": 15373,
+      "sha256": "ade68a1800871122095c5e9ad6626b0534ca0abc47c23ff28d90b915ba1c73f1"
     },
     {
       "path": "tests/tracker-open-closure-1.15.158.py",

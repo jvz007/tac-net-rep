@@ -27,7 +27,9 @@ class QS:
     def values_list(self, *fields, **kwargs):
         if fields == ("pk", "agent_id"):
             return list(self.rows)
-        raise AssertionError(fields)
+        if fields == ("pk",) and kwargs.get("flat"):
+            return [row[0] for row in self.rows]
+        raise AssertionError((fields, kwargs))
 
 class AgentManager:
     def __init__(self, rows):
@@ -89,10 +91,27 @@ vns = {
 exec(compile(ast.Module(body=[req_node], type_ignores=[]), str(VIEWS), "exec"), vns)
 vns["_require_target_scope"](object(), {"type": "endpoints", "ids": ["42"]}, payload=False)
 
-# History visibility must include both the legacy PK and canonical agent_id.
-adapter_source = ADAPTER.read_text(encoding="utf-8")
-assert 'endpoint_ids.add(str(agent_id))' in adapter_source
-assert 'endpoint_ids.add(str(pk))' in adapter_source
+# History visibility must include both the legacy PK and canonical agent_id
+# when that token is unambiguous. Exercise the real snapshot helper rather than
+# grepping implementation shape.
+snapshot_node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "scheduler_scope_snapshot")
+class Relation:
+    def values_list(self, *fields, **kwargs): return []
+class Role:
+    can_view_clients = Relation()
+    can_view_sites = Relation()
+class SiteManager:
+    def all(self): return QS([])
+class Site: objects = SiteManager()
+snap_ns = {
+    "_role_for_user": lambda user: Role(),
+    "_role_scope_unrestricted": lambda **kwargs: False,
+    "_models": lambda: (None, Site, Agent),
+    "_scope_queryset": lambda qs, **kwargs: qs,
+}
+exec(compile(ast.Module(body=[snapshot_node], type_ignores=[]), str(ADAPTER), "exec"), snap_ns)
+snapshot = snap_ns["scheduler_scope_snapshot"](user=object())
+assert {"42", "agent-42"}.issubset(snapshot["endpoint_ids"])
 
 # PATCH/create still canonicalize persistence to agent_id after the legacy row
 # passes get_object authorization.

@@ -44,11 +44,13 @@ assert 'error_type="InvalidTargetShape"' in scheduler
 import ast
 migration_path = ROOT / "framwork" / "tec_tac" / "migrations" / "0015_scheduler_target_canonicalization.py"
 tree = ast.parse(migration_path.read_text())
-keep_names = {"_NATIVE", "_ALIASES"}
-keep_funcs = {"_values", "_ids", "_extract_native", "_legacy_normalize", "_endpoint_rows", "_canonical_endpoint_ids", "_canonicalize_endpoint_identity", "canonicalize_existing_targets"}
+keep_names = {"_NATIVE", "_ALIASES", "_RESERVED_FILTER_SCOPE_KEYS"}
+keep_funcs = {"_scope_alias_token", "_reserved_filter_value", "_values", "_ids", "_extract_native", "_legacy_normalize", "_endpoint_rows", "_canonical_endpoint_ids", "_canonicalize_endpoint_identity", "canonicalize_existing_targets"}
 nodes = []
 for node in tree.body:
-    if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id in keep_names for t in node.targets):
+    if isinstance(node, ast.Import):
+        nodes.append(node)
+    elif isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id in keep_names for t in node.targets):
         nodes.append(node)
     elif isinstance(node, ast.FunctionDef) and node.name in keep_funcs:
         nodes.append(node)

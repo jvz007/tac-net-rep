@@ -266,14 +266,16 @@ with tempfile.TemporaryDirectory() as td:
 mig_path = ROOT / "framwork/tec_tac/migrations/0015_scheduler_target_canonicalization.py"
 mig_tree = ast.parse(mig_path.read_text(encoding="utf-8"))
 keep_names = {
-    "_values", "_ids", "_extract_native", "_legacy_normalize", "_endpoint_rows",
+    "_scope_alias_token", "_reserved_filter_value", "_values", "_ids", "_extract_native", "_legacy_normalize", "_endpoint_rows",
     "_canonical_endpoint_ids", "_canonicalize_endpoint_identity", "canonicalize_existing_targets",
 }
 body = []
 for node in mig_tree.body:
-    if isinstance(node, ast.Assign):
+    if isinstance(node, ast.Import):
+        body.append(node)
+    elif isinstance(node, ast.Assign):
         names = {target.id for target in node.targets if isinstance(target, ast.Name)}
-        if names & {"_NATIVE", "_ALIASES"}:
+        if names & {"_NATIVE", "_ALIASES", "_RESERVED_FILTER_SCOPE_KEYS"}:
             body.append(node)
     elif isinstance(node, ast.FunctionDef) and node.name in keep_names:
         body.append(node)

@@ -287,6 +287,9 @@ def normalize_scheduler_targets(targets):
         _reject_unknown_keys(targets, {"type", "ids"}, "Tactical-native targets")
         if "ids" not in targets:
             raise SchedulerTargetShapeError("Tactical-native scheduler targets require an ids array.")
+        # Preserve the module-declared native target vocabulary for persistence
+        # and handler dispatch. Core derives the singular Tactical kind only
+        # inside scope/authorization helpers via _NATIVE_KIND.
         return {"type": target_type, "ids": _canonical_ids(kind, targets.get("ids"))}
 
     if target_type != "dynamic":

@@ -78,6 +78,7 @@ TRUST_LEVELS = ("unsigned", "signed_development", "signed_production", "secure_s
 TRUST_LEVEL_RANK = {name: idx for idx, name in enumerate(TRUST_LEVELS)}
 DEFAULT_CONFIG = Path("/opt/tec-tac/etc/tec-tac.conf")
 CONFIG_POINTER = Path("/etc/tec-tac/config-path")
+DEFAULT_LOCAL_RECOVERY_ROOT = Path("/rmmbackups")
 
 
 def _installed_config_path(pointer=CONFIG_POINTER, default=DEFAULT_CONFIG):
@@ -1130,24 +1131,31 @@ def store_local(destination, archive: Path, metadata):
     target_sidecar = sidecar_path(target)
     archive_tmp = target.with_name(target.name + ".partial")
     sidecar_tmp = target_sidecar.with_name(target_sidecar.name + ".partial")
-    same_target = archive.resolve() == target.resolve()
+    if archive.resolve() == target.resolve():
+        raise RuntimeError("local recovery publication source may not already be the final archive")
+    if os.path.lexists(target) or os.path.lexists(target_sidecar):
+        raise RuntimeError("local recovery archive names are immutable; final archive or sidecar already exists")
+    sidecar_published = False
     try:
-        if not same_target:
-            shutil.copy2(archive, archive_tmp)
-            verify_path = archive_tmp
-        else:
-            verify_path = archive
+        shutil.copy2(archive, archive_tmp)
         atomic_json(sidecar_tmp, metadata, mode=0o640)
-        if verify_path.stat().st_size != metadata["size_bytes"] or sha256_file(verify_path) != metadata["sha256"]:
+        if archive_tmp.stat().st_size != metadata["size_bytes"] or sha256_file(archive_tmp) != metadata["sha256"]:
             raise RuntimeError("local backup copy verification failed")
-        # Publish the sidecar first. A crash/failure may leave an orphan sidecar,
-        # but never a newly published recovery archive without its metadata.
+        # Publish the sidecar first. If final archive publication fails, remove
+        # that newly published sidecar so no mismatched final pair remains.
         os.replace(sidecar_tmp, target_sidecar)
-        if not same_target:
+        sidecar_published = True
+        try:
             os.replace(archive_tmp, target)
+        except Exception:
+            target_sidecar.unlink(missing_ok=True)
+            sidecar_published = False
+            raise
     except Exception:
         archive_tmp.unlink(missing_ok=True)
         sidecar_tmp.unlink(missing_ok=True)
+        if sidecar_published and not os.path.lexists(target):
+            target_sidecar.unlink(missing_ok=True)
         raise
     return {
         "id": destination["id"], "type": "local", "name": destination_name(destination), "ok": True,
@@ -2036,8 +2044,12 @@ def create_recovery_bundle(config, temp: Path, *, backup_class, tactical_archive
         encoding="utf-8",
     )
     os.chmod(signature_path, 0o600)
-    bundle_name=datetime.now(timezone.utc).strftime("tec-tac-backup-%Y_%m_%d__%H_%M_%S.tgz")
-    output=Path("/rmmbackups")/bundle_name
+    bundle_name=datetime.now(timezone.utc).strftime("tec-tac-backup-%Y_%m_%d__%H_%M_%S_%f.tgz")
+    # Build recovery bundles only inside Core's private staging directory.
+    # Final/retained copies are published later by store_local(), which makes
+    # the sidecar visible before the archive. Building directly in /rmmbackups
+    # allowed the archive to be visible before its metadata existed.
+    output=temp/bundle_name
     output.parent.mkdir(parents=True,exist_ok=True)
     partial=output.with_name(output.name+".partial")
     partial.unlink(missing_ok=True)
@@ -2125,8 +2137,21 @@ def operation_create_backup(config, job, log):
             finally:
                 shutil.rmtree(validation_stage,ignore_errors=True)
             results=[]; failed=[]
+            fallback_destination = {
+                "id": "local-staging", "type": "local", "name": "Local recovery storage",
+                "path": str(DEFAULT_LOCAL_RECOVERY_ROOT),
+            }
+
+            def retain_local_fallback(reason):
+                result = store_local(fallback_destination, bundle, metadata)
+                final_path = Path(fallback_destination["path"]) / bundle.name
+                log.write(f"[TEC-TAC-BACKUP] retained recovery bundle locally after {reason}: {final_path}\n")
+                return str(final_path), result
+
+            local_path = None
             if not destinations:
-                set_job_stage(config, job["id"], "destination.upload", current=7, total=CREATE_BACKUP_PROGRESS_TOTAL)
+                set_job_stage(config, job["id"], "destination.upload", label="Publishing local recovery bundle", current=7, total=CREATE_BACKUP_PROGRESS_TOTAL)
+                local_path, _local_result = retain_local_fallback("no external destination was requested")
                 set_job_stage(config, job["id"], "destination.verify", current=8, total=CREATE_BACKUP_PROGRESS_TOTAL)
             for destination in destinations:
                 set_job_stage(config, job["id"], "destination.upload", label=f"Uploading recovery bundle to {destination_name(destination)}", current=7, total=CREATE_BACKUP_PROGRESS_TOTAL)
@@ -2142,7 +2167,7 @@ def operation_create_backup(config, job, log):
             overall={
                 "ok":not failed,
                 "archive_name":bundle.name,
-                "local_path":str(bundle),
+                "local_path":local_path,
                 "size_bytes":metadata["size_bytes"],
                 "sha256":metadata["sha256"],
                 "backup_class":backup_class,
@@ -2152,27 +2177,30 @@ def operation_create_backup(config, job, log):
                 "destinations":results,
             }
             if failed:
-                overall["local_staging_removed"] = False
+                # Preserve a verified fallback copy, but publish it through the
+                # same sidecar-first local path rather than exposing private
+                # staging as a recovery destination.
+                if local_path is None:
+                    try:
+                        local_path, _fallback_result = retain_local_fallback("destination verification failure")
+                        overall["local_path"] = local_path
+                        overall["local_staging_removed"] = False
+                    except Exception as fallback_exc:
+                        overall["local_staging_removed"] = True
+                        overall["local_retention_error"] = str(fallback_exc)
                 raise OperationFailed("One or more requested backup destinations failed verification.",result=overall)
-            # /rmmbackups is a staging source for remote destinations, not an
-            # implicit second retention target. Remove the local bundle after
-            # every requested destination has verified, unless the requested
-            # local destination is exactly that file.
-            same_local_target = any(
-                d.get("type") == "local" and (Path(d["path"]) / bundle.name).resolve() == bundle.resolve()
-                for d in destinations
-            )
             strongly_verified = destination_results_strongly_verified(results) if destinations else False
-            if destinations and not same_local_target and strongly_verified:
-                bundle.unlink(missing_ok=True); sidecar_path(bundle).unlink(missing_ok=True)
+            if destinations and strongly_verified:
                 overall["local_path"] = None
                 overall["local_staging_removed"] = True
-                log.write("[TEC-TAC-BACKUP] removed strongly verified local staging bundle after destination upload\n")
+                log.write("[TEC-TAC-BACKUP] private staging bundle will be removed after strongly verified destination upload\n")
+            elif destinations and not strongly_verified:
+                local_path, _fallback_result = retain_local_fallback("a destination copy lacked strong SHA-256 verification")
+                overall["local_path"] = local_path
+                overall["local_staging_removed"] = False
+                overall["local_staging_retained_reason"] = "one or more destination copies lack strong SHA-256 verification"
             else:
                 overall["local_staging_removed"] = False
-                if destinations and not same_local_target and not strongly_verified:
-                    overall["local_staging_retained_reason"] = "one or more destination copies lack strong SHA-256 verification"
-                    log.write("[TEC-TAC-BACKUP] retained local staging bundle because a destination copy lacks strong hash verification\n")
             return overall
     finally:
         if tactical_archive is not None and tactical_archive.exists():
@@ -2999,6 +3027,28 @@ def _preflight_host_snapshot_bytes(config, mode):
     return _snapshot_source_bytes(targets) if targets else 0
 
 
+def _preflight_database_snapshot_bytes(mode):
+    """Estimate PostgreSQL rollback dumps for modes that snapshot Tactical DBs.
+
+    pg_dump -Fc is normally smaller than pg_database_size(), so using the live
+    database size is intentionally conservative and prevents the rollback
+    snapshot from being omitted from the free-space decision.
+    """
+    if mode not in {"full", "tactical"}:
+        return 0
+    total = 0
+    for name in ("tacticalrmm", "meshcentral"):
+        raw = _postgres_query(
+            "SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_database WHERE datname='" + name + "') "
+            "THEN pg_database_size('" + name + "') ELSE 0 END"
+        )
+        try:
+            total += max(0, int(str(raw or "0").strip()))
+        except ValueError as exc:
+            raise RuntimeError(f"unable to estimate pre-restore database snapshot size for {name}") from exc
+    return total
+
+
 def _canonical_snapshot_targets(paths):
     """Return fixed absolute rollback targets with nested duplicates removed."""
     normalized = []
@@ -3393,11 +3443,12 @@ def validate_target_preflight(config, report, mode, staged_bytes, *, mutation_lo
         # components + one additional copy/safety margin, plus the host paths
         # that will be copied into the pre-restore rollback snapshot.
         host_snapshot_bytes = _preflight_host_snapshot_bytes(config, mode)
-        required = max(2 * 1024**3, int(staged_bytes) * 3 + host_snapshot_bytes)
+        database_snapshot_bytes = _preflight_database_snapshot_bytes(mode)
+        required = max(2 * 1024**3, int(staged_bytes) * 3 + host_snapshot_bytes + database_snapshot_bytes)
         _vr_check(
             report, "target", "target.disk", "Staging free space",
             "passed" if usage.free >= required else "failed",
-            f"free={usage.free} required_estimate={required} host_snapshot_estimate={host_snapshot_bytes}",
+            f"free={usage.free} required_estimate={required} host_snapshot_estimate={host_snapshot_bytes} database_snapshot_estimate={database_snapshot_bytes}",
         )
     except Exception as exc:
         _vr_check(report, "target", "target.disk", "Staging free space", "failed", str(exc))
