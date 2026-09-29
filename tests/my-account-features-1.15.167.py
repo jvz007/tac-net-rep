@@ -108,6 +108,20 @@ try: mod.change_own_password(user,current_password='bad',new_password='Another-4
 except mod.AccountSelfServiceError: pass
 else: raise AssertionError('bad current password accepted')
 
+# F1 done-when: Django/Tactical weak-password validation must surface as a
+# bounded self-service error and must not change the password or revoke sessions.
+user.password='Strong-Next-42!'
+revocations_before=len(revocations)
+try:
+    mod.change_own_password(user,current_password='Strong-Next-42!',new_password='weak',current_session_id='current')
+except mod.AccountSelfServiceError as exc:
+    assert str(exc) == 'too weak'
+else:
+    raise AssertionError('weak password accepted')
+assert user.password == 'Strong-Next-42!'
+assert validation_calls[-1][0] == 'weak'
+assert len(revocations) == revocations_before
+
 # F2: current password + current TOTP proof, then clear TOTP, backup codes and all sessions.
 user.password='current-pass'; secret=pyotp.random_base32(); user.totp_key=secret
 code=pyotp.TOTP(secret).now()

@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.176",
+  "version": "1.15.177",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -32,14 +32,14 @@
       "sha256": "b16e78b37eecd6b4690403b4725a0b9977c7e8e9eca51b6cb4493166c952f243"
     },
     {
-      "path": "RELEASE_NOTES_1.15.176.md",
-      "size": 1382,
-      "sha256": "f4f1d2d32bd08a1e8e46715c8bd419924432a1cd245f8daa39cc05ee55d9aaad"
+      "path": "RELEASE_NOTES_1.15.177.md",
+      "size": 1250,
+      "sha256": "bbe363e549aa38f8878e520e8a67f48d70671c3a289dc201e2817adaa0e8179e"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "c876153e6466fc1e56789d39e9039398770274cbf7ffa351224f5b7f73747069"
+      "sha256": "13d8d91787504dcee78b349d733e28c96e2f85de6a8d73b2c2c4c74845a0672f"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -630,6 +630,11 @@
       "path": "docs/releases/RELEASE_NOTES_1.15.175.md",
       "size": 965,
       "sha256": "a66a14f5118b300bb0f3b7c9206613f8e195b3af282006ac1f3fadee9a4dba91"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.176.md",
+      "size": 1382,
+      "sha256": "f4f1d2d32bd08a1e8e46715c8bd419924432a1cd245f8daa39cc05ee55d9aaad"
     },
     {
       "path": "docs/releases/RELEASE_NOTES_1.15.19.md",
@@ -1934,7 +1939,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "c910fde2996f3145eeccf1a290607762c21979de155cb97f8d11d75100f2d7a1"
+      "sha256": "c771751ae45fb12c743f7057d610e62318b853514579d21c81a191f6449787af"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2313,8 +2318,8 @@
     },
     {
       "path": "tests/my-account-features-1.15.167.py",
-      "size": 6016,
-      "sha256": "7bd1470805b6b2c0936537fe7776caee09c71a6f033d89aaa8f460727321fa98"
+      "size": 6628,
+      "sha256": "6aace99db120d87504994db00ed26f4fdd5a5596caed72c17077ebadba5a79cd"
     },
     {
       "path": "tests/network-reporting-api.sh",
@@ -2445,6 +2450,11 @@
       "path": "tests/resource-contract-paging.py",
       "size": 2286,
       "sha256": "f2ad26f66fca5ec492dfb4412a4cad4263ccedd251c0d3ed0a225374054a0447"
+    },
+    {
+      "path": "tests/resource-directory-custom-fields-postgres.py",
+      "size": 8986,
+      "sha256": "b34f5b9fa16cc722a86e0c23e4d67886d419d29772943c8d793eecfb012900fe"
     },
     {
       "path": "tests/resource-directory-delete-postgres.py",
