@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.175",
+  "version": "1.15.176",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -32,14 +32,14 @@
       "sha256": "b16e78b37eecd6b4690403b4725a0b9977c7e8e9eca51b6cb4493166c952f243"
     },
     {
-      "path": "RELEASE_NOTES_1.15.175.md",
-      "size": 965,
-      "sha256": "a66a14f5118b300bb0f3b7c9206613f8e195b3af282006ac1f3fadee9a4dba91"
+      "path": "RELEASE_NOTES_1.15.176.md",
+      "size": 1382,
+      "sha256": "f4f1d2d32bd08a1e8e46715c8bd419924432a1cd245f8daa39cc05ee55d9aaad"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "803adbba3e2f32dde6f6d60097fc54947f87fcb364816998412c9962d7196cba"
+      "sha256": "c876153e6466fc1e56789d39e9039398770274cbf7ffa351224f5b7f73747069"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -625,6 +625,11 @@
       "path": "docs/releases/RELEASE_NOTES_1.15.174.md",
       "size": 3701,
       "sha256": "6d7f07b9a10df939867d401b009bd8d25e6dc90fda71b4ec2677a8cb8e12f27a"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.175.md",
+      "size": 965,
+      "sha256": "a66a14f5118b300bb0f3b7c9206613f8e195b3af282006ac1f3fadee9a4dba91"
     },
     {
       "path": "docs/releases/RELEASE_NOTES_1.15.19.md",
@@ -1929,7 +1934,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "34ef94cd21096f45b2835173d1f4f8fa427ebdc23dae9efe5ec93e5c4ff977a2"
+      "sha256": "c910fde2996f3145eeccf1a290607762c21979de155cb97f8d11d75100f2d7a1"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2440,6 +2445,11 @@
       "path": "tests/resource-contract-paging.py",
       "size": 2286,
       "sha256": "f2ad26f66fca5ec492dfb4412a4cad4263ccedd251c0d3ed0a225374054a0447"
+    },
+    {
+      "path": "tests/resource-directory-delete-postgres.py",
+      "size": 11063,
+      "sha256": "0324328723f4960044ed22141fb4e81af4081e88927d7d510cd9105c3a00a996"
     },
     {
       "path": "tests/resource-directory-foundation.py",
