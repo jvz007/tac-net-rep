@@ -563,6 +563,11 @@ BROWSER_CONTRACTS = (
         "phase": "authenticated",
         "service": "contextActions",
         "operations": ["register", "list", "execute", "clear"],
+        "placements": ["client.context-menu", "site.context-menu", "endpoint.context-menu", "alert.context-menu", "patch.context-menu"],
+        "context": {
+            "client.context-menu": ["resource_type", "resource", "client", "selection"],
+            "site.context-menu": ["resource_type", "resource", "site", "client", "selection"],
+        },
         "audience": "provider/consumer browser",
         "docs": "tec-tac-ui/docs/context-actions.md",
         "purpose": "Contribute and consume resource actions through stable shared placements without importing provider UI internals.",

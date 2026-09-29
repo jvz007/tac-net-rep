@@ -20,6 +20,7 @@ python3 "${ROOT}/tests/d2-d3-final-acceptance-1.15.172.py"
 python3 "${ROOT}/tests/d2-d3-restore-orchestration-1.15.173.py"
 python3 "${ROOT}/tests/l10-publication-final-1.15.173.py"
 python3 "${ROOT}/tests/tracker-acceptance-1.15.173.py"
+python3 "${ROOT}/tests/f9-f10-browser-contract-1.15.175.py"
 
 
 # D2/D3 recovery continuity must be ordinary-CI portable; run it explicitly as

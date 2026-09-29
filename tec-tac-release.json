@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.174",
+  "version": "1.15.175",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -32,14 +32,14 @@
       "sha256": "b16e78b37eecd6b4690403b4725a0b9977c7e8e9eca51b6cb4493166c952f243"
     },
     {
-      "path": "RELEASE_NOTES_1.15.174.md",
-      "size": 3701,
-      "sha256": "6d7f07b9a10df939867d401b009bd8d25e6dc90fda71b4ec2677a8cb8e12f27a"
+      "path": "RELEASE_NOTES_1.15.175.md",
+      "size": 965,
+      "sha256": "a66a14f5118b300bb0f3b7c9206613f8e195b3af282006ac1f3fadee9a4dba91"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "3e025a035b6af42cc4dd70b150e9c27e300a39d93d5272e0a27661b2f205278b"
+      "sha256": "803adbba3e2f32dde6f6d60097fc54947f87fcb364816998412c9962d7196cba"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -620,6 +620,11 @@
       "path": "docs/releases/RELEASE_NOTES_1.15.173.md",
       "size": 1547,
       "sha256": "13bbef29d119212e60499bf51c7f8d90c52796654a9520526b196356ca0f7741"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.174.md",
+      "size": 3701,
+      "sha256": "6d7f07b9a10df939867d401b009bd8d25e6dc90fda71b4ec2677a8cb8e12f27a"
     },
     {
       "path": "docs/releases/RELEASE_NOTES_1.15.19.md",
@@ -1353,8 +1358,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 52388,
-      "sha256": "51e828ba3faa0df5f73baeb5bb4bfca1911be444a1c8e985bb0e74d0a22495bb"
+      "size": 52741,
+      "sha256": "845c1eef0b5366ce71941c7782b639acfb763c97d29c83bfbc0c274238d0f3e7"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -1924,7 +1929,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "4661d9c5076e00d834f801db53d6c135130961c8220bb9d1b1e98c0a691cf46d"
+      "sha256": "34ef94cd21096f45b2835173d1f4f8fa427ebdc23dae9efe5ec93e5c4ff977a2"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2090,6 +2095,11 @@
       "path": "tests/f11-openapi-ownership-1.15.172.py",
       "size": 3896,
       "sha256": "01c1974aad63a71828ea47c3ae48552c24685ceec54dc5b30713b5fb156267ad"
+    },
+    {
+      "path": "tests/f9-f10-browser-contract-1.15.175.py",
+      "size": 1008,
+      "sha256": "0cc4f639e7b35610b2959260133f67af928673bd747ee7ca3e86bc593802f6d6"
     },
     {
       "path": "tests/framework-foundation.sh",
@@ -2473,8 +2483,8 @@
     },
     {
       "path": "tests/review-hygiene-foundation.sh",
-      "size": 2755,
-      "sha256": "816752b53382a6f25d1838ab0cec902460acc3d48396d71056f2e91dcdaec9c0"
+      "size": 2815,
+      "sha256": "578fbe8ab46c933e6eaf319002ff0f5d9712035158a78602061276e44282d6ef"
     },
     {
       "path": "tests/review-regressions-1.15.50.py",
