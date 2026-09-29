@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.170",
+  "version": "1.15.171",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -18,8 +18,8 @@
     },
     {
       "path": "FIXING.md",
-      "size": 2413,
-      "sha256": "14cabce4a20f83380ccbd07b3ce2cc2c08507cff241fcbfaa65ced43ba86e8ef"
+      "size": 2742,
+      "sha256": "1d9a4d0f92a2c81f5e2b0d0ffa5429864db64e2ae23820d898a3427e5cccbb2e"
     },
     {
       "path": "LICENSE",
@@ -32,14 +32,14 @@
       "sha256": "b16e78b37eecd6b4690403b4725a0b9977c7e8e9eca51b6cb4493166c952f243"
     },
     {
-      "path": "RELEASE_NOTES_1.15.170.md",
-      "size": 1424,
-      "sha256": "f0d920aa6c4020b2a5477efcd02acd60a7c18c7c4d5f9dd77b7741592fda4b26"
+      "path": "RELEASE_NOTES_1.15.171.md",
+      "size": 1682,
+      "sha256": "52c71d8c555c0a73ba0134818c78ca925d994173f85906568d57587c3bd37131"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "cefebe8e22574a2bb7d3d2c4cae659b2e1a766a6f2e1cfc7d37a2c60822ba81e"
+      "sha256": "341b1cb55ceef5bc74786019083ec1463fcd977e0da4da633508855daf85c82e"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -68,8 +68,8 @@
     },
     {
       "path": "docs/developer-contracts.md",
-      "size": 10259,
-      "sha256": "5a79da9a6af4accaf59a76ebfaa22a3d2c39941832277f3e7a36466fa9704517"
+      "size": 11062,
+      "sha256": "df765f0e64815f179621223f38e5f08206a09fbb35d817863674f7e2525a93f1"
     },
     {
       "path": "docs/extension-reportset-tutorial.html",
@@ -600,6 +600,11 @@
       "path": "docs/releases/RELEASE_NOTES_1.15.169.md",
       "size": 1268,
       "sha256": "4ea576ba7cf3c75bcc99e019f3de0b957e5f859d6059569d73de8e3d858a1476"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.170.md",
+      "size": 1424,
+      "sha256": "f0d920aa6c4020b2a5477efcd02acd60a7c18c7c4d5f9dd77b7741592fda4b26"
     },
     {
       "path": "docs/releases/RELEASE_NOTES_1.15.19.md",
@@ -1328,8 +1333,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 51940,
-      "sha256": "c7f3db559cb8039e5dfd96357ce44182e32159b1d043ec8546bcb138905476f3"
+      "size": 52333,
+      "sha256": "c706d455ba9aa9d7096106f5b76dd921d4817c5ec9d417aabf6eb3caa15ea688"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -1563,8 +1568,8 @@
     },
     {
       "path": "framwork/tec_tac/openapi.py",
-      "size": 3486,
-      "sha256": "46d692231b4a4785b61967278d5843e9ccad8877af5d38bda148c14ad64103da"
+      "size": 4455,
+      "sha256": "7852ee89f28380efc63fb2918ac313c475c7e34e6124590fc6eea2d672fccc66"
     },
     {
       "path": "framwork/tec_tac/preference_views.py",
@@ -1899,7 +1904,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "8aec51f4645293c4daff5949e681837009bee8d77c292e935ee9ab1600de1c5e"
+      "sha256": "84a5a98ddee9c4156a648bb8dfdd8deb6aa223ff7b9af58deaaa4d884fb7cea7"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2110,6 +2115,11 @@
       "path": "tests/installer-resource-contract-version.sh",
       "size": 157,
       "sha256": "e4b95204e6e7992a8f259fc292c063d0a7b0c5788e8dc75579d8ab1d1fb89106"
+    },
+    {
+      "path": "tests/l10-publication-atomicity-1.15.171.py",
+      "size": 950,
+      "sha256": "e74dce4d1f218378bcb321442d8f09843c43b6412af224ae4d87c15bdd6ba276"
     },
     {
       "path": "tests/layout-foundation.sh",
@@ -2418,8 +2428,8 @@
     },
     {
       "path": "tests/review-hygiene-foundation.sh",
-      "size": 2093,
-      "sha256": "130174551a1d233c9507e7f3d0c439af14af4fe139e0b478c1f52cdf7424fe63"
+      "size": 2333,
+      "sha256": "b05739718c2f7c5ba370937415f011625e8946a5144f7affa1db45215876b47b"
     },
     {
       "path": "tests/review-regressions-1.15.50.py",
@@ -2798,8 +2808,13 @@
     },
     {
       "path": "tests/tracker-feature-closure-1.15.169.py",
-      "size": 2863,
-      "sha256": "277e16bdd75094bca269c9dda3ded35f11f90f6848b375aae47e3c4634b34583"
+      "size": 3121,
+      "sha256": "3d1012496599bf2e218e7cd6271a2670e1f4d6a250cee07ccece4b3ea8daada4"
+    },
+    {
+      "path": "tests/tracker-final-closure-1.15.171.py",
+      "size": 3634,
+      "sha256": "7248d88df08c3d04110df4b8ae900a8f2f2a23a50f8feba3965d3c84e3b82a5a"
     },
     {
       "path": "tests/tracker-final-review-1.15.164.py",

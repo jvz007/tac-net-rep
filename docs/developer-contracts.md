@@ -124,6 +124,20 @@ The page provides:
 - **Export Text**;
 - live refresh.
 
+
+## Swagger / OpenAPI grouping
+
+Core owns Swagger grouping for the Tec-Tac HTTP surface. Module authors do not need to repeat generic `tags=` annotations merely to make their endpoints discoverable.
+
+The generated schema groups routes as follows:
+
+- known Core areas below `/api/tfd/` use their named `Tec-Tac · <area>` group;
+- routes whose first path segment matches a registered extension ID use `Tec-Tac Module · <module-id>`;
+- any other `/api/tfd/` route uses the `Tec-Tac · Framework` catch-all so a future Core route is never mislabeled as a module;
+- Tactical endpoints outside `/api/tfd/` are left unchanged.
+
+Modules should still provide useful summaries, request/response schemas and operation documentation where appropriate. Group ownership is the part supplied automatically by Core.
+
 ## Recommended coding-agent workflow
 
 Before developing a module:

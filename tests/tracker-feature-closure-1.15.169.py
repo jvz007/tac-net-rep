@@ -27,19 +27,22 @@ must('"tactical_ui": tactical_ui_context(request.user)' in views, 'UiContextView
 
 # F11: every /api/tfd endpoint receives a deterministic Swagger group, including modules.
 api=load('openapi169','framwork/tec_tac/openapi.py')
+api.registered_module_ids=lambda: frozenset({'alerts'})
 schema={'tags':[{'name':'Tactical'}],'paths':{
  '/api/tfd/scheduler/schedules/':{'get':{'tags':['old']},'post':{}},
  '/api/tfd/resources/clients/':{'get':{}},
  '/api/tfd/alerts/events/':{'get':{'tags':['Alerts']}},
+ '/api/tfd/future-core/health/':{'get':{'tags':['api']}},
  '/api/v3/agents/':{'get':{'tags':['Agents']}},
 }}
 out=api.postprocess_tec_tac_groups(schema)
 must(out['paths']['/api/tfd/scheduler/schedules/']['get']['tags']==['Tec-Tac · Scheduler'],'scheduler group missing')
 must(out['paths']['/api/tfd/resources/clients/']['get']['tags']==['Tec-Tac · Clients, Sites & Agents'],'resource group missing')
 must(out['paths']['/api/tfd/alerts/events/']['get']['tags']==['Tec-Tac Module · alerts'],'module group missing')
+must(out['paths']['/api/tfd/future-core/health/']['get']['tags']==['Tec-Tac · Framework'],'framework fallback missing')
 must(out['paths']['/api/v3/agents/']['get']['tags']==['Agents'],'Tactical endpoint tag was changed')
 names={x['name'] for x in out['tags']}
-must({'Tactical','Tec-Tac · Scheduler','Tec-Tac · Clients, Sites & Agents','Tec-Tac Module · alerts'} <= names,'top-level Swagger tag catalogue incomplete')
+must({'Tactical','Tec-Tac · Scheduler','Tec-Tac · Clients, Sites & Agents','Tec-Tac · Framework','Tec-Tac Module · alerts'} <= names,'top-level Swagger tag catalogue incomplete')
 settings=SimpleNamespace(SPECTACULAR_SETTINGS={'TITLE':'Tactical RMM API'})
 api.install_openapi_grouping(settings)
 hooks=settings.SPECTACULAR_SETTINGS['POSTPROCESSING_HOOKS']

@@ -1,5 +1,7 @@
-# Fixing / review notes — Core 1.15.170
+# Fixing / review notes — Core 1.15.171
 
+
+Tracker acceptance closure: fixes the F4 browser-context propagation gap, makes F11 module ownership registry-backed with a real Framework fallback, and adds final behavioral closure tests for F1-F11 plus D2/D3/L10 evidence. Regressions: `tests/tracker-final-closure-1.15.171.py`, `tests/l10-publication-atomicity-1.15.171.py`.
 
 Module-development readiness: Public Contracts now exports a static browser/UI runtime catalog alongside backend contracts, so coding agents receive one canonical handoff for both integration layers. Regression: `tests/browser-contract-catalog-1.15.170.py`.
 

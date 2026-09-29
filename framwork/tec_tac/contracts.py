@@ -651,11 +651,11 @@ BROWSER_CONTRACTS = (
     {
         "id": "ui.authenticated.runtime-context",
         "phase": "authenticated",
-        "service": "state.context",
-        "operations": ["read"],
+        "service": "context / state.context",
+        "operations": ["read", "tactical_ui.agent_dblclick_action", "tactical_ui.url_action_id", "tactical_ui.can_run_url_actions"],
         "audience": "module/browser",
         "docs": "tec-tac-ui/docs/module-runtime-api.md",
-        "purpose": "Read Core-provided authenticated context including permissions, preferences and Tactical UI preferences; treat it as read-only state.",
+        "purpose": "Read the Core-provided authenticated register(context).context object (also available as state.context), including permissions, preferences and Tactical UI preferences; treat it as read-only state.",
     },
     {
         "id": "ui.public.sso-providers",
@@ -680,6 +680,7 @@ BROWSER_CONTRACTS = (
 RULES = (
     "Use Python tec_tac.* contracts inside the Tec-Tac/Tactical backend; use HTTP only at browser/external process boundaries.",
     "UI modules must use the documented browser contracts passed to register(context) or registerPublic(context); do not import Core UI internals or read Tactical authentication storage.",
+    "Swagger grouping is Core-owned: registered extension routes under /api/tfd/<module-id>/ are grouped automatically; unknown Tec-Tac prefixes fall back to the Framework group rather than being guessed as modules.",
     "Do not import another module's private models, helpers, services, filesystem layout or database tables.",
     "Feature modules must consume Tactical clients/sites/agents through tec_tac.resources; direct Tactical resource-model imports are a Core-only compatibility boundary.",
     "Resolve cross-module business operations through the capability registry and re-check runtime availability at execution time.",

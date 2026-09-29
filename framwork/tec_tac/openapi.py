@@ -22,20 +22,42 @@ DEFAULT_ENUM_HOOK = "drf_spectacular.hooks.postprocess_schema_enums"
 GROUP_HOOK = "tec_tac.openapi.postprocess_tec_tac_groups"
 
 
-def schema_group_for_path(path: str) -> str | None:
+def registered_module_ids() -> frozenset[str]:
+    """Return installed extension IDs for OpenAPI ownership classification.
+
+    Schema grouping is documentation-only and must never become a Tactical
+    startup dependency, so registry failures degrade to an empty module set.
+    """
+    try:
+        from .registry import get_plugins
+
+        return frozenset(
+            str(plugin.plugin_id)
+            for plugin in get_plugins()
+            if getattr(plugin, "plugin_type", None) == "extension"
+            and getattr(plugin, "plugin_id", None)
+        )
+    except Exception:
+        return frozenset()
+
+
+def schema_group_for_path(path: str, *, module_ids=None) -> str | None:
     text = str(path or "")
     marker = "/api/tfd/"
     if not text.startswith(marker):
         return None
     tail = text[len(marker):].lstrip("/")
     first = tail.split("/", 1)[0].strip() if tail else ""
-    if not first:
-        return "Tec-Tac · Framework"
     if first in CORE_GROUPS:
         return CORE_GROUPS[first]
-    # Every extension is mounted below /api/tfd/<module-id>/. Group unknown
-    # prefixes as module-owned instead of leaving them in Tactical's generic tags.
-    return f"Tec-Tac Module · {first}"
+    known_modules = frozenset(module_ids if module_ids is not None else registered_module_ids())
+    if first and first in known_modules:
+        return f"Tec-Tac Module · {first}"
+    # A future Core route may introduce a new first path segment before this
+    # grouping table is updated. Unknown prefixes are therefore Core-owned by
+    # default; only IDs proven by the live extension registry are labelled as
+    # modules. This is the real catch-all required by the Swagger contract.
+    return "Tec-Tac · Framework"
 
 
 def postprocess_tec_tac_groups(result, generator=None, request=None, public=False):
@@ -52,8 +74,9 @@ def postprocess_tec_tac_groups(result, generator=None, request=None, public=Fals
         return result
 
     groups = set()
+    module_ids = registered_module_ids()
     for path, path_item in paths.items():
-        group = schema_group_for_path(path)
+        group = schema_group_for_path(path, module_ids=module_ids)
         if not group or not isinstance(path_item, dict):
             continue
         groups.add(group)
