@@ -1,7 +1,7 @@
 # Core Resource Directory
 
 Contract ID: `core.resources`  
-Contract version: `1.2.0`  
+Contract version: `1.3.0`  
 Python namespace: `tec_tac.resources`
 
 ## Purpose
@@ -24,7 +24,7 @@ tec_tac.resources           <- stable public contract
         +-- Alerts / Automation / other modules
 ```
 
-Contract 1.2 keeps scoped reads for all three resource types and the existing client/site create-update boundary. It additionally guarantees that a new client is created atomically with a `Default Site`, restricted creators are granted scope to the client they create, clients retain at least one site, trusted global service contexts are audited, and list pagination bounds are published. Agent mutation and resource deletion are not part of this version.
+Contract 1.3 keeps the 1.2 scoped read/create/update boundary and adds audited client/site deletion with atomic agent relocation plus client/site custom-field value editing. Agent mutation remains outside this contract. A new client is still created atomically with a `Default Site`, restricted creators are granted scope to the client they create, and clients retain at least one site.
 
 ## Stable resource records
 
@@ -121,8 +121,12 @@ There is no implicit service/global access when the user is absent. Trusted serv
 
 - `create_client(name=..., context=...)`
 - `update_client(client_id, name=..., context=...)`
+- `delete_client(client_id, move_to_site_id=None, context=...)`
 - `create_site(client_id=..., name=..., context=...)`
 - `update_site(site_id, name=None, client_id=None, context=...)`
+- `delete_site(site_id, move_to_site_id=None, context=...)`
+- `list_custom_fields(resource_type, resource_id, context=...)`
+- `update_custom_fields(resource_type, resource_id, values=[...], context=...)`
 
 The write operations return the same stable client/site record shapes as the read contract. Core never returns Tactical ORM instances.
 
@@ -161,8 +165,8 @@ Client/site mutation requires both Tactical authority and Tec-Tac Core RBAC:
 
 | Operation | Tactical permission | Tec-Tac RBAC |
 | --- | --- | --- |
-| `create_client`, `update_client` | `can_manage_clients` | `core.resources.clients.manage` |
-| `create_site`, `update_site` | `can_manage_sites` | `core.resources.sites.manage` |
+| `create_client`, `update_client`, `delete_client`, client custom fields | `can_manage_clients` | `core.resources.clients.manage` |
+| `create_site`, `update_site`, `delete_site`, site custom fields | `can_manage_sites` | `core.resources.sites.manage` |
 
 Effective superusers retain the normal override behavior.
 
@@ -186,9 +190,11 @@ The permissions are enforced in the Python contract itself and therefore cannot 
 Authenticated browser/external callers can use:
 
 - `GET/POST /api/tfd/resources/clients/`
-- `GET/PATCH /api/tfd/resources/clients/<id>/`
+- `GET/PATCH/DELETE /api/tfd/resources/clients/<id>/`
+- `GET/PATCH /api/tfd/resources/clients/<id>/custom-fields/`
 - `GET/POST /api/tfd/resources/sites/`
-- `GET/PATCH /api/tfd/resources/sites/<id>/`
+- `GET/PATCH/DELETE /api/tfd/resources/sites/<id>/`
+- `GET/PATCH /api/tfd/resources/sites/<id>/custom-fields/`
 - `GET /api/tfd/resources/agents/`
 - `GET /api/tfd/resources/agents/<agent_id>/`
 
@@ -207,6 +213,17 @@ Create payloads:
 Update payloads accept only writable fields. Unknown fields are rejected. Agent HTTP resources remain read-only.
 
 Client and site create/update operations are transaction-audited through Core using the authenticated Tactical actor. The audit write is strict: if Tactical audit persistence fails, the resource mutation is rolled back rather than succeeding without an investigation trail. Update events include before/after resource snapshots when the prior row is visible through the caller's Tactical read scope.
+
+
+### Deletion semantics
+
+- Site deletion moves agents only to another site under the same client. The last site in a client cannot be deleted.
+- Client deletion moves all agents to a writable site under a different client when agents remain.
+- Relocation and deletion run inside one transaction and the strict Core audit write is part of that transaction.
+
+### Custom-field values
+
+Core exposes non-hidden Tactical custom-field definitions and values as `{field_id,name,type,options,required,value}`. Supported types are `text`, `number`, `single`, `multiple`, `checkbox`, and `datetime`. PATCH accepts an array of `{field_id,value}` entries, validates required/options/type rules, then writes Tactical's native custom-field value rows. Hidden definitions are not exposed or writable through this surface.
 
 ## Errors
 

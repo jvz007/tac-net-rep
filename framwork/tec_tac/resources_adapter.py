@@ -515,3 +515,245 @@ def update_site_row(*, user, site_id: int, name: str | None = None, client_id: i
     except ValidationError as exc:
         raise TacticalResourceValidationError("Site failed Tactical validation.") from exc
     return site_row({"pk": obj.pk, "name": obj.name, "client_id": obj.client_id})
+
+
+def delete_site_row(*, user, site_id: int, move_to_site_id: int | None = None) -> dict[str, Any] | None:
+    """Delete one Tactical site after atomically relocating its agents.
+
+    Site deletion is intentionally limited to a destination under the same
+    client so the operation cannot smuggle a cross-client agent move through a
+    site-management permission. Cross-client relocation belongs to client
+    deletion, where the caller also holds client-management authority.
+    """
+    Client, Site, Agent = _models()
+    try:
+        with transaction.atomic():
+            if not site_write_in_scope(user=user, site_id=site_id):
+                return None
+            source = Site.objects.select_for_update().filter(pk=site_id).first()
+            if source is None:
+                return None
+            Client.objects.select_for_update().filter(pk=source.client_id).first()
+            site_count = Site.objects.filter(client_id=source.client_id).count()
+            if site_count <= 1:
+                raise TacticalResourceValidationError("A client must retain at least one site.")
+
+            agent_count = Agent.objects.filter(site_id=source.pk).count()
+            destination = None
+            if agent_count:
+                if move_to_site_id is None:
+                    raise TacticalResourceValidationError("A destination site is required while agents remain on the site.")
+                if int(move_to_site_id) == int(source.pk):
+                    raise TacticalResourceValidationError("The destination site must differ from the site being deleted.")
+                if not site_write_in_scope(user=user, site_id=int(move_to_site_id)):
+                    raise TacticalResourceValidationError("Destination site is outside the caller's writable Tactical scope.")
+                destination = Site.objects.select_for_update().filter(pk=int(move_to_site_id)).first()
+                if destination is None:
+                    raise TacticalResourceValidationError("Destination site was not found.")
+                if int(destination.client_id) != int(source.client_id):
+                    raise TacticalResourceValidationError("Deleting a site may move agents only to another site in the same client.")
+                moved_agents = Agent.objects.filter(site_id=source.pk).update(site_id=destination.pk)
+            else:
+                moved_agents = 0
+                if move_to_site_id is not None:
+                    if int(move_to_site_id) == int(source.pk):
+                        raise TacticalResourceValidationError("The destination site must differ from the site being deleted.")
+                    destination = Site.objects.select_for_update().filter(pk=int(move_to_site_id), client_id=source.client_id).first()
+                    if destination is None or not site_write_in_scope(user=user, site_id=int(move_to_site_id)):
+                        raise TacticalResourceValidationError("Destination site is outside the caller's writable Tactical scope.")
+
+            deleted = site_row({"pk": source.pk, "name": source.name, "client_id": source.client_id})
+            destination_row = (
+                site_row({"pk": destination.pk, "name": destination.name, "client_id": destination.client_id})
+                if destination is not None else None
+            )
+            source.delete()
+            return {"deleted": deleted, "destination": destination_row, "moved_agents": int(moved_agents)}
+    except IntegrityError as exc:
+        raise TacticalResourceConflictError("Tactical prevented the site from being deleted.") from exc
+    except ValidationError as exc:
+        raise TacticalResourceValidationError("Site deletion failed Tactical validation.") from exc
+
+
+def delete_client_row(*, user, client_id: int, move_to_site_id: int | None = None) -> dict[str, Any] | None:
+    """Delete one Tactical client after atomically relocating all its agents."""
+    Client, Site, Agent = _models()
+    try:
+        with transaction.atomic():
+            if not client_write_in_scope(user=user, client_id=client_id):
+                return None
+            source = Client.objects.select_for_update().filter(pk=client_id).first()
+            if source is None:
+                return None
+            # Serialize the source client sites so no concurrent site move can
+            # alter the set being deleted while the agent relocation is built.
+            list(Site.objects.select_for_update().filter(client_id=source.pk).values_list("pk", flat=True))
+            agent_count = Agent.objects.filter(site__client_id=source.pk).count()
+            destination = None
+            if agent_count:
+                if move_to_site_id is None:
+                    raise TacticalResourceValidationError("A destination site is required while agents remain under the client.")
+                destination = Site.objects.select_for_update().filter(pk=int(move_to_site_id)).first()
+                if destination is None:
+                    raise TacticalResourceValidationError("Destination site was not found.")
+                if int(destination.client_id) == int(source.pk):
+                    raise TacticalResourceValidationError("Destination site must belong to a different client.")
+                if not site_write_in_scope(user=user, site_id=destination.pk):
+                    raise TacticalResourceValidationError("Destination site is outside the caller's writable Tactical scope.")
+                moved_agents = Agent.objects.filter(site__client_id=source.pk).update(site_id=destination.pk)
+            else:
+                moved_agents = 0
+                if move_to_site_id is not None:
+                    destination = Site.objects.select_for_update().filter(pk=int(move_to_site_id)).first()
+                    if destination is None or int(destination.client_id) == int(source.pk) or not site_write_in_scope(user=user, site_id=destination.pk):
+                        raise TacticalResourceValidationError("Destination site is outside the caller's writable Tactical scope.")
+
+            deleted = client_row({"pk": source.pk, "name": source.name})
+            destination_row = (
+                site_row({"pk": destination.pk, "name": destination.name, "client_id": destination.client_id})
+                if destination is not None else None
+            )
+            source.delete()
+            return {"deleted": deleted, "destination": destination_row, "moved_agents": int(moved_agents)}
+    except IntegrityError as exc:
+        raise TacticalResourceConflictError("Tactical prevented the client from being deleted.") from exc
+    except ValidationError as exc:
+        raise TacticalResourceValidationError("Client deletion failed Tactical validation.") from exc
+
+
+def _custom_models():
+    from core.models import CustomField  # noqa: PLC0415
+    from clients.models import ClientCustomField, SiteCustomField  # noqa: PLC0415
+    return CustomField, ClientCustomField, SiteCustomField
+
+
+def _custom_value(record, field):
+    if record is None:
+        return field.default_value
+    if field.type == "multiple":
+        return list(record.multiple_value or [])
+    if field.type == "checkbox":
+        return bool(record.bool_value)
+    return record.string_value
+
+
+def custom_field_rows(*, user, resource_type: str, resource_id: int) -> list[dict[str, Any]] | None:
+    if resource_type == "client":
+        if not client_write_in_scope(user=user, client_id=resource_id):
+            return None
+    elif resource_type == "site":
+        if not site_write_in_scope(user=user, site_id=resource_id):
+            return None
+    else:
+        raise TacticalResourceValidationError("Unsupported custom-field resource type.")
+
+    CustomField, ClientCustomField, SiteCustomField = _custom_models()
+    fields = list(
+        CustomField.objects.filter(model=resource_type, hide_in_ui=False)
+        .order_by("order", "name", "pk")
+    )
+    field_ids = [field.pk for field in fields]
+    if resource_type == "client":
+        values = ClientCustomField.objects.filter(client_id=resource_id, field_id__in=field_ids).select_related("field")
+    else:
+        values = SiteCustomField.objects.filter(site_id=resource_id, field_id__in=field_ids).select_related("field")
+    by_field = {row.field_id: row for row in values}
+    return [
+        {
+            "field_id": int(field.pk),
+            "name": str(field.name),
+            "type": str(field.type),
+            "options": list(field.options or []),
+            "required": bool(field.required),
+            "value": _custom_value(by_field.get(field.pk), field),
+        }
+        for field in fields
+    ]
+
+
+def _normalize_custom_value(field, value):
+    field_type = str(field.type)
+    required = bool(field.required)
+    if field_type == "checkbox":
+        if not isinstance(value, bool):
+            raise TacticalResourceValidationError(f"Custom field {field.name!r} requires a boolean value.")
+        return value
+    if field_type == "multiple":
+        if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+            raise TacticalResourceValidationError(f"Custom field {field.name!r} requires an array of strings.")
+        cleaned = [item.strip() for item in value if item.strip()]
+        if required and not cleaned:
+            raise TacticalResourceValidationError(f"Custom field {field.name!r} is required.")
+        options = set(field.options or [])
+        if options and any(item not in options for item in cleaned):
+            raise TacticalResourceValidationError(f"Custom field {field.name!r} contains an unsupported option.")
+        return list(dict.fromkeys(cleaned))
+    if value is None:
+        value = ""
+    if not isinstance(value, (str, int, float)) or isinstance(value, bool):
+        raise TacticalResourceValidationError(f"Custom field {field.name!r} requires a scalar value.")
+    cleaned = str(value).strip()
+    if required and not cleaned:
+        raise TacticalResourceValidationError(f"Custom field {field.name!r} is required.")
+    if field_type == "number" and cleaned:
+        from decimal import Decimal, InvalidOperation  # noqa: PLC0415
+        try:
+            Decimal(cleaned)
+        except InvalidOperation as exc:
+            raise TacticalResourceValidationError(f"Custom field {field.name!r} requires a numeric value.") from exc
+    if field_type == "single" and cleaned and field.options and cleaned not in set(field.options):
+        raise TacticalResourceValidationError(f"Custom field {field.name!r} contains an unsupported option.")
+    return cleaned
+
+
+def update_custom_field_rows(*, user, resource_type: str, resource_id: int, values: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+    if resource_type == "client":
+        if not client_write_in_scope(user=user, client_id=resource_id):
+            return None
+    elif resource_type == "site":
+        if not site_write_in_scope(user=user, site_id=resource_id):
+            return None
+    else:
+        raise TacticalResourceValidationError("Unsupported custom-field resource type.")
+    if not isinstance(values, list):
+        raise TacticalResourceValidationError("values must be an array.")
+
+    CustomField, ClientCustomField, SiteCustomField = _custom_models()
+    submitted: dict[int, Any] = {}
+    for item in values:
+        if not isinstance(item, dict) or set(item) != {"field_id", "value"}:
+            raise TacticalResourceValidationError("Each custom-field update must contain only field_id and value.")
+        try:
+            field_id = int(item["field_id"])
+        except (TypeError, ValueError) as exc:
+            raise TacticalResourceValidationError("field_id must be a positive integer.") from exc
+        if field_id < 1 or field_id in submitted:
+            raise TacticalResourceValidationError("Custom-field updates must contain unique positive field_id values.")
+        submitted[field_id] = item["value"]
+
+    fields = {
+        int(field.pk): field
+        for field in CustomField.objects.filter(pk__in=submitted, model=resource_type, hide_in_ui=False)
+    }
+    if set(fields) != set(submitted):
+        raise TacticalResourceValidationError("One or more custom fields are unavailable for this resource type.")
+
+    with transaction.atomic():
+        for field_id, raw_value in submitted.items():
+            field = fields[field_id]
+            value = _normalize_custom_value(field, raw_value)
+            if resource_type == "client":
+                record, _ = ClientCustomField.objects.select_for_update().get_or_create(client_id=resource_id, field_id=field_id)
+            else:
+                record, _ = SiteCustomField.objects.select_for_update().get_or_create(site_id=resource_id, field_id=field_id)
+            if str(field.type) == "checkbox":
+                record.bool_value = value
+                record.save(update_fields=["bool_value"])
+            elif str(field.type) == "multiple":
+                record.multiple_value = value
+                record.save(update_fields=["multiple_value"])
+            else:
+                record.string_value = value
+                record.save(update_fields=["string_value"])
+
+    return custom_field_rows(user=user, resource_type=resource_type, resource_id=resource_id)

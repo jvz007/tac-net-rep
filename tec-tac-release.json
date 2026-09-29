@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.167",
+  "version": "1.15.168",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -19,7 +19,7 @@
     {
       "path": "FIXING.md",
       "size": 1915,
-      "sha256": "d58375fc9f0b7498d546557f3ea82b61dafe0542138bab6a45597275cb0b5abb"
+      "sha256": "8227a8fa26e0a1fbdb7c8cd79a67beb4745fe38f3cec19b0ef378ae1dcbb4ec9"
     },
     {
       "path": "LICENSE",
@@ -32,14 +32,14 @@
       "sha256": "b16e78b37eecd6b4690403b4725a0b9977c7e8e9eca51b6cb4493166c952f243"
     },
     {
-      "path": "RELEASE_NOTES_1.15.167.md",
-      "size": 1209,
-      "sha256": "5cc835b2ad3b3a584d6ea6e96ef09faafa1f4988045aab9cbea4e0e649170488"
+      "path": "RELEASE_NOTES_1.15.168.md",
+      "size": 1047,
+      "sha256": "ae7fe315cadbcda24c60b2c934a191a77be579eb0f2028e84424b559dc26afa5"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "4cc8b565f9f5a472bf0c7cdb06fd95e39476846c0d19e312778203522c55e4eb"
+      "sha256": "9a679d3b13e862814bbf2234b3e1d2d4a4a1060d5f67bc4b8843f3ee440d12d6"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -582,6 +582,11 @@
       "sha256": "460114817521293e2274628af8852afde51d5c6326b953500c4e0d866d90d3fa"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.15.167.md",
+      "size": 1209,
+      "sha256": "5cc835b2ad3b3a584d6ea6e96ef09faafa1f4988045aab9cbea4e0e649170488"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.15.19.md",
       "size": 1248,
       "sha256": "b9934bcfd38415b74e6005a74d9d6d384513f01b414bed4c30fda3dc31ada503"
@@ -973,8 +978,8 @@
     },
     {
       "path": "docs/resource-directory.md",
-      "size": 9345,
-      "sha256": "8de9774dd9f042e7e0b54d1cdf9591a2e347fc92e9d042a89c3c004786f44d1b"
+      "size": 10558,
+      "sha256": "888d3f979f0d9d4ecb66dd07f5a4823117d22fb45815d25ce567d4cae2fda405"
     },
     {
       "path": "docs/scheduler.md",
@@ -1308,8 +1313,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 43098,
-      "sha256": "72f490e03047e53810e5d6ff8ba4b2bcefeec9d141e945528b47156613795006"
+      "size": 44452,
+      "sha256": "4004f8b66745da4b9ea1d5040066cf896d69ca76692735e15969d232ee7a2be2"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -1568,18 +1573,18 @@
     },
     {
       "path": "framwork/tec_tac/resource_views.py",
-      "size": 6031,
-      "sha256": "b4814aa502a5a48a47a3a7e23c6084e4060b2b001fcfb0d06103566181e38d1b"
+      "size": 8097,
+      "sha256": "df1c9f4303a37ca46d314ae89fa89b1dca2bebb39ac2f1768fabfc3bdcfd9287"
     },
     {
       "path": "framwork/tec_tac/resources.py",
-      "size": 23386,
-      "sha256": "f08842d7bbf2d8450ef919e95d8e7069a6da912f85a4bf29061a8a084eeaef0f"
+      "size": 30620,
+      "sha256": "e19d9e7d8574d074369f1fd5d7dc9bed25f8d36ba3bf241957d028b4b6273a3e"
     },
     {
       "path": "framwork/tec_tac/resources_adapter.py",
-      "size": 21294,
-      "sha256": "d81198988cf298924cfe5d06d7e6f18a51193519015c907d890f907322dbd6a2"
+      "size": 34549,
+      "sha256": "2e1ea909e8c2116df6f990105ff2f94d3a437ff821c27e26ab88295be9397ca6"
     },
     {
       "path": "framwork/tec_tac/safe_files.py",
@@ -1683,8 +1688,8 @@
     },
     {
       "path": "framwork/tec_tac/urls.py",
-      "size": 13518,
-      "sha256": "858d2dccfdbcff979756913bfb93c8cc4dc804a8a8192dc39b3ae254058ebd95"
+      "size": 13874,
+      "sha256": "1527df4378611a39bbf2fd54c5f28e46f578b1815cd626e43f49c50391460198"
     },
     {
       "path": "framwork/tec_tac/views.py",
@@ -1874,7 +1879,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "903ff40000db2b370b5d234310a606d4a5ea6f1c9820ab0a5da9de7eb22289b0"
+      "sha256": "7dcac589afe195f277adf7ac845c5a9c1642e4a19d0317100caff7fb6178f746"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2348,8 +2353,8 @@
     },
     {
       "path": "tests/resource-directory-foundation.py",
-      "size": 18562,
-      "sha256": "076b1f784dbb39139fb0ed44bacd2e1bd25fb4627d0970980ede4c6716db7bdf"
+      "size": 25891,
+      "sha256": "0ea93a7789b03dfea98dd1a58818ebcb247a200a31a5b34d264acf26695fec45"
     },
     {
       "path": "tests/resource-directory-foundation.sh",

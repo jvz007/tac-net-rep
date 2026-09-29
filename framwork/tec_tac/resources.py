@@ -14,7 +14,7 @@ from . import resources_adapter as adapter
 from .capabilities import register_capability
 
 CONTRACT_ID = "core.resources"
-CONTRACT_VERSION = "1.2.0"
+CONTRACT_VERSION = "1.3.0"
 RESOURCE_TYPES = ("client", "site", "agent")
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 500
@@ -432,6 +432,123 @@ def update_site(site_id: Any, *, name: str | None = None, client_id: Any | None 
         return row
 
 
+
+def delete_site(site_id: Any, *, move_to_site_id: Any | None = None, context: ResourceAccessContext) -> dict[str, Any]:
+    user = _authorize_write(context, "site")
+    resource_id = _clean_positive_int(site_id, "site_id")
+    destination_id = _clean_positive_int(move_to_site_id, "move_to_site_id") if move_to_site_id not in (None, "") else None
+    before = adapter.get_site_row(adapter.sites_queryset(user=user, trusted=False), resource_id)
+    if before is None:
+        raise ResourceNotFound("Site was not found in the caller's resource scope.")
+    with _transaction_atomic():
+        result = _adapter_write(
+            adapter.delete_site_row,
+            user=user,
+            site_id=resource_id,
+            move_to_site_id=destination_id,
+        )
+        if result is None:
+            raise ResourceNotFound("Site was not found in the caller's resource scope.")
+        _record_resource_change(
+            actor=user,
+            action="delete",
+            resource_type="site",
+            resource_id=resource_id,
+            before=before,
+            after=None,
+            metadata={
+                "moved_agents": int(result.get("moved_agents") or 0),
+                "destination_site": result.get("destination"),
+            },
+        )
+        return result
+
+
+def delete_client(client_id: Any, *, move_to_site_id: Any | None = None, context: ResourceAccessContext) -> dict[str, Any]:
+    user = _authorize_write(context, "client")
+    resource_id = _clean_positive_int(client_id, "client_id")
+    destination_id = _clean_positive_int(move_to_site_id, "move_to_site_id") if move_to_site_id not in (None, "") else None
+    before = adapter.get_client_row(adapter.clients_queryset(user=user, trusted=False), resource_id)
+    if before is None:
+        raise ResourceNotFound("Client was not found in the caller's resource scope.")
+    with _transaction_atomic():
+        result = _adapter_write(
+            adapter.delete_client_row,
+            user=user,
+            client_id=resource_id,
+            move_to_site_id=destination_id,
+        )
+        if result is None:
+            raise ResourceNotFound("Client was not found in the caller's resource scope.")
+        _record_resource_change(
+            actor=user,
+            action="delete",
+            resource_type="client",
+            resource_id=resource_id,
+            before=before,
+            after=None,
+            metadata={
+                "moved_agents": int(result.get("moved_agents") or 0),
+                "destination_site": result.get("destination"),
+            },
+        )
+        return result
+
+
+def list_custom_fields(resource_type: str, resource_id: Any, *, context: ResourceAccessContext) -> dict[str, Any]:
+    resource_type = str(resource_type or "").strip().lower()
+    if resource_type not in ("client", "site"):
+        raise ResourceValidationError("Custom fields are supported only for clients and sites.")
+    user = _authorize_write(context, resource_type)
+    clean_id = _clean_positive_int(resource_id, f"{resource_type}_id")
+    rows = _adapter_write(
+        adapter.custom_field_rows,
+        user=user,
+        resource_type=resource_type,
+        resource_id=clean_id,
+    )
+    if rows is None:
+        raise ResourceNotFound(f"{resource_type.title()} was not found in the caller's resource scope.")
+    return {"resource_type": resource_type, "resource_id": clean_id, "fields": rows}
+
+
+def update_custom_fields(resource_type: str, resource_id: Any, *, values: list[dict[str, Any]], context: ResourceAccessContext) -> dict[str, Any]:
+    resource_type = str(resource_type or "").strip().lower()
+    if resource_type not in ("client", "site"):
+        raise ResourceValidationError("Custom fields are supported only for clients and sites.")
+    user = _authorize_write(context, resource_type)
+    clean_id = _clean_positive_int(resource_id, f"{resource_type}_id")
+    before = _adapter_write(
+        adapter.custom_field_rows,
+        user=user,
+        resource_type=resource_type,
+        resource_id=clean_id,
+    )
+    if before is None:
+        raise ResourceNotFound(f"{resource_type.title()} was not found in the caller's resource scope.")
+    with _transaction_atomic():
+        rows = _adapter_write(
+            adapter.update_custom_field_rows,
+            user=user,
+            resource_type=resource_type,
+            resource_id=clean_id,
+            values=values,
+        )
+        if rows is None:
+            raise ResourceNotFound(f"{resource_type.title()} was not found in the caller's resource scope.")
+        field_ids = sorted(int(item["field_id"]) for item in values)
+        _record_resource_change(
+            actor=user,
+            action="modify",
+            resource_type=resource_type,
+            resource_id=clean_id,
+            before={"custom_field_ids": field_ids},
+            after={"custom_field_ids": field_ids},
+            metadata={"custom_fields_updated": field_ids, "values_redacted": True},
+        )
+        return {"resource_type": resource_type, "resource_id": clean_id, "fields": rows}
+
+
 def resolve_resource(resource_type: str, resource_id: Any, *, context: ResourceAccessContext) -> dict[str, Any]:
     resource_type = str(resource_type or "").strip().lower()
     if resource_type == "client":
@@ -449,13 +566,13 @@ def resource_contract_metadata() -> dict[str, Any]:
         "version": CONTRACT_VERSION,
         "namespace": "tec_tac.resources",
         "read_only": False,
-        "write_support": {"client": ["create", "update"], "site": ["create", "update"], "agent": []},
+        "write_support": {"client": ["create", "update", "delete", "custom_fields"], "site": ["create", "update", "delete", "custom_fields"], "agent": []},
         "resource_types": {
             "client": {"id_type": "integer", "fields": list(CLIENT_FIELDS), "filters": ["search", "active", "page", "page_size"]},
             "site": {"id_type": "integer", "fields": list(SITE_FIELDS), "filters": ["client_id", "search", "active", "page", "page_size"]},
             "agent": {"id_type": "string", "fields": list(AGENT_FIELDS), "filters": ["client_id", "site_id", "search", "active", "page", "page_size"]},
         },
-        "operations": ["list_clients", "get_client", "create_client", "update_client", "list_sites", "get_site", "create_site", "update_site", "list_agents", "get_agent", "resolve_resource"],
+        "operations": ["list_clients", "get_client", "create_client", "update_client", "delete_client", "list_sites", "get_site", "create_site", "update_site", "delete_site", "list_custom_fields", "update_custom_fields", "list_agents", "get_agent", "resolve_resource"],
         "pagination": {
             "default_page_size": DEFAULT_PAGE_SIZE,
             "maximum_page_size": MAX_PAGE_SIZE,
@@ -475,6 +592,31 @@ def resource_contract_metadata() -> dict[str, Any]:
                 "response": {"items": "array[site]", "count": "integer", "page": "integer", "page_size": "integer", "pages": "integer", "next_page": "integer|null", "previous_page": "integer|null"},
             },
         },
+        "mutation_contracts": {
+            "delete_client": {
+                "python": "delete_client",
+                "http": "DELETE /api/tfd/resources/clients/<id>/",
+                "body": {"move_to_site_id": "optional positive integer; required when agents exist"},
+                "semantics": "Move all agents atomically to a writable site outside the deleted client, then hard-delete the client.",
+            },
+            "delete_site": {
+                "python": "delete_site",
+                "http": "DELETE /api/tfd/resources/sites/<id>/",
+                "body": {"move_to_site_id": "optional positive integer; required when agents exist"},
+                "semantics": "Move all agents atomically to another writable site under the same client, then hard-delete the site; the last site cannot be deleted.",
+            },
+            "client_custom_fields": {
+                "python": ["list_custom_fields", "update_custom_fields"],
+                "http": "GET|PATCH /api/tfd/resources/clients/<id>/custom-fields/",
+                "response": {"resource_type": "client", "resource_id": "integer", "fields": "array[{field_id,name,type,options,required,value}]"},
+            },
+            "site_custom_fields": {
+                "python": ["list_custom_fields", "update_custom_fields"],
+                "http": "GET|PATCH /api/tfd/resources/sites/<id>/custom-fields/",
+                "response": {"resource_type": "site", "resource_id": "integer", "fields": "array[{field_id,name,type,options,required,value}]"},
+            },
+        },
+        "custom_field_types": ["text", "number", "single", "multiple", "checkbox", "datetime"],
         "errors": {
             ResourceValidationError.code: "Invalid type, identifier, filter or pagination input.",
             ResourcePermissionDenied.code: "Caller lacks Tactical read permission/scope or a trusted service context.",
@@ -486,7 +628,7 @@ def resource_contract_metadata() -> dict[str, Any]:
             "service": "Explicit trusted_service_context(..., global_access=True) for reads only; service contexts cannot mutate resources in contract 1.x.",
             "write": "Authenticated Tactical user + Tactical can_manage_clients/can_manage_sites + Tec-Tac Core resource-manage RBAC permission + Tactical native object write scope (_has_perm_on_client/_has_perm_on_site semantics).",
         },
-        "active_semantics": "Tactical currently hard-deletes client/site/agent rows; existing rows are active in contract v1. active=false returns no rows.",
+        "active_semantics": "Tactical hard-deletes client/site rows. Core deletion first relocates agents when required, then deletes atomically. Existing rows are active in contract v1; active=false returns no rows.",
         "rbac": {"client_write": CLIENT_MANAGE_PERMISSION, "site_write": SITE_MANAGE_PERMISSION},
         "compatibility": "Additive changes are preferred within 1.x. Tactical ORM changes are adapter-internal unless the public representation changes incompatibly.",
     }
@@ -497,10 +639,14 @@ class _CoreResourceProvider:
     get_client = staticmethod(get_client)
     create_client = staticmethod(create_client)
     update_client = staticmethod(update_client)
+    delete_client = staticmethod(delete_client)
     list_sites = staticmethod(list_sites)
     get_site = staticmethod(get_site)
     create_site = staticmethod(create_site)
     update_site = staticmethod(update_site)
+    delete_site = staticmethod(delete_site)
+    list_custom_fields = staticmethod(list_custom_fields)
+    update_custom_fields = staticmethod(update_custom_fields)
     list_agents = staticmethod(list_agents)
     get_agent = staticmethod(get_agent)
     resolve_resource = staticmethod(resolve_resource)
@@ -519,8 +665,9 @@ def register_core_resources_capability():
         provider=_RESOURCE_PROVIDER,
         description="Stable Core directory for Tactical clients, sites and agents with scoped client/site management.",
         operations=(
-            "list_clients", "get_client", "create_client", "update_client",
-            "list_sites", "get_site", "create_site", "update_site",
+            "list_clients", "get_client", "create_client", "update_client", "delete_client",
+            "list_sites", "get_site", "create_site", "update_site", "delete_site",
+            "list_custom_fields", "update_custom_fields",
             "list_agents", "get_agent", "resolve_resource",
             "user_context", "trusted_service_context",
         ),

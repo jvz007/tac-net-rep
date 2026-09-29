@@ -162,6 +162,86 @@ adapter.create_client_row = create_client_row
 adapter.update_client_row = update_client_row
 adapter.create_site_row = create_site_row
 adapter.update_site_row = update_site_row
+
+CUSTOM_DEFS = [
+    {"field_id": 1, "name": "Account code", "type": "text", "options": [], "required": True},
+    {"field_id": 2, "name": "VIP", "type": "checkbox", "options": [], "required": False},
+    {"field_id": 3, "name": "Regions", "type": "multiple", "options": ["GP", "WC", "KZN"], "required": False},
+]
+CUSTOM_VALUES = {}
+
+def delete_site_row(*, user, site_id, move_to_site_id=None):
+    if not site_write_in_scope(user=user, site_id=site_id): return None
+    row = next((r for r in DATA["sites"] if r["id"] == site_id), None)
+    if row is None: return None
+    same_client = [r for r in DATA["sites"] if r["client_id"] == row["client_id"]]
+    if len(same_client) <= 1:
+        raise TacticalResourceValidationError("A client must retain at least one site.")
+    agents = [a for a in DATA["agents"] if a["site_id"] == site_id]
+    destination = None
+    if agents:
+        if move_to_site_id is None:
+            raise TacticalResourceValidationError("A destination site is required while agents remain on the site.")
+        destination = next((r for r in DATA["sites"] if r["id"] == move_to_site_id), None)
+        if destination is None or destination["id"] == row["id"] or destination["client_id"] != row["client_id"] or not site_write_in_scope(user=user, site_id=destination["id"]):
+            raise TacticalResourceValidationError("Deleting a site may move agents only to another site in the same client.")
+        for agent in agents:
+            agent["site_id"] = destination["id"]
+            agent["client_id"] = destination["client_id"]
+    DATA["sites"].remove(row)
+    return {"deleted": dict(row), "destination": dict(destination) if destination else None, "moved_agents": len(agents)}
+
+def delete_client_row(*, user, client_id, move_to_site_id=None):
+    if not client_write_in_scope(user=user, client_id=client_id): return None
+    row = next((r for r in DATA["clients"] if r["id"] == client_id), None)
+    if row is None: return None
+    agents = [a for a in DATA["agents"] if a["client_id"] == client_id]
+    destination = None
+    if agents:
+        if move_to_site_id is None:
+            raise TacticalResourceValidationError("A destination site is required while agents remain under the client.")
+        destination = next((r for r in DATA["sites"] if r["id"] == move_to_site_id), None)
+        if destination is None or destination["client_id"] == client_id or not site_write_in_scope(user=user, site_id=destination["id"]):
+            raise TacticalResourceValidationError("Destination site is outside the caller's writable Tactical scope.")
+        for agent in agents:
+            agent["site_id"] = destination["id"]
+            agent["client_id"] = destination["client_id"]
+    DATA["sites"][:] = [r for r in DATA["sites"] if r["client_id"] != client_id]
+    DATA["clients"].remove(row)
+    return {"deleted": dict(row), "destination": dict(destination) if destination else None, "moved_agents": len(agents)}
+
+def custom_field_rows(*, user, resource_type, resource_id):
+    in_scope = client_write_in_scope(user=user, client_id=resource_id) if resource_type == "client" else site_write_in_scope(user=user, site_id=resource_id)
+    if not in_scope: return None
+    rows=[]
+    for definition in CUSTOM_DEFS:
+        row=dict(definition)
+        default = False if row["type"] == "checkbox" else ([] if row["type"] == "multiple" else "")
+        row["value"] = CUSTOM_VALUES.get((resource_type, resource_id, row["field_id"]), default)
+        rows.append(row)
+    return rows
+
+def update_custom_field_rows(*, user, resource_type, resource_id, values):
+    rows=custom_field_rows(user=user, resource_type=resource_type, resource_id=resource_id)
+    if rows is None: return None
+    defs={row["field_id"]: row for row in CUSTOM_DEFS}
+    seen=set()
+    for item in values:
+        if set(item) != {"field_id","value"}: raise TacticalResourceValidationError("bad custom field shape")
+        fid=int(item["field_id"])
+        if fid in seen or fid not in defs: raise TacticalResourceValidationError("bad custom field id")
+        seen.add(fid); definition=defs[fid]; value=item["value"]
+        if definition["type"] == "checkbox" and not isinstance(value, bool): raise TacticalResourceValidationError("boolean required")
+        if definition["type"] == "multiple":
+            if not isinstance(value, list) or any(v not in definition["options"] for v in value): raise TacticalResourceValidationError("bad multiple")
+        if definition["required"] and not value: raise TacticalResourceValidationError("required")
+        CUSTOM_VALUES[(resource_type, resource_id, fid)] = value
+    return custom_field_rows(user=user, resource_type=resource_type, resource_id=resource_id)
+
+adapter.delete_site_row = delete_site_row
+adapter.delete_client_row = delete_client_row
+adapter.custom_field_rows = custom_field_rows
+adapter.update_custom_field_rows = update_custom_field_rows
 sys.modules["tec_tac.resources_adapter"] = adapter
 
 spec = importlib.util.spec_from_file_location("tec_tac.resources", PKG / "resources.py")
@@ -357,9 +437,45 @@ try:
 except resources.ResourcePermissionDenied:
     pass
 
+# F7: client/site custom-field definitions and values use the same scoped write boundary.
+cf = resources.list_custom_fields("client", 1, context=ctx)
+assert [f["field_id"] for f in cf["fields"]] == [1, 2, 3]
+updated_cf = resources.update_custom_fields("client", 1, values=[
+    {"field_id": 1, "value": "AC-001"},
+    {"field_id": 2, "value": True},
+    {"field_id": 3, "value": ["GP", "WC"]},
+], context=ctx)
+assert {f["field_id"]: f["value"] for f in updated_cf["fields"]} == {1: "AC-001", 2: True, 3: ["GP", "WC"]}
+assert AUDITS[-1]["action"] == "modify" and AUDITS[-1]["metadata"]["custom_fields_updated"] == [1,2,3]
+try:
+    resources.update_custom_fields("client", 1, values=[{"field_id": 3, "value": ["INVALID"]}], context=ctx)
+    raise AssertionError("invalid custom-field option accepted")
+except resources.ResourceValidationError:
+    pass
+
+# F5: site deletion relocates agents first and is strictly audited.
+# Use Alpha site 11, which still has another destination site under client 1.
+u.allowed_sites.update({11, 12, created_site["id"]})
+site_delete = resources.delete_site(11, move_to_site_id=12, context=ctx)
+assert site_delete["moved_agents"] == 1 and DATA["agents"][0]["site_id"] == 12
+assert not any(row["id"] == 11 for row in DATA["sites"])
+assert AUDITS[-1]["action"] == "delete" and AUDITS[-1]["metadata"]["destination_site"]["id"] == 12
+
+# F6: client deletion can move agents to a writable site under another client.
+u.allowed_clients.add(2); u.allowed_sites.add(21)
+client_to_delete = resources.create_client(name="Delete Me", context=ctx)
+source_site = next(row for row in DATA["sites"] if row["client_id"] == client_to_delete["id"])
+DATA["agents"].append({"type":"agent","id":"a-delete","hostname":"DEL-PC","client_id":client_to_delete["id"],"site_id":source_site["id"],"active":True,"platform":"windows","monitoring_type":"workstation","last_seen":None})
+client_delete = resources.delete_client(client_to_delete["id"], move_to_site_id=21, context=ctx)
+assert client_delete["moved_agents"] == 1
+assert next(a for a in DATA["agents"] if a["id"] == "a-delete")["site_id"] == 21
+assert not any(row["id"] == client_to_delete["id"] for row in DATA["clients"])
+assert not any(row["client_id"] == client_to_delete["id"] for row in DATA["sites"])
+assert AUDITS[-1]["action"] == "delete" and AUDITS[-1]["metadata"]["destination_site"]["id"] == 21
+
 # Contract metadata is versioned and discoverable.
 meta = resources.resource_contract_metadata()
-assert meta["id"] == "core.resources" and meta["version"] == "1.2.0"
+assert meta["id"] == "core.resources" and meta["version"] == "1.3.0"
 assert meta["pagination"]["maximum_page_number"] == 10000
 assert meta["list_contracts"]["clients"]["http"] == "GET /api/tfd/resources/clients/"
 assert meta["list_contracts"]["sites"]["response"]["pages"] == "integer"
@@ -367,8 +483,8 @@ registration = resources.register_core_resources_capability()
 assert registration["module_id"] == "core" and registration["id"] == "core.resources"
 assert set(meta["resource_types"]) == {"client", "site", "agent"}
 assert meta["read_only"] is False
-assert meta["write_support"]["client"] == ["create", "update"]
-assert meta["write_support"]["site"] == ["create", "update"]
+assert meta["write_support"]["client"] == ["create", "update", "delete", "custom_fields"]
+assert meta["write_support"]["site"] == ["create", "update", "delete", "custom_fields"]
 assert meta["write_support"]["agent"] == []
 assert meta["rbac"]["client_write"] == "core.resources.clients.manage"
 assert meta["rbac"]["site_write"] == "core.resources.sites.manage"

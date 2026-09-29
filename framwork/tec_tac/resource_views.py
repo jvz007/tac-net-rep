@@ -12,12 +12,16 @@ from .resources import (
     ResourceValidationError,
     create_client,
     create_site,
+    delete_client,
+    delete_site,
     get_agent,
     get_client,
     get_site,
     list_agents,
     list_clients,
     list_sites,
+    list_custom_fields,
+    update_custom_fields,
     update_client,
     update_site,
     user_context,
@@ -148,5 +152,50 @@ class ResourceMutableDetailView(ResourceDetailView):
                     context=context,
                 ))
             raise ResourceValidationError("This resource type is read-only.")
+        except ResourceDirectoryError as exc:
+            return _error_response(exc)
+
+    @extend_schema(tags=["Tec-Tac Resources"], summary="Delete a Core-managed Tactical resource after optional agent relocation")
+    def delete(self, request, resource_id):
+        try:
+            context = user_context(request.user)
+            data = _body(request, {"move_to_site_id"})
+            destination = data.get("move_to_site_id")
+            if self.resource_type == "client":
+                return Response(delete_client(resource_id, move_to_site_id=destination, context=context))
+            if self.resource_type == "site":
+                return Response(delete_site(resource_id, move_to_site_id=destination, context=context))
+            raise ResourceValidationError("This resource type is read-only.")
+        except ResourceDirectoryError as exc:
+            return _error_response(exc)
+
+
+class ResourceCustomFieldsView(APIView):
+    permission_classes = [SessionAuthenticated]
+    resource_type = ""
+
+    @extend_schema(tags=["Tec-Tac Resources"], summary="List editable client/site custom-field definitions and values")
+    def get(self, request, resource_id):
+        try:
+            return Response(list_custom_fields(
+                self.resource_type,
+                resource_id,
+                context=user_context(request.user),
+            ))
+        except ResourceDirectoryError as exc:
+            return _error_response(exc)
+
+    @extend_schema(tags=["Tec-Tac Resources"], summary="Update client/site custom-field values")
+    def patch(self, request, resource_id):
+        try:
+            data = _body(request, {"values"})
+            if "values" not in data:
+                raise ResourceValidationError("values is required.")
+            return Response(update_custom_fields(
+                self.resource_type,
+                resource_id,
+                values=data["values"],
+                context=user_context(request.user),
+            ))
         except ResourceDirectoryError as exc:
             return _error_response(exc)
