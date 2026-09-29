@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.166",
+  "version": "1.15.167",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -18,8 +18,8 @@
     },
     {
       "path": "FIXING.md",
-      "size": 1746,
-      "sha256": "3c50d271241e032508bcfa51c2abeaf8b1451f39b8ccc3de3f6e7caf6db13e37"
+      "size": 1915,
+      "sha256": "d58375fc9f0b7498d546557f3ea82b61dafe0542138bab6a45597275cb0b5abb"
     },
     {
       "path": "LICENSE",
@@ -32,14 +32,14 @@
       "sha256": "b16e78b37eecd6b4690403b4725a0b9977c7e8e9eca51b6cb4493166c952f243"
     },
     {
-      "path": "RELEASE_NOTES_1.15.166.md",
-      "size": 2181,
-      "sha256": "460114817521293e2274628af8852afde51d5c6326b953500c4e0d866d90d3fa"
+      "path": "RELEASE_NOTES_1.15.167.md",
+      "size": 1209,
+      "sha256": "5cc835b2ad3b3a584d6ea6e96ef09faafa1f4988045aab9cbea4e0e649170488"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "00b98289ee513bb9c792dd32132eaa6ad121ddef3225d0eb7cc9c29bdf38cb6c"
+      "sha256": "4cc8b565f9f5a472bf0c7cdb06fd95e39476846c0d19e312778203522c55e4eb"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -130,6 +130,11 @@
       "path": "docs/module-visibility.md",
       "size": 6687,
       "sha256": "aefe75d01e60da2fd56727124e1e5050817294138dcede7a0c2d7cc4602f0e07"
+    },
+    {
+      "path": "docs/my-account.md",
+      "size": 1843,
+      "sha256": "553101524dc3d6c06fc12358aa1382a7670e9359818d787b9ef41098e490cf00"
     },
     {
       "path": "docs/optional-module-integrations.md",
@@ -570,6 +575,11 @@
       "path": "docs/releases/RELEASE_NOTES_1.15.165.md",
       "size": 951,
       "sha256": "6d7179e55cb07bc6c861b2fc35f856df983ba8520d6bb9ae2c8cc42fda7dc309"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.166.md",
+      "size": 2181,
+      "sha256": "460114817521293e2274628af8852afde51d5c6326b953500c4e0d866d90d3fa"
     },
     {
       "path": "docs/releases/RELEASE_NOTES_1.15.19.md",
@@ -1247,6 +1257,16 @@
       "sha256": "2624ee17f3332801931a0531cb9df8301bb0938f4b48782aea273fed4a66d5c7"
     },
     {
+      "path": "framwork/tec_tac/account_self_service.py",
+      "size": 8895,
+      "sha256": "9ccf25bb95f6d92c657661fd92e9495df882835c78750fad475f12849a342efb"
+    },
+    {
+      "path": "framwork/tec_tac/account_self_service_views.py",
+      "size": 2660,
+      "sha256": "ea0f83a83a65c0ddcb488ea00183f58712fb72a1b934e04a965f09ba901e5e9c"
+    },
+    {
       "path": "framwork/tec_tac/apps.py",
       "size": 3342,
       "sha256": "84182bddecad0b4e452bbf4d10f3f231812423dc941d5b643b0bd5eb4464ed63"
@@ -1288,8 +1308,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 40783,
-      "sha256": "c9255ab1a6c599a239641d6258cfee30d81397260aa679924c447188f8d75e39"
+      "size": 43098,
+      "sha256": "72f490e03047e53810e5d6ff8ba4b2bcefeec9d141e945528b47156613795006"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -1663,8 +1683,8 @@
     },
     {
       "path": "framwork/tec_tac/urls.py",
-      "size": 13005,
-      "sha256": "e8df2a9ae26e77a68b29245e5ac10f43aad25aa8c3aa9ad7353c1e4c5f1b18b6"
+      "size": 13518,
+      "sha256": "858d2dccfdbcff979756913bfb93c8cc4dc804a8a8192dc39b3ae254058ebd95"
     },
     {
       "path": "framwork/tec_tac/views.py",
@@ -1854,7 +1874,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "d18e628d400af80b4efb33c7c7c1bdbcd4441b98fc3693c656d1a1de614d0d6c"
+      "sha256": "903ff40000db2b370b5d234310a606d4a5ea6f1c9820ab0a5da9de7eb22289b0"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2192,6 +2212,11 @@
       "sha256": "212e34aae4781eac4efb8820ef582aaa589a43572b80c9b5b4a93c5de576842f"
     },
     {
+      "path": "tests/my-account-features-1.15.167.py",
+      "size": 6016,
+      "sha256": "7bd1470805b6b2c0936537fe7776caee09c71a6f033d89aaa8f460727321fa98"
+    },
+    {
       "path": "tests/network-reporting-api.sh",
       "size": 3157,
       "sha256": "b314bf84b3347cfff824f28ee24898b3b582093e4599171d30d10f7851a1c401"
@@ -2363,8 +2388,8 @@
     },
     {
       "path": "tests/review-hygiene-foundation.sh",
-      "size": 1803,
-      "sha256": "cd6b98b6b3673ad29d5686a69c8bc883ff9c74b43fea644fbdf8e5d6809a20fd"
+      "size": 1859,
+      "sha256": "17961ba578679518659f62477184ad14c20fbb82aec3c9c902cec8ffbef16906"
     },
     {
       "path": "tests/review-regressions-1.15.50.py",

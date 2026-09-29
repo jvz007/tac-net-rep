@@ -1,4 +1,4 @@
-# Fixing / review notes — Core 1.15.166
+# Fixing / review notes — Core 1.15.167
 
 Tracker closure focus: D2, D3, L10, L15, L24 and L25. Final restore, backup-publication and Scheduler target-parity cleanup with behavioral regressions.
 Recovery-key import no longer follows the final import path or reads an unbounded source as root. Imported trust-key publication also fsyncs the trust directory.
@@ -17,6 +17,10 @@ Blocking Scheduler compatibility rebuild: preserve module-declared native target
 
 Tracker closure focus: L10, L24 and L25. Remote recovery publication now treats final archive/sidecar names as immutable; migration target repair fails closed on unsupported keys; and endpoint PK aliases are canonicalized to agent_id again immediately before handler execution. Regression: `tests/tracker-closure-1.15.165.py`.
 
+
+## 1.15.167
+
+Feature release F1-F4: My Account self-service for password change, TOTP reset/re-enrollment, revoke-other-sessions and Tactical agent action preferences.
 
 ## 1.15.166
 

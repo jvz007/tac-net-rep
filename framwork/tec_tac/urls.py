@@ -1,4 +1,5 @@
 from .account_security_views import AccountSecurityPolicyView
+from .account_self_service_views import MyAccountPasswordView, MyAccountTacticalUiView, MyAccountTotpResetView, MyAccountView
 from .resource_views import ResourceListView, ResourceDetailView, ResourceMutableListView, ResourceMutableDetailView
 from .server_backup_views import RecoveryTrustView, BackupRestoreView, BackupRestoreJobView
 from .server_maintenance_views import (
@@ -45,6 +46,10 @@ from .module_hotfix_views import (
     ModuleHotfixListView, ModuleHotfixRollbackView, ModuleHotfixJobView,
 )
 urlpatterns = [
+    path("account/", MyAccountView.as_view(), name="tec-tac-my-account"),
+    path("account/password/", MyAccountPasswordView.as_view(), name="tec-tac-my-account-password"),
+    path("account/totp/reset/", MyAccountTotpResetView.as_view(), name="tec-tac-my-account-totp-reset"),
+    path("account/tactical-ui/", MyAccountTacticalUiView.as_view(), name="tec-tac-my-account-tactical-ui"),
     path("session/current/", CurrentSessionView.as_view(), name="tec-tac-session-current"),
     path("session/activity/", SessionActivityView.as_view(), name="tec-tac-session-activity"),
     path("session/sessions/", SessionListView.as_view(), name="tec-tac-session-list"),

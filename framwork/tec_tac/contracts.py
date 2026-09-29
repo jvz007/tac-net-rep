@@ -345,6 +345,45 @@ CORE_CONTRACTS = (
 )
 
 HTTP_CONTRACT_DETAILS = {
+    "/api/tfd/account/": {
+        "GET": {
+            "authorization": "authenticated Tec-Tac session; self only",
+            "response": {
+                "account": "current Tactical user identity and SSO/TOTP state",
+                "mfa": "current Tec-Tac backup-code status",
+                "tactical_ui": "current Tactical agent double-click/default URL Action preferences plus allowed choices",
+            },
+        },
+    },
+    "/api/tfd/account/password/": {
+        "PUT": {
+            "authorization": "authenticated local Tec-Tac session; self only; current-password proof required",
+            "request": {"current_password": "current local password", "new_password": "new password accepted by Django password validators"},
+            "response": {"changed": True, "other_sessions_revoked": "integer"},
+            "errors": {"400": "SSO-managed account, rejected current password, or invalid new password"},
+        },
+    },
+    "/api/tfd/account/totp/reset/": {
+        "POST": {
+            "authorization": "authenticated local Tec-Tac session; self only; current password + current TOTP proof required",
+            "request": {"current_password": "current local password", "current_totp": "current authenticator code"},
+            "response": {"reset": True, "reauthentication_required": True, "sessions_revoked": "integer"},
+            "semantics": "clears Tactical TOTP secret, invalidates Tec-Tac backup codes, revokes every active session; normal sign-in performs fresh enrollment",
+            "errors": {"400": "SSO-managed account, TOTP not configured, or proof rejected"},
+        },
+    },
+    "/api/tfd/account/tactical-ui/": {
+        "GET": {
+            "authorization": "authenticated Tec-Tac session; self only",
+            "response": {"preferences": "Tactical agent_dblclick_action/url_action plus current valid choices"},
+        },
+        "PUT": {
+            "authorization": "authenticated Tec-Tac session; self only",
+            "request": {"agent_dblclick_action": "one of Tactical's current model choices", "url_action_id": "integer|null"},
+            "response": {"preferences": "updated Tactical UI preferences"},
+            "errors": {"400": "unknown field, unsupported action, missing URL Action, or URL Action permission denied"},
+        },
+    },
     "/api/tfd/modules/v2/jobs/": {
         "query": {"page": "integer >=1", "page_size": "integer 1..100", "status": "optional string", "action": "optional string", "search": "optional string"},
         "response": {"items": "array", "total": "integer", "page": "integer", "page_size": "integer", "pages": "integer", "next_page": "integer|null", "previous_page": "integer|null"},
