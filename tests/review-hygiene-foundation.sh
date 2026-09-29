@@ -18,8 +18,10 @@ python3 "${ROOT}/tests/scheduler-run-now-scope-1.15.165-1.py"
 # an unprivileged account when the test host permits that.
 if [[ "$(id -u)" -eq 0 ]] && command -v runuser >/dev/null 2>&1 && id nobody >/dev/null 2>&1; then
   runuser -u nobody -- python3 "${ROOT}/tests/server-backup-d2-d3.py"
+python3 "${ROOT}/tests/server-backup-decision-closure-1.15.166.py"
 else
   python3 "${ROOT}/tests/server-backup-d2-d3.py"
+python3 "${ROOT}/tests/server-backup-decision-closure-1.15.166.py"
 fi
 
 # Portable privileged-boundary coverage delegated to portable-privileged-foundation.sh:

@@ -222,16 +222,4 @@ with tempfile.TemporaryDirectory() as td:
     assert transition['is_core_downgrade'] is True
     assert 'puts Core back to 1.15.83' in transition['notice']
 
-source=(ROOT/'scripts'/'server-backup-helper.py').read_text()
-assert 'recovery_signer_trusted' in source
-assert 'version_transition' in source
-assert '_merge_restore_security_state' in source
-assert 'allow_untrusted_signer=True' in source
-assert 'recovery-signature.json' in source
-
-install=(ROOT/'install.sh').read_text()
-assert 'tec-tac-recovery-key' in install
-cli=(ROOT/'scripts'/'recovery-key-cli.py').read_text()
-assert "add_parser('export')" in cli and "add_parser('import')" in cli and "add_parser('status')" in cli
-
 print('[TEST] PASS D2/D3 recovery continuity, trust merge and signer inspection')
