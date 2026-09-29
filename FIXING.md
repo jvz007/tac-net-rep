@@ -1,3 +1,5 @@
+Tracker acceptance consolidation: D2/D3 destructive restore orchestration, final L10 four-transport atomicity, and one Core acceptance runner for every remaining Core-owned tracker row.
+
 # Fixing / review notes — Core 1.15.172
 
 Tracker done-when closure: real L10 transport failure regression, callback-owned F11 Swagger grouping for path/module-ID mismatches, actual DRF boundary coverage for F1/F2/F5-F7, and a portable D2/D3 acceptance runner.

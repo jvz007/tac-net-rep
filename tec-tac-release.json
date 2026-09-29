@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.172",
+  "version": "1.15.173",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -18,8 +18,8 @@
     },
     {
       "path": "FIXING.md",
-      "size": 2962,
-      "sha256": "0789bc99bd0778d125eb6e82de102f1f37983fdc656eb58be7242f0051f151ed"
+      "size": 3149,
+      "sha256": "52d2599347e3a7acafc4128392bcc10964f8fb3482b415c791109ea9b35389d5"
     },
     {
       "path": "LICENSE",
@@ -32,14 +32,14 @@
       "sha256": "b16e78b37eecd6b4690403b4725a0b9977c7e8e9eca51b6cb4493166c952f243"
     },
     {
-      "path": "RELEASE_NOTES_1.15.172.md",
-      "size": 1826,
-      "sha256": "b57d3483e84638ce0ba7c5e4c0a3b2eaefb22a7a9dc9e05088d212cfeae9f4da"
+      "path": "RELEASE_NOTES_1.15.173.md",
+      "size": 1547,
+      "sha256": "13bbef29d119212e60499bf51c7f8d90c52796654a9520526b196356ca0f7741"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "35740b121ab172daf0b7dc41bf518b1d76f6133be4ae00c5bfeef85f9d4cae42"
+      "sha256": "379e73e1201d6eb638b3c2ead65ae5a2de830c9729c8b1edc2819650a8d3e16a"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -612,6 +612,11 @@
       "sha256": "52c71d8c555c0a73ba0134818c78ca925d994173f85906568d57587c3bd37131"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.15.172.md",
+      "size": 1826,
+      "sha256": "b57d3483e84638ce0ba7c5e4c0a3b2eaefb22a7a9dc9e05088d212cfeae9f4da"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.15.19.md",
       "size": 1248,
       "sha256": "b9934bcfd38415b74e6005a74d9d6d384513f01b414bed4c30fda3dc31ada503"
@@ -1030,6 +1035,11 @@
       "path": "docs/system-update-signed-releases.md",
       "size": 2387,
       "sha256": "419602a237b83f5549eb6ca29be9325e8b6945de29da6df553bc7385de3f5918"
+    },
+    {
+      "path": "docs/tracker-acceptance-1.15.173.md",
+      "size": 2134,
+      "sha256": "6e19f2c4a17cb64199622c294143634ce9836be9e08fb4389fdedb0a366cba59"
     },
     {
       "path": "docs/troubleshooting-diagnostics.md",
@@ -1909,7 +1919,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "3f3acda11efd6e5d1b8bc0adf7a037a1426cfcd7b25e0665d711b5760766224d"
+      "sha256": "dc1f3795a86b545f0eac291d8d183e61bfa4f527374e62cba298ad74723109cb"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2027,6 +2037,11 @@
       "sha256": "452f5ea332c990cd78e6338e08612544c39c011606f8d873e17c59f2024fb434"
     },
     {
+      "path": "tests/d2-d3-restore-orchestration-1.15.173.py",
+      "size": 8417,
+      "sha256": "3c19fafab4e6008ad1efc494a714b9abcba4cf8246fbc7b596c1538ce09e6e0c"
+    },
+    {
       "path": "tests/d5-completion.py",
       "size": 4078,
       "sha256": "d3b15b9540478b4caedaf0f745135ed9fea7a69636dfe30b76dcd7264bfa540f"
@@ -2140,6 +2155,11 @@
       "path": "tests/l10-publication-atomicity-1.15.172.py",
       "size": 8313,
       "sha256": "345344904e80ddd35db262752b40807edd361668be4d3766e5b5a2c2db01c40d"
+    },
+    {
+      "path": "tests/l10-publication-final-1.15.173.py",
+      "size": 10682,
+      "sha256": "0abb9550ce93e85062ae79c185890a2c412570f41c32ca8498355a86bb383a67"
     },
     {
       "path": "tests/layout-foundation.sh",
@@ -2448,8 +2468,8 @@
     },
     {
       "path": "tests/review-hygiene-foundation.sh",
-      "size": 2578,
-      "sha256": "50d8e68674002420cab241fe7f0d4df8c3d239dfa03b093bcdab7516f50812c9"
+      "size": 2755,
+      "sha256": "816752b53382a6f25d1838ab0cec902460acc3d48396d71056f2e91dcdaec9c0"
     },
     {
       "path": "tests/review-regressions-1.15.50.py",
@@ -2810,6 +2830,11 @@
       "path": "tests/test_housekeeping_claim_security.py",
       "size": 221,
       "sha256": "acd331f08c2d27f682a934da78b013f34a2a9e771cd05cc51258dca48c1e3414"
+    },
+    {
+      "path": "tests/tracker-acceptance-1.15.173.py",
+      "size": 1070,
+      "sha256": "8bb1d35050b9f6cf7215a010d5219ebe936f658b68c0cbe98aca93834927e345"
     },
     {
       "path": "tests/tracker-behavior-closure-1.15.161.py",

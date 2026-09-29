@@ -17,6 +17,9 @@ python3 "${ROOT}/tests/tracker-http-feature-boundary-1.15.172.py"
 python3 "${ROOT}/tests/f11-openapi-ownership-1.15.172.py"
 python3 "${ROOT}/tests/l10-publication-atomicity-1.15.172.py"
 python3 "${ROOT}/tests/d2-d3-final-acceptance-1.15.172.py"
+python3 "${ROOT}/tests/d2-d3-restore-orchestration-1.15.173.py"
+python3 "${ROOT}/tests/l10-publication-final-1.15.173.py"
+python3 "${ROOT}/tests/tracker-acceptance-1.15.173.py"
 
 
 # D2/D3 recovery continuity must be ordinary-CI portable; run it explicitly as
