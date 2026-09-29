@@ -10,6 +10,8 @@ python3 "${ROOT}/tests/infrastructure-closure-1.15.148.py"
 python3 "${ROOT}/tests/tracker-behavior-closure-1.15.161.py"
 python3 "${ROOT}/tests/tracker-final-review-1.15.164.py"
 python3 "${ROOT}/tests/scheduler-native-type-compat-1.15.164-1.py"
+python3 "${ROOT}/tests/tracker-closure-1.15.165.py"
+python3 "${ROOT}/tests/scheduler-run-now-scope-1.15.165-1.py"
 
 
 # D2/D3 recovery continuity must be ordinary-CI portable; run it explicitly as

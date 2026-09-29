@@ -635,6 +635,35 @@ def _runtime_authorization_error(schedule: TecTacSchedule) -> str | None:
     return None
 
 
+def _canonicalize_persisted_endpoint_identity(targets):
+    """Canonicalize legacy endpoint PK aliases before a handler can see them."""
+    from . import resources_adapter
+    from .scheduler_targets import SchedulerTargetShapeError
+
+    canonical = dict(targets or {})
+    target_type = str(canonical.get("type") or "none").strip().lower()
+    try:
+        if target_type in {"endpoint", "endpoints", "agent", "agents"}:
+            values = list(canonical.get("ids") or [])
+            resolved = resources_adapter.canonical_agent_target_ids(identifiers=values)
+            if len(resolved) != len(dict.fromkeys(str(v).strip() for v in values)):
+                raise SchedulerTargetShapeError("One or more persisted scheduler endpoints no longer resolve to a Tactical agent.")
+            canonical["ids"] = resolved
+        elif target_type == "dynamic":
+            scope = dict(canonical.get("scope") or {})
+            if str(scope.get("type") or "").strip().lower() in {"endpoint", "agent"}:
+                values = list(scope.get("ids") or [])
+                resolved = resources_adapter.canonical_agent_target_ids(identifiers=values)
+                if len(resolved) != len(dict.fromkeys(str(v).strip() for v in values)):
+                    raise SchedulerTargetShapeError("One or more persisted scheduler endpoints no longer resolve to a Tactical agent.")
+                scope["type"] = "endpoint"
+                scope["ids"] = resolved
+                canonical["scope"] = scope
+    except resources_adapter.TacticalResourceAdapterError as exc:
+        raise SchedulerTargetShapeError(str(exc)) from exc
+    return canonical
+
+
 def dispatch_due_schedules(now: datetime | None = None) -> dict:
     now = _as_utc(now or timezone.now())
     state = TecTacSchedulerState.current()
@@ -656,6 +685,7 @@ def dispatch_due_schedules(now: datetime | None = None) -> dict:
                         continue
                     try:
                         canonical_targets = normalize_scheduler_targets(schedule.targets or {})
+                        canonical_targets = _canonicalize_persisted_endpoint_identity(canonical_targets)
                     except SchedulerTargetShapeError as exc:
                         schedule.enabled = False
                         schedule.target_state = "invalid"

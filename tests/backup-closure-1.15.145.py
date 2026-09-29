@@ -66,7 +66,10 @@ with tempfile.TemporaryDirectory() as td:
 class FTP:
     def __init__(self): self.deleted=[]; self.renamed=[]
     def storbinary(self,*a,**k): pass
-    def size(self,n): return 3
+    def size(self,n):
+        if n in {'a.tgz','a.tgz.tectac.json'}:
+            raise h.ftplib.error_perm('550 not found')
+        return 3
     def retrbinary(self,cmd,cb,blocksize=0): cb(b'abc')
     def delete(self,n): self.deleted.append(n)
     def rename(self,a,b):

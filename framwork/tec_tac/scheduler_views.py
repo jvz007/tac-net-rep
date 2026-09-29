@@ -79,6 +79,32 @@ def _normalize_targets(targets):
 
 
 
+
+
+def _canonicalize_endpoint_targets_globally(targets):
+    """Repair legacy endpoint aliases without making an authorization decision."""
+    canonical = dict(targets or {})
+    target_type = str(canonical.get("type") or "none").strip().lower()
+    try:
+        if target_type in {"endpoint", "endpoints", "agent", "agents"}:
+            values = list(canonical.get("ids") or [])
+            resolved = resources_adapter.canonical_agent_target_ids(identifiers=values)
+            if len(resolved) != len(dict.fromkeys(str(v).strip() for v in values)):
+                raise SchedulerError("One or more persisted scheduler endpoints no longer resolve to a Tactical agent.")
+            canonical["ids"] = resolved
+        elif target_type == "dynamic":
+            scope = dict(canonical.get("scope") or {})
+            if str(scope.get("type") or "").strip().lower() in {"endpoint", "agent"}:
+                values = list(scope.get("ids") or [])
+                resolved = resources_adapter.canonical_agent_target_ids(identifiers=values)
+                if len(resolved) != len(dict.fromkeys(str(v).strip() for v in values)):
+                    raise SchedulerError("One or more persisted scheduler endpoints no longer resolve to a Tactical agent.")
+                scope["type"] = "endpoint"
+                scope["ids"] = resolved
+                canonical["scope"] = scope
+    except resources_adapter.TacticalResourceAdapterError as exc:
+        raise SchedulerError(str(exc)) from exc
+    return canonical
 def _canonicalize_endpoint_targets_for_user(user, targets):
     canonical = dict(targets or {})
     target_type = str(canonical.get("type") or "none").strip().lower()
@@ -421,18 +447,19 @@ class SchedulerRunNowView(APIView):
         _require_schedule_owner_or_manager(request.user, schedule)
         try:
             canonical_targets = _normalize_targets(schedule.targets or {})
+            canonical_targets = _canonicalize_endpoint_targets_globally(canonical_targets)
         except SchedulerError as exc:
             schedule.enabled = False
             schedule.target_state = "invalid"
             schedule.target_state_detail = str(exc)[:500]
             schedule.save(update_fields=["enabled", "target_state", "target_state_detail", "updated_at"])
             return Response({"detail": str(exc)}, status=400)
+        _require_target_scope(request.user, canonical_targets, payload=False)
         if canonical_targets != (schedule.targets or {}):
             schedule.targets = canonical_targets
             schedule.target_state = "valid"
             schedule.target_state_detail = ""
             schedule.save(update_fields=["targets", "target_state", "target_state_detail", "updated_at"])
-        _require_target_scope(request.user, canonical_targets, payload=False)
         run = queue_manual_run(schedule)
         return Response(serialize_run(run), status=202)
 

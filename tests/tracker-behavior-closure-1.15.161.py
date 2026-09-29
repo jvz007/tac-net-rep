@@ -79,6 +79,8 @@ class FakeFTP:
         self.objects[name] = fh.read()
 
     def size(self, name):
+        if name not in self.objects:
+            raise h.ftplib.error_perm("550 not found")
         return len(self.objects[name])
 
     def retrbinary(self, command, callback, blocksize=0):
@@ -144,6 +146,8 @@ with tempfile.TemporaryDirectory() as td:
         raise AssertionError(argv)
 
     def fake_subrun(argv, **kwargs):
+        if argv[1] == "lsjson" and "--stat" in argv:
+            return SimpleNamespace(returncode=1, stdout="", stderr="object not found")
         if argv[1] == "lsjson":
             return SimpleNamespace(returncode=0, stdout=json.dumps([{"Size": 3}]), stderr="")
         if argv[1] == "hash":
@@ -266,7 +270,7 @@ with tempfile.TemporaryDirectory() as td:
 mig_path = ROOT / "framwork/tec_tac/migrations/0015_scheduler_target_canonicalization.py"
 mig_tree = ast.parse(mig_path.read_text(encoding="utf-8"))
 keep_names = {
-    "_scope_alias_token", "_reserved_filter_value", "_values", "_ids", "_extract_native", "_legacy_normalize", "_endpoint_rows",
+    "_scope_alias_token", "_reserved_filter_value", "_reject_unknown_keys", "_values", "_ids", "_extract_native", "_legacy_normalize", "_endpoint_rows",
     "_canonical_endpoint_ids", "_canonicalize_endpoint_identity", "canonicalize_existing_targets",
 }
 body = []

@@ -188,7 +188,7 @@ with tempfile.TemporaryDirectory() as td:
 # closed for dynamic filters that encode Tactical scope outside targets.scope.
 mig_path = ROOT/'framwork/tec_tac/migrations/0015_scheduler_target_canonicalization.py'
 mig_tree = ast.parse(mig_path.read_text())
-names = {'_NATIVE','_ALIASES','_RESERVED_FILTER_SCOPE_KEYS','_scope_alias_token','_reserved_filter_value','_values','_ids','_extract_native','_legacy_normalize','_endpoint_rows','_canonical_endpoint_ids','_canonicalize_endpoint_identity','canonicalize_existing_targets'}
+names = {'_NATIVE','_ALIASES','_RESERVED_FILTER_SCOPE_KEYS','_scope_alias_token','_reserved_filter_value','_reject_unknown_keys','_values','_ids','_extract_native','_legacy_normalize','_endpoint_rows','_canonical_endpoint_ids','_canonicalize_endpoint_identity','canonicalize_existing_targets'}
 nodes=[]
 for n in mig_tree.body:
     if isinstance(n, ast.Import): nodes.append(n)

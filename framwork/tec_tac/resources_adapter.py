@@ -173,6 +173,34 @@ def site_target_ids_in_scope(*, user, site_ids) -> set[int]:
     )
 
 
+def canonical_agent_target_ids(*, identifiers) -> list[str]:
+    """Resolve endpoint PK/agent_id aliases globally to canonical agent_id values.
+
+    This is an identity normalizer, not an authorization decision. It is used
+    when repairing persisted schedules immediately before execution; Tactical
+    scope is still checked separately for user-owned schedules. Ambiguous
+    numeric aliases fail closed.
+    """
+    requested = [str(value).strip() for value in identifiers]
+    if not requested:
+        return []
+    numeric = {int(value) for value in requested if value.isdigit() and int(value) > 0}
+    _, _, Agent = _models()
+    rows = list(
+        Agent.objects.filter(Q(agent_id__in=set(requested)) | Q(pk__in=numeric))
+        .values_list("pk", "agent_id")
+    )
+    resolved = []
+    for token in requested:
+        matches = {(int(pk), str(agent_id)) for pk, agent_id in rows if str(agent_id) == token or str(pk) == token}
+        if not matches:
+            continue
+        if len(matches) != 1:
+            raise TacticalResourceAdapterError(f"Endpoint identifier {token!r} is ambiguous; use the canonical agent_id.")
+        resolved.append(next(iter(matches))[1])
+    return list(dict.fromkeys(resolved))
+
+
 def canonical_agent_target_ids_in_scope(*, user, identifiers) -> list[str]:
     """Resolve endpoint references to the one canonical scheduler identity: agent_id.
 

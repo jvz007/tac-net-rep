@@ -963,12 +963,27 @@ def ftp_prepare_path(ftp, remote_path, *, create=False):
             ftp.cwd(part)
 
 
+def ftp_path_exists(ftp, name):
+    try:
+        ftp.size(name)
+        return True
+    except ftplib.error_perm as exc:
+        if str(exc).startswith("550"):
+            return False
+        raise RuntimeError(f"Unable to determine whether FTP recovery object {name!r} exists") from exc
+    except Exception as exc:
+        raise RuntimeError(f"Unable to determine whether FTP recovery object {name!r} exists") from exc
+
+
 def ftp_store(config, destination, archive, metadata, log):
     ftp = ftp_connect(config, destination, timeout=120)
     partial_name = archive.name + ".partial"
     partial_sidecar = archive.name + ".tectac.json.partial"
+    final_sidecar = archive.name + ".tectac.json"
     try:
         ftp_prepare_path(ftp, destination["remote_path"], create=True)
+        if ftp_path_exists(ftp, archive.name) or ftp_path_exists(ftp, final_sidecar):
+            raise RuntimeError("FTP recovery archive names are immutable; final archive or sidecar already exists")
         with archive.open("rb") as fh:
             ftp.storbinary(f"STOR {partial_name}", fh, blocksize=1024 * 1024)
         side_bytes = (json.dumps(metadata, indent=2, sort_keys=True) + "\n").encode("utf-8")
@@ -986,11 +1001,8 @@ def ftp_store(config, destination, archive, metadata, log):
         ftp.retrbinary(f"RETR {partial_name}", consume, blocksize=1024 * 1024)
         if size != int(metadata["size_bytes"]) or digest.hexdigest().lower() != str(metadata["sha256"]).lower():
             raise RuntimeError("FTP backup SHA-256 verification failed")
-        # Publish only after the partial object has been strongly verified.
-        for final in (archive.name, archive.name + ".tectac.json"):
-            try: ftp.delete(final)
-            except Exception: pass
-        final_sidecar = archive.name + ".tectac.json"
+        # Final recovery names are immutable. Never delete/replace an existing
+        # archive or sidecar: a retry with the same name must fail closed.
         ftp.rename(partial_sidecar, final_sidecar)
         try:
             ftp.rename(partial_name, archive.name)
@@ -1163,6 +1175,20 @@ def store_local(destination, archive: Path, metadata):
     }
 
 
+def rclone_path_exists(remote, cfg):
+    result = subprocess.run(
+        ["rclone", "lsjson", "--stat", remote, "--config", str(cfg)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120,
+    )
+    if result.returncode == 0:
+        return True
+    detail = (result.stderr or result.stdout or "").lower()
+    missing_markers = ("not found", "directory not found", "object not found", "doesn't exist", "does not exist")
+    if any(marker in detail for marker in missing_markers):
+        return False
+    raise RuntimeError(f"Unable to determine whether rclone recovery object exists: {remote}")
+
+
 def store_rclone(config, destination, archive, metadata, log):
     with tempfile.TemporaryDirectory(prefix="tectac-rclone-") as td:
         temp = Path(td)
@@ -1176,6 +1202,8 @@ def store_rclone(config, destination, archive, metadata, log):
         sidecar.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         sidecar_published = False
         try:
+            if rclone_path_exists(archive_remote, cfg) or rclone_path_exists(sidecar_remote, cfg):
+                raise RuntimeError("rclone recovery archive names are immutable; final archive or sidecar already exists")
             run_logged(["rclone", "copyto", str(archive), partial_remote, "--config", str(cfg)], log, timeout=6 * 60 * 60)
             run_logged(["rclone", "copyto", str(sidecar), partial_sidecar, "--config", str(cfg)], log, timeout=30 * 60)
             stat_result = subprocess.run(["rclone", "lsjson", partial_remote, "--config", str(cfg)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
@@ -1250,6 +1278,13 @@ def store_scp(config, destination, archive, metadata, log):
         sidecar = temp / (archive.name + ".tectac.json")
         sidecar.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         try:
+            final_absent = (
+                "test ! -e {f} && test ! -L {f} && test ! -e {s} && test ! -L {s}"
+            ).format(f=shlex.quote(remote_file), s=shlex.quote(sidecar_file))
+            try:
+                run_logged(["ssh", *ssh_common, host, final_absent], log, timeout=120)
+            except Exception as exc:
+                raise RuntimeError("SCP recovery archive names are immutable; final archive or sidecar already exists or cannot be checked") from exc
             run_logged(["scp", *scp_common, str(archive), f"{host}:{partial_file}"], log, timeout=6 * 60 * 60)
             run_logged(["scp", *scp_common, str(sidecar), f"{host}:{partial_sidecar}"], log, timeout=30 * 60)
             verify = temp / archive.name

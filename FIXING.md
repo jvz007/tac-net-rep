@@ -1,4 +1,4 @@
-# Fixing / review notes — Core 1.15.164
+# Fixing / review notes — Core 1.15.165
 
 Tracker closure focus: D2, D3, L10, L15, L24 and L25. Final restore, backup-publication and Scheduler target-parity cleanup with behavioral regressions.
 Recovery-key import no longer follows the final import path or reads an unbounded source as root. Imported trust-key publication also fsyncs the trust directory.
@@ -10,6 +10,10 @@ Regression: `tests/recovery-key-import-1.15.158.py`.
 
 Tracker closure focus: D2 and D3. Added the missing native Backup & Restore HTTP surface over registered destinations, non-destructive validation, exact recovery identity/version transition display data, and explicit destructive restore confirmation.
 
-## 1.15.164
+## 1.15.164-1
 
-Blocking Scheduler compatibility rebuild: preserve module-declared native target types (`endpoints`, `agents`, `clients`, `sites`) through normalization, persistence, migration repair and handler dispatch. Singular Tactical kinds remain internal to Core scope/authorization. Regression: `tests/scheduler-native-type-compat-1.15.164.py`.
+Blocking Scheduler compatibility rebuild: preserve module-declared native target types (`endpoints`, `agents`, `clients`, `sites`) through normalization, persistence, migration repair and handler dispatch. Singular Tactical kinds remain internal to Core scope/authorization. Regression: `tests/scheduler-native-type-compat-1.15.164-1.py`.
+## 1.15.165
+
+Tracker closure focus: L10, L24 and L25. Remote recovery publication now treats final archive/sidecar names as immutable; migration target repair fails closed on unsupported keys; and endpoint PK aliases are canonicalized to agent_id again immediately before handler execution. Regression: `tests/tracker-closure-1.15.165.py`.
+

@@ -134,6 +134,7 @@ ns = {
     "_as_utc": lambda value: value,
     "recover_stale_runs": lambda value: 0,
     "normalize_scheduler_targets": normalize,
+    "_canonicalize_persisted_endpoint_identity": lambda value: dict(value),
     "SchedulerTargetShapeError": targets.SchedulerTargetShapeError,
     "_runtime_authorization_error": lambda sched: None,
     "latest_occurrence": lambda sched, value: occurrence,

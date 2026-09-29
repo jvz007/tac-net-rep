@@ -66,6 +66,12 @@ def _reserved_filter_value(value):
                 return found
     return None
 
+
+def _reject_unknown_keys(obj, allowed, label):
+    extra = sorted(str(key) for key in obj.keys() if str(key) not in allowed)
+    if extra:
+        raise ValueError(f"{label} contains unsupported key(s): {', '.join(extra)}")
+
 def _values(value):
     if isinstance(value, list):
         return value
@@ -114,9 +120,12 @@ def _legacy_normalize(targets):
         raise ValueError("targets is not an object")
     target_type = str(targets.get("type") or "none").strip().lower()
     if target_type in {"", "none"}:
+        _reject_unknown_keys(targets, {"type"}, "targets")
         return {"type": "none"}
     kind = _NATIVE.get(target_type)
     if kind:
+        allowed = {"type", "ids", *_ALIASES[kind]}
+        _reject_unknown_keys(targets, allowed, "Tactical-native targets")
         if "ids" in targets:
             ids = _ids(kind, targets.get("ids"))
             legacy = [key for key in _ALIASES[kind] if key in targets]
@@ -131,8 +140,17 @@ def _legacy_normalize(targets):
     if target_type != "dynamic":
         return targets
 
+    root_allowed = {"type", "scope", "filter"}
+    for aliases in _ALIASES.values():
+        root_allowed.update(aliases)
+    _reject_unknown_keys(targets, root_allowed, "Dynamic targets")
+
     scope = targets.get("scope")
     if isinstance(scope, dict):
+        scope_allowed = {"type", "ids"}
+        for aliases in _ALIASES.values():
+            scope_allowed.update(aliases)
+        _reject_unknown_keys(scope, scope_allowed, "Dynamic targets.scope")
         explicit_type = str(scope.get("type") or "").strip().lower()
         explicit_kind = _NATIVE.get(explicit_type) if explicit_type else None
         if explicit_type and not explicit_kind:

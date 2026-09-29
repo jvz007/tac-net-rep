@@ -146,6 +146,7 @@ sched_ns = {
     "_as_utc": lambda value: value if value.tzinfo else value.replace(tzinfo=dt.timezone.utc),
     "recover_stale_runs": lambda current: [],
     "normalize_scheduler_targets": lambda targets: dict(targets),
+    "_canonicalize_persisted_endpoint_identity": lambda targets: dict(targets),
     "_runtime_authorization_error": lambda sched: None,
     "latest_occurrence": lambda sched, current: occurrence,
     "due_key": lambda value, exact=False: "old-key",
@@ -181,7 +182,7 @@ def migration_namespace(path: Path, names: set[str]):
     return ns
 
 ns15 = migration_namespace(MIG15, {
-    "_NATIVE", "_ALIASES", "_RESERVED_FILTER_SCOPE_KEYS", "_scope_alias_token", "_reserved_filter_value",
+    "_NATIVE", "_ALIASES", "_RESERVED_FILTER_SCOPE_KEYS", "_scope_alias_token", "_reserved_filter_value", "_reject_unknown_keys",
     "_values", "_ids", "_extract_native", "_legacy_normalize", "_canonical_endpoint_ids", "_canonicalize_endpoint_identity",
 })
 rows = [(42, "agent-42"), (77, "agent-77"), (88, "77")]

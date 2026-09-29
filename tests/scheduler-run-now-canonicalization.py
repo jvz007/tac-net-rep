@@ -65,6 +65,9 @@ def _normalize_targets(targets):
     except target_mod.SchedulerTargetShapeError as exc:
         raise SchedulerError(str(exc)) from exc
 
+def _canonicalize_endpoint_targets_globally(targets):
+    return dict(targets or {})
+
 def _require_target_scope(_user, targets, payload=False):
     assert payload is False
     scope_seen.append(targets)
