@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.182",
+  "version": "1.15.183",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -32,14 +32,14 @@
       "sha256": "b16e78b37eecd6b4690403b4725a0b9977c7e8e9eca51b6cb4493166c952f243"
     },
     {
-      "path": "RELEASE_NOTES_1.15.182.md",
-      "size": 387,
-      "sha256": "915d68589c68c3158c79e4b27d26c14e88190890fb8b4cfcc12f659108b190cf"
+      "path": "RELEASE_NOTES_1.15.183.md",
+      "size": 904,
+      "sha256": "813904b60f2e9cc5f12b1fc78faa6444b9a0f76c6e07f00f624a6522672dc2b3"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "e2ad55199a0fbbd24b3f6b2771fa7628732677e5e70b144e72124d09689cbb08"
+      "sha256": "4f5c02cbdd7417d597581078ab0571cc29d48a082e372b199405649da7abfd6c"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -660,6 +660,11 @@
       "path": "docs/releases/RELEASE_NOTES_1.15.181.md",
       "size": 772,
       "sha256": "1fe3b80c8f03a872de492f4858d6bbdb8297586b61e87e7833ae4a50db096c31"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.182.md",
+      "size": 387,
+      "sha256": "915d68589c68c3158c79e4b27d26c14e88190890fb8b4cfcc12f659108b190cf"
     },
     {
       "path": "docs/releases/RELEASE_NOTES_1.15.19.md",
@@ -1964,7 +1969,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "9f0ef5e334ef7ab8b252fdadaf3a471e47ca87f871fbc7ee5055e4ddb5978a37"
+      "sha256": "a89641df6e44d4c75f3b454d3ce14b1027de669bdc94d31466a7dacb43be04fa"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2085,6 +2090,11 @@
       "path": "tests/d2-d3-restore-orchestration-1.15.173.py",
       "size": 8583,
       "sha256": "0f290348a5da58bd9bd69b9e27adf89059ce4c62543a5b55bb6a567658c910c8"
+    },
+    {
+      "path": "tests/d3-l10-tracker-closure-1.15.183.py",
+      "size": 1379,
+      "sha256": "17c0c1f9db85b8547a5119fdc816acdf29f2d7f91c3428020874780e9e5a3cf3"
     },
     {
       "path": "tests/d5-completion.py",
@@ -2563,8 +2573,8 @@
     },
     {
       "path": "tests/review-hygiene-foundation.sh",
-      "size": 2815,
-      "sha256": "578fbe8ab46c933e6eaf319002ff0f5d9712035158a78602061276e44282d6ef"
+      "size": 2875,
+      "sha256": "6542aeea07a547197b7a4185b13f061daeb5a76c3cd7ae2336aac3e33d27097b"
     },
     {
       "path": "tests/review-regressions-1.15.50.py",

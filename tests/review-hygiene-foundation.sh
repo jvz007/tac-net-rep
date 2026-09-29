@@ -57,3 +57,5 @@ echo "[TEST] PASS review hygiene foundation"
 python3 "${ROOT}/tests/server-backup-registered-restore-1.15.162.py"
 
 python3 "${ROOT}/tests/backup-restore-ui-boundary-1.15.162.py"
+
+python3 "${ROOT}/tests/d3-l10-tracker-closure-1.15.183.py"
