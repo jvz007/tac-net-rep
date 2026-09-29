@@ -538,8 +538,148 @@ HTTP_CONTRACT_DETAILS = {
     },
 }
 
+
+BROWSER_CONTRACTS = (
+    {
+        "id": "ui.authenticated.transport",
+        "phase": "authenticated",
+        "service": "api",
+        "operations": ["api", "apiRaw", "apiBlob", "apiText"],
+        "audience": "module/browser",
+        "docs": "tec-tac-ui/docs/module-runtime-api.md",
+        "purpose": "Use Core-owned authenticated browser transport without reading Tactical tokens or authentication storage.",
+    },
+    {
+        "id": "ui.authenticated.audit",
+        "phase": "authenticated",
+        "service": "audit",
+        "operations": ["record"],
+        "audience": "module/browser",
+        "docs": "tec-tac-ui/docs/module-audit.md",
+        "purpose": "Write module audit events through Core instead of Tactical AuditLog internals.",
+    },
+    {
+        "id": "ui.authenticated.context-actions",
+        "phase": "authenticated",
+        "service": "contextActions",
+        "operations": ["register", "list", "execute", "clear"],
+        "audience": "provider/consumer browser",
+        "docs": "tec-tac-ui/docs/context-actions.md",
+        "purpose": "Contribute and consume resource actions through stable shared placements without importing provider UI internals.",
+    },
+    {
+        "id": "ui.authenticated.context-interactions",
+        "phase": "authenticated",
+        "service": "contextInteractions",
+        "operations": ["register", "list", "execute", "clear"],
+        "audience": "provider/consumer browser",
+        "docs": "tec-tac-ui/docs/context-interactions.md",
+        "purpose": "Contribute and consume cross-module drag/drop interactions through shared surfaces.",
+    },
+    {
+        "id": "ui.authenticated.resource-views",
+        "phase": "authenticated",
+        "service": "resourceViews",
+        "operations": ["register", "list", "clear"],
+        "audience": "provider/consumer browser",
+        "docs": "tec-tac-ui/docs/module-resource-views.md",
+        "purpose": "Render optional module-owned visual contributions on consumer-owned resource placements.",
+    },
+    {
+        "id": "ui.authenticated.code-editor",
+        "phase": "authenticated",
+        "service": "codeEditor",
+        "operations": ["create", "createModel", "registerCompletionProvider", "registerHoverProvider", "registerDiagnosticsProvider", "clear"],
+        "audience": "module/browser",
+        "docs": "tec-tac-ui/docs/module-code-editor.md",
+        "purpose": "Use Core-owned shared editor infrastructure without importing Monaco or Tactical editor internals.",
+    },
+    {
+        "id": "ui.authenticated.dashboard-widgets",
+        "phase": "authenticated",
+        "service": "dashboardWidgets",
+        "operations": ["register", "list", "clear"],
+        "audience": "provider/browser",
+        "docs": "tec-tac-ui/docs/module-dashboard-widgets.md",
+        "purpose": "Contribute module widgets while Core owns dashboard layout, persistence and visibility.",
+    },
+    {
+        "id": "ui.authenticated.quick-actions",
+        "phase": "authenticated",
+        "service": "quickActions",
+        "operations": ["register", "pin", "pinAction", "listPins", "listCatalog", "clear"],
+        "audience": "provider/browser",
+        "docs": "tec-tac-ui/docs/module-quick-actions.md",
+        "purpose": "Expose module-owned operator actions through Core-owned personal Quick Actions.",
+    },
+    {
+        "id": "ui.authenticated.notifications",
+        "phase": "authenticated",
+        "service": "notifications",
+        "operations": ["info", "success", "warning", "error", "show", "dismiss", "clear"],
+        "audience": "module/browser",
+        "docs": "tec-tac-ui/docs/module-notifications.md",
+        "purpose": "Show bounded in-app operator notices without creating another notification surface.",
+    },
+    {
+        "id": "ui.authenticated.help",
+        "phase": "authenticated",
+        "service": "help",
+        "operations": ["register", "open", "clear"],
+        "audience": "provider/browser",
+        "docs": "tec-tac-ui/docs/module-help.md",
+        "purpose": "Contribute module help articles to the Core Help and Knowledge Base surfaces.",
+    },
+    {
+        "id": "ui.authenticated.header",
+        "phase": "authenticated",
+        "service": "header",
+        "operations": ["register", "list", "clear"],
+        "audience": "provider/browser",
+        "docs": "tec-tac-ui/docs/module-header.md",
+        "purpose": "Contribute compact module-owned components such as an Alerts bell to the Core top bar.",
+    },
+    {
+        "id": "ui.authenticated.module-status",
+        "phase": "authenticated",
+        "service": "modules",
+        "operations": ["list", "get", "isInstalled", "isEnabled"],
+        "audience": "module/browser",
+        "docs": "tec-tac-ui/docs/module-status.md",
+        "purpose": "Inspect installed/enabled module state without additional HTTP calls; backend capability checks remain authoritative.",
+    },
+    {
+        "id": "ui.authenticated.runtime-context",
+        "phase": "authenticated",
+        "service": "state.context",
+        "operations": ["read"],
+        "audience": "module/browser",
+        "docs": "tec-tac-ui/docs/module-runtime-api.md",
+        "purpose": "Read Core-provided authenticated context including permissions, preferences and Tactical UI preferences; treat it as read-only state.",
+    },
+    {
+        "id": "ui.public.sso-providers",
+        "phase": "public",
+        "service": "ssoProviders",
+        "operations": ["register", "list", "begin", "clear"],
+        "audience": "provider/public-browser",
+        "docs": "tec-tac-ui/docs/module-sso.md",
+        "purpose": "Contribute sign-in providers from registerPublic(context) before Tactical authentication exists.",
+    },
+    {
+        "id": "ui.public.module-runtime",
+        "phase": "public",
+        "service": "registerPublic(context)",
+        "operations": ["publicApi", "addPublicRoute", "ssoProviders"],
+        "audience": "module/public-browser",
+        "docs": "tec-tac-ui/docs/module-sso.md",
+        "purpose": "Expose bounded anonymous module routes and public API calls without Tactical credentials or authenticated runtime state.",
+    },
+)
+
 RULES = (
     "Use Python tec_tac.* contracts inside the Tec-Tac/Tactical backend; use HTTP only at browser/external process boundaries.",
+    "UI modules must use the documented browser contracts passed to register(context) or registerPublic(context); do not import Core UI internals or read Tactical authentication storage.",
     "Do not import another module's private models, helpers, services, filesystem layout or database tables.",
     "Feature modules must consume Tactical clients/sites/agents through tec_tac.resources; direct Tactical resource-model imports are a Core-only compatibility boundary.",
     "Resolve cross-module business operations through the capability registry and re-check runtime availability at execution time.",
@@ -603,6 +743,7 @@ def build_contract_catalog() -> dict:
     permissions = permission_catalog()
     reporting_models = list_reporting_models()
     http = _http_contracts()
+    browser = [dict(row) for row in BROWSER_CONTRACTS]
     core = []
     for source in (*CORE_RESOURCE_CONTRACTS, *CORE_CONTRACTS):
         row = dict(source)
@@ -619,6 +760,7 @@ def build_contract_catalog() -> dict:
         "generated_at": timezone.now().isoformat(),
         "rules": list(RULES),
         "core": core,
+        "browser": browser,
         "capabilities": capabilities,
         "scheduler_actions": actions,
         "permissions": permissions,
@@ -627,6 +769,7 @@ def build_contract_catalog() -> dict:
         "resource_directory": resource_contract_metadata(),
         "counts": {
             "core": len(core),
+            "browser": len(browser),
             "capabilities": len(capabilities),
             "scheduler_actions": len(actions),
             "permission_modules": len(permissions),
@@ -660,6 +803,11 @@ def render_markdown(catalog: dict | None = None) -> str:
     out.extend(["", "## Core Python contracts", "", "| Import | Function / signature | Audience | Purpose |", "| --- | --- | --- | --- |"])
     for row in data["core"]:
         out.append(f"| `{row['import_path']}` | `{row['name']}{row.get('signature') or '()'}` | {row['audience']} | {row['purpose']} |")
+
+    out.extend(["", "## Browser / UI module contracts", "", "These contracts are supplied by the Tec-Tac UI runtime. They are stable integration surfaces even when no provider modules are currently registered.", "", "| Contract | Phase | Service | Operations | Audience | Canonical docs | Purpose |", "| --- | --- | --- | --- | --- | --- | --- |"])
+    for row in data.get("browser", []):
+        operations = ", ".join(f"`{op}`" for op in row.get("operations", [])) or "_none_"
+        out.append(f"| `{row['id']}` | `{row['phase']}` | `{row['service']}` | {operations} | {row['audience']} | `{row['docs']}` | {row['purpose']} |")
 
     resource = data.get("resource_directory") or {}
     if resource:
@@ -811,6 +959,14 @@ def render_text(catalog: dict | None = None) -> str:
     out.extend(["", "CORE PYTHON CONTRACTS"])
     for row in data["core"]:
         out.append(f"- {row['import_path']}.{row['name']}{row.get('signature') or '()'} [{row['audience']}] - {row['purpose']}")
+
+    out.extend(["", "BROWSER / UI MODULE CONTRACTS"])
+    for row in data.get("browser", []):
+        operations = ",".join(row.get("operations", [])) or "none"
+        out.append(
+            f"- {row['id']} | phase={row['phase']} | service={row['service']} | "
+            f"operations={operations} | audience={row['audience']} | docs={row['docs']} - {row['purpose']}"
+        )
 
     resource = data.get("resource_directory") or {}
     if resource:

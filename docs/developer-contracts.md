@@ -88,6 +88,16 @@ dangerous flag
 
 Permission groups and codenames declared by installed extensions.
 
+### Browser / UI runtime contracts
+
+The catalog also publishes the stable browser services supplied to Tec-Tac UI modules. These rows are present even when no provider modules are currently registered, so a coding agent can discover the supported UI integration surface from the same export used for backend development.
+
+Authenticated `register(context)` services include the Core-owned API transport, audit writer, context actions/interactions, resource views, shared code editor, dashboard widgets, Quick Actions, notifications, Help contributions, module status, header contributions and read-only authenticated runtime context.
+
+Public `registerPublic(context)` services include the bounded public API/route surface and SSO-provider registry.
+
+Each browser-contract row includes its phase (`authenticated` or `public`), service name, supported operations, intended audience and canonical UI documentation path. Live provider registrations remain browser runtime state and are shown separately in the Public Contracts UI.
+
 ### HTTP boundary
 
 The currently registered `/api/tfd/` routes and HTTP methods. These are intended for browser or external-process integration.

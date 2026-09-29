@@ -1,5 +1,7 @@
-# Fixing / review notes — Core 1.15.169
+# Fixing / review notes — Core 1.15.170
 
+
+Module-development readiness: Public Contracts now exports a static browser/UI runtime catalog alongside backend contracts, so coding agents receive one canonical handoff for both integration layers. Regression: `tests/browser-contract-catalog-1.15.170.py`.
 
 Tracker closure focus: D2, D3, L10, F4 and F11. Adds Tactical UI values to authenticated module context, automatic Swagger grouping for every /api/tfd endpoint, and one explicit runner for the existing D2/D3/L10 behavioral closure tests.
 Tracker closure focus: D2, D3, L10, L15, L24 and L25. Final restore, backup-publication and Scheduler target-parity cleanup with behavioral regressions.
