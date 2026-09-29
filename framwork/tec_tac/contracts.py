@@ -685,7 +685,7 @@ BROWSER_CONTRACTS = (
         "operations": ["register", "list", "begin", "clear"],
         "audience": "provider/public-browser",
         "docs": "tec-tac-ui/docs/module-sso.md",
-        "purpose": "Contribute sign-in providers from registerPublic(context) before Tactical authentication exists.",
+        "purpose": "Contribute sign-in providers from registerPublic(context) before Tactical authentication exists. Core owns the browser callback and token-completion boundary; public modules only initiate the provider redirect and never receive Tactical credentials or access tokens.",
     },
     {
         "id": "ui.public.module-runtime",
@@ -694,7 +694,7 @@ BROWSER_CONTRACTS = (
         "operations": ["publicApi", "addPublicRoute", "ssoProviders"],
         "audience": "module/public-browser",
         "docs": "tec-tac-ui/docs/module-sso.md",
-        "purpose": "Expose bounded anonymous module routes and public API calls without Tactical credentials or authenticated runtime state.",
+        "purpose": "Expose bounded anonymous module routes and public API calls without Tactical credentials or authenticated runtime state. SSO callbacks and Tactical token exchange are reserved to Core and are not exposed through registerPublic(context).",
     },
 )
 
@@ -709,6 +709,7 @@ RULES = (
     "Modules define WHAT can run; the shared Scheduler owns WHEN it runs, recurrence, retry, concurrency and history.",
     "Backend authorization is authoritative; frontend visibility is never a substitute for permission checks.",
     "Tec-Tac authenticated backend endpoints must use the Core session-security guard; Tactical token validity alone is not sufficient for Tec-Tac trust.",
+    "SSO provider modules may initiate sign-in only. Core owns /account/provider/callback, exchanges the Tactical SSO session for a Knox token, and establishes the normal Tec-Tac session-security boundary before the operational shell loads.",
     "Report-facing module models must register through tec_tac.reporting; modules must not import or mutate ee.reporting internals or Tactical schema files.",
     "One-off schedule definitions are operational state, not permanent history; the Scheduler may remove completed one-off definitions after the configured retention period while preserving run history.",
     "Scheduler handlers must distinguish permanent from transient failures so retries are not wasted on invalid parameters, unavailable contracts, or incompatible dependencies.",

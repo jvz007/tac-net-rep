@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.179",
+  "version": "1.15.180",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -32,14 +32,14 @@
       "sha256": "b16e78b37eecd6b4690403b4725a0b9977c7e8e9eca51b6cb4493166c952f243"
     },
     {
-      "path": "RELEASE_NOTES_1.15.179.md",
-      "size": 831,
-      "sha256": "57be2c58547582cddda13f56ab4f6fc3362cb2404907667243ccec1242df8bf8"
+      "path": "RELEASE_NOTES_1.15.180.md",
+      "size": 275,
+      "sha256": "f6ea8dccf224afe2520b363589f63d29b121184ab45513e1e87733ae70374776"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "0d13c83040c2f1f256b13a4236ba8fd59a527576410f4ec301cdf02ea9e3fcb8"
+      "sha256": "0b012e5cf15510024fa17eebc4175ecda664316552476709980a4c06d14421ad"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -645,6 +645,16 @@
       "path": "docs/releases/RELEASE_NOTES_1.15.178.md",
       "size": 1053,
       "sha256": "3d8e7e747e46a50e0f8b268c55a1455a503d01d9ec9364ae6bcf2b9c5abf14a3"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.179.md",
+      "size": 831,
+      "sha256": "57be2c58547582cddda13f56ab4f6fc3362cb2404907667243ccec1242df8bf8"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.180.md",
+      "size": 430,
+      "sha256": "72749648fce410f7d7aef51aac17deccbc596677b36eaf3c8ea3618b44042ae4"
     },
     {
       "path": "docs/releases/RELEASE_NOTES_1.15.19.md",
@@ -1378,8 +1388,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 53627,
-      "sha256": "f273bd33722e5e0dc3298d8d30b41c1559c9e8f04150cc3117a09d3dc80dc272"
+      "size": 54156,
+      "sha256": "cc0535033c64178d11f330e23698463dbd412d4523188b81bd4e2fc6593b9481"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -1949,7 +1959,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "e079c7e3bb9b9d6a5db3c9f6dc48e4a38158d8e44fba527a9691709cfd62f1d2"
+      "sha256": "07d2ab014c9e2bd3e640964da1a36fa5e352c62301c72608d8da157af0ba256f"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2120,6 +2130,11 @@
       "path": "tests/f4-core-ui-context-1.15.178.py",
       "size": 1200,
       "sha256": "9fe632ffd3f63d639287e82daec9fa77a53a8f547a471f4b8047301da9c3fd38"
+    },
+    {
+      "path": "tests/f8-sso-contract-1.15.180.py",
+      "size": 565,
+      "sha256": "54af312f82df49fed4b14c6287d1a833ce0240fd051153c4037b53d866df68ab"
     },
     {
       "path": "tests/f9-f10-browser-contract-1.15.175.py",
