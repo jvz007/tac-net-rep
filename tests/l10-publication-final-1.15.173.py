@@ -178,6 +178,36 @@ with tempfile.TemporaryDirectory() as td_raw:
     must(not any(key.endswith("rclone.tgz.tectac.json") for key in remote), "rclone published sidecar was not rolled back")
     must(not any(key.endswith("/rclone.tgz") for key in remote), "rclone final archive became visible")
 
+# rclone timeout-after-publish: if the archive move completed remotely before
+# the client raised, the sidecar must remain and the publication is successful.
+with tempfile.TemporaryDirectory() as td_raw:
+    td = Path(td_raw); archive = td / "landed.tgz"; archive.write_bytes(b"abc")
+    remote = {}
+    old_cfg, old_exists, old_run, old_subrun = h.make_rclone_config, h.rclone_path_exists, h.run_logged, h.subprocess.run
+    h.make_rclone_config = lambda *_a, **_k: td / "rclone.conf"
+    h.rclone_path_exists = lambda remote_path, _cfg: remote_path in remote
+    def landed_run(argv, _log, timeout=None):
+        op=argv[1]
+        if op == 'copyto': remote[argv[3]]=Path(argv[2]).read_bytes(); return None
+        if op == 'moveto':
+            src,dst=argv[2],argv[3]; remote[dst]=remote.pop(src)
+            if dst.endswith('/landed.tgz'): raise TimeoutError('client timed out after server move')
+            return None
+        raise AssertionError(argv)
+    def landed_subrun(argv, **kwargs):
+        if argv[1]=='lsjson': return SimpleNamespace(returncode=0,stdout=json.dumps([{'Size':3}]),stderr='')
+        if argv[1]=='hash': return SimpleNamespace(returncode=0,stdout=meta()['sha256']+'  landed.tgz.partial\n',stderr='')
+        if argv[1]=='deletefile': remote.pop(argv[2],None); return SimpleNamespace(returncode=0,stdout='',stderr='')
+        raise AssertionError(argv)
+    h.run_logged=landed_run; h.subprocess.run=landed_subrun
+    try:
+        result=h.store_rclone({}, {'id':'r','type':'s3','bucket':'bucket','remote_path':'.'}, archive, meta(), Log())
+    finally:
+        h.make_rclone_config, h.rclone_path_exists, h.run_logged, h.subprocess.run = old_cfg, old_exists, old_run, old_subrun
+    must(result['ok'] is True, 'rclone did not reconcile a completed remote move')
+    must(any(key.endswith('/landed.tgz') for key in remote), 'rclone landed archive disappeared during reconciliation')
+    must(any(key.endswith('landed.tgz.tectac.json') for key in remote), 'rclone deleted sidecar under a landed archive')
+
 
 # ---------------- SCP ----------------
 with tempfile.TemporaryDirectory() as td_raw:
@@ -250,5 +280,31 @@ with tempfile.TemporaryDirectory() as td_raw:
     must(not (remote_dir / "scp.tgz.tectac.json").exists(), "SCP published sidecar was not rolled back")
     # The directory used to force failure is not a published archive file.
     must(not (remote_dir / "scp.tgz").is_file(), "SCP final archive became visible")
+
+    # Execute the exact production shell publication command. A directory at a
+    # final name must fail closed (-T) rather than absorb the archive.
+    for target_name in ('scp.tgz', 'scp.tgz.tectac.json'):
+        for child in remote_dir.iterdir():
+            if child.is_dir():
+                import shutil; shutil.rmtree(child)
+            else: child.unlink()
+        (remote_dir / 'scp.tgz.partial').write_bytes(b'abc')
+        (remote_dir / 'scp.tgz.tectac.json.partial').write_bytes(b'{}')
+        (remote_dir / target_name).mkdir()
+        proc=subprocess.run(['bash','-c',publish],text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        must(proc.returncode != 0, f'SCP publish accepted directory target {target_name}')
+        must(not (remote_dir / 'scp.tgz').is_file(), 'SCP archive was exposed through directory-target race')
+
+    # Success path: both partials become final regular files and neither partial remains.
+    for child in remote_dir.iterdir():
+        if child.is_dir():
+            import shutil; shutil.rmtree(child)
+        else: child.unlink()
+    (remote_dir / 'scp.tgz.partial').write_bytes(b'abc')
+    (remote_dir / 'scp.tgz.tectac.json.partial').write_bytes(b'{}')
+    proc=subprocess.run(['bash','-c',publish],text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    must(proc.returncode == 0, f'SCP real publish command failed success path: {proc.stderr}')
+    must((remote_dir/'scp.tgz').is_file() and (remote_dir/'scp.tgz.tectac.json').is_file(), 'SCP success did not publish archive + sidecar')
+    must(not (remote_dir/'scp.tgz.partial').exists() and not (remote_dir/'scp.tgz.tectac.json.partial').exists(), 'SCP success left partials')
 
 print("[TEST] PASS L10 final atomic publication on local/FTP/rclone/SCP")

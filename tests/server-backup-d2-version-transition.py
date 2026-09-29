@@ -31,14 +31,16 @@ with tempfile.TemporaryDirectory() as td:
     assert transition['effective_core_version'] is None
 
     # Once the older payload is installed, exact version verification succeeds.
-    (framework / 'VERSION').write_text('1.15.108\n', encoding='utf-8')
+    (runtime / 'VERSION').write_text('1.15.108\n', encoding='utf-8')
     log = io.StringIO()
     effective = h._verify_restored_core_version(config, {'framework_version': '1.15.108'}, log)
     assert effective == '1.15.108'
     assert 'verified restored Core version: 1.15.108' in log.getvalue()
 
     # A restore that silently remains on the newer version is not considered complete.
-    (framework / 'VERSION').write_text('1.15.121\n', encoding='utf-8')
+    (runtime / 'VERSION').write_text('1.15.121\n', encoding='utf-8')
+    # A stale source-tree VERSION must not satisfy the post-install assertion.
+    (framework / 'VERSION').write_text('1.15.108\n', encoding='utf-8')
     try:
         h._verify_restored_core_version(config, {'framework_version': '1.15.108'}, io.StringIO())
     except RuntimeError as exc:

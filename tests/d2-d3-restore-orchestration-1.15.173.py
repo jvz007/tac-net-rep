@@ -143,10 +143,11 @@ with tempfile.TemporaryDirectory() as td_raw:
             }
         h.create_pre_restore_snapshot = fake_snapshot
 
-        def fake_reintegrate(_config, component_meta, component_archive, _log, *, security_snapshot=None, actor="restore"):
-            calls.append(("reintegrate", dict(component_meta), Path(component_archive), security_snapshot, actor))
+        def fake_reintegrate(_config, component_meta, component_archive, _log, *, security_snapshot=None, actor="restore", source_installation_id=None):
+            calls.append(("reintegrate", dict(component_meta), Path(component_archive), security_snapshot, actor, source_installation_id))
             # This is the exact postcondition D2 requires from a successful older-Core restore.
-            (framework / "VERSION").write_text("1.15.83\n", encoding="utf-8")
+            Path(config["TEC_TAC_ROOT"]).mkdir(parents=True, exist_ok=True)
+            (Path(config["TEC_TAC_ROOT"]) / "VERSION").write_text("1.15.83\n", encoding="utf-8")
             return h._verify_restored_core_version(_config, component_meta, io.StringIO())
         h.run_post_restore_tec_tac = fake_reintegrate
 
@@ -169,7 +170,7 @@ with tempfile.TemporaryDirectory() as td_raw:
     must(transition.get("is_core_downgrade") is True, "older Core restore was not identified as a downgrade")
     must(transition.get("effective_core_version") == "1.15.83", "successful restore did not verify the effective older Core version")
     must(transition.get("version_verified") is True, "successful restore did not mark older Core version verified")
-    must((framework / "VERSION").read_text(encoding="utf-8").strip() == "1.15.83", "restored framework did not remain on the backup version")
+    must((Path(config["TEC_TAC_ROOT"]) / "VERSION").read_text(encoding="utf-8").strip() == "1.15.83", "installed runtime did not remain on the backup version")
 
     reintegrate = next(row for row in calls if row[0] == "reintegrate")
     must(reintegrate[1]["framework_version"] == "1.15.83", "restore orchestrator did not pass the backup Core version into reintegration")

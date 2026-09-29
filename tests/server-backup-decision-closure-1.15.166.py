@@ -132,7 +132,7 @@ with tempfile.TemporaryDirectory() as td_raw:
     # D2 completion is not merely advisory: after the restored payload is in
     # place, Core must verify that the effective installed version is exactly
     # the older version declared by the backup.
-    (framework / 'VERSION').write_text('1.15.83\n', encoding='utf-8')
+    (runtime / 'VERSION').write_text('1.15.83\n', encoding='utf-8')
     log = io.StringIO()
     effective = h._verify_restored_core_version(config, {'framework_version': '1.15.83'}, log)
     assert effective == '1.15.83'

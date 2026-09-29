@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import base64
+import hashlib
 import importlib.util
 import io
 import json
@@ -12,6 +14,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('server_backup_helper_d2d3', ROOT / 'scripts' / 'server-backup-helper.py')
 h = importlib.util.module_from_spec(spec); spec.loader.exec_module(h)
+trust_spec = importlib.util.spec_from_file_location('trusted_publishers_d2d3', ROOT / 'framwork' / 'tec_tac' / 'trusted_publishers.py')
+trusted_publishers = importlib.util.module_from_spec(trust_spec); trust_spec.loader.exec_module(trusted_publishers)
 
 # This regression must be ordinary-CI portable. Production requires root-owned
 # recovery material; when the test itself is non-root, stub only that ownership
@@ -214,6 +218,97 @@ with tempfile.TemporaryDirectory() as td:
     assert 'account_security_policy_restore_merge' in recovery_audit
     assert 'removed restored-only publishers: pub-deleted' in log.getvalue()
 
+
+    # D2 regression: on the same installation the current publisher directory
+    # replaces the restored directory wholesale. A key deleted after the backup
+    # and its public-key file must not be resurrected.
+    same_snap=td/'same-snap'; (same_snap/'trusted-publishers'/'pub-a').mkdir(parents=True)
+    (same_snap/'trusted-publishers'/'pub-a'/'publisher.json').write_text(json.dumps({
+        'schema':1,'publisher_id':'pub-a','status':'trusted',
+        'keys':[{'key_id':'k2','status':'active','public_key':'k2.pub'}],
+    }))
+    (same_snap/'trusted-publishers'/'pub-a'/'k2.pub').write_text('current-k2')
+    same_restored=td/'same-restored'; (same_restored/'pub-a').mkdir(parents=True)
+    (same_restored/'pub-a'/'publisher.json').write_text(json.dumps({
+        'schema':1,'publisher_id':'pub-a','status':'trusted',
+        'keys':[
+            {'key_id':'k1','status':'active','public_key':'k1.pub'},
+            {'key_id':'k2','status':'active','public_key':'k2.pub'},
+        ],
+    }))
+    (same_restored/'pub-a'/'k1.pub').write_text('restored-k1')
+    (same_restored/'pub-a'/'k2.pub').write_text('restored-k2')
+    h._merge_restore_security_state(
+        {'trust_root':str(same_snap/'trusted-publishers'),'trust_authoritative':True,'installation_id':'same-server'},
+        actor='tester', log=io.StringIO(), restored_trust=same_restored, source_installation_id='same-server',
+    )
+    same_policy=json.loads((same_restored/'pub-a'/'publisher.json').read_text())
+    assert [item['key_id'] for item in same_policy['keys']]==['k2'], 'same-server restore resurrected a deleted key'
+    assert not (same_restored/'pub-a'/'k1.pub').exists(), 'same-server restore kept a deleted key file'
+    assert (same_restored/'pub-a'/'k2.pub').read_text()=='current-k2'
+
+    # D2 regression: replacement-server merge normalises legacy current policy
+    # before merging so a top-level revoked key cannot be reactivated by a
+    # restored keys[] record for the same key.
+    legacy_snap=td/'legacy-snap'; (legacy_snap/'trusted-publishers'/'pub-a').mkdir(parents=True)
+    (legacy_snap/'trusted-publishers'/'pub-a'/'publisher.json').write_text(json.dumps({
+        'schema':1,'publisher_id':'pub-a','status':'trusted',
+        'key_id':'k','key_status':'revoked','public_key':'k.pub',
+    }))
+    legacy_restored=td/'legacy-restored'; (legacy_restored/'pub-a').mkdir(parents=True)
+    (legacy_restored/'pub-a'/'publisher.json').write_text(json.dumps({
+        'schema':1,'publisher_id':'pub-a','status':'trusted',
+        'keys':[{'key_id':'k','status':'active','public_key':'k.pub'}],
+    }))
+    (legacy_restored/'pub-a'/'k.pub').write_text('placeholder')
+    h._merge_restore_security_state(
+        {'trust_root':str(legacy_snap/'trusted-publishers'),'trust_authoritative':True,'installation_id':'replacement-server'},
+        actor='tester', log=io.StringIO(), restored_trust=legacy_restored, source_installation_id='source-server',
+    )
+    merged_legacy=json.loads((legacy_restored/'pub-a'/'publisher.json').read_text())
+    assert merged_legacy['keys']==[{'key_id':'k','status':'revoked','algorithm':'Ed25519','public_key':'k.pub'}]
+    try:
+        trusted_publishers._publisher_policy('pub-a','k',trust_root=legacy_restored)
+    except trusted_publishers.PublisherTrustError as exc:
+        assert exc.code=='key_revoked'
+    else:
+        raise AssertionError('legacy revoked key became active after replacement-server merge')
+
+
+    # D2 replacement-server merge keeps publishers that exist only in the restored
+    # source installation, while current revoked key state still wins on conflict.
+    replacement_snap=td/'replacement-snap'; (replacement_snap/'trusted-publishers'/'pub-a').mkdir(parents=True)
+    (replacement_snap/'trusted-publishers'/'pub-a'/'publisher.json').write_text(json.dumps({'schema':1,'publisher_id':'pub-a','status':'trusted','keys':[{'key_id':'k','status':'revoked'}]}))
+    replacement_restored=td/'replacement-restored'; (replacement_restored/'pub-a').mkdir(parents=True)
+    (replacement_restored/'pub-a'/'publisher.json').write_text(json.dumps({'schema':1,'publisher_id':'pub-a','status':'trusted','keys':[{'key_id':'k','status':'active'}]}))
+    (replacement_restored/'source-only').mkdir()
+    (replacement_restored/'source-only'/'publisher.json').write_text(json.dumps({'schema':1,'publisher_id':'source-only','status':'trusted'}))
+    replacement_log=io.StringIO()
+    h._merge_restore_security_state(
+        {'trust_root':str(replacement_snap/'trusted-publishers'),'trust_authoritative':True,'installation_id':'replacement-server'},
+        actor='tester', log=replacement_log, restored_trust=replacement_restored, source_installation_id='source-server',
+    )
+    assert (replacement_restored/'source-only'/'publisher.json').is_file(), 'replacement restore dropped a source publisher'
+    assert json.loads((replacement_restored/'pub-a'/'publisher.json').read_text())['keys'][0]['status']=='revoked'
+    assert 'replacement-server restore retained restored-only publishers' in replacement_log.getvalue()
+
+    # D2 downgrade extraction clears stale newer-only files before the backup tree
+    # is unpacked and refuses configurable roots that are symlinks or touch Tactical.
+    clear_root=td/'clear-runtime'; clear_framework=td/'clear-framework'; clear_ui=td/'clear-ui'
+    for root in (clear_root,clear_framework,clear_ui):
+        root.mkdir(); (root/'newer-only.py').write_text('stale')
+    clear_cfg={'TEC_TAC_ROOT':str(clear_root),'TEC_TAC_FRAMEWORK_SOURCE':str(clear_framework),'TEC_TAC_UI_SOURCE':str(clear_ui),'TACTICAL_ROOT':str(td/'tactical')}
+    h._clear_tec_tac_restore_roots(clear_cfg, io.StringIO())
+    assert not clear_root.exists() and not clear_framework.exists() and not clear_ui.exists(), 'stale Tec-Tac roots survived pre-extraction clear'
+    symlink_root=td/'symlink-runtime'; symlink_root.symlink_to(td/'outside-target', target_is_directory=True)
+    bad_cfg=dict(clear_cfg); bad_cfg['TEC_TAC_ROOT']=str(symlink_root)
+    try:
+        h._clear_tec_tac_restore_roots(bad_cfg, io.StringIO())
+    except RuntimeError as exc:
+        assert 'symlinked' in str(exc)
+    else:
+        raise AssertionError('symlinked Tec-Tac restore root was accepted')
+
     # An older Core restore is allowed but must produce a clear transition notice.
     original=h.detect_version
     h.detect_version=lambda path: '1.15.86'
@@ -221,5 +316,74 @@ with tempfile.TemporaryDirectory() as td:
     h.detect_version=original
     assert transition['is_core_downgrade'] is True
     assert 'puts Core back to 1.15.83' in transition['notice']
+
+
+    # D2 rebuild regression: on a replacement server, a restored-only key must
+    # never keep a filename that is overwritten by a different current key.
+    # Dropping the restored-only key on a differing-byte collision is allowed by
+    # the restore contract and fails closed for any package that claims its id.
+    def _pub_text(key):
+        raw=key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+        return 'ed25519:'+base64.b64encode(raw).decode()+'\n'
+
+    def _assert_colliding_replacement_fails(*, legacy=False):
+        current_key=Ed25519PrivateKey.generate()   # kB: current, revoked
+        restored_key=Ed25519PrivateKey.generate() # kA: restored-only, active
+        suffix='legacy' if legacy else 'keys'
+        snap=td/f'collision-{suffix}-snap'; current_dir=snap/'trusted-publishers'/'P'; current_dir.mkdir(parents=True)
+        restored_root=td/f'collision-{suffix}-restored'; restored_dir=restored_root/'P'; restored_dir.mkdir(parents=True)
+        if legacy:
+            current_policy={'schema':1,'publisher_id':'P','status':'trusted','key_id':'kB','key_status':'revoked','algorithm':'Ed25519','public_key':'public.key','environment':'development','permissions':['module.install']}
+            restored_policy={'schema':1,'publisher_id':'P','status':'trusted','key_id':'kA','key_status':'active','algorithm':'Ed25519','public_key':'public.key','environment':'development','permissions':['module.install']}
+        else:
+            current_policy={'schema':1,'publisher_id':'P','status':'trusted','environment':'development','permissions':['module.install'],'keys':[{'key_id':'kB','status':'revoked','algorithm':'Ed25519','public_key':'public.key'}]}
+            restored_policy={'schema':1,'publisher_id':'P','status':'trusted','environment':'development','permissions':['module.install'],'keys':[{'key_id':'kA','status':'active','algorithm':'Ed25519','public_key':'public.key'}]}
+        (current_dir/'publisher.json').write_text(json.dumps(current_policy))
+        (current_dir/'public.key').write_text(_pub_text(current_key))
+        (restored_dir/'publisher.json').write_text(json.dumps(restored_policy))
+        original_restored_bytes=_pub_text(restored_key).encode()
+        (restored_dir/'public.key').write_bytes(original_restored_bytes)
+
+        h._merge_restore_security_state(
+            {'trust_root':str(snap/'trusted-publishers'),'trust_authoritative':True,'installation_id':'replacement-server'},
+            actor='tester', log=io.StringIO(), restored_trust=restored_root, source_installation_id='source-server',
+        )
+
+        # kA may be preserved only if it still resolves to its original bytes.
+        # This implementation deliberately drops it on a differing-byte filename
+        # collision, so _publisher_policy must fail rather than alias kB's file.
+        try:
+            _policy,_record,key_path=trusted_publishers._publisher_policy('P','kA',trust_root=restored_root)
+        except trusted_publishers.PublisherTrustError as exc:
+            assert exc.code in {'key_unknown','key_revoked'}, (legacy, exc.code)
+        else:
+            assert key_path.read_bytes()==original_restored_bytes, 'restored-only kA resolved to current kB bytes'
+
+        assert (restored_dir/'public.key').read_text()==_pub_text(current_key), 'current key file did not remain authoritative'
+
+        # A package signed by compromised kB but labelled kA must fail trusted
+        # publisher verification after the merge.
+        package=td/f'collision-{suffix}.zip'; package.write_bytes(b'collision regression package')
+        sig=td/f'collision-{suffix}.zip.sig'; sig.write_text('ed25519:'+base64.b64encode(current_key.sign(package.read_bytes())).decode()+'\n')
+        meta={
+            'schema':1,'publisher_id':'P','key_id':'kA','filename':package.name,
+            'sha256':hashlib.sha256(package.read_bytes()).hexdigest(),'signature':sig.name,
+            'algorithm':'Ed25519','environment':'development',
+        }
+        metap=td/f'collision-{suffix}.release.json'; metap.write_text(json.dumps(meta))
+        try:
+            trusted_publishers.verify_release_files(
+                package_path=package, package_filename=package.name,
+                signature_path=sig, signature_filename=sig.name, metadata_path=metap,
+                required_permissions=('module.install',), trust_root=restored_root,
+                server_environment='development', require_signed=True,
+            )
+        except trusted_publishers.PublisherTrustError as exc:
+            assert exc.code in {'key_unknown','key_revoked','signature_invalid'}, (legacy, exc.code)
+        else:
+            raise AssertionError('kB signature labelled as restored-only kA verified after filename collision')
+
+    _assert_colliding_replacement_fails(legacy=False)
+    _assert_colliding_replacement_fails(legacy=True)
 
 print('[TEST] PASS D2/D3 recovery continuity, trust merge and signer inspection')

@@ -1230,17 +1230,33 @@ def store_rclone(config, destination, archive, metadata, log):
             # published sidecar again.
             run_logged(["rclone", "moveto", partial_sidecar, sidecar_remote, "--config", str(cfg)], log, timeout=300)
             sidecar_published = True
-            run_logged(["rclone", "moveto", partial_remote, archive_remote, "--config", str(cfg)], log, timeout=300)
+            try:
+                run_logged(["rclone", "moveto", partial_remote, archive_remote, "--config", str(cfg)], log, timeout=300)
+            except Exception:
+                # A timed-out/failed moveto may still have completed remotely.
+                # Reconcile final state before rollback so we never delete the
+                # sidecar underneath an archive that actually landed.
+                archive_landed = rclone_path_exists(archive_remote, cfg)
+                sidecar_landed = rclone_path_exists(sidecar_remote, cfg)
+                if not (archive_landed and sidecar_landed):
+                    raise
             return {
                 "id": destination["id"], "type": destination["type"], "name": destination_name(destination), "ok": True,
                 "location": archive_remote, "size_verified": True, "hash_verified": hash_ok, "hash_supported": hash_supported,
             }
         except Exception:
-            cleanup_targets = [partial_remote, partial_sidecar]
-            if sidecar_published:
-                cleanup_targets.append(sidecar_remote)
-            for remote in cleanup_targets:
+            # Partials are never public recovery objects and may be removed
+            # best-effort. A published sidecar may only be removed when the
+            # final archive is definitely absent.
+            for remote in (partial_remote, partial_sidecar):
                 subprocess.run(["rclone", "deletefile", remote, "--config", str(cfg)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+            if sidecar_published and not rclone_path_exists(archive_remote, cfg):
+                deleted = subprocess.run(
+                    ["rclone", "deletefile", sidecar_remote, "--config", str(cfg)],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120,
+                )
+                if deleted.returncode != 0 and rclone_path_exists(sidecar_remote, cfg):
+                    raise RuntimeError("rclone recovery sidecar rollback failed; final archive is absent but sidecar remains")
             raise
 
 def scp_args(config, destination, temp, log):
@@ -1291,9 +1307,15 @@ def store_scp(config, destination, archive, metadata, log):
             run_logged(["scp", *scp_common, f"{host}:{partial_file}", str(verify)], log, timeout=6 * 60 * 60)
             if verify.stat().st_size != metadata["size_bytes"] or sha256_file(verify) != metadata["sha256"]:
                 raise RuntimeError("SCP backup verification failed")
+            # Re-check the immutable final names at publication time: uploads
+            # can take hours. `mv -T -n` plus a source-exists assertion gives
+            # fail-closed no-clobber behaviour even if another writer races
+            # between the test and the move, and -T refuses directory targets.
             publish = (
-                "mv -f -- {ps} {s} && "
-                "(mv -f -- {p} {f} || {{ rm -f -- {s}; exit 1; }})"
+                "test ! -e {f} && test ! -L {f} && test ! -e {s} && test ! -L {s} && "
+                "mv -T -n -- {ps} {s} && test ! -e {ps} && test ! -L {ps} && "
+                "(mv -T -n -- {p} {f} && test ! -e {p} && test ! -L {p} || "
+                "{{ rm -f -- {s}; exit 1; }})"
             ).format(
                 p=shlex.quote(partial_file), f=shlex.quote(remote_file),
                 ps=shlex.quote(partial_sidecar), s=shlex.quote(sidecar_file),
@@ -1893,37 +1915,184 @@ def _capture_restore_security_state(config, stage: Path) -> dict:
         "trust_entries": trust_entries,
         "policy": str(snapshot / "update-trust-policy.json"),
         "account_policy": str(snapshot / "account-security-policy.json"),
+        "installation_id": str(config.get("TEC_TAC_INSTALLATION_ID") or "").strip(),
     }
 
 
-def _merge_restore_security_state(snapshot: dict, *, actor: str, log, restored_trust: Path | None = None, restored_policy: Path | None = None, restored_account_policy: Path | None = None):
-    # The target trust store is authoritative. Current entries overwrite restored
-    # copies, and restored-only publishers are removed so an administrator's
-    # post-backup publisher deletion cannot be undone by restore. Recovery signer
-    # trust is a separate D3 mechanism and is not sourced from this publisher set.
+def _publisher_keys(policy: dict) -> list[dict]:
+    """Return publisher keys in the canonical keys[] form.
+
+    Older trust stores used top-level key_id/key_status fields. Normalising that
+    representation before a replacement-server merge prevents a restored keys[]
+    list from bypassing a current legacy revocation.
+    """
+    keys = policy.get("keys")
+    if isinstance(keys, list):
+        return [dict(item) for item in keys if isinstance(item, dict) and str(item.get("key_id") or "").strip()]
+    key_id = str(policy.get("key_id") or "").strip()
+    if not key_id:
+        return []
+    return [{
+        "key_id": key_id,
+        "status": policy.get("key_status", "active"),
+        "algorithm": policy.get("algorithm", "Ed25519"),
+        "public_key": policy.get("public_key", "public.key"),
+    }]
+
+
+def _publisher_key_filename(record: dict) -> str:
+    name = str(record.get("public_key_file") or record.get("public_key") or "public.key").strip()
+    if not name or name in {".", ".."} or Path(name).name != name or "/" in name or "\\" in name:
+        raise RuntimeError("publisher trust metadata contains an unsafe public-key filename")
+    return name
+
+
+def _same_regular_file_bytes(left: Path, right: Path) -> bool:
+    if not left.is_file() or left.is_symlink() or not right.is_file() or right.is_symlink():
+        return False
+    return left.stat().st_size == right.stat().st_size and sha256_file(left) == sha256_file(right)
+
+
+def _merge_publisher_json(restored_file: Path, current_file: Path):
+    """Merge publisher policy for a replacement-server restore only.
+
+    Current target policy is authoritative for keys it already knows. Restored
+    source keys are added only when absent from the current target policy. A
+    revoked state always wins. Restored-only keys are dropped when their
+    public-key filename collides with a different current key file; this prevents
+    one key_id from resolving to another key_id's bytes after current files are
+    copied over the restored publisher directory. Callers handling a
+    same-installation restore must replace the restored publisher directory
+    wholesale with the current one.
+    """
+    try:
+        restored = json.loads(restored_file.read_text(encoding="utf-8")) if restored_file.is_file() else {}
+        current = json.loads(current_file.read_text(encoding="utf-8")) if current_file.is_file() else {}
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("publisher trust metadata is unreadable during restore merge") from exc
+    if not isinstance(restored, dict) or not isinstance(current, dict):
+        raise RuntimeError("publisher trust metadata must be a JSON object")
+
+    restored_keys = {str(item.get("key_id") or "").strip(): item for item in _publisher_keys(restored)}
+    current_keys = {str(item.get("key_id") or "").strip(): item for item in _publisher_keys(current)}
+
+    # Replacement-server safety boundary: a restored-only key may refer to a
+    # filename that the target already uses for a different key. The caller will
+    # copy current files over restored files after this merge. If the two files
+    # differ, retaining the restored key record would let its key_id resolve to
+    # the target key's bytes. Drop that restored-only key instead of creating an
+    # ambiguous trust mapping. Same-byte aliases are safe to retain.
+    for key_id in list(restored_keys):
+        if key_id in current_keys:
+            continue
+        record = restored_keys[key_id]
+        key_name = _publisher_key_filename(record)
+        restored_key_path = restored_file.parent / key_name
+        current_key_path = current_file.parent / key_name
+        if not current_key_path.exists() and not current_key_path.is_symlink():
+            continue
+        if _same_regular_file_bytes(restored_key_path, current_key_path):
+            continue
+        restored_keys.pop(key_id, None)
+
+    merged_keys = []
+    order = []
+    for item in _publisher_keys(current) + _publisher_keys(restored):
+        key_id = str(item.get("key_id") or "").strip()
+        if key_id and key_id not in order:
+            order.append(key_id)
+    for key_id in order:
+        if key_id in current_keys:
+            record = dict(current_keys[key_id])
+            restored_record = restored_keys.get(key_id)
+            if restored_record and str(restored_record.get("status") or "").lower() == "revoked":
+                record["status"] = "revoked"
+        elif key_id in restored_keys:
+            record = dict(restored_keys[key_id])
+        else:
+            continue
+        merged_keys.append(record)
+
+    merged = dict(restored)
+    merged.update(current)
+    # Remove legacy fields after canonicalisation so trusted_publishers always
+    # evaluates the merged keys[] policy first and cannot see conflicting state.
+    for legacy in ("key_id", "key_status", "algorithm", "public_key"):
+        merged.pop(legacy, None)
+    if str(restored.get("status") or "").lower() == "revoked" or str(current.get("status") or "").lower() == "revoked":
+        merged["status"] = "revoked"
+    if merged_keys:
+        merged["keys"] = merged_keys
+    else:
+        merged.pop("keys", None)
+    atomic_json(restored_file, merged, mode=0o644, uid=0, gid=0)
+
+
+def _merge_restore_security_state(snapshot: dict, *, actor: str, log, restored_trust: Path | None = None, restored_policy: Path | None = None, restored_account_policy: Path | None = None, source_installation_id: str | None = None):
+    # On the same installation, target deletions remain authoritative so a
+    # restore cannot resurrect a publisher an administrator removed after the
+    # backup. On a replacement server, the restored trust store is the source
+    # installation's durable state and must be retained. In both cases current
+    # entries are merged over restored entries and a revoked publisher/key wins.
     current_trust = Path(snapshot.get("trust_root") or "")
     restored_trust = Path(restored_trust or "/etc/tec-tac/trusted-publishers")
+    target_installation_id = str(snapshot.get("installation_id") or "").strip()
+    source_installation_id = str(source_installation_id or "").strip()
+    replacement_server = bool(target_installation_id and source_installation_id and target_installation_id != source_installation_id)
     if snapshot.get("trust_authoritative") and current_trust.is_dir():
         restored_trust.mkdir(parents=True, exist_ok=True)
         current_names = {entry.name for entry in current_trust.iterdir() if not entry.is_symlink()}
         removed = []
-        for entry in list(restored_trust.iterdir()):
-            if entry.name in current_names:
-                continue
-            removed.append(entry.name)
-            if entry.is_dir() and not entry.is_symlink(): shutil.rmtree(entry)
-            else: entry.unlink()
+        if not replacement_server:
+            for entry in list(restored_trust.iterdir()):
+                if entry.name in current_names:
+                    continue
+                removed.append(entry.name)
+                if entry.is_dir() and not entry.is_symlink(): shutil.rmtree(entry)
+                else: entry.unlink()
         for entry in current_trust.iterdir():
             if entry.is_symlink():
                 continue
             target = restored_trust / entry.name
-            if target.exists() or target.is_symlink():
+            if not target.exists():
+                if entry.is_dir(): shutil.copytree(entry, target, symlinks=False)
+                elif entry.is_file(): shutil.copy2(entry, target)
+                continue
+            if entry.is_dir() and target.is_dir() and not target.is_symlink():
+                if not replacement_server:
+                    # Same installation: the live target trust directory is the
+                    # authority. Replacing the whole directory preserves key
+                    # deletion/rotation decisions made after the backup and also
+                    # removes restored-only public-key files.
+                    shutil.rmtree(target)
+                    shutil.copytree(entry, target, symlinks=False)
+                else:
+                    current_json = entry / "publisher.json"
+                    target_json = target / "publisher.json"
+                    # Replacement server: merge policy while both restored and
+                    # current key files are still intact, so filename collisions
+                    # can be compared safely. Only then let current target files
+                    # win by name.
+                    if current_json.is_file():
+                        _merge_publisher_json(target_json, current_json)
+                    for child in entry.iterdir():
+                        if child.name == "publisher.json" or child.is_symlink():
+                            continue
+                        dst = target / child.name
+                        if dst.exists() or dst.is_symlink():
+                            if dst.is_dir() and not dst.is_symlink(): shutil.rmtree(dst)
+                            else: dst.unlink()
+                        if child.is_dir(): shutil.copytree(child, dst, symlinks=False)
+                        elif child.is_file(): shutil.copy2(child, dst)
+            else:
                 if target.is_dir() and not target.is_symlink(): shutil.rmtree(target)
                 else: target.unlink()
-            if entry.is_dir(): shutil.copytree(entry, target, symlinks=False)
-            elif entry.is_file(): shutil.copy2(entry, target)
-        log.write("[TEC-TAC-BACKUP] target publisher trust preserved over restored publisher state")
-        if removed:
+                if entry.is_dir(): shutil.copytree(entry, target, symlinks=False)
+                elif entry.is_file(): shutil.copy2(entry, target)
+        log.write("[TEC-TAC-BACKUP] target publisher trust merged with restored publisher state")
+        if replacement_server:
+            log.write("; replacement-server restore retained restored-only publishers")
+        elif removed:
             log.write(f"; removed restored-only publishers: {', '.join(sorted(removed))}")
         log.write("\n")
 
@@ -1991,9 +2160,10 @@ def _verify_restored_core_version(config, component_meta: dict, log) -> str | No
     if not expected:
         log.write("[TEC-TAC-BACKUP] restored Core bundle has no framework_version; skipping exact version assertion\n")
         return None
-    framework_source = Path(config["TEC_TAC_FRAMEWORK_SOURCE"])
     runtime_root = Path(config["TEC_TAC_ROOT"])
-    effective = detect_version(framework_source) or detect_version(runtime_root)
+    # Verify the deployed runtime produced by install.sh, not the source tree
+    # that came from the same archive as the manifest.
+    effective = detect_version(runtime_root)
     if effective != expected:
         raise RuntimeError(
             f"post-restore Core version verification failed: backup declares {expected}, installed Core reports {effective or 'unknown'}"
@@ -3346,13 +3516,55 @@ def verify_tactical_runtime(config, log):
             raise RuntimeError(f"post-restore Tactical service verification failed: {service}")
 
 
-def run_post_restore_tec_tac(config, component_meta, component_archive, log, *, security_snapshot=None, actor="restore"):
+def _clear_tec_tac_restore_roots(config, log):
+    candidates = [
+        Path(config["TEC_TAC_ROOT"]),
+        Path(config["TEC_TAC_FRAMEWORK_SOURCE"]),
+        Path(config["TEC_TAC_UI_SOURCE"]),
+        Path("/opt/tec-tac-ui"),
+    ]
+    tactical_root = Path(config["TACTICAL_ROOT"]).resolve(strict=False)
+    unique = []
+    for candidate in candidates:
+        if not candidate.is_absolute():
+            raise RuntimeError(f"unsafe relative Tec-Tac restore root: {candidate}")
+        # A privileged restore must never follow a configurable root symlink.
+        # Clearing the resolved target would turn a root-owned configuration
+        # mistake into arbitrary tree deletion.
+        if candidate.is_symlink():
+            raise RuntimeError(f"unsafe symlinked Tec-Tac restore root: {candidate}")
+        resolved = candidate.resolve(strict=False)
+        if (
+            resolved == Path("/")
+            or resolved == tactical_root
+            or resolved in tactical_root.parents
+            or tactical_root in resolved.parents
+        ):
+            raise RuntimeError(f"unsafe Tec-Tac restore root: {candidate}")
+        if any(resolved == prior or resolved.is_relative_to(prior) for prior, _ in unique):
+            continue
+        unique = [(prior, original) for prior, original in unique if not prior.is_relative_to(resolved)]
+        unique.append((resolved, candidate))
+    for resolved, path in sorted(unique, key=lambda value: len(value[0].parts), reverse=True):
+        if path.is_symlink():
+            raise RuntimeError(f"Tec-Tac restore root changed to a symlink: {path}")
+        if path.is_file():
+            path.unlink()
+        elif path.is_dir():
+            shutil.rmtree(path)
+        log.write(f"[TEC-TAC-BACKUP] cleared restore root before extraction: {path}\n")
+
+
+def run_post_restore_tec_tac(config, component_meta, component_archive, log, *, security_snapshot=None, actor="restore", source_installation_id=None):
     # Destination paths and executable installers are chosen exclusively from
     # the root-owned local config. Manifest paths are descriptive metadata and
     # can never redirect a privileged restore.
+    _clear_tec_tac_restore_roots(config, log)
     safe_extract_payload_tar(component_archive, config=config)
     if security_snapshot:
-        _merge_restore_security_state(security_snapshot, actor=actor, log=log)
+        _merge_restore_security_state(
+            security_snapshot, actor=actor, log=log, source_installation_id=source_installation_id
+        )
     framework_source=Path(config["TEC_TAC_FRAMEWORK_SOURCE"])
     ui_source=Path(config["TEC_TAC_UI_SOURCE"])
     backend_installer=framework_source/"install.sh"
@@ -3925,7 +4137,7 @@ def operation_restore_backup(config, job, log):
                 env=os.environ.copy(); env.update({"HOME":home,"USER":user,"LOGNAME":user,"GROUP":grp.getgrgid(tactical_identity(config)[1]).gr_name})
                 run_logged([str(restore_script),str(extracted["tactical"])],log,env=env,cwd=home,timeout=10*60*60,user=user)
                 if mode=="full":
-                    effective_core_version = run_post_restore_tec_tac(config,(manifest.get("components") or {}).get("tec_tac") or {},extracted["tec_tac"],log,security_snapshot=security_snapshot,actor=(job.get("context") or {}).get("requested_by") or "restore")
+                    effective_core_version = run_post_restore_tec_tac(config,(manifest.get("components") or {}).get("tec_tac") or {},extracted["tec_tac"],log,security_snapshot=security_snapshot,actor=(job.get("context") or {}).get("requested_by") or "restore",source_installation_id=manifest.get("installation_id"))
                     if job.get("version_transition") is not None:
                         job["version_transition"]["effective_core_version"] = effective_core_version
                         job["version_transition"]["version_verified"] = bool(effective_core_version)
@@ -3961,7 +4173,7 @@ def operation_restore_backup(config, job, log):
             }
             atomic_json(job_path(job["id"],config),job)
             try:
-                effective_core_version = run_post_restore_tec_tac(config,(manifest.get("components") or {}).get("tec_tac") or {},extracted["tec_tac"],log,security_snapshot=security_snapshot,actor=(job.get("context") or {}).get("requested_by") or "restore")
+                effective_core_version = run_post_restore_tec_tac(config,(manifest.get("components") or {}).get("tec_tac") or {},extracted["tec_tac"],log,security_snapshot=security_snapshot,actor=(job.get("context") or {}).get("requested_by") or "restore",source_installation_id=manifest.get("installation_id"))
                 if job.get("version_transition") is not None:
                     job["version_transition"]["effective_core_version"] = effective_core_version
                     job["version_transition"]["version_verified"] = bool(effective_core_version)
