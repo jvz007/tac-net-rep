@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.181",
+  "version": "1.15.182",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -32,14 +32,14 @@
       "sha256": "b16e78b37eecd6b4690403b4725a0b9977c7e8e9eca51b6cb4493166c952f243"
     },
     {
-      "path": "RELEASE_NOTES_1.15.181.md",
-      "size": 772,
-      "sha256": "1fe3b80c8f03a872de492f4858d6bbdb8297586b61e87e7833ae4a50db096c31"
+      "path": "RELEASE_NOTES_1.15.182.md",
+      "size": 387,
+      "sha256": "915d68589c68c3158c79e4b27d26c14e88190890fb8b4cfcc12f659108b190cf"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "0f3355a007f77891d04d23a36996651518d3f200d12b05984176f37424cf0b7b"
+      "sha256": "e2ad55199a0fbbd24b3f6b2771fa7628732677e5e70b144e72124d09689cbb08"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -655,6 +655,11 @@
       "path": "docs/releases/RELEASE_NOTES_1.15.180.md",
       "size": 430,
       "sha256": "72749648fce410f7d7aef51aac17deccbc596677b36eaf3c8ea3618b44042ae4"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.181.md",
+      "size": 772,
+      "sha256": "1fe3b80c8f03a872de492f4858d6bbdb8297586b61e87e7833ae4a50db096c31"
     },
     {
       "path": "docs/releases/RELEASE_NOTES_1.15.19.md",
@@ -1388,8 +1393,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 54156,
-      "sha256": "cc0535033c64178d11f330e23698463dbd412d4523188b81bd4e2fc6593b9481"
+      "size": 54260,
+      "sha256": "9844faf77ce09513819e3de68ee809c44607fac995b980545f3c51822e8a2e53"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -1773,8 +1778,8 @@
     },
     {
       "path": "framwork/tec_tac/views.py",
-      "size": 35900,
-      "sha256": "978e1e67b3c525e82fb5cc3fd7ce8c33fc75f44eed5a0f9e60d6816ad2dcdc2d"
+      "size": 36437,
+      "sha256": "7a2b4c2a0bbdc50a6782095d9192a3c14c2b64cc8fd12517c6cc09a9e1eb19ce"
     },
     {
       "path": "install.sh",
@@ -1959,7 +1964,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "259cf44baf4d0a81d7c35268e2ccf5e14ae295216d677c503fc41e15c3f50ee9"
+      "sha256": "9f0ef5e334ef7ab8b252fdadaf3a471e47ca87f871fbc7ee5055e4ddb5978a37"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2910,6 +2915,11 @@
       "path": "tests/tactical-update-survival.sh",
       "size": 2484,
       "sha256": "5d93d43f92957f4d0ea2233f5608ffa1b9420f33edafbf21f356a7ab3890b419"
+    },
+    {
+      "path": "tests/tactical-web-ui-context-1.15.182.py",
+      "size": 1299,
+      "sha256": "f7eb46833a170dd9b9d843baf7eb7929db1ad6295959526a080c5bb2df260964"
     },
     {
       "path": "tests/test_core_leftovers_1_15_139.py",

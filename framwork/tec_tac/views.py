@@ -84,6 +84,13 @@ def _runtime_localization(request):
     date_time_format = str(getattr(core_settings, "date_format", "") or "MMM-DD-YYYY - HH:mm")
     return {"locale": locale, "timeZone": time_zone, "dateTimeFormat": date_time_format}
 
+def _tactical_web_ui_context(index_path=None, nginx_path=None):
+    """Return whether the standard Tactical web UI is operationally installed."""
+    index = Path(index_path) if index_path is not None else Path("/var/www/rmm/dist/index.html")
+    nginx = Path(nginx_path) if nginx_path is not None else Path("/etc/nginx/sites-enabled/frontend.conf")
+    installed = index.is_file() and nginx.is_file()
+    return {"installed": installed, "url": "/" if installed else None}
+
 def _role_for_user(user):
     try:
         return user.get_and_set_role_cache()
@@ -383,6 +390,7 @@ class UiContextView(APIView):
                 "preferences": preferences,
                 **_runtime_localization(request),
                 "tactical_ui": tactical_ui_context(request.user),
+                "tactical_web_ui": _tactical_web_ui_context(),
                 "preferences_initialized": preferences_initialized,
                 "preferences_updated_at": preferences_updated_at,
             }
