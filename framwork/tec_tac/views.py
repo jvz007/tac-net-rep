@@ -52,6 +52,7 @@ from .module_runtime import module_runtime_snapshot
 from .registry import get_plugins
 from .notices import unread_count as notice_unread_count
 from .preferences import get_user_preferences
+from .account_self_service import tactical_ui_context
 from .session_security import SessionAuthenticated, _audit
 from .trust_policy import TrustPolicyError, LEVEL_RANK, console_guidance as trust_policy_console_guidance, get_policy as get_update_trust_policy, set_policy as set_update_trust_policy
 
@@ -364,6 +365,7 @@ class UiContextView(APIView):
                 "module_status": module_runtime_snapshot(plugins),
                 "notice_unread_count": notice_unread_count(request.user),
                 "preferences": preferences,
+                "tactical_ui": tactical_ui_context(request.user),
                 "preferences_initialized": preferences_initialized,
                 "preferences_updated_at": preferences_updated_at,
             }

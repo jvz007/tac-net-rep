@@ -55,6 +55,16 @@ class TecTacFrameworkConfig(AppConfig):
         # modules never need to import ee.reporting internals themselves.
         install_tactical_reporting_bridge()
 
+        # Swagger/OpenAPI is generated after Django app startup. Install one
+        # post-processing hook so all Core and dynamically mounted module
+        # endpoints under /api/tfd/ are grouped consistently.
+        try:
+            from .openapi import install_openapi_grouping
+            install_openapi_grouping()
+        except Exception:
+            # Documentation grouping must never affect Tactical availability.
+            logger.exception("Tec-Tac OpenAPI grouping hook installation failed")
+
         # Register framework-owned API routes in memory. This deliberately
         # avoids editing Tactical's tracked tacticalrmm/urls.py file.
         from tacticalrmm import urls as tactical_urls

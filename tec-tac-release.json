@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.168",
+  "version": "1.15.169",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -18,8 +18,8 @@
     },
     {
       "path": "FIXING.md",
-      "size": 1915,
-      "sha256": "8227a8fa26e0a1fbdb7c8cd79a67beb4745fe38f3cec19b0ef378ae1dcbb4ec9"
+      "size": 2154,
+      "sha256": "5346358a8a63dbd1349a8ab42f9e8b819d29d9367af88578b150e97b1693f925"
     },
     {
       "path": "LICENSE",
@@ -32,14 +32,14 @@
       "sha256": "b16e78b37eecd6b4690403b4725a0b9977c7e8e9eca51b6cb4493166c952f243"
     },
     {
-      "path": "RELEASE_NOTES_1.15.168.md",
-      "size": 1047,
-      "sha256": "ae7fe315cadbcda24c60b2c934a191a77be579eb0f2028e84424b559dc26afa5"
+      "path": "RELEASE_NOTES_1.15.169.md",
+      "size": 1268,
+      "sha256": "4ea576ba7cf3c75bcc99e019f3de0b957e5f859d6059569d73de8e3d858a1476"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "9a679d3b13e862814bbf2234b3e1d2d4a4a1060d5f67bc4b8843f3ee440d12d6"
+      "sha256": "3ca986d0ceb10071be7798a24925ce3611f8e3deb6d0e3fc3dbc91b0a4ffb34d"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -135,6 +135,11 @@
       "path": "docs/my-account.md",
       "size": 1843,
       "sha256": "553101524dc3d6c06fc12358aa1382a7670e9359818d787b9ef41098e490cf00"
+    },
+    {
+      "path": "docs/openapi-grouping.md",
+      "size": 642,
+      "sha256": "d8defaef61782bcdbdb132d2a09bbec04a7e47a50e7112d276193ef819b4ff06"
     },
     {
       "path": "docs/optional-module-integrations.md",
@@ -585,6 +590,11 @@
       "path": "docs/releases/RELEASE_NOTES_1.15.167.md",
       "size": 1209,
       "sha256": "5cc835b2ad3b3a584d6ea6e96ef09faafa1f4988045aab9cbea4e0e649170488"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.15.168.md",
+      "size": 1034,
+      "sha256": "ee406eea4212bfa24f63a7c453dcf7dce97521e96603c4600be7219031b01ff1"
     },
     {
       "path": "docs/releases/RELEASE_NOTES_1.15.19.md",
@@ -1263,8 +1273,8 @@
     },
     {
       "path": "framwork/tec_tac/account_self_service.py",
-      "size": 8895,
-      "sha256": "9ccf25bb95f6d92c657661fd92e9495df882835c78750fad475f12849a342efb"
+      "size": 9478,
+      "sha256": "2ff7607e9d40c161f6c927ad6f84786c27b6999a32c3eca6b6db2b1441aed401"
     },
     {
       "path": "framwork/tec_tac/account_self_service_views.py",
@@ -1273,8 +1283,8 @@
     },
     {
       "path": "framwork/tec_tac/apps.py",
-      "size": 3342,
-      "sha256": "84182bddecad0b4e452bbf4d10f3f231812423dc941d5b643b0bd5eb4464ed63"
+      "size": 3852,
+      "sha256": "d328522872250a69237a67ffeb62e62f8174fcb20f4651cc25ddcea28f095d4c"
     },
     {
       "path": "framwork/tec_tac/audit.py",
@@ -1547,6 +1557,11 @@
       "sha256": "03c0168644e4e4539727e1451b4a5dbcbd5ee3377197d8c128cf4f47481935a1"
     },
     {
+      "path": "framwork/tec_tac/openapi.py",
+      "size": 3486,
+      "sha256": "46d692231b4a4785b61967278d5843e9ccad8877af5d38bda148c14ad64103da"
+    },
+    {
       "path": "framwork/tec_tac/preference_views.py",
       "size": 1711,
       "sha256": "60f9e7e9396e6a990a125bd1eab15bc01b7b62f9f941b218f88a04857c17c2ce"
@@ -1693,8 +1708,8 @@
     },
     {
       "path": "framwork/tec_tac/views.py",
-      "size": 34925,
-      "sha256": "2d99b40cc86a5b0ab136f9051e9b85908607ec7a0209604025dab76bd5cee4cf"
+      "size": 35045,
+      "sha256": "cae48b0e3d829ec517c252469ab94acf92cf2993e23ae6e05902f057b9e61a8b"
     },
     {
       "path": "install.sh",
@@ -1879,7 +1894,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "7dcac589afe195f277adf7ac845c5a9c1642e4a19d0317100caff7fb6178f746"
+      "sha256": "55fa97217972cc09fa339c11b62f57484a61adccb219aec113d9e6b6a2a62583"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2393,8 +2408,8 @@
     },
     {
       "path": "tests/review-hygiene-foundation.sh",
-      "size": 1859,
-      "sha256": "17961ba578679518659f62477184ad14c20fbb82aec3c9c902cec8ffbef16906"
+      "size": 2093,
+      "sha256": "130174551a1d233c9507e7f3d0c439af14af4fe139e0b478c1f52cdf7424fe63"
     },
     {
       "path": "tests/review-regressions-1.15.50.py",
@@ -2772,6 +2787,11 @@
       "sha256": "4fb172e2c14658f3eb746e649caf48a7d3369c6163b9161e78d36317a287fe8e"
     },
     {
+      "path": "tests/tracker-feature-closure-1.15.169.py",
+      "size": 2863,
+      "sha256": "277e16bdd75094bca269c9dda3ded35f11f90f6848b375aae47e3c4634b34583"
+    },
+    {
       "path": "tests/tracker-final-review-1.15.164.py",
       "size": 15396,
       "sha256": "0eaff5f60f59d6f1c15cbc900788f6a886b6c122e3e814a3adf12981b2d46418"
@@ -2780,6 +2800,11 @@
       "path": "tests/tracker-open-closure-1.15.158.py",
       "size": 1650,
       "sha256": "777f531ff18f25907abbe9523f9cac239e44aa8cc4e22615998684ec537774a0"
+    },
+    {
+      "path": "tests/tracker-open-closure-1.15.169.py",
+      "size": 383,
+      "sha256": "e25ab748004228170a78d5b98ba6aa79a7f9e00532a4d6dae61aa0750a1a6453"
     },
     {
       "path": "tests/tracker-partial-closure-1.15.151.py",

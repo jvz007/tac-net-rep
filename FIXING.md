@@ -1,5 +1,7 @@
-# Fixing / review notes — Core 1.15.168
+# Fixing / review notes — Core 1.15.169
 
+
+Tracker closure focus: D2, D3, L10, F4 and F11. Adds Tactical UI values to authenticated module context, automatic Swagger grouping for every /api/tfd endpoint, and one explicit runner for the existing D2/D3/L10 behavioral closure tests.
 Tracker closure focus: D2, D3, L10, L15, L24 and L25. Final restore, backup-publication and Scheduler target-parity cleanup with behavioral regressions.
 Recovery-key import no longer follows the final import path or reads an unbounded source as root. Imported trust-key publication also fsyncs the trust directory.
 

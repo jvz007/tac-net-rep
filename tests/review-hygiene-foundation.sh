@@ -20,9 +20,13 @@ python3 "${ROOT}/tests/my-account-features-1.15.167.py"
 if [[ "$(id -u)" -eq 0 ]] && command -v runuser >/dev/null 2>&1 && id nobody >/dev/null 2>&1; then
   runuser -u nobody -- python3 "${ROOT}/tests/server-backup-d2-d3.py"
 python3 "${ROOT}/tests/server-backup-decision-closure-1.15.166.py"
+python3 "${ROOT}/tests/tracker-feature-closure-1.15.169.py"
+python3 "${ROOT}/tests/tracker-open-closure-1.15.169.py"
 else
   python3 "${ROOT}/tests/server-backup-d2-d3.py"
 python3 "${ROOT}/tests/server-backup-decision-closure-1.15.166.py"
+python3 "${ROOT}/tests/tracker-feature-closure-1.15.169.py"
+python3 "${ROOT}/tests/tracker-open-closure-1.15.169.py"
 fi
 
 # Portable privileged-boundary coverage delegated to portable-privileged-foundation.sh:

@@ -126,6 +126,20 @@ def reset_own_totp(user, *, current_password: str, current_totp: str, request=No
     }
 
 
+def tactical_ui_context(user) -> dict[str, Any]:
+    """Return the lightweight Tactical UI values exposed to module runtime context.
+
+    Keep this hot-path payload intentionally small: modules need the effective
+    double-click action and selected URL Action identity, not the full URL Action
+    catalogue returned by the My Account editor.
+    """
+    return {
+        "agent_dblclick_action": str(getattr(user, "agent_dblclick_action", "") or ""),
+        "url_action_id": getattr(user, "url_action_id", None),
+        "can_run_url_actions": _can_run_url_actions(user),
+    }
+
+
 def tactical_ui_preferences(user) -> dict[str, Any]:
     field = user._meta.get_field("agent_dblclick_action")
     choices = [{"value": str(value), "label": str(label)} for value, label in field.choices]

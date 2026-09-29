@@ -1,4 +1,4 @@
-# Tec-Tac backend/framework 1.15.168
+# Tec-Tac Core 1.15.168
 
 ## Clients & Sites lifecycle and custom fields (F5-F7)
 
