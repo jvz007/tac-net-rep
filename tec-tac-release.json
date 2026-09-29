@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.180",
+  "version": "1.15.181",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -32,14 +32,14 @@
       "sha256": "b16e78b37eecd6b4690403b4725a0b9977c7e8e9eca51b6cb4493166c952f243"
     },
     {
-      "path": "RELEASE_NOTES_1.15.180.md",
-      "size": 275,
-      "sha256": "f6ea8dccf224afe2520b363589f63d29b121184ab45513e1e87733ae70374776"
+      "path": "RELEASE_NOTES_1.15.181.md",
+      "size": 772,
+      "sha256": "1fe3b80c8f03a872de492f4858d6bbdb8297586b61e87e7833ae4a50db096c31"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "0b012e5cf15510024fa17eebc4175ecda664316552476709980a4c06d14421ad"
+      "sha256": "0f3355a007f77891d04d23a36996651518d3f200d12b05984176f37424cf0b7b"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -1959,7 +1959,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "07d2ab014c9e2bd3e640964da1a36fa5e352c62301c72608d8da157af0ba256f"
+      "sha256": "259cf44baf4d0a81d7c35268e2ccf5e14ae295216d677c503fc41e15c3f50ee9"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2125,6 +2125,11 @@
       "path": "tests/f11-openapi-final-1.15.178.py",
       "size": 8172,
       "sha256": "e602290acdf072b298ef743116cfad5b6b02dbaadabf2ddcf23b596da9191fc0"
+    },
+    {
+      "path": "tests/f2-totp-reenrollment-postgres.py",
+      "size": 5896,
+      "sha256": "f383ee7e644779b35ef84ffc9d0d3901c4273bf20f15753710363f2bdf8cf9ab"
     },
     {
       "path": "tests/f4-core-ui-context-1.15.178.py",
