@@ -22,6 +22,7 @@ python3 "${ROOT}/tests/tracker-acceptance-1.15.173.py"
 python3 "${ROOT}/tests/f11-openapi-final-1.15.178.py"
 python3 "${ROOT}/tests/f11-tracker-closure-1.15.184.py"
 python3 "${ROOT}/tests/f8-sso-session-pipeline-1.15.185.py"
+python3 "${ROOT}/tests/f8-ad4-acceptance-1.15.186-1.py"
 python3 "${ROOT}/tests/f9-f10-browser-contract-1.15.175.py"
 
 

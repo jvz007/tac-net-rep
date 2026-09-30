@@ -331,3 +331,15 @@ therefore not accepted by the compatibility path.
 
 SSO authentication remains owned by Tactical/allauth and the external identity provider. After the Core UI exchanges Tactical's pending SSO session for a Knox token, it must cross `GET /api/tfd/ui/context/`. That endpoint is protected by `SessionAuthenticated`, so SSO does not bypass Tec-Tac session security: a trust row is created/validated and a new session records the normal `session_created` audit event. SSO users are exempt only from Tec-Tac's local-TOTP enrollment gate because their MFA lifecycle is delegated to the external identity provider.
 
+
+## SSO MFA ownership (AD-4)
+
+Accepted decision AD-4 (30 Sep 2026): Tec-Tac follows Tactical's authentication model for SSO-linked accounts.
+
+- Only accounts that Tactical reports as SSO-linked are exempt from Tec-Tac's local authenticator-code gate.
+- A successful SSO sign-in still enters the normal Tec-Tac session-security boundary and creates the normal session audit trail.
+- SSO sign-ins are audited; the identity provider owns MFA for that sign-in.
+- Local/password users continue to follow Tec-Tac's local MFA policy.
+- Tactical's password sign-in remains unavailable for an SSO-linked account.
+
+The integration regression is `tec_tac.tests.test_f8_sso_ad4_tactical_integration` and runs only through Django's test runner as a `TestCase`. Django creates and destroys a separate throwaway test database; the regression fails closed if it is pointed at the configured live database. Tactical/allauth models are used only for fixtures inside that isolated test database. Production sign-in crosses Tactical's supported SSO/token HTTP view and Tec-Tac's `/api/tfd/ui/context/` boundary; Tec-Tac never uses Tactical's database as an integration contract.
