@@ -528,30 +528,6 @@ HTTP_CONTRACT_DETAILS = {
             },
         },
     },
-    "/api/tfd/system/recovery/trust/": {
-        "GET": {
-            "authorization": "effective Tactical superuser",
-            "query": {"job_id": "optional recovery-trust job UUID"},
-            "response": {
-                "identity": "installation/server recovery signer metadata when job_id is absent",
-                "job": "sanitized asynchronous recovery-trust job status when job_id is present",
-                "can_trust_signer": "boolean",
-            },
-        },
-        "POST": {
-            "authorization": "effective Tactical superuser",
-            "request": {
-                "backup_ref": "string",
-                "destination_id": "previously validated Core destination id",
-                "expected_key_id": "confirmed signer key id",
-                "expected_fingerprint": "confirmed signer SHA-256 fingerprint",
-                "expected_server_name": "confirmed source server name",
-                "expected_installation_id": "confirmed source installation id",
-            },
-            "response": {"job_id": "UUID", "status": "queued", "action": "trust_recovery_signer"},
-            "status": 202,
-        },
-    },
 }
 
 

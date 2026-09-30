@@ -39,13 +39,13 @@ from pathlib import Path, PurePosixPath
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 JOB_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 LEGACY_ARCHIVE_RE = re.compile(r"^rmm-backup-[A-Za-z0-9_.-]+\.tar$")
 BUNDLE_RE = re.compile(r"^tec-tac-backup-[A-Za-z0-9_.-]+\.tgz$")
 ARCHIVE_RE = BUNDLE_RE
-ALLOWED_ACTIONS = {"create_backup", "list_backups", "restore_backup", "apply_retention", "validate_destination", "validate_restore", "store_secret", "delete_secret", "recovery_identity", "trust_recovery_signer", "list_registered_destinations", "list_registered_backups", "validate_registered_restore", "restore_registered_backup"}
+ALLOWED_ACTIONS = {"create_backup", "list_backups", "restore_backup", "apply_retention", "validate_destination", "validate_restore", "store_secret", "delete_secret", "list_registered_destinations", "list_registered_backups", "validate_registered_restore", "restore_registered_backup"}
 OVERRIDEABLE_RESTORE_CHECKS = {"target.os"}
 TACTICAL_RESTORE_OVERRIDE_BASELINE = "67"
 TACTICAL_RESTORE_OS_GATE = """if [[ "$osname" == "debian" ]]; then
@@ -347,20 +347,7 @@ def load_job(job_id, config=None):
         overrides = request.get("overrides")
         if not isinstance(overrides, list) or any(not isinstance(item, str) for item in overrides):
             raise SystemExit("invalid validate_restore overrides schema")
-    if job.get("action") == "recovery_identity":
-        if request not in ({}, None):
-            raise SystemExit("invalid recovery_identity request schema")
-    if job.get("action") == "trust_recovery_signer":
-        required = {
-            "backup_ref", "destination_id", "expected_key_id",
-            "expected_fingerprint", "expected_server_name",
-            "expected_installation_id",
-        }
-        if not isinstance(request, dict) or set(request) != required:
-            raise SystemExit("invalid trust_recovery_signer request schema")
-        for key in required:
-            if not str(request.get(key) or "").strip():
-                raise SystemExit(f"invalid trust_recovery_signer {key}")
+
     if job.get("action") == "restore_backup":
         request = job["request"]
         if set(request) == {"backup_ref", "destination", "restore_mode"}:
@@ -976,48 +963,32 @@ def ftp_path_exists(ftp, name):
 
 
 def ftp_store(config, destination, archive, metadata, log):
-    ftp = ftp_connect(config, destination, timeout=120)
-    partial_name = archive.name + ".partial"
-    partial_sidecar = archive.name + ".tectac.json.partial"
-    final_sidecar = archive.name + ".tectac.json"
+    ftp=ftp_connect(config,destination,timeout=120)
+    partial_name=archive.name+".partial"; final_sidecar=archive.name+".tectac.json"; partial_sidecar=final_sidecar+".partial"
+    final_hash=archive.name+".sha256"; partial_hash=final_hash+".partial"
     try:
-        ftp_prepare_path(ftp, destination["remote_path"], create=True)
-        if ftp_path_exists(ftp, archive.name) or ftp_path_exists(ftp, final_sidecar):
-            raise RuntimeError("FTP recovery archive names are immutable; final archive or sidecar already exists")
-        with archive.open("rb") as fh:
-            ftp.storbinary(f"STOR {partial_name}", fh, blocksize=1024 * 1024)
-        side_bytes = (json.dumps(metadata, indent=2, sort_keys=True) + "\n").encode("utf-8")
-        ftp.storbinary(f"STOR {partial_sidecar}", io.BytesIO(side_bytes))
-        try:
-            remote_size = ftp.size(partial_name)
-        except Exception:
-            remote_size = None
-        if remote_size is not None and int(remote_size) != int(metadata["size_bytes"]):
-            raise RuntimeError("FTP backup size verification failed")
-        digest = hashlib.sha256(); size = 0
+        ftp_prepare_path(ftp,destination["remote_path"],create=True)
+        if any(ftp_path_exists(ftp,n) for n in (archive.name,final_sidecar,final_hash)):
+            raise RuntimeError("FTP recovery archive names are immutable; final archive, sidecar or hash already exists")
+        with archive.open("rb") as fh: ftp.storbinary(f"STOR {partial_name}",fh,blocksize=1024*1024)
+        side_bytes=(json.dumps(metadata,indent=2,sort_keys=True)+"\n").encode(); ftp.storbinary(f"STOR {partial_sidecar}",io.BytesIO(side_bytes))
+        ftp.storbinary(f"STOR {partial_hash}",io.BytesIO(archive_hash_text(archive.name,metadata["sha256"]).encode()))
+        digest=hashlib.sha256(); size=0
         def consume(block):
-            nonlocal size
-            digest.update(block); size += len(block)
-        ftp.retrbinary(f"RETR {partial_name}", consume, blocksize=1024 * 1024)
-        if size != int(metadata["size_bytes"]) or digest.hexdigest().lower() != str(metadata["sha256"]).lower():
-            raise RuntimeError("FTP backup SHA-256 verification failed")
-        # Final recovery names are immutable. Never delete/replace an existing
-        # archive or sidecar: a retry with the same name must fail closed.
-        ftp.rename(partial_sidecar, final_sidecar)
-        try:
-            ftp.rename(partial_name, archive.name)
+            nonlocal size; digest.update(block); size+=len(block)
+        ftp.retrbinary(f"RETR {partial_name}",consume,blocksize=1024*1024)
+        if size!=int(metadata["size_bytes"]) or digest.hexdigest()!=str(metadata["sha256"]).lower(): raise RuntimeError("FTP backup SHA-256 verification failed")
+        ftp.rename(partial_sidecar,final_sidecar); ftp.rename(partial_hash,final_hash)
+        try: ftp.rename(partial_name,archive.name)
         except Exception:
-            try: ftp.delete(final_sidecar)
-            except Exception: pass
+            for n in (final_sidecar,final_hash):
+                try: ftp.delete(n)
+                except Exception: pass
             raise
-        return {
-            "id": destination["id"], "type": "ftp", "name": destination_name(destination), "ok": True,
-            "location": f"ftp://{destination['host']}:{destination['port']}/{destination['remote_path'].strip('/')}/{archive.name}",
-            "size_verified": True, "hash_verified": True,
-        }
+        return {"id":destination["id"],"type":"ftp","name":destination_name(destination),"ok":True,"location":f"ftp://{destination['host']}:{destination['port']}/{destination['remote_path'].strip('/')}/{archive.name}","size_verified":True,"hash_verified":True,"hash_file":final_hash}
     except Exception:
-        for name in (partial_name, partial_sidecar):
-            try: ftp.delete(name)
+        for n in (partial_name,partial_sidecar,partial_hash):
+            try: ftp.delete(n)
             except Exception: pass
         raise
     finally:
@@ -1025,7 +996,6 @@ def ftp_store(config, destination, archive, metadata, log):
         except Exception:
             try: ftp.close()
             except Exception: pass
-
 
 def ftp_read_json(ftp, name):
     chunks=[]
@@ -1096,6 +1066,8 @@ def ftp_delete(config, destination, name, log):
         ftp.delete(name)
         try: ftp.delete(name+".tectac.json")
         except ftplib.error_perm: pass
+        try: ftp.delete(name+".sha256")
+        except ftplib.error_perm: pass
     finally:
         try: ftp.quit()
         except Exception:
@@ -1103,9 +1075,35 @@ def ftp_delete(config, destination, name, log):
             except Exception: pass
 
 
+
+def backup_identity(config) -> dict:
+    installation_id = str(config.get("TEC_TAC_INSTALLATION_ID") or "").strip()
+    if not SAFE_RECOVERY_KEY_ID_RE.fullmatch(installation_id):
+        raise RuntimeError("TEC_TAC_INSTALLATION_ID is missing or invalid")
+    return {"installation_id": installation_id, "server_name": socket.gethostname()}
+
+def archive_hash_path(path: Path) -> Path:
+    return path.with_name(path.name + ".sha256")
+
+def archive_hash_text(name: str, digest: str) -> str:
+    value = str(digest or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", value):
+        raise RuntimeError("backup SHA-256 value is invalid")
+    return f"{value}  {name}\n"
+
+def parse_archive_hash_text(text: str, archive_name: str) -> str:
+    raw = str(text or "").strip()
+    match = re.fullmatch(r"([0-9A-Fa-f]{64})(?:\s+[ *]?(.+))?", raw)
+    if not match:
+        raise RuntimeError("backup SHA-256 companion is malformed")
+    named = str(match.group(2) or "").strip()
+    if named and PurePosixPath(named).name != archive_name:
+        raise RuntimeError("backup SHA-256 companion names a different archive")
+    return match.group(1).lower()
+
 def metadata_for_archive(path, backup_class, config, *, components=None, recovery_modes=None):
-    identity = recovery_identity(config)
-    server_id = identity["installation_id"]
+    identity = backup_identity(config)
+    core_version = detect_version(Path(config["TEC_TAC_FRAMEWORK_SOURCE"])) or detect_version(Path(config["TEC_TAC_ROOT"]))
     return {
         "format_version": 2,
         "artifact_type": "tec-tac-recovery-bundle",
@@ -1113,14 +1111,13 @@ def metadata_for_archive(path, backup_class, config, *, components=None, recover
         "created_at": now(),
         "size_bytes": path.stat().st_size,
         "sha256": sha256_file(path),
-        "server_id": server_id,
-        "installation_id": server_id,
+        "server_id": identity["installation_id"],
+        "installation_id": identity["installation_id"],
         "server_name": identity["server_name"],
-        "recovery_signer": {"key_id": identity["key_id"], "public_key_sha256": identity["public_key_sha256"]},
+        "core_version": core_version,
         "components": dict(components or {}),
         "recovery_modes": list(recovery_modes or []),
     }
-
 
 def sidecar_path(path: Path):
     return path.with_name(path.name + ".tectac.json")
@@ -1135,45 +1132,35 @@ def destination_name(destination):
 
 
 def store_local(destination, archive: Path, metadata):
-    root = Path(destination["path"])
-    root.mkdir(parents=True, exist_ok=True)
-    if root.is_symlink():
-        raise RuntimeError("local destination root may not be a symlink")
-    target = root / archive.name
-    target_sidecar = sidecar_path(target)
+    root = Path(destination["path"]); root.mkdir(parents=True, exist_ok=True)
+    if root.is_symlink(): raise RuntimeError("local destination root may not be a symlink")
+    target = root / archive.name; target_sidecar = sidecar_path(target); target_hash = archive_hash_path(target)
     archive_tmp = target.with_name(target.name + ".partial")
     sidecar_tmp = target_sidecar.with_name(target_sidecar.name + ".partial")
-    if archive.resolve() == target.resolve():
-        raise RuntimeError("local recovery publication source may not already be the final archive")
-    if os.path.lexists(target) or os.path.lexists(target_sidecar):
-        raise RuntimeError("local recovery archive names are immutable; final archive or sidecar already exists")
-    sidecar_published = False
+    hash_tmp = target_hash.with_name(target_hash.name + ".partial")
+    if archive.resolve() == target.resolve(): raise RuntimeError("local recovery publication source may not already be the final archive")
+    if any(os.path.lexists(x) for x in (target,target_sidecar,target_hash)):
+        raise RuntimeError("local recovery archive names are immutable; final archive, sidecar or hash already exists")
+    published=[]
     try:
-        shutil.copy2(archive, archive_tmp)
-        atomic_json(sidecar_tmp, metadata, mode=0o640)
+        shutil.copy2(archive,archive_tmp)
+        atomic_json(sidecar_tmp,metadata,mode=0o640)
+        hash_tmp.write_text(archive_hash_text(archive.name, metadata["sha256"]), encoding="utf-8")
+        os.chmod(hash_tmp,0o640)
         if archive_tmp.stat().st_size != metadata["size_bytes"] or sha256_file(archive_tmp) != metadata["sha256"]:
             raise RuntimeError("local backup copy verification failed")
-        # Publish the sidecar first. If final archive publication fails, remove
-        # that newly published sidecar so no mismatched final pair remains.
-        os.replace(sidecar_tmp, target_sidecar)
-        sidecar_published = True
-        try:
-            os.replace(archive_tmp, target)
+        os.replace(sidecar_tmp,target_sidecar); published.append(target_sidecar)
+        os.replace(hash_tmp,target_hash); published.append(target_hash)
+        try: os.replace(archive_tmp,target)
         except Exception:
-            target_sidecar.unlink(missing_ok=True)
-            sidecar_published = False
+            for item in reversed(published): item.unlink(missing_ok=True)
             raise
     except Exception:
-        archive_tmp.unlink(missing_ok=True)
-        sidecar_tmp.unlink(missing_ok=True)
-        if sidecar_published and not os.path.lexists(target):
-            target_sidecar.unlink(missing_ok=True)
+        for item in (archive_tmp,sidecar_tmp,hash_tmp): item.unlink(missing_ok=True)
+        if not os.path.lexists(target):
+            for item in published: item.unlink(missing_ok=True)
         raise
-    return {
-        "id": destination["id"], "type": "local", "name": destination_name(destination), "ok": True,
-        "location": str(target), "size_verified": True, "hash_verified": True,
-    }
-
+    return {"id":destination["id"],"type":"local","name":destination_name(destination),"ok":True,"location":str(target),"size_verified":True,"hash_verified":True,"hash_file":str(target_hash)}
 
 def rclone_path_exists(remote, cfg):
     result = subprocess.run(
@@ -1191,72 +1178,40 @@ def rclone_path_exists(remote, cfg):
 
 def store_rclone(config, destination, archive, metadata, log):
     with tempfile.TemporaryDirectory(prefix="tectac-rclone-") as td:
-        temp = Path(td)
-        cfg = make_rclone_config(config, destination, temp, log)
-        base = remote_base(destination)
-        archive_remote = join_remote(base, archive.name)
-        partial_remote = archive_remote + ".partial"
-        sidecar_remote = archive_remote + ".tectac.json"
-        partial_sidecar = sidecar_remote + ".partial"
-        sidecar = temp / (archive.name + ".tectac.json")
-        sidecar.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        sidecar_published = False
+        temp=Path(td); cfg=make_rclone_config(config,destination,temp,log); base=remote_base(destination)
+        archive_remote=join_remote(base,archive.name); partial_remote=archive_remote+".partial"
+        sidecar_remote=archive_remote+".tectac.json"; partial_sidecar=sidecar_remote+".partial"
+        hash_remote=archive_remote+".sha256"; partial_hash=hash_remote+".partial"
+        sidecar=temp/(archive.name+".tectac.json"); sidecar.write_text(json.dumps(metadata,indent=2,sort_keys=True)+"\n")
+        hash_file=temp/(archive.name+".sha256"); hash_file.write_text(archive_hash_text(archive.name,metadata["sha256"]),encoding="utf-8")
+        published=[]
         try:
-            if rclone_path_exists(archive_remote, cfg) or rclone_path_exists(sidecar_remote, cfg):
-                raise RuntimeError("rclone recovery archive names are immutable; final archive or sidecar already exists")
-            run_logged(["rclone", "copyto", str(archive), partial_remote, "--config", str(cfg)], log, timeout=6 * 60 * 60)
-            run_logged(["rclone", "copyto", str(sidecar), partial_sidecar, "--config", str(cfg)], log, timeout=30 * 60)
-            stat_result = subprocess.run(["rclone", "lsjson", partial_remote, "--config", str(cfg)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
-            size_ok = False
-            if stat_result.returncode == 0:
-                try:
-                    rows = json.loads(stat_result.stdout)
-                    row = rows[0] if isinstance(rows, list) and rows else rows
-                    size_ok = int(row.get("Size", -1)) == int(metadata["size_bytes"])
-                except Exception:
-                    size_ok = False
-            if not size_ok:
-                raise RuntimeError("remote backup size verification failed")
-            hash_ok = False; hash_supported = False
-            hash_result = subprocess.run(["rclone", "hash", "SHA-256", partial_remote, "--config", str(cfg)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=300)
-            if hash_result.returncode == 0 and hash_result.stdout.strip():
-                hash_supported = True
-                remote_hash = hash_result.stdout.strip().split()[0].lower()
-                hash_ok = remote_hash == str(metadata["sha256"]).lower()
-                if not hash_ok:
-                    raise RuntimeError("remote backup SHA-256 verification failed")
-            # Publish metadata first so the archive is never visible without its
-            # matching sidecar. If archive publication fails, remove the newly
-            # published sidecar again.
-            run_logged(["rclone", "moveto", partial_sidecar, sidecar_remote, "--config", str(cfg)], log, timeout=300)
-            sidecar_published = True
-            try:
-                run_logged(["rclone", "moveto", partial_remote, archive_remote, "--config", str(cfg)], log, timeout=300)
+            if any(rclone_path_exists(x,cfg) for x in (archive_remote,sidecar_remote,hash_remote)):
+                raise RuntimeError("rclone recovery archive names are immutable; final archive, sidecar or hash already exists")
+            run_logged(["rclone","copyto",str(archive),partial_remote,"--config",str(cfg)],log,timeout=6*60*60)
+            run_logged(["rclone","copyto",str(sidecar),partial_sidecar,"--config",str(cfg)],log,timeout=30*60)
+            run_logged(["rclone","copyto",str(hash_file),partial_hash,"--config",str(cfg)],log,timeout=30*60)
+            stat_result=subprocess.run(["rclone","lsjson",partial_remote,"--config",str(cfg)],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,timeout=120)
+            rows=json.loads(stat_result.stdout or "[]") if stat_result.returncode==0 else []
+            row=rows[0] if isinstance(rows,list) and rows else rows
+            if not isinstance(row,dict) or int(row.get("Size",-1))!=int(metadata["size_bytes"]): raise RuntimeError("remote backup size verification failed")
+            hr=subprocess.run(["rclone","hash","SHA-256",partial_remote,"--config",str(cfg)],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,timeout=300)
+            hash_supported=hr.returncode==0 and bool(hr.stdout.strip()); hash_ok=False
+            if hash_supported:
+                hash_ok=hr.stdout.strip().split()[0].lower()==str(metadata["sha256"]).lower()
+                if not hash_ok: raise RuntimeError("remote backup SHA-256 verification failed")
+            run_logged(["rclone","moveto",partial_sidecar,sidecar_remote,"--config",str(cfg)],log,timeout=300); published.append(sidecar_remote)
+            run_logged(["rclone","moveto",partial_hash,hash_remote,"--config",str(cfg)],log,timeout=300); published.append(hash_remote)
+            try: run_logged(["rclone","moveto",partial_remote,archive_remote,"--config",str(cfg)],log,timeout=300)
             except Exception:
-                # A timed-out/failed moveto may still have completed remotely.
-                # Reconcile final state before rollback so we never delete the
-                # sidecar underneath an archive that actually landed.
-                archive_landed = rclone_path_exists(archive_remote, cfg)
-                sidecar_landed = rclone_path_exists(sidecar_remote, cfg)
-                if not (archive_landed and sidecar_landed):
+                if not rclone_path_exists(archive_remote,cfg):
+                    for item in published: subprocess.run(["rclone","deletefile",item,"--config",str(cfg)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=120)
                     raise
-            return {
-                "id": destination["id"], "type": destination["type"], "name": destination_name(destination), "ok": True,
-                "location": archive_remote, "size_verified": True, "hash_verified": hash_ok, "hash_supported": hash_supported,
-            }
+            return {"id":destination["id"],"type":destination["type"],"name":destination_name(destination),"ok":True,"location":archive_remote,"size_verified":True,"hash_verified":hash_ok,"hash_supported":hash_supported,"hash_file":hash_remote}
         except Exception:
-            # Partials are never public recovery objects and may be removed
-            # best-effort. A published sidecar may only be removed when the
-            # final archive is definitely absent.
-            for remote in (partial_remote, partial_sidecar):
-                subprocess.run(["rclone", "deletefile", remote, "--config", str(cfg)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
-            if sidecar_published and not rclone_path_exists(archive_remote, cfg):
-                deleted = subprocess.run(
-                    ["rclone", "deletefile", sidecar_remote, "--config", str(cfg)],
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120,
-                )
-                if deleted.returncode != 0 and rclone_path_exists(sidecar_remote, cfg):
-                    raise RuntimeError("rclone recovery sidecar rollback failed; final archive is absent but sidecar remains")
+            for item in (partial_remote,partial_sidecar,partial_hash): subprocess.run(["rclone","deletefile",item,"--config",str(cfg)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=120)
+            if not rclone_path_exists(archive_remote,cfg):
+                for item in published: subprocess.run(["rclone","deletefile",item,"--config",str(cfg)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=120)
             raise
 
 def scp_args(config, destination, temp, log):
@@ -1281,53 +1236,33 @@ def scp_args(config, destination, temp, log):
 
 
 def store_scp(config, destination, archive, metadata, log):
-    with tempfile.TemporaryDirectory(prefix="tectac-scp-", dir=str(roots(config)["staging"])) as td:
-        temp = Path(td)
-        ssh_common, scp_common = scp_args(config, destination, temp, log)
-        remote_dir = destination["remote_path"]
-        host = f"{destination['username']}@{destination['host']}"
-        run_logged(["ssh", *ssh_common, host, "mkdir", "-p", "--", remote_dir], log, timeout=120)
-        remote_file = remote_dir.rstrip("/") + "/" + archive.name
-        partial_file = remote_file + ".partial"
-        sidecar_file = remote_file + ".tectac.json"
-        partial_sidecar = sidecar_file + ".partial"
-        sidecar = temp / (archive.name + ".tectac.json")
-        sidecar.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    with tempfile.TemporaryDirectory(prefix="tectac-scp-",dir=str(roots(config)["staging"])) as td:
+        temp=Path(td); ssh_common,scp_common=scp_args(config,destination,temp,log); remote_dir=destination["remote_path"]; host=f"{destination['username']}@{destination['host']}"
+        run_logged(["ssh",*ssh_common,host,"mkdir","-p","--",remote_dir],log,timeout=120)
+        remote_file=remote_dir.rstrip("/")+"/"+archive.name; partial_file=remote_file+".partial"
+        sidecar_file=remote_file+".tectac.json"; partial_sidecar=sidecar_file+".partial"; hash_remote=remote_file+".sha256"; partial_hash=hash_remote+".partial"
+        sidecar=temp/(archive.name+".tectac.json"); sidecar.write_text(json.dumps(metadata,indent=2,sort_keys=True)+"\n")
+        hash_file=temp/(archive.name+".sha256"); hash_file.write_text(archive_hash_text(archive.name,metadata["sha256"]),encoding="utf-8")
         try:
-            final_absent = (
-                "test ! -e {f} && test ! -L {f} && test ! -e {s} && test ! -L {s}"
-            ).format(f=shlex.quote(remote_file), s=shlex.quote(sidecar_file))
+            absent=" && ".join(f"test ! -e {shlex.quote(x)} && test ! -L {shlex.quote(x)}" for x in (remote_file,sidecar_file,hash_remote))
             try:
-                run_logged(["ssh", *ssh_common, host, final_absent], log, timeout=120)
+                run_logged(["ssh",*ssh_common,host,absent],log,timeout=120)
             except Exception as exc:
-                raise RuntimeError("SCP recovery archive names are immutable; final archive or sidecar already exists or cannot be checked") from exc
-            run_logged(["scp", *scp_common, str(archive), f"{host}:{partial_file}"], log, timeout=6 * 60 * 60)
-            run_logged(["scp", *scp_common, str(sidecar), f"{host}:{partial_sidecar}"], log, timeout=30 * 60)
-            verify = temp / archive.name
-            run_logged(["scp", *scp_common, f"{host}:{partial_file}", str(verify)], log, timeout=6 * 60 * 60)
-            if verify.stat().st_size != metadata["size_bytes"] or sha256_file(verify) != metadata["sha256"]:
-                raise RuntimeError("SCP backup verification failed")
-            # Re-check the immutable final names at publication time: uploads
-            # can take hours. `mv -T -n` plus a source-exists assertion gives
-            # fail-closed no-clobber behaviour even if another writer races
-            # between the test and the move, and -T refuses directory targets.
-            publish = (
-                "test ! -e {f} && test ! -L {f} && test ! -e {s} && test ! -L {s} && "
-                "mv -T -n -- {ps} {s} && test ! -e {ps} && test ! -L {ps} && "
-                "(mv -T -n -- {p} {f} && test ! -e {p} && test ! -L {p} || "
-                "{{ rm -f -- {s}; exit 1; }})"
-            ).format(
-                p=shlex.quote(partial_file), f=shlex.quote(remote_file),
-                ps=shlex.quote(partial_sidecar), s=shlex.quote(sidecar_file),
-            )
-            run_logged(["ssh", *ssh_common, host, publish], log, timeout=120)
-            return {
-                "id": destination["id"], "type": "scp", "name": destination_name(destination), "ok": True,
-                "location": f"scp://{destination['host']}:{destination['port']}{remote_file}", "size_verified": True, "hash_verified": True,
-            }
+                raise RuntimeError("SCP recovery archive names are immutable; final archive, sidecar or hash already exists") from exc
+            run_logged(["scp",*scp_common,str(archive),f"{host}:{partial_file}"],log,timeout=6*60*60)
+            run_logged(["scp",*scp_common,str(sidecar),f"{host}:{partial_sidecar}"],log,timeout=30*60)
+            run_logged(["scp",*scp_common,str(hash_file),f"{host}:{partial_hash}"],log,timeout=30*60)
+            verify=temp/archive.name; run_logged(["scp",*scp_common,f"{host}:{partial_file}",str(verify)],log,timeout=6*60*60)
+            if verify.stat().st_size!=metadata["size_bytes"] or sha256_file(verify)!=metadata["sha256"]: raise RuntimeError("SCP backup verification failed")
+            publish=("test ! -e {f} && test ! -L {f} && test ! -e {s} && test ! -L {s} && test ! -e {h} && test ! -L {h} && "
+                     "mv -T -n -- {ps} {s} && test ! -e {ps} && mv -T -n -- {ph} {h} && test ! -e {ph} && "
+                     "(mv -T -n -- {p} {f} && test ! -e {p} || {{ rm -f -- {s} {h}; exit 1; }})").format(
+                         f=shlex.quote(remote_file),s=shlex.quote(sidecar_file),h=shlex.quote(hash_remote),ps=shlex.quote(partial_sidecar),ph=shlex.quote(partial_hash),p=shlex.quote(partial_file))
+            run_logged(["ssh",*ssh_common,host,publish],log,timeout=120)
+            return {"id":destination["id"],"type":"scp","name":destination_name(destination),"ok":True,"location":f"scp://{destination['host']}:{destination['port']}{remote_file}","size_verified":True,"hash_verified":True,"hash_file":hash_remote}
         except Exception:
-            cleanup = "rm -f -- {p} {ps}".format(p=shlex.quote(partial_file), ps=shlex.quote(partial_sidecar))
-            subprocess.run(["ssh", *ssh_common, host, cleanup], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+            cleanup="rm -f -- "+" ".join(shlex.quote(x) for x in (partial_file,partial_sidecar,partial_hash))
+            subprocess.run(["ssh",*ssh_common,host,cleanup],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=120)
             raise
 
 def destination_results_strongly_verified(results):
@@ -1667,17 +1602,6 @@ def _recovery_signing_message(manifest_bytes: bytes, checksums_bytes: bytes) -> 
     )
 
 
-def _secure_root_directory(path: Path, *, private=False):
-    info = path.lstat()
-    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
-        raise RuntimeError(f"recovery trust directory is not a real directory: {path}")
-    if info.st_uid != 0:
-        raise RuntimeError(f"recovery trust directory must be root-owned: {path}")
-    forbidden = 0o077 if private else 0o022
-    if info.st_mode & forbidden:
-        raise RuntimeError(f"recovery trust directory permissions are unsafe: {path}")
-    return info
-
 
 def _secure_regular_root_file(path: Path, *, private=False):
     info = path.lstat()
@@ -1692,27 +1616,6 @@ def _secure_regular_root_file(path: Path, *, private=False):
     return info
 
 
-
-def recovery_identity(config) -> dict:
-    key_id = str(config.get("TEC_TAC_INSTALLATION_ID") or "").strip()
-    if not SAFE_RECOVERY_KEY_ID_RE.fullmatch(key_id):
-        raise RuntimeError("TEC_TAC_INSTALLATION_ID is missing or invalid")
-    key_path = Path(str(config.get("TEC_TAC_RECOVERY_SIGNING_KEY") or "/etc/tec-tac/recovery-signing/private.pem"))
-    _secure_root_directory(key_path.parent, private=True)
-    _secure_regular_root_file(key_path, private=True)
-    key = serialization.load_pem_private_key(key_path.read_bytes(), password=None)
-    if not isinstance(key, Ed25519PrivateKey):
-        raise RuntimeError("Tec-Tac recovery signing key must be Ed25519")
-    public = key.public_key()
-    raw = public.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
-    pem = public.public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
-    return {
-        "installation_id": key_id,
-        "server_name": socket.gethostname(),
-        "key_id": key_id,
-        "public_key_sha256": hashlib.sha256(raw).hexdigest(),
-        "public_key_pem": pem.decode("ascii"),
-    }
 
 
 def _inspect_recovery_signature(manifest_bytes: bytes, checksums_bytes: bytes, envelope_bytes: bytes) -> dict:
@@ -1754,26 +1657,6 @@ def _inspect_recovery_signature(manifest_bytes: bytes, checksums_bytes: bytes, e
         "public_key_pem": candidate_pem.decode("ascii"),
     }
 
-
-def _recovery_trust_status(config, signer: dict) -> dict:
-    trust_root = Path(str(config.get("TEC_TAC_RECOVERY_TRUST_ROOT") or "/etc/tec-tac/recovery-trust"))
-    if not trust_root.is_absolute():
-        raise RuntimeError("TEC_TAC_RECOVERY_TRUST_ROOT must be absolute")
-    _secure_root_directory(trust_root, private=False)
-    key_path = trust_root / f"{signer['key_id']}.pub"
-    try:
-        _secure_regular_root_file(key_path, private=False)
-        trusted_key = serialization.load_pem_public_key(key_path.read_bytes())
-    except FileNotFoundError:
-        return {**signer, "trusted": False, "trust_required": True}
-    except Exception as exc:
-        raise RuntimeError(f"trusted recovery public key could not be loaded: {signer['key_id']}") from exc
-    if not isinstance(trusted_key, Ed25519PublicKey):
-        raise RuntimeError("trusted recovery key must be Ed25519")
-    raw = trusted_key.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
-    if hashlib.sha256(raw).hexdigest() != signer["public_key_sha256"]:
-        raise RuntimeError("recovery bundle signer fingerprint conflicts with trusted key id")
-    return {**signer, "trusted": True, "trust_required": False}
 
 
 def _append_recovery_audit(event: str, *, actor="root", **detail):
@@ -2171,122 +2054,33 @@ def _verify_restored_core_version(config, component_meta: dict, log) -> str | No
     log.write(f"[TEC-TAC-BACKUP] verified restored Core version: {effective}\n")
     return effective
 
-def create_recovery_signature(config, manifest_bytes: bytes, checksums_bytes: bytes) -> dict:
-    key_id = str(config.get("TEC_TAC_INSTALLATION_ID") or "").strip()
-    if not SAFE_RECOVERY_KEY_ID_RE.fullmatch(key_id):
-        raise RuntimeError("TEC_TAC_INSTALLATION_ID is missing or invalid; recovery bundle cannot be signed")
-    key_path = Path(str(config.get("TEC_TAC_RECOVERY_SIGNING_KEY") or "/etc/tec-tac/recovery-signing/private.pem"))
-    _secure_root_directory(key_path.parent, private=True)
-    _secure_regular_root_file(key_path, private=True)
-    try:
-        key = serialization.load_pem_private_key(key_path.read_bytes(), password=None)
-    except Exception as exc:
-        raise RuntimeError("Tec-Tac recovery signing key could not be loaded") from exc
-    if not isinstance(key, Ed25519PrivateKey):
-        raise RuntimeError("Tec-Tac recovery signing key must be Ed25519")
-    message = _recovery_signing_message(manifest_bytes, checksums_bytes)
-    signature = key.sign(message)
-    public_key = key.public_key()
-    public_raw = public_key.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
-    public_pem = public_key.public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
-    return {
-        "schema": 1,
-        "algorithm": "ed25519",
-        "key_id": key_id,
-        # The candidate public key is carried for disaster-recovery portability
-        # only. Verification below never trusts it directly; the target must
-        # already have an identical key in its root-owned recovery trust store.
-        "public_key_pem": public_pem.decode("ascii"),
-        "public_key_sha256": hashlib.sha256(public_raw).hexdigest(),
-        "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
-        "checksums_sha256": hashlib.sha256(checksums_bytes).hexdigest(),
-        "signature": base64.b64encode(signature).decode("ascii"),
-    }
-
-
-def verify_recovery_signature(config, manifest_bytes: bytes, checksums_bytes: bytes, envelope_bytes: bytes, *, allow_untrusted=False) -> dict:
-    signer = _inspect_recovery_signature(manifest_bytes, checksums_bytes, envelope_bytes)
-    status = _recovery_trust_status(config, signer)
-    if not status["trusted"] and not allow_untrusted:
-        raise RuntimeError(f"recovery bundle signer is not trusted by this server: {signer['key_id']}")
-    return status
 
 
 def create_recovery_bundle(config, temp: Path, *, backup_class, tactical_archive=None, tactical_meta=None, tec_tac_archive=None, tec_tac_meta=None):
-    created_at=now()
-    components={
-        "tactical": tactical_meta or {"included": False},
-        "tec_tac": tec_tac_meta or {"included": False},
-    }
-    modes=bundle_recovery_modes(bool(tactical_meta), bool(tec_tac_meta))
-    identity = recovery_identity(config)
-    manifest={
-        "format_version": 2,
-        "artifact_type": "tec-tac-recovery-bundle",
-        "created_at": created_at,
-        "installation_id": identity["installation_id"],
-        "server_name": identity["server_name"],
-        "recovery_signer": {"key_id": identity["key_id"], "public_key_sha256": identity["public_key_sha256"]},
-        "backup_class": backup_class,
-        "components": components,
-        "recovery_modes": modes,
-    }
-    manifest_path=temp/"manifest.json"
-    manifest_path.write_text(json.dumps(manifest,indent=2,sort_keys=True)+"\n",encoding="utf-8")
+    created_at=now(); components={"tactical":tactical_meta or {"included":False},"tec_tac":tec_tac_meta or {"included":False}}
+    modes=bundle_recovery_modes(bool(tactical_meta),bool(tec_tac_meta)); identity=backup_identity(config)
+    manifest={"format_version":2,"artifact_type":"tec-tac-recovery-bundle","created_at":created_at,"installation_id":identity["installation_id"],"server_name":identity["server_name"],"backup_class":backup_class,"components":components,"recovery_modes":modes}
+    manifest_path=temp/"manifest.json"; manifest_path.write_text(json.dumps(manifest,indent=2,sort_keys=True)+"\n",encoding="utf-8")
     checksum_lines=[]
-    if tactical_archive is not None:
-        checksum_lines.append(f"{tactical_meta['sha256']}  tactical/{tactical_archive.name}")
-    if tec_tac_archive is not None:
-        checksum_lines.append(f"{tec_tac_meta['sha256']}  tec-tac/tec-tac-backup.tar.gz")
-    checksums=temp/"checksums.sha256"
-    checksums.write_text("\n".join(checksum_lines)+"\n",encoding="utf-8")
-    signature_path=temp/RECOVERY_SIGNATURE_MEMBER
-    signature_path.write_text(
-        json.dumps(
-            create_recovery_signature(config, manifest_path.read_bytes(), checksums.read_bytes()),
-            indent=2, sort_keys=True,
-        ) + "\n",
-        encoding="utf-8",
-    )
-    os.chmod(signature_path, 0o600)
-    bundle_name=datetime.now(timezone.utc).strftime("tec-tac-backup-%Y_%m_%d__%H_%M_%S_%f.tgz")
-    # Build recovery bundles only inside Core's private staging directory.
-    # Final/retained copies are published later by store_local(), which makes
-    # the sidecar visible before the archive. Building directly in /rmmbackups
-    # allowed the archive to be visible before its metadata existed.
-    output=temp/bundle_name
-    output.parent.mkdir(parents=True,exist_ok=True)
-    partial=output.with_name(output.name+".partial")
-    partial.unlink(missing_ok=True)
+    if tactical_archive is not None: checksum_lines.append(f"{tactical_meta['sha256']}  tactical/{tactical_archive.name}")
+    if tec_tac_archive is not None: checksum_lines.append(f"{tec_tac_meta['sha256']}  tec-tac/tec-tac-backup.tar.gz")
+    checksums=temp/"checksums.sha256"; checksums.write_text("\n".join(checksum_lines)+"\n",encoding="utf-8")
+    bundle_name=datetime.now(timezone.utc).strftime("tec-tac-backup-%Y_%m_%d__%H_%M_%S_%f.tgz"); output=temp/bundle_name; partial=output.with_name(output.name+".partial")
     try:
         with tarfile.open(partial,"w:gz") as tf:
-            tf.add(manifest_path,arcname="manifest.json",recursive=False)
-            tf.add(checksums,arcname="checksums.sha256",recursive=False)
-            tf.add(signature_path,arcname=RECOVERY_SIGNATURE_MEMBER,recursive=False)
-            if tactical_archive is not None:
-                tf.add(tactical_archive,arcname=f"tactical/{tactical_archive.name}",recursive=False)
-            if tec_tac_archive is not None:
-                tf.add(tec_tac_archive,arcname="tec-tac/tec-tac-backup.tar.gz",recursive=False)
-        os.replace(partial,output)
-        ensure_regular(output,max_bytes=max_backup_bytes(config))
-        # Prove the copied Tactical member is byte-identical to the authoritative native archive.
+            tf.add(manifest_path,arcname="manifest.json",recursive=False); tf.add(checksums,arcname="checksums.sha256",recursive=False)
+            if tactical_archive is not None: tf.add(tactical_archive,arcname=f"tactical/{tactical_archive.name}",recursive=False)
+            if tec_tac_archive is not None: tf.add(tec_tac_archive,arcname="tec-tac/tec-tac-backup.tar.gz",recursive=False)
+        os.replace(partial,output); ensure_regular(output,max_bytes=max_backup_bytes(config))
         if tactical_archive is not None:
             with tarfile.open(output,"r:gz") as tf:
-                member=tf.getmember(f"tactical/{tactical_archive.name}")
-                fh=tf.extractfile(member)
+                fh=tf.extractfile(tf.getmember(f"tactical/{tactical_archive.name}")); digest=hashlib.sha256(); size=0
                 if fh is None: raise RuntimeError("recovery bundle Tactical component is unreadable")
-                digest=hashlib.sha256(); size=0
-                for block in iter(lambda:fh.read(1024*1024),b""):
-                    digest.update(block); size+=len(block)
-                if digest.hexdigest()!=tactical_meta["sha256"] or size!=tactical_meta["size_bytes"]:
-                    raise RuntimeError("Tactical archive changed while creating recovery bundle")
-        return output, manifest
+                for block in iter(lambda:fh.read(1024*1024),b""): digest.update(block); size+=len(block)
+                if digest.hexdigest()!=tactical_meta["sha256"] or size!=tactical_meta["size_bytes"]: raise RuntimeError("Tactical archive changed while creating recovery bundle")
+        return output,manifest
     except Exception:
-        partial.unlink(missing_ok=True)
-        output.unlink(missing_ok=True)
-        sidecar_path(output).unlink(missing_ok=True)
-        raise
-
+        partial.unlink(missing_ok=True); output.unlink(missing_ok=True); sidecar_path(output).unlink(missing_ok=True); archive_hash_path(output).unlink(missing_ok=True); raise
 
 def operation_create_backup(config, job, log):
     request = job["request"]
@@ -2459,7 +2253,8 @@ def backup_item(destination, archive_name, location, size, modified, metadata=No
         "recovery_modes": modes,
         "installation_id": metadata.get("installation_id") or metadata.get("server_id"),
         "server_name": metadata.get("server_name"),
-        "recovery_signer": metadata.get("recovery_signer") if isinstance(metadata.get("recovery_signer"), dict) else None,
+        "core_version": metadata.get("core_version") or (((metadata.get("components") or {}).get("tec_tac") or {}).get("framework_version") if isinstance(metadata.get("components"), dict) else None),
+        "hash_file": archive_name + ".sha256",
         "sidecar_status": sidecar_status,
     }
 
@@ -2696,6 +2491,52 @@ def download_scp(config, destination, name, target, log):
         return None
 
 
+
+def read_archive_hash_companion(config, destination, name, log):
+    destination=validate_destination(destination,config); companion=name+".sha256"
+    if destination["type"]=="local":
+        path=Path(destination["path"])/companion
+        if not path.exists(): return None,"missing"
+        if path.is_symlink() or not path.is_file(): raise RuntimeError("backup SHA-256 companion is unsafe")
+        return parse_archive_hash_text(path.read_text(encoding="utf-8"),name),"present"
+    if destination["type"]=="ftp":
+        ftp=ftp_connect(config,destination,timeout=120)
+        try:
+            ftp_prepare_path(ftp,destination["remote_path"],create=False); chunks=[]
+            try: ftp.retrbinary(f"RETR {companion}",chunks.append)
+            except ftplib.error_perm as exc:
+                if str(exc).startswith("550"): return None,"missing"
+                raise
+            return parse_archive_hash_text(b"".join(chunks).decode("utf-8"),name),"present"
+        finally:
+            try: ftp.quit()
+            except Exception: pass
+    if destination["type"]=="scp":
+        with tempfile.TemporaryDirectory(prefix="tectac-scp-hash-") as td:
+            temp=Path(td); ssh_common,scp_common=scp_args(config,destination,temp,log); host=f"{destination['username']}@{destination['host']}"
+            remote=destination["remote_path"].rstrip("/")+"/"+companion
+            exists=subprocess.run(["ssh",*ssh_common,host,f"test -f {shlex.quote(remote)} && test ! -L {shlex.quote(remote)}"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=60)
+            if exists.returncode!=0: return None,"missing"
+            local=temp/companion; run_logged(["scp",*scp_common,f"{host}:{remote}",str(local)],log,timeout=120)
+            return parse_archive_hash_text(local.read_text(encoding="utf-8"),name),"present"
+    # Keep hash-companion dispatch aligned with store/download/delete: every
+    # supported remote type other than FTP/SCP is backed by the rclone adapter.
+    # This intentionally includes sftp, webdav and s3.
+    with tempfile.TemporaryDirectory(prefix="tectac-hash-read-") as td:
+        cfg=make_rclone_config(config,destination,Path(td),log); remote=join_remote(remote_base(destination),companion)
+        if not rclone_path_exists(remote,cfg): return None,"missing"
+        proc=subprocess.run(["rclone","cat",remote,"--config",str(cfg)],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,timeout=120)
+        if proc.returncode: raise RuntimeError("backup SHA-256 companion could not be read")
+        return parse_archive_hash_text(proc.stdout,name),"present"
+
+def verify_archive_hash_companion(config,destination,name,downloaded,log):
+    expected,status=read_archive_hash_companion(config,destination,name,log)
+    if expected is None:
+        return {"status":"not_verified","reason":"sha256 companion missing"}
+    actual=sha256_file(downloaded).lower()
+    if actual!=expected: raise RuntimeError("restore artifact SHA-256 companion mismatch")
+    return {"status":"verified","sha256":expected}
+
 def download_destination(config, destination, name, target, log):
     destination = validate_destination(destination, config)
     if destination["type"] == "local":
@@ -2882,67 +2723,44 @@ def extract_verified_bundle_member(tf, member, target, expected_hash, expected_s
 
 
 def validate_recovery_bundle(bundle: Path, restore_mode: str, stage: Path, *, validate_components=True, config=None, allow_untrusted_signer=False):
-    ensure_regular(bundle, max_bytes=max_backup_bytes(load_config()))
-    if not BUNDLE_RE.fullmatch(bundle.name):
-        raise RuntimeError("recovery bundle filename is invalid")
+    ensure_regular(bundle,max_bytes=max_backup_bytes(load_config()))
+    if not BUNDLE_RE.fullmatch(bundle.name): raise RuntimeError("recovery bundle filename is invalid")
     with tarfile.open(bundle,"r:gz") as tf:
-        members=safe_tar_members(tf)
-        names=[m.name.lstrip("./") for m in members]
-        if len(names) != len(set(names)):
-            raise RuntimeError("recovery bundle contains duplicate member paths")
+        members=safe_tar_members(tf); names=[m.name.lstrip("./") for m in members]
+        if len(names)!=len(set(names)): raise RuntimeError("recovery bundle contains duplicate member paths")
         by_name={m.name.lstrip("./"):m for m in members}
-        if "manifest.json" not in by_name or "checksums.sha256" not in by_name or RECOVERY_SIGNATURE_MEMBER not in by_name:
-            raise RuntimeError("recovery bundle requires manifest.json, checksums.sha256 and recovery-signature.json")
-        mf=tf.extractfile(by_name["manifest.json"]); cf=tf.extractfile(by_name["checksums.sha256"]); sf=tf.extractfile(by_name[RECOVERY_SIGNATURE_MEMBER])
-        if mf is None or cf is None or sf is None: raise RuntimeError("recovery bundle metadata is unreadable")
-        manifest_bytes=mf.read(); checksums_bytes=cf.read(); signature_bytes=sf.read()
-        recovery_trust=verify_recovery_signature(config or load_config(), manifest_bytes, checksums_bytes, signature_bytes, allow_untrusted=allow_untrusted_signer)
+        if "manifest.json" not in by_name or "checksums.sha256" not in by_name: raise RuntimeError("recovery bundle requires manifest.json and checksums.sha256")
+        mf=tf.extractfile(by_name["manifest.json"]); cf=tf.extractfile(by_name["checksums.sha256"])
+        if mf is None or cf is None: raise RuntimeError("recovery bundle metadata is unreadable")
+        manifest_bytes=mf.read(); checksums_bytes=cf.read(); legacy_signature=None
+        if RECOVERY_SIGNATURE_MEMBER in by_name:
+            sf=tf.extractfile(by_name[RECOVERY_SIGNATURE_MEMBER])
+            if sf is None: raise RuntimeError("legacy recovery signature is unreadable")
+            legacy_signature=_inspect_recovery_signature(manifest_bytes,checksums_bytes,sf.read())
         manifest=json.loads(manifest_bytes.decode("utf-8"))
-        if not isinstance(manifest,dict) or int(manifest.get("format_version",0)) != 2:
-            raise RuntimeError("recovery bundle format is unsupported")
-        if manifest.get("artifact_type") not in (None,"tec-tac-recovery-bundle"):
-            raise RuntimeError("recovery bundle artifact type is invalid")
-        checksums=parse_checksum_file(checksums_bytes.decode("utf-8"))
-        modes=manifest.get("recovery_modes") or []
-        if restore_mode not in modes:
-            raise RuntimeError(f"recovery bundle does not support restore mode {restore_mode}")
-        components=manifest.get("components") or {}
-        required=[]
+        if not isinstance(manifest,dict) or int(manifest.get("format_version",0))!=2: raise RuntimeError("recovery bundle format is unsupported")
+        if manifest.get("artifact_type") not in (None,"tec-tac-recovery-bundle"): raise RuntimeError("recovery bundle artifact type is invalid")
+        checksums=parse_checksum_file(checksums_bytes.decode("utf-8")); modes=manifest.get("recovery_modes") or []
+        if restore_mode not in modes: raise RuntimeError(f"recovery bundle does not support restore mode {restore_mode}")
+        components=manifest.get("components") or {}; required=[]
         if restore_mode in {"full","tactical"}: required.append("tactical")
         if restore_mode in {"full","tec_tac"}: required.append("tec_tac")
         extracted={}
         for key in required:
             meta=components.get(key) or {}
-            if not meta.get("included"):
-                raise RuntimeError(f"recovery bundle does not include required component: {key}")
-            rel=str(meta.get("archive") or "")
-            expected = "tec-tac/tec-tac-backup.tar.gz" if key=="tec_tac" else rel
-            if key=="tactical" and not re.fullmatch(r"tactical/rmm-backup-[A-Za-z0-9_.-]+\.tar",rel):
-                raise RuntimeError("recovery bundle Tactical component path is invalid")
-            if key=="tec_tac" and rel != expected:
-                raise RuntimeError("recovery bundle Tec-Tac component path is invalid")
-            member=by_name.get(rel)
-            if member is None or not member.isfile():
-                raise RuntimeError(f"recovery bundle component is missing: {key}")
-            manifest_hash=str(meta.get("sha256") or "").lower()
-            checksum_hash=str(checksums.get(rel) or "").lower()
-            if not manifest_hash or checksum_hash != manifest_hash:
-                raise RuntimeError(f"recovery bundle checksum record mismatch: {key}")
-            target=stage/("tactical-native.tar" if key=="tactical" else "tec-tac-backup.tar.gz")
-            extract_verified_bundle_member(tf,member,target,manifest_hash,int(meta.get("size_bytes",-1)))
-            extracted[key]=target
-        # Every declared included component must have a checksum record even when
-        # the selected emergency mode does not read/hash that component.
-        for key,meta in components.items():
-            if not isinstance(meta,dict) or not meta.get("included"): continue
-            rel=str(meta.get("archive") or "")
-            if not rel or str(checksums.get(rel) or "").lower()!=str(meta.get("sha256") or "").lower():
-                raise RuntimeError(f"recovery bundle metadata/checksum declaration is incomplete: {key}")
-    if validate_components and "tactical" in extracted: validate_tactical_native_archive(extracted["tactical"])
-    if validate_components and "tec_tac" in extracted: validate_tec_tac_component(extracted["tec_tac"], (manifest.get("components") or {}).get("tec_tac") or {}, config=config or load_config())
-    manifest["recovery_trust"] = recovery_trust
+            if not meta.get("included"): raise RuntimeError(f"recovery bundle does not include required component: {key}")
+            rel=str(meta.get("archive") or ""); expected="tec-tac/tec-tac-backup.tar.gz" if key=="tec_tac" else rel
+            if key=="tactical" and not re.fullmatch(r"tactical/rmm-backup-[A-Za-z0-9_.-]+\.tar",rel): raise RuntimeError("recovery bundle Tactical component path is invalid")
+            if key=="tec_tac" and rel!=expected: raise RuntimeError("recovery bundle Tec-Tac component path is invalid")
+            if rel not in by_name: raise RuntimeError(f"recovery bundle member is missing: {rel}")
+            if str(checksums.get(rel) or "").lower()!=str(meta.get("sha256") or "").lower(): raise RuntimeError(f"recovery bundle checksum manifest mismatch: {rel}")
+            target=stage/("tactical.tar" if key=="tactical" else "tec-tac-backup.tar.gz")
+            extracted[key]=extract_verified_bundle_member(tf,by_name[rel],target,meta.get("sha256"),meta.get("size_bytes"))
+    if validate_components:
+        if "tactical" in extracted: validate_tactical_native_archive(extracted["tactical"])
+        if "tec_tac" in extracted: validate_tec_tac_component(extracted["tec_tac"],(manifest.get("components") or {}).get("tec_tac") or {},config=config or load_config())
+    manifest["legacy_signature"] = ({**{k:legacy_signature.get(k) for k in ("verified","key_id","public_key_sha256")}, "trust_required": False} if legacy_signature else None)
     return manifest,extracted
-
 
 def _tec_tac_restore_allowed_roots(config):
     state_root = Path(config["TEC_TAC_STATE_ROOT"])
@@ -3141,7 +2959,6 @@ TEC_TAC_PRIVILEGED_INSTALL_PATHS = (
     "/usr/local/sbin/tec-tac-housekeeping",
     "/usr/local/sbin/tec-tac-repair",
     "/usr/local/sbin/tec-tac-diagnostics",
-    "/usr/local/sbin/tec-tac-recovery-key",
     "/etc/sudoers.d/tec-tac-module-manager",
     "/etc/sudoers.d/tec-tac-module-manager-v2",
     "/etc/sudoers.d/tec-tac-module-hotfix",
@@ -3910,6 +3727,12 @@ def operation_validate_restore(config, job, log):
                 _vr_check(report, "source", "source.sidecar", "Sidecar metadata", "passed", "Sidecar structure/size/hash accepted.")
             else:
                 _vr_check(report, "source", "source.sidecar", "Sidecar metadata", "warning", "No sidecar metadata was available; artifact integrity will be established from the recovery object itself.")
+            archive_verification = verify_archive_hash_companion(config, destination, name, downloaded, log)
+            report["archive_verification"] = archive_verification
+            if archive_verification.get("status") == "verified":
+                _vr_check(report, "source", "source.sha256", "Archive SHA-256 companion", "passed", "Adjacent SHA-256 companion matches the recovery archive.")
+            else:
+                _vr_check(report, "source", "source.sha256", "Archive SHA-256 companion", "warning", "No SHA-256 companion was found; this older backup remains restorable but is not externally verified.")
         except Exception as exc:
             _vr_check(report, "source", "source.object", "Recovery object", "failed", str(exc))
             return report
@@ -3932,20 +3755,14 @@ def operation_validate_restore(config, job, log):
                 report["format_version"] = int(manifest.get("format_version") or 0)
                 report["legacy"] = False
                 _vr_check(report, "bundle", "bundle.structure", "Recovery bundle structure", "passed", "Manifest, checksums and selected component hash/size are valid.")
-                signer = manifest.get("recovery_trust") or {}
-                report["recovery_signer"] = {
-                    "installation_id": manifest.get("installation_id") or signer.get("installation_id"),
+                report["source_identity"] = {
+                    "installation_id": manifest.get("installation_id"),
                     "server_name": manifest.get("server_name"),
-                    "key_id": signer.get("key_id"),
-                    "public_key_sha256": signer.get("public_key_sha256"),
-                    "signed_at": manifest.get("created_at"),
-                    "trusted": bool(signer.get("trusted")),
-                    "trust_required": bool(signer.get("trust_required")),
+                    "created_at": manifest.get("created_at"),
+                    "core_version": (((manifest.get("components") or {}).get("tec_tac") or {}).get("framework_version")),
                 }
-                if signer.get("trusted"):
-                    _vr_check(report, "bundle", "bundle.signer_trust", "Recovery signer trust", "passed", f"Trusted signer {signer.get('key_id')} fingerprint {signer.get('public_key_sha256')}")
-                else:
-                    _vr_check(report, "bundle", "bundle.signer_trust", "Recovery signer trust", "failed", f"Signer {signer.get('key_id')} is valid but not yet trusted; superuser confirmation or root key import is required.")
+                if manifest.get("legacy_signature"):
+                    report["legacy_signature"] = manifest.get("legacy_signature")
                 report["version_transition"] = _restore_version_transition(config, manifest)
                 if report["version_transition"].get("is_core_downgrade"):
                     report["warnings"].append(report["version_transition"]["notice"])
@@ -4063,6 +3880,9 @@ def operation_restore_backup(config, job, log):
         if metadata:
             if int(metadata.get("size_bytes",-1))!=downloaded.stat().st_size: raise RuntimeError("restore artifact size does not match backup metadata")
             if metadata.get("sha256") and str(metadata["sha256"]).lower()!=sha256_file(downloaded).lower(): raise RuntimeError("restore artifact SHA-256 does not match backup metadata")
+        archive_verification=verify_archive_hash_companion(config,destination,name,downloaded,log)
+        if archive_verification.get("status") == "not_verified":
+            _append_recovery_audit("restore_archive_not_verified", actor=(job.get("context") or {}).get("requested_by") or "unknown", backup_ref=request.get("backup_ref"), reason=archive_verification.get("reason"))
 
         if LEGACY_ARCHIVE_RE.fullmatch(name):
             if mode!="tactical": raise RuntimeError("legacy Tactical archives support only tactical restore mode")
@@ -4196,6 +4016,7 @@ def operation_restore_backup(config, job, log):
             "rollback_performed":False,
             "accepted_overrides":dict((job.get("restore_preflight") or {}).get("accepted_overrides") or {}),
             "version_transition":job.get("version_transition"),
+            "archive_verification":archive_verification,
             "completed_at":now(),
         }
     finally:
@@ -4203,100 +4024,14 @@ def operation_restore_backup(config, job, log):
 
 
 
-def _bundle_signer_from_download(config, destination, name, stage, log):
-    downloaded = stage / name
-    metadata = download_destination(config, destination, name, downloaded, log)
-    ensure_regular(downloaded, max_bytes=max_backup_bytes(config))
-    with tarfile.open(downloaded, "r:gz") as tf:
-        members = safe_tar_members(tf); by_name = {m.name.lstrip("./"): m for m in members}
-        for required in ("manifest.json", "checksums.sha256", RECOVERY_SIGNATURE_MEMBER):
-            if required not in by_name: raise RuntimeError(f"recovery bundle is missing {required}")
-        mf=tf.extractfile(by_name["manifest.json"]); cf=tf.extractfile(by_name["checksums.sha256"]); sf=tf.extractfile(by_name[RECOVERY_SIGNATURE_MEMBER])
-        if mf is None or cf is None or sf is None: raise RuntimeError("recovery bundle metadata is unreadable")
-        manifest_bytes, checksums_bytes, envelope_bytes = mf.read(), cf.read(), sf.read()
-    signer = _inspect_recovery_signature(manifest_bytes, checksums_bytes, envelope_bytes)
-    manifest = json.loads(manifest_bytes.decode("utf-8"))
-    signer.update({"server_name": manifest.get("server_name"), "signed_at": manifest.get("created_at"), "installation_id": manifest.get("installation_id") or signer["key_id"]})
-    signer.update(_recovery_trust_status(config, signer))
-    return signer
 
-
-def operation_recovery_identity(config, job, log):
-    identity = recovery_identity(config)
-    identity.pop("public_key_pem", None)
-    identity["trusted_locally"] = True
-    return identity
-
-
-def operation_trust_recovery_signer(config, job, log):
-    request = job["request"]
-    dest_id, name = parse_backup_ref(request.get("backup_ref"))
-    requested_dest_id = str(request.get("destination_id") or "").strip()
-    if requested_dest_id != dest_id:
-        raise RuntimeError("backup_ref destination id does not match requested destination id")
-    if dest_id in {"local", "0", "native"}:
-        registered = _registered_destination_path(config, requested_dest_id)
-        if registered.is_file() and not registered.is_symlink():
-            destination=load_registered_destination(config, requested_dest_id)
-        else:
-            destination={"id":dest_id,"type":"local","name":"Tactical local backups","path":"/rmmbackups"}
-            destination=validate_destination(destination,config)
-    else:
-        destination=load_registered_destination(config, requested_dest_id)
-    rs=roots(config); stage=rs["staging"]/f"trust-signer-{job['id']}"
-    shutil.rmtree(stage, ignore_errors=True); stage.mkdir(parents=True, exist_ok=True)
-    try:
-        signer = _bundle_signer_from_download(config, destination, name, stage, log)
-        expected = {
-            "key_id": str(request.get("expected_key_id") or "").strip(),
-            "public_key_sha256": str(request.get("expected_fingerprint") or "").strip().lower(),
-            "server_name": str(request.get("expected_server_name") or "").strip(),
-            "installation_id": str(request.get("expected_installation_id") or "").strip(),
-        }
-        actual = {
-            "key_id": str(signer.get("key_id") or "").strip(),
-            "public_key_sha256": str(signer.get("public_key_sha256") or "").strip().lower(),
-            "server_name": str(signer.get("server_name") or "").strip(),
-            "installation_id": str(signer.get("installation_id") or "").strip(),
-        }
-        for field in ("key_id", "public_key_sha256", "server_name", "installation_id"):
-            if expected[field] != actual[field]:
-                raise RuntimeError(f"recovery signer {field} changed since confirmation; trust was not written")
-        if signer.get("trusted"):
-            signer.pop("public_key_pem", None)
-            return {"ok": True, "already_trusted": True, "signer": signer}
-        trust_root = Path(str(config.get("TEC_TAC_RECOVERY_TRUST_ROOT") or "/etc/tec-tac/recovery-trust"))
-        _secure_root_directory(trust_root, private=False)
-        key_path = trust_root / f"{signer['key_id']}.pub"
-        if key_path.exists():
-            raise RuntimeError("recovery trust key id already exists with different material")
-        pem = signer["public_key_pem"].encode("ascii")
-        fd, tmp_name = tempfile.mkstemp(prefix=f".{signer['key_id']}.", suffix=".pub", dir=str(trust_root))
-        tmp=Path(tmp_name)
-        try:
-            os.write(fd, pem); os.fsync(fd); os.fchmod(fd,0o644); os.fchown(fd,0,0); os.close(fd); fd=-1
-            os.replace(tmp,key_path)
-        finally:
-            if fd >= 0: os.close(fd)
-            tmp.unlink(missing_ok=True)
-        actor=(job.get("context") or {}).get("requested_by") or "unknown"
-        _append_recovery_audit(
-            "recovery_signer_trusted", actor=actor, key_id=signer["key_id"],
-            public_key_sha256=signer["public_key_sha256"], backup_ref=request.get("backup_ref"),
-            signed_at=signer.get("signed_at"), server_name=signer.get("server_name"),
-            installation_id=signer.get("installation_id"), destination_id=requested_dest_id,
-        )
-        log.write(f"[TEC-TAC-BACKUP] trusted recovery signer {signer['key_id']} fingerprint={signer['public_key_sha256']} actor={actor}\n")
-        signer["trusted"] = True; signer["trust_required"] = False; signer.pop("public_key_pem", None)
-        return {"ok": True, "already_trusted": False, "signer": signer}
-    finally:
-        shutil.rmtree(stage, ignore_errors=True)
 
 
 def delete_local(destination, name):
     archive = Path(destination["path"]) / name
     archive.unlink(missing_ok=True)
     sidecar_path(archive).unlink(missing_ok=True)
+    archive_hash_path(archive).unlink(missing_ok=True)
 
 
 def delete_rclone(config, destination, name, log):
@@ -4305,6 +4040,7 @@ def delete_rclone(config, destination, name, log):
         remote = join_remote(remote_base(destination), name)
         run_logged(["rclone", "deletefile", remote, "--config", str(cfg)], log, timeout=300)
         subprocess.run(["rclone", "deletefile", remote + ".tectac.json", "--config", str(cfg)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300)
+        subprocess.run(["rclone", "deletefile", remote + ".sha256", "--config", str(cfg)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300)
 
 
 def delete_scp(config, destination, name, log):
@@ -4312,7 +4048,7 @@ def delete_scp(config, destination, name, log):
         temp = Path(td); ssh_common, scp_common = scp_args(config, destination, temp, log)
         host = f"{destination['username']}@{destination['host']}"
         remote_file = destination["remote_path"].rstrip("/") + "/" + name
-        run_logged(["ssh", *ssh_common, host, "rm", "-f", "--", remote_file, remote_file + ".tectac.json"], log, timeout=120)
+        run_logged(["ssh", *ssh_common, host, "rm", "-f", "--", remote_file, remote_file + ".tectac.json", remote_file + ".sha256"], log, timeout=120)
 
 
 def delete_destination(config, destination, name, log):
@@ -4768,8 +4504,6 @@ OPERATIONS = {
     "apply_retention": operation_apply_retention,
     "validate_destination": operation_validate_destination,
     "validate_restore": operation_validate_restore,
-    "recovery_identity": operation_recovery_identity,
-    "trust_recovery_signer": operation_trust_recovery_signer,
     "store_secret": operation_store_secret,
     "delete_secret": operation_delete_secret,
     "list_registered_destinations": operation_list_registered_destinations,

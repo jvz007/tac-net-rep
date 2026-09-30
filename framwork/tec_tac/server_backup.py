@@ -107,8 +107,6 @@ def _timeout_for(action: str) -> int:
         "validate_restore": 45 * 60,
         "store_secret": 120,
         "delete_secret": 120,
-        "recovery_identity": 120,
-        "trust_recovery_signer": 45 * 60,
         "list_registered_destinations": 120,
         "list_registered_backups": 20 * 60,
         "validate_registered_restore": 45 * 60,
@@ -500,60 +498,6 @@ class ServerBackupProvider:
         }
 
 
-def recovery_identity_core(*, context: dict | None = None) -> dict:
-    """Core-internal recovery identity lookup. Not exposed as a capability operation."""
-    return _run("recovery_identity", {}, context=context or {})
-
-
-def trust_recovery_signer_core(
-    *,
-    backup_ref: str,
-    destination_id: str,
-    expected_key_id: str,
-    expected_fingerprint: str,
-    expected_server_name: str,
-    expected_installation_id: str,
-    context: dict,
-) -> dict:
-    """Queue a Core-internal recovery signer trust job.
-
-    The browser may identify only a previously registered destination id. The
-    privileged helper resolves the validated destination server-side and binds
-    the write to the exact signer identity the superuser confirmed.
-    """
-    request = {
-        "backup_ref": str(backup_ref or "").strip(),
-        "destination_id": str(destination_id or "").strip(),
-        "expected_key_id": str(expected_key_id or "").strip(),
-        "expected_fingerprint": str(expected_fingerprint or "").strip().lower(),
-        "expected_server_name": str(expected_server_name or "").strip(),
-        "expected_installation_id": str(expected_installation_id or "").strip(),
-    }
-    if any(not value for value in request.values()):
-        raise ServerBackupError("Recovery trust confirmation requires backup_ref, destination_id and the complete expected signer identity.")
-    return _start("trust_recovery_signer", request, context=context)
-
-
-def recovery_trust_job_status_core(*, job_id: str) -> dict:
-    """Return sanitized status for one recovery-trust job only."""
-    job = _read_job(str(job_id or "").strip())
-    if str(job.get("action") or "") != "trust_recovery_signer":
-        raise ServerBackupError("The requested job is not a recovery signer trust job.", job_id=str(job_id))
-    result = _public_job_status(job)
-    if job.get("status") == "succeeded" and isinstance(job.get("result"), dict):
-        signer = job["result"].get("signer") if isinstance(job["result"].get("signer"), dict) else None
-        if signer:
-            result["signer"] = {
-                key: signer.get(key)
-                for key in (
-                    "installation_id", "server_name", "key_id",
-                    "public_key_sha256", "signed_at", "trusted",
-                    "trust_required",
-                )
-            }
-            result["already_trusted"] = bool(job["result"].get("already_trusted"))
-    return result
-
 
 def list_registered_destinations_core(*, context: dict) -> list[dict]:
     result = _run("list_registered_destinations", {}, context=context)
@@ -634,9 +578,9 @@ def register_core_server_backup_capability():
             "backup_classes": sorted(BACKUP_CLASSES),
             "recovery_modes": ["full", "tactical", "tec_tac"],
             "format_version": 2,
-            "recovery_signature_member": "recovery-signature.json",
-            "backup_inventory_identity_fields": ["installation_id", "server_name", "recovery_signer"],
-            "restore_validation_fields": ["recovery_signer", "version_transition"],
+            "archive_hash_companion": "<archive>.sha256",
+            "backup_inventory_identity_fields": ["installation_id", "server_name", "created_at", "core_version"],
+            "restore_validation_fields": ["source_identity", "archive_verification", "version_transition"],
             "overrideable_restore_checks": ["target.os"],
             "credential_binding_required": True,
         },

@@ -33,19 +33,12 @@ h = load('backup164', 'scripts/server-backup-helper.py')
 # failures leave no final archive/sidecar pair behind.
 with tempfile.TemporaryDirectory() as td:
     base = Path(td)
-    old_identity, old_sig = h.recovery_identity, h.create_recovery_signature
-    h.recovery_identity = lambda _cfg: {
-        'installation_id': 'test-install', 'server_name': 'test-rmm',
-        'key_id': 'test-key', 'public_key_sha256': 'ab' * 32,
-    }
-    h.create_recovery_signature = lambda *_a, **_k: {
-        'schema': 1, 'algorithm': 'ed25519', 'key_id': 'test-key',
-        'public_key_sha256': 'ab' * 32, 'signature': 'AA==', 'public_key_pem': 'x',
-    }
-    try:
-        bundle, _manifest = h.create_recovery_bundle({}, base, backup_class='manual')
-    finally:
-        h.recovery_identity, h.create_recovery_signature = old_identity, old_sig
+    framework = base / 'framework'; framework.mkdir(); (framework / 'VERSION').write_text('1.15.188\n')
+    bundle, _manifest = h.create_recovery_bundle({
+        'TEC_TAC_INSTALLATION_ID': 'test-install',
+        'TEC_TAC_FRAMEWORK_SOURCE': str(framework),
+        'TEC_TAC_ROOT': str(base / 'runtime'),
+    }, base, backup_class='manual')
     must(bundle.parent == base, 'recovery bundle was exposed outside private staging before publication')
     must('/rmmbackups/' not in str(bundle), 'recovery bundle was created directly in final local backup storage')
 
@@ -58,6 +51,7 @@ with tempfile.TemporaryDirectory() as td:
     destination = {'id': 'local', 'type': 'local', 'path': str(dest)}
     target = dest / src.name
     sidecar = target.with_name(target.name + '.tectac.json')
+    hashfile = target.with_name(target.name + '.sha256')
     real_replace = h.os.replace
 
     # Sidecar publication failure: archive must never become final.
@@ -74,6 +68,7 @@ with tempfile.TemporaryDirectory() as td:
         h.os.replace = real_replace
     must(not target.exists(), 'archive was published after sidecar publication failed')
     must(not sidecar.exists(), 'failed sidecar publication left a final sidecar')
+    must(not hashfile.exists(), 'failed sidecar publication left a final hash companion')
 
     # Archive publication failure after sidecar succeeds: roll the final sidecar back.
     def fail_archive(a, b):
@@ -89,6 +84,7 @@ with tempfile.TemporaryDirectory() as td:
         h.os.replace = real_replace
     must(not target.exists(), 'failed final publication left an archive')
     must(not sidecar.exists(), 'failed final publication left a mismatched sidecar')
+    must(not hashfile.exists(), 'failed final publication left a mismatched hash companion')
 
     # The old same-target path is forbidden: final storage is never a build workspace.
     dest.mkdir(exist_ok=True)
@@ -105,7 +101,6 @@ with tempfile.TemporaryDirectory() as td:
     originals = {
         'roots': h.roots, 'lock': h.acquire_lock, 'stage': h.set_job_stage,
         'tec': h.create_tec_tac_component, 'validate': h.validate_recovery_bundle,
-        'identity': h.recovery_identity, 'sig': h.create_recovery_signature,
         'localroot': h.DEFAULT_LOCAL_RECOVERY_ROOT,
     }
     h.roots = lambda _cfg=None: {'staging': staging}
@@ -116,20 +111,20 @@ with tempfile.TemporaryDirectory() as td:
         return {'included': True, 'size_bytes': path.stat().st_size, 'sha256': hashlib.sha256(path.read_bytes()).hexdigest(), 'framework_version': '1.15.164'}
     h.create_tec_tac_component = fake_tec
     h.validate_recovery_bundle = lambda *_a, **_k: {'ok': True}
-    h.recovery_identity = lambda _cfg: {'installation_id':'test-install','server_name':'test-rmm','key_id':'test-key','public_key_sha256':'ab'*32}
-    h.create_recovery_signature = lambda *_a, **_k: {'schema':1,'algorithm':'ed25519','key_id':'test-key','public_key_sha256':'ab'*32,'signature':'AA==','public_key_pem':'x'}
     h.DEFAULT_LOCAL_RECOVERY_ROOT = final
     try:
-        result = h.operation_create_backup({}, {'id':'11111111-1111-4111-8111-111111111111','request':{
+        framework = base/'framework'; framework.mkdir(); (framework/'VERSION').write_text('1.15.188\n')
+        result = h.operation_create_backup({'TEC_TAC_INSTALLATION_ID':'test-install','TEC_TAC_FRAMEWORK_SOURCE':str(framework),'TEC_TAC_ROOT':str(base/'runtime')}, {'id':'11111111-1111-4111-8111-111111111111','request':{
             'backup_class':'manual','destinations':[],'include_tactical':False,'include_tec_tac':True,
         }}, SimpleNamespace(write=lambda *_a: None))
     finally:
         h.roots=originals['roots']; h.acquire_lock=originals['lock']; h.set_job_stage=originals['stage']
         h.create_tec_tac_component=originals['tec']; h.validate_recovery_bundle=originals['validate']
-        h.recovery_identity=originals['identity']; h.create_recovery_signature=originals['sig']; h.DEFAULT_LOCAL_RECOVERY_ROOT=originals['localroot']
+        h.DEFAULT_LOCAL_RECOVERY_ROOT=originals['localroot']
     final_archive = Path(result['local_path'])
     must(final_archive.parent == final and final_archive.is_file(), 'no-destination backup was not published to final local storage')
     must(final_archive.with_name(final_archive.name+'.tectac.json').is_file(), 'published local recovery archive has no sidecar')
+    must(final_archive.with_name(final_archive.name+'.sha256').is_file(), 'published local recovery archive has no SHA-256 companion')
     must(not any(staging.rglob('tec-tac-backup-*.tgz')), 'private staging recovery bundle survived operation cleanup')
 
 # L15: preflight estimates the complete rollback snapshot, including PostgreSQL

@@ -6,6 +6,7 @@ import io
 import json
 import os
 import pathlib
+import tarfile
 import tempfile
 
 from cryptography.hazmat.primitives import serialization
@@ -17,157 +18,113 @@ h = importlib.util.module_from_spec(spec); spec.loader.exec_module(h)
 trust_spec = importlib.util.spec_from_file_location('trusted_publishers_d2d3', ROOT / 'framwork' / 'tec_tac' / 'trusted_publishers.py')
 trusted_publishers = importlib.util.module_from_spec(trust_spec); trust_spec.loader.exec_module(trusted_publishers)
 
-# This regression must be ordinary-CI portable. Production requires root-owned
-# recovery material; when the test itself is non-root, stub only that ownership
-# boundary while retaining the real type/symlink/mode checks and cryptography.
+# This decision-level regression is intentionally runnable as an unprivileged
+# user. Production writes remain root-owned; only the test's temporary files
+# suppress fchown when the runner itself is not root.
 if os.geteuid() != 0:
-    import stat
-    def _portable_secure_dir(path, *, private=False):
-        info = pathlib.Path(path).lstat()
-        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
-            raise RuntimeError(f"recovery trust directory is not a real directory: {path}")
-        forbidden = 0o077 if private else 0o022
-        if info.st_mode & forbidden:
-            raise RuntimeError(f"recovery trust directory permissions are unsafe: {path}")
-        return info
-    def _portable_secure_file(path, *, private=False):
-        info = pathlib.Path(path).lstat()
-        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
-            raise RuntimeError(f"recovery trust file is not a regular file: {path}")
-        forbidden = 0o077 if private else 0o022
-        if info.st_mode & forbidden:
-            raise RuntimeError(f"recovery trust file permissions are unsafe: {path}")
-        return info
-    h._secure_root_directory = _portable_secure_dir
-    h._secure_regular_root_file = _portable_secure_file
-    h.os.chown = lambda *_a, **_k: None
-    h.os.fchown = lambda *_a, **_k: None
-    def _portable_load_registered_destination(config, destination_id):
-        path = h._registered_destination_path(config, destination_id)
-        if not path.is_file() or path.is_symlink():
-            raise RuntimeError("backup destination is not registered; validate it before trusting a recovery signer")
-        if stat.S_IMODE(path.stat().st_mode) != 0o600:
-            raise RuntimeError("registered backup destination permissions are unsafe")
-        item = json.loads(path.read_text(encoding="utf-8"))
-        item = h.validate_destination(item, config)
-        if item["id"] != str(destination_id):
-            raise RuntimeError("registered backup destination id mismatch")
-        return item
-    h.load_registered_destination = _portable_load_registered_destination
-
-
-def make_identity(base, key_id='source-a', trust=True):
-    signing=base/'sign'; trust_root=base/'recovery-trust'; signing.mkdir(); trust_root.mkdir()
-    os.chmod(signing,0o700); os.chmod(trust_root,0o755)
-    key=Ed25519PrivateKey.generate()
-    private=signing/'private.pem'; private.write_bytes(key.private_bytes(serialization.Encoding.PEM,serialization.PrivateFormat.PKCS8,serialization.NoEncryption())); os.chmod(private,0o600)
-    public=key.public_key().public_bytes(serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo)
-    if trust:
-        (trust_root/f'{key_id}.pub').write_bytes(public); os.chmod(trust_root/f'{key_id}.pub',0o644)
-    return key,private,public,trust_root
-
-
-def cfg(private, trust_root, key_id='source-a'):
-    return {'TEC_TAC_INSTALLATION_ID':key_id,'TEC_TAC_RECOVERY_SIGNING_KEY':str(private),'TEC_TAC_RECOVERY_TRUST_ROOT':str(trust_root),'TEC_TAC_FRAMEWORK_SOURCE':'/no/framework','TEC_TAC_ROOT':'/no/runtime'}
+    _real_atomic_json = h.atomic_json
+    def _portable_atomic_json(path, payload, *, mode=0o600, uid=None, gid=None):
+        return _real_atomic_json(path, payload, mode=mode, uid=None, gid=None)
+    h.atomic_json = _portable_atomic_json
+    def _portable_recovery_audit(event, *, actor="root", **detail):
+        h.RECOVERY_AUDIT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with h.RECOVERY_AUDIT_FILE.open('a', encoding='utf-8') as fh:
+            fh.write(json.dumps({'event': event, 'actor': actor, **detail}, sort_keys=True) + '\n')
+    def _portable_account_audit(*, actor, before, restored, effective):
+        h.ACCOUNT_SECURITY_AUDIT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        row={'event':'account_security_policy_restore_merge','actor':actor,'before':before,'restored':restored,'effective':effective}
+        with h.ACCOUNT_SECURITY_AUDIT_FILE.open('a', encoding='utf-8') as fh:
+            fh.write(json.dumps(row, sort_keys=True) + '\n')
+        _portable_recovery_audit('account_security_policy_restore_merge', actor=actor, before=before, restored=restored, effective=effective)
+    h._append_recovery_audit = _portable_recovery_audit
+    h._append_account_security_restore_audit = _portable_account_audit
 
 with tempfile.TemporaryDirectory() as td:
     td=pathlib.Path(td)
-    key, private, public, trust_root = make_identity(td, trust=False)
-    config=cfg(private, trust_root)
-    manifest={'format_version':2,'artifact_type':'tec-tac-recovery-bundle','created_at':h.now(),'installation_id':'source-a','server_name':'old-rmm','components':{'tec_tac':{'included':True,'framework_version':'1.15.83'}},'recovery_modes':['tec_tac']}
-    mb=(json.dumps(manifest,sort_keys=True)+'\n').encode(); cb=b''
-    env=h.create_recovery_signature(config,mb,cb)
-    eb=(json.dumps(env,sort_keys=True)+'\n').encode()
-    inspected=h.verify_recovery_signature(config,mb,cb,eb,allow_untrusted=True)
-    assert inspected['verified'] is True and inspected['trusted'] is False and inspected['trust_required'] is True
+    framework=td/'framework'; framework.mkdir(); (framework/'VERSION').write_text('1.15.188\n')
+    runtime=td/'runtime'; runtime.mkdir()
+    config={
+        'TEC_TAC_INSTALLATION_ID':'install-a',
+        'TEC_TAC_FRAMEWORK_SOURCE':str(framework),
+        'TEC_TAC_ROOT':str(runtime),
+        'TEC_TAC_SERVER_BACKUP_LOCAL_ROOTS':str(td),
+        'TEC_TAC_SERVER_BACKUP_ROOT':str(td/'state'),
+        'TACTICAL_ROOT':str(td/'tactical'),
+        'TACTICAL_USER':str(os.getuid()),
+    }
+
+    # AD-3: every new archive is published with an adjacent SHA-256 companion,
+    # and inventory exposes provenance without any recovery signer/trust state.
+    archive=td/'tec-tac-backup-ad3.tgz'; archive.write_bytes(b'ad3-backup-bytes')
+    metadata=h.metadata_for_archive(archive,'manual',config,components={'tec_tac':{'included':True,'framework_version':'1.15.188'}},recovery_modes=['tec_tac'])
+    assert metadata['installation_id']=='install-a'
+    assert metadata['server_name']
+    assert metadata['core_version']=='1.15.188'
+    assert 'recovery_signer' not in metadata
+    dest=td/'dest'; result=h.store_local({'id':'local','type':'local','name':'local','path':str(dest)},archive,metadata)
+    published=dest/archive.name; hash_path=dest/(archive.name+'.sha256')
+    assert published.is_file() and hash_path.is_file() and (dest/(archive.name+'.tectac.json')).is_file()
+    assert h.parse_archive_hash_text(hash_path.read_text(),archive.name)==metadata['sha256']
+    assert h.verify_archive_hash_companion(config,{'id':'local','type':'local','name':'local','path':str(dest)},archive.name,published,io.StringIO())['status']=='verified'
+    item=h.backup_item({'id':'local','type':'local','name':'local'},archive.name,str(published),published.stat().st_size,metadata['created_at'],metadata)
+    assert item['installation_id']=='install-a' and item['server_name']==metadata['server_name']
+    assert item['created_at']==metadata['created_at'] and item['core_version']=='1.15.188'
+
+    # A present but wrong companion is fatal.
+    hash_path.write_text(('0'*64)+'  '+archive.name+'\n')
     try:
-        h.verify_recovery_signature(config,mb,cb,eb)
+        h.verify_archive_hash_companion(config,{'id':'local','type':'local','name':'local','path':str(dest)},archive.name,published,io.StringIO())
     except RuntimeError as exc:
-        assert 'not trusted' in str(exc)
+        assert 'companion mismatch' in str(exc)
     else:
-        raise AssertionError('destructive trust boundary accepted unknown signer')
+        raise AssertionError('AD-3 accepted a mismatched SHA-256 companion')
 
-    # One-confirmation trust path validates the bundle with its candidate key, then writes that exact public key.
-    bundle=td/'tec-tac-backup-d3.tgz'
-    import tarfile
-    mpath=td/'manifest.json'; cpath=td/'checksums.sha256'; epath=td/h.RECOVERY_SIGNATURE_MEMBER
-    mpath.write_bytes(mb); cpath.write_bytes(cb); epath.write_bytes(eb)
-    with tarfile.open(bundle,'w:gz') as tf:
-        tf.add(mpath,arcname='manifest.json'); tf.add(cpath,arcname='checksums.sha256'); tf.add(epath,arcname=h.RECOVERY_SIGNATURE_MEMBER)
-    state=td/'state'
-    config.update({'TEC_TAC_SERVER_BACKUP_ROOT':str(state),'TEC_TAC_SERVER_BACKUP_LOCAL_ROOTS':str(td),'TACTICAL_USER':'root'})
-    h.ensure_runtime_dirs(config)
-    h.register_destination(config, {'id':'local','type':'local','name':'test','path':str(td)})
-    job={'id':'11111111-1111-4111-8111-111111111111','request':{
-        'backup_ref':'destination:local:tec-tac-backup-d3.tgz',
-        'destination_id':'local',
-        'expected_key_id':'source-a',
-        'expected_fingerprint':env['public_key_sha256'],
-        'expected_server_name':'old-rmm',
-        'expected_installation_id':'source-a',
-    },'context':{'requested_by':'admin'}}
-    old_audit=h.RECOVERY_AUDIT_FILE; h.RECOVERY_AUDIT_FILE=td/'recovery-audit.jsonl'
-    try:
-        result=h.operation_trust_recovery_signer(config,job,io.StringIO())
-    finally:
-        h.RECOVERY_AUDIT_FILE=old_audit
-    assert result['ok'] is True and result['signer']['trusted'] is True
-    trusted=(trust_root/'source-a.pub')
-    assert trusted.read_bytes()==public
-    audit=(td/'recovery-audit.jsonl').read_text()
-    assert 'recovery_signer_trusted' in audit and 'admin' in audit
+    # Missing companion remains restorable and is explicitly not verified.
+    hash_path.unlink()
+    missing=h.verify_archive_hash_companion(config,{'id':'local','type':'local','name':'local','path':str(dest)},archive.name,published,io.StringIO())
+    assert missing=={'status':'not_verified','reason':'sha256 companion missing'}
 
-    # The helper must re-check the exact identity confirmed by the superuser.
-    mismatch_trust=td/'mismatch-trust'; mismatch_trust.mkdir()
-    target_mismatch_cfg=dict(config); target_mismatch_cfg['TEC_TAC_RECOVERY_TRUST_ROOT']=str(mismatch_trust)
-    bad_job=json.loads(json.dumps(job)); bad_job['id']='22222222-2222-4222-8222-222222222222'
-    bad_job['request']['expected_fingerprint']='00'*32
-    try:
-        h.operation_trust_recovery_signer(target_mismatch_cfg,bad_job,io.StringIO())
-    except RuntimeError as exc:
-        assert 'changed since confirmation' in str(exc)
-    else:
-        raise AssertionError('recovery signer fingerprint change was accepted')
-    assert not (mismatch_trust/'source-a.pub').exists(), 'mismatched signer was trusted'
+    # New format-2 bundles are unsigned. Build a minimal Tec-Tac-only bundle and
+    # prove the normal validator accepts it without a trust step.
+    payload=td/'tec-tac-backup.tar.gz'; payload.write_bytes(b'component')
+    payload_hash=hashlib.sha256(payload.read_bytes()).hexdigest()
+    manifest={
+        'format_version':2,'artifact_type':'tec-tac-recovery-bundle','created_at':h.now(),
+        'installation_id':'install-a','server_name':'source-rmm','backup_class':'manual',
+        'components':{'tactical':{'included':False},'tec_tac':{'included':True,'archive':'tec-tac/tec-tac-backup.tar.gz','sha256':payload_hash,'size_bytes':payload.stat().st_size,'framework_version':'1.15.188'}},
+        'recovery_modes':['tec_tac'],
+    }
+    manifest_bytes=(json.dumps(manifest,indent=2,sort_keys=True)+'\n').encode()
+    checksums_bytes=(f'{payload_hash}  tec-tac/tec-tac-backup.tar.gz\n').encode()
+    unsigned=td/'tec-tac-backup-unsigned-ad3.tgz'
+    m=td/'manifest.json'; c=td/'checksums.sha256'; m.write_bytes(manifest_bytes); c.write_bytes(checksums_bytes)
+    with tarfile.open(unsigned,'w:gz') as tf:
+        tf.add(m,arcname='manifest.json'); tf.add(c,arcname='checksums.sha256'); tf.add(payload,arcname='tec-tac/tec-tac-backup.tar.gz')
+    stage=td/'stage'; stage.mkdir()
+    parsed,_=h.validate_recovery_bundle(unsigned,'tec_tac',stage,validate_components=False,config=config)
+    assert parsed['legacy_signature'] is None
 
-    # Remote recovery trust resolves only a root-registered destination id; the
-    # trust job itself carries no browser-supplied host/secret destination.
-    remote_cfg=dict(config)
-    h.register_destination(remote_cfg, {
-        'id':'remote-a','type':'webdav','url':'https://backup.example.invalid/d3',
-        'remote_path':'backups','secret_ref':'11111111-1111-4111-8111-111111111111',
-    })
-    captured={}
-    original_bundle=h._bundle_signer_from_download
-    try:
-        def fake_bundle(_cfg, destination, _name, _stage, _log):
-            captured.update(destination)
-            return {
-                'key_id':'source-a','public_key_sha256':env['public_key_sha256'],
-                'server_name':'old-rmm','installation_id':'source-a',
-                'signed_at':h.now(),'trusted':True,'trust_required':False,
-                'public_key_pem':public.decode('ascii'),
-            }
-        h._bundle_signer_from_download=fake_bundle
-        remote_job={'id':'33333333-3333-4333-8333-333333333333','request':{
-            'backup_ref':'destination:remote-a:tec-tac-backup-remote-d3.tgz','destination_id':'remote-a',
-            'expected_key_id':'source-a','expected_fingerprint':env['public_key_sha256'],
-            'expected_server_name':'old-rmm','expected_installation_id':'source-a',
-        },'context':{'requested_by':'admin'}}
-        result=h.operation_trust_recovery_signer(remote_cfg,remote_job,io.StringIO())
-        assert result['already_trusted'] is True
-        assert captured['id']=='remote-a' and captured['url']=='https://backup.example.invalid/d3'
-        assert captured['secret_ref']=='11111111-1111-4111-8111-111111111111'
-        missing=json.loads(json.dumps(remote_job)); missing['id']='44444444-4444-4444-8444-444444444444'
-        missing['request']['backup_ref']='destination:missing:tec-tac-backup-remote-d3.tgz'; missing['request']['destination_id']='missing'
-        try:
-            h.operation_trust_recovery_signer(remote_cfg,missing,io.StringIO())
-        except RuntimeError as exc:
-            assert 'not registered' in str(exc)
-        else:
-            raise AssertionError('unregistered remote destination was accepted for recovery trust')
-    finally:
-        h._bundle_signer_from_download=original_bundle
+    # Older signed bundles remain readable. The embedded public key verifies the
+    # historical signature, but no replacement-server trust decision is needed.
+    key=Ed25519PrivateKey.generate()
+    public_pem=key.public_key().public_bytes(serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo)
+    public_raw=key.public_key().public_bytes(serialization.Encoding.Raw,serialization.PublicFormat.Raw)
+    envelope={
+        'schema':1,'algorithm':'ed25519','key_id':'legacy-source',
+        'public_key_sha256':hashlib.sha256(public_raw).hexdigest(),
+        'public_key_pem':public_pem.decode('ascii'),
+        'manifest_sha256':hashlib.sha256(manifest_bytes).hexdigest(),
+        'checksums_sha256':hashlib.sha256(checksums_bytes).hexdigest(),
+        'signature':base64.b64encode(key.sign(h._recovery_signing_message(manifest_bytes,checksums_bytes))).decode('ascii'),
+    }
+    sig=td/h.RECOVERY_SIGNATURE_MEMBER; sig.write_text(json.dumps(envelope))
+    signed=td/'tec-tac-backup-signed-ad3.tgz'
+    with tarfile.open(signed,'w:gz') as tf:
+        tf.add(m,arcname='manifest.json'); tf.add(c,arcname='checksums.sha256'); tf.add(sig,arcname=h.RECOVERY_SIGNATURE_MEMBER); tf.add(payload,arcname='tec-tac/tec-tac-backup.tar.gz')
+    stage2=td/'stage2'; stage2.mkdir()
+    parsed,_=h.validate_recovery_bundle(signed,'tec_tac',stage2,validate_components=False,config=config)
+    assert parsed['legacy_signature']['verified'] is True
+    assert parsed['legacy_signature']['trust_required'] is False
 
     # D2 trust/account-policy merge: target state must win over an older backup.
     # This preserves publisher/key revocations, does not resurrect publishers
@@ -312,7 +269,8 @@ with tempfile.TemporaryDirectory() as td:
     # An older Core restore is allowed but must produce a clear transition notice.
     original=h.detect_version
     h.detect_version=lambda path: '1.15.86'
-    transition=h._restore_version_transition({'TEC_TAC_FRAMEWORK_SOURCE':'/x','TEC_TAC_ROOT':'/y'},manifest)
+    old_manifest=json.loads(json.dumps(manifest)); old_manifest['components']['tec_tac']['framework_version']='1.15.83'
+    transition=h._restore_version_transition({'TEC_TAC_FRAMEWORK_SOURCE':'/x','TEC_TAC_ROOT':'/y'},old_manifest)
     h.detect_version=original
     assert transition['is_core_downgrade'] is True
     assert 'puts Core back to 1.15.83' in transition['notice']
@@ -386,4 +344,4 @@ with tempfile.TemporaryDirectory() as td:
     _assert_colliding_replacement_fails(legacy=False)
     _assert_colliding_replacement_fails(legacy=True)
 
-print('[TEST] PASS D2/D3 recovery continuity, trust merge and signer inspection')
+print('[TEST] PASS D2/D3 recovery continuity, AD-3 hash verification and legacy signed-bundle compatibility')

@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
+"""Portable AD-3 regression retained under the historical filename.
+
+The old test covered recovery-signer trust. AD-3 removed that trust model. This
+regression now proves unsigned new bundles, legacy signed-bundle compatibility,
+and fixed Tec-Tac restore destinations without requiring root-owned trust state.
+"""
+import base64
 import hashlib
 import importlib.util
 import io
 import json
-import os
 import pathlib
 import tarfile
 import tempfile
@@ -12,66 +18,13 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("server_backup_helper_n1", ROOT / "scripts" / "server-backup-helper.py")
-h = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(h)
-
-
-# Recovery trust production paths are intentionally root-owned. For non-root CI,
-# retain the real type/symlink/mode checks while modelling only st_uid == 0.
-if os.geteuid() != 0:
-    def _fixture_secure_dir(path, *, private=False):
-        info = path.lstat()
-        if not h.stat.S_ISDIR(info.st_mode) or h.stat.S_ISLNK(info.st_mode):
-            raise RuntimeError(f"recovery trust directory is not a real directory: {path}")
-        forbidden = 0o077 if private else 0o022
-        if info.st_mode & forbidden:
-            raise RuntimeError(f"recovery trust directory permissions are unsafe: {path}")
-        return info
-    def _fixture_secure_file(path, *, private=False):
-        info = path.lstat()
-        if not h.stat.S_ISREG(info.st_mode) or h.stat.S_ISLNK(info.st_mode):
-            raise RuntimeError(f"recovery trust file is not a regular file: {path}")
-        forbidden = 0o077 if private else 0o022
-        if info.st_mode & forbidden:
-            raise RuntimeError(f"recovery trust file permissions are unsafe: {path}")
-        return info
-    h._secure_root_directory = _fixture_secure_dir
-    h._secure_regular_root_file = _fixture_secure_file
-
-
-def make_identity(base: pathlib.Path, key_id: str, *, trust=True):
-    signing = base / f"sign-{key_id}"
-    trust_root = base / f"trust-{key_id}"
-    signing.mkdir(); trust_root.mkdir()
-    os.chmod(signing, 0o700); os.chmod(trust_root, 0o755)
-    private = signing / "private.pem"
-    key = Ed25519PrivateKey.generate()
-    private.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
-    os.chmod(private, 0o600)
-    if trust:
-        public = key.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
-        trusted = trust_root / f"{key_id}.pub"
-        trusted.write_bytes(public)
-        os.chmod(trusted, 0o644)
-    return key, private, trust_root
-
-
-def config(private: pathlib.Path, trust_root: pathlib.Path, key_id="source-a"):
-    return {
-        "TEC_TAC_INSTALLATION_ID": key_id,
-        "TEC_TAC_RECOVERY_SIGNING_KEY": str(private),
-        "TEC_TAC_RECOVERY_TRUST_ROOT": str(trust_root),
-        "TEC_TAC_ROOT": "/opt/tec-tac",
-        "TEC_TAC_FRAMEWORK_SOURCE": "/opt/tec-tac-src/framework",
-        "TEC_TAC_UI_SOURCE": "/opt/tec-tac-src/ui",
-        "TEC_TAC_STATE_ROOT": "/var/lib/tec-tac",
-    }
+spec = importlib.util.spec_from_file_location("server_backup_helper_ad3", ROOT / "scripts" / "server-backup-helper.py")
+h = importlib.util.module_from_spec(spec); spec.loader.exec_module(h)
 
 
 def make_tec_component(path: pathlib.Path, extra=None):
     files = {
-        "opt/tec-tac/VERSION": b"1.15.80\n",
+        "opt/tec-tac/VERSION": b"1.15.188\n",
         "etc/tec-tac/tec-tac.conf": b"x=1\n",
     }
     files.update(extra or {})
@@ -81,9 +34,8 @@ def make_tec_component(path: pathlib.Path, extra=None):
             tf.addfile(ti, io.BytesIO(data))
 
 
-def make_bundle(base: pathlib.Path, cfg: dict, *, component_extra=None, tamper_manifest=False):
-    tec = base / "tec.tar.gz"
-    make_tec_component(tec, component_extra)
+def build_bundle(base: pathlib.Path, *, signed=False, tamper_manifest=False, extra=None):
+    tec = base / "tec.tar.gz"; make_tec_component(tec, extra)
     tec_hash = h.sha256_file(tec)
     cmeta = {
         "included": True,
@@ -91,10 +43,8 @@ def make_bundle(base: pathlib.Path, cfg: dict, *, component_extra=None, tamper_m
         "archive_name": "tec-tac-backup.tar.gz",
         "sha256": tec_hash,
         "size_bytes": tec.stat().st_size,
-        "framework_version": "1.15.80",
-        "ui_version": "0.12.33",
-        # These are deliberately attacker-controlled descriptive values. Root
-        # restore code must never use them to select executable paths.
+        "framework_version": "1.15.188",
+        "ui_version": "0.12.80",
         "paths": {"framework_source": "/etc/cron.d", "ui_source": "/root/.ssh"},
         "state_policy": {"state_root": "/var/lib/tec-tac"},
     }
@@ -102,93 +52,90 @@ def make_bundle(base: pathlib.Path, cfg: dict, *, component_extra=None, tamper_m
         "format_version": 2,
         "artifact_type": "tec-tac-recovery-bundle",
         "created_at": h.now(),
-        "installation_id": cfg["TEC_TAC_INSTALLATION_ID"],
+        "installation_id": "source-a",
+        "server_name": "source-rmm",
         "backup_class": "manual",
         "components": {"tactical": {"included": False}, "tec_tac": cmeta},
         "recovery_modes": ["tec_tac"],
     }
-    manifest_path = base / "manifest.json"
-    checksums = base / "checksums.sha256"
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    checksums.write_text(f"{tec_hash}  tec-tac/tec-tac-backup.tar.gz\n", encoding="utf-8")
-    envelope = h.create_recovery_signature(cfg, manifest_path.read_bytes(), checksums.read_bytes())
-    sig = base / h.RECOVERY_SIGNATURE_MEMBER
-    sig.write_text(json.dumps(envelope, sort_keys=True) + "\n", encoding="utf-8")
+    m = base / "manifest.json"; c = base / "checksums.sha256"
+    m.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    c.write_text(f"{tec_hash}  tec-tac/tec-tac-backup.tar.gz\n")
+    sig = None
+    if signed:
+        key = Ed25519PrivateKey.generate()
+        mb, cb = m.read_bytes(), c.read_bytes()
+        pem = key.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+        raw = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+        env = {
+            "schema": 1, "algorithm": "ed25519", "key_id": "legacy-source",
+            "public_key_sha256": hashlib.sha256(raw).hexdigest(), "public_key_pem": pem.decode(),
+            "manifest_sha256": hashlib.sha256(mb).hexdigest(), "checksums_sha256": hashlib.sha256(cb).hexdigest(),
+            "signature": base64.b64encode(key.sign(h._recovery_signing_message(mb, cb))).decode(),
+        }
+        sig = base / h.RECOVERY_SIGNATURE_MEMBER; sig.write_text(json.dumps(env) + "\n")
     if tamper_manifest:
         manifest["backup_class"] = "monthly"
-        manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    bundle = base / "tec-tac-backup-n1.tgz"
+        m.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    bundle = base / ("tec-tac-backup-signed.tgz" if signed else "tec-tac-backup-unsigned.tgz")
     with tarfile.open(bundle, "w:gz") as tf:
-        tf.add(manifest_path, arcname="manifest.json")
-        tf.add(checksums, arcname="checksums.sha256")
-        tf.add(sig, arcname=h.RECOVERY_SIGNATURE_MEMBER)
+        tf.add(m, arcname="manifest.json"); tf.add(c, arcname="checksums.sha256")
+        if sig: tf.add(sig, arcname=h.RECOVERY_SIGNATURE_MEMBER)
         tf.add(tec, arcname="tec-tac/tec-tac-backup.tar.gz")
     return bundle
 
 
+cfg = {
+    "TEC_TAC_INSTALLATION_ID": "target-a",
+    "TEC_TAC_ROOT": "/opt/tec-tac",
+    "TEC_TAC_FRAMEWORK_SOURCE": "/opt/tec-tac-src/framework",
+    "TEC_TAC_UI_SOURCE": "/opt/tec-tac-src/ui",
+    "TEC_TAC_STATE_ROOT": "/var/lib/tec-tac",
+}
+
 with tempfile.TemporaryDirectory() as td:
     td = pathlib.Path(td)
-    _key, private, trust_root = make_identity(td, "source-a", trust=True)
-    cfg = config(private, trust_root)
-
     good_dir = td / "good"; good_dir.mkdir()
-    good = make_bundle(good_dir, cfg)
+    good = build_bundle(good_dir, signed=False)
     stage = td / "stage-good"; stage.mkdir()
     manifest, parts = h.validate_recovery_bundle(good, "tec_tac", stage, config=cfg)
-    assert manifest["recovery_trust"]["verified"] is True
-    assert manifest["recovery_trust"]["key_id"] == "source-a"
+    assert manifest["legacy_signature"] is None
     assert hashlib.sha256(parts["tec_tac"].read_bytes()).hexdigest() == manifest["components"]["tec_tac"]["sha256"]
 
+    signed_dir = td / "signed"; signed_dir.mkdir()
+    legacy = build_bundle(signed_dir, signed=True)
+    stage = td / "stage-signed"; stage.mkdir()
+    manifest, _ = h.validate_recovery_bundle(legacy, "tec_tac", stage, config=cfg)
+    assert manifest["legacy_signature"]["verified"] is True
+    assert manifest["legacy_signature"]["trust_required"] is False
+
     tamper_dir = td / "tamper"; tamper_dir.mkdir()
-    tampered = make_bundle(tamper_dir, cfg, tamper_manifest=True)
+    tampered = build_bundle(tamper_dir, signed=True, tamper_manifest=True)
     stage = td / "stage-tamper"; stage.mkdir()
     try:
         h.validate_recovery_bundle(tampered, "tec_tac", stage, config=cfg)
     except RuntimeError as exc:
         assert "signed manifest hash" in str(exc) or "signature verification" in str(exc)
     else:
-        raise AssertionError("tampered recovery manifest was accepted")
-
-    untrusted_dir = td / "untrusted"; untrusted_dir.mkdir()
-    _k2, p2, empty_trust = make_identity(untrusted_dir, "source-b", trust=False)
-    cfg_b = config(p2, empty_trust, "source-b")
-    bdir = untrusted_dir / "bundle"; bdir.mkdir()
-    untrusted = make_bundle(bdir, cfg_b)
-    # Target has not imported source-b public key.
-    target_cfg = dict(cfg_b); target_cfg["TEC_TAC_RECOVERY_TRUST_ROOT"] = str(trust_root)
-    stage = td / "stage-untrusted"; stage.mkdir()
-    try:
-        h.validate_recovery_bundle(untrusted, "tec_tac", stage, config=target_cfg)
-    except RuntimeError as exc:
-        assert "not trusted" in str(exc)
-    else:
-        raise AssertionError("untrusted recovery signer was accepted")
+        raise AssertionError("tampered legacy signed recovery manifest was accepted")
 
     malicious_dir = td / "malicious"; malicious_dir.mkdir()
-    malicious = make_bundle(malicious_dir, cfg, component_extra={"etc/cron.d/tectac-root": b"* * * * * root id\n"})
+    malicious = build_bundle(malicious_dir, extra={"etc/cron.d/tectac-root": b"* * * * * root id\n"})
     stage = td / "stage-malicious"; stage.mkdir()
     try:
         h.validate_recovery_bundle(malicious, "tec_tac", stage, config=cfg)
     except RuntimeError as exc:
         assert "not allow-listed" in str(exc)
     else:
-        raise AssertionError("signed recovery payload escaped the fixed destination allow-list")
+        raise AssertionError("recovery payload escaped the fixed destination allow-list")
 
-    trust_replace_dir = td / "trust-replace"; trust_replace_dir.mkdir()
-    trust_replace = make_bundle(trust_replace_dir, cfg, component_extra={"etc/tec-tac/recovery-trust/evil.pub": b"evil"})
-    stage = td / "stage-trust-replace"; stage.mkdir()
-    try:
-        h.validate_recovery_bundle(trust_replace, "tec_tac", stage, config=cfg)
-    except RuntimeError as exc:
-        assert "may not replace target recovery trust" in str(exc)
-    else:
-        raise AssertionError("recovery payload was allowed to replace target recovery trust")
-
-source = (ROOT / "scripts" / "server-backup-helper.py").read_text(encoding="utf-8")
+source = (ROOT / "scripts" / "server-backup-helper.py").read_text()
 post = source[source.index("def run_post_restore_tec_tac"):source.index("VALIDATE_RESTORE_STATUSES")]
 assert 'Path(config["TEC_TAC_FRAMEWORK_SOURCE"])' in post
 assert 'Path(config["TEC_TAC_UI_SOURCE"])' in post
 assert 'paths.get("framework_source")' not in post and 'paths.get("ui_source")' not in post
-assert 'exclude_paths=(' in source and '"recovery-signing"' in source and '"recovery-trust"' in source
+assert 'create_recovery_signature' not in source
+assert 'operation_trust_recovery_signer' not in source
+assert 'archive_hash_companion' not in source or '.sha256' in source
 
-print("[TEST] PASS N1 signed recovery trust and fixed restore destinations")
+print("[TEST] PASS AD-3 unsigned recovery, legacy signature compatibility and fixed restore destinations")

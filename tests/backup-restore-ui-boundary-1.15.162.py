@@ -29,9 +29,6 @@ calls={'dest':0,'list':[],'validate':[],'restore':[],'jobs':[]}
 sb=types.ModuleType('tec_tac.server_backup')
 class ServerBackupError(Exception): pass
 sb.ServerBackupError=ServerBackupError
-sb.recovery_identity_core=lambda **kw: {}
-sb.recovery_trust_job_status_core=lambda **kw: {}
-sb.trust_recovery_signer_core=lambda **kw: {}
 sb.list_registered_destinations_core=lambda **kw: calls.__setitem__('dest',calls['dest']+1) or [{'id':'remote-a','type':'s3','location':'bucket-a'}]
 def list_core(**kw): calls['list'].append(kw); return {'job_id':'11111111-1111-4111-8111-111111111111','status':'queued','action':'list_registered_backups'}
 def val_core(**kw): calls['validate'].append(kw); return {'job_id':'22222222-2222-4222-8222-222222222222','status':'queued','action':'validate_registered_restore'}
@@ -41,7 +38,7 @@ validation_checks=[]
 def require_validation(**kw): validation_checks.append(kw); return {'ok':True}
 sb.require_successful_restore_validation_core=require_validation
 class Provider:
-    def get_job_status(self, **kw): calls['jobs'].append(kw); return {'job_id':kw['job_id'],'action':'validate_registered_restore','status':'succeeded','result':{'ok':True,'recovery_signer':{'installation_id':'source-a','server_name':'old-rmm','public_key_sha256':'abcd'},'version_transition':{'current_core_version':'1.15.162','restored_core_version':'1.15.83','is_core_downgrade':True,'notice':'This restore puts Core back to 1.15.83.'}}}
+    def get_job_status(self, **kw): calls['jobs'].append(kw); return {'job_id':kw['job_id'],'action':'validate_registered_restore','status':'succeeded','result':{'ok':True,'source_identity':{'installation_id':'source-a','server_name':'old-rmm','created_at':'2026-09-30T05:00:00Z','core_version':'1.15.83'},'archive_verification':{'status':'verified','sha256':'abcd'},'version_transition':{'current_core_version':'1.15.162','restored_core_version':'1.15.83','is_core_downgrade':True,'notice':'This restore puts Core back to 1.15.83.'}}}
 sb.get_server_backup_provider=lambda: Provider()
 sys.modules['tec_tac.server_backup']=sb
 
@@ -71,5 +68,6 @@ else: raise AssertionError('restore started without validation job id')
 q=view.post(Req(admin,{'action':'restore','backup_ref':'destination:remote-a:a.tectac-recovery.tar.gz','destination_id':'remote-a','restore_mode':'full','confirmed':True,'validation_job_id':'22222222-2222-4222-8222-222222222222'})); assert q.status_code==202 and calls['restore'] and validation_checks
 job=mod.BackupRestoreJobView().get(Req(admin), '22222222-2222-4222-8222-222222222222')
 assert job.data['job']['result']['version_transition']['restored_core_version']=='1.15.83'
-assert job.data['job']['result']['recovery_signer']['installation_id']=='source-a'
+assert job.data['job']['result']['source_identity']['installation_id']=='source-a'
+assert job.data['job']['result']['archive_verification']['status']=='verified'
 print('backup restore UI HTTP boundary 1.15.162: PASS')

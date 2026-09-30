@@ -25,6 +25,6 @@ assert 'PASS D2/D3 recovery continuity' in out, out
 # publication failures after sidecar publication and also proves success leaves
 # the pair visible.
 out = run([sys.executable, str(ROOT / 'tests' / 'l10-publication-final-1.15.173.py')])
-assert 'PASS L10 final atomic publication on local/FTP/rclone/SCP' in out, out
+assert 'PASS L10/AD-3 atomic archive + sidecar + SHA-256 publication on local/FTP/rclone/SCP' in out, out
 
-print('[TEST] PASS tracker D3/L10 final closure acceptance 1.15.183')
+print('[TEST] PASS tracker D3/L10 AD-3 final closure acceptance')

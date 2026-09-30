@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""L10 done-when: no archive may remain published without its sidecar.
+"""L10/AD-3 done-when: archive publication is atomic with sidecar + SHA-256 companion.
 
 For local, FTP, rclone and SCP, execute the real store function, force final
-archive publication to fail after sidecar publication, and prove:
-  1. sidecar publication happens before final archive publication;
-  2. the sidecar is rolled back on archive publication failure;
+archive publication to fail after metadata publication, and prove:
+  1. sidecar and hash companion are published before the final archive;
+  2. both are rolled back on archive publication failure;
   3. no final archive is exposed.
 """
 from __future__ import annotations
@@ -66,8 +66,11 @@ with tempfile.TemporaryDirectory() as td_raw:
         h.os.replace = real_replace
 
     side = "local.tgz.tectac.json"
+    hash_name = "local.tgz.sha256"
     must(events.index(("replace", side)) < events.index(("replace", "local.tgz")), "local sidecar was not published first")
+    must(events.index(("replace", hash_name)) < events.index(("replace", "local.tgz")), "local hash companion was not published first")
     must(not (dest / side).exists(), "local published sidecar was not rolled back")
+    must(not (dest / hash_name).exists(), "local published hash companion was not rolled back")
     must(not (dest / "local.tgz").exists(), "local final archive became visible")
 
 
@@ -118,9 +121,12 @@ with tempfile.TemporaryDirectory() as td_raw:
         h.ftp_connect, h.ftp_prepare_path, h.ftp_path_exists = old_connect, old_prepare, old_exists
 
     side_publish = ("rename", "ftp.tgz.tectac.json.partial", "ftp.tgz.tectac.json")
+    hash_publish = ("rename", "ftp.tgz.sha256.partial", "ftp.tgz.sha256")
     archive_publish = ("rename", "ftp.tgz.partial", "ftp.tgz")
     must(ftp.events.index(side_publish) < ftp.events.index(archive_publish), "FTP sidecar was not published first")
+    must(ftp.events.index(hash_publish) < ftp.events.index(archive_publish), "FTP hash companion was not published first")
     must("ftp.tgz.tectac.json" not in ftp.objects, "FTP published sidecar was not rolled back")
+    must("ftp.tgz.sha256" not in ftp.objects, "FTP published hash companion was not rolled back")
     must("ftp.tgz" not in ftp.objects, "FTP final archive became visible")
 
 
@@ -173,9 +179,12 @@ with tempfile.TemporaryDirectory() as td_raw:
         h.make_rclone_config, h.rclone_path_exists, h.run_logged, h.subprocess.run = old_cfg, old_exists, old_run, old_subrun
 
     side_event = next(i for i, event in enumerate(events) if len(event) >= 4 and event[1] == "moveto" and event[3].endswith(".tectac.json"))
+    hash_event = next(i for i, event in enumerate(events) if len(event) >= 4 and event[1] == "moveto" and event[3].endswith(".sha256"))
     archive_event = next(i for i, event in enumerate(events) if len(event) >= 4 and event[1] == "moveto" and event[3].endswith("/rclone.tgz"))
     must(side_event < archive_event, "rclone sidecar was not published first")
+    must(hash_event < archive_event, "rclone hash companion was not published first")
     must(not any(key.endswith("rclone.tgz.tectac.json") for key in remote), "rclone published sidecar was not rolled back")
+    must(not any(key.endswith("rclone.tgz.sha256") for key in remote), "rclone published hash companion was not rolled back")
     must(not any(key.endswith("/rclone.tgz") for key in remote), "rclone final archive became visible")
 
 # rclone timeout-after-publish: if the archive move completed remotely before
@@ -207,6 +216,7 @@ with tempfile.TemporaryDirectory() as td_raw:
     must(result['ok'] is True, 'rclone did not reconcile a completed remote move')
     must(any(key.endswith('/landed.tgz') for key in remote), 'rclone landed archive disappeared during reconciliation')
     must(any(key.endswith('landed.tgz.tectac.json') for key in remote), 'rclone deleted sidecar under a landed archive')
+    must(any(key.endswith('landed.tgz.sha256') for key in remote), 'rclone deleted hash companion under a landed archive')
 
 
 # ---------------- SCP ----------------
@@ -238,15 +248,18 @@ with tempfile.TemporaryDirectory() as td_raw:
         if argv[0] == "ssh":
             command = argv[-1]
             publish_commands.append(command)
-            if "tectac.json.partial" in command and "scp.tgz.partial" in command:
+            if "tectac.json.partial" in command and "scp.tgz.sha256.partial" in command and "scp.tgz.partial" in command:
                 # Execute the first publication step, then emulate failure of
                 # the archive mv and the command's inline sidecar rollback.
                 partial_sidecar = remote_dir / "scp.tgz.tectac.json.partial"
                 final_sidecar = remote_dir / "scp.tgz.tectac.json"
+                partial_hash = remote_dir / "scp.tgz.sha256.partial"
+                final_hash = remote_dir / "scp.tgz.sha256"
                 partial_sidecar.replace(final_sidecar)
-                if not final_sidecar.exists():
-                    raise AssertionError("SCP sidecar was not made visible before archive publication")
-                final_sidecar.unlink()
+                partial_hash.replace(final_hash)
+                if not final_sidecar.exists() or not final_hash.exists():
+                    raise AssertionError("SCP metadata was not made visible before archive publication")
+                final_sidecar.unlink(); final_hash.unlink()
                 raise RuntimeError("forced final archive failure")
             proc = subprocess.run(["bash", "-c", command], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             if proc.returncode:
@@ -273,23 +286,27 @@ with tempfile.TemporaryDirectory() as td_raw:
     finally:
         h.roots, h.scp_args, h.run_logged, h.subprocess.run = old_roots, old_args, old_run, old_subrun
 
-    publish = next(command for command in publish_commands if "tectac.json.partial" in command and "scp.tgz.partial" in command)
+    publish = next(command for command in publish_commands if "tectac.json.partial" in command and "scp.tgz.sha256.partial" in command and "scp.tgz.partial" in command)
     side_mv = publish.index("scp.tgz.tectac.json.partial")
-    archive_mv = publish.index("scp.tgz.partial", side_mv + 1)
+    hash_mv = publish.index("scp.tgz.sha256.partial")
+    archive_mv = publish.index("scp.tgz.partial", max(side_mv, hash_mv) + 1)
     must(side_mv < archive_mv, "SCP publish command did not make sidecar visible first")
+    must(hash_mv < archive_mv, "SCP publish command did not make hash companion visible first")
     must(not (remote_dir / "scp.tgz.tectac.json").exists(), "SCP published sidecar was not rolled back")
+    must(not (remote_dir / "scp.tgz.sha256").exists(), "SCP published hash companion was not rolled back")
     # The directory used to force failure is not a published archive file.
     must(not (remote_dir / "scp.tgz").is_file(), "SCP final archive became visible")
 
     # Execute the exact production shell publication command. A directory at a
     # final name must fail closed (-T) rather than absorb the archive.
-    for target_name in ('scp.tgz', 'scp.tgz.tectac.json'):
+    for target_name in ('scp.tgz', 'scp.tgz.tectac.json', 'scp.tgz.sha256'):
         for child in remote_dir.iterdir():
             if child.is_dir():
                 import shutil; shutil.rmtree(child)
             else: child.unlink()
         (remote_dir / 'scp.tgz.partial').write_bytes(b'abc')
         (remote_dir / 'scp.tgz.tectac.json.partial').write_bytes(b'{}')
+        (remote_dir / 'scp.tgz.sha256.partial').write_text(meta()['sha256'] + '  scp.tgz\n')
         (remote_dir / target_name).mkdir()
         proc=subprocess.run(['bash','-c',publish],text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         must(proc.returncode != 0, f'SCP publish accepted directory target {target_name}')
@@ -302,9 +319,10 @@ with tempfile.TemporaryDirectory() as td_raw:
         else: child.unlink()
     (remote_dir / 'scp.tgz.partial').write_bytes(b'abc')
     (remote_dir / 'scp.tgz.tectac.json.partial').write_bytes(b'{}')
+    (remote_dir / 'scp.tgz.sha256.partial').write_text(meta()['sha256'] + '  scp.tgz\n')
     proc=subprocess.run(['bash','-c',publish],text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
     must(proc.returncode == 0, f'SCP real publish command failed success path: {proc.stderr}')
-    must((remote_dir/'scp.tgz').is_file() and (remote_dir/'scp.tgz.tectac.json').is_file(), 'SCP success did not publish archive + sidecar')
-    must(not (remote_dir/'scp.tgz.partial').exists() and not (remote_dir/'scp.tgz.tectac.json.partial').exists(), 'SCP success left partials')
+    must((remote_dir/'scp.tgz').is_file() and (remote_dir/'scp.tgz.tectac.json').is_file() and (remote_dir/'scp.tgz.sha256').is_file(), 'SCP success did not publish archive + sidecar + hash')
+    must(not (remote_dir/'scp.tgz.partial').exists() and not (remote_dir/'scp.tgz.tectac.json.partial').exists() and not (remote_dir/'scp.tgz.sha256.partial').exists(), 'SCP success left partials')
 
-print("[TEST] PASS L10 final atomic publication on local/FTP/rclone/SCP")
+print("[TEST] PASS L10/AD-3 atomic archive + sidecar + SHA-256 publication on local/FTP/rclone/SCP")

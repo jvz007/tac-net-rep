@@ -7,7 +7,6 @@ def load(name, rel):
     spec=importlib.util.spec_from_file_location(name, ROOT/rel); m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m); return m
 h=load('backup145','scripts/server-backup-helper.py')
 sm=load('maint145','scripts/server-maintenance-helper.py')
-rk=load('recovery145','scripts/recovery-key-cli.py')
 
 def must(c,m):
     if not c: raise AssertionError(m)
@@ -58,16 +57,20 @@ with tempfile.TemporaryDirectory() as td:
         else: raise AssertionError('local archive publication failure not raised')
     finally:h.os.replace=real_replace
     final_side=next(i for i,(_,b) in enumerate(calls) if b=='src.tgz.tectac.json')
+    final_hash=next(i for i,(_,b) in enumerate(calls) if b=='src.tgz.sha256')
     archive_attempt=next(i for i,(_,b) in enumerate(calls) if b=='src.tgz')
     must(final_side < archive_attempt,'local archive attempted before sidecar')
+    must(final_hash < archive_attempt,'local archive attempted before hash companion')
     must(not (dest/'src.tgz').exists(),'local archive visible after failed archive publish')
+    must(not (dest/'src.tgz.tectac.json').exists(),'local sidecar survived failed archive publish')
+    must(not (dest/'src.tgz.sha256').exists(),'local hash companion survived failed archive publish')
 
 # L10 FTP: if final archive rename fails, published sidecar is removed.
 class FTP:
     def __init__(self): self.deleted=[]; self.renamed=[]
     def storbinary(self,*a,**k): pass
     def size(self,n):
-        if n in {'a.tgz','a.tgz.tectac.json'}:
+        if n in {'a.tgz','a.tgz.tectac.json','a.tgz.sha256'}:
             raise h.ftplib.error_perm('550 not found')
         return 3
     def retrbinary(self,cmd,cb,blocksize=0): cb(b'abc')
@@ -86,7 +89,11 @@ with tempfile.TemporaryDirectory() as td:
         else: raise AssertionError('FTP archive rename failure not raised')
     finally:h.ftp_connect,h.ftp_prepare_path=old
 must(('a.tgz.tectac.json.partial','a.tgz.tectac.json') in ftp.renamed,'FTP did not publish sidecar first')
+must(('a.tgz.sha256.partial','a.tgz.sha256') in ftp.renamed,'FTP did not publish hash companion before archive')
+must(ftp.renamed.index(('a.tgz.tectac.json.partial','a.tgz.tectac.json')) < ftp.renamed.index(('a.tgz.partial','a.tgz')),'FTP archive attempted before sidecar')
+must(ftp.renamed.index(('a.tgz.sha256.partial','a.tgz.sha256')) < ftp.renamed.index(('a.tgz.partial','a.tgz')),'FTP archive attempted before hash companion')
 must('a.tgz.tectac.json' in ftp.deleted,'FTP did not roll back published sidecar')
+must('a.tgz.sha256' in ftp.deleted,'FTP did not roll back published hash companion')
 
 # L14: all backup/recovery helpers resolve installer-selected config through a root-owned no-follow pointer.
 with tempfile.TemporaryDirectory() as td:
@@ -94,9 +101,8 @@ with tempfile.TemporaryDirectory() as td:
     ptr=td/'config-path'; ptr.write_text(str(custom)+'\n'); os.chmod(ptr,0o600)
     must(h._installed_config_path(ptr,pathlib.Path('/fallback'))==custom,'backup helper ignored custom config')
     must(sm._installed_config_path(ptr,pathlib.Path('/fallback'))==custom,'maintenance helper ignored custom config')
-    must(rk._installed_config_path(ptr,pathlib.Path('/fallback'))==custom,'recovery-key ignored custom config')
     ptr.unlink(); ptr.symlink_to(custom)
-    for fn in (h._installed_config_path,sm._installed_config_path,rk._installed_config_path):
+    for fn in (h._installed_config_path,sm._installed_config_path):
         try:fn(ptr,pathlib.Path('/fallback'))
         except RuntimeError: pass
         else: raise AssertionError('symlinked config pointer accepted')
@@ -111,17 +117,11 @@ finally:h.shutil.disk_usage,h._preflight_host_snapshot_bytes,h._mutation_active,
 check=next(c for c in report['sections']['target']['checks'] if c['id']=='target.disk')
 must(check['status']=='failed' and 'host_snapshot_estimate=4096' in check['detail'],'host snapshot omitted from disk preflight')
 
-# L76: recovery identity/trust reads are isolated/config-derived and no-follow/root-owned.
-must((ROOT/'scripts/recovery-key-cli.py').read_text().splitlines()[0]=='#!/usr/bin/python3 -I','recovery-key not isolated Python')
-must(rk._absolute_layout_path({'TEC_TAC_RECOVERY_TRUST_ROOT':'/srv/trust'},'TEC_TAC_RECOVERY_TRUST_ROOT','/etc/tec-tac/recovery-trust')==pathlib.Path('/srv/trust'),'trust root still hard-coded')
-with tempfile.TemporaryDirectory() as td:
-    td=pathlib.Path(td); safe=td/'safe'; safe.write_bytes(b'ok'); os.chmod(safe,0o600); must(rk._read_root_regular(safe)==b'ok','safe recovery file rejected')
-    link=td/'link'; link.symlink_to(safe)
-    try:rk._read_root_regular(link)
-    except RuntimeError: pass
-    else: raise AssertionError('recovery read followed symlink')
-    bad=td/'bad'; bad.write_bytes(b'x'); os.chmod(bad,0o666)
-    try:rk._read_root_regular(bad)
-    except RuntimeError: pass
-    else: raise AssertionError('writable recovery file accepted')
+# L76 superseded by AD-3: new backups use hash companions; recovery-key/trust tooling is removed.
+helper_source=(ROOT/'scripts/server-backup-helper.py').read_text()
+install_source=(ROOT/'install.sh').read_text()
+must(not (ROOT/'scripts/recovery-key-cli.py').exists(),'AD-3 recovery-key CLI still shipped')
+must('operation_trust_recovery_signer' not in helper_source,'AD-3 trust operation still present')
+must('create_recovery_signature' not in helper_source,'AD-3 new-backup signing helper still present')
+must('rm -f /usr/local/sbin/tec-tac-recovery-key' in install_source,'upgrade does not remove legacy recovery-key CLI')
 print('backup-closure-1.15.145: PASS')

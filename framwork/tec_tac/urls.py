@@ -1,7 +1,7 @@
 from .account_security_views import AccountSecurityPolicyView
 from .account_self_service_views import MyAccountPasswordView, MyAccountTacticalUiView, MyAccountTotpResetView, MyAccountView
 from .resource_views import ResourceListView, ResourceDetailView, ResourceMutableListView, ResourceMutableDetailView, ResourceCustomFieldsView
-from .server_backup_views import RecoveryTrustView, BackupRestoreView, BackupRestoreJobView
+from .server_backup_views import BackupRestoreView, BackupRestoreJobView
 from .server_maintenance_views import (
     ServerMaintenanceActionListView, ServerMaintenanceJobListView,
     ServerMaintenanceJobDetailView, ServerMaintenanceJobCancelView,
@@ -96,7 +96,6 @@ urlpatterns = [
     path("ui/notices/read-all/", NoticeReadAllView.as_view(), name="tec-tac-notices-read-all"),
     path("ui/notices/clear-read/", NoticeClearReadView.as_view(), name="tec-tac-notices-clear-read"),
     path("system/diagnostics/", SystemDiagnosticsView.as_view(), name="tec-tac-system-diagnostics"),
-    path("system/recovery/trust/", RecoveryTrustView.as_view(), name="tec-tac-recovery-trust"),
     path("system/backups/restore/", BackupRestoreView.as_view(), name="tec-tac-backup-restore"),
     path("system/backups/restore/jobs/<uuid:job_id>/", BackupRestoreJobView.as_view(), name="tec-tac-backup-restore-job"),
     path("system/storage/", HousekeepingStatusView.as_view(), name="tec-tac-housekeeping-status"),

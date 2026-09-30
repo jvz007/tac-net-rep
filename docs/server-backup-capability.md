@@ -1,5 +1,36 @@
 # Core privileged server backup capability
 
+## AD-3 recovery integrity model (30 Sep 2026)
+
+AD-3 is authoritative for new backups. Tec-Tac recovery archives are **not signed**. Core does not create or require a recovery signing key, signer trust store, trust approval step, or recovery-key export/import command.
+
+Every newly published recovery archive has two adjacent metadata files at **every** configured destination:
+
+- `<archive>.tectac.json` — inventory/provenance metadata.
+- `<archive>.sha256` — SHA-256 of the exact archive bytes in standard `hash  filename` form.
+
+Restore behavior:
+
+- If `<archive>.sha256` is present, Core verifies it before restore. A malformed companion, a companion naming a different archive, or a digest mismatch stops validation/restore.
+- If the companion is absent, the backup remains restorable for backward compatibility. Validation reports `archive_verification.status = not_verified`; destructive restore records `restore_archive_not_verified` in the recovery audit.
+- Older signed format-2 bundles remain restorable. Core verifies their embedded Ed25519 signature cryptographically, but **does not require local signer trust** on a replacement server.
+- New format-2 bundles omit `recovery-signature.json`.
+
+Backup inventory exposes `installation_id`, `server_name`, `created_at`, and `core_version`. These fields are provenance only.
+
+## Recovery bundle format
+
+A new format-2 bundle contains:
+
+```text
+manifest.json
+checksums.sha256
+tactical/<native Tactical archive>        # when Tactical is included
+tec-tac/tec-tac-backup.tar.gz            # when Tec-Tac is included
+```
+
+`manifest.json` records the selected components, their sizes/hashes, the source installation ID, source server name, creation time and supported recovery modes. `checksums.sha256` protects the component payloads inside the bundle. The adjacent `<archive>.sha256` protects the exact outer archive stored at the destination.
+
 **Framework baseline:** 1.15.5+
 
 Tec-Tac Core exposes one narrow privileged recovery contract:
@@ -31,31 +62,6 @@ Django/Celery writes a validated opaque job below `/var/lib/tec-tac/server-backu
 The root-owned helper validates job ownership/mode, operation allow-list and typed arguments, then runs the worker independently through systemd. No public operation accepts a browser/module supplied command or executable path. Backup/restore mutation uses a Core lock. Remote restores are fully downloaded and validated before destructive work begins.
 
 The privileged helper ignores process-environment attempts to redirect its config or state roots. Layout is read only from the fixed `/opt/tec-tac/etc/tec-tac.conf`; when present that file must be a regular root-owned non-writable file.
-
-## Recovery bundle format
-
-Core 1.2 no longer modifies Tactical's native backup archive. The portable artifact is:
-
-```text
-tec-tac-backup-YYYY_MM_DD__HH_MM_SS.tgz
-├── manifest.json
-├── checksums.sha256
-├── recovery-signature.json
-├── tactical/
-│   └── rmm-backup-YYYY_MM_DD__HH_MM_SS.tar
-└── tec-tac/
-    └── tec-tac-backup.tar.gz
-```
-
-The Tactical member is byte-for-byte the exact archive created by `/rmm/backup.sh`. Core hashes it before bundling and verifies the copied inner member against that same SHA-256. It is never appended to, unpacked/repacked, or otherwise changed.
-
-The Tec-Tac component contains resolved framework runtime/source, UI source, `/etc/tec-tac` and Tec-Tac nginx configuration. `/var/lib/tec-tac` remains a **default-deny recovery boundary**: Core retains only the two fixed durable Module Manager files `/var/lib/tec-tac/module-manager/module-state.json` and `/var/lib/tec-tac/module-manager/repositories/repositories.json`. Staged installers, update rollback trees, lifecycle history/logs, caches, validation staging, server-backup data and all other mutable state remain excluded so they cannot be recursively captured into later backups.
-
-Scheduler schedules/configuration, dashboards and user preferences live in Tactical's `tacticalrmm` PostgreSQL database and are therefore protected by Tactical's native backup. The deployed UI below `/var/lib/tec-tac/ui/tec-tac` is rebuilt from the backed-up UI source during Tec-Tac reintegration. The retained Module Manager files reconstruct module enablement and repository configuration; installed module code remains in `/opt/tec-tac/extensions`.
-
-No second PostgreSQL dump is created because Tec-Tac Django tables already live in Tactical's `tacticalrmm` database dump.
-
-`manifest.json` is format version `2` and records selected components, hashes/sizes, framework/UI versions, resolved Tec-Tac paths, backup class, creation time, supported recovery modes, the source installation ID/server name and recovery signer fingerprint. `checksums.sha256` records the component hashes. `recovery-signature.json` is a detached Ed25519 envelope over the exact manifest and checksum bytes. The candidate public key carried in that envelope is portability material only and never self-authorizes a restore.
 
 ## `create_backup(...)`
 
@@ -95,26 +101,6 @@ size/timestamps/destination metadata
 ```
 
 Legacy native `rmm-backup-*.tar` files may remain visible but are explicitly marked `legacy: true`, `format_version: 1`, and advertise `recovery_modes: ["tactical"]`. Core never silently treats them as version-2 full bundles.
-
-## Recovery signer trust and disaster recovery
-
-Recovery bundles are signed by a server-specific Ed25519 identity. `validate_restore(...)` reports a `recovery_signer` object with the source installation ID, source server name, key ID, SHA-256 fingerprint, bundle signing date, and whether the target already trusts that signer. An unknown but cryptographically valid signer is inspectable during non-destructive validation but remains a **failed restore prerequisite** until explicitly trusted.
-
-The authenticated Core boundary `GET /api/tfd/system/recovery/trust/` requires an effective Tactical superuser and returns the target server's recovery identity. Remote backup destinations must first pass `validate_destination(...)`; successful validation registers a root-owned destination definition under Core. `POST /api/tfd/system/recovery/trust/` never accepts a browser-supplied destination object. It accepts only the `backup_ref`, registered `destination_id`, and the exact installation ID, server name, key ID and SHA-256 fingerprint that the operator confirmed from `validate_restore(...)`. Core writes a strict Tactical audit record for that approval before dispatch and returns HTTP 202 with a privileged job ID. The root helper resolves the registered destination server-side, re-downloads and verifies the bundle, refuses the write if any confirmed identity field changed, and only then records the exact public key in the root-owned recovery trust store plus `/var/log/tec-tac/recovery-audit.jsonl`. Poll `GET /api/tfd/system/recovery/trust/?job_id=<uuid>` for sanitized status. Recovery identity and signer-trust are Core-internal operations and are deliberately not registered on the public `core.server_backup` capability provider; modules must use the authenticated Core HTTP boundary and cannot obtain a trust primitive through `get_capability()`.
-
-Admins who want to prepare replacement servers ahead of time can use the root console command:
-
-```text
-sudo tec-tac-recovery-key status
-sudo tec-tac-recovery-key export /secure/source-recovery-key.json
-sudo tec-tac-recovery-key import /secure/source-recovery-key.json
-```
-
-The export contains **public trust material only**. It never exports the private recovery signing key.
-
-### Older Core versions in backups
-
-A valid recovery bundle may intentionally restore an older Core version. The restore is only considered successful when the effective installed Core version exactly matches the bundle manifest `framework_version`; a mismatch enters the normal transactional rollback path. Validation and restore results expose `version_transition` with current/restored versions and a clear notice when the operation rolls Core back. The event is durably audited. The restore does not weaken security state merely because the backup is older: the current target publisher set is authoritative, so current publisher/key state overwrites restored copies and publishers deliberately removed from the target are not resurrected; the update trust floor is merged using the stricter of the current and restored values; and the D1 account-protection policy uses stricter-wins semantics so protection `on` cannot be turned off by an older backup. Account-protection merge changes are written to both the root-owned account-policy audit and the recovery audit. Recovery signing/trust directories remain target-local and are never restored from a bundle.
 
 ## `restore_backup(...)`
 
@@ -383,16 +369,3 @@ Tec-Tac recovery payload creation canonicalizes requested source roots before ar
 - Command timeouts are wall-clock enforced even when a child process is silent; timeout kills the child process group.
 - Tec-Tac recovery components retain an allow-list of durable state: module state, repository configuration and publisher trust. Cache/history/staging data remains excluded.
 
-## Recovery-bundle authenticity and fixed restore destinations (Core 1.15.80)
-
-Version-2 recovery bundles now carry a mandatory `recovery-signature.json` envelope. Core signs the exact `manifest.json` and `checksums.sha256` bytes with a server-specific Ed25519 recovery key stored at `/etc/tec-tac/recovery-signing/private.pem` (`root:root 0600`). The installer preserves an existing key across upgrades and creates one only when no recovery identity exists.
-
-The signature envelope records the source installation key ID, public-key fingerprint and candidate public key. The candidate key is provided only for disaster-recovery portability; **it is never trusted automatically**. Restore verification loads the authoritative public key from the target server's root-owned `/etc/tec-tac/recovery-trust/<key-id>.pub`. A bundle from an unknown key is rejected until an administrator explicitly provisions the source public key into that trust store.
-
-The source server trusts its own recovery public key automatically at installation, so locally created backups validate without an extra step. For replacement-server recovery, preserve or export `/etc/tec-tac/recovery-signing/public.pem` (public material only) and install it as `/etc/tec-tac/recovery-trust/<source-installation-id>.pub` on the recovery target after verifying its fingerprint out of band. The private recovery key is never required on the target.
-
-Recovery signing and recovery trust are target-local security state. `/etc/tec-tac/recovery-signing` and `/etc/tec-tac/recovery-trust` are explicitly excluded from Tec-Tac recovery payloads and may not be restored from a bundle.
-
-Before any Tec-Tac payload extraction, Core also enforces a fixed destination allow-list derived only from the target's root-owned Tec-Tac configuration plus fixed Core paths. Signed payload members such as `/etc/cron.d/*`, `/root/.ssh/*`, arbitrary systemd units, or recovery-trust/signing files are rejected. Manifest `paths` remain descriptive metadata only; post-restore framework and UI installers are selected exclusively from the target's root-owned local configuration.
-
-This intentionally makes older unsigned version-2 Tec-Tac recovery bundles fail authenticity validation. Legacy native Tactical `rmm-backup-*.tar` remains supported only for `tactical` restore mode and does not gain Tec-Tac payload privileges.

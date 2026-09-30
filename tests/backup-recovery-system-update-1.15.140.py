@@ -27,7 +27,6 @@ def must(value, message):
 
 backup = load("sbh_115140", ROOT / "scripts" / "server-backup-helper.py")
 update = load("suh_115140", ROOT / "scripts" / "system-update-helper.py")
-recovery = load("recovery_key_115140", ROOT / "scripts" / "recovery-key-cli.py")
 
 # L17: the configured Module Manager state root, not TEC_TAC_STATE_ROOT/module-manager,
 # is authoritative for backup, restore allow-listing and host rollback coverage.
@@ -49,41 +48,14 @@ host_paths = set(backup._tec_tac_restore_host_paths(cfg, Path("/etc/systemd/syst
 must("/srv/tec-tac/module-state/module-state.json" in host_paths, "rollback snapshot ignored custom module state root")
 must("/srv/tec-tac/module-state/repositories/repositories.json" in host_paths, "repository rollback ignored custom module state root")
 
-# L76: installed recovery-key command must use isolated Python and its trust root
-# must be config-derived. Root-owned identity/key reads reject symlinks and writable files.
-first_line = (ROOT / "scripts" / "recovery-key-cli.py").read_text(encoding="utf-8").splitlines()[0]
-must(first_line == "#!/usr/bin/python3 -I", "recovery-key command is not using isolated Python")
-must(recovery._absolute_layout_path({"TEC_TAC_RECOVERY_TRUST_ROOT": "/srv/tectac/trust"}, "TEC_TAC_RECOVERY_TRUST_ROOT", "/etc/tec-tac/recovery-trust") == Path("/srv/tectac/trust"), "recovery trust root is still hard-coded")
-with tempfile.TemporaryDirectory() as td:
-    root = Path(td)
-    safe = root / "safe"
-    safe.write_bytes(b"identity\n")
-    os.chmod(safe, 0o600)
-    must(recovery._read_root_regular(safe) == b"identity\n", "safe root-owned recovery file was rejected")
-    link = root / "link"
-    link.symlink_to(safe)
-    try:
-        recovery._read_root_regular(link)
-    except RuntimeError:
-        pass
-    else:
-        raise AssertionError("recovery identity read followed a symlink")
-    writable = root / "writable"
-    writable.write_bytes(b"bad")
-    os.chmod(writable, 0o666)
-    try:
-        recovery._read_root_regular(writable)
-    except RuntimeError:
-        pass
-    else:
-        raise AssertionError("group/world-writable recovery identity file was accepted")
-
-# L77: recovery-key is part of the same host rollback inventory as the other
-# privileged helpers, and the installer-discovery regression no longer exempts it.
-must("/usr/local/sbin/tec-tac-recovery-key" in backup.TEC_TAC_PRIVILEGED_INSTALL_PATHS, "recovery-key helper is absent from rollback inventory")
-must("/usr/local/sbin/tec-tac-recovery-key" in host_paths, "recovery-key helper is absent from rollback snapshot targets")
-rollback_test = (ROOT / "tests" / "server-backup-host-rollback.py").read_text(encoding="utf-8")
-must('known_uncovered_installer_paths = set()' in rollback_test, "rollback regression still exempts recovery-key")
+# L76/L77 superseded by AD-3: recovery signing/trust tooling is removed.
+helper_source = (ROOT / "scripts" / "server-backup-helper.py").read_text(encoding="utf-8")
+install_source = (ROOT / "install.sh").read_text(encoding="utf-8")
+must(not (ROOT / "scripts" / "recovery-key-cli.py").exists(), "AD-3 recovery-key CLI still shipped")
+must("operation_trust_recovery_signer" not in helper_source, "AD-3 trust operation still present")
+must("create_recovery_signature" not in helper_source, "AD-3 new-backup signing helper still present")
+must("/usr/local/sbin/tec-tac-recovery-key" not in backup.TEC_TAC_PRIVILEGED_INSTALL_PATHS, "removed recovery-key helper remains in privileged rollback inventory")
+must("rm -f /usr/local/sbin/tec-tac-recovery-key" in install_source, "upgrade does not remove legacy recovery-key helper")
 
 # L78: an update failure must still be finalized when config becomes unreadable
 # after startup. run_job may load config/tactical gid once, never again in finally.
