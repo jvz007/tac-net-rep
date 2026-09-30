@@ -286,8 +286,8 @@ for object_id in ("a-2", "a-99"):
     deny = ROWS[0]
     assert deny["action"] == "deny" and deny["username"] == "tech" and deny["object_type"] == "agent"
     assert deny["debug_info"]["module_id"] == "declaring-demo" and deny["debug_info"]["object_id"] == object_id
-    assert deny["debug_info"]["metadata"] == {"refused_action": "view", "reason": "not_found"}
-    assert deny["message"] == audit_views._DENY_MESSAGE
+    assert deny["debug_info"]["metadata"] == {"refused_action": "view", "reason": "not_found", "status": 404}
+    assert deny["message"] == audit_views._DENY_MESSAGES["not_found"]
     assert "MODULE-SECRET-TEXT" not in json.dumps(deny, default=str)
     assert deny["debug_info"]["operation_context"]["browser_provenance"] == "module-declared-event"
 # Missing and out-of-scope use the same message, so existence is not leaked.
@@ -298,6 +298,7 @@ response = post(no_list_role)
 assert response.status_code == 403 and response.data["recorded"] is False, (response.status_code, response.data)
 assert len(ROWS) == 1 and ROWS[0]["action"] == "deny"
 assert ROWS[0]["debug_info"]["metadata"]["reason"] == "permission_denied"
+assert ROWS[0]["message"] == audit_views._DENY_MESSAGES["permission_denied"]
 # A failing deny write never turns the refusal into a 500.
 reset()
 FakeAuditLog.objects.fail = True
@@ -363,7 +364,7 @@ try:
     reset()
     result = audit.record(
         actor=tech, module_id="declaring-demo", action="view", object_type="agent", object_id="a-1",
-        metadata={"blob": "m" * (300 * 1024)}, operation_context={"blob": "o" * (300 * 1024), "browser_provenance": "module-declared-event"},
+        metadata={"blob": "m" * (320 * 1024)}, operation_context={"blob": "o" * (300 * 1024), "browser_provenance": "module-declared-event"},
     )
     assert result["recorded"] is True
     info = ROWS[-1]["debug_info"]
@@ -371,7 +372,7 @@ try:
     for key in CORE_KEYS:
         assert info.get(key), key
     assert "error" in info["metadata"]
-    assert info["operation_context"]["blob"].startswith("o")  # only as much as needed is dropped
+    assert info["operation_context"]["blob"].startswith("o")  # only as much as needed is dropped (the larger piece goes first)
 
     # Tiny limit: metadata and operation_context both have to go, Core keys and the marker stay.
     reset()
@@ -450,7 +451,7 @@ bad_shapes = {
     "entry not an object": {"audit_events": ["agent"]},
     "unknown entry key": {"audit_events": [{"object_type": "agent", "actions": ["view"], "extra": 1}]},
     "missing object_type": {"audit_events": [{"actions": ["view"]}]},
-    "unsupported object_type": {"audit_events": [{"object_type": "policy", "actions": ["view"]}]},
+    "malformed object_type": {"audit_events": [{"object_type": "Bad Type", "actions": ["view"]}]},
     "duplicate object_type": {"audit_events": [{"object_type": "agent", "actions": ["view"]}, {"object_type": "agent", "actions": ["run"]}]},
     "empty actions": {"audit_events": [{"object_type": "agent", "actions": []}]},
     "missing actions": {"audit_events": [{"object_type": "agent"}]},

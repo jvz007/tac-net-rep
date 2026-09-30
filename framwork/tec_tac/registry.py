@@ -33,8 +33,10 @@ SUPPORTED_KEYS = frozenset({
     "dependencies", "optional_dependencies", "requires", "licensing", "migration",
     "publisher_permissions", "name", "category", "audit_events",
 })
-# Object types core.resources can scope-check for the browser audit writer.
-AUDIT_EVENT_OBJECT_TYPES = ("client", "site", "agent")
+# Object types core.resources can scope-check for the browser audit writer. Any other
+# lowercase slug may be declared since 1.17.0, but carries no scope check (see docs/module-audit.md).
+SCOPE_CHECKED_OBJECT_TYPES = ("client", "site", "agent")
+AUDIT_EVENT_OBJECT_TYPES = SCOPE_CHECKED_OBJECT_TYPES  # alias kept for importers of the 1.16.0 name
 AUDIT_EVENT_MAX_ENTRIES = 20
 AUDIT_EVENT_MAX_ACTIONS = 20
 
@@ -117,7 +119,7 @@ def _audit_events(payload: dict, plugin_type: str, plugin_id: str) -> tuple[tupl
         raise RegistryError("Manifest key 'audit_events' must be a JSON array.")
     if len(raw) > AUDIT_EVENT_MAX_ENTRIES:
         raise RegistryError(f"Manifest audit_events may not contain more than {AUDIT_EVENT_MAX_ENTRIES} entries.")
-    from .audit import _CUSTOM_ACTION_RE, STANDARD_ACTIONS
+    from .audit import _CUSTOM_ACTION_RE, _OBJECT_TYPE_RE, STANDARD_ACTIONS
     entries = []
     seen_types = set()
     for entry in raw:
@@ -127,8 +129,8 @@ def _audit_events(payload: dict, plugin_type: str, plugin_id: str) -> tuple[tupl
         if unknown:
             raise RegistryError(f"Manifest audit_events entry contains unsupported keys {unknown!r}.")
         object_type = entry.get("object_type")
-        if not isinstance(object_type, str) or object_type not in AUDIT_EVENT_OBJECT_TYPES:
-            raise RegistryError(f"Manifest audit_events object_type must be one of {list(AUDIT_EVENT_OBJECT_TYPES)!r}.")
+        if not isinstance(object_type, str) or not _OBJECT_TYPE_RE.fullmatch(object_type):
+            raise RegistryError("Manifest audit_events object_type must be a lowercase slug up to 100 characters.")
         if object_type in seen_types:
             raise RegistryError(f"Manifest audit_events declares object_type {object_type!r} more than once.")
         seen_types.add(object_type)

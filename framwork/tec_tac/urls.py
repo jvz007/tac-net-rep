@@ -12,6 +12,7 @@ from .session_security_views import (
     AdminLoginSessionListView, AdminLoginSessionRevokeView, AdminUserLoginSessionsRevokeView,
 )
 from .dashboard_views import DashboardListCreateView, DashboardDetailView
+from .saved_view_views import SavedViewListCreateView, SavedViewDetailView
 from .preference_views import UserPreferencesView
 from .notice_views import NoticeListCreateView, NoticeReadView, NoticeReadAllView, NoticeClearReadView
 from .mfa_backup_views import MfaBackupCodesView, AdminUserMfaRecoveryView, BackupCodeLoginView
@@ -67,6 +68,8 @@ urlpatterns = [
     path("auth/login/backup-code/", BackupCodeLoginView.as_view(), name="tec-tac-backup-code-login"),
     path("dashboards/", DashboardListCreateView.as_view(), name="tec-tac-dashboards"),
     path("dashboards/<uuid:dashboard_id>/", DashboardDetailView.as_view(), name="tec-tac-dashboard-detail"),
+    path("saved-views/", SavedViewListCreateView.as_view(), name="tec-tac-saved-views"),
+    path("saved-views/<uuid:view_id>/", SavedViewDetailView.as_view(), name="tec-tac-saved-view-detail"),
     path("contracts/", ContractCatalogView.as_view(), name="tec-tac-contracts"),
     path("contracts/export/", ContractExportView.as_view(), name="tec-tac-contract-export"),
     path("resources/clients/", ResourceMutableListView.as_view(resource_type="client"), name="tec-tac-resource-clients"),

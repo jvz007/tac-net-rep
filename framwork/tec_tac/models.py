@@ -234,6 +234,44 @@ class TecTacDashboard(models.Model):
         return f"{self.name} ({self.visibility})"
 
 
+class TecTacSavedView(models.Model):
+    """One saved view (filters and layout) for any module, owned by the user who created it.
+
+    ``readers`` is a JSON list of user ids. Empty means shared with everyone; not empty means
+    private to the owner and the listed ids. Removing a module leaves its views in place.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    module_id = models.CharField(max_length=100)
+    view_key = models.CharField(max_length=64)
+    name = models.CharField(max_length=160)
+    payload = models.JSONField(default=dict, blank=True)
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="tec_tac_saved_views",
+    )
+    readers = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("name", "id")
+        indexes = [
+            models.Index(fields=("module_id", "view_key"), name="tectac_sview_mod_key_idx"),
+            models.Index(fields=("owner", "module_id", "view_key"), name="tectac_sview_owner_key_idx"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=("owner", "module_id", "view_key", "name"),
+                name="tectac_sview_owner_name_unique",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.module_id}/{self.view_key}: {self.name}"
+
+
 class TecTacSessionSecurityConfig(models.Model):
     class IpChangePolicy(models.TextChoices):
         OFF = "off", "Off"

@@ -29,6 +29,8 @@ python3 "${ROOT}/tests/f9-f10-browser-contract-1.15.175.py"
 python3 "${ROOT}/tests/audit-contract-foundation.py"
 python3 "${ROOT}/tests/audit-browser-provenance-hardening.py"
 python3 "${ROOT}/tests/audit-declared-browser-events-1.16.0.py"
+python3 "${ROOT}/tests/audit-declared-browser-events-1.17.0.py"
+python3 "${ROOT}/tests/saved-views-1.17.0.py"
 
 
 # D2/D3 recovery continuity must be ordinary-CI portable; run it explicitly as

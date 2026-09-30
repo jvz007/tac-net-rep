@@ -158,7 +158,7 @@ Core-owned workflows may explicitly pass `strict=True` to the backend `record()`
 
 Contract validation failures (invalid module ID, unauthenticated actor, invalid action/object type) are programming/authorization errors and are raised/rejected rather than silently ignored.
 
-## Declared browser events for permissionless modules (Core 1.16.0)
+## Declared browser events for permissionless modules (Core 1.16.0, extended in 1.17.0)
 
 Some UI modules have no permission groups, because Tactical's own permissions already decide who may use them. Take Control and Remote Background are examples. Before 1.16.0 they had no way to write an audit trail from the browser. A module like this can now declare the events it posts in `tec_tac.json`:
 
@@ -175,24 +175,26 @@ Some UI modules have no permission groups, because Tactical's own permissions al
 Rules for the key:
 
 - Each entry has only `object_type` and `actions`.
-- `object_type` must be `client`, `site` or `agent`. Those are the types `core.resources` can scope-check.
+- `object_type` is a lowercase slug (`^[a-z][a-z0-9_-]{0,99}$`). Since 1.17.0 any such slug may be declared, for example `licence_key`. `client`, `site` and `agent` are the types `core.resources` can scope-check; any other type has **no scope check** (see below).
 - Each action is a standard action or `custom:<slug>`.
 - Core rejects the manifest for unknown keys, a repeated `object_type`, an empty or repeated `actions` list, more than 20 entries or 20 actions, or a reportset that declares the key.
 - A module that declares `permission_groups` and `audit_events` keeps the permissioned path above. Core ignores `audit_events` for it.
-- Core older than 1.16.0 rejects the unknown key, so a module that declares `audit_events` must set `requires.framework` to `>=1.16.0`.
+- Core older than 1.16.0 rejects the unknown key, so a module that declares `audit_events` must set `requires.framework` to `>=1.16.0`. Core 1.16.x also rejects any `object_type` other than `client`, `site` and `agent`, so a module that declares another type must set `requires.framework` to `>=1.17.0`.
 
 What Core does with a `POST /api/tfd/audit/record/` for such a module:
 
 1. Core runs every existing check first: JSON object, no actor or provenance fields, no unknown fields, and no `module_id` of `core`.
 2. If the module has no permissions, Core accepts the request only when the module is installed, enabled, not legacy, and declares that exact `object_type` and `action`. Anything else gets HTTP 403 and writes nothing.
-3. `object_id` is required (HTTP 400 if missing). Core resolves the object through `core.resources` with the signed-in user's own scope.
+3. For `client`, `site` and `agent`, `object_id` is required (HTTP 400 if missing). Core resolves the object through `core.resources` with the signed-in user's own scope. For any other declared type, `object_id` is optional (at most 255 characters, HTTP 400 otherwise), Core makes no `core.resources` call and records the event under the signed-in user with the marker.
 4. An object that is missing, or outside the user's client or site scope, gets HTTP 404. The message is the same for both, so Core does not reveal that the object exists. A role without Tactical's `can_list_*` permission for the type gets HTTP 403. The module's event is not recorded in either case.
-5. Core writes one Core-owned `deny` row instead, so the attempt stays in the log. It carries the signed-in user, the module id, the declared `object_type`, the `object_id`, a fixed Core message with none of the module's text, and `metadata` with `refused_action` and `reason`.
+5. Core writes one Core-owned `deny` row instead, so the attempt stays in the log. It carries the signed-in user, the module id, the declared `object_type`, the `object_id`, and `metadata` with `refused_action`, `reason` (`not_found` or `permission_denied`) and the HTTP `status`. The message is one of two fixed Core texts, one per reason, with none of the module's text: the object is missing or outside the user's scope, or the user's role lacks Tactical's permission to list that object type. The row also sets `debug_info.operation_context.core_refusal = true`. Only Core sets that key. The payload cannot carry `operation_context` (HTTP 400), and a backend `record()` call that supplies `core_refusal` is a contract error.
 6. In scope, Core records the module's event. The actor, module id, version, source and correlation id stay Core-owned. The response is HTTP 201, or 202 if Tactical's AuditLog write failed.
 
-Every row on this path carries `debug_info.operation_context.browser_provenance = "module-declared-event"`.
+Every row on this path carries `debug_info.operation_context.browser_provenance = "module-declared-event"`. That covers accepted rows, Core `deny` rows and rows whose `metadata` or `operation_context` was too large to store. When Core has to replace an oversized value with a "value too large" marker, it replaces the larger of `metadata` and `operation_context` first, and a replaced `operation_context` keeps `browser_provenance` and `core_refusal`.
 
-What this path cannot prove: Core cannot tell that the module's code sent the request. A signed-in user could post a declared event about an agent they can already see. The marker lets the Audit module and reviewers tell these rows from backend-written ones. The event describes an action and never authorizes it.
+**Module-declared `deny` events (1.17.0).** A module may list `deny` in `audit_events`, for example to record a 403 that Tactical itself returned for `can_use_mesh` or `can_manage_winsvcs`. Core records that event like any other declared event: the marker, no `core_refusal`. A reader can therefore tell the module's row (no `core_refusal`) from Core's own refusal row (`core_refusal = true`). An event the module did not declare stays HTTP 403 and writes nothing, because that is a wrong manifest and not a user being denied.
+
+What this path cannot prove: Core cannot tell that the module's code sent the request. A signed-in user could post a declared event about an agent they can already see, or, for a type with no scope check, about any object id. The marker lets the Audit module and reviewers tell these rows from backend-written ones. The event describes an action and never authorizes it. Johan accepted this on 30 September 2026 (board Q36) on the conditions in `docs/review-accepted-decisions.md` AD-8: the marker on every row, the scope check for client, site and agent, actor and module id set by Core, and events that describe an action and never authorise it.
 
 The path uses the same rate limit as the permissioned path: 60 requests a minute and 1 000 a day for each user and IP. Refused requests and deny rows count.
 
@@ -213,7 +215,7 @@ The endpoint requires the normal authenticated Tec-Tac session guard. It derives
 - Never accept `username` from a module event.
 - Never let a module override `source`, `module_version`, or request/correlation provenance.
 - The requested module must exist and be enabled.
-- Browser audit writes are allowed only for (a) modules that declare an explicit module permission surface, or (b) permissionless modules for the exact `object_type` and `action` they declare in `audit_events`, on an object inside the signed-in user's scope. Core, undeclared events, disabled or unknown modules, and legacy modules are rejected with HTTP 403 because Core cannot prove module provenance for a browser-originated request. Path (b) rows carry a `browser_provenance` marker.
+- Browser audit writes are allowed only for (a) modules that declare an explicit module permission surface, or (b) permissionless modules for the exact `object_type` and `action` they declare in `audit_events`, on an object inside the signed-in user's scope (client, site and agent; other declared types have no scope check). Core, undeclared events, disabled or unknown modules, and legacy modules are rejected with HTTP 403 because Core cannot prove module provenance for a browser-originated request. Path (b) rows carry a `browser_provenance` marker.
 - Users without access to a permission-bearing module cannot use its browser audit writer.
 - When an enabled module with no declared permissions and no `audit_events` is exposed to the browser runtime, Core logs a warning once per module per process that `/api/tfd/audit/record/` will return HTTP 403 for that module. The module must declare an explicit permission, or declare its events in `audit_events`, before exposing a browser audit surface.
 - The UI may hide a module audit affordance when the user lacks a module grant, but Core remains authoritative: direct `POST /api/tfd/audit/record/` attempts return HTTP 403 for Core, legacy modules, permissionless modules that did not declare the event, or actors without an effective module grant. Declared events also return HTTP 404 or 403 when the object is outside the user's scope. Modules must treat that 403 as an authorization result, not as an audit-service failure.

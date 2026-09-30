@@ -8,10 +8,12 @@ from drf_spectacular.utils import extend_schema, extend_schema_view
 
 from .audit import (
     BROWSER_PROVENANCE_MARKER,
+    SCOPE_CHECKED_OBJECT_TYPES,
     AuditContractError,
     can_record_from_browser,
     declared_browser_event,
     record,
+    record_core_refusal,
 )
 from .session_security import SessionAuthenticated
 from .throttles import AuditWriteDayThrottle, AuditWriteMinThrottle
@@ -25,7 +27,13 @@ _NOT_PERMITTED = (
     "Browser audit events are not permitted for this module or event. The module must be explicitly permissioned, "
     "or be a permissionless module that declares this exact event in audit_events."
 )
-_DENY_MESSAGE = "Core refused a module-declared browser audit event: the object is outside the signed-in user's scope."
+# One fixed Core message per refusal reason. Neither carries any text from the module.
+_DENY_MESSAGES = {
+    "not_found": "Core refused a module-declared browser audit event: the object is missing or outside the signed-in user's scope.",
+    "permission_denied": "Core refused a module-declared browser audit event: the signed-in user's role lacks Tactical's permission to list this object type.",
+}
+_DENY_MESSAGE = _DENY_MESSAGES["not_found"]  # 1.16.0 name, kept for importers
+_OBJECT_ID_MAX = 255
 
 
 @extend_schema_view(post=extend_schema(tags=["Tec-Tac Framework"], summary="Record a Tec-Tac module audit event"))
@@ -84,16 +92,26 @@ class AuditRecordView(APIView):
         action = str(payload.get("action") or "").strip().lower()
         object_type = str(payload.get("object_type") or "").strip().lower()
         object_id = payload.get("object_id")
-        if object_id is None or isinstance(object_id, (dict, list, bool)) or not str(object_id).strip():
-            return Response({"detail": "object_id is required for module-declared browser audit events."}, status=400)
-        try:
-            resolve_resource(object_type, object_id, context=user_context(request.user))
-        except ResourceValidationError as exc:
-            return Response({"detail": str(exc), "recorded": False}, status=400)
-        except (ResourceNotFound, ResourcePermissionDenied) as exc:
-            missing = isinstance(exc, ResourceNotFound)
-            self._record_deny(request, module_id, action, object_type, object_id, "not_found" if missing else "permission_denied")
-            return Response({"detail": str(exc), "recorded": False}, status=404 if missing else 403)
+        if object_type in SCOPE_CHECKED_OBJECT_TYPES:
+            if object_id is None or isinstance(object_id, (dict, list, bool)) or not str(object_id).strip():
+                return Response({"detail": "object_id is required for module-declared browser audit events."}, status=400)
+            try:
+                resolve_resource(object_type, object_id, context=user_context(request.user))
+            except ResourceValidationError as exc:
+                return Response({"detail": str(exc), "recorded": False}, status=400)
+            except (ResourceNotFound, ResourcePermissionDenied) as exc:
+                missing = isinstance(exc, ResourceNotFound)
+                self._record_deny(
+                    request, module_id, action, object_type, object_id,
+                    "not_found" if missing else "permission_denied", 404 if missing else 403,
+                )
+                return Response({"detail": str(exc), "recorded": False}, status=404 if missing else 403)
+        elif object_id is not None:
+            # Any other declared object type has no scope check and no deny row. object_id is optional.
+            if isinstance(object_id, (dict, list, bool)) or not str(object_id).strip():
+                return Response({"detail": "object_id must be a string or number when provided."}, status=400)
+            if len(str(object_id)) > _OBJECT_ID_MAX:
+                return Response({"detail": f"object_id may not exceed {_OBJECT_ID_MAX} characters."}, status=400)
         try:
             result = record(
                 actor=request.user,
@@ -115,20 +133,17 @@ class AuditRecordView(APIView):
         return Response(result, status=201 if result.get("recorded") else 202)
 
     @staticmethod
-    def _record_deny(request, module_id, action, object_type, object_id, reason):
+    def _record_deny(request, module_id, action, object_type, object_id, reason, status):
         """Keep refused attempts in the log with a Core-owned row that carries none of the module's text."""
         try:
-            record(
+            record_core_refusal(
                 actor=request.user,
                 module_id=module_id,
-                action="deny",
                 object_type=object_type,
                 object_id=str(object_id)[:255],
-                message=_DENY_MESSAGE,
-                metadata={"refused_action": action, "reason": reason},
+                message=_DENY_MESSAGES[reason],
+                metadata={"refused_action": action, "reason": reason, "status": status},
                 request=request,
-                strict=False,
-                operation_context={"browser_provenance": BROWSER_PROVENANCE_MARKER},
             )
         except Exception:
             logger.exception("Unable to write the Core deny row for module=%s object_type=%s", module_id, object_type)

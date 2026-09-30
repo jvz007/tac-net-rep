@@ -44,6 +44,25 @@ class AuditWriteDayThrottle(_AuthenticatedAttemptThrottle):
     rate = "1000/day"
 
 
+class _WriteOnlyThrottle(_AuthenticatedAttemptThrottle):
+    """Counts only changes. Reads are not throttled."""
+
+    def allow_request(self, request, view):
+        if request.method in ("GET", "HEAD", "OPTIONS"):
+            return True
+        return super().allow_request(request, view)
+
+
+class SavedViewWriteMinThrottle(_WriteOnlyThrottle):
+    scope = "tec_tac_saved_view_write_min"
+    rate = "60/min"
+
+
+class SavedViewWriteDayThrottle(_WriteOnlyThrottle):
+    scope = "tec_tac_saved_view_write_day"
+    rate = "2000/day"
+
+
 class TrustPolicyMinThrottle(_AuthenticatedAttemptThrottle):
     scope = "tec_tac_trust_policy_min"
     rate = "10/min"

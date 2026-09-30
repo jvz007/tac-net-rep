@@ -95,6 +95,14 @@ from tec_tac.rbac import (
 
 Backend permission checks remain authoritative.
 
+## Saved views — `tec_tac.saved_views` (1.17.0)
+
+```python
+from tec_tac.saved_views import list_views, get_view, create_view, update_view, delete_view, SavedViewError
+```
+
+One Core table holds every module's saved views (filters and layout), with an owner and an optional list of readers. See `docs/saved-views.md`. Browser callers use `/api/tfd/saved-views/`.
+
 ## Boundary rule
 
 ```text

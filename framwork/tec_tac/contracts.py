@@ -355,6 +355,46 @@ CORE_CONTRACTS = (
         "audience": "diagnostics",
     },
     {
+        "area": "saved-views",
+        "import_path": "tec_tac.saved_views",
+        "name": "list_views",
+        "kind": "python",
+        "purpose": "List the saved views a user can read for one module (and optionally one view_key). Same rules as the HTTP contract.",
+        "audience": "consumer/backend",
+    },
+    {
+        "area": "saved-views",
+        "import_path": "tec_tac.saved_views",
+        "name": "get_view",
+        "kind": "python",
+        "purpose": "Read one saved view the user can read; a private view they cannot read raises SavedViewNotFound.",
+        "audience": "consumer/backend",
+    },
+    {
+        "area": "saved-views",
+        "import_path": "tec_tac.saved_views",
+        "name": "create_view",
+        "kind": "python",
+        "purpose": "Create a saved view owned by the user. Writes a strict Core audit row in the same transaction.",
+        "audience": "consumer/backend",
+    },
+    {
+        "area": "saved-views",
+        "import_path": "tec_tac.saved_views",
+        "name": "update_view",
+        "kind": "python",
+        "purpose": "Change the name, payload or readers of a saved view. Owner only.",
+        "audience": "consumer/backend",
+    },
+    {
+        "area": "saved-views",
+        "import_path": "tec_tac.saved_views",
+        "name": "delete_view",
+        "kind": "python",
+        "purpose": "Delete a saved view. Owner only. Failures raise a SavedViewError subclass (SavedViewValidationError, SavedViewNotFound, SavedViewPermissionDenied, SavedViewConflict, SavedViewAuditError).",
+        "audience": "consumer/backend",
+    },
+    {
         "area": "rbac",
         "import_path": "tec_tac.rbac",
         "name": "permission_groups",
@@ -370,14 +410,15 @@ HTTP_CONTRACT_DETAILS = {
             "authorization": (
                 "authenticated Tec-Tac session. Path 1: an explicitly permissioned module with one of its grants. "
                 "Path 2 (1.16.0): a permissionless, enabled, non-legacy module that declares this exact object_type and action "
-                "in its manifest audit_events, for an object inside the caller's Tactical client/site scope. "
+                "in its manifest audit_events. For client, site and agent objects Core also checks the caller's Tactical scope; "
+                "since 1.17.0 any other lowercase object_type slug may be declared and has no scope check. "
                 "Core provenance (module_id core) is never available"
             ),
             "request": {
                 "module_id": "required string; module that owns the event",
                 "action": "required; standard Tec-Tac audit action or custom:<slug>",
-                "object_type": "required lowercase slug; path 2 accepts only client, site or agent",
-                "object_id": "optional on path 1; required on path 2 (checked against the caller's scope)",
+                "object_type": "required lowercase slug; path 2 accepts any object_type the module declared (client, site and agent are scope-checked)",
+                "object_id": "optional on path 1; required on path 2 for client, site and agent (checked against the caller's scope); optional on path 2 for any other declared type (at most 255 characters)",
                 "message": "optional string up to 4096 bytes",
                 "before": "optional JSON value",
                 "after": "optional JSON value",
@@ -393,9 +434,11 @@ HTTP_CONTRACT_DETAILS = {
             },
             "notes": [
                 "Actor, module version, source and correlation id are Core-owned; supplying username, actor, user, module_version, source, correlation_id or request_id gives 400.",
-                "Path 2 rows carry debug_info.operation_context.browser_provenance = module-declared-event. Core cannot prove the module's code sent the event, so the marker is set on every row on this path.",
-                "Path 2 refusals (404 or 403 from the scope check) are not recorded as the module's event. Core writes one Core-owned deny row instead: action deny, a fixed Core message with no module text, metadata refused_action and reason.",
-                "Rate limit: 60/min and 1000/day per user and IP, counting accepted and refused requests.",
+                "Path 2 rows carry debug_info.operation_context.browser_provenance = module-declared-event. Core cannot prove the module's code sent the event, so the marker is set on every row on this path, including Core deny rows and rows whose metadata or operation_context was too large to store.",
+                "Path 2 refusals (404 or 403 from the scope check) are not recorded as the module's event. Core writes one Core-owned deny row instead: action deny, one of two fixed Core messages (object missing or out of scope; role lacks Tactical's can_list_* permission) with no module text, metadata refused_action, reason and status, and debug_info.operation_context.core_refusal = true. Only Core sets core_refusal.",
+                "Since 1.17.0 a module may declare 'deny' in audit_events (for example for a 403 Tactical itself returned). That row is recorded like any declared event, with the browser_provenance marker and without core_refusal, so it can be told apart from Core's own deny row.",
+                "Other declared object types (1.17.0) have no scope check and no Core deny row. An event or object type the module did not declare gives 403 and writes nothing.",
+                "Rate limit: 60/min and 1000/day per user and IP, counting accepted and refused requests (deny rows count too).",
                 "A module that declares permission_groups and audit_events keeps path 1; audit_events is ignored for it.",
             ],
             "errors": {
@@ -405,6 +448,56 @@ HTTP_CONTRACT_DETAILS = {
                 "429": "audit write rate limit reached",
             },
             "success": {"201": "recorded", "202": "accepted but Tactical's AuditLog write failed (recorded false)"},
+        },
+    },
+    "/api/tfd/saved-views/": {
+        "GET": {
+            "authorization": "authenticated Tec-Tac session; the module must be core or an installed, enabled module the user may use",
+            "query": {
+                "module": "required module id",
+                "view_key": "optional; narrow to one view_key",
+            },
+            "response": {
+                "views": "views the caller can read: own views, shared views (readers empty) and private views that list the caller",
+                "count": "number of views",
+            },
+            "notes": ["Each view: id, module_id, view_key, name, payload, shared, mine, can_edit, owner {id, username}, created_at, updated_at. readers (user ids) is returned to the owner only."],
+            "errors": {"400": "module missing, unknown, disabled or invalid view_key", "403": "caller may not use the module"},
+        },
+        "POST": {
+            "authorization": "authenticated Tec-Tac session; the module must be core or an installed, enabled module the user may use",
+            "request": {
+                "module_id": "required",
+                "view_key": "required lowercase slug up to 64 characters",
+                "name": "required, 1 to 160 characters, unique per owner, module and view_key",
+                "payload": "required JSON object up to 64 KiB: filters and layout only, never data, secrets or tokens",
+                "readers": "optional list of up to 100 active user ids. Empty (default) shares the view with everyone. Not empty makes it private to the owner and those ids. [own id] means only me",
+            },
+            "notes": [
+                "At most 100 views per owner, module and view_key.",
+                "Each create writes a Core audit row (module_id core, object_type saved_view, action add) without the payload, in the same transaction. A failed audit write rolls the create back.",
+                "Write rate limit: 60/min and 2000/day per user and IP. Reads are not counted.",
+            ],
+            "errors": {"400": "invalid field, unknown field, payload too large, unknown reader, quota reached", "403": "caller may not use the module", "409": "name already used by this owner for this module and view_key", "429": "write rate limit reached", "500": "audit row could not be written; nothing was saved"},
+            "success": {"201": "created"},
+        },
+    },
+    "/api/tfd/saved-views/<uuid:view_id>/": {
+        "GET": {
+            "authorization": "authenticated Tec-Tac session; the caller must be able to read the view",
+            "errors": {"404": "no such view, or a private view the caller cannot read (same answer, so it does not leak)"},
+        },
+        "PUT": {
+            "authorization": "authenticated Tec-Tac session; owner only",
+            "request": {"name": "optional", "payload": "optional", "readers": "optional; omitted keeps the current readers", "module_id": "optional; must equal the current value", "view_key": "optional; must equal the current value"},
+            "notes": ["Writes a Core audit row (action modify) without the payload; a failed audit write rolls the change back."],
+            "errors": {"400": "invalid field", "403": "caller can read the view but is not the owner", "404": "view not found or not readable", "409": "name already used", "429": "write rate limit reached"},
+        },
+        "DELETE": {
+            "authorization": "authenticated Tec-Tac session; owner only. The owner may delete a view whose module was removed",
+            "notes": ["Writes a Core audit row (action delete). Deleting a user deletes their saved views."],
+            "errors": {"403": "caller is not the owner", "404": "view not found or not readable", "429": "write rate limit reached"},
+            "success": {"204": "deleted"},
         },
     },
     "/api/tfd/account/": {
@@ -592,8 +685,9 @@ BROWSER_CONTRACTS = (
         "docs": "tec-tac-ui/docs/module-audit.md",
         "purpose": (
             "Write module audit events through Core instead of Tactical AuditLog internals. Permissioned modules need one of their grants. "
-            "Since Core 1.16.0 a permissionless module may also post events it declares in its manifest audit_events, "
-            "for client, site or agent objects inside the signed-in user's scope; those rows carry a browser_provenance marker."
+            "Since Core 1.16.0 a permissionless module may also post events it declares in its manifest audit_events; "
+            "since 1.17.0 the object type may be any lowercase slug. Client, site and agent objects must be inside the signed-in user's scope. "
+            "Those rows carry a browser_provenance marker."
         ),
     },
     {
@@ -721,7 +815,8 @@ BROWSER_CONTRACTS = (
 )
 
 RULES = (
-    "A permissionless extension that needs a browser audit trail declares audit_events in tec_tac.json: [{\"object_type\": \"agent\", \"actions\": [\"view\", \"run\"]}]. object_type is client, site or agent; each action is a standard Tec-Tac audit action or custom:<slug>. Core checks the signed-in user's scope, sets the actor and marks the row browser_provenance. A module that declares audit_events must require framework >=1.16.0.",
+    "A permissionless extension that needs a browser audit trail declares audit_events in tec_tac.json: [{\"object_type\": \"agent\", \"actions\": [\"view\", \"run\"]}]. object_type is a lowercase slug; each action is a standard Tec-Tac audit action or custom:<slug>. For client, site and agent Core checks the signed-in user's scope; other types have no scope check. Core sets the actor and marks the row browser_provenance. A module that declares audit_events must require framework >=1.16.0, and >=1.17.0 when it declares an object type other than client, site or agent.",
+    "Saved views belong to the Core saved views service (tec_tac.saved_views, /api/tfd/saved-views/). Modules must not keep saved views in browser storage, cookies or their own tables. A payload holds filters and layout only, never data, secrets or tokens. A module that uses the service must require framework >=1.17.0.",
     "Use Python tec_tac.* contracts inside the Tec-Tac/Tactical backend; use HTTP only at browser/external process boundaries.",
     "UI modules must use the documented browser contracts passed to register(context) or registerPublic(context); do not import Core UI internals or read Tactical authentication storage.",
     "Swagger grouping is Core-owned: installed extension endpoints are grouped from their registered Django app ownership even when the URL prefix differs from the module ID. Module manifests may declare a readable name and category=core; groups are named Core module · <name> or Module · <name>. Core HTTP surfaces use explicit subsystem groups, module callback ownership wins over path prefixes, and there is no generic Framework catch-all.",

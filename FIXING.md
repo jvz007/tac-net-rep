@@ -1,3 +1,5 @@
+Saved views service (1.17.0): one Core table and contract (`tec_tac.saved_views`, `/api/tfd/saved-views/`) for every module's saved views, with an owner and optional readers. Audit: Core deny rows now say why and set `core_refusal`, permissionless modules may declare any object type (scope check only for client, site and agent), and the `browser_provenance` marker is kept on every row even when a value is too large. Regressions: `tests/saved-views-1.17.0.py`, `tests/audit-declared-browser-events-1.17.0.py`.
+
 Audit trail for permissionless UI modules (1.16.0): optional `audit_events` manifest key, Core-checked scope, a Core-owned deny row for refused attempts and a `browser_provenance` marker on every row. Also keeps Core provenance inside the audit size limit (backlog core-1.15.179) and closes the 1.15.127 audit Lows. Regression: `tests/audit-declared-browser-events-1.16.0.py`.
 
 Tracker acceptance consolidation: D2/D3 destructive restore orchestration, final L10 four-transport atomicity, and one Core acceptance runner for every remaining Core-owned tracker row.

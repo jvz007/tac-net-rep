@@ -160,4 +160,20 @@ assert warning_text.count("permissionless-demo has no declared permissions") == 
 assert warning_text.count("legacy-demo has no declared permissions") == 1
 assert "declaring-demo" not in warning_text and "permissioned-demo" not in warning_text
 
+# Core 1.17.0 (1.16.0 review Low): _fit_debug_info replaces only keys that are present, the larger of
+# metadata and operation_context first, and a replaced operation_context keeps Core's own keys.
+saved_limit = audit._max_value_bytes
+audit._max_value_bytes = lambda: 1000
+try:
+    base = {"source": "tec-tac", "module_id": "m", "module_version": "1", "correlation_id": "c"}
+    fitted = audit._fit_debug_info({**base, "metadata": {"blob": "m" * 2000}})
+    assert "operation_context" not in fitted and "error" in fitted["metadata"], fitted
+    fitted = audit._fit_debug_info({**base, "metadata": {"blob": "m" * 600}, "operation_context": {"blob": "o" * 900, "browser_provenance": audit.BROWSER_PROVENANCE_MARKER, "core_refusal": True}})
+    assert fitted["operation_context"]["browser_provenance"] == audit.BROWSER_PROVENANCE_MARKER, fitted
+    assert fitted["operation_context"]["core_refusal"] is True and "error" in fitted["operation_context"], fitted
+    assert fitted["metadata"]["blob"] == "m" * 600, "the larger piece goes first; the smaller one survives"
+    assert audit.SCOPE_CHECKED_OBJECT_TYPES == ("client", "site", "agent")
+finally:
+    audit._max_value_bytes = saved_limit
+
 print("[TEST] PASS browser audit provenance hardening")

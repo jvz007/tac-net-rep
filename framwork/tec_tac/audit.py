@@ -183,8 +183,12 @@ def can_record_from_browser(actor, module_id: str) -> bool:
     return _actor_can_use_module(actor, module)
 
 
-BROWSER_EVENT_OBJECT_TYPES = ("client", "site", "agent")
+# Object types whose events Core scope-checks through core.resources (and whose refusals get a deny row).
+SCOPE_CHECKED_OBJECT_TYPES = ("client", "site", "agent")
+BROWSER_EVENT_OBJECT_TYPES = SCOPE_CHECKED_OBJECT_TYPES  # alias kept for 1.16.0 importers
 BROWSER_PROVENANCE_MARKER = "module-declared-event"
+# operation_context keys only Core sets. Payloads can never supply operation_context, so a module cannot forge them.
+CORE_CONTEXT_KEYS = ("browser_provenance", "core_refusal")
 
 
 def declared_browser_event(actor, module_id: str, action: Any, object_type: Any) -> bool:
@@ -195,7 +199,9 @@ def declared_browser_event(actor, module_id: str, action: Any, object_type: Any)
     enabled, is not legacy, has no permission groups (permissioned modules keep
     their grant path) and lists this exact ``object_type`` and ``action`` in its
     manifest ``audit_events``. Core still cannot prove the module's code sent the
-    event, so the caller must also pass the resource scope check.
+    event, so the caller must also pass the resource scope check for client, site
+    and agent objects (``SCOPE_CHECKED_OBJECT_TYPES``). Any other declared object
+    type has no scope check; the row is recorded under the signed-in user with the marker.
     """
     if not getattr(actor, "is_authenticated", False):
         return False
@@ -207,7 +213,7 @@ def declared_browser_event(actor, module_id: str, action: Any, object_type: Any)
         return False
     wanted_action = str(action or "").strip().lower()
     wanted_type = str(object_type or "").strip().lower()
-    if wanted_type not in BROWSER_EVENT_OBJECT_TYPES:
+    if not _OBJECT_TYPE_RE.fullmatch(wanted_type):
         return False
     for declared_type, declared_actions in tuple(module.get("audit_events") or ()):
         if declared_type == wanted_type and wanted_action in declared_actions:
@@ -285,10 +291,14 @@ def _safe_metadata(metadata: Any) -> Any:
 
 
 def _keep_browser_provenance(marker: dict, original: Any) -> None:
-    """Carry Core's browser_provenance flag onto a 'value too large' marker."""
-    provenance = original.get("browser_provenance") if isinstance(original, dict) else None
-    if isinstance(marker, dict) and isinstance(provenance, str) and len(provenance) <= 100:
+    """Carry Core's own operation_context keys onto a 'value too large' marker."""
+    if not isinstance(marker, dict) or not isinstance(original, dict):
+        return
+    provenance = original.get("browser_provenance")
+    if isinstance(provenance, str) and len(provenance) <= 100:
         marker["browser_provenance"] = provenance
+    if original.get("core_refusal") is True:
+        marker["core_refusal"] = True
 
 
 def _debug_info_bytes(debug_info: dict) -> int:
@@ -302,21 +312,25 @@ def _fit_debug_info(debug_info: dict) -> dict:
     """Keep the whole debug_info inside AUDIT_MAX_VALUE_BYTES.
 
     Tactical replaces the entire debug_info when it is over the limit, which would
-    wipe Core provenance. Drop module metadata first, then operation_context. Core
-    keys (source, module_id, module_version, correlation_id, actor_*) stay.
+    wipe Core provenance. Replace module metadata and operation_context with a
+    'value too large' marker, the larger of the two first, and stop as soon as the
+    row fits. Only keys that are present are touched. A replaced operation_context
+    keeps Core's own keys (browser_provenance, core_refusal). Core keys (source,
+    module_id, module_version, correlation_id, actor_*) always stay.
     """
     max_bytes = _max_value_bytes()
     if _debug_info_bytes(debug_info) <= max_bytes:
         return debug_info
     fitted = dict(debug_info)
-    for key in ("metadata", "operation_context"):
-        original = _debug_info_bytes({key: fitted.get(key)})
+    present = [key for key in ("metadata", "operation_context") if key in fitted]
+    sizes = {key: _debug_info_bytes({key: fitted[key]}) for key in present}
+    for key in sorted(present, key=lambda item: -sizes[item]):
         marker = {
             "error": "value too large to store in audit log. Check documentation for configuring AUDIT_MAX_VALUE_BYTES",
-            "original_bytes": original,
+            "original_bytes": sizes[key],
         }
         if key == "operation_context":
-            _keep_browser_provenance(marker, fitted.get(key))
+            _keep_browser_provenance(marker, fitted[key])
         fitted[key] = marker
         if _debug_info_bytes(fitted) <= max_bytes:
             break
@@ -368,7 +382,59 @@ def record(
     failures are non-fatal by default: they are logged at ERROR and returned as
     ``recorded=False``. Pass ``strict=True`` only when a Core-owned workflow has
     explicitly decided audit persistence is transaction-critical.
+
+    ``operation_context.core_refusal`` is Core-owned: only Core's own deny rows set
+    it, so a caller that supplies it gets a contract error.
     """
+    if isinstance(operation_context, dict) and "core_refusal" in operation_context:
+        raise AuditContractError("operation_context.core_refusal is Core-owned and may not be supplied.")
+    return _record_row(
+        actor=actor, module_id=module_id, action=action, object_type=object_type, object_id=object_id,
+        message=message, before=before, after=after, metadata=metadata, operation_context=operation_context,
+        request=request, correlation_id=correlation_id, strict=strict,
+    )
+
+
+def record_core_refusal(
+    *,
+    actor,
+    module_id: str,
+    object_type: str,
+    object_id: Any,
+    message: str,
+    metadata: dict,
+    request=None,
+) -> dict[str, Any]:
+    """Write Core's own 'deny' row for a refused browser event.
+
+    Used only by the browser audit view. The row carries the browser_provenance
+    marker and operation_context.core_refusal = true, so it can be told apart from
+    a 'deny' event a module declared and posted itself. Never strict: a failed
+    deny write must not turn the refusal into a 500.
+    """
+    return _record_row(
+        actor=actor, module_id=module_id, action="deny", object_type=object_type, object_id=object_id,
+        message=message, metadata=metadata, request=request, strict=False,
+        operation_context={"browser_provenance": BROWSER_PROVENANCE_MARKER, "core_refusal": True},
+    )
+
+
+def _record_row(
+    *,
+    actor,
+    module_id: str,
+    action: str,
+    object_type: str,
+    object_id: Any = None,
+    message: Any = None,
+    before: Any = None,
+    after: Any = None,
+    metadata: dict | None = None,
+    operation_context: dict | None = None,
+    request=None,
+    correlation_id: Any = None,
+    strict: bool = False,
+) -> dict[str, Any]:
     module = _resolve_module(module_id)
     username, actor_info = _actor_provenance(actor, module)
     normalized_action = _normalize_action(action)
