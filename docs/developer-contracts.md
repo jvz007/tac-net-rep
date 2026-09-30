@@ -229,6 +229,8 @@ Use a ReportSet only when the module actually contributes report-facing mappings
 
 Tec-Tac modules must write audit events through Core. Server-side code uses `tec_tac.audit.record(...)`; authenticated UI modules receive `audit.record(event)` from the shell runtime. Direct imports or writes to Tactical `logs.models.AuditLog` from modules are unsupported. See `docs/module-audit.md`.
 
+A permissioned UI module posts browser audit events with one of its grants. A permissionless UI module (Tactical's own permissions decide who may use it) declares the events it posts in the optional `audit_events` manifest key: `[{"object_type": "agent", "actions": ["view", "run"]}]`. `object_type` is `client`, `site` or `agent`. Core checks the signed-in user's scope, sets the actor and marks the row with `browser_provenance`. A module that declares the key must set `requires.framework` to `>=1.16.0`. The Public Contracts export lists each module's declared events under "Extension permissions".
+
 ## Tactical Report Manager registration
 
 Report-facing module models MUST register through Core rather than importing Tactical reporting internals:

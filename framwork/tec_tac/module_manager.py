@@ -243,6 +243,10 @@ def _pair_payload(extension, reportset=None, *, ui: dict | None = None, installe
             {"name": name, "permissions": list(values)} for name, values in extension.permission_groups
         ],
         "permission_count": len(permissions),
+        "audit_events": [
+            {"object_type": object_type, "actions": list(actions)}
+            for object_type, actions in (getattr(extension, "audit_events", ()) or ())
+        ],
         "publisher_permissions": list(getattr(extension, "publisher_permissions", ()) or ()),
         "ui": ui,
         "ui_enabled": ui is not None,

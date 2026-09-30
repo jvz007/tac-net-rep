@@ -131,18 +131,33 @@ import tec_tac.module_runtime as runtime
 runtime.get_plugins = lambda: (permissionless, legacy, permissioned)
 runtime.load_state = lambda: {}
 runtime.is_enabled = lambda module_id, state: True
+declaring = registry.PluginSpec(
+    plugin_id="declaring-demo",
+    plugin_type="extension",
+    root=ROOT,
+    version="1.0.0",
+    permission_groups=(),
+    audit_events=(("agent", ("view",)),),
+)
+runtime.get_plugins = lambda: (permissionless, legacy, permissioned, declaring)
+runtime._WARNED_MODULES.clear()
 stream = io.StringIO()
 handler = logging.StreamHandler(stream)
 runtime.logger.addHandler(handler)
 runtime.logger.setLevel(logging.WARNING)
 try:
     rows = runtime.module_runtime_snapshot()
+    runtime.module_runtime_snapshot()  # a second UI-context request must not warn again
 finally:
     runtime.logger.removeHandler(handler)
 warning_text = stream.getvalue()
-assert {row["id"] for row in rows} == {"permissionless-demo", "legacy-demo", "permissioned-demo"}
+assert {row["id"] for row in rows} == {"permissionless-demo", "legacy-demo", "permissioned-demo", "declaring-demo"}
 assert "permissionless-demo has no declared permissions" in warning_text
 assert "legacy-demo has no declared permissions" in warning_text
 assert "HTTP 403" in warning_text
+# Once per module per process; a module that declares audit_events, or permissions, never warns.
+assert warning_text.count("permissionless-demo has no declared permissions") == 1
+assert warning_text.count("legacy-demo has no declared permissions") == 1
+assert "declaring-demo" not in warning_text and "permissioned-demo" not in warning_text
 
 print("[TEST] PASS browser audit provenance hardening")

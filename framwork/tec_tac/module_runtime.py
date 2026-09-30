@@ -13,6 +13,9 @@ from .registry import get_plugins
 
 logger = logging.getLogger("tec_tac.module_runtime")
 
+# Warn once per module per process: the snapshot runs on every UI-context request.
+_WARNED_MODULES: set[str] = set()
+
 
 def module_runtime_snapshot(plugins=None) -> list[dict]:
     """Return one lightweight row for every installed extension/legacy plugin."""
@@ -29,10 +32,16 @@ def module_runtime_snapshot(plugins=None) -> list[dict]:
         seen.add(module_id)
         legacy = bool(plugin.legacy or plugin.plugin_type == "legacy")
         enabled = True if legacy else bool(is_enabled(module_id, state))
-        if enabled and not tuple(plugin.permission_groups or ()):
+        if (
+            enabled
+            and not tuple(plugin.permission_groups or ())
+            and not tuple(getattr(plugin, "audit_events", ()) or ())
+            and module_id not in _WARNED_MODULES
+        ):
+            _WARNED_MODULES.add(module_id)
             logger.warning(
-                "Tec-Tac module %s has no declared permissions; browser audit POSTs for this module are blocked with HTTP 403. "
-                "Declare an explicit module permission before exposing a browser audit surface.",
+                "Tec-Tac module %s has no declared permissions and no audit_events; browser audit POSTs for this module get HTTP 403. "
+                "Declare an explicit module permission, or declare the events in audit_events, before exposing a browser audit surface.",
                 module_id,
             )
         rows.append({

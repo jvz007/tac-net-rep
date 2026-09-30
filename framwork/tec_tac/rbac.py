@@ -32,12 +32,21 @@ def registered_permissions(plugins=None) -> frozenset[str]:
     return frozenset(values)
 
 
+def _audit_event_rows(plugin) -> list[dict]:
+    """Browser audit events a permissionless module declares in its manifest."""
+    return [
+        {"object_type": object_type, "actions": list(actions)}
+        for object_type, actions in (getattr(plugin, "audit_events", ()) or ())
+    ]
+
+
 def permission_catalog(plugins=None) -> list[dict]:
     catalog = [{
         "id": "core",
         "version": "1",
         "groups": [{"name": name, "permissions": list(permissions)} for name, permissions in CORE_PERMISSION_GROUPS.items()],
         "permissions": sorted({code for permissions in CORE_PERMISSION_GROUPS.values() for code in permissions}),
+        "audit_events": [],
     }]
     for plugin in _extension_plugins(plugins):
         groups = [
@@ -50,6 +59,7 @@ def permission_catalog(plugins=None) -> list[dict]:
                 "version": plugin.version,
                 "groups": groups,
                 "permissions": sorted({code for group in groups for code in group["permissions"]}),
+                "audit_events": _audit_event_rows(plugin),
             }
         )
     return catalog

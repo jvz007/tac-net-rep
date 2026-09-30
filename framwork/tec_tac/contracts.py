@@ -365,6 +365,48 @@ CORE_CONTRACTS = (
 )
 
 HTTP_CONTRACT_DETAILS = {
+    "/api/tfd/audit/record/": {
+        "POST": {
+            "authorization": (
+                "authenticated Tec-Tac session. Path 1: an explicitly permissioned module with one of its grants. "
+                "Path 2 (1.16.0): a permissionless, enabled, non-legacy module that declares this exact object_type and action "
+                "in its manifest audit_events, for an object inside the caller's Tactical client/site scope. "
+                "Core provenance (module_id core) is never available"
+            ),
+            "request": {
+                "module_id": "required string; module that owns the event",
+                "action": "required; standard Tec-Tac audit action or custom:<slug>",
+                "object_type": "required lowercase slug; path 2 accepts only client, site or agent",
+                "object_id": "optional on path 1; required on path 2 (checked against the caller's scope)",
+                "message": "optional string up to 4096 bytes",
+                "before": "optional JSON value",
+                "after": "optional JSON value",
+                "metadata": "optional object; stored nested under debug_info.metadata",
+            },
+            "response": {
+                "recorded": "true when Tactical's AuditLog row was written",
+                "id": "AuditLog row id",
+                "username": "signed-in user (Core-owned)",
+                "module_id": "module id (Core-verified)",
+                "module_version": "installed module version (Core-owned)",
+                "correlation_id": "Core-owned correlation id",
+            },
+            "notes": [
+                "Actor, module version, source and correlation id are Core-owned; supplying username, actor, user, module_version, source, correlation_id or request_id gives 400.",
+                "Path 2 rows carry debug_info.operation_context.browser_provenance = module-declared-event. Core cannot prove the module's code sent the event, so the marker is set on every row on this path.",
+                "Path 2 refusals (404 or 403 from the scope check) are not recorded as the module's event. Core writes one Core-owned deny row instead: action deny, a fixed Core message with no module text, metadata refused_action and reason.",
+                "Rate limit: 60/min and 1000/day per user and IP, counting accepted and refused requests.",
+                "A module that declares permission_groups and audit_events keeps path 1; audit_events is ignored for it.",
+            ],
+            "errors": {
+                "400": "not a JSON object; actor/provenance field supplied; unknown field; invalid action or object_type; path 2 without object_id or with an invalid object_id",
+                "403": "module_id core; module not permissioned for this account and event not declared (message contains 'not permitted'); module disabled, unknown or legacy; path 2: role lacks Tactical's can_list_* permission for the object type",
+                "404": "path 2: object not found or outside the caller's client/site scope (same message, so existence is not leaked)",
+                "429": "audit write rate limit reached",
+            },
+            "success": {"201": "recorded", "202": "accepted but Tactical's AuditLog write failed (recorded false)"},
+        },
+    },
     "/api/tfd/account/": {
         "GET": {
             "authorization": "authenticated Tec-Tac session; self only",
@@ -548,7 +590,11 @@ BROWSER_CONTRACTS = (
         "operations": ["record"],
         "audience": "module/browser",
         "docs": "tec-tac-ui/docs/module-audit.md",
-        "purpose": "Write module audit events through Core instead of Tactical AuditLog internals.",
+        "purpose": (
+            "Write module audit events through Core instead of Tactical AuditLog internals. Permissioned modules need one of their grants. "
+            "Since Core 1.16.0 a permissionless module may also post events it declares in its manifest audit_events, "
+            "for client, site or agent objects inside the signed-in user's scope; those rows carry a browser_provenance marker."
+        ),
     },
     {
         "id": "ui.authenticated.context-actions",
@@ -675,6 +721,7 @@ BROWSER_CONTRACTS = (
 )
 
 RULES = (
+    "A permissionless extension that needs a browser audit trail declares audit_events in tec_tac.json: [{\"object_type\": \"agent\", \"actions\": [\"view\", \"run\"]}]. object_type is client, site or agent; each action is a standard Tec-Tac audit action or custom:<slug>. Core checks the signed-in user's scope, sets the actor and marks the row browser_provenance. A module that declares audit_events must require framework >=1.16.0.",
     "Use Python tec_tac.* contracts inside the Tec-Tac/Tactical backend; use HTTP only at browser/external process boundaries.",
     "UI modules must use the documented browser contracts passed to register(context) or registerPublic(context); do not import Core UI internals or read Tactical authentication storage.",
     "Swagger grouping is Core-owned: installed extension endpoints are grouped from their registered Django app ownership even when the URL prefix differs from the module ID. Module manifests may declare a readable name and category=core; groups are named Core module · <name> or Module · <name>. Core HTTP surfaces use explicit subsystem groups, module callback ownership wins over path prefixes, and there is no generic Framework catch-all.",
@@ -890,6 +937,12 @@ def render_markdown(catalog: dict | None = None) -> str:
         out.append("")
         for group in module.get("groups", []):
             out.append(f"- **{group['name']}**: " + ", ".join(f"`{code}`" for code in group.get("permissions", [])))
+        events = module.get("audit_events") or []
+        if events:
+            out.append("- **Declared browser audit events**: " + ", ".join(
+                f"`{event['object_type']}`: " + "/".join(f"`{action}`" for action in event.get("actions", []))
+                for event in events
+            ))
         out.append("")
 
     out.extend(["## Registered reporting models", ""])
@@ -1024,6 +1077,8 @@ def render_text(catalog: dict | None = None) -> str:
         out.append(f"- {module['id']} package {module['version']}")
         for group in module.get("groups", []):
             out.append(f"  {group['name']}: {', '.join(group.get('permissions', []))}")
+        for event in module.get("audit_events") or []:
+            out.append(f"  audit_events {event['object_type']}: {', '.join(event.get('actions', []))}")
 
     out.extend(["", "REGISTERED REPORTING MODELS"])
     if not data.get("reporting_models"):

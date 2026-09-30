@@ -123,7 +123,13 @@ def _resolve_module(module_id: str):
     if plugin.plugin_type == "extension" and not is_enabled(module_id, load_state()):
         raise AuditContractError(f"Tec-Tac module {module_id!r} is disabled.")
     permissions = tuple(sorted({code for _, values in plugin.permission_groups for code in values}))
-    return {"id": plugin.plugin_id, "version": str(plugin.version or "0.0.0"), "permissions": permissions, "legacy": bool(plugin.legacy)}
+    return {
+        "id": plugin.plugin_id,
+        "version": str(plugin.version or "0.0.0"),
+        "permissions": permissions,
+        "legacy": bool(plugin.legacy),
+        "audit_events": tuple(getattr(plugin, "audit_events", ()) or ()),
+    }
 
 
 def _actor_can_use_module(actor, module: dict) -> bool:
@@ -177,6 +183,38 @@ def can_record_from_browser(actor, module_id: str) -> bool:
     return _actor_can_use_module(actor, module)
 
 
+BROWSER_EVENT_OBJECT_TYPES = ("client", "site", "agent")
+BROWSER_PROVENANCE_MARKER = "module-declared-event"
+
+
+def declared_browser_event(actor, module_id: str, action: Any, object_type: Any) -> bool:
+    """Return whether a permissionless module declared this browser audit event.
+
+    This is the second browser path, used only when ``can_record_from_browser``
+    said no. It accepts an event only when the module resolves, is installed and
+    enabled, is not legacy, has no permission groups (permissioned modules keep
+    their grant path) and lists this exact ``object_type`` and ``action`` in its
+    manifest ``audit_events``. Core still cannot prove the module's code sent the
+    event, so the caller must also pass the resource scope check.
+    """
+    if not getattr(actor, "is_authenticated", False):
+        return False
+    try:
+        module = _resolve_module(module_id)
+    except AuditContractError:
+        return False
+    if module.get("id") == "core" or module.get("legacy") or tuple(module.get("permissions") or ()):
+        return False
+    wanted_action = str(action or "").strip().lower()
+    wanted_type = str(object_type or "").strip().lower()
+    if wanted_type not in BROWSER_EVENT_OBJECT_TYPES:
+        return False
+    for declared_type, declared_actions in tuple(module.get("audit_events") or ()):
+        if declared_type == wanted_type and wanted_action in declared_actions:
+            return _actor_can_use_module(actor, module)
+    return False
+
+
 def _normalize_action(value: Any) -> str:
     action = str(value or "").strip().lower()
     if action in STANDARD_ACTIONS or _CUSTOM_ACTION_RE.fullmatch(action):
@@ -207,21 +245,35 @@ def _correlation_id(request=None, explicit: Any = None) -> str:
     return str(uuid.uuid4())
 
 
+def _max_value_bytes() -> int:
+    try:
+        from django.conf import settings
+        return int(getattr(settings, "AUDIT_MAX_VALUE_BYTES", 512 * 2**10))
+    except Exception:
+        return 512 * 2**10
+
+
+def _tactical_json_bytes(value: Any) -> bytes:
+    """Encode the way Tactical's AuditLog.save measures debug_info.
+
+    Tactical uses json.dumps with the default ensure_ascii=True, so non-ASCII text
+    counts as escaped characters. Measuring any other way undercounts and lets a row
+    pass here that Tactical then replaces whole.
+    """
+    return json.dumps(value, default=str).encode("utf-8")
+
+
 def _safe_metadata(metadata: Any) -> Any:
     if metadata is None:
         return {}
     if not isinstance(metadata, dict):
         raise AuditContractError("metadata must be an object when provided.")
-    try:
-        from django.conf import settings
-        max_bytes = int(getattr(settings, "AUDIT_MAX_VALUE_BYTES", 512 * 2**10))
-    except Exception:
-        max_bytes = 512 * 2**10
+    max_bytes = _max_value_bytes()
     # Reserve headroom for Core provenance so oversized module metadata does not
     # cause Tactical to replace the entire debug_info object.
     budget = max(1024, max_bytes - 8192)
     try:
-        encoded = json.dumps(metadata, ensure_ascii=False, default=str).encode("utf-8")
+        encoded = _tactical_json_bytes(metadata)
     except Exception:
         return {"error": "could not process audit metadata"}
     if len(encoded) > budget:
@@ -230,6 +282,45 @@ def _safe_metadata(metadata: Any) -> Any:
             "original_bytes": len(encoded),
         }
     return metadata
+
+
+def _keep_browser_provenance(marker: dict, original: Any) -> None:
+    """Carry Core's browser_provenance flag onto a 'value too large' marker."""
+    provenance = original.get("browser_provenance") if isinstance(original, dict) else None
+    if isinstance(marker, dict) and isinstance(provenance, str) and len(provenance) <= 100:
+        marker["browser_provenance"] = provenance
+
+
+def _debug_info_bytes(debug_info: dict) -> int:
+    try:
+        return len(_tactical_json_bytes(debug_info))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _fit_debug_info(debug_info: dict) -> dict:
+    """Keep the whole debug_info inside AUDIT_MAX_VALUE_BYTES.
+
+    Tactical replaces the entire debug_info when it is over the limit, which would
+    wipe Core provenance. Drop module metadata first, then operation_context. Core
+    keys (source, module_id, module_version, correlation_id, actor_*) stay.
+    """
+    max_bytes = _max_value_bytes()
+    if _debug_info_bytes(debug_info) <= max_bytes:
+        return debug_info
+    fitted = dict(debug_info)
+    for key in ("metadata", "operation_context"):
+        original = _debug_info_bytes({key: fitted.get(key)})
+        marker = {
+            "error": "value too large to store in audit log. Check documentation for configuring AUDIT_MAX_VALUE_BYTES",
+            "original_bytes": original,
+        }
+        if key == "operation_context":
+            _keep_browser_provenance(marker, fitted.get(key))
+        fitted[key] = marker
+        if _debug_info_bytes(fitted) <= max_bytes:
+            break
+    return fitted
 
 
 def _bounded_value(value: Any, label: str, *, maximum: int | None = None) -> Any:
@@ -241,7 +332,7 @@ def _bounded_value(value: Any, label: str, *, maximum: int | None = None) -> Any
     except Exception:
         limit = int(maximum or 512 * 2**10)
     try:
-        encoded = json.dumps(value, ensure_ascii=False, default=str).encode("utf-8")
+        encoded = _tactical_json_bytes(value)
     except Exception as exc:
         raise AuditContractError(f"{label} could not be serialized.") from exc
     if len(encoded) > limit:
@@ -292,6 +383,8 @@ def record(
     if not isinstance(operation_context, dict):
         raise AuditContractError("operation_context must be an object when provided.")
     op_context = _safe_metadata(operation_context)
+    if op_context is not operation_context:
+        _keep_browser_provenance(op_context, operation_context)
     op_correlation = op_context.get("correlation_id") if isinstance(op_context, dict) else None
     cid = _correlation_id(request, correlation_id or op_correlation)
 
@@ -307,6 +400,7 @@ def record(
     }
     # Keep null provenance keys out of Tactical output without losing stable fields.
     debug_info = {key: value for key, value in debug_info.items() if value is not None}
+    debug_info = _fit_debug_info(debug_info)
 
     try:
         row = _auditlog_model().objects.create(

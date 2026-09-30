@@ -31,8 +31,12 @@ SUPPORTED_TYPES = frozenset({"extension", "reportset"})
 SUPPORTED_KEYS = frozenset({
     "id", "type", "version", "python_paths", "django_apps", "permission_groups",
     "dependencies", "optional_dependencies", "requires", "licensing", "migration",
-    "publisher_permissions", "name", "category",
+    "publisher_permissions", "name", "category", "audit_events",
 })
+# Object types core.resources can scope-check for the browser audit writer.
+AUDIT_EVENT_OBJECT_TYPES = ("client", "site", "agent")
+AUDIT_EVENT_MAX_ENTRIES = 20
+AUDIT_EVENT_MAX_ACTIONS = 20
 
 class RegistryError(RuntimeError):
     """Raised when Tec-Tac plugin metadata is invalid."""
@@ -50,6 +54,7 @@ class PluginSpec:
     name: str = ""
     category: str = ""
     legacy: bool = False
+    audit_events: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
     def permission_group_map(self) -> dict[str, tuple[str, ...]]:
         return dict(self.permission_groups)
@@ -99,6 +104,48 @@ def _permission_groups(payload: dict, plugin_type: str, plugin_id: str) -> tuple
         groups.append((name, values))
     return tuple(groups)
 
+
+
+def _audit_events(payload: dict, plugin_type: str, plugin_id: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Parse the optional ``audit_events`` key: browser audit events a permissionless module declares."""
+    if "audit_events" not in payload:
+        return ()
+    raw = payload["audit_events"]
+    if plugin_type != "extension":
+        raise RegistryError(f"Reportset {plugin_id!r} may not declare audit_events; audit events belong to the extension.")
+    if not isinstance(raw, list):
+        raise RegistryError("Manifest key 'audit_events' must be a JSON array.")
+    if len(raw) > AUDIT_EVENT_MAX_ENTRIES:
+        raise RegistryError(f"Manifest audit_events may not contain more than {AUDIT_EVENT_MAX_ENTRIES} entries.")
+    from .audit import _CUSTOM_ACTION_RE, STANDARD_ACTIONS
+    entries = []
+    seen_types = set()
+    for entry in raw:
+        if not isinstance(entry, dict):
+            raise RegistryError("Manifest audit_events entries must be JSON objects.")
+        unknown = sorted(set(entry) - {"object_type", "actions"})
+        if unknown:
+            raise RegistryError(f"Manifest audit_events entry contains unsupported keys {unknown!r}.")
+        object_type = entry.get("object_type")
+        if not isinstance(object_type, str) or object_type not in AUDIT_EVENT_OBJECT_TYPES:
+            raise RegistryError(f"Manifest audit_events object_type must be one of {list(AUDIT_EVENT_OBJECT_TYPES)!r}.")
+        if object_type in seen_types:
+            raise RegistryError(f"Manifest audit_events declares object_type {object_type!r} more than once.")
+        seen_types.add(object_type)
+        actions = entry.get("actions")
+        if not isinstance(actions, list) or not actions:
+            raise RegistryError(f"Manifest audit_events actions for {object_type!r} must be a non-empty JSON array.")
+        if len(actions) > AUDIT_EVENT_MAX_ACTIONS:
+            raise RegistryError(f"Manifest audit_events actions for {object_type!r} may not exceed {AUDIT_EVENT_MAX_ACTIONS}.")
+        for action in actions:
+            if not isinstance(action, str) or not (action in STANDARD_ACTIONS or _CUSTOM_ACTION_RE.fullmatch(action)):
+                raise RegistryError(
+                    f"Manifest audit_events action {action!r} must be a standard Tec-Tac audit action or custom:<slug>."
+                )
+        if len(set(actions)) != len(actions):
+            raise RegistryError(f"Manifest audit_events actions for {object_type!r} contain duplicates.")
+        entries.append((object_type, tuple(actions)))
+    return tuple(entries)
 
 
 def _publisher_permissions(payload: dict, plugin_type: str, plugin_id: str) -> tuple[str, ...]:
@@ -198,7 +245,8 @@ def _load_manifest(plugin_type: str, plugin_dir: Path) -> PluginSpec | None:
     django_apps = _string_list(payload, "django_apps")
     permission_groups = _permission_groups(payload, plugin_type, plugin_id)
     publisher_permissions = _publisher_permissions(payload, plugin_type, plugin_id)
-    return PluginSpec(plugin_id=plugin_id, plugin_type=plugin_type, root=plugin_root, version=version, python_paths=tuple(python_paths), django_apps=django_apps, permission_groups=permission_groups, publisher_permissions=publisher_permissions, name=name, category=category)
+    audit_events = _audit_events(payload, plugin_type, plugin_id)
+    return PluginSpec(plugin_id=plugin_id, plugin_type=plugin_type, root=plugin_root, version=version, python_paths=tuple(python_paths), django_apps=django_apps, permission_groups=permission_groups, publisher_permissions=publisher_permissions, name=name, category=category, audit_events=audit_events)
 
 def _discover_root(plugin_type: str, root: Path) -> list[PluginSpec]:
     if not root.exists():

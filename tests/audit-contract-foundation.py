@@ -8,6 +8,9 @@ path = ROOT / "framwork" / "tec_tac" / "audit.py"
 spec = importlib.util.spec_from_file_location("audit_contract_subject", path)
 audit = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(audit)
+# Keep the real functions: the browser-authorization block at the end runs them unstubbed.
+_real_resolve_module = audit._resolve_module
+_real_actor_can_use_module = audit._actor_can_use_module
 
 class Actor:
     is_authenticated = True
@@ -113,23 +116,48 @@ except audit.AuditWriteError:
 
 
 # Browser audit authorization is stricter than backend audit authorization.
-# Core and permissionless module provenance are never available to browser callers.
+# Core and permissionless module provenance are never available to the permissioned
+# browser path. This block runs the real can_record_from_browser, _resolve_module and
+# _actor_can_use_module against a PluginSpec registry double (nothing under test is stubbed).
+import sys
+import types
+
+_pkg = types.ModuleType("tec_tac")
+_pkg.__path__ = [str(ROOT / "framwork" / "tec_tac")]
+sys.modules["tec_tac"] = _pkg
+import tec_tac.registry as registry
+audit.__package__ = "tec_tac"
+audit._resolve_module = _real_resolve_module
+audit._actor_can_use_module = _real_actor_can_use_module
+
+_permissionless = registry.PluginSpec(plugin_id="permissionless", plugin_type="extension", root=ROOT, version="1.0.0")
+_permissioned = registry.PluginSpec(
+    plugin_id="permissioned", plugin_type="extension", root=ROOT, version="1.0.0",
+    permission_groups=(("Use", ("permissioned.use",)),),
+)
+registry.get_plugins = lambda: (_permissionless, _permissioned)
+_state = types.ModuleType("tec_tac.module_state")
+_state.load_state = lambda: {}
+_state.is_enabled = lambda module_id, state: True
+sys.modules["tec_tac.module_state"] = _state
+_rbac = types.ModuleType("tec_tac.rbac")
+_granted = set()
+_rbac.effective_permissions = lambda actor: set(_granted)
+sys.modules["tec_tac.rbac"] = _rbac
+
 class BrowserActor:
     is_authenticated = True
     is_superuser = False
     username = "browser"
+    role = None
+    def get_and_set_role_cache(self):
+        return None
 
-audit._resolve_module = lambda mid: {
-    "id": mid, "version": "1.0.0", "permissions": (), "legacy": False
-}
-audit._actor_can_use_module = lambda actor, module: bool(getattr(actor, "is_authenticated", False))
 assert audit.can_record_from_browser(BrowserActor(), "permissionless") is False
 assert audit.can_record_from_browser(BrowserActor(), "core") is False
-
-audit._resolve_module = lambda mid: {
-    "id": mid, "version": "1.0.0", "permissions": ("demo.use",), "legacy": False
-}
-audit._actor_can_use_module = lambda actor, module: False
-assert audit.can_record_from_browser(BrowserActor(), "permissioned") is False
+assert audit.can_record_from_browser(BrowserActor(), "unknown-module") is False
+assert audit.can_record_from_browser(BrowserActor(), "permissioned") is False  # no grant
+_granted.add("permissioned.use")
+assert audit.can_record_from_browser(BrowserActor(), "permissioned") is True   # grant, real _resolve_module
 
 print("[TEST] PASS Tec-Tac audit write contract behavior")

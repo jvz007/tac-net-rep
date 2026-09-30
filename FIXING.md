@@ -1,3 +1,5 @@
+Audit trail for permissionless UI modules (1.16.0): optional `audit_events` manifest key, Core-checked scope, a Core-owned deny row for refused attempts and a `browser_provenance` marker on every row. Also keeps Core provenance inside the audit size limit (backlog core-1.15.179) and closes the 1.15.127 audit Lows. Regression: `tests/audit-declared-browser-events-1.16.0.py`.
+
 Tracker acceptance consolidation: D2/D3 destructive restore orchestration, final L10 four-transport atomicity, and one Core acceptance runner for every remaining Core-owned tracker row.
 
 # Fixing / review notes — Core 1.15.172
