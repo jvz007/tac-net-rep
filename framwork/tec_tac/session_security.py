@@ -406,6 +406,34 @@ def _audit(event_type: str, *, session=None, username: str = "", previous_ip: st
     )
 
 
+
+def _session_created_auth_metadata(user) -> dict[str, str]:
+    """Return read-only authentication provenance for a newly trusted session.
+
+    Tactical remains the authentication authority.  A linked allauth
+    SocialAccount marks the Tactical account as SSO-owned; otherwise the
+    session is recorded as password-authenticated.  Tec-Tac does not write to
+    Tactical authentication tables here.
+    """
+    if not bool(getattr(user, "is_sso_user", False)):
+        return {"auth_method": "password"}
+
+    # Import lazily so portable Core checks do not need allauth installed. In a
+    # Tactical runtime this is the same model behind User.is_sso_user.
+    from allauth.socialaccount.models import SocialAccount
+
+    account = (
+        SocialAccount.objects
+        .filter(user_id=getattr(user, "pk", None))
+        .only("provider")
+        .order_by("pk")
+        .first()
+    )
+    return {
+        "auth_method": "sso",
+        "provider": str(getattr(account, "provider", "") or ""),
+    }
+
 def _refresh_expiry(session: TecTacSessionTrust, policy: dict[str, Any]):
     session.absolute_expires_at = session.created_at + timedelta(minutes=int(policy["absolute_lifetime_minutes"]))
     session.idle_expires_at = session.last_activity_at + timedelta(minutes=int(policy["idle_timeout_minutes"]))
@@ -567,7 +595,13 @@ def ensure_request_session(request, *, create: bool = True) -> TecTacSessionTrus
             if not created:
                 session = TecTacSessionTrust.objects.select_for_update().get(pk=session.pk)
             else:
-                _audit("session_created", session=session, new_ip=client_ip, policy=policy)
+                _audit(
+                    "session_created",
+                    session=session,
+                    new_ip=client_ip,
+                    metadata=_session_created_auth_metadata(user),
+                    policy=policy,
+                )
 
         if session.revoked:
             raise SessionSecurityDenied("session_revoked")

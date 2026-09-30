@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.15.186",
+  "version": "1.15.187",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -32,14 +32,14 @@
       "sha256": "b16e78b37eecd6b4690403b4725a0b9977c7e8e9eca51b6cb4493166c952f243"
     },
     {
-      "path": "RELEASE_NOTES_1.15.186.md",
-      "size": 1267,
-      "sha256": "f8a56d932199e2c78abd737f4bcfd6fa3abfc628b597b73019684338078e1cf6"
+      "path": "RELEASE_NOTES_1.15.187.md",
+      "size": 839,
+      "sha256": "6f749de8e812a162b7e1e9bc27ee0ce57892502c85b14d77fdbef88433a7da6a"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "0199572275da109418e61914df5fcb503426f1910af4fb2c66a4d0a0070d6664"
+      "sha256": "8bfb910478b871d7f8b37a63b63e69b2991a2147b87f83236f45f772ac08f442"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -682,6 +682,11 @@
       "sha256": "d086ca2854b53258987d374d2dc09a3135764cc6131f2844d7094eed13f682ed"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.15.186.md",
+      "size": 1267,
+      "sha256": "f8a56d932199e2c78abd737f4bcfd6fa3abfc628b597b73019684338078e1cf6"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.15.19.md",
       "size": 1248,
       "sha256": "b9934bcfd38415b74e6005a74d9d6d384513f01b414bed4c30fda3dc31ada503"
@@ -1093,8 +1098,8 @@
     },
     {
       "path": "docs/session-security.md",
-      "size": 17186,
-      "sha256": "853ad183e325b9e804758860d5ed1f14e7a2e0b572980da490c6200adb28581d"
+      "size": 17376,
+      "sha256": "e5fdfe006b92902d5320c4ee50149abf3f2b67f0b66d511ab417f32859ab11d7"
     },
     {
       "path": "docs/system-update-signed-releases.md",
@@ -1738,8 +1743,8 @@
     },
     {
       "path": "framwork/tec_tac/session_security.py",
-      "size": 50099,
-      "sha256": "bb19e2241da4073259f0d3049bcdb662ed33b49fcd60051066c9088351bb7085"
+      "size": 51269,
+      "sha256": "230a5de8f6a98af41ad392e7d29585022792b78a23e1a49f8ce4a221253dd420"
     },
     {
       "path": "framwork/tec_tac/session_security_views.py",
@@ -1773,8 +1778,8 @@
     },
     {
       "path": "framwork/tec_tac/tests/test_f8_sso_ad4_tactical_integration.py",
-      "size": 7655,
-      "sha256": "8322b9c0a6f53481742ce563bdc5bdb46f2a810bc14c724b779fbd906f30c78c"
+      "size": 9695,
+      "sha256": "c6350619bd9c1b2179b46fe6fa9c7a5dc831d7b048dd834e7a8cbb4119373ccb"
     },
     {
       "path": "framwork/tec_tac/tests/test_scheduler_target_scope.py",
@@ -1989,7 +1994,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "6b7a505e5393405e6dd3f285dbe920466afcffae7928baa1e8f811bf118b2a60"
+      "sha256": "bdf8d925534d6b0b85f394e3aa84660fb837a9d98d7fe16e65913bce50b996b4"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2177,9 +2182,9 @@
       "sha256": "9fe632ffd3f63d639287e82daec9fa77a53a8f547a471f4b8047301da9c3fd38"
     },
     {
-      "path": "tests/f8-ad4-acceptance-1.15.186-1.py",
-      "size": 1838,
-      "sha256": "7119d1e8261ad0d78bccf0b2185e2523751650c5de2148fc7f5c8ea40d4cb14b"
+      "path": "tests/f8-ad4-acceptance-1.15.187.py",
+      "size": 2604,
+      "sha256": "62582271d79a9eea5574fc5ad6b4db57c2dbb0d26b8d00d78172abdf83be61e8"
     },
     {
       "path": "tests/f8-sso-contract-1.15.180.py",
@@ -2188,8 +2193,8 @@
     },
     {
       "path": "tests/f8-sso-session-pipeline-1.15.185.py",
-      "size": 8944,
-      "sha256": "db28ee9e169faa0f859be6a1d0b27a2989d4f345b2307cb185332d91e18a6c2f"
+      "size": 9720,
+      "sha256": "f08a611fce168b367fd57244978cd15614b1725b809d4867c4cb3a413ab5a1c2"
     },
     {
       "path": "tests/f9-f10-browser-contract-1.15.175.py",
@@ -2608,8 +2613,8 @@
     },
     {
       "path": "tests/review-hygiene-foundation.sh",
-      "size": 2807,
-      "sha256": "e6bc8b5491910270a503cfd9a8b6e4e457b2afa976c3944af7203f449df4109d"
+      "size": 2805,
+      "sha256": "db7b18c1028299ced3dbf9c04b6edc559f915475f29bda74225aa0124a19b101"
     },
     {
       "path": "tests/review-regressions-1.15.50.py",

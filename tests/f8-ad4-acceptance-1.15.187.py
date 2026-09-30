@@ -20,6 +20,9 @@ required = [
     "self.assertEqual(context_response.status_code, 200",
     "self.assertEqual(password_response.status_code, 400)",
     "throwaway test database",
+    'audit.metadata.get("auth_method"), "sso"',
+    'audit.metadata.get("provider"), "openid_connect"',
+    'test_password_session_records_password_auth_method',
 ]
 for item in required:
     assert item in s, f"F8 AD-4 test-database regression missing {item!r}"
@@ -47,4 +50,19 @@ assert "if active_name != expected_test_name" in s, "F8 test must fail closed ou
 assert "raise SkipTest" in s, "F8 test must skip when EE SSO/Postgres test prerequisites are unavailable"
 assert "force_authenticate" not in s, "F8 closure must authenticate through Tactical's real HTTP views"
 
-print("[TEST] PASS F8 AD-4 Django throwaway test-database acceptance 1.15.186-1")
+
+setup_pos = s.index("def setUpClass")
+super_pos = s.index("super().setUpClass()", setup_pos)
+for pre_super in [
+    'find_spec("ee.sso")',
+    'connection.vendor != "postgresql"',
+    'resolve("/accounts/ssoproviders/token/")',
+]:
+    assert s.index(pre_super, setup_pos) < super_pos, f"{pre_super} must run before TestCase.setUpClass()"
+
+prod = (ROOT / "framwork" / "tec_tac" / "session_security.py").read_text(encoding="utf-8")
+assert 'metadata=_session_created_auth_metadata(user)' in prod
+assert 'from allauth.socialaccount.models import SocialAccount' in prod
+assert 'SocialAccount.objects' in prod
+
+print("[TEST] PASS F8 AD-4 Django throwaway test-database acceptance 1.15.187")

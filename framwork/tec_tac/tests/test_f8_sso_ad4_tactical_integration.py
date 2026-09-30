@@ -27,6 +27,7 @@ from django.urls import Resolver404, resolve
 from accounts.models import User
 from allauth.socialaccount.models import SocialAccount
 from knox.models import AuthToken
+import pyotp
 from tacticalrmm.utils import get_core_settings
 
 from tec_tac.models import TecTacSessionAudit, TecTacSessionTrust
@@ -40,11 +41,9 @@ class F8SsoAd4TacticalIntegrationTests(TestCase):
 
     @classmethod
     def setUpClass(cls):
-        super().setUpClass()
-
-        # This regression depends on Tactical's EE SSO package and a PostgreSQL
-        # test database. CI environments without either dependency skip cleanly;
-        # they must never fall back to a live database.
+        # Run every prerequisite check before TestCase.setUpClass() opens the
+        # class-level atomic blocks.  A SkipTest must never leak that transaction
+        # into later Django tests.
         try:
             ee_sso_available = find_spec("ee.sso") is not None
         except (ImportError, ModuleNotFoundError):
@@ -69,6 +68,8 @@ class F8SsoAd4TacticalIntegrationTests(TestCase):
             resolve("/accounts/ssoproviders/token/")
         except Resolver404:
             raise SkipTest("Tactical EE SSO token route is not installed in this test runtime")
+
+        super().setUpClass()
 
     def setUp(self):
         self.user = User.objects.create_user(
@@ -161,7 +162,10 @@ class F8SsoAd4TacticalIntegrationTests(TestCase):
             event_type="session_created",
         )
         self.assertEqual(audits.count(), 1)
-        self.assertEqual(audits.get().session_id, trust.id)
+        audit = audits.get()
+        self.assertEqual(audit.session_id, trust.id)
+        self.assertEqual(audit.metadata.get("auth_method"), "sso")
+        self.assertEqual(audit.metadata.get("provider"), "openid_connect")
 
         # Tactical's own local sign-in path must refuse an SSO-linked account,
         # even when the submitted password is correct.
@@ -178,3 +182,52 @@ class F8SsoAd4TacticalIntegrationTests(TestCase):
         self.assertEqual(password_response.status_code, 400)
         self.assertEqual(self._json(password_response), "Bad credentials")
         self.assertEqual(AuthToken.objects.filter(user=self.user).count(), 1)
+
+    def test_password_session_records_password_auth_method(self):
+        local_user = User.objects.create_user(
+            username="tectac_f8_password_test",
+            email="tectac-f8-password@invalid.local",
+            password=self.password,
+        )
+        totp_secret = pyotp.random_base32()
+        local_user.totp_key = totp_secret
+        local_user.save(update_fields=["totp_key"])
+        self.assertFalse(local_user.is_sso_user)
+
+        password_client = Client(
+            REMOTE_ADDR="192.0.2.83",
+            HTTP_USER_AGENT="TecTac-F8-Password-TestDatabase",
+        )
+        login_response = password_client.post(
+            "/v2/login/",
+            data=json.dumps(
+                {
+                    "username": local_user.username,
+                    "password": self.password,
+                    "twofactor": pyotp.TOTP(totp_secret).now(),
+                }
+            ),
+            content_type="application/json",
+            REMOTE_ADDR="192.0.2.83",
+        )
+        login_data = self._json(login_response)
+        self.assertEqual(login_response.status_code, 200, login_data)
+        knox_token = str(login_data.get("token") or "")
+        self.assertTrue(knox_token, login_data)
+
+        core_client = Client(
+            HTTP_AUTHORIZATION=f"Token {knox_token}",
+            REMOTE_ADDR="192.0.2.83",
+            HTTP_USER_AGENT="TecTac-F8-Password-TestDatabase",
+        )
+        context_response = core_client.get("/api/tfd/ui/context/")
+        context_data = self._json(context_response)
+        self.assertEqual(context_response.status_code, 200, context_data)
+
+        audit = TecTacSessionAudit.objects.get(
+            username=local_user.username,
+            event_type="session_created",
+        )
+        self.assertEqual(audit.metadata.get("auth_method"), "password")
+        self.assertNotIn("provider", audit.metadata)
+

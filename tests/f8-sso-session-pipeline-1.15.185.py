@@ -52,6 +52,22 @@ AuthToken.objects = types.SimpleNamespace(filter=lambda **kwargs: types.SimpleNa
 knox_models.AuthToken = AuthToken
 sys.modules.update({"knox": knox, "knox.models": knox_models})
 
+allauth = types.ModuleType("allauth")
+allauth_social = types.ModuleType("allauth.socialaccount")
+allauth_social_models = types.ModuleType("allauth.socialaccount.models")
+class _SocialAccountQuery:
+    def filter(self, **kwargs): return self
+    def only(self, *args): return self
+    def order_by(self, *args): return self
+    def first(self): return types.SimpleNamespace(provider="openid_connect")
+class SocialAccount: objects = _SocialAccountQuery()
+allauth_social_models.SocialAccount = SocialAccount
+sys.modules.update({
+    "allauth": allauth,
+    "allauth.socialaccount": allauth_social,
+    "allauth.socialaccount.models": allauth_social_models,
+})
+
 rf = types.ModuleType("rest_framework")
 rf_exc = types.ModuleType("rest_framework.exceptions")
 class APIException(Exception):
@@ -208,6 +224,8 @@ assert row.knox_digest == "digest-sso"
 assert getattr(sso_request, "tec_tac_session") is row
 assert len(AUDITS.rows) == 1
 assert AUDITS.rows[0].event_type == "session_created"
+assert AUDITS.rows[0].metadata["auth_method"] == "sso"
+assert AUDITS.rows[0].metadata["provider"] == "openid_connect"
 assert AUDITS.rows[0].session is row
 assert AUDITS.rows[0].username == "alice"
 assert AUDITS.rows[0].new_ip == "192.0.2.44"

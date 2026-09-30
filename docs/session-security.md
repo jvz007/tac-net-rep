@@ -338,7 +338,8 @@ Accepted decision AD-4 (30 Sep 2026): Tec-Tac follows Tactical's authentication 
 
 - Only accounts that Tactical reports as SSO-linked are exempt from Tec-Tac's local authenticator-code gate.
 - A successful SSO sign-in still enters the normal Tec-Tac session-security boundary and creates the normal session audit trail.
-- SSO sign-ins are audited; the identity provider owns MFA for that sign-in.
+- SSO sign-ins are audited; `session_created.metadata` records `auth_method: "sso"` and the linked allauth `provider`. The identity provider owns MFA for that sign-in.
+- Local/password sessions record `auth_method: "password"` and do not carry an SSO provider value.
 - Local/password users continue to follow Tec-Tac's local MFA policy.
 - Tactical's password sign-in remains unavailable for an SSO-linked account.
 
