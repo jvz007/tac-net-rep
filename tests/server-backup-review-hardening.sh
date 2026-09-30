@@ -64,3 +64,4 @@ finally:
     h.acquire_lock, h.list_destination, h.delete_destination = old_lock, old_list, old_delete
 print('[TEST] PASS backup review hardening')
 PY
+python3 "${ROOT}/tests/server-backup-capability-compat-1.15.189-1.py"

@@ -191,9 +191,16 @@ installer_discovered_paths = set(re.findall(
     install_text,
 ))
 # Every privileged installer target must participate in rollback coverage.
-known_uncovered_installer_paths = set()
+known_uncovered_installer_paths = {
+    # AD-3 removes the obsolete recovery-key helper. install.sh deletes this
+    # legacy path during upgrade; it is removal-only and is not a current
+    # privileged install target that restore rollback must snapshot.
+    Path("/usr/local/sbin/tec-tac-recovery-key"),
+}
 for raw in sorted(installer_discovered_paths):
     path = Path(raw)
+    if path in known_uncovered_installer_paths:
+        continue
     must(
         any(path == root or root in path.parents for root in rollback_roots),
         f"new privileged installer target is not covered by rollback snapshot: {path}",

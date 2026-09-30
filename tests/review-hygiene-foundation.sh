@@ -24,6 +24,7 @@ python3 "${ROOT}/tests/f11-tracker-closure-1.15.184.py"
 python3 "${ROOT}/tests/f8-sso-session-pipeline-1.15.185.py"
 python3 "${ROOT}/tests/f8-ad4-acceptance-1.15.187.py"
 python3 "${ROOT}/tests/d3-ad3-final-acceptance-1.15.188.py"
+python3 "${ROOT}/tests/server-backup-d3-destructive-restore-1.15.189.py"
 python3 "${ROOT}/tests/f9-f10-browser-contract-1.15.175.py"
 
 

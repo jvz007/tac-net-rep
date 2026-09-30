@@ -865,7 +865,7 @@ fi
 log "Installed Core housekeeping helper: ${HOUSEKEEPING_HELPER}"
 
 log "Verifying Core server-backup capability registration."
-VERIFY_SERVER_BACKUP_CODE="from tec_tac.capabilities import capability_status,get_capability; s=capability_status('core.server_backup',version='>=1,<2'); assert s['available'], s; p=get_capability('core.server_backup',version='>=1,<2'); assert all(hasattr(p,n) for n in ('create_backup','list_backups','restore_backup','validate_restore','apply_retention','store_secret','delete_secret')); print('TEC-TAC core.server_backup OK:', s['capability_version'], s['operations'])"
+VERIFY_SERVER_BACKUP_CODE="from tec_tac.capabilities import capability_status,get_capability; s=capability_status('core.server_backup',version='>=1.6.0,<2.0.0'); assert s['available'], s; p=get_capability('core.server_backup',version='>=1.6.0,<2.0.0'); assert all(hasattr(p,n) for n in ('create_backup','list_backups','restore_backup','validate_restore','apply_retention','store_secret','delete_secret')); print('TEC-TAC core.server_backup OK:', s['capability_version'], s['operations'])"
 if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_SERVER_BACKUP_CODE}\""; then
     fail "Core server-backup capability verification failed or timed out."
 fi

@@ -37,7 +37,9 @@ Tec-Tac Core exposes one narrow privileged recovery contract:
 
 ```text
 core.server_backup
-capability version 1.8.0
+capability version 1.9.0
+
+AD-3 keeps the capability on the 1.x compatibility line. The Backups module already consumes the stable operations and does not depend on the removed recovery-signer fields; the new archive hash and source-identity fields are additive for that consumer. Capability version 1.9.0 lets existing consumers pinned to `>=1.6.0,<2.0.0` continue to resolve the provider.
 ```
 
 Modules request typed backup, inventory, restore, retention, destination-validation and secret-store operations. They never receive arbitrary `sudo`, shell, executable-path or unrestricted filesystem access.
@@ -47,7 +49,7 @@ from tec_tac.capabilities import get_capability
 
 backup = get_capability(
     "core.server_backup",
-    version=">=1.4.0,<2.0.0",
+    version=">=1.6.0,<2.0.0",
 )
 ```
 
@@ -96,7 +98,9 @@ backup_class
 sha256
 installation_id
 server_name
-recovery_signer.key_id / recovery_signer.public_key_sha256
+created_at
+core_version
+hash_file
 size/timestamps/destination metadata
 ```
 

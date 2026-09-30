@@ -13,7 +13,6 @@ Tracker closure focus: D2, D3, L10, F4 and F11. Adds Tactical UI values to authe
 Tracker closure focus: D2, D3, L10, L15, L24 and L25. Final restore, backup-publication and Scheduler target-parity cleanup with behavioral regressions.
 Recovery-key import no longer follows the final import path or reads an unbounded source as root. Imported trust-key publication also fsyncs the trust directory.
 
-Regression: `tests/recovery-key-import-1.15.158.py`.
 
 
 ## 1.15.162-1

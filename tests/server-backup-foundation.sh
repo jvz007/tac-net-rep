@@ -6,7 +6,7 @@ fail(){ echo "[TEST] FAIL: $*" >&2; exit 1; }
 [[ -f "${ROOT}/framwork/tec_tac/server_backup.py" ]] || fail "Core server-backup provider missing"
 [[ -f "${ROOT}/scripts/server-backup-helper.py" ]] || fail "privileged server-backup helper missing"
 [[ -f "${ROOT}/docs/server-backup-capability.md" ]] || fail "server-backup developer contract missing"
-grep -q 'CAPABILITY_VERSION = "1.8.0"' "${ROOT}/framwork/tec_tac/server_backup.py" || fail "server-backup capability is not 1.7.0"
+grep -q 'CAPABILITY_VERSION = "1.9.0"' "${ROOT}/framwork/tec_tac/server_backup.py" || fail "server-backup capability is not 1.9.0"
 grep -q 'core.server_backup' "${ROOT}/framwork/tec_tac/server_backup.py" || fail "core.server_backup capability id missing"
 grep -q 'register_core_server_backup_capability' "${ROOT}/framwork/tec_tac/apps.py" || fail "Core server-backup capability is not registered by AppConfig"
 grep -q 'module_id in {"tec-tac", "core"}' "${ROOT}/framwork/tec_tac/capabilities.py" || fail "capability registry does not recognize Core-owned providers"
@@ -39,7 +39,7 @@ import tec_tac.capabilities as cap
 from tec_tac.server_backup import register_core_server_backup_capability, get_server_backup_provider
 cap._clear_capabilities_for_tests()
 reg=register_core_server_backup_capability()
-assert reg.id == "core.server_backup" and reg.module_id == "core" and reg.version == "1.8.0"
+assert reg.id == "core.server_backup" and reg.module_id == "core" and reg.version == "1.9.0"
 assert set(("create_backup","get_job_status","list_backups","restore_backup","apply_retention","validate_destination","validate_restore","store_secret","delete_secret")) <= set(reg.operations)
 assert "recovery_identity" not in reg.operations
 assert "trust_recovery_signer" not in reg.operations
