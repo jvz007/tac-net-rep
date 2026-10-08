@@ -86,4 +86,60 @@ assert "from .tactical_account_guard_fallback import install_tactical_account_gu
 assert "except Exception:" in apps_source
 assert "Tec-Tac precise Tactical account guard failed" in apps_source
 
+# 1.17.4: the reporting handover settles after every AppConfig.ready() has run, and never breaks start-up.
+events = []
+settle_state = {"fail": False}
+reporting = types.ModuleType("tec_tac.reporting")
+
+
+def settle_reporting_bridge():
+    events.append("settle")
+    if settle_state["fail"]:
+        raise RuntimeError("settle failed")
+    return {}
+
+
+reporting.settle_reporting_bridge = settle_reporting_bridge
+sys.modules["tec_tac.reporting"] = reporting
+
+
+def recording_populate(self, installed_apps=None):
+    events.append("populate")
+    return ["marker", *list(installed_apps or [])]
+
+
+state["failure"] = "registry"
+FakeApps.populate = recording_populate
+bootstrap.load_extensions()
+result = FakeApps.populate(django_apps, ["tactical.base"])
+assert events == ["populate", "settle"], events
+assert result[0] == "marker" and "tactical.base" in result, result
+# settle raising must not change the result or raise
+events.clear()
+settle_state["fail"] = True
+result = FakeApps.populate(django_apps, ["tactical.base"])
+assert events == ["populate", "settle"] and result[0] == "marker", (events, result)
+# no settle for another registry, or when no app list is passed
+events.clear()
+FakeApps.populate(object(), ["tactical.base"])
+FakeApps.populate(django_apps)
+assert events == ["populate", "populate"], events
+# a populate that raises does not settle
+events.clear()
+
+
+def failing_populate(self, installed_apps=None):
+    raise RuntimeError("populate failed")
+
+
+FakeApps.populate = failing_populate
+bootstrap.load_extensions()
+try:
+    FakeApps.populate(django_apps, ["tactical.base"])
+except RuntimeError:
+    pass
+else:
+    raise AssertionError("a failing populate must still raise")
+assert events == [], events
+
 print("startup-safety: PASS")

@@ -4,6 +4,16 @@ Tec-Tac modules register report-facing Django models here instead of importing
 ``ee.reporting`` internals. Core owns the compatibility bridge that keeps
 Tactical's in-memory allow-lists and query-schema endpoint synchronized while
 leaving Tactical tracked source and its native static schema untouched.
+
+1.17.4 (AD-15): Report Manager 0.3.0 owns the report-model registry
+(``reportmanager.registry``). This module is now a forwarding shim. The public names and
+shapes stay, so every caller keeps working. Core keeps its own registry as the single record
+of every registration. When Report Manager 0.3.0 or later is installed and enabled, Core
+stands down at start-up (it patches nothing), holds registrations pending, and forwards them
+to Report Manager once the capability is available. If the capability is not the owner of the
+bridge when every module has loaded, Core takes its bridge back, so no report model vanishes.
+
+1.17.4 also ships the row-scope hook: ``scoped_report_manager`` and ``model_row_scope``.
 """
 from __future__ import annotations
 
@@ -25,8 +35,34 @@ _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,159}$")
 _NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 
 
+REPORT_MANAGER_ID = "reportmanager"
+REPORT_MANAGER_MIN_VERSION = ">=0.3.0"
+REGISTRY_CAPABILITY = "reportmanager.registry"
+SHIM_SOURCE_ACTION = "reporting-shim"
+STATE_PENDING = "pending-report-manager"
+STATE_HIDDEN_UNAVAILABLE = "hidden-fields-unavailable"
+STATE_REPORT_MANAGER_ERROR = "report-manager-error"
+STATE_REPORT_MANAGER_UNAVAILABLE = "report-manager-unavailable"
+# Report Manager refusals that remove the registration and raise, and refusals that keep it.
+VALIDATION_STATES = frozenset({
+    "invalid", "duplicate", "not-owner", "native-model-clash", "unknown-provider",
+    "provider-disabled", "model-unavailable",
+})
+AVAILABILITY_STATES = frozenset({
+    "row-scope-unavailable", "bridge-unavailable", "core-bridge-active", STATE_HIDDEN_UNAVAILABLE,
+})
+
+
 class ReportingRegistrationError(ValueError):
-    """Invalid or conflicting reporting-model registration."""
+    """Invalid or conflicting reporting-model registration.
+
+    ``state`` is one stable word (1.17.4): invalid, duplicate, not-owner, native-model-clash,
+    unknown-provider, provider-disabled or model-unavailable.
+    """
+
+    def __init__(self, message: str = "", state: str = "invalid"):
+        super().__init__(message)
+        self.state = state
 
 
 @dataclass(frozen=True)
@@ -38,6 +74,7 @@ class ReportingModelRegistration:
     display_name: str = ""
     description: str = ""
     field_metadata: dict[str, Any] = field(default_factory=dict)
+    hidden_fields: tuple[str, ...] = ()
 
 
 _LOCK = threading.RLock()
@@ -49,6 +86,17 @@ _BRIDGE_INSTALLED = False
 _BRIDGE_ERROR = ""
 _ORIGINAL_QUERY_SCHEMA_GET = None
 _ORIGINAL_RESOLVE_MODEL = None
+# 1.17.4 handover state. _HANDOVER: Report Manager >= 0.3.0 was enabled at start-up, so Core did not patch
+# Tactical. _FALLBACK: Core took the bridge back at settle. _SETTLED: settle_reporting_bridge() has run.
+_HANDOVER = False
+_FALLBACK = False
+_SETTLED = False
+_REPORT_MANAGER_OWNS = False
+_HANDOVER_ERROR = ""
+_PENDING: set[str] = set()
+_FORWARDED: set[str] = set()
+_HELD: dict[str, tuple[str, str]] = {}
+_FIELD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 
 
 def _clean_id(value: Any, label: str) -> str:
@@ -63,6 +111,21 @@ def _clean_name(value: Any, label: str) -> str:
     if not _NAME_RE.fullmatch(text):
         raise ReportingRegistrationError(f"{label} must be a valid Django identifier.")
     return text
+
+
+def _clean_hidden(value: Any) -> tuple[str, ...]:
+    if value is None or value == ():
+        return ()
+    if isinstance(value, str) or not isinstance(value, (list, tuple, set, frozenset)):
+        raise ReportingRegistrationError("hidden_fields must be a list of field or property names.")
+    names: list[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if not _FIELD_RE.fullmatch(text):
+            raise ReportingRegistrationError(f"hidden_fields entry {item!r} is not a field or property name.")
+        if text not in names:
+            names.append(text)
+    return tuple(names)
 
 
 def _provider_status(module_id: str) -> dict[str, Any]:
@@ -128,6 +191,7 @@ def _native_model_names() -> set[str]:
 
 
 def _registration_status(registration: ReportingModelRegistration) -> dict[str, Any]:
+    """Core's own computed row for one registration (never calls Report Manager)."""
     provider = _provider_status(registration.module_id)
     state = provider.get("state") or "unavailable"
     reason = provider.get("reason")
@@ -139,10 +203,23 @@ def _registration_status(registration: ReportingModelRegistration) -> dict[str, 
             available = False
             state = "model-unavailable"
             reason = f"Django model {registration.app_label}.{registration.model} is not loaded."
+    with _LOCK:
+        forwarded = registration.id in _FORWARDED
+        pending = registration.id in _PENDING
+        held = _HELD.get(registration.id)
     if available and _BRIDGE_ERROR:
         available = False
         state = "bridge-unavailable"
         reason = _BRIDGE_ERROR
+    if available and pending:
+        # Handover: Report Manager has not taken this registration yet (1.17.4).
+        available = False
+        state, reason = held or (STATE_PENDING, _HANDOVER_ERROR or "Waiting for Report Manager to take this registration.")
+    elif available and registration.hidden_fields and not forwarded:
+        # Core's own bridge cannot hide columns, so it never serves a model that asks for hidden columns.
+        available = False
+        state = STATE_HIDDEN_UNAVAILABLE
+        reason = "Hidden columns can be enforced only by Report Manager's bridge; Core's bridge would expose them."
 
     fields = []
     if model_class is not None:
@@ -162,10 +239,42 @@ def _registration_status(registration: ReportingModelRegistration) -> dict[str, 
         "field_metadata": copy.deepcopy(registration.field_metadata),
         "fields": fields,
         "queryable_fields": fields,
+        "hidden_fields": list(registration.hidden_fields),
+        "forwarded": forwarded,
+        "row_scope": model_row_scope(registration.app_label, registration.model),
         "available": available,
         "state": "available" if available else state,
         "reason": reason,
     }
+
+
+def _registry_capability() -> tuple[dict | None, Any]:
+    """Return (capability status, provider) for reportmanager.registry. Never raises: an error reads as unavailable."""
+    try:
+        from .capabilities import capability_status, get_capability
+
+        status = capability_status(REGISTRY_CAPABILITY)
+        provider = get_capability(REGISTRY_CAPABILITY, required=False) if status.get("available") else None
+        return status, provider
+    except Exception:
+        logger.exception("Unable to read the reportmanager.registry capability")
+        return None, None
+
+
+def _live_row(registration: ReportingModelRegistration, live: dict[str, Any] | None) -> dict[str, Any]:
+    """The row of a forwarded registration: Report Manager's live row, with Core's keys added."""
+    if not isinstance(live, dict):
+        row = _registration_status(registration)
+        row.update(
+            available=False, state=STATE_REPORT_MANAGER_UNAVAILABLE,
+            reason="Report Manager's registry is not available to report this registration.",
+        )
+        return row
+    row = dict(live)
+    row["forwarded"] = True
+    row.setdefault("hidden_fields", list(registration.hidden_fields))
+    row.setdefault("row_scope", model_row_scope(registration.app_label, registration.model))
+    return row
 
 
 def reporting_model_status(reporting_id: str) -> dict[str, Any]:
@@ -173,6 +282,7 @@ def reporting_model_status(reporting_id: str) -> dict[str, Any]:
     key = _clean_id(reporting_id, "reporting_id")
     with _LOCK:
         registration = _REGISTRY.get(key)
+        forwarded = key in _FORWARDED
     if registration is None:
         return {
             "id": key,
@@ -180,23 +290,48 @@ def reporting_model_status(reporting_id: str) -> dict[str, Any]:
             "state": "missing",
             "reason": f"Reporting model {key!r} is not registered.",
         }
+    if forwarded:
+        _, provider = _registry_capability()
+        live = None
+        if provider is not None:
+            try:
+                live = provider.model_status(key)
+            except Exception:
+                logger.exception("Report Manager could not report reporting model %s", key)
+        return _live_row(registration, live)
     return _registration_status(registration)
 
 
 def list_reporting_models(*, include_unavailable: bool = True) -> list[dict[str, Any]]:
-    """List registered Tec-Tac reporting models and their live provider state."""
+    """List registered Tec-Tac reporting models and their live provider state.
+
+    Forwarded registrations (1.17.4) return Report Manager's live row; pending ones return Core's computed row.
+    """
     with _LOCK:
         registrations = sorted(_REGISTRY.values(), key=lambda item: item.id)
-    rows = [_registration_status(item) for item in registrations]
+        forwarded = set(_FORWARDED)
+    live_rows: dict[str, dict[str, Any]] = {}
+    if forwarded:
+        _, provider = _registry_capability()
+        if provider is not None:
+            try:
+                live_rows = {str(row.get("id")): row for row in provider.list_models(include_unavailable=True)}
+            except Exception:
+                logger.exception("Report Manager could not list reporting models")
+    rows = [
+        _live_row(item, live_rows.get(item.id)) if item.id in forwarded else _registration_status(item)
+        for item in registrations
+    ]
     if not include_unavailable:
         rows = [row for row in rows if row["available"]]
     return rows
 
 
 def _active_pairs() -> tuple[tuple[str, str], ...]:
+    """What Core's own bridge exposes: available registrations that Report Manager has not taken."""
     rows = []
     with _LOCK:
-        registrations = list(_REGISTRY.values())
+        registrations = [item for item in _REGISTRY.values() if item.id not in _FORWARDED and item.id not in _PENDING]
     for item in registrations:
         if _registration_status(item)["available"]:
             rows.append((item.model, item.app_label))
@@ -220,6 +355,106 @@ def sync_tactical_reporting_models() -> dict[str, Any]:
     return {"native": len(native), "tec_tac": len(active), "total": len(combined)}
 
 
+def _core_serves() -> bool:
+    """True when Core's own bridge serves registrations: no handover, or Core took the bridge back."""
+    return (not _HANDOVER) or _FALLBACK
+
+
+def _sync_core_bridge(label: str) -> None:
+    """Resynchronize Tactical's allow-lists, but only while Core's own bridge is the one that serves."""
+    if not _core_serves():
+        return
+    try:
+        sync_tactical_reporting_models()
+    except Exception as exc:
+        logger.exception("Unable to synchronize Tactical reporting model %s", label)
+        _set_bridge_error(exc)
+
+
+def _drop_registration(public_id: str) -> ReportingModelRegistration | None:
+    with _LOCK:
+        registration = _REGISTRY.pop(public_id, None)
+        if registration is not None:
+            _PAIR_INDEX.pop((registration.app_label.lower(), registration.model.lower()), None)
+            _MODEL_INDEX.pop(registration.model.lower(), None)
+        _PENDING.discard(public_id)
+        _FORWARDED.discard(public_id)
+        _HELD.pop(public_id, None)
+    return registration
+
+
+def _forward_registration(registration: ReportingModelRegistration, provider) -> bool:
+    """Forward one registration to Report Manager. True when it took it.
+
+    A validation refusal removes the registration and raises ReportingRegistrationError with the state. An
+    availability refusal (or any other failure) keeps the registration pending, logs a warning and returns False.
+    """
+    global _REPORT_MANAGER_OWNS
+    from .capabilities import build_operation_context
+
+    context = build_operation_context(source_module=registration.module_id, source_action=SHIM_SOURCE_ACTION)
+    try:
+        provider.register_model(
+            module_id=registration.module_id,
+            app_label=registration.app_label,
+            model=registration.model,
+            reporting_id=registration.id,
+            display_name=registration.display_name or None,
+            description=registration.description or None,
+            field_metadata=copy.deepcopy(registration.field_metadata),
+            hidden_fields=list(registration.hidden_fields) or None,
+            context=context,
+        )
+    except Exception as exc:
+        state = str(getattr(exc, "state", "") or "")
+        if state in VALIDATION_STATES:
+            _drop_registration(registration.id)
+            raise ReportingRegistrationError(str(exc), state) from exc
+        state = state if state in AVAILABILITY_STATES else STATE_REPORT_MANAGER_ERROR
+        logger.warning(
+            "Report Manager did not take reporting model %s (%s): %s", registration.id, state, exc,
+        )
+        with _LOCK:
+            _HELD[registration.id] = (state, str(exc))
+        return False
+    with _LOCK:
+        _PENDING.discard(registration.id)
+        _HELD.pop(registration.id, None)
+        _FORWARDED.add(registration.id)
+        _REPORT_MANAGER_OWNS = True
+    return True
+
+
+def _forward_pending(*, raise_for: str | None = None) -> None:
+    """Replay pending registrations to Report Manager in id order, when its capability is available.
+
+    A validation refusal for ``raise_for`` is raised after the rest have been replayed. For any other
+    registration it is logged, because its caller is gone.
+    """
+    with _LOCK:
+        ids = sorted(_PENDING)
+    if not ids:
+        return
+    _, provider = _registry_capability()
+    if provider is None:
+        return
+    pending_error = None
+    for public_id in ids:
+        with _LOCK:
+            registration = _REGISTRY.get(public_id)
+        if registration is None:
+            continue
+        try:
+            _forward_registration(registration, provider)
+        except ReportingRegistrationError as exc:
+            if public_id == raise_for:
+                pending_error = exc
+            else:
+                logger.warning("Report Manager refused reporting model %s (%s): %s", public_id, exc.state, exc)
+    if pending_error is not None:
+        raise pending_error
+
+
 def register_reporting_model(
     *,
     module_id: str,
@@ -229,12 +464,18 @@ def register_reporting_model(
     display_name: str | None = None,
     description: str | None = None,
     field_metadata: dict[str, Any] | None = None,
+    hidden_fields: list[str] | None = None,
 ) -> dict[str, Any]:
     """Register one module-owned Django model with Tactical Report Manager.
 
-    Registration is process-local by design and should be called from the
-    provider module/reportset ``AppConfig.ready()``. Module lifecycle reloads
-    rebuild the registry from the currently enabled module set.
+    Registration is process-local by design and should be called from the provider module/reportset
+    ``AppConfig.ready()``. Module lifecycle reloads rebuild the registry from the currently enabled module set.
+
+    1.17.4: ``hidden_fields`` names columns Report Manager must hide and refuse; Core's own bridge cannot, so a
+    model that asks for them is served only through Report Manager. When Report Manager owns the registry the
+    call is held pending until its capability is available, then forwarded (see ``settle_reporting_bridge``).
+    A validation refusal raises ReportingRegistrationError with a ``state``. An availability refusal keeps the
+    registration and returns the row with that state.
     """
     module_key = _clean_id(module_id, "module_id")
     app_key = _clean_name(app_label, "app_label")
@@ -243,20 +484,22 @@ def register_reporting_model(
     metadata = field_metadata or {}
     if not isinstance(metadata, dict):
         raise ReportingRegistrationError("field_metadata must be an object when provided.")
+    hidden = _clean_hidden(hidden_fields)
 
     provider = _provider_status(module_key)
     if not provider.get("installed"):
-        raise ReportingRegistrationError(f"Unknown Tec-Tac provider module: {module_key}")
+        raise ReportingRegistrationError(f"Unknown Tec-Tac provider module: {module_key}", "unknown-provider")
     if not provider.get("enabled"):
-        raise ReportingRegistrationError(f"Tec-Tac provider module {module_key!r} is disabled.")
+        raise ReportingRegistrationError(f"Tec-Tac provider module {module_key!r} is disabled.", "provider-disabled")
     if _resolve_model_class(app_key, model_name) is None:
-        raise ReportingRegistrationError(f"Django model {app_key}.{model_name} is not loaded.")
+        raise ReportingRegistrationError(f"Django model {app_key}.{model_name} is not loaded.", "model-unavailable")
 
     pair = (app_key.lower(), model_name.lower())
     model_key = model_name.lower()
     if model_key in _native_model_names():
         raise ReportingRegistrationError(
-            f"Reporting model name {model_name!r} conflicts with a Tactical native reporting model."
+            f"Reporting model name {model_name!r} conflicts with a Tactical native reporting model.",
+            "native-model-clash",
         )
 
     registration = ReportingModelRegistration(
@@ -267,29 +510,38 @@ def register_reporting_model(
         display_name=str(display_name or "").strip(),
         description=str(description or "").strip(),
         field_metadata=copy.deepcopy(metadata),
+        hidden_fields=hidden,
     )
     with _LOCK:
         if public_id in _REGISTRY:
-            raise ReportingRegistrationError(f"Duplicate public reporting ID: {public_id}")
+            raise ReportingRegistrationError(f"Duplicate public reporting ID: {public_id}", "duplicate")
         if pair in _PAIR_INDEX:
             raise ReportingRegistrationError(
-                f"Duplicate reporting model registration: {app_key}.{model_name}"
+                f"Duplicate reporting model registration: {app_key}.{model_name}", "duplicate"
             )
         if model_key in _MODEL_INDEX:
             other = _REGISTRY[_MODEL_INDEX[model_key]]
             raise ReportingRegistrationError(
                 f"Reporting model name {model_name!r} is already registered by {other.module_id!r}; "
-                "Tactical Report Manager model names must be globally unique."
+                "Tactical Report Manager model names must be globally unique.",
+                "duplicate",
             )
         _REGISTRY[public_id] = registration
         _PAIR_INDEX[pair] = public_id
         _MODEL_INDEX[model_key] = public_id
+        handover = _HANDOVER and not _FALLBACK
+        if handover:
+            _PENDING.add(public_id)
 
-    try:
-        sync_tactical_reporting_models()
-    except Exception as exc:
-        logger.exception("Unable to synchronize Tactical reporting model registration %s", public_id)
-        _set_bridge_error(exc)
+    if handover:
+        _forward_pending(raise_for=public_id)
+        return reporting_model_status(public_id)
+    if hidden:
+        logger.warning(
+            "Reporting model %s asks for hidden columns, which Core's own bridge cannot enforce; it is not served.",
+            public_id,
+        )
+    _sync_core_bridge(f"registration {public_id}")
     return reporting_model_status(public_id)
 
 
@@ -300,7 +552,10 @@ def unregister_reporting_model(
     app_label: str | None = None,
     model: str | None = None,
 ) -> bool:
-    """Remove one registration and immediately resynchronize Tactical runtime state."""
+    """Remove one registration and immediately resynchronize Tactical runtime state.
+
+    A registration that was forwarded to Report Manager is removed there too.
+    """
     key = _clean_id(reporting_id, "reporting_id") if reporting_id else None
     with _LOCK:
         if key is None:
@@ -315,14 +570,23 @@ def unregister_reporting_model(
                 key = candidate
         if not key or key not in _REGISTRY:
             return False
-        registration = _REGISTRY.pop(key)
-        _PAIR_INDEX.pop((registration.app_label.lower(), registration.model.lower()), None)
-        _MODEL_INDEX.pop(registration.model.lower(), None)
-    try:
-        sync_tactical_reporting_models()
-    except Exception as exc:
-        logger.exception("Unable to synchronize Tactical reporting model unregistration %s", key)
-        _set_bridge_error(exc)
+        was_forwarded = key in _FORWARDED
+    registration = _drop_registration(key)
+    if was_forwarded and registration is not None:
+        _, provider = _registry_capability()
+        if provider is None:
+            logger.warning("Report Manager is not available to remove reporting model %s", key)
+        else:
+            try:
+                from .capabilities import build_operation_context
+
+                provider.unregister_model(
+                    key,
+                    context=build_operation_context(source_module=registration.module_id, source_action=SHIM_SOURCE_ACTION),
+                )
+            except Exception:
+                logger.exception("Report Manager could not remove reporting model %s", key)
+    _sync_core_bridge(f"unregistration {key}")
     return True
 
 
@@ -372,6 +636,9 @@ def _traverse_model_fields(*, model, prefix: str = "", depth: int = 3):
 
 
 def _schema_entry(registration: ReportingModelRegistration) -> dict[str, Any] | None:
+    with _LOCK:
+        if registration.id in _FORWARDED or registration.id in _PENDING:
+            return None  # Report Manager serves these (1.17.4); Core's schema never lists them
     if not _registration_status(registration)["available"]:
         return None
     model_class = _resolve_model_class(registration.app_label, registration.model)
@@ -429,11 +696,36 @@ def _set_bridge_error(exc: Exception) -> None:
     _BRIDGE_ERROR = f"{exc.__class__.__name__}: {exc}"
 
 
-def install_tactical_reporting_bridge() -> dict[str, Any]:
-    """Install the Core compatibility bridge once per Django process."""
-    global _BRIDGE_INSTALLED, _BRIDGE_ERROR, _ORIGINAL_QUERY_SCHEMA_GET, _ORIGINAL_RESOLVE_MODEL
+def _report_manager_takeover() -> bool:
+    """True when Report Manager is installed as an extension, enabled, and version 0.3.0 or later (AD-15)."""
+    provider = _provider_status(REPORT_MANAGER_ID)
+    if not (provider.get("installed") and provider.get("enabled")):
+        return False
+    try:
+        from .module_state import version_satisfies
+
+        return bool(version_satisfies(str(provider.get("version") or "0.0.0"), REPORT_MANAGER_MIN_VERSION))
+    except Exception:
+        logger.exception("Unable to compare the Report Manager version; Core keeps its own bridge")
+        return False
+
+
+def install_tactical_reporting_bridge(force: bool = False) -> dict[str, Any]:
+    """Install the Core compatibility bridge once per Django process.
+
+    1.17.4: when Report Manager 0.3.0 or later is installed and enabled, Core stands down. It patches nothing, records
+    ``handover`` and reports ``installed`` false with no ``_tec_tac_reporting_bridge`` marker, which is what Report
+    Manager reads. ``force=True`` installs anyway; ``settle_reporting_bridge`` uses it to take the bridge back.
+    """
+    global _BRIDGE_INSTALLED, _BRIDGE_ERROR, _ORIGINAL_QUERY_SCHEMA_GET, _ORIGINAL_RESOLVE_MODEL, _HANDOVER
     if _BRIDGE_INSTALLED:
         return reporting_bridge_status()
+    if not force:
+        if _report_manager_takeover():
+            _HANDOVER = True
+            logger.info("Report Manager %s or later is enabled; Core's reporting bridge stands down.", REPORT_MANAGER_MIN_VERSION)
+            return reporting_bridge_status()
+        _HANDOVER = False
     try:
         from django.http import JsonResponse
         from ee.reporting import constants as reporting_constants
@@ -488,18 +780,269 @@ def install_tactical_reporting_bridge() -> dict[str, Any]:
     return reporting_bridge_status()
 
 
+def _take_bridge_back(reason: str) -> None:
+    """Fallback (1.17.4): Report Manager does not own the bridge, so Core installs its own again.
+
+    Pending registrations that carry hidden_fields are refused (state hidden-fields-unavailable), because Core's
+    bridge cannot hide columns. Every other pending registration is served by Core's bridge as before.
+    """
+    global _FALLBACK
+    with _LOCK:
+        _FALLBACK = True
+        pending = sorted(_PENDING)
+        _PENDING.clear()
+        _HELD.clear()
+        refused = [_REGISTRY[item].id for item in pending if item in _REGISTRY and _REGISTRY[item].hidden_fields]
+    logger.warning("Core takes its reporting bridge back: %s", reason)
+    for public_id in refused:
+        logger.warning("Reporting model %s is refused: it carries hidden_fields and Core's bridge cannot hide columns.", public_id)
+    install_tactical_reporting_bridge(force=True)
+
+
+def settle_reporting_bridge() -> dict[str, Any]:
+    """Settle the handover once every AppConfig.ready() has run (called after Apps.populate, in every process).
+
+    Report Manager owns the bridge when its ``reportmanager.registry`` capability is available (its health is true
+    only then): pending registrations are replayed in id order. When the capability is absent, or reports mode
+    ``core-bridge-active`` or ``unavailable``, Core takes its bridge back. When it reports mode ``report-manager``
+    but is unhealthy for another reason, nothing changes and the status shows the error, so two bridges never
+    patch the same names.
+    """
+    global _SETTLED, _HANDOVER_ERROR
+    with _LOCK:
+        if _SETTLED:
+            return reporting_bridge_status()
+        _SETTLED = True
+        handover = _HANDOVER and not _FALLBACK
+    if not handover:
+        return reporting_bridge_status()
+    status, provider = _registry_capability()
+    if provider is not None:
+        _forward_pending()
+        return reporting_bridge_status()
+    health = (status or {}).get("health") if isinstance(status, dict) else None
+    mode = health.get("mode") if isinstance(health, dict) else None
+    if status is not None and status.get("state") == "unhealthy" and mode == "report-manager":
+        _HANDOVER_ERROR = str(status.get("reason") or "Report Manager reports its bridge unhealthy.")
+        logger.error("Report Manager owns the reporting bridge but is unhealthy: %s", _HANDOVER_ERROR)
+        return reporting_bridge_status()
+    detail = (status or {}).get("reason") or (status or {}).get("state") or "capability status could not be read"
+    _take_bridge_back(f"reportmanager.registry is not the owner of the bridge ({detail})")
+    return reporting_bridge_status()
+
+
 def reporting_bridge_status() -> dict[str, Any]:
+    """Public bridge status. Cheap, and it never calls Report Manager (Report Manager reads it back)."""
     native = _native_models()
-    active = list_reporting_models(include_unavailable=False)
+    with _LOCK:
+        registrations = sorted(_REGISTRY.values(), key=lambda item: item.id)
+        forwarded = sorted(_FORWARDED)
+        pending = sorted(_PENDING)
+    served = [item for item in registrations if item.id not in _FORWARDED and item.id not in _PENDING]
+    core_active = [item for item in served if _registration_status(item)["available"]]
+    active_count = len(core_active) + len(forwarded)
+    if _core_serves():
+        owner = "core"
+    else:
+        owner = "reportmanager" if _REPORT_MANAGER_OWNS else "pending"
+    enforced, unscoped = [], []
+    for item in registrations:
+        (enforced if model_row_scope(item.app_label, item.model)["enforced"] else unscoped).append(item.id)
     return {
         "available": bool(_BRIDGE_INSTALLED and not _BRIDGE_ERROR),
         "installed": bool(_BRIDGE_INSTALLED),
-        "error": _BRIDGE_ERROR or None,
+        "error": _BRIDGE_ERROR or _HANDOVER_ERROR or None,
         "native_models": len(native),
-        "tec_tac_models": len(active),
-        "total_models": len(native) + len(active),
+        "tec_tac_models": active_count,
+        "total_models": len(native) + active_count,
         "dynamic_schema": bool(_BRIDGE_INSTALLED and not _BRIDGE_ERROR),
+        "owner": owner,
+        "handover": bool(_HANDOVER),
+        "fallback": bool(_FALLBACK),
+        "forwarded_models": len(forwarded),
+        "pending_models": len(pending),
+        "row_scope_enforced": True,
+        "row_scope_models": {"enforced": enforced, "unscoped": unscoped},
     }
+
+
+# ----------------------------------------------------------------------------------------------
+# Row scope hook (1.17.4)
+#
+# Tactical's report engine scopes a query by the person's clients and sites only when the model's manager has
+# ``filter_by_role`` (ee/reporting/utils.py build_queryset). A registered model has no such method, so a scoped
+# person would see every row. ``scoped_report_manager`` is the manager a module adopts. Core cannot attach it to a
+# module's model after the fact, so the module declares it. Tactical falls back to an UNSCOPED queryset when
+# ``filter_by_role`` raises, so the Core implementation never raises: any failure returns no rows.
+# ----------------------------------------------------------------------------------------------
+
+_SCOPE_SEGMENT = r"[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)*"
+_SCOPE_PATH_RE = re.compile(rf"^{_SCOPE_SEGMENT}(?:__{_SCOPE_SEGMENT})*$")
+_SCOPE_MANAGER_CLASS = None
+
+
+def _clean_scope_path(value: Any, label: str) -> str | None:
+    if value is None:
+        return None
+    text = value.strip() if isinstance(value, str) else ""
+    if not text or len(text) > 200 or not _SCOPE_PATH_RE.fullmatch(text):
+        raise ReportingRegistrationError(
+            f"{label} must be an ORM lookup path such as 'client_id' or 'agent__site__client_id'."
+        )
+    return text
+
+
+def scope_filter_spec(
+    ids: dict[str, Any], *, client_path: str | None, site_path: str | None, include_unassigned: bool = False
+) -> dict[str, Any]:
+    """Pure decision logic: what a report model's rows look like to one person.
+
+    ``ids`` is ``report_scope_ids(user)``. Returns ``{"mode": "all" | "none" | "filter", "clauses": [(path, ids)],
+    "unassigned": [path]}``. A row matches when its client path is in the granted client ids, or its site path is in
+    the visible site ids, or (``include_unassigned``) every declared path is null. A model that declares neither
+    path gives no rows to a scoped person (fail closed).
+    """
+    if ids.get("unrestricted"):
+        return {"mode": "all", "clauses": [], "unassigned": []}
+    if ids.get("denied") or (not client_path and not site_path):
+        return {"mode": "none", "clauses": [], "unassigned": []}
+    client_ids = sorted(ids.get("client_ids") or ())
+    site_ids = sorted(ids.get("site_ids") or ())
+    clauses = []
+    if client_path and client_ids:
+        clauses.append((client_path, client_ids))
+    if site_path and site_ids:
+        clauses.append((site_path, site_ids))
+    unassigned = [path for path in (client_path, site_path) if path] if include_unassigned else []
+    if not clauses and not unassigned:
+        return {"mode": "none", "clauses": [], "unassigned": []}
+    return {"mode": "filter", "clauses": clauses, "unassigned": unassigned}
+
+
+def _apply_scope_spec(queryset, spec: dict[str, Any]):
+    if spec["mode"] == "all":
+        return queryset
+    if spec["mode"] == "none":
+        return queryset.none()
+    from django.db.models import Q
+
+    condition = Q()
+    for path, values in spec["clauses"]:
+        condition |= Q(**{f"{path}__in": list(values)})
+    if spec["unassigned"]:
+        unassigned = Q()
+        for path in spec["unassigned"]:
+            unassigned &= Q(**{f"{path}__isnull": True})
+        condition |= unassigned
+    return queryset.filter(condition)
+
+
+def _scoped_queryset(queryset, user, *, client_path, site_path, include_unassigned):
+    try:
+        from .resources_adapter import report_scope_ids
+
+        spec = scope_filter_spec(
+            report_scope_ids(user), client_path=client_path, site_path=site_path, include_unassigned=include_unassigned
+        )
+        return _apply_scope_spec(queryset, spec)
+    except Exception:
+        # Tactical treats a raised filter_by_role as "no scope". Fail closed instead.
+        logger.exception("Tec-Tac report row scope failed; returning no rows")
+        return queryset.none()
+
+
+def _scoped_manager_class():
+    global _SCOPE_MANAGER_CLASS
+    if _SCOPE_MANAGER_CLASS is not None:
+        return _SCOPE_MANAGER_CLASS
+    from django.db import models
+
+    class ScopedReportManager(models.Manager):
+        """Manager whose ``filter_by_role(user)`` limits rows to the person's clients and sites."""
+
+        _tec_tac_scoped_report_manager = True
+
+        def __init__(self, client_field=None, site_field=None, include_unassigned=False):
+            super().__init__()
+            self.client_field = client_field
+            self.site_field = site_field
+            self.include_unassigned = bool(include_unassigned)
+
+        def filter_by_role(self, user):
+            return _scoped_queryset(
+                self.get_queryset(), user,
+                client_path=self.client_field, site_path=self.site_field, include_unassigned=self.include_unassigned,
+            )
+
+    _SCOPE_MANAGER_CLASS = ScopedReportManager
+    return _SCOPE_MANAGER_CLASS
+
+
+def scoped_report_manager(*, client: str | None = None, site: str | None = None, include_unassigned: bool = False):
+    """Return a Django manager that scopes a report model's rows by client and site.
+
+    Declare it on the report-facing model: ``objects = scoped_report_manager(client="client_id", site="site_id")``.
+    ``client`` and ``site`` are ORM lookup paths (for example ``agent__site__client_id``). Its
+    ``filter_by_role(user)`` mirrors Tactical's rules: a superuser, or a role with neither can_view_clients nor
+    can_view_sites, sees every row; no role sees none; otherwise a row is visible when its client path is in the
+    explicitly granted client ids or its site path is in the visible site ids (granted sites plus the sites of
+    granted clients). A row with no client or site is hidden unless ``include_unassigned`` is true. A model that
+    declares neither path shows no rows to a scoped person.
+    """
+    if not isinstance(include_unassigned, bool):
+        raise ReportingRegistrationError("include_unassigned must be true or false.")
+    return _scoped_manager_class()(
+        _clean_scope_path(client, "client"), _clean_scope_path(site, "site"), include_unassigned
+    )
+
+
+def _path_resolves(model_class, path: str) -> bool:
+    from django.core.exceptions import FieldDoesNotExist
+
+    current = model_class
+    parts = path.split("__")
+    for index, part in enumerate(parts):
+        try:
+            model_field = current._meta.get_field(part)
+        except FieldDoesNotExist:
+            return False
+        if index < len(parts) - 1:
+            related = getattr(model_field, "related_model", None)
+            if related is None or isinstance(related, str) or not getattr(model_field, "concrete", False):
+                return False
+            current = related
+        elif not getattr(model_field, "concrete", False):
+            return False
+    return True
+
+
+def model_row_scope(app_label: str, model: str) -> dict[str, Any]:
+    """Whether a model's rows are scoped by Core's hook.
+
+    ``enforced`` is true only when ``Model.objects.filter_by_role`` is Core's scoped implementation (not overridden)
+    and the declared client or site path resolves on the model. ``source`` is ``core`` (Core's manager), ``model``
+    (a manager with its own filter_by_role, which Core cannot vouch for) or null (none).
+    """
+    result = {"enforced": False, "source": None, "client_field": None, "site_field": None, "include_unassigned": False}
+    model_class = _resolve_model_class(app_label, model)
+    if model_class is None:
+        return result
+    manager = getattr(model_class, "objects", None)
+    if not callable(getattr(manager, "filter_by_role", None)):
+        return result
+    if not getattr(manager, "_tec_tac_scoped_report_manager", False):
+        result["source"] = "model"
+        return result
+    result["source"] = "core"
+    if getattr(type(manager), "filter_by_role", None) is not _scoped_manager_class().filter_by_role:
+        result["source"] = "model"  # a subclass replaced Core's filter_by_role
+        return result
+    client_path = getattr(manager, "client_field", None)
+    site_path = getattr(manager, "site_field", None)
+    result.update(client_field=client_path, site_field=site_path, include_unassigned=bool(getattr(manager, "include_unassigned", False)))
+    paths = [path for path in (client_path, site_path) if path]
+    result["enforced"] = bool(paths) and all(_path_resolves(model_class, path) for path in paths)
+    return result
 
 
 def _clear_reporting_registry_for_tests() -> None:
@@ -508,3 +1051,6 @@ def _clear_reporting_registry_for_tests() -> None:
         _REGISTRY.clear()
         _PAIR_INDEX.clear()
         _MODEL_INDEX.clear()
+        _PENDING.clear()
+        _FORWARDED.clear()
+        _HELD.clear()

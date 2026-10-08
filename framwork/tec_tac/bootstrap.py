@@ -40,6 +40,16 @@ def load_extensions():
                 for app_config in plugin.django_apps:
                     if app_config not in installed_apps:
                         installed_apps.append(app_config)
-        return original_populate(self, installed_apps)
+        result = original_populate(self, installed_apps)
+        if self is django_apps and installed_apps is not None:
+            # 1.17.4: every AppConfig.ready() has run, in any process (web, celery, shell). Settle the reporting
+            # handover here: replay pending registrations to Report Manager, or take Core's bridge back.
+            try:
+                from tec_tac.reporting import settle_reporting_bridge
+
+                settle_reporting_bridge()
+            except Exception:
+                logger.exception("Tec-Tac reporting handover could not settle; Tactical starts regardless")
+        return result
     tec_tac_populate._tec_tac_extension_loader = True
     Apps.populate = tec_tac_populate

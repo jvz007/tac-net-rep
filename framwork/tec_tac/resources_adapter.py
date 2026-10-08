@@ -95,6 +95,31 @@ def tactical_scope_unrestricted(*, user) -> bool:
     return _role_scope_unrestricted(user=user)
 
 
+def report_scope_ids(user) -> dict[str, object]:
+    """Client and site ids a person may see in report models (1.17.4, the reporting row-scope hook).
+
+    A light helper: it does not load the agent list the way ``scheduler_scope_snapshot`` does. ``client_ids`` are the
+    explicitly granted clients. ``site_ids`` are the sites Tactical's own role scope shows (granted sites plus the
+    sites of granted clients). ``unrestricted`` follows ``_role_scope_unrestricted``. No role, or no user, sees none and
+    carries ``denied`` true, so even rows with no client or site stay hidden.
+    """
+    role = _role_for_user(user)
+    if _role_scope_unrestricted(user=user, role=role):
+        return {"unrestricted": True, "client_ids": frozenset(), "site_ids": frozenset()}
+    if role is None:
+        return {"unrestricted": False, "client_ids": frozenset(), "site_ids": frozenset(), "denied": True}
+    _, Site, _ = _models()
+    client_relation = getattr(role, "can_view_clients", None)
+    if client_relation is not None and hasattr(client_relation, "values_list"):
+        client_ids = frozenset(int(v) for v in client_relation.values_list("pk", flat=True))
+    else:
+        client_ids = frozenset()
+    site_ids = frozenset(
+        int(v) for v in _scope_queryset(Site.objects.all(), user=user, trusted=False).values_list("pk", flat=True)
+    )
+    return {"unrestricted": False, "client_ids": client_ids, "site_ids": site_ids}
+
+
 def scheduler_scope_snapshot(*, user) -> dict[str, object]:
     """Resolve Scheduler-visible Tactical scope once for a request."""
     role = _role_for_user(user)

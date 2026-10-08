@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """1.17.3 regression: branch source online status.
 
-A branch source no longer fetches GitHub's latest release (latest_release is null), and when no install
+A branch source leaves latest_release null (1.17.4 amended: the stable release now arrives as stable_release), and when no install
 recorded a commit the branch state falls back to comparing VERSION files (CQ11). The stage contract entry
 cannot drift from the view. Django is not installed on the development PC, so the real system_update.py is
 loaded against stubs, as tests/update-source-1.17.2.py does. contracts.py and views.py are read by AST.
@@ -108,24 +108,27 @@ def release_calls():
     return [u for u in GH["calls"] if u.endswith("/releases/latest") or "/commits/" in u]
 
 
-# ------------------------------------------------------------------ item 1: no release call for a branch source
+# ------------------------------------------------------------------ item 1: latest_release is null for a branch source
+# 1.17.4 amendment: the 1.17.3 version asserted that no release call was made and the release cache was untouched. From
+# 1.17.4 the stable release is fetched as the secondary stable_release (tests/update-source-1.17.4.py covers it in full);
+# latest_release stays null.
 OLD_KEYS = {"component", "repository", "installed_version", "latest_release", "checked_at", "release_error", "cache"}
 GH["calls"].clear()
 out = su.online_status("framework", force=True, source=BRANCH)
-must(release_calls() == [], f"a branch source must not call releases or commits: {GH['calls']}")
-must(out["latest_release"] is None and out["release_error"] is None and out["checked_at"] is None, out)
-must(OLD_KEYS | {"source", "branch", "branch_error"} == set(out), set(out))
+must(len(release_calls()) == 2, f"1.17.4: a branch source fetches the stable release once: {GH['calls']}")
+must(out["latest_release"] is None and out["release_error"] is None, out)
+must(out["stable_release"]["tag"] == "v1.17.1" and out["checked_at"] is not None, out)
+must(OLD_KEYS | {"source", "branch", "branch_error", "stable_release"} == set(out), set(out))
 must(out["component"] == "framework" and out["repository"] == REPO and out["installed_version"] == "1.17.2", out)
-must(out["cache"] == {"hit": False, "stale": False, "ttl_hours": 24} and out["source"] == BRANCH and out["branch_error"] is None, out)
-must(not su.RELEASE_CACHE.is_file() or "framework" not in json.loads(su.RELEASE_CACHE.read_text(encoding="utf-8"))["components"],
-     "a branch check must not write the release cache")
-# A cached release is not read either: seed one, the branch answer still has no release.
+must(out["source"] == BRANCH and out["branch_error"] is None, out)
+must(out["cache"] == {"hit": False, "stale": False, "ttl_hours": 24}, out["cache"])
+# A cached release is read under a branch source from 1.17.4 on: seed one, the answer carries it as stable_release.
 doc = json.loads(su.RELEASE_CACHE.read_text(encoding="utf-8"))
 doc["components"]["framework"] = {"repository": REPO, "checked_at": datetime.now(timezone.utc).isoformat(),
-                                  "release": {"tag": "v9.9.9", "commit": SHA_B}}
+                                  "latest_release": {"tag": "v9.9.9", "commit": SHA_B}}
 su.RELEASE_CACHE.write_text(json.dumps(doc), encoding="utf-8")
 out = su.online_status("framework", source=BRANCH)
-must(out["latest_release"] is None, "the release cache must not be read for a branch source")
+must(out["latest_release"] is None and out["stable_release"]["tag"] == "v9.9.9", "the cached release is the secondary stable_release")
 doc = json.loads(su.RELEASE_CACHE.read_text(encoding="utf-8"))
 must("framework" in doc["components"] and "framework" in doc["branches"], "branches and components must coexist")
 su.RELEASE_CACHE.unlink()

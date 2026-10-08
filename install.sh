@@ -366,7 +366,7 @@ if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON
 fi
 
 log "Verifying Core Tactical Report Manager bridge."
-VERIFY_REPORTING_CODE="from tec_tac.reporting import reporting_bridge_status; from ee.reporting import constants as c,utils as u,views as v; s=reporting_bridge_status(); assert s['available'], s; assert c.REPORTING_MODELS == u.REPORTING_MODELS, 'Report Manager model registry mismatch'; assert getattr(v.QuerySchema.get,'_tec_tac_reporting_bridge',False), 'QuerySchema reporting bridge marker missing'; assert getattr(u.resolve_model,'_tec_tac_reporting_bridge',False), 'resolve_model reporting bridge marker missing'; print('TEC-TAC reporting bridge OK:', s)"
+VERIFY_REPORTING_CODE="from tec_tac.reporting import reporting_bridge_status; from ee.reporting import constants as c,utils as u,views as v; s=reporting_bridge_status(); assert s['installed'] or s['handover'], s; assert not s['error'], s; assert (not s['installed']) or s['available'], s; assert (not s['installed']) or c.REPORTING_MODELS == u.REPORTING_MODELS, 'Report Manager model registry mismatch'; assert (not s['installed']) or getattr(v.QuerySchema.get,'_tec_tac_reporting_bridge',False), 'QuerySchema reporting bridge marker missing'; assert (not s['installed']) or getattr(u.resolve_model,'_tec_tac_reporting_bridge',False), 'resolve_model reporting bridge marker missing'; print('TEC-TAC reporting bridge OK:', s)"
 if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_REPORTING_CODE}\""; then
     fail "Tec-Tac Tactical Report Manager bridge verification failed or timed out."
 fi

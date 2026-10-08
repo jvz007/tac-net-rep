@@ -55,7 +55,7 @@ Changing the source does not stage or install anything. Staging and installing s
 
 For a `release` source the answer is the same as before 1.17.2.
 
-For a `branch` source (1.17.3) Core does not call GitHub releases and does not read or write the release cache. The answer keeps every existing key, but `latest_release` is `null` and `release_error` is `null`. It adds three keys:
+For a `branch` source (1.17.3) the branch is the primary answer. The answer keeps every existing key, but `latest_release` is `null`. It adds `source`, `branch`, `branch_error` and, from 1.17.4, `stable_release`:
 
 ```json
 {
@@ -74,14 +74,26 @@ For a `branch` source (1.17.3) Core does not call GitHub releases and does not r
     "head_version": null,
     "installed_version": null
   },
-  "branch_error": null
+  "branch_error": null,
+  "stable_release": { "tag": "v1.17.3", "name": "1.17.3", "published_at": "...", "html_url": "...", "commit": "<40 hex>", "release_trust": {}, "operation": "upgrade" }
 }
 ```
 
 - `head_commit` and `head_date` come from GitHub's branch API. They are cached for 5 minutes in the release cache file. `force=1` skips the cache.
 - `state` is `same`, `differs` or `unknown`. `differs` is `true`, `false` or `null` to match.
-- A branch failure sets `branch_error`. Release data is not fetched for a branch source, so `latest_release` stays `null` either way.
+- A branch failure sets `branch_error` only. It never hides `stable_release`.
 - `basis` says how `state` was decided: `commit` (an install recorded the GitHub commit), `version` (the VERSION fallback below) or `null` (unknown). `head_version` and `installed_version` are set only when the VERSION fallback was tried. All three are new in 1.17.3.
+
+### The stable release under a branch (1.17.4)
+
+A branch source still shows the latest stable release, as secondary information. It is `stable_release`, with the same shape as `latest_release` (tag, name, publication date, link, exact commit, release trust and the operation: install, upgrade or downgrade). `latest_release` stays `null`.
+
+- Core fetches it with the same GitHub calls, the same 24-hour release cache and the same stale-on-error behaviour as a release source. `force=1` bypasses the cache.
+- `checked_at`, `cache` and `release_error` describe that release check.
+- A release failure sets `release_error` only. It never sets `branch_error`. A failure to write the release cache also reads as `release_error`, not a server error.
+- When GitHub fails and an older release is cached, the cached release is returned as stale in `stable_release`.
+- `GET /api/tfd/system/updates/` returns the cached row without calling GitHub. For a component whose saved source is a branch, `release_cache[component]` has `latest_release` null, `stable_release` (the cached row, or null) and `source`. The page can show the secondary line on first load. Before 1.17.4 this call returned the cached release as `latest_release` under a branch source.
+- A release source, or no source, gets exactly the answer it had before: no `stable_release` key.
 
 ### How "installed" is known
 

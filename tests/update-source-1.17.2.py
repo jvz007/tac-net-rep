@@ -320,7 +320,8 @@ must(plain["latest_release"]["tag"] == "v1.17.1", plain)
 GH["calls"].clear()
 out = su.online_status("framework", force=True, source=BRANCH)
 must(out["source"] == BRANCH and out["branch_error"] is None, out)
-# 1.17.3: a branch source no longer fetches the release, so latest_release is null; every key stays present.
+# 1.17.3: latest_release is null for a branch source; every key stays present. 1.17.4: the stable release is the
+# secondary stable_release key (tests/update-source-1.17.4.py), latest_release is still null.
 must(out["latest_release"] is None and "installed_version" in out and "release_error" in out and "checked_at" in out and "cache" in out, "every existing key is kept")
 b = out["branch"]
 must(b["ref"] == "dev" and b["head_commit"] == SHA_A and b["head_short"] == SHA_A[:7] and b["head_date"] == "2026-10-08T09:30:00Z", b)
@@ -400,7 +401,8 @@ must("framework" in doc["components"] and "branches" in doc, doc.keys())
 
 # ------------------------------------------------------------------ system_status
 su._signed_release_min_version = lambda component: None
-su.cached_online_status = lambda component: {"component": component}
+# 1.17.4: system_status passes each component's saved source as the second argument.
+su.cached_online_status = lambda component, source=None: {"component": component}
 su._recent_history = lambda limit=12: []
 CONFIG.update_sources = {"ui": {"type": "branch", "ref": "dev"}}
 status = su.system_status()

@@ -696,7 +696,14 @@ def _release_from_cache(component: str, *, installed: str | None = None) -> dict
     }
 
 
-def cached_online_status(component: str) -> dict:
+def cached_online_status(component: str, source: dict | None = None) -> dict:
+    """Persisted release row for a component, read-only (no GitHub call).
+
+    1.17.4: with a branch ``source`` the cached stable release is the secondary
+    ``stable_release`` and ``latest_release`` is null, so GET /system/updates/ no longer
+    shows the stable release as the answer under a branch source. ``source`` is added.
+    With no source, or a release source, the answer is unchanged.
+    """
     if component not in COMPONENTS:
         raise SystemUpdateError("component must be framework or ui")
     installed = _installed_version(component)
@@ -707,16 +714,25 @@ def cached_online_status(component: str) -> dict:
         latest = cached.get("latest_release")
         if isinstance(latest, dict):
             latest["release_trust"] = _annotate_trust_acceptance(latest.get("release_trust"))
-        return cached
-    return {
-        "component": component,
-        "repository": _repo_name(component),
-        "installed_version": installed,
-        "latest_release": None,
-        "checked_at": None,
-        "release_error": None,
-        "cache": {"hit": False, "stale": True, "ttl_hours": 24},
-    }
+    else:
+        cached = {
+            "component": component,
+            "repository": _repo_name(component),
+            "installed_version": installed,
+            "latest_release": None,
+            "checked_at": None,
+            "release_error": None,
+            "cache": {"hit": False, "stale": True, "ttl_hours": 24},
+        }
+    if _is_branch_source(source):
+        cached["stable_release"] = cached["latest_release"]
+        cached["latest_release"] = None
+        cached["source"] = {"type": "branch", "ref": str(source.get("ref") or "")}
+    return cached
+
+
+def _is_branch_source(source: object) -> bool:
+    return isinstance(source, dict) and source.get("type") == "branch"
 
 
 def _release_online_status(component: str, *, force: bool = False) -> dict:
@@ -942,12 +958,15 @@ def online_status(component: str, *, force: bool = False, source: dict | None = 
     """Online status for a component.
 
     With no source or a release source the answer is the stable-release answer, exactly as
-    before 1.17.2. With a branch source (1.17.3) GitHub's releases are not called and the
-    release cache is not touched: every release key stays present, ``latest_release`` is
-    null, and ``source``, ``branch`` and ``branch_error`` are added. A branch failure sets
-    branch_error only.
+    before 1.17.2, with no ``stable_release`` key. With a branch source the branch result is
+    primary and ``latest_release`` stays null (1.17.3). ``source``, ``branch`` and
+    ``branch_error`` are added, and from 1.17.4 so is ``stable_release``: the stable release
+    as secondary information, fetched and cached like the release answer (same 24-hour
+    cache, same stale-on-error behaviour). ``checked_at``, ``cache`` and ``release_error``
+    describe that release check. A release failure sets release_error only. A branch failure
+    sets branch_error only and never hides stable_release.
     """
-    if not isinstance(source, dict) or source.get("type") != "branch":
+    if not _is_branch_source(source):
         return _release_online_status(component, force=force)
     if component not in COMPONENTS:
         raise SystemUpdateError("component must be framework or ui")
@@ -961,7 +980,19 @@ def online_status(component: str, *, force: bool = False, source: dict | None = 
         "release_error": None,
         "cache": {"hit": False, "stale": False, "ttl_hours": 24},
         "source": {"type": "branch", "ref": ref},
+        "stable_release": None,
     }
+    try:
+        release = _release_online_status(component, force=force)
+        payload["stable_release"] = release.get("latest_release")
+        payload["checked_at"] = release.get("checked_at")
+        payload["cache"] = release.get("cache") or payload["cache"]
+        payload["release_error"] = release.get("release_error")
+    except (SystemUpdateError, OSError, ValueError, TypeError, KeyError) as exc:
+        # A release failure, even a cache write error, must never fail the branch answer.
+        payload["release_error"] = (
+            str(exc) if isinstance(exc, SystemUpdateError) else f"Release check failed: {exc.__class__.__name__}"
+        )
     payload["branch"], payload["branch_error"] = _branch_status(component, ref, force=force)
     return payload
 
@@ -1192,6 +1223,7 @@ def _saved_update_sources() -> dict:
 
 
 def system_status() -> dict:
+    saved_sources = _saved_update_sources()
     return {
         "framework": {
             "version": _installed_version("framework"),
@@ -1203,10 +1235,13 @@ def system_status() -> dict:
         },
         # Read-only persisted release discovery lets the UI show the last known
         # stable versions immediately, before any GitHub request is necessary.
-        "release_cache": {component: cached_online_status(component) for component in sorted(COMPONENTS)},
+        "release_cache": {
+            component: cached_online_status(component, saved_sources.get(component))
+            for component in sorted(COMPONENTS)
+        },
         "accepted_archives": [".zip", ".tar.gz", ".tgz"],
         "advanced_sources": {"branch_requires_unlock": True},
-        "update_sources": _saved_update_sources(),
+        "update_sources": saved_sources,
         "signed_release_policy": {component: {"minimum_version": _signed_release_min_version(component)} for component in sorted(COMPONENTS)},
         "update_trust_policy": get_trust_policy(),
         "history": _recent_history(),
