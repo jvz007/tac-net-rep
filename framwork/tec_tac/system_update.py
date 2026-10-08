@@ -855,12 +855,61 @@ def _branch_head(component: str, repo: str, ref: str, *, force: bool) -> dict:
     return {"head_commit": commit, "head_date": head_date}
 
 
+_PLAUSIBLE_VERSION = re.compile(r"v?\d+(?:\.\d+){1,2}(?:-[0-9A-Za-z.]+)?")
+
+
+def _plausible_version(value: object) -> str | None:
+    text = value.strip() if isinstance(value, str) else ""
+    return text if text and len(text) <= 40 and _PLAUSIBLE_VERSION.fullmatch(text) else None
+
+
+def _branch_head_version(component: str, repo: str, ref: str, head_commit: str, *, force: bool) -> str | None:
+    """The VERSION file at the branch head commit (1.17.3), or None when it cannot be read.
+
+    Content at a commit never changes, so the value is cached in the component's 'branches' row
+    under the head commit it was read at. It is reused while that row is fresh (5 minutes);
+    force bypasses it. It never raises: a failed read leaves the state unknown.
+    """
+    try:
+        doc = _read_release_cache()
+        branches = doc.get("branches") if isinstance(doc.get("branches"), dict) else {}
+        row = branches.get(component)
+        same_row = isinstance(row, dict) and row.get("repository") == repo and row.get("ref") == ref
+        if not force and same_row:
+            checked = _parse_cached_at(row.get("checked_at"))
+            cached = _plausible_version(row.get("head_version"))
+            if (
+                cached
+                and row.get("head_version_commit") == head_commit
+                and checked is not None
+                and datetime.now(timezone.utc) - checked < BRANCH_CACHE_TTL
+            ):
+                return cached
+        raw = _github_content_bytes(repo, "VERSION", head_commit)
+        version = _plausible_version(raw.decode("utf-8")) if raw is not None else None
+        if version is None:
+            return None
+        if same_row and row.get("head_commit") == head_commit:
+            row["head_version"] = version
+            row["head_version_commit"] = head_commit
+            branches[component] = row
+            doc["branches"] = branches
+            try:
+                _write_release_cache(doc)
+            except OSError:
+                pass  # the cache is an optimisation
+        return version
+    except (SystemUpdateError, UnicodeDecodeError, OSError, ValueError):  # a VERSION read never raises or sets branch_error
+        return None
+
+
 def _branch_status(component: str, ref: str, *, force: bool) -> tuple[dict, str | None]:
     repo = _repo_name(component)
     branch = {
         "ref": ref, "head_commit": None, "head_short": None, "head_date": None,
         "installed_commit": None, "installed_short": None, "installed_source": None,
         "state": "unknown", "differs": None,
+        "basis": None, "head_version": None, "installed_version": None,
     }
     error = None
     try:
@@ -871,6 +920,17 @@ def _branch_status(component: str, ref: str, *, force: bool) -> tuple[dict, str 
         if installed_commit:
             branch["differs"] = installed_commit != branch["head_commit"]
             branch["state"] = "differs" if branch["differs"] else "same"
+            branch["basis"] = "commit"
+        else:
+            # 1.17.3 (CQ11): no install recorded a commit, so compare VERSION files. This is weaker
+            # than a commit match: a branch can gain commits without a VERSION bump.
+            head_version = _branch_head_version(component, repo, ref, branch["head_commit"], force=force)
+            installed_version = _plausible_version(_installed_version(component))
+            branch.update(head_version=head_version, installed_version=installed_version)
+            if head_version and installed_version:
+                branch["differs"] = _version_key(head_version) != _version_key(installed_version)
+                branch["state"] = "differs" if branch["differs"] else "same"
+                branch["basis"] = "version"
     except SystemUpdateError as exc:
         error = str(exc)
     except Exception as exc:  # a branch failure must never hide the release data
@@ -882,14 +942,26 @@ def online_status(component: str, *, force: bool = False, source: dict | None = 
     """Online status for a component.
 
     With no source or a release source the answer is the stable-release answer, exactly as
-    before 1.17.2. With a branch source it keeps every release key and adds ``source``,
-    ``branch`` and ``branch_error`` (1.17.2). A branch failure sets branch_error only.
+    before 1.17.2. With a branch source (1.17.3) GitHub's releases are not called and the
+    release cache is not touched: every release key stays present, ``latest_release`` is
+    null, and ``source``, ``branch`` and ``branch_error`` are added. A branch failure sets
+    branch_error only.
     """
-    payload = _release_online_status(component, force=force)
     if not isinstance(source, dict) or source.get("type") != "branch":
-        return payload
+        return _release_online_status(component, force=force)
+    if component not in COMPONENTS:
+        raise SystemUpdateError("component must be framework or ui")
     ref = str(source.get("ref") or "")
-    payload["source"] = {"type": "branch", "ref": ref}
+    payload = {
+        "component": component,
+        "repository": _repo_name(component),
+        "installed_version": _installed_version(component),
+        "latest_release": None,
+        "checked_at": None,
+        "release_error": None,
+        "cache": {"hit": False, "stale": False, "ttl_hours": 24},
+        "source": {"type": "branch", "ref": ref},
+    }
     payload["branch"], payload["branch_error"] = _branch_status(component, ref, force=force)
     return payload
 

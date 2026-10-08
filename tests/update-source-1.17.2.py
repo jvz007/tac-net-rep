@@ -293,6 +293,7 @@ def fake_github(url):
 
 
 su._github_json = fake_github
+su._github_content_bytes = lambda repo, path, ref: None  # 1.17.3: the VERSION fallback reads nothing here, so these states stay unknown
 
 
 def branch_calls():
@@ -319,7 +320,8 @@ must(plain["latest_release"]["tag"] == "v1.17.1", plain)
 GH["calls"].clear()
 out = su.online_status("framework", force=True, source=BRANCH)
 must(out["source"] == BRANCH and out["branch_error"] is None, out)
-must(out["latest_release"]["tag"] == "v1.17.1" and "installed_version" in out and "release_error" in out, "every existing key is kept")
+# 1.17.3: a branch source no longer fetches the release, so latest_release is null; every key stays present.
+must(out["latest_release"] is None and "installed_version" in out and "release_error" in out and "checked_at" in out and "cache" in out, "every existing key is kept")
 b = out["branch"]
 must(b["ref"] == "dev" and b["head_commit"] == SHA_A and b["head_short"] == SHA_A[:7] and b["head_date"] == "2026-10-08T09:30:00Z", b)
 must(b["state"] == "unknown" and b["differs"] is None and b["installed_commit"] is None and b["installed_short"] is None, b)
@@ -365,7 +367,8 @@ must(b["state"] == "same" and b["installed_commit"] == SHA_B, b)
 GH["branch_fail"] = True
 out = su.online_status("framework", force=True, source={"type": "branch", "ref": "nope"})
 must("Branch not found" in out["branch_error"], out)
-must(out["latest_release"]["tag"] == "v1.17.1" and out["release_error"] is None, "release data must survive a branch failure")
+# 1.17.3: no release data is fetched for a branch source, so a branch failure leaves latest_release null and release_error null.
+must(out["latest_release"] is None and out["release_error"] is None, "a branch failure sets branch_error only")
 must(out["branch"]["state"] == "unknown" and out["branch"]["head_commit"] is None and out["branch"]["differs"] is None, out["branch"])
 GH["branch_fail"] = False
 
@@ -513,6 +516,15 @@ for needle in ('"/api/tfd/system/update-source/"', '"/api/tfd/system/updates/onl
 install = (ROOT / "install.sh").read_text(encoding="utf-8")
 must("('/api/tfd/system/update-source/','tec-tac-update-source')" in install, "install.sh must verify the route")
 must((ROOT / "docs" / "update-source.md").is_file(), "docs/update-source.md missing")
+
+# Held Low from the 1.17.2 review: the stage route has a contract entry (read by AST, as contracts.py needs Django).
+ctree = ast.parse(contracts)
+details = next(ast.literal_eval(n.value) for n in ctree.body if isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "HTTP_CONTRACT_DETAILS" for t in n.targets))
+stage_entry = details["/api/tfd/system/updates/online/stage/"]["POST"]
+stage_text = json.dumps(stage_entry)
+for needle in ("component", "source_type", "ref", "remembered", "core.privileged_operations"):
+    must(needle in stage_text, f"stage contract entry lacks {needle}")
+must(set(stage_entry["errors"]) == {"400", "403", "500"} and "201" in stage_entry["response"], "stage contract entry must list 201, 400, 403 and 500")
 
 # ------------------------------------------------------------------ model and migration
 model_src = (APP / "models.py").read_text(encoding="utf-8")

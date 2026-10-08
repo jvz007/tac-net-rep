@@ -55,7 +55,7 @@ Changing the source does not stage or install anything. Staging and installing s
 
 For a `release` source the answer is the same as before 1.17.2.
 
-For a `branch` source the answer keeps every existing key and adds three:
+For a `branch` source (1.17.3) Core does not call GitHub releases and does not read or write the release cache. The answer keeps every existing key, but `latest_release` is `null` and `release_error` is `null`. It adds three keys:
 
 ```json
 {
@@ -69,7 +69,10 @@ For a `branch` source the answer keeps every existing key and adds three:
     "installed_short": "a1b2c3d",
     "installed_source": { "type": "branch", "ref": "dev" },
     "state": "same",
-    "differs": false
+    "differs": false,
+    "basis": "commit",
+    "head_version": null,
+    "installed_version": null
   },
   "branch_error": null
 }
@@ -77,11 +80,12 @@ For a `branch` source the answer keeps every existing key and adds three:
 
 - `head_commit` and `head_date` come from GitHub's branch API. They are cached for 5 minutes in the release cache file. `force=1` skips the cache.
 - `state` is `same`, `differs` or `unknown`. `differs` is `true`, `false` or `null` to match.
-- A branch failure sets `branch_error` and leaves the release data in place.
+- A branch failure sets `branch_error`. Release data is not fetched for a branch source, so `latest_release` stays `null` either way.
+- `basis` says how `state` was decided: `commit` (an install recorded the GitHub commit), `version` (the VERSION fallback below) or `null` (unknown). `head_version` and `installed_version` are set only when the VERSION fallback was tried. All three are new in 1.17.3.
 
 ### How "installed" is known
 
-Core compares the branch head with the GitHub commit recorded when the component was last installed. The install job now carries the source of the staged package (type, repository, ref and commit). The root helper copies a sanitised copy into the history row.
+Core first compares the branch head with the GitHub commit recorded when the component was last installed. When that commit exists it decides (`basis` is `commit`). The install job now carries the source of the staged package (type, repository, ref and commit). The root helper copies a sanitised copy into the history row.
 
 Core cannot use the `source_git` commit for this. The root helper commits the verified files to a local branch, so that SHA is local and never equals GitHub's.
 
@@ -92,6 +96,14 @@ The state is `unknown` when the most recent successful install of the component:
 - was made before 1.17.2, so it has no recorded commit.
 
 Stage and install the branch once with 1.17.2 or later and the check becomes exact.
+
+### The VERSION fallback (1.17.3)
+
+When no install recorded a commit, Core reads the `VERSION` file at the branch head commit and compares it with the installed `VERSION`. Equal gives `same`. Not equal gives `differs`. `basis` is `version`.
+
+This is weaker than a commit match. A branch can gain commits without a VERSION bump, so a version match can read `same` while the commits differ. Treat `basis: "version"` as "probably the same", not proof.
+
+The state stays `unknown` (`basis` null) when the head VERSION cannot be read (not found, a GitHub error, bytes that are not text), when the installed VERSION is missing, or when either is not a plausible version string. A failed VERSION read never sets `branch_error`. The head VERSION is cached with the branch head for 5 minutes, keyed by the head commit. `force=1` bypasses it. A status check makes at most one extra GitHub call.
 
 ## Staging
 

@@ -574,11 +574,33 @@ HTTP_CONTRACT_DETAILS = {
             "authorization": "authenticated Tec-Tac session with privileged lifecycle authority",
             "query": {"component": "framework or ui", "force": "1 bypasses the caches"},
             "response": {
+                "latest_release": "null for a branch source (1.17.3): GitHub's releases are not fetched for it. A release source, or none, is unchanged",
+                "release_error": "null for a branch source (1.17.3): release data is not fetched",
                 "source": "added in 1.17.2, only when the remembered source is a branch: {type: branch, ref}. For a release source the response is unchanged",
-                "branch": "added in 1.17.2, only for a branch source: {ref, head_commit, head_short, head_date, installed_commit, installed_short, installed_source {type, ref}, state same|differs|unknown, differs true|false|null}. The installed commit is the GitHub commit recorded when the component was last installed. It is unknown (state unknown, differs null) for an offline upload, another repository, or an install made before 1.17.2",
-                "branch_error": "added in 1.17.2, only for a branch source: text when the branch could not be read, else null. The release data is still returned",
+                "branch": "added in 1.17.2, only for a branch source: {ref, head_commit, head_short, head_date, installed_commit, installed_short, installed_source {type, ref}, state same|differs|unknown, differs true|false|null, basis commit|version|null, head_version, installed_version}. basis, head_version and installed_version were added in 1.17.3. basis commit: the installed commit is the GitHub commit recorded when the component was last installed, and it wins when present. basis version: no install recorded a commit (offline upload, another repository, or an install before 1.17.2), so the VERSION file at the branch head is compared with the installed VERSION. A version match is weaker than a commit match: a branch can gain commits without a VERSION bump, so basis version can read same while commits differ. State stays unknown (differs null, basis null) when either VERSION cannot be read or is not a plausible version",
+                "branch_error": "added in 1.17.2, only for a branch source: text when the branch could not be read, else null. Failing to read the branch VERSION never sets it",
             },
-            "notes": ["The branch head is cached for 5 minutes in the release cache file; force=1 bypasses it. Every earlier key is unchanged."],
+            "notes": ["The branch head and its VERSION are cached for 5 minutes in the release cache file; force=1 bypasses them. Every earlier key stays present. 1.17.3: only the value of latest_release changes (null) for a branch source."],
+        },
+    },
+    "/api/tfd/system/updates/online/stage/": {
+        "POST": {
+            "authorization": "authenticated Tec-Tac session with core.privileged_operations",
+            "request": {
+                "component": "required: framework or ui",
+                "source_type": "optional: release or branch. The default is the remembered source from /api/tfd/system/update-source/, release when none is saved; an explicit value wins (default changed in 1.17.2)",
+                "ref": "branch name. With source_type branch and no ref, the saved branch ref is used only when source_type was omitted; an explicit branch with no ref returns 400 'A branch name is required'",
+            },
+            "response": {"201": "the staged package inspection, unchanged"},
+            "errors": {
+                "400": "unknown component, invalid source_type, or a branch or release that cannot be resolved",
+                "403": "caller does not hold core.privileged_operations",
+                "500": "unexpected staging failure",
+            },
+            "notes": [
+                "1.17.2 default change, additive. The saved source only supplies the default. Trust-policy and signed-release checks and the root helper's re-verification still apply.",
+                "Changing the saved source does not stage anything.",
+            ],
         },
     },
     "/api/tfd/system/runtime-settings/": {
