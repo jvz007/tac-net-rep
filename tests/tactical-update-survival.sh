@@ -20,7 +20,7 @@ TACTICAL_USER="$(systemctl show rmm.service -p User --value 2>/dev/null || true)
 verify_now() {
     runuser -u "${TACTICAL_USER}" -- git -C "${TACTICAL_ROOT}" check-ignore -q "api/tacticalrmm/tacticalrmm/local_settings.py" || { echo '[TEST] FAIL local_settings.py is not ignored' >&2; exit 1; }
     grep -Fq '# BEGIN TEC-TAC EXTENSION FRAMEWORK' "${LOCAL_SETTINGS}" || { echo '[TEST] FAIL bootstrap marker missing' >&2; exit 1; }
-    CODE="import tfdreporting; assert tfdreporting.__file__.startswith('${REPO_ROOT}/extensions/reporting/'); print(tfdreporting.__file__)"
+    CODE="import tec_tac; assert tec_tac.__file__.startswith('${TEC_TAC_FRAMEWORK_ROOT:-${REPO_ROOT}/framework}/'), tec_tac.__file__; print(tec_tac.__file__)"
     runuser -u "${TACTICAL_USER}" -- bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${CODE}\""
     if [[ -f "${TEC_TAC_CONFIG_FILE}" ]]; then
         grep -Fq 'TEC_TAC_UI_DEPLOY_ROOT=/var/lib/tec-tac/ui/tec-tac' "${TEC_TAC_CONFIG_FILE}" || { echo '[TEST] FAIL persistent UI root is not configured' >&2; exit 1; }

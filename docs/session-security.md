@@ -143,6 +143,49 @@ new Core trust record.
 Revocation can target one session or all sessions for a username, optionally
 preserving the current session.
 
+## Logout, timeout and the expiry sweep (1.17.1)
+
+How a Tec-Tac session ends, and what ends the matching Tactical token.
+
+**Logout.** The browser calls Tactical's own `/logout/` (Knox `LogoutView`). That
+deletes the one token. Core does not hook it. The trust row stays unrevoked until
+it times out or retention removes it. That is harmless: the token it points to is
+gone.
+
+**Timeout while a request arrives.** `ensure_request_session` checks the idle and
+absolute limits on every request to a `SessionAuthenticated` Core view. When a
+limit has passed it revokes the row and deletes the exact Knox token. The UI
+heartbeat reaches Core, so this holds while a tab is open.
+
+**Timeout with no request.** A closed tab, a dead browser or a module that only
+calls Tactical routes never reaches Core. Knox then keeps the token alive for its
+own 5 hour lifetime, refreshed on every use. The scheduler tick closes this gap.
+Every tick (about one minute) it runs `sweep_expired_sessions`:
+
+- It finds unrevoked trust rows that have a `knox_digest` and are past the
+  current global policy. Expiry is worked out from `created_at` and
+  `last_activity_at`, the same way a live request does it.
+- Each row is handled in its own transaction and locked with `skip_locked`, so
+  the sweep never races a live request. A locked row waits for the next tick.
+- It revokes the row (`idle-timeout` or `absolute-timeout`), writes the matching
+  `session_idle_timeout` or `session_absolute_timeout` audit event with
+  `requested_by` set to `tec-tac-scheduler`, and deletes that exact Knox token.
+- It skips rows with no `knox_digest` (written before the digest was stored, or
+  not Knox). Revoking them would delete every token of that username and end the
+  user's other live sessions. They are counted in `skipped_no_digest`.
+- It deletes any live token whose digest belongs to an already revoked row.
+- It handles at most 500 rows per tick. A larger backlog clears over the next ticks.
+- A failure never stops the tick or Tactical. The tick prints
+  `session_expiry_sweep=error` and retries on the next tick.
+
+Retention cleanup now also deletes the Knox token of a stale unrevoked row before
+it deletes the row.
+
+**What this cannot do.** The sweep enforces idle and absolute expiry only.
+The IP-change policy still applies only to requests that reach a Core view. A
+Tactical-only request from a new IP is not checked. Closing that needs a wrapper
+around Tactical's Knox authentication class, which is not built.
+
 ## Trusted client IP resolution
 
 Core starts from `REMOTE_ADDR`.

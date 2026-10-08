@@ -18,7 +18,7 @@ class ModuleIdentityMigrationError(RuntimeError):
 
 
 def _permission_model():
-    from tfdreporting.models import ExtensionRolePermission
+    from .models import ExtensionRolePermission
     return ExtensionRolePermission
 
 

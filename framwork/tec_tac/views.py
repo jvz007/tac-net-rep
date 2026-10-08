@@ -54,6 +54,7 @@ from .module_runtime import module_runtime_snapshot
 from .registry import get_plugins
 from .notices import unread_count as notice_unread_count
 from .preferences import get_user_preferences
+from .runtime_settings import get_module_register_timeout_seconds
 from .account_self_service import tactical_ui_context
 from .session_security import SessionAuthenticated, _audit
 from .trust_policy import TrustPolicyError, LEVEL_RANK, console_guidance as trust_policy_console_guidance, get_policy as get_update_trust_policy, set_policy as set_update_trust_policy
@@ -388,6 +389,8 @@ class UiContextView(APIView):
                 "module_status": module_runtime_snapshot(plugins),
                 "notice_unread_count": notice_unread_count(request.user),
                 "preferences": preferences,
+                # Seconds the UI lets a module's register() run (Core setting, default 30).
+                "module_register_timeout_seconds": get_module_register_timeout_seconds(),
                 **_runtime_localization(request),
                 "tactical_ui": tactical_ui_context(request.user),
                 "tactical_web_ui": _tactical_web_ui_context(),

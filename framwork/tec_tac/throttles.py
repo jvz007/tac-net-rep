@@ -63,6 +63,16 @@ class SavedViewWriteDayThrottle(_WriteOnlyThrottle):
     rate = "2000/day"
 
 
+class RuntimeSettingsWriteMinThrottle(_WriteOnlyThrottle):
+    scope = "tec_tac_runtime_settings_write_min"
+    rate = "10/min"
+
+
+class RuntimeSettingsWriteDayThrottle(_WriteOnlyThrottle):
+    scope = "tec_tac_runtime_settings_write_day"
+    rate = "200/day"
+
+
 class TrustPolicyMinThrottle(_AuthenticatedAttemptThrottle):
     scope = "tec_tac_trust_policy_min"
     rate = "10/min"

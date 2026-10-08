@@ -126,10 +126,6 @@ if [[ "${PLUGIN_ID}" == "example" ]]; then
     log "WARNING: '${PLUGIN_ID}' is the Tec-Tac reference implementation."
 fi
 
-if [[ "${PLUGIN_ID}" == "legacy-reporting-poc" || "${PLUGIN_ID}" == "reporting" ]]; then
-    fail "This script is for convention-based Tec-Tac extensions, not the legacy reporting POC."
-fi
-
 if [[ "${MODE}" == "--purge-data" ]]; then
     log "WARNING: --purge-data will attempt to reverse migrations for Django apps declared by this extension and optional reportset."
     log "This may permanently delete plugin-owned database tables/data."
@@ -216,7 +212,7 @@ print(f"[TEC-TAC] Disabled {updated} module-owned schedule(s) for {module_id}.")
 runuser -u "${TACTICAL_USER}" -- env TEC_TAC_REMOVE_PERMISSION_MANIFEST="${EXT_DIR}/tec_tac.json" "${VENV_PYTHON}" "${MANAGE_PY}" shell -c '
 import json, os
 from pathlib import Path
-from tfdreporting.models import ExtensionRolePermission
+from tec_tac.models import ExtensionRolePermission
 payload=json.loads(Path(os.environ["TEC_TAC_REMOVE_PERMISSION_MANIFEST"]).read_text(encoding="utf-8"))
 codenames=sorted({p for values in payload.get("permission_groups", {}).values() for p in values})
 if codenames:

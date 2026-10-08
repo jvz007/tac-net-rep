@@ -243,19 +243,11 @@ Explicitly reverse conventional plugin migrations before removal:
 sudo bash scripts/remove-extension.sh networkprobe --purge-data
 ```
 
-Plugin package/removed-code backups are kept under `/var/lib/tec-tac/backups/plugins/`. The default removal behavior preserves data. The package tools apply only to convention-based Tec-Tac extensions (with optional matching ReportSets) and do not manage the legacy reporting POC.
+Plugin package/removed-code backups are kept under `/var/lib/tec-tac/backups/plugins/`. The default removal behavior preserves data. The package tools apply to convention-based Tec-Tac extensions (with optional matching ReportSets).
 
-## Current reporting POC compatibility
+## Retired reporting POC (1.17.1)
 
-The existing `tfdreporting` / `NetworkAvailability` POC predates the extension/reportset contract. It remains at:
-
-```text
-extensions/reporting/tfdreporting/
-```
-
-and is loaded as the compatibility plugin `legacy-reporting-poc`.
-
-We are deliberately not renaming it until the first real extension receives its final extension ID. That avoids moving proven Django migrations/RBAC/API code twice.
+The `tfdreporting` / `NetworkAvailability` proof of concept is retired. Its ingest endpoint `/api/tfd/reporting/network-availability/` and its data are gone. The extension-permission table it used to own (`ExtensionRolePermission`) now belongs to `tec_tac`, with the same table name, so no grant is lost. A server backup taken before upgrading keeps the old network rows. On an upgraded server the old `extensions/reporting/` directory may stay on disk. Nothing reads it.
 
 ## Get the repository
 
@@ -300,10 +292,8 @@ The installer:
 5. writes the minimal Tec-Tac bootstrap using the resolved repository path;
 6. loads plugins directly from the Git checkout;
 7. runs Django checks and migrations;
-8. verifies the existing reporting POC, RBAC, Report Manager and API route;
-9. optionally grants reporting ingest permission using a Tactical username;
-10. removes obsolete legacy in-tree/exclude artifacts;
-11. restarts and verifies Tactical services.
+8. verifies the framework models, RBAC, Report Manager bridge and API routes;
+9. restarts and verifies Tactical services.
 
 No tracked Tactical source file is modified.
 
@@ -336,7 +326,7 @@ sudo bash scripts/plugin-info.sh
 Inspect one plugin:
 
 ```bash
-sudo bash scripts/plugin-info.sh legacy-reporting-poc legacy
+sudo bash scripts/plugin-info.sh example extension
 ```
 
 Once convention plugins exist, the optional second argument can disambiguate `extension` vs `reportset` when they share the same ID.
@@ -366,27 +356,6 @@ reportsets/<extension-id>/README.md
 
 The scaffold contains no Django apps by default. Add implementation packages and then update `python_paths` / `django_apps` explicitly.
 
-## Reporting permission management
-
-During installation, Tec-Tac first checks whether the reporting ingest `manage` permission is already granted to one or more Tactical roles. Existing assignments are displayed and kept by default, so repeat installs do not require entering the same username again. If no assignment exists, an interactive install asks for a Tactical username whose **role** should receive the permission. You can also choose to add/change an assignment when an existing one is detected.
-
-After installation:
-
-```bash
-sudo bash scripts/reporting-permission.sh bob show
-sudo bash scripts/reporting-permission.sh bob manage
-sudo bash scripts/reporting-permission.sh bob list
-sudo bash scripts/reporting-permission.sh bob both
-```
-
-Permissions are role-based; every user sharing that Tactical role inherits the Tec-Tac permissions.
-
-For unattended installation:
-
-```bash
-TEC_TAC_REPORTING_USERNAME="bob" sudo -E bash install.sh
-```
-
 ## Foundation tests
 
 Run the non-destructive foundation checks:
@@ -396,22 +365,11 @@ sudo bash tests/framework-foundation.sh
 sudo bash tests/registry-validation.sh
 sudo bash tests/tactical-update-survival.sh check
 sudo bash tests/example-plugin.sh
-sudo bash tests/network-reporting-server.sh
 ```
-
-The API regression test additionally needs:
-
-```bash
-export TEC_TAC_API_BASE="https://api.example.com"
-export TEC_TAC_API_KEY="YOUR_API_KEY"
-sudo -E bash tests/network-reporting-api.sh
-```
-
-It validates successful ingest, idempotent replay, replay header, conflict handling, invalid status, invalid latency/percentages and future timestamps.
 
 ## Full lifecycle test
 
-`tests/lifecycle.sh` intentionally includes a purge and is therefore **destructive to the current reporting POC data**.
+`tests/lifecycle.sh` intentionally includes a purge and is therefore **destructive to the data of this Tec-Tac install**.
 
 It will not run unless explicitly acknowledged:
 
@@ -451,7 +409,7 @@ Run the Tactical updater normally. Then:
 sudo bash tests/tactical-update-survival.sh after
 ```
 
-The test confirms that Tactical still ignores `local_settings.py`, the Tec-Tac bootstrap remains present, and Django still imports `tfdreporting` from the external Tec-Tac checkout.
+The test confirms that Tactical still ignores `local_settings.py`, the Tec-Tac bootstrap remains present, and the Tec-Tac framework still loads from the external Tec-Tac checkout.
 
 A current-state-only check is also available:
 
@@ -467,19 +425,13 @@ Disconnect Tec-Tac while preserving extension tables/data:
 sudo bash uninstall.sh
 ```
 
-Purge the existing reporting POC database objects:
+Purge the Tec-Tac extension-permission table (rolls `tec_tac` back to migration 0022):
 
 ```bash
 sudo bash uninstall.sh --purge-data
 ```
 
 The uninstaller never deletes the Git checkout.
-
-## Current API
-
-```text
-/api/tfd/reporting/network-availability/
-```
 
 ## Stable foundation status
 

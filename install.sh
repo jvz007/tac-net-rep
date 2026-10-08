@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_NAME="tfdreporting"
-MODEL_NAME="NetworkAvailability"
 TACTICAL_ROOT="${TACTICAL_ROOT:-/rmm}"
 BACKEND_DIR="${TACTICAL_ROOT}/api/tacticalrmm"
 VENV_PYTHON="${TACTICAL_ROOT}/api/env/bin/python"
@@ -41,8 +39,6 @@ SOURCE_REPORTSETS_DIR="${SOURCE_ROOT}/reportsets"
 SOURCE_SCRIPTS_DIR="${SOURCE_ROOT}/scripts"
 SOURCE_TEMPLATES_DIR="${SOURCE_ROOT}/templates"
 BOOTSTRAP_MODULE_DIR="${TEC_TAC_BOOTSTRAP_MODULE_DIR:-${SOURCE_ROOT}/bootstrap-modules}"
-LEGACY_REPORTING_DIR="${EXTENSIONS_DIR}/reporting"
-APP_DIR="${LEGACY_REPORTING_DIR}/${APP_NAME}"
 VERSION_FILE="${SOURCE_ROOT}/VERSION"
 REPO_ROOT="${TEC_TAC_ROOT}"
 
@@ -50,8 +46,6 @@ BEGIN_MARKER="# BEGIN TEC-TAC EXTENSION FRAMEWORK"
 END_MARKER="# END TEC-TAC EXTENSION FRAMEWORK"
 OLD_BEGIN_MARKER="# BEGIN TFD REPORTING EXTENSION"
 OLD_END_MARKER="# END TFD REPORTING EXTENSION"
-LEGACY_DEST_APP="${BACKEND_DIR}/${APP_NAME}"
-EXCLUDE_FILE="${TACTICAL_ROOT}/.git/info/exclude"
 
 log() { printf '[TEC-TAC] %s\n' "$*"; }
 fail() { printf '[TEC-TAC] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -84,6 +78,7 @@ REQUIRED_FILES=(
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/views.py"
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/contracts.py"
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/reporting.py"
+    "${SOURCE_FRAMEWORK_DIR}/tec_tac/runtime_settings.py"
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/contract_views.py"
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/resources.py"
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/resources_adapter.py"
@@ -96,17 +91,6 @@ REQUIRED_FILES=(
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/module_hotfix_views.py"
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/module_repository.py"
     "${SOURCE_FRAMEWORK_DIR}/tec_tac/module_repository_views.py"
-    "${SOURCE_EXTENSIONS_DIR}/reporting/${APP_NAME}/__init__.py"
-    "${SOURCE_EXTENSIONS_DIR}/reporting/${APP_NAME}/apps.py"
-    "${SOURCE_EXTENSIONS_DIR}/reporting/${APP_NAME}/models.py"
-    "${SOURCE_EXTENSIONS_DIR}/reporting/${APP_NAME}/rbac.py"
-    "${SOURCE_EXTENSIONS_DIR}/reporting/${APP_NAME}/serializers.py"
-    "${SOURCE_EXTENSIONS_DIR}/reporting/${APP_NAME}/views.py"
-    "${SOURCE_EXTENSIONS_DIR}/reporting/${APP_NAME}/urls.py"
-    "${SOURCE_EXTENSIONS_DIR}/reporting/${APP_NAME}/migrations/0001_initial.py"
-    "${SOURCE_EXTENSIONS_DIR}/reporting/${APP_NAME}/migrations/0002_extensionrolepermission.py"
-    "${SOURCE_EXTENSIONS_DIR}/reporting/${APP_NAME}/migrations/0003_networkavailability_ingest_hardening.py"
-    "${SOURCE_ROOT}/scripts/reporting-permission.sh"
     "${SOURCE_ROOT}/scripts/framework-info.sh"
     "${SOURCE_ROOT}/scripts/plugin-info.sh"
     "${SOURCE_ROOT}/scripts/scaffold-plugin.sh"
@@ -213,7 +197,7 @@ rm -rf "${FRAMEWORK_DIR}" "${RUNTIME_SCRIPTS_DIR}" "${TEC_TAC_ROOT}/templates"
 cp -a "${SOURCE_FRAMEWORK_DIR}" "${FRAMEWORK_DIR}"
 cp -a "${SOURCE_SCRIPTS_DIR}" "${RUNTIME_SCRIPTS_DIR}"
 cp -a "${SOURCE_TEMPLATES_DIR}" "${TEC_TAC_ROOT}/templates"
-for rel in extensions/example extensions/reporting reportsets/example; do
+for rel in extensions/example reportsets/example; do
     source_path="${SOURCE_ROOT}/${rel}"
     target_path="${TEC_TAC_ROOT}/${rel}"
     if [[ -e "${source_path}" ]]; then
@@ -259,7 +243,6 @@ log "Tec-Tac framework: ${FRAMEWORK_DIR}"
 
 log "Extensions root: ${EXTENSIONS_DIR}"
 log "Reportsets root: ${REPORTSETS_DIR}"
-log "Legacy reporting POC: ${LEGACY_REPORTING_DIR}"
 
 if ! run_as_tactical git -C "${TACTICAL_ROOT}" check-ignore -q "api/tacticalrmm/tacticalrmm/local_settings.py"; then
     fail "Tactical no longer treats local_settings.py as ignored. Refusing to install because the bootstrap would not be upgrade-safe."
@@ -330,9 +313,6 @@ log "Installed minimal Tec-Tac bootstrap in local_settings.py."
 log "Running Django system checks."
 run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' check"
 
-log "Applying ${APP_NAME} migrations."
-run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' migrate '${APP_NAME}' --noinput"
-
 log "Applying Tec-Tac framework migrations."
 run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' migrate tec_tac --noinput"
 
@@ -367,14 +347,14 @@ else
     printf '%s\n' "${MODULE_MIGRATION_OUTPUT}"
 fi
 
-log "Verifying framework models, RBAC, and Report Manager integration."
-VERIFY_MODEL_CODE="import tfdreporting; from django.apps import apps; expected='${LEGACY_REPORTING_DIR}/'; assert tfdreporting.__file__.startswith(expected), tfdreporting.__file__; assert apps.is_installed('tec_tac'), 'tec_tac app is not installed'; m=apps.get_model('${APP_NAME}','${MODEL_NAME}'); p=apps.get_model('${APP_NAME}','ExtensionRolePermission'); from ee.reporting.utils import resolve_model; r=resolve_model(data_source={'model':'${MODEL_NAME}'}); assert r['model'] is m, 'Report Manager did not resolve the Tec-Tac reporting model'; from tfdreporting.rbac import REGISTERED_PERMISSIONS; assert len(REGISTERED_PERMISSIONS) >= 2, f'expected at least 2 registered reporting permissions, got {len(REGISTERED_PERMISSIONS)}'; fields={f.name for f in m._meta.fields}; assert {'idempotency_key','ingested_by','received_at'} <= fields, 'reporting model missing required ingest fields'; sm=apps.get_model('tec_tac','TecTacSchedule'); sr=apps.get_model('tec_tac','TecTacScheduleRun'); ss=apps.get_model('tec_tac','TecTacSessionTrust'); sc=apps.get_model('tec_tac','TecTacSessionSecurityConfig'); sa=apps.get_model('tec_tac','TecTacSessionAudit'); print('TEC-TAC model/RBAC verification OK:', tfdreporting.__file__, m._meta.label, p._meta.label, sm._meta.label, sr._meta.label, ss._meta.label, sc._meta.label, sa._meta.label)"
+log "Verifying framework models and RBAC."
+VERIFY_MODEL_CODE="from django.apps import apps; assert apps.is_installed('tec_tac'), 'tec_tac app is not installed'; p=apps.get_model('tec_tac','ExtensionRolePermission'); assert p._meta.db_table=='tfdreporting_extensionrolepermission', p._meta.db_table; from tec_tac.rbac import registered_permissions; assert len(registered_permissions()) >= 1, 'no registered Tec-Tac permissions'; rc=apps.get_model('tec_tac','TecTacRuntimeConfig'); sm=apps.get_model('tec_tac','TecTacSchedule'); sr=apps.get_model('tec_tac','TecTacScheduleRun'); ss=apps.get_model('tec_tac','TecTacSessionTrust'); sc=apps.get_model('tec_tac','TecTacSessionSecurityConfig'); sa=apps.get_model('tec_tac','TecTacSessionAudit'); print('TEC-TAC model/RBAC verification OK:', p._meta.label, rc._meta.label, sm._meta.label, sr._meta.label, ss._meta.label, sc._meta.label, sa._meta.label)"
 if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_MODEL_CODE}\""; then
     fail "Framework model/RBAC verification failed or timed out."
 fi
 
 log "Verifying Tec-Tac API routes."
-VERIFY_ROUTE_CODE="from django.urls import resolve; checks=[('/api/tfd/reporting/network-availability/','network-availability'),('/api/tfd/ui/context/','tec-tac-ui-context'),('/api/tfd/access/extensions/','tec-tac-extension-permissions'),('/api/tfd/access/security-policy/','tec-tac-access-security-policy'),('/api/tfd/modules/','tec-tac-module-catalog'),('/api/tfd/system/updates/','tec-tac-system-update-status'),('/api/tfd/system/diagnostics/','tec-tac-system-diagnostics'),('/api/tfd/capabilities/','tec-tac-capabilities'),('/api/tfd/contracts/','tec-tac-contracts'),('/api/tfd/contracts/export/','tec-tac-contract-export'),('/api/tfd/resources/clients/','tec-tac-resource-clients'),('/api/tfd/resources/sites/','tec-tac-resource-sites'),('/api/tfd/resources/agents/','tec-tac-resource-agents'),('/api/tfd/audit/record/','tec-tac-audit-record'),('/api/tfd/scheduler/actions/','tec-tac-scheduler-actions'),('/api/tfd/scheduler/schedules/','tec-tac-scheduler-schedules'),('/api/tfd/scheduler/runs/','tec-tac-scheduler-runs'),('/api/tfd/modules/repositories/','tec-tac-module-repositories'),('/api/tfd/modules/catalog/online/','tec-tac-module-online-catalog'),('/api/tfd/modules/hotfixes/inspect/','tec-tac-module-hotfix-inspect'),('/api/tfd/session/current/','tec-tac-session-current'),('/api/tfd/session/activity/','tec-tac-session-activity'),('/api/tfd/session/policy/','tec-tac-session-policy'),('/api/tfd/session/audit/','tec-tac-session-audit'),('/api/tfd/session/diagnostics/','tec-tac-session-diagnostics')]; resolved=[(path, resolve(path).url_name) for path,_ in checks]; assert all(actual == expected for (path,actual),(_,expected) in zip(resolved,checks)), resolved; print('TEC-TAC route verification OK:', resolved)"
+VERIFY_ROUTE_CODE="from django.urls import resolve; checks=[('/api/tfd/ui/context/','tec-tac-ui-context'),('/api/tfd/system/runtime-settings/','tec-tac-runtime-settings'),('/api/tfd/access/extensions/','tec-tac-extension-permissions'),('/api/tfd/access/security-policy/','tec-tac-access-security-policy'),('/api/tfd/modules/','tec-tac-module-catalog'),('/api/tfd/system/updates/','tec-tac-system-update-status'),('/api/tfd/system/diagnostics/','tec-tac-system-diagnostics'),('/api/tfd/capabilities/','tec-tac-capabilities'),('/api/tfd/contracts/','tec-tac-contracts'),('/api/tfd/contracts/export/','tec-tac-contract-export'),('/api/tfd/resources/clients/','tec-tac-resource-clients'),('/api/tfd/resources/sites/','tec-tac-resource-sites'),('/api/tfd/resources/agents/','tec-tac-resource-agents'),('/api/tfd/audit/record/','tec-tac-audit-record'),('/api/tfd/scheduler/actions/','tec-tac-scheduler-actions'),('/api/tfd/scheduler/schedules/','tec-tac-scheduler-schedules'),('/api/tfd/scheduler/runs/','tec-tac-scheduler-runs'),('/api/tfd/modules/repositories/','tec-tac-module-repositories'),('/api/tfd/modules/catalog/online/','tec-tac-module-online-catalog'),('/api/tfd/modules/hotfixes/inspect/','tec-tac-module-hotfix-inspect'),('/api/tfd/session/current/','tec-tac-session-current'),('/api/tfd/session/activity/','tec-tac-session-activity'),('/api/tfd/session/policy/','tec-tac-session-policy'),('/api/tfd/session/audit/','tec-tac-session-audit'),('/api/tfd/session/diagnostics/','tec-tac-session-diagnostics')]; resolved=[(path, resolve(path).url_name) for path,_ in checks]; assert all(actual == expected for (path,actual),(_,expected) in zip(resolved,checks)), resolved; print('TEC-TAC route verification OK:', resolved)"
 if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_ROUTE_CODE}\""; then
     fail "Framework API route verification failed or timed out."
 fi
@@ -912,84 +892,6 @@ systemctl enable --now tec-tac-scheduler.timer >/dev/null
 log "Installed Tec-Tac scheduler timer: tec-tac-scheduler.timer"
 
 
-# Optional reporting permission assignment. Permissions are stored against the
-# Tactical role used by the named user, not against the user directly. Existing
-# granted manage permissions are kept by default on repeat installs.
-REPORTING_USERNAME="${TEC_TAC_REPORTING_USERNAME:-}"
-EXISTING_PERMISSION_CODE=$(cat <<'PYEOF'
-from django.contrib.auth import get_user_model
-from tfdreporting.models import ExtensionRolePermission
-from tfdreporting.rbac import PERMISSION_NETWORK_AVAILABILITY_MANAGE
-
-rows = list(
-    ExtensionRolePermission.objects.filter(
-        codename=PERMISSION_NETWORK_AVAILABILITY_MANAGE,
-        granted=True,
-    ).order_by("role_id")
-)
-
-users_by_role = {}
-role_names = {}
-for user in get_user_model().objects.all().order_by("username"):
-    try:
-        role = user.get_and_set_role_cache()
-    except Exception:
-        continue
-    if not role:
-        continue
-    role_id = int(role.id)
-    role_names[role_id] = str(role.name)
-    users_by_role.setdefault(role_id, []).append(str(user.username))
-
-for row in rows:
-    role_id = int(row.role_id)
-    role_name = role_names.get(role_id, "unknown")
-    usernames = ",".join(users_by_role.get(role_id, ())) or "none"
-    print(f"FOUND|{role_id}|{role_name}|{usernames}")
-PYEOF
-)
-
-EXISTING_PERMISSIONS="$(run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell" <<< "${EXISTING_PERMISSION_CODE}")"
-
-if [[ -n "${REPORTING_USERNAME}" ]]; then
-    log "Granting reporting ingest permission using Tactical user '${REPORTING_USERNAME}'."
-    bash "${REPO_ROOT}/scripts/reporting-permission.sh" "${REPORTING_USERNAME}" manage
-elif [[ -n "${EXISTING_PERMISSIONS}" ]]; then
-    log "Existing reporting ingest permission assignment(s) found:"
-    while IFS='|' read -r marker role_id role_name usernames; do
-        [[ "${marker}" == "FOUND" ]] || continue
-        log "Role: ${role_name} (id=${role_id}); users: ${usernames}"
-    done <<< "${EXISTING_PERMISSIONS}"
-    log "Keeping existing reporting permission assignment(s) unchanged."
-elif [[ -t 0 ]]; then
-    printf '[TEC-TAC] Tactical username to grant reporting ingest permission (leave blank to skip): '
-    read -r REPORTING_USERNAME
-    if [[ -n "${REPORTING_USERNAME}" ]]; then
-        log "Granting reporting ingest permission using Tactical user '${REPORTING_USERNAME}'."
-        bash "${REPO_ROOT}/scripts/reporting-permission.sh" "${REPORTING_USERNAME}" manage
-    else
-        log "Reporting permission assignment skipped."
-    fi
-else
-    log "No existing reporting ingest permission found and no unattended username supplied; permission assignment skipped."
-fi
-
-# Remove any old in-tree extension copy only after the repository-loaded copy
-# has been verified successfully.
-if [[ -d "${LEGACY_DEST_APP}" ]]; then
-    rm -rf "${LEGACY_DEST_APP}"
-    log "Removed legacy in-tree ${LEGACY_DEST_APP}."
-fi
-
-if [[ -f "${EXCLUDE_FILE}" ]]; then
-    TMP_EXCLUDE="$(mktemp)"
-    grep -Fxv "/api/tacticalrmm/${APP_NAME}/" "${EXCLUDE_FILE}" > "${TMP_EXCLUDE}" || true
-    cat "${TMP_EXCLUDE}" > "${EXCLUDE_FILE}"
-    rm -f "${TMP_EXCLUDE}"
-    chown "${TACTICAL_USER}:${TACTICAL_GROUP}" "${EXCLUDE_FILE}"
-    log "Removed obsolete ${APP_NAME} Git exclude rule if present."
-fi
-
 # Optional first-install module intake. Packages placed in bootstrap-modules/ are
 # not unpacked directly: they are staged, dependency-planned, license-checked,
 # audited and installed through the same Module Manager lifecycle used by the UI.
@@ -1052,7 +954,6 @@ log "Framework source: ${SOURCE_ROOT}"
 log "Framework runtime: ${FRAMEWORK_DIR}"
 log "Extensions: ${EXTENSIONS_DIR}"
 log "Reportsets: ${REPORTSETS_DIR}"
-log "Swagger endpoint: /api/tfd/reporting/network-availability/"
 
 # Reaching this point means every installer verification and service restart
 # succeeded. Clear the temporary-file EXIT trap explicitly so cleanup cannot

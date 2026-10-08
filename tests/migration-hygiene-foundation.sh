@@ -12,4 +12,5 @@ grep -q 'Module migration drift detected:' "${ROOT}/install.sh" || fail "module 
 grep -q 'framework installation will continue' "${ROOT}/install.sh" || fail "module drift check must remain non-blocking"
 python3 -m py_compile "${MIGRATION}"
 bash -n "${ROOT}/install.sh"
+python3 "${ROOT}/tests/extension-permission-move-1.17.1.py"
 echo "[TEST] PASS migration hygiene foundation"

@@ -452,7 +452,7 @@ if [[ -n "${PERMISSION_GROUPS}" ]]; then
 import json, os
 from pathlib import Path
 from django.contrib.auth import get_user_model
-from tfdreporting.models import ExtensionRolePermission
+from tec_tac.models import ExtensionRolePermission
 payload = json.loads(Path(os.environ["TEC_TAC_PERMISSION_MANIFEST"]).read_text(encoding="utf-8"))
 codenames = sorted({p for values in payload.get("permission_groups", {}).values() for p in values})
 rows = ExtensionRolePermission.objects.filter(codename__in=codenames, granted=True).order_by("role_id", "codename")

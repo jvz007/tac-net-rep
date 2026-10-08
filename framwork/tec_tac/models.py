@@ -117,6 +117,60 @@ class TecTacSchedulerConfig(models.Model):
         return obj
 
 
+class ExtensionRolePermission(models.Model):
+    """Tec-Tac extension permission attached to an existing Tactical Role ID.
+
+    role_id is deliberately an integer instead of a ForeignKey so Tec-Tac
+    migrations stay independent of Tactical's accounts migration graph.
+
+    The table keeps the name it had in the retired reporting proof of concept, so
+    an upgraded server needs no DDL (see migration 0023).
+    """
+
+    role_id = models.PositiveIntegerField()
+    codename = models.CharField(max_length=150)
+    granted = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "tfdreporting_extensionrolepermission"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["role_id", "codename"],
+                name="tfd_unique_role_permission",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=["role_id", "codename"],
+                name="tfd_role_perm_lookup",
+            )
+        ]
+        ordering = ["role_id", "codename"]
+
+    def __str__(self):
+        return f"{self.role_id}: {self.codename} = {self.granted}"
+
+
+class TecTacRuntimeConfig(models.Model):
+    """Core-owned runtime settings the UI shell reads (singleton)."""
+
+    singleton = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    # Seconds a module's register() may take before the UI marks it failed.
+    module_register_timeout_seconds = models.PositiveIntegerField(default=30)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="tec_tac_runtime_config_updates")
+
+    class Meta:
+        verbose_name = "Tec-Tac runtime configuration"
+
+    @classmethod
+    def current(cls):
+        obj, _ = cls.objects.get_or_create(singleton=1)
+        return obj
+
+
 class TecTacSchedulerState(models.Model):
     singleton = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
     last_tick_at = models.DateTimeField(null=True, blank=True)

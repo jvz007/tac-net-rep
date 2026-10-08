@@ -34,6 +34,8 @@ DEFAULT_ACTIVITY_HEARTBEAT_SECONDS = 60
 DEFAULT_HISTORY_RETENTION_DAYS = 30
 SESSION_PAGINATION_MAX_PAGE = 10000
 DEFAULT_IP_CHANGE_POLICY = "reauthenticate"
+SESSION_SWEEP_ACTOR = "tec-tac-scheduler"
+SESSION_SWEEP_DEFAULT_LIMIT = 500
 ALLOWED_IP_CHANGE_POLICIES = {"off", "audit", "reauthenticate", "terminate"}
 
 
@@ -965,6 +967,90 @@ def _revoked_tombstone_is_live(session: TecTacSessionTrust, *, now, active_non_k
     return session.token_fingerprint in active_non_knox
 
 
+def _expiry_verdict(session: TecTacSessionTrust, policy: dict[str, Any], now) -> tuple[str, str] | None:
+    """Return (reason, audit event) when the row is past the current policy.
+
+    Same maths as ensure_request_session: expiry is always recomputed from the
+    row's created_at and last_activity_at with the policy in force now, so a
+    policy that was lengthened never makes the sweep stricter than a live request.
+    """
+    absolute = session.created_at + timedelta(minutes=int(policy["absolute_lifetime_minutes"]))
+    if now >= absolute:
+        return "absolute-timeout", "session_absolute_timeout"
+    idle = session.last_activity_at + timedelta(minutes=int(policy["idle_timeout_minutes"]))
+    if now >= idle:
+        return "idle-timeout", "session_idle_timeout"
+    return None
+
+
+def sweep_expired_sessions(*, now=None, limit: int = SESSION_SWEEP_DEFAULT_LIMIT) -> dict[str, int]:
+    """Revoke trust rows past the session policy and delete their Knox tokens.
+
+    ensure_request_session only enforces expiry when a request reaches a Core
+    view. A closed tab or a module that only calls Tactical routes would leave
+    the Tactical token alive (Knox refreshes it on every use). The scheduler
+    tick calls this so enforcement does not depend on the browser.
+
+    Each row is handled in its own transaction and locked with skip_locked, so
+    the sweep never races a live request on the same row. Rows without a
+    knox_digest are skipped and counted: revoking them would delete every token
+    of that username and end the user's other live sessions.
+    """
+    limit = max(1, int(limit))
+    now = now or timezone.now()
+    policy = _policy_dict()
+    absolute_cutoff = now - timedelta(minutes=int(policy["absolute_lifetime_minutes"]))
+    idle_cutoff = now - timedelta(minutes=int(policy["idle_timeout_minutes"]))
+    expired = Q(created_at__lte=absolute_cutoff) | Q(last_activity_at__lte=idle_cutoff)
+
+    live = TecTacSessionTrust.objects.filter(revoked=False)
+    skipped_no_digest = live.filter(knox_digest="").filter(expired).count()
+    candidate_ids = list(
+        live.exclude(knox_digest="").filter(expired).order_by("created_at").values_list("pk", flat=True)[:limit]
+    )
+
+    result = {
+        "checked": len(candidate_ids),
+        "revoked": 0,
+        "absolute_timeout": 0,
+        "idle_timeout": 0,
+        "skipped_no_digest": skipped_no_digest,
+        "skipped_locked": 0,
+        "errors": 0,
+        "orphan_tokens_deleted": 0,
+    }
+    for pk in candidate_ids:
+        try:
+            with transaction.atomic():
+                row = TecTacSessionTrust.objects.select_for_update(skip_locked=True).filter(pk=pk, revoked=False).first()
+                if row is None:
+                    # Locked by a live request, or revoked since the list was read.
+                    result["skipped_locked"] += 1
+                    continue
+                if not row.knox_digest:
+                    continue
+                verdict = _expiry_verdict(row, policy, now)
+                if verdict is None:
+                    continue  # activity arrived after the list was read
+                reason, event_type = verdict
+                _revoke_locked(row, reason=reason, requested_by=SESSION_SWEEP_ACTOR, event_type=event_type, policy=policy)
+                result["revoked"] += 1
+                result["absolute_timeout" if reason == "absolute-timeout" else "idle_timeout"] += 1
+        except Exception:
+            # One bad row must not stop the rest; the next tick retries it.
+            result["errors"] += 1
+
+    # A revoked row whose token is still live is a leak (a delete that failed or
+    # a token reissued path). Exact digests only.
+    revoked_digests = [
+        d for d in TecTacSessionTrust.objects.filter(revoked=True).exclude(knox_digest="").values_list("knox_digest", flat=True) if d
+    ]
+    if revoked_digests:
+        deleted = AuthToken.objects.filter(digest__in=revoked_digests).delete()
+        result["orphan_tokens_deleted"] = int(deleted[0]) if deleted else 0
+    return result
+
+
 def cleanup_session_history(*, retention_days: int | None = None) -> dict[str, int]:
     config = TecTacSessionSecurityConfig.current()
     days = int(config.history_retention_days if retention_days is None else retention_days)
@@ -977,6 +1063,12 @@ def cleanup_session_history(*, retention_days: int | None = None) -> dict[str, i
         Q(revoked=False, absolute_expires_at__lt=cutoff)
         | Q(revoked=False, idle_expires_at__lt=cutoff)
     )
+    # Deleting the trust row must not leave its Tactical credential behind. Only
+    # exact digests are removed: a row with no digest is never matched by username,
+    # because that would end the same user's other live sessions.
+    stale_digests = [d for d in stale_unrevoked.values_list("knox_digest", flat=True) if d]
+    if stale_digests:
+        AuthToken.objects.filter(digest__in=stale_digests).delete()
     sessions_deleted = stale_unrevoked.count()
     stale_unrevoked.delete()
 

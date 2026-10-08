@@ -10,9 +10,6 @@ is the stable extension ID. A reportset is optional; when present it must use th
 
 Extensions may declare role-based permission groups in their manifest. Reportsets
 do not own permissions.
-
-The 0.5.x reporting POC predates this contract and remains registered as a
-legacy compatibility plugin until its real extension ID is chosen.
 """
 
 from __future__ import annotations
@@ -288,15 +285,8 @@ def discover_plugins(extensions_root: Path | None = None, reportsets_root: Path 
     _validate_pairs(extensions, reportsets)
     return tuple([*extensions, *reportsets])
 
-def legacy_plugins() -> tuple[PluginSpec, ...]:
-    legacy_root = EXTENSIONS_ROOT / "reporting"
-    legacy_app = legacy_root / "tfdreporting"
-    if not (legacy_app / "apps.py").is_file():
-        return ()
-    return (PluginSpec(plugin_id="legacy-reporting-poc", plugin_type="legacy", root=legacy_root.resolve(), version="0.5.x", python_paths=(legacy_root.resolve(),), django_apps=("tfdreporting.apps.TfdreportingConfig",), legacy=True),)
-
 def get_plugins() -> tuple[PluginSpec, ...]:
-    plugins = [*discover_plugins(), *legacy_plugins()]
+    plugins = [*discover_plugins()]
     seen_apps = {}
     seen_identity = set()
     seen_permissions = {}

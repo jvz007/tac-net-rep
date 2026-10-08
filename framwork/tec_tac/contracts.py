@@ -395,6 +395,14 @@ CORE_CONTRACTS = (
         "audience": "consumer/backend",
     },
     {
+        "area": "runtime-settings",
+        "import_path": "tec_tac.runtime_settings",
+        "name": "get_module_register_timeout_seconds",
+        "kind": "python",
+        "purpose": "Return the configured module register() time limit in seconds (default 30, range 5 to 300). Never raises. Informational: the UI applies the limit, modules do not.",
+        "audience": "diagnostics",
+    },
+    {
         "area": "rbac",
         "import_path": "tec_tac.rbac",
         "name": "permission_groups",
@@ -498,6 +506,35 @@ HTTP_CONTRACT_DETAILS = {
             "notes": ["Writes a Core audit row (action delete). Deleting a user deletes their saved views."],
             "errors": {"403": "caller is not the owner", "404": "view not found or not readable", "429": "write rate limit reached"},
             "success": {"204": "deleted"},
+        },
+    },
+    "/api/tfd/ui/context/": {
+        "GET": {
+            "authorization": "authenticated Tec-Tac session",
+            "response": {
+                "module_register_timeout_seconds": "integer, added in 1.17.1. Seconds the UI lets a module's register() run before it marks the module failed and loads the next. Default 30, range 5 to 300. Additive: older UI builds ignore it.",
+            },
+            "notes": ["Only the field added in 1.17.1 is listed here. The rest of the context (user, permissions, extensions, capabilities, module_status, preferences, locale, tactical_ui) is documented with the runtime-context browser contract."],
+        },
+    },
+    "/api/tfd/system/runtime-settings/": {
+        "GET": {
+            "authorization": "authenticated Tec-Tac session; any signed-in user",
+            "response": {
+                "module_register_timeout_seconds": "object: value, minimum, maximum, default (seconds)",
+                "updated_at": "ISO time of the last change",
+                "updated_by": "username of the last editor, or null",
+            },
+        },
+        "PATCH": {
+            "authorization": "authenticated Tec-Tac session; effective superuser or core.privileged_operations",
+            "request": {"module_register_timeout_seconds": "required whole number of seconds from 5 to 300. A boolean, float, string or null is refused"},
+            "notes": [
+                "Writes a strict Core audit row (module_id core, object_type runtime_settings, action modify) with the before and after value, in the same transaction. A failed audit write rolls the change back.",
+                "Write rate limit: 10/min and 200/day per user and IP. Reads are not counted.",
+            ],
+            "response": "same as GET",
+            "errors": {"400": "unknown field, missing field or invalid value", "403": "caller lacks privileged authority", "429": "write rate limit reached"},
         },
     },
     "/api/tfd/account/": {
@@ -789,7 +826,7 @@ BROWSER_CONTRACTS = (
         "id": "ui.authenticated.runtime-context",
         "phase": "authenticated",
         "service": "context / state.context",
-        "operations": ["read", "locale", "timeZone", "dateTimeFormat", "tactical_ui.agent_dblclick_action", "tactical_ui.url_action_id", "tactical_ui.can_run_url_actions", "tactical_web_ui.installed", "tactical_web_ui.url"],
+        "operations": ["read", "locale", "timeZone", "dateTimeFormat", "tactical_ui.agent_dblclick_action", "tactical_ui.url_action_id", "tactical_ui.can_run_url_actions", "tactical_web_ui.installed", "tactical_web_ui.url", "module_register_timeout_seconds"],
         "audience": "module/browser",
         "docs": "tec-tac-ui/docs/module-runtime-api.md",
         "purpose": "Read the Core-provided authenticated register(context).context object (also available as state.context), including permissions, preferences, authoritative locale/time-zone/date-format fields, Tactical UI preferences, and whether the standard Tactical web UI is installed; treat it as read-only state.",
@@ -816,6 +853,7 @@ BROWSER_CONTRACTS = (
 
 RULES = (
     "A permissionless extension that needs a browser audit trail declares audit_events in tec_tac.json: [{\"object_type\": \"agent\", \"actions\": [\"view\", \"run\"]}]. object_type is a lowercase slug; each action is a standard Tec-Tac audit action or custom:<slug>. For client, site and agent Core checks the signed-in user's scope; other types have no scope check. Core sets the actor and marks the row browser_provenance. A module that declares audit_events must require framework >=1.16.0, and >=1.17.0 when it declares an object type other than client, site or agent.",
+    "The UI, not modules, applies the module register() time limit. A module does not read or enforce module_register_timeout_seconds, and its register() must not assume more than the configured time. Core only stores and publishes the value (GET /api/tfd/ui/context/).",
     "Saved views belong to the Core saved views service (tec_tac.saved_views, /api/tfd/saved-views/). Modules must not keep saved views in browser storage, cookies or their own tables. A payload holds filters and layout only, never data, secrets or tokens. A module that uses the service must require framework >=1.17.0.",
     "Use Python tec_tac.* contracts inside the Tec-Tac/Tactical backend; use HTTP only at browser/external process boundaries.",
     "UI modules must use the documented browser contracts passed to register(context) or registerPublic(context); do not import Core UI internals or read Tactical authentication storage.",

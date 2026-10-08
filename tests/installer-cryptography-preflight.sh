@@ -15,7 +15,7 @@ first_mutation_line=$(grep -nE '^[[:space:]]*(mkdir|install|cp|rm|mv|chown|chmod
 (( check_line > preflight_line )) || fail "cryptography check is not in the validated preflight block"
 (( check_line < first_mutation_line )) || fail "cryptography check occurs after the first installer mutation"
 
-migrate_line=$(grep -Fn "migrate '${APP_NAME:-tfdreporting}' --noinput" "$INSTALL" | head -n1 | cut -d: -f1 || true)
+migrate_line=$(grep -Fn "migrate tec_tac --noinput" "$INSTALL" | head -n1 | cut -d: -f1 || true)
 [[ -z "$migrate_line" || "$check_line" -lt "$migrate_line" ]] || fail "cryptography check occurs after migrations"
 
 policy_line=$(grep -Fn 'POLICY_FILE="${POLICY_ROOT}/update-trust-policy.json"' "$INSTALL" | cut -d: -f1)

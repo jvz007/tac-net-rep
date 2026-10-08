@@ -1021,16 +1021,7 @@ reportsets/example/
 
 to understand the basic paired-plugin contract.
 
-Use the existing legacy reporting POC when studying proven patterns for:
-
-```text
-Django models
-migrations
-API validation
-idempotency
-role-based permissions
-Tactical Report Manager integration
-```
+For proven patterns in Django models, migrations, API validation, idempotency and role-based permissions, read the installed modules under `modules/` and the Core contracts. The old reporting POC was retired in 1.17.1.
 
 The `example` pair is a reference implementation only. It is not a production extension.
 

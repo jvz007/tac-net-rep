@@ -1,7 +1,7 @@
 """Generic Tec-Tac role-based permission helpers.
 
 Extensions declare permission groups in ``tec_tac.json``. Tec-Tac persists role
-assignments in the compatibility ``ExtensionRolePermission`` table while keeping
+assignments in the ``ExtensionRolePermission`` table (``tec_tac.models``) while keeping
 permission discovery generic at framework level.
 """
 from __future__ import annotations
@@ -75,7 +75,7 @@ def permission_groups(plugin_id: str) -> dict[str, tuple[str, ...]]:
 
 
 def _permission_model():
-    from tfdreporting.models import ExtensionRolePermission
+    from .models import ExtensionRolePermission
 
     return ExtensionRolePermission
 

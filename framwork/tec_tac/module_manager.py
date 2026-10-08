@@ -33,7 +33,7 @@ HELPER = Path("/usr/local/sbin/tec-tac-module-job")
 MAX_PACKAGE_BYTES = 100 * 1024 * 1024
 MAX_EXTRACTED_BYTES = 512 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 10000
-PROTECTED_PLUGIN_IDS = frozenset({"example", "legacy-reporting-poc"})
+PROTECTED_PLUGIN_IDS = frozenset({"example"})
 logger = logging.getLogger(__name__)
 
 

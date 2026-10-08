@@ -64,6 +64,8 @@ python3 "${ROOT}/tests/session-retention-policy.py"
 python3 "${ROOT}/tests/session-retention-http-policy.py"
 python3 "${ROOT}/tests/session-retention-deletion.py"
 python3 "${ROOT}/tests/session-retention-scheduler.py"
+python3 "${ROOT}/tests/session-expiry-sweep-1.17.1.py"
+python3 "${ROOT}/tests/session-knox-revocation.py"
 
 python3 -m py_compile \
   "${ROOT}/framwork/tec_tac/session_security.py" \

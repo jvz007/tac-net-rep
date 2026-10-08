@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_NAME="tfdreporting"
 TACTICAL_ROOT="${TACTICAL_ROOT:-/rmm}"
 BACKEND_DIR="${TACTICAL_ROOT}/api/tacticalrmm"
 VENV_PYTHON="${TACTICAL_ROOT}/api/env/bin/python"
@@ -18,15 +17,11 @@ REPO_ROOT="${TEC_TAC_ROOT:-/opt/tec-tac}"
 FRAMEWORK_DIR="${TEC_TAC_FRAMEWORK_ROOT:-${REPO_ROOT}/framework}"
 EXTENSIONS_DIR="${TEC_TAC_EXTENSIONS_ROOT:-${REPO_ROOT}/extensions}"
 REPORTSETS_DIR="${TEC_TAC_REPORTSETS_ROOT:-${REPO_ROOT}/reportsets}"
-LEGACY_REPORTING_DIR="${EXTENSIONS_DIR}/reporting"
-APP_DIR="${LEGACY_REPORTING_DIR}/${APP_NAME}"
 
 BEGIN_MARKER="# BEGIN TEC-TAC EXTENSION FRAMEWORK"
 END_MARKER="# END TEC-TAC EXTENSION FRAMEWORK"
 OLD_BEGIN_MARKER="# BEGIN TFD REPORTING EXTENSION"
 OLD_END_MARKER="# END TFD REPORTING EXTENSION"
-LEGACY_DEST_APP="${BACKEND_DIR}/${APP_NAME}"
-EXCLUDE_FILE="${TACTICAL_ROOT}/.git/info/exclude"
 PURGE_DATA=false
 
 if [[ "${1:-}" == "--purge-data" ]]; then
@@ -54,9 +49,14 @@ run_as_tactical() {
 log "Detected Tec-Tac runtime root: ${REPO_ROOT}"
 
 if ${PURGE_DATA}; then
-    [[ -f "${APP_DIR}/apps.py" || -d "${LEGACY_DEST_APP}" ]] || fail "${APP_NAME} code is missing; cannot safely run migration rollback."
-    log "Purging ${APP_NAME} database objects via Django migrations."
-    run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' migrate '${APP_NAME}' zero --noinput"
+    # The extension-permission table lives in tec_tac (migration 0023). Rolling tec_tac
+    # back to 0022 removes it, as the old purge did. Only roll back when 0023 is applied.
+    if run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' showmigrations tec_tac" | grep -Eq '\[X\][[:space:]]+0023_extension_role_permission'; then
+        log "Purging the Tec-Tac extension-permission table via Django migrations (tec_tac back to 0022_runtime_config)."
+        run_as_tactical bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' migrate tec_tac 0022_runtime_config --noinput"
+    else
+        log "Migration 0023_extension_role_permission is not applied; no extension-permission table to purge."
+    fi
 else
     log "Database data will be preserved. Use --purge-data to remove extension tables and data."
 fi
@@ -107,19 +107,6 @@ log "Removed Tec-Tac privileged lifecycle/update/backup/maintenance helpers, sud
 
 # Runtime code and installed modules are intentionally not deleted.
 # Uninstall disconnects Tec-Tac from Tactical; source checkouts under /opt/tec-tac-src remain separate.
-if [[ -d "${LEGACY_DEST_APP}" ]]; then
-    rm -rf "${LEGACY_DEST_APP}"
-    log "Removed legacy in-tree ${LEGACY_DEST_APP}."
-fi
-
-if [[ -f "${EXCLUDE_FILE}" ]]; then
-    TMP_EXCLUDE="$(mktemp)"
-    grep -Fxv "/api/tacticalrmm/${APP_NAME}/" "${EXCLUDE_FILE}" > "${TMP_EXCLUDE}" || true
-    cat "${TMP_EXCLUDE}" > "${EXCLUDE_FILE}"
-    rm -f "${TMP_EXCLUDE}"
-    chown "${TACTICAL_USER}:${TACTICAL_GROUP}" "${EXCLUDE_FILE}"
-fi
-
 systemctl restart rmm daphne celery celerybeat
 
 for svc in rmm daphne celery celerybeat; do

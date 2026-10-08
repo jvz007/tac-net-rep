@@ -114,6 +114,7 @@ class QuerySet:
         for key, value in kwargs.items(): rows=[row for row in rows if _lookup(row, key, value)]
         return QuerySet(self.manager, rows)
     def count(self): return len(self.rows)
+    def values_list(self, field, flat=False): return [getattr(row, field) for row in self.rows]
     def delete(self):
         for row in list(self.rows):
             if row in self.manager.rows: self.manager.rows.remove(row)
