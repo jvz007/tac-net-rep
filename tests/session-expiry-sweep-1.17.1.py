@@ -48,6 +48,10 @@ class Q:
         return any(parts) if self.mode == "or" else all(parts)
 
 
+class ValuesRows(list):
+    """Result of .values(field): usable as a queryset-valued `__in` operand."""
+
+
 class Rows(list):
     """A list that also behaves like the few QuerySet methods the code uses."""
 
@@ -65,6 +69,9 @@ class Rows(list):
 
     def order_by(self, *fields):
         return self._wrap(sorted(self, key=lambda r: getattr(r, fields[0])))
+
+    def values(self, field):
+        return ValuesRows(getattr(r, field) for r in self)
 
     def values_list(self, field, flat=False):
         assert flat is True

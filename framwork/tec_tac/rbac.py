@@ -10,10 +10,12 @@ from accounts.models import Role
 from tec_tac.registry import get_plugins
 
 CORE_PRIVILEGED_PERMISSION = "core.privileged_operations"
+CORE_RUNTIME_SETTINGS_MANAGE_PERMISSION = "core.runtime_settings.manage"
 CORE_RESOURCES_CLIENTS_MANAGE_PERMISSION = "core.resources.clients.manage"
 CORE_RESOURCES_SITES_MANAGE_PERMISSION = "core.resources.sites.manage"
 CORE_PERMISSION_GROUPS = {
     "Privileged operations": (CORE_PRIVILEGED_PERMISSION,),
+    "Runtime settings": (CORE_RUNTIME_SETTINGS_MANAGE_PERMISSION,),
     "Client resource management": (CORE_RESOURCES_CLIENTS_MANAGE_PERMISSION,),
     "Site resource management": (CORE_RESOURCES_SITES_MANAGE_PERMISSION,),
 }
@@ -144,6 +146,25 @@ def can_manage_privileged_operations(user) -> bool:
         return has_extension_permission(user, CORE_PRIVILEGED_PERMISSION)
     except Exception:
         return False
+
+
+
+def can_manage_runtime_settings(user) -> bool:
+    """May this user change Core runtime settings (1.17.2)?
+
+    True for an effective superuser, a holder of core.runtime_settings.manage, or a
+    holder of core.privileged_operations (kept so 1.17.1 administrators lose
+    nothing). Never raises: any error reads as False.
+    """
+    try:
+        if is_effective_superuser(user):
+            return True
+        return has_extension_permission(user, CORE_RUNTIME_SETTINGS_MANAGE_PERMISSION) or has_extension_permission(
+            user, CORE_PRIVILEGED_PERMISSION
+        )
+    except Exception:
+        return False
+
 
 def set_extension_permission(role, codename: str, granted: bool):
     _validate_codename(codename)

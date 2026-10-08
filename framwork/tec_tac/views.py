@@ -54,7 +54,7 @@ from .module_runtime import module_runtime_snapshot
 from .registry import get_plugins
 from .notices import unread_count as notice_unread_count
 from .preferences import get_user_preferences
-from .runtime_settings import get_module_register_timeout_seconds
+from .runtime_settings import get_module_register_timeout_seconds, get_update_source
 from .account_self_service import tactical_ui_context
 from .session_security import SessionAuthenticated, _audit
 from .trust_policy import TrustPolicyError, LEVEL_RANK, console_guidance as trust_policy_console_guidance, get_policy as get_update_trust_policy, set_policy as set_update_trust_policy
@@ -816,7 +816,8 @@ class SystemUpdateOnlineStatusView(APIView):
         component = str(request.query_params.get("component", "")).strip()
         force = str(request.query_params.get("force", "")).strip().lower() in {"1", "true", "yes", "on"}
         try:
-            return Response(system_update_online_status(component, force=force))
+            source = get_update_source(component)
+            return Response(system_update_online_status(component, force=force, source=source))
         except SystemUpdateError as exc:
             return Response({"detail": str(exc)}, status=400)
 
@@ -841,8 +842,15 @@ class SystemUpdateOnlineStageView(APIView):
     def post(self, request):
         _require_module_manager(request.user)
         component = str(request.data.get("component", "")).strip()
-        source_type = str(request.data.get("source_type", "release")).strip()
         ref = request.data.get("ref")
+        if request.data.get("source_type") is None:
+            # No source named: use the remembered one (default release). An explicit source_type wins.
+            saved = get_update_source(component)
+            source_type = saved["type"]
+            if ref is None:
+                ref = saved["ref"]
+        else:
+            source_type = str(request.data.get("source_type")).strip()
         try:
             return Response(stage_online_package(component, source_type, str(ref).strip() if ref is not None else None), status=201)
         except SystemUpdateError as exc:

@@ -68,7 +68,7 @@ mods["tec_tac.session_security"].SessionAuthenticated = type("SessionAuthenticat
 mods["tec_tac.throttles"].RuntimeSettingsWriteMinThrottle = type("Min", (), {})
 mods["tec_tac.throttles"].RuntimeSettingsWriteDayThrottle = type("Day", (), {})
 PRIVILEGED = {"ok": False}
-mods["tec_tac.rbac"].can_manage_privileged_operations = lambda user: PRIVILEGED["ok"]
+mods["tec_tac.rbac"].can_manage_runtime_settings = lambda user: PRIVILEGED["ok"]
 AUDITS = []
 AUDIT_FAIL = {"on": False}
 
@@ -214,13 +214,13 @@ must("from .runtime_settings import get_module_register_timeout_seconds" in view
 urls = (APP / "urls.py").read_text(encoding="utf-8")
 must('path("system/runtime-settings/", RuntimeSettingsView.as_view(), name="tec-tac-runtime-settings")' in urls, "route missing")
 openapi = (APP / "openapi.py").read_text(encoding="utf-8")
-must(openapi.count("Tec-Tac · Runtime Settings") == 2, "Swagger group missing from callback and path tables")
+must(openapi.count("Tec-Tac · Runtime Settings") == 3, "Swagger group missing from callback and path tables (callback, runtime-settings path, update-source path)")
 contracts = (APP / "contracts.py").read_text(encoding="utf-8")
 must('"module_register_timeout_seconds"' in contracts and '"/api/tfd/system/runtime-settings/"' in contracts, "contracts.py must list the key and the endpoint")
 must('"/api/tfd/ui/context/"' in contracts, "contracts.py must describe the ui/context addition")
 must("The UI, not modules, applies the module register() time limit." in contracts, "contracts.py must say the UI applies the limit")
 must("get_module_register_timeout_seconds" in contracts, "contracts.py python row missing")
-for needle in ('"PATCH"', "core.privileged_operations", "strict Core audit row"):
+for needle in ('"PATCH"', "core.privileged_operations", "core.runtime_settings.manage", "strict Core audit row"):
     must(needle in contracts, f"endpoint contract lacks {needle}")
 install = (ROOT / "install.sh").read_text(encoding="utf-8")
 must("/api/tfd/system/runtime-settings/" in install and "tec_tac/runtime_settings.py" in install, "install.sh must verify the route and require the file")

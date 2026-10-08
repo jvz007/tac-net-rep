@@ -12,7 +12,7 @@ from .session_security_views import (
     AdminLoginSessionListView, AdminLoginSessionRevokeView, AdminUserLoginSessionsRevokeView,
 )
 from .dashboard_views import DashboardListCreateView, DashboardDetailView
-from .runtime_settings import RuntimeSettingsView
+from .runtime_settings import RuntimeSettingsView, UpdateSourceView
 from .saved_view_views import SavedViewListCreateView, SavedViewDetailView
 from .preference_views import UserPreferencesView
 from .notice_views import NoticeListCreateView, NoticeReadView, NoticeReadAllView, NoticeClearReadView
@@ -100,6 +100,7 @@ urlpatterns = [
     path("ui/notices/read-all/", NoticeReadAllView.as_view(), name="tec-tac-notices-read-all"),
     path("ui/notices/clear-read/", NoticeClearReadView.as_view(), name="tec-tac-notices-clear-read"),
     path("system/runtime-settings/", RuntimeSettingsView.as_view(), name="tec-tac-runtime-settings"),
+    path("system/update-source/", UpdateSourceView.as_view(), name="tec-tac-update-source"),
     path("system/diagnostics/", SystemDiagnosticsView.as_view(), name="tec-tac-system-diagnostics"),
     path("system/backups/restore/", BackupRestoreView.as_view(), name="tec-tac-backup-restore"),
     path("system/backups/restore/jobs/<uuid:job_id>/", BackupRestoreJobView.as_view(), name="tec-tac-backup-restore-job"),

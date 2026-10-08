@@ -159,6 +159,9 @@ class TecTacRuntimeConfig(models.Model):
     singleton = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
     # Seconds a module's register() may take before the UI marks it failed.
     module_register_timeout_seconds = models.PositiveIntegerField(default=30)
+    # Remembered update source per component (1.17.2): {"framework": {"type": "branch", "ref": "dev"}, ...}.
+    # A missing or invalid entry reads as the default (release, ref null); see runtime_settings.
+    update_sources = models.JSONField(default=dict, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
     updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="tec_tac_runtime_config_updates")
 

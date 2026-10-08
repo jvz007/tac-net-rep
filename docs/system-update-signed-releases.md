@@ -15,3 +15,7 @@ Downgrades require both a superuser request in the web tier and the root-owned `
 The root trust policy is stored under `/etc/tec-tac/policy/`. The Tactical sudo path may strengthen that floor but cannot lower it; lowering requires direct root-console use of the privileged trust helper.
 
 Private signing keys never belong on a Tec-Tac server. Only public publisher policy and public verification keys are installed in the root-managed trust store.
+
+## Remembered update source (1.17.2)
+
+Core remembers a release or branch source for each component and uses it for the online check and as the default when staging. It changes nothing about trust: every staged package is still verified as root. The install job also records where the staged package came from (type, repository, ref, commit) as provenance in the history row. Root never uses it to decide anything. See `update-source.md`.

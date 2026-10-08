@@ -31,6 +31,9 @@ expected = {
     'ui.authenticated.header',
     'ui.authenticated.module-status',
     'ui.authenticated.runtime-context',
+    'ui.authenticated.navigation',
+    'ui.authenticated.router',
+    'ui.authenticated.permissions',
     'ui.public.sso-providers',
     'ui.public.module-runtime',
 }

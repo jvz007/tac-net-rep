@@ -77,6 +77,7 @@ CORE_PATH_GROUPS = (
     ("/api/tfd/scheduler/", "Tec-Tac · Scheduler"),
     ("/api/tfd/ui/", "Tec-Tac · UI Runtime"),
     ("/api/tfd/system/runtime-settings/", "Tec-Tac · Runtime Settings"),
+    ("/api/tfd/system/update-source/", "Tec-Tac · Runtime Settings"),
     ("/api/tfd/system/diagnostics/", "Tec-Tac · Diagnostics"),
     ("/api/tfd/system/recovery/", "Tec-Tac · Backup & Restore"),
     ("/api/tfd/system/backups/", "Tec-Tac · Backup & Restore"),

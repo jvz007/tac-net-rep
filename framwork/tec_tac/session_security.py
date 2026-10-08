@@ -1041,12 +1041,17 @@ def sweep_expired_sessions(*, now=None, limit: int = SESSION_SWEEP_DEFAULT_LIMIT
             result["errors"] += 1
 
     # A revoked row whose token is still live is a leak (a delete that failed or
-    # a token reissued path). Exact digests only.
-    revoked_digests = [
-        d for d in TecTacSessionTrust.objects.filter(revoked=True).exclude(knox_digest="").values_list("knox_digest", flat=True) if d
-    ]
-    if revoked_digests:
-        deleted = AuthToken.objects.filter(digest__in=revoked_digests).delete()
+    # a token reissued path). Exact digests only. The step is bounded by the same
+    # limit and counts tokens that still exist, so old tombstones whose tokens are
+    # already gone never fill the limit. The rest is deleted on the next tick.
+    revoked_digests = (
+        TecTacSessionTrust.objects.filter(revoked=True).exclude(knox_digest="").values("knox_digest")
+    )
+    orphan_digests = list(
+        AuthToken.objects.filter(digest__in=revoked_digests).values_list("digest", flat=True)[:limit]
+    )
+    if orphan_digests:
+        deleted = AuthToken.objects.filter(digest__in=orphan_digests).delete()
         result["orphan_tokens_deleted"] = int(deleted[0]) if deleted else 0
     return result
 

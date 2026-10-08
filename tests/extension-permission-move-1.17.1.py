@@ -226,6 +226,7 @@ allowed = {
     (APP / "models.py").resolve(): "models.py: only the db_table string",
     (APP / "migrations" / "0023_extension_role_permission.py").resolve(): "0023: only the table name",
     (APP / "migrations" / "0024_retire_tfdreporting_poc.py").resolve(): "0024",
+    (APP / "migrations" / "0025_runtime_update_sources.py").resolve(): "0025: only the dependency line",
 }
 scan = [ROOT / "install.sh", ROOT / "uninstall.sh", *(ROOT / "scripts").rglob("*"), *(ROOT / "framwork").rglob("*")]
 pattern = re.compile(r"tfdreporting|legacy-reporting|reporting-permission|network-availability|NetworkAvailability")
@@ -243,6 +244,10 @@ for path in scan:
             for line in text.splitlines():
                 if pattern.search(line):
                     must(OLD_TABLE in line, f"0023 names the old app outside the table name: {line.strip()}")
+        elif resolved.name.startswith("0025"):
+            for line in text.splitlines():
+                if pattern.search(line):
+                    must('("tec_tac", "0024_retire_tfdreporting_poc")' in line, f"0025 names the old app outside its dependency line: {line.strip()}")
         continue
     for line in text.splitlines():
         hit = pattern.search(line)

@@ -173,7 +173,9 @@ Every tick (about one minute) it runs `sweep_expired_sessions`:
 - It skips rows with no `knox_digest` (written before the digest was stored, or
   not Knox). Revoking them would delete every token of that username and end the
   user's other live sessions. They are counted in `skipped_no_digest`.
-- It deletes any live token whose digest belongs to an already revoked row.
+- It deletes any live token whose digest belongs to an already revoked row. This step is bounded by the same limit
+  (1.17.2): it picks at most that many tokens that still exist, so old revoked rows whose tokens are gone never use up
+  the limit. Any left over go on the next tick.
 - It handles at most 500 rows per tick. A larger backlog clears over the next ticks.
 - A failure never stops the tick or Tactical. The tick prints
   `session_expiry_sweep=error` and retries on the next tick.

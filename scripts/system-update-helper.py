@@ -367,6 +367,29 @@ def _unlink_staged_metadata_if_same(root_fd: int, upload_id: str, expected_info)
         os.unlink(name, dir_fd=root_fd)
 
 
+SOURCE_TYPES = {"release", "branch", "offline"}
+SOURCE_TEXT_MAX = 200
+
+
+def sanitise_source(value):
+    """Provenance of an install (1.17.2): where the staged package came from.
+
+    It is recorded in the history row only. It is never an execution authority:
+    the helper re-verifies trust as root. Anything unexpected is dropped.
+    """
+    if not isinstance(value, dict) or not isinstance(value.get("type"), str) or value["type"] not in SOURCE_TYPES:
+        return {"type": "offline"}
+    clean = {"type": value["type"]}
+    for key in ("repository", "ref"):
+        item = value.get(key)
+        if isinstance(item, str) and 0 < len(item) <= SOURCE_TEXT_MAX and item.isprintable():
+            clean[key] = item
+    commit = value.get("commit")
+    if isinstance(commit, str) and re.fullmatch(r"[0-9a-fA-F]{40}", commit):
+        clean["commit"] = commit.lower()
+    return clean
+
+
 def claim_job(job_id):
     status_path, request = load_job(job_id)
     if request.get("status") != "queued":
@@ -419,6 +442,7 @@ def claim_job(job_id):
             "package_filename": str(meta.get("filename") or source_name),
             "release_manifest_path": str(running_manifest) if running_manifest is not None else None,
             "release_signature_path": str(running_signature) if running_signature is not None else None,
+            "source": sanitise_source(request.get("source")),
         }
         req_path = running_request_path(job_id)
         atomic_json(req_path, immutable, mode=0o600, uid=0, gid=0)

@@ -33,6 +33,7 @@ STATE_ROOT = Path("/var/lib/tec-tac/system-updates")
 CACHE_ROOT = STATE_ROOT / "cache"
 RELEASE_CACHE = CACHE_ROOT / "release-cache.json"
 RELEASE_CACHE_TTL = timedelta(hours=24)
+BRANCH_CACHE_TTL = timedelta(minutes=5)
 STAGED_ROOT = STATE_ROOT / "staged"
 JOBS_ROOT = STATE_ROOT / "jobs"
 LOGS_ROOT = STATE_ROOT / "logs"
@@ -718,7 +719,7 @@ def cached_online_status(component: str) -> dict:
     }
 
 
-def online_status(component: str, *, force: bool = False) -> dict:
+def _release_online_status(component: str, *, force: bool = False) -> dict:
     if component not in COMPONENTS:
         raise SystemUpdateError("component must be framework or ui")
     repo = _repo_name(component)
@@ -779,6 +780,117 @@ def online_status(component: str, *, force: bool = False) -> dict:
             payload = cached
             payload["cache"] = {"hit": True, "stale": True, "ttl_hours": 24}
         payload["release_error"] = str(exc)
+    return payload
+
+
+def _short(commit: object) -> str | None:
+    return str(commit)[:7] if isinstance(commit, str) and commit else None
+
+
+def _installed_source_commit(component: str, repo: str) -> tuple[str | None, dict | None]:
+    """The GitHub commit the installed code came from, or (None, None) when unknown.
+
+    This is the provenance recorded on the most recent succeeded install job of the
+    component (1.17.2). It cannot be source_git.update_head: the root helper commits
+    the verified bytes to a local branch, so that SHA never equals GitHub's head.
+    If the most recent install came from another repository, from an offline upload
+    or from before 1.17.2, it has no matching commit and the answer is unknown.
+    """
+    newest: dict | None = None
+    newest_at = ""
+    for root in (HISTORY_ROOT, JOBS_ROOT):
+        if not root.is_dir():
+            continue
+        for path in root.glob("*.json"):
+            try:
+                job = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(job, dict) or job.get("status") != "succeeded":
+                continue
+            if job.get("component") != component or job.get("action", "install") != "install":
+                continue
+            finished = str(job.get("finished_at") or job.get("created_at") or "")
+            if newest is None or finished > newest_at:
+                newest, newest_at = job, finished
+    source = (newest or {}).get("source")
+    if not isinstance(source, dict) or source.get("repository") != repo:
+        return None, None
+    commit = source.get("commit")
+    commit = commit.lower() if isinstance(commit, str) and re.fullmatch(r"[0-9a-fA-F]{40}", commit) else None
+    return commit, {"type": source.get("type"), "ref": source.get("ref")}
+
+
+def _branch_head(component: str, repo: str, ref: str, *, force: bool) -> dict:
+    """Head commit and date of a branch. Cached 5 minutes in the release cache file; force bypasses."""
+    doc = _read_release_cache()
+    cached = doc.get("branches") if isinstance(doc.get("branches"), dict) else {}
+    row = cached.get(component)
+    if not force and isinstance(row, dict) and row.get("repository") == repo and row.get("ref") == ref:
+        checked = _parse_cached_at(row.get("checked_at"))
+        commit = row.get("head_commit")
+        if (
+            checked is not None
+            and datetime.now(timezone.utc) - checked < BRANCH_CACHE_TTL
+            and isinstance(commit, str)
+            and re.fullmatch(r"[0-9a-fA-F]{40}", commit)
+        ):
+            return {"head_commit": commit, "head_date": row.get("head_date")}
+    info = _github_json(f"https://api.github.com/repos/{repo}/branches/{urllib.parse.quote(ref, safe='')}")
+    commit_row = info.get("commit") if isinstance(info, dict) else None
+    if not isinstance(commit_row, dict):
+        raise SystemUpdateError("Unable to resolve branch commit.")
+    commit = str(commit_row.get("sha", ""))
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", commit):
+        raise SystemUpdateError("GitHub returned an invalid branch commit SHA.")
+    inner = commit_row.get("commit") if isinstance(commit_row.get("commit"), dict) else {}
+    committer = inner.get("committer") if isinstance(inner.get("committer"), dict) else {}
+    head_date = committer.get("date") if isinstance(committer.get("date"), str) else None
+    try:
+        cached[component] = {"repository": repo, "ref": ref, "checked_at": _utcnow(), "head_commit": commit, "head_date": head_date}
+        doc["branches"] = cached
+        _write_release_cache(doc)
+    except OSError:
+        pass  # the cache is an optimisation; the answer is still good
+    return {"head_commit": commit, "head_date": head_date}
+
+
+def _branch_status(component: str, ref: str, *, force: bool) -> tuple[dict, str | None]:
+    repo = _repo_name(component)
+    branch = {
+        "ref": ref, "head_commit": None, "head_short": None, "head_date": None,
+        "installed_commit": None, "installed_short": None, "installed_source": None,
+        "state": "unknown", "differs": None,
+    }
+    error = None
+    try:
+        head = _branch_head(component, repo, ref, force=force)
+        branch.update(head_commit=head["head_commit"].lower(), head_short=_short(head["head_commit"]), head_date=head["head_date"])
+        installed_commit, installed_source = _installed_source_commit(component, repo)
+        branch.update(installed_commit=installed_commit, installed_short=_short(installed_commit), installed_source=installed_source)
+        if installed_commit:
+            branch["differs"] = installed_commit != branch["head_commit"]
+            branch["state"] = "differs" if branch["differs"] else "same"
+    except SystemUpdateError as exc:
+        error = str(exc)
+    except Exception as exc:  # a branch failure must never hide the release data
+        error = f"Branch check failed: {exc.__class__.__name__}"
+    return branch, error
+
+
+def online_status(component: str, *, force: bool = False, source: dict | None = None) -> dict:
+    """Online status for a component.
+
+    With no source or a release source the answer is the stable-release answer, exactly as
+    before 1.17.2. With a branch source it keeps every release key and adds ``source``,
+    ``branch`` and ``branch_error`` (1.17.2). A branch failure sets branch_error only.
+    """
+    payload = _release_online_status(component, force=force)
+    if not isinstance(source, dict) or source.get("type") != "branch":
+        return payload
+    ref = str(source.get("ref") or "")
+    payload["source"] = {"type": "branch", "ref": ref}
+    payload["branch"], payload["branch_error"] = _branch_status(component, ref, force=force)
     return payload
 
 
@@ -934,6 +1046,9 @@ def queue_install(upload_id: str, *, allow_downgrade: bool = False, requested_by
         "requested_by": str(requested_by or ""),
         "version": preview.get("version"),
         "operation": operation,
+        # Provenance only (1.17.2). The root helper copies a sanitised copy into the
+        # history row; it is never an execution authority.
+        "source": preview.get("source") if isinstance(preview.get("source"), dict) else {"type": "offline"},
     })
     try:
         _dispatch(job["id"])
@@ -998,6 +1113,12 @@ def _recent_history(limit: int = 12) -> list[dict]:
     return items[:limit]
 
 
+def _saved_update_sources() -> dict:
+    from .runtime_settings import get_update_sources
+
+    return get_update_sources()
+
+
 def system_status() -> dict:
     return {
         "framework": {
@@ -1013,6 +1134,7 @@ def system_status() -> dict:
         "release_cache": {component: cached_online_status(component) for component in sorted(COMPONENTS)},
         "accepted_archives": [".zip", ".tar.gz", ".tgz"],
         "advanced_sources": {"branch_requires_unlock": True},
+        "update_sources": _saved_update_sources(),
         "signed_release_policy": {component: {"minimum_version": _signed_release_min_version(component)} for component in sorted(COMPONENTS)},
         "update_trust_policy": get_trust_policy(),
         "history": _recent_history(),

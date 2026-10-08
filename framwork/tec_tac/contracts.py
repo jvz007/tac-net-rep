@@ -403,6 +403,22 @@ CORE_CONTRACTS = (
         "audience": "diagnostics",
     },
     {
+        "area": "runtime-settings",
+        "import_path": "tec_tac.runtime_settings",
+        "name": "get_update_source",
+        "kind": "python",
+        "purpose": "Return the remembered update source {type: release|branch, ref} for framework or ui (1.17.2). Default {type: release, ref: None}. A missing or invalid value reads as the default. Never raises. Informational: the System Updates page and the default stage use it.",
+        "audience": "diagnostics",
+    },
+    {
+        "area": "rbac",
+        "import_path": "tec_tac.rbac",
+        "name": "can_manage_runtime_settings",
+        "kind": "python",
+        "purpose": "True when the user may change Core runtime settings: an effective superuser, a holder of core.runtime_settings.manage (1.17.2) or a holder of core.privileged_operations. Never raises; any error reads as False.",
+        "audience": "backend/administration",
+    },
+    {
         "area": "rbac",
         "import_path": "tec_tac.rbac",
         "name": "permission_groups",
@@ -517,6 +533,54 @@ HTTP_CONTRACT_DETAILS = {
             "notes": ["Only the field added in 1.17.1 is listed here. The rest of the context (user, permissions, extensions, capabilities, module_status, preferences, locale, tactical_ui) is documented with the runtime-context browser contract."],
         },
     },
+    "/api/tfd/system/update-source/": {
+        "GET": {
+            "authorization": "authenticated Tec-Tac session; any signed-in user",
+            "response": {
+                "update_sources": "object with framework and ui, each {type: release|branch, ref: branch name or null}. Default {type: release, ref: null}",
+                "updated_at": "ISO time of the last change",
+                "updated_by": "username of the last editor, or null",
+            },
+        },
+        "PATCH": {
+            "authorization": "authenticated Tec-Tac session; effective superuser, core.runtime_settings.manage or core.privileged_operations (same rule as runtime-settings)",
+            "request": {
+                "component": "required: framework or ui",
+                "type": "required: release or branch",
+                "ref": "branch name. Required for type branch: at most 200 characters, only letters, digits and . _ / -, no '..', no leading '-' or '/', no trailing '/', '.' or '.lock'. Ignored (stored as null) for type release",
+            },
+            "notes": [
+                "Added in 1.17.2. Additive: no existing endpoint changes its meaning.",
+                "The branch is not checked against GitHub on save, so saving works offline. A wrong name shows up as branch_error on the next online check.",
+                "Writes a strict Core audit row (module_id core, object_type update_source, object_id the component, action modify) with the before and after {type, ref}, in the same transaction. A failed audit write rolls the change back. Setting the same value writes nothing.",
+                "Changing the remembered source does not stage or install anything. Staging and installing still need core.privileged_operations and every signed-release and trust-policy check still applies.",
+                "Write rate limit: 10/min and 200/day per user and IP (shared with runtime-settings). Reads are not counted.",
+            ],
+            "response": "same as GET",
+            "errors": {"400": "unknown field, unknown component, invalid type or invalid branch name", "403": "caller holds neither core.runtime_settings.manage nor core.privileged_operations and is not a superuser", "429": "write rate limit reached"},
+        },
+    },
+    "/api/tfd/system/updates/": {
+        "GET": {
+            "authorization": "authenticated Tec-Tac session with privileged lifecycle authority",
+            "response": {
+                "update_sources": "added in 1.17.2: {framework, ui}, each {type: release|branch, ref}. The remembered update source, so the UI needs no extra call. Additive: older UI builds ignore it.",
+            },
+            "notes": ["Only the key added in 1.17.2 is listed here."],
+        },
+    },
+    "/api/tfd/system/updates/online/": {
+        "GET": {
+            "authorization": "authenticated Tec-Tac session with privileged lifecycle authority",
+            "query": {"component": "framework or ui", "force": "1 bypasses the caches"},
+            "response": {
+                "source": "added in 1.17.2, only when the remembered source is a branch: {type: branch, ref}. For a release source the response is unchanged",
+                "branch": "added in 1.17.2, only for a branch source: {ref, head_commit, head_short, head_date, installed_commit, installed_short, installed_source {type, ref}, state same|differs|unknown, differs true|false|null}. The installed commit is the GitHub commit recorded when the component was last installed. It is unknown (state unknown, differs null) for an offline upload, another repository, or an install made before 1.17.2",
+                "branch_error": "added in 1.17.2, only for a branch source: text when the branch could not be read, else null. The release data is still returned",
+            },
+            "notes": ["The branch head is cached for 5 minutes in the release cache file; force=1 bypasses it. Every earlier key is unchanged."],
+        },
+    },
     "/api/tfd/system/runtime-settings/": {
         "GET": {
             "authorization": "authenticated Tec-Tac session; any signed-in user",
@@ -527,14 +591,14 @@ HTTP_CONTRACT_DETAILS = {
             },
         },
         "PATCH": {
-            "authorization": "authenticated Tec-Tac session; effective superuser or core.privileged_operations",
+            "authorization": "authenticated Tec-Tac session; effective superuser, a role holding core.runtime_settings.manage (1.17.2, grantable in the role editor by any role manager) or a role holding core.privileged_operations",
             "request": {"module_register_timeout_seconds": "required whole number of seconds from 5 to 300. A boolean, float, string or null is refused"},
             "notes": [
                 "Writes a strict Core audit row (module_id core, object_type runtime_settings, action modify) with the before and after value, in the same transaction. A failed audit write rolls the change back.",
                 "Write rate limit: 10/min and 200/day per user and IP. Reads are not counted.",
             ],
             "response": "same as GET",
-            "errors": {"400": "unknown field, missing field or invalid value", "403": "caller lacks privileged authority", "429": "write rate limit reached"},
+            "errors": {"400": "unknown field, missing field or invalid value", "403": "caller holds neither core.runtime_settings.manage nor core.privileged_operations and is not a superuser", "429": "write rate limit reached"},
         },
     },
     "/api/tfd/account/": {
@@ -712,6 +776,13 @@ BROWSER_CONTRACTS = (
         "audience": "module/browser",
         "docs": "tec-tac-ui/docs/module-runtime-api.md",
         "purpose": "Use Core-owned authenticated browser transport without reading Tactical tokens or authentication storage.",
+        "details": [
+            "Error shape: every error thrown by api, apiRaw, apiBlob, apiText and publicApi carries status, payload and code.",
+            "status is 0 when no response arrived, 401 when there is no token, otherwise the HTTP status. For the error-key rejection it is the 2xx status of the response.",
+            "payload is the parsed response body. It is null for a 204, for an empty or unparseable body, and when status is 0. The field is payload; there is no body alias.",
+            "code is payload.code when that is a string, otherwise null.",
+            "api() also throws on any 2xx JSON object with a truthy error or detail key, unless rejectErrorPayload: false is passed. apiRaw, apiBlob and apiText never do.",
+        ],
     },
     {
         "id": "ui.authenticated.audit",
@@ -763,7 +834,7 @@ BROWSER_CONTRACTS = (
         "id": "ui.authenticated.code-editor",
         "phase": "authenticated",
         "service": "codeEditor",
-        "operations": ["create", "createModel", "registerCompletionProvider", "registerHoverProvider", "registerDiagnosticsProvider", "clear"],
+        "operations": ["create", "createModel", "registerCompletionProvider", "registerHoverProvider", "registerDiagnosticsProvider", "languages", "clear"],
         "audience": "module/browser",
         "docs": "tec-tac-ui/docs/module-code-editor.md",
         "purpose": "Use Core-owned shared editor infrastructure without importing Monaco or Tactical editor internals.",
@@ -799,7 +870,7 @@ BROWSER_CONTRACTS = (
         "id": "ui.authenticated.help",
         "phase": "authenticated",
         "service": "help",
-        "operations": ["register", "open", "clear"],
+        "operations": ["register", "open", "openContext", "list", "clear"],
         "audience": "provider/browser",
         "docs": "tec-tac-ui/docs/module-help.md",
         "purpose": "Contribute module help articles to the Core Help and Knowledge Base surfaces.",
@@ -817,7 +888,7 @@ BROWSER_CONTRACTS = (
         "id": "ui.authenticated.module-status",
         "phase": "authenticated",
         "service": "modules",
-        "operations": ["list", "get", "isInstalled", "isEnabled"],
+        "operations": ["list", "get", "has", "isInstalled", "isEnabled", "isActive", "version", "satisfies"],
         "audience": "module/browser",
         "docs": "tec-tac-ui/docs/module-status.md",
         "purpose": "Inspect installed/enabled module state without additional HTTP calls; backend capability checks remain authoritative.",
@@ -826,10 +897,60 @@ BROWSER_CONTRACTS = (
         "id": "ui.authenticated.runtime-context",
         "phase": "authenticated",
         "service": "context / state.context",
-        "operations": ["read", "locale", "timeZone", "dateTimeFormat", "tactical_ui.agent_dblclick_action", "tactical_ui.url_action_id", "tactical_ui.can_run_url_actions", "tactical_web_ui.installed", "tactical_web_ui.url", "module_register_timeout_seconds"],
+        "operations": ["read", "locale", "timeZone", "dateTimeFormat", "tactical_ui.agent_dblclick_action", "tactical_ui.url_action_id", "tactical_ui.can_run_url_actions", "tactical_web_ui.installed", "tactical_web_ui.url", "server_url", "module_register_timeout_seconds"],
         "audience": "module/browser",
         "docs": "tec-tac-ui/docs/module-runtime-api.md",
         "purpose": "Read the Core-provided authenticated register(context).context object (also available as state.context), including permissions, preferences, authoritative locale/time-zone/date-format fields, Tactical UI preferences, and whether the standard Tactical web UI is installed; treat it as read-only state.",
+        "details": [
+            "server_url: the Tactical API base without a trailing slash. It is an empty string when unset or not http(s). Read-only.",
+            "module_register_timeout_seconds: whole seconds from 5 to 300, default 30. The UI applies it. It covers loading the module's entry file plus its register() call. A module that takes longer is marked failed and the UI carries on.",
+        ],
+    },
+    {
+        "id": "ui.authenticated.navigation",
+        "phase": "authenticated",
+        "service": "addNavigation",
+        "operations": ["addNavigation"],
+        "audience": "module/browser",
+        "docs": "tec-tac-ui/docs/module-runtime-api.md",
+        "purpose": "Add a left-navigation item with addNavigation(item) from register(context). The item may be gated by permission.",
+        "details": [
+            "The item may carry one optional permission (a single code) or permissions (a list of codes).",
+            "The item is hidden when the user lacks any listed code. Superusers always see it. An item with neither field is shown.",
+            "When the backend supplied no context, a gated item is hidden.",
+            "This is a display rule only. The backend still refuses what the user may not do.",
+            "addNavigation is refused after the module was abandoned by a failed or timed-out register().",
+        ],
+    },
+    {
+        "id": "ui.authenticated.router",
+        "phase": "authenticated",
+        "service": "router",
+        "operations": ["addRoute"],
+        "audience": "module/browser",
+        "docs": "tec-tac-ui/docs/module-runtime-api.md",
+        "purpose": "Add module routes through the guarded module router passed to register(context). Other vue-router members pass through unchanged.",
+        "details": [
+            "addRoute(route) and addRoute(parentName, route) are both guarded.",
+            "A route whose path or name another owner already holds is refused.",
+            "meta.dynamicModule is set on every route the module adds.",
+            "addRoute returns the remover. Core runs the removers when the module is abandoned.",
+            "addRoute is refused after the module was abandoned by a failed or timed-out register().",
+            "Every other vue-router member (for example push, resolve and currentRoute) passes through unchanged.",
+        ],
+    },
+    {
+        "id": "ui.authenticated.permissions",
+        "phase": "authenticated",
+        "service": "hasPermission",
+        "operations": ["hasPermission"],
+        "audience": "module/browser",
+        "docs": "tec-tac-ui/docs/module-runtime-api.md",
+        "purpose": "Ask whether the signed-in user holds a permission code with hasPermission(code), to show or hide a control.",
+        "details": [
+            "Returns true for a superuser, or when the code is in the user's effective permission set.",
+            "Display only. The backend refuses what the user may not do.",
+        ],
     },
     {
         "id": "ui.public.sso-providers",
@@ -987,6 +1108,10 @@ def render_markdown(catalog: dict | None = None) -> str:
     for row in data.get("browser", []):
         operations = ", ".join(f"`{op}`" for op in row.get("operations", [])) or "_none_"
         out.append(f"| `{row['id']}` | `{row['phase']}` | `{row['service']}` | {operations} | {row['audience']} | `{row['docs']}` | {row['purpose']} |")
+    for row in data.get("browser", []):
+        if row.get("details"):
+            out.extend(["", f"### `{row['id']}` details", ""])
+            out.extend(f"- {line}" for line in row["details"])
 
     resource = data.get("resource_directory") or {}
     if resource:
@@ -1152,6 +1277,8 @@ def render_text(catalog: dict | None = None) -> str:
             f"- {row['id']} | phase={row['phase']} | service={row['service']} | "
             f"operations={operations} | audience={row['audience']} | docs={row['docs']} - {row['purpose']}"
         )
+        for line in row.get("details") or []:
+            out.append(f"    * {line}")
 
     resource = data.get("resource_directory") or {}
     if resource:
