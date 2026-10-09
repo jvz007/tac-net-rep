@@ -787,12 +787,18 @@ def _take_bridge_back(reason: str) -> None:
     own the bridge, are served by Core's bridge. Ones that carry hidden_fields are refused (state
     hidden-fields-unavailable), because Core's bridge cannot hide columns. The forwarded set is cleared before the
     bridge is installed so the allow-lists include them; after that unregister no longer calls the provider for them.
+
+    1.17.6: the formerly forwarded registrations are also unregistered from Report Manager's registry, best effort,
+    so it does not keep a row Core now serves. The call is made after the lock is released and before the bridge is
+    installed. It never raises: a failure (including Report Manager's own RegistryError in mode core-bridge-active)
+    is logged and the fallback goes on. With no provider, one warning is logged.
     """
     global _FALLBACK, _REPORT_MANAGER_OWNS
     with _LOCK:
         _FALLBACK = True
         pending = sorted(_PENDING)
         forwarded = sorted(_FORWARDED)
+        released = [_REGISTRY[item] for item in forwarded if item in _REGISTRY]
         _PENDING.clear()
         _HELD.clear()
         _FORWARDED.clear()
@@ -801,7 +807,34 @@ def _take_bridge_back(reason: str) -> None:
     logger.warning("Core takes its reporting bridge back: %s", reason)
     for public_id in refused:
         logger.warning("Reporting model %s is refused: it carries hidden_fields and Core's bridge cannot hide columns.", public_id)
+    _unregister_released(released)
     install_tactical_reporting_bridge(force=True)
+
+
+def _unregister_released(released: list) -> None:
+    """Best-effort removal of formerly forwarded registrations from Report Manager. Never raises."""
+    if not released:
+        return
+    try:
+        _, provider = _registry_capability()
+        if provider is None:
+            logger.warning(
+                "Report Manager is not available to remove %d formerly forwarded reporting model(s): %s",
+                len(released), ", ".join(item.id for item in released),
+            )
+            return
+        from .capabilities import build_operation_context
+
+        for registration in released:
+            try:
+                provider.unregister_model(
+                    registration.id,
+                    context=build_operation_context(source_module=registration.module_id, source_action=SHIM_SOURCE_ACTION),
+                )
+            except Exception:
+                logger.exception("Report Manager could not remove formerly forwarded reporting model %s", registration.id)
+    except Exception:
+        logger.exception("Unable to remove formerly forwarded reporting models from Report Manager")
 
 
 def settle_reporting_bridge() -> dict[str, Any]:

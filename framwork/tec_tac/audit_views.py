@@ -7,12 +7,12 @@ from rest_framework.views import APIView
 from drf_spectacular.utils import extend_schema, extend_schema_view
 
 from .audit import (
-    BROWSER_PROVENANCE_MARKER,
     SCOPE_CHECKED_OBJECT_TYPES,
     AuditContractError,
     can_record_from_browser,
     declared_browser_event,
     record,
+    record_browser_declared,
     record_core_refusal,
 )
 from .session_security import SessionAuthenticated
@@ -113,7 +113,7 @@ class AuditRecordView(APIView):
             if len(str(object_id)) > _OBJECT_ID_MAX:
                 return Response({"detail": f"object_id may not exceed {_OBJECT_ID_MAX} characters."}, status=400)
         try:
-            result = record(
+            result = record_browser_declared(
                 actor=request.user,
                 module_id=module_id,
                 action=payload.get("action"),
@@ -124,8 +124,6 @@ class AuditRecordView(APIView):
                 after=payload.get("after"),
                 metadata=payload.get("metadata"),
                 request=request,
-                strict=False,
-                operation_context={"browser_provenance": BROWSER_PROVENANCE_MARKER},
             )
         except AuditContractError as exc:
             detail = str(exc)

@@ -44,6 +44,8 @@ result = record(
 
 `actor` must be the authenticated Tactical user. There is deliberately no `username` argument. Core derives `username` from the actor and rejects actor/provenance fields on the browser API.
 
+Two `operation_context` keys are Core-owned: `core_refusal` and, since 1.17.6, `browser_provenance`. Only Core's own rows set them. `record()` raises `AuditContractError` when a caller supplies either, so a backend module cannot forge the marker of another path. (Before 1.17.6 only `core_refusal` was refused, so `browser_provenance` could be forged through the backend call.) `build_operation_context(...)` never sets them.
+
 Backend authorization remains authoritative. Audit recording does not grant permission to perform the business action. Modules must authorize the action first, perform it, then record the event.
 
 ## Browser runtime

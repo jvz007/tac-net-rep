@@ -87,9 +87,10 @@ rf_views = types.ModuleType("rest_framework.views")
 
 
 class Response:
-    def __init__(self, data, status=200):
+    def __init__(self, data, status=200, headers=None):
         self.data = data
         self.status_code = status
+        self.headers = dict(headers or {})
 
 
 class APIView:
@@ -494,14 +495,14 @@ try:
 
     # operation_context over the limit: only Core-side callers can reach this, so call the writer directly
     reset()
-    audit.record(actor=tech, module_id="declaring-demo", action="view", object_type="agent", object_id="a-1",
+    audit._record_row(actor=tech, module_id="declaring-demo", action="view", object_type="agent", object_id="a-1",
                  operation_context={"blob": "o" * (600 * 1024), "browser_provenance": "module-declared-event"})
     assert_all_marked("operation_context over the limit")
     assert "error" in ROWS[0]["debug_info"]["operation_context"]
 
     # both over the limit
     reset()
-    audit.record(actor=tech, module_id="declaring-demo", action="view", object_type="agent", object_id="a-1",
+    audit._record_row(actor=tech, module_id="declaring-demo", action="view", object_type="agent", object_id="a-1",
                  metadata={"blob": "m" * (400 * 1024)},
                  operation_context={"blob": "o" * (400 * 1024), "browser_provenance": "module-declared-event"})
     assert_all_marked("both over the limit")

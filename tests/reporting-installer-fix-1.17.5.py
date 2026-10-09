@@ -137,6 +137,7 @@ def fall_back(env, how):
 for how in ("unavailable", "health raises"):
     env = forwarded_env()
     st = fall_back(env, how)
+    at_takeback = len(env.provider.unregistered)  # 1.17.6: take-back may call the provider once per former forwarded id
     must(st["fallback"] is True and st["installed"] is True and st["owner"] == "core" and st["forwarded_models"] == 0, (how, st))
     must(st["error"] is None, (how, st))
     must(marked(env) == (True, True), f"{how}: Core's bridge is installed again")
@@ -152,7 +153,7 @@ for how in ("unavailable", "health raises"):
     # unregistering a former forwarded model must not call the provider, even if Report Manager is healthy again
     env.cap.update(available=True, state="available", health={"healthy": True, "mode": "report-manager"})
     must(env.rep.unregister_reporting_model("alerts.modulealert") is True, "unregister works")
-    must(env.provider.unregistered == [], f"{how}: the provider is not called for a former forwarded model")
+    must(len(env.provider.unregistered) == at_takeback, f"{how}: the provider is not called again for a former forwarded model after take-back")
     must(("ModuleAlert", "tec_tac_alerts") not in env.constants.REPORTING_MODELS, "the allow-list drops it")
 
 # no fallback: a healthy capability at settle leaves them forwarded

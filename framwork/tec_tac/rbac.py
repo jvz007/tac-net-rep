@@ -166,6 +166,54 @@ def can_manage_runtime_settings(user) -> bool:
         return False
 
 
+def _validate_tactical_flag(flag) -> str:
+    """Return flag when it names a boolean ``can_*`` field on Tactical's Role. Otherwise raise ValueError."""
+    name = flag if isinstance(flag, str) else ""
+    if not name.startswith("can_"):
+        raise ValueError(f"Unknown Tactical role permission: {flag!r}")
+    try:
+        field = Role._meta.get_field(name)
+        internal = field.get_internal_type()
+    except Exception:
+        raise ValueError(f"Unknown Tactical role permission: {flag!r}") from None
+    if internal != "BooleanField":
+        raise ValueError(f"Tactical role field {name!r} is not a permission flag.")
+    return name
+
+
+def tactical_permission_flags(user, flags) -> dict[str, bool]:
+    """Evaluate Tactical role flags for a user, the way Tactical's own ``_has_perm`` does (1.17.6).
+
+    Returns ``{flag: bool}`` for every requested flag. An authenticated Django superuser or role superuser passes
+    every flag. A user with no role is denied, and so is a Tactical installer user. Otherwise the answer is the
+    role's own boolean. Every flag must be a boolean ``can_*`` field on ``accounts.models.Role``, or ValueError is
+    raised before anything is evaluated. A lookup failure never raises: it fails closed (every flag False).
+    This adds no Tec-Tac permission and does not change ``has_extension_permission``.
+    """
+    names = [_validate_tactical_flag(flag) for flag in flags]
+    denied = {name: False for name in names}
+    try:
+        if not getattr(user, "is_authenticated", False):
+            return denied
+        if getattr(user, "is_installer_user", False):
+            return denied
+        if bool(getattr(user, "is_superuser", False)):
+            return {name: True for name in names}
+        role = user.get_and_set_role_cache()
+        if not role:
+            return denied
+        if bool(getattr(role, "is_superuser", False)):
+            return {name: True for name in names}
+        return {name: bool(getattr(role, name, False)) for name in names}
+    except Exception:
+        return denied
+
+
+def has_tactical_permission(user, flag: str) -> bool:
+    """May this user do what Tactical's role flag ``flag`` allows? See ``tactical_permission_flags``."""
+    return tactical_permission_flags(user, (flag,))[flag]
+
+
 def set_extension_permission(role, codename: str, granted: bool):
     _validate_codename(codename)
     if not isinstance(role, Role):

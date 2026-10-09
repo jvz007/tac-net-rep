@@ -80,9 +80,10 @@ rf_response = types.ModuleType("rest_framework.response")
 rf_views = types.ModuleType("rest_framework.views")
 
 class Response:
-    def __init__(self, data, status=200):
+    def __init__(self, data, status=200, headers=None):
         self.data = data
         self.status_code = status
+        self.headers = dict(headers or {})
 
 class APIView:
     pass

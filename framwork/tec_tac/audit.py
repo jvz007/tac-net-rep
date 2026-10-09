@@ -383,11 +383,14 @@ def record(
     ``recorded=False``. Pass ``strict=True`` only when a Core-owned workflow has
     explicitly decided audit persistence is transaction-critical.
 
-    ``operation_context.core_refusal`` is Core-owned: only Core's own deny rows set
-    it, so a caller that supplies it gets a contract error.
+    ``operation_context.core_refusal`` and ``browser_provenance`` are Core-owned:
+    only Core's own rows set them, so a caller that supplies either gets a contract
+    error (``browser_provenance`` since 1.17.6).
     """
-    if isinstance(operation_context, dict) and "core_refusal" in operation_context:
-        raise AuditContractError("operation_context.core_refusal is Core-owned and may not be supplied.")
+    if isinstance(operation_context, dict):
+        for key in CORE_CONTEXT_KEYS:
+            if key in operation_context:
+                raise AuditContractError(f"operation_context.{key} is Core-owned and may not be supplied.")
     return _record_row(
         actor=actor, module_id=module_id, action=action, object_type=object_type, object_id=object_id,
         message=message, before=before, after=after, metadata=metadata, operation_context=operation_context,
@@ -416,6 +419,31 @@ def record_core_refusal(
         actor=actor, module_id=module_id, action="deny", object_type=object_type, object_id=object_id,
         message=message, metadata=metadata, request=request, strict=False,
         operation_context={"browser_provenance": BROWSER_PROVENANCE_MARKER, "core_refusal": True},
+    )
+
+
+def record_browser_declared(
+    *,
+    actor,
+    module_id: str,
+    action: str,
+    object_type: str,
+    object_id: Any = None,
+    message: Any = None,
+    before: Any = None,
+    after: Any = None,
+    metadata: dict | None = None,
+    request=None,
+) -> dict[str, Any]:
+    """Write the row of a browser-declared event (Core 1.16.0 path), marked browser_provenance.
+
+    Used only by the browser audit view. The public ``record()`` refuses ``browser_provenance`` since 1.17.6, so the
+    view calls this Core-internal writer. Never strict.
+    """
+    return _record_row(
+        actor=actor, module_id=module_id, action=action, object_type=object_type, object_id=object_id,
+        message=message, before=before, after=after, metadata=metadata, request=request, strict=False,
+        operation_context={"browser_provenance": BROWSER_PROVENANCE_MARKER},
     )
 
 

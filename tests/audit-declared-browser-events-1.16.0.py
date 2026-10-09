@@ -84,9 +84,10 @@ rf_views = types.ModuleType("rest_framework.views")
 
 
 class Response:
-    def __init__(self, data, status=200):
+    def __init__(self, data, status=200, headers=None):
         self.data = data
         self.status_code = status
+        self.headers = dict(headers or {})
 
 
 class APIView:
@@ -362,7 +363,7 @@ CORE_KEYS = ("source", "module_id", "module_version", "correlation_id", "actor_i
 try:
     # Each piece fits its own budget, together they do not.
     reset()
-    result = audit.record(
+    result = audit._record_row(
         actor=tech, module_id="declaring-demo", action="view", object_type="agent", object_id="a-1",
         metadata={"blob": "m" * (320 * 1024)}, operation_context={"blob": "o" * (300 * 1024), "browser_provenance": "module-declared-event"},
     )
@@ -377,7 +378,7 @@ try:
     # Tiny limit: metadata and operation_context both have to go, Core keys and the marker stay.
     reset()
     _Settings.AUDIT_MAX_VALUE_BYTES = 1000
-    audit.record(
+    audit._record_row(
         actor=tech, module_id="declaring-demo", action="view", object_type="agent", object_id="a-1",
         metadata={"blob": "m" * 1000}, operation_context={"blob": "o" * 1000, "browser_provenance": "module-declared-event"},
     )
@@ -391,7 +392,7 @@ try:
     # Non-ASCII: Tactical measures json.dumps (ensure_ascii=True), so CJK counts 6 bytes a character.
     reset()
     _Settings.AUDIT_MAX_VALUE_BYTES = 512 * 2**10
-    result = audit.record(
+    result = audit._record_row(
         actor=tech, module_id="declaring-demo", action="view", object_type="agent", object_id="a-1",
         metadata={"blob": "漢" * 150000}, operation_context={"note": "x", "browser_provenance": "module-declared-event"},
     )
@@ -402,7 +403,7 @@ try:
     assert info["operation_context"].get("browser_provenance") == "module-declared-event"
     assert "error" in info["metadata"]
     reset()
-    audit.record(
+    audit._record_row(
         actor=tech, module_id="declaring-demo", action="view", object_type="agent", object_id="a-1",
         metadata={"a": 1}, operation_context={"blob": "漢" * 150000, "browser_provenance": "module-declared-event"},
     )

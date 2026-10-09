@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.5",
+  "version": "1.17.6",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -32,14 +32,14 @@
       "sha256": "66c389576a517f455059348a31b1788ed1ff07f441e7bbb7d20f47579c019812"
     },
     {
-      "path": "RELEASE_NOTES_1.17.5.md",
-      "size": 5798,
-      "sha256": "76874154bf26d646b3427bcd6349958e5ecf4abbf1dbb56fe74ca006398bc1cd"
+      "path": "RELEASE_NOTES_1.17.6.md",
+      "size": 5908,
+      "sha256": "ea9db558a822a993573bacd967e5b36f280d5102bd880f5ee503b7709e2145cf"
     },
     {
       "path": "VERSION",
       "size": 7,
-      "sha256": "06602835753cefc9264a3dbfc488b2000bbd17a67f8417a3b506fad545bc1046"
+      "sha256": "71b37d0bac9a9507a2f7a39b3b5afb0113bd5aa112346f2d1170adb3ed9bc216"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -88,8 +88,8 @@
     },
     {
       "path": "docs/module-audit.md",
-      "size": 14220,
-      "sha256": "52fe10b06ff115b4611140ed6c97125451070020a1dc8d1580653c35299e9971"
+      "size": 14647,
+      "sha256": "790cc22f842982ff69294bed9c7ec5be2a78a55719160823c6871584850d2da4"
     },
     {
       "path": "docs/module-hotfixes.md",
@@ -113,8 +113,8 @@
     },
     {
       "path": "docs/module-reporting.md",
-      "size": 14582,
-      "sha256": "7a61804bb39ce0613c51fcec0e26943c2e363ade295672f0dcd6056237cb7649"
+      "size": 15002,
+      "sha256": "a34382a9bb3aa5512d312fc9599c77ce1564efbc7226a58abf15eab5c182ef7f"
     },
     {
       "path": "docs/module-repositories.md",
@@ -1042,6 +1042,11 @@
       "sha256": "475a15200a394354c6c71737e7991ce1ceab3c9818db1b119d1b7e74e6690bea"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.5.md",
+      "size": 5798,
+      "sha256": "76874154bf26d646b3427bcd6349958e5ecf4abbf1dbb56fe74ca006398bc1cd"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.2.0.md",
       "size": 1977,
       "sha256": "7d78abb704c7a3e459f7437cb0bdcc7ea738f76e97b925f2b4e16466a812cd54"
@@ -1383,13 +1388,13 @@
     },
     {
       "path": "framwork/tec_tac/audit.py",
-      "size": 21291,
-      "sha256": "f0e86535f32126afafd1a190d1a661d0133fff54c0bdbf88d9f14a2d8acdaa44"
+      "size": 22274,
+      "sha256": "0789215bb23c1a454f91788bf95233b8befc1fe1a1fd25be59b27c67a2c21a81"
     },
     {
       "path": "framwork/tec_tac/audit_views.py",
-      "size": 7462,
-      "sha256": "68611dd1bdfd014a456c4560da62b99abd4cdc0061402c72c4a53f70e2530a6d"
+      "size": 7362,
+      "sha256": "019756dd1529815a216200a529e8b2c8a3b6c85ea97576ab9909612160067235"
     },
     {
       "path": "framwork/tec_tac/bootstrap.py",
@@ -1418,8 +1423,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 85638,
-      "sha256": "73fdebbae17a3fd21613333fd8a30c5ca4c03b5a3c485a6694eb934af48c858c"
+      "size": 87179,
+      "sha256": "bcb93ba41ad47f8033d7a2498d5faa9a16c847b810f4714da00354c5461be7e8"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -1693,8 +1698,8 @@
     },
     {
       "path": "framwork/tec_tac/rbac.py",
-      "size": 7831,
-      "sha256": "0da7fa777d4371a267e38830161478754792ae6631ac8565885ff0918240afe3"
+      "size": 10105,
+      "sha256": "955e25905208de91b9657f34e59c61602414efe520e0ab6bb6f341cf68e16c63"
     },
     {
       "path": "framwork/tec_tac/registry.py",
@@ -1703,8 +1708,8 @@
     },
     {
       "path": "framwork/tec_tac/reporting.py",
-      "size": 46561,
-      "sha256": "413ae12239c758a83aaec3e9bf9dc9c3b45f9b1c7d9c177cbdf9ad1c42e8b760"
+      "size": 48230,
+      "sha256": "038e24c1520a3a23ff2292054955c72616943b40858152cb4d908cd24bbb47a6"
     },
     {
       "path": "framwork/tec_tac/resource_views.py",
@@ -2024,7 +2029,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 76,
-      "sha256": "6837c779493250e3bd625d1d93cbe9c456e75d8c44ae7f0d3cce99cd4fc89266"
+      "sha256": "7d45658a64645d728c1c45021acfe798ca15f6a101b493eddbb13a177fc262e2"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2073,8 +2078,8 @@
     },
     {
       "path": "tests/audit-browser-provenance-hardening.py",
-      "size": 7226,
-      "sha256": "74f5d11999f464c48d764189a7ed020d49bc4d9359f952a8bc5006eac38b3734"
+      "size": 7283,
+      "sha256": "b6084b461f7d7feb8073114dde0370e5799ec159df7beb8f7d34202e01189413"
     },
     {
       "path": "tests/audit-contract-foundation.py",
@@ -2088,13 +2093,18 @@
     },
     {
       "path": "tests/audit-declared-browser-events-1.16.0.py",
-      "size": 23162,
-      "sha256": "c5eebabd3bb3eba58263fedb0274237914861ed9ea715654645759cacef96e78"
+      "size": 23239,
+      "sha256": "58867394f1c83b7d940574bcf9281edc042bc44b0518fb15c3e4386ade6f486c"
     },
     {
       "path": "tests/audit-declared-browser-events-1.17.0.py",
-      "size": 28140,
-      "sha256": "1afa986d528919945021c648a1e5132e1b6acf8aa192f6a977d5bc313d618a23"
+      "size": 28207,
+      "sha256": "b66e031d1ed30413c338c67a00aee6ea9c65238d7b1aec24a575f7fadc4c556e"
+    },
+    {
+      "path": "tests/audit-provenance-hardening-1.17.6.py",
+      "size": 7274,
+      "sha256": "5f97eddd0ea9cffdee36d17eced9ad2baec7e8c9cbc86f669c308f87d1a9e123"
     },
     {
       "path": "tests/backup-closure-1.15.145.py",
@@ -2568,8 +2578,8 @@
     },
     {
       "path": "tests/reporting-installer-fix-1.17.5.py",
-      "size": 9261,
-      "sha256": "da35274a5047df2f31718b93b73eb977374891147aa8a4307219774cfb8bd3f6"
+      "size": 9418,
+      "sha256": "d4a84960b272815223407b005c182d498aa11e0fac5acdc6a83d1d6f53c945ad"
     },
     {
       "path": "tests/reporting-registration-foundation.sh",
@@ -2590,6 +2600,11 @@
       "path": "tests/reporting-row-scope-runtime-1.17.4.py",
       "size": 5637,
       "sha256": "6de998f1d7926c7197a4effad65914d2a91172015aa7942f36d28285c283ed74"
+    },
+    {
+      "path": "tests/reporting-takeback-unregister-1.17.6.py",
+      "size": 5451,
+      "sha256": "cd694f1f50a2f9ac581d4f1aae60c5444f1930a26f6113678ede4f9fe72e0ce2"
     },
     {
       "path": "tests/resource-contract-paging.py",
@@ -2700,6 +2715,11 @@
       "path": "tests/runtime-settings-1.17.1.py",
       "size": 12791,
       "sha256": "22460e61ab2c06be6b6e18314b3e63c632fb5829fbefa499f283023bd74a5b0f"
+    },
+    {
+      "path": "tests/runtime-settings-contract-1.17.6.py",
+      "size": 2677,
+      "sha256": "32aae89669311893c89b22ce6f83b3ef4774d8d25f35b8578779d29ee5931176"
     },
     {
       "path": "tests/runtime-settings-permission-1.17.2.py",
@@ -3025,6 +3045,11 @@
       "path": "tests/system-update-signed-tree.py",
       "size": 5853,
       "sha256": "8b4a67280e34df068dddc77a3ae09844695f5ef39ecdbc6ef64e3d8ee98b06f0"
+    },
+    {
+      "path": "tests/tactical-permission-helper-1.17.6.py",
+      "size": 4940,
+      "sha256": "ccc4ae1e11505e72c6099faf00b84d6cc1d0b62fba69f01934bf5f52f5f8a699"
     },
     {
       "path": "tests/tactical-superuser-guard-postgres.py",

@@ -63,7 +63,7 @@ CORE_CONTRACTS = (
         "import_path": "tec_tac.audit",
         "name": "record",
         "kind": "python",
-        "purpose": "Record a Tec-Tac module event through Core into Tactical's unified AuditLog trail.",
+        "purpose": "Record a Tec-Tac module event through Core into Tactical's unified AuditLog trail. Since 1.17.6 operation_context may not carry browser_provenance or core_refusal: they are Core-owned and give a contract error.",
         "audience": "provider/backend",
     },
     {
@@ -458,6 +458,22 @@ CORE_CONTRACTS = (
         "purpose": "Return declared permission groups for one extension.",
         "audience": "backend/administration",
     },
+    {
+        "area": "rbac",
+        "import_path": "tec_tac.rbac",
+        "name": "has_tactical_permission",
+        "kind": "python",
+        "purpose": "True when the user holds one Tactical Role flag, evaluated the way Tactical's own _has_perm does (1.17.6): a Django superuser or role superuser passes, a user with no role is denied, an installer user is denied, otherwise the role's boolean. The flag must be a boolean can_* field on Tactical's Role, or ValueError. A lookup failure fails closed (False). It adds no Tec-Tac permission and does not change has_extension_permission. Requires framework >=1.17.6.",
+        "audience": "backend",
+    },
+    {
+        "area": "rbac",
+        "import_path": "tec_tac.rbac",
+        "name": "tactical_permission_flags",
+        "kind": "python",
+        "purpose": "Evaluate several Tactical Role flags at once: returns {flag: bool}. Same rules as has_tactical_permission; every flag is validated first (ValueError), and a lookup failure returns every flag False (1.17.6).",
+        "audience": "backend",
+    },
 )
 
 HTTP_CONTRACT_DETAILS = {
@@ -496,6 +512,7 @@ HTTP_CONTRACT_DETAILS = {
                 "Other declared object types (1.17.0) have no scope check and no Core deny row. An event or object type the module did not declare gives 403 and writes nothing.",
                 "Rate limit: 60/min and 1000/day per user and IP, counting accepted and refused requests (deny rows count too).",
                 "A module that declares permission_groups and audit_events keeps path 1; audit_events is ignored for it.",
+                "operation_context.browser_provenance and core_refusal are Core-owned. A backend record() call that supplies any of them is a contract error (1.17.6; before, only core_refusal).",
             ],
             "errors": {
                 "400": "not a JSON object; actor/provenance field supplied; unknown field; invalid action or object_type; path 2 without object_id or with an invalid object_id",
@@ -656,7 +673,7 @@ HTTP_CONTRACT_DETAILS = {
                 "Write rate limit: 10/min and 200/day per user and IP. Reads are not counted.",
             ],
             "response": "same as GET",
-            "errors": {"400": "unknown field, missing field or invalid value", "403": "caller is not an effective superuser: 'Only a Tec-Tac superuser may change the update source.' Checked before the body, so a non-superuser never sees 400", "429": "write rate limit reached"},
+            "errors": {"400": "unknown field, missing field or invalid value", "403": "caller is not an effective superuser and holds neither core.runtime_settings.manage nor core.privileged_operations: 'Tec-Tac core.runtime_settings.manage or core.privileged_operations permission is required to change runtime settings.' Checked before the body, so a caller without the right never sees 400", "429": "write rate limit reached"},
         },
     },
     "/api/tfd/account/": {
