@@ -1,8 +1,14 @@
-"""Runtime check for Core 1.17.12 module hand-back and audit. It did NOT run on the development PC (Django is not installed there).
+"""Runtime check for Core 1.17.13 module hand-back and audit (the 1.17.12 script, corrected). It did NOT run on the development PC (Django is not installed there).
 
 Run it on the dev server through Tactical's manage.py shell, so Django, Tactical's real AuditLog and the real Core code are loaded:
 
-    cd /rmm/api/tacticalrmm && ../env/bin/python manage.py shell < /path/to/tests/module-replacement-handback-runtime-1.17.12.py
+    cd /rmm/api/tacticalrmm && ../env/bin/python manage.py shell < /path/to/tests/module-replacement-handback-runtime-1.17.13.py
+
+1.17.13: the probe capability is ``tectac-probe-replaced.windows``. The 1.17.12 script declared ``patching.windows`` on a core probe, which Core
+refuses (a core module's capability must begin with its own id), so 4 of its 6 steps failed with RegistryError before they tested anything
+(debug/command results 18-06.log). The replacement probe carries ``category: premium`` (AD-21). Two steps are new: the long-error row is
+written once, found again by its correlation id even after the audit writer replaced the metadata, and a failed switch with no rollback
+record says the outcome is not confirmed (the two findings held from the 1.17.12 review).
 
 It proves what the stub tests (tests/module-replacement-handback-1.17.12.py, tests/module-replacement-audit-1.17.12.py) cannot:
 that the AuditLog JSON lookup (action, object and metadata job_id) really finds a row and really misses another, that the queue-time
@@ -38,6 +44,7 @@ for folder in (EXT, JOBS):
 STATE = {"schema": 1, "modules": {OLD: {"enabled": False}, REPL: {"enabled": True}}}
 SAVED = (registry.EXTENSIONS_ROOT, module_state.load_state, v2.load_state, v2.JOBS_ROOT, module_manager.JOBS_ROOT, v2._dispatch_v2)
 MARK = "tectac-runtime-handback"
+CAP = f"{OLD}.windows"  # a core module's capability must begin with its own id
 NOW = datetime.now(timezone.utc)
 
 
@@ -55,7 +62,7 @@ def step(name, fn):
 def manifest(module_id, **extra):
     folder = EXT / module_id
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / "tec_tac.json").write_text(json.dumps({"id": module_id, "type": "extension", "version": "1.0.0", **extra}), encoding="utf-8")
+    (folder / "tec_tac.json").write_text(json.dumps({"id": module_id, "type": "extension", "version": "1.0.0", **({"category": "premium"} if "replaces" in extra else {}), **extra}), encoding="utf-8")
 
 
 def rows(action=None):
@@ -72,8 +79,8 @@ def setup():
     registry.EXTENSIONS_ROOT = EXT
     module_state.load_state = v2.load_state = lambda: STATE
     v2.JOBS_ROOT = module_manager.JOBS_ROOT = JOBS
-    manifest(OLD, category="core", capabilities={"patching.windows": "1.2.0"})
-    manifest(REPL, replaces=OLD, capabilities={"patching.windows": "1.2.0"})
+    manifest(OLD, category="core", capabilities={CAP: "1.2.0"})
+    manifest(REPL, category="premium", replaces=OLD, capabilities={CAP: "1.2.0"})
 
 
 def teardown():
@@ -112,7 +119,7 @@ def outcome_rows_written_once():
     job_file("job-h1", action="disable", plugin_id=REPL, enabled_modules=[OLD])
     job_file("job-e1", action="enable", plugin_id=OLD, disable_modules=[REPL], disabled_modules=[REPL], replacement_confirmed=True)
     job_file("job-r1", action="enable", plugin_id="tectac-probe-bystander", disabled_modules=[], reconciled_modules=[REPL])
-    job_file("job-f1", status="failed", action="disable", plugin_id=REPL, enable_modules=[OLD], stage="rollback", error="Tactical graceful reload failed with status 1")
+    job_file("job-f1", status="failed", action="disable", plugin_id=REPL, enable_modules=[OLD], stage="rollback", rolled_back=True, error="Tactical graceful reload failed with status 1")
     job_file("job-old", action="disable", plugin_id=REPL, enabled_modules=[OLD], finished_at=(NOW - timedelta(days=9)).isoformat())
     (JOBS / "broken.json").write_text("{not json", encoding="utf-8")
     written = mr.audit_finished_jobs()
@@ -126,6 +133,8 @@ def outcome_rows_written_once():
     assert resolved.debug_info["object_id"] == REPL and resolved.debug_info["metadata"]["replaced"] == OLD, resolved.debug_info
     failed = rows("custom:module-replacement-switch-failed").get(debug_info__metadata__job_id="job-f1")
     assert "graceful reload" in failed.message and failed.debug_info["metadata"]["stage"] == "rollback", failed.message
+    assert "put back as they were" in failed.message and failed.debug_info["metadata"]["rolled_back"] is True, failed.message
+    assert failed.debug_info["correlation_id"] == "module-replacement:switch-failed:job-f1", failed.debug_info["correlation_id"]
     assert not rows().filter(debug_info__metadata__job_id="job-old").exists(), "a job older than 7 days is not audited"
     assert mr.audit_finished_jobs() == 0, "a second sweep must write nothing"
     assert rows().filter(debug_info__metadata__job_id__in=["job-h1", "job-e1", "job-r1", "job-f1"]).count() == 4, "no duplicate rows"
@@ -150,6 +159,30 @@ def reconcile_job_keeps_one_row():
     job.update(status="succeeded", finished_at=NOW.isoformat(), reconciled_modules=[REPL])
     (JOBS / f"{job['id']}.json").write_text(json.dumps(job), encoding="utf-8")
     assert mr.audit_finished_jobs() == 0 and rows("custom:module-replacement-conflict-resolved").filter(debug_info__metadata__job_id=job["id"]).count() == 1
+
+
+def long_error_row_is_written_once():
+    marker = {"error": "value too large to store in audit log. Check documentation for configuring AUDIT_MAX_VALUE_BYTES", "original_bytes": 99999}
+    job_file("job-long", status="failed", action="enable", plugin_id=OLD, disable_modules=[REPL], stage="runtime-sync", error="E" * 20000)  # no rolled_back
+    assert mr.audit_finished_jobs() == 1, "one row for the failed job"
+    row = rows("custom:module-replacement-switch-failed").get(debug_info__correlation_id="module-replacement:switch-failed:job-long")
+    assert "The outcome is not confirmed" in row.message and "stage runtime-sync" in row.message and "put back" not in row.message, row.message
+    assert len(row.message) < 800, len(row.message)  # the error is cut to 300 characters
+    meta = row.debug_info["metadata"]
+    assert len(meta.get("error", "")) <= 300 and meta.get("rolled_back", "missing") is None, meta
+    # the audit writer replaces oversized metadata with its marker; the row must still be found, so no second row is written
+    AuditLog.objects.filter(pk=row.pk).update(debug_info={**row.debug_info, "metadata": marker})
+    assert mr._audit_already_written("custom:module-replacement-switch-failed", OLD, "job-long") is True, "found by correlation id after the marker"
+    assert mr.audit_finished_jobs() == 0, "a second sweep writes nothing"
+    assert rows("custom:module-replacement-switch-failed").filter(debug_info__correlation_id="module-replacement:switch-failed:job-long").count() == 1
+
+
+def a_1_17_12_row_is_still_found():
+    AuditLog.objects.create(username=f"service:{MARK}", action="custom:module-replacement-disabled", object_type="module", message="row written by 1.17.12",
+                            debug_info={"source": "tec-tac", "module_id": "core", "object_id": REPL, "metadata": {"job_id": "job-1-17-12"}})
+    assert mr._audit_already_written("custom:module-replacement-disabled", REPL, "job-1-17-12") is True, "found by metadata job id"
+    job_file("job-1-17-12", action="enable", plugin_id=OLD, disable_modules=[REPL], disabled_modules=[REPL], replacement_confirmed=True)
+    assert mr.audit_finished_jobs() == 0, "the sweep does not duplicate a 1.17.12 row"
 
 
 def dispatch_fails_safely():
@@ -183,6 +216,8 @@ try:
     step("the AuditLog JSON lookup finds the row and misses another job, object or action", lookup_finds_and_misses)
     step("the sweep writes one outcome row per module and never a duplicate", outcome_rows_written_once)
     step("the reconcile job keeps its single row", reconcile_job_keeps_one_row)
+    step("the long-error row is written once and found again by its correlation id; no rollback record means not confirmed", long_error_row_is_written_once)
+    step("a row written by 1.17.12 (metadata job id only) is still found", a_1_17_12_row_is_still_found)
     step("a failing sudo dispatch of a hand-back job is recorded, raised and not audited", dispatch_fails_safely)
 finally:
     teardown()

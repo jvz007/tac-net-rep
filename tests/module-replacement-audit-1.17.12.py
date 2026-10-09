@@ -9,7 +9,7 @@
 
 Runs the real module_replacement.py and module_manager_v2.py with the audit writer stubbed (an in-memory log, with the same
 action/object/job_id lookup the real AuditLog query does). The real AuditLog JSON lookup needs a server: see
-tests/module-replacement-handback-runtime-1.17.12.py.
+tests/module-replacement-handback-runtime-1.17.13.py.
 """
 from __future__ import annotations
 
@@ -48,6 +48,8 @@ _stub("cryptography.hazmat.primitives.asymmetric.ed25519", Ed25519PublicKey=obje
 _stub("cryptography.exceptions", InvalidSignature=Exception)
 
 from tec_tac import module_manager, module_manager_v2 as v2, module_replacement as mr, module_state, registry  # noqa: E402
+from tec_tac import module_category  # noqa: E402
+module_category.is_development_server = lambda: True  # AD-21 (1.17.13): these tests are about replacement, not about the category gate
 
 records = []
 
@@ -107,7 +109,7 @@ mr._audit_already_written = fake_lookup
 def manifest(module_id, **extra):
     folder = EXT / module_id
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / "tec_tac.json").write_text(json.dumps({"id": module_id, "type": "extension", "version": "1.0.0", "name": module_id, **extra}), encoding="utf-8")
+    (folder / "tec_tac.json").write_text(json.dumps({"id": module_id, "type": "extension", "version": "1.0.0", "name": module_id, **({"category": "premium"} if "replaces" in extra else {}), **extra}), encoding="utf-8")
 
 
 def world(*, patching=False, pm=True):
@@ -230,7 +232,7 @@ must(LOG == [], "nothing was switched")
 
 # ------------------------------------------------------------------------------------------ outcome rows: failed jobs
 failed = finished(id="j-f1", status="failed", action="enable", plugin_id="patching", disable_modules=["patchmanagement"], replacement_confirmed=True,
-                  stage="rollback", error="Tactical graceful reload failed with status 1", disabled_modules=["patchmanagement"])
+                  stage="rollback", rolled_back=True, error="Tactical graceful reload failed with status 1", disabled_modules=["patchmanagement"])  # 1.17.13: the helper records the restore
 must(mr.audit_finished_jobs(now=NOW, jobs=[failed]) == 1, LOG)
 row = LOG[0]
 must(row["action"] == "custom:module-replacement-switch-failed" and row["object_id"] == "patching", row)

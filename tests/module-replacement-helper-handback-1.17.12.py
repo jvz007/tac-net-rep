@@ -63,6 +63,7 @@ must(source.count(LOOKUP) == 1, "the trusted-bash lookup line moved; update this
 helper = types.ModuleType("module_v2_job_helper")
 helper.__file__ = str(HELPER)
 exec(compile(source.replace(LOOKUP, 'TRUSTED_BASH = "/bin/bash"'), str(HELPER), "exec"), helper.__dict__)
+helper.development_server = lambda: True  # AD-21 (1.17.13): these tests are about replacement, not about the category gate
 
 TMP = Path(tempfile.mkdtemp(prefix="tectac-helper-"))
 REPO = TMP / "repo"

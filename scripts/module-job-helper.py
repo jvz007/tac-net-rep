@@ -10,9 +10,11 @@ import pwd
 import re
 import shutil
 import stat
+import tarfile
 import tempfile
 import subprocess
 import sys
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -150,6 +152,97 @@ def forget_module_state(plugin_id, log=None):
         log.write(f"[TEC-TAC-MODULE] removed stale runtime state for {plugin_id}\n")
         log.flush()
     return True
+
+
+# ---------------------------------------------------------------------------------------------- AD-21 category (1.17.13)
+KNOWN_CATEGORIES = frozenset({"", "core", "server", "premium", "test"})
+MAX_MANIFEST_BYTES = 1024 * 1024
+
+
+def development_server():
+    """True only when the root-owned config says TEC_TAC_ENVIRONMENT=development. Fails closed (twin of module_category)."""
+    try:
+        return str(load_config().get("TEC_TAC_ENVIRONMENT") or "production").strip().lower() == "development"
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+def category_refused(category, development=None):
+    """True when a module of this declared category must not be installed here: effective test, not a development server."""
+    development = development_server() if development is None else development
+    return (str(category or "").strip().lower() or "test") == "test" and not development
+
+
+def package_category(package_path, plugin_id):
+    """The declared category of the extension manifest inside the root-private package snapshot.
+
+    Raises RuntimeError when the manifest cannot be found or read, or names a category Core does not know: the install
+    then fails closed. Nothing is extracted to disk."""
+    package = Path(package_path)
+    found = []
+
+    def consider(name, reader):
+        parts = [part for part in name.split("/") if part]
+        if len(parts) < 3 or parts[-1] != "tec_tac.json" or parts[-3] != "extensions":
+            return
+        data = reader()
+        if len(data) > MAX_MANIFEST_BYTES:
+            raise RuntimeError("module manifest is too large")
+        try:
+            payload = json.loads(data.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise RuntimeError("module manifest is unreadable") from exc
+        if isinstance(payload, dict) and payload.get("type") == "extension":
+            found.append(payload)
+
+    if package.name.lower().endswith(".zip"):
+        with zipfile.ZipFile(package) as archive:
+            for member in archive.infolist():
+                if not member.is_dir() and member.file_size <= MAX_MANIFEST_BYTES:
+                    consider(member.filename, lambda m=member: archive.read(m))
+    else:
+        with tarfile.open(package, "r:*") as archive:
+            for member in archive:
+                if member.isfile() and member.size <= MAX_MANIFEST_BYTES:
+                    consider(member.name, lambda m=member: archive.extractfile(m).read())
+    if len(found) != 1:
+        raise RuntimeError(f"module package must contain exactly one extension manifest; found {len(found)}")
+    payload = found[0]
+    if payload.get("id") != plugin_id:
+        raise RuntimeError("module package manifest does not match the requested module")
+    raw = payload.get("category", "")
+    if not isinstance(raw, str) or raw.strip().lower() not in KNOWN_CATEGORIES:
+        raise RuntimeError("module manifest names an unknown category")
+    return raw.strip().lower()
+
+
+def remember_category(plugin_id, category):
+    """Write the manifest category into the module's state entry (AD-21 condition 5), under the state lock."""
+    STATE_ROOT.mkdir(parents=True, exist_ok=True)
+    if not MODULE_STATE_LOCK.exists():
+        MODULE_STATE_LOCK.touch(mode=0o600, exist_ok=True)
+        os.chown(MODULE_STATE_LOCK, 0, 0)
+        os.chmod(MODULE_STATE_LOCK, 0o600)
+    with MODULE_STATE_LOCK.open("r+") as lock_handle:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        try:
+            state = {"schema": 1, "modules": {}}
+            if STATE_FILE.is_file():
+                try:
+                    state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError) as exc:
+                    raise RuntimeError(f"module state is unreadable: {exc}") from exc
+            modules = state.get("modules")
+            if not isinstance(modules, dict):
+                raise RuntimeError("module state has an invalid structure")
+            record = dict(modules.get(plugin_id) or {})
+            record["category"] = str(category)
+            modules[plugin_id] = record
+            atomic_json(STATE_FILE, state)
+            os.chown(STATE_FILE, 0, 0)
+            os.chmod(STATE_FILE, 0o644)
+        finally:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
 
 
 def _read_json_nofollow(path, *, max_bytes=2 * 1024 * 1024, label="job file"):
@@ -432,8 +525,27 @@ def run_job(job_id):
     atomic_json(path, job)
 
     command = None
+    declared_category = None
     if job["action"] == "install":
         package = Path(job["package_path"])
+        # AD-21 (1.17.13): re-check the category from the root-private package before anything is installed.
+        try:
+            declared_category = package_category(package, job["plugin_id"])
+            if category_refused(declared_category):
+                raise RuntimeError(f"module {job['plugin_id']} is a Test module (or states no category) and this is not a development server: refusing to install it")
+        except (RuntimeError, OSError, zipfile.BadZipFile, tarfile.TarError) as exc:
+            with log_path.open("a", encoding="utf-8") as log:
+                log.write(f"[TEC-TAC-MODULE] category check failed: {exc}\n")
+            job["finished_at"] = now()
+            job["status"] = "failed"
+            job["error"] = str(exc)
+            job["error_type"] = "CategoryRefused"
+            atomic_json(path, job)
+            try:
+                running_request_path(job_id).unlink(missing_ok=True)
+            except OSError:
+                pass
+            return
         command = [TRUSTED_BASH, str(install_script), str(package)]
         if job.get("replace"):
             command.append("--replace")
@@ -449,6 +561,8 @@ def run_job(job_id):
             log.flush()
             result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, text=True, env=privileged_env())
             rc = result.returncode
+            if rc == 0 and job["action"] == "install" and declared_category is not None:
+                remember_category(job["plugin_id"], declared_category)
             if rc == 0 and job["action"] == "remove":
                 # Removal is not complete until its persistent runtime state is
                 # cleared. Otherwise later UI/system updates can fail because

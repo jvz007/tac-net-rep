@@ -38,6 +38,8 @@ _stub("cryptography.hazmat.primitives.asymmetric.ed25519", Ed25519PublicKey=obje
 _stub("cryptography.exceptions", InvalidSignature=Exception)
 
 from tec_tac import capabilities, module_manager, module_manager_v2 as v2, module_replacement as mr, module_state, registry  # noqa: E402
+from tec_tac import module_category  # noqa: E402
+module_category.is_development_server = lambda: True  # AD-21 (1.17.13): these tests are about replacement, not about the category gate
 
 logging.getLogger("tec_tac.module_replacement").addHandler(logging.NullHandler())
 TMP = Path(tempfile.mkdtemp(prefix="tectac-replacement-"))
@@ -57,6 +59,8 @@ def manifest(module_id, root=EXT, **extra):
     folder.mkdir(parents=True, exist_ok=True)
     payload = {"id": module_id, "type": "extension" if root is EXT else "reportset", "version": "1.0.0", "name": module_id}
     payload.update(extra)
+    if "replaces" in extra:
+        payload.setdefault("category", "premium")  # AD-21 (1.17.13): a replacement is a premium module
     (folder / "tec_tac.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -126,7 +130,7 @@ manifest("srv", category="server")
 manifest("corem", category="core")
 specs = {p.plugin_id: p for p in registry.get_plugins()}
 must(specs["srv"].category == "server" and specs["corem"].category == "core", "category server is accepted")
-must("category must be 'core' or 'server'" in refused_manifest("other", category="premium"), "other values are still refused")
+must("category must be" in refused_manifest("other", category="bogus"), "other values are still refused (premium and test are accepted since 1.17.13)")
 must("category" in refused_manifest("rs", root=REP, category="server"), "a reportset may not declare a category")
 must("may not declare replaces" in refused_manifest("srv2", category="server", replaces="corem"), "a server module may not replace anything")
 must("prefix" in refused_manifest("srv3", category="server", capabilities={"other.thing": "1.0.0"}), "a server module declares only its own prefix")

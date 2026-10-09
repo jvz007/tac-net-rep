@@ -111,7 +111,7 @@ A module needs `requires.framework` of `>=1.17.7` to use any of this.
 
 ## How a call runs
 
-`run_tactical_operation(request, module_id, operation_id, params=None, body=None)` and the HTTP route run the same code.
+`run_tactical_operation(request, module_id, operation_id, params=None, body=None, query=None, upload=None)` and the HTTP route run the same code. The steps below are as of 1.17.13: see "Added in 1.17.13" for the before-read (between steps 6 and 7), the query string and the file.
 
 1. The operation exists and its module is enabled. Otherwise 404 `tactical_operation_not_found`.
 2. The caller is authenticated. Otherwise 401.
@@ -173,6 +173,111 @@ result.status, result.data, result.audit
 `run` returns `TacticalOperationResult(status, data, content_type, headers, audit, content)`. Core's own refusals raise
 `TacticalOperationError` with `status`, `code`, `message` and `audit`. `list_operations(module_id=None)` and
 `get_operation(module_id, operation_id)` return plain metadata rows.
+
+## Added in 1.17.13
+
+Everything here is optional. An operation declared the 1.17.12 way registers and runs exactly as before. The capability
+`core.tactical_operations` is now `1.1.0` (it was `1.0.0`). Every caller asks for `>=1,<2`, so nothing breaks. A module that uses any
+key below needs `requires.framework` of `>=1.17.13`.
+
+### Name the audit object: `audit.object_param`
+
+`audit.object_param` names a path parameter of the route. Its value is the audit row's `object_id`, with the declared
+`audit.object_type`. It is written on every row: success, deny, and outcome-unknown. It is also the object hint on a refusal at steps
+3 and 4. It must name a real parameter of the route, or registration is refused. Without it, `object_id` comes from the first scope
+object, as before.
+
+```python
+audit={"action": "delete", "object_type": "report_template", "audit_fields": [], "object_param": "pk"}
+```
+
+### Read the object first: `audit.before`
+
+`audit.before = {"route": ..., "fields": [...]}` gives the row a before value. `route` is a Tactical `GET` route that returns the
+object. Its parameters must be among the operation's own parameters, with the same names and kinds, and the same module must own it
+(the same owner check as the operation). `fields` is a list of at most 16 top-level names. None may look like a secret.
+
+Before it dispatches the change, Core runs that `GET` in this process through Tactical's own view, as the signed-in user. It uses the
+same helper as the operation, so there is no HTTP call and no token. It copies only the listed fields. A string is cut to 256
+characters. A value that is not a string, number, true, false or null is dropped. The result is the row's `before_value`.
+
+A read that fails or does not answer 200 never blocks the change. The row is still written, and its metadata says `before:
+unavailable` with the read's `before_status`. A `GET` operation has no before value.
+
+### Scope from the read: `before:<field>`
+
+A scope entry may read its object from the `before` answer: `{"type": "agent", "source": "before:agent_id"}`. The field must be in
+`before.fields`. Core then runs the usual `objects_in_role_scope` check on it. This is how a note's agent is checked for
+`PUT` and `DELETE agents/notes/<pk>/`.
+
+The read happens after the Tactical flag and module-permission checks. If it does not answer 200, or the field is missing, Core
+refuses with the fixed 404 `object_not_found` text and writes a deny row. Core fails closed. Tactical's `GET agents/notes/<pk>/`
+needs `can_list_notes`, so a role that may manage notes but not list them cannot edit a note through Core. That is stricter than
+Tactical's own call for that role (CQ37).
+
+Core never reads a Tactical model for this. A pending action has no `GET` by pk in Tactical, so `cancel-pending-action` declares
+`object_param: "pk"` and no scope entry. Tactical's own `DELETE` view enforces the agent scope. Core still re-checks the Tactical flag and
+writes the row with the pk as the object.
+
+### Scope type from the body: `body:<field>`
+
+`{"type": "body:type", "source": "body:id", "type_map": {"Client": "client", "Site": "site"}}` takes the scope type from a body
+field. `type_map` maps each allowed value to `client` or `site`, with at most 8 entries. A value outside the map is refused 400
+`scope_field_required`. The resolved type is written to the row metadata as `scope_type`. `POST agents/maintenance/bulk/` uses this.
+
+### A query string for `GET`: `query_params`
+
+`query_params` is a whitelist of up to 16 names for a `GET` operation. It is the new last argument of `register_tactical_operation`. A
+name may not look like a secret, because a query string is logged. The caller sends `query` (a flat object):
+
+- Each value is a string or a whole number of at most 512 characters.
+- No control characters, and no `..` path segment (also after one level of percent-decoding).
+- A name outside the whitelist gives 400 `query_field_not_allowed`. A bad value gives 400 `invalid_query`.
+
+Core builds the query string and sets `GET` on the forwarded request, so Tactical's `request.query_params` sees it. `audit_fields` may
+name a body field or a query name. The value is copied into `after`.
+
+### One file: `upload`
+
+`upload = {"field": "file", "max_bytes": 1000000, "extensions": ["png", "jpg"]}` lets a `POST`, `PUT` or `PATCH` operation forward exactly
+one file. The hard ceiling is `MAX_UPLOAD_BYTES`, 10 MiB (CQ40). Each operation declares its own lower cap. The extension list is lower
+case, has no dot and may not be empty. The field name may not be `params`, `body`, `query` or a body field.
+
+`run_tactical_operation(..., upload={"name": ..., "content_type": ..., "content": bytes})` and the HTTP route take it. Core:
+
+1. cleans the file name (no path, at most 255 characters, no control characters) and checks the extension against the list;
+2. checks the size against the cap before it reads the file;
+3. builds its own `multipart/form-data` payload with a random boundary and the text parts from `body`, with no `django.test`;
+4. forwards it, so Tactical's own `MultiPartParser` reads the file and the text fields.
+
+Name the part after the file when Tactical wants that. Tactical's report asset upload (`POST reporting/assets/upload/`) stores each
+file under the name of its multipart part, not under the `filename` attribute. For such an operation declare
+`"field": "{file_name}"`. Core then names the part after the cleaned file name, and the browser's own part name does not matter. From the
+HTTP route, the file name is the part's `filename`, falling back to the part name.
+
+The audit row's `after` records only the file name, size and content type. It never holds the content. Refusals: `upload_not_allowed`
+(the operation takes no file, or the part has the wrong name), `upload_too_large` (413), `upload_type_not_allowed`, and `invalid_upload`
+(no file, a bad name, content that is not bytes).
+
+### HTTP
+
+The JSON form takes `{"params": ..., "body": ..., "query": ...}`. The multipart form carries the text parts `params`, `body` and
+`query` (each a JSON object) and one file part named as the operation declares it. The route checks the declared length before it
+parses the request, and the file's size before it reads it. The throttles are unchanged. The browser helper sends `query` and the file
+from UI 0.12.91 (a UI request).
+
+### What does not work yet
+
+Tactical answers `GET reporting/assets/download/` with a `FileResponse`, which is a streamed answer. Core refuses a streamed answer
+(`tactical_response_refused`), so a declared download operation reaches Tactical's view with its query string but the file is not
+relayed. The query string itself works for any operation whose answer is not streamed. Relaying a streamed file answer is a separate
+request.
+
+### AD-21: the category decides
+
+The owner table still says which core module owns a route. Since 1.17.13 the declaring module's **effective category** decides too (a
+missing category is `test`; see `docs/module-categories.md`). A `premium`, `server` or `test` module is refused every route, even one the
+owner table lists by id. The message names the category. Licensing keeps `core/codesign/` (AD-16). An honoured AD-20 replacement keeps its rights.
 
 ## AD-19 conditions
 

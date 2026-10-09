@@ -15,6 +15,17 @@ What this module is not:
   so a Celery task cannot use it (mode b, the Scheduler running as the owner, is a separate Core contract).
 
 The registry is empty until a module declares an operation, so this release changes nothing for installed modules.
+
+1.17.13 (all additive; an operation declared the 1.17.12 way registers and runs unchanged):
+
+* ``audit.object_param`` names a path parameter that is the audit object (a note, a template, a pending action).
+* ``audit.before = {route, fields}`` reads the object through Tactical's own GET view, as the signed-in user, and writes
+  a whitelisted copy of it as the row's before value. A failed read never blocks the change.
+* A scope entry may take its source from that read (``before:<field>``) or its type from the body (``type: body:<field>``
+  with a ``type_map``).
+* ``query_params`` lets a GET operation pass a whitelisted query string; ``upload`` lets one operation forward one file
+  as multipart/form-data, with a size cap and an extension allow-list.
+* AD-21: the owning module's effective category (a missing category is ``test``) decides, not only its id.
 """
 from __future__ import annotations
 
@@ -22,20 +33,30 @@ import itertools
 import json
 import logging
 import re
+import secrets
 import threading
 from dataclasses import dataclass, field
 from io import BytesIO
 from typing import Any
 
+from . import module_category as _module_category
+
 logger = logging.getLogger("tec_tac.tactical_operations")
 
 CAPABILITY_ID = "core.tactical_operations"
-CAPABILITY_VERSION = "1.0.0"
+CAPABILITY_VERSION = "1.1.0"
 AUDIT_HEADER = "X-Tec-Tac-Audit"
 AUDIT_RECORDED = "recorded"
 AUDIT_NOT_RECORDED = "not-recorded"
 MAX_BODY_BYTES = 256 * 1024
 MAX_RESPONSE_BYTES = 25 * 2**20
+MAX_UPLOAD_BYTES = 10 * 2**20  # hard ceiling for one uploaded file; an operation declares its own lower cap (CQ40)
+MAX_QUERY_PARAMS = 16
+# An upload whose part is named after the file itself. Tactical's report asset upload stores each file under the name of
+# its multipart part, not under the filename attribute (ee/reporting/views.py UploadAssets), so the part must be named
+# after the cleaned file name.
+FILE_NAME_FIELD = "{file_name}"
+MAX_QUERY_VALUE = 512
 RELAYED_HEADERS = ("Content-Type", "Content-Disposition")
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 BODY_METHODS = ("POST", "PUT", "PATCH", "DELETE")
@@ -52,7 +73,10 @@ _LITERAL_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}$")
 _PARAM_RE = re.compile(r"^\{([a-z][a-z0-9_]{0,31})(?::(str|int|agent))?\}$")
 _FIELD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 _SECRET_NAME_RE = re.compile(r"(pass|secret|token|key|credential|auth|cookie|signature)", re.IGNORECASE)
-_SCOPE_SOURCE_RE = re.compile(r"^(path|body):([A-Za-z_][A-Za-z0-9_]{0,63})$")
+_SCOPE_SOURCE_RE = re.compile(r"^(path|body|before):([A-Za-z_][A-Za-z0-9_]{0,63})$")
+_SCOPE_TYPE_BODY_RE = re.compile(r"^body:([A-Za-z_][A-Za-z0-9_]{0,63})$")
+_EXTENSION_RE = re.compile(r"^[a-z0-9]{1,10}$")
+_CONTENT_TYPE_RE = re.compile(r"^[A-Za-z0-9!#$&^_.+-]{1,60}/[A-Za-z0-9!#$&^_.+-]{1,60}$")
 _PARAM_VALUE_RE = {
     "str": re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,254}$"),
     "agent": re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{20,254}$"),
@@ -63,6 +87,11 @@ _MAX_ROUTE_LENGTH = 200
 _MAX_PERMISSIONS = 8
 _MAX_BODY_FIELDS = 64
 _MAX_SCOPE = 4
+_MAX_BEFORE_FIELDS = 16
+_MAX_TYPE_MAP = 8
+_MAX_UPLOAD_EXTENSIONS = 16
+_BEFORE_STRING_LIMIT = 256
+_MAX_FILE_NAME = 255
 
 # One fixed Core text per refusal. None carries any wording from the declaring module or from Tactical.
 MESSAGES = {
@@ -100,8 +129,28 @@ class TacticalOperationRegistrationError(ValueError):
 
 @dataclass(frozen=True)
 class ScopeSpec:
-    type: str
-    source: str  # path:<name> or body:<field>
+    type: str  # agent, client or site, or body:<field> with a type_map (1.17.13)
+    source: str  # path:<name>, body:<field> or before:<field> (1.17.13)
+    type_map: tuple = ()  # ((body value, scope type), ...) when ``type`` is body:<field>
+
+
+@dataclass(frozen=True)
+class BeforeSpec:
+    """A Tactical GET route that returns the object an operation changes, and the fields copied from it (1.17.13)."""
+
+    route: str
+    segments: tuple
+    trailing_slash: bool
+    fields: tuple
+
+
+@dataclass(frozen=True)
+class UploadSpec:
+    """One file part an operation forwards as multipart/form-data (1.17.13)."""
+
+    field: str
+    max_bytes: int
+    extensions: tuple
 
 
 @dataclass(frozen=True)
@@ -120,6 +169,10 @@ class TacticalOperation:
     audit_fields: tuple
     module_permission: str | None = None
     message: str | None = None
+    audit_object_param: str | None = None
+    before: BeforeSpec | None = None
+    query_params: tuple = ()
+    upload: UploadSpec | None = None
 
     @property
     def params(self) -> tuple:
@@ -133,10 +186,22 @@ class TacticalOperation:
             "route": self.route,
             "params": {name: kind for name, kind in self.params},
             "permissions": list(self.permissions),
-            "scope": [{"type": item.type, "source": item.source} for item in self.scope],
+            "scope": [
+                {"type": item.type, "source": item.source, **({"type_map": dict(item.type_map)} if item.type_map else {})}
+                for item in self.scope
+            ],
             "body_fields": list(self.body_fields),
-            "audit": {"action": self.audit_action, "object_type": self.audit_object_type, "audit_fields": list(self.audit_fields)},
+            "audit": {
+                "action": self.audit_action, "object_type": self.audit_object_type, "audit_fields": list(self.audit_fields),
+                "object_param": self.audit_object_param,
+                "before": {"route": self.before.route, "fields": list(self.before.fields)} if self.before else None,
+            },
             "module_permission": self.module_permission,
+            "query_params": list(self.query_params),
+            "upload": (
+                {"field": self.upload.field, "max_bytes": self.upload.max_bytes, "extensions": list(self.upload.extensions)}
+                if self.upload else None
+            ),
         }
 
 
@@ -373,9 +438,11 @@ def _check_route_owner(module: dict, segments: tuple, route: str = "") -> None:
     rules = _expansion_rules(segments)
     shown = "/".join(literal) if not route else route
     pairs = _honoured_pairs()
-    if module.get("category") != "core" and owner not in pairs and not all((owner, rule) in CATEGORY_EXCEPTIONS for rule in rules):
+    category = _module_category.effective_category(module.get("category"))
+    if category != "core" and owner not in pairs and not all((owner, rule) in CATEGORY_EXCEPTIONS for rule in rules):
+        # AD-21 condition 3: a premium, server or test module is refused every route, even one the owner table lists by id.
         raise TacticalOperationRegistrationError(
-            f"module {owner!r} is not a core module. Only the core module that owns a Tactical route can declare its operations."
+            f"module {owner!r} is not a core module (its category is {category}). Only the core module that owns a Tactical route can declare its operations."
         )
     for rule in rules:
         if rule is None:
@@ -411,6 +478,64 @@ def _check_module(module_id: Any) -> dict:
     return module
 
 
+def _parse_before(value: Any, module: dict, verb: str, params: dict) -> BeforeSpec | None:
+    """Validate ``audit.before = {route, fields}`` (1.17.13)."""
+    if value is None:
+        return None
+    if verb == "GET":
+        raise TacticalOperationRegistrationError("a GET operation changes nothing, so it has no audit.before.")
+    if not isinstance(value, dict) or set(value) != {"route", "fields"}:
+        raise TacticalOperationRegistrationError("audit.before is {route, fields} and nothing else.")
+    segments, trailing = _parse_route(value["route"])
+    # The read is a Tactical GET like any operation, so the same module must own it.
+    _check_route_owner(module, segments, value["route"])
+    for seg in segments:
+        if seg[0] == "param" and params.get(seg[1]) != seg[2]:
+            raise TacticalOperationRegistrationError(
+                f"audit.before route parameter {seg[1]!r} must be a parameter of the operation's own route, with the same kind."
+            )
+    names = _clean_names(value["fields"], "audit.before fields", maximum=_MAX_BEFORE_FIELDS)
+    if not names:
+        raise TacticalOperationRegistrationError("audit.before fields must name at least one field.")
+    for name in names:
+        if _SECRET_NAME_RE.search(name):
+            raise TacticalOperationRegistrationError(f"audit.before field {name!r} looks like a secret. Never put secrets in the audit row.")
+    return BeforeSpec(value["route"], segments, trailing, names)
+
+
+def _parse_type_map(value: Any) -> tuple:
+    if not isinstance(value, dict) or not value or len(value) > _MAX_TYPE_MAP:
+        raise TacticalOperationRegistrationError(f"a body-selected scope type needs a type_map of 1 to {_MAX_TYPE_MAP} entries.")
+    pairs = []
+    for key, scope_type in value.items():
+        if not isinstance(key, str) or not _LITERAL_RE.match(key):
+            raise TacticalOperationRegistrationError(f"type_map key {key!r} is not allowed.")
+        if scope_type not in ("client", "site"):
+            raise TacticalOperationRegistrationError("type_map maps a body value to client or site.")
+        pairs.append((key, scope_type))
+    return tuple(sorted(pairs))
+
+
+def _parse_upload(value: Any, verb: str, fields: tuple) -> UploadSpec | None:
+    if value is None:
+        return None
+    if verb not in ("POST", "PUT", "PATCH"):
+        raise TacticalOperationRegistrationError("upload belongs to a POST, PUT or PATCH operation.")
+    if not isinstance(value, dict) or set(value) != {"field", "max_bytes", "extensions"}:
+        raise TacticalOperationRegistrationError("upload is {field, max_bytes, extensions} and nothing else.")
+    name, cap = value["field"], value["max_bytes"]
+    if name != FILE_NAME_FIELD and (not isinstance(name, str) or not _FIELD_RE.match(name) or name in ("params", "body", "query") or name in fields):
+        raise TacticalOperationRegistrationError(
+            f"upload field must be a plain name that is not params, body, query or a body field, or {FILE_NAME_FIELD} to name the part after the file."
+        )
+    if isinstance(cap, bool) or not isinstance(cap, int) or not 0 < cap <= MAX_UPLOAD_BYTES:
+        raise TacticalOperationRegistrationError(f"upload max_bytes must be a whole number from 1 to {MAX_UPLOAD_BYTES}.")
+    extensions = _clean_names(value["extensions"], "upload extensions", maximum=_MAX_UPLOAD_EXTENSIONS, pattern=_EXTENSION_RE)
+    if not extensions:
+        raise TacticalOperationRegistrationError("upload extensions must list at least one allowed file extension (lower case, no dot).")
+    return UploadSpec(name, cap, extensions)
+
+
 def register_tactical_operation(
     id,
     module_id,
@@ -422,8 +547,14 @@ def register_tactical_operation(
     audit,
     module_permission=None,
     message=None,
+    query_params=None,
+    upload=None,
 ):
     """Declare one Tactical operation. Call it from the owning module's ``AppConfig.ready()``.
+
+    1.17.13 (all optional): ``audit`` may also carry ``object_param`` and ``before``; a scope entry may use a
+    ``before:<field>`` source or a ``body:<field>`` type with a ``type_map``; ``query_params`` whitelists the query names
+    of a GET operation; ``upload`` declares one multipart file part. See docs/tactical-operations.md.
 
     Refuses (TacticalOperationRegistrationError, a ValueError) a module that is not a core module (bar the named
     exceptions) or a route the module does not own (the longest matching rule of ``ROUTE_OWNERS`` decides, see
@@ -464,14 +595,32 @@ def register_tactical_operation(
         scope = ()
     if isinstance(scope, (str, bytes, dict)) or not hasattr(scope, "__iter__"):
         raise TacticalOperationRegistrationError("scope must be a list of {type, source}.")
+    # The audit and before declarations come first: a scope source may read from the before fields.
+    if not isinstance(audit, dict) or not {"action", "object_type"} <= set(audit) or set(audit) - {"action", "object_type", "audit_fields", "object_param", "before"}:
+        raise TacticalOperationRegistrationError("audit is {action, object_type, audit_fields, object_param, before}; the last three are optional.")
+    object_param = audit.get("object_param")
+    if object_param is not None and (not isinstance(object_param, str) or object_param not in params):
+        raise TacticalOperationRegistrationError(f"audit object_param {object_param!r} is not a parameter of the route.")
+    before = _parse_before(audit.get("before"), module, verb, params)
+
     for item in scope:
-        if not isinstance(item, dict) or set(item) != {"type", "source"}:
-            raise TacticalOperationRegistrationError("each scope entry is {type, source} and nothing else.")
+        if not isinstance(item, dict) or not {"type", "source"} <= set(item) or set(item) - {"type", "source", "type_map"}:
+            raise TacticalOperationRegistrationError("each scope entry is {type, source}, plus type_map for a body-selected type, and nothing else.")
         kind, source = item["type"], item["source"]
         match = _SCOPE_SOURCE_RE.match(source) if isinstance(source, str) else None
-        if kind not in SCOPE_TYPES or match is None:
-            raise TacticalOperationRegistrationError(f"bad scope entry {item!r}: type is agent, client or site and source is path:<name> or body:<field>.")
+        type_field = _SCOPE_TYPE_BODY_RE.match(kind) if isinstance(kind, str) else None
+        if match is None or (kind not in SCOPE_TYPES and type_field is None):
+            raise TacticalOperationRegistrationError(
+                f"bad scope entry {item!r}: type is agent, client, site or body:<field>, and source is path:<name>, body:<field> or before:<field>."
+            )
         where, name = match.group(1), match.group(2)
+        type_map = ()
+        if type_field is not None:
+            if type_field.group(1) not in fields:
+                raise TacticalOperationRegistrationError(f"scope type {kind!r} is not one of body_fields.")
+            type_map = _parse_type_map(item.get("type_map"))
+        elif "type_map" in item:
+            raise TacticalOperationRegistrationError("type_map belongs only to a scope type of the form body:<field>.")
         if where == "path":
             if name not in params:
                 raise TacticalOperationRegistrationError(f"scope source {source!r} is not a parameter of the route.")
@@ -479,17 +628,20 @@ def register_tactical_operation(
                 raise TacticalOperationRegistrationError(f"scope source {source!r} must be an int parameter for a {kind}.")
             if kind == "agent" and params[name] == "int":
                 raise TacticalOperationRegistrationError(f"scope source {source!r} must be a string parameter for an agent.")
+            if type_map and params[name] != "int":
+                raise TacticalOperationRegistrationError(f"scope source {source!r} must be an int parameter for a client or site.")
+        elif where == "before":
+            if before is None or name not in before.fields:
+                raise TacticalOperationRegistrationError(f"scope source {source!r} is not one of the audit.before fields.")
         elif name not in fields:
             raise TacticalOperationRegistrationError(f"scope source {source!r} is not one of body_fields.")
-        spec = ScopeSpec(kind, source)
+        spec = ScopeSpec(kind, source, type_map)
         if spec in scope_specs:
             raise TacticalOperationRegistrationError(f"scope entry {item!r} is repeated.")
         scope_specs.append(spec)
     if len(scope_specs) > _MAX_SCOPE:
         raise TacticalOperationRegistrationError("too many scope entries.")
 
-    if not isinstance(audit, dict) or not {"action", "object_type"} <= set(audit) or set(audit) - {"action", "object_type", "audit_fields"}:
-        raise TacticalOperationRegistrationError("audit is {action, object_type, audit_fields}.")
     try:
         action = audit_core._normalize_action(audit["action"])
         object_type = audit_core._normalize_object_type(audit["object_type"])
@@ -497,10 +649,18 @@ def register_tactical_operation(
         raise TacticalOperationRegistrationError(f"audit: {exc}") from None
     if action == "deny" or action == OUTCOME_UNKNOWN_ACTION:
         raise TacticalOperationRegistrationError("audit action deny and custom:outcome-unknown are written by Core only.")
+    query_names = _clean_names(query_params, "query_params", maximum=MAX_QUERY_PARAMS)
+    if query_names and verb != "GET":
+        raise TacticalOperationRegistrationError("query_params belong to a GET operation.")
+    for name in query_names:
+        if _SECRET_NAME_RE.search(name):
+            raise TacticalOperationRegistrationError(f"query parameter {name!r} looks like a secret. A query string is logged; never put secrets in it.")
+    upload_spec = _parse_upload(upload, verb, fields)
+
     audit_fields = _clean_names(audit.get("audit_fields"), "audit_fields", maximum=_MAX_BODY_FIELDS)
     for name in audit_fields:
-        if name not in fields:
-            raise TacticalOperationRegistrationError(f"audit field {name!r} is not one of body_fields.")
+        if name not in fields and name not in query_names:
+            raise TacticalOperationRegistrationError(f"audit field {name!r} is not one of body_fields or query_params.")
         if _SECRET_NAME_RE.search(name):
             raise TacticalOperationRegistrationError(f"audit field {name!r} looks like a secret. Never put secrets in the audit row.")
 
@@ -519,6 +679,7 @@ def register_tactical_operation(
         id=op_id, module_id=owner, method=verb, route=route, segments=segments, trailing_slash=trailing,
         permissions=flags, scope=tuple(scope_specs), body_fields=fields, audit_action=action, audit_object_type=object_type,
         audit_fields=audit_fields, module_permission=codename, message=text,
+        audit_object_param=object_param, before=before, query_params=query_names, upload=upload_spec,
     )
     key = (owner, op_id)
     route_key = (verb, _route_key(segments, trailing))
@@ -579,7 +740,7 @@ def _lookup(module_id: Any, operation_id: Any) -> TacticalOperation:
     # A replacement's operation stays dead once its replacement is no longer honoured (AD-20), even in a process
     # that registered it before the operator changed module state.
     if (
-        module.get("category") != "core"
+        _module_category.effective_category(module.get("category")) != "core"
         and operation.module_id not in {name for name, _ in CATEGORY_EXCEPTIONS}
         and operation.module_id not in _honoured_pairs()
     ):
@@ -591,13 +752,20 @@ def _printable(value: Any, limit: int = 255) -> str:
     return "".join(ch for ch in str(value) if 32 <= ord(ch) < 127)[:limit]
 
 
-def _scope_values(operation: TacticalOperation, params: Any, body: Any) -> list[tuple[str, list[str]]]:
-    """Resolve every declared scope entry to (type, [ids]). Raises 400 for a missing or malformed value."""
+def _scope_values(operation: TacticalOperation, params: Any, body: Any, before: Any = None, *, phase: str = "direct") -> list[tuple[str, list[str]]]:
+    """Resolve the declared scope entries to (type, [ids]). Raises 400 for a missing or malformed value.
+
+    ``phase`` is "direct" for entries read from the path or the body, and "before" for entries read from the
+    audit.before answer (1.17.13), which exist only after Core has read the object."""
     resolved = []
     for spec in operation.scope:
         where, name = spec.source.split(":", 1)
+        if (where == "before") != (phase == "before"):
+            continue
         if where == "path":
             raw = (params or {}).get(name)
+        elif where == "before":
+            raw = (before or {}).get(name)
         else:
             raw = (body or {}).get(name)
         values = raw if isinstance(raw, list) else [raw]
@@ -608,15 +776,37 @@ def _scope_values(operation: TacticalOperation, params: Any, body: Any) -> list[
             if value is None or isinstance(value, (bool, dict, list, float)) or not str(value).strip():
                 raise TacticalOperationError(f"{name} is required.", status=400, code="scope_field_required")
             ids.append(str(value).strip())
-        resolved.append((spec.type, ids))
+        kind = spec.type
+        if kind.startswith("body:"):
+            field_name = kind.split(":", 1)[1]
+            chosen = (body or {}).get(field_name)
+            kind = dict(spec.type_map).get(chosen) if isinstance(chosen, str) else None
+            if kind is None:
+                raise TacticalOperationError(f"{field_name} is required and must be one of the declared types.", status=400, code="scope_field_required")
+        resolved.append((kind, ids))
     return resolved
 
 
-def _object_id(scope: list[tuple[str, list[str]]]) -> str | None:
+def _object_id(scope: list[tuple[str, list[str]]], operation: TacticalOperation | None = None, params: Any = None) -> str | None:
+    """The audit row's object id. A declared ``audit.object_param`` wins (1.17.13); otherwise the first scope object."""
+    if operation is not None and operation.audit_object_param and isinstance(params, dict):
+        value = params.get(operation.audit_object_param)
+        if value is not None and not isinstance(value, (bool, dict, list, float)):
+            text = _printable(str(value).strip())
+            if text:
+                return text
     if not scope:
         return None
     ids = scope[0][1]
     return _printable(",".join(ids)) or None
+
+
+def _body_scope_type(operation: TacticalOperation, scope: list[tuple[str, list[str]]]) -> str | None:
+    """The scope type a body-selected entry resolved to, for the row metadata."""
+    for spec, (kind, _) in zip([item for item in operation.scope if not item.source.startswith("before:")], scope):
+        if spec.type.startswith("body:"):
+            return kind
+    return None
 
 
 def _clean_params(operation: TacticalOperation, params: Any) -> dict[str, str]:
@@ -656,6 +846,101 @@ def _clean_body(operation: TacticalOperation, body: Any) -> dict:
     return body
 
 
+_QUERY_SAFE = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+_PERCENT_RE = re.compile(r"%([0-9A-Fa-f]{2})")
+
+
+def _quote(text: str) -> str:
+    """Percent-encode one query name or value. Written here so this module imports no URL library (no HTTP, 1.17.7)."""
+    return "".join(chr(byte) if byte in _QUERY_SAFE else f"%{byte:02X}" for byte in text.encode("utf-8"))
+
+
+def _query_string(query: dict) -> str:
+    return "&".join(f"{_quote(str(name))}={_quote(str(value))}" for name, value in query.items())
+
+
+def _unquote(text: str) -> str:
+    return _PERCENT_RE.sub(lambda found: chr(int(found.group(1), 16)), text)
+
+
+def _has_control(text: str) -> bool:
+    return any(ord(ch) < 32 or ord(ch) == 127 for ch in text)
+
+
+def _dotdot_segment(text: str) -> bool:
+    return any(".." in re.split(r"[\\/]", candidate) for candidate in (text, _unquote(text)))
+
+
+def _clean_query(operation: TacticalOperation, query: Any) -> dict[str, str]:
+    """The query string of a GET operation: whitelisted names, flat string or whole-number values (1.17.13)."""
+    if query is None:
+        query = {}
+    if not isinstance(query, dict):
+        raise TacticalOperationError("query must be an object.", status=400, code="invalid_query")
+    extra = sorted(set(query) - set(operation.query_params))
+    if extra:
+        raise TacticalOperationError(
+            "Query field not allowed: " + ", ".join(_printable(name, 40) for name in extra), status=400, code="query_field_not_allowed",
+        )
+    cleaned = {}
+    for name in operation.query_params:
+        if name not in query:
+            continue
+        value = query[name]
+        if value is None or isinstance(value, (bool, dict, list, float)):
+            raise TacticalOperationError(f"Query field {name} must be a string or a whole number.", status=400, code="invalid_query")
+        text = str(value)
+        if not text.strip() or len(text) > MAX_QUERY_VALUE or _has_control(text) or _dotdot_segment(text):
+            raise TacticalOperationError(f"Query field {name} is not valid.", status=400, code="invalid_query")
+        cleaned[name] = text
+    return cleaned
+
+
+def _clean_file_name(raw: Any) -> str:
+    if not isinstance(raw, str):
+        raise TacticalOperationError("The file needs a name.", status=400, code="invalid_upload")
+    if _has_control(raw):
+        raise TacticalOperationError("The file name has control characters.", status=400, code="invalid_upload")
+    name = re.split(r"[\\/]", raw)[-1].strip().replace('"', "_")
+    if not name or name in (".", "..") or len(name) > _MAX_FILE_NAME:
+        raise TacticalOperationError("The file name is not valid.", status=400, code="invalid_upload")
+    return name
+
+
+def _clean_upload(operation: TacticalOperation, upload: Any) -> dict | None:
+    """Check the one file an operation may forward: field, name, extension and size (1.17.13). Returns the clean part."""
+    spec = operation.upload
+    if upload is None:
+        if spec is not None:
+            raise TacticalOperationError("This operation needs one file.", status=400, code="invalid_upload")
+        return None
+    if spec is None:
+        raise TacticalOperationError("This operation takes no file.", status=400, code="upload_not_allowed")
+    if not isinstance(upload, dict):
+        raise TacticalOperationError("upload must be an object.", status=400, code="invalid_upload")
+    if spec.field != FILE_NAME_FIELD and upload.get("field") not in (None, spec.field):
+        raise TacticalOperationError("The file part has the wrong name.", status=400, code="upload_not_allowed")
+    content = upload.get("content")
+    if not isinstance(content, (bytes, bytearray)):
+        raise TacticalOperationError("The file has no content.", status=400, code="invalid_upload")
+    cap = min(spec.max_bytes, MAX_UPLOAD_BYTES)
+    if len(content) > cap:
+        raise TacticalOperationError(f"The file is larger than {cap} bytes.", status=413, code="upload_too_large")
+    name = _clean_file_name(upload.get("name"))
+    extension = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    if extension not in spec.extensions:
+        raise TacticalOperationError("This file type is not allowed. Allowed: " + ", ".join(spec.extensions) + ".", status=400, code="upload_type_not_allowed")
+    content_type = str(upload.get("content_type") or "").split(";")[0].strip()
+    if not _CONTENT_TYPE_RE.match(content_type):
+        content_type = "application/octet-stream"
+    part = spec.field
+    if part == FILE_NAME_FIELD:
+        part = name  # Tactical stores the file under its part name
+        if part in operation.body_fields or part in ("params", "body", "query"):
+            raise TacticalOperationError("The file name clashes with a field of this operation.", status=400, code="invalid_upload")
+    return {"field": part, "name": name, "content_type": content_type, "content": bytes(content)}
+
+
 def _check_whitelist(operation: TacticalOperation, body: dict) -> None:
     extra = sorted(set(body) - set(operation.body_fields))
     if extra:
@@ -666,7 +951,7 @@ def _check_whitelist(operation: TacticalOperation, body: dict) -> None:
 
 
 def _write_row(request, operation: TacticalOperation, *, action: str, object_id, message: str, after=None,
-               tactical_status: int | None, refusal: bool = False, extra: dict | None = None) -> dict:
+               tactical_status: int | None, refusal: bool = False, extra: dict | None = None, before=None) -> dict:
     """Write one Core audit row. Never raises: a failed write is logged and reported."""
     from . import audit as audit_core
 
@@ -675,7 +960,7 @@ def _write_row(request, operation: TacticalOperation, *, action: str, object_id,
     try:
         result = audit_core._record_tactical_operation(
             actor=getattr(request, "user", None), module_id=operation.module_id, action=action,
-            object_type=operation.audit_object_type, object_id=object_id, message=message, after=after,
+            object_type=operation.audit_object_type, object_id=object_id, message=message, before=before, after=after,
             metadata=metadata, operation=operation.id, tactical_status=tactical_status, refusal=refusal, request=request,
         )
     except Exception:
@@ -699,27 +984,66 @@ def _refuse(request, operation: TacticalOperation, reason: str, status: int, cod
     return TacticalOperationError(MESSAGES[text], status=status, code=code, audit=audit)
 
 
-def _build_request(request, operation: TacticalOperation, path: str, body: dict, match):
-    """A copy of the incoming request with path, method and body replaced, authenticated as the signed-in user."""
+def _encode_multipart(fields: dict[str, str], part: dict) -> tuple[bytes, str]:
+    """A multipart/form-data payload of text parts and one file part, with a random boundary. No django.test (1.17.13)."""
+    content = part["content"]
+    while True:
+        boundary = "TecTacBoundary" + secrets.token_hex(16)
+        if boundary.encode("ascii") not in content:
+            break
+    lines = []
+    for name, value in fields.items():
+        lines.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n".encode() + str(value).encode() + b"\r\n")
+    lines.append(
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"{part['field']}\"; filename=\"{part['name']}\"\r\n"
+        f"Content-Type: {part['content_type']}\r\n\r\n".encode() + content + b"\r\n"
+    )
+    lines.append(f"--{boundary}--\r\n".encode("ascii"))
+    return b"".join(lines), boundary
+
+
+def _text_part(value: Any) -> str:
+    return value if isinstance(value, str) else json.dumps(value, separators=(",", ":"))
+
+
+def _build_request(request, operation: TacticalOperation, path: str, body: dict, match, *, method: str | None = None, query=None, file=None):
+    """A copy of the incoming request with path, method, query and body replaced, authenticated as the signed-in user."""
     from django.http import HttpRequest
 
+    verb = method or operation.method
     source = getattr(request, "_request", request)
-    payload = json.dumps(body, separators=(",", ":")).encode("utf-8") if operation.method in BODY_METHODS else b""
+    content_type = ""
+    params_of_type = {}
+    if verb not in BODY_METHODS:
+        payload = b""
+    elif file is not None:
+        # Tactical's own MultiPartParser reads the file and the text parts, as it would from a browser.
+        payload, boundary = _encode_multipart({key: _text_part(value) for key, value in body.items()}, file)
+        content_type, params_of_type = "multipart/form-data", {"boundary": boundary}
+    else:
+        payload = json.dumps(body, separators=(",", ":")).encode("utf-8")
+        content_type = "application/json"
+    header = content_type + (f"; boundary={params_of_type['boundary']}" if params_of_type else "")
+    query_string = _query_string(query) if query else ""
     clone = HttpRequest()
     meta = {key: value for key, value in dict(getattr(source, "META", {}) or {}).items() if key not in ("HTTP_AUTHORIZATION", "HTTP_COOKIE")}
     meta.update(
-        REQUEST_METHOD=operation.method, PATH_INFO=path, QUERY_STRING="", CONTENT_TYPE="application/json" if payload else "",
+        REQUEST_METHOD=verb, PATH_INFO=path, QUERY_STRING=query_string, CONTENT_TYPE=header if payload else "",
         CONTENT_LENGTH=str(len(payload)),
     )
     clone.META = meta
-    clone.method = operation.method
+    clone.method = verb
     clone.path = path
     clone.path_info = path
-    clone.content_type = "application/json" if payload else ""
-    clone.content_params = {}
+    clone.content_type = content_type if payload else ""
+    clone.content_params = params_of_type if payload else {}
     clone._body = payload
     clone._stream = BytesIO(payload)
     clone._read_started = False
+    if query_string:
+        from django.http import QueryDict
+
+        clone.GET = QueryDict(query_string)  # DRF's request.query_params reads this
     clone.resolver_match = match
     clone._dont_enforce_csrf_checks = True
     # DRF's ForcedAuthentication reads this. No Knox token is read or forwarded.
@@ -764,10 +1088,68 @@ def _recheck_route_owner(operation: TacticalOperation, path: str) -> None:
         raise TacticalOperationError(MESSAGES["not_found"], status=404, code="tactical_operation_not_found")
 
 
-def _after_values(operation: TacticalOperation, body: dict) -> dict | None:
-    if not operation.audit_fields:
+def _after_values(operation: TacticalOperation, body: dict, query: dict | None = None, file: dict | None = None) -> dict | None:
+    """The declared audit fields, copied from the body or the query string, and for an upload only its name, size and type."""
+    if not operation.audit_fields and file is None:
         return None
-    return {name: body[name] for name in operation.audit_fields if name in body}
+    values = {}
+    for name in operation.audit_fields:
+        if name in body:
+            values[name] = body[name]
+        elif query and name in query:
+            values[name] = query[name]
+    if file is not None:
+        values["upload"] = {"file_name": _printable(file["name"]), "size": len(file["content"]), "content_type": file["content_type"]}
+    return values
+
+
+def _before_values(operation: TacticalOperation, data: Any) -> dict | None:
+    """The whitelisted scalar fields of Tactical's own answer: strings cut to 256 characters, everything else dropped."""
+    if not isinstance(data, dict):
+        return None
+    values = {}
+    for name in operation.before.fields:
+        value = data.get(name)
+        if isinstance(value, str):
+            values[name] = "".join(ch for ch in value if ord(ch) >= 32 and ord(ch) != 127)[:_BEFORE_STRING_LIMIT]
+        elif value is None or isinstance(value, (bool, int, float)):
+            values[name] = value
+    return values
+
+
+def _dispatch(match, forwarded):
+    response = match.func(forwarded, *match.args, **match.kwargs)
+    if hasattr(response, "render") and callable(response.render) and not getattr(response, "is_rendered", True):
+        response.render()
+    return response
+
+
+def _read_before(request, operation: TacticalOperation, params: dict[str, str]) -> dict:
+    """Run the declared before-read in-process through Tactical's own view, as the signed-in user (1.17.13).
+
+    Never raises and never blocks the change: the answer is {"status", "values"}, and ``values`` is None when the read
+    did not answer 200 or could not be read. No HTTP call, no token."""
+    spec = operation.before
+    try:
+        from django.urls import resolve
+
+        parts = [seg[1] if seg[0] == "lit" else params[seg[1]] for seg in spec.segments]
+        if _forbidden_route(parts):
+            return {"status": None, "values": None}
+        path = "/" + "/".join(parts) + ("/" if spec.trailing_slash else "")
+        _recheck_route_owner(operation, path)
+        match = resolve(path)
+        response = _dispatch(match, _build_request(request, operation, path, {}, match, method="GET"))
+        status = int(getattr(response, "status_code", 500))
+        if status != 200 or getattr(response, "streaming", False):
+            return {"status": status, "values": None}
+        content = bytes(getattr(response, "content", b"") or b"")
+        if len(content) > MAX_RESPONSE_BYTES:
+            return {"status": status, "values": None}
+        return {"status": status, "values": _before_values(operation, json.loads(content.decode("utf-8")))}
+    except Exception:
+        logger.warning("The before-read of Tactical operation %s/%s did not answer.", operation.module_id, operation.id, exc_info=True)
+        return {"status": None, "values": None}
 
 
 def _unknown_outcome(request, operation, object_id, tactical_status, code: str, text: str) -> TacticalOperationError:
@@ -781,8 +1163,11 @@ def _unknown_outcome(request, operation, object_id, tactical_status, code: str, 
     return TacticalOperationError(text, status=502, code=code, audit=audit)
 
 
-def run_tactical_operation(request, module_id, operation_id, params=None, body=None) -> TacticalOperationResult:
+def run_tactical_operation(request, module_id, operation_id, params=None, body=None, query=None, upload=None) -> TacticalOperationResult:
     """Run one declared Tactical operation for the signed-in user and audit it. Needs an authenticated request.
+
+    ``query`` (1.17.13) is a flat object of the operation's whitelisted query names, for a GET operation. ``upload`` is
+    {name, content_type, content} (bytes) for an operation that declares a file part.
 
     Raises TacticalOperationError (``status``, ``code``, ``message``, ``audit``) for Core's own refusals and for a
     failure around the call. A Tactical answer, whatever its status, comes back as the result.
@@ -796,9 +1181,10 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
 
     hint = None
     try:
-        hint = _object_id(_scope_values(operation, params if isinstance(params, dict) else {}, body if isinstance(body, dict) else {}))
+        hint_params = params if isinstance(params, dict) else {}
+        hint = _object_id(_scope_values(operation, hint_params, body if isinstance(body, dict) else {}), operation, hint_params)
     except TacticalOperationError:
-        hint = None
+        hint = _object_id([], operation, params if isinstance(params, dict) else {})
     flags = tactical_permission_flags(user, operation.permissions)  # 3.
     if not all(flags.values()):
         raise _refuse(request, operation, "permission_denied", 403, "tactical_permission_denied", hint)
@@ -813,8 +1199,10 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
 
     params = _clean_params(operation, params)  # 5. shape, then scope
     body = _clean_body(operation, body)
+    query = _clean_query(operation, query)
+    file = _clean_upload(operation, upload)
     scope = _scope_values(operation, params, body)
-    object_id = _object_id(scope)
+    object_id = _object_id(scope, operation, params)
     if scope:
         from . import resources_adapter as adapter
 
@@ -834,11 +1222,37 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
         raise TacticalOperationError(
             "Tactical no longer serves this route. The owning module needs an update.", status=502, code="tactical_route_changed",
         ) from None
-    forwarded = _build_request(request, operation, path, body, match)
+
+    extra: dict = {}
+    body_type = _body_scope_type(operation, scope)
+    if body_type:
+        extra["scope_type"] = body_type
+    before_state = None
+    if operation.before is not None:  # 7a. Tactical's own record of the object, read as the signed-in user (1.17.13)
+        before_state = _read_before(request, operation, params)
+        if any(item.source.startswith("before:") for item in operation.scope):
+            fresh = None
+            try:
+                fresh = _scope_values(operation, params, body, before_state["values"], phase="before") if before_state["values"] is not None else None
+            except TacticalOperationError:
+                fresh = None
+            if fresh is None:  # fails closed: no answer, no scope decision
+                raise _refuse(request, operation, "not_found", 404, "object_not_found", object_id)
+            from . import resources_adapter as adapter
+
+            for kind, ids in fresh:
+                if not adapter.objects_in_role_scope(user=user, resource_type=kind, identifiers=ids):
+                    raise _refuse(request, operation, "not_found", 404, "object_not_found", object_id)
+            scope = scope + fresh
+            if object_id is None:
+                object_id = _object_id(scope, operation, params)
+        extra["before"] = "recorded" if before_state["values"] is not None else "unavailable"
+        if before_state["values"] is None:
+            extra["before_status"] = before_state["status"]
+
+    forwarded = _build_request(request, operation, path, body, match, query=query, file=file)
     try:
-        response = match.func(forwarded, *match.args, **match.kwargs)
-        if hasattr(response, "render") and callable(response.render) and not getattr(response, "is_rendered", True):
-            response.render()
+        response = _dispatch(match, forwarded)
     except Exception:
         logger.exception("Tactical operation %s/%s raised after dispatch", operation.module_id, operation.id)
         raise _unknown_outcome(request, operation, object_id, None, "tactical_call_failed", "Tactical failed while running this operation.") from None
@@ -855,7 +1269,8 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
         audit = _write_row(
             request, operation, action=operation.audit_action, object_id=object_id,
             message=operation.message or f"Core ran Tactical operation {operation.id}.",
-            after=_after_values(operation, body), tactical_status=status,
+            before=before_state["values"] if before_state else None,
+            after=_after_values(operation, body, query, file), tactical_status=status, extra=extra,
         )
     elif status in (401, 403):
         audit = _write_row(
@@ -898,9 +1313,13 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
         "id": CAPABILITY_ID,
         "version": CAPABILITY_VERSION,
         "operations": ["run", "list_operations", "get_operation"],
-        "declaration": "tec_tac.tactical_operations.register_tactical_operation(id, module_id, method, route, permissions, scope, body_fields, audit, module_permission=None, message=None), called from AppConfig.ready()",
-        "http": "POST /api/tfd/tactical-operations/<module_id>/<operation_id>/ with {params, body}",
-        "limits": {"body_bytes": MAX_BODY_BYTES, "response_bytes": MAX_RESPONSE_BYTES},
+        "declaration": "tec_tac.tactical_operations.register_tactical_operation(id, module_id, method, route, permissions, scope, body_fields, audit, module_permission=None, message=None, query_params=None, upload=None), called from AppConfig.ready()",
+        "http": "POST /api/tfd/tactical-operations/<module_id>/<operation_id>/ with {params, body, query} as JSON, or as multipart/form-data with the text parts params, body and query (each a JSON object) and one file part",
+        "limits": {"body_bytes": MAX_BODY_BYTES, "response_bytes": MAX_RESPONSE_BYTES, "upload_bytes": MAX_UPLOAD_BYTES, "query_params": MAX_QUERY_PARAMS, "query_value_chars": MAX_QUERY_VALUE},
+        "declaration_keys_added_in_1_1_0": [
+            "audit.object_param", "audit.before", "scope source before:<field>", "scope type body:<field> with type_map", "query_params", "upload",
+        ],
+        "refusal_codes_added_in_1_1_0": ["query_field_not_allowed", "invalid_query", "upload_not_allowed", "upload_too_large", "upload_type_not_allowed", "invalid_upload"],
         "audit_header": AUDIT_HEADER,
         "modes": "(a) a signed-in user's request only. Background runs as the schedule owner (mode b) are not part of this contract.",
     }

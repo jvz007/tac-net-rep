@@ -226,6 +226,15 @@ def _permission_codes(plugin) -> set[str]:
     return {code for _, values in plugin.permission_groups for code in values}
 
 
+def _category_fields(extension) -> dict:
+    """AD-21 status fields (Core 1.17.13): effective_category, category_missing, category_refused, category_warning."""
+    from . import module_category
+
+    fields = module_category.describe(getattr(extension, "category", ""))
+    fields.pop("category")  # the declared value is already the row's ``category``
+    return fields
+
+
 def _pair_payload(extension, reportset=None, *, ui: dict | None = None, installed: bool = True) -> dict:
     permissions = _permission_codes(extension)
     reportset_version = reportset.version if reportset is not None else None
@@ -234,6 +243,7 @@ def _pair_payload(extension, reportset=None, *, ui: dict | None = None, installe
         "id": extension.plugin_id,
         "name": getattr(extension, "name", "") or extension.plugin_id,
         "category": getattr(extension, "category", "") or None,
+        **_category_fields(extension),
         "extension_version": extension.version,
         "reportset_version": reportset_version,
         "has_reportset": reportset is not None,
@@ -333,9 +343,15 @@ def inspect_archive(archive: Path) -> dict:
     protected = package["id"] in PROTECTED_PLUGIN_IDS
     package["protected"] = protected
     package["managed"] = not protected
-    package["installable"] = bool(package["versions_match"]) and not protected
+    from . import module_category
+
+    category_refused = module_category.refused(package.get("category"))
+    package["installable"] = bool(package["versions_match"]) and not protected and not category_refused
     if protected:
         package["install_block_reason"] = "This module ID is framework-protected and cannot be installed or replaced from the UI."
+    elif category_refused:
+        # AD-21 (1.17.13): the v1 install route and the offline single-package path refuse a Test module off a development server.
+        package["install_block_reason"] = module_category.REFUSED_MESSAGE
     elif not package["versions_match"]:
         package["install_block_reason"] = "Extension and ReportSet versions must match when a ReportSet is included."
     else:

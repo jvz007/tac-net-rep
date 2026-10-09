@@ -24,6 +24,9 @@ in the status.
   that disables the replacement and keeps the replaced module (``conflicted_replacements``, ``reconcile_conflicts``).
 * An honoured replacement satisfies a hard dependency on the replaced module id (``satisfies_dependency``).
 
+1.17.13 (AD-21): the replacement must be a ``premium`` module, or have no category on a development server. A module
+that writes ``test`` cannot declare ``replaces`` (the registry refuses it). Reason code ``replacement-category``.
+
 1.17.12 (AD-20 hand-back, Johan CQ32 and CQ33, 9 October 2026):
 
 * Enabling the replaced module while its replacement is enabled is no longer refused. It names the replacement
@@ -42,6 +45,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from . import module_category as _module_category
 from . import module_state as _module_state
 from . import registry as _registry
 
@@ -56,6 +60,7 @@ REASON_CAPS_UNDECLARED = "capabilities-undeclared"
 REASON_CAP_MISSING = "capability-missing"
 REASON_CAP_MAJOR = "capability-major-mismatch"
 REASON_CAP_LOWER = "capability-version-lower"
+REASON_REPLACEMENT_CATEGORY = "replacement-category"
 
 # The categories a replacement may take the place of (1.17.11). A manifest without a category is neither.
 REPLACEABLE_CATEGORIES = frozenset({"core", "server"})
@@ -76,6 +81,7 @@ MESSAGES = {
     REASON_CAP_MISSING: "The replacement does not publish every capability of the module it replaces.",
     REASON_CAP_MAJOR: "The replacement publishes a capability at a different major version from the replaced module's.",
     REASON_CAP_LOWER: "The replacement publishes a capability at a lower version than the replaced module's.",
+    REASON_REPLACEMENT_CATEGORY: "A replacement must be a Premium module. A module with no category counts as Test, and Core honours that on a development server only.",
 }
 
 
@@ -176,6 +182,8 @@ def check(model: Mapping[str, Node], replacement_id: str, *, assume_enabled: boo
         return REASON_TARGET_MISSING, []
     if not node.enabled and not assume_enabled:
         return REASON_REPLACEMENT_DISABLED, []
+    if not _module_category.replacement_category_ok(node.category):  # AD-21: premium, or no category on a development server
+        return REASON_REPLACEMENT_CATEGORY, []
     target = model.get(node.replaces)
     if target is None:
         return REASON_TARGET_MISSING, []
@@ -317,15 +325,26 @@ def conflicted_replacements(model: Mapping[str, Node]) -> list[tuple[str, str]]:
     return pairs
 
 
-def _audit_replacement(actor, *, action: str, object_id: str, message: str, metadata: dict) -> None:
+def correlation_id_for(action: str, job_id: Any) -> str:
+    """The correlation id of an audit row this module writes for a job: ``module-replacement:<action>:<job id>`` (1.17.13).
+
+    ``<action>`` is the audit action without its ``custom:module-replacement-`` prefix (disabled, enabled, conflict-resolved,
+    switch-failed, switch-queued). The audit writer keeps the correlation id when it has to replace oversized metadata,
+    so the sweep can always find the row it wrote."""
+    short = str(action).replace("custom:module-replacement-", "", 1)
+    return f"module-replacement:{short}:{job_id or ''}"[:255]
+
+
+def _audit_replacement(actor, *, action: str, object_id: str, message: str, metadata: dict, correlation_id: str | None = None) -> None:
     """One Core audit row, never fatal (non-strict)."""
     try:
         from . import audit
 
         if actor is None:
             actor = audit.service_audit_actor(module_id="core", service="module-replacement", identity="system")
+        extra = {"correlation_id": correlation_id} if correlation_id else {}
         audit.record(actor=actor, module_id="core", action=action, object_type="module", object_id=object_id,
-                     message=message, metadata=metadata, strict=False)
+                     message=message, metadata=metadata, strict=False, **extra)
     except Exception:
         logger.exception("Could not write the %s audit row for %s.", action, object_id)
 
@@ -360,16 +379,24 @@ def audit_switch_queued(actor, subject_id: str, job_id: Any, disabled=(), enable
         actor, action=ACTION_SWITCH_QUEUED, object_id=subject_id,
         message=f"Module {subject_id} was asked to switch: job {job_id or ''} will {' and '.join(parts)}.",
         metadata={"job_id": str(job_id or ""), "disable": disabled, "enable": enabled},
+        correlation_id=correlation_id_for(ACTION_SWITCH_QUEUED, job_id),
     )
 
 
 def _audit_already_written(action: str, object_id: str, job_id: str) -> bool:
-    """True when Tactical's AuditLog holds a row with this action, object and metadata job_id. Raises when the lookup
-    cannot run; the caller then writes nothing, so a broken lookup can never duplicate a row every tick."""
+    """True when Tactical's AuditLog holds a row with this action and object for this job. Raises when the lookup cannot
+    run; the caller then writes nothing, so a broken lookup can never duplicate a row every tick.
+
+    1.17.13: the row is found by its correlation id (``correlation_id_for``), which the audit writer never drops, and still
+    by ``metadata.job_id``, which a row written by 1.17.12 carries and a row whose metadata was replaced by the size marker
+    does not."""
+    from django.db.models import Q
+
     from . import audit
 
     return audit._auditlog_model().objects.filter(
-        action=action, debug_info__object_id=object_id, debug_info__metadata__job_id=job_id,
+        Q(debug_info__correlation_id=correlation_id_for(action, job_id)) | Q(debug_info__metadata__job_id=job_id),
+        action=action, debug_info__object_id=object_id,
     ).exists()
 
 
@@ -391,6 +418,30 @@ def _replacement_for(job: Mapping[str, Any], replaced_id: str) -> str:
         if isinstance(action, Mapping) and replaced_id in _id_list(action.get("will_disable")):
             return str(action.get("id") or "")
     return str(job.get("plugin_id") or "")
+
+
+# The switch-failed row keeps its text short, so it fits the audit size limit and is never replaced by the size marker (1.17.13).
+FAILED_ERROR_MAX = 300
+FAILED_PLANNED_MAX = 10
+
+
+def _plain(value: Any, limit: int) -> str:
+    """Printable ASCII only, cut to ``limit`` characters."""
+    return "".join(ch for ch in str(value or "") if 32 <= ord(ch) < 127)[:limit]
+
+
+def _failed_outcome(job: Mapping[str, Any], stage: str) -> tuple[str, bool | None]:
+    """The sentence for a failed switch and the ``rolled_back`` value, from what the root helper recorded (1.17.13).
+
+    The helper sets ``rolled_back`` only after it has put the flags back and ``rollback_error`` when that raised, so the
+    stage name alone is never taken as proof. A job file written by 1.17.12 has neither field."""
+    if job.get("rollback_error"):
+        return "Core could not put the flags back. Check the Modules page to see which modules are enabled.", False
+    if job.get("rolled_back") is True:
+        return "The flags were put back as they were.", True
+    if stage in {"runtime-sync", "rollback"}:
+        return (f"The outcome is not confirmed: the job stopped at stage {stage}. Check the module state on the Modules page.", None)
+    return "Nothing was changed.", False
 
 
 def _outcome_rows(job: Mapping[str, Any], replaces_of) -> list[dict]:
@@ -420,13 +471,14 @@ def _outcome_rows(job: Mapping[str, Any], replaces_of) -> list[dict]:
                              "message": f"Replacement {target} was found enabled next to the module it replaces and was disabled.",
                              "metadata": {**base, "replacement": target, "replaced": replaces_of(target)}})
     elif job.get("status") == "failed" and (_id_list(job.get("disable_modules")) or _id_list(job.get("enable_modules"))):
-        planned = _id_list(job.get("disable_modules")) + _id_list(job.get("enable_modules"))
-        stage = str(job.get("stage") or "")
-        outcome = "The flags were put back as they were." if stage in {"rollback", "runtime-sync"} else "Nothing was changed."
-        error = str(job.get("error") or "no error was recorded")
+        planned = (_id_list(job.get("disable_modules")) + _id_list(job.get("enable_modules")))
+        planned = sorted(set(planned))[:FAILED_PLANNED_MAX]
+        stage = _plain(job.get("stage"), 40)
+        outcome, rolled_back = _failed_outcome(job, stage)
+        error = _plain(job.get("error"), FAILED_ERROR_MAX) or "no error was recorded"
         rows.append({"action": ACTION_SWITCH_FAILED, "object_id": subject,
                      "message": f"The switch for module {subject} did not finish (stage {stage or 'unknown'}, planned: {_join_ids(planned)}). {outcome} Error: {error}",
-                     "metadata": {**base, "stage": stage, "error": error, "planned": sorted(set(planned)),
+                     "metadata": {**base, "stage": stage, "error": error, "planned": planned, "rolled_back": rolled_back,
                                   "replacement": subject, "replaced": ""}})
     return rows
 
@@ -444,7 +496,8 @@ def _write_outcome_row(row: dict) -> bool:
 
         actor = audit.service_audit_actor(module_id="core", service="module-replacement", identity="system")
         result = audit.record(actor=actor, module_id="core", action=row["action"], object_type="module",
-                              object_id=row["object_id"], message=row["message"], metadata=row["metadata"], strict=False)
+                              object_id=row["object_id"], message=row["message"], metadata=row["metadata"], strict=False,
+                              correlation_id=correlation_id_for(row["action"], job_id))
     except Exception:
         logger.exception("Could not write the %s audit row for %s.", row["action"], row["object_id"])
         return False
@@ -532,6 +585,7 @@ def reconcile_conflicts(*, model: Mapping[str, Node] | None = None, now: datetim
                     None, action=ACTION_CONFLICT_RESOLVED, object_id=replacement_id,
                     message=f"Both {replacement_id} and the module it replaces, {replaced_id}, were enabled. Core queued a job that disables {replacement_id} and keeps {replaced_id}.",
                     metadata={"replacement": replacement_id, "replaced": replaced_id, "job_id": str(job.get("id") or "")},
+                    correlation_id=correlation_id_for(ACTION_CONFLICT_RESOLVED, job.get("id")),
                 )
             except Exception as exc:
                 row["error"] = f"{exc.__class__.__name__}: {exc}"

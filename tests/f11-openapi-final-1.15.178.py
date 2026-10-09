@@ -54,7 +54,7 @@ with tempfile.TemporaryDirectory() as tmp:
     must(legacy.name == "demo" and legacy.category == "", "legacy manifest compatibility broke")
 
     bad = json.loads((root / "tec_tac.json").read_text())
-    bad["category"] = "premium"
+    bad["category"] = "bogus"  # premium and test are accepted since 1.17.13
     (root / "tec_tac.json").write_text(json.dumps(bad), encoding="utf-8")
     try:
         registry._load_manifest("extension", root)

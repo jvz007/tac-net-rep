@@ -33,10 +33,10 @@ for name in ("agent-management", "remote-background", "take-control", "scriptexe
              "scriptmanager", "automation", "alerts", "checks"):
     plugin(name, "core")
 plugin("patching", "core", capabilities_declared=True)
-plugin("patchmanagement", "", replaces="patching", capabilities_declared=True)
+plugin("patchmanagement", "premium", replaces="patching", capabilities_declared=True)
 PLUGINS["licensing"].category = "server"
 PLUGINS["licensing"].capabilities_declared = True
-plugin("altlicense", "", replaces="licensing", capabilities_declared=True)
+plugin("altlicense", "premium", replaces="licensing", capabilities_declared=True)
 
 FLAG = ["can_code_sign"]
 NOSCOPE = dict(scope=[], body_fields=[], audit={"action": "view", "object_type": "agent", "audit_fields": []})

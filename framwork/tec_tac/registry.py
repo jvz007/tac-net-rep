@@ -199,6 +199,8 @@ def _replacement_keys(payload: dict, plugin_type: str, plugin_id: str, category:
             raise RegistryError(f"Plugin {plugin_id!r} may not replace itself.")
         if category in ("core", "server"):
             raise RegistryError(f"Module {plugin_id!r} is a {category} module and may not declare replaces; only a module that is neither a core nor a server module can replace one.")
+        if category == "test":
+            raise RegistryError(f"Module {plugin_id!r} is a test module and may not declare replaces. A replacement is a premium module (AD-21).")
     capabilities: list[tuple[str, str]] = []
     if has_caps:
         raw = payload["capabilities"]
@@ -281,8 +283,8 @@ def _load_manifest(plugin_type: str, plugin_dir: Path) -> PluginSpec | None:
     category = raw_category.strip().lower()
     if category and plugin_type != "extension":
         raise RegistryError(f"Reportset {plugin_id!r} may not declare category metadata.")
-    if category not in {"", "core", "server"}:
-        raise RegistryError(f"Plugin {plugin_id!r} category must be 'core' or 'server' when provided.")
+    if category not in {"", "core", "server", "premium", "test"}:
+        raise RegistryError(f"Plugin {plugin_id!r} category must be 'core', 'server', 'premium' or 'test' when provided.")
     raw_python_paths = _string_list(payload, "python_paths", (".",))
     python_paths = []
     plugin_root = plugin_dir.resolve()

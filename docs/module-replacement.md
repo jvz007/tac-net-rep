@@ -180,6 +180,36 @@ The outcome rows come from `module_replacement.audit_finished_jobs()`, which the
 
 The sweep is bounded and safe. It looks at jobs that finished in the last 7 days and at most 200 jobs a tick, newest first. Before it writes a row it looks for one with the same action, object and `job_id` in Tactical's audit log, so a second tick never duplicates a row. If that lookup fails, it writes nothing and tries again next tick. It never raises, and the reconcile job keeps its single queue-time row (`custom:module-replacement-conflict-resolved`) rather than getting a second one.
 
+## Categories (AD-21, 1.17.13)
+
+Core 1.17.13 reads the manifest category (`core`, `server`, `premium`, `test`; see `docs/module-categories.md`).
+
+- A replacement must be `premium`. A replacement with no category (which counts as `test`) is honoured on a development server only, so a
+  replacement that has not shipped a category still works on the dev server. Off a development server the status reports the reason
+  code `replacement-category`, with a plain-English message, and the module does not own the replaced module's routes or capabilities.
+- A module that writes `test` may not declare `replaces`. The registry refuses the manifest.
+- The capability prefix rule stays for `core` and `server` only. A `premium` module publishes the same capability names as the module
+  it replaces (AD-20), so it cannot follow a prefix rule.
+- The root job helper carries the same rule and checks it again from root-owned manifests and the root config. A drift test runs both
+  over one scenario matrix.
+- A manifest that writes `premium` or `test` must require `requires.framework` of `>=1.17.13`.
+
+The reason code is added to `replacement.reason` in module status, and to the enable and install problems of type
+`replacement_incomplete`. Additive.
+
+### Audit rows (1.17.13)
+
+Every row Core writes for a module switch now carries the correlation id `module-replacement:<action>:<job id>`, where `<action>` is the
+audit action without its prefix (`disabled`, `enabled`, `conflict-resolved`, `switch-failed`, `switch-queued`). The audit writer replaces
+oversized metadata but never drops the correlation id, so the outcome sweep always finds a row it has written. It still finds a row from
+1.17.12 by its `metadata.job_id`. The switch-failed row cuts the error to 300 characters and the planned list to 10 ids.
+
+The root helper records what actually happened when a switch fails. `rolled_back` is set only after the flags were put back.
+`rollback_error` is set when putting them back raised. The row says "The flags were put back as they were." only for the first. For the
+second it says Core could not put the flags back and the operator must check the Modules page. A failure at the runtime-sync or rollback
+stage with neither field (including a job file from 1.17.12) says the outcome is not confirmed. A failure before any change says
+"Nothing was changed." The row metadata carries `rolled_back`: true, false or null.
+
 ## What this does not do
 
 - It adds no general `conflicts_with` key. AD-20 decides replacement only.

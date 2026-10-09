@@ -171,6 +171,7 @@ class DRFResponse:
 mod("rest_framework")
 mod("rest_framework.response", Response=DRFResponse)
 mod("rest_framework.views", APIView=type("APIView", (), {}))
+mod("rest_framework.parsers", JSONParser=type("JSONParser", (), {}), MultiPartParser=type("MultiPartParser", (), {}))
 mod("drf_spectacular")
 mod("drf_spectacular.utils", extend_schema=lambda *a, **k: (lambda obj: obj), extend_schema_view=lambda *a, **k: (lambda obj: obj))
 mod("tec_tac.session_security", SessionAuthenticated=type("SessionAuthenticated", (), {}))
@@ -763,7 +764,7 @@ reply = view.post(SimpleNamespace(data={"params": {}, "path": "/accounts/"}, use
 must(reply.status_code == 400 and "path" in reply.data["detail"], reply.__dict__)
 # a path in the payload is never read: only params and body exist
 view_source = (APP / "tactical_operation_views.py").read_text(encoding="utf-8")
-must('_ALLOWED_FIELDS = {"params", "body"}' in view_source and "SessionAuthenticated" in view_source, "the route sits behind SessionAuthenticated and takes only params and body")
+must('_ALLOWED_FIELDS = {"params", "body", "query"}' in view_source and "SessionAuthenticated" in view_source, "the route sits behind SessionAuthenticated and takes only params, body and query (1.17.13)")
 
 # ------------------------------------------------------------------------------------------------ AD-19 conditions 3 and 5
 # Condition 3: a failed audit write is logged at error level, never fatal, and the result and the header say so.
@@ -815,12 +816,12 @@ refused(route="api/tfd/system/updates/")
 
 # ------------------------------------------------------------------------------------------------ capability, urls, throttles, apps, docs, install.sh
 cap = ops.register_core_tactical_operations_capability()
-must(CAPS and CAPS[-1]["id"] == "core.tactical_operations" and CAPS[-1]["module_id"] == "core" and CAPS[-1]["version"] == "1.0.0", CAPS)
+must(CAPS and CAPS[-1]["id"] == "core.tactical_operations" and CAPS[-1]["module_id"] == "core" and CAPS[-1]["version"] == "1.1.0", CAPS)
 must(CAPS[-1]["operations"] == ("run", "list_operations", "get_operation"), CAPS[-1]["operations"])
 provider = CAPS[-1]["provider"]
 must(provider.run is ops.run_tactical_operation and provider.list_operations is ops.list_operations and provider.get_operation is ops.get_operation, "provider")
 json.dumps(CAPS[-1]["metadata"])
-must(CAPS[-1]["metadata"]["limits"] == {"body_bytes": 262144, "response_bytes": 26214400}, CAPS[-1]["metadata"])
+must(CAPS[-1]["metadata"]["limits"]["body_bytes"] == 262144 and CAPS[-1]["metadata"]["limits"]["response_bytes"] == 26214400, CAPS[-1]["metadata"])  # 1.17.13 adds upload and query limits
 
 urls = (APP / "urls.py").read_text(encoding="utf-8")
 must('path("tactical-operations/<str:module_id>/<str:operation_id>/", TacticalOperationView.as_view(), name="tec-tac-tactical-operations")' in urls, "route")

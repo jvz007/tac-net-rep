@@ -59,6 +59,8 @@ must(source.count(LOOKUP) == 1, "the trusted-bash lookup line moved; update this
 helper = types.ModuleType("module_v2_job_helper")
 helper.__file__ = str(HELPER)
 exec(compile(source.replace(LOOKUP, 'TRUSTED_BASH = "/bin/bash"'), str(HELPER), "exec"), helper.__dict__)
+mr._module_category.is_development_server = lambda: True
+helper.development_server = lambda: True  # AD-21 (1.17.13): these tests are about replacement, not about the category gate
 
 TMP = Path(tempfile.mkdtemp(prefix="tectac-helper-"))
 REPO = TMP / "repo"
@@ -142,7 +144,7 @@ nodes = helper.read_installed_manifests(REPO)
 must(set(nodes) == {"patching", "patchmanagement"} and nodes["patchmanagement"]["replaces"] == "patching", nodes)
 must(nodes["patching"]["category"] == "core" and nodes["patching"]["capabilities"] == PATCHING_CAPS and nodes["patching"]["replaces"] == "", nodes)
 # manifests that break Core's own rules are treated as not installed
-put("badcat", category="premium")
+put("badcat", category="bogus")
 put("coreswap", category="core", replaces="patching")
 put("badprefix", category="core", capabilities={"other.thing": "1.0.0"})
 put("badver", capabilities={"badver.x": "1.0"})
@@ -156,7 +158,7 @@ put("emptyreplaces", replaces="")
 (REPO / "extensions" / "empty").mkdir()
 must(set(helper.read_installed_manifests(REPO)) == {"patching", "patchmanagement"}, sorted(helper.read_installed_manifests(REPO)))
 # an invalid manifest is one that Core's registry refuses as well
-for bad_id, payload in (("badcat", {"category": "premium"}), ("coreswap", {"category": "core", "replaces": "patching"}), ("badprefix", {"category": "core", "capabilities": {"other.thing": "1.0.0"}}),
+for bad_id, payload in (("badcat", {"category": "bogus"}), ("coreswap", {"category": "core", "replaces": "patching"}), ("badprefix", {"category": "core", "capabilities": {"other.thing": "1.0.0"}}),
                         ("badver", {"capabilities": {"badver.x": "1.0"}}), ("selfie", {"replaces": "selfie"}), ("serverswap", {"category": "server", "replaces": "patching"})):
     tmp = Path(tempfile.mkdtemp(prefix="tectac-reg-"))
     (tmp / bad_id).mkdir()
@@ -574,6 +576,22 @@ for category in ("core", "server"):
     refused(lambda: helper.plan_enable_disables(helper_model, ["target"], []), "did not confirm: repl")
     refused(lambda: helper.plan_enable_disables(helper_model, ["target"], ["repl"]), "did not confirm the switch")
     must(helper.plan_enable_disables(helper_model, ["target"], ["repl"], True) == ["repl"], category)
+# AD-21 (1.17.13): the replacement's category, on a development server and off one. Core and the helper must agree.
+for dev in (True, False):
+    mr._module_category.is_development_server = lambda d=dev: d
+    helper.development_server = lambda d=dev: d
+    for repl_category in ("", "premium", "test", "core", "server"):
+        core_model = {"target": mr.Node(id="target", category="core", enabled=False, capabilities=dict(PATCHING_CAPS)),
+                      "repl": mr.Node(id="repl", category=repl_category, enabled=True, replaces="target", capabilities=dict(PATCHING_CAPS))}
+        helper_model = {"target": {"id": "target", "category": "core", "enabled": False, "replaces": "", "capabilities": dict(PATCHING_CAPS)},
+                        "repl": {"id": "repl", "category": repl_category, "enabled": True, "replaces": "target", "capabilities": dict(PATCHING_CAPS)}}
+        want = mr.check(core_model, "repl")[0]
+        got = helper.replacement_check(helper_model, "repl")
+        must(want == got, (dev, repl_category, want, got))
+        honoured = repl_category == "premium" or (repl_category == "" and dev)
+        must((want is None) == honoured and (honoured or want == "replacement-category"), (dev, repl_category, want))
+mr._module_category.is_development_server = lambda: True
+helper.development_server = lambda: True
 # the shared version rule: every pair of versions gives the same answer
 for declared, registered in itertools.product(("1.2.0", "1.0.0", "0.0.1", "2.3.4"), ("1.2.0", "1.2.1", "1.1.9", "2", "2.0", "2.0.0-1", "1.2.0-3", "0.9.0", "garbage", "", "3.0.0")):
     must(mr.version_within_declared(declared, registered) == helper._version_within_declared(declared, registered), (declared, registered))

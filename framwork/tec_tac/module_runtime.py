@@ -28,15 +28,32 @@ def _conflicted_replacements(source, state) -> set[str]:
         return set()
 
 
+def _development_server() -> bool:
+    from .module_category import is_development_server
+
+    return is_development_server()
+
+
+def _category_row(plugin, legacy: bool, development: bool) -> dict:
+    """AD-21 fields (1.17.13). A legacy plugin has no category, so it is never missing and never refused."""
+    if legacy:
+        return {"category": None, "effective_category": None, "category_missing": False, "category_refused": False, "category_warning": None}
+    from .module_category import describe
+
+    return describe(getattr(plugin, "category", ""), development=development)
+
+
 def module_runtime_snapshot(plugins=None) -> list[dict]:
     """Return one lightweight row for every installed extension/legacy plugin.
 
     1.17.11: ``replaces`` is the manifest's declared value (null for a module that declares none and for a legacy
-    plugin). A replacement that is enabled next to its enabled replaced module is reported as not enabled and not
+    plugin). 1.17.13 (AD-21): ``category``, ``effective_category``, ``category_missing``, ``category_refused`` and
+    ``category_warning`` on every row. A replacement that is enabled next to its enabled replaced module is reported as not enabled and not
     active, because Core does not load its backend (AD-20)."""
     state = load_state()
     source = get_plugins() if plugins is None else plugins
     conflicted = _conflicted_replacements(source, state)
+    development = _development_server()
     rows: list[dict] = []
     seen: set[str] = set()
     for plugin in source:
@@ -70,6 +87,7 @@ def module_runtime_snapshot(plugins=None) -> list[dict]:
             "active": enabled,
             "legacy": legacy,
             "replaces": (str(getattr(plugin, "replaces", "") or "") or None) if not legacy else None,
+            **_category_row(plugin, legacy, development),
         })
     rows.sort(key=lambda item: item["id"].lower())
     return rows

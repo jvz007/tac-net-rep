@@ -219,11 +219,14 @@ def set_visible(module_id, visible):
     mutate_module_state(apply)
 
 
-def remember_version(module_id, version, source=None):
+def remember_version(module_id, version, source=None, category=None):
     def apply(state):
         record = dict(state["modules"].get(module_id) or {})
         record.setdefault("enabled", True)
         record["version"] = str(version)
+        if category is not None:
+            # AD-21 (1.17.13): the manifest's category as the root helper read it, in the same state write.
+            record["category"] = str(category)
         if source:
             record["source"] = dict(source)
             record["source"]["installed_at"] = now()
@@ -256,6 +259,8 @@ def migrate_module_state_identity(old_id, new_id):
 # tests/module-replacement-helper-handback-1.17.12.py extends the drift matrix to the 1.17.12 rules.
 # ---------------------------------------------------------------------------------------------------------------------
 REPLACEABLE_CATEGORIES = frozenset({"core", "server"})
+# AD-21 (1.17.13): the values a manifest may write. A missing category counts as test.
+KNOWN_CATEGORIES = frozenset({"", "core", "server", "premium", "test"})
 _CAPABILITY_ID_RE = re.compile(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)+$")
 _CAPABILITY_VERSION_RE = re.compile(r"^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$")
 _VERSION_CORE_RE = re.compile(r"^\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?([-+.][0-9A-Za-z.-]+)?\s*$")
@@ -295,6 +300,29 @@ def _read_manifest_nofollow(path):
         os.close(fd)
 
 
+def development_server():
+    """True only when the root-owned config says TEC_TAC_ENVIRONMENT=development. Fails closed (AD-21, 1.17.13)."""
+    try:
+        return str(load_config().get("TEC_TAC_ENVIRONMENT") or "production").strip().lower() == "development"
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+def category_refused(category, development=None):
+    """True when a module of this declared category must not be installed or enabled here: effective test, not a development server."""
+    development = development_server() if development is None else development
+    return (str(category or "").strip().lower() or "test") == "test" and not development
+
+
+def replacement_category_ok(category, development=None):
+    """AD-20 with AD-21: a replacement is premium, or has no category on a development server (twin of module_category)."""
+    category = str(category or "").strip().lower()
+    if category == "premium":
+        return True
+    development = development_server() if development is None else development
+    return category == "" and development
+
+
 def manifest_node(payload):
     """The facts the replacement rules need from one manifest, or None when the manifest breaks Core's own rules
     (the module is then treated as not installed: every rule fails closed)."""
@@ -306,12 +334,12 @@ def manifest_node(payload):
     if not isinstance(raw_category, str):
         return None
     category = raw_category.strip().lower()
-    if category not in {"", "core", "server"}:
+    if category not in KNOWN_CATEGORIES:
         return None
     replaces = ""
     if "replaces" in payload:
         raw = payload["replaces"]
-        if not isinstance(raw, str) or not PLUGIN_RE.fullmatch(raw.strip()) or raw.strip() == module_id or category in REPLACEABLE_CATEGORIES:
+        if not isinstance(raw, str) or not PLUGIN_RE.fullmatch(raw.strip()) or raw.strip() == module_id or category in REPLACEABLE_CATEGORIES or category == "test":
             return None
         replaces = raw.strip()
     capabilities = None
@@ -392,6 +420,8 @@ def replacement_check(model, replacement_id, *, assume_enabled=False):
         return "target-missing"
     if not node["enabled"] and not assume_enabled:
         return "replacement-disabled"
+    if not replacement_category_ok(node["category"]):
+        return "replacement-category"
     target = model.get(node["replaces"])
     if target is None:
         return "target-missing"
@@ -475,6 +505,11 @@ def apply_enable_job(repo_root, module_ids, confirmed, replacement_confirmed=Fal
 
     def apply(state):
         manifests = read_installed_manifests(repo_root)
+        development = development_server()
+        for mid in module_ids:
+            # AD-21: re-checked here from the root-owned manifest and the root config, whatever the web side said.
+            if mid in manifests and category_refused(manifests[mid]["category"], development):
+                raise RuntimeError(f"module {mid} is a Test module (or states no category) and this is not a development server: refusing to enable it")
         model = replacement_model(manifests, state)
         disables = plan_enable_disables(model, module_ids, confirmed, replacement_confirmed)
         modules = state["modules"]
@@ -579,6 +614,25 @@ def verify_install_disables(repo_root, order, actions, pre_installed, confirmed)
     if unconfirmed:
         raise RuntimeError("module replacement would disable a module the operator did not confirm: " + ", ".join(unconfirmed))
     return disables
+
+
+def verify_install_categories(repo_root, order):
+    """Read-only, after the packages are installed and before any module state is written (AD-21, 1.17.13).
+
+    Re-reads the installed manifests as root and refuses a module whose effective category is test on a server that is
+    not a development server. Returns {module id: declared category} for the state write. Raises RuntimeError, which the
+    caller's rollback handles."""
+    manifests = read_installed_manifests(repo_root)
+    development = development_server()
+    categories = {}
+    for module_id in order:
+        node = manifests.get(module_id)
+        if node is None:
+            continue
+        if category_refused(node["category"], development):
+            raise RuntimeError(f"module {module_id} is a Test module (or states no category) and this is not a development server: refusing to install it")
+        categories[module_id] = node["category"]
+    return categories
 
 
 def run_identity_migration(config, action, log, *, reverse=False):
@@ -1366,6 +1420,10 @@ def _confirmed_enable_modules(job):
     return [str(value) for value in values]
 
 
+def _printable_text(value):
+    return "".join(ch for ch in str(value) if 32 <= ord(ch) < 127)
+
+
 def run_job(job_id):
     path, status = load_job(job_id)
     if status.get("status") not in {"dispatched", "running"}:
@@ -1438,13 +1496,22 @@ def run_job(job_id):
                 except Exception:
                     if disabled or reconciled or enabled_back:
                         # Put every flag this job changed back, so the state is not left with a half-done replacement.
+                        # 1.17.13: the job records what actually happened. ``rolled_back`` is set only after the flags
+                        # were restored, ``rollback_error`` when restoring them raised; the audit row reads these fields.
                         job["stage"] = "rollback"
                         atomic_json(path, job)
-                        restore_enabled_flags(previous)
                         try:
-                            sync_and_reload(config, log, refresh_workers=True)
-                        except Exception as rollback_exc:
-                            log.write(f"[TEC-TAC-MODULE-V2] rollback runtime sync failed: {rollback_exc}\n")
+                            restore_enabled_flags(previous)
+                            job["rolled_back"] = True
+                        except (OSError, RuntimeError, ValueError) as restore_exc:
+                            job["rollback_error"] = (_printable_text(restore_exc) or restore_exc.__class__.__name__)[:300]
+                            log.write(f"[TEC-TAC-MODULE-V2] restoring the enabled flags failed: {restore_exc}\n")
+                        atomic_json(path, job)
+                        if job.get("rolled_back"):
+                            try:
+                                sync_and_reload(config, log, refresh_workers=True)
+                            except Exception as rollback_exc:
+                                log.write(f"[TEC-TAC-MODULE-V2] rollback runtime sync failed: {rollback_exc}\n")
                     raise
             elif job["action"] == "visibility":
                 module_id = str(job.get("plugin_id") or "")
@@ -1470,13 +1537,14 @@ def run_job(job_id):
                     backup_ids = install_packages(repo_root, packages, order, actions, log, backup)
                     # Read-only, before any module state is written: what would the new replacements disable?
                     disables = verify_install_disables(repo_root, order, actions, pre_installed, confirmed)
+                    categories = verify_install_categories(repo_root, order)
                     sources = {item.get("id"): item.get("source") for item in packages}
                     for action in actions:
                         if action.get("action") == "rename":
                             run_identity_migration(config, action, log)
                             migrate_module_state_identity(action["previous_module_id"], action["id"])
                             applied_renames.append(action)
-                        remember_version(action["id"], action.get("version") or "0.0.0", sources.get(action["id"]))
+                        remember_version(action["id"], action.get("version") or "0.0.0", sources.get(action["id"]), categories.get(action["id"]))
                     if disables:
                         set_enabled(disables, False)
                         disabled_by_job = list(disables)

@@ -33,11 +33,11 @@ for name in ("agent-management", "remote-background", "take-control", "scriptexe
              "scriptmanager", "automation", "alerts", "checks"):
     plugin(name, "core")
 plugin("patching", "core", capabilities_declared=True)
-plugin("patchmanagement", "", replaces="patching", capabilities_declared=True)
-plugin("rival", "", replaces="patching", capabilities_declared=True)
-plugin("premiumtwo", "", replaces="premiumdemo", capabilities_declared=True)  # names a module that is not a core module
+plugin("patchmanagement", "premium", replaces="patching", capabilities_declared=True)
+plugin("rival", "premium", replaces="patching", capabilities_declared=True)
+plugin("premiumtwo", "premium", replaces="premiumdemo", capabilities_declared=True)  # names a module that is not a core module
 plugin("nocaps", "core")  # a core module that never declared capabilities
-plugin("wannabe", "", replaces="nocaps", capabilities_declared=True)
+plugin("wannabe", "premium", replaces="nocaps", capabilities_declared=True)
 PLUGINS["licensing"].category = "server"
 
 

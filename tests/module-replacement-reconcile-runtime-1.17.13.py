@@ -1,8 +1,13 @@
-"""Runtime check for Core 1.17.11 module replacement. It did NOT run on the development PC (Django is not installed there).
+"""Runtime check for Core 1.17.13 module replacement and module categories (the 1.17.11 script, corrected). It did NOT run on the development PC (Django is not installed there).
 
 Run it on the dev server through Tactical's manage.py shell, so Django, Tactical's real AuditLog and the real Core code are loaded:
 
-    cd /rmm/api/tacticalrmm && ../env/bin/python manage.py shell < /path/to/tests/module-replacement-reconcile-runtime-1.17.11.py
+    cd /rmm/api/tacticalrmm && ../env/bin/python manage.py shell < /path/to/tests/module-replacement-reconcile-runtime-1.17.13.py
+
+1.17.13: the probe capability is ``tectac-probe-replaced.windows``. The 1.17.11 script declared ``patching.windows`` on a core probe, which Core
+refuses (a core module's capability must begin with its own id), so 5 of its 6 steps failed with RegistryError before they tested anything
+(debug/test results 1.17.11.log). The replacement probe now carries ``category: premium`` (AD-21), and two steps read the category fields
+from the real root config and prove that a test module is refused off a development server.
 
 It proves what the stub tests (tests/module-replacement-conflict-1.17.11.py, tests/module-replacement-enable-1.17.11.py) cannot:
 that the audit rows reach Tactical's AuditLog with the right action, actor, module and object, that the real Core job writer records a
@@ -22,7 +27,7 @@ from pathlib import Path
 
 from accounts.models import User
 from logs.models import AuditLog
-from tec_tac import module_manager, module_manager_v2 as v2, module_replacement as mr, module_state, registry
+from tec_tac import module_category as mc, module_manager, module_manager_v2 as v2, module_replacement as mr, module_state, registry
 
 # Unique probe ids: the rows this script writes and deletes can never be a real module's audit rows.
 REPL, OLD = "tectac-probe-replacement", "tectac-probe-replaced"
@@ -32,8 +37,11 @@ EXT, JOBS = TMP / "extensions", TMP / "jobs"
 for folder in (EXT, JOBS):
     folder.mkdir()
 STATE = {"schema": 1, "modules": {OLD: {"enabled": True}, REPL: {"enabled": True}}}
+REAL_DEV = mc.is_development_server
 SAVED = (registry.EXTENSIONS_ROOT, module_state.load_state, v2.load_state, v2.JOBS_ROOT, module_manager.JOBS_ROOT)
 MARK = "tectac-runtime-replacement"
+CAP = f"{OLD}.windows"  # a core module's capability must begin with its own id
+TEST_MODULE = "tectac-probe-testmodule"
 
 
 def step(name, fn):
@@ -50,7 +58,7 @@ def step(name, fn):
 def manifest(module_id, **extra):
     folder = EXT / module_id
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / "tec_tac.json").write_text(json.dumps({"id": module_id, "type": "extension", "version": "1.0.0", **extra}), encoding="utf-8")
+    (folder / "tec_tac.json").write_text(json.dumps({"id": module_id, "type": "extension", "version": "1.0.0", **({"category": "premium"} if "replaces" in extra else {}), **extra}), encoding="utf-8")
 
 
 def audit_rows():
@@ -62,12 +70,13 @@ def setup():
     registry.EXTENSIONS_ROOT = EXT
     module_state.load_state = v2.load_state = lambda: STATE
     v2.JOBS_ROOT = module_manager.JOBS_ROOT = JOBS
-    manifest(OLD, category="core", capabilities={"patching.windows": "1.2.0"})
-    manifest(REPL, replaces=OLD, capabilities={"patching.windows": "1.2.0"})
+    manifest(OLD, category="core", capabilities={CAP: "1.2.0"})
+    manifest(REPL, category="premium", replaces=OLD, capabilities={CAP: "1.2.0"})
 
 
 def teardown():
     registry.EXTENSIONS_ROOT, module_state.load_state, v2.load_state, v2.JOBS_ROOT, module_manager.JOBS_ROOT = SAVED
+    mc.is_development_server = REAL_DEV
     audit_rows().delete()
 
 
@@ -139,6 +148,51 @@ def snapshot_effective_state():
     assert rows[REPL]["replaces"] == OLD and rows[OLD]["replaces"] is None, rows
 
 
+def category_fields_read_the_real_config():
+    from tec_tac import trust_policy
+    from tec_tac.module_runtime import module_runtime_snapshot
+
+    environment = trust_policy._server_environment()
+    print(f"INFO the root config says TEC_TAC_ENVIRONMENT is {environment}")
+    assert mc.is_development_server() is (environment == "development"), (mc.is_development_server(), environment)
+    rows = {row["id"]: row for row in module_runtime_snapshot()}
+    assert rows[REPL]["category"] == "premium" and rows[REPL]["effective_category"] == "premium" and rows[REPL]["category_missing"] is False, rows[REPL]
+    assert rows[OLD]["category"] == "core" and rows[OLD]["category_warning"] is None and rows[OLD]["category_refused"] is False, rows[OLD]
+    catalog = {row["id"]: row for row in v2.installed_catalog_v2()}
+    assert catalog[REPL]["effective_category"] == "premium" and catalog[OLD]["category"] == "core", (catalog[REPL], catalog[OLD])
+    # a manifest with no category: effective test, with the warning
+    manifest(TEST_MODULE)
+    STATE["modules"][TEST_MODULE] = {"enabled": False}
+    row = {item["id"]: item for item in module_runtime_snapshot()}[TEST_MODULE]
+    assert row["category"] is None and row["effective_category"] == "test" and row["category_missing"] is True, row
+    assert row["category_refused"] is (environment != "development") and "does not state its category" in row["category_warning"], row
+
+
+def test_module_is_refused_off_a_development_server():
+    manifest(TEST_MODULE)
+    STATE["modules"][TEST_MODULE] = {"enabled": False}
+    candidate = {"id": TEST_MODULE, "extension_version": "1.0.0", "dependencies": {}, "optional_dependencies": {}, "requires": {},
+                 "runtime_requirements": [], "category": "", "replaces": None, "capabilities": None, "migration": {}}
+    mc.is_development_server = lambda: False  # what a production server reads from its root-owned config
+    try:
+        check = v2.validate_enable(TEST_MODULE)
+        assert check["valid"] is False and [p["type"] for p in check["problems"]] == ["category_refused"], check
+        plan = v2.resolve_install_plan([candidate])
+        assert plan["valid"] is False and any(p["type"] == "category_refused" for p in plan["problems"]), plan
+        assert mr.check(mr.live_model(), REPL)[0] is None, "a premium replacement is still honoured off a development server"
+        (EXT / REPL / "tec_tac.json").write_text(json.dumps({"id": REPL, "type": "extension", "version": "1.0.0", "replaces": OLD, "capabilities": {CAP: "1.2.0"}}), encoding="utf-8")  # no category
+        STATE["modules"][OLD]["enabled"], STATE["modules"][REPL]["enabled"] = False, True
+        assert mr.check(mr.live_model(), REPL)[0] == "replacement-category", mr.check(mr.live_model(), REPL)
+        mc.is_development_server = lambda: True
+        assert v2.validate_enable(TEST_MODULE)["valid"] is True, "the same module enables on a development server"
+        assert mr.check(mr.live_model(), REPL)[0] is None, "no category is honoured on a development server"
+    finally:
+        mc.is_development_server = REAL_DEV
+        manifest(REPL, category="premium", replaces=OLD, capabilities={CAP: "1.2.0"})
+        STATE["modules"][OLD]["enabled"] = STATE["modules"][REPL]["enabled"] = True
+        STATE["modules"].pop(TEST_MODULE, None)
+
+
 setup()
 try:
     step("a replacement next to its enabled module is a conflict", detect)
@@ -147,6 +201,8 @@ try:
     step("the queue-time audit row names the module and the requesting user", enable_audit_row)
     step("a failing sudo dispatch is logged, recorded and not raised", dispatch_fails_safely)
     step("module_status reports the conflicted replacement as not enabled, with replaces", snapshot_effective_state)
+    step("the category fields read the real root config and the missing-category warning", category_fields_read_the_real_config)
+    step("a test module is refused off a development server, and a replacement needs premium there", test_module_is_refused_off_a_development_server)
 finally:
     teardown()
 

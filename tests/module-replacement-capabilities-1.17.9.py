@@ -30,6 +30,8 @@ fcntl.__dict__.update(LOCK_EX=2, LOCK_SH=1, LOCK_UN=8, flock=lambda *a: None)
 sys.modules.setdefault("fcntl", fcntl)
 
 from tec_tac import capabilities as caps, module_state, registry  # noqa: E402
+from tec_tac import module_category  # noqa: E402
+module_category.is_development_server = lambda: True  # AD-21 (1.17.13): these tests are about replacement, not about the category gate
 
 TMP = Path(tempfile.mkdtemp(prefix="tectac-replacement-caps-"))
 EXT, REP = TMP / "extensions", TMP / "reportsets"
@@ -45,6 +47,8 @@ def manifest(module_id, **extra):
     folder.mkdir(parents=True, exist_ok=True)
     payload = {"id": module_id, "type": "extension", "version": "1.0.0"}
     payload.update(extra)
+    if "replaces" in extra:
+        payload.setdefault("category", "premium")  # AD-21 (1.17.13): a replacement is a premium module
     (folder / "tec_tac.json").write_text(json.dumps(payload), encoding="utf-8")
 
 

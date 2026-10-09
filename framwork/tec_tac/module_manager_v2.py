@@ -17,6 +17,7 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import module_category
 from . import module_replacement
 from . import registry as registry_module
 from .capabilities import capability_status, get_capability
@@ -556,6 +557,10 @@ def installed_catalog_v2() -> list[dict]:
             "runtime_requirements": _check_runtime_requirements(meta.get("requires", {})),
             "metadata_error": meta.get("metadata_error"),
             "source": record.get("source"),
+            # 1.17.13 (AD-21): the manifest is read first. ``category_state`` is what the install wrote to module state
+            # (null for a module installed before 1.17.13); a different value is flagged, never trusted.
+            "category_state": record.get("category") if isinstance(record.get("category"), str) else None,
+            "category_mismatch": isinstance(record.get("category"), str) and module_category.normalize(record.get("category")) != module_category.normalize(item.get("category")),
             "replaces": item.get("replaces"),
             "replacement": replacement_rows.get(item["id"]),
             "replaced_by": module_replacement.replaced_by(item["id"], model=replacement_model) if replacement_model else None,
@@ -720,6 +725,13 @@ def resolve_install_plan(candidates: list[dict]) -> dict:
                 "installed": bool(dep),
                 "satisfied": bool(dep and version_satisfies(dep.get("extension_version") or "0.0.0", constraint)),
             })
+
+    # AD-21: a module whose effective category is test is not installed off a development server.
+    development = module_category.is_development_server()
+    for candidate in candidates:
+        refusal = module_category.refusal_problem(candidate["id"], candidate.get("category"), development=development)
+        if refusal:
+            problems.append(refusal)
 
     # AD-20: a replacement installs only next to a disabled core module it covers; never both enabled.
     if replacement_model is None:
@@ -1428,6 +1440,11 @@ def _enable_problems(catalog: dict, model: dict, module_id: str, *, hypothetical
     # AD-20: enabling a replacement names the module it will disable (1.17.11), and enabling a core or server module names
     # the replacement it will switch off (1.17.12); the other replacement rules still apply.
     problems.extend(module_replacement.enable_problems(model, module_id))
+    # AD-21 (1.17.13): a module whose effective category is test is not enabled off a development server.
+    if not target.get("legacy"):
+        refusal = module_category.refusal_problem(module_id, target.get("category"))
+        if refusal:
+            problems.append(refusal)
     return problems
 
 
@@ -1500,6 +1517,8 @@ def _problem_text(problem: dict) -> str:
         return "a runtime requirement is not met"
     if kind == "not_manageable":
         return "it cannot be enabled or disabled from the UI"
+    if kind == "category_refused":
+        return "it is a Test module and this is not a development server"
     return str(problem.get("message") or kind or "a rule refuses it")
 
 
