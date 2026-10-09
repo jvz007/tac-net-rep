@@ -24,6 +24,14 @@ class TecTacFrameworkConfig(AppConfig):
         register_core_server_backup_capability()
         register_core_server_maintenance_capability()
         register_core_resources_capability()
+        # 1.17.7: the server-side Tactical operation path. Guarded, because a fault here must never abort start-up.
+        # The registry is empty until an owning core module declares an operation, so this changes nothing by itself.
+        try:
+            from .tactical_operations import register_core_tactical_operations_capability
+
+            register_core_tactical_operations_capability()
+        except Exception:
+            logger.exception("Tec-Tac core.tactical_operations capability registration failed")
 
         # Tactical's native role/account editors can otherwise grant effective
         # superuser authority to mid-level managers. Install the Core-owned,

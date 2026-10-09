@@ -25,7 +25,7 @@ Reportsets do not declare a category.
 
 ## Core groups
 
-Core routes are explicitly classified by their owning `tec_tac.*` view module/class. The current groups include My Account, Access & Security, Authentication, Sessions, Dashboards, Saved Views, Developer Contracts, Clients/Sites/Agents, Audit, Capabilities, Scheduler, UI Runtime, Diagnostics, **System Updates**, **Backup & Restore**, **Server Maintenance**, **Storage**, **Module Repository**, **Module Hotfixes**, and Modules.
+Core routes are explicitly classified by their owning `tec_tac.*` view module/class. The current groups include My Account, Access & Security, Authentication, Sessions, Dashboards, Saved Views, Developer Contracts, Clients/Sites/Agents, Audit, Tactical Operations (1.17.7), Capabilities, Scheduler, UI Runtime, Diagnostics, **System Updates**, **Backup & Restore**, **Server Maintenance**, **Storage**, **Module Repository**, **Module Hotfixes**, and Modules.
 
 There is deliberately **no Framework catch-all**. A new Core HTTP surface must be added to the explicit ownership table. This makes an ungrouped `/api/tfd/` operation a detectable schema regression instead of silently hiding it in a generic bucket.
 

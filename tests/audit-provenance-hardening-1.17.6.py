@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""1.17.6 regression: record() refuses forged Core keys, and the executor is absent (CQ17 unanswered).
+"""1.17.6 regression: record() refuses forged Core keys.
+
+Amended in 1.17.7: AD-19 brought the executor back, so the absence checks are gone. The executor, the third key
+(server_provenance) and the deprecation are covered by tests/tactical-operations-1.17.7.py and
+tests/audit-server-provenance-1.17.7.py.
 
 Closes the held 1.17.0 Low 'browser_provenance is still forgeable through backend record()'. Reuses the stub harness of
 tests/audit-declared-browser-events-1.17.0.py (everything before its first scenario), so the real audit.py and
@@ -8,7 +12,6 @@ audit_views.py run with only the Tactical ORM boundary faked. Django is not inst
 from __future__ import annotations
 
 import ast
-import inspect
 import json
 import sys
 import types
@@ -47,7 +50,7 @@ for key, value in (("browser_provenance", "module-declared-event"), ("core_refus
     refuses(lambda key=key, value=value: audit.record(actor=tech, module_id="declaring-demo", action="view", object_type="agent", operation_context={key: value}), key)
     refuses(lambda key=key, value=value: audit.get_audit_provider().record(actor=tech, module_id="declaring-demo", action="view", object_type="agent", operation_context={key: value}), key)
     must(not ROWS, "a refused call writes nothing")
-must(audit.CORE_CONTEXT_KEYS == ("browser_provenance", "core_refusal"), audit.CORE_CONTEXT_KEYS)
+must(audit.CORE_CONTEXT_KEYS == ("browser_provenance", "core_refusal", "server_provenance"), audit.CORE_CONTEXT_KEYS)
 # A normal context, and build_operation_context-shaped keys, still pass.
 reset()
 res = audit.record(actor=tech, module_id="declaring-demo", action="view", object_type="agent",
@@ -87,11 +90,11 @@ finally:
 # ------------------------------------------------------------------ 3. the declared browser path: unchanged answers, no deprecation, no server path
 reset()
 ok = post(tech)
-must(ok.status_code == 201 and not getattr(ok, "headers", {}), (ok.status_code, getattr(ok, "headers", None)))
+must(ok.status_code == 201, ok.status_code)
 must(ROWS[0]["debug_info"]["operation_context"] == {"browser_provenance": "module-declared-event"}, ROWS[0])
 reset()
 gone = post(tech, object_id="a-2")
-must(gone.status_code == 404 and gone.data["recorded"] is False and not getattr(gone, "headers", {}), (gone.status_code, gone.data))
+must(gone.status_code == 404 and gone.data["recorded"] is False, (gone.status_code, gone.data))
 must(len(ROWS) == 1 and ROWS[0]["action"] == "deny", ROWS)
 must(ROWS[0]["debug_info"]["operation_context"] == {"browser_provenance": "module-declared-event", "core_refusal": True}, ROWS)
 reset()
@@ -99,14 +102,6 @@ GRANTED.add("both-demo.use")
 perm = post(tech, module_id="both-demo", action="view", object_type="agent", object_id="a-1")
 must(perm.status_code == 201 and ROWS[0]["debug_info"]["operation_context"] == {}, "the permissioned path sets no marker")
 GRANTED.clear()
-# CQ17 is unanswered: no in-process Tactical executor, no server-provenance marker, no deprecation machinery ships.
-must(not hasattr(audit, "record_tactical_operation") and not hasattr(audit, "SERVER_PROVENANCE_TACTICAL_OPERATION"), "no executor writer")
-must("authority" not in inspect.signature(audit._record_row).parameters, "no internal authority parameter")
-must(not hasattr(audit_views, "DEPRECATION_HEADERS"), "no deprecation header")
-must(not (PKG / "tactical_operations.py").exists() and not (PKG / "tactical_operation_views.py").exists(), "executor files are absent")
-must("tactical_operation" not in (PKG / "urls.py").read_text(encoding="utf-8").replace("tactical-operations-x", ""), "no tactical-operations route")
-must("tactical_operations" not in (PKG / "apps.py").read_text(encoding="utf-8"), "no capability registration")
-
 # ------------------------------------------------------------------ 4. contract and docs text
 tree = ast.parse((PKG / "contracts.py").read_text(encoding="utf-8"))
 
@@ -117,12 +112,9 @@ def literal(name):
 
 
 details = literal("HTTP_CONTRACT_DETAILS")["/api/tfd/audit/record/"]["POST"]
-must("browser_provenance and core_refusal are Core-owned" in json.dumps(details) and "deprecated" not in details, details)
-must("tactical-operations" not in json.dumps(literal("HTTP_CONTRACT_DETAILS")), "no tactical-operations route in the contract")
-must(not any(r["area"] == "tactical-operations" for r in literal("CORE_CONTRACTS")), "no tactical-operations rows")
+must("browser_provenance since 1.17.6" in json.dumps(details), details)
 record_row = next(r for r in literal("CORE_CONTRACTS") if r["name"] == "record" and r["area"] == "audit")
-must("browser_provenance or core_refusal" in record_row["purpose"] and "server_provenance" not in record_row["purpose"], record_row)
+must("Since 1.17.6 operation_context may not carry browser_provenance or core_refusal" in record_row["purpose"], record_row)
 docs = (ROOT / "docs" / "module-audit.md").read_text(encoding="utf-8")
-must("`browser_provenance`" in docs and "Johan accepted this on 30 September 2026" in docs and "Deprecated since" not in docs, "docs")
-must(not (ROOT / "docs" / "tactical-operations.md").exists(), "no tactical-operations doc")
+must("`browser_provenance`" in docs and "AD-8" in docs, "docs")
 print("[TEST] PASS audit provenance hardening 1.17.6")

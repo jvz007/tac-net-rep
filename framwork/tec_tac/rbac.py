@@ -214,6 +214,31 @@ def has_tactical_permission(user, flag: str) -> bool:
     return tactical_permission_flags(user, (flag,))[flag]
 
 
+def tactical_permission_catalog(user) -> dict[str, bool]:
+    """Every boolean ``can_*`` field on Tactical's Role mapped to True or False for this user (1.17.7).
+
+    One role lookup, through ``tactical_permission_flags``, so the answers follow the same rules as
+    ``has_tactical_permission``: a Django superuser or role superuser has every flag, an installer user, a user with no
+    role and any lookup failure have none. Keys keep the order of the Role model's fields. Non-boolean fields
+    (many-to-many scope lists, text) are never included. Never raises: if the model's fields cannot be listed it
+    returns an empty dict. This adds no Tec-Tac permission and only reads the signed-in user's own role.
+    """
+    try:
+        fields = list(Role._meta.get_fields())
+    except Exception:
+        return {}
+    names = []
+    for field in fields:
+        name = getattr(field, "name", "")
+        try:
+            is_flag = isinstance(name, str) and name.startswith("can_") and field.get_internal_type() == "BooleanField"
+        except Exception:
+            is_flag = False  # a reverse relation or an odd field is not a flag
+        if is_flag:
+            names.append(name)
+    return tactical_permission_flags(user, names)
+
+
 def set_extension_permission(role, codename: str, granted: bool):
     _validate_codename(codename)
     if not isinstance(role, Role):

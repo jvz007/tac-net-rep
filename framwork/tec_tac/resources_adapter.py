@@ -284,6 +284,33 @@ def agent_target_identifiers_in_scope(*, user, identifiers) -> set[str]:
     return allowed
 
 
+def objects_in_role_scope(*, user, resource_type: str, identifiers) -> bool:
+    """True when every identifier names an existing object inside the user's Tactical role client/site limits.
+
+    Scope only (1.17.7, tec_tac.tactical_operations). It deliberately does not ask for ``can_list_*``: Tactical's own
+    permission class for the operation decides the permission, and Core re-checks that flag separately. A missing
+    object, an object outside the limits, a malformed identifier and an ambiguous identifier all read as False, so the
+    caller cannot tell them apart. Agents are matched by canonical ``agent_id`` only, never by database PK alias.
+    """
+    tokens = [str(value).strip() for value in identifiers]
+    if not tokens:
+        return False
+    try:
+        if resource_type == "agent":
+            allowed = set(canonical_agent_target_ids_in_scope(user=user, identifiers=tokens))
+            return all(token in allowed for token in tokens)
+        if not all(token.isdigit() and 0 < int(token) < 2**63 for token in tokens):
+            return False
+        wanted = {int(token) for token in tokens}
+        if resource_type == "client":
+            return wanted <= set(explicit_client_target_ids_in_scope(user=user, client_ids=wanted))
+        if resource_type == "site":
+            return wanted <= set(site_target_ids_in_scope(user=user, site_ids=wanted))
+    except Exception:
+        return False
+    return False
+
+
 def _active_filter(queryset, active: bool | None):
     # Tactical currently hard-deletes these resource rows and exposes no
     # soft-disabled field. Existing rows are therefore active in contract v1.

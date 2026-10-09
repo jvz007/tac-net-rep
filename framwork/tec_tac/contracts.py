@@ -63,7 +63,7 @@ CORE_CONTRACTS = (
         "import_path": "tec_tac.audit",
         "name": "record",
         "kind": "python",
-        "purpose": "Record a Tec-Tac module event through Core into Tactical's unified AuditLog trail. Since 1.17.6 operation_context may not carry browser_provenance or core_refusal: they are Core-owned and give a contract error.",
+        "purpose": "Record a Tec-Tac module event through Core into Tactical's unified AuditLog trail. Since 1.17.6 operation_context may not carry browser_provenance or core_refusal, and since 1.17.7 server_provenance: they are Core-owned and give a contract error. For a Tactical call use a registered Tactical operation (core.tactical_operations) so Core writes the row where the call happens.",
         "audience": "provider/backend",
     },
     {
@@ -474,11 +474,58 @@ CORE_CONTRACTS = (
         "purpose": "Evaluate several Tactical Role flags at once: returns {flag: bool}. Same rules as has_tactical_permission; every flag is validated first (ValueError), and a lookup failure returns every flag False (1.17.6).",
         "audience": "backend",
     },
+    {
+        "area": "rbac",
+        "import_path": "tec_tac.rbac",
+        "name": "tactical_permission_catalog",
+        "kind": "python",
+        "purpose": "Every boolean can_* field on Tactical's Role mapped to True or False for one user (1.17.7): tactical_permission_catalog(user) -> {flag: bool}. One role lookup, same rules as has_tactical_permission (a superuser or role superuser has every flag; an installer user, no role and any lookup failure have none). Non-boolean fields are excluded and the order follows the Role model. It adds no Tec-Tac permission. GET /api/tfd/ui/context/ publishes the same map as tactical_permissions. Requires framework >=1.17.7.",
+        "audience": "backend",
+    },
+    {
+        "area": "tactical-operations",
+        "import_path": "tec_tac.tactical_operations",
+        "name": "register_tactical_operation",
+        "kind": "python",
+        "purpose": "Declare one typed Tactical operation from the owning core module's AppConfig.ready() (1.17.7): (id, module_id, method, route, permissions, scope, body_fields, audit, module_permission=None, message=None). route is a Tactical route template such as agents/{agent_id}/reboot/. permissions are Tactical Role flags, all required. scope lists {type agent|client|site, source path:<name>|body:<field>}. body_fields is the whitelist of JSON body keys. audit is {action, object_type, audit_fields}. Refuses routes Core owns, a second caller for the same (method, route), an unknown flag, and a legacy, unknown or disabled module (TacticalOperationRegistrationError, a ValueError). The registry is empty until a module declares an operation. Requires framework >=1.17.7.",
+        "audience": "core module/backend",
+    },
+    {
+        "area": "tactical-operations",
+        "import_path": "tec_tac.tactical_operations",
+        "name": "run_tactical_operation",
+        "kind": "python",
+        "purpose": "Run a declared operation for the signed-in user of an authenticated request and audit it where the call happens (1.17.7): run_tactical_operation(request, module_id, operation_id, params=None, body=None) returns TacticalOperationResult(status, data, content_type, headers, audit, content). Core re-checks the Tactical flags, the optional module permission and the role's client and site limits, then dispatches in-process to Tactical's own view. Core's refusals raise TacticalOperationError(status, code, message, audit). It needs a request, so a Celery task cannot call it. Also available as capability core.tactical_operations 1.0.0 operation run.",
+        "audience": "core module/backend",
+    },
+    {
+        "area": "tactical-operations",
+        "import_path": "tec_tac.tactical_operations",
+        "name": "list_operations",
+        "kind": "python",
+        "purpose": "List the declared Tactical operations (optionally for one module) as plain metadata rows (1.17.7). Capability core.tactical_operations operation list_operations.",
+        "audience": "consumer/backend",
+    },
+    {
+        "area": "tactical-operations",
+        "import_path": "tec_tac.tactical_operations",
+        "name": "get_operation",
+        "kind": "python",
+        "purpose": "Return one declared Tactical operation's metadata row, or None (1.17.7). Capability core.tactical_operations operation get_operation.",
+        "audience": "consumer/backend",
+    },
 )
 
 HTTP_CONTRACT_DETAILS = {
     "/api/tfd/audit/record/": {
         "POST": {
+            "deprecated": (
+                "Deprecated since 1.17.7 for events a permissionless module declares in audit_events (path 2). The path still behaves exactly as in 1.17.6, "
+                "keeps its browser_provenance marker, adds the response header Deprecation: true and logs one warning per module per process. "
+                "Replacement: an event for a Tactical call moves to a registered Tactical operation (POST /api/tfd/tactical-operations/<module_id>/<operation_id>/); "
+                "an event for the module's own backend action moves to tec_tac.audit.record from the backend route; a browser-only event with no server action has no replacement and stays declared until the module drops it. "
+                "The end date is not set. The permissioned-module path (path 1) is not deprecated."
+            ),
             "authorization": (
                 "authenticated Tec-Tac session. Path 1: an explicitly permissioned module with one of its grants. "
                 "Path 2 (1.16.0): a permissionless, enabled, non-legacy module that declares this exact object_type and action "
@@ -512,7 +559,8 @@ HTTP_CONTRACT_DETAILS = {
                 "Other declared object types (1.17.0) have no scope check and no Core deny row. An event or object type the module did not declare gives 403 and writes nothing.",
                 "Rate limit: 60/min and 1000/day per user and IP, counting accepted and refused requests (deny rows count too).",
                 "A module that declares permission_groups and audit_events keeps path 1; audit_events is ignored for it.",
-                "operation_context.browser_provenance and core_refusal are Core-owned. A backend record() call that supplies any of them is a contract error (1.17.6; before, only core_refusal).",
+                "Deprecated since 1.17.7 (path 2 only): responses on path 2 carry Deprecation: true. See the deprecated key.",
+                "operation_context.browser_provenance, server_provenance and core_refusal are Core-owned. A backend record() call that supplies any of them is a contract error (browser_provenance since 1.17.6, server_provenance since 1.17.7; before 1.17.6 only core_refusal).",
             ],
             "errors": {
                 "400": "not a JSON object; actor/provenance field supplied; unknown field; invalid action or object_type; path 2 without object_id or with an invalid object_id",
@@ -521,6 +569,37 @@ HTTP_CONTRACT_DETAILS = {
                 "429": "audit write rate limit reached",
             },
             "success": {"201": "recorded", "202": "accepted but Tactical's AuditLog write failed (recorded false)"},
+        },
+    },
+    "/api/tfd/tactical-operations/<str:module_id>/<str:operation_id>/": {
+        "POST": {
+            "authorization": (
+                "authenticated Tec-Tac session (SessionAuthenticated). Core then requires every Tactical Role flag the operation declares "
+                "(a superuser and a role superuser pass; an installer user or a missing role is denied), the optional Tec-Tac module_permission, "
+                "and every declared scope object inside the role's client and site limits. Tactical's own permission and scope classes run again on the call"
+            ),
+            "request": {
+                "params": "object: one value for each {param} of the operation's route. Anything else gives 400",
+                "body": "optional object: only the operation's body_fields. Any other key gives 400. At most 256 KiB",
+            },
+            "response": "Tactical's own status and body, relayed unchanged. A file answer keeps Content-Type and Content-Disposition (up to 25 MiB). Core's own refusals are JSON {detail, code}.",
+            "notes": [
+                "Added in 1.17.7. Additive. An operation exists only when an owning core module declares it with tec_tac.tactical_operations.register_tactical_operation; until then every call gives 404 tactical_operation_not_found.",
+                "Core writes the audit row after the call, from Tactical's real answer, with the signed-in user as actor and the declaring module as module_id. Every row carries operation_context.server_provenance = tactical-operation, operation and tactical_status.",
+                "2xx: the declared action. 401 or 403 from Tactical: a Core deny row (core_refusal, reason tactical_denied). Core's own refusals: the same deny row with a fixed Core text. 5xx, or an error after dispatch, on a call that is not GET: custom:outcome-unknown. Any other 4xx: no row.",
+                "Response header X-Tec-Tac-Audit: recorded or not-recorded, present when a row was due. A failed audit write is logged and does not undo Tactical's change.",
+                "A missing object and an object outside the caller's scope give the same 404 text. Tactical renaming a route gives 502 tactical_route_changed; Core never falls back to another path. A streaming answer is refused.",
+                "Rate limit: 120/min and 5000/day per user and IP.",
+            ],
+            "errors": {
+                "400": "unknown field, params or body invalid, body key not in the whitelist, scope field missing (code invalid_operation_request, invalid_params, invalid_body, body_field_not_allowed or scope_field_required)",
+                "401": "not authenticated (authentication_required)",
+                "403": "a Tactical flag or the module permission is missing (tactical_permission_denied or module_permission_denied), or Tactical itself answered 403",
+                "404": "unknown operation or disabled module (tactical_operation_not_found), or object missing or outside scope (object_not_found)",
+                "413": "body larger than 256 KiB",
+                "429": "rate limit reached",
+                "502": "tactical_route_changed, tactical_call_failed or tactical_response_refused",
+            },
         },
     },
     "/api/tfd/saved-views/": {
@@ -578,8 +657,9 @@ HTTP_CONTRACT_DETAILS = {
             "authorization": "authenticated Tec-Tac session",
             "response": {
                 "module_register_timeout_seconds": "integer, added in 1.17.1. Seconds the UI lets a module's register() run before it marks the module failed and loads the next. Default 30, range 5 to 300. Additive: older UI builds ignore it.",
+                "tactical_permissions": "object, added in 1.17.7: every boolean can_* field on Tactical's Role mapped to true or false for the signed-in user, for example {\"can_reboot_agents\": true}. A superuser or role superuser has every flag true. An installer user, a user with no role and any lookup failure have every flag false. It uses only the user's own role and adds no Tec-Tac permission. It is a hint for the UI: Tactical still decides every call. Additive: older UI builds ignore it.",
             },
-            "notes": ["Only the field added in 1.17.1 is listed here. The rest of the context (user, permissions, extensions, capabilities, module_status, preferences, locale, tactical_ui) is documented with the runtime-context browser contract."],
+            "notes": ["Only the fields added in 1.17.1 and 1.17.7 are listed here. The rest of the context (user, permissions, extensions, capabilities, module_status, preferences, locale, tactical_ui) is documented with the runtime-context browser contract."],
         },
     },
     "/api/tfd/system/update-source/": {
@@ -870,7 +950,11 @@ BROWSER_CONTRACTS = (
             "Write module audit events through Core instead of Tactical AuditLog internals. Permissioned modules need one of their grants. "
             "Since Core 1.16.0 a permissionless module may also post events it declares in its manifest audit_events; "
             "since 1.17.0 the object type may be any lowercase slug. Client, site and agent objects must be inside the signed-in user's scope. "
-            "Those rows carry a browser_provenance marker."
+            "Those rows carry a browser_provenance marker. "
+            "Deprecated since Core 1.17.7 for declared events: the path still works and answers with a Deprecation: true header. "
+            "An event for a Tactical call moves to a registered Tactical operation, so Core writes the row server-side; "
+            "an event for the module's own backend action is written by the module's backend with tec_tac.audit.record; "
+            "a browser-only event with no server action has no replacement yet. The permissioned-module path is not deprecated."
         ),
     },
     {
@@ -972,7 +1056,7 @@ BROWSER_CONTRACTS = (
         "id": "ui.authenticated.runtime-context",
         "phase": "authenticated",
         "service": "context / state.context",
-        "operations": ["read", "locale", "timeZone", "dateTimeFormat", "tactical_ui.agent_dblclick_action", "tactical_ui.url_action_id", "tactical_ui.can_run_url_actions", "tactical_web_ui.installed", "tactical_web_ui.url", "server_url", "module_register_timeout_seconds"],
+        "operations": ["read", "locale", "timeZone", "dateTimeFormat", "tactical_ui.agent_dblclick_action", "tactical_ui.url_action_id", "tactical_ui.can_run_url_actions", "tactical_web_ui.installed", "tactical_web_ui.url", "server_url", "module_register_timeout_seconds", "tactical_permissions.<flag>"],
         "audience": "module/browser",
         "docs": "tec-tac-ui/docs/module-runtime-api.md",
         "purpose": "Read the Core-provided authenticated register(context).context object (also available as state.context), including permissions, preferences, authoritative locale/time-zone/date-format fields, Tactical UI preferences, and whether the standard Tactical web UI is installed; treat it as read-only state.",
@@ -1051,6 +1135,7 @@ RULES = (
     "A permissionless extension that needs a browser audit trail declares audit_events in tec_tac.json: [{\"object_type\": \"agent\", \"actions\": [\"view\", \"run\"]}]. object_type is a lowercase slug; each action is a standard Tec-Tac audit action or custom:<slug>. For client, site and agent Core checks the signed-in user's scope; other types have no scope check. Core sets the actor and marks the row browser_provenance. A module that declares audit_events must require framework >=1.16.0, and >=1.17.0 when it declares an object type other than client, site or agent.",
     "The UI, not modules, applies the module register() time limit. A module does not read or enforce module_register_timeout_seconds, and its register() must not assume more than the configured time. Core only stores and publishes the value (GET /api/tfd/ui/context/).",
     "Saved views belong to the Core saved views service (tec_tac.saved_views, /api/tfd/saved-views/). Modules must not keep saved views in browser storage, cookies or their own tables. A payload holds filters and layout only, never data, secrets or tokens. A module that uses the service must require framework >=1.17.0.",
+    "A Tactical call that must be audited (reboot, Wake-on-LAN, report changes, code signing) is declared once by the owning core module with tec_tac.tactical_operations.register_tactical_operation and run through core.tactical_operations (POST /api/tfd/tactical-operations/<module_id>/<operation_id>/ or the capability's run). Core writes the audit row where the call happens, so the browser cannot misreport it. The browser-declared audit_events path is deprecated since 1.17.7 for declared events (see docs/module-audit.md for the replacement of each event).",
     "Use Python tec_tac.* contracts inside the Tec-Tac/Tactical backend; use HTTP only at browser/external process boundaries.",
     "UI modules must use the documented browser contracts passed to register(context) or registerPublic(context); do not import Core UI internals or read Tactical authentication storage.",
     "Swagger grouping is Core-owned: installed extension endpoints are grouped from their registered Django app ownership even when the URL prefix differs from the module ID. Module manifests may declare a readable name and category=core; groups are named Core module · <name> or Module · <name>. Core HTTP surfaces use explicit subsystem groups, module callback ownership wins over path prefixes, and there is no generic Framework catch-all.",

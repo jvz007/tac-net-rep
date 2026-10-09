@@ -857,6 +857,12 @@ if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON
     fail "Core server-maintenance capability verification failed or timed out."
 fi
 
+log "Verifying Core Tactical operations capability registration."
+VERIFY_TACTICAL_OPERATIONS_CODE="from django.urls import resolve; from tec_tac.capabilities import capability_status,get_capability; s=capability_status('core.tactical_operations',version='>=1,<2'); assert s['available'], s; p=get_capability('core.tactical_operations',version='>=1,<2'); assert all(hasattr(p,n) for n in ('run','list_operations','get_operation')), 'core.tactical_operations provider incomplete'; assert resolve('/api/tfd/tactical-operations/probe/probe/').url_name=='tec-tac-tactical-operations', 'tactical-operations route missing'; print('TEC-TAC core.tactical_operations OK:', s['capability_version'], len(p.list_operations()), 'declared operation(s)')"
+if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_TACTICAL_OPERATIONS_CODE}\""; then
+    fail "Core Tactical operations capability verification failed or timed out."
+fi
+
 
 SCHEDULER_SERVICE="/etc/systemd/system/tec-tac-scheduler.service"
 SCHEDULER_TIMER="/etc/systemd/system/tec-tac-scheduler.timer"

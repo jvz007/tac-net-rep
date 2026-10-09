@@ -21,6 +21,14 @@ Audit module / Tactical audit APIs / retention / export
 
 Modules MUST NOT import, instantiate, or write `logs.models.AuditLog` directly. Core is the only supported Tec-Tac writer. Tactical's own audit records are not changed or rewritten.
 
+## Where the row should be written (1.17.7)
+
+A browser-sent audit row can be manipulated. The rows Core can vouch for are written on the server, where the action happens. There are three ways, in order of preference:
+
+1. **A Tactical call that must be audited** is declared once by the owning core module as a Tactical operation (`docs/tactical-operations.md`). Core runs the call server-side for the signed-in user and writes the row from Tactical's real answer. The row carries `operation_context.server_provenance = "tactical-operation"`.
+2. **A module's own backend action** (a Core update job, an installer run, a change to the module's own data) calls `tec_tac.audit.record` from the backend route, after the action succeeds. Core's audit covers Tec-Tac's own functions as well as Tactical ones.
+3. **A browser-only event with no server action** has no server-side replacement yet. It stays on the declared browser path below until the module drops it.
+
 ## Backend contract
 
 Server-side modules should record the audit event immediately after the authoritative business action succeeds:
@@ -44,7 +52,7 @@ result = record(
 
 `actor` must be the authenticated Tactical user. There is deliberately no `username` argument. Core derives `username` from the actor and rejects actor/provenance fields on the browser API.
 
-Two `operation_context` keys are Core-owned: `core_refusal` and, since 1.17.6, `browser_provenance`. Only Core's own rows set them. `record()` raises `AuditContractError` when a caller supplies either, so a backend module cannot forge the marker of another path. (Before 1.17.6 only `core_refusal` was refused, so `browser_provenance` could be forged through the backend call.) `build_operation_context(...)` never sets them.
+Three `operation_context` keys are Core-owned: `core_refusal`, `browser_provenance` and, since 1.17.7, `server_provenance`. Only Core's own rows set them. `record()` raises `AuditContractError` when a caller supplies any of them, so a backend module cannot forge the marker of another path. (Before 1.17.6 only `core_refusal` was refused, so `browser_provenance` could be forged through the backend call.) `build_operation_context(...)` never sets them.
 
 Backend authorization remains authoritative. Audit recording does not grant permission to perform the business action. Modules must authorize the action first, perform it, then record the event.
 
@@ -160,7 +168,19 @@ Core-owned workflows may explicitly pass `strict=True` to the backend `record()`
 
 Contract validation failures (invalid module ID, unauthenticated actor, invalid action/object type) are programming/authorization errors and are raised/rejected rather than silently ignored.
 
-## Declared browser events for permissionless modules (Core 1.16.0, extended in 1.17.0)
+## Declared browser events for permissionless modules (Core 1.16.0, extended in 1.17.0, deprecated in 1.17.7)
+
+**Deprecated since Core 1.17.7.** The path behaves exactly as in 1.17.6, and no manifest key is removed. Core now adds the response header `Deprecation: true` to every response on this path and logs one warning per module per process when a module posts a declared event. No end date is set. Core removes the path in the first release after every module has switched, and not before. The permissioned-module browser path (`can_record_from_browser`) is not deprecated.
+
+Each declared event has a replacement:
+
+| The declared event is... | Replace it with |
+| --- | --- |
+| a record of a Tactical call the module's page makes (reboot, Wake-on-LAN, a report change, code signing) | a registered Tactical operation (`docs/tactical-operations.md`). Core runs the call and writes the row. |
+| a record of the module's own backend action (a Core update job, an installer run) | `tec_tac.audit.record` from the module's backend route, after the action succeeds. |
+| a browser-only event with no server action | nothing yet. It stays declared until the module drops it. |
+
+After a module has moved every event, it removes `audit_events` from its manifest. A module that does so can drop its `requires.framework` of `>=1.16.0` for this key.
 
 Some UI modules have no permission groups, because Tactical's own permissions already decide who may use them. Take Control and Remote Background are examples. Before 1.16.0 they had no way to write an audit trail from the browser. A module like this can now declare the events it posts in `tec_tac.json`:
 
@@ -196,7 +216,9 @@ Every row on this path carries `debug_info.operation_context.browser_provenance 
 
 **Module-declared `deny` events (1.17.0).** A module may list `deny` in `audit_events`, for example to record a 403 that Tactical itself returned for `can_use_mesh` or `can_manage_winsvcs`. Core records that event like any other declared event: the marker, no `core_refusal`. A reader can therefore tell the module's row (no `core_refusal`) from Core's own refusal row (`core_refusal = true`). An event the module did not declare stays HTTP 403 and writes nothing, because that is a wrong manifest and not a user being denied.
 
-What this path cannot prove: Core cannot tell that the module's code sent the request. A signed-in user could post a declared event about an agent they can already see, or, for a type with no scope check, about any object id. The marker lets the Audit module and reviewers tell these rows from backend-written ones. The event describes an action and never authorizes it. Johan accepted this on 30 September 2026 (board Q36) on the conditions in `docs/review-accepted-decisions.md` AD-8: the marker on every row, the scope check for client, site and agent, actor and module id set by Core, and events that describe an action and never authorise it.
+What this path cannot prove: Core cannot tell that the module's code sent the request. A signed-in user could post a declared event about an agent they can already see, or, for a type with no scope check, about any object id. The marker lets the Audit module and reviewers tell these rows from backend-written ones. The event describes an action and never authorizes it.
+
+Johan accepted this path on 30 September 2026 (board Q36) on the conditions in `docs/review-accepted-decisions.md` AD-8: the marker on every row, the scope check for client, site and agent, actor and module id set by Core, and events that describe an action and never authorise it. On 9 October 2026 he chose the server-side path as the end state (AD-19, CQ6 and CQ17): a browser can be manipulated, so Core writes the row where the call happens. That is why this path is deprecated in 1.17.7. It is removed in the first Core release after the last declaring module has switched, with no fixed date (CQ18, option a). Until then it keeps every AD-8 condition.
 
 The path uses the same rate limit as the permissioned path: 60 requests a minute and 1 000 a day for each user and IP. Refused requests and deny rows count.
 

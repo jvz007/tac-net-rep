@@ -74,7 +74,7 @@ def device_audit_actor(*, module_id: str, device_id: str, identity: str | None =
     return AuditActor(kind="device", module_id=module["id"], service=service_name, identity=actor_identity, device_id=did)
 
 
-def _actor_provenance(actor, module: dict) -> tuple[str, dict[str, Any]]:
+def _actor_provenance(actor, module: dict, authority=None) -> tuple[str, dict[str, Any]]:
     if isinstance(actor, AuditActor):
         if actor.module_id != module["id"]:
             raise AuditContractError("non-human audit actor module_id must match the audit event module_id.")
@@ -91,7 +91,9 @@ def _actor_provenance(actor, module: dict) -> tuple[str, dict[str, Any]]:
 
     if not getattr(actor, "is_authenticated", False):
         raise AuditContractError("actor must be an authenticated Tactical user or a Core-owned audit actor.")
-    if not _actor_can_use_module(actor, module):
+    # A person acting only under a Tactical permission is not a Tec-Tac module user (1.17.7). Core's executor has
+    # already checked Tactical's permission and scope, so it passes its own internal authority.
+    if authority is not _TACTICAL_OPERATION_AUTHORITY and not _actor_can_use_module(actor, module):
         raise AuditContractError(f"actor is not permitted to use Tec-Tac module {module['id']!r}.")
     username = str(getattr(actor, "username", "") or "").strip()
     if not username:
@@ -128,6 +130,7 @@ def _resolve_module(module_id: str):
         "version": str(plugin.version or "0.0.0"),
         "permissions": permissions,
         "legacy": bool(plugin.legacy),
+        "category": str(getattr(plugin, "category", "") or ""),
         "audit_events": tuple(getattr(plugin, "audit_events", ()) or ()),
     }
 
@@ -188,7 +191,11 @@ SCOPE_CHECKED_OBJECT_TYPES = ("client", "site", "agent")
 BROWSER_EVENT_OBJECT_TYPES = SCOPE_CHECKED_OBJECT_TYPES  # alias kept for 1.16.0 importers
 BROWSER_PROVENANCE_MARKER = "module-declared-event"
 # operation_context keys only Core sets. Payloads can never supply operation_context, so a module cannot forge them.
-CORE_CONTEXT_KEYS = ("browser_provenance", "core_refusal")
+CORE_CONTEXT_KEYS = ("browser_provenance", "core_refusal", "server_provenance")
+# 1.17.7: provenance of a row Core wrote itself around a Tactical call it ran server-side (tec_tac.tactical_operations).
+SERVER_PROVENANCE_TACTICAL_OPERATION = "tactical-operation"
+# Core-internal authority. Passed only by Core's own executor to _record_row, never through the public record().
+_TACTICAL_OPERATION_AUTHORITY = object()
 
 
 def declared_browser_event(actor, module_id: str, action: Any, object_type: Any) -> bool:
@@ -299,6 +306,15 @@ def _keep_browser_provenance(marker: dict, original: Any) -> None:
         marker["browser_provenance"] = provenance
     if original.get("core_refusal") is True:
         marker["core_refusal"] = True
+    server = original.get("server_provenance")
+    if isinstance(server, str) and len(server) <= 100:
+        marker["server_provenance"] = server
+        operation = original.get("operation")
+        if isinstance(operation, str) and len(operation) <= 100:
+            marker["operation"] = operation
+        status = original.get("tactical_status")
+        if isinstance(status, int) and not isinstance(status, bool):
+            marker["tactical_status"] = status
 
 
 def _debug_info_bytes(debug_info: dict) -> int:
@@ -315,7 +331,7 @@ def _fit_debug_info(debug_info: dict) -> dict:
     wipe Core provenance. Replace module metadata and operation_context with a
     'value too large' marker, the larger of the two first, and stop as soon as the
     row fits. Only keys that are present are touched. A replaced operation_context
-    keeps Core's own keys (browser_provenance, core_refusal). Core keys (source,
+    keeps Core's own keys (browser_provenance, core_refusal, server_provenance with its operation and tactical_status). Core keys (source,
     module_id, module_version, correlation_id, actor_*) always stay.
     """
     max_bytes = _max_value_bytes()
@@ -383,9 +399,10 @@ def record(
     ``recorded=False``. Pass ``strict=True`` only when a Core-owned workflow has
     explicitly decided audit persistence is transaction-critical.
 
-    ``operation_context.core_refusal`` and ``browser_provenance`` are Core-owned:
-    only Core's own rows set them, so a caller that supplies either gets a contract
-    error (``browser_provenance`` since 1.17.6).
+    ``operation_context.core_refusal``, ``browser_provenance`` and ``server_provenance``
+    are Core-owned: only Core's own rows set them, so a caller that supplies any of
+    them gets a contract error (``browser_provenance`` and ``server_provenance``
+    since 1.17.6 and 1.17.7).
     """
     if isinstance(operation_context, dict):
         for key in CORE_CONTEXT_KEYS:
@@ -447,6 +464,43 @@ def record_browser_declared(
     )
 
 
+def record_tactical_operation(
+    *,
+    actor,
+    module_id: str,
+    action: str,
+    object_type: str,
+    object_id: Any = None,
+    message: Any = None,
+    before: Any = None,
+    after: Any = None,
+    metadata: dict | None = None,
+    operation: str,
+    tactical_status: int | None = None,
+    refusal: bool = False,
+    request=None,
+) -> dict[str, Any]:
+    """Write the row of a Tactical call Core ran server-side (1.17.7). Core-internal; never strict.
+
+    The actor is the signed-in user and the module is the one that declared the operation. Core passes its internal
+    authority, so a person acting only under a Tactical permission is not blocked by the module-permission check.
+    The row carries operation_context.server_provenance, operation and tactical_status. ``refusal`` adds
+    core_refusal = true, for Core's own deny rows.
+    """
+    context = {
+        "server_provenance": SERVER_PROVENANCE_TACTICAL_OPERATION,
+        "operation": str(operation)[:100],
+        "tactical_status": tactical_status,
+    }
+    if refusal:
+        context["core_refusal"] = True
+    return _record_row(
+        actor=actor, module_id=module_id, action=action, object_type=object_type, object_id=object_id,
+        message=message, before=before, after=after, metadata=metadata, request=request, strict=False,
+        operation_context=context, authority=_TACTICAL_OPERATION_AUTHORITY,
+    )
+
+
 def _record_row(
     *,
     actor,
@@ -462,9 +516,10 @@ def _record_row(
     request=None,
     correlation_id: Any = None,
     strict: bool = False,
+    authority=None,
 ) -> dict[str, Any]:
     module = _resolve_module(module_id)
-    username, actor_info = _actor_provenance(actor, module)
+    username, actor_info = _actor_provenance(actor, module, authority)
     normalized_action = _normalize_action(action)
     normalized_object_type = _normalize_object_type(object_type)
     oid = None if object_id is None else str(object_id)[:255]

@@ -44,6 +44,16 @@ class AuditWriteDayThrottle(_AuthenticatedAttemptThrottle):
     rate = "1000/day"
 
 
+class TacticalOperationMinThrottle(_AuthenticatedAttemptThrottle):
+    scope = "tec_tac_tactical_operation_min"
+    rate = "120/min"
+
+
+class TacticalOperationDayThrottle(_AuthenticatedAttemptThrottle):
+    scope = "tec_tac_tactical_operation_day"
+    rate = "5000/day"
+
+
 class _WriteOnlyThrottle(_AuthenticatedAttemptThrottle):
     """Counts only changes. Reads are not throttled."""
 

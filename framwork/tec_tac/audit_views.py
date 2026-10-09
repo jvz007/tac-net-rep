@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -34,6 +35,25 @@ _DENY_MESSAGES = {
 }
 _DENY_MESSAGE = _DENY_MESSAGES["not_found"]  # 1.16.0 name, kept for importers
 _OBJECT_ID_MAX = 255
+
+# 1.17.7: the browser-declared path is deprecated. Core still serves it exactly as before, adds the Deprecation
+# header to its responses and logs one warning per module per process. The end date is not set (CQ18).
+DEPRECATION_HEADERS = {"Deprecation": "true"}
+_DEPRECATION_WARNED: set[str] = set()
+_DEPRECATION_LOCK = threading.Lock()
+
+
+def _warn_declared_path_deprecated(module_id: str) -> None:
+    with _DEPRECATION_LOCK:
+        if module_id in _DEPRECATION_WARNED:
+            return
+        _DEPRECATION_WARNED.add(module_id)
+    logger.warning(
+        "Module %s posted a browser-declared audit event to /api/tfd/audit/record/. This path is deprecated since "
+        "Core 1.17.7: a Tactical call should use a registered Tactical operation, and a module's own backend action "
+        "should call tec_tac.audit.record from its backend route. See docs/module-audit.md.",
+        module_id,
+    )
 
 
 @extend_schema_view(post=extend_schema(tags=["Tec-Tac Framework"], summary="Record a Tec-Tac module audit event"))
@@ -89,29 +109,30 @@ class AuditRecordView(APIView):
         )
 
         module_id = str(payload.get("module_id") or "").strip()
+        _warn_declared_path_deprecated(module_id)
         action = str(payload.get("action") or "").strip().lower()
         object_type = str(payload.get("object_type") or "").strip().lower()
         object_id = payload.get("object_id")
         if object_type in SCOPE_CHECKED_OBJECT_TYPES:
             if object_id is None or isinstance(object_id, (dict, list, bool)) or not str(object_id).strip():
-                return Response({"detail": "object_id is required for module-declared browser audit events."}, status=400)
+                return Response({"detail": "object_id is required for module-declared browser audit events."}, status=400, headers=DEPRECATION_HEADERS)
             try:
                 resolve_resource(object_type, object_id, context=user_context(request.user))
             except ResourceValidationError as exc:
-                return Response({"detail": str(exc), "recorded": False}, status=400)
+                return Response({"detail": str(exc), "recorded": False}, status=400, headers=DEPRECATION_HEADERS)
             except (ResourceNotFound, ResourcePermissionDenied) as exc:
                 missing = isinstance(exc, ResourceNotFound)
                 self._record_deny(
                     request, module_id, action, object_type, object_id,
                     "not_found" if missing else "permission_denied", 404 if missing else 403,
                 )
-                return Response({"detail": str(exc), "recorded": False}, status=404 if missing else 403)
+                return Response({"detail": str(exc), "recorded": False}, status=404 if missing else 403, headers=DEPRECATION_HEADERS)
         elif object_id is not None:
             # Any other declared object type has no scope check and no deny row. object_id is optional.
             if isinstance(object_id, (dict, list, bool)) or not str(object_id).strip():
-                return Response({"detail": "object_id must be a string or number when provided."}, status=400)
+                return Response({"detail": "object_id must be a string or number when provided."}, status=400, headers=DEPRECATION_HEADERS)
             if len(str(object_id)) > _OBJECT_ID_MAX:
-                return Response({"detail": f"object_id may not exceed {_OBJECT_ID_MAX} characters."}, status=400)
+                return Response({"detail": f"object_id may not exceed {_OBJECT_ID_MAX} characters."}, status=400, headers=DEPRECATION_HEADERS)
         try:
             result = record_browser_declared(
                 actor=request.user,
@@ -127,8 +148,8 @@ class AuditRecordView(APIView):
             )
         except AuditContractError as exc:
             detail = str(exc)
-            return Response({"detail": detail}, status=403 if "not permitted" in detail else 400)
-        return Response(result, status=201 if result.get("recorded") else 202)
+            return Response({"detail": detail}, status=403 if "not permitted" in detail else 400, headers=DEPRECATION_HEADERS)
+        return Response(result, status=201 if result.get("recorded") else 202, headers=DEPRECATION_HEADERS)
 
     @staticmethod
     def _record_deny(request, module_id, action, object_type, object_id, reason, status):

@@ -67,6 +67,7 @@ from .rbac import (
     get_all_role_permissions,
     permission_catalog,
     registered_permissions,
+    tactical_permission_catalog,
     set_extension_permission,
 )
 
@@ -393,6 +394,7 @@ class UiContextView(APIView):
                 "module_register_timeout_seconds": get_module_register_timeout_seconds(),
                 **_runtime_localization(request),
                 "tactical_ui": tactical_ui_context(request.user),
+                "tactical_permissions": tactical_permission_catalog(request.user),
                 "tactical_web_ui": _tactical_web_ui_context(),
                 "preferences_initialized": preferences_initialized,
                 "preferences_updated_at": preferences_updated_at,
