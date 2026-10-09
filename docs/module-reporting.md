@@ -112,7 +112,7 @@ Core keeps its own registry as the single record of every registration. It valid
 After every module has loaded (in every process: web, celery and `manage.py shell`), Core settles the handover once:
 
 - **The capability is available.** Report Manager reports healthy only when it owns the bridge. Core replays every pending registration to it, in id order. `owner` becomes `reportmanager`.
-- **The capability is absent, or reports mode `core-bridge-active` or `unavailable`.** Report Manager is not the owner of the bridge. Core takes its own bridge back, so no report model disappears. `fallback` becomes true, `installed` becomes true, and the pending registrations are served as before. A pending registration that carries `hidden_fields` is refused (`hidden-fields-unavailable`) and logged, because Core's bridge cannot hide columns.
+- **The capability is absent, or reports mode `core-bridge-active` or `unavailable`.** Report Manager is not the owner of the bridge. Core takes its own bridge back, so no report model disappears. `fallback` becomes true, `installed` becomes true, and the pending registrations are served as before. Registrations already forwarded to Report Manager before the fallback (1.17.5) are served the same way: Core clears its forwarded set, installs its bridge, and `owner` reads `core` with `forwarded_models` 0. A registration that carries `hidden_fields`, pending or formerly forwarded, is refused (`hidden-fields-unavailable`) and logged, because Core's bridge cannot hide columns. After the fallback, `unregister_reporting_model` no longer calls Report Manager for them.
 - **The capability reports mode `report-manager` but is unhealthy.** Nothing changes. The status shows the error, so two bridges never patch the same names.
 
 Report Manager 0.3.0 patches no Tactical code, so today the visible result with 0.3.0 installed is the fallback: Core's bridge is installed again and Report Manager reports `core-bridge-active`. The real handover happens, with no further Core change, when Report Manager ships the release that owns the bridge.
@@ -139,6 +139,7 @@ Every earlier key is kept (`available`, `installed`, `error`, `native_models`, `
 | `owner` | `core`, `reportmanager`, or `pending` (handover, not yet settled or unhealthy) |
 | `handover` | Report Manager 0.3.0 or later was enabled at start-up, so Core did not patch Tactical |
 | `fallback` | Core took its bridge back at settle |
+| `bridge_error`, `handover_error` | 1.17.5, additive. `bridge_error` is Core's own bridge error or null. `handover_error` is set when Report Manager owns the bridge but reports unhealthy, or null. `error` is unchanged and equals `bridge_error or handover_error`. The installer fails only on `bridge_error`, so a healthy Core is not rolled back because Report Manager is unhealthy. |
 | `forwarded_models`, `pending_models` | Counts of registrations Report Manager holds, and registrations still waiting |
 | `row_scope_enforced` | Always true: Core offers the scope hook (see below). It does not mean every registered model is scoped |
 | `row_scope_models` | `{enforced, unscoped}`: registration ids, by the per-model truth |

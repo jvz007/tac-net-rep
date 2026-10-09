@@ -18,7 +18,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .models import TecTacRuntimeConfig
-from .rbac import can_manage_runtime_settings
+from .rbac import can_manage_runtime_settings, is_effective_superuser
 from .session_security import SessionAuthenticated
 from .throttles import RuntimeSettingsWriteDayThrottle, RuntimeSettingsWriteMinThrottle
 
@@ -31,6 +31,11 @@ MAX_MODULE_REGISTER_TIMEOUT_SECONDS = 300
 RUNTIME_SETTINGS_DENIED = (
     "Tec-Tac core.runtime_settings.manage or core.privileged_operations permission is required to change runtime settings."
 )
+
+
+# Update source: superusers only (CQ12, Johan, 9 October 2026; 1.17.5). Staging and installing
+# keep core.privileged_operations.
+UPDATE_SOURCE_DENIED = "Only a Tec-Tac superuser may change the update source."
 
 
 class RuntimeSettingsError(ValueError):
@@ -243,8 +248,9 @@ class UpdateSourceView(APIView):
         return Response(serialize_update_sources())
 
     def patch(self, request):
-        if not can_manage_runtime_settings(request.user):
-            raise PermissionDenied(RUNTIME_SETTINGS_DENIED)
+        # Checked before the body, so a non-superuser gets 403 and never 400.
+        if not is_effective_superuser(request.user):
+            raise PermissionDenied(UPDATE_SOURCE_DENIED)
         data = request.data
         if not isinstance(data, dict):
             return Response({"detail": "The update source must be a JSON object."}, status=400)

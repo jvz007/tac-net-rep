@@ -189,6 +189,8 @@ def healthy(env):
 
 OLD_KEYS = {"available", "installed", "error", "native_models", "tec_tac_models", "total_models", "dynamic_schema"}
 NEW_KEYS = {"owner", "handover", "fallback", "forwarded_models", "pending_models", "row_scope_enforced", "row_scope_models"}
+# 1.17.5: two additive keys; `error` is unchanged and is their combination.
+NEW_KEYS |= {"bridge_error", "handover_error"}
 
 # ------------------------------------------------------------------ (a) Report Manager absent, disabled or older: today's bridge
 for label, kw in (("absent", {}), ("disabled", {"report_manager": "0.3.0", "rm_enabled": False}),
@@ -416,6 +418,10 @@ env.rep.install_tactical_reporting_bridge()
 verify(env)  # handover: no markers, no failure
 env.rep.settle_reporting_bridge()
 verify(env)  # fallback: Core's bridge is installed again
+env = fresh(report_manager="0.3.0", cap_state={"available": False, "state": "unhealthy", "reason": "bridge not owned", "health": {"mode": "report-manager"}})
+env.rep.install_tactical_reporting_bridge()
+env.rep.settle_reporting_bridge()
+verify(env)  # 1.17.5: Report Manager owns the bridge but is unhealthy; a healthy Core must not fail the install
 env = fresh()
 env.rep.install_tactical_reporting_bridge()
 env.views.QuerySchema.get = lambda self, request: None  # a lost marker still fails the installer when Core claims installed

@@ -34,7 +34,7 @@ The default is `release` with `ref` null. It means "the latest stable GitHub rel
 { "component": "framework", "type": "branch", "ref": "dev" }
 ```
 
-Who may change it: the same rule as runtime settings. An effective superuser, a role with `core.runtime_settings.manage`, or a role with `core.privileged_operations`. Anyone else gets 403.
+Who may change it: an effective superuser only (Django superuser, or a role marked superuser). Anyone else gets 403 before the body is read. `core.runtime_settings.manage` and `core.privileged_operations` no longer cover the update source (tightened in 1.17.5; they did in 1.17.2 to 1.17.4). Staging and installing still need `core.privileged_operations`.
 
 Rules:
 

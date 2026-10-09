@@ -783,16 +783,21 @@ def install_tactical_reporting_bridge(force: bool = False) -> dict[str, Any]:
 def _take_bridge_back(reason: str) -> None:
     """Fallback (1.17.4): Report Manager does not own the bridge, so Core installs its own again.
 
-    Pending registrations that carry hidden_fields are refused (state hidden-fields-unavailable), because Core's
-    bridge cannot hide columns. Every other pending registration is served by Core's bridge as before.
+    Pending registrations, and (1.17.5) registrations already forwarded to Report Manager before it proved not to
+    own the bridge, are served by Core's bridge. Ones that carry hidden_fields are refused (state
+    hidden-fields-unavailable), because Core's bridge cannot hide columns. The forwarded set is cleared before the
+    bridge is installed so the allow-lists include them; after that unregister no longer calls the provider for them.
     """
-    global _FALLBACK
+    global _FALLBACK, _REPORT_MANAGER_OWNS
     with _LOCK:
         _FALLBACK = True
         pending = sorted(_PENDING)
+        forwarded = sorted(_FORWARDED)
         _PENDING.clear()
         _HELD.clear()
-        refused = [_REGISTRY[item].id for item in pending if item in _REGISTRY and _REGISTRY[item].hidden_fields]
+        _FORWARDED.clear()
+        _REPORT_MANAGER_OWNS = False
+        refused = [_REGISTRY[item].id for item in pending + forwarded if item in _REGISTRY and _REGISTRY[item].hidden_fields]
     logger.warning("Core takes its reporting bridge back: %s", reason)
     for public_id in refused:
         logger.warning("Reporting model %s is refused: it carries hidden_fields and Core's bridge cannot hide columns.", public_id)
@@ -852,6 +857,8 @@ def reporting_bridge_status() -> dict[str, Any]:
         "available": bool(_BRIDGE_INSTALLED and not _BRIDGE_ERROR),
         "installed": bool(_BRIDGE_INSTALLED),
         "error": _BRIDGE_ERROR or _HANDOVER_ERROR or None,
+        "bridge_error": _BRIDGE_ERROR or None,
+        "handover_error": _HANDOVER_ERROR or None,
         "native_models": len(native),
         "tec_tac_models": active_count,
         "total_models": len(native) + active_count,

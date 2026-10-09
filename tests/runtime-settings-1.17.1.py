@@ -69,6 +69,7 @@ mods["tec_tac.throttles"].RuntimeSettingsWriteMinThrottle = type("Min", (), {})
 mods["tec_tac.throttles"].RuntimeSettingsWriteDayThrottle = type("Day", (), {})
 PRIVILEGED = {"ok": False}
 mods["tec_tac.rbac"].can_manage_runtime_settings = lambda user: PRIVILEGED["ok"]
+mods["tec_tac.rbac"].is_effective_superuser = lambda user: False  # 1.17.5: runtime_settings imports it
 AUDITS = []
 AUDIT_FAIL = {"on": False}
 

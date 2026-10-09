@@ -38,7 +38,7 @@ If the database cannot be read, Core returns the default (30). Startup never fai
 
 `PATCH /api/tfd/system/runtime-settings/` changes it. The caller needs one of three things: an effective superuser, a role with the Core permission `core.runtime_settings.manage` (group "Runtime settings", added in 1.17.2), or a role with `core.privileged_operations` (kept, so 1.17.1 administrators lose nothing). Anyone else gets 403.
 
-Any role manager can grant `core.runtime_settings.manage` in the role editor. Only a superuser can grant `core.privileged_operations`. Holding `core.runtime_settings.manage` does not allow staging or installing updates. That still needs `core.privileged_operations`.
+Any role manager can grant `core.runtime_settings.manage` in the role editor. Only a superuser can grant `core.privileged_operations`. `core.runtime_settings.manage` covers runtime settings only. It no longer covers the update source, which only a superuser can change (1.17.5). It does not allow staging or installing updates either. That still needs `core.privileged_operations`.
 
 Python: `tec_tac.rbac.can_manage_runtime_settings(user)` gives the same answer. It never raises.
 

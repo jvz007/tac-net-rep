@@ -119,7 +119,7 @@ CORE_CONTRACTS = (
         "import_path": "tec_tac.reporting",
         "name": "reporting_bridge_status",
         "kind": "python",
-        "purpose": "Return the state of Core's Tactical reporting bridge. Keys: available, installed, error, native_models, tec_tac_models, total_models, dynamic_schema (unchanged), plus 1.17.4 owner (core, reportmanager or pending), handover (Report Manager 0.3.0 or later was enabled at start-up, so Core did not patch Tactical), fallback (Core took its bridge back because reportmanager.registry is not the owner of the bridge), forwarded_models, pending_models, row_scope_enforced and row_scope_models {enforced, unscoped} (registration ids). During handover installed stays false and no _tec_tac_reporting_bridge marker is set; Report Manager reads installed and the marker. row_scope_enforced true means Core offers the scope hook (scoped_report_manager), not that every registered model is scoped; the per-model truth is row_scope.enforced. It never calls Report Manager.",
+        "purpose": "Return the state of Core's Tactical reporting bridge. Keys: available, installed, error (Core's bridge error or the handover error), native_models, tec_tac_models, total_models, dynamic_schema (unchanged), plus 1.17.4 owner (core, reportmanager or pending), handover (Report Manager 0.3.0 or later was enabled at start-up, so Core did not patch Tactical), fallback (Core took its bridge back because reportmanager.registry is not the owner of the bridge), forwarded_models, pending_models, row_scope_enforced and row_scope_models {enforced, unscoped} (registration ids), plus 1.17.5 bridge_error (only Core's own bridge error, or null) and handover_error (only the handover error, for example Report Manager owns the bridge but reports unhealthy, or null); error is their combination (bridge_error or handover_error). Additive: error is unchanged. During handover installed stays false and no _tec_tac_reporting_bridge marker is set; Report Manager reads installed and the marker. row_scope_enforced true means Core offers the scope hook (scoped_report_manager), not that every registered model is scoped; the per-model truth is row_scope.enforced. It never calls Report Manager.",
         "audience": "backend/diagnostics",
     },
     {
@@ -575,7 +575,7 @@ HTTP_CONTRACT_DETAILS = {
             },
         },
         "PATCH": {
-            "authorization": "authenticated Tec-Tac session; effective superuser, core.runtime_settings.manage or core.privileged_operations (same rule as runtime-settings)",
+            "authorization": "authenticated Tec-Tac session; effective superuser only (Django is_superuser or a role with is_superuser). Tightened in 1.17.5: holders of core.runtime_settings.manage or core.privileged_operations who are not superusers were allowed in 1.17.2 to 1.17.4",
             "request": {
                 "component": "required: framework or ui",
                 "type": "required: release or branch",
@@ -589,7 +589,7 @@ HTTP_CONTRACT_DETAILS = {
                 "Write rate limit: 10/min and 200/day per user and IP (shared with runtime-settings). Reads are not counted.",
             ],
             "response": "same as GET",
-            "errors": {"400": "unknown field, unknown component, invalid type or invalid branch name", "403": "caller holds neither core.runtime_settings.manage nor core.privileged_operations and is not a superuser", "429": "write rate limit reached"},
+            "errors": {"400": "unknown field, unknown component, invalid type or invalid branch name", "403": "caller is not an effective superuser: 'Only a Tec-Tac superuser may change the update source.' Checked before the body, so a non-superuser never sees 400", "429": "write rate limit reached"},
         },
     },
     "/api/tfd/system/updates/": {
@@ -635,7 +635,7 @@ HTTP_CONTRACT_DETAILS = {
             },
             "notes": [
                 "1.17.2 default change, additive. The saved source only supplies the default. Trust-policy and signed-release checks and the root helper's re-verification still apply.",
-                "Changing the saved source does not stage anything.",
+                "Changing the saved source does not stage anything. Since 1.17.5 only a superuser can set the saved source.",
             ],
         },
     },
@@ -656,7 +656,7 @@ HTTP_CONTRACT_DETAILS = {
                 "Write rate limit: 10/min and 200/day per user and IP. Reads are not counted.",
             ],
             "response": "same as GET",
-            "errors": {"400": "unknown field, missing field or invalid value", "403": "caller holds neither core.runtime_settings.manage nor core.privileged_operations and is not a superuser", "429": "write rate limit reached"},
+            "errors": {"400": "unknown field, missing field or invalid value", "403": "caller is not an effective superuser: 'Only a Tec-Tac superuser may change the update source.' Checked before the body, so a non-superuser never sees 400", "429": "write rate limit reached"},
         },
     },
     "/api/tfd/account/": {

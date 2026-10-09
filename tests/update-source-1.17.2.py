@@ -71,6 +71,8 @@ mods["tec_tac.throttles"].RuntimeSettingsWriteMinThrottle = type("Min", (), {})
 mods["tec_tac.throttles"].RuntimeSettingsWriteDayThrottle = type("Day", (), {})
 ALLOWED = {"ok": False}
 mods["tec_tac.rbac"].can_manage_runtime_settings = lambda user: ALLOWED["ok"]
+# 1.17.5: PATCH update-source is superuser-only, so the stub flag now stands for is_effective_superuser.
+mods["tec_tac.rbac"].is_effective_superuser = lambda user: ALLOWED["ok"]
 AUDITS: list[dict] = []
 AUDIT_FAIL = {"on": False}
 
@@ -196,7 +198,7 @@ def patch(body, who=user):
 try:
     patch({"component": "framework", "type": "branch", "ref": "dev"})
 except PermissionDenied as exc:
-    must("core.runtime_settings.manage" in str(exc) and "core.privileged_operations" in str(exc), "403 must name both rights")
+    must("superuser" in str(exc), "403 must say only a superuser may change the source (1.17.5; named both rights in 1.17.2)")
 else:
     raise AssertionError("a user with neither right must get 403")
 must(CONFIG.update_sources == {} and not AUDITS, "a refused PATCH must change and audit nothing")
