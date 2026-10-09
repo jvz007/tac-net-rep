@@ -53,7 +53,15 @@ Otherwise the replacement is simply not honoured, and its status says why:
 | `capability-major-mismatch` | A capability is at a different major version. |
 | `capability-version-lower` | A capability has the same major version but a lower minor or patch. |
 
-`replacement_status(module_id)` returns the status object. It also carries `degraded`: true when a declared capability is not registered at run time. That is information, never a refusal.
+`replacement_status(module_id)` returns the status object. It also carries `degraded`: true when a declared capability is not registered at run time. That is information, never a refusal. `registered_mismatch` (1.17.10) also sets it.
+
+## What Core checks at registration (1.17.10)
+
+Declaring is not the same as registering, so Core compares the two when a module registers a capability. It never raises out of `AppConfig.ready()`. It logs one warning, registers nothing, and the name stays `capability-unavailable`.
+
+- A core module that declares `capabilities` registers exactly those ids. A core module with no `capabilities` key is unchanged. If Core cannot read module state, it lets the registration through.
+- An honoured replacement registers a replaced module's id at the declared major version, with a minor.patch that is not lower. `capability-major-mismatch` and `capability-version-lower` are the reason codes, the same as the parity check.
+- `replacement_status` lists each refused registration in `registered_mismatch` as `{capability, declared, registered, reason}`, and `degraded` becomes true. The list lives in the running process and clears on restart.
 
 ## What changes while a replacement is honoured
 

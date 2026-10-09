@@ -188,6 +188,10 @@ Johan accepted this path on 9 October 2026 (AD-19, `docs/review-accepted-decisio
 
 `GET /api/tfd/ui/context/` carries `tactical_permissions` since 1.17.7: every boolean `can_*` field on Tactical's Role, mapped to true or false for the signed-in user. Core computes it with one role lookup (`tec_tac.rbac.tactical_permission_catalog`). A superuser or role superuser has every flag. An installer user, a user with no role and any lookup failure have none. It adds no Tec-Tac permission and reads only the user's own role. It is a hint for the page: Tactical still decides every call.
 
+## Browser helpers
+
+The UI gives modules two helpers for this path. They are documented as browser contract rows, `ui.authenticated.tactical-operation` (`tacticalOperation(moduleId, operationId, options)`) and `ui.authenticated.tactical-permissions` (`hasTacticalPermission(flag)`). The rows state what Core checks and the rule that a module passes its own id. They add no HTTP contract, executor or permission change.
+
 ## What this does not do
 
 - It does not run a Tactical function itself. The owning core module decides which operations exist. Core only runs them.

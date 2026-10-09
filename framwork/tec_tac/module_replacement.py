@@ -65,8 +65,39 @@ class Node:
 
 
 def _parse_version(value: str) -> tuple[int, int, int]:
-    parts = str(value).split(".")
-    return int(parts[0]), int(parts[1]), int(parts[2])
+    # One parser for every version rule: "2", "2.0" and "2.0.0-1" read as 2.0.0 (suffix ignored), garbage raises.
+    return _module_state.Version.parse(value).core()
+
+
+def version_within_declared(declared: str, registered: str) -> str | None:
+    """None when a registered capability version is acceptable for the version declared in the manifest, else the reason
+    code: the same major, and a minor.patch that is not lower. ``parity()`` and run-time registration share this rule."""
+    try:
+        have = _parse_version(registered)
+    except _module_state.ModuleStateError:
+        return REASON_CAP_MAJOR  # fail closed: an unreadable registered version is never accepted
+    want = _parse_version(declared)
+    if have[0] != want[0]:
+        return REASON_CAP_MAJOR
+    if have[1:] < want[1:]:
+        return REASON_CAP_LOWER
+    return None
+
+
+# Process-local record of registrations refused for a version outside the declared one: (module, capability) -> row.
+_MISMATCHES: dict[tuple[str, str], dict[str, str]] = {}
+
+
+def record_registered_mismatch(module_id: str, capability_id: str, declared: str, registered: str, reason: str) -> None:
+    _MISMATCHES[(module_id, capability_id)] = {"capability": capability_id, "declared": declared, "registered": registered, "reason": reason}
+
+
+def clear_registered_mismatch(module_id: str, capability_id: str) -> None:
+    _MISMATCHES.pop((module_id, capability_id), None)
+
+
+def registered_mismatches(module_id: str) -> list[dict[str, str]]:
+    return [dict(row) for (owner, _), row in sorted(_MISMATCHES.items()) if owner == module_id]
 
 
 def live_model(plugins=None, state=None) -> dict[str, Node]:
@@ -102,11 +133,7 @@ def parity(replaced: Node, replacement: Node) -> tuple[str | None, list[dict]]:
         if have is None:
             code = REASON_CAP_MISSING
         else:
-            want_v, have_v = _parse_version(want), _parse_version(have)
-            if have_v[0] != want_v[0]:
-                code = REASON_CAP_MAJOR
-            elif have_v[1:] < want_v[1:]:
-                code = REASON_CAP_LOWER
+            code = version_within_declared(want, have)
         if code:
             failures.append({"capability": cap_id, "required": want, "declared": have, "reason": code})
             reason = reason or code
@@ -206,6 +233,7 @@ def _status_for(model: Mapping[str, Node], node: Node, *, check_registered: bool
         "capabilities": {"expected": sorted(expected), "declared": sorted(node.capabilities or {}), "failed": failures},
         "degraded": False,
         "unregistered": [],
+        "registered_mismatch": [],
     }
     if honoured and check_registered:
         try:
@@ -213,8 +241,12 @@ def _status_for(model: Mapping[str, Node], node: Node, *, check_registered: bool
         except Exception:
             missing = []
         # Informational only. It is never a refusal: registration happens at start-up, after this check.
-        status["degraded"] = bool(missing)
+        mismatch = registered_mismatches(node.id)
+        status["degraded"] = bool(missing or mismatch)
         status["unregistered"] = missing
+        # 1.17.10: a capability the replacement tried to register outside its declared major, or below its declared
+        # minor.patch. Core refused the registration at start-up, so the name stays unavailable.
+        status["registered_mismatch"] = mismatch
     return status
 
 

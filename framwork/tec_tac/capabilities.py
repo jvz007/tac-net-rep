@@ -123,6 +123,45 @@ def _replacement_may_register(owner: str, capability_id: str) -> bool:
         return False
 
 
+def _core_module_may_register(owner: str, capability_id: str) -> bool:
+    """1.17.10 (AD-20): a core module whose manifest declares ``capabilities`` registers exactly what it declares.
+    A core module with no ``capabilities`` key is unchanged. If the model cannot be read the registration is allowed
+    (the enable and install checks cover the manifest side)."""
+    try:
+        from .module_replacement import live_model
+
+        node = live_model().get(owner)
+    except (ImportError, RegistryError, ModuleStateError, OSError, ValueError, KeyError) as exc:
+        logger.warning("Could not read module state to check capability %r of %r; allowing it: %s", capability_id, owner, exc)
+        return True
+    if node is None or node.category != "core" or node.capabilities is None:
+        return True
+    return capability_id in node.capabilities
+
+
+def _replacement_version_refusal(owner: str, capability_id: str, version: str) -> tuple[str, str, str] | None:
+    """(declared, registered, reason) when an honoured replacement registers a replaced module's id outside its declared
+    version, else None. The honouring check has just passed, so an unreadable manifest here simply gives None."""
+    try:
+        from .module_replacement import declared_capabilities, version_within_declared
+
+        declared = declared_capabilities(owner).get(capability_id)
+        if declared is None:
+            return None
+        reason = version_within_declared(declared, version)
+        return (declared, version, reason) if reason else None
+    except (ImportError, RegistryError, ModuleStateError, OSError, ValueError, KeyError, IndexError):
+        return None
+
+
+_REFUSAL_WARNED: set[tuple[str, str]] = set()
+
+
+def _unregistered(capability_id: str, owner: str, version, provider, description) -> CapabilityRegistration:
+    return CapabilityRegistration(id=capability_id, module_id=owner, version=str(version or ""), provider=provider,
+                                  description=str(description or "").strip())
+
+
 def _is_unhonoured_replacement_name(owner: str, capability_id: str) -> bool:
     """True when owner declares ``replaces`` equal to the id's prefix and declares this id, so the id is a replacement's
     name that is simply not honoured right now (both enabled, both disabled, parity lost). Fails closed (False)."""
@@ -177,18 +216,41 @@ def register_capability(
     owner = _clean_identifier(module_id, "Capability module_id")
     if "." not in capability_id:
         raise ValueError("Capability id must be namespaced, for example communicator.messaging.")
-    if owner != "tec-tac" and not capability_id.startswith(owner + ".") and not _replacement_may_register(owner, capability_id):
-        if _is_unhonoured_replacement_name(owner, capability_id):
+    via_replacement = False
+    if owner != "tec-tac" and not capability_id.startswith(owner + "."):
+        if _replacement_may_register(owner, capability_id):
+            via_replacement = True
+        elif _is_unhonoured_replacement_name(owner, capability_id):
             # 1.17.9-1: never raise out of a module's AppConfig.ready() for this: Core never stops Tactical for a
             # both-enabled replacement. Warn and leave the name unregistered; the status API explains why.
             logger.warning("Module %r replaces a core module that is not replaced right now (both enabled, parity lost or "
                            "not enabled); capability %r is not registered.", owner, capability_id)
-            return CapabilityRegistration(id=capability_id, module_id=owner, version=str(version or ""), provider=provider,
-                                          description=str(description or "").strip())
-        raise ValueError(
-            f"Capability id {capability_id!r} must begin with provider module prefix {owner + '.'!r}."
-        )
+            return _unregistered(capability_id, owner, version, provider, description)
+        else:
+            raise ValueError(
+                f"Capability id {capability_id!r} must begin with provider module prefix {owner + '.'!r}."
+            )
+    elif owner not in ("tec-tac", "core") and not _core_module_may_register(owner, capability_id):
+        # 1.17.10: same rule, same reason: warn once, register nothing, never raise out of ready().
+        if (owner, capability_id) not in _REFUSAL_WARNED:
+            _REFUSAL_WARNED.add((owner, capability_id))
+            logger.warning("Core module %r declares capabilities in its manifest but not %r; the capability is not registered.",
+                           owner, capability_id)
+        return _unregistered(capability_id, owner, version, provider, description)
     cap_version = _validate_capability_version(version)
+    if via_replacement:
+        from .module_replacement import clear_registered_mismatch, record_registered_mismatch
+
+        refusal = _replacement_version_refusal(owner, capability_id, cap_version)
+        if refusal:
+            declared, registered, reason = refusal
+            record_registered_mismatch(owner, capability_id, declared, registered, reason)
+            if (owner, capability_id) not in _REFUSAL_WARNED:
+                _REFUSAL_WARNED.add((owner, capability_id))
+                logger.warning("Replacement %r declares %r at %s but registered %s (%s); the capability is not registered.",
+                               owner, capability_id, declared, registered, reason)
+            return _unregistered(capability_id, owner, cap_version, provider, description)
+        clear_registered_mismatch(owner, capability_id)
     if provider is None:
         raise ValueError("Capability provider is required.")
     if health is not None and not callable(health):
@@ -467,3 +529,7 @@ def _clear_capabilities_for_tests() -> None:
     """Private test helper; never use for production lifecycle management."""
     with _CAPABILITY_LOCK:
         _CAPABILITIES.clear()
+    _REFUSAL_WARNED.clear()
+    from . import module_replacement
+
+    module_replacement._MISMATCHES.clear()
