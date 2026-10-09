@@ -152,7 +152,7 @@ def _module_group(plugin) -> str:
     plugin_id = str(getattr(plugin, "plugin_id", "") or "").strip()
     name = str(getattr(plugin, "name", "") or plugin_id).strip() or plugin_id
     category = str(getattr(plugin, "category", "") or "").strip().lower()
-    prefix = "Core module" if category == "core" else "Module"
+    prefix = {"core": "Core module", "server": "Server module"}.get(category, "Module")
     return f"{prefix} · {name}"
 
 

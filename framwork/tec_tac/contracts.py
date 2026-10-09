@@ -271,7 +271,7 @@ CORE_CONTRACTS = (
         "import_path": "tec_tac.capabilities",
         "name": "register_capability",
         "kind": "python",
-        "purpose": "Register a stable, versioned public cross-module backend contract. Since 1.17.9 (AD-20) the id must still begin with the provider module id and a dot, except that the honoured replacement of a core module may register that module's capability ids, and only the ids it declares in its manifest capabilities.",
+        "purpose": "Register a stable, versioned public cross-module backend contract. Since 1.17.9 (AD-20) the id must still begin with the provider module id and a dot, except that the honoured replacement of a core or server module may register that module's capability ids, and only the ids it declares in its manifest capabilities. Since 1.17.11 a refused registration also removes an earlier registration of the same id by the same module, so the name stays capability-unavailable.",
         "audience": "provider",
     },
     {
@@ -279,7 +279,7 @@ CORE_CONTRACTS = (
         "import_path": "tec_tac.module_replacement",
         "name": "honoured_replacement",
         "kind": "python",
-        "purpose": "honoured_replacement(module_id) -> the core module id that module replaces right now, or None (1.17.9, AD-20). Worked out from manifests and module state on every call, so disabling the replacement ends it at once. Never raises.",
+        "purpose": "honoured_replacement(module_id) -> the core or server module id that module replaces right now, or None (1.17.9, AD-20; server modules since 1.17.11). Worked out from manifests and module state on every call, so disabling the replacement ends it at once. Never raises.",
         "audience": "core module/backend",
     },
     {
@@ -287,7 +287,7 @@ CORE_CONTRACTS = (
         "import_path": "tec_tac.module_replacement",
         "name": "replaced_by",
         "kind": "python",
-        "purpose": "replaced_by(core_module_id) -> the module that honourably replaces that core module right now, or None (1.17.9, AD-20).",
+        "purpose": "replaced_by(module_id) -> the module that honourably replaces that core or server module right now, or None (1.17.9, AD-20).",
         "audience": "core module/backend",
     },
     {
@@ -295,7 +295,7 @@ CORE_CONTRACTS = (
         "import_path": "tec_tac.module_replacement",
         "name": "replacement_status",
         "kind": "python",
-        "purpose": "replacement_status(module_id=None) -> {module_id, replaces, enabled, honoured, reason, message, capabilities, degraded, unregistered} for one module that declares replaces (None when it declares none), or a list for every such module (1.17.9, AD-20). reason is one of replacement-disabled, target-missing, target-not-core, target-enabled, competing-replacement, capabilities-undeclared, capability-missing, capability-major-mismatch, capability-version-lower. degraded is informational: a declared capability is not registered at run time.",
+        "purpose": "replacement_status(module_id=None) -> {module_id, replaces, enabled, honoured, reason, message, capabilities, conflict, degraded, unregistered, registered_mismatch} for one module that declares replaces (None when it declares none), or a list for every such module (1.17.9, AD-20). reason is one of replacement-disabled, target-missing, target-not-core (the module it names is not a core or server module), target-enabled, competing-replacement, capabilities-undeclared, capability-missing, capability-major-mismatch, capability-version-lower. conflict (1.17.11) is true when the replacement and the module it replaces are both enabled: Core does not load the replacement and queues a job that disables it. degraded is informational: it is true when a declared capability is not registered at run time, and also when registered_mismatch is not empty. registered_mismatch (1.17.10) lists {capability, declared, registered, reason} for each capability the replacement tried to register outside its declared major version or below its declared minor.patch; Core refused it, so the name stays unavailable. It lives in the running process and clears on restart or when a correct registration follows. A core module's undeclared-id refusal is logged once and is not listed here.",
         "audience": "core module/backend/browser",
     },
     {
@@ -682,8 +682,9 @@ HTTP_CONTRACT_DETAILS = {
             "response": {
                 "module_register_timeout_seconds": "integer, added in 1.17.1. Seconds the UI lets a module's register() run before it marks the module failed and loads the next. Default 30, range 5 to 300. Additive: older UI builds ignore it.",
                 "tactical_permissions": "object, added in 1.17.7: every boolean can_* field on Tactical's Role mapped to true or false for the signed-in user, for example {\"can_reboot_agents\": true}. A superuser or role superuser has every flag true. An installer user, a user with no role and any lookup failure have every flag false. It uses only the user's own role and adds no Tec-Tac permission. It is a hint for the UI: Tactical still decides every call. Additive: older UI builds ignore it.",
+                "module_status[].replaces": "string|null, added in 1.17.11: the core or server module id the module's manifest declares it replaces (AD-20), null for a module that declares none and for a legacy plugin. The declared value, not the honoured one. A replacement enabled next to the module it replaces is reported with enabled false and active false. Additive: older UI builds ignore it.",
             },
-            "notes": ["Only the fields added in 1.17.1 and 1.17.7 are listed here. The rest of the context (user, permissions, extensions, capabilities, module_status, preferences, locale, tactical_ui) is documented with the runtime-context browser contract."],
+            "notes": ["Only the fields added in 1.17.1, 1.17.7 and 1.17.11 are listed here. The rest of the context (user, permissions, extensions, capabilities, module_status, preferences, locale, tactical_ui) is documented with the runtime-context browser contract."],
         },
     },
     "/api/tfd/system/update-source/": {
@@ -821,11 +822,52 @@ HTTP_CONTRACT_DETAILS = {
     },
     "/api/tfd/modules/v2/": {
         "response": {
-            "modules[].replaces": "string|null, the core module this module replaces (added 1.17.9)",
-            "modules[].replacement": "object|null, replacement status of a module that declares replaces (added 1.17.9)",
-            "modules[].replaced_by": "string|null, the module that honourably replaces this core module right now (added 1.17.9)",
+            "modules[].replaces": "string|null, the core or server module this module replaces (added 1.17.9)",
+            "modules[].replacement": "object|null, replacement status of a module that declares replaces (added 1.17.9). Carries registered_mismatch and a registration-caused degraded since 1.17.10, and conflict (boolean, true while it is enabled next to the module it replaces) since 1.17.11. See replacement_status",
+            "modules[].replaced_by": "string|null, the module that honourably replaces this core or server module right now (added 1.17.9)",
+            "modules[].will_disable": "array of module ids, added 1.17.11: the modules that enabling this module would disable in the same job (its replaced module, when that is enabled and every other rule passes). Empty when none. Show it, then send it back as disable_replaced",
+            "modules[].dependency_status[].satisfied_by": "string|null, added 1.17.11: the honoured replacement that stands in for this hard dependency while it is disabled. enabled stays truthful. The version constraint still applies to the dependency's own installed version",
         },
-        "errors": {"400": "an enable or install that would run a replacement next to its core module (problem type replacement_conflict) or does not cover every capability of the core module (replacement_incomplete), added 1.17.9"},
+        "errors": {"400": "an enable or install that would run a replacement next to a module it replaces and that module cannot be handled (problem type replacement_conflict, for example a rival enabled replacement, or enabling a core or server module while its replacement is enabled) or does not cover every capability of the module it replaces (replacement_incomplete), added 1.17.9. Enabling or installing the replacement itself no longer fails because the replaced module is enabled (1.17.11): it names that module in will_disable and needs confirmation"},
+    },
+    "/api/tfd/modules/v2/<str:plugin_id>/state/": {
+        "POST": {
+            "authorization": "authenticated Tec-Tac session with module management permission",
+            "request": {
+                "enabled": "required boolean",
+                "cascade": "optional boolean (disable only)",
+                "disable_replaced": "optional array of module ids, added 1.17.11: the list the operator was shown (modules[].will_disable). When enabling this module would disable other modules, the request must name exactly that list. A list that is missing or out of date is refused",
+            },
+            "response": {"202": "the queued job"},
+            "errors": {
+                "400": "invalid field, or a refusal. code replacement_confirmation_required (added 1.17.11) means the enable would disable the modules in will_disable and the request did not name exactly them; the answer carries detail (plain English), code and the fresh will_disable. Old callers that send no list see this refusal and nothing is changed",
+            },
+            "notes": [
+                "Added 1.17.11 (AD-20): enabling a module with replaces disables the module it replaces in the same job, after the root job helper re-checks the replacement rules from root-owned manifests. The helper refuses anything the operator did not confirm and restores the flags if the runtime sync fails.",
+                "Writes a Core audit row per disabled module (module core, action custom:module-replacement-disabled, object the replaced module, actor the requesting user) when the job is queued.",
+            ],
+        },
+    },
+    "/api/tfd/modules/v2/packages/<uuid:upload_id>/install/": {
+        "POST": {
+            "authorization": "authenticated Tec-Tac session with module management permission",
+            "request": {
+                "kind": "optional: artifact (default) or batch",
+                "order": "optional array of module ids",
+                "disable_replaced": "optional array of module ids, added 1.17.11: the list the operator was shown (plan.will_disable from the inspect answer). A fresh install of a module with replaces disables the module it replaces in the same job, so the request must name exactly that list",
+            },
+            "response": {"202": "the queued job"},
+            "errors": {"400": "invalid field or an unsatisfiable plan, or code replacement_confirmation_required (added 1.17.11) with the fresh will_disable when the install would disable modules the request did not name"},
+            "notes": ["A single local package that would disable a module is installed by the v2 worker (like a rename), because only the v2 worker disables in the same job. An upgrade of an installed replacement names nothing."],
+        },
+    },
+    "/api/tfd/modules/v2/packages/inspect/": {
+        "POST": {
+            "notes": [
+                "Since 1.17.11 the install plan carries will_disable (array of module ids) at the top and on each action: the modules a fresh install of a replacement would disable. Show it and send it back as disable_replaced on the install call. The plan stays valid.",
+                "Since 1.17.11 a plan problem disabled_dependency is not raised when an honoured replacement stands in for the dependency.",
+            ],
+        },
     },
     "/api/tfd/modules/v2/jobs/": {
         "query": {"page": "integer >=1", "page_size": "integer 1..100", "status": "optional string", "action": "optional string", "search": "optional string"},
@@ -1083,6 +1125,11 @@ BROWSER_CONTRACTS = (
         "audience": "module/browser",
         "docs": "tec-tac-ui/docs/module-status.md",
         "purpose": "Inspect installed/enabled module state without additional HTTP calls; backend capability checks remain authoritative.",
+        "details": [
+            "Each row is {id, version, installed, enabled, active, legacy, replaces}. replaces (needs Core 1.17.11) is the id of the core or server module the module declares it replaces in its manifest, or null.",
+            "replaces is the declared value, not the honoured one. Core's executor still re-checks honouring on every call.",
+            "A replacement that is enabled next to the module it replaces is reported with enabled false and active false (1.17.11): Core does not load its backend, so the UI must not load it either.",
+        ],
     },
     {
         "id": "ui.authenticated.runtime-context",
@@ -1095,6 +1142,7 @@ BROWSER_CONTRACTS = (
         "details": [
             "server_url: the Tactical API base without a trailing slash. It is an empty string when unset or not http(s). Read-only.",
             "module_register_timeout_seconds: whole seconds from 5 to 300, default 30. The UI applies it. It covers loading the module's entry file plus its register() call. A module that takes longer is marked failed and the UI carries on.",
+            "module_status[].replaces: string or null, added in Core 1.17.11. The core or server module id that module's manifest declares it replaces (AD-20), null for a module that declares none and for a legacy plugin. It is the declared value, not the honoured one. UI 0.12.88 reads it to scope tacticalOperation to the AD-20 module the caller replaces and fails closed when it is absent. Additive: older UI builds ignore it.",
             "tactical_permissions: a plain object of can_* keys with strict boolean values (needs Core 1.17.7). The UI drops any key that does not start with can_ and any value that is not exactly true or false. A missing or non-object value becomes an empty map. Core sends only booleans from tactical_permission_catalog, so the rule is defence in depth. Use hasTacticalPermission(flag) to read it.",
         ],
     },
@@ -1160,7 +1208,8 @@ BROWSER_CONTRACTS = (
             "A failure keeps status, payload and code, plus a non-enumerable headers property. Core refusal codes such as tactical_permission_denied and object_not_found pass through unchanged.",
             "What Core checks: the operation is declared by the moduleId in the URL, the signed-in user holds the Tactical permission and the role scope, and the route is owned (AD-19, AD-20). Core cannot tell which module's browser code made the call.",
             "Scoping rule (the contract): a module passes its own id. The helper refuses another module's id unless that module is the AD-20 core module the caller replaces, and it refuses calls after a failed or timed-out register() abandoned the module.",
-            "UI 0.12.87 does not enforce that scoping rule yet. The UI release that closes the held review finding does. Until then the rule is the contract and Core's checks above are the only guarantee.",
+            "From UI 0.12.88 the shell binds tacticalOperation to the calling module. It refuses another module's id except the AD-20 module the caller replaces, which it reads from descriptor.replaces or from the module's module_status row (module_status[].replaces, needs Core 1.17.11). It refuses every call after a failed or timed-out register(), and it fails closed when the row carries no replaces, so a replacement can then pass only its own id.",
+            "Calls made through api, apiRaw, apiBlob or apiText straight to the executor path are scoped only from the UI release that closes the held 0.12.88 review finding. Until then Core's own checks above are the guarantee: the operation is declared by the module id in the URL, the user holds the Tactical permission and role scope, the route is owned, and the replacement is honoured.",
             "Public modules (registerPublic) do not get tacticalOperation.",
         ],
     },
@@ -1202,12 +1251,12 @@ RULES = (
     "A permissionless extension that needs a browser audit trail declares audit_events in tec_tac.json: [{\"object_type\": \"agent\", \"actions\": [\"view\", \"run\"]}]. object_type is a lowercase slug; each action is a standard Tec-Tac audit action or custom:<slug>. For client, site and agent Core checks the signed-in user's scope; other types have no scope check. Core sets the actor and marks the row browser_provenance. A module that declares audit_events must require framework >=1.16.0, and >=1.17.0 when it declares an object type other than client, site or agent.",
     "The UI, not modules, applies the module register() time limit. A module does not read or enforce module_register_timeout_seconds, and its register() must not assume more than the configured time. Core only stores and publishes the value (GET /api/tfd/ui/context/).",
     "Saved views belong to the Core saved views service (tec_tac.saved_views, /api/tfd/saved-views/). Modules must not keep saved views in browser storage, cookies or their own tables. A payload holds filters and layout only, never data, secrets or tokens. A module that uses the service must require framework >=1.17.0.",
-    "A module that is not a core module may replace one core module (AD-20, since 1.17.9) by declaring replaces=<core module id> and capabilities={id: X.Y.Z} in tec_tac.json; the replaced core module declares capabilities too (an empty {} is allowed). Core honours the replacement only while the replacement is enabled, the core module is installed and disabled, no other enabled module replaces it, and the replacement declares every capability of the core module at the same major version with a minor.patch that is not lower. While honoured the replacement owns the core module's Tactical routes (and no others) and may register its capability names. Core refuses to enable both (problem types replacement_conflict and replacement_incomplete), never disables anything at start-up, and hands everything back when the replacement is disabled. A module that uses these keys must require framework >=1.17.9. Other modules keep calling capabilities by name.",
-    "A core module that declares `capabilities` in tec_tac.json must register exactly the capability ids it declares, and a replacement must register at the declared major version with a minor.patch that is not lower (since 1.17.10). Core does not register anything else: it logs one warning, registers nothing and never raises out of AppConfig.ready(). A core module with no `capabilities` key is unchanged.",
+    "A module that is neither a core nor a server module may replace one core or server module (AD-20, since 1.17.9; server modules since 1.17.11) by declaring replaces=<module id> and capabilities={id: X.Y.Z} in tec_tac.json; the replaced module declares capabilities too (an empty {} is allowed). Core honours the replacement only while the replacement is enabled, the replaced module is installed and disabled, no other enabled module replaces it, and the replacement declares every capability of the replaced module at the same major version with a minor.patch that is not lower. While honoured the replacement owns the replaced core module's Tactical routes (and no others; a server module has none) and may register its capability names, and it satisfies a hard dependency on the replaced module id (1.17.11). Enabling or installing the replacement names the module it will disable (will_disable) and disables it in the same job once the exact list is confirmed (disable_replaced); the root job helper re-checks the rules. If state shows both enabled, Core does not load the replacement, reports it as not enabled, queues a job that disables it and keeps the replaced module; it never stops Tactical at start-up. Handing back is disabling the replacement and enabling the replaced module. A module that uses these keys must require framework >=1.17.9 (>=1.17.11 for category server or for any of the 1.17.11 behaviour). Other modules keep calling capabilities by name.",
+    "A core or server module that declares `capabilities` in tec_tac.json must register exactly the capability ids it declares, and a replacement must register at the declared major version with a minor.patch that is not lower (since 1.17.10; server modules since 1.17.11). Core does not register anything else: it logs one warning, registers nothing, drops an earlier registration of the same id by the same module (1.17.11) and never raises out of AppConfig.ready(). A module with no `capabilities` key is unchanged.",
     "A Tactical call that must be audited (reboot, Wake-on-LAN, report changes, code signing) is declared once by the owning core module with tec_tac.tactical_operations.register_tactical_operation and run through core.tactical_operations (POST /api/tfd/tactical-operations/<module_id>/<operation_id>/ or the capability's run). Core writes the audit row where the call happens, so the browser cannot misreport it. The browser-declared audit_events path is deprecated since 1.17.7 for declared events (see docs/module-audit.md for the replacement of each event).",
     "Use Python tec_tac.* contracts inside the Tec-Tac/Tactical backend; use HTTP only at browser/external process boundaries.",
     "UI modules must use the documented browser contracts passed to register(context) or registerPublic(context); do not import Core UI internals or read Tactical authentication storage.",
-    "Swagger grouping is Core-owned: installed extension endpoints are grouped from their registered Django app ownership even when the URL prefix differs from the module ID. Module manifests may declare a readable name and category=core; groups are named Core module · <name> or Module · <name>. Core HTTP surfaces use explicit subsystem groups, module callback ownership wins over path prefixes, and there is no generic Framework catch-all.",
+    "Swagger grouping is Core-owned: installed extension endpoints are grouped from their registered Django app ownership even when the URL prefix differs from the module ID. Module manifests may declare a readable name and category=core or category=server (1.17.11); groups are named Core module · <name>, Server module · <name> or Module · <name>. Core HTTP surfaces use explicit subsystem groups, module callback ownership wins over path prefixes, and there is no generic Framework catch-all.",
     "Do not import another module's private models, helpers, services, filesystem layout or database tables.",
     "Feature modules must consume Tactical clients/sites/agents through tec_tac.resources; direct Tactical resource-model imports are a Core-only compatibility boundary.",
     "Resolve cross-module business operations through the capability registry and re-check runtime availability at execution time.",

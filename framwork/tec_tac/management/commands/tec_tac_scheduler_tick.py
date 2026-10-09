@@ -27,10 +27,20 @@ class Command(BaseCommand):
             sweep_error = f"{exc.__class__.__name__}: {exc}"
             self.stderr.write(f"TEC-TAC session expiry sweep failed; retrying next tick: {sweep_error}")
 
+        reconciled = []
+        try:
+            # 1.17.11 (AD-20): a replacement enabled next to the module it replaces gets a job that disables it. The
+            # step never raises, and a failure here never takes the tick or Tactical down.
+            from tec_tac.module_replacement import reconcile_conflicts
+
+            reconciled = reconcile_conflicts()
+        except Exception as exc:
+            self.stderr.write(f"TEC-TAC replacement conflict check failed; retrying next tick: {exc.__class__.__name__}: {exc}")
+
         sweep_state = "error" if sweep_error else "ran"
         cleanup_state = "error" if cleanup_error else ("ran" if cleanup and cleanup.get("ran") else "not_due")
         self.stdout.write(
-            "TEC-TAC scheduler tick: checked={checked} queued={queued} skipped={skipped} cleaned={cleaned} session_history_cleanup={session_cleanup} session_expiry_sweep={sweep_state} sweep_revoked={sweep_revoked} sweep_skipped_no_digest={sweep_skipped} sweep_orphan_tokens={sweep_orphans} now={now}".format(
+            "TEC-TAC scheduler tick: checked={checked} queued={queued} skipped={skipped} cleaned={cleaned} session_history_cleanup={session_cleanup} session_expiry_sweep={sweep_state} sweep_revoked={sweep_revoked} sweep_skipped_no_digest={sweep_skipped} sweep_orphan_tokens={sweep_orphans} now={now} replacement_conflicts_queued={replacement_queued}".format(
                 checked=result["checked"],
                 queued=len(result["queued"]),
                 skipped=len(result["skipped"]),
@@ -41,5 +51,6 @@ class Command(BaseCommand):
                 sweep_skipped=(sweep or {}).get("skipped_no_digest", 0),
                 sweep_orphans=(sweep or {}).get("orphan_tokens_deleted", 0),
                 now=result["now"],
+                replacement_queued=sum(1 for row in reconciled if row.get("queued")),
             )
         )

@@ -297,7 +297,10 @@ CATEGORY_EXCEPTIONS: frozenset = frozenset({("licensing", ("core", "codesign"))}
 
 
 def _honoured_pairs() -> dict[str, str]:
-    """{replacement module id: replaced core module id} for every replacement honoured right now (AD-20). Fails closed."""
+    """{replacement module id: replaced core module id} for every replacement honoured right now (AD-20). Fails closed.
+
+    1.17.11: a replacement of a server module is honoured for capabilities but joins no owner rule. A server module has
+    no Tactical routes, so it is left out here."""
     try:
         from . import module_replacement
 
@@ -306,7 +309,7 @@ def _honoured_pairs() -> dict[str, str]:
         for node in model.values():
             if node.replaces:
                 replaced = module_replacement.honoured_replacement(node.id, model=model)
-                if replaced:
+                if replaced and model[replaced].category == "core":
                     pairs[node.id] = replaced
         return pairs
     except Exception:

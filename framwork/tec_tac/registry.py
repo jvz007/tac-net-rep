@@ -178,8 +178,9 @@ def _publisher_permissions(payload: dict, plugin_type: str, plugin_id: str) -> t
 def _replacement_keys(payload: dict, plugin_type: str, plugin_id: str, category: str) -> tuple[str, tuple[tuple[str, str], ...], bool]:
     """Parse the optional AD-20 keys ``replaces`` and ``capabilities`` (extensions only).
 
-    ``replaces`` names one core module. It is refused on a core module and on the module itself. Whether the target is
-    installed and is a core module is checked where the installed set is known (module_replacement.py), not here.
+    ``replaces`` names one core or server module (1.17.11). It is refused on a core or server module and on the module
+    itself. Whether the target is installed and is a core or server module is checked where the installed set is known
+    (module_replacement.py), not here.
     ``capabilities`` maps a capability id to an X.Y.Z version: the public contracts the module publishes, declared
     statically because a disabled module's code is never loaded.
     """
@@ -196,8 +197,8 @@ def _replacement_keys(payload: dict, plugin_type: str, plugin_id: str, category:
         replaces = _safe_plugin_id(raw)
         if replaces == plugin_id:
             raise RegistryError(f"Plugin {plugin_id!r} may not replace itself.")
-        if category == "core":
-            raise RegistryError(f"Core module {plugin_id!r} may not declare replaces; only a module that is not a core module can replace one.")
+        if category in ("core", "server"):
+            raise RegistryError(f"Module {plugin_id!r} is a {category} module and may not declare replaces; only a module that is neither a core nor a server module can replace one.")
     capabilities: list[tuple[str, str]] = []
     if has_caps:
         raw = payload["capabilities"]
@@ -210,8 +211,8 @@ def _replacement_keys(payload: dict, plugin_type: str, plugin_id: str, category:
                 raise RegistryError(f"Manifest capabilities id {cap_id!r} must be a namespaced id such as patching.windows.")
             if not isinstance(cap_version, str) or not _CAPABILITY_VERSION_RE.match(cap_version):
                 raise RegistryError(f"Manifest capabilities version for {cap_id!r} must look like 1.0.0.")
-            if category == "core" and not cap_id.startswith(plugin_id + "."):
-                raise RegistryError(f"Capability {cap_id!r} must begin with the core module ID prefix {plugin_id + '.'!r}.")
+            if category in ("core", "server") and not cap_id.startswith(plugin_id + "."):
+                raise RegistryError(f"Capability {cap_id!r} must begin with the {category} module ID prefix {plugin_id + '.'!r}.")
             capabilities.append((cap_id, cap_version))
     return replaces, tuple(sorted(capabilities)), has_caps
 
@@ -280,8 +281,8 @@ def _load_manifest(plugin_type: str, plugin_dir: Path) -> PluginSpec | None:
     category = raw_category.strip().lower()
     if category and plugin_type != "extension":
         raise RegistryError(f"Reportset {plugin_id!r} may not declare category metadata.")
-    if category not in {"", "core"}:
-        raise RegistryError(f"Plugin {plugin_id!r} category must be 'core' when provided.")
+    if category not in {"", "core", "server"}:
+        raise RegistryError(f"Plugin {plugin_id!r} category must be 'core' or 'server' when provided.")
     raw_python_paths = _string_list(payload, "python_paths", (".",))
     python_paths = []
     plugin_root = plugin_dir.resolve()

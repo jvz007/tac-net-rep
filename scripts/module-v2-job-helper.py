@@ -6,6 +6,10 @@ package install/remove jobs continue to use the proven v1 worker.
 
 Rollback scope for bundle/batch failure is code + enabled-state. Database
 migrations already applied by a package are intentionally not auto-reversed.
+
+Since Core 1.17.11 (AD-20) an enable or install of a module that replaces another one disables the replaced module in
+the same job, but only the modules the operator confirmed (``disable_modules``) and only after this worker has
+re-checked the replacement rules itself, from root-owned manifests.
 """
 from __future__ import annotations
 
@@ -229,6 +233,285 @@ def migrate_module_state_identity(old_id, new_id):
         if record is not None:
             state["modules"][new_id] = record
     mutate_module_state(apply)
+
+# ---------------------------------------------------------------------------------------------------------------------
+# AD-20 module replacement rules (Core 1.17.11)
+#
+# This worker runs as root and must never import the Tactical-writable tree, so the rules Core applies in
+# tec_tac/module_replacement.py are written a second time here, with a reader of its own that takes manifests only from
+# REPO_ROOT/extensions/*/tec_tac.json as regular, root-owned, not group- or world-writable files.
+# tests/module-replacement-helper-1.17.11.py runs both implementations over one scenario matrix and asserts the same
+# reason codes, so the two cannot drift apart unnoticed. Change a rule in both places.
+#
+# The helper never disables a module the requesting operator was not shown: whatever it works out to disable must be a
+# subset of the job's confirmed ``disable_modules`` list, or the job fails with nothing changed.
+# ---------------------------------------------------------------------------------------------------------------------
+REPLACEABLE_CATEGORIES = frozenset({"core", "server"})
+_CAPABILITY_ID_RE = re.compile(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)+$")
+_CAPABILITY_VERSION_RE = re.compile(r"^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$")
+_VERSION_CORE_RE = re.compile(r"^\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?([-+.][0-9A-Za-z.-]+)?\s*$")
+MAX_MANIFEST_BYTES = 1024 * 1024
+MAX_CAPABILITIES = 200
+
+
+def _manifest_stat_ok(info):
+    """A manifest or its folder is trusted only when it is root-owned and not writable by group or others."""
+    return info.st_uid == 0 and not (info.st_mode & 0o022)
+
+
+def _read_manifest_nofollow(path):
+    """The manifest as a dict, or None when it is missing, a symlink, not a regular root-owned file, or unreadable."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError:
+        return None
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or not _manifest_stat_ok(info) or info.st_size > MAX_MANIFEST_BYTES:
+            return None
+        data = b""
+        while len(data) <= MAX_MANIFEST_BYTES:
+            block = os.read(fd, 65536)
+            if not block:
+                break
+            data += block
+        if len(data) > MAX_MANIFEST_BYTES:
+            return None
+        value = json.loads(data.decode("utf-8"))
+        return value if isinstance(value, dict) else None
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+    finally:
+        os.close(fd)
+
+
+def manifest_node(payload):
+    """The facts the replacement rules need from one manifest, or None when the manifest breaks Core's own rules
+    (the module is then treated as not installed: every rule fails closed)."""
+    module_id = payload.get("id")
+    if not isinstance(module_id, str) or not PLUGIN_RE.fullmatch(module_id.strip()):
+        return None
+    module_id = module_id.strip()
+    raw_category = payload.get("category", "")
+    if not isinstance(raw_category, str):
+        return None
+    category = raw_category.strip().lower()
+    if category not in {"", "core", "server"}:
+        return None
+    replaces = ""
+    if "replaces" in payload:
+        raw = payload["replaces"]
+        if not isinstance(raw, str) or not PLUGIN_RE.fullmatch(raw.strip()) or raw.strip() == module_id or category in REPLACEABLE_CATEGORIES:
+            return None
+        replaces = raw.strip()
+    capabilities = None
+    if "capabilities" in payload:
+        raw = payload["capabilities"]
+        if not isinstance(raw, dict) or len(raw) > MAX_CAPABILITIES:
+            return None
+        capabilities = {}
+        for cap_id, cap_version in raw.items():
+            if not isinstance(cap_id, str) or not _CAPABILITY_ID_RE.match(cap_id):
+                return None
+            if not isinstance(cap_version, str) or not _CAPABILITY_VERSION_RE.match(cap_version):
+                return None
+            if category in REPLACEABLE_CATEGORIES and not cap_id.startswith(module_id + "."):
+                return None
+            capabilities[cap_id] = cap_version
+    return {"id": module_id, "category": category, "replaces": replaces, "capabilities": capabilities}
+
+
+def read_installed_manifests(repo_root):
+    """{module id: manifest node} for the extensions installed under repo_root, read as root-owned regular files only."""
+    root = Path(repo_root) / "extensions"
+    nodes = {}
+    try:
+        folders = sorted(root.iterdir())
+    except OSError:
+        return nodes
+    for folder in folders:
+        try:
+            info = os.lstat(folder)
+        except OSError:
+            continue
+        if not stat.S_ISDIR(info.st_mode) or not _manifest_stat_ok(info):
+            continue
+        payload = _read_manifest_nofollow(folder / "tec_tac.json")
+        node = manifest_node(payload) if payload is not None else None
+        if node is not None and node["id"] == folder.name:
+            nodes[node["id"]] = node
+    return nodes
+
+
+def replacement_model(manifests, state):
+    """The manifest nodes with their enabled flag from the (locked) module state, as {id: dict}."""
+    modules = state.get("modules") or {}
+    model = {}
+    for module_id, node in manifests.items():
+        record = modules.get(module_id) or {}
+        model[module_id] = {**node, "enabled": bool(record.get("enabled", True))}
+    return model
+
+
+def _version_core(value):
+    match = _VERSION_CORE_RE.match(str(value or ""))
+    if not match:
+        raise ValueError(f"invalid version {value!r}")
+    major, minor, patch, _ = match.groups()
+    return int(major), int(minor or 0), int(patch or 0)
+
+
+def _version_within_declared(declared, registered):
+    """None, or capability-major-mismatch / capability-version-lower (the rule Core shares with registration)."""
+    try:
+        have = _version_core(registered)
+    except ValueError:
+        return "capability-major-mismatch"
+    want = _version_core(declared)
+    if have[0] != want[0]:
+        return "capability-major-mismatch"
+    if have[1:] < want[1:]:
+        return "capability-version-lower"
+    return None
+
+
+def replacement_check(model, replacement_id, *, assume_enabled=False):
+    """None when the replacement would be honoured, else Core's reason code (module_replacement.check)."""
+    node = model.get(replacement_id)
+    if node is None or not node["replaces"]:
+        return "target-missing"
+    if not node["enabled"] and not assume_enabled:
+        return "replacement-disabled"
+    target = model.get(node["replaces"])
+    if target is None:
+        return "target-missing"
+    if target["category"] not in REPLACEABLE_CATEGORIES:
+        return "target-not-core"
+    if target["enabled"]:
+        return "target-enabled"
+    if any(other["id"] != replacement_id and other["enabled"] and other["replaces"] == node["replaces"] for other in model.values()):
+        return "competing-replacement"
+    if target["capabilities"] is None:
+        return "capabilities-undeclared"
+    reason = None
+    offered = node["capabilities"] or {}
+    for cap_id in sorted(target["capabilities"]):
+        have = offered.get(cap_id)
+        code = "capability-missing" if have is None else _version_within_declared(target["capabilities"][cap_id], have)
+        reason = reason or code
+    return reason
+
+
+def _hypothetical_disable(model, node, *, blocked=()):
+    """(model with the replaced module disabled, [its id]) when enabling or installing ``node`` would disable it."""
+    target = model.get(node["replaces"])
+    if target is None or target["category"] not in REPLACEABLE_CATEGORIES or not target["enabled"] or target["id"] in blocked:
+        return model, []
+    return {**model, target["id"]: {**target, "enabled": False}}, [target["id"]]
+
+
+def plan_enable_disables(model, module_ids, confirmed):
+    """The modules an enable job disables. Raises RuntimeError on a rule violation or an unconfirmed disable."""
+    disables = []
+    for module_id in module_ids:
+        node = model.get(module_id)
+        if node is None:
+            if confirmed:
+                # The operator confirmed a disable for a module this worker cannot read a trusted manifest for.
+                raise RuntimeError(f"cannot verify the module replacement rules for {module_id}: no trusted manifest")
+            continue
+        if node["replaces"]:
+            hypothetical, names = (model, []) if node["enabled"] else _hypothetical_disable(model, node)
+            reason = replacement_check(hypothetical, module_id, assume_enabled=True)
+            if reason:
+                raise RuntimeError(f"module replacement rule refuses enabling {module_id}: {reason}")
+            disables.extend(names)
+        if node["category"] in REPLACEABLE_CATEGORIES:
+            for other in model.values():
+                if other["enabled"] and other["replaces"] == module_id:
+                    raise RuntimeError(f"module replacement rule refuses enabling {module_id}: {other['id']} is enabled and replaces it")
+    disables = sorted(set(disables) - set(module_ids))
+    unconfirmed = sorted(set(disables) - set(confirmed))
+    if unconfirmed:
+        raise RuntimeError("module replacement would disable a module the operator did not confirm: " + ", ".join(unconfirmed))
+    return disables
+
+
+def conflicted_replacement_ids(model):
+    """The enabled replacements whose replaced module is also enabled."""
+    return sorted(
+        node["id"] for node in model.values()
+        if node["replaces"] and node["enabled"]
+        and (model.get(node["replaces"]) or {}).get("enabled") and model[node["replaces"]]["category"] in REPLACEABLE_CATEGORIES
+    )
+
+
+def apply_enable_job(repo_root, module_ids, confirmed):
+    """Enable ``module_ids`` and disable the modules they replace in ONE state write, under the module-state lock.
+
+    Manifests are re-read here, under the lock, and the rules are re-run on the state as it is now. Returns
+    (disabled, reconciled, previous): the replaced modules this job disabled, replacements it found enabled next to
+    their replaced module and disabled too, and the enabled flag every touched module had before (for rollback)."""
+    result = {}
+
+    def apply(state):
+        manifests = read_installed_manifests(repo_root)
+        model = replacement_model(manifests, state)
+        disables = plan_enable_disables(model, module_ids, confirmed)
+        modules = state["modules"]
+        touched = list(module_ids) + disables
+        result["previous"] = {mid: bool((modules.get(mid) or {}).get("enabled", True)) for mid in touched}
+        for mid in module_ids:
+            modules[mid] = {**(modules.get(mid) or {}), "enabled": True}
+        for mid in disables:
+            modules[mid] = {**(modules.get(mid) or {}), "enabled": False}
+        # A both-enabled pair that was already in the state (a hand edit) is settled the way Core settles it: the
+        # replacement is disabled and the replaced module stays.
+        reconciled = [mid for mid in conflicted_replacement_ids(replacement_model(manifests, state)) if mid not in module_ids]
+        for mid in reconciled:
+            result["previous"].setdefault(mid, True)
+            modules[mid] = {**(modules.get(mid) or {}), "enabled": False}
+        result["disabled"], result["reconciled"] = disables, reconciled
+
+    mutate_module_state(apply)
+    return result["disabled"], result["reconciled"], result["previous"]
+
+
+def restore_enabled_flags(previous):
+    """Put the enabled flags back the way a failed job found them."""
+    def apply(state):
+        for mid, enabled in previous.items():
+            state["modules"][mid] = {**(state["modules"].get(mid) or {}), "enabled": bool(enabled)}
+    mutate_module_state(apply)
+
+
+def verify_install_disables(repo_root, order, actions, pre_installed, confirmed):
+    """Read-only check run after the packages are installed and before any module state is written.
+
+    Re-reads the installed manifests, works out what each freshly installed replacement would disable, and requires
+    that to be a subset of ``confirmed``. Returns the modules to disable. Raises RuntimeError on a violation, which
+    the caller's rollback handles."""
+    manifests = read_installed_manifests(repo_root)
+    model = replacement_model(manifests, load_module_state())
+    actions_by_id = {str(item.get("id")): item for item in actions}
+    disables = []
+    for module_id in order:
+        node = model.get(module_id)
+        action = actions_by_id.get(module_id) or {}
+        if node is None or not node["replaces"] or module_id in pre_installed or action.get("action") != "install" or not node["enabled"]:
+            continue
+        hypothetical, names = _hypothetical_disable(model, node, blocked=set(order))
+        reason = replacement_check(hypothetical, module_id, assume_enabled=True)
+        if reason:
+            raise RuntimeError(f"module replacement rule refuses installing {module_id}: {reason}")
+        disables.extend(names)
+    disables = sorted(set(disables))
+    unconfirmed = sorted(set(disables) - set(confirmed))
+    if unconfirmed:
+        raise RuntimeError("module replacement would disable a module the operator did not confirm: " + ", ".join(unconfirmed))
+    return disables
+
 
 def run_identity_migration(config, action, log, *, reverse=False):
     old_id = str(action.get("previous_module_id") or "")
@@ -999,6 +1282,14 @@ def cleanup_successful_stage(job, log):
             (BATCHES_ROOT / f"{batch_id}.json").unlink(missing_ok=True)
     log.write("[TEC-TAC-MODULE-V2] cleaned successful staged artifacts\n")
 
+def _confirmed_disable_modules(job):
+    """The module ids the operator confirmed this job may disable (Core 1.17.11), validated."""
+    values = job.get("disable_modules") or []
+    if not isinstance(values, list) or any(not isinstance(value, str) or not PLUGIN_RE.fullmatch(value) for value in values):
+        raise RuntimeError("invalid disable_modules")
+    return [str(value) for value in values]
+
+
 def run_job(job_id):
     path, status = load_job(job_id)
     if status.get("status") not in {"dispatched", "running"}:
@@ -1046,11 +1337,34 @@ def run_job(job_id):
                     raise RuntimeError("invalid affected module id")
                 # Enable one target; disable may cascade through dependants.
                 enabled = job["action"] == "enable"
-                set_enabled(affected, enabled)
-                touched = affected
+                disabled, reconciled, previous = [], [], {}
+                if enabled:
+                    confirmed = _confirmed_disable_modules(job)
+                    # One state write under the lock: the rules are re-run on the state as it is now.
+                    disabled, reconciled, previous = apply_enable_job(repo_root, affected, confirmed)
+                    if disabled:
+                        log.write(f"[TEC-TAC-MODULE-V2] disabled replaced module(s): {', '.join(disabled)}\n")
+                    if reconciled:
+                        log.write(f"[TEC-TAC-MODULE-V2] disabled replacement(s) found enabled next to their replaced module: {', '.join(reconciled)}\n")
+                    job["disabled_modules"], job["reconciled_modules"] = disabled, reconciled
+                else:
+                    set_enabled(affected, False)
+                touched = affected + disabled + reconciled
                 job["stage"] = "runtime-sync"
                 atomic_json(path, job)
-                sync_and_reload(config, log, refresh_workers=True)
+                try:
+                    sync_and_reload(config, log, refresh_workers=True)
+                except Exception:
+                    if disabled or reconciled:
+                        # Put every flag this job changed back, so the state is not left with a half-done replacement.
+                        job["stage"] = "rollback"
+                        atomic_json(path, job)
+                        restore_enabled_flags(previous)
+                        try:
+                            sync_and_reload(config, log, refresh_workers=True)
+                        except Exception as rollback_exc:
+                            log.write(f"[TEC-TAC-MODULE-V2] rollback runtime sync failed: {rollback_exc}\n")
+                    raise
             elif job["action"] == "visibility":
                 module_id = str(job.get("plugin_id") or "")
                 if not PLUGIN_RE.fullmatch(module_id):
@@ -1068,8 +1382,13 @@ def run_job(job_id):
                 touched = order
                 applied_renames = []
                 backup_ids = list(order)
+                confirmed = _confirmed_disable_modules(job)
+                pre_installed = set(read_installed_manifests(repo_root))
+                disabled_by_job = []
                 try:
                     backup_ids = install_packages(repo_root, packages, order, actions, log, backup)
+                    # Read-only, before any module state is written: what would the new replacements disable?
+                    disables = verify_install_disables(repo_root, order, actions, pre_installed, confirmed)
                     sources = {item.get("id"): item.get("source") for item in packages}
                     for action in actions:
                         if action.get("action") == "rename":
@@ -1077,6 +1396,11 @@ def run_job(job_id):
                             migrate_module_state_identity(action["previous_module_id"], action["id"])
                             applied_renames.append(action)
                         remember_version(action["id"], action.get("version") or "0.0.0", sources.get(action["id"]))
+                    if disables:
+                        set_enabled(disables, False)
+                        disabled_by_job = list(disables)
+                        job["disabled_modules"] = disabled_by_job
+                        log.write(f"[TEC-TAC-MODULE-V2] disabled replaced module(s): {', '.join(disables)}\n")
                     job["stage"] = "runtime-sync"
                     atomic_json(path, job)
                     sync_and_reload(config, log, refresh_workers=True)
@@ -1090,6 +1414,11 @@ def run_job(job_id):
                         except Exception as identity_rollback_exc:
                             log.write(f"[TEC-TAC-MODULE-V2] identity rollback failed: {identity_rollback_exc}\n")
                     restore_modules(repo_root, backup_ids, backup, log)
+                    if disabled_by_job:
+                        try:
+                            set_enabled(disabled_by_job, True)
+                        except Exception as reenable_exc:
+                            log.write(f"[TEC-TAC-MODULE-V2] re-enabling replaced module(s) failed: {reenable_exc}\n")
                     try:
                         sync_and_reload(config, log, refresh_workers=True)
                     except Exception as rollback_exc:

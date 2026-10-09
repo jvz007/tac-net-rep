@@ -16,9 +16,10 @@ An extension manifest may declare:
 }
 ```
 
-`name` is the readable Swagger name and defaults to the stable module ID for older packages. `category` is optional; the only supported value is `core`.
+`name` is the readable Swagger name and defaults to the stable module ID for older packages. `category` is optional; the supported values are `core` and `server` (`server` since 1.17.11; a module that writes it must require framework >=1.17.11, because older Core rejects the value).
 
 - `category: "core"` -> `Core module · <name>`
+- `category: "server"` -> `Server module · <name>`
 - no category -> `Module · <name>`
 
 Reportsets do not declare a category.

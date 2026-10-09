@@ -30,8 +30,10 @@ for needle in ("POST /api/tfd/tactical-operations/<moduleId>/<operationId>/", "^
                "headers", "audit field", "X-Tec-Tac-Audit", "auditRecorded", "tactical_permission_denied", "object_not_found",
                "Public modules (registerPublic) do not get", "Core 1.17.7", "UI 0.12.87",
                "declared by the moduleId in the URL", "Tactical permission", "role scope", "route is owned", "AD-19",
-               "cannot tell which module's browser code made the call", "its own id", "AD-20 core module", "does not enforce"):
+               "cannot tell which module's browser code made the call", "its own id", "AD-20 core module"):
     assert needle in text, f"tacticalOperation details lack {needle!r}"
+# 1.17.11: UI 0.12.88 enforces the scoping rule for the helper, so the 1.17.10 sentence that said otherwise is gone
+assert "UI 0.12.87 does not enforce" not in text and "does not enforce that scoping rule yet" not in text, "stale 0.12.87 wording is still in the row"
 
 perm = by_id["ui.authenticated.tactical-permissions"]
 assert perm["docs"].startswith("tec-tac-ui/docs/") and perm["operations"] == ["hasTacticalPermission"] and perm["service"] == "hasTacticalPermission"

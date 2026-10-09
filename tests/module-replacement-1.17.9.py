@@ -238,15 +238,17 @@ def problems(module_id):
 
 
 world(patching=True, pm=False)
+# 1.17.11 (AD-20 amendment 1a): enabling the replacement next to its enabled core module is no longer a refusal. It names
+# the module it will disable, and it is queued only with that exact list (tests/module-replacement-enable-1.17.11.py).
 result = problems("patchmanagement")
-must(not result["valid"] and result["problems"][0]["type"] == "replacement_conflict" and result["problems"][0]["reason"] == "target-enabled", result)
+must(result["valid"] is True and result["will_disable"] == ["patching"], result)
 captured = []
 v2._queue_v2 = lambda payload: captured.append(payload) or {"queued": True}
 try:
     v2.queue_set_enabled("patchmanagement", True)
-    raise AssertionError("enabling the replacement next to its enabled core module was queued")
-except v2.ModuleManagerV2Error as exc:
-    must("Disable the core module first" in str(exc), exc)
+    raise AssertionError("enabling the replacement without confirming the disable was queued")
+except v2.ModuleReplacementConfirmationRequired as exc:
+    must("patching" in str(exc) and exc.will_disable == ["patching"], exc)
 must(captured == [], "nothing queued")
 # the other order: the core module while an enabled replacement points at it
 world(patching=False, pm=True)
@@ -296,7 +298,9 @@ def plan_types(*items):
 
 reset(patching=True)
 manifest("patching", category="core", capabilities=PATCHING_CAPS)
-must(plan_types(candidate("patchmanagement", replaces="patching", capabilities=PM_CAPS)) == [("replacement_conflict", "target-enabled")], "install while the target is enabled")
+# 1.17.11: a fresh install while the target is enabled names it and disables it in the same job (no longer a problem)
+must(plan_types(candidate("patchmanagement", replaces="patching", capabilities=PM_CAPS)) == [], "install while the target is enabled")
+must(v2.resolve_install_plan([candidate("patchmanagement", replaces="patching", capabilities=PM_CAPS)])["will_disable"] == ["patching"], "names the target")
 STATE["modules"]["patching"]["enabled"] = False
 must(plan_types(candidate("patchmanagement", replaces="patching", capabilities=PM_CAPS)) == [], "install next to a disabled core module")
 must(plan_types(candidate("patchmanagement", replaces="patching", capabilities={"patching.windows": "1.2.0"})) == [("replacement_incomplete", "capability-missing")], "parity fails")
@@ -360,7 +364,11 @@ world(patching=False, pm=False)
 must(problems("patchmanagement")["valid"] is True and problems("patching")["valid"] is True, "both free before any job")
 (jobs / "a.json").write_text(_json.dumps({"id": "a", "action": "enable", "plugin_id": "patching", "affected_modules": ["patching"], "status": "queued", "created_at": "2026-10-09T10:00:00"}), encoding="utf-8")
 result = problems("patchmanagement")
-must(not result["valid"] and result["problems"][0]["reason"] == "target-enabled", result)
+must(result["valid"] is True and result["will_disable"] == ["patching"], result)  # 1.17.11: it will disable it
 (jobs / "a.json").write_text(_json.dumps({"id": "a", "action": "enable", "plugin_id": "patching", "affected_modules": ["patching"], "status": "succeeded", "created_at": "2026-10-09T10:00:00"}), encoding="utf-8")
-must(problems("patchmanagement")["valid"] is True, "a finished job is already in the live state, not overlaid")
+must(problems("patchmanagement")["valid"] is True and problems("patchmanagement")["will_disable"] == [], "a finished job is already in the live state, not overlaid")
+# the other order: a queued enable of the replacement makes enabling the core module a conflict
+(jobs / "a.json").write_text(_json.dumps({"id": "a", "action": "enable", "plugin_id": "patchmanagement", "affected_modules": ["patchmanagement"], "status": "queued", "created_at": "2026-10-09T10:00:00"}), encoding="utf-8")
+result = problems("patching")
+must(not result["valid"] and result["problems"][0]["type"] == "replacement_conflict" and result["problems"][0]["replaced_by"] == "patchmanagement", result)
 print("[TEST] PASS pending-job enable recheck 1.17.9-1")

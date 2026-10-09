@@ -17,10 +17,26 @@ logger = logging.getLogger("tec_tac.module_runtime")
 _WARNED_MODULES: set[str] = set()
 
 
+def _conflicted_replacements(source, state) -> set[str]:
+    """Ids of the enabled replacements that sit next to their enabled replaced module. Never raises."""
+    try:
+        from .module_replacement import conflicted_replacements, live_model
+
+        return {replacement for replacement, _ in conflicted_replacements(live_model(source, state))}
+    except Exception:
+        logger.exception("Could not check for a replacement next to its module; reporting module state as stored.")
+        return set()
+
+
 def module_runtime_snapshot(plugins=None) -> list[dict]:
-    """Return one lightweight row for every installed extension/legacy plugin."""
+    """Return one lightweight row for every installed extension/legacy plugin.
+
+    1.17.11: ``replaces`` is the manifest's declared value (null for a module that declares none and for a legacy
+    plugin). A replacement that is enabled next to its enabled replaced module is reported as not enabled and not
+    active, because Core does not load its backend (AD-20)."""
     state = load_state()
     source = get_plugins() if plugins is None else plugins
+    conflicted = _conflicted_replacements(source, state)
     rows: list[dict] = []
     seen: set[str] = set()
     for plugin in source:
@@ -32,6 +48,8 @@ def module_runtime_snapshot(plugins=None) -> list[dict]:
         seen.add(module_id)
         legacy = bool(plugin.legacy or plugin.plugin_type == "legacy")
         enabled = True if legacy else bool(is_enabled(module_id, state))
+        if module_id in conflicted:
+            enabled = False
         if (
             enabled
             and not tuple(plugin.permission_groups or ())
@@ -51,6 +69,7 @@ def module_runtime_snapshot(plugins=None) -> list[dict]:
             "enabled": enabled,
             "active": enabled,
             "legacy": legacy,
+            "replaces": (str(getattr(plugin, "replaces", "") or "") or None) if not legacy else None,
         })
     rows.sort(key=lambda item: item["id"].lower())
     return rows

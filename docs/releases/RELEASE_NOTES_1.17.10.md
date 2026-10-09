@@ -17,7 +17,7 @@ Not included: checking a core module's registered version against its own declar
 
 ## Module-facing changes
 
-- **New runtime rule.** A core module that declares `capabilities` in `tec_tac.json` must register exactly those ids. Anything else is logged and not registered. A core module without the key is unaffected. A scan of `modules/` finds no manifest that declares the key today, so nothing changes for an installed module until Windows Patching and Advanced Patch Management add their keys.
+- **New runtime rule.** A core module that declares `capabilities` in `tec_tac.json` must register exactly those ids. Anything else is logged and not registered. A core module without the key is unaffected. Correction (1.17.11): the original sentence here said no manifest declares the key. That was wrong. Endpoints (`modules/endpoints/package/extensions/endpoints/tec_tac.json`) declares `"capabilities": {}` on a core module, so under this rule no capability id can be registered by Endpoints. That is harmless today because Endpoints registers none. Windows Patching and Advanced Patch Management do not declare the key yet, so nothing else changes for an installed module until they add theirs.
 - **New replacement rule.** A replacement must register a replaced capability at the declared major version with a minor.patch that is not lower. Anything else is logged and not registered.
 - **New status field.** `replacement_status(...)` and the `replacement` object on `GET /api/tfd/modules/v2/` rows carry `registered_mismatch` (a list, empty when all is well). Additive.
 - **Documentation only.** The two browser contract rows and the runtime-context rule describe the UI 0.12.87 contract. No HTTP contract, executor or permission changed.

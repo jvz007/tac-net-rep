@@ -11,6 +11,7 @@ from .module_manager import ModuleManagerError, discard_stage, get_job, list_job
 from .module_manager_v2 import (
     LicensingRequirementError,
     ModuleManagerV2Error,
+    ModuleReplacementConfirmationRequired,
     discard_v2_stage,
     installed_catalog_v2,
     queue_batch_install,
@@ -23,6 +24,17 @@ from .module_manager_v2 import (
 from .views import _can_manage_modules, _require_module_manager
 
 logger = logging.getLogger(__name__)
+
+
+def _disable_replaced(request):
+    """The optional ``disable_replaced`` list from the request: None when absent, else a list of module id strings.
+    Raises ModuleManagerV2Error (a refusal, HTTP 400) for anything else."""
+    value = request.data.get("disable_replaced")
+    if value is None:
+        return None
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise ModuleManagerV2Error("disable_replaced must be an array of module IDs.")
+    return value
 
 
 @extend_schema_view(get=extend_schema(tags=["Tec-Tac Framework"], summary="List Module Management v2 catalog"))
@@ -89,10 +101,15 @@ class ModuleV2InstallView(APIView):
             order = request.data.get("order")
             if order is not None and not isinstance(order, list):
                 return Response({"detail": "order must be an array of module IDs."}, status=400)
-            job = queue_batch_install(str(upload_id), requested_order=order, requested_by=str(request.user.username)) if kind == "batch" else queue_v2_install(str(upload_id), requested_order=order, requested_by=str(request.user.username))
+            disable_replaced = _disable_replaced(request)
+            queue = queue_batch_install if kind == "batch" else queue_v2_install
+            job = queue(str(upload_id), requested_order=order, requested_by=str(request.user.username),
+                        disable_replaced=disable_replaced, actor=request.user)
             return Response(job, status=202)
         except LicensingRequirementError as exc:
             return Response(exc.as_payload(), status=403)
+        except ModuleReplacementConfirmationRequired as exc:
+            return Response(exc.as_payload(), status=400)
         except (ModuleManagerError, ModuleManagerV2Error) as exc:
             return Response({"detail": str(exc)}, status=400)
 
@@ -106,7 +123,11 @@ class ModuleV2StateView(APIView):
         if not isinstance(enabled, bool):
             return Response({"detail": "enabled must be true or false."}, status=400)
         try:
-            return Response(queue_set_enabled(plugin_id, enabled, cascade=cascade, requested_by=str(request.user.username)), status=202)
+            disable_replaced = _disable_replaced(request)
+            return Response(queue_set_enabled(plugin_id, enabled, cascade=cascade, requested_by=str(request.user.username),
+                                              disable_replaced=disable_replaced, actor=request.user), status=202)
+        except ModuleReplacementConfirmationRequired as exc:
+            return Response(exc.as_payload(), status=400)
         except (ModuleManagerError, ModuleManagerV2Error) as exc:
             return Response({"detail": str(exc)}, status=400)
 

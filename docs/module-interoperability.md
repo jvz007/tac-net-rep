@@ -81,7 +81,7 @@ A framework service becomes part of the Tec-Tac module-development contract and 
 
 ## Replacing a core module (AD-20)
 
-A module that is not a core module can replace one core module (Advanced Patch Management replaces Windows Patching). Consumers still call the capability by name and get whichever module is installed. They do not list the replacement as a dependency, and a hard `dependencies` entry on the replaced module's id is not satisfied by its replacement. See `docs/module-replacement.md` for the manifest keys `replaces` and `capabilities`, when Core honours a replacement, and what Core refuses.
+A module that is neither a core nor a server module can replace one core or server module (Advanced Patch Management replaces Windows Patching). Consumers still call the capability by name and get whichever module is installed. They do not need to list the replacement as a dependency: since 1.17.11 an honoured replacement satisfies a hard `dependencies` entry on the replaced module's id, and the version constraint still applies to the replaced module's own version. See `docs/module-replacement.md` for the manifest keys `replaces` and `capabilities`, when Core honours a replacement, what Core disables when one is enabled, and what Core refuses.
 
 ## Soft-failure requirement
 

@@ -125,16 +125,16 @@ def _replacement_may_register(owner: str, capability_id: str) -> bool:
 
 def _core_module_may_register(owner: str, capability_id: str) -> bool:
     """1.17.10 (AD-20): a core module whose manifest declares ``capabilities`` registers exactly what it declares.
-    A core module with no ``capabilities`` key is unchanged. If the model cannot be read the registration is allowed
-    (the enable and install checks cover the manifest side)."""
+    1.17.11: the same for a server module. A module with no ``capabilities`` key is unchanged. If the model cannot be
+    read the registration is allowed (the enable and install checks cover the manifest side)."""
     try:
-        from .module_replacement import live_model
+        from .module_replacement import REPLACEABLE_CATEGORIES, live_model
 
         node = live_model().get(owner)
     except (ImportError, RegistryError, ModuleStateError, OSError, ValueError, KeyError) as exc:
         logger.warning("Could not read module state to check capability %r of %r; allowing it: %s", capability_id, owner, exc)
         return True
-    if node is None or node.category != "core" or node.capabilities is None:
+    if node is None or node.category not in REPLACEABLE_CATEGORIES or node.capabilities is None:
         return True
     return capability_id in node.capabilities
 
@@ -160,6 +160,15 @@ _REFUSAL_WARNED: set[tuple[str, str]] = set()
 def _unregistered(capability_id: str, owner: str, version, provider, description) -> CapabilityRegistration:
     return CapabilityRegistration(id=capability_id, module_id=owner, version=str(version or ""), provider=provider,
                                   description=str(description or "").strip())
+
+
+def _drop_own_registration(capability_id: str, owner: str) -> None:
+    """1.17.11: a refused registration also removes an earlier one of the same id by the same module, so the name really
+    stays capability-unavailable (accepted at 1.2.0, refused at 2.0.0). A registration owned by another module stays."""
+    with _CAPABILITY_LOCK:
+        existing = _CAPABILITIES.get(capability_id)
+        if existing is not None and existing.module_id == owner:
+            del _CAPABILITIES[capability_id]
 
 
 def _is_unhonoured_replacement_name(owner: str, capability_id: str) -> bool:
@@ -225,6 +234,7 @@ def register_capability(
             # both-enabled replacement. Warn and leave the name unregistered; the status API explains why.
             logger.warning("Module %r replaces a core module that is not replaced right now (both enabled, parity lost or "
                            "not enabled); capability %r is not registered.", owner, capability_id)
+            _drop_own_registration(capability_id, owner)
             return _unregistered(capability_id, owner, version, provider, description)
         else:
             raise ValueError(
@@ -234,8 +244,9 @@ def register_capability(
         # 1.17.10: same rule, same reason: warn once, register nothing, never raise out of ready().
         if (owner, capability_id) not in _REFUSAL_WARNED:
             _REFUSAL_WARNED.add((owner, capability_id))
-            logger.warning("Core module %r declares capabilities in its manifest but not %r; the capability is not registered.",
+            logger.warning("Core or server module %r declares capabilities in its manifest but not %r; the capability is not registered.",
                            owner, capability_id)
+        _drop_own_registration(capability_id, owner)
         return _unregistered(capability_id, owner, version, provider, description)
     cap_version = _validate_capability_version(version)
     if via_replacement:
@@ -249,6 +260,7 @@ def register_capability(
                 _REFUSAL_WARNED.add((owner, capability_id))
                 logger.warning("Replacement %r declares %r at %s but registered %s (%s); the capability is not registered.",
                                owner, capability_id, declared, registered, reason)
+            _drop_own_registration(capability_id, owner)
             return _unregistered(capability_id, owner, cap_version, provider, description)
         clear_registered_mismatch(owner, capability_id)
     if provider is None:
