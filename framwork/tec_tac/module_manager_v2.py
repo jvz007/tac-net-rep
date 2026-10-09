@@ -6,6 +6,7 @@ inspection while preserving the 1.3.x package lifecycle implementation.
 """
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import os
@@ -15,6 +16,7 @@ import uuid
 import zipfile
 from pathlib import Path
 
+from . import module_replacement
 from . import registry as registry_module
 from .capabilities import capability_status, get_capability
 from .module_manager import (
@@ -353,6 +355,17 @@ def _ui_default_visible(extension_root: Path) -> bool:
     return True
 
 
+def _replacement_metadata(payload: dict) -> dict:
+    """The AD-20 manifest keys, parsed with the registry's own rules (extensions only)."""
+    module_id = str(payload.get("id", "")).strip()
+    category = str(payload.get("category") or "").strip().lower()
+    try:
+        replaces, capabilities, declared = registry_module._replacement_keys(payload, "extension", module_id, category)
+    except registry_module.RegistryError as exc:
+        raise ModuleManagerV2Error(str(exc)) from exc
+    return {"replaces": replaces or None, "capabilities": dict(capabilities) if declared else None}
+
+
 def _extension_metadata(extension_root: Path) -> dict:
     payload = _read_json(extension_root / "tec_tac.json", "extension manifest")
     return {
@@ -366,6 +379,7 @@ def _extension_metadata(extension_root: Path) -> dict:
         "licensing": _licensing_metadata(payload),
         "migration": _identity_migration_metadata(payload, str(payload.get("id", "")).strip()),
         "default_visible": _ui_default_visible(extension_root),
+        **_replacement_metadata(payload),
     }
 
 
@@ -427,11 +441,18 @@ def installed_catalog_v2() -> list[dict]:
         for dep_id, constraint in meta.get("dependencies", {}).items():
             reverse.setdefault(dep_id, []).append({"id": module_id, "constraint": constraint})
 
+    try:
+        replacement_model = module_replacement.live_model(state=state)
+        replacement_rows = {row["module_id"]: row for row in module_replacement.replacement_status(model=replacement_model)}
+    except Exception:
+        replacement_model, replacement_rows = {}, {}
+
     result = []
     for item in base:
         item = dict(item)
         if item.get("legacy"):
-            item.update({"enabled": True, "visible": True, "dependencies": {}, "optional_dependencies": {}, "requires": {}, "dependants": []})
+            item.update({"enabled": True, "visible": True, "dependencies": {}, "optional_dependencies": {}, "requires": {}, "dependants": [],
+                         "replaces": None, "replacement": None, "replaced_by": None})
             result.append(item)
             continue
         meta = metadata.get(item["id"], {})
@@ -472,6 +493,9 @@ def installed_catalog_v2() -> list[dict]:
             "runtime_requirements": _check_runtime_requirements(meta.get("requires", {})),
             "metadata_error": meta.get("metadata_error"),
             "source": record.get("source"),
+            "replaces": item.get("replaces"),
+            "replacement": replacement_rows.get(item["id"]),
+            "replaced_by": module_replacement.replaced_by(item["id"], model=replacement_model) if replacement_model else None,
         })
         result.append(item)
     return result
@@ -493,6 +517,8 @@ def _package_metadata(archive: Path) -> dict:
         "runtime_requirements": _check_runtime_requirements(metadata["requires"]),
         "licensing": metadata.get("licensing", {"required": False}),
         "migration": metadata.get("migration", {}),
+        "replaces": metadata.get("replaces"),
+        "capabilities": metadata.get("capabilities"),
     })
     return preview
 
@@ -516,6 +542,24 @@ def _future_catalog(candidates: list[dict]) -> dict[str, dict]:
             "requires": candidate.get("requires", {}),
         }
     return current
+
+
+def _replacement_install_problems(candidates: list[dict], installed: dict[str, dict]) -> list[dict]:
+    """Replacement problems for this install plan (problem types replacement_conflict and replacement_incomplete)."""
+    try:
+        model = dict(module_replacement.live_model())
+    except Exception as exc:
+        return [{"type": "replacement_incomplete", "reason": "state-unreadable", "message": f"Module state could not be read: {exc}"}]
+    for candidate in candidates:
+        was = model.get(candidate["id"])
+        model[candidate["id"]] = module_replacement.Node(
+            id=candidate["id"],
+            category=str(candidate.get("category") or ""),
+            enabled=was.enabled if was is not None else True,
+            replaces=str(candidate.get("replaces") or ""),
+            capabilities=candidate.get("capabilities"),
+        )
+    return module_replacement.install_problems(model, [item["id"] for item in candidates], installed_ids=installed)
 
 
 def resolve_install_plan(candidates: list[dict]) -> dict:
@@ -591,6 +635,9 @@ def resolve_install_plan(candidates: list[dict]) -> dict:
                 "installed": bool(dep),
                 "satisfied": bool(dep and version_satisfies(dep.get("extension_version") or "0.0.0", constraint)),
             })
+
+    # AD-20: a replacement installs only next to a disabled core module it covers; never both enabled.
+    problems.extend(_replacement_install_problems(candidates, installed))
 
     # Existing enabled modules may also depend on a package being replaced.
     candidate_ids = set(ids)
@@ -1262,7 +1309,35 @@ def validate_enable(module_id: str) -> dict:
     for check in target.get("runtime_requirements") or []:
         if not check.get("satisfied"):
             problems.append({"type": "runtime", **check})
+    # AD-20: never enable a replacement next to its core module, nor a core module next to its enabled replacement.
+    # 1.17.9-1: queued enable/disable jobs not yet applied count as done, so two queued jobs cannot both pass.
+    problems.extend(module_replacement.enable_problems(_model_with_pending_jobs(module_replacement.live_model()), module_id))
     return {"valid": not problems, "problems": problems}
+
+
+def _model_with_pending_jobs(model: dict) -> dict:
+    """The live model with queued, dispatched or running enable/disable jobs applied in creation order."""
+    pending = []
+    try:
+        paths = list(JOBS_ROOT.glob("*.json")) if JOBS_ROOT.is_dir() else []
+    except OSError:
+        paths = []
+    for path in paths:
+        try:
+            job = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(job, dict) and job.get("action") in ("enable", "disable") and job.get("status") in ("queued", "dispatched", "running"):
+            pending.append(job)
+    pending.sort(key=lambda item: str(item.get("created_at") or ""))
+    out = dict(model)
+    for job in pending:
+        enabled = job.get("action") == "enable"
+        for mid in job.get("affected_modules") or [job.get("plugin_id")]:
+            node = out.get(str(mid))
+            if node is not None and node.enabled != enabled:
+                out[str(mid)] = dataclasses.replace(node, enabled=enabled)
+    return out
 
 
 def queue_set_enabled(module_id: str, enabled: bool, cascade: bool = False, requested_by: str | None = None) -> dict:
@@ -1276,6 +1351,9 @@ def queue_set_enabled(module_id: str, enabled: bool, cascade: bool = False, requ
     if enabled:
         validation = validate_enable(module_id)
         if not validation["valid"]:
+            replacement = [item for item in validation["problems"] if item.get("type") in ("replacement_conflict", "replacement_incomplete")]
+            if replacement:
+                raise ModuleManagerV2Error("Module cannot be enabled. " + " ".join(item["message"] for item in replacement))
             raise ModuleManagerV2Error("Module cannot be enabled until its dependencies and runtime requirements are satisfied.")
     else:
         dependants = _enabled_dependants(module_id)

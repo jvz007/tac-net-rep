@@ -12,11 +12,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import logging
 from threading import RLock
 from typing import Any, Callable
 
 from .module_state import ModuleStateError, is_enabled, version_satisfies
 from .registry import RegistryError, get_plugin
+
+logger = logging.getLogger(__name__)
 
 
 __all__ = [
@@ -107,6 +110,52 @@ def _validate_capability_version(value: str) -> str:
     return value
 
 
+def _replacement_may_register(owner: str, capability_id: str) -> bool:
+    """AD-20: the honoured replacement of a core module may register that module's capability names, and only the
+    ids it declares in its manifest capabilities. Fails closed on any error."""
+    try:
+        from .module_replacement import declared_capabilities, honoured_replacement, live_model
+
+        model = live_model()
+        replaced = honoured_replacement(owner, model=model)
+        return bool(replaced) and capability_id.startswith(replaced + ".") and capability_id in declared_capabilities(owner, model=model)
+    except Exception:
+        return False
+
+
+def _is_unhonoured_replacement_name(owner: str, capability_id: str) -> bool:
+    """True when owner declares ``replaces`` equal to the id's prefix and declares this id, so the id is a replacement's
+    name that is simply not honoured right now (both enabled, both disabled, parity lost). Fails closed (False)."""
+    try:
+        from .module_replacement import declared_capabilities, live_model
+
+        model = live_model()
+        node = model.get(owner)
+        return bool(node and node.replaces and capability_id.startswith(node.replaces + ".")
+                    and capability_id in declared_capabilities(owner, model=model))
+    except (ImportError, RegistryError, ModuleStateError, OSError, ValueError, KeyError):
+        return False
+
+
+def _registered_by_replacement(registration: CapabilityRegistration | None, capability_id: str) -> str | None:
+    """The replaced module's id when a replacement registered this capability (its id carries that module's prefix)."""
+    if registration is None or registration.module_id in ("tec-tac", "core"):
+        return None
+    if capability_id.startswith(registration.module_id + "."):
+        return None
+    return capability_id.split(".", 1)[0]
+
+
+def _honoured_replacement_of(module_id: str) -> str | None:
+    """The module that honourably replaces module_id right now, or None. Fails closed."""
+    try:
+        from .module_replacement import replaced_by
+
+        return replaced_by(module_id)
+    except Exception:
+        return None
+
+
 def register_capability(
     *,
     id: str,
@@ -128,7 +177,14 @@ def register_capability(
     owner = _clean_identifier(module_id, "Capability module_id")
     if "." not in capability_id:
         raise ValueError("Capability id must be namespaced, for example communicator.messaging.")
-    if owner != "tec-tac" and not capability_id.startswith(owner + "."):
+    if owner != "tec-tac" and not capability_id.startswith(owner + ".") and not _replacement_may_register(owner, capability_id):
+        if _is_unhonoured_replacement_name(owner, capability_id):
+            # 1.17.9-1: never raise out of a module's AppConfig.ready() for this: Core never stops Tactical for a
+            # both-enabled replacement. Warn and leave the name unregistered; the status API explains why.
+            logger.warning("Module %r replaces a core module that is not replaced right now (both enabled, parity lost or "
+                           "not enabled); capability %r is not registered.", owner, capability_id)
+            return CapabilityRegistration(id=capability_id, module_id=owner, version=str(version or ""), provider=provider,
+                                          description=str(description or "").strip())
         raise ValueError(
             f"Capability id {capability_id!r} must begin with provider module prefix {owner + '.'!r}."
         )
@@ -253,6 +309,7 @@ def capability_status(
     owner = registration.module_id if registration else str(module_id or capability_id.split(".", 1)[0]).strip()
 
     module_state, installed_version, module_reason = _provider_module_status(owner)
+    replaces = _registered_by_replacement(registration, capability_id)
     base = {
         "id": capability_id,
         "module_id": owner,
@@ -267,9 +324,27 @@ def capability_status(
         "reason": module_reason,
         "health": {},
         "health_checked": bool(check_health),
+        "replaces": replaces,
     }
 
     if module_state != "available":
+        honoured_by = _honoured_replacement_of(owner) if registration is None and module_state == "disabled" else None
+        if honoured_by:
+            base.update(
+                state="capability-unavailable",
+                reason=(
+                    f"Provider module {owner!r} is disabled and replaced by {honoured_by!r}, which has not registered "
+                    f"capability {capability_id!r} in this runtime."
+                ),
+            )
+        return base
+
+    if replaces and _honoured_replacement_of(replaces) != registration.module_id:
+        # Registered by a replacement that is no longer honoured (disabled, or the core module is enabled again).
+        base.update(
+            state="capability-unavailable",
+            reason=f"Module {registration.module_id!r} no longer replaces {replaces!r}, so it may not provide {capability_id!r}.",
+        )
         return base
 
     if registration is None:

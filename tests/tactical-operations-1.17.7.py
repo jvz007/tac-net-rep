@@ -269,7 +269,7 @@ class Request:
 # ------------------------------------------------------------------------------------------------ declarations
 def declare(**over):
     spec = dict(
-        id="reboot", module_id="agents", method="POST", route="agents/{agent_id}/reboot/", permissions=["can_reboot_agents"],
+        id="reboot", module_id="agents", method="POST", route="agents/{agent_id:agent}/reboot/", permissions=["can_reboot_agents"],
         scope=[{"type": "agent", "source": "path:agent_id"}], body_fields=["mode", "datetime"],
         audit={"action": "run", "object_type": "agent", "audit_fields": ["mode"]}, module_permission=None, message=None,
     )
@@ -304,7 +304,7 @@ for route in ("accounts/ssoproviders/", "accounts/", "api/tfd/modules/", "api/v3
               "logoutall/", "logout", "v2/login/", "agents/installer/", "agents/installer", "agents/installer/{x}/", "ACCOUNTS/x/", "Agents/Installer/"):
     refused(route=route, id=re.sub(r"[^a-z]", "", route.lower())[:20] or "x")
 must("Core's own" in refused(route="accounts/x/"), "the refusal names the reason")
-for route in ("agents/../x/", "agents/{agent_id}/..", "/agents/x/", "agents//x/", "agents/{agent id}/", "agents/%2e/x/", "agents/x?y=1", "{x}/reboot/",
+for route in ("agents/../x/", "agents/{agent_id:agent}/..", "/agents/x/", "agents//x/", "agents/{agent id}/", "agents/%2e/x/", "agents/x?y=1", "{x}/reboot/",
               "api/{x}/reboot/", "agents/{agent_id:float}/", "agents/{Agent}/", "agents/{a}/{a}/", "", "agents/ /", "agents\\x/", "agents/x#y", "a/" * 13):
     refused(route=route, id="badroute")
 refused(method="TRACE")
@@ -318,7 +318,7 @@ refused(module_id="oldmod")
 refused(module_id="offmod")
 # 1.17.7-1: only the core module that owns the Tactical group may declare in it (AD-19 condition 1)
 must("not a core module" in refused(module_id="premiumdemo", id="premreboot"), "a premium module (category '') is refused")
-refused(module_id="premiumdemo", id="premcmd", route="agents/{agent_id}/cmd/")
+refused(module_id="premiumdemo", id="premcmd", route="agents/{agent_id:agent}/cmd/")
 refused(module_id="premiumdemo", id="premcodesign", method="PUT", route="core/codesign/", permissions=["can_code_sign"], scope=[], body_fields=["token"],
         audit={"action": "modify", "object_type": "code_signing_token", "audit_fields": []})  # the exception is Licensing's alone
 must("does not own route" in refused(module_id="reportmanager", id="rmreboot"), "a core module outside its group is refused")
@@ -369,15 +369,15 @@ must(ops.list_operations() == [], "no refused declaration left a trace")
 first = declare()
 must(first.id == "reboot" and first.module_id == "agents" and first.method == "POST", first)
 must(declare() is first, "the identical operation again is idempotent")
-refused(id="reboot", route="agents/{agent_id}/reboot-now/")  # same (module, id), different definition
+refused(id="reboot", route="agents/{agent_id:agent}/reboot-now/")  # same (module, id), different definition
 refused(id="reboot2", route="agents/{other_name}/reboot/")  # same (method, route), another parameter name
 refused(id="reboot3", module_id="reportmanager")  # a second module cannot take the same route (not its group, so it never gets that far)
 refused(id="reboot4", module_id="premiumdemo")  # a premium module cannot take a route away from its owner
-declare(id="reboot-get", method="GET", route="agents/{agent_id}/reboot/", body_fields=[], audit={"action": "view", "object_type": "agent"})  # another method: fine
+declare(id="reboot-get", method="GET", route="agents/{agent_id:agent}/reboot/", body_fields=[], audit={"action": "view", "object_type": "agent"})  # another method: fine
 must([row["id"] for row in ops.list_operations("agents")] == ["reboot", "reboot-get"], ops.list_operations())
 must(ops.get_operation("agents", "reboot")["permissions"] == ["can_reboot_agents"] and ops.get_operation("agents", "nope") is None, "lookup")
 described = ops.get_operation("agents", "reboot")
-must(described["route"] == "agents/{agent_id}/reboot/" and described["params"] == {"agent_id": "str"}, described)
+must(described["route"] == "agents/{agent_id:agent}/reboot/" and described["params"] == {"agent_id": "agent"}, described)
 must(described["scope"] == [{"type": "agent", "source": "path:agent_id"}] and described["audit"]["audit_fields"] == ["mode"], described)
 json.dumps(described)
 # a module_permission must be a registered Tec-Tac codename
@@ -610,7 +610,12 @@ route(CODESIGN_PATH, FakeResponse(200, b'{"token": "x"}'))
 route("/agents/maintenance/bulk/", FakeResponse(200, b'"ok"'))
 route(f"/agents/{AGENT}/notes/", FakeResponse(200, b'"ok"'))
 # a parameter value cannot steer a path into a forbidden route
+# 1.17.9: an untyped parameter here is refused at registration now (it can hold a route word), so register past the owner check
+# to prove the dispatch-time path check on its own.
+_owner_check = ops._check_route_owner
+ops._check_route_owner = lambda *args, **kwargs: None
 declare(id="inspect", method="GET", route="agents/{name}/notes/", permissions=["can_reboot_agents"], scope=[], body_fields=[], audit={"action": "view", "object_type": "agent"})
+ops._check_route_owner = _owner_check
 for name in ("installer", "Installer"):
     refusal(lambda: run(operation="inspect", params={"name": name}), 404, "tactical_operation_not_found")
 must(not CALLS, "the concrete path is checked again")
@@ -631,7 +636,7 @@ must(row["after_value"] == {"mode": "now"}, "only audit_fields are copied into a
 info = row["debug_info"]
 must(info["module_id"] == "agents" and info["module_version"] == "0.1.2" and info["object_id"] == AGENT, info)
 must(info["operation_context"] == {"server_provenance": "tactical-operation", "operation": "reboot", "tactical_status": 200}, info)
-must(info["metadata"] == {"operation": "reboot", "method": "POST", "route": "agents/{agent_id}/reboot/", "tactical_status": 200}, info["metadata"])
+must(info["metadata"] == {"operation": "reboot", "method": "POST", "route": "agents/{agent_id:agent}/reboot/", "tactical_status": 200}, info["metadata"])
 must(info["actor_kind"] == "human" and info["correlation_id"] == "req-1", info)
 must(result.audit == {"recorded": True, "id": 7, "action": "run"}, result.audit)
 must(row["message"] == "Core ran Tactical operation reboot.", row)
@@ -646,7 +651,7 @@ del ROWS[:]
 must(run(user=signing_role_user, module="licensing", operation="codesign-view").status == 200, "ran")
 must(len(ROWS) == 1 and ROWS[0]["action"] == "view" and ROWS[0]["username"] == "flagonly", ROWS)  # GET with action view writes a row
 # a custom message
-declare(id="noted", method="POST", route="agents/{agent_id}/notes/", permissions=["can_manage_notes"], scope=[{"type": "agent", "source": "path:agent_id"}],
+declare(id="noted", method="POST", route="agents/{agent_id:agent}/notes/", permissions=["can_manage_notes"], scope=[{"type": "agent", "source": "path:agent_id"}],
         body_fields=["note"], audit={"action": "add", "object_type": "agent_note", "audit_fields": []}, message="Core added an agent note.")
 route(f"/agents/{AGENT}/notes/", FakeResponse(200, b'"ok"'))
 del ROWS[:]

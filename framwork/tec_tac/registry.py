@@ -15,6 +15,7 @@ do not own permissions.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -28,7 +29,7 @@ SUPPORTED_TYPES = frozenset({"extension", "reportset"})
 SUPPORTED_KEYS = frozenset({
     "id", "type", "version", "python_paths", "django_apps", "permission_groups",
     "dependencies", "optional_dependencies", "requires", "licensing", "migration",
-    "publisher_permissions", "name", "category", "audit_events",
+    "publisher_permissions", "name", "category", "audit_events", "replaces", "capabilities",
 })
 # Object types core.resources can scope-check for the browser audit writer. Any other
 # lowercase slug may be declared since 1.17.0, but carries no scope check (see docs/module-audit.md).
@@ -36,6 +37,9 @@ SCOPE_CHECKED_OBJECT_TYPES = ("client", "site", "agent")
 AUDIT_EVENT_OBJECT_TYPES = SCOPE_CHECKED_OBJECT_TYPES  # alias kept for importers of the 1.16.0 name
 AUDIT_EVENT_MAX_ENTRIES = 20
 AUDIT_EVENT_MAX_ACTIONS = 20
+CAPABILITY_MAX_ENTRIES = 200
+_CAPABILITY_ID_RE = re.compile(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)+$")
+_CAPABILITY_VERSION_RE = re.compile(r"^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$")
 
 class RegistryError(RuntimeError):
     """Raised when Tec-Tac plugin metadata is invalid."""
@@ -54,6 +58,14 @@ class PluginSpec:
     category: str = ""
     legacy: bool = False
     audit_events: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    # AD-20 (1.17.9): the one core module this module replaces, and the public contracts it declares (id, X.Y.Z).
+    # ``capabilities_declared`` tells an absent key from an empty one, so a core module cannot hide a contract.
+    replaces: str = ""
+    capabilities: tuple[tuple[str, str], ...] = ()
+    capabilities_declared: bool = False
+
+    def capability_map(self) -> dict[str, str]:
+        return dict(self.capabilities)
 
     def permission_group_map(self) -> dict[str, tuple[str, ...]]:
         return dict(self.permission_groups)
@@ -163,6 +175,47 @@ def _publisher_permissions(payload: dict, plugin_type: str, plugin_id: str) -> t
     return values
 
 
+def _replacement_keys(payload: dict, plugin_type: str, plugin_id: str, category: str) -> tuple[str, tuple[tuple[str, str], ...], bool]:
+    """Parse the optional AD-20 keys ``replaces`` and ``capabilities`` (extensions only).
+
+    ``replaces`` names one core module. It is refused on a core module and on the module itself. Whether the target is
+    installed and is a core module is checked where the installed set is known (module_replacement.py), not here.
+    ``capabilities`` maps a capability id to an X.Y.Z version: the public contracts the module publishes, declared
+    statically because a disabled module's code is never loaded.
+    """
+    has_replaces, has_caps = "replaces" in payload, "capabilities" in payload
+    if not (has_replaces or has_caps):
+        return "", (), False
+    if plugin_type != "extension":
+        raise RegistryError(f"Reportset {plugin_id!r} may not declare replaces or capabilities; they belong to the extension.")
+    replaces = ""
+    if has_replaces:
+        raw = payload["replaces"]
+        if not isinstance(raw, str) or not raw.strip():
+            raise RegistryError("Manifest key 'replaces' must be the ID of one core module.")
+        replaces = _safe_plugin_id(raw)
+        if replaces == plugin_id:
+            raise RegistryError(f"Plugin {plugin_id!r} may not replace itself.")
+        if category == "core":
+            raise RegistryError(f"Core module {plugin_id!r} may not declare replaces; only a module that is not a core module can replace one.")
+    capabilities: list[tuple[str, str]] = []
+    if has_caps:
+        raw = payload["capabilities"]
+        if not isinstance(raw, dict):
+            raise RegistryError("Manifest key 'capabilities' must be a JSON object of capability id to X.Y.Z version.")
+        if len(raw) > CAPABILITY_MAX_ENTRIES:
+            raise RegistryError(f"Manifest capabilities may not contain more than {CAPABILITY_MAX_ENTRIES} entries.")
+        for cap_id, cap_version in raw.items():
+            if not isinstance(cap_id, str) or not _CAPABILITY_ID_RE.match(cap_id):
+                raise RegistryError(f"Manifest capabilities id {cap_id!r} must be a namespaced id such as patching.windows.")
+            if not isinstance(cap_version, str) or not _CAPABILITY_VERSION_RE.match(cap_version):
+                raise RegistryError(f"Manifest capabilities version for {cap_id!r} must look like 1.0.0.")
+            if category == "core" and not cap_id.startswith(plugin_id + "."):
+                raise RegistryError(f"Capability {cap_id!r} must begin with the core module ID prefix {plugin_id + '.'!r}.")
+            capabilities.append((cap_id, cap_version))
+    return replaces, tuple(sorted(capabilities)), has_caps
+
+
 def _identity_migration(payload: dict, plugin_type: str, plugin_id: str) -> dict:
     raw = payload.get("migration")
     if raw in (None, {}):
@@ -245,7 +298,8 @@ def _load_manifest(plugin_type: str, plugin_dir: Path) -> PluginSpec | None:
     permission_groups = _permission_groups(payload, plugin_type, plugin_id)
     publisher_permissions = _publisher_permissions(payload, plugin_type, plugin_id)
     audit_events = _audit_events(payload, plugin_type, plugin_id)
-    return PluginSpec(plugin_id=plugin_id, plugin_type=plugin_type, root=plugin_root, version=version, python_paths=tuple(python_paths), django_apps=django_apps, permission_groups=permission_groups, publisher_permissions=publisher_permissions, name=name, category=category, audit_events=audit_events)
+    replaces, capabilities, capabilities_declared = _replacement_keys(payload, plugin_type, plugin_id, category)
+    return PluginSpec(plugin_id=plugin_id, plugin_type=plugin_type, root=plugin_root, version=version, python_paths=tuple(python_paths), django_apps=django_apps, permission_groups=permission_groups, publisher_permissions=publisher_permissions, name=name, category=category, audit_events=audit_events, replaces=replaces, capabilities=capabilities, capabilities_declared=capabilities_declared)
 
 def _discover_root(plugin_type: str, root: Path) -> list[PluginSpec]:
     if not root.exists():

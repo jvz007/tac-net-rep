@@ -79,6 +79,10 @@ Examples include the Scheduler, the 1.9.0 capability registry, and future shared
 
 A framework service becomes part of the Tec-Tac module-development contract and should be consumed through its documented framework interface.
 
+## Replacing a core module (AD-20)
+
+A module that is not a core module can replace one core module (Advanced Patch Management replaces Windows Patching). Consumers still call the capability by name and get whichever module is installed. They do not list the replacement as a dependency, and a hard `dependencies` entry on the replaced module's id is not satisfied by its replacement. See `docs/module-replacement.md` for the manifest keys `replaces` and `capabilities`, when Core honours a replacement, and what Core refuses.
+
 ## Soft-failure requirement
 
 **Inter-module failures are feature failures, not product failures.**

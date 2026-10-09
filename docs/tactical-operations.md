@@ -31,7 +31,7 @@ register_tactical_operation(
     "reboot",                                  # id: lowercase slug, unique for the module
     "agents",                                  # module_id: the owning core module
     "POST",
-    "agents/{agent_id}/reboot/",               # a Tactical route template, never a free path
+    "agents/{agent_id:agent}/reboot/",         # a Tactical route template, never a free path
     ["can_reboot_agents"],                     # Tactical Role flags. All are required.
     [{"type": "agent", "source": "path:agent_id"}],
     ["mode", "datetime"],                      # body_fields: the only JSON keys allowed
@@ -56,7 +56,7 @@ register_tactical_operation(
 
 ### Who may declare where
 
-Since 1.17.8 ownership is per route, not per Tactical group. Core holds an ordered table of route prefixes (`ROUTE_OWNERS` in `tec_tac/tactical_operations.py`; Core-internal, not a module contract). A `{}` stands for a parameter segment. Core finds the longest prefix a route starts with and applies only that rule, so a sub-route homed elsewhere cannot be claimed through its group. An empty owner means the prefix is Core's own, or no core module owns it yet: every module is refused. The table follows the function map (`reviews/modules/tactical-function-map.json`), AD-11, AD-16 and AD-18.
+Since 1.17.8 ownership is per route, not per Tactical group. Core holds an ordered table of route prefixes (`ROUTE_OWNERS` in `tec_tac/tactical_operations.py`; Core-internal, not a module contract). A `{}` stands for a parameter segment. Core finds the longest prefix a route starts with and applies only that rule, so a sub-route homed elsewhere cannot be claimed through its group. One rule, `agents/{}/{}/webvnc/`, names a single route and matches only a path of exactly that length, so `agents/<id>/eventlog/webvnc/<days>/` stays the eventlog route. An empty owner means the prefix is Core's own, or no core module owns it yet: every module is refused. The table follows the function map (`reviews/modules/tactical-function-map.json`), AD-11, AD-16 and AD-18.
 
 | Route prefix | Who may declare |
 | --- | --- |
@@ -85,11 +85,17 @@ Since 1.17.8 ownership is per route, not per Tactical group. Core holds an order
 | `services/` | `remote-background` |
 | `winupdate/` | `patching` |
 
-Endpoints is the technician workspace. It composes what other modules publish, so it owns no route and declares no operation. Core refuses a non-owner when it registers, so a module outside its home cannot take a route first and block the owner on the one-caller rule. Core still re-checks the stored operation at dispatch.
+Endpoints is the technician workspace. It composes what other modules publish, so it owns no route and declares no operation. Core refuses a non-owner when it registers, so a module outside its home cannot take a route first and block the owner on the one-caller rule.
+
+**Parameter kinds decide what a route can reach (1.17.9).** A parameter can hold any value, so Core judges a template by every route it can land on. A parameter of kind `agent` (21 characters or more) or `int` (digits) can never hold a route word such as `registry` or `update`, so it only ever stands for an ordinary value. A plain `{name}` parameter can hold a route word, including one with more route after it: `agents/{agent_id:agent}/{p}/create-key/` can be `agents/<id>/registry/create-key/`, which is Remote Background's, so Agents is refused. Declare an agent id as `{agent_id:agent}`.
+
+**Core re-checks ownership at dispatch (1.17.9).** After the concrete path is built, Core finds the rule that path lands on and answers 404 `tactical_operation_not_found` unless the operation's module is an owner of that rule (or the named Licensing exception). Core reads the owner table and module state again, so an operation that slipped into the registry in this process cannot reach another module's route, and a replacement's operation stops working the moment it is no longer honoured, before any restart.
+
+**A replacement joins the replaced module's rules (AD-20, 1.17.9).** A module that is not a core module may declare `replaces = "<core module id>"` in its manifest. While Core honours that (see `docs/module-replacement.md`), the replacement is an owner of every rule the replaced core module owns, and of no other. For Windows Patching that is `winupdate/` and `automation/patchpolicy/`. Core's own rules, a rule with no owner, and every rule the replaced module does not own stay refused. The moment the replacement is disabled, or the core module is enabled again, the replacement is refused again. A premium module with no declared and honoured `replaces` is still refused.
 
 ### What Core refuses at registration
 
-- A module that is not a core module, and a core module declaring a route it does not own (table below). A route the table does not list is refused until a Core release adds it. A premium module that replaces a core module 100% is not yet accepted: see `reviews/questions/core.md` (CQ21).
+- A module that is not a core module (bar Licensing's named exception and an honoured replacement, AD-20), and a core module declaring a route it does not own (table above). A route the table does not list is refused until a Core release adds it. A route a plain `{name}` parameter could steer onto a route another module owns.
 - A route under `accounts/`, `api/tfd/`, `api/v3/`, `api/v4/`, `_allauth/`, `logout`, `logoutall`, `v2/` or `agents/installer`. Those are Core's own or agent-facing. A parameter value can never reach them either.
 - `..`, a leading slash, a query string, a percent sign, or anything outside the route grammar.
 - A second operation on the same method and route, even with a different parameter name. This enforces "one caller per Tactical route" (AD-6 condition 4) at run time. Registering the identical operation again changes nothing.

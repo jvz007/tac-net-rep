@@ -175,7 +175,7 @@ def _parse_route(route: Any) -> tuple[tuple, bool]:
     if route != route.strip() or len(route) > _MAX_ROUTE_LENGTH:
         raise TacticalOperationRegistrationError("route has stray space or is too long.")
     if route.startswith("/") or "\\" in route or "?" in route or "#" in route or "%" in route or "//" in route:
-        raise TacticalOperationRegistrationError("route must be a relative Tactical route template such as agents/{agent_id}/reboot/.")
+        raise TacticalOperationRegistrationError("route must be a relative Tactical route template such as agents/{agent_id:agent}/reboot/.")
     trailing = route.endswith("/")
     raw = route.rstrip("/").split("/")
     if not raw or len(raw) > _MAX_SEGMENTS or any(not part for part in raw):
@@ -290,15 +290,48 @@ _ROUTE_OWNER_RULES = (
 ROUTE_OWNERS: dict[tuple, frozenset] = {prefix: frozenset(owners) for prefix, owners in _ROUTE_OWNER_RULES}
 
 # The named exceptions to "category core only": (module id, rule prefix). Licensing is a server module and owns
-# Tactical's code-signing route (AD-16, AD-17). A premium module that replaces a core module 100% is not listed: Core
-# has no signal yet that says it is the one installed (reviews/questions/core.md, 9 October 2026).
+# Tactical's code-signing route (AD-16, AD-17). A module that replaces a core module is not listed here: since 1.17.9
+# (AD-20) Core asks module_replacement whether the replacement is honoured right now, and the replacement then joins
+# the owners of every rule the replaced core module owns, and of no other.
 CATEGORY_EXCEPTIONS: frozenset = frozenset({("licensing", ("core", "codesign"))})
+
+
+def _honoured_pairs() -> dict[str, str]:
+    """{replacement module id: replaced core module id} for every replacement honoured right now (AD-20). Fails closed."""
+    try:
+        from . import module_replacement
+
+        model = module_replacement.live_model()
+        pairs = {}
+        for node in model.values():
+            if node.replaces:
+                replaced = module_replacement.honoured_replacement(node.id, model=model)
+                if replaced:
+                    pairs[node.id] = replaced
+        return pairs
+    except Exception:
+        logger.exception("Could not read module replacement state; no replacement is honoured for Tactical operations.")
+        return {}
+
+
+def _owners_for_rule(rule: tuple, pairs: dict[str, str] | None = None) -> frozenset:
+    """The module ids that may own ``rule``: the table's owners plus any honoured replacement of one of them (AD-20)."""
+    owners = ROUTE_OWNERS.get(rule, frozenset())
+    pairs = _honoured_pairs() if pairs is None else pairs
+    return owners | frozenset(module for module, replaced in pairs.items() if replaced in owners)
+
+
+# Rules that name one Tactical route and not a family of routes below a prefix: only a path of exactly that length
+# lands on them. webvnc is agents/<id>/<port>/webvnc/, so agents/<id>/eventlog/webvnc/<days>/ is the eventlog route.
+EXACT_RULES: frozenset = frozenset({("agents", "{}", "{}", "webvnc")})
 
 
 def _matching_rule(literal: list[str]) -> tuple | None:
     """The longest rule prefix the route starts with, or None. A "{}" in a rule matches any one segment."""
     best = None
     for prefix in ROUTE_OWNERS:
+        if prefix in EXACT_RULES and len(prefix) != len(literal):
+            continue
         if len(prefix) <= len(literal) and all(want == "{}" or want == have for want, have in zip(prefix, literal)) and (
             best is None or len(prefix) > len(best)
         ):
@@ -306,29 +339,27 @@ def _matching_rule(literal: list[str]) -> tuple | None:
     return best
 
 
-def _expansion_rules(literal: list[str]) -> list[tuple]:
-    """Every rule a concrete path built from this template can land on (1.17.8-1).
+def _expansion_rules(segments: tuple) -> list[tuple]:
+    """Every rule a concrete path built from this template can land on (1.17.8-1, parameter kinds since 1.17.9).
 
     A parameter segment can hold any value, so ``agents/{x}/`` reaches ``agents/update/`` as well as ``agents/<id>/``.
-    Each parameter is tried as every literal a rule has at that position and as a value no rule names. The longest
-    matching rule of each expansion decides, exactly as it does at dispatch. An expansion that fills a parameter with a
-    route word and then runs on past the rule (``agents/update/reboot/``) is an id value, not that route, and is skipped.
+    A parameter of kind ``agent`` (21 or more characters) or ``int`` (digits) can never hold a route word, so its only
+    expansion is the ordinary value. A plain ``str`` parameter is tried as every literal a rule has at that position and
+    as a value no rule names, including expansions that run on past the matched rule (``agents/{a}/{p}/create-key/``
+    reaches ``agents/<id>/registry/``). The longest matching rule of each expansion decides, exactly as it does at dispatch.
     """
     options = []
-    for index, part in enumerate(literal):
-        if part == "{}":
+    for index, seg in enumerate(segments):
+        if seg[0] == "lit":
+            options.append([seg[1].lower()])
+        elif seg[2] in ("agent", "int"):
+            options.append(["*other*"])
+        else:
             names = {rule[index] for rule in ROUTE_OWNERS if len(rule) > index and rule[index] != "{}"}
             options.append(sorted(names) + ["*other*"])
-        else:
-            options.append([part])
     found: dict[tuple, None] = {}
     for combo in itertools.product(*options):
-        rule = _matching_rule(list(combo))
-        if rule is not None and len(rule) < len(combo) and any(
-            literal[i] == "{}" and combo[i] != "*other*" for i in range(len(rule))
-        ):
-            continue  # a parameter that names a route word, with more route after it: an id value, not that route
-        found[rule] = None
+        found[_matching_rule(list(combo))] = None
     return list(found)
 
 
@@ -336,9 +367,10 @@ def _check_route_owner(module: dict, segments: tuple, route: str = "") -> None:
     """Refuse a route the module does not own: a non-core module, or a core module outside the owner rule of any path the route can reach."""
     owner = module["id"]
     literal = [seg[1].lower() if seg[0] == "lit" else "{}" for seg in segments]
-    rules = _expansion_rules(literal)
+    rules = _expansion_rules(segments)
     shown = "/".join(literal) if not route else route
-    if module.get("category") != "core" and not all((owner, rule) in CATEGORY_EXCEPTIONS for rule in rules):
+    pairs = _honoured_pairs()
+    if module.get("category") != "core" and owner not in pairs and not all((owner, rule) in CATEGORY_EXCEPTIONS for rule in rules):
         raise TacticalOperationRegistrationError(
             f"module {owner!r} is not a core module. Only the core module that owns a Tactical route can declare its operations."
         )
@@ -349,6 +381,8 @@ def _check_route_owner(module: dict, segments: tuple, route: str = "") -> None:
             )
         owners = ROUTE_OWNERS[rule]
         rule_text = "/".join(rule) + "/"
+        if owners and pairs.get(owner) in owners:
+            continue  # AD-20: the honoured replacement joins the rules of the module it replaces
         if not owners:
             raise TacticalOperationRegistrationError(
                 f"route {shown!r} is Core's own or no core module owns it yet (rule {rule_text}). No module may declare it."
@@ -539,6 +573,14 @@ def _lookup(module_id: Any, operation_id: Any) -> TacticalOperation:
         module = None
     if module is None or module.get("legacy"):
         raise _fail("not_found", 404, "tactical_operation_not_found")
+    # A replacement's operation stays dead once its replacement is no longer honoured (AD-20), even in a process
+    # that registered it before the operator changed module state.
+    if (
+        module.get("category") != "core"
+        and operation.module_id not in {name for name, _ in CATEGORY_EXCEPTIONS}
+        and operation.module_id not in _honoured_pairs()
+    ):
+        raise _fail("not_found", 404, "tactical_operation_not_found")
     return operation
 
 
@@ -705,6 +747,20 @@ def _concrete_path(operation: TacticalOperation, params: dict[str, str]) -> str:
     return "/" + "/".join(parts) + ("/" if operation.trailing_slash else "")
 
 
+def _recheck_route_owner(operation: TacticalOperation, path: str) -> None:
+    """Defence in depth: the module must own the rule that the concrete path lands on, whatever registration let through.
+
+    Core re-reads the owner table and the honoured replacements here, so an operation registered in-process still cannot
+    reach another module's route, nor a route its replacement no longer owns.
+    """
+    parts = [part.lower() for part in path.strip("/").split("/")]
+    rule = _matching_rule(parts)
+    if rule is not None and ((operation.module_id, rule) in CATEGORY_EXCEPTIONS or operation.module_id in ROUTE_OWNERS[rule]):
+        return
+    if rule is None or operation.module_id not in _owners_for_rule(rule):
+        raise TacticalOperationError(MESSAGES["not_found"], status=404, code="tactical_operation_not_found")
+
+
 def _after_values(operation: TacticalOperation, body: dict) -> dict | None:
     if not operation.audit_fields:
         return None
@@ -767,6 +823,7 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
     from django.urls import resolve  # 7.
 
     path = _concrete_path(operation, params)
+    _recheck_route_owner(operation, path)
     try:
         match = resolve(path)
     except Exception:

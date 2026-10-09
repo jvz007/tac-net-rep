@@ -78,31 +78,31 @@ for route in ("core/openai/generate/", "core/dashinfo/", "core/unlisted/", "core
 
 # ---- agents/ sub-routes
 fresh()
-ok("take-control", "vnc", "agents/{agent_id}/{port}/webvnc/")
-no("take-control", "vnc-reboot", "agents/{agent_id}/reboot/", "POST")
-no("take-control", "vnc-cmd", "agents/{agent_id}/cmd/", "POST")
+ok("take-control", "vnc", "agents/{agent_id:agent}/{port}/webvnc/")
+no("take-control", "vnc-reboot", "agents/{agent_id:agent}/reboot/", "POST")
+no("take-control", "vnc-cmd", "agents/{agent_id:agent}/cmd/", "POST")
 for mod in ("agents", "remote-background", "endpoints", "agent-management"):
-    no(mod, "vnc-" + mod, "agents/{agent_id}/{port}/webvnc/")
-ok("remote-background", "cmd", "agents/{agent_id}/cmd/", "POST")
-no("remote-background", "rb-reboot", "agents/{agent_id}/reboot/", "POST")
-no("remote-background", "rb-vnc", "agents/{agent_id}/{port}/webvnc/")
-ok("scriptexecution", "run", "agents/{agent_id}/runscript/", "POST")
-no("scriptexecution", "se-reboot", "agents/{agent_id}/reboot/", "POST")
-no("scriptexecution", "se-cmd", "agents/{agent_id}/cmd/", "POST")
-ok("agents", "reboot", "agents/{agent_id}/reboot/", "POST")
-ok("agents", "wol", "agents/{agent_id}/wol/", "POST")
+    no(mod, "vnc-" + mod, "agents/{agent_id:agent}/{port}/webvnc/")
+ok("remote-background", "cmd", "agents/{agent_id:agent}/cmd/", "POST")
+no("remote-background", "rb-reboot", "agents/{agent_id:agent}/reboot/", "POST")
+no("remote-background", "rb-vnc", "agents/{agent_id:agent}/{port}/webvnc/")
+ok("scriptexecution", "run", "agents/{agent_id:agent}/runscript/", "POST")
+no("scriptexecution", "se-reboot", "agents/{agent_id:agent}/reboot/", "POST")
+no("scriptexecution", "se-cmd", "agents/{agent_id:agent}/cmd/", "POST")
+ok("agents", "reboot", "agents/{agent_id:agent}/reboot/", "POST")
+ok("agents", "wol", "agents/{agent_id:agent}/wol/", "POST")
 ok("agents", "pend", "logs/pendingactions/{id:int}/", "DELETE")
 ok("agents", "pend-list", "logs/pendingactions/")
-no("agents", "a-cmd", "agents/{agent_id}/cmd/", "POST")
-no("agents", "a-vnc", "agents/{agent_id}/{port}/webvnc/")
-no("agents", "a-run", "agents/{agent_id}/runscript/", "POST")
-no("endpoints", "e-reboot", "agents/{agent_id}/reboot/", "POST")  # Endpoints composes contracts, owns no route
+no("agents", "a-cmd", "agents/{agent_id:agent}/cmd/", "POST")
+no("agents", "a-vnc", "agents/{agent_id:agent}/{port}/webvnc/")
+no("agents", "a-run", "agents/{agent_id:agent}/runscript/", "POST")
+no("endpoints", "e-reboot", "agents/{agent_id:agent}/reboot/", "POST")  # Endpoints composes contracts, owns no route
 ROUTED = (
-    ("agents/{agent_id}/meshcentral/", "take-control"), ("agents/{agent_id}/meshcentral/recover/", "take-control"),
-    ("agents/{agent_id}/processes/", "remote-background"), ("agents/{agent_id}/registry/create-key/", "remote-background"),
-    ("agents/{agent_id}/eventlog/{logtype}/{days:int}/", "remote-background"), ("agents/{agent_id}/terminal-defaults/", "remote-background"),
+    ("agents/{agent_id:agent}/meshcentral/", "take-control"), ("agents/{agent_id:agent}/meshcentral/recover/", "take-control"),
+    ("agents/{agent_id:agent}/processes/", "remote-background"), ("agents/{agent_id:agent}/registry/create-key/", "remote-background"),
+    ("agents/{agent_id:agent}/eventlog/{logtype}/{days:int}/", "remote-background"), ("agents/{agent_id:agent}/terminal-defaults/", "remote-background"),
     ("agents/update/", "agent-management"), ("agents/versions/", "agent-management"), ("agents/bulkrecovery/", "agent-management"),
-    ("agents/{agent_id}/recover/", "agent-management"),
+    ("agents/{agent_id:agent}/recover/", "agent-management"),
 )
 for route, owner in ROUTED:
     fresh()
@@ -132,10 +132,10 @@ for group, mod in (("reporting", "reportmanager"), ("alerts", "alerts"), ("scrip
 
 # ---- longest prefix wins, and a non-owner registering first does not block the owner later
 fresh()
-no("agents", "lp", "agents/{agent_id}/cmd/", "POST")  # group owner, reserved sub-route
+no("agents", "lp", "agents/{agent_id:agent}/cmd/", "POST")  # group owner, reserved sub-route
 must(ops.list_operations() == [], "a refusal left no trace")
-no("agents", "first", "agents/{agent_id}/{port}/webvnc/")
-ok("take-control", "later", "agents/{agent_id}/{port}/webvnc/")  # the first caller was refused, so the route is free
+no("agents", "first", "agents/{agent_id:agent}/{port}/webvnc/")
+ok("take-control", "later", "agents/{agent_id:agent}/{port}/webvnc/")  # the first caller was refused, so the route is free
 must([row["module_id"] for row in ops.list_operations()] == ["take-control"], ops.list_operations())
 msg = no("globalsettings", "named", "core/schedules/")
 must("reportmanager" in msg and "core/schedules" in msg, msg)  # the message names the route and the owner
@@ -146,22 +146,22 @@ must("endpoints" not in set().union(*ops.ROUTE_OWNERS.values()), "Endpoints owns
 
 # ---- 1.17.7 cases still hold
 fresh()
-must("not a core module" in no("premiumdemo", "p", "agents/{agent_id}/reboot/", "POST"), "premium refused")
-no("oldmod", "o", "agents/{agent_id}/reboot/", "POST")
-no("offmod", "d", "agents/{agent_id}/reboot/", "POST")
+must("not a core module" in no("premiumdemo", "p", "agents/{agent_id:agent}/reboot/", "POST"), "premium refused")
+no("oldmod", "o", "agents/{agent_id:agent}/reboot/", "POST")
+no("offmod", "d", "agents/{agent_id:agent}/reboot/", "POST")
 first = declare()
 must(declare() is first and first.module_id == "agents", "idempotent re-register")
-no("reportmanager", "dup", "agents/{agent_id}/reboot/", "POST")
+no("reportmanager", "dup", "agents/{agent_id:agent}/reboot/", "POST")
 print("[TEST] PASS tactical operation route owners 1.17.8")
 
 # ---- 1.17.8-1: a parameter segment is a wildcard, so it cannot reach a reserved sub-route through the group rule
 fresh()
-for route in ("agents/{agent_id}/{op}/", "agents/{x}/", "agents/{a}/{b}/webvnc/", "agents/{agent_id}/{port}/{x}/", "agents/{x}/{y}/"):
+for route in ("agents/{agent_id:agent}/{op}/", "agents/{x}/", "agents/{a}/{b}/webvnc/", "agents/{agent_id:agent}/{port}/{x}/", "agents/{x}/{y}/"):
     for mod in ("agents", "endpoints"):
         no(mod, "wc-" + mod, route, "POST")
 must(ops.list_operations() == [], "wildcard refusals left no trace")
-ok("remote-background", "wc-rb", "agents/{agent_id}/cmd/", "POST")
-ok("take-control", "wc-tc", "agents/{agent_id}/{port}/webvnc/")
-ok("agent-management", "wc-am", "agents/{agent_id}/recover/", "POST")
-ok("agents", "wc-ok", "agents/{agent_id}/reboot/", "POST")
-ok("agents", "wc-ok2", "agents/{agent_id}/{x}/wol/", "POST")
+ok("remote-background", "wc-rb", "agents/{agent_id:agent}/cmd/", "POST")
+ok("take-control", "wc-tc", "agents/{agent_id:agent}/{port}/webvnc/")
+ok("agent-management", "wc-am", "agents/{agent_id:agent}/recover/", "POST")
+ok("agents", "wc-ok", "agents/{agent_id:agent}/reboot/", "POST")
+no("agents", "wc-ok2", "agents/{agent_id:agent}/{x}/wol/", "POST")  # 1.17.9: x can be cmd, so the longest rule is Remote Background's

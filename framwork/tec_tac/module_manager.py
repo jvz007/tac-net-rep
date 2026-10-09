@@ -248,6 +248,8 @@ def _pair_payload(extension, reportset=None, *, ui: dict | None = None, installe
             for object_type, actions in (getattr(extension, "audit_events", ()) or ())
         ],
         "publisher_permissions": list(getattr(extension, "publisher_permissions", ()) or ()),
+        "replaces": getattr(extension, "replaces", "") or None,
+        "capabilities": dict(getattr(extension, "capabilities", ()) or ()) if getattr(extension, "capabilities_declared", False) else None,
         "ui": ui,
         "ui_enabled": ui is not None,
         "authenticated_ui_enabled": bool(ui and ui.get("entry")),

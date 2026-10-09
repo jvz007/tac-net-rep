@@ -53,6 +53,12 @@ Capability IDs are stable and namespaced. For extension providers the ID must be
 
 The capability version is the public contract version, not the package version. A Communicator module `0.4.0` may expose `communicator.messaging` `1.0.0`.
 
+### A replacement provides the replaced module's capabilities (AD-20, 1.17.9)
+
+The capability id must begin with the provider module id and a dot. One exception: the honoured replacement of a core module (see `docs/module-replacement.md`) may register that core module's capability ids, and only the ids it lists in its manifest `capabilities`. Any other id still raises the same `must begin with provider module prefix` error.
+
+Consumers do not change. They keep calling the same capability name. `capability_status` reports the module that registered it as the provider (`module_id`) and adds `replaces` (the replaced module's id, or `null`). While the replaced module is disabled and its honoured replacement has not registered a name, the state is `capability-unavailable` and the reason names the replacement. If the replacement stops being honoured while the process still holds its registration (the core module was enabled again), the capability is `capability-unavailable` until the worker restarts.
+
 ## Consumer lookup
 
 Hard/runtime-required integration:
