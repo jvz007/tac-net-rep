@@ -69,7 +69,7 @@ try:
     raise AssertionError("record() let a person without a module grant write")
 except audit.AuditContractError as exc:
     must("not permitted" in str(exc), exc)
-res = audit.record_tactical_operation(
+res = audit._record_tactical_operation(
     actor=tech, module_id="declaring-demo", action="run", object_type="agent", object_id="a-1", message="Core ran it",
     after={"mode": "now"}, metadata={"operation": "reboot"}, operation="reboot", tactical_status=200,
 )
@@ -81,19 +81,19 @@ must(ctx == {"server_provenance": "tactical-operation", "operation": "reboot", "
 must(row["debug_info"]["actor_kind"] == "human" and row["debug_info"]["actor_identity"] == "tech", row["debug_info"])
 must(row["debug_info"]["module_id"] == "declaring-demo" and row["debug_info"]["module_version"] == "2.0.0", row["debug_info"])
 # a refusal row also carries core_refusal
-audit.record_tactical_operation(actor=tech, module_id="declaring-demo", action="deny", object_type="agent", object_id="a-1", message="m",
+audit._record_tactical_operation(actor=tech, module_id="declaring-demo", action="deny", object_type="agent", object_id="a-1", message="m",
                                 operation="reboot", tactical_status=None, refusal=True)
 ctx = ROWS[-1]["debug_info"]["operation_context"]
 must(ctx == {"server_provenance": "tactical-operation", "operation": "reboot", "tactical_status": None, "core_refusal": True}, ctx)
 # the internal call still needs an authenticated actor and a known module
 for bad_actor in (types.SimpleNamespace(is_authenticated=False, username="x"), types.SimpleNamespace(is_authenticated=True, username="")):
     try:
-        audit.record_tactical_operation(actor=bad_actor, module_id="declaring-demo", action="run", object_type="agent", operation="r")
+        audit._record_tactical_operation(actor=bad_actor, module_id="declaring-demo", action="run", object_type="agent", operation="r")
         raise AssertionError("bad actor accepted")
     except audit.AuditContractError:
         pass
 try:
-    audit.record_tactical_operation(actor=tech, module_id="missing-demo", action="run", object_type="agent", operation="r")
+    audit._record_tactical_operation(actor=tech, module_id="missing-demo", action="run", object_type="agent", operation="r")
     raise AssertionError("unknown module accepted")
 except audit.AuditContractError:
     pass

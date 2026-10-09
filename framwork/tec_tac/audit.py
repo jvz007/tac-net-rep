@@ -464,7 +464,7 @@ def record_browser_declared(
     )
 
 
-def record_tactical_operation(
+def _record_tactical_operation(
     *,
     actor,
     module_id: str,
@@ -480,7 +480,7 @@ def record_tactical_operation(
     refusal: bool = False,
     request=None,
 ) -> dict[str, Any]:
-    """Write the row of a Tactical call Core ran server-side (1.17.7). Core-internal; never strict.
+    """Write the row of a Tactical call Core ran server-side (1.17.7). Private since 1.17.8; only Core's executor calls it. Never strict.
 
     The actor is the signed-in user and the module is the one that declared the operation. Core passes its internal
     authority, so a person acting only under a Tactical permission is not blocked by the module-permission check.

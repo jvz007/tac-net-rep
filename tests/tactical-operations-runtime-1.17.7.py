@@ -62,9 +62,9 @@ def left_behind():
 
 
 # Since 1.17.7-1 Core only accepts an operation from the core module that owns the route's Tactical group.
-enabled = [p for p in get_plugins() if p.plugin_type == "extension" and p.category == "core" and p.plugin_id in ops.GROUP_OWNERS["core"]]
+enabled = [p for p in get_plugins() if p.plugin_type == "extension" and p.category == "core" and p.plugin_id in ops.ROUTE_OWNERS[("core", "version")]]
 if not enabled:
-    print("FAIL setup: no installed core module that owns Tactical's core/ group (globalsettings, reportmanager, scriptmanager) to declare the probe operation under")
+    print("FAIL setup: no installed core module that owns Tactical's core/version/ route (globalsettings) to declare the probe operation under")
     sys.exit(1)
 OWNER = enabled[0].plugin_id
 factory = RequestFactory()
@@ -82,7 +82,7 @@ try:
         {"action": "view", "object_type": PROBE_TYPE, "audit_fields": []}, message="Core runtime probe read the Tactical version.",
     )
     ops.register_tactical_operation(
-        "runtime-renamed", OWNER, "GET", "core/versionx-does-not-exist/", ["can_view_core_settings"], [], [],
+        "runtime-renamed", OWNER, "GET", "core/version/does-not-exist/", ["can_view_core_settings"], [], [],
         {"action": "view", "object_type": PROBE_TYPE, "audit_fields": []},
     )
 

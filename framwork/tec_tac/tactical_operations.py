@@ -18,6 +18,7 @@ The registry is empty until a module declares an operation, so this release chan
 """
 from __future__ import annotations
 
+import itertools
 import json
 import logging
 import re
@@ -229,47 +230,133 @@ def _clean_names(values: Any, label: str, *, maximum: int, pattern=_FIELD_RE) ->
     return tuple(names)
 
 
-# Core-held owner map (AD-19 condition 1, three-layer design of 8 October 2026). The first segment of a Tactical route is
-# its API group. Only the core modules listed for a group may declare an operation in it. It follows the function map
-# (reviews/modules/TACTICAL-FUNCTION-MAP-30-09-2026.md) and the route homes in AD-18. A group missing here is refused:
-# add it here, in a Core release, when a core module owns it. ``accounts``, ``api``, ``beta`` and clients/sites writes
-# that belong to Core are deliberately absent.
-GROUP_OWNERS: dict[str, frozenset] = {
-    "agents": frozenset({"endpoints", "agents", "agent-management", "remote-background", "take-control", "scriptexecution"}),
-    "logs": frozenset({"endpoints", "agents", "audit", "debug"}),
-    "reporting": frozenset({"reportmanager"}),
-    "core": frozenset({"globalsettings", "reportmanager", "scriptmanager"}),
-    "automation": frozenset({"automation", "patching"}),
-    "clients": frozenset({"agent-management"}),
-    "alerts": frozenset({"alerts"}),
-    "scripts": frozenset({"scriptmanager"}),
-    "checks": frozenset({"checks"}),
-    "software": frozenset({"software"}),
-    "tasks": frozenset({"tasks"}),
-    "services": frozenset({"remote-background"}),
-    "winupdate": frozenset({"patching"}),
-}
+# Core-held route owner table (AD-19 condition 1, three-layer design of 8 October 2026; route level since 1.17.8).
+# Each rule is a tuple of literal route segments ("{}" stands for any parameter segment) and the set of module ids that may
+# declare an operation at or below that prefix. The longest matching rule wins and is the only one applied, so a
+# reserved sub-route (agents/{}/cmd) cannot be claimed through its group rule (agents). An empty set means the prefix is
+# Core's own, or no core module owns it yet: every module is refused. A route no rule matches is refused as well.
+# The table follows the function map (reviews/modules/tactical-function-map.json), AD-11 (clients and sites stay in Core),
+# AD-16 (code signing is Licensing's) and AD-18 (pending actions to Agents, webvnc to Take Control, cmd to Remote
+# Background). Endpoints is the technician workspace: it composes other modules' contracts and owns no route.
+# ``accounts``, ``api``, ``beta`` and the rest of clients/ and core/ are deliberately without a module owner.
+_ROUTE_OWNER_RULES = (
+    # Core's own (AD-11): clients and sites. Agent Management keeps the install deployments.
+    (("clients",), ()),
+    (("clients", "deployments"), ("agent-management",)),
+    (("clients", "{}", "deploy"), ("agent-management",)),
+    # core/: explicit per prefix. Anything not listed is refused.
+    (("core",), ()),
+    (("core", "codesign"), ("licensing",)),
+    (("core", "schedules"), ("reportmanager",)),
+    (("core", "serverscript"), ("scriptmanager",)),
+    (("core", "openai"), ()),
+    (("core", "dashinfo"), ()),
+    *((("core", name), ("globalsettings",)) for name in (
+        "settings", "customfields", "keystore", "urlaction", "emailtest", "smstest", "clearcache", "servermaintenance",
+        "version", "webtermperms",
+    )),
+    # agents/: Agents owns the group, the sub-paths below are homed elsewhere.
+    (("agents",), ("agents",)),
+    (("agents", "{}", "cmd"), ("remote-background",)),
+    (("agents", "{}", "{}", "webvnc"), ("take-control",)),
+    (("agents", "{}", "runscript"), ("scriptexecution",)),
+    (("agents", "{}", "meshcentral"), ("take-control",)),
+    (("agents", "{}", "processes"), ("remote-background",)),
+    (("agents", "{}", "registry"), ("remote-background",)),
+    (("agents", "{}", "eventlog"), ("remote-background",)),
+    (("agents", "{}", "terminal-defaults"), ("remote-background",)),
+    (("agents", "update"), ("agent-management",)),
+    (("agents", "versions"), ("agent-management",)),
+    (("agents", "bulkrecovery"), ("agent-management",)),
+    (("agents", "{}", "recover"), ("agent-management",)),
+    # logs/: pending actions are Agents' (AD-18). Any other logs/ route is refused.
+    (("logs",), ()),
+    (("logs", "pendingactions"), ("agents",)),
+    (("logs", "audit"), ("audit",)),
+    (("logs", "debug"), ("debug",)),
+    # automation/: the patch policy is Windows Patching's.
+    (("automation",), ("automation",)),
+    (("automation", "patchpolicy"), ("patching",)),
+    # One owner for the whole group.
+    (("reporting",), ("reportmanager",)),
+    (("alerts",), ("alerts",)),
+    (("scripts",), ("scriptmanager",)),
+    (("checks",), ("checks",)),
+    (("software",), ("software",)),
+    (("tasks",), ("tasks",)),
+    (("services",), ("remote-background",)),
+    (("winupdate",), ("patching",)),
+)
+ROUTE_OWNERS: dict[tuple, frozenset] = {prefix: frozenset(owners) for prefix, owners in _ROUTE_OWNER_RULES}
 
-# The named exceptions to "category core only": (module id, first two literal route segments). Licensing is a server
-# module and owns Tactical's code-signing route (AD-16, AD-17). A premium module that replaces a core module 100% is
-# not listed: Core has no signal yet that says it is the one installed (reviews/questions/core.md, 9 October 2026).
+# The named exceptions to "category core only": (module id, rule prefix). Licensing is a server module and owns
+# Tactical's code-signing route (AD-16, AD-17). A premium module that replaces a core module 100% is not listed: Core
+# has no signal yet that says it is the one installed (reviews/questions/core.md, 9 October 2026).
 CATEGORY_EXCEPTIONS: frozenset = frozenset({("licensing", ("core", "codesign"))})
 
 
-def _check_route_owner(module: dict, segments: tuple) -> None:
-    """Refuse a route the module does not own: a non-core module, or a core module outside its Tactical group."""
+def _matching_rule(literal: list[str]) -> tuple | None:
+    """The longest rule prefix the route starts with, or None. A "{}" in a rule matches any one segment."""
+    best = None
+    for prefix in ROUTE_OWNERS:
+        if len(prefix) <= len(literal) and all(want == "{}" or want == have for want, have in zip(prefix, literal)) and (
+            best is None or len(prefix) > len(best)
+        ):
+            best = prefix
+    return best
+
+
+def _expansion_rules(literal: list[str]) -> list[tuple]:
+    """Every rule a concrete path built from this template can land on (1.17.8-1).
+
+    A parameter segment can hold any value, so ``agents/{x}/`` reaches ``agents/update/`` as well as ``agents/<id>/``.
+    Each parameter is tried as every literal a rule has at that position and as a value no rule names. The longest
+    matching rule of each expansion decides, exactly as it does at dispatch. An expansion that fills a parameter with a
+    route word and then runs on past the rule (``agents/update/reboot/``) is an id value, not that route, and is skipped.
+    """
+    options = []
+    for index, part in enumerate(literal):
+        if part == "{}":
+            names = {rule[index] for rule in ROUTE_OWNERS if len(rule) > index and rule[index] != "{}"}
+            options.append(sorted(names) + ["*other*"])
+        else:
+            options.append([part])
+    found: dict[tuple, None] = {}
+    for combo in itertools.product(*options):
+        rule = _matching_rule(list(combo))
+        if rule is not None and len(rule) < len(combo) and any(
+            literal[i] == "{}" and combo[i] != "*other*" for i in range(len(rule))
+        ):
+            continue  # a parameter that names a route word, with more route after it: an id value, not that route
+        found[rule] = None
+    return list(found)
+
+
+def _check_route_owner(module: dict, segments: tuple, route: str = "") -> None:
+    """Refuse a route the module does not own: a non-core module, or a core module outside the owner rule of any path the route can reach."""
     owner = module["id"]
     literal = [seg[1].lower() if seg[0] == "lit" else "{}" for seg in segments]
-    if (owner, tuple(literal[:2])) in CATEGORY_EXCEPTIONS:
-        return
-    if module.get("category") != "core":
+    rules = _expansion_rules(literal)
+    shown = "/".join(literal) if not route else route
+    if module.get("category") != "core" and not all((owner, rule) in CATEGORY_EXCEPTIONS for rule in rules):
         raise TacticalOperationRegistrationError(
-            f"module {owner!r} is not a core module. Only the core module that owns a Tactical group can declare its operations."
+            f"module {owner!r} is not a core module. Only the core module that owns a Tactical route can declare its operations."
         )
-    if owner not in GROUP_OWNERS.get(literal[0], frozenset()):
-        raise TacticalOperationRegistrationError(
-            f"module {owner!r} does not own Tactical group {literal[0]!r}. Declare the operation in the core module that does."
-        )
+    for rule in rules:
+        if rule is None:
+            raise TacticalOperationRegistrationError(
+                f"route {shown!r} is in no Tactical group that a core module owns. Core's owner table refuses it until a Core release adds it."
+            )
+        owners = ROUTE_OWNERS[rule]
+        rule_text = "/".join(rule) + "/"
+        if not owners:
+            raise TacticalOperationRegistrationError(
+                f"route {shown!r} is Core's own or no core module owns it yet (rule {rule_text}). No module may declare it."
+            )
+        if owner not in owners:
+            raise TacticalOperationRegistrationError(
+                f"module {owner!r} does not own route {shown!r} (rule {rule_text}, owner: {', '.join(sorted(owners))}). Declare the operation in the core module that does."
+            )
 
 
 def _check_module(module_id: Any) -> dict:
@@ -302,8 +389,8 @@ def register_tactical_operation(
     """Declare one Tactical operation. Call it from the owning module's ``AppConfig.ready()``.
 
     Refuses (TacticalOperationRegistrationError, a ValueError) a module that is not a core module (bar the named
-    exceptions) or a route outside the module's Tactical group (``GROUP_OWNERS``), a route Core owns, ``..``, a second operation on the
-    same (method, route), a flag that is not a boolean ``can_*`` field on Tactical's Role, an unknown, legacy or
+    exceptions) or a route the module does not own (the longest matching rule of ``ROUTE_OWNERS`` decides, see
+    docs/tactical-operations.md), a route Core owns, ``..``, a second operation on the same (method, route), a flag that is not a boolean ``can_*`` field on Tactical's Role, an unknown, legacy or
     disabled module, a scope source that does not exist, and audit fields that look like secrets. Registering the
     identical operation again is idempotent.
     """
@@ -319,7 +406,7 @@ def register_tactical_operation(
     if verb not in METHODS:
         raise TacticalOperationRegistrationError(f"method must be one of {', '.join(METHODS)}.")
     segments, trailing = _parse_route(route)
-    _check_route_owner(module, segments)
+    _check_route_owner(module, segments, route)
 
     flags = _clean_names(permissions, "permissions", maximum=_MAX_PERMISSIONS, pattern=re.compile(r"^can_[a-z0-9_]+$"))
     if not flags:
@@ -541,7 +628,7 @@ def _write_row(request, operation: TacticalOperation, *, action: str, object_id,
     metadata = {"operation": operation.id, "method": operation.method, "route": operation.route, "tactical_status": tactical_status}
     metadata.update(extra or {})
     try:
-        result = audit_core.record_tactical_operation(
+        result = audit_core._record_tactical_operation(
             actor=getattr(request, "user", None), module_id=operation.module_id, action=action,
             object_type=operation.audit_object_type, object_id=object_id, message=message, after=after,
             metadata=metadata, operation=operation.id, tactical_status=tactical_status, refusal=refusal, request=request,

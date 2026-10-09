@@ -44,7 +44,7 @@ register_tactical_operation(
 | Argument | Meaning |
 | --- | --- |
 | `id` | Lowercase slug, for example `reboot` or `wake-on-lan`. Unique within the module. |
-| `module_id` | The owning core module: its manifest says `category: core` and it owns the route's Tactical group in Core's owner map (`GROUP_OWNERS` in `tec_tac/tactical_operations.py`). Core refuses `core`, an unknown, legacy or disabled module, a module that is not a core module, and a core module outside its group. The one named exception is Licensing, which owns `core/codesign/` (AD-16). |
+| `module_id` | The owning core module: its manifest says `category: core` and it owns the route in Core's route owner table (see "Who may declare where" below). Core refuses `core`, an unknown, legacy or disabled module, a module that is not a core module, and a core module on a route it does not own. The one named exception is Licensing, which owns `core/codesign/` (AD-16). |
 | `method` | `GET`, `POST`, `PUT`, `PATCH` or `DELETE`. |
 | `route` | Tactical's route as a template, no leading slash. `{name}` is a text parameter (letters, digits, `_`, `.`, `-`). `{name:int}` is a whole number. `{name:agent}` is an agent id (21 characters or more, as Tactical's `agent` converter needs). A route may not start with a parameter. |
 | `permissions` | Tactical Role flags, for example `can_reboot_agents`. Each must be a boolean `can_*` field on Tactical's Role. The caller needs all of them. At least one is required. |
@@ -54,9 +54,42 @@ register_tactical_operation(
 | `module_permission` | Optional. A Tec-Tac permission codename, checked with `has_extension_permission` as well as the Tactical flags (AND). A superuser passes. Use it only where a Tec-Tac permission is a real extra rule, such as AD-16 for Licensing (`licensing.manage` plus Tactical's `can_code_sign`). It is not a copy of a Tactical permission (AD-5). |
 | `message` | Optional fixed text for the audit row. One line, 255 bytes at most. |
 
+### Who may declare where
+
+Since 1.17.8 ownership is per route, not per Tactical group. Core holds an ordered table of route prefixes (`ROUTE_OWNERS` in `tec_tac/tactical_operations.py`; Core-internal, not a module contract). A `{}` stands for a parameter segment. Core finds the longest prefix a route starts with and applies only that rule, so a sub-route homed elsewhere cannot be claimed through its group. An empty owner means the prefix is Core's own, or no core module owns it yet: every module is refused. The table follows the function map (`reviews/modules/tactical-function-map.json`), AD-11, AD-16 and AD-18.
+
+| Route prefix | Who may declare |
+| --- | --- |
+| `clients/`, `clients/sites/`, `clients/{}/` | Nobody. Clients and sites are Core's (AD-11). |
+| `clients/deployments/`, `clients/{}/deploy/` | `agent-management` |
+| `core/codesign/` | `licensing` only (AD-16) |
+| `core/settings/`, `customfields/`, `keystore/`, `urlaction/`, `emailtest/`, `smstest/`, `clearcache/`, `servermaintenance/`, `version/`, `webtermperms/` | `globalsettings` |
+| `core/schedules/` | `reportmanager` |
+| `core/serverscript/` | `scriptmanager` |
+| `core/openai/`, `core/dashinfo/`, any other `core/` route | Nobody |
+| `agents/` (everything not listed below) | `agents` |
+| `agents/{}/cmd/` | `remote-background` (AD-18) |
+| `agents/{}/{}/webvnc/` | `take-control` (AD-18) |
+| `agents/{}/runscript/` | `scriptexecution` |
+| `agents/{}/meshcentral/` (and `recover/`) | `take-control` |
+| `agents/{}/processes/`, `registry/`, `eventlog/`, `terminal-defaults/` | `remote-background` |
+| `agents/update/`, `agents/versions/`, `agents/bulkrecovery/`, `agents/{}/recover/` | `agent-management` |
+| `logs/pendingactions/` | `agents` (AD-18) |
+| `logs/audit/` | `audit` |
+| `logs/debug/` | `debug` |
+| any other `logs/` route | Nobody |
+| `automation/patchpolicy/` | `patching` |
+| `automation/` (the rest) | `automation` |
+| `reporting/` | `reportmanager` |
+| `alerts/`, `scripts/`, `checks/`, `software/`, `tasks/` | `alerts`, `scriptmanager`, `checks`, `software`, `tasks` |
+| `services/` | `remote-background` |
+| `winupdate/` | `patching` |
+
+Endpoints is the technician workspace. It composes what other modules publish, so it owns no route and declares no operation. Core refuses a non-owner when it registers, so a module outside its home cannot take a route first and block the owner on the one-caller rule. Core still re-checks the stored operation at dispatch.
+
 ### What Core refuses at registration
 
-- A module that is not a core module, and a core module declaring a route outside its Tactical group. The owner map follows the function map and AD-18 (for example `agents`: endpoints, agents, agent-management, remote-background, take-control, scriptexecution). A group that is not in the map is refused until a Core release adds it. A premium module that replaces a core module 100% is not yet accepted: see `reviews/questions/core.md` (CQ21).
+- A module that is not a core module, and a core module declaring a route it does not own (table below). A route the table does not list is refused until a Core release adds it. A premium module that replaces a core module 100% is not yet accepted: see `reviews/questions/core.md` (CQ21).
 - A route under `accounts/`, `api/tfd/`, `api/v3/`, `api/v4/`, `_allauth/`, `logout`, `logoutall`, `v2/` or `agents/installer`. Those are Core's own or agent-facing. A parameter value can never reach them either.
 - `..`, a leading slash, a query string, a percent sign, or anything outside the route grammar.
 - A second operation on the same method and route, even with a different parameter name. This enforces "one caller per Tactical route" (AD-6 condition 4) at run time. Registering the identical operation again changes nothing.

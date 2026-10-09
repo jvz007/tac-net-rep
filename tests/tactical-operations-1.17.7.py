@@ -321,7 +321,7 @@ must("not a core module" in refused(module_id="premiumdemo", id="premreboot"), "
 refused(module_id="premiumdemo", id="premcmd", route="agents/{agent_id}/cmd/")
 refused(module_id="premiumdemo", id="premcodesign", method="PUT", route="core/codesign/", permissions=["can_code_sign"], scope=[], body_fields=["token"],
         audit={"action": "modify", "object_type": "code_signing_token", "audit_fields": []})  # the exception is Licensing's alone
-must("does not own Tactical group" in refused(module_id="reportmanager", id="rmreboot"), "a core module outside its group is refused")
+must("does not own route" in refused(module_id="reportmanager", id="rmreboot"), "a core module outside its group is refused")
 refused(module_id="reportmanager", id="rmcmd", route="accounts/x/")
 refused(module_id="licensing", id="licreboot")  # Licensing owns core/codesign/ only
 refused(module_id="licensing", id="licsettings", method="GET", route="core/settings/", permissions=["can_code_sign"], scope=[], body_fields=[],
@@ -610,7 +610,7 @@ route(CODESIGN_PATH, FakeResponse(200, b'{"token": "x"}'))
 route("/agents/maintenance/bulk/", FakeResponse(200, b'"ok"'))
 route(f"/agents/{AGENT}/notes/", FakeResponse(200, b'"ok"'))
 # a parameter value cannot steer a path into a forbidden route
-declare(id="inspect", method="GET", route="agents/{name}/", permissions=["can_reboot_agents"], scope=[], body_fields=[], audit={"action": "view", "object_type": "agent"})
+declare(id="inspect", method="GET", route="agents/{name}/notes/", permissions=["can_reboot_agents"], scope=[], body_fields=[], audit={"action": "view", "object_type": "agent"})
 for name in ("installer", "Installer"):
     refusal(lambda: run(operation="inspect", params={"name": name}), 404, "tactical_operation_not_found")
 must(not CALLS, "the concrete path is checked again")

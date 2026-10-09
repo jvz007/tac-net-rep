@@ -54,6 +54,8 @@ result = record(
 
 Three `operation_context` keys are Core-owned: `core_refusal`, `browser_provenance` and, since 1.17.7, `server_provenance`. Only Core's own rows set them. `record()` raises `AuditContractError` when a caller supplies any of them, so a backend module cannot forge the marker of another path. (Before 1.17.6 only `core_refusal` was refused, so `browser_provenance` could be forged through the backend call.) `build_operation_context(...)` never sets them.
 
+Core's own audit writers are Core-internal and a module must not call them: `record_browser_declared`, `record_core_refusal` and `_record_tactical_operation`. Since 1.17.8 the last one is private (`audit.record_tactical_operation` is gone, with no alias), so only Core's executor can write a `server_provenance` row. A module that needs a Tactical call audited declares a Tactical operation (`core.tactical_operations`).
+
 Backend authorization remains authoritative. Audit recording does not grant permission to perform the business action. Modules must authorize the action first, perform it, then record the event.
 
 ## Browser runtime

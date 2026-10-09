@@ -63,7 +63,7 @@ CORE_CONTRACTS = (
         "import_path": "tec_tac.audit",
         "name": "record",
         "kind": "python",
-        "purpose": "Record a Tec-Tac module event through Core into Tactical's unified AuditLog trail. Since 1.17.6 operation_context may not carry browser_provenance or core_refusal, and since 1.17.7 server_provenance: they are Core-owned and give a contract error. For a Tactical call use a registered Tactical operation (core.tactical_operations) so Core writes the row where the call happens.",
+        "purpose": "Record a Tec-Tac module event through Core into Tactical's unified AuditLog trail. Since 1.17.6 operation_context may not carry browser_provenance or core_refusal, and since 1.17.7 server_provenance: they are Core-owned and give a contract error. For a Tactical call use a registered Tactical operation (core.tactical_operations) so Core writes the row where the call happens. Core's own writers (record_browser_declared, record_core_refusal and, since 1.17.8, the private _record_tactical_operation) are Core-internal and not callable by modules.",
         "audience": "provider/backend",
     },
     {
@@ -487,7 +487,7 @@ CORE_CONTRACTS = (
         "import_path": "tec_tac.tactical_operations",
         "name": "register_tactical_operation",
         "kind": "python",
-        "purpose": "Declare one typed Tactical operation from the owning core module's AppConfig.ready() (1.17.7): (id, module_id, method, route, permissions, scope, body_fields, audit, module_permission=None, message=None). route is a Tactical route template such as agents/{agent_id}/reboot/. permissions are Tactical Role flags, all required. scope lists {type agent|client|site, source path:<name>|body:<field>}. body_fields is the whitelist of JSON body keys. audit is {action, object_type, audit_fields}. Refuses routes Core owns, a second caller for the same (method, route), an unknown flag, and a legacy, unknown or disabled module (TacticalOperationRegistrationError, a ValueError). The registry is empty until a module declares an operation. Requires framework >=1.17.7.",
+        "purpose": "Declare one typed Tactical operation from the owning core module's AppConfig.ready() (1.17.7): (id, module_id, method, route, permissions, scope, body_fields, audit, module_permission=None, message=None). route is a Tactical route template such as agents/{agent_id}/reboot/. permissions are Tactical Role flags, all required. scope lists {type agent|client|site, source path:<name>|body:<field>}. body_fields is the whitelist of JSON body keys. audit is {action, object_type, audit_fields}. Since 1.17.8 only the core module that owns the route may declare it: Core's route owner table (docs/tactical-operations.md, Who may declare where) decides by the longest matching route prefix, so clients/ is Core's (AD-11), core/codesign/ is Licensing's alone (AD-16), agents/{id}/cmd/ is Remote Background's and agents/{id}/{port}/webvnc/ is Take Control's (AD-18), and Endpoints declares none. Refuses routes Core owns, a second caller for the same (method, route), an unknown flag, and a legacy, unknown or disabled module (TacticalOperationRegistrationError, a ValueError). The registry is empty until a module declares an operation. Requires framework >=1.17.7.",
         "audience": "core module/backend",
     },
     {
