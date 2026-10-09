@@ -12,6 +12,7 @@ from .module_manager_v2 import (
     LicensingRequirementError,
     ModuleManagerV2Error,
     ModuleReplacementConfirmationRequired,
+    ModuleReplacementSecondConfirmationRequired,
     discard_v2_stage,
     installed_catalog_v2,
     queue_batch_install,
@@ -34,6 +35,17 @@ def _disable_replaced(request):
         return None
     if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
         raise ModuleManagerV2Error("disable_replaced must be an array of module IDs.")
+    return value
+
+
+def _confirm_replacement_switch(request):
+    """The optional ``confirm_replacement_switch`` flag (1.17.12): None when absent, else a boolean. Only true confirms.
+    Raises ModuleManagerV2Error (a refusal, HTTP 400) for anything that is not a boolean."""
+    value = request.data.get("confirm_replacement_switch")
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise ModuleManagerV2Error("confirm_replacement_switch must be true or false.")
     return value
 
 
@@ -124,9 +136,11 @@ class ModuleV2StateView(APIView):
             return Response({"detail": "enabled must be true or false."}, status=400)
         try:
             disable_replaced = _disable_replaced(request)
+            confirm_switch = _confirm_replacement_switch(request)
             return Response(queue_set_enabled(plugin_id, enabled, cascade=cascade, requested_by=str(request.user.username),
-                                              disable_replaced=disable_replaced, actor=request.user), status=202)
-        except ModuleReplacementConfirmationRequired as exc:
+                                              disable_replaced=disable_replaced, actor=request.user,
+                                              confirm_replacement_switch=confirm_switch), status=202)
+        except (ModuleReplacementConfirmationRequired, ModuleReplacementSecondConfirmationRequired) as exc:
             return Response(exc.as_payload(), status=400)
         except (ModuleManagerError, ModuleManagerV2Error) as exc:
             return Response({"detail": str(exc)}, status=400)

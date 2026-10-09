@@ -250,14 +250,15 @@ try:
 except v2.ModuleReplacementConfirmationRequired as exc:
     must("patching" in str(exc) and exc.will_disable == ["patching"], exc)
 must(captured == [], "nothing queued")
-# the other order: the core module while an enabled replacement points at it
+# the other order: the core module while an enabled replacement points at it. 1.17.12 (CQ32): no longer a refusal. It names
+# the replacement it will switch off and needs the two confirmations (tests/module-replacement-handback-1.17.12.py).
 world(patching=False, pm=True)
 result = problems("patching")
-must(not result["valid"] and result["problems"][0]["type"] == "replacement_conflict" and result["problems"][0]["replaced_by"] == "patchmanagement", result)
+must(result["valid"] is True and result["will_disable"] == ["patchmanagement"], result)
 try:
     v2.queue_set_enabled("patching", True)
-    raise AssertionError("enabling the core module next to its enabled replacement was queued")
-except v2.ModuleManagerV2Error as exc:
+    raise AssertionError("enabling the core module next to its enabled replacement was queued without confirmation")
+except v2.ModuleReplacementConfirmationRequired as exc:
     must("patchmanagement" in str(exc), exc)
 must(captured == [], "nothing queued")
 # parity failure: incomplete
@@ -370,5 +371,5 @@ must(problems("patchmanagement")["valid"] is True and problems("patchmanagement"
 # the other order: a queued enable of the replacement makes enabling the core module a conflict
 (jobs / "a.json").write_text(_json.dumps({"id": "a", "action": "enable", "plugin_id": "patchmanagement", "affected_modules": ["patchmanagement"], "status": "queued", "created_at": "2026-10-09T10:00:00"}), encoding="utf-8")
 result = problems("patching")
-must(not result["valid"] and result["problems"][0]["type"] == "replacement_conflict" and result["problems"][0]["replaced_by"] == "patchmanagement", result)
+must(result["valid"] is True and result["will_disable"] == ["patchmanagement"], result)  # 1.17.12: it will switch the queued replacement off
 print("[TEST] PASS pending-job enable recheck 1.17.9-1")

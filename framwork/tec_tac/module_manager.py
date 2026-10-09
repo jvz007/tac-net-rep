@@ -631,6 +631,8 @@ def public_job(job: dict) -> dict:
     allowed = {
         "id", "status", "created_at", "started_at", "finished_at", "stage", "error", "error_type",
         "action", "plugin_id", "replace", "purge_data", "package_sha256", "package_filename", "requested_by",
+        # 1.17.12 (AD-20): what a module job switched, written by the root helper when it ran.
+        "disabled_modules", "enabled_modules", "reconciled_modules",
     }
     result = {key: value for key, value in job.items() if key in allowed}
     log_path = LOGS_ROOT / f"{job.get('id')}.log"

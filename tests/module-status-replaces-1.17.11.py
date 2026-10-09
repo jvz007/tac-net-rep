@@ -138,7 +138,7 @@ for stale in ("UI 0.12.87 does not enforce", "does not enforce that scoping rule
     must(stale not in op, f"stale wording: {stale}")
 for needle in ("From UI 0.12.88", "binds tacticalOperation to the calling module", "descriptor.replaces", "module_status", "module_status[].replaces", "Core 1.17.11",
                "refuses every call after a failed or timed-out register()", "fails closed when the row carries no replaces",
-               "api, apiRaw, apiBlob or apiText", "held 0.12.88 review finding", "Core's own checks", "route is owned", "honoured"):
+               "api, apiRaw, apiBlob and apiText", "UI 0.12.89", "not a sandbox", "Core's own checks", "route is owned", "honoured"):  # 1.17.12 reworded the 0.12.88 finding sentence
     must(needle in op, f"tactical-operation row lacks {needle!r}")
 status_text = details("ui.authenticated.module-status")
 for needle in ("replaces", "Core 1.17.11", "declared value, not the honoured one", "enabled false and active false"):

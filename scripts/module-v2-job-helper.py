@@ -10,6 +10,11 @@ migrations already applied by a package are intentionally not auto-reversed.
 Since Core 1.17.11 (AD-20) an enable or install of a module that replaces another one disables the replaced module in
 the same job, but only the modules the operator confirmed (``disable_modules``) and only after this worker has
 re-checked the replacement rules itself, from root-owned manifests.
+
+Since Core 1.17.12 (AD-20 hand-back, Johan CQ32 and CQ33) the same job can switch the other way too. Enabling a replaced
+module switches its enabled replacement off, but only when the job carries the confirmed list AND
+``replacement_confirmed``. Disabling a replacement switches the module it replaces back on (``enable_modules``) in one
+state write, with the same rollback.
 """
 from __future__ import annotations
 
@@ -244,7 +249,11 @@ def migrate_module_state_identity(old_id, new_id):
 # reason codes, so the two cannot drift apart unnoticed. Change a rule in both places.
 #
 # The helper never disables a module the requesting operator was not shown: whatever it works out to disable must be a
-# subset of the job's confirmed ``disable_modules`` list, or the job fails with nothing changed.
+# subset of the job's confirmed ``disable_modules`` list, or the job fails with nothing changed. When that list holds a
+# replacement of a module being enabled (1.17.12), the job must also carry ``replacement_confirmed`` (the second
+# confirmation). A hand-back enable (``enable_modules`` of a disable job) is held to the same discipline: each module
+# must be the replaced module of a replacement the job disables, still disabled, with no other enabled replacement.
+# tests/module-replacement-helper-handback-1.17.12.py extends the drift matrix to the 1.17.12 rules.
 # ---------------------------------------------------------------------------------------------------------------------
 REPLACEABLE_CATEGORIES = frozenset({"core", "server"})
 _CAPABILITY_ID_RE = re.compile(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)+$")
@@ -411,9 +420,13 @@ def _hypothetical_disable(model, node, *, blocked=()):
     return {**model, target["id"]: {**target, "enabled": False}}, [target["id"]]
 
 
-def plan_enable_disables(model, module_ids, confirmed):
-    """The modules an enable job disables. Raises RuntimeError on a rule violation or an unconfirmed disable."""
+def plan_enable_disables(model, module_ids, confirmed, replacement_confirmed=False):
+    """The modules an enable job disables. Raises RuntimeError on a rule violation or an unconfirmed disable.
+
+    1.17.12: an enabled replacement of a module being enabled is added to the disables instead of refusing the job. That
+    switch needs the confirmed list and ``replacement_confirmed`` (the second confirmation)."""
     disables = []
+    switches_replacement = False
     for module_id in module_ids:
         node = model.get(module_id)
         if node is None:
@@ -427,14 +440,19 @@ def plan_enable_disables(model, module_ids, confirmed):
             if reason:
                 raise RuntimeError(f"module replacement rule refuses enabling {module_id}: {reason}")
             disables.extend(names)
-        if node["category"] in REPLACEABLE_CATEGORIES:
-            for other in model.values():
+        if node["category"] in REPLACEABLE_CATEGORIES and not node["enabled"]:
+            for other in sorted(model.values(), key=lambda item: item["id"]):
                 if other["enabled"] and other["replaces"] == module_id:
-                    raise RuntimeError(f"module replacement rule refuses enabling {module_id}: {other['id']} is enabled and replaces it")
+                    if other["id"] in module_ids:
+                        raise RuntimeError(f"module replacement rule refuses enabling {module_id}: {other['id']} replaces it and is enabled in the same job")
+                    disables.append(other["id"])
+                    switches_replacement = True
     disables = sorted(set(disables) - set(module_ids))
     unconfirmed = sorted(set(disables) - set(confirmed))
     if unconfirmed:
         raise RuntimeError("module replacement would disable a module the operator did not confirm: " + ", ".join(unconfirmed))
+    if switches_replacement and replacement_confirmed is not True:
+        raise RuntimeError("module replacement would switch off a replacement and the operator did not confirm the switch")
     return disables
 
 
@@ -447,7 +465,7 @@ def conflicted_replacement_ids(model):
     )
 
 
-def apply_enable_job(repo_root, module_ids, confirmed):
+def apply_enable_job(repo_root, module_ids, confirmed, replacement_confirmed=False):
     """Enable ``module_ids`` and disable the modules they replace in ONE state write, under the module-state lock.
 
     Manifests are re-read here, under the lock, and the rules are re-run on the state as it is now. Returns
@@ -458,7 +476,7 @@ def apply_enable_job(repo_root, module_ids, confirmed):
     def apply(state):
         manifests = read_installed_manifests(repo_root)
         model = replacement_model(manifests, state)
-        disables = plan_enable_disables(model, module_ids, confirmed)
+        disables = plan_enable_disables(model, module_ids, confirmed, replacement_confirmed)
         modules = state["modules"]
         touched = list(module_ids) + disables
         result["previous"] = {mid: bool((modules.get(mid) or {}).get("enabled", True)) for mid in touched}
@@ -476,6 +494,56 @@ def apply_enable_job(repo_root, module_ids, confirmed):
 
     mutate_module_state(apply)
     return result["disabled"], result["reconciled"], result["previous"]
+
+
+def plan_hand_back(model, module_ids, confirmed_enable):
+    """The modules a disable job switches back on (1.17.12, CQ33): the confirmed ``enable_modules``, each one re-checked.
+    Raises RuntimeError unless every one is the replaced module of a replacement this job disables, is a core or server
+    module, is disabled now, and has no other enabled replacement. An empty confirmed list returns []."""
+    enables = []
+    for module_id in sorted(set(confirmed_enable)):
+        target = model.get(module_id)
+        if target is None:
+            raise RuntimeError(f"cannot verify the hand-back of {module_id}: no trusted manifest")
+        if target["category"] not in REPLACEABLE_CATEGORIES:
+            raise RuntimeError(f"module replacement rule refuses enabling {module_id} as a hand-back: it is not a core or server module")
+        if target["enabled"]:
+            raise RuntimeError(f"module replacement rule refuses enabling {module_id} as a hand-back: it is enabled already")
+        leaving = [mid for mid in module_ids if (model.get(mid) or {}).get("replaces") == module_id and model[mid]["enabled"]]
+        if not leaving:
+            raise RuntimeError(f"module replacement rule refuses enabling {module_id} as a hand-back: no enabled replacement of it is being disabled")
+        rival = sorted(other["id"] for other in model.values()
+                       if other["enabled"] and other["replaces"] == module_id and other["id"] not in module_ids)
+        if rival:
+            raise RuntimeError(f"module replacement rule refuses enabling {module_id} as a hand-back: {', '.join(rival)} also replaces it and stays enabled")
+        enables.append(module_id)
+    return enables
+
+
+def apply_disable_job(repo_root, module_ids, confirmed_enable):
+    """Disable ``module_ids`` and switch the confirmed replaced modules back on in ONE state write, under the lock.
+
+    Manifests are re-read here, under the lock. Returns (enabled, previous): the modules this job switched on, and the
+    enabled flag every touched module had before (for rollback). Raises with nothing changed when a hand-back breaks a
+    rule. With no ``confirmed_enable`` it is exactly ``set_enabled(module_ids, False)``."""
+    result = {}
+
+    def apply(state):
+        modules = state["modules"]
+        enables = []
+        if confirmed_enable:
+            model = replacement_model(read_installed_manifests(repo_root), state)
+            enables = plan_hand_back(model, module_ids, confirmed_enable)
+        touched = list(module_ids) + [mid for mid in enables if mid not in module_ids]
+        result["previous"] = {mid: bool((modules.get(mid) or {}).get("enabled", True)) for mid in touched}
+        for mid in module_ids:
+            modules[mid] = {**(modules.get(mid) or {}), "enabled": False}
+        for mid in enables:
+            modules[mid] = {**(modules.get(mid) or {}), "enabled": True}
+        result["enabled"] = enables
+
+    mutate_module_state(apply)
+    return result["enabled"], result["previous"]
 
 
 def restore_enabled_flags(previous):
@@ -1290,6 +1358,14 @@ def _confirmed_disable_modules(job):
     return [str(value) for value in values]
 
 
+def _confirmed_enable_modules(job):
+    """The module ids a disable job may switch back on (Core 1.17.12), validated."""
+    values = job.get("enable_modules") or []
+    if not isinstance(values, list) or any(not isinstance(value, str) or not PLUGIN_RE.fullmatch(value) for value in values):
+        raise RuntimeError("invalid enable_modules")
+    return [str(value) for value in values]
+
+
 def run_job(job_id):
     path, status = load_job(job_id)
     if status.get("status") not in {"dispatched", "running"}:
@@ -1337,25 +1413,30 @@ def run_job(job_id):
                     raise RuntimeError("invalid affected module id")
                 # Enable one target; disable may cascade through dependants.
                 enabled = job["action"] == "enable"
-                disabled, reconciled, previous = [], [], {}
+                disabled, reconciled, enabled_back, previous = [], [], [], {}
                 if enabled:
                     confirmed = _confirmed_disable_modules(job)
-                    # One state write under the lock: the rules are re-run on the state as it is now.
-                    disabled, reconciled, previous = apply_enable_job(repo_root, affected, confirmed)
+                    # One state write under the lock: the rules are re-run on the state as it is now. The second
+                    # confirmation (1.17.12) is read from the root-owned copy of the job, never from the web side.
+                    disabled, reconciled, previous = apply_enable_job(repo_root, affected, confirmed, job.get("replacement_confirmed") is True)
                     if disabled:
                         log.write(f"[TEC-TAC-MODULE-V2] disabled replaced module(s): {', '.join(disabled)}\n")
                     if reconciled:
                         log.write(f"[TEC-TAC-MODULE-V2] disabled replacement(s) found enabled next to their replaced module: {', '.join(reconciled)}\n")
                     job["disabled_modules"], job["reconciled_modules"] = disabled, reconciled
                 else:
-                    set_enabled(affected, False)
-                touched = affected + disabled + reconciled
+                    # One state write under the lock (1.17.12): the disable and, for a replacement, the hand-back.
+                    enabled_back, previous = apply_disable_job(repo_root, affected, _confirmed_enable_modules(job))
+                    if enabled_back:
+                        log.write(f"[TEC-TAC-MODULE-V2] enabled replaced module(s) handed back: {', '.join(enabled_back)}\n")
+                    job["enabled_modules"] = enabled_back
+                touched = affected + disabled + reconciled + enabled_back
                 job["stage"] = "runtime-sync"
                 atomic_json(path, job)
                 try:
                     sync_and_reload(config, log, refresh_workers=True)
                 except Exception:
-                    if disabled or reconciled:
+                    if disabled or reconciled or enabled_back:
                         # Put every flag this job changed back, so the state is not left with a half-done replacement.
                         job["stage"] = "rollback"
                         atomic_json(path, job)

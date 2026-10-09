@@ -97,7 +97,7 @@ def rows():
 logging.getLogger("tec_tac.module_runtime").addHandler(logging.NullHandler())
 captured = []
 v2._queue_v2 = lambda payload: captured.append(payload) or {"id": f"job-{len(captured)}", "queued": True}
-mr.audit_replaced_disabled = lambda *args, **kwargs: None
+mr.audit_switch_queued = lambda *args, **kwargs: None
 BACKUP_CAPS = {"backups.run": "1.0.0", "backups.restore": "1.1.0"}
 ALT_CAPS = {"backups.run": "1.0.0", "backups.restore": "1.2.0", "backups.cloud": "1.0.0"}
 
@@ -163,13 +163,13 @@ except v2.ModuleReplacementConfirmationRequired as exc:
     must(exc.will_disable == ["backups"], exc)
 v2.queue_set_enabled("altbackups", True, disable_replaced=["backups"])
 must(captured[-1]["disable_modules"] == ["backups"] and captured[-1]["affected_modules"] == ["altbackups"], captured[-1])
-# the server module next to its enabled replacement is refused (hand back is disable first)
+# 1.17.12 (CQ32): the server module next to its enabled replacement names the replacement it will switch off
 server_world(backups=False, alt=True)
 result = v2.validate_enable("backups")
-must(not result["valid"] and result["problems"][0]["replaced_by"] == "altbackups", result)
-# hand back: disable the replacement, then enable the server module
+must(result["valid"] is True and result["will_disable"] == ["altbackups"], result)
+# hand back (CQ33): disabling the replacement switches the server module back on in the same job
 v2.queue_set_enabled("altbackups", False)
-must(captured[-1]["action"] == "disable", captured[-1])
+must(captured[-1]["action"] == "disable" and captured[-1]["enable_modules"] == ["backups"], captured[-1])
 STATE["modules"]["altbackups"]["enabled"] = False
 must(v2.validate_enable("backups")["valid"] is True and mr.honoured_replacement("altbackups") is None, "handed back")
 # both enabled: a conflict, as for a core module

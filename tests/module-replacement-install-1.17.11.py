@@ -155,7 +155,8 @@ must(result["valid"] is True and result["will_disable"] == ["backups"], result)
 captured, audited, v1_calls = [], [], []
 v2._queue_v2 = lambda payload: captured.append(payload) or {"id": f"job-{len(captured)}", "queued": True}
 module_manager.queue_install = lambda *args, **kwargs: v1_calls.append((args, kwargs)) or {"v1": True}
-mr.audit_replaced_disabled = lambda actor, replacement, disabled, job_id: audited.append((actor, replacement, list(disabled), job_id))
+# 1.17.12: the queue-time row is audit_switch_queued (a request, not a change)
+mr.audit_switch_queued = lambda actor, subject, job_id, disabled=(), enabled=(): audited.append((actor, subject, list(disabled), job_id))
 v2._enforce_candidate_licensing = lambda candidate_: candidate_
 v2._verify_stage_trust = lambda *args, **kwargs: {"state": "unsigned"}
 META = {}

@@ -37,10 +37,20 @@ class Command(BaseCommand):
         except Exception as exc:
             self.stderr.write(f"TEC-TAC replacement conflict check failed; retrying next tick: {exc.__class__.__name__}: {exc}")
 
+        audited = 0
+        try:
+            # 1.17.12 (AD-20): the outcome audit rows of finished module switch jobs. Audit follows what happened, so
+            # this runs after the root helper has finished. Never raises.
+            from tec_tac.module_replacement import audit_finished_jobs
+
+            audited = audit_finished_jobs()
+        except Exception as exc:
+            self.stderr.write(f"TEC-TAC replacement audit sweep failed; retrying next tick: {exc.__class__.__name__}: {exc}")
+
         sweep_state = "error" if sweep_error else "ran"
         cleanup_state = "error" if cleanup_error else ("ran" if cleanup and cleanup.get("ran") else "not_due")
         self.stdout.write(
-            "TEC-TAC scheduler tick: checked={checked} queued={queued} skipped={skipped} cleaned={cleaned} session_history_cleanup={session_cleanup} session_expiry_sweep={sweep_state} sweep_revoked={sweep_revoked} sweep_skipped_no_digest={sweep_skipped} sweep_orphan_tokens={sweep_orphans} now={now} replacement_conflicts_queued={replacement_queued}".format(
+            "TEC-TAC scheduler tick: checked={checked} queued={queued} skipped={skipped} cleaned={cleaned} session_history_cleanup={session_cleanup} session_expiry_sweep={sweep_state} sweep_revoked={sweep_revoked} sweep_skipped_no_digest={sweep_skipped} sweep_orphan_tokens={sweep_orphans} now={now} replacement_conflicts_queued={replacement_queued} replacement_audit_rows={replacement_audit}".format(
                 checked=result["checked"],
                 queued=len(result["queued"]),
                 skipped=len(result["skipped"]),
@@ -52,5 +62,6 @@ class Command(BaseCommand):
                 sweep_orphans=(sweep or {}).get("orphan_tokens_deleted", 0),
                 now=result["now"],
                 replacement_queued=sum(1 for row in reconciled if row.get("queued")),
+                replacement_audit=audited,
             )
         )

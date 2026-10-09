@@ -54,7 +54,8 @@ def manifest(module_id, **extra):
 
 
 def audit_rows():
-    return AuditLog.objects.filter(object_type="module", debug_info__metadata__replacement=REPL)
+    # 1.17.12: the queue-time row no longer carries replacement/replaced in its metadata, so rows are found by object id
+    return AuditLog.objects.filter(object_type="module", debug_info__object_id__in=[REPL, OLD])
 
 
 def setup():
@@ -104,10 +105,11 @@ def reconcile_limits():
 
 def enable_audit_row():
     user = User(username=MARK)  # unsaved: nothing is written to Tactical's accounts table
-    mr.audit_replaced_disabled(user, REPL, [OLD], "job-1")
-    row = audit_rows().filter(action="custom:module-replacement-disabled").first()
+    mr.audit_switch_queued(user, REPL, "job-1", disabled=[OLD])  # 1.17.12: the queue-time row is a request, not a change
+    row = audit_rows().filter(action="custom:module-replacement-switch-queued").first()
     assert row is not None, "no audit row"
-    assert row.username == MARK and row.debug_info["object_id"] == OLD and row.debug_info["metadata"]["job_id"] == "job-1", row.debug_info
+    assert row.username == MARK and row.debug_info["object_id"] == REPL and row.debug_info["metadata"]["job_id"] == "job-1", row.debug_info
+    assert row.debug_info["metadata"]["disable"] == [OLD], row.debug_info
 
 
 def dispatch_fails_safely():
@@ -142,7 +144,7 @@ try:
     step("a replacement next to its enabled module is a conflict", detect)
     step("reconcile queues one disable job and writes the audit row", reconcile_audits_and_queues)
     step("a pending job and the hourly limit stop a second job", reconcile_limits)
-    step("the enable audit row names the replaced module and the requesting user", enable_audit_row)
+    step("the queue-time audit row names the module and the requesting user", enable_audit_row)
     step("a failing sudo dispatch is logged, recorded and not raised", dispatch_fails_safely)
     step("module_status reports the conflicted replacement as not enabled, with replaces", snapshot_effective_state)
 finally:

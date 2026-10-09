@@ -200,8 +200,8 @@ old_note = (ROOT / "docs/releases/RELEASE_NOTES_1.17.10.md").read_text(encoding=
 must("A scan of `modules/` finds no manifest that declares the key" not in old_note, "the archived 1.17.10 note still makes the wrong claim")
 must("modules/endpoints" in old_note and '"capabilities": {}' in old_note, "the archived 1.17.10 note states the Endpoints case")
 must(not (ROOT / "RELEASE_NOTES_1.17.10.md").exists(), "the 1.17.10 note moved out of the root")
-version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
-note = (ROOT / f"RELEASE_NOTES_{version}.md").read_text(encoding="utf-8")
+version = "1.17.11"  # 1.17.12: the 1.17.11 note moved to docs/releases/, the root holds the current one
+note = (ROOT / "docs" / "releases" / f"RELEASE_NOTES_{version}.md").read_text(encoding="utf-8")
 for needle in ("Endpoints", "no capability id can be registered", "harmless", "Module-facing"):
     must(needle in note, f"the {version} note lacks {needle!r}")
 docs = (ROOT / "docs/capabilities.md").read_text(encoding="utf-8")

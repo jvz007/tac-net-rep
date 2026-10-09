@@ -98,6 +98,27 @@ class ModuleReplacementConfirmationRequired(ModuleManagerV2Error):
         return {"detail": str(self), "code": "replacement_confirmation_required", "will_disable": list(self.will_disable)}
 
 
+class ModuleReplacementSecondConfirmationRequired(ModuleManagerV2Error):
+    """Raised when enabling a core or server module would switch off an enabled replacement and the request did not carry
+    ``confirm_replacement_switch: true`` (1.17.12, Johan CQ32).
+
+    The first confirmation (the ``disable_replaced`` list) has already passed when this is raised. It is a refusal (HTTP
+    400, code ``replacement_second_confirmation_required``) carrying the fresh ``will_disable`` list and the module id."""
+
+    def __init__(self, will_disable, module_id: str):
+        self.will_disable = sorted(set(will_disable))
+        self.module_id = str(module_id)
+        names = ", ".join(self.will_disable)
+        super().__init__(
+            f"Module {self.module_id!r} is replaced by {names}, which is enabled. Enabling {self.module_id!r} will switch {names} off. "
+            "Confirm the switch to go ahead: send confirm_replacement_switch with true."
+        )
+
+    def as_payload(self) -> dict:
+        return {"detail": str(self), "code": "replacement_second_confirmation_required",
+                "will_disable": list(self.will_disable), "module": self.module_id}
+
+
 def _confirmed_disables(will_disable, disable_replaced, subject: str) -> list[str]:
     """The ids the job may disable. Empty when nothing would be disabled; else the request must name exactly that list."""
     needed = sorted(set(will_disable or []))
@@ -110,11 +131,12 @@ def _confirmed_disables(will_disable, disable_replaced, subject: str) -> list[st
 
 
 def _audit_plan_disables(actor, plan: dict, job: dict) -> None:
-    """One audit row per replaced module a queued install job will disable. The audit write never raises."""
+    """One "asked to switch" audit row per install action whose job will disable a replaced module. It records the
+    request, not a change: the outcome rows follow when the job has finished. The audit write never raises."""
     for action in plan.get("actions") or []:
         disabled = list(action.get("will_disable") or [])
         if disabled:
-            module_replacement.audit_replaced_disabled(actor, str(action.get("id") or ""), disabled, job.get("id"))
+            module_replacement.audit_switch_queued(actor, str(action.get("id") or ""), job.get("id"), disabled=disabled)
 
 
 def _read_json(path: Path, label: str) -> dict:
@@ -490,7 +512,8 @@ def installed_catalog_v2() -> list[dict]:
         item = dict(item)
         if item.get("legacy"):
             item.update({"enabled": True, "visible": True, "dependencies": {}, "optional_dependencies": {}, "requires": {}, "dependants": [],
-                         "replaces": None, "replacement": None, "replaced_by": None, "will_disable": []})
+                         "replaces": None, "replacement": None, "replaced_by": None, "will_disable": [], "will_enable": [],
+                         "second_confirmation_required": False})
             result.append(item)
             continue
         meta = metadata.get(item["id"], {})
@@ -538,6 +561,11 @@ def installed_catalog_v2() -> list[dict]:
             "replaced_by": module_replacement.replaced_by(item["id"], model=replacement_model) if replacement_model else None,
             # 1.17.11: the modules that enabling this one would disable (empty when none).
             "will_disable": module_replacement.disable_plan(planning_model, item["id"]) if planning_model else [],
+            # 1.17.12: for a disabled core or server module, will_disable names its enabled replacement (CQ32) and
+            # second_confirmation_required is true. For an enabled replacement, will_enable names the replaced module that
+            # disabling it switches back on (CQ33).
+            "will_enable": module_replacement.hand_back_plan(planning_model, item["id"]) if planning_model else [],
+            "second_confirmation_required": module_replacement.switches_replacement(planning_model, item["id"]) if planning_model else False,
         })
         result.append(item)
     return result
@@ -1376,6 +1404,53 @@ def _enabled_dependants(module_id: str) -> list[dict]:
     return result
 
 
+def _enable_problems(catalog: dict, model: dict, module_id: str, *, hypothetical: bool = False) -> list[dict]:
+    """Problems that stop ``module_id`` being enabled, judged against ``model``. With ``hypothetical`` the enabled state of
+    a dependency comes from ``model`` (the state after the job), not from the catalogue (the state now)."""
+    target = catalog[module_id]
+    problems = []
+    for dep_id, constraint in (target.get("dependencies") or {}).items():
+        dep = catalog.get(dep_id)
+        if not dep:
+            problems.append({"type": "missing_dependency", "dependency": dep_id, "constraint": constraint})
+            continue
+        dep_enabled = bool(dep.get("enabled"))
+        if hypothetical and dep_id in model:
+            dep_enabled = bool(model[dep_id].enabled)
+        # 1.17.11: an honoured replacement stands in for a disabled dependency. The version still applies to the dependency.
+        if not dep_enabled and not module_replacement.satisfies_dependency(model, dep_id):
+            problems.append({"type": "disabled_dependency", "dependency": dep_id, "constraint": constraint})
+        if not version_satisfies(dep.get("extension_version") or "0.0.0", constraint):
+            problems.append({"type": "dependency_version", "dependency": dep_id, "constraint": constraint, "version": dep.get("extension_version")})
+    for check in target.get("runtime_requirements") or []:
+        if not check.get("satisfied"):
+            problems.append({"type": "runtime", **check})
+    # AD-20: enabling a replacement names the module it will disable (1.17.11), and enabling a core or server module names
+    # the replacement it will switch off (1.17.12); the other replacement rules still apply.
+    problems.extend(module_replacement.enable_problems(model, module_id))
+    return problems
+
+
+def _replacement_dependants(catalog: dict, model: dict, module_id: str, replacements) -> list[dict]:
+    """Problems for enabled modules that hard-depend on a replacement that enabling ``module_id`` would switch off
+    (1.17.12, CQ35). No cascade: the operator disables them first."""
+    problems = []
+    for replacement_id in replacements:
+        names = []
+        for item in sorted(catalog.values(), key=lambda row: row["id"]):
+            if item.get("legacy") or item["id"] in (module_id, replacement_id) or replacement_id not in (item.get("dependencies") or {}):
+                continue
+            node = model.get(item["id"])
+            if (node.enabled if node is not None else item.get("enabled")):
+                names.append(item["id"])
+        if names:
+            problems.append({
+                "type": "replacement_has_dependants", "module": module_id, "replacement": replacement_id, "dependants": names,
+                "message": f"Enabling {module_id!r} switches {replacement_id!r} off, but enabled module(s) {', '.join(names)} depend on {replacement_id!r}. Disable them first.",
+            })
+    return problems
+
+
 def validate_enable(module_id: str) -> dict:
     catalog = {item["id"]: item for item in installed_catalog_v2()}
     target = catalog.get(module_id)
@@ -1385,25 +1460,62 @@ def validate_enable(module_id: str) -> dict:
         raise ModuleManagerV2Error("Protected framework modules cannot be enabled/disabled from the UI.")
     # 1.17.9-1: queued enable/disable jobs not yet applied count as done, so two queued jobs cannot both pass.
     model = _model_with_pending_jobs(module_replacement.live_model())
-    problems = []
-    for dep_id, constraint in (target.get("dependencies") or {}).items():
-        dep = catalog.get(dep_id)
-        if not dep:
-            problems.append({"type": "missing_dependency", "dependency": dep_id, "constraint": constraint})
-            continue
-        # 1.17.11: an honoured replacement stands in for a disabled dependency. The version still applies to the dependency.
-        if not dep.get("enabled") and not module_replacement.satisfies_dependency(model, dep_id):
-            problems.append({"type": "disabled_dependency", "dependency": dep_id, "constraint": constraint})
-        if not version_satisfies(dep.get("extension_version") or "0.0.0", constraint):
-            problems.append({"type": "dependency_version", "dependency": dep_id, "constraint": constraint, "version": dep.get("extension_version")})
-    for check in target.get("runtime_requirements") or []:
-        if not check.get("satisfied"):
-            problems.append({"type": "runtime", **check})
-    # AD-20: enabling a replacement names the module it will disable (1.17.11); enabling a core or server module next
-    # to its enabled replacement is refused.
-    problems.extend(module_replacement.enable_problems(model, module_id))
+    problems = _enable_problems(catalog, model, module_id)
+    # 1.17.12: the replacements this enable would switch off must have no enabled dependants.
+    problems.extend(_replacement_dependants(catalog, model, module_id, module_replacement.disable_plan(model, module_id) if module_replacement.switches_replacement(model, module_id) else []))
     will_disable = [] if problems else module_replacement.disable_plan(model, module_id)
     return {"valid": not problems, "problems": problems, "will_disable": will_disable}
+
+
+def _hand_back_problems(catalog: dict, model: dict, replacement_id: str, will_enable, off) -> list[dict]:
+    """Why a module that disabling ``replacement_id`` switches back on cannot be enabled (1.17.12, CQ34). Judged on the
+    model as it will be with ``off`` (the replacement and any cascade) disabled. Empty when it can come back."""
+    future = module_replacement._with_enabled(model, {module_id: False for module_id in off})
+    problems = []
+    for back in will_enable:
+        item = catalog.get(back)
+        if item is None or item.get("protected") or not item.get("managed", True):
+            inner = [{"type": "not_manageable", "module": back}]
+        else:
+            inner = _enable_problems(catalog, future, back, hypothetical=True)
+        if inner:
+            reasons = "; ".join(_problem_text(entry) for entry in inner)
+            problems.append({
+                "type": "hand_back_blocked", "module": replacement_id, "replaced": back, "problems": inner,
+                "message": f"Disabling {replacement_id!r} switches {back!r} back on, and {back!r} cannot be enabled: {reasons}. Nothing was changed.",
+            })
+    return problems
+
+
+def _problem_text(problem: dict) -> str:
+    kind = problem.get("type")
+    dep = problem.get("dependency")
+    if kind == "missing_dependency":
+        return f"it needs module {dep!r}, which is not installed"
+    if kind == "disabled_dependency":
+        return f"it needs module {dep!r}, which is disabled"
+    if kind == "dependency_version":
+        return f"module {dep!r} is at version {problem.get('version')}, and it needs {problem.get('constraint')}"
+    if kind == "runtime":
+        return "a runtime requirement is not met"
+    if kind == "not_manageable":
+        return "it cannot be enabled or disabled from the UI"
+    return str(problem.get("message") or kind or "a rule refuses it")
+
+
+def validate_disable(module_id: str, affected=None) -> dict:
+    """What disabling ``module_id`` would also do (1.17.12, CQ33): ``will_enable`` names the replaced module that comes
+    back on, and ``problems`` explain why it cannot (then the disable is refused). ``affected`` is the cascade list."""
+    catalog = {item["id"]: item for item in installed_catalog_v2()}
+    target = catalog.get(module_id)
+    if not target:
+        raise ModuleManagerV2Error(f"Module {module_id!r} is not installed.")
+    if target.get("protected"):
+        raise ModuleManagerV2Error("Protected framework modules cannot be enabled/disabled from the UI.")
+    model = _model_with_pending_jobs(module_replacement.live_model())
+    will_enable = module_replacement.hand_back_plan(model, module_id)
+    problems = _hand_back_problems(catalog, model, module_id, will_enable, set(affected or ()) | {module_id}) if will_enable else []
+    return {"valid": not problems, "problems": problems, "will_enable": will_enable}
 
 
 def _iter_jobs():
@@ -1423,7 +1535,8 @@ def _iter_jobs():
 
 def _model_with_pending_jobs(model: dict) -> dict:
     """The live model with queued, dispatched or running jobs applied in creation order: enable and disable jobs, and
-    the modules an enable or install job disables (``disable_modules``, 1.17.11)."""
+    the modules an enable or install job disables (``disable_modules``, 1.17.11) and the modules a disable job switches
+    back on (``enable_modules``, 1.17.12)."""
     pending = [
         job for job in _iter_jobs()
         if job.get("action") in ("enable", "disable", "batch_install", "bundle_install")
@@ -1442,6 +1555,10 @@ def _model_with_pending_jobs(model: dict) -> dict:
             node = out.get(str(mid))
             if node is not None and node.enabled:
                 out[str(mid)] = dataclasses.replace(node, enabled=False)
+        for mid in job.get("enable_modules") or []:  # 1.17.12: the replaced module a disable job hands back
+            node = out.get(str(mid))
+            if node is not None and not node.enabled:
+                out[str(mid)] = dataclasses.replace(node, enabled=True)
     return out
 
 
@@ -1478,7 +1595,7 @@ def queue_replacement_conflict_disable(replacement_id: str, replaced_id: str) ->
 
 
 def queue_set_enabled(module_id: str, enabled: bool, cascade: bool = False, requested_by: str | None = None,
-                      disable_replaced=None, actor=None) -> dict:
+                      disable_replaced=None, actor=None, confirm_replacement_switch=None) -> dict:
     catalog = {item["id"]: item for item in installed_catalog_v2()}
     target = catalog.get(module_id)
     if not target:
@@ -1487,18 +1604,34 @@ def queue_set_enabled(module_id: str, enabled: bool, cascade: bool = False, requ
         raise ModuleManagerV2Error("Protected modules cannot be enabled or disabled from the UI.")
     affected = [module_id]
     disable_modules: list[str] = []
+    enable_modules: list[str] = []
+    replacement_confirmed = False
     if enabled:
         validation = validate_enable(module_id)
         if not validation["valid"]:
-            replacement = [item for item in validation["problems"] if item.get("type") in ("replacement_conflict", "replacement_incomplete")]
+            replacement = [item for item in validation["problems"]
+                           if item.get("type") in ("replacement_conflict", "replacement_incomplete", "replacement_has_dependants")]
             if replacement:
                 raise ModuleManagerV2Error("Module cannot be enabled. " + " ".join(item["message"] for item in replacement))
             raise ModuleManagerV2Error("Module cannot be enabled until its dependencies and runtime requirements are satisfied.")
         # 1.17.11: enabling a replacement disables the module it replaces in the same job, and only on the exact list
         # the operator confirmed. The root helper re-checks the rules and holds the job to this list.
         disable_modules = _confirmed_disables(validation.get("will_disable"), disable_replaced, f"Module {module_id!r}")
+        # 1.17.12 (CQ32): enabling the replaced module switches its replacement off. That needs a second confirmation,
+        # after the first (the list). Enabling a replacement keeps its single confirmation.
+        if disable_modules and module_replacement.switches_replacement(_model_with_pending_jobs(module_replacement.live_model()), module_id):
+            if confirm_replacement_switch is not True:
+                raise ModuleReplacementSecondConfirmationRequired(disable_modules, module_id)
+            replacement_confirmed = True
     else:
-        dependants = _enabled_dependants(module_id)
+        # 1.17.12 (CQ33): disabling a replacement switches the module it replaces back on, when it can come back. The
+        # dependants of that module stay satisfied throughout, so they do not block the disable.
+        enable_modules = module_replacement.hand_back_plan(_model_with_pending_jobs(module_replacement.live_model()), module_id)
+
+        def dependants_of(mid):
+            return [item for item in _enabled_dependants(mid) if not (enable_modules and mid == module_id and item.get("via"))]
+
+        dependants = dependants_of(module_id)
         if dependants and not cascade:
             names = ", ".join(item["id"] for item in dependants)
             raise ModuleManagerV2Error(f"Module is required by enabled module(s): {names}. Disable dependants first or request cascade.")
@@ -1506,13 +1639,17 @@ def queue_set_enabled(module_id: str, enabled: bool, cascade: bool = False, requ
             # Recursively disable enabled dependants before the requested module.
             seen = set()
             def visit(mid):
-                for dep in _enabled_dependants(mid):
+                for dep in dependants_of(mid):
                     if dep["id"] not in seen:
                         seen.add(dep["id"])
                         visit(dep["id"])
                         affected.append(dep["id"])
             visit(module_id)
             affected = [mid for mid in affected if mid != module_id] + [module_id]
+        if enable_modules:
+            blocked = _hand_back_problems(catalog, _model_with_pending_jobs(module_replacement.live_model()), module_id, enable_modules, set(affected))
+            if blocked:
+                raise ModuleManagerV2Error("Module cannot be disabled. " + " ".join(item["message"] for item in blocked))
     payload = {
         "action": "enable" if enabled else "disable",
         "plugin_id": module_id,
@@ -1523,9 +1660,12 @@ def queue_set_enabled(module_id: str, enabled: bool, cascade: bool = False, requ
     }
     if enabled:
         payload["disable_modules"] = disable_modules
+        payload["replacement_confirmed"] = replacement_confirmed
+    else:
+        payload["enable_modules"] = enable_modules
     job = _queue_v2(payload)
-    if disable_modules:
-        module_replacement.audit_replaced_disabled(actor, module_id, disable_modules, job.get("id"))
+    if disable_modules or enable_modules:
+        module_replacement.audit_switch_queued(actor, module_id, job.get("id"), disabled=disable_modules, enabled=enable_modules)
     return job
 
 

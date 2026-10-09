@@ -97,7 +97,8 @@ def rows():
 captured = []
 v2._queue_v2 = lambda payload: captured.append(payload) or {"id": f"job-{len(captured)}", "queued": True}
 audited = []
-mr.audit_replaced_disabled = lambda actor, replacement, disabled, job_id: audited.append((actor, replacement, list(disabled), job_id))
+# 1.17.12: the queue-time row is audit_switch_queued (a request, not a change)
+mr.audit_switch_queued = lambda actor, subject, job_id, disabled=(), enabled=(): audited.append((actor, subject, list(disabled), job_id))
 
 
 def refused_enable(module_id, **kwargs):
@@ -167,12 +168,13 @@ v2.queue_set_enabled("bystander", False)
 must("disable_modules" not in captured[-1], captured[-1])
 
 # ------------------------------------------------------------------------------------------ what stays refused
+# 1.17.12 (CQ32): the core module next to its enabled replacement is no longer refused. It names the replacement and needs the
+# two confirmations (tests/module-replacement-handback-1.17.12.py).
 world(patching=False, pm=True)
 exc = refused_enable("patching")
-must(not isinstance(exc, v2.ModuleReplacementConfirmationRequired) and "patchmanagement" in str(exc), exc)
+must(isinstance(exc, v2.ModuleReplacementConfirmationRequired) and exc.will_disable == ["patchmanagement"], exc)
 result = v2.validate_enable("patching")
-must(not result["valid"] and result["problems"][0]["type"] == "replacement_conflict" and result["problems"][0]["replaced_by"] == "patchmanagement", result)
-must(result["will_disable"] == [], result)
+must(result == {"valid": True, "problems": [], "will_disable": ["patchmanagement"]}, result)
 # a rival enabled replacement of the same module is still refused (the target would be disabled, the rival still competes)
 world(patching=True, pm=False)
 manifest("rival", replaces="patching", capabilities=PM_CAPS)
@@ -200,8 +202,7 @@ captured.clear()
                                           "disable_modules": ["patching"], "status": "queued", "created_at": "2026-10-09T10:00:00"}), encoding="utf-8")
 model = v2._model_with_pending_jobs(mr.live_model())
 must(model["patchmanagement"].enabled is True and model["patching"].enabled is False, "the pending job enables the replacement and disables the core module")
-must(not v2.validate_enable("patching")["valid"], "a second queued job cannot enable the core module next to the queued replacement")
-must(v2.validate_enable("patching")["problems"][0]["replaced_by"] == "patchmanagement", v2.validate_enable("patching"))
+must(v2.validate_enable("patching")["will_disable"] == ["patchmanagement"], "1.17.12: a second queued job enabling the core module switches the queued replacement off")
 must(rows()["patchmanagement"]["will_disable"] == [], "the replacement is already enabled in the pending model")
 (JOBS / "a.json").write_text(json.dumps({"id": "a", "action": "enable", "plugin_id": "patchmanagement", "affected_modules": ["patchmanagement"],
                                           "disable_modules": ["patching"], "status": "succeeded", "created_at": "2026-10-09T10:00:00"}), encoding="utf-8")
@@ -259,6 +260,6 @@ answer = post({"enabled": "yes"})
 must(answer.status_code == 400 and answer.data["detail"] == "enabled must be true or false.", answer.data)  # the existing contract
 world(patching=False, pm=True)
 answer = post({"enabled": True, "disable_replaced": ["patching"]}, "patching")  # the core module next to its enabled replacement
-must(answer.status_code == 400 and "code" not in answer.data and "patchmanagement" in answer.data["detail"], answer.data)  # an ordinary refusal keeps the old shape
+must(answer.status_code == 400 and answer.data["code"] == "replacement_confirmation_required" and answer.data["will_disable"] == ["patchmanagement"], answer.data)  # 1.17.12: a wrong list gets the fresh one
 
 print("[TEST] PASS module replacement enable 1.17.11")

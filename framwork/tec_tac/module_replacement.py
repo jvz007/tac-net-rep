@@ -23,6 +23,15 @@ in the status.
 * If state shows both enabled, Core does not honour the replacement, drops it from what it loads, and queues a job
   that disables the replacement and keeps the replaced module (``conflicted_replacements``, ``reconcile_conflicts``).
 * An honoured replacement satisfies a hard dependency on the replaced module id (``satisfies_dependency``).
+
+1.17.12 (AD-20 hand-back, Johan CQ32 and CQ33, 9 October 2026):
+
+* Enabling the replaced module while its replacement is enabled is no longer refused. It names the replacement
+  (``disable_plan``), needs two confirmations, and switches the replacement off in the same job (``replacements_of``,
+  ``switches_replacement``).
+* Disabling a replacement switches the replaced module back on in the same job when it can (``hand_back_plan``).
+* Audit follows what happened: a "queued" row when the job is queued (``audit_switch_queued``) and one outcome row per
+  module the job changed, written by the scheduler tick once the job has finished (``audit_finished_jobs``).
 """
 from __future__ import annotations
 
@@ -217,12 +226,49 @@ def _hypothetical(model: Mapping[str, Node], node: Node, *, will_enable: bool, b
     return _with_enabled(model, {target.id: False}), [target.id]
 
 
+def replacements_of(model: Mapping[str, Node], module_id: str) -> list[str]:
+    """The enabled modules that replace ``module_id`` (1.17.12). Empty unless ``module_id`` is an installed core or server
+    module. Used by the enable direction of the hand-back and by the root helper's twin of the rule."""
+    target = model.get(module_id)
+    if target is None or target.category not in REPLACEABLE_CATEGORIES:
+        return []
+    return sorted(other.id for other in model.values() if other.enabled and other.replaces == module_id and other.id != module_id)
+
+
+def switches_replacement(model: Mapping[str, Node], module_id: str) -> bool:
+    """True when enabling ``module_id`` (a disabled core or server module) would switch off an enabled replacement of it.
+    That is the direction that needs the second confirmation (1.17.12)."""
+    node = model.get(module_id)
+    return bool(node is not None and not node.enabled and replacements_of(model, module_id))
+
+
+def hand_back_plan(model: Mapping[str, Node], replacement_id: str) -> list[str]:
+    """[replaced module id] when disabling ``replacement_id`` should switch the module it replaces back on (CQ33, 1.17.12).
+
+    Only when the module declares ``replaces`` and is enabled, the target is installed, is a core or server module and is
+    disabled, and no other enabled module replaces the same target. When both are enabled (the reconcile case) or the
+    target is enabled already, it is [] (the replaced module is on, so there is nothing to hand back)."""
+    node = model.get(replacement_id)
+    if node is None or not node.replaces or not node.enabled:
+        return []
+    target = model.get(node.replaces)
+    if target is None or target.category not in REPLACEABLE_CATEGORIES or target.enabled:
+        return []
+    if any(other.id != replacement_id and other.enabled and other.replaces == node.replaces for other in model.values()):
+        return []
+    return [target.id]
+
+
 def disable_plan(model: Mapping[str, Node], module_id: str) -> list[str]:
     """The module ids that enabling ``module_id`` would disable (AD-20 amendment 1a, 1.17.11). Empty when it replaces
-    nothing, is enabled already, has nothing enabled to replace, or would be refused for any other reason."""
+    nothing, is enabled already, has nothing enabled to replace, or would be refused for any other reason.
+
+    1.17.12: for a disabled core or server module it is the enabled replacements of that module (the hand-back, CQ32)."""
     node = model.get(module_id)
-    if node is None or not node.replaces or node.enabled:
+    if node is None or node.enabled:
         return []
+    if not node.replaces:
+        return replacements_of(model, module_id)
     hypothetical, disables = _hypothetical(model, node, will_enable=True)
     if not disables:
         return []
@@ -284,14 +330,173 @@ def _audit_replacement(actor, *, action: str, object_id: str, message: str, meta
         logger.exception("Could not write the %s audit row for %s.", action, object_id)
 
 
-def audit_replaced_disabled(actor, replacement_id: str, disabled: list[str], job_id: Any) -> None:
-    """Audit row for a job that disables a replaced module as part of enabling or installing its replacement."""
-    for replaced in disabled:
-        _audit_replacement(
-            actor, action="custom:module-replacement-disabled", object_id=replaced,
-            message=f"Module {replaced} is disabled because its replacement {replacement_id} was enabled.",
-            metadata={"replacement": replacement_id, "replaced": replaced, "job_id": str(job_id or "")},
-        )
+ACTION_SWITCH_QUEUED = "custom:module-replacement-switch-queued"
+ACTION_DISABLED = "custom:module-replacement-disabled"
+ACTION_ENABLED = "custom:module-replacement-enabled"
+ACTION_CONFLICT_RESOLVED = "custom:module-replacement-conflict-resolved"
+ACTION_SWITCH_FAILED = "custom:module-replacement-switch-failed"
+
+# The outcome sweep looks back this far and at this many job files per scheduler tick (1.17.12).
+AUDIT_WINDOW_DAYS = 7
+AUDIT_MAX_JOBS_PER_TICK = 200
+
+
+def _join_ids(ids) -> str:
+    return ", ".join(sorted({str(value) for value in ids}))
+
+
+def audit_switch_queued(actor, subject_id: str, job_id: Any, disabled=(), enabled=()) -> None:
+    """Audit row for a job that asks Core to switch modules (1.17.12). It records the request, written when the job is
+    queued, and claims no change: the outcome rows come from ``audit_finished_jobs`` once the job has run."""
+    disabled, enabled = sorted(set(disabled or ())), sorted(set(enabled or ()))
+    if not (disabled or enabled):
+        return
+    parts = []
+    if disabled:
+        parts.append(f"disable {_join_ids(disabled)}")
+    if enabled:
+        parts.append(f"enable {_join_ids(enabled)}")
+    _audit_replacement(
+        actor, action=ACTION_SWITCH_QUEUED, object_id=subject_id,
+        message=f"Module {subject_id} was asked to switch: job {job_id or ''} will {' and '.join(parts)}.",
+        metadata={"job_id": str(job_id or ""), "disable": disabled, "enable": enabled},
+    )
+
+
+def _audit_already_written(action: str, object_id: str, job_id: str) -> bool:
+    """True when Tactical's AuditLog holds a row with this action, object and metadata job_id. Raises when the lookup
+    cannot run; the caller then writes nothing, so a broken lookup can never duplicate a row every tick."""
+    from . import audit
+
+    return audit._auditlog_model().objects.filter(
+        action=action, debug_info__object_id=object_id, debug_info__metadata__job_id=job_id,
+    ).exists()
+
+
+def _parse_when(value) -> datetime | None:
+    try:
+        when = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+
+
+def _id_list(value) -> list[str]:
+    return [str(item) for item in value if isinstance(item, str) and item] if isinstance(value, list) else []
+
+
+def _replacement_for(job: Mapping[str, Any], replaced_id: str) -> str:
+    """The module whose enable or install led to ``replaced_id`` being disabled, from the job's own plan."""
+    for action in (job.get("plan") or {}).get("actions") or []:
+        if isinstance(action, Mapping) and replaced_id in _id_list(action.get("will_disable")):
+            return str(action.get("id") or "")
+    return str(job.get("plugin_id") or "")
+
+
+def _outcome_rows(job: Mapping[str, Any], replaces_of) -> list[dict]:
+    """The audit rows one finished job owes: [{action, object_id, message, metadata}]. Pure; no I/O."""
+    job_id = str(job.get("id") or "")
+    subject = str(job.get("plugin_id") or "")
+    base = {"job_id": job_id, "requested_by": str(job.get("requested_by") or "")}
+    rows: list[dict] = []
+    if job.get("status") == "succeeded":
+        for target in _id_list(job.get("disabled_modules")):
+            if job.get("action") == "enable" and job.get("replacement_confirmed") is True:
+                # The replaced module was enabled again and switched its replacement off (CQ32).
+                message = f"Replacement {target} was disabled because the module it replaces, {subject}, was enabled again."
+                replacement, replaced = target, subject
+            else:
+                replacement, replaced = _replacement_for(job, target), target
+                message = f"Module {target} was disabled because replacement {replacement} was enabled."
+            rows.append({"action": ACTION_DISABLED, "object_id": target, "message": message,
+                         "metadata": {**base, "replacement": replacement, "replaced": replaced}})
+        for target in _id_list(job.get("enabled_modules")):
+            rows.append({"action": ACTION_ENABLED, "object_id": target,
+                         "message": f"Module {target} was enabled again because its replacement {subject} was disabled.",
+                         "metadata": {**base, "replacement": subject, "replaced": target}})
+        if job.get("reason") != "replacement_conflict":
+            for target in _id_list(job.get("reconciled_modules")):
+                rows.append({"action": ACTION_CONFLICT_RESOLVED, "object_id": target,
+                             "message": f"Replacement {target} was found enabled next to the module it replaces and was disabled.",
+                             "metadata": {**base, "replacement": target, "replaced": replaces_of(target)}})
+    elif job.get("status") == "failed" and (_id_list(job.get("disable_modules")) or _id_list(job.get("enable_modules"))):
+        planned = _id_list(job.get("disable_modules")) + _id_list(job.get("enable_modules"))
+        stage = str(job.get("stage") or "")
+        outcome = "The flags were put back as they were." if stage in {"rollback", "runtime-sync"} else "Nothing was changed."
+        error = str(job.get("error") or "no error was recorded")
+        rows.append({"action": ACTION_SWITCH_FAILED, "object_id": subject,
+                     "message": f"The switch for module {subject} did not finish (stage {stage or 'unknown'}, planned: {_join_ids(planned)}). {outcome} Error: {error}",
+                     "metadata": {**base, "stage": stage, "error": error, "planned": sorted(set(planned)),
+                                  "replacement": subject, "replaced": ""}})
+    return rows
+
+
+def _write_outcome_row(row: dict) -> bool:
+    job_id = row["metadata"]["job_id"]
+    try:
+        if _audit_already_written(row["action"], row["object_id"], job_id):
+            return False
+    except Exception:
+        logger.exception("Could not look up the %s audit row of job %s for %s; not writing it.", row["action"], job_id, row["object_id"])
+        return False
+    try:
+        from . import audit
+
+        actor = audit.service_audit_actor(module_id="core", service="module-replacement", identity="system")
+        result = audit.record(actor=actor, module_id="core", action=row["action"], object_type="module",
+                              object_id=row["object_id"], message=row["message"], metadata=row["metadata"], strict=False)
+    except Exception:
+        logger.exception("Could not write the %s audit row for %s.", row["action"], row["object_id"])
+        return False
+    return bool(result.get("recorded", True)) if isinstance(result, dict) else True
+
+
+def audit_finished_jobs(*, now: datetime | None = None, jobs=None, model: Mapping[str, Node] | None = None) -> int:
+    """Write the outcome audit rows of module jobs that have finished (1.17.12). Returns the number of rows written.
+
+    Audit follows what happened, so the rows are written after the root helper has finished, from the job file it left:
+    ``disabled_modules``, ``enabled_modules`` and ``reconciled_modules`` of a succeeded job, and a switch-failed row for
+    a failed job that had a planned list. It looks only at jobs finished in the last ``AUDIT_WINDOW_DAYS`` days and at
+    most ``AUDIT_MAX_JOBS_PER_TICK`` of them, newest first. A row already in the audit log (same action, object and job
+    id) is never written again. Non-strict: it never raises, and logs once per failing job."""
+    written = 0
+    try:
+        if jobs is None:
+            from . import module_manager_v2 as v2
+
+            jobs = v2._iter_jobs()
+        now = now or datetime.now(timezone.utc)
+        horizon = now.timestamp() - AUDIT_WINDOW_DAYS * 86400
+        candidates = []
+        for job in jobs:
+            if not isinstance(job, Mapping) or job.get("status") not in ("succeeded", "failed"):
+                continue
+            when = _parse_when(job.get("finished_at"))
+            if when is not None and when.timestamp() >= horizon:
+                candidates.append((when, job))
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        known = dict(model) if model is not None else None
+
+        def replaces_of(module_id: str) -> str:
+            nonlocal known
+            try:
+                if known is None:
+                    known = dict(live_model())
+                node = known.get(module_id)
+                return node.replaces if node is not None else ""
+            except Exception:
+                return ""
+
+        for _, job in candidates[:AUDIT_MAX_JOBS_PER_TICK]:
+            try:
+                for row in _outcome_rows(job, replaces_of):
+                    if _write_outcome_row(row):
+                        written += 1
+            except Exception:
+                logger.exception("Could not write the outcome audit rows for module job %s.", job.get("id"))
+    except Exception:
+        logger.exception("Replacement audit sweep failed; Tactical is not affected.")
+    return written
 
 
 def reconcile_conflicts(*, model: Mapping[str, Node] | None = None, now: datetime | None = None) -> list[dict]:
@@ -324,7 +529,7 @@ def reconcile_conflicts(*, model: Mapping[str, Node] | None = None, now: datetim
                 logger.warning("Module %s replaces %s and both were enabled. Queued job %s to disable %s; %s stays.",
                                replacement_id, replaced_id, job.get("id"), replacement_id, replaced_id)
                 _audit_replacement(
-                    None, action="custom:module-replacement-conflict-resolved", object_id=replacement_id,
+                    None, action=ACTION_CONFLICT_RESOLVED, object_id=replacement_id,
                     message=f"Both {replacement_id} and the module it replaces, {replaced_id}, were enabled. Core queued a job that disables {replacement_id} and keeps {replaced_id}.",
                     metadata={"replacement": replacement_id, "replaced": replaced_id, "job_id": str(job.get("id") or "")},
                 )
@@ -425,7 +630,9 @@ def enable_problems(model: Mapping[str, Node], module_id: str) -> list[dict]:
     """Problems that stop ``module_id`` being enabled (AD-20 conditions 1 and 3), as lifecycle problem dicts.
 
     1.17.11: the replaced module being enabled is not a refusal for the replacement itself. Enabling it names that
-    module (``disable_plan``) and disables it in the same job, so every other rule is checked as if it already were."""
+    module (``disable_plan``) and disables it in the same job, so every other rule is checked as if it already were.
+    1.17.12: the other direction is not a refusal either. Enabling a core or server module whose replacement is enabled
+    names the replacement in ``disable_plan`` and switches it off in the same job, after two confirmations."""
     problems: list[dict] = []
     node = model.get(module_id)
     if node is None:
@@ -437,12 +644,6 @@ def enable_problems(model: Mapping[str, Node], module_id: str) -> list[dict]:
             kind = "replacement_conflict" if reason in CONFLICT_REASONS else "replacement_incomplete"
             problems.append({"type": kind, "module": module_id, "replaces": node.replaces, "reason": reason,
                              "message": MESSAGES[reason], "capabilities": failures})
-    if node.category in REPLACEABLE_CATEGORIES:
-        for other in sorted(model.values(), key=lambda n: n.id):
-            if other.enabled and other.replaces == module_id:
-                problems.append({"type": "replacement_conflict", "module": module_id, "replaced_by": other.id,
-                                 "reason": REASON_TARGET_ENABLED,
-                                 "message": f"Module {other.id!r} is enabled and replaces this module. Disable {other.id!r} first."})
     return problems
 
 

@@ -2,7 +2,7 @@
 
 Some premium modules do the whole job of a core or server module and do it better. Advanced Patch Management replaces Windows Patching. Core lets one module take over another's place, safely, without both ever running.
 
-This page is for module authors and administrators. The decision is AD-20 (`docs/review-accepted-decisions.md`). Johan's amendments of 9 October 2026 (Core 1.17.11) are marked below.
+This page is for module authors and administrators. The decision is AD-20 (`docs/review-accepted-decisions.md`). Johan's amendments of 9 October 2026 (Core 1.17.11) and the hand-back (Core 1.17.12) are marked below.
 
 ## The two manifest keys
 
@@ -90,14 +90,13 @@ The job carries the confirmed list as `disable_modules`. Two queued jobs still c
 
 The root job helper does not trust the web side. Under the module-state lock it reads the installed manifests itself (regular, root-owned files under `extensions/` only), runs the same rules again, and requires what it would disable to be inside the confirmed list. Anything else fails the job with nothing changed. It then enables the replacement and disables the replaced module in one state write. If the runtime sync fails, it puts the flags back. An install does the same check after the packages land and before any state is written, disables after the versions are recorded, and re-enables the module if it has to roll back.
 
-Core writes one audit row for each module it will disable, when the job is queued: module `core`, action `custom:module-replacement-disabled`, object the replaced module, actor the person who asked.
+Audit follows what happened (1.17.12). When the job is queued, Core writes one row that records the request: module `core`, action `custom:module-replacement-switch-queued`, object the module being enabled, actor the person who asked, message "Module X was asked to switch: job J will disable A". It claims no change. The rows that say what the job did are written after it finishes. See "Audit rows" below.
 
 What still stays refused:
 
 | Action | Problem type |
 | --- | --- |
 | Enable a replacement while another enabled module replaces the same module | `replacement_conflict` |
-| Enable a core or server module while an enabled replacement points at it (disable the replacement first) | `replacement_conflict` |
 | Enable or install a replacement whose target is missing or whose capabilities do not cover the replaced module's | `replacement_incomplete` |
 | Install a replaced module and its replacement in the same batch | `replacement_conflict` |
 
@@ -109,7 +108,7 @@ A hand-edited state file, or a privileged job that races, can leave both enabled
 
 1. **At load.** The replacement is left out of the modules Core loads. The replaced module loads as normal. Core logs one warning for each pair.
 2. **In what the UI sees.** `module_status` reports the replacement as `enabled: false` and `active: false`, so the UI does not load code whose backend is not loaded. The `replacement` object gains `conflict: true`.
-3. **For good.** The scheduler tick queues one `disable` job for the replacement (requested by the system, reason `replacement_conflict`), through the same dispatch as a user job. It writes an audit row (`custom:module-replacement-conflict-resolved`, with both module ids and the job id) and logs a warning. It skips a pair that already has a queued, dispatched or running disable job, and queues at most one job per replacement an hour, so a failing dispatch cannot loop every minute. The root helper also settles a pair it finds when it runs any enable job.
+3. **For good.** The scheduler tick queues one `disable` job for the replacement (requested by the system, reason `replacement_conflict`), through the same dispatch as a user job. It writes an audit row (`custom:module-replacement-conflict-resolved`, with both module ids and the job id) and logs a warning. This job never hands back: the replaced module is already enabled in that state. It skips a pair that already has a queued, dispatched or running disable job, and queues at most one job per replacement an hour, so a failing dispatch cannot loop every minute. The root helper also settles a pair it finds when it runs any enable job.
 
 Until the job runs, the replacement is not honoured: it gets no routes and no capability names. The replaced module keeps both.
 
@@ -119,19 +118,67 @@ A module can list the replaced module's id in `dependencies`. While a replacemen
 
 - Catalogue rows gain `dependency_status[].satisfied_by`: the replacement's id, or null. `enabled` stays truthful.
 - Enabling a dependant, and an install plan that includes one, no longer raise `disabled_dependency` while the replacement is honoured. A plan is judged on the modules as they will be after the install.
-- Disabling the replacement is blocked while enabled modules depend on the replaced module, and the existing `cascade` option disables them first. Core does this rather than leave enabled modules running without what they declared they need. The enable job that switches over does not cascade, because the replacement keeps those modules satisfied.
+- Disabling the replacement used to be blocked while enabled modules depended on the replaced module. Since 1.17.12 it switches the replaced module back on in the same job (see "Hand back"), so those dependants stay satisfied throughout and do not block it. A dependant of the replacement itself still needs the `cascade` option. The enable job that switches over does not cascade, because the replacement keeps those modules satisfied.
 
 ## What changes while a replacement is honoured
 
 - **Tactical routes.** The replacement joins the owners of every Tactical operation rule the replaced core module owns, and of no other. For Windows Patching that is `winupdate/` and `automation/patchpolicy/`. Core refuses everything else to it. A server module has no routes, so a replacement of one joins none. See `docs/tactical-operations.md`.
 - **Capability names.** The replacement may register the replaced module's capability ids, only the ones it declares. Consumers keep calling the same names and get whichever module is installed (`docs/capabilities.md`).
 - **Hard dependencies.** See above.
-- **Catalogue.** Rows from `GET /api/tfd/modules/v2/` carry `replaces`, `replacement` (the status object), `replaced_by` and `will_disable`.
+- **Catalogue.** Rows from `GET /api/tfd/modules/v2/` carry `replaces`, `replacement` (the status object), `replaced_by` and `will_disable`. Since 1.17.12 they also carry `will_enable` and `second_confirmation_required` (see "Hand back").
 - **Browser rows.** Each `module_status` row of `GET /api/tfd/ui/context/` carries `replaces` since 1.17.11: the declared id, or null. It is the declared value, not the honoured one, and Core's executor re-checks honouring on every call. UI 0.12.88 reads it to scope `tacticalOperation` to the AD-20 module the caller replaces. See `docs/tactical-operations.md`.
 
-## Hand back
+## Hand back (1.17.12)
 
-Disable the replacement, then enable the replaced module. Honouring is computed from state on every call, so disabling the replacement drops its routes and capability names at once. After the normal reload the replaced module registers its own again. Enabling the replaced module while its replacement is still enabled is refused, and the answer names the replacement. Core does not hand back by itself.
+Handing back works in both directions, in one job, with the same rollback and audit as an enable. Johan decided it on 9 October 2026 (CQ32 and CQ33). The two modules are never both enabled, and you never have to remember the order.
+
+### Enabling the replaced module while its replacement is enabled
+
+Before 1.17.12 Core refused this and said "Disable X first". Now Core names the replacement, asks twice, and switches it off in the same job.
+
+1. Read `modules[].will_disable` from `GET /api/tfd/modules/v2/` for the replaced module. It now names the enabled replacement. `modules[].second_confirmation_required` is true, so the UI knows before it asks.
+2. Show the list and ask. Send it back as `disable_replaced` on `POST /api/tfd/modules/v2/<id>/state/`. If the list is missing or out of date, the answer is HTTP 400 with `code: replacement_confirmation_required` and the fresh `will_disable`. This is the first confirmation, and it works as it did in 1.17.11.
+3. Show a warning that names the replacement and says it will be switched off. Send `confirm_replacement_switch: true` as well. If the list is right but the flag is missing or false, the answer is HTTP 400 with `code: replacement_second_confirmation_required`, a plain `detail`, the fresh `will_disable` and `module` (the id being enabled). A value that is not true or false is a plain 400 refusal with no code.
+
+Enabling a replacement keeps its single confirmation. It never needs the second flag.
+
+Core refuses the enable (a plain 400, problem type `replacement_has_dependants`) when an enabled module hard-depends on the replacement that would be switched off. It lists them. Nothing cascades: you disable those modules first. A dependant of the replaced module itself is not affected, because that module is the one coming on.
+
+The job carries `disable_modules` (the replacements to switch off) and `replacement_confirmed: true`. Two queued jobs cannot both pass, because a queued job's changes count as done when the next one is checked.
+
+The root job helper checks all of this again from root-owned manifests and the root-owned copy of the job. It adds the enabled replacement to what it disables, requires that to sit inside the confirmed list, and requires `replacement_confirmed` to be exactly true when the list holds a replacement of a module being enabled. Otherwise the job fails with nothing changed. Both flags change in one state write. If the runtime sync fails, it puts both back and syncs again.
+
+### Disabling a replacement
+
+Disabling an enabled replacement now switches its replaced module back on in the same job. No confirmation is needed: Johan asked only for a warning on the enable direction, so the UI names the module that comes back.
+
+- `modules[].will_enable` names it. It is set only when the replaced module is installed, is a core or server module, is disabled, and no other enabled module replaces it. It is empty when the replaced module is already enabled (the "both enabled" case), so that case is never "handed back".
+- The job carries `enable_modules`. Core checks that the replaced module can be enabled with the replacement off: its own dependencies, versions and runtime requirements. If it cannot, Core refuses the disable with a plain-English reason and changes nothing, so you are never left with both modules off.
+- Dependants of the replaced module stay satisfied throughout and do not block the disable. Dependants of the replacement still need `cascade`, as before.
+- The root helper re-checks each module it would enable: it must be the replaced module of a replacement the job disables, a core or server module, disabled now, and have no other enabled replacement. It makes the disable and the enable in one state write. If the sync fails, it puts both flags back and syncs again.
+- The reconcile job from "If both end up enabled anyway" never hands back.
+
+Removing (uninstalling) a replacement does not enable the replaced module. It stays disabled until someone enables it.
+
+### Job fields
+
+A job row from `GET /api/tfd/modules/v2/jobs/` carries `disabled_modules`, `enabled_modules` and `reconciled_modules` once the root helper has run it. They are additive and absent on older jobs. The request fields (`disable_modules`, `enable_modules`, `replacement_confirmed`) are not exposed.
+
+### Audit rows
+
+Audit follows what happened. Every row is module `core`, object type `module`, and non-strict (a failed write is logged and never stops a job).
+
+| When | Action | Actor | Says |
+| --- | --- | --- | --- |
+| The job is queued | `custom:module-replacement-switch-queued` | the person who asked | "Module X was asked to switch: job J will disable A and enable B". A request, not a change. Written for every job that carries `disable_modules` or `enable_modules`: enable, disable, and the install paths. |
+| The job succeeded | `custom:module-replacement-disabled` | system service | A module in `disabled_modules` was switched off. |
+| The job succeeded | `custom:module-replacement-enabled` | system service | A module in `enabled_modules` was switched back on. |
+| The job succeeded | `custom:module-replacement-conflict-resolved` | system service | A replacement in `reconciled_modules` was found enabled next to its replaced module and disabled by the helper. |
+| The job failed | `custom:module-replacement-switch-failed` | system service | A failed job that had a planned list. The message says whether the flags were put back or nothing changed, and gives the stage and the error. |
+
+The outcome rows come from `module_replacement.audit_finished_jobs()`, which the scheduler tick calls every minute, so a row appears within about a minute of the job finishing. Each row's metadata carries `job_id`, `requested_by`, `replacement` and `replaced`.
+
+The sweep is bounded and safe. It looks at jobs that finished in the last 7 days and at most 200 jobs a tick, newest first. Before it writes a row it looks for one with the same action, object and `job_id` in Tactical's audit log, so a second tick never duplicates a row. If that lookup fails, it writes nothing and tries again next tick. It never raises, and the reconcile job keeps its single queue-time row (`custom:module-replacement-conflict-resolved`) rather than getting a second one.
 
 ## What this does not do
 

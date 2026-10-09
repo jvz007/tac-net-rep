@@ -94,7 +94,7 @@ def rows():
     return {row["id"]: row for row in v2.installed_catalog_v2()}
 
 
-mr.audit_replaced_disabled = lambda *args, **kwargs: None  # the audit row is covered in the enable test
+mr.audit_switch_queued = lambda *args, **kwargs: None  # the audit row is covered in the enable test
 
 captured = []
 v2._queue_v2 = lambda payload: captured.append(payload) or {"id": f"job-{len(captured)}", "queued": True}
@@ -162,14 +162,13 @@ with_consumer(patching=False, pm=True, consumer=True)
 must(v2._enabled_dependants("patchmanagement") == [{"id": "consumer", "constraint": "*", "via": "patching"}], v2._enabled_dependants("patchmanagement"))
 must(v2._enabled_dependants("patching") == [{"id": "consumer", "constraint": "*"}], "the replaced module's own dependants are unchanged")
 must(v2.validate_remove("patchmanagement")["valid"] is False, "removing the replacement is flagged too")
-try:
-    v2.queue_set_enabled("patchmanagement", False)
-    raise AssertionError("disabling the replacement was queued with an enabled dependant")
-except v2.ModuleManagerV2Error as exc:
-    must("consumer" in str(exc) and "cascade" in str(exc), exc)
-must(captured == [], "nothing queued")
+# 1.17.12 (CQ33): disabling the replacement switches the replaced module back on in the same job, so the dependant of the
+# replaced module stays satisfied and blocks nothing. A dependant of the replacement itself still needs cascade
+# (tests/module-replacement-handback-1.17.12.py).
+v2.queue_set_enabled("patchmanagement", False)
+must(captured[-1]["action"] == "disable" and captured[-1]["affected_modules"] == ["patchmanagement"] and captured[-1]["enable_modules"] == ["patching"], captured[-1])
 v2.queue_set_enabled("patchmanagement", False, cascade=True)
-must(captured[-1]["action"] == "disable" and captured[-1]["affected_modules"] == ["consumer", "patchmanagement"], captured[-1])
+must(captured[-1]["affected_modules"] == ["patchmanagement"], "cascade has nothing to add: the consumer stays satisfied by the module that comes back")
 # a disabled dependant blocks nothing
 with_consumer(patching=False, pm=True, consumer=False)
 must(v2._enabled_dependants("patchmanagement") == [], "no enabled dependants")

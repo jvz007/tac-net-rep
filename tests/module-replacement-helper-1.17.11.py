@@ -265,9 +265,11 @@ refused(lambda: helper.apply_enable_job(REPO, ["patchmanagement"], ["patching"])
 world(patching=True, pm=False)
 put("patching", capabilities=PATCHING_CAPS)
 refused(lambda: helper.apply_enable_job(REPO, ["patchmanagement"], ["patching"]), "target-not-core")
-# 7. the core module is enabled while an enabled replacement points at it
+# 7. the core module is enabled while an enabled replacement points at it. 1.17.12 (CQ32): that is a switch, not a refusal,
+# but it needs the confirmed list and the second confirmation (tests/module-replacement-helper-handback-1.17.12.py)
 world(patching=False, pm=True)
-refused(lambda: helper.apply_enable_job(REPO, ["patching"], []), "replaces it")
+refused(lambda: helper.apply_enable_job(REPO, ["patching"], []), "did not confirm: patchmanagement")
+refused(lambda: helper.apply_enable_job(REPO, ["patching"], ["patchmanagement"]), "did not confirm the switch")
 must(flags() == {"patching": False, "patchmanagement": True}, "unchanged")
 # 8. the replaced module hid its capabilities
 world(patching=True, pm=False, patching_caps=None)
@@ -567,8 +569,11 @@ for category in ("core", "server"):
     core_model = {"target": mr.Node(id="target", category=category, enabled=False, capabilities={}), "repl": mr.Node(id="repl", enabled=True, replaces="target", capabilities={})}
     helper_model = {"target": {"id": "target", "category": category, "enabled": False, "replaces": "", "capabilities": {}},
                     "repl": {"id": "repl", "category": "", "enabled": True, "replaces": "target", "capabilities": {}}}
-    must(bool(mr.enable_problems(core_model, "target")) is True, category)
-    refused(lambda: helper.plan_enable_disables(helper_model, ["target"], []), "replaces it")
+    # 1.17.12 (CQ32): not a refusal any more. Both sides name the replacement, and the helper needs both confirmations.
+    must(mr.enable_problems(core_model, "target") == [] and mr.disable_plan(core_model, "target") == ["repl"], category)
+    refused(lambda: helper.plan_enable_disables(helper_model, ["target"], []), "did not confirm: repl")
+    refused(lambda: helper.plan_enable_disables(helper_model, ["target"], ["repl"]), "did not confirm the switch")
+    must(helper.plan_enable_disables(helper_model, ["target"], ["repl"], True) == ["repl"], category)
 # the shared version rule: every pair of versions gives the same answer
 for declared, registered in itertools.product(("1.2.0", "1.0.0", "0.0.1", "2.3.4"), ("1.2.0", "1.2.1", "1.1.9", "2", "2.0", "2.0.0-1", "1.2.0-3", "0.9.0", "garbage", "", "3.0.0")):
     must(mr.version_within_declared(declared, registered) == helper._version_within_declared(declared, registered), (declared, registered))
