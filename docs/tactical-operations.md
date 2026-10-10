@@ -111,7 +111,7 @@ A module needs `requires.framework` of `>=1.17.7` to use any of this.
 
 ## How a call runs
 
-`run_tactical_operation(request, module_id, operation_id, params=None, body=None, query=None, upload=None)` and the HTTP route run the same code. The steps below are as of 1.17.13: see "Added in 1.17.13" for the before-read (between steps 6 and 7), the query string and the file.
+`run_tactical_operation(request, module_id, operation_id, params=None, body=None, query=None, upload=None)` and the HTTP route run the same code. The steps below are as of 1.17.13: see "Added in 1.17.13" for the before-read (between steps 6 and 7, for the audit row only since 1.17.14), the query string and the file.
 
 1. The operation exists and its module is enabled. Otherwise 404 `tactical_operation_not_found`.
 2. The caller is authenticated. Otherwise 401.
@@ -204,20 +204,26 @@ characters. A value that is not a string, number, true, false or null is dropped
 A read that fails or does not answer 200 never blocks the change. The row is still written, and its metadata says `before:
 unavailable` with the read's `before_status`. A `GET` operation has no before value.
 
-### Scope from the read: `before:<field>`
+### Scope from the read: removed in 1.17.14 (CQ37)
 
-A scope entry may read its object from the `before` answer: `{"type": "agent", "source": "before:agent_id"}`. The field must be in
-`before.fields`. Core then runs the usual `objects_in_role_scope` check on it. This is how a note's agent is checked for
-`PUT` and `DELETE agents/notes/<pk>/`.
+Core 1.17.13 let a scope entry read its object from the `before` answer: `{"type": "agent", "source": "before:agent_id"}`. Johan asked
+for it to go (CQ37, 9 October 2026), so **1.17.14 removes the `before:<field>` source**. Registering one is refused with a plain message.
+The check Core ran on that read, and the fixed 404 `object_not_found` it gave when the read did not answer 200, are gone with it.
 
-The read happens after the Tactical flag and module-permission checks. If it does not answer 200, or the field is missing, Core
-refuses with the fixed 404 `object_not_found` text and writes a deny row. Core fails closed. Tactical's `GET agents/notes/<pk>/`
-needs `can_list_notes`, so a role that may manage notes but not list them cannot edit a note through Core. That is stricter than
-Tactical's own call for that role (CQ37).
+An operation that has only an object id declares `scope: []` and `audit.object_param`. Tactical's own check then decides, as it does
+for `cancel-pending-action`. For `PUT` and `DELETE agents/notes/<pk>/` that is the declaration:
 
-Core never reads a Tactical model for this. A pending action has no `GET` by pk in Tactical, so `cancel-pending-action` declares
-`object_param: "pk"` and no scope entry. Tactical's own `DELETE` view enforces the agent scope. Core still re-checks the Tactical flag and
-writes the row with the pk as the object.
+```python
+route="agents/notes/{pk:int}/", scope=[], audit={"action": "modify", "object_type": "agent_note", "audit_fields": [], "object_param": "pk"}
+```
+
+Tactical's own view then answers 403 for a note on an agent the role cannot see, and 404 for a note that does not exist. Core relays the
+answer, and writes a deny row for the 403. The row still names the pk as the object. Core still re-checks the Tactical flag first.
+
+`audit.before` is unchanged. It is an audit value only: it fills the row's before value, and a read that fails or does not answer 200
+never blocks the change. A role that may manage notes but not list them can now edit a note, and the row records that no before value
+was kept. Nothing in `modules/` declared `before` or a `before:` source when it was removed. Agents declares its note operations on
+Core 1.17.14 or later (a request to the Agents module).
 
 ### Scope type from the body: `body:<field>`
 
@@ -240,7 +246,7 @@ name a body field or a query name. The value is copied into `after`.
 ### One file: `upload`
 
 `upload = {"field": "file", "max_bytes": 1000000, "extensions": ["png", "jpg"]}` lets a `POST`, `PUT` or `PATCH` operation forward exactly
-one file. The hard ceiling is `MAX_UPLOAD_BYTES`, 10 MiB (CQ40). Each operation declares its own lower cap. The extension list is lower
+one file. The ceiling is a system setting, 10 MiB by default (see "The upload ceiling is a setting (1.17.14)" below). Each operation declares its own lower cap. The extension list is lower
 case, has no dot and may not be empty. The field name may not be `params`, `body`, `query` or a body field.
 
 `run_tactical_operation(..., upload={"name": ..., "content_type": ..., "content": bytes})` and the HTTP route take it. Core:
@@ -278,6 +284,30 @@ request.
 The owner table still says which core module owns a route. Since 1.17.13 the declaring module's **effective category** decides too (a
 missing category is `test`; see `docs/module-categories.md`). A `premium`, `server` or `test` module is refused every route, even one the
 owner table lists by id. The message names the category. Licensing keeps `core/codesign/` (AD-16). An honoured AD-20 replacement keeps its rights.
+
+## Added in 1.17.14
+
+The capability `core.tactical_operations` is now `1.2.0` (still major 1; callers ask for `>=1,<2`).
+
+### The upload ceiling is a setting (1.17.14)
+
+The largest file one operation may forward is the system setting `tactical_operation_upload_max_mib`: whole MiB, 1 to 25, **default 10**. An
+existing install reads 10, the ceiling Core had before. A superuser changes it with `PATCH /api/tfd/system/runtime-settings/` (see
+`docs/runtime-settings.md`). The executor and the HTTP route read it on every call, so lowering it takes effect at once with no restart.
+
+- A file is held to the smaller of the operation's own `max_bytes` and the setting. A module's cap of 2 MiB still wins over a setting of 25.
+- Registration checks `max_bytes` against a fixed absolute ceiling of 25 MiB (`MAX_UPLOAD_ABSOLUTE_BYTES`), because registration runs in
+  `AppConfig.ready()` and must not read the database. A module can never declare more than 25 MiB, whatever the setting says.
+- `MAX_UPLOAD_BYTES` is still exported. It is now the 10 MiB default, so no import breaks.
+- If the setting cannot be read, Core uses 10 MiB.
+- The capability's `limits` report `upload_bytes` (the effective ceiling now), `upload_bytes_default` and `upload_bytes_max`.
+
+A body-size limit in the web server (nginx) or in Tactical still applies in front of Core. Core 1.17.14 does not change either, and it
+was not checked from the development PC. If you raise the setting above what the web server accepts, the upload fails before Core sees it.
+
+### The before-read scope source is gone (1.17.14)
+
+See "Scope from the read: removed in 1.17.14" above.
 
 ## AD-19 conditions
 

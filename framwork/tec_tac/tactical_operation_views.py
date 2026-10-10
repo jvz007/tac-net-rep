@@ -6,6 +6,9 @@ writes the audit row where the call happens. See tec_tac.tactical_operations and
 1.17.13: the JSON form also takes ``query`` (a GET operation's whitelisted query string). A multipart/form-data form
 carries the text parts ``params``, ``body`` and ``query`` (each a JSON object) and one file part named as the operation
 declares it. The file's size is checked before it is read.
+
+1.17.14: the size limit is the system setting ``tactical_operation_upload_max_mib`` (default 10 MiB, at most 25), and an
+operation's own lower cap still wins. The declared request length is checked against the same setting.
 """
 from __future__ import annotations
 
@@ -22,10 +25,10 @@ from .tactical_operations import (
     AUDIT_HEADER,
     AUDIT_NOT_RECORDED,
     AUDIT_RECORDED,
-    MAX_UPLOAD_BYTES,
     TacticalOperationError,
     get_operation,
     run_tactical_operation,
+    upload_ceiling_bytes,
 )
 from .throttles import TacticalOperationDayThrottle, TacticalOperationMinThrottle
 
@@ -76,7 +79,8 @@ class TacticalOperationView(APIView):
                 length = int(request.META.get("CONTENT_LENGTH") or 0)
             except (TypeError, ValueError):
                 length = 0
-            if length > MAX_UPLOAD_BYTES + _MULTIPART_ENVELOPE_BYTES:
+            ceiling = upload_ceiling_bytes()  # the system setting, read now (1.17.14, CQ40)
+            if length > ceiling + _MULTIPART_ENVELOPE_BYTES:
                 return _bad("The request is larger than Core accepts for an upload.", "upload_too_large", 413)
             data = request.data
             files = request.FILES
@@ -95,7 +99,7 @@ class TacticalOperationView(APIView):
             part_name = next(iter(files.keys()))
             uploaded = files[part_name]
             declared = get_operation(module_id, operation_id)
-            cap = MAX_UPLOAD_BYTES
+            cap = ceiling
             if declared and declared.get("upload"):
                 cap = min(cap, int(declared["upload"]["max_bytes"]))
             size = getattr(uploaded, "size", None)

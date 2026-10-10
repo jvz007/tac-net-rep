@@ -21,11 +21,21 @@ The registry is empty until a module declares an operation, so this release chan
 * ``audit.object_param`` names a path parameter that is the audit object (a note, a template, a pending action).
 * ``audit.before = {route, fields}`` reads the object through Tactical's own GET view, as the signed-in user, and writes
   a whitelisted copy of it as the row's before value. A failed read never blocks the change.
-* A scope entry may take its source from that read (``before:<field>``) or its type from the body (``type: body:<field>``
-  with a ``type_map``).
+* A scope entry may take its type from the body (``type: body:<field>`` with a ``type_map``).
 * ``query_params`` lets a GET operation pass a whitelisted query string; ``upload`` lets one operation forward one file
   as multipart/form-data, with a size cap and an extension allow-list.
 * AD-21: the owning module's effective category (a missing category is ``test``) decides, not only its id.
+
+1.17.14 (Johan CQ37, CQ40; the capability is 1.2.0, still major 1):
+
+* The scope source ``before:<field>`` is gone, and so is the fail-closed 404 ``object_not_found`` that came from a before-read
+  that did not answer 200. An operation that has only an object id (a note edit or delete: route ``agents/notes/{pk:int}/``,
+  ``audit.object_param`` ``pk``, ``scope`` empty) registers and runs with Tactical's own check deciding, as the Agents
+  cancel-pending-action operation already does. ``audit.object_param`` is unchanged, so the audit row still names the id.
+  ``audit.before`` stays as a non-blocking audit value: it never refuses a call.
+* The upload ceiling is a system setting (``tactical_operation_upload_max_mib``, default 10 MiB, 1 to 25). An operation's
+  declared ``max_bytes`` may be at most 25 MiB (``MAX_UPLOAD_ABSOLUTE_BYTES``, checked at registration, which must not read
+  the database), and a file is held to the smaller of that and the setting at the time of the call.
 """
 from __future__ import annotations
 
@@ -44,13 +54,14 @@ from . import module_category as _module_category
 logger = logging.getLogger("tec_tac.tactical_operations")
 
 CAPABILITY_ID = "core.tactical_operations"
-CAPABILITY_VERSION = "1.1.0"
+CAPABILITY_VERSION = "1.2.0"
 AUDIT_HEADER = "X-Tec-Tac-Audit"
 AUDIT_RECORDED = "recorded"
 AUDIT_NOT_RECORDED = "not-recorded"
 MAX_BODY_BYTES = 256 * 1024
 MAX_RESPONSE_BYTES = 25 * 2**20
-MAX_UPLOAD_BYTES = 10 * 2**20  # hard ceiling for one uploaded file; an operation declares its own lower cap (CQ40)
+MAX_UPLOAD_BYTES = 10 * 2**20  # the DEFAULT ceiling for one uploaded file (kept exported for older importers); the system setting changes it (CQ40)
+MAX_UPLOAD_ABSOLUTE_BYTES = 25 * 2**20  # the most any operation may declare, and the setting's upper limit (1.17.14)
 MAX_QUERY_PARAMS = 16
 # An upload whose part is named after the file itself. Tactical's report asset upload stores each file under the name of
 # its multipart part, not under the filename attribute (ee/reporting/views.py UploadAssets), so the part must be named
@@ -73,7 +84,7 @@ _LITERAL_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}$")
 _PARAM_RE = re.compile(r"^\{([a-z][a-z0-9_]{0,31})(?::(str|int|agent))?\}$")
 _FIELD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 _SECRET_NAME_RE = re.compile(r"(pass|secret|token|key|credential|auth|cookie|signature)", re.IGNORECASE)
-_SCOPE_SOURCE_RE = re.compile(r"^(path|body|before):([A-Za-z_][A-Za-z0-9_]{0,63})$")
+_SCOPE_SOURCE_RE = re.compile(r"^(path|body):([A-Za-z_][A-Za-z0-9_]{0,63})$")
 _SCOPE_TYPE_BODY_RE = re.compile(r"^body:([A-Za-z_][A-Za-z0-9_]{0,63})$")
 _EXTENSION_RE = re.compile(r"^[a-z0-9]{1,10}$")
 _CONTENT_TYPE_RE = re.compile(r"^[A-Za-z0-9!#$&^_.+-]{1,60}/[A-Za-z0-9!#$&^_.+-]{1,60}$")
@@ -130,7 +141,7 @@ class TacticalOperationRegistrationError(ValueError):
 @dataclass(frozen=True)
 class ScopeSpec:
     type: str  # agent, client or site, or body:<field> with a type_map (1.17.13)
-    source: str  # path:<name>, body:<field> or before:<field> (1.17.13)
+    source: str  # path:<name> or body:<field>
     type_map: tuple = ()  # ((body value, scope type), ...) when ``type`` is body:<field>
 
 
@@ -528,8 +539,10 @@ def _parse_upload(value: Any, verb: str, fields: tuple) -> UploadSpec | None:
         raise TacticalOperationRegistrationError(
             f"upload field must be a plain name that is not params, body, query or a body field, or {FILE_NAME_FIELD} to name the part after the file."
         )
-    if isinstance(cap, bool) or not isinstance(cap, int) or not 0 < cap <= MAX_UPLOAD_BYTES:
-        raise TacticalOperationRegistrationError(f"upload max_bytes must be a whole number from 1 to {MAX_UPLOAD_BYTES}.")
+    # Registration runs in AppConfig.ready() and must not read the database, so it checks the fixed absolute ceiling. The system
+    # setting (1 to 25 MiB, default 10) is applied on every call by upload_ceiling_bytes() (1.17.14, CQ40).
+    if isinstance(cap, bool) or not isinstance(cap, int) or not 0 < cap <= MAX_UPLOAD_ABSOLUTE_BYTES:
+        raise TacticalOperationRegistrationError(f"upload max_bytes must be a whole number from 1 to {MAX_UPLOAD_ABSOLUTE_BYTES}.")
     extensions = _clean_names(value["extensions"], "upload extensions", maximum=_MAX_UPLOAD_EXTENSIONS, pattern=_EXTENSION_RE)
     if not extensions:
         raise TacticalOperationRegistrationError("upload extensions must list at least one allowed file extension (lower case, no dot).")
@@ -553,7 +566,7 @@ def register_tactical_operation(
     """Declare one Tactical operation. Call it from the owning module's ``AppConfig.ready()``.
 
     1.17.13 (all optional): ``audit`` may also carry ``object_param`` and ``before``; a scope entry may use a
-    ``before:<field>`` source or a ``body:<field>`` type with a ``type_map``; ``query_params`` whitelists the query names
+    ``body:<field>`` type with a ``type_map``; ``query_params`` whitelists the query names
     of a GET operation; ``upload`` declares one multipart file part. See docs/tactical-operations.md.
 
     Refuses (TacticalOperationRegistrationError, a ValueError) a module that is not a core module (bar the named
@@ -595,7 +608,7 @@ def register_tactical_operation(
         scope = ()
     if isinstance(scope, (str, bytes, dict)) or not hasattr(scope, "__iter__"):
         raise TacticalOperationRegistrationError("scope must be a list of {type, source}.")
-    # The audit and before declarations come first: a scope source may read from the before fields.
+    # The audit declaration comes first. A scope source is a path or body value only; Tactical decides the rest (1.17.14).
     if not isinstance(audit, dict) or not {"action", "object_type"} <= set(audit) or set(audit) - {"action", "object_type", "audit_fields", "object_param", "before"}:
         raise TacticalOperationRegistrationError("audit is {action, object_type, audit_fields, object_param, before}; the last three are optional.")
     object_param = audit.get("object_param")
@@ -607,11 +620,15 @@ def register_tactical_operation(
         if not isinstance(item, dict) or not {"type", "source"} <= set(item) or set(item) - {"type", "source", "type_map"}:
             raise TacticalOperationRegistrationError("each scope entry is {type, source}, plus type_map for a body-selected type, and nothing else.")
         kind, source = item["type"], item["source"]
+        if isinstance(source, str) and source.startswith("before:"):
+            raise TacticalOperationRegistrationError(
+                f"scope source {source!r} was removed in Core 1.17.14. An operation with only an object id declares no scope for it, and Tactical's own check decides."
+            )
         match = _SCOPE_SOURCE_RE.match(source) if isinstance(source, str) else None
         type_field = _SCOPE_TYPE_BODY_RE.match(kind) if isinstance(kind, str) else None
         if match is None or (kind not in SCOPE_TYPES and type_field is None):
             raise TacticalOperationRegistrationError(
-                f"bad scope entry {item!r}: type is agent, client, site or body:<field>, and source is path:<name>, body:<field> or before:<field>."
+                f"bad scope entry {item!r}: type is agent, client, site or body:<field>, and source is path:<name> or body:<field>."
             )
         where, name = match.group(1), match.group(2)
         type_map = ()
@@ -630,9 +647,6 @@ def register_tactical_operation(
                 raise TacticalOperationRegistrationError(f"scope source {source!r} must be a string parameter for an agent.")
             if type_map and params[name] != "int":
                 raise TacticalOperationRegistrationError(f"scope source {source!r} must be an int parameter for a client or site.")
-        elif where == "before":
-            if before is None or name not in before.fields:
-                raise TacticalOperationRegistrationError(f"scope source {source!r} is not one of the audit.before fields.")
         elif name not in fields:
             raise TacticalOperationRegistrationError(f"scope source {source!r} is not one of body_fields.")
         spec = ScopeSpec(kind, source, type_map)
@@ -752,20 +766,13 @@ def _printable(value: Any, limit: int = 255) -> str:
     return "".join(ch for ch in str(value) if 32 <= ord(ch) < 127)[:limit]
 
 
-def _scope_values(operation: TacticalOperation, params: Any, body: Any, before: Any = None, *, phase: str = "direct") -> list[tuple[str, list[str]]]:
-    """Resolve the declared scope entries to (type, [ids]). Raises 400 for a missing or malformed value.
-
-    ``phase`` is "direct" for entries read from the path or the body, and "before" for entries read from the
-    audit.before answer (1.17.13), which exist only after Core has read the object."""
+def _scope_values(operation: TacticalOperation, params: Any, body: Any) -> list[tuple[str, list[str]]]:
+    """Resolve the declared scope entries to (type, [ids]). Raises 400 for a missing or malformed value."""
     resolved = []
     for spec in operation.scope:
         where, name = spec.source.split(":", 1)
-        if (where == "before") != (phase == "before"):
-            continue
         if where == "path":
             raw = (params or {}).get(name)
-        elif where == "before":
-            raw = (before or {}).get(name)
         else:
             raw = (body or {}).get(name)
         values = raw if isinstance(raw, list) else [raw]
@@ -803,7 +810,7 @@ def _object_id(scope: list[tuple[str, list[str]]], operation: TacticalOperation 
 
 def _body_scope_type(operation: TacticalOperation, scope: list[tuple[str, list[str]]]) -> str | None:
     """The scope type a body-selected entry resolved to, for the row metadata."""
-    for spec, (kind, _) in zip([item for item in operation.scope if not item.source.startswith("before:")], scope):
+    for spec, (kind, _) in zip(operation.scope, scope):
         if spec.type.startswith("body:"):
             return kind
     return None
@@ -907,6 +914,21 @@ def _clean_file_name(raw: Any) -> str:
     return name
 
 
+def upload_ceiling_bytes() -> int:
+    """The system setting's upload ceiling in bytes, read now (1.17.14, CQ40). Never raises.
+
+    A lowered setting takes effect at once, with no restart. Any failure to read it (no database, a value out of range)
+    gives the 10 MiB default, so a broken read can only be stricter than the setting's maximum, never looser."""
+    try:
+        from .runtime_settings import get_tactical_upload_max_bytes
+
+        value = int(get_tactical_upload_max_bytes())
+    except Exception:
+        logger.debug("Could not read the upload limit setting; using the default.", exc_info=True)
+        return MAX_UPLOAD_BYTES
+    return value if 0 < value <= MAX_UPLOAD_ABSOLUTE_BYTES else MAX_UPLOAD_BYTES
+
+
 def _clean_upload(operation: TacticalOperation, upload: Any) -> dict | None:
     """Check the one file an operation may forward: field, name, extension and size (1.17.13). Returns the clean part."""
     spec = operation.upload
@@ -923,7 +945,7 @@ def _clean_upload(operation: TacticalOperation, upload: Any) -> dict | None:
     content = upload.get("content")
     if not isinstance(content, (bytes, bytearray)):
         raise TacticalOperationError("The file has no content.", status=400, code="invalid_upload")
-    cap = min(spec.max_bytes, MAX_UPLOAD_BYTES)
+    cap = min(spec.max_bytes, upload_ceiling_bytes())
     if len(content) > cap:
         raise TacticalOperationError(f"The file is larger than {cap} bytes.", status=413, code="upload_too_large")
     name = _clean_file_name(upload.get("name"))
@@ -1228,24 +1250,9 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
     if body_type:
         extra["scope_type"] = body_type
     before_state = None
-    if operation.before is not None:  # 7a. Tactical's own record of the object, read as the signed-in user (1.17.13)
+    if operation.before is not None:  # 7a. Tactical's own record of the object, read as the signed-in user, for the audit row only (1.17.13)
         before_state = _read_before(request, operation, params)
-        if any(item.source.startswith("before:") for item in operation.scope):
-            fresh = None
-            try:
-                fresh = _scope_values(operation, params, body, before_state["values"], phase="before") if before_state["values"] is not None else None
-            except TacticalOperationError:
-                fresh = None
-            if fresh is None:  # fails closed: no answer, no scope decision
-                raise _refuse(request, operation, "not_found", 404, "object_not_found", object_id)
-            from . import resources_adapter as adapter
-
-            for kind, ids in fresh:
-                if not adapter.objects_in_role_scope(user=user, resource_type=kind, identifiers=ids):
-                    raise _refuse(request, operation, "not_found", 404, "object_not_found", object_id)
-            scope = scope + fresh
-            if object_id is None:
-                object_id = _object_id(scope, operation, params)
+        # 1.17.14 (CQ37): the read only fills the audit before-value. It never decides scope and never refuses the call.
         extra["before"] = "recorded" if before_state["values"] is not None else "unavailable"
         if before_state["values"] is None:
             extra["before_status"] = before_state["status"]
@@ -1315,10 +1322,16 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
         "operations": ["run", "list_operations", "get_operation"],
         "declaration": "tec_tac.tactical_operations.register_tactical_operation(id, module_id, method, route, permissions, scope, body_fields, audit, module_permission=None, message=None, query_params=None, upload=None), called from AppConfig.ready()",
         "http": "POST /api/tfd/tactical-operations/<module_id>/<operation_id>/ with {params, body, query} as JSON, or as multipart/form-data with the text parts params, body and query (each a JSON object) and one file part",
-        "limits": {"body_bytes": MAX_BODY_BYTES, "response_bytes": MAX_RESPONSE_BYTES, "upload_bytes": MAX_UPLOAD_BYTES, "query_params": MAX_QUERY_PARAMS, "query_value_chars": MAX_QUERY_VALUE},
+        "limits": {
+            "body_bytes": MAX_BODY_BYTES, "response_bytes": MAX_RESPONSE_BYTES,
+            # 1.17.14 (CQ40): upload_bytes is the effective ceiling now (the system setting), with the default and the absolute maximum.
+            "upload_bytes": upload_ceiling_bytes(), "upload_bytes_default": MAX_UPLOAD_BYTES, "upload_bytes_max": MAX_UPLOAD_ABSOLUTE_BYTES,
+            "query_params": MAX_QUERY_PARAMS, "query_value_chars": MAX_QUERY_VALUE,
+        },
         "declaration_keys_added_in_1_1_0": [
-            "audit.object_param", "audit.before", "scope source before:<field>", "scope type body:<field> with type_map", "query_params", "upload",
+            "audit.object_param", "audit.before", "scope type body:<field> with type_map", "query_params", "upload",
         ],
+        "declaration_keys_removed_in_1_2_0": ["scope source before:<field>"],
         "refusal_codes_added_in_1_1_0": ["query_field_not_allowed", "invalid_query", "upload_not_allowed", "upload_too_large", "upload_type_not_allowed", "invalid_upload"],
         "audit_header": AUDIT_HEADER,
         "modes": "(a) a signed-in user's request only. Background runs as the schedule owner (mode b) are not part of this contract.",

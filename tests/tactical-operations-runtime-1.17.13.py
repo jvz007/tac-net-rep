@@ -10,8 +10,9 @@ cannot:
 
 1. the real `GET agents/notes/<pk>/` read through Tactical's own view as the signed-in user, and the whitelisted before value;
 2. `object_id` equal to the note pk on the real AuditLog row, and the before value in `before_value`;
-3. the role's client limit applied to the agent of the note (and the fail-closed answer when the read does not answer 200, which
-   includes a role that may manage notes but not list them, CQ37);
+3. 1.17.14 (CQ37): Core reads no scope from the note any more. Tactical's own check on PUT agents/notes/<pk>/ decides: a role limited to
+   another client gets Tactical's 403 (Core writes a deny row), a role that may manage notes but not list them can edit (the audit
+   before-read answers 403 and only leaves the before value empty), and a note that does not exist gives Tactical's own 404;
 4. a scope type taken from the body (`POST agents/maintenance/bulk/`, Client and Site) with `scope_type` in the row metadata;
 5. the query string reaching DRF's `request.query_params` (`GET reporting/assets/?path=`);
 6. a real multipart upload parsed by Tactical's own MultiPartParser (`POST reporting/assets/upload/`, the part named after the file),
@@ -97,7 +98,7 @@ UPLOADED = []
 try:
     if AGENTS:
         ops.register_tactical_operation(
-            "runtime-note-edit", AGENTS, "PUT", "agents/notes/{pk:int}/", ["can_manage_notes"], [{"type": "agent", "source": "before:agent_id"}], ["note"],
+            "runtime-note-edit", AGENTS, "PUT", "agents/notes/{pk:int}/", ["can_manage_notes"], [], ["note"],
             {"action": "modify", "object_type": PROBE_TYPE, "audit_fields": [], "object_param": "pk",
              "before": {"route": "agents/notes/{pk:int}/", "fields": ["agent_id", "note", "username", "entry_time"]}},
         )
@@ -161,21 +162,28 @@ try:
             assert row.debug_info["metadata"]["before"] == "recorded", row.debug_info["metadata"]
 
         def n3_out_of_scope():
+            # Tactical's own _has_perm_on_agent check answers 403; Core records it as a deny row (no Core scope is read, CQ37)
             before_count = rows("deny").count()
-            refused(lambda: run(user_out, "runtime-note-edit", params={"pk": note.pk}, body={"note": "x"}), 404, "object_not_found")
+            result = run(user_out, "runtime-note-edit", params={"pk": note.pk}, body={"note": "x"})
+            assert result.status == 403, (result.status, result.data)
             deny = rows("deny").order_by("-id").first()
             assert rows("deny").count() == before_count + 1 and deny.debug_info["object_id"] == str(note.pk), deny.debug_info
             note.refresh_from_db()
             assert note.note == "edited note", "an out-of-scope user changed the note"
 
-        def n4_cannot_list_fails_closed():
-            # Tactical's GET agents/notes/<pk>/ needs can_list_notes, so the read answers 403 and Core refuses (CQ37, assumption a)
-            refused(lambda: run(user_nolist, "runtime-note-edit", params={"pk": note.pk}, body={"note": "x"}), 404, "object_not_found")
+        def n4_cannot_list_still_edits():
+            # Tactical's GET agents/notes/<pk>/ needs can_list_notes, so the audit before-read answers 403. It never blocks the change.
+            result = run(user_nolist, "runtime-note-edit", params={"pk": note.pk}, body={"note": "edited by nolist"})
+            assert result.status == 200, (result.status, result.data)
             note.refresh_from_db()
-            assert note.note == "edited note", note.note
+            assert note.note == "edited by nolist", note.note
+            row = rows("modify").filter(debug_info__object_id=str(note.pk)).order_by("-id").first()
+            assert row.before_value is None and row.debug_info["metadata"]["before"] == "unavailable", row.debug_info["metadata"]
 
         def n5_missing_note():
-            refused(lambda: run(user_in, "runtime-note-edit", params={"pk": 2147483000}, body={"note": "x"}), 404, "object_not_found")
+            # Tactical's own 404 comes back as the answer; Core adds no refusal of its own
+            result = run(user_in, "runtime-note-edit", params={"pk": 2147483000}, body={"note": "x"})
+            assert result.status == 404, (result.status, result.data)
 
         def n6_body_scope_type():
             result = run(user_in, "runtime-maintenance", body={"type": "Client", "id": client.pk, "action": True})
@@ -192,9 +200,9 @@ try:
             for name, fn in (
                 ("1 a note edit reads the note through Tactical's own view and runs", n1_note_edit),
                 ("2 the real row carries object_id equal to the note pk and a whitelisted before value", n2_row_object_and_before),
-                ("3 a role limited to another client is refused with a deny row, the note is unchanged", n3_out_of_scope),
-                ("4 a role that may manage but not list notes fails closed (CQ37)", n4_cannot_list_fails_closed),
-                ("5 a note that does not exist gives the same 404", n5_missing_note),
+                ("3 a role limited to another client gets Tactical's 403 and a deny row, the note is unchanged (CQ37)", n3_out_of_scope),
+                ("4 a role that may manage but not list notes can edit, with no before value (CQ37)", n4_cannot_list_still_edits),
+                ("5 a note that does not exist gives Tactical's own 404", n5_missing_note),
                 ("6 the scope type comes from the body (Client, Site) and scope_type is in the row", n6_body_scope_type),
             ):
                 step(name, fn)

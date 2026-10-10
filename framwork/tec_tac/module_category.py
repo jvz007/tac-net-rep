@@ -2,8 +2,9 @@
 
 A module's manifest says what kind of module it is: ``core`` (wraps one Tactical API group), ``server`` (manages the
 Tec-Tac or Tactical server), ``premium`` (functionality Tactical does not have) or ``test`` (a development module).
-A manifest with no category is treated as ``test``. Core refuses to install or enable a test module on a server that is
-not a development server. Modules that are already installed keep loading (Johan, CQ38 assumption).
+A manifest with no category is treated as ``test``. Core refuses to INSTALL a test module on a server that is not a
+development server. Since 1.17.14 (Johan CQ38) the refusal is install-only: a module that is already installed keeps
+loading and can be enabled, and the status still carries the warning (an upgrade is an install, so it is checked again).
 
 The development flag is read from the root-owned ``TEC_TAC_ENVIRONMENT`` setting through ``trust_policy``, the same
 setting that picks the default update trust level. Nothing a module or a browser sends can change it.
@@ -29,13 +30,13 @@ WARNING_MISSING_DEV = (
 )
 WARNING_MISSING = (
     "This module does not state its category. Core treats it as Test. On a server that is not a development server "
-    "Core refuses to install or enable it, so the next release of the module needs to carry a category."
+    "Core refuses to install it, so the next release of the module needs to carry a category."
 )
 WARNING_TEST = (
-    "This is a Test module. Core installs and enables Test modules on a development server only."
+    "This is a Test module. Core installs Test modules on a development server only."
 )
 REFUSED_MESSAGE = (
-    "Core refuses to install or enable a Test module on a server that is not a development server. "
+    "Core refuses to install a Test module on a server that is not a development server. "
     "The module's next release needs to carry a category (core, server or premium)."
 )
 
@@ -62,7 +63,8 @@ def is_development_server() -> bool:
 
 
 def refused(declared: Any, *, development: bool | None = None) -> bool:
-    """True when an install or enable of this module must be refused: effective category test, not a development server."""
+    """True when an install of this module must be refused: effective category test, not a development server.
+    Only installs ask (1.17.14, CQ38): enabling a module that is already installed is never refused for its category."""
     development = is_development_server() if development is None else bool(development)
     return effective_category(declared) == DEFAULT_CATEGORY and not development
 
@@ -99,7 +101,7 @@ def describe(declared: Any, *, development: bool | None = None) -> dict[str, Any
 
 
 def refusal_problem(module_id: str, declared: Any, *, development: bool | None = None) -> dict[str, Any] | None:
-    """A lifecycle problem dict for an install or enable that must be refused, else None."""
+    """A lifecycle problem dict for an install that must be refused, else None. Install plans only (1.17.14, CQ38)."""
     if not refused(declared, development=development):
         return None
     return {

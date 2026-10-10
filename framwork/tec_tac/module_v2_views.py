@@ -12,6 +12,7 @@ from .module_manager_v2 import (
     LicensingRequirementError,
     ModuleManagerV2Error,
     ModuleReplacementConfirmationRequired,
+    ModuleReplacementHandBackConfirmationRequired,
     ModuleReplacementSecondConfirmationRequired,
     discard_v2_stage,
     installed_catalog_v2,
@@ -46,6 +47,17 @@ def _confirm_replacement_switch(request):
         return None
     if not isinstance(value, bool):
         raise ModuleManagerV2Error("confirm_replacement_switch must be true or false.")
+    return value
+
+
+def _confirm_without_hand_back(request):
+    """The optional ``confirm_without_hand_back`` flag (1.17.14): None when absent, else a boolean. Only true confirms.
+    Raises ModuleManagerV2Error (a refusal, HTTP 400) for anything that is not a boolean."""
+    value = request.data.get("confirm_without_hand_back")
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise ModuleManagerV2Error("confirm_without_hand_back must be true or false.")
     return value
 
 
@@ -137,10 +149,13 @@ class ModuleV2StateView(APIView):
         try:
             disable_replaced = _disable_replaced(request)
             confirm_switch = _confirm_replacement_switch(request)
+            confirm_without = _confirm_without_hand_back(request)
             return Response(queue_set_enabled(plugin_id, enabled, cascade=cascade, requested_by=str(request.user.username),
                                               disable_replaced=disable_replaced, actor=request.user,
-                                              confirm_replacement_switch=confirm_switch), status=202)
-        except (ModuleReplacementConfirmationRequired, ModuleReplacementSecondConfirmationRequired) as exc:
+                                              confirm_replacement_switch=confirm_switch,
+                                              confirm_without_hand_back=confirm_without), status=202)
+        except (ModuleReplacementConfirmationRequired, ModuleReplacementSecondConfirmationRequired,
+                ModuleReplacementHandBackConfirmationRequired) as exc:
             return Response(exc.as_payload(), status=400)
         except (ModuleManagerError, ModuleManagerV2Error) as exc:
             return Response({"detail": str(exc)}, status=400)

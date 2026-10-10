@@ -68,13 +68,14 @@ for bad in ({"field": "params", "max_bytes": 10, "extensions": ["png"]}, {"field
             {"field": "query", "max_bytes": 10, "extensions": ["png"]}, {"field": "parentPath", "max_bytes": 10, "extensions": ["png"]},  # a body field name
             {"field": "bad field", "max_bytes": 10, "extensions": ["png"]}, {"field": "file", "max_bytes": 0, "extensions": ["png"]},
             {"field": "file", "max_bytes": -1, "extensions": ["png"]}, {"field": "file", "max_bytes": True, "extensions": ["png"]},
-            {"field": "file", "max_bytes": 1.5, "extensions": ["png"]}, {"field": "file", "max_bytes": ops.MAX_UPLOAD_BYTES + 1, "extensions": ["png"]},
+            {"field": "file", "max_bytes": 1.5, "extensions": ["png"]}, {"field": "file", "max_bytes": ops.MAX_UPLOAD_ABSOLUTE_BYTES + 1, "extensions": ["png"]},  # 1.17.14: the fixed absolute ceiling is 25 MiB
             {"field": "file", "max_bytes": 10, "extensions": []}, {"field": "file", "max_bytes": 10, "extensions": [".png"]},
             {"field": "file", "max_bytes": 10, "extensions": ["PNG"]}, {"field": "file", "max_bytes": 10, "extensions": "png"},
             {"field": "file", "max_bytes": 10, "extensions": [f"e{i}" for i in range(17)]}, {"field": "file", "max_bytes": 10},
             {"field": "file", "max_bytes": 10, "extensions": ["png"], "extra": 1}, "png", ["png"]):
     refused(UPLOAD, id="x8", upload=bad)
-must(ops.MAX_UPLOAD_BYTES == 10 * 2**20, "the hard ceiling is 10 MiB (CQ40, assumption a)")
+must(ops.MAX_UPLOAD_BYTES == 10 * 2**20, "10 MiB stays the default ceiling and the exported constant (CQ40, 1.17.14: now a system setting)")
+must(ops.MAX_UPLOAD_ABSOLUTE_BYTES == 25 * 2**20, "the absolute ceiling an operation may declare")
 register(UPLOAD, id="ok-ceiling", route="reporting/assets/other/", upload={"field": "file", "max_bytes": ops.MAX_UPLOAD_BYTES, "extensions": ["png"]})
 refused(DOWNLOAD, id="x9", method="DELETE", upload=UPLOAD["upload"], route="reporting/assets/x/", query_params=[])  # not for a DELETE
 refused({**DOWNLOAD, "upload": UPLOAD["upload"]}, id="x10")  # not for a GET

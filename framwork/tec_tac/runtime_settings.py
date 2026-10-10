@@ -6,9 +6,13 @@ and publishes it in ``GET /api/tfd/ui/context/`` as ``module_register_timeout_se
 
 The other (1.17.2) is the remembered update source per component: release or a
 branch, read by the System Updates page and used as the default when staging.
+
+1.17.14 (CQ40): ``tactical_operation_upload_max_mib`` is the largest file one Tactical operation may forward, in whole
+MiB (1 to 25, default 10). Only a superuser changes it. The executor reads it on every call, so a change takes effect at once.
 """
 from __future__ import annotations
 
+import logging
 import re
 
 from django.db import transaction
@@ -22,10 +26,19 @@ from .rbac import can_manage_runtime_settings, is_effective_superuser
 from .session_security import SessionAuthenticated
 from .throttles import RuntimeSettingsWriteDayThrottle, RuntimeSettingsWriteMinThrottle
 
+logger = logging.getLogger("tec_tac.runtime_settings")
+
 SETTING_MODULE_REGISTER_TIMEOUT = "module_register_timeout_seconds"
 DEFAULT_MODULE_REGISTER_TIMEOUT_SECONDS = 30
 MIN_MODULE_REGISTER_TIMEOUT_SECONDS = 5
 MAX_MODULE_REGISTER_TIMEOUT_SECONDS = 300
+
+SETTING_TACTICAL_UPLOAD_MAX_MIB = "tactical_operation_upload_max_mib"
+DEFAULT_TACTICAL_UPLOAD_MAX_MIB = 10
+MIN_TACTICAL_UPLOAD_MAX_MIB = 1
+MAX_TACTICAL_UPLOAD_MAX_MIB = 25
+_MIB = 2**20
+RUNTIME_SETTING_NAMES = (SETTING_MODULE_REGISTER_TIMEOUT, SETTING_TACTICAL_UPLOAD_MAX_MIB)
 
 
 RUNTIME_SETTINGS_DENIED = (
@@ -36,6 +49,10 @@ RUNTIME_SETTINGS_DENIED = (
 # Update source: superusers only (CQ12, Johan, 9 October 2026; 1.17.5). Staging and installing
 # keep core.privileged_operations.
 UPDATE_SOURCE_DENIED = "Only a Tec-Tac superuser may change the update source."
+
+# The upload ceiling: superusers only, the same rule as the update source (CQ40 assumption, 1.17.14). The register timeout
+# keeps core.runtime_settings.manage.
+UPLOAD_LIMIT_DENIED = "Only a Tec-Tac superuser may change the Tactical operation upload limit."
 
 
 class RuntimeSettingsError(ValueError):
@@ -56,6 +73,30 @@ def validate_module_register_timeout_seconds(value) -> int:
             f"{MIN_MODULE_REGISTER_TIMEOUT_SECONDS} and {MAX_MODULE_REGISTER_TIMEOUT_SECONDS}."
         )
     return value
+
+
+def validate_tactical_upload_max_mib(value) -> int:
+    """Accept only a whole number of MiB from 1 to 25. bool, float, string and None are rejected, as for the timeout."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise RuntimeSettingsError(f"{SETTING_TACTICAL_UPLOAD_MAX_MIB} must be a whole number of MiB.")
+    if value < MIN_TACTICAL_UPLOAD_MAX_MIB or value > MAX_TACTICAL_UPLOAD_MAX_MIB:
+        raise RuntimeSettingsError(
+            f"{SETTING_TACTICAL_UPLOAD_MAX_MIB} must be between {MIN_TACTICAL_UPLOAD_MAX_MIB} and {MAX_TACTICAL_UPLOAD_MAX_MIB}."
+        )
+    return value
+
+
+def get_tactical_upload_max_bytes() -> int:
+    """The largest file one Tactical operation may forward, in bytes. Never raises.
+
+    The executor reads this on every upload, so a database error must not stop a call. Any failure, or a stored value
+    outside 1 to 25 MiB, returns the 10 MiB default."""
+    try:
+        value = int(TecTacRuntimeConfig.current().tactical_operation_upload_max_mib)
+        return validate_tactical_upload_max_mib(value) * _MIB
+    except Exception:
+        logger.debug("Could not read the Tactical operation upload limit; using the default.", exc_info=True)
+        return DEFAULT_TACTICAL_UPLOAD_MAX_MIB * _MIB
 
 
 def get_module_register_timeout_seconds() -> int:
@@ -81,13 +122,29 @@ def serialize_runtime_settings(config=None) -> dict:
             "maximum": MAX_MODULE_REGISTER_TIMEOUT_SECONDS,
             "default": DEFAULT_MODULE_REGISTER_TIMEOUT_SECONDS,
         },
+        SETTING_TACTICAL_UPLOAD_MAX_MIB: _serialize_upload_limit(config),
         "updated_at": config.updated_at.isoformat() if config.updated_at else None,
         "updated_by": config.updated_by.username if config.updated_by else None,
     }
 
 
-def _audit_change(user, before: int, after: int) -> None:
-    """Strict Core audit row, written in the same transaction as the change."""
+def _serialize_upload_limit(config) -> dict:
+    try:
+        value = validate_tactical_upload_max_mib(int(config.tactical_operation_upload_max_mib))
+    except (AttributeError, TypeError, ValueError, RuntimeSettingsError):
+        value = DEFAULT_TACTICAL_UPLOAD_MAX_MIB  # what the executor uses for a value outside the range
+    return {
+        "value": value,
+        "minimum": MIN_TACTICAL_UPLOAD_MAX_MIB,
+        "maximum": MAX_TACTICAL_UPLOAD_MAX_MIB,
+        "default": DEFAULT_TACTICAL_UPLOAD_MAX_MIB,
+        "bytes": value * _MIB,
+    }
+
+
+def _audit_change(user, before: int, after: int, setting: str = SETTING_MODULE_REGISTER_TIMEOUT) -> None:
+    """Strict Core audit row, written in the same transaction as the change. One row per changed setting, ``object_id`` is
+    the setting's name."""
     from .audit import record
 
     record(
@@ -95,17 +152,17 @@ def _audit_change(user, before: int, after: int) -> None:
         module_id="core",
         action="modify",
         object_type="runtime_settings",
-        object_id=SETTING_MODULE_REGISTER_TIMEOUT,
+        object_id=setting,
         message="Tec-Tac runtime setting changed.",
-        before={SETTING_MODULE_REGISTER_TIMEOUT: before},
-        after={SETTING_MODULE_REGISTER_TIMEOUT: after},
+        before={setting: before},
+        after={setting: after},
         strict=True,
     )
 
 
 @extend_schema_view(
     get=extend_schema(tags=["Tec-Tac Runtime Settings"], summary="Get the Core runtime settings"),
-    patch=extend_schema(tags=["Tec-Tac Runtime Settings"], summary="Change the module register() time limit"),
+    patch=extend_schema(tags=["Tec-Tac Runtime Settings"], summary="Change the module register() time limit or the Tactical operation upload limit"),
 )
 class RuntimeSettingsView(APIView):
     permission_classes = [SessionAuthenticated]
@@ -120,24 +177,36 @@ class RuntimeSettingsView(APIView):
         data = request.data
         if not isinstance(data, dict):
             return Response({"detail": "Runtime settings must be a JSON object."}, status=400)
-        unknown = sorted(set(data) - {SETTING_MODULE_REGISTER_TIMEOUT})
+        unknown = sorted(set(data) - set(RUNTIME_SETTING_NAMES))
         if unknown:
             return Response({"detail": "Unknown runtime setting(s): " + ", ".join(unknown)}, status=400)
-        if SETTING_MODULE_REGISTER_TIMEOUT not in data:
-            return Response({"detail": f"{SETTING_MODULE_REGISTER_TIMEOUT} is required."}, status=400)
+        if not data:
+            return Response({"detail": "Send at least one runtime setting: " + " or ".join(RUNTIME_SETTING_NAMES) + "."}, status=400)
+        # The upload limit is superuser only. Checked before the values, so a non-superuser gets 403 and never 400.
+        if SETTING_TACTICAL_UPLOAD_MAX_MIB in data and not is_effective_superuser(request.user):
+            raise PermissionDenied(UPLOAD_LIMIT_DENIED)
+        changes = {}
         try:
-            value = validate_module_register_timeout_seconds(data[SETTING_MODULE_REGISTER_TIMEOUT])
+            if SETTING_MODULE_REGISTER_TIMEOUT in data:
+                changes[SETTING_MODULE_REGISTER_TIMEOUT] = validate_module_register_timeout_seconds(data[SETTING_MODULE_REGISTER_TIMEOUT])
+            if SETTING_TACTICAL_UPLOAD_MAX_MIB in data:
+                changes[SETTING_TACTICAL_UPLOAD_MAX_MIB] = validate_tactical_upload_max_mib(data[SETTING_TACTICAL_UPLOAD_MAX_MIB])
         except RuntimeSettingsError as exc:
             return Response({"detail": str(exc)}, status=400)
         with transaction.atomic():
             config = TecTacRuntimeConfig.objects.select_for_update().get(pk=TecTacRuntimeConfig.current().pk)
-            before = int(config.module_register_timeout_seconds)
-            if before != value:
-                config.module_register_timeout_seconds = value
+            changed = []
+            for setting, value in changes.items():
+                before = int(getattr(config, setting))
+                if before != value:
+                    setattr(config, setting, value)
+                    changed.append((setting, before, value))
+            if changed:
                 config.updated_by = request.user
-                config.save(update_fields=[SETTING_MODULE_REGISTER_TIMEOUT, "updated_by", "updated_at"])
-                # A failed audit write raises and rolls the change back.
-                _audit_change(request.user, before, value)
+                config.save(update_fields=[*(item[0] for item in changed), "updated_by", "updated_at"])
+                # One strict audit row per changed setting. A failed audit write raises and rolls every change back.
+                for setting, before, value in changed:
+                    _audit_change(request.user, before, value, setting)
         return Response(serialize_runtime_settings(config))
 
 

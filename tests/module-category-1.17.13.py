@@ -141,7 +141,7 @@ for development in (True, False):
 row = mc.describe("", development=False)
 must(row == {"category": None, "effective_category": "test", "category_missing": True, "category_refused": True, "category_warning": mc.WARNING_MISSING}, row)
 must("does not state its category" in row["category_warning"] and "treats it as Test" in row["category_warning"] and "not a development server" in row["category_warning"]
-     and "refuses to install or enable" in row["category_warning"] and "next release" in row["category_warning"], row["category_warning"])
+     and "refuses to install it" in row["category_warning"] and "next release" in row["category_warning"], row["category_warning"])
 row = mc.describe("", development=True)
 must(row["category_missing"] is True and row["category_refused"] is False and "still runs on this development server" in row["category_warning"], row)
 for category in ("core", "server", "premium"):
@@ -226,7 +226,7 @@ plan = v2.resolve_install_plan([candidate("fresh")])
 refusal = next(p for p in plan["problems"] if p["type"] == "category_refused")
 must(plan["valid"] is False and refusal["module"] == "fresh" and refusal["effective_category"] == "test" and "development server" in refusal["message"], plan)
 must(v2.resolve_install_plan([candidate("fresh", category="premium")])["valid"] is True, "a premium module installs")
-# enabling an installed module
+# enabling an installed module: 1.17.14 (CQ38) made the refusal install-only, so an enable is never refused for the category
 reset(plain=False, tagged=False, premiumone=False, testone=False)
 manifest("plain")
 manifest("tagged", category="core")
@@ -234,18 +234,13 @@ manifest("premiumone", category="premium")
 manifest("testone", category="test")
 for development in (False, True):
     DEV["on"] = development
-    for module_id, refused in (("plain", not development), ("testone", not development), ("tagged", False), ("premiumone", False)):
+    for module_id in ("plain", "testone", "tagged", "premiumone"):
         check = v2.validate_enable(module_id)
-        types_ = [p["type"] for p in check["problems"]]
-        must(("category_refused" in types_) is refused and check["valid"] is (not refused), (development, module_id, check))
+        must("category_refused" not in [p["type"] for p in check["problems"]] and check["valid"] is True, (development, module_id, check))
 DEV["on"] = False
-try:
-    v2.queue_set_enabled("plain", True)
-except v2.ModuleManagerV2Error as exc:
-    must("cannot be enabled" in str(exc), exc)
-else:
-    raise AssertionError("queue_set_enabled queued a test module off a development server")
-must(not list(JOBS.iterdir()), "nothing was queued")
+queued = []
+v2._queue_v2 = lambda payload: queued.append(payload) or {"id": "job-1", "queued": True}
+must(v2.queue_set_enabled("plain", True)["queued"] is True and queued[0]["action"] == "enable" and queued[0]["plugin_id"] == "plain", queued)
 
 # ------------------------------------------------------------------------------------------------ AD-20 replacement
 PATCHING = {"patching.windows": "1.2.0"}

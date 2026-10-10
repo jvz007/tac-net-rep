@@ -1,6 +1,6 @@
 # Core Runtime Settings
 
-Core stores a small set of settings the browser shell reads at startup. There is one today.
+Core stores a small set of settings. Two today: the module `register()` time limit, which the browser shell reads at startup, and (1.17.14) the Tactical operation upload limit, which Core's own executor reads.
 
 ## Module `register()` time limit
 
@@ -31,6 +31,7 @@ If the database cannot be read, Core returns the default (30). Startup never fai
 ```json
 {
   "module_register_timeout_seconds": { "value": 30, "minimum": 5, "maximum": 300, "default": 30 },
+  "tactical_operation_upload_max_mib": { "value": 10, "minimum": 1, "maximum": 25, "default": 10, "bytes": 10485760 },
   "updated_at": "2026-10-08T12:00:00+00:00",
   "updated_by": "alice"
 }
@@ -47,8 +48,8 @@ Python: `tec_tac.rbac.can_manage_runtime_settings(user)` gives the same answer. 
 ```
 
 - The value must be a whole number from 5 to 300. A boolean, float, string or `null` gets 400, as does a value outside the range.
-- Unknown fields get 400. Nothing is changed.
-- A change writes one strict Core audit row (module `core`, object type `runtime_settings`, action `modify`) with the value before and after. It is written in the same transaction, so if the audit write fails the change is rolled back.
+- Unknown fields get 400. Nothing is changed. Since 1.17.14 an empty body is a 400 too, and the answer names both settings.
+- A change writes one strict Core audit row (module `core`, object type `runtime_settings`, action `modify`) with the value before and after. It is written in the same transaction, so if the audit write fails the change is rolled back. Since 1.17.14 each changed setting writes its own row, and `object_id` is the setting's name.
 - Setting the value it already has changes nothing and writes no audit row.
 - Writes are limited to 10 a minute and 200 a day for each user and IP. Reads are not counted.
 
@@ -57,5 +58,24 @@ Choose the value with care. A very low limit makes slow modules fail to load. A 
 ### Python
 
 `tec_tac.runtime_settings.get_module_register_timeout_seconds()` returns the configured value. It never raises. It is informational: the UI applies the limit.
+
+## Tactical operation upload limit (1.17.14)
+
+The largest file one Tactical operation may forward through Core (`docs/tactical-operations.md`, "One file: `upload`").
+
+```text
+tactical_operation_upload_max_mib   default 10   range 1 to 25 (whole MiB)
+```
+
+- `GET` returns `{value, minimum, maximum, default, bytes}`. The setting lives on the runtime configuration row (migration 0026). A row that existed before 1.17.14 reads as 10.
+- `PATCH` accepts `module_register_timeout_seconds`, `tactical_operation_upload_max_mib`, or both. A body with only the old key behaves exactly as before.
+- The value is validated like the timeout: a whole number only. A boolean, float, string or `null` gets 400, as does a value outside 1 to 25.
+- **Only a superuser may change it**, the same rule as the update source. A caller who holds `core.runtime_settings.manage` can still change the timeout, but gets 403 for this key. The check runs before the value is read, so a caller without the right never sees 400. If a body carries both keys and the caller is not a superuser, nothing is changed.
+- Each changed setting writes its own strict audit row in the same transaction. Sending a value the setting already has writes nothing.
+- The executor reads the setting on every call. A lowered limit takes effect at once, with no restart. An operation's own lower cap still wins.
+- A module can never declare a cap above 25 MiB. Registration cannot read the database, so it checks that fixed limit.
+- A body limit in the web server or in Tactical still applies in front of Core. This setting does not change either.
+
+Python: `tec_tac.runtime_settings.get_tactical_upload_max_bytes()` returns the effective ceiling in bytes. It never raises and falls back to 10 MiB. It is informational: Core applies it.
 
 Storage is the `TecTacRuntimeConfig` singleton (migration `0022_runtime_config`).

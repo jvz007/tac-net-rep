@@ -562,6 +562,7 @@ op = m25.Migration.operations[0]
 must(op.k["model_name"] == "tectacruntimeconfig" and op.k["name"] == "update_sources", op.k)
 must(op.k["field"].k == {"blank": True, "default": dict}, op.k["field"].k)
 latest = sorted(p.name for p in (APP / "migrations").glob("0*.py"))[-1]
-must(latest == "0025_runtime_update_sources.py", f"0025 must be the newest migration, found {latest}")
+must(latest == "0026_runtime_upload_limit.py", f"0026 must be the newest migration, found {latest}")  # 1.17.14 added 0026 after 0025
+must((APP / "migrations" / "0025_runtime_update_sources.py").is_file(), "0025 is still there")
 
 print("[TEST] PASS 1.17.2 remembered update source")

@@ -213,7 +213,7 @@ must(saved["keep"] == {"enabled": False, "version": "2", "category": "core"} and
 
 # run_job refuses before the install script runs
 start = raw.index("    command = None\n    declared_category = None")
-chunk = raw[start:raw.index("    rc = 1\n    try:", start)]
-must('package_category(package, job["plugin_id"])' in chunk and "category_refused(declared_category)" in chunk and "return" in chunk, "run_job checks the category")
+chunk = raw[start:raw.index("    rc = 1\n    if command is not None:", start)]  # 1.17.14: the lifecycle block sits under `if command is not None`
+must('package_category(package, job["plugin_id"])' in chunk and "category_refused(declared_category)" in chunk and "category_failed = True" in chunk, "run_job checks the category")  # 1.17.14: falls through to the shared tail instead of returning
 must(chunk.index("category_refused") < chunk.index("command = [TRUSTED_BASH, str(install_script)"), "the check comes before the install command")
 print("module-category-install-route-1.17.13: ok")

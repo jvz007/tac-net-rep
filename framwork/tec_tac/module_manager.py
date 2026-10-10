@@ -649,6 +649,8 @@ def public_job(job: dict) -> dict:
         "action", "plugin_id", "replace", "purge_data", "package_sha256", "package_filename", "requested_by",
         # 1.17.12 (AD-20): what a module job switched, written by the root helper when it ran.
         "disabled_modules", "enabled_modules", "reconciled_modules",
+        # 1.17.14 (CQ34): the replaced modules a confirmed disable left off because they could not be enabled.
+        "hand_back_skipped",
     }
     result = {key: value for key, value in job.items() if key in allowed}
     log_path = LOGS_ROOT / f"{job.get('id')}.log"

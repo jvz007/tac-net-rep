@@ -364,21 +364,26 @@ def _join_ids(ids) -> str:
     return ", ".join(sorted({str(value) for value in ids}))
 
 
-def audit_switch_queued(actor, subject_id: str, job_id: Any, disabled=(), enabled=()) -> None:
+def audit_switch_queued(actor, subject_id: str, job_id: Any, disabled=(), enabled=(), skipped=()) -> None:
     """Audit row for a job that asks Core to switch modules (1.17.12). It records the request, written when the job is
-    queued, and claims no change: the outcome rows come from ``audit_finished_jobs`` once the job has run."""
-    disabled, enabled = sorted(set(disabled or ())), sorted(set(enabled or ()))
-    if not (disabled or enabled):
+    queued, and claims no change: the outcome rows come from ``audit_finished_jobs`` once the job has run.
+
+    1.17.14: ``skipped`` names the replaced modules the request confirmed to leave off because they cannot be enabled."""
+    disabled, enabled, skipped = sorted(set(disabled or ())), sorted(set(enabled or ())), sorted(set(skipped or ()))
+    if not (disabled or enabled or skipped):
         return
     parts = []
     if disabled:
         parts.append(f"disable {_join_ids(disabled)}")
     if enabled:
         parts.append(f"enable {_join_ids(enabled)}")
+    message = f"Module {subject_id} was asked to switch: job {job_id or ''} will {' and '.join(parts) if parts else 'change nothing else'}."
+    metadata = {"job_id": str(job_id or ""), "disable": disabled, "enable": enabled}
+    if skipped:
+        message += f" It was confirmed that {_join_ids(skipped)} stays off because it cannot be enabled."
+        metadata["hand_back_skipped"] = skipped
     _audit_replacement(
-        actor, action=ACTION_SWITCH_QUEUED, object_id=subject_id,
-        message=f"Module {subject_id} was asked to switch: job {job_id or ''} will {' and '.join(parts)}.",
-        metadata={"job_id": str(job_id or ""), "disable": disabled, "enable": enabled},
+        actor, action=ACTION_SWITCH_QUEUED, object_id=subject_id, message=message, metadata=metadata,
         correlation_id=correlation_id_for(ACTION_SWITCH_QUEUED, job_id),
     )
 
@@ -465,6 +470,12 @@ def _outcome_rows(job: Mapping[str, Any], replaces_of) -> list[dict]:
             rows.append({"action": ACTION_ENABLED, "object_id": target,
                          "message": f"Module {target} was enabled again because its replacement {subject} was disabled.",
                          "metadata": {**base, "replacement": subject, "replaced": target}})
+        skipped = _id_list(job.get("hand_back_skipped"))
+        if skipped and job.get("action") == "disable":
+            # 1.17.14 (CQ34): the replacement was disabled on a confirmation to leave the replaced module off.
+            rows.append({"action": ACTION_DISABLED, "object_id": subject,
+                         "message": f"Replacement {subject} was disabled. The module it replaces, {_join_ids(skipped)}, stayed off because it cannot be enabled.",
+                         "metadata": {**base, "replacement": subject, "replaced": ", ".join(sorted(skipped)), "hand_back_skipped": sorted(skipped)}})
         if job.get("reason") != "replacement_conflict":
             for target in _id_list(job.get("reconciled_modules")):
                 rows.append({"action": ACTION_CONFLICT_RESOLVED, "object_id": target,

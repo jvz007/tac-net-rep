@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import logging
 import os
 import shutil
 import tempfile
@@ -57,6 +58,8 @@ V2_HELPER = Path("/usr/local/sbin/tec-tac-module-v2-job")
 BUNDLES_ROOT = STAGED_ROOT / "bundles"
 BATCHES_ROOT = STAGED_ROOT / "batches"
 BUNDLE_MANIFEST = "tec_tac_bundle.json"
+logger = logging.getLogger("tec_tac.module_manager_v2")
+
 FRAMEWORK_VERSION_FILE = Path("/opt/tec-tac/VERSION")
 UI_VERSION_FILE = Path("/var/lib/tec-tac/ui/tec-tac/VERSION")
 UI_PACKAGE_FILE = Path("/var/lib/tec-tac/ui/tec-tac/package.json")
@@ -104,20 +107,48 @@ class ModuleReplacementSecondConfirmationRequired(ModuleManagerV2Error):
     ``confirm_replacement_switch: true`` (1.17.12, Johan CQ32).
 
     The first confirmation (the ``disable_replaced`` list) has already passed when this is raised. It is a refusal (HTTP
-    400, code ``replacement_second_confirmation_required``) carrying the fresh ``will_disable`` list and the module id."""
+    400, code ``replacement_second_confirmation_required``) carrying the fresh ``will_disable`` list and the module id.
+    1.17.14 (CQ35): it also carries ``dependants``, [{replacement, modules[]}], the enabled modules that name a replacement
+    that will be switched off directly in their dependencies. It is a warning shown in this confirmation, never a refusal."""
 
-    def __init__(self, will_disable, module_id: str):
+    def __init__(self, will_disable, module_id: str, dependants=None):
         self.will_disable = sorted(set(will_disable))
         self.module_id = str(module_id)
+        self.dependants = [dict(item) for item in (dependants or [])]
         names = ", ".join(self.will_disable)
-        super().__init__(
-            f"Module {self.module_id!r} is replaced by {names}, which is enabled. Enabling {self.module_id!r} will switch {names} off. "
-            "Confirm the switch to go ahead: send confirm_replacement_switch with true."
-        )
+        text = (f"Module {self.module_id!r} is replaced by {names}, which is enabled. Enabling {self.module_id!r} will switch {names} off. ")
+        for item in self.dependants:
+            text += f"Enabled module(s) {', '.join(item['modules'])} depend directly on {item['replacement']!r}. "
+        super().__init__(text + "Confirm the switch to go ahead: send confirm_replacement_switch with true.")
 
     def as_payload(self) -> dict:
         return {"detail": str(self), "code": "replacement_second_confirmation_required",
-                "will_disable": list(self.will_disable), "module": self.module_id}
+                "will_disable": list(self.will_disable), "module": self.module_id, "dependants": [dict(item) for item in self.dependants]}
+
+
+class ModuleReplacementHandBackConfirmationRequired(ModuleManagerV2Error):
+    """Raised when disabling a replacement would leave the module it replaces off, because that module cannot be enabled,
+    and the request did not carry ``confirm_without_hand_back: true`` (1.17.14, Johan CQ34).
+
+    It is a refusal (HTTP 400, code ``replacement_hand_back_confirmation_required``) carrying ``will_enable`` (the modules
+    that can come back), ``hand_back_unavailable`` ([{module, reasons[], required_modules[]}]) and the module id. An old
+    caller that sends no flag sees a refusal and nothing is queued."""
+
+    def __init__(self, module_id: str, will_enable, unavailable):
+        self.module_id = str(module_id)
+        self.will_enable = sorted(set(will_enable))
+        self.hand_back_unavailable = [dict(item) for item in unavailable]
+        parts = []
+        for item in self.hand_back_unavailable:
+            parts.append(f"{item['module']!r} cannot be enabled ({'; '.join(item['reasons'])})")
+        super().__init__(
+            f"Disabling {self.module_id!r} would leave module(s) it replaces switched off: {'; '.join(parts)}. "
+            "Confirm to go ahead without them: send confirm_without_hand_back with true."
+        )
+
+    def as_payload(self) -> dict:
+        return {"detail": str(self), "code": "replacement_hand_back_confirmation_required", "module": self.module_id,
+                "will_enable": list(self.will_enable), "hand_back_unavailable": [dict(item) for item in self.hand_back_unavailable]}
 
 
 def _confirmed_disables(will_disable, disable_replaced, subject: str) -> list[str]:
@@ -514,7 +545,8 @@ def installed_catalog_v2() -> list[dict]:
         if item.get("legacy"):
             item.update({"enabled": True, "visible": True, "dependencies": {}, "optional_dependencies": {}, "requires": {}, "dependants": [],
                          "replaces": None, "replacement": None, "replaced_by": None, "will_disable": [], "will_enable": [],
-                         "second_confirmation_required": False})
+                         "second_confirmation_required": False, "replacement_dependants": [],
+                         "hand_back_unavailable": [], "hand_back_confirmation_required": False})
             result.append(item)
             continue
         meta = metadata.get(item["id"], {})
@@ -571,9 +603,36 @@ def installed_catalog_v2() -> list[dict]:
             # disabling it switches back on (CQ33).
             "will_enable": module_replacement.hand_back_plan(planning_model, item["id"]) if planning_model else [],
             "second_confirmation_required": module_replacement.switches_replacement(planning_model, item["id"]) if planning_model else False,
+            # 1.17.14: what disabling an enabled replacement cannot hand back (CQ34) and what enabling a replaced module
+            # would leave directly depending on the replacement it switches off (CQ35). Filled in below.
+            "replacement_dependants": [],
+            "hand_back_unavailable": [],
+            "hand_back_confirmation_required": False,
         })
         result.append(item)
+    _add_replacement_warnings(result, planning_model)
     return result
+
+
+def _add_replacement_warnings(rows: list[dict], planning_model: dict) -> None:
+    """Fill the 1.17.14 warning fields of the catalogue rows, in place. ``will_enable`` keeps only the modules that can come
+    back. Never raises: a failure leaves the fields as they were (empty), and the queue-time check still runs."""
+    if not planning_model:
+        return
+    catalog = {row["id"]: row for row in rows}
+    for row in rows:
+        if row.get("legacy"):
+            continue
+        try:
+            if row.get("will_enable"):
+                can, cannot = _hand_back_split(catalog, planning_model, row["id"], row["will_enable"], {row["id"]})
+                row["will_enable"] = can
+                row["hand_back_unavailable"] = _unavailable_rows(cannot)
+                row["hand_back_confirmation_required"] = bool(cannot)
+            if row.get("second_confirmation_required") and row.get("will_disable"):
+                row["replacement_dependants"] = _replacement_dependants(catalog, planning_model, row["id"], row["will_disable"])
+        except Exception:
+            logger.exception("Could not work out the replacement warnings for module %s.", row.get("id"))
 
 
 def _package_metadata(archive: Path) -> dict:
@@ -1440,18 +1499,17 @@ def _enable_problems(catalog: dict, model: dict, module_id: str, *, hypothetical
     # AD-20: enabling a replacement names the module it will disable (1.17.11), and enabling a core or server module names
     # the replacement it will switch off (1.17.12); the other replacement rules still apply.
     problems.extend(module_replacement.enable_problems(model, module_id))
-    # AD-21 (1.17.13): a module whose effective category is test is not enabled off a development server.
-    if not target.get("legacy"):
-        refusal = module_category.refusal_problem(module_id, target.get("category"))
-        if refusal:
-            problems.append(refusal)
+    # AD-21 (1.17.14, CQ38): the category refusal applies at install only. A module already installed can be enabled.
     return problems
 
 
 def _replacement_dependants(catalog: dict, model: dict, module_id: str, replacements) -> list[dict]:
-    """Problems for enabled modules that hard-depend on a replacement that enabling ``module_id`` would switch off
-    (1.17.12, CQ35). No cascade: the operator disables them first."""
-    problems = []
+    """[{replacement, modules[]}]: the enabled modules that name a replacement, which enabling ``module_id`` would switch
+    off, directly in their ``dependencies`` (1.17.14, CQ35). It is a warning, never a refusal and never a cascade.
+
+    Modules that depend on ``module_id`` itself are not listed: it is the module coming back, and the replacement's
+    contract parity (AD-20 condition 3) keeps the others satisfied."""
+    found = []
     for replacement_id in replacements:
         names = []
         for item in sorted(catalog.values(), key=lambda row: row["id"]):
@@ -1461,11 +1519,8 @@ def _replacement_dependants(catalog: dict, model: dict, module_id: str, replacem
             if (node.enabled if node is not None else item.get("enabled")):
                 names.append(item["id"])
         if names:
-            problems.append({
-                "type": "replacement_has_dependants", "module": module_id, "replacement": replacement_id, "dependants": names,
-                "message": f"Enabling {module_id!r} switches {replacement_id!r} off, but enabled module(s) {', '.join(names)} depend on {replacement_id!r}. Disable them first.",
-            })
-    return problems
+            found.append({"replacement": replacement_id, "modules": names})
+    return found
 
 
 def validate_enable(module_id: str) -> dict:
@@ -1478,30 +1533,66 @@ def validate_enable(module_id: str) -> dict:
     # 1.17.9-1: queued enable/disable jobs not yet applied count as done, so two queued jobs cannot both pass.
     model = _model_with_pending_jobs(module_replacement.live_model())
     problems = _enable_problems(catalog, model, module_id)
-    # 1.17.12: the replacements this enable would switch off must have no enabled dependants.
-    problems.extend(_replacement_dependants(catalog, model, module_id, module_replacement.disable_plan(model, module_id) if module_replacement.switches_replacement(model, module_id) else []))
     will_disable = [] if problems else module_replacement.disable_plan(model, module_id)
-    return {"valid": not problems, "problems": problems, "will_disable": will_disable}
+    dependants = _replacement_dependants(catalog, model, module_id, will_disable) if will_disable and module_replacement.switches_replacement(model, module_id) else []
+    return {"valid": not problems, "problems": problems, "will_disable": will_disable, "replacement_dependants": dependants}
 
 
-def _hand_back_problems(catalog: dict, model: dict, replacement_id: str, will_enable, off) -> list[dict]:
-    """Why a module that disabling ``replacement_id`` switches back on cannot be enabled (1.17.12, CQ34). Judged on the
-    model as it will be with ``off`` (the replacement and any cascade) disabled. Empty when it can come back."""
+def _hand_back_split(catalog: dict, model: dict, replacement_id: str, will_enable, off) -> tuple[list[str], list[dict]]:
+    """(can come back, cannot) for the modules that disabling ``replacement_id`` would switch back on (1.17.14, CQ34).
+
+    Judged on the model as it will be with ``off`` (the replacement and any cascade) disabled. ``cannot`` rows are
+    {module, reasons[], required_modules[], problems[]}: plain-English reasons, and the modules whose absence or state
+    stops it (taken from the missing, disabled or out-of-range dependency rows)."""
     future = module_replacement._with_enabled(model, {module_id: False for module_id in off})
-    problems = []
+    can, cannot = [], []
     for back in will_enable:
         item = catalog.get(back)
         if item is None or item.get("protected") or not item.get("managed", True):
             inner = [{"type": "not_manageable", "module": back}]
         else:
             inner = _enable_problems(catalog, future, back, hypothetical=True)
-        if inner:
-            reasons = "; ".join(_problem_text(entry) for entry in inner)
-            problems.append({
-                "type": "hand_back_blocked", "module": replacement_id, "replaced": back, "problems": inner,
-                "message": f"Disabling {replacement_id!r} switches {back!r} back on, and {back!r} cannot be enabled: {reasons}. Nothing was changed.",
-            })
-    return problems
+        if not inner:
+            can.append(back)
+            continue
+        required = sorted({str(entry["dependency"]) for entry in inner if entry.get("dependency")})
+        cannot.append({"module": back, "reasons": [_problem_text(entry) for entry in inner],
+                       "required_modules": required, "problems": inner})
+    return can, cannot
+
+
+def _hand_back_problems(catalog: dict, model: dict, replacement_id: str, will_enable, off) -> list[dict]:
+    """Warnings for the modules that disabling ``replacement_id`` switches back on but that cannot come back (1.17.14,
+    CQ34). Since 1.17.14 these are warnings that need a confirmation, not refusals. Empty when every one can come back."""
+    _, cannot = _hand_back_split(catalog, model, replacement_id, will_enable, off)
+    warnings = []
+    for row in cannot:
+        warnings.append({
+            "type": "hand_back_unavailable", "module": replacement_id, "replaced": row["module"], "problems": row["problems"],
+            "reasons": row["reasons"], "required_modules": row["required_modules"],
+            "message": f"Disabling {replacement_id!r} cannot switch {row['module']!r} back on: {'; '.join(row['reasons'])}. It would stay off.",
+        })
+    return warnings
+
+
+def _unavailable_rows(cannot) -> list[dict]:
+    return [{"module": row["module"], "reasons": list(row["reasons"]), "required_modules": list(row["required_modules"])} for row in cannot]
+
+
+def _hand_back_wanted(model: dict, affected) -> list[str]:
+    """The replaced modules a disable would switch back on, over every module it switches off, the cascade included
+    (1.17.14, CQ36). A replacement disabled as part of a deliberate cascade hands back too.
+
+    Each replacement in ``affected`` is judged with the others already off, so two replacements of one module, both being
+    disabled, still hand it back."""
+    off = list(dict.fromkeys(affected))
+    wanted: list[str] = []
+    for module_id in off:
+        plan = module_replacement.hand_back_plan(module_replacement._with_enabled(model, {mid: False for mid in off if mid != module_id}), module_id)
+        for back in plan:
+            if back not in wanted and back not in off:
+                wanted.append(back)
+    return wanted
 
 
 def _problem_text(problem: dict) -> str:
@@ -1517,14 +1608,14 @@ def _problem_text(problem: dict) -> str:
         return "a runtime requirement is not met"
     if kind == "not_manageable":
         return "it cannot be enabled or disabled from the UI"
-    if kind == "category_refused":
-        return "it is a Test module and this is not a development server"
     return str(problem.get("message") or kind or "a rule refuses it")
 
 
 def validate_disable(module_id: str, affected=None) -> dict:
-    """What disabling ``module_id`` would also do (1.17.12, CQ33): ``will_enable`` names the replaced module that comes
-    back on, and ``problems`` explain why it cannot (then the disable is refused). ``affected`` is the cascade list."""
+    """What disabling ``module_id`` would also do (1.17.12, CQ33): ``will_enable`` names the replaced modules that come
+    back on. 1.17.14 (CQ34): a replaced module that cannot come back is a warning, not a refusal. ``hand_back_unavailable``
+    names it, why, and the modules it needs; ``hand_back_confirmation_required`` says the request must confirm. ``problems``
+    carries the same warnings. ``affected`` is the cascade list."""
     catalog = {item["id"]: item for item in installed_catalog_v2()}
     target = catalog.get(module_id)
     if not target:
@@ -1532,9 +1623,12 @@ def validate_disable(module_id: str, affected=None) -> dict:
     if target.get("protected"):
         raise ModuleManagerV2Error("Protected framework modules cannot be enabled/disabled from the UI.")
     model = _model_with_pending_jobs(module_replacement.live_model())
-    will_enable = module_replacement.hand_back_plan(model, module_id)
-    problems = _hand_back_problems(catalog, model, module_id, will_enable, set(affected or ()) | {module_id}) if will_enable else []
-    return {"valid": not problems, "problems": problems, "will_enable": will_enable}
+    off = list(dict.fromkeys([*(affected or ()), module_id]))
+    wanted = _hand_back_wanted(model, off)
+    can, cannot = _hand_back_split(catalog, model, module_id, wanted, off) if wanted else ([], [])
+    problems = _hand_back_problems(catalog, model, module_id, wanted, off) if cannot else []
+    return {"valid": True, "problems": problems, "will_enable": can,
+            "hand_back_unavailable": _unavailable_rows(cannot), "hand_back_confirmation_required": bool(cannot)}
 
 
 def _iter_jobs():
@@ -1614,7 +1708,8 @@ def queue_replacement_conflict_disable(replacement_id: str, replaced_id: str) ->
 
 
 def queue_set_enabled(module_id: str, enabled: bool, cascade: bool = False, requested_by: str | None = None,
-                      disable_replaced=None, actor=None, confirm_replacement_switch=None) -> dict:
+                      disable_replaced=None, actor=None, confirm_replacement_switch=None,
+                      confirm_without_hand_back=None) -> dict:
     catalog = {item["id"]: item for item in installed_catalog_v2()}
     target = catalog.get(module_id)
     if not target:
@@ -1624,12 +1719,13 @@ def queue_set_enabled(module_id: str, enabled: bool, cascade: bool = False, requ
     affected = [module_id]
     disable_modules: list[str] = []
     enable_modules: list[str] = []
+    hand_back_skipped: list[str] = []
     replacement_confirmed = False
     if enabled:
         validation = validate_enable(module_id)
         if not validation["valid"]:
             replacement = [item for item in validation["problems"]
-                           if item.get("type") in ("replacement_conflict", "replacement_incomplete", "replacement_has_dependants")]
+                           if item.get("type") in ("replacement_conflict", "replacement_incomplete")]
             if replacement:
                 raise ModuleManagerV2Error("Module cannot be enabled. " + " ".join(item["message"] for item in replacement))
             raise ModuleManagerV2Error("Module cannot be enabled until its dependencies and runtime requirements are satisfied.")
@@ -1640,15 +1736,19 @@ def queue_set_enabled(module_id: str, enabled: bool, cascade: bool = False, requ
         # after the first (the list). Enabling a replacement keeps its single confirmation.
         if disable_modules and module_replacement.switches_replacement(_model_with_pending_jobs(module_replacement.live_model()), module_id):
             if confirm_replacement_switch is not True:
-                raise ModuleReplacementSecondConfirmationRequired(disable_modules, module_id)
+                raise ModuleReplacementSecondConfirmationRequired(
+                    disable_modules, module_id, _replacement_dependants(catalog, _model_with_pending_jobs(module_replacement.live_model()), module_id, disable_modules))
             replacement_confirmed = True
     else:
         # 1.17.12 (CQ33): disabling a replacement switches the module it replaces back on, when it can come back. The
-        # dependants of that module stay satisfied throughout, so they do not block the disable.
-        enable_modules = module_replacement.hand_back_plan(_model_with_pending_jobs(module_replacement.live_model()), module_id)
+        # dependants of that module stay satisfied throughout, so they do not block the disable. 1.17.14: a replaced
+        # module that cannot come back does not stop the disable; it asks for a confirmation and stays off.
+        live = _model_with_pending_jobs(module_replacement.live_model())
+        first_plan = module_replacement.hand_back_plan(live, module_id)
+        coming_back, _ = _hand_back_split(catalog, live, module_id, first_plan, {module_id}) if first_plan else ([], [])
 
         def dependants_of(mid):
-            return [item for item in _enabled_dependants(mid) if not (enable_modules and mid == module_id and item.get("via"))]
+            return [item for item in _enabled_dependants(mid) if not (coming_back and mid == module_id and item.get("via"))]
 
         dependants = dependants_of(module_id)
         if dependants and not cascade:
@@ -1665,10 +1765,14 @@ def queue_set_enabled(module_id: str, enabled: bool, cascade: bool = False, requ
                         affected.append(dep["id"])
             visit(module_id)
             affected = [mid for mid in affected if mid != module_id] + [module_id]
-        if enable_modules:
-            blocked = _hand_back_problems(catalog, _model_with_pending_jobs(module_replacement.live_model()), module_id, enable_modules, set(affected))
-            if blocked:
-                raise ModuleManagerV2Error("Module cannot be disabled. " + " ".join(item["message"] for item in blocked))
+        # 1.17.14 (CQ36): a deliberate disable always hands back, a replacement disabled in a cascade included.
+        wanted = _hand_back_wanted(live, affected)
+        if wanted:
+            enable_modules, cannot = _hand_back_split(catalog, live, module_id, wanted, set(affected))
+            if cannot:
+                if confirm_without_hand_back is not True:
+                    raise ModuleReplacementHandBackConfirmationRequired(module_id, enable_modules, _unavailable_rows(cannot))
+                hand_back_skipped = sorted(row["module"] for row in cannot)
     payload = {
         "action": "enable" if enabled else "disable",
         "plugin_id": module_id,
@@ -1682,9 +1786,11 @@ def queue_set_enabled(module_id: str, enabled: bool, cascade: bool = False, requ
         payload["replacement_confirmed"] = replacement_confirmed
     else:
         payload["enable_modules"] = enable_modules
+        payload["hand_back_skipped"] = hand_back_skipped
     job = _queue_v2(payload)
-    if disable_modules or enable_modules:
-        module_replacement.audit_switch_queued(actor, module_id, job.get("id"), disabled=disable_modules, enabled=enable_modules)
+    if disable_modules or enable_modules or hand_back_skipped:
+        extra = {"skipped": hand_back_skipped} if hand_back_skipped else {}  # 1.17.14: the row names what a confirmed disable left off
+        module_replacement.audit_switch_queued(actor, module_id, job.get("id"), disabled=disable_modules, enabled=enable_modules, **extra)
     return job
 
 

@@ -7,8 +7,9 @@ it, so the two cannot drift) and covers:
 
 * the manifest reader accepts core, server, premium and test, refuses anything else, and refuses ``replaces`` on a test module;
 * ``development_server()`` reads the root-owned ``TEC_TAC_ENVIRONMENT`` from the root config and fails closed;
-* enabling and installing a test module (or one with no category) is refused off a development server, re-checked from root-owned
-  manifests, and the install writes the manifest category into the module's state entry in the same state write;
+* installing a test module (or one with no category) is refused off a development server, re-checked from root-owned
+  manifests, and the install writes the manifest category into the module's state entry in the same state write. Since 1.17.14
+  (CQ38) the refusal is install-only: enabling an installed test module is no longer refused (tests/module-category-enable-1.17.14.py);
 * a failed enable or disable records what actually happened: ``rolled_back`` only after the flags were restored, ``rollback_error``
   when restoring raised, and neither when nothing was changed (Medium held from the 1.17.12 review).
 
@@ -105,12 +106,9 @@ def plain_world(**flags_):
     SAVES.clear()
 
 
+# 1.17.14 (CQ38): the category refusal is install-only, so every installed module enables, a test module included
 plain_world()
-for module_id in ("plain", "tst"):
-    before = STATE_FILE.read_bytes()
-    refused(lambda: helper.apply_enable_job(REPO, [module_id], []), "not a development server")
-    must(STATE_FILE.read_bytes() == before and SAVES == [], "nothing written")
-for module_id in ("tagged", "pre"):
+for module_id in ("plain", "tst", "tagged", "pre"):
     helper.apply_enable_job(REPO, [module_id], [])
     must(flags()[module_id] is True, module_id)
 plain_world()
@@ -119,11 +117,10 @@ for module_id in ("plain", "tst", "tagged", "pre"):
     helper.apply_enable_job(REPO, [module_id], [])
     must(flags()[module_id] is True, module_id)
 DEV["on"] = False
-# the whole job: refused with nothing changed and no sync
+# the whole job: an enable of an installed test module is no longer refused
 plain_world()
 result = run({"action": "enable", "plugin_id": "plain", "affected_modules": ["plain"]})
-must(result["status"] == "failed" and "not a development server" in result["error"] and SYNC["calls"] == 0 and flags()["plain"] is False, result)
-must("rolled_back" not in result and "rollback_error" not in result, "nothing was changed, so nothing is recorded as rolled back")
+must(result["status"] == "succeeded" and flags()["plain"] is True, result)
 plain_world()
 must(run({"action": "enable", "plugin_id": "tagged", "affected_modules": ["tagged"]})["status"] == "succeeded", "a core module enables")
 # a module with no manifest the helper can trust is not judged by category (the existing rule handles it)

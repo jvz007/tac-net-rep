@@ -47,10 +47,20 @@ class Command(BaseCommand):
         except Exception as exc:
             self.stderr.write(f"TEC-TAC replacement audit sweep failed; retrying next tick: {exc.__class__.__name__}: {exc}")
 
+        failure_notices = 0
+        try:
+            # 1.17.14 (CQ36): one notice per failed module job, for the superusers and the person who started it. The
+            # step never raises, and a failure here never takes the tick or Tactical down.
+            from tec_tac.module_failure_notices import sweep_failed_jobs
+
+            failure_notices = sweep_failed_jobs()
+        except Exception as exc:
+            self.stderr.write(f"TEC-TAC module failure notice sweep failed; retrying next tick: {exc.__class__.__name__}: {exc}")
+
         sweep_state = "error" if sweep_error else "ran"
         cleanup_state = "error" if cleanup_error else ("ran" if cleanup and cleanup.get("ran") else "not_due")
         self.stdout.write(
-            "TEC-TAC scheduler tick: checked={checked} queued={queued} skipped={skipped} cleaned={cleaned} session_history_cleanup={session_cleanup} session_expiry_sweep={sweep_state} sweep_revoked={sweep_revoked} sweep_skipped_no_digest={sweep_skipped} sweep_orphan_tokens={sweep_orphans} now={now} replacement_conflicts_queued={replacement_queued} replacement_audit_rows={replacement_audit}".format(
+            "TEC-TAC scheduler tick: checked={checked} queued={queued} skipped={skipped} cleaned={cleaned} session_history_cleanup={session_cleanup} session_expiry_sweep={sweep_state} sweep_revoked={sweep_revoked} sweep_skipped_no_digest={sweep_skipped} sweep_orphan_tokens={sweep_orphans} now={now} replacement_conflicts_queued={replacement_queued} replacement_audit_rows={replacement_audit} module_failure_notices={failure_notices}".format(
                 checked=result["checked"],
                 queued=len(result["queued"]),
                 skipped=len(result["skipped"]),
@@ -63,5 +73,6 @@ class Command(BaseCommand):
                 now=result["now"],
                 replacement_queued=sum(1 for row in reconciled if row.get("queued")),
                 replacement_audit=audited,
+                failure_notices=failure_notices,
             )
         )

@@ -20,7 +20,7 @@ Anything else in `category` is refused when Core reads the manifest. Reportsets 
 A manifest with no `category` is treated as `test`. Core tells you so, in plain English, and nothing breaks today:
 
 - On a **development server** the module still runs. The warning says so.
-- On a server that is **not a development server**, Core refuses to install or enable it. Modules that are already installed keep loading. Nothing stops at start-up.
+- On a server that is **not a development server**, Core refuses to install it. Since 1.17.14 the refusal applies at install only. A module that is already installed keeps loading and can be enabled. The warning still names the missing category. Nothing stops at start-up.
 
 The fix is the same either way. The module's next release needs to carry its category.
 
@@ -35,14 +35,14 @@ These fields are additive. Older UI builds ignore them.
 | `category` | The category the manifest declares, or `null`. |
 | `effective_category` | The category Core acts on. A missing category is `test`. |
 | `category_missing` | `true` when the manifest states no category. |
-| `category_refused` | `true` when the effective category is `test` and the server is not a development server. |
+| `category_refused` | `true` when the effective category is `test` and the server is not a development server. Since 1.17.14 it means "an install is refused"; an installed module can still be enabled. |
 | `category_warning` | Plain English for a badge or a hint, or `null`. |
 
 They appear on every `module_status` row of `GET /api/tfd/ui/context/` (legacy plugins carry `null` and `false`), and on every extension row of the `modules/v2` installed catalogue. The catalogue also carries `category_state` (what the install wrote to module state) and `category_mismatch`. Core reads the manifest first. A different value in state is flagged, never trusted.
 
 ## What Core enforces
 
-1. **Install and enable.** An install plan, and an enable, for an effective `test` module off a development server returns the problem type `category_refused`, with `module`, `category`, `effective_category` and a plain-English `message`. The package preview of the direct install route (`/api/tfd/modules/packages/<id>/install/`) and the local single-package path refuse it the same way. Both root job helpers (v1 and v2) check again from the root-owned package or manifests and the root config. It writes the manifest category into the module's state entry in the same state write as the install.
+1. **Install only (CQ38, 1.17.14).** An install plan for an effective `test` module off a development server returns the problem type `category_refused`, with `module`, `category`, `effective_category` and a plain-English `message`. The package preview of the direct install route (`/api/tfd/modules/packages/<id>/install/`) and the local single-package path refuse it the same way. Both root job helpers (v1 and v2) check the install again from the root-owned package or manifests and the root config. An upgrade is an install, so it is checked too. Enabling or disabling an installed module is never refused for its category, and neither is a hand-back. It writes the manifest category into the module's state entry in the same state write as the install.
 2. **Tactical operations (AD-21 condition 3).** The executor uses the effective category. A `premium`, `server` or `test` module is refused every route, even one the owner table lists by id. The refusal names the category. Licensing keeps `core/codesign/` (AD-16). An honoured AD-20 replacement keeps its rights.
 3. **Replacement (AD-20).** A replacement must be `premium`. A replacement with no category is honoured on a development server only. Otherwise the status reports the reason code `replacement-category`. A `test` module may not declare `replaces`, and neither may a `core` or `server` module. The capability prefix rule (a capability begins with the module's own id) stays for `core` and `server` only.
 

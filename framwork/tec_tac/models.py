@@ -159,6 +159,8 @@ class TecTacRuntimeConfig(models.Model):
     singleton = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
     # Seconds a module's register() may take before the UI marks it failed.
     module_register_timeout_seconds = models.PositiveIntegerField(default=30)
+    # Largest file one Tactical operation may forward, in whole MiB (1.17.14, CQ40). Default 10; Core accepts 1 to 25.
+    tactical_operation_upload_max_mib = models.PositiveIntegerField(default=10)
     # Remembered update source per component (1.17.2): {"framework": {"type": "branch", "ref": "dev"}, ...}.
     # A missing or invalid entry reads as the default (release, ref null); see runtime_settings.
     update_sources = models.JSONField(default=dict, blank=True)

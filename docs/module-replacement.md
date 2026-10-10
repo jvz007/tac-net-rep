@@ -2,7 +2,7 @@
 
 Some premium modules do the whole job of a core or server module and do it better. Advanced Patch Management replaces Windows Patching. Core lets one module take over another's place, safely, without both ever running.
 
-This page is for module authors and administrators. The decision is AD-20 (`docs/review-accepted-decisions.md`). Johan's amendments of 9 October 2026 (Core 1.17.11) and the hand-back (Core 1.17.12) are marked below.
+This page is for module authors and administrators. The decision is AD-20 (`docs/review-accepted-decisions.md`). Johan's amendments of 9 October 2026 (Core 1.17.11), the hand-back (Core 1.17.12) and the warnings that replaced two refusals (Core 1.17.14) are marked below.
 
 ## The two manifest keys
 
@@ -142,7 +142,7 @@ Before 1.17.12 Core refused this and said "Disable X first". Now Core names the 
 
 Enabling a replacement keeps its single confirmation. It never needs the second flag.
 
-Core refuses the enable (a plain 400, problem type `replacement_has_dependants`) when an enabled module hard-depends on the replacement that would be switched off. It lists them. Nothing cascades: you disable those modules first. A dependant of the replaced module itself is not affected, because that module is the one coming on.
+Since 1.17.14 (CQ35) an enabled module that depends on the replacement no longer stops the enable. Core warns instead. See "Warnings instead of refusals (1.17.14)". Until 1.17.14 Core refused with the problem type `replacement_has_dependants`; that type is gone.
 
 The job carries `disable_modules` (the replacements to switch off) and `replacement_confirmed: true`. Two queued jobs cannot both pass, because a queued job's changes count as done when the next one is checked.
 
@@ -153,7 +153,7 @@ The root job helper checks all of this again from root-owned manifests and the r
 Disabling an enabled replacement now switches its replaced module back on in the same job. No confirmation is needed: Johan asked only for a warning on the enable direction, so the UI names the module that comes back.
 
 - `modules[].will_enable` names it. It is set only when the replaced module is installed, is a core or server module, is disabled, and no other enabled module replaces it. It is empty when the replaced module is already enabled (the "both enabled" case), so that case is never "handed back".
-- The job carries `enable_modules`. Core checks that the replaced module can be enabled with the replacement off: its own dependencies, versions and runtime requirements. If it cannot, Core refuses the disable with a plain-English reason and changes nothing, so you are never left with both modules off.
+- The job carries `enable_modules`. Core checks that the replaced module can be enabled with the replacement off: its own dependencies, versions and runtime requirements. In 1.17.12 and 1.17.13 a module that could not come back made Core refuse the disable. Since 1.17.14 (CQ34) Core warns and asks you to confirm instead. See "Warnings instead of refusals (1.17.14)".
 - Dependants of the replaced module stay satisfied throughout and do not block the disable. Dependants of the replacement still need `cascade`, as before.
 - The root helper re-checks each module it would enable: it must be the replaced module of a replacement the job disables, a core or server module, disabled now, and have no other enabled replacement. It makes the disable and the enable in one state write. If the sync fails, it puts both flags back and syncs again.
 - The reconcile job from "If both end up enabled anyway" never hands back.
@@ -162,7 +162,7 @@ Removing (uninstalling) a replacement does not enable the replaced module. It st
 
 ### Job fields
 
-A job row from `GET /api/tfd/modules/v2/jobs/` carries `disabled_modules`, `enabled_modules` and `reconciled_modules` once the root helper has run it. They are additive and absent on older jobs. The request fields (`disable_modules`, `enable_modules`, `replacement_confirmed`) are not exposed.
+A job row from `GET /api/tfd/modules/v2/jobs/` carries `disabled_modules`, `enabled_modules` and `reconciled_modules` once the root helper has run it. Since 1.17.14 a disable job also carries `hand_back_skipped`, the replaced modules a confirmed disable left off. They are additive and absent on older jobs. The request fields (`disable_modules`, `enable_modules`, `replacement_confirmed`) are not exposed.
 
 ### Audit rows
 
@@ -170,9 +170,10 @@ Audit follows what happened. Every row is module `core`, object type `module`, a
 
 | When | Action | Actor | Says |
 | --- | --- | --- | --- |
-| The job is queued | `custom:module-replacement-switch-queued` | the person who asked | "Module X was asked to switch: job J will disable A and enable B". A request, not a change. Written for every job that carries `disable_modules` or `enable_modules`: enable, disable, and the install paths. |
+| The job is queued | `custom:module-replacement-switch-queued` | the person who asked | "Module X was asked to switch: job J will disable A and enable B". A request, not a change. Written for every job that carries `disable_modules` or `enable_modules`: enable, disable, and the install paths. Since 1.17.14 it also names the modules the request confirmed to leave off (`hand_back_skipped` in the metadata), and is written for a disable that skips a hand-back even when nothing is switched on. |
 | The job succeeded | `custom:module-replacement-disabled` | system service | A module in `disabled_modules` was switched off. |
 | The job succeeded | `custom:module-replacement-enabled` | system service | A module in `enabled_modules` was switched back on. |
+| The job succeeded (1.17.14) | `custom:module-replacement-disabled` | system service | For a disable job with `hand_back_skipped`: "Replacement X was disabled. The module it replaces, Y, stayed off because it cannot be enabled." Object the replacement. |
 | The job succeeded | `custom:module-replacement-conflict-resolved` | system service | A replacement in `reconciled_modules` was found enabled next to its replaced module and disabled by the helper. |
 | The job failed | `custom:module-replacement-switch-failed` | system service | A failed job that had a planned list. The message says whether the flags were put back or nothing changed, and gives the stage and the error. |
 
@@ -209,6 +210,39 @@ The root helper records what actually happened when a switch fails. `rolled_back
 second it says Core could not put the flags back and the operator must check the Modules page. A failure at the runtime-sync or rollback
 stage with neither field (including a job file from 1.17.12) says the outcome is not confirmed. A failure before any change says
 "Nothing was changed." The row metadata carries `rolled_back`: true, false or null.
+
+## Warnings instead of refusals (1.17.14)
+
+Johan answered CQ34 to CQ36 on 9 October 2026. Two refusals became warnings, and a failed module job now tells people. Nothing here changes AD-20 condition 3: a replacement still has to publish every contract of the module it replaces, and that is what keeps other modules working.
+
+### Disabling a replacement whose replaced module cannot come back (CQ34)
+
+Core no longer refuses. It works out who can come back and who cannot.
+
+- `modules[].will_enable` lists only the modules that can come back.
+- `modules[].hand_back_unavailable` lists the others: `[{module, reasons[], required_modules[]}]`. `reasons` is plain English: a missing or disabled dependency, a version that does not fit, a runtime requirement, or a module that cannot be managed from the UI. `required_modules` names the modules behind the missing, disabled or out-of-range dependency, so you can tell the person what is needed.
+- `modules[].hand_back_confirmation_required` is true when that list is not empty.
+
+The first `POST /api/tfd/modules/v2/<id>/state/` with `enabled: false` is answered with HTTP 400, `code: replacement_hand_back_confirmation_required`, a plain `detail`, `module`, `will_enable` and `hand_back_unavailable`. Nothing is queued. Send the request again with `confirm_without_hand_back: true` to go ahead. Only `true` confirms: `false` is the same as missing, and any other type is a plain 400. The job then disables the replacement and hands back only what can come back. `enable_modules` holds that filtered list, so the root helper is unchanged and still re-checks every rule. The job records `hand_back_skipped` (the ids left off), the queue-time audit row names them, and the outcome row says the module stayed off.
+
+An old caller that sends no flag sees a refusal and changes nothing. Core does not offer to install a missing module: the module catalogue is not online, so the warning only names the module that is needed.
+
+### Enabling a replaced module whose replacement has dependants (CQ35)
+
+Core no longer refuses. The catalogue row of the replaced module carries `replacement_dependants`: `[{replacement, modules[]}]`, the enabled modules that name the replacement directly in `dependencies`. Modules that depend on the replaced module are not listed. It is the module coming back, and the replacement's contract parity keeps the others satisfied. The `replacement_second_confirmation_required` answer carries the same list as `dependants`, so the warning appears in the confirmation you already show. Nothing cascades and nothing is disabled beyond the confirmed list. The job and the root helper are unchanged.
+
+### A deliberate disable always hands back (CQ36)
+
+Hand-back belongs to a deliberate disable job only. It never happens on a rollback, a failed job, a reconcile job (`reason: replacement_conflict`) or a fault. Since 1.17.14 it also covers a replacement that is disabled as part of a deliberate cascade (it depends on the module being disabled): the replaced module is handed back too, with no extra confirmation. Removing (uninstalling) a replacement still does not hand back. Johan answered only for the disable.
+
+### A failed module job tells people (CQ36, CQ41)
+
+The scheduler tick (`module_failure_notices.sweep_failed_jobs`) stores one notice for each failed module job: enable, disable, install, bundle install and batch install. It is a normal Core notice (`tec_tac.notices.publish_system_notice`): source `core`, level `error`, title "Module job failed", `client_id` `module-job-failed:<job id>`, and an action that opens `/modules`. The text is plain English with no paths. A failed switch says whether the flags were put back, from what the root helper recorded.
+
+- Recipients: every active superuser (a Django superuser or a superuser role), plus the user who started the job when that user is active. Installer and agent accounts never receive one. This is the smallest audience, and it is Johan's question CQ41 if he wants more.
+- One notice per job and person. The next tick does not store it again, and a notice that has been read stays read.
+- It looks only at jobs finished in the last 7 days, at most 200 a tick, newest first, and never raises.
+- The browser toast for a new server-created notice is a UI change. Until it ships the notice appears in the notice history.
 
 ## What this does not do
 

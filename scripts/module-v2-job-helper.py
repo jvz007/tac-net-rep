@@ -505,11 +505,8 @@ def apply_enable_job(repo_root, module_ids, confirmed, replacement_confirmed=Fal
 
     def apply(state):
         manifests = read_installed_manifests(repo_root)
-        development = development_server()
-        for mid in module_ids:
-            # AD-21: re-checked here from the root-owned manifest and the root config, whatever the web side said.
-            if mid in manifests and category_refused(manifests[mid]["category"], development):
-                raise RuntimeError(f"module {mid} is a Test module (or states no category) and this is not a development server: refusing to enable it")
+        # AD-21 (1.17.14, CQ38): the category refusal is install-only (verify_install_categories). A module that is already
+        # installed can be enabled, whatever its category.
         model = replacement_model(manifests, state)
         disables = plan_enable_disables(model, module_ids, confirmed, replacement_confirmed)
         modules = state["modules"]

@@ -121,7 +121,7 @@ must(table["patching"]["will_disable"] == [], "a core module disables nothing")
 must(all("will_disable" in row for row in table.values()), "every row carries will_disable")
 must(table["patchmanagement"]["replacement"]["conflict"] is False, table["patchmanagement"]["replacement"])
 check = v2.validate_enable("patchmanagement")
-must(check == {"valid": True, "problems": [], "will_disable": ["patching"]}, check)
+must({k: v for k, v in check.items() if k != "replacement_dependants"} == {"valid": True, "problems": [], "will_disable": ["patching"]}, check)  # 1.17.14 adds replacement_dependants
 must(v2.validate_enable("patching")["will_disable"] == [], "enabling the core module names nothing")
 
 world(patching=False, pm=False)
@@ -178,7 +178,7 @@ world(patching=False, pm=True)
 exc = refused_enable("patching")
 must(isinstance(exc, v2.ModuleReplacementConfirmationRequired) and exc.will_disable == ["patchmanagement"], exc)
 result = v2.validate_enable("patching")
-must(result == {"valid": True, "problems": [], "will_disable": ["patchmanagement"]}, result)
+must({k: v for k, v in result.items() if k != "replacement_dependants"} == {"valid": True, "problems": [], "will_disable": ["patchmanagement"]}, result)  # 1.17.14 adds replacement_dependants
 # a rival enabled replacement of the same module is still refused (the target would be disabled, the rival still competes)
 world(patching=True, pm=False)
 manifest("rival", replaces="patching", capabilities=PM_CAPS)

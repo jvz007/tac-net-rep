@@ -10,6 +10,7 @@ import re
 from datetime import timedelta
 
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from .models import TecTacUserNotice
@@ -112,6 +113,46 @@ def store_notice(user, payload: dict) -> tuple[TecTacUserNotice, bool]:
         created = True
     _prune_user(user.pk)
     return row, created
+
+
+def system_notice_recipients(usernames=()) -> list:
+    """The people a Core-created (server-side) notice goes to (1.17.14, CQ41 assumption (a), the smallest audience): every
+    active effective superuser (a Django superuser or a role that is a superuser), plus each active user named in
+    ``usernames``. Installer and agent accounts and users blocked from the dashboard never receive one. One entry per
+    person, ordered by username. Raises on a database failure; the caller decides what that means."""
+    from django.contrib.auth import get_user_model
+
+    User = get_user_model()
+    people = User.objects.filter(is_active=True, is_installer_user=False, agent__isnull=True, block_dashboard_login=False)
+    wanted = {str(name) for name in usernames if isinstance(name, str) and name and name != "system"}
+    condition = Q(is_superuser=True) | Q(role__is_superuser=True)
+    if wanted:
+        condition |= Q(username__in=wanted)
+    return list(people.filter(condition).distinct().order_by("username"))
+
+
+@transaction.atomic
+def publish_system_notice(recipients, *, client_id: str, message: str, title: str = "", level: str = "error",
+                          source: str = "core", action_label: str = "", action_route: str = "") -> int:
+    """Store one notice per recipient for something Core itself noticed (1.17.14, CQ36). Returns how many it created.
+
+    ``client_id`` is required: it is the dedupe key, so a notice is stored once per recipient and a notice the person has
+    already read is never reset by a later call (``store_notice`` resets it, on purpose, for browser notices). The text goes
+    through the same checks as every other notice and raises ``NoticeError`` when it fails them."""
+    if not str(client_id or "").strip():
+        raise NoticeError("client_id is required for a system notice.")
+    values = normalize_notice({
+        "client_id": client_id, "source": source, "level": level, "title": title, "message": message,
+        "action_label": action_label, "action_route": action_route,
+    })
+    key = values.pop("client_id")
+    created = 0
+    for user in recipients:
+        _, new = TecTacUserNotice.objects.get_or_create(user=user, client_id=key, defaults={**values, "read_at": None})
+        if new:
+            created += 1
+            _prune_user(user.pk)
+    return created
 
 
 def list_notices(user, *, unread_only: bool = False, limit: int = 50) -> list[dict]:

@@ -99,7 +99,7 @@ def rows():
 captured = []
 v2._queue_v2 = lambda payload: captured.append(payload) or {"id": f"job-{len(captured)}", "queued": True}
 queued_rows = []
-mr.audit_switch_queued = lambda actor, subject, job_id, disabled=(), enabled=(): queued_rows.append((actor, subject, job_id, sorted(disabled), sorted(enabled)))
+mr.audit_switch_queued = lambda actor, subject, job_id, disabled=(), enabled=(), skipped=(): queued_rows.append((actor, subject, job_id, sorted(disabled), sorted(enabled)))
 mr._audit_replacement = lambda *a, **k: None  # the reconcile row is covered elsewhere
 
 
@@ -114,7 +114,7 @@ def refused(call, kind=Exception):
 # ------------------------------------------------------------------------------------------ CQ32: enabling the replaced module
 world(patching=False, pm=True)
 check = v2.validate_enable("patching")
-must(check == {"valid": True, "problems": [], "will_disable": ["patchmanagement"]}, check)
+must(check == {"valid": True, "problems": [], "will_disable": ["patchmanagement"], "replacement_dependants": []}, check)  # 1.17.14 adds replacement_dependants
 table = rows()
 must(table["patching"]["will_disable"] == ["patchmanagement"] and table["patching"]["second_confirmation_required"] is True, table["patching"])
 must(table["patchmanagement"]["will_disable"] == [] and table["patchmanagement"]["second_confirmation_required"] is False, "enabling a replacement keeps one confirmation")
@@ -192,16 +192,19 @@ world(patching=False, pm=True)
 manifest("consumer", dependencies={"patchmanagement": "*"})
 STATE["modules"]["consumer"] = {"enabled": True}
 check = v2.validate_enable("patching")
-must(not check["valid"] and check["will_disable"] == [], check)
-problem = check["problems"][0]
-must(problem["type"] == "replacement_has_dependants" and problem["replacement"] == "patchmanagement" and problem["dependants"] == ["consumer"], problem)
-must("consumer" in problem["message"] and "Disable them first" in problem["message"], problem)
+# 1.17.14 (CQ35): a dependant of the replacement is a warning in the second confirmation, no longer a refusal.
+must(check["valid"] is True and check["will_disable"] == ["patchmanagement"], check)
+must(check["replacement_dependants"] == [{"replacement": "patchmanagement", "modules": ["consumer"]}], check)
+must(not any(p.get("type") == "replacement_has_dependants" for p in check["problems"]), "replacement_has_dependants is gone")
 captured.clear()
-exc = refused(lambda: v2.queue_set_enabled("patching", True, disable_replaced=["patchmanagement"], confirm_replacement_switch=True))
-must("consumer" in str(exc) and not isinstance(exc, (v2.ModuleReplacementConfirmationRequired, v2.ModuleReplacementSecondConfirmationRequired)), exc)
-must(captured == [], "no cascade and nothing queued")
-STATE["modules"]["consumer"]["enabled"] = False  # the operator disables the dependant first
-must(v2.validate_enable("patching")["valid"] is True, "a disabled dependant blocks nothing")
+exc = refused(lambda: v2.queue_set_enabled("patching", True, disable_replaced=["patchmanagement"]))
+must(isinstance(exc, v2.ModuleReplacementSecondConfirmationRequired), exc)
+must(exc.as_payload()["dependants"] == [{"replacement": "patchmanagement", "modules": ["consumer"]}] and "consumer" in str(exc), exc.as_payload())
+must(captured == [], "nothing queued before the confirmation")
+v2.queue_set_enabled("patching", True, disable_replaced=["patchmanagement"], confirm_replacement_switch=True)
+must(captured[0]["disable_modules"] == ["patchmanagement"] and captured[0]["replacement_confirmed"] is True, "no cascade: the job is the same as before")
+STATE["modules"]["consumer"]["enabled"] = False  # a disabled dependant is not listed
+must(v2.validate_enable("patching")["replacement_dependants"] == [], "a disabled dependant is not listed")
 # a dependant of the replaced module itself stays satisfied by the module that comes on
 manifest("consumer", dependencies={"patching": "*"})
 STATE["modules"]["consumer"]["enabled"] = True
@@ -243,7 +246,7 @@ must(mr.hand_back_plan({"patching": core}, "patching") == [] and mr.hand_back_pl
 # ------------------------------------------------------------------------------------------ CQ33: disabling the replacement
 world(patching=False, pm=True)
 check = v2.validate_disable("patchmanagement")
-must(check == {"valid": True, "problems": [], "will_enable": ["patching"]}, check)
+must(check == {"valid": True, "problems": [], "will_enable": ["patching"], "hand_back_unavailable": [], "hand_back_confirmation_required": False}, check)
 table = rows()
 must(table["patchmanagement"]["will_enable"] == ["patching"] and table["patching"]["will_enable"] == [], table)
 captured.clear()
@@ -292,23 +295,25 @@ captured.clear()
 v2.queue_set_enabled("patchmanagement", False, cascade=True)
 must(captured[0]["affected_modules"] == ["direct", "patchmanagement"] and captured[0]["enable_modules"] == ["patching"], captured[0])
 
-# the replaced module cannot come back: the disable is refused and nothing is queued (CQ34, option a)
+# the replaced module cannot come back: 1.17.14 (CQ34) replaces the refusal with a warning and a confirmation.
+# The full set of cases is in tests/module-replacement-warnings-1.17.14.py.
 for extra, needle in (({"dependencies": {"missingdep": "*"}}, "missingdep"), ({"requires": {"nosuch": ">=1"}}, "runtime")):
     world(patching=False, pm=True, patching_extra=extra)
     captured.clear()
     check = v2.validate_disable("patchmanagement")
-    must(not check["valid"] and check["will_enable"] == ["patching"] and check["problems"][0]["type"] == "hand_back_blocked", check)
+    must(check["valid"] is True and check["will_enable"] == [] and check["hand_back_confirmation_required"] is True, check)
+    must(check["hand_back_unavailable"][0]["module"] == "patching" and needle in " ".join(check["hand_back_unavailable"][0]["reasons"]), check)
     exc = refused(lambda: v2.queue_set_enabled("patchmanagement", False))
-    must("cannot be disabled" in str(exc) and "patching" in str(exc) and needle in str(exc) and "Nothing was changed" in str(exc), exc)
-    must(captured == [], "nothing queued")
+    must(isinstance(exc, v2.ModuleReplacementHandBackConfirmationRequired) and needle in str(exc) and "hand_back_blocked" not in str(exc), exc)
+    must(captured == [], "nothing queued without the confirmation")
 world(patching=False, pm=True, patching_extra={"dependencies": {"helper": "*"}})
 manifest("helper")
 STATE["modules"]["helper"] = {"enabled": False}
-must(not v2.validate_disable("patchmanagement")["valid"], "a disabled dependency of the replaced module blocks the hand-back")
+must(v2.validate_disable("patchmanagement")["hand_back_confirmation_required"] is True, "a disabled dependency of the replaced module is a warning")
 exc = refused(lambda: v2.queue_set_enabled("patchmanagement", False))
 must("helper" in str(exc) and "disabled" in str(exc), exc)
 STATE["modules"]["helper"]["enabled"] = True
-must(v2.validate_disable("patchmanagement")["valid"] is True, "enabled: it can come back")
+must(v2.validate_disable("patchmanagement")["hand_back_confirmation_required"] is False, "enabled: it can come back")
 # an unrelated disable is never blocked by this
 manifest("bystander")
 STATE["modules"]["bystander"] = {"enabled": True}
@@ -391,11 +396,11 @@ must(answer.status_code == 202 and captured[0]["disable_modules"] == ["patchmana
 captured.clear()
 answer = post({"enabled": False}, "patchmanagement")
 must(answer.status_code == 202 and captured[0]["enable_modules"] == ["patching"], (answer.data, captured))
-# the replaced module cannot come back: an ordinary refusal that keeps the old shape
+# the replaced module cannot come back: 1.17.14 answers with its own code until the request confirms
 world(patching=False, pm=True, patching_extra={"dependencies": {"missingdep": "*"}})
 captured.clear()
 answer = post({"enabled": False}, "patchmanagement")
-must(answer.status_code == 400 and "code" not in answer.data and "missingdep" in answer.data["detail"] and captured == [], answer.data)
+must(answer.status_code == 400 and answer.data["code"] == "replacement_hand_back_confirmation_required" and "missingdep" in answer.data["detail"] and captured == [], answer.data)
 answer = post({"enabled": "yes"})
 must(answer.status_code == 400 and answer.data["detail"] == "enabled must be true or false.", answer.data)  # the existing contract
 

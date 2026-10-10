@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
-"""1.17.13 regression: a declared Tactical operation names its audit object, reads a before value, resolves scope from
-that read, and takes a scope type from the body (requests from agents 0.3.0 and reportmanager 0.5.0).
+"""1.17.13 regression: a declared Tactical operation names its audit object, reads a before value, and takes a scope type from
+the body (requests from agents 0.3.0 and reportmanager 0.5.0).
+
+1.17.14 (CQ37): the scope source ``before:<field>`` is gone. A note edit now declares no scope, Tactical's own check decides, and
+``audit.before`` only fills the audit row's before value: it never refuses a call. The 1.17.13 assertions that a failed read
+refused the call (404 object_not_found) were replaced by assertions that it does not. The removal itself is covered in
+tests/tactical-operations-before-scope-1.17.14.py.
 
 Builds on the stubs of tests/tactical-operations-1.17.7.py (the helper section is executed from that file, so the two cannot
 drift). The real tactical_operations.py runs against them. Django and Tactical are not installed on the development PC; the
@@ -29,7 +34,7 @@ NOTE_FIELDS = ["agent_id", "note", "user", "entry_time", "meta", "count"]
 def note_spec(**over):
     spec = dict(
         id="note-edit", module_id="agents", method="PUT", route="agents/notes/{pk:int}/", permissions=["can_manage_notes"],
-        scope=[{"type": "agent", "source": "before:agent_id"}], body_fields=["note"],
+        scope=[], body_fields=["note"],
         audit={"action": "modify", "object_type": "agent_note", "audit_fields": [], "object_param": "pk",
                "before": {"route": "agents/notes/{pk:int}/", "fields": NOTE_FIELDS}},
     )
@@ -74,10 +79,10 @@ refused_spec(audit=audit_with(before={"route": "accounts/users/{pk:int}/", "fiel
 refused_spec(audit=audit_with(before={"route": "agents/notes/{other:int}/", "fields": ["note"]}))  # a parameter the operation lacks
 refused_spec(audit=audit_with(before={"route": "agents/notes/{pk}/", "fields": ["note"]}))  # same name, other kind
 refused_spec(method="GET", scope=[], body_fields=[], audit=audit_with(before={"route": "agents/notes/{pk:int}/", "fields": ["note"]}))  # a read has no before value
-# a before source needs a declared before field
-refused_spec(scope=[{"type": "agent", "source": "before:nope"}])
-refused_spec(scope=[{"type": "agent", "source": "before:agent_id"}], audit={"action": "modify", "object_type": "agent_note", "object_param": "pk"})
-refused_spec(scope=[{"type": "agent", "source": "before:agent_id", "extra": 1}])
+# 1.17.14: a before source is refused, with a plain message, whatever the audit block says
+for _source in ("before:nope", "before:agent_id"):
+    must("removed in Core 1.17.14" in refused_spec(scope=[{"type": "agent", "source": _source}]), _source)
+must("removed in Core 1.17.14" in refused_spec(scope=[{"type": "agent", "source": "before:agent_id"}], audit={"action": "modify", "object_type": "agent_note", "object_param": "pk"}), "no audit.before")
 # a body-selected scope type
 TYPE_MAP = {"Client": "client", "Site": "site"}
 BULK = dict(id="bulk-maintenance", method="POST", route="agents/maintenance/bulk/", permissions=["can_manage_clients"],
@@ -104,7 +109,7 @@ register(id="cancel-pending-action", method="DELETE", route="logs/pendingactions
 register(**BULK)
 described = ops.get_operation("agents", "note-edit")
 must(described["audit"]["object_param"] == "pk" and described["audit"]["before"] == {"route": "agents/notes/{pk:int}/", "fields": NOTE_FIELDS}, described)
-must(described["scope"] == [{"type": "agent", "source": "before:agent_id"}], described)
+must(described["scope"] == [], described)
 must(ops.get_operation("agents", "bulk-maintenance")["scope"] == [{"type": "body:type", "source": "body:id", "type_map": TYPE_MAP}], ops.get_operation("agents", "bulk-maintenance"))
 json.dumps(ops.list_operations())
 # a declaration made the 1.17.12 way is unchanged
@@ -158,25 +163,28 @@ must("meta" not in before and "password" not in json.dumps(before), before)  # a
 must(row["debug_info"]["metadata"]["before"] == "recorded" and "before_status" not in row["debug_info"]["metadata"], row["debug_info"]["metadata"])
 must("N" * 257 not in json.dumps(row, default=str), "the note text is cut")
 
-# scope from the note's agent: an agent outside the role's limits
+# 1.17.14 (CQ37): no scope is read from the note. A note on an agent outside the role's limits is left to Tactical's own check, and
+# a read that fails, or answers without a field, never refuses the call: the audit row records that no before value was kept.
 for agent in (OTHER, "z" * 21):
     del ROWS[:]
     ROUTES[NOTE] = (notes_view(agent=agent), (), {})
-    exc = refusal(lambda: call(params={"pk": 5}, body={"note": "x"}), 404, "object_not_found")
-    must([c.method for c in CALLS] == ["GET"], "the change never reaches Tactical")
-    must(len(ROWS) == 1 and ROWS[0]["action"] == "deny" and ROWS[0]["debug_info"]["metadata"]["reason"] == "not_found", ROWS)
-    must(ROWS[0]["debug_info"]["object_id"] == "5" and exc.message == ops.MESSAGES["object_not_found"], ROWS[0])
-# fails closed: the read does not answer 200, or raises, or answers without the field
+    result = call(params={"pk": 5}, body={"note": "x"})
+    must(result.status == 200 and [c.method for c in CALLS] == ["GET", "PUT"] and len(ROWS) == 1 and ROWS[0]["action"] == "modify", (CALLS, ROWS))
 for view in (notes_view(read_status=403), notes_view(read_status=404), notes_view(read_status=500), notes_view(read_boom=RuntimeError("down")),
              notes_view(record={"agent_id": None}), notes_view(record={"agent_id": ""}), notes_view(record={"agent_id": ["a"]})):
     del ROWS[:]
     ROUTES[NOTE] = (view, (), {})
-    refusal(lambda: call(params={"pk": 5}, body={"note": "x"}), 404, "object_not_found")
-    must([c.method for c in CALLS] == ["GET"] and len(ROWS) == 1 and ROWS[0]["action"] == "deny", (CALLS, ROWS))
+    must(call(params={"pk": 5}, body={"note": "x"}).status == 200 and [c.method for c in CALLS] == ["GET", "PUT"], CALLS)
+    must(len(ROWS) == 1 and ROWS[0]["action"] == "modify" and ROWS[0]["debug_info"]["object_id"] == "5", ROWS)
 ROUTES[NOTE] = (lambda request, *a, **k: FakeResponse(200, b"not json"), (), {})
-refusal(lambda: call(params={"pk": 5}, body={"note": "x"}), 404, "object_not_found")
+del ROWS[:]
+call(params={"pk": 5}, body={"note": "x"})
+must(ROWS[0]["before_value"] is None and ROWS[0]["debug_info"]["metadata"]["before"] == "unavailable", ROWS[0])
 ROUTES[NOTE] = (lambda request, *a, **k: FakeResponse(200, b'["a list"]'), (), {})
-refusal(lambda: call(params={"pk": 5}, body={"note": "x"}), 404, "object_not_found")
+del ROWS[:]
+call(params={"pk": 5}, body={"note": "x"})
+must(ROWS[0]["before_value"] is None and ROWS[0]["debug_info"]["metadata"]["before"] == "unavailable", ROWS[0])
+ROUTES[NOTE] = (notes_view(), (), {})
 
 # the read happens after the Tactical flag check: a role without the flag never causes a read
 weak = User("weak", Roleish("can_send_wol"))

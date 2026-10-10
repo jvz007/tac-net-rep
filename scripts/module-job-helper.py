@@ -526,6 +526,7 @@ def run_job(job_id):
 
     command = None
     declared_category = None
+    category_failed = False
     if job["action"] == "install":
         package = Path(job["package_path"])
         # AD-21 (1.17.13): re-check the category from the root-private package before anything is installed.
@@ -536,67 +537,64 @@ def run_job(job_id):
         except (RuntimeError, OSError, zipfile.BadZipFile, tarfile.TarError) as exc:
             with log_path.open("a", encoding="utf-8") as log:
                 log.write(f"[TEC-TAC-MODULE] category check failed: {exc}\n")
-            job["finished_at"] = now()
-            job["status"] = "failed"
+            # 1.17.14 (held Low from the 1.17.13-1 review): no early return. Set the failure and fall through to the shared
+            # tail, which chmods the log, removes the running request and the root-private package snapshot.
             job["error"] = str(exc)
             job["error_type"] = "CategoryRefused"
-            atomic_json(path, job)
-            try:
-                running_request_path(job_id).unlink(missing_ok=True)
-            except OSError:
-                pass
-            return
-        command = [TRUSTED_BASH, str(install_script), str(package)]
-        if job.get("replace"):
-            command.append("--replace")
+            category_failed = True
+        if not category_failed:
+            command = [TRUSTED_BASH, str(install_script), str(package)]
+            if job.get("replace"):
+                command.append("--replace")
     else:
         command = [TRUSTED_BASH, str(remove_script), job["plugin_id"], "", "--yes"]
 
     rc = 1
-    try:
-        with log_path.open("a", encoding="utf-8") as log:
-            log.write(f"[TEC-TAC-MODULE] started {now()} action={job['action']} plugin={job['plugin_id']}\n")
-            trust = job.get("publisher_trust") if isinstance(job.get("publisher_trust"), dict) else {}
-            log.write(f"[TEC-TAC-MODULE] publisher_trust state={trust.get('state','unknown')} publisher={trust.get('publisher_id','')} key={trust.get('key_id','')} sha256={job.get('package_sha256','')}\n")
-            log.flush()
-            result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, text=True, env=privileged_env())
-            rc = result.returncode
-            if rc == 0 and job["action"] == "install" and declared_category is not None:
-                remember_category(job["plugin_id"], declared_category)
-            if rc == 0 and job["action"] == "remove":
-                # Removal is not complete until its persistent runtime state is
-                # cleared. Otherwise later UI/system updates can fail because
-                # module-state.json still marks a deleted extension as enabled.
-                forget_module_state(job["plugin_id"], log)
-            if rc == 0 and ui_sync.is_file():
-                job["stage"] = "ui-sync"
-                atomic_json(path, job)
-                log.write("[TEC-TAC-MODULE] synchronizing deployed UI modules\n")
+    if command is not None:
+        try:
+            with log_path.open("a", encoding="utf-8") as log:
+                log.write(f"[TEC-TAC-MODULE] started {now()} action={job['action']} plugin={job['plugin_id']}\n")
+                trust = job.get("publisher_trust") if isinstance(job.get("publisher_trust"), dict) else {}
+                log.write(f"[TEC-TAC-MODULE] publisher_trust state={trust.get('state','unknown')} publisher={trust.get('publisher_id','')} key={trust.get('key_id','')} sha256={job.get('package_sha256','')}\n")
                 log.flush()
-                sync_env = privileged_env({"TEC_TAC_UI_ROOT": ui_root})
-                sync = subprocess.run([TRUSTED_BASH, str(ui_sync)], stdout=log, stderr=subprocess.STDOUT, text=True, env=sync_env)
-                if sync.returncode != 0:
-                    rc = sync.returncode
-                    log.write(f"[TEC-TAC-MODULE] UI module sync failed rc={rc}\n")
-                elif job["action"] == "install":
-                    manifest = repo_root / "extensions" / job["plugin_id"] / "tec_tac_ui.json"
-                    if manifest.is_file():
-                        module_dir = Path(ui_root) / "modules" / job["plugin_id"]
-                        if not module_dir.is_dir():
-                            rc = 1
-                            job["error"] = f"UI verification failed: {module_dir} was not deployed."
-                            job["error_type"] = "UiVerificationError"
-                            log.write(f"[TEC-TAC-MODULE] {job['error']}\n")
-                        else:
-                            log.write(f"[TEC-TAC-MODULE] UI verification OK: {module_dir}\n")
-            elif rc == 0:
-                log.write(f"[TEC-TAC-MODULE] UI sync script not found at {ui_sync}; backend install succeeded\n")
-    except Exception as exc:
-        with log_path.open("a", encoding="utf-8") as log:
-            log.write(f"[TEC-TAC-MODULE] worker exception: {exc}\n")
-        job["error"] = str(exc)
-        job["error_type"] = exc.__class__.__name__
-        rc = 1
+                result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, text=True, env=privileged_env())
+                rc = result.returncode
+                if rc == 0 and job["action"] == "install" and declared_category is not None:
+                    remember_category(job["plugin_id"], declared_category)
+                if rc == 0 and job["action"] == "remove":
+                    # Removal is not complete until its persistent runtime state is
+                    # cleared. Otherwise later UI/system updates can fail because
+                    # module-state.json still marks a deleted extension as enabled.
+                    forget_module_state(job["plugin_id"], log)
+                if rc == 0 and ui_sync.is_file():
+                    job["stage"] = "ui-sync"
+                    atomic_json(path, job)
+                    log.write("[TEC-TAC-MODULE] synchronizing deployed UI modules\n")
+                    log.flush()
+                    sync_env = privileged_env({"TEC_TAC_UI_ROOT": ui_root})
+                    sync = subprocess.run([TRUSTED_BASH, str(ui_sync)], stdout=log, stderr=subprocess.STDOUT, text=True, env=sync_env)
+                    if sync.returncode != 0:
+                        rc = sync.returncode
+                        log.write(f"[TEC-TAC-MODULE] UI module sync failed rc={rc}\n")
+                    elif job["action"] == "install":
+                        manifest = repo_root / "extensions" / job["plugin_id"] / "tec_tac_ui.json"
+                        if manifest.is_file():
+                            module_dir = Path(ui_root) / "modules" / job["plugin_id"]
+                            if not module_dir.is_dir():
+                                rc = 1
+                                job["error"] = f"UI verification failed: {module_dir} was not deployed."
+                                job["error_type"] = "UiVerificationError"
+                                log.write(f"[TEC-TAC-MODULE] {job['error']}\n")
+                            else:
+                                log.write(f"[TEC-TAC-MODULE] UI verification OK: {module_dir}\n")
+                elif rc == 0:
+                    log.write(f"[TEC-TAC-MODULE] UI sync script not found at {ui_sync}; backend install succeeded\n")
+        except Exception as exc:
+            with log_path.open("a", encoding="utf-8") as log:
+                log.write(f"[TEC-TAC-MODULE] worker exception: {exc}\n")
+            job["error"] = str(exc)
+            job["error_type"] = exc.__class__.__name__
+            rc = 1
 
     try:
         os.chmod(log_path, 0o640)

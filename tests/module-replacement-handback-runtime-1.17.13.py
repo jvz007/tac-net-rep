@@ -92,7 +92,7 @@ def plan_is_read():
     model = mr.live_model()
     assert mr.hand_back_plan(model, REPL) == [OLD], mr.hand_back_plan(model, REPL)
     check = v2.validate_disable(REPL)
-    assert check["valid"] is True and check["will_enable"] == [OLD], check
+    assert check["valid"] is True and check["will_enable"] == [OLD] and check["hand_back_unavailable"] == [] and check["hand_back_confirmation_required"] is False, check  # 1.17.14 adds the last two
     row = {item["id"]: item for item in v2.installed_catalog_v2()}[REPL]
     assert row["will_enable"] == [OLD] and row["second_confirmation_required"] is False, row
 

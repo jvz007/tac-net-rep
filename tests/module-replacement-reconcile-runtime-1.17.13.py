@@ -176,7 +176,7 @@ def test_module_is_refused_off_a_development_server():
     mc.is_development_server = lambda: False  # what a production server reads from its root-owned config
     try:
         check = v2.validate_enable(TEST_MODULE)
-        assert check["valid"] is False and [p["type"] for p in check["problems"]] == ["category_refused"], check
+        assert check["valid"] is True and check["problems"] == [], check  # 1.17.14 (CQ38): the category refusal is install-only
         plan = v2.resolve_install_plan([candidate])
         assert plan["valid"] is False and any(p["type"] == "category_refused" for p in plan["problems"]), plan
         assert mr.check(mr.live_model(), REPL)[0] is None, "a premium replacement is still honoured off a development server"
@@ -184,7 +184,7 @@ def test_module_is_refused_off_a_development_server():
         STATE["modules"][OLD]["enabled"], STATE["modules"][REPL]["enabled"] = False, True
         assert mr.check(mr.live_model(), REPL)[0] == "replacement-category", mr.check(mr.live_model(), REPL)
         mc.is_development_server = lambda: True
-        assert v2.validate_enable(TEST_MODULE)["valid"] is True, "the same module enables on a development server"
+        assert v2.validate_enable(TEST_MODULE)["valid"] is True, "and it enables on a development server too"
         assert mr.check(mr.live_model(), REPL)[0] is None, "no category is honoured on a development server"
     finally:
         mc.is_development_server = REAL_DEV
@@ -202,7 +202,7 @@ try:
     step("a failing sudo dispatch is logged, recorded and not raised", dispatch_fails_safely)
     step("module_status reports the conflicted replacement as not enabled, with replaces", snapshot_effective_state)
     step("the category fields read the real root config and the missing-category warning", category_fields_read_the_real_config)
-    step("a test module is refused off a development server, and a replacement needs premium there", test_module_is_refused_off_a_development_server)
+    step("a test module is refused at install off a development server, enables anywhere, and a replacement needs premium there", test_module_is_refused_off_a_development_server)
 finally:
     teardown()
 
