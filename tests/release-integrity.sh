@@ -36,6 +36,7 @@ CURRENT_NOTE="RELEASE_NOTES_${VERSION}.md"
 printf '%s\n' "${ROOT_NOTES[@]}" | grep -Fxq "${CURRENT_NOTE}" || \
   fail "current release note ${CURRENT_NOTE} not found"
 
+bash "${ROOT}/tests/root-script-crlf-1.17.15.sh"
 python3 "${ROOT}/tests/release-archive-integrity.py"
 
 echo "[TEST] PASS release integrity ${VERSION}"

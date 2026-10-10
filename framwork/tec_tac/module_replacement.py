@@ -466,9 +466,11 @@ def _outcome_rows(job: Mapping[str, Any], replaces_of) -> list[dict]:
                 message = f"Module {target} was disabled because replacement {replacement} was enabled."
             rows.append({"action": ACTION_DISABLED, "object_id": target, "message": message,
                          "metadata": {**base, "replacement": replacement, "replaced": replaced}})
+        # 1.17.15 (CQ43): an uninstall of the replacement hands back the same way; the row says what happened to it.
+        gone = "uninstalled" if job.get("action") == "remove" else "disabled"
         for target in _id_list(job.get("enabled_modules")):
             rows.append({"action": ACTION_ENABLED, "object_id": target,
-                         "message": f"Module {target} was enabled again because its replacement {subject} was disabled.",
+                         "message": f"Module {target} was enabled again because its replacement {subject} was {gone}.",
                          "metadata": {**base, "replacement": subject, "replaced": target}})
         skipped = _id_list(job.get("hand_back_skipped"))
         if skipped and job.get("action") == "disable":

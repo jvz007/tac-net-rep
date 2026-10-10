@@ -1,11 +1,16 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.14",
+  "version": "1.17.15",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
   "files": [
+    {
+      "path": ".gitattributes",
+      "size": 128,
+      "sha256": "cc301aafa6e39a30710e29b195da8847bb80091f449977d1f67b53ffbf596d45"
+    },
     {
       "path": ".github/workflows/release.yml",
       "size": 2044,
@@ -32,14 +37,14 @@
       "sha256": "66c389576a517f455059348a31b1788ed1ff07f441e7bbb7d20f47579c019812"
     },
     {
-      "path": "RELEASE_NOTES_1.17.14.md",
-      "size": 17514,
-      "sha256": "3c607ec33fcb761654144a62e8469e263d48eca54f47a81f3ee0c6632fdbdd0f"
+      "path": "RELEASE_NOTES_1.17.15.md",
+      "size": 7591,
+      "sha256": "8cc9e9fe1c6d504df45699343a72557eb73ff067c3a97eb65982af68a7a8f23e"
     },
     {
       "path": "VERSION",
       "size": 8,
-      "sha256": "36909d26a9f64ac527fc97888ee15e3580480f60f4605930f8c4fea11c8a287b"
+      "sha256": "05f6a2182bcb3a3443473745c6ba2abaa30817c188b9d47aef294c3fded61fbe"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -1057,6 +1062,11 @@
       "sha256": "ab7757dde5556b790f15494af1c69184ef2c2b0a95e84b3e7b3f2605074be1dc"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.14.md",
+      "size": 17514,
+      "sha256": "3c607ec33fcb761654144a62e8469e263d48eca54f47a81f3ee0c6632fdbdd0f"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.2.md",
       "size": 9363,
       "sha256": "bb66dd5922f6980076b7c6d3427a58224bdc4d2d213cb8dce93377b64341b81d"
@@ -1688,8 +1698,8 @@
     },
     {
       "path": "framwork/tec_tac/module_failure_notices.py",
-      "size": 7885,
-      "sha256": "cbb7105ab1a30e4d77f9d09b07542fdc3425ddbc2a9968544419761a5db1c280"
+      "size": 16455,
+      "sha256": "5be31870dbbb3c952834893aa1b9a12edc550ca7882ac10bea40457ae4ec7651"
     },
     {
       "path": "framwork/tec_tac/module_hotfix.py",
@@ -1708,8 +1718,8 @@
     },
     {
       "path": "framwork/tec_tac/module_manager.py",
-      "size": 33039,
-      "sha256": "2f9c56760e4612a4aa1ac92ce8e26ac2c18a73989a558ee0099f74c62d99a338"
+      "size": 35548,
+      "sha256": "713b958cf0bc40b1e5c38c85844c1b1748ff1e28f5e07f24c359d40f3518a15a"
     },
     {
       "path": "framwork/tec_tac/module_manager_v2.py",
@@ -1718,8 +1728,8 @@
     },
     {
       "path": "framwork/tec_tac/module_replacement.py",
-      "size": 40564,
-      "sha256": "06621d3e8d7cb7f2161bbdfef4a5ea45deb3248751a9bc6222b9e49f566c9573"
+      "size": 40759,
+      "sha256": "da6b6016fbe1a627e03b77fd70cda99e2025f3c7f6a6288da03f1bb242b3f46b"
     },
     {
       "path": "framwork/tec_tac/module_repository.py",
@@ -1938,13 +1948,13 @@
     },
     {
       "path": "framwork/tec_tac/views.py",
-      "size": 37199,
-      "sha256": "24d483b85c3267f068c82f6de5bc91d05c20f6dcd7bfa0e0f131856d039c7db2"
+      "size": 37891,
+      "sha256": "c9e9b76f136e6e46401337c77f817162c502182440098b28dd3a126ddf9f7464"
     },
     {
       "path": "install.sh",
-      "size": 59178,
-      "sha256": "7528f1c55e829498845f5dc52e11e5c0aa3612bf259f3feadc47d5fb4d91e011"
+      "size": 59500,
+      "sha256": "9b3b538996617a37e79324a067e6c82bf9069415f8a59bb8fa4dd216f8d821bd"
     },
     {
       "path": "reportsets/.gitkeep",
@@ -2003,8 +2013,8 @@
     },
     {
       "path": "scripts/module-job-helper.py",
-      "size": 28868,
-      "sha256": "83e97236fbb196afe095791c2db9b98d13ba70a8d5d00c6a62122a2f51f4ac0c"
+      "size": 37087,
+      "sha256": "b2b43cad6f81044c84174b833db9a178b3e6ae17187db75f6e02b652bcfa6c3d"
     },
     {
       "path": "scripts/module-v2-job-helper.py",
@@ -2114,7 +2124,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "69a2ba86e2fa8ecc6cbd2b6020669b7c37e29ff5837e2a76e906fcf58af1c4d2"
+      "sha256": "55e72068fb0a49bfdd56356c8d6e7e64ab86c1f14a910346ec32a86cb8410cd2"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2567,6 +2577,11 @@
       "sha256": "6537209283d5a1e350aa7f1b4344f406b613f846870bcdb13e9276ba9a5408ab"
     },
     {
+      "path": "tests/module-failure-notices-email-1.17.15.py",
+      "size": 13571,
+      "sha256": "b45c3410ee4c77f88b85b11a28a3acd1a0903d40ad23bc045c33412faec2b29c"
+    },
+    {
       "path": "tests/module-failure-notices-runtime-1.17.14.py",
       "size": 6773,
       "sha256": "935f0cc8cad5661c50b3072e5b26b3c0f42efda0bfdd1c6f3eefb11f746588d5"
@@ -2610,6 +2625,11 @@
       "path": "tests/module-install-hardening-1.15.136.py",
       "size": 6646,
       "sha256": "c7f0f9cd0d860523389452d9c0c3e89b0cb8a60b21128d9631a036d78a6d10cd"
+    },
+    {
+      "path": "tests/module-job-dispatch-crlf-1.17.15.py",
+      "size": 3563,
+      "sha256": "18fa0d67b9f83762bfb3173a8b5cbf9f96e792521e2d39473463f51328fc36dd"
     },
     {
       "path": "tests/module-job-helper-category-cleanup-1.17.14.py",
@@ -2722,6 +2742,11 @@
       "sha256": "822059c12dda85e2ba35b530a94048a6345028cbe96a3cde52e97401407f0e63"
     },
     {
+      "path": "tests/module-replacement-uninstall-handback-1.17.15.py",
+      "size": 15856,
+      "sha256": "36704a51350972d66cf6c13feb7d4920d28c9b9eb78e665a1def1924fe2d7a6d"
+    },
+    {
       "path": "tests/module-replacement-warnings-1.17.14.py",
       "size": 16228,
       "sha256": "1cdf2b8197ecd873e7be475d35c6cb85a9dd25973dd22a82e3d10bd28e403f8a"
@@ -2823,8 +2848,8 @@
     },
     {
       "path": "tests/release-integrity.sh",
-      "size": 1448,
-      "sha256": "0262a55901a939d79904ecf3ffeca429f249bbed0be7b1c643090aa91b71d167"
+      "size": 1497,
+      "sha256": "ba10fe60643eeef0c278c823968eb69d670861044efb05c187c686addcceca80"
     },
     {
       "path": "tests/reporting-handover-1.17.4.py",
@@ -2960,6 +2985,11 @@
       "path": "tests/root-required-foundation.sh",
       "size": 374,
       "sha256": "06de7c954c07628ac79d124be4c46e72ded9af1b62ea99dd24ba0fe45380ffa6"
+    },
+    {
+      "path": "tests/root-script-crlf-1.17.15.sh",
+      "size": 2192,
+      "sha256": "4ca1abc3e544e7d6873dfe927e017f9dd522d47445f3953bd1de05855f2b0061"
     },
     {
       "path": "tests/root-suite-classification-1.15.160.py",

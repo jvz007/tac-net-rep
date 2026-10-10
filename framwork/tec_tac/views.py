@@ -620,9 +620,18 @@ class ModuleRemoveView(APIView):
 
     def post(self, request, plugin_id):
         _require_module_manager(request.user)
+        # 1.17.15 (CQ43): the same hand-back confirmation as a disable (module_v2_views). A refusal names the code and the
+        # modules that cannot come back; nothing is queued until the request confirms them.
+        from .module_manager_v2 import ModuleManagerV2Error, ModuleReplacementHandBackConfirmationRequired
+        from .module_v2_views import _confirm_without_hand_back
+
         try:
-            return Response(queue_remove(plugin_id, requested_by=str(request.user.username)), status=202)
-        except ModuleManagerError as exc:
+            confirm = _confirm_without_hand_back(request)
+            return Response(queue_remove(plugin_id, requested_by=str(request.user.username), confirm_without_hand_back=confirm,
+                                         actor=request.user), status=202)
+        except ModuleReplacementHandBackConfirmationRequired as exc:
+            return Response(exc.as_payload(), status=400)
+        except (ModuleManagerError, ModuleManagerV2Error) as exc:
             return Response({"detail": str(exc)}, status=400)
 
 

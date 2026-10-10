@@ -559,6 +559,17 @@ def _new_job(payload: dict) -> dict:
     return job
 
 
+def _helper_has_crlf(path: Path) -> bool:
+    """True when the installed helper's first line ends in a carriage return (1.17.15). That is the Windows line-ending
+    fault: the shebang then names a file that does not exist, and sudo reports "unable to execute"."""
+    try:
+        with path.open("rb") as handle:
+            first_line = handle.readline(4096)
+    except OSError:
+        return False
+    return b"\r" in first_line
+
+
 def _dispatch(job_id: str) -> None:
     if not HELPER.is_file():
         raise ModuleManagerError(f"Privileged module helper is not installed at {HELPER}.")
@@ -573,6 +584,11 @@ def _dispatch(job_id: str) -> None:
         )
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         detail = getattr(exc, "stderr", None) or str(exc)
+        # 1.17.15: say what is wrong in plain words when the helper has Windows line endings, not the bare sudo error.
+        if "unable to execute" in detail and _helper_has_crlf(HELPER):
+            raise ModuleManagerError(
+                "Unable to dispatch privileged module job: helper has Windows line endings - reinstall it from this version."
+            ) from exc
         raise ModuleManagerError(f"Unable to dispatch privileged module job: {detail.strip()}") from exc
 
 
@@ -615,7 +631,25 @@ def queue_install(upload_id: str, replace: bool = False, requested_by: str | Non
     return public_job(job)
 
 
-def queue_remove(plugin_id: str, requested_by: str | None = None) -> dict:
+def _remove_hand_back(plugin_id: str, confirm_without_hand_back=None) -> tuple[list[str], list[str]]:
+    """(enable, skipped) for uninstalling ``plugin_id`` (1.17.15, CQ43, Johan): an enabled replacement that is uninstalled
+    switches the module it replaces back on, as a deliberate disable does. A replaced module that cannot come back is a
+    warning: the request must confirm it (``confirm_without_hand_back``), or nothing is queued."""
+    from . import module_manager_v2 as v2  # lazy: module_manager_v2 imports this module
+    from . import module_replacement
+
+    catalog = {item["id"]: item for item in v2.installed_catalog_v2()}
+    live = v2._model_with_pending_jobs(module_replacement.live_model())
+    wanted = v2._hand_back_wanted(live, [plugin_id])
+    if not wanted:
+        return [], []
+    can, cannot = v2._hand_back_split(catalog, live, plugin_id, wanted, {plugin_id})
+    if cannot and confirm_without_hand_back is not True:
+        raise v2.ModuleReplacementHandBackConfirmationRequired(plugin_id, can, v2._unavailable_rows(cannot))
+    return list(can), sorted(row["module"] for row in cannot)
+
+
+def queue_remove(plugin_id: str, requested_by: str | None = None, confirm_without_hand_back=None, actor=None) -> dict:
     if not plugin_id or any(ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for ch in plugin_id):
         raise ModuleManagerError("Invalid module id.")
     installed = {item["id"]: item for item in installed_catalog()}
@@ -624,11 +658,15 @@ def queue_remove(plugin_id: str, requested_by: str | None = None) -> dict:
         raise ModuleManagerError("Module is not installed.")
     if not item.get("managed"):
         raise ModuleManagerError("This module is framework-protected and cannot be removed from the UI.")
+    enable_modules, hand_back_skipped = _remove_hand_back(plugin_id, confirm_without_hand_back)
     job = _new_job({
         "action": "remove",
         "plugin_id": plugin_id,
         "purge_data": False,
         "requested_by": str(requested_by) if requested_by else None,
+        # 1.17.15 (CQ43): the replaced modules this uninstall switches back on, and the ones a confirmed uninstall leaves off.
+        "enable_modules": enable_modules,
+        "hand_back_skipped": hand_back_skipped,
     })
     try:
         _dispatch(job["id"])
@@ -640,6 +678,10 @@ def queue_remove(plugin_id: str, requested_by: str | None = None) -> dict:
         job["error_type"] = exc.__class__.__name__
         _atomic_json(JOBS_ROOT / f"{job['id']}.json", job)
         raise
+    if enable_modules or hand_back_skipped:
+        from . import module_replacement
+
+        module_replacement.audit_switch_queued(actor, plugin_id, job.get("id"), enabled=enable_modules, skipped=hand_back_skipped)
     return public_job(job)
 
 

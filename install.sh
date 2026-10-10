@@ -49,6 +49,15 @@ OLD_END_MARKER="# END TFD REPORTING EXTENSION"
 
 log() { printf '[TEC-TAC] %s\n' "$*"; }
 fail() { printf '[TEC-TAC] ERROR: %s\n' "$*" >&2; exit 1; }
+# 1.17.15: a root helper is copied with any trailing carriage return removed. A Windows checkout can carry CRLF line endings,
+# and then the shebang names a file that does not exist, which sudo reports as "unable to execute".
+install_root_script() {
+    local source="$1" target="$2" staged
+    staged="$(mktemp)"
+    sed 's/\r$//' "${source}" > "${staged}"
+    install -o root -g root -m 0755 "${staged}" "${target}"
+    rm -f "${staged}"
+}
 
 if [[ ${EUID} -ne 0 ]]; then
     fail "Run this installer as root (for example: sudo bash install.sh)."
@@ -469,9 +478,9 @@ touch "${MODULE_STATE_LOCK}"
 chown root:root "${MODULE_STATE_LOCK}"
 chmod 0600 "${MODULE_STATE_LOCK}"
 
-install -o root -g root -m 0755 "${REPO_ROOT}/scripts/module-job-helper.py" "${MODULE_HELPER}"
-install -o root -g root -m 0755 "${REPO_ROOT}/scripts/module-v2-job-helper.py" "${MODULE_V2_HELPER}"
-install -o root -g root -m 0755 "${REPO_ROOT}/scripts/module-hotfix-job-helper.py" "${MODULE_HOTFIX_HELPER}"
+install_root_script "${REPO_ROOT}/scripts/module-job-helper.py" "${MODULE_HELPER}"
+install_root_script "${REPO_ROOT}/scripts/module-v2-job-helper.py" "${MODULE_V2_HELPER}"
+install_root_script "${REPO_ROOT}/scripts/module-hotfix-job-helper.py" "${MODULE_HOTFIX_HELPER}"
 
 # Recovery scripts intentionally remain under /opt/tec-tac/scripts/recovery.
 # Remove convenience links created by 1.12.0 when they still point at this
@@ -616,10 +625,10 @@ PY_PUBLISHERS
 PRIVILEGED_TRUST_DIR="/usr/local/lib/tec-tac-security"
 PRIVILEGED_TRUST_HELPER="${PRIVILEGED_TRUST_DIR}/privileged-trust.py"
 mkdir -p "${PRIVILEGED_TRUST_DIR}"
-install -o root -g root -m 0755 "${REPO_ROOT}/scripts/privileged-trust.py" "${PRIVILEGED_TRUST_HELPER}"
+install_root_script "${REPO_ROOT}/scripts/privileged-trust.py" "${PRIVILEGED_TRUST_HELPER}"
 
 TRUST_POLICY_CLI="/usr/local/sbin/tec-tac-trust-policy"
-install -o root -g root -m 0755 "${REPO_ROOT}/scripts/trust-policy-cli.py" "${TRUST_POLICY_CLI}"
+install_root_script "${REPO_ROOT}/scripts/trust-policy-cli.py" "${TRUST_POLICY_CLI}"
 mkdir -p /var/log/tec-tac
 chown root:root /var/log/tec-tac
 chmod 0750 /var/log/tec-tac
@@ -689,7 +698,7 @@ chmod 2750 "${SYSTEM_UPDATE_ROOT}" "${SYSTEM_UPDATE_ROOT}/running" "${SYSTEM_UPD
 chmod 2770 "${SYSTEM_UPDATE_ROOT}/staged" "${SYSTEM_UPDATE_ROOT}/jobs" "${SYSTEM_UPDATE_ROOT}/cache"
 
 mkdir -p "${SYSTEM_UPDATE_LIB}"
-install -o root -g root -m 0755 "${REPO_ROOT}/scripts/system-update-helper.py" "${SYSTEM_UPDATE_LIB}/system-update-helper.py"
+install_root_script "${REPO_ROOT}/scripts/system-update-helper.py" "${SYSTEM_UPDATE_LIB}/system-update-helper.py"
 ln -sfn "${SYSTEM_UPDATE_LIB}/system-update-helper.py" "${SYSTEM_UPDATE_HELPER}"
 chown -h root:root "${SYSTEM_UPDATE_HELPER}"
 
@@ -749,8 +758,8 @@ chmod 0700 "${SERVER_BACKUP_ROOT}/secrets" "${SERVER_BACKUP_ROOT}/destinations"
 run_as_tactical test -w "${SERVER_BACKUP_ROOT}/jobs" || fail "Tactical service user cannot write ${SERVER_BACKUP_ROOT}/jobs."
 
 mkdir -p "${SERVER_BACKUP_LIB}"
-install -o root -g root -m 0755 "${REPO_ROOT}/scripts/server-backup-helper.py" "${SERVER_BACKUP_LIB}/server-backup-helper.py"
-install -o root -g root -m 0755 "${REPO_ROOT}/scripts/tactical-backup-sudo.py" "${SERVER_BACKUP_LIB}/sudo"
+install_root_script "${REPO_ROOT}/scripts/server-backup-helper.py" "${SERVER_BACKUP_LIB}/server-backup-helper.py"
+install_root_script "${REPO_ROOT}/scripts/tactical-backup-sudo.py" "${SERVER_BACKUP_LIB}/sudo"
 ln -sfn "${SERVER_BACKUP_LIB}/server-backup-helper.py" "${SERVER_BACKUP_HELPER}"
 chown -h root:root "${SERVER_BACKUP_HELPER}"
 cat > "${SERVER_BACKUP_SUDOERS}" <<EOF
@@ -774,7 +783,7 @@ chown root:root "${SERVER_MAINTENANCE_REGISTRY_ROOT}" "${SERVER_MAINTENANCE_ACTI
 chmod 0755 "${SERVER_MAINTENANCE_REGISTRY_ROOT}" "${SERVER_MAINTENANCE_ACTION_ROOT}" "${SERVER_MAINTENANCE_LIB}"
 run_as_tactical test -w "${SERVER_MAINTENANCE_ROOT}/jobs" || fail "Tactical service user cannot write ${SERVER_MAINTENANCE_ROOT}/jobs."
 run_as_tactical test -w "${SERVER_MAINTENANCE_ROOT}/cancel-requests" || fail "Tactical service user cannot write ${SERVER_MAINTENANCE_ROOT}/cancel-requests."
-install -o root -g root -m 0755 "${REPO_ROOT}/scripts/server-maintenance-helper.py" "${SERVER_MAINTENANCE_LIB}/server-maintenance-helper.py"
+install_root_script "${REPO_ROOT}/scripts/server-maintenance-helper.py" "${SERVER_MAINTENANCE_LIB}/server-maintenance-helper.py"
 ln -sfn "${SERVER_MAINTENANCE_LIB}/server-maintenance-helper.py" "${SERVER_MAINTENANCE_HELPER}"
 chown -h root:root "${SERVER_MAINTENANCE_HELPER}"
 cat > "${SERVER_MAINTENANCE_SUDOERS}" <<EOF
@@ -831,7 +840,7 @@ if [[ -f "${HOUSEKEEPING_CONFIG}" && ! -L "${HOUSEKEEPING_CONFIG}" ]]; then
     chown root:"${TACTICAL_GROUP}" "${HOUSEKEEPING_CONFIG}"
     chmod 0640 "${HOUSEKEEPING_CONFIG}"
 fi
-install -o root -g root -m 0755 "${REPO_ROOT}/scripts/housekeeping-helper.py" "${HOUSEKEEPING_LIB}/housekeeping-helper.py"
+install_root_script "${REPO_ROOT}/scripts/housekeeping-helper.py" "${HOUSEKEEPING_LIB}/housekeeping-helper.py"
 ln -sfn "${HOUSEKEEPING_LIB}/housekeeping-helper.py" "${HOUSEKEEPING_HELPER}"
 chown -h root:root "${HOUSEKEEPING_HELPER}"
 cat > "${HOUSEKEEPING_SUDOERS}" <<EOF

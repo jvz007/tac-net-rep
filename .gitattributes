@@ -1,0 +1,3 @@
+# Line endings: root helpers and other scripts run on Linux and must keep LF.
+scripts/*.py text eol=lf
+scripts/*.sh text eol=lf

@@ -154,6 +154,164 @@ def forget_module_state(plugin_id, log=None):
     return True
 
 
+# ------------------------------------------------------------ AD-20 hand-back on uninstall (1.17.15, Johan CQ43)
+# An uninstall of an enabled replacement switches the module it replaces back on, in the same job. Core asks for it in
+# ``enable_modules``; this worker re-checks every rule from root-owned manifests before anything is removed, the way
+# module-v2-job-helper.py checks a disable. The rules are the same: each module is the replaced module of the module being
+# removed, is a core or server module, is disabled now, and no other enabled module replaces it.
+REPLACEABLE_CATEGORIES = frozenset({"core", "server"})
+MAX_MANIFEST_BYTES = 1024 * 1024
+
+
+def _trusted_stat(info):
+    """Root-owned and not writable by group or others."""
+    return info.st_uid == 0 and not (info.st_mode & 0o022)
+
+
+def _read_manifest_file(path):
+    """The manifest as a dict, or None when it is missing, a symlink, not a root-owned regular file, too large or not JSON."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError:
+        return None
+    chunks, total = [], 0
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or not _trusted_stat(info) or info.st_size > MAX_MANIFEST_BYTES:
+            return None
+        while True:
+            block = os.read(fd, 65536)
+            if not block:
+                break
+            total += len(block)
+            if total > MAX_MANIFEST_BYTES:
+                return None
+            chunks.append(block)
+    finally:
+        os.close(fd)
+    try:
+        payload = json.loads(b"".join(chunks).decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _installed_manifest(repo_root, module_id):
+    """{id, category, replaces} of an installed extension, read as root-owned files only, or None."""
+    if not PLUGIN_RE.fullmatch(str(module_id)):
+        return None
+    folder = Path(repo_root) / "extensions" / module_id
+    try:
+        info = os.lstat(folder)
+    except OSError:
+        return None
+    if not stat.S_ISDIR(info.st_mode) or not _trusted_stat(info):
+        return None
+    payload = _read_manifest_file(folder / "tec_tac.json")
+    if payload is None or str(payload.get("id") or "").strip() != module_id:
+        return None
+    return {
+        "id": module_id,
+        "category": str(payload.get("category") or "").strip().lower(),
+        "replaces": str(payload.get("replaces") or "").strip(),
+    }
+
+
+def _installed_ids(repo_root):
+    try:
+        names = [entry.name for entry in (Path(repo_root) / "extensions").iterdir()]
+    except OSError:
+        return []
+    return sorted(name for name in names if PLUGIN_RE.fullmatch(name))
+
+
+def _state_modules():
+    """The ``modules`` map of module-state.json, empty when there is no state file. RuntimeError when it cannot be read."""
+    if not STATE_FILE.is_file():
+        return {}
+    try:
+        state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"module state is unreadable: {exc}") from exc
+    modules = state.get("modules") if isinstance(state, dict) else None
+    if not isinstance(modules, dict):
+        raise RuntimeError("module state has an invalid structure")
+    return modules
+
+
+def _enabled_in(modules, module_id):
+    return bool((modules.get(module_id) or {}).get("enabled", True))
+
+
+def plan_remove_hand_back(repo_root, plugin_id, enable_modules):
+    """The replaced modules an uninstall may switch back on, each re-checked from root-owned manifests while the module
+    being removed is still installed. Returns the sorted ids (empty when nothing was asked for). Raises RuntimeError with
+    nothing changed when a rule does not hold."""
+    wanted = sorted({str(item) for item in (enable_modules or [])})
+    if not wanted:
+        return []
+    for module_id in wanted:
+        if not PLUGIN_RE.fullmatch(module_id):
+            raise RuntimeError(f"invalid module id in the hand-back list: {module_id!r}")
+    removed = _installed_manifest(repo_root, plugin_id)
+    if removed is None:
+        raise RuntimeError(f"cannot verify the hand-back for {plugin_id}: no trusted manifest")
+    modules = _state_modules()
+    if not _enabled_in(modules, plugin_id):
+        raise RuntimeError(f"module replacement rule refuses a hand-back for {plugin_id}: it is not enabled")
+    for module_id in wanted:
+        target = _installed_manifest(repo_root, module_id)
+        if target is None:
+            raise RuntimeError(f"cannot verify the hand-back of {module_id}: no trusted manifest")
+        if module_id == plugin_id or target["category"] not in REPLACEABLE_CATEGORIES:
+            raise RuntimeError(f"module replacement rule refuses enabling {module_id} as a hand-back: it is not a core or server module")
+        if removed["replaces"] != module_id:
+            raise RuntimeError(f"module replacement rule refuses enabling {module_id} as a hand-back: {plugin_id} does not replace it")
+        if _enabled_in(modules, module_id):
+            raise RuntimeError(f"module replacement rule refuses enabling {module_id} as a hand-back: it is enabled already")
+        rivals = []
+        for other_id in _installed_ids(repo_root):
+            if other_id in (plugin_id, module_id):
+                continue
+            other = _installed_manifest(repo_root, other_id)
+            if other is not None and other["replaces"] == module_id and _enabled_in(modules, other_id):
+                rivals.append(other_id)
+        if rivals:
+            raise RuntimeError(f"module replacement rule refuses enabling {module_id} as a hand-back: {', '.join(rivals)} also replaces it and stays enabled")
+    return wanted
+
+
+def set_module_enabled(module_ids, enabled):
+    """Write the enabled flag of each module into module-state.json, under the state lock (1.17.15, CQ43)."""
+    STATE_ROOT.mkdir(parents=True, exist_ok=True)
+    if not MODULE_STATE_LOCK.exists():
+        MODULE_STATE_LOCK.touch(mode=0o600, exist_ok=True)
+        os.chown(MODULE_STATE_LOCK, 0, 0)
+        os.chmod(MODULE_STATE_LOCK, 0o600)
+    with MODULE_STATE_LOCK.open("r+") as lock_handle:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        try:
+            if not STATE_FILE.is_file():
+                raise RuntimeError("module state is missing; the replaced module cannot be switched back on")
+            try:
+                state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise RuntimeError(f"module state is unreadable: {exc}") from exc
+            modules = state.get("modules") if isinstance(state, dict) else None
+            if not isinstance(modules, dict):
+                raise RuntimeError("module state has an invalid structure")
+            for module_id in module_ids:
+                record = dict(modules.get(module_id) or {})
+                record["enabled"] = bool(enabled)
+                modules[module_id] = record
+            atomic_json(STATE_FILE, state)
+            os.chown(STATE_FILE, 0, 0)
+            os.chmod(STATE_FILE, 0o644)
+        finally:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+
+
 # ---------------------------------------------------------------------------------------------- AD-21 category (1.17.13)
 KNOWN_CATEGORIES = frozenset({"", "core", "server", "premium", "test"})
 MAX_MANIFEST_BYTES = 1024 * 1024
@@ -417,6 +575,9 @@ def claim_job(job_id):
         "plugin_id": str(job.get("plugin_id") or ""),
         "replace": bool(job.get("replace", False)),
     }
+    if job["action"] == "remove":
+        # 1.17.15 (CQ43): the replaced modules an uninstall switches back on. plan_remove_hand_back re-checks them.
+        immutable["enable_modules"] = list(job.get("enable_modules") or [])
     if job["action"] == "install":
         upload_id = str(job.get("upload_id") or "")
         if not JOB_RE.fullmatch(upload_id):
@@ -489,12 +650,19 @@ def _privileged_verify_package(config, job):
         raise RuntimeError("root module trust verifier returned invalid data")
     return trust
 
+
+def run_job_record(status, immutable):
+    """The record run_job works on: what Core queued (requested_by, enable_modules, ...) with the root-side fields on top.
+    1.17.15: it used to start from the running request alone, so the final write dropped what Core had queued."""
+    return {**status, **immutable, "status": status.get("status"), "stage": status.get("stage"), "created_at": status.get("created_at")}
+
+
 def run_job(job_id):
     path, status = load_job(job_id)
     if status.get("status") not in {"dispatched", "running"}:
         raise SystemExit("job was not dispatched")
     _, immutable = load_running_request(job_id)
-    job = {**immutable, "status": status.get("status"), "stage": status.get("stage"), "created_at": status.get("created_at")}
+    job = run_job_record(status, immutable)
     acquire_lifecycle_lock()
     config = load_config()
     root_trust = _privileged_verify_package(config, job)
@@ -527,6 +695,7 @@ def run_job(job_id):
     command = None
     declared_category = None
     category_failed = False
+    handback = []
     if job["action"] == "install":
         package = Path(job["package_path"])
         # AD-21 (1.17.13): re-check the category from the root-private package before anything is installed.
@@ -547,7 +716,15 @@ def run_job(job_id):
             if job.get("replace"):
                 command.append("--replace")
     else:
-        command = [TRUSTED_BASH, str(remove_script), job["plugin_id"], "", "--yes"]
+        # 1.17.15 (CQ43): the hand-back is checked while the module being removed is still installed, before anything changes.
+        try:
+            handback = plan_remove_hand_back(repo_root, job["plugin_id"], job.get("enable_modules"))
+            command = [TRUSTED_BASH, str(remove_script), job["plugin_id"], "", "--yes"]
+        except (RuntimeError, OSError) as exc:
+            with log_path.open("a", encoding="utf-8") as log:
+                log.write(f"[TEC-TAC-MODULE] hand-back check failed: {exc}\n")
+            job["error"] = str(exc)
+            job["error_type"] = "HandBackRefused"
 
     rc = 1
     if command is not None:
@@ -566,6 +743,12 @@ def run_job(job_id):
                     # cleared. Otherwise later UI/system updates can fail because
                     # module-state.json still marks a deleted extension as enabled.
                     forget_module_state(job["plugin_id"], log)
+                    if handback:
+                        # 1.17.15 (CQ43): the replaced module comes back on in the same job, after the uninstall.
+                        set_module_enabled(handback, True)
+                        job["enabled_modules"] = list(handback)
+                        log.write(f"[TEC-TAC-MODULE] enabled replaced module(s) handed back: {', '.join(handback)}\n")
+                        log.flush()
                 if rc == 0 and ui_sync.is_file():
                     job["stage"] = "ui-sync"
                     atomic_json(path, job)
