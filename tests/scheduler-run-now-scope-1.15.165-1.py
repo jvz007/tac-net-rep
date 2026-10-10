@@ -84,6 +84,10 @@ def _require_target_scope(user, targets, payload=False):
     if user.username in {"module-tech", "restricted-manager"}:
         raise PermissionDenied("Schedule target is outside your Tactical access scope.")
 
+def is_one_off_schedule(_schedule):
+    # 1.17.17: run-now refuses one-off schedules first; these schedules are ordinary ones (see tests/scheduler-one-off-run-now-1.17.17.py)
+    return False
+
 def queue_manual_run(schedule):
     queued.append(schedule)
     return SimpleNamespace(id="run-1")

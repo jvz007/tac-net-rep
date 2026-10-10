@@ -95,6 +95,64 @@ def tactical_scope_unrestricted(*, user) -> bool:
     return _role_scope_unrestricted(user=user)
 
 
+def _scope_none() -> dict[str, object]:
+    return {"mode": "none", "unrestricted": False, "whole_client_ids": [], "site_ids": [], "whole_client_count": 0, "site_count": 0}
+
+
+def _relation_pks(relation) -> list[int]:
+    """The ids a role relation lists, sorted, without loading anything else. None reads as no rows."""
+    if relation is None:
+        return []
+    values_list = getattr(relation, "values_list", None)
+    if callable(values_list):
+        return sorted({int(value) for value in values_list("pk", flat=True)})
+    rows = getattr(relation, "all", None)
+    rows = rows() if callable(rows) else relation
+    return sorted({int(getattr(row, "pk", row)) for row in rows})
+
+
+def role_scope_descriptor(user) -> dict[str, object]:
+    """One description of a person's Tactical client and site scope (1.17.17, ``core.resources`` 1.4.0).
+
+    ``{mode, unrestricted, whole_client_ids, site_ids, whole_client_count, site_count}``. It uses the rule of
+    ``_role_scope_unrestricted`` and the role's ``can_view_clients`` and ``can_view_sites`` relations, so no module needs to
+    read Tactical's Role. ``unrestricted`` is a superuser, a role superuser, or a role with both relations empty (Tactical's own
+    rule). ``mode`` is ``unrestricted``, ``clients`` (only whole-client grants), ``sites`` (only explicit site grants), ``mixed``
+    (both) or ``none``. ``whole_client_ids`` are the explicit ``can_view_clients`` grants. ``site_ids`` are the explicit
+    ``can_view_sites`` grants only, never the sites of a granted client, and a site-only role never counts as holding the whole
+    client. No user, no role, a Tactical installer user and any lookup failure give mode ``none`` and ``unrestricted`` False
+    (fail closed). Returns new lists on every call.
+    """
+    try:
+        if user is None or not bool(getattr(user, "is_authenticated", False)) or bool(getattr(user, "is_installer_user", False)):
+            return _scope_none()
+        role = _role_for_user(user)
+        if bool(getattr(user, "is_superuser", False)) or bool(getattr(role, "is_superuser", False) if role else False):
+            return {**_scope_none(), "mode": "unrestricted", "unrestricted": True}
+        if role is None:
+            return _scope_none()
+        clients = _relation_pks(getattr(role, "can_view_clients", None))
+        sites = _relation_pks(getattr(role, "can_view_sites", None))
+        if not clients and not sites:
+            return {**_scope_none(), "mode": "unrestricted", "unrestricted": True}
+        mode = "mixed" if clients and sites else ("clients" if clients else "sites")
+        return {
+            "mode": mode, "unrestricted": False, "whole_client_ids": clients, "site_ids": sites,
+            "whole_client_count": len(clients), "site_count": len(sites),
+        }
+    except Exception:
+        return _scope_none()
+
+
+def existing_client_ids(client_ids) -> set[int]:
+    """The ids among ``client_ids`` that name a Tactical client (no scope decision)."""
+    wanted = {int(value) for value in client_ids if int(value) > 0}
+    if not wanted:
+        return set()
+    Client, _, _ = _models()
+    return set(Client.objects.filter(pk__in=wanted).values_list("pk", flat=True))
+
+
 def report_scope_ids(user) -> dict[str, object]:
     """Client and site ids a person may see in report models (1.17.4, the reporting row-scope hook).
 
@@ -354,12 +412,18 @@ def agents_queryset(*, user=None, trusted: bool = False, client_id: int | None =
     return qs.order_by("site__client_id", "site_id", "hostname", "agent_id")
 
 
+def _template_id(row: dict[str, Any]) -> int | None:
+    value = row.get("alert_template_id")
+    return int(value) if value is not None else None
+
+
 def client_row(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "type": "client",
         "id": int(row["pk"]),
         "name": str(row.get("name") or ""),
         "active": True,
+        "alert_template_id": _template_id(row),
     }
 
 
@@ -370,6 +434,7 @@ def site_row(row: dict[str, Any]) -> dict[str, Any]:
         "name": str(row.get("name") or ""),
         "client_id": int(row["client_id"]),
         "active": True,
+        "alert_template_id": _template_id(row),
     }
 
 
@@ -390,13 +455,13 @@ def agent_row(row: dict[str, Any]) -> dict[str, Any]:
 
 def page_clients(queryset, *, offset: int, limit: int) -> tuple[list[dict[str, Any]], int]:
     total = queryset.count()
-    rows = queryset.values("pk", "name")[offset : offset + limit]
+    rows = queryset.values("pk", "name", "alert_template_id")[offset : offset + limit]
     return [client_row(row) for row in rows], total
 
 
 def page_sites(queryset, *, offset: int, limit: int) -> tuple[list[dict[str, Any]], int]:
     total = queryset.count()
-    rows = queryset.values("pk", "name", "client_id")[offset : offset + limit]
+    rows = queryset.values("pk", "name", "client_id", "alert_template_id")[offset : offset + limit]
     return [site_row(row) for row in rows], total
 
 
@@ -410,12 +475,12 @@ def page_agents(queryset, *, offset: int, limit: int) -> tuple[list[dict[str, An
 
 
 def get_client_row(queryset, client_id: int) -> dict[str, Any] | None:
-    row = queryset.filter(pk=client_id).values("pk", "name").first()
+    row = queryset.filter(pk=client_id).values("pk", "name", "alert_template_id").first()
     return client_row(row) if row else None
 
 
 def get_site_row(queryset, site_id: int) -> dict[str, Any] | None:
-    row = queryset.filter(pk=site_id).values("pk", "name", "client_id").first()
+    row = queryset.filter(pk=site_id).values("pk", "name", "client_id", "alert_template_id").first()
     return site_row(row) if row else None
 
 
@@ -490,10 +555,24 @@ def create_client_row(*, user, name: str, default_site_name: str = "Default Site
         raise TacticalResourceConflictError("A client with that name already exists.") from exc
     except ValidationError as exc:
         raise TacticalResourceValidationError("Client or default site failed Tactical validation.") from exc
-    return client_row({"pk": obj.pk, "name": obj.name})
+    return client_row({"pk": obj.pk, "name": obj.name, "alert_template_id": getattr(obj, "alert_template_id", None)})
 
 
-def update_client_row(*, user, client_id: int, name: str) -> dict[str, Any] | None:
+_NOT_GIVEN = object()
+
+
+def _validation_message(exc: ValidationError, label: str) -> str:
+    """A missing alert template reads plainly; every other failure keeps the one-line text of before 1.17.17."""
+    fields = getattr(exc, "message_dict", None) if hasattr(exc, "error_dict") else None
+    if isinstance(fields, dict) and "alert_template" in fields:
+        return "alert_template_id does not name an existing alert template."
+    return f"{label} failed Tactical validation."
+
+
+def update_client_row(*, user, client_id: int, name: str | None = None, alert_template_id: int | None = _NOT_GIVEN) -> dict[str, Any] | None:
+    """Change a client's name and, since 1.17.17, its alert template (an id or None). Core holds only the field:
+    Alerts owns the template list. The write goes through ``obj.save`` so Tactical's own model hook
+    (``cache_agents_alert_template``) still runs. A template id that does not exist fails ``full_clean`` through the ForeignKey."""
     Client, _, _ = _models()
     try:
         with transaction.atomic():
@@ -502,19 +581,25 @@ def update_client_row(*, user, client_id: int, name: str) -> dict[str, Any] | No
             obj = Client.objects.select_for_update().filter(pk=client_id).first()
             if obj is None:
                 return None
-            obj.name = name
-            obj.full_clean(exclude=None, validate_unique=False)
-            update_fields = ["name"]
-            if hasattr(obj, "modified_by"):
-                update_fields.append("modified_by")
-            if hasattr(obj, "modified_time"):
-                update_fields.append("modified_time")
-            obj.save(update_fields=update_fields)
+            update_fields = []
+            if name is not None:
+                obj.name = name
+                update_fields.append("name")
+            if alert_template_id is not _NOT_GIVEN:
+                obj.alert_template_id = alert_template_id
+                update_fields.append("alert_template")
+            if update_fields:
+                obj.full_clean(exclude=None, validate_unique=False)
+                if hasattr(obj, "modified_by"):
+                    update_fields.append("modified_by")
+                if hasattr(obj, "modified_time"):
+                    update_fields.append("modified_time")
+                obj.save(update_fields=update_fields)
     except IntegrityError as exc:
         raise TacticalResourceConflictError("A client with that name already exists.") from exc
     except ValidationError as exc:
-        raise TacticalResourceValidationError("Client failed Tactical validation.") from exc
-    return client_row({"pk": obj.pk, "name": obj.name})
+        raise TacticalResourceValidationError(_validation_message(exc, "Client")) from exc
+    return client_row({"pk": obj.pk, "name": obj.name, "alert_template_id": getattr(obj, "alert_template_id", None)})
 
 
 def create_site_row(*, client_id: int, name: str) -> dict[str, Any]:
@@ -528,10 +613,11 @@ def create_site_row(*, client_id: int, name: str) -> dict[str, Any]:
         raise TacticalResourceConflictError("A site with that name already exists for the selected client.") from exc
     except ValidationError as exc:
         raise TacticalResourceValidationError("Site failed Tactical validation.") from exc
-    return site_row({"pk": obj.pk, "name": obj.name, "client_id": obj.client_id})
+    return site_row({"pk": obj.pk, "name": obj.name, "client_id": obj.client_id, "alert_template_id": getattr(obj, "alert_template_id", None)})
 
 
-def update_site_row(*, user, site_id: int, name: str | None = None, client_id: int | None = None) -> dict[str, Any] | None:
+def update_site_row(*, user, site_id: int, name: str | None = None, client_id: int | None = None,
+                    alert_template_id: int | None = _NOT_GIVEN) -> dict[str, Any] | None:
     Client, Site, _ = _models()
     try:
         with transaction.atomic():
@@ -555,6 +641,9 @@ def update_site_row(*, user, site_id: int, name: str | None = None, client_id: i
                     raise TacticalResourceValidationError("A client must retain at least one site.")
                 obj.client_id = client_id
                 update_fields.append("client")
+            if alert_template_id is not _NOT_GIVEN:
+                obj.alert_template_id = alert_template_id
+                update_fields.append("alert_template")
             if update_fields:
                 obj.full_clean(exclude=None, validate_unique=False)
                 if hasattr(obj, "modified_by"):
@@ -565,8 +654,8 @@ def update_site_row(*, user, site_id: int, name: str | None = None, client_id: i
     except IntegrityError as exc:
         raise TacticalResourceConflictError("A site with that name already exists for the selected client.") from exc
     except ValidationError as exc:
-        raise TacticalResourceValidationError("Site failed Tactical validation.") from exc
-    return site_row({"pk": obj.pk, "name": obj.name, "client_id": obj.client_id})
+        raise TacticalResourceValidationError(_validation_message(exc, "Site")) from exc
+    return site_row({"pk": obj.pk, "name": obj.name, "client_id": obj.client_id, "alert_template_id": getattr(obj, "alert_template_id", None)})
 
 
 def delete_site_row(*, user, site_id: int, move_to_site_id: int | None = None) -> dict[str, Any] | None:

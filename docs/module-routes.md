@@ -63,3 +63,7 @@ A module whose app is not loaded is not listed. The list covers the current proc
 ## The `description` key (Core 1.17.16)
 
 `tec_tac.json` also accepts `description`: plain text of 1 to 500 characters with no control characters (no new lines or tabs). Extensions and reportsets may both declare it, and no module has to. Core shows it as `description` on the module catalogue rows, on the package inspect preview and on the runtime module rows. The value is `null` when the module declares none. A bad value is refused with a plain message, and a package with a bad value is refused at inspect.
+
+## Other manifest keys that follow the same rules
+
+`server_maintenance_actions` (Core 1.17.17) lets a signed server module register its own Core server-maintenance actions when it is installed. It has its own rules, its own trust gate (`publisher_permissions` `server_maintenance.register`) and its own page: see `docs/server-maintenance-capability.md`, "Registering from a module manifest". Like `routes`, it is read when the package is installed, a bad value refuses the package with a plain message, and a module that does not declare it is not affected.

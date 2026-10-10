@@ -27,17 +27,21 @@ CORE_RESOURCE_CONTRACTS = (
     {"area":"resources","import_path":"tec_tac.resources","name":"list_clients","kind":"python","purpose":"List Tactical clients through the stable scoped Core Resource Directory.","audience":"consumer/backend"},
     {"area":"resources","import_path":"tec_tac.resources","name":"get_client","kind":"python","purpose":"Resolve one scoped Tactical client as a stable Core record.","audience":"consumer/backend"},
     {"area":"resources","import_path":"tec_tac.resources","name":"create_client","kind":"python","purpose":"Create a Tactical client through the Core resource write boundary.","audience":"authorized backend"},
-    {"area":"resources","import_path":"tec_tac.resources","name":"update_client","kind":"python","purpose":"Update a scoped Tactical client through the Core resource write boundary.","audience":"authorized backend"},
+    {"area":"resources","import_path":"tec_tac.resources","name":"update_client","kind":"python","purpose":"Update a scoped Tactical client through the Core resource write boundary. update_client(client_id, *, name=None, alert_template_id=UNSET, context): at least one of name or alert_template_id (core.resources 1.4.0, framework >=1.17.17). alert_template_id is a positive integer to set the client's alert template or None to clear it; booleans, zero, negatives and text that is not a whole number raise ResourceValidationError, and so does an id that names no template (Tactical's own foreign key decides, Core imports no Alerts model). Core holds only the id: the template list belongs to Alerts. Same write rule as a rename (Tactical can_manage_clients, the Core resources permission, a whole-client grant); can_manage_alerts is not required, matching Tactical's client PUT. The write goes through Tactical's model save, so its own agent alert cache refresh still runs. The audit row carries before and after records (with alert_template_id) and metadata alert_template_changed. Existing calls with name only are unchanged.","audience":"authorized backend"},
     {"area":"resources","import_path":"tec_tac.resources","name":"delete_client","kind":"python","purpose":"Delete a scoped Tactical client after atomically relocating its agents when required.","audience":"authorized backend"},
     {"area":"resources","import_path":"tec_tac.resources","name":"list_sites","kind":"python","purpose":"List Tactical sites globally or by client through the stable scoped Core Resource Directory.","audience":"consumer/backend"},
     {"area":"resources","import_path":"tec_tac.resources","name":"get_site","kind":"python","purpose":"Resolve one scoped Tactical site as a stable Core record.","audience":"consumer/backend"},
     {"area":"resources","import_path":"tec_tac.resources","name":"create_site","kind":"python","purpose":"Create a Tactical site inside the caller's client scope through Core.","audience":"authorized backend"},
-    {"area":"resources","import_path":"tec_tac.resources","name":"update_site","kind":"python","purpose":"Update a scoped Tactical site through the Core resource write boundary.","audience":"authorized backend"},
+    {"area":"resources","import_path":"tec_tac.resources","name":"update_site","kind":"python","purpose":"Update a scoped Tactical site through the Core resource write boundary. update_site(site_id, *, name=None, client_id=None, alert_template_id=UNSET, context) takes alert_template_id since core.resources 1.4.0 (framework >=1.17.17): a positive integer to set or None to clear, with the same checks, scope rule (a site grant or a grant of the site's client), audit metadata alert_template_changed and Tactical hook as update_client.","audience":"authorized backend"},
     {"area":"resources","import_path":"tec_tac.resources","name":"delete_site","kind":"python","purpose":"Delete a scoped Tactical site after atomically relocating its agents within the same client when required.","audience":"authorized backend"},
     {"area":"resources","import_path":"tec_tac.resources","name":"list_custom_fields","kind":"python","purpose":"List editable Tactical custom-field definitions and values for a scoped client or site.","audience":"authorized backend"},
     {"area":"resources","import_path":"tec_tac.resources","name":"update_custom_fields","kind":"python","purpose":"Update scoped client/site Tactical custom-field values through Core validation and audit.","audience":"authorized backend"},
     {"area":"resources","import_path":"tec_tac.resources","name":"list_agents","kind":"python","purpose":"List Tactical agents globally or by client/site through the stable scoped Core Resource Directory.","audience":"consumer/backend"},
     {"area":"resources","import_path":"tec_tac.resources","name":"get_agent","kind":"python","purpose":"Resolve one scoped Tactical agent using its stable agent_id.","audience":"consumer/backend"},
+    {"area":"resources","import_path":"tec_tac.resources","name":"scope_descriptor","kind":"python","purpose":"Describe the caller's Tactical client and site scope once (core.resources 1.4.0, framework >=1.17.17): scope_descriptor(*, context) returns {mode, unrestricted, whole_client_ids, site_ids, whole_client_count, site_count}. mode is unrestricted, clients (only whole-client grants), sites (only explicit site grants), mixed or none. unrestricted is a superuser, a role superuser or a role with both can_view_clients and can_view_sites empty (Tactical's own rule). whole_client_ids are the explicit can_view_clients grants. site_ids are the explicit can_view_sites grants only, not the sites of a granted client. No role, a Tactical installer user and any lookup failure give mode none (fail closed). A trusted global service context is unrestricted; a service context that is not global is refused. A scope question only: no can_list_* flag is needed. Modules use this instead of reading Tactical's Role.","audience":"consumer/backend"},
+    {"area":"resources","import_path":"tec_tac.resources","name":"scope_unrestricted","kind":"python","purpose":"True when the caller sees every client and site (core.resources 1.4.0, framework >=1.17.17): scope_unrestricted(context). The unrestricted flag of scope_descriptor.","audience":"consumer/backend"},
+    {"area":"resources","import_path":"tec_tac.resources","name":"has_whole_client_access","kind":"python","purpose":"May the caller act on a whole client (core.resources 1.4.0, framework >=1.17.17): has_whole_client_access(client_id, *, context) is true only for an unrestricted caller or a role that lists the client in can_view_clients, and only when the client exists. A site-only role never holds the whole client, not even the client that owns its site. No can_list_clients is needed (a scope question only). No role, an installer user and any lookup failure give False. A malformed client_id raises ResourceValidationError. A trusted global service context has whole access to every existing client.","audience":"consumer/backend"},
+    {"area":"resources","import_path":"tec_tac.resources","name":"ResourceAccessContext","kind":"python","purpose":"The authority context every Resource Directory call takes. Since core.resources 1.4.0 it has a read-only property scope that returns scope_descriptor(context=self), computed when read and never cached on the context.","audience":"consumer/backend"},
     {"area":"resources","import_path":"tec_tac.resources","name":"resolve_resource","kind":"python","purpose":"Resolve a client, site or agent through one generic Core operation.","audience":"consumer/backend"},
 )
 
@@ -167,7 +171,15 @@ CORE_CONTRACTS = (
         "import_path": "tec_tac.scheduler",
         "name": "register_scheduled_action",
         "kind": "python",
-        "purpose": "Register a stable business action with the shared Tec-Tac Scheduler.",
+        "purpose": (
+            "Register a stable business action with the shared Tec-Tac Scheduler. permission is a Tec-Tac permission code, None (managers only), "
+            "a Tactical role flag written 'tactical:can_manage_winupdates', or a list or tuple of those (any-of, at most 8, no duplicates; "
+            "since 1.17.17, requires framework >=1.17.17 for the tactical: form and the list). The shape is checked at registration and a bad "
+            "shape raises SchedulerError. A flag or code that does not exist fails closed when used (nobody but a scheduler manager passes) "
+            "and is logged. The same check is repeated just before a one-off or user-owned run, so a run whose owner lost the flag is skipped. "
+            "serialize_action and the exported scheduler_actions rows carry permission (the single entry, or the entries joined with ' | ') "
+            "and permission_any (the list, empty for a single entry)."
+        ),
         "audience": "provider",
     },
     {
@@ -175,7 +187,7 @@ CORE_CONTRACTS = (
         "import_path": "tec_tac.scheduler",
         "name": "reconcile_schedule",
         "kind": "python",
-        "purpose": "Idempotently create/update a backend-module-owned schedule using owner_module + owner_key.",
+        "purpose": "Idempotently create/update a backend-module-owned schedule using owner_module + owner_key. Since 1.17.17 an owner_key that starts with one-off: raises SchedulerError: that prefix is reserved to Core, and only start_one_off_run makes such a schedule.",
         "audience": "provider/backend",
     },
     {
@@ -575,7 +587,7 @@ CORE_CONTRACTS = (
         "import_path": "tec_tac.scheduler",
         "name": "start_one_off_run",
         "kind": "python",
-        "purpose": "start_one_off_run(*, user, owner_module, action_id, targets=None, parameters=None, name=None) -> TecTacScheduleRun (1.17.16, AD-13 condition 2, CQ50): start one run of a registered Scheduler action on behalf of a user and track it. A module starts only its own actions (action.module_id == owner_module). The user must be active and not an installer user, hold the action now (an action with no permission is startable only by native scheduler managers, as in the browser) and hold the targets' Tactical scope; otherwise SchedulerNotAllowed (a SchedulerError). Core creates one disabled ONCE schedule owned by the module with owner_key one-off:<uuid> and created_by the user, so the ticker never dispatches it, the Scheduler page shows it as managed by the module, and the existing once-retention cleanup removes it (48 hours by default); the run history stays. It then queues the run like a manual run and writes one best-effort Core audit row (action add, object_type scheduler_run). Just before the handler runs, Core re-checks that the user is still active and still holds the action and the scope; if not the run ends skipped with a plain reason and an audit row, and the handler never runs. The handler context gains owner_type, owner_module, owner_key, owner_user_id, owner_username (the user fields only for a one-off run and a user-owned schedule, otherwise None) and one_off (see the scheduler docs). This is the start-and-track call, not the system-action contract (registered Tactical actions run in-process as the owner, still open). Call it outside an uncommitted database transaction. Requires framework >=1.17.16.",
+        "purpose": "start_one_off_run(*, user, owner_module, action_id, targets=None, parameters=None, name=None) -> TecTacScheduleRun (1.17.16, AD-13 condition 2, CQ50): start one run of a registered Scheduler action on behalf of a user and track it. A module starts only its own actions (action.module_id == owner_module). The user must be active and not an installer user, hold the action now (an action with no permission is startable only by native scheduler managers, as in the browser) and hold the targets' Tactical scope; otherwise SchedulerNotAllowed (a SchedulerError). Core creates one disabled ONCE schedule owned by the module with owner_key one-off:<uuid> and created_by the user, so the ticker never dispatches it, the Scheduler page shows it as managed by the module, and the existing once-retention cleanup removes it (48 hours by default); the run history stays. It then queues the run like a manual run and writes one best-effort Core audit row (action add, object_type scheduler_run). Just before the handler runs, Core re-checks that the user is still active and still holds the action and the scope; if not the run ends skipped with a plain reason and an audit row, and the handler never runs. The handler context gains owner_type, owner_module, owner_key, owner_user_id, owner_username (the user fields only for a one-off run and a user-owned schedule, otherwise None) and one_off (see the scheduler docs). This is the start-and-track call, not the system-action contract (registered Tactical actions run in-process as the owner, still open). Call it outside an uncommitted database transaction. Requires framework >=1.17.16. Since 1.17.17 the action's permission may be a Tactical role flag or an any-of list (see register_scheduled_action), the flag is read again just before the handler runs, and the run cannot be repeated from the browser: POST /api/tfd/scheduler/schedules/<id>/run/ refuses every one-off schedule with 403, for any caller, so a second user cannot queue a run under the first user's identity.",
         "audience": "provider/backend",
     },
     {
@@ -601,6 +613,44 @@ CORE_CONTRACTS = (
         "kind": "python",
         "purpose": "SchedulerNotAllowed (1.17.16): raised by start_one_off_run when the user may not run the action or touch the targets. A subclass of SchedulerError.",
         "audience": "provider/backend",
+    },
+    {
+        "area": "server-maintenance",
+        "import_path": "tec_tac.server_maintenance",
+        "name": "get_server_maintenance_provider",
+        "kind": "python",
+        "purpose": (
+            "The provider behind capability core.server_maintenance, now 1.1.0 (1.0.0 until 1.17.16; still major 1, additive; ask for >=1.1,<2 and framework >=1.17.17). "
+            "start(*, action, parameters=None, context, user=None) and cancel(*, job_id, context, user=None) take a user. An action manifest may carry permission "
+            "(a Tec-Tac extension permission code) and owner_module (the module that owns it). When an action declares a permission, start() needs a user who holds it "
+            "(a superuser passes, AD-10); no user, a failed lookup, an unknown code or a missing grant raises ServerMaintenancePermissionDenied (classification "
+            "permission_denied), writes a best-effort Core audit row (action deny, object_type server_maintenance_action; it never carries the parameters) and creates "
+            "no job file. cancel() applies the same check against the permission the job's action had when it started (jobs written before 1.17.17 use the registry's "
+            "permission now). A permissioned action whose owner_module is not enabled is refused with classification action_disabled. An action with no permission, and "
+            "a caller that passes no user, behave as in 1.17.16. start(parameters=None) now means no parameters (before 1.17.17 it was refused as 'parameters must be "
+            "an object'). list_actions rows add permission and owner_module (null when absent); job rows add permission. POST /api/tfd/system/maintenance/jobs/ and the "
+            "cancel route keep requiring core.privileged_operations and, for a permissioned action, its permission as well (403 naming the permission); the action list "
+            "and the job list and detail routes hide permissioned actions and their jobs from a caller who lacks it. "
+            "A signed module registers its own actions from its manifest key server_maintenance_actions (see the manifest-key rule for 1.17.17). "
+            "Requires framework >=1.17.17."
+        ),
+        "audience": "provider/backend",
+    },
+    {
+        "area": "server-maintenance",
+        "import_path": "tec_tac.server_maintenance",
+        "name": "ServerMaintenancePermissionDenied",
+        "kind": "python",
+        "purpose": "ServerMaintenancePermissionDenied (1.17.17): raised by start() and cancel() when the caller does not hold the permission the action declares. A subclass of ServerMaintenanceError with classification permission_denied and a permission attribute naming the code to ask an administrator for.",
+        "audience": "consumer/backend",
+    },
+    {
+        "area": "server-maintenance",
+        "import_path": "tec_tac.server_maintenance",
+        "name": "holds_action_permission",
+        "kind": "python",
+        "purpose": "holds_action_permission(user, permission) -> bool (1.17.17): may this user use an action that declares permission? No permission means yes; otherwise the user must hold it through the Tec-Tac role grants (a superuser passes). No user, a failed lookup and an unknown code are False. The same test start() and cancel() apply, for a module that wants to hide an action it lists.",
+        "audience": "consumer/backend",
     },
 )
 
@@ -749,6 +799,7 @@ HTTP_CONTRACT_DETAILS = {
             "authorization": "authenticated Tec-Tac session",
             "response": {
                 "module_register_timeout_seconds": "integer, added in 1.17.1. Seconds the UI lets a module's register() run before it marks the module failed and loads the next. Default 30, range 5 to 300. Additive: older UI builds ignore it.",
+                "tactical_scope": "object, added in 1.17.17: the signed-in user's Tactical client and site scope as {mode, unrestricted, whole_client_count, site_count}. mode is unrestricted, clients, sites, mixed or none. It carries counts only, never id lists, so the startup payload stays small; the ids stay in the Python contract (core.resources scope_descriptor). It is built from the same descriptor as core.resources 1.4.0. An installer user, a user with no role and any lookup failure give mode none and unrestricted false. It is a hint for the UI: Tactical still decides every call. Additive: older UI builds ignore it. The UI exposes it in register(context).context in a later UI release.",
                 "tactical_permissions": "object, added in 1.17.7: every boolean can_* field on Tactical's Role mapped to true or false for the signed-in user, for example {\"can_reboot_agents\": true}. A superuser or role superuser has every flag true. An installer user, a user with no role and any lookup failure have every flag false. It uses only the user's own role and adds no Tec-Tac permission. It is a hint for the UI: Tactical still decides every call. Additive: older UI builds ignore it.",
                 "module_status[].replaces": "string|null, added in 1.17.11: the core or server module id the module's manifest declares it replaces (AD-20), null for a module that declares none and for a legacy plugin. The declared value, not the honoured one. A replacement enabled next to the module it replaces is reported with enabled false and active false. Additive: older UI builds ignore it.",
                 "module_status[].description": "string|null, added in 1.17.16: the plain-text description the module's manifest declares (1 to 500 characters), null when it declares none and for a legacy plugin. Additive: older UI builds ignore it.",
@@ -1354,6 +1405,7 @@ RULES = (
     "A core or server module that declares `capabilities` in tec_tac.json must register exactly the capability ids it declares, and a replacement must register at the declared major version with a minor.patch that is not lower (since 1.17.10; server modules since 1.17.11). Core does not register anything else: it logs one warning, registers nothing, drops an earlier registration of the same id by the same module (1.17.11) and never raises out of AppConfig.ready(). A module with no `capabilities` key is unchanged.",
     "A Tactical call that must be audited (reboot, Wake-on-LAN, report changes, code signing) is declared once by the owning core module with tec_tac.tactical_operations.register_tactical_operation and run through core.tactical_operations (POST /api/tfd/tactical-operations/<module_id>/<operation_id>/ or the capability's run). Core writes the audit row where the call happens, so the browser cannot misreport it. The browser-declared audit_events path is deprecated since 1.17.7 for declared events (see docs/module-audit.md for the replacement of each event).",
     "Manifest keys added in 1.17.16: routes {prefix, urlconf} lets Core serve the module's urlconf at /api/tfd/<prefix>/ instead of the module appending to tacticalrmm.urls or tec_tac.urls (see tec_tac.route_mounting.mounted_routes; the old append keeps working); description is a plain text of 1 to 500 characters with no control characters, shown on the module catalogue and runtime rows as description (null when absent). Neither is required. A module that uses routes requires framework >=1.17.16.",
+    "Manifest key added in 1.17.17: server_maintenance_actions (extensions only, at most 16 entries) lets a signed module register its own Core server-maintenance actions when it is installed, with no manual root script. Each entry is {id, description, permission, executable, argv, parameters, timeout_seconds, success_exit_codes, revision} and may add protected: true. id must begin with <module_id>.; permission is required and must be one the same module declares in permission_groups; executable is a file below the module's server_maintenance/actions/ folder (relative, no .., no symlink); argv entries are literal strings or {param: name} and parameters are typed (string, integer, boolean or enum), so there is no shell text; the module must also declare publisher_permissions server_maintenance.register, which the publisher that signs the package must hold (AD-10). Core's root job helpers call the root server-maintenance helper after the module files are installed and the runtime is synced: it re-checks the root-owned installed manifest, copies each executable into the Core action root as a root-owned 0755 file (an action never runs from the module folder), records its SHA-256 (dispatch and run check it again, so a changed executable stops the action), and removes the module's actions that a newer manifest no longer declares. Uninstalling the module removes its actions and executables; disabling does not, but start() refuses a permissioned action whose owner module is not enabled. A hotfix that changes an executable does not re-register: the action stops until the module is installed again. Actions marked protected: true are never registered automatically. The Tactical account's sudo rule still reaches only --dispatch and --cancel. Capability core.server_maintenance 1.1.0, requires framework >=1.17.17. The module validator under pipeline/ must learn the key before it accepts a manifest that carries it.",
     "Use Python tec_tac.* contracts inside the Tec-Tac/Tactical backend; use HTTP only at browser/external process boundaries.",
     "UI modules must use the documented browser contracts passed to register(context) or registerPublic(context); do not import Core UI internals or read Tactical authentication storage.",
     "Swagger grouping is Core-owned: installed extension endpoints are grouped from their registered Django app ownership even when the URL prefix differs from the module ID. Module manifests may declare a readable name and category=core, server, premium or test (premium and test since 1.17.13); groups are named Core module · <name>, Server module · <name> or Module · <name>. Core HTTP surfaces use explicit subsystem groups, module callback ownership wins over path prefixes, and there is no generic Framework catch-all.",
@@ -1631,6 +1683,8 @@ def render_markdown(catalog: dict | None = None) -> str:
         "```",
         "",
         "Backend-owned recurring definitions should use `reconcile_schedule(...)` rather than importing TecTacSchedule directly.",
+        "",
+        "`permission` is a Tec-Tac permission code, a Tactical role flag written `tactical:can_manage_winupdates`, or a list of those (any-of, at most 8). Requires framework >=1.17.17 for the `tactical:` form and the list.",
         "",
     ])
     return "\n".join(out)

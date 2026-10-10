@@ -135,7 +135,18 @@ Scheduler API endpoints require an authenticated Tactical session.
 A user may manage an action when either:
 
 - the user/effective Tactical role has server-maintenance/superuser scheduler management authority; or
-- the action declares an extension permission and the user's effective Tec-Tac extension permissions include it.
+- the action declares a permission and the user holds it. Since 1.17.17 the permission is a Tec-Tac extension permission, a Tactical role flag, or a list of those (any-of).
+
+An action's `permission` takes these forms:
+
+| Form | Meaning |
+|---|---|
+| `"patching.run"` | A Tec-Tac extension permission (the form before 1.17.17). |
+| `"tactical:can_manage_winupdates"` | A Tactical role flag. The user holds it the way Tactical's own `_has_perm` reads it: a Django superuser or role superuser has every flag, a Tactical installer user and a user with no role have none. |
+| `["patching.run", "tactical:can_manage_winupdates"]` (or a tuple) | **any-of**: the user needs one entry. Tec-Tac codes and `tactical:` flags may be mixed. One to 8 entries, no duplicates, each a non-empty string. A list of one entry reads as that entry. |
+| `None` | Native scheduler managers only. |
+
+Registration checks the shape only (`tactical:` must be followed by `can_` and lowercase letters, digits or underscore) and raises `SchedulerError` for a bad shape. A flag or code that does not exist is caught when the action is used: nobody but a scheduler manager passes, and Core logs it (fail closed). An error on one entry never blocks the next. `GET /api/tfd/scheduler/actions/` shows `permission` (the single entry, or the entries joined with ` | `) and `permission_any` (the list, empty for a single entry). Requires framework >=1.17.17. This adds no Tec-Tac permission.
 
 The framework checks this when schedules are listed/created/edited/deleted or manually executed. Deleting a schedule re-checks the action permission at deletion time; ownership alone is not sufficient.
 
@@ -279,7 +290,7 @@ What Core checks, in order:
 1. The user is active and not an installer user.
 2. The action is registered and `action.module_id == owner_module`. A module starts only its own actions.
 3. The targets pass the usual target checks and the action's `target_types`.
-4. The user holds the action now. An action with no permission is startable only by native scheduler managers, the same rule as the browser.
+4. The user holds the action now (any entry of an any-of permission, a `tactical:` flag included). An action with no permission is startable only by native scheduler managers, the same rule as the browser.
 5. The user holds the targets' Tactical scope now.
 
 A failure at 1, 4 or 5 raises `SchedulerNotAllowed`. The others raise `SchedulerError`. If the run cannot be queued, Core removes the schedule it made and raises `SchedulerTransientError`.
@@ -288,9 +299,11 @@ What Core creates: one schedule owned by the module with `owner_key` `one-off:<u
 
 Call it outside a database transaction that has not committed: the worker reads the run as soon as it is queued.
 
+Since 1.17.17 a one-off schedule cannot be run again from the browser. `POST /api/tfd/scheduler/schedules/<id>/run/` refuses it with 403 ("This one-off run is managed by module X and cannot be run again.") before any other check, for every caller including a scheduler manager. The run belongs to the user it was started for, so a second user can never queue a run under that user's identity, and one run cannot be repeated. The `owner_key` prefix `one-off:` is reserved to Core: `reconcile_schedule` raises `SchedulerError` for a key that starts with it, so only `start_one_off_run` can make a one-off schedule. `disable_owned_schedule` and `remove_owned_schedule` are unchanged.
+
 ### The owner is re-checked before the handler (AD-13 condition 2)
 
-A run's authority is the user it was started for, and it does not outlive that user's access. Just before the handler runs, Core checks again that the user is still active, still holds the action, and still holds the targets' scope. If not, the run ends `skipped` with a plain reason (`error_type` `AuthorizationRevoked`) and an audit row, and the handler never runs. A check that cannot be made counts as a refusal. It never raises into Celery.
+A run's authority is the user it was started for, and it does not outlive that user's access. Just before the handler runs, Core checks again that the user is still active, still holds the action (a `tactical:` flag is read from the role again), and still holds the targets' scope. If not, the run ends `skipped` with a plain reason (`error_type` `AuthorizationRevoked`) and an audit row, and the handler never runs. A check that cannot be made counts as a refusal. It never raises into Celery.
 
 ### More in the handler context
 

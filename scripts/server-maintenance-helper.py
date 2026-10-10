@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import fcntl
 import grp
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -46,6 +48,7 @@ CONFIG = _installed_config_path()
 DEFAULT_STATE_ROOT = Path("/var/lib/tec-tac/server-maintenance")
 DEFAULT_REGISTRY_ROOT = Path("/etc/tec-tac/server-maintenance/actions.d")
 DEFAULT_ACTION_ROOT = Path("/usr/local/lib/tec-tac/server-maintenance/actions")
+DEFAULT_EXTENSIONS_ROOT = Path("/opt/tec-tac/extensions")
 
 
 def _root_owned_layout():
@@ -89,6 +92,7 @@ try:
     STATE_ROOT = _trusted_root(_ROOT_LAYOUT, "TEC_TAC_SERVER_MAINTENANCE_ROOT", DEFAULT_STATE_ROOT)
     REGISTRY_ROOT = _trusted_root(_ROOT_LAYOUT, "TEC_TAC_SERVER_MAINTENANCE_REGISTRY_ROOT", DEFAULT_REGISTRY_ROOT)
     ACTION_ROOT = _trusted_root(_ROOT_LAYOUT, "TEC_TAC_SERVER_MAINTENANCE_ACTION_ROOT", DEFAULT_ACTION_ROOT)
+    EXTENSIONS_ROOT = _trusted_root(_ROOT_LAYOUT, "TEC_TAC_EXTENSIONS_ROOT", DEFAULT_EXTENSIONS_ROOT)
 except (OSError, UnicodeError, RuntimeError, ValueError) as exc:
     # Keep imports/diagnostics safe while ensuring every privileged operation
     # fails closed through load_config() when the root-owned config is invalid.
@@ -97,6 +101,7 @@ except (OSError, UnicodeError, RuntimeError, ValueError) as exc:
     STATE_ROOT = DEFAULT_STATE_ROOT
     REGISTRY_ROOT = DEFAULT_REGISTRY_ROOT
     ACTION_ROOT = DEFAULT_ACTION_ROOT
+    EXTENSIONS_ROOT = DEFAULT_EXTENSIONS_ROOT
 JOBS_ROOT = STATE_ROOT / "jobs"
 CANCEL_ROOT = STATE_ROOT / "cancel-requests"
 LOGS_ROOT = STATE_ROOT / "logs"
@@ -106,7 +111,21 @@ LOCK_FILE = STATE_ROOT / "server-maintenance.lock"
 ACTION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 JOB_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 ALLOWED_PARAMETER_TYPES = {"string", "integer", "boolean", "enum"}
+# 1.17.17: an action manifest may carry the Tec-Tac permission a caller needs (checked by Core's Python side) and the owning module
+PERMISSION_CODE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,149}$")
+OWNER_MODULE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$")
 MAX_TIMEOUT_SECONDS = 7 * 24 * 60 * 60
+# 1.17.17: actions a signed module registers from its manifest (--register-module). Everything below is root-only.
+MODULE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+MODULE_ACTIONS_KEY = "server_maintenance_actions"
+MODULE_ACTIONS_MAX = 16
+MODULE_EXECUTABLE_PREFIX = "server_maintenance/actions/"
+MODULE_REGISTER_PERMISSION = "server_maintenance.register"
+MODULE_ACTION_KEYS = frozenset({"id", "description", "permission", "executable", "argv", "parameters", "timeout_seconds", "success_exit_codes", "revision", "protected"})
+MAX_MODULE_MANIFEST_BYTES = 1024 * 1024
+MAX_MODULE_EXECUTABLE_BYTES = 64 * 1024 * 1024
+ROOT_UID = 0
 _cancel_requested = False
 _child = None
 
@@ -329,6 +348,12 @@ def validate_manifest(payload, *, require_executable=True):
             pass
         else:
             raise RuntimeError("registered argv entries must be literal strings or {'param': '<registered-name>'}")
+    permission = payload.get("permission")
+    if permission is not None and (not isinstance(permission, str) or not PERMISSION_CODE_RE.fullmatch(permission)):
+        raise RuntimeError("action permission must be a Tec-Tac permission code")
+    owner_module = payload.get("owner_module")
+    if owner_module is not None and (not isinstance(owner_module, str) or not OWNER_MODULE_RE.fullmatch(owner_module)):
+        raise RuntimeError("action owner_module must be a module id")
     timeout = int(payload.get("timeout_seconds") or 3600)
     if timeout < 1 or timeout > MAX_TIMEOUT_SECONDS:
         raise RuntimeError("action timeout_seconds is outside the allowed range")
@@ -348,6 +373,21 @@ def validate_manifest(payload, *, require_executable=True):
     }
 
 
+def verify_registered_executable_hash(manifest):
+    """An action a module registered carries the SHA-256 of the executable Core copied (1.17.17). Dispatch and run read it back and
+    compare, so an executable that changed since registration fails closed. A hotfix that changes an executable does not re-register,
+    so the hash fails and the action stops until the module is installed again. Actions an administrator registered by hand carry no
+    hash and are checked as before."""
+    expected = manifest.get("executable_sha256")
+    if manifest.get("registered_by") != "module-manifest" and expected is None:
+        return
+    if not isinstance(expected, str) or not SHA256_RE.fullmatch(expected):
+        raise RuntimeError("registered action has no valid executable_sha256")
+    actual = _sha256_nofollow(Path(manifest["executable"]))
+    if not hmac.compare_digest(actual, expected):
+        raise RuntimeError("registered action executable no longer matches its registered SHA-256; install the module again to register it")
+
+
 def action_path(action_id):
     if not ACTION_ID_RE.fullmatch(str(action_id or "")):
         raise RuntimeError("invalid action id")
@@ -365,6 +405,7 @@ def load_action(action_id):
         raise RuntimeError("registered action id does not match its filename")
     if not manifest["enabled"]:
         raise RuntimeError("registered action is disabled")
+    verify_registered_executable_hash(manifest)
     return manifest
 
 
@@ -446,6 +487,270 @@ def unregister_manifest(action_id):
     if path.exists():
         path.unlink()
     append_audit("action.unregistered", detail={"action": str(action_id)})
+
+
+# ---------------------------------------------------------------------------------------------------------------- module actions
+def _untrusted(st):
+    """Not root-owned, or writable by a group or anyone else (the test of privileged-trust._require_root_owned_nonwritable)."""
+    return st.st_uid != ROOT_UID or bool(st.st_mode & 0o022)
+
+
+def _module_id(value):
+    if not isinstance(value, str) or not MODULE_ID_RE.fullmatch(value):
+        raise RuntimeError("module id is invalid")
+    return value
+
+
+def _require_trusted_path(path, label, *, directory=False):
+    """lstat, never follow: the path is a real file or directory, root-owned and not group or world writable."""
+    try:
+        st = os.lstat(path)
+    except OSError as exc:
+        raise RuntimeError(f"{label} is not available: {path}") from exc
+    if stat.S_ISLNK(st.st_mode):
+        raise RuntimeError(f"{label} may not be a symlink: {path}")
+    if not (stat.S_ISDIR(st.st_mode) if directory else stat.S_ISREG(st.st_mode)):
+        raise RuntimeError(f"{label} is not a {'directory' if directory else 'regular file'}: {path}")
+    if _untrusted(st):
+        raise RuntimeError(f"{label} must be root-owned and not group/world writable: {path}")
+
+
+def _read_trusted_file(path, label, *, max_bytes):
+    """Read one regular file with no symlink following. Its owner and mode are checked on the open descriptor, so a swap after
+    the check cannot change what is read."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise RuntimeError(f"{label} is not readable: {path}") from exc
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise RuntimeError(f"{label} is not a regular file: {path}")
+        if _untrusted(st):
+            raise RuntimeError(f"{label} must be root-owned and not group/world writable: {path}")
+        if st.st_size > max_bytes:
+            raise RuntimeError(f"{label} is larger than {max_bytes} bytes: {path}")
+        with os.fdopen(os.dup(fd), "rb") as handle:
+            return handle.read(max_bytes + 1)
+    finally:
+        os.close(fd)
+
+
+def _sha256_nofollow(path):
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
+    fd = os.open(path, flags)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise RuntimeError(f"registered action executable is not a regular file: {path}")
+        digest = hashlib.sha256()
+        with os.fdopen(os.dup(fd), "rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(block)
+        return digest.hexdigest()
+    finally:
+        os.close(fd)
+
+
+def _write_root_file(path, data, mode):
+    """Atomically write root-owned bytes: unique temp file, mode and owner set before the rename, no symlink followed."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp, mode)
+        if os.geteuid() == 0:
+            os.chown(tmp, 0, 0)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _module_actions_from_manifest(module_id, payload):
+    """The same rules registry.py applies when the package is installed, applied again here to the root-owned installed manifest
+    (never to job metadata). Returns (version, actions)."""
+    if str(payload.get("id", module_id)) != module_id:
+        raise RuntimeError("installed manifest id does not match the module folder")
+    if str(payload.get("type", "extension")) != "extension":
+        raise RuntimeError("only an extension may register server-maintenance actions")
+    raw = payload.get(MODULE_ACTIONS_KEY)
+    version = str(payload.get("version", "0.0.0")).strip() or "0.0.0"
+    if raw is None:
+        return version, []
+    if not isinstance(raw, list) or len(raw) > MODULE_ACTIONS_MAX:
+        raise RuntimeError(f"{MODULE_ACTIONS_KEY} must be an array of at most {MODULE_ACTIONS_MAX} entries")
+    if not raw:
+        return version, []
+    publisher = payload.get("publisher_permissions") or []
+    if not isinstance(publisher, list) or MODULE_REGISTER_PERMISSION not in publisher:
+        raise RuntimeError(f"module {module_id} must declare publisher_permissions {MODULE_REGISTER_PERMISSION!r} to register actions")
+    groups = payload.get("permission_groups") or {}
+    declared = {str(code) for codes in groups.values() if isinstance(codes, list) for code in codes} if isinstance(groups, dict) else set()
+    actions, seen = [], set()
+    for entry in raw:
+        if not isinstance(entry, dict) or set(entry) - MODULE_ACTION_KEYS:
+            raise RuntimeError("a server-maintenance action entry must be an object with only the documented keys")
+        action_id = entry.get("id")
+        if not isinstance(action_id, str) or not ACTION_ID_RE.fullmatch(action_id):
+            raise RuntimeError("a server-maintenance action id is invalid")
+        if not action_id.startswith(module_id + ".") or action_id == module_id + ".":
+            raise RuntimeError(f"action id {action_id!r} must start with {module_id + '.'!r}")
+        if action_id in seen:
+            raise RuntimeError(f"action {action_id!r} is declared twice")
+        seen.add(action_id)
+        permission = entry.get("permission")
+        if not isinstance(permission, str) or permission not in declared:
+            raise RuntimeError(f"action {action_id!r} needs a permission the module declares in permission_groups")
+        executable = entry.get("executable")
+        if not isinstance(executable, str) or not executable or "\x00" in executable or "\\" in executable or executable.startswith("/"):
+            raise RuntimeError(f"action {action_id!r} executable must be a relative path inside the module folder")
+        parts = executable.split("/")
+        if any(part in ("", ".", "..") for part in parts) or not executable.startswith(MODULE_EXECUTABLE_PREFIX) or len(parts) < 3:
+            raise RuntimeError(f"action {action_id!r} executable must be a file below {MODULE_EXECUTABLE_PREFIX}")
+        protected = entry.get("protected", False)
+        if not isinstance(protected, bool):
+            raise RuntimeError(f"action {action_id!r} protected must be true or false")
+        actions.append({**entry, "protected": protected})
+    return version, actions
+
+
+def _module_managed(action_id):
+    """True when the registry file of this action was written by --register-module (not registered by hand)."""
+    try:
+        payload = json.loads(action_path(action_id).read_text(encoding="utf-8"))
+    except (OSError, ValueError, RuntimeError):
+        return False
+    return isinstance(payload, dict) and payload.get("registered_by") == "module-manifest"
+
+
+def _remove_owned_actions(module_id, *, keep=()):
+    """Delete the registry files whose owner_module is this module, except the ids in ``keep``. Returns the removed ids."""
+    removed = []
+    if not REGISTRY_ROOT.is_dir():
+        return removed
+    for path in sorted(REGISTRY_ROOT.glob("*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(payload, dict) or payload.get("owner_module") != module_id:
+            continue
+        action_id = str(payload.get("id") or path.stem)
+        if action_id in keep:
+            continue
+        path.unlink(missing_ok=True)
+        removed.append(action_id)
+        append_audit("action.unregistered", detail={"action": action_id, "module": module_id})
+    return removed
+
+
+def register_module(module_id):
+    """Register the server-maintenance actions an installed module declares (1.17.17, ``--register-module <module-id>``).
+
+    Reads ``<extensions root>/<module>/tec_tac.json``, which must be root-owned and not group or world writable, checks the
+    declared actions again, copies each executable into the Core action root under ``<module-id>/`` as a root-owned 0755 file (an
+    action never runs from the module folder), records the SHA-256, owner_module, permission and version in the registry JSON, and
+    removes the registry files of this module that the manifest no longer declares, so an upgrade drops stale actions. Actions
+    marked ``protected: true`` are not registered. Only the root module job helpers call this; the Tactical account's sudo rule
+    does not reach it."""
+    module_id = _module_id(module_id)
+    ensure_layout()
+    folder = EXTENSIONS_ROOT / module_id
+    _require_trusted_path(folder, "installed module folder", directory=True)
+    raw = _read_trusted_file(folder / "tec_tac.json", "installed module manifest", max_bytes=MAX_MODULE_MANIFEST_BYTES)
+    if len(raw) > MAX_MODULE_MANIFEST_BYTES:
+        raise RuntimeError("installed module manifest is too large")
+    version, actions = _module_actions_from_manifest(module_id, json.loads(raw.decode("utf-8")))
+    # Phase 1: read and check every executable before anything is changed.
+    staged = []
+    for action in actions:
+        if action["protected"]:
+            append_audit("action.skipped_protected", detail={"action": action["id"], "module": module_id})
+            continue
+        relative = action["executable"]
+        current = folder
+        parts = relative.split("/")
+        for index, part in enumerate(parts):
+            current = current / part
+            _require_trusted_path(current, f"action {action['id']} executable path", directory=index < len(parts) - 1)
+        data = _read_trusted_file(current, f"action {action['id']} executable", max_bytes=MAX_MODULE_EXECUTABLE_BYTES)
+        if len(data) > MAX_MODULE_EXECUTABLE_BYTES:
+            raise RuntimeError(f"action {action['id']} executable is too large")
+        # The typed rules (argv, parameters, timeout, exit codes, permission) are applied before anything is copied.
+        validate_manifest({
+            "id": action["id"], "executable": str(ACTION_ROOT / module_id / relative[len(MODULE_EXECUTABLE_PREFIX):]), "argv": action.get("argv") or [],
+            "parameters": action.get("parameters") or {}, "timeout_seconds": action.get("timeout_seconds", 3600),
+            "success_exit_codes": action.get("success_exit_codes", [0]), "permission": action["permission"], "owner_module": module_id,
+        }, require_executable=False)
+        existing = action_path(action["id"])
+        if existing.is_file():
+            try:
+                owner = json.loads(existing.read_text(encoding="utf-8")).get("owner_module")
+            except (OSError, ValueError):
+                owner = None
+            if isinstance(owner, str) and owner and owner != module_id:
+                raise RuntimeError(f"action {action['id']} is already registered by module {owner}")
+        staged.append((action, relative[len(MODULE_EXECUTABLE_PREFIX):], data))
+    # Phase 2: copy the executables, then write the registry files (atomic, root-owned), then drop what the manifest dropped.
+    target_root = ACTION_ROOT / module_id
+    target_root.mkdir(parents=True, exist_ok=True)
+    if os.geteuid() == 0:
+        os.chown(target_root, 0, 0)
+    os.chmod(target_root, 0o755)
+    registered, wanted_files = [], set()
+    for action, subpath, data in staged:
+        target = target_root / subpath
+        if not target.resolve().is_relative_to(target_root.resolve()):
+            raise RuntimeError(f"action {action['id']} executable would leave the module action folder")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _write_root_file(target, data, 0o755)
+        wanted_files.add(target.resolve())
+        manifest = validate_manifest({
+            "id": action["id"], "revision": str(action.get("revision") or "1"), "description": str(action.get("description") or ""),
+            "executable": str(target), "argv": action.get("argv") or [], "parameters": action.get("parameters") or {},
+            "timeout_seconds": action.get("timeout_seconds", 3600), "success_exit_codes": action.get("success_exit_codes", [0]), "enabled": True,
+            "permission": action["permission"], "owner_module": module_id, "owner_version": version,
+            "executable_sha256": hashlib.sha256(data).hexdigest(), "registered_by": "module-manifest",
+        })
+        _write_root_file(action_path(action["id"]), (json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n").encode("utf-8"), 0o644)
+        append_audit("action.registered", detail={"action": manifest["id"], "revision": manifest["revision"], "module": module_id, "module_version": version,
+                                                   "executable_sha256": manifest["executable_sha256"], "permission": manifest["permission"]})
+        registered.append(manifest["id"])
+    # Stale actions: the registry files this module owns that the manifest no longer declares. A protected action stays only when an
+    # administrator registered it by hand; one an earlier version registered from the manifest is dropped.
+    keep = {action["id"] for action in actions if not action["protected"]}
+    keep |= {action["id"] for action in actions if action["protected"] and not _module_managed(action["id"])}
+    removed = _remove_owned_actions(module_id, keep=keep)
+    # Stale executables: nothing under the module's action folder that no registered action points at.
+    for path in sorted(target_root.rglob("*"), reverse=True):
+        if path.is_file() or path.is_symlink():
+            if path.resolve() not in wanted_files:
+                path.unlink(missing_ok=True)
+        elif path.is_dir():
+            try:
+                path.rmdir()
+            except OSError:
+                pass
+    append_audit("module.actions_registered", detail={"module": module_id, "module_version": version, "actions": registered, "removed": removed})
+    print(",".join(registered))
+
+
+def unregister_module(module_id):
+    """Remove every action and executable a module owns (1.17.17, ``--unregister-module <module-id>``): the registry files whose
+    owner_module is the module and the module's own folder under the Core action root. Nothing of another module's."""
+    module_id = _module_id(module_id)
+    removed = _remove_owned_actions(module_id)
+    folder = ACTION_ROOT / module_id
+    if folder.is_symlink():
+        folder.unlink()
+    elif folder.is_dir():
+        shutil.rmtree(folder)
+    append_audit("module.actions_unregistered", detail={"module": module_id, "actions": removed})
+    print(",".join(removed))
 
 
 def _systemd_unit(job_id):
@@ -674,7 +979,7 @@ def cancel_job(job_id):
         append_audit("job.cancelled", job=current)
 
 def usage():
-    raise SystemExit("usage: tec-tac-server-maintenance --dispatch|--run|--cancel <job-id> | --register <manifest.json> | --unregister <action-id>")
+    raise SystemExit("usage: tec-tac-server-maintenance --dispatch|--run|--cancel <job-id> | --register <manifest.json> | --unregister <action-id> | --register-module|--unregister-module <module-id>")
 
 
 def main():
@@ -688,6 +993,8 @@ def main():
     elif mode == "--cancel": cancel_job(value)
     elif mode == "--register": register_manifest(value)
     elif mode == "--unregister": unregister_manifest(value)
+    elif mode == "--register-module": register_module(value)
+    elif mode == "--unregister-module": unregister_module(value)
     else: usage()
 
 

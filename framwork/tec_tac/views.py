@@ -59,6 +59,7 @@ from .account_self_service import tactical_ui_context
 from .session_security import SessionAuthenticated, _audit
 from .trust_policy import TrustPolicyError, LEVEL_RANK, console_guidance as trust_policy_console_guidance, get_policy as get_update_trust_policy, set_policy as set_update_trust_policy
 
+from . import resources_adapter
 from .rbac import (
     CORE_PRIVILEGED_PERMISSION,
     can_manage_privileged_operations,
@@ -98,6 +99,22 @@ def _role_for_user(user):
         return user.get_and_set_role_cache()
     except Exception:
         return getattr(user, "role", None)
+
+
+def _tactical_scope_context(user) -> dict:
+    """The signed-in user's Tactical client and site scope for the browser (1.17.17): the mode and counts only, never id lists,
+    so the startup payload stays small. The ids stay in the Python contract (``core.resources.scope_descriptor``). Built from
+    the same descriptor. An installer user, no role and any failure give mode ``none``."""
+    try:
+        scope = resources_adapter.role_scope_descriptor(user)
+        return {
+            "mode": str(scope["mode"]),
+            "unrestricted": bool(scope["unrestricted"]),
+            "whole_client_count": int(scope["whole_client_count"]),
+            "site_count": int(scope["site_count"]),
+        }
+    except Exception:
+        return {"mode": "none", "unrestricted": False, "whole_client_count": 0, "site_count": 0}
 
 
 def _native_capabilities(user, role=None):
@@ -395,6 +412,7 @@ class UiContextView(APIView):
                 **_runtime_localization(request),
                 "tactical_ui": tactical_ui_context(request.user),
                 "tactical_permissions": tactical_permission_catalog(request.user),
+                "tactical_scope": _tactical_scope_context(request.user),
                 "tactical_web_ui": _tactical_web_ui_context(),
                 "preferences_initialized": preferences_initialized,
                 "preferences_updated_at": preferences_updated_at,

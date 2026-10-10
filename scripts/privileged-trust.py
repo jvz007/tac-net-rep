@@ -592,6 +592,22 @@ def verify_package(package: Path, signature: Path | None, metadata: Path | None)
         required_permissions=required, require_signed=False,
         trust_root=TRUST_ROOT, server_environment=_environment(cfg),
     )
+    # 1.17.17: a permission beyond module.install (server_maintenance.register leads to root code execution) is never granted to an
+    # unsigned package, whatever the policy floor or the development override says. Same rule as verify_hotfix.
+    if set(required) - {"module.install"} and not trust.get("signed"):
+        PublisherTrustError, _, _ = _imports()
+        raise PublisherTrustError(
+            "This package declares a publisher permission that requires a trusted publisher signature.",
+            code="signature_required",
+        )
+    approved = {str(v).strip() for v in (trust.get("approved_permissions") or []) if str(v).strip()}
+    missing = sorted(set(required) - approved) if trust.get("signed") else []
+    if missing:
+        PublisherTrustError, _, _ = _imports()
+        raise PublisherTrustError(
+            "Publisher policy does not grant required permission(s): " + ", ".join(missing),
+            code="publisher_permission_denied",
+        )
     trust = enforce_policy(trust, kind='package')
     trust['artifact_modules'] = _artifact_modules_from_archive(Path(package))
     trust['artifact_package_files'] = _artifact_bundle_package_files(Path(package))

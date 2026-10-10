@@ -37,7 +37,7 @@ import tec_tac.capabilities as cap
 import tec_tac.server_maintenance as sm
 cap._clear_capabilities_for_tests()
 reg=sm.register_core_server_maintenance_capability()
-assert reg.id=="core.server_maintenance" and reg.version=="1.0.0"
+assert reg.id=="core.server_maintenance" and reg.version=="1.1.0"
 assert {"start","get_job","cancel","list_jobs"} <= set(reg.operations)
 assert reg.metadata["arbitrary_shell"] is False and reg.metadata["global_lock"] is True
 

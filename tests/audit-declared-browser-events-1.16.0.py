@@ -430,9 +430,10 @@ finally:
 # --- Registry parsing ---------------------------------------------------------------------------
 assert "audit_events" in registry.SUPPORTED_KEYS
 fields = list(registry.PluginSpec.__dataclass_fields__)
-# new fields are only ever appended: audit_events (1.16.0) still follows legacy, the 1.17.9 AD-20 fields follow it, and the 1.17.16 fields (routes, description) follow those
-assert fields[-7] == "audit_events" and fields[-8] == "legacy" and fields[-6:-3] == ["replaces", "capabilities", "capabilities_declared"]
-assert fields[-3:] == ["route_prefix", "route_urlconf", "description"]
+# new fields are only ever appended: audit_events (1.16.0) still follows legacy, the 1.17.9 AD-20 fields follow it, the 1.17.16 fields (routes, description) follow those,
+# and server_maintenance_actions (1.17.17) comes last
+assert fields[-8] == "audit_events" and fields[-9] == "legacy" and fields[-7:-4] == ["replaces", "capabilities", "capabilities_declared"]
+assert fields[-4:-1] == ["route_prefix", "route_urlconf", "description"] and fields[-1] == "server_maintenance_actions"
 assert registry.PluginSpec(plugin_id="x", plugin_type="extension", root=ROOT).audit_events == ()
 
 

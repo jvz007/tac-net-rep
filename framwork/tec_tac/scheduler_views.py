@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, time, timedelta
 from uuid import UUID
 
@@ -16,11 +17,14 @@ from .session_security import SessionAuthenticated
 from rest_framework.exceptions import NotFound, PermissionDenied
 
 from .models import TecTacSchedule, TecTacScheduleRun, TecTacSchedulerConfig
-from .rbac import has_extension_permission
+from .rbac import has_extension_permission, has_tactical_permission
 from . import resources_adapter
 from .scheduler import (
+    TACTICAL_PERMISSION_PREFIX,
     SchedulerError,
     get_scheduled_action,
+    is_one_off_schedule,
+    is_tactical_permission_entry,
     queue_manual_run,
     scheduled_actions,
     serialize_action,
@@ -31,6 +35,8 @@ from .scheduler import (
 )
 from .views import _role_for_user
 
+logger = logging.getLogger("tec_tac.scheduler")
+
 
 def _native_scheduler_manager(user) -> bool:
     role = _role_for_user(user)
@@ -40,12 +46,20 @@ def _native_scheduler_manager(user) -> bool:
 def _can_use_action(user, action) -> bool:
     if _native_scheduler_manager(user):
         return True
-    if not action.permission:
-        return False
-    try:
-        return has_extension_permission(user, action.permission)
-    except ValueError:
-        return False
+    # 1.17.17: any-of. A Tec-Tac code or a Tactical role flag (tactical:can_...). An entry that cannot be checked counts as
+    # not held and never stops the next entry; no entry at all means managers only.
+    for entry in action.permission_entries:
+        try:
+            if is_tactical_permission_entry(entry):
+                if has_tactical_permission(user, entry[len(TACTICAL_PERMISSION_PREFIX):]):
+                    return True
+            elif has_extension_permission(user, entry):
+                return True
+        except ValueError:
+            logger.warning("Scheduled action %s names a permission that does not exist: %s", action.id, entry)
+        except Exception:
+            logger.exception("Scheduled action %s: permission %s could not be checked", action.id, entry)
+    return False
 
 
 def _require_action(user, action_id, *, allow_unregistered_manager=False):
@@ -443,6 +457,10 @@ class SchedulerRunNowView(APIView):
     permission_classes = [SessionAuthenticated]
     def post(self, request, schedule_id):
         schedule = get_object_or_404(TecTacSchedule, pk=schedule_id)
+        if is_one_off_schedule(schedule):
+            # 1.17.17: a one-off run belongs to the user who started it and happens once. Refused before any other check, so a
+            # second user cannot queue a run under the first user's identity and nobody can repeat it from the browser.
+            raise PermissionDenied(f"This one-off run is managed by module {schedule.owner_module!r} and cannot be run again.")
         _require_action(request.user, schedule.action_id)
         _require_schedule_owner_or_manager(request.user, schedule)
         try:

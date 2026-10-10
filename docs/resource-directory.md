@@ -1,7 +1,7 @@
 # Core Resource Directory
 
 Contract ID: `core.resources`  
-Contract version: `1.3.0`  
+Contract version: `1.4.0`  
 Python namespace: `tec_tac.resources`
 
 ## Purpose
@@ -24,6 +24,8 @@ tec_tac.resources           <- stable public contract
         +-- Alerts / Automation / other modules
 ```
 
+Contract 1.4 (Core 1.17.17, additive, still major 1) adds `alert_template_id` to client and site records, lets `update_client` and `update_site` set or clear it, and adds the scope descriptor (`scope_descriptor`, `scope_unrestricted`, `has_whole_client_access`, `ResourceAccessContext.scope`, and `tactical_scope` in the runtime context). Existing callers keep working: the new record keys are appended after the old ones and every new keyword is optional.
+
 Contract 1.3 keeps the 1.2 scoped read/create/update boundary and adds audited client/site deletion with atomic agent relocation plus client/site custom-field value editing. Agent mutation remains outside this contract. A new client is still created atomically with a `Default Site`, restricted creators are granted scope to the client they create, and clients retain at least one site.
 
 ## Stable resource records
@@ -35,11 +37,12 @@ Contract 1.3 keeps the 1.2 scoped read/create/update boundary and adds audited c
   "type": "client",
   "id": 123,
   "name": "North West Radiology",
-  "active": true
+  "active": true,
+  "alert_template_id": 7
 }
 ```
 
-Stable fields: `type`, `id`, `name`, `active`.
+Stable fields: `type`, `id`, `name`, `active`, `alert_template_id` (since 1.4.0, an integer or `null`; appended after the earlier keys).
 
 ### Site
 
@@ -49,11 +52,14 @@ Stable fields: `type`, `id`, `name`, `active`.
   "id": 456,
   "name": "Potch Mediclinic",
   "client_id": 123,
-  "active": true
+  "active": true,
+  "alert_template_id": null
 }
 ```
 
-Stable fields: `type`, `id`, `name`, `client_id`, `active`.
+Stable fields: `type`, `id`, `name`, `client_id`, `active`, `alert_template_id` (since 1.4.0, an integer or `null`).
+
+`alert_template_id` is the id of the alert template Tactical assigns to the client or site, or `null` for none. It is an id only. Core does not import Alerts models and does not list templates: the Alerts module owns the template list and the picker. Anyone who can already list clients or sites sees the id.
 
 ### Agent
 
@@ -117,18 +123,54 @@ There is no implicit service/global access when the user is absent. Trusted serv
 - `user_context(user)`
 - `trusted_service_context(actor=..., purpose=..., global_access=True)`
 
+### Scope operations (since 1.4.0, framework >=1.17.17)
+
+Modules ask Core about the caller's Tactical client and site scope. They never read Tactical's Role.
+
+- `scope_descriptor(context=...)` returns `{mode, unrestricted, whole_client_ids, site_ids, whole_client_count, site_count}`.
+- `scope_unrestricted(context)` returns `True` when the caller sees every client and site.
+- `has_whole_client_access(client_id, context=...)` returns `True` when the caller may act on the whole client.
+- `context.scope` is the same descriptor as a read-only property of `ResourceAccessContext`. It is computed when you read it and never cached on the context.
+
+`mode` is one of:
+
+| mode | Meaning |
+| --- | --- |
+| `unrestricted` | A superuser, a role superuser, or a role whose `can_view_clients` and `can_view_sites` are both empty (Tactical's own rule). |
+| `clients` | Only whole-client grants (`can_view_clients`). |
+| `sites` | Only explicit site grants (`can_view_sites`). |
+| `mixed` | Both. |
+| `none` | No role, a Tactical installer user, or a lookup that failed. Core fails closed: `unrestricted` is `false`. |
+
+`whole_client_ids` are the explicit `can_view_clients` grants. `site_ids` are the explicit `can_view_sites` grants only, not the sites of a granted client. A site-only role is mode `sites`, has no whole client, and `has_whole_client_access` is `False` for it even for the client that owns its site. `has_whole_client_access` is `True` only for an unrestricted caller or a role that lists the client in `can_view_clients`, and only when the client exists. A malformed `client_id` raises `ResourceValidationError`.
+
+These are scope questions only. They do not need `can_list_clients` or `can_list_sites`, the same as Scheduler targets. A trusted global service context is unrestricted, with whole access to every existing client. A service context that is not global is refused with `ResourcePermissionDenied`.
+
+Core computes the descriptor once in the adapter, from the same rule that Scheduler targets, report row scope and client writes use, so the answers cannot disagree.
+
 ### Client/site write operations
 
 - `create_client(name=..., context=...)`
-- `update_client(client_id, name=..., context=...)`
+- `update_client(client_id, name=None, alert_template_id=UNSET, context=...)`
 - `delete_client(client_id, move_to_site_id=None, context=...)`
 - `create_site(client_id=..., name=..., context=...)`
-- `update_site(site_id, name=None, client_id=None, context=...)`
+- `update_site(site_id, name=None, client_id=None, alert_template_id=UNSET, context=...)`
 - `delete_site(site_id, move_to_site_id=None, context=...)`
 - `list_custom_fields(resource_type, resource_id, context=...)`
 - `update_custom_fields(resource_type, resource_id, values=[...], context=...)`
 
 The write operations return the same stable client/site record shapes as the read contract. Core never returns Tactical ORM instances.
+
+#### Alert template (since 1.4.0)
+
+`update_client` and `update_site` accept `alert_template_id`: a positive integer sets the template and `None` clears it. Leave the keyword out to leave the template alone (`UNSET` is the default; do not pass it yourself). `name` is optional on `update_client` now, but at least one field is required. Existing calls such as `update_client(7, name="New", context=ctx)` work as before.
+
+- A boolean, zero, a negative number, a fraction and text that is not a whole number raise `ResourceValidationError`.
+- An id that names no template raises `ResourceValidationError`. Tactical's own foreign key decides, so Core imports no Alerts model.
+- The write rule is the same as a rename: Tactical `can_manage_clients` or `can_manage_sites`, the Core resources permission, and the same client or site write scope (a whole-client grant for a client; a site grant or a grant of the site's client for a site). A role limited to one site cannot change its client's template. Core does not ask for `can_manage_alerts`, because Tactical's own client and site `PUT` check only the manage-clients and manage-sites flags.
+- The write goes through Tactical's model save, so Tactical's own refresh of the agents' cached alert template still runs.
+- The audit row carries the before and after records, which include `alert_template_id`, and the metadata flag `alert_template_changed`.
+- `create_client` and `create_site` do not take `alert_template_id`. A new resource has no template.
 
 List operations return:
 
@@ -212,6 +254,22 @@ Create payloads:
 
 Update payloads accept only writable fields. Unknown fields are rejected. Agent HTTP resources remain read-only.
 
+```json
+{"alert_template_id": 7}
+```
+
+`PATCH /api/tfd/resources/clients/<id>/` accepts `name`, `alert_template_id` or both (at least one). `PATCH /api/tfd/resources/sites/<id>/` accepts `name`, `client_id`, `alert_template_id` or any of them. `alert_template_id: null` clears the template.
+
+### Scope in the runtime context
+
+`GET /api/tfd/ui/context/` carries `tactical_scope` since Core 1.17.17, next to `tactical_permissions`:
+
+```json
+{"mode": "mixed", "unrestricted": false, "whole_client_count": 2, "site_count": 5}
+```
+
+It is built from the same descriptor and holds the mode and counts only, never id lists, so the startup payload stays small. The ids stay in the Python contract (`scope_descriptor`). An installer user, a user with no role and any failure give `{"mode": "none", "unrestricted": false, "whole_client_count": 0, "site_count": 0}`. It is a hint for the page: Tactical still decides every call. Older UI builds ignore it. The UI release that exposes it in `register(context).context` is separate.
+
 Client and site create/update operations are transaction-audited through Core using the authenticated Tactical actor. The audit write is strict: if Tactical audit persistence fails, the resource mutation is rolled back rather than succeeding without an investigation trail. Update events include before/after resource snapshots when the prior row is visible through the caller's Tactical read scope.
 
 
@@ -247,6 +305,8 @@ If Tactical later changes model/table/field layout, update the Core adapter whil
 `core.resources` follows semantic contract versioning.
 
 Contract `1.1.0` is additive over `1.0.0`: it preserves all read operations and resource shapes while adding client/site create/update operations, write authorization metadata and stable conflict errors. A Tactical internal schema change alone is not a reason to change this contract version.
+
+Contract `1.4.0` is additive over `1.3.0`: client and site records gain `alert_template_id` (appended last), `update_client` and `update_site` gain an optional `alert_template_id`, and the scope operations are new.
 
 ## Core consumers
 

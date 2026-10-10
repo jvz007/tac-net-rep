@@ -39,13 +39,13 @@ sys.modules["tec_tac.audit"] = audit
 
 DATA = {
     "clients": [
-        {"type": "client", "id": 1, "name": "Alpha", "active": True},
-        {"type": "client", "id": 2, "name": "Beta", "active": True},
+        {"type": "client", "id": 1, "name": "Alpha", "active": True, "alert_template_id": None},
+        {"type": "client", "id": 2, "name": "Beta", "active": True, "alert_template_id": None},
     ],
     "sites": [
-        {"type": "site", "id": 11, "name": "Alpha One", "client_id": 1, "active": True},
-        {"type": "site", "id": 12, "name": "Alpha Two", "client_id": 1, "active": True},
-        {"type": "site", "id": 21, "name": "Beta One", "client_id": 2, "active": True},
+        {"type": "site", "id": 11, "name": "Alpha One", "client_id": 1, "active": True, "alert_template_id": None},
+        {"type": "site", "id": 12, "name": "Alpha Two", "client_id": 1, "active": True, "alert_template_id": None},
+        {"type": "site", "id": 21, "name": "Beta One", "client_id": 2, "active": True, "alert_template_id": None},
     ],
     "agents": [
         {"type": "agent", "id": "a-1", "hostname": "ALPHA-PC", "client_id": 1, "site_id": 11, "active": True, "platform": "windows", "monitoring_type": "workstation", "last_seen": None},
@@ -115,10 +115,10 @@ def create_client_row(*, user, name):
     if any(r["name"].lower() == name.lower() for r in DATA["clients"]):
         raise TacticalResourceConflictError("A client with that name already exists.")
     new_id = max(r["id"] for r in DATA["clients"]) + 1
-    row = {"type":"client","id":new_id,"name":name,"active":True}
+    row = {"type":"client","id":new_id,"name":name,"active":True,"alert_template_id":None}
     DATA["clients"].append(row)
     site_id = max(r["id"] for r in DATA["sites"]) + 1
-    DATA["sites"].append({"type":"site","id":site_id,"name":"Default Site","client_id":new_id,"active":True})
+    DATA["sites"].append({"type":"site","id":site_id,"name":"Default Site","client_id":new_id,"active":True,"alert_template_id":None})
     user.allowed_clients.add(new_id)
     return dict(row)
 
@@ -137,7 +137,7 @@ def create_site_row(*, client_id, name):
     if any(r["client_id"] == client_id and r["name"].lower() == name.lower() for r in DATA["sites"]):
         raise TacticalResourceConflictError("A site with that name already exists for the selected client.")
     new_id = max(r["id"] for r in DATA["sites"]) + 1
-    row = {"type":"site","id":new_id,"name":name,"client_id":client_id,"active":True}
+    row = {"type":"site","id":new_id,"name":name,"client_id":client_id,"active":True,"alert_template_id":None}
     DATA["sites"].append(row)
     return dict(row)
 
@@ -475,7 +475,7 @@ assert AUDITS[-1]["action"] == "delete" and AUDITS[-1]["metadata"]["destination_
 
 # Contract metadata is versioned and discoverable.
 meta = resources.resource_contract_metadata()
-assert meta["id"] == "core.resources" and meta["version"] == "1.3.0"
+assert meta["id"] == "core.resources" and meta["version"] == "1.4.0"
 assert meta["pagination"]["maximum_page_number"] == 10000
 assert meta["list_contracts"]["clients"]["http"] == "GET /api/tfd/resources/clients/"
 assert meta["list_contracts"]["sites"]["response"]["pages"] == "integer"

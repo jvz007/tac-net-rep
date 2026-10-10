@@ -75,7 +75,10 @@ ns = {
     'adapter': adapter, '_authorize_write': authorize_write, '_transaction_atomic': lambda: Atomic(),
     '_clean_name': clean_name, '_clean_positive_int': clean_id, '_adapter_write': adapter_write,
     '_record_resource_change': record_change,
+    'UNSET': object(),  # 1.17.17: the sentinel of update_client and update_site (alert_template_id)
 }
+for name in ('_clean_alert_template_id', '_template_changed'):  # 1.17.17 helpers of the two updates
+    ns[name] = compile_function(resources_path, name, ns)
 for name in ('create_client','update_client','create_site','update_site'):
     ns[name] = compile_function(resources_path, name, ns)
 

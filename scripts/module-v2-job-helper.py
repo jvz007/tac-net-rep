@@ -1040,6 +1040,72 @@ def sync_and_reload(config, log, *, refresh_workers=False):
         raise RuntimeError(f"Tactical Celery is not active after three refresh attempts (last restart status {last_restart_rc})")
 
 
+# 1.17.17: a signed module registers its Core server-maintenance actions from its manifest (``server_maintenance_actions``) when it is
+# installed, and they are removed when it is removed. The work is done by Core's root server-maintenance helper, which re-checks the
+# root-owned installed manifest. This helper only asks for it: --register-module and --unregister-module are reachable here and
+# never through the Tactical account's sudo rule.
+SERVER_MAINTENANCE_HELPER = Path("/usr/local/sbin/tec-tac-server-maintenance")
+MAX_SERVER_ACTION_MANIFEST_BYTES = 1024 * 1024
+
+
+def manifest_declares_server_actions(repo_root, module_id):
+    """True when the installed manifest declares at least one server_maintenance_actions entry. Only the decision is made here, so
+    the read is lenient; the root helper checks the owner, the mode and every rule before it registers anything."""
+    path = Path(repo_root) / "extensions" / module_id / "tec_tac.json"
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError:
+        return False
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return False
+        data = os.read(fd, MAX_SERVER_ACTION_MANIFEST_BYTES + 1)
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+    try:
+        payload = json.loads(data[:MAX_SERVER_ACTION_MANIFEST_BYTES].decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return False
+    actions = payload.get("server_maintenance_actions") if isinstance(payload, dict) else None
+    return isinstance(actions, list) and bool(actions)
+
+
+def sync_server_maintenance_actions(repo_root, module_id, log, *, remove=False):
+    """Register (or, with ``remove``, unregister) the server-maintenance actions of one module. A module that declares none has
+    its earlier actions dropped, which is how an upgrade removes a stale action. Raises RuntimeError with a plain message when the
+    root helper refuses or fails, so the job fails."""
+    declared = (not remove) and manifest_declares_server_actions(repo_root, module_id)
+    helper = SERVER_MAINTENANCE_HELPER
+    if not helper.is_file():
+        if declared:
+            raise RuntimeError(f"module {module_id} declares server-maintenance actions but the Core server-maintenance helper is not installed")
+        return
+    info = helper.stat()
+    if info.st_uid != 0 or info.st_mode & 0o022:
+        raise RuntimeError(f"refusing to run a non-root-owned or writable server-maintenance helper: {helper}")
+    flag = "--register-module" if declared else "--unregister-module"
+    log.write(f"[TEC-TAC-SERVER-MAINTENANCE] {'registering' if declared else 'removing'} server-maintenance actions of {module_id}\n")
+    log.flush()
+    result = subprocess.run([str(helper), flag, module_id], stdout=log, stderr=subprocess.STDOUT, text=True, env=privileged_env(), check=False)
+    if result.returncode:
+        verb = "registration" if declared else "removal"
+        raise RuntimeError(f"server-maintenance action {verb} failed for module {module_id} (status {result.returncode}). See the job log for the reason.")
+
+
+def restore_server_maintenance_actions(repo_root, module_ids, log):
+    """After restore_modules put the earlier module code back, put its registered actions back too: re-register the restored version,
+    or remove the actions when there is no restored module. One module failing never hides the original error."""
+    for module_id in module_ids:
+        try:
+            restored = (Path(repo_root) / "extensions" / module_id / "tec_tac.json").is_file()
+            sync_server_maintenance_actions(repo_root, module_id, log, remove=not restored)
+        except Exception as exc:
+            log.write(f"[TEC-TAC-MODULE-V2] restoring server-maintenance actions of {module_id} failed: {exc}\n")
+
+
 def backup_modules(repo_root, module_ids, backup_root):
     records = {}
     for module_id in module_ids:
@@ -1550,6 +1616,15 @@ def run_job(job_id):
                     job["stage"] = "runtime-sync"
                     atomic_json(path, job)
                     sync_and_reload(config, log, refresh_workers=True)
+                    # 1.17.17: register the actions the installed modules declare (and drop what an upgrade dropped). A failure here
+                    # fails the job and takes the rollback below, which puts the earlier registration back.
+                    job["stage"] = "server-maintenance-actions"
+                    atomic_json(path, job)
+                    for action in actions:
+                        if action.get("action") == "rename" and action.get("previous_module_id"):
+                            sync_server_maintenance_actions(repo_root, str(action["previous_module_id"]), log, remove=True)
+                    for module_id in order:
+                        sync_server_maintenance_actions(repo_root, module_id, log)
                     cleanup_successful_stage(job, log)
                 except Exception:
                     job["stage"] = "rollback"
@@ -1560,6 +1635,7 @@ def run_job(job_id):
                         except Exception as identity_rollback_exc:
                             log.write(f"[TEC-TAC-MODULE-V2] identity rollback failed: {identity_rollback_exc}\n")
                     restore_modules(repo_root, backup_ids, backup, log)
+                    restore_server_maintenance_actions(repo_root, backup_ids, log)
                     if disabled_by_job:
                         try:
                             set_enabled(disabled_by_job, True)

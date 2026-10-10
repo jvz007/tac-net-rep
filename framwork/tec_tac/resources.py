@@ -14,7 +14,7 @@ from . import resources_adapter as adapter
 from .capabilities import register_capability
 
 CONTRACT_ID = "core.resources"
-CONTRACT_VERSION = "1.3.0"
+CONTRACT_VERSION = "1.4.0"
 RESOURCE_TYPES = ("client", "site", "agent")
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 500
@@ -22,12 +22,26 @@ MAX_PAGE_NUMBER = 10000
 CLIENT_MANAGE_PERMISSION = "core.resources.clients.manage"
 SITE_MANAGE_PERMISSION = "core.resources.sites.manage"
 
-CLIENT_FIELDS = ("type", "id", "name", "active")
-SITE_FIELDS = ("type", "id", "name", "client_id", "active")
+# 1.4.0 appended alert_template_id (an integer or null) to the client and site records; the earlier keys keep their place.
+CLIENT_FIELDS = ("type", "id", "name", "active", "alert_template_id")
+SITE_FIELDS = ("type", "id", "name", "client_id", "active", "alert_template_id")
 AGENT_FIELDS = (
     "type", "id", "hostname", "client_id", "site_id", "active",
     "platform", "monitoring_type", "last_seen",
 )
+
+
+class _Unset:
+    """The value of a keyword the caller left out, so that None can mean clear (``alert_template_id=None``)."""
+
+    def __repr__(self) -> str:
+        return "UNSET"
+
+    def __bool__(self) -> bool:
+        return False
+
+
+UNSET = _Unset()
 
 
 class ResourceDirectoryError(RuntimeError):
@@ -62,6 +76,12 @@ class ResourceAccessContext:
     @property
     def is_service(self) -> bool:
         return bool(self.service_actor)
+
+    @property
+    def scope(self) -> dict[str, Any]:
+        """The caller's Tactical client and site scope (1.4.0): ``scope_descriptor(context=self)``. Read when asked, never
+        cached on this frozen object, so it reflects the role as it is now."""
+        return scope_descriptor(context=self)
 
 
 def user_context(user) -> ResourceAccessContext:
@@ -253,6 +273,27 @@ def _clean_positive_int(value: Any, label: str) -> int:
     return parsed
 
 
+def _clean_alert_template_id(value: Any) -> int | None:
+    """None clears the template. Otherwise a positive whole number (a text of digits is accepted). Booleans, zero, negatives,
+    fractions and any other text are refused. Whether the template exists is checked by Tactical's own ForeignKey."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ResourceValidationError("alert_template_id must be a positive integer or null.")
+    if isinstance(value, str):
+        text = value.strip()
+        if not text.isascii() or not text.isdigit():
+            raise ResourceValidationError("alert_template_id must be a positive integer or null.")
+        value = int(text)
+    if not isinstance(value, int) or value < 1 or value >= 2**63:
+        raise ResourceValidationError("alert_template_id must be a positive integer or null.")
+    return value
+
+
+def _template_changed(before: dict | None, after: dict | None) -> bool:
+    return (before or {}).get("alert_template_id") != (after or {}).get("alert_template_id")
+
+
 def _pagination(page: Any, page_size: Any) -> tuple[int, int, int]:
     page = _clean_positive_int(page, "page")
     page_size = _clean_positive_int(page_size, "page_size")
@@ -367,22 +408,27 @@ def create_client(*, name: str, context: ResourceAccessContext) -> dict[str, Any
         return row
 
 
-def update_client(client_id: Any, *, name: str, context: ResourceAccessContext) -> dict[str, Any]:
+def update_client(client_id: Any, *, name: str | None = None, alert_template_id: Any = UNSET, context: ResourceAccessContext) -> dict[str, Any]:
+    """Change a client's name, its alert template id, or both (at least one). ``alert_template_id`` is a positive integer to set
+    or None to clear (1.4.0). Core holds only the id: Alerts owns the template list."""
     user = _authorize_write(context, "client")
     resource_id = _clean_positive_int(client_id, "client_id")
+    if name is None and alert_template_id is UNSET:
+        raise ResourceValidationError("At least one of name or alert_template_id is required.")
+    changes: dict[str, Any] = {}
+    if name is not None:
+        changes["name"] = _clean_name(name, "name")
+    if alert_template_id is not UNSET:
+        changes["alert_template_id"] = _clean_alert_template_id(alert_template_id)
     before = adapter.get_client_row(adapter.clients_queryset(user=user, trusted=False), resource_id)
     with _transaction_atomic():
-        row = _adapter_write(
-            adapter.update_client_row,
-            user=user,
-            client_id=resource_id,
-            name=_clean_name(name, "name"),
-        )
+        row = _adapter_write(adapter.update_client_row, user=user, client_id=resource_id, **changes)
         if row is None:
             raise ResourceNotFound("Client was not found in the caller's resource scope.")
         _record_resource_change(
             actor=user, action="modify", resource_type="client", resource_id=resource_id,
             before=before, after=row,
+            metadata={"alert_template_changed": "alert_template_id" in changes and _template_changed(before, row)},
         )
         return row
 
@@ -405,13 +451,17 @@ def create_site(*, client_id: Any, name: str, context: ResourceAccessContext) ->
         return row
 
 
-def update_site(site_id: Any, *, name: str | None = None, client_id: Any | None = None, context: ResourceAccessContext) -> dict[str, Any]:
+def update_site(site_id: Any, *, name: str | None = None, client_id: Any | None = None, alert_template_id: Any = UNSET, context: ResourceAccessContext) -> dict[str, Any]:
+    """Change a site's name, its client, its alert template id (a positive integer, or None to clear; 1.4.0), or any of them."""
     user = _authorize_write(context, "site")
     resource_id = _clean_positive_int(site_id, "site_id")
-    if name is None and client_id in (None, ""):
-        raise ResourceValidationError("At least one of name or client_id is required.")
+    if name is None and client_id in (None, "") and alert_template_id is UNSET:
+        raise ResourceValidationError("At least one of name, client_id or alert_template_id is required.")
     clean_name = _clean_name(name, "name") if name is not None else None
     target_client_id = _clean_positive_int(client_id, "client_id") if client_id not in (None, "") else None
+    changes: dict[str, Any] = {}
+    if alert_template_id is not UNSET:
+        changes["alert_template_id"] = _clean_alert_template_id(alert_template_id)
     if target_client_id is not None and not adapter.client_write_in_scope(user=user, client_id=target_client_id):
         raise ResourceNotFound("Client was not found in the caller's resource scope.")
     before = adapter.get_site_row(adapter.sites_queryset(user=user, trusted=False), resource_id)
@@ -422,12 +472,14 @@ def update_site(site_id: Any, *, name: str | None = None, client_id: Any | None 
             site_id=resource_id,
             name=clean_name,
             client_id=target_client_id,
+            **changes,
         )
         if row is None:
             raise ResourceNotFound("Site was not found in the caller's resource scope.")
         _record_resource_change(
             actor=user, action="modify", resource_type="site", resource_id=resource_id,
             before=before, after=row,
+            metadata={"alert_template_changed": "alert_template_id" in changes and _template_changed(before, row)},
         )
         return row
 
@@ -549,6 +601,58 @@ def update_custom_fields(resource_type: str, resource_id: Any, *, values: list[d
         return {"resource_type": resource_type, "resource_id": clean_id, "fields": rows}
 
 
+def _scope_subject(context: ResourceAccessContext):
+    """The user a scope question is about, or None for a trusted global service context. A service context that is not global,
+    a missing user and a context of the wrong type are refused, the way every other operation refuses them."""
+    if not isinstance(context, ResourceAccessContext):
+        raise ResourcePermissionDenied("A ResourceAccessContext is required.")
+    if context.is_service:
+        if not context.trusted_global:
+            raise ResourcePermissionDenied("Service context is not authorized for global resource access.")
+        return None
+    user = context.user
+    if user is None or not bool(getattr(user, "is_authenticated", False)):
+        raise ResourcePermissionDenied("An authenticated Tactical user is required.")
+    return user
+
+
+def scope_descriptor(*, context: ResourceAccessContext) -> dict[str, Any]:
+    """The caller's Tactical client and site scope, described once (1.4.0): ``{mode, unrestricted, whole_client_ids, site_ids,
+    whole_client_count, site_count}``. ``mode`` is ``unrestricted``, ``clients``, ``sites``, ``mixed`` or ``none``. Modules read
+    this instead of Tactical's Role. A scope question only: it needs no ``can_list_*`` flag. A trusted global service context is
+    unrestricted. No role, an installer user and any lookup failure give mode ``none`` (fail closed)."""
+    user = _scope_subject(context)
+    if user is None:
+        return {"mode": "unrestricted", "unrestricted": True, "whole_client_ids": [], "site_ids": [], "whole_client_count": 0, "site_count": 0}
+    return adapter.role_scope_descriptor(user)
+
+
+def scope_unrestricted(context: ResourceAccessContext) -> bool:
+    """True when the caller sees every client and site (a superuser, a role superuser, a role with no client or site limits, or a
+    trusted global service context). Same rule as ``scope_descriptor(context=...)["unrestricted"]``."""
+    return bool(scope_descriptor(context=context)["unrestricted"])
+
+
+def has_whole_client_access(client_id: Any, *, context: ResourceAccessContext) -> bool:
+    """True only for an unrestricted caller, or a role that lists this client in ``can_view_clients``, and only when the client
+    exists. A site-only role never holds the whole client, not even the client that owns its site. A scope question only (it needs
+    no ``can_list_clients``, like Scheduler targets). No role, an installer user and a failed lookup give False. A malformed
+    ``client_id`` raises ``ResourceValidationError``. A trusted global service context has whole access to every existing client."""
+    user = _scope_subject(context)
+    resource_id = _clean_positive_int(client_id, "client_id")
+    try:
+        if user is None:
+            return resource_id in adapter.existing_client_ids([resource_id])
+        if bool(getattr(user, "is_installer_user", False)):
+            return False
+        role = _role(user)
+        if role is None and not bool(getattr(user, "is_superuser", False)):
+            return False
+        return resource_id in adapter.explicit_client_target_ids_in_scope(user=user, client_ids=[resource_id])
+    except Exception:
+        return False
+
+
 def resolve_resource(resource_type: str, resource_id: Any, *, context: ResourceAccessContext) -> dict[str, Any]:
     resource_type = str(resource_type or "").strip().lower()
     if resource_type == "client":
@@ -566,13 +670,18 @@ def resource_contract_metadata() -> dict[str, Any]:
         "version": CONTRACT_VERSION,
         "namespace": "tec_tac.resources",
         "read_only": False,
-        "write_support": {"client": ["create", "update", "delete", "custom_fields"], "site": ["create", "update", "delete", "custom_fields"], "agent": []},
+        "write_support": {
+            "client": ["create", "update", "delete", "custom_fields"], "site": ["create", "update", "delete", "custom_fields"], "agent": [],
+            # 1.4.0: what update_client and update_site accept (alert_template_id since 1.4.0, an id or null)
+            "update_fields": {"client": ["name", "alert_template_id"], "site": ["name", "client_id", "alert_template_id"]},
+        },
         "resource_types": {
             "client": {"id_type": "integer", "fields": list(CLIENT_FIELDS), "filters": ["search", "active", "page", "page_size"]},
             "site": {"id_type": "integer", "fields": list(SITE_FIELDS), "filters": ["client_id", "search", "active", "page", "page_size"]},
             "agent": {"id_type": "string", "fields": list(AGENT_FIELDS), "filters": ["client_id", "site_id", "search", "active", "page", "page_size"]},
         },
-        "operations": ["list_clients", "get_client", "create_client", "update_client", "delete_client", "list_sites", "get_site", "create_site", "update_site", "delete_site", "list_custom_fields", "update_custom_fields", "list_agents", "get_agent", "resolve_resource"],
+        "operations": ["list_clients", "get_client", "create_client", "update_client", "delete_client", "list_sites", "get_site", "create_site", "update_site", "delete_site", "list_custom_fields", "update_custom_fields", "list_agents", "get_agent", "resolve_resource", "scope_descriptor", "scope_unrestricted", "has_whole_client_access"],
+        "context_properties": ["ResourceAccessContext.scope"],
         "pagination": {
             "default_page_size": DEFAULT_PAGE_SIZE,
             "maximum_page_size": MAX_PAGE_SIZE,
@@ -593,6 +702,31 @@ def resource_contract_metadata() -> dict[str, Any]:
             },
         },
         "mutation_contracts": {
+            "update_client": {
+                "python": "update_client(client_id, *, name=None, alert_template_id=UNSET, context)",
+                "http": "PATCH /api/tfd/resources/clients/<id>/",
+                "body": {"name": "optional string", "alert_template_id": "optional positive integer to set, or null to clear; at least one of the two is required"},
+                "semantics": "Since 1.4.0. Core holds only the alert template id: Alerts owns the template list. The id must name an existing template (Tactical's own foreign key decides) or the call fails with invalid_resource_request. Same write rule as a rename (Tactical can_manage_clients, the Core resources permission and a whole-client grant); can_manage_alerts is not required, matching Tactical's own client PUT. The audit row carries before and after records and metadata alert_template_changed.",
+            },
+            "update_site": {
+                "python": "update_site(site_id, *, name=None, client_id=None, alert_template_id=UNSET, context)",
+                "http": "PATCH /api/tfd/resources/sites/<id>/",
+                "body": {"name": "optional string", "client_id": "optional positive integer", "alert_template_id": "optional positive integer to set, or null to clear; at least one field is required"},
+                "semantics": "Since 1.4.0. As update_client: the id only, existing template required, same write rule as a rename (can_manage_sites, the Core resources permission, a site grant or a grant of the site's client), audit metadata alert_template_changed.",
+            },
+            "scope_descriptor": {
+                "python": ["scope_descriptor(*, context)", "scope_unrestricted(context)", "has_whole_client_access(client_id, *, context)", "ResourceAccessContext.scope"],
+                "http": "GET /api/tfd/ui/context/ carries tactical_scope: {mode, unrestricted, whole_client_count, site_count} (counts, never id lists)",
+                "response": {
+                    "mode": "unrestricted | clients | sites | mixed | none",
+                    "unrestricted": "boolean",
+                    "whole_client_ids": "array[integer], the explicit can_view_clients grants (Python only)",
+                    "site_ids": "array[integer], the explicit can_view_sites grants only, not the sites of a granted client (Python only)",
+                    "whole_client_count": "integer",
+                    "site_count": "integer",
+                },
+                "semantics": "Since 1.4.0. One description of the caller's Tactical client and site scope, so no module reads Tactical's Role. unrestricted is a superuser, a role superuser, or a role with both relations empty. A site-only role is mode sites and never holds a whole client. No role, an installer user and any lookup failure give mode none. A trusted global service context is unrestricted. A scope question only: no can_list_* flag is needed.",
+            },
             "delete_client": {
                 "python": "delete_client",
                 "http": "DELETE /api/tfd/resources/clients/<id>/",
@@ -630,6 +764,7 @@ def resource_contract_metadata() -> dict[str, Any]:
         },
         "active_semantics": "Tactical hard-deletes client/site rows. Core deletion first relocates agents when required, then deletes atomically. Existing rows are active in contract v1; active=false returns no rows.",
         "rbac": {"client_write": CLIENT_MANAGE_PERMISSION, "site_write": SITE_MANAGE_PERMISSION},
+        "alert_template_id": "Since 1.4.0 client and site records carry alert_template_id (integer or null), appended after the earlier keys. It is an id only. Anyone who can list clients or sites sees it.",
         "compatibility": "Additive changes are preferred within 1.x. Tactical ORM changes are adapter-internal unless the public representation changes incompatibly.",
     }
 
@@ -650,6 +785,9 @@ class _CoreResourceProvider:
     list_agents = staticmethod(list_agents)
     get_agent = staticmethod(get_agent)
     resolve_resource = staticmethod(resolve_resource)
+    scope_descriptor = staticmethod(scope_descriptor)
+    scope_unrestricted = staticmethod(scope_unrestricted)
+    has_whole_client_access = staticmethod(has_whole_client_access)
     user_context = staticmethod(user_context)
     trusted_service_context = staticmethod(trusted_service_context)
 
@@ -669,6 +807,7 @@ def register_core_resources_capability():
             "list_sites", "get_site", "create_site", "update_site", "delete_site",
             "list_custom_fields", "update_custom_fields",
             "list_agents", "get_agent", "resolve_resource",
+            "scope_descriptor", "scope_unrestricted", "has_whole_client_access",
             "user_context", "trusted_service_context",
         ),
         metadata=resource_contract_metadata(),

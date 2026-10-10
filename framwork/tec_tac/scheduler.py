@@ -3,6 +3,7 @@ from __future__ import annotations
 import calendar
 import json
 import logging
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone as dt_timezone
@@ -64,13 +65,66 @@ class ScheduledAction:
     permission: str | None = None
     dangerous: bool = False
     timeout_seconds: int = 3600
+    # 1.17.17: more than one accepted entry (any-of). Empty for a single entry or none. Last, so a positional constructor and
+    # equality of every earlier action stay as they were. ``permission`` is then the entries joined with PERMISSION_ANY_JOIN.
+    permission_any: tuple[str, ...] = ()
+
+    @property
+    def permission_entries(self) -> tuple[str, ...]:
+        """Every entry the caller may hold, any-of: a Tec-Tac permission code or ``tactical:<flag>``. Empty means managers only."""
+        if self.permission_any:
+            return self.permission_any
+        return (self.permission,) if self.permission else ()
+
+
+# 1.17.17: a scheduled action's permission may name a Tactical role flag, written ``tactical:can_manage_winupdates``.
+TACTICAL_PERMISSION_PREFIX = "tactical:"
+PERMISSION_ANY_JOIN = " | "
+MAX_PERMISSION_ENTRIES = 8
+_TACTICAL_ENTRY_RE = re.compile(r"can_[a-z0-9_]+")
+
+
+def is_tactical_permission_entry(entry) -> bool:
+    return isinstance(entry, str) and entry.startswith(TACTICAL_PERMISSION_PREFIX)
+
+
+def _normalize_permission(permission) -> tuple[str | None, tuple[str, ...]]:
+    """Check the shape of an action's ``permission`` and return ``(permission, permission_any)``.
+
+    ``None`` or a text entry stays as it was (an empty text still means managers only). A list or tuple means any-of: one to
+    eight non-empty, distinct text entries, a single entry reading as that entry. Only the shape is checked here. Whether a
+    Tec-Tac code or a Tactical flag exists is decided when the action is used and fails closed (see ``_can_use_action``).
+    """
+    if permission is None or isinstance(permission, str):
+        entries = (permission,) if permission else ()
+        many = False
+    elif isinstance(permission, (list, tuple)):
+        entries, many = tuple(permission), True
+        if not entries:
+            raise SchedulerError("Scheduled action permission list may not be empty.")
+        if len(entries) > MAX_PERMISSION_ENTRIES:
+            raise SchedulerError(f"Scheduled action permission list has more than {MAX_PERMISSION_ENTRIES} entries.")
+    else:
+        raise SchedulerError("Scheduled action permission must be text, a list of text entries or None.")
+    for entry in entries:
+        if not isinstance(entry, str) or not entry.strip():
+            raise SchedulerError("Scheduled action permission entries must be non-empty text.")
+        if is_tactical_permission_entry(entry) and not _TACTICAL_ENTRY_RE.fullmatch(entry[len(TACTICAL_PERMISSION_PREFIX):]):
+            raise SchedulerError(
+                f"Scheduled action permission {entry!r} must be tactical: followed by a Tactical role flag such as can_manage_winupdates."
+            )
+    if len(set(entries)) != len(entries):
+        raise SchedulerError("Scheduled action permission list repeats an entry.")
+    if many and len(entries) > 1:
+        return PERMISSION_ANY_JOIN.join(entries), entries
+    return (entries[0] if entries else None), ()
 
 
 _ACTIONS: dict[str, ScheduledAction] = {}
 _ACTION_LOCK = RLock()
 
 
-def register_scheduled_action(*, id: str, module_id: str, label: str, handler, description: str = "", target_types=("none",), permission: str | None = None, dangerous: bool = False, timeout_seconds: int = 3600):
+def register_scheduled_action(*, id: str, module_id: str, label: str, handler, description: str = "", target_types=("none",), permission: str | list | tuple | None = None, dangerous: bool = False, timeout_seconds: int = 3600):
     action_id = str(id or "").strip()
     module = str(module_id or "").strip()
     if not action_id or "." not in action_id:
@@ -86,7 +140,8 @@ def register_scheduled_action(*, id: str, module_id: str, label: str, handler, d
         raise SchedulerError("Scheduled action timeout_seconds must be an integer.") from exc
     if timeout < 60 or timeout > 7 * 24 * 60 * 60:
         raise SchedulerError("Scheduled action timeout_seconds must be between 60 and 604800.")
-    action = ScheduledAction(action_id, module, str(label or action_id), handler, str(description or ""), targets, permission, bool(dangerous), timeout)
+    permission_text, permission_any = _normalize_permission(permission)
+    action = ScheduledAction(action_id, module, str(label or action_id), handler, str(description or ""), targets, permission_text, bool(dangerous), timeout, permission_any)
     with _ACTION_LOCK:
         previous = _ACTIONS.get(action_id)
         if previous and previous != action:
@@ -882,6 +937,10 @@ def reconcile_schedule(*, owner_module: str, owner_key: str, action_id: str, sch
     authentication is intentionally not part of this server-side contract.
     """
     module, key = _validate_owner(owner_module, owner_key)
+    if is_one_off_key(key):
+        # 1.17.17: the one-off: prefix is Core's. Only start_one_off_run makes such a key, so a module cannot dress an
+        # ordinary schedule as a one-off run (which the browser then refuses to run again and the worker re-checks as its owner).
+        raise SchedulerError(f"owner_key may not start with {ONE_OFF_PREFIX!r}: that prefix is reserved to Core.")
     action = get_scheduled_action(str(action_id or "").strip())
     if action.module_id != module:
         raise SchedulerError(
@@ -1129,6 +1188,7 @@ def serialize_action(action: ScheduledAction) -> dict:
         "description": action.description,
         "target_types": list(action.target_types),
         "permission": action.permission,
+        "permission_any": list(action.permission_any),
         "dangerous": action.dangerous,
         "timeout_seconds": action.timeout_seconds,
     }

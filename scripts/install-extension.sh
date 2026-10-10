@@ -325,6 +325,9 @@ if [[ -d "${STAGE_ROOT}/reportsets/${PLUGIN_ID}" ]]; then
     cp -a "${STAGE_ROOT}/reportsets/${PLUGIN_ID}" "${DEST_REPORTSET}"
 fi
 chmod -R a+rX "${DEST_EXTENSION}"
+# 1.17.17: an installed module is root-owned and not writable by a group or anyone else. Core's root server-maintenance helper
+# refuses to register actions from a module folder that is.
+chmod -R go-w "${DEST_EXTENSION}"
 if [[ -d "${DEST_REPORTSET}" ]]; then chmod -R a+rX "${DEST_REPORTSET}"; fi
 
 # Validate the complete live registry, including conflicts with already

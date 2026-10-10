@@ -9,6 +9,7 @@ unit so Tactical Django, Celery, NATS and nginx restarts do not own job lifetime
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import subprocess
@@ -22,7 +23,7 @@ from .capabilities import build_operation_context, register_capability
 from .config import load_layout
 
 CAPABILITY_ID = "core.server_maintenance"
-CAPABILITY_VERSION = "1.0.0"
+CAPABILITY_VERSION = "1.1.0"
 DEFAULT_STATE_ROOT = Path("/var/lib/tec-tac/server-maintenance")
 DEFAULT_REGISTRY_ROOT = Path("/etc/tec-tac/server-maintenance/actions.d")
 DEFAULT_ACTION_ROOT = Path("/usr/local/lib/tec-tac/server-maintenance/actions")
@@ -30,6 +31,11 @@ HELPER = Path("/usr/local/sbin/tec-tac-server-maintenance")
 TERMINAL_STATES = frozenset({"succeeded", "failed", "cancelled", "dispatch_failed"})
 ACTION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 MAX_OUTPUT_BYTES = 65536
+# 1.17.17: an action manifest may carry a Tec-Tac permission code and the module that owns the action (both optional)
+PERMISSION_CODE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,149}$")
+OWNER_MODULE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$")
+
+logger = logging.getLogger("tec_tac.server_maintenance")
 
 
 class ServerMaintenanceError(RuntimeError):
@@ -47,6 +53,15 @@ class ServerMaintenanceValidationError(ServerMaintenanceError):
 
 class ServerMaintenanceNotFound(ServerMaintenanceError):
     pass
+
+
+class ServerMaintenancePermissionDenied(ServerMaintenanceError):
+    """1.17.17: the caller does not hold the Tec-Tac permission the action declares (classification ``permission_denied``).
+    ``permission`` is the code to ask an administrator for."""
+
+    def __init__(self, message: str, *, job_id: str | None = None, permission: str | None = None):
+        super().__init__(message, job_id=job_id, classification="permission_denied")
+        self.permission = permission
 
 
 def _utcnow() -> str:
@@ -130,8 +145,86 @@ def _read_action(action_id: str) -> dict:
     return action
 
 
+def _action_permission(action: dict) -> str | None:
+    """The Tec-Tac permission an action declares (1.17.17), or None. A value that is not a permission code fails closed."""
+    value = action.get("permission")
+    if value in (None, ""):
+        return None
+    if not isinstance(value, str) or not PERMISSION_CODE_RE.fullmatch(value):
+        raise ServerMaintenanceError(
+            f"Registered action {str(action.get('id') or '')!r} declares an invalid permission.", classification="action_invalid"
+        )
+    return value
+
+
+def _action_owner(action: dict) -> str | None:
+    value = action.get("owner_module")
+    return value if isinstance(value, str) and OWNER_MODULE_RE.fullmatch(value) else None
+
+
+def holds_action_permission(user, permission: str | None) -> bool:
+    """May this user use an action that declares ``permission`` (1.17.17)? No permission means yes. Otherwise the user must hold
+    the Tec-Tac permission: a superuser passes (AD-10), no user, a failed lookup and an unknown code do not."""
+    if not permission:
+        return True
+    if user is None:
+        return False
+    try:
+        from .rbac import has_extension_permission
+
+        return bool(has_extension_permission(user, permission))
+    except Exception:
+        logger.warning("Server-maintenance permission %s could not be checked and is treated as not held", permission)
+        return False
+
+
+def _record_permission_denied(*, user, action_id: str, permission: str, owner_module: str | None, operation: str, context: dict, job_id: str | None = None) -> None:
+    """Best-effort Core audit row for a refused start or cancel. It never carries the parameters."""
+    try:
+        from . import audit
+
+        actor = user if getattr(user, "is_authenticated", False) else audit.service_audit_actor(module_id="core", service="server-maintenance", identity=operation)
+        metadata = {"permission": permission, "owner_module": owner_module, "operation": operation, "reason": "permission_not_held"}
+        if job_id:
+            metadata["job_id"] = job_id
+        audit.record(
+            actor=actor, module_id="core", action="deny", object_type="server_maintenance_action", object_id=action_id,
+            message=f"Server-maintenance {operation} of {action_id} was refused: the caller does not hold {permission}.",
+            metadata=metadata, operation_context=context,
+        )
+    except Exception:
+        logger.exception("Tec-Tac audit row for a refused server-maintenance %s could not be written", operation)
+
+
+def _require_action_permission(*, user, action_id: str, permission: str | None, owner_module: str | None, operation: str, context: dict, job_id: str | None = None) -> None:
+    if not permission or holds_action_permission(user, permission):
+        return
+    _record_permission_denied(user=user, action_id=action_id, permission=permission, owner_module=owner_module, operation=operation, context=context, job_id=job_id)
+    raise ServerMaintenancePermissionDenied(
+        f"Server-maintenance action {action_id!r} needs the Tec-Tac permission {permission!r}. Ask an administrator to grant it.",
+        job_id=job_id, permission=permission,
+    )
+
+
+def _registry_permission(action_id: str) -> str | None:
+    """The permission an action declares in the registry now, for a job file written before 1.17.17. Unreadable means None."""
+    try:
+        return _action_permission(_read_json(_registry_root() / f"{action_id}.json", "action") if ACTION_ID_RE.fullmatch(str(action_id or "")) else {})
+    except ServerMaintenanceError:
+        return None
+
+
+def _job_permission(job: dict) -> str | None:
+    """The permission a job's action needs: the one recorded when it started, else the registry's now (jobs of 1.17.16 and earlier)."""
+    if "action_permission" in job:
+        value = job.get("action_permission")
+        return value if isinstance(value, str) and value else None
+    return _registry_permission(str(job.get("action") or ""))
+
+
 def _normalize_parameters(action: dict, parameters: dict | None) -> tuple[dict, dict]:
-    raw = dict(parameters or {}) if isinstance(parameters, dict) else None
+    # 1.17.17: None (the default of start) means no parameters. Before, it was refused as "parameters must be an object".
+    raw = dict(parameters) if isinstance(parameters, dict) else ({} if parameters is None else None)
     if raw is None:
         raise ServerMaintenanceValidationError("parameters must be an object.", classification="validation_failed")
     schema = action.get("parameters") or {}
@@ -243,6 +336,8 @@ def _public_job(job: dict, *, include_output: bool = True) -> dict:
         "lock": dict(job.get("lock") or {}),
         "exit_result": dict(job.get("exit_result") or {}) if isinstance(job.get("exit_result"), dict) else None,
         "failure": dict(job.get("failure") or {}) if isinstance(job.get("failure"), dict) else None,
+        # 1.17.17 (additive): the Tec-Tac permission the job's action needed when it started, null when it needed none
+        "permission": job.get("action_permission") if isinstance(job.get("action_permission"), str) and job.get("action_permission") else None,
     }
     if include_output:
         jid = result["id"]
@@ -273,16 +368,41 @@ def _dispatch(command: str, job_id: str) -> None:
 class ServerMaintenanceProvider:
     """Public provider contract for ``core.server_maintenance`` 1.x."""
 
-    def start(self, *, action: str, parameters: dict | None = None, context: dict) -> dict:
+    def start(self, *, action: str, parameters: dict | None = None, context: dict, user=None) -> dict:
+        """Start a registered action. Since 1.17.17 (1.1.0) an action whose manifest declares ``permission`` needs a ``user`` who
+        holds it (a superuser passes). No user, a failed lookup or a missing grant raises ``ServerMaintenancePermissionDenied``,
+        writes a best-effort Core audit row (never the parameters) and creates no job. A permissioned action whose
+        ``owner_module`` is not enabled is refused (``action_disabled``). An action with no permission, and a caller that passes
+        no user, behave as in 1.0.0."""
         action_def = _read_action(action)
+        permission = _action_permission(action_def)
+        owner_module = _action_owner(action_def)
+        operation_context = None
+        if permission:
+            operation_context = _validate_context(context)
+            _require_action_permission(user=user, action_id=str(action_def["id"]), permission=permission, owner_module=owner_module, operation="start", context=operation_context)
+            if owner_module:
+                from . import module_state
+
+                try:
+                    owner_enabled = bool(module_state.is_enabled(owner_module))
+                except Exception:
+                    owner_enabled = False
+                if not owner_enabled:
+                    raise ServerMaintenanceValidationError(
+                        f"Module {owner_module!r}, which owns action {str(action_def['id'])!r}, is not enabled.", classification="action_disabled"
+                    )
         normalized, public_parameters = _normalize_parameters(action_def, parameters)
-        operation_context = _validate_context(context)
+        if operation_context is None:
+            operation_context = _validate_context(context)
         job_id = str(uuid.uuid4())
         payload = {
             "schema": 1,
             "id": job_id,
             "action": str(action_def["id"]),
             "action_revision": str(action_def.get("revision") or "1"),
+            "action_permission": permission,
+            "owner_module": owner_module,
             "status": "queued",
             "stage": "queued",
             "created_at": _utcnow(),
@@ -330,10 +450,16 @@ class ServerMaintenanceProvider:
         _validate_context(context)
         return _public_job(_read_job(job_id), include_output=True)
 
-    def cancel(self, *, job_id: str, context: dict) -> dict:
+    def cancel(self, *, job_id: str, context: dict, user=None) -> dict:
+        """Cancel a job. Since 1.17.17 a job whose action needs a permission can be cancelled only by a ``user`` who holds it."""
         operation_context = _validate_context(context)
         safe_id = _safe_job_id(job_id)
         job = _read_job(safe_id)
+        _require_action_permission(
+            user=user, action_id=str(job.get("action") or ""), permission=_job_permission(job),
+            owner_module=job.get("owner_module") if isinstance(job.get("owner_module"), str) else None,
+            operation="cancel", context=operation_context, job_id=safe_id,
+        )
         if str(job.get("status")) in TERMINAL_STATES:
             return _public_job(job, include_output=True)
         cancel_path = _cancel_root() / f"{safe_id}.json"
@@ -397,6 +523,9 @@ class ServerMaintenanceProvider:
                 "revision": str(action.get("revision") or "1"),
                 "enabled": action.get("enabled", True) is True,
                 "timeout_seconds": int(action.get("timeout_seconds") or 3600),
+                # 1.17.17 (additive): the Tec-Tac permission the action needs, and the module that owns it. Null when none.
+                "permission": action.get("permission") if isinstance(action.get("permission"), str) and action.get("permission") else None,
+                "owner_module": _action_owner(action),
                 "parameters": {
                     name: {k: v for k, v in spec.items() if k != "default" or not bool(spec.get("sensitive", False))}
                     for name, spec in parameters.items() if isinstance(spec, dict)
@@ -433,6 +562,9 @@ def register_core_server_maintenance_capability():
             "execution": "registered-actions-only",
             "arbitrary_shell": False,
             "terminal_states": sorted(TERMINAL_STATES),
+            # 1.1.0: an action manifest may carry permission and owner_module; start and cancel take user=
+            "action_manifest_keys_added_in_1_1_0": ["permission", "owner_module"],
+            "per_action_permission": True,
         },
     )
 

@@ -72,6 +72,10 @@ def _require_target_scope(_user, targets, payload=False):
     assert payload is False
     scope_seen.append(targets)
 
+def is_one_off_schedule(_schedule):
+    # 1.17.17: run-now refuses one-off schedules first; these schedules are ordinary ones (see tests/scheduler-one-off-run-now-1.17.17.py)
+    return False
+
 def queue_manual_run(schedule):
     queue_seen.append(dict(schedule.targets))
     return SimpleNamespace(id="run-1")

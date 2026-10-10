@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
@@ -32,6 +32,8 @@ SUPPORTED_KEYS = frozenset({
     "publisher_permissions", "name", "category", "audit_events", "replaces", "capabilities",
     # 1.17.16: ``routes`` {prefix, urlconf} lets Core serve a module's urls at /api/tfd/<prefix>/; ``description`` is a short plain text.
     "routes", "description",
+    # 1.17.17: ``server_maintenance_actions`` lets a signed module register its own Core server-maintenance actions on install.
+    "server_maintenance_actions",
 })
 # Object types core.resources can scope-check for the browser audit writer. Any other
 # lowercase slug may be declared since 1.17.0, but carries no scope check (see docs/module-audit.md).
@@ -46,6 +48,17 @@ DESCRIPTION_MAX = 500
 _ROUTE_PREFIX_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _URLCONF_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
 _CAPABILITY_VERSION_RE = re.compile(r"^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$")
+
+# 1.17.17: manifest key ``server_maintenance_actions`` (see docs/server-maintenance-capability.md, 'Registering from a module manifest').
+SERVER_MAINTENANCE_ACTIONS_MAX = 16
+SERVER_MAINTENANCE_EXECUTABLE_PREFIX = "server_maintenance/actions/"
+SERVER_MAINTENANCE_REGISTER_PERMISSION = "server_maintenance.register"
+_SM_ACTION_KEYS = frozenset({
+    "id", "description", "permission", "executable", "argv", "parameters", "timeout_seconds", "success_exit_codes", "revision", "protected",
+})
+_SM_ACTION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+_SM_PARAMETER_TYPES = frozenset({"string", "integer", "boolean", "enum"})
+_SM_MAX_TIMEOUT_SECONDS = 7 * 24 * 60 * 60
 
 class RegistryError(RuntimeError):
     """Raised when Tec-Tac plugin metadata is invalid."""
@@ -73,6 +86,9 @@ class PluginSpec:
     route_prefix: str = ""
     route_urlconf: str = ""
     description: str = ""
+    # 1.17.17: the validated ``server_maintenance_actions`` entries (plain dicts, see ``_server_maintenance_actions``). Left out of
+    # equality and hashing so a spec stays comparable and hashable.
+    server_maintenance_actions: tuple = field(default=(), compare=False, repr=False)
 
     def capability_map(self) -> dict[str, str]:
         return dict(self.capabilities)
@@ -183,6 +199,125 @@ def _publisher_permissions(payload: dict, plugin_type: str, plugin_id: str) -> t
     if unknown:
         raise RegistryError(f"Manifest publisher_permissions contains unsupported permission(s): {unknown!r}.")
     return values
+
+
+def _sm_parameters(schema, label: str) -> dict:
+    """The typed parameter schema of one server-maintenance action: the rules the root helper applies again (validate_manifest)."""
+    if not isinstance(schema, dict) or len(schema) > 64:
+        raise RegistryError(f"{label} parameters must be an object with at most 64 entries.")
+    for name, spec in schema.items():
+        if not isinstance(name, str) or not _SM_ACTION_ID_RE.fullmatch(name):
+            raise RegistryError(f"{label} parameter name {name!r} is invalid.")
+        if not isinstance(spec, dict):
+            raise RegistryError(f"{label} parameter {name!r} schema must be an object.")
+        ptype = spec.get("type", "string")
+        if ptype not in _SM_PARAMETER_TYPES:
+            raise RegistryError(f"{label} parameter {name!r} has an unsupported type (string, integer, boolean or enum).")
+        if ptype == "enum" and (not isinstance(spec.get("choices"), list) or not spec["choices"]):
+            raise RegistryError(f"{label} enum parameter {name!r} requires choices.")
+        if "pattern" in spec:
+            try:
+                re.compile(str(spec["pattern"]))
+            except re.error as exc:
+                raise RegistryError(f"{label} parameter {name!r} has an invalid pattern.") from exc
+    return schema
+
+
+def _server_maintenance_actions(payload: dict, plugin_type: str, plugin_id: str, plugin_dir: Path,
+                                permission_groups, publisher_permissions) -> tuple[dict, ...]:
+    """Parse the optional ``server_maintenance_actions`` key (1.17.17): the Core server-maintenance actions a signed module registers.
+
+    Each entry is ``{id, description, permission, executable, argv, parameters, timeout_seconds, success_exit_codes, revision}``
+    (and ``protected``: true, which keeps an action out of automatic registration). Extensions only, at most 16 entries. Rules:
+    ``id`` starts with ``<module_id>.`` and is unique; ``permission`` is required and is one the same module declares in
+    ``permission_groups``; ``executable`` is a path below the module's ``server_maintenance/actions/`` folder (relative, no ``..``,
+    no symlink, an existing file); ``argv`` and ``parameters`` follow the root helper's typed rules (no shell text: argv entries are
+    literal strings or ``{"param": name}``); the module must also declare publisher_permissions ``server_maintenance.register``,
+    the AD-10 gate. The root helper checks the same rules again from the root-owned installed manifest. Returns plain dicts, or ``()``
+    when the key is absent."""
+    if "server_maintenance_actions" not in payload:
+        return ()
+    raw = payload["server_maintenance_actions"]
+    if plugin_type != "extension":
+        raise RegistryError(f"Reportset {plugin_id!r} may not declare server_maintenance_actions; they belong to the extension.")
+    if not isinstance(raw, list):
+        raise RegistryError("Manifest key 'server_maintenance_actions' must be a JSON array.")
+    if len(raw) > SERVER_MAINTENANCE_ACTIONS_MAX:
+        raise RegistryError(f"Manifest server_maintenance_actions may not contain more than {SERVER_MAINTENANCE_ACTIONS_MAX} entries.")
+    if not raw:
+        return ()
+    if SERVER_MAINTENANCE_REGISTER_PERMISSION not in publisher_permissions:
+        raise RegistryError(
+            f"Module {plugin_id!r} declares server_maintenance_actions and must also declare publisher_permissions "
+            f"{SERVER_MAINTENANCE_REGISTER_PERMISSION!r}: the publisher that signs it must hold that permission (AD-10)."
+        )
+    declared_permissions = {code for _, codes in permission_groups for code in codes}
+    entries, seen = [], set()
+    for index, entry in enumerate(raw):
+        label = f"Manifest server_maintenance_actions entry {index + 1}"
+        if not isinstance(entry, dict):
+            raise RegistryError(f"{label} must be a JSON object.")
+        unknown = sorted(set(entry) - _SM_ACTION_KEYS)
+        if unknown:
+            raise RegistryError(f"{label} contains unsupported keys {unknown!r}.")
+        action_id = entry.get("id")
+        if not isinstance(action_id, str) or not _SM_ACTION_ID_RE.fullmatch(action_id):
+            raise RegistryError(f"{label} id must be letters, digits, '.', '_' or '-' (1 to 128 characters).")
+        if not action_id.startswith(plugin_id + ".") or action_id == plugin_id + ".":
+            raise RegistryError(f"Server-maintenance action id {action_id!r} must begin with the module ID prefix {plugin_id + '.'!r}.")
+        if action_id in seen:
+            raise RegistryError(f"Manifest server_maintenance_actions declares {action_id!r} more than once.")
+        seen.add(action_id)
+        label = f"Server-maintenance action {action_id!r}"
+        permission = entry.get("permission")
+        if not isinstance(permission, str) or permission not in declared_permissions:
+            raise RegistryError(f"{label} needs a permission that this module declares in permission_groups.")
+        executable = entry.get("executable")
+        if not isinstance(executable, str) or not executable or "\x00" in executable or "\\" in executable or executable.startswith("/"):
+            raise RegistryError(f"{label} executable must be a relative path inside the module folder.")
+        parts = executable.split("/")
+        if any(part in ("", ".", "..") for part in parts):
+            raise RegistryError(f"{label} executable may not contain empty, '.' or '..' path parts.")
+        if not executable.startswith(SERVER_MAINTENANCE_EXECUTABLE_PREFIX) or len(parts) < 3:
+            raise RegistryError(f"{label} executable must be a file below {SERVER_MAINTENANCE_EXECUTABLE_PREFIX!r} in the module folder.")
+        current = plugin_dir
+        for part in parts:
+            current = current / part
+            if current.is_symlink():
+                raise RegistryError(f"{label} executable may not use a symlink.")
+        if not current.is_file():
+            raise RegistryError(f"{label} executable {executable!r} does not exist in the module folder.")
+        schema = _sm_parameters(entry.get("parameters", {}), label)
+        argv = entry.get("argv", [])
+        if not isinstance(argv, list) or len(argv) > 64:
+            raise RegistryError(f"{label} argv must be an array with at most 64 entries.")
+        for item in argv:
+            if isinstance(item, str):
+                if "\x00" in item or len(item) > 4096:
+                    raise RegistryError(f"{label} has an invalid literal argv entry.")
+            elif not (isinstance(item, dict) and set(item) == {"param"} and isinstance(item["param"], str) and item["param"] in schema):
+                raise RegistryError(f"{label} argv entries must be literal strings or {{'param': '<declared parameter>'}}; no shell text.")
+        timeout = entry.get("timeout_seconds", 3600)
+        if isinstance(timeout, bool) or not isinstance(timeout, int) or timeout < 1 or timeout > _SM_MAX_TIMEOUT_SECONDS:
+            raise RegistryError(f"{label} timeout_seconds must be a whole number from 1 to {_SM_MAX_TIMEOUT_SECONDS}.")
+        codes = entry.get("success_exit_codes", [0])
+        if not isinstance(codes, list) or not codes or any(isinstance(code, bool) or not isinstance(code, int) for code in codes):
+            raise RegistryError(f"{label} success_exit_codes must be a non-empty array of whole numbers.")
+        description = entry.get("description", "")
+        if not isinstance(description, str) or len(description) > DESCRIPTION_MAX or any(ord(ch) < 32 or ord(ch) == 127 for ch in description):
+            raise RegistryError(f"{label} description must be plain text of up to {DESCRIPTION_MAX} characters.")
+        revision = entry.get("revision", "1")
+        if isinstance(revision, bool) or not isinstance(revision, (str, int)) or not str(revision).strip() or len(str(revision)) > 64:
+            raise RegistryError(f"{label} revision must be a short text or whole number.")
+        protected = entry.get("protected", False)
+        if not isinstance(protected, bool):
+            raise RegistryError(f"{label} protected must be true or false.")
+        entries.append({
+            "id": action_id, "description": description.strip(), "permission": permission, "executable": executable, "argv": list(argv),
+            "parameters": dict(schema), "timeout_seconds": timeout, "success_exit_codes": list(codes), "revision": str(revision).strip(),
+            "protected": protected,
+        })
+    return tuple(entries)
 
 
 def _replacement_keys(payload: dict, plugin_type: str, plugin_id: str, category: str) -> tuple[str, tuple[tuple[str, str], ...], bool]:
@@ -385,7 +520,8 @@ def _load_manifest(plugin_type: str, plugin_dir: Path) -> PluginSpec | None:
     replaces, capabilities, capabilities_declared = _replacement_keys(payload, plugin_type, plugin_id, category)
     route_prefix, route_urlconf = _route_keys(payload, plugin_type, plugin_id, django_apps)
     description = _description(payload, plugin_id)
-    return PluginSpec(plugin_id=plugin_id, plugin_type=plugin_type, root=plugin_root, version=version, python_paths=tuple(python_paths), django_apps=django_apps, permission_groups=permission_groups, publisher_permissions=publisher_permissions, name=name, category=category, audit_events=audit_events, replaces=replaces, capabilities=capabilities, capabilities_declared=capabilities_declared, route_prefix=route_prefix, route_urlconf=route_urlconf, description=description)
+    server_maintenance_actions = _server_maintenance_actions(payload, plugin_type, plugin_id, plugin_dir, permission_groups, publisher_permissions)
+    return PluginSpec(plugin_id=plugin_id, plugin_type=plugin_type, root=plugin_root, version=version, python_paths=tuple(python_paths), django_apps=django_apps, permission_groups=permission_groups, publisher_permissions=publisher_permissions, name=name, category=category, audit_events=audit_events, replaces=replaces, capabilities=capabilities, capabilities_declared=capabilities_declared, route_prefix=route_prefix, route_urlconf=route_urlconf, description=description, server_maintenance_actions=server_maintenance_actions)
 
 def _discover_root(plugin_type: str, root: Path) -> list[PluginSpec]:
     if not root.exists():

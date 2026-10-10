@@ -72,7 +72,7 @@ class CommunicatorConfig(AppConfig):
 : Target types the action accepts. The scheduler validates `targets.type` against this list before saving a schedule.
 
 `permission`
-: Extension permission required to create/manage/manual-run this action for non-server-maintenance users. Prefer a real module permission such as `communicator.send` or `patching.install`.
+: Who may create/manage/manual-run this action for non-server-maintenance users. Prefer a real module permission such as `communicator.send` or `patching.install`. Since 1.17.17 it may also be a Tactical role flag written `tactical:can_manage_winupdates`, or a list or tuple of entries meaning **any-of** (Tec-Tac codes and `tactical:` flags may be mixed; at most 8 entries, no duplicates). A module that mirrors a Tactical flag declares `permission="tactical:can_manage_winupdates"` and needs no Tec-Tac permission of its own. A flag that does not exist fails closed. The flag is read again just before a one-off run, so a run whose owner lost it is skipped. Requires `requires.framework >=1.17.17`.
 
 `handler`
 : Callable invoked by the Celery execution task.

@@ -299,7 +299,7 @@ def _clean_names(values: Any, label: str, *, maximum: int, pattern=_FIELD_RE) ->
         raise TacticalOperationRegistrationError(f"{label} must be a list of names.")
     names = []
     for value in values:
-        if not isinstance(value, str) or not pattern.match(value):
+        if not isinstance(value, str) or not pattern.fullmatch(value):
             raise TacticalOperationRegistrationError(f"{label} has an invalid name: {value!r}.")
         if value in names:
             raise TacticalOperationRegistrationError(f"{label} repeats {value!r}.")
@@ -538,7 +538,7 @@ def _parse_upload(value: Any, verb: str, fields: tuple) -> UploadSpec | None:
     if not isinstance(value, dict) or set(value) != {"field", "max_bytes", "extensions"}:
         raise TacticalOperationRegistrationError("upload is {field, max_bytes, extensions} and nothing else.")
     name, cap = value["field"], value["max_bytes"]
-    if name != FILE_NAME_FIELD and (not isinstance(name, str) or not _FIELD_RE.match(name) or name in ("params", "body", "query") or name in fields):
+    if name != FILE_NAME_FIELD and (not isinstance(name, str) or not _FIELD_RE.fullmatch(name) or name in ("params", "body", "query") or name in fields):
         raise TacticalOperationRegistrationError(
             f"upload field must be a plain name that is not params, body, query or a body field, or {FILE_NAME_FIELD} to name the part after the file."
         )
@@ -1226,7 +1226,7 @@ def _clean_audit_before(value: Any) -> dict | None:
         raise bad
     clean = {}
     for name, item in value.items():
-        if not isinstance(name, str) or not _FIELD_RE.match(name) or _SECRET_NAME_RE.search(name):
+        if not isinstance(name, str) or not _FIELD_RE.fullmatch(name) or _SECRET_NAME_RE.search(name):
             raise bad
         if isinstance(item, str):
             if len(item) > _BEFORE_STRING_LIMIT or any(ord(ch) < 32 or ord(ch) == 127 for ch in item):

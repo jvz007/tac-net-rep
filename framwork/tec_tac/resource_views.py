@@ -10,6 +10,7 @@ from .resources import (
     ResourceNotFound,
     ResourcePermissionDenied,
     ResourceValidationError,
+    UNSET,
     create_client,
     create_site,
     delete_client,
@@ -137,18 +138,27 @@ class ResourceMutableDetailView(ResourceDetailView):
         try:
             context = user_context(request.user)
             if self.resource_type == "client":
-                data = _body(request, {"name"})
-                if "name" not in data:
-                    raise ResourceValidationError("name is required.")
-                return Response(update_client(resource_id, name=data["name"], context=context))
+                data = _body(request, {"name", "alert_template_id"})
+                if "name" not in data and "alert_template_id" not in data:
+                    raise ResourceValidationError("name or alert_template_id is required.")
+                if "name" in data and data["name"] is None:
+                    raise ResourceValidationError("name must be a string.")
+                # alert_template_id: a positive integer sets it and null clears it (1.17.17, core.resources 1.4.0)
+                return Response(update_client(
+                    resource_id,
+                    name=data.get("name"),
+                    alert_template_id=data.get("alert_template_id", UNSET),
+                    context=context,
+                ))
             if self.resource_type == "site":
-                data = _body(request, {"name", "client_id"})
+                data = _body(request, {"name", "client_id", "alert_template_id"})
                 if not data:
-                    raise ResourceValidationError("At least one of name or client_id is required.")
+                    raise ResourceValidationError("At least one of name, client_id or alert_template_id is required.")
                 return Response(update_site(
                     resource_id,
                     name=data.get("name"),
                     client_id=data.get("client_id"),
+                    alert_template_id=data.get("alert_template_id", UNSET),
                     context=context,
                 ))
             raise ResourceValidationError("This resource type is read-only.")

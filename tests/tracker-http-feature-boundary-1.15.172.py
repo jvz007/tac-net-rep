@@ -121,6 +121,7 @@ class ResourceValidationError(ResourceDirectoryError): code = 'invalid_resource_
 for cls in (ResourceDirectoryError, ResourcePermissionDenied, ResourceNotFound, ResourceConflict, ResourceValidationError):
     setattr(resources, cls.__name__, cls)
 resource_calls = []
+resources.UNSET = object()  # 1.17.17: resource_views imports the sentinel of update_client and update_site
 resources.user_context = lambda user: SimpleNamespace(actor=user.username)
 resources.list_clients = lambda **kwargs: {'items': []}
 resources.list_sites = lambda **kwargs: {'items': []}
