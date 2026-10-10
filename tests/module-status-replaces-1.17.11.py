@@ -113,7 +113,7 @@ plugins = list(registry.get_plugins()) + [legacy]
 snapshot = {row["id"]: row for row in module_runtime.module_runtime_snapshot(plugins)}
 must(set(snapshot) == {"patching", "patchmanagement", "plain", "oldplugin"}, sorted(snapshot))
 for module_id, row in snapshot.items():
-    must(set(row) == OLD_KEYS | {"replaces", "category", "effective_category", "category_missing", "category_refused", "category_warning"}, (module_id, sorted(row)))  # the old keys, replaces (1.17.11) and the AD-21 fields (1.17.13)
+    must(set(row) == OLD_KEYS | {"replaces", "category", "effective_category", "category_missing", "category_refused", "category_warning", "description"}, (module_id, sorted(row)))  # the old keys, replaces (1.17.11), the AD-21 fields (1.17.13) and description (1.17.16)
 must(snapshot["patchmanagement"]["replaces"] == "patching", snapshot["patchmanagement"])
 must(snapshot["patching"]["replaces"] is None and snapshot["plain"]["replaces"] is None, "a module that declares none: null")
 must(snapshot["oldplugin"]["replaces"] is None and snapshot["oldplugin"]["legacy"] is True and snapshot["oldplugin"]["enabled"] is True, snapshot["oldplugin"])

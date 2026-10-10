@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import calendar
 import json
+import logging
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone as dt_timezone
 from threading import RLock
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
@@ -26,6 +29,16 @@ class SchedulerPermanentError(SchedulerError):
 
 class SchedulerTransientError(SchedulerError):
     """A failure that may recover and may use the configured retry policy."""
+
+
+class SchedulerNotAllowed(SchedulerError):
+    """1.17.16: the user a module started a one-off run for may not run that action or touch those targets."""
+
+
+logger = logging.getLogger("tec_tac.scheduler")
+
+# 1.17.16: a one-off run is a disabled ONCE module-owned schedule whose owner_key starts with this prefix.
+ONE_OFF_PREFIX = "one-off:"
 
 
 DEFAULT_RETRY_DELAY_SECONDS = 60
@@ -610,17 +623,28 @@ def _queue_run(run: TecTacScheduleRun):
         raise
 
 
+def is_one_off_key(owner_key) -> bool:
+    return isinstance(owner_key, str) and owner_key.startswith(ONE_OFF_PREFIX)
+
+
+def is_one_off_schedule(schedule) -> bool:
+    return schedule is not None and schedule.owner_type == TecTacSchedule.OwnerType.MODULE and is_one_off_key(schedule.owner_key)
+
+
 def _runtime_authorization_error(schedule: TecTacSchedule) -> str | None:
     """Re-check the saved actor, action permission and Tactical target scope.
 
     Save-time authorization is not durable authority. User-owned schedules run
     only while the original actor remains active and still has permission for
     both the registered action and the saved client/site/endpoint scope.
+    Since 1.17.16 a module-owned one-off schedule (owner_key ``one-off:<id>``, AD-13 condition 2) is held to the same
+    check against ``created_by``, the user the module started it for.
     """
-    if schedule.owner_type != TecTacSchedule.OwnerType.USER:
+    one_off = is_one_off_schedule(schedule)
+    if schedule.owner_type != TecTacSchedule.OwnerType.USER and not one_off:
         return None
     actor = schedule.created_by
-    if actor is None or not bool(getattr(actor, "is_active", False)):
+    if actor is None or not bool(getattr(actor, "is_active", False)) or (one_off and bool(getattr(actor, "is_installer_user", False))):
         return "Schedule owner is missing or inactive."
     try:
         action = get_scheduled_action(schedule.action_id)
@@ -970,6 +994,131 @@ def remove_owned_schedule(*, owner_module: str, owner_key: str) -> bool:
             raise SchedulerError("Owned schedule cannot be removed while a run is queued or running.")
         schedule.delete()
         return True
+
+
+def _one_off_user_refusal(user) -> str | None:
+    if user is None or not bool(getattr(user, "is_active", False)) or bool(getattr(user, "is_installer_user", False)):
+        return "A one-off run needs an active, interactive user."
+    return None
+
+
+def start_one_off_run(*, user, owner_module: str, action_id: str, targets: dict | None = None,
+                      parameters: dict | None = None, name: str | None = None) -> TecTacScheduleRun:
+    """Start one run of a registered Scheduler action on behalf of ``user`` and return the queued run (1.17.16).
+
+    A module starts only its own actions (``action.module_id == owner_module``, as ``reconcile_schedule`` requires). The user
+    must hold the action now (``scheduler_views._can_use_action``: an action with no permission is startable only by native
+    scheduler managers, as in the browser) and the targets' Tactical scope. Core then creates a disabled ONCE module-owned
+    schedule with ``owner_key`` ``one-off:<uuid>`` and ``created_by`` the user, so the ticker never dispatches it, the browser
+    shows it as managed by the module, and ``cleanup_once_schedules`` removes it after the retention. The run is queued like a
+    manual run. Before the handler runs Core re-checks that the user is still active and still holds the action and scope
+    (AD-13 condition 2); if not, the run ends ``skipped``. This is the start-and-track call only, not the system-action
+    contract. Raises ``SchedulerError`` (``SchedulerNotAllowed`` for a user who may not), ``SchedulerTransientError`` when the
+    run could not be queued. Call it outside a database transaction that has not committed: the worker reads the run at once."""
+    refusal = _one_off_user_refusal(user)
+    if refusal:
+        raise SchedulerNotAllowed(refusal)
+    module, _ = _validate_owner(owner_module, ONE_OFF_PREFIX)
+    action = get_scheduled_action(str(action_id or "").strip())
+    if action.module_id != module:
+        raise SchedulerError(f"Scheduled action {action.id!r} belongs to module {action.module_id!r}, not {module!r}.")
+    if targets is not None and not isinstance(targets, dict):
+        raise SchedulerError("targets must be an object.")
+    data = validate_schedule_payload({
+        "name": str(name or f"{action.label} · one-off").strip()[:255],
+        "action_id": action.id,
+        "schedule_type": TecTacSchedule.ScheduleType.ONCE,
+        "targets": targets or {"type": action.target_types[0]},
+        "parameters": parameters if parameters is not None else {},
+        "enabled": False,
+    })
+    try:
+        json.dumps(data["parameters"])
+    except (TypeError, ValueError) as exc:
+        raise SchedulerError("parameters must be JSON data.") from exc
+    try:
+        canonical = normalize_scheduler_targets(data["targets"])
+    except SchedulerTargetShapeError as exc:
+        raise SchedulerError(str(exc)) from exc
+    target_type = str(canonical.get("type") or "none")
+    if target_type not in action.target_types:
+        raise SchedulerError(f"Action {action.id} does not support target type {target_type!r}.")
+    # Runtime import avoids a scheduler <-> scheduler_views import cycle.
+    from .scheduler_views import _can_use_action, _can_access_target_scope, _canonicalize_endpoint_targets_for_user
+    try:
+        may_run = _can_use_action(user, action)
+    except Exception as exc:  # fail closed when the permission lookup itself fails
+        raise SchedulerNotAllowed("The user's permission to run this action could not be verified.") from exc
+    if not may_run:
+        raise SchedulerNotAllowed("The user does not have permission to run this action.")
+    try:
+        canonical = _canonicalize_endpoint_targets_for_user(user, canonical)
+        in_scope = _can_access_target_scope(user, canonical)
+    except SchedulerError:
+        raise
+    except Exception as exc:
+        raise SchedulerNotAllowed("The targets are outside the user's Tactical scope.") from exc
+    if not in_scope:
+        raise SchedulerNotAllowed("The targets are outside the user's Tactical scope.")
+
+    now = timezone.now()
+    with transaction.atomic():
+        schedule = TecTacSchedule.objects.create(
+            name=data["name"], module_id=action.module_id, action_id=action.id,
+            target_mode=TecTacSchedule.TargetMode.SNAPSHOT, targets=canonical, target_state="valid", target_state_detail="",
+            parameters=data["parameters"], schedule_type=TecTacSchedule.ScheduleType.ONCE, timezone="UTC", run_at=now,
+            owner_type=TecTacSchedule.OwnerType.MODULE, owner_module=module, owner_key=f"{ONE_OFF_PREFIX}{uuid.uuid4()}",
+            enabled=False, created_by=user, updated_by=user,
+        )
+    try:
+        run = queue_manual_run(schedule)
+    except Exception as exc:
+        # _queue_run left the failed run as history. The schedule has no use without a run, so remove it.
+        schedule.delete()
+        raise SchedulerTransientError("The run could not be queued. Try again.") from exc
+    try:
+        from .audit import record as audit_record
+        audit_record(
+            actor=user, module_id="core", action="add", object_type="scheduler_run", object_id=str(run.id),
+            message=f"Module {module} started a one-off run of {action.id}.",
+            metadata={"owner_module": module, "action_id": action.id, "requested_by": "scheduler"},
+        )
+    except Exception:
+        logger.exception("Tec-Tac audit row for a one-off scheduler run could not be written")
+    return run
+
+
+def get_one_off_run(run_id, *, owner_module: str) -> dict:
+    """The state of a run that ``start_one_off_run`` started, as ``serialize_run`` shows it (1.17.16). A module reads only its own.
+    Raises ``SchedulerError`` when there is no such one-off run for ``owner_module``."""
+    module, _ = _validate_owner(owner_module, ONE_OFF_PREFIX)
+    try:
+        run = TecTacScheduleRun.objects.filter(pk=run_id, owner_type=TecTacSchedule.OwnerType.MODULE, owner_module=module).first()
+    except (TypeError, ValueError, ValidationError):  # a malformed id is "not found", never a crash
+        run = None
+    if run is None or not is_one_off_key(run.owner_key):
+        raise SchedulerError("No one-off run with that id was found for this module.")
+    return serialize_run(run)
+
+
+def get_owned_schedule(owner_module: str, owner_key: str) -> dict | None:
+    """Read one module-owned schedule without exposing the model (1.17.16): ``{enabled, schedule_type, next_run_at,
+    last_run_at, last_run_status, last_run_finished_at}``, or None when no schedule has that ownership tuple. A module reads
+    only its own tuple (the same trust as ``reconcile_schedule``)."""
+    module, key = _validate_owner(owner_module, owner_key)
+    schedule = TecTacSchedule.objects.filter(owner_type=TecTacSchedule.OwnerType.MODULE, owner_module=module, owner_key=key).first()
+    if schedule is None:
+        return None
+    latest = schedule.runs.order_by("-created_at").first()
+    upcoming = next_occurrence(schedule) if schedule.enabled else None
+    return {
+        "enabled": bool(schedule.enabled),
+        "schedule_type": schedule.schedule_type,
+        "next_run_at": upcoming.isoformat() if upcoming else None,
+        "last_run_at": schedule.last_run_at.isoformat() if schedule.last_run_at else None,
+        "last_run_status": latest.status if latest else None,
+        "last_run_finished_at": latest.finished_at.isoformat() if latest and latest.finished_at else None,
+    }
 
 
 def serialize_action(action: ScheduledAction) -> dict:

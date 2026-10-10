@@ -74,6 +74,14 @@ def load_extensions():
                 settle_reporting_bridge()
             except Exception:
                 logger.exception("Tec-Tac reporting handover could not settle; Tactical starts regardless")
+            # 1.17.16: mount the urls of every loaded module that declares the manifest ``routes`` key. It runs after every
+            # AppConfig.ready(), so a module's urls are never imported before its own ready(). Never raises.
+            try:
+                from tec_tac.route_mounting import mount_module_routes
+
+                mount_module_routes()
+            except Exception:
+                logger.exception("Tec-Tac module route mounting failed; Tactical starts regardless")
         return result
     tec_tac_populate._tec_tac_extension_loader = True
     Apps.populate = tec_tac_populate

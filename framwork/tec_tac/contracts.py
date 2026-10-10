@@ -527,7 +527,7 @@ CORE_CONTRACTS = (
         "import_path": "tec_tac.tactical_operations",
         "name": "run_tactical_operation",
         "kind": "python",
-        "purpose": "Run a declared operation for the signed-in user of an authenticated request and audit it where the call happens (1.17.7): run_tactical_operation(request, module_id, operation_id, params=None, body=None, query=None, upload=None) returns TacticalOperationResult(status, data, content_type, headers, audit, content). Since 1.17.13 query is a flat object of the operation's whitelisted query names (each value a string or whole number of at most 512 characters, no control characters, no '..' path segment; a name outside the whitelist gives 400 query_field_not_allowed) and upload is {name, content_type, content} (bytes) for an operation that declares a file part (refusals upload_not_allowed, upload_too_large, upload_type_not_allowed, invalid_upload; the audit row records the file name, size and content type, never the content). Core re-checks the Tactical flags, the optional module permission and the role's client and site limits, then dispatches in-process to Tactical's own view. Core's refusals raise TacticalOperationError(status, code, message, audit). It needs a request, so a Celery task cannot call it. Also available as capability core.tactical_operations 1.1.0 (1.0.0 until 1.17.12; ask for >=1,<2) operation run.",
+        "purpose": "Run a declared operation for the signed-in user of an authenticated request and audit it where the call happens (1.17.7): run_tactical_operation(request, module_id, operation_id, params=None, body=None, query=None, upload=None) returns TacticalOperationResult(status, data, content_type, headers, audit, content). Since 1.17.13 query is a flat object of the operation's whitelisted query names (each value a string or whole number of at most 512 characters, no control characters, no '..' path segment; a name outside the whitelist gives 400 query_field_not_allowed) and upload is {name, content_type, content} (bytes) for an operation that declares a file part (refusals upload_not_allowed, upload_too_large, upload_type_not_allowed, invalid_upload; the audit row records the file name, size and content type, never the content). Core re-checks the Tactical flags, the optional module permission and the role's client and site limits, then dispatches in-process to Tactical's own view. Core's refusals raise TacticalOperationError(status, code, message, audit). It needs a request, so a Celery task cannot call it. Also available as capability core.tactical_operations 1.1.0 (1.0.0 until 1.17.12; ask for >=1,<2) operation run. Since 1.17.16 (capability core.tactical_operations 1.3.0, still major 1, additive) run takes two server-set keywords and is stricter about the request. correlation_id=None: 1 to 128 characters of letters, digits and . _ : -, written on every Core row of the call (success, deny and outcome-unknown) as audit.record(correlation_id=) does; a bad value is refused 400 invalid_correlation_id. audit_before=None: a flat dict of at most 16 fields (text up to 256 characters, whole numbers, true/false, null) the caller asserts as the row's before value, for a route with no single-row GET to read; a field name that looks like a secret, a nested value, a float or an oversize value is refused 400 invalid_audit_before. It is used only when the operation declares no audit.before read (Tactical's own read wins when both exist), is written only on the success row, and the row metadata says before recorded and before_source caller (before_source tactical for a read), so a reviewer can tell an asserted value from a read one. Neither keyword is available over HTTP: the route still accepts only params, body and query, and a browser can never send a correlation id (the audit endpoints refuse one). The request must now be a real Django HttpRequest, or a DRF Request wrapping one, whose user is authenticated and which carries tec_tac_session (left by Core's SessionAuthenticated guard); any other object is refused 401 authenticated_request_required with no audit row, because there is no trustworthy actor to write. Real callers (views that use SessionAuthenticated) are unaffected; a module's own stub tests that pass a fake request must now pass one that carries tec_tac_session. Requires framework >=1.17.16 for any of these.",
         "audience": "core module/backend",
     },
     {
@@ -545,6 +545,62 @@ CORE_CONTRACTS = (
         "kind": "python",
         "purpose": "Return one declared Tactical operation's metadata row, or None (1.17.7). Capability core.tactical_operations operation get_operation.",
         "audience": "consumer/backend",
+    },
+    {
+        "area": "module-routes",
+        "import_path": "tec_tac.route_mounting",
+        "name": "mounted_routes",
+        "kind": "python",
+        "purpose": "mounted_routes() -> [{prefix, module, state, reason}] (1.17.16, read only): what Core did with each loaded module's manifest routes key. A module may declare \"routes\": {\"prefix\": \"windows-patching\", \"urlconf\": \"tec_tac_patching.urls\"} in tec_tac.json (extensions only). Core then serves the module's urlconf at /api/tfd/<prefix>/ and the module no longer appends to tacticalrmm.urls or tec_tac.urls from its AppConfig.ready(). prefix is one lowercase slug (a-z, 0-9, _ and -, up to 64 characters) and defaults to the module id; it may differ from the id. urlconf is required and must sit inside one of the module's own django_apps packages, never tacticalrmm, tec_tac or another module's. Core mounts after every AppConfig.ready() has run, only modules whose app is loaded (a disabled module, and an AD-20 replacement Core dropped, are not mounted), and appends after Core's own routes, so a Core route always wins on an overlap. Each module is mounted on its own: a urlconf that cannot be imported is logged and skipped and never stops Tactical starting. Two loaded modules asking for the same prefix: the first by sorted module id is mounted, the second is refused (state refused). Compatibility path, no end date: a module that still appends to tec_tac.urls or tacticalrmm.urls is untouched and shows state compat, so adding routes and forgetting to drop the append is harmless. state is mounted, compat or refused. A bad routes key is refused when the package is inspected for install, not at start-up. Requires framework >=1.17.16.",
+        "audience": "framework/diagnostics",
+    },
+    {
+        "area": "notices",
+        "import_path": "tec_tac.notices",
+        "name": "publish",
+        "kind": "python",
+        "purpose": "publish(user, client_id, level, message, action=None, *, module_id) -> {created, notice} (1.17.16, CQ49): store one notice for a user from a module backend route or a Scheduler handler (no request needed). user is a user object or a username of an active interactive user (active, not an installer user, no agent link, not blocked from the dashboard); anything else raises NoticeError. module_id must be an installed, enabled extension and never core or tec-tac; it becomes the notice source. It is a CLAIMED id: Core does not yet verify which module is calling, so a module can name another enabled module until the verified caller identity request ships. level is info, success, warning or error. message is up to 1000 characters. action is None or {label, route}; route must be an internal Tec-Tac route starting with '/' (never javascript: or a URL), and a label needs a route. client_id is required and is the dedupe key, stored as <module_id>:<client_id> (the pair must fit 64 characters of letters, digits and . _ : -). A notice is stored once per user and key and a notice the person has read is never reset. Not exposed over HTTP. Requires framework >=1.17.16.",
+        "audience": "provider/backend",
+    },
+    {
+        "area": "audit",
+        "import_path": "tec_tac.audit",
+        "name": "request_correlation_id",
+        "kind": "python",
+        "purpose": "request_correlation_id(request) -> str (1.17.16): the correlation id every Core audit row of this request carries. Core has no middleware entry of its own, so the first row written for a request (or the first call here) mints the id and keeps it on the underlying Django request as tec_tac_request_id; every later row of the same request shares it, so a module backend can stamp its own parent audit.record row with it (correlation_id=) and the Tactical operation rows it triggers carry the same id. The attribute is set by Core only and a browser header (X-Request-ID, X-Correlation-ID) is never read. An explicit correlation_id on audit.record or run_tactical_operation wins over the request id and does not replace it. Requires framework >=1.17.16.",
+        "audience": "provider/backend",
+    },
+    {
+        "area": "scheduler",
+        "import_path": "tec_tac.scheduler",
+        "name": "start_one_off_run",
+        "kind": "python",
+        "purpose": "start_one_off_run(*, user, owner_module, action_id, targets=None, parameters=None, name=None) -> TecTacScheduleRun (1.17.16, AD-13 condition 2, CQ50): start one run of a registered Scheduler action on behalf of a user and track it. A module starts only its own actions (action.module_id == owner_module). The user must be active and not an installer user, hold the action now (an action with no permission is startable only by native scheduler managers, as in the browser) and hold the targets' Tactical scope; otherwise SchedulerNotAllowed (a SchedulerError). Core creates one disabled ONCE schedule owned by the module with owner_key one-off:<uuid> and created_by the user, so the ticker never dispatches it, the Scheduler page shows it as managed by the module, and the existing once-retention cleanup removes it (48 hours by default); the run history stays. It then queues the run like a manual run and writes one best-effort Core audit row (action add, object_type scheduler_run). Just before the handler runs, Core re-checks that the user is still active and still holds the action and the scope; if not the run ends skipped with a plain reason and an audit row, and the handler never runs. The handler context gains owner_type, owner_module, owner_key, owner_user_id, owner_username (the user fields only for a one-off run and a user-owned schedule, otherwise None) and one_off (see the scheduler docs). This is the start-and-track call, not the system-action contract (registered Tactical actions run in-process as the owner, still open). Call it outside an uncommitted database transaction. Requires framework >=1.17.16.",
+        "audience": "provider/backend",
+    },
+    {
+        "area": "scheduler",
+        "import_path": "tec_tac.scheduler",
+        "name": "get_one_off_run",
+        "kind": "python",
+        "purpose": "get_one_off_run(run_id, *, owner_module) -> dict (1.17.16): the state of a run start_one_off_run started, in the serialize_run shape (id, status, result, error, started_at, finished_at ...). A module reads only its own: an unknown run, a run of another module and a run that is not a one-off raise SchedulerError. The run stays readable after its one-off schedule is cleaned up. Requires framework >=1.17.16.",
+        "audience": "provider/backend",
+    },
+    {
+        "area": "scheduler",
+        "import_path": "tec_tac.scheduler",
+        "name": "get_owned_schedule",
+        "kind": "python",
+        "purpose": "get_owned_schedule(owner_module, owner_key) -> dict | None (1.17.16): read one module-owned schedule without the model: {enabled, schedule_type, next_run_at, last_run_at, last_run_status, last_run_finished_at}, or None when no schedule has that tuple. next_run_at is None for a disabled schedule. Read only, no permission input: a module reads only its own tuple, the same trust as reconcile_schedule. Requires framework >=1.17.16.",
+        "audience": "provider/backend",
+    },
+    {
+        "area": "scheduler",
+        "import_path": "tec_tac.scheduler",
+        "name": "SchedulerNotAllowed",
+        "kind": "python",
+        "purpose": "SchedulerNotAllowed (1.17.16): raised by start_one_off_run when the user may not run the action or touch the targets. A subclass of SchedulerError.",
+        "audience": "provider/backend",
     },
 )
 
@@ -695,6 +751,7 @@ HTTP_CONTRACT_DETAILS = {
                 "module_register_timeout_seconds": "integer, added in 1.17.1. Seconds the UI lets a module's register() run before it marks the module failed and loads the next. Default 30, range 5 to 300. Additive: older UI builds ignore it.",
                 "tactical_permissions": "object, added in 1.17.7: every boolean can_* field on Tactical's Role mapped to true or false for the signed-in user, for example {\"can_reboot_agents\": true}. A superuser or role superuser has every flag true. An installer user, a user with no role and any lookup failure have every flag false. It uses only the user's own role and adds no Tec-Tac permission. It is a hint for the UI: Tactical still decides every call. Additive: older UI builds ignore it.",
                 "module_status[].replaces": "string|null, added in 1.17.11: the core or server module id the module's manifest declares it replaces (AD-20), null for a module that declares none and for a legacy plugin. The declared value, not the honoured one. A replacement enabled next to the module it replaces is reported with enabled false and active false. Additive: older UI builds ignore it.",
+                "module_status[].description": "string|null, added in 1.17.16: the plain-text description the module's manifest declares (1 to 500 characters), null when it declares none and for a legacy plugin. Additive: older UI builds ignore it.",
                 "module_status[].category": "string|null, added in 1.17.13 (AD-21): the category the manifest declares (core, server, premium or test), null when it states none and for a legacy plugin. Additive.",
                 "module_status[].effective_category": "string|null, added in 1.17.13: the category Core acts on. A missing category is test. Null for a legacy plugin.",
                 "module_status[].category_missing": "boolean, added in 1.17.13: true when the manifest states no category.",
@@ -845,6 +902,8 @@ HTTP_CONTRACT_DETAILS = {
     "/api/tfd/modules/v2/": {
         "response": {
             "modules[].replaces": "string|null, the core or server module this module replaces (added 1.17.9)",
+            "modules[].description": "string|null, the manifest description (added 1.17.16), null when the module declares none",
+            "modules[].routes": "{prefix, urlconf}|null, the manifest routes key (added 1.17.16): Core serves the module's urlconf at /api/tfd/<prefix>/. null when the module declares none (see tec_tac.route_mounting.mounted_routes)",
             "modules[].replacement": "object|null, replacement status of a module that declares replaces (added 1.17.9). Carries registered_mismatch and a registration-caused degraded since 1.17.10, and conflict (boolean, true while it is enabled next to the module it replaces) since 1.17.11. See replacement_status",
             "modules[].replaced_by": "string|null, the module that honourably replaces this core or server module right now (added 1.17.9)",
             "modules[].will_disable": "array of module ids, added 1.17.11: the modules that enabling this module would disable in the same job (its replaced module, when that is enabled and every other rule passes). Empty when none. Show it, then send it back as disable_replaced. Since 1.17.12 (AD-20 hand-back, same field, new meaning for the replaced module) it also names the enabled replacement(s) that enabling a disabled core or server module would switch off. Enabling the module then needs a second confirmation: see second_confirmation_required",
@@ -1294,6 +1353,7 @@ RULES = (
     "Notices Core creates itself (1.17.14, Johan CQ36 and CQ41): when a module job fails (enable, disable, install, bundle install or batch install) the scheduler tick stores one notice per recipient, readable through GET /api/tfd/ui/notices/ like any other: source core, level error, client_id module-job-failed:<job id>, action route /modules. Recipients are every active superuser and the user who started the job. A failed switch says whether the flags were put back. The text is plain English and holds no paths. The browser toast for a new server-created notice is a UI change; until then the notice shows in the notice history.",
     "A core or server module that declares `capabilities` in tec_tac.json must register exactly the capability ids it declares, and a replacement must register at the declared major version with a minor.patch that is not lower (since 1.17.10; server modules since 1.17.11). Core does not register anything else: it logs one warning, registers nothing, drops an earlier registration of the same id by the same module (1.17.11) and never raises out of AppConfig.ready(). A module with no `capabilities` key is unchanged.",
     "A Tactical call that must be audited (reboot, Wake-on-LAN, report changes, code signing) is declared once by the owning core module with tec_tac.tactical_operations.register_tactical_operation and run through core.tactical_operations (POST /api/tfd/tactical-operations/<module_id>/<operation_id>/ or the capability's run). Core writes the audit row where the call happens, so the browser cannot misreport it. The browser-declared audit_events path is deprecated since 1.17.7 for declared events (see docs/module-audit.md for the replacement of each event).",
+    "Manifest keys added in 1.17.16: routes {prefix, urlconf} lets Core serve the module's urlconf at /api/tfd/<prefix>/ instead of the module appending to tacticalrmm.urls or tec_tac.urls (see tec_tac.route_mounting.mounted_routes; the old append keeps working); description is a plain text of 1 to 500 characters with no control characters, shown on the module catalogue and runtime rows as description (null when absent). Neither is required. A module that uses routes requires framework >=1.17.16.",
     "Use Python tec_tac.* contracts inside the Tec-Tac/Tactical backend; use HTTP only at browser/external process boundaries.",
     "UI modules must use the documented browser contracts passed to register(context) or registerPublic(context); do not import Core UI internals or read Tactical authentication storage.",
     "Swagger grouping is Core-owned: installed extension endpoints are grouped from their registered Django app ownership even when the URL prefix differs from the module ID. Module manifests may declare a readable name and category=core, server, premium or test (premium and test since 1.17.13); groups are named Core module · <name>, Server module · <name> or Module · <name>. Core HTTP surfaces use explicit subsystem groups, module callback ownership wins over path prefixes, and there is no generic Framework catch-all.",
@@ -1331,6 +1391,8 @@ def _http_contracts() -> list[dict]:
         route = str(getattr(entry, "pattern", ""))
         if not route:
             continue
+        if getattr(entry, "_tec_tac_module_route", None):
+            continue  # a module's own urls, mounted from its manifest routes key (1.17.16): not a Core HTTP contract
         callback = getattr(entry, "callback", None)
         view_class = getattr(callback, "view_class", None)
         methods = []

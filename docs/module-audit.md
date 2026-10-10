@@ -140,7 +140,29 @@ Core writes these values into Tactical `debug_info`:
 }
 ```
 
-Module version is resolved from the installed registry. Browser callers cannot override it. Correlation/request IDs are taken from the Core request context or standard `X-Request-ID` / `X-Correlation-ID` headers when available.
+Module version is resolved from the installed registry. Browser callers cannot override it. Core never reads a browser `X-Request-ID` or `X-Correlation-ID` header as provenance. The correlation id is the explicit `correlation_id` a backend passes, or the id Core keeps for the request (next section).
+
+## One correlation id for a request or a job (1.17.16)
+
+Core has no middleware entry of its own (adding one would mean editing Tactical's tracked settings), so the id is made the first time it is needed:
+
+- **Per request.** The first audit row written for a request mints an id and keeps it on the underlying Django request as `tec_tac_request_id`. Every later row of the same request shares it. A DRF `Request` and the `HttpRequest` it wraps agree.
+- **`audit.request_correlation_id(request)`** returns that id, minting and keeping it if it is not there yet. A module backend reads it to stamp its own parent row, so the parent row and the Tactical operation rows it triggers share one id:
+
+  ```python
+  from tec_tac import audit
+  from tec_tac.tactical_operations import run_tactical_operation
+
+  cid = audit.request_correlation_id(request)
+  audit.record(actor=request.user, module_id="patching", action="run", object_type="agent", object_id=agent_id,
+               message="Bulk patch install started.", request=request, correlation_id=cid)
+  run_tactical_operation(request, "patching", "install-updates", params, body)  # same request, same id
+  ```
+
+- **Per job.** A backend that works across requests or in a Scheduler run passes its own `correlation_id=` to `audit.record` and to `run_tactical_operation` (1.17.16, see `docs/tactical-operations.md`).
+- **An explicit id wins** over the request id and never replaces it.
+- **Core sets it, a browser never does.** The attribute name `tec_tac_request_id` is Core's. A browser header is never read, and the audit endpoints refuse a `correlation_id` field.
+- Two requests always get two different ids.
 
 ## Tactical compatibility and payload limits
 

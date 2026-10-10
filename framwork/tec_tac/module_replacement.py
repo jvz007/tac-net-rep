@@ -473,10 +473,11 @@ def _outcome_rows(job: Mapping[str, Any], replaces_of) -> list[dict]:
                          "message": f"Module {target} was enabled again because its replacement {subject} was {gone}.",
                          "metadata": {**base, "replacement": subject, "replaced": target}})
         skipped = _id_list(job.get("hand_back_skipped"))
-        if skipped and job.get("action") == "disable":
+        if skipped and job.get("action") in ("disable", "remove"):
             # 1.17.14 (CQ34): the replacement was disabled on a confirmation to leave the replaced module off.
+            # 1.17.16: a confirmed uninstall leaves the replaced module off the same way and owes the same row.
             rows.append({"action": ACTION_DISABLED, "object_id": subject,
-                         "message": f"Replacement {subject} was disabled. The module it replaces, {_join_ids(skipped)}, stayed off because it cannot be enabled.",
+                         "message": f"Replacement {subject} was {gone}. The module it replaces, {_join_ids(skipped)}, stayed off because it cannot be enabled.",
                          "metadata": {**base, "replacement": subject, "replaced": ", ".join(sorted(skipped)), "hand_back_skipped": sorted(skipped)}})
         if job.get("reason") != "replacement_conflict":
             for target in _id_list(job.get("reconciled_modules")):

@@ -572,3 +572,15 @@ Creating or materially editing a schedule establishes a new scheduling baseline.
 Migration `0015_scheduler_target_canonicalization` may repair mutable schedule definitions, but run-history `targets_snapshot` values are immutable evidence and are never rewritten by the migration.
 
 Queued stale-run recovery applies a database timestamp prefilter before row locking, then evaluates the authoritative retry-aware deadline per candidate. Retry recovery and Celery execution share the same 60-second fallback when an old run has no stored retry delay.
+
+
+## One-off runs and reading an owned schedule (Core 1.17.16)
+
+Two server-side calls sit next to `reconcile_schedule`. Both need framework >=1.17.16. The full description is in `docs/scheduler.md`.
+
+- `start_one_off_run(user=..., owner_module=..., action_id=..., targets=None, parameters=None, name=None)` starts one run of your own registered action for a user and returns the queued run. Core re-checks the user's access just before your handler runs. `get_one_off_run(run_id, owner_module=...)` reads its state.
+- `get_owned_schedule(owner_module, owner_key)` returns `{enabled, schedule_type, next_run_at, last_run_at, last_run_status, last_run_finished_at}` or `None`, so a module can show the real next run instead of an estimate.
+
+The handler context has six more keys: `owner_type`, `owner_module`, `owner_key`, `owner_user_id`, `owner_username` and `one_off`. The user keys are set only for a one-off run and a user-owned schedule.
+
+One-off schedules show in the module schedule list as managed by the module, disabled, with an `owner_key` that starts `one-off:`. Do not reconcile, disable or remove them yourself. Core removes them after the once-retention.

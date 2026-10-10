@@ -254,8 +254,28 @@ def _correlation_id(request=None, explicit: Any = None) -> str:
             if value:
                 return value[:255]
     # Never trust browser-supplied X-Request-ID/X-Correlation-ID as audit
-    # provenance. If Core middleware did not assign one, mint it here.
-    return str(uuid.uuid4())
+    # provenance. Core has no middleware entry of its own, so the first row of a request mints the id and keeps it on
+    # the request (1.17.16): every later row of the same request shares it.
+    minted = str(uuid.uuid4())
+    if request is not None:
+        _remember_request_id(request, minted)
+    return minted
+
+
+def _remember_request_id(request, value: str) -> None:
+    """Keep the id Core minted on the underlying Django request, so a DRF wrapper and the request it wraps agree.
+    Never raises: a request that refuses the attribute simply gets a fresh id next time."""
+    try:
+        setattr(getattr(request, "_request", request), "tec_tac_request_id", value)
+    except Exception:
+        pass
+
+
+def request_correlation_id(request) -> str:
+    """The correlation id every Core audit row of this request carries (1.17.16). Public: a module backend reads it to
+    stamp its own parent row, then passes it as ``correlation_id`` to ``audit.record``. Minted and kept on the request the
+    first time it is asked for. Set by Core only; a browser header never becomes one. Without a request it is a new id."""
+    return _correlation_id(request)
 
 
 def _max_value_bytes() -> int:
@@ -479,6 +499,7 @@ def _record_tactical_operation(
     tactical_status: int | None = None,
     refusal: bool = False,
     request=None,
+    correlation_id: Any = None,
 ) -> dict[str, Any]:
     """Write the row of a Tactical call Core ran server-side (1.17.7). Private since 1.17.8; only Core's executor calls it. Never strict.
 
@@ -497,7 +518,7 @@ def _record_tactical_operation(
     return _record_row(
         actor=actor, module_id=module_id, action=action, object_type=object_type, object_id=object_id,
         message=message, before=before, after=after, metadata=metadata, request=request, strict=False,
-        operation_context=context, authority=_TACTICAL_OPERATION_AUTHORITY,
+        operation_context=context, authority=_TACTICAL_OPERATION_AUTHORITY, correlation_id=correlation_id,
     )
 
 

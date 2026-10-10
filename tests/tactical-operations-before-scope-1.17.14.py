@@ -142,7 +142,7 @@ must(result.status == 200 and ROWS[0]["action"] == "modify" and ROWS[0]["before_
 
 # ------------------------------------------------------------------------------------------------ the capability and the docs
 meta = ops.tactical_operations_contract_metadata()
-must(ops.CAPABILITY_VERSION == "1.2.0" and meta["version"] == "1.2.0" and meta["version"].split(".")[0] == "1", "capability 1.2.0, still major 1")
+must(ops.CAPABILITY_VERSION == "1.3.0" and meta["version"] == "1.3.0" and meta["version"].split(".")[0] == "1", "capability 1.3.0, still major 1")
 must("scope source before:<field>" in meta["declaration_keys_removed_in_1_2_0"], meta)
 must("scope source before:<field>" not in meta["declaration_keys_added_in_1_1_0"], meta)
 text = (Path(__file__).resolve().parents[1] / "docs/tactical-operations.md").read_text(encoding="utf-8")

@@ -457,6 +457,18 @@ def _replacement_metadata(payload: dict) -> dict:
     return {"replaces": replaces or None, "capabilities": dict(capabilities) if declared else None}
 
 
+def _route_and_description_metadata(payload: dict) -> dict:
+    """The 1.17.16 manifest keys ``routes`` and ``description``, parsed with the registry's own rules, so a bad key is
+    refused when the package is inspected and not at the next start-up."""
+    module_id = str(payload.get("id", "")).strip()
+    try:
+        prefix, urlconf = registry_module._route_keys(payload, "extension", module_id, registry_module._string_list(payload, "django_apps"))
+        description = registry_module._description(payload, module_id)
+    except registry_module.RegistryError as exc:
+        raise ModuleManagerV2Error(str(exc)) from exc
+    return {"routes": {"prefix": prefix, "urlconf": urlconf} if urlconf else None, "description": description or None}
+
+
 def _extension_metadata(extension_root: Path) -> dict:
     payload = _read_json(extension_root / "tec_tac.json", "extension manifest")
     return {
@@ -471,6 +483,7 @@ def _extension_metadata(extension_root: Path) -> dict:
         "migration": _identity_migration_metadata(payload, str(payload.get("id", "")).strip()),
         "default_visible": _ui_default_visible(extension_root),
         **_replacement_metadata(payload),
+        **_route_and_description_metadata(payload),
     }
 
 
@@ -653,6 +666,8 @@ def _package_metadata(archive: Path) -> dict:
         "migration": metadata.get("migration", {}),
         "replaces": metadata.get("replaces"),
         "capabilities": metadata.get("capabilities"),
+        "routes": metadata.get("routes"),
+        "description": metadata.get("description"),
     })
     return preview
 

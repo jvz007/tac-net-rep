@@ -247,8 +247,9 @@ class Files(dict):
         return [self[name]] if name in self else []
 
 
-class DRFRequest:
+class DRFRequest(G["HttpRequest"]):  # 1.17.16: a request the operation runner accepts, with Core's session proof
     def __init__(self, data, *, files=None, content_type="application/json", length=0, user=manager):
+        self.tec_tac_session = SimpleNamespace(id="session-1")
         self.FILES = Files(files or {})
         # DRF 3.15.2 Request._load_data_and_files: _full_data = _data.copy(); _full_data.update(_files), so a multipart
         # request.data carries the file keys too. A JSON body has no files and stays as parsed.

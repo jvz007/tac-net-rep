@@ -87,6 +87,7 @@ def module_runtime_snapshot(plugins=None) -> list[dict]:
             "active": enabled,
             "legacy": legacy,
             "replaces": (str(getattr(plugin, "replaces", "") or "") or None) if not legacy else None,
+            "description": (str(getattr(plugin, "description", "") or "") or None) if not legacy else None,
             **_category_row(plugin, legacy, development),
         })
     rows.sort(key=lambda item: item["id"].lower())

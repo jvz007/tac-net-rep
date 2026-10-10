@@ -2,7 +2,7 @@
 
 **Status:** Public Core developer contract, added in Core 1.17.7
 **Python:** `tec_tac.tactical_operations`
-**Capability:** `core.tactical_operations` 1.0.0, owner `core`
+**Capability:** `core.tactical_operations` 1.3.0 (major 1, additive since 1.0.0), owner `core`
 **HTTP:** `POST /api/tfd/tactical-operations/<module_id>/<operation_id>/`
 
 ## Why this exists
@@ -308,6 +308,55 @@ was not checked from the development PC. If you raise the setting above what the
 ### The before-read scope source is gone (1.17.14)
 
 See "Scope from the read: removed in 1.17.14" above.
+
+## Added in 1.17.16
+
+The capability is `1.3.0`. It is still major 1, so every caller that asks for `>=1,<2` keeps working. Everything below is optional for a caller, except the request check, which only a caller that passes something other than a real request notices.
+
+### A real request, with Core's session proof
+
+`run_tactical_operation` no longer takes any object that has a `.user`. AD-19 condition 2 says Core never substitutes another user, so the first step now accepts only:
+
+- a Django `HttpRequest`, or a DRF `Request` that wraps one,
+- whose user is authenticated,
+- and which carries `tec_tac_session`. Core's `SessionAuthenticated` guard sets it, so the session-security check ran for this request.
+
+Anything else is refused with HTTP 401, code `authenticated_request_required` and a fixed Core text. No audit row is written, because there is no trustworthy actor to write.
+
+Real callers are unaffected. Patching and Script Execution call it from views that use `SessionAuthenticated`, and the Core HTTP route is the same. A module's own stub tests that pass a fake request must now pass an object that is an `HttpRequest` and carries `tec_tac_session`. Core's shared test stub (`Request` in `tests/tactical-operations-1.17.7.py`) shows the shape.
+
+### A correlation id from the caller: `correlation_id=`
+
+```python
+run_tactical_operation(request, "patching", "set-update-action", params, body, correlation_id="patch-run:42")
+```
+
+`correlation_id` is 1 to 128 characters of letters, digits and `. _ : -`. Core writes it on every row of that call: success, deny and outcome-unknown. It is the same value `audit.record(correlation_id=...)` takes, so a module can give its own parent row and each operation row one id. A bad value is refused with HTTP 400, code `invalid_correlation_id`, before anything runs.
+
+For one request, use `tec_tac.audit.request_correlation_id(request)` instead. See `docs/module-audit.md`.
+
+It is Python only. The HTTP view still accepts only `params`, `body` and `query`. A browser can never send a correlation id, and the audit endpoints still refuse one.
+
+### A before value from the caller: `audit_before=`
+
+Some routes have no single-row `GET` to read the old value from (Patching's `set-update-action` and `reset-patch-policy` are examples). For those the caller may assert what the value was:
+
+```python
+run_tactical_operation(request, "patching", "set-update-action", params, body, audit_before={"action": "approve", "kb": "KB5031356"})
+```
+
+The rules:
+
+- A flat dict of at most 16 fields. Each value is text (up to 256 characters, no control characters), a whole number, `true`/`false` or `null`.
+- Field names follow the operation's field-name rule (a letter or `_`, then letters, digits and `_`, up to 64 characters). A name that looks like a secret (`pass`, `secret`, `token`, `key`, `credential`, `auth`, `cookie`, `signature`) is refused. A nested value, a float or an oversize value is refused too. The refusal is HTTP 400, code `invalid_audit_before`.
+- Core uses it only when the operation declares no `audit.before` read. When both exist, Tactical's own read wins and the caller's value is ignored.
+- It is written on the success row only. A refused or failed call keeps no before value.
+- The row metadata says `before: recorded` and `before_source: caller`. A value Core read from Tactical says `before_source: tactical`. A reviewer can tell an asserted value from a read one.
+- It is Python only and never available over HTTP.
+
+### What `audit.object_param` already does
+
+The audit object id from a `{pk}` path parameter shipped in 1.17.13 and works with a typed `{pk:int}` since 1.17.14. Core writes the path value as the row's `object_id` on success, deny and outcome-unknown rows. A module only has to declare `object_param`. `tests/tactical-operations-audit-before-1.17.16.py` locks the Report Manager shape (`reporting/templates/{pk:int}/` and the operations below it).
 
 ## AD-19 conditions
 

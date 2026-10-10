@@ -54,7 +54,7 @@ from . import module_category as _module_category
 logger = logging.getLogger("tec_tac.tactical_operations")
 
 CAPABILITY_ID = "core.tactical_operations"
-CAPABILITY_VERSION = "1.2.0"
+CAPABILITY_VERSION = "1.3.0"
 AUDIT_HEADER = "X-Tec-Tac-Audit"
 AUDIT_RECORDED = "recorded"
 AUDIT_NOT_RECORDED = "not-recorded"
@@ -83,6 +83,7 @@ _ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 _LITERAL_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}$")
 _PARAM_RE = re.compile(r"^\{([a-z][a-z0-9_]{0,31})(?::(str|int|agent))?\}$")
 _FIELD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+_CORRELATION_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _SECRET_NAME_RE = re.compile(r"(pass|secret|token|key|credential|auth|cookie|signature)", re.IGNORECASE)
 _SCOPE_SOURCE_RE = re.compile(r"^(path|body):([A-Za-z_][A-Za-z0-9_]{0,63})$")
 _SCOPE_TYPE_BODY_RE = re.compile(r"^body:([A-Za-z_][A-Za-z0-9_]{0,63})$")
@@ -102,6 +103,7 @@ _MAX_BEFORE_FIELDS = 16
 _MAX_TYPE_MAP = 8
 _MAX_UPLOAD_EXTENSIONS = 16
 _BEFORE_STRING_LIMIT = 256
+_MAX_AUDIT_BEFORE_FIELDS = 16
 _MAX_FILE_NAME = 255
 
 # One fixed Core text per refusal. None carries any wording from the declaring module or from Tactical.
@@ -111,6 +113,7 @@ MESSAGES = {
     "permission_denied": "Your Tactical role does not allow this operation.",
     "module_permission_denied": "Your Tec-Tac role does not allow this operation.",
     "object_not_found": "The requested object was not found, or you cannot access it.",
+    "authenticated_request_required": "This operation needs a signed-in Tec-Tac request.",
 }
 DENY_MESSAGES = {
     "permission_denied": "Core refused a Tactical operation: the signed-in user's Tactical role lacks a required permission.",
@@ -973,7 +976,8 @@ def _check_whitelist(operation: TacticalOperation, body: dict) -> None:
 
 
 def _write_row(request, operation: TacticalOperation, *, action: str, object_id, message: str, after=None,
-               tactical_status: int | None, refusal: bool = False, extra: dict | None = None, before=None) -> dict:
+               tactical_status: int | None, refusal: bool = False, extra: dict | None = None, before=None,
+               correlation_id: str | None = None) -> dict:
     """Write one Core audit row. Never raises: a failed write is logged and reported."""
     from . import audit as audit_core
 
@@ -984,6 +988,7 @@ def _write_row(request, operation: TacticalOperation, *, action: str, object_id,
             actor=getattr(request, "user", None), module_id=operation.module_id, action=action,
             object_type=operation.audit_object_type, object_id=object_id, message=message, before=before, after=after,
             metadata=metadata, operation=operation.id, tactical_status=tactical_status, refusal=refusal, request=request,
+            correlation_id=correlation_id,
         )
     except Exception:
         logger.exception("Tec-Tac audit row for Tactical operation %s/%s could not be written", operation.module_id, operation.id)
@@ -996,11 +1001,12 @@ def _write_row(request, operation: TacticalOperation, *, action: str, object_id,
     return {"recorded": bool(result.get("recorded")), "id": result.get("id"), "action": action}
 
 
-def _refuse(request, operation: TacticalOperation, reason: str, status: int, code: str, object_id=None) -> TacticalOperationError:
+def _refuse(request, operation: TacticalOperation, reason: str, status: int, code: str, object_id=None,
+            correlation_id: str | None = None) -> TacticalOperationError:
     """Core's own refusal (steps 3 to 5): a deny row with a fixed Core text, and the typed error to raise."""
     audit = _write_row(
         request, operation, action="deny", object_id=object_id, message=DENY_MESSAGES[reason], tactical_status=None, refusal=True,
-        extra={"refused_action": operation.audit_action, "reason": reason, "status": status},
+        extra={"refused_action": operation.audit_action, "reason": reason, "status": status}, correlation_id=correlation_id,
     )
     text = "object_not_found" if reason == "not_found" else reason
     return TacticalOperationError(MESSAGES[text], status=status, code=code, audit=audit)
@@ -1174,26 +1180,84 @@ def _read_before(request, operation: TacticalOperation, params: dict[str, str]) 
         return {"status": None, "values": None}
 
 
-def _unknown_outcome(request, operation, object_id, tactical_status, code: str, text: str) -> TacticalOperationError:
+def _unknown_outcome(request, operation, object_id, tactical_status, code: str, text: str, correlation_id: str | None = None) -> TacticalOperationError:
     """After dispatch, a non-GET call whose result Core cannot trust may have changed Tactical: say so in the log."""
     audit = None
     if operation.method != "GET":
         audit = _write_row(
             request, operation, action=OUTCOME_UNKNOWN_ACTION, object_id=object_id, message=OUTCOME_UNKNOWN_MESSAGE,
-            tactical_status=tactical_status,
+            tactical_status=tactical_status, correlation_id=correlation_id,
         )
     return TacticalOperationError(text, status=502, code=code, audit=audit)
 
 
-def run_tactical_operation(request, module_id, operation_id, params=None, body=None, query=None, upload=None) -> TacticalOperationResult:
+def _is_real_request(request) -> bool:
+    """A Django HttpRequest, or a DRF Request that wraps one. Anything else, a stand-in object with a ``user``, is no proof."""
+    from django.http import HttpRequest
+
+    if isinstance(request, HttpRequest):
+        return True
+    try:
+        from rest_framework.request import Request as DRFRequest
+    except ImportError:
+        return False
+    return isinstance(request, DRFRequest) and isinstance(getattr(request, "_request", None), HttpRequest)
+
+
+def _clean_correlation_id(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not _CORRELATION_RE.fullmatch(value):
+        raise TacticalOperationError(
+            "correlation_id must be 1 to 128 characters of letters, digits and . _ : -.", status=400, code="invalid_correlation_id",
+        )
+    return value
+
+
+def _clean_audit_before(value: Any) -> dict | None:
+    """A caller's own before value (1.17.16): a flat dict of at most 16 scalar fields. Python only; never from a browser."""
+    if value is None:
+        return None
+    bad = TacticalOperationError(
+        "audit_before must be a flat object of at most 16 text (up to 256 characters), number, true/false or null values.",
+        status=400, code="invalid_audit_before",
+    )
+    if not isinstance(value, dict) or len(value) > _MAX_AUDIT_BEFORE_FIELDS:
+        raise bad
+    clean = {}
+    for name, item in value.items():
+        if not isinstance(name, str) or not _FIELD_RE.match(name) or _SECRET_NAME_RE.search(name):
+            raise bad
+        if isinstance(item, str):
+            if len(item) > _BEFORE_STRING_LIMIT or any(ord(ch) < 32 or ord(ch) == 127 for ch in item):
+                raise bad
+        elif not (item is None or isinstance(item, (bool, int))):
+            raise bad
+        clean[name] = item
+    return clean
+
+
+def run_tactical_operation(request, module_id, operation_id, params=None, body=None, query=None, upload=None, *,
+                           correlation_id=None, audit_before=None) -> TacticalOperationResult:
     """Run one declared Tactical operation for the signed-in user and audit it. Needs an authenticated request.
 
     ``query`` (1.17.13) is a flat object of the operation's whitelisted query names, for a GET operation. ``upload`` is
     {name, content_type, content} (bytes) for an operation that declares a file part.
 
+    1.17.16: ``request`` must be a real Django or DRF request that went through Core's session check (it carries
+    ``tec_tac_session``); anything else is refused 401 ``authenticated_request_required`` with no audit row. The keyword
+    ``correlation_id`` (server-set, 1 to 128 characters) is written on every Core row of this call. ``audit_before`` is a
+    flat object the caller asserts as the before value, used only when the operation declares no ``audit.before`` read;
+    the row says ``before_source: caller``. Neither keyword is available over HTTP.
+
     Raises TacticalOperationError (``status``, ``code``, ``message``, ``audit``) for Core's own refusals and for a
     failure around the call. A Tactical answer, whatever its status, comes back as the result.
     """
+    # 0. (1.17.16, AD-19 condition 2) a real request that passed Core's session check, never an object that merely has a user
+    if not _is_real_request(request) or getattr(request, "tec_tac_session", None) is None:
+        raise _fail("authenticated_request_required", 401, "authenticated_request_required")
+    correlation_id = _clean_correlation_id(correlation_id)
+    audit_before = _clean_audit_before(audit_before)
     operation = _lookup(module_id, operation_id)  # 1. exists and its module is enabled
     user = getattr(request, "user", None)
     if user is None or not getattr(user, "is_authenticated", False):  # 2.
@@ -1209,7 +1273,7 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
         hint = _object_id([], operation, params if isinstance(params, dict) else {})
     flags = tactical_permission_flags(user, operation.permissions)  # 3.
     if not all(flags.values()):
-        raise _refuse(request, operation, "permission_denied", 403, "tactical_permission_denied", hint)
+        raise _refuse(request, operation, "permission_denied", 403, "tactical_permission_denied", hint, correlation_id)
     if operation.module_permission:  # 4.
         try:
             allowed = has_extension_permission(user, operation.module_permission)
@@ -1217,7 +1281,7 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
             logger.exception("Unable to check module permission %s for operation %s", operation.module_permission, operation.id)
             allowed = False
         if not allowed:
-            raise _refuse(request, operation, "module_permission_denied", 403, "module_permission_denied", hint)
+            raise _refuse(request, operation, "module_permission_denied", 403, "module_permission_denied", hint, correlation_id)
 
     params = _clean_params(operation, params)  # 5. shape, then scope
     body = _clean_body(operation, body)
@@ -1230,7 +1294,7 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
 
         for kind, ids in scope:
             if not adapter.objects_in_role_scope(user=user, resource_type=kind, identifiers=ids):
-                raise _refuse(request, operation, "not_found", 404, "object_not_found", object_id)
+                raise _refuse(request, operation, "not_found", 404, "object_not_found", object_id, correlation_id)
     _check_whitelist(operation, body)  # 6.
 
     from django.urls import resolve  # 7.
@@ -1250,10 +1314,15 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
     if body_type:
         extra["scope_type"] = body_type
     before_state = None
+    if operation.before is None and audit_before is not None and operation.method != "GET":  # 7a. the caller's own before value, only where Core has no read
+        before_state = {"status": None, "values": audit_before}
+        extra["before"] = "recorded"
+        extra["before_source"] = "caller"
     if operation.before is not None:  # 7a. Tactical's own record of the object, read as the signed-in user, for the audit row only (1.17.13)
         before_state = _read_before(request, operation, params)
         # 1.17.14 (CQ37): the read only fills the audit before-value. It never decides scope and never refuses the call.
         extra["before"] = "recorded" if before_state["values"] is not None else "unavailable"
+        extra["before_source"] = "tactical"
         if before_state["values"] is None:
             extra["before_status"] = before_state["status"]
 
@@ -1262,14 +1331,14 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
         response = _dispatch(match, forwarded)
     except Exception:
         logger.exception("Tactical operation %s/%s raised after dispatch", operation.module_id, operation.id)
-        raise _unknown_outcome(request, operation, object_id, None, "tactical_call_failed", "Tactical failed while running this operation.") from None
+        raise _unknown_outcome(request, operation, object_id, None, "tactical_call_failed", "Tactical failed while running this operation.", correlation_id) from None
 
     status = int(getattr(response, "status_code", 500))
     if getattr(response, "streaming", False):
-        raise _unknown_outcome(request, operation, object_id, status, "tactical_response_refused", "Core does not relay streaming responses.")
+        raise _unknown_outcome(request, operation, object_id, status, "tactical_response_refused", "Core does not relay streaming responses.", correlation_id)
     content = bytes(getattr(response, "content", b"") or b"")
     if len(content) > MAX_RESPONSE_BYTES:
-        raise _unknown_outcome(request, operation, object_id, status, "tactical_response_refused", "Tactical's answer is larger than Core relays.")
+        raise _unknown_outcome(request, operation, object_id, status, "tactical_response_refused", "Tactical's answer is larger than Core relays.", correlation_id)
 
     audit = None  # 8.
     if 200 <= status < 300:
@@ -1277,16 +1346,18 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
             request, operation, action=operation.audit_action, object_id=object_id,
             message=operation.message or f"Core ran Tactical operation {operation.id}.",
             before=before_state["values"] if before_state else None,
-            after=_after_values(operation, body, query, file), tactical_status=status, extra=extra,
+            after=_after_values(operation, body, query, file), tactical_status=status, extra=extra, correlation_id=correlation_id,
         )
     elif status in (401, 403):
         audit = _write_row(
             request, operation, action="deny", object_id=object_id, message=DENY_MESSAGES["tactical_denied"], tactical_status=status,
             refusal=True, extra={"refused_action": operation.audit_action, "reason": "tactical_denied", "status": status},
+            correlation_id=correlation_id,
         )
     elif status >= 500 and operation.method != "GET":
         audit = _write_row(
             request, operation, action=OUTCOME_UNKNOWN_ACTION, object_id=object_id, message=OUTCOME_UNKNOWN_MESSAGE, tactical_status=status,
+            correlation_id=correlation_id,
         )
 
     content_type = str(response.get("Content-Type", "") or "") if hasattr(response, "get") else ""
@@ -1332,6 +1403,9 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
             "audit.object_param", "audit.before", "scope type body:<field> with type_map", "query_params", "upload",
         ],
         "declaration_keys_removed_in_1_2_0": ["scope source before:<field>"],
+        # 1.17.16: Python-only keywords of run, never accepted over HTTP (the view's allowed fields are params, body and query).
+        "declaration_keys_added_in_1_3_0": ["run(correlation_id=)", "run(audit_before=)"],
+        "refusal_codes_added_in_1_3_0": ["authenticated_request_required", "invalid_correlation_id", "invalid_audit_before"],
         "refusal_codes_added_in_1_1_0": ["query_field_not_allowed", "invalid_query", "upload_not_allowed", "upload_too_large", "upload_type_not_allowed", "invalid_upload"],
         "audit_header": AUDIT_HEADER,
         "modes": "(a) a signed-in user's request only. Background runs as the schedule owner (mode b) are not part of this contract.",

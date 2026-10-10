@@ -332,6 +332,34 @@ A module integration should show one of these states explicitly:
 
 Do not use color alone. Include readable text/reason.
 
+## Notices from a module backend (Core 1.17.16)
+
+A module backend route or a Scheduler handler can put a notice in front of one user with `tec_tac.notices.publish`. It needs no request. It is not an HTTP contract.
+
+```python
+from tec_tac import notices
+
+result = notices.publish(
+    user,                                   # a user object or a username
+    "scan-finished:42",                     # client_id: the dedupe key
+    "success",                              # info, success, warning or error
+    "The patch scan for Acme finished. 3 endpoints need a restart.",
+    {"label": "Open Patching", "route": "/patching/runs/42"},   # optional
+    module_id="patching",
+)
+# {"created": True, "notice": {...}}
+```
+
+The rules:
+
+- `user` must be an active interactive user: active, not an installer user, no agent link, not blocked from the dashboard. Anything else raises `NoticeError`.
+- `module_id` must be an installed, enabled extension. It can never be `core` or `tec-tac`. It becomes the notice `source`, which the UI shows. **It is a claimed id.** Core does not verify which module is calling until the verified caller identity request ships, so a module could name another enabled module.
+- `message` is up to 1000 characters. `action` is `None` or `{label, route}`. The route must be an internal Tec-Tac route that starts with `/`. A URL, a protocol-relative path and `javascript:` are refused. A label needs a route.
+- `client_id` is required. Core stores `<module_id>:<client_id>` as the key, and the pair must fit 64 characters of letters, digits and `. _ : -`.
+- A notice is stored once per user and key. A second call with the same key returns `created: False` and the stored notice. A notice the person has already read is never reset.
+
+Core stores a short copy for the person's notice history. The browser toast for a new server-created notice is a UI change. Until it ships, the notice shows in the history.
+
 ## Backend authority
 
 Frontend availability checks improve UX but are not authoritative.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from django.db import transaction
 from django.utils import timezone
@@ -8,7 +9,12 @@ from tacticalrmm.celery import app
 
 from .models import TecTacScheduleRun
 from .capabilities import capability_status, CapabilityDisabled, CapabilityUnavailable, CapabilityVersionMismatch, CapabilityUnhealthy
-from .scheduler import SchedulerError, SchedulerPermanentError, SchedulerTransientError, effective_retry_delay_seconds, get_scheduled_action
+from .scheduler import (
+    SchedulerError, SchedulerPermanentError, SchedulerTransientError, _runtime_authorization_error, effective_retry_delay_seconds,
+    get_scheduled_action, is_one_off_key,
+)
+
+logger = logging.getLogger("tec_tac.tasks")
 
 
 def _json_result(value):
@@ -22,6 +28,65 @@ def _json_result(value):
             pass
     return {"value": str(value)}
 
+
+
+def _is_one_off_run(run) -> bool:
+    return run.owner_type == "module" and is_one_off_key(run.owner_key)
+
+
+def _skip_unauthorized_one_off(run, schedule) -> str | None:
+    """AD-13 condition 2 (1.17.16): a one-off run is re-checked against the user it was started for just before its handler.
+
+    Returns None when the run may go on. Otherwise the run ends ``skipped`` with the plain reason, one audit row is
+    written (best effort) and the reason is returned. It never raises: a check that cannot be made counts as a refusal."""
+    if schedule is None:
+        reason = "The one-off schedule no longer exists."
+    else:
+        try:
+            reason = _runtime_authorization_error(schedule)
+        except Exception:
+            logger.exception("The authorization check of a one-off run failed")
+            reason = "Schedule authorization could not be verified at run time."
+    if not reason:
+        return None
+    with transaction.atomic():
+        current = TecTacScheduleRun.objects.select_for_update().get(pk=run.pk)
+        if current.status != TecTacScheduleRun.Status.RUNNING:
+            return f"run no longer active: {current.status}"
+        current.status = TecTacScheduleRun.Status.SKIPPED
+        current.error = reason
+        current.error_type = "AuthorizationRevoked"
+        current.finished_at = timezone.now()
+        current.save(update_fields=["status", "error", "error_type", "finished_at"])
+    try:
+        from . import audit
+
+        audit.record(
+            actor=audit.service_audit_actor(module_id="core", service="scheduler", identity="one-off-run"),
+            module_id="core", action="deny", object_type="scheduler_run", object_id=str(run.id),
+            message=f"A one-off run of {run.action_id} was skipped: {reason}",
+            metadata={"owner_module": run.owner_module, "action_id": run.action_id, "requested_by": "scheduler", "reason": reason},
+        )
+    except Exception:
+        logger.exception("Tec-Tac audit row for a skipped one-off run could not be written")
+    return f"run skipped: {reason}"
+
+
+def _handler_owner(run, schedule) -> dict:
+    """The additive owner keys of the handler context (1.17.16). The user fields are set only for a one-off run and for a
+    user-owned schedule, the two cases where a person's authority backs the run; otherwise they are None."""
+    one_off = _is_one_off_run(run)
+    user = None
+    if schedule is not None and (one_off or run.owner_type == "user"):
+        user = schedule.created_by
+    return {
+        "owner_type": run.owner_type or (schedule.owner_type if schedule else None),
+        "owner_module": run.owner_module or None,
+        "owner_key": run.owner_key or None,
+        "owner_user_id": getattr(user, "pk", None),
+        "owner_username": getattr(user, "username", None),
+        "one_off": one_off,
+    }
 
 
 def _retryable(exc) -> bool:
@@ -59,6 +124,11 @@ def execute_schedule_run(self, run_id: str):
     retries = int(run.retry_count_snapshot or 0)
     retry_delay = effective_retry_delay_seconds(run.retry_delay_seconds_snapshot)
 
+    if _is_one_off_run(run):
+        skipped = _skip_unauthorized_one_off(run, schedule)
+        if skipped:
+            return skipped
+
     try:
         action = get_scheduled_action(action_id)
         context = {
@@ -72,6 +142,7 @@ def execute_schedule_run(self, run_id: str):
             "scheduled_for": run.scheduled_for,
             "manual": run.manual,
             "attempt": run.attempt,
+            **_handler_owner(run, schedule),
         }
         result = action.handler(context)
         with transaction.atomic():

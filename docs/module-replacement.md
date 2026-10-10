@@ -233,7 +233,7 @@ Core no longer refuses. The catalogue row of the replaced module carries `replac
 
 ### A deliberate disable always hands back (CQ36)
 
-Hand-back belongs to a deliberate disable job only. It never happens on a rollback, a failed job, a reconcile job (`reason: replacement_conflict`) or a fault. Since 1.17.14 it also covers a replacement that is disabled as part of a deliberate cascade (it depends on the module being disabled): the replaced module is handed back too, with no extra confirmation. Removing (uninstalling) a replacement still does not hand back. Johan answered only for the disable.
+Hand-back belongs to a deliberate disable job only. It never happens on a rollback, a failed job, a reconcile job (`reason: replacement_conflict`) or a fault. Since 1.17.14 it also covers a replacement that is disabled as part of a deliberate cascade (it depends on the module being disabled): the replaced module is handed back too, with no extra confirmation. Uninstalling a replacement hands back too since 1.17.15 (CQ43); see the next section.
 
 ### A failed module job tells people (CQ36, CQ41)
 
@@ -243,6 +243,12 @@ The scheduler tick (`module_failure_notices.sweep_failed_jobs`) stores one notic
 - One notice per job and person. The next tick does not store it again, and a notice that has been read stays read.
 - It looks only at jobs finished in the last 7 days, at most 200 a tick, newest first, and never raises.
 - The browser toast for a new server-created notice is a UI change. Until it ships the notice appears in the notice history.
+
+### Uninstalling a replacement hands back (CQ43)
+
+Since 1.17.15 an uninstall of an enabled replacement hands the replaced module back by the same rules as a disable, with the same confirmation (`confirm_without_hand_back: true`) when the replaced module cannot come back. The job records `enable_modules` and `hand_back_skipped`.
+
+Since 1.17.16 the outcome audit rows follow. For each module that came back, Core writes the audit action `custom:module-replacement-enabled` ("Module X was enabled again because its replacement Y was uninstalled"). When a confirmed uninstall left a module off, Core writes one more row (`custom:module-replacement-disabled`), with the same metadata as the disable case (`replacement`, `replaced`, `hand_back_skipped`): "Replacement Y was uninstalled. The module it replaces, X, stayed off because it cannot be enabled." Before 1.17.16 that row was written for a disable only. Rows are written once per job id.
 
 ## What this does not do
 

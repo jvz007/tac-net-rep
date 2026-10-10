@@ -30,6 +30,8 @@ SUPPORTED_KEYS = frozenset({
     "id", "type", "version", "python_paths", "django_apps", "permission_groups",
     "dependencies", "optional_dependencies", "requires", "licensing", "migration",
     "publisher_permissions", "name", "category", "audit_events", "replaces", "capabilities",
+    # 1.17.16: ``routes`` {prefix, urlconf} lets Core serve a module's urls at /api/tfd/<prefix>/; ``description`` is a short plain text.
+    "routes", "description",
 })
 # Object types core.resources can scope-check for the browser audit writer. Any other
 # lowercase slug may be declared since 1.17.0, but carries no scope check (see docs/module-audit.md).
@@ -39,6 +41,10 @@ AUDIT_EVENT_MAX_ENTRIES = 20
 AUDIT_EVENT_MAX_ACTIONS = 20
 CAPABILITY_MAX_ENTRIES = 200
 _CAPABILITY_ID_RE = re.compile(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)+$")
+ROUTE_PREFIX_MAX = 64
+DESCRIPTION_MAX = 500
+_ROUTE_PREFIX_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+_URLCONF_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
 _CAPABILITY_VERSION_RE = re.compile(r"^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$")
 
 class RegistryError(RuntimeError):
@@ -63,6 +69,10 @@ class PluginSpec:
     replaces: str = ""
     capabilities: tuple[tuple[str, str], ...] = ()
     capabilities_declared: bool = False
+    # 1.17.16: the optional ``routes`` key (both empty when absent) and ``description`` (empty when absent).
+    route_prefix: str = ""
+    route_urlconf: str = ""
+    description: str = ""
 
     def capability_map(self) -> dict[str, str]:
         return dict(self.capabilities)
@@ -219,6 +229,77 @@ def _replacement_keys(payload: dict, plugin_type: str, plugin_id: str, category:
     return replaces, tuple(sorted(capabilities)), has_caps
 
 
+def app_packages(django_apps: Iterable[str]) -> tuple[str, ...]:
+    """The Python package each ``django_apps`` entry lives in: ``pkg.apps.PkgConfig`` and ``pkg.apps`` give ``pkg``; a plain
+    ``pkg`` gives ``pkg``. Used to keep a module's ``routes.urlconf`` inside its own code."""
+    packages = []
+    for entry in django_apps:
+        parts = str(entry).split(".")
+        if len(parts) > 1 and parts[-1][:1].isupper():
+            parts = parts[:-1]
+        if len(parts) > 1 and parts[-1] == "apps":
+            parts = parts[:-1]
+        if parts and all(parts):
+            packages.append(".".join(parts))
+    return tuple(packages)
+
+
+def _route_keys(payload: dict, plugin_type: str, plugin_id: str, django_apps: Iterable[str] = ()) -> tuple[str, str]:
+    """Parse the optional ``routes`` key (1.17.16): ``{"prefix": "windows-patching", "urlconf": "tec_tac_patching.urls"}``.
+
+    Core serves the urlconf at /api/tfd/<prefix>/. ``prefix`` is one lowercase slug (letters a-z, digits, ``_`` and ``-``) and
+    defaults to the module id. ``urlconf`` is required and must sit inside one of the module's own ``django_apps`` packages,
+    never tacticalrmm, tec_tac or another module. Extensions only. Returns ``(prefix, urlconf)``, or ``("", "")`` when the key
+    is absent. Whether two modules ask for the same prefix is judged where the loaded set is known (route_mounting.py)."""
+    if "routes" not in payload:
+        return "", ""
+    raw = payload["routes"]
+    if plugin_type != "extension":
+        raise RegistryError(f"Reportset {plugin_id!r} may not declare routes; routes belong to the extension.")
+    if not isinstance(raw, dict):
+        raise RegistryError("Manifest key 'routes' must be a JSON object with 'prefix' and 'urlconf'.")
+    unknown = sorted(set(raw) - {"prefix", "urlconf"})
+    if unknown:
+        raise RegistryError(f"Manifest routes contains unsupported keys {unknown!r}.")
+    urlconf = raw.get("urlconf")
+    if not isinstance(urlconf, str) or not _URLCONF_RE.fullmatch(urlconf):
+        raise RegistryError("Manifest routes.urlconf must be a dotted Python module path such as tec_tac_patching.urls.")
+    prefix = raw.get("prefix")
+    if prefix is None:
+        # The module id is the default prefix, as the modules that add their own routes use it today.
+        prefix = plugin_id
+    elif not isinstance(prefix, str) or not _ROUTE_PREFIX_RE.fullmatch(prefix):
+        raise RegistryError(
+            "Manifest routes.prefix must be one lowercase slug of up to 64 characters (a-z, 0-9, '_' and '-'), with no slash."
+        )
+    first = urlconf.split(".")[0]
+    if first in ("tacticalrmm", "tec_tac") or urlconf.startswith("tec_tac."):
+        raise RegistryError("Manifest routes.urlconf may not point into tacticalrmm or tec_tac.")
+    packages = app_packages(django_apps)
+    if not packages:
+        raise RegistryError("Manifest routes needs django_apps: the urlconf must sit inside one of the module's own Django apps.")
+    if not any(urlconf == package or urlconf.startswith(package + ".") for package in packages):
+        raise RegistryError(
+            f"Manifest routes.urlconf {urlconf!r} must sit inside one of the module's own django_apps packages ({', '.join(packages)})."
+        )
+    return prefix, urlconf
+
+
+def _description(payload: dict, plugin_id: str) -> str:
+    """Parse the optional ``description`` key (1.17.16): a plain string of 1 to 500 characters with no control characters."""
+    if "description" not in payload:
+        return ""
+    raw = payload["description"]
+    if not isinstance(raw, str) or not raw.strip():
+        raise RegistryError(f"Plugin {plugin_id!r} description must be a non-empty string.")
+    text = raw.strip()
+    if len(text) > DESCRIPTION_MAX:
+        raise RegistryError(f"Plugin {plugin_id!r} description may not be longer than {DESCRIPTION_MAX} characters.")
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in text):
+        raise RegistryError(f"Plugin {plugin_id!r} description may not contain control characters.")
+    return text
+
+
 def _identity_migration(payload: dict, plugin_type: str, plugin_id: str) -> dict:
     raw = payload.get("migration")
     if raw in (None, {}):
@@ -302,7 +383,9 @@ def _load_manifest(plugin_type: str, plugin_dir: Path) -> PluginSpec | None:
     publisher_permissions = _publisher_permissions(payload, plugin_type, plugin_id)
     audit_events = _audit_events(payload, plugin_type, plugin_id)
     replaces, capabilities, capabilities_declared = _replacement_keys(payload, plugin_type, plugin_id, category)
-    return PluginSpec(plugin_id=plugin_id, plugin_type=plugin_type, root=plugin_root, version=version, python_paths=tuple(python_paths), django_apps=django_apps, permission_groups=permission_groups, publisher_permissions=publisher_permissions, name=name, category=category, audit_events=audit_events, replaces=replaces, capabilities=capabilities, capabilities_declared=capabilities_declared)
+    route_prefix, route_urlconf = _route_keys(payload, plugin_type, plugin_id, django_apps)
+    description = _description(payload, plugin_id)
+    return PluginSpec(plugin_id=plugin_id, plugin_type=plugin_type, root=plugin_root, version=version, python_paths=tuple(python_paths), django_apps=django_apps, permission_groups=permission_groups, publisher_permissions=publisher_permissions, name=name, category=category, audit_events=audit_events, replaces=replaces, capabilities=capabilities, capabilities_declared=capabilities_declared, route_prefix=route_prefix, route_urlconf=route_urlconf, description=description)
 
 def _discover_root(plugin_type: str, root: Path) -> list[PluginSpec]:
     if not root.exists():

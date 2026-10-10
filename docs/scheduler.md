@@ -254,3 +254,68 @@ remove_owned_schedule(
 ```
 
 The owning module must match the registered action's `module_id`; a module cannot reconcile another module's scheduled action. These APIs are server-side framework APIs and intentionally do not depend on browser authentication.
+
+
+## Start a one-off run for a user (Core 1.17.16)
+
+A module that needs to run one of its own registered actions once, on behalf of the person who clicked, calls `start_one_off_run`. It is for a manual sync, a bulk scan or an install that should not wait for the ticker.
+
+```python
+from tec_tac.scheduler import start_one_off_run, get_one_off_run, SchedulerNotAllowed
+
+run = start_one_off_run(
+    user=request.user,
+    owner_module="cyberhoot",
+    action_id="cyberhoot.sync",
+    targets={"type": "client", "ids": [12]},
+    parameters={"full": True},
+    name="Manual CyberHoot sync",
+)
+status = get_one_off_run(run.id, owner_module="cyberhoot")  # the serialize_run shape
+```
+
+What Core checks, in order:
+
+1. The user is active and not an installer user.
+2. The action is registered and `action.module_id == owner_module`. A module starts only its own actions.
+3. The targets pass the usual target checks and the action's `target_types`.
+4. The user holds the action now. An action with no permission is startable only by native scheduler managers, the same rule as the browser.
+5. The user holds the targets' Tactical scope now.
+
+A failure at 1, 4 or 5 raises `SchedulerNotAllowed`. The others raise `SchedulerError`. If the run cannot be queued, Core removes the schedule it made and raises `SchedulerTransientError`.
+
+What Core creates: one schedule owned by the module with `owner_key` `one-off:<uuid>`, type `once`, `run_at` now, **disabled**, and `created_by` the user. The ticker never dispatches a disabled schedule, so only the queued manual run executes. The Scheduler page shows the schedule as managed by the module and refuses edits. The existing once-retention cleanup removes it (48 hours by default). The run stays in the history. Core then writes one best-effort audit row (`add`, object type `scheduler_run`).
+
+Call it outside a database transaction that has not committed: the worker reads the run as soon as it is queued.
+
+### The owner is re-checked before the handler (AD-13 condition 2)
+
+A run's authority is the user it was started for, and it does not outlive that user's access. Just before the handler runs, Core checks again that the user is still active, still holds the action, and still holds the targets' scope. If not, the run ends `skipped` with a plain reason (`error_type` `AuthorizationRevoked`) and an audit row, and the handler never runs. A check that cannot be made counts as a refusal. It never raises into Celery.
+
+### More in the handler context
+
+The context dict gains these keys. Existing handlers that ignore them are unaffected.
+
+| Key | Value |
+|---|---|
+| `owner_type` | `user` or `module` |
+| `owner_module` | the owning module id, or `None` |
+| `owner_key` | the ownership key, or `None` |
+| `owner_user_id`, `owner_username` | the user the run is for. Set only for a one-off run and for a user-owned schedule. `None` otherwise. |
+| `one_off` | `True` for a run from `start_one_off_run` |
+
+A handler that must act inside the owner's scope (Patching reads update rows "under the owner's scope") uses `owner_user_id`.
+
+This is the start-and-track call only. It is not the AD-13 system-action contract (registered Tactical actions running in-process as the owner), which is still open.
+
+## Read a module-owned schedule (Core 1.17.16)
+
+```python
+from tec_tac.scheduler import get_owned_schedule
+
+info = get_owned_schedule("cyberhoot", "sync")
+# {"enabled": True, "schedule_type": "interval", "next_run_at": "...", "last_run_at": "...",
+#  "last_run_status": "succeeded", "last_run_finished_at": "..."}  or None
+```
+
+`get_owned_schedule` returns `None` when no schedule has that `(owner_module, owner_key)`. `next_run_at` is `None` for a disabled schedule. It takes no user: a module reads only its own tuple, the same trust as `reconcile_schedule`. It does not expose the model.

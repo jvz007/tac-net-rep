@@ -259,6 +259,8 @@ def _pair_payload(extension, reportset=None, *, ui: dict | None = None, installe
         ],
         "publisher_permissions": list(getattr(extension, "publisher_permissions", ()) or ()),
         "replaces": getattr(extension, "replaces", "") or None,
+        "description": getattr(extension, "description", "") or None,
+        "routes": ({"prefix": extension.route_prefix, "urlconf": extension.route_urlconf} if getattr(extension, "route_urlconf", "") else None),
         "capabilities": dict(getattr(extension, "capabilities", ()) or ()) if getattr(extension, "capabilities_declared", False) else None,
         "ui": ui,
         "ui_enabled": ui is not None,

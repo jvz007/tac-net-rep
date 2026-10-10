@@ -115,15 +115,19 @@ def store_notice(user, payload: dict) -> tuple[TecTacUserNotice, bool]:
     return row, created
 
 
+def _interactive_users():
+    """The people who may receive a server-created notice: active, not an installer or agent account, not blocked from the dashboard."""
+    from django.contrib.auth import get_user_model
+
+    return get_user_model().objects.filter(is_active=True, is_installer_user=False, agent__isnull=True, block_dashboard_login=False)
+
+
 def system_notice_recipients(usernames=()) -> list:
     """The people a Core-created (server-side) notice goes to (1.17.14, CQ41 assumption (a), the smallest audience): every
     active effective superuser (a Django superuser or a role that is a superuser), plus each active user named in
     ``usernames``. Installer and agent accounts and users blocked from the dashboard never receive one. One entry per
     person, ordered by username. Raises on a database failure; the caller decides what that means."""
-    from django.contrib.auth import get_user_model
-
-    User = get_user_model()
-    people = User.objects.filter(is_active=True, is_installer_user=False, agent__isnull=True, block_dashboard_login=False)
+    people = _interactive_users()
     wanted = {str(name) for name in usernames if isinstance(name, str) and name and name != "system"}
     condition = Q(is_superuser=True) | Q(role__is_superuser=True)
     if wanted:
@@ -153,6 +157,81 @@ def publish_system_notice(recipients, *, client_id: str, message: str, title: st
             created += 1
             _prune_user(user.pk)
     return created
+
+
+_RESERVED_SOURCES = frozenset({"core", "tec-tac"})
+
+
+def _publishing_module(module_id) -> str:
+    """The id of an installed, enabled extension. Never ``core`` or ``tec-tac``: those sources are Core's own."""
+    name = str(module_id).strip() if isinstance(module_id, str) else ""
+    if not name:
+        raise NoticeError("module_id is required.")
+    if name.lower() in _RESERVED_SOURCES:
+        raise NoticeError("module_id may not be a Core source.")
+    from .module_state import is_enabled, load_state
+    from .registry import get_plugins
+
+    try:
+        installed = any(p.plugin_id == name and p.plugin_type == "extension" for p in get_plugins())
+        enabled = installed and bool(is_enabled(name, load_state()))
+    except Exception as exc:
+        raise NoticeError("Core could not check module_id.") from exc
+    if not enabled:
+        raise NoticeError(f"module_id {name!r} is not an installed, enabled module.")
+    return name
+
+
+def _notice_user(user):
+    """The active interactive user the notice is for: a user object or a username, looked up again so a stale object is never trusted."""
+    people = _interactive_users()
+    if isinstance(user, str) and user.strip():
+        found = people.filter(username=user.strip()).first()
+    elif getattr(user, "pk", None) is not None:
+        found = people.filter(pk=user.pk).first()
+    else:
+        found = None
+    if found is None:
+        raise NoticeError("user must be an active, interactive Tec-Tac user.")
+    return found
+
+
+@transaction.atomic
+def publish(user, client_id, level, message, action=None, *, module_id) -> dict:
+    """Store one notice for a user on behalf of a module backend or Scheduler run (1.17.16, tec_tac.notices contract).
+
+    ``module_id`` (required keyword) must be an installed, enabled extension and never ``core`` or ``tec-tac``. It becomes the
+    notice ``source``. It is a CLAIMED id: Core does not yet verify which module is calling (the open verified caller
+    identity request), so a module can name another enabled module. ``client_id`` is required and is the dedupe key, stored as
+    ``<module_id>:<client_id>``. The notice is stored once per user and key and a notice the person has already read is never
+    reset. ``action`` is None or {label, route} with an internal route. Needs no request, so a Scheduler handler may call it.
+    Raises ``NoticeError`` for anything Core refuses. Not exposed over HTTP. Returns {created, notice}."""
+    source = _publishing_module(module_id)
+    if not isinstance(client_id, str) or not client_id.strip():
+        raise NoticeError("client_id is required.")
+    key = f"{source}:{client_id.strip()}"
+    if not _CLIENT_ID_RE.fullmatch(key):
+        raise NoticeError("module_id and client_id together must be 1 to 64 characters of letters, digits and . _ : -.")
+    if not isinstance(level, str) or level not in LEVELS:
+        raise NoticeError("level must be one of info, success, warning or error.")
+    if not isinstance(message, str):
+        raise NoticeError("message must be text.")
+    label, route = "", ""
+    if action is not None:
+        if not isinstance(action, dict) or set(action) - {"label", "route"}:
+            raise NoticeError("action must be {label, route}.")
+        label, route = action.get("label") or "", action.get("route") or ""
+        if not isinstance(label, str) or not isinstance(route, str):
+            raise NoticeError("action label and route must be text.")
+    values = normalize_notice({
+        "client_id": key, "source": source, "level": level, "message": message, "action_label": label, "action_route": route,
+    })
+    stored_key = values.pop("client_id")
+    recipient = _notice_user(user)
+    row, created = TecTacUserNotice.objects.get_or_create(user=recipient, client_id=stored_key, defaults={**values, "read_at": None})
+    if created:
+        _prune_user(recipient.pk)
+    return {"created": bool(created), "notice": serialize_notice(row)}
 
 
 def list_notices(user, *, unread_only: bool = False, limit: int = 50) -> list[dict]:

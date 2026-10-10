@@ -170,6 +170,19 @@ class DRFResponse:
 
 mod("rest_framework")
 mod("rest_framework.response", Response=DRFResponse)
+
+
+class DRFWrapper:
+    """1.17.16: rest_framework.request.Request stand-in; wraps an HttpRequest in ``_request`` like the real one."""
+
+    def __init__(self, request):
+        self._request = request
+
+    def __getattr__(self, name):
+        return getattr(self._request, name)
+
+
+mod("rest_framework.request", Request=DRFWrapper)
 mod("rest_framework.views", APIView=type("APIView", (), {}))
 mod("rest_framework.parsers", JSONParser=type("JSONParser", (), {}), MultiPartParser=type("MultiPartParser", (), {}))
 mod("drf_spectacular")
@@ -259,9 +272,12 @@ tech = User("tech", tech_role)
 tech.sees = {"agents": {AGENT}, "clients": {1}, "sites": {10}}  # sees agent a only, client 1, site 10
 
 
-class Request:
+class Request(HttpRequest):
+    """1.17.16: a real (stubbed) HttpRequest that carries Core's session proof, as a SessionAuthenticated view leaves it."""
+
     def __init__(self, user, **extra):
         self.user = user
+        self.tec_tac_session = SimpleNamespace(id="session-1")
         self.META = {"HTTP_AUTHORIZATION": "Token SECRET-KNOX", "HTTP_COOKIE": "sid=1", "REMOTE_ADDR": "10.0.0.9", "HTTP_USER_AGENT": "ua"}
         self.tec_tac_request_id = "req-1"
         self.__dict__.update(extra)
@@ -446,7 +462,8 @@ must(not ROWS and not CALLS, "an unknown operation or a disabled module writes n
 
 exc = refusal(lambda: run(user=User(anonymous=True, role=tech_role), params={"agent_id": AGENT}), 401, "authentication_required")
 must(not ROWS and not CALLS, "an unauthenticated caller writes no row and reaches nothing")
-refusal(lambda: ops.run_tactical_operation(SimpleNamespace(), "agents", "reboot", {"agent_id": AGENT}, None), 401, "authentication_required")
+refusal(lambda: ops.run_tactical_operation(SimpleNamespace(), "agents", "reboot", {"agent_id": AGENT}, None), 401, "authenticated_request_required")  # 1.17.16: no real request
+refusal(lambda: ops.run_tactical_operation(Request(User(anonymous=True)), "agents", "reboot", {"agent_id": AGENT}, None), 401, "authentication_required")
 
 # a missing Tactical flag: 403 and a Core deny row
 weak = User("weak", Roleish("can_send_wol"))
@@ -739,28 +756,28 @@ must(run(operation="reboot-get", params={"agent_id": AGENT}).data is None, "an e
 route(PATH, FakeResponse(200, b'{"ok": true}'))
 view = views.TacticalOperationView()
 del ROWS[:]
-reply = view.post(SimpleNamespace(data={"params": {"agent_id": AGENT}, "body": {"mode": "now"}}, user=tech, META={}), "agents", "reboot")
+reply = view.post(Request(tech, data={"params": {"agent_id": AGENT}, "body": {"mode": "now"}}), "agents", "reboot")
 must(isinstance(reply, HttpResponse) and reply.status_code == 200 and reply.content == b'{"ok": true}' and reply.content_type == "application/json", reply.__dict__)
 must(reply.headers == {"Content-Type": "application/json", "X-Tec-Tac-Audit": "recorded"}, reply.headers)
 FakeAuditLog.objects.fail = True
-reply = view.post(SimpleNamespace(data={"params": {"agent_id": AGENT}}, user=tech, META={}), "agents", "reboot")
+reply = view.post(Request(tech, data={"params": {"agent_id": AGENT}}), "agents", "reboot")
 must(reply.status_code == 200 and reply.headers["X-Tec-Tac-Audit"] == "not-recorded", reply.headers)
 FakeAuditLog.objects.fail = False
 route(PATH, FakeResponse(404, b'"Not found."'))
-reply = view.post(SimpleNamespace(data={"params": {"agent_id": AGENT}}, user=tech, META={}), "agents", "reboot")
+reply = view.post(Request(tech, data={"params": {"agent_id": AGENT}}), "agents", "reboot")
 must(reply.status_code == 404 and reply.content == b'"Not found."' and "X-Tec-Tac-Audit" not in reply.headers, "Tactical's own 404 is relayed, with no header when no row was due")
 route(PATH, FakeResponse(200, b'{"ok": true}'))
-reply = view.post(SimpleNamespace(data={"params": {"agent_id": AGENT}}, user=weak, META={}), "agents", "reboot")
+reply = view.post(Request(weak, data={"params": {"agent_id": AGENT}}), "agents", "reboot")
 must(isinstance(reply, DRFResponse) and reply.status_code == 403 and reply.data == {"detail": ops.MESSAGES["permission_denied"], "code": "tactical_permission_denied"}, reply.__dict__)
 must(reply.headers == {"X-Tec-Tac-Audit": "recorded"}, reply.headers)
-reply = view.post(SimpleNamespace(data={"params": {"agent_id": OTHER}}, user=tech, META={}), "agents", "reboot")
+reply = view.post(Request(tech, data={"params": {"agent_id": OTHER}}), "agents", "reboot")
 must(reply.status_code == 404 and reply.data["code"] == "object_not_found", reply.__dict__)
-reply = view.post(SimpleNamespace(data={"params": {"agent_id": AGENT}}, user=tech, META={}), "agents", "nope")
+reply = view.post(Request(tech, data={"params": {"agent_id": AGENT}}), "agents", "nope")
 must(reply.status_code == 404 and reply.data["code"] == "tactical_operation_not_found" and reply.headers == {}, reply.__dict__)
 for data in (["x"], "x", None):
-    reply = view.post(SimpleNamespace(data=data, user=tech, META={}), "agents", "reboot")
+    reply = view.post(Request(tech, data=data), "agents", "reboot")
     must(reply.status_code == 400 and reply.data["code"] == "invalid_operation_request", reply.__dict__)
-reply = view.post(SimpleNamespace(data={"params": {}, "path": "/accounts/"}, user=tech, META={}), "agents", "reboot")
+reply = view.post(Request(tech, data={"params": {}, "path": "/accounts/"}), "agents", "reboot")
 must(reply.status_code == 400 and "path" in reply.data["detail"], reply.__dict__)
 # a path in the payload is never read: only params and body exist
 view_source = (APP / "tactical_operation_views.py").read_text(encoding="utf-8")
@@ -816,7 +833,7 @@ refused(route="api/tfd/system/updates/")
 
 # ------------------------------------------------------------------------------------------------ capability, urls, throttles, apps, docs, install.sh
 cap = ops.register_core_tactical_operations_capability()
-must(CAPS and CAPS[-1]["id"] == "core.tactical_operations" and CAPS[-1]["module_id"] == "core" and CAPS[-1]["version"] == "1.2.0", CAPS)  # 1.17.14: 1.2.0, still major 1
+must(CAPS and CAPS[-1]["id"] == "core.tactical_operations" and CAPS[-1]["module_id"] == "core" and CAPS[-1]["version"] == "1.3.0", CAPS)  # 1.17.16: 1.3.0, still major 1
 must(CAPS[-1]["operations"] == ("run", "list_operations", "get_operation"), CAPS[-1]["operations"])
 provider = CAPS[-1]["provider"]
 must(provider.run is ops.run_tactical_operation and provider.list_operations is ops.list_operations and provider.get_operation is ops.get_operation, "provider")

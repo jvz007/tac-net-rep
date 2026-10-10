@@ -73,6 +73,7 @@ factory = RequestFactory()
 def request_for(user):
     request = factory.get("/api/tfd/tactical-operations/probe/probe/")  # no Authorization header at all
     request.user = user
+    request.tec_tac_session = object()  # 1.17.16: the proof Core's SessionAuthenticated guard leaves on a request
     return request
 
 
