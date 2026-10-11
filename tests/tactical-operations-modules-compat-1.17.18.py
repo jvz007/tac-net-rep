@@ -77,7 +77,9 @@ must(total >= 50, f"only {total} declarations registered: {registered} (skipped 
 import json
 for row in ops.list_operations():
     json.dumps(row)
-    must(row["caller_scope"] is None and row["body_selector"] == [] and row["audit"]["params"] == [], row)
+    # Modules adopt the 1.17.18 keys over time (agent-management bulk-recovery uses caller_scope), so the row is only held to
+    # describing every key; a declaration that names none of the new keys keeps the defaults (1.17.19: server_only too).
+    must({"caller_scope", "body_selector", "server_only"} <= set(row) and "params" in row["audit"] and row["server_only"] is False, row)
 print(f"       registered {total} declarations of {len(registered)} modules: {registered}")
 if skipped:
     print(f"       not read as data: {skipped}")

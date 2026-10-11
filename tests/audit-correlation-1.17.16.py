@@ -153,6 +153,6 @@ must(audit._correlation_id(Frozen()), "a request that refuses the attribute stil
 
 # the capability states it
 meta = ops.tactical_operations_contract_metadata()
-must(meta["version"] == "1.4.0" and "run(correlation_id=)" in meta["declaration_keys_added_in_1_3_0"], meta)
+must(meta["version"] == "1.5.0" and "run(correlation_id=)" in meta["declaration_keys_added_in_1_3_0"], meta)
 
 print("[TEST] PASS audit correlation 1.17.16")

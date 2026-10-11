@@ -9,6 +9,9 @@ declares it. The file's size is checked before it is read.
 
 1.17.14: the size limit is the system setting ``tactical_operation_upload_max_mib`` (default 10 MiB, at most 25), and an
 operation's own lower cap still wins. The declared request length is checked against the same setting.
+
+1.17.19: an operation declared ``server_only`` is refused here 403 ``operation_server_only`` (a Core deny row, Tactical never
+called) before the body is parsed or a file is read. Only a module backend can run it, through ``run_tactical_operation``.
 """
 from __future__ import annotations
 
@@ -25,6 +28,7 @@ from .tactical_operations import (
     AUDIT_HEADER,
     AUDIT_NOT_RECORDED,
     AUDIT_RECORDED,
+    MESSAGES,
     TacticalOperationError,
     get_operation,
     run_tactical_operation,
@@ -72,6 +76,15 @@ class TacticalOperationView(APIView):
     parser_classes = (JSONParser, MultiPartParser)
 
     def post(self, request, module_id, operation_id):
+        # 1.17.19: a server-only operation is refused before anything is parsed or any file is read. The call goes through
+        # run_tactical_operation, which signs the caller in, writes the deny row and never reaches Tactical.
+        declared = get_operation(module_id, operation_id)
+        if declared and declared.get("server_only"):
+            try:
+                run_tactical_operation(request, module_id, operation_id, None, None, _via_http_route=True)
+            except TacticalOperationError as exc:
+                return Response({"detail": exc.message, "code": exc.code}, status=exc.status, headers=_audit_headers(exc.audit))
+            return _bad(MESSAGES["server_only"], "operation_server_only", 403)
         upload = None
         if _is_multipart(request):
             # Refuse a huge request before DRF parses it: the declared length is checked first.
@@ -118,6 +131,7 @@ class TacticalOperationView(APIView):
         try:
             result = run_tactical_operation(
                 request, module_id, operation_id, payload.get("params"), payload.get("body"), query=payload.get("query"), upload=upload,
+                _via_http_route=True,
             )
         except TacticalOperationError as exc:
             return Response({"detail": exc.message, "code": exc.code}, status=exc.status, headers=_audit_headers(exc.audit))

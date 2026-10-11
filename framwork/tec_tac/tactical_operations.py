@@ -49,6 +49,12 @@ registers and runs unchanged):
   ``select`` finds the row of a list GET by the path id (CQ58 a). ``audit.params`` records named path parameters.
 * ``body_selector`` lets one module declare several operations on one Tactical route when their bodies are provably
   exclusive (CQ60).
+
+1.17.19 (the capability is 1.5.0, still major 1; all additive, an operation declared the 1.17.18 way registers and runs unchanged):
+
+* ``server_only=True`` keeps an operation off the browser and off Core's general route. Only a module backend can run it,
+  through ``run_tactical_operation``. It stops the browser path; it is not a verified caller identity.
+* The 403 ``tactical_permission_denied`` text names the missing Tactical role flag. The code and the deny row text are unchanged.
 """
 from __future__ import annotations
 
@@ -67,7 +73,7 @@ from . import module_category as _module_category
 logger = logging.getLogger("tec_tac.tactical_operations")
 
 CAPABILITY_ID = "core.tactical_operations"
-CAPABILITY_VERSION = "1.4.0"
+CAPABILITY_VERSION = "1.5.0"
 AUDIT_HEADER = "X-Tec-Tac-Audit"
 AUDIT_RECORDED = "recorded"
 AUDIT_NOT_RECORDED = "not-recorded"
@@ -135,6 +141,7 @@ MESSAGES = {
     "authenticated_request_required": "This operation needs a signed-in Tec-Tac request.",
     "scope_unrestricted_required": "This operation needs access to all clients and sites. Ask an administrator to change your role's scope.",
     "body_selector_mismatch": "The request does not match this operation. Check the fields you sent.",
+    "server_only": "This operation can only be run by a module on the server, not from the browser.",
 }
 DENY_MESSAGES = {
     "permission_denied": "Core refused a Tactical operation: the signed-in user's Tactical role lacks a required permission.",
@@ -143,6 +150,7 @@ DENY_MESSAGES = {
     "scope_unrestricted_required": "Core refused a Tactical operation: it is for callers with access to all clients and sites, and the signed-in user's role is limited.",
     "body_selector_mismatch": "Core refused a Tactical operation: the request body does not match the operation that was named.",
     "tactical_denied": "Tactical refused an operation that Core ran for the signed-in user.",
+    "server_only": "Core refused a Tactical operation: it is declared server-only and was called from the browser route.",
 }
 OUTCOME_UNKNOWN_MESSAGE = (
     "Core ran a Tactical operation and could not confirm the outcome. Tactical may have changed data."
@@ -217,6 +225,7 @@ class TacticalOperation:
     caller_scope: str | None = None  # 1.17.18: "unrestricted" or None
     body_selector: tuple = ()  # 1.17.18: ((field, "present"|"equals", value), ...), all must hold
     audit_params: tuple = ()  # 1.17.18: path parameters copied into the row's after value
+    server_only: bool = False  # 1.17.19: only a module backend may run it (never the browser route)
 
     @property
     def params(self) -> tuple:
@@ -257,6 +266,7 @@ class TacticalOperation:
                 "params": list(self.audit_params),
             },
             "caller_scope": self.caller_scope,
+            "server_only": self.server_only,
             "body_selector": [
                 {"field": name, kind: value} for name, kind, value in self.body_selector
             ],
@@ -720,8 +730,12 @@ def register_tactical_operation(
     upload=None,
     caller_scope=None,
     body_selector=None,
+    server_only=False,
 ):
     """Declare one Tactical operation. Call it from the owning module's ``AppConfig.ready()``.
+
+    1.17.19 (optional): ``server_only=True`` (a strict bool) keeps the operation off Core's browser route. A module backend
+    runs it through ``run_tactical_operation``. It stops the browser path; it is not a verified caller identity.
 
     1.17.18 (all optional): ``caller_scope="unrestricted"`` (only a caller with no client or site limits); a scope entry may
     carry ``optional: true`` or ``row_lookup``, and may have the type ``agent_pk``; ``audit`` may carry ``params`` and its
@@ -776,6 +790,8 @@ def register_tactical_operation(
         raise TacticalOperationRegistrationError("audit is {action, object_type, audit_fields, object_param, before, params}; the last four are optional.")
     if caller_scope is not None and caller_scope != "unrestricted":
         raise TacticalOperationRegistrationError('caller_scope must be "unrestricted" or left out.')
+    if not isinstance(server_only, bool):
+        raise TacticalOperationRegistrationError("server_only must be true or false.")
     audit_params = _clean_names(audit.get("params"), "audit params", maximum=_MAX_AUDIT_PARAMS, pattern=_PARAM_NAME_RE)
     for name in audit_params:
         if name not in params:
@@ -888,7 +904,7 @@ def register_tactical_operation(
         permissions=flags, scope=tuple(scope_specs), body_fields=fields, audit_action=action, audit_object_type=object_type,
         audit_fields=audit_fields, module_permission=codename, message=text,
         audit_object_param=object_param, before=before, query_params=query_names, upload=upload_spec,
-        caller_scope=caller_scope, body_selector=selector, audit_params=audit_params,
+        caller_scope=caller_scope, body_selector=selector, audit_params=audit_params, server_only=server_only,
     )
     key = (owner, op_id)
     route_key = (verb, _route_key(segments, trailing))
@@ -1285,14 +1301,24 @@ def _write_row(request, operation: TacticalOperation, *, action: str, object_id,
 
 
 def _refuse(request, operation: TacticalOperation, reason: str, status: int, code: str, object_id=None,
-            correlation_id: str | None = None) -> TacticalOperationError:
-    """Core's own refusal (steps 3 to 5): a deny row with a fixed Core text, and the typed error to raise."""
+            correlation_id: str | None = None, text: str | None = None) -> TacticalOperationError:
+    """Core's own refusal (steps 3 to 5): a deny row with a fixed Core text, and the typed error to raise.
+
+    ``text`` replaces the answer's detail only (1.17.19, the missing Tactical flag). The deny row keeps its fixed wording."""
     audit = _write_row(
         request, operation, action="deny", object_id=object_id, message=DENY_MESSAGES[reason], tactical_status=None, refusal=True,
         extra={"refused_action": operation.audit_action, "reason": reason, "status": status}, correlation_id=correlation_id,
     )
-    text = "object_not_found" if reason == "not_found" else reason
-    return TacticalOperationError(MESSAGES[text], status=status, code=code, audit=audit)
+    key = "object_not_found" if reason == "not_found" else reason
+    return TacticalOperationError(text or MESSAGES[key], status=status, code=code, audit=audit)
+
+
+def _missing_flag_text(operation: TacticalOperation, flags: dict) -> str:
+    """The 403 detail that names every Tactical role flag the caller lacks (1.17.19). Flags are validated ``can_*`` names."""
+    missing = [_printable(name, 80) for name in operation.permissions if not flags.get(name)]
+    if len(missing) == 1:
+        return f"{MESSAGES['permission_denied']} It needs the Tactical permission {missing[0]}."
+    return f"{MESSAGES['permission_denied']} It needs the Tactical permissions {', '.join(missing)}."
 
 
 def _encode_multipart(fields: dict[str, str], part: dict) -> tuple[bytes, str]:
@@ -1586,7 +1612,7 @@ def _clean_audit_before(value: Any) -> dict | None:
 
 
 def run_tactical_operation(request, module_id, operation_id, params=None, body=None, query=None, upload=None, *,
-                           correlation_id=None, audit_before=None) -> TacticalOperationResult:
+                           correlation_id=None, audit_before=None, _via_http_route=False) -> TacticalOperationResult:
     """Run one declared Tactical operation for the signed-in user and audit it. Needs an authenticated request.
 
     ``query`` (1.17.13) is a flat object of the operation's whitelisted query names, for a GET operation. ``upload`` is
@@ -1597,6 +1623,10 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
     ``correlation_id`` (server-set, 1 to 128 characters) is written on every Core row of this call. ``audit_before`` is a
     flat object the caller asserts as the before value, used only when the operation declares no ``audit.before`` read;
     the row says ``before_source: caller``. Neither keyword is available over HTTP.
+
+    1.17.19: an operation declared ``server_only`` is refused 403 ``operation_server_only`` when it arrives through Core's HTTP
+    route (the private ``_via_http_route`` keyword, set only by ``TacticalOperationView``). A module backend that calls this
+    function directly runs it. Module code must never pass ``_via_http_route``.
 
     Raises TacticalOperationError (``status``, ``code``, ``message``, ``audit``) for Core's own refusals and for a
     failure around the call. A Tactical answer, whatever its status, comes back as the result.
@@ -1619,9 +1649,14 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
         hint = _object_id(_scope_values(operation, hint_params, body if isinstance(body, dict) else {}), operation, hint_params)
     except TacticalOperationError:
         hint = _object_id([], operation, params if isinstance(params, dict) else {})
+    if _via_http_route and operation.server_only:  # 2a. (1.17.19) a server-only operation never runs from the browser route
+        raise _refuse(request, operation, "server_only", 403, "operation_server_only", hint, correlation_id)
     flags = tactical_permission_flags(user, operation.permissions)  # 3.
     if not all(flags.values()):
-        raise _refuse(request, operation, "permission_denied", 403, "tactical_permission_denied", hint, correlation_id)
+        raise _refuse(
+            request, operation, "permission_denied", 403, "tactical_permission_denied", hint, correlation_id,
+            text=_missing_flag_text(operation, flags),
+        )
     if operation.module_permission:  # 4.
         try:
             allowed = has_extension_permission(user, operation.module_permission)
@@ -1758,7 +1793,7 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
         "id": CAPABILITY_ID,
         "version": CAPABILITY_VERSION,
         "operations": ["run", "list_operations", "get_operation"],
-        "declaration": "tec_tac.tactical_operations.register_tactical_operation(id, module_id, method, route, permissions, scope, body_fields, audit, module_permission=None, message=None, query_params=None, upload=None, caller_scope=None, body_selector=None), called from AppConfig.ready(). A core module that names a row_lookup also calls tec_tac.tactical_operations.register_tactical_row_lookup(module_id, lookup_id, fn) from AppConfig.ready().",
+        "declaration": "tec_tac.tactical_operations.register_tactical_operation(id, module_id, method, route, permissions, scope, body_fields, audit, module_permission=None, message=None, query_params=None, upload=None, caller_scope=None, body_selector=None, server_only=False), called from AppConfig.ready(). A core module that names a row_lookup also calls tec_tac.tactical_operations.register_tactical_row_lookup(module_id, lookup_id, fn) from AppConfig.ready().",
         "http": "POST /api/tfd/tactical-operations/<module_id>/<operation_id>/ with {params, body, query} as JSON, or as multipart/form-data with the text parts params, body and query (each a JSON object) and one file part",
         "limits": {
             "body_bytes": MAX_BODY_BYTES, "response_bytes": MAX_RESPONSE_BYTES,
@@ -1783,6 +1818,9 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
             "audit_before_select_rows": _MAX_BEFORE_SELECT_ROWS, "audit_params": _MAX_AUDIT_PARAMS,
             "body_selector_conditions": _MAX_BODY_SELECTOR,
         },
+        # 1.17.19 (capability 1.5.0, still major 1): server_only stops the browser path only; it is not a verified caller identity.
+        "declaration_keys_added_in_1_5_0": ["server_only"],
+        "refusal_codes_added_in_1_5_0": ["operation_server_only"],
         "refusal_codes_added_in_1_3_0": ["authenticated_request_required", "invalid_correlation_id", "invalid_audit_before"],
         "refusal_codes_added_in_1_1_0": ["query_field_not_allowed", "invalid_query", "upload_not_allowed", "upload_too_large", "upload_type_not_allowed", "invalid_upload"],
         "audit_header": AUDIT_HEADER,

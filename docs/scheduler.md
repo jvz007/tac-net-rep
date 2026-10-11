@@ -327,6 +327,45 @@ A handler that must act inside the owner's scope (Patching reads update rows "un
 
 This is the start-and-track call only. It is not the AD-13 system-action contract (registered Tactical actions running in-process as the owner), which is still open.
 
+## Verify a run context (Core 1.17.19)
+
+A Scheduler handler that must act for the person who owns a schedule (Script Manager running a script, Global Settings changing a
+setting) needs to know the run is real. Before 1.17.19 any module could build a dict with the same keys. From 1.17.19 Core issues the
+handler context itself, and a handler can ask Core to verify it.
+
+```python
+from tec_tac.scheduler import SchedulerPermanentError, SchedulerRunContextInvalid, verify_run_context
+
+def handler(context):
+    try:
+        run = verify_run_context(context)            # pass the context object itself
+    except SchedulerRunContextInvalid as exc:
+        raise SchedulerPermanentError(str(exc))
+    if not run.has_tactical_permission("can_list_scripts"):   # Script Manager; Global Settings checks its own flag
+        raise SchedulerPermanentError("The schedule owner may not do this.")
+    rows = read_scripts(run.resource_context())      # a scope-bound read runs as the person
+```
+
+`verify_run_context(context, require_owner=True)` returns a frozen `VerifiedSchedulerRun` (`run_id`, `schedule_id`, `module_id`,
+`action_id`, `owner_module`, `owner_key`, `one_off`, `user`, `owner_user_id`, `owner_username`) or raises `SchedulerRunContextInvalid`
+(a `SchedulerError`) with a plain message. Core reads the run row again: it must exist and be running. The owner comes from the database
+(the schedule's `created_by` for a one-off or user-owned run), never from the dict, so changing `owner_username` in the dict changes
+nothing. Core also checks that the owner is active, still holds the action and still holds the target scope.
+
+It fails closed for a plain dict, a copy (`{**context}`, `dict(context)`, `copy.copy`), a JSON, pickle or Celery round-trip, a context a
+module builds (including `SchedulerRunContext(...)` called directly), a run that has finished or was deleted, and any lookup error. A run
+that belongs to a module with no person behind it is refused unless you pass `require_owner=False`; it then verifies with `user` None.
+
+`run.has_tactical_permission(flag)` reads the owner again on every call (active, then the role flag) and answers False on any error,
+a deleted owner or a name that is not a `can_*` flag. `run.resource_context()` gives the owner's Resource Directory context.
+
+Each retry attempt issues a new context for the same run row, and the owner is checked again on every attempt. The context is still a
+`dict` with every key it had, so a handler that ignores verification is unchanged.
+
+What this does not do. Modules run in the same Python process as Core. This stops a module naming a run or an owner that Core did not issue.
+It cannot stop deliberately hostile signed module code; the review of signed modules stays the defence. There is no per-run signed token
+(CQ64 a). This is not the AD-13 system-action contract, which is still open.
+
 ## Read a module-owned schedule (Core 1.17.16)
 
 ```python

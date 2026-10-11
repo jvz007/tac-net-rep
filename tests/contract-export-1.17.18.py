@@ -75,7 +75,7 @@ for needle in ("counts only", "no id lists", "tacticalScope()", "AD-12", "UI 0.1
 # ---- (3) the new tacticalScope row, modelled on hasTacticalPermission
 row = browser("ui.authenticated.tactical-scope")
 must(row["phase"] == "authenticated" and row["service"] == "tacticalScope" and row["operations"] == ["tacticalScope"] and row["audience"] == "module/browser", row)
-must(row["docs"].startswith("tec-tac-ui/docs/module-runtime-api.md") and "tacticalScope()" in row["docs"], row["docs"])
+must(row["docs"] == "tec-tac-ui/docs/module-runtime-api.md" and "tacticalScope()" in row["details"][0], (row["docs"], row["details"][0]))  # 1.17.19: a plain path, the section sits in details
 must("Core 1.17.17" in row["purpose"] and "UI 0.12.93" in row["purpose"], row["purpose"])
 text = " ".join(row["details"])
 for needle in ("mode, unrestricted, whole_client_count, site_count", "unrestricted, clients, sites, mixed or none", "no id lists", "AD-12", "scope_unrestricted_required", "Public modules"):

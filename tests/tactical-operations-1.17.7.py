@@ -694,7 +694,7 @@ must(ROWS[0]["action"] == "custom:outcome-unknown", ROWS)
 del ROWS[:]
 route(PATH, FakeResponse(500, b'"boom"'))
 must(run(operation="reboot-get", params={"agent_id": AGENT}).status == 500 and not ROWS, "a failed GET writes no row")
-# other 4xx: nothing changed
+# other 4xx: nothing changed (AD-19 condition 4; a failed row waits for Johan, CQ63)
 for status in (400, 404, 409, 422, 405):
     result = rows_after(status, b'"nope"')
     must(result.status == status and not ROWS and result.audit == {}, (status, ROWS))
@@ -768,7 +768,7 @@ reply = view.post(Request(tech, data={"params": {"agent_id": AGENT}}), "agents",
 must(reply.status_code == 404 and reply.content == b'"Not found."' and "X-Tec-Tac-Audit" not in reply.headers, "Tactical's own 404 is relayed, with no header when no row was due")
 route(PATH, FakeResponse(200, b'{"ok": true}'))
 reply = view.post(Request(weak, data={"params": {"agent_id": AGENT}}), "agents", "reboot")
-must(isinstance(reply, DRFResponse) and reply.status_code == 403 and reply.data == {"detail": ops.MESSAGES["permission_denied"], "code": "tactical_permission_denied"}, reply.__dict__)
+must(isinstance(reply, DRFResponse) and reply.status_code == 403 and reply.data == {"detail": ops.MESSAGES["permission_denied"] + " It needs the Tactical permission can_reboot_agents.", "code": "tactical_permission_denied"}, reply.__dict__)
 must(reply.headers == {"X-Tec-Tac-Audit": "recorded"}, reply.headers)
 reply = view.post(Request(tech, data={"params": {"agent_id": OTHER}}), "agents", "reboot")
 must(reply.status_code == 404 and reply.data["code"] == "object_not_found", reply.__dict__)
@@ -833,7 +833,7 @@ refused(route="api/tfd/system/updates/")
 
 # ------------------------------------------------------------------------------------------------ capability, urls, throttles, apps, docs, install.sh
 cap = ops.register_core_tactical_operations_capability()
-must(CAPS and CAPS[-1]["id"] == "core.tactical_operations" and CAPS[-1]["module_id"] == "core" and CAPS[-1]["version"] == "1.4.0", CAPS)  # 1.17.18: 1.4.0, still major 1
+must(CAPS and CAPS[-1]["id"] == "core.tactical_operations" and CAPS[-1]["module_id"] == "core" and CAPS[-1]["version"] == "1.5.0", CAPS)  # 1.17.19: 1.5.0, still major 1
 must(CAPS[-1]["operations"] == ("run", "list_operations", "get_operation"), CAPS[-1]["operations"])
 provider = CAPS[-1]["provider"]
 must(provider.run is ops.run_tactical_operation and provider.list_operations is ops.list_operations and provider.get_operation is ops.get_operation, "provider")

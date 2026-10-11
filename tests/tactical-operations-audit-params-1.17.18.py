@@ -106,6 +106,7 @@ for response, boom, expected in ((FakeResponse(403, b'"no"'), None, "deny"), (Fa
 route(PATH, FakeResponse(404, b'"missing"'))
 call()
 must(not ROWS, "another 4xx writes no row")
+del ROWS[:]
 # a refusal by Core writes no params either
 weak = G["User"]("weak", G["Roleish"]("can_send_wol"))
 del ROWS[:]

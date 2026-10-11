@@ -8,6 +8,7 @@ from django.utils import timezone
 from tacticalrmm.celery import app
 
 from .models import TecTacScheduleRun
+from .scheduler_run_context import issue_run_context
 from .capabilities import capability_status, CapabilityDisabled, CapabilityUnavailable, CapabilityVersionMismatch, CapabilityUnhealthy
 from .scheduler import (
     SchedulerError, SchedulerPermanentError, SchedulerTransientError, _runtime_authorization_error, effective_retry_delay_seconds,
@@ -131,7 +132,9 @@ def execute_schedule_run(self, run_id: str):
 
     try:
         action = get_scheduled_action(action_id)
-        context = {
+        # 1.17.19: Core issues the context (a dict subclass with every key below) so a handler can ask
+        # tec_tac.scheduler.verify_run_context whether the run and its owner are real.
+        context = issue_run_context({
             "schedule_id": str(run.schedule_snapshot_id or (schedule.id if schedule else "")),
             "run_id": str(run.id),
             "module_id": module_id,
@@ -143,7 +146,7 @@ def execute_schedule_run(self, run_id: str):
             "manual": run.manual,
             "attempt": run.attempt,
             **_handler_owner(run, schedule),
-        }
+        }, run_id=run.id)
         result = action.handler(context)
         with transaction.atomic():
             current = TecTacScheduleRun.objects.select_for_update().get(pk=run.pk)

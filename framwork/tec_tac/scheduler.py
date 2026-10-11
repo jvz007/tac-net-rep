@@ -16,6 +16,9 @@ from django.db.models import Q
 from django.utils import timezone
 
 from .models import TecTacSchedule, TecTacScheduleRun, TecTacSchedulerConfig, TecTacSchedulerState
+from .scheduler_run_context import (  # noqa: F401  (1.17.19: public re-exports of the run-context contract)
+    SchedulerRunContext, VerifiedSchedulerRun, is_core_issued_run_context, verify_run_context,
+)
 from .scheduler_timing import queued_stale_deadline
 from .scheduler_targets import SchedulerTargetShapeError, normalize_scheduler_targets
 
@@ -30,6 +33,10 @@ class SchedulerPermanentError(SchedulerError):
 
 class SchedulerTransientError(SchedulerError):
     """A failure that may recover and may use the configured retry policy."""
+
+
+class SchedulerRunContextInvalid(SchedulerError):
+    """1.17.19: ``verify_run_context`` was given a context Core did not issue, or for a run or an owner that no longer holds."""
 
 
 class SchedulerNotAllowed(SchedulerError):

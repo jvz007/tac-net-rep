@@ -2,7 +2,7 @@
 
 **Status:** Public Core developer contract, added in Core 1.17.7
 **Python:** `tec_tac.tactical_operations`
-**Capability:** `core.tactical_operations` 1.4.0 (major 1, additive since 1.0.0), owner `core`
+**Capability:** `core.tactical_operations` 1.5.0 (major 1, additive since 1.0.0), owner `core`
 **HTTP:** `POST /api/tfd/tactical-operations/<module_id>/<operation_id>/`
 
 ## Why this exists
@@ -104,6 +104,7 @@ Endpoints is the technician workspace. It composes what other modules publish, s
 - A permission flag that is not a boolean `can_*` field on Tactical's Role.
 - A scope source that is not a parameter of the route or one of the `body_fields`, and an `int` requirement for client and site path parameters.
 - Audit action `deny` and `custom:outcome-unknown`. Only Core writes them.
+- A `server_only` that is not true or false (1.17.19).
 - A legacy, unknown or disabled module.
 
 The registry is empty until a module declares an operation. Installing Core 1.17.7 changes nothing for a module that
@@ -137,7 +138,8 @@ Core writes the row with the signed-in user as actor and the declaring module as
 | 2xx | the declared action, `object_id` from the scope object, `after` from `audit_fields`, and metadata with the operation, method, route template and Tactical status |
 | 401 or 403 | a Core `deny` row (`core_refusal`, reason `tactical_denied`) |
 | 5xx, or an error after dispatch, on a call that is not `GET` | `custom:outcome-unknown`, because the change may have happened |
-| any other 4xx | nothing, because nothing changed |
+| any other 4xx on a call that is not `GET` | nothing (AD-19 condition 4). A failed-attempt row is an open question to Johan (CQ63) |
+| any 4xx on a `GET` | nothing, because nothing changed |
 
 Every row carries `operation_context.server_provenance = "tactical-operation"`, `operation` and `tactical_status`
 (null when Core refused before calling Tactical). Only Core sets these keys. The public `tec_tac.audit.record` refuses
@@ -157,7 +159,9 @@ POST /api/tfd/tactical-operations/agents/reboot/
 The reply is Tactical's own status and body. Core's own refusals are JSON `{"detail", "code"}`. Codes:
 `tactical_operation_not_found`, `authentication_required`, `tactical_permission_denied`, `module_permission_denied`,
 `object_not_found`, `invalid_params`, `invalid_body`, `body_field_not_allowed`, `scope_field_required`,
-`body_too_large`, `tactical_route_changed`, `tactical_call_failed`, `tactical_response_refused`.
+`body_too_large`, `tactical_route_changed`, `tactical_call_failed`, `tactical_response_refused`, and since 1.17.19 `operation_server_only`.
+
+The `tactical_permission_denied` detail names the missing Tactical permission since 1.17.19, for example "It needs the Tactical permission can_reboot_agents." (several are listed when several are missing). The code is unchanged, and so is the text of the deny row.
 
 A file answer, such as a report export, is relayed with its `Content-Type` and `Content-Disposition`, up to 25 MiB.
 A streaming answer is refused. Rate limit: 120 a minute and 5 000 a day for each user and IP.
@@ -372,9 +376,10 @@ registers and runs exactly as before. A module needs framework 1.17.18 to use an
 `tec_tac.resources.scope_unrestricted` for the caller, the same answer the UI reads as `tactical_scope.unrestricted`. A caller with
 no role, an installer user and a failed lookup count as limited (fail closed).
 
-The check runs after the Tactical flags and the module permission, and before the body is cleaned. A limited caller gets 403
+The check runs after the Tactical flags and the module permission, and before the body is cleaned. It applies to every call of the
+operation, including a call whose body names no agent (for example Checks' `add-policy-check`). A limited caller gets 403
 `scope_unrestricted_required` with a plain message, and Core writes a deny row (reason `scope_unrestricted_required`). Tactical is
-never called. The rule is per operation. It never applies to a row that belongs to no agent (CQ57: follow Tactical). The UI hides
+never called. The rule is per operation. The "never applies to a row that belongs to no agent" rule (CQ57: follow Tactical) belongs to a `row_lookup` scope entry, which checks the agent of a loaded row. It is not part of `caller_scope`. The UI hides
 the control from `tacticalScope().unrestricted`, so a person normally never sees the refusal (AD-12).
 
 ### Scope entries: `optional`, `agent_pk` and `row_lookup`
@@ -459,6 +464,14 @@ time Core checks the cleaned body against the operation's own selector. A body t
 `body_selector_mismatch`, with a refusal row and no Tactical call, so a call can never run under the wrong operation's scope or
 audit verb. `present` means the key is in the body and not null.
 
+A selector field must also be one of the operation's `body_fields`, and registration refuses it otherwise. A selector that says
+`present: false` still lists the field in `body_fields`. A body that names that field is refused 400 `body_selector_mismatch`.
+
+```python
+# add-policy-check lists "agent" in body_fields so the selector can say it must be absent
+{"field": "agent", "present": False}   # a body {"agent": "..."} is refused body_selector_mismatch
+```
+
 ```python
 # Checks: POST checks/ is two operations in one module
 {"add-agent-check": {..., "body_selector": [{"field": "agent", "present": True}]},
@@ -468,6 +481,33 @@ audit verb. `present` means the key is in the body and not null.
 Single declarations behave exactly as before, including the refusal text for a different module. `describe()` lists
 `caller_scope`, `body_selector`, `audit.params`, the scope `optional` and `row_lookup`, and `audit.before.count_fields` and `select`.
 
+## Added in 1.17.19
+
+Capability `core.tactical_operations` is 1.5.0, still major 1. An operation declared the 1.17.18 way registers and runs as before.
+A module needs framework 1.17.19 to use `server_only`. The new refusal code is `operation_server_only` (403).
+
+### Server-only operations: `server_only`
+
+`register_tactical_operation(..., server_only=True)` (a strict true or false; anything else is refused at registration). A server-only
+operation is for a change that only module code should make, such as a bulk action that a module's own backend runs after its own checks.
+
+Core's browser route, `POST /api/tfd/tactical-operations/<module_id>/<operation_id>/`, refuses it 403 `operation_server_only`. Core looks
+the operation up first and refuses before it parses a body or reads a file. It checks that the request is signed in (401 otherwise), writes
+one Core deny row (reason `server_only`, `refused_action` = the declared action) and never calls Tactical. This check comes before the
+Tactical flag check, so a caller who also lacks a flag sees `operation_server_only`.
+
+A module backend that calls `run_tactical_operation` (or the capability provider) runs the operation as before, with `audit_before`.
+
+What this is not. It stops the browser path only. It is not a verified caller identity: modules run in the same Python process as Core,
+and Core does not check which module called. `run_tactical_operation` has a private keyword, `_via_http_route`, that only Core's view sets.
+Module code must never pass it. A call that carries it only makes Core stricter for a server-only operation, so it opens nothing.
+`list_operations` and `get_operation` carry `server_only`. Ownership rules are unchanged.
+
+### The 403 names the missing flag
+
+The `tactical_permission_denied` detail ends with the missing flag, such as "It needs the Tactical permission can_reboot_agents." The code
+and the deny row text are unchanged.
+
 ## AD-19 conditions
 
 Johan accepted this path on 9 October 2026 (AD-19, `docs/review-accepted-decisions.md`) on five conditions. Each has a test in `tests/tactical-operations-1.17.7.py`.
@@ -475,7 +515,7 @@ Johan accepted this path on 9 October 2026 (AD-19, `docs/review-accepted-decisio
 1. **Only a declared operation runs.** The owning core module declares it. Core refuses a non-owner or a route outside the owner's group at registration (`tests/tactical-operations-1.17.7.py`), and an unknown operation gives 404.
 2. **The signed-in user's own identity.** Core resolves the route with Django's resolver and calls Tactical's view in-process, on a copy of the request with forced authentication. The `Authorization` header and cookies are dropped. Core reads no Knox token, makes no HTTP call and holds no key. An installer user and a user with no role are denied. Tactical's own permission, scope and validation still run. If Tactical renamed the route, the answer is 502 `tactical_route_changed`, with no fallback.
 3. **A failed audit write is not fatal.** Tactical's change has already happened. Core logs the failure at error level and sets `X-Tec-Tac-Audit: not-recorded`. A Python caller reads `TacticalOperationResult.audit`.
-4. **Outcome rows.** 2xx writes the declared action. 401 or 403 writes a Core deny row. A 5xx, or an error after dispatch, on a call that is not GET writes `custom:outcome-unknown`. Other 4xx write nothing. Core's own refusals write a deny row with a fixed Core text.
+4. **Outcome rows.** 2xx writes the declared action. 401 or 403 writes a Core deny row. A 5xx, or an error after dispatch, on a call that is not GET writes `custom:outcome-unknown`. Any other 4xx writes nothing. Core's own refusals write a deny row with a fixed Core text.
 5. **Tec-Tac's own functions are audited too.** Core and the module's own routes (`module_id` `core`, anything under `api/tfd/`) are not Tactical operations, so the executor refuses them. A module's backend action calls `tec_tac.audit.record` from its route instead. Both paths write the same row: actor, module, action, object, `module_version`, `correlation_id`, `operation_context` and `metadata`. Only the Tactical-operation row carries `server_provenance`, so an auditor can tell the two apart.
 
 ## Tactical permission flags in the runtime context
