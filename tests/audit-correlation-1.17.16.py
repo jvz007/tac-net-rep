@@ -82,7 +82,10 @@ route(PATH, FakeResponse(200))
 for bad in ("", "x" * 129, "has space", "new\nline", "slash/slash", "ü", 5, ["a"], b"x", True):
     del ROWS[:], CALLS[:]
     exc = refusal(lambda: ops.run_tactical_operation(new_request(), "agents", "reboot", PARAMS, BODY, correlation_id=bad), 400, "invalid_correlation_id")
-    must(not ROWS and not CALLS, f"a bad id {bad!r} writes nothing and reaches nothing")
+    # 1.17.21: Core's own refusal of a change writes one row, which never carries the bad id, and Tactical is never reached
+    must(not CALLS and len(ROWS) == 1 and ROWS[0]["action"] == "custom:operation-failed", f"a bad id {bad!r} writes one Core row and reaches nothing")
+    must(cid(ROWS[0]) != bad and ROWS[0]["debug_info"]["metadata"]["code"] == "invalid_correlation_id", ROWS[0])
+    must(exc.audit is not None and exc.audit["recorded"] is True, exc.audit)
 del ROWS[:]
 ops.run_tactical_operation(new_request(), "agents", "reboot", PARAMS, BODY, correlation_id="x" * 128)
 must(cid(ROWS[0]) == "x" * 128, "128 characters is the limit")
@@ -153,6 +156,6 @@ must(audit._correlation_id(Frozen()), "a request that refuses the attribute stil
 
 # the capability states it
 meta = ops.tactical_operations_contract_metadata()
-must(meta["version"] == "1.6.0" and "run(correlation_id=)" in meta["declaration_keys_added_in_1_3_0"], meta)
+must(meta["version"] == "1.7.0" and "run(correlation_id=)" in meta["declaration_keys_added_in_1_3_0"], meta)
 
 print("[TEST] PASS audit correlation 1.17.16")

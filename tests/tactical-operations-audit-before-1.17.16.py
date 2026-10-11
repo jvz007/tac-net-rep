@@ -64,8 +64,11 @@ bad_values = [
 ]
 for bad in bad_values:
     del ROWS[:], CALLS[:]
-    refusal(lambda: run(bad), 400, "invalid_audit_before")
-    must(not ROWS and not CALLS, f"{bad!r} writes nothing and reaches nothing")
+    exc = refusal(lambda: run(bad), 400, "invalid_audit_before")
+    # 1.17.21: Core's own refusal of a change writes one custom:operation-failed row (no caller value in it), and Tactical is never reached
+    must(not CALLS and len(ROWS) == 1 and ROWS[0]["action"] == "custom:operation-failed", f"{bad!r} writes one Core row and reaches nothing")
+    must(ROWS[0]["debug_info"]["metadata"]["code"] == "invalid_audit_before" and not ROWS[0].get("before_value") and not ROWS[0].get("after_value"), ROWS[0])
+    must(exc.audit is not None and exc.audit["recorded"] is True and exc.audit["action"] == "custom:operation-failed", exc.audit)
 del ROWS[:]
 run({f"f{i}": i for i in range(16)})
 must(len(ROWS[0]["before_value"]) == 16, "16 fields is the limit")
@@ -154,6 +157,7 @@ must(len([o for o in ops.list_operations("reportmanager") if o["audit"]["object_
 # a non-int pk never reaches Tactical
 del ROWS[:], CALLS[:]
 refusal(lambda: ops.run_tactical_operation(Request(tech), "reportmanager", "template-delete", {"pk": "8/../x"}, None), 400, "invalid_params")
-must(not ROWS, "a refused path value writes no row")
+must(len(ROWS) == 1 and ROWS[0]["action"] == "custom:operation-failed" and ROWS[0]["debug_info"]["metadata"]["code"] == "invalid_params", ROWS)  # 1.17.21: one Core row
+must("8/../x" not in json.dumps(ROWS, default=str) and ROWS[0]["debug_info"].get("object_id") is None, "the refused path value is not in the row")
 
 print("[TEST] PASS tactical operations audit before 1.17.16")

@@ -326,3 +326,9 @@ record(actor=probe, module_id="networkprobe", action="sync", object_type="probe_
 ```
 
 Core stores human/service/device provenance in Tactical AuditLog-compatible rows. Non-human actors are module-bound: their `module_id` must match the event's `module_id`. The readable Tactical `username` is prefixed `service:` or `device:`, while structured provenance is retained in `debug_info`. `build_operation_context(...)` may be passed directly as `operation_context=...`; Core retains source/run/requested-by fields and uses an included `correlation_id` when no explicit correlation ID is supplied.
+
+## Core's own refusal row (1.17.21)
+
+For a Tactical operation that is not `GET`, Core writes one Core-only `custom:operation-failed` row (`failure: core_refused`, metadata `code`) when
+it refuses `body_field_not_allowed`, `invalid_body`, `invalid_params`, `scope_field_required`, `invalid_correlation_id` or `invalid_audit_before`
+before calling Tactical. A module checks `error.audit`: when it is not `None`, Core has written the row and the module writes none. See `docs/tactical-operations.md`.

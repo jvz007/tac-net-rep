@@ -2,7 +2,7 @@
 
 **Status:** Public Core developer contract, added in Core 1.17.7
 **Python:** `tec_tac.tactical_operations`
-**Capability:** `core.tactical_operations` 1.6.0 (major 1, additive since 1.0.0), owner `core`
+**Capability:** `core.tactical_operations` 1.7.0 (major 1, additive since 1.0.0), owner `core`
 **HTTP:** `POST /api/tfd/tactical-operations/<module_id>/<operation_id>/`
 
 ## Why this exists
@@ -127,7 +127,8 @@ A module needs `requires.framework` of `>=1.17.7` to use any of this.
 9. Core relays Tactical's status and body unchanged.
 
 A refusal in steps 3 to 5 writes a Core `deny` row. The text is fixed Core wording and carries nothing from the module.
-Steps 1 and 2, and a bad parameter or body, write no row because no operation was attempted.
+Steps 1 and 2 write no row because no operation was attempted. Since 1.17.21 six refusals of the validation step write one Core row
+for a call that is not `GET` (see "Added in 1.17.21"). The other validation refusals still write none.
 
 ### The audit row
 
@@ -139,6 +140,7 @@ Core writes the row with the signed-in user as actor and the declaring module as
 | 401 or 403 | a Core `deny` row (`core_refusal`, reason `tactical_denied`) |
 | 5xx, or an error after dispatch, on a call that is not `GET` | `custom:outcome-unknown`, because the change may have happened |
 | any other 4xx on a call that is not `GET` (1.17.20) | `custom:operation-failed`, with the declared action in `metadata.declared_action`, `result: failed`, a fixed Core text, and no before or after value |
+| Core's own refusal before Tactical is called, on a call that is not `GET` (1.17.21): `body_field_not_allowed`, `invalid_body`, `invalid_params`, `scope_field_required`, `invalid_correlation_id`, `invalid_audit_before` | `custom:operation-failed`, with `failure: core_refused` and the refusal `code` in the metadata, a fixed Core text, and no before or after value |
 | any 4xx on a `GET` | nothing, because nothing changed |
 
 Every row carries `operation_context.server_provenance = "tactical-operation"`, `operation` and `tactical_status`
@@ -525,6 +527,60 @@ these answers; both are now a verdict. A 4xx on a `GET` still writes nothing. A 
 `tec_tac.audit.record` refuses it with `AuditContractError`. A module that wrote its own failed row for a Tactical 4xx should stop, so one
 refused attempt gives one row.
 
+## Added in 1.17.21
+
+Capability `core.tactical_operations` is 1.7.0, still major 1. Everything here is additive. A module needs framework 1.17.21 to rely on it,
+and can feature-detect it with the capability version and the keys `declaration_keys_added_in_1_7_0`, `behaviour_added_in_1_7_0` and
+`refusal_row_codes` in the capability metadata.
+
+### Core's own refusal writes one row (1.17.21)
+
+When Core refuses a call that is not `GET` before it reaches Tactical, with one of `body_field_not_allowed` (both the "takes no body" and the
+whitelist refusal), `invalid_body`, `invalid_params`, `scope_field_required`, `invalid_correlation_id` or `invalid_audit_before`, Core
+writes exactly one row. The action is `custom:operation-failed`, the same Core-only action as a Tactical 4xx. The row has `core_refusal`,
+the declared object type, the object id the deny rows use, the correlation id, a fixed Core text ("Core refused this change before sending it
+to Tactical (invalid_body); nothing was changed."), and metadata `declared_action`, `result: failed`, `failure: core_refused`, `code`, `status`,
+`operation`, `method` and `route`. It has no before or after value, no body, query or upload value, and no text from the caller's input.
+The object id comes from the path parameter named by `audit.object_param` or from scope ids that were already cleaned. It never comes from a
+body field value. An `invalid_params` refusal has no object id, because the parameters are the thing that was refused.
+
+`TacticalOperationError.audit` is the verdict `{recorded, id, action}`, and the `X-Tec-Tac-Audit` header says the same over HTTP. A failed
+audit write gives `{recorded: false, error: audit_write_failed}` and raises nothing else.
+
+What this changes in the order of a call:
+
+- `correlation_id` and `audit_before` are now cleaned at step 5 (the validation step), after the operation lookup, the signed-in check, the
+  permission checks and the caller-scope check. Before 1.17.21 they were cleaned first. Until step 5 an invalid correlation id is held back,
+  so no earlier deny row carries it (the row has no correlation id of its own).
+- An unknown operation, a disabled module, a request that is not a real signed-in request and a caller who fails the permission checks keep
+  their answers. The first three write no row. The permission refusals keep their one `deny` row. So each refused change has exactly one row.
+- A refusal on a `GET` writes no row and keeps `audit` at `None`.
+- `body_too_large`, `invalid_query`, `query_field_not_allowed`, `invalid_upload`, `upload_not_allowed`, `upload_too_large`,
+  `upload_type_not_allowed`, `tactical_route_changed` and `tactical_operation_not_found` from the owner recheck write no row in this release.
+  Modules handle them in their own ways.
+
+For a module: when `error.audit` is not `None` for one of these six codes, do not write your own failed row. Write it only when `error.audit`
+is `None`. Then one refused attempt gives one row.
+
+### Name the object of a create: `audit.object_field` and `audit.object_body_field` (1.17.21)
+
+A create has no id in the path. Two optional keys in the `audit` declaration give the success row an object id:
+
+- `audit.object_field`: the name of a top-level field of Tactical's success answer, when that answer is a JSON object (for example `id` or `pk`).
+- `audit.object_body_field`: the name of a cleaned request body field. It must be one of `body_fields` (for example the script `name`).
+
+Both are for a non-`GET` operation, match the usual field name pattern and must not look like a secret. They apply only when no
+`audit.object_param` and no scope object gives an id, so a path id or a scope id always wins. On a 2xx answer Core takes the id from
+`object_field` first. The value must be text or a whole number. A bool, a float, a list, an object or null is ignored, and Core then tries
+`object_body_field`, then leaves the id empty. Control characters are dropped and the id is cut at 255 characters. The row's
+`metadata.object_source` is `answer` or `body`.
+
+Neither key is used on a `deny`, `custom:operation-failed` (from Tactical or from Core) or `custom:outcome-unknown` row. Those rows must not
+carry request body values or Tactical's text. `describe()` and the exported operation rows list both keys (`null` when not declared).
+
+The original request asked for one key, `object_field`, naming a body field. Johan's answer (CQ66 b) splits it into `object_field` (Tactical's
+answer) and `object_body_field` (the request body).
+
 ## AD-19 conditions
 
 Johan accepted this path on 9 October 2026 (AD-19, `docs/review-accepted-decisions.md`) on five conditions. Each has a test in `tests/tactical-operations-1.17.7.py`.
@@ -532,7 +588,7 @@ Johan accepted this path on 9 October 2026 (AD-19, `docs/review-accepted-decisio
 1. **Only a declared operation runs.** The owning core module declares it. Core refuses a non-owner or a route outside the owner's group at registration (`tests/tactical-operations-1.17.7.py`), and an unknown operation gives 404.
 2. **The signed-in user's own identity.** Core resolves the route with Django's resolver and calls Tactical's view in-process, on a copy of the request with forced authentication. The `Authorization` header and cookies are dropped. Core reads no Knox token, makes no HTTP call and holds no key. An installer user and a user with no role are denied. Tactical's own permission, scope and validation still run. If Tactical renamed the route, the answer is 502 `tactical_route_changed`, with no fallback.
 3. **A failed audit write is not fatal.** Tactical's change has already happened. Core logs the failure at error level and sets `X-Tec-Tac-Audit: not-recorded`. A Python caller reads `TacticalOperationResult.audit`.
-4. **Outcome rows.** 2xx writes the declared action. 401 or 403 writes a Core deny row. A 5xx, or an error after dispatch, on a call that is not GET writes `custom:outcome-unknown`. Since 1.17.20 another 4xx on a call that is not GET writes `custom:operation-failed`, and a GET 4xx writes nothing. Core's own refusals write a deny row with a fixed Core text.
+4. **Outcome rows.** 2xx writes the declared action. 401 or 403 writes a Core deny row. A 5xx, or an error after dispatch, on a call that is not GET writes `custom:outcome-unknown`. Since 1.17.20 another 4xx on a call that is not GET writes `custom:operation-failed`, and a GET 4xx writes nothing. Core's own refusals write a deny row with a fixed Core text. Since 1.17.21 six validation refusals of a change before Tactical is called write one `custom:operation-failed` row with `failure: core_refused` (see "Added in 1.17.21").
 5. **Tec-Tac's own functions are audited too.** Core and the module's own routes (`module_id` `core`, anything under `api/tfd/`) are not Tactical operations, so the executor refuses them. A module's backend action calls `tec_tac.audit.record` from its route instead. Both paths write the same row: actor, module, action, object, `module_version`, `correlation_id`, `operation_context` and `metadata`. Only the Tactical-operation row carries `server_provenance`, so an auditor can tell the two apart.
 
 ## Tactical permission flags in the runtime context

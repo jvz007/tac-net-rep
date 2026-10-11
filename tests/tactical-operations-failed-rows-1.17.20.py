@@ -120,14 +120,14 @@ del ROWS[:]
 accepted = audit.record(actor=tech, module_id="agents", action="custom:outcome-unknown", object_type="agent")
 must(accepted.get("recorded") is True and len(ROWS) == 1, accepted)
 
-# capability 1.6.0, still major 1
+# capability 1.7.0 (1.17.21; the 1.6.0 behaviour stays), still major 1
 meta = ops.tactical_operations_contract_metadata()
-must(ops.CAPABILITY_VERSION == "1.6.0" and meta["version"] == "1.6.0" and meta["version"].split(".")[0] == "1", meta)
-must("custom:operation-failed" in meta["audit_actions_core_only"] and meta["behaviour_added_in_1_6_0"], meta)
+must(ops.CAPABILITY_VERSION == "1.7.0" and meta["version"] == "1.7.0" and meta["version"].split(".")[0] == "1", meta)  # 1.17.21: 1.7.0
+must("custom:operation-failed" in meta["audit_actions_core_only"] and meta["behaviour_added_in_1_6_0"], meta)  # the 1.6.0 keys stay
 
 contracts = (Path(__file__).resolve().parents[1] / "framwork/tec_tac/contracts.py").read_text(encoding="utf-8")
 must("custom:operation-failed" in contracts and "Any other 4xx: no row." not in contracts and "writes no row (AD-19 condition 4" not in contracts, "contract text")
 docs = (Path(__file__).resolve().parents[1] / "docs/tactical-operations.md").read_text(encoding="utf-8")
-must("custom:operation-failed" in docs and "declared_action" in docs and "1.6.0" in docs[:400], "the docs describe the failed row")
+must("custom:operation-failed" in docs and "declared_action" in docs and "1.7.0" in docs[:400] and "1.6.0" in docs, "the docs describe the failed row")
 must("writes nothing (AD-19" not in docs and "Any other 4xx writes nothing" not in docs, "docs no longer say other 4xx write nothing")
 print("[TEST] PASS tactical operations failed rows 1.17.20")

@@ -35,7 +35,7 @@ def run(before):
 # ---- audit_before
 del ROWS[:], CALLS[:]
 refusal(lambda: run({"action\n": "x"}), 400, "invalid_audit_before")
-must(not ROWS and not CALLS, "a newline-ended name writes nothing and reaches nothing")
+must(not CALLS and len(ROWS) == 1 and ROWS[0]["action"] == "custom:operation-failed", "a newline-ended name writes one Core row (1.17.21) and reaches nothing")
 for bad in ({"a\n": 1}, {"\naction": 1}, {"ac\ntion": 1}):
     refusal(lambda bad=bad: run(bad), 400, "invalid_audit_before")
 del ROWS[:]

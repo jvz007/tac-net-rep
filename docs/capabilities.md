@@ -290,3 +290,5 @@ Capability providers may also be owned directly by Tec-Tac Core rather than an i
 ### Metadata-only discovery
 
 `check_health=false` is discovery-only. Core returns registered capability metadata without calling provider health callbacks, but it reports `available=false`, `state=health-unchecked`, and `health_checked=false`. Runtime callers must use the default live health check before treating a capability as available.
+
+`core.caller_identity` 1.0.0 (Core 1.17.21): the verified identity of the module whose code is calling a provider. See `docs/caller-identity.md`.

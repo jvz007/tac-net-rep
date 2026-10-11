@@ -63,6 +63,16 @@ registers and runs unchanged):
   declared object type, ``result: failed``, a fixed Core text, and no before or after value and none of Tactical's own text.
   ``result.audit`` and the ``X-Tec-Tac-Audit`` header are a verdict for these answers (before they were ``{}`` and absent).
   A GET 4xx still writes nothing. A module cannot declare or record this action.
+
+1.17.21 (the capability is 1.7.0, still major 1; additive, an operation declared the 1.17.20 way registers and runs unchanged):
+
+* Core's own refusal before Tactical is called writes one Core-only row for a call that is not ``GET``: ``custom:operation-failed``
+  with ``failure: core_refused`` and ``code``, for ``body_field_not_allowed``, ``invalid_body``, ``invalid_params``,
+  ``scope_field_required``, ``invalid_correlation_id`` and ``invalid_audit_before``. ``error.audit`` is the verdict. The two
+  cleaners of ``correlation_id`` and ``audit_before`` now run at the validation step, after the operation lookup and the permission
+  checks, so a row can be written. Until then an invalid correlation id is held back and no earlier deny row carries it.
+* ``audit.object_field`` (a top-level scalar of Tactical's JSON answer) and ``audit.object_body_field`` (a cleaned body field) give the
+  success row's object id when no ``audit.object_param`` and no scope object gives one. No other row carries them.
 """
 from __future__ import annotations
 
@@ -81,7 +91,7 @@ from . import module_category as _module_category
 logger = logging.getLogger("tec_tac.tactical_operations")
 
 CAPABILITY_ID = "core.tactical_operations"
-CAPABILITY_VERSION = "1.6.0"
+CAPABILITY_VERSION = "1.7.0"
 AUDIT_HEADER = "X-Tec-Tac-Audit"
 AUDIT_RECORDED = "recorded"
 AUDIT_NOT_RECORDED = "not-recorded"
@@ -162,6 +172,13 @@ DENY_MESSAGES = {
     "server_only": "Core refused a Tactical operation: it is declared server-only and was called from the browser route.",
 }
 FAILED_MESSAGE = "Tactical refused this change (HTTP {status}); nothing was changed."
+# 1.17.21: Core's own refusal before dispatch. A fixed Core text; the code is one of CORE_REFUSAL_ROW_CODES, never caller text.
+CORE_REFUSED_MESSAGE = "Core refused this change before sending it to Tactical ({code}); nothing was changed."
+# The six refusals of a non-GET call that write one Core row (requests/core.md, globalsettings 0.4.0). The other validation
+# refusals (body_too_large, invalid_query, the upload codes, tactical_route_changed ...) write none in this release.
+CORE_REFUSAL_ROW_CODES = (
+    "body_field_not_allowed", "invalid_body", "invalid_params", "scope_field_required", "invalid_correlation_id", "invalid_audit_before",
+)
 OUTCOME_UNKNOWN_MESSAGE = (
     "Core ran a Tactical operation and could not confirm the outcome. Tactical may have changed data."
 )
@@ -236,6 +253,8 @@ class TacticalOperation:
     body_selector: tuple = ()  # 1.17.18: ((field, "present"|"equals", value), ...), all must hold
     audit_params: tuple = ()  # 1.17.18: path parameters copied into the row's after value
     server_only: bool = False  # 1.17.19: only a module backend may run it (never the browser route)
+    audit_object_field: str | None = None  # 1.17.21: top-level scalar of Tactical's JSON answer that is the row's object id
+    audit_object_body_field: str | None = None  # 1.17.21: cleaned body field that is the row's object id when the answer gives none
 
     @property
     def params(self) -> tuple:
@@ -274,6 +293,8 @@ class TacticalOperation:
                 "object_param": self.audit_object_param,
                 "before": self._describe_before(),
                 "params": list(self.audit_params),
+                "object_field": self.audit_object_field,
+                "object_body_field": self.audit_object_body_field,
             },
             "caller_scope": self.caller_scope,
             "server_only": self.server_only,
@@ -618,6 +639,19 @@ def _parse_before(value: Any, module: dict, verb: str, params: dict) -> BeforeSp
     return BeforeSpec(value["route"], segments, trailing, names, counts, select)
 
 
+def _parse_object_name(value: Any, label: str, verb: str) -> str | None:
+    """Validate ``audit.object_field`` or ``audit.object_body_field`` (1.17.21): a plain, non-secret name on a non-GET operation."""
+    if value is None:
+        return None
+    if verb == "GET":
+        raise TacticalOperationRegistrationError(f"a GET operation changes nothing, so it has no {label.replace('audit ', 'audit.')}.")
+    if not isinstance(value, str) or not _FIELD_RE.fullmatch(value):
+        raise TacticalOperationRegistrationError(f"{label} must be a plain field name.")
+    if _SECRET_NAME_RE.search(value):
+        raise TacticalOperationRegistrationError(f"{label} {value!r} looks like a secret. Never put secrets in the audit row.")
+    return value
+
+
 def _parse_type_map(value: Any) -> tuple:
     if not isinstance(value, dict) or not value or len(value) > _MAX_TYPE_MAP:
         raise TacticalOperationRegistrationError(f"a body-selected scope type needs a type_map of 1 to {_MAX_TYPE_MAP} entries.")
@@ -744,6 +778,10 @@ def register_tactical_operation(
 ):
     """Declare one Tactical operation. Call it from the owning module's ``AppConfig.ready()``.
 
+    1.17.21 (optional): ``audit.object_field`` names a top-level scalar field of Tactical's JSON answer, and
+    ``audit.object_body_field`` names a body field (one of ``body_fields``). Either gives the success row's object id when no
+    ``audit.object_param`` and no scope object does; neither is read for a GET operation or written on any other row.
+
     1.17.19 (optional): ``server_only=True`` (a strict bool) keeps the operation off Core's browser route. A module backend
     runs it through ``run_tactical_operation``. It stops the browser path; it is not a verified caller identity.
 
@@ -796,8 +834,10 @@ def register_tactical_operation(
     if isinstance(scope, (str, bytes, dict)) or not hasattr(scope, "__iter__"):
         raise TacticalOperationRegistrationError("scope must be a list of {type, source}.")
     # The audit declaration comes first. A scope source is a path or body value only; Tactical decides the rest (1.17.14).
-    if not isinstance(audit, dict) or not {"action", "object_type"} <= set(audit) or set(audit) - {"action", "object_type", "audit_fields", "object_param", "before", "params"}:
-        raise TacticalOperationRegistrationError("audit is {action, object_type, audit_fields, object_param, before, params}; the last four are optional.")
+    if not isinstance(audit, dict) or not {"action", "object_type"} <= set(audit) or set(audit) - {"action", "object_type", "audit_fields", "object_param", "before", "params", "object_field", "object_body_field"}:
+        raise TacticalOperationRegistrationError(
+            "audit is {action, object_type, audit_fields, object_param, before, params, object_field, object_body_field}; all after object_type are optional."
+        )
     if caller_scope is not None and caller_scope != "unrestricted":
         raise TacticalOperationRegistrationError('caller_scope must be "unrestricted" or left out.')
     if not isinstance(server_only, bool):
@@ -812,6 +852,10 @@ def register_tactical_operation(
     if object_param is not None and (not isinstance(object_param, str) or object_param not in params):
         raise TacticalOperationRegistrationError(f"audit object_param {object_param!r} is not a parameter of the route.")
     before = _parse_before(audit.get("before"), module, verb, params)
+    object_field = _parse_object_name(audit.get("object_field"), "audit object_field", verb)
+    object_body_field = _parse_object_name(audit.get("object_body_field"), "audit object_body_field", verb)
+    if object_body_field is not None and object_body_field not in fields:
+        raise TacticalOperationRegistrationError(f"audit object_body_field {object_body_field!r} is not one of body_fields.")
 
     row_lookup_entries = 0
     for item in scope:
@@ -915,6 +959,7 @@ def register_tactical_operation(
         audit_fields=audit_fields, module_permission=codename, message=text,
         audit_object_param=object_param, before=before, query_params=query_names, upload=upload_spec,
         caller_scope=caller_scope, body_selector=selector, audit_params=audit_params, server_only=server_only,
+        audit_object_field=object_field, audit_object_body_field=object_body_field,
     )
     key = (owner, op_id)
     route_key = (verb, _route_key(segments, trailing))
@@ -1067,6 +1112,28 @@ def _object_id(scope: list[tuple[str, list[str]]], operation: TacticalOperation 
         return None
     ids = scope[0][1]
     return _printable(",".join(ids)) or None
+
+
+def _answer_object_id(operation: TacticalOperation, data: Any, body: dict) -> tuple[str | None, str | None]:
+    """The success row's object id from Tactical's answer, then the cleaned body (1.17.21). Returns (id, source), or (None, None).
+
+    Used only when no ``audit.object_param`` and no scope object gave an id. The answer value must be a text or a whole number
+    (a bool, float, list, dict or null is ignored); the body value likewise. Both are cleaned like every object id (printable
+    ASCII, 255 characters). Never used on a deny, failed, core_refused or outcome-unknown row."""
+    sources = (
+        (operation.audit_object_field, data if isinstance(data, dict) else None, "answer"),
+        (operation.audit_object_body_field, body if isinstance(body, dict) else None, "body"),
+    )
+    for name, holder, label in sources:
+        if not name or holder is None:
+            continue
+        value = holder.get(name)
+        if isinstance(value, bool) or not isinstance(value, (str, int)):
+            continue
+        text = _printable(str(value).strip())
+        if text:
+            return text, label
+    return None, None
 
 
 def _body_scope_type(operation: TacticalOperation, scope: list) -> str | None:
@@ -1321,6 +1388,22 @@ def _refuse(request, operation: TacticalOperation, reason: str, status: int, cod
     )
     key = "object_not_found" if reason == "not_found" else reason
     return TacticalOperationError(text or MESSAGES[key], status=status, code=code, audit=audit)
+
+
+def _write_core_refusal(request, operation: TacticalOperation, error: TacticalOperationError, object_id=None,
+                        correlation_id: str | None = None) -> dict:
+    """The one Core row of a refusal made before Tactical is called (1.17.21). A fixed Core text and the refusal code only.
+
+    The row has no before or after value and no body, query or upload value, and carries nothing from the caller's input but the
+    object id the deny rows already use. It never raises: a failed write is ``{recorded: False, error: audit_write_failed}``."""
+    return _write_row(
+        request, operation, action=FAILED_ACTION, object_id=object_id, message=CORE_REFUSED_MESSAGE.format(code=error.code),
+        tactical_status=None, refusal=True, correlation_id=correlation_id,
+        extra={
+            "declared_action": operation.audit_action, "result": "failed", "failure": "core_refused", "code": error.code,
+            "status": error.status,
+        },
+    )
 
 
 def _missing_flag_text(operation: TacticalOperation, flags: dict) -> str:
@@ -1598,6 +1681,16 @@ def _clean_correlation_id(value: Any) -> str | None:
     return value
 
 
+def _held_correlation_id(value: Any) -> str | None:
+    """The correlation id a row may carry before the validation step: the value when it is valid, else None (1.17.21).
+
+    An invalid id is refused at the validation step (``invalid_correlation_id``). Until then no row carries it."""
+    try:
+        return _clean_correlation_id(value)
+    except TacticalOperationError:
+        return None
+
+
 def _clean_audit_before(value: Any) -> dict | None:
     """A caller's own before value (1.17.16): a flat dict of at most 16 scalar fields. Python only; never from a browser."""
     if value is None:
@@ -1644,8 +1737,9 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
     # 0. (1.17.16, AD-19 condition 2) a real request that passed Core's session check, never an object that merely has a user
     if not _is_real_request(request) or getattr(request, "tec_tac_session", None) is None:
         raise _fail("authenticated_request_required", 401, "authenticated_request_required")
-    correlation_id = _clean_correlation_id(correlation_id)
-    audit_before = _clean_audit_before(audit_before)
+    # 1.17.21: the two cleaners run at the validation step (5). Until then an invalid correlation id is held back (None).
+    raw_correlation_id, raw_audit_before = correlation_id, audit_before
+    correlation_id = _held_correlation_id(raw_correlation_id)
     operation = _lookup(module_id, operation_id)  # 1. exists and its module is enabled
     user = getattr(request, "user", None)
     if user is None or not getattr(user, "is_authenticated", False):  # 2.
@@ -1679,36 +1773,44 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
     if operation.caller_scope == "unrestricted" and not _caller_unrestricted(user):  # 4a. (1.17.18) only for no client or site limits
         raise _refuse(request, operation, "scope_unrestricted_required", 403, "scope_unrestricted_required", hint, correlation_id)
 
-    params = _clean_params(operation, params)  # 5. shape, then scope
-    body = _clean_body(operation, body)
-    if operation.body_selector and not _selector_holds(operation, body):  # 5a. (1.17.18) never run under another operation's scope or verb
-        raise _refuse(request, operation, "body_selector_mismatch", 400, "body_selector_mismatch", hint, correlation_id)
-    query = _clean_query(operation, query)
-    file = _clean_upload(operation, upload)
-    entries = _scope_entries(operation, params, body)
-    scope = [(kind, ids) for _, kind, ids in entries]
-    object_id = _object_id(scope, operation, params)
-    extra: dict = {}
-    if entries:
-        from . import resources_adapter as adapter
+    try:
+        correlation_id = _clean_correlation_id(raw_correlation_id)  # 5. (1.17.21: the two cleaners run here) shape, then scope
+        audit_before = _clean_audit_before(raw_audit_before)
+        params = _clean_params(operation, params)  # 5. shape, then scope
+        body = _clean_body(operation, body)
+        if operation.body_selector and not _selector_holds(operation, body):  # 5a. (1.17.18) never run under another operation's scope or verb
+            raise _refuse(request, operation, "body_selector_mismatch", 400, "body_selector_mismatch", hint, correlation_id)
+        query = _clean_query(operation, query)
+        file = _clean_upload(operation, upload)
+        entries = _scope_entries(operation, params, body)
+        scope = [(kind, ids) for _, kind, ids in entries]
+        object_id = _object_id(scope, operation, params)
+        extra: dict = {}
+        if entries:
+            from . import resources_adapter as adapter
 
-        for spec, kind, ids in entries:
-            if spec.row_lookup:
-                # CQ56 a, CQ57: the owning module says which agent the row belongs to. A row with no agent is allowed to anyone
-                # who holds the Tactical flag (Tactical decides); a row with an agent is held to the caller's role scope.
-                agent_id = _row_lookup_agent(operation, spec, ids[0])
-                if agent_id is _LOOKUP_FAILED:
+            for spec, kind, ids in entries:
+                if spec.row_lookup:
+                    # CQ56 a, CQ57: the owning module says which agent the row belongs to. A row with no agent is allowed to anyone
+                    # who holds the Tactical flag (Tactical decides); a row with an agent is held to the caller's role scope.
+                    agent_id = _row_lookup_agent(operation, spec, ids[0])
+                    if agent_id is _LOOKUP_FAILED:
+                        raise _refuse(request, operation, "not_found", 404, "object_not_found", object_id, correlation_id)
+                    extra["scope_source"] = "row_lookup"
+                    extra["agentless"] = agent_id is None
+                    if agent_id is not None and not adapter.objects_in_role_scope(user=user, resource_type="agent", identifiers=[agent_id]):
+                        raise _refuse(request, operation, "not_found", 404, "object_not_found", object_id, correlation_id)
+                elif kind == "agent_pk":
+                    if not adapter.agent_pks_in_role_scope(user=user, pks=ids):
+                        raise _refuse(request, operation, "not_found", 404, "object_not_found", object_id, correlation_id)
+                elif not adapter.objects_in_role_scope(user=user, resource_type=kind, identifiers=ids):
                     raise _refuse(request, operation, "not_found", 404, "object_not_found", object_id, correlation_id)
-                extra["scope_source"] = "row_lookup"
-                extra["agentless"] = agent_id is None
-                if agent_id is not None and not adapter.objects_in_role_scope(user=user, resource_type="agent", identifiers=[agent_id]):
-                    raise _refuse(request, operation, "not_found", 404, "object_not_found", object_id, correlation_id)
-            elif kind == "agent_pk":
-                if not adapter.agent_pks_in_role_scope(user=user, pks=ids):
-                    raise _refuse(request, operation, "not_found", 404, "object_not_found", object_id, correlation_id)
-            elif not adapter.objects_in_role_scope(user=user, resource_type=kind, identifiers=ids):
-                raise _refuse(request, operation, "not_found", 404, "object_not_found", object_id, correlation_id)
-    _check_whitelist(operation, body)  # 6.
+        _check_whitelist(operation, body)  # 6.
+    except TacticalOperationError as exc:
+        # 1.17.21: Core's own refusal of a change writes one row. An error that already carries a verdict (a deny row) keeps it.
+        if exc.audit is None and exc.code in CORE_REFUSAL_ROW_CODES and operation.method != "GET":
+            exc.audit = _write_core_refusal(request, operation, exc, None if exc.code == "invalid_params" else hint, correlation_id)
+        raise
 
     from django.urls import resolve  # 7.
 
@@ -1752,13 +1854,27 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
     if len(content) > MAX_RESPONSE_BYTES:
         raise _unknown_outcome(request, operation, object_id, status, "tactical_response_refused", "Tactical's answer is larger than Core relays.", correlation_id)
 
+    content_type = str(response.get("Content-Type", "") or "") if hasattr(response, "get") else ""
+    data: Any = content
+    if content_type.split(";")[0].strip().lower() in ("application/json",) or content_type.split(";")[0].strip().lower().endswith("+json"):
+        try:
+            data = json.loads(content.decode("utf-8")) if content else None
+        except Exception:  # review round 3: any parse error (RecursionError, MemoryError ...) must never skip the row of a change Tactical ran
+            data = content
+
     audit = None  # 8.
     if 200 <= status < 300:
+        success_extra = extra
+        if object_id is None and (operation.audit_object_field or operation.audit_object_body_field):
+            # 1.17.21: a create has no id in the path or scope. Tactical's answer, then the cleaned body, names it. Success rows only.
+            object_id, object_source = _answer_object_id(operation, data, body)
+            if object_source:
+                success_extra = {**extra, "object_source": object_source}
         audit = _write_row(
             request, operation, action=operation.audit_action, object_id=object_id,
             message=operation.message or f"Core ran Tactical operation {operation.id}.",
             before=before_state["values"] if before_state else None,
-            after=_after_values(operation, body, query, file, params), tactical_status=status, extra=extra, correlation_id=correlation_id,
+            after=_after_values(operation, body, query, file, params), tactical_status=status, extra=success_extra, correlation_id=correlation_id,
         )
     elif status in (401, 403):
         audit = _write_row(
@@ -1781,18 +1897,11 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
             correlation_id=correlation_id,
         )
 
-    content_type = str(response.get("Content-Type", "") or "") if hasattr(response, "get") else ""
     headers = {}
     for name in RELAYED_HEADERS:
         value = response.get(name) if hasattr(response, "get") else None
         if value:
             headers[name] = str(value)
-    data: Any = content
-    if content_type.split(";")[0].strip().lower() in ("application/json",) or content_type.split(";")[0].strip().lower().endswith("+json"):
-        try:
-            data = json.loads(content.decode("utf-8")) if content else None
-        except (ValueError, UnicodeDecodeError):
-            data = content
     return TacticalOperationResult(status=status, data=data, content_type=content_type, headers=headers, audit=audit or {}, content=content)
 
 
@@ -1848,6 +1957,20 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
                 "(metadata.declared_action, result failed, no before or after value, no Tactical text); result.audit and X-Tec-Tac-Audit are a verdict for it"
             ),
         ],
+        # 1.17.21 (capability 1.7.0, still major 1): two optional audit keys and one behaviour, so a module can feature-detect each.
+        "declaration_keys_added_in_1_7_0": ["audit.object_field", "audit.object_body_field"],
+        "behaviour_added_in_1_7_0": [
+            (
+                "a non-GET call that Core refuses before Tactical is called, with one of refusal_row_codes, writes one custom:operation-failed row "
+                "(failure core_refused, metadata.code, declared_action, fixed Core text, no body, query or upload value); error.audit and "
+                "X-Tec-Tac-Audit are the verdict, so a module stops writing its own failed row for these codes when error.audit is not None"
+            ),
+            (
+                "audit.object_field or audit.object_body_field gives the success row's object id (metadata.object_source answer or body) when "
+                "no audit.object_param and no scope object does; no other row carries it"
+            ),
+        ],
+        "refusal_row_codes": list(CORE_REFUSAL_ROW_CODES),
         "audit_actions_core_only": ["deny", OUTCOME_UNKNOWN_ACTION, FAILED_ACTION],
         "refusal_codes_added_in_1_3_0": ["authenticated_request_required", "invalid_correlation_id", "invalid_audit_before"],
         "refusal_codes_added_in_1_1_0": ["query_field_not_allowed", "invalid_query", "upload_not_allowed", "upload_too_large", "upload_type_not_allowed", "invalid_upload"],

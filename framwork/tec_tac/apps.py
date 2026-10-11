@@ -30,8 +30,12 @@ class TecTacFrameworkConfig(AppConfig):
             from .tactical_operations import register_core_tactical_operations_capability
 
             register_core_tactical_operations_capability()
+            # 1.17.21: the verified calling-module identity. Same guard: a fault here must never abort start-up, and a provider that
+            # cannot find the capability (has_capability) refuses, so a missing registration fails closed.
+            from .caller_identity import register_core_caller_identity_capability
+            register_core_caller_identity_capability()
         except Exception:
-            logger.exception("Tec-Tac core.tactical_operations capability registration failed")
+            logger.exception("Tec-Tac core.tactical_operations or core.caller_identity capability registration failed")
 
         # Tactical's native role/account editors can otherwise grant effective
         # superuser authority to mid-level managers. Install the Core-owned,

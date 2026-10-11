@@ -563,8 +563,12 @@ refusal(lambda: run(user=manager, operation="maintenance", body={"client_ids": [
 
 # ---- body and parameter whitelists
 del ROWS[:]
-refusal(lambda: run(params={"agent_id": AGENT}, body={"mode": "now", "command": "rm -rf /"}), 400, "body_field_not_allowed")
-must(not CALLS and not ROWS, "a body key outside the whitelist never reaches Tactical and writes nothing")
+exc = refusal(lambda: run(params={"agent_id": AGENT}, body={"mode": "now", "command": "rm -rf /"}), 400, "body_field_not_allowed")
+# 1.17.21: Core's own refusal of a change writes one custom:operation-failed row (core_refused) and says so in error.audit
+must(not CALLS and len(ROWS) == 1 and ROWS[0]["action"] == "custom:operation-failed", "a body key outside the whitelist never reaches Tactical and writes one Core row")
+must(ROWS[0]["debug_info"]["metadata"]["failure"] == "core_refused" and ROWS[0]["debug_info"]["metadata"]["code"] == "body_field_not_allowed", ROWS[0])
+must("rm -rf" not in json.dumps(ROWS, default=str), "no body value in the row")
+must(exc.audit == {"recorded": True, "id": 7, "action": "custom:operation-failed"}, exc.audit)
 refusal(lambda: run(params={"agent_id": AGENT}, body=["mode"]), 400, "invalid_body")
 refusal(lambda: run(params={"agent_id": AGENT}, body={"mode": object()}), 400, "invalid_body")
 refusal(lambda: run(params={"agent_id": AGENT}, body={"mode": "x" * (ops.MAX_BODY_BYTES + 1)}), 413, "body_too_large")
@@ -574,7 +578,9 @@ for bad in ({}, {"agent_id": None}, {"agent_id": "a/b"}, {"agent_id": ".."}, {"a
 refusal(lambda: run(params="agent"), 400, "invalid_params")
 must(not CALLS, "bad parameters never reach Tactical")
 route(f"/agents/{AGENT}/reboot/")
-refusal(lambda: run(operation="reboot-get", params={"agent_id": AGENT}, body={"mode": "x"}), 400, "body_field_not_allowed")  # a GET takes no body
+del ROWS[:]
+exc = refusal(lambda: run(operation="reboot-get", params={"agent_id": AGENT}, body={"mode": "x"}), 400, "body_field_not_allowed")  # a GET takes no body
+must(not ROWS and exc.audit is None, "1.17.21: a refusal on a GET writes no row and keeps audit None")
 
 # ------------------------------------------------------------------------------------------------ dispatch
 del ROWS[:]
@@ -834,7 +840,7 @@ refused(route="api/tfd/system/updates/")
 
 # ------------------------------------------------------------------------------------------------ capability, urls, throttles, apps, docs, install.sh
 cap = ops.register_core_tactical_operations_capability()
-must(CAPS and CAPS[-1]["id"] == "core.tactical_operations" and CAPS[-1]["module_id"] == "core" and CAPS[-1]["version"] == "1.6.0", CAPS)  # 1.17.20: 1.6.0, still major 1
+must(CAPS and CAPS[-1]["id"] == "core.tactical_operations" and CAPS[-1]["module_id"] == "core" and CAPS[-1]["version"] == "1.7.0", CAPS)  # 1.17.21: 1.7.0, still major 1
 must(CAPS[-1]["operations"] == ("run", "list_operations", "get_operation"), CAPS[-1]["operations"])
 provider = CAPS[-1]["provider"]
 must(provider.run is ops.run_tactical_operation and provider.list_operations is ops.list_operations and provider.get_operation is ops.get_operation, "provider")
