@@ -926,12 +926,80 @@ def _hash_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def stage_multiple_packages(uploads) -> dict:
+def _read_metadata_upload(upload, name: str) -> dict:
+    """Read one uploaded release metadata file (JSON object, at most 1 MB) for pairing. Raises ModuleManagerV2Error."""
+    size = int(getattr(upload, "size", 0) or 0)
+    if size <= 0 or size > 1024 * 1024:
+        raise ModuleManagerV2Error(f"{name} is empty or too large to be release metadata.")
+    try:
+        data = json.loads(b"".join(upload.chunks()).decode("utf-8"))
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise ModuleManagerV2Error(f"{name} is not valid release metadata (JSON).") from exc
+    if not isinstance(data, dict):
+        raise ModuleManagerV2Error(f"{name} is not valid release metadata (a JSON object).")
+    return data
+
+
+def pair_intake_sidecars(uploads, signatures=None, metadata_files=None) -> list[tuple]:
+    """Pair every uploaded package with its detached signature and release metadata (1.17.18).
+
+    Pairing follows the release metadata, never a guess: ``metadata.filename`` names the package and ``metadata.signature``
+    names the signature file (the same two names ``verify_release_files`` checks). Returns ``[(package, signature, metadata)]``
+    in upload order; a package with no companions gets ``(package, None, None)`` and follows the unsigned policy. Raises
+    ModuleManagerV2Error with a plain message naming the file when a pairing fails. Nothing is staged here."""
+    uploads = list(uploads)
+    signatures = list(signatures or [])
+    metadata_files = list(metadata_files or [])
+    by_package: dict[str, list] = {}
+    for upload in uploads:
+        by_package.setdefault(str(getattr(upload, "name", "package")), []).append(upload)
+    by_signature: dict[str, list] = {}
+    for sig in signatures:
+        by_signature.setdefault(str(getattr(sig, "name", "")), []).append(sig)
+    chosen_metadata: dict[int, tuple] = {}
+    used_signatures: set[int] = set()
+    for meta_upload in metadata_files:
+        meta_name = str(getattr(meta_upload, "name", "release metadata"))
+        data = _read_metadata_upload(meta_upload, meta_name)
+        package_name = str(data.get("filename") or "").strip()
+        signature_name = str(data.get("signature") or "").strip()
+        owners = by_package.get(package_name) or []
+        if not owners:
+            raise ModuleManagerV2Error(
+                f"{meta_name} is for a package called '{package_name or 'unknown'}', and that file was not uploaded. "
+                "Upload each package under the name its release metadata gives. A browser may rename a copy, "
+                "for example 'name (1).zip'; rename it back and try again.")
+        if len(owners) > 1:
+            raise ModuleManagerV2Error(f"More than one uploaded package is called '{package_name}'. Upload each package once.")
+        if id(owners[0]) in chosen_metadata:
+            raise ModuleManagerV2Error(f"Two release metadata files were uploaded for '{package_name}'. Upload only one.")
+        sigs = by_signature.get(signature_name) or []
+        if not sigs:
+            raise ModuleManagerV2Error(
+                f"{meta_name} names the signature file '{signature_name or 'unknown'}', and that file was not uploaded.")
+        if len(sigs) > 1:
+            raise ModuleManagerV2Error(f"More than one uploaded signature is called '{signature_name}'. Upload each signature once.")
+        chosen_metadata[id(owners[0])] = (sigs[0], meta_upload)
+        used_signatures.add(id(sigs[0]))
+    for sig in signatures:
+        if id(sig) not in used_signatures:
+            raise ModuleManagerV2Error(
+                f"The signature file '{getattr(sig, 'name', 'signature')}' does not belong to any uploaded release metadata file. "
+                "Upload its .release.json file too, or remove the signature.")
+    return [(upload, *chosen_metadata.get(id(upload), (None, None))) for upload in uploads]
+
+
+def stage_multiple_packages(uploads, signatures=None, metadata_files=None) -> dict:
     uploads = list(uploads)
     if not uploads:
         raise ModuleManagerV2Error("At least one package is required.")
+    pairs = pair_intake_sidecars(uploads, signatures, metadata_files) if (signatures or metadata_files) else [
+        (upload, None, None) for upload in uploads]
     if len(uploads) == 1:
-        return stage_uploaded_artifact(uploads[0])
+        _upload, sig, meta = pairs[0]
+        if sig is None and meta is None:
+            return stage_uploaded_artifact(uploads[0])
+        return stage_uploaded_artifact(uploads[0], signature_upload=sig, metadata_upload=meta)
 
     # A multi-file intake may contain any mixture of normal module packages and
     # Tec-Tac bundles. Bundles are staging containers only: their child module
@@ -940,10 +1008,10 @@ def stage_multiple_packages(uploads) -> dict:
     artifacts = []
     flattened = []
     try:
-        for upload in uploads:
+        for upload, sig_upload, meta_upload in pairs:
             filename = str(getattr(upload, "name", "package"))
             try:
-                stage = stage_uploaded_artifact(upload)
+                stage = stage_uploaded_artifact(upload) if sig_upload is None and meta_upload is None else                     stage_uploaded_artifact(upload, signature_upload=sig_upload, metadata_upload=meta_upload)
                 preview = dict(stage.get("preview") or {})
                 kind = str(stage.get("kind") or preview.get("kind") or "package")
                 artifact = {**stage, "preview": preview, "kind": kind}
@@ -1292,6 +1360,13 @@ def _queue_v2(payload: dict) -> dict:
     return public_job(job)
 
 
+def _refuse_disabled_install(candidate: dict) -> None:
+    """Refuse installing or upgrading a module that is disabled (1.17.18, CQ59). Raises ModuleManagerV2Error with the plain sentence."""
+    message = module_replacement.disabled_install_refusal(candidate.get("id"), candidate.get("name"))
+    if message:
+        raise ModuleManagerV2Error(message)
+
+
 def queue_v2_install(upload_id: str, requested_order=None, requested_by: str | None = None, disable_replaced=None, actor=None) -> dict:
     # Individual v1-staged package.
     try:
@@ -1300,6 +1375,7 @@ def queue_v2_install(upload_id: str, requested_order=None, requested_by: str | N
         meta = None
     if meta:
         preview = _package_metadata(Path(meta["package_path"]))
+        _refuse_disabled_install(preview)  # 1.17.18 (CQ59): a plain 400 before anything is queued
         requested_permissions = set(preview.get("publisher_permissions") or [])
         trust = _verify_stage_trust(meta, require_signed=bool(requested_permissions - {"module.install"}), required_permissions=tuple(sorted({"module.install", *requested_permissions})))
         _enforce_candidate_licensing(preview)
@@ -1411,6 +1487,8 @@ def queue_batch_install(batch_id: str, requested_order=None, requested_by: str |
                 "signature_filename": bundle.get("signature_filename"),
                 "release_metadata_path": bundle.get("release_metadata_path"),
             }, require_signed=bool(bundle_permissions - {"module.install"}), required_permissions=tuple(sorted({"module.install", *bundle_permissions})))
+            for child in fresh.get("packages") or []:
+                _refuse_disabled_install(child)
             candidates.extend(fresh.get("packages") or [])
             job_artifacts.append({
                 "kind": "bundle",
@@ -1427,6 +1505,7 @@ def queue_batch_install(batch_id: str, requested_order=None, requested_by: str |
 
         meta = _load_stage(upload_id)
         candidate = _package_metadata(Path(meta["package_path"]))
+        _refuse_disabled_install(candidate)  # 1.17.18 (CQ59)
         requested_permissions = set(candidate.get("publisher_permissions") or [])
         trust = _verify_stage_trust(meta, require_signed=bool(requested_permissions - {"module.install"}), required_permissions=tuple(sorted({"module.install", *requested_permissions})))
         _enforce_candidate_licensing(candidate)

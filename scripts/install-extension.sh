@@ -240,6 +240,7 @@ print(ext_manifest.parent)
 print(rep_manifest.parent if rep_manifest is not None else "-")
 print(str(ext_payload.get("version", "0.0.0")).strip())
 print(str(rep_payload.get("version", "0.0.0")).strip() if rep_payload is not None else "-")
+print(" ".join(str(ext_payload.get("name", "") or "").split()) or "-")
 PY
 )"
 
@@ -249,6 +250,7 @@ SOURCE_EXTENSION="${DISCOVERY_LINES[1]}"
 SOURCE_REPORTSET="${DISCOVERY_LINES[2]}"
 EXT_VERSION="${DISCOVERY_LINES[3]}"
 REP_VERSION="${DISCOVERY_LINES[4]}"
+PACKAGE_NAME="${DISCOVERY_LINES[5]:--}"
 
 DEST_EXTENSION="${EXTENSIONS_ROOT}/${PLUGIN_ID}"
 DEST_REPORTSET="${REPORTSETS_ROOT}/${PLUGIN_ID}"
@@ -261,6 +263,25 @@ if [[ -e "${DEST_EXTENSION}" || -e "${DEST_REPORTSET}" ]]; then
     [[ "${MODE}" == "--replace" ]] || fail \
         "Extension '${PLUGIN_ID}' is already installed. Re-run with --replace to upgrade/replace it."
 fi
+
+# 1.17.18 (Johan CQ59): refuse a module that is disabled up front, in a fresh install and in --replace alike, with the plain
+# reason and no traceback. Nothing has been copied, backed up or changed yet. The sentence comes from Core's own check
+# (tec_tac.module_replacement.disabled_install_refusal), which reads the module state; a check that cannot run says nothing.
+DISABLED_REFUSAL="$("${SYSTEM_PYTHON}" -I - "${FRAMEWORK_DIR}" "${PLUGIN_ID}" "${PACKAGE_NAME}" <<'PY'
+import sys
+from pathlib import Path
+
+try:
+    sys.path.insert(0, str(Path(sys.argv[1]).resolve()))
+    from tec_tac.module_replacement import disabled_install_refusal
+
+    message = disabled_install_refusal(sys.argv[2], sys.argv[3] if sys.argv[3] != "-" else None)
+except Exception:
+    message = None
+print(" ".join(str(message or "").split()))
+PY
+)"
+[[ -z "${DISABLED_REFUSAL}" ]] || fail "${DISABLED_REFUSAL}"
 
 # Validate the package pair in isolation with the Tec-Tac registry before
 # touching the live plugin directories.

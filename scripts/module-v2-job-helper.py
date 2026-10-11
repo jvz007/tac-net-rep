@@ -1143,6 +1143,26 @@ def restore_modules(repo_root, module_ids, backup_root, log):
         MODULE_STATE.unlink()
 
 
+_INSTALLER_REFUSAL = re.compile(r"^\[TEC-TAC\] ERROR: ([^\r\n]{1,400} install again\.)[ \t\r]*$", re.M)
+
+
+def installer_refusal(log_path):
+    """The plain sentence install-extension.sh printed when it refused a disabled module (1.17.18, CQ59), else None.
+
+    The script writes ``[TEC-TAC] ERROR: <Module> is disabled ... then install again.`` to the job log. The job shows that
+    sentence instead of a bare exit status. Only the last 16 KiB of the log is read."""
+    try:
+        with Path(log_path).open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - 16384))
+            tail = handle.read().decode("utf-8", "replace")
+    except (OSError, TypeError, ValueError):
+        return None
+    found = _INSTALLER_REFUSAL.findall(tail)
+    return found[-1] if found else None
+
+
 def install_packages(repo_root, packages, order, actions, log, backup_root):
     install_script = repo_root / "scripts/install-extension.sh"
     if not install_script.is_file():
@@ -1180,6 +1200,10 @@ def install_packages(repo_root, packages, order, actions, log, backup_root):
         env = privileged_env({"TEC_TAC_DEFER_WORKER_REFRESH": "1"})
         result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, text=True, env=env)
         if result.returncode:
+            log.flush()
+            refusal = installer_refusal(getattr(log, "name", None))  # 1.17.18 (CQ59): the plain reason for a disabled module
+            if refusal:
+                raise RuntimeError(refusal)
             raise RuntimeError(f"install failed for {module_id} with status {result.returncode}")
     return backup_ids
 

@@ -165,9 +165,9 @@ What happens on install:
 
 Dispatch and run read the registry file back and compare the executable's SHA-256 with the recorded one. An executable that changed since registration fails closed.
 
-A hotfix that changes an action executable does not re-register. The stale hash fails closed and the action stops until the module is installed again.
+A hotfix does not change the registered copy. It writes only under the module folder and never re-registers, so the executable Core copied at install keeps running, unchanged, until the module is installed again. The hash check guards that root-owned copy, not the module folder. (Before 1.17.18 this page said the action would stop. The code never did that.)
 
-If registration fails, the install job fails with a plain message ("server-maintenance action registration failed for module X ... See the job log for the reason"). A failed install restores the earlier module code and then re-registers the restored version, or removes the module's actions when there was none. Uninstalling a module runs `--unregister-module`, which removes every action and executable the module owns and nothing of any other module's.
+If registration fails, the install job fails with a plain message ("server-maintenance action registration failed for module X ... See the job log for the reason"). A failed install restores the earlier module code and then re-registers the restored version, or removes the module's actions when there was none. Uninstalling a module runs `--unregister-module`, which removes every action the module registered from its manifest (`registered_by: module-manifest`), their executables, and nothing of any other module's. Since 1.17.18 it never removes a hand registration: an action an administrator registered by hand stays, even when its `owner_module` names the module and even when it is protected. The same rule applies to the stale-action sweep of `--register-module`. To remove a hand registration, delete its registry file as an administrator.
 
 Disabling a module does not unregister its actions. `start()` refuses a permissioned action whose owner module is not enabled.
 

@@ -70,7 +70,7 @@ refused_spec(audit=audit_with(before={"route": "agents/notes/{pk:int}/"}))
 refused_spec(audit=audit_with(before={"route": "agents/notes/{pk:int}/", "fields": ["note"], "method": "POST"}))
 refused_spec(audit=audit_with(before={"route": "agents/notes/{pk:int}/", "fields": []}))  # nothing to copy
 refused_spec(audit=audit_with(before={"route": "agents/notes/{pk:int}/", "fields": ["note", "note"]}))
-refused_spec(audit=audit_with(before={"route": "agents/notes/{pk:int}/", "fields": [f"f{i}" for i in range(17)]}))  # more than 16
+refused_spec(audit=audit_with(before={"route": "agents/notes/{pk:int}/", "fields": [f"f{i}" for i in range(33)]}))  # more than 32
 for secretive in ("password", "api_token", "secret", "auth_header", "cookie", "private_key"):
     refused_spec(audit=audit_with(before={"route": "agents/notes/{pk:int}/", "fields": ["agent_id", secretive]}))
 # the before route is a GET that the same module must own, with the operation's own parameters

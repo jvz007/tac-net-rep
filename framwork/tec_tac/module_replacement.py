@@ -638,6 +638,54 @@ def replaced_by(core_id: str, *, model: Mapping[str, Node] | None = None) -> str
     return None
 
 
+def _manifest_name(plugins, module_id: str) -> str:
+    """The module's display name from its installed manifest, or the id. One plain line."""
+    for plugin in plugins or ():
+        if getattr(plugin, "plugin_id", None) == module_id and getattr(plugin, "plugin_type", "extension") == "extension":
+            name = " ".join(str(getattr(plugin, "name", "") or "").split())
+            if name:
+                return name
+    return module_id
+
+
+def disabled_install_refusal(module_id: str, name: str | None = None, *, model: Mapping[str, Node] | None = None,
+                             state: Mapping[str, Any] | None = None, plugins=None) -> str | None:
+    """The plain sentence that refuses installing a module that is disabled, or None (1.17.18, Johan CQ59).
+
+    An install or upgrade of a disabled module used to run to the end and then fail, or be skipped half way. The installer and
+    the Module Manager ask this first, before anything is copied, backed up or queued. It reads the module state and, for the
+    reason, the live model.
+
+    * Disabled because its replacement is enabled and honoured right now: "<Module> is disabled because <Replacement> replaces
+      it. Disable <Replacement> and enable <Module>, then install again."
+    * Disabled for any other reason: "<Module> is disabled. Enable it, then install again."
+    * A module with no state entry (a first install), an enabled module and a state file that cannot be read give None; the
+      later steps handle those as before.
+
+    ``name`` is the incoming package's manifest name (the installed manifest, then the id, are the fallbacks). Never raises:
+    a failure to work this out gives None, which is the behaviour before 1.17.18. Enable, disable and hand-back are unchanged
+    (AD-20)."""
+    try:
+        target = str(module_id or "").strip()
+        if not target:
+            return None
+        state = _module_state.load_state() if state is None else state
+        if state.get("_corrupt") or not isinstance(state.get("modules"), Mapping) or target not in state["modules"]:
+            return None
+        if _module_state.is_enabled(target, dict(state)):
+            return None
+        plugins = _registry.get_plugins() if plugins is None else plugins
+        shown = " ".join(str(name or "").split()) or _manifest_name(plugins, target)
+        replacement = replaced_by(target, model=live_model(plugins, dict(state)) if model is None else model)
+        if replacement:
+            other = _manifest_name(plugins, replacement)
+            return f"{shown} is disabled because {other} replaces it. Disable {other} and enable {shown}, then install again."
+        return f"{shown} is disabled. Enable it, then install again."
+    except Exception:
+        logger.exception("Could not check whether %s is disabled before installing it.", module_id)
+        return None
+
+
 def declared_capabilities(module_id: str, *, model: Mapping[str, Node] | None = None) -> dict[str, str]:
     model = live_model() if model is None else model
     node = model.get(str(module_id))

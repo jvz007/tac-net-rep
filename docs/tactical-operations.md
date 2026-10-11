@@ -2,7 +2,7 @@
 
 **Status:** Public Core developer contract, added in Core 1.17.7
 **Python:** `tec_tac.tactical_operations`
-**Capability:** `core.tactical_operations` 1.3.0 (major 1, additive since 1.0.0), owner `core`
+**Capability:** `core.tactical_operations` 1.4.0 (major 1, additive since 1.0.0), owner `core`
 **HTTP:** `POST /api/tfd/tactical-operations/<module_id>/<operation_id>/`
 
 ## Why this exists
@@ -74,6 +74,8 @@ Since 1.17.8 ownership is per route, not per Tactical group. Core holds an order
 | `agents/{}/meshcentral/` (and `recover/`) | `take-control` |
 | `agents/{}/processes/`, `registry/`, `eventlog/`, `terminal-defaults/` | `remote-background` |
 | `agents/update/`, `agents/versions/`, `agents/bulkrecovery/`, `agents/{}/recover/` | `agent-management` |
+| `agents/{}/tasks/` | `tasks` (1.17.18) |
+| `agents/{}/checks/` | `checks` (1.17.18) |
 | `logs/pendingactions/` | `agents` (AD-18) |
 | `logs/audit/` | `audit` |
 | `logs/debug/` | `debug` |
@@ -195,7 +197,7 @@ audit={"action": "delete", "object_type": "report_template", "audit_fields": [],
 
 `audit.before = {"route": ..., "fields": [...]}` gives the row a before value. `route` is a Tactical `GET` route that returns the
 object. Its parameters must be among the operation's own parameters, with the same names and kinds, and the same module must own it
-(the same owner check as the operation). `fields` is a list of at most 16 top-level names. None may look like a secret.
+(the same owner check as the operation). `fields` is a list of at most 32 top-level names (16 before 1.17.18). None may look like a secret.
 
 Before it dispatches the change, Core runs that `GET` in this process through Tactical's own view, as the signed-in user. It uses the
 same helper as the operation, so there is no HTTP call and no token. It copies only the listed fields. A string is cut to 256
@@ -357,6 +359,114 @@ The rules:
 ### What `audit.object_param` already does
 
 The audit object id from a `{pk}` path parameter shipped in 1.17.13 and works with a typed `{pk:int}` since 1.17.14. Core writes the path value as the row's `object_id` on success, deny and outcome-unknown rows. A module only has to declare `object_param`. `tests/tactical-operations-audit-before-1.17.16.py` locks the Report Manager shape (`reporting/templates/{pk:int}/` and the operations below it).
+
+## Added in 1.17.18
+
+Capability `core.tactical_operations` is 1.4.0, still major 1. Every addition is optional. An operation declared the 1.17.17 way
+registers and runs exactly as before. A module needs framework 1.17.18 to use any of them. The new refusal codes are
+`scope_unrestricted_required` (403) and `body_selector_mismatch` (400).
+
+### Only for a caller with no client or site limits: `caller_scope`
+
+`register_tactical_operation(..., caller_scope="unrestricted")`. Any other value is refused at registration. At run time Core asks
+`tec_tac.resources.scope_unrestricted` for the caller, the same answer the UI reads as `tactical_scope.unrestricted`. A caller with
+no role, an installer user and a failed lookup count as limited (fail closed).
+
+The check runs after the Tactical flags and the module permission, and before the body is cleaned. A limited caller gets 403
+`scope_unrestricted_required` with a plain message, and Core writes a deny row (reason `scope_unrestricted_required`). Tactical is
+never called. The rule is per operation. It never applies to a row that belongs to no agent (CQ57: follow Tactical). The UI hides
+the control from `tacticalScope().unrestricted`, so a person normally never sees the refusal (AD-12).
+
+### Scope entries: `optional`, `agent_pk` and `row_lookup`
+
+- `optional: true` (a body source only). Core resolves the entry only when the body field is present and not null. An empty list
+  is allowed and checks nothing. When the field is absent the entry is skipped and adds no object id. A client or site entry may
+  hold a list of ids (up to 1000). One id out of scope refuses the call with 404 `object_not_found`.
+- Type `agent_pk` is for Tactical agent numbers: whole positive integers, one or a list, from a body field or an `int` path
+  parameter. Core checks them against the role's client and site limits through `resources_adapter.agent_pks_in_role_scope`.
+  `objects_in_role_scope` still matches only the canonical `agent_id` and still refuses pk aliases.
+- `row_lookup` is for a route whose path id loads a row, such as a task, a policy check or a patch policy (CQ56 a). The scope entry
+  is `{"type": "agent", "source": "path:<int param>", "row_lookup": "<lookup id>"}`. The owning core module registers the lookup:
+
+```python
+from tec_tac.tactical_operations import register_tactical_row_lookup
+
+def task_row(pk: str):
+    row = AutomatedTask.objects.filter(pk=pk).values("agent__agent_id").first()   # the module's own data
+    return None if row is None else {"agent_id": row["agent__agent_id"]}         # None for a policy task
+
+register_tactical_row_lookup("tasks", "task-row", task_row)   # from AppConfig.ready()
+```
+
+Rules: the same module and category rules as operations. A module names only its own lookups. The lookup returns `None` when the
+row does not exist, or a dict with `agent_id` (a canonical agent id, or `None`). Before dispatch Core calls it in this process:
+
+| Lookup answer | What Core does |
+| --- | --- |
+| Missing, raises, wrong shape or `None` | 404 `object_not_found`, no detail, deny row. |
+| An `agent_id` | Applies the caller's role scope to that agent. Out of scope gives 404 `object_not_found`. |
+| `{"agent_id": None}` (policy-level row) | Allowed for anyone who holds the Tactical flag. Tactical decides the rest (CQ57). |
+
+The audit row records the object id from the path id, and the metadata `scope_source: row_lookup` and `agentless: true|false`.
+Registration refuses `row_lookup` on a body source, on a non-int path parameter, and together with a second `row_lookup` entry.
+Core never reads Tactical models itself (CQ56 b was refused). The lookup runs before dispatch, so a row can change between the
+lookup and Tactical's own load. That race is small and accepted. Tactical still decides permission.
+
+### List values and counts in `audit.before`
+
+A declared `audit.before` field whose value is a list of whole numbers or short strings is now recorded as a list. Each string is
+cut to 256 characters and loses control characters. Core keeps at most 1000 entries and 64 KiB of text, and writes
+`<field>_count` (the full length) next to the list, plus `<field>_truncated: true` when it cut. A list that holds an object, a
+float, a boolean, a null or another list is not recorded at all. The secret-name rule on field names stays. A declaration may list
+up to 32 fields.
+
+`audit.before.count_fields` names list fields of the same read whose length only is recorded, as `<field>_count`. The contents are
+never recorded (for example a software package list).
+
+`audit.before.select = {"param": "<path param>", "field": "id"}` is for a route that has no single-row `GET` (CQ58 a), for example
+`agents/deployments/`. Core reads the list `GET` in-process through Tactical's own view as the signed-in user, selects the row whose
+`field` equals the path parameter Core already cleaned, and records the whitelisted fields of that row. It never uses a before
+value or an id sent by the browser, and a caller can still not supply a before over HTTP. The param must be an `int` or `str` path
+parameter of the operation's route. A bare list and a paginated `{"results": [...]}` answer are both read, and Core scans the first
+1000 rows only. No match, or an answer that is not a list, records `before: unavailable` and never blocks the call. The list route
+must be owned by the same module and use only parameters of the operation, with the same kinds.
+
+The Python-only `audit_before` keyword of `run_tactical_operation` is unchanged and stays flat.
+
+### Audit the path parameters: `audit.params`
+
+`audit = {..., "params": ["port"]}` names up to 8 path parameters of the route (plain names, none that looks like a secret, each
+present on the route). Core copies their cleaned values (shape-checked, printable, at most 255 characters) into the row's `after`
+value, next to the declared body and query fields. The row metadata does not change. A name may not also be an `audit_fields`
+name. Take Control can record the port of a Web VNC call, and Remote Background the pid of an end-process call.
+
+### Several operations on one route: `body_selector`
+
+AD-6 allows one caller per Tactical route. Core reads that as one caller per *module* (CQ60). The owning module may declare more
+than one operation on one `(method, route)` when Core can prove the bodies are exclusive. Each operation declares
+`body_selector`: a list of at most 3 conditions, each `{"field": <name in body_fields>, "present": true|false}` or
+`{"field": <name>, "equals": <text, whole number or boolean>}`. All of them must hold.
+
+A second operation on the same route is accepted only when:
+
+1. both operations belong to the same module (a second module stays refused);
+2. every operation on that route declares a `body_selector`; and
+3. every pair is provably exclusive: one field appears in both selectors with contradicting conditions (`present` true against
+   `present` false, two different `equals` values, or `equals` against `present` false).
+
+Core proves this at registration, in either order, and refuses the later declaration with a message that names the first. At run
+time Core checks the cleaned body against the operation's own selector. A body that does not hold is refused 400
+`body_selector_mismatch`, with a refusal row and no Tactical call, so a call can never run under the wrong operation's scope or
+audit verb. `present` means the key is in the body and not null.
+
+```python
+# Checks: POST checks/ is two operations in one module
+{"add-agent-check": {..., "body_selector": [{"field": "agent", "present": True}]},
+ "add-policy-check": {..., "body_selector": [{"field": "agent", "present": False}, {"field": "policy", "present": True}]}}
+```
+
+Single declarations behave exactly as before, including the refusal text for a different module. `describe()` lists
+`caller_scope`, `body_selector`, `audit.params`, the scope `optional` and `row_lookup`, and `audit.before.count_fields` and `select`.
 
 ## AD-19 conditions
 

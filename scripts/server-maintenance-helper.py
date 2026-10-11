@@ -375,8 +375,9 @@ def validate_manifest(payload, *, require_executable=True):
 
 def verify_registered_executable_hash(manifest):
     """An action a module registered carries the SHA-256 of the executable Core copied (1.17.17). Dispatch and run read it back and
-    compare, so an executable that changed since registration fails closed. A hotfix that changes an executable does not re-register,
-    so the hash fails and the action stops until the module is installed again. Actions an administrator registered by hand carry no
+    compare, so an executable that changed since registration fails closed. A hotfix writes only under the module folder and never
+    re-registers, so it does not change the registered copy: the executable Core copied at install keeps running, unchanged, until the
+    module is installed again. The hash guards that copy, not the module folder. Actions an administrator registered by hand carry no
     hash and are checked as before."""
     expected = manifest.get("executable_sha256")
     if manifest.get("registered_by") != "module-manifest" and expected is None:
@@ -628,7 +629,11 @@ def _module_managed(action_id):
 
 
 def _remove_owned_actions(module_id, *, keep=()):
-    """Delete the registry files whose owner_module is this module, except the ids in ``keep``. Returns the removed ids."""
+    """Delete the registry files this module registered itself, except the ids in ``keep``. Returns the removed ids.
+
+    1.17.18 (held Medium from the 1.17.17 review): a file is the module's own only when the helper wrote it
+    (``registered_by`` is ``module-manifest``). An action an administrator registered by hand, with ``owner_module`` set or not,
+    protected ones included, is never removed here."""
     removed = []
     if not REGISTRY_ROOT.is_dir():
         return removed
@@ -639,6 +644,8 @@ def _remove_owned_actions(module_id, *, keep=()):
             continue
         if not isinstance(payload, dict) or payload.get("owner_module") != module_id:
             continue
+        if payload.get("registered_by") != "module-manifest":
+            continue  # a hand registration (CQ54)
         action_id = str(payload.get("id") or path.stem)
         if action_id in keep:
             continue
@@ -741,7 +748,8 @@ def register_module(module_id):
 
 def unregister_module(module_id):
     """Remove every action and executable a module owns (1.17.17, ``--unregister-module <module-id>``): the registry files whose
-    owner_module is the module and the module's own folder under the Core action root. Nothing of another module's."""
+    owner_module is the module and that the helper registered (``registered_by`` is ``module-manifest``; a hand registration stays),
+    and the module's own folder under the Core action root. Nothing of another module's."""
     module_id = _module_id(module_id)
     removed = _remove_owned_actions(module_id)
     folder = ACTION_ROOT / module_id

@@ -578,7 +578,7 @@ Queued stale-run recovery applies a database timestamp prefilter before row lock
 
 Two server-side calls sit next to `reconcile_schedule`. Both need framework >=1.17.16. The full description is in `docs/scheduler.md`.
 
-- `start_one_off_run(user=..., owner_module=..., action_id=..., targets=None, parameters=None, name=None)` starts one run of your own registered action for a user and returns the queued run. Core re-checks the user's access just before your handler runs. `get_one_off_run(run_id, owner_module=...)` reads its state.
+- `start_one_off_run(user=..., owner_module=..., action_id=..., targets=None, parameters=None, name=None, retry_count=0, retry_delay_seconds=60)` starts one run of your own registered action for a user and returns the queued run. Core re-checks the user's access just before your handler runs, on every attempt. Since 1.17.18 the two retry keywords (0 to 10 retries, 1 to 86400 seconds) let a transient failure (`SchedulerTransientError`) retry without your handler waiting inside the run; they need framework 1.17.18 or later. `get_one_off_run(run_id, owner_module=...)` reads its state.
 - `get_owned_schedule(owner_module, owner_key)` returns `{enabled, schedule_type, next_run_at, last_run_at, last_run_status, last_run_finished_at}` or `None`, so a module can show the real next run instead of an estimate.
 
 The handler context has six more keys: `owner_type`, `owner_module`, `owner_key`, `owner_user_id`, `owner_username` and `one_off`. The user keys are set only for a one-off run and a user-owned schedule.

@@ -36,6 +36,19 @@ The registry is empty until a module declares an operation, so this release chan
 * The upload ceiling is a system setting (``tactical_operation_upload_max_mib``, default 10 MiB, 1 to 25). An operation's
   declared ``max_bytes`` may be at most 25 MiB (``MAX_UPLOAD_ABSOLUTE_BYTES``, checked at registration, which must not read
   the database), and a file is held to the smaller of that and the setting at the time of the call.
+
+1.17.18 (Johan CQ56 to CQ60; the capability is 1.4.0, still major 1; all additive, an operation declared the 1.17.17 way
+registers and runs unchanged):
+
+* ``caller_scope="unrestricted"``: only a caller with no client or site limits may run the operation (403
+  ``scope_unrestricted_required``, a deny row, Tactical never called).
+* A scope entry may be ``optional`` (resolved only when the body field is present), may have the type ``agent_pk`` (Tactical
+  agent numbers), and may name a ``row_lookup``: a function the owning module registers with ``register_tactical_row_lookup``
+  that maps the row a path id loads to its agent, so Core can apply the role's scope to that agent (CQ56 a, CQ57).
+* ``audit.before`` keeps lists of whole numbers or short strings, ``count_fields`` records only a list's length, and
+  ``select`` finds the row of a list GET by the path id (CQ58 a). ``audit.params`` records named path parameters.
+* ``body_selector`` lets one module declare several operations on one Tactical route when their bodies are provably
+  exclusive (CQ60).
 """
 from __future__ import annotations
 
@@ -54,7 +67,7 @@ from . import module_category as _module_category
 logger = logging.getLogger("tec_tac.tactical_operations")
 
 CAPABILITY_ID = "core.tactical_operations"
-CAPABILITY_VERSION = "1.3.0"
+CAPABILITY_VERSION = "1.4.0"
 AUDIT_HEADER = "X-Tec-Tac-Audit"
 AUDIT_RECORDED = "recorded"
 AUDIT_NOT_RECORDED = "not-recorded"
@@ -71,7 +84,7 @@ MAX_QUERY_VALUE = 512
 RELAYED_HEADERS = ("Content-Type", "Content-Disposition")
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 BODY_METHODS = ("POST", "PUT", "PATCH", "DELETE")
-SCOPE_TYPES = ("agent", "client", "site")
+SCOPE_TYPES = ("agent", "client", "site", "agent_pk")
 OUTCOME_UNKNOWN_ACTION = "custom:outcome-unknown"
 
 # Routes Core owns or that face agents. A module can never declare these, and a param value can never reach them.
@@ -85,6 +98,7 @@ _PARAM_RE = re.compile(r"^\{([a-z][a-z0-9_]{0,31})(?::(str|int|agent))?\}$")
 _FIELD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 _CORRELATION_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _SECRET_NAME_RE = re.compile(r"(pass|secret|token|key|credential|auth|cookie|signature)", re.IGNORECASE)
+_PARAM_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 _SCOPE_SOURCE_RE = re.compile(r"^(path|body):([A-Za-z_][A-Za-z0-9_]{0,63})$")
 _SCOPE_TYPE_BODY_RE = re.compile(r"^body:([A-Za-z_][A-Za-z0-9_]{0,63})$")
 _EXTENSION_RE = re.compile(r"^[a-z0-9]{1,10}$")
@@ -99,7 +113,12 @@ _MAX_ROUTE_LENGTH = 200
 _MAX_PERMISSIONS = 8
 _MAX_BODY_FIELDS = 64
 _MAX_SCOPE = 4
-_MAX_BEFORE_FIELDS = 16
+_MAX_BEFORE_FIELDS = 32  # 1.17.18: 16 before (alerts asked for more)
+_MAX_BEFORE_LIST = 1000  # entries of one list-valued before field (1.17.18)
+_MAX_BEFORE_LIST_CHARS = 65536  # characters kept across one list-valued before field (1.17.18)
+_MAX_BEFORE_SELECT_ROWS = 1000  # rows scanned in a list answer by audit.before.select (1.17.18)
+_MAX_AUDIT_PARAMS = 8
+_MAX_BODY_SELECTOR = 3
 _MAX_TYPE_MAP = 8
 _MAX_UPLOAD_EXTENSIONS = 16
 _BEFORE_STRING_LIMIT = 256
@@ -114,11 +133,15 @@ MESSAGES = {
     "module_permission_denied": "Your Tec-Tac role does not allow this operation.",
     "object_not_found": "The requested object was not found, or you cannot access it.",
     "authenticated_request_required": "This operation needs a signed-in Tec-Tac request.",
+    "scope_unrestricted_required": "This operation needs access to all clients and sites. Ask an administrator to change your role's scope.",
+    "body_selector_mismatch": "The request does not match this operation. Check the fields you sent.",
 }
 DENY_MESSAGES = {
     "permission_denied": "Core refused a Tactical operation: the signed-in user's Tactical role lacks a required permission.",
     "module_permission_denied": "Core refused a Tactical operation: the signed-in user's Tec-Tac role lacks the module permission.",
     "not_found": "Core refused a Tactical operation: the object is missing or outside the signed-in user's scope.",
+    "scope_unrestricted_required": "Core refused a Tactical operation: it is for callers with access to all clients and sites, and the signed-in user's role is limited.",
+    "body_selector_mismatch": "Core refused a Tactical operation: the request body does not match the operation that was named.",
     "tactical_denied": "Tactical refused an operation that Core ran for the signed-in user.",
 }
 OUTCOME_UNKNOWN_MESSAGE = (
@@ -146,6 +169,8 @@ class ScopeSpec:
     type: str  # agent, client or site, or body:<field> with a type_map (1.17.13)
     source: str  # path:<name> or body:<field>
     type_map: tuple = ()  # ((body value, scope type), ...) when ``type`` is body:<field>
+    optional: bool = False  # 1.17.18: resolved only when the body field is present and not null
+    row_lookup: str | None = None  # 1.17.18: id of a lookup the owning module registered (CQ56 a)
 
 
 @dataclass(frozen=True)
@@ -156,6 +181,8 @@ class BeforeSpec:
     segments: tuple
     trailing_slash: bool
     fields: tuple
+    count_fields: tuple = ()  # 1.17.18: list fields of the same read whose length only is recorded
+    select: tuple | None = None  # 1.17.18: (path param, row key) for a list GET with no single-row read
 
 
 @dataclass(frozen=True)
@@ -187,10 +214,23 @@ class TacticalOperation:
     before: BeforeSpec | None = None
     query_params: tuple = ()
     upload: UploadSpec | None = None
+    caller_scope: str | None = None  # 1.17.18: "unrestricted" or None
+    body_selector: tuple = ()  # 1.17.18: ((field, "present"|"equals", value), ...), all must hold
+    audit_params: tuple = ()  # 1.17.18: path parameters copied into the row's after value
 
     @property
     def params(self) -> tuple:
         return tuple((seg[1], seg[2]) for seg in self.segments if seg[0] == "param")
+
+    def _describe_before(self) -> dict | None:
+        if not self.before:
+            return None
+        out: dict[str, Any] = {"route": self.before.route, "fields": list(self.before.fields)}
+        if self.before.count_fields:
+            out["count_fields"] = list(self.before.count_fields)
+        if self.before.select:
+            out["select"] = {"param": self.before.select[0], "field": self.before.select[1]}
+        return out
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -201,15 +241,25 @@ class TacticalOperation:
             "params": {name: kind for name, kind in self.params},
             "permissions": list(self.permissions),
             "scope": [
-                {"type": item.type, "source": item.source, **({"type_map": dict(item.type_map)} if item.type_map else {})}
+                {
+                    "type": item.type, "source": item.source,
+                    **({"type_map": dict(item.type_map)} if item.type_map else {}),
+                    **({"optional": True} if item.optional else {}),
+                    **({"row_lookup": item.row_lookup} if item.row_lookup else {}),
+                }
                 for item in self.scope
             ],
             "body_fields": list(self.body_fields),
             "audit": {
                 "action": self.audit_action, "object_type": self.audit_object_type, "audit_fields": list(self.audit_fields),
                 "object_param": self.audit_object_param,
-                "before": {"route": self.before.route, "fields": list(self.before.fields)} if self.before else None,
+                "before": self._describe_before(),
+                "params": list(self.audit_params),
             },
+            "caller_scope": self.caller_scope,
+            "body_selector": [
+                {"field": name, kind: value} for name, kind, value in self.body_selector
+            ],
             "module_permission": self.module_permission,
             "query_params": list(self.query_params),
             "upload": (
@@ -233,7 +283,10 @@ class TacticalOperationResult:
 
 _LOCK = threading.RLock()
 _OPERATIONS: dict[tuple[str, str], TacticalOperation] = {}
-_ROUTES: dict[tuple[str, str], tuple[str, str]] = {}
+# (method, route key) -> the (module id, operation id) pairs declared on it. One pair, unless the owning module declared
+# several operations with provably exclusive body selectors (1.17.18, CQ60).
+_ROUTES: dict[tuple[str, str], list[tuple[str, str]]] = {}
+_ROW_LOOKUPS: dict[tuple[str, str], Any] = {}
 
 
 # ----------------------------------------------------------------------------------------------- registration
@@ -348,6 +401,9 @@ _ROUTE_OWNER_RULES = (
     (("agents", "versions"), ("agent-management",)),
     (("agents", "bulkrecovery"), ("agent-management",)),
     (("agents", "{}", "recover"), ("agent-management",)),
+    # 1.17.18 (Johan, 10 October 2026): the agent's own task and check lists belong to the modules that own those groups.
+    (("agents", "{}", "tasks"), ("tasks",)),
+    (("agents", "{}", "checks"), ("checks",)),
     # logs/: pending actions are Agents' (AD-18). Any other logs/ route is refused.
     (("logs",), ()),
     (("logs", "pendingactions"), ("agents",)),
@@ -493,13 +549,13 @@ def _check_module(module_id: Any) -> dict:
 
 
 def _parse_before(value: Any, module: dict, verb: str, params: dict) -> BeforeSpec | None:
-    """Validate ``audit.before = {route, fields}`` (1.17.13)."""
+    """Validate ``audit.before = {route, fields, count_fields?, select?}`` (1.17.13, extended 1.17.18)."""
     if value is None:
         return None
     if verb == "GET":
         raise TacticalOperationRegistrationError("a GET operation changes nothing, so it has no audit.before.")
-    if not isinstance(value, dict) or set(value) != {"route", "fields"}:
-        raise TacticalOperationRegistrationError("audit.before is {route, fields} and nothing else.")
+    if not isinstance(value, dict) or not {"route", "fields"} <= set(value) or set(value) - {"route", "fields", "count_fields", "select"}:
+        raise TacticalOperationRegistrationError("audit.before is {route, fields}, plus count_fields and select when needed, and nothing else.")
     segments, trailing = _parse_route(value["route"])
     # The read is a Tactical GET like any operation, so the same module must own it.
     _check_route_owner(module, segments, value["route"])
@@ -509,12 +565,37 @@ def _parse_before(value: Any, module: dict, verb: str, params: dict) -> BeforeSp
                 f"audit.before route parameter {seg[1]!r} must be a parameter of the operation's own route, with the same kind."
             )
     names = _clean_names(value["fields"], "audit.before fields", maximum=_MAX_BEFORE_FIELDS)
-    if not names:
+    counts = _clean_names(value.get("count_fields"), "audit.before count_fields", maximum=_MAX_BEFORE_FIELDS)
+    if not names and not counts:
         raise TacticalOperationRegistrationError("audit.before fields must name at least one field.")
-    for name in names:
+    for name in (*names, *counts):
         if _SECRET_NAME_RE.search(name):
             raise TacticalOperationRegistrationError(f"audit.before field {name!r} looks like a secret. Never put secrets in the audit row.")
-    return BeforeSpec(value["route"], segments, trailing, names)
+    overlap = set(names) & set(counts)
+    if overlap:
+        raise TacticalOperationRegistrationError(f"audit.before names {sorted(overlap)[0]!r} in both fields and count_fields.")
+    # A list field also writes <name>_count (and <name>_truncated when cut), and a count field writes <name>_count: no clash.
+    for name in names:
+        for suffix in ("_count", "_truncated"):
+            if f"{name}{suffix}" in names:
+                raise TacticalOperationRegistrationError(f"audit.before field {name + suffix!r} would be written twice.")
+        if f"{name}_count" in counts:
+            raise TacticalOperationRegistrationError(f"audit.before field {name + '_count'!r} would be written twice.")
+    for name in counts:
+        if f"{name}_count" in names:
+            raise TacticalOperationRegistrationError(f"audit.before field {name + '_count'!r} would be written twice.")
+    select = None
+    raw_select = value.get("select")
+    if raw_select is not None:
+        if not isinstance(raw_select, dict) or "param" not in raw_select or set(raw_select) - {"param", "field"}:
+            raise TacticalOperationRegistrationError("audit.before select is {param, field}; field is optional and defaults to id.")
+        param, key = raw_select["param"], raw_select.get("field", "id")
+        if not isinstance(param, str) or params.get(param) not in ("int", "str"):
+            raise TacticalOperationRegistrationError("audit.before select param must be an int or str path parameter of the operation's route.")
+        if not isinstance(key, str) or not _FIELD_RE.fullmatch(key) or _SECRET_NAME_RE.search(key):
+            raise TacticalOperationRegistrationError("audit.before select field must be a plain, non-secret key name.")
+        select = (param, key)
+    return BeforeSpec(value["route"], segments, trailing, names, counts, select)
 
 
 def _parse_type_map(value: Any) -> tuple:
@@ -552,6 +633,78 @@ def _parse_upload(value: Any, verb: str, fields: tuple) -> UploadSpec | None:
     return UploadSpec(name, cap, extensions)
 
 
+def _parse_body_selector(value: Any, fields: tuple) -> tuple:
+    """Validate ``body_selector`` (1.17.18, CQ60): at most 3 conditions on body fields, all of which must hold."""
+    if value is None:
+        return ()
+    if isinstance(value, (str, bytes, dict)) or not hasattr(value, "__iter__"):
+        raise TacticalOperationRegistrationError("body_selector must be a list of conditions.")
+    conditions = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict) or "field" not in item or len(item) != 2 or len({"present", "equals"} & set(item)) != 1:
+            raise TacticalOperationRegistrationError("each body_selector condition is {field, present} or {field, equals}.")
+        name = item["field"]
+        if not isinstance(name, str) or name not in fields:
+            raise TacticalOperationRegistrationError(f"body_selector field {name!r} is not one of body_fields.")
+        if name in seen:
+            raise TacticalOperationRegistrationError(f"body_selector names field {name!r} twice.")
+        seen.add(name)
+        if "present" in item:
+            if not isinstance(item["present"], bool):
+                raise TacticalOperationRegistrationError("body_selector present must be true or false.")
+            conditions.append((name, "present", item["present"]))
+        else:
+            expected = item["equals"]
+            if not isinstance(expected, (str, int, bool)):
+                raise TacticalOperationRegistrationError("body_selector equals must be a string, a whole number or a boolean.")
+            conditions.append((name, "equals", expected))
+    if len(conditions) > _MAX_BODY_SELECTOR:
+        raise TacticalOperationRegistrationError(f"body_selector has more than {_MAX_BODY_SELECTOR} conditions.")
+    return tuple(conditions)
+
+
+def _same_value(left: Any, right: Any) -> bool:
+    """Equality that does not read True as 1."""
+    return type(left) is type(right) and left == right
+
+
+def _selectors_exclusive(first: tuple, second: tuple) -> bool:
+    """True when no body can satisfy both selectors: one field has contradicting conditions in the two."""
+    mine = {name: (kind, value) for name, kind, value in first}
+    for name, kind, value in second:
+        other = mine.get(name)
+        if other is None:
+            continue
+        other_kind, other_value = other
+        if kind == "present" and other_kind == "present" and value != other_value:
+            return True
+        if kind == "equals" and other_kind == "equals" and not _same_value(value, other_value):
+            return True
+        if {kind, other_kind} == {"present", "equals"}:
+            present_value = value if kind == "present" else other_value
+            if present_value is False:
+                return True
+    return False
+
+
+def _check_route_sharing(operation: TacticalOperation, holders: list, verb: str, route: str) -> None:
+    """Refuse a second operation on one (method, route), unless the same module declares provably exclusive body selectors."""
+    first_module, first_id = holders[0]
+    others = [_OPERATIONS[key] for key in holders]
+    if not operation.body_selector or any(not other.body_selector or other.module_id != operation.module_id for other in others):
+        raise TacticalOperationRegistrationError(
+            f"{verb} {route} is already declared by {first_module}/{first_id}. One caller per Tactical route (AD-6)."
+        )
+    for other in others:
+        if not _selectors_exclusive(other.body_selector, operation.body_selector):
+            raise TacticalOperationRegistrationError(
+                f"{verb} {route} is already declared by {other.module_id}/{other.id}, and the body selectors of the two are not "
+                "provably exclusive. Give each operation a condition on a field that the other contradicts "
+                "(present true against present false, or two different equals values)."
+            )
+
+
 def register_tactical_operation(
     id,
     module_id,
@@ -565,8 +718,15 @@ def register_tactical_operation(
     message=None,
     query_params=None,
     upload=None,
+    caller_scope=None,
+    body_selector=None,
 ):
     """Declare one Tactical operation. Call it from the owning module's ``AppConfig.ready()``.
+
+    1.17.18 (all optional): ``caller_scope="unrestricted"`` (only a caller with no client or site limits); a scope entry may
+    carry ``optional: true`` or ``row_lookup``, and may have the type ``agent_pk``; ``audit`` may carry ``params`` and its
+    ``before`` may carry ``count_fields`` and ``select``; ``body_selector`` lets the same module declare several operations on
+    one route when their bodies are provably exclusive.
 
     1.17.13 (all optional): ``audit`` may also carry ``object_param`` and ``before``; a scope entry may use a
     ``body:<field>`` type with a ``type_map``; ``query_params`` whitelists the query names
@@ -612,16 +772,27 @@ def register_tactical_operation(
     if isinstance(scope, (str, bytes, dict)) or not hasattr(scope, "__iter__"):
         raise TacticalOperationRegistrationError("scope must be a list of {type, source}.")
     # The audit declaration comes first. A scope source is a path or body value only; Tactical decides the rest (1.17.14).
-    if not isinstance(audit, dict) or not {"action", "object_type"} <= set(audit) or set(audit) - {"action", "object_type", "audit_fields", "object_param", "before"}:
-        raise TacticalOperationRegistrationError("audit is {action, object_type, audit_fields, object_param, before}; the last three are optional.")
+    if not isinstance(audit, dict) or not {"action", "object_type"} <= set(audit) or set(audit) - {"action", "object_type", "audit_fields", "object_param", "before", "params"}:
+        raise TacticalOperationRegistrationError("audit is {action, object_type, audit_fields, object_param, before, params}; the last four are optional.")
+    if caller_scope is not None and caller_scope != "unrestricted":
+        raise TacticalOperationRegistrationError('caller_scope must be "unrestricted" or left out.')
+    audit_params = _clean_names(audit.get("params"), "audit params", maximum=_MAX_AUDIT_PARAMS, pattern=_PARAM_NAME_RE)
+    for name in audit_params:
+        if name not in params:
+            raise TacticalOperationRegistrationError(f"audit param {name!r} is not a parameter of the route.")
+        if _SECRET_NAME_RE.search(name):
+            raise TacticalOperationRegistrationError(f"audit param {name!r} looks like a secret. Never put secrets in the audit row.")
     object_param = audit.get("object_param")
     if object_param is not None and (not isinstance(object_param, str) or object_param not in params):
         raise TacticalOperationRegistrationError(f"audit object_param {object_param!r} is not a parameter of the route.")
     before = _parse_before(audit.get("before"), module, verb, params)
 
+    row_lookup_entries = 0
     for item in scope:
-        if not isinstance(item, dict) or not {"type", "source"} <= set(item) or set(item) - {"type", "source", "type_map"}:
-            raise TacticalOperationRegistrationError("each scope entry is {type, source}, plus type_map for a body-selected type, and nothing else.")
+        if not isinstance(item, dict) or not {"type", "source"} <= set(item) or set(item) - {"type", "source", "type_map", "optional", "row_lookup"}:
+            raise TacticalOperationRegistrationError(
+                "each scope entry is {type, source}, plus type_map for a body-selected type, optional or row_lookup, and nothing else."
+            )
         kind, source = item["type"], item["source"]
         if isinstance(source, str) and source.startswith("before:"):
             raise TacticalOperationRegistrationError(
@@ -631,7 +802,7 @@ def register_tactical_operation(
         type_field = _SCOPE_TYPE_BODY_RE.match(kind) if isinstance(kind, str) else None
         if match is None or (kind not in SCOPE_TYPES and type_field is None):
             raise TacticalOperationRegistrationError(
-                f"bad scope entry {item!r}: type is agent, client, site or body:<field>, and source is path:<name> or body:<field>."
+                f"bad scope entry {item!r}: type is agent, agent_pk, client, site or body:<field>, and source is path:<name> or body:<field>."
             )
         where, name = match.group(1), match.group(2)
         type_map = ()
@@ -641,18 +812,35 @@ def register_tactical_operation(
             type_map = _parse_type_map(item.get("type_map"))
         elif "type_map" in item:
             raise TacticalOperationRegistrationError("type_map belongs only to a scope type of the form body:<field>.")
+        optional = item.get("optional", False)
+        if not isinstance(optional, bool):
+            raise TacticalOperationRegistrationError("scope optional must be true or false.")
+        if optional and where != "body":
+            raise TacticalOperationRegistrationError("scope optional belongs to a body source: a path parameter is always present.")
+        lookup_id = item.get("row_lookup")
+        if lookup_id is not None:
+            if not isinstance(lookup_id, str) or not _ID_RE.match(lookup_id):
+                raise TacticalOperationRegistrationError("scope row_lookup must be a lookup id (a lowercase slug).")
+            if kind != "agent" or where != "path":
+                raise TacticalOperationRegistrationError("scope row_lookup belongs to an agent entry with a path source, never a body source.")
+            row_lookup_entries += 1
+            if row_lookup_entries > 1:
+                raise TacticalOperationRegistrationError("an operation may declare one row_lookup scope entry.")
         if where == "path":
             if name not in params:
                 raise TacticalOperationRegistrationError(f"scope source {source!r} is not a parameter of the route.")
-            if kind in ("client", "site") and params[name] != "int":
+            if kind in ("client", "site", "agent_pk") and params[name] != "int":
                 raise TacticalOperationRegistrationError(f"scope source {source!r} must be an int parameter for a {kind}.")
-            if kind == "agent" and params[name] == "int":
+            if kind == "agent" and lookup_id is not None:
+                if params[name] != "int":
+                    raise TacticalOperationRegistrationError(f"scope source {source!r} must be an int parameter for a row_lookup.")
+            elif kind == "agent" and params[name] == "int":
                 raise TacticalOperationRegistrationError(f"scope source {source!r} must be a string parameter for an agent.")
             if type_map and params[name] != "int":
                 raise TacticalOperationRegistrationError(f"scope source {source!r} must be an int parameter for a client or site.")
         elif name not in fields:
             raise TacticalOperationRegistrationError(f"scope source {source!r} is not one of body_fields.")
-        spec = ScopeSpec(kind, source, type_map)
+        spec = ScopeSpec(kind, source, type_map, optional, lookup_id)
         if spec in scope_specs:
             raise TacticalOperationRegistrationError(f"scope entry {item!r} is repeated.")
         scope_specs.append(spec)
@@ -680,6 +868,9 @@ def register_tactical_operation(
             raise TacticalOperationRegistrationError(f"audit field {name!r} is not one of body_fields or query_params.")
         if _SECRET_NAME_RE.search(name):
             raise TacticalOperationRegistrationError(f"audit field {name!r} looks like a secret. Never put secrets in the audit row.")
+        if name in audit_params:
+            raise TacticalOperationRegistrationError(f"audit field {name!r} is also an audit param: the row would carry it twice.")
+    selector = _parse_body_selector(body_selector, fields)
 
     codename = None
     if module_permission is not None:
@@ -697,6 +888,7 @@ def register_tactical_operation(
         permissions=flags, scope=tuple(scope_specs), body_fields=fields, audit_action=action, audit_object_type=object_type,
         audit_fields=audit_fields, module_permission=codename, message=text,
         audit_object_param=object_param, before=before, query_params=query_names, upload=upload_spec,
+        caller_scope=caller_scope, body_selector=selector, audit_params=audit_params,
     )
     key = (owner, op_id)
     route_key = (verb, _route_key(segments, trailing))
@@ -706,14 +898,41 @@ def register_tactical_operation(
             if existing == operation:
                 return existing
             raise TacticalOperationRegistrationError(f"operation {owner}/{op_id} is already registered with a different definition.")
-        holder = _ROUTES.get(route_key)
-        if holder is not None:
-            raise TacticalOperationRegistrationError(
-                f"{verb} {route} is already declared by {holder[0]}/{holder[1]}. One caller per Tactical route (AD-6)."
-            )
+        holders = _ROUTES.get(route_key) or []
+        if holders:
+            _check_route_sharing(operation, holders, verb, route)
         _OPERATIONS[key] = operation
-        _ROUTES[route_key] = key
+        _ROUTES.setdefault(route_key, []).append(key)
     return operation
+
+
+def register_tactical_row_lookup(module_id, lookup_id, fn):
+    """Register a row lookup for the scope of an operation whose path id loads a row (1.17.18, CQ56 a).
+
+    The owning core module calls this from ``AppConfig.ready()``, with the same module and category rules as
+    ``register_tactical_operation``. ``fn(pk: str)`` returns None when the row does not exist, or a dict
+    ``{"agent_id": "<canonical agent id>"}`` (``None`` when the row belongs to no agent, such as a policy task). An operation
+    names it in a scope entry ``{type: "agent", source: "path:<int param>", row_lookup: "<lookup id>"}``. A module can only
+    name its own lookups. The lookup reads the module's own data in-process; Core never reads Tactical models itself.
+    Registering the same function again is idempotent."""
+    name = str(lookup_id or "").strip()
+    if not _ID_RE.match(name):
+        raise TacticalOperationRegistrationError("lookup_id must be a lowercase slug such as task-row.")
+    if not callable(fn):
+        raise TacticalOperationRegistrationError("a row lookup must be a function that takes the row id.")
+    module = _check_module(module_id)
+    owner = module["id"]
+    category = _module_category.effective_category(module.get("category"))
+    if category != "core" and owner not in _honoured_pairs():
+        raise TacticalOperationRegistrationError(
+            f"module {owner!r} is not a core module (its category is {category}). Only a core module may register a row lookup."
+        )
+    with _LOCK:
+        existing = _ROW_LOOKUPS.get((owner, name))
+        if existing is not None and existing is not fn:
+            raise TacticalOperationRegistrationError(f"row lookup {owner}/{name} is already registered with a different function.")
+        _ROW_LOOKUPS[(owner, name)] = fn
+    return fn
 
 
 def get_operation(module_id: str, operation_id: str) -> dict[str, Any] | None:
@@ -733,6 +952,7 @@ def _clear_operations_for_tests() -> None:
     with _LOCK:
         _OPERATIONS.clear()
         _ROUTES.clear()
+        _ROW_LOOKUPS.clear()
 
 
 # ----------------------------------------------------------------------------------------------- execution
@@ -769,8 +989,10 @@ def _printable(value: Any, limit: int = 255) -> str:
     return "".join(ch for ch in str(value) if 32 <= ord(ch) < 127)[:limit]
 
 
-def _scope_values(operation: TacticalOperation, params: Any, body: Any) -> list[tuple[str, list[str]]]:
-    """Resolve the declared scope entries to (type, [ids]). Raises 400 for a missing or malformed value."""
+def _scope_entries(operation: TacticalOperation, params: Any, body: Any) -> list[tuple]:
+    """Resolve the declared scope entries to (spec, type, [ids]). Raises 400 for a missing or malformed value.
+
+    1.17.18: an ``optional`` entry whose body field is absent or null (or an empty list) adds nothing."""
     resolved = []
     for spec in operation.scope:
         where, name = spec.source.split(":", 1)
@@ -778,6 +1000,8 @@ def _scope_values(operation: TacticalOperation, params: Any, body: Any) -> list[
             raw = (params or {}).get(name)
         else:
             raw = (body or {}).get(name)
+        if spec.optional and (raw is None or (isinstance(raw, list) and not raw)):
+            continue
         values = raw if isinstance(raw, list) else [raw]
         if not values or len(values) > 1000:
             raise TacticalOperationError(f"{name} is required.", status=400, code="scope_field_required")
@@ -785,7 +1009,10 @@ def _scope_values(operation: TacticalOperation, params: Any, body: Any) -> list[
         for value in values:
             if value is None or isinstance(value, (bool, dict, list, float)) or not str(value).strip():
                 raise TacticalOperationError(f"{name} is required.", status=400, code="scope_field_required")
-            ids.append(str(value).strip())
+            text = str(value).strip()
+            if spec.type == "agent_pk" and not (text.isdigit() and 0 < int(text) < 2**63):
+                raise TacticalOperationError(f"{name} must be whole numbers.", status=400, code="scope_field_required")
+            ids.append(text)
         kind = spec.type
         if kind.startswith("body:"):
             field_name = kind.split(":", 1)[1]
@@ -793,8 +1020,13 @@ def _scope_values(operation: TacticalOperation, params: Any, body: Any) -> list[
             kind = dict(spec.type_map).get(chosen) if isinstance(chosen, str) else None
             if kind is None:
                 raise TacticalOperationError(f"{field_name} is required and must be one of the declared types.", status=400, code="scope_field_required")
-        resolved.append((kind, ids))
+        resolved.append((spec, kind, ids))
     return resolved
+
+
+def _scope_values(operation: TacticalOperation, params: Any, body: Any) -> list[tuple[str, list[str]]]:
+    """The declared scope as (type, [ids]) pairs (see ``_scope_entries``)."""
+    return [(kind, ids) for _, kind, ids in _scope_entries(operation, params, body)]
 
 
 def _object_id(scope: list[tuple[str, list[str]]], operation: TacticalOperation | None = None, params: Any = None) -> str | None:
@@ -811,9 +1043,9 @@ def _object_id(scope: list[tuple[str, list[str]]], operation: TacticalOperation 
     return _printable(",".join(ids)) or None
 
 
-def _body_scope_type(operation: TacticalOperation, scope: list[tuple[str, list[str]]]) -> str | None:
-    """The scope type a body-selected entry resolved to, for the row metadata."""
-    for spec, (kind, _) in zip(operation.scope, scope):
+def _body_scope_type(operation: TacticalOperation, scope: list) -> str | None:
+    """The scope type a body-selected entry resolved to, for the row metadata. ``scope`` is ``_scope_entries`` output."""
+    for spec, kind, _ in scope:
         if spec.type.startswith("body:"):
             return kind
     return None
@@ -966,6 +1198,57 @@ def _clean_upload(operation: TacticalOperation, upload: Any) -> dict | None:
     return {"field": part, "name": name, "content_type": content_type, "content": bytes(content)}
 
 
+def _selector_holds(operation: TacticalOperation, body: dict) -> bool:
+    """True when the cleaned body satisfies every condition of the operation's own ``body_selector`` (1.17.18)."""
+    for name, kind, expected in operation.body_selector:
+        value = body.get(name)
+        if kind == "present":
+            if (value is not None) != expected:
+                return False
+        elif not _same_value(value, expected):
+            return False
+    return True
+
+
+def _caller_unrestricted(user) -> bool:
+    """True when the caller sees every client and site, by ``core.resources.scope_unrestricted``. Any failure is False (fail closed)."""
+    try:
+        from . import resources
+
+        return bool(resources.scope_unrestricted(resources.user_context(user)))
+    except Exception:
+        logger.warning("Could not read the caller's Tactical scope; treating the caller as limited.", exc_info=True)
+        return False
+
+
+_LOOKUP_FAILED = object()
+
+
+def _row_lookup_agent(operation: TacticalOperation, spec: ScopeSpec, pk: str):
+    """Ask the owning module's row lookup which agent the row belongs to (1.17.18, CQ56 a).
+
+    Returns the canonical agent id, or None for a row with no agent, or ``_LOOKUP_FAILED`` when the lookup is missing, raises,
+    answers None (no such row) or answers the wrong shape. The caller fails closed on ``_LOOKUP_FAILED``."""
+    with _LOCK:
+        lookup = _ROW_LOOKUPS.get((operation.module_id, spec.row_lookup))
+    if lookup is None:
+        logger.warning("Row lookup %s/%s is not registered.", operation.module_id, spec.row_lookup)
+        return _LOOKUP_FAILED
+    try:
+        row = lookup(pk)
+    except Exception:
+        logger.warning("Row lookup %s/%s raised.", operation.module_id, spec.row_lookup, exc_info=True)
+        return _LOOKUP_FAILED
+    if not isinstance(row, dict) or "agent_id" not in row:
+        return _LOOKUP_FAILED
+    agent_id = row["agent_id"]
+    if agent_id is None:
+        return None
+    if not isinstance(agent_id, str) or not agent_id.strip():
+        return _LOOKUP_FAILED
+    return agent_id.strip()
+
+
 def _check_whitelist(operation: TacticalOperation, body: dict) -> None:
     extra = sorted(set(body) - set(operation.body_fields))
     if extra:
@@ -1116,9 +1399,12 @@ def _recheck_route_owner(operation: TacticalOperation, path: str) -> None:
         raise TacticalOperationError(MESSAGES["not_found"], status=404, code="tactical_operation_not_found")
 
 
-def _after_values(operation: TacticalOperation, body: dict, query: dict | None = None, file: dict | None = None) -> dict | None:
-    """The declared audit fields, copied from the body or the query string, and for an upload only its name, size and type."""
-    if not operation.audit_fields and file is None:
+def _after_values(operation: TacticalOperation, body: dict, query: dict | None = None, file: dict | None = None,
+                  params: dict | None = None) -> dict | None:
+    """The declared audit fields, copied from the body or the query string, and for an upload only its name, size and type.
+
+    1.17.18: ``audit.params`` names path parameters whose cleaned values are copied in as well."""
+    if not operation.audit_fields and file is None and not operation.audit_params:
         return None
     values = {}
     for name in operation.audit_fields:
@@ -1126,23 +1412,82 @@ def _after_values(operation: TacticalOperation, body: dict, query: dict | None =
             values[name] = body[name]
         elif query and name in query:
             values[name] = query[name]
+    for name in operation.audit_params:
+        if params and name in params:
+            values[name] = _printable(params[name])
     if file is not None:
         values["upload"] = {"file_name": _printable(file["name"]), "size": len(file["content"]), "content_type": file["content_type"]}
     return values
 
 
+def _before_text(value: str) -> str:
+    return "".join(ch for ch in value if ord(ch) >= 32 and ord(ch) != 127)[:_BEFORE_STRING_LIMIT]
+
+
+def _before_list(value: list) -> tuple[list, int] | None:
+    """A list of whole numbers or short strings, capped, with its full length (1.17.18). None for anything else.
+
+    A list that holds an object, a float, a boolean, a null or another list is never recorded."""
+    kept: list = []
+    used = 0
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, (int, str)):
+            return None
+        if len(kept) < _MAX_BEFORE_LIST and used <= _MAX_BEFORE_LIST_CHARS:
+            clean = _before_text(item) if isinstance(item, str) else item
+            used += len(str(clean))
+            kept.append(clean)
+    return kept, len(value)
+
+
 def _before_values(operation: TacticalOperation, data: Any) -> dict | None:
-    """The whitelisted scalar fields of Tactical's own answer: strings cut to 256 characters, everything else dropped."""
+    """The whitelisted fields of Tactical's own answer.
+
+    Strings are cut to 256 characters. Numbers, booleans and nulls are kept. Since 1.17.18 a list of whole numbers or short
+    strings is kept too (capped, with ``<field>_count`` and ``<field>_truncated`` when cut), ``count_fields`` record only the
+    length of a list as ``<field>_count``, and everything else (objects, lists of objects) is dropped."""
     if not isinstance(data, dict):
         return None
     values = {}
     for name in operation.before.fields:
         value = data.get(name)
         if isinstance(value, str):
-            values[name] = "".join(ch for ch in value if ord(ch) >= 32 and ord(ch) != 127)[:_BEFORE_STRING_LIMIT]
+            values[name] = _before_text(value)
         elif value is None or isinstance(value, (bool, int, float)):
             values[name] = value
+        elif isinstance(value, list):
+            cleaned = _before_list(value)
+            if cleaned is not None:
+                values[name], total = cleaned
+                values[f"{name}_count"] = total
+                if total > len(cleaned[0]):
+                    values[f"{name}_truncated"] = True
+    for name in operation.before.count_fields:
+        value = data.get(name)
+        if isinstance(value, list):
+            values[f"{name}_count"] = len(value)
     return values
+
+
+def _select_row(operation: TacticalOperation, payload: Any, params: dict[str, str]) -> dict | None:
+    """The row of a list answer whose key equals the cleaned path parameter (1.17.18, CQ58 a), or None.
+
+    A bare list and a paginated ``{"results": [...]}`` answer are read; at most the first 1000 rows are scanned. The value to
+    match is the path parameter Core already cleaned, never anything the browser sent as a before value."""
+    param, key = operation.before.select
+    rows = payload if isinstance(payload, list) else (payload.get("results") if isinstance(payload, dict) else None)
+    if not isinstance(rows, list):
+        return None
+    wanted = params.get(param)
+    for row in rows[:_MAX_BEFORE_SELECT_ROWS]:
+        if not isinstance(row, dict):
+            continue
+        value = row.get(key)
+        if value is None or isinstance(value, (bool, dict, list, float)):
+            continue
+        if wanted is not None and str(value) == wanted:
+            return row
+    return None
 
 
 def _dispatch(match, forwarded):
@@ -1174,7 +1519,10 @@ def _read_before(request, operation: TacticalOperation, params: dict[str, str]) 
         content = bytes(getattr(response, "content", b"") or b"")
         if len(content) > MAX_RESPONSE_BYTES:
             return {"status": status, "values": None}
-        return {"status": status, "values": _before_values(operation, json.loads(content.decode("utf-8")))}
+        payload = json.loads(content.decode("utf-8"))
+        if spec.select:
+            payload = _select_row(operation, payload, params)
+        return {"status": status, "values": _before_values(operation, payload)}
     except Exception:
         logger.warning("The before-read of Tactical operation %s/%s did not answer.", operation.module_id, operation.id, exc_info=True)
         return {"status": None, "values": None}
@@ -1283,17 +1631,37 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
         if not allowed:
             raise _refuse(request, operation, "module_permission_denied", 403, "module_permission_denied", hint, correlation_id)
 
+    if operation.caller_scope == "unrestricted" and not _caller_unrestricted(user):  # 4a. (1.17.18) only for no client or site limits
+        raise _refuse(request, operation, "scope_unrestricted_required", 403, "scope_unrestricted_required", hint, correlation_id)
+
     params = _clean_params(operation, params)  # 5. shape, then scope
     body = _clean_body(operation, body)
+    if operation.body_selector and not _selector_holds(operation, body):  # 5a. (1.17.18) never run under another operation's scope or verb
+        raise _refuse(request, operation, "body_selector_mismatch", 400, "body_selector_mismatch", hint, correlation_id)
     query = _clean_query(operation, query)
     file = _clean_upload(operation, upload)
-    scope = _scope_values(operation, params, body)
+    entries = _scope_entries(operation, params, body)
+    scope = [(kind, ids) for _, kind, ids in entries]
     object_id = _object_id(scope, operation, params)
-    if scope:
+    extra: dict = {}
+    if entries:
         from . import resources_adapter as adapter
 
-        for kind, ids in scope:
-            if not adapter.objects_in_role_scope(user=user, resource_type=kind, identifiers=ids):
+        for spec, kind, ids in entries:
+            if spec.row_lookup:
+                # CQ56 a, CQ57: the owning module says which agent the row belongs to. A row with no agent is allowed to anyone
+                # who holds the Tactical flag (Tactical decides); a row with an agent is held to the caller's role scope.
+                agent_id = _row_lookup_agent(operation, spec, ids[0])
+                if agent_id is _LOOKUP_FAILED:
+                    raise _refuse(request, operation, "not_found", 404, "object_not_found", object_id, correlation_id)
+                extra["scope_source"] = "row_lookup"
+                extra["agentless"] = agent_id is None
+                if agent_id is not None and not adapter.objects_in_role_scope(user=user, resource_type="agent", identifiers=[agent_id]):
+                    raise _refuse(request, operation, "not_found", 404, "object_not_found", object_id, correlation_id)
+            elif kind == "agent_pk":
+                if not adapter.agent_pks_in_role_scope(user=user, pks=ids):
+                    raise _refuse(request, operation, "not_found", 404, "object_not_found", object_id, correlation_id)
+            elif not adapter.objects_in_role_scope(user=user, resource_type=kind, identifiers=ids):
                 raise _refuse(request, operation, "not_found", 404, "object_not_found", object_id, correlation_id)
     _check_whitelist(operation, body)  # 6.
 
@@ -1309,8 +1677,7 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
             "Tactical no longer serves this route. The owning module needs an update.", status=502, code="tactical_route_changed",
         ) from None
 
-    extra: dict = {}
-    body_type = _body_scope_type(operation, scope)
+    body_type = _body_scope_type(operation, entries)
     if body_type:
         extra["scope_type"] = body_type
     before_state = None
@@ -1346,7 +1713,7 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
             request, operation, action=operation.audit_action, object_id=object_id,
             message=operation.message or f"Core ran Tactical operation {operation.id}.",
             before=before_state["values"] if before_state else None,
-            after=_after_values(operation, body, query, file), tactical_status=status, extra=extra, correlation_id=correlation_id,
+            after=_after_values(operation, body, query, file, params), tactical_status=status, extra=extra, correlation_id=correlation_id,
         )
     elif status in (401, 403):
         audit = _write_row(
@@ -1391,7 +1758,7 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
         "id": CAPABILITY_ID,
         "version": CAPABILITY_VERSION,
         "operations": ["run", "list_operations", "get_operation"],
-        "declaration": "tec_tac.tactical_operations.register_tactical_operation(id, module_id, method, route, permissions, scope, body_fields, audit, module_permission=None, message=None, query_params=None, upload=None), called from AppConfig.ready()",
+        "declaration": "tec_tac.tactical_operations.register_tactical_operation(id, module_id, method, route, permissions, scope, body_fields, audit, module_permission=None, message=None, query_params=None, upload=None, caller_scope=None, body_selector=None), called from AppConfig.ready(). A core module that names a row_lookup also calls tec_tac.tactical_operations.register_tactical_row_lookup(module_id, lookup_id, fn) from AppConfig.ready().",
         "http": "POST /api/tfd/tactical-operations/<module_id>/<operation_id>/ with {params, body, query} as JSON, or as multipart/form-data with the text parts params, body and query (each a JSON object) and one file part",
         "limits": {
             "body_bytes": MAX_BODY_BYTES, "response_bytes": MAX_RESPONSE_BYTES,
@@ -1405,6 +1772,17 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
         "declaration_keys_removed_in_1_2_0": ["scope source before:<field>"],
         # 1.17.16: Python-only keywords of run, never accepted over HTTP (the view's allowed fields are params, body and query).
         "declaration_keys_added_in_1_3_0": ["run(correlation_id=)", "run(audit_before=)"],
+        # 1.17.18 (capability 1.4.0, still major 1): all optional, an older declaration registers and runs unchanged.
+        "declaration_keys_added_in_1_4_0": [
+            "caller_scope", "body_selector", "scope.optional", "scope type agent_pk", "scope.row_lookup", "audit.params",
+            "audit.before.count_fields", "audit.before.select", "audit.before list values", "register_tactical_row_lookup",
+        ],
+        "refusal_codes_added_in_1_4_0": ["scope_unrestricted_required", "body_selector_mismatch"],
+        "limits_added_in_1_4_0": {
+            "audit_before_fields": _MAX_BEFORE_FIELDS, "audit_before_list_entries": _MAX_BEFORE_LIST,
+            "audit_before_select_rows": _MAX_BEFORE_SELECT_ROWS, "audit_params": _MAX_AUDIT_PARAMS,
+            "body_selector_conditions": _MAX_BODY_SELECTOR,
+        },
         "refusal_codes_added_in_1_3_0": ["authenticated_request_required", "invalid_correlation_id", "invalid_audit_before"],
         "refusal_codes_added_in_1_1_0": ["query_field_not_allowed", "invalid_query", "upload_not_allowed", "upload_too_large", "upload_type_not_allowed", "invalid_upload"],
         "audit_header": AUDIT_HEADER,

@@ -164,6 +164,20 @@ metadata         optional .release.json
 
 If either signing sidecar is supplied, both are required. Invalid signed packages are rejected rather than downgraded to unsigned.
 
+### Several packages at once (Core 1.17.18)
+
+`POST /api/tfd/modules/v2/packages/inspect/` also accepts the repeated fields `packages`, `signatures` and `metadata_files`:
+
+```text
+packages         repeated, one per module package or bundle
+signatures       repeated, the .sig files
+metadata_files   repeated, the .release.json files
+```
+
+Core pairs each package with its sidecars from the release metadata, never by guessing. `filename` in the metadata must equal an uploaded package name, and `signature` must equal an uploaded signature name. The single fields above still work for one package. A package with no sidecars stays unsigned and follows the normal unsigned policy.
+
+Core refuses with a plain message, naming the file, when a metadata file matches no uploaded package, when it names a signature that was not uploaded, when a signature belongs to no metadata file, or when two metadata files arrive for one package. A copy renamed by the browser (for example `name (1).zip`) does not match the metadata, so rename it back first. When any pairing fails, nothing stays staged. Core still verifies trust for each package when it is staged and again when the batch install is queued.
+
 ## Repository releases
 
 Repository index entries may optionally publish:

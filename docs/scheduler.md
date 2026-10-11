@@ -301,6 +301,12 @@ Call it outside a database transaction that has not committed: the worker reads 
 
 Since 1.17.17 a one-off schedule cannot be run again from the browser. `POST /api/tfd/scheduler/schedules/<id>/run/` refuses it with 403 ("This one-off run is managed by module X and cannot be run again.") before any other check, for every caller including a scheduler manager. The run belongs to the user it was started for, so a second user can never queue a run under that user's identity, and one run cannot be repeated. The `owner_key` prefix `one-off:` is reserved to Core: `reconcile_schedule` raises `SchedulerError` for a key that starts with it, so only `start_one_off_run` can make a one-off schedule. `disable_owned_schedule` and `remove_owned_schedule` are unchanged.
 
+### Retry settings on a one-off run (Core 1.17.18)
+
+`start_one_off_run` takes two keyword-only settings, `retry_count` (a whole number from 0 to 10, default 0) and `retry_delay_seconds` (a whole number from 1 to 86400, default 60). Core stores them on the one-off schedule and copies them onto the run. When your handler raises `SchedulerTransientError`, the worker puts the run back in the queue and waits `retry_delay_seconds` before the next attempt, until `retry_count` retries are used up. Your handler does not need to wait inside the run.
+
+The owner check runs again on every attempt. If the user loses the action, the scope or their account between attempts, the run ends `skipped` and the handler does not run again. A bool, a text, a float or a number out of range raises `SchedulerError` before Core creates anything. A call without the keywords behaves exactly as before 1.17.18. The keywords need framework 1.17.18 or later.
+
 ### The owner is re-checked before the handler (AD-13 condition 2)
 
 A run's authority is the user it was started for, and it does not outlive that user's access. Just before the handler runs, Core checks again that the user is still active, still holds the action (a `tactical:` flag is read from the role again), and still holds the targets' scope. If not, the run ends `skipped` with a plain reason (`error_type` `AuthorizationRevoked`) and an audit row, and the handler never runs. A check that cannot be made counts as a refusal. It never raises into Celery.

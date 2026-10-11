@@ -369,6 +369,24 @@ def objects_in_role_scope(*, user, resource_type: str, identifiers) -> bool:
     return False
 
 
+def agent_pks_in_role_scope(*, user, pks) -> bool:
+    """True when every Tactical agent number (database pk) names an existing agent inside the user's role scope (1.17.18).
+
+    Scope only, like ``objects_in_role_scope``, which deliberately matches canonical ``agent_id`` and refuses pk aliases: this is
+    the separate helper for operations whose body names agents by their number (automation's ``excluded_agents``). A missing
+    agent, an agent outside the limits and a malformed number all read as False, so the caller cannot tell them apart."""
+    try:
+        tokens = [str(value).strip() for value in pks]
+        if not tokens or not all(token.isdigit() and 0 < int(token) < 2**63 for token in tokens):
+            return False
+        wanted = {int(token) for token in tokens}
+        _, _, Agent = _models()
+        found = set(_scope_queryset(Agent.objects.all(), user=user, trusted=False).filter(pk__in=wanted).values_list("pk", flat=True))
+        return wanted <= {int(value) for value in found}
+    except Exception:
+        return False
+
+
 def _active_filter(queryset, active: bool | None):
     # Tactical currently hard-deletes these resource rows and exposes no
     # soft-disabled field. Existing rows are therefore active in contract v1.

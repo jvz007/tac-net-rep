@@ -1062,7 +1062,8 @@ def _one_off_user_refusal(user) -> str | None:
 
 
 def start_one_off_run(*, user, owner_module: str, action_id: str, targets: dict | None = None,
-                      parameters: dict | None = None, name: str | None = None) -> TecTacScheduleRun:
+                      parameters: dict | None = None, name: str | None = None, retry_count: int = 0,
+                      retry_delay_seconds: int = DEFAULT_RETRY_DELAY_SECONDS) -> TecTacScheduleRun:
     """Start one run of a registered Scheduler action on behalf of ``user`` and return the queued run (1.17.16).
 
     A module starts only its own actions (``action.module_id == owner_module``, as ``reconcile_schedule`` requires). The user
@@ -1073,7 +1074,14 @@ def start_one_off_run(*, user, owner_module: str, action_id: str, targets: dict 
     manual run. Before the handler runs Core re-checks that the user is still active and still holds the action and scope
     (AD-13 condition 2); if not, the run ends ``skipped``. This is the start-and-track call only, not the system-action
     contract. Raises ``SchedulerError`` (``SchedulerNotAllowed`` for a user who may not), ``SchedulerTransientError`` when the
-    run could not be queued. Call it outside a database transaction that has not committed: the worker reads the run at once."""
+    run could not be queued. Call it outside a database transaction that has not committed: the worker reads the run at once.
+
+    1.17.18: ``retry_count`` (0 to 10, default 0) and ``retry_delay_seconds`` (1 to 86400, default 60) are keyword-only retry
+    settings, stored on the one-off schedule exactly as ``reconcile_schedule`` stores them and snapshotted onto the run. When
+    the handler raises ``SchedulerTransientError`` (or another error the worker treats as retryable) the worker re-queues the
+    run with that countdown until the attempts are used up. The owner re-check runs again on every attempt. Anything that is
+    not a whole number in range (a bool, a text, a float) raises ``SchedulerError`` before anything is created. The defaults
+    equal the behaviour before 1.17.18."""
     refusal = _one_off_user_refusal(user)
     if refusal:
         raise SchedulerNotAllowed(refusal)
@@ -1083,6 +1091,9 @@ def start_one_off_run(*, user, owner_module: str, action_id: str, targets: dict 
         raise SchedulerError(f"Scheduled action {action.id!r} belongs to module {action.module_id!r}, not {module!r}.")
     if targets is not None and not isinstance(targets, dict):
         raise SchedulerError("targets must be an object.")
+    for label, value in (("retry_count", retry_count), ("retry_delay_seconds", retry_delay_seconds)):
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise SchedulerError(f"{label} must be a whole number.")
     data = validate_schedule_payload({
         "name": str(name or f"{action.label} · one-off").strip()[:255],
         "action_id": action.id,
@@ -1090,6 +1101,8 @@ def start_one_off_run(*, user, owner_module: str, action_id: str, targets: dict 
         "targets": targets or {"type": action.target_types[0]},
         "parameters": parameters if parameters is not None else {},
         "enabled": False,
+        "retry_count": retry_count,
+        "retry_delay_seconds": retry_delay_seconds,
     })
     try:
         json.dumps(data["parameters"])
@@ -1128,6 +1141,7 @@ def start_one_off_run(*, user, owner_module: str, action_id: str, targets: dict 
             parameters=data["parameters"], schedule_type=TecTacSchedule.ScheduleType.ONCE, timezone="UTC", run_at=now,
             owner_type=TecTacSchedule.OwnerType.MODULE, owner_module=module, owner_key=f"{ONE_OFF_PREFIX}{uuid.uuid4()}",
             enabled=False, created_by=user, updated_by=user,
+            retry_count=data["retry_count"], retry_delay_seconds=data["retry_delay_seconds"],
         )
     try:
         run = queue_manual_run(schedule)

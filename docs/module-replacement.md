@@ -250,6 +250,28 @@ Since 1.17.15 an uninstall of an enabled replacement hands the replaced module b
 
 Since 1.17.16 the outcome audit rows follow. For each module that came back, Core writes the audit action `custom:module-replacement-enabled` ("Module X was enabled again because its replacement Y was uninstalled"). When a confirmed uninstall left a module off, Core writes one more row (`custom:module-replacement-disabled`), with the same metadata as the disable case (`replacement`, `replaced`, `hand_back_skipped`): "Replacement Y was uninstalled. The module it replaces, X, stayed off because it cannot be enabled." Before 1.17.16 that row was written for a disable only. Rows are written once per job id.
 
+## Installing a module that is disabled (1.17.18, CQ59)
+
+An install or an upgrade of a module that is disabled used to run to the end and then fail, or leave a half-finished change.
+Core now refuses it up front, before anything is copied, backed up or queued. The same plain sentence comes from three places:
+`scripts/install-extension.sh` (fresh install and `--replace` alike), the Module Manager's single install call and its batch
+install call (a plain 400), and the job helpers, which show it as the job error.
+
+When the module is disabled because its replacement is enabled and honoured right now:
+
+> Windows Patching is disabled because Advanced Patch Management replaces it. Disable Advanced Patch Management and enable Windows Patching, then install again.
+
+When it is disabled for any other reason:
+
+> Windows Patching is disabled. Enable it, then install again.
+
+Names come from the manifests (the incoming package first, then the installed one, then the id). A module with no entry in the
+module state (a first install), an enabled module and a module state that cannot be read give no refusal, and the later steps
+run as before. The check is `tec_tac.module_replacement.disabled_install_refusal(module_id, name=None)`. It never raises.
+
+Core does not skip the migration step and does not change enable, disable or hand-back (AD-20). To install the module, switch
+the replacement off and the module on first, as the sentence says.
+
 ## What this does not do
 
 - It adds no general `conflicts_with` key. AD-20 decides replacement only.

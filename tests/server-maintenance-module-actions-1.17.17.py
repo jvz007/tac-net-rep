@@ -387,10 +387,11 @@ try:
     must(any(e["event"] == "action.unregistered" and e["detail"].get("module") == "vendor" for e in audit_events()), "audit of the removal")
     sm.unregister_module("vendor")   # a second call is harmless
     sm.unregister_module("never-installed")
-    # unregister removes everything the module owns, however it was registered
+    # unregister removes what the module registered; since 1.17.18 a hand registration with the module as owner stays (CQ54)
     reg_file("other.manual").write_text(json.dumps({**manual, "id": "other.manual", "owner_module": "other"}), encoding="utf-8")
     sm.unregister_module("other")
-    must(not reg_file("other.run").exists() and not reg_file("other.manual").exists() and not (ACT / "other").exists(), "all of the module's own")
+    must(not reg_file("other.run").exists() and reg_file("other.manual").is_file() and not (ACT / "other").exists(), "the module's own are gone, a hand registration stays (1.17.18)")
+    reg_file("other.manual").unlink()
 
     # ---- another module's action cannot be taken over
     put_module("vendor", manifest(), files=("rotate.sh",))

@@ -78,15 +78,22 @@ class ModuleV2InspectView(APIView):
         uploads = request.FILES.getlist("packages") or request.FILES.getlist("package")
         if not uploads:
             return Response({"detail": "At least one package or bundle upload is required."}, status=400)
+        signatures = request.FILES.getlist("signatures")
+        metadata_files = request.FILES.getlist("metadata_files")
         signature = request.FILES.get("signature")
         release_metadata = request.FILES.get("metadata") or request.FILES.get("release_metadata")
-        if (signature is not None or release_metadata is not None) and len(uploads) != 1:
-            return Response({"detail": "Detached signature/release metadata companions are supported only for a single uploaded artifact."}, status=400)
+        if signature is not None:
+            signatures.append(signature)
+        if release_metadata is not None:
+            metadata_files.append(release_metadata)
         try:
-            if len(uploads) == 1 and (signature is not None or release_metadata is not None):
+            if len(uploads) == 1 and len(signatures) <= 1 and len(metadata_files) <= 1 and (signatures or metadata_files):
+                # Single package, one pair at most: unchanged path (companions are checked by the trust step).
                 from .module_manager_v2 import stage_uploaded_artifact
-                return Response(stage_uploaded_artifact(uploads[0], signature_upload=signature, metadata_upload=release_metadata), status=201)
-            return Response(stage_multiple_packages(uploads), status=201)
+                return Response(stage_uploaded_artifact(
+                    uploads[0], signature_upload=signatures[0] if signatures else None,
+                    metadata_upload=metadata_files[0] if metadata_files else None), status=201)
+            return Response(stage_multiple_packages(uploads, signatures, metadata_files), status=201)
         except LicensingRequirementError as exc:
             return Response(exc.as_payload(), status=403)
         except (ModuleManagerError, ModuleManagerV2Error) as exc:

@@ -848,6 +848,11 @@ def run_job(job_id):
         pass
 
     job["finished_at"] = now()
+    if rc != 0 and job["action"] == "install" and not job.get("error"):
+        refusal = installer_refusal(log_path)  # 1.17.18 (CQ59): the installer's plain reason for refusing a disabled module
+        if refusal:
+            job["error"] = refusal
+            job["error_type"] = "ModuleDisabled"
     if rc == 0:
         job["status"] = "succeeded"
         job["stage"] = "complete"
@@ -871,6 +876,26 @@ def run_job(job_id):
             shutil.rmtree(run_dir)
     except OSError:
         pass
+
+
+_INSTALLER_REFUSAL = re.compile(r"^\[TEC-TAC\] ERROR: ([^\r\n]{1,400} install again\.)[ \t\r]*$", re.M)
+
+
+def installer_refusal(log_path):
+    """The plain sentence install-extension.sh printed when it refused a disabled module (1.17.18, CQ59), else None.
+
+    The script writes ``[TEC-TAC] ERROR: <Module> is disabled ... then install again.`` to the job log. The job shows that
+    sentence instead of a bare exit status. Only the last 16 KiB of the log is read."""
+    try:
+        with Path(log_path).open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - 16384))
+            tail = handle.read().decode("utf-8", "replace")
+    except (OSError, TypeError, ValueError):
+        return None
+    found = _INSTALLER_REFUSAL.findall(tail)
+    return found[-1] if found else None
 
 
 def mark_failed(job_id, error):
