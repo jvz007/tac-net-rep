@@ -91,6 +91,46 @@ For server-mutating operations, prefer recording from the authorized backend end
 | `after` | no | Written to Tactical `after_value`. |
 | `metadata` | no | Stored beneath Core provenance in `debug_info.metadata`. |
 
+## Rows for a person who holds none of the module's permissions (Core 1.17.20)
+
+A module's backend `record()` call normally needs a signed-in person who holds at least one of the module's own permissions. Some
+modules must also record what happens to a person who holds none of them: a refusal, or the outcome of a change that Tactical's own role
+flags allow. From 1.17.20 Core accepts that row when the module is the **declaring owner of the action**.
+
+A module is a declaring owner when it has registered at least one Tactical operation (`core.tactical_operations`). So the module is
+enabled, not legacy and not `core`. Core then applies these rules to the signed-in person with no grant of the module:
+
+| Action in `record()` | Accepted when |
+|---|---|
+| `deny` | the module owns at least one declared operation |
+| any other action | it is the `audit.action` of one of the module's declared operations that has **no** `module_permission`, **and** the person holds **every** Tactical flag of that operation |
+
+The second rule rests on the check Core would make anyway (AD-5, AD-12). `rbac.tactical_permission_flags` decides it, so it already
+refuses an installer user, a user with no Tactical role and any lookup failure. An operation that declares no Tactical flag never
+qualifies, because there is nothing to rest the row on.
+
+Core refuses, with `AuditContractError`, the same as before:
+
+- an installer user, an unauthenticated actor, and Core itself (`module_id` `core`);
+- a legacy module, a disabled module, and a module with no declared operation;
+- an action that none of the module's operations declares;
+- an operation that needs a module permission (the person must hold that grant);
+- an outcome row for a person who lacks one of the operation's Tactical flags.
+
+Core marks such a row with `debug_info.actor_authority = "declared-operation-owner"`. Core sets it from the actor information it builds,
+so a module cannot supply it (a key of that name in `metadata` stays inside `metadata`). A row written for a person who holds a module
+grant carries no `actor_authority`, so an auditor can tell the two apart. Service and device actors (`service_audit_actor`,
+`device_audit_actor`) are unchanged.
+
+Limits. This is the backend `record()` only. The browser path (`POST /api/tfd/audit/record/`, `can_record_from_browser`,
+`declared_browser_event`) is unchanged: a permissioned module's browser row still needs its grant, because Core cannot prove the
+module's code sent the event. A module that needs such a row writes it from a backend route instead. The rule is purely additive: it
+accepts more rows and refuses nothing that was accepted before. A module that relies on it needs `requires.framework >=1.17.20`.
+
+Since 1.17.20 the action `custom:operation-failed` is Core-only. Core writes it when Tactical refuses a change (see
+`docs/tactical-operations.md`), so `record()` refuses it with `AuditContractError`. `custom:outcome-unknown` stays open to a module that
+writes its own outcome row.
+
 ## Standard action vocabulary
 
 Use these values wherever they fit:

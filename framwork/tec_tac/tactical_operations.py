@@ -55,6 +55,14 @@ registers and runs unchanged):
 * ``server_only=True`` keeps an operation off the browser and off Core's general route. Only a module backend can run it,
   through ``run_tactical_operation``. It stops the browser path; it is not a verified caller identity.
 * The 403 ``tactical_permission_denied`` text names the missing Tactical role flag. The code and the deny row text are unchanged.
+
+1.17.20 (the capability is 1.6.0, still major 1; additive):
+
+* A non-GET operation that Tactical answers with a 4xx other than 401 and 403 (400, 404, 409, 422, 429 ...) writes one failed
+  audit row: the Core-only action ``custom:operation-failed`` with the declared action in ``metadata.declared_action``, the
+  declared object type, ``result: failed``, a fixed Core text, and no before or after value and none of Tactical's own text.
+  ``result.audit`` and the ``X-Tec-Tac-Audit`` header are a verdict for these answers (before they were ``{}`` and absent).
+  A GET 4xx still writes nothing. A module cannot declare or record this action.
 """
 from __future__ import annotations
 
@@ -73,7 +81,7 @@ from . import module_category as _module_category
 logger = logging.getLogger("tec_tac.tactical_operations")
 
 CAPABILITY_ID = "core.tactical_operations"
-CAPABILITY_VERSION = "1.5.0"
+CAPABILITY_VERSION = "1.6.0"
 AUDIT_HEADER = "X-Tec-Tac-Audit"
 AUDIT_RECORDED = "recorded"
 AUDIT_NOT_RECORDED = "not-recorded"
@@ -92,6 +100,7 @@ METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 BODY_METHODS = ("POST", "PUT", "PATCH", "DELETE")
 SCOPE_TYPES = ("agent", "client", "site", "agent_pk")
 OUTCOME_UNKNOWN_ACTION = "custom:outcome-unknown"
+FAILED_ACTION = "custom:operation-failed"  # 1.17.20: Core-only; the declared action sits in metadata.declared_action
 
 # Routes Core owns or that face agents. A module can never declare these, and a param value can never reach them.
 FORBIDDEN_FIRST_SEGMENTS = ("accounts", "_allauth", "v2")
@@ -152,6 +161,7 @@ DENY_MESSAGES = {
     "tactical_denied": "Tactical refused an operation that Core ran for the signed-in user.",
     "server_only": "Core refused a Tactical operation: it is declared server-only and was called from the browser route.",
 }
+FAILED_MESSAGE = "Tactical refused this change (HTTP {status}); nothing was changed."
 OUTCOME_UNKNOWN_MESSAGE = (
     "Core ran a Tactical operation and could not confirm the outcome. Tactical may have changed data."
 )
@@ -868,8 +878,8 @@ def register_tactical_operation(
         object_type = audit_core._normalize_object_type(audit["object_type"])
     except audit_core.AuditContractError as exc:
         raise TacticalOperationRegistrationError(f"audit: {exc}") from None
-    if action == "deny" or action == OUTCOME_UNKNOWN_ACTION:
-        raise TacticalOperationRegistrationError("audit action deny and custom:outcome-unknown are written by Core only.")
+    if action == "deny" or action == OUTCOME_UNKNOWN_ACTION or action == FAILED_ACTION:
+        raise TacticalOperationRegistrationError("audit action deny, custom:outcome-unknown and custom:operation-failed are written by Core only.")
     query_names = _clean_names(query_params, "query_params", maximum=MAX_QUERY_PARAMS)
     if query_names and verb != "GET":
         raise TacticalOperationRegistrationError("query_params belong to a GET operation.")
@@ -1756,6 +1766,15 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
             refusal=True, extra={"refused_action": operation.audit_action, "reason": "tactical_denied", "status": status},
             correlation_id=correlation_id,
         )
+    elif 400 <= status < 500 and operation.method != "GET":
+        # 1.17.20: Tactical refused the change (400, 404, 409, 422, 429 ...). A failed attempt changed nothing, so the row
+        # carries no before or after value and none of Tactical's own text.
+        failed_extra = {key: value for key, value in extra.items() if not key.startswith("before")}
+        failed_extra.update(declared_action=operation.audit_action, result="failed", failure="tactical_refused")
+        audit = _write_row(
+            request, operation, action=FAILED_ACTION, object_id=object_id,
+            message=FAILED_MESSAGE.format(status=status), tactical_status=status, extra=failed_extra, correlation_id=correlation_id,
+        )
     elif status >= 500 and operation.method != "GET":
         audit = _write_row(
             request, operation, action=OUTCOME_UNKNOWN_ACTION, object_id=object_id, message=OUTCOME_UNKNOWN_MESSAGE, tactical_status=status,
@@ -1821,6 +1840,15 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
         # 1.17.19 (capability 1.5.0, still major 1): server_only stops the browser path only; it is not a verified caller identity.
         "declaration_keys_added_in_1_5_0": ["server_only"],
         "refusal_codes_added_in_1_5_0": ["operation_server_only"],
+        # 1.17.20 (capability 1.6.0, still major 1): a feature-detect for the failed row. No declaration key changes.
+        "declaration_keys_added_in_1_6_0": [],
+        "behaviour_added_in_1_6_0": [
+            (
+                "a non-GET operation that Tactical refuses with a 4xx other than 401 and 403 writes one custom:operation-failed row "
+                "(metadata.declared_action, result failed, no before or after value, no Tactical text); result.audit and X-Tec-Tac-Audit are a verdict for it"
+            ),
+        ],
+        "audit_actions_core_only": ["deny", OUTCOME_UNKNOWN_ACTION, FAILED_ACTION],
         "refusal_codes_added_in_1_3_0": ["authenticated_request_required", "invalid_correlation_id", "invalid_audit_before"],
         "refusal_codes_added_in_1_1_0": ["query_field_not_allowed", "invalid_query", "upload_not_allowed", "upload_too_large", "upload_type_not_allowed", "invalid_upload"],
         "audit_header": AUDIT_HEADER,

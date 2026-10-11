@@ -143,12 +143,12 @@ must("can_manage_notes" in exc.message and "can_reboot_agents" not in exc.messag
 
 # ---- capability metadata and documentation
 meta = ops.tactical_operations_contract_metadata()
-must(meta["version"] == "1.5.0" and meta["declaration_keys_added_in_1_5_0"] == ["server_only"] and meta["refusal_codes_added_in_1_5_0"] == ["operation_server_only"], meta)
+must(meta["version"] == "1.6.0" and meta["declaration_keys_added_in_1_5_0"] == ["server_only"] and meta["refusal_codes_added_in_1_5_0"] == ["operation_server_only"], meta)
 must("server_only=False" in meta["declaration"], meta["declaration"])
 contracts = (ROOT / "framwork/tec_tac/contracts.py").read_text(encoding="utf-8")
-must("server_only" in contracts and "operation_server_only" in contracts and "custom:operation-failed" not in contracts, "contracts.py names server_only and no failed-row action")
+must("server_only" in contracts and "operation_server_only" in contracts and "custom:operation-failed" in contracts, "contracts.py names server_only and, since 1.17.20, the failed-row action")
 must(any(line.lstrip().startswith('"403": "a Tactical flag') and "operation_server_only" in line for line in contracts.splitlines()), "the 403 entry of the errors table lists operation_server_only")
-must("Any other 4xx: no row." in contracts, "the contract keeps the AD-19 condition 4 statement")
+must("Any other 4xx: no row." not in contracts and "Any other 4xx from Tactical still writes no row" not in contracts, "1.17.20: the contract no longer says other 4xx write nothing")
 docs = " ".join((ROOT / "docs/tactical-operations.md").read_text(encoding="utf-8").split())  # line breaks do not matter
 must("Server-only operations" in docs and "operation_server_only" in docs and "not a verified caller identity" in docs and "_via_http_route" in docs, "server-only docs")
 caller_scope_text = "applies to every call of the operation, including a call whose body names no agent"

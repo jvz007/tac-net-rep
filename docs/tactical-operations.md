@@ -2,7 +2,7 @@
 
 **Status:** Public Core developer contract, added in Core 1.17.7
 **Python:** `tec_tac.tactical_operations`
-**Capability:** `core.tactical_operations` 1.5.0 (major 1, additive since 1.0.0), owner `core`
+**Capability:** `core.tactical_operations` 1.6.0 (major 1, additive since 1.0.0), owner `core`
 **HTTP:** `POST /api/tfd/tactical-operations/<module_id>/<operation_id>/`
 
 ## Why this exists
@@ -103,7 +103,7 @@ Endpoints is the technician workspace. It composes what other modules publish, s
 - A second operation on the same method and route, even with a different parameter name. This enforces "one caller per Tactical route" (AD-6 condition 4) at run time. Registering the identical operation again changes nothing.
 - A permission flag that is not a boolean `can_*` field on Tactical's Role.
 - A scope source that is not a parameter of the route or one of the `body_fields`, and an `int` requirement for client and site path parameters.
-- Audit action `deny` and `custom:outcome-unknown`. Only Core writes them.
+- Audit action `deny`, `custom:outcome-unknown` and `custom:operation-failed` (1.17.20). Only Core writes them.
 - A `server_only` that is not true or false (1.17.19).
 - A legacy, unknown or disabled module.
 
@@ -138,7 +138,7 @@ Core writes the row with the signed-in user as actor and the declaring module as
 | 2xx | the declared action, `object_id` from the scope object, `after` from `audit_fields`, and metadata with the operation, method, route template and Tactical status |
 | 401 or 403 | a Core `deny` row (`core_refusal`, reason `tactical_denied`) |
 | 5xx, or an error after dispatch, on a call that is not `GET` | `custom:outcome-unknown`, because the change may have happened |
-| any other 4xx on a call that is not `GET` | nothing (AD-19 condition 4). A failed-attempt row is an open question to Johan (CQ63) |
+| any other 4xx on a call that is not `GET` (1.17.20) | `custom:operation-failed`, with the declared action in `metadata.declared_action`, `result: failed`, a fixed Core text, and no before or after value |
 | any 4xx on a `GET` | nothing, because nothing changed |
 
 Every row carries `operation_context.server_provenance = "tactical-operation"`, `operation` and `tactical_status`
@@ -189,7 +189,7 @@ key below needs `requires.framework` of `>=1.17.13`.
 ### Name the audit object: `audit.object_param`
 
 `audit.object_param` names a path parameter of the route. Its value is the audit row's `object_id`, with the declared
-`audit.object_type`. It is written on every row: success, deny, and outcome-unknown. It is also the object hint on a refusal at steps
+`audit.object_type`. It is written on every row: success, deny, outcome-unknown and failed. It is also the object hint on a refusal at steps
 3 and 4. It must name a real parameter of the route, or registration is refused. Without it, `object_id` comes from the first scope
 object, as before.
 
@@ -508,6 +508,23 @@ Module code must never pass it. A call that carries it only makes Core stricter 
 The `tactical_permission_denied` detail ends with the missing flag, such as "It needs the Tactical permission can_reboot_agents." The code
 and the deny row text are unchanged.
 
+## Added in 1.17.20
+
+### A failed attempt writes a row: `custom:operation-failed` (1.17.20)
+
+Capability `core.tactical_operations` is 1.6.0, still major 1. A module needs framework 1.17.20 to rely on the row, and can feature-detect
+it with the capability version. Nothing about declaring or running an operation changes.
+
+When Tactical answers a call that is not `GET` with a 4xx other than 401 and 403 (400, 404, 409, 422, 429 ...), Core writes exactly one row.
+The action is `custom:operation-failed`, never the declared action, so a filter on the declared action never matches a failed attempt (the
+same as `deny` and `custom:outcome-unknown`). The row has the declared object type and object id, the correlation id, `tactical_status`, a
+fixed Core text ("Tactical refused this change (HTTP 404); nothing was changed.") with no Tactical wording, and metadata `declared_action`,
+`result: failed`, `failure: tactical_refused`, `operation`, `method` and `route`. It has no before or after value. The `X-Tec-Tac-Audit`
+header and `TacticalOperationResult.audit` say whether it was recorded. Before 1.17.20 `result.audit` was `{}` and the header absent for
+these answers; both are now a verdict. A 4xx on a `GET` still writes nothing. A module cannot declare `custom:operation-failed`, and
+`tec_tac.audit.record` refuses it with `AuditContractError`. A module that wrote its own failed row for a Tactical 4xx should stop, so one
+refused attempt gives one row.
+
 ## AD-19 conditions
 
 Johan accepted this path on 9 October 2026 (AD-19, `docs/review-accepted-decisions.md`) on five conditions. Each has a test in `tests/tactical-operations-1.17.7.py`.
@@ -515,7 +532,7 @@ Johan accepted this path on 9 October 2026 (AD-19, `docs/review-accepted-decisio
 1. **Only a declared operation runs.** The owning core module declares it. Core refuses a non-owner or a route outside the owner's group at registration (`tests/tactical-operations-1.17.7.py`), and an unknown operation gives 404.
 2. **The signed-in user's own identity.** Core resolves the route with Django's resolver and calls Tactical's view in-process, on a copy of the request with forced authentication. The `Authorization` header and cookies are dropped. Core reads no Knox token, makes no HTTP call and holds no key. An installer user and a user with no role are denied. Tactical's own permission, scope and validation still run. If Tactical renamed the route, the answer is 502 `tactical_route_changed`, with no fallback.
 3. **A failed audit write is not fatal.** Tactical's change has already happened. Core logs the failure at error level and sets `X-Tec-Tac-Audit: not-recorded`. A Python caller reads `TacticalOperationResult.audit`.
-4. **Outcome rows.** 2xx writes the declared action. 401 or 403 writes a Core deny row. A 5xx, or an error after dispatch, on a call that is not GET writes `custom:outcome-unknown`. Any other 4xx writes nothing. Core's own refusals write a deny row with a fixed Core text.
+4. **Outcome rows.** 2xx writes the declared action. 401 or 403 writes a Core deny row. A 5xx, or an error after dispatch, on a call that is not GET writes `custom:outcome-unknown`. Since 1.17.20 another 4xx on a call that is not GET writes `custom:operation-failed`, and a GET 4xx writes nothing. Core's own refusals write a deny row with a fixed Core text.
 5. **Tec-Tac's own functions are audited too.** Core and the module's own routes (`module_id` `core`, anything under `api/tfd/`) are not Tactical operations, so the executor refuses them. A module's backend action calls `tec_tac.audit.record` from its route instead. Both paths write the same row: actor, module, action, object, `module_version`, `correlation_id`, `operation_context` and `metadata`. Only the Tactical-operation row carries `server_provenance`, so an auditor can tell the two apart.
 
 ## Tactical permission flags in the runtime context

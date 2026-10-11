@@ -10,9 +10,13 @@ What this module does:
   ``issue_run_context``. The result is a ``SchedulerRunContext``, a ``dict`` subclass. It carries every key it always did, so a
   handler that reads ``context["owner_username"]``, calls ``dict(context)`` or ``json.dumps(context)`` is unchanged.
 * Core keeps a private identity registry of the instances it issued, with the run id of each. The dict fields are never trusted.
-* ``verify_run_context(context)`` answers with a frozen ``VerifiedSchedulerRun`` or raises ``SchedulerRunContextInvalid``. The owner
-  comes from the database (the run row, then the schedule's ``created_by``), never from the dict, and is checked again for
-  access at that moment. A mutated ``owner_username`` or ``owner_user_id`` changes nothing.
+* ``verify_run_context(context, expected_module_id=..., expected_action_id=...)`` answers with a frozen ``VerifiedSchedulerRun`` or
+  raises ``SchedulerRunContextInvalid``. The owner comes from the database (the run row, then the schedule's ``created_by``),
+  never from the dict, and is checked again for access at that moment. A mutated ``owner_username`` or ``owner_user_id`` changes
+  nothing.
+* Since 1.17.20 the handler also names its own module id and action id (both required keywords). Core compares them with the module
+  and action of the run it loaded, so a context issued for module A's action cannot verify inside module B's handler (a confused
+  deputy). A missing, empty or non-string id fails closed. The comparison is exact.
 
 What it does not do. Modules run in the same Python process as Core, so code that deliberately reaches into Core's private state
 is outside what this stops. What it stops is a module naming a run or an owner that Core did not issue. A copy, ``{**context}``,
@@ -34,6 +38,7 @@ _PLAIN = "This is not a scheduler run context that Core issued for a run that is
 _NO_OWNER = "This run has no person behind it."
 _OWNER_REFUSED = "The person who owns this schedule may no longer run it."
 _UNVERIFIED = "The run could not be verified."
+_OTHER_RUN = "This run belongs to another module or action."
 
 
 class SchedulerRunContext(dict):
@@ -173,13 +178,28 @@ class VerifiedSchedulerRun:
         return _user_resource_context(self._owner_now())
 
 
-def verify_run_context(context: Any, *, require_owner: bool = True) -> VerifiedSchedulerRun:
+def _expected_id(value: Any) -> str:
+    """An expected id the handler passed. Anything but a non-empty string fails closed: the check is never skipped."""
+    if not isinstance(value, str) or not value:
+        raise _invalid(_OTHER_RUN)
+    return value
+
+
+def verify_run_context(
+    context: Any, *, expected_module_id: str, expected_action_id: str, require_owner: bool = True,
+) -> VerifiedSchedulerRun:
     """Confirm that ``context`` is a handler context Core issued for a run that is still going, and read its owner.
+
+    Since 1.17.20 the handler passes its own ``expected_module_id`` and ``expected_action_id`` (both required, keyword-only).
+    They must equal the module and action of the run Core loaded, exactly. A context issued for another module's or action's run
+    is refused with a plain message that names no ids, and so is an expected id that is missing, empty or not a string.
 
     Raises ``SchedulerRunContextInvalid`` (a ``SchedulerError``) with a plain message for anything else: a plain dict or a copy of
     the context, a run that is no longer running or no longer exists, a schedule that is gone, a run with no person behind it
     (when ``require_owner`` is True, the default) and an owner who is inactive, no longer holds the action or no longer holds the
     target scope. With ``require_owner=False`` a module-owned run verifies with ``user`` None."""
+    want_module = _expected_id(expected_module_id)
+    want_action = _expected_id(expected_action_id)
     run_id = _issued_run_id(context)
     if run_id is None:
         raise _invalid(_PLAIN)
@@ -190,6 +210,10 @@ def verify_run_context(context: Any, *, require_owner: bool = True) -> VerifiedS
         schedule = getattr(run, "schedule", None)
         if schedule is None:
             raise _invalid(_PLAIN)
+        module_id = str(run.module_id or schedule.module_id)
+        action_id = str(run.action_id or schedule.action_id)
+        if module_id != want_module or action_id != want_action:
+            raise _invalid(_OTHER_RUN)
         one_off = bool(run.owner_type == "module" and _is_one_off_key(run.owner_key))
         user = schedule.created_by if (one_off or run.owner_type == "user") else None
         if user is None and require_owner:
@@ -198,7 +222,7 @@ def verify_run_context(context: Any, *, require_owner: bool = True) -> VerifiedS
             raise _invalid(_OWNER_REFUSED)
         return VerifiedSchedulerRun(
             run_id=str(run.id), schedule_id=str(run.schedule_snapshot_id or schedule.id),
-            module_id=str(run.module_id or schedule.module_id), action_id=str(run.action_id or schedule.action_id),
+            module_id=module_id, action_id=action_id,
             owner_module=run.owner_module or None, owner_key=run.owner_key or None, one_off=one_off, user=user,
             owner_user_id=getattr(user, "pk", None), owner_username=getattr(user, "username", None),
         )

@@ -133,7 +133,8 @@ def execute_schedule_run(self, run_id: str):
     try:
         action = get_scheduled_action(action_id)
         # 1.17.19: Core issues the context (a dict subclass with every key below) so a handler can ask
-        # tec_tac.scheduler.verify_run_context whether the run and its owner are real.
+        # tec_tac.scheduler.verify_run_context whether the run and its owner are real. 1.17.20: the handler names its own
+        # module id and action id, and Core refuses a context issued for another module's or action's run.
         context = issue_run_context({
             "schedule_id": str(run.schedule_snapshot_id or (schedule.id if schedule else "")),
             "run_id": str(run.id),

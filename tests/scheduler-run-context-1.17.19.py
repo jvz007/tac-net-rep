@@ -96,13 +96,17 @@ FIELDS = {"schedule_id": "sched-1", "run_id": "run-1", "module_id": "scriptmanag
           "owner_key": None, "owner_user_id": 5, "owner_username": "dave", "one_off": False}
 
 
+# 1.17.20: a handler names its own module id and action id
+IDS = {"expected_module_id": "scriptmanager", "expected_action_id": "run-script"}
+
+
 def issue():
     return ctx_mod.issue_run_context(dict(FIELDS), run_id="run-1")
 
 
 def refused(context, **kw):
     try:
-        ctx_mod.verify_run_context(context, **kw)
+        ctx_mod.verify_run_context(context, **{**IDS, **kw})
     except SchedulerRunContextInvalid as exc:
         must(str(exc), "a plain message")
         return str(exc)
@@ -116,7 +120,7 @@ STATE["run"] = make_run(owner=owner)
 ctx = issue()
 must(isinstance(ctx, dict) and ctx["owner_username"] == "dave" and json.loads(json.dumps(ctx)) == json.loads(json.dumps(FIELDS)), "dict compatible")
 must(ctx_mod.is_core_issued_run_context(ctx) and not ctx_mod.is_core_issued_run_context(dict(ctx)), "identity registry")
-verified = ctx_mod.verify_run_context(ctx)
+verified = ctx_mod.verify_run_context(ctx, **IDS)
 must(verified.user is owner and verified.owner_user_id == 5 and verified.owner_username == "dave", verified)
 must(verified.run_id == "run-1" and verified.schedule_id == "sched-1" and verified.module_id == "scriptmanager" and verified.one_off is False, verified)
 try:
@@ -126,7 +130,7 @@ except Exception as exc:  # FrozenInstanceError
     must(type(exc).__name__ == "FrozenInstanceError", exc)
 # mutating the dict changes nothing
 ctx["owner_username"], ctx["owner_user_id"] = "root", 1
-again = ctx_mod.verify_run_context(ctx)
+again = ctx_mod.verify_run_context(ctx, **IDS)
 must(again.owner_username == "dave" and again.owner_user_id == 5, "the owner is read from the database")
 
 # ---- anything that is not the issued object is refused
@@ -145,7 +149,7 @@ class Sub(ctx_mod.SchedulerRunContext):
 
 
 refused(Sub(FIELDS))
-must(ctx_mod.verify_run_context(good).user is owner, "the issued object still verifies after the refusals")
+must(ctx_mod.verify_run_context(good, **IDS).user is owner, "the issued object still verifies after the refusals")
 
 # ---- the run and the schedule
 for label, run in (("finished", make_run(owner=owner, status="succeeded")), ("queued", make_run(owner=owner, status="queued")),
@@ -162,16 +166,16 @@ STATE["run"] = make_run(owner=None)
 refused(issue())  # a user-owned run with no created_by has no person
 STATE["run"] = make_run(owner_type="module", owner_key="plain-key", owner=None)
 refused(issue())  # module-owned, no person
-free = ctx_mod.verify_run_context(issue(), require_owner=False)
+free = ctx_mod.verify_run_context(issue(), require_owner=False, **IDS)
 must(free.user is None and free.owner_user_id is None and free.owner_module == "scriptmanager", free)
 refused(issue(), require_owner=True)
 STATE["run"] = make_run(owner_type="module", owner_key="one-off:abc", owner=owner)
-one_off = ctx_mod.verify_run_context(issue())
+one_off = ctx_mod.verify_run_context(issue(), **IDS)
 must(one_off.one_off is True and one_off.user is owner and one_off.owner_username == "dave", one_off)
 
 # ---- has_tactical_permission re-reads the owner on every call and fails closed
 STATE["run"] = make_run(owner=owner)
-run = ctx_mod.verify_run_context(issue())
+run = ctx_mod.verify_run_context(issue(), **IDS)
 FLAGS[5] = {"can_list_scripts"}
 must(run.has_tactical_permission("can_list_scripts") is True, "granted")
 FLAGS[5] = set()
@@ -188,7 +192,7 @@ USERS[5] = user(5, "dave")
 STATE["flag_boom"] = RuntimeError("db down")
 must(run.has_tactical_permission("can_list_scripts") is False, "a raising lookup")
 STATE["flag_boom"] = None
-must(ctx_mod.verify_run_context(issue()).resource_context() == ("resource-context", "dave"), "resource context is the owner's")
+must(ctx_mod.verify_run_context(issue(), **IDS).resource_context() == ("resource-context", "dave"), "resource context is the owner's")
 del USERS[5]
 try:
     run.resource_context()
@@ -198,7 +202,7 @@ except SchedulerRunContextInvalid:
 USERS[5] = user(5, "dave")
 # a verified run with no person
 STATE["run"] = make_run(owner_type="module", owner_key="k", owner=None)
-nobody = ctx_mod.verify_run_context(issue(), require_owner=False)
+nobody = ctx_mod.verify_run_context(issue(), require_owner=False, **IDS)
 must(nobody.has_tactical_permission("can_list_scripts") is False, "no owner, no permission")
 try:
     nobody.resource_context()

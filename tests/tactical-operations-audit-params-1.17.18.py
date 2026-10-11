@@ -105,7 +105,7 @@ for response, boom, expected in ((FakeResponse(403, b'"no"'), None, "deny"), (Fa
     must(len(ROWS) == 1 and ROWS[0]["action"] == expected and not ROWS[0].get("after_value"), (expected, ROWS))
 route(PATH, FakeResponse(404, b'"missing"'))
 call()
-must(not ROWS, "another 4xx writes no row")
+must(len(ROWS) == 1 and ROWS[0]["action"] == "custom:operation-failed" and ROWS[0]["debug_info"]["metadata"]["result"] == "failed" and not ROWS[0].get("after_value"), "1.17.20: another 4xx writes one failed row, and no params")
 del ROWS[:]
 # a refusal by Core writes no params either
 weak = G["User"]("weak", G["Roleish"]("can_send_wol"))

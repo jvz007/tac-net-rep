@@ -23,6 +23,8 @@ STANDARD_ACTIONS = frozenset({
 })
 _CUSTOM_ACTION_RE = re.compile(r"^custom:[a-z0-9][a-z0-9_-]{0,63}$")
 _OBJECT_TYPE_RE = re.compile(r"^[a-z][a-z0-9_-]{0,99}$")
+# 1.17.20: the failed row Core writes when Tactical refuses a change (tec_tac.tactical_operations). Only Core writes it.
+CORE_ONLY_FAILED_ACTION = "custom:operation-failed"
 
 
 class AuditContractError(ValueError):
@@ -74,7 +76,59 @@ def device_audit_actor(*, module_id: str, device_id: str, identity: str | None =
     return AuditActor(kind="device", module_id=module["id"], service=service_name, identity=actor_identity, device_id=did)
 
 
-def _actor_provenance(actor, module: dict, authority=None) -> tuple[str, dict[str, Any]]:
+# 1.17.20: debug_info.actor_authority on a row accepted for a person who holds none of the module's own permissions.
+ACTOR_AUTHORITY_DECLARED_OWNER = "declared-operation-owner"
+
+
+def _declared_owner_row_allowed(actor, module: dict, action: Any) -> bool:
+    """May a signed-in person with no grant of ``module`` still have this backend row written? (1.17.20)
+
+    Yes only when Core finds the module is the declaring owner of the action: it registered at least one Tactical operation
+    (``tactical_operations.list_operations``), so it is enabled, not legacy and not Core. Then:
+
+    * ``deny`` is accepted (the module refused or saw Tactical refuse something it owns);
+    * any other action is accepted only when it is the audit action of one of the module's operations that needs no module
+      permission, and the person holds every Tactical flag of that operation (``rbac.tactical_permission_flags``, which
+      refuses an installer user, a user with no role and any lookup failure). The row rests on the check Core would make anyway.
+
+    An installer user, an unauthenticated actor, Core itself, a legacy module, a module with no operation, an action no operation
+    declares and an operation that needs a module permission are all refused. Never raises: any error is a refusal.
+    """
+    try:
+        if not getattr(actor, "is_authenticated", False) or getattr(actor, "is_installer_user", False):
+            return False
+        if module.get("id") == "core" or module.get("legacy"):
+            return False
+        try:
+            wanted = _normalize_action(action)
+        except AuditContractError:
+            return False  # the writer raises its own error for an invalid action
+        from .tactical_operations import list_operations
+
+        operations = list_operations(module["id"])
+        if not operations:
+            return False
+        if wanted == "deny":
+            return True
+        for operation in operations:
+            declared = operation.get("audit") or {}
+            if str(declared.get("action") or "") != wanted or operation.get("module_permission"):
+                continue
+            flags = list(operation.get("permissions") or ())
+            if not flags:
+                continue  # nothing to rest the row on
+            from .rbac import tactical_permission_flags
+
+            granted = tactical_permission_flags(actor, flags)
+            if all(granted.get(flag) is True for flag in flags):
+                return True
+        return False
+    except Exception:
+        logger.exception("Unable to decide whether module %s owns audit action %s", module.get("id"), action)
+        return False
+
+
+def _actor_provenance(actor, module: dict, authority=None, action: Any = None, declared_owner_ok: bool = True) -> tuple[str, dict[str, Any]]:
     if isinstance(actor, AuditActor):
         if actor.module_id != module["id"]:
             raise AuditContractError("non-human audit actor module_id must match the audit event module_id.")
@@ -93,12 +147,19 @@ def _actor_provenance(actor, module: dict, authority=None) -> tuple[str, dict[st
         raise AuditContractError("actor must be an authenticated Tactical user or a Core-owned audit actor.")
     # A person acting only under a Tactical permission is not a Tec-Tac module user (1.17.7). Core's executor has
     # already checked Tactical's permission and scope, so it passes its own internal authority.
+    declared_owner = False
     if authority is not _TACTICAL_OPERATION_AUTHORITY and not _actor_can_use_module(actor, module):
-        raise AuditContractError(f"actor is not permitted to use Tec-Tac module {module['id']!r}.")
+        # 1.17.20: a person with none of the module's permissions, for an action the module declared through a Tactical operation.
+        if not (declared_owner_ok and _declared_owner_row_allowed(actor, module, action)):
+            raise AuditContractError(f"actor is not permitted to use Tec-Tac module {module['id']!r}.")
+        declared_owner = True
     username = str(getattr(actor, "username", "") or "").strip()
     if not username:
         raise AuditContractError("authenticated actor does not expose a username.")
-    return username, {"actor_kind": "human", "actor_identity": username}
+    details = {"actor_kind": "human", "actor_identity": username}
+    if declared_owner:
+        details["actor_authority"] = ACTOR_AUTHORITY_DECLARED_OWNER  # set here only: a caller cannot supply it
+    return username, details
 
 
 def _framework_version() -> str:
@@ -422,17 +483,30 @@ def record(
     ``operation_context.core_refusal``, ``browser_provenance`` and ``server_provenance``
     are Core-owned: only Core's own rows set them, so a caller that supplies any of
     them gets a contract error (``browser_provenance`` and ``server_provenance``
-    since 1.17.6 and 1.17.7).
+    since 1.17.6 and 1.17.7). The action ``custom:operation-failed`` is Core-only too (1.17.20): Core writes it when
+    Tactical refuses a change, so a module cannot forge it. ``custom:outcome-unknown`` stays open to a module that
+    writes its own outcome row.
     """
     if isinstance(operation_context, dict):
         for key in CORE_CONTEXT_KEYS:
             if key in operation_context:
                 raise AuditContractError(f"operation_context.{key} is Core-owned and may not be supplied.")
+    _refuse_core_only_action(action)
     return _record_row(
         actor=actor, module_id=module_id, action=action, object_type=object_type, object_id=object_id,
         message=message, before=before, after=after, metadata=metadata, operation_context=operation_context,
         request=request, correlation_id=correlation_id, strict=strict,
     )
+
+
+def _refuse_core_only_action(action: Any) -> None:
+    """Refuse the action only Core writes (1.17.20). Compared after the same normalisation the writer uses."""
+    try:
+        normalized = _normalize_action(action)
+    except AuditContractError:
+        return  # the writer raises its own error for an invalid action
+    if normalized == CORE_ONLY_FAILED_ACTION:
+        raise AuditContractError(f"audit action {CORE_ONLY_FAILED_ACTION} is written by Core only.")
 
 
 def record_core_refusal(
@@ -455,7 +529,7 @@ def record_core_refusal(
     return _record_row(
         actor=actor, module_id=module_id, action="deny", object_type=object_type, object_id=object_id,
         message=message, metadata=metadata, request=request, strict=False,
-        operation_context={"browser_provenance": BROWSER_PROVENANCE_MARKER, "core_refusal": True},
+        operation_context={"browser_provenance": BROWSER_PROVENANCE_MARKER, "core_refusal": True}, declared_owner_ok=False,
     )
 
 
@@ -477,10 +551,11 @@ def record_browser_declared(
     Used only by the browser audit view. The public ``record()`` refuses ``browser_provenance`` since 1.17.6, so the
     view calls this Core-internal writer. Never strict.
     """
+    _refuse_core_only_action(action)
     return _record_row(
         actor=actor, module_id=module_id, action=action, object_type=object_type, object_id=object_id,
         message=message, before=before, after=after, metadata=metadata, request=request, strict=False,
-        operation_context={"browser_provenance": BROWSER_PROVENANCE_MARKER},
+        operation_context={"browser_provenance": BROWSER_PROVENANCE_MARKER}, declared_owner_ok=False,
     )
 
 
@@ -538,9 +613,10 @@ def _record_row(
     correlation_id: Any = None,
     strict: bool = False,
     authority=None,
+    declared_owner_ok: bool = True,
 ) -> dict[str, Any]:
     module = _resolve_module(module_id)
-    username, actor_info = _actor_provenance(actor, module, authority)
+    username, actor_info = _actor_provenance(actor, module, authority, action, declared_owner_ok)
     normalized_action = _normalize_action(action)
     normalized_object_type = _normalize_object_type(object_type)
     oid = None if object_id is None else str(object_id)[:255]

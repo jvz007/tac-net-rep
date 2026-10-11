@@ -329,6 +329,8 @@ This is the start-and-track call only. It is not the AD-13 system-action contrac
 
 ## Verify a run context (Core 1.17.19)
 
+Since 1.17.20 the handler also names its own module id and action id (see below).
+
 A Scheduler handler that must act for the person who owns a schedule (Script Manager running a script, Global Settings changing a
 setting) needs to know the run is real. Before 1.17.19 any module could build a dict with the same keys. From 1.17.19 Core issues the
 handler context itself, and a handler can ask Core to verify it.
@@ -338,7 +340,9 @@ from tec_tac.scheduler import SchedulerPermanentError, SchedulerRunContextInvali
 
 def handler(context):
     try:
-        run = verify_run_context(context)            # pass the context object itself
+        run = verify_run_context(                    # pass the context object itself, and your own ids
+            context, expected_module_id="scriptmanager", expected_action_id="run-script",
+        )
     except SchedulerRunContextInvalid as exc:
         raise SchedulerPermanentError(str(exc))
     if not run.has_tactical_permission("can_list_scripts"):   # Script Manager; Global Settings checks its own flag
@@ -346,7 +350,7 @@ def handler(context):
     rows = read_scripts(run.resource_context())      # a scope-bound read runs as the person
 ```
 
-`verify_run_context(context, require_owner=True)` returns a frozen `VerifiedSchedulerRun` (`run_id`, `schedule_id`, `module_id`,
+`verify_run_context(context, *, expected_module_id, expected_action_id, require_owner=True)` returns a frozen `VerifiedSchedulerRun` (`run_id`, `schedule_id`, `module_id`,
 `action_id`, `owner_module`, `owner_key`, `one_off`, `user`, `owner_user_id`, `owner_username`) or raises `SchedulerRunContextInvalid`
 (a `SchedulerError`) with a plain message. Core reads the run row again: it must exist and be running. The owner comes from the database
 (the schedule's `created_by` for a one-off or user-owned run), never from the dict, so changing `owner_username` in the dict changes
@@ -355,6 +359,13 @@ nothing. Core also checks that the owner is active, still holds the action and s
 It fails closed for a plain dict, a copy (`{**context}`, `dict(context)`, `copy.copy`), a JSON, pickle or Celery round-trip, a context a
 module builds (including `SchedulerRunContext(...)` called directly), a run that has finished or was deleted, and any lookup error. A run
 that belongs to a module with no person behind it is refused unless you pass `require_owner=False`; it then verifies with `user` None.
+
+Since 1.17.20 the handler must also name its own module id and action id. Both keywords are required, so a handler cannot forget them.
+Core compares them, exactly, with the module and action of the run it loaded. Why: a context Core issued for module A's action is a real
+context. Without this check, module A could hand it to module B's handler, and B would act for A's schedule owner (a confused deputy).
+With the ids, that context is refused in B's handler with "This run belongs to another module or action." The message names no ids.
+An id that is missing, empty or not a string is refused too; the check is never skipped. A call written the 1.17.19 way, without the ids,
+raises `TypeError`. Nothing in `modules/` called it yet. A module that adopts it needs `requires.framework >=1.17.20`.
 
 `run.has_tactical_permission(flag)` reads the owner again on every call (active, then the role flag) and answers False on any error,
 a deleted owner or a name that is not a `can_*` flag. `run.resource_context()` gives the owner's Resource Directory context.
