@@ -112,13 +112,15 @@ for method in ("POST", "PUT", "PATCH", "DELETE"):
     # scope_field_required: a body-sourced scope with the field missing or malformed
     for bad in ({"action": SENTINEL}, {"client_ids": [], "action": SENTINEL}, {"client_ids": [True], "action": SENTINEL}, {"client_ids": ["  "]}):
         expect("scope_field_required", method, lambda bad=bad: call("bulk", {}, bad, user=manager), None)
-    # invalid_correlation_id: the row never carries the bad id (it carries the request's own id)
+    # invalid_correlation_id: the row never carries the bad id (it carries the request's own id). 1.17.22: this refusal comes
+    # before the path parameters are cleaned, so the row names no object (the raw path value is never used)
     for bad in ("has space", "x" * 129, "new\nline", "ü" + SENTINEL, 5, ["a"]):
-        expect("invalid_correlation_id", method, lambda bad=bad: call("op", P, {"mode": SENTINEL}, correlation_id=bad), AGENT, correlation_id="req-1")
+        expect("invalid_correlation_id", method, lambda bad=bad: call("op", P, {"mode": SENTINEL}, correlation_id=bad), None, correlation_id="req-1")
         must(not isinstance(bad, str) or bad not in json.dumps(ROWS, default=str), "the bad id is not in the row")
     # invalid_audit_before
+    # (1.17.22: this refusal comes before the path parameters are cleaned, so no object id)
     for bad in ("text", {"password": "x"}, {"f": "x" * 257}, {"f": 1.5}, {"nested": {"a": SENTINEL}}):
-        expect("invalid_audit_before", method, lambda bad=bad: call("op", P, {"mode": "x"}, audit_before=bad), AGENT)
+        expect("invalid_audit_before", method, lambda bad=bad: call("op", P, {"mode": "x"}, audit_before=bad), None)
     # a valid correlation id is carried on the Core row
     expect("invalid_body", method, lambda: call("op", P, [SENTINEL], correlation_id="job-1"), AGENT, correlation_id="job-1")
     # the object id comes from audit.object_param, never from a body field
@@ -130,7 +132,19 @@ for method in ("POST", "PUT", "PATCH", "DELETE"):
     must(exc.message.startswith("Body field not allowed"), exc.message)
 
     # a refusal order: the correlation id is cleaned first at step 5, so it wins over a bad body
-    expect("invalid_correlation_id", method, lambda: call("op", P, [SENTINEL], correlation_id="bad id"), AGENT, correlation_id="req-1")
+    expect("invalid_correlation_id", method, lambda: call("op", P, [SENTINEL], correlation_id="bad id"), None, correlation_id="req-1")
+
+    # 1.17.22 (the held Medium of the 1.17.21 review): a core_refused row never takes its object id from the body, nor from a raw
+    # path value that was not cleaned. A bulk operation with a valid body-sourced scope (client 1) gives no object id.
+    for bad_body, code in (({"client_ids": ["1"], "action": "x", SENTINEL: 1}, "body_field_not_allowed"),
+                           ({"client_ids": ["1", "2"], "action": "x", "extra": 1}, "body_field_not_allowed"),
+                           ({"client_ids": ["1"], "action": object()}, "invalid_body")):
+        expect(code, method, lambda bad_body=bad_body: call("bulk", {}, bad_body, user=manager), None)
+    # a raw path value (a slash and the sentinel) with a bad correlation id gives no object id from the raw value
+    expect("invalid_correlation_id", method, lambda: call("op", {"agent_id": "a/b" + SENTINEL}, {"mode": "x"}, correlation_id="bad id"), None, correlation_id="req-1")
+    # a valid path parameter and audit.object_param still name the object
+    expect("body_field_not_allowed", method, lambda: call("op", P, {SENTINEL: 1}), AGENT)
+    expect("invalid_body", method, lambda: call("note", {"agent_id": AGENT, "pk": "12"}, [SENTINEL]), "12")
 
 # ---- a refusal on a GET writes no row and keeps audit None
 fresh()

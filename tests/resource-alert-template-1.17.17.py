@@ -185,6 +185,8 @@ class Query:
                 rows = [r for r in rows if r["pk"] in set(val)]
             elif key == "client_id":
                 rows = [r for r in rows if r["client_id"] == val]
+            elif key == "client_id__in":
+                rows = [r for r in rows if r["client_id"] in set(val)]
             else:
                 raise NotImplementedError(key)
         return Query(self.model, rows)
@@ -213,10 +215,12 @@ class Query:
         return len(self.rows)
 
     def values(self, *fields):
-        return Rows({f: r[f] for f in fields} for r in self.rows)
+        def pick(r, f):  # 1.5.0: client__name is the join Tactical's ORM resolves
+            return Client.STORE[r["client_id"]]["name"] if f == "client__name" else r[f]
+        return Rows({f: pick(r, f) for f in fields} for r in self.rows)
 
     def values_list(self, *fields, flat=False):
-        return [r[fields[0]] for r in self.rows] if flat else [tuple(r[f] for f in fields) for r in self.rows]
+        return Rows([r[fields[0]] for r in self.rows] if flat else [tuple(r[f] for f in fields) for r in self.rows])
 
 
 class _Manager:
@@ -367,8 +371,8 @@ def refused(call, *errors):
 
 
 # ------------------------------------------------------------------------------------------------ the contract shape
-must(resources.CONTRACT_VERSION == "1.4.0" and resources.CLIENT_FIELDS == ("type", "id", "name", "active", "alert_template_id"), resources.CLIENT_FIELDS)
-must(resources.SITE_FIELDS == ("type", "id", "name", "client_id", "active", "alert_template_id"), resources.SITE_FIELDS)
+must(resources.CONTRACT_VERSION == "1.5.0" and resources.CLIENT_FIELDS == ("type", "id", "name", "active", "alert_template_id", "sites"), resources.CLIENT_FIELDS)
+must(resources.SITE_FIELDS == ("type", "id", "name", "client_id", "active", "alert_template_id", "client_name"), resources.SITE_FIELDS)
 must(resources.AGENT_FIELDS[-1] == "last_seen", "agent records are unchanged")
 listed = resources.list_clients(context=ctx_admin)["items"]
 must([tuple(row) for row in listed] == [resources.CLIENT_FIELDS] * 2 and [r["alert_template_id"] for r in listed] == [None, None], listed)
@@ -502,7 +506,7 @@ must(made["id"] in creator.role.can_view_clients.ids, "creator scope")
 reset_tactical()
 must(adapter.client_row({"pk": 3, "name": "X"})["alert_template_id"] is None, "a row without the key reads as None")
 must(adapter.client_row({"pk": 3, "name": "X", "alert_template_id": "7"})["alert_template_id"] == 7, "integer")
-must(list(adapter.site_row({"pk": 3, "name": "X", "client_id": 1, "alert_template_id": 7}))[-1] == "alert_template_id", "site key order")
+must(list(adapter.site_row({"pk": 3, "name": "X", "client_id": 1, "alert_template_id": 7}))[-2:] == ["alert_template_id", "client_name"], "site key order (client_name appended in 1.5.0)")
 page, total = adapter.page_clients(adapter.clients_queryset(user=admin, trusted=False), offset=0, limit=10)
 must(total == 2 and all("alert_template_id" in r for r in page), page)
 page, total = adapter.page_sites(adapter.sites_queryset(user=admin, trusted=False), offset=0, limit=10)
@@ -569,7 +573,7 @@ must(r.status_code == 404, "but not another site's")
 
 # ------------------------------------------------------------------------------------------------ the capability and the contract text
 meta = resources.resource_contract_metadata()
-must(meta["version"] == "1.4.0" and meta["version"].split(".")[0] == "1", meta["version"])
+must(meta["version"] == "1.5.0" and meta["version"].split(".")[0] == "1", meta["version"])
 must(meta["resource_types"]["client"]["fields"] == list(resources.CLIENT_FIELDS) and meta["resource_types"]["site"]["fields"] == list(resources.SITE_FIELDS), "fields")
 must(meta["write_support"]["client"] == ["create", "update", "delete", "custom_fields"], "the earlier write_support lists are unchanged")
 must(meta["write_support"]["update_fields"] == {"client": ["name", "alert_template_id"], "site": ["name", "client_id", "alert_template_id"]}, meta["write_support"])
@@ -579,7 +583,7 @@ must("alert_template_id" in meta["mutation_contracts"]["update_client"]["body"],
 must("PATCH /api/tfd/resources/clients/<id>/" == meta["mutation_contracts"]["update_client"]["http"], "http row")
 must("delete_client" in meta["mutation_contracts"] and "client_custom_fields" in meta["mutation_contracts"], "the earlier entries stay")
 registration = resources.register_core_resources_capability()
-must(registration["version"] == "1.4.0" and registration["module_id"] == "core", registration["version"])
+must(registration["version"] == "1.5.0" and registration["module_id"] == "core", registration["version"])
 for op in ("update_client", "update_site", "scope_descriptor", "scope_unrestricted", "has_whole_client_access", "user_context"):
     must(op in registration["operations"] and callable(getattr(registration["provider"], op)), op)
 must(registration["operations"][:15] == ("list_clients", "get_client", "create_client", "update_client", "delete_client", "list_sites", "get_site", "create_site",
@@ -589,6 +593,6 @@ contracts = (PKG / "contracts.py").read_text(encoding="utf-8")
 for needle in ("alert_template_id", "framework >=1.17.17", "alert_template_changed"):
     must(needle in contracts, needle)
 doc = (ROOT / "docs" / "resource-directory.md").read_text(encoding="utf-8")
-must("Contract version: `1.4.0`" in doc and "alert_template_id" in doc and "UNSET" in doc, "docs/resource-directory.md")
+must("Contract version: `1.5.0`" in doc and "alert_template_id" in doc and "UNSET" in doc, "docs/resource-directory.md")
 
 print("[TEST] PASS resource alert template 1.17.17")

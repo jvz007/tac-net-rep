@@ -14,7 +14,7 @@ from . import resources_adapter as adapter
 from .capabilities import register_capability
 
 CONTRACT_ID = "core.resources"
-CONTRACT_VERSION = "1.4.0"
+CONTRACT_VERSION = "1.5.0"
 RESOURCE_TYPES = ("client", "site", "agent")
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 500
@@ -23,8 +23,9 @@ CLIENT_MANAGE_PERMISSION = "core.resources.clients.manage"
 SITE_MANAGE_PERMISSION = "core.resources.sites.manage"
 
 # 1.4.0 appended alert_template_id (an integer or null) to the client and site records; the earlier keys keep their place.
-CLIENT_FIELDS = ("type", "id", "name", "active", "alert_template_id")
-SITE_FIELDS = ("type", "id", "name", "client_id", "active", "alert_template_id")
+# 1.5.0 appended ``sites`` (the client's site records inside the caller's scope) to client records and ``client_name`` to site records.
+CLIENT_FIELDS = ("type", "id", "name", "active", "alert_template_id", "sites")
+SITE_FIELDS = ("type", "id", "name", "client_id", "active", "alert_template_id", "client_name")
 AGENT_FIELDS = (
     "type", "id", "hostname", "client_id", "site_id", "active",
     "platform", "monitoring_type", "last_seen",
@@ -221,6 +222,38 @@ def _clean_name(value: Any, label: str) -> str:
     return value
 
 
+def _clean_resource_name(value: Any, kind: str) -> str:
+    """A client or site name as Tactical accepts it: a trimmed non-empty string of at most 255 characters with no ``|`` (1.17.22).
+    Tactical's ClientSerializer and SiteSerializer refuse ``|``, which it uses to join client and site in agent labels."""
+    clean = _clean_name(value, "name")
+    if "|" in clean:
+        raise ResourceValidationError(f"{kind} name cannot contain the | character")
+    return clean
+
+
+def _clean_custom_fields(value: Any) -> list[dict[str, Any]] | None:
+    """None, or a list of ``{field_id, value}`` for create_client and create_site (1.17.22). Adapter rules decide the values."""
+    if value is None:
+        return None
+    if not isinstance(value, list) or len(value) > 200:
+        raise ResourceValidationError("custom_fields must be an array of at most 200 items.")
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {"field_id", "value"}:
+            raise ResourceValidationError("Each custom field must contain only field_id and value.")
+    return [dict(item) for item in value]
+
+
+def _custom_field_ids(values: list[dict[str, Any]] | None) -> list[int]:
+    return sorted(int(item["field_id"]) for item in (values or []))
+
+
+def _audit_view(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The record as audited before 1.5.0: without the nested ``sites`` and ``client_name`` added by the read contract."""
+    if row is None:
+        return None
+    return {key: value for key, value in row.items() if key not in ("sites", "client_name")}
+
+
 def _adapter_write(callable_obj, **kwargs):
     try:
         return callable_obj(**kwargs)
@@ -344,7 +377,8 @@ def list_clients(*, context: ResourceAccessContext, search: str | None = None, a
     page, page_size, offset = _pagination(page, page_size)
     qs = adapter.clients_queryset(user=user, trusted=trusted, search=_search(search), active=_active(active))
     items, total = adapter.page_clients(qs, offset=offset, limit=page_size)
-    return _page(items, total, page, page_size)
+    # 1.5.0: each client carries its sites inside the caller's scope (Tactical's own GET /clients/ does), one query per page.
+    return _page(adapter.nest_sites(items, user=user, trusted=trusted), total, page, page_size)
 
 
 def get_client(client_id: Any, *, context: ResourceAccessContext) -> dict[str, Any]:
@@ -353,7 +387,7 @@ def get_client(client_id: Any, *, context: ResourceAccessContext) -> dict[str, A
     row = adapter.get_client_row(adapter.clients_queryset(user=user, trusted=trusted), resource_id)
     if row is None:
         raise ResourceNotFound("Client was not found in the caller's resource scope.")
-    return row
+    return adapter.nest_sites([row], user=user, trusted=trusted)[0]
 
 
 def list_sites(*, context: ResourceAccessContext, client_id: Any | None = None, search: str | None = None, active: bool | None = None, page: int = 1, page_size: int = DEFAULT_PAGE_SIZE) -> dict[str, Any]:
@@ -396,16 +430,36 @@ def get_agent(agent_id: Any, *, context: ResourceAccessContext) -> dict[str, Any
 
 
 
-def create_client(*, name: str, context: ResourceAccessContext) -> dict[str, Any]:
+def create_client(*, name: str, context: ResourceAccessContext, site_name: str | None = None, custom_fields: Any = None) -> dict[str, Any]:
+    """Create a client and its first site in one transaction (Tactical's Add client).
+
+    ``site_name`` is the first site's name; new callers always send it. A call without it still works and the site is named
+    "Default Site" (deprecated compatibility path, audit metadata ``default_site_created`` true). ``custom_fields`` is an
+    optional list of ``{field_id, value}`` saved in the same transaction. As Tactical does, the client joins the creator's
+    ``can_view_clients`` only when that list is not empty. Names may not contain ``|``. The record returned carries
+    ``sites`` with the first site.
+    """
     user = _authorize_write(context, "client")
-    clean_name = _clean_name(name, "name")
+    clean_name = _clean_resource_name(name, "Client")
+    first_site_name = _clean_resource_name(site_name, "Site") if site_name is not None else "Default Site"
+    fields = _clean_custom_fields(custom_fields)
     with _transaction_atomic():
-        row = _adapter_write(adapter.create_client_row, user=user, name=clean_name)
+        result = _adapter_write(
+            adapter.create_client_row, user=user, name=clean_name,
+            default_site_name=first_site_name, custom_fields=fields,
+        )
+        row, first_site = result["client"], result["site"]
         _record_resource_change(
             actor=user, action="add", resource_type="client", resource_id=row["id"],
-            after=row, metadata={"default_site_created": True},
+            after=row,
+            metadata={
+                "default_site_created": site_name is None,
+                "first_site_id": first_site["id"],
+                "role_scope_extended": result.get("role_scope_extended") or "none",
+                "custom_field_ids": _custom_field_ids(fields),
+            },
         )
-        return row
+        return {**row, "sites": [first_site]}
 
 
 def update_client(client_id: Any, *, name: str | None = None, alert_template_id: Any = UNSET, context: ResourceAccessContext) -> dict[str, Any]:
@@ -417,7 +471,7 @@ def update_client(client_id: Any, *, name: str | None = None, alert_template_id:
         raise ResourceValidationError("At least one of name or alert_template_id is required.")
     changes: dict[str, Any] = {}
     if name is not None:
-        changes["name"] = _clean_name(name, "name")
+        changes["name"] = _clean_resource_name(name, "Client")
     if alert_template_id is not UNSET:
         changes["alert_template_id"] = _clean_alert_template_id(alert_template_id)
     before = adapter.get_client_row(adapter.clients_queryset(user=user, trusted=False), resource_id)
@@ -430,23 +484,35 @@ def update_client(client_id: Any, *, name: str | None = None, alert_template_id:
             before=before, after=row,
             metadata={"alert_template_changed": "alert_template_id" in changes and _template_changed(before, row)},
         )
-        return row
+        return adapter.nest_sites([row], user=user, trusted=False)[0]
 
 
-def create_site(*, client_id: Any, name: str, context: ResourceAccessContext) -> dict[str, Any]:
+def create_site(*, client_id: Any, name: str, context: ResourceAccessContext, custom_fields: Any = None) -> dict[str, Any]:
+    """Create a site under a client the caller may write to. ``custom_fields`` is an optional list of ``{field_id, value}`` saved
+    in the same transaction. As Tactical does, the site joins the creator's ``can_view_sites`` only when that list is not
+    empty. Names may not contain ``|``."""
     user = _authorize_write(context, "site")
     target_client_id = _clean_positive_int(client_id, "client_id")
+    clean_name = _clean_resource_name(name, "Site")
+    fields = _clean_custom_fields(custom_fields)
     if not adapter.client_write_in_scope(user=user, client_id=target_client_id):
         raise ResourceNotFound("Client was not found in the caller's resource scope.")
     with _transaction_atomic():
-        row = _adapter_write(
+        result = _adapter_write(
             adapter.create_site_row,
             client_id=target_client_id,
-            name=_clean_name(name, "name"),
+            name=clean_name,
+            user=user,
+            custom_fields=fields,
         )
+        row = result["site"]
         _record_resource_change(
             actor=user, action="add", resource_type="site", resource_id=row["id"],
-            after=row,
+            after=_audit_view(row),
+            metadata={
+                "role_scope_extended": result.get("role_scope_extended") or "none",
+                "custom_field_ids": _custom_field_ids(fields),
+            },
         )
         return row
 
@@ -457,7 +523,7 @@ def update_site(site_id: Any, *, name: str | None = None, client_id: Any | None 
     resource_id = _clean_positive_int(site_id, "site_id")
     if name is None and client_id in (None, "") and alert_template_id is UNSET:
         raise ResourceValidationError("At least one of name, client_id or alert_template_id is required.")
-    clean_name = _clean_name(name, "name") if name is not None else None
+    clean_name = _clean_resource_name(name, "Site") if name is not None else None
     target_client_id = _clean_positive_int(client_id, "client_id") if client_id not in (None, "") else None
     changes: dict[str, Any] = {}
     if alert_template_id is not UNSET:
@@ -478,7 +544,7 @@ def update_site(site_id: Any, *, name: str | None = None, client_id: Any | None 
             raise ResourceNotFound("Site was not found in the caller's resource scope.")
         _record_resource_change(
             actor=user, action="modify", resource_type="site", resource_id=resource_id,
-            before=before, after=row,
+            before=_audit_view(before), after=_audit_view(row),
             metadata={"alert_template_changed": "alert_template_id" in changes and _template_changed(before, row)},
         )
         return row
@@ -506,11 +572,11 @@ def delete_site(site_id: Any, *, move_to_site_id: Any | None = None, context: Re
             action="delete",
             resource_type="site",
             resource_id=resource_id,
-            before=before,
+            before=_audit_view(before),
             after=None,
             metadata={
                 "moved_agents": int(result.get("moved_agents") or 0),
-                "destination_site": result.get("destination"),
+                "destination_site": _audit_view(result.get("destination")),
             },
         )
         return result
@@ -541,7 +607,7 @@ def delete_client(client_id: Any, *, move_to_site_id: Any | None = None, context
             after=None,
             metadata={
                 "moved_agents": int(result.get("moved_agents") or 0),
-                "destination_site": result.get("destination"),
+                "destination_site": _audit_view(result.get("destination")),
             },
         )
         return result
@@ -702,6 +768,18 @@ def resource_contract_metadata() -> dict[str, Any]:
             },
         },
         "mutation_contracts": {
+            "create_client": {
+                "python": "create_client(*, name, context, site_name=None, custom_fields=None)",
+                "http": "POST /api/tfd/resources/clients/",
+                "body": {"name": "required string, no | character", "site_name": "the first site's name; send it from every new form (omitting it names the site 'Default Site', deprecated)", "custom_fields": "optional array[{field_id, value}] saved in the same transaction"},
+                "semantics": "Since 1.5.0 (site_name and custom_fields; Tactical's Add client). The client, its first site and the custom fields are created in one transaction with a strict audit row (metadata first_site_id, role_scope_extended 'clients' or 'none', custom_field_ids as ids only, default_site_created). As Tactical does, the new client joins the creator's can_view_clients only when that list is not empty: a role limited only by sites is not widened. The record returned carries sites with the first site. Names may not contain the | character.",
+            },
+            "create_site": {
+                "python": "create_site(*, client_id, name, context, custom_fields=None)",
+                "http": "POST /api/tfd/resources/sites/",
+                "body": {"client_id": "required positive integer", "name": "required string, no | character", "custom_fields": "optional array[{field_id, value}] saved in the same transaction"},
+                "semantics": "Since 1.5.0 (custom_fields). As Tactical does, the new site joins the creator's can_view_sites only when that list is not empty. Audit metadata role_scope_extended 'sites' or 'none' and custom_field_ids.",
+            },
             "update_client": {
                 "python": "update_client(client_id, *, name=None, alert_template_id=UNSET, context)",
                 "http": "PATCH /api/tfd/resources/clients/<id>/",
@@ -764,6 +842,14 @@ def resource_contract_metadata() -> dict[str, Any]:
         },
         "active_semantics": "Tactical hard-deletes client/site rows. Core deletion first relocates agents when required, then deletes atomically. Existing rows are active in contract v1; active=false returns no rows.",
         "rbac": {"client_write": CLIENT_MANAGE_PERMISSION, "site_write": SITE_MANAGE_PERMISSION},
+        "client_sites": "Since 1.5.0 client records carry sites: the site records of that client inside the caller's scope (the same Site.filter_by_role rule as the sites read), ordered by name then id, with the shape of list_sites records, loaded with one query per page. It needs only can_list_clients, as Tactical's GET /clients/ does. A client-limited role gets every site of its clients plus granted sites, a site-only role only its granted sites, an unrestricted caller and a trusted global context every site. A client with no site in scope has an empty list. Create and update results carry it too. Audit before and after rows are built without sites and client_name.",
+        "site_client_name": "Since 1.5.0 site records carry client_name (the owning client's name, as Tactical's /clients/sites/ returns it), appended after the earlier keys, so a role with only can_list_sites can group sites by client without reading clients.",
+        "role_reads": "Clients read: can_list_clients (200 with nested sites; the sites read stays refused without can_list_sites). Sites read: can_list_sites (each site carries client_id and client_name; the clients read stays refused without can_list_clients). A role with neither flag is refused both reads. Writes still need can_manage_clients or can_manage_sites plus the Core codenames.",
+        "role_scope_lists": {
+            "route": "GET|POST /accounts/roles/ and GET|PUT|DELETE /accounts/roles/<id>/ (Tactical's own role routes; Core adds no route)",
+            "fields": "can_view_clients and can_view_sites, each a list of ids",
+            "semantics": "Since 1.17.22. An empty pair means unrestricted. A role with only can_view_sites is site mode. PUT replaces both lists, so an editor that cannot see every id (a limited editor sees only its own clients and sites) must send back the ids it loaded and could not show. Pickers read clients with nested sites from this Resource Directory (List clients is enough). Core writes one strict audit row (module core, object_type role_scope, object_id the role id) with before and after as sorted id lists (capped at 1000, with counts and a truncated flag), only when a list changed. Core does not change who may edit role lists.",
+        },
         "alert_template_id": "Since 1.4.0 client and site records carry alert_template_id (integer or null), appended after the earlier keys. It is an id only. Anyone who can list clients or sites sees it.",
         "compatibility": "Additive changes are preferred within 1.x. Tactical ORM changes are adapter-internal unless the public representation changes incompatibly.",
     }

@@ -453,7 +453,34 @@ def site_row(row: dict[str, Any]) -> dict[str, Any]:
         "client_id": int(row["client_id"]),
         "active": True,
         "alert_template_id": _template_id(row),
+        # 1.5.0: the owning client's name, as Tactical's own /clients/sites/ returns it (client__name, no extra query)
+        "client_name": str(row.get("client__name") or ""),
     }
+
+
+def sites_by_client(client_ids, *, user=None, trusted: bool = False) -> dict[int, list[dict[str, Any]]]:
+    """The site records of each client id inside the caller's scope (1.5.0), in one query.
+
+    It uses the same ``filter_by_role`` rule as the sites read, so a client-limited role gets every site of its clients plus
+    granted sites, a site-only role only its granted sites, and a trusted global context or an unrestricted caller every site.
+    Records are ordered by name then id and have the same shape as ``list_sites`` records.
+    """
+    wanted = sorted({int(value) for value in client_ids})
+    grouped: dict[int, list[dict[str, Any]]] = {value: [] for value in wanted}
+    if not wanted:
+        return grouped
+    _, Site, _ = _models()
+    qs = _scope_queryset(Site.objects.all(), user=user, trusted=trusted).filter(client_id__in=wanted)
+    rows = qs.order_by("name", "pk").values("pk", "name", "client_id", "alert_template_id", "client__name")
+    for row in rows:
+        grouped.setdefault(int(row["client_id"]), []).append(site_row(row))
+    return grouped
+
+
+def nest_sites(rows: list[dict[str, Any]], *, user=None, trusted: bool = False) -> list[dict[str, Any]]:
+    """Return copies of client records with ``sites`` appended last (1.5.0). One site query for the whole list."""
+    grouped = sites_by_client([row["id"] for row in rows], user=user, trusted=trusted)
+    return [{**row, "sites": list(grouped.get(int(row["id"]), []))} for row in rows]
 
 
 def agent_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -479,7 +506,7 @@ def page_clients(queryset, *, offset: int, limit: int) -> tuple[list[dict[str, A
 
 def page_sites(queryset, *, offset: int, limit: int) -> tuple[list[dict[str, Any]], int]:
     total = queryset.count()
-    rows = queryset.values("pk", "name", "client_id", "alert_template_id")[offset : offset + limit]
+    rows = queryset.values("pk", "name", "client_id", "alert_template_id", "client__name")[offset : offset + limit]
     return [site_row(row) for row in rows], total
 
 
@@ -498,7 +525,7 @@ def get_client_row(queryset, client_id: int) -> dict[str, Any] | None:
 
 
 def get_site_row(queryset, site_id: int) -> dict[str, Any] | None:
-    row = queryset.filter(pk=site_id).values("pk", "name", "client_id", "alert_template_id").first()
+    row = queryset.filter(pk=site_id).values("pk", "name", "client_id", "alert_template_id", "client__name").first()
     return site_row(row) if row else None
 
 
@@ -548,7 +575,32 @@ def site_write_in_scope(*, user, site_id: int) -> bool:
     return bool(client_relation is not None and client_relation.filter(pk=site["client_id"]).exists())
 
 
-def create_client_row(*, user, name: str, default_site_name: str = "Default Site") -> dict[str, Any]:
+def _extend_role_scope(*, user, relation_name: str, obj) -> str | None:
+    """Tactical's rule (clients/views.py): a created client or site joins the creator's role list only when that list is not empty.
+
+    Returns "clients" or "sites" when the object was added, else None. A superuser or unrestricted role changes nothing, and a
+    role limited only by sites is not widened to a client (1.17.22).
+    """
+    role = _role_for_user(user)
+    if role is None or _role_scope_unrestricted(user=user, role=role):
+        return None
+    relation = getattr(role, relation_name, None)
+    if not _relation_has_any(relation):
+        return None
+    add = getattr(relation, "add", None)
+    if not callable(add):
+        raise TacticalResourceValidationError("Restricted creator role does not expose a writable scope relation.")
+    add(obj)
+    return "clients" if relation_name == "can_view_clients" else "sites"
+
+
+def create_client_row(*, user, name: str, default_site_name: str = "Default Site", custom_fields=None) -> dict[str, Any]:
+    """Create a client and its first site in one transaction (1.17.22).
+
+    ``custom_fields`` is a list of ``{field_id, value}`` saved in the same transaction, without the write-scope check because the
+    creator just made the client. Returns ``{"client", "site", "role_scope_extended"}``: the base client record, the first site
+    record and ``"clients"`` when the client joined the creator's ``can_view_clients`` (else None).
+    """
     Client, Site, _ = _models()
     try:
         with transaction.atomic():
@@ -560,20 +612,21 @@ def create_client_row(*, user, name: str, default_site_name: str = "Default Site
             site.full_clean(exclude=None, validate_unique=False)
             site.save()
 
-            role = _role_for_user(user)
-            if not _role_scope_unrestricted(user=user, role=role):
-                relation = getattr(role, "can_view_clients", None) if role is not None else None
-                add = getattr(relation, "add", None)
-                if not callable(add):
-                    raise TacticalResourceValidationError(
-                        "Restricted creator role does not expose a writable client-scope relation."
-                    )
-                add(obj)
+            extended = _extend_role_scope(user=user, relation_name="can_view_clients", obj=obj)
+            if custom_fields:
+                _save_custom_field_values("client", obj.pk, custom_fields)
     except IntegrityError as exc:
         raise TacticalResourceConflictError("A client with that name already exists.") from exc
     except ValidationError as exc:
-        raise TacticalResourceValidationError("Client or default site failed Tactical validation.") from exc
-    return client_row({"pk": obj.pk, "name": obj.name, "alert_template_id": getattr(obj, "alert_template_id", None)})
+        raise TacticalResourceValidationError("Client or first site failed Tactical validation.") from exc
+    return {
+        "client": client_row({"pk": obj.pk, "name": obj.name, "alert_template_id": getattr(obj, "alert_template_id", None)}),
+        "site": site_row({
+            "pk": site.pk, "name": site.name, "client_id": obj.pk,
+            "alert_template_id": getattr(site, "alert_template_id", None), "client__name": obj.name,
+        }),
+        "role_scope_extended": extended,
+    }
 
 
 _NOT_GIVEN = object()
@@ -620,18 +673,31 @@ def update_client_row(*, user, client_id: int, name: str | None = None, alert_te
     return client_row({"pk": obj.pk, "name": obj.name, "alert_template_id": getattr(obj, "alert_template_id", None)})
 
 
-def create_site_row(*, client_id: int, name: str) -> dict[str, Any]:
-    _, Site, _ = _models()
+def create_site_row(*, client_id: int, name: str, user=None, custom_fields=None) -> dict[str, Any]:
+    """Create a site (1.17.22). Returns ``{"site", "role_scope_extended"}``: the site record and ``"sites"`` when the site joined
+    the creator's ``can_view_sites`` (Tactical's rule: only when that list is not empty), else None. ``custom_fields`` are saved
+    in the same transaction."""
+    Client, Site, _ = _models()
     try:
         with transaction.atomic():
             obj = Site(client_id=client_id, name=name)
             obj.full_clean(exclude=None, validate_unique=False)
             obj.save()
+            extended = _extend_role_scope(user=user, relation_name="can_view_sites", obj=obj) if user is not None else None
+            if custom_fields:
+                _save_custom_field_values("site", obj.pk, custom_fields)
+            client_name = str(Client.objects.filter(pk=obj.client_id).values_list("name", flat=True).first() or "")
     except IntegrityError as exc:
         raise TacticalResourceConflictError("A site with that name already exists for the selected client.") from exc
     except ValidationError as exc:
         raise TacticalResourceValidationError("Site failed Tactical validation.") from exc
-    return site_row({"pk": obj.pk, "name": obj.name, "client_id": obj.client_id, "alert_template_id": getattr(obj, "alert_template_id", None)})
+    return {
+        "site": site_row({
+            "pk": obj.pk, "name": obj.name, "client_id": obj.client_id,
+            "alert_template_id": getattr(obj, "alert_template_id", None), "client__name": client_name,
+        }),
+        "role_scope_extended": extended,
+    }
 
 
 def update_site_row(*, user, site_id: int, name: str | None = None, client_id: int | None = None,
@@ -673,7 +739,10 @@ def update_site_row(*, user, site_id: int, name: str | None = None, client_id: i
         raise TacticalResourceConflictError("A site with that name already exists for the selected client.") from exc
     except ValidationError as exc:
         raise TacticalResourceValidationError(_validation_message(exc, "Site")) from exc
-    return site_row({"pk": obj.pk, "name": obj.name, "client_id": obj.client_id, "alert_template_id": getattr(obj, "alert_template_id", None)})
+    return site_row({
+        "pk": obj.pk, "name": obj.name, "client_id": obj.client_id, "alert_template_id": getattr(obj, "alert_template_id", None),
+        "client__name": str(Client.objects.filter(pk=obj.client_id).values_list("name", flat=True).first() or ""),
+    })
 
 
 def delete_site_row(*, user, site_id: int, move_to_site_id: int | None = None) -> dict[str, Any] | None:
@@ -721,9 +790,10 @@ def delete_site_row(*, user, site_id: int, move_to_site_id: int | None = None) -
                     if destination is None or not site_write_in_scope(user=user, site_id=int(move_to_site_id)):
                         raise TacticalResourceValidationError("Destination site is outside the caller's writable Tactical scope.")
 
-            deleted = site_row({"pk": source.pk, "name": source.name, "client_id": source.client_id})
+            source_client_name = str(Client.objects.filter(pk=source.client_id).values_list("name", flat=True).first() or "")
+            deleted = site_row({"pk": source.pk, "name": source.name, "client_id": source.client_id, "client__name": source_client_name})
             destination_row = (
-                site_row({"pk": destination.pk, "name": destination.name, "client_id": destination.client_id})
+                site_row({"pk": destination.pk, "name": destination.name, "client_id": destination.client_id, "client__name": source_client_name})
                 if destination is not None else None
             )
             source.delete()
@@ -769,7 +839,10 @@ def delete_client_row(*, user, client_id: int, move_to_site_id: int | None = Non
 
             deleted = client_row({"pk": source.pk, "name": source.name})
             destination_row = (
-                site_row({"pk": destination.pk, "name": destination.name, "client_id": destination.client_id})
+                site_row({
+                    "pk": destination.pk, "name": destination.name, "client_id": destination.client_id,
+                    "client__name": str(Client.objects.filter(pk=destination.client_id).values_list("name", flat=True).first() or ""),
+                })
                 if destination is not None else None
             )
             source.delete()
@@ -865,14 +938,13 @@ def _normalize_custom_value(field, value):
     return cleaned
 
 
-def update_custom_field_rows(*, user, resource_type: str, resource_id: int, values: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
-    if resource_type == "client":
-        if not client_write_in_scope(user=user, client_id=resource_id):
-            return None
-    elif resource_type == "site":
-        if not site_write_in_scope(user=user, site_id=resource_id):
-            return None
-    else:
+def _save_custom_field_values(resource_type: str, resource_id: int, values: list[dict[str, Any]]) -> list[int]:
+    """Validate and save custom-field values for one client or site, with no write-scope check (the caller decided that).
+
+    Used by ``update_custom_field_rows`` after its scope check and by create_client and create_site inside their own
+    transaction, where the creator has just made the object. Returns the sorted field ids saved.
+    """
+    if resource_type not in ("client", "site"):
         raise TacticalResourceValidationError("Unsupported custom-field resource type.")
     if not isinstance(values, list):
         raise TacticalResourceValidationError("values must be an array.")
@@ -914,5 +986,17 @@ def update_custom_field_rows(*, user, resource_type: str, resource_id: int, valu
             else:
                 record.string_value = value
                 record.save(update_fields=["string_value"])
+    return sorted(submitted)
 
+
+def update_custom_field_rows(*, user, resource_type: str, resource_id: int, values: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+    if resource_type == "client":
+        if not client_write_in_scope(user=user, client_id=resource_id):
+            return None
+    elif resource_type == "site":
+        if not site_write_in_scope(user=user, site_id=resource_id):
+            return None
+    else:
+        raise TacticalResourceValidationError("Unsupported custom-field resource type.")
+    _save_custom_field_values(resource_type, resource_id, values)
     return custom_field_rows(user=user, resource_type=resource_type, resource_id=resource_id)

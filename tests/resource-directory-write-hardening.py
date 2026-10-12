@@ -67,6 +67,9 @@ class User:
     def __init__(self): self.role=Role()
     def get_and_set_role_cache(self): return self.role
 
+class _Rows(list):
+    def first(self): return self[0] if self else None
+
 class Query:
     def __init__(self, rows): self.rows=list(rows)
     def all(self): return Query(self.rows)
@@ -84,8 +87,8 @@ class Query:
     def values(self, *fields):
         return [{f: getattr(r, f) for f in fields} for r in self.rows]
     def values_list(self, *fields, flat=False):
-        if flat: return [getattr(r, fields[0]) for r in self.rows]
-        return [tuple(getattr(r, f) for f in fields) for r in self.rows]
+        if flat: return _Rows([getattr(r, fields[0]) for r in self.rows])
+        return _Rows([tuple(getattr(r, f) for f in fields) for r in self.rows])
 
 class Manager:
     def __init__(self, source): self.source=source
@@ -126,12 +129,21 @@ adapter.site_write_in_scope=lambda *, user, site_id: any(s.pk == site_id for s i
 
 user=User()
 created=adapter.create_client_row(user=user, name="Gamma")
-assert created["name"] == "Gamma"
+assert created["client"]["name"] == "Gamma"
 client=CLIENTS[0]
 assert len(SITES) == 1 and SITES[0].client_id == client.pk and SITES[0].name == "Default Site"
-assert client in user.role.can_view_clients.values, "restricted creator was not added to new client scope"
+# 1.17.22 (Tactical parity, CQ73): a role limited only by sites (empty can_view_clients) is NOT widened to the new client.
+assert client not in user.role.can_view_clients.values and created["role_scope_extended"] is None
+assert created["site"]["client_name"] == "Gamma"
+# A role that already lists clients does get the new client, as Tactical does.
+user.role.can_view_clients=Relation([object()])
+second_created=adapter.create_client_row(user=user, name="Delta", default_site_name="HQ")
+assert second_created["role_scope_extended"] == "clients" and SITES[-1].name == "HQ"
+assert any(getattr(v, "pk", None) == second_created["client"]["id"] for v in user.role.can_view_clients.values)
+user.role.can_view_clients=Relation()
 
 # Client update keeps Tactical BaseAuditModel fields in update_fields.
+user.role.can_view_clients=Relation([client])  # an administrator granted the client (the creator was not widened)
 updated=adapter.update_client_row(user=user, client_id=client.pk, name="Gamma Renamed")
 assert updated["name"] == "Gamma Renamed"
 assert set(client.last_update_fields) == {"name", "modified_by", "modified_time"}

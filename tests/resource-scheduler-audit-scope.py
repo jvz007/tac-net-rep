@@ -44,9 +44,16 @@ class Adapter:
     def __init__(self):
         self.client = {'type':'client','id':7,'name':'Old','active':True}
         self.site = {'type':'site','id':11,'name':'Old Site','client_id':7,'active':True}
-    def create_client_row(self, **kw): return {'type':'client','id':8,'name':kw['name'],'active':True}
+    def create_client_row(self, **kw):
+        # 1.17.22: the adapter returns the client, its first site and how the creator's scope grew
+        return {'client': {'type':'client','id':8,'name':kw['name'],'active':True},
+                'site': {'type':'site','id':13,'name':kw['default_site_name'],'client_id':8,'active':True,'client_name':kw['name']},
+                'role_scope_extended': None}
+    def nest_sites(self, rows, **kw): return [{**r, 'sites': []} for r in rows]
     def update_client_row(self, **kw): return {'type':'client','id':kw['client_id'],'name':kw['name'],'active':True}
-    def create_site_row(self, **kw): return {'type':'site','id':12,'name':kw['name'],'client_id':kw['client_id'],'active':True}
+    def create_site_row(self, **kw):
+        return {'site': {'type':'site','id':12,'name':kw['name'],'client_id':kw['client_id'],'active':True,'client_name':'Old'},
+                'role_scope_extended': None}
     def update_site_row(self, **kw):
         return {'type':'site','id':kw['site_id'],'name':kw['name'] or self.site['name'],'client_id':kw['client_id'] or self.site['client_id'],'active':True}
     def clients_queryset(self, **kw): return object()
@@ -77,7 +84,8 @@ ns = {
     '_record_resource_change': record_change,
     'UNSET': object(),  # 1.17.17: the sentinel of update_client and update_site (alert_template_id)
 }
-for name in ('_clean_alert_template_id', '_template_changed'):  # 1.17.17 helpers of the two updates
+ns['_clean_resource_name'] = lambda value, kind: str(value).strip()
+for name in ('_clean_alert_template_id', '_template_changed', '_clean_custom_fields', '_custom_field_ids', '_audit_view'):  # helpers of the writes
     ns[name] = compile_function(resources_path, name, ns)
 for name in ('create_client','update_client','create_site','update_site'):
     ns[name] = compile_function(resources_path, name, ns)

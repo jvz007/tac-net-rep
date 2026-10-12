@@ -1114,6 +1114,29 @@ def _object_id(scope: list[tuple[str, list[str]]], operation: TacticalOperation 
     return _printable(",".join(ids)) or None
 
 
+def _refusal_object_id(operation: TacticalOperation, params: Any) -> str | None:
+    """The object id of a ``core_refused`` row (1.17.22, AD-19 condition 4 second amendment: never body values).
+
+    Called only with cleaned path parameters, after ``_clean_params`` succeeded. A declared ``audit.object_param`` wins, else the
+    first path-sourced scope entry. A body-sourced scope entry never names the row, and neither does a raw, uncleaned value."""
+    if not isinstance(params, dict):
+        return None
+    found = _object_id([], operation, params)
+    if found:
+        return found
+    for spec in operation.scope:
+        where, name = spec.source.split(":", 1)
+        if where != "path":
+            continue
+        value = params.get(name)
+        if value is None or isinstance(value, (bool, dict, list, float)):
+            continue
+        text = _printable(str(value).strip())
+        if text:
+            return text
+    return None
+
+
 def _answer_object_id(operation: TacticalOperation, data: Any, body: dict) -> tuple[str | None, str | None]:
     """The success row's object id from Tactical's answer, then the cleaned body (1.17.21). Returns (id, source), or (None, None).
 
@@ -1773,10 +1796,12 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
     if operation.caller_scope == "unrestricted" and not _caller_unrestricted(user):  # 4a. (1.17.18) only for no client or site limits
         raise _refuse(request, operation, "scope_unrestricted_required", 403, "scope_unrestricted_required", hint, correlation_id)
 
+    refusal_object_id = None  # 1.17.22: a core_refused row names an object only after the path parameters were cleaned
     try:
         correlation_id = _clean_correlation_id(raw_correlation_id)  # 5. (1.17.21: the two cleaners run here) shape, then scope
         audit_before = _clean_audit_before(raw_audit_before)
         params = _clean_params(operation, params)  # 5. shape, then scope
+        refusal_object_id = _refusal_object_id(operation, params)
         body = _clean_body(operation, body)
         if operation.body_selector and not _selector_holds(operation, body):  # 5a. (1.17.18) never run under another operation's scope or verb
             raise _refuse(request, operation, "body_selector_mismatch", 400, "body_selector_mismatch", hint, correlation_id)
@@ -1809,7 +1834,7 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
     except TacticalOperationError as exc:
         # 1.17.21: Core's own refusal of a change writes one row. An error that already carries a verdict (a deny row) keeps it.
         if exc.audit is None and exc.code in CORE_REFUSAL_ROW_CODES and operation.method != "GET":
-            exc.audit = _write_core_refusal(request, operation, exc, None if exc.code == "invalid_params" else hint, correlation_id)
+            exc.audit = _write_core_refusal(request, operation, exc, refusal_object_id, correlation_id)
         raise
 
     from django.urls import resolve  # 7.

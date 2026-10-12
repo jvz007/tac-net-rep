@@ -326,13 +326,103 @@ def _already_guarded(fn) -> bool:
     return bool(getattr(fn, _GUARD_MARKER, False))
 
 
+ROLE_SCOPE_AUDIT_CAP = 1000
+
+
+def _relation_ids(role, name: str):
+    """The sorted ids a role relation lists, or None when the role object has no such relation (a lightweight test stub)."""
+    relation = getattr(role, name, None)
+    if relation is None:
+        return None
+    return sorted({int(value) for value in relation.values_list("pk", flat=True)})
+
+
+def _role_scope_lists(role_id):
+    """``{"clients": [ids], "sites": [ids]}`` for one role, or None when the role is gone or exposes no scope relations.
+
+    Reads ``can_view_clients`` and ``can_view_sites`` only (ids, never names). Both lists empty is Tactical's unrestricted role.
+    """
+    if role_id is None:
+        return None
+    role = Role.objects.filter(pk=role_id).first()
+    if role is None:
+        return None
+    clients = _relation_ids(role, "can_view_clients")
+    sites = _relation_ids(role, "can_view_sites")
+    if clients is None or sites is None:
+        return None
+    return {"clients": clients, "sites": sites}
+
+
+def _scope_audit_view(lists: dict | None) -> dict:
+    """The audited form of a role's lists: sorted ids capped at ROLE_SCOPE_AUDIT_CAP, with a count and a truncated flag."""
+    lists = lists or {"clients": [], "sites": []}
+    view = {}
+    for key in ("clients", "sites"):
+        ids = list(lists.get(key) or [])
+        view[key] = {
+            "ids": ids[:ROLE_SCOPE_AUDIT_CAP],
+            "count": len(ids),
+            "truncated": len(ids) > ROLE_SCOPE_AUDIT_CAP,
+        }
+    return view
+
+
+def _audit_role_scope_change(actor, *, role_id, action: str, before: dict | None, after: dict | None) -> bool:
+    """Write one strict Core audit row when a role's client or site list changed (1.17.22). Returns True when a row was written.
+
+    Tactical's own audit compares a serialisation at save time and the serializer sets many-to-many fields afterwards, so a
+    change that only touches these two lists leaves no Tactical audit row. The write is strict: it runs inside the guard's
+    transaction, so a failed audit write rolls the role save back. Ids only, never names.
+    """
+    if after is None:
+        return False
+    before_lists = before or {"clients": [], "sites": []}
+    if before_lists.get("clients") == after.get("clients") and before_lists.get("sites") == after.get("sites"):
+        return False
+    from .audit import record
+    try:
+        record(
+            actor=actor,
+            module_id="core",
+            action=action,
+            object_type="role_scope",
+            object_id=str(role_id),
+            message="Tactical role client and site lists changed.",
+            before=_scope_audit_view(before_lists),
+            after=_scope_audit_view(after),
+            metadata={"role_id": int(role_id)},
+            strict=True,
+        )
+    except Exception as exc:
+        raise RuntimeError("A role scope change requires a persisted Core audit record.") from exc
+    return True
+
+
+def _succeeded(response) -> bool:
+    status = getattr(response, "status_code", 200)
+    return isinstance(status, int) and status < 400
+
+
 def _wrap_role_create(original):
     @wraps(original)
     def guarded(self, request, *args, **kwargs):
         violation = _role_create_violation(request.user, request.data)
         if violation:
             _raise_violation(request.user, violation)
-        return original(self, request, *args, **kwargs)
+        # Tactical's create answers with text only, so find the new role by id and name inside one transaction.
+        with transaction.atomic():
+            newest = Role.objects.order_by("-pk").values_list("pk", flat=True).first()
+            response = original(self, request, *args, **kwargs)
+            if newest is not None and _succeeded(response):
+                name = _payload_get(request.data, "name")
+                created = Role.objects.filter(pk__gt=newest, name=name).values_list("pk", flat=True).first() if name else None
+                if created is not None:
+                    _audit_role_scope_change(
+                        request.user, role_id=created, action="add",
+                        before=None, after=_role_scope_lists(created),
+                    )
+            return response
     return _mark_guarded(guarded)
 
 
@@ -344,7 +434,14 @@ def _wrap_role_update(original):
             role = Role.objects.select_for_update().only("id", "is_superuser").filter(pk=pk).first()
             violation = _role_update_violation(request.user, role, request.data)
             if violation is None:
-                return original(self, request, pk, *args, **kwargs)
+                before = _role_scope_lists(role.pk) if role is not None else None
+                response = original(self, request, pk, *args, **kwargs)
+                if before is not None and _succeeded(response):
+                    _audit_role_scope_change(
+                        request.user, role_id=role.pk, action="modify",
+                        before=before, after=_role_scope_lists(role.pk),
+                    )
+                return response
         _raise_violation(request.user, violation)
     return _mark_guarded(guarded)
 

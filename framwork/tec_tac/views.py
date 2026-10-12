@@ -229,21 +229,40 @@ def _tec_tac_totp_uri(request, secret: str | None = None) -> str:
 def _is_short_lived_knox_setup_token(request) -> bool:
     """Return True only for the bounded Knox token Tactical issues from checkcreds.
 
-    Upstream Tactical currently gives that token a 180-second TTL. Keep a small
-    tolerance so a harmless upstream adjustment does not break enrollment, while
-    normal operational Knox sessions remain ineligible for this endpoint.
+    Tactical issues that token with a 180-second life, but its Knox settings
+    refresh a token on first use (AUTO_REFRESH, TOKEN_TTL 5 hours), which
+    stretches the expiry to about now plus 5 hours. So the expiry minus the
+    creation time cannot tell a setup token from a normal session. Core judges
+    the token by its age instead: it must have been created no more than five
+    minutes ago, belong to a user with no authenticator yet (and not an SSO
+    user), and not be expired. The Knox digest ties it to this sign-in.
+    Naive or missing times fail closed. Tactical's own 5-hour life of a used
+    setup token is Tactical's behaviour and is not changed here.
     """
     auth = getattr(request, "auth", None)
     digest = str(getattr(auth, "digest", "") or "")
     created = getattr(auth, "created", None)
     expiry = getattr(auth, "expiry", None)
-    if not digest or created is None or expiry is None:
+    if not digest or created is None:
+        return False
+    user = getattr(request, "user", None)
+    if bool(getattr(user, "is_sso_user", False)) or getattr(user, "totp_key", None):
         return False
     try:
-        seconds = (expiry - created).total_seconds()
+        if created.tzinfo is None or created.utcoffset() is None:
+            return False
+        now = datetime.now(timezone.utc)
+        age = (now - created).total_seconds()
+        if age < -30 or age > 5 * 60:
+            return False
+        if expiry is not None:
+            if expiry.tzinfo is None or expiry.utcoffset() is None:
+                return False
+            if expiry <= now:
+                return False
     except Exception:
         return False
-    return 0 < seconds <= 5 * 60
+    return True
 
 
 def _render_totp_qr_svg(provisioning_uri: str) -> str:
@@ -293,7 +312,13 @@ class TotpEnrollmentView(APIView):
                 requested_by=username,
                 force=True,
             )
-            return Response({"detail": "A fresh Tactical authenticator setup session is required."}, status=403)
+            return Response(
+                {
+                    "detail": "A fresh Tactical authenticator setup session is required.",
+                    "code": "setup_session_required",
+                },
+                status=403,
+            )
 
         password = str(request.data.get("password") or "")
         if not password or not request.user.check_password(password):

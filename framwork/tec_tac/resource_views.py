@@ -94,16 +94,25 @@ class ResourceMutableListView(ResourceListView):
         try:
             context = user_context(request.user)
             if self.resource_type == "client":
-                data = _body(request, {"name"})
+                data = _body(request, {"name", "site_name", "custom_fields"})
                 if "name" not in data:
                     raise ResourceValidationError("name is required.")
-                return Response(create_client(name=data["name"], context=context), status=201)
+                # site_name is the first site's name (core.resources 1.5.0); without it the site is named "Default Site"
+                return Response(create_client(
+                    name=data["name"],
+                    site_name=data.get("site_name"),
+                    custom_fields=data.get("custom_fields"),
+                    context=context,
+                ), status=201)
             if self.resource_type == "site":
-                data = _body(request, {"name", "client_id"})
+                data = _body(request, {"name", "client_id", "custom_fields"})
                 missing = [key for key in ("client_id", "name") if key not in data]
                 if missing:
                     raise ResourceValidationError("Missing required field(s): " + ", ".join(missing))
-                return Response(create_site(client_id=data["client_id"], name=data["name"], context=context), status=201)
+                return Response(create_site(
+                    client_id=data["client_id"], name=data["name"],
+                    custom_fields=data.get("custom_fields"), context=context,
+                ), status=201)
             raise ResourceValidationError("This resource type is read-only.")
         except ResourceDirectoryError as exc:
             return _error_response(exc)

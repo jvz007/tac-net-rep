@@ -541,8 +541,10 @@ writes exactly one row. The action is `custom:operation-failed`, the same Core-o
 the declared object type, the object id the deny rows use, the correlation id, a fixed Core text ("Core refused this change before sending it
 to Tactical (invalid_body); nothing was changed."), and metadata `declared_action`, `result: failed`, `failure: core_refused`, `code`, `status`,
 `operation`, `method` and `route`. It has no before or after value, no body, query or upload value, and no text from the caller's input.
-The object id comes from the path parameter named by `audit.object_param` or from scope ids that were already cleaned. It never comes from a
-body field value. An `invalid_params` refusal has no object id, because the parameters are the thing that was refused.
+The object id comes from the path parameter named by `audit.object_param`, or else from the first path-sourced scope entry, and only after the
+path parameters were cleaned (since 1.17.22; before that the row took a hint built from the raw call). It never comes from a body field value,
+including a body-sourced scope entry, and never from a raw value. So `invalid_params`, `invalid_correlation_id` and `invalid_audit_before`
+(which are checked before the parameters are cleaned) and a body-scoped operation write a row with no object id.
 
 `TacticalOperationError.audit` is the verdict `{recorded, id, action}`, and the `X-Tec-Tac-Audit` header says the same over HTTP. A failed
 audit write gives `{recorded: false, error: audit_write_failed}` and raises nothing else.

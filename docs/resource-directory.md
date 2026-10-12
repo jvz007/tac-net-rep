@@ -1,7 +1,7 @@
 # Core Resource Directory
 
 Contract ID: `core.resources`  
-Contract version: `1.4.0`  
+Contract version: `1.5.0`  
 Python namespace: `tec_tac.resources`
 
 ## Purpose
@@ -24,6 +24,8 @@ tec_tac.resources           <- stable public contract
         +-- Alerts / Automation / other modules
 ```
 
+Contract 1.5 (Core 1.17.22, additive, still major 1) adds `sites` to client records (that client's site records inside the caller's scope), `client_name` to site records, `site_name` and `custom_fields` to `create_client`, `custom_fields` to `create_site`, and the role scope list contract below. Existing keys, query parameters, paging and error codes do not change.
+
 Contract 1.4 (Core 1.17.17, additive, still major 1) adds `alert_template_id` to client and site records, lets `update_client` and `update_site` set or clear it, and adds the scope descriptor (`scope_descriptor`, `scope_unrestricted`, `has_whole_client_access`, `ResourceAccessContext.scope`, and `tactical_scope` in the runtime context). Existing callers keep working: the new record keys are appended after the old ones and every new keyword is optional.
 
 Contract 1.3 keeps the 1.2 scoped read/create/update boundary and adds audited client/site deletion with atomic agent relocation plus client/site custom-field value editing. Agent mutation remains outside this contract. A new client is still created atomically with a `Default Site`, restricted creators are granted scope to the client they create, and clients retain at least one site.
@@ -42,7 +44,9 @@ Contract 1.3 keeps the 1.2 scoped read/create/update boundary and adds audited c
 }
 ```
 
-Stable fields: `type`, `id`, `name`, `active`, `alert_template_id` (since 1.4.0, an integer or `null`; appended after the earlier keys).
+Stable fields: `type`, `id`, `name`, `active`, `alert_template_id` (since 1.4.0, an integer or `null`; appended after the earlier keys), `sites` (since 1.5.0, appended last).
+
+`sites` is the list of that client's site records the caller may see, ordered by name then id, each with the shape of a site record below. It uses the same `Site.filter_by_role` rule as the sites read. A client-limited role gets every site of its clients plus granted sites. A site-only role gets only its granted sites under the parent client. An unrestricted caller and a trusted global service context get every site. A client with no site in scope has `"sites": []`. It is loaded with one query per page. It needs only `can_list_clients`, as Tactical's own `GET /clients/` does, so showing nested site names to a role without `can_list_sites` opens no data beyond Tactical (AD-5, AD-25). The sites read itself stays refused without `can_list_sites`. `list_clients`, `get_client`, `create_client` and `update_client` carry it.
 
 ### Site
 
@@ -57,7 +61,20 @@ Stable fields: `type`, `id`, `name`, `active`, `alert_template_id` (since 1.4.0,
 }
 ```
 
-Stable fields: `type`, `id`, `name`, `client_id`, `active`, `alert_template_id` (since 1.4.0, an integer or `null`).
+Stable fields: `type`, `id`, `name`, `client_id`, `active`, `alert_template_id` (since 1.4.0, an integer or `null`), `client_name` (since 1.5.0, appended last).
+
+`client_name` is the owning client's name, as Tactical's own `/clients/sites/` returns it. It comes from the client join with no extra query per row, so a role with only `can_list_sites` can group sites by client without reading clients.
+
+#### What each role can read (since 1.5.0)
+
+| Role holds | Clients read | Sites read |
+| --- | --- | --- |
+| List clients only | 200, each client with its nested sites | 403 |
+| List sites only | 403 | 200, each site with `client_id` and `client_name` |
+| Both | 200 | 200 |
+| Neither | 403 | 403 (unchanged; names from endpoint rows are not built) |
+
+The UI shows the Clients and Sites page when the role holds either flag (or is a superuser). It reads clients when it can, otherwise sites grouped by `client_name`, and never calls the other read after a 403. Writes still need `can_manage_clients` or `can_manage_sites` plus the Core codenames.
 
 `alert_template_id` is the id of the alert template Tactical assigns to the client or site, or `null` for none. It is an id only. Core does not import Alerts models and does not list templates: the Alerts module owns the template list and the picker. Anyone who can already list clients or sites sees the id.
 
@@ -150,16 +167,27 @@ Core computes the descriptor once in the adapter, from the same rule that Schedu
 
 ### Client/site write operations
 
-- `create_client(name=..., context=...)`
+- `create_client(name=..., context=..., site_name=None, custom_fields=None)`
 - `update_client(client_id, name=None, alert_template_id=UNSET, context=...)`
 - `delete_client(client_id, move_to_site_id=None, context=...)`
-- `create_site(client_id=..., name=..., context=...)`
+- `create_site(client_id=..., name=..., context=..., custom_fields=None)`
 - `update_site(site_id, name=None, client_id=None, alert_template_id=UNSET, context=...)`
 - `delete_site(site_id, move_to_site_id=None, context=...)`
 - `list_custom_fields(resource_type, resource_id, context=...)`
 - `update_custom_fields(resource_type, resource_id, values=[...], context=...)`
 
 The write operations return the same stable client/site record shapes as the read contract. Core never returns Tactical ORM instances.
+
+#### Create client and create site (since 1.5.0, Core 1.17.22)
+
+Tactical's Add client creates the client and its first site together, and Add site can carry custom fields. Core does the same.
+
+- `site_name` is the first site's name. Every new caller and form sends it. A call without it still works and names the site `Default Site` (deprecated compatibility path; the audit metadata then says `default_site_created: true`). A blank `site_name` is refused.
+- `custom_fields` is an optional list of `{field_id, value}`. They are validated by the same rules as `update_custom_fields` and saved in the same transaction as the client and site, so a bad custom field rolls everything back. The write-scope check is skipped for them because the creator just created the object.
+- Names may not contain `|`. Tactical refuses it in client and site names, and Core refuses it in create and rename: `Client name cannot contain the | character`.
+- As Tactical does, a new client is added to the creator's `can_view_clients` only when that list is not empty, and a new site to `can_view_sites` only when that list is not empty. A role limited only by sites that adds a client is not widened to whole-client authority (a narrowing of Core 1.17.21, which widened every restricted creator). Superusers and unrestricted roles are unchanged.
+- The strict audit row carries `first_site_id`, `role_scope_extended` (`clients`, `sites` or `none`) and `custom_field_ids` (ids only, never values). Audit before and after snapshots are built without `sites` and `client_name`.
+- The record `create_client` returns carries `sites` with the first site, even when the creator's scope does not show it afterwards.
 
 #### Alert template (since 1.4.0)
 
@@ -245,12 +273,14 @@ Read query parameters mirror the Python filters. HTTP always derives a user cont
 Create payloads:
 
 ```json
-{"name": "Client name"}
+{"name": "Client name", "site_name": "Head office", "custom_fields": [{"field_id": 4, "value": "AC-001"}]}
 ```
 
 ```json
-{"client_id": 123, "name": "Site name"}
+{"client_id": 123, "name": "Site name", "custom_fields": [{"field_id": 5, "value": true}]}
 ```
+
+`site_name` and `custom_fields` are optional on the wire for compatibility; new forms send `site_name`.
 
 Update payloads accept only writable fields. Unknown fields are rejected. Agent HTTP resources remain read-only.
 
@@ -259,6 +289,16 @@ Update payloads accept only writable fields. Unknown fields are rejected. Agent 
 ```
 
 `PATCH /api/tfd/resources/clients/<id>/` accepts `name`, `alert_template_id` or both (at least one). `PATCH /api/tfd/resources/sites/<id>/` accepts `name`, `client_id`, `alert_template_id` or any of them. `alert_template_id: null` clears the template.
+
+### Role client and site lists (since Core 1.17.22)
+
+Core has no roles API of its own for these lists. The routes are Tactical's `GET|POST /accounts/roles/` and `GET|PUT|DELETE /accounts/roles/<id>/`. They already read and save `can_view_clients` and `can_view_sites` as lists of ids.
+
+- An empty pair means unrestricted. A role limited to sites only is site mode.
+- `PUT` replaces both lists. A limited editor sees only its own clients and sites in the pickers, so the UI must send back the ids it loaded and could not show.
+- The pickers read clients (with nested sites) and sites from this Resource Directory. List clients is enough for the tree.
+- Core writes one strict audit row for a changed pair: module `core`, action `add` or `modify`, object type `role_scope`, object id the role id, `before` and `after` as sorted id lists (capped at 1000, with counts and a `truncated` flag), ids only, never names. It is written only when a list changed, inside the same transaction as the role save, so a failed audit write rolls the save back. Tactical's own audit does not record a change that only touches these two lists.
+- Core does not change who may edit role lists. Tactical's rule stands (any role with Manage roles); see CQ72 in the questions file.
 
 ### Scope in the runtime context
 
@@ -305,6 +345,8 @@ If Tactical later changes model/table/field layout, update the Core adapter whil
 `core.resources` follows semantic contract versioning.
 
 Contract `1.1.0` is additive over `1.0.0`: it preserves all read operations and resource shapes while adding client/site create/update operations, write authorization metadata and stable conflict errors. A Tactical internal schema change alone is not a reason to change this contract version.
+
+Contract `1.5.0` is additive over `1.4.0`: client records gain `sites`, site records gain `client_name` (both appended last), `create_client` gains `site_name` and `custom_fields`, `create_site` gains `custom_fields`.
 
 Contract `1.4.0` is additive over `1.3.0`: client and site records gain `alert_template_id` (appended last), `update_client` and `update_site` gain an optional `alert_template_id`, and the scope operations are new.
 

@@ -43,9 +43,9 @@ DATA = {
         {"type": "client", "id": 2, "name": "Beta", "active": True, "alert_template_id": None},
     ],
     "sites": [
-        {"type": "site", "id": 11, "name": "Alpha One", "client_id": 1, "active": True, "alert_template_id": None},
-        {"type": "site", "id": 12, "name": "Alpha Two", "client_id": 1, "active": True, "alert_template_id": None},
-        {"type": "site", "id": 21, "name": "Beta One", "client_id": 2, "active": True, "alert_template_id": None},
+        {"type": "site", "id": 11, "name": "Alpha One", "client_id": 1, "active": True, "alert_template_id": None, "client_name": "Alpha"},
+        {"type": "site", "id": 12, "name": "Alpha Two", "client_id": 1, "active": True, "alert_template_id": None, "client_name": "Alpha"},
+        {"type": "site", "id": 21, "name": "Beta One", "client_id": 2, "active": True, "alert_template_id": None, "client_name": "Beta"},
     ],
     "agents": [
         {"type": "agent", "id": "a-1", "hostname": "ALPHA-PC", "client_id": 1, "site_id": 11, "active": True, "platform": "windows", "monitoring_type": "workstation", "last_seen": None},
@@ -90,11 +90,22 @@ def agents_queryset(*, user=None, trusted=False, client_id=None, site_id=None, s
     if search: rows = [r for r in rows if search.lower() in (r["hostname"] + r["id"]).lower()]
     return FakeQS(rows)
 
+NEST_QUERIES = []
+
+def nest_sites(rows, *, user=None, trusted=False):
+    # one site query for the whole page, scoped like Site.filter_by_role (granted sites plus the sites of granted clients)
+    NEST_QUERIES.append([r["id"] for r in rows])
+    ids = {r["id"] for r in rows}
+    visible = [s for s in DATA["sites"] if s["client_id"] in ids and (trusted or s["id"] in getattr(user, "allowed_sites", set()) or s["client_id"] in getattr(user, "allowed_clients", set()))]
+    visible.sort(key=lambda s: (s["name"], s["id"]))
+    return [{**r, "sites": [dict(s) for s in visible if s["client_id"] == r["id"]]} for r in rows]
+
 def page(qs, offset, limit): return list(qs.rows[offset:offset+limit]), len(qs.rows)
 def get(qs, rid): return next((dict(r) for r in qs.rows if r["id"] == rid), None)
 adapter.clients_queryset = clients_queryset
 adapter.sites_queryset = sites_queryset
 adapter.agents_queryset = agents_queryset
+adapter.nest_sites = nest_sites
 adapter.page_clients = lambda qs, *, offset, limit: page(qs, offset, limit)
 adapter.page_sites = lambda qs, *, offset, limit: page(qs, offset, limit)
 adapter.page_agents = lambda qs, *, offset, limit: page(qs, offset, limit)
@@ -111,16 +122,17 @@ def site_write_in_scope(*, user, site_id):
         return False
     return site_id in user.allowed_sites or site["client_id"] in user.allowed_clients
 
-def create_client_row(*, user, name):
+def create_client_row(*, user, name, default_site_name="Default Site", custom_fields=None):
     if any(r["name"].lower() == name.lower() for r in DATA["clients"]):
         raise TacticalResourceConflictError("A client with that name already exists.")
     new_id = max(r["id"] for r in DATA["clients"]) + 1
     row = {"type":"client","id":new_id,"name":name,"active":True,"alert_template_id":None}
     DATA["clients"].append(row)
     site_id = max(r["id"] for r in DATA["sites"]) + 1
-    DATA["sites"].append({"type":"site","id":site_id,"name":"Default Site","client_id":new_id,"active":True,"alert_template_id":None})
+    first = {"type":"site","id":site_id,"name":default_site_name,"client_id":new_id,"active":True,"alert_template_id":None,"client_name":name}
+    DATA["sites"].append(first)
     user.allowed_clients.add(new_id)
-    return dict(row)
+    return {"client": dict(row), "site": dict(first), "role_scope_extended": "clients"}
 
 def update_client_row(*, user, client_id, name):
     if not client_write_in_scope(user=user, client_id=client_id): return None
@@ -131,15 +143,16 @@ def update_client_row(*, user, client_id, name):
     row["name"] = name
     return dict(row)
 
-def create_site_row(*, client_id, name):
+def create_site_row(*, client_id, name, user=None, custom_fields=None):
     if name == "INVALID":
         raise TacticalResourceValidationError("Site failed Tactical validation.")
     if any(r["client_id"] == client_id and r["name"].lower() == name.lower() for r in DATA["sites"]):
         raise TacticalResourceConflictError("A site with that name already exists for the selected client.")
     new_id = max(r["id"] for r in DATA["sites"]) + 1
-    row = {"type":"site","id":new_id,"name":name,"client_id":client_id,"active":True,"alert_template_id":None}
+    owner = next(r for r in DATA["clients"] if r["id"] == client_id)
+    row = {"type":"site","id":new_id,"name":name,"client_id":client_id,"active":True,"alert_template_id":None,"client_name":owner["name"]}
     DATA["sites"].append(row)
-    return dict(row)
+    return {"site": dict(row), "role_scope_extended": None}
 
 def update_site_row(*, user, site_id, name=None, client_id=None):
     if not site_write_in_scope(user=user, site_id=site_id): return None
@@ -153,7 +166,9 @@ def update_site_row(*, user, site_id, name=None, client_id=None):
         if sum(1 for item in DATA["sites"] if item["client_id"] == row["client_id"]) <= 1:
             raise TacticalResourceValidationError("A client must retain at least one site.")
     if name is not None: row["name"] = name
-    if client_id is not None: row["client_id"] = client_id
+    if client_id is not None:
+        row["client_id"] = client_id
+        row["client_name"] = next(r for r in DATA["clients"] if r["id"] == client_id)["name"]
     return dict(row)
 
 adapter.client_write_in_scope = client_write_in_scope
@@ -475,7 +490,7 @@ assert AUDITS[-1]["action"] == "delete" and AUDITS[-1]["metadata"]["destination_
 
 # Contract metadata is versioned and discoverable.
 meta = resources.resource_contract_metadata()
-assert meta["id"] == "core.resources" and meta["version"] == "1.4.0"
+assert meta["id"] == "core.resources" and meta["version"] == "1.5.0"
 assert meta["pagination"]["maximum_page_number"] == 10000
 assert meta["list_contracts"]["clients"]["http"] == "GET /api/tfd/resources/clients/"
 assert meta["list_contracts"]["sites"]["response"]["pages"] == "integer"

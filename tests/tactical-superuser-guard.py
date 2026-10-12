@@ -43,6 +43,7 @@ class Query:
         if int(pk) not in self.manager.rows: raise DoesNotExist()
         return self.manager.rows[int(pk)]
     def filter(self, pk): self.pk = int(pk); return self
+    def values_list(self, *args, **kwargs): return self
     def first(self): return self.manager.rows.get(self.pk)
 
 class Manager:
@@ -51,6 +52,8 @@ class Manager:
     def filter(self, pk): return Query(self).filter(pk)
     def select_for_update(self, *args, **kwargs): return Query(self)
     def select_related(self, *args): return Query(self)
+    # 1.17.22: the role create wrapper looks up the newest role id; this stub holds no scope rows
+    def order_by(self, *args): return Query(self)
 
 class Role:
     DoesNotExist = DoesNotExist
