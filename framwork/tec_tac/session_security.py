@@ -893,14 +893,20 @@ def revoke_all_login_sessions(
     reason: str = "administrator-request",
     requested_by: str = "",
     requester=None,
-    include_current: bool = False,
+    include_current: bool = True,
     current_digest: str | None = None,
+    current_session=None,
 ) -> dict[str, Any]:
-    """End every login session of every user (1.17.24, CO17). Effective superuser only.
+    """End every login session of every user (1.17.24, CO17; 1.17.25, CQ76). Effective superuser only.
 
     In one transaction: revoke every non-revoked trust row, delete every Tactical Knox token (protected accounts
     included), write one session audit event and one strict Core audit row (counts only). A failed Core audit write
-    raises, which rolls everything back. The caller's own current session is kept unless ``include_current``.
+    raises, which rolls everything back.
+
+    The caller's own session ends too by default (``include_current`` True, CQ76). With ``include_current`` False the
+    caller's session is kept when the caller's token digest is known: that token is not deleted, and the caller's trust
+    row is not revoked, found by digest or, for a legacy row with no bound digest, by ``current_session``'s primary key.
+    ``current_kept`` is True only when both were actually spared. It is never the bare value of ``include_current``.
     """
     if not _is_effective_superuser(requester):
         _audit_all_sessions_denied(requester)
@@ -909,11 +915,15 @@ def revoke_all_login_sessions(
 
     reason = str(reason or "administrator-request")[:255]
     keep = "" if include_current else str(current_digest or "")
+    keep_pk = getattr(current_session, "pk", None) if keep else None
+
+    def spared(trust) -> bool:
+        return bool(keep) and (str(getattr(trust, "knox_digest", "") or "") == keep or (keep_pk is not None and trust.pk == keep_pk))
+
     with transaction.atomic():
-        trust_qs = TecTacSessionTrust.objects.select_for_update().filter(revoked=False)
-        if keep:
-            trust_qs = trust_qs.exclude(knox_digest=keep)
-        sessions = list(trust_qs)
+        open_rows = list(TecTacSessionTrust.objects.select_for_update().filter(revoked=False))
+        trust_spared = any(spared(trust) for trust in open_rows)
+        sessions = [trust for trust in open_rows if not spared(trust)]
         for trust in sessions:
             _revoke_locked(trust, reason=reason, requested_by=requested_by, event_type="session_revoked", invalidate_knox=False)
         token_qs = AuthToken.objects.all()
@@ -922,7 +932,15 @@ def revoke_all_login_sessions(
         users = len({token.user_id for token in token_qs})
         tokens = len(list(token_qs))
         token_qs.delete()
-        counts = {"tokens": tokens, "users": users, "tec_tac_sessions": len(sessions), "include_current": bool(include_current)}
+        token_spared = bool(keep) and AuthToken.objects.filter(digest=keep).exists()
+        current_kept = bool(token_spared and trust_spared)
+        counts = {
+            "tokens": tokens,
+            "users": users,
+            "tec_tac_sessions": len(sessions),
+            "include_current": bool(include_current),
+            "current_kept": current_kept,
+        }
         _audit("all_login_sessions_revoked", reason=reason, requested_by=requested_by, metadata=counts, force=True)
         record(
             actor=requester,
@@ -934,7 +952,7 @@ def revoke_all_login_sessions(
             metadata=counts,
             strict=True,
         )
-    return {"revoked_tokens": tokens, "revoked_sessions": len(sessions), "users": users, "current_kept": bool(keep)}
+    return {"revoked_tokens": tokens, "revoked_sessions": len(sessions), "users": users, "current_kept": current_kept}
 
 
 def _audit_all_sessions_denied(requester) -> None:

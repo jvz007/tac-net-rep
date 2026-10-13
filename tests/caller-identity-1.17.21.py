@@ -255,28 +255,39 @@ def record_users(out, *args, **kwargs):
     out.append(ci.calling_module(provider_module_id="globalsettings"))
     return [USER]
 
-def record_mail(out, *args, **kwargs):
+def record_flag(out, *args, **kwargs):
     out.append(ci.calling_module(provider_module_id="globalsettings"))
-    return MAIL
+    return True
+
+def record_host(out, *args, **kwargs):
+    out.append(ci.calling_module(provider_module_id="globalsettings"))
+    return HOST
+
+def record_count(out, *args, **kwargs):
+    out.append(ci.calling_module(provider_module_id="globalsettings"))
+    return 0
 '''
 seam = run_file(EXT / "globalsettings" / "seams.py", SEAM_PROVIDER_SRC)
 SEAM_CALLER_SRC = '''
 import functools
 
-def via_send(real, notice, users, cfg, provider_fn, out):
-    return real.send_p1_email(notice, users, settings=cfg, have=lambda ids: set(), mark=lambda u, c: None,
+def via_send(real, notice, users, provider_fn, out):
+    return real.send_p1_email(notice, users, configured=lambda: True, host=lambda: "smtp.example.com", have=lambda ids: set(),
+                              mark=lambda u, c: None, recent=lambda since: 0, audit=lambda j, m: None,
                               send=functools.partial(provider_fn, out))
 
-def via_have(real, notice, users, cfg, provider_fn, out):
-    return real.send_p1_email(notice, users, settings=cfg, have=functools.partial(provider_fn, out), mark=lambda u, c: None,
-                              send=lambda cfg, msg: None)
+def via_have(real, notice, users, provider_fn, out):
+    return real.send_p1_email(notice, users, configured=lambda: True, host=lambda: "smtp.example.com",
+                              have=functools.partial(provider_fn, out), mark=lambda u, c: None, recent=lambda since: 0,
+                              audit=lambda j, m: None, send=lambda a, s, b: True)
 
-def via_mark(real, notice, users, cfg, provider_fn, out):
-    return real.send_p1_email(notice, users, settings=cfg, have=lambda ids: set(), send=lambda cfg, msg: None,
+def via_mark(real, notice, users, provider_fn, out):
+    return real.send_p1_email(notice, users, configured=lambda: True, host=lambda: "smtp.example.com", have=lambda ids: set(),
+                              send=lambda a, s, b: True, recent=lambda since: 0, audit=lambda j, m: None,
                               mark=functools.partial(provider_fn, out))
 
-def direct(real, notice, users, cfg):
-    return real.send_p1_email(notice, users, settings=cfg)
+def direct(real, notice, users):
+    return real.send_p1_email(notice, users)
 
 def sweep(real, job, **seams):
     return real.sweep_failed_jobs(jobs=[job], **seams)
@@ -288,25 +299,33 @@ seam_caller = run_file(EXT / "alerts" / "seam_caller.py", SEAM_CALLER_SRC)
 real_notice = {"client_id": "module-job-failed:abc", "level": "error", "title": "Module job failed", "message": "x", "action_label": "a",
                "action_route": "/m", "requested_by": "", "module": "checks"}
 real_user = SimpleNamespace(pk=1, email="admin@example.com")
-real_cfg = {"smtp_from_email": "from@example.com", "smtp_host": "smtp.example.com"}
-seam["USER"], seam["MAIL"] = real_user, real_cfg
+seam["USER"], seam["HOST"] = real_user, "smtp.example.com"
+# 1.17.25: the public-address check resolves the mail server's name; a fake resolver keeps this test off the network
+priority_mail = importlib.import_module("tec_tac.priority_mail")
+priority_mail.resolve_addresses = lambda name: ["93.184.216.34"]
 for name, fn, provider_fn in (("send=partial(provider_fn)", seam_caller["via_send"], seam["record"]),
                               ("have=partial(provider_fn)", seam_caller["via_have"], seam["record_have"]),
                               ("mark=partial(provider_fn)", seam_caller["via_mark"], seam["record"])):
     out = []
-    fn(real, real_notice, [real_user], real_cfg, provider_fn, out)
+    fn(real, real_notice, [real_user], provider_fn, out)
     must(len(out) == 1, (name, out))
     must(out[0] is None, (name, "the provider function sits behind send_p1_email, a Core frame", out[0]))
 # called directly from a module file, with the real module's own sender swapped for the provider function
 direct_out = []
-saved_defaults = (real._smtp_send, real._default_mark_sent, real._default_existing)
-real._smtp_send = functools.partial(seam["record"], direct_out)
+saved_defaults = (real._default_recent, real._default_mark_sent, real._default_existing, real._default_audit,
+                  priority_mail.is_configured, priority_mail.smtp_host, priority_mail.send_one)
+real._default_recent = lambda since: 0
 real._default_mark_sent = lambda user, client_id: None
 real._default_existing = lambda ids: set()
+real._default_audit = lambda job_id, metadata: None
+priority_mail.is_configured = lambda: True
+priority_mail.smtp_host = lambda: "smtp.example.com"
+priority_mail.send_one = functools.partial(seam["record"], direct_out)
 try:
-    seam_caller["direct"](real, real_notice, [real_user], real_cfg)
+    seam_caller["direct"](real, real_notice, [real_user])
 finally:
-    real._smtp_send, real._default_mark_sent, real._default_existing = saved_defaults
+    (real._default_recent, real._default_mark_sent, real._default_existing, real._default_audit,
+     priority_mail.is_configured, priority_mail.smtp_host, priority_mail.send_one) = saved_defaults
 must(len(direct_out) == 1 and direct_out[0] is None, ("direct call", direct_out))
 
 
@@ -315,7 +334,8 @@ def failed_job():
 
 
 QUIET = {"recipients_for": lambda requested_by: [real_user], "publish": lambda users, n: 1, "existing": lambda ids: set(),
-         "mail_settings": lambda: real_cfg, "email_have": lambda ids: set(), "send_mail": lambda cfg, msg: None, "mark_sent": lambda u, c: None}
+         "configured": lambda: True, "host": lambda: "smtp.example.com", "send": lambda address, subject, body: True,
+         "recent": lambda since: 0, "audit": lambda job_id, metadata: None, "email_have": lambda ids: set(), "mark_sent": lambda u, c: None}
 # The review's case, called from a module file: the real sweep_failed_jobs with real.send_p1_email rebound to (a) functools.partial of the
 # provider function and (b) an eval lambda that calls it. Both give None.
 saved_send = real.send_p1_email
@@ -329,8 +349,9 @@ try:
 finally:
     real.send_p1_email = saved_send
 # Every seam of sweep_failed_jobs set to a partial of the provider function, and to an eval lambda that calls it: each gives None.
-SEAM_FN = {"recipients_for": "record_users", "publish": "record", "existing": "record_have", "mail_settings": "record_mail",
-           "email_have": "record_have", "send_mail": "record", "mark_sent": "record"}
+SEAM_FN = {"recipients_for": "record_users", "publish": "record", "existing": "record_have", "configured": "record_flag",
+           "host": "record_host", "send": "record", "recent": "record_count", "audit": "record", "email_have": "record_have",
+           "mark_sent": "record"}
 for seam_name, provider_name in SEAM_FN.items():
     for label, make in (("partial", lambda out, p=provider_name: functools.partial(seam[p], out)),
                         ("eval lambda", lambda out, p=provider_name: seam_caller["generated"](seam[p], out))):

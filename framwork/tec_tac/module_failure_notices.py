@@ -9,18 +9,32 @@ install, bundle install and batch install) for the people who can act on it, thr
   next tick never stores it again and never resets a notice the person has read.
 * Recipients (CQ41, assumption (a), the smallest audience): every active effective superuser, plus the user named in the
   job's ``requested_by`` when that user is active.
-* The text is plain English, printable ASCII, cut short, and holds no paths. A failed switch says whether the flags were put
-  back, from ``rolled_back`` and ``rollback_error`` as the root helper recorded them.
+* The text is plain English, printable ASCII, cut short, and holds no paths. A failed switch says whether the flags were put back, from
+  ``rolled_back`` and ``rollback_error`` as the root helper recorded them.
 * It looks only at jobs finished in the last seven days, and at most 200 of them per tick, newest first: the same bounds
   as the replacement audit sweep.
 * It never raises. A failure is logged and the next tick tries again. Tactical is not affected.
 
 The browser toast for a new notice is UI work. Core only stores the notice.
 
-Priority 1 email (1.17.15, Johan CQ41): a failed module job is a system failure, so the same people also get an email, once
-per job. ``send_p1_email`` is the one place that sends it, so a later Priority 1 type (server storage) calls the same
-function. Outbound email has no contract yet: ``_mail_settings`` returns None, so nothing is sent until one exists (see
-reviews/requests/core-modules.md). Core does not read Tactical's CoreSettings.
+Priority 1 email (1.17.15, Johan CQ41; 1.17.25, AD-28 amendment): a failed module job is a system failure, so the Tec-Tac
+administrators also get an email, once per job. ``send_p1_email`` is the one place that sends it. From 1.17.25 the email goes
+through Tactical's own sender (``priority_mail``) and never through a Core SMTP client or Global Settings. Its rules:
+
+* Recipients: the administrators only (active effective superusers, with their own address), never a free-form address. The
+  requester gets the email only when that person is an administrator. One entry per address, at most 20 per job.
+* The mail server's name gets the public-address check before Tactical connects. A refusal sends nothing, writes one count-only
+  audit row, and marks the recipients as tried.
+* An hourly cap (20 emails, counted from the marker rows of the last hour, read once per sweep and spent across jobs). Over the cap
+  nothing is sent, nothing is marked, and a later tick sends within the seven-day window.
+* One message per recipient, through ``CoreSettings.send_mail`` with ``test=True``. The first failed send stops the job's loop and
+  marks the rest as tried, so a broken server is not retried every minute.
+* Off when Tactical's email is not configured. Nothing is sent and no row is written, and recent failures are still sent once it is.
+* Each job that reached the sender or the host check writes one count-only audit row (``custom:priority-mail``). It never carries an
+  address, a host, a subject, a body, Tactical's text or a password.
+
+The marker rows (``module-job-failed-email:<job id>``) are the dedupe key and the cap's count. Core reads no CoreSettings field
+other than ``smtp_host`` (for the public-address check), and reads no password.
 """
 from __future__ import annotations
 
@@ -28,16 +42,17 @@ import logging
 import re
 import socket
 from collections.abc import Callable, Iterable, Mapping
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from . import module_replacement as _replacement
+from . import priority_mail
 
 logger = logging.getLogger("tec_tac.module_failure_notices")
 
 CLIENT_ID_PREFIX = "module-job-failed:"
 EMAIL_CLIENT_ID_PREFIX = "module-job-failed-email:"
-SMTP_TIMEOUT_SECONDS = 20
+EMAIL_WINDOW = timedelta(hours=1)
 EMAIL_SERVER_MAX = 120
 SOURCE = "core"
 TITLE = "Module job failed"
@@ -47,6 +62,8 @@ WINDOW_DAYS = _replacement.AUDIT_WINDOW_DAYS
 MAX_JOBS_PER_TICK = _replacement.AUDIT_MAX_JOBS_PER_TICK
 ERROR_MAX = 200
 MESSAGE_MAX = 600
+EMAIL_AUDIT_ACTION = "custom:priority-mail"
+EMAIL_AUDIT_OBJECT = "module_job_email"
 
 # What each job action did, in the words of the sentence "Module X could not be ...".
 _VERBS = {"enable": "enabled", "disable": "disabled", "install": "installed", "bundle_install": "installed", "batch_install": "installed"}
@@ -160,14 +177,21 @@ def _default_existing(client_ids: list[str]) -> set[tuple[str, Any]]:
     return set(TecTacUserNotice.objects.filter(client_id__in=client_ids).values_list("client_id", "user_id"))
 
 
-def _mail_settings() -> dict | None:
-    """The outbound email settings Core may use, or None (1.17.15, CQ41).
+def _default_recent(since: datetime) -> int:
+    """How many Priority 1 email marker rows were written since ``since``: one row per recipient tried (the cap's count)."""
+    from .models import TecTacUserNotice
 
-    The keys are Tactical's own names (smtp_host, smtp_port, smtp_from_email, smtp_requires_auth, smtp_host_user,
-    smtp_host_password), so the contract can mirror them. There is no contract yet. Tactical keeps these in its CoreSettings
-    model, and Core may not read Tactical's models, so the Priority 1 email stays off until the Global Settings core module
-    publishes one (reviews/requests/core-modules.md)."""
-    return None
+    return TecTacUserNotice.objects.filter(client_id__startswith=EMAIL_CLIENT_ID_PREFIX, created_at__gte=since).count()
+
+
+def _default_audit(job_id: str, metadata: dict) -> None:
+    from . import audit
+
+    actor = audit.service_audit_actor(module_id="core", service="priority-mail")
+    audit.record(
+        actor=actor, module_id="core", action=EMAIL_AUDIT_ACTION, object_type=EMAIL_AUDIT_OBJECT, object_id=job_id,
+        message="Priority 1 email for a failed module job.", metadata=metadata, strict=False,
+    )
 
 
 def _server_name() -> str:
@@ -187,48 +211,6 @@ def _server_name() -> str:
         return "this server"
 
 
-def _p1_message(notice: Mapping[str, Any], server: str, settings: Mapping[str, Any], address: str):
-    """The email for one notice and one address. Plain English; the body repeats the notice text, which holds no paths."""
-    from email.message import EmailMessage
-
-    module = str(notice.get("module") or "module job")
-    message = EmailMessage()
-    message["Subject"] = f"[Tec-Tac] Priority 1: module job failed for {module} on {server}"
-    message["From"] = str(settings["smtp_from_email"]).strip()
-    message["To"] = address
-    message.set_content(
-        f"A module job did not finish on {server}.\n\n"
-        f"{notice['message']}\n\n"
-        f"Server: {server}\n"
-        f"Module: {module}\n\n"
-        "Open Modules in Tec-Tac to see the job log.\n\n"
-        "Tec-Tac by Tech Flow Dynamics - techxflow.co.za\n"
-    )
-    return message
-
-
-def _smtp_send(settings: Mapping[str, Any], message) -> None:
-    """Send one message the way Tactical sends its own email (1.17.15): implicit TLS on port 465, otherwise a plain
-    connection, upgraded with STARTTLS when the server needs a login. The socket waits SMTP_TIMEOUT_SECONDS at most."""
-    import smtplib
-    import ssl
-
-    host = str(settings["smtp_host"]).strip()
-    port = int(settings.get("smtp_port") or 25)
-    use_ssl = port == 465
-    if use_ssl:
-        client = smtplib.SMTP_SSL(host, port, timeout=SMTP_TIMEOUT_SECONDS, context=ssl.create_default_context())
-    else:
-        client = smtplib.SMTP(host, port, timeout=SMTP_TIMEOUT_SECONDS)
-    with client:
-        if settings.get("smtp_requires_auth"):
-            client.ehlo()
-            if not use_ssl:
-                client.starttls()
-            client.login(str(settings.get("smtp_host_user") or ""), str(settings.get("smtp_host_password") or ""))
-        client.send_message(message)
-
-
 def _default_mark_sent(user: Any, client_id: str) -> None:
     """Record that the email was tried for this user. The row is read already, so it raises no toast."""
     from django.utils import timezone
@@ -241,45 +223,154 @@ def _default_mark_sent(user: Any, client_id: str) -> None:
     })
 
 
-def send_p1_email(notice: Mapping[str, Any], recipients: Iterable[Any], *, settings: Mapping[str, Any] | None = None,
-                  server: str | None = None, have: Callable[[list[str]], set] | None = None,
-                  send: Callable[[Mapping[str, Any], Any], None] | None = None,
-                  mark: Callable[[Any, str], None] | None = None) -> int:
-    """Email one Priority 1 notice to each recipient who has not had it yet (1.17.15, CQ41). Returns how many emails it
-    tried. Never raises.
+def _email_text(value: Any, limit: int) -> str:
+    """Printable ASCII on one line, cut to ``limit``: no carriage return, no line feed, no control character."""
+    return " ".join(_replacement._plain(value, limit * 2).split())[:limit]
 
-    ``recipients`` is the audience of the toast. ``settings`` None means ``_mail_settings()``; a missing sender or host
-    skips everything, logged at DEBUG. One try per recipient and job: the try is marked with a row whose client id is
-    ``module-job-failed-email:<job id>``, whether the send worked or not, so the next tick never sends it again. A send
-    that fails is logged, and the tick goes on. A recipient with no email address is skipped and not marked."""
+
+def _email_subject_and_body(notice: Mapping[str, Any], server: str) -> tuple[str, str]:
+    """The subject and body of one Priority 1 email. Plain English; the body repeats the notice text, which holds no paths."""
+    module = _email_text(notice.get("module") or "module job", 80)
+    subject = _email_text(f"[Tec-Tac] Priority 1: module job failed for {module} on {server}", 200)
+    body = (
+        f"A module job did not finish on {server}.\n\n"
+        f"{_email_text(notice.get('message'), MESSAGE_MAX)}\n\n"
+        f"Server: {server}\n"
+        f"Module: {module}\n\n"
+        "Open Modules in Tec-Tac to see the job log.\n\n"
+        "Tec-Tac by Tech Flow Dynamics - techxflow.co.za\n"
+    )
+    return subject, body
+
+
+def _email_audience(users: Iterable[Any]) -> list:
+    """The administrators who may get the email: one entry per address (case-insensitive), at most MAX_RECIPIENTS. A person with
+    no address keeps a place and is refused when the email is tried."""
+    seen: set[str] = set()
+    audience: list = []
+    for user in users:
+        address = str(getattr(user, "email", "") or "").strip().lower()
+        if address:
+            if address in seen:
+                continue
+            seen.add(address)
+        audience.append(user)
+        if len(audience) >= priority_mail.MAX_RECIPIENTS:
+            break
+    return audience
+
+
+def _email_budget(now: datetime, configured: Callable[[], bool] | None, recent: Callable[[datetime], int] | None) -> int | None:
+    """How many emails may still be tried this hour, or None when Tactical's email is not configured. Read once per sweep."""
+    if not (configured or priority_mail.is_configured)():
+        logger.debug("Priority 1 email skipped: Tactical's email is not configured.")
+        return None
+    used = int((recent or _default_recent)(now - EMAIL_WINDOW) or 0)
+    return max(0, priority_mail.HOURLY_CAP - used)
+
+
+def _mark(user: Any, client_id: str, mark: Callable[[Any, str], None] | None) -> None:
     try:
-        cfg = _mail_settings() if settings is None else settings
-        if not cfg or not str(cfg.get("smtp_from_email") or "").strip() or not str(cfg.get("smtp_host") or "").strip():
-            logger.debug("Priority 1 email skipped: outbound email is not configured.")
-            return 0
+        (mark or _default_mark_sent)(user, client_id)
+    except Exception:
+        logger.exception("Could not record the Priority 1 email %s.", client_id)
+
+
+def _write_email_audit(notice: Mapping[str, Any], counts: Mapping[str, int], code: str, audit: Callable[[str, dict], None] | None) -> None:
+    """One count-only row for the job. Best effort: a failed write is logged and the sweep goes on."""
+    job_id = str(notice.get("client_id") or "")[len(CLIENT_ID_PREFIX):]
+    if code == "send_failed":
+        outcome = "failed"
+    elif counts["recipients"] and counts["sent"] == counts["recipients"]:
+        outcome = "sent"
+    else:
+        outcome = "refused"
+    metadata = {
+        "recipients": counts["recipients"], "sent": counts["sent"], "refused": counts["refused"],
+        "outcome": outcome, "code": code, "requested_by": "scheduler",
+    }
+    try:
+        (audit or _default_audit)(job_id, metadata)
+    except Exception:
+        logger.exception("Could not write the Priority 1 email audit row.")
+
+
+def send_p1_email(notice: Mapping[str, Any], recipients: Iterable[Any], *, state: dict | None = None,
+                  host: Callable[[], str] | None = None, send: Callable[[str, str, str], bool] | None = None,
+                  configured: Callable[[], bool] | None = None, recent: Callable[[datetime], int] | None = None,
+                  audit: Callable[[str, dict], None] | None = None, have: Callable[[list[str]], set] | None = None,
+                  mark: Callable[[Any, str], None] | None = None, server: str | None = None,
+                  now: datetime | None = None) -> int:
+    """Email one Priority 1 notice to each administrator who has not had it yet. Returns how many emails were sent. Never raises.
+
+    ``recipients`` is the administrators' audience (the sweep builds it with ``_email_audience``). ``state`` is what one sweep may
+    spend, {"budget": emails left this hour, "deferred": recipients held back by the cap}; None is a direct call, which reads the
+    budget itself. One try per recipient and job: the try is marked with a row whose client id is ``module-job-failed-email:<job id>``,
+    so the next tick never sends it again. A recipient with no address, or an address that is refused, is not marked and not sent.
+    The host check runs once per job, and only when there is something to send. A refused host or a failed send marks the rest of
+    the job's recipients as tried and sends nothing more."""
+    try:
         client_id = email_client_id_for(notice)
-        users = list(recipients)
-        if client_id is None or not users:
+        audience = _email_audience(recipients or [])
+        if client_id is None or not audience:
             return 0
+        own = state is None
+        if own:
+            budget = _email_budget(now or datetime.now(timezone.utc), configured, recent)
+            if budget is None:
+                return 0
+            state = {"budget": budget, "deferred": 0}
         done = (have or _default_existing)([client_id])
-        server_label = server or _server_name()
-        tried = 0
-        for user in users:
-            if (client_id, getattr(user, "pk", user)) in done:
+        pending = [user for user in audience if (client_id, getattr(user, "pk", user)) not in done]
+        if not pending:
+            return 0
+        subject, body = _email_subject_and_body(notice, server or _server_name())
+        counts = {"recipients": 0, "sent": 0, "refused": 0}
+        code = "none"
+        stopped = False
+        host_checked = False
+        host_code: str | None = None
+        for user in pending:
+            address = priority_mail.clean_address(getattr(user, "email", ""))
+            if address is None:
+                counts["recipients"] += 1
+                counts["refused"] += 1
                 continue
-            address = str(getattr(user, "email", "") or "").strip()
-            if not address:
+            if stopped:
+                counts["recipients"] += 1
+                counts["refused"] += 1
+                _mark(user, client_id, mark)
+                state["budget"] -= 1
                 continue
-            tried += 1
+            if state["budget"] <= 0:
+                state["deferred"] += 1
+                continue
+            if not host_checked:
+                host_checked = True
+                host_code = priority_mail.public_refusal((host or priority_mail.smtp_host)())
+            counts["recipients"] += 1
+            state["budget"] -= 1
+            if host_code:
+                counts["refused"] += 1
+                code, stopped = host_code, True
+                _mark(user, client_id, mark)
+                continue
             try:
-                (send or _smtp_send)(cfg, _p1_message(notice, server_label, cfg, address))
+                ok = bool((send or priority_mail.send_one)(address, subject, body))
             except Exception:
-                logger.exception("Could not send the Priority 1 email %s.", client_id)
-            try:
-                (mark or _default_mark_sent)(user, client_id)
-            except Exception:
-                logger.exception("Could not record the Priority 1 email %s.", client_id)
-        return tried
+                logger.warning("Priority 1 email failed to send (exception).")
+                ok = False
+            _mark(user, client_id, mark)
+            if ok:
+                counts["sent"] += 1
+            else:
+                counts["refused"] += 1
+                code, stopped = "send_failed", True
+        if host_checked:
+            _write_email_audit(notice, counts, code, audit)
+        if own and state["deferred"]:
+            logger.warning("Priority 1 email cap reached: %d email(s) held for a later tick.", state["deferred"])
+        return counts["sent"]
     except Exception:
         logger.exception("Priority 1 email failed; Tactical is not affected.")
         return 0
@@ -289,24 +380,29 @@ def sweep_failed_jobs(*, now: datetime | None = None, jobs: Iterable[Any] | None
                       recipients_for: Callable[[str], list] | None = None,
                       publish: Callable[[list, dict], int] | None = None,
                       existing: Callable[[list[str]], set] | None = None,
-                      mail_settings: Callable[[], Mapping[str, Any] | None] | None = None,
+                      configured: Callable[[], bool] | None = None,
+                      host: Callable[[], str] | None = None,
+                      send: Callable[[str, str, str], bool] | None = None,
+                      recent: Callable[[datetime], int] | None = None,
+                      audit: Callable[[str, dict], None] | None = None,
                       email_have: Callable[[list[str]], set] | None = None,
-                      send_mail: Callable[[Mapping[str, Any], Any], None] | None = None,
                       mark_sent: Callable[[Any, str], None] | None = None) -> int:
-    """Raise one notice per failed module job that has none yet, and the Priority 1 email for it (1.17.15). Returns how many
-    notices it stored. Never raises.
+    """Raise one notice per failed module job that has none yet, and the Priority 1 email for it (1.17.15; 1.17.25 through Tactical's
+    sender). Returns how many notices it stored. Never raises.
 
-    The callables are the seams: recipients, the store, which notices already exist, the email settings, which emails were
-    already tried, the sender and the marker. The defaults use ``tec_tac.notices``, ``send_p1_email`` and the
-    ``TecTacUserNotice`` table. A job whose recipients all hold its notice already costs one read and no write."""
+    The callables are the seams: the requester's recipients, the notice store, which notices already exist, then the email's
+    configured flag, the mail server's name, the one-address sender (returns a bool), the rolling count of marker rows, the count-only
+    audit row, which emails were already tried, and the marker. ``recipients_for("")`` is the administrators' audience. The defaults use
+    ``tec_tac.notices``, ``priority_mail`` and the ``TecTacUserNotice`` table. The toast goes out first, and the email is a separate step
+    that cannot stop it. A job whose recipients all hold its notice already costs one read and no write."""
     stored = 0
+    notices = []
     try:
         if jobs is None:
             from . import module_manager_v2 as v2
 
             jobs = v2._iter_jobs()
         now = now or datetime.now(timezone.utc)
-        notices = []
         for job in _bounded_failed_jobs(jobs, now):
             notice = notice_for_job(job)
             if notice is not None:
@@ -316,11 +412,6 @@ def sweep_failed_jobs(*, now: datetime | None = None, jobs: Iterable[Any] | None
         have = (existing or _default_existing)([item["client_id"] for item in notices])
         recipients_for = recipients_for or _default_recipients
         publish = publish or _default_publish
-        try:
-            mail = dict((mail_settings or _mail_settings)() or {})
-        except Exception:
-            logger.exception("Could not read the outbound email settings; no Priority 1 email this tick.")
-            mail = {}
         cache: dict[str, list] = {}
         for notice in notices:
             try:
@@ -332,9 +423,19 @@ def sweep_failed_jobs(*, now: datetime | None = None, jobs: Iterable[Any] | None
                     stored += int(publish(missing, notice) or 0)
             except Exception:
                 logger.exception("Could not raise the failure notice %s.", notice["client_id"])
-            # 1.17.15 (CQ41): the Priority 1 email goes to the same people, after the toast notice is stored.
-            send_p1_email(notice, cache.get(notice["requested_by"]) or [], settings=mail, have=email_have,
-                          send=send_mail, mark=mark_sent)
     except Exception:
         logger.exception("Module failure notice sweep failed; Tactical is not affected.")
+        return stored
+    # 1.17.25 (AD-28 amendment): the Priority 1 email, to the administrators only, through Tactical's own sender. After the toast.
+    try:
+        budget = _email_budget(now, configured, recent)
+        if budget is not None:
+            audience = _email_audience((recipients_for or _default_recipients)(""))
+            state = {"budget": budget, "deferred": 0}
+            for notice in notices:
+                send_p1_email(notice, audience, state=state, host=host, send=send, audit=audit, have=email_have, mark=mark_sent, now=now)
+            if state["deferred"]:
+                logger.warning("Priority 1 email cap reached: %d email(s) held for a later tick (%d an hour).", state["deferred"], priority_mail.HOURLY_CAP)
+    except Exception:
+        logger.exception("Priority 1 email sweep failed; Tactical is not affected.")
     return stored

@@ -2,8 +2,10 @@
 """1.17.24 regression: move a site to another client (Tactical's Edit site; CO25, C7), keeping the one-site-per-client rule.
 
 The mechanism is older (update_site with client_id). Since core.resources 1.7.0 the rules are documented and pinned here:
-the agents follow the site, the destination needs the client write grant of create_site, the last site of a client cannot leave,
-a name clash is a 409, the same client is a no-op, and the strict audit row says what moved (ids and a count, never a name).
+the agents follow the site, the last site of a client cannot leave, a name clash is a 409, the same client is a no-op, and the
+strict audit row says what moved (ids and a count, never a name). The destination grant pinned here in 1.17.24 was replaced in
+1.17.25 (core.resources 1.8.0, CQ79): the destination needs no grant, as Tactical's Edit site, and
+tests/resource-move-site-1.17.25.py pins that rule.
 Uses the in-memory Tactical of tests/resource-alert-template-1.17.17.py. The real move with Postgres runs in
 tests/resource-directory-site-move-postgres.py, and the Tactical save hooks on the dev server in tests/resource-policy-runtime-1.17.24.py.
 """
@@ -18,6 +20,7 @@ H = globals()
 must, resources, adapter, views = H["must"], H["resources"], H["adapter"], H["views"]
 reset_tactical, Client, Site, Agent, User, Role = H["reset_tactical"], H["Client"], H["Site"], H["Agent"], H["User"], H["Role"]
 AUDITS, HOOKS, ctx_for, ROOT, PKG = H["AUDITS"], H["HOOKS"], H["ctx_for"], H["ROOT"], H["PKG"]
+ValidationError = H["ValidationError"]
 
 reset_tactical()
 admin = User(Role())
@@ -76,18 +79,46 @@ must(Site.STORE[21]["client_id"] == 2 and not AUDITS and not HOOKS, "nothing sav
 refused(lambda: resources.update_site(21, client_id=1, name="Renamed", context=ctx_admin), resources.ResourceValidationError)
 must(Site.STORE[21]["name"] == "Beta One" and not AUDITS, "the rename was not applied either")
 
-# ----------------------------------------------------------------------------------- the destination must be in the caller's grant
+# ----------------------------------------------------------------------------------- the destination needs no grant (1.8.0, CQ79)
+# Tactical's Edit site checks the Edit sites permission and the source site's scope, never the destination client's grant. These
+# expectations were the 1.17.24 rule (a destination grant); they now follow Tactical, as tests/resource-move-site-1.17.25.py pins.
+def install_fk_check():
+    """Django's foreign-key check on the destination client, which the in-memory Site model does not run."""
+    real_full_clean = Site.full_clean
+
+    def full_clean(self, **kw):
+        if self.client_id not in Client.STORE:
+            raise ValidationError("bad client", {"client": ["client instance does not exist."]})
+        return real_full_clean(self, **kw)
+
+    Site.full_clean = full_clean
+    return lambda: setattr(Site, "full_clean", real_full_clean)
+
+
 del AUDITS[:]
-exc = refused(lambda: resources.update_site(12, client_id=2, context=ctx_for(client_one_only)), resources.ResourceNotFound)
-must(exc.code == "resource_not_found" and str(exc) == "Client was not found in the caller's resource scope.", (exc.code, str(exc)))
-exc_missing = refused(lambda: resources.update_site(12, client_id=999, context=ctx_for(client_one_only)), resources.ResourceNotFound)
-must(str(exc_missing) == str(exc) and exc_missing.code == exc.code, "a client that does not exist reads the same: no enumeration difference")
-exc_missing_admin = refused(lambda: resources.update_site(12, client_id=999, context=ctx_admin), resources.ResourceNotFound)
-must(str(exc_missing_admin) == str(exc), "also for an unrestricted caller")
-refused(lambda: resources.update_site(12, client_id=2, context=ctx_for(site_only)), resources.ResourceNotFound)  # a site grant is not a client grant
-must(Site.STORE[12]["client_id"] == 1 and not AUDITS, "refused: nothing changed")
-# a source site the caller does not hold
-refused(lambda: resources.update_site(11, client_id=2, context=ctx_for(site_only)), resources.ResourceNotFound)
+row = resources.update_site(12, client_id=2, context=ctx_for(client_one_only))
+must(row["client_id"] == 2 and len(AUDITS) == 1 and AUDITS[0]["metadata"]["client_changed"] is True, (row, AUDITS))
+resources.update_site(12, client_id=1, context=ctx_admin)
+del AUDITS[:]
+row = resources.update_site(12, client_id=2, context=ctx_for(site_only))  # a site grant alone may move its own site
+must(row["client_id"] == 2, row)
+resources.update_site(12, client_id=1, context=ctx_admin)
+del AUDITS[:]
+# the source site must be in the caller's scope
+exc = refused(lambda: resources.update_site(11, client_id=2, context=ctx_for(site_only)), resources.ResourceNotFound)
+must(exc.code == "resource_not_found" and str(exc) == "Site was not found in the caller's resource scope.", (exc.code, str(exc)))
+must(Site.STORE[11]["client_id"] == 1 and not AUDITS, "refused: nothing changed")
+# a missing destination client is a plain 400 from the model's foreign-key check, never a 500
+restore = install_fk_check()
+try:
+    exc_missing = refused(lambda: resources.update_site(12, client_id=999, context=ctx_for(client_one_only)), resources.ResourceValidationError)
+finally:
+    restore()
+must(exc_missing.code == "invalid_resource_request" and Site.STORE[12]["client_id"] == 1 and not AUDITS, "a missing destination writes nothing")
+
+# ----------------------------------------------------------------------------------- a source site the caller does not hold
+exc = refused(lambda: resources.update_site(11, client_id=2, context=ctx_for(site_only)), resources.ResourceNotFound)
+must(exc.code == "resource_not_found", exc.code)
 must(Site.STORE[11]["client_id"] == 1, "unchanged")
 # the Tactical permission and the Core permission are both still needed
 refused(lambda: resources.update_site(12, client_id=2, context=ctx_for(User(Role(manage=False)))), resources.ResourcePermissionDenied)
@@ -164,10 +195,16 @@ r = patch(12, {"client_id": 1, "name": "Alpha Two", "alert_template_id": None})
 must(r.status_code == 200 and r.data["client_id"] == 1 and r.data["alert_template_id"] is None, r.__dict__)
 r = patch(21, {"client_id": 1})
 must(r.status_code == 400 and r.data["detail"] == "A client must retain at least one site.", r.__dict__)
-r = patch(12, {"client_id": 999})
-must(r.status_code == 404 and r.data["code"] == "resource_not_found", r.__dict__)
+restore = install_fk_check()
+try:
+    r = patch(12, {"client_id": 999})
+finally:
+    restore()
+must(r.status_code == 400 and Site.STORE[12]["client_id"] == 1, r.__dict__)
 r = patch(12, {"client_id": 2}, user=client_one_only)
-must(r.status_code == 404, r.__dict__)
+must(r.status_code == 200 and r.data["client_id"] == 2, r.__dict__)
+r = patch(12, {"client_id": 1})
+must(r.status_code == 200 and r.data["client_id"] == 1, r.__dict__)
 resources.update_site(21, name="Alpha Two", context=ctx_admin)
 r = patch(12, {"client_id": 2})
 must(r.status_code == 409 and r.data["code"] == "resource_conflict", r.__dict__)
@@ -180,7 +217,7 @@ must(r.status_code == 200 and r.data["client_id"] == 1, "same client over HTTP i
 meta = resources.resource_contract_metadata()
 must("move_site" in meta["mutation_contracts"], list(meta["mutation_contracts"]))
 text = meta["mutation_contracts"]["move_site"]["semantics"]
-for needle in ("agents follow", "A client must retain at least one site.", "409", "no-op", "client_changed", "from_client_id", "to_client_id", "agents_moved", "stricter than Tactical", "404"):
+for needle in ("agents follow", "A client must retain at least one site.", "409", "no-op", "client_changed", "from_client_id", "to_client_id", "agents_moved", "needs no grant", "400"):
     must(needle in text, needle)
 doc = (ROOT / "docs" / "resource-directory.md").read_text(encoding="utf-8")
 must("#### Move a site" in doc and "agents_moved" in doc and "A client must retain at least one site." in doc, "docs")

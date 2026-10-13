@@ -87,6 +87,9 @@ class TokenQS:
         gone = {t.digest for t in self.tokens}
         TOKENS[:] = [t for t in TOKENS if t.digest not in gone]
 
+    def exists(self):
+        return bool(self.tokens)
+
     def __iter__(self):
         return iter(list(self.tokens))
 
@@ -95,7 +98,7 @@ TOKENS: list = []
 
 
 class AuthToken:
-    objects = types.SimpleNamespace(all=lambda: TokenQS(TOKENS))
+    objects = types.SimpleNamespace(all=lambda: TokenQS(TOKENS), filter=lambda **kw: TokenQS([t for t in TOKENS if t.digest == kw["digest"]]))
 
 
 mod("knox")
@@ -219,7 +222,7 @@ def call(who, **kw):
 # (1) a superuser keeps their own current session by default; protected accounts (root) are included
 for who in (sup, root, role_super):
     reset()
-    out = call(who, reason="clean-up", current_digest="d-boss")
+    out = call(who, reason="clean-up", current_digest="d-boss", include_current=False)
     must(out == {"revoked_tokens": 4, "revoked_sessions": 3, "users": 4, "current_kept": True}, out)
     must([t.digest for t in TOKENS] == ["d-boss"], TOKENS)
     must([r.id for r in TRUSTS if not r.revoked] == [1], "own trust row kept")
@@ -228,7 +231,7 @@ for who in (sup, root, role_super):
     kinds = [e[0] for e in EVENTS if e[0] == "all_login_sessions_revoked"]
     must(len(kinds) == 1, EVENTS)
     event = next(e for e in EVENTS if e[0] == "all_login_sessions_revoked")[1]
-    must(event["metadata"] == {"tokens": 4, "users": 4, "tec_tac_sessions": 3, "include_current": False} and event.get("force") is True, event)
+    must(event["metadata"] == {"tokens": 4, "users": 4, "tec_tac_sessions": 3, "include_current": False, "current_kept": True} and event.get("force") is True, event)
     must(len(ROWS) == 1, ROWS)
     row = ROWS[0]
     must(row["module_id"] == "core" and row["action"] == "custom:revoke-all-sessions" and row["object_type"] == "login_sessions" and row["strict"] is True, row)
@@ -260,7 +263,7 @@ for who in (acct_admin, plain, user("anon", is_authenticated=False)):
         raise AssertionError(f"{who.username} must be refused")
     must(len(TOKENS) == 5 and not any(r.revoked for r in TRUSTS) and not EVENTS, "nothing changed")
     must(len(ROWS) == 1 and ROWS[0]["action"] == "deny" and ROWS[0]["strict"] is False and ROWS[0]["object_type"] == "login_sessions", ROWS)
-must(ss.revoke_all_login_sessions.__kwdefaults__["include_current"] is False, "default keeps the current session")
+must(ss.revoke_all_login_sessions.__kwdefaults__["include_current"] is True, "the default ends the caller's session too (CQ76)")
 
 # (5) a failed deny write never turns the refusal into another error
 reset()
@@ -288,8 +291,8 @@ must(ERRORS["n"] == before + 1, "the transaction saw the error")
 reset()
 TOKENS.clear()
 TRUSTS.clear()
-out = call(sup, current_digest="d-boss")
-must(out == {"revoked_tokens": 0, "revoked_sessions": 0, "users": 0, "current_kept": True}, out)
+out = call(sup, current_digest="d-boss", include_current=False)
+must(out == {"revoked_tokens": 0, "revoked_sessions": 0, "users": 0, "current_kept": False}, out)
 must(len([e for e in EVENTS if e[0] == "all_login_sessions_revoked"]) == 1 and len(ROWS) == 1, (EVENTS, ROWS))
 
 # (8) the view: reason cut to 255, bad types refused, 403 mapped, digest passed through
@@ -315,7 +318,7 @@ class Req:
 
 v = views.AdminAllLoginSessionsRevokeView()
 resp = v.post(Req(sup, {"reason": "x" * 400}))
-must(resp.status_code == 200 and len(seen["reason"]) == 255 and seen["include_current"] is False and seen["current_digest"] == "d-cur", seen)
+must(resp.status_code == 200 and len(seen["reason"]) == 255 and seen["include_current"] is True and seen["current_digest"] == "d-cur", seen)
 resp = v.post(Req(sup, {}))
 must(resp.status_code == 200 and seen["reason"] == "administrator-request", seen)
 resp = v.post(Req(sup, {"include_current": True}))
@@ -330,6 +333,7 @@ must('path("access/sessions/revoke-all/", AdminAllLoginSessionsRevokeView.as_vie
 contracts = ast.parse((APP / "contracts.py").read_text(encoding="utf-8"))
 table = next(ast.literal_eval(n.value) for n in contracts.body if isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "HTTP_CONTRACT_DETAILS" for t in n.targets))
 must("include_current" in table["/api/tfd/access/sessions/revoke-all/"]["POST"]["request"], "contract row")
+must("default true" in table["/api/tfd/access/sessions/revoke-all/"]["POST"]["request"]["include_current"], "contract default (CQ76)")
 must("revoke-all" in (ROOT / "docs" / "session-security.md").read_text(encoding="utf-8"), "doc")
 
 print("session revoke all 1.17.24: ok")

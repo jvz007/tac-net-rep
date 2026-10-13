@@ -359,16 +359,22 @@ for fn, kwargs in ((resources.create_client, {"name":"Denied2"}), (resources.cre
 # object writes still permit only explicitly allowed client 1.
 transitive = User(Role(), clients={1}, sites={21}, core_permissions={"core.resources.clients.manage", "core.resources.sites.manage"})
 transitive_ctx = resources.user_context(transitive)
+# A context that holds both clients, used only to move a site back after a move (1.17.25).
+both_clients = resources.user_context(User(Role(), clients={1, 2}, sites={11, 12}, agents={"a-1"}, core_permissions={"core.resources.clients.manage", "core.resources.sites.manage"}))
 for fn, kwargs in (
     (resources.update_client, {"client_id": 2, "name": "Denied rename"}),
     (resources.create_site, {"client_id": 2, "name": "Denied create"}),
-    (resources.update_site, {"site_id": 11, "client_id": 2}),
 ):
     try:
         fn(context=transitive_ctx, **kwargs)
         raise AssertionError("read visibility became write scope")
     except (resources.ResourceNotFound, resources.ResourcePermissionDenied):
         pass
+# 1.17.25 (CQ79): a move follows Tactical's Edit site. The caller's site 11 (client 1 is whole) may go into client 2, which this role
+# sees only through site 21. Client 2 itself stays out of write scope: its rename and a new site in it are refused above.
+moved_transitive = resources.update_site(11, client_id=2, context=transitive_ctx)
+assert moved_transitive["client_id"] == 2, moved_transitive
+assert resources.update_site(11, client_id=1, context=both_clients)["client_id"] == 1
 
 # Site create/move is constrained to a visible client.
 try:
@@ -376,11 +382,10 @@ try:
     raise AssertionError("site created outside client scope")
 except resources.ResourceNotFound:
     pass
-try:
-    resources.update_site(created_site["id"], client_id=2, context=ctx)
-    raise AssertionError("site moved outside client scope")
-except resources.ResourceNotFound:
-    pass
+# 1.17.25 (CQ79): the destination needs no grant (Tactical's Edit site), so the caller's own site may move into client 2.
+moved_site = resources.update_site(created_site["id"], client_id=2, context=ctx)
+assert moved_site["client_id"] == 2, moved_site
+assert resources.update_site(created_site["id"], client_id=1, context=both_clients)["client_id"] == 1
 
 # Duplicate names surface a stable conflict, not Tactical ORM details.
 try:
@@ -497,7 +502,7 @@ assert AUDITS[-1]["action"] == "delete" and AUDITS[-1]["metadata"]["destination_
 
 # Contract metadata is versioned and discoverable.
 meta = resources.resource_contract_metadata()
-assert meta["id"] == "core.resources" and meta["version"] == "1.7.0"
+assert meta["id"] == "core.resources" and meta["version"] == "1.8.0"
 assert meta["pagination"]["maximum_page_number"] == 10000
 assert meta["list_contracts"]["clients"]["http"] == "GET /api/tfd/resources/clients/"
 assert meta["list_contracts"]["sites"]["response"]["pages"] == "integer"

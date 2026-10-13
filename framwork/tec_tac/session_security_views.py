@@ -270,13 +270,15 @@ class AdminUserLoginSessionsRevokeView(APIView):
 
 
 class AdminAllLoginSessionsRevokeView(APIView):
-    """End every login session of every user (CO17). Effective superuser only; no typed confirmation (the UI asks Yes or No)."""
+    """End every login session of every user (CO17). Effective superuser only; no typed confirmation (the UI asks Yes or No).
+
+    The caller's own session ends too unless the body says ``include_current: false`` (1.17.25, CQ76)."""
 
     permission_classes = [SessionAuthenticated]
 
     def post(self, request):
         data = request.data if isinstance(request.data, dict) else {}
-        include_current = data.get("include_current", False)
+        include_current = data.get("include_current", True)
         if not isinstance(include_current, bool):
             return Response({"detail": "include_current must be true or false."}, status=400)
         reason = data.get("reason")
@@ -289,6 +291,7 @@ class AdminAllLoginSessionsRevokeView(APIView):
                 requester=request.user,
                 include_current=include_current,
                 current_digest=request_knox_digest(request),
+                current_session=getattr(request, "tec_tac_session", None),
             )
         except PermissionError as exc:
             return Response({"detail": str(exc)}, status=403)

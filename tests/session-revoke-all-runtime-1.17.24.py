@@ -1,4 +1,4 @@
-"""Runtime check for Core 1.17.24: end every login session for every user. DEV SERVER ONLY.
+"""Runtime check for Core 1.17.24, updated for Core 1.17.25 (CQ76): end every login session for every user. DEV SERVER ONLY.
 It did NOT run on the development PC (Django, Knox and the Tactical database are not installed there).
 
     cd /rmm/api/tacticalrmm && ../env/bin/python manage.py shell < /path/to/tests/session-revoke-all-runtime-1.17.24.py
@@ -6,7 +6,8 @@ It did NOT run on the development PC (Django, Knox and the Tactical database are
 It runs the real route POST /api/tfd/access/sessions/revoke-all/ as a throwaway superuser, with real Knox tokens, inside one
 database transaction that is ROLLED BACK at the end, so the tokens that exist on the server come back. It checks: the caller's own
 token is kept by default, every other token is deleted (a protected account's too), include_current ends the caller's as well, an
-account administrator without superuser authority gets 403 and nothing changes, and the audit rows carry counts only.
+account administrator without superuser authority gets 403 and nothing changes, and the audit rows carry counts only. From 1.17.25 the
+default (no include_current in the body) ends the caller's own session too, so the probe that keeps it sends include_current false.
 Prints PASS or FAIL for each step and exits with status 1 when any step fails.
 """
 import sys
@@ -83,7 +84,7 @@ try:
             check(AuditLog.objects.filter(object_type="login_sessions", action="deny").exists(), "a deny row was written")
 
         def a_superuser_keeps_their_own_session():
-            response = call(boss, digests["boss"], {"reason": "probe"})
+            response = call(boss, digests["boss"], {"reason": "probe", "include_current": False})
             check(response.status_code == 200 and response.data["current_kept"] is True, getattr(response, "data", None))
             check(AuthToken.objects.filter(digest=digests["boss"]).exists(), "the caller's token is kept")
             check(AuthToken.objects.count() == 1, f"every other token is gone, protected accounts included: {AuthToken.objects.count()}")
@@ -91,10 +92,15 @@ try:
 
         def audit_rows_carry_counts_only():
             event = TecTacSessionAudit.objects.filter(event_type="all_login_sessions_revoked").order_by("-created_at").first()
-            check(event is not None and set(event.metadata) == {"tokens", "users", "tec_tac_sessions", "include_current"}, event and event.metadata)
+            check(event is not None and set(event.metadata) == {"tokens", "users", "tec_tac_sessions", "include_current", "current_kept"}, event and event.metadata)
             check(all(d not in repr(event.metadata) for d in digests.values()), "no digest in the event")
             row = AuditLog.objects.filter(object_type="login_sessions", action="custom:revoke-all-sessions").order_by("-pk").first()
             check(row is not None and all(d not in repr(row.__dict__) for d in digests.values()), "a Core audit row, no digest")
+
+        def the_default_ends_the_callers_session_too():
+            response = call(boss, digests["boss"], {})
+            check(response.status_code == 200 and response.data["current_kept"] is False, getattr(response, "data", None))
+            check(not AuthToken.objects.filter(digest=digests["boss"]).exists(), "the caller's own token is gone by default")
 
         def include_current_ends_the_callers_session_too():
             fresh = AuthToken.objects.create(victim)[0]
@@ -106,6 +112,7 @@ try:
             ("an account administrator without superuser authority is refused with a deny row", an_account_administrator_is_refused),
             ("a superuser ends every other session and keeps their own", a_superuser_keeps_their_own_session),
             ("the audit rows carry counts only", audit_rows_carry_counts_only),
+            ("the default ends the caller's session too (1.17.25)", the_default_ends_the_callers_session_too),
             ("include_current ends the caller's session too", include_current_ends_the_callers_session_too),
         ):
             step(name, fn)

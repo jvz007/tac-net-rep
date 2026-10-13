@@ -355,15 +355,17 @@ Recovery sign-in uses `POST /api/tfd/auth/login/backup-code/`. The endpoint reva
 Revoking a Tec-Tac trust session invalidates the underlying Tactical Knox credential at the common revocation boundary, including administrator revocation, idle/absolute timeout, IP-change termination and other Core revocation paths. Current rows revoke the exact bound Knox digest. A legacy row that predates the digest binding fails closed by invalidating the recorded user's Knox tokens because Core cannot safely identify only one credential. `POST /api/tfd/access/users/<user_id>/sessions/revoke/` revokes every active Tactical token for the selected user. These controls require Tactical account-management permission (or superuser authority).
 
 
-### End every login session (1.17.24)
+### End every login session (1.17.24, changed 1.17.25)
 
 `POST /api/tfd/access/sessions/revoke-all/` ends every user's login sessions at once. Only an effective superuser may call it (the root user and superuser roles pass). An account administrator who only holds Tactical's manage-accounts permission gets 403, and the refusal writes one Core `deny` audit row.
 
-Body (both optional): `reason` (text, at most 255 characters) and `include_current` (true or false, default false). Core keeps the caller's own current session by default, so the button does not sign the administrator out. Send `include_current: true` to end that one too. Core takes no typed confirmation. The browser asks one Yes or No (AD-27).
+Body (both optional): `reason` (text, at most 255 characters) and `include_current` (true or false, default true). By default the caller's own session ends too, so the administrator is signed out at once. This is the 1.17.25 default (CQ76). A caller who relied on the 1.17.24 default must now send `include_current: false` to keep their own session. The response is still delivered to the caller. Core takes no typed confirmation. The browser asks one Yes or No (AD-27) and says the administrator is signed out too.
 
-In one transaction Core revokes every active Tec-Tac session row, deletes every Tactical Knox token (protected accounts included) except the caller's own unless `include_current`, writes one session audit event (`all_login_sessions_revoked`) and one strict Core audit row (`custom:revoke-all-sessions`, object type `login_sessions`). Both carry counts only: never a token or digest. If the audit write fails, nothing changes.
+In one transaction Core revokes every active Tec-Tac session row, deletes every Tactical Knox token (protected accounts included), writes one session audit event (`all_login_sessions_revoked`) and one strict Core audit row (`custom:revoke-all-sessions`, object type `login_sessions`). Both carry counts only (`tokens`, `users`, `tec_tac_sessions`, `include_current`, `current_kept`): never a token or digest. If the audit write fails, nothing changes.
 
-The answer is `{ revoked_tokens, revoked_sessions, users, current_kept }`. Python: `tec_tac.session_security.revoke_all_login_sessions(reason=, requested_by=, requester=, include_current=False, current_digest=None)`. It raises `PermissionError` for a caller who is not an effective superuser.
+With `include_current: false`, Core spares the caller's own token (its digest is not deleted) and the caller's own trust row. A legacy trust row with no bound digest is spared by its primary key, so the caller is not left with a revoked row and a live token. If the caller's digest is not known, nothing is spared.
+
+The answer is `{ revoked_tokens, revoked_sessions, users, current_kept }`. `current_kept` is true only when the caller's own token and trust row were both actually spared. It is false when the caller was signed out, including when `include_current` is true. Python: `tec_tac.session_security.revoke_all_login_sessions(reason=, requested_by=, requester=, include_current=True, current_digest=None, current_session=None)`; `current_session` is the caller's trust row (`request.tec_tac_session`). It raises `PermissionError` for a caller who is not an effective superuser.
 
 ## 1.15.45 access hardening
 

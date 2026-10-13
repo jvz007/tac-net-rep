@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.24",
+  "version": "1.17.25",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "66c389576a517f455059348a31b1788ed1ff07f441e7bbb7d20f47579c019812"
     },
     {
-      "path": "RELEASE_NOTES_1.17.24.md",
-      "size": 14007,
-      "sha256": "390c7713d34fa24130ac4904f242ab229c34cd747d7c4e00c3d3e99743cf61ca"
+      "path": "RELEASE_NOTES_1.17.25.md",
+      "size": 13321,
+      "sha256": "e1d5439ea1b5307f607936c197619b811e7e39c60bd3fb94a36354129450e6ea"
     },
     {
       "path": "VERSION",
       "size": 7,
-      "sha256": "36cccd7a971f6eb299df4f3448e0b22c1c9c2dade0e01d4203d71b1a5aa1fa16"
+      "sha256": "1dc330ad30bf6c6ec0989617bc03608c0fe93ceab817fda97694391f3c4570cb"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -63,8 +63,8 @@
     },
     {
       "path": "docs/caller-identity.md",
-      "size": 6208,
-      "sha256": "1a6021d915da09a66e14d1d5f2c83401bb9468addc3262face42b0ae179bfd56"
+      "size": 6435,
+      "sha256": "f756943efb585811a691f77250c81bd4b0cf3bd50a5cbe2d0fd62dd7a0e178bf"
     },
     {
       "path": "docs/capabilities.md",
@@ -128,8 +128,8 @@
     },
     {
       "path": "docs/module-replacement.md",
-      "size": 28590,
-      "sha256": "af5a588d771819ba1315096a49d8095240075d132e9b16bb767fa4f72863f2dd"
+      "size": 31346,
+      "sha256": "7ae0a86e0db205448fae132e3ad4870e05511716b182f2f4af6257f8f08197b5"
     },
     {
       "path": "docs/module-reporting.md",
@@ -1127,6 +1127,11 @@
       "sha256": "ca5f152502d1f8cf6d2dd3b4895af05b9a127aee1524e3b6435597e5c81dee03"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.24.md",
+      "size": 14007,
+      "sha256": "390c7713d34fa24130ac4904f242ab229c34cd747d7c4e00c3d3e99743cf61ca"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.3.md",
       "size": 4600,
       "sha256": "f0f4683ec45092f3a12500e9b81bb3e18cd3aed75ac4942a000151893f46429f"
@@ -1243,8 +1248,8 @@
     },
     {
       "path": "docs/resource-directory.md",
-      "size": 29826,
-      "sha256": "918a799a6c5045c06638a79350ce19c5d7a521c549086306bf463dbaf373b239"
+      "size": 30744,
+      "sha256": "a56a99f5f1e72dd4c92e77eca38889cafbd38713a5882f2e10faee3737e3339f"
     },
     {
       "path": "docs/runtime-settings.md",
@@ -1273,8 +1278,8 @@
     },
     {
       "path": "docs/session-security.md",
-      "size": 21490,
-      "sha256": "71e49cfcee0da06b30fb952fb6cc581aa6f7f460ebd6e855c0f472605c158abf"
+      "size": 22295,
+      "sha256": "31ce5a4fe6913293284682bb7b557a5826837610680f328d7b78b212b060f1bb"
     },
     {
       "path": "docs/system-update-signed-releases.md",
@@ -1548,8 +1553,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 202801,
-      "sha256": "902b40b3eb73c6cbb6d0ae36393d7caf253b33e65076c02210ce0ced66e70896"
+      "size": 203318,
+      "sha256": "fcf518ca4d31142ec493013435034f31610f2d7bcc3529bce1f355ef148be535"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -1768,8 +1773,8 @@
     },
     {
       "path": "framwork/tec_tac/module_failure_notices.py",
-      "size": 16455,
-      "sha256": "5be31870dbbb3c952834893aa1b9a12edc550ca7882ac10bea40457ae4ec7651"
+      "size": 22095,
+      "sha256": "50532233d32ac9b1e8aae48f01225f0729f26f4179e5cae341ad12862c09f60e"
     },
     {
       "path": "framwork/tec_tac/module_hotfix.py",
@@ -1852,6 +1857,11 @@
       "sha256": "4f3962307fb8f9f30904d89856efcbb4bf29c159f5c92227574fa6a92d28ccb3"
     },
     {
+      "path": "framwork/tec_tac/priority_mail.py",
+      "size": 6392,
+      "sha256": "781a923e29ca9203149399f055e1eb502fd3f72814219279e796e6d178b14254"
+    },
+    {
       "path": "framwork/tec_tac/rbac.py",
       "size": 11638,
       "sha256": "23ff5feeee1fb45922b5069a49e7916c8f7274ff99447dcba0a9fe41ce5a86bd"
@@ -1873,8 +1883,8 @@
     },
     {
       "path": "framwork/tec_tac/resources.py",
-      "size": 63788,
-      "sha256": "8cbb047f77135194df4140075d9a2325683d5e3c0513818c2be6ca0465e959a8"
+      "size": 64314,
+      "sha256": "7e2f3c257cbab73ba80cf252df035f5683c6d60f2145cebebba5df5abd04d119"
     },
     {
       "path": "framwork/tec_tac/resources_adapter.py",
@@ -1953,13 +1963,13 @@
     },
     {
       "path": "framwork/tec_tac/session_security.py",
-      "size": 60289,
-      "sha256": "e4aa3583836cfda891491c13f82773dd92a653c528278585287e2f94e4441c21"
+      "size": 61254,
+      "sha256": "5fd4b920f59d4e1c6d50dd0bc8048b55c3dc123236829eccd29b00b207bfd456"
     },
     {
       "path": "framwork/tec_tac/session_security_views.py",
-      "size": 11553,
-      "sha256": "17e99ae8d0b18b3240665393bc09c435bdb7c8948e4c7a400cf965740a867eec"
+      "size": 11731,
+      "sha256": "3a520b748366215128515d3cc8d6c0ecde135efaed806129e948cde6a14552e1"
     },
     {
       "path": "framwork/tec_tac/system_update.py",
@@ -2204,7 +2214,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "6ede770e49905c8297f9255f64e3b3bef1e002aea727fdd6e5f4b14ffb545d44"
+      "sha256": "a40803272a61958d059e7eee67f305fd208789e8cbdae52568ac72d6943cfa98"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2353,8 +2363,8 @@
     },
     {
       "path": "tests/caller-identity-1.17.21.py",
-      "size": 28375,
-      "sha256": "c5f249961acb88de2da0f2b3124bc05775d011bd34b922e33c6f55e3ffb40a4b"
+      "size": 29725,
+      "sha256": "dad7c424efde7e53e7500adfd4c2f5ad7e5395abe48aba06ef773233fc2c44d4"
     },
     {
       "path": "tests/capability-foundation.sh",
@@ -2703,8 +2713,8 @@
     },
     {
       "path": "tests/module-failure-notices-email-1.17.15.py",
-      "size": 13571,
-      "sha256": "b45c3410ee4c77f88b85b11a28a3acd1a0903d40ad23bc045c33412faec2b29c"
+      "size": 12511,
+      "sha256": "8b2a1c4a485841a4417f197af35215602e0189e5ba9085207adad71751b67fd9"
     },
     {
       "path": "tests/module-failure-notices-runtime-1.17.14.py",
@@ -2987,6 +2997,16 @@
       "sha256": "3e1e7801cfd2e01d2bc8870dc77997662260e74070b2384544bd6c66aab34585"
     },
     {
+      "path": "tests/priority-mail-1.17.25.py",
+      "size": 24593,
+      "sha256": "34dd132bdabb37b2c2e81e41377f1daf892eb605682aa1563581b18e54d63cdf"
+    },
+    {
+      "path": "tests/priority-mail-runtime-1.17.25.py",
+      "size": 6703,
+      "sha256": "557890e7d6e9caa7392d5f77a6b0f6724a56456d9e72fec64ff7b0a8b02f7282"
+    },
+    {
       "path": "tests/privileged-helper-environment.py",
       "size": 4245,
       "sha256": "1718ea38a5195410b0d6f7a8781f69786d46f0b7fa2f869e613c2534ec3781cf"
@@ -3059,7 +3079,7 @@
     {
       "path": "tests/resource-alert-template-1.17.17.py",
       "size": 34766,
-      "sha256": "7e629e28034f44a94a7ea4a8014cab039214ffb5a3233e82843d64c791b782af"
+      "sha256": "bc02436bc1e26f45e7029c13be51b4dfd105034dc5f589bbb23de011834c4c01"
     },
     {
       "path": "tests/resource-alert-template-runtime-1.17.17.py",
@@ -3068,8 +3088,8 @@
     },
     {
       "path": "tests/resource-client-sites-1.17.22.py",
-      "size": 7458,
-      "sha256": "cfa85f3b0764643dfc771a5912bee9b633ed8ba21bafa282b4597e51fac80123"
+      "size": 7488,
+      "sha256": "2cc33b777f9eb3745b62f2099d9bd28f9f248b4fcece641cfcffc57beb9f5780"
     },
     {
       "path": "tests/resource-client-sites-runtime-1.17.22.py",
@@ -3088,8 +3108,8 @@
     },
     {
       "path": "tests/resource-custom-field-definitions-1.17.23.py",
-      "size": 11035,
-      "sha256": "4bfe71a9f98a66c736747cb9ae4f9b3bb68a30343e76a2ec3f563155e4bbd886"
+      "size": 11060,
+      "sha256": "64cc469d1f09c763d1954c7954eb67105ebf5eebd53593e0a226b04ef6ccb3de"
     },
     {
       "path": "tests/resource-directory-custom-fields-postgres.py",
@@ -3103,8 +3123,8 @@
     },
     {
       "path": "tests/resource-directory-foundation.py",
-      "size": 27784,
-      "sha256": "bfd0a2192eba679ae904842a642b39bae14d963e2e317a84b096d6cf9b537737"
+      "size": 28652,
+      "sha256": "fa68c5056122bb96a11b5c65a0cd98bba2ce13a3192459aaff41ccb8e66a7a9b"
     },
     {
       "path": "tests/resource-directory-foundation.sh",
@@ -3123,13 +3143,18 @@
     },
     {
       "path": "tests/resource-move-site-1.17.24.py",
-      "size": 11923,
-      "sha256": "0f3ed61c907c0ac0d9e10c28616c0a54a1d87ed70a17b181a942723c9c200916"
+      "size": 13522,
+      "sha256": "b54baa817944fb871537e64cbdf3a5573b713cad9dac04b6dd0955525b1326e0"
+    },
+    {
+      "path": "tests/resource-move-site-1.17.25.py",
+      "size": 10734,
+      "sha256": "dc2ccfd1c02f527dac611a525f42a6de4eaa84e8a6e520f8bdcf79d66cc7008b"
     },
     {
       "path": "tests/resource-policy-fields-1.17.24.py",
       "size": 22136,
-      "sha256": "079bffbd818c9f78222533ac407cc7de9240817214b46f915ac02170f4340c46"
+      "sha256": "a8e6bcb969520d57b449aa049d81d442700831cf59ce7d827d6e2f4636018f1c"
     },
     {
       "path": "tests/resource-policy-runtime-1.17.24.py",
@@ -3138,8 +3163,8 @@
     },
     {
       "path": "tests/resource-scheduler-audit-scope.py",
-      "size": 7536,
-      "sha256": "d8f28413a57061926336750df924a39eee656bd4fbe29346430be294abedde83"
+      "size": 7650,
+      "sha256": "68b9b00fcd8e698737da66caac9a78bac86b5e5bcebe0f70ba0d48053586d64d"
     },
     {
       "path": "tests/resource-scope-descriptor-1.17.17.py",
@@ -3583,13 +3608,18 @@
     },
     {
       "path": "tests/session-revoke-all-1.17.24.py",
-      "size": 11470,
-      "sha256": "dcae31b9746a39246df1cff9f33bad15fd808144610513d3e95f7e190636b8ec"
+      "size": 11821,
+      "sha256": "a802596f834e8f653a071e8299d52424d233d767f4546aa821cfbaa00c2c7a6a"
+    },
+    {
+      "path": "tests/session-revoke-all-1.17.25.py",
+      "size": 11901,
+      "sha256": "336c752099d96d6b882368e5592480974c310eaaf32151928be4836ad831741a"
     },
     {
       "path": "tests/session-revoke-all-runtime-1.17.24.py",
-      "size": 5896,
-      "sha256": "e3bedecb45c65852094a36363978688540aad48291ea8b9f1b185986768fa415"
+      "size": 6592,
+      "sha256": "83a00442874313058397dfa13530d6912fac30aee97fa112fd263da09910c8fb"
     },
     {
       "path": "tests/session-security-contract-version.py",

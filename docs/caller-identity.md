@@ -50,7 +50,8 @@ Core walks the Python stack upward from the code that called `calling_module`. I
 3. Anything else in that position gives `None`, and Core does not look at the frames above it. No gap is skipped (AD-26 condition 3):
    - a frame in a disabled, legacy or unreadable module;
    - a frame inside the `tec_tac` package: the Scheduler's executor, the row-lookup call, signal dispatch, `send_p1_email` and the `send`,
-     `have` and `mark` callables it runs, `sweep_failed_jobs` and its seams. Core is never a caller;
+     `have`, `mark`, `recent`, `audit` and `configured` callables it runs, `sweep_failed_jobs` and its seams, and `priority_mail` (Tactical's
+     sender). Core is never a caller;
    - a frame with a generated file name (`<string>`, `<lambda>` built with `eval` or `compile`);
    - a standard-library, Django, DRF, Celery or other third-party frame.
 
@@ -85,9 +86,10 @@ These are part of the contract. A provider must not assume more.
 `ResourceAccessContext`, `trusted_service_context`, `build_operation_context` and `notices.publish` behave as before. Nothing that was accepted is
 refused by this release. A provider opts in by calling `calling_module`.
 
-Core's own Priority 1 notice email does not go through caller identity in this release. Core keeps sending it through its own SMTP path
-(`module_failure_notices.send_p1_email`), as in 1.17.15. Routing it through `globalsettings.email` comes later through a separate
-Core-internal path (AD-26 condition 2), not through `calling_module`.
+Core's own Priority 1 notice email does not go through caller identity. From 1.17.25 it goes through Tactical's own sender (the AD-28
+amendment): `module_failure_notices.send_p1_email` calls `priority_mail.send_one`, which calls Tactical's `CoreSettings.send_mail` in
+process, to the administrators only. Core is never a caller of a module's contract, it does not go through Global Settings (AD-26
+condition 2), and it never reads the SMTP password. It has no SMTP client of its own.
 
 ## Feature detection
 

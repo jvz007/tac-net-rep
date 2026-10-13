@@ -61,6 +61,7 @@ class Adapter:
     def get_client_row(self, qs, resource_id): return dict(self.client) if resource_id == 7 else None
     def get_site_row(self, qs, resource_id): return dict(self.site) if resource_id == 11 else None
     def client_write_in_scope(self, **kw): return True
+    def site_write_in_scope(self, **kw): return True  # 1.17.25: update_site checks the source site's write scope
     def site_agent_count(self, **kw): return 0  # 1.17.24
 
 adapter = Adapter()

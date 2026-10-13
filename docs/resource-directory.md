@@ -1,7 +1,7 @@
 # Core Resource Directory
 
 Contract ID: `core.resources`  
-Contract version: `1.7.0`  
+Contract version: `1.8.0`  
 Python namespace: `tec_tac.resources`
 
 ## Purpose
@@ -23,6 +23,8 @@ tec_tac.resources           <- stable public contract
         +-- Reporting
         +-- Alerts / Automation / other modules
 ```
+
+Contract 1.8 (Core 1.17.25, still major 1) changes one documented rule: moving a site follows Tactical's Edit site (CQ79, Johan, 13 October 2026). The destination client needs no grant check any more, and a same-client update needs the site's write scope. No record shape or keyword changed, so it is listed as a rule change, not an addition. See "Move a site".
 
 Contract 1.7 (Core 1.17.24, additive, still major 1) adds `workstation_policy_id`, `server_policy_id` and `block_policy_inheritance` to client and site records, lets `update_client` and `update_site` set or clear them, and adds the `alert_template_id` and `policy_id` list filters. It also documents and pins the site move. Existing keys, keywords, paging and error codes do not change. See "Policy fields (since 1.7.0)", "List filters (since 1.7.0)" and "Move a site".
 
@@ -217,13 +219,14 @@ A client and a site each carry a workstation policy, a server policy and a "bloc
 
 `list_clients` and `list_sites` take `alert_template_id` and `policy_id`. Each is a positive whole number or the call fails with `invalid_resource_request`. `alert_template_id` keeps the records that use that alert template. `policy_id` keeps the records whose workstation policy or server policy is that policy. Both together mean both must match. The filters run inside the caller's scope and under the list's own permission. They let Alerts find where a template is used and Automation build the policy overview without reading every page. HTTP: `GET /api/tfd/resources/clients/?alert_template_id=5&policy_id=31` and the same on `sites/`.
 
-#### Move a site (documented in 1.7.0, Core 1.17.24)
+#### Move a site (documented in 1.7.0, Core 1.17.24; rule changed in 1.8.0, Core 1.17.25)
 
-`update_site(site_id, client_id=<destination>, context=...)` (HTTP `PATCH /api/tfd/resources/sites/<id>/` with `client_id`) is Tactical's Edit site with a new client. The mechanism is older. Since 1.7.0 the rules are documented and tested.
+`update_site(site_id, client_id=<destination>, context=...)` (HTTP `PATCH /api/tfd/resources/sites/<id>/` with `client_id`) is Tactical's Edit site with a new client. The mechanism is older. Since 1.7.0 the rules are documented and tested. Since 1.8.0 the destination rule is Tactical's (Johan, CQ79, 13 October 2026: "keep it the same as Tactical"). This loosens Core's 1.17.24 rule on purpose.
 
 - The agents on the site follow it, because they point at the site.
-- The source needs the site write grant (a site grant or a grant of its client). The destination client needs the same client write grant as `create_site`. A role limited to some clients therefore needs an explicit grant on the destination. That is stricter than Tactical, which checks only the Edit sites permission, and it is kept on purpose.
-- A destination outside the caller's scope answers `404 resource_not_found`, the same as a client that does not exist.
+- The source site needs its write scope (a site grant or a grant of its client). A same-client update checks the same scope first, so a read-only caller gets the same `404 resource_not_found` refusal as for any other write.
+- The destination client needs no grant. Tactical's Edit site checks only the Edit sites permission and the source site's scope, so Core does the same. A role limited to some clients may move a site into a client it holds no grant on. This is a deliberate loosening of the 1.17.24 rule.
+- A destination client that does not exist answers `400` (a validation error from the model's own check), as Tactical does.
 - The last site of a client cannot move away: `400`, `A client must retain at least one site.`
 - A name already used by a site of the destination client gives `409`, `A site with that name already exists for the selected client.`
 - A `client_id` equal to the site's current client is a no-op: nothing is saved and no audit row is written.
@@ -377,6 +380,8 @@ If Tactical later changes model/table/field layout, update the Core adapter whil
 `core.resources` follows semantic contract versioning.
 
 Contract `1.1.0` is additive over `1.0.0`: it preserves all read operations and resource shapes while adding client/site create/update operations, write authorization metadata and stable conflict errors. A Tactical internal schema change alone is not a reason to change this contract version.
+
+Contract `1.8.0` (Core 1.17.25) changes the move rule only: the destination client needs no grant, and a same-client update needs the site's write scope. Records and keywords are unchanged.
 
 Contract `1.7.0` is additive over `1.6.0`: client and site records gain `workstation_policy_id`, `server_policy_id` and `block_policy_inheritance` (appended last), `update_client` and `update_site` gain three optional keywords, `list_clients` and `list_sites` gain the `alert_template_id` and `policy_id` filters, and the site move rules are documented. An unchanged update (the same values sent again) now writes no audit row.
 

@@ -14,7 +14,7 @@ from . import resources_adapter as adapter
 from .capabilities import register_capability
 
 CONTRACT_ID = "core.resources"
-CONTRACT_VERSION = "1.7.0"
+CONTRACT_VERSION = "1.8.0"
 RESOURCE_TYPES = ("client", "site", "agent")
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 500
@@ -27,6 +27,8 @@ SITE_MANAGE_PERMISSION = "core.resources.sites.manage"
 # 1.6.0 added list_custom_field_definitions (the definitions without a client or site id); no record shape changed.
 # 1.7.0 appended workstation_policy_id, server_policy_id and block_policy_inheritance to client and site records (the policy
 # ids are Automation's; Core holds only the ids), and the alert_template_id and policy_id list filters.
+# 1.8.0 (Core 1.17.25, Johan CQ79) moves a site on Tactical's rule: Edit sites and the site's own scope decide, with no destination
+# client grant check, and a same-client update needs the site's write scope too (a read-only scope is refused). No record shape changed.
 CLIENT_FIELDS = ("type", "id", "name", "active", "alert_template_id", "sites", "workstation_policy_id", "server_policy_id", "block_policy_inheritance")
 SITE_FIELDS = ("type", "id", "name", "client_id", "active", "alert_template_id", "client_name", "workstation_policy_id", "server_policy_id", "block_policy_inheritance")
 AGENT_FIELDS = (
@@ -613,9 +615,10 @@ def update_site(site_id: Any, *, name: str | None = None, client_id: Any | None 
     """Change a site's name, its client, its alert template id (a positive integer, or None to clear; 1.4.0), its policy fields
     (1.7.0, as update_client), or any of them.
 
-    Moving a site (``client_id`` other than the current one) is Tactical's Edit site: the agents follow the site, the destination
-    client needs the same client write grant as create_site, the source needs the site write grant, and the last site of a client
-    cannot leave (400). A name already used in the destination client is a 409. A ``client_id`` equal to the current one is a no-op.
+    Moving a site (``client_id`` other than the current one) is Tactical's Edit site (1.8.0, CQ79): the agents follow the site, the
+    source site needs the write scope, and the destination client needs no grant (Tactical checks only Edit sites on the source).
+    The last site of a client cannot leave (400). A missing destination client is a 400. A name already used in the destination
+    client is a 409. A ``client_id`` equal to the current one is a no-op, after the same write-scope check as any update.
     """
     user = _authorize_write(context, "site")
     resource_id = _clean_positive_int(site_id, "site_id")
@@ -629,13 +632,14 @@ def update_site(site_id: Any, *, name: str | None = None, client_id: Any | None 
         changes["alert_template_id"] = _clean_alert_template_id(alert_template_id)
     changes.update(_policy_changes(workstation_policy_id=workstation_policy_id, server_policy_id=server_policy_id, block_policy_inheritance=block_policy_inheritance))
     before = adapter.get_site_row(adapter.sites_queryset(user=user, trusted=False), resource_id)
+    if not adapter.site_write_in_scope(user=user, site_id=resource_id):
+        # Checked before the same-client return below, so a read-only scope gets the same refusal as every other write (1.17.25).
+        raise ResourceNotFound("Site was not found in the caller's resource scope.")
     if target_client_id is not None and before is not None and target_client_id == before["client_id"]:
-        # The site is already in that client: not a move, so no destination check and no client change.
+        # The site is already in that client: not a move, so no client change.
         target_client_id = None
         if clean_name is None and not changes:
             return before
-    if target_client_id is not None and not adapter.client_write_in_scope(user=user, client_id=target_client_id):
-        raise ResourceNotFound("Client was not found in the caller's resource scope.")
     moving = target_client_id is not None and before is not None
     with _transaction_atomic():
         agents_moved = adapter.site_agent_count(site_id=resource_id) if moving else 0
@@ -948,7 +952,7 @@ def resource_contract_metadata() -> dict[str, Any]:
             "move_site": {
                 "python": "update_site(site_id, *, client_id=<destination>, ...)",
                 "http": "PATCH /api/tfd/resources/sites/<id>/ with client_id (Tactical's Edit site)",
-                "semantics": "Documented and tested in 1.7.0 (the mechanism is older). The agents follow their site. The source needs the site write grant (a site grant or a grant of its client). The destination client needs the same client write grant as create_site: a limited role needs an explicit client grant on the destination, which is stricter than Tactical (it checks only the Edit sites permission). A destination outside the caller's scope answers 404 resource_not_found, the same as a client that does not exist. The last site of a client cannot move away (400, 'A client must retain at least one site.'). A name already used by a site of the destination client is 409 ('A site with that name already exists for the selected client.'). A client_id equal to the current one is a no-op: nothing is saved and no audit row is written. The write goes through Tactical's model save (update_fields client, modified_by, modified_time), so its Site.save hooks run. The strict audit row carries before and after records (client_id) and metadata client_changed true, from_client_id, to_client_id and agents_moved (ids and a count only, never a name). A move together with a rename or another field is one row.",
+                "semantics": "Documented and tested in 1.7.0 (the mechanism is older); the destination rule follows Tactical since 1.8.0 (Core 1.17.25, CQ79). The agents follow their site. The source needs the site write grant (a site grant or a grant of its client), and a same-client update is refused the same way when the site is read-only in scope. The destination client needs no grant: Tactical's Edit site checks only the Edit sites permission, and Core does the same, so a limited role may move a site into a client it holds no grant on. A missing destination client is a 400 validation error. The last site of a client cannot move away (400, 'A client must retain at least one site.'). A name already used by a site of the destination client is 409 ('A site with that name already exists for the selected client.'). A client_id equal to the current one is a no-op: nothing is saved and no audit row is written. The write goes through Tactical's model save (update_fields client, modified_by, modified_time), so its Site.save hooks run. The strict audit row carries before and after records (client_id) and metadata client_changed true, from_client_id, to_client_id and agents_moved (ids and a count only, never a name). A move together with a rename or another field is one row.",
             },
             "scope_descriptor": {
                 "python": ["scope_descriptor(*, context)", "scope_unrestricted(context)", "has_whole_client_access(client_id, *, context)", "ResourceAccessContext.scope"],
