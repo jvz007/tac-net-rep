@@ -113,7 +113,7 @@ docs = (ROOT / "docs" / "module-reporting.md").read_text(encoding="utf-8")
 section = docs.split("### Server-wide data", 1)[1].split("### Reading the result", 1)[0]
 for word in ("effective superusers only", "AD-34 condition 3", "AD-34 condition 4", "1.17.30", "CQ93", "no signed-in user", "unscoped"):
     must(word in section, f"docs/module-reporting.md server-wide section mentions {word}")
-notes = (ROOT / "RELEASE_NOTES_1.17.30.md").read_text(encoding="utf-8")
+notes = (ROOT / "docs" / "releases" / "RELEASE_NOTES_1.17.30.md").read_text(encoding="utf-8")  # archived at 1.17.31
 for word in ("superusers only", "AD-34", "no signed-in user", "replaces", "1.17.29"):
     must(word in notes, f"release notes mention {word}")
 

@@ -32,6 +32,13 @@ class TecTacFrameworkConfig(AppConfig):
             register_core_accounts_capability()
         except Exception:
             logger.exception("Tec-Tac core.accounts capability registration failed")
+        # 1.17.31 (C4): the ticketed Tactical terminal capability. Guarded like core.accounts; a missing capability refuses.
+        try:
+            from .tactical_websocket import register_core_tactical_websocket_capability
+
+            register_core_tactical_websocket_capability()
+        except Exception:
+            logger.exception("Tec-Tac core.tactical_websocket capability registration failed")
         # 1.17.7: the server-side Tactical operation path. Guarded, because a fault here must never abort start-up.
         # The registry is empty until an owning core module declares an operation, so this changes nothing by itself.
         try:
@@ -98,3 +105,12 @@ class TecTacFrameworkConfig(AppConfig):
             tactical_urls.urlpatterns.append(
                 path(route_prefix, include("tec_tac.urls"))
             )
+
+        # 1.17.31 (C4): the ticketed terminal socket ws/tfd/agent-terminal/<ticket>/, appended once to Tactical's ws_urlpatterns.
+        # Guarded: a fault here must never abort start-up. Skipped in DEMO, where Tactical also has no terminal route.
+        try:
+            from .tactical_websocket import install_tactical_websocket_route
+
+            install_tactical_websocket_route()
+        except Exception:
+            logger.exception("Tec-Tac ticketed terminal socket route installation failed")

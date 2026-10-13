@@ -54,6 +54,16 @@ class TacticalOperationDayThrottle(_AuthenticatedAttemptThrottle):
     rate = "5000/day"
 
 
+class TacticalWebSocketTicketMinThrottle(_AuthenticatedAttemptThrottle):
+    scope = "tec_tac_tactical_websocket_ticket_min"
+    rate = "30/min"
+
+
+class TacticalWebSocketTicketDayThrottle(_AuthenticatedAttemptThrottle):
+    scope = "tec_tac_tactical_websocket_ticket_day"
+    rate = "500/day"
+
+
 class _WriteOnlyThrottle(_AuthenticatedAttemptThrottle):
     """Counts only changes. Reads are not throttled."""
 

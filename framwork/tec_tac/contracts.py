@@ -767,6 +767,14 @@ CORE_CONTRACTS = (
         "purpose": "holds_action_permission(user, permission) -> bool (1.17.17): may this user use an action that declares permission? No permission means yes; otherwise the user must hold it through the Tec-Tac role grants (a superuser passes). No user, a failed lookup and an unknown code are False. The same test start() and cancel() apply, for a module that wants to hide an action it lists.",
         "audience": "consumer/backend",
     },
+    {
+        "area": "tactical-websocket",
+        "import_path": "tec_tac.tactical_websocket",
+        "name": "issue_ticket",
+        "kind": "python",
+        "purpose": "Issue one single-use, 30 second ticket for a Tactical terminal socket (1.17.31, C4, capability core.tactical_websocket 1.0.0). issue_ticket(request, module_id, kind, agent_id) runs Core's checks for the signed-in user of the request: the module owns the kind (its route owner rule, agents/{agent_id}/terminal-defaults/ for kind agent-terminal), the Tactical flag can_use_terminal, and the agent inside the caller's role scope. It answers {ticket, path, session_id, expires_in, kind} or raises TicketRefusal (status, code, message, audit). The capability's operation issue_ticket is the same, and accepts a call only from the module it names (verified caller). The browser route is POST /api/tfd/tactical-websocket/<module_id>/<kind>/tickets/. The socket is /ws/tfd/agent-terminal/<ticket>/. See docs/tactical-websocket.md.",
+        "audience": "backend/browser",
+    },
 )
 
 HTTP_CONTRACT_DETAILS = {
@@ -822,6 +830,31 @@ HTTP_CONTRACT_DETAILS = {
                 "429": "audit write rate limit reached",
             },
             "success": {"201": "recorded", "202": "accepted but Tactical's AuditLog write failed (recorded false)"},
+        },
+    },
+    "/api/tfd/tactical-websocket/<str:module_id>/<str:kind>/tickets/": {
+        "POST": {
+            "authorization": (
+                "authenticated Tec-Tac session (SessionAuthenticated). Core then requires the module to own the kind (its route owner rule; the terminal kind is owned by whoever owns agents/{agent_id}/terminal-defaults/, remote-background in 1.17.31), the Tactical flag can_use_terminal, and the agent inside the caller's client and site limits"
+            ),
+            "request": {
+                "body": "a JSON object with exactly one key, agent_id (the canonical Tactical agent id). Any other key, or a missing agent_id, gives 400 invalid_ticket_request",
+                "module_id": "path: the owning core module id",
+                "kind": "path: the socket kind. Only agent-terminal exists in 1.17.31; another value gives 404 websocket_kind_not_found",
+            },
+            "response": "201 {ticket, path, session_id, expires_in, kind}. ticket is 43 URL-safe characters, single use, valid for 30 seconds. path is /ws/tfd/agent-terminal/<ticket>/. session_id is a new uuid4 for the terminal session. Core's refusals are JSON {detail, code}.",
+            "errors": {
+                "400": "invalid_ticket_request (body keys) or invalid_agent_id",
+                "401": "authenticated_request_required, or tactical_session_required (the session is not linked to a Tactical token; sign in again)",
+                "403": "websocket_owner_required (the module does not own the kind), tactical_permission_denied (names can_use_terminal)",
+                "404": "websocket_kind_not_found, or object_not_found (the agent is outside the caller's limits or does not exist; the same text for both)",
+                "503": "websocket_unavailable: the ticket store (Django cache) did not hold the ticket, so nothing was issued. Fail closed",
+            },
+            "notes": [
+                "Added in 1.17.31 (module-facing, additive, capability core.tactical_websocket 1.0.0). Needs framework >=1.17.31. Nothing existing changed.",
+                "A 403 and an out-of-scope 404 write one Core deny row (reason, status and kind; no body values). A successful mint writes no audit row: the audit row is written once per session start by the relayed socket (custom:terminal-start).",
+                "Throttles: 30 requests per minute and 500 per day for each signed-in user and address.",
+            ],
         },
     },
     "/api/tfd/tactical-operations/<str:module_id>/<str:operation_id>/": {

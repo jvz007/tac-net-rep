@@ -290,6 +290,8 @@ BROWSER_PROVENANCE_MARKER = "module-declared-event"
 CORE_CONTEXT_KEYS = ("browser_provenance", "core_refusal", "server_provenance")
 # 1.17.7: provenance of a row Core wrote itself around a Tactical call it ran server-side (tec_tac.tactical_operations).
 SERVER_PROVENANCE_TACTICAL_OPERATION = "tactical-operation"
+# 1.17.31 (C4): provenance of the rows Core writes for a relayed Tactical terminal socket (tec_tac.tactical_websocket). Core-only.
+SERVER_PROVENANCE_TACTICAL_WEBSOCKET = "tactical-websocket"
 # Core-internal authority. Passed only by Core's own executor to _record_row, never through the public record().
 _TACTICAL_OPERATION_AUTHORITY = object()
 
@@ -628,6 +630,44 @@ def _record_tactical_operation(
     return _record_row(
         actor=actor, module_id=module_id, action=action, object_type=object_type, object_id=object_id,
         message=message, before=before, after=after, metadata=metadata, request=request, strict=False,
+        operation_context=context, authority=_TACTICAL_OPERATION_AUTHORITY, correlation_id=correlation_id,
+    )
+
+
+def _record_tactical_websocket(
+    *,
+    actor,
+    module_id: str,
+    action: str,
+    object_type: str,
+    object_id: Any = None,
+    message: Any = None,
+    after: Any = None,
+    metadata: dict | None = None,
+    websocket: str,
+    refusal: bool = False,
+    strict: bool = False,
+    request=None,
+    correlation_id: Any = None,
+) -> dict[str, Any]:
+    """Write a row for a Tactical terminal socket Core relays (1.17.31, C4). Private since 1.17.31: only Core's websocket code calls it.
+
+    The actor is the signed-in user and the module is the owner of the route (the owner of the ticket's kind). Core passes its internal
+    authority, so a person who acts under a Tactical permission only is not blocked by the module-permission check, as for a Tactical
+    operation. The row carries operation_context.server_provenance = tactical-websocket and websocket (the kind). ``refusal`` adds
+    core_refusal = true, for Core's own deny rows. ``strict`` raises AuditWriteError when the row cannot be written, so a start
+    never happens without its row. The callers pass only the fields listed in docs/tactical-websocket.md: never typed input,
+    output, a ticket or a token.
+    """
+    context = {
+        "server_provenance": SERVER_PROVENANCE_TACTICAL_WEBSOCKET,
+        "websocket": str(websocket)[:100],
+    }
+    if refusal:
+        context["core_refusal"] = True
+    return _record_row(
+        actor=actor, module_id=module_id, action=action, object_type=object_type, object_id=object_id,
+        message=message, after=after, metadata=metadata, request=request, strict=strict,
         operation_context=context, authority=_TACTICAL_OPERATION_AUTHORITY, correlation_id=correlation_id,
     )
 

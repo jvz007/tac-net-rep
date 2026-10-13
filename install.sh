@@ -872,6 +872,12 @@ if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON
     fail "Core Tactical operations capability verification failed or timed out."
 fi
 
+log "Verifying Core Tactical websocket ticket capability registration."
+VERIFY_TACTICAL_WEBSOCKET_CODE="from tec_tac.capabilities import capability_status,get_capability; s=capability_status('core.tactical_websocket',version='>=1,<2'); assert s['available'], s; p=get_capability('core.tactical_websocket',version='>=1,<2'); assert hasattr(p,'issue_ticket'), 'core.tactical_websocket provider incomplete'; print('TEC-TAC core.tactical_websocket OK:', s['capability_version'])"
+if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_TACTICAL_WEBSOCKET_CODE}\""; then
+    fail "Core Tactical websocket ticket capability verification failed or timed out."
+fi
+
 
 SCHEDULER_SERVICE="/etc/systemd/system/tec-tac-scheduler.service"
 SCHEDULER_TIMER="/etc/systemd/system/tec-tac-scheduler.timer"

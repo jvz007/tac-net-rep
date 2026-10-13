@@ -87,6 +87,11 @@ Since 1.17.8 ownership is per route, not per Tactical group. Core holds an order
 | `services/` | `remote-background` |
 | `winupdate/` | `patching` |
 
+The terminal socket (`docs/tactical-websocket.md`) has the same owner as `agents/{}/terminal-defaults/` (1.17.31): the two come from
+the one table. `remote-background` may declare `GET agents/{agent_id:agent}/terminal-defaults/` (flag `can_use_terminal`, scope from
+`path:agent_id`, audit `view`). Every other module, including `agents` and `endpoints`, is refused the same route, and so is a premium
+module that is not an honoured replacement. Core adds nothing to the executor for it.
+
 Endpoints is the technician workspace. It composes what other modules publish, so it owns no route and declares no operation. Core refuses a non-owner when it registers, so a module outside its home cannot take a route first and block the owner on the one-caller rule.
 
 **Parameter kinds decide what a route can reach (1.17.9).** A parameter can hold any value, so Core judges a template by every route it can land on. A parameter of kind `agent` (21 characters or more) or `int` (digits) can never hold a route word such as `registry` or `update`, so it only ever stands for an ordinary value. A plain `{name}` parameter can hold a route word, including one with more route after it: `agents/{agent_id:agent}/{p}/create-key/` can be `agents/<id>/registry/create-key/`, which is Remote Background's, so Agents is refused. Declare an agent id as `{agent_id:agent}`.
