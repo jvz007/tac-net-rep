@@ -100,6 +100,15 @@ first) is verified exactly like a core or premium module while it is installed, 
 allows it by id gets its identity, and AD-30 lets such a module send mail through Global Settings on that basis. Pinned by
 `tests/caller-identity-server-module-1.17.26.py`.
 
+## Core as a provider (1.17.27 note)
+
+A Core provider, such as `core.accounts` (`docs/accounts-contract.md`), also needs to know which module is calling it. Its signed-out
+caller has no session to check. For that, Core has a private, Core-internal helper, `tec_tac.caller_identity.calling_module_for_core_provider(*,
+provider_file)`. It is not a public contract: it is not in the contract export and no module may import it. It works from the same rules as
+`calling_module`. Every frame in the provider's own file is skipped, and the first other frame must be the code of an enabled, non-legacy
+extension, or the answer is `None`. Core is still never identified as a caller (AD-26 condition 2). `calling_module` and the
+`core.caller_identity` 1.0.0 contract are unchanged by 1.17.27. Pinned by `tests/caller-identity-core-provider-1.17.27.py`.
+
 ## Feature detection
 
 `has_capability("core.caller_identity")` is true from Core 1.17.21. The capability metadata lists the limits above in `limits`, gives

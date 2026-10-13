@@ -151,6 +151,53 @@ def _calling_module(provider_module_id) -> CallerIdentity | None:
         frame = None
 
 
+def calling_module_for_core_provider(*, provider_file) -> CallerIdentity | None:
+    """Core-internal (1.17.27, CQ87): the module whose code called a Core-owned provider function, or ``None`` (refuse).
+
+    Not a public contract: it is not listed in the contract export and no module may import it. A Core provider (tec_tac.accounts) calls
+    it from its own function, with its own ``__file__``. Every frame in that file is skipped, however deep the provider's own calls go.
+    The first other frame is the caller, and only that frame: it gives a module only when it is the code of an installed, enabled,
+    non-legacy extension. A Core frame, a library or Django frame, a generated (``<...>``) frame, a disabled or legacy module and any error
+    give ``None``. Core is never identified (AD-26 condition 2): this names module code and nothing else. Enabled state is read on every call.
+    """
+    try:
+        getter = getattr(sys, "_getframe", None)
+        if getter is None:
+            return None
+        return _core_provider_caller(getter(1), provider_file)  # frame 1 is the provider function that called this
+    except Exception:
+        logger.warning("Could not verify the calling module of a Core provider; treating the caller as unverified.", exc_info=True)
+        return None
+
+
+def _core_provider_caller(frame, provider_file) -> CallerIdentity | None:
+    """Walk up from the provider's own frame (already the first argument), as ``_calling_module`` does for a module provider."""
+    if not isinstance(provider_file, str) or not provider_file.strip():
+        return None
+    provider_path = _norm(provider_file)
+    plugins = _plugins()
+    framework = _norm(_FRAMEWORK_DIR)
+    try:
+        path = None
+        while frame is not None:
+            path = _code_path(frame)
+            if path != provider_path:
+                break
+            frame = frame.f_back
+        if frame is None or path is None:
+            return None  # nothing above the provider, or a generated frame: refuse
+        if _under(path, framework):
+            return None  # Core code (the Scheduler, a row lookup, signal dispatch): Core is never a caller
+        for plugin in plugins:
+            if _under(path, _norm(plugin.root)):
+                if plugin.plugin_type != "extension" or plugin.legacy or not _enabled(plugin.plugin_id):
+                    return None  # a disabled, legacy or non-extension module: refuse
+                return CallerIdentity(plugin.plugin_id, KIND_MODULE, str(plugin.version or "0.0.0"))
+        return None  # the standard library, Django or other code outside every module
+    finally:
+        frame = None
+
+
 def module_frame_on_stack() -> bool:
     """True when any frame on the current call stack lies inside an installed plugin's folder (enabled or not), or when that cannot be
     told. Fails closed. It is for Core's own gates (the Priority 1 private relay, AD-30), not a provider's caller check: use

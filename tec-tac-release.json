@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.26",
+  "version": "1.17.27",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "66c389576a517f455059348a31b1788ed1ff07f441e7bbb7d20f47579c019812"
     },
     {
-      "path": "RELEASE_NOTES_1.17.26.md",
-      "size": 13364,
-      "sha256": "3b9f6ff48c4d023fcf93c0d6974cadd1acc8cbadbe63dcbd7ed1ff67de467900"
+      "path": "RELEASE_NOTES_1.17.27.md",
+      "size": 9275,
+      "sha256": "199f0a2f5df8d266b98b6e2fe8bcdee42cac097794f0d274f9dcaf17419adbe1"
     },
     {
       "path": "VERSION",
       "size": 7,
-      "sha256": "422f692a00ca1dfb2223fd0f7a8b1c11566eca59753b55f3a2e454b7bb77f548"
+      "sha256": "5279b8e4e4f835a19a83e2bf2387ba0a371bef7c98afafea4ee5a8b3c988b806"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -62,14 +62,19 @@
       "sha256": "c34f853999dc5dc028cb7f4bddf8f9a46d240fcba31bd44fc9030ff7236ff1eb"
     },
     {
+      "path": "docs/accounts-contract.md",
+      "size": 7373,
+      "sha256": "14ee2812a360cf225a147b375402964bbf16c7706409aae0984bf3dde023f0ed"
+    },
+    {
       "path": "docs/api-keys.md",
       "size": 3592,
       "sha256": "ebc2c85bc1d2c63546cb6e08890d2e04442810e69372013e15fe0f16e8e25d11"
     },
     {
       "path": "docs/caller-identity.md",
-      "size": 7257,
-      "sha256": "a79ee7a5d64e6981bc7e8bb679f228241e53688bcdaaadbdd78fb8eba37875af"
+      "size": 8102,
+      "sha256": "b46be28efc468489d9da0216849aa62265e430410ba6d4cc159653f8ff1df5b3"
     },
     {
       "path": "docs/capabilities.md",
@@ -1142,6 +1147,11 @@
       "sha256": "e1d5439ea1b5307f607936c197619b811e7e39c60bd3fb94a36354129450e6ea"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.26.md",
+      "size": 13364,
+      "sha256": "3b9f6ff48c4d023fcf93c0d6974cadd1acc8cbadbe63dcbd7ed1ff67de467900"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.3.md",
       "size": 4600,
       "sha256": "f0f4683ec45092f3a12500e9b81bb3e18cd3aed75ac4942a000151893f46429f"
@@ -1517,9 +1527,14 @@
       "sha256": "ea0f83a83a65c0ddcb488ea00183f58712fb72a1b934e04a965f09ba901e5e9c"
     },
     {
+      "path": "framwork/tec_tac/accounts.py",
+      "size": 13189,
+      "sha256": "775b127fdc3f114c4bf7ccd0cd6ab0067d683582d23dc8663c2d0ebb66e3e77e"
+    },
+    {
       "path": "framwork/tec_tac/apps.py",
-      "size": 4772,
-      "sha256": "f64bb0dd0aded7995d41eb7de41b4cf88f031ddc5f297ac87773e6e894be20b0"
+      "size": 5244,
+      "sha256": "dfdddd14dfeaa24f5822a955bb5e1dedbd96592e2c9bb6f71043120f4bc6d39e"
     },
     {
       "path": "framwork/tec_tac/audit.py",
@@ -1538,8 +1553,8 @@
     },
     {
       "path": "framwork/tec_tac/caller_identity.py",
-      "size": 10885,
-      "sha256": "03970c894833d7c07281bbe01e851e3c2d7062d9ee28375788967d50b44446c9"
+      "size": 13587,
+      "sha256": "865de7897abece119713753cd87ce3580335c87ba9f70b4825bc3831ab866bb9"
     },
     {
       "path": "framwork/tec_tac/capabilities.py",
@@ -1563,8 +1578,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 207595,
-      "sha256": "591bef98b3c302493f210e3c1e5b6f833c1816e1d8eaba1d6ab2cffbd41a7eec"
+      "size": 210860,
+      "sha256": "4066c04af6a1b7582ea883f492e29296b3b8ffdac64c401e92fecb4131bb20a8"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -2228,8 +2243,8 @@
     },
     {
       "path": "tec_tac_package.json",
-      "size": 77,
-      "sha256": "905274977c3278620bee5d0ddea1449b29b341fda2d4837477fc08f7e3255cf0"
+      "size": 82,
+      "sha256": "e2b078f44c2a24266c6808f302635f4f1d94654ebe9e6637c097d1505b15e725"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2270,6 +2285,16 @@
       "path": "tests/account-security-policy.py",
       "size": 5781,
       "sha256": "0574e9ffb9cbb72d95661e62cd97919a36db882344968785f8843441993d2a3d"
+    },
+    {
+      "path": "tests/accounts-contract-1.17.27.py",
+      "size": 23758,
+      "sha256": "78beddb7b7d840e1b18f53c13a0b742f0c81a3f469fc2f00c6a1e8d69178b349"
+    },
+    {
+      "path": "tests/accounts-runtime-1.17.27.py",
+      "size": 8575,
+      "sha256": "e10118b3bb1ffc9705e721c9bdad6911e74ba8e523f4def4f986e84eadc4300b"
     },
     {
       "path": "tests/api-key-audit-1.17.26.py",
@@ -2390,6 +2415,11 @@
       "path": "tests/caller-identity-1.17.21.py",
       "size": 29725,
       "sha256": "dad7c424efde7e53e7500adfd4c2f5ad7e5395abe48aba06ef773233fc2c44d4"
+    },
+    {
+      "path": "tests/caller-identity-core-provider-1.17.27.py",
+      "size": 9112,
+      "sha256": "d1f3ce0b01810cd063939815723eb99143be48d8181bc53d0363ea27793adb2d"
     },
     {
       "path": "tests/caller-identity-server-module-1.17.26.py",

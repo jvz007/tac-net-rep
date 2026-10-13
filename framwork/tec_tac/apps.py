@@ -24,6 +24,14 @@ class TecTacFrameworkConfig(AppConfig):
         register_core_server_backup_capability()
         register_core_server_maintenance_capability()
         register_core_resources_capability()
+        # 1.17.27: core.accounts (Tactical accounts for an accepted invite, and the roles an inviter may grant). Guarded, so a fault
+        # here never aborts start-up; a module that finds no capability refuses (has_capability).
+        try:
+            from .accounts import register_core_accounts_capability
+
+            register_core_accounts_capability()
+        except Exception:
+            logger.exception("Tec-Tac core.accounts capability registration failed")
         # 1.17.7: the server-side Tactical operation path. Guarded, because a fault here must never abort start-up.
         # The registry is empty until an owning core module declares an operation, so this changes nothing by itself.
         try:

@@ -592,6 +592,43 @@ CORE_CONTRACTS = (
         "audience": "provider/backend",
     },
     {
+        "area": "accounts",
+        "import_path": "tec_tac.accounts",
+        "name": "create_user",
+        "kind": "python",
+        "purpose": (
+            "create_user(*, username, email, first_name, last_name, role_id, password, invited_by_id) -> CreatedUser(user_id, username, role_id) "
+            "(1.17.27, binding entry accounts contracts for User Invite, capability core.accounts 1.0.0, framework >=1.17.27). Creates a Tactical user "
+            "for an accepted invite the way Tactical's own add-user does, and never through the User model of a module. Callable only by a verified "
+            "caller: Core identifies the calling module from the call stack (AD-26, CQ87), the allow-list is CALLERS (userinvite), and nothing is passed "
+            "in for the caller, so there is no caller argument. The purpose is fixed to accept-invite. Core checks: the username is valid and free, "
+            "ignoring case; the email is valid and free, ignoring case; the password passes Django's validators with Tactical's AUTH_PASSWORD_VALIDATORS "
+            "(weak_password, with no password in the message); the role exists (role_not_found), is not a superuser role (role_not_grantable, while CQ86 "
+            "is open) and bool or non-integer ids are refused (invalid_input). The inviter (invited_by_id) is re-read at acceptance: it must exist, be "
+            "active, not be an installer user and still hold Tactical's can_manage_accounts (inviter_not_allowed, and nothing is created). Core never "
+            "sets a TOTP key, so Core's first-sign-in two-factor set-up (1.17.22) applies. The user, the role lookup and one strict Core audit row are "
+            "in one transaction; a failed audit write rolls the user back (audit_failed). Tactical's Mesh permission sync runs once, after the commit. "
+            "Typed errors, all AccountsError subclasses with a stable code: invalid_input, username_taken, email_taken, weak_password, role_not_found, "
+            "role_not_grantable, inviter_not_allowed, caller_not_allowed, audit_failed. The module still checks the invite token and the emailed code "
+            "itself. See docs/accounts-contract.md."
+        ),
+        "audience": "authorized backend",
+    },
+    {
+        "area": "accounts",
+        "import_path": "tec_tac.accounts",
+        "name": "list_grantable_roles",
+        "kind": "python",
+        "purpose": (
+            "list_grantable_roles(inviter) -> [{id, name, is_superuser}] ordered by name then id (1.17.27, capability core.accounts 1.0.0, framework "
+            ">=1.17.27). The roles the signed-in inviter may grant: an effective superuser sees every role, anyone else sees the roles that are not "
+            "superuser roles. Each row carries id, name and is_superuser only, never permission flags or scope lists. Denied with accounts_permission_required "
+            "unless the inviter is authenticated, not an installer user and holds Tactical's can_manage_accounts (AD-12: nothing is returned). Same verified "
+            "caller rule as create_user (caller_not_allowed). A server module uses this instead of Tactical's /accounts/roles/ (AD-6)."
+        ),
+        "audience": "consumer/backend",
+    },
+    {
         "area": "module-routes",
         "import_path": "tec_tac.route_mounting",
         "name": "mounted_routes",
