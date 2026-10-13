@@ -357,7 +357,7 @@ must(status["row_scope_enforced"] is True and set(status["row_scope_models"]) ==
 env.rep._provider_status = lambda module_id: {"installed": True, "enabled": True, "version": "1.0.0", "state": "available"}
 must(set(reg(env)) >= {"id", "module_id", "module_version", "app_label", "model", "display_name", "description", "field_metadata", "fields",
                        "queryable_fields", "available", "state", "reason", "hidden_fields", "forwarded", "row_scope"}, "status row keys")
-must(reg(env, "ModuleAlertEvent")["row_scope"] == {"enforced": False, "source": None, "client_field": None, "site_field": None, "include_unassigned": False},
+must(reg(env, "ModuleAlertEvent")["row_scope"] == {"enforced": False, "source": None, "client_field": None, "site_field": None, "include_unassigned": False, "server_wide": False},  # server_wide: 1.17.29
      "a plain manager is not row scoped")
 must("ModuleAlertEvent" in dict(env.constants.REPORTING_MODELS), "a model that does not adopt the manager stays registered with Core's bridge")
 for bad in ("secret", ["bad name"], [1], [""], {"a": 1}, ["a.b"]):

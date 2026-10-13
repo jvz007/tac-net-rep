@@ -1,4 +1,4 @@
-"""Core accounts contract (Core 1.17.27): create a Tactical user from an accepted invite, and list the roles an inviter may grant.
+"""Core accounts contract (Core 1.17.27): create a Tactical user from an accepted invite, list the roles an inviter may grant, and (1.17.29) say whether a username or email is free.
 
 Binding entry "accounts contracts for User Invite" (reviews/requests/core.md). A server module such as User Invite must not write
 Tactical's User model or call Tactical's roles route (AD-6). This module is that path, and it is the only place Core creates a
@@ -18,6 +18,11 @@ Core decides, whoever calls and whatever the module says:
 * Tactical's Mesh permission sync runs once, after the commit, as Tactical's own view does.
 
 The module still checks the invite token and the emailed code before it calls. Core does not, and says so in docs/accounts-contract.md.
+That is an accepted limit (AD-31 condition 5, Johan, 14 October 2026). The caller check itself is AD-31 conditions 1 and 2.
+
+``check_available`` (1.17.29) is a read for the create step of an invitation. It has the same caller rule as ``create_user`` and answers taken or
+free for a username and an email, and nothing else about any user. Core cannot see whether a person is signed in, so the module calls it only from
+the signed-in create step and rate-limits it (docs/accounts-contract.md).
 """
 from __future__ import annotations
 
@@ -38,7 +43,7 @@ from .rbac import is_effective_superuser, tactical_permission_flags
 logger = logging.getLogger("tec_tac.accounts")
 
 CAPABILITY_ID = "core.accounts"
-CAPABILITY_VERSION = "1.0.0"
+CAPABILITY_VERSION = "1.1.0"
 CALLERS = ("userinvite",)  # Core decides this list (AD-26 condition 5); a module cannot add itself
 PURPOSE = "accept-invite"  # the only purpose; a caller cannot choose it
 MANAGE_FLAG = "can_manage_accounts"  # the flag Tactical's own POST /accounts/users/ needs; no second gate (AD-5)
@@ -112,6 +117,15 @@ class CreatedUser:
     role_id: int
 
 
+@dataclass(frozen=True)
+class Availability:
+    """What check_available returns. ``status`` is exactly ``username_taken``, ``email_taken`` or ``free``. No id, name or other user field."""
+
+    status: str
+    username_taken: bool
+    email_taken: bool
+
+
 def _verified_caller():
     """The enabled module on CALLERS that called this function, or CallerNotAllowed. Fails closed."""
     identity = calling_module_for_core_provider(provider_file=__file__)
@@ -172,10 +186,19 @@ def _grantable_role(role_id: int):
     return role
 
 
+def _clashes(username: str, email: str) -> tuple[bool, bool]:
+    """(username taken, email taken), ignoring case. The one lookup that create_user and check_available share, so they cannot drift."""
+    return (
+        User.objects.filter(username__iexact=username).exists(),
+        User.objects.filter(email__iexact=email).exists(),
+    )
+
+
 def _check_free(username: str, email: str) -> None:
-    if User.objects.filter(username__iexact=username).exists():
+    username_taken, email_taken = _clashes(username, email)
+    if username_taken:
         raise UsernameTaken("That username is already taken.")
-    if User.objects.filter(email__iexact=email).exists():
+    if email_taken:
         raise EmailTaken("That email address already has an account.")
 
 
@@ -257,6 +280,21 @@ def create_user(*, username, email, first_name, last_name, role_id, password, in
     return CreatedUser(user_id=user.pk, username=user.username, role_id=role.pk)
 
 
+def check_available(username, email) -> Availability:
+    """Is this username or email free? A read for the signed-in create step of an invitation (1.17.29, capability core.accounts 1.1.0).
+
+    Same verified caller rule as create_user (CallerNotAllowed), and the same case-insensitive lookups. When both clash, ``status`` is
+    ``username_taken``, the order create_user uses, and both flags are true. No audit row, no write, no transaction, and nothing about the
+    matching user is returned. Core cannot see whether a person is signed in: the module calls this only from the signed-in step and rate-limits it.
+    """
+    _verified_caller()
+    username = _username(username)
+    email = _email(email)
+    username_taken, email_taken = _clashes(username, email)
+    status = "username_taken" if username_taken else "email_taken" if email_taken else "free"
+    return Availability(status=status, username_taken=username_taken, email_taken=email_taken)
+
+
 def list_grantable_roles(inviter) -> list[dict]:
     """The roles the signed-in inviter may grant: [{id, name, is_superuser}], ordered by name then id.
 
@@ -280,20 +318,28 @@ def accounts_contract_metadata() -> dict:
         "id": CAPABILITY_ID,
         "version": CAPABILITY_VERSION,
         "namespace": "tec_tac.accounts",
-        "operations": ["create_user", "list_grantable_roles"],
+        "operations": ["create_user", "list_grantable_roles", "check_available"],
+        "availability_statuses": ["username_taken", "email_taken", "free"],
+        "check_available": (
+            "check_available(username, email) -> Availability(status, username_taken, email_taken); same verified caller rule as create_user; "
+            "case-insensitive; a read with no audit row; returns no user detail. The module calls it only from the signed-in create step and rate-limits it (AD-31)."
+        ),
+        "accepted_decisions": ["AD-31"],
+        "limits": "Core does not verify the invite token or the emailed code; the module does (AD-31 condition 5, an accepted limit).",
         "callers": list(CALLERS),
         "purpose": PURPOSE,
         "errors": list(ERROR_CODES),
         "superuser_roles": "refused by create_user while CQ86 is open; list_grantable_roles lists them to an effective superuser only",
         "creates_totp_key": False,
         "audit": {"module_id": "core", "action": "add", "object_type": AUDIT_OBJECT_TYPE, "strict": True, "rows_per_success": 1},
-        "requires_framework": ">=1.17.27",
+        "requires_framework": ">=1.17.27 (check_available: >=1.17.29)",
     }
 
 
 class _CoreAccountsProvider:
     create_user = staticmethod(create_user)
     list_grantable_roles = staticmethod(list_grantable_roles)
+    check_available = staticmethod(check_available)
 
 
 _PROVIDER = _CoreAccountsProvider()
@@ -308,6 +354,6 @@ def register_core_accounts_capability():
         version=CAPABILITY_VERSION,
         provider=_PROVIDER,
         description="Tactical accounts for an accepted invite and the roles an inviter may grant, for verified callers only.",
-        operations=("create_user", "list_grantable_roles"),
+        operations=("create_user", "list_grantable_roles", "check_available"),
         metadata=accounts_contract_metadata(),
     )

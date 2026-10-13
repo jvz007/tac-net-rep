@@ -192,7 +192,7 @@ class ScoutDNSReportDataset(models.Model):
 
 Core cannot attach the method to a module's manager after the fact. A manager-class change would reach every model that shares the class, and Django discards an instance attribute when it expires its manager cache. That is why the module declares it. It works whichever bridge serves the model, because Core patches nothing for the scope.
 
-`scoped_report_manager(*, client=None, site=None, include_unassigned=False)` takes ORM lookup paths such as `client_id`, `site_id` or `agent__site__client_id`. A path is letters, digits and single underscores, joined by `__`. Anything else is refused.
+`scoped_report_manager(*, client=None, site=None, include_unassigned=False, server_wide=False)` takes ORM lookup paths such as `client_id`, `site_id` or `agent__site__client_id`. A path is letters, digits and single underscores, joined by `__`. Anything else is refused.
 
 Its `filter_by_role(user)` follows Tactical's rules:
 
@@ -206,9 +206,30 @@ Its `filter_by_role(user)` follows Tactical's rules:
 
 Core resolves the ids with `tec_tac.resources_adapter.report_scope_ids(user)`, which returns `{unrestricted, client_ids, site_ids}`. It reuses the same role rules as the Scheduler and does not load the agent list.
 
+### Server-wide data (since 1.17.29)
+
+Some report models hold rows that belong to the server, not to a client or a site: User Invite's invitation history, a certificate
+observation. They have no path to declare, so until now Core reported them as not enforced and Report Manager refused them. A module now says
+so out loud:
+
+```python
+objects = scoped_report_manager(server_wide=True)
+```
+
+- `server_wide` is opt-in and must be a bool. `True` together with `client`, `site` or `include_unassigned=True` is refused when the manager
+  is declared (`ReportingRegistrationError`), because the data has no client or site.
+- `filter_by_role` is the fail-closed rule a pathless model already had. An unrestricted person (a superuser, a role-level superuser, or a
+  role with neither `can_view_clients` nor `can_view_sites`, as Tactical's own rule) sees every row. A scoped person sees none. No role, and any
+  error, sees none. Core never raises, because Tactical treats a raised `filter_by_role` as no scope.
+- `model_row_scope` reports `enforced` true and `server_wide` true for such a model. A pathless `scoped_report_manager()` without the flag stays
+  `enforced` false, so a module that has not opted in behaves exactly as before and Report Manager still refuses it.
+- Report Manager reads only `enforced`, so it needs no change.
+- Report Manager's own report permission still decides who may run a report at all. A scheduled report run with no signed-in user stays
+  unscoped by Tactical (see Limits), so the same limit holds for server-wide rows.
+
 ### Reading the result
 
-`model_row_scope(app_label, model)` returns `{enforced, source, client_field, site_field, include_unassigned}`. `enforced` is true only when `Model.objects.filter_by_role` is Core's scoped implementation (not overridden) and the declared paths resolve on the model. `source` is `core`, `model` (a manager with its own `filter_by_role`, which Core cannot vouch for) or null. Every status row carries it as `row_scope`.
+`model_row_scope(app_label, model)` returns `{enforced, source, client_field, site_field, include_unassigned, server_wide}` (`server_wide` is additive, 1.17.29). `enforced` is true only when `Model.objects.filter_by_role` is Core's scoped implementation (not overridden) and the declared paths resolve on the model, or the model declared `server_wide` and no path. `source` is `core`, `model` (a manager with its own `filter_by_role`, which Core cannot vouch for) or null. Every status row carries it as `row_scope`.
 
 `reporting_bridge_status()["row_scope_enforced"]` is the signal Report Manager reads to set its `ROW_SCOPE_ENFORCED`. It means Core offers the hook. The per-model truth is `row_scope.enforced`. `row_scope_models` lists which registered models are scoped and which are not.
 

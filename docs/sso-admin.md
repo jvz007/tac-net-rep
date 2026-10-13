@@ -2,7 +2,7 @@
 
 Tactical lets an administrator add single sign-on providers, choose whether SSO is on, block local sign-in, and disconnect a linked
 account. Tec-Tac replaces Tactical's UI, so a technician must be able to do the same here. The screens are Core UI work. This page covers
-what Core does on the server (Core 1.17.28, CQ84 a: "enforce the guard, superuser only").
+what Core does on the server (Core 1.17.28, CQ84 a: "enforce the guard, superuser only"). Johan signed it as **AD-33** (SSO admin lock-out guard and superuser-only changes); its conditions are stated where each rule appears below.
 
 ## What Tactical does (v1.5.2, `ee/sso/views.py`)
 

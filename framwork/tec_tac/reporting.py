@@ -1002,11 +1002,12 @@ def _scoped_manager_class():
 
         _tec_tac_scoped_report_manager = True
 
-        def __init__(self, client_field=None, site_field=None, include_unassigned=False):
+        def __init__(self, client_field=None, site_field=None, include_unassigned=False, server_wide=False):
             super().__init__()
             self.client_field = client_field
             self.site_field = site_field
             self.include_unassigned = bool(include_unassigned)
+            self._server_wide = bool(server_wide)  # 1.17.29: the rows belong to the server, not to a client or site
 
         def filter_by_role(self, user):
             return _scoped_queryset(
@@ -1018,7 +1019,9 @@ def _scoped_manager_class():
     return _SCOPE_MANAGER_CLASS
 
 
-def scoped_report_manager(*, client: str | None = None, site: str | None = None, include_unassigned: bool = False):
+def scoped_report_manager(
+    *, client: str | None = None, site: str | None = None, include_unassigned: bool = False, server_wide: bool = False
+):
     """Return a Django manager that scopes a report model's rows by client and site.
 
     Declare it on the report-facing model: ``objects = scoped_report_manager(client="client_id", site="site_id")``.
@@ -1028,12 +1031,24 @@ def scoped_report_manager(*, client: str | None = None, site: str | None = None,
     explicitly granted client ids or its site path is in the visible site ids (granted sites plus the sites of
     granted clients). A row with no client or site is hidden unless ``include_unassigned`` is true. A model that
     declares neither path shows no rows to a scoped person.
+
+    ``server_wide=True`` (1.17.29, opt-in) declares that the model's rows belong to the server and have no client or site
+    (User Invite's invitation history, a certificate observation). It is refused together with ``client``, ``site`` or
+    ``include_unassigned``. Its ``filter_by_role`` is the same fail-closed rule as a pathless model: an unrestricted person
+    (a superuser, or a role with neither can_view_clients nor can_view_sites) sees every row, a scoped person sees none, and
+    no role or any error sees none. Only ``model_row_scope`` differs: it reports ``enforced`` true, because the choice is declared.
     """
     if not isinstance(include_unassigned, bool):
         raise ReportingRegistrationError("include_unassigned must be true or false.")
-    return _scoped_manager_class()(
-        _clean_scope_path(client, "client"), _clean_scope_path(site, "site"), include_unassigned
-    )
+    if not isinstance(server_wide, bool):
+        raise ReportingRegistrationError("server_wide must be true or false.")
+    client_path = _clean_scope_path(client, "client")
+    site_path = _clean_scope_path(site, "site")
+    if server_wide and (client_path or site_path or include_unassigned):
+        raise ReportingRegistrationError(
+            "server_wide data has no client or site: it cannot be declared with client, site or include_unassigned."
+        )
+    return _scoped_manager_class()(client_path, site_path, include_unassigned, server_wide)
 
 
 def _path_resolves(model_class, path: str) -> bool:
@@ -1061,9 +1076,13 @@ def model_row_scope(app_label: str, model: str) -> dict[str, Any]:
 
     ``enforced`` is true only when ``Model.objects.filter_by_role`` is Core's scoped implementation (not overridden)
     and the declared client or site path resolves on the model. ``source`` is ``core`` (Core's manager), ``model``
-    (a manager with its own filter_by_role, which Core cannot vouch for) or null (none).
+    (a manager with its own filter_by_role, which Core cannot vouch for) or null (none). ``server_wide`` (1.17.29, additive) is true
+    when the model declared server-wide rows (``scoped_report_manager(server_wide=True)``); such a model with no path is enforced.
     """
-    result = {"enforced": False, "source": None, "client_field": None, "site_field": None, "include_unassigned": False}
+    result = {
+        "enforced": False, "source": None, "client_field": None, "site_field": None, "include_unassigned": False,
+        "server_wide": False,
+    }
     model_class = _resolve_model_class(app_label, model)
     if model_class is None:
         return result
@@ -1081,6 +1100,11 @@ def model_row_scope(app_label: str, model: str) -> dict[str, Any]:
     site_path = getattr(manager, "site_field", None)
     result.update(client_field=client_path, site_field=site_path, include_unassigned=bool(getattr(manager, "include_unassigned", False)))
     paths = [path for path in (client_path, site_path) if path]
+    server_wide = bool(getattr(manager, "_server_wide", False))
+    result["server_wide"] = server_wide
+    if server_wide:
+        result["enforced"] = not paths and not result["include_unassigned"]  # declared, and nothing to resolve
+        return result
     result["enforced"] = bool(paths) and all(_path_resolves(model_class, path) for path in paths)
     return result
 

@@ -679,7 +679,9 @@ same way. `register_tactical_operation(..., audit_lists=["actions"])` names up t
 
 **Recorded in clear.** Script arguments and environment values are written as Tactical stores them. Core does not mask a value whose name looks
 like a secret. Anyone who can read the Tec-Tac audit can read them, as anyone who can read Tactical's audit can. This is Johan's answer to CQ85 a
-(14 October 2026): "do the same as Tactical".
+(14 October 2026): "do the same as Tactical". It is signed as **AD-32**, an exception to module standard section 3 (no secrets in audit) for the
+opt-in `audit_lists` keyword only. Other fields and routes keep section 3. Only holders of the audit view permission can read these rows, and
+Johan may reverse the decision at any time.
 
 - The success row's after value holds the list from the cleaned body. When the operation has a before read, the before value holds Tactical's own GET answer.
 - Each list is written with `<name>_count`, the full length. `<name>_truncated: true` appears only when something was cut or dropped.

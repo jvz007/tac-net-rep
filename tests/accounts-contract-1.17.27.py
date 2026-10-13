@@ -492,14 +492,14 @@ CALLER["value"] = CALLER_ID
 subclasses = {cls.code for cls in vars(accounts).values() if isinstance(cls, type) and issubclass(cls, accounts.AccountsError) and cls is not accounts.AccountsError}
 must(subclasses == set(accounts.ERROR_CODES), (subclasses, accounts.ERROR_CODES))
 meta = accounts.accounts_contract_metadata()
-must(meta["id"] == "core.accounts" and meta["version"] == "1.0.0" and meta["callers"] == ["userinvite"], meta)
-must(meta["operations"] == ["create_user", "list_grantable_roles"] and meta["creates_totp_key"] is False and meta["errors"] == list(accounts.ERROR_CODES), meta)
+must(meta["id"] == "core.accounts" and meta["version"] == "1.1.0" and meta["callers"] == ["userinvite"], meta)
+must(meta["operations"] == ["create_user", "list_grantable_roles", "check_available"] and meta["creates_totp_key"] is False and meta["errors"] == list(accounts.ERROR_CODES), meta)
 
 registered = {}
 stub("tec_tac.capabilities", register_capability=lambda **kw: registered.update(kw) or SimpleNamespace(**kw))
 accounts.register_core_accounts_capability()
-must(registered["id"] == "core.accounts" and registered["module_id"] == "core" and registered["version"] == "1.0.0", registered)
-must(registered["operations"] == ("create_user", "list_grantable_roles") and registered["metadata"] == meta, registered)
+must(registered["id"] == "core.accounts" and registered["module_id"] == "core" and registered["version"] == "1.1.0", registered)
+must(registered["operations"] == ("create_user", "list_grantable_roles", "check_available") and registered["metadata"] == meta, registered)
 must(registered["provider"].create_user is accounts.create_user and registered["provider"].list_grantable_roles is accounts.list_grantable_roles, "provider")
 
 apps_src = (APP / "apps.py").read_text(encoding="utf-8")
@@ -509,15 +509,15 @@ must("register_core_accounts_capability()" in apps_src and "core.accounts capabi
 contracts_tree = ast.parse((APP / "contracts.py").read_text(encoding="utf-8"))
 core_rows = next(ast.literal_eval(n.value) for n in contracts_tree.body if isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "CORE_CONTRACTS" for t in n.targets))
 acc_rows = {r["name"]: r for r in core_rows if r["area"] == "accounts"}
-must(set(acc_rows) == {"create_user", "list_grantable_roles"}, acc_rows.keys())
+must(set(acc_rows) == {"create_user", "list_grantable_roles", "check_available"}, acc_rows.keys())  # check_available: 1.17.29
 for name, row in acc_rows.items():
     must(row["import_path"] == "tec_tac.accounts" and row["kind"] == "python" and row["purpose"] and row["audience"], row)
     must(re.search(rf"^def {name}\b", (APP / "accounts.py").read_text(encoding="utf-8"), re.MULTILINE), f"{name} is defined")
-    must("1.17.27" in row["purpose"] and "core.accounts" in row["purpose"], f"{name} names its release and capability")
+    must(("1.17.29" if name == "check_available" else "1.17.27") in row["purpose"] and "core.accounts" in row["purpose"], f"{name} names its release and capability")
 must("caller_not_allowed" in acc_rows["create_user"]["purpose"] and "accounts_permission_required" in acc_rows["list_grantable_roles"]["purpose"], "errors named")
 
 docs = (ROOT / "docs" / "accounts-contract.md").read_text(encoding="utf-8")
-for needle in ("core.accounts", "1.0.0", "userinvite", "accept-invite", "CQ86", "CQ87", "AccountsError", "weak_password", "role_not_grantable",
+for needle in ("core.accounts", "1.1.0", "userinvite", "accept-invite", "CQ86", "CQ87", "AccountsError", "weak_password", "role_not_grantable",
                "inviter_not_allowed", "caller_not_allowed", "audit_failed", "accounts_permission_required", "totp_set", "can_manage_accounts"):
     must(needle in docs, f"docs/accounts-contract.md names {needle}")
 for code in accounts.ERROR_CODES:

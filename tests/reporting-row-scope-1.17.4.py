@@ -322,11 +322,11 @@ MODELS.update({
     ("tec_tac_x", "nopaths"): make_model("NoPaths", base, rep.scoped_report_manager()),
     ("tec_tac_x", "noobjects"): type("NoObjects", (), {"_meta": SimpleNamespace(get_field=lambda n: None)}),
 })
-NOT = {"enforced": False, "source": None, "client_field": None, "site_field": None, "include_unassigned": False}
+NOT = {"enforced": False, "source": None, "client_field": None, "site_field": None, "include_unassigned": False, "server_wide": False}  # server_wide: 1.17.29
 scope = rep.model_row_scope
 must(scope("tec_tac_x", "Plain") == NOT, "a plain manager is not scoped")
 must(scope("tec_tac_x", "Own") == {**NOT, "source": "model"}, "a manager with its own filter_by_role is not vouched for")
-must(scope("tec_tac_x", "Good") == {"enforced": True, "source": "core", "client_field": "client_id", "site_field": "site_id", "include_unassigned": True}, scope("tec_tac_x", "Good"))
+must(scope("tec_tac_x", "Good") == {"enforced": True, "source": "core", "client_field": "client_id", "site_field": "site_id", "include_unassigned": True, "server_wide": False}, scope("tec_tac_x", "Good"))
 must(scope("tec_tac_x", "Deep")["enforced"] is True and scope("tec_tac_x", "Deep")["site_field"] is None, "a path through a relation resolves")
 must(scope("tec_tac_x", "Subclassed")["enforced"] is False and scope("tec_tac_x", "Subclassed")["source"] == "model", "a subclass that replaces filter_by_role is not Core's")
 bad = scope("tec_tac_x", "BadPath")

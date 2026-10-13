@@ -1,9 +1,10 @@
 # Accounts contract: create a user from an accepted invite, and the roles an inviter may grant
 
 **Status:** Public Core developer contract, added in Core 1.17.27 (binding entry "accounts contracts for User Invite")
-**Python:** `tec_tac.accounts.create_user`, `tec_tac.accounts.list_grantable_roles`
-**Capability:** `core.accounts` 1.0.0, owner `core`
-**Needs:** `requires.framework >=1.17.27`
+**Python:** `tec_tac.accounts.create_user`, `tec_tac.accounts.list_grantable_roles`, `tec_tac.accounts.check_available` (1.17.29)
+**Capability:** `core.accounts` 1.1.0, owner `core`
+**Needs:** `requires.framework >=1.17.27` (`check_available`: `>=1.17.29`)
+**Decisions:** AD-31 (the caller check, and condition 5, the accepted limit that Core does not verify the invite token)
 **Who may call:** the `userinvite` module only (Core checks; see "Who may call")
 
 ## Why this exists
@@ -25,7 +26,8 @@ Core verifies the calling module from the call stack (AD-26, CQ87). The module p
 
 Because the public invite page is signed out, there is no signed-in user to check. Authority for `create_user` rests on three things:
 the verified calling module, the purpose Core fixes (`accept-invite`), and the inviter re-check below. The module must still verify the
-invite token and the emailed code before it calls. Core does not check those and never trusts the module's word about them.
+invite token and the emailed code before it calls. Core does not check those and never trusts the module's word about them. This is an
+accepted limit (AD-31 condition 5, Johan, 14 October 2026). Johan may later ask for a Core-issued one-time invite proof.
 
 ## `create_user`
 
@@ -119,6 +121,28 @@ User Invite should hide rows with `is_superuser` true from its role picker until
 While CQ86 is open, `create_user` refuses a superuser role for every inviter, including a superuser (`role_not_grantable`). The safest choice
 was taken; Johan decides whether an invite may ever give a superuser role. The choices are in `reviews/questions/core.md`.
 
+## `check_available` (since 1.17.29)
+
+```python
+answer = accounts.check_available("jane.doe", "jane@example.co.za")
+answer.status, answer.username_taken, answer.email_taken
+```
+
+It tells the create step of an invitation whether the username or the email is already used, so the inviter hears it before the invite is sent.
+
+- It returns a frozen `Availability(status, username_taken, email_taken)`. `status` is exactly `username_taken`, `email_taken` or `free`.
+  When both clash, `status` is `username_taken`, the order `create_user` uses, and both flags are true.
+- The match ignores case, with the same lookups as `create_user` (one shared helper, so they cannot drift).
+- Same caller rule as `create_user`: only the verified, enabled `userinvite` module. Anyone else gets `caller_not_allowed` and no query runs.
+- The inputs are cleaned as in `create_user`. A blank, over-long, control-character or malformed value raises `invalid_input`.
+- It is a read. It writes no audit row, no record and opens no transaction.
+- It returns no user id, no name and no other field of the matching user. A taken answer is all it gives.
+
+Core cannot see whether a person is signed in. So the module must call `check_available` only from the signed-in create step of an invitation,
+never from a signed-out page, and must rate-limit it. Without that, anyone could use it to test which usernames and emails have accounts.
+Whether Core should also re-check the inviter's `can_manage_accounts` here is a question for Johan (CQ92); the signature above is what the
+User Invite plan names.
+
 ## What is not set
 
 - No TOTP key (see above).
@@ -127,7 +151,8 @@ was taken; Johan decides whether an invite may ever give a superuser role. The c
 
 ## Compatibility
 
-Additive in 1.17.27. Nothing in `modules/` used `core.accounts` before this release. A module finds it with
+Additive in 1.17.27. Nothing in `modules/` used `core.accounts` before this release. 1.17.29 (capability 1.1.0) adds `check_available`, also
+additive: `create_user` and `list_grantable_roles` behave exactly as before. A module finds it with
 `has_capability("core.accounts")`, and it needs `requires.framework >=1.17.27`.
 
 Tactical's own `/accounts/users/` and `/accounts/roles/` routes are unchanged. Core's guard on them (`tactical_account_guard`) is unchanged.

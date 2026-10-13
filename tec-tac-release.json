@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.28",
+  "version": "1.17.29",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "66c389576a517f455059348a31b1788ed1ff07f441e7bbb7d20f47579c019812"
     },
     {
-      "path": "RELEASE_NOTES_1.17.28.md",
-      "size": 14679,
-      "sha256": "f4bba7154de156b3f8bd4c18438e8e8760bcea0546a7c5c9a53c904288e23254"
+      "path": "RELEASE_NOTES_1.17.29.md",
+      "size": 11427,
+      "sha256": "de66884673a5910500b6a7d4c35ef627e7f9fc4fd4175119e3a990c197171eb6"
     },
     {
       "path": "VERSION",
       "size": 7,
-      "sha256": "58e280ed2e5bc4f70e44e4d601172a2dadcc8c6ffdcdb00ad212466d1d32b863"
+      "sha256": "10e449155cf84873fa86b62b7c86c63cdb931c5836ce325a93d4f07b6d4d8ae8"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -63,8 +63,8 @@
     },
     {
       "path": "docs/accounts-contract.md",
-      "size": 7373,
-      "sha256": "14ee2812a360cf225a147b375402964bbf16c7706409aae0984bf3dde023f0ed"
+      "size": 9407,
+      "sha256": "3c84ecfd3ece4f8c3d1b78fab0b72a0f85c3e1553aca9a7333fdbb51e23eb180"
     },
     {
       "path": "docs/api-keys.md",
@@ -143,8 +143,8 @@
     },
     {
       "path": "docs/module-reporting.md",
-      "size": 15002,
-      "sha256": "a34382a9bb3aa5512d312fc9599c77ce1564efbc7226a58abf15eab5c182ef7f"
+      "size": 16668,
+      "sha256": "90d9db4a275d66683e1ad261c2142ccd06d0ca1bff4ec91662e37b5b19653e93"
     },
     {
       "path": "docs/module-repositories.md",
@@ -1157,6 +1157,11 @@
       "sha256": "199f0a2f5df8d266b98b6e2fe8bcdee42cac097794f0d274f9dcaf17419adbe1"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.28.md",
+      "size": 14679,
+      "sha256": "f4bba7154de156b3f8bd4c18438e8e8760bcea0546a7c5c9a53c904288e23254"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.3.md",
       "size": 4600,
       "sha256": "f0f4683ec45092f3a12500e9b81bb3e18cd3aed75ac4942a000151893f46429f"
@@ -1308,8 +1313,8 @@
     },
     {
       "path": "docs/sso-admin.md",
-      "size": 6008,
-      "sha256": "0d499546cf3aea42f58cf21e9acc46b56120c5e274d43c7e73dc165d4edc9d63"
+      "size": 6149,
+      "sha256": "905ead56bfbd93f14775b08a6bf10ba7384cc8aecda9b63be9a27b7e1fe5b87d"
     },
     {
       "path": "docs/system-update-signed-releases.md",
@@ -1318,8 +1323,8 @@
     },
     {
       "path": "docs/tactical-operations.md",
-      "size": 60111,
-      "sha256": "141e872802907a7ff28a4e52183f30f102800e530e80a9e7909f4ec9eb086c3d"
+      "size": 60398,
+      "sha256": "d676d918a01f05efd53bf5e2ab3361557222b49107466637d8af2dd00774cc9f"
     },
     {
       "path": "docs/tracker-acceptance-1.15.173.md",
@@ -1538,8 +1543,8 @@
     },
     {
       "path": "framwork/tec_tac/accounts.py",
-      "size": 13189,
-      "sha256": "775b127fdc3f114c4bf7ccd0cd6ab0067d683582d23dc8663c2d0ebb66e3e77e"
+      "size": 15990,
+      "sha256": "ff10462f3354343dac1fbb4355ce6ef15568259cc6ffe64d5967c412f3223e57"
     },
     {
       "path": "framwork/tec_tac/apps.py",
@@ -1588,8 +1593,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 212970,
-      "sha256": "704e5003c804ecd81a289e4ce524260ba5486014ea1b4e374991973c93a3303f"
+      "size": 215079,
+      "sha256": "8d67d2a92981af6be05d46178ce21e45849654e4e73047cf6890d2d721f01424"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -1913,8 +1918,8 @@
     },
     {
       "path": "framwork/tec_tac/reporting.py",
-      "size": 48230,
-      "sha256": "038e24c1520a3a23ff2292054955c72616943b40858152cb4d908cd24bbb47a6"
+      "size": 49918,
+      "sha256": "5e0e75440a9ed861f640a40bb071b6161bfa19d2c975e0cf7a2419945bc31746"
     },
     {
       "path": "framwork/tec_tac/resource_views.py",
@@ -2254,7 +2259,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 82,
-      "sha256": "a9a6b01906a2a5bdf73bf9470474146614577e9e519361801ca286567ef0c45a"
+      "sha256": "cb037b4f0e5ea66135c1af7b0048cb42ed1fa437abc42a2caf4396f93f7c8192"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2297,14 +2302,24 @@
       "sha256": "0574e9ffb9cbb72d95661e62cd97919a36db882344968785f8843441993d2a3d"
     },
     {
+      "path": "tests/accounts-check-available-1.17.29.py",
+      "size": 7647,
+      "sha256": "73be5a8508913512a4012040edfa23382d13522c2658169b6c4f21dd7c9a1c9a"
+    },
+    {
       "path": "tests/accounts-contract-1.17.27.py",
-      "size": 23758,
-      "sha256": "78beddb7b7d840e1b18f53c13a0b742f0c81a3f469fc2f00c6a1e8d69178b349"
+      "size": 23889,
+      "sha256": "a1ce5f78f4a4eae0bfc5a0ba6e904205544030778c43d51e85888b18f37ffbc9"
     },
     {
       "path": "tests/accounts-runtime-1.17.27.py",
       "size": 8575,
       "sha256": "e10118b3bb1ffc9705e721c9bdad6911e74ba8e523f4def4f986e84eadc4300b"
+    },
+    {
+      "path": "tests/accounts-runtime-1.17.29.py",
+      "size": 5877,
+      "sha256": "f6132f6474cda32157d7fb2e8ef36d3e20e57128be5cb5fb268c8a2c9ecd2fe3"
     },
     {
       "path": "tests/api-key-audit-1.17.26.py",
@@ -3118,8 +3133,8 @@
     },
     {
       "path": "tests/reporting-handover-1.17.4.py",
-      "size": 25945,
-      "sha256": "d6aa4f607498a3cca88edbbc1d1b8c30a199ee92dd45e1c409ee1205d1f1c769"
+      "size": 25991,
+      "sha256": "f99300f20f059441fa4e02f4c443aba3bc37ce0060d3ba01e876035746d6ce36"
     },
     {
       "path": "tests/reporting-installer-fix-1.17.5.py",
@@ -3138,13 +3153,18 @@
     },
     {
       "path": "tests/reporting-row-scope-1.17.4.py",
-      "size": 18511,
-      "sha256": "3bc1a1dba16d2315ba1d3a6c3e9c6ab4c338b7eb347b0f1a17293d61e9fcef3e"
+      "size": 18579,
+      "sha256": "40c960fd801ac29fd30df2b971b9f9709a5ec641cd2278e4a222f816d166eed3"
     },
     {
       "path": "tests/reporting-row-scope-runtime-1.17.4.py",
       "size": 5637,
       "sha256": "6de998f1d7926c7197a4effad65914d2a91172015aa7942f36d28285c283ed74"
+    },
+    {
+      "path": "tests/reporting-server-wide-scope-1.17.29.py",
+      "size": 8704,
+      "sha256": "0e8b52b647917ffb6e30b5b393fbaecba6fb625058e86448d04b2450dbc584ad"
     },
     {
       "path": "tests/reporting-takeback-unregister-1.17.6.py",
