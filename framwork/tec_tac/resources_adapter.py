@@ -890,17 +890,31 @@ def custom_field_rows(*, user, resource_type: str, resource_id: int) -> list[dic
     else:
         values = SiteCustomField.objects.filter(site_id=resource_id, field_id__in=field_ids).select_related("field")
     by_field = {row.field_id: row for row in values}
-    return [
-        {
-            "field_id": int(field.pk),
-            "name": str(field.name),
-            "type": str(field.type),
-            "options": list(field.options or []),
-            "required": bool(field.required),
-            "value": _custom_value(by_field.get(field.pk), field),
-        }
-        for field in fields
-    ]
+    return [_custom_field_row(field, by_field.get(field.pk)) for field in fields]
+
+
+def _custom_field_row(field, record) -> dict[str, Any]:
+    """One custom field as the stable row. ``record`` is the stored value, or None for the field's default."""
+    return {
+        "field_id": int(field.pk),
+        "name": str(field.name),
+        "type": str(field.type),
+        "options": list(field.options or []),
+        "required": bool(field.required),
+        "value": _custom_value(record, field),
+    }
+
+
+def custom_field_definition_rows(resource_type: str) -> list[dict[str, Any]]:
+    """The non-hidden custom-field definitions for clients or sites with each field's default as ``value`` (1.17.23).
+
+    Same order and shape as ``custom_field_rows`` (``hide_in_ui`` False, ordered by order, name, pk). No per-client data is read, so
+    there is nothing to scope."""
+    if resource_type not in ("client", "site"):
+        raise TacticalResourceValidationError("Unsupported custom-field resource type.")
+    CustomField, _client_values, _site_values = _custom_models()
+    fields = CustomField.objects.filter(model=resource_type, hide_in_ui=False).order_by("order", "name", "pk")
+    return [_custom_field_row(field, None) for field in fields]
 
 
 def _normalize_custom_value(field, value):

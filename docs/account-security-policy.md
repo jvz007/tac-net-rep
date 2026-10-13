@@ -44,3 +44,7 @@ Naive or missing times are refused. The current password is still required befor
 ## Role client and site lists (1.17.22)
 
 A role's `can_view_clients` and `can_view_sites` lists decide which clients and sites its users see. Tactical's own role routes read and save them (`PUT` replaces both). Tactical writes no audit row for a change that touches only these lists, so Core does: after a successful role create or update, when the id lists changed, Core writes one strict audit row in the same transaction (module `core`, object type `role_scope`, object id the role id, `before` and `after` as sorted id lists capped at 1000 with a count and a truncated flag, ids only). A failed audit write rolls the role save back. Core does not change who may edit these lists: a role with Manage roles can still change them, as in Tactical. That question is open as CQ72.
+
+## Authenticator label (1.17.23)
+
+The `issuer` of the authenticator set-up answer, and the issuer inside its `otpauth` address, is the Core runtime setting `system_name` (default `Tec-Tac`, 1 to 60 characters, no colon, see `docs/runtime-settings.md`). It is never a host name and never `/tec-tac`. The setup audit row carries the same value as `issuer`. The `ui_url` field of the answer stays for older UI builds. The secret does not change, so existing authenticator entries keep working.

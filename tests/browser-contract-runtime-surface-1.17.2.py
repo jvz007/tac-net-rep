@@ -18,7 +18,7 @@ rows = ast.literal_eval(assignment.value)
 by_id = {row["id"]: row for row in rows}
 ids = [row["id"] for row in rows]
 assert len(ids) == len(set(ids)), "duplicate browser contract ids"
-for new in ("ui.authenticated.navigation", "ui.authenticated.router", "ui.authenticated.permissions"):
+for new in ("ui.authenticated.navigation", "ui.authenticated.router", "ui.authenticated.permissions", "ui.authenticated.popup", "ui.authenticated.confirm", "ui.authenticated.module-descriptor"):
     assert new in by_id, new
 for row in rows:
     assert row["docs"].startswith("tec-tac-ui/docs/"), row["id"]

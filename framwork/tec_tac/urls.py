@@ -1,6 +1,6 @@
 from .account_security_views import AccountSecurityPolicyView
 from .account_self_service_views import MyAccountPasswordView, MyAccountTacticalUiView, MyAccountTotpResetView, MyAccountView
-from .resource_views import ResourceListView, ResourceDetailView, ResourceMutableListView, ResourceMutableDetailView, ResourceCustomFieldsView
+from .resource_views import ResourceListView, ResourceDetailView, ResourceMutableListView, ResourceMutableDetailView, ResourceCustomFieldsView, ResourceCustomFieldDefinitionsView
 from .server_backup_views import BackupRestoreView, BackupRestoreJobView
 from .server_maintenance_views import (
     ServerMaintenanceActionListView, ServerMaintenanceJobListView,
@@ -74,6 +74,7 @@ urlpatterns = [
     path("saved-views/<uuid:view_id>/", SavedViewDetailView.as_view(), name="tec-tac-saved-view-detail"),
     path("contracts/", ContractCatalogView.as_view(), name="tec-tac-contracts"),
     path("contracts/export/", ContractExportView.as_view(), name="tec-tac-contract-export"),
+    path("resources/custom-fields/", ResourceCustomFieldDefinitionsView.as_view(), name="tec-tac-resource-custom-field-definitions"),
     path("resources/clients/", ResourceMutableListView.as_view(resource_type="client"), name="tec-tac-resource-clients"),
     path("resources/clients/<int:resource_id>/", ResourceMutableDetailView.as_view(resource_type="client"), name="tec-tac-resource-client-detail"),
     path("resources/clients/<int:resource_id>/custom-fields/", ResourceCustomFieldsView.as_view(resource_type="client"), name="tec-tac-resource-client-custom-fields"),

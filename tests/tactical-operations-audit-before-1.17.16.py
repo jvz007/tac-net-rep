@@ -58,7 +58,7 @@ must(ROWS[0]["before_value"] == {} and meta(ROWS[0])["before_source"] == "caller
 
 # ---- refusals: 400, nothing written, nothing sent to Tactical
 bad_values = [
-    "text", ["a"], 5, True, {"nested": {"a": 1}}, {"list": [1]}, {"f": 1.5}, {"f": b"x"}, {"f": "x" * 257}, {"f": "a\nb"},
+    "text", ["a"], 5, True, {"nested": {"a": 1}}, {"f": 1.5}, {"f": b"x"}, {"f": "x" * 257}, {"f": "a\nb"},
     {f"f{i}": i for i in range(17)}, {"bad name": 1}, {"1st": 1}, {5: 1}, {"": 1},
     {"password": "x"}, {"api_token": "x"}, {"Secret": "x"}, {"authorization": "x"}, {"cookie": "x"}, {"private_key": "x"}, {"signature": "x"},
 ]

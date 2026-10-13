@@ -73,6 +73,13 @@ registers and runs unchanged):
   checks, so a row can be written. Until then an invalid correlation id is held back and no earlier deny row carries it.
 * ``audit.object_field`` (a top-level scalar of Tactical's JSON answer) and ``audit.object_body_field`` (a cleaned body field) give the
   success row's object id when no ``audit.object_param`` and no scope object gives one. No other row carries them.
+
+1.17.23 (the capability is 1.8.0, still major 1; additive, a scalar-only ``audit_before`` is unchanged):
+
+* The Python-only ``audit_before`` keyword also accepts, per field, a list of whole numbers or short texts. It is kept to its first 1000
+  entries (and 65536 characters) as declared before fields are, and the row carries ``<field>_count`` (the full length) and, when cut,
+  ``<field>_truncated: true``. A list holding anything else, or a caller field named ``<list>_count`` or ``<list>_truncated`` next to
+  a list, is refused 400 ``invalid_audit_before``.
 """
 from __future__ import annotations
 
@@ -91,7 +98,7 @@ from . import module_category as _module_category
 logger = logging.getLogger("tec_tac.tactical_operations")
 
 CAPABILITY_ID = "core.tactical_operations"
-CAPABILITY_VERSION = "1.7.0"
+CAPABILITY_VERSION = "1.8.0"
 AUDIT_HEADER = "X-Tec-Tac-Audit"
 AUDIT_RECORDED = "recorded"
 AUDIT_NOT_RECORDED = "not-recorded"
@@ -1715,25 +1722,51 @@ def _held_correlation_id(value: Any) -> str | None:
 
 
 def _clean_audit_before(value: Any) -> dict | None:
-    """A caller's own before value (1.17.16): a flat dict of at most 16 scalar fields. Python only; never from a browser."""
+    """A caller's own before value (1.17.16): a flat dict of at most 16 fields. Python only; never from a browser.
+
+    A field is a scalar (text up to 256 characters, a number, true/false or null). Since 1.17.23 it may also be a list of whole
+    numbers or short texts. A list is kept to its first 1000 entries as declared before fields are, and the row carries
+    ``<field>_count`` (the full length) and, when cut, ``<field>_truncated: true``. A caller field with either of those names
+    next to a list is refused, because the row would hold it twice."""
     if value is None:
         return None
     bad = TacticalOperationError(
-        "audit_before must be a flat object of at most 16 text (up to 256 characters), number, true/false or null values.",
+        "audit_before must be a flat object of at most 16 values. Each is text (up to 256 characters), a number, true/false, null, "
+        "or a list of whole numbers or texts (up to 256 characters each).",
         status=400, code="invalid_audit_before",
     )
     if not isinstance(value, dict) or len(value) > _MAX_AUDIT_BEFORE_FIELDS:
         raise bad
     clean = {}
+    lists = []
     for name, item in value.items():
         if not isinstance(name, str) or not _FIELD_RE.fullmatch(name) or _SECRET_NAME_RE.search(name):
             raise bad
         if isinstance(item, str):
             if len(item) > _BEFORE_STRING_LIMIT or any(ord(ch) < 32 or ord(ch) == 127 for ch in item):
                 raise bad
+        elif isinstance(item, (list, tuple)):
+            # A tuple is refused: a list is the one sequence a caller may send.
+            if not isinstance(item, list):
+                raise bad
+            for entry in item:
+                if isinstance(entry, str) and (len(entry) > _BEFORE_STRING_LIMIT or any(ord(ch) < 32 or ord(ch) == 127 for ch in entry)):
+                    raise bad
+            cleaned = _before_list(item)
+            if cleaned is None:
+                raise bad
+            clean[name], total = cleaned
+            clean[f"{name}_count"] = total
+            if total > len(cleaned[0]):
+                clean[f"{name}_truncated"] = True
+            lists.append(name)
+            continue
         elif not (item is None or isinstance(item, (bool, int))):
             raise bad
         clean[name] = item
+    for name in lists:
+        if f"{name}_count" in value or f"{name}_truncated" in value:
+            raise bad
     return clean
 
 
@@ -1993,6 +2026,14 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
             (
                 "audit.object_field or audit.object_body_field gives the success row's object id (metadata.object_source answer or body) when "
                 "no audit.object_param and no scope object does; no other row carries it"
+            ),
+        ],
+        # 1.17.23 (capability 1.8.0, still major 1): a feature-detect for list values in the caller's audit_before.
+        "declaration_keys_added_in_1_8_0": [],
+        "behaviour_added_in_1_8_0": [
+            (
+                "run(audit_before=) accepts a list of whole numbers or short texts per field, kept to the first 1000 entries; the row carries "
+                "<field>_count and, when cut, <field>_truncated; a caller field named <list>_count or <list>_truncated next to a list is refused"
             ),
         ],
         "refusal_row_codes": list(CORE_REFUSAL_ROW_CODES),

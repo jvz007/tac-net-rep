@@ -178,6 +178,8 @@ Core pairs each package with its sidecars from the release metadata, never by gu
 
 Core refuses with a plain message, naming the file, when a metadata file matches no uploaded package, when it names a signature that was not uploaded, when a signature belongs to no metadata file, or when two metadata files arrive for one package. A copy renamed by the browser (for example `name (1).zip`) does not match the metadata, so rename it back first. When any pairing fails, nothing stays staged. Core still verifies trust for each package when it is staged and again when the batch install is queued.
 
+Where to read the trust of a batch row (confirmed 1.17.23, no behaviour change). A row of `packages` for a standalone package is the stage answer plus `source_kind: "package"`, `source_upload_id` and `source_filename`, so it carries its own `publisher_trust` and its `source_upload_id` equals its `upload_id`. A bundle child row is the child's preview plus `source_kind: "bundle"`, `source_upload_id`, `source_bundle_id` and `source_filename`, and has no `publisher_trust` of its own. Its trust is the `publisher_trust` of the entry in `artifacts` whose `upload_id` equals the row's `source_upload_id` (the bundle). A client that shows trust per row reads the row's own `publisher_trust` when present and otherwise looks up its `source_upload_id` in `artifacts`.
+
 ## Repository releases
 
 Repository index entries may optionally publish:

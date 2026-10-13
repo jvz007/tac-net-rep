@@ -1,6 +1,6 @@
 # Core Runtime Settings
 
-Core stores a small set of settings. Two today: the module `register()` time limit, which the browser shell reads at startup, and (1.17.14) the Tactical operation upload limit, which Core's own executor reads.
+Core stores a small set of settings. Three today: the module `register()` time limit, which the browser shell reads at startup, (1.17.14) the Tactical operation upload limit, which Core's own executor reads, and (1.17.23) the system name an authenticator app shows.
 
 ## Module `register()` time limit
 
@@ -79,3 +79,18 @@ tactical_operation_upload_max_mib   default 10   range 1 to 25 (whole MiB)
 Python: `tec_tac.runtime_settings.get_tactical_upload_max_bytes()` returns the effective ceiling in bytes. It never raises and falls back to 10 MiB. It is informational: Core applies it.
 
 Storage is the `TecTacRuntimeConfig` singleton (migration `0022_runtime_config`).
+
+## System name (1.17.23)
+
+The name an authenticator app (Google Authenticator, Microsoft Authenticator and the like) shows beside the account when a person sets up two-factor sign-in. Before 1.17.23 it showed the server address. Now it shows this name.
+
+```text
+system_name   default "Tec-Tac"   1 to 60 characters, no colon
+```
+
+- It is plain text. Core trims it, normalises it (NFC) and refuses a control character, a zero-width or other invisible character, and a colon. A colon separates the name from the account in an authenticator label, so Core refuses it with a 400 and never stores a changed version.
+- `PATCH /api/tfd/system/runtime-settings/` with `{ "system_name": "Acme IT" }` changes it. JSON `null` resets it to `Tec-Tac`. The right is the same as for the register time limit: an effective superuser or a role with `core.runtime_settings.manage`. The upload limit and the update source stay superuser only.
+- Each change writes its own strict audit row (`object_id` `system_name`, the name before and after). The name is not a secret. A value sent unchanged writes no row.
+- Read: `GET /api/tfd/system/runtime-settings/` carries `system_name` as `{ value, maximum_length, default }`, and `GET /api/tfd/ui/context/` carries `system_name` as a string. Both are additive. No unauthenticated read exists, so the sign-in set-up screen uses the `issuer` of the enrollment answer, which Core builds.
+- Existing authenticator entries keep working. The secret does not change, so only a new set-up (first sign-in, or after "Reset my own two-factor") carries the new label.
+- Python: `tec_tac.runtime_settings.get_system_name()` never raises and falls back to `Tec-Tac`.

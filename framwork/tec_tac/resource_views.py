@@ -21,6 +21,7 @@ from .resources import (
     list_agents,
     list_clients,
     list_sites,
+    list_custom_field_definitions,
     list_custom_fields,
     update_custom_fields,
     update_client,
@@ -214,6 +215,25 @@ class ResourceCustomFieldsView(APIView):
                 self.resource_type,
                 resource_id,
                 values=data["values"],
+                context=user_context(request.user),
+            ))
+        except ResourceDirectoryError as exc:
+            return _error_response(exc)
+
+
+class ResourceCustomFieldDefinitionsView(APIView):
+    """GET /api/tfd/resources/custom-fields/?resource_type=client|site (core.resources 1.6.0, Core 1.17.23)."""
+
+    permission_classes = (SessionAuthenticated,)
+
+    @extend_schema(tags=["Tec-Tac Resources"], summary="List the client or site custom-field definitions with their defaults, before the object exists")
+    def get(self, request):
+        try:
+            unknown = sorted(set(request.query_params) - {"resource_type"})
+            if unknown:
+                raise ResourceValidationError("Unsupported query parameter(s): " + ", ".join(unknown))
+            return Response(list_custom_field_definitions(
+                request.query_params.get("resource_type"),
                 context=user_context(request.user),
             ))
         except ResourceDirectoryError as exc:

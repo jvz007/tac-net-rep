@@ -2,7 +2,7 @@
 
 **Status:** Public Core developer contract, added in Core 1.17.7
 **Python:** `tec_tac.tactical_operations`
-**Capability:** `core.tactical_operations` 1.7.0 (major 1, additive since 1.0.0), owner `core`
+**Capability:** `core.tactical_operations` 1.8.0 (major 1, additive since 1.0.0), owner `core`
 **HTTP:** `POST /api/tfd/tactical-operations/<module_id>/<operation_id>/`
 
 ## Why this exists
@@ -355,8 +355,8 @@ run_tactical_operation(request, "patching", "set-update-action", params, body, a
 
 The rules:
 
-- A flat dict of at most 16 fields. Each value is text (up to 256 characters, no control characters), a whole number, `true`/`false` or `null`.
-- Field names follow the operation's field-name rule (a letter or `_`, then letters, digits and `_`, up to 64 characters). A name that looks like a secret (`pass`, `secret`, `token`, `key`, `credential`, `auth`, `cookie`, `signature`) is refused. A nested value, a float or an oversize value is refused too. The refusal is HTTP 400, code `invalid_audit_before`.
+- A flat dict of at most 16 fields. Each value is text (up to 256 characters, no control characters), a whole number, `true`/`false` or `null`. Since 1.17.23 a value may also be a list of whole numbers or texts (see "A list in `audit_before`" below). The 16-field limit counts the caller's own fields only.
+- Field names follow the operation's field-name rule (a letter or `_`, then letters, digits and `_`, up to 64 characters). A name that looks like a secret (`pass`, `secret`, `token`, `key`, `credential`, `auth`, `cookie`, `signature`) is refused. A nested value (an object, or a list inside a list), a float or an oversize value is refused too. The refusal is HTTP 400, code `invalid_audit_before`.
 - Core uses it only when the operation declares no `audit.before` read. When both exist, Tactical's own read wins and the caller's value is ignored.
 - It is written on the success row only. A refused or failed call keeps no before value.
 - The row metadata says `before: recorded` and `before_source: caller`. A value Core read from Tactical says `before_source: tactical`. A reviewer can tell an asserted value from a read one.
@@ -438,7 +438,7 @@ parameter of the operation's route. A bare list and a paginated `{"results": [..
 1000 rows only. No match, or an answer that is not a list, records `before: unavailable` and never blocks the call. The list route
 must be owned by the same module and use only parameters of the operation, with the same kinds.
 
-The Python-only `audit_before` keyword of `run_tactical_operation` is unchanged and stays flat.
+The Python-only `audit_before` keyword of `run_tactical_operation` stays flat. Since 1.17.23 a field may hold a list of whole numbers or texts (see "A list in `audit_before`").
 
 ### Audit the path parameters: `audit.params`
 
@@ -610,3 +610,26 @@ The rule is: a module passes its own id, except for the AD-20 module it replaces
 - It does not run a Tactical function itself. The owning core module decides which operations exist. Core only runs them.
 - It does not run background work. Mode (b), the Scheduler running as the schedule owner, is the AD-13 system-action contract.
 - It does not replace `tec_tac.audit.record` for a module's own backend action. Use `record` from the backend route for that.
+
+## Added in 1.17.23
+
+Capability `core.tactical_operations` is 1.8.0, still major 1. Everything here is additive. A module needs framework 1.17.23 to rely on it,
+and can feature-detect with `core.tactical_operations >= 1.8.0`. A caller that sends only scalars is unchanged.
+
+### A list in `audit_before` (1.17.23)
+
+A caller that acts on many things at once (Automation's Run now on a set of endpoints) can put the list in `audit_before` so Core's own row carries it:
+
+```python
+run_tactical_operation(request, "automation", "run-now", params, body, audit_before={"endpoint_ids": [12, 15, 31]})
+```
+
+- A field may hold a list. Each item is a whole number (not `true`/`false`) or a text of at most 256 characters with no control characters.
+- Core keeps the first 1000 entries (and at most 65536 characters), exactly as it does for a declared before field. The row carries `<field>_count`, the full length, and, when the list was cut, `<field>_truncated: true`. A list of 1000 or fewer short entries is kept whole and sets no flag. An empty list is recorded with a count of 0.
+- A list that holds an object, a float, `true`/`false`, `null` or another list, a text over 256 characters or with a control character, or a tuple, is refused: HTTP 400 `invalid_audit_before`, one `core_refused` row, no Tactical call.
+- A caller field named `<list>_count` or `<list>_truncated` next to a list is refused, because Core writes those two itself and the row would hold the name twice. The 16-field limit counts the caller's own fields only, so those two Core-written keys do not use it up.
+- The secret-name rule, `before_source: caller`, and the rule that an operation with its own `audit.before` ignores the caller's value, are unchanged. A browser still cannot send `audit_before`.
+
+### Already shipped in 1.17.22, closed here
+
+The `core_refused` row's object id is taken from the cleaned path values only (`_refusal_object_id`), and the compatibility test asserts `server_only` is a boolean. Both are in 1.17.22. Nothing more to build.

@@ -74,15 +74,17 @@ class _Q:
     def select_for_update(self):
         return self
 
-    def filter(self, pk=None, pk__gt=None, name=None):
-        rows = [r for r in self.rows if (pk is None or r.pk == int(pk)) and (pk__gt is None or r.pk > pk__gt) and (name is None or r.name == name)]
+    def filter(self, pk=None, pk__gt=None, pk__in=None, name=None):
+        rows = [r for r in self.rows if (pk is None or r.pk == int(pk)) and (pk__gt is None or r.pk > pk__gt)
+                and (pk__in is None or r.pk in pk__in) and (name is None or r.name == name)]
         return _Q(rows)
 
     def order_by(self, field):
         return _Q(sorted(self.rows, key=lambda r: r.pk, reverse=field.startswith("-")))
 
     def values_list(self, *fields, flat=False):
-        return _Q([types.SimpleNamespace(pk=r.pk, v=r.pk) for r in self.rows])
+        # 1.17.23: the role create wrapper compares the set of ids before and after, so a flat pk list is iterable
+        return [r.pk for r in self.rows]
 
     def first(self):
         if not self.rows:
@@ -103,6 +105,9 @@ class _Manager:
 
     def order_by(self, field):
         return _Q(Role.ROWS.values()).order_by(field)
+
+    def values_list(self, *fields, flat=False):
+        return _Q(Role.ROWS.values()).values_list(*fields, flat=flat)
 
 
 Role.objects = _Manager()

@@ -149,6 +149,7 @@ def update_custom_fields(resource_type, resource_id, *, values, context=None):
 resources.delete_site = delete_site
 resources.delete_client = delete_client
 resources.list_custom_fields = list_custom_fields
+resources.list_custom_field_definitions = lambda *args, **kwargs: {}  # 1.17.23: resource_views imports the definitions read
 resources.update_custom_fields = update_custom_fields
 sys.modules['tec_tac.resources'] = resources
 

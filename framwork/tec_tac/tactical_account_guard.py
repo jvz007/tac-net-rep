@@ -404,24 +404,37 @@ def _succeeded(response) -> bool:
     return isinstance(status, int) and status < 400
 
 
+def _created_role_id(ids_before: set, name):
+    """The id of the one role a successful create added, or a RuntimeError (1.17.23).
+
+    One new id is the created role. When a concurrent create committed in between, the new ids whose name equals the request
+    name are kept, and exactly one must remain. Zero new ids, or an ambiguous set, raises: the guard's transaction then rolls
+    Tactical's create back, as a failed audit write does."""
+    new_ids = set(Role.objects.values_list("pk", flat=True)) - ids_before
+    if len(new_ids) > 1:
+        new_ids = set(Role.objects.filter(pk__in=new_ids, name=name).values_list("pk", flat=True)) if name else set()
+    if len(new_ids) != 1:
+        raise RuntimeError("A role create must be matched to exactly one new role.")
+    return int(next(iter(new_ids)))
+
+
 def _wrap_role_create(original):
     @wraps(original)
     def guarded(self, request, *args, **kwargs):
         violation = _role_create_violation(request.user, request.data)
         if violation:
             _raise_violation(request.user, violation)
-        # Tactical's create answers with text only, so find the new role by id and name inside one transaction.
+        # Tactical's create answers with text only, so find the new role by comparing the role ids before and after, inside one
+        # transaction (1.17.23). The table is small. An empty table works, and a created role is never skipped silently.
         with transaction.atomic():
-            newest = Role.objects.order_by("-pk").values_list("pk", flat=True).first()
+            ids_before = set(Role.objects.values_list("pk", flat=True))
             response = original(self, request, *args, **kwargs)
-            if newest is not None and _succeeded(response):
-                name = _payload_get(request.data, "name")
-                created = Role.objects.filter(pk__gt=newest, name=name).values_list("pk", flat=True).first() if name else None
-                if created is not None:
-                    _audit_role_scope_change(
-                        request.user, role_id=created, action="add",
-                        before=None, after=_role_scope_lists(created),
-                    )
+            if _succeeded(response):
+                created = _created_role_id(ids_before, _payload_get(request.data, "name"))
+                _audit_role_scope_change(
+                    request.user, role_id=created, action="add",
+                    before=None, after=_role_scope_lists(created),
+                )
             return response
     return _mark_guarded(guarded)
 

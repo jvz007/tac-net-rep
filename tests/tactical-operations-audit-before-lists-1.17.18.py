@@ -212,10 +212,10 @@ go()
 must(ROWS[0]["before_value"] == {"note": "x", "user": "u"}, ROWS[0]["before_value"])
 # a GET operation still cannot declare before
 refused({"route": NOTE_ROUTE, "fields": ["a"]}, "changes nothing", op_id="g1", method="GET", body_fields=[])
-# the Python-only audit_before stays flat and is unchanged
+# the Python-only audit_before stays flat: a list of objects is still refused (1.17.23 accepts lists of numbers and texts)
 refused_audit = None
 try:
-    ops.run_tactical_operation(Request(tech), "agents", "note-edit", {"pk": 5}, {"note": "n"}, audit_before={"list": [1]})
+    ops.run_tactical_operation(Request(tech), "agents", "note-edit", {"pk": 5}, {"note": "n"}, audit_before={"list": [{"a": 1}]})
 except ops.TacticalOperationError as exc:
     refused_audit = exc.code
 must(refused_audit == "invalid_audit_before", "audit_before is still a flat object")

@@ -9,11 +9,15 @@ branch, read by the System Updates page and used as the default when staging.
 
 1.17.14 (CQ40): ``tactical_operation_upload_max_mib`` is the largest file one Tactical operation may forward, in whole
 MiB (1 to 25, default 10). Only a superuser changes it. The executor reads it on every call, so a change takes effect at once.
+
+1.17.23: ``system_name`` is the name an authenticator app shows for this system (plain text, 1 to 60 characters, default
+``Tec-Tac``, no colon). Whoever may change the register timeout may change it.
 """
 from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 
 from django.db import transaction
 from drf_spectacular.utils import extend_schema, extend_schema_view
@@ -38,7 +42,10 @@ DEFAULT_TACTICAL_UPLOAD_MAX_MIB = 10
 MIN_TACTICAL_UPLOAD_MAX_MIB = 1
 MAX_TACTICAL_UPLOAD_MAX_MIB = 25
 _MIB = 2**20
-RUNTIME_SETTING_NAMES = (SETTING_MODULE_REGISTER_TIMEOUT, SETTING_TACTICAL_UPLOAD_MAX_MIB)
+SETTING_SYSTEM_NAME = "system_name"
+DEFAULT_SYSTEM_NAME = "Tec-Tac"
+MAX_SYSTEM_NAME_LENGTH = 60
+RUNTIME_SETTING_NAMES = (SETTING_MODULE_REGISTER_TIMEOUT, SETTING_TACTICAL_UPLOAD_MAX_MIB, SETTING_SYSTEM_NAME)
 
 
 RUNTIME_SETTINGS_DENIED = (
@@ -86,6 +93,34 @@ def validate_tactical_upload_max_mib(value) -> int:
     return value
 
 
+def validate_system_name(value) -> str:
+    """Accept only plain text of 1 to 60 characters. Returns the NFC-normalised, trimmed name.
+
+    A colon is refused, never altered: an otpauth label uses ':' to separate the issuer from the account. Control and
+    format characters (zero-width and the like) are refused. bool, number, list and empty text are refused.
+    """
+    if not isinstance(value, str):
+        raise RuntimeSettingsError(f"{SETTING_SYSTEM_NAME} must be text.")
+    name = unicodedata.normalize("NFC", value).strip()
+    if not name:
+        raise RuntimeSettingsError(f"{SETTING_SYSTEM_NAME} must not be empty.")
+    if len(name) > MAX_SYSTEM_NAME_LENGTH:
+        raise RuntimeSettingsError(f"{SETTING_SYSTEM_NAME} must be at most {MAX_SYSTEM_NAME_LENGTH} characters.")
+    if any(unicodedata.category(ch) in ("Cc", "Cf") for ch in name):
+        raise RuntimeSettingsError(f"{SETTING_SYSTEM_NAME} must not contain control or invisible characters.")
+    if ":" in name:
+        raise RuntimeSettingsError(f"{SETTING_SYSTEM_NAME} must not contain a colon.")
+    return name
+
+
+def get_system_name() -> str:
+    """The name an authenticator shows for this system. Never raises: any failure or invalid stored value gives ``Tec-Tac``."""
+    try:
+        return validate_system_name(TecTacRuntimeConfig.current().system_name)
+    except Exception:
+        return DEFAULT_SYSTEM_NAME
+
+
 def get_tactical_upload_max_bytes() -> int:
     """The largest file one Tactical operation may forward, in bytes. Never raises.
 
@@ -123,6 +158,7 @@ def serialize_runtime_settings(config=None) -> dict:
             "default": DEFAULT_MODULE_REGISTER_TIMEOUT_SECONDS,
         },
         SETTING_TACTICAL_UPLOAD_MAX_MIB: _serialize_upload_limit(config),
+        SETTING_SYSTEM_NAME: _serialize_system_name(config),
         "updated_at": config.updated_at.isoformat() if config.updated_at else None,
         "updated_by": config.updated_by.username if config.updated_by else None,
     }
@@ -142,7 +178,15 @@ def _serialize_upload_limit(config) -> dict:
     }
 
 
-def _audit_change(user, before: int, after: int, setting: str = SETTING_MODULE_REGISTER_TIMEOUT) -> None:
+def _serialize_system_name(config) -> dict:
+    try:
+        value = validate_system_name(config.system_name)
+    except (AttributeError, TypeError, ValueError, RuntimeSettingsError):
+        value = DEFAULT_SYSTEM_NAME
+    return {"value": value, "maximum_length": MAX_SYSTEM_NAME_LENGTH, "default": DEFAULT_SYSTEM_NAME}
+
+
+def _audit_change(user, before, after, setting: str = SETTING_MODULE_REGISTER_TIMEOUT) -> None:
     """Strict Core audit row, written in the same transaction as the change. One row per changed setting, ``object_id`` is
     the setting's name."""
     from .audit import record
@@ -162,7 +206,7 @@ def _audit_change(user, before: int, after: int, setting: str = SETTING_MODULE_R
 
 @extend_schema_view(
     get=extend_schema(tags=["Tec-Tac Runtime Settings"], summary="Get the Core runtime settings"),
-    patch=extend_schema(tags=["Tec-Tac Runtime Settings"], summary="Change the module register() time limit or the Tactical operation upload limit"),
+    patch=extend_schema(tags=["Tec-Tac Runtime Settings"], summary="Change the module register() time limit, the Tactical operation upload limit or the system name"),
 )
 class RuntimeSettingsView(APIView):
     permission_classes = [SessionAuthenticated]
@@ -191,13 +235,19 @@ class RuntimeSettingsView(APIView):
                 changes[SETTING_MODULE_REGISTER_TIMEOUT] = validate_module_register_timeout_seconds(data[SETTING_MODULE_REGISTER_TIMEOUT])
             if SETTING_TACTICAL_UPLOAD_MAX_MIB in data:
                 changes[SETTING_TACTICAL_UPLOAD_MAX_MIB] = validate_tactical_upload_max_mib(data[SETTING_TACTICAL_UPLOAD_MAX_MIB])
+            if SETTING_SYSTEM_NAME in data:
+                # JSON null resets the name to the default.
+                name = data[SETTING_SYSTEM_NAME]
+                changes[SETTING_SYSTEM_NAME] = DEFAULT_SYSTEM_NAME if name is None else validate_system_name(name)
         except RuntimeSettingsError as exc:
             return Response({"detail": str(exc)}, status=400)
         with transaction.atomic():
             config = TecTacRuntimeConfig.objects.select_for_update().get(pk=TecTacRuntimeConfig.current().pk)
             changed = []
             for setting, value in changes.items():
-                before = int(getattr(config, setting))
+                before = getattr(config, setting)
+                if setting != SETTING_SYSTEM_NAME:
+                    before = int(before)
                 if before != value:
                     setattr(config, setting, value)
                     changed.append((setting, before, value))

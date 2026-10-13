@@ -52,8 +52,8 @@ class Manager:
     def filter(self, pk): return Query(self).filter(pk)
     def select_for_update(self, *args, **kwargs): return Query(self)
     def select_related(self, *args): return Query(self)
-    # 1.17.22: the role create wrapper looks up the newest role id; this stub holds no scope rows
-    def order_by(self, *args): return Query(self)
+    # 1.17.23: the role create wrapper compares the set of role ids before and after the create; this stub holds no scope rows
+    def values_list(self, *args, **kwargs): return list(self.rows)
 
 class Role:
     DoesNotExist = DoesNotExist
@@ -257,7 +257,11 @@ policy_state["enabled"] = False
 
 # Install wrappers around Tactical's native methods and prove idempotence/pass-through.
 class GetAddRoles:
-    def post(self, request, *args, **kwargs): return "role-create-ok"
+    def post(self, request, *args, **kwargs):
+        # Tactical's create adds a role. Since 1.17.23 the wrapper matches the new id, so the stub adds one too.
+        pk = max([*Role.objects.rows, 900]) + 1
+        Role.objects.rows[pk] = Role(pk)
+        return "role-create-ok"
 class GetUpdateDeleteRole:
     def put(self, request, pk, *args, **kwargs): return f"role-update-{pk}"
     def delete(self, request, pk, *args, **kwargs): return f"role-delete-{pk}"

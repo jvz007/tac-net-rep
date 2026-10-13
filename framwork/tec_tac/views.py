@@ -54,7 +54,7 @@ from .module_runtime import module_runtime_snapshot
 from .registry import get_plugins
 from .notices import unread_count as notice_unread_count
 from .preferences import get_user_preferences
-from .runtime_settings import get_module_register_timeout_seconds, get_update_source
+from .runtime_settings import get_module_register_timeout_seconds, get_system_name, get_update_source
 from .account_self_service import tactical_ui_context
 from .session_security import SessionAuthenticated, _audit
 from .trust_policy import TrustPolicyError, LEVEL_RANK, console_guidance as trust_policy_console_guidance, get_policy as get_update_trust_policy, set_policy as set_update_trust_policy
@@ -207,14 +207,10 @@ def _tec_tac_ui_url(request) -> str:
 
 
 def _tec_tac_totp_issuer(request) -> str:
-    parsed = urlsplit(_tec_tac_ui_url(request))
-    host = str(parsed.hostname or "tec-tac")
-    path = (parsed.path or "/tec-tac/").rstrip("/")
-    # otpauth labels use ':' as the issuer/account separator. Keep the issuer
-    # itself colon-free so authenticators do not parse a URL scheme or port as
-    # part of the separator grammar.
-    issuer = f"{host}{path}".replace(":", "-")
-    return issuer[:160] or "tec-tac"
+    # 1.17.23: the issuer is the system name the administrator set (default "Tec-Tac"), never a host or a path.
+    # otpauth labels use ':' as the issuer/account separator. The setting refuses a colon, so the replace below is
+    # only a last defence.
+    return get_system_name().replace(":", "-")[:60] or "Tec-Tac"
 
 
 def _tec_tac_totp_uri(request, secret: str | None = None) -> str:
@@ -434,6 +430,8 @@ class UiContextView(APIView):
                 "preferences": preferences,
                 # Seconds the UI lets a module's register() run (Core setting, default 30).
                 "module_register_timeout_seconds": get_module_register_timeout_seconds(),
+                # The name an authenticator shows for this system (1.17.23). Read only here.
+                "system_name": get_system_name(),
                 **_runtime_localization(request),
                 "tactical_ui": tactical_ui_context(request.user),
                 "tactical_permissions": tactical_permission_catalog(request.user),

@@ -14,7 +14,7 @@ from . import resources_adapter as adapter
 from .capabilities import register_capability
 
 CONTRACT_ID = "core.resources"
-CONTRACT_VERSION = "1.5.0"
+CONTRACT_VERSION = "1.6.0"
 RESOURCE_TYPES = ("client", "site", "agent")
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 500
@@ -24,6 +24,7 @@ SITE_MANAGE_PERMISSION = "core.resources.sites.manage"
 
 # 1.4.0 appended alert_template_id (an integer or null) to the client and site records; the earlier keys keep their place.
 # 1.5.0 appended ``sites`` (the client's site records inside the caller's scope) to client records and ``client_name`` to site records.
+# 1.6.0 added list_custom_field_definitions (the definitions without a client or site id); no record shape changed.
 CLIENT_FIELDS = ("type", "id", "name", "active", "alert_template_id", "sites")
 SITE_FIELDS = ("type", "id", "name", "client_id", "active", "alert_template_id", "client_name")
 AGENT_FIELDS = (
@@ -231,16 +232,34 @@ def _clean_resource_name(value: Any, kind: str) -> str:
     return clean
 
 
+def _clean_custom_field_id(value: Any) -> int:
+    """A field id as a positive whole number (1.17.23): a real int of 1 or more, or a string of ASCII digits that is at least 1 (the
+    HTTP body may carry it). A boolean, float, None, list, zero, a negative number and text such as ``'1.5'`` or ``' 1'`` are refused.
+    The adapter's own ``int()`` would take ``True`` and ``1.5`` as 1, so the id is cleaned here, before anything is created."""
+    if isinstance(value, bool):
+        raise ResourceValidationError("field_id must be a positive whole number.")
+    if isinstance(value, str):
+        if not (value.isascii() and value.isdigit()):
+            raise ResourceValidationError("field_id must be a positive whole number.")
+        value = int(value)
+    if not isinstance(value, int) or value < 1 or value >= 2**63:
+        raise ResourceValidationError("field_id must be a positive whole number.")
+    return value
+
+
 def _clean_custom_fields(value: Any) -> list[dict[str, Any]] | None:
-    """None, or a list of ``{field_id, value}`` for create_client and create_site (1.17.22). Adapter rules decide the values."""
+    """None, or a list of ``{field_id, value}`` for create_client, create_site and update_custom_fields (1.17.22). The ids are
+    validated and stored back as whole numbers (1.17.23); adapter rules decide the values and refuse a duplicate id."""
     if value is None:
         return None
     if not isinstance(value, list) or len(value) > 200:
         raise ResourceValidationError("custom_fields must be an array of at most 200 items.")
+    cleaned = []
     for item in value:
         if not isinstance(item, dict) or set(item) != {"field_id", "value"}:
             raise ResourceValidationError("Each custom field must contain only field_id and value.")
-    return [dict(item) for item in value]
+        cleaned.append({"field_id": _clean_custom_field_id(item["field_id"]), "value": item["value"]})
+    return cleaned
 
 
 def _custom_field_ids(values: list[dict[str, Any]] | None) -> list[int]:
@@ -630,12 +649,30 @@ def list_custom_fields(resource_type: str, resource_id: Any, *, context: Resourc
     return {"resource_type": resource_type, "resource_id": clean_id, "fields": rows}
 
 
+def list_custom_field_definitions(resource_type: str, *, context: ResourceAccessContext) -> dict[str, Any]:
+    """The non-hidden custom-field definitions for a new client or site, with each field's default as ``value`` (1.6.0, Core 1.17.23).
+
+    Returns ``{resource_type, fields: [{field_id, name, type, options, required, value}]}`` in the same order and shape as
+    ``list_custom_fields``. It serves the Add client and Add site forms, which need the fields before the object exists. No
+    per-client data is read, so there is nothing to scope. Gate: the one the create it serves needs (Tactical can_manage_clients or
+    can_manage_sites plus the Core permission; a superuser passes; a service context is refused). ``resource_type`` must be exactly
+    ``client`` or ``site``."""
+    if not isinstance(resource_type, str) or resource_type not in ("client", "site"):
+        raise ResourceValidationError("resource_type must be client or site.")
+    _authorize_write(context, resource_type)
+    rows = _adapter_write(adapter.custom_field_definition_rows, resource_type=resource_type)
+    return {"resource_type": resource_type, "fields": rows}
+
+
 def update_custom_fields(resource_type: str, resource_id: Any, *, values: list[dict[str, Any]], context: ResourceAccessContext) -> dict[str, Any]:
     resource_type = str(resource_type or "").strip().lower()
     if resource_type not in ("client", "site"):
         raise ResourceValidationError("Custom fields are supported only for clients and sites.")
     user = _authorize_write(context, resource_type)
     clean_id = _clean_positive_int(resource_id, f"{resource_type}_id")
+    if values is None:
+        raise ResourceValidationError("values must be an array.")
+    values = _clean_custom_fields(values)  # 1.17.23: ids are whole numbers before anything is read or saved
     before = _adapter_write(
         adapter.custom_field_rows,
         user=user,
@@ -654,7 +691,7 @@ def update_custom_fields(resource_type: str, resource_id: Any, *, values: list[d
         )
         if rows is None:
             raise ResourceNotFound(f"{resource_type.title()} was not found in the caller's resource scope.")
-        field_ids = sorted(int(item["field_id"]) for item in values)
+        field_ids = _custom_field_ids(values)
         _record_resource_change(
             actor=user,
             action="modify",
@@ -746,7 +783,7 @@ def resource_contract_metadata() -> dict[str, Any]:
             "site": {"id_type": "integer", "fields": list(SITE_FIELDS), "filters": ["client_id", "search", "active", "page", "page_size"]},
             "agent": {"id_type": "string", "fields": list(AGENT_FIELDS), "filters": ["client_id", "site_id", "search", "active", "page", "page_size"]},
         },
-        "operations": ["list_clients", "get_client", "create_client", "update_client", "delete_client", "list_sites", "get_site", "create_site", "update_site", "delete_site", "list_custom_fields", "update_custom_fields", "list_agents", "get_agent", "resolve_resource", "scope_descriptor", "scope_unrestricted", "has_whole_client_access"],
+        "operations": ["list_clients", "get_client", "create_client", "update_client", "delete_client", "list_sites", "get_site", "create_site", "update_site", "delete_site", "list_custom_fields", "update_custom_fields", "list_agents", "get_agent", "resolve_resource", "scope_descriptor", "scope_unrestricted", "has_whole_client_access", "list_custom_field_definitions"],
         "context_properties": ["ResourceAccessContext.scope"],
         "pagination": {
             "default_page_size": DEFAULT_PAGE_SIZE,
@@ -817,6 +854,12 @@ def resource_contract_metadata() -> dict[str, Any]:
                 "body": {"move_to_site_id": "optional positive integer; required when agents exist"},
                 "semantics": "Move all agents atomically to another writable site under the same client, then hard-delete the site; the last site cannot be deleted.",
             },
+            "custom_field_definitions": {
+                "python": "list_custom_field_definitions(resource_type, *, context)",
+                "http": "GET /api/tfd/resources/custom-fields/?resource_type=client|site",
+                "response": {"resource_type": "client|site", "fields": "array[{field_id,name,type,options,required,value}] where value is the field's default"},
+                "semantics": "Since 1.6.0 (Core 1.17.23). The non-hidden definitions for a new client or site, so Add client and Add site can show the fields before the create. Same order and shape as the id read. No per-client data is read, so nothing is scoped. Gate: the create's own (Tactical can_manage_clients or can_manage_sites plus the Core permission; a superuser passes; a service context is refused). resource_type missing or not exactly client or site is 400, as is any other query name.",
+            },
             "client_custom_fields": {
                 "python": ["list_custom_fields", "update_custom_fields"],
                 "http": "GET|PATCH /api/tfd/resources/clients/<id>/custom-fields/",
@@ -867,6 +910,7 @@ class _CoreResourceProvider:
     update_site = staticmethod(update_site)
     delete_site = staticmethod(delete_site)
     list_custom_fields = staticmethod(list_custom_fields)
+    list_custom_field_definitions = staticmethod(list_custom_field_definitions)
     update_custom_fields = staticmethod(update_custom_fields)
     list_agents = staticmethod(list_agents)
     get_agent = staticmethod(get_agent)
@@ -894,7 +938,7 @@ def register_core_resources_capability():
             "list_custom_fields", "update_custom_fields",
             "list_agents", "get_agent", "resolve_resource",
             "scope_descriptor", "scope_unrestricted", "has_whole_client_access",
-            "user_context", "trusted_service_context",
+            "user_context", "trusted_service_context", "list_custom_field_definitions",
         ),
         metadata=resource_contract_metadata(),
     )

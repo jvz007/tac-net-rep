@@ -1,7 +1,7 @@
 # Core Resource Directory
 
 Contract ID: `core.resources`  
-Contract version: `1.5.0`  
+Contract version: `1.6.0`  
 Python namespace: `tec_tac.resources`
 
 ## Purpose
@@ -261,6 +261,7 @@ Authenticated browser/external callers can use:
 
 - `GET/POST /api/tfd/resources/clients/`
 - `GET/PATCH/DELETE /api/tfd/resources/clients/<id>/`
+- `GET /api/tfd/resources/custom-fields/?resource_type=client|site` (since 1.6.0)
 - `GET/PATCH /api/tfd/resources/clients/<id>/custom-fields/`
 - `GET/POST /api/tfd/resources/sites/`
 - `GET/PATCH/DELETE /api/tfd/resources/sites/<id>/`
@@ -346,6 +347,8 @@ If Tactical later changes model/table/field layout, update the Core adapter whil
 
 Contract `1.1.0` is additive over `1.0.0`: it preserves all read operations and resource shapes while adding client/site create/update operations, write authorization metadata and stable conflict errors. A Tactical internal schema change alone is not a reason to change this contract version.
 
+Contract `1.6.0` is additive over `1.5.0`: one new call, `list_custom_field_definitions(resource_type, *, context)`, with the route `GET /api/tfd/resources/custom-fields/?resource_type=client|site`. No record shape changed. See "Custom-field definitions before the create (since 1.6.0)".
+
 Contract `1.5.0` is additive over `1.4.0`: client records gain `sites`, site records gain `client_name` (both appended last), `create_client` gains `site_name` and `custom_fields`, `create_site` gains `custom_fields`.
 
 Contract `1.4.0` is additive over `1.3.0`: client and site records gain `alert_template_id` (appended last), `update_client` and `update_site` gain an optional `alert_template_id`, and the scope operations are new.
@@ -353,3 +356,20 @@ Contract `1.4.0` is additive over `1.3.0`: client and site records gain `alert_t
 ## Core consumers
 
 Core subsystems that need Tactical client, site, or agent scope should use this Resource Directory boundary or its internal adapter rather than importing Tactical resource ORM models directly. Scheduler target authorization follows this rule so Tactical model compatibility and scope behavior remain centralized.
+
+## Custom-field definitions before the create (since 1.6.0, Core 1.17.23)
+
+Add client and Add site show the custom fields before the object exists, so they cannot use the read that needs a client or site id.
+
+```python
+from tec_tac.resources import list_custom_field_definitions
+list_custom_field_definitions("client", context=context)
+# {"resource_type": "client", "fields": [{"field_id": 1, "name": "Account code", "type": "text", "options": [], "required": True, "value": ""}]}
+```
+
+- `GET /api/tfd/resources/custom-fields/?resource_type=client|site` gives the same answer over HTTP.
+- Each row has the shape and order of the id read (`list_custom_fields`): non-hidden fields only, ordered by `order`, name and id. `value` is the field's default.
+- No per-client data is read, so nothing is scoped. A role limited to one client still gets the definitions.
+- The gate is the create's own: Tactical `can_manage_clients` (for `client`) or `can_manage_sites` (for `site`) plus the Core permission. A superuser passes. A service context is refused. A role with only List clients is refused, because only a person who can add a client needs the form. This is the same gate as the id read.
+- `resource_type` missing, or anything other than exactly `client` or `site` (`agent`, `Client `), is a 400. An unknown query name is a 400.
+- Field ids in `custom_fields` of `create_client`, `create_site` and `update_custom_fields` must be positive whole numbers (1.17.23). A boolean, a float, `null`, zero, a negative number, a list or text such as `1.5` is refused with 400 `field_id must be a positive whole number.` before anything is created.

@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.22",
+  "version": "1.17.23",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "66c389576a517f455059348a31b1788ed1ff07f441e7bbb7d20f47579c019812"
     },
     {
-      "path": "RELEASE_NOTES_1.17.22.md",
-      "size": 12656,
-      "sha256": "62d5fcfd6b632ec6c2c6c640cc4c5be8ac469760574c8a05074c76dc221362f2"
+      "path": "RELEASE_NOTES_1.17.23.md",
+      "size": 12917,
+      "sha256": "ca5f152502d1f8cf6d2dd3b4895af05b9a127aee1524e3b6435597e5c81dee03"
     },
     {
       "path": "VERSION",
       "size": 7,
-      "sha256": "5cb633f9de46aef214cb0f2b0cd8607c714eece3fc675206265375a344f6642e"
+      "sha256": "a276675d956d90390d0ccb95888e026abca7873fd0930e28b8800a2aa8d6d3c2"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -58,8 +58,8 @@
     },
     {
       "path": "docs/account-security-policy.md",
-      "size": 3937,
-      "sha256": "80843a5d715979ad3eb2754f4571fa871e93e2ba2f08cbcc6e75e8e8a357a7a7"
+      "size": 4429,
+      "sha256": "c34f853999dc5dc028cb7f4bddf8f9a46d240fcba31bd44fc9030ff7236ff1eb"
     },
     {
       "path": "docs/caller-identity.md",
@@ -1117,6 +1117,11 @@
       "sha256": "6e342c1019a06ffb0cd7c24589501693f06702ca8cb10d8385eff696afbe9168"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.22.md",
+      "size": 12656,
+      "sha256": "62d5fcfd6b632ec6c2c6c640cc4c5be8ac469760574c8a05074c76dc221362f2"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.3.md",
       "size": 4600,
       "sha256": "f0f4683ec45092f3a12500e9b81bb3e18cd3aed75ac4942a000151893f46429f"
@@ -1233,13 +1238,13 @@
     },
     {
       "path": "docs/resource-directory.md",
-      "size": 22027,
-      "sha256": "81b7f72b6ac676fc88125e926aec8ca7ecaaeefa875823b76f957ac3cc484fbb"
+      "size": 24034,
+      "sha256": "354c3335f236862af53aff4996a44e0803b4cbf1c829debe4d60283ccb30667e"
     },
     {
       "path": "docs/runtime-settings.md",
-      "size": 5418,
-      "sha256": "d028634a62da4e408413d7a54d2938bc0ebcb53af4046f4922a30883b8ae057c"
+      "size": 7152,
+      "sha256": "6a66e19c9fafc12eb4cf337a867375602f7e436c5147f14c653853b99467d19f"
     },
     {
       "path": "docs/saved-views.md",
@@ -1273,8 +1278,8 @@
     },
     {
       "path": "docs/tactical-operations.md",
-      "size": 51815,
-      "sha256": "7cd4aaaf15cfd9d60b703735dd0d1ad078655beb5b84baa83d9e0dcb2b547db4"
+      "size": 54147,
+      "sha256": "4593b7241ed4f7cd625512c92941c08a696e15bc47b5001739a7989ea4a47b48"
     },
     {
       "path": "docs/tracker-acceptance-1.15.173.md",
@@ -1288,8 +1293,8 @@
     },
     {
       "path": "docs/trusted-publisher-verification.md",
-      "size": 13796,
-      "sha256": "ea5799a50514554537be5780e941ea8c4d472e370c09dcc3cb06fbde013089c5"
+      "size": 14560,
+      "sha256": "ec69c15de57caee0d49089b3d305a7e3ec49eeae8ccb4b3ed5f2da22a6cc915d"
     },
     {
       "path": "docs/tutorial-packages/packagetest/README.md",
@@ -1538,8 +1543,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 188573,
-      "sha256": "0ca286e0b5d4701cbaf066cf89fc9ae645eda4559f2fd50a4f7a0eb26aa61410"
+      "size": 196965,
+      "sha256": "506e74c5a32a9c6d3773f9d7c105b8b2fd368c6dfb3ab1fee57a0b75e7e3cdd8"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -1732,14 +1737,19 @@
       "sha256": "432f1be0301e9e9fb36d6a0c50d0d4445e044ad47c27bf0c6bdaaab93aa16877"
     },
     {
+      "path": "framwork/tec_tac/migrations/0027_runtime_system_name.py",
+      "size": 638,
+      "sha256": "0bb83819557104674c3c8f7f8d3a76b4ec2412b6c943d5af87a0b188109c0a37"
+    },
+    {
       "path": "framwork/tec_tac/migrations/__init__.py",
       "size": 0,
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "path": "framwork/tec_tac/models.py",
-      "size": 21879,
-      "sha256": "a67b97d3bdbd26d7213a0e826f0eb761178540486fd449555ebd8da6fb4ea559"
+      "size": 22059,
+      "sha256": "176381568e228610090e5c12971d14e2b1a4674fd7c83c4677206cd437b89b1c"
     },
     {
       "path": "framwork/tec_tac/module_category.py",
@@ -1848,18 +1858,18 @@
     },
     {
       "path": "framwork/tec_tac/resource_views.py",
-      "size": 9153,
-      "sha256": "3aeaeb52cf7f936435985c6fca7209fa0c213d3570498df9af58416eeb0084be"
+      "size": 10072,
+      "sha256": "9518605b737c32641ec86507cd0d515e9a8f657239183f92a139d0905a97afe8"
     },
     {
       "path": "framwork/tec_tac/resources.py",
-      "size": 48543,
-      "sha256": "209a74c32bc9c8aec4edb7354756936ffda9569d4c75681d4d04445835eb05e9"
+      "size": 52169,
+      "sha256": "f6f67d9b9ea54225e20b8b26f1a9ae9684ad86c189fc11fed58181e2eaf588b6"
     },
     {
       "path": "framwork/tec_tac/resources_adapter.py",
-      "size": 48693,
-      "sha256": "b7c64698ada99adb8a80d81bef2f958fcfc811aa2781760fe344d3b4a7dcce04"
+      "size": 49599,
+      "sha256": "f083ed97836719ec73fc7da655d4efa70850d5cf5a2936e9d35ea2138c384c13"
     },
     {
       "path": "framwork/tec_tac/route_mounting.py",
@@ -1868,8 +1878,8 @@
     },
     {
       "path": "framwork/tec_tac/runtime_settings.py",
-      "size": 15386,
-      "sha256": "7a471ac6e6aa94c2682696f7fb8dee89da2d5773de0efcdccc4bdfa354c50b9c"
+      "size": 17869,
+      "sha256": "3fd3452f405956df0c6f62b0b82339485374dd914d2fb33bedad3ff3ed6f0128"
     },
     {
       "path": "framwork/tec_tac/safe_files.py",
@@ -1948,8 +1958,8 @@
     },
     {
       "path": "framwork/tec_tac/tactical_account_guard.py",
-      "size": 24675,
-      "sha256": "7040e3c412c013d9c43862e2ad266685521d9a489e5d751f32f91924df3b3b40"
+      "size": 25434,
+      "sha256": "3929c13b616df446f0f8d1a5730c1dec936d296ac93ee417ca350db1690e163d"
     },
     {
       "path": "framwork/tec_tac/tactical_account_guard_fallback.py",
@@ -1963,8 +1973,8 @@
     },
     {
       "path": "framwork/tec_tac/tactical_operations.py",
-      "size": 114606,
-      "sha256": "352b414abec86539e6c1165320e39ea91ddb97e2eaf499aff568141288a16ee5"
+      "size": 117111,
+      "sha256": "76324632c99a6b63318a7160635ac2f08ba0a5460a2a935c6d020c2ce4b9ad7b"
     },
     {
       "path": "framwork/tec_tac/tasks.py",
@@ -2003,13 +2013,13 @@
     },
     {
       "path": "framwork/tec_tac/urls.py",
-      "size": 14490,
-      "sha256": "1f66b78d66d63f7ffb2331af029564c3469a34516b7df80c9c73bc31083ac4e8"
+      "size": 14660,
+      "sha256": "6d65bae5001834cd1f95078ad5473b6f3ef8699c2c9803ad8cdf70c207e65348"
     },
     {
       "path": "framwork/tec_tac/views.py",
-      "size": 39887,
-      "sha256": "79e8fe724d1800cde2fb72935116108ae31122c59dfc0df965702ca2e409f8d3"
+      "size": 39943,
+      "sha256": "d0c15124f37563797dafc913d9be9f8beb46c6b4468e89d29382015c1c26a29d"
     },
     {
       "path": "install.sh",
@@ -2184,7 +2194,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "65f3c6c35385f1da535ed3231b29cca6ebdc31b0bf3aa8d9f322782da65375b0"
+      "sha256": "d27e82ae0e3b33dcbbc657a33531e5fdba0b766c1bca4941c0f49bbd329deb8b"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2249,7 +2259,7 @@
     {
       "path": "tests/audit-correlation-1.17.16.py",
       "size": 8959,
-      "sha256": "a1fd40e9bd0123c86caec7e5674c8f123fe096a79f1b68510c1fa9cdcd4a1ce2"
+      "sha256": "481bc5cb8993835ebee0515eddd99e73adc63bbaae10553198646ff58ddd7802"
     },
     {
       "path": "tests/audit-declared-browser-events-1.16.0.py",
@@ -2308,13 +2318,18 @@
     },
     {
       "path": "tests/browser-contract-catalog-1.15.170.py",
-      "size": 2755,
-      "sha256": "c6c6bf53cfcda1567707784f1447fb1af622d98fc67e0ec06251293effeaa80f"
+      "size": 2986,
+      "sha256": "00242a3164cfecb35379b0a7238ab996b72056d501e54ff2a4134539c8421505"
+    },
+    {
+      "path": "tests/browser-contract-popup-confirm-1.17.23.py",
+      "size": 5377,
+      "sha256": "9a3a4244124ec807d1585867b9710ec04b46b253b14d5ff167f8f8bbd7dc10e6"
     },
     {
       "path": "tests/browser-contract-runtime-surface-1.17.2.py",
-      "size": 4077,
-      "sha256": "e281db0b101a1ddb62409ecab25b975f3247def37eee737ab8e09bfef3062794"
+      "size": 4169,
+      "sha256": "ff8404d77426abc93d43261a551731c35f48cd3f532e9849b1f57beb2e70475c"
     },
     {
       "path": "tests/browser-contract-tactical-operation-1.17.12.py",
@@ -2354,7 +2369,7 @@
     {
       "path": "tests/contract-export-1.17.16.py",
       "size": 6470,
-      "sha256": "ab83e980a3e3157fc6c433bc64edd87a80f7c63e1709c5998aa88c871470a0fa"
+      "sha256": "d37b07eee8e1d964e1aeb2b39a450fdea13fbfeb3bd836c753ce72b3d0adef4a"
     },
     {
       "path": "tests/contract-export-1.17.18.py",
@@ -2370,6 +2385,11 @@
       "path": "tests/core-contract-compat-1.15.141.py",
       "size": 4932,
       "sha256": "3ca3f557771df74117f8435a9d7967fc893dbc44be7bbde52da87f458c8b8147"
+    },
+    {
+      "path": "tests/custom-field-validation-1.17.23.py",
+      "size": 6662,
+      "sha256": "27f501aa9a2e64767a97088676a2fb656e6f138ca2f36861e11d2dcb3cbfc505"
     },
     {
       "path": "tests/d1-account-protection-policy-boundary.py",
@@ -2722,6 +2742,11 @@
       "sha256": "c7f0f9cd0d860523389452d9c0c3e89b0cb8a60b21128d9631a036d78a6d10cd"
     },
     {
+      "path": "tests/module-intake-batch-trust-1.17.23.py",
+      "size": 7051,
+      "sha256": "f27e9952d39657d1ee48bed9d08bf02119a657c8efb518977ae35d0be308be9c"
+    },
+    {
       "path": "tests/module-intake-multi-signature-1.17.18.py",
       "size": 6461,
       "sha256": "76e32a68c5b5a98a27f2a4232dd52646b89f1e31eb935537a5b9ea5ba788d5c2"
@@ -3024,7 +3049,7 @@
     {
       "path": "tests/resource-alert-template-1.17.17.py",
       "size": 31984,
-      "sha256": "071ea8821ab32c518368f771e97dfc1a7103b660013146a1e9443fd9932d9cd5"
+      "sha256": "2761000b6b6325cdeaa38680ebcf9f4afbfe2969aa2d054b5a36df46dbdd3e55"
     },
     {
       "path": "tests/resource-alert-template-runtime-1.17.17.py",
@@ -3034,7 +3059,7 @@
     {
       "path": "tests/resource-client-sites-1.17.22.py",
       "size": 7401,
-      "sha256": "07f42d1337241ad6dbe1450196457b2a4367c044b6e9953f1f06f827546d785c"
+      "sha256": "a98f72408dee06eaa41e2d881d656af61ea304c93d65cdcb517b4c7914527bc9"
     },
     {
       "path": "tests/resource-client-sites-runtime-1.17.22.py",
@@ -3052,6 +3077,11 @@
       "sha256": "ec1167aea1052ef592ed19bd618846929fd5cdee0aaef9ce3da3b54703a7092a"
     },
     {
+      "path": "tests/resource-custom-field-definitions-1.17.23.py",
+      "size": 11003,
+      "sha256": "0ac5307af055fb5543206172f60db4fa76954969d4378e1211acd8455f674aeb"
+    },
+    {
       "path": "tests/resource-directory-custom-fields-postgres.py",
       "size": 8986,
       "sha256": "b34f5b9fa16cc722a86e0c23e4d67886d419d29772943c8d793eecfb012900fe"
@@ -3064,7 +3094,7 @@
     {
       "path": "tests/resource-directory-foundation.py",
       "size": 27256,
-      "sha256": "d6c0ed50ff5b48e6fcd1b40fe3d2cb5ae38df15661227598ad3a053a7e30f110"
+      "sha256": "1bc19e4456500064d5b2963fb6a3305647b4a5ba3997530c7c0cf6b178f4d318"
     },
     {
       "path": "tests/resource-directory-foundation.sh",
@@ -3127,14 +3157,24 @@
       "sha256": "773e2a9b362323ad65c3c10987d6294912abb59ef4f4d16f40002ce807575b15"
     },
     {
+      "path": "tests/role-create-audit-1.17.23.py",
+      "size": 11258,
+      "sha256": "ce7da2d6efc209912c4091a50cda15f01c92010262ed66f8a386efb4f607e9be"
+    },
+    {
+      "path": "tests/role-create-runtime-1.17.23.py",
+      "size": 3683,
+      "sha256": "b37d5014c5bc20562ee59869d7275d2fb87bbbd168ddcb16ef2b74973c819a0b"
+    },
+    {
       "path": "tests/role-permission-save-regression.py",
       "size": 4669,
       "sha256": "fae3fcb8832fe07160d514e6003249158b890c4476cebaffed724dcada7af185"
     },
     {
       "path": "tests/role-scope-lists-1.17.22.py",
-      "size": 11425,
-      "sha256": "1bb70690c78c6076dc4c4c190c68e04f83e2908be8f7d68f797a5ab4934cec36"
+      "size": 11689,
+      "sha256": "25197b24ff04e5ace3009d2e0875cb167b54d8ca4313b5054ed3b5d935f84ba6"
     },
     {
       "path": "tests/role-scope-lists-runtime-1.17.22.py",
@@ -3188,8 +3228,8 @@
     },
     {
       "path": "tests/runtime-settings-upload-1.17.14.py",
-      "size": 10989,
-      "sha256": "bcf69ab27c9ebe02aa36dfe39c4c17055bc869cf3b118ba023591c2c815afeab"
+      "size": 11024,
+      "sha256": "a8a1451b0aeed2eabb2426e2a710005b3a83db87d0add26ab2fce14c4b5b6a7b"
     },
     {
       "path": "tests/runtime-settings-upload-runtime-1.17.14.py",
@@ -3542,6 +3582,16 @@
       "sha256": "52e59f6872736891b64ba5079842ad5731e0f25ba54988c732c4f870042872db"
     },
     {
+      "path": "tests/system-name-1.17.23.py",
+      "size": 11149,
+      "sha256": "714a79798841f47c930d43aa93ed50b1aa9a294d9ddf0c85eb86076d27985ee0"
+    },
+    {
+      "path": "tests/system-name-runtime-1.17.23.py",
+      "size": 2711,
+      "sha256": "43c3186d9c1e3aeb653a39e787b41a2c9c65af8859c0e3795731db3b7a45e7fe"
+    },
+    {
       "path": "tests/system-update-claim-security.py",
       "size": 5896,
       "sha256": "16795a886e3f3ae03fc1705dba251e7067e8fc937287f79475bbf548b7e8b5a2"
@@ -3589,12 +3639,12 @@
     {
       "path": "tests/tactical-operations-1.17.7.py",
       "size": 53942,
-      "sha256": "7b9b9908b769682a8526dd36912ded3b66bc7fffc70f16cd23ff2275bc1b7cac"
+      "sha256": "7427643083ea35d597774860e2d00b023d27427ecefe766d804c438343390e5a"
     },
     {
       "path": "tests/tactical-operations-audit-before-1.17.16.py",
-      "size": 9775,
-      "sha256": "57eb90ceefc62e50d79ddd05e23aa63daef856a31a02e548176b958653255f4e"
+      "size": 9760,
+      "sha256": "d8965bd77211ba475dfa1d9dfcec7639c0da0edfa7658b11fedac5d26268d7c5"
     },
     {
       "path": "tests/tactical-operations-audit-before-fullmatch-1.17.17.py",
@@ -3603,8 +3653,13 @@
     },
     {
       "path": "tests/tactical-operations-audit-before-lists-1.17.18.py",
-      "size": 13282,
-      "sha256": "be718296578bbfe5bc6633e936231077e6fc870d0b9700226fcd2c9ba172a2e6"
+      "size": 13353,
+      "sha256": "96fc7acba01ba44e6bbdf8d40f452d12d737f0c91fdad1bb7ce8f6caac7563bd"
+    },
+    {
+      "path": "tests/tactical-operations-audit-before-lists-1.17.23.py",
+      "size": 7342,
+      "sha256": "c89a23f7927bd74c8cbda73290c61b436788e695cd4b469bd4b9e78d7a84ea38"
     },
     {
       "path": "tests/tactical-operations-audit-object-1.17.13.py",
@@ -3619,7 +3674,7 @@
     {
       "path": "tests/tactical-operations-before-scope-1.17.14.py",
       "size": 9965,
-      "sha256": "bffc9b2f922ca6a943dccd8a6d05faa4743b57ee916088be9a6e4fbd806415a1"
+      "sha256": "140a126e6014dfc0b9a3a6264c2f115df265027aa25a94e31f8079afb34eae5a"
     },
     {
       "path": "tests/tactical-operations-body-selector-1.17.18.py",
@@ -3629,12 +3684,12 @@
     {
       "path": "tests/tactical-operations-core-refused-rows-1.17.21.py",
       "size": 18643,
-      "sha256": "9f9836c3e842277b3708d8bb3a21835e47b7627421ed66354ab33a32e1de2f70"
+      "sha256": "45fb6bbbcf54af43fcb079af69191b9989f76f713b1d85a1da41115b401c207b"
     },
     {
       "path": "tests/tactical-operations-failed-rows-1.17.20.py",
       "size": 8021,
-      "sha256": "fe25727c443c12a55b9e2d891d419e2017c3f6b124c3ee32960df75ac6ef8909"
+      "sha256": "5af87e545741bae33248b3a0e9f06a486736ea15e0b82ad008f020185252538b"
     },
     {
       "path": "tests/tactical-operations-modules-compat-1.17.18.py",
@@ -3644,7 +3699,7 @@
     {
       "path": "tests/tactical-operations-object-field-1.17.21.py",
       "size": 14855,
-      "sha256": "ab3e7b2916ad0f09f5f9687276323813b4f523d2b6bf72e520253252fd37d75b"
+      "sha256": "b75c4416549b22df7ee96a844eb358df203ac7331edd64da69f45be4d9a8ccd9"
     },
     {
       "path": "tests/tactical-operations-query-upload-1.17.13.py",
@@ -3674,7 +3729,7 @@
     {
       "path": "tests/tactical-operations-server-only-1.17.19.py",
       "size": 10006,
-      "sha256": "6a149d0c36a71fe41fbca1f0191e4421b252e0daefa6eee3225d5622dc3b9732"
+      "sha256": "a32f32d7650c5b95b5cdb51390b117891ce6c818ff5e7cb442591adc572d435c"
     },
     {
       "path": "tests/tactical-operations-unrestricted-1.17.18.py",
@@ -3703,8 +3758,8 @@
     },
     {
       "path": "tests/tactical-superuser-guard.py",
-      "size": 21607,
-      "sha256": "b3ee4a015a0b11868eafbd138d288b2af89e9d72315c1c1c3235e9792a7b0687"
+      "size": 21863,
+      "sha256": "7cce33b1eb7c93ecad3c465c81f38ffb9716677c15f0ae893f9624695b2a3b41"
     },
     {
       "path": "tests/tactical-update-survival.sh",
@@ -3763,8 +3818,8 @@
     },
     {
       "path": "tests/tracker-http-feature-boundary-1.15.172.py",
-      "size": 9155,
-      "sha256": "8cd50e1cf7e0afbbbfcc79d693b2922e99ab9d6175bd8ea435469a224bb7b7b9"
+      "size": 9280,
+      "sha256": "8f965f63219a390ab67a1c03b9879ae97a10c153dd40a673684778f494b198d8"
     },
     {
       "path": "tests/tracker-open-closure-1.15.158.py",
@@ -3828,8 +3883,8 @@
     },
     {
       "path": "tests/update-source-1.17.2.py",
-      "size": 29211,
-      "sha256": "caa67c7700e8850156b7999269aa552b0792dcaf3871da0b19dc9811b054c7ed"
+      "size": 29247,
+      "sha256": "3edbfad45692a8a876e76152852fe9c19d05de9a213ad453ce926181fa75ecb3"
     },
     {
       "path": "tests/update-source-1.17.3.py",
