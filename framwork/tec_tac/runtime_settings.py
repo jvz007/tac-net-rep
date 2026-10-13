@@ -12,6 +12,9 @@ MiB (1 to 25, default 10). Only a superuser changes it. The executor reads it on
 
 1.17.23: ``system_name`` is the name an authenticator app shows for this system (plain text, 1 to 60 characters, default
 ``Tec-Tac``, no colon). Whoever may change the register timeout may change it.
+
+1.17.24: only an effective superuser may change ``system_name`` (held Low of the 1.17.23 review). A refusal writes one
+best-effort Core ``deny`` row, and so does the upload-limit refusal.
 """
 from __future__ import annotations
 
@@ -60,6 +63,9 @@ UPDATE_SOURCE_DENIED = "Only a Tec-Tac superuser may change the update source."
 # The upload ceiling: superusers only, the same rule as the update source (CQ40 assumption, 1.17.14). The register timeout
 # keeps core.runtime_settings.manage.
 UPLOAD_LIMIT_DENIED = "Only a Tec-Tac superuser may change the Tactical operation upload limit."
+
+# The system name: superusers only (1.17.24). The register timeout keeps core.runtime_settings.manage.
+SYSTEM_NAME_DENIED = "Only a Tec-Tac superuser may change the system name."
 
 
 class RuntimeSettingsError(ValueError):
@@ -204,9 +210,29 @@ def _audit_change(user, before, after, setting: str = SETTING_MODULE_REGISTER_TI
     )
 
 
+def _deny_superuser_only(request, setting: str, message: str) -> None:
+    """Refuse a superuser-only setting: one best-effort Core ``deny`` row (never the value), then 403."""
+    try:
+        from .audit import record
+
+        record(
+            actor=request.user,
+            module_id="core",
+            action="deny",
+            object_type="runtime_settings",
+            object_id=setting,
+            message="Blocked a runtime setting change that needs a superuser.",
+            metadata={"reason": "superuser_required"},
+            strict=False,
+        )
+    except Exception:
+        logger.exception("Unable to persist the runtime setting denial audit")
+    raise PermissionDenied(message)
+
+
 @extend_schema_view(
     get=extend_schema(tags=["Tec-Tac Runtime Settings"], summary="Get the Core runtime settings"),
-    patch=extend_schema(tags=["Tec-Tac Runtime Settings"], summary="Change the module register() time limit, the Tactical operation upload limit or the system name"),
+    patch=extend_schema(tags=["Tec-Tac Runtime Settings"], summary="Change the module register() time limit, or (superuser only) the Tactical operation upload limit or the system name"),
 )
 class RuntimeSettingsView(APIView):
     permission_classes = [SessionAuthenticated]
@@ -227,8 +253,12 @@ class RuntimeSettingsView(APIView):
         if not data:
             return Response({"detail": "Send at least one runtime setting: " + " or ".join(RUNTIME_SETTING_NAMES) + "."}, status=400)
         # The upload limit is superuser only. Checked before the values, so a non-superuser gets 403 and never 400.
-        if SETTING_TACTICAL_UPLOAD_MAX_MIB in data and not is_effective_superuser(request.user):
-            raise PermissionDenied(UPLOAD_LIMIT_DENIED)
+        # The system name is superuser only too (1.17.24). A mixed body is refused whole, so nothing is saved.
+        if not is_effective_superuser(request.user):
+            if SETTING_TACTICAL_UPLOAD_MAX_MIB in data:
+                _deny_superuser_only(request, SETTING_TACTICAL_UPLOAD_MAX_MIB, UPLOAD_LIMIT_DENIED)
+            if SETTING_SYSTEM_NAME in data:
+                _deny_superuser_only(request, SETTING_SYSTEM_NAME, SYSTEM_NAME_DENIED)
         changes = {}
         try:
             if SETTING_MODULE_REGISTER_TIMEOUT in data:

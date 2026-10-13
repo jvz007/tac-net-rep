@@ -383,6 +383,9 @@ class TecTacSessionTrust(models.Model):
     revoked_at = models.DateTimeField(null=True, blank=True)
     revoked_by = models.CharField(max_length=150, blank=True, default="")
     revocation_reason = models.CharField(max_length=255, blank=True, default="")
+    # The theme chosen in the dropdown for this sign-in only (1.17.24). Empty means none was chosen. It lives and dies with the
+    # session row, is never copied to the saved preference, and a new sign-in starts with a new row.
+    session_theme = models.CharField(max_length=16, blank=True, default="")
 
     class Meta:
         ordering = ("-last_seen_at", "-created_at")

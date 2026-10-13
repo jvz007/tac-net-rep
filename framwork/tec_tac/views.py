@@ -56,7 +56,7 @@ from .notices import unread_count as notice_unread_count
 from .preferences import get_user_preferences
 from .runtime_settings import get_module_register_timeout_seconds, get_system_name, get_update_source
 from .account_self_service import tactical_ui_context
-from .session_security import SessionAuthenticated, _audit
+from .session_security import SessionAuthenticated, _audit, session_theme_of
 from .trust_policy import TrustPolicyError, LEVEL_RANK, console_guidance as trust_policy_console_guidance, get_policy as get_update_trust_policy, set_policy as set_update_trust_policy
 
 from . import resources_adapter
@@ -428,6 +428,8 @@ class UiContextView(APIView):
                 "module_status": module_runtime_snapshot(plugins),
                 "notice_unread_count": notice_unread_count(request.user),
                 "preferences": preferences,
+                # The theme chosen for this sign-in only (1.17.24): null or a theme. Held on the session, never in the preference.
+                "session_theme": session_theme_of(getattr(request, "tec_tac_session", None)),
                 # Seconds the UI lets a module's register() run (Core setting, default 30).
                 "module_register_timeout_seconds": get_module_register_timeout_seconds(),
                 # The name an authenticator shows for this system (1.17.23). Read only here.

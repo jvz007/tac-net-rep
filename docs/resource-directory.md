@@ -1,7 +1,7 @@
 # Core Resource Directory
 
 Contract ID: `core.resources`  
-Contract version: `1.6.0`  
+Contract version: `1.7.0`  
 Python namespace: `tec_tac.resources`
 
 ## Purpose
@@ -24,6 +24,8 @@ tec_tac.resources           <- stable public contract
         +-- Alerts / Automation / other modules
 ```
 
+Contract 1.7 (Core 1.17.24, additive, still major 1) adds `workstation_policy_id`, `server_policy_id` and `block_policy_inheritance` to client and site records, lets `update_client` and `update_site` set or clear them, and adds the `alert_template_id` and `policy_id` list filters. It also documents and pins the site move. Existing keys, keywords, paging and error codes do not change. See "Policy fields (since 1.7.0)", "List filters (since 1.7.0)" and "Move a site".
+
 Contract 1.5 (Core 1.17.22, additive, still major 1) adds `sites` to client records (that client's site records inside the caller's scope), `client_name` to site records, `site_name` and `custom_fields` to `create_client`, `custom_fields` to `create_site`, and the role scope list contract below. Existing keys, query parameters, paging and error codes do not change.
 
 Contract 1.4 (Core 1.17.17, additive, still major 1) adds `alert_template_id` to client and site records, lets `update_client` and `update_site` set or clear it, and adds the scope descriptor (`scope_descriptor`, `scope_unrestricted`, `has_whole_client_access`, `ResourceAccessContext.scope`, and `tactical_scope` in the runtime context). Existing callers keep working: the new record keys are appended after the old ones and every new keyword is optional.
@@ -44,7 +46,7 @@ Contract 1.3 keeps the 1.2 scoped read/create/update boundary and adds audited c
 }
 ```
 
-Stable fields: `type`, `id`, `name`, `active`, `alert_template_id` (since 1.4.0, an integer or `null`; appended after the earlier keys), `sites` (since 1.5.0, appended last).
+Stable fields: `type`, `id`, `name`, `active`, `alert_template_id` (since 1.4.0, an integer or `null`; appended after the earlier keys), `sites` (since 1.5.0), `workstation_policy_id`, `server_policy_id`, `block_policy_inheritance` (since 1.7.0, appended last).
 
 `sites` is the list of that client's site records the caller may see, ordered by name then id, each with the shape of a site record below. It uses the same `Site.filter_by_role` rule as the sites read. A client-limited role gets every site of its clients plus granted sites. A site-only role gets only its granted sites under the parent client. An unrestricted caller and a trusted global service context get every site. A client with no site in scope has `"sites": []`. It is loaded with one query per page. It needs only `can_list_clients`, as Tactical's own `GET /clients/` does, so showing nested site names to a role without `can_list_sites` opens no data beyond Tactical (AD-5, AD-25). The sites read itself stays refused without `can_list_sites`. `list_clients`, `get_client`, `create_client` and `update_client` carry it.
 
@@ -61,7 +63,7 @@ Stable fields: `type`, `id`, `name`, `active`, `alert_template_id` (since 1.4.0,
 }
 ```
 
-Stable fields: `type`, `id`, `name`, `client_id`, `active`, `alert_template_id` (since 1.4.0, an integer or `null`), `client_name` (since 1.5.0, appended last).
+Stable fields: `type`, `id`, `name`, `client_id`, `active`, `alert_template_id` (since 1.4.0, an integer or `null`), `client_name` (since 1.5.0), `workstation_policy_id`, `server_policy_id`, `block_policy_inheritance` (since 1.7.0, appended last).
 
 `client_name` is the owning client's name, as Tactical's own `/clients/sites/` returns it. It comes from the client join with no extra query per row, so a role with only `can_list_sites` can group sites by client without reading clients.
 
@@ -168,10 +170,10 @@ Core computes the descriptor once in the adapter, from the same rule that Schedu
 ### Client/site write operations
 
 - `create_client(name=..., context=..., site_name=None, custom_fields=None)`
-- `update_client(client_id, name=None, alert_template_id=UNSET, context=...)`
+- `update_client(client_id, name=None, alert_template_id=UNSET, workstation_policy_id=UNSET, server_policy_id=UNSET, block_policy_inheritance=UNSET, context=...)`
 - `delete_client(client_id, move_to_site_id=None, context=...)`
 - `create_site(client_id=..., name=..., context=..., custom_fields=None)`
-- `update_site(site_id, name=None, client_id=None, alert_template_id=UNSET, context=...)`
+- `update_site(site_id, name=None, client_id=None, alert_template_id=UNSET, workstation_policy_id=UNSET, server_policy_id=UNSET, block_policy_inheritance=UNSET, context=...)`
 - `delete_site(site_id, move_to_site_id=None, context=...)`
 - `list_custom_fields(resource_type, resource_id, context=...)`
 - `update_custom_fields(resource_type, resource_id, values=[...], context=...)`
@@ -199,6 +201,35 @@ Tactical's Add client creates the client and its first site together, and Add si
 - The write goes through Tactical's model save, so Tactical's own refresh of the agents' cached alert template still runs.
 - The audit row carries the before and after records, which include `alert_template_id`, and the metadata flag `alert_template_changed`.
 - `create_client` and `create_site` do not take `alert_template_id`. A new resource has no template.
+
+#### Policy fields (since 1.7.0, Core 1.17.24)
+
+A client and a site each carry a workstation policy, a server policy and a "block policy inheritance" flag. Tactical's Edit client and Edit site save them. Core holds only the ids and the flag. The Automation module owns the policy list, the picker and what a policy does.
+
+- Record keys `workstation_policy_id` (integer or `null`), `server_policy_id` (integer or `null`) and `block_policy_inheritance` (`true` or `false`, `false` when unset). A nested site carries them too. A record built from a row without the keys reads `null`, `null` and `false`. Anyone who can list clients or sites sees them, as for `alert_template_id`.
+- `update_client` and `update_site` take `workstation_policy_id` and `server_policy_id` (a positive whole number sets, `None` clears, leaving the keyword out leaves it alone) and `block_policy_inheritance` (a real `True` or `False` only: `1`, `0` and text are refused). At least one field is still required.
+- A policy id that names no policy fails Tactical's own foreign key and answers `400 invalid_resource_request` with `workstation_policy_id does not name an existing policy.` (or `server_policy_id ...`).
+- The write rule is the same as a rename: Tactical `can_manage_clients` or `can_manage_sites`, the Core resources permission, and the client or site write scope. Core does not ask for `can_manage_automation_policies`, because Tactical's own client and site `PUT` check only the manage-clients and manage-sites flags. A policy then pushes its checks, tasks and scripts to every endpoint under the client or site, so the audit row names the ids.
+- The write goes through Tactical's model save (`update_fields` include `workstation_policy`, `server_policy`, `block_policy_inheritance`, `modified_by`), so Tactical's own refresh of the agents' alert template and policy caches still runs.
+- The strict audit row carries before and after records (the new fields are in them) and the metadata `policy_changed`: the names of the fields whose value changed (ids only, never a policy name). A call that changes nothing writes no row.
+
+#### List filters (since 1.7.0)
+
+`list_clients` and `list_sites` take `alert_template_id` and `policy_id`. Each is a positive whole number or the call fails with `invalid_resource_request`. `alert_template_id` keeps the records that use that alert template. `policy_id` keeps the records whose workstation policy or server policy is that policy. Both together mean both must match. The filters run inside the caller's scope and under the list's own permission. They let Alerts find where a template is used and Automation build the policy overview without reading every page. HTTP: `GET /api/tfd/resources/clients/?alert_template_id=5&policy_id=31` and the same on `sites/`.
+
+#### Move a site (documented in 1.7.0, Core 1.17.24)
+
+`update_site(site_id, client_id=<destination>, context=...)` (HTTP `PATCH /api/tfd/resources/sites/<id>/` with `client_id`) is Tactical's Edit site with a new client. The mechanism is older. Since 1.7.0 the rules are documented and tested.
+
+- The agents on the site follow it, because they point at the site.
+- The source needs the site write grant (a site grant or a grant of its client). The destination client needs the same client write grant as `create_site`. A role limited to some clients therefore needs an explicit grant on the destination. That is stricter than Tactical, which checks only the Edit sites permission, and it is kept on purpose.
+- A destination outside the caller's scope answers `404 resource_not_found`, the same as a client that does not exist.
+- The last site of a client cannot move away: `400`, `A client must retain at least one site.`
+- A name already used by a site of the destination client gives `409`, `A site with that name already exists for the selected client.`
+- A `client_id` equal to the site's current client is a no-op: nothing is saved and no audit row is written.
+- A move together with a rename or another field is one write and one audit row.
+- The write goes through Tactical's model save (`update_fields` include `client`, `modified_by`, `modified_time`), so its `Site.save` hooks run.
+- The strict audit row carries before and after records (`client_id`) and the metadata `client_changed` (`true`), `from_client_id`, `to_client_id` and `agents_moved` (a count). Ids and a number only, never a name. The keys are absent when the client did not change.
 
 List operations return:
 
@@ -289,7 +320,7 @@ Update payloads accept only writable fields. Unknown fields are rejected. Agent 
 {"alert_template_id": 7}
 ```
 
-`PATCH /api/tfd/resources/clients/<id>/` accepts `name`, `alert_template_id` or both (at least one). `PATCH /api/tfd/resources/sites/<id>/` accepts `name`, `client_id`, `alert_template_id` or any of them. `alert_template_id: null` clears the template.
+`PATCH /api/tfd/resources/clients/<id>/` accepts `name`, `alert_template_id`, `workstation_policy_id`, `server_policy_id`, `block_policy_inheritance` or any of them (at least one). `PATCH /api/tfd/resources/sites/<id>/` accepts the same plus `client_id`. `null` clears a template or policy id. `block_policy_inheritance` takes only `true` or `false`.
 
 ### Role client and site lists (since Core 1.17.22)
 
@@ -346,6 +377,8 @@ If Tactical later changes model/table/field layout, update the Core adapter whil
 `core.resources` follows semantic contract versioning.
 
 Contract `1.1.0` is additive over `1.0.0`: it preserves all read operations and resource shapes while adding client/site create/update operations, write authorization metadata and stable conflict errors. A Tactical internal schema change alone is not a reason to change this contract version.
+
+Contract `1.7.0` is additive over `1.6.0`: client and site records gain `workstation_policy_id`, `server_policy_id` and `block_policy_inheritance` (appended last), `update_client` and `update_site` gain three optional keywords, `list_clients` and `list_sites` gain the `alert_template_id` and `policy_id` filters, and the site move rules are documented. An unchanged update (the same values sent again) now writes no audit row.
 
 Contract `1.6.0` is additive over `1.5.0`: one new call, `list_custom_field_definitions(resource_type, *, context)`, with the route `GET /api/tfd/resources/custom-fields/?resource_type=client|site`. No record shape changed. See "Custom-field definitions before the create (since 1.6.0)".
 

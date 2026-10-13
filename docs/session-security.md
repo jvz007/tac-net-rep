@@ -355,6 +355,16 @@ Recovery sign-in uses `POST /api/tfd/auth/login/backup-code/`. The endpoint reva
 Revoking a Tec-Tac trust session invalidates the underlying Tactical Knox credential at the common revocation boundary, including administrator revocation, idle/absolute timeout, IP-change termination and other Core revocation paths. Current rows revoke the exact bound Knox digest. A legacy row that predates the digest binding fails closed by invalidating the recorded user's Knox tokens because Core cannot safely identify only one credential. `POST /api/tfd/access/users/<user_id>/sessions/revoke/` revokes every active Tactical token for the selected user. These controls require Tactical account-management permission (or superuser authority).
 
 
+### End every login session (1.17.24)
+
+`POST /api/tfd/access/sessions/revoke-all/` ends every user's login sessions at once. Only an effective superuser may call it (the root user and superuser roles pass). An account administrator who only holds Tactical's manage-accounts permission gets 403, and the refusal writes one Core `deny` audit row.
+
+Body (both optional): `reason` (text, at most 255 characters) and `include_current` (true or false, default false). Core keeps the caller's own current session by default, so the button does not sign the administrator out. Send `include_current: true` to end that one too. Core takes no typed confirmation. The browser asks one Yes or No (AD-27).
+
+In one transaction Core revokes every active Tec-Tac session row, deletes every Tactical Knox token (protected accounts included) except the caller's own unless `include_current`, writes one session audit event (`all_login_sessions_revoked`) and one strict Core audit row (`custom:revoke-all-sessions`, object type `login_sessions`). Both carry counts only: never a token or digest. If the audit write fails, nothing changes.
+
+The answer is `{ revoked_tokens, revoked_sessions, users, current_kept }`. Python: `tec_tac.session_security.revoke_all_login_sessions(reason=, requested_by=, requester=, include_current=False, current_digest=None)`. It raises `PermissionError` for a caller who is not an effective superuser.
+
 ## 1.15.45 access hardening
 
 MFA recovery-code sets are cryptographically bound to the Tactical TOTP secret present at generation time. A reset or replacement of the TOTP secret invalidates the previous recovery set. Recovery-code regeneration is throttled and failed password/TOTP proofs are always security-audited.

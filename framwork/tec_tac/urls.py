@@ -9,7 +9,7 @@ from .server_maintenance_views import (
 from .session_security_views import (
     CurrentSessionView, SessionActivityView, SessionListView, SessionRevokeView,
     RevokeOtherSessionsView, SessionPolicyView, SessionAuditView, SessionDiagnosticsView,
-    AdminLoginSessionListView, AdminLoginSessionRevokeView, AdminUserLoginSessionsRevokeView,
+    AdminAllLoginSessionsRevokeView, SessionThemeView, AdminLoginSessionListView, AdminLoginSessionRevokeView, AdminUserLoginSessionsRevokeView,
 )
 from .dashboard_views import DashboardListCreateView, DashboardDetailView
 from .runtime_settings import RuntimeSettingsView, UpdateSourceView
@@ -57,12 +57,14 @@ urlpatterns = [
     path("session/activity/", SessionActivityView.as_view(), name="tec-tac-session-activity"),
     path("session/sessions/", SessionListView.as_view(), name="tec-tac-session-list"),
     path("session/sessions/<uuid:session_id>/revoke/", SessionRevokeView.as_view(), name="tec-tac-session-revoke"),
+    path("session/theme/", SessionThemeView.as_view(), name="tec-tac-session-theme"),
     path("session/revoke-others/", RevokeOtherSessionsView.as_view(), name="tec-tac-session-revoke-others"),
     path("session/policy/", SessionPolicyView.as_view(), name="tec-tac-session-policy"),
     path("session/audit/", SessionAuditView.as_view(), name="tec-tac-session-audit"),
     path("session/diagnostics/", SessionDiagnosticsView.as_view(), name="tec-tac-session-diagnostics"),
     path("access/security-policy/", AccountSecurityPolicyView.as_view(), name="tec-tac-access-security-policy"),
     path("access/sessions/", AdminLoginSessionListView.as_view(), name="tec-tac-access-login-sessions"),
+    path("access/sessions/revoke-all/", AdminAllLoginSessionsRevokeView.as_view(), name="tec-tac-access-login-sessions-revoke-all"),
     path("access/sessions/<str:session_ref>/revoke/", AdminLoginSessionRevokeView.as_view(), name="tec-tac-access-login-session-revoke"),
     path("access/users/<int:user_id>/sessions/revoke/", AdminUserLoginSessionsRevokeView.as_view(), name="tec-tac-access-user-login-sessions-revoke"),
     path("auth/mfa/backup-codes/", MfaBackupCodesView.as_view(), name="tec-tac-mfa-backup-codes"),

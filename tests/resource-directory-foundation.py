@@ -53,6 +53,11 @@ DATA = {
     ],
 }
 
+POL = {"workstation_policy_id": None, "server_policy_id": None, "block_policy_inheritance": False}  # 1.7.0 keys, appended last
+for _row in DATA["clients"] + DATA["sites"]:
+    _row.update(POL)
+
+
 class FakeQS:
     def __init__(self, rows): self.rows = list(rows)
 
@@ -69,13 +74,13 @@ def scoped(rows, user, trusted, kind):
     allowed = getattr(user, f"allowed_{kind}", set())
     return [row for row in rows if row["id"] in allowed]
 
-def clients_queryset(*, user=None, trusted=False, search=None, active=None):
+def clients_queryset(*, user=None, trusted=False, search=None, active=None, alert_template_id=None, policy_id=None):
     rows = scoped(DATA["clients"], user, trusted, "clients")
     if active is False: rows = []
     if search: rows = [r for r in rows if search.lower() in r["name"].lower()]
     return FakeQS(rows)
 
-def sites_queryset(*, user=None, trusted=False, client_id=None, search=None, active=None):
+def sites_queryset(*, user=None, trusted=False, client_id=None, search=None, active=None, alert_template_id=None, policy_id=None):
     rows = scoped(DATA["sites"], user, trusted, "sites")
     if client_id is not None: rows = [r for r in rows if r["client_id"] == client_id]
     if active is False: rows = []
@@ -98,7 +103,8 @@ def nest_sites(rows, *, user=None, trusted=False):
     ids = {r["id"] for r in rows}
     visible = [s for s in DATA["sites"] if s["client_id"] in ids and (trusted or s["id"] in getattr(user, "allowed_sites", set()) or s["client_id"] in getattr(user, "allowed_clients", set()))]
     visible.sort(key=lambda s: (s["name"], s["id"]))
-    return [{**r, "sites": [dict(s) for s in visible if s["client_id"] == r["id"]]} for r in rows]
+    # 1.7.0: sites keeps its place before the policy keys
+    return [{**{k: v for k, v in r.items() if k not in POL}, "sites": [dict(s) for s in visible if s["client_id"] == r["id"]], **{k: r[k] for k in POL}} for r in rows]
 
 def page(qs, offset, limit): return list(qs.rows[offset:offset+limit]), len(qs.rows)
 def get(qs, rid): return next((dict(r) for r in qs.rows if r["id"] == rid), None)
@@ -126,10 +132,10 @@ def create_client_row(*, user, name, default_site_name="Default Site", custom_fi
     if any(r["name"].lower() == name.lower() for r in DATA["clients"]):
         raise TacticalResourceConflictError("A client with that name already exists.")
     new_id = max(r["id"] for r in DATA["clients"]) + 1
-    row = {"type":"client","id":new_id,"name":name,"active":True,"alert_template_id":None}
+    row = {"type":"client","id":new_id,"name":name,"active":True,"alert_template_id":None, **POL}
     DATA["clients"].append(row)
     site_id = max(r["id"] for r in DATA["sites"]) + 1
-    first = {"type":"site","id":site_id,"name":default_site_name,"client_id":new_id,"active":True,"alert_template_id":None,"client_name":name}
+    first = {"type":"site","id":site_id,"name":default_site_name,"client_id":new_id,"active":True,"alert_template_id":None,"client_name":name, **POL}
     DATA["sites"].append(first)
     user.allowed_clients.add(new_id)
     return {"client": dict(row), "site": dict(first), "role_scope_extended": "clients"}
@@ -150,7 +156,7 @@ def create_site_row(*, client_id, name, user=None, custom_fields=None):
         raise TacticalResourceConflictError("A site with that name already exists for the selected client.")
     new_id = max(r["id"] for r in DATA["sites"]) + 1
     owner = next(r for r in DATA["clients"] if r["id"] == client_id)
-    row = {"type":"site","id":new_id,"name":name,"client_id":client_id,"active":True,"alert_template_id":None,"client_name":owner["name"]}
+    row = {"type":"site","id":new_id,"name":name,"client_id":client_id,"active":True,"alert_template_id":None,"client_name":owner["name"], **POL}
     DATA["sites"].append(row)
     return {"site": dict(row), "role_scope_extended": None}
 
@@ -171,6 +177,7 @@ def update_site_row(*, user, site_id, name=None, client_id=None):
         row["client_name"] = next(r for r in DATA["clients"] if r["id"] == client_id)["name"]
     return dict(row)
 
+adapter.site_agent_count = lambda *, site_id: sum(1 for a in DATA["agents"] if a["site_id"] == site_id)
 adapter.client_write_in_scope = client_write_in_scope
 adapter.site_write_in_scope = site_write_in_scope
 adapter.create_client_row = create_client_row
@@ -490,7 +497,7 @@ assert AUDITS[-1]["action"] == "delete" and AUDITS[-1]["metadata"]["destination_
 
 # Contract metadata is versioned and discoverable.
 meta = resources.resource_contract_metadata()
-assert meta["id"] == "core.resources" and meta["version"] == "1.6.0"
+assert meta["id"] == "core.resources" and meta["version"] == "1.7.0"
 assert meta["pagination"]["maximum_page_number"] == 10000
 assert meta["list_contracts"]["clients"]["http"] == "GET /api/tfd/resources/clients/"
 assert meta["list_contracts"]["sites"]["response"]["pages"] == "integer"

@@ -86,7 +86,7 @@ else:
 must((len(AUDITS), len(Config.saved)) == before and CONFIG.system_name == "Tec-Tac", "refused: nothing saved or audited")
 
 # (5) manage right and superuser may change it, one strict row each, before and after in the row
-for who, name in ((person(manage=True), "Acme IT"), (person(superuser=True), "Acme IT South")):
+for who, name in ((person(superuser=True), "Acme IT"), (person(superuser=True, manage=True), "Acme IT South")):  # 1.17.24: superuser only
     AUDITS.clear()
     resp = patch({"system_name": name}, who)
     must(resp.status_code == 200 and resp.data["system_name"]["value"] == name, resp.data)
@@ -100,21 +100,21 @@ must(AUDITS[0]["before"] == {"system_name": "Acme IT"}, AUDITS[0])
 # (6) an unchanged value writes no row, even when sent with stray spaces
 AUDITS.clear()
 saved = len(Config.saved)
-resp = patch({"system_name": "  Acme IT South  "}, person(manage=True))
+resp = patch({"system_name": "  Acme IT South  "}, person(superuser=True))
 must(resp.status_code == 200 and not AUDITS and len(Config.saved) == saved, "unchanged value: no row, no save")
 
 # (7) bad values are 400 and change nothing
 for bad in ("", "a:b", "x" * 61, "no\u200bway", True, 7, ["x"]):
-    resp = patch({"system_name": bad}, person(manage=True))
+    resp = patch({"system_name": bad}, person(superuser=True))
     must(resp.status_code == 400 and CONFIG.system_name == "Acme IT South" and not AUDITS, (bad, resp.data))
 
 # (8) null resets to the default; one row
-resp = patch({"system_name": None}, person(manage=True))
+resp = patch({"system_name": None}, person(superuser=True))
 must(resp.status_code == 200 and CONFIG.system_name == "Tec-Tac" and len(AUDITS) == 1 and AUDITS[0]["after"] == {"system_name": "Tec-Tac"}, (resp.data, AUDITS))
 
 # (9) together with the timeout: one row per changed setting; the integer settings behave as before
 AUDITS.clear()
-resp = patch({"system_name": "Acme", rs.SETTING_MODULE_REGISTER_TIMEOUT: 60}, person(manage=True))
+resp = patch({"system_name": "Acme", rs.SETTING_MODULE_REGISTER_TIMEOUT: 60}, person(superuser=True))
 must(resp.status_code == 200 and sorted(r["object_id"] for r in AUDITS) == [rs.SETTING_MODULE_REGISTER_TIMEOUT, "system_name"], AUDITS)
 must(next(r for r in AUDITS if r["object_id"] == rs.SETTING_MODULE_REGISTER_TIMEOUT)["after"] == {rs.SETTING_MODULE_REGISTER_TIMEOUT: 60}, AUDITS)
 # the upload limit stays superuser only, even next to the name
@@ -128,7 +128,7 @@ else:
 H["AUDIT_FAIL"]["on"] = True
 errors_before = H["AtomicCtx"].exited_with_error
 try:
-    patch({"system_name": "Other"}, person(manage=True))
+    patch({"system_name": "Other"}, person(superuser=True))
 except RuntimeError:
     pass
 else:

@@ -859,6 +859,103 @@ def revoke_user_login_sessions(user_id: int, *, reason: str = "administrator-req
         return {"user_id": int(user_id), "username": username, "revoked": count}
 
 
+def _session_themes() -> set[str]:
+    from .preferences import THEMES
+
+    return set(THEMES)
+
+
+def session_theme_of(session) -> str | None:
+    """The theme chosen for this sign-in, or None. Never raises: a missing session, an empty value or a value that is no longer a
+    known theme all read as None."""
+    try:
+        value = str(getattr(session, "session_theme", "") or "")
+        return value if value in _session_themes() else None
+    except Exception:
+        return None
+
+
+def set_session_theme(session, theme) -> str | None:
+    """Hold ``theme`` (one of the preference themes) or clear it (None) for this one session row (1.17.24).
+
+    A display choice, not a security event, so it is not audited and it never touches the saved preference. Only the caller's own
+    current row is passed in. A revoked row is not written. Anything but a known theme or None raises SessionSecurityError."""
+    if theme is not None and (not isinstance(theme, str) or theme not in _session_themes()):
+        raise SessionSecurityError("theme must be one of: " + ", ".join(sorted(_session_themes())) + ".")
+    value = theme or ""
+    TecTacSessionTrust.objects.filter(pk=session.pk, revoked=False).update(session_theme=value)
+    session.session_theme = value
+    return theme
+
+
+def revoke_all_login_sessions(
+    *,
+    reason: str = "administrator-request",
+    requested_by: str = "",
+    requester=None,
+    include_current: bool = False,
+    current_digest: str | None = None,
+) -> dict[str, Any]:
+    """End every login session of every user (1.17.24, CO17). Effective superuser only.
+
+    In one transaction: revoke every non-revoked trust row, delete every Tactical Knox token (protected accounts
+    included), write one session audit event and one strict Core audit row (counts only). A failed Core audit write
+    raises, which rolls everything back. The caller's own current session is kept unless ``include_current``.
+    """
+    if not _is_effective_superuser(requester):
+        _audit_all_sessions_denied(requester)
+        raise PermissionError("Ending every login session requires superuser authority.")
+    from .audit import record
+
+    reason = str(reason or "administrator-request")[:255]
+    keep = "" if include_current else str(current_digest or "")
+    with transaction.atomic():
+        trust_qs = TecTacSessionTrust.objects.select_for_update().filter(revoked=False)
+        if keep:
+            trust_qs = trust_qs.exclude(knox_digest=keep)
+        sessions = list(trust_qs)
+        for trust in sessions:
+            _revoke_locked(trust, reason=reason, requested_by=requested_by, event_type="session_revoked", invalidate_knox=False)
+        token_qs = AuthToken.objects.all()
+        if keep:
+            token_qs = token_qs.exclude(digest=keep)
+        users = len({token.user_id for token in token_qs})
+        tokens = len(list(token_qs))
+        token_qs.delete()
+        counts = {"tokens": tokens, "users": users, "tec_tac_sessions": len(sessions), "include_current": bool(include_current)}
+        _audit("all_login_sessions_revoked", reason=reason, requested_by=requested_by, metadata=counts, force=True)
+        record(
+            actor=requester,
+            module_id="core",
+            action="custom:revoke-all-sessions",
+            object_type="login_sessions",
+            object_id="all",
+            message="All login sessions ended.",
+            metadata=counts,
+            strict=True,
+        )
+    return {"revoked_tokens": tokens, "revoked_sessions": len(sessions), "users": users, "current_kept": bool(keep)}
+
+
+def _audit_all_sessions_denied(requester) -> None:
+    """One best-effort Core deny row for a refused end-all request. A failed write never changes the refusal."""
+    try:
+        from .audit import record
+
+        record(
+            actor=requester,
+            module_id="core",
+            action="deny",
+            object_type="login_sessions",
+            object_id="all",
+            message="Blocked an attempt to end every login session without superuser authority.",
+            metadata={"reason": "superuser_required"},
+            strict=False,
+        )
+    except Exception:
+        pass
+
+
 def _serialize_audit_event(item: TecTacSessionAudit) -> dict[str, Any]:
     return {
         "id": str(item.id),

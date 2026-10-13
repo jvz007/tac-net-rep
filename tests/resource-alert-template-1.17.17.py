@@ -52,11 +52,18 @@ class _Transaction:
 
 
 class Q:
+    """1.17.24: keeps its keywords so the policy_id filter (workstation or server policy) can be run."""
+
     def __init__(self, *args, **kwargs):
-        pass
+        self.alternatives = [dict(kwargs)]
 
     def __or__(self, other):
-        return self
+        joined = Q()
+        joined.alternatives = self.alternatives + other.alternatives
+        return joined
+
+    def matches(self, row):
+        return any(all(row.get(key) == value for key, value in alt.items()) for alt in self.alternatives)
 
 
 class Response:
@@ -95,6 +102,8 @@ mod("tec_tac.audit", record=lambda **kw: AUDITS.append(kw) or {"recorded": True}
 
 # ------------------------------------------------------------------------------------------------ an in-memory Tactical
 TEMPLATES = {5, 6}   # the alert templates that exist (Alerts owns them; Core never lists them)
+POLICIES = {31, 32, 33}  # the policies that exist (Automation owns them; Core never lists them)
+POLICY_DEFAULTS = {"workstation_policy_id": None, "server_policy_id": None, "block_policy_inheritance": False}
 HOOKS = []           # Tactical's own cache_agents_alert_template, called from Client.save and Site.save when the template changed
 
 
@@ -176,13 +185,19 @@ class Query:
     def all(self):
         return Query(self.model, self.rows)
 
-    def filter(self, **kw):
+    def filter(self, *qs, **kw):
         rows = self.rows
+        for q in qs:
+            rows = [r for r in rows if q.matches(r)]
         for key, val in kw.items():
-            if key == "pk":
+            if key in ("alert_template_id", "workstation_policy_id", "server_policy_id"):
+                rows = [r for r in rows if r.get(key) == val]
+            elif key == "pk":
                 rows = [r for r in rows if r["pk"] == val]
             elif key == "pk__in":
                 rows = [r for r in rows if r["pk"] in set(val)]
+            elif key == "site_id":
+                rows = [r for r in rows if r["site_id"] == val]
             elif key == "client_id":
                 rows = [r for r in rows if r["client_id"] == val]
             elif key == "client_id__in":
@@ -237,6 +252,26 @@ class _Manager:
         return self.all()
 
 
+def _check_foreign_keys(obj):
+    """The foreign keys Tactical's full_clean checks: an alert template or a policy that does not exist fails."""
+    if obj.alert_template_id is not None and obj.alert_template_id not in TEMPLATES:
+        raise ValidationError("bad template", {"alert_template": ["alert template instance does not exist."]})
+    if obj.workstation_policy_id is not None and obj.workstation_policy_id not in POLICIES:
+        raise ValidationError("bad policy", {"workstation_policy": ["policy instance does not exist."]})
+    if obj.server_policy_id is not None and obj.server_policy_id not in POLICIES:
+        raise ValidationError("bad policy", {"server_policy": ["policy instance does not exist."]})
+
+
+def _policy_row(obj):
+    return {key: getattr(obj, key) for key in POLICY_DEFAULTS}
+
+
+def _watched(row):
+    """What Tactical's own save compares to decide whether to refresh the agents' caches."""
+    # Site.save also refreshes the agents' caches when the client changed (a move), as Tactical's own save does
+    return (row["alert_template_id"], row.get("workstation_policy_id"), row.get("server_policy_id"), row.get("client_id"))
+
+
 class _Model:
     FIELD_OF = {}
 
@@ -259,16 +294,17 @@ class _Model:
 
 class Client(_Model):
     STORE: dict = {}
-    FIELD_OF = {"name": "name", "alert_template": "alert_template_id"}
+    FIELD_OF = {"name": "name", "alert_template": "alert_template_id", "workstation_policy": "workstation_policy_id",
+                "server_policy": "server_policy_id", "block_policy_inheritance": "block_policy_inheritance"}
     objects = _Manager(None)
 
     def __init__(self, name):
         self.pk, self.name, self.alert_template_id = None, name, None
+        self.workstation_policy_id, self.server_policy_id, self.block_policy_inheritance = None, None, False
         self.modified_by = self.modified_time = self.last_update_fields = None
 
     def full_clean(self, **kw):
-        if self.alert_template_id is not None and self.alert_template_id not in TEMPLATES:
-            raise ValidationError("bad template", {"alert_template": ["alert template instance does not exist."]})
+        _check_foreign_keys(self)
 
     def save(self, update_fields=None):
         self.last_update_fields = update_fields
@@ -276,37 +312,40 @@ class Client(_Model):
             if any(r["name"].lower() == self.name.lower() for r in self.STORE.values()):
                 raise IntegrityError("duplicate")
             self.pk = max(self.STORE, default=0) + 1
-            self.STORE[self.pk] = {"pk": self.pk, "name": self.name, "alert_template_id": self.alert_template_id}
+            self.STORE[self.pk] = {"pk": self.pk, "name": self.name, "alert_template_id": self.alert_template_id, **_policy_row(self)}
             return
-        old = self.STORE[self.pk]["alert_template_id"]
+        old = _watched(self.STORE[self.pk])
         self._persist(update_fields if update_fields is not None else self.FIELD_OF)
-        if old != self.STORE[self.pk]["alert_template_id"]:
+        if old != _watched(self.STORE[self.pk]):
             HOOKS.append(("client", self.pk))
 
 
 class Site(_Model):
     STORE: dict = {}
-    FIELD_OF = {"name": "name", "client": "client_id", "alert_template": "alert_template_id"}
+    FIELD_OF = {"name": "name", "client": "client_id", "alert_template": "alert_template_id", "workstation_policy": "workstation_policy_id",
+                "server_policy": "server_policy_id", "block_policy_inheritance": "block_policy_inheritance"}
     objects = _Manager(None)
 
     def __init__(self, client=None, client_id=None, name=""):
         self.pk, self.name, self.alert_template_id = None, name, None
+        self.workstation_policy_id, self.server_policy_id, self.block_policy_inheritance = None, None, False
         self.client_id = client.pk if client is not None else client_id
         self.modified_by = self.modified_time = self.last_update_fields = None
 
     def full_clean(self, **kw):
-        if self.alert_template_id is not None and self.alert_template_id not in TEMPLATES:
-            raise ValidationError("bad template", {"alert_template": ["alert template instance does not exist."]})
+        _check_foreign_keys(self)
 
     def save(self, update_fields=None):
         self.last_update_fields = update_fields
         if self.pk is None:
             self.pk = max(self.STORE, default=0) + 1
-            self.STORE[self.pk] = {"pk": self.pk, "name": self.name, "client_id": self.client_id, "alert_template_id": self.alert_template_id}
+            self.STORE[self.pk] = {"pk": self.pk, "name": self.name, "client_id": self.client_id, "alert_template_id": self.alert_template_id, **_policy_row(self)}
             return
-        old = self.STORE[self.pk]["alert_template_id"]
+        if any(r["pk"] != self.pk and r["client_id"] == self.client_id and r["name"].lower() == self.name.lower() for r in self.STORE.values()):
+            raise IntegrityError("duplicate")  # 1.17.24: the (client, name) unique constraint, so a move can clash
+        old = _watched(self.STORE[self.pk])
         self._persist(update_fields if update_fields is not None else self.FIELD_OF)
-        if old != self.STORE[self.pk]["alert_template_id"]:
+        if old != _watched(self.STORE[self.pk]):
             HOOKS.append(("site", self.pk))
 
     def delete(self):
@@ -323,11 +362,11 @@ Client.objects, Site.objects, Agent.objects = _Manager(Client), _Manager(Site), 
 
 def reset_tactical():
     Client.STORE.clear(), Site.STORE.clear(), Agent.STORE.clear(), HOOKS.clear(), AUDITS.clear()
-    Client.STORE.update({1: {"pk": 1, "name": "Alpha", "alert_template_id": None}, 2: {"pk": 2, "name": "Beta", "alert_template_id": None}})
+    Client.STORE.update({1: {"pk": 1, "name": "Alpha", "alert_template_id": None, **POLICY_DEFAULTS}, 2: {"pk": 2, "name": "Beta", "alert_template_id": None, **POLICY_DEFAULTS}})
     Site.STORE.update({
-        11: {"pk": 11, "name": "Alpha One", "client_id": 1, "alert_template_id": None},
-        12: {"pk": 12, "name": "Alpha Two", "client_id": 1, "alert_template_id": None},
-        21: {"pk": 21, "name": "Beta One", "client_id": 2, "alert_template_id": None},
+        11: {"pk": 11, "name": "Alpha One", "client_id": 1, "alert_template_id": None, **POLICY_DEFAULTS},
+        12: {"pk": 12, "name": "Alpha Two", "client_id": 1, "alert_template_id": None, **POLICY_DEFAULTS},
+        21: {"pk": 21, "name": "Beta One", "client_id": 2, "alert_template_id": None, **POLICY_DEFAULTS},
     })
     Agent.STORE.update({"a-1": {"pk": 1, "agent_id": "a-1", "site_id": 11}})
 
@@ -371,8 +410,9 @@ def refused(call, *errors):
 
 
 # ------------------------------------------------------------------------------------------------ the contract shape
-must(resources.CONTRACT_VERSION == "1.6.0" and resources.CLIENT_FIELDS == ("type", "id", "name", "active", "alert_template_id", "sites"), resources.CLIENT_FIELDS)
-must(resources.SITE_FIELDS == ("type", "id", "name", "client_id", "active", "alert_template_id", "client_name"), resources.SITE_FIELDS)
+POLICY_KEYS = ("workstation_policy_id", "server_policy_id", "block_policy_inheritance")
+must(resources.CONTRACT_VERSION == "1.7.0" and resources.CLIENT_FIELDS == ("type", "id", "name", "active", "alert_template_id", "sites", *POLICY_KEYS), resources.CLIENT_FIELDS)
+must(resources.SITE_FIELDS == ("type", "id", "name", "client_id", "active", "alert_template_id", "client_name", *POLICY_KEYS), resources.SITE_FIELDS)
 must(resources.AGENT_FIELDS[-1] == "last_seen", "agent records are unchanged")
 listed = resources.list_clients(context=ctx_admin)["items"]
 must([tuple(row) for row in listed] == [resources.CLIENT_FIELDS] * 2 and [r["alert_template_id"] for r in listed] == [None, None], listed)
@@ -407,8 +447,9 @@ must(row["name"] == "Alpha Two" and row["alert_template_id"] == 6 and AUDITS[-1]
 resources.update_client(1, name="Alpha", context=ctx_whole)
 # the same value again is not a change
 del HOOKS[:]
+audit_count = len(AUDITS)
 resources.update_client(1, alert_template_id=6, context=ctx_whole)
-must(AUDITS[-1]["metadata"] == {"alert_template_changed": False} and not HOOKS, (AUDITS[-1]["metadata"], HOOKS))
+must(len(AUDITS) == audit_count and not HOOKS, (AUDITS[-1]["metadata"], HOOKS))  # 1.17.24: nothing changed, so no audit row
 # None clears; leaving the keyword out is not None
 row = resources.update_client(1, alert_template_id=None, context=ctx_whole)
 must(row["alert_template_id"] is None and Client.STORE[1]["alert_template_id"] is None and AUDITS[-1]["metadata"]["alert_template_changed"] is True, row)
@@ -506,7 +547,7 @@ must(made["id"] in creator.role.can_view_clients.ids, "creator scope")
 reset_tactical()
 must(adapter.client_row({"pk": 3, "name": "X"})["alert_template_id"] is None, "a row without the key reads as None")
 must(adapter.client_row({"pk": 3, "name": "X", "alert_template_id": "7"})["alert_template_id"] == 7, "integer")
-must(list(adapter.site_row({"pk": 3, "name": "X", "client_id": 1, "alert_template_id": 7}))[-2:] == ["alert_template_id", "client_name"], "site key order (client_name appended in 1.5.0)")
+must(list(adapter.site_row({"pk": 3, "name": "X", "client_id": 1, "alert_template_id": 7}))[5:7] == ["alert_template_id", "client_name"], "site key order (client_name appended in 1.5.0)")
 page, total = adapter.page_clients(adapter.clients_queryset(user=admin, trusted=False), offset=0, limit=10)
 must(total == 2 and all("alert_template_id" in r for r in page), page)
 page, total = adapter.page_sites(adapter.sites_queryset(user=admin, trusted=False), offset=0, limit=10)
@@ -573,17 +614,17 @@ must(r.status_code == 404, "but not another site's")
 
 # ------------------------------------------------------------------------------------------------ the capability and the contract text
 meta = resources.resource_contract_metadata()
-must(meta["version"] == "1.6.0" and meta["version"].split(".")[0] == "1", meta["version"])
+must(meta["version"] == "1.7.0" and meta["version"].split(".")[0] == "1", meta["version"])
 must(meta["resource_types"]["client"]["fields"] == list(resources.CLIENT_FIELDS) and meta["resource_types"]["site"]["fields"] == list(resources.SITE_FIELDS), "fields")
 must(meta["write_support"]["client"] == ["create", "update", "delete", "custom_fields"], "the earlier write_support lists are unchanged")
-must(meta["write_support"]["update_fields"] == {"client": ["name", "alert_template_id"], "site": ["name", "client_id", "alert_template_id"]}, meta["write_support"])
+must(meta["write_support"]["update_fields"] == {"client": ["name", "alert_template_id", *POLICY_KEYS], "site": ["name", "client_id", "alert_template_id", *POLICY_KEYS]}, meta["write_support"])
 for key in ("update_client", "update_site", "scope_descriptor"):
     must(key in meta["mutation_contracts"] and "1.4.0" in meta["mutation_contracts"][key]["semantics"], key)
 must("alert_template_id" in meta["mutation_contracts"]["update_client"]["body"], meta["mutation_contracts"]["update_client"])
 must("PATCH /api/tfd/resources/clients/<id>/" == meta["mutation_contracts"]["update_client"]["http"], "http row")
 must("delete_client" in meta["mutation_contracts"] and "client_custom_fields" in meta["mutation_contracts"], "the earlier entries stay")
 registration = resources.register_core_resources_capability()
-must(registration["version"] == "1.6.0" and registration["module_id"] == "core", registration["version"])
+must(registration["version"] == "1.7.0" and registration["module_id"] == "core", registration["version"])
 for op in ("update_client", "update_site", "scope_descriptor", "scope_unrestricted", "has_whole_client_access", "user_context"):
     must(op in registration["operations"] and callable(getattr(registration["provider"], op)), op)
 must(registration["operations"][:15] == ("list_clients", "get_client", "create_client", "update_client", "delete_client", "list_sites", "get_site", "create_site",
@@ -593,6 +634,6 @@ contracts = (PKG / "contracts.py").read_text(encoding="utf-8")
 for needle in ("alert_template_id", "framework >=1.17.17", "alert_template_changed"):
     must(needle in contracts, needle)
 doc = (ROOT / "docs" / "resource-directory.md").read_text(encoding="utf-8")
-must("Contract version: `1.6.0`" in doc and "alert_template_id" in doc and "UNSET" in doc, "docs/resource-directory.md")
+must("Contract version: `1.7.0`" in doc and "alert_template_id" in doc and "UNSET" in doc, "docs/resource-directory.md")
 
 print("[TEST] PASS resource alert template 1.17.17")

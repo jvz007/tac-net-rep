@@ -70,6 +70,10 @@ security.revoke_active_login_session = lambda *args, **kwargs: {}
 security.revoke_session = lambda *args, **kwargs: {}
 security.revoke_user_login_sessions = lambda *args, **kwargs: {}
 security.revoke_user_sessions = lambda *args, **kwargs: {}
+security.request_knox_digest = lambda request: ""  # 1.17.24
+security.revoke_all_login_sessions = lambda *args, **kwargs: {}
+security.session_theme_of = lambda session: None
+security.set_session_theme = lambda session, theme: theme
 def update_global_policy(payload, *, requested_by=""):
     calls.append((dict(payload), requested_by))
     if "history_retention_days" in payload:

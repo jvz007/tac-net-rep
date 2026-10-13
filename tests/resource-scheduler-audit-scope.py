@@ -61,6 +61,7 @@ class Adapter:
     def get_client_row(self, qs, resource_id): return dict(self.client) if resource_id == 7 else None
     def get_site_row(self, qs, resource_id): return dict(self.site) if resource_id == 11 else None
     def client_write_in_scope(self, **kw): return True
+    def site_agent_count(self, **kw): return 0  # 1.17.24
 
 adapter = Adapter()
 audits = []
@@ -85,7 +86,8 @@ ns = {
     'UNSET': object(),  # 1.17.17: the sentinel of update_client and update_site (alert_template_id)
 }
 ns['_clean_resource_name'] = lambda value, kind: str(value).strip()
-for name in ('_clean_alert_template_id', '_template_changed', '_clean_custom_fields', '_custom_field_ids', '_audit_view'):  # helpers of the writes
+ns['POLICY_FIELDS'] = ('workstation_policy_id', 'server_policy_id', 'block_policy_inheritance')
+for name in ('_clean_nullable_id', '_clean_alert_template_id', '_clean_block_policy_inheritance', '_policy_changes', '_policy_changed', '_with_sites', '_template_changed', '_clean_custom_fields', '_custom_field_ids', '_audit_view'):  # helpers of the writes
     ns[name] = compile_function(resources_path, name, ns)
 for name in ('create_client','update_client','create_site','update_site'):
     ns[name] = compile_function(resources_path, name, ns)

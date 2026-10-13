@@ -19,10 +19,14 @@ from .session_security import (
     page_active_login_sessions,
     list_sessions,
     record_activity,
+    request_knox_digest,
     revoke_active_login_session,
+    revoke_all_login_sessions,
     revoke_session,
     revoke_user_login_sessions,
     revoke_user_sessions,
+    session_theme_of,
+    set_session_theme,
     _update_global_policy,
 )
 
@@ -91,6 +95,37 @@ class RevokeOtherSessionsView(APIView):
             requested_by=request.user.username,
         )
         return Response(result)
+
+
+class SessionThemeView(APIView):
+    """The theme chosen for this sign-in only (1.17.24, CO9). It touches only the caller's own current session row, is never
+    written to the saved preference and dies with the session."""
+
+    permission_classes = [SessionAuthenticated]
+
+    def get(self, request):
+        return Response({"theme": session_theme_of(request.tec_tac_session)})
+
+    def put(self, request):
+        data = request.data
+        if not isinstance(data, dict):
+            return Response({"detail": "The body must be a JSON object with theme."}, status=400)
+        unknown = sorted(set(data) - {"theme"})
+        if unknown:
+            return Response({"detail": "Unsupported field(s): " + ", ".join(unknown)}, status=400)
+        if "theme" not in data:
+            return Response({"detail": "theme is required."}, status=400)
+        if data["theme"] is None:
+            return Response({"detail": "theme must be text. Use DELETE to clear the choice."}, status=400)
+        try:
+            set_session_theme(request.tec_tac_session, data["theme"])
+        except SessionSecurityError as exc:
+            return Response({"detail": str(exc)}, status=400)
+        return Response({"theme": session_theme_of(request.tec_tac_session)})
+
+    def delete(self, request):
+        set_session_theme(request.tec_tac_session, None)
+        return Response({"theme": None})
 
 
 class SessionPolicyView(APIView):
@@ -232,3 +267,29 @@ class AdminUserLoginSessionsRevokeView(APIView):
             return Response({"detail": str(exc)}, status=403)
         return Response(result)
 
+
+
+class AdminAllLoginSessionsRevokeView(APIView):
+    """End every login session of every user (CO17). Effective superuser only; no typed confirmation (the UI asks Yes or No)."""
+
+    permission_classes = [SessionAuthenticated]
+
+    def post(self, request):
+        data = request.data if isinstance(request.data, dict) else {}
+        include_current = data.get("include_current", False)
+        if not isinstance(include_current, bool):
+            return Response({"detail": "include_current must be true or false."}, status=400)
+        reason = data.get("reason")
+        if reason is not None and not isinstance(reason, str):
+            return Response({"detail": "reason must be text."}, status=400)
+        try:
+            result = revoke_all_login_sessions(
+                reason=(reason or "administrator-request")[:255],
+                requested_by=request.user.username,
+                requester=request.user,
+                include_current=include_current,
+                current_digest=request_knox_digest(request),
+            )
+        except PermissionError as exc:
+            return Response({"detail": str(exc)}, status=403)
+        return Response(result)

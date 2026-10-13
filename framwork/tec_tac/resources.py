@@ -14,7 +14,7 @@ from . import resources_adapter as adapter
 from .capabilities import register_capability
 
 CONTRACT_ID = "core.resources"
-CONTRACT_VERSION = "1.6.0"
+CONTRACT_VERSION = "1.7.0"
 RESOURCE_TYPES = ("client", "site", "agent")
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 500
@@ -25,8 +25,10 @@ SITE_MANAGE_PERMISSION = "core.resources.sites.manage"
 # 1.4.0 appended alert_template_id (an integer or null) to the client and site records; the earlier keys keep their place.
 # 1.5.0 appended ``sites`` (the client's site records inside the caller's scope) to client records and ``client_name`` to site records.
 # 1.6.0 added list_custom_field_definitions (the definitions without a client or site id); no record shape changed.
-CLIENT_FIELDS = ("type", "id", "name", "active", "alert_template_id", "sites")
-SITE_FIELDS = ("type", "id", "name", "client_id", "active", "alert_template_id", "client_name")
+# 1.7.0 appended workstation_policy_id, server_policy_id and block_policy_inheritance to client and site records (the policy
+# ids are Automation's; Core holds only the ids), and the alert_template_id and policy_id list filters.
+CLIENT_FIELDS = ("type", "id", "name", "active", "alert_template_id", "sites", "workstation_policy_id", "server_policy_id", "block_policy_inheritance")
+SITE_FIELDS = ("type", "id", "name", "client_id", "active", "alert_template_id", "client_name", "workstation_policy_id", "server_policy_id", "block_policy_inheritance")
 AGENT_FIELDS = (
     "type", "id", "hostname", "client_id", "site_id", "active",
     "platform", "monitoring_type", "last_seen",
@@ -325,25 +327,64 @@ def _clean_positive_int(value: Any, label: str) -> int:
     return parsed
 
 
-def _clean_alert_template_id(value: Any) -> int | None:
-    """None clears the template. Otherwise a positive whole number (a text of digits is accepted). Booleans, zero, negatives,
-    fractions and any other text are refused. Whether the template exists is checked by Tactical's own ForeignKey."""
+def _clean_nullable_id(value: Any, label: str) -> int | None:
+    """None clears the id. Otherwise a positive whole number (a text of digits is accepted). Booleans, zero, negatives,
+    fractions and any other text are refused. Whether the id exists is checked by Tactical's own ForeignKey."""
     if value is None:
         return None
     if isinstance(value, bool):
-        raise ResourceValidationError("alert_template_id must be a positive integer or null.")
+        raise ResourceValidationError(f"{label} must be a positive integer or null.")
     if isinstance(value, str):
         text = value.strip()
         if not text.isascii() or not text.isdigit():
-            raise ResourceValidationError("alert_template_id must be a positive integer or null.")
+            raise ResourceValidationError(f"{label} must be a positive integer or null.")
         value = int(text)
     if not isinstance(value, int) or value < 1 or value >= 2**63:
-        raise ResourceValidationError("alert_template_id must be a positive integer or null.")
+        raise ResourceValidationError(f"{label} must be a positive integer or null.")
     return value
+
+
+def _clean_alert_template_id(value: Any) -> int | None:
+    return _clean_nullable_id(value, "alert_template_id")
+
+
+def _clean_block_policy_inheritance(value: Any) -> bool:
+    """A real true or false only: 1, 0 and text are refused."""
+    if not isinstance(value, bool):
+        raise ResourceValidationError("block_policy_inheritance must be true or false.")
+    return value
+
+
+POLICY_FIELDS = ("workstation_policy_id", "server_policy_id", "block_policy_inheritance")
+
+
+def _policy_changes(*, workstation_policy_id: Any, server_policy_id: Any, block_policy_inheritance: Any) -> dict[str, Any]:
+    """The policy fields that were given, cleaned (1.7.0). UNSET leaves a field alone; None clears a policy id."""
+    changes: dict[str, Any] = {}
+    if workstation_policy_id is not UNSET:
+        changes["workstation_policy_id"] = _clean_nullable_id(workstation_policy_id, "workstation_policy_id")
+    if server_policy_id is not UNSET:
+        changes["server_policy_id"] = _clean_nullable_id(server_policy_id, "server_policy_id")
+    if block_policy_inheritance is not UNSET:
+        changes["block_policy_inheritance"] = _clean_block_policy_inheritance(block_policy_inheritance)
+    return changes
+
+
+def _with_sites(row: dict[str, Any], sites: list[dict[str, Any]]) -> dict[str, Any]:
+    """A client record with ``sites`` before the 1.7.0 policy keys, so the key order is CLIENT_FIELDS."""
+    out = {key: value for key, value in row.items() if key not in POLICY_FIELDS}
+    out["sites"] = sites
+    out.update({key: row[key] for key in POLICY_FIELDS if key in row})
+    return out
 
 
 def _template_changed(before: dict | None, after: dict | None) -> bool:
     return (before or {}).get("alert_template_id") != (after or {}).get("alert_template_id")
+
+
+def _policy_changed(before: dict | None, after: dict | None) -> list[str]:
+    """The names of the policy fields whose value differs. Ids only, never a policy name."""
+    return [key for key in POLICY_FIELDS if (before or {}).get(key) != (after or {}).get(key)]
 
 
 def _pagination(page: Any, page_size: Any) -> tuple[int, int, int]:
@@ -391,10 +432,26 @@ def _page(items: list[dict], total: int, page: int, page_size: int) -> dict[str,
     }
 
 
-def list_clients(*, context: ResourceAccessContext, search: str | None = None, active: bool | None = None, page: int = 1, page_size: int = DEFAULT_PAGE_SIZE) -> dict[str, Any]:
+def _filter_id(value: Any, label: str) -> int | None:
+    """A list filter id: empty means no filter, otherwise a positive whole number (text of digits accepted). Strict: a fraction,
+    a boolean or other text is refused, so a typo never silently widens or empties a list."""
+    if value is None or (isinstance(value, str) and value == ""):
+        return None
+    try:
+        return _clean_nullable_id(value, label)
+    except ResourceValidationError as exc:
+        raise ResourceValidationError(f"{label} must be a positive integer.") from exc
+
+
+def list_clients(*, context: ResourceAccessContext, search: str | None = None, active: bool | None = None, page: int = 1, page_size: int = DEFAULT_PAGE_SIZE,
+                 alert_template_id: Any | None = None, policy_id: Any | None = None) -> dict[str, Any]:
+    """``alert_template_id`` and ``policy_id`` (matches the workstation or the server policy) filter the list (1.7.0)."""
     user, trusted = _authorize(context, "client")
     page, page_size, offset = _pagination(page, page_size)
-    qs = adapter.clients_queryset(user=user, trusted=trusted, search=_search(search), active=_active(active))
+    template_filter = _filter_id(alert_template_id, "alert_template_id")
+    policy_filter = _filter_id(policy_id, "policy_id")
+    qs = adapter.clients_queryset(user=user, trusted=trusted, search=_search(search), active=_active(active),
+                                  alert_template_id=template_filter, policy_id=policy_filter)
     items, total = adapter.page_clients(qs, offset=offset, limit=page_size)
     # 1.5.0: each client carries its sites inside the caller's scope (Tactical's own GET /clients/ does), one query per page.
     return _page(adapter.nest_sites(items, user=user, trusted=trusted), total, page, page_size)
@@ -409,11 +466,16 @@ def get_client(client_id: Any, *, context: ResourceAccessContext) -> dict[str, A
     return adapter.nest_sites([row], user=user, trusted=trusted)[0]
 
 
-def list_sites(*, context: ResourceAccessContext, client_id: Any | None = None, search: str | None = None, active: bool | None = None, page: int = 1, page_size: int = DEFAULT_PAGE_SIZE) -> dict[str, Any]:
+def list_sites(*, context: ResourceAccessContext, client_id: Any | None = None, search: str | None = None, active: bool | None = None, page: int = 1, page_size: int = DEFAULT_PAGE_SIZE,
+               alert_template_id: Any | None = None, policy_id: Any | None = None) -> dict[str, Any]:
+    """``alert_template_id`` and ``policy_id`` (matches the workstation or the server policy) filter the list (1.7.0)."""
     user, trusted = _authorize(context, "site")
     page, page_size, offset = _pagination(page, page_size)
     client_id = _clean_positive_int(client_id, "client_id") if client_id not in (None, "") else None
-    qs = adapter.sites_queryset(user=user, trusted=trusted, client_id=client_id, search=_search(search), active=_active(active))
+    template_filter = _filter_id(alert_template_id, "alert_template_id")
+    policy_filter = _filter_id(policy_id, "policy_id")
+    qs = adapter.sites_queryset(user=user, trusted=trusted, client_id=client_id, search=_search(search), active=_active(active),
+                                alert_template_id=template_filter, policy_id=policy_filter)
     items, total = adapter.page_sites(qs, offset=offset, limit=page_size)
     return _page(items, total, page, page_size)
 
@@ -478,30 +540,40 @@ def create_client(*, name: str, context: ResourceAccessContext, site_name: str |
                 "custom_field_ids": _custom_field_ids(fields),
             },
         )
-        return {**row, "sites": [first_site]}
+        return _with_sites(row, [first_site])
 
 
-def update_client(client_id: Any, *, name: str | None = None, alert_template_id: Any = UNSET, context: ResourceAccessContext) -> dict[str, Any]:
-    """Change a client's name, its alert template id, or both (at least one). ``alert_template_id`` is a positive integer to set
-    or None to clear (1.4.0). Core holds only the id: Alerts owns the template list."""
+def update_client(client_id: Any, *, name: str | None = None, alert_template_id: Any = UNSET, context: ResourceAccessContext,
+                  workstation_policy_id: Any = UNSET, server_policy_id: Any = UNSET, block_policy_inheritance: Any = UNSET) -> dict[str, Any]:
+    """Change a client's name, its alert template id, its policy fields, or any of them (at least one).
+
+    ``alert_template_id`` is a positive integer to set or None to clear (1.4.0). ``workstation_policy_id`` and ``server_policy_id``
+    work the same way and ``block_policy_inheritance`` takes a real true or false (1.7.0). UNSET leaves a field alone. Core holds
+    only the ids: Alerts owns the template list and Automation the policy list."""
     user = _authorize_write(context, "client")
     resource_id = _clean_positive_int(client_id, "client_id")
-    if name is None and alert_template_id is UNSET:
-        raise ResourceValidationError("At least one of name or alert_template_id is required.")
+    if name is None and alert_template_id is UNSET and all(value is UNSET for value in (workstation_policy_id, server_policy_id, block_policy_inheritance)):
+        raise ResourceValidationError("At least one of name, alert_template_id, workstation_policy_id, server_policy_id or block_policy_inheritance is required.")
     changes: dict[str, Any] = {}
     if name is not None:
         changes["name"] = _clean_resource_name(name, "Client")
     if alert_template_id is not UNSET:
         changes["alert_template_id"] = _clean_alert_template_id(alert_template_id)
+    changes.update(_policy_changes(workstation_policy_id=workstation_policy_id, server_policy_id=server_policy_id, block_policy_inheritance=block_policy_inheritance))
     before = adapter.get_client_row(adapter.clients_queryset(user=user, trusted=False), resource_id)
     with _transaction_atomic():
         row = _adapter_write(adapter.update_client_row, user=user, client_id=resource_id, **changes)
         if row is None:
             raise ResourceNotFound("Client was not found in the caller's resource scope.")
+        if before is not None and before == row:
+            # Nothing changed (the same values were sent again): no audit row.
+            return adapter.nest_sites([row], user=user, trusted=False)[0]
+        metadata = {"alert_template_changed": "alert_template_id" in changes and _template_changed(before, row)}
+        if any(key in changes for key in POLICY_FIELDS):
+            metadata["policy_changed"] = _policy_changed(before, row)
         _record_resource_change(
             actor=user, action="modify", resource_type="client", resource_id=resource_id,
-            before=before, after=row,
-            metadata={"alert_template_changed": "alert_template_id" in changes and _template_changed(before, row)},
+            before=before, after=row, metadata=metadata,
         )
         return adapter.nest_sites([row], user=user, trusted=False)[0]
 
@@ -536,21 +608,37 @@ def create_site(*, client_id: Any, name: str, context: ResourceAccessContext, cu
         return row
 
 
-def update_site(site_id: Any, *, name: str | None = None, client_id: Any | None = None, alert_template_id: Any = UNSET, context: ResourceAccessContext) -> dict[str, Any]:
-    """Change a site's name, its client, its alert template id (a positive integer, or None to clear; 1.4.0), or any of them."""
+def update_site(site_id: Any, *, name: str | None = None, client_id: Any | None = None, alert_template_id: Any = UNSET, context: ResourceAccessContext,
+                workstation_policy_id: Any = UNSET, server_policy_id: Any = UNSET, block_policy_inheritance: Any = UNSET) -> dict[str, Any]:
+    """Change a site's name, its client, its alert template id (a positive integer, or None to clear; 1.4.0), its policy fields
+    (1.7.0, as update_client), or any of them.
+
+    Moving a site (``client_id`` other than the current one) is Tactical's Edit site: the agents follow the site, the destination
+    client needs the same client write grant as create_site, the source needs the site write grant, and the last site of a client
+    cannot leave (400). A name already used in the destination client is a 409. A ``client_id`` equal to the current one is a no-op.
+    """
     user = _authorize_write(context, "site")
     resource_id = _clean_positive_int(site_id, "site_id")
-    if name is None and client_id in (None, "") and alert_template_id is UNSET:
-        raise ResourceValidationError("At least one of name, client_id or alert_template_id is required.")
+    policy_given = (workstation_policy_id, server_policy_id, block_policy_inheritance)
+    if name is None and client_id in (None, "") and alert_template_id is UNSET and all(value is UNSET for value in policy_given):
+        raise ResourceValidationError("At least one of name, client_id, alert_template_id, workstation_policy_id, server_policy_id or block_policy_inheritance is required.")
     clean_name = _clean_resource_name(name, "Site") if name is not None else None
     target_client_id = _clean_positive_int(client_id, "client_id") if client_id not in (None, "") else None
     changes: dict[str, Any] = {}
     if alert_template_id is not UNSET:
         changes["alert_template_id"] = _clean_alert_template_id(alert_template_id)
+    changes.update(_policy_changes(workstation_policy_id=workstation_policy_id, server_policy_id=server_policy_id, block_policy_inheritance=block_policy_inheritance))
+    before = adapter.get_site_row(adapter.sites_queryset(user=user, trusted=False), resource_id)
+    if target_client_id is not None and before is not None and target_client_id == before["client_id"]:
+        # The site is already in that client: not a move, so no destination check and no client change.
+        target_client_id = None
+        if clean_name is None and not changes:
+            return before
     if target_client_id is not None and not adapter.client_write_in_scope(user=user, client_id=target_client_id):
         raise ResourceNotFound("Client was not found in the caller's resource scope.")
-    before = adapter.get_site_row(adapter.sites_queryset(user=user, trusted=False), resource_id)
+    moving = target_client_id is not None and before is not None
     with _transaction_atomic():
+        agents_moved = adapter.site_agent_count(site_id=resource_id) if moving else 0
         row = _adapter_write(
             adapter.update_site_row,
             user=user,
@@ -561,10 +649,21 @@ def update_site(site_id: Any, *, name: str | None = None, client_id: Any | None 
         )
         if row is None:
             raise ResourceNotFound("Site was not found in the caller's resource scope.")
+        if before is not None and _audit_view(before) == _audit_view(row):
+            # Nothing changed (the same values were sent again): no audit row.
+            return row
+        client_changed = before is not None and before.get("client_id") != row.get("client_id")
+        metadata: dict[str, Any] = {
+            "alert_template_changed": "alert_template_id" in changes and _template_changed(before, row),
+        }
+        if client_changed:
+            # A move says what moved: ids and a count only, never a name. The keys are absent when the client did not change.
+            metadata.update({"client_changed": True, "from_client_id": before["client_id"], "to_client_id": row["client_id"], "agents_moved": int(agents_moved)})
+        if any(key in changes for key in POLICY_FIELDS):
+            metadata["policy_changed"] = _policy_changed(before, row)
         _record_resource_change(
             actor=user, action="modify", resource_type="site", resource_id=resource_id,
-            before=_audit_view(before), after=_audit_view(row),
-            metadata={"alert_template_changed": "alert_template_id" in changes and _template_changed(before, row)},
+            before=_audit_view(before), after=_audit_view(row), metadata=metadata,
         )
         return row
 
@@ -776,11 +875,15 @@ def resource_contract_metadata() -> dict[str, Any]:
         "write_support": {
             "client": ["create", "update", "delete", "custom_fields"], "site": ["create", "update", "delete", "custom_fields"], "agent": [],
             # 1.4.0: what update_client and update_site accept (alert_template_id since 1.4.0, an id or null)
-            "update_fields": {"client": ["name", "alert_template_id"], "site": ["name", "client_id", "alert_template_id"]},
+            # 1.7.0: the policy fields (ids and the inheritance flag) join both lists
+            "update_fields": {
+                "client": ["name", "alert_template_id", "workstation_policy_id", "server_policy_id", "block_policy_inheritance"],
+                "site": ["name", "client_id", "alert_template_id", "workstation_policy_id", "server_policy_id", "block_policy_inheritance"],
+            },
         },
         "resource_types": {
-            "client": {"id_type": "integer", "fields": list(CLIENT_FIELDS), "filters": ["search", "active", "page", "page_size"]},
-            "site": {"id_type": "integer", "fields": list(SITE_FIELDS), "filters": ["client_id", "search", "active", "page", "page_size"]},
+            "client": {"id_type": "integer", "fields": list(CLIENT_FIELDS), "filters": ["search", "active", "alert_template_id", "policy_id", "page", "page_size"]},
+            "site": {"id_type": "integer", "fields": list(SITE_FIELDS), "filters": ["client_id", "search", "active", "alert_template_id", "policy_id", "page", "page_size"]},
             "agent": {"id_type": "string", "fields": list(AGENT_FIELDS), "filters": ["client_id", "site_id", "search", "active", "page", "page_size"]},
         },
         "operations": ["list_clients", "get_client", "create_client", "update_client", "delete_client", "list_sites", "get_site", "create_site", "update_site", "delete_site", "list_custom_fields", "update_custom_fields", "list_agents", "get_agent", "resolve_resource", "scope_descriptor", "scope_unrestricted", "has_whole_client_access", "list_custom_field_definitions"],
@@ -794,13 +897,13 @@ def resource_contract_metadata() -> dict[str, Any]:
             "clients": {
                 "python": "list_clients",
                 "http": "GET /api/tfd/resources/clients/",
-                "query": {"search": "optional string", "active": "optional boolean", "page": f"integer 1..{MAX_PAGE_NUMBER}", "page_size": f"integer 1..{MAX_PAGE_SIZE}"},
+                "query": {"search": "optional string", "active": "optional boolean", "alert_template_id": "optional positive integer (1.7.0): only clients using that alert template", "policy_id": "optional positive integer (1.7.0): only clients whose workstation or server policy is that policy", "page": f"integer 1..{MAX_PAGE_NUMBER}", "page_size": f"integer 1..{MAX_PAGE_SIZE}"},
                 "response": {"items": "array[client]", "count": "integer", "page": "integer", "page_size": "integer", "pages": "integer", "next_page": "integer|null", "previous_page": "integer|null"},
             },
             "sites": {
                 "python": "list_sites",
                 "http": "GET /api/tfd/resources/sites/",
-                "query": {"client_id": "optional positive integer", "search": "optional string", "active": "optional boolean", "page": f"integer 1..{MAX_PAGE_NUMBER}", "page_size": f"integer 1..{MAX_PAGE_SIZE}"},
+                "query": {"client_id": "optional positive integer", "search": "optional string", "active": "optional boolean", "alert_template_id": "optional positive integer (1.7.0): only sites using that alert template", "policy_id": "optional positive integer (1.7.0): only sites whose workstation or server policy is that policy", "page": f"integer 1..{MAX_PAGE_NUMBER}", "page_size": f"integer 1..{MAX_PAGE_SIZE}"},
                 "response": {"items": "array[site]", "count": "integer", "page": "integer", "page_size": "integer", "pages": "integer", "next_page": "integer|null", "previous_page": "integer|null"},
             },
         },
@@ -818,16 +921,34 @@ def resource_contract_metadata() -> dict[str, Any]:
                 "semantics": "Since 1.5.0 (custom_fields). As Tactical does, the new site joins the creator's can_view_sites only when that list is not empty. Audit metadata role_scope_extended 'sites' or 'none' and custom_field_ids.",
             },
             "update_client": {
-                "python": "update_client(client_id, *, name=None, alert_template_id=UNSET, context)",
+                "python": "update_client(client_id, *, name=None, alert_template_id=UNSET, workstation_policy_id=UNSET, server_policy_id=UNSET, block_policy_inheritance=UNSET, context)",
                 "http": "PATCH /api/tfd/resources/clients/<id>/",
-                "body": {"name": "optional string", "alert_template_id": "optional positive integer to set, or null to clear; at least one of the two is required"},
-                "semantics": "Since 1.4.0. Core holds only the alert template id: Alerts owns the template list. The id must name an existing template (Tactical's own foreign key decides) or the call fails with invalid_resource_request. Same write rule as a rename (Tactical can_manage_clients, the Core resources permission and a whole-client grant); can_manage_alerts is not required, matching Tactical's own client PUT. The audit row carries before and after records and metadata alert_template_changed.",
+                "body": {
+                    "name": "optional string",
+                    "alert_template_id": "optional positive integer to set, or null to clear",
+                    "workstation_policy_id": "optional positive integer to set, or null to clear (1.7.0)",
+                    "server_policy_id": "optional positive integer to set, or null to clear (1.7.0)",
+                    "block_policy_inheritance": "optional boolean, true or false only (1.7.0); 1, 0 and text are refused. At least one field is required",
+                },
+                "semantics": "Since 1.4.0 (alert_template_id) and 1.7.0 (the three policy fields). Core holds only the ids: Alerts owns the template list and Automation owns the policy list. An id must name an existing template or policy (Tactical's own foreign key decides) or the call fails with invalid_resource_request ('alert_template_id does not name an existing alert template.' or 'workstation_policy_id does not name an existing policy.'). Same write rule as a rename (Tactical can_manage_clients, the Core resources permission and a whole-client grant); can_manage_alerts and can_manage_automation_policies are not required, matching Tactical's own client PUT. The write goes through Tactical's model save, so its agent alert cache refresh and policy cache refresh run. The audit row carries before and after records and metadata alert_template_changed and, when a policy field was sent, policy_changed (the names of the fields whose value changed, ids only). A call that changes nothing writes no row.",
             },
             "update_site": {
-                "python": "update_site(site_id, *, name=None, client_id=None, alert_template_id=UNSET, context)",
+                "python": "update_site(site_id, *, name=None, client_id=None, alert_template_id=UNSET, workstation_policy_id=UNSET, server_policy_id=UNSET, block_policy_inheritance=UNSET, context)",
                 "http": "PATCH /api/tfd/resources/sites/<id>/",
-                "body": {"name": "optional string", "client_id": "optional positive integer", "alert_template_id": "optional positive integer to set, or null to clear; at least one field is required"},
-                "semantics": "Since 1.4.0. As update_client: the id only, existing template required, same write rule as a rename (can_manage_sites, the Core resources permission, a site grant or a grant of the site's client), audit metadata alert_template_changed.",
+                "body": {
+                    "name": "optional string",
+                    "client_id": "optional positive integer: move the site to that client (see Move a site)",
+                    "alert_template_id": "optional positive integer to set, or null to clear",
+                    "workstation_policy_id": "optional positive integer to set, or null to clear (1.7.0)",
+                    "server_policy_id": "optional positive integer to set, or null to clear (1.7.0)",
+                    "block_policy_inheritance": "optional boolean, true or false only (1.7.0). At least one field is required",
+                },
+                "semantics": "Since 1.4.0 (alert_template_id) and 1.7.0 (the three policy fields, as update_client). Same write rule as a rename (can_manage_sites, the Core resources permission, a site grant or a grant of the site's client). Audit metadata alert_template_changed, client_changed and, when a policy field was sent, policy_changed. A call that changes nothing writes no row.",
+            },
+            "move_site": {
+                "python": "update_site(site_id, *, client_id=<destination>, ...)",
+                "http": "PATCH /api/tfd/resources/sites/<id>/ with client_id (Tactical's Edit site)",
+                "semantics": "Documented and tested in 1.7.0 (the mechanism is older). The agents follow their site. The source needs the site write grant (a site grant or a grant of its client). The destination client needs the same client write grant as create_site: a limited role needs an explicit client grant on the destination, which is stricter than Tactical (it checks only the Edit sites permission). A destination outside the caller's scope answers 404 resource_not_found, the same as a client that does not exist. The last site of a client cannot move away (400, 'A client must retain at least one site.'). A name already used by a site of the destination client is 409 ('A site with that name already exists for the selected client.'). A client_id equal to the current one is a no-op: nothing is saved and no audit row is written. The write goes through Tactical's model save (update_fields client, modified_by, modified_time), so its Site.save hooks run. The strict audit row carries before and after records (client_id) and metadata client_changed true, from_client_id, to_client_id and agents_moved (ids and a count only, never a name). A move together with a rename or another field is one row.",
             },
             "scope_descriptor": {
                 "python": ["scope_descriptor(*, context)", "scope_unrestricted(context)", "has_whole_client_access(client_id, *, context)", "ResourceAccessContext.scope"],
@@ -894,6 +1015,8 @@ def resource_contract_metadata() -> dict[str, Any]:
             "semantics": "Since 1.17.22. An empty pair means unrestricted. A role with only can_view_sites is site mode. PUT replaces both lists, so an editor that cannot see every id (a limited editor sees only its own clients and sites) must send back the ids it loaded and could not show. Pickers read clients with nested sites from this Resource Directory (List clients is enough). Core writes one strict audit row (module core, object_type role_scope, object_id the role id) with before and after as sorted id lists (capped at 1000, with counts and a truncated flag), only when a list changed. Core does not change who may edit role lists.",
         },
         "alert_template_id": "Since 1.4.0 client and site records carry alert_template_id (integer or null), appended after the earlier keys. It is an id only. Anyone who can list clients or sites sees it.",
+        "policy_fields": "Since 1.7.0 client and site records carry workstation_policy_id (integer or null), server_policy_id (integer or null) and block_policy_inheritance (boolean, false when unset), appended after the earlier keys (after sites on a client, after client_name on a site; nested sites carry them too). They are ids and a flag only: Automation owns the policy list and Core validates nothing about it. Anyone who can list clients or sites sees them. A record built from a row without the keys reads null, null and false.",
+        "list_filters_1_7": "Since 1.7.0 list_clients and list_sites take alert_template_id and policy_id (the workstation or the server policy), each a positive integer or 400, applied inside the caller's scope and under the list's own permission. Both together mean both must match. Alerts uses alert_template_id to find where a template is used, and Automation uses policy_id to build the policy overview without reading every page.",
         "compatibility": "Additive changes are preferred within 1.x. Tactical ORM changes are adapter-internal unless the public representation changes incompatibly.",
     }
 

@@ -393,19 +393,32 @@ def _active_filter(queryset, active: bool | None):
     return queryset.none() if active is False else queryset
 
 
-def clients_queryset(*, user=None, trusted: bool = False, search: str | None = None, active: bool | None = None):
+def _policy_filters(qs, *, alert_template_id: int | None, policy_id: int | None):
+    """1.7.0: ``alert_template_id`` matches the record's alert template, ``policy_id`` its workstation or its server policy."""
+    if alert_template_id is not None:
+        qs = qs.filter(alert_template_id=alert_template_id)
+    if policy_id is not None:
+        qs = qs.filter(Q(workstation_policy_id=policy_id) | Q(server_policy_id=policy_id))
+    return qs
+
+
+def clients_queryset(*, user=None, trusted: bool = False, search: str | None = None, active: bool | None = None,
+                     alert_template_id: int | None = None, policy_id: int | None = None):
     Client, _, _ = _models()
     qs = _scope_queryset(Client.objects.all(), user=user, trusted=trusted)
     qs = _active_filter(qs, active)
+    qs = _policy_filters(qs, alert_template_id=alert_template_id, policy_id=policy_id)
     if search:
         qs = qs.filter(name__icontains=search)
     return qs.order_by("name", "pk")
 
 
-def sites_queryset(*, user=None, trusted: bool = False, client_id: int | None = None, search: str | None = None, active: bool | None = None):
+def sites_queryset(*, user=None, trusted: bool = False, client_id: int | None = None, search: str | None = None, active: bool | None = None,
+                   alert_template_id: int | None = None, policy_id: int | None = None):
     _, Site, _ = _models()
     qs = _scope_queryset(Site.objects.all(), user=user, trusted=trusted)
     qs = _active_filter(qs, active)
+    qs = _policy_filters(qs, alert_template_id=alert_template_id, policy_id=policy_id)
     if client_id is not None:
         qs = qs.filter(client_id=client_id)
     if search:
@@ -435,6 +448,30 @@ def _template_id(row: dict[str, Any]) -> int | None:
     return int(value) if value is not None else None
 
 
+POLICY_KEYS = ("workstation_policy_id", "server_policy_id", "block_policy_inheritance")
+# The model fields a policy change saves, one per policy key.
+_POLICY_UPDATE_FIELDS = {"workstation_policy_id": "workstation_policy", "server_policy_id": "server_policy", "block_policy_inheritance": "block_policy_inheritance"}
+
+
+def _policy_id(row: dict[str, Any], key: str) -> int | None:
+    value = row.get(key)
+    return int(value) if value is not None else None
+
+
+def _policy_part(row: dict[str, Any]) -> dict[str, Any]:
+    """1.7.0: the policy ids and the inheritance flag, appended last. Missing keys read as None, None and False."""
+    return {
+        "workstation_policy_id": _policy_id(row, "workstation_policy_id"),
+        "server_policy_id": _policy_id(row, "server_policy_id"),
+        "block_policy_inheritance": bool(row.get("block_policy_inheritance") or False),
+    }
+
+
+def _policy_of(obj) -> dict[str, Any]:
+    """The policy keys of a model object, in the shape ``client_row`` and ``site_row`` read."""
+    return {key: getattr(obj, key, None) for key in POLICY_KEYS}
+
+
 def client_row(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "type": "client",
@@ -442,6 +479,7 @@ def client_row(row: dict[str, Any]) -> dict[str, Any]:
         "name": str(row.get("name") or ""),
         "active": True,
         "alert_template_id": _template_id(row),
+        **_policy_part(row),
     }
 
 
@@ -455,6 +493,7 @@ def site_row(row: dict[str, Any]) -> dict[str, Any]:
         "alert_template_id": _template_id(row),
         # 1.5.0: the owning client's name, as Tactical's own /clients/sites/ returns it (client__name, no extra query)
         "client_name": str(row.get("client__name") or ""),
+        **_policy_part(row),
     }
 
 
@@ -471,16 +510,24 @@ def sites_by_client(client_ids, *, user=None, trusted: bool = False) -> dict[int
         return grouped
     _, Site, _ = _models()
     qs = _scope_queryset(Site.objects.all(), user=user, trusted=trusted).filter(client_id__in=wanted)
-    rows = qs.order_by("name", "pk").values("pk", "name", "client_id", "alert_template_id", "client__name")
+    rows = qs.order_by("name", "pk").values("pk", "name", "client_id", "alert_template_id", "client__name", *POLICY_KEYS)
     for row in rows:
         grouped.setdefault(int(row["client_id"]), []).append(site_row(row))
     return grouped
 
 
 def nest_sites(rows: list[dict[str, Any]], *, user=None, trusted: bool = False) -> list[dict[str, Any]]:
-    """Return copies of client records with ``sites`` appended last (1.5.0). One site query for the whole list."""
+    """Return copies of client records with ``sites`` added (1.5.0). One site query for the whole list.
+
+    ``sites`` keeps its place before the policy keys of 1.7.0, so the key order is CLIENT_FIELDS."""
     grouped = sites_by_client([row["id"] for row in rows], user=user, trusted=trusted)
-    return [{**row, "sites": list(grouped.get(int(row["id"]), []))} for row in rows]
+    nested = []
+    for row in rows:
+        out = {key: value for key, value in row.items() if key not in POLICY_KEYS}
+        out["sites"] = list(grouped.get(int(row["id"]), []))
+        out.update(_policy_part(row))
+        nested.append(out)
+    return nested
 
 
 def agent_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -500,13 +547,13 @@ def agent_row(row: dict[str, Any]) -> dict[str, Any]:
 
 def page_clients(queryset, *, offset: int, limit: int) -> tuple[list[dict[str, Any]], int]:
     total = queryset.count()
-    rows = queryset.values("pk", "name", "alert_template_id")[offset : offset + limit]
+    rows = queryset.values("pk", "name", "alert_template_id", *POLICY_KEYS)[offset : offset + limit]
     return [client_row(row) for row in rows], total
 
 
 def page_sites(queryset, *, offset: int, limit: int) -> tuple[list[dict[str, Any]], int]:
     total = queryset.count()
-    rows = queryset.values("pk", "name", "client_id", "alert_template_id", "client__name")[offset : offset + limit]
+    rows = queryset.values("pk", "name", "client_id", "alert_template_id", "client__name", *POLICY_KEYS)[offset : offset + limit]
     return [site_row(row) for row in rows], total
 
 
@@ -520,12 +567,12 @@ def page_agents(queryset, *, offset: int, limit: int) -> tuple[list[dict[str, An
 
 
 def get_client_row(queryset, client_id: int) -> dict[str, Any] | None:
-    row = queryset.filter(pk=client_id).values("pk", "name", "alert_template_id").first()
+    row = queryset.filter(pk=client_id).values("pk", "name", "alert_template_id", *POLICY_KEYS).first()
     return client_row(row) if row else None
 
 
 def get_site_row(queryset, site_id: int) -> dict[str, Any] | None:
-    row = queryset.filter(pk=site_id).values("pk", "name", "client_id", "alert_template_id", "client__name").first()
+    row = queryset.filter(pk=site_id).values("pk", "name", "client_id", "alert_template_id", "client__name", *POLICY_KEYS).first()
     return site_row(row) if row else None
 
 
@@ -620,10 +667,10 @@ def create_client_row(*, user, name: str, default_site_name: str = "Default Site
     except ValidationError as exc:
         raise TacticalResourceValidationError("Client or first site failed Tactical validation.") from exc
     return {
-        "client": client_row({"pk": obj.pk, "name": obj.name, "alert_template_id": getattr(obj, "alert_template_id", None)}),
+        "client": client_row({"pk": obj.pk, "name": obj.name, "alert_template_id": getattr(obj, "alert_template_id", None), **_policy_of(obj)}),
         "site": site_row({
             "pk": site.pk, "name": site.name, "client_id": obj.pk,
-            "alert_template_id": getattr(site, "alert_template_id", None), "client__name": obj.name,
+            "alert_template_id": getattr(site, "alert_template_id", None), "client__name": obj.name, **_policy_of(site),
         }),
         "role_scope_extended": extended,
     }
@@ -633,17 +680,36 @@ _NOT_GIVEN = object()
 
 
 def _validation_message(exc: ValidationError, label: str) -> str:
-    """A missing alert template reads plainly; every other failure keeps the one-line text of before 1.17.17."""
+    """A missing alert template or policy reads plainly; every other failure keeps the one-line text of before 1.17.17."""
     fields = getattr(exc, "message_dict", None) if hasattr(exc, "error_dict") else None
     if isinstance(fields, dict) and "alert_template" in fields:
         return "alert_template_id does not name an existing alert template."
+    if isinstance(fields, dict):
+        for model_field, key in (("workstation_policy", "workstation_policy_id"), ("server_policy", "server_policy_id")):
+            if model_field in fields:
+                return f"{key} does not name an existing policy."
     return f"{label} failed Tactical validation."
 
 
-def update_client_row(*, user, client_id: int, name: str | None = None, alert_template_id: int | None = _NOT_GIVEN) -> dict[str, Any] | None:
+def _apply_policy_fields(obj, update_fields: list[str], given: dict[str, Any]) -> None:
+    """Set the policy fields that were given and differ from the stored value (1.17.24). An unchanged value is not saved."""
+    for key, value in given.items():
+        if value is _NOT_GIVEN or getattr(obj, key, None) == value:
+            continue
+        setattr(obj, key, value)
+        update_fields.append(_POLICY_UPDATE_FIELDS[key])
+
+
+def update_client_row(*, user, client_id: int, name: str | None = None, alert_template_id: int | None = _NOT_GIVEN,
+                      workstation_policy_id: int | None = _NOT_GIVEN, server_policy_id: int | None = _NOT_GIVEN,
+                      block_policy_inheritance: bool = _NOT_GIVEN) -> dict[str, Any] | None:
     """Change a client's name and, since 1.17.17, its alert template (an id or None). Core holds only the field:
     Alerts owns the template list. The write goes through ``obj.save`` so Tactical's own model hook
-    (``cache_agents_alert_template``) still runs. A template id that does not exist fails ``full_clean`` through the ForeignKey."""
+    (``cache_agents_alert_template``) still runs. A template id that does not exist fails ``full_clean`` through the ForeignKey.
+
+    1.17.24: the workstation and server policy ids and ``block_policy_inheritance`` are saved the same way, so Tactical's own
+    ``Client.save`` re-caches the alert template and refreshes the policy caches. A policy id that names no policy fails the
+    ForeignKey. Core holds only the ids: Automation owns the policy list."""
     Client, _, _ = _models()
     try:
         with transaction.atomic():
@@ -659,6 +725,10 @@ def update_client_row(*, user, client_id: int, name: str | None = None, alert_te
             if alert_template_id is not _NOT_GIVEN:
                 obj.alert_template_id = alert_template_id
                 update_fields.append("alert_template")
+            _apply_policy_fields(obj, update_fields, {
+                "workstation_policy_id": workstation_policy_id, "server_policy_id": server_policy_id,
+                "block_policy_inheritance": block_policy_inheritance,
+            })
             if update_fields:
                 obj.full_clean(exclude=None, validate_unique=False)
                 if hasattr(obj, "modified_by"):
@@ -670,7 +740,7 @@ def update_client_row(*, user, client_id: int, name: str | None = None, alert_te
         raise TacticalResourceConflictError("A client with that name already exists.") from exc
     except ValidationError as exc:
         raise TacticalResourceValidationError(_validation_message(exc, "Client")) from exc
-    return client_row({"pk": obj.pk, "name": obj.name, "alert_template_id": getattr(obj, "alert_template_id", None)})
+    return client_row({"pk": obj.pk, "name": obj.name, "alert_template_id": getattr(obj, "alert_template_id", None), **_policy_of(obj)})
 
 
 def create_site_row(*, client_id: int, name: str, user=None, custom_fields=None) -> dict[str, Any]:
@@ -694,14 +764,21 @@ def create_site_row(*, client_id: int, name: str, user=None, custom_fields=None)
     return {
         "site": site_row({
             "pk": obj.pk, "name": obj.name, "client_id": obj.client_id,
-            "alert_template_id": getattr(obj, "alert_template_id", None), "client__name": client_name,
+            "alert_template_id": getattr(obj, "alert_template_id", None), "client__name": client_name, **_policy_of(obj),
         }),
         "role_scope_extended": extended,
     }
 
 
+def site_agent_count(*, site_id: int) -> int:
+    """How many agents sit on a site (1.17.24). Agents follow their site when it moves, so a move audit row can say how many."""
+    _, _, Agent = _models()
+    return int(Agent.objects.filter(site_id=site_id).count())
+
+
 def update_site_row(*, user, site_id: int, name: str | None = None, client_id: int | None = None,
-                    alert_template_id: int | None = _NOT_GIVEN) -> dict[str, Any] | None:
+                    alert_template_id: int | None = _NOT_GIVEN, workstation_policy_id: int | None = _NOT_GIVEN,
+                    server_policy_id: int | None = _NOT_GIVEN, block_policy_inheritance: bool = _NOT_GIVEN) -> dict[str, Any] | None:
     Client, Site, _ = _models()
     try:
         with transaction.atomic():
@@ -728,12 +805,18 @@ def update_site_row(*, user, site_id: int, name: str | None = None, client_id: i
             if alert_template_id is not _NOT_GIVEN:
                 obj.alert_template_id = alert_template_id
                 update_fields.append("alert_template")
+            _apply_policy_fields(obj, update_fields, {
+                "workstation_policy_id": workstation_policy_id, "server_policy_id": server_policy_id,
+                "block_policy_inheritance": block_policy_inheritance,
+            })
             if update_fields:
                 obj.full_clean(exclude=None, validate_unique=False)
                 if hasattr(obj, "modified_by"):
                     update_fields.append("modified_by")
                 if hasattr(obj, "modified_time"):
                     update_fields.append("modified_time")
+                # Saved through the model so Tactical's own Site.save hooks run (alert template and policy caches). The
+                # agents follow the site on a move because they point at the site row.
                 obj.save(update_fields=update_fields)
     except IntegrityError as exc:
         raise TacticalResourceConflictError("A site with that name already exists for the selected client.") from exc
@@ -742,6 +825,7 @@ def update_site_row(*, user, site_id: int, name: str | None = None, client_id: i
     return site_row({
         "pk": obj.pk, "name": obj.name, "client_id": obj.client_id, "alert_template_id": getattr(obj, "alert_template_id", None),
         "client__name": str(Client.objects.filter(pk=obj.client_id).values_list("name", flat=True).first() or ""),
+        **_policy_of(obj),
     })
 
 

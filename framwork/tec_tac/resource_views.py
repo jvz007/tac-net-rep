@@ -31,6 +31,9 @@ from .resources import (
 from .session_security import SessionAuthenticated
 
 
+_POLICY_BODY_KEYS = ("workstation_policy_id", "server_policy_id", "block_policy_inheritance")
+
+
 def _error_response(exc: ResourceDirectoryError):
     if isinstance(exc, ResourcePermissionDenied):
         status = 403
@@ -53,6 +56,14 @@ def _common(request):
     }
 
 
+def _policy_filters(request):
+    """The 1.7.0 list filters of clients and sites. Core validates them (a positive integer or 400)."""
+    return {
+        "alert_template_id": request.query_params.get("alert_template_id"),
+        "policy_id": request.query_params.get("policy_id"),
+    }
+
+
 def _body(request, allowed: set[str]) -> dict:
     data = request.data
     if not isinstance(data, dict):
@@ -72,9 +83,11 @@ class ResourceListView(APIView):
         try:
             params = _common(request)
             if self.resource_type == "client":
+                params.update(_policy_filters(request))
                 return Response(list_clients(**params))
             if self.resource_type == "site":
                 params["client_id"] = request.query_params.get("client_id")
+                params.update(_policy_filters(request))
                 return Response(list_sites(**params))
             if self.resource_type == "agent":
                 params["client_id"] = request.query_params.get("client_id")
@@ -148,27 +161,33 @@ class ResourceMutableDetailView(ResourceDetailView):
         try:
             context = user_context(request.user)
             if self.resource_type == "client":
-                data = _body(request, {"name", "alert_template_id"})
-                if "name" not in data and "alert_template_id" not in data:
-                    raise ResourceValidationError("name or alert_template_id is required.")
+                data = _body(request, {"name", "alert_template_id", *_POLICY_BODY_KEYS})
+                if not data:
+                    raise ResourceValidationError("At least one of name, alert_template_id, workstation_policy_id, server_policy_id or block_policy_inheritance is required.")
                 if "name" in data and data["name"] is None:
                     raise ResourceValidationError("name must be a string.")
-                # alert_template_id: a positive integer sets it and null clears it (1.17.17, core.resources 1.4.0)
+                # alert_template_id and the policy ids: a positive integer sets, null clears (core.resources 1.4.0 and 1.7.0)
                 return Response(update_client(
                     resource_id,
                     name=data.get("name"),
                     alert_template_id=data.get("alert_template_id", UNSET),
+                    workstation_policy_id=data.get("workstation_policy_id", UNSET),
+                    server_policy_id=data.get("server_policy_id", UNSET),
+                    block_policy_inheritance=data.get("block_policy_inheritance", UNSET),
                     context=context,
                 ))
             if self.resource_type == "site":
-                data = _body(request, {"name", "client_id", "alert_template_id"})
+                data = _body(request, {"name", "client_id", "alert_template_id", *_POLICY_BODY_KEYS})
                 if not data:
-                    raise ResourceValidationError("At least one of name, client_id or alert_template_id is required.")
+                    raise ResourceValidationError("At least one of name, client_id, alert_template_id, workstation_policy_id, server_policy_id or block_policy_inheritance is required.")
                 return Response(update_site(
                     resource_id,
                     name=data.get("name"),
                     client_id=data.get("client_id"),
                     alert_template_id=data.get("alert_template_id", UNSET),
+                    workstation_policy_id=data.get("workstation_policy_id", UNSET),
+                    server_policy_id=data.get("server_policy_id", UNSET),
+                    block_policy_inheritance=data.get("block_policy_inheritance", UNSET),
                     context=context,
                 ))
             raise ResourceValidationError("This resource type is read-only.")

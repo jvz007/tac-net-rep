@@ -136,10 +136,12 @@ for who in ("manage", "privileged", "nobody"):
     reset()
     message = denied(who, {UP: 20})
     must("superuser" in message and "upload" in message if who != "nobody" else "core.runtime_settings.manage" in message, message)
-    must(CONFIG.tactical_operation_upload_max_mib == 10 and not AUDIT and not SAVES, who)
+    # 1.17.24: the refusal of a superuser-only key writes one best-effort deny row (never a change row), none for a caller with no right at all
+    must(CONFIG.tactical_operation_upload_max_mib == 10 and not [r for r in AUDIT if r["action"] != "deny"] and not SAVES, who)
+    must(len(AUDIT) == (0 if who == "nobody" else 1) and all(r["action"] == "deny" and r["object_id"] == UP for r in AUDIT), (who, AUDIT))
     # sending both keys is refused as a whole: the timeout is not changed either
     denied(who, {TO: 90, UP: 20})
-    must(CONFIG.module_register_timeout_seconds == 30 and CONFIG.tactical_operation_upload_max_mib == 10 and not AUDIT, who)
+    must(CONFIG.module_register_timeout_seconds == 30 and CONFIG.tactical_operation_upload_max_mib == 10 and not [r for r in AUDIT if r["action"] != "deny"], who)
 # a non-superuser gets 403 and never 400, even for a bad value
 reset()
 denied("manage", {UP: "lots"})
@@ -187,7 +189,7 @@ tree = ast.parse(migration.read_text(encoding="utf-8"))
 text = migration.read_text(encoding="utf-8")
 must('("tec_tac", "0025_runtime_update_sources")' in text and 'name="tactical_operation_upload_max_mib"' in text and "default=10" in text, "migration 0026 follows 0025, adds the column with default 10")
 must(sum(isinstance(node, ast.ClassDef) for node in ast.walk(tree)) == 1, "one migration class")
-must(not any(p.name.startswith("0028") for p in (APP / "migrations").iterdir()), "no later migration yet (0027 is the system name, 1.17.23)")
+must(not any(p.name.startswith("0029") for p in (APP / "migrations").iterdir()), "the newest migration is 0028 (the session theme, 1.17.24); no later one yet")
 contracts = (APP / "contracts.py").read_text(encoding="utf-8")
 for needle in (UP, "superuser", "1.17.14"):
     must(needle in contracts, f"the runtime-settings contract entry lacks {needle!r}")

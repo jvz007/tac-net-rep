@@ -150,9 +150,9 @@ must(urls_src.index('"resources/custom-fields/"') < urls_src.index('"resources/c
 must("ResourceCustomFieldDefinitionsView" in urls_src.split("\n")[2], "imported")
 
 # 8. the version, the contract rows, the capability and the docs
-must(resources.CONTRACT_VERSION == "1.6.0", resources.CONTRACT_VERSION)
+must(resources.CONTRACT_VERSION == "1.7.0", resources.CONTRACT_VERSION)  # 1.17.24 raised it from 1.6.0
 meta = resources.resource_contract_metadata()
-must(meta["version"] == "1.6.0" and "list_custom_field_definitions" in meta["operations"], meta["operations"])
+must(meta["version"] == "1.7.0" and "list_custom_field_definitions" in meta["operations"], meta["operations"])
 must(meta["operations"][:15] == ["list_clients", "get_client", "create_client", "update_client", "delete_client", "list_sites", "get_site", "create_site",
                                  "update_site", "delete_site", "list_custom_fields", "update_custom_fields", "list_agents", "get_agent", "resolve_resource"], "earlier operations keep their order")
 must("custom_field_definitions" in meta["mutation_contracts"] and "/api/tfd/resources/custom-fields/" in meta["mutation_contracts"]["custom_field_definitions"]["http"], "metadata row")
@@ -163,7 +163,7 @@ rows = next(ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.As
 row = next(r for r in rows if r["name"] == "list_custom_field_definitions")
 must(row["import_path"] == "tec_tac.resources" and "/api/tfd/resources/custom-fields/" in row["purpose"] and "1.6.0" in row["purpose"], row)
 doc = (ROOT / "docs/resource-directory.md").read_text(encoding="utf-8")
-must("Contract version: `1.6.0`" in doc and "list_custom_field_definitions" in doc and "/api/tfd/resources/custom-fields/" in doc, "docs")
+must("Contract version: `1.7.0`" in doc and "list_custom_field_definitions" in doc and "/api/tfd/resources/custom-fields/" in doc, "docs")
 installer = (ROOT / "install.sh").read_text(encoding="utf-8")
 must("(1,1,0) <= resource_version < (2,0,0)" in installer, "the installer bound still admits 1.6.0")
 
