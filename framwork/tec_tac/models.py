@@ -163,6 +163,8 @@ class TecTacRuntimeConfig(models.Model):
     tactical_operation_upload_max_mib = models.PositiveIntegerField(default=10)
     # The name an authenticator app shows for this system (1.17.23). Plain text, 1 to 60 characters, no colon.
     system_name = models.CharField(max_length=60, default="Tec-Tac")
+    # Lets Core's own Priority 1 email go to a mail server on a private network (1.17.26, AD-30). Off by default. Superusers only.
+    priority_mail_private_relay = models.BooleanField(default=False)
     # Remembered update source per component (1.17.2): {"framework": {"type": "branch", "ref": "dev"}, ...}.
     # A missing or invalid entry reads as the default (release, ref null); see runtime_settings.
     update_sources = models.JSONField(default=dict, blank=True)

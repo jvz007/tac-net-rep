@@ -8,6 +8,9 @@ The wrappers run after DRF authentication and therefore have the real actor.
 Only actual privilege transitions are blocked. Full-form saves that resend an
 unchanged ``is_superuser`` value or the user's existing role remain valid for
 ordinary Tactical role/account managers.
+
+1.17.26: the three API key writes (create, edit, delete) also write one strict Core audit row each, in the guard's transaction. The
+row names the key's id, name and owner. It never carries the key value: the key field is never read for the row.
 """
 from __future__ import annotations
 
@@ -583,19 +586,106 @@ def _wrap_api_key_list(original):
     return _mark_guarded(guarded)
 
 
+API_KEY_AUDIT_OBJECT = "api_key"
+API_KEY_NAME_AUDIT_MAX = 100
+
+
+def _api_key_owner(apikey):
+    """(owner id, owner username) of a key, or (None, None). Reads the owner row only, never the key value."""
+    try:
+        owner = apikey.user
+        return getattr(owner, "pk", getattr(owner, "id", None)), str(getattr(owner, "username", "") or "") or None
+    except Exception:
+        return None, None
+
+
+def _api_key_expiry_text(value):
+    if value is None:
+        return None
+    try:
+        return value.isoformat()
+    except Exception:
+        return str(value)
+
+
+def _api_key_audit_view(apikey) -> dict:
+    """The audited form of a key: id, name, owner and expiry. The key value is NEVER read here."""
+    owner_id, owner_name = _api_key_owner(apikey)
+    return {
+        "id": getattr(apikey, "pk", getattr(apikey, "id", None)),
+        "name": str(getattr(apikey, "name", "") or "")[:API_KEY_NAME_AUDIT_MAX],
+        "owner": owner_name,
+        "owner_id": owner_id,
+        "expiration": _api_key_expiry_text(getattr(apikey, "expiration", None)),
+    }
+
+
+def _audit_api_key(actor, *, action: str, view: dict | None, before=None, after=None, metadata: dict | None = None) -> None:
+    """One strict Core audit row for a successful API key write (1.17.26). ``view`` names the key; it holds no key value.
+
+    The write is strict: it runs inside the guard's transaction, so a failed audit write rolls the Tactical change back. The row
+    carries ids, names and the expiry only."""
+    from .audit import record
+
+    view = view or {}
+    key_id = view.get("id")
+    try:
+        record(
+            actor=actor,
+            module_id="core",
+            action=action,
+            object_type=API_KEY_AUDIT_OBJECT,
+            object_id=None if key_id is None else str(key_id),
+            message="Tactical API key " + {"add": "created", "modify": "edited", "delete": "deleted"}[action] + ".",
+            before=before,
+            after=after,
+            metadata={"name": view.get("name"), "owner": view.get("owner"), "owner_id": view.get("owner_id"), **(metadata or {})},
+            strict=True,
+        )
+    except Exception as exc:
+        raise RuntimeError("An API key change requires a persisted Core audit record.") from exc
+
+
+def _created_api_key(name, user_id):
+    """The one key a successful create added, found by name and owner, or None. Tactical's key names are unique."""
+    if not isinstance(name, str) or not name:
+        return None
+    try:
+        query = APIKey.objects.select_related("user").filter(name=name)
+        if user_id is not None:
+            query = query.filter(user_id=user_id)
+        rows = list(query[:2])
+    except Exception:
+        logger.exception("Unable to look up the API key a create added")
+        return None
+    return rows[0] if len(rows) == 1 else None
+
+
 def _wrap_api_key_create(original):
     @wraps(original)
     def guarded(self, request, *args, **kwargs):
         user_id, invalid = _api_key_user_id_from_payload(request.data)
         if invalid:
             raise PermissionDenied("Invalid API key user target.")
-        if user_id is None:
-            return original(self, request, *args, **kwargs)
         with transaction.atomic():
-            target = _locked_user(user_id)
-            violation = _protected_account_violation(request.user, target, operation="create_api_key")
+            violation = None
+            if user_id is not None:
+                target = _locked_user(user_id)
+                violation = _protected_account_violation(request.user, target, operation="create_api_key")
             if violation is None:
-                return original(self, request, *args, **kwargs)
+                name = _payload_get(request.data, "name")
+                response = original(self, request, *args, **kwargs)
+                if _succeeded(response):
+                    created = _created_api_key(name, user_id)
+                    if created is not None:
+                        view = _api_key_audit_view(created)
+                        _audit_api_key(request.user, action="add", view=view, after={k: view[k] for k in ("name", "owner", "expiration")})
+                    else:
+                        # Never skipped: the row goes out with no id and a count of what was found.
+                        shown = name[:API_KEY_NAME_AUDIT_MAX] if isinstance(name, str) else None
+                        _audit_api_key(request.user, action="add", view={"id": None, "name": shown, "owner": None, "owner_id": user_id},
+                                       metadata={"matched": 0})
+                return response
         _raise_violation(request.user, violation)
     return _mark_guarded(guarded)
 
@@ -611,9 +701,29 @@ def _wrap_api_key_mutation(original, operation: str):
                 requested_target = _api_key_target(apikey, request.data, for_update=True)
                 violation = _protected_account_violation(request.user, requested_target, operation=operation)
             if violation is None:
-                return original(self, request, pk, *args, **kwargs)
+                before = _api_key_audit_view(apikey) if apikey is not None else None
+                response = original(self, request, pk, *args, **kwargs)
+                if before is not None and _succeeded(response):
+                    _audit_api_key_write(request.user, operation, pk, before)
+                return response
         _raise_violation(request.user, violation)
     return _mark_guarded(guarded)
+
+
+def _audit_api_key_write(actor, operation: str, pk, before: dict) -> None:
+    """The row of a successful edit or delete. An edit row names the changed fields, with owner and expiry before and after."""
+    if operation == "delete_api_key":
+        _audit_api_key(actor, action="delete", view=before, before={k: before[k] for k in ("name", "owner", "expiration")})
+        return
+    current = APIKey.objects.select_related("user").filter(pk=pk).first()
+    after = _api_key_audit_view(current) if current is not None else before
+    changed = [field for field in ("name", "owner", "expiration") if before.get(field) != after.get(field)]
+    _audit_api_key(
+        actor, action="modify", view=after,
+        before={field: before[field] for field in ("name", "owner", "expiration")},
+        after={field: after[field] for field in ("name", "owner", "expiration")},
+        metadata={"changed": changed},
+    )
 
 
 def install_tactical_account_guard() -> None:

@@ -23,14 +23,15 @@ through Tactical's own sender (``priority_mail``) and never through a Core SMTP 
 
 * Recipients: the administrators only (active effective superusers, with their own address), never a free-form address. The
   requester gets the email only when that person is an administrator. One entry per address, at most 20 per job.
-* The mail server's name gets the public-address check before Tactical connects. A refusal sends nothing, writes one count-only
+* The mail server's name gets the public-address check before Tactical connects (1.17.26, AD-30: with the administrator's
+  ``priority_mail_private_relay`` setting on, Core's own call also accepts ordinary private-network addresses. A module never does). A refusal sends nothing, writes one count-only
   audit row, and marks the recipients as tried.
 * An hourly cap (20 emails, counted from the marker rows of the last hour, read once per sweep and spent across jobs). Over the cap
   nothing is sent, nothing is marked, and a later tick sends within the seven-day window.
 * One message per recipient, through ``CoreSettings.send_mail`` with ``test=True``. The first failed send stops the job's loop and
   marks the rest as tried, so a broken server is not retried every minute.
 * Off when Tactical's email is not configured. Nothing is sent and no row is written, and recent failures are still sent once it is.
-* Each job that reached the sender or the host check writes one count-only audit row (``custom:priority-mail``). It never carries an
+* Each job that reached the sender or the host check writes one count-only audit row (``custom:priority-mail``). It carries ``private_relay`` (true only when the relaxed rule accepted the host). It never carries an
   address, a host, a subject, a body, Tactical's text or a password.
 
 The marker rows (``module-job-failed-email:<job id>``) are the dedupe key and the cap's count. Core reads no CoreSettings field
@@ -276,7 +277,8 @@ def _mark(user: Any, client_id: str, mark: Callable[[Any, str], None] | None) ->
         logger.exception("Could not record the Priority 1 email %s.", client_id)
 
 
-def _write_email_audit(notice: Mapping[str, Any], counts: Mapping[str, int], code: str, audit: Callable[[str, dict], None] | None) -> None:
+def _write_email_audit(notice: Mapping[str, Any], counts: Mapping[str, int], code: str, audit: Callable[[str, dict], None] | None,
+                       private_relay: bool = False) -> None:
     """One count-only row for the job. Best effort: a failed write is logged and the sweep goes on."""
     job_id = str(notice.get("client_id") or "")[len(CLIENT_ID_PREFIX):]
     if code == "send_failed":
@@ -287,7 +289,7 @@ def _write_email_audit(notice: Mapping[str, Any], counts: Mapping[str, int], cod
         outcome = "refused"
     metadata = {
         "recipients": counts["recipients"], "sent": counts["sent"], "refused": counts["refused"],
-        "outcome": outcome, "code": code, "requested_by": "scheduler",
+        "outcome": outcome, "code": code, "requested_by": "scheduler", "private_relay": bool(private_relay),
     }
     try:
         (audit or _default_audit)(job_id, metadata)
@@ -330,6 +332,9 @@ def send_p1_email(notice: Mapping[str, Any], recipients: Iterable[Any], *, state
         stopped = False
         host_checked = False
         host_code: str | None = None
+        private_relay = False
+        # AD-30: the private relay is for Core's own call only. An injected host or send seam is never Core's own call.
+        core_seams = host is None and send is None
         for user in pending:
             address = priority_mail.clean_address(getattr(user, "email", ""))
             if address is None:
@@ -347,7 +352,7 @@ def send_p1_email(notice: Mapping[str, Any], recipients: Iterable[Any], *, state
                 continue
             if not host_checked:
                 host_checked = True
-                host_code = priority_mail.public_refusal((host or priority_mail.smtp_host)())
+                host_code, private_relay = priority_mail.host_check((host or priority_mail.smtp_host)(), core_seams=core_seams)
             counts["recipients"] += 1
             state["budget"] -= 1
             if host_code:
@@ -367,7 +372,7 @@ def send_p1_email(notice: Mapping[str, Any], recipients: Iterable[Any], *, state
                 counts["refused"] += 1
                 code, stopped = "send_failed", True
         if host_checked:
-            _write_email_audit(notice, counts, code, audit)
+            _write_email_audit(notice, counts, code, audit, private_relay)
         if own and state["deferred"]:
             logger.warning("Priority 1 email cap reached: %d email(s) held for a later tick.", state["deferred"])
         return counts["sent"]

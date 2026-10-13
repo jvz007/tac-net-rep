@@ -2,7 +2,7 @@
 
 **Status:** Public Core developer contract, added in Core 1.17.7
 **Python:** `tec_tac.tactical_operations`
-**Capability:** `core.tactical_operations` 1.8.0 (major 1, additive since 1.0.0), owner `core`
+**Capability:** `core.tactical_operations` 1.9.0 (1.8.0 before Core 1.17.26; major 1, additive since 1.0.0), owner `core`
 **HTTP:** `POST /api/tfd/tactical-operations/<module_id>/<operation_id>/`
 
 ## Why this exists
@@ -633,3 +633,36 @@ run_tactical_operation(request, "automation", "run-now", params, body, audit_bef
 ### Already shipped in 1.17.22, closed here
 
 The `core_refused` row's object id is taken from the cleaned path values only (`_refusal_object_id`), and the compatibility test asserts `server_only` is a boolean. Both are in 1.17.22. Nothing more to build.
+
+## Added in 1.17.26
+
+Capability `core.tactical_operations` is 1.9.0, still major 1. Everything here is additive and opt-in: a declaration that passes neither new keyword
+behaves exactly as before, with the same text and the same rows. A module needs framework 1.17.26 to rely on it and can feature-detect with
+`core.tactical_operations >= 1.9.0`. Report Manager adopts both in its own release.
+
+### Any-of permissions: `permissions_any`
+
+Tactical's report generation lets a role run a report with either "view reports" or "manage reports" (`GenerateReportPerms`). `permissions` can only say
+"all of these", so a declaration could not match. `register_tactical_operation(..., permissions_any=[...])` takes a list of Tactical role flags (`can_...`,
+the same name check and the same maximum of 8 as `permissions`). The caller needs at least one of them.
+
+- It combines with `permissions`: the caller needs **every** flag of `permissions` **and at least one** flag of `permissions_any`.
+- `permissions` may be empty only when `permissions_any` is given. With neither, registration is refused as before.
+- A flag may not be in both lists, and a list may not repeat a flag.
+- The check runs at the same step as the all-of check (step 3, through `tactical_permission_flags`). A superuser passes, as before.
+- The 403 `tactical_permission_denied` names what is needed: `It needs one of can_view_reports, can_manage_reports.` When an all-of flag is also missing, the text names both: `It needs the Tactical permission can_reboot_agents and one of can_view_reports, can_manage_reports.`
+- The deny row keeps its fixed wording and gains `needs_one_of` (the list) in its metadata. An operation declared the old way writes the same row as before, with no such key.
+- `list_operations` and `get_operation` show `permissions_any` (an empty list for an old declaration). The exported contract describes the keyword.
+
+### A larger body cap: `body_max_bytes`
+
+The JSON body of a call is held to 256 KiB (`MAX_BODY_BYTES`). Report Manager's template import posts a whole template, which can be larger, and its 0.4.0
+browser post had no such cap. `register_tactical_operation(..., body_max_bytes=N)` lets one operation raise its own cap.
+
+- `N` is a whole number of bytes (not a bool, float or text) from the 256 KiB default up to the Core ceiling of 8 MiB (`MAX_BODY_CEILING_BYTES`). The ceiling is a Core constant, never a module's choice. A value below the default or above the ceiling is refused at registration. A value equal to the default is stored as the default.
+- The size check at the body step uses the operation's cap. `body_too_large` (HTTP 413) names the cap that applied: `body is larger than 2097152 bytes.`
+- `list_operations` and `get_operation` show the effective cap as `body_max_bytes` (262144 for an operation that does not set it). The capability's `limits` carry `body_bytes` (the default) and `body_bytes_max` (the ceiling).
+- Body parsing, the JSON depth limit, the secret-name rule and the rule that `body_too_large` writes no audit row (it is not a core-refused row code) are unchanged.
+- A web-server body limit (nginx) or a limit in Tactical itself still applies and was not verified. A module that posts a large body should test it on a real server.
+
+Tests: `tests/tactical-operations-permissions-any-1.17.26.py`, `tests/tactical-operations-body-cap-1.17.26.py`.

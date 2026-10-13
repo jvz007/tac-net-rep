@@ -254,7 +254,7 @@ for item in CORE.sent:
     must(len(item["override_recipients"]) == 1 and item["test"] is True, item)
     must(item["subject"].isascii() and "\n" not in item["subject"] and "\r" not in item["subject"], item["subject"])
     must("patching" in item["subject"] and "could not be enabled" in item["body"] and "techxflow.co.za" in item["body"], item)
-must(AUDIT_ROWS == [(job(2)["id"], {"recipients": 2, "sent": 2, "refused": 0, "outcome": "sent", "code": "none", "requested_by": "scheduler"})],
+must(AUDIT_ROWS == [(job(2)["id"], {"recipients": 2, "sent": 2, "refused": 0, "outcome": "sent", "code": "none", "requested_by": "scheduler", "private_relay": False})],
      AUDIT_ROWS)
 sweep([job(2)])
 must(len(CORE.sent) == 2 and len(AUDIT_ROWS) == 1, "a second sweep never sends again and writes no second row")
@@ -286,7 +286,7 @@ for host_name, addresses in REFUSED_HOSTS.items():
     sweep([job(5)])
     must(CORE.sent == [], (host_name, "nothing is sent"))
     must(AUDIT_ROWS == [(job(5)["id"], {"recipients": 2, "sent": 0, "refused": 2, "outcome": "refused", "code": "mail_host_refused",
-                                        "requested_by": "scheduler"})], (host_name, AUDIT_ROWS))
+                                        "requested_by": "scheduler", "private_relay": False})], (host_name, AUDIT_ROWS))
     must(len(STORE.markers) == 2, (host_name, "both recipients marked as tried"))
     resolves = len(RESOLVE_CALLS)
     sweep([job(5)])
@@ -358,7 +358,7 @@ CORE.reply = ("refused by the relay for tec-admin", False)
 sweep([job(15)])
 must(len(CORE.sent) == 1, CORE.sent)
 must(AUDIT_ROWS == [(job(15)["id"], {"recipients": 2, "sent": 0, "refused": 2, "outcome": "failed", "code": "send_failed",
-                                     "requested_by": "scheduler"})], AUDIT_ROWS)
+                                     "requested_by": "scheduler", "private_relay": False})], AUDIT_ROWS)
 must(len(STORE.markers) == 2, "the rest of the job is marked as tried, so a broken server is not retried every minute")
 CORE.reply = ("ok", True)
 sweep([job(15)])
@@ -393,13 +393,13 @@ CORE.error = None
 
 # ------------------------------------------------------------------------------------------------ the audit row: service provenance, counts and a code only
 fresh()
-mfn._default_audit(job(19)["id"], {"recipients": 1, "sent": 1, "refused": 0, "outcome": "sent", "code": "none", "requested_by": "scheduler"})
+mfn._default_audit(job(19)["id"], {"recipients": 1, "sent": 1, "refused": 0, "outcome": "sent", "code": "none", "requested_by": "scheduler", "private_relay": False})
 row = AUDIT_CALLS[-1]
 must(row["module_id"] == "core" and row["action"] == "custom:priority-mail" and row["object_type"] == "module_job_email", row)
 must(row["object_id"] == job(19)["id"] and row["strict"] is False and row["actor"].kind == "service" and row["actor"].module_id == "core", row)
-must(set(row["metadata"]) == {"recipients", "sent", "refused", "outcome", "code", "requested_by"}, row["metadata"])
+must(set(row["metadata"]) == {"recipients", "sent", "refused", "outcome", "code", "requested_by", "private_relay"}, row["metadata"])
 must(row["metadata"]["code"] in {"mail_host_refused", "send_failed", "none"}, row["metadata"])
-must(all(isinstance(value, (int, str)) for value in row["metadata"].values()), "counts and codes only")
+must(all(isinstance(value, (int, str, bool)) for value in row["metadata"].values()), "counts and codes only")
 
 # ------------------------------------------------------------------------------------------------ the entry points never raise
 fresh()

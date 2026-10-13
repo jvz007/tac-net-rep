@@ -80,6 +80,18 @@ registers and runs unchanged):
   entries (and 65536 characters) as declared before fields are, and the row carries ``<field>_count`` (the full length) and, when cut,
   ``<field>_truncated: true``. A list holding anything else, or a caller field named ``<list>_count`` or ``<list>_truncated`` next to
   a list, is refused 400 ``invalid_audit_before``.
+
+1.17.26 (the capability is 1.9.0, still major 1; additive and opt-in, a declaration that passes neither key behaves exactly as before):
+
+* ``permissions_any`` (optional): a list of Tactical role flags (``can_...``) of which the caller needs at least one. It combines with
+  ``permissions``: the caller needs every flag of ``permissions`` and at least one of ``permissions_any``. Tactical's report generation
+  is "view or manage reports", and ``permissions`` alone could only say "both". ``permissions`` may be empty only when
+  ``permissions_any`` is given. The 403 ``tactical_permission_denied`` names the flags ("It needs one of can_view_reports,
+  can_manage_reports."). A flag may not be in both lists. The deny row, ``describe()`` and the exported contract show the list.
+* ``body_max_bytes`` (optional): a whole number from the 256 KiB default up to ``MAX_BODY_CEILING_BYTES`` (8 MiB, a Core constant), for
+  an operation that forwards a large JSON body such as a template import. ``MAX_BODY_BYTES`` stays the default for every other
+  operation. ``body_too_large`` (413) names the cap that applied. A value below the default, above the ceiling, a bool or a non-integer
+  is refused at registration. The body and JSON depth parsing rules are unchanged.
 """
 from __future__ import annotations
 
@@ -98,11 +110,12 @@ from . import module_category as _module_category
 logger = logging.getLogger("tec_tac.tactical_operations")
 
 CAPABILITY_ID = "core.tactical_operations"
-CAPABILITY_VERSION = "1.8.0"
+CAPABILITY_VERSION = "1.9.0"
 AUDIT_HEADER = "X-Tec-Tac-Audit"
 AUDIT_RECORDED = "recorded"
 AUDIT_NOT_RECORDED = "not-recorded"
-MAX_BODY_BYTES = 256 * 1024
+MAX_BODY_BYTES = 256 * 1024  # the DEFAULT body cap; an operation may declare a larger body_max_bytes up to the ceiling (1.17.26)
+MAX_BODY_CEILING_BYTES = 8 * 2**20  # the most any operation may declare (1.17.26): a Core constant, never a module's choice
 MAX_RESPONSE_BYTES = 25 * 2**20
 MAX_UPLOAD_BYTES = 10 * 2**20  # the DEFAULT ceiling for one uploaded file (kept exported for older importers); the system setting changes it (CQ40)
 MAX_UPLOAD_ABSOLUTE_BYTES = 25 * 2**20  # the most any operation may declare, and the setting's upper limit (1.17.14)
@@ -262,6 +275,13 @@ class TacticalOperation:
     server_only: bool = False  # 1.17.19: only a module backend may run it (never the browser route)
     audit_object_field: str | None = None  # 1.17.21: top-level scalar of Tactical's JSON answer that is the row's object id
     audit_object_body_field: str | None = None  # 1.17.21: cleaned body field that is the row's object id when the answer gives none
+    permissions_any: tuple = ()  # 1.17.26: the caller needs at least one of these flags (and every flag of ``permissions``)
+    body_max_bytes: int | None = None  # 1.17.26: a larger body cap than MAX_BODY_BYTES; None means the default
+
+    @property
+    def body_cap(self) -> int:
+        """The body size limit that applies to this operation, in bytes."""
+        return self.body_max_bytes if self.body_max_bytes is not None else MAX_BODY_BYTES
 
     @property
     def params(self) -> tuple:
@@ -285,6 +305,8 @@ class TacticalOperation:
             "route": self.route,
             "params": {name: kind for name, kind in self.params},
             "permissions": list(self.permissions),
+            "permissions_any": list(self.permissions_any),
+            "body_max_bytes": self.body_cap,
             "scope": [
                 {
                     "type": item.type, "source": item.source,
@@ -766,6 +788,19 @@ def _check_route_sharing(operation: TacticalOperation, holders: list, verb: str,
             )
 
 
+def _clean_body_max_bytes(value):
+    """The declared body cap, or None for the default (1.17.26). A whole number (never a bool) from MAX_BODY_BYTES to the ceiling."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TacticalOperationRegistrationError("body_max_bytes must be a whole number of bytes.")
+    if value < MAX_BODY_BYTES:
+        raise TacticalOperationRegistrationError(f"body_max_bytes must be at least the default of {MAX_BODY_BYTES} bytes.")
+    if value > MAX_BODY_CEILING_BYTES:
+        raise TacticalOperationRegistrationError(f"body_max_bytes must be at most {MAX_BODY_CEILING_BYTES} bytes, the ceiling Core keeps.")
+    return None if value == MAX_BODY_BYTES else value
+
+
 def register_tactical_operation(
     id,
     module_id,
@@ -782,8 +817,14 @@ def register_tactical_operation(
     caller_scope=None,
     body_selector=None,
     server_only=False,
+    permissions_any=None,
+    body_max_bytes=None,
 ):
     """Declare one Tactical operation. Call it from the owning module's ``AppConfig.ready()``.
+
+    1.17.26 (both optional): ``permissions_any`` lists Tactical role flags of which the caller needs at least one, on top of every flag
+    of ``permissions`` (``permissions`` may be empty only when this is given). ``body_max_bytes`` is a whole number from
+    ``MAX_BODY_BYTES`` up to ``MAX_BODY_CEILING_BYTES`` for an operation that forwards a large JSON body.
 
     1.17.21 (optional): ``audit.object_field`` names a top-level scalar field of Tactical's JSON answer, and
     ``audit.object_body_field`` names a body field (one of ``body_fields``). Either gives the success row's object id when no
@@ -821,14 +862,20 @@ def register_tactical_operation(
     segments, trailing = _parse_route(route)
     _check_route_owner(module, segments, route)
 
-    flags = _clean_names(permissions, "permissions", maximum=_MAX_PERMISSIONS, pattern=re.compile(r"^can_[a-z0-9_]+$"))
-    if not flags:
+    flag_pattern = re.compile(r"^can_[a-z0-9_]+$")
+    flags = _clean_names(permissions, "permissions", maximum=_MAX_PERMISSIONS, pattern=flag_pattern)
+    any_flags = _clean_names(permissions_any, "permissions_any", maximum=_MAX_PERMISSIONS, pattern=flag_pattern)
+    if not flags and not any_flags:
         raise TacticalOperationRegistrationError("permissions must list at least one Tactical Role flag.")
+    both = [flag for flag in any_flags if flag in flags]
+    if both:
+        raise TacticalOperationRegistrationError(f"permissions_any repeats {both[0]!r} from permissions: the flag would be required and optional at once.")
     try:
-        for flag in flags:
+        for flag in (*flags, *any_flags):
             _validate_tactical_flag(flag)
     except ValueError as exc:
         raise TacticalOperationRegistrationError(str(exc)) from None
+    body_cap = _clean_body_max_bytes(body_max_bytes)
 
     fields = _clean_names(body_fields, "body_fields", maximum=_MAX_BODY_FIELDS)
     if fields and verb not in BODY_METHODS:
@@ -967,6 +1014,7 @@ def register_tactical_operation(
         audit_object_param=object_param, before=before, query_params=query_names, upload=upload_spec,
         caller_scope=caller_scope, body_selector=selector, audit_params=audit_params, server_only=server_only,
         audit_object_field=object_field, audit_object_body_field=object_body_field,
+        permissions_any=any_flags, body_max_bytes=body_cap,
     )
     key = (owner, op_id)
     route_key = (verb, _route_key(segments, trailing))
@@ -1206,8 +1254,9 @@ def _clean_body(operation: TacticalOperation, body: Any) -> dict:
         size = len(json.dumps(body, separators=(",", ":")).encode("utf-8"))
     except (TypeError, ValueError):
         raise TacticalOperationError("body must be JSON.", status=400, code="invalid_body") from None
-    if size > MAX_BODY_BYTES:
-        raise TacticalOperationError(f"body is larger than {MAX_BODY_BYTES} bytes.", status=413, code="body_too_large")
+    cap = operation.body_cap
+    if size > cap:
+        raise TacticalOperationError(f"body is larger than {cap} bytes.", status=413, code="body_too_large")
     return body
 
 
@@ -1408,13 +1457,14 @@ def _write_row(request, operation: TacticalOperation, *, action: str, object_id,
 
 
 def _refuse(request, operation: TacticalOperation, reason: str, status: int, code: str, object_id=None,
-            correlation_id: str | None = None, text: str | None = None) -> TacticalOperationError:
+            correlation_id: str | None = None, text: str | None = None, row_extra: dict | None = None) -> TacticalOperationError:
     """Core's own refusal (steps 3 to 5): a deny row with a fixed Core text, and the typed error to raise.
 
     ``text`` replaces the answer's detail only (1.17.19, the missing Tactical flag). The deny row keeps its fixed wording."""
     audit = _write_row(
         request, operation, action="deny", object_id=object_id, message=DENY_MESSAGES[reason], tactical_status=None, refusal=True,
-        extra={"refused_action": operation.audit_action, "reason": reason, "status": status}, correlation_id=correlation_id,
+        extra={"refused_action": operation.audit_action, "reason": reason, "status": status, **(row_extra or {})},
+        correlation_id=correlation_id,
     )
     key = "object_not_found" if reason == "not_found" else reason
     return TacticalOperationError(text or MESSAGES[key], status=status, code=code, audit=audit)
@@ -1439,9 +1489,23 @@ def _write_core_refusal(request, operation: TacticalOperation, error: TacticalOp
 def _missing_flag_text(operation: TacticalOperation, flags: dict) -> str:
     """The 403 detail that names every Tactical role flag the caller lacks (1.17.19). Flags are validated ``can_*`` names."""
     missing = [_printable(name, 80) for name in operation.permissions if not flags.get(name)]
-    if len(missing) == 1:
-        return f"{MESSAGES['permission_denied']} It needs the Tactical permission {missing[0]}."
-    return f"{MESSAGES['permission_denied']} It needs the Tactical permissions {', '.join(missing)}."
+    any_missing = bool(operation.permissions_any) and not any(flags.get(name) for name in operation.permissions_any)
+    if not any_missing:
+        if len(missing) == 1:
+            return f"{MESSAGES['permission_denied']} It needs the Tactical permission {missing[0]}."
+        return f"{MESSAGES['permission_denied']} It needs the Tactical permissions {', '.join(missing)}."
+    one_of = ", ".join(_printable(name, 80) for name in operation.permissions_any)  # 1.17.26: the caller holds none of the any-of flags
+    if not missing:
+        return f"{MESSAGES['permission_denied']} It needs one of {one_of}."
+    noun = "permission" if len(missing) == 1 else "permissions"
+    return f"{MESSAGES['permission_denied']} It needs the Tactical {noun} {', '.join(missing)} and one of {one_of}."
+
+
+def _permissions_hold(operation: TacticalOperation, flags: dict) -> bool:
+    """Every flag of ``permissions`` and, when ``permissions_any`` is declared, at least one of it (1.17.26)."""
+    if not all(flags.get(name) for name in operation.permissions):
+        return False
+    return not operation.permissions_any or any(flags.get(name) for name in operation.permissions_any)
 
 
 def _encode_multipart(fields: dict[str, str], part: dict) -> tuple[bytes, str]:
@@ -1811,11 +1875,12 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
         hint = _object_id([], operation, params if isinstance(params, dict) else {})
     if _via_http_route and operation.server_only:  # 2a. (1.17.19) a server-only operation never runs from the browser route
         raise _refuse(request, operation, "server_only", 403, "operation_server_only", hint, correlation_id)
-    flags = tactical_permission_flags(user, operation.permissions)  # 3.
-    if not all(flags.values()):
+    flags = tactical_permission_flags(user, (*operation.permissions, *operation.permissions_any))  # 3. (1.17.26: all of permissions, one of permissions_any)
+    if not _permissions_hold(operation, flags):
         raise _refuse(
             request, operation, "permission_denied", 403, "tactical_permission_denied", hint, correlation_id,
             text=_missing_flag_text(operation, flags),
+            row_extra={"needs_one_of": list(operation.permissions_any)} if operation.permissions_any else None,
         )
     if operation.module_permission:  # 4.
         try:
@@ -1979,10 +2044,12 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
         "id": CAPABILITY_ID,
         "version": CAPABILITY_VERSION,
         "operations": ["run", "list_operations", "get_operation"],
-        "declaration": "tec_tac.tactical_operations.register_tactical_operation(id, module_id, method, route, permissions, scope, body_fields, audit, module_permission=None, message=None, query_params=None, upload=None, caller_scope=None, body_selector=None, server_only=False), called from AppConfig.ready(). A core module that names a row_lookup also calls tec_tac.tactical_operations.register_tactical_row_lookup(module_id, lookup_id, fn) from AppConfig.ready().",
+        "declaration": "tec_tac.tactical_operations.register_tactical_operation(id, module_id, method, route, permissions, scope, body_fields, audit, module_permission=None, message=None, query_params=None, upload=None, caller_scope=None, body_selector=None, server_only=False, permissions_any=None, body_max_bytes=None), called from AppConfig.ready(). A core module that names a row_lookup also calls tec_tac.tactical_operations.register_tactical_row_lookup(module_id, lookup_id, fn) from AppConfig.ready().",
         "http": "POST /api/tfd/tactical-operations/<module_id>/<operation_id>/ with {params, body, query} as JSON, or as multipart/form-data with the text parts params, body and query (each a JSON object) and one file part",
         "limits": {
             "body_bytes": MAX_BODY_BYTES, "response_bytes": MAX_RESPONSE_BYTES,
+            # 1.17.26: body_bytes is the default cap; an operation may declare body_max_bytes up to body_bytes_max.
+            "body_bytes_max": MAX_BODY_CEILING_BYTES,
             # 1.17.14 (CQ40): upload_bytes is the effective ceiling now (the system setting), with the default and the absolute maximum.
             "upload_bytes": upload_ceiling_bytes(), "upload_bytes_default": MAX_UPLOAD_BYTES, "upload_bytes_max": MAX_UPLOAD_ABSOLUTE_BYTES,
             "query_params": MAX_QUERY_PARAMS, "query_value_chars": MAX_QUERY_VALUE,
@@ -2034,6 +2101,19 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
             (
                 "run(audit_before=) accepts a list of whole numbers or short texts per field, kept to the first 1000 entries; the row carries "
                 "<field>_count and, when cut, <field>_truncated; a caller field named <list>_count or <list>_truncated next to a list is refused"
+            ),
+        ],
+        # 1.17.26 (capability 1.9.0, still major 1): two optional declaration keys. A declaration that passes neither behaves as before.
+        "declaration_keys_added_in_1_9_0": ["permissions_any", "body_max_bytes"],
+        "behaviour_added_in_1_9_0": [
+            (
+                "permissions_any: the caller needs every flag of permissions and at least one flag of permissions_any; permissions may be empty "
+                "only when permissions_any is given; the 403 tactical_permission_denied names 'one of' the flags and the deny row carries needs_one_of; "
+                "list_operations and get_operation show permissions_any"
+            ),
+            (
+                "body_max_bytes: a whole number from the default body_bytes up to limits.body_bytes_max; body_too_large (413) names the cap that "
+                "applied; list_operations and get_operation show the effective cap as body_max_bytes"
             ),
         ],
         "refusal_row_codes": list(CORE_REFUSAL_ROW_CODES),

@@ -89,7 +89,16 @@ refused by this release. A provider opts in by calling `calling_module`.
 Core's own Priority 1 notice email does not go through caller identity. From 1.17.25 it goes through Tactical's own sender (the AD-28
 amendment): `module_failure_notices.send_p1_email` calls `priority_mail.send_one`, which calls Tactical's `CoreSettings.send_mail` in
 process, to the administrators only. Core is never a caller of a module's contract, it does not go through Global Settings (AD-26
-condition 2), and it never reads the SMTP password. It has no SMTP client of its own.
+condition 2), and it never reads the SMTP password. It has no SMTP client of its own. From 1.17.26 an administrator may let this email use a mail
+server on a private network (AD-30, `priority_mail_private_relay` in docs/runtime-settings.md). That path is for Core's own call only: it
+looks at the call stack for a frame inside an installed module's folder, and a module that reaches `send_p1_email` gets the public-only rule.
+
+## Server modules (1.17.26 note)
+
+`calling_module` keys on the enabled extension's folder, not on its category. A signed module with `category: "server"` (User Invite is the
+first) is verified exactly like a core or premium module while it is installed, an extension, not legacy and enabled. A provider that
+allows it by id gets its identity, and AD-30 lets such a module send mail through Global Settings on that basis. Pinned by
+`tests/caller-identity-server-module-1.17.26.py`.
 
 ## Feature detection
 

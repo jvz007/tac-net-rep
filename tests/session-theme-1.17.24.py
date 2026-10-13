@@ -149,7 +149,8 @@ must(ast.literal_eval(kw["model_name"]) == "tectacsessiontrust" and ast.literal_
 field = ast.unparse(kw["field"])
 must("max_length=16" in field and "default=''" in field and "blank=True" in field, field)
 must("RunPython" not in mig_path.read_text(encoding="utf-8") and "RunSQL" not in mig_path.read_text(encoding="utf-8"), "no data step, so AddField reverses by dropping the column")
-must(sorted(p.name for p in (APP / "migrations").glob("00*.py"))[-1] == "0028_session_theme.py", "0028 is the newest migration")
+must(sorted(p.name for p in (APP / "migrations").glob("00*.py"))[-1] == "0029_priority_mail_private_relay.py", "0029 is the newest migration (1.17.26); 0028 is still there")
+must(mig_path.is_file(), "0028 is still there")
 urls = (APP / "urls.py").read_text(encoding="utf-8")
 must('path("session/theme/", SessionThemeView.as_view()' in urls and "SessionThemeView," in urls, "route")
 

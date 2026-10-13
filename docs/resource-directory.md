@@ -221,6 +221,8 @@ A client and a site each carry a workstation policy, a server policy and a "bloc
 
 #### Move a site (documented in 1.7.0, Core 1.17.24; rule changed in 1.8.0, Core 1.17.25)
 
+This rule is accepted decision AD-29 (Johan, 13 October 2026, CQ79) in `docs/review-accepted-decisions.md`: the source-site write scope is kept, a missing client is 400, a name clash is 409, one audit row is written, and the consequence below is accepted. Revisit when Johan declares parity reached or asks sooner.
+
 `update_site(site_id, client_id=<destination>, context=...)` (HTTP `PATCH /api/tfd/resources/sites/<id>/` with `client_id`) is Tactical's Edit site with a new client. The mechanism is older. Since 1.7.0 the rules are documented and tested. Since 1.8.0 the destination rule is Tactical's (Johan, CQ79, 13 October 2026: "keep it the same as Tactical"). This loosens Core's 1.17.24 rule on purpose.
 
 - The agents on the site follow it, because they point at the site.

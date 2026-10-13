@@ -151,6 +151,31 @@ def _calling_module(provider_module_id) -> CallerIdentity | None:
         frame = None
 
 
+def module_frame_on_stack() -> bool:
+    """True when any frame on the current call stack lies inside an installed plugin's folder (enabled or not), or when that cannot be
+    told. Fails closed. It is for Core's own gates (the Priority 1 private relay, AD-30), not a provider's caller check: use
+    ``calling_module`` for that. A frame inside the ``tec_tac`` package is Core and never counts."""
+    try:
+        getter = getattr(sys, "_getframe", None)
+        if getter is None:
+            return True
+        roots = [_norm(plugin.root) for plugin in _plugins()]
+        framework = _norm(_FRAMEWORK_DIR)
+        frame = getter(1)
+        try:
+            while frame is not None:
+                path = _code_path(frame)
+                if path is not None and not _under(path, framework) and any(_under(path, root) for root in roots):
+                    return True
+                frame = frame.f_back
+        finally:
+            frame = None
+        return False
+    except Exception:
+        logger.warning("Could not read the call stack; treating a module frame as present.", exc_info=True)
+        return True
+
+
 class _CallerIdentityProvider:
     calling_module = staticmethod(calling_module)
 
