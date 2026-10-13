@@ -92,12 +92,23 @@ registers and runs unchanged):
   an operation that forwards a large JSON body such as a template import. ``MAX_BODY_BYTES`` stays the default for every other
   operation. ``body_too_large`` (413) names the cap that applied. A value below the default, above the ceiling, a bool or a non-integer
   is refused at registration. The body and JSON depth parsing rules are unchanged.
+
+1.17.28 (the capability is 1.10.0, still major 1; additive and opt-in, a declaration without ``audit_lists`` behaves exactly as before):
+
+* ``audit_lists`` (optional, Python only): up to two body or before field names that hold a list of flat objects, such as a task's
+  actions. Each is recorded IN CLEAR, with no masking, in the success row: the after value from the cleaned body, and, when the
+  operation has a before read, the before value from Tactical's own GET answer. Script arguments and environment values appear as
+  Tactical stores them. Bounds: 50 entries per list, 24 keys per entry (names that match the field-name pattern), a text value cut at
+  4096 characters with control characters other than tab and newline removed, numbers, booleans and nulls, or one level of up to 100
+  scalars, and 64 KiB of text per list field. ``<name>_count`` is the full length and ``<name>_truncated`` is true when anything was cut
+  or dropped. A malformed list is recorded as its count only. Failed, denied and outcome-unknown rows carry no list.
 """
 from __future__ import annotations
 
 import itertools
 import json
 import logging
+import math
 import re
 import secrets
 import threading
@@ -110,7 +121,7 @@ from . import module_category as _module_category
 logger = logging.getLogger("tec_tac.tactical_operations")
 
 CAPABILITY_ID = "core.tactical_operations"
-CAPABILITY_VERSION = "1.9.0"
+CAPABILITY_VERSION = "1.10.0"
 AUDIT_HEADER = "X-Tec-Tac-Audit"
 AUDIT_RECORDED = "recorded"
 AUDIT_NOT_RECORDED = "not-recorded"
@@ -168,6 +179,14 @@ _MAX_TYPE_MAP = 8
 _MAX_UPLOAD_EXTENSIONS = 16
 _BEFORE_STRING_LIMIT = 256
 _MAX_AUDIT_BEFORE_FIELDS = 16
+_MAX_AUDIT_LISTS = 2  # 1.17.28: list fields one operation may record in clear
+_LIST_MAX_ENTRIES = 50  # objects kept from one list
+_LIST_MAX_KEYS = 24  # keys kept from one object
+_LIST_MAX_ITEMS = 100  # scalars kept from one list value inside an object
+_LIST_VALUE_MAX_CHARS = 4096  # characters kept from one text value
+_LIST_MAX_TEXT_BYTES = 64 * 1024  # text bytes kept across one list field
+_LIST_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")  # control characters, but not tab (\x09) or newline (\x0a)
+_DROPPED = object()
 _MAX_FILE_NAME = 255
 
 # One fixed Core text per refusal. None carries any wording from the declaring module or from Tactical.
@@ -277,6 +296,7 @@ class TacticalOperation:
     audit_object_body_field: str | None = None  # 1.17.21: cleaned body field that is the row's object id when the answer gives none
     permissions_any: tuple = ()  # 1.17.26: the caller needs at least one of these flags (and every flag of ``permissions``)
     body_max_bytes: int | None = None  # 1.17.26: a larger body cap than MAX_BODY_BYTES; None means the default
+    audit_lists: tuple = ()  # 1.17.28: body or before fields that hold a list of flat objects, recorded in clear (CQ85 a)
 
     @property
     def body_cap(self) -> int:
@@ -324,6 +344,7 @@ class TacticalOperation:
                 "params": list(self.audit_params),
                 "object_field": self.audit_object_field,
                 "object_body_field": self.audit_object_body_field,
+                "lists": list(self.audit_lists),
             },
             "caller_scope": self.caller_scope,
             "server_only": self.server_only,
@@ -819,8 +840,15 @@ def register_tactical_operation(
     server_only=False,
     permissions_any=None,
     body_max_bytes=None,
+    audit_lists=None,
 ):
     """Declare one Tactical operation. Call it from the owning module's ``AppConfig.ready()``.
+
+    1.17.28 (optional): ``audit_lists`` names up to two body or before fields that hold a list of flat objects (a task's actions).
+    Each is recorded in clear in the success row (after from the cleaned body, before from Tactical's GET answer), with the bounds
+    of ``_list_record``. It needs a changing operation, and each name must be a body field or come from a before read. It may not
+    name a field already in ``audit.before`` (fields or count_fields) or ``audit.audit_fields``, nor clash with another list's
+    ``<name>_count`` or ``<name>_truncated``. The name must not look like a secret.
 
     1.17.26 (both optional): ``permissions_any`` lists Tactical role flags of which the caller needs at least one, on top of every flag
     of ``permissions`` (``permissions`` may be empty only when this is given). ``body_max_bytes`` is a whole number from
@@ -994,6 +1022,7 @@ def register_tactical_operation(
             raise TacticalOperationRegistrationError(f"audit field {name!r} looks like a secret. Never put secrets in the audit row.")
         if name in audit_params:
             raise TacticalOperationRegistrationError(f"audit field {name!r} is also an audit param: the row would carry it twice.")
+    lists = _clean_audit_lists(audit_lists, verb, fields, before, audit_fields)
     selector = _parse_body_selector(body_selector, fields)
 
     codename = None
@@ -1014,7 +1043,7 @@ def register_tactical_operation(
         audit_object_param=object_param, before=before, query_params=query_names, upload=upload_spec,
         caller_scope=caller_scope, body_selector=selector, audit_params=audit_params, server_only=server_only,
         audit_object_field=object_field, audit_object_body_field=object_body_field,
-        permissions_any=any_flags, body_max_bytes=body_cap,
+        permissions_any=any_flags, body_max_bytes=body_cap, audit_lists=lists,
     )
     key = (owner, op_id)
     route_key = (verb, _route_key(segments, trailing))
@@ -1612,12 +1641,126 @@ def _recheck_route_owner(operation: TacticalOperation, path: str) -> None:
         raise TacticalOperationError(MESSAGES["not_found"], status=404, code="tactical_operation_not_found")
 
 
+def _clean_audit_lists(value: Any, verb: str, fields: tuple, before: BeforeSpec | None, audit_fields: tuple) -> tuple:
+    """Validate ``audit_lists`` (1.17.28, CQ85 a). At most two names, each a body field or a field of the before read. Refused:
+    a GET, a name that looks like a secret, and a name that would write a key another part of the row also writes."""
+    names = _clean_names(value, "audit_lists", maximum=_MAX_AUDIT_LISTS)
+    if not names:
+        return ()
+    if verb not in BODY_METHODS:
+        raise TacticalOperationRegistrationError("audit_lists belongs to a changing operation: a GET changes nothing.")
+    written = set(audit_fields)
+    if before is not None:
+        written |= set(before.fields) | set(before.count_fields)
+    for name in names:
+        if name not in fields and before is None:
+            raise TacticalOperationRegistrationError(
+                f"audit_lists {name!r} is not one of body_fields, and the operation has no before read to take it from."
+            )
+        if _SECRET_NAME_RE.search(name):
+            raise TacticalOperationRegistrationError(f"audit_lists {name!r} looks like a secret. Never put secrets in the audit row.")
+        for key in (name, f"{name}_count", f"{name}_truncated"):
+            if key in written:
+                raise TacticalOperationRegistrationError(f"audit_lists {name!r} would write {key!r} twice in the audit row.")
+            written.add(key)
+    return names
+
+
+def _list_text(value: str) -> tuple[str, bool]:
+    """Control characters but tab and newline removed, then cut to the text limit. Returns (text, cut)."""
+    clean = _LIST_CONTROL.sub("", value)
+    return clean[:_LIST_VALUE_MAX_CHARS], len(clean) > _LIST_VALUE_MAX_CHARS
+
+
+def _list_value(value: Any) -> tuple[Any, int, bool]:
+    """(clean value, text bytes kept, cut) for one value of a list object, or (_DROPPED, 0, True).
+
+    A scalar is kept as it is (text cleaned as ``_list_text``). A list is kept when it holds scalars, at most ``_LIST_MAX_ITEMS`` of
+    them; anything deeper, and any object, is dropped."""
+    if value is None or isinstance(value, bool):
+        return value, 0, False
+    if isinstance(value, int):
+        return value, len(str(value)), False
+    if isinstance(value, float):
+        return (value, len(repr(value)), False) if math.isfinite(value) else (_DROPPED, 0, True)
+    if isinstance(value, str):
+        text, cut = _list_text(value)
+        return text, len(text.encode("utf-8")), cut
+    if isinstance(value, list):
+        items: list = []
+        used = 0
+        cut = len(value) > _LIST_MAX_ITEMS
+        for item in value[:_LIST_MAX_ITEMS]:
+            if isinstance(item, (list, dict)):
+                cut = True  # one level only: a nested list or object is dropped
+                continue
+            clean, size, item_cut = _list_value(item)
+            cut = cut or item_cut
+            if clean is _DROPPED:
+                continue
+            items.append(clean)
+            used += size
+        return items, used, cut
+    return _DROPPED, 0, True
+
+
+def _list_entry(item: dict) -> tuple[dict, int, bool]:
+    """One object of a declared list: its first ``_LIST_MAX_KEYS`` keys whose names match the field-name pattern. Returns
+    (entry, text bytes kept, cut)."""
+    entry: dict = {}
+    size = 0
+    cut = False
+    for key, value in item.items():
+        if len(entry) >= _LIST_MAX_KEYS or not isinstance(key, str) or not _FIELD_RE.fullmatch(key):
+            cut = True
+            continue
+        clean, used, value_cut = _list_value(value)
+        cut = cut or value_cut
+        if clean is _DROPPED:
+            continue
+        entry[key] = clean
+        size += len(key.encode("utf-8")) + used
+    return entry, size, cut
+
+
+def _list_record(name: str, value: Any) -> dict:
+    """The clear-text record of one declared list field (1.17.28, CQ85 a): the kept objects, ``<name>_count`` (the full length) and
+    ``<name>_truncated`` (true when anything was cut or dropped). Never raises. A value that is not a list is recorded as an empty
+    list with count 0. A list with an item that is not an object is recorded as its count only. Nothing is masked: script arguments
+    and environment values stay as Tactical stores them."""
+    try:
+        if not isinstance(value, list):
+            return {name: [], f"{name}_count": 0, f"{name}_truncated": True}
+        if any(not isinstance(item, dict) for item in value):
+            return {name: [], f"{name}_count": len(value), f"{name}_truncated": True}
+        truncated = len(value) > _LIST_MAX_ENTRIES
+        entries: list = []
+        used = 0
+        for item in value[:_LIST_MAX_ENTRIES]:
+            entry, size, cut = _list_entry(item)
+            if used + size > _LIST_MAX_TEXT_BYTES:
+                truncated = True
+                break
+            entries.append(entry)
+            used += size
+            truncated = truncated or cut
+        record = {name: entries, f"{name}_count": len(value)}
+        if truncated:
+            record[f"{name}_truncated"] = True
+        return record
+    except Exception:
+        logger.warning("A declared audit list could not be recorded; its count only is kept.", exc_info=True)
+        count = len(value) if isinstance(value, list) else 0
+        return {name: [], f"{name}_count": count, f"{name}_truncated": True}
+
+
 def _after_values(operation: TacticalOperation, body: dict, query: dict | None = None, file: dict | None = None,
                   params: dict | None = None) -> dict | None:
     """The declared audit fields, copied from the body or the query string, and for an upload only its name, size and type.
 
-    1.17.18: ``audit.params`` names path parameters whose cleaned values are copied in as well."""
-    if not operation.audit_fields and file is None and not operation.audit_params:
+    1.17.18: ``audit.params`` names path parameters whose cleaned values are copied in as well. 1.17.28: ``audit_lists`` are copied
+    from the cleaned body in clear."""
+    if not operation.audit_fields and file is None and not operation.audit_params and not operation.audit_lists:
         return None
     values = {}
     for name in operation.audit_fields:
@@ -1628,6 +1771,9 @@ def _after_values(operation: TacticalOperation, body: dict, query: dict | None =
     for name in operation.audit_params:
         if params and name in params:
             values[name] = _printable(params[name])
+    for name in operation.audit_lists:
+        if name in body:
+            values.update(_list_record(name, body[name]))
     if file is not None:
         values["upload"] = {"file_name": _printable(file["name"]), "size": len(file["content"]), "content_type": file["content_type"]}
     return values
@@ -1679,6 +1825,9 @@ def _before_values(operation: TacticalOperation, data: Any) -> dict | None:
         value = data.get(name)
         if isinstance(value, list):
             values[f"{name}_count"] = len(value)
+    for name in operation.audit_lists:  # 1.17.28: the declared lists, in clear, from Tactical's own answer
+        if name in data:
+            values.update(_list_record(name, data[name]))
     return values
 
 
@@ -2044,7 +2193,7 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
         "id": CAPABILITY_ID,
         "version": CAPABILITY_VERSION,
         "operations": ["run", "list_operations", "get_operation"],
-        "declaration": "tec_tac.tactical_operations.register_tactical_operation(id, module_id, method, route, permissions, scope, body_fields, audit, module_permission=None, message=None, query_params=None, upload=None, caller_scope=None, body_selector=None, server_only=False, permissions_any=None, body_max_bytes=None), called from AppConfig.ready(). A core module that names a row_lookup also calls tec_tac.tactical_operations.register_tactical_row_lookup(module_id, lookup_id, fn) from AppConfig.ready().",
+        "declaration": "tec_tac.tactical_operations.register_tactical_operation(id, module_id, method, route, permissions, scope, body_fields, audit, module_permission=None, message=None, query_params=None, upload=None, caller_scope=None, body_selector=None, server_only=False, permissions_any=None, body_max_bytes=None, audit_lists=None), called from AppConfig.ready(). A core module that names a row_lookup also calls tec_tac.tactical_operations.register_tactical_row_lookup(module_id, lookup_id, fn) from AppConfig.ready().",
         "http": "POST /api/tfd/tactical-operations/<module_id>/<operation_id>/ with {params, body, query} as JSON, or as multipart/form-data with the text parts params, body and query (each a JSON object) and one file part",
         "limits": {
             "body_bytes": MAX_BODY_BYTES, "response_bytes": MAX_RESPONSE_BYTES,
@@ -2070,6 +2219,11 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
             "audit_before_fields": _MAX_BEFORE_FIELDS, "audit_before_list_entries": _MAX_BEFORE_LIST,
             "audit_before_select_rows": _MAX_BEFORE_SELECT_ROWS, "audit_params": _MAX_AUDIT_PARAMS,
             "body_selector_conditions": _MAX_BODY_SELECTOR,
+        },
+        # 1.17.28: the bounds of audit_lists (a Core constant, never a module's choice).
+        "limits_added_in_1_10_0": {
+            "audit_lists_per_operation": _MAX_AUDIT_LISTS, "audit_list_entries": _LIST_MAX_ENTRIES, "audit_list_keys": _LIST_MAX_KEYS,
+            "audit_list_items": _LIST_MAX_ITEMS, "audit_list_text_chars": _LIST_VALUE_MAX_CHARS, "audit_list_text_bytes": _LIST_MAX_TEXT_BYTES,
         },
         # 1.17.19 (capability 1.5.0, still major 1): server_only stops the browser path only; it is not a verified caller identity.
         "declaration_keys_added_in_1_5_0": ["server_only"],
@@ -2114,6 +2268,15 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
             (
                 "body_max_bytes: a whole number from the default body_bytes up to limits.body_bytes_max; body_too_large (413) names the cap that "
                 "applied; list_operations and get_operation show the effective cap as body_max_bytes"
+            ),
+        ],
+        # 1.17.28 (capability 1.10.0, still major 1): one optional declaration key. A declaration without it behaves as before.
+        "declaration_keys_added_in_1_10_0": ["audit_lists (register_tactical_operation(audit_lists=)), shown as audit.lists"],
+        "behaviour_added_in_1_10_0": [
+            (
+                "audit_lists: up to two body or before fields that hold a list of flat objects are recorded IN CLEAR, with no masking, in the "
+                "success row (after from the cleaned body, before from Tactical's own GET answer) with <field>_count and, when cut or dropped, "
+                "<field>_truncated; a failed, denied or outcome-unknown row carries no list; the docs state the clear-text rule"
             ),
         ],
         "refusal_row_codes": list(CORE_REFUSAL_ROW_CODES),

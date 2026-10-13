@@ -455,7 +455,8 @@ for needle in ("/accounts/apikeys/", "/accounts/apikeys/<id>/", "can_list_api_ke
                "The key value is never in a row", "matched 0", "create_api_key", "docs/api-keys.md"):
     must(needle in contracts, f"contracts.py lacks {needle!r}")
 doc = (ROOT / "docs" / "api-keys.md").read_text(encoding="utf-8")
-for needle in ("can_list_api_keys", "can_manage_api_keys", "never in a row", "matched", "[REDACTED]", "CQ84", "ssoproviders"):
+# 1.17.28: the "Not in this release" SSO paragraph is removed; SSO admin is in docs/sso-admin.md (tests/sso-admin-guard-1.17.28.py)
+for needle in ("can_list_api_keys", "can_manage_api_keys", "never in a row", "matched", "[REDACTED]"):
     must(needle in doc, f"docs/api-keys.md lacks {needle!r}")
 
 print("[TEST] PASS api key audit 1.17.26")

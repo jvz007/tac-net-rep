@@ -2,7 +2,7 @@
 
 **Status:** Public Core developer contract, added in Core 1.17.7
 **Python:** `tec_tac.tactical_operations`
-**Capability:** `core.tactical_operations` 1.9.0 (1.8.0 before Core 1.17.26; major 1, additive since 1.0.0), owner `core`
+**Capability:** `core.tactical_operations` 1.10.0 (1.9.0 before Core 1.17.28, 1.8.0 before Core 1.17.26; major 1, additive since 1.0.0), owner `core`
 **HTTP:** `POST /api/tfd/tactical-operations/<module_id>/<operation_id>/`
 
 ## Why this exists
@@ -666,3 +666,32 @@ browser post had no such cap. `register_tactical_operation(..., body_max_bytes=N
 - A web-server body limit (nginx) or a limit in Tactical itself still applies and was not verified. A module that posts a large body should test it on a real server.
 
 Tests: `tests/tactical-operations-permissions-any-1.17.26.py`, `tests/tactical-operations-body-cap-1.17.26.py`.
+
+## Added in 1.17.28
+
+Capability `core.tactical_operations` is 1.10.0, still major 1. One new optional keyword. A declaration without it behaves exactly as
+before. A module can feature-detect with `core.tactical_operations >= 1.10.0` and needs framework 1.17.28 to rely on it.
+
+### Lists of objects, recorded in clear: `audit_lists`
+
+Tactical's own audit records a whole task, its actions included, as before and after on every change. Core can now record such a list the
+same way. `register_tactical_operation(..., audit_lists=["actions"])` names up to two body or before fields that hold a list of flat objects.
+
+**Recorded in clear.** Script arguments and environment values are written as Tactical stores them. Core does not mask a value whose name looks
+like a secret. Anyone who can read the Tec-Tac audit can read them, as anyone who can read Tactical's audit can. This is Johan's answer to CQ85 a
+(14 October 2026): "do the same as Tactical".
+
+- The success row's after value holds the list from the cleaned body. When the operation has a before read, the before value holds Tactical's own GET answer.
+- Each list is written with `<name>_count`, the full length. `<name>_truncated: true` appears only when something was cut or dropped.
+- Bounds (`limits_added_in_1_10_0` in the contract): 50 objects per list; 24 keys per object, each a plain field name; a text value cut at
+  4096 characters, with control characters other than tab and newline removed; numbers, booleans and nulls kept; a list of up to 100 scalars
+  kept, anything deeper dropped; 64 KiB of text per list field; two list fields per operation.
+- A value that is not a list is recorded as an empty list with count 0. A list with an item that is not an object is recorded as its count
+  only. Both are flagged truncated. Nothing raises: the change is still written and still made.
+- A failed row (Tactical's 4xx), a denied row and an outcome-unknown row carry no list, as before.
+- Registration: a GET cannot declare it. Each name must be a body field, or come from a before read. A name may not repeat a field of
+  `audit.before` or `audit.audit_fields`, may not clash with another list's `<name>_count` or `<name>_truncated`, and may not look like a secret.
+- `describe()` and `list_operations` show `audit.lists`.
+
+Adoption by the Tasks module (declaring `audit_lists` on edit, create, create-policy-task and delete) is a request in
+`reviews/requests/core-modules.md`, not part of this release.

@@ -63,7 +63,7 @@ for folder in sorted(p for p in MODULES.iterdir() if (p / "package").is_dir()):
             kwargs = {key: value for key, value in kwargs.items() if key in ALLOWED}
             kwargs.pop("module_id", None)
             kwargs.pop("module_permission", None)
-            for flag in kwargs.get("permissions") or ():
+            for flag in (*(kwargs.get("permissions") or ()), *(kwargs.get("permissions_any") or ())):  # 1.17.26: any-of flags too
                 G["Role"].FIELDS.setdefault(flag, "BooleanField")  # the stub Role knows only a few of Tactical's flags
             # The same call as the module's apps.py makes.
             ops.register_tactical_operation(id=op_id, module_id=module_id, **kwargs)

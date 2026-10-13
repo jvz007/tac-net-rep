@@ -11,9 +11,19 @@ ordinary Tactical role/account managers.
 
 1.17.26: the three API key writes (create, edit, delete) also write one strict Core audit row each, in the guard's transaction. The
 row names the key's id, name and owner. It never carries the key value: the key field is never read for the row.
+
+1.17.28 (CQ84 a, Johan: "enforce the guard, superuser only"): Tactical's SSO provider and settings writes (ee/sso/views.py) are wrapped
+the same way. Only an effective superuser may add, edit or delete a provider, save the SSO settings or disconnect an SSO account; anyone
+else gets 403 and one Core deny row before the body is read, a holder of can_manage_accounts included. A settings save that would leave
+local sign-in blocked with no provider row, and a delete of the last provider while local sign-in is blocked, are refused with 409
+sso_lockout_guard and nothing is kept: a delete is checked before Tactical is called, and a settings save is checked on the state Tactical
+stored, inside the guard's transaction, and rolled back when it would lock everyone out. The provider list shows the client secret as [REDACTED] to anyone who is not an
+effective superuser. Each successful write writes one strict Core audit row in the same transaction. The client id and the secret are
+never stored in a row, only the names of the fields an edit changed.
 """
 from __future__ import annotations
 
+import importlib
 import logging
 from functools import wraps
 
@@ -726,6 +736,368 @@ def _audit_api_key_write(actor, operation: str, pk, before: dict) -> None:
     )
 
 
+# ----------------------------------------------------------------------------------------------- SSO admin (1.17.28, CQ84 a)
+SSO_AUDIT_PROVIDER = "sso_provider"
+SSO_AUDIT_SETTINGS = "sso_settings"
+SSO_AUDIT_ACCOUNT = "sso_account"
+SSO_AUDIT_SETTINGS_ID = "sso_settings"
+SSO_SUPERUSER_OBJECT = "sso_admin_superuser_required"
+SSO_LOCKOUT_OBJECT = "sso_lockout_guard"
+SSO_SUPERUSER_DETAIL = "Only a Tec-Tac superuser may change SSO providers or SSO settings."
+SSO_LOCKOUT_CODE = "sso_lockout_guard"
+SSO_LOCKOUT_TEXT = (
+    "Local sign-in cannot be blocked while no SSO provider exists. Add a working SSO provider first, or leave local sign-in open."
+)
+SSO_REDACTED = "[REDACTED]"
+SSO_SECRET_FIELD = "secret"
+SSO_CHANGE_FIELDS = ("name", "client_id", "secret", "server_url", "role")  # the names an edit may list as changed
+SSO_NAME_AUDIT_MAX = 255
+
+
+class _SSOLockoutRefused(Exception):
+    """Raised inside the guard's transaction so that nothing is kept. It is caught outside the transaction, where the deny row is written."""
+
+    def __init__(self, operation: str, object_id=None):
+        super().__init__(operation)
+        self.operation = operation
+        self.object_id = object_id
+
+
+def _audit_sso_deny(actor, *, object_type: str, object_id, operation: str, message: str) -> None:
+    """One best-effort Core deny row. It names the operation and the object id, and never a value, a secret or a Tactical text."""
+    try:
+        from .audit import record
+
+        record(
+            actor=actor, module_id="core", action="deny", object_type=object_type,
+            object_id=None if object_id is None else str(object_id), message=message,
+            metadata={"operation": operation}, strict=False,
+        )
+    except Exception:
+        logger.exception("Unable to persist the SSO admin denial audit")
+
+
+def _deny_sso_not_superuser(request, operation: str, object_id=None):
+    _audit_sso_deny(
+        request.user, object_type=SSO_SUPERUSER_OBJECT, object_id=object_id, operation=operation,
+        message="Blocked an SSO change by someone who is not a Tec-Tac superuser.",
+    )
+    raise PermissionDenied(SSO_SUPERUSER_DETAIL)
+
+
+def _refuse_sso_lockout(request, refused: _SSOLockoutRefused):
+    """The 409 answer for a lock-out refusal: one deny row, a plain sentence and the code. Nothing was kept."""
+    from rest_framework.response import Response
+
+    _audit_sso_deny(
+        request.user, object_type=SSO_LOCKOUT_OBJECT, object_id=refused.object_id, operation=refused.operation,
+        message="Blocked an SSO change that would lock every local user out.",
+    )
+    return Response({"detail": SSO_LOCKOUT_TEXT, "code": SSO_LOCKOUT_CODE}, status=409)
+
+
+def _lock_core_settings():
+    """Tactical's CoreSettings row, locked until the transaction ends (None when there is none). Every SSO admin write takes it first,
+    so two administrators queue behind each other and cannot both pass the lock-out check."""
+    from core.models import CoreSettings
+
+    return CoreSettings.objects.select_for_update().order_by("pk").first()
+
+
+def _stored_sso_state(row) -> dict:
+    """The two Tactical settings Core reads for SSO, as stored."""
+    return {
+        "sso_enabled": bool(getattr(row, "sso_enabled", False)),
+        "block_local_user_logon": bool(getattr(row, "block_local_user_logon", False)),
+    }
+
+
+def _provider_count(exclude_pk=None) -> int:
+    from allauth.socialaccount.models import SocialApp
+
+    query = SocialApp.objects.all()
+    if exclude_pk is not None:
+        query = query.exclude(pk=exclude_pk)
+    return query.count()
+
+
+def _locks_out(state: dict, providers: int) -> bool:
+    """True when local sign-in would be blocked with no provider row to sign in through (CQ89 a: a row is what counts)."""
+    return bool(state.get("block_local_user_logon")) and providers == 0
+
+
+def _requested_sso_state(data):
+    """The state Tactical stores for a body of two real booleans. Tactical's own failsafe clears the block when SSO is off, so the
+    block is kept only with SSO on. None for any other body: then the state Tactical stored is checked after its save instead."""
+    if not _payload_has(data, "sso_enabled") or not _payload_has(data, "block_local_user_logon"):
+        return None
+    sso = _payload_get(data, "sso_enabled")
+    block = _payload_get(data, "block_local_user_logon")
+    if not isinstance(sso, bool) or not isinstance(block, bool):
+        return None
+    return {"sso_enabled": sso, "block_local_user_logon": block and sso}
+
+
+def _audit_sso_settings(actor, before: dict, after: dict) -> None:
+    """One strict row per successful settings save, with the stored state before and after (the failsafe is visible)."""
+    from .audit import record
+
+    try:
+        record(
+            actor=actor, module_id="core", action="modify", object_type=SSO_AUDIT_SETTINGS, object_id=SSO_AUDIT_SETTINGS_ID,
+            message="Tactical SSO settings changed.", before=dict(before), after=dict(after), strict=True,
+        )
+    except Exception as exc:
+        raise RuntimeError("An SSO settings change requires a persisted Core audit record.") from exc
+
+
+def _provider_view(app) -> dict:
+    """The audited form of a provider: name, provider id, server URL and role. Never the client id or the secret."""
+    settings = getattr(app, "settings", None)
+    if not isinstance(settings, dict):
+        settings = {}
+    return {
+        "name": str(getattr(app, "name", "") or "")[:SSO_NAME_AUDIT_MAX],
+        "provider_id": str(getattr(app, "provider_id", "") or "")[:SSO_NAME_AUDIT_MAX],
+        "server_url": settings.get("server_url"),
+        "role": settings.get("role"),
+    }
+
+
+def _provider_row(pk):
+    from allauth.socialaccount.models import SocialApp
+
+    return SocialApp.objects.filter(pk=pk).first()
+
+
+def _provider_snapshot(app) -> dict:
+    """The audited view plus the two secret fields, kept in memory only to decide which names an edit changed. Never written."""
+    settings = getattr(app, "settings", None)
+    if not isinstance(settings, dict):
+        settings = {}
+    return {
+        **_provider_view(app),
+        "client_id": getattr(app, "client_id", None),
+        "secret": getattr(app, "secret", None),
+    }
+
+
+def _audit_sso_provider(actor, *, action: str, object_id, before, after, metadata: dict) -> None:
+    """One strict row per successful provider write, in the guard's transaction. ``metadata`` holds the view, or the view plus the
+    names of the fields an edit changed. Client ids and secrets are never in it."""
+    from .audit import record
+
+    try:
+        record(
+            actor=actor, module_id="core", action=action, object_type=SSO_AUDIT_PROVIDER,
+            object_id=None if object_id is None else str(object_id),
+            message="Tactical SSO provider " + {"add": "created", "modify": "edited", "delete": "deleted"}[action] + ".",
+            before=before, after=after, metadata=metadata, strict=True,
+        )
+    except Exception as exc:
+        raise RuntimeError("An SSO provider change requires a persisted Core audit record.") from exc
+
+
+def _created_provider(ids_before: set, name):
+    """The one provider a successful create added, found by comparing the ids before and after (1.17.28). When a concurrent create
+    committed in between, the new ids with the requested name are kept. None when exactly one cannot be found."""
+    from allauth.socialaccount.models import SocialApp
+
+    new_ids = set(SocialApp.objects.values_list("pk", flat=True)) - ids_before
+    if len(new_ids) > 1 and isinstance(name, str):
+        new_ids = set(SocialApp.objects.filter(pk__in=new_ids, name=name).values_list("pk", flat=True))
+    if len(new_ids) != 1:
+        return None
+    return SocialApp.objects.filter(pk=next(iter(new_ids))).first()
+
+
+def _sso_account_snapshot(data):
+    """The audited parts of the account a disconnect names: the Tactical user id, the provider and the username. None when the body
+    names no account. The external uid is read to find the row and is never kept."""
+    from allauth.socialaccount.models import SocialAccount
+
+    uid = _payload_get(data, "account")
+    provider = _payload_get(data, "provider")
+    if not isinstance(uid, (str, int)) or isinstance(uid, bool) or not isinstance(provider, str):
+        return None
+    account = SocialAccount.objects.select_related("user").filter(uid=uid, provider=provider).first()
+    if account is None:
+        return None
+    return {
+        "user_id": account.user_id,
+        "provider": str(account.provider or ""),
+        "username": str(getattr(account.user, "username", "") or ""),
+    }
+
+
+def _audit_sso_account(actor, snapshot: dict) -> None:
+    from .audit import record
+
+    try:
+        record(
+            actor=actor, module_id="core", action="delete", object_type=SSO_AUDIT_ACCOUNT, object_id=str(snapshot["user_id"]),
+            message="Tactical SSO account disconnected.",
+            metadata={"provider": snapshot["provider"], "username": snapshot["username"]}, strict=True,
+        )
+    except Exception as exc:
+        raise RuntimeError("An SSO account disconnect requires a persisted Core audit record.") from exc
+
+
+def _wrap_sso_provider_list(original):
+    @wraps(original)
+    def guarded(self, request, *args, **kwargs):
+        response = original(self, request, *args, **kwargs)
+        if is_effective_superuser(request.user):
+            return response
+        data = getattr(response, "data", None)
+        if not isinstance(data, list):
+            return response
+        for item in data:
+            if isinstance(item, dict) and SSO_SECRET_FIELD in item:
+                item[SSO_SECRET_FIELD] = SSO_REDACTED
+        return response
+    return _mark_guarded(guarded)
+
+
+def _wrap_sso_provider_add(original):
+    @wraps(original)
+    def guarded(self, request, *args, **kwargs):
+        if not is_effective_superuser(request.user):
+            _deny_sso_not_superuser(request, "add_provider")
+        with transaction.atomic():
+            _lock_core_settings()
+            ids_before = set(_provider_ids())
+            response = original(self, request, *args, **kwargs)
+            if _succeeded(response):
+                name = _payload_get(request.data, "name")
+                created = _created_provider(ids_before, name)
+                if created is not None:
+                    view = _provider_view(created)
+                    _audit_sso_provider(request.user, action="add", object_id=created.pk, before=None, after=view, metadata=dict(view))
+                else:
+                    # Never skipped: the row goes out with no id and a count of what was found.
+                    shown = str(name)[:SSO_NAME_AUDIT_MAX] if isinstance(name, str) else None
+                    _audit_sso_provider(request.user, action="add", object_id=None, before=None, after=None,
+                                        metadata={"name": shown, "matched": 0})
+            return response
+    return _mark_guarded(guarded)
+
+
+def _provider_ids():
+    from allauth.socialaccount.models import SocialApp
+
+    return SocialApp.objects.values_list("pk", flat=True)
+
+
+def _wrap_sso_provider_edit(original):
+    @wraps(original)
+    def guarded(self, request, pk, *args, **kwargs):
+        if not is_effective_superuser(request.user):
+            _deny_sso_not_superuser(request, "edit_provider", object_id=pk)
+        with transaction.atomic():
+            _lock_core_settings()
+            app = _provider_row(pk)
+            if app is None:
+                return original(self, request, pk, *args, **kwargs)  # Tactical answers 404; no row
+            before = _provider_snapshot(app)
+            response = original(self, request, pk, *args, **kwargs)
+            if _succeeded(response):
+                now = _provider_snapshot(_provider_row(pk) or app)
+                changed = [field for field in SSO_CHANGE_FIELDS if before.get(field) != now.get(field)]
+                view_before = {key: before[key] for key in ("name", "provider_id", "server_url", "role")}
+                view_after = {key: now[key] for key in ("name", "provider_id", "server_url", "role")}
+                _audit_sso_provider(request.user, action="modify", object_id=pk, before=view_before, after=view_after,
+                                    metadata={**view_after, "changed": changed})
+            return response
+    return _mark_guarded(guarded)
+
+
+def _wrap_sso_provider_delete(original):
+    @wraps(original)
+    def guarded(self, request, pk, *args, **kwargs):
+        if not is_effective_superuser(request.user):
+            _deny_sso_not_superuser(request, "delete_provider", object_id=pk)
+        try:
+            with transaction.atomic():
+                settings_row = _lock_core_settings()
+                app = _provider_row(pk)
+                if app is None:
+                    return original(self, request, pk, *args, **kwargs)  # Tactical answers 404; no row
+                if bool(_stored_sso_state(settings_row)["block_local_user_logon"]) and _provider_count(exclude_pk=pk) == 0:
+                    raise _SSOLockoutRefused("delete_provider", pk)
+                view = _provider_view(app)
+                response = original(self, request, pk, *args, **kwargs)
+                if _succeeded(response):
+                    _audit_sso_provider(request.user, action="delete", object_id=pk, before=view, after=None, metadata=dict(view))
+                return response
+        except _SSOLockoutRefused as refused:
+            return _refuse_sso_lockout(request, refused)
+    return _mark_guarded(guarded)
+
+
+def _wrap_sso_settings_save(original):
+    @wraps(original)
+    def guarded(self, request, *args, **kwargs):
+        if not is_effective_superuser(request.user):
+            _deny_sso_not_superuser(request, "save_settings", object_id=SSO_AUDIT_SETTINGS_ID)
+        try:
+            with transaction.atomic():
+                before = _stored_sso_state(_lock_core_settings())
+                requested = _requested_sso_state(request.data)
+                if requested is not None and _locks_out(requested, _provider_count()):
+                    raise _SSOLockoutRefused("save_settings", SSO_AUDIT_SETTINGS_ID)
+                response = original(self, request, *args, **kwargs)
+                if not _succeeded(response):
+                    return response  # Tactical refused (its licence answer, 423): nothing changed, no row
+                # The state Tactical stored, after its own failsafe. This is what the lock-out rule reads when the body was not two booleans.
+                after = _stored_sso_state(_lock_core_settings())
+                if _locks_out(after, _provider_count()):
+                    raise _SSOLockoutRefused("save_settings", SSO_AUDIT_SETTINGS_ID)
+                _audit_sso_settings(request.user, before, after)
+                return response
+        except _SSOLockoutRefused as refused:
+            return _refuse_sso_lockout(request, refused)
+    return _mark_guarded(guarded)
+
+
+def _wrap_sso_disconnect(original):
+    @wraps(original)
+    def guarded(self, request, *args, **kwargs):
+        if not is_effective_superuser(request.user):
+            _deny_sso_not_superuser(request, "disconnect_account")
+        with transaction.atomic():
+            _lock_core_settings()
+            snapshot = _sso_account_snapshot(request.data)
+            response = original(self, request, *args, **kwargs)
+            if snapshot is not None and _succeeded(response):
+                _audit_sso_account(request.user, snapshot)
+            return response
+    return _mark_guarded(guarded)
+
+
+def _install_sso_wrappers() -> None:
+    """Wrap Tactical's SSO admin handlers in place (1.17.28, CQ84 a). Sign-in routes (the token, the OIDC callback, the allauth
+    routes) are not touched. Without ee.sso, the wrappers are skipped with one log line."""
+    try:
+        # import_module, not ``from ee.sso import views``: a None entry in sys.modules would make that statement return None silently.
+        sso_views = importlib.import_module("ee.sso.views")
+    except ImportError:
+        logger.info("Tactical's SSO views (ee.sso) are not installed; the SSO admin guard is not installed.")
+        return
+    wrappers = [
+        (sso_views.GetAddSSOProvider, "get", _wrap_sso_provider_list),
+        (sso_views.GetAddSSOProvider, "post", _wrap_sso_provider_add),
+        (sso_views.GetUpdateDeleteSSOProvider, "put", _wrap_sso_provider_edit),
+        (sso_views.GetUpdateDeleteSSOProvider, "delete", _wrap_sso_provider_delete),
+        (sso_views.GetUpdateSSOSettings, "post", _wrap_sso_settings_save),
+        (sso_views.DisconnectSSOAccount, "delete", _wrap_sso_disconnect),
+    ]
+    for view_cls, method, wrapper in wrappers:
+        original = getattr(view_cls, method)
+        if not _already_guarded(original):
+            setattr(view_cls, method, wrapper(original))
+
+
 def install_tactical_account_guard() -> None:
     """Install idempotent wrappers around Tactical's native account security mutations."""
     from accounts import views as tactical_views
@@ -752,3 +1124,4 @@ def install_tactical_account_guard() -> None:
         original = getattr(view_cls, method)
         if not _already_guarded(original):
             setattr(view_cls, method, wrapper(original))
+    _install_sso_wrappers()

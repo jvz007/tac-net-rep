@@ -95,21 +95,15 @@ system_name   default "Tec-Tac"   1 to 60 characters, no colon
 - Existing authenticator entries keep working. The secret does not change, so only a new set-up (first sign-in, or after "Reset my own two-factor") carries the new label.
 - Python: `tec_tac.runtime_settings.get_system_name()` never raises and falls back to `Tec-Tac`.
 
-## Private mail relay for Core's own Priority 1 email (1.17.26, AD-30)
+## Private mail relay: withdrawn (1.17.26 to 1.17.28, AD-30 amendment)
 
-```text
-priority_mail_private_relay   default false   true or false
-```
+The `priority_mail_private_relay` setting shipped in 1.17.26 and is withdrawn in 1.17.28. Johan's decision (14 October 2026): Core's own
+Priority 1 email and every other mail use Tactical's own SMTP sender only, and the mail server's name must resolve only to public
+addresses. Loopback, private networks and cloud metadata all stay refused, for every sender. There is no split of email functions.
 
-Core emails the Tec-Tac administrators when a module job fails (the Priority 1 email). It sends through Tactical's own mail sender. Before it sends, Core checks where the mail server's name points, and by default it accepts public addresses only. Some servers use a relay on the private network. Turn this on to let Core's own Priority 1 email use one.
-
-- On, Core's own call accepts a name that resolves to ordinary private-network addresses: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10 and fc00::/7. Every address is judged on its own, so a name with one bad address is refused.
-- Still refused with it on: cloud metadata addresses, loopback (127.0.0.1 and ::1, a mail server on this server itself), link-local, unspecified and multicast addresses, other reserved ranges, and a name that does not resolve. Loopback stays refused until Johan answers CQ82.
-- Nothing else changes. The recipients are the administrators only, the cap is 20 an hour, Core reads no SMTP password and has no SMTP client, and a refusal never falls back to another sender.
-- **Core's own call only.** A module that reaches `send_p1_email`, `sweep_failed_jobs` or `host_refusal` gets the public-only rule, with one warning logged, never the private path. So does a call that passes its own host or send function. Core tells by the call stack: a frame inside an installed module's folder means a module is calling. A stack it cannot read counts as a module.
-- Only an effective superuser may change it. A holder of `core.runtime_settings.manage` who is not a superuser gets 403 and one best-effort Core `deny` row (`object_id` `priority_mail_private_relay`, no value). The check runs before the value. A body that mixes it with another setting is refused whole. A value that is not true or false (a number, text, a list or null) is a 400.
-- Each change writes one strict audit row in the same transaction (`runtime_settings`, `modify`, the boolean before and after). Sending the current value writes no row.
-- The Priority 1 audit row (`custom:priority-mail`) carries `private_relay`: true only when the relaxed rule accepted the mail server. It stays count-only.
-- Read: `GET /api/tfd/system/runtime-settings/` carries `priority_mail_private_relay` as `{ value, default, warning }`. Existing installs read false.
-- Python: `tec_tac.runtime_settings.get_priority_mail_private_relay()` is for Core's own code. It never raises and reads any error or odd stored value as false. It is not in the public Python contract, so no module can read it.
-- Tests: `tests/priority-mail-private-relay-1.17.26.py`, `tests/runtime-settings-private-relay-1.17.26.py`, `tests/caller-identity-server-module-1.17.26.py`. The migration (0029) and the real setting row are checked by `tests/priority-mail-runtime-1.17.26.py` on the dev server.
+- `GET /api/tfd/system/runtime-settings/` no longer carries `priority_mail_private_relay`.
+- `PATCH /api/tfd/system/runtime-settings/` naming it is the normal 400 (`Unknown runtime setting(s): priority_mail_private_relay`), for every caller, a superuser included.
+- The stored column stays in the database for this release only. It is never read. The scheduler tick calls `tec_tac.runtime_settings.clear_retired_private_relay()`, which sets a stored true back to false and writes one strict Core audit row (`runtime_settings`, `modify`, object `priority_mail_private_relay`, before true, after false, a message that says the setting was retired) in the same transaction. A failed audit write leaves the column true and the next tick retries. A stored false or a missing row does nothing.
+- A later release drops the column with a migration, once installs have cleared it.
+- The Priority 1 audit row (`custom:priority-mail`) has no `private_relay` key any more: `recipients`, `sent`, `refused`, `outcome`, `code` and `requested_by` only.
+- Tests: `tests/priority-mail-no-private-relay-1.17.28.py` (stubs), `tests/runtime-settings-1.17.28.py` (dev server).

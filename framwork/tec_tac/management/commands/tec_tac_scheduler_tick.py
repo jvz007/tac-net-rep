@@ -1,3 +1,5 @@
+import logging
+
 from django.core.management.base import BaseCommand
 from tec_tac.scheduler import dispatch_due_schedules
 from tec_tac.session_security import cleanup_session_history_if_due, sweep_expired_sessions
@@ -56,6 +58,16 @@ class Command(BaseCommand):
             failure_notices = sweep_failed_jobs()
         except Exception as exc:
             self.stderr.write(f"TEC-TAC module failure notice sweep failed; retrying next tick: {exc.__class__.__name__}: {exc}")
+
+        try:
+            # 1.17.28 (AD-30 amendment): clear the retired mail-setting column once, with its audit row. The function never raises;
+            # the guard here keeps a failed import from taking the tick down either.
+            from tec_tac.runtime_settings import clear_retired_private_relay
+
+            clear_retired_private_relay()
+        except Exception:
+            # Logged, not written to the command's output: the step is a retry, and the tick's own output stays the same.
+            logging.getLogger("tec_tac.runtime_settings").warning("The retired mail setting clear did not run; the next tick retries.", exc_info=True)
 
         sweep_state = "error" if sweep_error else "ran"
         cleanup_state = "error" if cleanup_error else ("ran" if cleanup and cleanup.get("ran") else "not_due")

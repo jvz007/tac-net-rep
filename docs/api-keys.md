@@ -40,8 +40,4 @@ A call that is refused writes the deny row and no success row. A call Tactical i
 
 The browser calls Tactical's routes above through Core's transport, as before. The permission flags are Tactical's: `can_list_api_keys` for the list, `can_manage_api_keys` for the rest. Tactical decides. The UI hides a control the person cannot use (AD-12: denied means hidden and refused). The UI half of this entry is in `reviews/requests/ui.md`.
 
-## Not in this release
-
-Tactical's SSO provider and settings admin (`/accounts/ssoproviders/`) is left out. It needs a decision from Johan on how to avoid locking every superuser out (CQ84).
-
 Tests: `tests/api-key-audit-1.17.26.py`. The real-database check is `tests/api-key-audit-runtime-1.17.26.py`, written for the dev server and not run here.

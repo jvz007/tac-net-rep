@@ -13,12 +13,12 @@ MiB (1 to 25, default 10). Only a superuser changes it. The executor reads it on
 1.17.23: ``system_name`` is the name an authenticator app shows for this system (plain text, 1 to 60 characters, default
 ``Tec-Tac``, no colon). Whoever may change the register timeout may change it.
 
-1.17.26: ``priority_mail_private_relay`` (strict bool, default off, AD-30) lets Core's own Priority 1 email go to a mail server on a
-private network. Only an effective superuser changes it. ``get_priority_mail_private_relay`` is for Core's own code and is not in the
-public Python contract, so no module can read it.
-
 1.17.24: only an effective superuser may change ``system_name`` (held Low of the 1.17.23 review). A refusal writes one
 best-effort Core ``deny`` row, and so does the upload-limit refusal.
+
+1.17.28 (AD-30 amendment, Johan, 14 October 2026): the private mail relay setting is retired. It is no longer in the GET answer and a
+PATCH that names it is the normal 400. Its stored column (1.17.26) is never read; ``clear_retired_private_relay`` sets a stored True
+back to False with one strict audit row, once, from the scheduler tick. The column is dropped in a later release.
 """
 from __future__ import annotations
 
@@ -52,13 +52,9 @@ _MIB = 2**20
 SETTING_SYSTEM_NAME = "system_name"
 DEFAULT_SYSTEM_NAME = "Tec-Tac"
 MAX_SYSTEM_NAME_LENGTH = 60
-SETTING_PRIORITY_MAIL_PRIVATE_RELAY = "priority_mail_private_relay"
-DEFAULT_PRIORITY_MAIL_PRIVATE_RELAY = False
-PRIORITY_MAIL_PRIVATE_RELAY_WARNING = (
-    "This lets Core's own Priority 1 email go to a mail server on a private network (for example 10.x or 192.168.x). "
-    "It changes nothing else. Other modules never use it, and cloud metadata, loopback and link-local addresses stay refused."
-)
-RUNTIME_SETTING_NAMES = (SETTING_MODULE_REGISTER_TIMEOUT, SETTING_TACTICAL_UPLOAD_MAX_MIB, SETTING_SYSTEM_NAME, SETTING_PRIORITY_MAIL_PRIVATE_RELAY)
+RUNTIME_SETTING_NAMES = (SETTING_MODULE_REGISTER_TIMEOUT, SETTING_TACTICAL_UPLOAD_MAX_MIB, SETTING_SYSTEM_NAME)
+RETIRED_PRIVATE_RELAY_AUDIT_OBJECT = "priority_mail_private_relay"
+RETIRED_PRIVATE_RELAY_MESSAGE = "Tec-Tac runtime setting retired: the private mail relay was removed. Email uses Tactical's SMTP only."
 
 
 RUNTIME_SETTINGS_DENIED = (
@@ -76,9 +72,6 @@ UPLOAD_LIMIT_DENIED = "Only a Tec-Tac superuser may change the Tactical operatio
 
 # The system name: superusers only (1.17.24). The register timeout keeps core.runtime_settings.manage.
 SYSTEM_NAME_DENIED = "Only a Tec-Tac superuser may change the system name."
-
-# The private relay switch: superusers only (1.17.26, AD-30).
-PRIORITY_MAIL_PRIVATE_RELAY_DENIED = "Only a Tec-Tac superuser may change the private mail relay setting."
 
 
 class RuntimeSettingsError(ValueError):
@@ -132,22 +125,6 @@ def validate_system_name(value) -> str:
     return name
 
 
-def validate_priority_mail_private_relay(value) -> bool:
-    """Accept only a real boolean. A number, text, a list and null are refused: ``1`` and ``"true"`` must never switch it on."""
-    if not isinstance(value, bool):
-        raise RuntimeSettingsError(f"{SETTING_PRIORITY_MAIL_PRIVATE_RELAY} must be true or false.")
-    return value
-
-
-def get_priority_mail_private_relay() -> bool:
-    """Whether Core's own Priority 1 email may use a private-network mail server. Never raises, and fails closed: any error or any
-    stored value that is not exactly True reads as False. Not in the public Python contract."""
-    try:
-        return TecTacRuntimeConfig.current().priority_mail_private_relay is True
-    except Exception:
-        return DEFAULT_PRIORITY_MAIL_PRIVATE_RELAY
-
-
 def get_system_name() -> str:
     """The name an authenticator shows for this system. Never raises: any failure or invalid stored value gives ``Tec-Tac``."""
     try:
@@ -194,7 +171,6 @@ def serialize_runtime_settings(config=None) -> dict:
         },
         SETTING_TACTICAL_UPLOAD_MAX_MIB: _serialize_upload_limit(config),
         SETTING_SYSTEM_NAME: _serialize_system_name(config),
-        SETTING_PRIORITY_MAIL_PRIVATE_RELAY: _serialize_private_relay(config),
         "updated_at": config.updated_at.isoformat() if config.updated_at else None,
         "updated_by": config.updated_by.username if config.updated_by else None,
     }
@@ -222,12 +198,37 @@ def _serialize_system_name(config) -> dict:
     return {"value": value, "maximum_length": MAX_SYSTEM_NAME_LENGTH, "default": DEFAULT_SYSTEM_NAME}
 
 
-def _serialize_private_relay(config) -> dict:
-    return {
-        "value": getattr(config, "priority_mail_private_relay", False) is True,
-        "default": DEFAULT_PRIORITY_MAIL_PRIVATE_RELAY,
-        "warning": PRIORITY_MAIL_PRIVATE_RELAY_WARNING,
-    }
+def clear_retired_private_relay() -> bool:
+    """Clear the retired mail-setting column (1.17.28, AD-30 amendment). Returns True only when it cleared a stored True.
+
+    Idempotent and never raises. A stored False or a missing row does nothing and writes no row. A stored True is set to False and
+    one strict Core audit row (modify, object_type runtime_settings, before true, after false) is written in the same transaction, so
+    a failed audit write leaves the column True and the next tick retries. Called from the scheduler tick."""
+    try:
+        from .audit import record, service_audit_actor
+
+        with transaction.atomic():
+            # filter, not current(): a missing singleton row is left missing, and nothing is written for it.
+            config = TecTacRuntimeConfig.objects.select_for_update().filter(singleton=1).first()
+            if config is None or getattr(config, "priority_mail_private_relay", False) is not True:
+                return False
+            config.priority_mail_private_relay = False
+            config.save(update_fields=["priority_mail_private_relay", "updated_at"])
+            record(
+                actor=service_audit_actor(module_id="core", service="runtime-settings", identity="retire-private-relay"),
+                module_id="core",
+                action="modify",
+                object_type="runtime_settings",
+                object_id=RETIRED_PRIVATE_RELAY_AUDIT_OBJECT,
+                message=RETIRED_PRIVATE_RELAY_MESSAGE,
+                before={RETIRED_PRIVATE_RELAY_AUDIT_OBJECT: True},
+                after={RETIRED_PRIVATE_RELAY_AUDIT_OBJECT: False},
+                strict=True,
+            )
+        return True
+    except Exception:
+        logger.exception("Could not clear the retired private mail relay setting; the next tick retries.")
+        return False
 
 
 def _audit_change(user, before, after, setting: str = SETTING_MODULE_REGISTER_TIMEOUT) -> None:
@@ -270,7 +271,7 @@ def _deny_superuser_only(request, setting: str, message: str) -> None:
 
 @extend_schema_view(
     get=extend_schema(tags=["Tec-Tac Runtime Settings"], summary="Get the Core runtime settings"),
-    patch=extend_schema(tags=["Tec-Tac Runtime Settings"], summary="Change the module register() time limit, or (superuser only) the Tactical operation upload limit, the system name or the private mail relay switch"),
+    patch=extend_schema(tags=["Tec-Tac Runtime Settings"], summary="Change the module register() time limit, or (superuser only) the Tactical operation upload limit or the system name"),
 )
 class RuntimeSettingsView(APIView):
     permission_classes = [SessionAuthenticated]
@@ -297,8 +298,6 @@ class RuntimeSettingsView(APIView):
                 _deny_superuser_only(request, SETTING_TACTICAL_UPLOAD_MAX_MIB, UPLOAD_LIMIT_DENIED)
             if SETTING_SYSTEM_NAME in data:
                 _deny_superuser_only(request, SETTING_SYSTEM_NAME, SYSTEM_NAME_DENIED)
-            if SETTING_PRIORITY_MAIL_PRIVATE_RELAY in data:
-                _deny_superuser_only(request, SETTING_PRIORITY_MAIL_PRIVATE_RELAY, PRIORITY_MAIL_PRIVATE_RELAY_DENIED)
         changes = {}
         try:
             if SETTING_MODULE_REGISTER_TIMEOUT in data:
@@ -309,8 +308,6 @@ class RuntimeSettingsView(APIView):
                 # JSON null resets the name to the default.
                 name = data[SETTING_SYSTEM_NAME]
                 changes[SETTING_SYSTEM_NAME] = DEFAULT_SYSTEM_NAME if name is None else validate_system_name(name)
-            if SETTING_PRIORITY_MAIL_PRIVATE_RELAY in data:
-                changes[SETTING_PRIORITY_MAIL_PRIVATE_RELAY] = validate_priority_mail_private_relay(data[SETTING_PRIORITY_MAIL_PRIVATE_RELAY])
         except RuntimeSettingsError as exc:
             return Response({"detail": str(exc)}, status=400)
         with transaction.atomic():
@@ -318,9 +315,7 @@ class RuntimeSettingsView(APIView):
             changed = []
             for setting, value in changes.items():
                 before = getattr(config, setting)
-                if setting == SETTING_PRIORITY_MAIL_PRIVATE_RELAY:
-                    before = before is True
-                elif setting != SETTING_SYSTEM_NAME:
+                if setting != SETTING_SYSTEM_NAME:
                     before = int(before)
                 if before != value:
                     setattr(config, setting, value)

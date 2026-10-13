@@ -90,8 +90,8 @@ Core's own Priority 1 notice email does not go through caller identity. From 1.1
 amendment): `module_failure_notices.send_p1_email` calls `priority_mail.send_one`, which calls Tactical's `CoreSettings.send_mail` in
 process, to the administrators only. Core is never a caller of a module's contract, it does not go through Global Settings (AD-26
 condition 2), and it never reads the SMTP password. It has no SMTP client of its own. From 1.17.26 an administrator may let this email use a mail
-server on a private network (AD-30, `priority_mail_private_relay` in docs/runtime-settings.md). That path is for Core's own call only: it
-looks at the call stack for a frame inside an installed module's folder, and a module that reaches `send_p1_email` gets the public-only rule.
+server on a private network (AD-30). From 1.17.28 that is withdrawn (AD-30 amendment): every sender, Core's own included, uses the
+public-address check only, so no call-stack test decides a mail path any more (`module_frame_on_stack` is removed).
 
 ## Server modules (1.17.26 note)
 
