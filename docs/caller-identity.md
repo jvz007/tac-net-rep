@@ -109,6 +109,13 @@ provider_file)`. It is not a public contract: it is not in the contract export a
 extension, or the answer is `None`. Core is still never identified as a caller (AD-26 condition 2). `calling_module` and the
 `core.caller_identity` 1.0.0 contract are unchanged by 1.17.27. Pinned by `tests/caller-identity-core-provider-1.17.27.py`.
 
+Since Core 1.17.30, AD-34 extends AD-31 condition 2 (a Core provider may verify its module caller) from `core.accounts` to two more Core
+providers: `core.resources` (`trusted_service_context(global_access=False)`, the module `userinvite` only, actor named the same) and
+`core.audit` (a deny row from a server module, see `docs/module-audit.md`). Each calls the same private helper with its own `__file__`.
+So a Core provider may verify its module caller in `core.accounts`, `core.resources` and `core.audit`, and nowhere else without Johan's
+sign-off in chat (AD-34 condition 2). The helper stays private and `core.caller_identity` stays at 1.0.0. Pinned by
+`tests/resource-service-context-1.17.30.py` and `tests/audit-server-module-deny-1.17.30.py`.
+
 ## Feature detection
 
 `has_capability("core.caller_identity")` is true from Core 1.17.21. The capability metadata lists the limits above in `limits`, gives

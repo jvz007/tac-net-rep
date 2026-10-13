@@ -59,6 +59,48 @@ class IntegrityError(Exception):
 stub("django")
 stub("django.core")
 stub("django.core.exceptions", ValidationError=ValidationError)
+
+
+class FakeCache:
+    """django.core.cache stand-in (1.17.30): add, incr and set with expiry on a clock the test moves, and a switch that makes it fail."""
+
+    def __init__(self):
+        self.data = {}
+        self.now = 0.0
+        self.down = False
+
+    def _live(self, key):
+        item = self.data.get(key)
+        if item is not None and item[1] <= self.now:
+            del self.data[key]
+            item = None
+        return item
+
+    def add(self, key, value, timeout=None):
+        if self.down:
+            raise RuntimeError("cache down")
+        if self._live(key) is None:
+            self.data[key] = (value, self.now + timeout)
+            return True
+        return False
+
+    def incr(self, key):
+        if self.down:
+            raise RuntimeError("cache down")
+        item = self._live(key)
+        if item is None:
+            raise ValueError(key)
+        self.data[key] = (item[0] + 1, item[1])
+        return item[0] + 1
+
+    def set(self, key, value, timeout=None):
+        if self.down:
+            raise RuntimeError("cache down")
+        self.data[key] = (value, self.now + timeout)
+
+
+CACHE = FakeCache()
+stub("django.core.cache", cache=CACHE)
 COMMON = {"password", "12345678", "qwertyui", "letmein1", "iloveyou"}
 
 
@@ -334,6 +376,9 @@ def reset():
     FAIL["on"] = False
     CALLER["value"] = CALLER_ID
     NEXT["user"] = 100
+    CACHE.data.clear()
+    CACHE.now = 0.0
+    CACHE.down = False
     ROLES[1] = RoleRow(1, "Technician")
     ROLES[2] = RoleRow(2, "Super Admin", is_superuser=True)
     ROLES[3] = RoleRow(3, "Account Manager", can_manage_accounts=True)
@@ -492,13 +537,13 @@ CALLER["value"] = CALLER_ID
 subclasses = {cls.code for cls in vars(accounts).values() if isinstance(cls, type) and issubclass(cls, accounts.AccountsError) and cls is not accounts.AccountsError}
 must(subclasses == set(accounts.ERROR_CODES), (subclasses, accounts.ERROR_CODES))
 meta = accounts.accounts_contract_metadata()
-must(meta["id"] == "core.accounts" and meta["version"] == "1.1.0" and meta["callers"] == ["userinvite"], meta)
+must(meta["id"] == "core.accounts" and meta["version"] == "1.2.0" and meta["callers"] == ["userinvite"], meta)
 must(meta["operations"] == ["create_user", "list_grantable_roles", "check_available"] and meta["creates_totp_key"] is False and meta["errors"] == list(accounts.ERROR_CODES), meta)
 
 registered = {}
 stub("tec_tac.capabilities", register_capability=lambda **kw: registered.update(kw) or SimpleNamespace(**kw))
 accounts.register_core_accounts_capability()
-must(registered["id"] == "core.accounts" and registered["module_id"] == "core" and registered["version"] == "1.1.0", registered)
+must(registered["id"] == "core.accounts" and registered["module_id"] == "core" and registered["version"] == "1.2.0", registered)
 must(registered["operations"] == ("create_user", "list_grantable_roles", "check_available") and registered["metadata"] == meta, registered)
 must(registered["provider"].create_user is accounts.create_user and registered["provider"].list_grantable_roles is accounts.list_grantable_roles, "provider")
 
@@ -517,7 +562,7 @@ for name, row in acc_rows.items():
 must("caller_not_allowed" in acc_rows["create_user"]["purpose"] and "accounts_permission_required" in acc_rows["list_grantable_roles"]["purpose"], "errors named")
 
 docs = (ROOT / "docs" / "accounts-contract.md").read_text(encoding="utf-8")
-for needle in ("core.accounts", "1.1.0", "userinvite", "accept-invite", "CQ86", "CQ87", "AccountsError", "weak_password", "role_not_grantable",
+for needle in ("core.accounts", "1.2.0", "userinvite", "accept-invite", "CQ86", "CQ87", "AccountsError", "weak_password", "role_not_grantable",
                "inviter_not_allowed", "caller_not_allowed", "audit_failed", "accounts_permission_required", "totp_set", "can_manage_accounts"):
     must(needle in docs, f"docs/accounts-contract.md names {needle}")
 for code in accounts.ERROR_CODES:

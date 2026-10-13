@@ -991,6 +991,21 @@ def _scoped_queryset(queryset, user, *, client_path, site_path, include_unassign
         return queryset.none()
 
 
+def _server_wide_queryset(queryset, user):
+    """Rows of a server_wide model (1.17.30, AD-34 condition 3): every row for an effective superuser, none for anyone else.
+
+    An effective superuser is a Django superuser or a role with is_superuser. A role with no client or site limits is not enough (this
+    replaces the 1.17.29 rule). No user, no role, an installer user and any error give no rows. Never raises."""
+    try:
+        from .rbac import is_effective_superuser
+
+        if is_effective_superuser(user):
+            return queryset
+    except Exception:
+        logger.exception("Tec-Tac server-wide report row check failed; returning no rows")
+    return queryset.none()
+
+
 def _scoped_manager_class():
     global _SCOPE_MANAGER_CLASS
     if _SCOPE_MANAGER_CLASS is not None:
@@ -1010,6 +1025,8 @@ def _scoped_manager_class():
             self._server_wide = bool(server_wide)  # 1.17.29: the rows belong to the server, not to a client or site
 
         def filter_by_role(self, user):
+            if self._server_wide:
+                return _server_wide_queryset(self.get_queryset(), user)
             return _scoped_queryset(
                 self.get_queryset(), user,
                 client_path=self.client_field, site_path=self.site_field, include_unassigned=self.include_unassigned,
@@ -1034,9 +1051,10 @@ def scoped_report_manager(
 
     ``server_wide=True`` (1.17.29, opt-in) declares that the model's rows belong to the server and have no client or site
     (User Invite's invitation history, a certificate observation). It is refused together with ``client``, ``site`` or
-    ``include_unassigned``. Its ``filter_by_role`` is the same fail-closed rule as a pathless model: an unrestricted person
-    (a superuser, or a role with neither can_view_clients nor can_view_sites) sees every row, a scoped person sees none, and
-    no role or any error sees none. Only ``model_row_scope`` differs: it reports ``enforced`` true, because the choice is declared.
+    ``include_unassigned``. Since 1.17.30 (AD-34 condition 3) its ``filter_by_role`` shows every row to an effective superuser
+    (a Django superuser or a role superuser) only. A role with no client or site limits, a scoped role, no role, no user and any
+    error see none. Server modules will get their own role system later (AD-34 condition 4). A report run with no signed-in user
+    never calls ``filter_by_role`` and stays unscoped (CQ15 a). ``model_row_scope`` reports ``enforced`` true, because the choice is declared.
     """
     if not isinstance(include_unassigned, bool):
         raise ReportingRegistrationError("include_unassigned must be true or false.")

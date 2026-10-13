@@ -78,6 +78,8 @@ def device_audit_actor(*, module_id: str, device_id: str, identity: str | None =
 
 # 1.17.20: debug_info.actor_authority on a row accepted for a person who holds none of the module's own permissions.
 ACTOR_AUTHORITY_DECLARED_OWNER = "declared-operation-owner"
+# 1.17.30 (AD-34 condition 2): the same field on a deny row a server module wrote for a person with none of its permissions.
+ACTOR_AUTHORITY_SERVER_MODULE_DENY = "server-module-deny"
 
 
 def _declared_owner_row_allowed(actor, module: dict, action: Any) -> bool:
@@ -128,6 +130,33 @@ def _declared_owner_row_allowed(actor, module: dict, action: Any) -> bool:
         return False
 
 
+def _server_module_deny_allowed(actor, module: dict, action: Any) -> bool:
+    """May a server module write a deny row for a signed-in person who holds none of its permissions? (1.17.30, AD-34 condition 2)
+
+    Yes only when all of these hold: the actor is an authenticated person (not an installer user), the module is a signed, enabled,
+    non-legacy module whose manifest category is ``server``, the action is exactly ``deny``, and the verified caller (read from the call
+    stack, never from an argument) is that same module. A missing or different caller, a Core, library or generated frame, and any other
+    action or category are refused. Never raises: any error is a refusal.
+    """
+    try:
+        if not getattr(actor, "is_authenticated", False) or getattr(actor, "is_installer_user", False):
+            return False
+        if module.get("id") == "core" or module.get("legacy") or module.get("category") != "server":
+            return False
+        try:
+            if _normalize_action(action) != "deny":
+                return False
+        except AuditContractError:
+            return False
+        # Imported here, not at module level: standalone loaders (spec_from_file_location) have no parent package, and a failed import is a refusal.
+        from .caller_identity import calling_module_for_core_provider
+        identity = calling_module_for_core_provider(provider_file=__file__)
+        return identity is not None and identity.module_id == module["id"]
+    except Exception:
+        logger.exception("Unable to decide whether server module %s may write a deny row", module.get("id"))
+        return False
+
+
 def _actor_provenance(actor, module: dict, authority=None, action: Any = None, declared_owner_ok: bool = True) -> tuple[str, dict[str, Any]]:
     if isinstance(actor, AuditActor):
         if actor.module_id != module["id"]:
@@ -148,17 +177,23 @@ def _actor_provenance(actor, module: dict, authority=None, action: Any = None, d
     # A person acting only under a Tactical permission is not a Tec-Tac module user (1.17.7). Core's executor has
     # already checked Tactical's permission and scope, so it passes its own internal authority.
     declared_owner = False
+    server_deny = False
     if authority is not _TACTICAL_OPERATION_AUTHORITY and not _actor_can_use_module(actor, module):
         # 1.17.20: a person with none of the module's permissions, for an action the module declared through a Tactical operation.
-        if not (declared_owner_ok and _declared_owner_row_allowed(actor, module, action)):
+        if declared_owner_ok and _declared_owner_row_allowed(actor, module, action):
+            declared_owner = True
+        elif authority is None and declared_owner_ok and _server_module_deny_allowed(actor, module, action):
+            server_deny = True
+        else:
             raise AuditContractError(f"actor is not permitted to use Tec-Tac module {module['id']!r}.")
-        declared_owner = True
     username = str(getattr(actor, "username", "") or "").strip()
     if not username:
         raise AuditContractError("authenticated actor does not expose a username.")
     details = {"actor_kind": "human", "actor_identity": username}
     if declared_owner:
         details["actor_authority"] = ACTOR_AUTHORITY_DECLARED_OWNER  # set here only: a caller cannot supply it
+    elif server_deny:
+        details["actor_authority"] = ACTOR_AUTHORITY_SERVER_MODULE_DENY  # set here only: a caller cannot supply it
     return username, details
 
 

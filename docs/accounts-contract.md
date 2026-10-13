@@ -1,10 +1,10 @@
 # Accounts contract: create a user from an accepted invite, and the roles an inviter may grant
 
 **Status:** Public Core developer contract, added in Core 1.17.27 (binding entry "accounts contracts for User Invite")
-**Python:** `tec_tac.accounts.create_user`, `tec_tac.accounts.list_grantable_roles`, `tec_tac.accounts.check_available` (1.17.29)
-**Capability:** `core.accounts` 1.1.0, owner `core`
-**Needs:** `requires.framework >=1.17.27` (`check_available`: `>=1.17.29`)
-**Decisions:** AD-31 (the caller check, and condition 5, the accepted limit that Core does not verify the invite token)
+**Python:** `tec_tac.accounts.create_user`, `tec_tac.accounts.list_grantable_roles`, `tec_tac.accounts.check_available` (1.17.29, `invited_by_id` since 1.17.30)
+**Capability:** `core.accounts` 1.2.0, owner `core`
+**Needs:** `requires.framework >=1.17.27` (`check_available`: `>=1.17.30`, with `invited_by_id`)
+**Decisions:** AD-31 (the caller check, and condition 5, the accepted limit that Core does not verify the invite token); AD-34 condition 4 (`check_available` inviter re-check and Core limit)
 **Who may call:** the `userinvite` module only (Core checks; see "Who may call")
 
 ## Why this exists
@@ -121,10 +121,10 @@ User Invite should hide rows with `is_superuser` true from its role picker until
 While CQ86 is open, `create_user` refuses a superuser role for every inviter, including a superuser (`role_not_grantable`). The safest choice
 was taken; Johan decides whether an invite may ever give a superuser role. The choices are in `reviews/questions/core.md`.
 
-## `check_available` (since 1.17.29)
+## `check_available` (since 1.17.29, inviter and limit since 1.17.30)
 
 ```python
-answer = accounts.check_available("jane.doe", "jane@example.co.za")
+answer = accounts.check_available("jane.doe", "jane@example.co.za", invited_by_id=request.user.pk)
 answer.status, answer.username_taken, answer.email_taken
 ```
 
@@ -135,13 +135,20 @@ It tells the create step of an invitation whether the username or the email is a
 - The match ignores case, with the same lookups as `create_user` (one shared helper, so they cannot drift).
 - Same caller rule as `create_user`: only the verified, enabled `userinvite` module. Anyone else gets `caller_not_allowed` and no query runs.
 - The inputs are cleaned as in `create_user`. A blank, over-long, control-character or malformed value raises `invalid_input`.
+- `invited_by_id` is required (1.17.30). It is checked like `create_user`'s: a bool or a number that is not above zero raises `invalid_input`.
+- Core re-reads the inviter and re-checks `can_manage_accounts`, as `create_user` does. A missing, inactive or installer-user inviter, or one who no
+  longer holds the flag, raises `inviter_not_allowed`. No lookup runs and the call is not counted against the limit.
+- Core limits each inviter to **30 answered calls per 10 minutes and 300 per day** (a Django cache counter per inviter id, counted only after the
+  inviter check passes; the key holds no username or email). The next call raises `rate_limited`. If the counter cannot be read the call raises
+  `rate_check_unavailable` and answers nothing. A limit hit writes a warning to the log and no audit row. The numbers are Core's choice and Johan may change them.
+- Order of checks: verified caller, input cleaning, inviter re-check, rate limit, lookup.
 - It is a read. It writes no audit row, no record and opens no transaction.
 - It returns no user id, no name and no other field of the matching user. A taken answer is all it gives.
 
-Core cannot see whether a person is signed in. So the module must call `check_available` only from the signed-in create step of an invitation,
-never from a signed-out page, and must rate-limit it. Without that, anyone could use it to test which usernames and emails have accounts.
-Whether Core should also re-check the inviter's `can_manage_accounts` here is a question for Johan (CQ92); the signature above is what the
-User Invite plan names.
+Core cannot see whether a person is signed in. So the module still binds `check_available` to the signed-in create step of an invitation,
+never calls it from a signed-out page, and keeps its own rate limit next to Core's. Core's inviter re-check and limit (AD-34 condition 4) make
+guessing account names slow and traceable to an inviter who holds `can_manage_accounts`. This stricter form is stricter than the open form by the
+main session's choice on 14 October 2026 (CQ92 b); Johan may relax it to the plain signature.
 
 ## What is not set
 
@@ -152,7 +159,9 @@ User Invite plan names.
 ## Compatibility
 
 Additive in 1.17.27. Nothing in `modules/` used `core.accounts` before this release. 1.17.29 (capability 1.1.0) adds `check_available`, also
-additive: `create_user` and `list_grantable_roles` behave exactly as before. A module finds it with
+additive: `create_user` and `list_grantable_roles` behave exactly as before. 1.17.30 (capability 1.2.0, still major 1) gives `check_available` a required
+`invited_by_id`, the inviter re-check and Core's limit, and two error codes (`rate_limited`, `rate_check_unavailable`). No module in `modules/` calls
+`check_available` yet (User Invite 0.9.0 does not), so nothing breaks; a caller written for 1.17.29's two-argument form must pass the inviter. A module finds it with
 `has_capability("core.accounts")`, and it needs `requires.framework >=1.17.27`.
 
 Tactical's own `/accounts/users/` and `/accounts/roles/` routes are unchanged. Core's guard on them (`tactical_account_guard`) is unchanged.

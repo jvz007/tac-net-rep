@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """1.17.29 regression: server-wide row scope for a report model (scoped_report_manager(server_wide=True)).
 
+1.17.30 (AD-34 condition 3) changed who sees the rows: effective superusers only. A role with no limits now sees none (see
+tests/reporting-server-wide-scope-1.17.30.py); this test follows that rule.
+
 Extends the stubs of tests/reporting-row-scope-1.17.4.py (its text runs here up to the status-row section, so the real reporting.py and
 resources_adapter.py run against fake Django, users, roles and models). Covered: scope_filter_spec and the manager with server_wide give
 all rows to an unrestricted person, none to a scoped person, none for no role and none when the adapter raises; server_wide together
@@ -20,6 +23,17 @@ _src = HARNESS.read_text(encoding="utf-8")
 _cut = "# ------------------------------------------------------------------ status rows and the bridge status carry it"
 assert _cut in _src
 exec(compile(_src.split(_cut)[0], str(HARNESS), "exec"), globals())  # noqa: S102 - the shared test harness, not user input
+
+
+# ---- rbac stand-in (1.17.30): the real is_effective_superuser, cut out of rbac.py (the module itself needs Tactical's Role model) --------
+import types as _types
+
+_rbac_tree = ast.parse((APP / "rbac.py").read_text(encoding="utf-8"))
+_fn = next(n for n in _rbac_tree.body if isinstance(n, ast.FunctionDef) and n.name == "is_effective_superuser")
+_rbac = _types.ModuleType("tec_tac.rbac")
+exec(compile(ast.Module(body=[_fn], type_ignores=[]), "rbac.py", "exec"), _rbac.__dict__)  # noqa: S102 - the real function, not user input
+sys.modules["tec_tac.rbac"] = _rbac
+User.is_authenticated = True  # the harness user stands in for a signed-in Tactical user
 
 # ---- declaration ---------------------------------------------------------------------------------------------------------------------
 wide = rep.scoped_report_manager(server_wide=True)
@@ -44,13 +58,13 @@ for bad_flag in (1, 0, "yes", None, "true", [True]):
 rep.scoped_report_manager(server_wide=True, include_unassigned=False)  # an explicit False include_unassigned is fine
 
 # ---- who sees what -------------------------------------------------------------------------------------------------------------------
-must(rep.scope_filter_spec(UNRESTRICTED, client_path=None, site_path=None)["mode"] == "all", "spec: unrestricted sees all")
+must(rep.scope_filter_spec(UNRESTRICTED, client_path=None, site_path=None)["mode"] == "all", "spec: unrestricted sees all (a pathless model, not server_wide)")
 must(rep.scope_filter_spec(client_only, client_path=None, site_path=None)["mode"] == "none", "spec: a scoped person sees none")
 must(rep.scope_filter_spec(none, client_path=None, site_path=None)["mode"] == "none", "spec: denied sees none")
-for person, label in ((User(superuser=True), "superuser"), (User(Role(superuser=True)), "role superuser"), (User(Role()), "a role with no limits")):
+for person, label in ((User(superuser=True), "superuser"), (User(Role(superuser=True)), "role superuser")):
     qs = wide.filter_by_role(person)
     must(qs.is_none is False and qs.condition is None, f"{label} sees every row")
-for person, label in ((User(Role(clients=[10])), "client-limited"), (User(Role(sites=[3])), "site-limited"),
+for person, label in ((User(Role()), "a role with no limits (1.17.30)"), (User(Role(clients=[10])), "client-limited"), (User(Role(sites=[3])), "site-limited"),
                       (User(Role(clients=[10], sites=[3])), "client and site limited"), (User(None), "no role"), (None, "no user")):
     must(wide.filter_by_role(person).is_none is True, f"{label} sees no row")
 real = adapter.report_scope_ids
@@ -62,7 +76,7 @@ def boom(user):
 
 adapter.report_scope_ids = boom
 must(wide.filter_by_role(User(Role(clients=[10]))).is_none is True, "an adapter error gives no rows and does not raise")
-must(wide.filter_by_role(User(superuser=True)).is_none is True, "an adapter error gives no rows, even for a superuser")
+must(wide.filter_by_role(User(superuser=True)).is_none is False, "1.17.30: the scope adapter is not used for a server-wide model")
 adapter.report_scope_ids = real
 
 # ---- model_row_scope -----------------------------------------------------------------------------------------------------------------

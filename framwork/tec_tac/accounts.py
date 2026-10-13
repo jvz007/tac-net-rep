@@ -21,8 +21,9 @@ The module still checks the invite token and the emailed code before it calls. C
 That is an accepted limit (AD-31 condition 5, Johan, 14 October 2026). The caller check itself is AD-31 conditions 1 and 2.
 
 ``check_available`` (1.17.29) is a read for the create step of an invitation. It has the same caller rule as ``create_user`` and answers taken or
-free for a username and an email, and nothing else about any user. Core cannot see whether a person is signed in, so the module calls it only from
-the signed-in create step and rate-limits it (docs/accounts-contract.md).
+free for a username and an email, and nothing else about any user. Since 1.17.30 (AD-34 condition 4) it also takes ``invited_by_id``, re-checks
+that inviter as ``create_user`` does and keeps a Core rate limit per inviter, because Core cannot see whether a person is signed in. The module
+still calls it only from the signed-in create step and keeps its own limit (docs/accounts-contract.md).
 """
 from __future__ import annotations
 
@@ -32,6 +33,7 @@ from dataclasses import dataclass
 from accounts.models import Role, User
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.validators import UnicodeUsernameValidator
+from django.core.cache import cache
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import validate_email
 from django.db import IntegrityError, transaction
@@ -43,7 +45,7 @@ from .rbac import is_effective_superuser, tactical_permission_flags
 logger = logging.getLogger("tec_tac.accounts")
 
 CAPABILITY_ID = "core.accounts"
-CAPABILITY_VERSION = "1.1.0"
+CAPABILITY_VERSION = "1.2.0"
 CALLERS = ("userinvite",)  # Core decides this list (AD-26 condition 5); a module cannot add itself
 PURPOSE = "accept-invite"  # the only purpose; a caller cannot choose it
 MANAGE_FLAG = "can_manage_accounts"  # the flag Tactical's own POST /accounts/users/ needs; no second gate (AD-5)
@@ -52,9 +54,16 @@ EMAIL_MAX = 254
 NAME_MAX = 150
 AUDIT_OBJECT_TYPE = "user"
 AUDIT_MESSAGE = "Tactical user created from an accepted invite."
+# 1.17.30 (AD-34 condition 4): Core's own limit on check_available, per inviter, counted only after the inviter check passes.
+CHECK_WINDOW_SECONDS = 600
+CHECK_WINDOW_LIMIT = 30
+CHECK_DAY_SECONDS = 86400
+CHECK_DAY_LIMIT = 300
+CHECK_CACHE_PREFIX = "tec_tac:accounts:check_available:"  # then the inviter id and the window name; never a username or an email
 ERROR_CODES = (
     "invalid_input", "username_taken", "email_taken", "weak_password", "role_not_found", "role_not_grantable",
     "inviter_not_allowed", "caller_not_allowed", "accounts_permission_required", "audit_failed",
+    "rate_limited", "rate_check_unavailable",
 )
 
 
@@ -106,6 +115,14 @@ class AccountsPermissionDenied(AccountsError):
 
 class AuditFailed(AccountsError):
     code = "audit_failed"
+
+
+class RateLimited(AccountsError):
+    code = "rate_limited"
+
+
+class RateCheckUnavailable(AccountsError):
+    code = "rate_check_unavailable"
 
 
 @dataclass(frozen=True)
@@ -174,6 +191,30 @@ def _inviter_allowed(invited_by_id: int) -> None:
         raise InviterNotAllowed("The person who sent this invite can no longer create accounts.")
     if not tactical_permission_flags(inviter, (MANAGE_FLAG,))[MANAGE_FLAG]:
         raise InviterNotAllowed("The person who sent this invite can no longer create accounts.")
+
+
+def _count_hit(key: str, timeout: int) -> int:
+    """One more answered call in a fixed window (Django's SimpleRateThrottle pattern: add, then incr)."""
+    cache.add(key, 0, timeout)
+    try:
+        return cache.incr(key)
+    except ValueError:  # the key expired between add and incr
+        cache.set(key, 1, timeout)
+        return 1
+
+
+def _check_rate(invited_by_id: int) -> None:
+    """Core's per-inviter limit for check_available. A cache error refuses (nothing is answered); a limit hit logs a warning, no audit row."""
+    base = f"{CHECK_CACHE_PREFIX}{invited_by_id}"
+    try:
+        in_window = _count_hit(f"{base}:window", CHECK_WINDOW_SECONDS) <= CHECK_WINDOW_LIMIT
+        in_day = in_window and _count_hit(f"{base}:day", CHECK_DAY_SECONDS) <= CHECK_DAY_LIMIT
+    except Exception:
+        logger.exception("check_available rate counter unavailable; refusing the call.")
+        raise RateCheckUnavailable("The check could not be made right now. Try again in a moment.") from None
+    if not (in_window and in_day):
+        logger.warning("check_available rate limit reached for inviter id %s.", invited_by_id)
+        raise RateLimited("Too many checks. Wait a while and try again.")
 
 
 def _grantable_role(role_id: int):
@@ -280,16 +321,21 @@ def create_user(*, username, email, first_name, last_name, role_id, password, in
     return CreatedUser(user_id=user.pk, username=user.username, role_id=role.pk)
 
 
-def check_available(username, email) -> Availability:
-    """Is this username or email free? A read for the signed-in create step of an invitation (1.17.29, capability core.accounts 1.1.0).
+def check_available(username, email, invited_by_id) -> Availability:
+    """Is this username or email free? A read for the signed-in create step of an invitation (1.17.29; invited_by_id required since 1.17.30, core.accounts 1.2.0).
 
-    Same verified caller rule as create_user (CallerNotAllowed), and the same case-insensitive lookups. When both clash, ``status`` is
-    ``username_taken``, the order create_user uses, and both flags are true. No audit row, no write, no transaction, and nothing about the
-    matching user is returned. Core cannot see whether a person is signed in: the module calls this only from the signed-in step and rate-limits it.
+    Order: the verified caller (CallerNotAllowed, nothing read), input cleaning (invalid_input), the inviter re-check as create_user does
+    (inviter_not_allowed: exists, active, not an installer user, still holds can_manage_accounts), Core's rate limit per inviter (rate_limited,
+    rate_check_unavailable), then the same case-insensitive lookups as create_user. When both clash, ``status`` is ``username_taken``, the
+    order create_user uses, and both flags are true. No audit row, no write, no transaction, and nothing about the matching user is returned.
+    The module still calls this only from the signed-in create step and keeps its own limit (AD-34 condition 4).
     """
     _verified_caller()
     username = _username(username)
     email = _email(email)
+    invited_by_id = _positive_id(invited_by_id, "The inviter")
+    _inviter_allowed(invited_by_id)
+    _check_rate(invited_by_id)
     username_taken, email_taken = _clashes(username, email)
     status = "username_taken" if username_taken else "email_taken" if email_taken else "free"
     return Availability(status=status, username_taken=username_taken, email_taken=email_taken)
@@ -321,18 +367,25 @@ def accounts_contract_metadata() -> dict:
         "operations": ["create_user", "list_grantable_roles", "check_available"],
         "availability_statuses": ["username_taken", "email_taken", "free"],
         "check_available": (
-            "check_available(username, email) -> Availability(status, username_taken, email_taken); same verified caller rule as create_user; "
-            "case-insensitive; a read with no audit row; returns no user detail. The module calls it only from the signed-in create step and rate-limits it (AD-31)."
+            "check_available(username, email, invited_by_id) -> Availability(status, username_taken, email_taken); same verified caller rule as create_user; "
+            "invited_by_id is required (1.17.30) and Core re-checks that the inviter exists, is active, is not an installer user and still holds can_manage_accounts "
+            "(inviter_not_allowed); Core limits each inviter to 30 answered calls per 10 minutes and 300 per day, counted after that check (rate_limited, "
+            "rate_check_unavailable when the counter fails); case-insensitive; a read with no audit row; returns no user detail. The module still calls it only "
+            "from the signed-in create step and keeps its own limit (AD-31, AD-34 condition 4)."
         ),
-        "accepted_decisions": ["AD-31"],
-        "limits": "Core does not verify the invite token or the emailed code; the module does (AD-31 condition 5, an accepted limit).",
+        "accepted_decisions": ["AD-31", "AD-34"],
+        "limits": (
+            "Core does not verify the invite token or the emailed code; the module does (AD-31 condition 5, an accepted limit). "
+            "check_available has a Core limit of 30 answered calls per 10 minutes and 300 per day for each inviter (AD-34 condition 4); the module keeps its own."
+        ),
+        "check_available_limits": {"per_window": CHECK_WINDOW_LIMIT, "window_seconds": CHECK_WINDOW_SECONDS, "per_day": CHECK_DAY_LIMIT},
         "callers": list(CALLERS),
         "purpose": PURPOSE,
         "errors": list(ERROR_CODES),
         "superuser_roles": "refused by create_user while CQ86 is open; list_grantable_roles lists them to an effective superuser only",
         "creates_totp_key": False,
         "audit": {"module_id": "core", "action": "add", "object_type": AUDIT_OBJECT_TYPE, "strict": True, "rows_per_success": 1},
-        "requires_framework": ">=1.17.27 (check_available: >=1.17.29)",
+        "requires_framework": ">=1.17.27 (check_available: >=1.17.30, with invited_by_id)",
     }
 
 

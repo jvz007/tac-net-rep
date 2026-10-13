@@ -218,14 +218,18 @@ objects = scoped_report_manager(server_wide=True)
 
 - `server_wide` is opt-in and must be a bool. `True` together with `client`, `site` or `include_unassigned=True` is refused when the manager
   is declared (`ReportingRegistrationError`), because the data has no client or site.
-- `filter_by_role` is the fail-closed rule a pathless model already had. An unrestricted person (a superuser, a role-level superuser, or a
-  role with neither `can_view_clients` nor `can_view_sites`, as Tactical's own rule) sees every row. A scoped person sees none. No role, and any
-  error, sees none. Core never raises, because Tactical treats a raised `filter_by_role` as no scope.
+- Since Core 1.17.30 (AD-34 condition 3, Johan CQ91 b), `filter_by_role` shows the rows to **effective superusers only**: a Django superuser or
+  a role with `is_superuser`. A role with neither `can_view_clients` nor `can_view_sites` (Tactical's own "unrestricted" rule, which Core 1.17.29
+  used for these models) no longer sees them. A scoped role, no role, no user, an installer user and any error see none. Core never raises,
+  because Tactical treats a raised `filter_by_role` as no scope. Server modules will get their own role system later (AD-34 condition 4,
+  Johan to plan); until then the rule is superusers only. A manager that is not `server_wide` keeps the client and site rule above.
 - `model_row_scope` reports `enforced` true and `server_wide` true for such a model. A pathless `scoped_report_manager()` without the flag stays
   `enforced` false, so a module that has not opted in behaves exactly as before and Report Manager still refuses it.
 - Report Manager reads only `enforced`, so it needs no change.
 - Report Manager's own report permission still decides who may run a report at all. A scheduled report run with no signed-in user stays
-  unscoped by Tactical (see Limits), so the same limit holds for server-wide rows.
+  unscoped by Tactical (see Limits), so the same limit holds for server-wide rows: Core's row filter is never called for it, and a schedule made
+  by a superuser could send those rows to any recipient. Report Manager's own permission decides who may schedule. Johan has been asked
+  whether this is acceptable (CQ93); until he answers, Core leaves it as it is.
 
 ### Reading the result
 

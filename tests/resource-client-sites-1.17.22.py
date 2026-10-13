@@ -119,7 +119,7 @@ must(len(AUDITS) == 2, AUDITS)
 
 # 11. metadata
 meta = resources.resource_contract_metadata()
-must(meta["version"] == "1.8.0" and resources.CONTRACT_VERSION == "1.8.0", meta["version"])  # 1.8.0 (Core 1.17.25, CQ79)
+must(meta["version"] == "1.9.0" and resources.CONTRACT_VERSION == "1.9.0", meta["version"])  # 1.8.0 (Core 1.17.25, CQ79)
 must(meta["version"].split(".")[0] == "1", "still major 1")
 must(meta["resource_types"]["client"]["fields"][5] == "sites" and meta["resource_types"]["site"]["fields"][6] == "client_name", "fields")
 must("client_sites" in meta and "site_client_name" in meta and "role_reads" in meta and "role_scope_lists" in meta, sorted(meta))
@@ -127,7 +127,7 @@ must("create_client" in meta["mutation_contracts"] and "create_site" in meta["mu
 
 # 12. docs and contracts name the rule
 doc = (ROOT / "docs" / "resource-directory.md").read_text(encoding="utf-8")
-must("Contract version: `1.8.0`" in doc and "client_name" in doc and "List clients only" in doc, "docs/resource-directory.md")
+must("Contract version: `1.9.0`" in doc and "client_name" in doc and "List clients only" in doc, "docs/resource-directory.md")
 contracts = (ROOT / "framwork" / "tec_tac" / "contracts.py").read_text(encoding="utf-8")
 must("core.resources 1.5.0" in contracts, "contracts.py")
 

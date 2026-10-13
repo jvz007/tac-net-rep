@@ -14,11 +14,13 @@ from . import resources_adapter as adapter
 from .capabilities import register_capability
 
 CONTRACT_ID = "core.resources"
-CONTRACT_VERSION = "1.8.0"
+CONTRACT_VERSION = "1.9.0"
 RESOURCE_TYPES = ("client", "site", "agent")
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 500
 MAX_PAGE_NUMBER = 10000
+# AD-34 condition 1: the only modules that may build a non-global service context. The actor must name the same module.
+SERVICE_CONTEXT_CALLERS = ("userinvite",)
 CLIENT_MANAGE_PERMISSION = "core.resources.clients.manage"
 SITE_MANAGE_PERMISSION = "core.resources.sites.manage"
 
@@ -29,6 +31,8 @@ SITE_MANAGE_PERMISSION = "core.resources.sites.manage"
 # ids are Automation's; Core holds only the ids), and the alert_template_id and policy_id list filters.
 # 1.8.0 (Core 1.17.25, Johan CQ79) moves a site on Tactical's rule: Edit sites and the site's own scope decide, with no destination
 # client grant check, and a same-client update needs the site's write scope too (a read-only scope is refused). No record shape changed.
+# 1.9.0 (Core 1.17.30, AD-34 condition 1) lets the module userinvite (only) call trusted_service_context(global_access=False): a
+# service context with no resource visibility, for a caller Core verified from the call stack. Additive; global_access=True is unchanged.
 CLIENT_FIELDS = ("type", "id", "name", "active", "alert_template_id", "sites", "workstation_policy_id", "server_policy_id", "block_policy_inheritance")
 SITE_FIELDS = ("type", "id", "name", "client_id", "active", "alert_template_id", "client_name", "workstation_policy_id", "server_policy_id", "block_policy_inheritance")
 AGENT_FIELDS = (
@@ -99,7 +103,8 @@ def user_context(user) -> ResourceAccessContext:
 def trusted_service_context(*, actor: str, purpose: str, global_access: bool = False) -> ResourceAccessContext:
     """Create an explicit audited non-interactive trusted execution context.
 
-    Global resource visibility is deliberately opt-in.  Granting it is a
+    Global resource visibility is deliberately opt-in.  A non-global context (``global_access=False``) is for the module userinvite
+    only (AD-34 condition 1): it carries the actor and purpose but no visibility, and writes no audit row.  Granting global access is a
     security-relevant event, so Core writes a strict Tactical audit record
     before returning the context. Browser callers never use this path.
     """
@@ -108,7 +113,16 @@ def trusted_service_context(*, actor: str, purpose: str, global_access: bool = F
     if not actor or not purpose:
         raise ResourceValidationError("Trusted service contexts require actor and purpose.")
     if not global_access:
-        raise ResourcePermissionDenied("Trusted service resource access requires explicit global_access=True in contract v1.")
+        # AD-34 condition 1: a verified module caller from the Core-held list, naming itself as the actor. Fail closed otherwise,
+        # with no audit row and no hint of the list. The context sees no resources: trusted_global stays False.
+        # Imported here: standalone test loaders have no parent package.
+        from .caller_identity import calling_module_for_core_provider
+
+        identity = calling_module_for_core_provider(provider_file=__file__)
+        caller_id = getattr(identity, "module_id", None)
+        if caller_id not in SERVICE_CONTEXT_CALLERS or actor != caller_id:
+            raise ResourcePermissionDenied("Trusted service resource access requires explicit global_access=True in contract v1.")
+        return ResourceAccessContext(service_actor=actor, service_purpose=purpose[:500], trusted_global=False)
 
     class _ServiceAuditActor:
         is_authenticated = True
@@ -1005,7 +1019,7 @@ def resource_contract_metadata() -> dict[str, Any]:
         },
         "authorization": {
             "interactive": "Authenticated Tactical user + can_list_<resource> + Tactical filter_by_role scope.",
-            "service": "Explicit trusted_service_context(..., global_access=True) for reads only; service contexts cannot mutate resources in contract 1.x.",
+            "service": "Explicit trusted_service_context(..., global_access=True) for reads only; service contexts cannot mutate resources in contract 1.x. Since 1.9.0 (Core 1.17.30, AD-34 condition 1) trusted_service_context(actor, purpose, global_access=False) is available to the module userinvite only, when the actor names that module and Core verifies the caller from the call stack: the context has no resource visibility (every list, get and write is refused) and writes no audit row. Every other caller is refused.",
             "write": "Authenticated Tactical user + Tactical can_manage_clients/can_manage_sites + Tec-Tac Core resource-manage RBAC permission + Tactical native object write scope (_has_perm_on_client/_has_perm_on_site semantics).",
         },
         "active_semantics": "Tactical hard-deletes client/site rows. Core deletion first relocates agents when required, then deletes atomically. Existing rows are active in contract v1; active=false returns no rows.",

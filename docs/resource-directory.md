@@ -1,7 +1,7 @@
 # Core Resource Directory
 
 Contract ID: `core.resources`  
-Contract version: `1.8.0`  
+Contract version: `1.9.0`  
 Python namespace: `tec_tac.resources`
 
 ## Purpose
@@ -130,6 +130,14 @@ ctx = trusted_service_context(
 page = list_agents(context=ctx, page=1, page_size=100)
 ```
 
+Since 1.9.0 (Core 1.17.30, AD-34 condition 1) the module `userinvite`, and no other module, may build a service context without global access:
+
+```python
+ctx = trusted_service_context(actor="userinvite", purpose="send an invitation email", global_access=False)
+```
+
+Core verifies the caller from the call stack (a private helper, see `docs/caller-identity.md`). The actor must name the same module. Any other caller, an unverified caller, a disabled module or a different actor is refused with `resource_permission_denied`, and Core says nothing about who is allowed. The context carries the actor and purpose and nothing else: it has no resource visibility, so every list, get and write on it is still refused. It writes no audit row. A module such as Global Settings reads only `is_service`, `service_actor` and `service_purpose` from it. `global_access=True` is unchanged. Any further module that needs this path needs Johan's sign-off first (AD-34 condition 2).
+
 There is no implicit service/global access when the user is absent. Trusted service contexts are read-only in contract 1.x and cannot call create/update operations.
 
 ### Read operations
@@ -142,7 +150,7 @@ There is no implicit service/global access when the user is absent. Trusted serv
 - `get_agent(agent_id, context=...)`
 - `resolve_resource(resource_type, resource_id, context=...)`
 - `user_context(user)`
-- `trusted_service_context(actor=..., purpose=..., global_access=True)`
+- `trusted_service_context(actor=..., purpose=..., global_access=True)` (`global_access=False` for `userinvite` only, since 1.9.0)
 
 ### Scope operations (since 1.4.0, framework >=1.17.17)
 

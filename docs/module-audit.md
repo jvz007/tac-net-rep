@@ -131,6 +131,24 @@ Since 1.17.20 the action `custom:operation-failed` is Core-only. Core writes it 
 `docs/tactical-operations.md`), so `record()` refuses it with `AuditContractError`. `custom:outcome-unknown` stays open to a module that
 writes its own outcome row.
 
+## Deny rows from a server module (Core 1.17.30, AD-34)
+
+A module whose signed manifest category is `server` (User Invite is the first) can refuse a person who holds none of its permissions and
+still leave a trace. `audit.record` accepts that person as the actor when all of these hold:
+
+* the action is exactly `deny` (no other action, no `custom:` action);
+* the module is enabled, not legacy and its category is `server` (a `core`, `premium`, `test` or empty category is refused);
+* Core verifies from the call stack that the caller is that same module. A missing caller, another module, a Core frame, a library
+  frame, a generated frame and a disabled module all fail closed with `AuditContractError`;
+* the person is signed in and is not an installer user.
+
+Core marks the row `debug_info.actor_authority = server-module-deny`. A caller cannot supply it. The row names the person (`actor_kind`
+human, `actor_identity` the username). A person who does hold a module permission gets the normal row, with no `actor_authority`.
+Core's own rows (`record_core_refusal`, `record_browser_declared`, the Tactical operation executor) never take this path. The check
+never raises: any error is a refusal. The helper that verifies the caller is Core-private and no module may import it.
+This is AD-34 conditions 1 and 2. Any further module needs Johan's sign-off in chat (AD-34 condition 2). Pinned by
+`tests/audit-server-module-deny-1.17.30.py`.
+
 ## Standard action vocabulary
 
 Use these values wherever they fit:
