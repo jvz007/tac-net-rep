@@ -375,7 +375,9 @@ def norm(source: str) -> str:
 
 models_tree = ast.parse((APP / "models.py").read_text(encoding="utf-8"))
 model_node, model_fields = class_fields(models_tree, "TecTacModulePreference")
-must(model_fields == ["id", "user", "module_id", "name", "value", "updated_at"], f"model fields: {model_fields}")
+# 1.17.36: the model no longer declares id (the implicit id matches migration 0031), so the list has no "id". The id is covered by
+# tests/migration-model-id-agreement-1.17.36.py.
+must(model_fields == ["user", "module_id", "name", "value", "updated_at"], f"model fields: {model_fields}")
 model_src = norm(ast.unparse(model_node))
 must('name="tectac_modpref_unique"' in model_src and '("user", "module_id", "name")' in model_src, "model constraint")
 must('related_name="tec_tac_module_preferences"' in model_src, "model related name")

@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.35",
+  "version": "1.17.36",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "66c389576a517f455059348a31b1788ed1ff07f441e7bbb7d20f47579c019812"
     },
     {
-      "path": "RELEASE_NOTES_1.17.35.md",
-      "size": 9830,
-      "sha256": "e2b10a68a16b94e6a7446575288551c25584f5660722c83d0a2194522cfc776c"
+      "path": "RELEASE_NOTES_1.17.36.md",
+      "size": 4591,
+      "sha256": "7eca568a8cc62e2aa2438b7a2e221bd42449e970d8511820b0474e89ee3279c3"
     },
     {
       "path": "VERSION",
       "size": 7,
-      "sha256": "81bd72739a08bfdcfb2cc2ca931fb439633d75ad204a717d1b619f972f87333b"
+      "sha256": "12047f630951a8dcb628682646d22e312418d506e6340830f3ee7df1eb822217"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -1202,6 +1202,11 @@
       "sha256": "77c3503c597664bfa88413a70c382149e3d4623a85f62ce160ddd77b6b60614a"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.35.md",
+      "size": 9830,
+      "sha256": "e2b10a68a16b94e6a7446575288551c25584f5660722c83d0a2194522cfc776c"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.4.md",
       "size": 12393,
       "sha256": "475a15200a394354c6c71737e7991ce1ceab3c9818db1b119d1b7e74e6690bea"
@@ -1858,8 +1863,8 @@
     },
     {
       "path": "framwork/tec_tac/models.py",
-      "size": 25377,
-      "sha256": "8847bf96eeacba935746c5e40e70cad98d8b4b69be4fbb0dc17c4c52a9893e27"
+      "size": 25551,
+      "sha256": "d31a1dba50feeaf0f561cb4c3e5cbbabbb244779c3403665268e6cfdc0b40fdf"
     },
     {
       "path": "framwork/tec_tac/module_category.py",
@@ -2339,7 +2344,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "dc2f7d3c9ad786834957cf6da08db27bb89fb4e095e6494aadbc0452d07d41f8"
+      "sha256": "dbe56a36dbff646a62afb586c0854360d122cbdc42ffadb2dcdfeabbae51fb46"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2877,6 +2882,11 @@
       "sha256": "3508908eedaf86aa0ea72f5524b9493d328adffc20b3aa74f5214aff80ec89fc"
     },
     {
+      "path": "tests/migration-model-id-agreement-1.17.36.py",
+      "size": 14165,
+      "sha256": "0e3611f035366cf6701dfec3480f0d0a4afb4d5292503f359993283188e6a2ac"
+    },
+    {
       "path": "tests/module-artifact-immutable-claim.py",
       "size": 8032,
       "sha256": "119b24a304edb75c42eb5897f40086cd9823905a80047099fa36a3024d940bd4"
@@ -3018,8 +3028,8 @@
     },
     {
       "path": "tests/module-preferences-1.17.35.py",
-      "size": 22162,
-      "sha256": "79e256564ea978881fa919cbef81322de0a3089511cabb3da62f81b03e620413"
+      "size": 22336,
+      "sha256": "cf9f456b47148571a62a716727322754ccbd84cbea4544e474cd65145214b99b"
     },
     {
       "path": "tests/module-preferences-runtime-1.17.35.py",

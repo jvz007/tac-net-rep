@@ -502,7 +502,7 @@ class TecTacNoticeLedger(models.Model):
     KIND_NOTICE = "notice"
     KIND_EMAIL = "email"
 
-    id = models.BigAutoField(primary_key=True)
+    # The id is implicit on purpose (1.17.36): migration 0030 creates it as Django's implicit id, so the model must not redeclare it.
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -534,7 +534,7 @@ class TecTacModulePreference(models.Model):
     delete). No secret, token or personal data may be stored; this is the person's own display choice.
     """
 
-    id = models.BigAutoField(primary_key=True)
+    # The id is implicit on purpose (1.17.36): migration 0031 creates it as Django's implicit id, so the model must not redeclare it.
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
