@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.31",
+  "version": "1.17.32",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "66c389576a517f455059348a31b1788ed1ff07f441e7bbb7d20f47579c019812"
     },
     {
-      "path": "RELEASE_NOTES_1.17.31.md",
-      "size": 10096,
-      "sha256": "7fa4fe2cfb5def1dd44326b09d8e949a2478121f71d0bae21d352c4d8789529f"
+      "path": "RELEASE_NOTES_1.17.32.md",
+      "size": 11860,
+      "sha256": "a19e6488579efd428f31aceee1d62a77b44d569815ec3340540412ef4209d891"
     },
     {
       "path": "VERSION",
       "size": 7,
-      "sha256": "9b64fa5f15879c75a7d0271b289f57aabceac64fcfb23dfa8e886e4146496de9"
+      "sha256": "b39b7dc0768324e7c430be483538a65d9588ff4a2bffad0e8b1355e7ea7eb35f"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -1177,6 +1177,11 @@
       "sha256": "3ea33060315c1b7cefea0cb0cc983d29cb104ef54b67d4894afa9561247f74a6"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.31.md",
+      "size": 10096,
+      "sha256": "7fa4fe2cfb5def1dd44326b09d8e949a2478121f71d0bae21d352c4d8789529f"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.4.md",
       "size": 12393,
       "sha256": "475a15200a394354c6c71737e7991ce1ceab3c9818db1b119d1b7e74e6690bea"
@@ -1338,8 +1343,8 @@
     },
     {
       "path": "docs/tactical-websocket.md",
-      "size": 8502,
-      "sha256": "f9bedc3bf3357eee71372adbb17c44afd4ad5ccdb7440cf57730c98fc183197e"
+      "size": 11014,
+      "sha256": "92d12cb006657dc39ba7329aa2779d81fe0902cdc4f1b9bb5fb98e41d56b5308"
     },
     {
       "path": "docs/tracker-acceptance-1.15.173.md",
@@ -1608,8 +1613,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 220842,
-      "sha256": "db36b86942aafee9d5e60845ce8a5b5625f5304b774f79fb2d0a9b9fe26ad677"
+      "size": 230546,
+      "sha256": "c4cc261ccfa3a0940a82d13e18785638d9231e18dc7e150b41dc1f134d2ce2a3"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -2058,13 +2063,13 @@
     },
     {
       "path": "framwork/tec_tac/tactical_websocket.py",
-      "size": 17210,
-      "sha256": "88b8d65193317e4be8b92f435bdd5e004ab98717818f9460fc0de8b261d4eb78"
+      "size": 17277,
+      "sha256": "ec823cc4028c1ee5a744a8cef5cbeb006ca2c49a24db55ed72f928107194aa63"
     },
     {
       "path": "framwork/tec_tac/tactical_websocket_consumers.py",
-      "size": 6997,
-      "sha256": "e2a2b451ea14de0c08661807107a13ec3b4c3f1959b7af33af8820c921c93990"
+      "size": 9830,
+      "sha256": "6111ea1dafcf878b5368c590e3dbd627150695e4d089a9b6c0d20d1f51009c0f"
     },
     {
       "path": "framwork/tec_tac/tactical_websocket_views.py",
@@ -2289,7 +2294,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "7dc6a8aca0484fef7e488281aa1f81fd648cea24dfdd354d2c0eaee14fb0dcf3"
+      "sha256": "93565f358ec45ea53efcbcfd48956f51318e561a07daef78049bd727f0796c58"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2458,13 +2463,18 @@
     },
     {
       "path": "tests/browser-contract-catalog-1.15.170.py",
-      "size": 2986,
-      "sha256": "00242a3164cfecb35379b0a7238ab996b72056d501e54ff2a4134539c8421505"
+      "size": 3124,
+      "sha256": "be33b99f88728f83583ce224904ed2504de0a7e42dc124c768b36c388f4fdec2"
     },
     {
       "path": "tests/browser-contract-popup-confirm-1.17.23.py",
       "size": 5377,
       "sha256": "9a3a4244124ec807d1585867b9710ec04b46b253b14d5ff167f8f8bbd7dc10e6"
+    },
+    {
+      "path": "tests/browser-contract-rows-1.17.32.py",
+      "size": 8842,
+      "sha256": "484372c5de9839d10f5ad54ab84246ff87b458942a83a603c29773eb5df9bdd1"
     },
     {
       "path": "tests/browser-contract-runtime-surface-1.17.2.py",
@@ -3412,6 +3422,11 @@
       "sha256": "2ab6297852531f37a72bcba1c2d489530438e948d6319b2f8e7a993f6a69e3e8"
     },
     {
+      "path": "tests/runtime-script-imports-1.17.32.py",
+      "size": 7904,
+      "sha256": "ca465ff0307490d23b2a93946a426e26e0bafa8dfd64f9d7d93c6018f4cb4e55"
+    },
+    {
       "path": "tests/runtime-settings-1.17.1.py",
       "size": 12791,
       "sha256": "22460e61ab2c06be6b6e18314b3e63c632fb5829fbefa499f283023bd74a5b0f"
@@ -4034,7 +4049,12 @@
     {
       "path": "tests/tactical-websocket-consumer-1.17.31.py",
       "size": 16636,
-      "sha256": "6601bf0f0fe36401543ffe29a7a20e25f0218f613ca6489ea52cdb963ea33f56"
+      "sha256": "42aac70443f72d38571441252a33d0babfb9f3dccbb4841b94db4d19131b67c3"
+    },
+    {
+      "path": "tests/tactical-websocket-origin-1.17.32.py",
+      "size": 12426,
+      "sha256": "111b00b32f0cf84323e3cfb19df9d20844cc536e1dc2cf36afaf16ec0894f038"
     },
     {
       "path": "tests/tactical-websocket-route-1.17.31.py",
@@ -4042,14 +4062,14 @@
       "sha256": "0b482bc6bdeaae10a531146b87d420c6c4e2d119047795c40eee5ed563eca12a"
     },
     {
-      "path": "tests/tactical-websocket-runtime-1.17.31.py",
-      "size": 5197,
-      "sha256": "af0c3f532c8bc2cd425a2ab00a8d85f166ca859471b7521b1bb369db90321c21"
+      "path": "tests/tactical-websocket-runtime-1.17.32.py",
+      "size": 10784,
+      "sha256": "7960f31cefe9a0cc5b7786d302096d9380135ff9697b3a9c5c1c7b242984f080"
     },
     {
       "path": "tests/tactical-websocket-ticket-1.17.31.py",
       "size": 31690,
-      "sha256": "84d53f3df82086569e67fc9bc7e0ad228a2f91547b5122560c634b9f8c891c78"
+      "sha256": "9101b8b895c82f77d9d26118fe79786ad9fdb0dc0b2b28b61707d241fe95412b"
     },
     {
       "path": "tests/test_core_leftovers_1_15_139.py",

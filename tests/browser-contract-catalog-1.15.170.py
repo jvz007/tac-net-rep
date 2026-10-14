@@ -39,6 +39,8 @@ expected = {
     'ui.authenticated.tactical-operation',
     'ui.authenticated.tactical-permissions',
     'ui.authenticated.tactical-scope',
+    'ui.authenticated.websocket',  # added 1.17.32 (the pinned set moves with the rows)
+    'ui.authenticated.services',  # added 1.17.32
     'ui.authenticated.permissions',
     'ui.public.sso-providers',
     'ui.public.module-runtime',

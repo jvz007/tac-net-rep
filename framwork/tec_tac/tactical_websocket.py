@@ -301,7 +301,7 @@ def tactical_websocket_contract_metadata() -> dict[str, Any]:
         "ticket": {"ttl_seconds": TICKET_TTL_SECONDS, "single_use": True, "store": "Django cache (Tactical Redis), key holds the SHA-256 of the ticket only"},
         "close_codes": {
             "4401": "ticket missing, expired, used or unknown, or the sign-in behind it ended (revoked, expired, Knox token gone, user disabled)",
-            "4003": "Origin not the request host, or the Tactical flag or agent scope no longer holds",
+            "4003": "Origin is neither the request host nor a frontend origin from Tactical's CORS_ORIGIN_WHITELIST, or the Tactical flag or agent scope no longer holds",
             "4503": "Tactical's terminal consumer could not be loaded; Tactical itself still runs",
         },
         "messages": "Tactical's own start, input, resize and kill messages, and its trmmcli.output, terminal_error and terminal_info answers, unchanged (AD-25).",

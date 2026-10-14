@@ -36,23 +36,75 @@ def clean_shell(value) -> str:
     return text[:SHELL_MAX_CHARS] or "default"
 
 
+ORIGIN_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def normal_origin(value) -> str | None:
+    """scheme://host[:port] in lower case, with the default port (443 for https, 80 for http) dropped. None when the value is not a
+    plain http(s) origin: a path, query, fragment, user name, '*', 'null', a number, a regular expression or a space in it."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip().lower()
+    if not text or text in ("*", "null") or not all(ch.isascii() and ch.isprintable() and not ch.isspace() for ch in text):
+        return None
+    try:
+        parts = urlsplit(text)
+        port = parts.port
+    except ValueError:
+        return None
+    if parts.scheme not in ORIGIN_DEFAULT_PORTS or not parts.hostname:
+        return None
+    if parts.path not in ("", "/") or parts.query or parts.fragment or "@" in parts.netloc:
+        return None
+    host = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
+    if port is not None and port != ORIGIN_DEFAULT_PORTS[parts.scheme]:
+        host = f"{host}:{port}"
+    return f"{parts.scheme}://{host}"
+
+
+def configured_frontend_origins() -> set[str]:
+    """The frontend origins Tactical's own CORS settings name: CORS_ORIGIN_WHITELIST and, when present, CORS_ALLOWED_ORIGINS.
+
+    Read from server settings only, never from a request, a header or a ticket. Entries that are not plain http(s) origins are ignored
+    (see normal_origin), and so are regular expressions and allow-all settings: narrower than Tactical's CORS on purpose. A settings read
+    that fails gives an empty set, so only the same-host rule applies.
+    """
+    try:
+        # imported here, not at the top, so this module still loads where Django's settings are not configured
+        from django.conf import settings
+
+        lists = [getattr(settings, name, None) for name in ("CORS_ORIGIN_WHITELIST", "CORS_ALLOWED_ORIGINS")]
+    except Exception:  # noqa: BLE001 - any failure to read settings means no frontend origin (fail closed)
+        logger.warning("Could not read Tactical's CORS settings; the terminal socket accepts the request host only.")
+        return set()
+    origins: set[str] = set()
+    for entries in lists:
+        if isinstance(entries, (list, tuple, set, frozenset)):
+            origins.update(origin for origin in map(normal_origin, entries) if origin)
+    return origins
+
+
 def origin_allowed(scope) -> bool:
-    """A browser that sends an Origin must come from the same host as the request. No Origin is allowed: the ticket already blocks
-    use from another site, because the ticket is never sent by the page of another site."""
+    """A browser that sends an Origin must come from the same host as the request, or from a frontend origin that Tactical's CORS
+    settings name (configured_frontend_origins). That second case is the split layout: the API on one host, the web UI on another.
+    No Origin is allowed: the ticket already blocks use from another site, because the ticket is never sent by the page of another site.
+    A null, empty or malformed Origin is refused. The frontend list comes from server settings only, never from the request."""
     headers = {}
     for name, value in scope.get("headers") or []:
         headers[bytes(name).lower()] = bytes(value)
     origin = headers.get(b"origin")
     if origin is None:
         return True
+    origin_text = origin.decode("latin-1").strip()
     host = headers.get(b"host", b"").decode("latin-1").strip().lower()
-    if not host:
-        return False
     try:
-        netloc = urlsplit(origin.decode("latin-1").strip()).netloc.lower()
+        netloc = urlsplit(origin_text).netloc.lower()
     except ValueError:
         return False
-    return bool(netloc) and netloc == host
+    if host and netloc and netloc == host:
+        return True
+    origin_form = normal_origin(origin_text)
+    return origin_form is not None and origin_form in configured_frontend_origins()
 
 
 def recheck(value: dict):
