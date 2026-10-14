@@ -162,7 +162,7 @@ def publish_system_notice(recipients, *, client_id: str, message: str, title: st
 
 # ---- The notice ledger (1.17.34). The dedupe record of the module failure sweep. Clear read and _prune_user never touch it. ----
 LEDGER_KINDS = frozenset({TecTacNoticeLedger.KIND_NOTICE, TecTacNoticeLedger.KIND_EMAIL})
-LEDGER_RETENTION_DAYS = 7
+LEDGER_RETENTION_DAYS = 14  # two weeks: the failure window is seven days (1.17.38), so a row older than this can never matter again
 
 
 def _ledger_kind(kind) -> str:
@@ -209,7 +209,7 @@ def ledger_count_since(kind: str, since) -> int:
 
 
 def ledger_prune(days: int = LEDGER_RETENTION_DAYS) -> int:
-    """Delete ledger rows older than ``days``. The notice window is hours, so a seven day row can never matter again."""
+    """Delete ledger rows older than ``days``. The notice window is seven days (1.17.38), so a row older than the two week retention can never matter again."""
     deleted, _ = TecTacNoticeLedger.objects.filter(created_at__lt=timezone.now() - timedelta(days=days)).delete()
     return int(deleted)
 

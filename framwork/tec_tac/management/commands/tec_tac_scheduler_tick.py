@@ -53,8 +53,9 @@ class Command(BaseCommand):
         failure_report = {}
         try:
             # 1.17.14 (CQ36): one notice per failed module job, for the superusers and the person who started it. The
-            # step never raises, and a failure here never takes the tick or Tactical down. 1.17.34: only jobs finished in the last
-            # six hours, and never again for a person the notice ledger already holds; the report counts what it left alone.
+            # step never raises, and a failure here never takes the tick or Tactical down. Since 1.17.38 only jobs finished in the
+            # last seven days count (1.17.34 used six hours). A failure is never announced again for a person the notice ledger
+            # already holds (no daily reminder); the report counts what the sweep left alone.
             from tec_tac.module_failure_notices import sweep_failed_jobs
 
             failure_notices = sweep_failed_jobs(report=failure_report)

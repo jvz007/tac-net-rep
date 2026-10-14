@@ -350,3 +350,11 @@ Core stores human/service/device provenance in Tactical AuditLog-compatible rows
 For a Tactical operation that is not `GET`, Core writes one Core-only `custom:operation-failed` row (`failure: core_refused`, metadata `code`) when
 it refuses `body_field_not_allowed`, `invalid_body`, `invalid_params`, `scope_field_required`, `invalid_correlation_id` or `invalid_audit_before`
 before calling Tactical. A module checks `error.audit`: when it is not `None`, Core has written the row and the module writes none. See `docs/tactical-operations.md`.
+
+## Core's own module preference rows (1.17.38)
+
+`core.module_preferences` (capability 1.2.0) writes its own rows, through `tec_tac.audit.record` with `module_id` `core`, for each real
+change of one person's module preference. The object type is `module_preference`, the object id is `<module_id>/<name>`, and the actions are
+`add`, `modify` and `delete`. The metadata holds `module`, `name`, `source` (`module_python` or `browser`), `module_verified`, `user_id`
+and, for `add` and `modify` only, `size_bytes`. The stored value is never in the row. The rule is AD-19 condition 5; see
+`docs/module-preferences.md`.

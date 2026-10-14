@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""1.17.35: module user preferences (core.module_preferences 1.0.0; 1.1.0 from 1.17.37), Django-free part.
+"""1.17.35: module user preferences (core.module_preferences 1.0.0; 1.1.0 from 1.17.37; 1.2.0 from 1.17.38), Django-free part.
 
 From 1.17.37 this test calls the private functions (_get, _set, _delete, _list_for) directly: the public ones verify the calling module and a
 test frame is not a module, so they refuse (tests/module-preferences-caller-1.17.37.py covers the public functions).
@@ -98,6 +98,28 @@ def enabled_extension_id(module_id):
 
 
 _stub("tec_tac.notices", NoticeError=NoticeError, enabled_extension_id=enabled_extension_id)
+
+# the audit module (1.17.38): the person check and the audit row; every row the code asks for is kept
+AUDIT_CALLS: list = []
+
+
+class AuditContractError(ValueError):
+    pass
+
+
+class AuditWriteError(RuntimeError):
+    pass
+
+
+def _resolve_module(module_id):
+    if module_id not in INSTALLED or module_id in DISABLED:
+        raise AuditContractError(f"Unknown or ambiguous Tec-Tac module_id: {module_id}")
+    return {"id": module_id, "version": "1.0.0", "permissions": ("view",), "legacy": False}
+
+
+_stub("tec_tac.audit", AuditContractError=AuditContractError, AuditWriteError=AuditWriteError, _resolve_module=_resolve_module,
+      _actor_can_use_module=lambda actor, module: getattr(actor, "allowed", True),
+      record=lambda **kwargs: AUDIT_CALLS.append(kwargs) or {"recorded": True})
 
 
 # the model: a fake table with the lookups module_preferences uses
@@ -333,13 +355,13 @@ resp = views.ModulePreferenceDetailView().put(types.SimpleNamespace(user=ALICE, 
 must(resp.status_code == 400 and resp.data["code"] == "preference_limit", resp.data)
 
 # ------------------------------------------------------------------------------------------------ 9. capability, apps.py, throttle, urls (source)
-must(mp.CAPABILITY_ID == "core.module_preferences" and mp.CAPABILITY_VERSION == "1.1.0", "capability id and version")
+must(mp.CAPABILITY_ID == "core.module_preferences" and mp.CAPABILITY_VERSION == "1.2.0", "capability id and version")
 mp.register_core_module_preferences_capability()
 reg = REGISTERED[-1]
-must(reg["id"] == "core.module_preferences" and reg["version"] == "1.1.0" and reg["module_id"] == "core", f"registered: {reg}")
+must(reg["id"] == "core.module_preferences" and reg["version"] == "1.2.0" and reg["module_id"] == "core", f"registered: {reg}")
 must(tuple(reg["operations"]) == ("get", "set", "delete", "list_for"), "the four operations")
 must(all(hasattr(reg["provider"], op) for op in ("get", "set", "delete", "list_for")), "the provider has the four operations")
-must(reg["metadata"]["requires_framework"] == ">=1.17.37" and json.dumps(reg["metadata"]), "metadata is JSON and names 1.17.37")
+must(reg["metadata"]["requires_framework"] == ">=1.17.38" and json.dumps(reg["metadata"]), "metadata is JSON and names 1.17.38")
 
 apps_tree = ast.parse((APP / "apps.py").read_text(encoding="utf-8"))
 ready = next(n for n in ast.walk(apps_tree) if isinstance(n, ast.FunctionDef) and n.name == "ready")
@@ -412,7 +434,7 @@ http = literal("HTTP_CONTRACT_DETAILS")
 must("/api/tfd/module-preferences/<str:module_id>/" in http and "/api/tfd/module-preferences/<str:module_id>/<str:name>/" in http, "the HTTP rows")
 must("PUT" in http["/api/tfd/module-preferences/<str:module_id>/<str:name>/"] and "DELETE" in http["/api/tfd/module-preferences/<str:module_id>/<str:name>/"],
      "PUT and DELETE are documented")
-must(any("core.module_preferences 1.1.0" in rule and ">=1.17.37" in rule for rule in literal("RULES")), "the rule names the capability and the framework")
+must(any("core.module_preferences 1.2.0" in rule and ">=1.17.38" in rule for rule in literal("RULES")), "the rule names the capability and the framework")
 browser_src = (APP / "contracts.py").read_text(encoding="utf-8")
 must("tec_tac.module_preferences" in browser_src and "docs/module-preferences.md" in browser_src, "the contract points at the docs")
 must((ROOT / "docs/module-preferences.md").is_file(), "the docs page exists")
@@ -430,7 +452,7 @@ catalog = {
 }
 rendered_md = render_ns["render_markdown"](catalog)
 rendered_text = render_ns["render_text"](catalog)
-for needle in ("tec_tac.module_preferences", "list_for", "/api/tfd/module-preferences/", "core.module_preferences 1.1.0"):
+for needle in ("tec_tac.module_preferences", "list_for", "/api/tfd/module-preferences/", "core.module_preferences 1.2.0"):
     must(needle in rendered_md and needle in rendered_text, f"the rendered export carries {needle!r}")
 
 print("[TEST] PASS module preferences 1.17.35")

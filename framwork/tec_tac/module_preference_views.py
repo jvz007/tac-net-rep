@@ -44,14 +44,18 @@ class ModulePreferenceDetailView(APIView):
                 status=400,
             )
         try:
-            value = module_preferences._set(request.user, name, data["value"], module_id=module_id)
+            value = module_preferences._set(
+                request.user, name, data["value"], module_id=module_id, source=module_preferences.SOURCE_BROWSER,
+            )
         except ModulePreferenceError as exc:
             return _error(exc)
         return Response({"module_id": module_id, "name": name, "value": value})
 
     def delete(self, request, module_id, name):
         try:
-            deleted = module_preferences._delete(request.user, name, module_id=module_id)
+            deleted = module_preferences._delete(
+                request.user, name, module_id=module_id, source=module_preferences.SOURCE_BROWSER,
+            )
         except ModulePreferenceError as exc:
             return _error(exc)
         return Response({"module_id": module_id, "name": name, "deleted": deleted})

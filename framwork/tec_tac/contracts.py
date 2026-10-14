@@ -780,7 +780,7 @@ CORE_CONTRACTS = (
         "import_path": "tec_tac.module_preferences",
         "name": "get",
         "kind": "python",
-        "purpose": "get(user, name, *, module_id, default=None) -> the stored value of one preference of the signed-in person for an installed, enabled module (1.17.35, capability core.module_preferences 1.1.0 from 1.17.37). Only that person's row is read; a missing row gives default. name matches [a-z0-9][a-z0-9._-]{0,63}. The calling module is verified by Core (1.17.37, AD-26): a module may use it only for its own id, and any other caller, Core included, gets ModulePreferenceError caller_not_allowed (403) before any read. Core refuses core and tec-tac, and an unknown or disabled module raises ModulePreferenceError module_not_found (404). Requires framework >=1.17.37. See docs/module-preferences.md.",
+        "purpose": "get(user, name, *, module_id, default=None) -> the stored value of one preference of the signed-in person for an installed, enabled module (1.17.35, capability core.module_preferences 1.2.0 from 1.17.38). Only that person's row is read; a missing row gives default. name matches [a-z0-9][a-z0-9._-]{0,63}. The calling module is verified by Core (1.17.37, AD-26): a module may use it only for its own id, and any other caller, Core included, gets ModulePreferenceError caller_not_allowed (403) before any read. Core refuses core and tec-tac, and an unknown or disabled module raises ModulePreferenceError module_not_found (404). Since 1.17.38 a person who may not use the module gets module_not_allowed (403) before any read. A read is not audited. Requires framework >=1.17.38. See docs/module-preferences.md.",
         "audience": "consumer/backend",
     },
     {
@@ -788,7 +788,7 @@ CORE_CONTRACTS = (
         "import_path": "tec_tac.module_preferences",
         "name": "set",
         "kind": "python",
-        "purpose": "set(user, name, value, *, module_id) -> the stored value (1.17.35). The calling module is verified by Core (1.17.37): a module may use it only for its own id, and any other caller gets caller_not_allowed (403) before anything is read or written. value is plain JSON (a scalar, a list or an object) of at most 4 KiB stored and 5 levels deep. A 51st name for one module raises preference_limit (400). invalid_name and invalid_value are raised before anything is written. Writes by one person are serialised. Not audited. No secret, token or personal data may be stored. Requires framework >=1.17.37.",
+        "purpose": "set(user, name, value, *, module_id) -> the stored value (1.17.35; capability core.module_preferences 1.2.0 from 1.17.38). The calling module is verified by Core (1.17.37): a module may use it only for its own id, and any other caller gets caller_not_allowed (403) before anything is read or written. Since 1.17.38 a person who may not use the module gets module_not_allowed (403). value is plain JSON (a scalar, a list or an object) of at most 4 KiB stored and 5 levels deep. A 51st name for one module raises preference_limit (400). invalid_name and invalid_value are raised before anything is written. Writes by one person are serialised. Since 1.17.38 each real add or modify writes one strict Core audit row (object_type module_preference, object_id <module_id>/<name>, the person as actor, the size of the value and never the value). A write that changes nothing writes no row. If that row cannot be written the change is rolled back and ModulePreferenceError audit_failed (503) is raised. No secret, token or personal data may be stored. Requires framework >=1.17.38.",
         "audience": "consumer/backend",
     },
     {
@@ -796,7 +796,7 @@ CORE_CONTRACTS = (
         "import_path": "tec_tac.module_preferences",
         "name": "delete",
         "kind": "python",
-        "purpose": "delete(user, name, *, module_id) -> True when one of the signed-in person's rows was removed, else False (1.17.35). Only that person's row is touched. The calling module is verified by Core (1.17.37): a module may use it only for its own id; any other caller gets caller_not_allowed (403). Requires framework >=1.17.37.",
+        "purpose": "delete(user, name, *, module_id) -> True when one of the signed-in person's rows was removed, else False (1.17.35; capability core.module_preferences 1.2.0 from 1.17.38). Only that person's row is touched. The calling module is verified by Core (1.17.37): a module may use it only for its own id; any other caller gets caller_not_allowed (403). Since 1.17.38 a person who may not use the module gets module_not_allowed (403). Since 1.17.38 a removal writes one strict Core audit row (action delete, object_id <module_id>/<name>, never the value); deleting a name that does not exist writes none. If that row cannot be written the removal is rolled back and ModulePreferenceError audit_failed (503) is raised. Requires framework >=1.17.38.",
         "audience": "consumer/backend",
     },
     {
@@ -804,7 +804,7 @@ CORE_CONTRACTS = (
         "import_path": "tec_tac.module_preferences",
         "name": "list_for",
         "kind": "python",
-        "purpose": "list_for(user, *, module_id) -> {name: value} of every preference of the signed-in person for the module, sorted by name (1.17.35). The calling module is verified by Core (1.17.37): a module may use it only for its own id; any other caller gets caller_not_allowed (403). Requires framework >=1.17.37.",
+        "purpose": "list_for(user, *, module_id) -> {name: value} of every preference of the signed-in person for the module, sorted by name (1.17.35; capability core.module_preferences 1.2.0 from 1.17.38). The calling module is verified by Core (1.17.37): a module may use it only for its own id; any other caller gets caller_not_allowed (403). Since 1.17.38 a person who may not use the module gets module_not_allowed (403). A read is not audited. Requires framework >=1.17.38.",
         "audience": "consumer/backend",
     },
 )
@@ -868,8 +868,12 @@ HTTP_CONTRACT_DETAILS = {
         "GET": {
             "authorization": "authenticated Tec-Tac session (SessionAuthenticated); self only, never another person's row (added 1.17.35)",
             "response": {"module_id": "the path id", "preferences": "{name: value} of every preference of this person for the module, sorted by name"},
-            "module_id": "a claim: the browser cannot prove which module calls, so the path id is trusted as notices.publish trusts its module_id. Core checks that it is an installed, enabled extension; core and tec-tac are refused.",
-            "errors": {"401": "not signed in", "404": "module_not_found: an unknown or disabled module, or core or tec-tac"},
+            "module_id": "a claim: Core cannot prove that the request came from that module's page, so the path id is a claim. Core checks that it is an installed, enabled extension (core and tec-tac are refused) and that the person may use it (since 1.17.38). See What Core can and cannot prove about the module id in docs/module-preferences.md.",
+            "errors": {
+                "401": "not signed in",
+                "403": "module_not_allowed (since 1.17.38): the person may not use this module (no permission it declares, and not a superuser)",
+                "404": "module_not_found: an unknown or disabled module, or core or tec-tac",
+            },
         },
     },
     "/api/tfd/module-preferences/<str:module_id>/<str:name>/": {
@@ -883,16 +887,25 @@ HTTP_CONTRACT_DETAILS = {
             "errors": {
                 "400": "invalid_name, or invalid_value (a body that is not exactly {value}, a value too large or too deep, or not plain JSON), or preference_limit (a 51st name for the module: at most 50)",
                 "401": "not signed in",
+                "403": "module_not_allowed (since 1.17.38): the person may not use this module",
                 "404": "module_not_found",
                 "429": "throttle: more than 120 changes a minute",
+                "503": "audit_failed (since 1.17.38): the change could not be audited, so it was not saved (rolled back)",
             },
-            "audit": "none (same as /api/tfd/ui/preferences/)",
+            "audit": "since 1.17.38, one strict Core audit row for a real add or modify (action add or modify, object_type module_preference, object_id <module_id>/<name>, source browser, module_verified false, and size_bytes, never the value). A write that changes nothing writes no row.",
         },
         "DELETE": {
             "authorization": "authenticated Tec-Tac session; self only; throttled as PUT",
             "response": {"module_id": "the path id", "name": "the path name", "deleted": "true when one row was removed, else false"},
-            "errors": {"400": "invalid_name", "401": "not signed in", "404": "module_not_found", "429": "throttle"},
-            "audit": "none (same as /api/tfd/ui/preferences/)",
+            "errors": {
+                "400": "invalid_name",
+                "401": "not signed in",
+                "403": "module_not_allowed (since 1.17.38)",
+                "404": "module_not_found",
+                "429": "throttle",
+                "503": "audit_failed (since 1.17.38): the removal was rolled back",
+            },
+            "audit": "since 1.17.38, one strict Core audit row when a row is removed (action delete, source browser, never the value). Nothing is written when no row was there.",
         },
     },
     "/api/tfd/tactical-websocket/<str:module_id>/<str:kind>/tickets/": {
@@ -1811,8 +1824,8 @@ BROWSER_CONTRACTS = (
             "get(name, fallback) returns the stored value, or fallback when the person has none. getAll() returns a new object of { name: value } for this module. set(name, value) stores one value and returns what Core stored. remove(name) deletes one preference and returns true when Core removed a row. Every call reads from Core: nothing is cached, and nothing is kept in browser storage (no localStorage, sessionStorage or cache).",
             "Own id only: the module id is bound to the loader's descriptor id, so no module id is passed and a module cannot read or change another module's preferences. There is no AD-20 replaced-module exception: a replacement module keeps its own preferences and cannot reach the module it replaces. The api, apiRaw, apiBlob and apiText helpers also refuse a raw path to /api/tfd/module-preferences/ for any other id (the path is decoded first). registerPublic does not get modulePreferences, because a public page has no signed-in person.",
             "Limits, checked in the browser before any request and again by Core: name 1 to 64 characters matching [a-z0-9][a-z0-9._-]{0,63}; value plain JSON (null, booleans, finite numbers, strings, arrays and plain objects), at most 4 KiB when stored and at most 5 levels deep; at most 50 names per module for one person. A bad name gives invalid_name and a bad value gives invalid_value (both status 400, no request).",
-            "Refusals from Core: preference_limit (status 400, a 51st name), module_not_found (status 404). A 401 is treated as signed out (signed_out) and the helper stays silent. Too many writes give 429.",
-            "Core 1.17.35 or later and UI 0.12.106 or later. The Python functions of core.module_preferences are a separate contract (Core 1.17.37 adds the verified caller).",
+            "Refusals from Core: preference_limit (status 400, a 51st name), module_not_found (status 404), and since Core 1.17.38 module_not_allowed (status 403, the person may not use the module) and audit_failed (status 503, the change was not saved). A 401 is treated as signed out (signed_out) and the helper stays silent. Too many writes give 429.",
+            "Core 1.17.35 or later and UI 0.12.106 or later. The Python functions of core.module_preferences are a separate contract (Core 1.17.37 adds the verified caller; Core 1.17.38 adds the audit row and the two refusals above).",
         ],
     },
     {
@@ -1901,7 +1914,7 @@ RULES = (
     "Treat transport acknowledgement as transport state, not operation success; providers must verify downstream execution outcome before returning success.",
     "Scheduled handlers must propagate downstream execution failures so Scheduler history and retry semantics reflect the real result.",
     "When dispatching raw OS commands, build and test the command for the exact shell used by the agent; Windows cmd.exe quoting, especially Program Files paths, must be deliberate.",
-    "Module user preferences (core.module_preferences 1.1.0, Core 1.17.37): a module that uses tec_tac.module_preferences or /api/tfd/module-preferences/ must require framework >=1.17.37. A module may use the Python functions only for its own module id: Core verifies the calling module (AD-26) and refuses any other caller with 403 caller_not_allowed; the browser route cannot be verified, so its path id is a claim. A preference is one person's own non-secret display choice for one module. No secret, token or personal data may be stored. Core checks the person and that the module is installed and enabled. Rows of a removed module stay until the person is deleted. See docs/module-preferences.md.",
+    "Module user preferences (core.module_preferences 1.2.0, Core 1.17.38): a module that uses tec_tac.module_preferences or /api/tfd/module-preferences/ must require framework >=1.17.38. A module may use the Python functions only for its own module id: Core verifies the calling module (AD-26, from 1.17.37) and refuses any other caller with 403 caller_not_allowed. Each real add, modify or delete writes one strict Core audit row (1.17.38) that names the person, the module and the name, and holds the size but never the value; reads and unchanged writes write nothing; if the row cannot be written the change is rolled back with 503 audit_failed. Core checks that the person may use the module (403 module_not_allowed, from 1.17.38). A preference is one person's own non-secret display choice for one module. No secret, token or personal data may be stored. Core checks the person and that the module is installed and enabled. Rows of a removed module stay until the person is deleted. What Core can and cannot prove about the module id (1.17.38): Core can prove the person (their session), that the module is installed and enabled, that the person may use it, and that a row belongs only to that person and that module id pair; Core cannot prove that a browser request came from that module's page, so the browser route's module id is a claim and the audit row records it as source browser, module_verified false. See docs/module-preferences.md.",
 )
 
 

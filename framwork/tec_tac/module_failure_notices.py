@@ -14,9 +14,10 @@ install, bundle install and batch install) for the people who can act on it, thr
   job's ``requested_by`` when that user is active.
 * The text is plain English, printable ASCII, cut short, and holds no paths. A failed switch says whether the flags were put back, from
   ``rolled_back`` and ``rollback_error`` as the root helper recorded them.
-* It looks only at jobs finished in the last ``NOTICE_WINDOW_HOURS`` hours (6, since 1.17.34), and at most 200 of them per tick,
-  newest first. A job older than that gets no notice, no toast and no email, however long ago it finished and whoever is new on the
-  recipient list. It stays visible on the Modules page and in the job log. A job with no readable finished_at is skipped.
+* It looks only at jobs finished in the last ``NOTICE_WINDOW_HOURS`` hours (168, seven days, since 1.17.38; six hours from 1.17.34),
+  and at most 200 of them per tick, newest first. A job older than that gets no notice, no toast and no email, however long ago it
+  finished and whoever is new on the recipient list. It stays visible on the Modules page and in the job log. A job with no readable
+  finished_at is skipped. A failure is announced once per person and never repeated: there is no daily reminder (1.17.38, Johan CQ104).
 * It never raises. A failure is logged and the next tick tries again. Tactical is not affected.
 
 The browser toast for a new notice is UI work. Core only stores the notice.
@@ -60,7 +61,7 @@ logger = logging.getLogger("tec_tac.module_failure_notices")
 CLIENT_ID_PREFIX = "module-job-failed:"
 EMAIL_CLIENT_ID_PREFIX = "module-job-failed-email:"
 EMAIL_WINDOW = timedelta(hours=1)
-NOTICE_WINDOW_HOURS = 6
+NOTICE_WINDOW_HOURS = 7 * 24  # seven days (1.17.38, Johan CQ104); it was six hours from 1.17.34
 NOTICE_WINDOW = timedelta(hours=NOTICE_WINDOW_HOURS)
 LEDGER_NOTICE = "notice"
 LEDGER_EMAIL = "email"
@@ -153,7 +154,7 @@ def email_client_id_for(notice: Mapping[str, Any]) -> str | None:
 
 
 def _bounded_failed_jobs(jobs: Iterable[Any], now: datetime, report: dict | None = None) -> list[Mapping[str, Any]]:
-    """Failed jobs finished inside the notice window (6 hours), newest first, at most ``MAX_JOBS_PER_TICK``.
+    """Failed jobs finished inside the notice window (seven days), newest first, at most ``MAX_JOBS_PER_TICK``.
 
     A failed job finished before the window, or with no readable finished_at, is skipped and counted in ``report["skipped_old"]``."""
     horizon = now.timestamp() - NOTICE_WINDOW.total_seconds()
@@ -459,8 +460,8 @@ def send_p1_email(notice: Mapping[str, Any], recipients: Iterable[Any], *, state
 def _log_skips(report: Mapping[str, int]) -> None:
     """One log line when the sweep left jobs alone because they were too old or already notified (1.17.34). Counts only."""
     if report.get("skipped_old") or report.get("skipped_notified"):
-        logger.info("Module failure notices: skipped %d job(s) older than %d hours and %d job(s) already notified.",
-                    report.get("skipped_old", 0), NOTICE_WINDOW_HOURS, report.get("skipped_notified", 0))
+        logger.info("Module failure notices: skipped %d job(s) older than %d days and %d job(s) already notified.",
+                    report.get("skipped_old", 0), NOTICE_WINDOW.days, report.get("skipped_notified", 0))
 
 
 def _ledger_pairs(kind: str, job_ids: list[str], ledger_have: Callable[[str, list[str]], set] | None) -> set[tuple[str, Any]]:
@@ -491,7 +492,7 @@ def sweep_failed_jobs(*, now: datetime | None = None, jobs: Iterable[Any] | None
     """Raise one notice per failed module job that has none yet, and the Priority 1 email for it (1.17.15; 1.17.25 through Tactical's
     sender). Returns how many notices it stored. Never raises.
 
-    Since 1.17.34 only jobs finished in the last ``NOTICE_WINDOW_HOURS`` hours count, and a job the ledger already holds for a recipient
+    Since 1.17.38 only jobs finished in the last seven days (``NOTICE_WINDOW``) count; since 1.17.34 the window was six hours. A job the ledger already holds for a recipient
     is never raised again for that recipient, even when the person cleared the notice row. ``report``, when given, is filled with
     {stored, skipped_old, skipped_notified, emailed} for the scheduler tick's output and log.
 
@@ -512,7 +513,7 @@ def sweep_failed_jobs(*, now: datetime | None = None, jobs: Iterable[Any] | None
             jobs = v2._iter_jobs()
         now = now or datetime.now(timezone.utc)
         try:
-            (ledger_prune or _default_ledger_prune)()  # rows older than seven days can never matter: the window is hours
+            (ledger_prune or _default_ledger_prune)()  # rows older than the ledger's 14 day retention can never matter (1.17.38)
         except Exception as exc:
             logger.warning("Could not prune the notice ledger (%s); the next tick tries again.", exc.__class__.__name__)
         for job in _bounded_failed_jobs(jobs, now, report):

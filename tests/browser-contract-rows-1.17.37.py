@@ -70,6 +70,7 @@ check("ui.authenticated.modulePreferences", [
     "[a-z0-9][a-z0-9._-]{0,63}", "4 KiB", "5 levels", "50 names",
     "invalid_name", "invalid_value", "status 400", "preference_limit", "module_not_found", "404",
     "401", "signed_out", "429",
+    "module_not_allowed", "status 403", "audit_failed", "status 503", "Core 1.17.38",
     "UI 0.12.106", "Core 1.17.35",
 ])
 for needle in ("UI 0.12.106", "Core 1.17.35"):

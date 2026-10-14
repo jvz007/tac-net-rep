@@ -496,7 +496,7 @@ class TecTacNoticeLedger(models.Model):
     The module failure sweep reads and writes it. It is the dedupe record, so it is kept apart from TecTacUserNotice, which the person
     can clear ("Clear read") and which is pruned at 30 days or 500 rows. ``kind`` is ``notice`` (the toast and history row) or ``email``
     (the Priority 1 email); ``key`` is the module job id. Neither Clear read nor the notice pruning touches this table. The sweep deletes
-    rows older than seven days itself. No message text, address or name is stored.
+    rows older than fourteen days itself (1.17.38; seven days before). No message text, address or name is stored.
     """
 
     KIND_NOTICE = "notice"

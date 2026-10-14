@@ -11,7 +11,7 @@ no toast row and no email, and is counted as skipped_old; (3) a job inside the w
 appears later still gets a job inside the window and not one outside it; (5) the hourly email cap counts ledger rows, not marker rows;
 (6) notice rows or old marker rows without ledger rows still count as raised (nothing to migrate), and the sweep backfills the ledger;
 (7) a ledger read or write failure never raises and never double-sends an email: a failed email read or mark sends nothing; (8) the
-ledger is pruned past seven days and the window is six hours; (9) the report counts what the sweep left alone; (10) source checks: the
+ledger is pruned past fourteen days and the window is seven days (1.17.38); (9) the report counts what the sweep left alone; (10) source checks: the
 default mark writes the ledger and no notice row, Clear read and the 30 day pruning do not touch the ledger, migration 0030 is additive,
 and the scheduler tick reports the counts. The database part is tests/module-failure-notices-ledger-runtime-1.17.34.py (dev server).
 """
@@ -140,7 +140,7 @@ class World:
 
     def ledger_prune(self):
         self.prune_calls += 1
-        cutoff = CLOCK["now"] - timedelta(days=7)
+        cutoff = CLOCK["now"] - timedelta(days=14)
         for item in [k for k, at in self.ledger.items() if at < cutoff]:
             del self.ledger[item]
         return 0
@@ -214,7 +214,7 @@ must(not W.notice_rows and len(W.sent) == 2, "deleted rows (any cause) are not r
 # ------------------------------------------------------------------------------------------------ 2. old jobs give nothing
 fresh()
 report = {}
-old = [job(2, finished_at=stamp(hours=7)), job(3, finished_at=stamp(days=3)), job(4, finished_at=stamp(days=6, hours=23))]
+old = [job(2, finished_at=stamp(days=7, hours=1)), job(3, finished_at=stamp(days=8)), job(4, finished_at=stamp(days=30))]
 must(sweep(old, report) == 0, "jobs older than the window store nothing")
 must(not W.notice_rows and not W.sent and not W.ledger, "no notice row, no email, no ledger row for an old job")
 must(report["skipped_old"] == 3, report)
@@ -225,10 +225,10 @@ must(not W.notice_rows and not W.sent, "a job with no readable finished_at owes 
 must(report["skipped_old"] == 2, "the two unreadable ones are counted, the successful one is not a failure")
 # the edges of the window
 fresh()
-must(mfn.NOTICE_WINDOW_HOURS == 6 and mfn.NOTICE_WINDOW == timedelta(hours=6), "the window is six hours")
-must(sweep([job(8, finished_at=stamp(hours=5, minutes=59))]) == 3, "5 hours 59 minutes is inside")
+must(mfn.NOTICE_WINDOW_HOURS == 168 and mfn.NOTICE_WINDOW == timedelta(days=7), "the window is seven days (1.17.38)")
+must(sweep([job(8, finished_at=stamp(days=6, hours=23, minutes=59))]) == 3, "6 days 23 hours 59 minutes is inside")
 fresh()
-must(sweep([job(9, finished_at=stamp(hours=6, minutes=1))]) == 0 and not W.sent, "6 hours 1 minute is outside")
+must(sweep([job(9, finished_at=stamp(days=7, hours=1))]) == 0 and not W.sent, "7 days 1 hour is outside")
 must(not hasattr(mfn, "WINDOW_DAYS"), "the seven day constant is gone")
 
 # ------------------------------------------------------------------------------------------------ 3. once per recipient
@@ -240,7 +240,7 @@ must(sorted(a for a, _ in W.sent) == ["boss@example.test", "root@example.test"],
 
 # ------------------------------------------------------------------------------------------------ 4. a recipient who appears later
 fresh()
-F11, F12 = stamp(hours=1), stamp(hours=8)  # fixed times: one hour and eight hours before NOW
+F11, F12 = stamp(hours=1), stamp(days=8)  # fixed times: one hour and eight days before NOW
 sweep([job(11, finished_at=F11), job(12, finished_at=F12)])
 must({pk for (c, pk) in W.notice_rows if c == cid(11)} == {1, 2, 3} and not any(c == cid(12) for (c, _) in W.notice_rows), "the old job is not raised")
 W.audience = ["root", "boss", "carol"]  # carol becomes an administrator
@@ -251,7 +251,7 @@ must((cid(11), 4) in W.notice_rows, "the new person gets the job that is inside 
 must(not any(c == cid(12) for (c, _) in W.notice_rows), "and not the job outside it")
 must([a for a, _ in W.sent] == ["carol@example.test"], f"only the new administrator is emailed: {W.sent}")
 # later still the job leaves the window: nobody new gets it
-CLOCK["now"] = NOW + timedelta(hours=6)
+CLOCK["now"] = NOW + timedelta(days=7)
 W.audience = ["root", "boss", "carol", "alice"]
 W.sent.clear()
 before = set(W.notice_rows)
@@ -364,21 +364,22 @@ must(order == ["mark", "send"], f"the try is recorded before the send: {order}")
 
 # ------------------------------------------------------------------------------------------------ 8. prune
 fresh()
-W.ledger[("notice", "ancient", 1)] = CLOCK["now"] - timedelta(days=8)
-W.ledger[("email", "ancient", 1)] = CLOCK["now"] - timedelta(days=8)
+W.ledger[("notice", "ancient", 1)] = CLOCK["now"] - timedelta(days=15)
+W.ledger[("email", "ancient", 1)] = CLOCK["now"] - timedelta(days=15)
+W.ledger[("notice", "kept", 1)] = CLOCK["now"] - timedelta(days=13)
 W.ledger[("notice", "recent", 1)] = CLOCK["now"] - timedelta(days=2)
 sweep([])
-must(W.prune_calls == 1 and ("notice", "ancient", 1) not in W.ledger and ("email", "ancient", 1) not in W.ledger and ("notice", "recent", 1) in W.ledger,
-     "rows older than seven days are pruned, newer ones kept")
-must(7 * 86400 > mfn.NOTICE_WINDOW.total_seconds() * 10, "the ledger outlives the window many times over")
+must(W.prune_calls == 1 and ("notice", "ancient", 1) not in W.ledger and ("email", "ancient", 1) not in W.ledger and ("notice", "recent", 1) in W.ledger and ("notice", "kept", 1) in W.ledger,
+     "rows older than fourteen days are pruned, newer ones kept")
+must(mfn.NOTICE_WINDOW == timedelta(days=7) and 14 > mfn.NOTICE_WINDOW.days, "the ledger outlives the window (14 days against 7)")
 
 # ------------------------------------------------------------------------------------------------ 9. the report
 fresh()
 report = {}
-sweep([job(24), job(25, finished_at=stamp(days=2)), job(26, finished_at=stamp(days=3))], report)
+sweep([job(24), job(25, finished_at=stamp(days=8)), job(26, finished_at=stamp(days=9))], report)
 must(report == {"stored": 3, "skipped_old": 2, "skipped_notified": 0, "emailed": 2}, report)
 report = {}
-sweep([job(24), job(25, finished_at=stamp(days=2)), job(26, finished_at=stamp(days=3))], report)
+sweep([job(24), job(25, finished_at=stamp(days=8)), job(26, finished_at=stamp(days=9))], report)
 must(report == {"stored": 0, "skipped_old": 2, "skipped_notified": 1, "emailed": 0}, report)
 must(mfn.sweep_failed_jobs(now=NOW, jobs=[], ledger_prune=lambda: 0) == 0, "the report is optional")
 
@@ -397,6 +398,7 @@ for name in ("def clear_read(", "def _prune_user("):
     must("Ledger" not in body and "ledger" not in body, f"{name} never touches the ledger")
 for name in ("def ledger_have(", "def ledger_add(", "def ledger_count_since(", "def ledger_prune("):
     must(name in notices_src, name)
+must("LEDGER_RETENTION_DAYS = 14" in notices_src, "the ledger keeps fourteen days (1.17.38)")
 models_src = (ROOT / "framwork/tec_tac/models.py").read_text(encoding="utf-8")
 must("class TecTacNoticeLedger(models.Model):" in models_src and 'fields=("user", "kind", "key"), name="tectac_nledger_unique"' in models_src, "the model and its unique key")
 migration = (ROOT / "framwork/tec_tac/migrations/0030_notice_ledger.py").read_text(encoding="utf-8")

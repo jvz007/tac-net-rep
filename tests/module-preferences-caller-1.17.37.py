@@ -9,7 +9,7 @@ frame, a library frame, a generated '<string>' frame, the standard library, a di
 (outside every module) are refused; the refusal comes before name and value validation and before the signed-in and module id checks;
 a module's own bad name still gives invalid_name; the browser views keep working through the private functions with the path id (PUT,
 GET, DELETE, the 50 names limit, 401, 404 module_not_found, 400 invalid_name and invalid_value, and the write throttle class); the capability
-is 1.1.0 with requires_framework >=1.17.37 and a verified-caller note; the contract rows and the rule text say so; docs/module-preferences.md
+was 1.1.0 with requires_framework >=1.17.37 and a verified-caller note (1.2.0 with >=1.17.38 from Core 1.17.38, see tests/module-preferences-audit-1.17.38.py); the contract rows and the rule text say so; docs/module-preferences.md
 names the verified caller and no longer says the module id is an unchecked claim.
 """
 from __future__ import annotations
@@ -98,6 +98,29 @@ pkg.__path__ = [str(APP)]
 pkg.registry = mod("tec_tac.registry", discover_plugins=discover_plugins)
 pkg.module_state = mod("tec_tac.module_state", is_enabled=is_enabled)
 pkg.notices = mod("tec_tac.notices", NoticeError=NoticeError, enabled_extension_id=enabled_extension_id)
+
+# the audit module (1.17.38): the person check and the audit row; every row the code asks for is kept
+AUDIT_CALLS: list = []
+
+
+class AuditContractError(ValueError):
+    pass
+
+
+class AuditWriteError(RuntimeError):
+    pass
+
+
+def _resolve_module(module_id):
+    plug = PLUGINS.get(module_id)
+    if plug is None or plug.plugin_type != "extension" or not ENABLED.get(module_id):
+        raise AuditContractError(f"Unknown or ambiguous Tec-Tac module_id: {module_id}")
+    return {"id": module_id, "version": "1.0.0", "permissions": ("view",), "legacy": bool(plug.legacy)}
+
+
+mod("tec_tac.audit", AuditContractError=AuditContractError, AuditWriteError=AuditWriteError, _resolve_module=_resolve_module,
+    _actor_can_use_module=lambda actor, module: getattr(actor, "allowed", True),
+    record=lambda **kwargs: AUDIT_CALLS.append(kwargs) or {"recorded": True})
 REGISTERED: list = []
 pkg.capabilities = mod("tec_tac.capabilities", register_capability=lambda **kwargs: REGISTERED.append(kwargs) or "registered")
 mod("tec_tac.mfa_backup")
@@ -361,16 +384,16 @@ must("module_preferences._set(" in views_src and all(f"module_preferences.{n}(" 
      "the views call the private functions")
 
 # ------------------------------------------------------------------------------------------------ 7. the capability: 1.1.0, requires >=1.17.37, the verified-caller note
-must(mp.CAPABILITY_VERSION == "1.1.0", mp.CAPABILITY_VERSION)
+must(mp.CAPABILITY_VERSION == "1.2.0", mp.CAPABILITY_VERSION)  # 1.1.0 is the 1.17.37 version this file was written for
 meta = mp.module_preferences_contract_metadata()
-must(meta["version"] == "1.1.0" and meta["requires_framework"] == ">=1.17.37", meta)
+must(meta["version"] == "1.2.0" and meta["requires_framework"] == ">=1.17.38", meta)
 must(meta["operations"] == ["get", "set", "delete", "list_for"], "the operations are unchanged")
 must("verified" in meta["caller"] and "caller_not_allowed" in meta["caller"] and "403" in meta["caller"], meta["caller"])
 json.dumps(meta)
 mp.register_core_module_preferences_capability()
 reg = REGISTERED[-1]
-must(reg["id"] == "core.module_preferences" and reg["version"] == "1.1.0" and reg["module_id"] == "core", reg)
-must(reg["metadata"]["requires_framework"] == ">=1.17.37", "the registered metadata says 1.17.37")
+must(reg["id"] == "core.module_preferences" and reg["version"] == "1.2.0" and reg["module_id"] == "core", reg)
+must(reg["metadata"]["requires_framework"] == ">=1.17.38", "the registered metadata says 1.17.38")
 
 # ------------------------------------------------------------------------------------------------ 8. contract rows, rule text and docs (read only)
 tree = ast.parse((APP / "contracts.py").read_text(encoding="utf-8"))
@@ -386,12 +409,12 @@ rows = [r for r in literal("CORE_CONTRACTS") if r.get("area") == "module-prefere
 must(sorted(r["name"] for r in rows) == ["delete", "get", "list_for", "set"], "the four Python rows")
 for r in rows:
     purpose = r["purpose"]
-    must("verified" in purpose and "caller_not_allowed" in purpose and "Requires framework >=1.17.37" in purpose, f"{r['name']}: {purpose[:80]}")
+    must("verified" in purpose and "caller_not_allowed" in purpose and "Requires framework >=1.17.38" in purpose, f"{r['name']}: {purpose[:80]}")
     must("module_id is a claim" not in purpose, f"{r['name']} no longer says the module id is a claim")
-rule = next(r for r in literal("RULES") if "core.module_preferences 1.1.0" in r)
-must(">=1.17.37" in rule and "verifies" in rule and "caller_not_allowed" in rule and "AD-26" in rule, "the rule names the verified caller")
+rule = next(r for r in literal("RULES") if "core.module_preferences 1.2.0" in r)
+must(">=1.17.38" in rule and "verifies" in rule and "caller_not_allowed" in rule and "AD-26" in rule, "the rule names the verified caller")
 doc = (ROOT / "docs" / "module-preferences.md").read_text(encoding="utf-8")
-must("core.module_preferences 1.1.0" in doc and "caller_not_allowed" in doc and "AD-26" in doc, "the docs name the verified caller")
+must("core.module_preferences 1.2.0" in doc and "caller_not_allowed" in doc and "AD-26" in doc, "the docs name the verified caller")
 must("is a claim, with the same trust" not in doc and "does not check which module is calling" not in doc, "the docs drop the unchecked claim")
 must("condition 4" in doc or "AD-26 condition 4" in doc, "the docs state the known limit")
 
