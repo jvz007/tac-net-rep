@@ -780,7 +780,7 @@ CORE_CONTRACTS = (
         "import_path": "tec_tac.module_preferences",
         "name": "get",
         "kind": "python",
-        "purpose": "get(user, name, *, module_id, default=None) -> the stored value of one preference of the signed-in person for an installed, enabled module (1.17.35, capability core.module_preferences 1.0.0). Only that person's row is read; a missing row gives default. name matches [a-z0-9][a-z0-9._-]{0,63}. module_id is a claim, with the same trust as notices.publish: core and tec-tac are refused, and an unknown or disabled module raises ModulePreferenceError module_not_found (404). Requires framework >=1.17.35. See docs/module-preferences.md.",
+        "purpose": "get(user, name, *, module_id, default=None) -> the stored value of one preference of the signed-in person for an installed, enabled module (1.17.35, capability core.module_preferences 1.1.0 from 1.17.37). Only that person's row is read; a missing row gives default. name matches [a-z0-9][a-z0-9._-]{0,63}. The calling module is verified by Core (1.17.37, AD-26): a module may use it only for its own id, and any other caller, Core included, gets ModulePreferenceError caller_not_allowed (403) before any read. Core refuses core and tec-tac, and an unknown or disabled module raises ModulePreferenceError module_not_found (404). Requires framework >=1.17.37. See docs/module-preferences.md.",
         "audience": "consumer/backend",
     },
     {
@@ -788,7 +788,7 @@ CORE_CONTRACTS = (
         "import_path": "tec_tac.module_preferences",
         "name": "set",
         "kind": "python",
-        "purpose": "set(user, name, value, *, module_id) -> the stored value (1.17.35). value is plain JSON (a scalar, a list or an object) of at most 4 KiB stored and 5 levels deep. A 51st name for one module raises preference_limit (400). invalid_name and invalid_value are raised before anything is written. Writes by one person are serialised. Not audited. No secret, token or personal data may be stored.",
+        "purpose": "set(user, name, value, *, module_id) -> the stored value (1.17.35). The calling module is verified by Core (1.17.37): a module may use it only for its own id, and any other caller gets caller_not_allowed (403) before anything is read or written. value is plain JSON (a scalar, a list or an object) of at most 4 KiB stored and 5 levels deep. A 51st name for one module raises preference_limit (400). invalid_name and invalid_value are raised before anything is written. Writes by one person are serialised. Not audited. No secret, token or personal data may be stored. Requires framework >=1.17.37.",
         "audience": "consumer/backend",
     },
     {
@@ -796,7 +796,7 @@ CORE_CONTRACTS = (
         "import_path": "tec_tac.module_preferences",
         "name": "delete",
         "kind": "python",
-        "purpose": "delete(user, name, *, module_id) -> True when one of the signed-in person's rows was removed, else False (1.17.35). Only that person's row is touched.",
+        "purpose": "delete(user, name, *, module_id) -> True when one of the signed-in person's rows was removed, else False (1.17.35). Only that person's row is touched. The calling module is verified by Core (1.17.37): a module may use it only for its own id; any other caller gets caller_not_allowed (403). Requires framework >=1.17.37.",
         "audience": "consumer/backend",
     },
     {
@@ -804,7 +804,7 @@ CORE_CONTRACTS = (
         "import_path": "tec_tac.module_preferences",
         "name": "list_for",
         "kind": "python",
-        "purpose": "list_for(user, *, module_id) -> {name: value} of every preference of the signed-in person for the module, sorted by name (1.17.35).",
+        "purpose": "list_for(user, *, module_id) -> {name: value} of every preference of the signed-in person for the module, sorted by name (1.17.35). The calling module is verified by Core (1.17.37): a module may use it only for its own id; any other caller gets caller_not_allowed (403). Requires framework >=1.17.37.",
         "audience": "consumer/backend",
     },
 )
@@ -1800,6 +1800,22 @@ BROWSER_CONTRACTS = (
         ],
     },
     {
+        "id": "ui.authenticated.modulePreferences",
+        "phase": "authenticated",
+        "service": "modulePreferences",
+        "operations": ["get", "getAll", "set", "remove"],
+        "audience": "module/browser",
+        "docs": "tec-tac-ui/docs/module-preferences.md",
+        "purpose": "Keep small per-person display choices with context.modulePreferences: get(name, fallback), getAll(), set(name, value) and remove(name), all async. Core keeps each choice for the one person and one module, so it follows the person to another browser. Needs Core 1.17.35 or later and UI 0.12.106 or later.",
+        "details": [
+            "get(name, fallback) returns the stored value, or fallback when the person has none. getAll() returns a new object of { name: value } for this module. set(name, value) stores one value and returns what Core stored. remove(name) deletes one preference and returns true when Core removed a row. Every call reads from Core: nothing is cached, and nothing is kept in browser storage (no localStorage, sessionStorage or cache).",
+            "Own id only: the module id is bound to the loader's descriptor id, so no module id is passed and a module cannot read or change another module's preferences. There is no AD-20 replaced-module exception: a replacement module keeps its own preferences and cannot reach the module it replaces. The api, apiRaw, apiBlob and apiText helpers also refuse a raw path to /api/tfd/module-preferences/ for any other id (the path is decoded first). registerPublic does not get modulePreferences, because a public page has no signed-in person.",
+            "Limits, checked in the browser before any request and again by Core: name 1 to 64 characters matching [a-z0-9][a-z0-9._-]{0,63}; value plain JSON (null, booleans, finite numbers, strings, arrays and plain objects), at most 4 KiB when stored and at most 5 levels deep; at most 50 names per module for one person. A bad name gives invalid_name and a bad value gives invalid_value (both status 400, no request).",
+            "Refusals from Core: preference_limit (status 400, a 51st name), module_not_found (status 404). A 401 is treated as signed out (signed_out) and the helper stays silent. Too many writes give 429.",
+            "Core 1.17.35 or later and UI 0.12.106 or later. The Python functions of core.module_preferences are a separate contract (Core 1.17.37 adds the verified caller).",
+        ],
+    },
+    {
         "id": "ui.authenticated.services",
         "phase": "authenticated",
         "service": "services",
@@ -1885,7 +1901,7 @@ RULES = (
     "Treat transport acknowledgement as transport state, not operation success; providers must verify downstream execution outcome before returning success.",
     "Scheduled handlers must propagate downstream execution failures so Scheduler history and retry semantics reflect the real result.",
     "When dispatching raw OS commands, build and test the command for the exact shell used by the agent; Windows cmd.exe quoting, especially Program Files paths, must be deliberate.",
-    "Module user preferences (core.module_preferences 1.0.0, Core 1.17.35): a module that uses tec_tac.module_preferences or /api/tfd/module-preferences/ must require framework >=1.17.35. A preference is one person's own non-secret display choice for one module. No secret, token or personal data may be stored. Core checks the person and that the module is installed and enabled; the module id is a claim, as for notices.publish. Rows of a removed module stay until the person is deleted. See docs/module-preferences.md.",
+    "Module user preferences (core.module_preferences 1.1.0, Core 1.17.37): a module that uses tec_tac.module_preferences or /api/tfd/module-preferences/ must require framework >=1.17.37. A module may use the Python functions only for its own module id: Core verifies the calling module (AD-26) and refuses any other caller with 403 caller_not_allowed; the browser route cannot be verified, so its path id is a claim. A preference is one person's own non-secret display choice for one module. No secret, token or personal data may be stored. Core checks the person and that the module is installed and enabled. Rows of a removed module stay until the person is deleted. See docs/module-preferences.md.",
 )
 
 

@@ -1,6 +1,7 @@
-# Module user preferences (core.module_preferences 1.0.0)
+# Module user preferences (core.module_preferences 1.1.0)
 
-Core 1.17.35 adds one per-person choice a module can keep through Core. The first use is the collapse control of a window (Remote
+Core 1.17.35 adds one per-person choice a module can keep through Core. Core 1.17.37 makes the Python functions verify the calling module
+(capability 1.1.0, see "Python contract" below). The first use is the collapse control of a window (Remote
 Background's header and tabs), which Johan asked to be remembered per person. Browser storage is refused for UI modules, so the
 choice cannot live in the browser.
 
@@ -49,12 +50,28 @@ delete(request.user, "header-collapsed", module_id="remote-background")   # True
 prefs = list_for(request.user, module_id="remote-background")              # {name: value}, sorted by name
 ```
 
-A refusal raises `ModulePreferenceError` with `code` (`invalid_name`, `invalid_value`, `module_not_found`, `preference_limit`,
-`signed_in_required`) and `status_code`. A module uses it only when `requires.framework` is `>=1.17.35` and the capability
-`core.module_preferences` is present (`has_capability`).
+A refusal raises `ModulePreferenceError` with `code` (`caller_not_allowed`, `invalid_name`, `invalid_value`, `module_not_found`,
+`preference_limit`, `signed_in_required`) and `status_code` (403 for `caller_not_allowed`). A module uses it only when `requires.framework`
+is `>=1.17.37` and the capability `core.module_preferences` is present (`has_capability`).
 
-The `module_id` argument is a claim, with the same trust as `notices.publish`: Core checks that the module is installed and enabled,
-but does not check which module is calling. The damage is limited to one person's own display choice of another module.
+**The calling module is verified (AD-26, Core 1.17.37).** Each of the four functions asks Core who is calling, the same way Core checks
+`core.accounts` (AD-31). A call may read or write only the preferences of the module it names in `module_id`. Any other caller is refused
+with `caller_not_allowed` (403) before the name, the value or any row is looked at, so nothing is read or written. Core is never a caller:
+a call from a Core, library or generated frame, from a disabled or legacy module, or from code outside every module is refused too.
+Enabled state is read on every call. A module that calls the functions for another module's id is refused, even when that id is installed.
+
+**The `user` argument stays the caller's responsibility.** A module could pass any user for its own module id. It can never reach
+another module's rows, because the module id is checked against the caller.
+
+**Known limit (AD-26 condition 4).** The check reads the call stack. A module whose code is deliberately hostile, running in the same
+process, could forge its way past it; signed-module review is the defence against that. The private functions (`_get`, `_set`,
+`_delete`, `_list_for`) are not part of the contract and no module may import them.
+
+## The browser contract row
+
+The UI row `ui.authenticated.modulePreferences` (UI 0.12.106) lists `get`, `getAll`, `set` and `remove`. The shell binds the module id to
+the calling module, so a module cannot name another id through the helper. It needs Core 1.17.35 or later. The shell's helper is a separate
+contract from the Python functions above.
 
 ## HTTP (browser)
 
@@ -67,9 +84,9 @@ but does not check which module is calling. The damage is limited to one person'
 Refusals are `{detail, code}`: 400 `invalid_name`, 400 `invalid_value`, 400 `preference_limit`, 401 (not signed in), 404
 `module_not_found`, and 429 when the write throttle is reached. Every route needs a signed-in Tec-Tac session (`SessionAuthenticated`).
 
-**Browser caveat, stated plainly.** The browser cannot prove which module is calling, so the `module_id` in the path is a claim, exactly as
-`notices.publish` trusts its `module_id`. The UI shell binds the id to the module that asks. The result: one person can change only their
-own choice of a module, and no other person's row is reachable.
+**Browser caveat, stated plainly.** The browser cannot prove which module is calling, so the `module_id` in the path is a claim. The
+route is not verified by the caller check above; the views call the private functions with the path id. The UI shell binds the id to the
+module that asks. The result: one person can change only their own choice of a module, and no other person's row is reachable.
 
 ## Not audited
 
@@ -77,5 +94,7 @@ These routes write no audit row, the same as `/api/tfd/ui/preferences/`. The val
 
 ## Versions
 
-- Capability `core.module_preferences` 1.0.0, registered at start-up by Core 1.17.35 (guarded: a failure is logged and never stops start-up).
-- Core 1.17.35 or later. A module that uses it must require `tec-tac-framework >=1.17.35`.
+- Capability `core.module_preferences` 1.1.0 (1.0.0 in Core 1.17.35), registered at start-up by Core (guarded: a failure is logged and
+  never stops start-up). 1.1.0 is the verified-caller tightening of 1.17.37; nothing in `modules/` used the functions before it.
+- Core 1.17.37 or later for the Python functions. A module that uses them must require `tec-tac-framework >=1.17.37`. The browser route
+  and its contract row need Core 1.17.35 or later.

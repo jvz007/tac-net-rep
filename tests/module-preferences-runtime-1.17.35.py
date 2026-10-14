@@ -1,5 +1,8 @@
-"""Runtime check for Core 1.17.35 module user preferences (core.module_preferences 1.0.0). It did NOT run on the development PC (Django is not
-installed there), so the migration 0031, the unique constraint and the JSON column can only be proved on the dev server.
+"""Runtime check for Core 1.17.35 module user preferences (core.module_preferences 1.0.0; 1.1.0 from 1.17.37). It did NOT run on the development
+PC (Django is not installed there), so the migration 0031, the unique constraint and the JSON column can only be proved on the dev server.
+
+Since 1.17.37 this probe calls the private functions (_get, _set, _delete, _list_for). Tactical's manage.py shell is not an installed module, so the
+public functions refuse it with caller_not_allowed (403), as they should. The caller check itself is proved by tests/module-preferences-caller-1.17.37.py.
 
 Run it on the dev server through Tactical's manage.py shell, after the migration 0031_module_preferences has run:
 
@@ -67,16 +70,16 @@ def run():
     state = {}
 
     def round_trip():
-        assert mp.get(alice, "header-collapsed", module_id=module_id, default="none") == "none", "a missing name gives the default"
-        assert mp.set(alice, "header-collapsed", True, module_id=module_id) is True, "set returns the value"
-        assert mp.get(alice, "header-collapsed", module_id=module_id) is True, "the real column reads back the JSON value"
-        assert mp.list_for(alice, module_id=module_id) == {"header-collapsed": True}, "list_for shows the row"
-        assert mp.delete(alice, "header-collapsed", module_id=module_id) is True, "delete removes it"
-        assert mp.get(alice, "header-collapsed", module_id=module_id, default="gone") == "gone", "and it is gone"
+        assert mp._get(alice, "header-collapsed", module_id=module_id, default="none") == "none", "a missing name gives the default"
+        assert mp._set(alice, "header-collapsed", True, module_id=module_id) is True, "set returns the value"
+        assert mp._get(alice, "header-collapsed", module_id=module_id) is True, "the real column reads back the JSON value"
+        assert mp._list_for(alice, module_id=module_id) == {"header-collapsed": True}, "list_for shows the row"
+        assert mp._delete(alice, "header-collapsed", module_id=module_id) is True, "delete removes it"
+        assert mp._get(alice, "header-collapsed", module_id=module_id, default="gone") == "gone", "and it is gone"
 
     def upsert_keeps_one_row():
-        mp.set(alice, "tabs", {"order": ["a", "b"], "open": 2}, module_id=module_id)
-        mp.set(alice, "tabs", {"order": ["b", "a"]}, module_id=module_id)
+        mp._set(alice, "tabs", {"order": ["a", "b"], "open": 2}, module_id=module_id)
+        mp._set(alice, "tabs", {"order": ["b", "a"]}, module_id=module_id)
         rows = TecTacModulePreference.objects.filter(user_id=alice.pk, module_id=module_id, name="tabs")
         assert rows.count() == 1, f"one row, got {rows.count()}"
         assert rows.get().value == {"order": ["b", "a"]}, "the value is replaced, not merged"
@@ -91,16 +94,16 @@ def run():
             raise AssertionError("the database accepted a second row for the same person, module and name")
 
     def self_only():
-        assert mp.get(bob, "tabs", module_id=module_id, default="fresh") == "fresh", "bob never sees alice's row"
-        assert mp.list_for(bob, module_id=module_id) == {}, "bob's list is empty"
-        assert mp.delete(bob, "tabs", module_id=module_id) is False, "bob cannot delete it"
-        assert mp.get(alice, "tabs", module_id=module_id) == {"order": ["b", "a"]}, "and alice still has it"
+        assert mp._get(bob, "tabs", module_id=module_id, default="fresh") == "fresh", "bob never sees alice's row"
+        assert mp._list_for(bob, module_id=module_id) == {}, "bob's list is empty"
+        assert mp._delete(bob, "tabs", module_id=module_id) is False, "bob cannot delete it"
+        assert mp._get(alice, "tabs", module_id=module_id) == {"order": ["b", "a"]}, "and alice still has it"
 
     def refused_value_writes_nothing():
         before = TecTacModulePreference.objects.filter(user_id=alice.pk, module_id=module_id).count()
         for bad in ([[[[[[1]]]]]], "x" * 5000):
             try:
-                mp.set(alice, "big", bad, module_id=module_id)
+                mp._set(alice, "big", bad, module_id=module_id)
             except mp.ModulePreferenceError as exc:
                 assert exc.code == "invalid_value", exc.code
             else:
@@ -109,10 +112,10 @@ def run():
 
     def fifty_names_limit():
         for n in range(mp.MAX_NAMES_PER_MODULE - TecTacModulePreference.objects.filter(user_id=bob.pk, module_id=module_id).count()):
-            mp.set(bob, f"limit-{n:02d}", n, module_id=module_id)
+            mp._set(bob, f"limit-{n:02d}", n, module_id=module_id)
         assert TecTacModulePreference.objects.filter(user_id=bob.pk, module_id=module_id).count() == mp.MAX_NAMES_PER_MODULE, "50 rows"
         try:
-            mp.set(bob, "limit-fifty-one", 1, module_id=module_id)
+            mp._set(bob, "limit-fifty-one", 1, module_id=module_id)
         except mp.ModulePreferenceError as exc:
             assert exc.code == "preference_limit", exc.code
         else:

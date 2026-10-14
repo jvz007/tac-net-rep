@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""1.17.35: module user preferences (core.module_preferences 1.0.0), Django-free part.
+"""1.17.35: module user preferences (core.module_preferences 1.0.0; 1.1.0 from 1.17.37), Django-free part.
+
+From 1.17.37 this test calls the private functions (_get, _set, _delete, _list_for) directly: the public ones verify the calling module and a
+test frame is not a module, so they refuse (tests/module-preferences-caller-1.17.37.py covers the public functions).
 
 Runs the real ``module_preferences.py`` and ``module_preference_views.py`` with narrow stubs: the notice module's enabled-extension check,
 the model (a fake table with the lookups used), Django's transaction and user lock, and DRF's Response and APIView. Covered: name and value
@@ -224,31 +227,31 @@ must(mp.MAX_VALUE_DEPTH == 5 and mp.MAX_NAMES_PER_MODULE == 50 and mp.MAX_VALUE_
 
 # ------------------------------------------------------------------------------------------------ 3. round trip, upsert and list
 reset()
-must(mp.get(ALICE, "header-collapsed", module_id=MODULE, default="none") == "none", "a missing name gives the default")
-must(mp.set(ALICE, "header-collapsed", True, module_id=MODULE) is True, "set returns the stored value")
-must(mp.get(ALICE, "header-collapsed", module_id=MODULE) is True, "get returns it")
-mp.set(ALICE, "header-collapsed", False, module_id=MODULE)
+must(mp._get(ALICE, "header-collapsed", module_id=MODULE, default="none") == "none", "a missing name gives the default")
+must(mp._set(ALICE, "header-collapsed", True, module_id=MODULE) is True, "set returns the stored value")
+must(mp._get(ALICE, "header-collapsed", module_id=MODULE) is True, "get returns it")
+mp._set(ALICE, "header-collapsed", False, module_id=MODULE)
 must(len(TecTacModulePreference.objects.rows) == 1, "an upsert keeps one row")
-must(mp.get(ALICE, "header-collapsed", module_id=MODULE) is False, "and the new value")
-mp.set(ALICE, "tabs", {"order": ["a", "b"]}, module_id=MODULE)
-mp.set(ALICE, "alpha", 1, module_id=MODULE)
-must(mp.list_for(ALICE, module_id=MODULE) == {"alpha": 1, "header-collapsed": False, "tabs": {"order": ["a", "b"]}}, "list_for sorted by name")
-must(mp.delete(ALICE, "tabs", module_id=MODULE) is True and mp.delete(ALICE, "tabs", module_id=MODULE) is False, "delete reports the row")
-must("tabs" not in mp.list_for(ALICE, module_id=MODULE), "and it is gone")
+must(mp._get(ALICE, "header-collapsed", module_id=MODULE) is False, "and the new value")
+mp._set(ALICE, "tabs", {"order": ["a", "b"]}, module_id=MODULE)
+mp._set(ALICE, "alpha", 1, module_id=MODULE)
+must(mp._list_for(ALICE, module_id=MODULE) == {"alpha": 1, "header-collapsed": False, "tabs": {"order": ["a", "b"]}}, "list_for sorted by name")
+must(mp._delete(ALICE, "tabs", module_id=MODULE) is True and mp._delete(ALICE, "tabs", module_id=MODULE) is False, "delete reports the row")
+must("tabs" not in mp._list_for(ALICE, module_id=MODULE), "and it is gone")
 must(ATOMICS.count("enter") == ATOMICS.count("exit") and len(LOCKS) >= 2, "writes run in a transaction with the person's row locked")
 
 # ------------------------------------------------------------------------------------------------ 4. self only
 reset()
-mp.set(ALICE, "header-collapsed", True, module_id=MODULE)
-must(mp.get(BOB, "header-collapsed", module_id=MODULE, default="fresh") == "fresh", "another person never sees the row")
-must(mp.list_for(BOB, module_id=MODULE) == {}, "list_for shows only the signed-in person")
-must(mp.delete(BOB, "header-collapsed", module_id=MODULE) is False, "another person cannot delete it")
-must(mp.get(ALICE, "header-collapsed", module_id=MODULE) is True, "and it is still there")
-mp.set(BOB, "header-collapsed", False, module_id=MODULE)
-must(mp.get(ALICE, "header-collapsed", module_id=MODULE) is True and mp.get(BOB, "header-collapsed", module_id=MODULE) is False,
+mp._set(ALICE, "header-collapsed", True, module_id=MODULE)
+must(mp._get(BOB, "header-collapsed", module_id=MODULE, default="fresh") == "fresh", "another person never sees the row")
+must(mp._list_for(BOB, module_id=MODULE) == {}, "list_for shows only the signed-in person")
+must(mp._delete(BOB, "header-collapsed", module_id=MODULE) is False, "another person cannot delete it")
+must(mp._get(ALICE, "header-collapsed", module_id=MODULE) is True, "and it is still there")
+mp._set(BOB, "header-collapsed", False, module_id=MODULE)
+must(mp._get(ALICE, "header-collapsed", module_id=MODULE) is True and mp._get(BOB, "header-collapsed", module_id=MODULE) is False,
      "each person keeps their own value")
 try:
-    mp.get(ANON, "header-collapsed", module_id=MODULE)
+    mp._get(ANON, "header-collapsed", module_id=MODULE)
 except mp.ModulePreferenceError as exc:
     must(exc.code == "signed_in_required" and exc.status_code == 401, f"anonymous: {exc.code} {exc.status_code}")
 else:
@@ -258,10 +261,10 @@ else:
 reset()
 for module_id in ("core", "Core", "tec-tac", "unknown-module", "globalsettings-off", "", None):
     for call in (
-        lambda m: mp.get(ALICE, "a", module_id=m),
-        lambda m: mp.set(ALICE, "a", 1, module_id=m),
-        lambda m: mp.delete(ALICE, "a", module_id=m),
-        lambda m: mp.list_for(ALICE, module_id=m),
+        lambda m: mp._get(ALICE, "a", module_id=m),
+        lambda m: mp._set(ALICE, "a", 1, module_id=m),
+        lambda m: mp._delete(ALICE, "a", module_id=m),
+        lambda m: mp._list_for(ALICE, module_id=m),
     ):
         try:
             call(module_id)
@@ -274,27 +277,27 @@ must(not TecTacModulePreference.objects.rows, "a refused module writes nothing")
 # ------------------------------------------------------------------------------------------------ 6. the 50 names limit
 reset()
 for n in range(mp.MAX_NAMES_PER_MODULE):
-    mp.set(ALICE, f"n{n:02d}", n, module_id=MODULE)
-must(len(mp.list_for(ALICE, module_id=MODULE)) == 50, "50 names are allowed")
-mp.set(ALICE, "n00", "changed", module_id=MODULE)  # an existing name is not a new one
-must(mp.get(ALICE, "n00", module_id=MODULE) == "changed", "an existing name at the limit can be changed")
+    mp._set(ALICE, f"n{n:02d}", n, module_id=MODULE)
+must(len(mp._list_for(ALICE, module_id=MODULE)) == 50, "50 names are allowed")
+mp._set(ALICE, "n00", "changed", module_id=MODULE)  # an existing name is not a new one
+must(mp._get(ALICE, "n00", module_id=MODULE) == "changed", "an existing name at the limit can be changed")
 try:
-    mp.set(ALICE, "n50", 1, module_id=MODULE)
+    mp._set(ALICE, "n50", 1, module_id=MODULE)
 except mp.ModulePreferenceError as exc:
     must(exc.code == "preference_limit" and exc.status_code == 400, f"the 51st: {exc.code}")
 else:
     raise AssertionError("the 51st name is refused")
-must(len(mp.list_for(ALICE, module_id=MODULE)) == 50, "and nothing was written")
-mp.set(BOB, "n50", 1, module_id=MODULE)  # the limit is per person and module
-must(mp.get(BOB, "n50", module_id=MODULE) == 1, "another person has their own 50")
-mp.set(ALICE, "n50", 1, module_id="endpoints")  # and per module
-must(mp.get(ALICE, "n50", module_id="endpoints") == 1, "and another module has its own 50")
+must(len(mp._list_for(ALICE, module_id=MODULE)) == 50, "and nothing was written")
+mp._set(BOB, "n50", 1, module_id=MODULE)  # the limit is per person and module
+must(mp._get(BOB, "n50", module_id=MODULE) == 1, "another person has their own 50")
+mp._set(ALICE, "n50", 1, module_id="endpoints")  # and per module
+must(mp._get(ALICE, "n50", module_id="endpoints") == 1, "and another module has its own 50")
 
 # ------------------------------------------------------------------------------------------------ 7. refusals write nothing
 reset()
 for name, value in (("Bad Name", 1), ("ok", math.nan), ("ok", "x" * 5000)):
     try:
-        mp.set(ALICE, name, value, module_id=MODULE)
+        mp._set(ALICE, name, value, module_id=MODULE)
     except mp.ModulePreferenceError:
         pass
     else:
@@ -325,18 +328,18 @@ must(resp.data["deleted"] is False, resp.data)
 resp = views.ModulePreferenceListView().get(types.SimpleNamespace(user=ANON), module_id=MODULE)
 must(resp.status_code == 401 and resp.data["code"] == "signed_in_required", resp.data)
 for n in range(mp.MAX_NAMES_PER_MODULE):
-    mp.set(ALICE, f"v{n:02d}", n, module_id=MODULE)
+    mp._set(ALICE, f"v{n:02d}", n, module_id=MODULE)
 resp = views.ModulePreferenceDetailView().put(types.SimpleNamespace(user=ALICE, data={"value": 1}), module_id=MODULE, name="v99")
 must(resp.status_code == 400 and resp.data["code"] == "preference_limit", resp.data)
 
 # ------------------------------------------------------------------------------------------------ 9. capability, apps.py, throttle, urls (source)
-must(mp.CAPABILITY_ID == "core.module_preferences" and mp.CAPABILITY_VERSION == "1.0.0", "capability id and version")
+must(mp.CAPABILITY_ID == "core.module_preferences" and mp.CAPABILITY_VERSION == "1.1.0", "capability id and version")
 mp.register_core_module_preferences_capability()
 reg = REGISTERED[-1]
-must(reg["id"] == "core.module_preferences" and reg["version"] == "1.0.0" and reg["module_id"] == "core", f"registered: {reg}")
+must(reg["id"] == "core.module_preferences" and reg["version"] == "1.1.0" and reg["module_id"] == "core", f"registered: {reg}")
 must(tuple(reg["operations"]) == ("get", "set", "delete", "list_for"), "the four operations")
 must(all(hasattr(reg["provider"], op) for op in ("get", "set", "delete", "list_for")), "the provider has the four operations")
-must(reg["metadata"]["requires_framework"] == ">=1.17.35" and json.dumps(reg["metadata"]), "metadata is JSON and names 1.17.35")
+must(reg["metadata"]["requires_framework"] == ">=1.17.37" and json.dumps(reg["metadata"]), "metadata is JSON and names 1.17.37")
 
 apps_tree = ast.parse((APP / "apps.py").read_text(encoding="utf-8"))
 ready = next(n for n in ast.walk(apps_tree) if isinstance(n, ast.FunctionDef) and n.name == "ready")
@@ -409,7 +412,7 @@ http = literal("HTTP_CONTRACT_DETAILS")
 must("/api/tfd/module-preferences/<str:module_id>/" in http and "/api/tfd/module-preferences/<str:module_id>/<str:name>/" in http, "the HTTP rows")
 must("PUT" in http["/api/tfd/module-preferences/<str:module_id>/<str:name>/"] and "DELETE" in http["/api/tfd/module-preferences/<str:module_id>/<str:name>/"],
      "PUT and DELETE are documented")
-must(any("core.module_preferences 1.0.0" in rule and ">=1.17.35" in rule for rule in literal("RULES")), "the rule names the capability and the framework")
+must(any("core.module_preferences 1.1.0" in rule and ">=1.17.37" in rule for rule in literal("RULES")), "the rule names the capability and the framework")
 browser_src = (APP / "contracts.py").read_text(encoding="utf-8")
 must("tec_tac.module_preferences" in browser_src and "docs/module-preferences.md" in browser_src, "the contract points at the docs")
 must((ROOT / "docs/module-preferences.md").is_file(), "the docs page exists")
@@ -427,7 +430,7 @@ catalog = {
 }
 rendered_md = render_ns["render_markdown"](catalog)
 rendered_text = render_ns["render_text"](catalog)
-for needle in ("tec_tac.module_preferences", "list_for", "/api/tfd/module-preferences/", "core.module_preferences 1.0.0"):
+for needle in ("tec_tac.module_preferences", "list_for", "/api/tfd/module-preferences/", "core.module_preferences 1.1.0"):
     must(needle in rendered_md and needle in rendered_text, f"the rendered export carries {needle!r}")
 
 print("[TEST] PASS module preferences 1.17.35")

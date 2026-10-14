@@ -1,15 +1,16 @@
-"""Runtime check for Core 1.17.35 Tactical UI preferences (GET and PUT /api/tfd/account/tactical-ui/). It did NOT run on the development PC
-(Django is not installed there), so the real model choices and the real save can only be proved on the dev server.
+"""Runtime check for Core 1.17.35 Tactical UI preferences (GET and PUT /api/tfd/account/tactical-ui/), renamed for 1.17.37. It did NOT run
+on the development PC (Django is not installed there), so the real model choices and the real save can only be proved on the dev server.
 
-Run it on the dev server through Tactical's manage.py shell (after Core 1.17.35 is installed):
+Run it on the dev server through Tactical's manage.py shell (after Core 1.17.37 is installed):
 
-    cp /opt/tec-tac-src/tests/tactical-ui-preferences-runtime-1.17.35.py /tmp/ && chmod 644 /tmp/tactical-ui-preferences-runtime-1.17.35.py
-    sudo -u tactical bash -c 'cd /rmm/api/tacticalrmm && ../env/bin/python manage.py shell < /tmp/tactical-ui-preferences-runtime-1.17.35.py'
+    cp /opt/tec-tac-src/tests/tactical-ui-preferences-runtime-1.17.37.py /tmp/ && chmod 644 /tmp/tactical-ui-preferences-runtime-1.17.37.py
+    sudo -u tactical bash -c 'cd /rmm/api/tacticalrmm && ../env/bin/python manage.py shell < /tmp/tactical-ui-preferences-runtime-1.17.37.py'
 
 It proves what the stub test (tests/tactical-ui-preferences-1.17.35.py) cannot: that the real accounts.User columns take each new value, that
 the choices come from Tactical's own model fields, that one invalid value in a mixed request saves nothing, that block_dashboard_login is
-refused, and that the hot-path context carries the scalars. Everything runs inside one transaction that is rolled back at the end. It prints
-PASS or FAIL for each step and exits with status 1 when any step fails.
+refused, and that the hot-path context carries the scalars and matches the stored row. The hot-path step sets its own state first (1.17.37:
+the empty date_format step before it leaves date_format NULL in the same transaction). Everything runs inside one transaction that is rolled
+back at the end. It prints PASS or FAIL for each step and exits with status 1 when any step fails.
 """
 import uuid
 
@@ -83,10 +84,17 @@ def run():
         assert User.objects.get(pk=user.pk).block_dashboard_login is False, "the login block is untouched"
 
     def hot_path_context():
-        context = svc.tactical_ui_context(User.objects.get(pk=user.pk))
-        assert {"agent_dblclick_action", "url_action_id", "can_run_url_actions"} <= set(context), "the three keys stay"
+        # Set this step's own known state first: the steps before it leave date_format NULL (step 2) in this same transaction.
+        svc.update_tactical_ui_preferences(user, values)
+        fresh = User.objects.get(pk=user.pk)
+        context = svc.tactical_ui_context(fresh)
+        assert set(context) == {"agent_dblclick_action", "url_action_id", "can_run_url_actions", *svc.TACTICAL_UI_SCALAR_FIELDS}, (
+            f"the exact key set: {sorted(context)}"
+        )
+        for name in svc.TACTICAL_UI_SCALAR_FIELDS:
+            assert context[name] == getattr(fresh, name), f"{name}: context {context[name]!r}, stored row {getattr(fresh, name)!r}"
         assert context["client_tree_splitter"] == 30 and context["date_format"] == "YYYY-MM-DD HH:mm", "the scalars are published"
-        assert "default_agent_tbl_choices" not in context, "no choice list on the hot path"
+        assert "default_agent_tbl_choices" not in context and "client_tree_sort_choices" not in context, "no choice list on the hot path"
 
     step("save every new Tactical UI preference on the real User row", round_trip)
     step("an empty date format stores null", empty_date_format_is_null)
@@ -107,7 +115,7 @@ left = User.objects.filter(username__startswith="wspref-ui-").count()
 print("no probe rows left" if left == 0 else f"FAIL {left} probe user(s) left behind")
 RESULTS.append(left == 0)
 if all(RESULTS):
-    print("tactical-ui-preferences-runtime-1.17.35: ok")
+    print("tactical-ui-preferences-runtime-1.17.37: ok")
 else:
-    print("tactical-ui-preferences-runtime-1.17.35: FAILED")
+    print("tactical-ui-preferences-runtime-1.17.37: FAILED")
     raise SystemExit(1)

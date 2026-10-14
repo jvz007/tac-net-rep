@@ -1,4 +1,4 @@
-"""Module user preferences (Core 1.17.35, capability core.module_preferences 1.0.0).
+"""Module user preferences (Core 1.17.35; capability core.module_preferences 1.1.0 from Core 1.17.37).
 
 A module keeps one small per-person choice through Core, such as the collapse control of a window. A preference belongs to one person,
 one module id and one name, and holds one JSON value (a scalar, a list or an object) of at most 4 KiB serialised and 5 levels deep.
@@ -6,9 +6,14 @@ At most 50 names per person and module. Only the signed-in person can read or wr
 /api/tfd/module-preferences/<module_id>/ or through the Python functions below.
 
 Rules (also in docs/module-preferences.md): no secret, token or personal data may be stored; the value is the person's own display
-choice. Nothing here is audited (same as /api/tfd/ui/preferences/). The module id is a claim: the browser cannot prove which module
-calls, so the path id is trusted the way notices.publish trusts its module_id. The damage is limited to one person editing their own
-display choice of another module. A module id must be an installed, enabled extension; core and tec-tac are refused.
+choice. Nothing here is audited (same as /api/tfd/ui/preferences/). A module id must be an installed, enabled extension; core and tec-tac
+are refused.
+
+Who may call (AD-26, Core 1.17.37). The Python functions verify the calling module: a call may read or write only the preferences of the
+module it names in module_id, else it is refused with 403 caller_not_allowed before any name, value or row is looked at. Core is never a
+caller, and a call from a Core, library or generated frame, or from a disabled or legacy module, is refused too. The browser route cannot
+be verified (the browser names the module id), so the views call the private functions with the path id, as before. The ``user``
+argument stays the caller's responsibility: a module could pass any user for its own module id, but it can never reach another module's rows.
 """
 from __future__ import annotations
 
@@ -17,8 +22,10 @@ import re
 from contextlib import nullcontext
 from typing import Any
 
+from .caller_identity import calling_module_for_core_provider
+
 CAPABILITY_ID = "core.module_preferences"
-CAPABILITY_VERSION = "1.0.0"
+CAPABILITY_VERSION = "1.1.0"
 MAX_NAMES_PER_MODULE = 50
 MAX_VALUE_BYTES = 4 * 1024
 MAX_VALUE_DEPTH = 5
@@ -102,18 +109,51 @@ def _rows(user: Any, module_id: str):
     return TecTacModulePreference.objects.filter(user_id=_user_pk(user), module_id=module_id)
 
 
-# --- the public functions (the Python contract) -----------------------------------------------
+def _verified_caller(module_id: Any) -> None:
+    """Refuse unless the verified calling module is the module named in module_id (AD-26). Fails closed; Core is never a caller."""
+    identity = calling_module_for_core_provider(provider_file=__file__)
+    if identity is None or identity.module_id != module_id:
+        raise ModulePreferenceError(
+            "caller_not_allowed", "Only the module named in module_id may use its own module preferences.", 403,
+        )
+
+
+# --- the public functions (the Python contract): verify the caller, then do the work -----------
 
 def get(user: Any, name: Any, *, module_id: Any, default: Any = None) -> Any:
     """The stored value of one preference, or ``default`` when the person has none. Only this person's row is read."""
+    _verified_caller(module_id)
+    return _get(user, name, module_id=module_id, default=default)
+
+
+def set(user: Any, name: Any, value: Any, *, module_id: Any) -> Any:  # the contract name (1.17.35)
+    """Store one preference for this person and return the stored value. Refuses a 51st name for the module (preference_limit)."""
+    _verified_caller(module_id)
+    return _set(user, name, value, module_id=module_id)
+
+
+def delete(user: Any, name: Any, *, module_id: Any) -> bool:
+    """Remove one preference of this person. True when a row was removed."""
+    _verified_caller(module_id)
+    return _delete(user, name, module_id=module_id)
+
+
+def list_for(user: Any, *, module_id: Any) -> dict[str, Any]:
+    """Every preference of this person for the module, as {name: value}, sorted by name."""
+    _verified_caller(module_id)
+    return _list_for(user, module_id=module_id)
+
+
+# --- the private logic (the browser views call these with the path id; the public functions call them after the caller check) ---
+
+def _get(user: Any, name: Any, *, module_id: Any, default: Any = None) -> Any:
     module = _module(module_id)
     key = _clean_name(name)
     row = _rows(user, module).filter(name=key).first()
     return default if row is None else row.value
 
 
-def set(user: Any, name: Any, value: Any, *, module_id: Any) -> Any:  # the contract name (1.17.35)
-    """Store one preference for this person and return the stored value. Refuses a 51st name for the module (preference_limit)."""
+def _set(user: Any, name: Any, value: Any, *, module_id: Any) -> Any:
     module = _module(module_id)
     key = _clean_name(name)
     stored = _clean_value(value)
@@ -133,8 +173,7 @@ def set(user: Any, name: Any, value: Any, *, module_id: Any) -> Any:  # the cont
     return row.value
 
 
-def delete(user: Any, name: Any, *, module_id: Any) -> bool:
-    """Remove one preference of this person. True when a row was removed."""
+def _delete(user: Any, name: Any, *, module_id: Any) -> bool:
     module = _module(module_id)
     key = _clean_name(name)
     with _atomic():
@@ -142,8 +181,7 @@ def delete(user: Any, name: Any, *, module_id: Any) -> bool:
     return bool(deleted)
 
 
-def list_for(user: Any, *, module_id: Any) -> dict[str, Any]:
-    """Every preference of this person for the module, as {name: value}, sorted by name."""
+def _list_for(user: Any, *, module_id: Any) -> dict[str, Any]:
     module = _module(module_id)
     return {row.name: row.value for row in _rows(user, module).order_by("name")}
 
@@ -173,7 +211,12 @@ def module_preferences_contract_metadata() -> dict:
         "namespace": "tec_tac.module_preferences",
         "operations": ["get", "set", "delete", "list_for"],
         "limits": {"names_per_module": MAX_NAMES_PER_MODULE, "value_bytes": MAX_VALUE_BYTES, "value_depth": MAX_VALUE_DEPTH},
-        "requires_framework": ">=1.17.35",
+        "caller": (
+            "verified (AD-26, 1.1.0): a call may use only the module named in module_id; any other caller, Core, a library or a "
+            "generated frame, a disabled or legacy module, gives 403 caller_not_allowed before any read or write. The browser route "
+            "is not verified: the path id is a claim."
+        ),
+        "requires_framework": ">=1.17.37",
     }
 
 
