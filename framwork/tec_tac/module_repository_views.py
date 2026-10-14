@@ -6,6 +6,7 @@ from .session_security import SessionAuthenticated
 
 from .module_manager_v2 import LicensingRequirementError
 from .module_repository import (
+    SKIPPED_REASON_FOR_OTHERS,
     ModuleRepositoryError,
     all_repository_status,
     delete_repository,
@@ -42,6 +43,12 @@ def _redact_repository_status_for_non_manager(value):
         sync = clean.get("sync")
         if isinstance(sync, dict) and sync.get("error"):
             sync["error"] = "Repository synchronization failed."
+        # A skipped reason can quote a URL or a host from the remote index (1.17.39). The id, version and index stay.
+        if isinstance(sync, dict) and isinstance(sync.get("skipped"), list):
+            sync["skipped"] = [
+                {**record, "reason": SKIPPED_REASON_FOR_OTHERS} if isinstance(record, dict) else record
+                for record in sync["skipped"]
+            ]
         return clean
     return scrub(value)
 

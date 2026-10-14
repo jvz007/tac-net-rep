@@ -40,6 +40,54 @@ A repository URL points to a schema 1 JSON document:
 
 `download` may be absolute or relative to the index URL. Every package entry requires a SHA-256 digest.
 
+## Module ids in an index
+
+A repository entry's `id` must use only letters, digits, `-` and `_` (`[A-Za-z0-9_-]+`). A dot is not allowed (1.17.39). A dot is the separator in capability ids and permission prefixes, so a dotted id would make the owner of a capability or permission unclear. The rule is the same one in `module-identifiers.md`. An entry with a dotted id is skipped and recorded with a reason that lists the allowed characters (see Skipped entries below).
+
+## Skipped entries (1.17.39)
+
+Core checks each entry of the index on its own. An entry that fails a check is **skipped**: Core records it and keeps the rest of the index. A skipped entry is never offered, staged or installed.
+
+Each skipped entry appears in the sync answer, in the repository status and in the online catalog as a record of this shape:
+
+```json
+{"index": 2, "id": "checks", "version": "0.4.0", "reason": "Repository module checks 0.4.0 requires a valid SHA-256 digest."}
+```
+
+- `index` is the entry's position in the `modules` array (starting at 0).
+- `id` and `version` are the entry's own text, cut to 100 characters with control characters removed. A value that is not text becomes `null`.
+- `reason` is the plain-English reason, at most 300 characters. A caller who cannot manage modules sees a generic sentence instead of the reason. `index`, `id` and `version` still show.
+- At most 100 records are listed. `sync.skipped_count` is the real total, so a count above 100 is possible.
+
+Two rules go beyond one bad entry:
+
+- **Duplicates.** When two entries have the same `id` and `version`, Core skips **both** copies with the reason `duplicate`. Neither can be trusted, so neither is used.
+- **All entries invalid.** When the index has entries and none of them is valid, the sync fails (status `error`, error text "Every one of the N entries in the repository index was invalid"). The previous cache is kept, so a broken publish cannot empty a good catalog. An empty `modules` array is not a failure: it syncs with `module_count` 0.
+
+The status stays `ok` when at least one entry is kept. Core adds no new status value.
+
+Whole-index failures are still failures and keep the previous cache: an index that is not schema 1, a `modules` value that is not an array, a fetch failure, a size limit, and an address refused by the SSRF guard (for example a `download` that points to a private or local address without `trust=internal`). A download host that does not resolve counts as a skipped entry.
+
+## Informational release fields (1.17.39)
+
+Five optional fields on each entry are passed through to the catalog as information. Core shows them and **never acts on them**.
+
+| Field | Type | Rule |
+| --- | --- | --- |
+| `channel` | string | Stripped, control characters removed, at most 64 characters. Null when absent, not text or empty. |
+| `lifecycle` | string | The same rule as `channel`. |
+| `downgrade_policy` | string | The same rule as `channel`. |
+| `signing_environment` | string | The same rule as `channel`. |
+| `recommended` | boolean | Strict `true` or `false`. Null when absent or not a boolean. |
+
+A bad value never invalidates the entry: it becomes null. The values are not checked against a list. They are never used for selection, ordering, compatibility, staging or any refusal. A module release is chosen exactly as before, whatever these fields say. The online catalog copies them from the selected release onto each module item (null when nothing is selected, or when the cache was written before 1.17.39), and onto each release row.
+
+Core does not refuse a downgrade, does not warn about a revoked module, and does not seed a default repository. Those decisions are not built.
+
+## Entitlement
+
+Repository sync, the online catalog listing and package download are **not gated on any entitlement or licence** (1.17.39). Core does not call the licensing capability on those paths, and a licence check, where a module needs one, stays in that module.
+
 ## Multiple repository resolution
 
 Tec-Tac resolves sources in this order:

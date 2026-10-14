@@ -60,7 +60,7 @@ row = by_id["ui.authenticated.modulePreferences"]
 must(row.get("phase") == "authenticated" and row.get("service") == "modulePreferences", "phase and service")
 must(row.get("audience") == "module/browser", "audience is module/browser")
 must(row.get("docs") == "tec-tac-ui/docs/module-preferences.md", "docs path")
-must(row.get("operations") == ["get", "getAll", "set", "remove"], "the four operations in order")
+must(row.get("operations") == ["get", "getAll", "set", "remove", "flush"], "the four 1.17.37 operations in order, then flush (added 1.17.39)")
 check("ui.authenticated.modulePreferences", [
     "get(name, fallback)", "getAll()", "set(name, value)", "remove(name)", "async",
     "Own id only", "bound to the loader's descriptor id", "no module id is passed",

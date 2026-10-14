@@ -36,7 +36,7 @@ The following surfaces must preserve the identifier exactly:
 - repository catalogue module IDs;
 - navigation/module metadata supplied by the module.
 
-Uppercase ASCII letters are supported by the Core module-ID validators. Permission and capability prefixes are compared case-sensitively against the owning module ID.
+Uppercase ASCII letters are supported by the Core module-ID validators. Permission and capability prefixes are compared case-sensitively against the owning module ID. A module id in a repository index follows the same rule: no dot (1.17.39, see `module-repositories.md`).
 
 ## Explicit module identity migration (rename-upgrade)
 

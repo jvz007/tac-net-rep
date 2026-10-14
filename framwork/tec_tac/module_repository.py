@@ -19,6 +19,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -41,10 +42,20 @@ CACHE_ROOT = REPOSITORY_ROOT / "cache"
 MAX_INDEX_BYTES = 2 * 1024 * 1024
 REPO_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,63}$")
 TRUST_LEVELS = {"official", "internal", "custom"}
+MAX_SKIPPED_RECORDS = 100
+MAX_SKIPPED_TEXT = 100
+MAX_SKIPPED_REASON = 300
+MAX_INFORMATIONAL_TEXT = 64
+SKIPPED_REASON_FOR_OTHERS = "This entry was skipped. A module manager can see the reason."
+_CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 
 class ModuleRepositoryError(RuntimeError):
     pass
+
+
+class _RemoteAddressRefused(ModuleRepositoryError):
+    """The SSRF guard refused an address. This fails the whole index; it is never a skipped entry (1.17.39)."""
 
 
 def _utcnow() -> str:
@@ -121,7 +132,7 @@ def _resolve_remote_url(value: str, *, trust: str = "custom") -> tuple[str, urll
     parsed = urllib.parse.urlparse(url)
     host = str(parsed.hostname or "").strip().rstrip(".")
     if not host or host.lower() == "localhost":
-        raise ModuleRepositoryError("Repository URL resolves to a prohibited local address.")
+        raise _RemoteAddressRefused("Repository URL resolves to a prohibited local address.")
     addresses = set()
     try:
         addresses.add(_normalize_address(ipaddress.ip_address(host)))
@@ -134,9 +145,9 @@ def _resolve_remote_url(value: str, *, trust: str = "custom") -> tuple[str, urll
     if not addresses:
         raise ModuleRepositoryError("Repository hostname did not resolve to an address.")
     if any(_always_blocked_address(address) for address in addresses):
-        raise ModuleRepositoryError("Repository URL resolves to a prohibited local, link-local, or reserved address.")
+        raise _RemoteAddressRefused("Repository URL resolves to a prohibited local, link-local, or reserved address.")
     if trust != "internal" and any(_private_address(address) for address in addresses):
-        raise ModuleRepositoryError("Repository URL resolves to a private or carrier-grade NAT address. Mark an administrator-controlled LAN repository as trust=internal to permit private addressing.")
+        raise _RemoteAddressRefused("Repository URL resolves to a private or carrier-grade NAT address. Mark an administrator-controlled LAN repository as trust=internal to permit private addressing.")
     return url, parsed, tuple(sorted(addresses, key=lambda value: (value.version, str(value))))
 
 
@@ -384,7 +395,9 @@ def _validate_release(raw: dict, repo_url: str, *, trust: str = "custom") -> dic
     if not module_id or not version or not download:
         raise ModuleRepositoryError("Every repository module entry requires id, version and download.")
     if not re.fullmatch(r"[A-Za-z0-9_-]+", module_id):
-        raise ModuleRepositoryError(f"Repository module id is invalid: {module_id!r}.")
+        raise ModuleRepositoryError(
+            f"Repository module id is invalid: {module_id!r}. Use only letters, digits, '-' and '_' (a dot is not allowed)."
+        )
     if not re.fullmatch(r"[0-9a-f]{64}", sha256):
         raise ModuleRepositoryError(f"Repository module {module_id} {version} requires a valid SHA-256 digest.")
     # Validate semantic version and constraints using the same parser as Module Manager.
@@ -427,7 +440,79 @@ def _validate_release(raw: dict, repo_url: str, *, trust: str = "custom") -> dic
         "dependencies": {str(k): str(v) for k, v in dependencies.items()},
         "optional_dependencies": {str(k): str(v) for k, v in optional.items()},
         "requires": {str(k): str(v) for k, v in requires.items()},
+        # Informational only (1.17.39): Core shows them and never acts on them.
+        "channel": _informational_text(raw.get("channel")),
+        "lifecycle": _informational_text(raw.get("lifecycle")),
+        "recommended": raw.get("recommended") if isinstance(raw.get("recommended"), bool) else None,
+        "downgrade_policy": _informational_text(raw.get("downgrade_policy")),
+        "signing_environment": _informational_text(raw.get("signing_environment")),
     }
+
+
+def _informational_text(value) -> str | None:
+    # A bad value becomes null and never invalidates the entry (1.17.39).
+    if not isinstance(value, str):
+        return None
+    return _CONTROL_CHARACTERS.sub("", value).strip()[:MAX_INFORMATIONAL_TEXT] or None
+
+
+def _plain_text(value, limit: int) -> str | None:
+    # Untrusted text from a remote index: control characters removed, length capped (1.17.39).
+    if not isinstance(value, str):
+        return None
+    return _CONTROL_CHARACTERS.sub("", value)[:limit]
+
+
+def _skipped_record(index: int, raw, reason: str) -> dict:
+    fields = raw if isinstance(raw, dict) else {}
+    return {
+        "index": index,
+        "id": _plain_text(fields.get("id"), MAX_SKIPPED_TEXT),
+        "version": _plain_text(fields.get("version"), MAX_SKIPPED_TEXT),
+        "reason": _plain_text(reason, MAX_SKIPPED_REASON) or "",
+    }
+
+
+def _accepted_releases(raw_modules: list, repo: dict) -> tuple[list[dict], list[dict]]:
+    """Validate each index entry on its own (1.17.39). Returns the kept releases and every skipped record, in index order.
+
+    An entry that fails validation is skipped and recorded. Both copies of a duplicate id and version are skipped, because
+    neither can be trusted. A remote address refused by the SSRF guard still fails the whole index. An index whose entries
+    are all invalid fails, so a broken publish cannot empty a good cache.
+    """
+    trust = repo.get("trust", "custom")
+    accepted: list[tuple[int, dict]] = []
+    skipped: list[dict] = []
+    for index, item in enumerate(raw_modules):
+        try:
+            accepted.append((index, _validate_release(item, repo["url"], trust=trust)))
+        except _RemoteAddressRefused:
+            raise
+        except (ModuleRepositoryError, ValueError) as exc:
+            skipped.append(_skipped_record(index, item, str(exc)))
+    copies = Counter((release["id"], release["version"]) for _, release in accepted)
+    modules = []
+    for index, release in accepted:
+        if copies[(release["id"], release["version"])] > 1:
+            skipped.append(_skipped_record(index, release, "duplicate"))
+        else:
+            modules.append(release)
+    if raw_modules and not modules:
+        raise ModuleRepositoryError(
+            f"Every one of the {len(raw_modules)} entries in the repository index was invalid, so the index was not used. "
+            "The previous catalog is kept."
+        )
+    skipped.sort(key=lambda record: record["index"])
+    return modules, skipped
+
+
+def _skipped_summary(payload: dict) -> tuple[int, list]:
+    count = payload.get("skipped_count")
+    records = payload.get("skipped")
+    return (
+        count if isinstance(count, int) and not isinstance(count, bool) else 0,
+        records if isinstance(records, list) else [],
+    )
 
 
 def sync_repository(repository_id: str) -> dict:
@@ -441,10 +526,7 @@ def sync_repository(repository_id: str) -> dict:
         raw_modules = payload.get("modules")
         if not isinstance(raw_modules, list):
             raise ModuleRepositoryError("Repository index modules must be an array.")
-        modules = [_validate_release(item, repo["url"], trust=repo.get("trust", "custom")) for item in raw_modules]
-        identities = [(item["id"], item["version"]) for item in modules]
-        if len(identities) != len(set(identities)):
-            raise ModuleRepositoryError("Repository index contains duplicate module id/version entries.")
+        modules, skipped = _accepted_releases(raw_modules, repo)
         cache = {
             "schema": 1,
             "repository_id": repository_id,
@@ -453,10 +535,20 @@ def sync_repository(repository_id: str) -> dict:
             "status": "ok",
             "error": None,
             "modules": modules,
+            "skipped": skipped[:MAX_SKIPPED_RECORDS],
+            "skipped_count": len(skipped),
         }
         CACHE_ROOT.mkdir(parents=True, exist_ok=True)
         _atomic_repo_json(CACHE_ROOT / f"{repository_id}.json", cache)
-        return {**public_repository(repo), "sync": {"status": "ok", "synced_at": cache["synced_at"], "error": None, "module_count": len(modules)}}
+        sync = {
+            "status": "ok",
+            "synced_at": cache["synced_at"],
+            "error": None,
+            "module_count": len(modules),
+            "skipped_count": len(skipped),
+            "skipped": skipped[:MAX_SKIPPED_RECORDS],
+        }
+        return {**public_repository(repo), "sync": sync}
     except Exception as exc:
         cache_path = CACHE_ROOT / f"{repository_id}.json"
         existing = {}
@@ -474,19 +566,22 @@ def sync_repository(repository_id: str) -> dict:
 def repository_status(repository_id: str) -> dict:
     repo = _repo(repository_id)
     path = CACHE_ROOT / f"{repository_id}.json"
-    sync = {"status": "never", "synced_at": None, "error": None, "module_count": 0}
+    sync = {"status": "never", "synced_at": None, "error": None, "module_count": 0, "skipped_count": 0, "skipped": []}
     if path.is_file():
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
+            skipped_count, skipped = _skipped_summary(payload)
             sync = {
                 "status": payload.get("status") or "unknown",
                 "synced_at": payload.get("synced_at"),
                 "last_attempt_at": payload.get("last_attempt_at"),
                 "error": payload.get("error"),
                 "module_count": len(payload.get("modules") or []),
+                "skipped_count": skipped_count,
+                "skipped": skipped,
             }
         except Exception as exc:
-            sync = {"status": "error", "synced_at": None, "error": str(exc), "module_count": 0}
+            sync = {"status": "error", "synced_at": None, "error": str(exc), "module_count": 0, "skipped_count": 0, "skipped": []}
     return {**public_repository(repo), "sync": sync}
 
 
@@ -498,7 +593,7 @@ def sync_all(enabled_only: bool = True) -> list[dict]:
     results = []
     for repo in list_repositories():
         if enabled_only and not repo.get("enabled", True):
-            results.append({**repo, "sync": {"status": "disabled", "synced_at": None, "error": None, "module_count": 0}})
+            results.append({**repo, "sync": {"status": "disabled", "synced_at": None, "error": None, "module_count": 0, "skipped_count": 0, "skipped": []}})
             continue
         try:
             results.append(sync_repository(repo["id"]))
@@ -599,6 +694,12 @@ def online_catalog() -> dict:
             "compatibility": compatibility,
             "source_conflict": source_conflict,
             "available_sources": sorted({item["repository_id"] for item in choices}),
+            # Informational (1.17.39), taken from the selected release. Null when nothing is selected or the cache predates them.
+            "channel": (selected or {}).get("channel"),
+            "lifecycle": (selected or {}).get("lifecycle"),
+            "recommended": (selected or {}).get("recommended"),
+            "downgrade_policy": (selected or {}).get("downgrade_policy"),
+            "signing_environment": (selected or {}).get("signing_environment"),
             "releases": choices,
         })
     return {"schema": 1, "modules": items, "count": len(items), "repositories": all_repository_status()}

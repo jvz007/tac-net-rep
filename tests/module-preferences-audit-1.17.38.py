@@ -546,7 +546,7 @@ must("## Not audited" not in doc and "Not audited" not in doc.replace("**What is
 must("Core cannot prove" in doc and "Core can prove" in doc, "the can and cannot prove lists are there")
 must("source` `browser` and `module_verified` `false`" in doc or "`module_verified` is `false`" in doc or "`module_verified` `false`" in doc,
      "the browser claim is recorded as a claim")
-notes = (ROOT / "RELEASE_NOTES_1.17.38.md").read_text(encoding="utf-8")
+notes = (ROOT / "docs" / "releases" / "RELEASE_NOTES_1.17.38.md").read_text(encoding="utf-8")  # moved to docs/releases at 1.17.39
 must("What Core can and cannot prove about the module id" in notes, "the release notes carry the can and cannot prove heading")
 must("AD-36" in notes and "not recorded" in notes, "the release notes say AD-36 is not recorded")
 must("Module-facing" in notes or "module-facing" in notes, "the release notes have a module-facing heading")

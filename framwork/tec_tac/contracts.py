@@ -1202,6 +1202,37 @@ HTTP_CONTRACT_DETAILS = {
             "audit": "self_tactical_ui_preferences_changed, with the changed field names only, never the values",
         },
     },
+    "/api/tfd/modules/repositories/sync/": {
+        "POST": {
+            "authorization": "authenticated Tec-Tac session; module management only (a caller who cannot manage modules is refused)",
+            "response": {"repositories": "one row per enabled repository: the public repository fields plus sync {status, synced_at, error, module_count, skipped_count, skipped}"},
+            "notes": [
+                "Added 1.17.39, additive, informational: sync.skipped_count is the real total of entries Core skipped in the last sync of that repository, and sync.skipped[] lists at most 100 of them, in index order. Each record is {index, id, version, reason}: index is the entry's position in the index; id and version are the entry's text cut to 100 characters with control characters removed (null when not text); reason is the plain-English reason, at most 300 characters. A duplicate id and version are both skipped with reason 'duplicate'.",
+                "For a caller who cannot manage modules, each reason is replaced by a generic sentence (a reason can quote a URL or a host from the remote index). id, version, index and skipped_count stay.",
+                "Status stays 'ok' when at least one entry was kept. An index whose entries are all invalid fails with status 'error' and the previous cache is kept. Whole-index failures (not schema 1, modules not an array, a fetch, size or address-guard refusal) fail as before.",
+                "Added 1.17.39, additive, informational: the five release fields (channel, lifecycle, downgrade_policy, signing_environment, recommended) are shown with each release. Core never acts on them.",
+            ],
+        },
+    },
+    "/api/tfd/modules/repositories/<str:repository_id>/sync/": {
+        "POST": {
+            "authorization": "authenticated Tec-Tac session; module management only",
+            "response": {"sync": "{status, synced_at, error, module_count, skipped_count, skipped}, plus the public repository fields"},
+            "notes": [
+                "Added 1.17.39, additive, informational: sync.skipped_count and sync.skipped[] (at most 100 records, each {index, id, version, reason}), with the same rules and the same redaction for a caller who cannot manage modules as /api/tfd/modules/repositories/sync/. An all-invalid index answers 400 with the reason in detail, and the previous cache is kept.",
+            ],
+        },
+    },
+    "/api/tfd/modules/catalog/online/": {
+        "GET": {
+            "authorization": "authenticated Tec-Tac session; a caller who cannot manage modules gets the redacted form (generic skipped reasons)",
+            "response": {"modules": "array of the online catalog items", "repositories": "the repository status rows, with sync.skipped_count and sync.skipped[]"},
+            "notes": [
+                "Added 1.17.39, additive, informational: each modules[] item and each modules[].releases[] row carries channel, lifecycle, downgrade_policy and signing_environment (a string of at most 64 characters, or null) and recommended (true, false or null). A modules[] item takes them from the selected release, and is null when nothing is selected or the cache predates them. Core shows them and never acts on them: they are not used for selection, ordering, compatibility, staging or any refusal, and no value is checked against a list.",
+                "Module download and staging are not gated on any entitlement or licence (added 1.17.39): Core does not check a licence on sync, listing or download.",
+            ],
+        },
+    },
     "/api/tfd/modules/v2/": {
         "response": {
             "modules[].replaces": "string|null, the core or server module this module replaces (added 1.17.9)",
@@ -1592,7 +1623,7 @@ BROWSER_CONTRACTS = (
         "id": "ui.authenticated.runtime-context",
         "phase": "authenticated",
         "service": "context / state.context",
-        "operations": ["read", "locale", "timeZone", "dateTimeFormat", "tactical_ui.agent_dblclick_action", "tactical_ui.url_action_id", "tactical_ui.can_run_url_actions", "tactical_ui.dark_mode", "tactical_ui.show_community_scripts", "tactical_ui.clear_search_when_switching", "tactical_ui.default_agent_tbl_tab", "tactical_ui.client_tree_sort", "tactical_ui.client_tree_splitter", "tactical_ui.loading_bar_color", "tactical_ui.dash_info_color", "tactical_ui.dash_positive_color", "tactical_ui.dash_negative_color", "tactical_ui.dash_warning_color", "tactical_ui.date_format", "tactical_web_ui.installed", "tactical_web_ui.url", "server_url", "module_register_timeout_seconds", "system_name", "user.id", "tactical_permissions.<flag>", "tactical_scope.mode", "tactical_scope.unrestricted", "tactical_scope.whole_client_count", "tactical_scope.site_count"],
+        "operations": ["read", "locale", "timeZone", "dateTimeFormat", "tactical_ui.agent_dblclick_action", "tactical_ui.url_action_id", "tactical_ui.can_run_url_actions", "tactical_ui.dark_mode", "tactical_ui.show_community_scripts", "tactical_ui.clear_search_when_switching", "tactical_ui.default_agent_tbl_tab", "tactical_ui.client_tree_sort", "tactical_ui.client_tree_splitter", "tactical_ui.loading_bar_color", "tactical_ui.dash_info_color", "tactical_ui.dash_positive_color", "tactical_ui.dash_negative_color", "tactical_ui.dash_warning_color", "tactical_ui.date_format", "tactical_web_ui.installed", "tactical_web_ui.url", "server_url", "module_register_timeout_seconds", "system_name", "user.id", "user.superuser", "tactical_permissions.<flag>", "tactical_scope.mode", "tactical_scope.unrestricted", "tactical_scope.whole_client_count", "tactical_scope.site_count"],
         "audience": "module/browser",
         "docs": "tec-tac-ui/docs/module-runtime-api.md",
         "purpose": "Read the Core-provided authenticated register(context).context object (also available as state.context), including permissions, preferences, authoritative locale/time-zone/date-format fields, Tactical UI preferences, and whether the standard Tactical web UI is installed; treat it as read-only state.",
@@ -1605,6 +1636,7 @@ BROWSER_CONTRACTS = (
             "module_status[].category, effective_category, category_missing, category_refused and category_warning: added in Core 1.17.13 (AD-21), see docs/module-categories.md. category is the declared value (core, server, premium or test) or null, effective_category is what Core acts on (a missing category is test), category_missing and category_refused are booleans (category_refused means an install is refused, install only since 1.17.14), category_warning is plain English or null. The UI shows them as a badge. Additive: older UI builds ignore them.",
             "tactical_permissions: a plain object of can_* keys with strict boolean values (needs Core 1.17.7). The UI drops any key that does not start with can_ and any value that is not exactly true or false. A missing or non-object value becomes an empty map. Core sends only booleans from tactical_permission_catalog, so the rule is defence in depth. Use hasTacticalPermission(flag) to read it.",
             "user.id (UI 0.12.101): the signed-in person's Tactical user id, which is Tactical's own user primary key. It is a whole number of at least 1. A module uses it as an owner or author id only when it is valid, and otherwise asks the person to sign in again rather than guess one. Read-only.",
+            "user.superuser (sent since before 1.17.38, listed in the row from 1.17.39): the effective superuser, a strict boolean. It is true when Tactical's is_superuser or the role's is_superuser is true, and it is not the Tactical flag alone (that is user.tactical_superuser, which this row does not promise). A display hint only: Core and Tactical decide every call (AD-12, AD-35). A module treats a missing or non-boolean value as false (fail closed).",
             "tactical_scope: {mode, unrestricted, whole_client_count, site_count}, the signed-in user's Tactical client and site scope as counts only (Core 1.17.17, read by UI 0.12.93). mode is unrestricted, clients, sites, mixed or none. unrestricted is true only when mode is unrestricted. The counts are whole numbers and there are no id lists. An older Core, a lookup that failed or a value the UI does not recognise becomes {mode: 'none', unrestricted: false, whole_client_count: 0, site_count: 0}. Use tacticalScope() to read it. A display hint only: Tactical and Core decide every call (AD-12).",
         ],
     },
@@ -1816,15 +1848,17 @@ BROWSER_CONTRACTS = (
         "id": "ui.authenticated.modulePreferences",
         "phase": "authenticated",
         "service": "modulePreferences",
-        "operations": ["get", "getAll", "set", "remove"],
+        "operations": ["get", "getAll", "set", "remove", "flush"],
         "audience": "module/browser",
         "docs": "tec-tac-ui/docs/module-preferences.md",
-        "purpose": "Keep small per-person display choices with context.modulePreferences: get(name, fallback), getAll(), set(name, value) and remove(name), all async. Core keeps each choice for the one person and one module, so it follows the person to another browser. Needs Core 1.17.35 or later and UI 0.12.106 or later.",
+        "purpose": "Keep small per-person display choices with context.modulePreferences: get(name, fallback), getAll(), set(name, value), remove(name) and flush(), all async. Core keeps each choice for the one person and one module, so it follows the person to another browser. Needs Core 1.17.35 or later and UI 0.12.106 or later for get, getAll, set and remove; the debounce, flush() and the two refusals below need UI 0.12.108 and Core 1.17.38.",
         "details": [
             "get(name, fallback) returns the stored value, or fallback when the person has none. getAll() returns a new object of { name: value } for this module. set(name, value) stores one value and returns what Core stored. remove(name) deletes one preference and returns true when Core removed a row. Every call reads from Core: nothing is cached, and nothing is kept in browser storage (no localStorage, sessionStorage or cache).",
+            "Debounce (UI 0.12.108): set() and remove() on the same name within 400 ms become one request, which carries the last operation (the last value, or a remove if remove came last). The window restarts with each call, but a write is never held more than 2 seconds from its first call. Every call whose write was merged gets the same outcome. Different names are independent. get() and getAll() see a write that has not finished yet, and a waiting remove reads as absent. Validation runs when the call is made, so a refused name or value sends nothing.",
+            "flush() (UI 0.12.108): sends every write that is still waiting now, at once, and resolves when they are all done. It does not reject when a write failed: that failure goes to the caller of that write. It is for a module that is leaving its page and wants its last choice saved first.",
             "Own id only: the module id is bound to the loader's descriptor id, so no module id is passed and a module cannot read or change another module's preferences. There is no AD-20 replaced-module exception: a replacement module keeps its own preferences and cannot reach the module it replaces. The api, apiRaw, apiBlob and apiText helpers also refuse a raw path to /api/tfd/module-preferences/ for any other id (the path is decoded first). registerPublic does not get modulePreferences, because a public page has no signed-in person.",
             "Limits, checked in the browser before any request and again by Core: name 1 to 64 characters matching [a-z0-9][a-z0-9._-]{0,63}; value plain JSON (null, booleans, finite numbers, strings, arrays and plain objects), at most 4 KiB when stored and at most 5 levels deep; at most 50 names per module for one person. A bad name gives invalid_name and a bad value gives invalid_value (both status 400, no request).",
-            "Refusals from Core: preference_limit (status 400, a 51st name), module_not_found (status 404), and since Core 1.17.38 module_not_allowed (status 403, the person may not use the module) and audit_failed (status 503, the change was not saved). A 401 is treated as signed out (signed_out) and the helper stays silent. Too many writes give 429.",
+            "Refusals from Core: preference_limit (status 400, a 51st name), module_not_found (status 404), and since Core 1.17.38 module_not_allowed (status 403, the person may not use the module) and audit_failed (status 503, the change was not saved and the old value stays; a later get() returns it). From UI 0.12.108 the 403 error carries hideControl: true, so the module hides the control that uses the helper (AD-12). A 401 is treated as signed out (signed_out) and the helper stays silent. Too many writes give 429.",
             "Core 1.17.35 or later and UI 0.12.106 or later. The Python functions of core.module_preferences are a separate contract (Core 1.17.37 adds the verified caller; Core 1.17.38 adds the audit row and the two refusals above).",
         ],
     },
