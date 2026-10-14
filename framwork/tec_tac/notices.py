@@ -13,7 +13,7 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
-from .models import TecTacUserNotice
+from .models import TecTacNoticeLedger, TecTacUserNotice
 
 LEVELS = frozenset({"info", "success", "warning", "error"})
 MAX_NOTICE_HISTORY = 500
@@ -157,6 +157,48 @@ def publish_system_notice(recipients, *, client_id: str, message: str, title: st
             created += 1
             _prune_user(user.pk)
     return created
+
+
+# ---- The notice ledger (1.17.34). The dedupe record of the module failure sweep. Clear read and _prune_user never touch it. ----
+LEDGER_KINDS = frozenset({TecTacNoticeLedger.KIND_NOTICE, TecTacNoticeLedger.KIND_EMAIL})
+LEDGER_RETENTION_DAYS = 7
+
+
+def _ledger_kind(kind) -> str:
+    if kind not in LEDGER_KINDS:
+        raise NoticeError("ledger kind must be notice or email.")
+    return kind
+
+
+def ledger_have(kind: str, keys) -> set:
+    """The (key, user id) pairs the ledger holds for ``kind`` and these keys. One read. Raises on a database failure: the caller decides."""
+    kind = _ledger_kind(kind)
+    wanted = [str(key) for key in keys]
+    if not wanted:
+        return set()
+    return set(TecTacNoticeLedger.objects.filter(kind=kind, key__in=wanted).values_list("key", "user_id"))
+
+
+def ledger_add(kind: str, key: str, users) -> int:
+    """Record that each user (a user, or a user id) has had ``key``. Returns how many rows it created. Never changes an existing row.
+    Raises on a database failure."""
+    kind = _ledger_kind(kind)
+    created = 0
+    for user in users:
+        _, new = TecTacNoticeLedger.objects.get_or_create(user_id=getattr(user, "pk", user), kind=kind, key=str(key)[:64])
+        created += 1 if new else 0
+    return created
+
+
+def ledger_count_since(kind: str, since) -> int:
+    """How many ledger rows of ``kind`` were written since ``since``: the Priority 1 email cap counts these."""
+    return TecTacNoticeLedger.objects.filter(kind=_ledger_kind(kind), created_at__gte=since).count()
+
+
+def ledger_prune(days: int = LEDGER_RETENTION_DAYS) -> int:
+    """Delete ledger rows older than ``days``. The notice window is hours, so a seven day row can never matter again."""
+    deleted, _ = TecTacNoticeLedger.objects.filter(created_at__lt=timezone.now() - timedelta(days=days)).delete()
+    return int(deleted)
 
 
 _RESERVED_SOURCES = frozenset({"core", "tec-tac"})

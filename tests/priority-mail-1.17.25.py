@@ -181,7 +181,7 @@ def recipients_for(requested_by):
 def sweep(jobs, **overrides):
     seams = dict(now=CLOCK["now"], jobs=jobs, recipients_for=recipients_for, publish=STORE.publish, existing=STORE.toast_existing,
                  recent=STORE.recent, audit=lambda job_id, md: AUDIT_ROWS.append((job_id, dict(md))), email_have=STORE.have,
-                 mark_sent=STORE.mark)
+                 mark_sent=STORE.mark, ledger_have=lambda kind, keys: set(), ledger_add=lambda kind, key, users: 0, ledger_prune=lambda: 0)
     seams.update(overrides)
     return mfn.sweep_failed_jobs(**seams)
 

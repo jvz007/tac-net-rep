@@ -5,6 +5,11 @@ shell and NATS logic run unchanged. Core adds, in this order: the ticket (consum
 flag and scope re-check, and one strict audit row before the first start of each session. A watcher closes the socket when the sign-in
 behind it ends. Core logs no frame: not input, not output, not a ticket, not a token.
 
+Since 1.17.34 (AD-35) input and resize frames count as session activity: the consumer notes them in memory (TerminalActivity) and the
+watcher, once every 30 seconds, hands the time to session_security.record_terminal_activity, so a terminal in use keeps its sign-in
+alive. Output alone does not. The watcher also enforces the idle limit and the absolute maximum, and re-checks the Tactical flag and
+the agent's scope (the same recheck as connect).
+
 Close codes: 4401 (ticket or sign-in), 4003 (Origin, flag or scope). Messages are Tactical's own, unchanged (AD-25).
 """
 from __future__ import annotations
@@ -12,22 +17,26 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from urllib.parse import urlsplit
 
 from agents.consumers import TerminalStreamConsumer  # Tactical's own consumer; imported only when a socket connects
 from channels.db import database_sync_to_async
 from django.contrib.auth import get_user_model
 
-from . import audit as audit_core
 from . import resources_adapter as adapter
 from .rbac import has_tactical_permission
-from .tactical_websocket import (
+from .tactical_websocket import (  # noqa: F401 - the Origin helpers and write_start_row live in tactical_websocket and are re-exported
     KINDS,
+    ORIGIN_DEFAULT_PORTS,
+    TerminalActivity,
     _session_refusal_once,
+    configured_frontend_origins,
     consume_ticket,
     ensure_usable_connections,
+    normal_origin,
+    origin_allowed,
     run_with_fresh_connection,
     session_refusal,
+    write_start_row,
 )
 
 logger = logging.getLogger("tec_tac.tactical_websocket")
@@ -43,79 +52,8 @@ def clean_shell(value) -> str:
     return text[:SHELL_MAX_CHARS] or "default"
 
 
-ORIGIN_DEFAULT_PORTS = {"http": 80, "https": 443}
-
-
-def normal_origin(value) -> str | None:
-    """scheme://host[:port] in lower case, with the default port (443 for https, 80 for http) dropped. None when the value is not a
-    plain http(s) origin: a path, query, fragment, user name, '*', 'null', a number, a regular expression or a space in it."""
-    if not isinstance(value, str):
-        return None
-    text = value.strip().lower()
-    if not text or text in ("*", "null") or not all(ch.isascii() and ch.isprintable() and not ch.isspace() for ch in text):
-        return None
-    try:
-        parts = urlsplit(text)
-        port = parts.port
-    except ValueError:
-        return None
-    if parts.scheme not in ORIGIN_DEFAULT_PORTS or not parts.hostname:
-        return None
-    if parts.path not in ("", "/") or parts.query or parts.fragment or "@" in parts.netloc:
-        return None
-    host = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
-    if port is not None and port != ORIGIN_DEFAULT_PORTS[parts.scheme]:
-        host = f"{host}:{port}"
-    return f"{parts.scheme}://{host}"
-
-
-def configured_frontend_origins() -> set[str]:
-    """The frontend origins Tactical's own CORS settings name: CORS_ORIGIN_WHITELIST and, when present, CORS_ALLOWED_ORIGINS.
-
-    Read from server settings only, never from a request, a header or a ticket. Entries that are not plain http(s) origins are ignored
-    (see normal_origin), and so are regular expressions and allow-all settings: narrower than Tactical's CORS on purpose. A settings read
-    that fails gives an empty set, so only the same-host rule applies.
-    """
-    try:
-        # imported here, not at the top, so this module still loads where Django's settings are not configured
-        from django.conf import settings
-
-        lists = [getattr(settings, name, None) for name in ("CORS_ORIGIN_WHITELIST", "CORS_ALLOWED_ORIGINS")]
-    except Exception:  # noqa: BLE001 - any failure to read settings means no frontend origin (fail closed)
-        logger.warning("Could not read Tactical's CORS settings; the terminal socket accepts the request host only.")
-        return set()
-    origins: set[str] = set()
-    for entries in lists:
-        if isinstance(entries, (list, tuple, set, frozenset)):
-            origins.update(origin for origin in map(normal_origin, entries) if origin)
-    return origins
-
-
-def origin_allowed(scope) -> bool:
-    """A browser that sends an Origin must come from the same host as the request, or from a frontend origin that Tactical's CORS
-    settings name (configured_frontend_origins). That second case is the split layout: the API on one host, the web UI on another.
-    No Origin is allowed: the ticket already blocks use from another site, because the ticket is never sent by the page of another site.
-    A null, empty or malformed Origin is refused. The frontend list comes from server settings only, never from the request."""
-    headers = {}
-    for name, value in scope.get("headers") or []:
-        headers[bytes(name).lower()] = bytes(value)
-    origin = headers.get(b"origin")
-    if origin is None:
-        return True
-    origin_text = origin.decode("latin-1").strip()
-    host = headers.get(b"host", b"").decode("latin-1").strip().lower()
-    try:
-        netloc = urlsplit(origin_text).netloc.lower()
-    except ValueError:
-        return False
-    if host and netloc and netloc == host:
-        return True
-    origin_form = normal_origin(origin_text)
-    return origin_form is not None and origin_form in configured_frontend_origins()
-
-
-def _recheck_once(value: dict):
-    if _session_refusal_once(value):
+def _recheck_once(value: dict, activity_at=None):
+    if _session_refusal_once(value, activity_at):
         return 4401, None
     user = get_user_model().objects.filter(pk=value["user_id"]).first()
     if user is None:
@@ -127,23 +65,19 @@ def _recheck_once(value: dict):
     return None, user
 
 
-def recheck(value: dict):
+def recheck(value: dict, activity_at=None):
     """(close code, user). A None code means every check passed. Runs in a worker thread (database_sync_to_async).
+
+    ``activity_at`` is the time of the person's last input since the last check, or None (1.17.34): it refreshes the idle timer first.
+    The watcher and connect share this one function, so the watcher enforces the same rule as connect.
 
     A stale database connection is retried once, and the whole check runs again (Core 1.17.33). Any other error, or a second failure,
     closes the socket 4401 (fail closed)."""
     try:
-        return run_with_fresh_connection(_recheck_once, value)
+        return run_with_fresh_connection(_recheck_once, value, activity_at)
     except Exception:
         logger.exception("Could not re-check the sign-in behind a Tactical terminal ticket; refusing.")
         return 4401, None
-
-
-def write_start_row(**kwargs):
-    """The strict start row. The connection is checked first, but the write itself is never retried: a retry could double a row, and a
-    failed write must stay audit_unavailable (no row, no start)."""
-    ensure_usable_connections()
-    return audit_core._record_tactical_websocket(**kwargs)
 
 
 class TecTacAgentTerminalConsumer(TerminalStreamConsumer):
@@ -152,6 +86,12 @@ class TecTacAgentTerminalConsumer(TerminalStreamConsumer):
         self._tec_value = None
         self._tec_start_lock = asyncio.Lock()
         self._tec_watch = None
+        self._tec_activity = TerminalActivity()
+
+    async def receive_json(self, content, **kwargs):
+        # Input and resize count as activity (AD-35); nothing is kept from the frame but the time. start, kill and output never count.
+        self._tec_activity.note(KIND, content)
+        await super().receive_json(content, **kwargs)
 
     async def connect(self):
         route_kwargs = (self.scope.get("url_route") or {}).get("kwargs") or {}
@@ -214,14 +154,22 @@ class TecTacAgentTerminalConsumer(TerminalStreamConsumer):
             logger.exception("Terminal start audit row was not written; the terminal will not start.")
             return False
 
+    async def _watch_tick(self) -> bool:
+        """One check: hand any input time to the sign-in, then enforce the whole rule. Closes 4401 when the sign-in ended (revoked,
+        idle, past its maximum, Knox token gone, user disabled) and 4003 when the flag or the agent's scope no longer holds. True when
+        it closed the socket."""
+        code, _ = await database_sync_to_async(recheck)(self._tec_value, self._tec_activity.take())
+        if code is not None:
+            await self.close(code)
+            return True
+        return False
+
     async def _watch(self):
-        """Close the socket when the sign-in behind it ends. Idle time is not checked (see tactical_websocket.session_refusal)."""
+        """Run _watch_tick every WATCH_SECONDS until it closes the socket."""
         try:
             while True:
                 await asyncio.sleep(WATCH_SECONDS)
-                reason = await database_sync_to_async(session_refusal)(self._tec_value)
-                if reason:
-                    await self.close(4401)
+                if await self._watch_tick():
                     return
         except asyncio.CancelledError:
             raise

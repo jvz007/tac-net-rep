@@ -50,12 +50,14 @@ class Command(BaseCommand):
             self.stderr.write(f"TEC-TAC replacement audit sweep failed; retrying next tick: {exc.__class__.__name__}: {exc}")
 
         failure_notices = 0
+        failure_report = {}
         try:
             # 1.17.14 (CQ36): one notice per failed module job, for the superusers and the person who started it. The
-            # step never raises, and a failure here never takes the tick or Tactical down.
+            # step never raises, and a failure here never takes the tick or Tactical down. 1.17.34: only jobs finished in the last
+            # six hours, and never again for a person the notice ledger already holds; the report counts what it left alone.
             from tec_tac.module_failure_notices import sweep_failed_jobs
 
-            failure_notices = sweep_failed_jobs()
+            failure_notices = sweep_failed_jobs(report=failure_report)
         except Exception as exc:
             self.stderr.write(f"TEC-TAC module failure notice sweep failed; retrying next tick: {exc.__class__.__name__}: {exc}")
 
@@ -72,7 +74,7 @@ class Command(BaseCommand):
         sweep_state = "error" if sweep_error else "ran"
         cleanup_state = "error" if cleanup_error else ("ran" if cleanup and cleanup.get("ran") else "not_due")
         self.stdout.write(
-            "TEC-TAC scheduler tick: checked={checked} queued={queued} skipped={skipped} cleaned={cleaned} session_history_cleanup={session_cleanup} session_expiry_sweep={sweep_state} sweep_revoked={sweep_revoked} sweep_skipped_no_digest={sweep_skipped} sweep_orphan_tokens={sweep_orphans} now={now} replacement_conflicts_queued={replacement_queued} replacement_audit_rows={replacement_audit} module_failure_notices={failure_notices}".format(
+            "TEC-TAC scheduler tick: checked={checked} queued={queued} skipped={skipped} cleaned={cleaned} session_history_cleanup={session_cleanup} session_expiry_sweep={sweep_state} sweep_revoked={sweep_revoked} sweep_skipped_no_digest={sweep_skipped} sweep_orphan_tokens={sweep_orphans} now={now} replacement_conflicts_queued={replacement_queued} replacement_audit_rows={replacement_audit} module_failure_notices={failure_notices} module_failure_skipped_old={failure_old} module_failure_already_notified={failure_known} module_failure_emails={failure_emails}".format(
                 checked=result["checked"],
                 queued=len(result["queued"]),
                 skipped=len(result["skipped"]),
@@ -86,5 +88,8 @@ class Command(BaseCommand):
                 replacement_queued=sum(1 for row in reconciled if row.get("queued")),
                 replacement_audit=audited,
                 failure_notices=failure_notices,
+                failure_old=failure_report.get("skipped_old", 0),
+                failure_known=failure_report.get("skipped_notified", 0),
+                failure_emails=failure_report.get("emailed", 0),
             )
         )

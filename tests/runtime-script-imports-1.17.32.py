@@ -10,7 +10,7 @@ Covered (AST, not text search):
   a Tactical app, tec_tac, nor a module from TACTICAL_REQUIREMENTS; and it never imports daphne, channels.testing, pytest, pytest_asyncio,
   mock, requests_mock or freezegun;
 - scripts/, framwork/, extensions/, bootstrap-modules/, examples/, templates/ and reportsets/ never import daphne or channels.testing;
-- the socket script (tests/tactical-websocket-runtime-1.17.33.py since 1.17.33, 1.17.32 before) drives the ASGI application with
+- the socket script (tests/tactical-websocket-runtime-1.17.34.py since 1.17.34, 1.17.33 and 1.17.32 before) drives the ASGI application with
   asgiref.testing.ApplicationCommunicator, builds a websocket scope, commits its rows and deletes them in a finally block (no transaction
   or rollback, since 1.17.33), and checks 4401 on a reused ticket, 4003 on a foreign Origin and one custom:terminal-start row.
 
@@ -55,7 +55,7 @@ SCAN_FOLDERS = ("scripts", "framwork", "extensions", "bootstrap-modules", "examp
 FORBIDDEN_ANYWHERE = {"daphne"}
 
 SHELL_MARKER = "manage.py shell"
-SOCKET_SCRIPT = ROOT / "tests" / "tactical-websocket-runtime-1.17.33.py"
+SOCKET_SCRIPT = ROOT / "tests" / "tactical-websocket-runtime-1.17.34.py"
 
 
 def must(cond, msg):
@@ -117,7 +117,7 @@ for folder in SCAN_FOLDERS:
             failures.append(f"{path.relative_to(ROOT).as_posix()}: imports {', '.join(hit)}, which Tactical's venv does not have")
 print(f"PASS {scanned} Python files outside the shell scripts checked for daphne and channels.testing")
 
-# 3. the socket script (named for 1.17.33): what the dev-server run depends on
+# 3. the socket script (named for 1.17.34): what the dev-server run depends on
 if SOCKET_SCRIPT.exists():
     text = SOCKET_SCRIPT.read_text(encoding="utf-8")
     tops, dotted = imports_of(SOCKET_SCRIPT)

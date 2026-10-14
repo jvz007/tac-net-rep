@@ -77,6 +77,17 @@ check("ui.authenticated.websocket", [
     "0.12.102", "1.17.31",
 ])
 must("0.12.102" in websocket["purpose"] and "1.17.31" in websocket["purpose"], "websocket purpose names UI 0.12.102 and Core 1.17.31")
+# 1.17.34 (AD-35): the server terminal kind and terminal activity
+check("ui.authenticated.websocket", [
+    "server-terminal", "/ws/tfd/server-terminal/<ticket>/", "globalsettings", "superuser_required", "server_terminal_disabled", "can_use_webterm",
+    "trmmcli.input", "trmmcli.resize", "trmmcli.disconnect", "no start frame", "4502", "session activity",
+])
+ticket_row = literal("HTTP_CONTRACT_DETAILS")["/api/tfd/tactical-websocket/<str:module_id>/<str:kind>/tickets/"]["POST"]
+ticket_text = str(ticket_row)
+for needle in ("server-terminal", "exactly {}", "superuser_required", "server_terminal_disabled", "custom:server-terminal-start", "1.1.0", "4502"):
+    must(needle in ticket_text, f"the ticket route row names {needle!r}")
+python_row = next(r for r in CORE if r.get("area") == "tactical-websocket")
+must("1.1.0" in python_row["purpose"] and "server-terminal" in python_row["purpose"] and "session activity" in python_row["purpose"], "the python row names 1.1.0, the kind and activity")
 
 # ------------------------------------------------------------------------------------------------ the services row
 services = by_id.get("ui.authenticated.services", {})

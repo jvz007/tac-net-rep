@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""1.17.31 regression (C4 part 2): the ticketed terminal socket route is appended once to Tactical's ws_urlpatterns, is skipped in DEMO,
+"""1.17.31 regression (C4 part 2; the server terminal route added in 1.17.34): the ticketed terminal socket route is appended once to Tactical's ws_urlpatterns, is skipped in DEMO,
 and never stops start-up.
 
 Reuses the fixtures of tests/tactical-websocket-ticket-1.17.31.py. Covered: the route ws/tfd/agent-terminal/<str:ticket>/ is appended to a
@@ -107,6 +107,30 @@ calls.clear()
 asyncio.run(route(scope, receive, send))
 must(sent == [{"type": "websocket.close", "code": 4503}], f"an import failure closes with 4503: {sent}")
 must(not calls, "the consumer is not run")
+
+# ------------------------------------------------------------------------------------------------ the server terminal route (1.17.34, AD-35)
+# Tactical installs ws/trmmcli/ only when it is not DEMO, not HOSTED and not TRMM_DISABLE_WEB_TERMINAL. Core's server route follows that.
+must(len([p for p in TACTICAL_WS if p.pattern == ws.SERVER_ROUTE_PATTERN]) == 0, "the server route was not added in the DEMO run above")
+TACTICAL_WS.clear()
+TACTICAL_WS.append(SimpleNamespace(pattern="ws/dashinfo/", callback=object()))
+must(ws.install_tactical_websocket_route() is True, "a clean install adds routes")
+patterns = [p.pattern for p in TACTICAL_WS]
+must(ws.ROUTE_PATTERN in patterns and ws.SERVER_ROUTE_PATTERN in patterns, "both the agent and the server terminal routes are mounted")
+must(isinstance([p for p in TACTICAL_WS if p.pattern == ws.SERVER_ROUTE_PATTERN][0].callback, ws._ServerTerminalRoute), "the server route is the lazy app")
+must(ws.install_tactical_websocket_route() is False and len(TACTICAL_WS) == 3, "a second install adds nothing, for either route")
+for name in ("HOSTED", "TRMM_DISABLE_WEB_TERMINAL"):
+    TACTICAL_WS.clear()
+    TACTICAL_WS.append(SimpleNamespace(pattern="ws/dashinfo/", callback=object()))
+    setattr(SETTINGS, name, True)
+    must(ws.install_tactical_websocket_route() is True, f"{name}: the agent route is still added")
+    patterns = [p.pattern for p in TACTICAL_WS]
+    must(ws.ROUTE_PATTERN in patterns and ws.SERVER_ROUTE_PATTERN not in patterns, f"{name}: no server terminal route, as Tactical adds no ws/trmmcli/")
+    delattr(SETTINGS, name)
+# core.consumers (Tactical's server terminal, Linux only) cannot be imported: the socket closes 4503 and nothing else happens
+sys.modules["core.consumers"] = None
+sent.clear()
+asyncio.run(ws.server_terminal_route()(scope, receive, send))
+must(sent == [{"type": "websocket.close", "code": 4503}], f"a missing server terminal consumer closes 4503: {sent}")
 
 # ------------------------------------------------------------------------------------------------ the guarded calls in apps.py
 apps_tree = ast.parse((APP / "apps.py").read_text(encoding="utf-8"))

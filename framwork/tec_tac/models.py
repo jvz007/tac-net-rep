@@ -488,3 +488,38 @@ class TecTacUserNotice(models.Model):
 
     def __str__(self):
         return f"{self.user_id}:{self.level}:{self.source}:{self.created_at.isoformat() if self.created_at else 'new'}"
+
+
+class TecTacNoticeLedger(models.Model):
+    """Which server-raised notices and Priority 1 emails a person has already had (Core 1.17.34).
+
+    The module failure sweep reads and writes it. It is the dedupe record, so it is kept apart from TecTacUserNotice, which the person
+    can clear ("Clear read") and which is pruned at 30 days or 500 rows. ``kind`` is ``notice`` (the toast and history row) or ``email``
+    (the Priority 1 email); ``key`` is the module job id. Neither Clear read nor the notice pruning touches this table. The sweep deletes
+    rows older than seven days itself. No message text, address or name is stored.
+    """
+
+    KIND_NOTICE = "notice"
+    KIND_EMAIL = "email"
+
+    id = models.BigAutoField(primary_key=True)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="tec_tac_notice_ledger",
+    )
+    kind = models.CharField(max_length=12)
+    key = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=("kind", "key"), name="tectac_nledger_key_idx"),
+            models.Index(fields=("kind", "created_at"), name="tectac_nledger_age_idx"),
+        ]
+        constraints = [
+            models.UniqueConstraint(fields=("user", "kind", "key"), name="tectac_nledger_unique"),
+        ]
+
+    def __str__(self):
+        return f"{self.user_id}:{self.kind}:{self.key}"

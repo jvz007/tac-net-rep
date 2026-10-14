@@ -1,7 +1,9 @@
 """POST /api/tfd/tactical-websocket/<module_id>/<kind>/tickets/ (Core 1.17.31, C4).
 
-The browser sends exactly {agent_id} and gets a single-use, 30 second ticket for the socket /ws/tfd/agent-terminal/<ticket>/. The
-checks and the store are in tec_tac.tactical_websocket. The body is {agent_id} and nothing else; any other key is refused 400.
+The browser sends exactly {agent_id} (kind agent-terminal) and gets a single-use, 30 second ticket for the socket
+/ws/tfd/agent-terminal/<ticket>/. Since 1.17.34 the kind server-terminal takes the body {} and nothing else and answers a ticket for
+/ws/tfd/server-terminal/<ticket>/ (module globalsettings and effective superusers only). The checks and the store are in
+tec_tac.tactical_websocket. Each kind has its own body keys (KINDS[kind]["body_keys"]); any other key is refused 400.
 """
 from __future__ import annotations
 
@@ -11,7 +13,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .session_security import SessionAuthenticated
-from .tactical_websocket import TicketRefusal, issue_ticket
+from .tactical_websocket import KINDS, TicketRefusal, issue_ticket
 from .throttles import TacticalWebSocketTicketDayThrottle, TacticalWebSocketTicketMinThrottle
 
 
@@ -23,8 +25,16 @@ class TacticalWebSocketTicketView(APIView):
 
     def post(self, request, module_id, kind):
         payload = request.data
-        if not isinstance(payload, dict) or set(payload) != {"agent_id"}:
-            return Response({"detail": "The request must be a JSON object with only agent_id.", "code": "invalid_ticket_request"}, status=400)
+        spec = KINDS.get(kind)
+        if spec is None:
+            # an unknown kind behaves as before 1.17.34: a body that is not {agent_id} is 400, an agent-shaped body is 404
+            if not isinstance(payload, dict) or set(payload) != {"agent_id"}:
+                return Response({"detail": "The request must be a JSON object with only agent_id.", "code": "invalid_ticket_request"}, status=400)
+            return Response({"detail": "Core has no Tactical socket of that kind.", "code": "websocket_kind_not_found"}, status=404)
+        keys = tuple(spec["body_keys"])
+        if not isinstance(payload, dict) or set(payload) != set(keys):
+            wanted = "only agent_id" if keys == ("agent_id",) else "no keys (the body is exactly {})"
+            return Response({"detail": f"The request must be a JSON object with {wanted}.", "code": "invalid_ticket_request"}, status=400)
         try:
             ticket = issue_ticket(request, module_id=module_id, kind=kind, agent_id=payload.get("agent_id"))
         except TicketRefusal as exc:

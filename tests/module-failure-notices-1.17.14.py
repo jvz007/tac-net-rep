@@ -3,7 +3,7 @@
 
 Runs the real ``module_failure_notices.py`` and ``module_replacement.py`` with Django and the Linux-only modules stubbed. It covers:
 the job-to-notice text (plain English, printable ASCII, no paths, cut short), which jobs owe a notice, the dedupe key, the bounds
-(seven days, 200 jobs, newest first), one notice per job and recipient, that a notice that exists is not written again, that a
+(six hours since 1.17.34, 200 jobs, newest first), one notice per job and recipient, that a notice that exists is not written again, that a
 failing step never raises, and the shape of ``tec_tac.notices.publish_system_notice`` and the scheduler tick call (read as text).
 The database part is tests/module-failure-notices-runtime-1.17.14.py (a dev-server script).
 """
@@ -38,6 +38,12 @@ _stub("cryptography.hazmat.primitives.asymmetric.ed25519", Ed25519PublicKey=obje
 _stub("cryptography.exceptions", InvalidSignature=Exception)
 
 from tec_tac import module_failure_notices as mfn  # noqa: E402
+
+# 1.17.34: the notice ledger is tested in tests/module-failure-notices-1.17.34.py. Here its defaults are no-ops, so this file keeps testing
+# the notice rows and the text on their own.
+mfn._default_ledger_have = lambda kind, keys: set()
+mfn._default_ledger_add = lambda kind, key, users: 0
+mfn._default_ledger_prune = lambda: 0
 
 NOW = datetime(2026, 10, 9, 12, 0, tzinfo=timezone.utc)
 
@@ -133,7 +139,9 @@ recipients_for = lambda requested_by: [PEOPLE["root"]] + ([PEOPLE[requested_by]]
 # jobs that did not fail, and jobs outside the window, owe nothing
 STORE.clear()
 must(run([job(6, status="succeeded"), job(7, status="running"), job(8, finished_at=stamp(days=8)), job(9, finished_at=None), job(10, finished_at="garbage")]) == 0, STORE)
-must(run([job(11, finished_at=stamp(days=6))]) == 2, "inside the seven days")
+must(run([job(11, finished_at=stamp(minutes=5 * 60 + 59))]) == 2, "inside the six hours (1.17.34)")
+STORE.clear()
+must(run([job(12, finished_at=stamp(minutes=6 * 60 + 1)), job(13, finished_at=stamp(days=6))]) == 0, "outside the six hours owes nothing (1.17.34)")
 # at most 200 jobs per tick, newest first
 STORE.clear()
 many = [job(n, requested_by="system", finished_at=stamp(minutes=n)) for n in range(1, 251)]

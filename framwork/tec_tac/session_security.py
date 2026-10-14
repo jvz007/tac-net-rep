@@ -661,6 +661,47 @@ def record_activity(request) -> dict[str, Any]:
         return _serialize_session(session, current=True)
 
 
+def record_terminal_activity(trust_id, user_id, knox_digest, activity_at=None) -> str | None:
+    """Enforce the sign-in behind an open terminal socket, and count terminal input as activity (Core 1.17.34, AD-35).
+
+    Returns None while the sign-in holds, or the reason it does not: session_revoked, credential_unavailable, session_expired
+    (absolute maximum) or session_idle_timeout. It follows record_activity and ensure_request_session: the row is locked, a revoked
+    row, a different user or a different Knox digest is refused, and expiry is recomputed from the policy in force now.
+
+    ``activity_at`` is when the person last typed or resized, as a timezone-aware time. It moves last_activity_at and last_seen_at
+    forward (never backwards) and refreshes idle_expires_at, unless the absolute maximum has passed or the idle limit had already
+    passed before that input. Output never reaches this function. With no ``activity_at`` it only enforces. A session found idle or
+    past its absolute maximum is revoked like a REST request or the sweep would, so the Knox token ends too.
+    """
+    now = timezone.now()
+    with transaction.atomic():
+        session = TecTacSessionTrust.objects.select_for_update().filter(pk=trust_id).first()
+        if session is None or session.revoked or session.user_id != user_id:
+            return "session_revoked"
+        digest = str(session.knox_digest or "")
+        if not digest or not knox_digest or not hmac.compare_digest(digest, str(knox_digest)):
+            return "credential_unavailable"
+        policy = get_effective_policy()
+        _refresh_expiry(session, policy)
+        if now >= session.absolute_expires_at:
+            _revoke_locked(session, reason="absolute-timeout", event_type="session_absolute_timeout", policy=policy)
+            return "session_expired"
+        if activity_at is not None:
+            input_at = min(activity_at, now)
+            if input_at >= session.idle_expires_at:
+                _revoke_locked(session, reason="idle-timeout", event_type="session_idle_timeout", policy=policy)
+                return "session_idle_timeout"
+            if input_at > session.last_activity_at:
+                session.last_activity_at = input_at
+                session.last_seen_at = max(input_at, session.last_seen_at) if session.last_seen_at else input_at
+                _refresh_expiry(session, policy)
+                session.save(update_fields=["last_activity_at", "last_seen_at", "absolute_expires_at", "idle_expires_at", "updated_at"])
+        if now >= session.idle_expires_at:
+            _revoke_locked(session, reason="idle-timeout", event_type="session_idle_timeout", policy=policy)
+            return "session_idle_timeout"
+        return None
+
+
 def get_current_session(request) -> dict[str, Any]:
     return _serialize_session(ensure_request_session(request), current=True)
 

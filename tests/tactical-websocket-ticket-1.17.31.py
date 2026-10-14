@@ -137,15 +137,29 @@ stub("django.contrib.auth", get_user_model=lambda: FakeUser)
 
 
 class FakeTrust:
+    """The columns of TecTacSessionTrust that session_security.record_terminal_activity reads and writes (1.17.34)."""
+
     def __init__(self, pk, user_id, *, digest="knox-1", revoked=False, absolute=None):
         self.id, self.user_id, self.knox_digest, self.revoked = pk, user_id, digest, revoked
+        self.created_at = NOW[0]
+        self.last_activity_at = NOW[0]
+        self.last_seen_at = NOW[0]
         self.absolute_expires_at = absolute or (NOW[0] + timedelta(hours=8))
+        self.idle_expires_at = NOW[0] + timedelta(minutes=30)
+        self.saves = []
+
+    def save(self, update_fields=None):
+        self.saves.append(tuple(update_fields or ()))
 
 
 TRUSTS: dict[str, FakeTrust] = {}
 
 
 class _TrustManager:
+    @staticmethod
+    def select_for_update():
+        return _TrustManager
+
     @staticmethod
     def filter(**kwargs):
         return _Rows([t for t in TRUSTS.values() if t.id == kwargs.get("pk")])
@@ -208,6 +222,55 @@ stub("tec_tac.caller_identity", calling_module_for_core_provider=lambda *, provi
 session_security = sys.modules["tec_tac.session_security"]
 session_security.request_knox_digest = lambda request: str(getattr(getattr(request, "auth", None), "digest", "") or "")[:128]
 
+
+# the REAL session_security.record_terminal_activity (1.17.34), cut out of session_security.py and run against the fake trust rows, so the
+# idle, absolute and never-backwards rules under test are Core's own code. Django's models and DRF are not importable on this PC.
+POLICY = {"idle_timeout_minutes": 30, "absolute_lifetime_minutes": 480}
+REVOKED_ROWS: list[tuple[str, str]] = []
+
+
+class _Atomic:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _fake_revoke_locked(session, *, reason, requested_by="", event_type="session_revoked", policy=None, invalidate_knox=True):
+    if not session.revoked:
+        session.revoked = True
+        session.revocation_reason = reason
+        REVOKED_ROWS.append((reason, event_type))
+        if invalidate_knox:
+            LIVE_TOKENS.discard(session.knox_digest)  # the Knox token ends with the row, as _invalidate_knox_for_session does
+    return session
+
+
+def _load_real_terminal_helper():
+    import ast as _ast
+    import hmac as _hmac
+
+    text = (APP / "session_security.py").read_bytes().decode("utf-8")
+    tree = _ast.parse(text)
+    wanted = ("_refresh_expiry", "record_terminal_activity")
+    body = [n for n in tree.body if isinstance(n, _ast.FunctionDef) and n.name in wanted]
+    assert [n.name for n in body] == list(wanted), "the real helper is missing from session_security.py"
+    env = {
+        "timedelta": timedelta, "hmac": _hmac, "TecTacSessionTrust": FakeTrust, "timezone": sys.modules["django.utils.timezone"],
+        "transaction": SimpleNamespace(atomic=lambda: _Atomic()), "get_effective_policy": lambda user=None, request=None: dict(POLICY),
+        "_revoke_locked": _fake_revoke_locked, "Any": object, "TecTacSessionTrust_": FakeTrust,
+    }
+    module = _ast.Module(body=body, type_ignores=[])
+    exec(compile(_ast.fix_missing_locations(module), "session_security.py(record_terminal_activity)", "exec"), env)  # noqa: S102
+    return env["record_terminal_activity"]
+
+
+session_security.record_terminal_activity = _load_real_terminal_helper()
+session_security._is_effective_superuser = lambda user: bool(
+    getattr(user, "is_authenticated", False)
+    and (user.is_superuser or user.username == "root" or bool(getattr(getattr(user, "role", None), "is_superuser", False)))
+)
 
 # resources_adapter: the role's scope is the user's scope_ids
 adapter.objects_in_role_scope = lambda *, user, resource_type, identifiers: bool(identifiers) and set(identifiers) <= set(user.scope_ids)
@@ -292,6 +355,8 @@ def reset():
                     "core-nocat": True, "offmod": False})
     MODULE_REPLACEMENT.HONOURED.clear()
     TRUSTS[TRUST_ID] = FakeTrust(TRUST_ID, 5)
+    POLICY.update(idle_timeout_minutes=30, absolute_lifetime_minutes=480)
+    del REVOKED_ROWS[:]
 
 
 def mint(user=None, *, module="remote-background", kind="agent-terminal", agent=AGENT, **kwargs):
@@ -391,7 +456,7 @@ must(exc.code == "object_not_found", "a superuser with no scope on the agent is 
 # ------------------------------------------------------------------------------------------------ 4. refusals without a row
 reset()
 for label, call, code, status in (
-    ("unknown kind", lambda: mint(kind="server-terminal"), "websocket_kind_not_found", 404),
+    ("unknown kind", lambda: mint(kind="nope"), "websocket_kind_not_found", 404),
     ("bad agent id", lambda: mint(agent="a b"), "invalid_agent_id", 400),
     ("empty agent id", lambda: mint(agent=""), "invalid_agent_id", 400),
     ("long agent id", lambda: mint(agent="x" * 129), "invalid_agent_id", 400),
@@ -460,9 +525,11 @@ must(ws.session_refusal(value) is None, "a live sign-in passes")
 TRUSTS[TRUST_ID].revoked = True
 must(ws.session_refusal(value) == "session_revoked", "a revoked session row is refused")
 TRUSTS[TRUST_ID].revoked = False
-TRUSTS[TRUST_ID].absolute_expires_at = NOW[0] - timedelta(seconds=1)
+TRUSTS[TRUST_ID].created_at = NOW[0] - timedelta(hours=8, seconds=1)  # 1.17.34: expiry is recomputed from created_at and the policy
 must(ws.session_refusal(value) == "session_expired", "a session past its absolute lifetime is refused")
-TRUSTS[TRUST_ID].absolute_expires_at = NOW[0] + timedelta(hours=1)
+must(REVOKED_ROWS == [("absolute-timeout", "session_absolute_timeout")], "1.17.34: an expired session is revoked like a REST request would")
+TRUSTS[TRUST_ID] = FakeTrust(TRUST_ID, 5)
+LIVE_TOKENS.add("knox-1")
 LIVE_TOKENS.discard("knox-1")
 must(ws.session_refusal(value) == "credential_unavailable", "a Knox token that is gone is refused")
 LIVE_TOKENS.add("knox-1")
@@ -511,7 +578,7 @@ fresh()
 CAPS_BEFORE = len(G["CAPS"])
 ws.register_core_tactical_websocket_capability()
 registered = G["CAPS"][-1]
-must(registered["id"] == "core.tactical_websocket" and registered["version"] == "1.0.0", "capability id and version")
+must(registered["id"] == "core.tactical_websocket" and registered["version"] == "1.1.0", "capability id and version (1.1.0 since 1.17.34)")
 must(registered["operations"] == ("issue_ticket",) and registered["module_id"] == "core", "one operation, owned by core")
 meta = ws.tactical_websocket_contract_metadata()
 must(meta["operations"] == ["issue_ticket"] and meta["ticket"]["ttl_seconds"] == 30 and meta["ticket"]["single_use"] is True, "metadata")

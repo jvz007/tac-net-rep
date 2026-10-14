@@ -159,7 +159,7 @@ mod("django.contrib")
 mod("django.contrib.auth", get_user_model=lambda: User)
 pkg = mod("tec_tac")
 pkg.__path__ = [str(APP)]
-mod("tec_tac.models", TecTacUserNotice=Notice)
+mod("tec_tac.models", TecTacUserNotice=Notice, TecTacNoticeLedger=type("TecTacNoticeLedger", (), {"KIND_NOTICE": "notice", "KIND_EMAIL": "email"}))
 mod("tec_tac.registry", get_plugins=lambda: tuple(PLUGINS.values()))
 mod("tec_tac.module_state", load_state=dict, is_enabled=lambda module_id, state=None: ENABLED.get(module_id, True))
 sys.modules.update(mods)

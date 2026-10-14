@@ -313,7 +313,8 @@ for name, fn, provider_fn in (("send=partial(provider_fn)", seam_caller["via_sen
 # called directly from a module file, with the real module's own sender swapped for the provider function
 direct_out = []
 saved_defaults = (real._default_recent, real._default_mark_sent, real._default_existing, real._default_audit,
-                  priority_mail.is_configured, priority_mail.smtp_host, priority_mail.send_one)
+                  priority_mail.is_configured, priority_mail.smtp_host, priority_mail.send_one, real._default_email_have)
+real._default_email_have = lambda ids: set()
 real._default_recent = lambda since: 0
 real._default_mark_sent = lambda user, client_id: None
 real._default_existing = lambda ids: set()
@@ -325,7 +326,7 @@ try:
     seam_caller["direct"](real, real_notice, [real_user])
 finally:
     (real._default_recent, real._default_mark_sent, real._default_existing, real._default_audit,
-     priority_mail.is_configured, priority_mail.smtp_host, priority_mail.send_one) = saved_defaults
+     priority_mail.is_configured, priority_mail.smtp_host, priority_mail.send_one, real._default_email_have) = saved_defaults
 must(len(direct_out) == 1 and direct_out[0] is None, ("direct call", direct_out))
 
 
@@ -335,7 +336,8 @@ def failed_job():
 
 QUIET = {"recipients_for": lambda requested_by: [real_user], "publish": lambda users, n: 1, "existing": lambda ids: set(),
          "configured": lambda: True, "host": lambda: "smtp.example.com", "send": lambda address, subject, body: True,
-         "recent": lambda since: 0, "audit": lambda job_id, metadata: None, "email_have": lambda ids: set(), "mark_sent": lambda u, c: None}
+         "recent": lambda since: 0, "audit": lambda job_id, metadata: None, "email_have": lambda ids: set(), "mark_sent": lambda u, c: None,
+         "ledger_have": lambda kind, keys: set(), "ledger_add": lambda kind, key, users: 0, "ledger_prune": lambda: 0}
 # The review's case, called from a module file: the real sweep_failed_jobs with real.send_p1_email rebound to (a) functools.partial of the
 # provider function and (b) an eval lambda that calls it. Both give None.
 saved_send = real.send_p1_email

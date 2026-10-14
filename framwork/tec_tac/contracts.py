@@ -772,7 +772,7 @@ CORE_CONTRACTS = (
         "import_path": "tec_tac.tactical_websocket",
         "name": "issue_ticket",
         "kind": "python",
-        "purpose": "Issue one single-use, 30 second ticket for a Tactical terminal socket (1.17.31, C4, capability core.tactical_websocket 1.0.0). issue_ticket(request, module_id, kind, agent_id) runs Core's checks for the signed-in user of the request: the module owns the kind (its route owner rule, agents/{agent_id}/terminal-defaults/ for kind agent-terminal), the Tactical flag can_use_terminal, and the agent inside the caller's role scope. It answers {ticket, path, session_id, expires_in, kind} or raises TicketRefusal (status, code, message, audit). The capability's operation issue_ticket is the same, and accepts a call only from the module it names (verified caller). The browser route is POST /api/tfd/tactical-websocket/<module_id>/<kind>/tickets/. The socket is /ws/tfd/agent-terminal/<ticket>/. See docs/tactical-websocket.md.",
+        "purpose": "Issue one single-use, 30 second ticket for a Tactical terminal socket (1.17.31, C4, capability core.tactical_websocket 1.0.0; 1.1.0 in Core 1.17.34 adds the kind server-terminal). issue_ticket(request, module_id, kind, agent_id) runs Core's checks for the signed-in user of the request: the module owns the kind (its route owner rule, agents/{agent_id}/terminal-defaults/ for kind agent-terminal), the Tactical flag can_use_terminal, and the agent inside the caller's role scope. For kind server-terminal (AD-35) agent_id is None, only the module globalsettings may ask, only an effective superuser may have it (403 superuser_required), and only where Tactical's server web terminal is on and the caller holds can_use_webterm (403 server_terminal_disabled). It answers {ticket, path, session_id, expires_in, kind} or raises TicketRefusal (status, code, message, audit). The capability's operation issue_ticket is the same, and accepts a call only from the module it names (verified caller). The browser route is POST /api/tfd/tactical-websocket/<module_id>/<kind>/tickets/. The socket is /ws/tfd/agent-terminal/<ticket>/, or /ws/tfd/server-terminal/<ticket>/ for the server terminal. Since 1.17.34 terminal input and resize frames count as session activity (output does not), and the idle limit and absolute maximum close the socket 4401. See docs/tactical-websocket.md.",
         "audience": "backend/browser",
     },
 )
@@ -838,20 +838,21 @@ HTTP_CONTRACT_DETAILS = {
                 "authenticated Tec-Tac session (SessionAuthenticated). Core then requires the module to own the kind (its route owner rule; the terminal kind is owned by whoever owns agents/{agent_id}/terminal-defaults/, remote-background in 1.17.31), the Tactical flag can_use_terminal, and the agent inside the caller's client and site limits"
             ),
             "request": {
-                "body": "a JSON object with exactly one key, agent_id (the canonical Tactical agent id). Any other key, or a missing agent_id, gives 400 invalid_ticket_request",
-                "module_id": "path: the owning core module id",
-                "kind": "path: the socket kind. Only agent-terminal exists in 1.17.31; another value gives 404 websocket_kind_not_found",
+                "body": "kind agent-terminal: a JSON object with exactly one key, agent_id (the canonical Tactical agent id). Kind server-terminal (1.17.34): exactly {}. Any other key, or a missing agent_id, gives 400 invalid_ticket_request",
+                "module_id": "path: the owning core module id (globalsettings for kind server-terminal; any other module gets 403 websocket_owner_required)",
+                "kind": "path: the socket kind, agent-terminal or server-terminal (1.17.34, capability core.tactical_websocket 1.1.0). Another value gives 404 websocket_kind_not_found",
             },
-            "response": "201 {ticket, path, session_id, expires_in, kind}. ticket is 43 URL-safe characters, single use, valid for 30 seconds. path is /ws/tfd/agent-terminal/<ticket>/. session_id is a new uuid4 for the terminal session. Core's refusals are JSON {detail, code}.",
+            "response": "201 {ticket, path, session_id, expires_in, kind}. ticket is 43 URL-safe characters, single use, valid for 30 seconds. path is /ws/tfd/agent-terminal/<ticket>/, or /ws/tfd/server-terminal/<ticket>/ for the server terminal. session_id is a new uuid4 for the terminal session. Core's refusals are JSON {detail, code}.",
             "errors": {
                 "400": "invalid_ticket_request (body keys) or invalid_agent_id",
                 "401": "authenticated_request_required, or tactical_session_required (the session is not linked to a Tactical token; sign in again)",
-                "403": "websocket_owner_required (the module does not own the kind), tactical_permission_denied (names can_use_terminal)",
+                "403": "websocket_owner_required (the module does not own the kind), tactical_permission_denied (names can_use_terminal), superuser_required (server-terminal: the caller is not an effective superuser, 1.17.34), server_terminal_disabled (server-terminal: Tactical's server web terminal is off, or the caller lacks can_use_webterm, 1.17.34)",
                 "404": "websocket_kind_not_found, or object_not_found (the agent is outside the caller's limits or does not exist; the same text for both)",
                 "503": "websocket_unavailable: the ticket store (Django cache) did not hold the ticket, so nothing was issued. Fail closed",
             },
             "notes": [
                 "Added in 1.17.31 (module-facing, additive, capability core.tactical_websocket 1.0.0). Needs framework >=1.17.31. Nothing existing changed.",
+                "Kind server-terminal, added in 1.17.34 (module-facing, additive, capability core.tactical_websocket 1.1.0, AD-35): a shell on the server itself, run by Tactical's own consumer as the Tactical service user. The socket accepts the ticket once, checks Origin, the sign-in, superuser standing, Tactical's switch and can_use_webterm, then writes ONE strict row custom:server-terminal-start (object type server, module globalsettings) before the shell starts: no row means close 4502 and no shell. The watcher re-checks superuser standing every 30 seconds and kills the shell on loss (close 4003). Close codes: 4401, 4003, 4502, 4503. The agent-terminal body, codes and audit action are unchanged.",
                 "A 403 and an out-of-scope 404 write one Core deny row (reason, status and kind; no body values). A successful mint writes no audit row: the audit row is written once per session start by the relayed socket (custom:terminal-start).",
                 "Throttles: 30 requests per minute and 500 per day for each signed-in user and address.",
             ],
@@ -1693,6 +1694,8 @@ BROWSER_CONTRACTS = (
             "Public modules (registerPublic) do not get tacticalWebSocket. A module whose register() failed or timed out cannot open a terminal.",
             "At most 8 terminals open or connecting per module; a ninth is refused. Terminals close when the module is cleaned up, when the Tactical session ends and when the page is left. There is no reconnect: a dropped terminal reports close, and a new terminal needs a new ticket.",
             "Display only: hide a Terminal tab with hasTacticalPermission('can_use_terminal'). Core and Tactical decide every call (AD-12).",
+            "Core 1.17.34 (AD-35) adds the ticket kind server-terminal for the server web terminal: the body is exactly {}, only the module globalsettings may ask, and only an effective superuser may have it (403 superuser_required; 403 server_terminal_disabled where Tactical's switch is off or can_use_webterm is missing). Its path is /ws/tfd/server-terminal/<ticket>/. Its frames are Tactical's trmmcli.input {data:{input}}, trmmcli.resize {data:{rows, cols}} and trmmcli.disconnect, and it answers trmmcli.output; there is no start frame, the shell starts when the socket is accepted. Close 4502 (audit unavailable, no shell) and 4003 are terminal refusals. The helper does not open this kind yet: it waits for a signed UI release (request in reviews/requests/ui.md).",
+            "Terminal input and resize frames count as session activity (Core 1.17.34, AD-35), so a terminal in use keeps its sign-in alive. Output alone does not. An idle socket, the absolute maximum, a disabled user, a revoked session or a deleted token close 4401. Nothing changes for the helper: the existing close codes and messages apply.",
         ],
     },
     {

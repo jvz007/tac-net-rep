@@ -335,6 +335,7 @@ must("clear_retired_private_relay()" in tick, "the scheduler tick calls the clea
 ALLOWED_COLUMN_FILES = {
     "framwork/tec_tac/models.py",
     "framwork/tec_tac/migrations/0029_priority_mail_private_relay.py",
+    "framwork/tec_tac/migrations/0030_notice_ledger.py",  # names 0029 as its dependency, nothing else
     "framwork/tec_tac/runtime_settings.py",
     "docs/runtime-settings.md",
 }
