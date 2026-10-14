@@ -1,4 +1,4 @@
-# Tactical WebSocket ticket (Core 1.17.31, Origin rule 1.17.32)
+# Tactical WebSocket ticket (Core 1.17.31, Origin rule 1.17.32, stale connections 1.17.33)
 
 Core 1.17.31 lets a module open Tactical's terminal socket for the person who is signed in, without the module ever holding a
 Tactical token. It is capability `core.tactical_websocket` 1.0.0. It is additive: nothing that already existed changed.
@@ -98,6 +98,31 @@ read gives same-host only. The ticket, the session re-check, the scope check, th
 This is the code side only. The real proxy and layout still have to be confirmed on the dev server (Johan): see the dev-server steps in
 `reviews/questions/core.md` (note of 14 October 2026).
 
+## Stale database connections (Core 1.17.33)
+
+Django can hold a database connection that the server has already dropped (a Postgres or pgbouncer restart, an idle kill) while
+`CONN_MAX_AGE` is above 0. Django has not flagged it yet, so the first use fails with `OperationalError` or `InterfaceError` ("the
+connection is closed"). Before 1.17.33 that one failure refused a good ticket, or closed a terminal that had run for hours.
+
+What Core does now, in `tactical_websocket.run_with_fresh_connection`:
+
+- A **read** that fails with `OperationalError` or `InterfaceError` closes this thread's connections and runs again, once. The whole
+  check runs again, not one query. It applies to the connect re-check (the user, the session row, the Knox token, the Tactical
+  permission and the agent scope) and to every 30 second watcher tick. A second failure keeps the old result: close **4401**. Core logs
+  one warning line on a reconnect (no user data, no ticket) and the "Could not re-check" line only when the second attempt fails.
+- Any other error is not retried.
+- Inside a database transaction nothing is closed or retried, because a close would drop the transaction.
+- The **audit write is never retried**: a retry could write a row twice, and the strict rule stays "no row, no start". Core only checks
+  first that this thread's connection still answers, and closes it if not (`ensure_usable_connections`, skipped inside a transaction).
+  A write that still fails sends `audit_unavailable` and starts nothing.
+
+Nothing a module sees changes: the close codes, the messages, the ticket, the audit row and the capability version (`core.tactical_websocket`
+1.0.0) are the same.
+
+The dev-server probe used to fail for a different reason, which was its own design: it ran inside `transaction.atomic()` and rolled back,
+and channels' `database_sync_to_async` calls `close_old_connections()` around each call, which closes the shared connection inside a
+transaction. The 1.17.33 probe commits `wsprobe-` rows and deletes the user, role, token and session rows in a `finally` block. It keeps its audit rows (CQ103).
+
 ## Audit
 
 One row per session start, written by Core before Tactical starts the shell, and strict: if the row cannot be written, the shell does not
@@ -143,10 +168,18 @@ should already send `/ws/tfd/...` to daphne. This is to be confirmed on the dev 
 - `tests/tactical-websocket-origin-1.17.32.py`: the Origin rule, split host through `connect()`, the default-port, scheme, path and regex
   forms, the empty and failing settings, and the refusals.
 - `tests/tactical-websocket-route-1.17.31.py`: the route is appended once and skipped in DEMO; a missing consumer closes 4503.
-- `tests/tactical-websocket-runtime-1.17.32.py`: a dev-server check through `manage.py shell`. It drives `tacticalrmm.asgi.application` with
-  asgiref's `ApplicationCommunicator` (not channels' `WebsocketCommunicator`, which needs daphne, and Tactical's venv has no daphne). It checks
-  the accept, one start row, the 4401 reuse, the foreign Origin 4003, the split-host Origin and the malformed ticket 4401. It rolls back what
-  it writes. It was written on the development PC and did not run there.
+- `tests/tactical-websocket-stale-connection-1.17.33.py`: one retry on `OperationalError` or `InterfaceError`, fail closed on the second,
+  connect and watcher ticks with a stale connection, no retry for other errors or inside a transaction, and the audit write never retried.
+- `tests/tactical-websocket-probe-1.17.33.py`: a PC-side check of the probe below with no Django: `pick_agent` against a fake Agent whose
+  `status` is a property (never a database filter), and the shape of the rewrite.
+- `tests/tactical-websocket-runtime-1.17.33.py`: a dev-server check through `manage.py shell`. It drives `tacticalrmm.asgi.application` with
+  asgiref's `ApplicationCommunicator` (not channels' `WebsocketCommunicator`, which needs daphne, and Tactical's venv has no daphne). It
+  sweeps old `wsprobe-` rows, commits a probe user, role, Knox token and session row, checks the accept, one start row, the 4401 reuse, the
+  foreign Origin 4003, the split-host Origin, the malformed ticket 4401 and a socket after this thread's database connection was closed,
+  then deletes its user, role, token and session rows (only rows named `wsprobe-`) and checks none are left. Its `custom:terminal-start` audit row is kept. Run it with
+  `sudo -u tactical bash -c 'cd /rmm/api/tacticalrmm && ../env/bin/python manage.py shell < /tmp/tactical-websocket-runtime-1.17.33.py'`,
+  and put `TECTAC_WS_PROBE_AGENT=<agent_id>` before `../env/bin/python` to choose the agent. It was written on the development PC and did not
+  run there.
 - `tests/runtime-script-imports-1.17.32.py`: a PC-side guard that every `manage.py shell` script imports only what Tactical's venv has.
 
 Django, channels, Redis and Tactical are not installed on the development PC. The stub tests cover Core's own logic. The real

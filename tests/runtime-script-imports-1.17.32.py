@@ -10,8 +10,9 @@ Covered (AST, not text search):
   a Tactical app, tec_tac, nor a module from TACTICAL_REQUIREMENTS; and it never imports daphne, channels.testing, pytest, pytest_asyncio,
   mock, requests_mock or freezegun;
 - scripts/, framwork/, extensions/, bootstrap-modules/, examples/, templates/ and reportsets/ never import daphne or channels.testing;
-- the 1.17.32 socket script drives the ASGI application with asgiref.testing.ApplicationCommunicator, builds a websocket scope, keeps the
-  rollback and the cleanup, and checks 4401 on a reused ticket, 4003 on a foreign Origin and one custom:terminal-start row.
+- the socket script (tests/tactical-websocket-runtime-1.17.33.py since 1.17.33, 1.17.32 before) drives the ASGI application with
+  asgiref.testing.ApplicationCommunicator, builds a websocket scope, commits its rows and deletes them in a finally block (no transaction
+  or rollback, since 1.17.33), and checks 4401 on a reused ticket, 4003 on a foreign Origin and one custom:terminal-start row.
 
 TACTICAL_REQUIREMENTS is read from reference/tacticalrmm/api/tacticalrmm/requirements.txt (v1.5.2), by import name: the pip name in the
 file, mapped to the module it installs (django-cors-headers -> corsheaders, nats-py -> nats, pycryptodome -> Crypto, ...), plus the
@@ -54,7 +55,7 @@ SCAN_FOLDERS = ("scripts", "framwork", "extensions", "bootstrap-modules", "examp
 FORBIDDEN_ANYWHERE = {"daphne"}
 
 SHELL_MARKER = "manage.py shell"
-SOCKET_SCRIPT = ROOT / "tests" / "tactical-websocket-runtime-1.17.32.py"
+SOCKET_SCRIPT = ROOT / "tests" / "tactical-websocket-runtime-1.17.33.py"
 
 
 def must(cond, msg):
@@ -116,7 +117,7 @@ for folder in SCAN_FOLDERS:
             failures.append(f"{path.relative_to(ROOT).as_posix()}: imports {', '.join(hit)}, which Tactical's venv does not have")
 print(f"PASS {scanned} Python files outside the shell scripts checked for daphne and channels.testing")
 
-# 3. the 1.17.32 socket script: what the dev-server run depends on
+# 3. the socket script (named for 1.17.33): what the dev-server run depends on
 if SOCKET_SCRIPT.exists():
     text = SOCKET_SCRIPT.read_text(encoding="utf-8")
     tops, dotted = imports_of(SOCKET_SCRIPT)
@@ -124,13 +125,15 @@ if SOCKET_SCRIPT.exists():
     must(dotted_hit(dotted, {"channels.testing", "daphne"}) == set(), "the socket script imports neither channels.testing nor daphne")
     must('"type": "websocket"' in text and "ws_scope" in text, "the socket script builds a websocket scope by hand")
     must("tacticalrmm.asgi" in dotted and "application" in text, "the socket script drives tacticalrmm.asgi.application")
-    must("transaction.set_rollback(True)" in text and "finally:" in text and "cache.delete(tw.cache_key(" in text,
-         "the socket script keeps the rollback and the cache cleanup")
+    must("set_rollback" not in text.split('"""', 2)[2] and "transaction.atomic" not in text.split('"""', 2)[2],
+         "the socket script runs no transaction and no rollback (database_sync_to_async closes the connection inside one)")
+    must("finally:" in text and "remove_probe_rows(" in text and "cache.delete(tw.cache_key(" in text,
+         "the socket script deletes its rows and clears its ticket keys in a finally block")
     must('async_to_sync(socket_leg)()' in text, "the socket leg runs under async_to_sync")
     must("4401" in text and "4003" in text, "the socket script checks 4401 and 4003")
     must('"custom:terminal-start"' in text and "starts.count() == 1" in text, "the socket script checks one custom:terminal-start row")
     must("evil.example.invalid" in text and "CORS_ORIGIN_WHITELIST" in text, "the socket script checks a foreign Origin and the split host")
-    print("PASS the 1.17.32 socket script has the asgiref, scope, rollback, 4401, 4003 and one-row checks")
+    print("PASS the socket script has the asgiref, scope, cleanup, 4401, 4003 and one-row checks")
 
 if failures:
     raise AssertionError("runtime script imports:\n  " + "\n  ".join(failures))

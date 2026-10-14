@@ -5,7 +5,7 @@ Reuses the stub harness of tests/tactical-operations-1.17.7.py (the real audit.p
 module_category.py run against stubs for Django, DRF and Tactical's own models). The new code is the real tactical_websocket.py and
 tactical_websocket_views.py. Django, channels and Tactical are not installed on the development PC, so the cache, the session trust
 rows and the Knox table are fakes here. The consumer that relays the socket is tested in tests/tactical-websocket-consumer-1.17.31.py,
-and the real Redis single-use delete, the ASGI route and the watcher only run on the dev server (tests/tactical-websocket-runtime-1.17.32.py).
+and the real Redis single-use delete, the ASGI route and the watcher only run on the dev server (tests/tactical-websocket-runtime-1.17.33.py).
 
 Covered: a permitted owner, flag and in-scope agent gets {ticket, path, session_id, expires_in, kind}; the raw ticket is not in the
 stored key or value; a non-owner, a server or premium module (unless an honoured AD-20 replacement), a disabled, legacy, unknown or core

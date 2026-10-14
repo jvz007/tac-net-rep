@@ -236,34 +236,95 @@ def consume_ticket(ticket: str) -> dict | None:
     return value
 
 
+def _is_stale_connection_error(exc: BaseException) -> bool:
+    """True for a database error that a fresh connection can cure: OperationalError or InterfaceError (the connection is closed, the
+    server closed it, pgbouncer restarted). Anything else, and a Django that cannot be imported here, is not one."""
+    try:
+        from django.db import InterfaceError, OperationalError
+    except ImportError:
+        return False
+    return isinstance(exc, (OperationalError, InterfaceError))
+
+
+def _in_atomic_block(connections) -> bool:
+    return any(getattr(conn, "in_atomic_block", False) for conn in connections.all())
+
+
+def run_with_fresh_connection(fn, *args, **kwargs):
+    """Run a database read. On a stale connection, close this thread's connections and run it once more (Core 1.17.33).
+
+    A connection that Django has not yet flagged (CONN_MAX_AGE above 0, then a Postgres or pgbouncer restart or an idle kill) fails on
+    first use. One such failure must not refuse a good ticket or close a terminal that has run for hours. Rules: only OperationalError and
+    InterfaceError are retried, exactly once, and the whole of ``fn`` runs again (so the retry re-runs the full check, not one query). A
+    second failure is raised as it is, so callers keep failing closed. Inside a transaction nothing is closed or retried, because a close
+    would drop the transaction. Use it for reads only: never for a write that a retry could double (the strict audit row).
+    """
+    try:
+        return fn(*args, **kwargs)
+    except Exception as exc:
+        if not _is_stale_connection_error(exc):
+            raise
+        from django.db import connections
+
+        if _in_atomic_block(connections):
+            raise
+        logger.warning("A database connection was stale; reconnecting once.")
+        connections.close_all()
+        return fn(*args, **kwargs)
+
+
+def ensure_usable_connections() -> None:
+    """Before a write that must not be retried: close this thread's connection if it no longer answers, so the next query opens a
+    fresh one. Skipped inside a transaction, for a connection that was never opened, and where Django cannot be imported."""
+    try:
+        from django.db import connections
+    except ImportError:
+        return
+    for conn in connections.all():
+        if getattr(conn, "in_atomic_block", False) or getattr(conn, "connection", None) is None:
+            continue
+        try:
+            usable = conn.is_usable()
+        except Exception:  # noqa: BLE001 - a connection that cannot even answer the check is not usable
+            usable = False
+        if not usable:
+            conn.close()
+
+
+def _session_refusal_once(value: dict) -> str | None:
+    """session_refusal without its error handling: a database error is raised, so run_with_fresh_connection can retry the whole check."""
+    from knox.models import AuthToken
+
+    from .models import TecTacSessionTrust
+
+    user = get_user_model().objects.filter(pk=value["user_id"]).first()
+    if user is None or not user.is_active or bool(getattr(user, "block_dashboard_login", False)):
+        return "user_unavailable"
+    trust = TecTacSessionTrust.objects.filter(pk=value["trust_id"]).first()
+    if trust is None or trust.revoked or trust.user_id != user.pk:
+        return "session_revoked"
+    now = timezone.now()
+    if trust.absolute_expires_at is None or now >= trust.absolute_expires_at:
+        return "session_expired"
+    digest = str(trust.knox_digest or "")
+    if not digest or digest != value.get("knox_digest"):
+        return "credential_unavailable"
+    live = AuthToken.objects.filter(digest=digest).filter(Q(expiry__isnull=True) | Q(expiry__gt=now)).exists()
+    if not live:
+        return "credential_unavailable"
+    return None
+
+
 def session_refusal(value: dict) -> str | None:
     """Why the sign-in behind a ticket no longer holds, or None when it still does. Used at connect and every watch interval.
 
     Checks: the user exists, is active and is not blocked from the dashboard; the Tec-Tac session row is not revoked, belongs to
     that user and is inside its absolute lifetime; the Knox token behind it is still present and not expired. The idle timeout is
-    not checked: typing in a terminal does not touch the REST API. Any error is a refusal.
+    not checked: typing in a terminal does not touch the REST API. A stale database connection is retried once (see
+    run_with_fresh_connection). Any other error, or a second failure, is a refusal.
     """
-    from knox.models import AuthToken
-
-    from .models import TecTacSessionTrust
-
     try:
-        user = get_user_model().objects.filter(pk=value["user_id"]).first()
-        if user is None or not user.is_active or bool(getattr(user, "block_dashboard_login", False)):
-            return "user_unavailable"
-        trust = TecTacSessionTrust.objects.filter(pk=value["trust_id"]).first()
-        if trust is None or trust.revoked or trust.user_id != user.pk:
-            return "session_revoked"
-        now = timezone.now()
-        if trust.absolute_expires_at is None or now >= trust.absolute_expires_at:
-            return "session_expired"
-        digest = str(trust.knox_digest or "")
-        if not digest or digest != value.get("knox_digest"):
-            return "credential_unavailable"
-        live = AuthToken.objects.filter(digest=digest).filter(Q(expiry__isnull=True) | Q(expiry__gt=now)).exists()
-        if not live:
-            return "credential_unavailable"
-        return None
+        return run_with_fresh_connection(_session_refusal_once, value)
     except Exception:
         logger.exception("Could not re-check the sign-in behind a Tactical terminal ticket; refusing.")
         return "check_failed"

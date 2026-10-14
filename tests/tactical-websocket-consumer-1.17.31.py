@@ -4,7 +4,7 @@
 Reuses the fixtures of tests/tactical-websocket-ticket-1.17.31.py (the operations harness, the Django boundary fakes, the real
 tactical_websocket.py and the real audit.py). The stub stands for agents/consumers.py: its connect, start and disconnect follow the
 v1.5.2 source (the user, the URL route kwargs, the terminal permission and scope, the started flag, the kill on disconnect). The real
-Tactical class and the real Redis and channels run only on the dev server (tests/tactical-websocket-runtime-1.17.32.py).
+Tactical class and the real Redis and channels run only on the dev server (tests/tactical-websocket-runtime-1.17.33.py).
 
 Covered: a valid ticket is accepted and the socket takes its agent and session from the ticket, never from the URL; a replayed, expired,
 unknown or malformed ticket closes 4401; a revoked session, a lost flag or an out-of-scope agent closes 4401 or 4003 as specified; a bad

@@ -21,7 +21,14 @@ from django.contrib.auth import get_user_model
 from . import audit as audit_core
 from . import resources_adapter as adapter
 from .rbac import has_tactical_permission
-from .tactical_websocket import KINDS, consume_ticket, session_refusal
+from .tactical_websocket import (
+    KINDS,
+    _session_refusal_once,
+    consume_ticket,
+    ensure_usable_connections,
+    run_with_fresh_connection,
+    session_refusal,
+)
 
 logger = logging.getLogger("tec_tac.tactical_websocket")
 
@@ -107,9 +114,8 @@ def origin_allowed(scope) -> bool:
     return origin_form is not None and origin_form in configured_frontend_origins()
 
 
-def recheck(value: dict):
-    """(close code, user). A None code means every check passed. Runs in a worker thread (database_sync_to_async)."""
-    if session_refusal(value):
+def _recheck_once(value: dict):
+    if _session_refusal_once(value):
         return 4401, None
     user = get_user_model().objects.filter(pk=value["user_id"]).first()
     if user is None:
@@ -119,6 +125,25 @@ def recheck(value: dict):
     if not adapter.objects_in_role_scope(user=user, resource_type="agent", identifiers=[value["agent_id"]]):
         return 4003, None
     return None, user
+
+
+def recheck(value: dict):
+    """(close code, user). A None code means every check passed. Runs in a worker thread (database_sync_to_async).
+
+    A stale database connection is retried once, and the whole check runs again (Core 1.17.33). Any other error, or a second failure,
+    closes the socket 4401 (fail closed)."""
+    try:
+        return run_with_fresh_connection(_recheck_once, value)
+    except Exception:
+        logger.exception("Could not re-check the sign-in behind a Tactical terminal ticket; refusing.")
+        return 4401, None
+
+
+def write_start_row(**kwargs):
+    """The strict start row. The connection is checked first, but the write itself is never retried: a retry could double a row, and a
+    failed write must stay audit_unavailable (no row, no start)."""
+    ensure_usable_connections()
+    return audit_core._record_tactical_websocket(**kwargs)
 
 
 class TecTacAgentTerminalConsumer(TerminalStreamConsumer):
@@ -174,7 +199,7 @@ class TecTacAgentTerminalConsumer(TerminalStreamConsumer):
     async def _write_start_row(self, content) -> bool:
         value = self._tec_value
         try:
-            result = await database_sync_to_async(audit_core._record_tactical_websocket)(
+            result = await database_sync_to_async(write_start_row)(
                 actor=self.user, module_id=value["module_id"], action="custom:terminal-start", object_type=KINDS[KIND]["object_type"],
                 object_id=value["agent_id"], message="Terminal session started through Core's ticketed socket.",
                 after={

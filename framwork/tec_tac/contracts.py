@@ -1356,6 +1356,7 @@ BROWSER_CONTRACTS = (
             "payload is the parsed response body. It is null for a 204, for an empty or unparseable body, and when status is 0. The field is payload; there is no body alias.",
             "code is payload.code when that is a string, otherwise null.",
             "api() also throws on any 2xx JSON object with a truthy error or detail key, unless rejectErrorPayload: false is passed. apiRaw, apiBlob and apiText never do.",
+            "While signed out the shell refuses the call with status 401 and code signed_out, with no request.",
         ],
     },
     {
@@ -1454,6 +1455,10 @@ BROWSER_CONTRACTS = (
         "audience": "module/browser",
         "docs": "tec-tac-ui/docs/module-notifications.md",
         "purpose": "Show bounded in-app operator notices without creating another notification surface.",
+        "details": [
+            "Nothing shows and nothing is sent while the person is signed out; a module treats status 401 as signed out and stays silent.",
+            "While signed out, show, info, success, warning and error return null: no toast and no stored notice (UI 0.12.103).",
+        ],
     },
     {
         "id": "ui.authenticated.help",
@@ -1705,6 +1710,24 @@ BROWSER_CONTRACTS = (
             "Outside a backend-supplied context every service is hidden and a call is refused (AD-12): has() is false, list() is empty and call() refuses with service_denied. A service the person may not use is hidden the same way and does not appear in list().",
             "Calls: has(name) is true only when the provider is loaded and the person passes the checks. call(name, args) checks again at call time and awaits the handler. list() returns {name, label, provider} for each service the person may see. Refusal codes: service_unavailable (no such service) and service_denied (the person may not use it). An error thrown by the handler reaches the caller as 'Service <name> from <provider> failed: <message>'.",
             "Everything a module provides is removed when its register() fails, times out or is abandoned, and an abandoned module cannot provide or call a service. A module switched off while the page is open stops answering at once (UI 0.12.102).",
+        ],
+    },
+    {
+        "id": "ui.authenticated.jobs",
+        "phase": "authenticated",
+        "service": "jobs",
+        "operations": ["follow"],
+        "audience": "module/browser",
+        "docs": "tec-tac-ui/docs/module-job-follow.md",
+        "purpose": "Follow a background job through a read route after the person leaves the page.",
+        "details": [
+            "follow(descriptor) returns {id, cancel()}. The shell polls the read route itself, so the follow keeps running after the person leaves the module's page. The service only reads; the backend decides everything (AD-12). Needs UI 0.12.103.",
+            "Descriptor keys: id (a module-local key; a second follow with the same id replaces the first), title, path (a GET read route, called through the module's own guarded api), check(payload) (returns 'success', 'error' or a false value while the job is still running), successMessage, errorMessage and timeoutMessage (each text, or a function of the payload), intervalMs (default 5000, clamped to 2000 to 60000) and timeLimitMs (required, clamped to 10000 to 1800000).",
+            "A follow stops at the first finish with one success or error notice, and at the time limit with one timeout notice. cancel(), an unloaded or abandoned module, the end of the session and pagehide stop it silently. A read that fails with status 401 stops it silently. Three failed reads in a row (any other status, or a check that throws) stop it with one error notice.",
+            "Notices use dedupeKey job-follow:<id>.",
+            "Limits: 10 live follows per module and 50 in all. A further follow throws a plain error.",
+            "Refusals: a follow is refused outside a context Core supplied (the same rule as services), while signed out, and for an abandoned or unloaded module. The module id is bound by the shell; an argument cannot name another module.",
+            "The read goes through the module's guarded api, so the rule that keeps a module off another module's tactical-operations routes still applies.",
         ],
     },
     {
