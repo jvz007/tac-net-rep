@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pyotp
@@ -126,23 +127,46 @@ def reset_own_totp(user, *, current_password: str, current_totp: str, request=No
     }
 
 
+# Tactical's own UI preferences (Tactical 1.5.2: accounts.User and UserUISerializer). Core writes the same User columns that Tactical's
+# UI writes, so both UIs show one choice (AD-25). Core checks more strictly than Tactical's model, and one PUT is all or nothing.
+# block_dashboard_login is not a UI preference (it is a login block), so it is refused as an unknown field.
+TACTICAL_UI_BOOL_FIELDS = ("dark_mode", "show_community_scripts", "clear_search_when_switching")
+TACTICAL_UI_CHOICE_FIELDS = ("default_agent_tbl_tab", "client_tree_sort")
+TACTICAL_UI_COLOUR_FIELDS = ("loading_bar_color", "dash_info_color", "dash_positive_color", "dash_negative_color", "dash_warning_color")
+TACTICAL_UI_SCALAR_FIELDS = TACTICAL_UI_BOOL_FIELDS + TACTICAL_UI_CHOICE_FIELDS + TACTICAL_UI_COLOUR_FIELDS + ("client_tree_splitter", "date_format")
+_COLOUR_NAME = re.compile(r"[a-z][a-z0-9-]{0,39}")  # a Quasar colour name, such as red or deep-purple-3
+_COLOUR_HEX = re.compile(r"#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})")
+_DATE_FORMAT = re.compile(r"[A-Za-z0-9 :/.,\[\]-]{1,30}")
+
+
+def _tactical_ui_choices(user, name: str) -> list[dict[str, str]]:
+    field = user._meta.get_field(name)
+    return [{"value": str(value), "label": str(label)} for value, label in field.choices]
+
+
+def _tactical_ui_scalars(user) -> dict[str, Any]:
+    """The small Tactical UI scalars (no choice lists): the hot path and the My Account answer both carry them."""
+    return {name: getattr(user, name) for name in TACTICAL_UI_SCALAR_FIELDS}
+
+
 def tactical_ui_context(user) -> dict[str, Any]:
     """Return the lightweight Tactical UI values exposed to module runtime context.
 
     Keep this hot-path payload intentionally small: modules need the effective
-    double-click action and selected URL Action identity, not the full URL Action
-    catalogue returned by the My Account editor.
+    double-click action, the selected URL Action identity and the small UI
+    scalars (1.17.35), not the URL Action catalogue or the choice lists returned
+    by the My Account editor.
     """
-    return {
+    context = {
         "agent_dblclick_action": str(getattr(user, "agent_dblclick_action", "") or ""),
         "url_action_id": getattr(user, "url_action_id", None),
         "can_run_url_actions": _can_run_url_actions(user),
     }
+    context.update(_tactical_ui_scalars(user))
+    return context
 
 
 def tactical_ui_preferences(user) -> dict[str, Any]:
-    field = user._meta.get_field("agent_dblclick_action")
-    choices = [{"value": str(value), "label": str(label)} for value, label in field.choices]
     can_run_url_actions = _can_run_url_actions(user)
     url_field = user._meta.get_field("url_action")
     model = url_field.remote_field.model
@@ -153,16 +177,45 @@ def tactical_ui_preferences(user) -> dict[str, Any]:
     return {
         "agent_dblclick_action": str(getattr(user, "agent_dblclick_action", "") or ""),
         "url_action_id": selected,
-        "agent_dblclick_choices": choices,
+        "agent_dblclick_choices": _tactical_ui_choices(user, "agent_dblclick_action"),
         "url_actions": actions,
         "can_run_url_actions": can_run_url_actions,
+        **_tactical_ui_scalars(user),
+        "default_agent_tbl_choices": _tactical_ui_choices(user, "default_agent_tbl_tab"),
+        "client_tree_sort_choices": _tactical_ui_choices(user, "client_tree_sort"),
     }
+
+
+def _tactical_ui_value(user, name: str, value: Any) -> Any:
+    """Check one Tactical UI preference and return what to store. Raises before anything is saved."""
+    if name in TACTICAL_UI_BOOL_FIELDS:
+        if not isinstance(value, bool):
+            raise AccountSelfServiceError(f"{name} must be true or false.")
+        return value
+    if name == "client_tree_splitter":
+        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 99:
+            raise AccountSelfServiceError("client_tree_splitter must be a whole number from 1 to 99.")
+        return value
+    if name == "date_format":
+        if value in (None, ""):
+            return None
+        if not isinstance(value, str) or not _DATE_FORMAT.fullmatch(value):
+            raise AccountSelfServiceError("date_format must be empty or up to 30 letters, digits, spaces and : / - . , [ ].")
+        return value
+    if name in TACTICAL_UI_COLOUR_FIELDS:
+        if not isinstance(value, str) or not (_COLOUR_NAME.fullmatch(value) or _COLOUR_HEX.fullmatch(value)):
+            raise AccountSelfServiceError(f"{name} must be a colour name such as red, or a # colour of 3, 4, 6 or 8 digits.")
+        return value
+    valid = {choice["value"] for choice in _tactical_ui_choices(user, name)}
+    if not isinstance(value, str) or value not in valid:
+        raise AccountSelfServiceError(f"Unsupported value for {name}.")
+    return value
 
 
 def update_tactical_ui_preferences(user, payload: dict[str, Any], *, request=None) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise AccountSelfServiceError("Preferences must be an object.")
-    allowed = {"agent_dblclick_action", "url_action_id"}
+    allowed = {"agent_dblclick_action", "url_action_id", *TACTICAL_UI_SCALAR_FIELDS}
     unknown = set(payload) - allowed
     if unknown:
         raise AccountSelfServiceError("Unknown Tactical UI preference field(s): " + ", ".join(sorted(unknown)))
@@ -198,6 +251,11 @@ def update_tactical_ui_preferences(user, payload: dict[str, Any], *, request=Non
                     raise AccountSelfServiceError("URL Action was not found.")
                 locked.url_action_id = action_id
             update_fields.append("url_action")
+
+        for name in TACTICAL_UI_SCALAR_FIELDS:
+            if name in payload:
+                setattr(locked, name, _tactical_ui_value(locked, name, payload[name]))
+                update_fields.append(name)
 
         if update_fields:
             locked.save(update_fields=list(dict.fromkeys(update_fields)))

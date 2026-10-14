@@ -189,7 +189,7 @@ tree = ast.parse(migration.read_text(encoding="utf-8"))
 text = migration.read_text(encoding="utf-8")
 must('("tec_tac", "0025_runtime_update_sources")' in text and 'name="tactical_operation_upload_max_mib"' in text and "default=10" in text, "migration 0026 follows 0025, adds the column with default 10")
 must(sum(isinstance(node, ast.ClassDef) for node in ast.walk(tree)) == 1, "one migration class")
-must(not any(p.name.startswith("0031") for p in (APP / "migrations").iterdir()), "the newest migration is 0030 (the notice ledger, 1.17.34); no later one yet")
+must(sorted(p.name for p in (APP / "migrations").glob("00*.py"))[-1] == "0031_module_preferences.py", "the newest migration is 0031 (module preferences, 1.17.35)")
 contracts = (APP / "contracts.py").read_text(encoding="utf-8")
 for needle in (UP, "superuser", "1.17.14"):
     must(needle in contracts, f"the runtime-settings contract entry lacks {needle!r}")

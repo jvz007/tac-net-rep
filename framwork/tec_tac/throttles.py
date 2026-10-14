@@ -83,6 +83,13 @@ class SavedViewWriteDayThrottle(_WriteOnlyThrottle):
     rate = "2000/day"
 
 
+class ModulePreferenceWriteMinThrottle(_WriteOnlyThrottle):
+    """Core 1.17.35: changes to a module preference (PUT and DELETE). Reads are not throttled."""
+
+    scope = "tec_tac_module_preference_write_min"
+    rate = "120/min"
+
+
 class RuntimeSettingsWriteMinThrottle(_WriteOnlyThrottle):
     scope = "tec_tac_runtime_settings_write_min"
     rate = "10/min"

@@ -76,14 +76,24 @@ class Field:
     choices=[('editagent','Edit Agent'),('takecontrol','Take Control'),('remotebg','Remote Background'),('urlaction','URL Action')]
 class UrlField:
     remote_field=types.SimpleNamespace(model=ActionModel)
+class TabField:  # 1.17.35: Tactical's AgentTableTabs and ClientTreeSort choices, as the model reports them
+    choices=[('server','Servers'),('workstation','Workstations'),('mixed','Mixed')]
+class SortField:
+    choices=[('alphafail','Move failing clients to the top'),('alpha','Sort alphabetically')]
 class Meta:
-    def get_field(self,name): return Field() if name=='agent_dblclick_action' else UrlField()
+    def get_field(self,name):
+        if name=='url_action': return UrlField()
+        return {'agent_dblclick_action': Field(), 'default_agent_tbl_tab': TabField(), 'client_tree_sort': SortField()}[name]
 class Role:
     is_superuser=False; can_run_urlactions=True
 class User:
     _meta=Meta()
     pk=1; id=1; username='alice'; first_name='Alice'; last_name='Ops'; email='a@example.test'; is_superuser=False; is_sso_user=False
     role=Role(); agent_dblclick_action='editagent'; url_action_id=None
+    # 1.17.35: the Tactical UI columns (accounts.User defaults)
+    dark_mode=True; show_community_scripts=True; default_agent_tbl_tab='mixed'; client_tree_sort='alphafail'; client_tree_splitter=11
+    loading_bar_color='red'; dash_info_color='info'; dash_positive_color='positive'; dash_negative_color='negative'
+    dash_warning_color='warning'; clear_search_when_switching=True; date_format=None
     def __init__(self):
         self.password='old'; self.totp_key=pyotp.random_base32(); self.saved=[]
     def check_password(self,p): return p == self.password

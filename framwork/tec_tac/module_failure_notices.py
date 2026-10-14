@@ -191,6 +191,14 @@ def _default_existing(client_ids: list[str]) -> set[tuple[str, Any]]:
     return set(TecTacUserNotice.objects.filter(client_id__in=client_ids).values_list("client_id", "user_id"))
 
 
+def _default_marker_times(client_ids: list[str]) -> dict[tuple[str, Any], datetime | None]:
+    """(email client id, user id) -> the old marker row's own created_at (1.17.35), so the ledger copy keeps the time the email went."""
+    from .models import TecTacUserNotice
+
+    rows = TecTacUserNotice.objects.filter(client_id__in=client_ids).values_list("client_id", "user_id", "created_at")
+    return {(client_id, user_id): created_at for client_id, user_id, created_at in rows}
+
+
 def _default_recent(since: datetime) -> int:
     """How many Priority 1 emails were tried since ``since``: the ledger's email rows, one per recipient tried (the cap's count).
     Since 1.17.34 these are ledger rows, not marker rows, so Clear read cannot lower the count."""
@@ -212,22 +220,25 @@ def _default_email_have(client_ids: list[str]) -> set[tuple[str, Any]]:
     earlier). Raises on a database failure, so the email step sends nothing rather than risk a second email."""
     from . import notices
 
-    markers = set(_default_existing(client_ids))
+    marker_times = _default_marker_times(client_ids)
+    markers = set(marker_times)
     pairs = set(markers)
     held = notices.ledger_have(LEDGER_EMAIL, [_job_id_of(item) for item in client_ids])
     for key, user_id in held:
         pairs.add((f"{EMAIL_CLIENT_ID_PREFIX}{key}", user_id))
     # An old marker row is the only record that this person had the email. Copy it into the ledger now, so "Clear read" (which deletes
-    # marker rows) can never make the email look unsent. Best effort: the marker is still read this tick whatever happens here.
-    unrecorded: dict[str, list] = {}
+    # marker rows) can never make the email look unsent. Each copy keeps the marker's own time (1.17.35), so it counts toward the hourly
+    # cap only if the email really went in the last hour. Best effort: the marker is still read this tick whatever happens here.
+    unrecorded: dict[str, dict[Any, datetime | None]] = {}
     for client_id, user_id in markers:
         if (_job_id_of(client_id), user_id) not in held:
-            unrecorded.setdefault(_job_id_of(client_id), []).append(user_id)
-    for job_id, user_ids in unrecorded.items():
+            unrecorded.setdefault(_job_id_of(client_id), {})[user_id] = marker_times.get((client_id, user_id))
+    for job_id, times in unrecorded.items():
         try:
-            notices.ledger_add(LEDGER_EMAIL, job_id, user_ids)
+            notices.ledger_add(LEDGER_EMAIL, job_id, list(times), created_at=times)
         except Exception as exc:
             logger.warning("Could not copy an old email marker into the notice ledger (%s).", exc.__class__.__name__)
+            break  # one warning per tick; the next tick tries the rest again
     return pairs
 
 

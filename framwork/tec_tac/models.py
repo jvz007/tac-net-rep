@@ -523,3 +523,32 @@ class TecTacNoticeLedger(models.Model):
 
     def __str__(self):
         return f"{self.user_id}:{self.kind}:{self.key}"
+
+
+class TecTacModulePreference(models.Model):
+    """One per-person choice a module keeps through Core (core.module_preferences 1.0.0, Core 1.17.35).
+
+    A row belongs to one person, one module id and one name, and holds one small JSON value (at most 4 KiB, 5 levels deep). It is a
+    separate table, not the reserved ``extensions`` object of the Tec-Tac preference document: that document is replaced as a whole, so
+    a stale tab would overwrite a module's choice. Rows of a removed module stay (they are harmless and go with the person on account
+    delete). No secret, token or personal data may be stored; this is the person's own display choice.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="tec_tac_module_preferences",
+    )
+    module_id = models.CharField(max_length=100)
+    name = models.CharField(max_length=64)
+    value = models.JSONField()
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("user", "module_id", "name"), name="tectac_modpref_unique"),
+        ]
+
+    def __str__(self):
+        return f"{self.user_id}:{self.module_id}:{self.name}"

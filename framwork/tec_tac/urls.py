@@ -15,6 +15,7 @@ from .dashboard_views import DashboardListCreateView, DashboardDetailView
 from .runtime_settings import RuntimeSettingsView, UpdateSourceView
 from .saved_view_views import SavedViewListCreateView, SavedViewDetailView
 from .preference_views import UserPreferencesView
+from .module_preference_views import ModulePreferenceDetailView, ModulePreferenceListView
 from .notice_views import NoticeListCreateView, NoticeReadView, NoticeReadAllView, NoticeClearReadView
 from .mfa_backup_views import MfaBackupCodesView, AdminUserMfaRecoveryView, BackupCodeLoginView
 from .housekeeping_views import HousekeepingStatusView, HousekeepingPurgeView
@@ -102,6 +103,8 @@ urlpatterns = [
 
     path("ui/context/", UiContextView.as_view(), name="tec-tac-ui-context"),
     path("ui/preferences/", UserPreferencesView.as_view(), name="tec-tac-user-preferences"),
+    path("module-preferences/<str:module_id>/", ModulePreferenceListView.as_view(), name="tec-tac-module-preferences"),
+    path("module-preferences/<str:module_id>/<str:name>/", ModulePreferenceDetailView.as_view(), name="tec-tac-module-preference-detail"),
     path("ui/notices/", NoticeListCreateView.as_view(), name="tec-tac-notices"),
     path("ui/notices/<uuid:notice_id>/read/", NoticeReadView.as_view(), name="tec-tac-notice-read"),
     path("ui/notices/read-all/", NoticeReadAllView.as_view(), name="tec-tac-notices-read-all"),

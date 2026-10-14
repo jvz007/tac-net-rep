@@ -775,6 +775,38 @@ CORE_CONTRACTS = (
         "purpose": "Issue one single-use, 30 second ticket for a Tactical terminal socket (1.17.31, C4, capability core.tactical_websocket 1.0.0; 1.1.0 in Core 1.17.34 adds the kind server-terminal). issue_ticket(request, module_id, kind, agent_id) runs Core's checks for the signed-in user of the request: the module owns the kind (its route owner rule, agents/{agent_id}/terminal-defaults/ for kind agent-terminal), the Tactical flag can_use_terminal, and the agent inside the caller's role scope. For kind server-terminal (AD-35) agent_id is None, only the module globalsettings may ask, only an effective superuser may have it (403 superuser_required), and only where Tactical's server web terminal is on and the caller holds can_use_webterm (403 server_terminal_disabled). It answers {ticket, path, session_id, expires_in, kind} or raises TicketRefusal (status, code, message, audit). The capability's operation issue_ticket is the same, and accepts a call only from the module it names (verified caller). The browser route is POST /api/tfd/tactical-websocket/<module_id>/<kind>/tickets/. The socket is /ws/tfd/agent-terminal/<ticket>/, or /ws/tfd/server-terminal/<ticket>/ for the server terminal. Since 1.17.34 terminal input and resize frames count as session activity (output does not), and the idle limit and absolute maximum close the socket 4401. See docs/tactical-websocket.md.",
         "audience": "backend/browser",
     },
+    {
+        "area": "module-preferences",
+        "import_path": "tec_tac.module_preferences",
+        "name": "get",
+        "kind": "python",
+        "purpose": "get(user, name, *, module_id, default=None) -> the stored value of one preference of the signed-in person for an installed, enabled module (1.17.35, capability core.module_preferences 1.0.0). Only that person's row is read; a missing row gives default. name matches [a-z0-9][a-z0-9._-]{0,63}. module_id is a claim, with the same trust as notices.publish: core and tec-tac are refused, and an unknown or disabled module raises ModulePreferenceError module_not_found (404). Requires framework >=1.17.35. See docs/module-preferences.md.",
+        "audience": "consumer/backend",
+    },
+    {
+        "area": "module-preferences",
+        "import_path": "tec_tac.module_preferences",
+        "name": "set",
+        "kind": "python",
+        "purpose": "set(user, name, value, *, module_id) -> the stored value (1.17.35). value is plain JSON (a scalar, a list or an object) of at most 4 KiB stored and 5 levels deep. A 51st name for one module raises preference_limit (400). invalid_name and invalid_value are raised before anything is written. Writes by one person are serialised. Not audited. No secret, token or personal data may be stored.",
+        "audience": "consumer/backend",
+    },
+    {
+        "area": "module-preferences",
+        "import_path": "tec_tac.module_preferences",
+        "name": "delete",
+        "kind": "python",
+        "purpose": "delete(user, name, *, module_id) -> True when one of the signed-in person's rows was removed, else False (1.17.35). Only that person's row is touched.",
+        "audience": "consumer/backend",
+    },
+    {
+        "area": "module-preferences",
+        "import_path": "tec_tac.module_preferences",
+        "name": "list_for",
+        "kind": "python",
+        "purpose": "list_for(user, *, module_id) -> {name: value} of every preference of the signed-in person for the module, sorted by name (1.17.35).",
+        "audience": "consumer/backend",
+    },
 )
 
 HTTP_CONTRACT_DETAILS = {
@@ -830,6 +862,37 @@ HTTP_CONTRACT_DETAILS = {
                 "429": "audit write rate limit reached",
             },
             "success": {"201": "recorded", "202": "accepted but Tactical's AuditLog write failed (recorded false)"},
+        },
+    },
+    "/api/tfd/module-preferences/<str:module_id>/": {
+        "GET": {
+            "authorization": "authenticated Tec-Tac session (SessionAuthenticated); self only, never another person's row (added 1.17.35)",
+            "response": {"module_id": "the path id", "preferences": "{name: value} of every preference of this person for the module, sorted by name"},
+            "module_id": "a claim: the browser cannot prove which module calls, so the path id is trusted as notices.publish trusts its module_id. Core checks that it is an installed, enabled extension; core and tec-tac are refused.",
+            "errors": {"401": "not signed in", "404": "module_not_found: an unknown or disabled module, or core or tec-tac"},
+        },
+    },
+    "/api/tfd/module-preferences/<str:module_id>/<str:name>/": {
+        "PUT": {
+            "authorization": "authenticated Tec-Tac session; self only; changes are throttled at 120 a minute (reads are not throttled)",
+            "request": {
+                "body": "exactly {\"value\": ...}: a JSON scalar, list or object of at most 4 KiB stored and 5 levels deep",
+                "name": "path: [a-z0-9][a-z0-9._-]{0,63}",
+            },
+            "response": {"module_id": "the path id", "name": "the path name", "value": "the stored value"},
+            "errors": {
+                "400": "invalid_name, or invalid_value (a body that is not exactly {value}, a value too large or too deep, or not plain JSON), or preference_limit (a 51st name for the module: at most 50)",
+                "401": "not signed in",
+                "404": "module_not_found",
+                "429": "throttle: more than 120 changes a minute",
+            },
+            "audit": "none (same as /api/tfd/ui/preferences/)",
+        },
+        "DELETE": {
+            "authorization": "authenticated Tec-Tac session; self only; throttled as PUT",
+            "response": {"module_id": "the path id", "name": "the path name", "deleted": "true when one row was removed, else false"},
+            "errors": {"400": "invalid_name", "401": "not signed in", "404": "module_not_found", "429": "throttle"},
+            "audit": "none (same as /api/tfd/ui/preferences/)",
         },
     },
     "/api/tfd/tactical-websocket/<str:module_id>/<str:kind>/tickets/": {
@@ -1077,7 +1140,7 @@ HTTP_CONTRACT_DETAILS = {
             "response": {
                 "account": "current Tactical user identity and SSO/TOTP state",
                 "mfa": "current Tec-Tac backup-code status",
-                "tactical_ui": "current Tactical agent double-click/default URL Action preferences plus allowed choices",
+                "tactical_ui": "current Tactical UI preferences plus allowed choices (the same object as GET /api/tfd/account/tactical-ui/; the fields beyond the double-click and URL Action ones were added in 1.17.35)",
             },
         },
     },
@@ -1101,13 +1164,29 @@ HTTP_CONTRACT_DETAILS = {
     "/api/tfd/account/tactical-ui/": {
         "GET": {
             "authorization": "authenticated Tec-Tac session; self only",
-            "response": {"preferences": "Tactical agent_dblclick_action/url_action plus current valid choices"},
+            "response": {
+                "preferences": "Tactical agent_dblclick_action/url_action, the UI scalars below, and the valid choices (agent_dblclick_choices, default_agent_tbl_choices, client_tree_sort_choices, url_actions when allowed)",
+            },
         },
         "PUT": {
-            "authorization": "authenticated Tec-Tac session; self only",
-            "request": {"agent_dblclick_action": "one of Tactical's current model choices", "url_action_id": "integer|null"},
-            "response": {"preferences": "updated Tactical UI preferences"},
-            "errors": {"400": "unknown field, unsupported action, missing URL Action, or URL Action permission denied"},
+            "authorization": "authenticated Tec-Tac session; self only; partial update (only the fields sent change), all or nothing",
+            "request": {
+                "agent_dblclick_action": "one of Tactical's current model choices",
+                "url_action_id": "integer|null",
+                "dark_mode": "boolean (added 1.17.35)",
+                "show_community_scripts": "boolean (added 1.17.35)",
+                "clear_search_when_switching": "boolean (added 1.17.35)",
+                "default_agent_tbl_tab": "server, workstation or mixed (added 1.17.35)",
+                "client_tree_sort": "alphafail or alpha (added 1.17.35)",
+                "client_tree_splitter": "whole number from 1 to 99 (added 1.17.35)",
+                "loading_bar_color, dash_info_color, dash_positive_color, dash_negative_color, dash_warning_color": "a Quasar colour name such as red or deep-purple-3, or a # colour of 3, 4, 6 or 8 digits, at most 40 characters (added 1.17.35)",
+                "date_format": "empty or null for the server default, else at most 30 letters, digits, spaces and : / - . , [ ] (added 1.17.35)",
+            },
+            "response": {"preferences": "updated Tactical UI preferences, as the GET returns them"},
+            "errors": {
+                "400": "unknown field (block_dashboard_login is not a UI preference and is refused), unsupported action, missing URL Action, URL Action permission denied, or a value outside the rules above (nothing is saved)",
+            },
+            "audit": "self_tactical_ui_preferences_changed, with the changed field names only, never the values",
         },
     },
     "/api/tfd/modules/v2/": {
@@ -1500,11 +1579,12 @@ BROWSER_CONTRACTS = (
         "id": "ui.authenticated.runtime-context",
         "phase": "authenticated",
         "service": "context / state.context",
-        "operations": ["read", "locale", "timeZone", "dateTimeFormat", "tactical_ui.agent_dblclick_action", "tactical_ui.url_action_id", "tactical_ui.can_run_url_actions", "tactical_web_ui.installed", "tactical_web_ui.url", "server_url", "module_register_timeout_seconds", "system_name", "user.id", "tactical_permissions.<flag>", "tactical_scope.mode", "tactical_scope.unrestricted", "tactical_scope.whole_client_count", "tactical_scope.site_count"],
+        "operations": ["read", "locale", "timeZone", "dateTimeFormat", "tactical_ui.agent_dblclick_action", "tactical_ui.url_action_id", "tactical_ui.can_run_url_actions", "tactical_ui.dark_mode", "tactical_ui.show_community_scripts", "tactical_ui.clear_search_when_switching", "tactical_ui.default_agent_tbl_tab", "tactical_ui.client_tree_sort", "tactical_ui.client_tree_splitter", "tactical_ui.loading_bar_color", "tactical_ui.dash_info_color", "tactical_ui.dash_positive_color", "tactical_ui.dash_negative_color", "tactical_ui.dash_warning_color", "tactical_ui.date_format", "tactical_web_ui.installed", "tactical_web_ui.url", "server_url", "module_register_timeout_seconds", "system_name", "user.id", "tactical_permissions.<flag>", "tactical_scope.mode", "tactical_scope.unrestricted", "tactical_scope.whole_client_count", "tactical_scope.site_count"],
         "audience": "module/browser",
         "docs": "tec-tac-ui/docs/module-runtime-api.md",
         "purpose": "Read the Core-provided authenticated register(context).context object (also available as state.context), including permissions, preferences, authoritative locale/time-zone/date-format fields, Tactical UI preferences, and whether the standard Tactical web UI is installed; treat it as read-only state.",
         "details": [
+            "tactical_ui (added 1.17.35): the scalars dark_mode, show_community_scripts, clear_search_when_switching (booleans), default_agent_tbl_tab (server, workstation or mixed), client_tree_sort (alphafail or alpha), client_tree_splitter (1 to 99), loading_bar_color and the four dash_*_color values (Quasar colour names or # colours), and date_format (a string, or null for the server default). Read-only and additive: the three keys from 1.15.178 are unchanged, and the choice lists are not in the context.",
             "server_url: the Tactical API base without a trailing slash. It is an empty string when unset or not http(s). Read-only.",
             "module_register_timeout_seconds: whole seconds from 5 to 300, default 30. The UI applies it. It covers loading the module's entry file plus its register() call. A module that takes longer is marked failed and the UI carries on.",
             "system_name: string, added in Core 1.17.23. The name an authenticator app shows for this system (default Tec-Tac). Read-only, display only. The set-up answer of POST /api/tfd/auth/totp/enrollment/ carries it as issuer; no unauthenticated read exists.",
@@ -1694,8 +1774,29 @@ BROWSER_CONTRACTS = (
             "Public modules (registerPublic) do not get tacticalWebSocket. A module whose register() failed or timed out cannot open a terminal.",
             "At most 8 terminals open or connecting per module; a ninth is refused. Terminals close when the module is cleaned up, when the Tactical session ends and when the page is left. There is no reconnect: a dropped terminal reports close, and a new terminal needs a new ticket.",
             "Display only: hide a Terminal tab with hasTacticalPermission('can_use_terminal'). Core and Tactical decide every call (AD-12).",
-            "Core 1.17.34 (AD-35) adds the ticket kind server-terminal for the server web terminal: the body is exactly {}, only the module globalsettings may ask, and only an effective superuser may have it (403 superuser_required; 403 server_terminal_disabled where Tactical's switch is off or can_use_webterm is missing). Its path is /ws/tfd/server-terminal/<ticket>/. Its frames are Tactical's trmmcli.input {data:{input}}, trmmcli.resize {data:{rows, cols}} and trmmcli.disconnect, and it answers trmmcli.output; there is no start frame, the shell starts when the socket is accepted. Close 4502 (audit unavailable, no shell) and 4003 are terminal refusals. The helper does not open this kind yet: it waits for a signed UI release (request in reviews/requests/ui.md).",
+            "Core 1.17.34 (AD-35) adds the ticket kind server-terminal for the server web terminal: the body is exactly {}, only the module globalsettings may ask, and only an effective superuser may have it (403 superuser_required; 403 server_terminal_disabled where Tactical's switch is off or can_use_webterm is missing). Its path is /ws/tfd/server-terminal/<ticket>/. Its frames are Tactical's trmmcli.input {data:{input}}, trmmcli.resize {data:{rows, cols}} and trmmcli.disconnect, and it answers trmmcli.output; there is no start frame, the shell starts when the socket is accepted. Close 4502 (audit unavailable, no shell) and 4003 are terminal refusals. UI 0.12.105 or later opens this kind: open('globalsettings', 'server-terminal', {signal}), which refuses agentId before any request, and the ticket path must be exactly /ws/tfd/server-terminal/<ticket>/. session.start() throws and sends nothing. input sends trmmcli.input {data:{input}}, resize sends trmmcli.resize {data:{rows, cols}} and kill sends trmmcli.disconnect. Tactical's answer trmmcli.output {data:{output, messageId}} reaches the output event. Close 4502 (reason audit-unavailable) and 4003 are terminal refusals with no reconnect. The ticket refusals 403 superuser_required and 403 server_terminal_disabled keep error.status and error.code. Only the module's own id may open it: no AD-20 replacement. Needs Core 1.17.34 or later and UI 0.12.105 or later.",
             "Terminal input and resize frames count as session activity (Core 1.17.34, AD-35), so a terminal in use keeps its sign-in alive. Output alone does not. An idle socket, the absolute maximum, a disabled user, a revoked session or a deleted token close 4401. Nothing changes for the helper: the existing close codes and messages apply.",
+        ],
+    },
+    {
+        "id": "ui.authenticated.terminal",
+        "phase": "authenticated",
+        "service": "terminal",
+        "operations": [
+            "create", "write", "writeln", "clear", "reset", "focus", "blur", "fit", "size", "getText", "getSelection", "hasSelection",
+            "copy", "paste", "setTheme", "setOptions", "onInput", "onResize", "dispose",
+        ],
+        "audience": "module/browser",
+        "docs": "tec-tac-ui/docs/module-terminal.md",
+        "purpose": "Draw a real terminal in the module's own window with context.terminal.create(host, options). The widget is xterm.js, needs no Core API and pairs with ui.authenticated.websocket for a Tactical terminal. Needs UI 0.12.104 or later.",
+        "details": [
+            "create(host, options) resolves with a handle and rejects with a plain message when it cannot open. The terminal fills the host element you own and keeps it fitted as the window changes. The handle has write, writeln, clear, reset, focus, blur, fit, size, getText, getSelection, hasSelection, copy, paste, setTheme, setOptions, onInput, onResize and dispose.",
+            "Options: theme (colour names; each value a # colour of 3, 4, 6 or 8 digits, or an rgb(), rgba(), hsl() or hsla() colour, and any other value is dropped), fontFamily (up to 300 characters, no control characters, none of ; { } < >, no url(), checked), fontSize (whole number 8 to 32, default 14), cursorBlink (default true), scrollback (whole number 0 to 50000, default 50000; a larger value is clamped), convertEol (default true), focus (takes keyboard focus on open, default true), rows and cols (whole numbers 1 to 1000, default 24 and 80, the size until the first fit), ariaLabel (up to 200 characters, control characters removed), onInput(data) and onResize({rows, cols}).",
+            "Limits: scrollback 50000 lines at most; 8 live terminals per module, and a ninth create() is refused with a plain message; resize 1 to 1000 rows and 1 to 1000 columns.",
+            "Handle rules: write and writeln take text only, drawn as text and never as HTML; any other value throws a plain error. An OSC 8 link from the remote end is shown as text and clicking it does nothing. There is no clipboard addon and no web-links addon, so the remote end cannot read or write the clipboard. Window title changes and window-size requests from the remote end are ignored.",
+            "setTheme and setOptions follow the same colour and fontFamily checks; a font change fits the terminal again. copy({selectionOnly}) and paste(text) use the shell's clipboard helper; copy rejects with a plain message where the browser gives no clipboard.",
+            "Registered by register(context) only: no registerPublic access, because the public pages are signed out. The scope is bound to the calling module, so no module id is passed and a module cannot open a terminal for another module. The widget needs no Core API.",
+            "Pairing with ui.authenticated.websocket: session output is written with write(), and onInput and onResize go to session.input and session.resize. The server terminal (server-terminal, UI 0.12.105) is paired the same way, with no start step.",
         ],
     },
     {
@@ -1784,6 +1885,7 @@ RULES = (
     "Treat transport acknowledgement as transport state, not operation success; providers must verify downstream execution outcome before returning success.",
     "Scheduled handlers must propagate downstream execution failures so Scheduler history and retry semantics reflect the real result.",
     "When dispatching raw OS commands, build and test the command for the exact shell used by the agent; Windows cmd.exe quoting, especially Program Files paths, must be deliberate.",
+    "Module user preferences (core.module_preferences 1.0.0, Core 1.17.35): a module that uses tec_tac.module_preferences or /api/tfd/module-preferences/ must require framework >=1.17.35. A preference is one person's own non-secret display choice for one module. No secret, token or personal data may be stored. Core checks the person and that the module is installed and enabled; the module id is a claim, as for notices.publish. Rows of a removed module stay until the person is deleted. See docs/module-preferences.md.",
 )
 
 

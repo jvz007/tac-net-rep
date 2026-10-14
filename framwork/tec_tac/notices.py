@@ -7,6 +7,7 @@ provide durable history without persisting arbitrary runtime metadata.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from datetime import timedelta
 
 from django.db import transaction
@@ -179,14 +180,26 @@ def ledger_have(kind: str, keys) -> set:
     return set(TecTacNoticeLedger.objects.filter(kind=kind, key__in=wanted).values_list("key", "user_id"))
 
 
-def ledger_add(kind: str, key: str, users) -> int:
+def ledger_add(kind: str, key: str, users, *, created_at=None) -> int:
     """Record that each user (a user, or a user id) has had ``key``. Returns how many rows it created. Never changes an existing row.
-    Raises on a database failure."""
+    Raises on a database failure, and a failure leaves none of this call's rows behind.
+
+    ``created_at`` (1.17.35) is the time a new row records: one datetime for every user, or a mapping of user id to datetime. A user
+    with no value gets now. Only the rows this call creates take it, so an old marker is copied with its own time and counts only
+    where the email really was sent."""
     kind = _ledger_kind(kind)
     created = 0
-    for user in users:
-        _, new = TecTacNoticeLedger.objects.get_or_create(user_id=getattr(user, "pk", user), kind=kind, key=str(key)[:64])
-        created += 1 if new else 0
+    with transaction.atomic():
+        for user in users:
+            user_id = getattr(user, "pk", user)
+            row, new = TecTacNoticeLedger.objects.get_or_create(user_id=user_id, kind=kind, key=str(key)[:64])
+            if not new:
+                continue
+            created += 1
+            when = created_at.get(user_id) if isinstance(created_at, Mapping) else created_at
+            if when is not None:
+                # auto_now_add only sets the time on the first save, so the time is written with an update
+                TecTacNoticeLedger.objects.filter(pk=row.pk).update(created_at=when)
     return created
 
 
@@ -206,6 +219,11 @@ _RESERVED_SOURCES = frozenset({"core", "tec-tac"})
 
 def _publishing_module(module_id) -> str:
     """The id of an installed, enabled extension. Never ``core`` or ``tec-tac``: those sources are Core's own."""
+    return enabled_extension_id(module_id)
+
+
+def enabled_extension_id(module_id) -> str:
+    """The id of an installed, enabled extension (1.17.35: shared with tec_tac.module_preferences). Raises NoticeError otherwise."""
     name = str(module_id).strip() if isinstance(module_id, str) else ""
     if not name:
         raise NoticeError("module_id is required.")

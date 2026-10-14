@@ -25,6 +25,17 @@ A theme chosen in the dropdown is held for the signed-in session only. It is not
 
 All three need a signed-in session and touch only the caller's own session row. Another user's session, and another session of the same user, are never changed. Nothing here is audited: it is a display choice, not a security event. `PUT /api/tfd/ui/preferences/` is unchanged, and the UI decides when to call which. A new sign-in creates a new session row, so a second user never sees the earlier user's choice. A revoked row keeps its value only as a tombstone that is never read. Migration `0028_session_theme` adds the one column (`session_theme`, text, empty by default).
 
+## Two stores (1.17.35)
+
+A person's preferences live in two places, and a UI picks the right one for each choice:
+
+- **Tec-Tac's own preferences** (`appearance`, `navigation`, `dashboard`, `extensions`) are the document above. `GET`, `PUT` and `DELETE /api/tfd/ui/preferences/` keep them per person, across browsers.
+- **Tactical's UI preferences** (dark mode, the agent table tab, the client tree, the dashboard colours, the date format and the rest) are Tactical's own user columns. `GET` and `PUT /api/tfd/account/tactical-ui/` read and write them, so Tactical's own UI shows the same choice. Their rules and fields are in `my-account.md`. They do not go into the document above.
+
+Core keeps the two apart on purpose. `dark_mode` (Tactical's dark mode switch) and `appearance.theme` (Tec-Tac's three themes) are independent: saving one does not change the other.
+
+A module's own per-person choice is a third, separate store: see `module-preferences.md`. It is not the `extensions` object above, because a saved `extensions` document replaces the whole object and would overwrite a module's choice from another tab.
+
 ## Schema
 
 The Core schema currently reserves these sections:

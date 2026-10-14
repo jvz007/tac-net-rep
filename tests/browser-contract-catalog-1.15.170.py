@@ -42,6 +42,7 @@ expected = {
     'ui.authenticated.websocket',  # added 1.17.32 (the pinned set moves with the rows)
     'ui.authenticated.services',  # added 1.17.32
     'ui.authenticated.jobs',  # added 1.17.33
+    'ui.authenticated.terminal',  # added 1.17.35 (UI 0.12.104)
     'ui.authenticated.permissions',
     'ui.public.sso-providers',
     'ui.public.module-runtime',

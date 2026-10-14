@@ -39,6 +39,13 @@ class TecTacFrameworkConfig(AppConfig):
             register_core_tactical_websocket_capability()
         except Exception:
             logger.exception("Tec-Tac core.tactical_websocket capability registration failed")
+        # 1.17.35: core.module_preferences (one per-person choice a module keeps through Core). Guarded like core.accounts.
+        try:
+            from .module_preferences import register_core_module_preferences_capability
+
+            register_core_module_preferences_capability()
+        except Exception:
+            logger.exception("Tec-Tac core.module_preferences capability registration failed")
         # 1.17.7: the server-side Tactical operation path. Guarded, because a fault here must never abort start-up.
         # The registry is empty until an owning core module declares an operation, so this changes nothing by itself.
         try:

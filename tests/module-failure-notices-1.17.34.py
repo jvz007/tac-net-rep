@@ -131,7 +131,7 @@ class World:
             raise RuntimeError("ledger read failed")
         return {(k, pk) for (kd, k, pk) in self.ledger if kd == kind and k in keys}
 
-    def ledger_add(self, kind, key_, users):
+    def ledger_add(self, kind, key_, users, *, created_at=None):  # created_at: the 1.17.35 keyword (unused by this release's fake)
         if "ledger_add" in self.fail:
             raise RuntimeError("ledger write failed")
         for user in users:
@@ -296,10 +296,13 @@ must(not W.sent, "old marker rows are read as already sent")
 fresh()
 fake_notices = types.ModuleType("tec_tac.notices")
 fake_notices.ledger_have = W.ledger_have
-fake_notices.ledger_add = lambda kind, key_, users: W.ledger_add(kind, key_, [u if hasattr(u, "pk") else types.SimpleNamespace(pk=u) for u in users])
+fake_notices.ledger_add = lambda kind, key_, users, *, created_at=None: W.ledger_add(
+    kind, key_, [u if hasattr(u, "pk") else types.SimpleNamespace(pk=u) for u in users])
 sys.modules["tec_tac.notices"] = fake_notices
 saved_existing = mfn._default_existing
+saved_times = mfn._default_marker_times  # 1.17.35: the email read takes the marker rows with their times
 mfn._default_existing = lambda ids: {pair for pair in W.markers if pair[0] in ids}
+mfn._default_marker_times = lambda ids: {pair: None for pair in W.markers if pair[0] in ids}
 try:
     W.markers |= {(f"{mfn.EMAIL_CLIENT_ID_PREFIX}{key(27)}", 1), (f"{mfn.EMAIL_CLIENT_ID_PREFIX}{key(27)}", 2)}
     W.notice_rows |= {(cid(27), 1), (cid(27), 2), (cid(27), 3)}
@@ -310,6 +313,7 @@ try:
     must(not W.sent and not W.notice_rows, "after Clear read the copied ledger rows still stop the email")
 finally:
     mfn._default_existing = saved_existing
+    mfn._default_marker_times = saved_times
     del sys.modules["tec_tac.notices"]
 
 # ------------------------------------------------------------------------------------------------ 7. failures never raise and never double-send
