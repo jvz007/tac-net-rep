@@ -638,6 +638,39 @@ def _candidate_compatibility(candidate: dict, installed: dict[str, dict]) -> dic
     return {"compatible": not problems, "runtime_requirements": runtime, "dependency_status": dependency_status, "problems": problems}
 
 
+_AVAILABILITY_MESSAGES = {
+    "no_repository": "No module repository is set up. Add one under Repositories, then sync it.",
+    "not_synced": "A module repository is set up but has not been synced yet. Sync it to see what is available.",
+    "sync_failed": "Every module repository failed its last sync. Check the repository address, then sync again.",
+    "empty": "The module repositories were synced, but they offer no modules.",
+    "ready": "",
+}
+
+
+def _availability(repos: list[dict], offered_count: int, installed_only_count: int) -> dict:
+    """What the Online catalog can honestly say about itself (1.17.41).
+
+    A repository counts as synced when it has a cache from a successful sync, even if a later sync failed: the old modules stay offered.
+    """
+    statuses = [repository_status(repo["id"])["sync"] for repo in repos]
+    synced = sum(1 for sync in statuses if sync.get("synced_at"))
+    if not repos:
+        state = "no_repository"
+    elif not synced:
+        state = "sync_failed" if all(sync.get("status") == "error" for sync in statuses) else "not_synced"
+    elif not offered_count:
+        state = "empty"
+    else:
+        state = "ready"
+    return {
+        "state": state,
+        "enabled_repositories": len(repos),
+        "synced_repositories": synced,
+        "message": _AVAILABILITY_MESSAGES[state],
+        "installed_only_count": installed_only_count,
+    }
+
+
 def online_catalog() -> dict:
     repos = [repo for repo in list_repositories() if repo.get("enabled", True)]
     installed_list = [item for item in installed_catalog_v2() if not item.get("legacy")]
@@ -650,7 +683,17 @@ def online_catalog() -> dict:
         by_module.setdefault(release["id"], []).append(release)
 
     items = []
-    for module_id in sorted(set(by_module) | set(installed)):
+    # 1.17.41: modules[] holds only what an enabled repository offers. An installed module no repository offers goes to installed_only[].
+    installed_only = [
+        {
+            "id": module_id,
+            "name": item.get("name") or module_id,
+            "installed_version": item.get("extension_version"),
+            "installed_source": item.get("source") or None,
+        }
+        for module_id, item in sorted(installed.items()) if module_id not in by_module
+    ]
+    for module_id in sorted(by_module):
         current = installed.get(module_id)
         source = (current or {}).get("source") or {}
         choices = by_module.get(module_id, [])
@@ -702,7 +745,14 @@ def online_catalog() -> dict:
             "signing_environment": (selected or {}).get("signing_environment"),
             "releases": choices,
         })
-    return {"schema": 1, "modules": items, "count": len(items), "repositories": all_repository_status()}
+    return {
+        "schema": 1,
+        "modules": items,
+        "count": len(items),
+        "installed_only": installed_only,
+        "availability": _availability(repos, len(items), len(installed_only)),
+        "repositories": all_repository_status(),
+    }
 
 
 class _PathUpload:

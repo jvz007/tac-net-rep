@@ -245,7 +245,7 @@ must(result.status == 200 and len(ROWS) == 1 and ROWS[0]["action"] == "modify" a
 
 # ---- capability 1.7.0 and its metadata
 meta = ops.tactical_operations_contract_metadata()
-must(ops.CAPABILITY_VERSION == "1.10.0" and meta["version"] == "1.10.0" and meta["version"].split(".")[0] == "1", meta)
+must(ops.CAPABILITY_VERSION == "1.11.0" and meta["version"] == "1.11.0" and meta["version"].split(".")[0] == "1", meta)
 must(meta["refusal_row_codes"] == list(CODES) and len(meta["behaviour_added_in_1_7_0"]) == 2, meta)
 must(meta["declaration_keys_added_in_1_7_0"] == ["audit.object_field", "audit.object_body_field"], meta)
 must("behaviour_added_in_1_6_0" in meta and "custom:operation-failed" in meta["audit_actions_core_only"], "the 1.6.0 keys stay")

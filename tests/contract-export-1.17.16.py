@@ -95,9 +95,9 @@ must("Manifest keys added in 1.17.16" in md, "the export renders the rule")
 
 # the capability version in code and in the docs agree
 ops = (APP / "tactical_operations.py").read_text(encoding="utf-8")
-must('CAPABILITY_VERSION = "1.10.0"' in ops and "declaration_keys_added_in_1_7_0" in ops and "declaration_keys_added_in_1_6_0" in ops and "declaration_keys_added_in_1_3_0" in ops and "declaration_keys_added_in_1_4_0" in ops and "declaration_keys_added_in_1_5_0" in ops, "capability 1.8.0 in code")  # 1.17.23: 1.8.0
+must('CAPABILITY_VERSION = "1.11.0"' in ops and "declaration_keys_added_in_1_7_0" in ops and "declaration_keys_added_in_1_6_0" in ops and "declaration_keys_added_in_1_3_0" in ops and "declaration_keys_added_in_1_4_0" in ops and "declaration_keys_added_in_1_5_0" in ops, "capability 1.8.0 in code")  # 1.17.23: 1.8.0
 docs = (ROOT / "docs/tactical-operations.md").read_text(encoding="utf-8")
-must("`core.tactical_operations` 1.10.0" in docs[:600], "the docs header names 1.10.0 (1.17.28), not 1.0.0")
+must("`core.tactical_operations` 1.11.0" in docs[:600], "the docs header names 1.11.0 (1.17.41), not 1.0.0")
 must("`core.tactical_operations` 1.0.0, owner" not in docs, "the stale 1.0.0 header is gone")
 
 print("[TEST] PASS contract export 1.17.16")

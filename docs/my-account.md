@@ -26,7 +26,7 @@ Since 1.17.35 the PUT also saves every other UI preference Tactical saves (Tacti
 | --- | --- |
 | `dark_mode`, `show_community_scripts`, `clear_search_when_switching` | `true` or `false`. A string such as `"false"` is refused. |
 | `default_agent_tbl_tab` | `server`, `workstation` or `mixed` (Tactical's choices, from the model). |
-| `client_tree_sort` | `alphafail` or `alpha` (Tactical's choices, from the model). |
+| `client_tree_sort` | `alphafail` or `alpha` (Tactical's choices, from the model). `alphafail` is Tactical's "Move failing clients to the top". `alpha` is A to Z. Core publishes the setting and never sorts: the order, and any colour marking of failing clients, is the screen's. The failing state is `failing_checks` on `core.resources` client and site records (see `docs/resource-directory.md`). |
 | `client_tree_splitter` | a whole number from 1 to 99. |
 | `loading_bar_color`, `dash_info_color`, `dash_positive_color`, `dash_negative_color`, `dash_warning_color` | a Quasar colour name such as `red` or `deep-purple-3` (lower case letters, digits and hyphens), or a `#` colour of 3, 4, 6 or 8 hex digits. At most 40 characters. |
 | `date_format` | empty or `null` for the server default, otherwise at most 30 letters, digits, spaces and `: / - . , [ ]`. Empty stores `null`. |

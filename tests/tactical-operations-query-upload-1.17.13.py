@@ -62,7 +62,7 @@ refused(DOWNLOAD, id="x3", query_params="path")
 refused(DOWNLOAD, id="x4", query_params=[f"q{i}" for i in range(17)])
 for secretive in ("token", "api_key", "password", "secret", "cookie"):
     refused(DOWNLOAD, id="x5", query_params=[secretive])
-refused(UPLOAD, id="x6", query_params=["path"])  # a POST takes no query_params
+register(DOWNLOAD, id="x6", method="DELETE", route="reporting/assets/x6/", query_params=["path"])  # since 1.17.41 a DELETE may declare query_params (it was GET only)
 refused(DOWNLOAD, id="x7", audit={"action": "export", "object_type": "report_asset", "audit_fields": ["nope"]})  # neither a body field nor a query name
 for bad in ({"field": "params", "max_bytes": 10, "extensions": ["png"]}, {"field": "body", "max_bytes": 10, "extensions": ["png"]},
             {"field": "query", "max_bytes": 10, "extensions": ["png"]}, {"field": "parentPath", "max_bytes": 10, "extensions": ["png"]},  # a body field name

@@ -2,7 +2,7 @@
 
 **Status:** Public Core developer contract, added in Core 1.17.7
 **Python:** `tec_tac.tactical_operations`
-**Capability:** `core.tactical_operations` 1.10.0 (1.9.0 before Core 1.17.28, 1.8.0 before Core 1.17.26; major 1, additive since 1.0.0), owner `core`
+**Capability:** `core.tactical_operations` 1.11.0 (1.10.0 before Core 1.17.41, 1.9.0 before Core 1.17.28, 1.8.0 before Core 1.17.26; major 1, additive since 1.0.0), owner `core`
 **HTTP:** `POST /api/tfd/tactical-operations/<module_id>/<operation_id>/`
 
 ## Why this exists
@@ -46,7 +46,7 @@ register_tactical_operation(
 | `id` | Lowercase slug, for example `reboot` or `wake-on-lan`. Unique within the module. |
 | `module_id` | The owning core module: its manifest says `category: core` and it owns the route in Core's route owner table (see "Who may declare where" below). Core refuses `core`, an unknown, legacy or disabled module, a module that is not a core module, and a core module on a route it does not own. The one named exception is Licensing, which owns `core/codesign/` (AD-16). |
 | `method` | `GET`, `POST`, `PUT`, `PATCH` or `DELETE`. |
-| `route` | Tactical's route as a template, no leading slash. `{name}` is a text parameter (letters, digits, `_`, `.`, `-`). `{name:int}` is a whole number. `{name:agent}` is an agent id (21 characters or more, as Tactical's `agent` converter needs). A route may not start with a parameter. |
+| `route` | Tactical's route as a template, no leading slash. `{name}` is a text parameter (letters, digits, `_`, `.`, `-`). `{name:int}` is a whole number. `{name:agent}` is an agent id (21 characters or more, as Tactical's `agent` converter needs). `{name:service}` is a Windows service name (since 1.17.41, see "Added in 1.17.41"). A route may not start with a parameter. |
 | `permissions` | Tactical Role flags, for example `can_reboot_agents`. Each must be a boolean `can_*` field on Tactical's Role. The caller needs all of them. At least one is required. |
 | `scope` | A list of `{type, source}`. `type` is `agent`, `client` or `site`. `source` is `path:<name>` or `body:<field>`. A list in a body field is checked id by id. May be empty for an operation with no object. |
 | `body_fields` | The whitelist of JSON body keys. Any other key is refused with 400. A `GET` takes none. |
@@ -171,7 +171,7 @@ The reply is Tactical's own status and body. Core's own refusals are JSON `{"det
 The `tactical_permission_denied` detail names the missing Tactical permission since 1.17.19, for example "It needs the Tactical permission can_reboot_agents." (several are listed when several are missing). The code is unchanged, and so is the text of the deny row.
 
 A file answer, such as a report export, is relayed with its `Content-Type` and `Content-Disposition`, up to 25 MiB.
-A streaming answer is refused. Rate limit: 120 a minute and 5 000 a day for each user and IP.
+A streaming answer is refused unless the operation declares `file_response` (since 1.17.41). Rate limit: 120 a minute and 5 000 a day for each user and IP.
 
 ## Python
 
@@ -244,9 +244,9 @@ Core 1.17.14 or later (a request to the Agents module).
 field. `type_map` maps each allowed value to `client` or `site`, with at most 8 entries. A value outside the map is refused 400
 `scope_field_required`. The resolved type is written to the row metadata as `scope_type`. `POST agents/maintenance/bulk/` uses this.
 
-### A query string for `GET`: `query_params`
+### A query string: `query_params`
 
-`query_params` is a whitelist of up to 16 names for a `GET` operation. It is the new last argument of `register_tactical_operation`. A
+`query_params` is a whitelist of up to 16 names. Until 1.17.41 only a `GET` operation could declare it. Any method may since then (Tactical's registry delete reads `request.query_params` on a `DELETE`). It is the new last argument of `register_tactical_operation`. A
 name may not look like a secret, because a query string is logged. The caller sends `query` (a flat object):
 
 - Each value is a string or a whole number of at most 512 characters.
@@ -287,10 +287,9 @@ from UI 0.12.91 (a UI request).
 
 ### What does not work yet
 
-Tactical answers `GET reporting/assets/download/` with a `FileResponse`, which is a streamed answer. Core refuses a streamed answer
-(`tactical_response_refused`), so a declared download operation reaches Tactical's view with its query string but the file is not
-relayed. The query string itself works for any operation whose answer is not streamed. Relaying a streamed file answer is a separate
-request.
+Nothing here is open for a streamed file answer any more. Since 1.17.41 an operation that declares `file_response=True` relays it (see
+"Added in 1.17.41"). An operation that does not declare it still has a streamed answer refused as `tactical_response_refused`, so a module
+that declared a download before 1.17.41 keeps its refusal until it adds the keyword.
 
 ### AD-21: the category decides
 
@@ -702,3 +701,40 @@ Johan may reverse the decision at any time.
 
 Adoption by the Tasks module (declaring `audit_lists` on edit, create, create-policy-task and delete) is a request in
 `reviews/requests/core-modules.md`, not part of this release.
+
+## Added in 1.17.41
+
+Capability `core.tactical_operations` is 1.11.0, still major 1. Three additions, all opt-in. A declaration that uses none of them behaves
+exactly as before, with the same text and the same rows. A module needs framework 1.17.41 to rely on them and can feature-detect with
+`core.tactical_operations >= 1.11.0`.
+
+### A streamed file answer: `file_response`
+
+Tactical answers some routes with a `FileResponse`: a report PDF, a report asset download. `register_tactical_operation(..., file_response=True)`
+(a strict bool; GET or POST only) lets Core relay it.
+
+- Core reads the stream chunk by chunk, up to `limits.response_bytes` (25 MiB, the same cap as any answer), and closes it.
+- From there the call is an ordinary one. The same status handling and the same audit rows apply: the success row with the declared action,
+  the deny row for 401 and 403, the failed row for another 4xx on a change, the outcome-unknown row for a 5xx.
+- `Content-Type` and `Content-Disposition` are relayed with the bytes. `TacticalOperationResult.content` holds the bytes, and `data` stays
+  the raw bytes for a type that is not JSON.
+- A stream that passes the cap is cut, closed and refused as `tactical_response_refused` (the outcome-unknown row for a change, as the existing
+  size check writes). The audit row never carries the file name or the bytes.
+- Without `file_response` a streaming answer is refused as before, and the stream is closed.
+- `list_operations` and `get_operation` show `file_response`. It is buffered in memory, so a file over 25 MiB is refused.
+- `agents/installer/` stays a route Core forbids. It is not declared by this release.
+
+### A query string on any method
+
+`query_params` may now be declared on a `DELETE`, `POST`, `PUT` or `PATCH` operation. The protections are the same: a whitelist of names, flat
+values of at most 512 characters, no control characters, no `..` path segment, and a name that looks like a secret is refused at registration.
+`audit_fields` may name a query parameter. A `GET` declaration behaves as before.
+
+### A route parameter kind for a Windows service name: `{name:service}`
+
+`services/{agent_id:agent}/{svcname:service}/` is how Tactical addresses one service. The kind `service` takes a name whose first character is a
+letter, digit or underscore, followed by letters, digits, space and `$ # ( ) . , _ -`, at most 256 characters in all. It never holds a slash or
+`..`. Core builds the path unquoted, and Tactical's own `<str:svcname>` pattern resolves it, so `MSSQL$SQLEXPRESS` and `Print Spooler` work. The
+kind `str` still refuses `$` and a space. The owner table is unchanged: `services/` is Remote Background's alone. `audit.params` may name it.
+
+Tests: `tests/tactical-operation-file-response-1.17.41.py`, `tests/tactical-operation-query-service-1.17.41.py`.

@@ -84,6 +84,18 @@ A bad value never invalidates the entry: it becomes null. The values are not che
 
 Core does not refuse a downgrade, does not warn about a revoked module, and does not seed a default repository. Those decisions are not built.
 
+## What the online catalog shows (1.17.41)
+
+`GET /api/tfd/modules/catalog/online/` lists what the enabled repositories offer. It reads each repository's cache and never calls a repository: the manual Sync action is the only way a repository is read.
+
+- `modules[]` holds only the modules that at least one enabled repository's cache offers. Each item still carries `installed`, `installed_version`, `update_available`, `compatible`, `available_sources` and `releases`. `count` is the length of `modules`.
+- `installed_only[]` (`id`, `name`, `installed_version`, `installed_source`) holds the installed modules that no enabled repository offers. They are not presented as available. A module pinned to a repository that does not offer it is `source_conflict` only when another repository offers it. Otherwise it is in `installed_only`.
+- `availability` says what the catalog can honestly say: `state` is `no_repository` (no enabled repository), `not_synced` (enabled, none synced yet), `sync_failed` (every enabled repository's last sync failed and none has a cache), `empty` (synced, no modules) or `ready`. It also carries `enabled_repositories`, `synced_repositories`, `installed_only_count` and a one-sentence `message` that is empty when the state is `ready`. For example: "No module repository is set up. Add one under Repositories, then sync it."
+- A cache kept after a failed sync still counts as synced, so its modules stay offered.
+- A person who cannot manage modules gets the same redaction as before and never sees a repository address.
+
+Before 1.17.41 the list was built from the modules in the repositories and the modules installed, so with no repository the catalog showed only what was already installed.
+
 ## Entitlement
 
 Repository sync, the online catalog listing and package download are **not gated on any entitlement or licence** (1.17.39). Core does not call the licensing capability on those paths, and a licence check, where a module needs one, stays in that module.

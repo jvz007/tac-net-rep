@@ -22,7 +22,7 @@ The registry is empty until a module declares an operation, so this release chan
 * ``audit.before = {route, fields}`` reads the object through Tactical's own GET view, as the signed-in user, and writes
   a whitelisted copy of it as the row's before value. A failed read never blocks the change.
 * A scope entry may take its type from the body (``type: body:<field>`` with a ``type_map``).
-* ``query_params`` lets a GET operation pass a whitelisted query string; ``upload`` lets one operation forward one file
+* ``query_params`` lets an operation pass a whitelisted query string (a GET only until 1.17.41); ``upload`` lets one operation forward one file
   as multipart/form-data, with a size cap and an extension allow-list.
 * AD-21: the owning module's effective category (a missing category is ``test``) decides, not only its id.
 
@@ -121,7 +121,7 @@ from . import module_category as _module_category
 logger = logging.getLogger("tec_tac.tactical_operations")
 
 CAPABILITY_ID = "core.tactical_operations"
-CAPABILITY_VERSION = "1.10.0"
+CAPABILITY_VERSION = "1.11.0"
 AUDIT_HEADER = "X-Tec-Tac-Audit"
 AUDIT_RECORDED = "recorded"
 AUDIT_NOT_RECORDED = "not-recorded"
@@ -150,7 +150,7 @@ FORBIDDEN_FIRST_TWO = (("api", "tfd"), ("api", "v3"), ("api", "v4"), ("agents", 
 
 _ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 _LITERAL_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}$")
-_PARAM_RE = re.compile(r"^\{([a-z][a-z0-9_]{0,31})(?::(str|int|agent))?\}$")
+_PARAM_RE = re.compile(r"^\{([a-z][a-z0-9_]{0,31})(?::(str|int|agent|service))?\}$")
 _FIELD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 _CORRELATION_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _SECRET_NAME_RE = re.compile(r"(pass|secret|token|key|credential|auth|cookie|signature)", re.IGNORECASE)
@@ -163,6 +163,9 @@ _PARAM_VALUE_RE = {
     "str": re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,254}$"),
     "agent": re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{20,254}$"),
     "int": re.compile(r"^[0-9]{1,12}$"),
+    # 1.17.41: a Windows service name (services/{agent_id:agent}/{svcname:service}/). It may hold a space and $ # ( ) , which the
+    # str kind refuses, but never a slash or a leading dot or space. The value is checked for '..' as every kind is.
+    "service": re.compile(r"^[A-Za-z0-9_][A-Za-z0-9 $#().,_-]{0,255}$"),
 }
 _MAX_SEGMENTS = 12
 _MAX_ROUTE_LENGTH = 200
@@ -297,6 +300,7 @@ class TacticalOperation:
     permissions_any: tuple = ()  # 1.17.26: the caller needs at least one of these flags (and every flag of ``permissions``)
     body_max_bytes: int | None = None  # 1.17.26: a larger body cap than MAX_BODY_BYTES; None means the default
     audit_lists: tuple = ()  # 1.17.28: body or before fields that hold a list of flat objects, recorded in clear (CQ85 a)
+    file_response: bool = False  # 1.17.41: Tactical answers with a streamed file that Core relays (GET or POST only)
 
     @property
     def body_cap(self) -> int:
@@ -353,6 +357,7 @@ class TacticalOperation:
             ],
             "module_permission": self.module_permission,
             "query_params": list(self.query_params),
+            "file_response": self.file_response,
             "upload": (
                 {"field": self.upload.field, "max_bytes": self.upload.max_bytes, "extensions": list(self.upload.extensions)}
                 if self.upload else None
@@ -411,7 +416,7 @@ def _parse_route(route: Any) -> tuple[tuple, bool]:
         if part.startswith("{") or part.endswith("}"):
             match = _PARAM_RE.match(part)
             if not match:
-                raise TacticalOperationRegistrationError(f"route parameter {part!r} must look like {{name}} or {{name:str|int|agent}}.")
+                raise TacticalOperationRegistrationError(f"route parameter {part!r} must look like {{name}} or {{name:str|int|agent|service}}.")
             name, kind = match.group(1), match.group(2) or "str"
             if name in seen:
                 raise TacticalOperationRegistrationError(f"route parameter {name!r} is repeated.")
@@ -841,8 +846,14 @@ def register_tactical_operation(
     permissions_any=None,
     body_max_bytes=None,
     audit_lists=None,
+    file_response=False,
 ):
     """Declare one Tactical operation. Call it from the owning module's ``AppConfig.ready()``.
+
+    1.17.41 (all optional, capability 1.11.0): ``file_response=True`` (a strict bool, GET or POST only) lets Core relay a streamed file
+    answer (Tactical's FileResponse) up to ``MAX_RESPONSE_BYTES``; without it a streaming answer is refused as before. ``query_params``
+    is allowed on any method (a DELETE reads ``request.query_params`` too). The route parameter kind ``service`` takes a Windows
+    service name.
 
     1.17.28 (optional): ``audit_lists`` names up to two body or before fields that hold a list of flat objects (a task's actions).
     Each is recorded in clear in the success row (after from the cleaned body, before from Tactical's GET answer), with the bounds
@@ -868,7 +879,7 @@ def register_tactical_operation(
 
     1.17.13 (all optional): ``audit`` may also carry ``object_param`` and ``before``; a scope entry may use a
     ``body:<field>`` type with a ``type_map``; ``query_params`` whitelists the query names
-    of a GET operation; ``upload`` declares one multipart file part. See docs/tactical-operations.md.
+    of an operation (any method since 1.17.41); ``upload`` declares one multipart file part. See docs/tactical-operations.md.
 
     Refuses (TacticalOperationRegistrationError, a ValueError) a module that is not a core module (bar the named
     exceptions) or a route the module does not own (the longest matching rule of ``ROUTE_OWNERS`` decides, see
@@ -1007,8 +1018,10 @@ def register_tactical_operation(
     if action == "deny" or action == OUTCOME_UNKNOWN_ACTION or action == FAILED_ACTION:
         raise TacticalOperationRegistrationError("audit action deny, custom:outcome-unknown and custom:operation-failed are written by Core only.")
     query_names = _clean_names(query_params, "query_params", maximum=MAX_QUERY_PARAMS)
-    if query_names and verb != "GET":
-        raise TacticalOperationRegistrationError("query_params belong to a GET operation.")
+    if not isinstance(file_response, bool):
+        raise TacticalOperationRegistrationError("file_response must be true or false.")
+    if file_response and verb not in ("GET", "POST"):
+        raise TacticalOperationRegistrationError("file_response belongs to a GET or POST operation.")
     for name in query_names:
         if _SECRET_NAME_RE.search(name):
             raise TacticalOperationRegistrationError(f"query parameter {name!r} looks like a secret. A query string is logged; never put secrets in it.")
@@ -1043,7 +1056,7 @@ def register_tactical_operation(
         audit_object_param=object_param, before=before, query_params=query_names, upload=upload_spec,
         caller_scope=caller_scope, body_selector=selector, audit_params=audit_params, server_only=server_only,
         audit_object_field=object_field, audit_object_body_field=object_body_field,
-        permissions_any=any_flags, body_max_bytes=body_cap, audit_lists=lists,
+        permissions_any=any_flags, body_max_bytes=body_cap, audit_lists=lists, file_response=file_response,
     )
     key = (owner, op_id)
     route_key = (verb, _route_key(segments, trailing))
@@ -1315,7 +1328,7 @@ def _dotdot_segment(text: str) -> bool:
 
 
 def _clean_query(operation: TacticalOperation, query: Any) -> dict[str, str]:
-    """The query string of a GET operation: whitelisted names, flat string or whole-number values (1.17.13)."""
+    """The query string of an operation (any method since 1.17.41): whitelisted names, flat string or whole-number values (1.17.13)."""
     if query is None:
         query = {}
     if not isinstance(query, dict):
@@ -1890,6 +1903,31 @@ def _read_before(request, operation: TacticalOperation, params: dict[str, str]) 
         return {"status": None, "values": None}
 
 
+def _close_stream(response) -> None:
+    close = getattr(response, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:
+            logger.warning("A streamed Tactical answer did not close cleanly.", exc_info=True)
+
+
+def _read_stream(response) -> bytes | None:
+    """The bytes of a streamed answer, or None when it passes MAX_RESPONSE_BYTES (reading stops and the stream is closed)."""
+    chunks: list[bytes] = []
+    size = 0
+    try:
+        for chunk in response.streaming_content:
+            piece = chunk if isinstance(chunk, bytes) else bytes(chunk) if isinstance(chunk, (bytearray, memoryview)) else str(chunk).encode("utf-8")
+            size += len(piece)
+            if size > MAX_RESPONSE_BYTES:
+                return None
+            chunks.append(piece)
+    finally:
+        _close_stream(response)
+    return b"".join(chunks)
+
+
 def _unknown_outcome(request, operation, object_id, tactical_status, code: str, text: str, correlation_id: str | None = None) -> TacticalOperationError:
     """After dispatch, a non-GET call whose result Core cannot trust may have changed Tactical: say so in the log."""
     audit = None
@@ -2121,8 +2159,15 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
 
     status = int(getattr(response, "status_code", 500))
     if getattr(response, "streaming", False):
-        raise _unknown_outcome(request, operation, object_id, status, "tactical_response_refused", "Core does not relay streaming responses.", correlation_id)
-    content = bytes(getattr(response, "content", b"") or b"")
+        if not operation.file_response:
+            _close_stream(response)
+            raise _unknown_outcome(request, operation, object_id, status, "tactical_response_refused", "Core does not relay streaming responses.", correlation_id)
+        # 1.17.41: a declared file answer is read chunk by chunk up to the same cap as any answer, then closed.
+        content = _read_stream(response)
+        if content is None:
+            raise _unknown_outcome(request, operation, object_id, status, "tactical_response_refused", "Tactical's answer is larger than Core relays.", correlation_id)
+    else:
+        content = bytes(getattr(response, "content", b"") or b"")
     if len(content) > MAX_RESPONSE_BYTES:
         raise _unknown_outcome(request, operation, object_id, status, "tactical_response_refused", "Tactical's answer is larger than Core relays.", correlation_id)
 
@@ -2193,7 +2238,7 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
         "id": CAPABILITY_ID,
         "version": CAPABILITY_VERSION,
         "operations": ["run", "list_operations", "get_operation"],
-        "declaration": "tec_tac.tactical_operations.register_tactical_operation(id, module_id, method, route, permissions, scope, body_fields, audit, module_permission=None, message=None, query_params=None, upload=None, caller_scope=None, body_selector=None, server_only=False, permissions_any=None, body_max_bytes=None, audit_lists=None), called from AppConfig.ready(). A core module that names a row_lookup also calls tec_tac.tactical_operations.register_tactical_row_lookup(module_id, lookup_id, fn) from AppConfig.ready().",
+        "declaration": "tec_tac.tactical_operations.register_tactical_operation(id, module_id, method, route, permissions, scope, body_fields, audit, module_permission=None, message=None, query_params=None, upload=None, caller_scope=None, body_selector=None, server_only=False, permissions_any=None, body_max_bytes=None, audit_lists=None, file_response=False), called from AppConfig.ready(). A core module that names a row_lookup also calls tec_tac.tactical_operations.register_tactical_row_lookup(module_id, lookup_id, fn) from AppConfig.ready().",
         "http": "POST /api/tfd/tactical-operations/<module_id>/<operation_id>/ with {params, body, query} as JSON, or as multipart/form-data with the text parts params, body and query (each a JSON object) and one file part",
         "limits": {
             "body_bytes": MAX_BODY_BYTES, "response_bytes": MAX_RESPONSE_BYTES,
@@ -2277,6 +2322,27 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
                 "audit_lists: up to two body or before fields that hold a list of flat objects are recorded IN CLEAR, with no masking, in the "
                 "success row (after from the cleaned body, before from Tactical's own GET answer) with <field>_count and, when cut or dropped, "
                 "<field>_truncated; a failed, denied or outcome-unknown row carries no list; the docs state the clear-text rule"
+            ),
+        ],
+        # 1.17.41 (capability 1.11.0, still major 1): three optional additions. A declaration that uses none behaves as before.
+        "declaration_keys_added_in_1_11_0": [
+            "file_response (register_tactical_operation(file_response=)), shown as file_response",
+            "query_params on any method",
+            "route parameter kind {name:service}",
+        ],
+        "behaviour_added_in_1_11_0": [
+            (
+                "file_response: a streamed Tactical answer (FileResponse) is read up to limits.response_bytes and relayed with its status, Content-Type "
+                "and Content-Disposition; the same status handling and audit rows apply as for any answer; the row never carries the file name or bytes; "
+                "a stream over the cap is cut, closed and refused as tactical_response_refused; without file_response a stream is refused as before"
+            ),
+            (
+                "query_params may be declared on a DELETE, POST, PUT or PATCH operation; names stay a whitelist, values stay flat (512 characters, "
+                "no control characters, no '..' segment), a secret-looking name is refused at registration"
+            ),
+            (
+                "route parameter kind service: a Windows service name (first character a letter, digit or underscore, then letters, digits, space "
+                "and $ # ( ) . , _ -, at most 256 characters, no slash, no '..'), built into the path unquoted"
             ),
         ],
         "refusal_row_codes": list(CORE_REFUSAL_ROW_CODES),
