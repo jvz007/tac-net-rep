@@ -96,6 +96,38 @@ Core does not refuse a downgrade, does not warn about a revoked module, and does
 
 Before 1.17.41 the list was built from the modules in the repositories and the modules installed, so with no repository the catalog showed only what was already installed.
 
+## Default repository (1.17.42)
+
+A fresh server gets one repository, seeded once by the Scheduler tick (within a minute):
+
+- **id** `tec-tac-official`, **name** "Tec-Tac official modules (Tech Flow Dynamics)"
+- **address** `https://lic-service.tec-tac.techxflow.net.za/modules/index.json`. The index path is an assumption until Johan confirms it (question CQ125 in `reviews/questions/core.md`). No other document in this tree names the index path.
+- **trust** `official`, **priority** 100
+- **enabled** `false`. A disabled repository is never synced and offers nothing, so the Online catalog still says "No module repository is set up" until someone enables it. Whether the index needs a licence token is unknown. Core does not hold one and does not start the licensing integration for it.
+
+The seed runs once. The key `defaults_seeded` in `repositories.json` lists the ids already handled. An id on that list is never seeded again:
+
+- An administrator can edit, enable, disable or remove the entry through the normal repository routes. The seed never changes it back.
+- If a repository with the same address already exists, the seed only records the id in `defaults_seeded`. If an entry with the same id exists with another address, it is left as it is.
+- If the seed cannot write or read `repositories.json`, it logs a warning and the next tick tries again. It never raises.
+
+To remove the seed for good, delete the entry under Repositories. To have it back, edit it or add a repository by hand. Core will not recreate it, because the id stays in `defaults_seeded`.
+
+## Daily sync (1.17.42)
+
+Core runs the enabled repositories through the same sync as the Sync action, once a day at **03:00 server time**. The schedule is owned by the Scheduler (action `tec-tac.module-repository-sync`, module `tec-tac`, owner key `module-repository-sync`). It appears on the Scheduler page with its name, time, zone, next run and run history.
+
+- The time zone is the one the schedule was created with (Django's `TIME_ZONE` setting at the time). Core does not change it later.
+- A 03:00 run missed because the server was off runs on recovery, if the server comes back within 6 hours. Otherwise it waits for the next day.
+- Only enabled repositories are synced. When none is enabled, the run does nothing and succeeds.
+- A repository that fails does not fail the run. The run fails only when every enabled repository fails. Its previous cache stays.
+- Each run writes one audit row (`sync` on `module_repository`, actor the Core service). It holds counts only: repositories tried, ok, failed and entries skipped. It never holds an address or text from a remote index.
+- The module-owned schedule cannot be edited on the Scheduler page. To stop the daily sync, disable the repositories. Core does not re-save an existing schedule, so an administrator's change to it is kept, and a deleted schedule comes back on the next tick.
+- `GET /api/tfd/modules/repositories/` adds `sync_schedule`: `enabled`, `time` (`03:00`), `timezone`, `next_run_at`, `last_run_at` and `last_run_status`, or `null` when the schedule does not exist. It holds no address.
+- The manual Sync action is unchanged. The catalog GET (`/api/tfd/modules/catalog/online/`) still makes no outbound call.
+
+Where the daily time is taken from: the 03:00 is server time in the zone of the schedule. The runtime context in Tactical reads Tactical's own default time zone first. The daily schedule uses Django's `TIME_ZONE` only (question CQ126).
+
 ## Entitlement
 
 Repository sync, the online catalog listing and package download are **not gated on any entitlement or licence** (1.17.39). Core does not call the licensing capability on those paths, and a licence check, where a module needs one, stays in that module.

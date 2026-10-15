@@ -1203,6 +1203,20 @@ HTTP_CONTRACT_DETAILS = {
             "audit": "self_tactical_ui_preferences_changed, with the changed field names only, never the values",
         },
     },
+    "/api/tfd/modules/repositories/": {
+        "GET": {
+            "authorization": "authenticated Tec-Tac session; a caller who cannot manage modules gets the redacted form (no address, generic skipped reasons)",
+            "response": {
+                "repositories": "the repository status rows",
+                "count": "whole number, len(repositories)",
+                "manage": "true when the caller may manage modules",
+                "sync_schedule": "object or null (added 1.17.42): enabled, time ('03:00'), timezone, next_run_at, last_run_at and last_run_status of the daily sync (action tec-tac.module-repository-sync). Null when the schedule does not exist. It holds no address.",
+            },
+            "notes": [
+                "Added 1.17.42, additive: sync_schedule. The daily sync syncs the enabled repositories at 03:00 server time through the Scheduler. The Sync actions and the catalog GET are unchanged: the catalog GET never calls a repository.",
+            ],
+        },
+    },
     "/api/tfd/modules/repositories/sync/": {
         "POST": {
             "authorization": "authenticated Tec-Tac session; module management only (a caller who cannot manage modules is refused)",
@@ -1868,6 +1882,22 @@ BROWSER_CONTRACTS = (
             "Limits, checked in the browser before any request and again by Core: name 1 to 64 characters matching [a-z0-9][a-z0-9._-]{0,63}; value plain JSON (null, booleans, finite numbers, strings, arrays and plain objects), at most 4 KiB when stored and at most 5 levels deep; at most 50 names per module for one person. A bad name gives invalid_name and a bad value gives invalid_value (both status 400, no request).",
             "Refusals from Core: preference_limit (status 400, a 51st name), module_not_found (status 404), and since Core 1.17.38 module_not_allowed (status 403, the person may not use the module) and audit_failed (status 503, the change was not saved and the old value stays; a later get() returns it). From UI 0.12.108 the 403 error carries hideControl: true, so the module hides the control that uses the helper (AD-12). A 401 is treated as signed out (signed_out) and the helper stays silent. Too many writes give 429.",
             "Core 1.17.35 or later and UI 0.12.106 or later. The Python functions of core.module_preferences are a separate contract (Core 1.17.37 adds the verified caller; Core 1.17.38 adds the audit row and the two refusals above).",
+        ],
+    },
+    {
+        "id": "ui.authenticated.components",
+        "phase": "authenticated",
+        "service": "components",
+        "operations": ["SearchSelect", "TagEditor"],
+        "audience": "module/browser",
+        "docs": "tec-tac-ui/docs/module-components.md",
+        "purpose": "Two shared components for a module's own screens, from context.components in register(context): SearchSelect picks one item from a searchable list, and TagEditor edits a list of text values. Draw them with context.Vue.h(SearchSelect, props) and context.Vue.h(TagEditor, props). The value stays with the module: each component emits update:modelValue and keeps no value of its own. Needs UI 0.12.111 and Core 1.17.41 or later.",
+        "details": [
+            "SearchSelect props: modelValue (the chosen option's value, null for none), options (each { value, label, description, favourite, chip, chipTone, disabled, searchText }), placeholder, inputId, ariaLabel, disabled (default false), clearable (default false), emptyText (default 'No matches. Check the spelling.'), favouriteLabel (default 'Favourites') and allLabel (default 'All'). Events: update:modelValue (the chosen value, or null after clear) and select (the chosen option object, or null after clear), both at the same moment.",
+            "SearchSelect shows at most 300 rows and then the line 'Showing the first 300. Keep typing to narrow it.' The search matches label, description and searchText, ignoring case. Favourites are grouped first. It has the combobox and listbox roles, with aria-expanded, aria-controls, aria-activedescendant and role option on each row. Keys: ArrowDown and ArrowUp move, Enter chooses, Escape closes the list only, Tab closes and moves on. Disabled rows are skipped and cannot be chosen.",
+            "TagEditor props: modelValue (an array of strings, default []), placeholder, ariaLabel, disabled (default false), readonly (default false), maxItems (default 200), maxLength (default 500 characters), commaAdds (default true; a comma adds the typed value), validate(value) (returns '' for a good value or a plain sentence for a bad one). Events: update:modelValue (the new array) and reject ({value, reason}, the plain sentence shown to the person).",
+            "TagEditor trims values, ignores empties and duplicates without a message, and strips control characters. A value over maxLength, past maxItems or refused by validate is rejected: the sentence shows under the box, reject fires and the typed text stays in the box. Every label, description and value is shown as text, never as HTML.",
+            "Registered by register(context) only: registerPublic gets no components, because a public page has no signed-in person. The components object is frozen. Needs UI 0.12.111 and Core 1.17.41 or later. Documentation only: no endpoint, capability or version moves.",
         ],
     },
     {

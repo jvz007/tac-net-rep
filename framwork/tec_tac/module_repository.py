@@ -10,6 +10,7 @@ import hashlib
 import http.client
 import ipaddress
 import json
+import logging
 import os
 import re
 import socket
@@ -20,7 +21,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, time as dt_time, timezone
 from pathlib import Path
 
 from .safe_files import atomic_json
@@ -48,6 +49,29 @@ MAX_SKIPPED_REASON = 300
 MAX_INFORMATIONAL_TEXT = 64
 SKIPPED_REASON_FOR_OTHERS = "This entry was skipped. A module manager can see the reason."
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+logger = logging.getLogger("tec_tac.module_repository")
+
+# 1.17.42 (CQ121): the official repository is seeded once, disabled, and never rebuilt by code. The index path is an assumption until
+# Johan confirms it (CQ125). An administrator edits, enables, disables or removes the entry through the repository routes.
+DEFAULT_REPOSITORIES = (
+    {
+        "id": "tec-tac-official",
+        "name": "Tec-Tac official modules (Tech Flow Dynamics)",
+        "url": "https://lic-service.tec-tac.techxflow.net.za/modules/index.json",
+        "trust": "official",
+        "priority": 100,
+        "enabled": False,
+    },
+)
+DEFAULTS_SEEDED_KEY = "defaults_seeded"
+
+# 1.17.42 (CQ122): the daily sync is a module-owned Scheduler action. Its owner tuple is the stable identity of the schedule.
+SYNC_ACTION_ID = "tec-tac.module-repository-sync"
+SYNC_OWNER_MODULE = "tec-tac"
+SYNC_OWNER_KEY = "module-repository-sync"
+SYNC_RUN_TIME = dt_time(3, 0)
+SYNC_MISSED_GRACE_MINUTES = 360
 
 
 class ModuleRepositoryError(RuntimeError):
@@ -853,3 +877,142 @@ def stage_repository_package(repository_id: str, module_id: str, version: str | 
     attach_source_provenance(staged["upload_id"], source)
     staged["source"] = source
     return staged
+
+
+# ---------------------------------------------------------------------------------------------- 1.17.42: default repository and daily sync
+
+
+def seed_default_repositories() -> list[str]:
+    """Seed each DEFAULT_REPOSITORIES entry once and return the ids this call seeded (1.17.42, CQ121). Called from the Scheduler tick.
+
+    The top-level key ``defaults_seeded`` lists the ids already handled. An id on that list is never seeded again, so an entry an
+    administrator removed stays removed, and an edited or disabled entry is never touched. An entry with the same id or the same
+    URL as an existing one gets only the marker. The function never raises: an unreadable or unwritable configuration logs a
+    warning and the next tick tries again.
+    """
+    try:
+        config = load_repositories()
+        marked = config.get(DEFAULTS_SEEDED_KEY)
+        marked = [str(item) for item in marked] if isinstance(marked, list) else []
+        repos = list(config["repositories"])
+        seeded: list[str] = []
+        changed = False
+        for default in DEFAULT_REPOSITORIES:
+            if default["id"] in marked:
+                continue
+            exists = any(item.get("id") == default["id"] or item.get("url") == default["url"] for item in repos)
+            if not exists:
+                # The same URL check as upsert_repository, so the seeded entry is no less valid than a manual one.
+                url = _validate_remote_url(default["url"], trust=default["trust"])
+                now = _utcnow()
+                repos.append({
+                    "id": default["id"],
+                    "name": default["name"],
+                    "url": url,
+                    "enabled": default["enabled"],
+                    "priority": default["priority"],
+                    "trust": default["trust"],
+                    "created_at": now,
+                    "updated_at": now,
+                })
+                seeded.append(default["id"])
+            marked.append(default["id"])
+            changed = True
+        if changed:
+            config["repositories"] = repos
+            config[DEFAULTS_SEEDED_KEY] = marked
+            _atomic_repo_json(CONFIG_FILE, config)
+        return seeded
+    except Exception as exc:
+        logger.warning("The default module repository was not seeded; the next tick tries again: %s", exc)
+        return []
+
+
+def run_scheduled_sync(context=None) -> dict:
+    """The daily sync (1.17.42, CQ122). Called by the Scheduler action tec-tac.module-repository-sync.
+
+    It runs sync_all over the enabled repositories and writes one count-only audit row. A failed repository never fails the run. When
+    every enabled repository fails, the run raises SchedulerPermanentError, so the run history shows it. The audit row and the result
+    hold counts only: no address and no error text from a remote index.
+    """
+    from .audit import record, service_audit_actor
+    from .scheduler import SchedulerPermanentError
+
+    tried = ok = failed = skipped_entries = 0
+    for item in sync_all(enabled_only=True):
+        sync = item.get("sync") or {}
+        if sync.get("status") == "disabled":
+            continue
+        tried += 1
+        # sync_all sets sync.error when a repository's sync raised, and leaves it empty on success.
+        if sync.get("error"):
+            failed += 1
+        else:
+            ok += 1
+        skipped_entries += int(sync.get("skipped_count") or 0)
+    counts = {"repositories": tried, "ok": ok, "failed": failed, "entries_skipped": skipped_entries}
+    record(
+        actor=service_audit_actor(module_id="core", service="module-repository", identity="daily-sync"),
+        module_id="core",
+        action="sync",
+        object_type="module_repository",
+        object_id=SYNC_OWNER_KEY,
+        message="Daily module repository sync ran.",
+        after=counts,
+    )
+    if tried and not ok:
+        raise SchedulerPermanentError(f"Every enabled module repository failed its sync ({failed} of {tried}). The previous catalogs are kept.")
+    return counts
+
+
+def ensure_repository_sync_schedule() -> bool:
+    """Create the daily sync schedule (03:00 server time, run on recovery within 6 hours) when no row holds its owner tuple (1.17.42,
+    CQ122). Returns True when this call created it. An existing schedule is never re-saved, so an administrator's change to it survives,
+    and a deleted row comes back on the next tick. The function never raises. Called from the Scheduler tick."""
+    try:
+        from django.conf import settings
+
+        from .models import TecTacSchedule
+        from .scheduler import get_owned_schedule, reconcile_schedule
+
+        if get_owned_schedule(SYNC_OWNER_MODULE, SYNC_OWNER_KEY) is not None:
+            return False
+        reconcile_schedule(
+            owner_module=SYNC_OWNER_MODULE,
+            owner_key=SYNC_OWNER_KEY,
+            action_id=SYNC_ACTION_ID,
+            schedule_type=TecTacSchedule.ScheduleType.DAILY,
+            name="Module repository sync (daily, 03:00)",
+            run_time=SYNC_RUN_TIME,
+            timezone_name=str(getattr(settings, "TIME_ZONE", "") or "UTC"),
+            missed_policy=TecTacSchedule.MissedPolicy.RUN_ON_RECOVERY,
+            missed_grace_minutes=SYNC_MISSED_GRACE_MINUTES,
+            concurrency_policy=TecTacSchedule.ConcurrencyPolicy.SKIP,
+            retry_count=0,
+        )
+        return True
+    except Exception as exc:
+        logger.warning("The daily module repository sync schedule was not created; the next tick tries again: %s", exc)
+        return False
+
+
+def sync_schedule_status() -> dict | None:
+    """The daily sync as the Repositories page states it (1.17.42): enabled, time, timezone, next run, last run and last status.
+    None when the schedule does not exist. The address of a repository is never part of it."""
+    from .models import TecTacSchedule
+    from .scheduler import get_owned_schedule
+
+    owned = get_owned_schedule(SYNC_OWNER_MODULE, SYNC_OWNER_KEY)
+    if owned is None:
+        return None
+    row = TecTacSchedule.objects.filter(
+        owner_type=TecTacSchedule.OwnerType.MODULE, owner_module=SYNC_OWNER_MODULE, owner_key=SYNC_OWNER_KEY,
+    ).first()
+    return {
+        "enabled": owned["enabled"],
+        "time": row.run_time.strftime("%H:%M") if row is not None and row.run_time else None,
+        "timezone": row.timezone if row is not None else None,
+        "next_run_at": owned["next_run_at"],
+        "last_run_at": owned["last_run_at"],
+        "last_run_status": owned["last_run_status"],
+    }

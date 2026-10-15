@@ -72,10 +72,22 @@ class Command(BaseCommand):
             # Logged, not written to the command's output: the step is a retry, and the tick's own output stays the same.
             logging.getLogger("tec_tac.runtime_settings").warning("The retired mail setting clear did not run; the next tick retries.", exc_info=True)
 
+        repo_seeded = []
+        repo_schedule_created = False
+        try:
+            # 1.17.42 (CQ121, CQ122): seed the official repository once and make sure the daily sync schedule exists. Both calls
+            # never raise. This guard only catches an import or unexpected failure, and it logs rather than writing to the output.
+            from tec_tac.module_repository import ensure_repository_sync_schedule, seed_default_repositories
+
+            repo_seeded = seed_default_repositories()
+            repo_schedule_created = ensure_repository_sync_schedule()
+        except Exception:
+            logging.getLogger("tec_tac.module_repository").warning("The module repository tick step failed; the next tick retries.", exc_info=True)
+
         sweep_state = "error" if sweep_error else "ran"
         cleanup_state = "error" if cleanup_error else ("ran" if cleanup and cleanup.get("ran") else "not_due")
         self.stdout.write(
-            "TEC-TAC scheduler tick: checked={checked} queued={queued} skipped={skipped} cleaned={cleaned} session_history_cleanup={session_cleanup} session_expiry_sweep={sweep_state} sweep_revoked={sweep_revoked} sweep_skipped_no_digest={sweep_skipped} sweep_orphan_tokens={sweep_orphans} now={now} replacement_conflicts_queued={replacement_queued} replacement_audit_rows={replacement_audit} module_failure_notices={failure_notices} module_failure_skipped_old={failure_old} module_failure_already_notified={failure_known} module_failure_emails={failure_emails}".format(
+            "TEC-TAC scheduler tick: checked={checked} queued={queued} skipped={skipped} cleaned={cleaned} session_history_cleanup={session_cleanup} session_expiry_sweep={sweep_state} sweep_revoked={sweep_revoked} sweep_skipped_no_digest={sweep_skipped} sweep_orphan_tokens={sweep_orphans} now={now} replacement_conflicts_queued={replacement_queued} replacement_audit_rows={replacement_audit} module_failure_notices={failure_notices} module_failure_skipped_old={failure_old} module_failure_already_notified={failure_known} module_failure_emails={failure_emails} repository_defaults_seeded={repo_seeded} repository_sync_schedule_created={repo_schedule_created}".format(
                 checked=result["checked"],
                 queued=len(result["queued"]),
                 skipped=len(result["skipped"]),
@@ -92,5 +104,7 @@ class Command(BaseCommand):
                 failure_old=failure_report.get("skipped_old", 0),
                 failure_known=failure_report.get("skipped_notified", 0),
                 failure_emails=failure_report.get("emailed", 0),
+                repo_seeded=len(repo_seeded),
+                repo_schedule_created=int(bool(repo_schedule_created)),
             )
         )

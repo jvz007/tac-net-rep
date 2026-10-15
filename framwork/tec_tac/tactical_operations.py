@@ -2163,7 +2163,12 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
             _close_stream(response)
             raise _unknown_outcome(request, operation, object_id, status, "tactical_response_refused", "Core does not relay streaming responses.", correlation_id)
         # 1.17.41: a declared file answer is read chunk by chunk up to the same cap as any answer, then closed.
-        content = _read_stream(response)
+        try:
+            content = _read_stream(response)
+        except Exception:
+            # 1.17.42: a stream that fails part way is an outcome-unknown refusal, never a bare 500. _read_stream has already closed it.
+            logger.exception("Tactical operation %s/%s failed while sending its file answer", operation.module_id, operation.id)
+            raise _unknown_outcome(request, operation, object_id, status, "tactical_call_failed", "Tactical failed while sending its answer.", correlation_id) from None
         if content is None:
             raise _unknown_outcome(request, operation, object_id, status, "tactical_response_refused", "Tactical's answer is larger than Core relays.", correlation_id)
     else:

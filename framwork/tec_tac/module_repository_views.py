@@ -14,6 +14,7 @@ from .module_repository import (
     stage_repository_package,
     sync_all,
     sync_repository,
+    sync_schedule_status,
     upsert_repository,
 )
 from .views import _can_manage_modules, _require_module_manager
@@ -67,7 +68,7 @@ class ModuleRepositoryListView(APIView):
         repos = all_repository_status()
         if not manage:
             repos = _redact_repository_status_for_non_manager(repos)
-        return Response({"schema": 1, "repositories": repos, "count": len(repos), "manage": manage})
+        return Response({"schema": 1, "repositories": repos, "count": len(repos), "manage": manage, "sync_schedule": sync_schedule_status()})
 
     def post(self, request):
         _require_module_manager(request.user)

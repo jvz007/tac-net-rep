@@ -720,6 +720,9 @@ Tactical answers some routes with a `FileResponse`: a report PDF, a report asset
   the raw bytes for a type that is not JSON.
 - A stream that passes the cap is cut, closed and refused as `tactical_response_refused` (the outcome-unknown row for a change, as the existing
   size check writes). The audit row never carries the file name or the bytes.
+- A stream that fails part way (the connection breaks or Tactical's side raises while Core reads it) is closed and refused as
+  `tactical_call_failed` with the outcome-unknown row for a change, as for any other failure after dispatch. A `GET` writes no row. Since
+  1.17.42 this is a normal JSON refusal, not a bare 500. Before 1.17.42 it was an unhandled error.
 - Without `file_response` a streaming answer is refused as before, and the stream is closed.
 - `list_operations` and `get_operation` show `file_response`. It is buffered in memory, so a file over 25 MiB is refused.
 - `agents/installer/` stays a route Core forbids. It is not declared by this release.

@@ -223,6 +223,25 @@ register_scheduled_action(
 )
 
 
+def _module_repository_sync_handler(context):
+    # 1.17.42 (CQ122): the daily refresh of the enabled module repositories. The logic lives in module_repository.
+    from .module_repository import run_scheduled_sync
+
+    return run_scheduled_sync(context)
+
+
+register_scheduled_action(
+    id="tec-tac.module-repository-sync",
+    module_id="tec-tac",
+    label="Module repository sync (daily)",
+    description="Refreshes the enabled module repositories once a day. Only counts are recorded. One failed repository does not fail the run; the run fails only when every enabled repository fails.",
+    target_types=("none",),
+    permission=None,
+    handler=_module_repository_sync_handler,
+    timeout_seconds=900,
+)
+
+
 def _zone(value: str) -> ZoneInfo:
     try:
         return ZoneInfo(str(value or "UTC"))
