@@ -50,6 +50,8 @@ class Adapter:
                 'site': {'type':'site','id':13,'name':kw['default_site_name'],'client_id':8,'active':True,'client_name':kw['name']},
                 'role_scope_extended': None}
     def nest_sites(self, rows, **kw): return [{**r, 'sites': []} for r in rows]
+    def attach_sites(self, rows, grouped): return [{**r, 'sites': list(grouped.get(r['id'], []))} for r in rows]  # 1.17.40
+    def live_sites(self, rows): return [dict(r) for r in rows]  # 1.17.40
     def update_client_row(self, **kw): return {'type':'client','id':kw['client_id'],'name':kw['name'],'active':True}
     def create_site_row(self, **kw):
         return {'site': {'type':'site','id':12,'name':kw['name'],'client_id':kw['client_id'],'active':True,'client_name':'Old'},
@@ -87,8 +89,9 @@ ns = {
     'UNSET': object(),  # 1.17.17: the sentinel of update_client and update_site (alert_template_id)
 }
 ns['_clean_resource_name'] = lambda value, kind: str(value).strip()
+ns['LIVE_FIELDS'] = ('failing_checks', 'agent_count', 'maintenance_mode')  # 1.17.40
 ns['POLICY_FIELDS'] = ('workstation_policy_id', 'server_policy_id', 'block_policy_inheritance')
-for name in ('_clean_nullable_id', '_clean_alert_template_id', '_clean_block_policy_inheritance', '_policy_changes', '_policy_changed', '_with_sites', '_template_changed', '_clean_custom_fields', '_custom_field_ids', '_audit_view'):  # helpers of the writes
+for name in ('_clean_nullable_id', '_clean_alert_template_id', '_clean_block_policy_inheritance', '_policy_changes', '_policy_changed', '_template_changed', '_clean_custom_fields', '_custom_field_ids', '_audit_view'):  # helpers of the writes
     ns[name] = compile_function(resources_path, name, ns)
 for name in ('create_client','update_client','create_site','update_site'):
     ns[name] = compile_function(resources_path, name, ns)

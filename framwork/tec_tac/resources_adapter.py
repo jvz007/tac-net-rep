@@ -6,6 +6,7 @@ must never import Tactical Client/Site/Agent models directly.
 """
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any
 
 from django.core.exceptions import ValidationError
@@ -497,12 +498,61 @@ def site_row(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# 1.10.0: the live-state keys, appended after the policy keys on every client and site record. ``client_row`` and ``site_row``
+# never carry them (the audit rows stay stable); ``live_sites``, ``sites_by_client`` and ``attach_sites`` add them at the public return points.
+LIVE_KEYS = ("failing_checks", "agent_count", "maintenance_mode")
+
+
+def _failing_part(value) -> dict[str, bool]:
+    """Tactical's stored ``failing_checks`` JSON as two real booleans. Null, a non-dict or a non-boolean value reads false."""
+    stored = value if isinstance(value, dict) else {}
+    return {"error": stored.get("error") is True, "warning": stored.get("warning") is True}
+
+
+def _site_agent_stats(site_ids) -> dict[int, tuple[int, bool]]:
+    """site id -> (agent count, any agent in maintenance mode), in one grouped query. A site with no agent is absent."""
+    # Count is read lazily, with the Tactical models: some tests stub django.db.models with Q only
+    from django.db.models import Count
+
+    wanted = sorted({int(value) for value in site_ids})
+    if not wanted:
+        return {}
+    _, _, Agent = _models()
+    rows = (
+        Agent.objects.filter(site_id__in=wanted)
+        .values("site_id")
+        .annotate(agent_count=Count("pk"), in_maintenance=Count("pk", filter=Q(maintenance_mode=True)))
+        .order_by()
+    )
+    return {int(row["site_id"]): (int(row["agent_count"]), int(row["in_maintenance"]) > 0) for row in rows}
+
+
+def _live_site(row: dict[str, Any], failing, stats: dict[int, tuple[int, bool]]) -> dict[str, Any]:
+    count, maintenance = stats.get(int(row["id"]), (0, False))
+    out = {key: value for key, value in row.items() if key not in LIVE_KEYS}
+    out.update({"failing_checks": _failing_part(failing), "agent_count": count, "maintenance_mode": maintenance})
+    return out
+
+
+def live_sites(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Copies of site records with the three live keys appended (1.10.0). Two queries for any number of rows.
+
+    A site is computed from its own agents only. The rows are already inside the caller's scope, so nothing here widens it."""
+    if not rows:
+        return []
+    ids = [int(row["id"]) for row in rows]
+    _, Site, _ = _models()
+    stored = {int(pk): value for pk, value in Site.objects.filter(pk__in=ids).values_list("pk", "failing_checks")}
+    stats = _site_agent_stats(ids)
+    return [_live_site(row, stored.get(int(row["id"])), stats) for row in rows]
+
+
 def sites_by_client(client_ids, *, user=None, trusted: bool = False) -> dict[int, list[dict[str, Any]]]:
-    """The site records of each client id inside the caller's scope (1.5.0), in one query.
+    """The site records of each client id inside the caller's scope (1.5.0), in one query, with the live keys (1.10.0).
 
     It uses the same ``filter_by_role`` rule as the sites read, so a client-limited role gets every site of its clients plus
     granted sites, a site-only role only its granted sites, and a trusted global context or an unrestricted caller every site.
-    Records are ordered by name then id and have the same shape as ``list_sites`` records.
+    Records are ordered by name then id and have the same shape as ``list_sites`` records. One more grouped agent query covers all sites.
     """
     wanted = sorted({int(value) for value in client_ids})
     grouped: dict[int, list[dict[str, Any]]] = {value: [] for value in wanted}
@@ -510,24 +560,65 @@ def sites_by_client(client_ids, *, user=None, trusted: bool = False) -> dict[int
         return grouped
     _, Site, _ = _models()
     qs = _scope_queryset(Site.objects.all(), user=user, trusted=trusted).filter(client_id__in=wanted)
-    rows = qs.order_by("name", "pk").values("pk", "name", "client_id", "alert_template_id", "client__name", *POLICY_KEYS)
+    rows = list(qs.order_by("name", "pk").values("pk", "name", "client_id", "alert_template_id", "client__name", "failing_checks", *POLICY_KEYS))
+    stats = _site_agent_stats([row["pk"] for row in rows])
     for row in rows:
-        grouped.setdefault(int(row["client_id"]), []).append(site_row(row))
+        grouped.setdefault(int(row["client_id"]), []).append(_live_site(site_row(row), row.get("failing_checks"), stats))
     return grouped
 
 
-def nest_sites(rows: list[dict[str, Any]], *, user=None, trusted: bool = False) -> list[dict[str, Any]]:
-    """Return copies of client records with ``sites`` added (1.5.0). One site query for the whole list.
+def _client_live_parts(rows: list[dict[str, Any]], grouped: dict[int, list[dict[str, Any]]]) -> dict[int, dict[str, Any]]:
+    """The live keys of each client, from the sites the caller may see (1.10.0, AD-12).
 
-    ``sites`` keeps its place before the policy keys of 1.7.0, so the key order is CLIENT_FIELDS."""
-    grouped = sites_by_client([row["id"] for row in rows], user=user, trusted=trusted)
+    ``agent_count`` is the sum over those sites and ``maintenance_mode`` is true when any has one. ``failing_checks`` is Tactical's
+    stored client value only when the caller sees every site of the client, otherwise the OR of the visible sites' values, so a
+    hidden failing site never shows. A client with no visible site gets 0, false and both false."""
+    ids = [int(row["id"]) for row in rows]
+    if not ids:
+        return {}
+    Client, Site, _ = _models()
+    stored = {int(pk): value for pk, value in Client.objects.filter(pk__in=ids).values_list("pk", "failing_checks")}
+    real_sites = Counter(int(value) for value in Site.objects.filter(client_id__in=ids).values_list("client_id", flat=True))
+    parts: dict[int, dict[str, Any]] = {}
+    for client_id in ids:
+        sites = grouped.get(client_id, [])
+        if not sites:
+            parts[client_id] = {"failing_checks": _failing_part(None), "agent_count": 0, "maintenance_mode": False}
+            continue
+        if len(sites) == real_sites.get(client_id, 0):
+            failing = _failing_part(stored.get(client_id))
+        else:
+            failing = {
+                "error": any(site["failing_checks"]["error"] for site in sites),
+                "warning": any(site["failing_checks"]["warning"] for site in sites),
+            }
+        parts[client_id] = {
+            "failing_checks": failing,
+            "agent_count": sum(int(site["agent_count"]) for site in sites),
+            "maintenance_mode": any(bool(site["maintenance_mode"]) for site in sites),
+        }
+    return parts
+
+
+def attach_sites(rows: list[dict[str, Any]], grouped: dict[int, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """Client records with ``sites`` and the live keys added (1.10.0), from site records already read inside the caller's scope.
+
+    ``sites`` keeps its place before the policy keys of 1.7.0, and the live keys come last, so the key order is CLIENT_FIELDS."""
+    parts = _client_live_parts(rows, grouped)
     nested = []
     for row in rows:
-        out = {key: value for key, value in row.items() if key not in POLICY_KEYS}
-        out["sites"] = list(grouped.get(int(row["id"]), []))
+        client_id = int(row["id"])
+        out = {key: value for key, value in row.items() if key not in POLICY_KEYS and key not in LIVE_KEYS and key != "sites"}
+        out["sites"] = list(grouped.get(client_id, []))
         out.update(_policy_part(row))
+        out.update(parts[client_id])
         nested.append(out)
     return nested
+
+
+def nest_sites(rows: list[dict[str, Any]], *, user=None, trusted: bool = False) -> list[dict[str, Any]]:
+    """Return copies of client records with ``sites`` and the live keys added (1.5.0, 1.10.0). A constant number of queries for the whole list."""
+    return attach_sites(rows, sites_by_client([row["id"] for row in rows], user=user, trusted=trusted))
 
 
 def agent_row(row: dict[str, Any]) -> dict[str, Any]:

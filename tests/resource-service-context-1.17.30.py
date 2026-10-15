@@ -7,7 +7,7 @@ actor 'userinvite' gets a context with is_service true and trusted_global false,
 still raises ResourcePermissionDenied; refused (ResourcePermissionDenied, no audit row): another module, no verified caller, a Core caller, an
 empty module id, the actor 'alerts' called from userinvite, an actor that is blank or differs only by case; an empty actor or purpose raises
 ResourceValidationError first; global_access=True keeps its exact behaviour (no caller check, strict custom:resource-global-context row,
-trusted_global true, a failed audit write refuses); the contract version is 1.9.0 and contract text and docs name AD-34.
+trusted_global true, a failed audit write refuses); the contract version is 1.10.0 (1.9.0 when written) and contract text and docs name AD-34.
 """
 from __future__ import annotations
 
@@ -219,9 +219,9 @@ resources.trusted_service_context(actor="userinvite", purpose="x", global_access
 must(len(AUDITS) == 1, "the global form still writes its strict row for any caller")
 
 # ---- version, contract text, docs
-must(resources.CONTRACT_VERSION == "1.9.0", resources.CONTRACT_VERSION)
+must(resources.CONTRACT_VERSION == "1.10.0", resources.CONTRACT_VERSION)
 meta = resources.resource_contract_metadata()
-must(meta["version"] == "1.9.0" and meta["version"].split(".")[0] == "1", meta["version"])
+must(meta["version"] == "1.10.0" and meta["version"].split(".")[0] == "1", meta["version"])
 service_text = meta["authorization"]["service"]
 must("userinvite" in service_text and "1.9.0" in service_text and "AD-34" in service_text and "global_access=True" in service_text, service_text)
 source = (PKG / "resources.py").read_text(encoding="utf-8")
@@ -230,7 +230,7 @@ contracts = (PKG / "contracts.py").read_text(encoding="utf-8")
 row = [line for line in contracts.splitlines() if '"name":"trusted_service_context"' in line]
 must(len(row) == 1 and "AD-34" in row[0] and "userinvite" in row[0] and "1.9.0" in row[0] and "1.17.30" in row[0], "contract row")
 doc = (ROOT / "docs" / "resource-directory.md").read_text(encoding="utf-8")
-must("Contract version: `1.9.0`" in doc and "AD-34" in doc and "userinvite" in doc and "global_access=False" in doc, "docs/resource-directory.md")
+must("Contract version: `1.10.0`" in doc and "AD-34" in doc and "userinvite" in doc and "global_access=False" in doc, "docs/resource-directory.md")
 caller_doc = (ROOT / "docs" / "caller-identity.md").read_text(encoding="utf-8")
 must("AD-34" in caller_doc and "core.resources" in caller_doc and "core.accounts" in caller_doc and "core.audit" in caller_doc, "docs/caller-identity.md")
 must("calling_module_for_core_provider" not in contracts, "the private helper is not a contract row")

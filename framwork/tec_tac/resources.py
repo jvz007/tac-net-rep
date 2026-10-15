@@ -14,7 +14,7 @@ from . import resources_adapter as adapter
 from .capabilities import register_capability
 
 CONTRACT_ID = "core.resources"
-CONTRACT_VERSION = "1.9.0"
+CONTRACT_VERSION = "1.10.0"
 RESOURCE_TYPES = ("client", "site", "agent")
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 500
@@ -33,8 +33,11 @@ SITE_MANAGE_PERMISSION = "core.resources.sites.manage"
 # client grant check, and a same-client update needs the site's write scope too (a read-only scope is refused). No record shape changed.
 # 1.9.0 (Core 1.17.30, AD-34 condition 1) lets the module userinvite (only) call trusted_service_context(global_access=False): a
 # service context with no resource visibility, for a caller Core verified from the call stack. Additive; global_access=True is unchanged.
-CLIENT_FIELDS = ("type", "id", "name", "active", "alert_template_id", "sites", "workstation_policy_id", "server_policy_id", "block_policy_inheritance")
-SITE_FIELDS = ("type", "id", "name", "client_id", "active", "alert_template_id", "client_name", "workstation_policy_id", "server_policy_id", "block_policy_inheritance")
+# 1.10.0 (Core 1.17.40, Endpoints 0.7.0 request) appended failing_checks, agent_count and maintenance_mode to client and site records,
+# read only and computed inside the caller's scope (a role never learns of a site it may not see). Additive.
+LIVE_FIELDS = ("failing_checks", "agent_count", "maintenance_mode")
+CLIENT_FIELDS = ("type", "id", "name", "active", "alert_template_id", "sites", "workstation_policy_id", "server_policy_id", "block_policy_inheritance") + LIVE_FIELDS
+SITE_FIELDS = ("type", "id", "name", "client_id", "active", "alert_template_id", "client_name", "workstation_policy_id", "server_policy_id", "block_policy_inheritance") + LIVE_FIELDS
 AGENT_FIELDS = (
     "type", "id", "hostname", "client_id", "site_id", "active",
     "platform", "monitoring_type", "last_seen",
@@ -285,10 +288,11 @@ def _custom_field_ids(values: list[dict[str, Any]] | None) -> list[int]:
 
 
 def _audit_view(row: dict[str, Any] | None) -> dict[str, Any] | None:
-    """The record as audited before 1.5.0: without the nested ``sites`` and ``client_name`` added by the read contract."""
+    """The record as audited before 1.5.0: without the nested ``sites`` and ``client_name`` added by the read contract, and
+    without the live keys of 1.10.0 (they change on their own, so they never belong in a before and after pair)."""
     if row is None:
         return None
-    return {key: value for key, value in row.items() if key not in ("sites", "client_name")}
+    return {key: value for key, value in row.items() if key not in ("sites", "client_name") and key not in LIVE_FIELDS}
 
 
 def _adapter_write(callable_obj, **kwargs):
@@ -384,14 +388,6 @@ def _policy_changes(*, workstation_policy_id: Any, server_policy_id: Any, block_
     if block_policy_inheritance is not UNSET:
         changes["block_policy_inheritance"] = _clean_block_policy_inheritance(block_policy_inheritance)
     return changes
-
-
-def _with_sites(row: dict[str, Any], sites: list[dict[str, Any]]) -> dict[str, Any]:
-    """A client record with ``sites`` before the 1.7.0 policy keys, so the key order is CLIENT_FIELDS."""
-    out = {key: value for key, value in row.items() if key not in POLICY_FIELDS}
-    out["sites"] = sites
-    out.update({key: row[key] for key in POLICY_FIELDS if key in row})
-    return out
 
 
 def _template_changed(before: dict | None, after: dict | None) -> bool:
@@ -493,7 +489,7 @@ def list_sites(*, context: ResourceAccessContext, client_id: Any | None = None, 
     qs = adapter.sites_queryset(user=user, trusted=trusted, client_id=client_id, search=_search(search), active=_active(active),
                                 alert_template_id=template_filter, policy_id=policy_filter)
     items, total = adapter.page_sites(qs, offset=offset, limit=page_size)
-    return _page(items, total, page, page_size)
+    return _page(adapter.live_sites(items), total, page, page_size)
 
 
 def get_site(site_id: Any, *, context: ResourceAccessContext) -> dict[str, Any]:
@@ -502,7 +498,7 @@ def get_site(site_id: Any, *, context: ResourceAccessContext) -> dict[str, Any]:
     row = adapter.get_site_row(adapter.sites_queryset(user=user, trusted=trusted), resource_id)
     if row is None:
         raise ResourceNotFound("Site was not found in the caller's resource scope.")
-    return row
+    return adapter.live_sites([row])[0]
 
 
 def list_agents(*, context: ResourceAccessContext, client_id: Any | None = None, site_id: Any | None = None, search: str | None = None, active: bool | None = None, page: int = 1, page_size: int = DEFAULT_PAGE_SIZE) -> dict[str, Any]:
@@ -556,7 +552,8 @@ def create_client(*, name: str, context: ResourceAccessContext, site_name: str |
                 "custom_field_ids": _custom_field_ids(fields),
             },
         )
-        return _with_sites(row, [first_site])
+        # 1.10.0: the record carries the live keys, like every other read of a client
+        return adapter.attach_sites([row], {row["id"]: adapter.live_sites([first_site])})[0]
 
 
 def update_client(client_id: Any, *, name: str | None = None, alert_template_id: Any = UNSET, context: ResourceAccessContext,
@@ -621,7 +618,7 @@ def create_site(*, client_id: Any, name: str, context: ResourceAccessContext, cu
                 "custom_field_ids": _custom_field_ids(fields),
             },
         )
-        return row
+        return adapter.live_sites([row])[0]
 
 
 def update_site(site_id: Any, *, name: str | None = None, client_id: Any | None = None, alert_template_id: Any = UNSET, context: ResourceAccessContext,
@@ -653,7 +650,7 @@ def update_site(site_id: Any, *, name: str | None = None, client_id: Any | None 
         # The site is already in that client: not a move, so no client change.
         target_client_id = None
         if clean_name is None and not changes:
-            return before
+            return adapter.live_sites([before])[0] if before is not None else before
     moving = target_client_id is not None and before is not None
     with _transaction_atomic():
         agents_moved = adapter.site_agent_count(site_id=resource_id) if moving else 0
@@ -669,7 +666,7 @@ def update_site(site_id: Any, *, name: str | None = None, client_id: Any | None 
             raise ResourceNotFound("Site was not found in the caller's resource scope.")
         if before is not None and _audit_view(before) == _audit_view(row):
             # Nothing changed (the same values were sent again): no audit row.
-            return row
+            return adapter.live_sites([row])[0]
         client_changed = before is not None and before.get("client_id") != row.get("client_id")
         metadata: dict[str, Any] = {
             "alert_template_changed": "alert_template_id" in changes and _template_changed(before, row),
@@ -683,7 +680,7 @@ def update_site(site_id: Any, *, name: str | None = None, client_id: Any | None 
             actor=user, action="modify", resource_type="site", resource_id=resource_id,
             before=_audit_view(before), after=_audit_view(row), metadata=metadata,
         )
-        return row
+        return adapter.live_sites([row])[0]
 
 
 
@@ -930,7 +927,7 @@ def resource_contract_metadata() -> dict[str, Any]:
                 "python": "create_client(*, name, context, site_name=None, custom_fields=None)",
                 "http": "POST /api/tfd/resources/clients/",
                 "body": {"name": "required string, no | character", "site_name": "the first site's name; send it from every new form (omitting it names the site 'Default Site', deprecated)", "custom_fields": "optional array[{field_id, value}] saved in the same transaction"},
-                "semantics": "Since 1.5.0 (site_name and custom_fields; Tactical's Add client). The client, its first site and the custom fields are created in one transaction with a strict audit row (metadata first_site_id, role_scope_extended 'clients' or 'none', custom_field_ids as ids only, default_site_created). As Tactical does, the new client joins the creator's can_view_clients only when that list is not empty: a role limited only by sites is not widened. The record returned carries sites with the first site. Names may not contain the | character.",
+                "semantics": "Since 1.5.0 (site_name and custom_fields; Tactical's Add client). The client, its first site and the custom fields are created in one transaction with a strict audit row (metadata first_site_id, role_scope_extended 'clients' or 'none', custom_field_ids as ids only, default_site_created). As Tactical does, the new client joins the creator's can_view_clients only when that list is not empty: a role limited only by sites is not widened. The record returned carries sites with the first site, and the live keys of 1.10.0. Names may not contain the | character.",
             },
             "create_site": {
                 "python": "create_site(*, client_id, name, context, custom_fields=None)",
@@ -1024,7 +1021,7 @@ def resource_contract_metadata() -> dict[str, Any]:
         },
         "active_semantics": "Tactical hard-deletes client/site rows. Core deletion first relocates agents when required, then deletes atomically. Existing rows are active in contract v1; active=false returns no rows.",
         "rbac": {"client_write": CLIENT_MANAGE_PERMISSION, "site_write": SITE_MANAGE_PERMISSION},
-        "client_sites": "Since 1.5.0 client records carry sites: the site records of that client inside the caller's scope (the same Site.filter_by_role rule as the sites read), ordered by name then id, with the shape of list_sites records, loaded with one query per page. It needs only can_list_clients, as Tactical's GET /clients/ does. A client-limited role gets every site of its clients plus granted sites, a site-only role only its granted sites, an unrestricted caller and a trusted global context every site. A client with no site in scope has an empty list. Create and update results carry it too. Audit before and after rows are built without sites and client_name.",
+        "client_sites": "Since 1.5.0 client records carry sites: the site records of that client inside the caller's scope (the same Site.filter_by_role rule as the sites read), ordered by name then id, with the shape of list_sites records, loaded with one query per page. It needs only can_list_clients, as Tactical's GET /clients/ does. A client-limited role gets every site of its clients plus granted sites, a site-only role only its granted sites, an unrestricted caller and a trusted global context every site. A client with no site in scope has an empty list. Create and update results carry it too. Audit before and after rows are built without sites, client_name and the 1.10.0 live keys.",
         "site_client_name": "Since 1.5.0 site records carry client_name (the owning client's name, as Tactical's /clients/sites/ returns it), appended after the earlier keys, so a role with only can_list_sites can group sites by client without reading clients.",
         "role_reads": "Clients read: can_list_clients (200 with nested sites; the sites read stays refused without can_list_sites). Sites read: can_list_sites (each site carries client_id and client_name; the clients read stays refused without can_list_clients). A role with neither flag is refused both reads. Writes still need can_manage_clients or can_manage_sites plus the Core codenames.",
         "role_scope_lists": {
@@ -1034,6 +1031,8 @@ def resource_contract_metadata() -> dict[str, Any]:
         },
         "alert_template_id": "Since 1.4.0 client and site records carry alert_template_id (integer or null), appended after the earlier keys. It is an id only. Anyone who can list clients or sites sees it.",
         "policy_fields": "Since 1.7.0 client and site records carry workstation_policy_id (integer or null), server_policy_id (integer or null) and block_policy_inheritance (boolean, false when unset), appended after the earlier keys (after sites on a client, after client_name on a site; nested sites carry them too). They are ids and a flag only: Automation owns the policy list and Core validates nothing about it. Anyone who can list clients or sites sees them. A record built from a row without the keys reads null, null and false.",
+        "failing_checks_agent_count_maintenance_mode": "Since 1.10.0 (Core 1.17.40) client and site records carry three read-only keys, appended last (after block_policy_inheritance; nested sites and the records returned by create_client, update_client, create_site and update_site carry them too; agent records never do). failing_checks is {error: boolean, warning: boolean}: Tactical's stored value on the client or site as its own GET /clients/ returns it (null, a non-object or a non-boolean reads false). agent_count is an integer and maintenance_mode a boolean (true when any agent is in maintenance mode). Anyone who can list clients or sites sees them, as Tactical's GET /clients/ gives them to a role with List clients alone; no List agents flag is needed. Read only: no write field changes them.",
+        "live_state": "Scope rule for 1.10.0 (AD-12, a role sees counts only for what it may see). A site record is computed from its own agents only. A client record is computed only from the sites the caller may see (the same Site.filter_by_role rule as the nested sites): agent_count is the sum over those sites, maintenance_mode is true when any of them has an agent in maintenance mode, and failing_checks is Tactical's stored client value only when the caller sees every site of the client (an unrestricted caller and a trusted global context always do), otherwise the OR of the visible sites' stored values, so a role never learns that a hidden site is failing or how many agents it has. A client with no visible site reads 0, false and both false. The values are as of Tactical's last refresh: Tactical updates failing_checks only in its periodic cache task, so treat it as a hint and not a live check. agent_count and maintenance_mode are read at call time. Core runs a constant number of queries per page. The audit before and after rows never carry these keys.",
         "list_filters_1_7": "Since 1.7.0 list_clients and list_sites take alert_template_id and policy_id (the workstation or the server policy), each a positive integer or 400, applied inside the caller's scope and under the list's own permission. Both together mean both must match. Alerts uses alert_template_id to find where a template is used, and Automation uses policy_id to build the policy overview without reading every page.",
         "compatibility": "Additive changes are preferred within 1.x. Tactical ORM changes are adapter-internal unless the public representation changes incompatibly.",
     }

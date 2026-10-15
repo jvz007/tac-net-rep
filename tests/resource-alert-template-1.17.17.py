@@ -66,6 +66,13 @@ class Q:
         return any(all(row.get(key) == value for key, value in alt.items()) for alt in self.alternatives)
 
 
+class Count:
+    """1.17.40: the aggregate the live-state agent query uses (a field and an optional Q filter)."""
+
+    def __init__(self, field, filter=None):
+        self.field, self.filter = field, filter
+
+
 class Response:
     def __init__(self, data=None, status=200):
         self.data, self.status_code = data, status
@@ -84,7 +91,7 @@ mod("django")
 mod("django.core")
 mod("django.core.exceptions", ValidationError=ValidationError)
 mod("django.db", IntegrityError=IntegrityError, transaction=_Transaction())
-mod("django.db.models", Q=Q)
+mod("django.db.models", Q=Q, Count=Count)
 mod("drf_spectacular")
 mod("drf_spectacular.utils", extend_schema=_Spec())
 mod("rest_framework")
@@ -137,9 +144,33 @@ class Relation:
             self.ids.append(obj.pk)
 
 
+QUERY_LOG = []       # 1.17.40: one entry per query a test run executes: (model name, operation)
+
+
 class Rows(list):
     def first(self):
         return self[0] if self else None
+
+    def order_by(self, *fields):
+        return self
+
+    def annotate(self, **aggregates):
+        """1.17.40: GROUP BY the selected fields, then Count(field, filter=Q) over each group (a grouped values().annotate())."""
+        source = getattr(self, "source", [])
+        keys = list(self[0]) if self else []
+        out = Rows()
+        seen = []
+        for row in self:
+            group = tuple(row[k] for k in keys)
+            if group in seen:
+                continue
+            seen.append(group)
+            members = [r for r in source if tuple(r.get(k) for k in keys) == group]
+            entry = dict(zip(keys, group))
+            for name, agg in aggregates.items():
+                entry[name] = sum(1 for r in members if agg.filter is None or agg.filter.matches(r))
+            out.append(entry)
+        return out
 
 
 class Role:
@@ -198,6 +229,10 @@ class Query:
                 rows = [r for r in rows if r["pk"] in set(val)]
             elif key == "site_id":
                 rows = [r for r in rows if r["site_id"] == val]
+            elif key == "agent_id":
+                rows = [r for r in rows if r.get("agent_id") == val]
+            elif key == "site_id__in":
+                rows = [r for r in rows if r["site_id"] in set(val)]
             elif key == "client_id":
                 rows = [r for r in rows if r["client_id"] == val]
             elif key == "client_id__in":
@@ -221,21 +256,32 @@ class Query:
         return self
 
     def first(self):
+        QUERY_LOG.append((self.model.__name__, "first"))
         return self.model.from_row(self.rows[0]) if self.rows else None
 
     def exists(self):
+        QUERY_LOG.append((self.model.__name__, "exists"))
         return bool(self.rows)
 
     def count(self):
+        QUERY_LOG.append((self.model.__name__, "count"))
         return len(self.rows)
 
     def values(self, *fields):
-        def pick(r, f):  # 1.5.0: client__name is the join Tactical's ORM resolves
-            return Client.STORE[r["client_id"]]["name"] if f == "client__name" else r[f]
-        return Rows({f: pick(r, f) for f in fields} for r in self.rows)
+        QUERY_LOG.append((self.model.__name__, "values"))
+
+        def pick(r, f):  # 1.5.0: client__name is the join Tactical's ORM resolves; 1.17.40: failing_checks may be missing (None)
+            if f == "client__name":
+                return Client.STORE[r["client_id"]]["name"]
+            return r.get(f) if f == "failing_checks" else r[f]
+        out = Rows({f: pick(r, f) for f in fields} for r in self.rows)
+        out.source = self.rows
+        return out
 
     def values_list(self, *fields, flat=False):
-        return Rows([r[fields[0]] for r in self.rows] if flat else [tuple(r[f] for f in fields) for r in self.rows])
+        QUERY_LOG.append((self.model.__name__, "values_list"))
+        get = lambda r, f: r.get(f) if f == "failing_checks" else r[f]  # noqa: E731
+        return Rows([get(r, fields[0]) for r in self.rows] if flat else [tuple(get(r, f) for f in fields) for r in self.rows])
 
 
 class _Manager:
@@ -411,8 +457,9 @@ def refused(call, *errors):
 
 # ------------------------------------------------------------------------------------------------ the contract shape
 POLICY_KEYS = ("workstation_policy_id", "server_policy_id", "block_policy_inheritance")
-must(resources.CONTRACT_VERSION == "1.9.0" and resources.CLIENT_FIELDS == ("type", "id", "name", "active", "alert_template_id", "sites", *POLICY_KEYS), resources.CLIENT_FIELDS)
-must(resources.SITE_FIELDS == ("type", "id", "name", "client_id", "active", "alert_template_id", "client_name", *POLICY_KEYS), resources.SITE_FIELDS)
+LIVE_KEYS = ("failing_checks", "agent_count", "maintenance_mode")
+must(resources.CONTRACT_VERSION == "1.10.0" and resources.CLIENT_FIELDS == ("type", "id", "name", "active", "alert_template_id", "sites", *POLICY_KEYS, *LIVE_KEYS), resources.CLIENT_FIELDS)
+must(resources.SITE_FIELDS == ("type", "id", "name", "client_id", "active", "alert_template_id", "client_name", *POLICY_KEYS, *LIVE_KEYS), resources.SITE_FIELDS)
 must(resources.AGENT_FIELDS[-1] == "last_seen", "agent records are unchanged")
 listed = resources.list_clients(context=ctx_admin)["items"]
 must([tuple(row) for row in listed] == [resources.CLIENT_FIELDS] * 2 and [r["alert_template_id"] for r in listed] == [None, None], listed)
@@ -614,7 +661,7 @@ must(r.status_code == 404, "but not another site's")
 
 # ------------------------------------------------------------------------------------------------ the capability and the contract text
 meta = resources.resource_contract_metadata()
-must(meta["version"] == "1.9.0" and meta["version"].split(".")[0] == "1", meta["version"])
+must(meta["version"] == "1.10.0" and meta["version"].split(".")[0] == "1", meta["version"])
 must(meta["resource_types"]["client"]["fields"] == list(resources.CLIENT_FIELDS) and meta["resource_types"]["site"]["fields"] == list(resources.SITE_FIELDS), "fields")
 must(meta["write_support"]["client"] == ["create", "update", "delete", "custom_fields"], "the earlier write_support lists are unchanged")
 must(meta["write_support"]["update_fields"] == {"client": ["name", "alert_template_id", *POLICY_KEYS], "site": ["name", "client_id", "alert_template_id", *POLICY_KEYS]}, meta["write_support"])
@@ -624,7 +671,7 @@ must("alert_template_id" in meta["mutation_contracts"]["update_client"]["body"],
 must("PATCH /api/tfd/resources/clients/<id>/" == meta["mutation_contracts"]["update_client"]["http"], "http row")
 must("delete_client" in meta["mutation_contracts"] and "client_custom_fields" in meta["mutation_contracts"], "the earlier entries stay")
 registration = resources.register_core_resources_capability()
-must(registration["version"] == "1.9.0" and registration["module_id"] == "core", registration["version"])
+must(registration["version"] == "1.10.0" and registration["module_id"] == "core", registration["version"])
 for op in ("update_client", "update_site", "scope_descriptor", "scope_unrestricted", "has_whole_client_access", "user_context"):
     must(op in registration["operations"] and callable(getattr(registration["provider"], op)), op)
 must(registration["operations"][:15] == ("list_clients", "get_client", "create_client", "update_client", "delete_client", "list_sites", "get_site", "create_site",
@@ -634,6 +681,6 @@ contracts = (PKG / "contracts.py").read_text(encoding="utf-8")
 for needle in ("alert_template_id", "framework >=1.17.17", "alert_template_changed"):
     must(needle in contracts, needle)
 doc = (ROOT / "docs" / "resource-directory.md").read_text(encoding="utf-8")
-must("Contract version: `1.9.0`" in doc and "alert_template_id" in doc and "UNSET" in doc, "docs/resource-directory.md")
+must("Contract version: `1.10.0`" in doc and "alert_template_id" in doc and "UNSET" in doc, "docs/resource-directory.md")
 
 print("[TEST] PASS resource alert template 1.17.17")

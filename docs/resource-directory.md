@@ -1,7 +1,7 @@
 # Core Resource Directory
 
 Contract ID: `core.resources`  
-Contract version: `1.9.0`  
+Contract version: `1.10.0`  
 Python namespace: `tec_tac.resources`
 
 ## Purpose
@@ -23,6 +23,8 @@ tec_tac.resources           <- stable public contract
         +-- Reporting
         +-- Alerts / Automation / other modules
 ```
+
+Contract 1.10 (Core 1.17.40, additive, still major 1) adds `failing_checks`, `agent_count` and `maintenance_mode` to client and site records, read only and counted inside the caller's scope. Existing keys, keywords, paging and error codes do not change. See "Live state (since 1.10.0)".
 
 Contract 1.8 (Core 1.17.25, still major 1) changes one documented rule: moving a site follows Tactical's Edit site (CQ79, Johan, 13 October 2026). The destination client needs no grant check any more, and a same-client update needs the site's write scope. No record shape or keyword changed, so it is listed as a rule change, not an addition. See "Move a site".
 
@@ -48,7 +50,7 @@ Contract 1.3 keeps the 1.2 scoped read/create/update boundary and adds audited c
 }
 ```
 
-Stable fields: `type`, `id`, `name`, `active`, `alert_template_id` (since 1.4.0, an integer or `null`; appended after the earlier keys), `sites` (since 1.5.0), `workstation_policy_id`, `server_policy_id`, `block_policy_inheritance` (since 1.7.0, appended last).
+Stable fields: `type`, `id`, `name`, `active`, `alert_template_id` (since 1.4.0, an integer or `null`; appended after the earlier keys), `sites` (since 1.5.0), `workstation_policy_id`, `server_policy_id`, `block_policy_inheritance` (since 1.7.0), `failing_checks`, `agent_count`, `maintenance_mode` (since 1.10.0, appended last).
 
 `sites` is the list of that client's site records the caller may see, ordered by name then id, each with the shape of a site record below. It uses the same `Site.filter_by_role` rule as the sites read. A client-limited role gets every site of its clients plus granted sites. A site-only role gets only its granted sites under the parent client. An unrestricted caller and a trusted global service context get every site. A client with no site in scope has `"sites": []`. It is loaded with one query per page. It needs only `can_list_clients`, as Tactical's own `GET /clients/` does, so showing nested site names to a role without `can_list_sites` opens no data beyond Tactical (AD-5, AD-25). The sites read itself stays refused without `can_list_sites`. `list_clients`, `get_client`, `create_client` and `update_client` carry it.
 
@@ -65,7 +67,7 @@ Stable fields: `type`, `id`, `name`, `active`, `alert_template_id` (since 1.4.0,
 }
 ```
 
-Stable fields: `type`, `id`, `name`, `client_id`, `active`, `alert_template_id` (since 1.4.0, an integer or `null`), `client_name` (since 1.5.0), `workstation_policy_id`, `server_policy_id`, `block_policy_inheritance` (since 1.7.0, appended last).
+Stable fields: `type`, `id`, `name`, `client_id`, `active`, `alert_template_id` (since 1.4.0, an integer or `null`), `client_name` (since 1.5.0), `workstation_policy_id`, `server_policy_id`, `block_policy_inheritance` (since 1.7.0), `failing_checks`, `agent_count`, `maintenance_mode` (since 1.10.0, appended last).
 
 `client_name` is the owning client's name, as Tactical's own `/clients/sites/` returns it. It comes from the client join with no extra query per row, so a role with only `can_list_sites` can group sites by client without reading clients.
 
@@ -222,6 +224,21 @@ A client and a site each carry a workstation policy, a server policy and a "bloc
 - The write rule is the same as a rename: Tactical `can_manage_clients` or `can_manage_sites`, the Core resources permission, and the client or site write scope. Core does not ask for `can_manage_automation_policies`, because Tactical's own client and site `PUT` check only the manage-clients and manage-sites flags. A policy then pushes its checks, tasks and scripts to every endpoint under the client or site, so the audit row names the ids.
 - The write goes through Tactical's model save (`update_fields` include `workstation_policy`, `server_policy`, `block_policy_inheritance`, `modified_by`), so Tactical's own refresh of the agents' alert template and policy caches still runs.
 - The strict audit row carries before and after records (the new fields are in them) and the metadata `policy_changed`: the names of the fields whose value changed (ids only, never a policy name). A call that changes nothing writes no row.
+
+#### Live state (since 1.10.0, Core 1.17.40)
+
+Client and site records carry three read-only keys, appended after `block_policy_inheritance`. Endpoints uses them to show which clients and sites need attention, and to sort the Scope pane.
+
+- `failing_checks`: `{"error": true|false, "warning": true|false}`. It is Tactical's stored value on the client or site, as Tactical's own `GET /clients/` returns it. A null, a non-object or a non-boolean value reads `false`.
+- `agent_count`: a whole number, the agents counted.
+- `maintenance_mode`: `true` when any counted agent is in maintenance mode.
+- A nested site, and the record `create_client`, `update_client`, `create_site` and `update_site` return, carry the keys too, so one shape applies everywhere. Agent records never carry them.
+- Scope rule (AD-12, a role sees counts only for what it may see). A site record is computed from its own agents only. A client record is computed only from the sites the caller may see (the same `Site.filter_by_role` rule as `sites`): `agent_count` is the sum over those sites and `maintenance_mode` is `true` when any of them has an agent in maintenance mode. `failing_checks` is Tactical's stored client value only when the caller sees every site of the client (an unrestricted caller and a trusted global context always do). Otherwise it is the OR of the visible sites' stored values. A site-only role therefore never learns that a hidden site is failing or how many agents it has. A client with no visible site reads `0`, `false` and both `false`.
+- No `can_list_agents` flag is needed: Tactical's own `GET /clients/` gives a role with List clients alone these three values (AD-5, AD-25).
+- Stale by design. Tactical refreshes `failing_checks` only in its periodic cache task, so the value is as of that refresh. Treat it as a hint, not a live check. `agent_count` and `maintenance_mode` are read when you call.
+- Cost: a constant number of queries per page (one grouped agent query, no query per row), so a 500-row page stays cheap.
+- Audit: the before and after rows of `update_client` and `update_site` never carry these keys, and a change in Tactical's `failing_checks` between the read and the save does not write a `modify` row.
+- HTTP: `GET /api/tfd/resources/clients/` and `sites/` (and the id reads) pass the records through unchanged, so they carry the keys.
 
 #### List filters (since 1.7.0)
 
@@ -390,6 +407,8 @@ If Tactical later changes model/table/field layout, update the Core adapter whil
 `core.resources` follows semantic contract versioning.
 
 Contract `1.1.0` is additive over `1.0.0`: it preserves all read operations and resource shapes while adding client/site create/update operations, write authorization metadata and stable conflict errors. A Tactical internal schema change alone is not a reason to change this contract version.
+
+Contract `1.10.0` (Core 1.17.40) is additive over `1.9.0`: client and site records gain `failing_checks`, `agent_count` and `maintenance_mode` (appended last). No keyword, route or error changed. Needs framework >=1.17.40.
 
 Contract `1.8.0` (Core 1.17.25) changes the move rule only: the destination client needs no grant, and a same-client update needs the site's write scope. Records and keywords are unchanged.
 

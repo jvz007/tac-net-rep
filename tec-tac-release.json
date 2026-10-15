@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.39",
+  "version": "1.17.40",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "66c389576a517f455059348a31b1788ed1ff07f441e7bbb7d20f47579c019812"
     },
     {
-      "path": "RELEASE_NOTES_1.17.39.md",
-      "size": 6179,
-      "sha256": "29e39f835d2481e9ba3a5008f4e8fd0828885935248f9b7995a5c8d3483c45cf"
+      "path": "RELEASE_NOTES_1.17.40.md",
+      "size": 6689,
+      "sha256": "eca86492b422a35389bb4dfdbbbb88ed0a80abda566bdd99ed0b2a53ed0d9cbc"
     },
     {
       "path": "VERSION",
       "size": 7,
-      "sha256": "4732f1d6ab2ce7328044bf0f94f82db2f7b2fa06e80654f58b2fd2c46dadbd36"
+      "sha256": "722e09a2657118b81f0096656950f65d5d8c17f78dc9d4f829b96b95ae8eea30"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -138,8 +138,8 @@
     },
     {
       "path": "docs/module-preferences.md",
-      "size": 12124,
-      "sha256": "63b5df4b8a816e82642a9fce1fc975c9470287b4f08723f88ade851f7b114b26"
+      "size": 12848,
+      "sha256": "6863a72a4b8e3bbbd04eee2c892de67f161c81e6fb90749cd6513818b5450138"
     },
     {
       "path": "docs/module-replacement.md",
@@ -1222,6 +1222,11 @@
       "sha256": "aad3d8972113d479880df2acd29ee6adadb2610730e3c5cc9e4d4be87291686b"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.39.md",
+      "size": 6179,
+      "sha256": "29e39f835d2481e9ba3a5008f4e8fd0828885935248f9b7995a5c8d3483c45cf"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.4.md",
       "size": 12393,
       "sha256": "475a15200a394354c6c71737e7991ce1ceab3c9818db1b119d1b7e74e6690bea"
@@ -1333,8 +1338,8 @@
     },
     {
       "path": "docs/resource-directory.md",
-      "size": 32509,
-      "sha256": "ed498878fe05ff8b928981db16581c223fcca55834aba3563bd7d110b8f5ce00"
+      "size": 35536,
+      "sha256": "667d52337a33fbd3b30b195d9bb77a1914c0da8b0aa6e3b4af15174d2686069a"
     },
     {
       "path": "docs/runtime-settings.md",
@@ -1653,8 +1658,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 258885,
-      "sha256": "8599182649108dc689632e4a56e9ff032e269a007a942772a49f094fb11f0fe5"
+      "size": 262067,
+      "sha256": "aabdf9f0dc7171e3c9bceef25da1d104b43443d8924695023390f2c7476aa336"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -2008,13 +2013,13 @@
     },
     {
       "path": "framwork/tec_tac/resources.py",
-      "size": 67100,
-      "sha256": "23574fe58568241e3942370ad6f18ca96f100eb3b5f13bcdc28dc7d6cfc25ed6"
+      "size": 69444,
+      "sha256": "4b04dcaa6db1d43055c1aa795444672a439c9cae92eeed3a8136454e899e3717"
     },
     {
       "path": "framwork/tec_tac/resources_adapter.py",
-      "size": 54298,
-      "sha256": "8fed9ff38015f21f2d9469c59b4a9d863e0a87ac27ab9ccc4cb670f445e352a7"
+      "size": 60447,
+      "sha256": "1a2c9f4268f77e7cccb003c7e05133dc2d1305c7838e52674ee20960fe0a6ccb"
     },
     {
       "path": "framwork/tec_tac/route_mounting.py",
@@ -2359,7 +2364,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "2f925ba90d45fb5d496e3f842509a52201d873593f145bf3faf89c28228c2d80"
+      "sha256": "12ce527c7c253bea7174ceff38c0b2e3a8eba7e0cf326b4a8cd14ce06bbb9b4f"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2423,8 +2428,8 @@
     },
     {
       "path": "tests/accounts-runtime-1.17.30.py",
-      "size": 12143,
-      "sha256": "4e76a8e614f6e9a7eb4fee1c9d89042b878b89a66b2e4ca011108617f14b8e5f"
+      "size": 12372,
+      "sha256": "d4fb26177b8321ffd8ac3b4aac983f64be6e56fa265bf4becee7bfc10df9ac8d"
     },
     {
       "path": "tests/api-key-audit-1.17.26.py",
@@ -2560,6 +2565,11 @@
       "path": "tests/browser-contract-rows-1.17.39.py",
       "size": 9119,
       "sha256": "d214d5b068a71d056bbdceb0b7767f89d77931a9d0a4ff056d44d1be3763ffe1"
+    },
+    {
+      "path": "tests/browser-contract-rows-1.17.40.py",
+      "size": 4776,
+      "sha256": "91501913a5f4f2bf32aaa831c286e767c21cdf2c1e0ca2b0798bea3cf1aaf4e6"
     },
     {
       "path": "tests/browser-contract-runtime-surface-1.17.2.py",
@@ -3383,8 +3393,8 @@
     },
     {
       "path": "tests/resource-alert-template-1.17.17.py",
-      "size": 34766,
-      "sha256": "39ffba9d991ff7d076580cd0de917952fb579851bc2c394d98e02814ef987461"
+      "size": 37472,
+      "sha256": "a5dddc6d689e6a9b2b9b4fe5ef3a875c487166ca22cb2bb50341602b39906b54"
     },
     {
       "path": "tests/resource-alert-template-runtime-1.17.17.py",
@@ -3393,8 +3403,8 @@
     },
     {
       "path": "tests/resource-client-sites-1.17.22.py",
-      "size": 7488,
-      "sha256": "12a0a122d27097fae7d49a50f3ef3c364b449373d3607e02f1b7a51b099d6119"
+      "size": 7629,
+      "sha256": "3367004e96d4e0cc7c493154defec4fdbe992d44924cae0241b07febdd039698"
     },
     {
       "path": "tests/resource-client-sites-runtime-1.17.22.py",
@@ -3413,8 +3423,8 @@
     },
     {
       "path": "tests/resource-custom-field-definitions-1.17.23.py",
-      "size": 11060,
-      "sha256": "655cac6b26a8f9ba93d86959fc46be9a5534b5590176f85d3eaa3e80b434a9e6"
+      "size": 11233,
+      "sha256": "45f3131b6d93965ef70da3bb6e7ede968bed2397d76e9f48684720cde906e3f0"
     },
     {
       "path": "tests/resource-directory-custom-fields-postgres.py",
@@ -3428,8 +3438,8 @@
     },
     {
       "path": "tests/resource-directory-foundation.py",
-      "size": 28652,
-      "sha256": "9398c7bf5c4b8da10371ef0f861166cf06fa1e89dc3157d8c55d680e7b117cba"
+      "size": 29739,
+      "sha256": "c0b31464ac13ae2f58e4dbfab615f24506d8513b0b9f7d04bf1128d15e66ab2a"
     },
     {
       "path": "tests/resource-directory-foundation.sh",
@@ -3447,19 +3457,29 @@
       "sha256": "006aec8615ed017de3c036fc675838e08004e73f0467696a2bae2ec65d3dc6e8"
     },
     {
+      "path": "tests/resource-live-state-1.17.40.py",
+      "size": 14477,
+      "sha256": "26a2a497abac068365cf080005452f71dfb26a6f1df8b90bdfa5a5dc6e7a125f"
+    },
+    {
+      "path": "tests/resource-live-state-runtime-1.17.40.py",
+      "size": 8489,
+      "sha256": "370237d7d5226c06280f48535ac499b7d441a15f4c722b71b043108522dd4ddd"
+    },
+    {
       "path": "tests/resource-move-site-1.17.24.py",
       "size": 13522,
       "sha256": "b54baa817944fb871537e64cbdf3a5573b713cad9dac04b6dd0955525b1326e0"
     },
     {
       "path": "tests/resource-move-site-1.17.25.py",
-      "size": 10734,
-      "sha256": "45dc1039f89ee5ea30608bfc16c8a04ffd17d21a0e84651f49fc4fdb0c98111b"
+      "size": 10904,
+      "sha256": "d34f64ed84e6475476c32c2a50248f5542ab7c5279b21e6f69d0a94ccb0c8035"
     },
     {
       "path": "tests/resource-policy-fields-1.17.24.py",
-      "size": 22136,
-      "sha256": "af8cbb905a9e1b45aa29fd7b21a5b5b9a2274b43d32b81f297a5f6e5ef7ac8d2"
+      "size": 22435,
+      "sha256": "222c8499858c0e089848b6bc838dad3b5e31b87dd645e858f5c109dbeb20a593"
     },
     {
       "path": "tests/resource-policy-runtime-1.17.24.py",
@@ -3468,8 +3488,8 @@
     },
     {
       "path": "tests/resource-scheduler-audit-scope.py",
-      "size": 7650,
-      "sha256": "68b9b00fcd8e698737da66caac9a78bac86b5e5bcebe0f70ba0d48053586d64d"
+      "size": 8075,
+      "sha256": "9bdd362dd17fbd4e31d40afa64c2ffa4545ba3ad0456e6a6ba15bcafa47ee1a1"
     },
     {
       "path": "tests/resource-scope-descriptor-1.17.17.py",
@@ -3478,8 +3498,8 @@
     },
     {
       "path": "tests/resource-service-context-1.17.30.py",
-      "size": 11332,
-      "sha256": "9be21e13670a8c121d7d6dd7eb1ae92cc9a7f34ffd1fc9cbc0c3ea7691a973bf"
+      "size": 11357,
+      "sha256": "1250a725a434f32e4650cca664d6e4e328f2a6981389646ef1fd2fc64f0a5d57"
     },
     {
       "path": "tests/review-1.15.52-rebuild.sh",

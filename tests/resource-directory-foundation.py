@@ -96,6 +96,7 @@ def agents_queryset(*, user=None, trusted=False, client_id=None, site_id=None, s
     return FakeQS(rows)
 
 NEST_QUERIES = []
+LIVE = {"failing_checks": {"error": False, "warning": False}, "agent_count": 0, "maintenance_mode": False}  # 1.10.0
 
 def nest_sites(rows, *, user=None, trusted=False):
     # one site query for the whole page, scoped like Site.filter_by_role (granted sites plus the sites of granted clients)
@@ -104,7 +105,14 @@ def nest_sites(rows, *, user=None, trusted=False):
     visible = [s for s in DATA["sites"] if s["client_id"] in ids and (trusted or s["id"] in getattr(user, "allowed_sites", set()) or s["client_id"] in getattr(user, "allowed_clients", set()))]
     visible.sort(key=lambda s: (s["name"], s["id"]))
     # 1.7.0: sites keeps its place before the policy keys
-    return [{**{k: v for k, v in r.items() if k not in POL}, "sites": [dict(s) for s in visible if s["client_id"] == r["id"]], **{k: r[k] for k in POL}} for r in rows]
+    # 1.10.0: the live keys come last (the harness has no agents in maintenance and nothing failing)
+    return [{**{k: v for k, v in r.items() if k not in POL}, "sites": [{**s, **LIVE} for s in visible if s["client_id"] == r["id"]], **{k: r[k] for k in POL}, **LIVE} for r in rows]
+
+def attach_sites(rows, grouped):
+    return [{**{k: v for k, v in r.items() if k not in POL}, "sites": list(grouped.get(r["id"], [])), **{k: r[k] for k in POL}, **LIVE} for r in rows]
+
+def live_sites(rows):
+    return [{**r, **LIVE} for r in rows]
 
 def page(qs, offset, limit): return list(qs.rows[offset:offset+limit]), len(qs.rows)
 def get(qs, rid): return next((dict(r) for r in qs.rows if r["id"] == rid), None)
@@ -112,6 +120,8 @@ adapter.clients_queryset = clients_queryset
 adapter.sites_queryset = sites_queryset
 adapter.agents_queryset = agents_queryset
 adapter.nest_sites = nest_sites
+adapter.attach_sites = attach_sites
+adapter.live_sites = live_sites
 adapter.page_clients = lambda qs, *, offset, limit: page(qs, offset, limit)
 adapter.page_sites = lambda qs, *, offset, limit: page(qs, offset, limit)
 adapter.page_agents = lambda qs, *, offset, limit: page(qs, offset, limit)
@@ -502,7 +512,7 @@ assert AUDITS[-1]["action"] == "delete" and AUDITS[-1]["metadata"]["destination_
 
 # Contract metadata is versioned and discoverable.
 meta = resources.resource_contract_metadata()
-assert meta["id"] == "core.resources" and meta["version"] == "1.9.0"
+assert meta["id"] == "core.resources" and meta["version"] == "1.10.0"
 assert meta["pagination"]["maximum_page_number"] == 10000
 assert meta["list_contracts"]["clients"]["http"] == "GET /api/tfd/resources/clients/"
 assert meta["list_contracts"]["sites"]["response"]["pages"] == "integer"

@@ -147,6 +147,12 @@ The UI row `ui.authenticated.modulePreferences` (UI 0.12.106) lists `get`, `getA
 the calling module, so a module cannot name another id through the helper. It needs Core 1.17.35 or later. Since Core 1.17.38 the helper
 can also get `module_not_allowed` (403) and `audit_failed` (503). The shell's helper is a separate contract from the Python functions above.
 
+Since UI 0.12.109 the helper gives each call in one 400 ms window the result of its own type. The last operation in the window decides it:
+- Last operation `set()`: every `set()` resolves the value Core stored, and every `remove()` resolves `false`.
+- Last operation `remove()`: every `remove()` resolves `true` or `false` as Core answered, and every `set()` resolves `undefined`.
+
+Every merged call gets the same rejection when the write fails. Nothing else about the row changed: the 400 ms window, the 2 seconds limit and `flush()` stay.
+
 ## HTTP (browser)
 
 | Method and path | Body | Answer |
