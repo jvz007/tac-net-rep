@@ -2,7 +2,7 @@
 
 **Status:** Public Core developer contract, added in Core 1.17.7
 **Python:** `tec_tac.tactical_operations`
-**Capability:** `core.tactical_operations` 1.12.0 (1.11.0 before Core 1.17.43, 1.10.0 before Core 1.17.41, 1.9.0 before Core 1.17.28, 1.8.0 before Core 1.17.26; major 1, additive since 1.0.0), owner `core`
+**Capability:** `core.tactical_operations` 1.13.0 (1.12.0 before Core 1.17.44, 1.11.0 before Core 1.17.43, 1.10.0 before Core 1.17.41, 1.9.0 before Core 1.17.28, 1.8.0 before Core 1.17.26; major 1, additive since 1.0.0), owner `core`
 **HTTP:** `POST /api/tfd/tactical-operations/<module_id>/<operation_id>/`
 
 ## Why this exists
@@ -776,3 +776,37 @@ outcome-unknown rows of that call carry `metadata.object_count`: the number of i
 A row written before the scope is read (a permission, module permission or body refusal) carries no count, as before.
 
 Tests: `tests/tactical-operation-secret-fields-1.17.43.py`, `tests/tactical-operation-object-count-1.17.43.py`.
+
+## Added in 1.17.44
+
+Capability `core.tactical_operations` is 1.13.0, still major 1. One optional declaration key and one wider description. A declaration that
+uses neither behaves exactly as before, with the same text and the same rows. A module needs framework 1.17.44 to rely on them and can
+feature-detect with `core.tactical_operations >= 1.13.0`.
+
+### A fixed object id: `audit.object_id`
+
+Some operations change one thing that has no id in the path: a settings save, a test email, a cache clear, the server script test. Their rows
+had no object id, so a person could not find them by object. `audit` may now carry `object_id`, a fixed text such as `tactical-settings` or
+`tactical-server`.
+
+- Rules: a string of 1 to 64 characters, letters, digits and `.` `_` `:` `-`, starting with a letter or digit, and not secret-looking (the same
+  check as a field name). It is refused on a GET operation, and together with `audit.object_param`, `audit.object_field` or
+  `audit.object_body_field`, so one operation has one source of the object id.
+- It is the last fallback. The id still comes from `audit.object_param` first, then the first scope object. Only when neither gives an id does
+  the row carry the literal.
+- It is declared text from the module's signed code, not caller or body input, so it names the object on **every** row of that operation:
+  success, `tactical_denied` and scope deny, `custom:operation-failed` (Tactical refused), `custom:outcome-unknown` and the `core_refused` row.
+  A refused or failed save is findable by its object. A `core_refused` row still never carries a body value.
+- `describe()`, `get_operation` and `list_operations` show it as `audit.object_id` (null when not declared).
+
+### What `describe()` shows: `audit.secret_fields`
+
+`audit.secret_fields` (1.17.43) is now part of the described audit block, as the capability metadata always said. It lists field names only
+(an empty list for a declaration that has none). The audit block gains keys only; nothing a module read before changes.
+
+### A secret field may not be the object id source
+
+`audit.secret_fields` already refused `audit.object_body_field`. It now also refuses `audit.object_field`, because Tactical's answer often
+echoes the field and the object id would carry its value. No module in `modules/` declares both.
+
+Tests: `tests/tactical-operation-object-id-1.17.44.py`.

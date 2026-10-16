@@ -45,6 +45,9 @@ expected = {
     'ui.authenticated.terminal',  # added 1.17.35 (UI 0.12.104)
     'ui.authenticated.modulePreferences',  # added 1.17.37 (UI 0.12.106)
     'ui.authenticated.components',  # added 1.17.42 (UI 0.12.111)
+    'ui.authenticated.dialogs',  # added 1.17.44 (UI 0.12.112)
+    'ui.authenticated.signInLanding',  # added 1.17.44 (UI 0.12.112)
+    'ui.authenticated.rowMenu',  # added 1.17.44 (UI 0.12.112)
     'ui.authenticated.permissions',
     'ui.public.sso-providers',
     'ui.public.module-runtime',

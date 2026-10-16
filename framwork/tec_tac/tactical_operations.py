@@ -122,7 +122,7 @@ from . import module_category as _module_category
 logger = logging.getLogger("tec_tac.tactical_operations")
 
 CAPABILITY_ID = "core.tactical_operations"
-CAPABILITY_VERSION = "1.12.0"  # 1.17.43: audit.secret_fields (a change marker for a secret body field) and metadata.object_count
+CAPABILITY_VERSION = "1.13.0"  # 1.17.44: audit.object_id (a declared literal object id); 1.17.43: audit.secret_fields and metadata.object_count
 AUDIT_HEADER = "X-Tec-Tac-Audit"
 AUDIT_RECORDED = "recorded"
 AUDIT_NOT_RECORDED = "not-recorded"
@@ -153,6 +153,7 @@ _ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 _LITERAL_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}$")
 _PARAM_RE = re.compile(r"^\{([a-z][a-z0-9_]{0,31})(?::(str|int|agent|service))?\}$")
 _FIELD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+_OBJECT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")  # 1.17.44: audit.object_id, a fixed text such as tactical-server
 _CORRELATION_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _SECRET_NAME_RE = re.compile(r"(pass|secret|token|key|credential|auth|cookie|signature)", re.IGNORECASE)
 _PARAM_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
@@ -303,6 +304,7 @@ class TacticalOperation:
     audit_lists: tuple = ()  # 1.17.28: body or before fields that hold a list of flat objects, recorded in clear (CQ85 a)
     file_response: bool = False  # 1.17.41: Tactical answers with a streamed file that Core relays (GET or POST only)
     secret_fields: tuple = ()  # 1.17.43: body fields whose value Core never records; the row carries only changed or unchanged
+    audit_object_id: str | None = None  # 1.17.44: a fixed text from the module's declaration; the last fallback for the row's object id
 
     @property
     def body_cap(self) -> int:
@@ -351,6 +353,8 @@ class TacticalOperation:
                 "object_field": self.audit_object_field,
                 "object_body_field": self.audit_object_body_field,
                 "lists": list(self.audit_lists),
+                "secret_fields": list(self.secret_fields),
+                "object_id": self.audit_object_id,
             },
             "caller_scope": self.caller_scope,
             "server_only": self.server_only,
@@ -709,6 +713,22 @@ def _parse_object_name(value: Any, label: str, verb: str) -> str | None:
     return value
 
 
+def _parse_object_id(value: Any, verb: str) -> str | None:
+    """Validate ``audit.object_id`` (1.17.44): a fixed, plain, non-secret text on a non-GET operation. The module's signed code
+    declares it, so it is not caller or body input."""
+    if value is None:
+        return None
+    if verb == "GET":
+        raise TacticalOperationRegistrationError("a GET operation changes nothing, so it has no audit.object_id.")
+    if not isinstance(value, str) or not _OBJECT_ID_RE.fullmatch(value):
+        raise TacticalOperationRegistrationError(
+            "audit.object_id must be a plain text of 1 to 64 characters: letters, digits and . _ : -, starting with a letter or digit."
+        )
+    if _SECRET_NAME_RE.search(value):
+        raise TacticalOperationRegistrationError(f"audit.object_id {value!r} looks like a secret. Never put secrets in the audit row.")
+    return value
+
+
 def _parse_type_map(value: Any) -> tuple:
     if not isinstance(value, dict) or not value or len(value) > _MAX_TYPE_MAP:
         raise TacticalOperationRegistrationError(f"a body-selected scope type needs a type_map of 1 to {_MAX_TYPE_MAP} entries.")
@@ -834,11 +854,12 @@ _MAX_SECRET_FIELDS = 8
 
 
 def _clean_secret_fields(value: Any, fields: tuple, audit_fields: tuple, lists: tuple, before: BeforeSpec | None,
-                         object_body_field: str | None, scope_specs: list) -> tuple:
+                         object_body_field: str | None, scope_specs: list, object_field: str | None = None) -> tuple:
     """audit.secret_fields (1.17.43): body fields whose value Core never records, only a change marker.
 
     Refused: a name that is not a body field, one the row already records (audit_fields, audit_lists, audit.before fields), the
-    audit.object_body_field (the object id would carry the value) and a body scope source (the ids would carry the value)."""
+    audit.object_body_field or audit.object_field (the object id would carry the value, 1.17.44 for object_field: Tactical's answer
+    often echoes the field) and a body scope source (the ids would carry the value)."""
     names = _clean_names(value, "audit secret_fields", maximum=_MAX_SECRET_FIELDS)
     body_sources = {spec.source.split(":", 1)[1] for spec in scope_specs if spec.source.startswith("body:")}
     for name in names:
@@ -850,7 +871,7 @@ def _clean_secret_fields(value: Any, fields: tuple, audit_fields: tuple, lists: 
             )
         if before is not None and name in before.fields:
             raise TacticalOperationRegistrationError(f"audit secret_fields {name!r} is also an audit.before field: the before read would record it.")
-        if name == object_body_field or name in body_sources:
+        if name == object_body_field or name == object_field or name in body_sources:
             raise TacticalOperationRegistrationError(f"audit secret_fields {name!r} is the object id or a body scope source, so the id would carry its value.")
     return names
 
@@ -882,6 +903,14 @@ def register_tactical_operation(
     answer (Tactical's FileResponse) up to ``MAX_RESPONSE_BYTES``; without it a streaming answer is refused as before. ``query_params``
     is allowed on any method (a DELETE reads ``request.query_params`` too). The route parameter kind ``service`` takes a Windows
     service name.
+
+    1.17.44 (optional, capability 1.13.0): ``audit.object_id`` is a fixed text (letters, digits and . _ : -, 1 to 64 characters, not
+    secret-looking) for an operation with no path parameter that names the object, such as a settings save. It is the last fallback:
+    ``audit.object_param`` and the first scope object come first, and it may not be declared with ``audit.object_param``,
+    ``audit.object_field`` or ``audit.object_body_field``. Because it is declared text, never caller or body input, it names the
+    object on every row of that operation: success, tactical_denied and scope deny, failed, outcome-unknown and core_refused. A GET
+    operation takes none. A body field named by ``audit.object_field`` may no longer be a secret field. ``describe()`` shows
+    ``audit.object_id`` and ``audit.secret_fields``.
 
     1.17.43 (optional, capability 1.12.0): ``audit.secret_fields`` names up to 8 body fields whose value Core never records, in the
     row, the metadata or a log. A success row carries ``<field>: changed`` when the body sends the field. When ``audit.before`` is also
@@ -962,9 +991,9 @@ def register_tactical_operation(
     if isinstance(scope, (str, bytes, dict)) or not hasattr(scope, "__iter__"):
         raise TacticalOperationRegistrationError("scope must be a list of {type, source}.")
     # The audit declaration comes first. A scope source is a path or body value only; Tactical decides the rest (1.17.14).
-    if not isinstance(audit, dict) or not {"action", "object_type"} <= set(audit) or set(audit) - {"action", "object_type", "audit_fields", "object_param", "before", "params", "object_field", "object_body_field", "secret_fields"}:
+    if not isinstance(audit, dict) or not {"action", "object_type"} <= set(audit) or set(audit) - {"action", "object_type", "audit_fields", "object_param", "before", "params", "object_field", "object_body_field", "secret_fields", "object_id"}:
         raise TacticalOperationRegistrationError(
-            "audit is {action, object_type, audit_fields, object_param, before, params, object_field, object_body_field, secret_fields}; all after object_type are optional."
+            "audit is {action, object_type, audit_fields, object_param, before, params, object_field, object_body_field, secret_fields, object_id}; all after object_type are optional."
         )
     if caller_scope is not None and caller_scope != "unrestricted":
         raise TacticalOperationRegistrationError('caller_scope must be "unrestricted" or left out.')
@@ -984,6 +1013,11 @@ def register_tactical_operation(
     object_body_field = _parse_object_name(audit.get("object_body_field"), "audit object_body_field", verb)
     if object_body_field is not None and object_body_field not in fields:
         raise TacticalOperationRegistrationError(f"audit object_body_field {object_body_field!r} is not one of body_fields.")
+    object_id_literal = _parse_object_id(audit.get("object_id"), verb)
+    if object_id_literal is not None and (object_param is not None or object_field is not None or object_body_field is not None):
+        raise TacticalOperationRegistrationError(
+            "audit.object_id is the only source of the object id: leave out audit.object_param, audit.object_field and audit.object_body_field."
+        )
 
     row_lookup_entries = 0
     for item in scope:
@@ -1071,7 +1105,7 @@ def register_tactical_operation(
         if name in audit_params:
             raise TacticalOperationRegistrationError(f"audit field {name!r} is also an audit param: the row would carry it twice.")
     lists = _clean_audit_lists(audit_lists, verb, fields, before, audit_fields)
-    secret_declared = _clean_secret_fields(audit.get("secret_fields"), fields, audit_fields, lists, before, object_body_field, scope_specs)
+    secret_declared = _clean_secret_fields(audit.get("secret_fields"), fields, audit_fields, lists, before, object_body_field, scope_specs, object_field)
     selector = _parse_body_selector(body_selector, fields)
 
     codename = None
@@ -1093,7 +1127,7 @@ def register_tactical_operation(
         caller_scope=caller_scope, body_selector=selector, audit_params=audit_params, server_only=server_only,
         audit_object_field=object_field, audit_object_body_field=object_body_field,
         permissions_any=any_flags, body_max_bytes=body_cap, audit_lists=lists, file_response=file_response,
-        secret_fields=secret_declared,
+        secret_fields=secret_declared, audit_object_id=object_id_literal,
     )
     key = (owner, op_id)
     route_key = (verb, _route_key(segments, trailing))
@@ -1234,18 +1268,19 @@ def _scope_values(operation: TacticalOperation, params: Any, body: Any) -> list[
     return [(kind, ids) for _, kind, ids in _scope_entries(operation, params, body)]
 
 
-def _object_id(scope: list[tuple[str, list[str]]], operation: TacticalOperation | None = None, params: Any = None) -> str | None:
-    """The audit row's object id. A declared ``audit.object_param`` wins (1.17.13); otherwise the first scope object."""
+def _object_id(scope: list[tuple[str, list[str]]], operation: TacticalOperation | None = None, params: Any = None, declared: bool = True) -> str | None:
+    """The audit row's object id. A declared ``audit.object_param`` wins (1.17.13); otherwise the first scope object; last, the
+    declared ``audit.object_id`` literal (1.17.44; ``declared=False`` leaves it to the caller, see ``_refusal_object_id``)."""
     if operation is not None and operation.audit_object_param and isinstance(params, dict):
         value = params.get(operation.audit_object_param)
         if value is not None and not isinstance(value, (bool, dict, list, float)):
             text = _printable(str(value).strip())
             if text:
                 return text
-    if not scope:
-        return None
-    ids = scope[0][1]
-    return _printable(",".join(ids)) or None
+    found = _printable(",".join(scope[0][1])) or None if scope else None
+    if found is None and declared and operation is not None:
+        return operation.audit_object_id
+    return found
 
 
 def _refusal_object_id(operation: TacticalOperation, params: Any) -> str | None:
@@ -1255,7 +1290,7 @@ def _refusal_object_id(operation: TacticalOperation, params: Any) -> str | None:
     first path-sourced scope entry. A body-sourced scope entry never names the row, and neither does a raw, uncleaned value."""
     if not isinstance(params, dict):
         return None
-    found = _object_id([], operation, params)
+    found = _object_id([], operation, params, declared=False)
     if found:
         return found
     for spec in operation.scope:
@@ -1268,7 +1303,7 @@ def _refusal_object_id(operation: TacticalOperation, params: Any) -> str | None:
         text = _printable(str(value).strip())
         if text:
             return text
-    return None
+    return operation.audit_object_id  # 1.17.44: declared text, not a body value, so it may name a core_refused row
 
 
 def _answer_object_id(operation: TacticalOperation, data: Any, body: dict) -> tuple[str | None, str | None]:
@@ -2449,6 +2484,20 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
             (
                 "metadata.object_count: when the first scope entry names more than one id, the success, tactical_denied deny, scope refusal, failed "
                 "and outcome-unknown rows of that call carry the number of ids. A number, never an id; the object id itself is unchanged"
+            ),
+        ],
+        # 1.17.44 (capability 1.13.0, still major 1): one optional declaration key. A declaration without it behaves exactly as before.
+        "declaration_keys_added_in_1_13_0": ["audit.object_id (register_tactical_operation audit={... 'object_id'}), shown as audit.object_id"],
+        "behaviour_added_in_1_13_0": [
+            (
+                "audit.object_id: a fixed text declared by the module (letters, digits and . _ : -, at most 64 characters, not secret-looking; refused on a GET "
+                "operation and together with audit.object_param, audit.object_field or audit.object_body_field). It is the last fallback: the path "
+                "parameter of audit.object_param and the first scope object come first. It names the object on every row of that operation: success, "
+                "tactical_denied and scope deny, failed, outcome-unknown and core_refused. It is declared text, never caller or body input"
+            ),
+            (
+                "list_operations and get_operation show audit.object_id and audit.secret_fields (an empty list for a declaration that has none). "
+                "audit.secret_fields may no longer name the same field as audit.object_field"
             ),
         ],
         "refusal_row_codes": list(CORE_REFUSAL_ROW_CODES),

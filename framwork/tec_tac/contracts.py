@@ -959,6 +959,7 @@ HTTP_CONTRACT_DETAILS = {
                 "Added in 1.17.23 (module-facing, additive, capability core.tactical_operations 1.8.0): the Python-only audit_before keyword also accepts a list of whole numbers or texts per field, recorded as <field> with <field>_count and, when cut at 1000 entries, <field>_truncated. Feature-detect with core.tactical_operations >= 1.8.0; needs framework >=1.17.23. Scalar-only callers are unchanged. See docs/tactical-operations.md.",
                 "Added in 1.17.26 (module-facing, additive and opt-in, capability core.tactical_operations 1.9.0; a declaration that passes neither key behaves exactly as before): register_tactical_operation takes two optional keywords at the end. permissions_any is a list of Tactical role flags of which the caller needs at least one, on top of every flag of permissions (Tactical's report generation is view OR manage); permissions may be empty only when permissions_any is given; a flag may not be in both lists; the 403 tactical_permission_denied names the flags ('It needs one of can_view_reports, can_manage_reports.'); the deny row carries needs_one_of; list_operations and get_operation show permissions_any (an empty list for an old declaration). body_max_bytes is a whole number of bytes from the 256 KiB default (limits.body_bytes) up to the Core ceiling of 8 MiB (limits.body_bytes_max, a Core constant); body_too_large (413) names the cap that applied; list_operations and get_operation show the effective cap as body_max_bytes; a value below the default, above the ceiling, a bool or a non-integer is refused at registration. A web-server body limit (nginx) or Tactical's own limit still applies and was not verified. Feature-detect with core.tactical_operations >= 1.9.0; needs framework >=1.17.26. See docs/tactical-operations.md.",
                 "Added in 1.17.41 (module-facing, additive and opt-in, capability core.tactical_operations 1.11.0; a declaration that uses none of the three behaves exactly as before; needs framework >=1.17.41, feature-detect with core.tactical_operations >= 1.11.0): (1) register_tactical_operation(file_response=True), a strict bool for a GET or POST operation, lets Core relay a streamed Tactical file answer (FileResponse): Core reads it chunk by chunk up to limits.response_bytes (25 MiB), closes it and carries on as for a normal answer, with the same status handling and audit rows (success, deny for 401 and 403, failed for another 4xx on a change, outcome-unknown for 5xx); Content-Type and Content-Disposition are relayed with the bytes; a stream over the cap is cut, closed and refused as tactical_response_refused; the row never carries the file name or bytes; without file_response a stream is refused as before; list_operations shows file_response. (2) query_params may be declared on any method (a DELETE reads request.query_params): the name whitelist, the flat 512-character values, the control-character and '..' rules and the secret-name refusal are unchanged. (3) The route parameter kind {name:service} takes a Windows service name (first character a letter, digit or underscore, then letters, digits, space and $ # ( ) . , _ -, at most 256 characters, no slash, no '..'), built into the path unquoted so Tactical's own <str:svcname> pattern resolves it; the owner table is unchanged (services/ is Remote Background's). See docs/tactical-operations.md.",
+                "Added in 1.17.44 (module-facing, additive and opt-in, capability core.tactical_operations 1.13.0; a declaration that does not use the key behaves exactly as before; needs framework >=1.17.44, feature-detect with core.tactical_operations >= 1.13.0): audit.object_id is a fixed text (letters, digits and . _ : -, 1 to 64 characters, not secret-looking) for an operation with no path parameter that names the object, such as a settings save. It is the last fallback after audit.object_param and the first scope object, and it is refused on a GET operation and together with audit.object_param, audit.object_field or audit.object_body_field. Because it is declared text and never caller or body input, it names the object on every row of that operation: success, deny, failed, outcome-unknown and core_refused. list_operations and get_operation now show audit.object_id and audit.secret_fields. audit.secret_fields may no longer name the same field as audit.object_field. See docs/tactical-operations.md.",
                 "Added in 1.17.43 (module-facing, additive and opt-in, capability core.tactical_operations 1.12.0; a declaration that uses neither key behaves exactly as before; needs framework >=1.17.43, feature-detect with core.tactical_operations >= 1.12.0): audit.secret_fields names up to eight body fields whose value Core never records. The success row writes changed, or present before and changed or unchanged after when audit.before holds the field (an in-memory comparison). metadata.object_count gives the number of ids the first scope entry names, when it names more than one. See docs/tactical-operations.md.",
                 "Added in 1.17.28 (module-facing, additive and opt-in, capability core.tactical_operations 1.10.0; a declaration without it behaves exactly as before): register_tactical_operation takes one optional keyword, audit_lists, a list of up to two body or before field names that hold a list of flat objects (such as a task's actions). Each is recorded IN CLEAR, with no masking (script arguments and environment values appear as Tactical stores them; this is the signed exception AD-32 to module standard section 3, for audit_lists only, and audit-view holders can read these values), in the success row: the after value from the cleaned body and, when the operation has a before read, the before value from Tactical's GET answer. Bounds (limits_added_in_1_10_0): 50 entries per list, 24 keys per entry, a text value cut at 4096 characters with control characters other than tab and newline removed, one level of up to 100 scalars, 64 KiB of text per list field, two list fields per operation. The row carries <field>_count (the full length) and <field>_truncated when anything was cut or dropped. A malformed list is recorded as its count only. Failed, denied and outcome-unknown rows carry no list. describe() shows audit.lists. Feature-detect with core.tactical_operations >= 1.10.0; needs framework >=1.17.28. See docs/tactical-operations.md.",
                 "Added in 1.17.20 (module-facing, additive, capability core.tactical_operations 1.6.0): the Core-only audit action custom:operation-failed for a non-GET call that Tactical refuses with a 4xx other than 401 and 403 (metadata declared_action, result failed, no before or after value; result.audit and X-Tec-Tac-Audit are now a verdict, not {} and absent). tec_tac.audit.record also refuses that action with AuditContractError. Needs framework >=1.17.20.",
@@ -1207,11 +1208,13 @@ HTTP_CONTRACT_DETAILS = {
     "/api/tfd/modules/repositories/": {
         "GET": {
             "authorization": "authenticated Tec-Tac session; a caller who cannot manage modules gets the redacted form (no address, generic skipped reasons)",
+            "export_details": True,
             "response": {
-                "repositories": "the repository status rows",
+                "schema": "whole number 1",
+                "repositories": "the repository status rows. Each row is the public repository record (every stored field except auth_token) plus sync {status, synced_at, last_attempt_at, error, module_count, skipped_count, skipped}. sync.status is 'never' before a first sync. skipped holds at most 100 records {index, id, version, reason}. For a caller who cannot manage modules the address fields (url and every key ending in _url) are left out, sync.error is a generic sentence and each skipped reason is generic",
                 "count": "whole number, len(repositories)",
                 "manage": "true when the caller may manage modules",
-                "sync_schedule": "object or null (added 1.17.42): enabled, time ('03:00'), timezone, next_run_at, last_run_at and last_run_status of the daily sync (action tec-tac.module-repository-sync). Null when the schedule does not exist. It holds no address.",
+                "sync_schedule": "object or null (added 1.17.42): the daily sync (action tec-tac.module-repository-sync). Null for the whole object when the schedule does not exist. Keys: enabled (true or false), time ('03:00', or null), timezone (the server's Django TIME_ZONE, or null), next_run_at (null when none is due), last_run_at and last_run_status (both null when it has never run). It holds no address.",
             },
             "notes": [
                 "Added 1.17.42, additive: sync_schedule. The daily sync syncs the enabled repositories at 03:00 in the server's own time zone (Django TIME_ZONE, shown in sync_schedule.timezone; UTC on stock Tactical, so 05:00 in South Africa) through the Scheduler. The Sync actions and the catalog GET are unchanged: the catalog GET never calls a repository.",
@@ -1895,11 +1898,70 @@ BROWSER_CONTRACTS = (
         "docs": "tec-tac-ui/docs/module-components.md",
         "purpose": "Two shared components for a module's own screens, from context.components in register(context): SearchSelect picks one item from a searchable list, and TagEditor edits a list of text values. Draw them with context.Vue.h(SearchSelect, props) and context.Vue.h(TagEditor, props). The value stays with the module: each component emits update:modelValue and keeps no value of its own. Needs UI 0.12.111 and Core 1.17.41 or later.",
         "details": [
-            "SearchSelect props: modelValue (the chosen option's value, null for none), options (each { value, label, description, favourite, chip, chipTone, disabled, searchText }), placeholder, inputId, ariaLabel, disabled (default false), clearable (default false), emptyText (default 'No matches. Check the spelling.'), favouriteLabel (default 'Favourites') and allLabel (default 'All'). Events: update:modelValue (the chosen value, or null after clear) and select (the chosen option object, or null after clear), both at the same moment.",
+            "SearchSelect props: modelValue (the chosen option's value, null for none), options (each { value, label, description, favourite, chip, chipTone, disabled, searchText }), placeholder, inputId, ariaLabel, disabled (default false), clearable (default false), emptyText (default 'No matches. Check the spelling.'), favouriteLabel (default 'Favourites') and allLabel (default 'All'). Events: update:modelValue (the chosen value, or null after clear) and select (the chosen option object, or null after clear), both at the same moment. Server mode props (UI 0.12.112, all off by default): serverSearch, loading, hasMore and selectedLabel (text shown for a chosen value that is not in the loaded rows). Server mode events (UI 0.12.112): search (the typed text, empty when the list opens; server mode only; the module debounces) and more (no payload; server mode only; fires once when the highlight reaches the last row or the list is scrolled to its end while hasMore is true, and not again until options changes or loading returns to false).",
+            "SearchSelect server mode (UI 0.12.112): the component skips its own filter and the 300 row cap, shows at most 1000 loaded rows and then the line 'Showing the first 1000 loaded. Keep typing to narrow it.' loading shows one 'Loading...' line, sets aria-busy and hides 'No matches'. Typing never changes modelValue. A static list keeps the local filter and the 300 cap. The new props and events need UI 0.12.112; a picker that does not use them behaves as before.",
             "SearchSelect shows at most 300 rows and then the line 'Showing the first 300. Keep typing to narrow it.' The search matches label, description and searchText, ignoring case. Favourites are grouped first. It has the combobox and listbox roles, with aria-expanded, aria-controls, aria-activedescendant and role option on each row. Keys: ArrowDown and ArrowUp move, Enter chooses, Escape closes the list only, Tab closes and moves on. Disabled rows are skipped and cannot be chosen.",
             "TagEditor props: modelValue (an array of strings, default []), placeholder, ariaLabel, disabled (default false), readonly (default false), maxItems (default 200), maxLength (default 500 characters), commaAdds (default true; a comma adds the typed value), validate(value) (returns '' for a good value or a plain sentence for a bad one). Events: update:modelValue (the new array) and reject ({value, reason}, the plain sentence shown to the person).",
             "TagEditor trims values, ignores empties and duplicates without a message, and strips control characters. A value over maxLength, past maxItems or refused by validate is rejected: the sentence shows under the box, reject fires and the typed text stays in the box. Every label, description and value is shown as text, never as HTML.",
             "Registered by register(context) only: registerPublic gets no components, because a public page has no signed-in person. The components object is frozen. Needs UI 0.12.111 and Core 1.17.41 or later. Documentation only: no endpoint, capability or version moves.",
+        ],
+    },
+    {
+        "id": "ui.authenticated.dialogs",
+        "phase": "authenticated",
+        "service": "dialogs",
+        "operations": ["register", "open"],
+        "audience": "module/browser",
+        "docs": "tec-tac-ui/docs/module-dialogs.md",
+        "purpose": "Open a short task above the page, such as a wizard, an input form or a result, with context.dialogs. register(descriptor) names a dialog and open(id or descriptor) shows it. The shell draws the box and the rules around it; the module draws what goes inside. Needs UI 0.12.112. Documentation only: no endpoint, capability or version moves.",
+        "details": [
+            "register(descriptor) names a dialog and open(id or descriptor) opens a registered one, or one given in the call. open returns a Promise that resolves when the dialog closes.",
+            "Descriptor fields: id (required, module-local: letters, digits, _ and -, at most 64 characters, no dot; the full id is <module id>.<id>), title (plain text, at most 200 characters), size ('default' is 520px, 'wide' is 760px), mount(element, {close}) (required; may be async; may return a cleanup function or {unmount}; close() closes at once and does not ask beforeClose) and beforeClose() (optional; false or a rejected Promise keeps the dialog open).",
+            "One dialog at a time: a second open is refused with a rejected Error that has status 0 and no code.",
+            "Layers: the dialog is at 1100, toasts at 1200, the unsaved-changes prompt at 1300 and the Yes or No confirm at 1400.",
+            "Refused in a popup window, while signed out, outside a backend-supplied context, after register() failed or timed out, after the module was unloaded, and for an id the module did not register or that names another module. The shell binds every call to the module's own id.",
+            "Mount limit: mount must finish within context.module_register_timeout_seconds, or the dialog shows a plain line with a Close button.",
+            "registerPublic gets no dialogs, because a public page has no signed-in person. The shell never runs HTML from a title; the backend still decides every action (AD-12).",
+            "Needs UI 0.12.112. Documentation only: no endpoint, capability or version moves.",
+        ],
+    },
+    {
+        "id": "ui.authenticated.signInLanding",
+        "phase": "authenticated",
+        "service": "signInLanding",
+        "operations": ["register"],
+        "audience": "module/browser",
+        "docs": "tec-tac-ui/docs/module-sign-in-landing.md",
+        "purpose": "Ask the shell to send a person somewhere after sign-in, such as a first-run setup page, with context.signInLanding.register({id, permission, check}). The module decides whether its page is still needed; the shell only asks, and only at the one moment it is allowed to. Needs UI 0.12.112. Documentation only: no endpoint, capability or version moves.",
+        "details": [
+            "register({id, permission, check}): id is a module-local name (letters, digits, _ and -, at most 64 characters), permission is an optional permission code (the check is called only for a person who has it) and check is required. One registration per module: a second register replaces the first.",
+            "check({reason: 'landing', signal, context}) returns nothing, a route path, or {dialog: '<module id>.<dialog id>'}. signal aborts when the person signs out or the session ends. context is the person's shell context.",
+            "Shell rules: the check runs on the default landing only (the page opened on / or /dashboards, or with no address). It never runs in a popup window, on a public page, on /sso/callback, or while signed out. Unsaved changes win: the landing is dropped and not retried.",
+            "A failure is ignored with one warning: a check that throws, rejects, returns a value the shell cannot use, or does not answer within context.module_register_timeout_seconds is ignored, and the next check still runs.",
+            "A route result must be one plain path of the module's own page or one of Core's named pages, and never under /popup/, /public/ or /sso/. A dialog result must start with the module's id and be a dialog the module registered.",
+            "One landing per page load: the checks run once, in module load order, and the first check that returns something acts. Disabled, failed or unloaded modules are never called.",
+            "registerPublic gets no signInLanding.",
+            "Two points are open questions for Johan and are stated here only as built in UI 0.12.112, not as a Core promise: a reload on /dashboards runs the checks again (Q66), and a route may point only at the module's own pages and Core's named pages (Q67).",
+            "Needs UI 0.12.112. Documentation only: no endpoint, capability or version moves.",
+        ],
+    },
+    {
+        "id": "ui.authenticated.rowMenu",
+        "phase": "authenticated",
+        "service": "rowMenu",
+        "operations": ["open", "shouldHandle"],
+        "audience": "module/browser",
+        "docs": "tec-tac-ui/docs/module-row-menu.md",
+        "purpose": "Show a right-click menu on a module table row without drawing one, with context.rowMenu. The shell places the menu, handles the keys and closes it; the module says what is in it and what each item does. Needs UI 0.12.112. Documentation only: no endpoint, capability or version moves.",
+        "details": [
+            "open({event, element, label, items}) returns true when the menu is shown. event is the contextmenu or keydown event (a key gives no pointer position, so the menu opens under element). element is the row that gets focus back on close. label is the optional accessible name (plain text, at most 80 characters, default 'Actions').",
+            "shouldHandle(event) returns false for a right-click on a text field (an input, a textarea, a select or an editable element), which the browser keeps, and true otherwise.",
+            "Item fields: id (required; letters, digits and _ - . :, at most 64 characters, unique in the menu), label (required, 80 characters), hint (120), danger, disabled, reason (120, default 'Unavailable for this selection.') and run (required unless disabled).",
+            "1 to 40 items; more is a TypeError. A menu with no items, an item without an id or a label, a repeated id, and an enabled item without run are also a TypeError. Labels, hints, reasons and the menu label are plain text only.",
+            "Layer 1150: above module dialogs (1100), below toasts (1200), the unsaved-changes prompt (1300) and the Yes or No confirm (1400). One menu at a time: a second open replaces the first.",
+            "An error in run() is caught and logged as one warning that names the module. The menu is refused in a popup window, while signed out and outside a signed-in session. After the module is unloaded or fails, open is refused and no item runs.",
+            "An action the person may not do is left out of items (AD-12); an action that is allowed but not possible now is disabled with its reason. registerPublic gets no rowMenu.",
+            "Needs UI 0.12.112. Documentation only: no endpoint, capability or version moves.",
         ],
     },
     {
@@ -2216,6 +2278,17 @@ def render_markdown(catalog: dict | None = None) -> str:
     out.extend(["## HTTP boundary", "", "Use these endpoints from the browser or an external process. Backend Tec-Tac modules should prefer the Python contracts above.", "", "| Methods | Endpoint | Route name |", "| --- | --- | --- |"])
     for row in data["http"]:
         out.append(f"| `{'/'.join(row['methods'])}` | `{row['route']}` | `{row.get('name') or ''}` |")
+    # Routes that opt in with export_details (1.17.44) get their authorization, response keys and notes. A row with no contract adds nothing.
+    for row in data["http"]:
+        for method, block in (row.get("contract") or {}).items():
+            if not isinstance(block, dict) or not block.get("export_details"):
+                continue
+            if "### HTTP response details" not in out:
+                out.extend(["", "### HTTP response details", "", "Only the routes below are described in full here.", ""])
+            out.extend([f"#### `{method} {row['route']}`", "", f"- Authorization: {block.get('authorization') or ''}"])
+            out.extend(f"- Response `{key}`: {text}" for key, text in (block.get("response") or {}).items())
+            out.extend(f"- Note: {note}" for note in (block.get("notes") or []))
+            out.append("")
 
     out.extend([
         "",
@@ -2353,6 +2426,16 @@ def render_text(catalog: dict | None = None) -> str:
     out.extend(["", "HTTP BOUNDARY"])
     for row in data["http"]:
         out.append(f"- {'/'.join(row['methods'])} {row['route']} ({row.get('name') or 'unnamed'})")
+    for row in data["http"]:
+        for method, block in (row.get("contract") or {}).items():
+            if not isinstance(block, dict) or not block.get("export_details"):
+                continue
+            if "HTTP RESPONSE DETAILS" not in out:
+                out.extend(["", "HTTP RESPONSE DETAILS"])
+            out.append(f"- {method} {row['route']}")
+            out.append(f"    authorization: {block.get('authorization') or ''}")
+            out.extend(f"    response {key}: {text}" for key, text in (block.get("response") or {}).items())
+            out.extend(f"    note: {note}" for note in (block.get("notes") or []))
 
     out.extend([
         "",

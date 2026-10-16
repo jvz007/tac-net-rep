@@ -223,7 +223,7 @@ must(old.audit_object_field is None and old.audit_object_body_field is None, old
 must(declare(id="old", route_="agents/old/") == old, "the old declaration registers again unchanged")
 row = ops.get_operation("agents", "old")
 must(row["audit"] == {"action": "add", "object_type": "agent_thing", "audit_fields": ["kind"], "object_param": None, "before": None, "params": [],
-                      "object_field": None, "object_body_field": None, "lists": []}, row["audit"])  # 1.17.28: describe() shows audit.lists
+                      "object_field": None, "object_body_field": None, "lists": [], "secret_fields": [], "object_id": None}, row["audit"])  # 1.17.28: audit.lists; 1.17.44: audit.secret_fields and audit.object_id
 must(set(row) == {"id", "module_id", "method", "route", "params", "permissions", "scope", "body_fields", "audit", "caller_scope", "server_only",
                   "body_selector", "module_permission", "query_params", "upload", "permissions_any", "body_max_bytes", "file_response"}, set(row))  # 1.17.26 added permissions_any and body_max_bytes, 1.17.41 file_response
 route("/agents/old/", FakeResponse(200, b'{"id": 5}'))
@@ -238,7 +238,7 @@ json.dumps(ops.list_operations())
 
 # ---- capability, docs and contract text
 meta_cap = ops.tactical_operations_contract_metadata()
-must(meta_cap["version"] == "1.12.0" and meta_cap["declaration_keys_added_in_1_7_0"] == ["audit.object_field", "audit.object_body_field"], meta_cap)
+must(meta_cap["version"] == "1.13.0" and meta_cap["declaration_keys_added_in_1_7_0"] == ["audit.object_field", "audit.object_body_field"], meta_cap)
 docs = (ROOT / "docs/tactical-operations.md").read_text(encoding="utf-8")
 for needle in ("audit.object_field", "audit.object_body_field", "object_source", "CQ66 b", "`audit.object_param` and no scope object", "original request asked for one key"):
     must(needle in docs, needle)
