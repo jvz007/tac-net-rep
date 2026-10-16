@@ -135,21 +135,41 @@ def _plugins() -> tuple:
     return tuple(registry.discover_plugins())
 
 
+class ModuleStateUnreadable(RuntimeError):
+    """The module state file could not be read (it is corrupt or unreadable). Not the same as 'disabled'."""
+
+
 def _enabled_now(module_id: str) -> bool:
     from . import module_state
 
-    return bool(module_state.is_enabled(module_id))
+    state = module_state.load_state()
+    if isinstance(state, dict) and state.get("_corrupt"):
+        raise ModuleStateUnreadable("The module state could not be read.")
+    return bool(module_state.is_enabled(module_id, state))
+
+
+RUNNABLE, UNAVAILABLE, UNKNOWN = "runnable", "unavailable", "unknown"
+UNREAD_RETRY_SECONDS = 60  # a worker that cannot read the module state keeps the row and looks again after this long
+
+
+def _module_status_now(module_id: str) -> str:
+    """Uncached. ``runnable``: an installed, non-legacy extension, enabled. ``unavailable``: a read that succeeded shows it is missing,
+    legacy, not an extension or disabled. ``unknown``: a read failed, so Core cannot tell."""
+    try:
+        for plugin in _plugins():
+            if plugin.plugin_id == module_id:
+                if plugin.plugin_type != "extension" or plugin.legacy:
+                    return UNAVAILABLE
+                return RUNNABLE if _enabled_now(module_id) else UNAVAILABLE
+        return UNAVAILABLE
+    except Exception:
+        logger.warning("Could not read the state of module %s; treating it as unknown.", module_id, exc_info=True)
+        return UNKNOWN
 
 
 def _module_runnable_now(module_id: str) -> bool:
     """Authoritative and uncached: the module is an installed, non-legacy extension and enabled right now. Fails closed."""
-    try:
-        for plugin in _plugins():
-            if plugin.plugin_id == module_id:
-                return plugin.plugin_type == "extension" and not plugin.legacy and _enabled_now(module_id)
-    except Exception:
-        logger.warning("Could not read the state of module %s; treating it as unavailable.", module_id, exc_info=True)
-    return False
+    return _module_status_now(module_id) == RUNNABLE
 
 
 def _module_enabled_cached(module_id: str) -> bool:
@@ -668,6 +688,7 @@ def run_event_job(row_id, *, celery_task_id: str = "", now=None) -> str:
 
     now = now or timezone.now()
     verdict = None
+    deferred = False
     with transaction.atomic():
         try:
             row = TecTacEventJob.objects.select_for_update().get(pk=row_id)
@@ -679,13 +700,21 @@ def run_event_job(row_id, *, celery_task_id: str = "", now=None) -> str:
             return "job not due"
         with _LOCK:
             definition = _JOBS.get(row.job_id)
+        module_status = _module_status_now(row.module_id)
         if policy.is_expired(now, row.expires_at):
             verdict = (policy.STATUS_EXPIRED, "Expired", "The job was not started in time.", ACTION_EXPIRED, "expired")
-        elif not _module_runnable_now(row.module_id):
+        elif module_status == UNKNOWN:
+            # Core cannot read the module state: keep the row. No handler call, no attempt used, no audit row. The tick tries it again.
+            row.next_attempt_at, row.last_enqueued_at = now + timedelta(seconds=UNREAD_RETRY_SECONDS), now
+            row.save()
+            deferred = True
+        elif module_status != RUNNABLE:
             verdict = (policy.STATUS_SKIPPED, "ModuleUnavailable", "The module is disabled or no longer installed.", ACTION_SKIPPED, "skipped")
         elif definition is None or definition.module_id != row.module_id:
             verdict = (policy.STATUS_SKIPPED, "HandlerNotRegistered", "The handler is not registered in this worker.", ACTION_SKIPPED, "skipped")
-        if verdict:
+        if deferred:
+            pass
+        elif verdict:
             status, error_type, text, _action, counter = verdict
             row.status, row.error_type, row.error, row.finished_at = status, error_type, text, now
             row.save()
@@ -698,6 +727,9 @@ def run_event_job(row_id, *, celery_task_id: str = "", now=None) -> str:
             row.celery_task_id = str(celery_task_id or "")[:80]
             row.error, row.error_type = "", ""
             row.save()
+    if deferred:
+        logger.warning("Event job %s was kept: the state of module %s could not be read.", row.job_id, row.module_id)
+        return "job deferred"
     if verdict:
         _audit_row(verdict[3], row, f"Event job {row.job_id} did not run: {verdict[2]}")
         return f"job {verdict[0]}"
@@ -784,12 +816,14 @@ def _finish_failure(row_id, exc: BaseException, *, now, spec_policy: dict | None
 def recover_event_jobs(now=None) -> dict:
     """The tick's work for event jobs. Each step is bounded (200 rows) and isolated: a fault in one is logged and the next still runs.
 
-    Expires pending rows past their expiry and those of a disabled or uninstalled module, recovers running rows older than the hard
+    Expires pending rows past their expiry and those of a module confirmed disabled or uninstalled (rows of a module whose state
+    cannot be read stay pending and are counted in ``module_state_unread``), recovers running rows older than the hard
     limit plus five minutes, enqueues pending rows that were never enqueued or are overdue, trims a backlog over its limit (oldest
     first, counted as dropped), refreshes the backlog gauges, flushes this process's counters, writes one audit row per job that
     dropped, and prunes finished rows."""
     now = now or timezone.now()
-    out = {"expired": 0, "module_unavailable": 0, "stale_recovered": 0, "enqueued": 0, "trimmed": 0, "dropped_reported": 0, "pruned": 0, "errors": 0}
+    out = {"expired": 0, "module_unavailable": 0, "stale_recovered": 0, "enqueued": 0, "trimmed": 0, "dropped_reported": 0, "pruned": 0, "errors": 0,
+           "module_state_unread": 0}
     for step in (_tick_expire, _tick_module_gate, _tick_recover_running, _tick_enqueue_overdue, _tick_trim, _tick_gauges,
                  _tick_report_drops, _tick_prune):
         try:
@@ -839,7 +873,14 @@ def _tick_module_gate(now, out) -> None:
     modules = sorted(set(TecTacEventJob.objects.filter(status=policy.STATUS_PENDING).values_list("module_id", flat=True)))
     budget = policy.TICK_ROW_LIMIT
     for module_id in modules:
-        if budget <= 0 or _module_runnable_now(module_id):
+        if budget <= 0:
+            continue
+        status = _module_status_now(module_id)
+        if status == RUNNABLE:
+            continue
+        if status == UNKNOWN:
+            out["module_state_unread"] += 1
+            logger.warning("Event jobs of module %s stay pending: its state could not be read this tick.", module_id)
             continue
         rows = list(TecTacEventJob.objects.filter(module_id=module_id, status=policy.STATUS_PENDING).order_by("created_at")[:budget])
         budget -= len(rows)

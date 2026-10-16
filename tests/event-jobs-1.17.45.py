@@ -305,7 +305,13 @@ def discover_plugins():
     return list(PLUGINS.values())
 
 
-def is_enabled(module_id):
+def load_state():
+    if STATE_FAIL[0]:
+        raise OSError("state unreadable")
+    return {"schema": 1, "modules": {}}
+
+
+def is_enabled(module_id, state=None):
     if STATE_FAIL[0]:
         raise OSError("state unreadable")
     return ENABLED.get(module_id, True)
@@ -317,7 +323,7 @@ pkg.__path__ = [str(APP)]
 mod("tec_tac.models", TecTacEventJob=Job, TecTacEventJobStat=Stat, TecTacSchedulerConfig=Config)
 mod("tec_tac.tasks", execute_event_job=FakeTask)
 mod("tec_tac.registry", discover_plugins=discover_plugins)
-mod("tec_tac.module_state", is_enabled=is_enabled)
+mod("tec_tac.module_state", load_state=load_state, is_enabled=is_enabled)
 audit_stub = mod("tec_tac.audit", record=audit_record, service_audit_actor=lambda **kw: {"service": kw})
 mod("tec_tac.capabilities", register_capability=lambda **kw: CAPS.append(kw) or SimpleNamespace(**kw))
 pkg.audit = audit_stub
@@ -873,7 +879,7 @@ reset()
 handle = register()
 handle.publish("gate3")
 STATE_FAIL[0] = True
-must(run() == "job skipped" and not CALLS, "an unreadable module state fails closed")
+must(run() == "job deferred" and not CALLS and one_row().status == "pending", "an unreadable module state runs no handler and keeps the row (1.17.46)")
 reset()
 handle = register()
 handle.publish("gate4")

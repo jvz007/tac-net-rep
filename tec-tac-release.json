@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.45",
+  "version": "1.17.46",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "66c389576a517f455059348a31b1788ed1ff07f441e7bbb7d20f47579c019812"
     },
     {
-      "path": "RELEASE_NOTES_1.17.45.md",
-      "size": 13133,
-      "sha256": "c9dfecaea9fd4aecdef8315e676406c9507f6a7c6e47aa259f0ebb1f963d316b"
+      "path": "RELEASE_NOTES_1.17.46.md",
+      "size": 3727,
+      "sha256": "489540598f9644c2c2d5fe972636ca63285178b10c8d77ac3962c0407ca1efea"
     },
     {
       "path": "VERSION",
       "size": 7,
-      "sha256": "46ca0708474ed6b809ec3825f2fe193ae5cb5b909a16c0aa136d9ef507fa5071"
+      "sha256": "7fd0d4c1ea18919d890faff5a3e2441c0736a7b184ff6a5181582b92f58a1846"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -93,8 +93,8 @@
     },
     {
       "path": "docs/event-jobs.md",
-      "size": 14631,
-      "sha256": "b8ef11ae8fa7b478fdbddea704841190eea1adcb835897edf400a4afe2065e5c"
+      "size": 15095,
+      "sha256": "ee00812297e9e82244013b92d1961ca7d4a40d7a43948ab4b710093bed7a8b67"
     },
     {
       "path": "docs/extension-reportset-tutorial.html",
@@ -1262,6 +1262,11 @@
       "sha256": "3dfc8695f82af7f9e357cf739000b962540b24623dc6fcf853e8b0c6dd24470c"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.45.md",
+      "size": 13133,
+      "sha256": "c9dfecaea9fd4aecdef8315e676406c9507f6a7c6e47aa259f0ebb1f963d316b"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.5.md",
       "size": 5798,
       "sha256": "76874154bf26d646b3427bcd6349958e5ecf4abbf1dbb56fe74ca006398bc1cd"
@@ -1713,8 +1718,8 @@
     },
     {
       "path": "framwork/tec_tac/event_jobs.py",
-      "size": 53044,
-      "sha256": "2bdf2ab5886ff9b2838583d3f28ef5db909c882c81529b9156b1af127901c3e6"
+      "size": 55039,
+      "sha256": "df871ce4a6fd4ded5d748a88c564f8a1ae373c288352bbb03868d58c5f4bbc76"
     },
     {
       "path": "framwork/tec_tac/event_jobs_policy.py",
@@ -2409,7 +2414,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "8ccea8c1460e893e7ed8124a72339efc67f5f6f46db820a72586f2095664da23"
+      "sha256": "1f0851215307ea881ed8f9a1861284d2b2e1eac21cd0f7fcdb0f69fafe5d230c"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2778,13 +2783,18 @@
     },
     {
       "path": "tests/event-jobs-1.17.45.py",
-      "size": 59302,
-      "sha256": "83339f1b5fb234e16823b536ddd97eb5be8030cb096eb8eb7ec2adea8cc0d029"
+      "size": 59533,
+      "sha256": "361afaff80d3685ea4dfcfb6599898c4e86cc6fc869c7d6d8390320524bf841a"
     },
     {
       "path": "tests/event-jobs-contract-1.17.45.py",
       "size": 12261,
       "sha256": "716b4b7a3b047ff9ccc7789dbbf33aac4cc6ee166e9c57b449c30c73237e457c"
+    },
+    {
+      "path": "tests/event-jobs-module-gate-1.17.46.py",
+      "size": 17750,
+      "sha256": "044341afa4ff6aff16196a0ec08ae7598fb0aded3c34d4be7240122f1dabe4ae"
     },
     {
       "path": "tests/event-jobs-policy-1.17.45.py",

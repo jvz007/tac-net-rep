@@ -146,7 +146,7 @@ and Core sends the message with that countdown. After the last attempt, or at on
 Every minute `dispatch_due_schedules` calls `recover_event_jobs(now)` after `recover_stale_runs`, in its own `try` block, so a fault there never
 stops a schedule. The work is bounded to 200 rows a step:
 
-- pending rows past their expiry, and those of a disabled or uninstalled module, end `expired` (one audit row per job, with the count);
+- pending rows past their expiry, and those of a module the tick has confirmed disabled or uninstalled, end `expired` (one audit row per job, with the count); if the module state or the module list cannot be read, the rows stay pending, `module_state_unread` counts the module, and the next tick tries again;
 - a running row older than its hard time limit plus 5 minutes is a failed attempt (retry or give up);
 - a pending row never sent, or whose `next_attempt_at` passed more than 60 seconds ago, is sent again;
 - a backlog over `max_backlog` is trimmed, oldest first, and counted as dropped;
@@ -196,7 +196,7 @@ still open. Nothing runs at a person's authority and no permission check passes 
 3. **At least once.** A handler can run twice (a redelivery after a worker loss, a retry after a timeout) and must be safe to repeat.
 4. **The payload is data.** Size-capped (2 KiB), JSON only, ids and not text bodies. It is never logged, audited, listed or returned by a status route.
 5. **Exception text may reach the audit row**, cut to one line of 200 characters. A handler keeps secrets out of its exception messages.
-6. **A disabled or uninstalled module's jobs never run.** The worker checks the module itself, with no cache, and the tick expires its pending rows.
+6. **A disabled or uninstalled module's jobs never run.** The worker checks the module itself, with no cache, and the tick expires its pending rows once it has confirmed the module is disabled or uninstalled (an unreadable state leaves them pending until they expire on their own, and a worker that cannot read the state keeps the row it holds: it answers `job deferred`, runs no handler, uses no attempt and looks again after 60 seconds).
 7. **Bounded cost.** Core caps the backlog, the rate, the expiry, the attempts, the time limits and the payload, so a signal storm cannot grow without limit.
 8. **Tactical always starts.** Registration and the capability registration are guarded. A refusal is an exception the module catches.
 9. **The worker trusts nothing from publish time.** It re-reads the module state, the registration and the expiry itself.
