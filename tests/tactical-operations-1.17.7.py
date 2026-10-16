@@ -840,7 +840,7 @@ refused(route="api/tfd/system/updates/")
 
 # ------------------------------------------------------------------------------------------------ capability, urls, throttles, apps, docs, install.sh
 cap = ops.register_core_tactical_operations_capability()
-must(CAPS and CAPS[-1]["id"] == "core.tactical_operations" and CAPS[-1]["module_id"] == "core" and CAPS[-1]["version"] == "1.11.0", CAPS)  # 1.17.26: 1.9.0 (1.8.0 in 1.17.23), still major 1
+must(CAPS and CAPS[-1]["id"] == "core.tactical_operations" and CAPS[-1]["module_id"] == "core" and CAPS[-1]["version"] == "1.12.0", CAPS)  # 1.17.26: 1.9.0 (1.8.0 in 1.17.23), still major 1
 must(CAPS[-1]["operations"] == ("run", "list_operations", "get_operation"), CAPS[-1]["operations"])
 provider = CAPS[-1]["provider"]
 must(provider.run is ops.run_tactical_operation and provider.list_operations is ops.list_operations and provider.get_operation is ops.get_operation, "provider")

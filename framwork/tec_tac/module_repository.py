@@ -6,6 +6,7 @@ and then passed into the existing Module Management v2 staging/install pipeline.
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import http.client
 import ipaddress
@@ -16,6 +17,7 @@ import re
 import socket
 import ssl
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -39,6 +41,10 @@ from .module_state import ModuleStateError, version_satisfies
 
 REPOSITORY_ROOT = Path("/var/lib/tec-tac/module-manager/repositories")
 CONFIG_FILE = REPOSITORY_ROOT / "repositories.json"
+# 1.17.43: a sibling lock file. The directory is root:tactical-group 2770, so the Tactical user can create it too.
+CONFIG_LOCK = REPOSITORY_ROOT / "repositories.lock"
+CONFIG_LOCK_WAIT_SECONDS = 5.0
+CONFIG_LOCK_POLL_SECONDS = 0.1
 CACHE_ROOT = REPOSITORY_ROOT / "cache"
 MAX_INDEX_BYTES = 2 * 1024 * 1024
 REPO_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,63}$")
@@ -52,18 +58,24 @@ _CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 logger = logging.getLogger("tec_tac.module_repository")
 
-# 1.17.42 (CQ121): the official repository is seeded once, disabled, and never rebuilt by code. The index path is an assumption until
-# Johan confirms it (CQ125). An administrator edits, enables, disables or removes the entry through the repository routes.
+# 1.17.42 (CQ121): the official repository is seeded once, disabled, and never rebuilt by code. An administrator edits, enables,
+# disables or removes the entry through the repository routes. 1.17.43 (CQ125, Johan): the index path is the development channel.
+# The channel for a production server is not decided yet (CQ128).
 DEFAULT_REPOSITORIES = (
     {
         "id": "tec-tac-official",
         "name": "Tec-Tac official modules (Tech Flow Dynamics)",
-        "url": "https://lic-service.tec-tac.techxflow.net.za/modules/index.json",
+        "url": "https://lic-service.tec-tac.techxflow.net.za/api/v1/repository/channels/development/index.json",
         "trust": "official",
         "priority": 100,
         "enabled": False,
     },
 )
+# 1.17.43: the addresses a 1.17.42 seed wrote before Johan confirmed the path (CQ125), keyed by the seeded id. The seed replaces the
+# address of that record once, and only when its address equals one of these exactly. An administrator's edit never matches.
+SUPERSEDED_DEFAULT_URLS = {
+    "tec-tac-official": ("https://lic-service.tec-tac.techxflow.net.za/modules/index.json",),
+}
 DEFAULTS_SEEDED_KEY = "defaults_seeded"
 
 # 1.17.42 (CQ122): the daily sync is a module-owned Scheduler action. Its owner tuple is the stable identity of the schedule.
@@ -332,59 +344,123 @@ def list_repositories() -> list[dict]:
     return sorted((public_repository(item) for item in payload["repositories"]), key=lambda item: (int(item.get("priority", 100)), item.get("name", "")))
 
 
-def upsert_repository(data: dict, repository_id: str | None = None) -> dict:
-    if not isinstance(data, dict):
-        raise ModuleRepositoryError("Repository payload must be an object.")
-    config = load_repositories()
-    repos = list(config["repositories"])
-    current = next((item for item in repos if item.get("id") == repository_id), None) if repository_id else None
+@contextlib.contextmanager
+def _config_lock():
+    """An exclusive lock on the repository configuration (1.17.43). Held around each load, change and atomic write.
+
+    The wait is bounded (CONFIG_LOCK_WAIT_SECONDS). A lock that stays busy raises ModuleRepositoryError, and the caller decides
+    what that means: the seed step logs it and tries on the next tick. fcntl is POSIX only, so it is imported here and this module
+    still imports on a Windows development PC.
+    """
+    import fcntl
+
+    CONFIG_LOCK.parent.mkdir(parents=True, exist_ok=True)
+    handle = CONFIG_LOCK.open("a")
+    try:
+        deadline = time.monotonic() + CONFIG_LOCK_WAIT_SECONDS
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise ModuleRepositoryError("The repository configuration is busy. Try again.") from None
+                time.sleep(CONFIG_LOCK_POLL_SECONDS)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    finally:
+        handle.close()
+
+
+def _find_repository(config: dict, repository_id: str | None) -> dict | None:
+    if not repository_id:
+        return None
+    return next((item for item in config["repositories"] if item.get("id") == repository_id), None)
+
+
+def _requested_name(data: dict, current: dict | None) -> str:
     name = str(data.get("name", current.get("name") if current else "") or "").strip()
     if not name:
         raise ModuleRepositoryError("Repository name is required.")
-    rid = _clean_repo_id(repository_id or data.get("id"), name)
-    if repository_id and rid != repository_id:
-        raise ModuleRepositoryError("Repository id cannot be changed.")
-    if not current and any(item.get("id") == rid for item in repos):
-        raise ModuleRepositoryError(f"Repository {rid!r} already exists.")
+    return name
+
+
+def _requested_trust(data: dict, current: dict | None) -> str:
     trust = str(data.get("trust", current.get("trust") if current else "custom") or "custom").strip().lower()
     if trust not in TRUST_LEVELS:
         raise ModuleRepositoryError("Repository trust must be official, internal, or custom.")
-    url = _validate_remote_url(data.get("url", current.get("url") if current else ""), trust=trust)
-    try:
-        priority = int(data.get("priority", current.get("priority") if current else 100))
-    except (TypeError, ValueError) as exc:
-        raise ModuleRepositoryError("Repository priority must be an integer.") from exc
-    if priority < 0 or priority > 10000:
-        raise ModuleRepositoryError("Repository priority must be between 0 and 10000.")
-    enabled = data.get("enabled", current.get("enabled") if current else True)
-    if not isinstance(enabled, bool):
-        raise ModuleRepositoryError("Repository enabled must be true or false.")
-    record = {
-        "id": rid,
-        "name": name,
-        "url": url,
-        "enabled": enabled,
-        "priority": priority,
-        "trust": trust,
-        "created_at": current.get("created_at") if current else _utcnow(),
-        "updated_at": _utcnow(),
-    }
-    if current:
-        repos = [record if item.get("id") == rid else item for item in repos]
-    else:
-        repos.append(record)
-    config["repositories"] = repos
-    _atomic_repo_json(CONFIG_FILE, config)
+    return trust
+
+
+def _requested_url(data: dict, current: dict | None):
+    return data.get("url", current.get("url") if current else "")
+
+
+def upsert_repository(data: dict, repository_id: str | None = None) -> dict:
+    if not isinstance(data, dict):
+        raise ModuleRepositoryError("Repository payload must be an object.")
+    # 1.17.43: the address check can do a DNS lookup, so it runs before the configuration lock is taken. It uses a first read here,
+    # which only supplies the values it checks. The change is applied to a fresh read inside the lock.
+    first = _find_repository(load_repositories(), repository_id)
+    _requested_name(data, first)
+    first_trust = _requested_trust(data, first)
+    first_url_value = _requested_url(data, first)
+    checked_url = _validate_remote_url(first_url_value, trust=first_trust)
+    with _config_lock():
+        config = load_repositories()
+        repos = list(config["repositories"])
+        current = _find_repository(config, repository_id)
+        name = _requested_name(data, current)
+        rid = _clean_repo_id(repository_id or data.get("id"), name)
+        if repository_id and rid != repository_id:
+            raise ModuleRepositoryError("Repository id cannot be changed.")
+        if not current and any(item.get("id") == rid for item in repos):
+            raise ModuleRepositoryError(f"Repository {rid!r} already exists.")
+        trust = _requested_trust(data, current)
+        url_value = _requested_url(data, current)
+        if url_value == first_url_value and trust == first_trust:
+            url = checked_url
+        else:
+            # The stored address changed between the two reads, so this address is checked again (rare: the DNS answer is held under the lock).
+            url = _validate_remote_url(url_value, trust=trust)
+        try:
+            priority = int(data.get("priority", current.get("priority") if current else 100))
+        except (TypeError, ValueError) as exc:
+            raise ModuleRepositoryError("Repository priority must be an integer.") from exc
+        if priority < 0 or priority > 10000:
+            raise ModuleRepositoryError("Repository priority must be between 0 and 10000.")
+        enabled = data.get("enabled", current.get("enabled") if current else True)
+        if not isinstance(enabled, bool):
+            raise ModuleRepositoryError("Repository enabled must be true or false.")
+        record = {
+            "id": rid,
+            "name": name,
+            "url": url,
+            "enabled": enabled,
+            "priority": priority,
+            "trust": trust,
+            "created_at": current.get("created_at") if current else _utcnow(),
+            "updated_at": _utcnow(),
+        }
+        if current:
+            repos = [record if item.get("id") == rid else item for item in repos]
+        else:
+            repos.append(record)
+        config["repositories"] = repos
+        _atomic_repo_json(CONFIG_FILE, config)
     return public_repository(record)
 
 
 def delete_repository(repository_id: str) -> None:
-    config = load_repositories()
-    before = len(config["repositories"])
-    config["repositories"] = [item for item in config["repositories"] if item.get("id") != repository_id]
-    if len(config["repositories"]) == before:
-        raise ModuleRepositoryError(f"Repository {repository_id!r} was not found.")
-    _atomic_repo_json(CONFIG_FILE, config)
+    with _config_lock():
+        config = load_repositories()
+        before = len(config["repositories"])
+        config["repositories"] = [item for item in config["repositories"] if item.get("id") != repository_id]
+        if len(config["repositories"]) == before:
+            raise ModuleRepositoryError(f"Repository {repository_id!r} was not found.")
+        _atomic_repo_json(CONFIG_FILE, config)
     (CACHE_ROOT / f"{repository_id}.json").unlink(missing_ok=True)
 
 
@@ -882,46 +958,87 @@ def stage_repository_package(repository_id: str, module_id: str, version: str | 
 # ---------------------------------------------------------------------------------------------- 1.17.42: default repository and daily sync
 
 
+def _seed_address_check(url: str, trust: str) -> str:
+    """The address check for a seeded entry, with no network call (1.17.43).
+
+    It refuses what can be decided from the text alone: a credential, a bad scheme, localhost, an IP literal the SSRF guard always
+    refuses, and a private IP literal unless the trust is internal. A host name is not resolved here. _fetch resolves it and checks
+    the address at every real sync, so a seed host that does not resolve yet is seeded normally and fails only when enabled.
+    """
+    checked = _clean_url(url)
+    host = str(urllib.parse.urlparse(checked).hostname or "").strip().rstrip(".")
+    if not host or host.lower() == "localhost":
+        raise ModuleRepositoryError("Repository URL resolves to a prohibited local address.")
+    try:
+        address = _normalize_address(ipaddress.ip_address(host))
+    except ValueError:
+        return checked
+    if _always_blocked_address(address):
+        raise ModuleRepositoryError("Repository URL resolves to a prohibited local, link-local, or reserved address.")
+    if trust != "internal" and _private_address(address):
+        raise ModuleRepositoryError("Repository URL resolves to a private or carrier-grade NAT address.")
+    return checked
+
+
+def _correct_superseded_url(repos: list[dict], default: dict) -> bool:
+    """Replace the address of the seeded record once when it still holds a superseded seed address exactly (1.17.43).
+
+    Only the address and updated_at change. The enabled flag, name and priority stay as the administrator left them. An edited
+    address never matches, so it is never overwritten. Returns True when a record changed.
+    """
+    superseded = SUPERSEDED_DEFAULT_URLS.get(default["id"], ())
+    changed = False
+    for index, item in enumerate(repos):
+        if item.get("id") == default["id"] and item.get("url") in superseded:
+            repos[index] = {**item, "url": default["url"], "updated_at": _utcnow()}
+            changed = True
+    return changed
+
+
 def seed_default_repositories() -> list[str]:
     """Seed each DEFAULT_REPOSITORIES entry once and return the ids this call seeded (1.17.42, CQ121). Called from the Scheduler tick.
 
     The top-level key ``defaults_seeded`` lists the ids already handled. An id on that list is never seeded again, so an entry an
     administrator removed stays removed, and an edited or disabled entry is never touched. An entry with the same id or the same
-    URL as an existing one gets only the marker. The function never raises: an unreadable or unwritable configuration logs a
-    warning and the next tick tries again.
+    URL as an existing one gets only the marker. 1.17.43: the whole read, change and write runs under the configuration lock, and
+    the one-time address correction is part of it. The step makes no network call. The function never raises: an unreadable,
+    unwritable or busy configuration logs one warning and the next tick tries again.
     """
     try:
-        config = load_repositories()
-        marked = config.get(DEFAULTS_SEEDED_KEY)
-        marked = [str(item) for item in marked] if isinstance(marked, list) else []
-        repos = list(config["repositories"])
-        seeded: list[str] = []
-        changed = False
-        for default in DEFAULT_REPOSITORIES:
-            if default["id"] in marked:
-                continue
-            exists = any(item.get("id") == default["id"] or item.get("url") == default["url"] for item in repos)
-            if not exists:
-                # The same URL check as upsert_repository, so the seeded entry is no less valid than a manual one.
-                url = _validate_remote_url(default["url"], trust=default["trust"])
-                now = _utcnow()
-                repos.append({
-                    "id": default["id"],
-                    "name": default["name"],
-                    "url": url,
-                    "enabled": default["enabled"],
-                    "priority": default["priority"],
-                    "trust": default["trust"],
-                    "created_at": now,
-                    "updated_at": now,
-                })
-                seeded.append(default["id"])
-            marked.append(default["id"])
-            changed = True
-        if changed:
-            config["repositories"] = repos
-            config[DEFAULTS_SEEDED_KEY] = marked
-            _atomic_repo_json(CONFIG_FILE, config)
+        with _config_lock():
+            config = load_repositories()
+            marked = config.get(DEFAULTS_SEEDED_KEY)
+            marked = [str(item) for item in marked] if isinstance(marked, list) else []
+            repos = list(config["repositories"])
+            seeded: list[str] = []
+            changed = False
+            for default in DEFAULT_REPOSITORIES:
+                if _correct_superseded_url(repos, default):
+                    changed = True
+                if default["id"] in marked:
+                    continue
+                exists = any(item.get("id") == default["id"] or item.get("url") == default["url"] for item in repos)
+                if not exists:
+                    # The same static checks as upsert_repository, so the seeded entry is no less valid than a manual one.
+                    url = _seed_address_check(default["url"], default["trust"])
+                    now = _utcnow()
+                    repos.append({
+                        "id": default["id"],
+                        "name": default["name"],
+                        "url": url,
+                        "enabled": default["enabled"],
+                        "priority": default["priority"],
+                        "trust": default["trust"],
+                        "created_at": now,
+                        "updated_at": now,
+                    })
+                    seeded.append(default["id"])
+                marked.append(default["id"])
+                changed = True
+            if changed:
+                config["repositories"] = repos
+                config[DEFAULTS_SEEDED_KEY] = marked
+                _atomic_repo_json(CONFIG_FILE, config)
         return seeded
     except Exception as exc:
         logger.warning("The default module repository was not seeded; the next tick tries again: %s", exc)
@@ -949,7 +1066,8 @@ def run_scheduled_sync(context=None) -> dict:
             failed += 1
         else:
             ok += 1
-        skipped_entries += int(sync.get("skipped_count") or 0)
+            # 1.17.43: only a sync that succeeded in this run counts its skipped entries. A failed repository's count is from its old cache.
+            skipped_entries += int(sync.get("skipped_count") or 0)
     counts = {"repositories": tried, "ok": ok, "failed": failed, "entries_skipped": skipped_entries}
     record(
         actor=service_audit_actor(module_id="core", service="module-repository", identity="daily-sync"),
@@ -966,9 +1084,13 @@ def run_scheduled_sync(context=None) -> dict:
 
 
 def ensure_repository_sync_schedule() -> bool:
-    """Create the daily sync schedule (03:00 server time, run on recovery within 6 hours) when no row holds its owner tuple (1.17.42,
-    CQ122). Returns True when this call created it. An existing schedule is never re-saved, so an administrator's change to it survives,
-    and a deleted row comes back on the next tick. The function never raises. Called from the Scheduler tick."""
+    """Create the daily sync schedule when no row holds its owner tuple (1.17.42, CQ122). Returns True when this call created it.
+
+    The run time is 03:00 in the server's own time zone: Django's TIME_ZONE, which stock Tactical v1.5.2 sets to UTC (so 03:00 UTC is
+    05:00 in South Africa). The zone is stored on the row (sync_schedule.timezone). A run missed while the server was off runs on
+    recovery within 6 hours (1.17.43, CQ126: no code change to the time or the zone). An existing schedule is never re-saved, so an
+    administrator's change to it survives, and a deleted row comes back on the next tick. The function never raises. Called from the
+    Scheduler tick."""
     try:
         from django.conf import settings
 

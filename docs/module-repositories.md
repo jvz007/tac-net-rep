@@ -101,23 +101,26 @@ Before 1.17.41 the list was built from the modules in the repositories and the m
 A fresh server gets one repository, seeded once by the Scheduler tick (within a minute):
 
 - **id** `tec-tac-official`, **name** "Tec-Tac official modules (Tech Flow Dynamics)"
-- **address** `https://lic-service.tec-tac.techxflow.net.za/modules/index.json`. The index path is an assumption until Johan confirms it (question CQ125 in `reviews/questions/core.md`). No other document in this tree names the index path.
+- **address** `https://lic-service.tec-tac.techxflow.net.za/api/v1/repository/channels/development/index.json`. Johan confirmed this path on 15 October 2026 (CQ125 in `reviews/questions/core.md`). It is the **development channel**. The channel for a production server is not decided yet (CQ128), so a production server reads the development channel until an administrator edits the address.
 - **trust** `official`, **priority** 100
-- **enabled** `false`. A disabled repository is never synced and offers nothing, so the Online catalog still says "No module repository is set up" until someone enables it. Whether the index needs a licence token is unknown. Core does not hold one and does not start the licensing integration for it.
+- **enabled** `false`. A disabled repository is never synced and offers nothing, so the Online catalog still says "No module repository is set up" until someone enables it. Whether the index needs a licence token is still open (CQ129). Core does not hold one and does not start the licensing integration for it.
+- The seed makes no network call. It checks the address from the text alone (a credential, a local or reserved address, an IP literal). A host name is resolved only when the repository syncs, so a host that does not resolve yet is seeded normally and fails only once it is enabled.
 
 The seed runs once. The key `defaults_seeded` in `repositories.json` lists the ids already handled. An id on that list is never seeded again:
 
 - An administrator can edit, enable, disable or remove the entry through the normal repository routes. The seed never changes it back.
 - If a repository with the same address already exists, the seed only records the id in `defaults_seeded`. If an entry with the same id exists with another address, it is left as it is.
-- If the seed cannot write or read `repositories.json`, it logs a warning and the next tick tries again. It never raises.
+- If the seed cannot write or read `repositories.json`, or the configuration is busy, it logs one warning and the next tick tries again. It never raises.
+
+1.17.43 corrects one address. A 1.17.42 seed wrote the assumed path `/modules/index.json`. When the seeded record still holds that exact address, the next tick replaces it with the confirmed path, once, and keeps its enabled flag, name and priority. An address an administrator has edited is never replaced.
 
 To remove the seed for good, delete the entry under Repositories. To have it back, edit it or add a repository by hand. Core will not recreate it, because the id stays in `defaults_seeded`.
 
 ## Daily sync (1.17.42)
 
-Core runs the enabled repositories through the same sync as the Sync action, once a day at **03:00 server time**. The schedule is owned by the Scheduler (action `tec-tac.module-repository-sync`, module `tec-tac`, owner key `module-repository-sync`). It appears on the Scheduler page with its name, time, zone, next run and run history.
+Core runs the enabled repositories through the same sync as the Sync action, once a day at **03:00 in the server's own time zone**. That zone is Django's `TIME_ZONE`. Stock Tactical v1.5.2 sets it to UTC, so 03:00 UTC is 05:00 in South Africa. The zone is shown in the schedule row and in `sync_schedule.timezone`. The schedule is owned by the Scheduler (action `tec-tac.module-repository-sync`, module `tec-tac`, owner key `module-repository-sync`). It appears on the Scheduler page with its name, time, zone, next run and run history.
 
-- The time zone is the one the schedule was created with (Django's `TIME_ZONE` setting at the time). Core does not change it later.
+- The time zone is the one the schedule was created with (Django's `TIME_ZONE` setting at the time, UTC on stock Tactical). Core does not change it later.
 - A 03:00 run missed because the server was off runs on recovery, if the server comes back within 6 hours. Otherwise it waits for the next day.
 - Only enabled repositories are synced. When none is enabled, the run does nothing and succeeds.
 - A repository that fails does not fail the run. The run fails only when every enabled repository fails. Its previous cache stays.
@@ -126,7 +129,7 @@ Core runs the enabled repositories through the same sync as the Sync action, onc
 - `GET /api/tfd/modules/repositories/` adds `sync_schedule`: `enabled`, `time` (`03:00`), `timezone`, `next_run_at`, `last_run_at` and `last_run_status`, or `null` when the schedule does not exist. It holds no address.
 - The manual Sync action is unchanged. The catalog GET (`/api/tfd/modules/catalog/online/`) still makes no outbound call.
 
-Where the daily time is taken from: the 03:00 is server time in the zone of the schedule. The runtime context in Tactical reads Tactical's own default time zone first. The daily schedule uses Django's `TIME_ZONE` only (question CQ126).
+Where the daily time is taken from: the 03:00 is in the zone of the schedule, which is Django's `TIME_ZONE` (UTC on stock Tactical). The runtime context in Tactical reads Tactical's own default time zone first, but the daily schedule uses Django's `TIME_ZONE` only. Johan confirmed 03:00 on the server, and no code change was made for it (CQ126).
 
 ## Entitlement
 

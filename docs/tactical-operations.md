@@ -2,7 +2,7 @@
 
 **Status:** Public Core developer contract, added in Core 1.17.7
 **Python:** `tec_tac.tactical_operations`
-**Capability:** `core.tactical_operations` 1.11.0 (1.10.0 before Core 1.17.41, 1.9.0 before Core 1.17.28, 1.8.0 before Core 1.17.26; major 1, additive since 1.0.0), owner `core`
+**Capability:** `core.tactical_operations` 1.12.0 (1.11.0 before Core 1.17.43, 1.10.0 before Core 1.17.41, 1.9.0 before Core 1.17.28, 1.8.0 before Core 1.17.26; major 1, additive since 1.0.0), owner `core`
 **HTTP:** `POST /api/tfd/tactical-operations/<module_id>/<operation_id>/`
 
 ## Why this exists
@@ -741,3 +741,38 @@ letter, digit or underscore, followed by letters, digits, space and `$ # ( ) . ,
 kind `str` still refuses `$` and a space. The owner table is unchanged: `services/` is Remote Background's alone. `audit.params` may name it.
 
 Tests: `tests/tactical-operation-file-response-1.17.41.py`, `tests/tactical-operation-query-service-1.17.41.py`.
+
+## Added in 1.17.43
+
+Capability `core.tactical_operations` is 1.12.0, still major 1. Two changes ship together, both opt-in. A declaration that uses neither
+behaves exactly as before, with the same text and the same rows. A module needs framework 1.17.43 to rely on them and can feature-detect
+with `core.tactical_operations >= 1.12.0`.
+
+### A change marker for a secret body field: `audit.secret_fields`
+
+A body field can hold a secret (a password, a token, a script's arguments and environment). Core must still show that a change touched it, but
+never its value. `audit` may name up to eight body fields in `secret_fields`.
+
+- A success row writes `"<field>": "changed"` on the after side when the body sends the field.
+- When the operation also declares `audit.before` and Tactical's read holds the field, Core compares the sent value with the read's value in
+  memory. Both are reduced to a SHA-256 of their canonical JSON (sorted keys, no whitespace), and the values are dropped at once. The before side
+  writes `"<field>": "present"` and the after side writes `"changed"` or `"unchanged"`.
+- When there is no before read, or the read does not hold the field, the after side writes `changed` and the before side is left out. Core never
+  invents `unchanged`.
+- The marker proves the value was sent or differs. It does not say what the value holds.
+- Core never records the value in the row, the metadata or a log, so a field named in `secret_fields` may be secret-named (for example `token`).
+  Such a field is declared here and nowhere else in the audit declaration.
+- A secret field may not also be in `audit_fields`, `audit_lists`, the fields of `audit.before`, `audit.object_body_field` or a body scope source.
+  It must be one of `body_fields`. Registration refuses any other combination with `TacticalOperationRegistrationError`.
+- A failed, denied, core_refused or outcome-unknown row carries no marker.
+- `register_tactical_operation(audit={..., "secret_fields": [...]})` is the only way to declare it. A declaration without the key writes the
+  rows it wrote before.
+
+### A count of the ids a list scope names: `metadata.object_count`
+
+An operation whose scope entry names up to 1000 ids writes the joined ids as the row's object id, cut at 255 characters, so a long selection shows
+only its first ids. When the first scope entry names more than one id, the success, tactical_denied deny, scope refusal, failed and
+outcome-unknown rows of that call carry `metadata.object_count`: the number of ids. It is a number and never an id. The object id is unchanged.
+A row written before the scope is read (a permission, module permission or body refusal) carries no count, as before.
+
+Tests: `tests/tactical-operation-secret-fields-1.17.43.py`, `tests/tactical-operation-object-count-1.17.43.py`.

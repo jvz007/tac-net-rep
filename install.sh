@@ -49,6 +49,10 @@ OLD_END_MARKER="# END TFD REPORTING EXTENSION"
 
 log() { printf '[TEC-TAC] %s\n' "$*"; }
 fail() { printf '[TEC-TAC] ERROR: %s\n' "$*" >&2; exit 1; }
+# 1.17.43: refuse() is fail() for a pre-flight that stops before the first mutation (no mkdir, cp, chown or migration has run yet).
+# It exits 78 (EX_CONFIG). The update helper reads that status as "refused, nothing changed": it restores the source checkout and
+# does not reinstall. Use it only before the first mutation; every later failure keeps fail() and exit 1.
+refuse() { printf '[TEC-TAC] ERROR: %s\n' "$*" >&2; printf '[TEC-TAC-INSTALL] REFUSED: %s\n' "$*" >&2; exit 78; }
 # 1.17.15: a root helper is copied with any trailing carriage return removed. A Windows checkout can carry CRLF line endings,
 # and then the shebang names a file that does not exist, which sudo reports as "unable to execute".
 install_root_script() {
@@ -156,15 +160,15 @@ REQUIRED_FILES=(
     "${SOURCE_ROOT}/templates/plugin/reportset/tec_tac.json"
 )
 for required_file in "${REQUIRED_FILES[@]}"; do
-    [[ -f "${required_file}" ]] || fail "Installer payload is missing ${required_file}."
+    [[ -f "${required_file}" ]] || refuse "Installer payload is missing ${required_file}."
 done
 log "Preflight source repository layout: OK"
 
 # Root-side signature verification depends on the system Python cryptography
 # package. This is a hard preflight requirement: fail before any runtime,
 # migration, policy, sudoers or helper mutation occurs.
-[[ -x /usr/bin/python3 ]] || fail "System Python was not found at /usr/bin/python3."
-/usr/bin/python3 -I -c 'import cryptography' >/dev/null 2>&1 || fail "System Python cryptography support is required for root-side Tec-Tac signature verification."
+[[ -x /usr/bin/python3 ]] || refuse "System Python was not found at /usr/bin/python3."
+/usr/bin/python3 -I -c 'import cryptography' >/dev/null 2>&1 || refuse "System Python cryptography support is required for root-side Tec-Tac signature verification."
 log "Preflight system Python cryptography support: OK"
 
 # Deploy framework-owned code into a Git-independent runtime tree. Dynamic

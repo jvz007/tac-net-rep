@@ -105,6 +105,7 @@ registers and runs unchanged):
 """
 from __future__ import annotations
 
+import hashlib
 import itertools
 import json
 import logging
@@ -121,7 +122,7 @@ from . import module_category as _module_category
 logger = logging.getLogger("tec_tac.tactical_operations")
 
 CAPABILITY_ID = "core.tactical_operations"
-CAPABILITY_VERSION = "1.11.0"
+CAPABILITY_VERSION = "1.12.0"  # 1.17.43: audit.secret_fields (a change marker for a secret body field) and metadata.object_count
 AUDIT_HEADER = "X-Tec-Tac-Audit"
 AUDIT_RECORDED = "recorded"
 AUDIT_NOT_RECORDED = "not-recorded"
@@ -301,6 +302,7 @@ class TacticalOperation:
     body_max_bytes: int | None = None  # 1.17.26: a larger body cap than MAX_BODY_BYTES; None means the default
     audit_lists: tuple = ()  # 1.17.28: body or before fields that hold a list of flat objects, recorded in clear (CQ85 a)
     file_response: bool = False  # 1.17.41: Tactical answers with a streamed file that Core relays (GET or POST only)
+    secret_fields: tuple = ()  # 1.17.43: body fields whose value Core never records; the row carries only changed or unchanged
 
     @property
     def body_cap(self) -> int:
@@ -827,6 +829,32 @@ def _clean_body_max_bytes(value):
     return None if value == MAX_BODY_BYTES else value
 
 
+# 1.17.43: audit.secret_fields. A secret field is declared here and nowhere else in the audit declaration, so it is never recorded.
+_MAX_SECRET_FIELDS = 8
+
+
+def _clean_secret_fields(value: Any, fields: tuple, audit_fields: tuple, lists: tuple, before: BeforeSpec | None,
+                         object_body_field: str | None, scope_specs: list) -> tuple:
+    """audit.secret_fields (1.17.43): body fields whose value Core never records, only a change marker.
+
+    Refused: a name that is not a body field, one the row already records (audit_fields, audit_lists, audit.before fields), the
+    audit.object_body_field (the object id would carry the value) and a body scope source (the ids would carry the value)."""
+    names = _clean_names(value, "audit secret_fields", maximum=_MAX_SECRET_FIELDS)
+    body_sources = {spec.source.split(":", 1)[1] for spec in scope_specs if spec.source.startswith("body:")}
+    for name in names:
+        if name not in fields:
+            raise TacticalOperationRegistrationError(f"audit secret_fields {name!r} is not one of body_fields.")
+        if name in audit_fields or name in lists:
+            raise TacticalOperationRegistrationError(
+                f"audit secret_fields {name!r} is also recorded in clear (audit_fields or audit_lists). A secret field is never recorded."
+            )
+        if before is not None and name in before.fields:
+            raise TacticalOperationRegistrationError(f"audit secret_fields {name!r} is also an audit.before field: the before read would record it.")
+        if name == object_body_field or name in body_sources:
+            raise TacticalOperationRegistrationError(f"audit secret_fields {name!r} is the object id or a body scope source, so the id would carry its value.")
+    return names
+
+
 def register_tactical_operation(
     id,
     module_id,
@@ -854,6 +882,13 @@ def register_tactical_operation(
     answer (Tactical's FileResponse) up to ``MAX_RESPONSE_BYTES``; without it a streaming answer is refused as before. ``query_params``
     is allowed on any method (a DELETE reads ``request.query_params`` too). The route parameter kind ``service`` takes a Windows
     service name.
+
+    1.17.43 (optional, capability 1.12.0): ``audit.secret_fields`` names up to 8 body fields whose value Core never records, in the
+    row, the metadata or a log. A success row carries ``<field>: changed`` when the body sends the field. When ``audit.before`` is also
+    declared and Tactical's read holds the field, Core compares the sent value with it in memory (a SHA-256 of the canonical JSON,
+    the value dropped at once) and writes ``present`` on the before side and ``changed`` or ``unchanged`` on the after side. A secret
+    field may not be in audit_fields, audit_lists, audit.before fields, audit.object_body_field or a body scope source. It must be a
+    body field. A failed, denied, core_refused or outcome-unknown row carries no marker.
 
     1.17.28 (optional): ``audit_lists`` names up to two body or before fields that hold a list of flat objects (a task's actions).
     Each is recorded in clear in the success row (after from the cleaned body, before from Tactical's GET answer), with the bounds
@@ -927,9 +962,9 @@ def register_tactical_operation(
     if isinstance(scope, (str, bytes, dict)) or not hasattr(scope, "__iter__"):
         raise TacticalOperationRegistrationError("scope must be a list of {type, source}.")
     # The audit declaration comes first. A scope source is a path or body value only; Tactical decides the rest (1.17.14).
-    if not isinstance(audit, dict) or not {"action", "object_type"} <= set(audit) or set(audit) - {"action", "object_type", "audit_fields", "object_param", "before", "params", "object_field", "object_body_field"}:
+    if not isinstance(audit, dict) or not {"action", "object_type"} <= set(audit) or set(audit) - {"action", "object_type", "audit_fields", "object_param", "before", "params", "object_field", "object_body_field", "secret_fields"}:
         raise TacticalOperationRegistrationError(
-            "audit is {action, object_type, audit_fields, object_param, before, params, object_field, object_body_field}; all after object_type are optional."
+            "audit is {action, object_type, audit_fields, object_param, before, params, object_field, object_body_field, secret_fields}; all after object_type are optional."
         )
     if caller_scope is not None and caller_scope != "unrestricted":
         raise TacticalOperationRegistrationError('caller_scope must be "unrestricted" or left out.')
@@ -1036,6 +1071,7 @@ def register_tactical_operation(
         if name in audit_params:
             raise TacticalOperationRegistrationError(f"audit field {name!r} is also an audit param: the row would carry it twice.")
     lists = _clean_audit_lists(audit_lists, verb, fields, before, audit_fields)
+    secret_declared = _clean_secret_fields(audit.get("secret_fields"), fields, audit_fields, lists, before, object_body_field, scope_specs)
     selector = _parse_body_selector(body_selector, fields)
 
     codename = None
@@ -1057,6 +1093,7 @@ def register_tactical_operation(
         caller_scope=caller_scope, body_selector=selector, audit_params=audit_params, server_only=server_only,
         audit_object_field=object_field, audit_object_body_field=object_body_field,
         permissions_any=any_flags, body_max_bytes=body_cap, audit_lists=lists, file_response=file_response,
+        secret_fields=secret_declared,
     )
     key = (owner, op_id)
     route_key = (verb, _route_key(segments, trailing))
@@ -1792,6 +1829,45 @@ def _after_values(operation: TacticalOperation, body: dict, query: dict | None =
     return values
 
 
+def _object_count_extra(scope: list) -> dict:
+    """metadata.object_count (1.17.43): how many ids the first scope entry names, only when it names more than one. A number, never an id."""
+    if scope and len(scope[0][1]) > 1:
+        return {"object_count": len(scope[0][1])}
+    return {}
+
+
+def _secret_digest(value: Any) -> str:
+    """A SHA-256 of a value's canonical JSON (1.17.43). It serves one in-memory comparison and is never stored, logged or returned."""
+    text = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _secret_digests(operation: TacticalOperation, payload: Any) -> dict | None:
+    """The digests of the declared secret fields that Tactical's before read holds (1.17.43). None when the read is not an object."""
+    if not operation.secret_fields or not isinstance(payload, dict):
+        return None
+    return {name: _secret_digest(payload[name]) for name in operation.secret_fields if name in payload}
+
+
+def _secret_markers(operation: TacticalOperation, body: Any, digests: dict | None) -> tuple[dict, dict]:
+    """The (after, before) markers of a success row for the declared secret fields (1.17.43). Never a value.
+
+    A field the body does not send is not marked. A field sent with no before read, or a before read without the field, is
+    'changed' on the after side and omitted from the before side. A field the read holds gets 'present' before and 'changed' or
+    'unchanged' after."""
+    after: dict = {}
+    before: dict = {}
+    for name in operation.secret_fields:
+        if not isinstance(body, dict) or name not in body:
+            continue
+        if digests is None or name not in digests:
+            after[name] = "changed"
+            continue
+        before[name] = "present"
+        after[name] = "unchanged" if digests[name] == _secret_digest(body[name]) else "changed"
+    return after, before
+
+
 def _before_text(value: str) -> str:
     return "".join(ch for ch in value if ord(ch) >= 32 and ord(ch) != 127)[:_BEFORE_STRING_LIMIT]
 
@@ -1897,7 +1973,8 @@ def _read_before(request, operation: TacticalOperation, params: dict[str, str]) 
         payload = json.loads(content.decode("utf-8"))
         if spec.select:
             payload = _select_row(operation, payload, params)
-        return {"status": status, "values": _before_values(operation, payload)}
+        # 1.17.43: digests of the declared secret fields, for the in-memory comparison only; the values are not kept.
+        return {"status": status, "values": _before_values(operation, payload), "secret_digests": _secret_digests(operation, payload)}
     except Exception:
         logger.warning("The before-read of Tactical operation %s/%s did not answer.", operation.module_id, operation.id, exc_info=True)
         return {"status": None, "values": None}
@@ -1928,13 +2005,14 @@ def _read_stream(response) -> bytes | None:
     return b"".join(chunks)
 
 
-def _unknown_outcome(request, operation, object_id, tactical_status, code: str, text: str, correlation_id: str | None = None) -> TacticalOperationError:
+def _unknown_outcome(request, operation, object_id, tactical_status, code: str, text: str, correlation_id: str | None = None,
+                     row_extra: dict | None = None) -> TacticalOperationError:
     """After dispatch, a non-GET call whose result Core cannot trust may have changed Tactical: say so in the log."""
     audit = None
     if operation.method != "GET":
         audit = _write_row(
             request, operation, action=OUTCOME_UNKNOWN_ACTION, object_id=object_id, message=OUTCOME_UNKNOWN_MESSAGE,
-            tactical_status=tactical_status, correlation_id=correlation_id,
+            tactical_status=tactical_status, correlation_id=correlation_id, extra=row_extra,
         )
     return TacticalOperationError(text, status=502, code=code, audit=audit)
 
@@ -2095,7 +2173,8 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
         entries = _scope_entries(operation, params, body)
         scope = [(kind, ids) for _, kind, ids in entries]
         object_id = _object_id(scope, operation, params)
-        extra: dict = {}
+        count_extra = _object_count_extra(scope)  # 1.17.43: the rows of this call that read the scope carry how many ids it names
+        extra: dict = dict(count_extra)
         if entries:
             from . import resources_adapter as adapter
 
@@ -2105,16 +2184,16 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
                     # who holds the Tactical flag (Tactical decides); a row with an agent is held to the caller's role scope.
                     agent_id = _row_lookup_agent(operation, spec, ids[0])
                     if agent_id is _LOOKUP_FAILED:
-                        raise _refuse(request, operation, "not_found", 404, "object_not_found", object_id, correlation_id)
+                        raise _refuse(request, operation, "not_found", 404, "object_not_found", object_id, correlation_id, row_extra=count_extra)
                     extra["scope_source"] = "row_lookup"
                     extra["agentless"] = agent_id is None
                     if agent_id is not None and not adapter.objects_in_role_scope(user=user, resource_type="agent", identifiers=[agent_id]):
-                        raise _refuse(request, operation, "not_found", 404, "object_not_found", object_id, correlation_id)
+                        raise _refuse(request, operation, "not_found", 404, "object_not_found", object_id, correlation_id, row_extra=count_extra)
                 elif kind == "agent_pk":
                     if not adapter.agent_pks_in_role_scope(user=user, pks=ids):
-                        raise _refuse(request, operation, "not_found", 404, "object_not_found", object_id, correlation_id)
+                        raise _refuse(request, operation, "not_found", 404, "object_not_found", object_id, correlation_id, row_extra=count_extra)
                 elif not adapter.objects_in_role_scope(user=user, resource_type=kind, identifiers=ids):
-                    raise _refuse(request, operation, "not_found", 404, "object_not_found", object_id, correlation_id)
+                    raise _refuse(request, operation, "not_found", 404, "object_not_found", object_id, correlation_id, row_extra=count_extra)
         _check_whitelist(operation, body)  # 6.
     except TacticalOperationError as exc:
         # 1.17.21: Core's own refusal of a change writes one row. An error that already carries a verdict (a deny row) keeps it.
@@ -2155,26 +2234,26 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
         response = _dispatch(match, forwarded)
     except Exception:
         logger.exception("Tactical operation %s/%s raised after dispatch", operation.module_id, operation.id)
-        raise _unknown_outcome(request, operation, object_id, None, "tactical_call_failed", "Tactical failed while running this operation.", correlation_id) from None
+        raise _unknown_outcome(request, operation, object_id, None, "tactical_call_failed", "Tactical failed while running this operation.", correlation_id, row_extra=count_extra) from None
 
     status = int(getattr(response, "status_code", 500))
     if getattr(response, "streaming", False):
         if not operation.file_response:
             _close_stream(response)
-            raise _unknown_outcome(request, operation, object_id, status, "tactical_response_refused", "Core does not relay streaming responses.", correlation_id)
+            raise _unknown_outcome(request, operation, object_id, status, "tactical_response_refused", "Core does not relay streaming responses.", correlation_id, row_extra=count_extra)
         # 1.17.41: a declared file answer is read chunk by chunk up to the same cap as any answer, then closed.
         try:
             content = _read_stream(response)
         except Exception:
             # 1.17.42: a stream that fails part way is an outcome-unknown refusal, never a bare 500. _read_stream has already closed it.
             logger.exception("Tactical operation %s/%s failed while sending its file answer", operation.module_id, operation.id)
-            raise _unknown_outcome(request, operation, object_id, status, "tactical_call_failed", "Tactical failed while sending its answer.", correlation_id) from None
+            raise _unknown_outcome(request, operation, object_id, status, "tactical_call_failed", "Tactical failed while sending its answer.", correlation_id, row_extra=count_extra) from None
         if content is None:
-            raise _unknown_outcome(request, operation, object_id, status, "tactical_response_refused", "Tactical's answer is larger than Core relays.", correlation_id)
+            raise _unknown_outcome(request, operation, object_id, status, "tactical_response_refused", "Tactical's answer is larger than Core relays.", correlation_id, row_extra=count_extra)
     else:
         content = bytes(getattr(response, "content", b"") or b"")
     if len(content) > MAX_RESPONSE_BYTES:
-        raise _unknown_outcome(request, operation, object_id, status, "tactical_response_refused", "Tactical's answer is larger than Core relays.", correlation_id)
+        raise _unknown_outcome(request, operation, object_id, status, "tactical_response_refused", "Tactical's answer is larger than Core relays.", correlation_id, row_extra=count_extra)
 
     content_type = str(response.get("Content-Type", "") or "") if hasattr(response, "get") else ""
     data: Any = content
@@ -2192,16 +2271,23 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
             object_id, object_source = _answer_object_id(operation, data, body)
             if object_source:
                 success_extra = {**extra, "object_source": object_source}
+        before_payload = before_state["values"] if before_state else None
+        after_payload = _after_values(operation, body, query, file, params)
+        if operation.secret_fields:  # 1.17.43: one marker per sent secret field; the value is never recorded
+            secret_after, secret_before = _secret_markers(operation, body, before_state.get("secret_digests") if before_state else None)
+            if secret_after:
+                after_payload = {**(after_payload or {}), **secret_after}
+            if secret_before:
+                before_payload = {**(before_payload or {}), **secret_before}
         audit = _write_row(
             request, operation, action=operation.audit_action, object_id=object_id,
             message=operation.message or f"Core ran Tactical operation {operation.id}.",
-            before=before_state["values"] if before_state else None,
-            after=_after_values(operation, body, query, file, params), tactical_status=status, extra=success_extra, correlation_id=correlation_id,
+            before=before_payload, after=after_payload, tactical_status=status, extra=success_extra, correlation_id=correlation_id,
         )
     elif status in (401, 403):
         audit = _write_row(
             request, operation, action="deny", object_id=object_id, message=DENY_MESSAGES["tactical_denied"], tactical_status=status,
-            refusal=True, extra={"refused_action": operation.audit_action, "reason": "tactical_denied", "status": status},
+            refusal=True, extra={"refused_action": operation.audit_action, "reason": "tactical_denied", "status": status, **count_extra},
             correlation_id=correlation_id,
         )
     elif 400 <= status < 500 and operation.method != "GET":
@@ -2216,7 +2302,7 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
     elif status >= 500 and operation.method != "GET":
         audit = _write_row(
             request, operation, action=OUTCOME_UNKNOWN_ACTION, object_id=object_id, message=OUTCOME_UNKNOWN_MESSAGE, tactical_status=status,
-            correlation_id=correlation_id,
+            correlation_id=correlation_id, extra=count_extra,
         )
 
     headers = {}
@@ -2348,6 +2434,21 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
             (
                 "route parameter kind service: a Windows service name (first character a letter, digit or underscore, then letters, digits, space "
                 "and $ # ( ) . , _ -, at most 256 characters, no slash, no '..'), built into the path unquoted"
+            ),
+        ],
+        # 1.17.43 (capability 1.12.0, still major 1): one optional declaration key and one metadata key. A declaration that uses
+        # neither behaves exactly as before, and a row without them is unchanged.
+        "declaration_keys_added_in_1_12_0": ["audit.secret_fields (register_tactical_operation audit={... 'secret_fields'}), shown as audit.secret_fields"],
+        "behaviour_added_in_1_12_0": [
+            (
+                "audit.secret_fields: a success row writes '<field>': 'changed' when the body sends the field. With an audit.before read that holds "
+                "the field, the before side writes 'present' and the after side 'changed' or 'unchanged' (a SHA-256 of the canonical JSON, compared "
+                "in memory, the value dropped at once). The value is never recorded in the row, the metadata or a log. The marker proves the value "
+                "was sent or differs, not what it holds. A failed, denied, core_refused or outcome-unknown row carries no marker"
+            ),
+            (
+                "metadata.object_count: when the first scope entry names more than one id, the success, tactical_denied deny, scope refusal, failed "
+                "and outcome-unknown rows of that call carry the number of ids. A number, never an id; the object id itself is unchanged"
             ),
         ],
         "refusal_row_codes": list(CORE_REFUSAL_ROW_CODES),

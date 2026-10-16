@@ -176,7 +176,7 @@ Example parameters:
 
 ## Built-in repository sync (Core 1.17.42)
 
-Core registers `tec-tac.module-repository-sync` (module `tec-tac`, no target, timeout 900 seconds, no per-user permission). Core creates one daily schedule for it, owner `tec-tac` / `module-repository-sync`, at 03:00 server time, with run-on-recovery within 360 minutes and concurrency skip. The schedule appears on this page like any other, with its run history. It is not edited here: change the repositories instead, see `module-repositories.md` ("Daily sync (1.17.42)").
+Core registers `tec-tac.module-repository-sync` (module `tec-tac`, no target, timeout 900 seconds, no per-user permission). Core creates one daily schedule for it, owner `tec-tac` / `module-repository-sync`, at 03:00 in the server's own time zone (Django `TIME_ZONE`, UTC on stock Tactical, so 05:00 in South Africa; the zone is shown on the row), with run-on-recovery within 360 minutes and concurrency skip. The schedule appears on this page like any other, with its run history. It is not edited here: change the repositories instead, see `module-repositories.md` ("Daily sync (1.17.42)").
 
 ## API
 

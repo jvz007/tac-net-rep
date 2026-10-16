@@ -1188,6 +1188,37 @@ def _run_bounded(command, *, log, timeout, cwd=None, env=None, label="command"):
     return result.returncode
 
 
+# 1.17.43: an installer returns INSTALL_REFUSED_EXIT (EX_CONFIG 78) only when its pre-flight refused before it changed anything.
+# Core's install.sh does so from refuse(); the UI installer does so from the UI release that ships it (a request to the UI area).
+# Any other non-zero status keeps the full rollback. The installer's words are printed after INSTALLER_REFUSAL_MARKER.
+INSTALL_REFUSED_EXIT = 78
+INSTALLER_REFUSAL_MARKER = "[TEC-TAC-INSTALL] REFUSED:"
+
+
+class _UpdateRefused(RuntimeError):
+    """The installer's pre-flight refused before it changed anything (status 78). Not a failed deployment: no installer re-run, no rollback check."""
+
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _installer_refusal_reason(log_path):
+    """The installer's own words for a refusal, read from the end of the update log (the last 64 KiB only)."""
+    try:
+        with log_path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, handle.tell() - 65536))
+            tail = handle.read().decode("utf-8", "replace")
+    except OSError:
+        return "the installer gave no reason"
+    lines = [line for line in tail.splitlines() if INSTALLER_REFUSAL_MARKER in line]
+    if not lines:
+        return "the installer gave no reason"
+    reason = re.sub(r"\s+", " ", lines[-1].split(INSTALLER_REFUSAL_MARKER, 1)[1]).strip().rstrip(".")
+    return reason[:300] or "the installer gave no reason"
+
+
 def run_install(component, target, log):
     if component == "framework":
         command = [TRUSTED_BASH, str(target / "install.sh")]
@@ -1363,6 +1394,8 @@ def run_job(job_id):
             log.write(f"[TEC-TAC-UPDATE] running {component} installer\n")
             log.flush()
             rc = run_install(component, target, log)
+            if rc == INSTALL_REFUSED_EXIT:
+                raise _UpdateRefused(_installer_refusal_reason(log_path))
             if rc != 0:
                 raise RuntimeError(f"{component} installer exited with status {rc}")
 
@@ -1385,7 +1418,30 @@ def run_job(job_id):
             job["error"] = str(exc)
             job["error_type"] = exc.__class__.__name__
             rollback_error = None
-            if backup is None and not git_state:
+            if isinstance(exc, _UpdateRefused):
+                # 1.17.43: the installer's pre-flight refused before it changed anything. The installer is not run again and the
+                # rollback is not verified. Only the source checkout is restored, so it matches the installed version again.
+                job["error"] = f"The installer refused the update before changing anything: {exc.reason}. The installed version is unchanged."
+                job["error_type"] = "InstallerRefused"
+                log.write("[TEC-TAC-UPDATE] update refused by the installer pre-flight; nothing was installed; restoring the source checkout only\n")
+                log.flush()
+                job["stage"] = "rollback"
+                atomic_json(path, job)
+                try:
+                    if git_state:
+                        restore_git_source(target, git_state)
+                    elif backup is not None:
+                        restore_backup(backup, target)
+                    else:
+                        raise RuntimeError("rollback source is unavailable")
+                    job["rollback"] = {"performed": False, "status": "not-required", "reason": "installer-refused"}
+                    job["stage"] = "failed-pre-mutation"
+                except Exception as src_exc:
+                    log.write(f"[TEC-TAC-UPDATE] SOURCE RESTORE FAILED: {src_exc}\n")
+                    log.flush()
+                    job["rollback"] = {"performed": True, "status": "failed", "version": old_version, "reason": "installer-refused", "error": str(src_exc)}
+                    job["stage"] = "rollback-failed"
+            elif backup is None and not git_state:
                 # Root verification/downgrade policy failed before the installed
                 # source was mutated. Nothing needs rolling back.
                 job["rollback"] = {"performed": False, "status": "not-required"}

@@ -13,10 +13,15 @@ tests/online-catalog-availability-1.17.41.py). Nothing touches the network or th
 from __future__ import annotations
 
 import ast
+import contextlib
 import copy
+import ipaddress
 import json
 import logging
 import re
+import sys
+import time
+import types
 import tempfile
 import urllib.parse
 import uuid
@@ -57,10 +62,19 @@ class TestLog:
 WORK = Path(tempfile.mkdtemp(prefix="default-repo-")) / "module-manager" / "repositories"
 ns: dict = {
     "json": json, "re": re, "urllib": urllib, "uuid": uuid, "logging": logging, "datetime": datetime, "timezone": timezone,
-    "Path": Path, "Counter": __import__("collections").Counter,
+    "Path": Path, "Counter": __import__("collections").Counter, "ipaddress": ipaddress, "contextlib": contextlib, "time": time,
 }
+# 1.17.43: the configuration lock uses fcntl, which does not exist on the Windows PC. A no-op stub stands in for it here; the lock's
+# own behaviour is pinned by tests/repository-seed-lock-1.17.43.py.
+_fcntl_stub = types.ModuleType("fcntl")
+_fcntl_stub.LOCK_EX, _fcntl_stub.LOCK_NB, _fcntl_stub.LOCK_UN = 2, 4, 8
+_fcntl_stub.flock = lambda fd, op: None
+sys.modules.setdefault("fcntl", _fcntl_stub)
 ns["REPOSITORY_ROOT"] = WORK
 ns["CONFIG_FILE"] = WORK / "repositories.json"
+ns["CONFIG_LOCK"] = WORK / "repositories.lock"
+ns["CONFIG_LOCK_WAIT_SECONDS"] = 0.2
+ns["CONFIG_LOCK_POLL_SECONDS"] = 0.01
 ns["CACHE_ROOT"] = WORK / "cache"
 ns["REPO_ID_RE"] = re.compile(r"^[a-z0-9][a-z0-9_-]{1,63}$")
 ns["TRUST_LEVELS"] = {"official", "internal", "custom"}
@@ -77,6 +91,9 @@ names = {
     "logger", "DEFAULT_REPOSITORIES", "DEFAULTS_SEEDED_KEY", "ModuleRepositoryError", "_utcnow", "_default_config",
     "_atomic_repo_json", "load_repositories", "_validated_port", "_clean_url", "_clean_repo_id", "public_repository",
     "list_repositories", "upsert_repository", "delete_repository", "seed_default_repositories",
+    "CONFIG_LOCK", "_config_lock", "_find_repository", "_requested_name", "_requested_trust", "_requested_url",
+    "SUPERSEDED_DEFAULT_URLS", "_correct_superseded_url", "_seed_address_check", "_normalize_address",
+    "_always_blocked_address", "_private_address", "_CGNAT",
 }
 exec(compile(ast.Module(body=extract(REPO_TREE, names) + [
     n for n in REPO_TREE.body if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "TRUST_LEVELS" for t in n.targets)
@@ -122,7 +139,7 @@ must(len(config["repositories"]) == 1, config)
 record = config["repositories"][0]
 must(record["id"] == "tec-tac-official" and record["trust"] == "official" and record["enabled"] is False, record)
 must(record["priority"] == 100 and record["name"] == "Tec-Tac official modules (Tech Flow Dynamics)", record)
-must(record["url"] == "https://lic-service.tec-tac.techxflow.net.za/modules/index.json", record["url"])
+must(record["url"] == "https://lic-service.tec-tac.techxflow.net.za/api/v1/repository/channels/development/index.json", record["url"])  # 1.17.43 (CQ125)
 must(config[MARK] == ["tec-tac-official"], config.get(MARK))
 must(record["created_at"] and record["updated_at"], "timestamps are written as upsert writes them")
 must(config["schema"] == 1, config)

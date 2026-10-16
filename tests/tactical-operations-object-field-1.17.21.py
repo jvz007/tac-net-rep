@@ -238,7 +238,7 @@ json.dumps(ops.list_operations())
 
 # ---- capability, docs and contract text
 meta_cap = ops.tactical_operations_contract_metadata()
-must(meta_cap["version"] == "1.11.0" and meta_cap["declaration_keys_added_in_1_7_0"] == ["audit.object_field", "audit.object_body_field"], meta_cap)
+must(meta_cap["version"] == "1.12.0" and meta_cap["declaration_keys_added_in_1_7_0"] == ["audit.object_field", "audit.object_body_field"], meta_cap)
 docs = (ROOT / "docs/tactical-operations.md").read_text(encoding="utf-8")
 for needle in ("audit.object_field", "audit.object_body_field", "object_source", "CQ66 b", "`audit.object_param` and no scope object", "original request asked for one key"):
     must(needle in docs, needle)
