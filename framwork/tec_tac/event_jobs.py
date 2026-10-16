@@ -184,8 +184,9 @@ CALLER_OK = "ok"
 CALLER_FOREIGN = "foreign"  # a real caller that is not the owning module
 CALLER_UNVERIFIABLE = "unverifiable"  # the module list or state could not be read: not a refusal of anyone
 _UNVERIFIABLE_LOG_KEY = "(could not be verified)"
-_local_refusals: dict[tuple[str, str, int], int] = {}  # the fallback tally when the shared cache raises; this process only
-_local_reported: set[tuple[str, str, int]] = set()
+_pending_refusals: dict[tuple[str, str, int], int] = {}  # a send buffer only (1.17.49): counts wait here for the next bulk send; nothing reads it back
+_REFUSAL_LOCK = threading.Lock()
+_LAST_REFUSAL_FLUSH: list = [None]  # monotonic time of this process's last send attempt; None until the first
 
 
 def _verified_caller_ok(definition: EventJobDefinition) -> str:
@@ -243,23 +244,111 @@ def _refusal_key(module_id: str, job_id: str, bucket: int, part: str = "count") 
 
 
 def _note_refusal(definition: EventJobDefinition) -> None:
-    """Count one refused publish of this job in the current clock hour. Never raises and never waits: the shared cache first, a bounded
-    process-local tally when the cache raises. Holds the owner module id, the job id and the hour, never a key or a payload."""
+    """Count one refused publish of this job in the current clock hour. Never raises and never waits: it adds to a process-local, locked
+    buffer and makes no cache, database or network call. When the flush window has passed, the buffer goes to Core's worker in one bounded
+    broker message (``_flush_refusals``); the worker writes the shared cache. Holds the owner module id, the job id and the hour, never a
+    key or a payload."""
     try:
         bucket = int(time.time() // policy.REFUSAL_WINDOW_SECONDS)
-        try:
-            from django.core.cache import cache
-
-            count_key = _refusal_key(definition.module_id, definition.id, bucket)
-            cache.add(count_key, 0, policy.REFUSAL_TTL_SECONDS)
-            cache.incr(count_key)
-        except Exception:
-            local_key = (definition.module_id, definition.id, bucket)
-            if len(_local_refusals) > 256 and local_key not in _local_refusals:
-                _local_refusals.clear()
-            _local_refusals[local_key] = _local_refusals.get(local_key, 0) + 1
+        _buffer_refusal((definition.module_id, definition.id, bucket), 1)
     except Exception:
         logger.debug("The refusal of an event job publish could not be counted.", exc_info=True)
+        return
+    _flush_refusals()
+
+
+def _buffer_refusal(key: tuple[str, str, int], count: int) -> None:
+    with _REFUSAL_LOCK:
+        if len(_pending_refusals) >= policy.REFUSAL_BUFFER_KEYS and key not in _pending_refusals:
+            _pending_refusals.clear()
+        _pending_refusals[key] = _pending_refusals.get(key, 0) + count
+
+
+def _flush_refusals() -> bool:
+    """Send the buffered refusal counts to the worker, at most once per ``policy.REFUSAL_FLUSH_SECONDS`` per process. One bounded broker
+    message (the publish's own timeouts and circuit breaker), at most ``policy.REFUSAL_MAX_ENTRIES`` entries of
+    [module id, job id, hour, count]. When the breaker is open or the send fails, the entries go back into the buffer and the next window
+    tries again. Never raises, touches no cache and no database. True when a message was sent."""
+    try:
+        now = time.monotonic()
+        with _REFUSAL_LOCK:
+            last = _LAST_REFUSAL_FLUSH[0]
+            if not _pending_refusals or (last is not None and 0 <= now - last < policy.REFUSAL_FLUSH_SECONDS):
+                return False
+            _LAST_REFUSAL_FLUSH[0] = now
+            taken = list(_pending_refusals.items())[: policy.REFUSAL_MAX_ENTRIES]
+            for key, _count in taken:
+                del _pending_refusals[key]
+        entries = [[module_id, job_id, bucket, count] for (module_id, job_id, bucket), count in taken]
+        if _send_refusals(entries):
+            return True
+        for (module_id, job_id, bucket), count in taken:
+            _buffer_refusal((module_id, job_id, bucket), count)
+        return False
+    except Exception:
+        logger.debug("The refusal counts of event job publishes could not be sent.", exc_info=True)
+        return False
+
+
+def _send_refusals(entries: list) -> bool:
+    """One bounded attempt to hand ``entries`` to ``tec_tac.note_event_job_refusals``. Never raises. False when skipped or failed."""
+    try:
+        if not _BREAKER.allow():
+            return False
+        from .tasks import note_event_job_refusals
+
+        timeout = policy.BROKER_TIMEOUT_SECONDS
+        options = {"socket_timeout": timeout, "socket_connect_timeout": timeout}
+        with note_event_job_refusals.app.connection_for_write(transport_options=options, connect_timeout=timeout) as broker:
+            note_event_job_refusals.apply_async(
+                args=[entries], connection=broker, retry=False, expires=policy.REFUSAL_TTL_SECONDS, ignore_result=True,
+            )
+        _BREAKER.success()
+        return True
+    except Exception:
+        _BREAKER.failure()
+        logger.warning("Event job refusal counts could not be sent; they are kept for the next window.", exc_info=True)
+        return False
+
+
+def apply_refusal_counts(entries) -> int:
+    """The worker side (task ``tec_tac.note_event_job_refusals``): add each valid entry's count to the shared cache. Never raises.
+
+    An entry is [module id, job id, hour, count]. A list longer than ``policy.REFUSAL_MAX_ENTRIES`` or not a list is ignored whole; an
+    entry whose job is unknown, whose hour is not within the last ``policy.REFUSAL_BUCKET_AGE_HOURS`` hours, or whose count is not an
+    integer is ignored. The count is clamped to 1..``policy.REFUSAL_COUNT_MAX``. A cache fault is logged and that count is lost (CQ141: a
+    count is a count, not proof). Returns the number of entries applied."""
+    try:
+        if not isinstance(entries, (list, tuple)) or len(entries) > policy.REFUSAL_MAX_ENTRIES:
+            logger.warning("An event job refusal message was ignored: it is not a list of at most %s entries.", policy.REFUSAL_MAX_ENTRIES)
+            return 0
+        known = set(_known_jobs())
+        current = int(time.time() // policy.REFUSAL_WINDOW_SECONDS)
+        applied = 0
+        for entry in entries:
+            try:
+                if not isinstance(entry, (list, tuple)) or len(entry) != 4:
+                    continue
+                module_id, job_id, bucket, count = entry
+                if not (isinstance(module_id, str) and isinstance(job_id, str)) or (module_id, job_id) not in known:
+                    continue
+                if isinstance(bucket, bool) or not isinstance(bucket, int) or not current - policy.REFUSAL_BUCKET_AGE_HOURS < bucket <= current:
+                    continue
+                if isinstance(count, bool) or not isinstance(count, int):
+                    continue
+                count = max(1, min(count, policy.REFUSAL_COUNT_MAX))
+                from django.core.cache import cache
+
+                count_key = _refusal_key(module_id, job_id, bucket)
+                cache.add(count_key, 0, policy.REFUSAL_TTL_SECONDS)
+                cache.incr(count_key, count)
+                applied += 1
+            except Exception:
+                logger.warning("An event job refusal count could not be written to the shared cache; it is lost.", exc_info=True)
+        return applied
+    except Exception:
+        logger.warning("Event job refusal counts could not be applied.", exc_info=True)
+        return 0
 
 
 def _module_enabled_cached(module_id: str) -> bool:
@@ -481,6 +570,7 @@ def flush_counters(now=None, *, force: bool = False) -> int:
         if not force:
             if connection.in_atomic_block or time.monotonic() - _LAST_FLUSH[0] < policy.DROP_FLUSH_SECONDS:
                 return 0
+        _flush_refusals()
         with _COUNTER_LOCK:
             pending = {key: dict(value) for key, value in _COUNTERS.items() if any(value.values())}
             _COUNTERS.clear()
@@ -745,8 +835,9 @@ def verify_event_job_context(context, *, expected_module_id, expected_job_id) ->
 # ------------------------------------------------------------------------------------------------ audit
 
 def _audit(action: str, *, module_id: str, job_id: str, key: str = "", attempt: int = 0, error_type: str = "", error: str = "",
-           message: str, extra: dict | None = None) -> None:
-    """One Core audit row for an event job outcome. Never the payload, never a secret. Best effort: a failed write is logged."""
+           message: str, extra: dict | None = None) -> bool:
+    """One Core audit row for an event job outcome. Never the payload, never a secret. Best effort: a failed write is logged.
+    True only when ``audit.record`` returned without raising."""
     try:
         from . import audit
 
@@ -759,8 +850,10 @@ def _audit(action: str, *, module_id: str, job_id: str, key: str = "", attempt: 
             actor=audit.service_audit_actor(module_id="core", service=ACTOR_SERVICE, identity=job_id), module_id="core", action=action,
             object_type=OBJECT_TYPE, object_id=job_id, message=message, metadata=metadata,
         )
+        return True
     except Exception:
         logger.exception("The Core audit row of event job %s could not be written.", job_id)
+        return False
 
 
 def _audit_row(action: str, row, message: str, extra: dict | None = None) -> None:
@@ -1075,37 +1168,45 @@ def _tick_report_drops(now, out) -> None:
 
 
 def _refusal_count(module_id: str, job_id: str, bucket: int) -> int:
-    count = 0
+    """The shared cache's count for this hour, 0 when it is empty or the cache raises. The tick reads only the shared cache: with a
+    per-process cache (local development) it sees only its own process. The send buffer is never read."""
     try:
         from django.core.cache import cache
 
-        count += int(cache.get(_refusal_key(module_id, job_id, bucket)) or 0)
+        return int(cache.get(_refusal_key(module_id, job_id, bucket)) or 0)
     except Exception:
-        logger.debug("The refusal tally could not be read from the cache.", exc_info=True)
-    return count + _local_refusals.get((module_id, job_id, bucket), 0)
+        logger.warning("The refusal tally of event job %s could not be read from the cache; the hour is skipped this tick.", job_id, exc_info=True)
+        return 0
 
 
 def _claim_refusal_report(module_id: str, job_id: str, bucket: int) -> bool:
-    """True once per (module, job, hour) across workers: ``cache.add`` is atomic. A raising cache falls back to this process's set."""
-    local_key = (module_id, job_id, bucket)
+    """True once per (module, job, hour) across workers: ``cache.add`` is atomic. A raising cache skips the hour (no local claim)."""
     try:
         from django.core.cache import cache
 
-        claimed = bool(cache.add(_refusal_key(module_id, job_id, bucket, "reported"), 1, policy.REFUSAL_TTL_SECONDS))
+        return bool(cache.add(_refusal_key(module_id, job_id, bucket, "reported"), 1, policy.REFUSAL_TTL_SECONDS))
     except Exception:
-        claimed = local_key not in _local_reported
-    if claimed:
-        if len(_local_reported) > 256:
-            _local_reported.clear()
-        _local_reported.add(local_key)
-    return claimed
+        logger.warning("The refusal report of event job %s could not be claimed; the hour is skipped this tick.", job_id, exc_info=True)
+        return False
+
+
+def _release_refusal_claim(module_id: str, job_id: str, bucket: int) -> None:
+    """Best effort: free the claim after a failed audit write so the next tick writes the row."""
+    try:
+        from django.core.cache import cache
+
+        cache.delete(_refusal_key(module_id, job_id, bucket, "reported"))
+    except Exception:
+        logger.warning("The refusal report claim of event job %s could not be released.", job_id, exc_info=True)
 
 
 def _tick_report_refusals(now, out) -> None:
     """One audit row per (owner module, job) and clock hour for publishes refused because the caller was not the owner, with the count.
 
     Reads the two hours before the current one, so a missed tick still reports. The row never appears before its hour ends. The tally is
-    in the shared cache: a flush can lose a count (a count is a count, not proof). A caller that could not be verified is not counted."""
+    in the shared cache: a flush or fault can lose a count (a count is a count, not proof). The claim comes first (two ticks never write
+    twice); when the audit write fails the claim is released and the next tick, within the look-back, writes the row. A caller that could
+    not be verified is not counted."""
     current = int(now.timestamp() // policy.REFUSAL_WINDOW_SECONDS)
     for module_id, job_id in _known_jobs():
         for bucket in (current - 2, current - 1):
@@ -1114,12 +1215,14 @@ def _tick_report_refusals(now, out) -> None:
                 continue
             if not _claim_refusal_report(module_id, job_id, bucket):
                 continue
-            _local_refusals.pop((module_id, job_id, bucket), None)
             hour_start = datetime.fromtimestamp(bucket * policy.REFUSAL_WINDOW_SECONDS, tz=dt_timezone.utc).isoformat()
-            _audit(ACTION_REFUSED, module_id=module_id, job_id=job_id, error_type="CallerRefused",
-                   message=(f"Event job {job_id}: {count} publish(es) were refused in the hour from {hour_start} "
-                            "because the caller was not the module that owns the job."),
-                   extra={"count": count, "window_seconds": policy.REFUSAL_WINDOW_SECONDS, "hour_start": hour_start})
+            written = _audit(ACTION_REFUSED, module_id=module_id, job_id=job_id, error_type="CallerRefused",
+                             message=(f"Event job {job_id}: {count} publish(es) were refused in the hour from {hour_start} "
+                                      "because the caller was not the module that owns the job."),
+                             extra={"count": count, "window_seconds": policy.REFUSAL_WINDOW_SECONDS, "hour_start": hour_start})
+            if not written:
+                _release_refusal_claim(module_id, job_id, bucket)
+                continue
             out["refused_reported"] += 1
 
 
@@ -1262,9 +1365,11 @@ def event_jobs_contract_metadata() -> dict:
             "code of the enabled, non-legacy module that owns the job; anything else answers error and stores nothing. A module disabled in the "
             "last 5 seconds is still recognised for up to 5 seconds; the worker re-checks the module before any handler runs. A publish made "
             "while the module list or state cannot be read answers error 'the caller could not be verified' and is lost (nothing is stored to "
-            "retry); the next publish after about 1 second is checked again. A refusal for a foreign caller is counted in the shared cache "
-            "and reported as one Core audit row (custom:event-job-refused, with the count) per module and job once the clock hour ends; a "
-            "cache flush can lose a count, so a count is a count and not proof."
+            "retry); the next publish after about 1 second is checked again. A refusal for a foreign caller is counted in memory and sent to "
+            "Core's worker in bulk (at most one bounded broker message a minute per process, no Redis call in publish); the worker keeps the "
+            "count in the shared cache, and it is reported as one Core audit row (custom:event-job-refused, with the count) per module and job "
+            "once the clock hour ends. A cache flush or fault loses a count, and a process that stops publishing can hold up to one minute "
+            "of counts unsent, so a count is a count and not proof."
         ),
         "requires_framework": ">=1.17.47",
     }
@@ -1303,8 +1408,9 @@ def _clear_for_tests() -> None:
     _GAUGES.clear()
     _ENABLED.clear()
     _last_refusal_log.clear()
-    _local_refusals.clear()
-    _local_reported.clear()
+    with _REFUSAL_LOCK:
+        _pending_refusals.clear()
+        _LAST_REFUSAL_FLUSH[0] = None
     with contextlib.suppress(Exception):
         from . import caller_identity
 

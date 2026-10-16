@@ -58,6 +58,11 @@ DROP_FLUSH_SECONDS = 60
 REFUSAL_WINDOW_SECONDS = 3600  # refused publishes are tallied per clock hour and reported once, after the hour ends (1.17.48)
 REFUSAL_CACHE_PREFIX = "tectac:eventjob-refused"  # the tally lives in Django's shared cache, never in the database
 REFUSAL_TTL_SECONDS = 3 * 3600  # long enough for the tick after the hour, and for one that missed it
+REFUSAL_FLUSH_SECONDS = 60  # a process sends its buffered refusal counts to the worker at most this often (1.17.49)
+REFUSAL_MAX_ENTRIES = 64  # entries in one broker message; a longer list is refused by the worker
+REFUSAL_BUFFER_KEYS = 256  # (module, job, hour) keys a process buffers before it clears the buffer
+REFUSAL_COUNT_MAX = 100000  # the worker clamps one entry's count to 1..this
+REFUSAL_BUCKET_AGE_HOURS = 3  # the worker takes only an hour no older than this
 
 STATUS_PENDING = "pending"
 STATUS_RUNNING = "running"

@@ -195,6 +195,16 @@ def execute_event_job(self, row_id: str):
     return run_event_job(row_id, celery_task_id=str(getattr(self.request, "id", "") or ""))
 
 
+@app.task(name="tec_tac.note_event_job_refusals", ignore_result=True, time_limit=60)
+def note_event_job_refusals(entries):
+    """Core-internal (Core 1.17.49, not a module contract). A web process sends the refusal counts of event-job publishes here in bulk, so
+    the publish path never calls the shared cache. ``entries`` is a list of [module id, job id, hour, count]; ``apply_refusal_counts``
+    validates every entry, writes the shared cache and never raises."""
+    from .event_jobs import apply_refusal_counts
+
+    return apply_refusal_counts(entries)
+
+
 @app.task(name="tec_tac.capability_probe")
 def capability_probe(capability_id: str, version: str | None = None):
     """Return capability state from the Celery worker process for diagnostics."""

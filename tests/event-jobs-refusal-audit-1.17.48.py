@@ -3,14 +3,15 @@
 
 The real tec_tac/event_jobs.py, event_jobs_policy.py and caller_identity.py run against a temporary extensions folder, with real frames
 compiled under stub plugin folders (the technique of tests/event-jobs-caller-1.17.47.py). Stubbed: Django's transaction and connection,
-the registry, the module state, the shared cache (``CACHE``: add, incr, get, with a switch that makes it raise), ``audit.record`` and the
+the registry, the module state, the shared cache (``CACHE``: add, incr, get, delete, with a switch that makes it raise), the Celery send (since 1.17.49 a refusal reaches the
+cache through the buffer, one bounded broker message and the worker function ``apply_refusal_counts``, run by ``settle()``), ``audit.record`` and the
 stat-row model. Django is not installed on this PC, so the real tick, cache and audit table run only through these stubs.
 
 Covered: refusals of a foreign caller (another module, a library frame) are tallied and give no audit row before the hour ends; a tick
 after the hour turns writes exactly one row per (module, job) with the total count, action custom:event-job-refused; a second tick writes
 nothing more (the guard); a second job has its own row; a tick that missed an hour still reports it; a zero count writes no row; the row
-holds no key and no payload; a raising cache falls back to the local tally and the publish still answers error, never raises and stores
-nothing; a registry or state fault adds no tally; the owner's accepted publishes add no tally; the capability stays 1.1.0 and lists
+holds no key and no payload; a raising cache never breaks the publish (it answers error, never raises and stores nothing) and the tick
+then writes no row (1.17.49 dropped the local fallback); a registry or state fault adds no tally; the owner's accepted publishes add no tally; the capability stays 1.1.0 and lists
 custom:event-job-refused; no migration is added and the stat model gains no field.
 """
 from __future__ import annotations
@@ -98,10 +99,14 @@ class FakeCache:
         self.ttls.append(timeout)
         return True
 
-    def incr(self, key):
+    def incr(self, key, delta=1):
         self._check()
-        self.data[key] += 1
+        self.data[key] += delta
         return self.data[key]
+
+    def delete(self, key):
+        self._check()
+        self.data.pop(key, None)
 
     def get(self, key, default=None):
         self._check()
@@ -128,6 +133,18 @@ mod("tec_tac.audit", record=lambda **kw: AUDIT.append(kw),
     service_audit_actor=lambda **kw: dict(kw))
 
 
+SENT: list = []
+
+
+class FakeTask:
+    app = SimpleNamespace(connection_for_write=lambda **kw: __import__("contextlib").nullcontext(object()))
+
+    @staticmethod
+    def apply_async(args, **kw):
+        SENT.append(args[0])
+
+
+mod("tec_tac.tasks", note_event_job_refusals=FakeTask)
 mod("tec_tac.models", TecTacEventJobStat=SimpleNamespace(objects=SimpleNamespace(all=lambda: list(STATS))))
 
 
@@ -174,7 +191,7 @@ def key():
 
 def reset():
     ej._clear_for_tests()
-    del STORED[:], AUDIT[:], STATS[:]
+    del STORED[:], AUDIT[:], STATS[:], SENT[:]
     CACHE.data.clear()
     CACHE.ttls.clear()
     CACHE.raises = False
@@ -187,7 +204,16 @@ def register(job="deliver", handler=None):
     return ej.register_event_job(id=f"alerts.{job}", module_id="alerts", label="Send an alert notice", handler=handler or alerts["deliver"])
 
 
+def settle():
+    """Flush this process's buffer (the next window) and let the worker apply every message."""
+    MONO[0] += 61
+    ej._flush_refusals()
+    while SENT:
+        ej.apply_refusal_counts(SENT.pop(0))
+
+
 def tick(now_wall):
+    settle()
     out = {"refused_reported": 0}
     ej._tick_report_refusals(datetime.fromtimestamp(now_wall, tz=timezone.utc), out)
     return out
@@ -242,7 +268,6 @@ reset()
 handle = register()
 beta["fire"](handle, key())
 tick(WALL[0] + HOUR + 1)
-ej._local_reported.clear()  # a second process has no local memory, only the shared cache
 tick(WALL[0] + HOUR + 2)
 must(len(rows()) == 1, "the shared cache guard, not the local set, stops the second worker")
 print("       two ticks on different workers write one row (the shared guard)")
@@ -277,7 +302,7 @@ reset()
 handle = register()
 for _ in range(10):
     must(alerts["fire"](handle, key()).outcome == "queued", "owner accepted")
-must(not CACHE.data and not ej._local_refusals and tick(WALL[0] + HOUR + 5)["refused_reported"] == 0, "no tally for accepted publishes")
+must(not CACHE.data and not ej._pending_refusals and tick(WALL[0] + HOUR + 5)["refused_reported"] == 0 and not SENT, "no tally for accepted publishes")
 print("       the owner's accepted publishes add no tally")
 
 # a registry or state fault adds no tally and writes no row
@@ -289,42 +314,34 @@ ci.clear_snapshot_for_tests()
 for _ in range(5):
     r = alerts["fire"](handle, key())
     must((r.outcome, r.reason) == ("error", "the caller could not be verified"), r)
-must(not CACHE.data and not ej._local_refusals, "a registry fault is not a refusal")
+must(not CACHE.data and not ej._pending_refusals, "a registry fault is not a refusal")
 STATE["registry_error"] = False
 MONO[0] += 5
 ci.clear_snapshot_for_tests()
 ej._ENABLED.set("alerts", True)
 STATE["state_error"] = True
 r = alerts["fire"](handle, key())
-must((r.outcome, r.reason) == ("error", "the caller could not be verified") and not CACHE.data and not ej._local_refusals, "a state fault is not a refusal")
+must((r.outcome, r.reason) == ("error", "the caller could not be verified") and not CACHE.data and not ej._pending_refusals, "a state fault is not a refusal")
 must(tick(WALL[0] + HOUR + 5)["refused_reported"] == 0 and not AUDIT and not STORED, "no row, nothing stored")
 print("       a registry or state fault (could not be verified) adds no tally and writes no row")
 
-# a raising cache falls back to the local tally: no raise, still error, nothing stored, the same tick reports it
+# a raising cache: the publish is untouched (it never calls the cache), the count is lost, the tick writes no row and raises nothing
 reset()
 handle = register()
 CACHE.raises = True
 for _ in range(4):
     r = beta["fire"](handle, key())
     must((r.outcome, r.reason) == ("error", "the caller is not the module that owns this job"), r)
-must(not STORED and sum(ej._local_refusals.values()) == 4, ej._local_refusals)
-ej._local_refusals.clear()
-for n in range(300):  # bounded: a full dict is cleared when a new entry arrives, so it never grows without limit
-    ej._local_refusals[("m", f"j{n}", 1)] = 1
-beta["fire"](handle, key())
-must(len(ej._local_refusals) == 1 and sum(ej._local_refusals.values()) == 1, len(ej._local_refusals))
-ej._local_refusals.clear()
-beta["fire"](handle, key())
-beta["fire"](handle, key())
-out = tick(WALL[0] + HOUR + 5)  # the cache still raises: the tick reads the local tally and guards locally
-must(out["refused_reported"] == 1 and rows()[0]["metadata"]["count"] == 2, (out, AUDIT))
-must(tick(WALL[0] + HOUR + 6)["refused_reported"] == 0 and len(rows()) == 1, "the local guard also stops a repeat")
-print("       a raising cache falls back to a bounded local tally; the publish still answers error and stores nothing")
+must(not STORED, "nothing stored")
+out = tick(WALL[0] + HOUR + 5)
+must(out["refused_reported"] == 0 and not rows(), (out, AUDIT))
+print("       a raising cache never breaks the publish; that hour's count is lost and the tick writes no row (the local fallback is gone)")
 
 # the cache key and TTL
 reset()
 handle = register()
 beta["fire"](handle, key())
+settle()
 (only_key,) = CACHE.data.keys()
 must(only_key.startswith(policy.REFUSAL_CACHE_PREFIX) and "alerts" in only_key and "alerts.deliver" in only_key and SECRET not in only_key, only_key)
 must(CACHE.ttls == [policy.REFUSAL_TTL_SECONDS] and 2 * 3600 < policy.REFUSAL_TTL_SECONDS <= 4 * 3600, CACHE.ttls)
@@ -339,6 +356,7 @@ reset()
 handle = register()
 beta["fire"](handle, key())
 ej.timezone = SimpleNamespace(now=lambda: datetime.fromtimestamp(WALL[0] + HOUR + 5, tz=timezone.utc))
+settle()
 result = ej.recover_event_jobs()
 must(result["refused_reported"] == 1 and result["errors"] == 0 and len(rows()) == 1, result)
 src = (APP / "event_jobs.py").read_text(encoding="utf-8")

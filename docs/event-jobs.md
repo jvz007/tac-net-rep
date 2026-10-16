@@ -151,7 +151,7 @@ stops a schedule. The work is bounded to 200 rows a step:
 - a running row older than its hard time limit plus 5 minutes is a failed attempt (retry or give up);
 - a pending row never sent, or whose `next_attempt_at` passed more than 60 seconds ago, is sent again;
 - a backlog over `max_backlog` is trimmed, oldest first, and counted as dropped;
-- the backlog gauges are refreshed, this process's counters are flushed, and one audit row is written per job that dropped, and one per job and clock hour for publishes refused because the caller was not the owner (`custom:event-job-refused`, written after the hour ends);
+- the backlog gauges are refreshed, this process's counters and any buffered refusal counts are flushed, and one audit row is written per job that dropped, and one per job and clock hour for publishes refused because the caller was not the owner (`custom:event-job-refused`, written after the hour ends);
 - finished rows older than the Scheduler's `run_retention_days` are removed, with a hard cap of 20000 finished rows.
 
 ## Audit
@@ -173,10 +173,17 @@ A retry is recorded on the job row and in the counters, not as an audit row.
 
 The refused row holds `owner_module`, `job_id`, `count`, `window_seconds` (3600) and `hour_start` (ISO time), and never a key or a payload. It
 appears once, in the tick after the hour ends (a tick that missed an hour reports it the next time, up to two hours back), so the immediate
-signal stays the warning in the log. The count lives in Django's shared cache (Redis on a Tactical server), with no database column and no
-migration, so a cache flush or restart inside the hour can lose that hour's count: a count is a count, not proof. With a per-process cache
-(local development) the tick only sees its own process's tally. A caller that could not be verified (the module list or state could not be
-read) is not a refusal and writes no row.
+signal stays the warning in the log. Where the count is held (1.17.49): the publish only adds one to a small buffer in the web process's memory
+(at most 256 keys, never a key or a payload) and makes no Redis, database or network call for it. At most once a minute per process, the buffer goes
+to Core's own Celery worker in one bounded broker message (2 second timeout, the publish's circuit breaker, at most 64 entries of module id, job id,
+hour and count), also from the Scheduler tick's counter flush, so counts do not wait for the next refusal. If the broker is down the entries stay in
+the buffer and the next minute tries again. The worker task `tec_tac.note_event_job_refusals` checks every entry (known job, an hour in the last 3
+hours, an integer count clamped to 1..100000) and adds it to Django's shared cache (Redis on a Tactical server). It is Core-internal, not a module
+contract. There is no database column and no migration. The limits, stated plainly: a cache flush, a restart or a cache fault loses that hour's
+count (a count is a count, not proof); a process that stops publishing can hold up to one minute of counts unsent; a failed audit write is
+retried on the next tick within the two hour look-back. The tick reads only the shared cache and the in-memory buffer is never read, so with a
+per-process cache (local development) the tick only sees its own process's tally. A caller that could not be verified (the module list or state could
+not be read) is not a refusal and writes no row.
 
 ## Reading the state
 
@@ -203,7 +210,7 @@ still open. Nothing runs at a person's authority and no permission check passes 
    `calling_module_for_core_provider`: the first frame above `publish` must be the code of the enabled, non-legacy module that owns the job.
    Another module, a Core frame (the Scheduler, a `functools.partial`), a library or generated frame, a disabled or legacy module and any
    error give `error` ('the caller is not the module that owns this job'): nothing is stored or counted, and nothing is raised. The check
-   runs in `publish` itself, never in the commit hook. Core logs one warning per job and refused caller a minute at most, and (1.17.48, CQ138) counts each refusal of a foreign caller for the hourly `custom:event-job-refused` audit row (see Audit). A check that fails because the module list or the module state cannot be read is not a refusal: the publish answers `error` 'the caller could not be verified', stores nothing, writes no row and is lost (nothing is stored to retry); that fault is kept for 1 second, so the next publish after about 1 second is checked again. The residual case: a module that makes another module's own code frame call `publish` (a hook
+   runs in `publish` itself, never in the commit hook. Core logs one warning per job and refused caller a minute at most, and (1.17.48, CQ138) counts each refusal of a foreign caller in memory for the hourly `custom:event-job-refused` audit row (see Audit). The count reaches the worker in bulk, at most one bounded broker message a minute per process; the publish makes no Redis call. A check that fails because the module list or the module state cannot be read is not a refusal: the publish answers `error` 'the caller could not be verified', stores nothing, writes no row and is lost (nothing is stored to retry); that fault is kept for 1 second, so the next publish after about 1 second is checked again. The residual case: a module that makes another module's own code frame call `publish` (a hook
    list or signal that other modules can make it run), the callback-surface limit already listed in `docs/caller-identity.md`.
    *Cost.* The module list and each enabled flag are read through a snapshot kept for 5 seconds (the same window as the module-enabled
    cache), so a Tactical alert save does a stack walk and no disk read (the real path of each file name is kept in the snapshot too, because `realpath` is a system call per path part). On the development PC with stub reads the check adds about 20 microseconds per publish on a warm snapshot; the real-disk cost is read on the dev server with `tests/event-jobs-caller-runtime-1.17.47.py`. A module disabled in the last 5 seconds is still recognised as a caller
