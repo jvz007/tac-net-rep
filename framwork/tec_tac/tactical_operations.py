@@ -102,6 +102,21 @@ registers and runs unchanged):
   4096 characters with control characters other than tab and newline removed, numbers, booleans and nulls, or one level of up to 100
   scalars, and 64 KiB of text per list field. ``<name>_count`` is the full length and ``<name>_truncated`` is true when anything was cut
   or dropped. A malformed list is recorded as its count only. Failed, denied and outcome-unknown rows carry no list.
+
+1.17.45 (the capability is 1.14.0, still major 1; all additive and opt-in, a declaration that passes none of them behaves exactly as before):
+
+* ``audit.action_by_body = {field, map}``: the success row's audit action is chosen from the cleaned value of one declared body field
+  (``{"field": "action", "map": {"approve": "approve", "ignore": "modify"}}``). A value that is missing, not text or not in the map keeps
+  ``audit.action`` as the default. Registration refuses a field that is not in ``body_fields`` (or is a secret field), more than 8 map
+  entries, a key that is not text or is over 40 characters, an action outside the audit vocabulary, and the Core-only actions (``deny``,
+  ``custom:outcome-unknown``, ``custom:operation-failed``). Deny and other Core-only rows keep their own action; the chosen action is
+  recorded in ``metadata.declared_action`` on failed and outcome-unknown rows.
+* A scope entry may name a nested body source, ``body:<field>.<key>``, one level deep. ``<field>`` is one of ``body_fields`` and its value
+  must be an object (a present non-object is 400 ``scope_field_required``). Optional entries, list values and the 1000 id cap behave as
+  for a top-level source. The nested path is refused for ``row_lookup``, for ``audit.object_body_field`` and for ``audit.secret_fields``
+  (the id would carry the value). The body Core forwards to Tactical is the object that was checked.
+* A ``core_refused`` row for ``invalid_correlation_id``, ``invalid_audit_before`` or ``invalid_params`` now carries the declared
+  ``audit.object_id`` (declared text, never caller input).
 """
 from __future__ import annotations
 
@@ -122,7 +137,7 @@ from . import module_category as _module_category
 logger = logging.getLogger("tec_tac.tactical_operations")
 
 CAPABILITY_ID = "core.tactical_operations"
-CAPABILITY_VERSION = "1.13.0"  # 1.17.44: audit.object_id (a declared literal object id); 1.17.43: audit.secret_fields and metadata.object_count
+CAPABILITY_VERSION = "1.14.0"  # 1.17.45: audit.action_by_body, a nested body scope source (body:<field>.<key>), object_id on early core_refused rows; 1.17.44: audit.object_id (a declared literal object id); 1.17.43: audit.secret_fields and metadata.object_count
 AUDIT_HEADER = "X-Tec-Tac-Audit"
 AUDIT_RECORDED = "recorded"
 AUDIT_NOT_RECORDED = "not-recorded"
@@ -157,7 +172,7 @@ _OBJECT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")  # 1.17.44: au
 _CORRELATION_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _SECRET_NAME_RE = re.compile(r"(pass|secret|token|key|credential|auth|cookie|signature)", re.IGNORECASE)
 _PARAM_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
-_SCOPE_SOURCE_RE = re.compile(r"^(path|body):([A-Za-z_][A-Za-z0-9_]{0,63})$")
+_SCOPE_SOURCE_RE = re.compile(r"^(path|body):([A-Za-z_][A-Za-z0-9_]{0,63})(?:\.([A-Za-z_][A-Za-z0-9_]{0,63}))?$")  # 1.17.45: body:<field>.<key>
 _SCOPE_TYPE_BODY_RE = re.compile(r"^body:([A-Za-z_][A-Za-z0-9_]{0,63})$")
 _EXTENSION_RE = re.compile(r"^[a-z0-9]{1,10}$")
 _CONTENT_TYPE_RE = re.compile(r"^[A-Za-z0-9!#$&^_.+-]{1,60}/[A-Za-z0-9!#$&^_.+-]{1,60}$")
@@ -305,6 +320,7 @@ class TacticalOperation:
     file_response: bool = False  # 1.17.41: Tactical answers with a streamed file that Core relays (GET or POST only)
     secret_fields: tuple = ()  # 1.17.43: body fields whose value Core never records; the row carries only changed or unchanged
     audit_object_id: str | None = None  # 1.17.44: a fixed text from the module's declaration; the last fallback for the row's object id
+    audit_action_by_body: tuple = ()  # 1.17.45: (field, ((body value, audit action), ...)); the success row's action follows the body
 
     @property
     def body_cap(self) -> int:
@@ -355,6 +371,9 @@ class TacticalOperation:
                 "lists": list(self.audit_lists),
                 "secret_fields": list(self.secret_fields),
                 "object_id": self.audit_object_id,
+                "action_by_body": (
+                    {"field": self.audit_action_by_body[0], "map": dict(self.audit_action_by_body[1])} if self.audit_action_by_body else None
+                ),
             },
             "caller_scope": self.caller_scope,
             "server_only": self.server_only,
@@ -861,7 +880,7 @@ def _clean_secret_fields(value: Any, fields: tuple, audit_fields: tuple, lists: 
     audit.object_body_field or audit.object_field (the object id would carry the value, 1.17.44 for object_field: Tactical's answer
     often echoes the field) and a body scope source (the ids would carry the value)."""
     names = _clean_names(value, "audit secret_fields", maximum=_MAX_SECRET_FIELDS)
-    body_sources = {spec.source.split(":", 1)[1] for spec in scope_specs if spec.source.startswith("body:")}
+    body_sources = {spec.source.split(":", 1)[1].split(".", 1)[0] for spec in scope_specs if spec.source.startswith("body:")}  # 1.17.45: a nested source counts by its parent
     for name in names:
         if name not in fields:
             raise TacticalOperationRegistrationError(f"audit secret_fields {name!r} is not one of body_fields.")
@@ -874,6 +893,61 @@ def _clean_secret_fields(value: Any, fields: tuple, audit_fields: tuple, lists: 
         if name == object_body_field or name == object_field or name in body_sources:
             raise TacticalOperationRegistrationError(f"audit secret_fields {name!r} is the object id or a body scope source, so the id would carry its value.")
     return names
+
+
+# 1.17.45: audit.action_by_body.
+_MAX_ACTION_MAP = 8
+_MAX_ACTION_KEY = 40
+
+
+def _parse_action_by_body(value: Any, verb: str, fields: tuple, secret_fields: tuple, audit_core) -> tuple:
+    """audit.action_by_body (1.17.45): ``{field, map}``. Returns ``(field, ((body value, action), ...))`` or ``()``.
+
+    The success row's action is chosen from the cleaned body value of ``field``. Refused: a GET, a field that is not one of
+    ``body_fields`` or is a secret field (the action would leak a hint of the value), an empty map or more than 8 entries, a key that
+    is not text or is empty or over 40 characters, an action outside the audit vocabulary, and the Core-only actions."""
+    if value is None:
+        return ()
+    if verb not in BODY_METHODS:
+        raise TacticalOperationRegistrationError("audit action_by_body belongs to an operation with a body.")
+    if not isinstance(value, dict) or set(value) != {"field", "map"}:
+        raise TacticalOperationRegistrationError("audit action_by_body is {field, map}.")
+    name = value["field"]
+    if not isinstance(name, str) or not _FIELD_RE.match(name):
+        raise TacticalOperationRegistrationError("audit action_by_body field must be a body field name.")
+    if name not in fields:
+        raise TacticalOperationRegistrationError(f"audit action_by_body field {name!r} is not one of body_fields.")
+    if name in secret_fields:
+        raise TacticalOperationRegistrationError(f"audit action_by_body field {name!r} is a secret field: the action would show a hint of its value.")
+    mapping = value["map"]
+    if not isinstance(mapping, dict) or not mapping:
+        raise TacticalOperationRegistrationError("audit action_by_body map is a non-empty object of body value to audit action.")
+    if len(mapping) > _MAX_ACTION_MAP:
+        raise TacticalOperationRegistrationError(f"audit action_by_body map has more than {_MAX_ACTION_MAP} entries.")
+    pairs = []
+    for key, action_text in mapping.items():
+        if not isinstance(key, str) or not key or len(key) > _MAX_ACTION_KEY:
+            raise TacticalOperationRegistrationError(f"audit action_by_body map keys are text of 1 to {_MAX_ACTION_KEY} characters.")
+        try:
+            chosen = audit_core._normalize_action(action_text)
+        except audit_core.AuditContractError as exc:
+            raise TacticalOperationRegistrationError(f"audit action_by_body: {exc}") from None
+        if chosen == "deny" or chosen == OUTCOME_UNKNOWN_ACTION or chosen == FAILED_ACTION:
+            raise TacticalOperationRegistrationError("audit action_by_body may not choose deny, custom:outcome-unknown or custom:operation-failed: Core writes those only.")
+        pairs.append((key, chosen))
+    return (name, tuple(pairs))
+
+
+def _action_for(operation: TacticalOperation, body: Any) -> str:
+    """The audit action of the success row (1.17.45): ``audit.action_by_body`` picks it from the cleaned body, else ``audit.action``."""
+    if operation.audit_action_by_body and isinstance(body, dict):
+        field_name, pairs = operation.audit_action_by_body
+        chosen = body.get(field_name)
+        if isinstance(chosen, str):
+            for key, action in pairs:
+                if key == chosen:
+                    return action
+    return operation.audit_action
 
 
 def register_tactical_operation(
@@ -991,9 +1065,9 @@ def register_tactical_operation(
     if isinstance(scope, (str, bytes, dict)) or not hasattr(scope, "__iter__"):
         raise TacticalOperationRegistrationError("scope must be a list of {type, source}.")
     # The audit declaration comes first. A scope source is a path or body value only; Tactical decides the rest (1.17.14).
-    if not isinstance(audit, dict) or not {"action", "object_type"} <= set(audit) or set(audit) - {"action", "object_type", "audit_fields", "object_param", "before", "params", "object_field", "object_body_field", "secret_fields", "object_id"}:
+    if not isinstance(audit, dict) or not {"action", "object_type"} <= set(audit) or set(audit) - {"action", "object_type", "audit_fields", "object_param", "before", "params", "object_field", "object_body_field", "secret_fields", "object_id", "action_by_body"}:
         raise TacticalOperationRegistrationError(
-            "audit is {action, object_type, audit_fields, object_param, before, params, object_field, object_body_field, secret_fields, object_id}; all after object_type are optional."
+            "audit is {action, object_type, audit_fields, object_param, before, params, object_field, object_body_field, secret_fields, object_id, action_by_body}; all after object_type are optional."
         )
     if caller_scope is not None and caller_scope != "unrestricted":
         raise TacticalOperationRegistrationError('caller_scope must be "unrestricted" or left out.')
@@ -1036,7 +1110,15 @@ def register_tactical_operation(
             raise TacticalOperationRegistrationError(
                 f"bad scope entry {item!r}: type is agent, agent_pk, client, site or body:<field>, and source is path:<name> or body:<field>."
             )
-        where, name = match.group(1), match.group(2)
+        where, name, nested = match.group(1), match.group(2), match.group(3)
+        if nested is not None:
+            # 1.17.45: body:<field>.<key>, one level deep. The parent must be a body field; the key is read from its object value.
+            if where != "body":
+                raise TacticalOperationRegistrationError(f"scope source {source!r}: only a body source may be nested.")
+            if item.get("row_lookup") is not None:
+                raise TacticalOperationRegistrationError("scope row_lookup belongs to an agent entry with a path source, never a body source.")
+            if name == object_body_field:
+                raise TacticalOperationRegistrationError(f"scope source {source!r} is nested under audit.object_body_field: the object id would carry the value.")
         type_map = ()
         if type_field is not None:
             if type_field.group(1) not in fields:
@@ -1106,6 +1188,7 @@ def register_tactical_operation(
             raise TacticalOperationRegistrationError(f"audit field {name!r} is also an audit param: the row would carry it twice.")
     lists = _clean_audit_lists(audit_lists, verb, fields, before, audit_fields)
     secret_declared = _clean_secret_fields(audit.get("secret_fields"), fields, audit_fields, lists, before, object_body_field, scope_specs, object_field)
+    action_by_body = _parse_action_by_body(audit.get("action_by_body"), verb, fields, secret_declared, audit_core)
     selector = _parse_body_selector(body_selector, fields)
 
     codename = None
@@ -1127,7 +1210,7 @@ def register_tactical_operation(
         caller_scope=caller_scope, body_selector=selector, audit_params=audit_params, server_only=server_only,
         audit_object_field=object_field, audit_object_body_field=object_body_field,
         permissions_any=any_flags, body_max_bytes=body_cap, audit_lists=lists, file_response=file_response,
-        secret_fields=secret_declared, audit_object_id=object_id_literal,
+        secret_fields=secret_declared, audit_object_id=object_id_literal, audit_action_by_body=action_by_body,
     )
     key = (owner, op_id)
     route_key = (verb, _route_key(segments, trailing))
@@ -1237,6 +1320,16 @@ def _scope_entries(operation: TacticalOperation, params: Any, body: Any) -> list
         where, name = spec.source.split(":", 1)
         if where == "path":
             raw = (params or {}).get(name)
+        elif "." in name:
+            # 1.17.45: body:<field>.<key>. An absent or null parent is an absent value; a present non-object parent is a refusal.
+            parent_name, name = name.split(".", 1)
+            parent = (body or {}).get(parent_name)
+            if parent is None:
+                raw = None
+            elif isinstance(parent, dict):
+                raw = parent.get(name)
+            else:
+                raise TacticalOperationError(f"{parent_name} must be an object.", status=400, code="scope_field_required")
         else:
             raw = (body or {}).get(name)
         if spec.optional and (raw is None or (isinstance(raw, list) and not raw)):
@@ -2194,7 +2287,9 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
     if operation.caller_scope == "unrestricted" and not _caller_unrestricted(user):  # 4a. (1.17.18) only for no client or site limits
         raise _refuse(request, operation, "scope_unrestricted_required", 403, "scope_unrestricted_required", hint, correlation_id)
 
-    refusal_object_id = None  # 1.17.22: a core_refused row names an object only after the path parameters were cleaned
+    # 1.17.22: a core_refused row names an object only after the path parameters were cleaned. 1.17.45: until then it carries the
+    # declared audit.object_id (declared text, never caller input, AD-19 condition 4), so an early refusal still names its object.
+    refusal_object_id = operation.audit_object_id
     try:
         correlation_id = _clean_correlation_id(raw_correlation_id)  # 5. (1.17.21: the two cleaners run here) shape, then scope
         audit_before = _clean_audit_before(raw_audit_before)
@@ -2210,6 +2305,8 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
         object_id = _object_id(scope, operation, params)
         count_extra = _object_count_extra(scope)  # 1.17.43: the rows of this call that read the scope carry how many ids it names
         extra: dict = dict(count_extra)
+        action_now = _action_for(operation, body)  # 1.17.45: the success row's action (audit.action_by_body)
+        unknown_extra = {**count_extra, "declared_action": action_now} if operation.audit_action_by_body else count_extra
         if entries:
             from . import resources_adapter as adapter
 
@@ -2269,26 +2366,26 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
         response = _dispatch(match, forwarded)
     except Exception:
         logger.exception("Tactical operation %s/%s raised after dispatch", operation.module_id, operation.id)
-        raise _unknown_outcome(request, operation, object_id, None, "tactical_call_failed", "Tactical failed while running this operation.", correlation_id, row_extra=count_extra) from None
+        raise _unknown_outcome(request, operation, object_id, None, "tactical_call_failed", "Tactical failed while running this operation.", correlation_id, row_extra=unknown_extra) from None
 
     status = int(getattr(response, "status_code", 500))
     if getattr(response, "streaming", False):
         if not operation.file_response:
             _close_stream(response)
-            raise _unknown_outcome(request, operation, object_id, status, "tactical_response_refused", "Core does not relay streaming responses.", correlation_id, row_extra=count_extra)
+            raise _unknown_outcome(request, operation, object_id, status, "tactical_response_refused", "Core does not relay streaming responses.", correlation_id, row_extra=unknown_extra)
         # 1.17.41: a declared file answer is read chunk by chunk up to the same cap as any answer, then closed.
         try:
             content = _read_stream(response)
         except Exception:
             # 1.17.42: a stream that fails part way is an outcome-unknown refusal, never a bare 500. _read_stream has already closed it.
             logger.exception("Tactical operation %s/%s failed while sending its file answer", operation.module_id, operation.id)
-            raise _unknown_outcome(request, operation, object_id, status, "tactical_call_failed", "Tactical failed while sending its answer.", correlation_id, row_extra=count_extra) from None
+            raise _unknown_outcome(request, operation, object_id, status, "tactical_call_failed", "Tactical failed while sending its answer.", correlation_id, row_extra=unknown_extra) from None
         if content is None:
-            raise _unknown_outcome(request, operation, object_id, status, "tactical_response_refused", "Tactical's answer is larger than Core relays.", correlation_id, row_extra=count_extra)
+            raise _unknown_outcome(request, operation, object_id, status, "tactical_response_refused", "Tactical's answer is larger than Core relays.", correlation_id, row_extra=unknown_extra)
     else:
         content = bytes(getattr(response, "content", b"") or b"")
     if len(content) > MAX_RESPONSE_BYTES:
-        raise _unknown_outcome(request, operation, object_id, status, "tactical_response_refused", "Tactical's answer is larger than Core relays.", correlation_id, row_extra=count_extra)
+        raise _unknown_outcome(request, operation, object_id, status, "tactical_response_refused", "Tactical's answer is larger than Core relays.", correlation_id, row_extra=unknown_extra)
 
     content_type = str(response.get("Content-Type", "") or "") if hasattr(response, "get") else ""
     data: Any = content
@@ -2315,7 +2412,7 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
             if secret_before:
                 before_payload = {**(before_payload or {}), **secret_before}
         audit = _write_row(
-            request, operation, action=operation.audit_action, object_id=object_id,
+            request, operation, action=action_now, object_id=object_id,
             message=operation.message or f"Core ran Tactical operation {operation.id}.",
             before=before_payload, after=after_payload, tactical_status=status, extra=success_extra, correlation_id=correlation_id,
         )
@@ -2329,7 +2426,7 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
         # 1.17.20: Tactical refused the change (400, 404, 409, 422, 429 ...). A failed attempt changed nothing, so the row
         # carries no before or after value and none of Tactical's own text.
         failed_extra = {key: value for key, value in extra.items() if not key.startswith("before")}
-        failed_extra.update(declared_action=operation.audit_action, result="failed", failure="tactical_refused")
+        failed_extra.update(declared_action=action_now, result="failed", failure="tactical_refused")
         audit = _write_row(
             request, operation, action=FAILED_ACTION, object_id=object_id,
             message=FAILED_MESSAGE.format(status=status), tactical_status=status, extra=failed_extra, correlation_id=correlation_id,
@@ -2337,7 +2434,7 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
     elif status >= 500 and operation.method != "GET":
         audit = _write_row(
             request, operation, action=OUTCOME_UNKNOWN_ACTION, object_id=object_id, message=OUTCOME_UNKNOWN_MESSAGE, tactical_status=status,
-            correlation_id=correlation_id, extra=count_extra,
+            correlation_id=correlation_id, extra=unknown_extra,
         )
 
     headers = {}
@@ -2498,6 +2595,27 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
             (
                 "list_operations and get_operation show audit.object_id and audit.secret_fields (an empty list for a declaration that has none). "
                 "audit.secret_fields may no longer name the same field as audit.object_field"
+            ),
+        ],
+        # 1.17.45 (capability 1.14.0, still major 1): two optional declaration additions. A declaration that uses neither behaves exactly as before.
+        "declaration_keys_added_in_1_14_0": [
+            "audit.action_by_body (register_tactical_operation audit={... 'action_by_body': {'field', 'map'}}), shown as audit.action_by_body",
+            "a nested body scope source, scope {'source': 'body:<field>.<key>'}, one level deep",
+        ],
+        "behaviour_added_in_1_14_0": [
+            (
+                "audit.action_by_body: the success row's audit action is chosen from the cleaned body value of one body field through a map of at most 8 "
+                "entries (keys text of at most 40 characters, values audit actions that are not deny, custom:outcome-unknown or custom:operation-failed). "
+                "A missing, non-text or unmatched value keeps audit.action. Deny and other Core-only rows keep their own action; failed and outcome-unknown "
+                "rows carry the chosen action in metadata.declared_action (outcome-unknown rows only for an operation that declares action_by_body)"
+            ),
+            (
+                "nested scope source body:<field>.<key>: <field> is one of body_fields and must hold an object (400 scope_field_required otherwise); "
+                "optional entries, list values and the 1000 id cap behave as for a top-level source; refused with row_lookup, audit.object_body_field "
+                "and audit.secret_fields; Core checks scope before Tactical runs and forwards the body it checked"
+            ),
+            (
+                "a core_refused row for invalid_correlation_id, invalid_audit_before or invalid_params carries the declared audit.object_id"
             ),
         ],
         "refusal_row_codes": list(CORE_REFUSAL_ROW_CODES),

@@ -552,3 +552,88 @@ class TecTacModulePreference(models.Model):
 
     def __str__(self):
         return f"{self.user_id}:{self.module_id}:{self.name}"
+
+class TecTacEventJob(models.Model):
+    """One event-started job a module published through ``tec_tac.event_jobs`` (core.event_jobs 1.0.0, Core 1.17.45).
+
+    The row is the durable record: the publish stores it, a Celery message only tells a worker to look at it, and the Scheduler tick
+    enqueues any row whose message was lost. ``payload`` is data the module chose (ids, never secrets or text bodies, at most 2 KiB).
+    It is never logged, audited, listed or returned by a status route. ``policy`` is a snapshot of the registered limits taken at
+    publish time, so the tick can recover a row without the handler being registered in its own process.
+    A partial unique constraint lets one (module, job, key) be pending or running only once.
+    """
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        RUNNING = "running", "Running"
+        SUCCEEDED = "succeeded", "Succeeded"
+        FAILED = "failed", "Failed"
+        SKIPPED = "skipped", "Skipped"
+        EXPIRED = "expired", "Expired"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    module_id = models.CharField(max_length=100)
+    job_id = models.CharField(max_length=160)
+    key = models.CharField(max_length=128)
+    payload = models.JSONField(default=dict, blank=True)
+    policy = models.JSONField(default=dict, blank=True)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    attempt = models.PositiveSmallIntegerField(default=0)
+    max_attempts = models.PositiveSmallIntegerField(default=3)
+    next_attempt_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_enqueued_at = models.DateTimeField(null=True, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    error_type = models.CharField(max_length=120, blank=True, default="")
+    error = models.CharField(max_length=255, blank=True, default="")
+    result = models.JSONField(default=dict, blank=True)
+    celery_task_id = models.CharField(max_length=80, blank=True, default="")
+
+    class Meta:
+        ordering = ("created_at",)
+        indexes = [
+            models.Index(fields=("status", "next_attempt_at"), name="tectac_evjob_due_idx"),
+            models.Index(fields=("module_id", "job_id", "status"), name="tectac_evjob_job_idx"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=("module_id", "job_id", "key"),
+                condition=Q(status__in=("pending", "running")),
+                name="tectac_evjob_active_key",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.job_id}:{self.status}"
+
+
+class TecTacEventJobStat(models.Model):
+    """Counters of one event job (one row per module and job id). ``dropped`` counts publishes Core refused to store (backlog, rate)
+    and rows the tick trimmed; ``dropped_reported`` is how many of them already have an audit row. ``dropped_day`` counts drops in the
+    window that started at ``dropped_day_started`` (reset after 24 hours)."""
+
+    module_id = models.CharField(max_length=100)
+    job_id = models.CharField(max_length=160)
+    published = models.PositiveBigIntegerField(default=0)
+    duplicate = models.PositiveBigIntegerField(default=0)
+    dropped = models.PositiveBigIntegerField(default=0)
+    dropped_reported = models.PositiveBigIntegerField(default=0)
+    dropped_day = models.PositiveBigIntegerField(default=0)
+    dropped_day_started = models.DateTimeField(null=True, blank=True)
+    succeeded = models.PositiveBigIntegerField(default=0)
+    failed = models.PositiveBigIntegerField(default=0)
+    expired = models.PositiveBigIntegerField(default=0)
+    skipped = models.PositiveBigIntegerField(default=0)
+    last_failure_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.CharField(max_length=255, blank=True, default="")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("module_id", "job_id"), name="tectac_evjobstat_unique"),
+        ]
+
+    def __str__(self):
+        return self.job_id

@@ -653,7 +653,19 @@ def scheduler_health(now: datetime | None = None) -> dict:
         "running_runs": TecTacScheduleRun.objects.filter(status=TecTacScheduleRun.Status.RUNNING).count(),
         "failed_last_24h": runs.filter(status=TecTacScheduleRun.Status.FAILED).count(),
         **authorization_revoked_health,
+        "event_jobs": _event_jobs_health(now),  # 1.17.45, additive
     }
+
+
+def _event_jobs_health(now: datetime) -> dict:
+    """The additive ``event_jobs`` block of ``scheduler_health()`` (core.event_jobs 1.0.0). Never raises."""
+    try:
+        from .event_jobs import event_jobs_health
+
+        return event_jobs_health(now)
+    except Exception:
+        logger.exception("The event job health could not be read.")
+        return {"registered": 0, "pending": 0, "running": 0, "failed_last_24h": 0, "dropped_last_24h": 0, "oldest_pending_age_seconds": None, "error": "unavailable"}
 
 
 def _authorization_revoked_health(authorization_revoked) -> dict:
@@ -769,6 +781,17 @@ def _canonicalize_persisted_endpoint_identity(targets):
     return canonical
 
 
+def _recover_event_jobs_safely(now: datetime) -> dict:
+    """The tick's event job work (core.event_jobs 1.0.0, Core 1.17.45). A fault here is logged and never stops the schedules."""
+    try:
+        from .event_jobs import recover_event_jobs
+
+        return recover_event_jobs(now)
+    except Exception:
+        logger.exception("The event job step of the Scheduler tick failed; schedules continue.")
+        return {"error": True}
+
+
 def dispatch_due_schedules(now: datetime | None = None) -> dict:
     now = _as_utc(now or timezone.now())
     state = TecTacSchedulerState.current()
@@ -777,6 +800,7 @@ def dispatch_due_schedules(now: datetime | None = None) -> dict:
     state.save(update_fields=["last_tick_at", "last_tick_error"])
     queued, skipped, dispatch_failed = [], [], []
     stale = recover_stale_runs(now)
+    event_jobs_result = _recover_event_jobs_safely(now)  # 1.17.45: isolated, so a fault there never stops the schedules below
     schedule_ids = list(TecTacSchedule.objects.filter(enabled=True).values_list("id", flat=True))
     try:
         for schedule_id in schedule_ids:
@@ -917,7 +941,7 @@ def dispatch_due_schedules(now: datetime | None = None) -> dict:
         return {
             "queued": queued, "skipped": skipped, "dispatch_failed": dispatch_failed,
             "stale_recovered": stale, "cleaned": cleaned, "cleaned_once": cleaned_once,
-            "cleaned_runs": cleaned_runs, "checked": len(schedule_ids), "now": now.isoformat(),
+            "cleaned_runs": cleaned_runs, "checked": len(schedule_ids), "now": now.isoformat(), "event_jobs": event_jobs_result,
         }
     except Exception as exc:
         state.last_tick_completed_at = timezone.now()

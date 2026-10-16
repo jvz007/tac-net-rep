@@ -584,3 +584,11 @@ Two server-side calls sit next to `reconcile_schedule`. Both need framework >=1.
 The handler context has six more keys: `owner_type`, `owner_module`, `owner_key`, `owner_user_id`, `owner_username` and `one_off`. The user keys are set only for a one-off run and a user-owned schedule.
 
 One-off schedules show in the module schedule list as managed by the module, disabled, with an `owner_key` that starts `one-off:`. Do not reconcile, disable or remove them yourself. Core removes them after the once-retention.
+
+## Work that starts from an event: use an event job, not a schedule (Core 1.17.45)
+
+A schedule runs an action at a time. When a module must do small background work because something happened (a signal, a webhook), it registers
+an event job with `tec_tac.event_jobs.register_event_job` from `AppConfig.ready()` and publishes from the signal receiver. Core stores the job,
+runs the handler on a worker, retries it, limits it and audits it. A module does not start its own thread, timer or event-started Celery task for
+this. A scheduled action's handler context is a different object (`verify_run_context`); the event job context has no user and is checked with
+`verify_event_job_context`. See `docs/event-jobs.md`.

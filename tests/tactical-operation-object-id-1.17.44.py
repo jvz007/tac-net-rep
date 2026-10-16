@@ -8,7 +8,7 @@ outcome-unknown and core_refused. Covered: registration (accepted on a POST, ref
 space, a slash, over 64 characters or a non-string, and together with object_param, object_field or object_body_field), every row
 kind with the literal, a core_refused row never carrying a body value, an operation with a scope object still naming that id,
 describe(), get_operation and list_operations carrying audit.object_id and audit.secret_fields (held Medium of 1.17.43), a secret
-field equal to audit.object_field refused (held Low of 1.17.43), and the capability 1.13.0 with its contract metadata.
+field equal to audit.object_field refused (held Low of 1.17.43), and the capability 1.14.0 with its contract metadata.
 
 Uses the stubs of tests/tactical-operations-1.17.7.py, as tests/tactical-operation-secret-fields-1.17.43.py does.
 """
@@ -197,12 +197,12 @@ print("       secret field equal to audit.object_field refused; a different obje
 
 # (10) the capability and the contract metadata
 meta = ops.tactical_operations_contract_metadata()
-must(ops.CAPABILITY_VERSION == "1.13.0" and meta["version"] == "1.13.0" and meta["version"].split(".")[0] == "1", meta["version"])
+must(ops.CAPABILITY_VERSION == "1.14.0" and meta["version"] == "1.14.0" and meta["version"].split(".")[0] == "1", meta["version"])
 must(meta["declaration_keys_added_in_1_13_0"] and "audit.object_id" in meta["declaration_keys_added_in_1_13_0"][0], meta)
 text = " ".join(meta["behaviour_added_in_1_13_0"])
 for needle in ("every row", "core_refused", "last fallback", "audit.secret_fields", "audit.object_field"):
     must(needle in text, f"the metadata says {needle!r}")
-must(G["CAPS"][-1]["version"] == "1.13.0" if G.get("CAPS") and G["CAPS"][-1]["id"] == "core.tactical_operations" else True, "registered version")
-print("       capability 1.13.0 and the contract metadata name audit.object_id")
+must(G["CAPS"][-1]["version"] == "1.14.0" if G.get("CAPS") and G["CAPS"][-1]["id"] == "core.tactical_operations" else True, "registered version")
+print("       capability 1.14.0 and the contract metadata name audit.object_id")
 
 print("[TEST] PASS tactical operation object id 1.17.44")

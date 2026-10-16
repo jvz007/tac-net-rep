@@ -415,7 +415,7 @@ mig_fields = [name for name in ("module_id", "name", "value", "updated_at", "use
 must(sorted(mig_fields) == sorted(["module_id", "name", "value", "updated_at", "user"]), f"0031 fields: {mig_fields}")
 must('related_name="tec_tac_module_preferences"' in mig_src, "0031 related name matches the model")
 must('("user", "module_id", "name")' in mig_src, "0031 constraint fields match the model")
-must(not list((APP / "migrations").glob("0032*")), "no later migration is claimed by this release")
+must(sorted(p.name for p in (APP / "migrations").glob("0032*")) in ([], ["0032_event_jobs.py"]), "the only later migration is 0032_event_jobs (1.17.45)")
 
 # ------------------------------------------------------------------------------------------------ 11. contract rows and rule text (ast)
 contracts_tree = ast.parse((APP / "contracts.py").read_text(encoding="utf-8"))

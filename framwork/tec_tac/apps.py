@@ -59,6 +59,15 @@ class TecTacFrameworkConfig(AppConfig):
         except Exception:
             logger.exception("Tec-Tac core.tactical_operations or core.caller_identity capability registration failed")
 
+        # 1.17.45: core.event_jobs (event-started, time-limited system jobs a module publishes from a signal). Guarded like the other
+        # capabilities: a fault here never aborts start-up, and a module that finds no capability (has_capability) does not publish.
+        try:
+            from .event_jobs import register_core_event_jobs_capability
+
+            register_core_event_jobs_capability()
+        except Exception:
+            logger.exception("Tec-Tac core.event_jobs capability registration failed")
+
         # Tactical's native role/account editors can otherwise grant effective
         # superuser authority to mid-level managers. Install the Core-owned,
         # authenticated mutation guard without modifying upstream Tactical code.

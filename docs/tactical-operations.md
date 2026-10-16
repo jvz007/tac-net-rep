@@ -2,7 +2,7 @@
 
 **Status:** Public Core developer contract, added in Core 1.17.7
 **Python:** `tec_tac.tactical_operations`
-**Capability:** `core.tactical_operations` 1.13.0 (1.12.0 before Core 1.17.44, 1.11.0 before Core 1.17.43, 1.10.0 before Core 1.17.41, 1.9.0 before Core 1.17.28, 1.8.0 before Core 1.17.26; major 1, additive since 1.0.0), owner `core`
+**Capability:** `core.tactical_operations` 1.14.0 (1.13.0 before Core 1.17.45, 1.12.0 before Core 1.17.44, 1.11.0 before Core 1.17.43, 1.10.0 before Core 1.17.41, 1.9.0 before Core 1.17.28, 1.8.0 before Core 1.17.26; major 1, additive since 1.0.0), owner `core`
 **HTTP:** `POST /api/tfd/tactical-operations/<module_id>/<operation_id>/`
 
 ## Why this exists
@@ -810,3 +810,56 @@ had no object id, so a person could not find them by object. `audit` may now car
 echoes the field and the object id would carry its value. No module in `modules/` declares both.
 
 Tests: `tests/tactical-operation-object-id-1.17.44.py`.
+
+## Added in 1.17.45
+
+Capability `core.tactical_operations` is 1.14.0, still major 1. Two optional declaration additions and one wider row. A declaration that uses
+neither addition behaves exactly as before. A module needs framework 1.17.45 to rely on them and can feature-detect with
+`core.tactical_operations >= 1.14.0`.
+
+### The audit action follows the body: `audit.action_by_body`
+
+Some routes do two things by one body field. Tactical's set-update-action route approves, ignores or changes a patch by its `action` value, and
+the audit row should say which. `audit` may now carry `action_by_body`:
+
+```python
+audit={"action": "modify", "object_type": "patch",
+       "action_by_body": {"field": "action", "map": {"approve": "approve", "ignore": "modify"}}}
+```
+
+- The success row's action is the mapped action of the cleaned body value. A missing value, a value that is not text and a value that is not in
+  the map all keep `audit.action` as the default.
+- Rules, checked at registration: `field` is one of `body_fields` and not a secret field; the map has 1 to 8 entries; each key is text of 1 to
+  40 characters; each action is in the audit vocabulary (the standard actions or `custom:<slug>`). `deny`, `custom:outcome-unknown` and
+  `custom:operation-failed` are refused, because Core writes those rows only. It is refused on a GET operation.
+- Deny rows and the other Core-only rows keep their own action. A failed row (`custom:operation-failed`) and an outcome-unknown row carry the
+  chosen action in `metadata.declared_action`. An outcome-unknown row has the key only for an operation that declares `action_by_body`.
+  A `core_refused` row is written before the body is trusted, so it names the default `audit.action`.
+- `describe()`, `get_operation` and `list_operations` show it as `audit.action_by_body` (null when not declared).
+
+### A nested body scope source: `body:<field>.<key>`
+
+A body may carry the client, site and agent of an action one level down, as Report Manager's `dependencies` object does. A scope entry may now
+read it, so Core checks the person's client and site limits before Tactical runs:
+
+```python
+scope=[{"type": "client", "source": "body:dependencies.client", "optional": True},
+       {"type": "site", "source": "body:dependencies.site", "optional": True}]
+```
+
+- `<field>` is one of `body_fields` and its value must be an object. A present value that is not an object is refused 400
+  `scope_field_required`. An absent or null object is an absent value: an optional entry adds nothing, a required entry is refused as for a missing
+  top-level value.
+- Optional entries, list values and the cap of 1000 ids behave as for a top-level source. The scope type of a nested entry is its `type`, or a
+  `type` of the form `body:<field>` with a `type_map` (that field stays top level).
+- Refused at registration: a nested source with `row_lookup`, nested under `audit.object_body_field`, or nested under a field in
+  `audit.secret_fields` (the id would carry the value).
+- The body Core forwards to Tactical is the object it checked.
+
+### The object id on an early refusal
+
+A `core_refused` row for `invalid_correlation_id`, `invalid_audit_before` or `invalid_params` now carries the declared `audit.object_id`, as the
+1.17.44 text promised for every row. It is declared text, never caller input. Rows for other refusals are unchanged.
+
+Tests: `tests/tactical-operation-action-by-body-1.17.45.py`, `tests/tactical-operation-nested-scope-1.17.45.py`,
+`tests/tactical-operation-object-id-core-refused-1.17.45.py`.

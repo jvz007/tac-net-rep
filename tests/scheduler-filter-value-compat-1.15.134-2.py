@@ -133,6 +133,7 @@ ns = {
     "transaction": SimpleNamespace(atomic=lambda: nullcontext()),
     "_as_utc": lambda value: value,
     "recover_stale_runs": lambda value: 0,
+    "_recover_event_jobs_safely": lambda value: {},  # 1.17.45: the event job step of the tick
     "normalize_scheduler_targets": normalize,
     "_canonicalize_persisted_endpoint_identity": lambda value: dict(value),
     "SchedulerTargetShapeError": targets.SchedulerTargetShapeError,

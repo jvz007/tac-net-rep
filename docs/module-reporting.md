@@ -170,6 +170,8 @@ Declare Report Manager as an optional dependency. The argument names and status 
 
 Registrations that arrive before Report Manager's capability exists are held and replayed in id order after every `AppConfig.ready()` has run. A registration that arrives later, once the capability is available, is forwarded at once and replays any older pending ones first. Callers need no ordering between their own `ready()` and Report Manager's.
 
+**Supported path (Johan, 9 October 2026; confirmed as built in Core 1.17.45).** `tec_tac.reporting.register_reporting_model` (the shim) stays the supported path for any module whose `AppConfig.ready()` can run before Report Manager's registers `reportmanager.registry`. The shim holds the registration pending and replays pending registrations in id order after every `ready()` has run, so no ordering between `ready()` calls is needed. A module that registers through the shim needs no change. The shim is removed only after the last module in `modules/` has switched, with no date.
+
 ### Removal of the shim
 
 `tec_tac.reporting` is removed after every module in `modules/` has switched. No date is promised.

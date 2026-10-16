@@ -145,6 +145,7 @@ sched_ns = {
     "SchedulerError": SchedulerError,
     "_as_utc": lambda value: value if value.tzinfo else value.replace(tzinfo=dt.timezone.utc),
     "recover_stale_runs": lambda current: [],
+    "_recover_event_jobs_safely": lambda current: {},  # 1.17.45: the event job step of the tick
     "normalize_scheduler_targets": lambda targets: dict(targets),
     "_canonicalize_persisted_endpoint_identity": lambda targets: dict(targets),
     "_runtime_authorization_error": lambda sched: None,

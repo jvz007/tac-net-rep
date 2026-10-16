@@ -789,6 +789,20 @@ class SchedulerHealthView(APIView):
         return Response(scheduler_health())
 
 
+class SchedulerEventJobsView(APIView):
+    """GET /api/tfd/scheduler/event-jobs/ (core.event_jobs 1.0.0, Core 1.17.45): the event jobs modules registered, with counts, backlog,
+    the oldest pending age and the last error. The same authority as scheduler/health/. It never returns a payload, a key or a row id."""
+
+    permission_classes = [SessionAuthenticated]
+
+    def get(self, request):
+        if not _native_scheduler_manager(request.user):
+            raise PermissionDenied("Event job diagnostics require server-maintenance authority.")
+        from .event_jobs import list_event_jobs
+
+        return Response(list_event_jobs())
+
+
 class SchedulerSelfTestView(APIView):
     permission_classes = [SessionAuthenticated]
 

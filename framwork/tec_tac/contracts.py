@@ -592,6 +592,63 @@ CORE_CONTRACTS = (
         "audience": "provider/backend",
     },
     {
+        "area": "event-jobs",
+        "import_path": "tec_tac.event_jobs",
+        "name": "register_event_job",
+        "kind": "python",
+        "purpose": (
+            "register_event_job(*, id, module_id, label, handler, soft_time_limit_seconds=None, max_attempts=None, backoff_seconds=None, max_backoff_seconds=None, "
+            "expires_seconds=None, max_backlog=None, dedupe_seconds=None, audit_success=False) -> EventJobPublisher (1.17.45, capability core.event_jobs 1.0.0, framework >=1.17.45, "
+            "Johan 16 October 2026). The one sanctioned way for a module to do small background work because something happened (a Tactical alert was saved, a webhook arrived): "
+            "no private thread, timer or event-started Celery task. Call it from AppConfig.ready(); it touches memory only and returns the one handle that can publish this job. "
+            "id is '<module_id>.<job>' (lowercase letters, digits, - _ and . in the job part) and must start with the module's own id. handler(context) gets an EventJobContext "
+            "(a dict with job_id, module_id, key, payload, attempt, max_attempts, final_attempt, enqueued_at and run_id, and no user fields) and returns None or a small JSON-safe "
+            "dict. Registration is bound to the module: module_id must be an installed, enabled extension read from the registry and handler's code file must lie inside that module's "
+            "own folder (real-path check); a partial, a built-in or generated code is refused. Refusals raise EventJobRegistrationError, a ValueError; a module wraps the call and logs, so "
+            "Tactical always starts. Registering the identical definition again returns the same handle; a different one under the same id is refused. Core owns every ceiling: "
+            "soft_time_limit_seconds 5-600 (default 30; the hard limit is 15 seconds more), max_attempts 1-10 (3), backoff_seconds 5-3600 (60, doubling, capped by max_backoff_seconds "
+            "up to 3600, plus up to 20 percent jitter), expires_seconds 60-86400 (1800: a job not started by then ends expired), max_backlog 1-5000 (500 pending rows per job), "
+            "dedupe_seconds 0-3600 (0: a succeeded run with the same key inside the window counts as a duplicate) and audit_success (False). A handler runs at least once and must be "
+            "safe to run twice. Failures: SchedulerPermanentError, ValueError and TypeError give up at once; SchedulerTransientError, SoftTimeLimitExceeded and any other exception retry "
+            "with Core's back-off until the attempts are used up, then the row ends failed with one Core audit row. The job runs as the module, not as a person: a handler cannot call "
+            "run_tactical_operation, so an event job cannot make a Tactical change (the AD-13 system-action contract is still open). Feature-detect with has_capability('core.event_jobs') "
+            "and set requires.framework >=1.17.45. Needs migration 0032_event_jobs. See docs/event-jobs.md."
+        ),
+        "audience": "module/backend",
+    },
+    {
+        "area": "event-jobs",
+        "import_path": "tec_tac.event_jobs",
+        "name": "EventJobPublisher",
+        "kind": "python",
+        "purpose": (
+            "EventJobPublisher.publish(key, payload=None) -> PublishResult(outcome, reason) and EventJobPublisher.status() -> dict (1.17.45, core.event_jobs 1.0.0). The handle "
+            "register_event_job returns; it cannot be built, copied or pickled, and only the registering module holds it. publish never raises and never touches the network but one bounded "
+            "broker publish (2 second timeout, retry off, a 30 second circuit breaker after one failure). outcome is queued, duplicate, dropped, disabled or error. It answers from memory "
+            "first (the registry, a 5 second module-enabled cache, a 3 second in-process (job, key) duplicate check, a per-process cap of 600 publishes a minute per job, a cached backlog gauge; "
+            "an absent gauge means open) and drops without a database query when any says no. Otherwise, after the caller's transaction commits (at once when none is open), it stores one row "
+            "(PostgreSQL: statement timeout 1000 ms) and sends one Celery message. A failed broker publish is logged and the row stays pending: the Scheduler tick enqueues it. key is "
+            "1-128 characters of letters, digits and . _ : @ / - ; payload is a JSON object of at most 2 KiB with scalar, list and dict values only (ids, never secrets or text bodies), checked "
+            "before anything is stored, never logged, audited, listed or returned. Idempotency: one key can be pending or running once per job (a second publish is duplicate). Inside an open "
+            "transaction the answer is queued before the row exists, so a duplicate found at commit is counted in the stats and not reported to the caller. status() returns this job's counts, "
+            "backlog, oldest pending age and last failure, never a key or a payload."
+        ),
+        "audience": "module/backend",
+    },
+    {
+        "area": "event-jobs",
+        "import_path": "tec_tac.event_jobs",
+        "name": "verify_event_job_context",
+        "kind": "python",
+        "purpose": (
+            "verify_event_job_context(context, *, expected_module_id, expected_job_id) -> VerifiedEventJob(run_id, module_id, job_id, key, attempt, final_attempt) (1.17.45, "
+            "core.event_jobs 1.0.0). A handler passes its own module id and job id; Core refuses with EventJobContextInvalid a plain dict, a copy of the context, a context issued for "
+            "another module's or job's run, a run that is no longer running and an expected id that is missing or not text. The same shape as scheduler.verify_run_context, with no owner "
+            "because an event job has no person behind it."
+        ),
+        "audience": "module/backend",
+    },
+    {
         "area": "accounts",
         "import_path": "tec_tac.accounts",
         "name": "create_user",
@@ -959,6 +1016,7 @@ HTTP_CONTRACT_DETAILS = {
                 "Added in 1.17.23 (module-facing, additive, capability core.tactical_operations 1.8.0): the Python-only audit_before keyword also accepts a list of whole numbers or texts per field, recorded as <field> with <field>_count and, when cut at 1000 entries, <field>_truncated. Feature-detect with core.tactical_operations >= 1.8.0; needs framework >=1.17.23. Scalar-only callers are unchanged. See docs/tactical-operations.md.",
                 "Added in 1.17.26 (module-facing, additive and opt-in, capability core.tactical_operations 1.9.0; a declaration that passes neither key behaves exactly as before): register_tactical_operation takes two optional keywords at the end. permissions_any is a list of Tactical role flags of which the caller needs at least one, on top of every flag of permissions (Tactical's report generation is view OR manage); permissions may be empty only when permissions_any is given; a flag may not be in both lists; the 403 tactical_permission_denied names the flags ('It needs one of can_view_reports, can_manage_reports.'); the deny row carries needs_one_of; list_operations and get_operation show permissions_any (an empty list for an old declaration). body_max_bytes is a whole number of bytes from the 256 KiB default (limits.body_bytes) up to the Core ceiling of 8 MiB (limits.body_bytes_max, a Core constant); body_too_large (413) names the cap that applied; list_operations and get_operation show the effective cap as body_max_bytes; a value below the default, above the ceiling, a bool or a non-integer is refused at registration. A web-server body limit (nginx) or Tactical's own limit still applies and was not verified. Feature-detect with core.tactical_operations >= 1.9.0; needs framework >=1.17.26. See docs/tactical-operations.md.",
                 "Added in 1.17.41 (module-facing, additive and opt-in, capability core.tactical_operations 1.11.0; a declaration that uses none of the three behaves exactly as before; needs framework >=1.17.41, feature-detect with core.tactical_operations >= 1.11.0): (1) register_tactical_operation(file_response=True), a strict bool for a GET or POST operation, lets Core relay a streamed Tactical file answer (FileResponse): Core reads it chunk by chunk up to limits.response_bytes (25 MiB), closes it and carries on as for a normal answer, with the same status handling and audit rows (success, deny for 401 and 403, failed for another 4xx on a change, outcome-unknown for 5xx); Content-Type and Content-Disposition are relayed with the bytes; a stream over the cap is cut, closed and refused as tactical_response_refused; the row never carries the file name or bytes; without file_response a stream is refused as before; list_operations shows file_response. (2) query_params may be declared on any method (a DELETE reads request.query_params): the name whitelist, the flat 512-character values, the control-character and '..' rules and the secret-name refusal are unchanged. (3) The route parameter kind {name:service} takes a Windows service name (first character a letter, digit or underscore, then letters, digits, space and $ # ( ) . , _ -, at most 256 characters, no slash, no '..'), built into the path unquoted so Tactical's own <str:svcname> pattern resolves it; the owner table is unchanged (services/ is Remote Background's). See docs/tactical-operations.md.",
+                "Added in 1.17.45 (module-facing, additive and opt-in, capability core.tactical_operations 1.14.0; a declaration that uses none of it behaves exactly as before; needs framework >=1.17.45, feature-detect with core.tactical_operations >= 1.14.0): (1) audit.action_by_body = {field, map} chooses the success row's audit action from the cleaned value of one body field (for example {field: 'action', map: {approve: 'approve', ignore: 'modify'}}); a missing or unmatched value keeps audit.action; at most 8 entries, keys text of at most 40 characters, the field must be one of body_fields and not a secret field, and deny, custom:outcome-unknown and custom:operation-failed are refused because Core writes them only; failed and outcome-unknown rows carry the chosen action in metadata.declared_action. (2) A scope entry may name a nested body source, body:<field>.<key>, one level deep (for example body:dependencies.client): the field must be one of body_fields and hold an object (400 scope_field_required otherwise), optional entries, list values and the 1000 id cap behave as for a top-level source, and the nested path is refused with row_lookup, audit.object_body_field and audit.secret_fields; Core checks the scope before Tactical runs and forwards the body it checked. (3) A core_refused row for invalid_correlation_id, invalid_audit_before or invalid_params now carries the declared audit.object_id. list_operations and get_operation show audit.action_by_body. See docs/tactical-operations.md.",
                 "Added in 1.17.44 (module-facing, additive and opt-in, capability core.tactical_operations 1.13.0; a declaration that does not use the key behaves exactly as before; needs framework >=1.17.44, feature-detect with core.tactical_operations >= 1.13.0): audit.object_id is a fixed text (letters, digits and . _ : -, 1 to 64 characters, not secret-looking) for an operation with no path parameter that names the object, such as a settings save. It is the last fallback after audit.object_param and the first scope object, and it is refused on a GET operation and together with audit.object_param, audit.object_field or audit.object_body_field. Because it is declared text and never caller or body input, it names the object on every row of that operation: success, deny, failed, outcome-unknown and core_refused. list_operations and get_operation now show audit.object_id and audit.secret_fields. audit.secret_fields may no longer name the same field as audit.object_field. See docs/tactical-operations.md.",
                 "Added in 1.17.43 (module-facing, additive and opt-in, capability core.tactical_operations 1.12.0; a declaration that uses neither key behaves exactly as before; needs framework >=1.17.43, feature-detect with core.tactical_operations >= 1.12.0): audit.secret_fields names up to eight body fields whose value Core never records. The success row writes changed, or present before and changed or unchanged after when audit.before holds the field (an in-memory comparison). metadata.object_count gives the number of ids the first scope entry names, when it names more than one. See docs/tactical-operations.md.",
                 "Added in 1.17.28 (module-facing, additive and opt-in, capability core.tactical_operations 1.10.0; a declaration without it behaves exactly as before): register_tactical_operation takes one optional keyword, audit_lists, a list of up to two body or before field names that hold a list of flat objects (such as a task's actions). Each is recorded IN CLEAR, with no masking (script arguments and environment values appear as Tactical stores them; this is the signed exception AD-32 to module standard section 3, for audit_lists only, and audit-view holders can read these values), in the success row: the after value from the cleaned body and, when the operation has a before read, the before value from Tactical's GET answer. Bounds (limits_added_in_1_10_0): 50 entries per list, 24 keys per entry, a text value cut at 4096 characters with control characters other than tab and newline removed, one level of up to 100 scalars, 64 KiB of text per list field, two list fields per operation. The row carries <field>_count (the full length) and <field>_truncated when anything was cut or dropped. A malformed list is recorded as its count only. Failed, denied and outcome-unknown rows carry no list. describe() shows audit.lists. Feature-detect with core.tactical_operations >= 1.10.0; needs framework >=1.17.28. See docs/tactical-operations.md.",
@@ -1375,6 +1433,21 @@ HTTP_CONTRACT_DETAILS = {
                 "A refusal writes one best-effort Core deny row. The per-user and per-token revoke routes are unchanged.",
             ],
             "errors": {"400": "include_current is not a boolean, or reason is not text", "401": "not signed in", "403": "the caller is not an effective superuser"},
+        },
+    },
+    "/api/tfd/scheduler/event-jobs/": {
+        "GET": {
+            "authorization": "authenticated Tec-Tac session with server-maintenance authority (the same as scheduler/health/)",
+            "response": {
+                "jobs": "array of {module_id, job_id, label, registered, pending, running, oldest_pending_age_seconds, published, duplicate, dropped, succeeded, failed, expired, skipped, last_failure_at, last_error, max_backlog}",
+                "totals": "sums of the counts",
+                "limits": "Core's minimum, default and maximum of each registration limit",
+            },
+            "notes": [
+                "Added in 1.17.45 (core.event_jobs 1.0.0). Counts, ages and the last error text only: never a payload, a key or a row id.",
+                "registered is true when this process has the job registered; a job of a module that is disabled still lists its counts.",
+            ],
+            "errors": {"401": "not signed in", "403": "the caller lacks server-maintenance authority"},
         },
     },
     "/api/tfd/scheduler/runs/": {

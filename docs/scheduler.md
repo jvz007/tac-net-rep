@@ -392,3 +392,10 @@ info = get_owned_schedule("cyberhoot", "sync")
 ```
 
 `get_owned_schedule` returns `None` when no schedule has that `(owner_module, owner_key)`. `next_run_at` is `None` for a disabled schedule. It takes no user: a module reads only its own tuple, the same trust as `reconcile_schedule`. It does not expose the model.
+
+## Event jobs (Core 1.17.45)
+
+A job a module starts because of an event (a Tactical alert was saved) is not a schedule. It runs through `core.event_jobs` 1.0.0, which the
+same tick keeps healthy: `dispatch_due_schedules` calls `recover_event_jobs` after `recover_stale_runs`, in its own `try` block, so a fault there
+never stops a schedule. `scheduler_health()` gains an additive `event_jobs` block, and `GET /api/tfd/scheduler/event-jobs/` lists the jobs for
+people with server-maintenance authority. See `docs/event-jobs.md`.

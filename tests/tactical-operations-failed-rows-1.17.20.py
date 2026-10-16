@@ -122,7 +122,7 @@ must(accepted.get("recorded") is True and len(ROWS) == 1, accepted)
 
 # capability 1.7.0 (1.17.21; the 1.6.0 behaviour stays), still major 1
 meta = ops.tactical_operations_contract_metadata()
-must(ops.CAPABILITY_VERSION == "1.13.0" and meta["version"] == "1.13.0" and meta["version"].split(".")[0] == "1", meta)  # 1.17.21: 1.7.0
+must(ops.CAPABILITY_VERSION == "1.14.0" and meta["version"] == "1.14.0" and meta["version"].split(".")[0] == "1", meta)  # 1.17.21: 1.7.0
 must("custom:operation-failed" in meta["audit_actions_core_only"] and meta["behaviour_added_in_1_6_0"], meta)  # the 1.6.0 keys stay
 
 contracts = (Path(__file__).resolve().parents[1] / "framwork/tec_tac/contracts.py").read_text(encoding="utf-8")

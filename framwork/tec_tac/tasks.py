@@ -183,6 +183,18 @@ def execute_schedule_run(self, run_id: str):
         raise
 
 
+@app.task(bind=True, name="tec_tac.execute_event_job", acks_late=True, reject_on_worker_lost=True, ignore_result=True, time_limit=615)
+def execute_event_job(self, row_id: str):
+    """Run one event-started job (core.event_jobs 1.0.0, Core 1.17.45). The row is the record and this message only names it.
+
+    ``run_event_job`` claims the row under a lock, so a duplicate delivery or a redelivery after a worker loss runs nothing twice, and
+    it re-checks the module, the handler and the expiry before it calls the handler. The per-job soft and hard time limits are set by
+    ``apply_async`` when the message is sent; ``time_limit`` here is Core's ceiling (the largest soft limit plus 15 seconds)."""
+    from .event_jobs import run_event_job
+
+    return run_event_job(row_id, celery_task_id=str(getattr(self.request, "id", "") or ""))
+
+
 @app.task(name="tec_tac.capability_probe")
 def capability_probe(capability_id: str, version: str | None = None):
     """Return capability state from the Celery worker process for diagnostics."""

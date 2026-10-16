@@ -251,6 +251,8 @@ register_reporting_model(
 
 Core owns synchronization with Tactical's runtime reporting allow-list and live query schema. Disabled or removed providers are unavailable. See `docs/module-reporting.md` for lifecycle, uniqueness and discovery rules.
 
+**Supported path (Johan, 9 October 2026; confirmed as built in Core 1.17.45).** `tec_tac.reporting.register_reporting_model` (the shim) stays the supported path for any module whose `AppConfig.ready()` can run before Report Manager's registers `reportmanager.registry`. The shim holds the registration pending and replays pending registrations in id order after every `ready()` has run, so no ordering between `ready()` calls is needed. A module that registers through the shim needs no change. The shim is removed only after the last module in `modules/` has switched, with no date.
+
 ## Tactical startup is never a Tec-Tac dependency
 
 Core extensions are additive. A Tec-Tac registry, module-state, compatibility-hook, or optional integration failure must not prevent Tactical Django from starting. Bootstrap therefore degrades to Core-only extension loading when registry/module-state discovery is invalid, including files that are not valid UTF-8. Registry and module-state readers must convert decode failures into their Core domain errors so the bootstrap boundary can recover deterministically.
@@ -258,3 +260,5 @@ Core extensions are additive. A Tec-Tac registry, module-state, compatibility-ho
 The native Tactical account guard is the security exception to ordinary best-effort integration: if the precise compatibility module cannot import or its wrappers cannot install, Core keeps startup alive and imports a separate fail-closed guard module. That emergency module does not depend on the precise guard implementation. It requires effective-superuser authority for native role/user/API-key and self-service credential mutations and redacts API-key secrets from non-superuser listings until compatibility is repaired. Startup availability must never be recovered by silently dropping the privilege boundary.
 
 Verified calling-module identity (`tec_tac.caller_identity.calling_module`, capability `core.caller_identity` 1.0.0, Core 1.17.21): see `docs/caller-identity.md`.
+
+Event-started system jobs (`tec_tac.event_jobs.register_event_job`, capability `core.event_jobs` 1.0.0, Core 1.17.45): the one way a module does small background work because something happened, with no private thread, timer or event-started Celery task. See `docs/event-jobs.md`.

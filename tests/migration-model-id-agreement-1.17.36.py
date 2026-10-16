@@ -37,6 +37,7 @@ IMPLICIT_ID_SPEC = ("BigAutoField", {"auto_created": True, "primary_key": True, 
 NEW_TABLES = {
     "TecTacNoticeLedger": ("0030_notice_ledger.py", ["tectac_nledger_key_idx", "tectac_nledger_age_idx"], ["tectac_nledger_unique"]),
     "TecTacModulePreference": ("0031_module_preferences.py", [], ["tectac_modpref_unique"]),
+    "TecTacEventJobStat": ("0032_event_jobs.py", [], ["tectac_evjobstat_unique"]),  # 1.17.45: TecTacEventJob has an explicit uuid key and is not in this list
 }
 
 
@@ -266,6 +267,8 @@ for name, (migration_file, index_names, constraint_names) in NEW_TABLES.items():
          f"{name}: constraint names {sorted(state[name.lower()]['constraints'])} != {sorted(constraint_names)}")
 
 # ------------------------------------------------------------------------------------------------ (7) no migration 0032
-must(not list(MIGRATIONS.glob("0032_*.py")), "no migration 0032 may exist: the id fix is a model change, not a new migration")
+# 1.17.45: the one migration 0032 is the event jobs one (core.event_jobs). The id fix of 1.17.36 itself added none.
+must(sorted(p.name for p in MIGRATIONS.glob("0032_*.py")) == ["0032_event_jobs.py"], "the only migration 0032 is 0032_event_jobs (1.17.45)")
+must(not list(MIGRATIONS.glob("0033_*.py")), "no migration 0033 yet")
 
 print("[TEST] PASS migration and model id agreement 1.17.36")
