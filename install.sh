@@ -24,7 +24,14 @@ load_tec_tac_config() {
         printf -v "$key" '%s' "$value"
     done < "$file"
 }
+# 1.17.48: TEC_TAC_API_URL is the address of this server's Tec-Tac API. The UI installer owns the order (caller, config file, the file it
+# wrote last time, Tactical's PROD_URL) and checks the format. Core only keeps the key. The caller's value is read before the config is
+# loaded, because the loader would otherwise let the file override the caller, and the UI installer deliberately lets the caller win.
+CALLER_API_URL="${TEC_TAC_API_URL-}"
 load_tec_tac_config "${TEC_TAC_CONFIG_FILE}" || exit 1
+if [[ -n "${CALLER_API_URL}" ]]; then
+    TEC_TAC_API_URL="${CALLER_API_URL}"
+fi
 TEC_TAC_ROOT="${TEC_TAC_ROOT:-/opt/tec-tac}"
 TEC_TAC_SOURCE_ROOT="${TEC_TAC_SOURCE_ROOT:-/opt/tec-tac-src}"
 TEC_TAC_FRAMEWORK_SOURCE="${TEC_TAC_FRAMEWORK_SOURCE:-${SOURCE_ROOT}}"
@@ -509,7 +516,7 @@ for config_value in \
     "${TEC_TAC_UI_ROOT}" "${TACTICAL_ROOT}" "${BACKEND_DIR}" "${VENV_PYTHON}" "${TACTICAL_USER}" \
     "${TEC_TAC_ENVIRONMENT:-production}" "${TEC_TAC_SERVER_BACKUP_LOCAL_ROOTS:-/rmmbackups,/mnt,/media,/srv,/backup,/backups}" \
     "${TEC_TAC_FRAMEWORK_REPOSITORY:-jvz007/tac-net-rep}" "${TEC_TAC_UI_REPOSITORY:-jvz007/tec-tac-ui}" \
-    "${TEC_TAC_INSTALLATION_ID}"; do
+    "${TEC_TAC_INSTALLATION_ID}" "${TEC_TAC_API_URL:-}"; do
     [[ "${config_value}" != *$'\n'* && "${config_value}" != *$'\r'* ]] || fail "Tec-Tac config values may not contain CR/LF characters."
 done
 cat > "${MODULE_CONFIG}" <<EOF
@@ -551,6 +558,10 @@ TACTICAL_USER=${TACTICAL_USER}
 FRAMEWORK_REPOSITORY=${TEC_TAC_FRAMEWORK_REPOSITORY:-jvz007/tac-net-rep}
 UI_REPOSITORY=${TEC_TAC_UI_REPOSITORY:-jvz007/tec-tac-ui}
 EOF
+# 1.17.48: exactly one TEC_TAC_API_URL line when there is a value, none when there is not. Written as data with printf, never sourced.
+if [[ -n "${TEC_TAC_API_URL:-}" ]]; then
+    printf 'TEC_TAC_API_URL=%s\n' "${TEC_TAC_API_URL}" >> "${MODULE_CONFIG}"
+fi
 chown root:root "${MODULE_CONFIG}"
 chmod 0644 "${MODULE_CONFIG}"
 GITHUB_TOKEN_PATH="${TEC_TAC_ROOT}/etc/github-token"

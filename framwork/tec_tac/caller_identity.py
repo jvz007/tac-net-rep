@@ -93,16 +93,25 @@ def _enabled(module_id: str) -> bool:
     return bool(module_state.is_enabled(module_id))
 
 
+FAILED_READ_SECONDS = 1  # a failed scan or state read is kept this long at most (1.17.48): a short fault must not cost a whole window
+
+
+class _ReadFault(Exception):
+    """The module list or a module's state could not be read, so the caller cannot be verified (not the same as a foreign caller)."""
+
+
 class _Snapshot:
     """One short-lived read of the installed modules and their enabled flags (the opt-in cache of ``calling_module_for_core_provider``).
-    A new snapshot replaces the old one whole, so no lock is needed. ``plugins`` is ``None`` when the scan failed: that is cached too."""
+    A new snapshot replaces the old one whole, so no lock is needed. ``plugins`` is ``None`` when the scan failed: that is kept for
+    ``FAILED_READ_SECONDS`` at most (``lifetime``), not the full window."""
 
-    __slots__ = ("at", "enabled", "norms", "plugins")
+    __slots__ = ("at", "enabled", "faults", "lifetime", "norms", "plugins")
 
-    def __init__(self, at, plugins):
+    def __init__(self, at, plugins, lifetime):
         # ``norms`` keeps the real path of each file name seen in this window: ``realpath`` is a system call per path part and is the
         # largest cost of the frame walk, so the opt-in path asks the disk once a window and not once a frame.
-        self.at, self.plugins, self.enabled, self.norms = at, plugins, {}, {}
+        self.at, self.plugins, self.lifetime = at, plugins, lifetime
+        self.enabled, self.norms, self.faults = {}, {}, {}
 
     def norm(self, path) -> str:
         key = str(path)
@@ -123,27 +132,50 @@ def clear_snapshot_for_tests() -> None:
 def _snapshot(seconds: float) -> _Snapshot:
     now = _clock()
     snap = _SNAPSHOT[0]
-    if snap is not None and 0 <= now - snap.at < seconds:
+    if snap is not None and 0 <= now - snap.at < min(seconds, snap.lifetime):
         return snap
     try:
         plugins = _plugins()
+        lifetime = seconds
     except Exception:
-        logger.warning("Could not read the installed modules; callers stay unverified for %s seconds.", seconds, exc_info=True)
+        lifetime = min(seconds, FAILED_READ_SECONDS)
+        logger.warning("Could not read the installed modules; callers stay unverifiable for %s second(s).", lifetime, exc_info=True)
         plugins = None
-    snap = _Snapshot(now, plugins)
+    snap = _Snapshot(now, plugins, lifetime)
     _SNAPSHOT[0] = snap
     return snap
 
 
+def _enabled_checked(module_id: str) -> bool:
+    """``_enabled``, but a corrupt module state is a fault and not 'disabled'. The second read happens only when the module reads as disabled."""
+    value = _enabled(module_id)
+    if not value:
+        from . import module_state
+
+        state = module_state.load_state()
+        if isinstance(state, dict) and state.get("_corrupt"):
+            raise _ReadFault("the module state is corrupt")
+    return value
+
+
 def _snapshot_enabled(snap: _Snapshot, module_id: str) -> bool:
+    """The enabled flag from the snapshot. A good read is kept for the window. A fault (an unreadable or corrupt state) raises
+    ``_ReadFault`` and is remembered for ``FAILED_READ_SECONDS`` only, then read again."""
     known = snap.enabled.get(module_id)
     if known is not None:
         return known
+    now = _clock()
+    failed_at = snap.faults.get(module_id)
+    if failed_at is not None and 0 <= now - failed_at < FAILED_READ_SECONDS:
+        raise _ReadFault(module_id)
     try:
-        value = _enabled(module_id)
+        value = _enabled_checked(module_id)
     except Exception:
-        logger.warning("Could not read the enabled state of module %s; treating its code as an unverified caller.", module_id, exc_info=True)
-        value = False  # fail closed, and cached for the window so a fault costs one read, not one per call
+        logger.warning("Could not read the enabled state of module %s; its caller cannot be verified for %s second(s).", module_id,
+                       FAILED_READ_SECONDS, exc_info=True)
+        snap.faults[module_id] = now
+        raise _ReadFault(module_id) from None
+    snap.faults.pop(module_id, None)
     snap.enabled[module_id] = value
     return value
 
@@ -207,6 +239,26 @@ def _calling_module(provider_module_id) -> CallerIdentity | None:
         frame = None
 
 
+@dataclass(frozen=True)
+class CallerCheck:
+    """The answer of ``core_provider_caller_checked``: ``identity`` is the module, or ``None``. ``unverifiable`` is True when the answer is
+    ``None`` only because a read failed (the module list, a module's state, the frame helper or the walk), and False for a real answer
+    (the owner, another module, a disabled or legacy module, a Core, library or generated frame)."""
+
+    identity: CallerIdentity | None
+    unverifiable: bool = False
+
+
+def _seconds(cache_seconds) -> float:
+    try:
+        value = float(cache_seconds)
+    except (TypeError, ValueError):
+        return 0.0
+    if not value > 0 or value == float("inf"):
+        return 0.0
+    return value
+
+
 def calling_module_for_core_provider(*, provider_file, cache_seconds: float = 0) -> CallerIdentity | None:
     """Core-internal (1.17.27, CQ87): the module whose code called a Core-owned provider function, or ``None`` (refuse).
 
@@ -217,38 +269,71 @@ def calling_module_for_core_provider(*, provider_file, cache_seconds: float = 0)
     give ``None``. Core is never identified (AD-26 condition 2): this names module code and nothing else. Enabled state is read on every call
     unless the provider opts in with ``cache_seconds`` (1.17.47, event jobs: a path that runs on every Tactical alert save). With
     ``cache_seconds`` above 0 the installed modules and each enabled flag come from a process-local snapshot kept that long; a failed read
-    is kept for the same time and refuses (fail closed). The frame walk is never cached. At 0 (the default) nothing is cached.
+    is kept for ``FAILED_READ_SECONDS`` at most (1.17.48) and refuses (fail closed). The frame walk is never cached. At 0 (the default)
+    nothing is cached. Since 1.17.48 a thin wrapper over the same walk as ``core_provider_caller_checked``: it cannot tell a fault from a
+    foreign caller, and both are ``None``.
     """
-    try:
-        cache_seconds = float(cache_seconds)
-        if not cache_seconds > 0 or cache_seconds == float("inf"):
-            cache_seconds = 0.0
-    except (TypeError, ValueError):
-        cache_seconds = 0.0
+    seconds = _seconds(cache_seconds)
     try:
         getter = getattr(sys, "_getframe", None)
         if getter is None:
             return None
-        return _core_provider_caller(getter(1), provider_file, cache_seconds)  # frame 1 is the provider function that called this
+        return _checked_from(getter(1), provider_file, seconds).identity  # frame 1 is the provider function that called this
     except Exception:
         logger.warning("Could not verify the calling module of a Core provider; treating the caller as unverified.", exc_info=True)
         return None
 
 
+def core_provider_caller_checked(*, provider_file, cache_seconds: float = 0) -> CallerCheck:
+    """Core-internal (1.17.48), private, not a contract and not exported: ``calling_module_for_core_provider`` that also says whether
+    ``None`` was a real answer or a read fault. ``unverifiable`` is True when the plugin scan raised, the module-state read raised or
+    reported a corrupt state, the frame helper is missing, or the walk itself raised. It is False for every real answer. Never raises.
+    Event jobs uses it to tell a foreign caller (refused, tallied) from a fault (not stored, not counted as a refusal)."""
+    seconds = _seconds(cache_seconds)
+    try:
+        getter = getattr(sys, "_getframe", None)
+        if getter is None:
+            return CallerCheck(None, True)
+        return _checked_from(getter(1), provider_file, seconds)  # frame 1 is the provider function that called this
+    except Exception:
+        logger.warning("Could not verify the calling module of a Core provider; treating the caller as unverifiable.", exc_info=True)
+        return CallerCheck(None, True)
+
+
+def _checked_from(frame, provider_file, cache_seconds: float) -> CallerCheck:
+    if not isinstance(provider_file, str) or not provider_file.strip():
+        return CallerCheck(None, True)  # a provider that names no file cannot be verified
+    try:
+        return CallerCheck(_core_provider_caller(frame, provider_file, cache_seconds), False)
+    except _ReadFault:
+        return CallerCheck(None, True)
+
+
 def _core_provider_caller(frame, provider_file, cache_seconds: float = 0) -> CallerIdentity | None:
-    """Walk up from the provider's own frame (already the first argument), as ``_calling_module`` does for a module provider."""
+    """Walk up from the provider's own frame (already the first argument), as ``_calling_module`` does for a module provider.
+    Raises ``_ReadFault`` when a read failed; any other exception is the caller's to treat as a fault."""
     if not isinstance(provider_file, str) or not provider_file.strip():
         return None
     if cache_seconds > 0:
         snap = _snapshot(cache_seconds)
         if snap.plugins is None:
-            return None  # the scan failed inside this window: refuse
+            raise _ReadFault("the module list could not be read")  # the scan failed inside this (short) window
         plugins, norm = snap.plugins, snap.norm
 
         def enabled(module_id):
             return _snapshot_enabled(snap, module_id)
     else:
-        plugins, norm, enabled = _plugins(), _norm, _enabled
+        try:
+            plugins = _plugins()
+        except Exception:
+            raise _ReadFault("the module list could not be read") from None
+        norm = _norm
+
+        def enabled(module_id):
+            try:
+                return _enabled_checked(module_id)
+            except Exception:
+                raise _ReadFault(module_id) from None
     provider_path = norm(provider_file)
     framework = norm(_FRAMEWORK_DIR)
     try:

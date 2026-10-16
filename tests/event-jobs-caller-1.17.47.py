@@ -180,6 +180,7 @@ def register():
 
 
 REFUSED = ("error", "the caller is not the module that owns this job")
+UNVERIFIED = ("error", "the caller could not be verified")  # 1.17.48: a read fault is told apart from a foreign caller
 
 
 def outcome(result):
@@ -235,13 +236,13 @@ reset()
 handle = register()
 STATE["registry_error"] = True
 r = alerts["fire"](handle, key())
-must(outcome(r) == REFUSED and untouched(), r)
+must(outcome(r) == UNVERIFIED and untouched(), r)
 reset()
 handle = register()
 ej._ENABLED.set("alerts", True)  # event_jobs' own cache is warm, so the helper is the one that meets the state fault
 STATE["state_error"] = True
 r = alerts["fire"](handle, key())
-must(outcome(r) == REFUSED and untouched(), r)
+must(outcome(r) == UNVERIFIED and untouched(), r)
 print("       a registry fault and a state fault refuse the publish: no raise, nothing stored, nothing counted")
 
 # a disabled owner still answers disabled, with no stack walk
@@ -329,10 +330,10 @@ SCANS[0] = STATE_READS[0] = 0
 STATE["state_error"] = True
 for _ in range(20):
     ej._ENABLED.set("alerts", True)
-    must(outcome(alerts["fire"](handle, key())) == REFUSED, "refused")
+    must(outcome(alerts["fire"](handle, key())) == UNVERIFIED, "could not be verified")
 must(STATE_READS[0] == 1 and SCANS[0] == 1, (STATE_READS[0], SCANS[0]))
 STATE["state_error"] = False
-must(outcome(alerts["fire"](handle, key())) == REFUSED, "still inside the window: the failed read is kept (fail closed)")
+must(outcome(alerts["fire"](handle, key())) == UNVERIFIED, "still inside the failed-read second: fail closed")
 MONO[0] += 5
 ej._ENABLED.set("alerts", True)
 must(alerts["fire"](handle, key()).outcome == "queued" and STATE_READS[0] == 2, "the next window reads again and recovers")
@@ -396,6 +397,144 @@ for name in ("accounts.py", "resources.py", "audit.py", "module_preferences.py",
 must("cache_seconds=policy.ENABLED_CACHE_SECONDS" in (APP / "event_jobs.py").read_text(encoding="utf-8"), "event_jobs opts in with the 5 second window")
 print("       the public calling_module and the other Core providers stay uncached; event_jobs opts in")
 
+# ------------------------------------------------------------------------------------------------ (2b) 1.17.48: a short fault costs 1 second, not 5
+def warm_owner():
+    ej._ENABLED.set("alerts", True)  # event_jobs' own cache is warm, so the helper is the one that meets a state fault
+
+
+# a scan fault at T refuses the owner with the new reason; T+0.5 still; T+1 re-scans and succeeds
+reset()
+handle = register()
+SCANS[0] = STATE_READS[0] = 0  # registration scanned the registry once itself
+STATE["registry_error"] = True
+must(outcome(alerts["fire"](handle, key())) == UNVERIFIED and SCANS[0] == 1, "scan fault at T")
+STATE["registry_error"] = False
+MONO[0] += 0.5
+warm_owner()
+must(outcome(alerts["fire"](handle, key())) == UNVERIFIED and SCANS[0] == 1, "T+0.5 s is still the same fault, no new scan")
+MONO[0] += 0.5
+warm_owner()
+must(alerts["fire"](handle, key()).outcome == "queued" and SCANS[0] == 2, "T+1 s re-scans and the owner publishes again")
+MONO[0] += 4.5
+alerts["fire"](handle, key())
+must(SCANS[0] == 2, "the good snapshot then lasts its full 5 seconds")
+print("       a scan fault costs the owner at most 1 second: refused at T and T+0.5, re-scanned and accepted at T+1")
+
+# the same for a state-read fault
+reset()
+handle = register()
+SCANS[0] = STATE_READS[0] = 0
+warm_owner()
+STATE["state_error"] = True
+must(outcome(alerts["fire"](handle, key())) == UNVERIFIED, "state fault at T")
+STATE["state_error"] = False
+MONO[0] += 0.5
+warm_owner()
+must(outcome(alerts["fire"](handle, key())) == UNVERIFIED and STATE_READS[0] == 1, "T+0.5 s: no new read")
+MONO[0] += 0.5
+warm_owner()
+must(alerts["fire"](handle, key()).outcome == "queued" and STATE_READS[0] == 2, "T+1 s reads again and accepts")
+print("       a state-read fault costs the owner at most 1 second")
+
+# a corrupt state is a fault, not 'disabled': the module reads as disabled and the state says _corrupt
+CORRUPT = [False]
+_real_load = load_state
+
+
+def load_state_corrupt():
+    LOADS[0] += 1
+    return {"schema": 1, "modules": {}, "_corrupt": True} if CORRUPT[0] else {"schema": 1, "modules": {}}
+
+
+sys.modules["tec_tac.module_state"].load_state = load_state_corrupt
+sys.modules["tec_tac.module_state"].is_enabled = lambda module_id, state=None: (
+    False if CORRUPT[0] else (STATE_READS.__setitem__(0, STATE_READS[0] + (state is None)) or ENABLED.get(module_id, True)))
+reset()
+handle = register()
+warm_owner()
+CORRUPT[0] = True
+must(outcome(alerts["fire"](handle, key())) == UNVERIFIED, "a corrupt state is a fault")
+CORRUPT[0] = False
+MONO[0] += 0.5
+warm_owner()
+must(outcome(alerts["fire"](handle, key())) == UNVERIFIED, "T+0.5 s")
+MONO[0] += 0.5
+warm_owner()
+must(alerts["fire"](handle, key()).outcome == "queued", "T+1 s recovers")
+sys.modules["tec_tac.module_state"].load_state = load_state
+sys.modules["tec_tac.module_state"].is_enabled = is_enabled
+print("       a corrupt module state is a fault (could not be verified), not 'disabled', and recovers after 1 second")
+
+# a foreign caller still answers the foreign reason; a fault never does; the helper tells them apart
+reset()
+handle = register()
+must(outcome(beta["fire"](handle, key())) == REFUSED, "foreign caller")
+STATE["registry_error"] = True
+ci.clear_snapshot_for_tests()
+must(outcome(beta["fire"](handle, key())) == UNVERIFIED and outcome(alerts["fire"](handle, key())) == UNVERIFIED, "a fault answers the fault reason for any caller")
+STATE["registry_error"] = False
+MONO[0] += 1
+CHECK_FILE = str(APP / "event_jobs.py")
+ASK = compile_as(CHECK_FILE, f"def ask(ci, **kw):\n    return ci.core_provider_caller_checked(provider_file={CHECK_FILE!r}, **kw)\n")
+CALLFROM = {name: compile_as(str(root / "svc.py"), "def call(fn, ci, **kw):\n    return fn(ci, **kw)\n") for name, root in
+            (("alerts", alerts_root), ("beta", EXT / "beta"), ("gamma", EXT / "gamma"), ("oldmod", EXT / "oldmod"))}
+CALLFROM["lib"] = compile_as(str(LIB / "svc.py"), "def call(fn, ci, **kw):\n    return fn(ci, **kw)\n")
+CALLFROM["generated"] = compile_as("<string>", "def call(fn, ci, **kw):\n    return fn(ci, **kw)\n")
+CALLFROM["core"] = compile_as(SCHEDULER_FILE, "def call(fn, ci, **kw):\n    return fn(ci, **kw)\n")
+reset()
+for who, ident, unv in (("alerts", "alerts", False), ("beta", "beta", False), ("gamma", None, False), ("oldmod", None, False),
+                        ("lib", None, False), ("generated", None, False), ("core", None, False)):
+    for seconds in (0, 5):
+        ci.clear_snapshot_for_tests()
+        got = CALLFROM[who]["call"](ASK["ask"], ci, cache_seconds=seconds)
+        must((got.identity.module_id if got.identity else None) == ident and got.unverifiable is unv, (who, seconds, got))
+for kind in ("registry_error", "state_error"):
+    for seconds in (0, 5):
+        STATE.update(registry_error=False, state_error=False)
+        STATE[kind] = True
+        ci.clear_snapshot_for_tests()
+        got = CALLFROM["alerts"]["call"](ASK["ask"], ci, cache_seconds=seconds)
+        must(got.identity is None and got.unverifiable is True, (kind, seconds, got))
+        plain = CALLFROM["alerts"]["call"](PROVIDER["ask"], ci, cache_seconds=seconds)
+        must(plain is None, "the old helper still answers None on a fault")
+STATE.update(registry_error=False, state_error=False)
+ci.clear_snapshot_for_tests()
+got = CALLFROM["alerts"]["call"](PROVIDER["ask"], ci)
+must(got is not None and got.module_id == "alerts", "the old helper still returns the identity for a good call")
+print("       the private helper tells a read fault (unverifiable) from every real answer; calling_module_for_core_provider still answers None for both")
+
+# the two warnings are separate and each throttled; a fault adds no audit tally
+logs = []
+catch = Catch()
+logging.getLogger("tec_tac.caller_identity").addHandler(logging.NullHandler())  # the helper warns too; keep it off stderr
+ej.logger.addHandler(catch)
+ej.logger.setLevel(logging.WARNING)
+logging.disable(logging.NOTSET)
+try:
+    reset()
+    handle = register()
+    beta["fire"](handle, key())
+    ci.clear_snapshot_for_tests()
+    STATE["registry_error"] = True
+    for _ in range(30):
+        MONO[0] += 0.01
+        alerts["fire"](handle, key())
+    STATE["registry_error"] = False
+    unver = [m for m in logs if "could not be verified" in m]
+    must(len(unver) == 1 and "alerts.deliver" in unver[0] and "was not stored" in unver[0], unver)
+    must(len([m for m in logs if "was refused" in m]) == 1, "the foreign-caller warning was not hidden by the fault warning")
+    MONO[0] += 61
+    ci.clear_snapshot_for_tests()
+    STATE["registry_error"] = True
+    alerts["fire"](handle, key())
+    must(len([m for m in logs if "could not be verified" in m]) == 2, "the fault warning is throttled to a minute")
+    must(all("k1" not in m for m in logs), "no key in any warning")
+finally:
+    logging.disable(logging.CRITICAL)
+    ej.logger.removeHandler(catch)
+    STATE["registry_error"] = False
+print("       the fault warning and the refusal warning are separate, each throttled to a minute, and name no key")
+
 # ------------------------------------------------------------------------------------------------ (3) capability, metadata, docs
 reset()
 ej.register_core_event_jobs_capability()
@@ -448,7 +587,7 @@ def timed(label, prepare, loops=N):
     return SCANS[0], STATE_READS[0]
 
 
-ej._verified_caller_ok = lambda definition: True
+ej._verified_caller_ok = lambda definition: ej.CALLER_OK
 timed("no caller check", lambda: None)
 ej._verified_caller_ok = _real_check
 warm = timed("check, warm snapshot", lambda: None)

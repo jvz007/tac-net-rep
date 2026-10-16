@@ -630,6 +630,8 @@ Tec-Tac separates replaceable Git source from installed runtime code:
 /var/lib/tec-tac/ui/tec-tac  # compiled UI
 ```
 
+`tec-tac.conf` is read as `key=value` data, never sourced. `install.sh` rewrites it on every run, so a key it does not know about is kept only if it is one it writes. Since 1.17.48 that includes the optional `TEC_TAC_API_URL`, the address of this server's Tec-Tac API (for example `https://api.example.com`). A value in the caller's environment wins over the one in the file; with neither, no line is written. Core only keeps the value: the UI installer checks its format and falls back to the file it wrote last time and then Tactical's `PROD_URL`. A value with a CR or LF character is refused. `scripts/migrate-layout.sh` keeps the key the same way.
+
 Run `sudo bash scripts/migrate-layout.sh` once when upgrading a legacy installation where `/opt/tec-tac` or `/opt/tec-tac-ui` is still a Git checkout.
 
 ## User preferences (1.13.9)

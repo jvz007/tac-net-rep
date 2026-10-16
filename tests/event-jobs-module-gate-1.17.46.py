@@ -332,10 +332,11 @@ def _fake_caller(*, provider_file, cache_seconds=0):
     stand-in answers as the owning module (read from the publishing frame), the way the real helper does for the owner's own code.
     The real helper is exercised with real frames in tests/event-jobs-caller-1.17.47.py."""
     definition = sys._getframe(1).f_locals["definition"]
-    return SimpleNamespace(module_id=definition.module_id, kind="module", module_version="1.0.0")
+    identity = SimpleNamespace(module_id=definition.module_id, kind="module", module_version="1.0.0")
+    return SimpleNamespace(identity=identity, unverifiable=False)  # 1.17.48: the private helper answers identity and unverifiable
 
 
-mod("tec_tac.caller_identity", calling_module_for_core_provider=_fake_caller, clear_snapshot_for_tests=lambda: None)
+mod("tec_tac.caller_identity", core_provider_caller_checked=_fake_caller, clear_snapshot_for_tests=lambda: None)
 pkg.audit = audit_stub
 sys.modules.update(mods)
 

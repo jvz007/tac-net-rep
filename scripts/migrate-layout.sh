@@ -179,6 +179,18 @@ UI_REMOTE="$(git -C "${OLD_UI_REPO}" remote get-url origin 2>/dev/null || true)"
 [[ -n "${UI_REMOTE}" ]] && git -C "${UI_SOURCE}" remote set-url origin "${UI_REMOTE}"
 
 mkdir -p "${CONFIG_DIR}"
+# 1.17.48: keep TEC_TAC_API_URL. The caller's environment wins, else the first TEC_TAC_API_URL= line of the existing config (read as data,
+# never sourced). The config is rewritten from scratch below, so the value is read before it is lost.
+API_URL="${TEC_TAC_API_URL-}"
+if [[ -z "${API_URL}" && -f "${CONFIG_FILE}" ]]; then
+  while IFS= read -r api_line || [[ -n "${api_line}" ]]; do
+    if [[ "${api_line}" == TEC_TAC_API_URL=* ]]; then
+      API_URL="${api_line#TEC_TAC_API_URL=}"
+      break
+    fi
+  done < "${CONFIG_FILE}"
+fi
+[[ "${API_URL}" != *$'\n'* && "${API_URL}" != *$'\r'* ]] || fail "Tec-Tac config values may not contain CR/LF characters."
 cat > "${CONFIG_FILE}" <<EOF_CONFIG
 # Tec-Tac installation layout. Managed by the Tec-Tac framework installer.
 TEC_TAC_ROOT=${RUNTIME_ROOT}
@@ -201,6 +213,9 @@ TACTICAL_USER=tactical
 FRAMEWORK_REPOSITORY=jvz007/tac-net-rep
 UI_REPOSITORY=jvz007/tec-tac-ui
 EOF_CONFIG
+if [[ -n "${API_URL}" ]]; then
+  printf 'TEC_TAC_API_URL=%s\n' "${API_URL}" >> "${CONFIG_FILE}"
+fi
 chown root:root "${CONFIG_FILE}"
 chmod 0644 "${CONFIG_FILE}"
 log "Wrote authoritative layout config: ${CONFIG_FILE}"

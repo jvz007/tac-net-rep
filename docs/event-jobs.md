@@ -117,7 +117,7 @@ Otherwise, after the caller's transaction commits (at once when none is open), C
 So a broker outage, or a uWSGI worker that was recycled before the commit hook ran, loses nothing that was stored.
 
 Results: `queued` (accepted), `duplicate`, `dropped` (over the rate or backlog), `disabled` (the module is disabled, or its state could not be
-read), `error` (the handle is not a registered publisher, the caller is not the module that owns the job, the key or payload was refused, or something failed; the reason never holds a payload
+read by the publish's own five second module-enabled check), `error` (the handle is not a registered publisher, the caller is not the module that owns the job, the caller could not be verified (the module list or state could not be read while the caller was checked), the key or payload was refused, or something failed; the reason never holds a payload
 value).
 
 Inside an open transaction the answer is `queued` before the row exists, because the row is stored when the transaction commits. A duplicate
@@ -151,7 +151,7 @@ stops a schedule. The work is bounded to 200 rows a step:
 - a running row older than its hard time limit plus 5 minutes is a failed attempt (retry or give up);
 - a pending row never sent, or whose `next_attempt_at` passed more than 60 seconds ago, is sent again;
 - a backlog over `max_backlog` is trimmed, oldest first, and counted as dropped;
-- the backlog gauges are refreshed, this process's counters are flushed, and one audit row is written per job that dropped;
+- the backlog gauges are refreshed, this process's counters are flushed, and one audit row is written per job that dropped, and one per job and clock hour for publishes refused because the caller was not the owner (`custom:event-job-refused`, written after the hour ends);
 - finished rows older than the Scheduler's `run_retention_days` are removed, with a hard cap of 20000 finished rows.
 
 ## Audit
@@ -166,9 +166,17 @@ Core writes the rows, as the service actor `service_audit_actor(module_id="core"
 | skipped by the module or handler check | `custom:event-job-skipped` |
 | expired before it started | `custom:event-job-expired` |
 | publishes dropped at the gate, or rows trimmed (one row per job per tick, with a count) | `custom:event-job-dropped` |
+| publishes refused because the caller was not the module that owns the job (1.17.48: one row per module and job per clock hour, after the hour ends, with the count) | `custom:event-job-refused` |
 | a success, only when the job registered `audit_success=True` | `run` |
 
 A retry is recorded on the job row and in the counters, not as an audit row.
+
+The refused row holds `owner_module`, `job_id`, `count`, `window_seconds` (3600) and `hour_start` (ISO time), and never a key or a payload. It
+appears once, in the tick after the hour ends (a tick that missed an hour reports it the next time, up to two hours back), so the immediate
+signal stays the warning in the log. The count lives in Django's shared cache (Redis on a Tactical server), with no database column and no
+migration, so a cache flush or restart inside the hour can lose that hour's count: a count is a count, not proof. With a per-process cache
+(local development) the tick only sees its own process's tally. A caller that could not be verified (the module list or state could not be
+read) is not a refusal and writes no row.
 
 ## Reading the state
 
@@ -195,14 +203,13 @@ still open. Nothing runs at a person's authority and no permission check passes 
    `calling_module_for_core_provider`: the first frame above `publish` must be the code of the enabled, non-legacy module that owns the job.
    Another module, a Core frame (the Scheduler, a `functools.partial`), a library or generated frame, a disabled or legacy module and any
    error give `error` ('the caller is not the module that owns this job'): nothing is stored or counted, and nothing is raised. The check
-   runs in `publish` itself, never in the commit hook. Core logs one warning per job and refused caller a minute at most. No audit row and no
-   counter record a refusal (CQ138 is open). The residual case: a module that makes another module's own code frame call `publish` (a hook
+   runs in `publish` itself, never in the commit hook. Core logs one warning per job and refused caller a minute at most, and (1.17.48, CQ138) counts each refusal of a foreign caller for the hourly `custom:event-job-refused` audit row (see Audit). A check that fails because the module list or the module state cannot be read is not a refusal: the publish answers `error` 'the caller could not be verified', stores nothing, writes no row and is lost (nothing is stored to retry); that fault is kept for 1 second, so the next publish after about 1 second is checked again. The residual case: a module that makes another module's own code frame call `publish` (a hook
    list or signal that other modules can make it run), the callback-surface limit already listed in `docs/caller-identity.md`.
    *Cost.* The module list and each enabled flag are read through a snapshot kept for 5 seconds (the same window as the module-enabled
    cache), so a Tactical alert save does a stack walk and no disk read (the real path of each file name is kept in the snapshot too, because `realpath` is a system call per path part). On the development PC with stub reads the check adds about 20 microseconds per publish on a warm snapshot; the real-disk cost is read on the dev server with `tests/event-jobs-caller-runtime-1.17.47.py`. A module disabled in the last 5 seconds is still recognised as a caller
    for up to 5 seconds (the publish already tolerates this through the module-enabled cache, and the worker re-checks the module uncached
    before any handler runs, so nothing runs for a disabled module). A module installed in the last 5 seconds is refused until the snapshot
-   expires, which fails closed. An unreadable state is kept for the same window and refuses.
+   expires, which fails closed. A failed read of the module list or of a module's state (a corrupt state counts as a failed read) is kept for 1 second only, not the window, and refuses meanwhile ('the caller could not be verified'). A good read keeps the 5 second window.
 3. **At least once.** A handler can run twice (a redelivery after a worker loss, a retry after a timeout) and must be safe to repeat.
 4. **The payload is data.** Size-capped (2 KiB), JSON only, ids and not text bodies. It is never logged, audited, listed or returned by a status route.
 5. **Exception text may reach the audit row**, cut to one line of 200 characters. A handler keeps secrets out of its exception messages.

@@ -100,7 +100,7 @@ def costs():
     ej._persist_safely = lambda definition, key, payload: "queued"  # time the gate only, not the INSERT and the broker
     try:
         print(f"  publish with the check, warm {micro(publish, 2000):9.1f} us  (gate only: the INSERT and the broker publish are not timed)")
-        ej._verified_caller_ok = lambda definition: True
+        ej._verified_caller_ok = lambda definition: ej.CALLER_OK
         print(f"  publish without the check    {micro(publish, 2000):9.1f} us")
     finally:
         ej._persist_safely, ej._verified_caller_ok = original_persist, original_check

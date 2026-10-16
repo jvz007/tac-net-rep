@@ -55,6 +55,9 @@ TICK_ROW_LIMIT = 200
 FINISHED_ROW_CAP = 20000
 PRUNE_BATCH = 1000
 DROP_FLUSH_SECONDS = 60
+REFUSAL_WINDOW_SECONDS = 3600  # refused publishes are tallied per clock hour and reported once, after the hour ends (1.17.48)
+REFUSAL_CACHE_PREFIX = "tectac:eventjob-refused"  # the tally lives in Django's shared cache, never in the database
+REFUSAL_TTL_SECONDS = 3 * 3600  # long enough for the tick after the hour, and for one that missed it
 
 STATUS_PENDING = "pending"
 STATUS_RUNNING = "running"

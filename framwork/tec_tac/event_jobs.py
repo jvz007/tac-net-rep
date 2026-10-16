@@ -17,7 +17,9 @@ bound to the module itself: ``module_id`` must be an installed, enabled extensio
 ``<module_id>.``, and the handler's code file must lie inside that module's own folder. A module cannot register under another
 module's id, point an id at code that is not its own, or publish for another module (no other module is given the handle). Since 1.17.47 every publish also verifies its caller (AD-36): the
 first frame above ``publish`` must be the code of the enabled module that owns the job, else the answer is ``error`` and nothing is
-stored or counted.
+stored or counted. Since 1.17.48 a foreign caller is tallied (shared cache, no database column) and the tick writes one audit row per
+module, job and clock hour with the count; a check that failed because the module list or state could not be read answers "the caller
+could not be verified", is not tallied and is tried again after one second.
 
 What the publish does. It never raises and never makes a network call but one bounded broker publish. It answers from memory first (the
 registry, a five second module-enabled cache, the caller check on a five second snapshot of the module list and states, a three second in-process duplicate check, a per-process rate cap, a cached backlog gauge)
@@ -44,7 +46,7 @@ import threading
 import time
 import weakref
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone as dt_timezone
 from typing import Callable
 
 from django.db import IntegrityError, connection, transaction
@@ -66,6 +68,7 @@ ACTION_FAILED = "custom:event-job-failed"
 ACTION_SKIPPED = "custom:event-job-skipped"
 ACTION_EXPIRED = "custom:event-job-expired"
 ACTION_DROPPED = "custom:event-job-dropped"
+ACTION_REFUSED = "custom:event-job-refused"
 ACTION_SUCCEEDED = "run"
 
 DEFAULT_HARD_LIMIT = policy.LIMITS["soft_time_limit_seconds"][2] + policy.HARD_LIMIT_EXTRA_SECONDS
@@ -177,24 +180,51 @@ def _module_runnable_now(module_id: str) -> bool:
 
 _last_refusal_log: dict[tuple[str, str], float] = {}
 _REFUSAL_LOG_SECONDS = 60
+CALLER_OK = "ok"
+CALLER_FOREIGN = "foreign"  # a real caller that is not the owning module
+CALLER_UNVERIFIABLE = "unverifiable"  # the module list or state could not be read: not a refusal of anyone
+_UNVERIFIABLE_LOG_KEY = "(could not be verified)"
+_local_refusals: dict[tuple[str, str, int], int] = {}  # the fallback tally when the shared cache raises; this process only
+_local_reported: set[tuple[str, str, int]] = set()
 
 
-def _verified_caller_ok(definition: EventJobDefinition) -> bool:
+def _verified_caller_ok(definition: EventJobDefinition) -> str:
     """AD-36: the first frame above ``publish`` must be the code of the enabled module that owns this job. Never raises.
 
-    ``calling_module_for_core_provider`` skips every frame in this file, so ``publish`` -> ``_publish`` -> here is fine. It runs in the
+    Answers ``CALLER_OK``, ``CALLER_FOREIGN`` or ``CALLER_UNVERIFIABLE`` (1.17.48). Foreign is tallied for the hourly audit row;
+    unverifiable (a failed module-list or state read) is not a refusal and is not tallied.
+
+    ``core_provider_caller_checked`` skips every frame in this file, so ``publish`` -> ``_publish`` -> here is fine. It runs in the
     synchronous publish path, never in the commit hook (that runs in a Core frame and would always be refused). The module list and states
     are read through a short snapshot (``policy.ENABLED_CACHE_SECONDS``): a module just disabled is still recognised for up to that long
-    (the worker re-checks it uncached before any handler runs), and a module just installed is refused until the snapshot expires."""
+    (the worker re-checks it uncached before any handler runs), and a module just installed is refused until the snapshot expires. A failed
+    read is kept for one second only, then read again."""
+    who = "unverified"
     try:
         from . import caller_identity
 
-        caller = caller_identity.calling_module_for_core_provider(provider_file=__file__, cache_seconds=policy.ENABLED_CACHE_SECONDS)
+        check = caller_identity.core_provider_caller_checked(provider_file=__file__, cache_seconds=policy.ENABLED_CACHE_SECONDS)
+        caller = check.identity
         if caller is not None and caller.module_id == definition.module_id:
-            return True
-        who = caller.module_id if caller is not None else "unverified"
+            return CALLER_OK
+        if check.unverifiable:
+            _log_unverifiable(definition)
+            return CALLER_UNVERIFIABLE
+        if caller is not None:
+            who = caller.module_id
     except Exception:
-        who = "unverified"
+        _log_unverifiable(definition)
+        return CALLER_UNVERIFIABLE
+    _log_throttled(definition, who, f"Event job {definition.id}: a publish by {who} was refused; only the owning module's own code may publish.")
+    _note_refusal(definition)
+    return CALLER_FOREIGN
+
+
+def _log_unverifiable(definition: EventJobDefinition) -> None:
+    _log_throttled(definition, _UNVERIFIABLE_LOG_KEY, f"Event job {definition.id}: the caller could not be verified; this publish was not stored.")
+
+
+def _log_throttled(definition: EventJobDefinition, who: str, text: str) -> None:
     try:
         now = time.monotonic()
         key = (definition.id, who)
@@ -203,10 +233,33 @@ def _verified_caller_ok(definition: EventJobDefinition) -> bool:
             if len(_last_refusal_log) > 256:
                 _last_refusal_log.clear()
             _last_refusal_log[key] = now
-            logger.warning("Event job %s: a publish by %s was refused; only the owning module's own code may publish.", definition.id, who)
+            logger.warning(text)
     except Exception:
-        logger.debug("The refusal of an event job publish could not be logged.", exc_info=True)
-    return False
+        logger.debug("An event job publish warning could not be logged.", exc_info=True)
+
+
+def _refusal_key(module_id: str, job_id: str, bucket: int, part: str = "count") -> str:
+    return f"{policy.REFUSAL_CACHE_PREFIX}:{part}:{module_id}:{job_id}:{bucket}"
+
+
+def _note_refusal(definition: EventJobDefinition) -> None:
+    """Count one refused publish of this job in the current clock hour. Never raises and never waits: the shared cache first, a bounded
+    process-local tally when the cache raises. Holds the owner module id, the job id and the hour, never a key or a payload."""
+    try:
+        bucket = int(time.time() // policy.REFUSAL_WINDOW_SECONDS)
+        try:
+            from django.core.cache import cache
+
+            count_key = _refusal_key(definition.module_id, definition.id, bucket)
+            cache.add(count_key, 0, policy.REFUSAL_TTL_SECONDS)
+            cache.incr(count_key)
+        except Exception:
+            local_key = (definition.module_id, definition.id, bucket)
+            if len(_local_refusals) > 256 and local_key not in _local_refusals:
+                _local_refusals.clear()
+            _local_refusals[local_key] = _local_refusals.get(local_key, 0) + 1
+    except Exception:
+        logger.debug("The refusal of an event job publish could not be counted.", exc_info=True)
 
 
 def _module_enabled_cached(module_id: str) -> bool:
@@ -463,7 +516,10 @@ def _publish(handle, key, payload) -> PublishResult:
             return PublishResult("error", "not a registered publisher")
         if not _module_enabled_cached(definition.module_id):
             return PublishResult("disabled")
-        if not _verified_caller_ok(definition):
+        decision = _verified_caller_ok(definition)
+        if decision == CALLER_UNVERIFIABLE:
+            return PublishResult("error", "the caller could not be verified")
+        if decision != CALLER_OK:
             return PublishResult("error", "the caller is not the module that owns this job")
         try:
             key = policy.clean_key(key)
@@ -859,12 +915,13 @@ def recover_event_jobs(now=None) -> dict:
     cannot be read stay pending and are counted in ``module_state_unread``), recovers running rows older than the hard
     limit plus five minutes, enqueues pending rows that were never enqueued or are overdue, trims a backlog over its limit (oldest
     first, counted as dropped), refreshes the backlog gauges, flushes this process's counters, writes one audit row per job that
-    dropped, and prunes finished rows."""
+    dropped, writes one audit row per job and hour for publishes refused because the caller was not the owner (from the shared-cache
+    tally, after the hour ends), and prunes finished rows."""
     now = now or timezone.now()
-    out = {"expired": 0, "module_unavailable": 0, "stale_recovered": 0, "enqueued": 0, "trimmed": 0, "dropped_reported": 0, "pruned": 0, "errors": 0,
+    out = {"expired": 0, "module_unavailable": 0, "stale_recovered": 0, "enqueued": 0, "trimmed": 0, "dropped_reported": 0, "refused_reported": 0, "pruned": 0, "errors": 0,
            "module_state_unread": 0}
     for step in (_tick_expire, _tick_module_gate, _tick_recover_running, _tick_enqueue_overdue, _tick_trim, _tick_gauges,
-                 _tick_report_drops, _tick_prune):
+                 _tick_report_drops, _tick_report_refusals, _tick_prune):
         try:
             step(now, out)
         except Exception:
@@ -1017,6 +1074,55 @@ def _tick_report_drops(now, out) -> None:
         out["dropped_reported"] += 1
 
 
+def _refusal_count(module_id: str, job_id: str, bucket: int) -> int:
+    count = 0
+    try:
+        from django.core.cache import cache
+
+        count += int(cache.get(_refusal_key(module_id, job_id, bucket)) or 0)
+    except Exception:
+        logger.debug("The refusal tally could not be read from the cache.", exc_info=True)
+    return count + _local_refusals.get((module_id, job_id, bucket), 0)
+
+
+def _claim_refusal_report(module_id: str, job_id: str, bucket: int) -> bool:
+    """True once per (module, job, hour) across workers: ``cache.add`` is atomic. A raising cache falls back to this process's set."""
+    local_key = (module_id, job_id, bucket)
+    try:
+        from django.core.cache import cache
+
+        claimed = bool(cache.add(_refusal_key(module_id, job_id, bucket, "reported"), 1, policy.REFUSAL_TTL_SECONDS))
+    except Exception:
+        claimed = local_key not in _local_reported
+    if claimed:
+        if len(_local_reported) > 256:
+            _local_reported.clear()
+        _local_reported.add(local_key)
+    return claimed
+
+
+def _tick_report_refusals(now, out) -> None:
+    """One audit row per (owner module, job) and clock hour for publishes refused because the caller was not the owner, with the count.
+
+    Reads the two hours before the current one, so a missed tick still reports. The row never appears before its hour ends. The tally is
+    in the shared cache: a flush can lose a count (a count is a count, not proof). A caller that could not be verified is not counted."""
+    current = int(now.timestamp() // policy.REFUSAL_WINDOW_SECONDS)
+    for module_id, job_id in _known_jobs():
+        for bucket in (current - 2, current - 1):
+            count = _refusal_count(module_id, job_id, bucket)
+            if count <= 0:
+                continue
+            if not _claim_refusal_report(module_id, job_id, bucket):
+                continue
+            _local_refusals.pop((module_id, job_id, bucket), None)
+            hour_start = datetime.fromtimestamp(bucket * policy.REFUSAL_WINDOW_SECONDS, tz=dt_timezone.utc).isoformat()
+            _audit(ACTION_REFUSED, module_id=module_id, job_id=job_id, error_type="CallerRefused",
+                   message=(f"Event job {job_id}: {count} publish(es) were refused in the hour from {hour_start} "
+                            "because the caller was not the module that owns the job."),
+                   extra={"count": count, "window_seconds": policy.REFUSAL_WINDOW_SECONDS, "hour_start": hour_start})
+            out["refused_reported"] += 1
+
+
 def _retention_days() -> int:
     try:
         from .models import TecTacSchedulerConfig
@@ -1149,12 +1255,16 @@ def event_jobs_contract_metadata() -> dict:
         "handler_context_has_user": False,
         "tactical_write_from_handler": False,
         "delivery": "at least once",
-        "audit_actions": [ACTION_FAILED, ACTION_SKIPPED, ACTION_EXPIRED, ACTION_DROPPED, ACTION_SUCCEEDED + " (only when audit_success is true)"],
+        "audit_actions": [ACTION_FAILED, ACTION_SKIPPED, ACTION_EXPIRED, ACTION_DROPPED, ACTION_REFUSED, ACTION_SUCCEEDED + " (only when audit_success is true)"],
         "limits_text": list(LIMITS_TEXT),
         "caller": (
             "every publish verifies its caller (AD-36, core.caller_identity's private Core helper): the first frame above publish must be the "
             "code of the enabled, non-legacy module that owns the job; anything else answers error and stores nothing. A module disabled in the "
-            "last 5 seconds is still recognised for up to 5 seconds; the worker re-checks the module before any handler runs."
+            "last 5 seconds is still recognised for up to 5 seconds; the worker re-checks the module before any handler runs. A publish made "
+            "while the module list or state cannot be read answers error 'the caller could not be verified' and is lost (nothing is stored to "
+            "retry); the next publish after about 1 second is checked again. A refusal for a foreign caller is counted in the shared cache "
+            "and reported as one Core audit row (custom:event-job-refused, with the count) per module and job once the clock hour ends; a "
+            "cache flush can lose a count, so a count is a count and not proof."
         ),
         "requires_framework": ">=1.17.47",
     }
@@ -1193,6 +1303,8 @@ def _clear_for_tests() -> None:
     _GAUGES.clear()
     _ENABLED.clear()
     _last_refusal_log.clear()
+    _local_refusals.clear()
+    _local_reported.clear()
     with contextlib.suppress(Exception):
         from . import caller_identity
 
