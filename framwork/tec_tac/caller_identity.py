@@ -43,6 +43,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -92,6 +93,61 @@ def _enabled(module_id: str) -> bool:
     return bool(module_state.is_enabled(module_id))
 
 
+class _Snapshot:
+    """One short-lived read of the installed modules and their enabled flags (the opt-in cache of ``calling_module_for_core_provider``).
+    A new snapshot replaces the old one whole, so no lock is needed. ``plugins`` is ``None`` when the scan failed: that is cached too."""
+
+    __slots__ = ("at", "enabled", "norms", "plugins")
+
+    def __init__(self, at, plugins):
+        # ``norms`` keeps the real path of each file name seen in this window: ``realpath`` is a system call per path part and is the
+        # largest cost of the frame walk, so the opt-in path asks the disk once a window and not once a frame.
+        self.at, self.plugins, self.enabled, self.norms = at, plugins, {}, {}
+
+    def norm(self, path) -> str:
+        key = str(path)
+        known = self.norms.get(key)
+        if known is None:
+            known = self.norms[key] = _norm(key)
+        return known
+
+
+_clock = time.monotonic  # a test replaces it
+_SNAPSHOT: list = [None]
+
+
+def clear_snapshot_for_tests() -> None:
+    _SNAPSHOT[0] = None
+
+
+def _snapshot(seconds: float) -> _Snapshot:
+    now = _clock()
+    snap = _SNAPSHOT[0]
+    if snap is not None and 0 <= now - snap.at < seconds:
+        return snap
+    try:
+        plugins = _plugins()
+    except Exception:
+        logger.warning("Could not read the installed modules; callers stay unverified for %s seconds.", seconds, exc_info=True)
+        plugins = None
+    snap = _Snapshot(now, plugins)
+    _SNAPSHOT[0] = snap
+    return snap
+
+
+def _snapshot_enabled(snap: _Snapshot, module_id: str) -> bool:
+    known = snap.enabled.get(module_id)
+    if known is not None:
+        return known
+    try:
+        value = _enabled(module_id)
+    except Exception:
+        logger.warning("Could not read the enabled state of module %s; treating its code as an unverified caller.", module_id, exc_info=True)
+        value = False  # fail closed, and cached for the window so a fault costs one read, not one per call
+    snap.enabled[module_id] = value
+    return value
+
+
 def calling_module(*, provider_module_id) -> CallerIdentity | None:
     """The identity of the module whose code called the provider function that called this, or ``None`` (refuse).
 
@@ -105,12 +161,12 @@ def calling_module(*, provider_module_id) -> CallerIdentity | None:
         return None
 
 
-def _code_path(frame) -> str | None:
+def _code_path(frame, norm=None) -> str | None:
     """The real path of a frame's code file, or ``None`` for a generated (``<...>``) or empty file name."""
     filename = frame.f_code.co_filename
     if not isinstance(filename, str) or not filename or filename.startswith("<"):
         return None
-    return _norm(filename)
+    return (norm or _norm)(filename)
 
 
 def _calling_module(provider_module_id) -> CallerIdentity | None:
@@ -151,36 +207,54 @@ def _calling_module(provider_module_id) -> CallerIdentity | None:
         frame = None
 
 
-def calling_module_for_core_provider(*, provider_file) -> CallerIdentity | None:
+def calling_module_for_core_provider(*, provider_file, cache_seconds: float = 0) -> CallerIdentity | None:
     """Core-internal (1.17.27, CQ87): the module whose code called a Core-owned provider function, or ``None`` (refuse).
 
     Not a public contract: it is not listed in the contract export and no module may import it. A Core provider (tec_tac.accounts) calls
     it from its own function, with its own ``__file__``. Every frame in that file is skipped, however deep the provider's own calls go.
     The first other frame is the caller, and only that frame: it gives a module only when it is the code of an installed, enabled,
     non-legacy extension. A Core frame, a library or Django frame, a generated (``<...>``) frame, a disabled or legacy module and any error
-    give ``None``. Core is never identified (AD-26 condition 2): this names module code and nothing else. Enabled state is read on every call.
+    give ``None``. Core is never identified (AD-26 condition 2): this names module code and nothing else. Enabled state is read on every call
+    unless the provider opts in with ``cache_seconds`` (1.17.47, event jobs: a path that runs on every Tactical alert save). With
+    ``cache_seconds`` above 0 the installed modules and each enabled flag come from a process-local snapshot kept that long; a failed read
+    is kept for the same time and refuses (fail closed). The frame walk is never cached. At 0 (the default) nothing is cached.
     """
+    try:
+        cache_seconds = float(cache_seconds)
+        if not cache_seconds > 0 or cache_seconds == float("inf"):
+            cache_seconds = 0.0
+    except (TypeError, ValueError):
+        cache_seconds = 0.0
     try:
         getter = getattr(sys, "_getframe", None)
         if getter is None:
             return None
-        return _core_provider_caller(getter(1), provider_file)  # frame 1 is the provider function that called this
+        return _core_provider_caller(getter(1), provider_file, cache_seconds)  # frame 1 is the provider function that called this
     except Exception:
         logger.warning("Could not verify the calling module of a Core provider; treating the caller as unverified.", exc_info=True)
         return None
 
 
-def _core_provider_caller(frame, provider_file) -> CallerIdentity | None:
+def _core_provider_caller(frame, provider_file, cache_seconds: float = 0) -> CallerIdentity | None:
     """Walk up from the provider's own frame (already the first argument), as ``_calling_module`` does for a module provider."""
     if not isinstance(provider_file, str) or not provider_file.strip():
         return None
-    provider_path = _norm(provider_file)
-    plugins = _plugins()
-    framework = _norm(_FRAMEWORK_DIR)
+    if cache_seconds > 0:
+        snap = _snapshot(cache_seconds)
+        if snap.plugins is None:
+            return None  # the scan failed inside this window: refuse
+        plugins, norm = snap.plugins, snap.norm
+
+        def enabled(module_id):
+            return _snapshot_enabled(snap, module_id)
+    else:
+        plugins, norm, enabled = _plugins(), _norm, _enabled
+    provider_path = norm(provider_file)
+    framework = norm(_FRAMEWORK_DIR)
     try:
         path = None
         while frame is not None:
-            path = _code_path(frame)
+            path = _code_path(frame, norm)
             if path != provider_path:
                 break
             frame = frame.f_back
@@ -189,8 +263,8 @@ def _core_provider_caller(frame, provider_file) -> CallerIdentity | None:
         if _under(path, framework):
             return None  # Core code (the Scheduler, a row lookup, signal dispatch): Core is never a caller
         for plugin in plugins:
-            if _under(path, _norm(plugin.root)):
-                if plugin.plugin_type != "extension" or plugin.legacy or not _enabled(plugin.plugin_id):
+            if _under(path, norm(plugin.root)):
+                if plugin.plugin_type != "extension" or plugin.legacy or not enabled(plugin.plugin_id):
                     return None  # a disabled, legacy or non-extension module: refuse
                 return CallerIdentity(plugin.plugin_id, KIND_MODULE, str(plugin.version or "0.0.0"))
         return None  # the standard library, Django or other code outside every module

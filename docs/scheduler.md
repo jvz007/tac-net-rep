@@ -395,7 +395,7 @@ info = get_owned_schedule("cyberhoot", "sync")
 
 ## Event jobs (Core 1.17.45)
 
-A job a module starts because of an event (a Tactical alert was saved) is not a schedule. It runs through `core.event_jobs` 1.0.0, which the
+A job a module starts because of an event (a Tactical alert was saved) is not a schedule. It runs through `core.event_jobs` 1.1.0, which the
 same tick keeps healthy: `dispatch_due_schedules` calls `recover_event_jobs` after `recover_stale_runs`, in its own `try` block, so a fault there
 never stops a schedule. `scheduler_health()` gains an additive `event_jobs` block, and `GET /api/tfd/scheduler/event-jobs/` lists the jobs for
 people with server-maintenance authority. See `docs/event-jobs.md`.

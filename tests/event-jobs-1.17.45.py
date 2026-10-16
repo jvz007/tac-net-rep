@@ -326,6 +326,17 @@ mod("tec_tac.registry", discover_plugins=discover_plugins)
 mod("tec_tac.module_state", load_state=load_state, is_enabled=is_enabled)
 audit_stub = mod("tec_tac.audit", record=audit_record, service_audit_actor=lambda **kw: {"service": kw})
 mod("tec_tac.capabilities", register_capability=lambda **kw: CAPS.append(kw) or SimpleNamespace(**kw))
+
+
+def _fake_caller(*, provider_file, cache_seconds=0):
+    """1.17.47: the verified-caller seam. A test file is not a module's code, so the real helper would refuse every publish here. This
+    stand-in answers as the owning module (read from the publishing frame), the way the real helper does for the owner's own code.
+    The real helper is exercised with real frames in tests/event-jobs-caller-1.17.47.py."""
+    definition = sys._getframe(1).f_locals["definition"]
+    return SimpleNamespace(module_id=definition.module_id, kind="module", module_version="1.0.0")
+
+
+mod("tec_tac.caller_identity", calling_module_for_core_provider=_fake_caller, clear_snapshot_for_tests=lambda: None)
 pkg.audit = audit_stub
 sys.modules.update(mods)
 
@@ -1198,12 +1209,12 @@ print("       the hook runs after recover_stale_runs and before the schedules")
 # ------------------------------------------------------------------------------------------------ (13) the capability
 reset()
 cap = ej.register_core_event_jobs_capability()
-must(CAPS and CAPS[0]["id"] == "core.event_jobs" and CAPS[0]["module_id"] == "core" and CAPS[0]["version"] == "1.0.0", CAPS)
+must(CAPS and CAPS[0]["id"] == "core.event_jobs" and CAPS[0]["module_id"] == "core" and CAPS[0]["version"] == "1.1.0", CAPS)  # 1.0.0 until 1.17.47 (caller check)
 must(CAPS[0]["operations"] == ("register_event_job", "verify_event_job_context"), CAPS[0]["operations"])
 meta = CAPS[0]["metadata"]
 must(meta["limits"]["soft_time_limit_seconds"] == {"minimum": 5, "default": 30, "maximum": 600} and meta["payload_max_bytes"] == 2048, meta["limits"])
 must(meta["handler_context_has_user"] is False and meta["tactical_write_from_handler"] is False and meta["delivery"] == "at least once", meta)
-must(meta["requires_framework"] == ">=1.17.45" and meta["http"].startswith("GET /api/tfd/scheduler/event-jobs/"), meta)
+must(meta["requires_framework"] == ">=1.17.47" and "caller" in meta and meta["http"].startswith("GET /api/tfd/scheduler/event-jobs/"), meta)
 must(CAPS[0]["provider"].register_event_job is ej.register_event_job and CAPS[0]["provider"].verify_event_job_context is ej.verify_event_job_context, "provider")
-print("       the capability core.event_jobs 1.0.0 is registered with its limits")
+print("       the capability core.event_jobs 1.1.0 is registered with its limits")
 print("[TEST] PASS event jobs 1.17.45")

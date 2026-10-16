@@ -240,7 +240,7 @@ must(timed.get("y") is None, "clear")
 print("       rate window, duplicate memory, circuit breaker and timed value")
 
 # (10) the numbers the contract states
-must(P.CAPABILITY_ID == "core.event_jobs" and P.CAPABILITY_VERSION == "1.0.0", "capability")
+must(P.CAPABILITY_ID == "core.event_jobs" and P.CAPABILITY_VERSION == "1.1.0", "capability")  # 1.0.0 until 1.17.47
 must(P.TICK_ROW_LIMIT == 200 and P.FINISHED_ROW_CAP == 20000 and P.PAYLOAD_MAX_BYTES == 2048 and P.KEY_MAX_LENGTH == 128, "limits")
 must(P.IN_PROCESS_DEDUPE_SECONDS == 3 and P.ENABLED_CACHE_SECONDS == 5 and P.BREAKER_OPEN_SECONDS == 30 and P.BROKER_TIMEOUT_SECONDS == 2, "hot path")
 must(P.STATEMENT_TIMEOUT_MS == 1000 and P.OVERDUE_SECONDS == 60 and P.STALE_RUNNING_GRACE_SECONDS == 300 and P.HARD_LIMIT_EXTRA_SECONDS == 15, "recovery")

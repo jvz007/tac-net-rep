@@ -598,7 +598,7 @@ CORE_CONTRACTS = (
         "kind": "python",
         "purpose": (
             "register_event_job(*, id, module_id, label, handler, soft_time_limit_seconds=None, max_attempts=None, backoff_seconds=None, max_backoff_seconds=None, "
-            "expires_seconds=None, max_backlog=None, dedupe_seconds=None, audit_success=False) -> EventJobPublisher (1.17.45, capability core.event_jobs 1.0.0, framework >=1.17.45, "
+            "expires_seconds=None, max_backlog=None, dedupe_seconds=None, audit_success=False) -> EventJobPublisher (1.17.45, capability core.event_jobs 1.1.0 since 1.17.47, framework >=1.17.47 for the caller check, "
             "Johan 16 October 2026). The one sanctioned way for a module to do small background work because something happened (a Tactical alert was saved, a webhook arrived): "
             "no private thread, timer or event-started Celery task. Call it from AppConfig.ready(); it touches memory only and returns the one handle that can publish this job. "
             "id is '<module_id>.<job>' (lowercase letters, digits, - _ and . in the job part) and must start with the module's own id. handler(context) gets an EventJobContext "
@@ -612,7 +612,7 @@ CORE_CONTRACTS = (
             "safe to run twice. Failures: SchedulerPermanentError, ValueError and TypeError give up at once; SchedulerTransientError, SoftTimeLimitExceeded and any other exception retry "
             "with Core's back-off until the attempts are used up, then the row ends failed with one Core audit row. The job runs as the module, not as a person: a handler cannot call "
             "run_tactical_operation, so an event job cannot make a Tactical change (the AD-13 system-action contract is still open). Feature-detect with has_capability('core.event_jobs') "
-            "and set requires.framework >=1.17.45. Needs migration 0032_event_jobs. See docs/event-jobs.md."
+            "and set requires.framework >=1.17.47 (1.17.47 verifies the caller of every publish, AD-36; see EventJobPublisher). Needs migration 0032_event_jobs. See docs/event-jobs.md."
         ),
         "audience": "module/backend",
     },
@@ -622,8 +622,8 @@ CORE_CONTRACTS = (
         "name": "EventJobPublisher",
         "kind": "python",
         "purpose": (
-            "EventJobPublisher.publish(key, payload=None) -> PublishResult(outcome, reason) and EventJobPublisher.status() -> dict (1.17.45, core.event_jobs 1.0.0). The handle "
-            "register_event_job returns; it cannot be built, copied or pickled, and only the registering module holds it. publish never raises and never touches the network but one bounded "
+            "EventJobPublisher.publish(key, payload=None) -> PublishResult(outcome, reason) and EventJobPublisher.status() -> dict (1.17.45, core.event_jobs 1.1.0 since 1.17.47). The handle "
+            "register_event_job returns; it cannot be built, copied or pickled, and only the registering module holds it. Since 1.17.47 (AD-36) every publish verifies its caller: the first frame above publish must be the code of the enabled, non-legacy module that owns the job (Core's private caller check, 5 second snapshot), else the answer is error with 'the caller is not the module that owns this job' and nothing is stored or counted; call publish from your own module code, not through a Core callback. publish never raises and never touches the network but one bounded "
             "broker publish (2 second timeout, retry off, a 30 second circuit breaker after one failure). outcome is queued, duplicate, dropped, disabled or error. It answers from memory "
             "first (the registry, a 5 second module-enabled cache, a 3 second in-process (job, key) duplicate check, a per-process cap of 600 publishes a minute per job, a cached backlog gauge; "
             "an absent gauge means open) and drops without a database query when any says no. Otherwise, after the caller's transaction commits (at once when none is open), it stores one row "
@@ -642,7 +642,7 @@ CORE_CONTRACTS = (
         "kind": "python",
         "purpose": (
             "verify_event_job_context(context, *, expected_module_id, expected_job_id) -> VerifiedEventJob(run_id, module_id, job_id, key, attempt, final_attempt) (1.17.45, "
-            "core.event_jobs 1.0.0). A handler passes its own module id and job id; Core refuses with EventJobContextInvalid a plain dict, a copy of the context, a context issued for "
+            "core.event_jobs 1.1.0 since 1.17.47). A handler passes its own module id and job id; Core refuses with EventJobContextInvalid a plain dict, a copy of the context, a context issued for "
             "another module's or job's run, a run that is no longer running and an expected id that is missing or not text. The same shape as scheduler.verify_run_context, with no owner "
             "because an event job has no person behind it."
         ),

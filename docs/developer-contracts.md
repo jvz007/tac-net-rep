@@ -261,4 +261,4 @@ The native Tactical account guard is the security exception to ordinary best-eff
 
 Verified calling-module identity (`tec_tac.caller_identity.calling_module`, capability `core.caller_identity` 1.0.0, Core 1.17.21): see `docs/caller-identity.md`.
 
-Event-started system jobs (`tec_tac.event_jobs.register_event_job`, capability `core.event_jobs` 1.0.0, Core 1.17.45): the one way a module does small background work because something happened, with no private thread, timer or event-started Celery task. See `docs/event-jobs.md`.
+Event-started system jobs (`tec_tac.event_jobs.register_event_job`, capability `core.event_jobs` 1.1.0, Core 1.17.45; 1.17.47 verifies the caller of every publish): the one way a module does small background work because something happened, with no private thread, timer or event-started Celery task. See `docs/event-jobs.md`.

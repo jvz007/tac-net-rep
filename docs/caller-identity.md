@@ -116,6 +116,13 @@ So a Core provider may verify its module caller in `core.accounts`, `core.resour
 sign-off in chat (AD-34 condition 2). The helper stays private and `core.caller_identity` stays at 1.0.0. Pinned by
 `tests/resource-service-context-1.17.30.py` and `tests/audit-server-module-deny-1.17.30.py`.
 
+Core 1.17.37 added `core.module_preferences` as the fourth. Core 1.17.47 adds `core.event_jobs` as the fifth (AD-31 condition 2, AD-34
+condition 2, AD-36): `EventJobPublisher.publish` verifies that the first frame above it is the code of the enabled module that owns the job.
+This provider alone passes the private helper an opt-in `cache_seconds` (5): the module list and each enabled flag come from a process-local
+snapshot kept that long, because the publish runs on every Tactical alert save. A failed read is kept for the same window and the caller is
+refused. The frame walk is never cached, and at the default of 0 nothing is cached, so the other providers still read the state on every
+call. The public `calling_module` is never cached (AD-26: enabled state is read on every call). Pinned by `tests/event-jobs-caller-1.17.47.py`.
+
 ## Feature detection
 
 `has_capability("core.caller_identity")` is true from Core 1.17.21. The capability metadata lists the limits above in `limits`, gives

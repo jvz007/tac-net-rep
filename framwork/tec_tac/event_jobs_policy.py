@@ -1,4 +1,4 @@
-"""The decisions behind event jobs (Core 1.17.45, capability core.event_jobs 1.0.0). No Django import, so a test can run them anywhere.
+"""The decisions behind event jobs (Core 1.17.45, capability core.event_jobs 1.1.0 since 1.17.47). No Django import, so a test can run them anywhere.
 
 ``tec_tac.event_jobs`` holds the registry, the database rows and the Celery task. Every rule that is a number or a yes/no lives
 here: the key and payload checks, the registration limits Core enforces, the retry delay, the expiry, backlog and rate decisions, the
@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 from typing import Any, Callable
 
 CAPABILITY_ID = "core.event_jobs"
-CAPABILITY_VERSION = "1.0.0"
+CAPABILITY_VERSION = "1.1.0"
 
 KEY_MAX_LENGTH = 128
 KEY_RE = re.compile(r"^[A-Za-z0-9._:@/-]{1,128}$")

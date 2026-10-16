@@ -42,10 +42,10 @@ rows = {row["name"]: row for row in core_rows if row.get("area") == "event-jobs"
 must(set(rows) == {"register_event_job", "EventJobPublisher", "verify_event_job_context"}, sorted(rows))
 for row in rows.values():
     must(row["import_path"] == "tec_tac.event_jobs" and row["kind"] == "python" and row["audience"] == "module/backend", row)
-    must("core.event_jobs 1.0.0" in row["purpose"] or "1.17.45" in row["purpose"], row["name"])
+    must("core.event_jobs 1.1.0" in row["purpose"] or "1.17.45" in row["purpose"], row["name"])  # 1.0.0 until 1.17.47
 reg = rows["register_event_job"]["purpose"]
 for phrase in ("soft_time_limit_seconds 5-600", "max_attempts 1-10", "backoff_seconds 5-3600", "expires_seconds 60-86400", "max_backlog 1-5000",
-               "dedupe_seconds 0-3600", "AppConfig.ready()", "no private thread, timer or event-started Celery task", "requires.framework >=1.17.45",
+               "dedupe_seconds 0-3600", "AppConfig.ready()", "no private thread, timer or event-started Celery task", "requires.framework >=1.17.47",
                "handler's code file must lie inside that module's own folder", "AD-13 system-action contract is still open", "0032_event_jobs",
                "safe to run twice"):
     must(phrase in reg, phrase)

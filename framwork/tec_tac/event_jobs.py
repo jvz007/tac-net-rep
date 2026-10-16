@@ -1,4 +1,4 @@
-"""Event-started, time-limited system jobs (Core 1.17.45, capability ``core.event_jobs`` 1.0.0).
+"""Event-started, time-limited system jobs (Core 1.17.45, capability ``core.event_jobs`` 1.1.0 since 1.17.47).
 
 A module sometimes has to do a small piece of work because something happened: a Tactical alert was saved, a webhook arrived. It must
 not do it inside the request, and it must not run its own thread, timer or private Celery task for it. This module is the one sanctioned
@@ -15,10 +15,12 @@ How a module uses it (``AppConfig.ready()`` only; memory only, nothing is writte
 ``register_event_job`` returns the one handle that can publish this job. Only the module that registered holds it. Registration is
 bound to the module itself: ``module_id`` must be an installed, enabled extension read from the registry, the id must start with
 ``<module_id>.``, and the handler's code file must lie inside that module's own folder. A module cannot register under another
-module's id, point an id at code that is not its own, or publish for another module (no other module is given the handle).
+module's id, point an id at code that is not its own, or publish for another module (no other module is given the handle). Since 1.17.47 every publish also verifies its caller (AD-36): the
+first frame above ``publish`` must be the code of the enabled module that owns the job, else the answer is ``error`` and nothing is
+stored or counted.
 
 What the publish does. It never raises and never makes a network call but one bounded broker publish. It answers from memory first (the
-registry, a five second module-enabled cache, a three second in-process duplicate check, a per-process rate cap, a cached backlog gauge)
+registry, a five second module-enabled cache, the caller check on a five second snapshot of the module list and states, a three second in-process duplicate check, a per-process rate cap, a cached backlog gauge)
 and drops without a database query when any of them says no. Otherwise, after the caller's transaction commits (at once when none is
 open), it stores one row (PostgreSQL: statement timeout 1000 ms) and sends one Celery message with a 2 second broker timeout and a 30
 second circuit breaker. The row is the durable record. If the broker is down or a uWSGI worker is recycled, the row stays ``pending`` and
@@ -149,7 +151,8 @@ def _enabled_now(module_id: str) -> bool:
 
 
 RUNNABLE, UNAVAILABLE, UNKNOWN = "runnable", "unavailable", "unknown"
-UNREAD_RETRY_SECONDS = 60  # a worker that cannot read the module state keeps the row and looks again after this long
+# A worker that cannot read the module state keeps the row, due at once. The first Scheduler tick more than policy.OVERDUE_SECONDS later
+# sends it again, so after one to two minutes with a one-minute tick.
 
 
 def _module_status_now(module_id: str) -> str:
@@ -170,6 +173,40 @@ def _module_status_now(module_id: str) -> str:
 def _module_runnable_now(module_id: str) -> bool:
     """Authoritative and uncached: the module is an installed, non-legacy extension and enabled right now. Fails closed."""
     return _module_status_now(module_id) == RUNNABLE
+
+
+_last_refusal_log: dict[tuple[str, str], float] = {}
+_REFUSAL_LOG_SECONDS = 60
+
+
+def _verified_caller_ok(definition: EventJobDefinition) -> bool:
+    """AD-36: the first frame above ``publish`` must be the code of the enabled module that owns this job. Never raises.
+
+    ``calling_module_for_core_provider`` skips every frame in this file, so ``publish`` -> ``_publish`` -> here is fine. It runs in the
+    synchronous publish path, never in the commit hook (that runs in a Core frame and would always be refused). The module list and states
+    are read through a short snapshot (``policy.ENABLED_CACHE_SECONDS``): a module just disabled is still recognised for up to that long
+    (the worker re-checks it uncached before any handler runs), and a module just installed is refused until the snapshot expires."""
+    try:
+        from . import caller_identity
+
+        caller = caller_identity.calling_module_for_core_provider(provider_file=__file__, cache_seconds=policy.ENABLED_CACHE_SECONDS)
+        if caller is not None and caller.module_id == definition.module_id:
+            return True
+        who = caller.module_id if caller is not None else "unverified"
+    except Exception:
+        who = "unverified"
+    try:
+        now = time.monotonic()
+        key = (definition.id, who)
+        last = _last_refusal_log.get(key)
+        if last is None or now - last >= _REFUSAL_LOG_SECONDS or now < last:
+            if len(_last_refusal_log) > 256:
+                _last_refusal_log.clear()
+            _last_refusal_log[key] = now
+            logger.warning("Event job %s: a publish by %s was refused; only the owning module's own code may publish.", definition.id, who)
+    except Exception:
+        logger.debug("The refusal of an event job publish could not be logged.", exc_info=True)
+    return False
 
 
 def _module_enabled_cached(module_id: str) -> bool:
@@ -426,6 +463,8 @@ def _publish(handle, key, payload) -> PublishResult:
             return PublishResult("error", "not a registered publisher")
         if not _module_enabled_cached(definition.module_id):
             return PublishResult("disabled")
+        if not _verified_caller_ok(definition):
+            return PublishResult("error", "the caller is not the module that owns this job")
         try:
             key = policy.clean_key(key)
             payload = policy.clean_payload(payload)
@@ -705,7 +744,7 @@ def run_event_job(row_id, *, celery_task_id: str = "", now=None) -> str:
             verdict = (policy.STATUS_EXPIRED, "Expired", "The job was not started in time.", ACTION_EXPIRED, "expired")
         elif module_status == UNKNOWN:
             # Core cannot read the module state: keep the row. No handler call, no attempt used, no audit row. The tick tries it again.
-            row.next_attempt_at, row.last_enqueued_at = now + timedelta(seconds=UNREAD_RETRY_SECONDS), now
+            row.next_attempt_at, row.last_enqueued_at = now, now
             row.save()
             deferred = True
         elif module_status != RUNNABLE:
@@ -1112,7 +1151,12 @@ def event_jobs_contract_metadata() -> dict:
         "delivery": "at least once",
         "audit_actions": [ACTION_FAILED, ACTION_SKIPPED, ACTION_EXPIRED, ACTION_DROPPED, ACTION_SUCCEEDED + " (only when audit_success is true)"],
         "limits_text": list(LIMITS_TEXT),
-        "requires_framework": ">=1.17.45",
+        "caller": (
+            "every publish verifies its caller (AD-36, core.caller_identity's private Core helper): the first frame above publish must be the "
+            "code of the enabled, non-legacy module that owns the job; anything else answers error and stores nothing. A module disabled in the "
+            "last 5 seconds is still recognised for up to 5 seconds; the worker re-checks the module before any handler runs."
+        ),
+        "requires_framework": ">=1.17.47",
     }
 
 
@@ -1148,5 +1192,10 @@ def _clear_for_tests() -> None:
     _RATE._windows.clear()
     _GAUGES.clear()
     _ENABLED.clear()
+    _last_refusal_log.clear()
+    with contextlib.suppress(Exception):
+        from . import caller_identity
+
+        caller_identity.clear_snapshot_for_tests()
     _BREAKER.success()
     _LAST_FLUSH[0] = 0.0

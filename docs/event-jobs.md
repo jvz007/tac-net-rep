@@ -2,9 +2,9 @@
 
 **Status:** Public Core developer contract, added in Core 1.17.45
 **Python:** `tec_tac.event_jobs`
-**Capability:** `core.event_jobs` 1.0.0 (major 1, additive), owner `core`
+**Capability:** `core.event_jobs` 1.1.0 (major 1, additive; 1.0.0 until Core 1.17.47), owner `core`
 **HTTP:** `GET /api/tfd/scheduler/event-jobs/` (read only, server-maintenance authority)
-**Needs:** framework `>=1.17.45` (`requires.framework`), migration `0032_event_jobs`
+**Needs:** framework `>=1.17.45` (`requires.framework`), migration `0032_event_jobs`; framework `>=1.17.47` for the caller check on every publish
 
 ## What this is for
 
@@ -103,7 +103,8 @@ Registering the identical definition again returns the same handle. A different 
 ### Publish (in the request)
 
 The publish never raises and makes no network call except one bounded broker publish. It decides from memory first, with no database query:
-the registry, a module-enabled state kept for 5 seconds, an in-process memory of the same `(job, key)` for 3 seconds, a cap of 600 publishes a
+the registry, a module-enabled state kept for 5 seconds, then the caller (from Core 1.17.47: the first frame above `publish` must be the
+code of the enabled module that owns the job, read from a 5 second snapshot of the module list and states, else the result is `error`), an in-process memory of the same `(job, key)` for 3 seconds, a cap of 600 publishes a
 minute per job per process, and a backlog gauge. A job at its backlog is dropped without a query. An absent or old gauge counts as open.
 
 Otherwise, after the caller's transaction commits (at once when none is open), Core stores one row and sends one Celery message:
@@ -116,7 +117,7 @@ Otherwise, after the caller's transaction commits (at once when none is open), C
 So a broker outage, or a uWSGI worker that was recycled before the commit hook ran, loses nothing that was stored.
 
 Results: `queued` (accepted), `duplicate`, `dropped` (over the rate or backlog), `disabled` (the module is disabled, or its state could not be
-read), `error` (the handle is not a registered publisher, the key or payload was refused, or something failed; the reason never holds a payload
+read), `error` (the handle is not a registered publisher, the caller is not the module that owns the job, the key or payload was refused, or something failed; the reason never holds a payload
 value).
 
 Inside an open transaction the answer is `queued` before the row exists, because the row is stored when the transaction commits. A duplicate
@@ -190,13 +191,22 @@ still open. Nothing runs at a person's authority and no permission check passes 
    id must start with that module's id, and the handler's code file must lie inside that module's folder (a real-path check, as
    `caller_identity` does). A module cannot register under another module's id or point an id at code that is not its own.
 2. **The usual hostile import.** A module that imports another module's private code can reach that module's handler or handle. That is the
-   case rule 3.4 (signed-module review) already covers for every contract. Core deliberately adds no verified-caller stack check on each publish:
-   it would cost a stack walk and a module-state read on every Tactical alert save, and it would make event jobs a fourth caller-verified Core
-   provider that needs its own sign-off.
+   case rule 3.4 (signed-module review) already covers for every contract. Since Core 1.17.47 (AD-36) every publish also verifies its caller with
+   `calling_module_for_core_provider`: the first frame above `publish` must be the code of the enabled, non-legacy module that owns the job.
+   Another module, a Core frame (the Scheduler, a `functools.partial`), a library or generated frame, a disabled or legacy module and any
+   error give `error` ('the caller is not the module that owns this job'): nothing is stored or counted, and nothing is raised. The check
+   runs in `publish` itself, never in the commit hook. Core logs one warning per job and refused caller a minute at most. No audit row and no
+   counter record a refusal (CQ138 is open). The residual case: a module that makes another module's own code frame call `publish` (a hook
+   list or signal that other modules can make it run), the callback-surface limit already listed in `docs/caller-identity.md`.
+   *Cost.* The module list and each enabled flag are read through a snapshot kept for 5 seconds (the same window as the module-enabled
+   cache), so a Tactical alert save does a stack walk and no disk read (the real path of each file name is kept in the snapshot too, because `realpath` is a system call per path part). On the development PC with stub reads the check adds about 20 microseconds per publish on a warm snapshot; the real-disk cost is read on the dev server with `tests/event-jobs-caller-runtime-1.17.47.py`. A module disabled in the last 5 seconds is still recognised as a caller
+   for up to 5 seconds (the publish already tolerates this through the module-enabled cache, and the worker re-checks the module uncached
+   before any handler runs, so nothing runs for a disabled module). A module installed in the last 5 seconds is refused until the snapshot
+   expires, which fails closed. An unreadable state is kept for the same window and refuses.
 3. **At least once.** A handler can run twice (a redelivery after a worker loss, a retry after a timeout) and must be safe to repeat.
 4. **The payload is data.** Size-capped (2 KiB), JSON only, ids and not text bodies. It is never logged, audited, listed or returned by a status route.
 5. **Exception text may reach the audit row**, cut to one line of 200 characters. A handler keeps secrets out of its exception messages.
-6. **A disabled or uninstalled module's jobs never run.** The worker checks the module itself, with no cache, and the tick expires its pending rows once it has confirmed the module is disabled or uninstalled (an unreadable state leaves them pending until they expire on their own, and a worker that cannot read the state keeps the row it holds: it answers `job deferred`, runs no handler, uses no attempt and looks again after 60 seconds).
+6. **A disabled or uninstalled module's jobs never run.** The worker checks the module itself, with no cache, and the tick expires its pending rows once it has confirmed the module is disabled or uninstalled (an unreadable state leaves them pending until they expire on their own, and a worker that cannot read the state keeps the row it holds: it answers `job deferred`, runs no handler, uses no attempt and is tried again by the first Scheduler tick more than 60 seconds later, so after one to two minutes; Core 1.17.46 said 60 seconds).
 7. **Bounded cost.** Core caps the backlog, the rate, the expiry, the attempts, the time limits and the payload, so a signal storm cannot grow without limit.
 8. **Tactical always starts.** Registration and the capability registration are guarded. A refusal is an exception the module catches.
 9. **The worker trusts nothing from publish time.** It re-reads the module state, the registration and the expiry itself.
@@ -209,15 +219,15 @@ rows kept for the Scheduler's `run_retention_days` with a hard cap of 20000.
 
 ## Compatibility
 
-A pure addition. No existing contract, task, table, route or capability changes. The tick change is additive and isolated; scheduled actions,
+A pure addition. No existing contract, task, table, route or capability changes. From Core 1.17.47 (capability 1.1.0) every publish verifies its caller: a module that publishes from its own code (a signal receiver, a view) is unaffected, and one that makes another module's handle publish gets `error`. Alerts 0.10.0 publishes from its own code and needs no change. Set `requires.framework` to `>=1.17.47` to be sure the check exists. The tick change is additive and isolated; scheduled actions,
 one-off runs and notices are untouched. A module that adopts this sets `requires.framework` to `>=1.17.45` and feature-detects with
 `has_capability("core.event_jobs")`.
 
 ## Tests
 
-`tests/event-jobs-policy-1.17.45.py` (the decisions, no Django), `tests/event-jobs-1.17.45.py` (the registry, publish, worker, tick, health and route
+`tests/event-jobs-caller-1.17.47.py` (the caller check with real compiled frames, the snapshot with a fake clock, the deferred retry timing, the measured cost), `tests/event-jobs-policy-1.17.45.py` (the decisions, no Django), `tests/event-jobs-1.17.45.py` (the registry, publish, worker, tick, health and route
 against stubs), `tests/event-jobs-contract-1.17.45.py` (the contract rows, the migration against the models, the source pins).
 
 `tests/event-jobs-runtime-1.17.45.py` is a script for the dev server (`manage.py shell`): a real publish, a real worker run, a kill and recover,
 and a recycled worker. Django, PostgreSQL and Celery do not run on the development PC, so the migration, the partial unique constraint, the row
-locks, the commit hook, the statement timeout and the Celery task are checked there.
+locks, the commit hook, the statement timeout and the Celery task are checked there. `tests/event-jobs-caller-runtime-1.17.47.py` is the matching probe: it times the real module scan and state read and publishes once from a real module frame.

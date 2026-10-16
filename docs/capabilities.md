@@ -293,4 +293,4 @@ Capability providers may also be owned directly by Tec-Tac Core rather than an i
 
 `core.caller_identity` 1.0.0 (Core 1.17.21): the verified identity of the module whose code is calling a provider. See `docs/caller-identity.md`.
 
-`core.event_jobs` 1.0.0 (Core 1.17.45): event-started, time-limited system jobs a module publishes from a signal. Core stores, retries, limits and audits them. See `docs/event-jobs.md`.
+`core.event_jobs` 1.1.0 (Core 1.17.45; 1.1.0 in 1.17.47 verifies the caller of every publish): event-started, time-limited system jobs a module publishes from a signal. Core stores, retries, limits and audits them. See `docs/event-jobs.md`.

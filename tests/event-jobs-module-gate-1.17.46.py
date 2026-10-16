@@ -325,6 +325,17 @@ mod("tec_tac.registry", discover_plugins=discover_plugins)
 mod("tec_tac.module_state", load_state=load_state, is_enabled=is_enabled)
 audit_stub = mod("tec_tac.audit", record=audit_record, service_audit_actor=lambda **kw: {"service": kw})
 mod("tec_tac.capabilities", register_capability=lambda **kw: CAPS.append(kw) or SimpleNamespace(**kw))
+
+
+def _fake_caller(*, provider_file, cache_seconds=0):
+    """1.17.47: the verified-caller seam. A test file is not a module's code, so the real helper would refuse every publish here. This
+    stand-in answers as the owning module (read from the publishing frame), the way the real helper does for the owner's own code.
+    The real helper is exercised with real frames in tests/event-jobs-caller-1.17.47.py."""
+    definition = sys._getframe(1).f_locals["definition"]
+    return SimpleNamespace(module_id=definition.module_id, kind="module", module_version="1.0.0")
+
+
+mod("tec_tac.caller_identity", calling_module_for_core_provider=_fake_caller, clear_snapshot_for_tests=lambda: None)
 pkg.audit = audit_stub
 sys.modules.update(mods)
 
