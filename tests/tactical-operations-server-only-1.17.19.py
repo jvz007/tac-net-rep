@@ -143,7 +143,7 @@ must("can_manage_notes" in exc.message and "can_reboot_agents" not in exc.messag
 
 # ---- capability metadata and documentation
 meta = ops.tactical_operations_contract_metadata()
-must(meta["version"] == "1.14.0" and meta["declaration_keys_added_in_1_5_0"] == ["server_only"] and meta["refusal_codes_added_in_1_5_0"] == ["operation_server_only"], meta)
+must(meta["version"] == "1.15.0" and meta["declaration_keys_added_in_1_5_0"] == ["server_only"] and meta["refusal_codes_added_in_1_5_0"] == ["operation_server_only"], meta)
 must("server_only=False" in meta["declaration"], meta["declaration"])
 contracts = (ROOT / "framwork/tec_tac/contracts.py").read_text(encoding="utf-8")
 must("server_only" in contracts and "operation_server_only" in contracts and "custom:operation-failed" in contracts, "contracts.py names server_only and, since 1.17.20, the failed-row action")

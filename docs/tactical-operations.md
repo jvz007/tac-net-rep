@@ -2,7 +2,7 @@
 
 **Status:** Public Core developer contract, added in Core 1.17.7
 **Python:** `tec_tac.tactical_operations`
-**Capability:** `core.tactical_operations` 1.14.0 (1.13.0 before Core 1.17.45, 1.12.0 before Core 1.17.44, 1.11.0 before Core 1.17.43, 1.10.0 before Core 1.17.41, 1.9.0 before Core 1.17.28, 1.8.0 before Core 1.17.26; major 1, additive since 1.0.0), owner `core`
+**Capability:** `core.tactical_operations` 1.15.0 (1.14.0 before Core 1.17.52, 1.13.0 before Core 1.17.45, 1.12.0 before Core 1.17.44, 1.11.0 before Core 1.17.43, 1.10.0 before Core 1.17.41, 1.9.0 before Core 1.17.28, 1.8.0 before Core 1.17.26; major 1, additive since 1.0.0), owner `core`
 **HTTP:** `POST /api/tfd/tactical-operations/<module_id>/<operation_id>/`
 
 ## Why this exists
@@ -681,8 +681,8 @@ before. A module can feature-detect with `core.tactical_operations >= 1.10.0` an
 Tactical's own audit records a whole task, its actions included, as before and after on every change. Core can now record such a list the
 same way. `register_tactical_operation(..., audit_lists=["actions"])` names up to two body or before fields that hold a list of flat objects.
 
-**Recorded in clear.** Script arguments and environment values are written as Tactical stores them. Core does not mask a value whose name looks
-like a secret. Anyone who can read the Tec-Tac audit can read them, as anyone who can read Tactical's audit can. This is Johan's answer to CQ85 a
+**Recorded in clear (unless masked, since 1.17.52: see `audit_list_masks` under "Added in 1.17.52").** Script arguments and environment values are
+written as Tactical stores them. Core does not mask a value whose name looks like a secret. Anyone who can read the Tec-Tac audit can read them, as anyone who can read Tactical's audit can. This is Johan's answer to CQ85 a
 (14 October 2026): "do the same as Tactical". It is signed as **AD-32**, an exception to module standard section 3 (no secrets in audit) for the
 opt-in `audit_lists` keyword only. Other fields and routes keep section 3. Only holders of the audit view permission can read these rows, and
 Johan may reverse the decision at any time.
@@ -863,3 +863,69 @@ A `core_refused` row for `invalid_correlation_id`, `invalid_audit_before` or `in
 
 Tests: `tests/tactical-operation-action-by-body-1.17.45.py`, `tests/tactical-operation-nested-scope-1.17.45.py`,
 `tests/tactical-operation-object-id-core-refused-1.17.45.py`.
+
+## Added in 1.17.52
+
+Capability `core.tactical_operations` is 1.15.0, still major 1. Two optional additions. A declaration that uses neither behaves exactly as
+before: the same rows, the same text. A module needs framework 1.17.52 to rely on them and can feature-detect with
+`core.tactical_operations >= 1.15.0`.
+
+### Keep a list's values out of the row: `audit_list_masks`
+
+`audit_lists` (1.17.28) records a list of objects in clear. A task's actions carry script arguments and environment variables, and those can
+hold secrets. Johan's order (AD-39, 17 October 2026) is: record the names without the values first, and `***` second.
+`register_tactical_operation(..., audit_lists=["actions"], audit_list_masks={"actions": {"script_args": "names", "env_vars": "names", "command": "mask"}})`.
+
+`audit_list_masks` is a Python-only keyword, `{list name: {key: mode}}`. The list name must be in `audit_lists`. `audit_lists` itself keeps its
+signature and behaviour: a list with no mask is still recorded in clear.
+
+| Mode | A list of text items | A scalar text value |
+|---|---|---|
+| `names` | Only the name of each item (rules below) | `***` |
+| `mask` | The name and `***` for the value | `***` |
+
+**The names rule, per item.**
+
+- Text with `=` keeps what is before the first `=`: `KEY=VALUE` becomes `KEY`, `--flag=value` becomes `--flag`.
+- Otherwise text that starts with `-` or `/` keeps its first whitespace-delimited token: `-Name value` becomes `-Name`.
+- Anything else is a positional argument. It has no name, so it is recorded as `***`. A non-text item is `***`.
+- A name must look like a name: letters, digits, `_`, `.` and `-`, up to 64 characters, with one or two leading dashes (or one leading `/` for a
+  switch). An `=` must also be followed by a value that is not empty and not only `=`. Core adds this check so that a positional secret such as
+  a base64 token (`dG9rZW4=`) is never recorded as a name. Such an item is `***`. This means `KEY=` with an empty value is also `***`.
+
+**The mask rule.** A list item keeps its name and shows `***` for the value: `KEY=***`, `--flag=***`, `-Name ***`. A switch with no value
+(`-Force`) stays as it is. A positional item is `***`. A scalar text key, such as a cmd action's `command`, is `***`.
+
+**Fail closed.** A masked key whose value is not text or a list of scalars is `***`. `None` stays null. A scalar under a `names` key is `***`.
+Core cannot tell a scalar key from a list key when you register, so it handles this when the row is written. The bounds of `audit_lists` apply
+after masking (50 entries, 24 keys, 100 items, 4096 characters, 64 KiB, `<name>_count`, `<name>_truncated`).
+
+**Both sides.** The mask covers the after value (the cleaned body) and the before value (Tactical's own GET answer). The unmasked text never
+reaches the row, the metadata or a log.
+
+Registration refuses a list that is not in `audit_lists`, more than 8 keys for one list, a key that is not a field name, a mode other than
+`names` or `mask`, and a mapping that is not a dict. `describe()` and `list_operations` show `audit.list_masks` (an empty object when none).
+
+Adoption by the Tasks module is a request in `reviews/requests/core-modules.md`. The AD-32 and AD-39 exception for task action content ends only
+when a signed Tasks release uses these masks.
+
+### A scope entry that does not name the object: `names_object`
+
+A create that checks `body:dependencies.client` named the client on its success row, so `audit.object_field` never named the created record.
+A scope entry may now carry `names_object: false` (a strict bool, default true):
+
+```python
+scope=[{"type": "client", "source": "body:dependencies.client", "optional": True, "names_object": False}],
+audit={"action": "add", "object_type": "report_schedule", "object_field": "id"}
+```
+
+- The entry is resolved and checked exactly as before. The scope check, the deny rows and the 400 answers are unchanged, and a scope deny row
+  still names the entry it denied.
+- The entry is left out when Core picks the object id of the success, failed, Tactical-denied and outcome-unknown rows. A success row then takes
+  `audit.object_field` or `audit.object_body_field`.
+- Registration refuses a non-bool value, and a scope whose entries are all `names_object: false` unless the declaration has `audit.object_param`,
+  `audit.object_field`, `audit.object_body_field` or `audit.object_id`. An operation always has a way to name its object.
+- `describe()` shows `names_object: false` on such an entry, and shows nothing on one that names the object.
+- Not built: making `audit.object_field` win over every scope object. That would change the rows of declarations that exist today.
+
+Tests: `tests/tactical-operation-audit-list-masks-1.17.52.py`, `tests/tactical-operation-names-object-1.17.52.py`.

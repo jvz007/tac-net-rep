@@ -96,7 +96,7 @@ must(ids(fs.operators_for("bool")) == ["equals"], "bool gets equals only")
 must(ids(fs.operators_for("id")) == ["equals", "not_equals"], "id without a name gets the two ID operators")
 must(ids(fs.operators_for("id", True)) == GROUPS_IDS, "id with a name also gets the four text operators")
 must(all(r["label"] == fs.OPERATORS[r["id"]] for r in fs.operators_for("text")), "labels")
-refused(lambda: fs.operators_for("number"))
+refused(lambda: fs.operators_for("money"))
 
 # an id field offers the text operators only when it declares a name field
 described = {f["id"]: f for f in fs.browser_fields(FIELDS)}
@@ -119,7 +119,7 @@ fs.logger = _Capture()
 declared = fs.clean_fields([
     FIELDS[0],
     {"id": "Bad Id", "label": "x", "kind": "text", "lookup": "a"},
-    {"id": "nokind", "label": "x", "kind": "number", "lookup": "a"},
+    {"id": "nokind", "label": "x", "kind": "money", "lookup": "a"},
     {"id": "nolookup", "label": "x", "kind": "text"},
     {"id": "hostname", "label": "again", "kind": "text", "lookup": "hostname"},
     {"id": "evil", "label": "x", "kind": "text", "lookup": "a; DROP TABLE x"},
@@ -727,7 +727,7 @@ must("fs-" in saved_post and "reserved" in saved_post, saved_post)
 
 # the capability registers with the listed operations and version
 registration = fs.register_core_filter_sets_capability()
-must(registration.id == "core.filter_sets" and registration.version == "1.0.0" and registration.module_id == "core", registration)
+must(registration.id == "core.filter_sets" and registration.version == "1.1.0" and registration.module_id == "core", registration)
 must(list(registration.operations) == list(fs.OPERATIONS))
 meta = registration.metadata
 must(meta["requires_framework"] == ">=1.17.50" and meta["operators"] == fs.OPERATORS and meta["limits"]["rules"] == 50 and meta["audit_actions"] == ["add", "modify", "custom:filter-set-share", "delete"])
@@ -744,8 +744,8 @@ for cls, rate in (("FilterValuesMinThrottle", "240/min"), ("FilterSetWriteMinThr
     must(re.search(rf"class {cls}\(.*?rate = \"{re.escape(rate)}\"", throttles_src, re.S), cls)
 openapi_src = (SRC / "openapi.py").read_text(encoding="utf-8")
 must('"tec_tac.filter_set_views": "Tec-Tac · Filter Sets"' in openapi_src and '("/api/tfd/filter-sets/", "Tec-Tac · Filter Sets")' in openapi_src and '("/api/tfd/filter-values/", "Tec-Tac · Filter Sets")' in openapi_src)
-must(tuple(int(p) for p in (ROOT / "VERSION").read_text(encoding="utf-8").strip().split(".")) >= (1, 17, 50))  # 1.17.51: at least 1.17.50
-must(tuple(int(p) for p in json.loads((ROOT / "tec_tac_package.json").read_text(encoding="utf-8"))["version"].split(".")) >= (1, 17, 50))
+must(tuple(int(p) for p in (ROOT / "VERSION").read_text(encoding="utf-8").strip().split("-")[0].split(".")) >= (1, 17, 50))  # 1.17.51: at least 1.17.50
+must(tuple(int(p) for p in json.loads((ROOT / "tec_tac_package.json").read_text(encoding="utf-8"))["version"].split("-")[0].split(".")) >= (1, 17, 50))
 NOTES_50 = ROOT / "RELEASE_NOTES_1.17.50.md"
 if not NOTES_50.is_file():
     NOTES_50 = ROOT / "docs" / "releases" / "RELEASE_NOTES_1.17.50.md"  # moved there by 1.17.51
@@ -753,7 +753,7 @@ must(NOTES_50.is_file() and (ROOT / "docs" / "filter-sets.md").is_file())
 notes = NOTES_50.read_text(encoding="utf-8")
 must("Module-facing changes" in notes and "Requests closed" in notes)
 docs = (ROOT / "docs" / "filter-sets.md").read_text(encoding="utf-8")
-for needle in ("Not in this release", "Number and date ranges", "scope duty", "from_legacy_formula", "custom:filter-set-share", "What a reader sees of a shared set's values",
+for needle in ("Not in this release", "scope duty", "from_legacy_formula", "custom:filter-set-share", "What a reader sees of a shared set's values",
                "Never a rule value, never a reader id", "`fs-`", ">=1.17.50"):
     must(needle in docs, f"docs/filter-sets.md names {needle!r}")
 

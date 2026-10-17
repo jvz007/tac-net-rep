@@ -252,7 +252,7 @@ fields = fs.clean_fields(FIELDS + [
 must([f["id"] for f in fields] == [f["id"] for f in FIELDS], "a bad scope_kind drops the declaration")
 must(next(f for f in fields if f["id"] == "client")["scope_kind"] == "client" and next(f for f in fields if f["id"] == "other")["scope_kind"] is None)
 must("scope_kind" not in json.dumps(fs.browser_fields(FIELDS)), "the browser never sees scope_kind")
-must(fs.CAPABILITY_VERSION == "1.0.0", "core.filter_sets stays 1.0.0")
+must(fs.CAPABILITY_VERSION == "1.1.0", "core.filter_sets is 1.1.0 since 1.17.52")
 
 # === 8. the owner's evaluation is unchanged ===========================================================
 reset()

@@ -2,10 +2,10 @@
 
 **Status:** Public Core developer contract, added in Core 1.17.50
 **Python:** `tec_tac.filter_sets`
-**Capability:** `core.filter_sets` 1.0.0 (major 1), owner `core`
+**Capability:** `core.filter_sets` 1.1.0 (major 1), owner `core`. 1.1.0 (Core 1.17.52) adds the date and number kinds.
 **HTTP:** `GET/POST /api/tfd/filter-sets/`, `GET/PUT/DELETE /api/tfd/filter-sets/<uuid>/`, `GET /api/tfd/filter-sets/fields/`, `GET /api/tfd/filter-values/`
 **Provider capability a module implements:** `<module id>.filter_fields` 1.0.0
-**Needs:** framework `>=1.17.50` (`requires.framework`). No migration.
+**Needs:** framework `>=1.17.50` (`requires.framework`). A module that declares a `date` or `number` field needs `>=1.17.52`. No migration.
 
 ## What this is for
 
@@ -23,6 +23,8 @@ Core owns four things:
 A module keeps its own list and its own data. Core never reads a module's rows.
 
 ## The operators
+
+Six operators are the base vocabulary (`OPERATORS`). Date and number fields add more (see "Date and number fields").
 
 | Id | Label |
 |---|---|
@@ -42,8 +44,65 @@ Which operators a field offers depends on its kind. `operators_for(kind, has_nam
 | `text` | All six |
 | `bool` | `equals` only (the value is true or false) |
 | `id` (a client or site) | `equals` and `not_equals` on the ID. The four text operators too, matched on the **display name**, but only when the field declares a name. |
+| `date` (1.17.52) | `equals` ("Is"), `not_equals` ("Is not"), `before`, `after`, `on_or_before`, `on_or_after`, `between`, `in_the_last`, `not_in_the_last` |
+| `number` (1.17.52) | `equals`, `not_equals` ("Does not equal"), `greater_than`, `less_than`, `at_least`, `at_most`, `between` |
 
-This release has no "greater than", "less than" or date ranges. They are not in the vocabulary yet.
+The six text ids and labels never change. The new ids live in their own tables (`DATE_ONLY_OPERATORS`, `NUMBER_ONLY_OPERATORS`; all of them
+in `ALL_OPERATORS`), so `OPERATORS` and the route's `operators` key stay the six. An unknown kind still raises.
+
+## Date and number fields (Core 1.17.52)
+
+Both kinds are additive. Nothing stored before 1.17.52 holds them, so no existing set changes.
+
+### Date values
+
+A date value is a whole day, written as an ASCII `YYYY-MM-DD` string. It must be a real date from 1970-01-01 to 2100-12-31. There is no
+time of day.
+
+| Operator | Value | Meaning |
+|---|---|---|
+| `equals` | a day `D` | the whole day: from `D` 00:00 up to, not including, `D+1` 00:00 |
+| `not_equals` | a day | not that day |
+| `before` | a day | earlier than `D` 00:00 |
+| `on_or_before` | a day | earlier than `D+1` 00:00 (the whole of `D` counts) |
+| `after` | a day | `D+1` 00:00 or later |
+| `on_or_after` | a day | `D` 00:00 or later |
+| `between` | `{"from": D1, "to": D2}` | both days included, `D1` no later than `D2` |
+| `in_the_last` | `{"amount": N, "unit": "minutes", "hours" or "days"}` | from now minus N up to now, both included. A time in the future does not match. |
+| `not_in_the_last` | the same | the exact opposite of `in_the_last` |
+
+`amount` is a whole number from 1 to 525600 for minutes, 8760 for hours or 3650 for days. A bool, a decimal, text or any other unit is refused.
+
+**Days are UTC days.** "Last seen on 17 October" means 17 October 00:00 to 24:00 UTC, not South African time. Show that in the help text.
+
+**Relative rules stay relative.** The stored set keeps `{amount, unit}`, never a calculated time. `now` is read once per call, so a saved
+"last 7 days" set is always about the last 7 days from when it runs. `build_q` and `matches` take an optional keyword-only `now` for tests.
+
+### Number values
+
+A number value is a JSON integer or a finite decimal. A bool, `NaN`, infinity, numeric text and any magnitude above 10**15 are refused.
+`between` is `{"from": A, "to": B}`, both included, `A` no larger than `B`.
+
+### NULL and unreadable values
+
+A row with no value, or one Core cannot read, **never satisfies a positive operator**. It does satisfy `not_equals` and `not_in_the_last`.
+`build_q` (Django's `~Q`) and `matches` give the same answer.
+
+### The query a module gets
+
+`build_q` emits only plain equality, `__gte`, `__lt`, `__lte` and `__gt` on the declared `lookup`. For a date on a datetime column the
+bounds are timezone-aware UTC datetimes. With `stored_as: "date"` they are plain dates (a day stands for its 00:00 UTC).
+
+The `lookup` may name an **annotation** the module added to its queryset, such as a count of pending actions, as long as the module applies
+the annotation before it filters. Core never sees the queryset.
+
+`matches` reads a date row value that is a datetime (naive counts as UTC), a date (its UTC midnight), an ISO string, or an int, float or
+Decimal (Unix seconds). It reads a number row value that is an int, float, Decimal or numeric text. A bool is no value.
+
+### Who sees the values
+
+Date and number values are not scope-limited, so a reader who is not the owner sees them. Core still checks each one against the reader's
+own declaration and withholds anything that does not validate (fail closed).
 
 ## Declaring fields
 
@@ -53,12 +112,15 @@ The module returns a list of declarations. Core checks each one and drops a bad 
 {
     "id": "operating_system",            # lowercase slug, up to 64 characters
     "label": "Operating system",         # up to 80 characters
-    "kind": "text",                      # text | id | bool
+    "kind": "text",                      # text | id | bool | date | number
     "lookup": "operating_system",        # the Django field path, for build_q
     "row_key": "operating_system",       # the dict key, for matches (a list that is not a model)
     "name_lookup": "site__client__name", # kind "id" only: the display name path
     "name_key": "client_name",           # kind "id" only
     "scope_kind": "client",              # kind "id" only, optional (1.17.51): client | site
+    "stored_as": "datetime",             # kind "date" only, optional (1.17.52): datetime (default) | date
+    "integer": True,                     # kind "number" only, optional (1.17.52): refuses a decimal
+    "minimum": 0, "maximum": 100000,     # kind "number" only, optional (1.17.52): finite, minimum <= maximum
     "values": {"source": "distinct"},    # distinct | static | none
 }
 ```
@@ -70,8 +132,25 @@ The module returns a list of declarations. Core checks each one and drops a bad 
 - `scope_kind` (1.17.51, optional, `id` fields only) says the id is a client or a site, so Core can keep an out-of-scope id out of a
   shared set (see "What a reader sees of a shared set's values"). Without it an id value is never shown to anyone but the owner.
 
+- A `date` or `number` field takes `values.source` `none` only, and may not declare `name_lookup`, `name_key` or `scope_kind`. The date and
+  number keys on the wrong kind drop the declaration with a log line. A rule outside a number field's `minimum` or `maximum` is refused.
+- A provider on a Core older than 1.17.52 drops a date or number declaration with a log line. Set `requires.framework` to `>=1.17.52` before you declare one.
+
+A worked example, the two fields Agents would declare:
+
+```python
+{"id": "last_seen", "label": "Last seen", "kind": "date", "stored_as": "datetime",
+ "lookup": "last_seen", "row_key": "last_seen"},
+{"id": "pending_actions", "label": "Pending actions", "kind": "number", "integer": True, "minimum": 0,
+ "lookup": "pending_actions_count", "row_key": "pending_actions_count"},
+```
+
+`pending_actions_count` is an annotation, for example `Count("pendingactions", filter=Q(status="pending"))`, added to the role-scoped queryset
+before `build_q` runs.
+
 **The browser never sees a lookup or a key.** `GET /api/tfd/filter-sets/fields/?module=<id>` returns only `id`, `label`, `kind`, the
-operators and the value source (plus static options).
+operators and the value source (plus static options). A date or number field also carries `constraints` (`stored_as`; or `integer`,
+`minimum`, `maximum`). The answer's `operators` key stays the six; `date_operators`, `number_operators` and `relative_units` are new.
 
 ## Checking a filter
 
@@ -104,6 +183,10 @@ The validator **refuses** what it cannot accept. It never drops a rule quietly.
 | Control characters in a value | none |
 | An ID value | a whole number above zero |
 | A yes/no value | `true` or `false` |
+| A date value | `YYYY-MM-DD`, a real date from 1970-01-01 to 2100-12-31 |
+| A `between` value | an object with exactly `from` and `to`, `from` not after `to` |
+| A relative amount | a whole number, 1 to 525600 minutes, 8760 hours or 3650 days |
+| A number value | an int or finite float, at most 10**15 in size, inside the field's `minimum` and `maximum` |
 
 It also refuses a field that is not in the list the person may use, and an operator the field's kind does not offer. A filter with no rules
 matches nothing, as in Groups.
@@ -289,8 +372,8 @@ The functions take the signed-in user first and raise a `FilterSetError` subclas
 ```python
 filter_sets.operators_for(kind, has_name=False)
 filter_sets.validate_filter_set(raw, fields)
-filter_sets.build_q(tree, fields)
-filter_sets.matches(tree, row, fields)
+filter_sets.build_q(tree, fields, *, now=None)
+filter_sets.matches(tree, row, fields, *, now=None)
 filter_sets.from_legacy_formula(formula)
 filter_sets.list_filter_sets(user, module_id, view_key)
 filter_sets.get_filter_set(user, set_id)
@@ -313,7 +396,8 @@ with its own resolver.
 
 ## Not in this release
 
-- Number and date ranges (greater than, less than, between).
+- A time of day in a date rule. Dates are whole UTC days. A person's own time zone is not used.
+- Text-to-number or text-to-date conversion of a rule value. The validator refuses numeric text and a date with a time.
 - A timeout Core can enforce on a provider. Core has no thread or timer for it. The contract limits a provider to one indexed query of
   at most `page_size + 1` rows, and the 502 path covers failure.
 - Export of a filter set.

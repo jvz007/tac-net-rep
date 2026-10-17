@@ -182,13 +182,13 @@ print("       HTTP view: bytes, content type, disposition and audit header")
 
 # (7) describe and the capability
 meta = ops.tactical_operations_contract_metadata()
-must(ops.CAPABILITY_VERSION == "1.14.0" and meta["version"] == "1.14.0" and meta["version"].split(".")[0] == "1", meta["version"])
+must(ops.CAPABILITY_VERSION == "1.15.0" and meta["version"] == "1.15.0" and meta["version"].split(".")[0] == "1", meta["version"])
 must("file_response" in meta["declaration"] and meta["declaration_keys_added_in_1_11_0"] and meta["behaviour_added_in_1_11_0"], meta)
 fresh()
 declare_file()
 must(ops.list_operations("agents")[0]["file_response"] is True, "list_operations shows file_response")
 cap = ops.register_core_tactical_operations_capability()
-must(G["CAPS"][-1]["version"] == "1.14.0", G["CAPS"][-1])
+must(G["CAPS"][-1]["version"] == "1.15.0", G["CAPS"][-1])
 
 # docs and contract text
 root = Path(__file__).resolve().parents[1]

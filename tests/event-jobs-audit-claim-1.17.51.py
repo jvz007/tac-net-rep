@@ -122,7 +122,7 @@ print("       outcome rows only log a failed write")
 # --- the wording ------------------------------------------------------------------------------------------
 CONTRACTS = (APP / "contracts.py").read_text(encoding="utf-8")
 DOC = (ROOT / "docs" / "event-jobs.md").read_text(encoding="utf-8")
-NOTES = (ROOT / "RELEASE_NOTES_1.17.51-1.md").read_text(encoding="utf-8")
+NOTES = (ROOT / "docs" / "releases" / "RELEASE_NOTES_1.17.51.md").read_text(encoding="utf-8")
 meta = ej.event_jobs_contract_metadata()
 for label, text in (("source", src), ("contracts.py", CONTRACTS), ("docs/event-jobs.md", DOC), ("release notes", NOTES), ("capability text", meta["caller"])):
     flat = " ".join(text.split())

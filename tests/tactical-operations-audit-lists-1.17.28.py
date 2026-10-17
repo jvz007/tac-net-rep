@@ -97,9 +97,9 @@ delete_decl = dict(
 ops.register_tactical_operation(**delete_decl)
 
 # ---- the capability and the description
-must(ops.CAPABILITY_VERSION == "1.14.0", ops.CAPABILITY_VERSION)
+must(ops.CAPABILITY_VERSION == "1.15.0", ops.CAPABILITY_VERSION)
 info = ops.tactical_operations_contract_metadata()
-must(info["version"] == "1.14.0" and info["version"].split(".")[0] == "1" and "behaviour_added_in_1_10_0" in info, info["version"])
+must(info["version"] == "1.15.0" and info["version"].split(".")[0] == "1" and "behaviour_added_in_1_10_0" in info, info["version"])
 must("audit_lists" in info["declaration"], "the declaration names audit_lists")
 must(info["limits_added_in_1_10_0"]["audit_list_entries"] == 50 and info["limits_added_in_1_10_0"]["audit_list_keys"] == 24, info["limits_added_in_1_10_0"])
 described = ops.get_operation("agents", "edit-note")

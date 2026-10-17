@@ -197,12 +197,12 @@ print("       secret field equal to audit.object_field refused; a different obje
 
 # (10) the capability and the contract metadata
 meta = ops.tactical_operations_contract_metadata()
-must(ops.CAPABILITY_VERSION == "1.14.0" and meta["version"] == "1.14.0" and meta["version"].split(".")[0] == "1", meta["version"])
+must(ops.CAPABILITY_VERSION == "1.15.0" and meta["version"] == "1.15.0" and meta["version"].split(".")[0] == "1", meta["version"])
 must(meta["declaration_keys_added_in_1_13_0"] and "audit.object_id" in meta["declaration_keys_added_in_1_13_0"][0], meta)
 text = " ".join(meta["behaviour_added_in_1_13_0"])
 for needle in ("every row", "core_refused", "last fallback", "audit.secret_fields", "audit.object_field"):
     must(needle in text, f"the metadata says {needle!r}")
-must(G["CAPS"][-1]["version"] == "1.14.0" if G.get("CAPS") and G["CAPS"][-1]["id"] == "core.tactical_operations" else True, "registered version")
+must(G["CAPS"][-1]["version"] == "1.15.0" if G.get("CAPS") and G["CAPS"][-1]["id"] == "core.tactical_operations" else True, "registered version")
 print("       capability 1.14.0 and the contract metadata name audit.object_id")
 
 print("[TEST] PASS tactical operation object id 1.17.44")

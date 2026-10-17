@@ -1,8 +1,9 @@
-"""Core filter sets (Core 1.17.50, capability ``core.filter_sets`` 1.0.0).
+"""Core filter sets (Core 1.17.50, capability ``core.filter_sets`` 1.1.0 since 1.17.52).
 
 One filter facility for every module's lists:
 
-* one **operator vocabulary** (equals, not equals, contains, does not contain, starts with, ends with), owned by Core;
+* one **operator vocabulary** (equals, not equals, contains, does not contain, starts with, ends with, and since 1.17.52 the
+  date and number operators), owned by Core;
 * **field declarations**: a module says which fields a person may filter on and how to find them. The browser sees the id,
   label, kind, operators and value source of a field, never a lookup or a key;
 * a **safe validator** and two **evaluators** a module reuses (a Django ``Q`` and an in-memory twin), so a rule typed in the
@@ -21,12 +22,28 @@ Rules that matter:
 * Every create, change, share change and delete writes a strict Core audit row in the same transaction. The row never holds a
   rule value and never a reader id.
 
+Date and number fields (1.17.52, additive):
+
+* kind ``date``: a value is a strict ASCII ``YYYY-MM-DD`` day (a real date from 1970-01-01 to 2100-12-31, whole days only).
+  ``between`` is ``{"from", "to"}`` (both days inclusive). ``in_the_last`` and ``not_in_the_last`` are ``{"amount", "unit"}`` with
+  the unit minutes, hours or days. Days are UTC days. ``equals`` is the half-open day [D, D+1), ``before`` is < D 00:00,
+  ``on_or_before`` is < D+1, ``after`` is >= D+1, ``on_or_after`` is >= D, ``between`` is [from, to+1). ``in_the_last`` is
+  now-N .. now inclusive (a future value does not match) and ``not_in_the_last`` is its exact negation. The stored tree keeps the
+  relative form, so a saved "last 7 days" stays live. ``now`` is read once per call and can be passed in (``now=``).
+* kind ``number``: a value is a JSON int or finite float (never a bool, text, NaN or infinity; at most 10**15 in size).
+  ``between`` is ``{"from", "to"}`` inclusive.
+* A NULL or unreadable value never satisfies a positive operator. It does satisfy ``not_equals`` and ``not_in_the_last``. That
+  is the same in ``build_q`` (Django's ``~Q``) and in ``matches``.
+
 Django is imported lazily, so the pure parts (vocabulary, validator, evaluators) run without it, like ``saved_views``.
 """
 from __future__ import annotations
 
+import datetime as _dt
+import decimal
 import hashlib
 import json
+import math
 import logging
 import re
 import threading
@@ -39,7 +56,7 @@ from typing import Any
 logger = logging.getLogger("tec_tac.filter_sets")
 
 CAPABILITY_ID = "core.filter_sets"
-CAPABILITY_VERSION = "1.0.0"
+CAPABILITY_VERSION = "1.1.0"
 PROVIDER_CAPABILITY_SUFFIX = "filter_fields"
 PROVIDER_CAPABILITY_VERSION = "1.0.0"
 PROVIDER_VERSION_RANGE = ">=1.0.0,<2.0.0"
@@ -77,13 +94,34 @@ OPERATORS: dict[str, str] = {
 ID_OPERATORS = ("equals", "not_equals")
 TEXT_OPERATORS = tuple(OPERATORS)
 BOOL_OPERATORS = ("equals",)
-KINDS = ("text", "id", "bool")
+# 1.17.52: the date and number operators live in their own tables. OPERATORS stays the six Groups has always had (tests and modules
+# pin it), so nothing here is added to it. ``equals``, ``not_equals`` and ``between`` are shared ids; the label depends on the kind.
+DATE_ONLY_OPERATORS: dict[str, str] = {
+    "before": "Before", "after": "After", "on_or_before": "On or before", "on_or_after": "On or after",
+    "between": "Between", "in_the_last": "In the last", "not_in_the_last": "Not in the last",
+}
+NUMBER_ONLY_OPERATORS: dict[str, str] = {
+    "greater_than": "Greater than", "less_than": "Less than", "at_least": "At least", "at_most": "At most", "between": "Between",
+}
+DATE_LABELS: dict[str, str] = {"equals": "Is", "not_equals": "Is not", **DATE_ONLY_OPERATORS}
+NUMBER_LABELS: dict[str, str] = {"equals": "Equals", "not_equals": "Does not equal", **NUMBER_ONLY_OPERATORS}
+DATE_OPERATORS = ("equals", "not_equals", "before", "after", "on_or_before", "on_or_after", "between", "in_the_last", "not_in_the_last")
+NUMBER_OPERATORS = ("equals", "not_equals", "greater_than", "less_than", "at_least", "at_most", "between")
+ALL_OPERATORS: dict[str, str] = {**OPERATORS, **DATE_ONLY_OPERATORS, **NUMBER_ONLY_OPERATORS}
+RELATIVE_OPERATORS = ("in_the_last", "not_in_the_last")
+RELATIVE_UNITS: dict[str, int] = {"minutes": 525600, "hours": 8760, "days": 3650}  # unit -> largest amount
+_UNIT_SECONDS = {"minutes": 60, "hours": 3600, "days": 86400}
+STORED_AS = ("datetime", "date")
+MIN_DATE, MAX_DATE = "1970-01-01", "2100-12-31"
+MAX_NUMBER = 10**15
+KINDS = ("text", "id", "bool", "date", "number")
 VALUE_SOURCES = ("distinct", "static", "none")
 _LOOKUP_SUFFIX = {
     "equals": "iexact", "not_equals": "iexact", "contains": "icontains", "not_contains": "icontains",
     "starts_with": "istartswith", "ends_with": "iendswith",
 }
 _NEGATED = ("not_equals", "not_contains")
+_DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
 _FIELD_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _LOOKUP_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(__[A-Za-z_][A-Za-z0-9_]*)*$")
@@ -170,8 +208,14 @@ def operators_for(kind: str, has_name: bool = False) -> list[dict[str, str]]:
     """The operators a field of this kind offers, each ``{id, label}``.
 
     ``text`` gets all six. ``bool`` gets equals only. ``id`` (client, site) gets equals and does not equal on the ID, plus the four
-    text operators matched on the display name, but only when the field declares a name (``has_name``).
+    text operators matched on the display name, but only when the field declares a name (``has_name``). Since 1.17.52 ``date`` gets
+    is, is not, before, after, on or before, on or after, between, in the last and not in the last; ``number`` gets equals, does not
+    equal, greater than, less than, at least, at most and between.
     """
+    if kind == "date":
+        return [{"id": op, "label": DATE_LABELS[op]} for op in DATE_OPERATORS]
+    if kind == "number":
+        return [{"id": op, "label": NUMBER_LABELS[op]} for op in NUMBER_OPERATORS]
     if kind == "text":
         ids = TEXT_OPERATORS
     elif kind == "bool":
@@ -215,6 +259,38 @@ def _clean_option(raw: Any) -> dict[str, Any]:
     return {"value": value, "label": label}
 
 
+def _bound(value: Any, field_id: str, key: str) -> int | float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or (isinstance(value, float) and not math.isfinite(value)):
+        raise FilterSetValidationError(f"Field {field_id!r}: {key} must be a finite number.")
+    if abs(value) > MAX_NUMBER:
+        raise FilterSetValidationError(f"Field {field_id!r}: {key} may not exceed {MAX_NUMBER} in size.")
+    return value
+
+
+def _clean_constraints(raw: dict, kind: str, field_id: str, out: dict) -> None:
+    """The optional keys of a date or number field (1.17.52). They are refused on any other kind."""
+    wrong = {"date": ("integer", "minimum", "maximum"), "number": ("stored_as",)}.get(kind, ("stored_as", "integer", "minimum", "maximum"))
+    for key in wrong:
+        if key in raw:
+            raise FilterSetValidationError(f"Field {field_id!r}: {key} does not belong on a {kind} field.")
+    if kind == "date":
+        stored_as = raw.get("stored_as", "datetime")
+        if stored_as not in STORED_AS:
+            raise FilterSetValidationError(f"Field {field_id!r}: stored_as must be 'datetime' or 'date'.")
+        out["stored_as"] = stored_as
+    elif kind == "number":
+        integer = raw.get("integer", False)
+        if not isinstance(integer, bool):
+            raise FilterSetValidationError(f"Field {field_id!r}: integer must be true or false.")
+        minimum = _bound(raw["minimum"], field_id, "minimum") if raw.get("minimum") is not None else None
+        maximum = _bound(raw["maximum"], field_id, "maximum") if raw.get("maximum") is not None else None
+        if integer and any(isinstance(b, float) and not b.is_integer() for b in (minimum, maximum)):
+            raise FilterSetValidationError(f"Field {field_id!r}: an integer field needs whole-number limits.")
+        if minimum is not None and maximum is not None and minimum > maximum:
+            raise FilterSetValidationError(f"Field {field_id!r}: minimum may not be above maximum.")
+        out["integer"], out["minimum"], out["maximum"] = integer, minimum, maximum
+
+
 def _clean_field(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise FilterSetValidationError("A field declaration must be an object.")
@@ -248,6 +324,7 @@ def _clean_field(raw: Any) -> dict[str, Any]:
         raise FilterSetValidationError(f"Field {field_id!r} needs a lookup or a row_key.")
     if kind != "id" and (out["name_lookup"] or out["name_key"]):
         raise FilterSetValidationError(f"Field {field_id!r}: only an id field may declare a name.")
+    _clean_constraints(raw, kind, field_id, out)
     values = raw.get("values")
     if values is not None:
         if not isinstance(values, dict):
@@ -257,6 +334,8 @@ def _clean_field(raw: Any) -> dict[str, Any]:
             raise FilterSetValidationError(f"Field {field_id!r}: unknown value source.")
         if kind == "bool" and source != "none":
             raise FilterSetValidationError(f"Field {field_id!r}: a yes/no field takes no value list.")
+        if kind in ("date", "number") and source != "none":
+            raise FilterSetValidationError(f"Field {field_id!r}: a {kind} field takes no value list.")
         options: list[dict[str, Any]] = []
         if source == "static":
             raw_options = values.get("options")
@@ -291,14 +370,20 @@ def clean_fields(declared: Any) -> list[dict[str, Any]]:
 
 
 def browser_fields(fields: Any) -> list[dict[str, Any]]:
-    """What the browser may see: id, label, kind, operators and value source. Never a lookup, a row key or a name path."""
+    """What the browser may see: id, label, kind, operators and value source (and, for a date or number field, its constraints).
+    Never a lookup, a row key or a name path."""
     out = []
     for field in clean_fields(fields):
         values = {"source": field["values"]["source"]}
         if values["source"] == "static":
             values["options"] = [dict(option) for option in field["values"]["options"]]
-        out.append({"id": field["id"], "label": field["label"], "kind": field["kind"],
-                    "operators": operators_for(field["kind"], bool(field["name_lookup"] or field["name_key"])), "values": values})
+        entry = {"id": field["id"], "label": field["label"], "kind": field["kind"],
+                 "operators": operators_for(field["kind"], bool(field["name_lookup"] or field["name_key"])), "values": values}
+        if field["kind"] == "date":
+            entry["constraints"] = {"stored_as": field["stored_as"]}
+        elif field["kind"] == "number":
+            entry["constraints"] = {"integer": field["integer"], "minimum": field["minimum"], "maximum": field["maximum"]}
+        out.append(entry)
     return out
 
 
@@ -308,8 +393,78 @@ def _index(fields: Any) -> dict[str, dict[str, Any]]:
 
 # --- validator --------------------------------------------------------------------------------
 
+def _norm_day(label: str, value: Any) -> str:
+    if not isinstance(value, str) or not _DATE_RE.fullmatch(value):
+        raise FilterSetValidationError(f"{label}: use a date written YYYY-MM-DD.")
+    try:
+        _dt.date(int(value[:4]), int(value[5:7]), int(value[8:]))
+    except ValueError:
+        raise FilterSetValidationError(f"{label}: this is not a real date.") from None
+    if value < MIN_DATE or value > MAX_DATE:
+        raise FilterSetValidationError(f"{label}: the date must be from {MIN_DATE} to {MAX_DATE}.")
+    return value
+
+
+def _exact_keys(label: str, value: Any, keys: tuple) -> dict:
+    if not isinstance(value, dict) or set(value) != set(keys):
+        raise FilterSetValidationError(f"{label}: the value must be an object with exactly {', '.join(keys)}.")
+    return value
+
+
+def _norm_date_value(field: dict, operator: str, value: Any) -> Any:
+    label = f"{field['label']}: the value"
+    if operator in RELATIVE_OPERATORS:
+        body = _exact_keys(label, value, ("amount", "unit"))
+        unit, amount = body["unit"], body["amount"]
+        if not isinstance(unit, str) or unit not in RELATIVE_UNITS:
+            raise FilterSetValidationError(f"{label}: the unit must be minutes, hours or days.")
+        if isinstance(amount, bool) or not isinstance(amount, int) or amount < 1 or amount > RELATIVE_UNITS[unit]:
+            raise FilterSetValidationError(f"{label}: the amount must be a whole number from 1 to {RELATIVE_UNITS[unit]} {unit}.")
+        return {"amount": amount, "unit": unit}
+    if operator == "between":
+        body = _exact_keys(label, value, ("from", "to"))
+        start, end = _norm_day(f"{label} (from)", body["from"]), _norm_day(f"{label} (to)", body["to"])
+        if start > end:
+            raise FilterSetValidationError(f"{label}: 'from' may not be after 'to'.")
+        return {"from": start, "to": end}
+    return _norm_day(label, value)
+
+
+def _norm_number(field: dict, label: str, value: Any) -> int | float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise FilterSetValidationError(f"{label}: the value must be a number.")
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise FilterSetValidationError(f"{label}: the value must be a finite number.")
+        if field.get("integer"):
+            if not value.is_integer():
+                raise FilterSetValidationError(f"{label}: the value must be a whole number.")
+            value = int(value)
+    if abs(value) > MAX_NUMBER:
+        raise FilterSetValidationError(f"{label}: the value may not exceed {MAX_NUMBER} in size.")
+    minimum, maximum = field.get("minimum"), field.get("maximum")
+    if (minimum is not None and value < minimum) or (maximum is not None and value > maximum):
+        raise FilterSetValidationError(f"{field['label']}: the value is outside the allowed range.")
+    return value
+
+
+def _norm_number_value(field: dict, operator: str, value: Any) -> Any:
+    label = f"{field['label']}: the value"
+    if operator == "between":
+        body = _exact_keys(label, value, ("from", "to"))
+        start, end = _norm_number(field, f"{label} (from)", body["from"]), _norm_number(field, f"{label} (to)", body["to"])
+        if start > end:
+            raise FilterSetValidationError(f"{label}: 'from' may not be above 'to'.")
+        return {"from": start, "to": end}
+    return _norm_number(field, label, value)
+
+
 def _norm_value(field: dict, operator: str, value: Any) -> Any:
     kind = field["kind"]
+    if kind == "date":
+        return _norm_date_value(field, operator, value)
+    if kind == "number":
+        return _norm_number_value(field, operator, value)
     if kind == "bool":
         if isinstance(value, bool):
             return value
@@ -342,10 +497,10 @@ def _norm_rule(item: dict, index: dict, counter: dict) -> dict[str, Any]:
         raise FilterSetFieldUnavailable(f"This filter uses a field you cannot use ({shown}).")
     field = index[field_id]
     operator = item.get("operator")
-    if not isinstance(operator, str) or operator not in OPERATORS:
+    if not isinstance(operator, str) or operator not in ALL_OPERATORS:
         raise FilterSetValidationError(f"{field['label']}: choose one of the listed operators.")
     if operator not in _operator_ids(field):
-        raise FilterSetValidationError(f"{field['label']}: '{OPERATORS[operator]}' is not available for this field.")
+        raise FilterSetValidationError(f"{field['label']}: '{ALL_OPERATORS[operator]}' is not available for this field.")
     return {"kind": "rule", "field": field_id, "operator": operator, "value": _norm_value(field, operator, item.get("value"))}
 
 
@@ -411,8 +566,101 @@ def _q_class():
     return Q
 
 
-def _leaf_q(Q, field: dict, operator: str, value: Any):
+def _utc_now(now: Any = None) -> _dt.datetime:
+    """The moment a call works from. A naive ``now`` counts as UTC. Read once per call, so a whole tree sees one moment."""
+    if now is None:
+        return _dt.datetime.now(_dt.timezone.utc)
+    if not isinstance(now, _dt.datetime):
+        raise FilterSetValidationError("now must be a datetime.")
+    return now.replace(tzinfo=_dt.timezone.utc) if now.tzinfo is None else now.astimezone(_dt.timezone.utc)
+
+
+def _day_start(value: str) -> _dt.datetime:
+    return _dt.datetime(int(value[:4]), int(value[5:7]), int(value[8:]), tzinfo=_dt.timezone.utc)
+
+
+_ONE_DAY = _dt.timedelta(days=1)
+
+
+def _date_window(operator: str, value: Any, now: _dt.datetime) -> tuple[Any, Any, Any, Any] | None:
+    """A date rule as bounds on a UTC datetime: ``(gte, lt, lte, gt)``, each a datetime or None. Day boundaries are UTC days.
+    Returns None for an operator that has no window (never reached for a validated rule)."""
+    if operator in ("equals", "not_equals"):
+        start = _day_start(value)
+        return start, start + _ONE_DAY, None, None
+    if operator == "before":
+        return None, _day_start(value), None, None
+    if operator == "on_or_before":
+        return None, _day_start(value) + _ONE_DAY, None, None
+    if operator == "after":
+        return _day_start(value) + _ONE_DAY, None, None, None
+    if operator == "on_or_after":
+        return _day_start(value), None, None, None
+    if operator == "between":
+        return _day_start(value["from"]), _day_start(value["to"]) + _ONE_DAY, None, None
+    if operator in RELATIVE_OPERATORS:
+        cutoff = now - _dt.timedelta(seconds=value["amount"] * _UNIT_SECONDS[value["unit"]])
+        return cutoff, None, now, None
+    return None
+
+
+def _date_leaf_q(Q, field: dict, operator: str, value: Any, now: _dt.datetime):
+    lookup = field["lookup"]
+    if not lookup:
+        raise FilterSetValidationError(f"Field {field['id']!r} declares no lookup.")
+    gte, lt, lte, _gt = _date_window(operator, value, now)
+    if field.get("stored_as") == "date":
+        # a plain date column: a day D stands for D 00:00 UTC, so the same window becomes whole days
+        if operator in ("equals", "not_equals"):
+            q = Q(**{lookup: gte.date()})
+        else:
+            parts = []
+            if gte is not None:
+                low = gte.date() if gte == _dt.datetime.combine(gte.date(), _dt.time(), _dt.timezone.utc) else gte.date() + _ONE_DAY
+                parts.append(Q(**{f"{lookup}__gte": low}))
+            if lt is not None:
+                parts.append(Q(**{f"{lookup}__lt": lt.date()}))
+            if lte is not None:
+                parts.append(Q(**{f"{lookup}__lte": lte.date()}))
+            q = parts[0]
+            for part in parts[1:]:
+                q = q & part
+    else:
+        parts = []
+        if gte is not None:
+            parts.append(Q(**{f"{lookup}__gte": gte}))
+        if lt is not None:
+            parts.append(Q(**{f"{lookup}__lt": lt}))
+        if lte is not None:
+            parts.append(Q(**{f"{lookup}__lte": lte}))
+        q = parts[0]
+        for part in parts[1:]:
+            q = q & part
+    return ~q if operator in ("not_equals", "not_in_the_last") else q
+
+
+_NUMBER_LOOKUP = {"greater_than": "gt", "less_than": "lt", "at_least": "gte", "at_most": "lte"}
+
+
+def _number_leaf_q(Q, field: dict, operator: str, value: Any):
+    lookup = field["lookup"]
+    if not lookup:
+        raise FilterSetValidationError(f"Field {field['id']!r} declares no lookup.")
+    if operator in ("equals", "not_equals"):
+        q = Q(**{lookup: value})
+    elif operator == "between":
+        q = Q(**{f"{lookup}__gte": value["from"]}) & Q(**{f"{lookup}__lte": value["to"]})
+    else:
+        q = Q(**{f"{lookup}__{_NUMBER_LOOKUP[operator]}": value})
+    return ~q if operator == "not_equals" else q
+
+
+def _leaf_q(Q, field: dict, operator: str, value: Any, now: _dt.datetime | None = None):
     kind = field["kind"]
+    if kind == "date":
+        return _date_leaf_q(Q, field, operator, value, now or _utc_now())
+    if kind == "number":
+        return _number_leaf_q(Q, field, operator, value)
     if kind == "bool":
         if not field["lookup"]:
             raise FilterSetValidationError(f"Field {field['id']!r} declares no lookup.")
@@ -429,39 +677,135 @@ def _leaf_q(Q, field: dict, operator: str, value: Any):
     return ~q if operator in _NEGATED else q
 
 
-def _node_q(Q, group: dict, index: dict):
+def _node_q(Q, group: dict, index: dict, now: _dt.datetime):
     rules = group["rules"]
     if not rules:
         return Q(pk__isnull=True)  # empty matches nothing, as Groups does
     parts = []
     for item in rules:
         if item["kind"] == "group":
-            parts.append(_node_q(Q, item, index))
+            parts.append(_node_q(Q, item, index, now))
         else:
-            parts.append(_leaf_q(Q, index[item["field"]], item["operator"], item["value"]))
+            parts.append(_leaf_q(Q, index[item["field"]], item["operator"], item["value"], now))
     expr = parts[0]
     for part in parts[1:]:
         expr = (expr & part) if group["match"] == "all" else (expr | part)
     return expr
 
 
-def build_q(normalized: Any, fields: Any):
+def build_q(normalized: Any, fields: Any, *, now: Any = None):
     """A Django ``Q`` for a filter. The filter is validated again, so an unchecked tree can never reach the query.
 
     Values go to Django as data: iexact, icontains, istartswith and iendswith escape ``%``, ``_`` and ``\\`` in the value, so a typed
     ``%`` matches only a literal ``%``. There is no raw SQL, no regular expression and no field name from the browser.
     ``not_*`` operators negate, so an empty value still matches ``not_equals``, exactly as Groups does.
+
+    Date and number fields (1.17.52) emit only plain equality, ``__gte``, ``__lt``, ``__lte`` and ``__gt`` on the declared ``lookup``,
+    so a module may point ``lookup`` at an annotation it added to its queryset (for example a count of pending actions) as long as it
+    applies the annotation before it filters. A date on a datetime column becomes aware UTC bounds; with ``stored_as: 'date'`` it
+    becomes plain dates. ``now`` (keyword only, default the real clock) is read once; a relative rule is built from it. A NULL never
+    satisfies a positive operator and does satisfy ``not_equals`` and ``not_in_the_last`` (Django's ``~Q`` keeps NULL rows).
     """
     tree = validate_filter_set(normalized, fields)
-    return _node_q(_q_class(), tree, _index(fields))
+    return _node_q(_q_class(), tree, _index(fields), _utc_now(now))
 
 
 def _text(value: Any) -> str:
     return "" if value is None else str(value).casefold()
 
 
-def _row_rule(field: dict, operator: str, value: Any, row: dict) -> bool:
+def _row_moment(raw: Any) -> _dt.datetime | None:
+    """A row value as an aware UTC datetime, or None when it is not a date. A date is its UTC midnight, a naive datetime counts as
+    UTC, an ISO string is read, an int, float or Decimal is Unix seconds, and a bool is no value."""
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        if isinstance(raw, _dt.datetime):
+            return raw.replace(tzinfo=_dt.timezone.utc) if raw.tzinfo is None else raw.astimezone(_dt.timezone.utc)
+        if isinstance(raw, _dt.date):
+            return _dt.datetime(raw.year, raw.month, raw.day, tzinfo=_dt.timezone.utc)
+        if isinstance(raw, str):
+            text = raw.strip()
+            if len(text) == 10 and text[4] == "-":
+                parsed = _dt.date.fromisoformat(text)
+                return _dt.datetime(parsed.year, parsed.month, parsed.day, tzinfo=_dt.timezone.utc)
+            parsed_at = _dt.datetime.fromisoformat(text)
+            return parsed_at.replace(tzinfo=_dt.timezone.utc) if parsed_at.tzinfo is None else parsed_at.astimezone(_dt.timezone.utc)
+        if isinstance(raw, (int, float, decimal.Decimal)):
+            seconds = float(raw)
+            if not math.isfinite(seconds):
+                return None
+            return _dt.datetime.fromtimestamp(seconds, tz=_dt.timezone.utc)
+    except (ValueError, OverflowError, OSError, TypeError, decimal.InvalidOperation):
+        return None
+    return None
+
+
+def _row_number(raw: Any) -> decimal.Decimal | None:
+    """A row value as a Decimal, or None. A bool, NaN, infinity and unreadable text are no value. Compared as Decimal so a float never
+    rounds a boundary."""
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        if isinstance(raw, decimal.Decimal):
+            number = raw
+        elif isinstance(raw, int):
+            number = decimal.Decimal(raw)
+        elif isinstance(raw, float):
+            number = decimal.Decimal(repr(raw))
+        elif isinstance(raw, str):
+            number = decimal.Decimal(raw.strip())
+        else:
+            return None
+    except (decimal.InvalidOperation, ValueError, TypeError):
+        return None
+    return number if number.is_finite() else None
+
+
+def _dec(value: Any) -> decimal.Decimal:
+    return decimal.Decimal(value) if isinstance(value, int) else decimal.Decimal(repr(value))
+
+
+def _row_date_rule(field: dict, operator: str, value: Any, row: dict, now: _dt.datetime) -> bool:
+    if not field["row_key"]:
+        raise FilterSetValidationError(f"Field {field['id']!r} declares no row_key.")
+    actual = _row_moment(row.get(field["row_key"]))
+    negated = operator in ("not_equals", "not_in_the_last")
+    if actual is None:
+        return negated  # NULL or unreadable: never a positive match, always a negative one
+    gte, lt, lte, _gt = _date_window(operator, value, now)
+    inside = (gte is None or actual >= gte) and (lt is None or actual < lt) and (lte is None or actual <= lte)
+    return (not inside) if negated else inside
+
+
+def _row_number_rule(field: dict, operator: str, value: Any, row: dict) -> bool:
+    if not field["row_key"]:
+        raise FilterSetValidationError(f"Field {field['id']!r} declares no row_key.")
+    actual = _row_number(row.get(field["row_key"]))
+    if actual is None:
+        return operator == "not_equals"
+    if operator == "between":
+        return _dec(value["from"]) <= actual <= _dec(value["to"])
+    wanted = _dec(value)
+    if operator == "equals":
+        return actual == wanted
+    if operator == "not_equals":
+        return actual != wanted
+    if operator == "greater_than":
+        return actual > wanted
+    if operator == "less_than":
+        return actual < wanted
+    if operator == "at_least":
+        return actual >= wanted
+    return actual <= wanted
+
+
+def _row_rule(field: dict, operator: str, value: Any, row: dict, now: _dt.datetime | None = None) -> bool:
     kind = field["kind"]
+    if kind == "date":
+        return _row_date_rule(field, operator, value, row, now or _utc_now())
+    if kind == "number":
+        return _row_number_rule(field, operator, value, row)
     if kind == "bool":
         if not field["row_key"]:
             raise FilterSetValidationError(f"Field {field['id']!r} declares no row_key.")
@@ -493,24 +837,28 @@ def _row_rule(field: dict, operator: str, value: Any, row: dict) -> bool:
     return actual.endswith(wanted)
 
 
-def _node_matches(group: dict, row: dict, index: dict) -> bool:
+def _node_matches(group: dict, row: dict, index: dict, now: _dt.datetime) -> bool:
     rules = group["rules"]
     if not rules:
         return False
     results = (
-        _node_matches(item, row, index) if item["kind"] == "group"
-        else _row_rule(index[item["field"]], item["operator"], item["value"], row)
+        _node_matches(item, row, index, now) if item["kind"] == "group"
+        else _row_rule(index[item["field"]], item["operator"], item["value"], row, now)
         for item in rules
     )
     return all(results) if group["match"] == "all" else any(results)
 
 
-def matches(normalized: Any, row: dict, fields: Any) -> bool:
-    """In-memory twin of ``build_q`` for lists that are not model-backed. Casefolded compare; ``None`` counts as empty text."""
+def matches(normalized: Any, row: dict, fields: Any, *, now: Any = None) -> bool:
+    """In-memory twin of ``build_q`` for lists that are not model-backed. Casefolded compare; ``None`` counts as empty text.
+
+    Date and number fields (1.17.52) follow ``build_q`` exactly, including the NULL rule. A date row value may be a datetime (naive
+    counts as UTC), a date (its UTC midnight), an ISO string, or an int, float or Decimal (Unix seconds). A number row value may be an
+    int, float, Decimal or numeric text. A bool is no value. ``now`` (keyword only) is read once per call."""
     if not isinstance(row, dict):
         raise FilterSetValidationError("A row must be a dict.")
     tree = validate_filter_set(normalized, fields)
-    return _node_matches(tree, row, _index(fields))
+    return _node_matches(tree, row, _index(fields), _utc_now(now))
 
 
 # --- Groups compatibility ---------------------------------------------------------------------
@@ -750,6 +1098,16 @@ class _ScopeChecker:
 def _value_visible(rule: dict, index: dict, checker: _ScopeChecker) -> bool:
     field = index.get(rule.get("field")) if isinstance(rule.get("field"), str) else None
     value = rule.get("value")
+    if field is not None and field["kind"] in ("date", "number"):
+        # not scope-limited, but fail closed: only a value that validates for this field and operator is shown
+        operator = rule.get("operator")
+        try:
+            if not isinstance(operator, str) or operator not in _operator_ids(field):
+                return False
+            _norm_value(field, operator, value)
+        except FilterSetValidationError:
+            return False
+        return True
     if field is None or not isinstance(value, (str, int, bool)):
         return False
     if field["kind"] in ("text", "bool"):
@@ -1171,23 +1529,37 @@ def filter_sets_contract_metadata() -> dict[str, Any]:
         "version": CAPABILITY_VERSION,
         "operations": list(OPERATIONS),
         "operators": dict(OPERATORS),
+        "all_operators": dict(ALL_OPERATORS),
+        "date_operators": [dict(row) for row in operators_for("date")],
+        "number_operators": [dict(row) for row in operators_for("number")],
+        "relative_units": dict(RELATIVE_UNITS),
+        "date_range": {"from": MIN_DATE, "to": MAX_DATE},
+        "number_limit": MAX_NUMBER,
         "field_kinds": list(KINDS),
         "value_sources": list(VALUE_SOURCES),
         "limits": {
             "rules": MAX_RULES, "groups": MAX_GROUPS, "depth": MAX_DEPTH, "value_length": MAX_VALUE_LENGTH,
             "label_length": MAX_LABEL_LENGTH, "sets_per_owner_module_and_key": MAX_SETS_PER_KEY, "view_key_length": MAX_KEY_LENGTH,
             "search_length": MAX_SEARCH_LENGTH, "page_size": PAGE_SIZE, "pages": MAX_PAGE, "cache_seconds": CACHE_SECONDS,
+            "relative_amount_minutes": RELATIVE_UNITS["minutes"], "relative_amount_hours": RELATIVE_UNITS["hours"],
+            "relative_amount_days": RELATIVE_UNITS["days"], "number_magnitude": MAX_NUMBER,
         },
         "provider_capability": f"<module id>.{PROVIDER_CAPABILITY_SUFFIX} {PROVIDER_CAPABILITY_VERSION}",
         "provider_operations": ["describe_fields(*, context)", "distinct_values(field_id, *, context, search, page, page_size)"],
         "stored_as": f"tec_tac saved views table, view_key prefix {VIEW_KEY_PREFIX!r} (reserved)",
-        "field_declaration_keys": ["id", "label", "kind", "lookup", "row_key", "name_lookup", "name_key", "scope_kind (optional, kind id only, 'client' or 'site', since 1.17.51)", "values"],
+        "field_declaration_keys": ["id", "label", "kind", "lookup", "row_key", "name_lookup", "name_key", "scope_kind (optional, kind id only, 'client' or 'site', since 1.17.51)", "values",
+                                   "stored_as (optional, kind date only, 'datetime' default or 'date', since 1.17.52)",
+                                   "integer (optional, kind number only, bool, since 1.17.52)",
+                                   "minimum, maximum (optional, kind number only, finite numbers, since 1.17.52)"],
         "reader_view": (
             "since 1.17.51 the owner sees the full definition; any other reader sees each rule value only when it is inside their scope, else the rule "
             "{kind, field, operator, value: null, withheld: true} and a top-level values_withheld count; an id field with no scope_kind is always withheld"
         ),
         "audit_actions": ["add", "modify", "custom:filter-set-share", "delete"],
         "requires_framework": ">=1.17.50",
+        "date_and_number_requires_framework": ">=1.17.52",
+        "day_boundary": "UTC (a date rule means the UTC day, 00:00 to 24:00)",
+        "null_rule": "a NULL or unreadable value never satisfies a positive operator and satisfies not_equals and not_in_the_last",
     }
 
 

@@ -101,7 +101,8 @@ registers and runs unchanged):
   Tactical stores them. Bounds: 50 entries per list, 24 keys per entry (names that match the field-name pattern), a text value cut at
   4096 characters with control characters other than tab and newline removed, numbers, booleans and nulls, or one level of up to 100
   scalars, and 64 KiB of text per list field. ``<name>_count`` is the full length and ``<name>_truncated`` is true when anything was cut
-  or dropped. A malformed list is recorded as its count only. Failed, denied and outcome-unknown rows carry no list.
+  or dropped. A malformed list is recorded as its count only. Failed, denied and outcome-unknown rows carry no list. Since 1.17.52
+  ``audit_list_masks`` can keep a key's value out of the row (see below); without it the list is still recorded in clear.
 
 1.17.45 (the capability is 1.14.0, still major 1; all additive and opt-in, a declaration that passes none of them behaves exactly as before):
 
@@ -117,6 +118,28 @@ registers and runs unchanged):
   (the id would carry the value). The body Core forwards to Tactical is the object that was checked.
 * A ``core_refused`` row for ``invalid_correlation_id``, ``invalid_audit_before`` or ``invalid_params`` now carries the declared
   ``audit.object_id`` (declared text, never caller input).
+
+1.17.52 (the capability is 1.15.0, still major 1; additive and opt-in, a declaration that passes neither key behaves exactly as before):
+
+* ``audit_list_masks`` (optional, Python only, ``{list name: {key: mode}}``): a per-key mask for a list already named in
+  ``audit_lists``. ``audit_lists`` itself is unchanged, so a declaration that records a list in clear still does. Modes: ``names``
+  (the key holds a list of text items such as ``script_args`` or ``env_vars``: only the NAME part of each item is recorded) and
+  ``mask`` (the value is replaced by ``***``). Names rule, per item: text with ``=`` keeps what is before the first ``=`` (``KEY=VALUE``
+  becomes ``KEY``, ``--flag=value`` becomes ``--flag``); other text that starts with ``-`` or ``/`` keeps its first token
+  (``-Name value`` becomes ``-Name``); anything else is a positional argument with no name and becomes ``***``; a non-text item is
+  ``***``. A name must look like a name (letters, digits, ``_``, ``.``, ``-``, at most 64 characters, optionally one or two leading
+  dashes, or one leading ``/`` for a switch) and, for the ``=`` form, must be followed by a value that is not empty or only ``=``
+  (base64 padding): otherwise the item is recorded as ``***``. Mask rule: a list item keeps its name and shows ``***`` for the value
+  (``KEY=***``, ``--flag=***``, ``-Name ***``, a positional item ``***``); a scalar text key (a cmd action's ``command``) is ``***``.
+  ``names`` on a scalar key records ``***`` too. Fail closed: a masked key whose value is not text or a list of scalars is ``***``;
+  ``None`` stays null. The bounds of ``audit_lists`` apply after masking. The mask is applied to the body (after) and to Tactical's own
+  before answer alike, and the unmasked text never reaches the row. Registration refuses a list that is not in ``audit_lists``, more
+  than 8 keys per list, a key that is not a field-name, an unknown mode and a mapping that is not a dict.
+* A scope entry may carry ``names_object: false`` (a strict bool, default true). The entry is resolved and checked exactly as before
+  (scope check, deny rows and 400s unchanged), but it does not name the audit row's object. A create that checks
+  ``body:dependencies.client`` can then have ``audit.object_field`` or ``audit.object_body_field`` name the created record. Registration
+  refuses a non-bool, and a scope whose entries are all ``names_object: false`` unless the declaration has ``audit.object_param``,
+  ``audit.object_field``, ``audit.object_body_field`` or ``audit.object_id``.
 """
 from __future__ import annotations
 
@@ -137,7 +160,7 @@ from . import module_category as _module_category
 logger = logging.getLogger("tec_tac.tactical_operations")
 
 CAPABILITY_ID = "core.tactical_operations"
-CAPABILITY_VERSION = "1.14.0"  # 1.17.45: audit.action_by_body, a nested body scope source (body:<field>.<key>), object_id on early core_refused rows; 1.17.44: audit.object_id (a declared literal object id); 1.17.43: audit.secret_fields and metadata.object_count
+CAPABILITY_VERSION = "1.15.0"  # 1.17.52: audit_list_masks (names and *** for a list's keys) and scope names_object; 1.17.45: audit.action_by_body, a nested body scope source (body:<field>.<key>), object_id on early core_refused rows; 1.17.44: audit.object_id (a declared literal object id); 1.17.43: audit.secret_fields and metadata.object_count
 AUDIT_HEADER = "X-Tec-Tac-Audit"
 AUDIT_RECORDED = "recorded"
 AUDIT_NOT_RECORDED = "not-recorded"
@@ -207,6 +230,12 @@ _LIST_VALUE_MAX_CHARS = 4096  # characters kept from one text value
 _LIST_MAX_TEXT_BYTES = 64 * 1024  # text bytes kept across one list field
 _LIST_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")  # control characters, but not tab (\x09) or newline (\x0a)
 _DROPPED = object()
+_LIST_MASK_MODES = ("names", "mask")  # 1.17.52: audit_list_masks
+_MAX_LIST_MASK_KEYS = 8  # keys one list may mask
+_MASKED = "***"
+# A name Core will record from a list item (1.17.52): optional dashes, then a letter or underscore. A switch may start with one "/".
+_ITEM_NAME_RE = re.compile(r"^-{0,2}[A-Za-z_][A-Za-z0-9_.\-]{0,63}$")
+_ITEM_SWITCH_RE = re.compile(r"^(?:-{1,2}|/)[A-Za-z0-9_?][A-Za-z0-9_.\-]{0,63}$")
 _MAX_FILE_NAME = 255
 
 # One fixed Core text per refusal. None carries any wording from the declaring module or from Tactical.
@@ -265,6 +294,7 @@ class ScopeSpec:
     type_map: tuple = ()  # ((body value, scope type), ...) when ``type`` is body:<field>
     optional: bool = False  # 1.17.18: resolved only when the body field is present and not null
     row_lookup: str | None = None  # 1.17.18: id of a lookup the owning module registered (CQ56 a)
+    names_object: bool = True  # 1.17.52: False keeps the entry checked but leaves it out of the audit row's object id
 
 
 @dataclass(frozen=True)
@@ -321,6 +351,7 @@ class TacticalOperation:
     secret_fields: tuple = ()  # 1.17.43: body fields whose value Core never records; the row carries only changed or unchanged
     audit_object_id: str | None = None  # 1.17.44: a fixed text from the module's declaration; the last fallback for the row's object id
     audit_action_by_body: tuple = ()  # 1.17.45: (field, ((body value, audit action), ...)); the success row's action follows the body
+    audit_list_masks: tuple = ()  # 1.17.52: ((list name, ((key, "names"|"mask"), ...)), ...) for lists in audit_lists
 
     @property
     def body_cap(self) -> int:
@@ -357,6 +388,7 @@ class TacticalOperation:
                     **({"type_map": dict(item.type_map)} if item.type_map else {}),
                     **({"optional": True} if item.optional else {}),
                     **({"row_lookup": item.row_lookup} if item.row_lookup else {}),
+                    **({"names_object": False} if not item.names_object else {}),
                 }
                 for item in self.scope
             ],
@@ -369,6 +401,7 @@ class TacticalOperation:
                 "object_field": self.audit_object_field,
                 "object_body_field": self.audit_object_body_field,
                 "lists": list(self.audit_lists),
+                "list_masks": {name: dict(pairs) for name, pairs in self.audit_list_masks},
                 "secret_fields": list(self.secret_fields),
                 "object_id": self.audit_object_id,
                 "action_by_body": (
@@ -970,8 +1003,14 @@ def register_tactical_operation(
     body_max_bytes=None,
     audit_lists=None,
     file_response=False,
+    audit_list_masks=None,
 ):
     """Declare one Tactical operation. Call it from the owning module's ``AppConfig.ready()``.
+
+    1.17.52 (both optional, capability 1.15.0): ``audit_list_masks={list name: {key: "names"|"mask"}}`` keeps a key's value out of a list
+    named in ``audit_lists`` (``names`` records only the name part of each text item, ``mask`` records ``***``; see the module docstring
+    for the rules). It is a Python keyword, like ``audit_lists``. A scope entry may carry ``names_object: false`` (a strict bool):
+    the entry is still checked but does not name the audit row's object, so ``audit.object_field`` or ``audit.object_body_field`` can.
 
     1.17.41 (all optional, capability 1.11.0): ``file_response=True`` (a strict bool, GET or POST only) lets Core relay a streamed file
     answer (Tactical's FileResponse) up to ``MAX_RESPONSE_BYTES``; without it a streaming answer is refused as before. ``query_params``
@@ -1095,9 +1134,9 @@ def register_tactical_operation(
 
     row_lookup_entries = 0
     for item in scope:
-        if not isinstance(item, dict) or not {"type", "source"} <= set(item) or set(item) - {"type", "source", "type_map", "optional", "row_lookup"}:
+        if not isinstance(item, dict) or not {"type", "source"} <= set(item) or set(item) - {"type", "source", "type_map", "optional", "row_lookup", "names_object"}:
             raise TacticalOperationRegistrationError(
-                "each scope entry is {type, source}, plus type_map for a body-selected type, optional or row_lookup, and nothing else."
+                "each scope entry is {type, source}, plus type_map for a body-selected type, optional, row_lookup or names_object, and nothing else."
             )
         kind, source = item["type"], item["source"]
         if isinstance(source, str) and source.startswith("before:"):
@@ -1154,12 +1193,22 @@ def register_tactical_operation(
                 raise TacticalOperationRegistrationError(f"scope source {source!r} must be an int parameter for a client or site.")
         elif name not in fields:
             raise TacticalOperationRegistrationError(f"scope source {source!r} is not one of body_fields.")
-        spec = ScopeSpec(kind, source, type_map, optional, lookup_id)
+        names_object = item.get("names_object", True)
+        if not isinstance(names_object, bool):
+            raise TacticalOperationRegistrationError("scope names_object must be true or false.")
+        spec = ScopeSpec(kind, source, type_map, optional, lookup_id, names_object)
         if spec in scope_specs:
             raise TacticalOperationRegistrationError(f"scope entry {item!r} is repeated.")
         scope_specs.append(spec)
     if len(scope_specs) > _MAX_SCOPE:
         raise TacticalOperationRegistrationError("too many scope entries.")
+    if scope_specs and not any(spec.names_object for spec in scope_specs) and not (
+        object_param is not None or object_field is not None or object_body_field is not None or object_id_literal is not None
+    ):
+        raise TacticalOperationRegistrationError(
+            "every scope entry has names_object false, so nothing would name the audit row's object: declare audit.object_param, "
+            "audit.object_field, audit.object_body_field or audit.object_id."
+        )
 
     try:
         action = audit_core._normalize_action(audit["action"])
@@ -1187,6 +1236,7 @@ def register_tactical_operation(
         if name in audit_params:
             raise TacticalOperationRegistrationError(f"audit field {name!r} is also an audit param: the row would carry it twice.")
     lists = _clean_audit_lists(audit_lists, verb, fields, before, audit_fields)
+    list_masks = _clean_audit_list_masks(audit_list_masks, lists)
     secret_declared = _clean_secret_fields(audit.get("secret_fields"), fields, audit_fields, lists, before, object_body_field, scope_specs, object_field)
     action_by_body = _parse_action_by_body(audit.get("action_by_body"), verb, fields, secret_declared, audit_core)
     selector = _parse_body_selector(body_selector, fields)
@@ -1211,6 +1261,7 @@ def register_tactical_operation(
         audit_object_field=object_field, audit_object_body_field=object_body_field,
         permissions_any=any_flags, body_max_bytes=body_cap, audit_lists=lists, file_response=file_response,
         secret_fields=secret_declared, audit_object_id=object_id_literal, audit_action_by_body=action_by_body,
+        audit_list_masks=list_masks,
     )
     key = (owner, op_id)
     route_key = (verb, _route_key(segments, trailing))
@@ -1844,6 +1895,84 @@ def _clean_audit_lists(value: Any, verb: str, fields: tuple, before: BeforeSpec 
     return names
 
 
+def _clean_audit_list_masks(value: Any, lists: tuple) -> tuple:
+    """Validate ``audit_list_masks`` (1.17.52): ``{list name: {key: "names"|"mask"}}`` for lists already named in ``audit_lists``.
+    Refused: a mapping that is not a dict, a list that is not in ``audit_lists``, a non-dict or empty key map, more than 8 keys per
+    list, a key that is not a field name and a mode other than ``names`` or ``mask``. Core cannot tell a scalar key from a list key
+    at registration, so ``names`` on a scalar value is handled when the row is written (it records ``***``)."""
+    if value is None:
+        return ()
+    if not isinstance(value, dict):
+        raise TacticalOperationRegistrationError("audit_list_masks must be a dict of {list name: {key: mode}}.")
+    if not value:
+        return ()
+    out = []
+    for name, keys in value.items():
+        if not isinstance(name, str) or name not in lists:
+            raise TacticalOperationRegistrationError(f"audit_list_masks {name!r} is not one of audit_lists.")
+        if not isinstance(keys, dict) or not keys:
+            raise TacticalOperationRegistrationError(f"audit_list_masks {name!r} must be a dict of {{key: mode}} with at least one key.")
+        if len(keys) > _MAX_LIST_MASK_KEYS:
+            raise TacticalOperationRegistrationError(f"audit_list_masks {name!r} may mask at most {_MAX_LIST_MASK_KEYS} keys.")
+        pairs = []
+        for key, mode in keys.items():
+            if not isinstance(key, str) or not _FIELD_RE.fullmatch(key):
+                raise TacticalOperationRegistrationError(f"audit_list_masks {name!r}: {key!r} is not a field name.")
+            if not isinstance(mode, str) or mode not in _LIST_MASK_MODES:
+                raise TacticalOperationRegistrationError(f"audit_list_masks {name!r}.{key}: the mode is 'names' or 'mask'.")
+            pairs.append((key, mode))
+        out.append((name, tuple(pairs)))
+    return tuple(out)
+
+
+def _item_name(text: str) -> tuple[str | None, str, bool]:
+    """The name part of one text item of a masked list: ``(name, separator, has_value)``, or ``(None, "", False)`` for an item with
+    no name (a positional argument), which the caller records as ``***``.
+
+    ``KEY=VALUE`` gives ``KEY`` and ``--flag=value`` gives ``--flag``. Otherwise an item that starts with ``-`` or ``/`` gives its first
+    whitespace-delimited token (``-Name value`` gives ``-Name``). The name must look like a name, and an ``=`` must be followed by a
+    value that is not empty or only ``=`` (base64 padding), so a positional secret is not recorded as a name."""
+    clean = _LIST_CONTROL.sub("", text).strip()
+    if "=" in clean:
+        head, _, tail = clean.partition("=")
+        if tail.strip("=") and _ITEM_NAME_RE.fullmatch(head):
+            return head, "=", True
+        return None, "", False
+    if clean[:1] in ("-", "/"):
+        parts = clean.split(None, 1)
+        if _ITEM_SWITCH_RE.fullmatch(parts[0]):
+            return parts[0], " ", len(parts) > 1
+    return None, "", False
+
+
+def _mask_item(item: Any, mode: str) -> str:
+    if not isinstance(item, str):
+        return _MASKED
+    name, separator, has_value = _item_name(item)
+    if name is None:
+        return _MASKED
+    if mode == "names" or not has_value:
+        return name
+    return f"{name}{separator}{_MASKED}"
+
+
+def _mask_value(value: Any, mode: str) -> tuple[Any, bool]:
+    """A masked key's value as it may be recorded, and whether items were cut (1.17.52). ``None`` stays null; a list of items is
+    masked item by item (at most ``_LIST_MAX_ITEMS`` are kept); a text value, a number and anything else is ``***`` (fail closed)."""
+    if value is None:
+        return None, False
+    if isinstance(value, list):
+        return [_mask_item(item, mode) for item in value[:_LIST_MAX_ITEMS]], len(value) > _LIST_MAX_ITEMS
+    return _MASKED, False
+
+
+def _list_masks_for(operation: TacticalOperation, name: str) -> dict | None:
+    for list_name, pairs in operation.audit_list_masks:
+        if list_name == name:
+            return dict(pairs)
+    return None
+
+
 def _list_text(value: str) -> tuple[str, bool]:
     """Control characters but tab and newline removed, then cut to the text limit. Returns (text, cut)."""
     clean = _LIST_CONTROL.sub("", value)
@@ -1882,9 +2011,9 @@ def _list_value(value: Any) -> tuple[Any, int, bool]:
     return _DROPPED, 0, True
 
 
-def _list_entry(item: dict) -> tuple[dict, int, bool]:
+def _list_entry(item: dict, masks: dict | None = None) -> tuple[dict, int, bool]:
     """One object of a declared list: its first ``_LIST_MAX_KEYS`` keys whose names match the field-name pattern. Returns
-    (entry, text bytes kept, cut)."""
+    (entry, text bytes kept, cut). ``masks`` (1.17.52, ``{key: mode}``) masks those keys before the bounds apply."""
     entry: dict = {}
     size = 0
     cut = False
@@ -1892,6 +2021,9 @@ def _list_entry(item: dict) -> tuple[dict, int, bool]:
         if len(entry) >= _LIST_MAX_KEYS or not isinstance(key, str) or not _FIELD_RE.fullmatch(key):
             cut = True
             continue
+        if masks and key in masks:
+            value, mask_cut = _mask_value(value, masks[key])
+            cut = cut or mask_cut
         clean, used, value_cut = _list_value(value)
         cut = cut or value_cut
         if clean is _DROPPED:
@@ -1901,11 +2033,11 @@ def _list_entry(item: dict) -> tuple[dict, int, bool]:
     return entry, size, cut
 
 
-def _list_record(name: str, value: Any) -> dict:
+def _list_record(name: str, value: Any, masks: dict | None = None) -> dict:
     """The clear-text record of one declared list field (1.17.28, CQ85 a): the kept objects, ``<name>_count`` (the full length) and
     ``<name>_truncated`` (true when anything was cut or dropped). Never raises. A value that is not a list is recorded as an empty
-    list with count 0. A list with an item that is not an object is recorded as its count only. Nothing is masked: script arguments
-    and environment values stay as Tactical stores them."""
+    list with count 0. A list with an item that is not an object is recorded as its count only. Nothing is masked unless ``masks``
+    (1.17.52, ``{key: "names"|"mask"}`` from ``audit_list_masks``) says so: then those keys are masked before anything is kept."""
     try:
         if not isinstance(value, list):
             return {name: [], f"{name}_count": 0, f"{name}_truncated": True}
@@ -1915,7 +2047,7 @@ def _list_record(name: str, value: Any) -> dict:
         entries: list = []
         used = 0
         for item in value[:_LIST_MAX_ENTRIES]:
-            entry, size, cut = _list_entry(item)
+            entry, size, cut = _list_entry(item, masks)
             if used + size > _LIST_MAX_TEXT_BYTES:
                 truncated = True
                 break
@@ -1951,7 +2083,7 @@ def _after_values(operation: TacticalOperation, body: dict, query: dict | None =
             values[name] = _printable(params[name])
     for name in operation.audit_lists:
         if name in body:
-            values.update(_list_record(name, body[name]))
+            values.update(_list_record(name, body[name], _list_masks_for(operation, name)))
     if file is not None:
         values["upload"] = {"file_name": _printable(file["name"]), "size": len(file["content"]), "content_type": file["content_type"]}
     return values
@@ -2044,7 +2176,7 @@ def _before_values(operation: TacticalOperation, data: Any) -> dict | None:
             values[f"{name}_count"] = len(value)
     for name in operation.audit_lists:  # 1.17.28: the declared lists, in clear, from Tactical's own answer
         if name in data:
-            values.update(_list_record(name, data[name]))
+            values.update(_list_record(name, data[name], _list_masks_for(operation, name)))
     return values
 
 
@@ -2302,7 +2434,9 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
         file = _clean_upload(operation, upload)
         entries = _scope_entries(operation, params, body)
         scope = [(kind, ids) for _, kind, ids in entries]
-        object_id = _object_id(scope, operation, params)
+        scope_object_id = _object_id(scope, operation, params)  # names every scope entry: the scope's own deny rows keep it
+        # 1.17.52: an entry flagged names_object false is checked above but does not name the row (the answer or body field does).
+        object_id = _object_id([(kind, ids) for spec, kind, ids in entries if spec.names_object], operation, params) if entries else scope_object_id
         count_extra = _object_count_extra(scope)  # 1.17.43: the rows of this call that read the scope carry how many ids it names
         extra: dict = dict(count_extra)
         action_now = _action_for(operation, body)  # 1.17.45: the success row's action (audit.action_by_body)
@@ -2316,16 +2450,16 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
                     # who holds the Tactical flag (Tactical decides); a row with an agent is held to the caller's role scope.
                     agent_id = _row_lookup_agent(operation, spec, ids[0])
                     if agent_id is _LOOKUP_FAILED:
-                        raise _refuse(request, operation, "not_found", 404, "object_not_found", object_id, correlation_id, row_extra=count_extra)
+                        raise _refuse(request, operation, "not_found", 404, "object_not_found", scope_object_id, correlation_id, row_extra=count_extra)
                     extra["scope_source"] = "row_lookup"
                     extra["agentless"] = agent_id is None
                     if agent_id is not None and not adapter.objects_in_role_scope(user=user, resource_type="agent", identifiers=[agent_id]):
-                        raise _refuse(request, operation, "not_found", 404, "object_not_found", object_id, correlation_id, row_extra=count_extra)
+                        raise _refuse(request, operation, "not_found", 404, "object_not_found", scope_object_id, correlation_id, row_extra=count_extra)
                 elif kind == "agent_pk":
                     if not adapter.agent_pks_in_role_scope(user=user, pks=ids):
-                        raise _refuse(request, operation, "not_found", 404, "object_not_found", object_id, correlation_id, row_extra=count_extra)
+                        raise _refuse(request, operation, "not_found", 404, "object_not_found", scope_object_id, correlation_id, row_extra=count_extra)
                 elif not adapter.objects_in_role_scope(user=user, resource_type=kind, identifiers=ids):
-                    raise _refuse(request, operation, "not_found", 404, "object_not_found", object_id, correlation_id, row_extra=count_extra)
+                    raise _refuse(request, operation, "not_found", 404, "object_not_found", scope_object_id, correlation_id, row_extra=count_extra)
         _check_whitelist(operation, body)  # 6.
     except TacticalOperationError as exc:
         # 1.17.21: Core's own refusal of a change writes one row. An error that already carries a verdict (a deny row) keeps it.
@@ -2461,7 +2595,7 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
         "id": CAPABILITY_ID,
         "version": CAPABILITY_VERSION,
         "operations": ["run", "list_operations", "get_operation"],
-        "declaration": "tec_tac.tactical_operations.register_tactical_operation(id, module_id, method, route, permissions, scope, body_fields, audit, module_permission=None, message=None, query_params=None, upload=None, caller_scope=None, body_selector=None, server_only=False, permissions_any=None, body_max_bytes=None, audit_lists=None, file_response=False), called from AppConfig.ready(). A core module that names a row_lookup also calls tec_tac.tactical_operations.register_tactical_row_lookup(module_id, lookup_id, fn) from AppConfig.ready().",
+        "declaration": "tec_tac.tactical_operations.register_tactical_operation(id, module_id, method, route, permissions, scope, body_fields, audit, module_permission=None, message=None, query_params=None, upload=None, caller_scope=None, body_selector=None, server_only=False, permissions_any=None, body_max_bytes=None, audit_lists=None, file_response=False, audit_list_masks=None), called from AppConfig.ready(). A core module that names a row_lookup also calls tec_tac.tactical_operations.register_tactical_row_lookup(module_id, lookup_id, fn) from AppConfig.ready().",
         "http": "POST /api/tfd/tactical-operations/<module_id>/<operation_id>/ with {params, body, query} as JSON, or as multipart/form-data with the text parts params, body and query (each a JSON object) and one file part",
         "limits": {
             "body_bytes": MAX_BODY_BYTES, "response_bytes": MAX_RESPONSE_BYTES,
@@ -2616,6 +2750,30 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
             ),
             (
                 "a core_refused row for invalid_correlation_id, invalid_audit_before or invalid_params carries the declared audit.object_id"
+            ),
+        ],
+        # 1.17.52 (capability 1.15.0, still major 1): two optional additions. A declaration that uses neither behaves exactly as before.
+        "declaration_keys_added_in_1_15_0": [
+            "audit_list_masks (register_tactical_operation(audit_list_masks={list: {key: 'names'|'mask'}})), shown as audit.list_masks",
+            "scope names_object (a strict bool, default true; false keeps the entry checked but off the audit row's object id), shown as names_object: false",
+        ],
+        "limits_added_in_1_15_0": {"audit_list_mask_keys_per_list": _MAX_LIST_MASK_KEYS, "audit_list_mask_modes": list(_LIST_MASK_MODES), "masked_text": _MASKED},
+        "behaviour_added_in_1_15_0": [
+            (
+                "audit_list_masks: for a list in audit_lists, a masked key never reaches the audit row in clear, on the after side (cleaned body) or the before "
+                "side (Tactical's answer). names: each text item of the list keeps only its name (KEY=VALUE gives KEY, --flag=value gives --flag, -Name value "
+                "gives -Name); an item with no name (a positional argument, an empty value, base64 padding, a name that is not name-shaped) and any non-text item "
+                "is ***. mask: an item keeps its name and shows *** for the value (KEY=***, --flag=***, -Name ***); a scalar text key is ***. names on a scalar "
+                "key is ***. A masked key whose value is not text or a list of scalars is ***; null stays null. The audit_lists bounds (50 entries, 24 keys, "
+                "100 items, 4096 characters, 64 KiB, <name>_count, <name>_truncated) apply after masking. Registration refuses a list not in audit_lists, more "
+                "than 8 keys per list, a key that is not a field name, a mode other than names or mask and a mapping that is not a dict. audit_lists without "
+                "audit_list_masks is still recorded in clear"
+            ),
+            (
+                "scope names_object: false: the entry is resolved and checked exactly as before and its deny rows are unchanged, but it is left out when Core picks "
+                "the object id of the success, failed, tactical-denied and outcome-unknown rows, so audit.object_field or audit.object_body_field can name the "
+                "created record. Registration refuses a non-bool and a scope whose entries are all names_object false unless the declaration has audit.object_param, "
+                "audit.object_field, audit.object_body_field or audit.object_id"
             ),
         ],
         "refusal_row_codes": list(CORE_REFUSAL_ROW_CODES),

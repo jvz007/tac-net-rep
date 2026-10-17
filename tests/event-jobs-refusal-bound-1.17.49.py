@@ -547,7 +547,7 @@ for phrase in ("tec_tac.note_event_job_refusals", "one bounded broker message", 
                "the next tick, within", "never read", "a count is a count, not proof"):
     must(phrase in doc, f"event-jobs.md lacks {phrase!r}")
 must(policy.REFUSAL_FLUSH_SECONDS == 60 and policy.REFUSAL_MAX_ENTRIES == 64 and policy.REFUSAL_BUFFER_KEYS == 256, "policy limits")
-must(tuple(int(part) for part in (ROOT / "VERSION").read_text(encoding="utf-8").strip().split(".")) >= (1, 17, 49), "VERSION")  # 1.17.50: at least 1.17.49
+must(tuple(int(part) for part in (ROOT / "VERSION").read_text(encoding="utf-8").strip().split("-")[0].split(".")) >= (1, 17, 49), "VERSION")  # 1.17.50: at least 1.17.49
 migrations = sorted(p.name for p in (APP / "migrations").glob("0*.py"))
 must(migrations[-1] == "0032_event_jobs.py", migrations[-3:])
 print("       capability stays 1.1.0; contract row, capability text and docs agree; no migration")

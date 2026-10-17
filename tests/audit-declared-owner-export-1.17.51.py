@@ -152,6 +152,6 @@ for needle in ("Worked example: an export by a person who holds only List checks
     must(needle in doc, f"docs/module-audit.md names {needle!r}")
 contracts = " ".join((ROOT_DIR / "framwork" / "tec_tac" / "contracts.py").read_text(encoding="utf-8").split())
 must("Worked example (1.17.51, no behaviour change)" in contracts and "can_list_checks" in contracts, "the audit.record row has the worked example")
-notes = " ".join((ROOT_DIR / "RELEASE_NOTES_1.17.51-1.md").read_text(encoding="utf-8").split())
+notes = " ".join((ROOT_DIR / "docs" / "releases" / "RELEASE_NOTES_1.17.51.md").read_text(encoding="utf-8").split())
 must("event-log export" in notes and "requires.framework >=1.17.51" in notes and "No Core behaviour changed" in notes, "the release notes name it")
 print("audit declared owner export 1.17.51 ok")

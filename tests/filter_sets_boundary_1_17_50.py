@@ -62,6 +62,14 @@ class Q:
         (key, value), = self.kwargs.items()
         if key == "pk__isnull":
             return not value  # a row always has a pk
+        for known in ("gte", "lte", "gt", "lt"):  # 1.17.52: the comparisons a date or number rule emits
+            if key.endswith("__" + known):
+                actual = row.get(key[: -len(known) - 2])
+                if actual is None:
+                    return False  # SQL: NULL compares as unknown
+                if hasattr(actual, "tzinfo") and hasattr(value, "tzinfo") and (actual.tzinfo is None) != (value.tzinfo is None):
+                    actual = actual.replace(tzinfo=value.tzinfo) if actual.tzinfo is None else actual  # a naive column value is UTC
+                return {"gte": actual >= value, "lte": actual <= value, "gt": actual > value, "lt": actual < value}[known]
         for known in ("iexact", "icontains", "istartswith", "iendswith"):
             if key.endswith("__" + known):
                 path = key[: -len(known) - 2]

@@ -131,6 +131,9 @@ class FilterSetFieldsView(APIView):
         return Response({
             "module": str(module), "available": available, "fields": filter_sets.browser_fields(fields),
             "operators": [{"id": key, "label": label} for key, label in filter_sets.OPERATORS.items()],
+            "date_operators": filter_sets.operators_for("date"),
+            "number_operators": filter_sets.operators_for("number"),
+            "relative_units": [{"id": unit, "max_amount": most} for unit, most in filter_sets.RELATIVE_UNITS.items()],
             "limits": filter_sets.filter_sets_contract_metadata()["limits"],
         })
 
