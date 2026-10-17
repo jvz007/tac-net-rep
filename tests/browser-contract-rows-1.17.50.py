@@ -39,7 +39,8 @@ must(len(ids) == len(set(ids)), "no browser row id is duplicated")
 
 # (1) the components row
 comp = rows["ui.authenticated.components"]
-must(comp["operations"] == ["SearchSelect", "TagEditor", "DataTable", "FormRow", "EditorWindow", "Stepper"], comp["operations"])
+must(comp["operations"][:6] == ["SearchSelect", "TagEditor", "DataTable", "FormRow", "EditorWindow", "Stepper"], comp["operations"])
+must(comp["operations"][-1] == "FilterEditor", comp["operations"])  # 1.17.53 appends FilterEditor last
 must(comp["phase"] == "authenticated" and comp["service"] == "components" and comp["audience"] == "module/browser", comp)
 must(comp["docs"] == "tec-tac-ui/docs/module-components.md", comp["docs"])
 comp_text = " ".join(comp["details"]) + " " + comp["purpose"]

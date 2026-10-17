@@ -394,6 +394,10 @@ formula into a filter tree with the same results: Groups reads items strictly le
 complex for a filter set (more than 50 rules, or more than 3 levels of groups once nested) raises an error. Groups keeps evaluating it
 with its own resolver.
 
+## Browser editor
+
+Core UI 0.12.116 gives every module a shared filter editor, `context.components.FilterEditor`, bound to the module's own id. It needs Core 1.17.50 (`core.filter_sets` 1.0.0); its date and number controls need UI 0.12.117 and Core 1.17.52 (`core.filter_sets` 1.1.0). Core lists it as a member of the browser contract row `ui.authenticated.components` (since 1.17.53). That row is documentation: it adds no route and no capability. Core still validates every definition and every saved set, whatever the editor sends. The editor's own guide is `tec-tac-ui/docs/module-filters.md`.
+
 ## Not in this release
 
 - A time of day in a date rule. Dates are whole UTC days. A person's own time zone is not used.

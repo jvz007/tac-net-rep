@@ -29,7 +29,8 @@ node = next(n for n in tree.body if isinstance(n, (ast.Assign, ast.AnnAssign))
             and any(isinstance(t, ast.Name) and t.id == "BROWSER_CONTRACTS" for t in (n.targets if isinstance(n, ast.Assign) else [n.target])))
 rows = {r["id"]: r for r in ast.literal_eval(node.value)}
 comp = rows["ui.authenticated.components"]
-must(comp["operations"] == ["SearchSelect", "TagEditor", "DataTable", "FormRow", "EditorWindow", "Stepper"], comp["operations"])
+must(comp["operations"][:6] == ["SearchSelect", "TagEditor", "DataTable", "FormRow", "EditorWindow", "Stepper"], comp["operations"])
+must(comp["operations"][-1] == "FilterEditor", comp["operations"])  # 1.17.53 appends FilterEditor last
 text = " ".join(comp["details"]) + " " + comp["purpose"]
 for needle in (
     "actions (slot)", "properties (slot)", "content (slot", "footer (slot)", "left of the close button", "the left column",
