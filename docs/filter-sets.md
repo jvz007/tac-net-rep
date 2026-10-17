@@ -58,6 +58,7 @@ The module returns a list of declarations. Core checks each one and drops a bad 
     "row_key": "operating_system",       # the dict key, for matches (a list that is not a model)
     "name_lookup": "site__client__name", # kind "id" only: the display name path
     "name_key": "client_name",           # kind "id" only
+    "scope_kind": "client",              # kind "id" only, optional (1.17.51): client | site
     "values": {"source": "distinct"},    # distinct | static | none
 }
 ```
@@ -66,6 +67,8 @@ The module returns a list of declarations. Core checks each one and drops a bad 
 - `values.source` says where the Equals picker gets its values. `distinct` asks the provider (see below). `static` carries up to 50
   `{value, label}` options in the declaration. `none` gives a plain box. A `bool` field always uses `none`.
 - A `lookup` is a plain model field path. It is never a lookup suffix, and it never comes from the browser.
+- `scope_kind` (1.17.51, optional, `id` fields only) says the id is a client or a site, so Core can keep an out-of-scope id out of a
+  shared set (see "What a reader sees of a shared set's values"). Without it an id value is never shown to anyone but the owner.
 
 **The browser never sees a lookup or a key.** `GET /api/tfd/filter-sets/fields/?module=<id>` returns only `id`, `label`, `kind`, the
 operators and the value source (plus static options).
@@ -181,7 +184,8 @@ A filter set is a named filter a person keeps, per module and view key, with an 
 | `module_id` | The module the set belongs to |
 | `view_key` | The screen or list, a lowercase slug up to 61 characters |
 | `name` | 1 to 160 characters, unique for one owner, module and view key |
-| `definition` | `{version, match, rules}` as above |
+| `definition` | `{version, match, rules}` as above. For a reader who is not the owner a rule value that is not theirs to see is `null` with `withheld: true` (1.17.51) |
+| `values_withheld` | How many rule values were withheld from this reader (0 for the owner), since 1.17.51 |
 | `shared`, `mine`, `can_edit`, `owner` | As for saved views |
 | `readers` | User ids, returned to the owner only |
 
@@ -194,11 +198,54 @@ Rules:
 - A set is stored on the saved views table (no new table, no migration) under the view key `fs-` + your key. Saved views refuse the
   prefix `fs-`, never list those rows and never change them.
 
-### Rule values are visible to the people a set is shared with
+### What a reader sees of a shared set's values (Core 1.17.51)
 
-A shared set shows its rule values to everyone it is shared with. A person who can use the module but cannot see client B could open a
-set whose rule says "client equals B" and read that name. The value pickers never offer a value outside a person's scope, but a set
-carries what its owner typed or picked. The set shows no rows, and it can only narrow the reader's own list. Share only what you mean to share.
+A rule value can name a client or a site. A person who can use the module but cannot see client B must not learn that name from a set
+someone shared. From 1.17.51 Core checks every rule value before it shows it to anyone but the owner.
+
+- **The owner always sees the full definition.** Nothing changes for the owner, and `resolve_filter_set`, `build_q` and `matches` are
+  unchanged, so evaluating a set never leaks a value.
+- **Everyone else sees each value only when Core can prove it is theirs to see.** A value that cannot be shown is withheld with a plain
+  marker: the rule comes back as `{kind: "rule", field, operator, value: null, withheld: true}`. The set also carries a top-level
+  `values_withheld` count (0 when nothing is withheld). The definition keeps its shape, so a reader cannot copy a hidden value.
+- **Rules by field kind**, using the module's own declared fields:
+  - An `id` field with the optional declaration key `scope_kind` (`"client"` or `"site"`). For Equals and Does not equal the id is shown
+    when the reader is unrestricted, or the id is in the reader's `whole_client_ids` (client) or `site_ids` (site), or the Resource
+    Directory finds that client or site in the reader's scope. Any failure, including a missing List clients or List sites flag, withholds
+    the value. For the four name operators (contains, starts with and so on) the text is shown only when a client or site the reader may see
+    has a name that contains it. Otherwise it is withheld.
+  - An `id` field **with no `scope_kind`** is always withheld from everyone but the owner, because Core cannot prove its scope. If your
+    module offers a client or site field, declare `scope_kind`.
+  - `text` and `bool` values are shown as before. A text value such as an operating system is not a scope-limited value.
+  - Fail closed: a rule on a field the reader does not know, or a value that is not text, a whole number or a bool, is withheld.
+- **The set's name is a label its owner typed and stays visible.** Do not put a client's name in a set name you share. The browser
+  should warn next to the Shared switch. That is a UI request.
+- **Where the module's fields come from.** Core calls no provider from Python. `list_filter_sets(user, module_id, view_key, *, fields=None)`
+  and `get_filter_set(user, set_id, *, fields=None)` take the module's own fields. With no `fields`, every value of a set the person does
+  not own is withheld. The two GET routes read the signed-in person's fields from the module's provider, but only when a set the person
+  can read but does not own has rules. If the provider is missing or fails, the GET still answers, with every such value withheld.
+- Core looks each id or name up once per call and does at most 200 lookups. Past that, the remaining values are withheld.
+
+### Rule values and the old wording
+
+Before 1.17.51 a shared set showed every value to everyone it was shared with (1.17.50). That is replaced by the rules above.
+
+### Declaring `scope_kind`
+
+`scope_kind` is an optional key on a field declaration of kind `id`: `"client"` or `"site"`. It is additive on `<module id>.filter_fields`
+1.0.0, so no module needs to change, and a declaration without it works as before (its values are simply never shown to a non-owner). The
+browser never sees it. Any other value, or the key on a field that is not an `id` field, drops that declaration with a log line.
+
+### Saved views that start with `fs-` from before 1.17.50
+
+A saved view made before 1.17.50 whose key starts with `fs-` was hidden from saved views when Core reserved that prefix. From 1.17.51 Core
+treats a row under `fs-` as a filter set only when its payload has the shape Core writes (`kind` `filter_set`, `version` the whole number 1,
+`match` `all` or `any`, and a list of `rules`). Any other `fs-` row is not found: not listed, read, changed, deleted or resolved.
+
+`install.sh` runs `tec_tac.filter_sets.repair_stray_saved_views()` after the migrations. It gives each such row the key `fs_` + the rest
+(the same length, a valid saved view key), so the person's own old saved view returns to their saved views list under the new key. It never
+deletes. When the new key would clash with the owner's unique (module, key, name), the row is left as it is and counted. The step returns
+`{'renamed': n, 'skipped': m}`, logs both numbers, is safe to run again, and only warns if it fails. No migration is involved.
 
 ### Checked again on every use
 

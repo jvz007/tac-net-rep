@@ -129,7 +129,7 @@ pkg.__path__ = [str(APP)]
 mod("tec_tac.registry", discover_plugins=discover_plugins)
 mod("tec_tac.module_state", load_state=load_state, is_enabled=is_enabled)
 mod("tec_tac.capabilities", register_capability=lambda **kw: SimpleNamespace(**kw))
-mod("tec_tac.audit", record=lambda **kw: AUDIT.append(kw),
+mod("tec_tac.audit", record=lambda **kw: (AUDIT.append(kw), {"recorded": True})[1],
     service_audit_actor=lambda **kw: dict(kw))
 
 
@@ -539,12 +539,12 @@ print("       _local_refusals and _local_reported are gone; _audit answers True 
 reset()
 meta = ej.event_jobs_contract_metadata()
 must(ej.CAPABILITY_VERSION == "1.1.0" and meta["version"] == "1.1.0" and meta["requires_framework"] == ">=1.17.47", meta["version"])
-must("no Redis call in publish" in meta["caller"] and "in bulk" in meta["caller"] and "one minute" in meta["caller"], meta["caller"])
+must("no Redis call in publish" in meta["caller"] and "in bulk" in meta["caller"] and "a minute per process" in meta["caller"], meta["caller"])
 contracts = (APP / "contracts.py").read_text(encoding="utf-8")
 must("no Redis call in publish" in contracts and "one bounded broker message a minute per process" in contracts, "contracts.py row")
 doc = (ROOT / "docs" / "event-jobs.md").read_text(encoding="utf-8")
-for phrase in ("tec_tac.note_event_job_refusals", "one bounded broker message", "buffer", "up to one minute of counts unsent", "per-process cache",
-               "retried on the next tick", "never read", "a count is a count, not proof"):
+for phrase in ("tec_tac.note_event_job_refusals", "one bounded broker message", "buffer", "wait in the web process's memory", "per-process cache",
+               "the next tick, within", "never read", "a count is a count, not proof"):
     must(phrase in doc, f"event-jobs.md lacks {phrase!r}")
 must(policy.REFUSAL_FLUSH_SECONDS == 60 and policy.REFUSAL_MAX_ENTRIES == 64 and policy.REFUSAL_BUFFER_KEYS == 256, "policy limits")
 must(tuple(int(part) for part in (ROOT / "VERSION").read_text(encoding="utf-8").strip().split(".")) >= (1, 17, 49), "VERSION")  # 1.17.50: at least 1.17.49

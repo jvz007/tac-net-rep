@@ -237,7 +237,7 @@ Modules keep saved views (filters and layout) in the Core saved views service, n
 
 ## Filter sets and universal filters
 
-Modules that filter a list use Core's one filter vocabulary, validator and evaluators, and keep named filter sets in Core. Capability `core.filter_sets` 1.0.0, Python `tec_tac.filter_sets`, browser contract `GET/POST /api/tfd/filter-sets/`, `GET/PUT/DELETE /api/tfd/filter-sets/<uuid>/`, `GET /api/tfd/filter-sets/fields/` and `GET /api/tfd/filter-values/`. A module that offers filters registers `<module id>.filter_fields` 1.0.0. A module that uses any of it must set `requires.framework` to `>=1.17.50`. See `docs/filter-sets.md`.
+Modules that filter a list use Core's one filter vocabulary, validator and evaluators, and keep named filter sets in Core. Capability `core.filter_sets` 1.0.0, Python `tec_tac.filter_sets`, browser contract `GET/POST /api/tfd/filter-sets/`, `GET/PUT/DELETE /api/tfd/filter-sets/<uuid>/`, `GET /api/tfd/filter-sets/fields/` and `GET /api/tfd/filter-values/`. A module that offers filters registers `<module id>.filter_fields` 1.0.0, and may add the optional key `scope_kind` (`client` or `site`) to an `id` field. Since 1.17.51 a reader who does not own a shared set never sees a rule value that is outside their scope: it comes back as `{value: null, withheld: true}` with a `values_withheld` count, and `list_filter_sets` and `get_filter_set` take the module's own `fields` to decide it (see `docs/filter-sets.md`). A module that uses any of it must set `requires.framework` to `>=1.17.50`. See `docs/filter-sets.md`.
 
 ## Tactical Report Manager registration
 

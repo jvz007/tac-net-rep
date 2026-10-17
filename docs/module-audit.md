@@ -127,6 +127,23 @@ Limits. This is the backend `record()` only. The browser path (`POST /api/tfd/au
 module's code sent the event. A module that needs such a row writes it from a backend route instead. The rule is purely additive: it
 accepts more rows and refuses nothing that was accepted before. A module that relies on it needs `requires.framework >=1.17.20`.
 
+### Worked example: an export by a person who holds only List checks (Core 1.17.51)
+
+A role may hold Tactical's `can_list_checks` and nothing of the Checks module's own grants, yet be allowed to export an event log. Core
+changes nothing for this case: the rule above already accepts the row. Checks only has to declare the read the right way and write its row
+from its backend.
+
+1. Declare the event-log read as a Tactical operation: method `GET`, `permissions: ["can_list_checks"]`, **no** `module_permission`, and
+   `audit: {"action": "export", "object_type": "agent"}` (the object type of your choice).
+2. In the backend route that serves the export, after the data is built, call
+   `audit.record(actor=request.user, module_id="checks", action="export", object_type="agent", object_id=..., message=...)`.
+3. Core accepts it because Checks owns an operation with audit action `export`, that operation needs no module_permission, and the person holds every Tactical flag of it (`can_list_checks`). The row carries `debug_info.actor_authority = "declared-operation-owner"`.
+
+Core refuses the same row, with `AuditContractError`, for the same person without `can_list_checks`, for a module that declared no `export`
+operation, for an operation that sets `module_permission`, for an installer user and for any other action. Core does not loosen the rule: if
+it did, any module could claim a flag it never declared. A module that adopts this needs `requires.framework >=1.17.51` (the rule itself is
+older, but 1.17.51 is the release that documents and pins this case).
+
 Since 1.17.20 the action `custom:operation-failed` is Core-only. Core writes it when Tactical refuses a change (see
 `docs/tactical-operations.md`), so `record()` refuses it with `AuditContractError`. `custom:outcome-unknown` stays open to a module that
 writes its own outcome row.

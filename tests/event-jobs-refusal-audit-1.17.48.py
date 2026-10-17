@@ -129,7 +129,7 @@ pkg.__path__ = [str(APP)]
 mod("tec_tac.registry", discover_plugins=discover_plugins)
 mod("tec_tac.module_state", load_state=load_state, is_enabled=is_enabled)
 mod("tec_tac.capabilities", register_capability=lambda **kw: SimpleNamespace(**kw))
-mod("tec_tac.audit", record=lambda **kw: AUDIT.append(kw),
+mod("tec_tac.audit", record=lambda **kw: (AUDIT.append(kw), {"recorded": True})[1],
     service_audit_actor=lambda **kw: dict(kw))
 
 

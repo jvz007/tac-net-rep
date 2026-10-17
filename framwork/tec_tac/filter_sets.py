@@ -62,6 +62,8 @@ MAX_PAGE_SIZE = 50
 CACHE_SECONDS = 30
 CACHE_MAX_ENTRIES = 256
 MAX_ID_VALUE = 2**63 - 1
+MAX_SCOPE_LOOKUPS = 200
+SCOPE_KINDS = ("client", "site")
 
 # The six operators Groups has used since its first release. The ids and labels must not change meaning.
 OPERATORS: dict[str, str] = {
@@ -224,7 +226,14 @@ def _clean_field(raw: Any) -> dict[str, Any]:
     if kind not in KINDS:
         raise FilterSetValidationError(f"Field {field_id!r} has an unknown kind.")
     out: dict[str, Any] = {"id": field_id, "label": label, "kind": kind, "lookup": None, "row_key": None,
-                           "name_lookup": None, "name_key": None, "values": {"source": "none", "options": []}}
+                           "name_lookup": None, "name_key": None, "scope_kind": None, "values": {"source": "none", "options": []}}
+    scope_kind = raw.get("scope_kind")
+    if scope_kind is not None:
+        if kind != "id":
+            raise FilterSetValidationError(f"Field {field_id!r}: only an id field may declare a scope_kind.")
+        if scope_kind not in SCOPE_KINDS:
+            raise FilterSetValidationError(f"Field {field_id!r}: scope_kind must be 'client' or 'site'.")
+        out["scope_kind"] = scope_kind
     for key in ("lookup", "name_lookup"):
         value = raw.get(key)
         if value is not None:
@@ -591,7 +600,50 @@ def _public_key(stored: str) -> str:
 
 
 def _is_filter_set(row) -> bool:
-    return str(getattr(row, "view_key", "")).startswith(VIEW_KEY_PREFIX)
+    return str(getattr(row, "view_key", "")).startswith(VIEW_KEY_PREFIX) and _valid_filter_payload(row)
+
+
+def _valid_filter_payload(row) -> bool:
+    """True when the row's payload has the shape Core writes: ``kind`` 'filter_set', ``version`` the whole number 1, ``match`` 'all' or
+    'any' and a list of ``rules``. A row under the reserved 'fs-' key with any other payload (a saved view made before 1.17.50 took the
+    prefix) is not a filter set: it is not listed, read, changed, deleted or resolved (1.17.51)."""
+    payload = getattr(row, "payload", None)
+    return (
+        isinstance(payload, dict) and payload.get("kind") == "filter_set"
+        and type(payload.get("version")) is int and payload["version"] == 1
+        and payload.get("match") in ("all", "any") and isinstance(payload.get("rules"), list)
+    )
+
+
+def repair_stray_saved_views() -> dict[str, int]:
+    """Give a person's old saved views that start with 'fs-' back to the saved views list (1.17.51). Idempotent, never deletes.
+
+    A saved view made before 1.17.50 whose key starts with 'fs-' was hidden from saved views when the prefix became reserved. Each such
+    row that is not a valid filter set gets the key 'fs_' + the rest (same length, a valid saved-view key, not reserved). A row whose new
+    key would collide with the owner's unique (module, key, name) is left as it is and counted. Run by install.sh, after migrate.
+    Returns ``{'renamed': n, 'skipped': m}``."""
+    sv = _saved_views()
+    renamed = skipped = 0
+    for row in list(sv.TecTacSavedView.objects.filter(view_key__startswith=VIEW_KEY_PREFIX)):
+        if _valid_filter_payload(row):
+            continue
+        new_key = "fs_" + str(row.view_key)[len(VIEW_KEY_PREFIX):]
+        if not sv._VIEW_KEY_RE.fullmatch(new_key) or new_key.startswith(VIEW_KEY_PREFIX):
+            skipped += 1
+            continue
+        if sv.TecTacSavedView.objects.filter(owner_id=row.owner_id, module_id=row.module_id, view_key=new_key, name=row.name).first() is not None:
+            skipped += 1
+            continue
+        try:
+            with sv._atomic():
+                row.view_key = new_key
+                row.save(update_fields=["view_key"])
+        except Exception:
+            logger.warning("A saved view with a reserved key could not be renamed.", exc_info=True)
+            skipped += 1
+            continue
+        renamed += 1
+    return {"renamed": renamed, "skipped": skipped}
 
 
 def _user_id(user) -> Any:
@@ -609,12 +661,141 @@ def _payload(normalized: dict) -> dict[str, Any]:
     return {"kind": "filter_set", "version": 1, "match": normalized["match"], "rules": normalized["rules"]}
 
 
-def serialize_filter_set(row, viewer) -> dict[str, Any]:
+def _resources():
+    from . import resources
+
+    return resources
+
+
+class _ScopeChecker:
+    """Answers "may this reader see this client or site?" for the values of a shared filter set (1.17.51).
+
+    One checker serves one call. Answers are remembered, and at most ``MAX_SCOPE_LOOKUPS`` distinct lookups run, so a list of sets
+    cannot become a scan. Any failure, a missing flag, a missing scope and the cap all answer "no": the value is withheld."""
+
+    def __init__(self, viewer):
+        self.viewer = viewer
+        self.lookups = 0
+        self._answers: dict[tuple, bool] = {}
+        self._context: Any = _UNSET
+        self._scope: Any = _UNSET
+
+    def context(self):
+        if self._context is _UNSET:
+            try:
+                self._context = _resources().user_context(self.viewer)
+            except Exception:
+                self._context = None
+        return self._context
+
+    def scope(self) -> dict | None:
+        if self._scope is _UNSET:
+            self._scope = None
+            context = self.context()
+            if context is not None:
+                try:
+                    scope = context.scope
+                    if isinstance(scope, dict) and scope.get("mode") not in (None, "none"):
+                        self._scope = scope
+                except Exception:
+                    self._scope = None
+        return self._scope
+
+    def unrestricted(self) -> bool:
+        scope = self.scope()
+        return bool(scope) and scope.get("unrestricted") is True
+
+    def _lookup(self, key: tuple, call) -> bool:
+        if key in self._answers:
+            return self._answers[key]
+        if self.lookups >= MAX_SCOPE_LOOKUPS:
+            return False  # past the cap: withhold, and do not remember, so nothing is claimed about the value
+        self.lookups += 1
+        try:
+            answer = bool(call())
+        except Exception:
+            answer = False
+        self._answers[key] = answer
+        return answer
+
+    def id_visible(self, scope_kind: str, value: int) -> bool:
+        scope = self.scope()
+        if scope is None or isinstance(value, bool) or not isinstance(value, int):
+            return False
+        if scope.get("unrestricted") is True:
+            return True
+        granted = scope.get("whole_client_ids" if scope_kind == "client" else "site_ids")
+        if isinstance(granted, (list, tuple, set, frozenset)) and value in granted:
+            return True
+        context, resources = self.context(), _resources()
+        getter = resources.get_client if scope_kind == "client" else resources.get_site
+        return self._lookup(("id", scope_kind, value), lambda: getter(value, context=context))
+
+    def name_visible(self, scope_kind: str, text: str) -> bool:
+        scope = self.scope()
+        if scope is None or not isinstance(text, str):
+            return False
+        if scope.get("unrestricted") is True:
+            return True
+        context, resources = self.context(), _resources()
+        lister = resources.list_clients if scope_kind == "client" else resources.list_sites
+
+        def found():
+            answer = lister(context=context, search=text, page=1, page_size=1)
+            return bool(answer.get("items")) if isinstance(answer, dict) else False
+
+        return self._lookup(("name", scope_kind, text.casefold()), found)
+
+
+def _value_visible(rule: dict, index: dict, checker: _ScopeChecker) -> bool:
+    field = index.get(rule.get("field")) if isinstance(rule.get("field"), str) else None
+    value = rule.get("value")
+    if field is None or not isinstance(value, (str, int, bool)):
+        return False
+    if field["kind"] in ("text", "bool"):
+        return True
+    scope_kind = field.get("scope_kind")
+    if scope_kind not in SCOPE_KINDS:
+        return False  # an id Core cannot place in a client or a site: it cannot prove the reader's scope
+    operator = rule.get("operator")
+    if operator in ID_OPERATORS:
+        return checker.id_visible(scope_kind, value)
+    return isinstance(value, str) and checker.name_visible(scope_kind, value)
+
+
+def _withhold(group: Any, index: dict, checker: _ScopeChecker, counter: list) -> list:
+    out: list = []
+    for item in group if isinstance(group, list) else []:
+        if not isinstance(item, dict):
+            counter[0] += 1
+            out.append({"kind": "rule", "field": None, "operator": None, "value": None, "withheld": True})
+        elif item.get("kind") == "group":
+            out.append({"kind": "group", "match": item.get("match", "all"), "rules": _withhold(item.get("rules"), index, checker, counter)})
+        elif _value_visible(item, index, checker):
+            out.append(dict(item))
+        else:
+            counter[0] += 1
+            field, operator = item.get("field"), item.get("operator")
+            out.append({"kind": "rule", "field": field if isinstance(field, str) else None,
+                        "operator": operator if isinstance(operator, str) else None, "value": None, "withheld": True})
+    return out
+
+
+def serialize_filter_set(row, viewer, *, fields: Any = None, _checker: _ScopeChecker | None = None) -> dict[str, Any]:
+    """One set as the viewer may see it. The owner gets the full definition. Anyone else gets the definition with every rule value
+    that is not proven visible replaced by ``{kind, field, operator, value: null, withheld: true}``, and ``values_withheld`` counts
+    them. ``fields`` are the module's own declarations (Core calls no provider from Python); without them every value is withheld."""
     readers = list(row.readers or [])
     mine = row.owner_id == viewer.pk
+    definition = _definition(row)
+    withheld = 0
+    if not mine:
+        counter = [0]
+        definition = {**definition, "rules": _withhold(definition["rules"], _index(fields) if fields else {}, _checker or _ScopeChecker(viewer), counter)}
+        withheld = counter[0]
     out = {
         "id": str(row.id), "module_id": row.module_id, "view_key": _public_key(row.view_key), "name": row.name,
-        "definition": _definition(row), "shared": not readers, "mine": mine, "can_edit": mine,
+        "definition": definition, "values_withheld": withheld, "shared": not readers, "mine": mine, "can_edit": mine,
         "owner": {"id": row.owner_id, "username": str(getattr(row.owner, "username", "") or "")},
         "created_at": row.created_at, "updated_at": row.updated_at,
     }
@@ -656,8 +837,12 @@ def _audit(user, action: str, row, *, rules: int) -> None:
         raise FilterSetAuditError("A filter set change requires a persisted Core audit record.") from exc
 
 
-def list_filter_sets(user, module_id: Any, view_key: Any) -> list[dict[str, Any]]:
-    """The filter sets the person can read for one module and view key."""
+def list_filter_sets(user, module_id: Any, view_key: Any, *, fields: Any = None) -> list[dict[str, Any]]:
+    """The filter sets the person can read for one module and view key.
+
+    ``fields`` are the module's own declarations for this person (1.17.51; Core calls no provider from Python). The owner always gets the
+    full definition. For any other reader a rule value that is not proven visible is withheld (see ``serialize_filter_set``); without
+    ``fields`` every value of a set the person does not own is withheld."""
     _user_id(user)
     with _saved_view_errors() as sv:
         module = sv._clean_module_id(module_id)
@@ -665,22 +850,24 @@ def list_filter_sets(user, module_id: Any, view_key: Any) -> list[dict[str, Any]
         sv._check_module(user, module)
         rows = sv.TecTacSavedView.objects.select_related("owner").filter(module_id=module, view_key=stored).order_by("name", "id")
     out = []
+    checker = _ScopeChecker(user)
     for row in rows:
-        if sv._can_read(user, row):
-            out.append(serialize_filter_set(row, user))
+        if _valid_filter_payload(row) and sv._can_read(user, row):
+            out.append(serialize_filter_set(row, user, fields=fields, _checker=checker))
             if len(out) >= MAX_LIST_ROWS:
                 break
     return out
 
 
-def get_filter_set(user, set_id: Any) -> dict[str, Any]:
+def get_filter_set(user, set_id: Any, *, fields: Any = None) -> dict[str, Any]:
+    """One filter set the person can read. ``fields`` as in ``list_filter_sets``: a non-owner never sees an out-of-scope id value."""
     row = _load(user, set_id)
     sv = _saved_views()
     try:
         sv._check_module(user, row.module_id, allow_unresolved=row.owner_id == user.pk)
     except sv.SavedViewValidationError:
         raise FilterSetNotFound("Filter set not found.") from None  # module removed or disabled: only the owner still sees it
-    return serialize_filter_set(row, user)
+    return serialize_filter_set(row, user, fields=fields)
 
 
 def create_filter_set(user, module_id: Any, view_key: Any, name: Any, definition: Any, readers: Any = None, *, fields: Any) -> dict[str, Any]:
@@ -994,6 +1181,11 @@ def filter_sets_contract_metadata() -> dict[str, Any]:
         "provider_capability": f"<module id>.{PROVIDER_CAPABILITY_SUFFIX} {PROVIDER_CAPABILITY_VERSION}",
         "provider_operations": ["describe_fields(*, context)", "distinct_values(field_id, *, context, search, page, page_size)"],
         "stored_as": f"tec_tac saved views table, view_key prefix {VIEW_KEY_PREFIX!r} (reserved)",
+        "field_declaration_keys": ["id", "label", "kind", "lookup", "row_key", "name_lookup", "name_key", "scope_kind (optional, kind id only, 'client' or 'site', since 1.17.51)", "values"],
+        "reader_view": (
+            "since 1.17.51 the owner sees the full definition; any other reader sees each rule value only when it is inside their scope, else the rule "
+            "{kind, field, operator, value: null, withheld: true} and a top-level values_withheld count; an id field with no scope_kind is always withheld"
+        ),
         "audit_actions": ["add", "modify", "custom:filter-set-share", "delete"],
         "requires_framework": ">=1.17.50",
     }

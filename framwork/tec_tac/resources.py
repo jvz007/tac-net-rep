@@ -14,7 +14,7 @@ from . import resources_adapter as adapter
 from .capabilities import register_capability
 
 CONTRACT_ID = "core.resources"
-CONTRACT_VERSION = "1.10.0"
+CONTRACT_VERSION = "1.11.0"
 RESOURCE_TYPES = ("client", "site", "agent")
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 500
@@ -35,6 +35,9 @@ SITE_MANAGE_PERMISSION = "core.resources.sites.manage"
 # service context with no resource visibility, for a caller Core verified from the call stack. Additive; global_access=True is unchanged.
 # 1.10.0 (Core 1.17.40, Endpoints 0.7.0 request) appended failing_checks, agent_count and maintenance_mode to client and site records,
 # read only and computed inside the caller's scope (a role never learns of a site it may not see). Additive.
+# 1.11.0 (Core 1.17.51, Automation 0.10.0 request) lets update_client and update_site take an optional compare-and-set guard
+# (expected_workstation_policy_id, expected_server_policy_id, expected_block_policy_inheritance): judged on the locked row, a stale
+# guard writes nothing and answers 409 record_changed. Additive; a call without a guard behaves exactly as before.
 LIVE_FIELDS = ("failing_checks", "agent_count", "maintenance_mode")
 CLIENT_FIELDS = ("type", "id", "name", "active", "alert_template_id", "sites", "workstation_policy_id", "server_policy_id", "block_policy_inheritance") + LIVE_FIELDS
 SITE_FIELDS = ("type", "id", "name", "client_id", "active", "alert_template_id", "client_name", "workstation_policy_id", "server_policy_id", "block_policy_inheritance") + LIVE_FIELDS
@@ -75,6 +78,11 @@ class ResourceNotFound(ResourceDirectoryError):
 
 class ResourceConflict(ResourceDirectoryError):
     code = "resource_conflict"
+
+    def __init__(self, message: str = "", code: str | None = None):
+        super().__init__(message)
+        if code:
+            self.code = code  # 'record_changed' since 1.11.0 (a compare-and-set guard no longer matched)
 
 
 @dataclass(frozen=True)
@@ -299,7 +307,7 @@ def _adapter_write(callable_obj, **kwargs):
     try:
         return callable_obj(**kwargs)
     except getattr(adapter, "TacticalResourceConflictError", adapter.TacticalResourceAdapterError) as exc:
-        raise ResourceConflict(str(exc)) from exc
+        raise ResourceConflict(str(exc), code=getattr(exc, "code", None)) from exc
     except getattr(adapter, "TacticalResourceValidationError", adapter.TacticalResourceAdapterError) as exc:
         raise ResourceValidationError(str(exc)) from exc
 
@@ -388,6 +396,21 @@ def _policy_changes(*, workstation_policy_id: Any, server_policy_id: Any, block_
     if block_policy_inheritance is not UNSET:
         changes["block_policy_inheritance"] = _clean_block_policy_inheritance(block_policy_inheritance)
     return changes
+
+
+def _expected_guard(*, workstation_policy_id: Any, server_policy_id: Any, block_policy_inheritance: Any) -> dict[str, Any]:
+    """The compare-and-set guard that was given (1.11.0), cleaned. UNSET leaves a field out of the compare; None means 'must be
+    unset'. The ids use the same cleaner as the policy fields, the flag takes a real true or false only."""
+    guard: dict[str, Any] = {}
+    if workstation_policy_id is not UNSET:
+        guard["workstation_policy_id"] = _clean_nullable_id(workstation_policy_id, "expected_workstation_policy_id")
+    if server_policy_id is not UNSET:
+        guard["server_policy_id"] = _clean_nullable_id(server_policy_id, "expected_server_policy_id")
+    if block_policy_inheritance is not UNSET:
+        if not isinstance(block_policy_inheritance, bool):
+            raise ResourceValidationError("expected_block_policy_inheritance must be true or false.")
+        guard["block_policy_inheritance"] = block_policy_inheritance
+    return guard
 
 
 def _template_changed(before: dict | None, after: dict | None) -> bool:
@@ -557,12 +580,19 @@ def create_client(*, name: str, context: ResourceAccessContext, site_name: str |
 
 
 def update_client(client_id: Any, *, name: str | None = None, alert_template_id: Any = UNSET, context: ResourceAccessContext,
-                  workstation_policy_id: Any = UNSET, server_policy_id: Any = UNSET, block_policy_inheritance: Any = UNSET) -> dict[str, Any]:
+                  workstation_policy_id: Any = UNSET, server_policy_id: Any = UNSET, block_policy_inheritance: Any = UNSET,
+                  expected_workstation_policy_id: Any = UNSET, expected_server_policy_id: Any = UNSET,
+                  expected_block_policy_inheritance: Any = UNSET) -> dict[str, Any]:
     """Change a client's name, its alert template id, its policy fields, or any of them (at least one).
 
     ``alert_template_id`` is a positive integer to set or None to clear (1.4.0). ``workstation_policy_id`` and ``server_policy_id``
     work the same way and ``block_policy_inheritance`` takes a real true or false (1.7.0). UNSET leaves a field alone. Core holds
-    only the ids: Alerts owns the template list and Automation the policy list."""
+    only the ids: Alerts owns the template list and Automation the policy list.
+
+    ``expected_workstation_policy_id``, ``expected_server_policy_id`` and ``expected_block_policy_inheritance`` (1.11.0) are an optional
+    compare-and-set guard: a positive integer, None ('must be unset') or a real bool. When one is given and the locked record holds
+    another value, nothing is written, no audit row is written and the call raises ResourceConflict with the code ``record_changed``.
+    A guard alone is not a change: the 'at least one of' rule stays."""
     user = _authorize_write(context, "client")
     resource_id = _clean_positive_int(client_id, "client_id")
     if name is None and alert_template_id is UNSET and all(value is UNSET for value in (workstation_policy_id, server_policy_id, block_policy_inheritance)):
@@ -573,9 +603,11 @@ def update_client(client_id: Any, *, name: str | None = None, alert_template_id:
     if alert_template_id is not UNSET:
         changes["alert_template_id"] = _clean_alert_template_id(alert_template_id)
     changes.update(_policy_changes(workstation_policy_id=workstation_policy_id, server_policy_id=server_policy_id, block_policy_inheritance=block_policy_inheritance))
+    expected = _expected_guard(workstation_policy_id=expected_workstation_policy_id, server_policy_id=expected_server_policy_id,
+                               block_policy_inheritance=expected_block_policy_inheritance)
     before = adapter.get_client_row(adapter.clients_queryset(user=user, trusted=False), resource_id)
     with _transaction_atomic():
-        row = _adapter_write(adapter.update_client_row, user=user, client_id=resource_id, **changes)
+        row = _adapter_write(adapter.update_client_row, user=user, client_id=resource_id, **changes, **({"expected": expected} if expected else {}))
         if row is None:
             raise ResourceNotFound("Client was not found in the caller's resource scope.")
         if before is not None and before == row:
@@ -622,7 +654,9 @@ def create_site(*, client_id: Any, name: str, context: ResourceAccessContext, cu
 
 
 def update_site(site_id: Any, *, name: str | None = None, client_id: Any | None = None, alert_template_id: Any = UNSET, context: ResourceAccessContext,
-                workstation_policy_id: Any = UNSET, server_policy_id: Any = UNSET, block_policy_inheritance: Any = UNSET) -> dict[str, Any]:
+                workstation_policy_id: Any = UNSET, server_policy_id: Any = UNSET, block_policy_inheritance: Any = UNSET,
+                expected_workstation_policy_id: Any = UNSET, expected_server_policy_id: Any = UNSET,
+                expected_block_policy_inheritance: Any = UNSET) -> dict[str, Any]:
     """Change a site's name, its client, its alert template id (a positive integer, or None to clear; 1.4.0), its policy fields
     (1.7.0, as update_client), or any of them.
 
@@ -630,6 +664,9 @@ def update_site(site_id: Any, *, name: str | None = None, client_id: Any | None 
     source site needs the write scope, and the destination client needs no grant (Tactical checks only Edit sites on the source).
     The last site of a client cannot leave (400). A missing destination client is a 400. A name already used in the destination
     client is a 409. A ``client_id`` equal to the current one is a no-op, after the same write-scope check as any update.
+
+    The ``expected_*`` keywords are the compare-and-set guard of 1.11.0, as in ``update_client``. They are judged on the locked site
+    record before a move or any other change, so a stale guard moves nothing and writes no audit row.
     """
     user = _authorize_write(context, "site")
     resource_id = _clean_positive_int(site_id, "site_id")
@@ -642,6 +679,8 @@ def update_site(site_id: Any, *, name: str | None = None, client_id: Any | None 
     if alert_template_id is not UNSET:
         changes["alert_template_id"] = _clean_alert_template_id(alert_template_id)
     changes.update(_policy_changes(workstation_policy_id=workstation_policy_id, server_policy_id=server_policy_id, block_policy_inheritance=block_policy_inheritance))
+    expected = _expected_guard(workstation_policy_id=expected_workstation_policy_id, server_policy_id=expected_server_policy_id,
+                               block_policy_inheritance=expected_block_policy_inheritance)
     before = adapter.get_site_row(adapter.sites_queryset(user=user, trusted=False), resource_id)
     if not adapter.site_write_in_scope(user=user, site_id=resource_id):
         # Checked before the same-client return below, so a read-only scope gets the same refusal as every other write (1.17.25).
@@ -649,7 +688,7 @@ def update_site(site_id: Any, *, name: str | None = None, client_id: Any | None 
     if target_client_id is not None and before is not None and target_client_id == before["client_id"]:
         # The site is already in that client: not a move, so no client change.
         target_client_id = None
-        if clean_name is None and not changes:
+        if clean_name is None and not changes and not expected:
             return adapter.live_sites([before])[0] if before is not None else before
     moving = target_client_id is not None and before is not None
     with _transaction_atomic():
@@ -661,6 +700,7 @@ def update_site(site_id: Any, *, name: str | None = None, client_id: Any | None 
             name=clean_name,
             client_id=target_client_id,
             **changes,
+            **({"expected": expected} if expected else {}),
         )
         if row is None:
             raise ResourceNotFound("Site was not found in the caller's resource scope.")
@@ -895,6 +935,8 @@ def resource_contract_metadata() -> dict[str, Any]:
                 "client": ["name", "alert_template_id", "workstation_policy_id", "server_policy_id", "block_policy_inheritance"],
                 "site": ["name", "client_id", "alert_template_id", "workstation_policy_id", "server_policy_id", "block_policy_inheritance"],
             },
+            # 1.11.0: optional compare-and-set guard keywords of update_client and update_site (not changes: a guard alone is a 400)
+            "update_guards": ["expected_workstation_policy_id", "expected_server_policy_id", "expected_block_policy_inheritance"],
         },
         "resource_types": {
             "client": {"id_type": "integer", "fields": list(CLIENT_FIELDS), "filters": ["search", "active", "alert_template_id", "policy_id", "page", "page_size"]},
@@ -1034,6 +1076,7 @@ def resource_contract_metadata() -> dict[str, Any]:
         "failing_checks_agent_count_maintenance_mode": "Since 1.10.0 (Core 1.17.40) client and site records carry three read-only keys, appended last (after block_policy_inheritance; nested sites and the records returned by create_client, update_client, create_site and update_site carry them too; agent records never do). failing_checks is {error: boolean, warning: boolean}: Tactical's stored value on the client or site as its own GET /clients/ returns it (null, a non-object or a non-boolean reads false). agent_count is an integer and maintenance_mode a boolean (true when any agent is in maintenance mode). Anyone who can list clients or sites sees them, as Tactical's GET /clients/ gives them to a role with List clients alone; no List agents flag is needed. Read only: no write field changes them.",
         "live_state": "Scope rule for 1.10.0 (AD-12, a role sees counts only for what it may see). A site record is computed from its own agents only. A client record is computed only from the sites the caller may see (the same Site.filter_by_role rule as the nested sites): agent_count is the sum over those sites, maintenance_mode is true when any of them has an agent in maintenance mode, and failing_checks is Tactical's stored client value only when the caller sees every site of the client (an unrestricted caller and a trusted global context always do), otherwise the OR of the visible sites' stored values, so a role never learns that a hidden site is failing or how many agents it has. A client with no visible site reads 0, false and both false. The values are as of Tactical's last refresh: Tactical updates failing_checks only in its periodic cache task, so treat it as a hint and not a live check. agent_count and maintenance_mode are read at call time. Core runs a constant number of queries per page. The audit before and after rows never carry these keys.",
         "list_filters_1_7": "Since 1.7.0 list_clients and list_sites take alert_template_id and policy_id (the workstation or the server policy), each a positive integer or 400, applied inside the caller's scope and under the list's own permission. Both together mean both must match. Alerts uses alert_template_id to find where a template is used, and Automation uses policy_id to build the policy overview without reading every page.",
+        "update_guard": "Since 1.11.0 (Core 1.17.51, framework >=1.17.51) update_client and update_site take the optional keywords expected_workstation_policy_id and expected_server_policy_id (a positive whole number, or None for 'must be unset') and expected_block_policy_inheritance (a real true or false), all defaulting to UNSET, and PATCH /api/tfd/resources/clients/<id>/ and /sites/<id>/ accept the same three keys in the body. The compare runs inside the write transaction against the locked record, before a move or any change. When a guard key is sent and the record holds another value, nothing is written, no audit row is written and the answer is 409 with the code record_changed and a plain sentence that names the field and no value (ResourceConflict.code in Python). A guard alone is not a change: with no name, client_id, alert_template_id or policy field the call is still a 400. A bad guard value (a bool for an id, text for the flag) is a 400. A call with no guard key behaves exactly as before. There is no guard for the name or the alert template.",
         "compatibility": "Additive changes are preferred within 1.x. Tactical ORM changes are adapter-internal unless the public representation changes incompatibly.",
     }
 

@@ -28,6 +28,19 @@ def _body(request, allowed: set[str]) -> dict:
     return data
 
 
+def _reader_fields(user, module_id) -> list | None:
+    """The person's own filter fields, read only to decide which rule values another person's set may show them (1.17.51). A provider
+    that is missing or fails gives None: every value of a set the person does not own is then withheld, and the read never fails."""
+    try:
+        return filter_sets.person_fields(user, module_id)
+    except (filter_sets.FilterSetNoProvider, filter_sets.FilterSetProviderError):
+        return None
+
+
+def _needs_fields(sets: list) -> bool:
+    return any(not row["mine"] and row["values_withheld"] > 0 for row in sets)
+
+
 @extend_schema_view(
     get=extend_schema(tags=[_TAG], summary="List the filter sets the current user can read for a module and view key"),
     post=extend_schema(tags=[_TAG], summary="Save a filter set"),
@@ -38,7 +51,10 @@ class FilterSetListCreateView(APIView):
 
     def get(self, request):
         try:
-            sets = filter_sets.list_filter_sets(request.user, request.query_params.get("module"), request.query_params.get("view_key"))
+            module, view_key = request.query_params.get("module"), request.query_params.get("view_key")
+            sets = filter_sets.list_filter_sets(request.user, module, view_key)
+            if _needs_fields(sets):
+                sets = filter_sets.list_filter_sets(request.user, module, view_key, fields=_reader_fields(request.user, module))
         except FilterSetError as exc:
             return _error(exc)
         return Response({"filter_sets": sets, "count": len(sets)})
@@ -68,7 +84,10 @@ class FilterSetDetailView(APIView):
 
     def get(self, request, set_id):
         try:
-            return Response(filter_sets.get_filter_set(request.user, set_id))
+            found = filter_sets.get_filter_set(request.user, set_id)
+            if _needs_fields([found]):
+                found = filter_sets.get_filter_set(request.user, set_id, fields=_reader_fields(request.user, found["module_id"]))
+            return Response(found)
         except FilterSetError as exc:
             return _error(exc)
 
@@ -76,8 +95,11 @@ class FilterSetDetailView(APIView):
         try:
             data = _body(request, _UPDATE_FIELDS)
             kwargs = dict(data)
+            current = filter_sets.get_filter_set(request.user, set_id)  # a set the person cannot read is 404 here
+            if not current["mine"]:
+                # Before any provider call: a reader's change never reaches the module (and a failing provider cannot turn it into a 502).
+                raise filter_sets.FilterSetPermissionDenied("Only the owner can change this filter set.")
             if "definition" in data:
-                current = filter_sets.get_filter_set(request.user, set_id)
                 kwargs["fields"] = filter_sets.person_fields(request.user, current["module_id"])
             return Response(filter_sets.update_filter_set(request.user, set_id, **kwargs))
         except FilterSetError as exc:

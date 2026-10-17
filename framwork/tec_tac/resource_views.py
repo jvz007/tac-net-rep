@@ -32,6 +32,12 @@ from .session_security import SessionAuthenticated
 
 
 _POLICY_BODY_KEYS = ("workstation_policy_id", "server_policy_id", "block_policy_inheritance")
+# core.resources 1.11.0: the optional compare-and-set guard of a PATCH (never a change by itself)
+_EXPECTED_BODY_KEYS = tuple(f"expected_{key}" for key in _POLICY_BODY_KEYS)
+
+
+def _expected_kwargs(data: dict) -> dict:
+    return {key: data.get(key, UNSET) for key in _EXPECTED_BODY_KEYS}
 
 
 def _error_response(exc: ResourceDirectoryError):
@@ -161,7 +167,7 @@ class ResourceMutableDetailView(ResourceDetailView):
         try:
             context = user_context(request.user)
             if self.resource_type == "client":
-                data = _body(request, {"name", "alert_template_id", *_POLICY_BODY_KEYS})
+                data = _body(request, {"name", "alert_template_id", *_POLICY_BODY_KEYS, *_EXPECTED_BODY_KEYS})
                 if not data:
                     raise ResourceValidationError("At least one of name, alert_template_id, workstation_policy_id, server_policy_id or block_policy_inheritance is required.")
                 if "name" in data and data["name"] is None:
@@ -174,10 +180,11 @@ class ResourceMutableDetailView(ResourceDetailView):
                     workstation_policy_id=data.get("workstation_policy_id", UNSET),
                     server_policy_id=data.get("server_policy_id", UNSET),
                     block_policy_inheritance=data.get("block_policy_inheritance", UNSET),
+                    **_expected_kwargs(data),
                     context=context,
                 ))
             if self.resource_type == "site":
-                data = _body(request, {"name", "client_id", "alert_template_id", *_POLICY_BODY_KEYS})
+                data = _body(request, {"name", "client_id", "alert_template_id", *_POLICY_BODY_KEYS, *_EXPECTED_BODY_KEYS})
                 if not data:
                     raise ResourceValidationError("At least one of name, client_id, alert_template_id, workstation_policy_id, server_policy_id or block_policy_inheritance is required.")
                 return Response(update_site(
@@ -188,6 +195,7 @@ class ResourceMutableDetailView(ResourceDetailView):
                     workstation_policy_id=data.get("workstation_policy_id", UNSET),
                     server_policy_id=data.get("server_policy_id", UNSET),
                     block_policy_inheritance=data.get("block_policy_inheritance", UNSET),
+                    **_expected_kwargs(data),
                     context=context,
                 ))
             raise ResourceValidationError("This resource type is read-only.")

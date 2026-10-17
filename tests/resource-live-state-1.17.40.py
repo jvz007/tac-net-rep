@@ -50,7 +50,7 @@ root = User(Role(superuser=True), superuser=True)
 world()
 ctx = ctx_for(admin)
 CLIENT_TAIL = ("block_policy_inheritance", *LIVE)
-must(resources.CONTRACT_VERSION == "1.10.0", resources.CONTRACT_VERSION)
+must(resources.CONTRACT_VERSION == "1.11.0", resources.CONTRACT_VERSION)
 must(resources.CLIENT_FIELDS[-4:] == CLIENT_TAIL and resources.SITE_FIELDS[-4:] == CLIENT_TAIL, "the live keys come last")
 clients = resources.list_clients(context=ctx)["items"]
 sites = resources.list_sites(context=ctx)["items"]
@@ -204,16 +204,16 @@ must(triple(next(s for s in page if s["name"] == "Bulk 3-0")) == (1, True, NONE)
 
 # ------------------------------------------------------------------------------------------------ the contract text
 meta = resources.resource_contract_metadata()
-must(meta["version"] == "1.10.0" and meta["version"].split(".")[0] == "1", meta["version"])
+must(meta["version"] == "1.11.0" and meta["version"].split(".")[0] == "1", meta["version"])
 must(all(k in meta["resource_types"]["client"]["fields"] and k in meta["resource_types"]["site"]["fields"] for k in LIVE), meta["resource_types"])
 must(not (set(LIVE) & set(meta["resource_types"]["agent"]["fields"])), "agent fields")
 text = meta["failing_checks_agent_count_maintenance_mode"]
 must(all(k in text for k in LIVE) and "1.10.0" in text and "no List agents flag" in text, text)
 must("AD-12" in meta["live_state"] and "hidden site" in meta["live_state"] and "last refresh" in meta["live_state"], meta.get("live_state"))
 registration = resources.register_core_resources_capability()
-must(registration["version"] == "1.10.0", registration["version"])
+must(registration["version"] == "1.11.0", registration["version"])
 doc = (ROOT / "docs" / "resource-directory.md").read_text(encoding="utf-8")
-must("Contract version: `1.10.0`" in doc and "Contract 1.10 (Core 1.17.40" in doc and "#### Live state (since 1.10.0" in doc, "docs header and section")
+must("Contract version: `1.11.0`" in doc and "Contract 1.10 (Core 1.17.40" in doc and "#### Live state (since 1.10.0" in doc, "docs header and section")
 must("OR of the visible sites" in doc and "Stale by design" in doc and "constant number of queries" in doc, "docs scope rule")
 source = (ROOT / "framwork" / "tec_tac" / "contracts.py").read_text(encoding="utf-8")
 for name in ("list_clients", "get_client", "list_sites", "get_site"):

@@ -837,7 +837,9 @@ def verify_event_job_context(context, *, expected_module_id, expected_job_id) ->
 def _audit(action: str, *, module_id: str, job_id: str, key: str = "", attempt: int = 0, error_type: str = "", error: str = "",
            message: str, extra: dict | None = None) -> bool:
     """One Core audit row for an event job outcome. Never the payload, never a secret. Best effort: a failed write is logged.
-    True only when ``audit.record`` returned without raising."""
+    True only when ``audit.record`` returned a dict whose ``recorded`` is exactly True. ``audit.record`` is not strict here, so a write
+    that failed comes back as ``recorded=False`` without raising; that, any other answer and an exception all count as a failure
+    (1.17.51)."""
     try:
         from . import audit
 
@@ -846,11 +848,15 @@ def _audit(action: str, *, module_id: str, job_id: str, key: str = "", attempt: 
             "error": error[: policy.ERROR_MAX_CHARS], "requested_by": REQUESTED_BY,
         }
         metadata.update(extra or {})
-        audit.record(
+        answer = audit.record(
             actor=audit.service_audit_actor(module_id="core", service=ACTOR_SERVICE, identity=job_id), module_id="core", action=action,
             object_type=OBJECT_TYPE, object_id=job_id, message=message, metadata=metadata,
         )
-        return True
+        if isinstance(answer, dict) and answer.get("recorded") is True:
+            return True
+        logger.error("The Core audit row of event job %s was not recorded (%s).", job_id,
+                     answer.get("error", "no confirmation") if isinstance(answer, dict) else "no confirmation")
+        return False
     except Exception:
         logger.exception("The Core audit row of event job %s could not be written.", job_id)
         return False
@@ -1368,8 +1374,10 @@ def event_jobs_contract_metadata() -> dict:
             "retry); the next publish after about 1 second is checked again. A refusal for a foreign caller is counted in memory and sent to "
             "Core's worker in bulk (at most one bounded broker message a minute per process, no Redis call in publish); the worker keeps the "
             "count in the shared cache, and it is reported as one Core audit row (custom:event-job-refused, with the count) per module and job "
-            "once the clock hour ends. A cache flush or fault loses a count, and a process that stops publishing can hold up to one minute "
-            "of counts unsent, so a count is a count and not proof."
+            "once the clock hour ends. The limits: counts wait in the web process's memory until that process's next publish or refusal "
+            "sends them, and are lost if it restarts first; a count that reaches the worker after its hour has already been reported is not "
+            "reported; a cache flush or fault loses a count; so a count is a count and not proof. An audit write that is not confirmed "
+            "(recorded true) is retried by the next tick."
         ),
         "requires_framework": ">=1.17.47",
     }

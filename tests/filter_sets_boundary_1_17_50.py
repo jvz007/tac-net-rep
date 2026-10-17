@@ -168,6 +168,9 @@ def install(real_capabilities: bool = False) -> SimpleNamespace:
             for key, value in kwargs.items():
                 if key == "pk":
                     rows = [r for r in rows if str(r.id) == str(value)]
+                elif key.endswith("__startswith"):  # 1.17.51: the repair step reads view_key__startswith
+                    attr = key[: -len("__startswith")]
+                    rows = [r for r in rows if str(getattr(r, attr)).startswith(value)]
                 else:
                     rows = [r for r in rows if getattr(r, key) == value]
             return QS(rows)

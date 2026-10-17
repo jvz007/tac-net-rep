@@ -8,7 +8,7 @@ cache, which a rollback does not undo, so the script clears the limit keys of th
 each step.
 
 Checks: core.accounts 1.2.0 is registered with check_available; a call from the shell (no module's code on the stack) is refused with
-caller_not_allowed; core.resources 1.10.0 is registered. If the enabled userinvite extension is installed, calls made from a stand-in frame whose
+caller_not_allowed; core.resources 1.11.0 is registered. If the enabled userinvite extension is installed, calls made from a stand-in frame whose
 code file lies in userinvite's own folder: an inviter who holds can_manage_accounts (a real user, found through Core's own permission check) gets
 free, username_taken, email_taken and both, with no audit row and no user; a missing inviter id, an inactive user, an installer user and a user
 without can_manage_accounts get inviter_not_allowed; a bad invited_by_id gets invalid_input; the 31st call inside the window gets rate_limited
@@ -106,14 +106,14 @@ try:
         def capability_registered():
             global accounts_cap
             check(has_capability("core.accounts", version="1.2.0", module_id="core"), "core.accounts 1.2.0 is registered")
-            check(has_capability("core.resources", version="1.10.0", module_id="core"), "core.resources 1.10.0 is registered")
+            check(has_capability("core.resources", version="1.11.0", module_id="core"), "core.resources 1.11.0 is registered")
             accounts_cap = get_capability("core.accounts")
             check(callable(accounts_cap.check_available), "check_available is on the provider")
 
         def shell_refused():
             refused_with("caller_not_allowed", accounts_cap.check_available, "someone", "someone@probe.invalid", 1)
 
-        step("core.accounts 1.2.0 and core.resources 1.10.0 are registered", capability_registered)
+        step("core.accounts 1.2.0 and core.resources 1.11.0 are registered", capability_registered)
         step("check_available refuses a caller with no module's code on the stack", shell_refused)
 
         def shell_service_context_refused():

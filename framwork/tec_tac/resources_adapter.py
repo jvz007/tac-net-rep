@@ -19,7 +19,12 @@ class TacticalResourceAdapterError(RuntimeError):
 
 
 class TacticalResourceConflictError(TacticalResourceAdapterError):
-    pass
+    """A write that Tactical or the compare-and-set guard refused as a conflict. ``code`` is None for the older name conflicts and
+    ``record_changed`` when an expected_* guard no longer matches the locked row (core.resources 1.11.0)."""
+
+    def __init__(self, message: str = "", code: str | None = None):
+        super().__init__(message)
+        self.code = code
 
 
 class TacticalResourceValidationError(TacticalResourceAdapterError):
@@ -791,16 +796,42 @@ def _apply_policy_fields(obj, update_fields: list[str], given: dict[str, Any]) -
         update_fields.append(_POLICY_UPDATE_FIELDS[key])
 
 
+def check_expected(obj, expected: dict[str, Any] | None, label: str) -> None:
+    """The compare of core.resources 1.11.0's optional guard, run on the LOCKED row, before any change is applied.
+
+    ``expected`` maps ``workstation_policy_id`` or ``server_policy_id`` to a whole number (or None for 'must be unset') and
+    ``block_policy_inheritance`` to a bool. A key that is present and differs from the row raises a conflict with the code
+    ``record_changed`` and a plain sentence that names the field and never a value. Nothing has been written at that point."""
+    for key in POLICY_KEYS:
+        if not expected or key not in expected:
+            continue
+        current = getattr(obj, key, None)
+        if key == "block_policy_inheritance":
+            current = bool(current)
+        elif current is not None:
+            try:
+                current = int(current)
+            except (TypeError, ValueError):
+                current = None
+        if current != expected[key]:
+            raise TacticalResourceConflictError(
+                f"The {label}'s {key} changed since it was read, so nothing was saved. Read it again and retry.", code="record_changed",
+            )
+
+
 def update_client_row(*, user, client_id: int, name: str | None = None, alert_template_id: int | None = _NOT_GIVEN,
                       workstation_policy_id: int | None = _NOT_GIVEN, server_policy_id: int | None = _NOT_GIVEN,
-                      block_policy_inheritance: bool = _NOT_GIVEN) -> dict[str, Any] | None:
+                      block_policy_inheritance: bool = _NOT_GIVEN, expected: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """Change a client's name and, since 1.17.17, its alert template (an id or None). Core holds only the field:
     Alerts owns the template list. The write goes through ``obj.save`` so Tactical's own model hook
     (``cache_agents_alert_template``) still runs. A template id that does not exist fails ``full_clean`` through the ForeignKey.
 
     1.17.24: the workstation and server policy ids and ``block_policy_inheritance`` are saved the same way, so Tactical's own
     ``Client.save`` re-caches the alert template and refreshes the policy caches. A policy id that names no policy fails the
-    ForeignKey. Core holds only the ids: Automation owns the policy list."""
+    ForeignKey. Core holds only the ids: Automation owns the policy list.
+
+    1.17.51 (core.resources 1.11.0): ``expected`` is the optional compare-and-set guard, see ``check_expected``. It is judged against
+    the row this transaction has locked, so there is no gap between the compare and the write."""
     Client, _, _ = _models()
     try:
         with transaction.atomic():
@@ -809,6 +840,7 @@ def update_client_row(*, user, client_id: int, name: str | None = None, alert_te
             obj = Client.objects.select_for_update().filter(pk=client_id).first()
             if obj is None:
                 return None
+            check_expected(obj, expected, "client")
             update_fields = []
             if name is not None:
                 obj.name = name
@@ -869,7 +901,8 @@ def site_agent_count(*, site_id: int) -> int:
 
 def update_site_row(*, user, site_id: int, name: str | None = None, client_id: int | None = None,
                     alert_template_id: int | None = _NOT_GIVEN, workstation_policy_id: int | None = _NOT_GIVEN,
-                    server_policy_id: int | None = _NOT_GIVEN, block_policy_inheritance: bool = _NOT_GIVEN) -> dict[str, Any] | None:
+                    server_policy_id: int | None = _NOT_GIVEN, block_policy_inheritance: bool = _NOT_GIVEN,
+                    expected: dict[str, Any] | None = None) -> dict[str, Any] | None:
     Client, Site, _ = _models()
     try:
         with transaction.atomic():
@@ -878,6 +911,7 @@ def update_site_row(*, user, site_id: int, name: str | None = None, client_id: i
             obj = Site.objects.select_for_update().filter(pk=site_id).first()
             if obj is None:
                 return None
+            check_expected(obj, expected, "site")  # core.resources 1.11.0: on the locked row, before a move or any other change
             update_fields: list[str] = []
             if name is not None and name != obj.name:
                 obj.name = name

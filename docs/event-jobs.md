@@ -180,8 +180,10 @@ hour and count), also from the Scheduler tick's counter flush, so counts do not 
 the buffer and the next minute tries again. The worker task `tec_tac.note_event_job_refusals` checks every entry (known job, an hour in the last 3
 hours, an integer count clamped to 1..100000) and adds it to Django's shared cache (Redis on a Tactical server). It is Core-internal, not a module
 contract. There is no database column and no migration. The limits, stated plainly: a cache flush, a restart or a cache fault loses that hour's
-count (a count is a count, not proof); a process that stops publishing can hold up to one minute of counts unsent; a failed audit write is
-retried on the next tick within the two hour look-back. The tick reads only the shared cache and the in-memory buffer is never read, so with a
+count (a count is a count, not proof); counts wait in the web process's memory until that process's next publish or refusal sends them, and are
+lost if it restarts first; a count that reaches the worker after its hour has already been reported is not reported; an audit write counts as
+done only when `audit.record` answers `recorded: true` (1.17.51), so a write that was not confirmed releases the claim and the next tick, within
+the two hour look-back, writes one row with the full count. The tick reads only the shared cache and the in-memory buffer is never read, so with a
 per-process cache (local development) the tick only sees its own process's tally. A caller that could not be verified (the module list or state could
 not be read) is not a refusal and writes no row.
 

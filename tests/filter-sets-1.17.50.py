@@ -719,7 +719,7 @@ for needle in ("context.scope", "scope mode is none", "without calling the provi
 sets_contract = json.dumps(DETAILS["/api/tfd/filter-sets/"]) + json.dumps(DETAILS["/api/tfd/filter-sets/<uuid:set_id>/"])
 for status in ('"201"', '"204"', '"400"', '"403"', '"404"', '"409"', '"422"', '"429"', '"500"', '"502"'):
     must(status in sets_contract, f"filter-sets documents {status}")
-for needle in ("never a rule value or a reader id", "custom:filter-set-share", "60/min and 2000/day", "owner only", "rule value is visible to everyone the set is shared with"):
+for needle in ("never a rule value or a reader id", "custom:filter-set-share", "60/min and 2000/day", "owner only", "withheld: true"):  # 1.17.51: the visible-to-everyone sentence became the withholding rule
     must(needle in sets_contract, f"filter-sets names {needle!r}")
 must(any("Filter sets and value pickers belong to Core's filter-sets service" in r and "never takes field names, lookups, SQL or regular expressions" in r for r in RULES), "the RULES line")
 saved_post = DETAILS["/api/tfd/saved-views/"]["POST"]["request"]["view_key"]
@@ -744,13 +744,16 @@ for cls, rate in (("FilterValuesMinThrottle", "240/min"), ("FilterSetWriteMinThr
     must(re.search(rf"class {cls}\(.*?rate = \"{re.escape(rate)}\"", throttles_src, re.S), cls)
 openapi_src = (SRC / "openapi.py").read_text(encoding="utf-8")
 must('"tec_tac.filter_set_views": "Tec-Tac · Filter Sets"' in openapi_src and '("/api/tfd/filter-sets/", "Tec-Tac · Filter Sets")' in openapi_src and '("/api/tfd/filter-values/", "Tec-Tac · Filter Sets")' in openapi_src)
-must((ROOT / "VERSION").read_text(encoding="utf-8").strip() == "1.17.50")
-must(json.loads((ROOT / "tec_tac_package.json").read_text(encoding="utf-8"))["version"] == "1.17.50")
-must((ROOT / "RELEASE_NOTES_1.17.50.md").is_file() and (ROOT / "docs" / "filter-sets.md").is_file())
-notes = (ROOT / "RELEASE_NOTES_1.17.50.md").read_text(encoding="utf-8")
+must(tuple(int(p) for p in (ROOT / "VERSION").read_text(encoding="utf-8").strip().split(".")) >= (1, 17, 50))  # 1.17.51: at least 1.17.50
+must(tuple(int(p) for p in json.loads((ROOT / "tec_tac_package.json").read_text(encoding="utf-8"))["version"].split(".")) >= (1, 17, 50))
+NOTES_50 = ROOT / "RELEASE_NOTES_1.17.50.md"
+if not NOTES_50.is_file():
+    NOTES_50 = ROOT / "docs" / "releases" / "RELEASE_NOTES_1.17.50.md"  # moved there by 1.17.51
+must(NOTES_50.is_file() and (ROOT / "docs" / "filter-sets.md").is_file())
+notes = NOTES_50.read_text(encoding="utf-8")
 must("Module-facing changes" in notes and "Requests closed" in notes)
 docs = (ROOT / "docs" / "filter-sets.md").read_text(encoding="utf-8")
-for needle in ("Not in this release", "Number and date ranges", "scope duty", "from_legacy_formula", "custom:filter-set-share", "visible to the people a set is shared with",
+for needle in ("Not in this release", "Number and date ranges", "scope duty", "from_legacy_formula", "custom:filter-set-share", "What a reader sees of a shared set's values",
                "Never a rule value, never a reader id", "`fs-`", ">=1.17.50"):
     must(needle in docs, f"docs/filter-sets.md names {needle!r}")
 

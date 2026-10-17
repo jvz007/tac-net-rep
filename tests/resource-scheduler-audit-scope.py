@@ -91,7 +91,7 @@ ns = {
 ns['_clean_resource_name'] = lambda value, kind: str(value).strip()
 ns['LIVE_FIELDS'] = ('failing_checks', 'agent_count', 'maintenance_mode')  # 1.17.40
 ns['POLICY_FIELDS'] = ('workstation_policy_id', 'server_policy_id', 'block_policy_inheritance')
-for name in ('_clean_nullable_id', '_clean_alert_template_id', '_clean_block_policy_inheritance', '_policy_changes', '_policy_changed', '_template_changed', '_clean_custom_fields', '_custom_field_ids', '_audit_view'):  # helpers of the writes
+for name in ('_clean_nullable_id', '_clean_alert_template_id', '_clean_block_policy_inheritance', '_policy_changes', '_expected_guard', '_policy_changed', '_template_changed', '_clean_custom_fields', '_custom_field_ids', '_audit_view'):  # helpers of the writes
     ns[name] = compile_function(resources_path, name, ns)
 for name in ('create_client','update_client','create_site','update_site'):
     ns[name] = compile_function(resources_path, name, ns)

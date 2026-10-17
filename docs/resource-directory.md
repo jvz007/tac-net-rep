@@ -1,7 +1,7 @@
 # Core Resource Directory
 
 Contract ID: `core.resources`  
-Contract version: `1.10.0`  
+Contract version: `1.11.0`  
 Python namespace: `tec_tac.resources`
 
 ## Purpose
@@ -23,6 +23,8 @@ tec_tac.resources           <- stable public contract
         +-- Reporting
         +-- Alerts / Automation / other modules
 ```
+
+Contract 1.11 (Core 1.17.51, additive, still major 1) lets `update_client` and `update_site` take an optional compare-and-set guard: `expected_workstation_policy_id`, `expected_server_policy_id` and `expected_block_policy_inheritance`. A call without a guard behaves exactly as before. See "Compare-and-set guard (since 1.11.0)".
 
 Contract 1.10 (Core 1.17.40, additive, still major 1) adds `failing_checks`, `agent_count` and `maintenance_mode` to client and site records, read only and counted inside the caller's scope. Existing keys, keywords, paging and error codes do not change. See "Live state (since 1.10.0)".
 
@@ -182,10 +184,10 @@ Core computes the descriptor once in the adapter, from the same rule that Schedu
 ### Client/site write operations
 
 - `create_client(name=..., context=..., site_name=None, custom_fields=None)`
-- `update_client(client_id, name=None, alert_template_id=UNSET, workstation_policy_id=UNSET, server_policy_id=UNSET, block_policy_inheritance=UNSET, context=...)`
+- `update_client(client_id, name=None, alert_template_id=UNSET, workstation_policy_id=UNSET, server_policy_id=UNSET, block_policy_inheritance=UNSET, expected_workstation_policy_id=UNSET, expected_server_policy_id=UNSET, expected_block_policy_inheritance=UNSET, context=...)`
 - `delete_client(client_id, move_to_site_id=None, context=...)`
 - `create_site(client_id=..., name=..., context=..., custom_fields=None)`
-- `update_site(site_id, name=None, client_id=None, alert_template_id=UNSET, workstation_policy_id=UNSET, server_policy_id=UNSET, block_policy_inheritance=UNSET, context=...)`
+- `update_site(site_id, name=None, client_id=None, alert_template_id=UNSET, workstation_policy_id=UNSET, server_policy_id=UNSET, block_policy_inheritance=UNSET, expected_workstation_policy_id=UNSET, expected_server_policy_id=UNSET, expected_block_policy_inheritance=UNSET, context=...)`
 - `delete_site(site_id, move_to_site_id=None, context=...)`
 - `list_custom_fields(resource_type, resource_id, context=...)`
 - `update_custom_fields(resource_type, resource_id, values=[...], context=...)`
@@ -224,6 +226,20 @@ A client and a site each carry a workstation policy, a server policy and a "bloc
 - The write rule is the same as a rename: Tactical `can_manage_clients` or `can_manage_sites`, the Core resources permission, and the client or site write scope. Core does not ask for `can_manage_automation_policies`, because Tactical's own client and site `PUT` check only the manage-clients and manage-sites flags. A policy then pushes its checks, tasks and scripts to every endpoint under the client or site, so the audit row names the ids.
 - The write goes through Tactical's model save (`update_fields` include `workstation_policy`, `server_policy`, `block_policy_inheritance`, `modified_by`), so Tactical's own refresh of the agents' alert template and policy caches still runs.
 - The strict audit row carries before and after records (the new fields are in them) and the metadata `policy_changed`: the names of the fields whose value changed (ids only, never a policy name). A call that changes nothing writes no row.
+
+#### Compare-and-set guard (since 1.11.0, Core 1.17.51)
+
+A caller that read a client or site and now writes a policy field can ask Core to refuse the write when someone else changed the record in between. This is what Automation's "Remove from policy", "Assign client or site" and "Edit policies" need, so two people editing at once never overwrite each other silently.
+
+- `update_client` and `update_site` take `expected_workstation_policy_id` and `expected_server_policy_id` (a positive whole number, or `None` for "must be unset") and `expected_block_policy_inheritance` (a real `True` or `False`). All default to `UNSET`, which leaves a field out of the compare. A policy id may also arrive as digits in text, as for the policy fields.
+- `PATCH /api/tfd/resources/clients/<id>/` and `/sites/<id>/` accept the same three keys in the body.
+- The compare runs inside the adapter's write transaction, on the row that transaction has locked (`select_for_update`), before a move or any other change. There is no gap between the read and the write.
+- When a guard key is sent and the locked record holds another value: nothing is written, no audit row is written, and the answer is `409` with `code: "record_changed"` and a plain sentence that names the field and never a value. In Python the call raises `ResourceConflict`, and its `code` is `record_changed` (the other conflicts keep `resource_conflict`).
+- A guard alone is not a change. With no `name`, `client_id`, `alert_template_id` or policy field the call is still `400`. A bad guard value (a bool for an id, text for the flag, zero, a fraction) is `400`.
+- A matching guard with a change that changes nothing writes no audit row, as before. A call with no guard key behaves exactly as before.
+- There is no guard for the name or the alert template. Nothing asked for one.
+- A site call judges the guard together with a move in the same call: a stale guard moves nothing. A same-client `client_id` is not a shortcut past the compare when a guard is given.
+- Needs framework >=1.17.51. Feature-detect with `core.resources >= 1.11.0`. `install.sh` accepts any 1.x from 1.1.0, so it needs no change.
 
 #### Live state (since 1.10.0, Core 1.17.40)
 
@@ -351,7 +367,7 @@ Update payloads accept only writable fields. Unknown fields are rejected. Agent 
 {"alert_template_id": 7}
 ```
 
-`PATCH /api/tfd/resources/clients/<id>/` accepts `name`, `alert_template_id`, `workstation_policy_id`, `server_policy_id`, `block_policy_inheritance` or any of them (at least one). `PATCH /api/tfd/resources/sites/<id>/` accepts the same plus `client_id`. `null` clears a template or policy id. `block_policy_inheritance` takes only `true` or `false`.
+`PATCH /api/tfd/resources/clients/<id>/` accepts `name`, `alert_template_id`, `workstation_policy_id`, `server_policy_id`, `block_policy_inheritance` or any of them (at least one). `PATCH /api/tfd/resources/sites/<id>/` accepts the same plus `client_id`. `null` clears a template or policy id. `block_policy_inheritance` takes only `true` or `false`. Since 1.11.0 both also accept the guard keys `expected_workstation_policy_id`, `expected_server_policy_id` and `expected_block_policy_inheritance`; a stale one answers `409` with `record_changed` and writes nothing.
 
 ### Role client and site lists (since Core 1.17.22)
 
@@ -408,6 +424,8 @@ If Tactical later changes model/table/field layout, update the Core adapter whil
 `core.resources` follows semantic contract versioning.
 
 Contract `1.1.0` is additive over `1.0.0`: it preserves all read operations and resource shapes while adding client/site create/update operations, write authorization metadata and stable conflict errors. A Tactical internal schema change alone is not a reason to change this contract version.
+
+Contract `1.11.0` (Core 1.17.51) is additive over `1.10.0`: `update_client` and `update_site` gain three optional keywords (the compare-and-set guard), `ResourceConflict` gains a `code` argument (`record_changed`), and the two PATCH routes accept the same three keys. No record, route or earlier error changed. Needs framework >=1.17.51.
 
 Contract `1.10.0` (Core 1.17.40) is additive over `1.9.0`: client and site records gain `failing_checks`, `agent_count` and `maintenance_mode` (appended last). No keyword, route or error changed. Needs framework >=1.17.40.
 
