@@ -270,3 +270,22 @@ def record_backup_code_password_failure(username: object) -> None:
 
 def reset_backup_code_password_failures(username: object) -> None:
     _bucket_clear("login-password-failure", _username_token(username))
+
+
+class FilterValuesMinThrottle(_AuthenticatedAttemptThrottle):
+    """Core 1.17.50: the filter fields and distinct-values reads (GET /api/tfd/filter-sets/fields/ and /api/tfd/filter-values/)."""
+
+    scope = "tec_tac_filter_values_min"
+    rate = "240/min"
+
+
+class FilterSetWriteMinThrottle(_WriteOnlyThrottle):
+    """Core 1.17.50: changes to a filter set. Reads are not counted. Same limits as saved views."""
+
+    scope = "tec_tac_filter_set_write_min"
+    rate = "60/min"
+
+
+class FilterSetWriteDayThrottle(_WriteOnlyThrottle):
+    scope = "tec_tac_filter_set_write_day"
+    rate = "2000/day"

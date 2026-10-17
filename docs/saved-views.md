@@ -10,7 +10,7 @@ Saved views let a person keep a named set of filters and layout and come back to
 |---|---|
 | `id` | UUID, set by Core |
 | `module_id` | The module that owns the view. `core` or an installed, enabled module |
-| `view_key` | Which screen or list the view belongs to. A lowercase slug (`a-z`, `0-9`, `-`, `_`), up to 64 characters |
+| `view_key` | Which screen or list the view belongs to. A lowercase slug (`a-z`, `0-9`, `-`, `_`), up to 64 characters. A key that starts with `fs-` is reserved for Core filter sets (1.17.50): saved views refuse it, never list it and never change a row under it. See `docs/filter-sets.md` |
 | `name` | 1 to 160 characters. Unique for one owner, module and `view_key` |
 | `payload` | A JSON object, up to 64 KiB |
 | `owner` | The user who created it. Set by Core, never taken from the request |

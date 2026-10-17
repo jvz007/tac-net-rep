@@ -68,6 +68,15 @@ class TecTacFrameworkConfig(AppConfig):
         except Exception:
             logger.exception("Tec-Tac core.event_jobs capability registration failed")
 
+        # 1.17.50: core.filter_sets (universal filters: vocabulary, validator, evaluators, saved filter sets). Guarded like core.event_jobs:
+        # a fault here never aborts start-up, and a module that finds no capability (has_capability) offers no filters.
+        try:
+            from .filter_sets import register_core_filter_sets_capability
+
+            register_core_filter_sets_capability()
+        except Exception:
+            logger.exception("Tec-Tac core.filter_sets capability registration failed")
+
         # Tactical's native role/account editors can otherwise grant effective
         # superuser authority to mid-level managers. Install the Core-owned,
         # authenticated mutation guard without modifying upstream Tactical code.

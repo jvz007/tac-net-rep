@@ -41,7 +41,7 @@ row = BROWSER[ids.index("ui.authenticated.components")]
 
 # shape
 must(row["phase"] == "authenticated" and row["service"] == "components", (row["phase"], row["service"]))
-must(row["operations"] == ["SearchSelect", "TagEditor"], row["operations"])
+must(row["operations"][:2] == ["SearchSelect", "TagEditor"], row["operations"])  # 1.17.50: the kit (DataTable, FormRow, EditorWindow, Stepper) follows these two
 must(row["audience"] == "module/browser", row["audience"])
 must(re.fullmatch(r"tec-tac-ui/docs/[A-Za-z0-9._-]+\.md", row["docs"]), f"docs is a plain path: {row['docs']!r}")
 must(row["docs"] == "tec-tac-ui/docs/module-components.md", row["docs"])

@@ -48,6 +48,7 @@ expected = {
     'ui.authenticated.dialogs',  # added 1.17.44 (UI 0.12.112)
     'ui.authenticated.signInLanding',  # added 1.17.44 (UI 0.12.112)
     'ui.authenticated.rowMenu',  # added 1.17.44 (UI 0.12.112)
+    'ui.authenticated.styleTokens',  # added 1.17.50 (UI 0.12.114)
     'ui.authenticated.permissions',
     'ui.public.sso-providers',
     'ui.public.module-runtime',

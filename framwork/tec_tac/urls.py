@@ -14,6 +14,7 @@ from .session_security_views import (
 from .dashboard_views import DashboardListCreateView, DashboardDetailView
 from .runtime_settings import RuntimeSettingsView, UpdateSourceView
 from .saved_view_views import SavedViewListCreateView, SavedViewDetailView
+from .filter_set_views import FilterSetListCreateView, FilterSetDetailView, FilterSetFieldsView, FilterValuesView
 from .preference_views import UserPreferencesView
 from .module_preference_views import ModulePreferenceDetailView, ModulePreferenceListView
 from .notice_views import NoticeListCreateView, NoticeReadView, NoticeReadAllView, NoticeClearReadView
@@ -77,6 +78,10 @@ urlpatterns = [
     path("dashboards/<uuid:dashboard_id>/", DashboardDetailView.as_view(), name="tec-tac-dashboard-detail"),
     path("saved-views/", SavedViewListCreateView.as_view(), name="tec-tac-saved-views"),
     path("saved-views/<uuid:view_id>/", SavedViewDetailView.as_view(), name="tec-tac-saved-view-detail"),
+    path("filter-sets/", FilterSetListCreateView.as_view(), name="tec-tac-filter-sets"),
+    path("filter-sets/fields/", FilterSetFieldsView.as_view(), name="tec-tac-filter-set-fields"),
+    path("filter-sets/<uuid:set_id>/", FilterSetDetailView.as_view(), name="tec-tac-filter-set-detail"),
+    path("filter-values/", FilterValuesView.as_view(), name="tec-tac-filter-values"),
     path("contracts/", ContractCatalogView.as_view(), name="tec-tac-contracts"),
     path("contracts/export/", ContractExportView.as_view(), name="tec-tac-contract-export"),
     path("resources/custom-fields/", ResourceCustomFieldDefinitionsView.as_view(), name="tec-tac-resource-custom-field-definitions"),

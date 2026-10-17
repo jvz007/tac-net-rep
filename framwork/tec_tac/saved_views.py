@@ -34,6 +34,9 @@ MAX_VIEWS_PER_KEY = 100
 MAX_NAME_LENGTH = 160
 MAX_VIEW_KEY_LENGTH = 64
 MAX_LIST_ROWS = 500
+# 1.17.50: Core filter sets (tec_tac.filter_sets) are stored on this table under view keys that start with this prefix. The saved
+# views service neither creates nor lists nor changes them, so a filter set only ever changes through its own validated, audited path.
+RESERVED_VIEW_KEY_PREFIX = "fs-"
 
 _VIEW_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _UNSET = object()
@@ -102,6 +105,8 @@ def _clean_view_key(value: Any) -> str:
         raise SavedViewValidationError(
             f"view_key must be a lowercase slug of letters, digits, '-' or '_', up to {MAX_VIEW_KEY_LENGTH} characters."
         )
+    if value.startswith(RESERVED_VIEW_KEY_PREFIX):
+        raise SavedViewValidationError(f"view_key may not start with {RESERVED_VIEW_KEY_PREFIX!r}: that prefix is reserved for Core filter sets.")
     return value
 
 
@@ -189,7 +194,7 @@ def _load(user, view_id: Any):
     except (ValueError, AttributeError, TypeError):
         raise SavedViewNotFound("Saved view not found.") from None
     view = TecTacSavedView.objects.select_related("owner").filter(pk=wanted).first()
-    if view is None or not _can_read(user, view):
+    if view is None or str(view.view_key).startswith(RESERVED_VIEW_KEY_PREFIX) or not _can_read(user, view):
         raise SavedViewNotFound("Saved view not found.")
     return view
 
@@ -260,6 +265,8 @@ def list_views(user, module_id: Any, view_key: Any = None) -> list[dict[str, Any
     rows = TecTacSavedView.objects.select_related("owner").filter(**filters).order_by("name", "id")
     out = []
     for view in rows:
+        if str(view.view_key).startswith(RESERVED_VIEW_KEY_PREFIX):
+            continue
         if _can_read(user, view):
             out.append(serialize_view(view, user))
             if len(out) >= MAX_LIST_ROWS:
