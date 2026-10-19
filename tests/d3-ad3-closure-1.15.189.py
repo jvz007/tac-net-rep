@@ -39,9 +39,9 @@ server_backup = (ROOT / "framwork" / "tec_tac" / "server_backup.py").read_text(e
 install = (ROOT / "install.sh").read_text(encoding="utf-8")
 doc = (ROOT / "docs" / "server-backup-capability.md").read_text(encoding="utf-8")
 
-assert 'CAPABILITY_VERSION = "1.10.0"' in server_backup
+assert 'CAPABILITY_VERSION = "1.11.0"' in server_backup
 assert "version='>=1.6.0,<2.0.0'" in install
-assert "capability version 1.10.0" in doc
+assert "capability version 1.11.0" in doc
 assert "created_at" in doc and "core_version" in doc and "hash_file" in doc
 assert "recovery_signer.key_id" not in doc
 

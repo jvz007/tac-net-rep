@@ -212,16 +212,16 @@ def test_registration_and_versions() -> None:
     sb._PROVIDER.health = lambda: {"healthy": True}
     try:
         registration = sb.register_core_server_backup_capability()
-        assert registration.version == "1.10.0"
+        assert registration.version == "1.11.0"
         assert capabilities.get_capability("core.server_backup", version=">=1.6.0,<2.0.0") is PROVIDER
         operations = set(registration.operations)
         old = {"create_backup", "get_job_status", "list_backups", "restore_backup", "apply_retention", "validate_destination", "validate_restore", "store_secret", "delete_secret"}
-        new = {"start_create_backup", "start_validate_restore", "start_validate_destination", "start_list_backups", "start_restore_backup", "get_status"}
+        new = {"start_create_backup", "start_validate_restore", "start_validate_destination", "start_list_backups", "start_restore_backup", "get_status", "start_get_status", "start_apply_retention"}
         assert old <= operations and new <= operations and operations == old | new, operations
         for name in operations:
             assert callable(getattr(PROVIDER, name)), name
         meta = registration.metadata
-        assert meta["dangerous_operations"] == ["restore_backup", "start_restore_backup"]
+        assert meta["dangerous_operations"] == ["restore_backup", "start_restore_backup", "start_apply_retention"]
     finally:
         sb._PROVIDER.health = saved
         capabilities._clear_capabilities_for_tests()
@@ -269,4 +269,4 @@ if __name__ == "__main__":
     test_compatibility_waiting_operations_unchanged()
     test_registration_and_versions()
     test_get_status_core_side_and_health_untouched()
-    print("[TEST] PASS core.server_backup 1.10.0 non-waiting operations and compatibility")
+    print("[TEST] PASS core.server_backup non-waiting operations and compatibility")

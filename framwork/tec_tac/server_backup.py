@@ -21,7 +21,7 @@ from .capabilities import register_capability
 from .config import load_layout
 
 CAPABILITY_ID = "core.server_backup"
-CAPABILITY_VERSION = "1.10.0"
+CAPABILITY_VERSION = "1.11.0"
 HELPER = Path("/usr/local/sbin/tec-tac-server-backup")
 DEFAULT_STATE_ROOT = Path("/var/lib/tec-tac/server-backup")
 TERMINAL_STATES = {"succeeded", "failed", "dispatch_failed"}
@@ -482,9 +482,17 @@ class ServerBackupProvider:
 
     def get_status(self, *, destinations: list[dict] | None = None, context: dict) -> dict:
         """Read-only: free space per local destination and Tactical's own backup cron entry."""
-        return _run("get_status", {"destinations": _validate_destinations(destinations)}, context=context)
+        return _run("get_status", self._status_request(destinations), context=context)
 
-    def apply_retention(self, *, policies: list[dict], context: dict) -> dict:
+    def start_get_status(self, *, destinations: list[dict] | None = None, context: dict) -> dict:
+        return _start("get_status", self._status_request(destinations), context=context, nonwaiting=True)
+
+    @staticmethod
+    def _status_request(destinations) -> dict:
+        return {"destinations": _validate_destinations(destinations)}
+
+    @staticmethod
+    def _retention_request(policies) -> dict:
         if not isinstance(policies, list):
             raise ServerBackupError("policies must be a list.")
         normalized = []
@@ -511,7 +519,13 @@ class ServerBackupProvider:
                     raise ServerBackupError(f"{key} must be between 0 and 10000.")
                 policy[key] = value
             normalized.append(policy)
-        return _run("apply_retention", {"policies": normalized}, context=context)
+        return {"policies": normalized}
+
+    def apply_retention(self, *, policies: list[dict], context: dict) -> dict:
+        return _run("apply_retention", self._retention_request(policies), context=context)
+
+    def start_apply_retention(self, *, policies: list[dict], context: dict) -> dict:
+        return _start("apply_retention", self._retention_request(policies), context=context, nonwaiting=True)
 
     def store_secret(self, *, secret: dict, destination: dict | None = None, context: dict) -> str:
         if not isinstance(secret, dict) or not secret:
@@ -628,9 +642,11 @@ def register_core_server_backup_capability():
             "start_list_backups",
             "start_restore_backup",
             "get_status",
+            "start_get_status",
+            "start_apply_retention",
         ),
         metadata={
-            "dangerous_operations": ["restore_backup", "start_restore_backup"],
+            "dangerous_operations": ["restore_backup", "start_restore_backup", "start_apply_retention"],
             "destination_types": sorted(DESTINATION_TYPES),
             "backup_classes": sorted(BACKUP_CLASSES),
             "recovery_modes": ["full", "tactical", "tec_tac"],

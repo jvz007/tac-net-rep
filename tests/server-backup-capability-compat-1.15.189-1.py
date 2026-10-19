@@ -16,7 +16,7 @@ old_health = server_backup._PROVIDER.health
 server_backup._PROVIDER.health = lambda: {"healthy": True}
 try:
     registration = server_backup.register_core_server_backup_capability()
-    assert registration.version == "1.10.0", registration.version
+    assert registration.version == "1.11.0", registration.version
     provider = capabilities.get_capability(
         "core.server_backup",
         version=">=1.6.0,<2.0.0",

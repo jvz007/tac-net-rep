@@ -37,7 +37,7 @@ Tec-Tac Core exposes one narrow privileged recovery contract:
 
 ```text
 core.server_backup
-capability version 1.10.0
+capability version 1.11.0
 
 AD-3 keeps the capability on the 1.x compatibility line. The Backups module already consumes the stable operations and does not depend on the removed recovery-signer fields; the new archive hash and source-identity fields are additive for that consumer. Capability version 1.10.0 lets existing consumers pinned to `>=1.6.0,<2.0.0` continue to resolve the provider.
 ```
@@ -425,3 +425,25 @@ Every existing field and every short reason text stays. The result also carries 
 ### Retention and manual archives
 
 A `manual` archive counts as `unclassified` for retention and is kept or deleted by `keep_unclassified`. A policy without `keep_unclassified` still keeps 10000.
+
+## Non-waiting retention and status (1.11.0)
+
+Capability version 1.11.0 is additive. Every earlier operation, argument and response field stays. Backups pins `>=1.6.0,<2.0.0`, so it still resolves. A module that uses the two operations below pins `>=1.11.0,<2.0.0`.
+
+```text
+start_get_status        start_apply_retention
+```
+
+Each takes exactly the arguments of its waiting twin (`get_status`, `apply_retention`), runs the same argument checks with the same error text, and returns at once:
+
+```python
+{"job_id": "<uuid>", "status": "queued", "action": "get_status"}  # or "apply_retention"
+```
+
+Read the outcome with `get_job_status(job_id=...)`. The result rule of 1.10.0 applies: the job carries `"nonwaiting": true`, so `result` comes back scrubbed, for failed jobs too.
+
+- `start_get_status(destinations=None, context=...)` needs the 1.17.54 helper. An older helper refuses the job and the job fails. Nothing else is affected.
+- `start_apply_retention(policies, context=...)` takes the policy list of `apply_retention`. A policy without `keep_unclassified` still keeps 10000. A `manual` archive counts as unclassified since 1.17.54, so retention deletes an old `manual` archive beyond `keep_unclassified`.
+- `start_apply_retention` deletes archives. It is listed under `dangerous_operations` next to `restore_backup` and `start_restore_backup`. It adds no authority: the calling module keeps its own role check, its own plan guards and its own confirmation.
+- The waiting `get_status` (120 s) and `apply_retention` (7200 s) are unchanged.
+- Core publishes no helper version. For `validate_destination`, a missing `stage` in the result is the only sign of a helper older than 1.17.54.
