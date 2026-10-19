@@ -60,7 +60,7 @@ class QS:
         if started_not_null is False:
             rows = [x for x in rows if x.started_at is not None]
         return QS(rows)
-    def select_for_update(self):
+    def select_for_update(self, of=None):
         return self
     def only(self, *fields):
         return self

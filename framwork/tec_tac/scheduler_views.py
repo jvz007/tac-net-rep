@@ -413,7 +413,7 @@ class SchedulerDetailView(APIView):
         force = str(request.query_params.get("force") or "").strip().lower() in {"1", "true", "yes", "on"}
         with transaction.atomic():
             schedule = get_object_or_404(
-                TecTacSchedule.objects.select_for_update().select_related("created_by", "updated_by"), pk=schedule_id
+                TecTacSchedule.objects.select_for_update(of=("self",)).select_related("created_by", "updated_by"), pk=schedule_id
             )
             _require_user_managed(schedule)
             _require_action(request.user, schedule.action_id, allow_unregistered_manager=True)

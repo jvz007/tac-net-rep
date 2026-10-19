@@ -104,7 +104,7 @@ def execute_schedule_run(self, run_id: str):
     # twice, and a stale-recovery decision must not be overwritten by a late task.
     with transaction.atomic():
         try:
-            run = TecTacScheduleRun.objects.select_for_update().select_related("schedule").get(pk=run_id)
+            run = TecTacScheduleRun.objects.select_for_update(of=("self",)).select_related("schedule").get(pk=run_id)
         except TecTacScheduleRun.DoesNotExist:
             return "run missing"
         if run.status != TecTacScheduleRun.Status.QUEUED:

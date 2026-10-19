@@ -236,7 +236,7 @@ assert "created_at__lt" in keys
 # If strict audit fails, the schedule must not be deleted; on success the audit
 # must be strict and precede deletion.
 class FakeRuns:
-    def select_for_update(self): return self
+    def select_for_update(self, of=None): return self
     def filter(self, **kwargs): return []
 class FakeSchedule:
     pk = "sched-1"
@@ -246,7 +246,7 @@ class FakeSchedule:
     deleted = False
     def delete(self): self.deleted = True
 class FakeScheduleManager:
-    def select_for_update(self): return self
+    def select_for_update(self, of=None): return self
     def select_related(self, *args): return self
 class ScheduleModel:
     objects = FakeScheduleManager()

@@ -64,7 +64,7 @@ class Query(list):
     def filter(self, **kw):
         return Query(r for r in self if match(r, kw))
 
-    def select_for_update(self):
+    def select_for_update(self, of=None):
         return self
 
     def select_related(self, *a):
@@ -98,7 +98,7 @@ class Manager:
     def filter(self, **kw):
         return Query(r for r in self.rows if match(r, kw))
 
-    def select_for_update(self):
+    def select_for_update(self, of=None):
         return Query(self.rows)
 
     def create(self, **kw):
