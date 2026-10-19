@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.56",
+  "version": "1.17.57",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.17.56.md",
-      "size": 4568,
-      "sha256": "ae10f732c38e8dac61dbb6d72977467aec8def97ff74e98240ee694a5bcef4b1"
+      "path": "RELEASE_NOTES_1.17.57.md",
+      "size": 3906,
+      "sha256": "5758634dbd0963bc047448de79fcf23e3acb94f0a6bb7831b26dd5a9e7136023"
     },
     {
       "path": "VERSION",
       "size": 7,
-      "sha256": "bf66ac9c37cc1fa6105962d32bd46c49f9f8b3ba43372ee0885c891d882fa710"
+      "sha256": "68056e563f83f8669ed4c04b13d5ac1d5f29128867d15cb5db09697e627f5aa4"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -1327,6 +1327,11 @@
       "sha256": "14594a0895d61fe1020331c76bc5ae20d825b57d00d73968d92d1670bc225c48"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.56.md",
+      "size": 4568,
+      "sha256": "ae10f732c38e8dac61dbb6d72977467aec8def97ff74e98240ee694a5bcef4b1"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.6.md",
       "size": 5908,
       "sha256": "ea9db558a822a993573bacd967e5b36f280d5102bd880f5ee503b7709e2145cf"
@@ -2479,7 +2484,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "22b770c3cf5649029ae7de2e0780aa6461d05bb4996b31fdbba6e482cf46d323"
+      "sha256": "97fde7f89c75216539814f7534dca3b3efd4d5888ad118c24b3b7f4e5926779a"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2855,6 +2860,11 @@
       "path": "tests/dashboard-foundation.sh",
       "size": 1911,
       "sha256": "5b9804e9c1907b2640a65debedbb162f7111e112ee97eecbf4fb1536a4c5c3a9"
+    },
+    {
+      "path": "tests/decision-record-ad40-winupdatepolicy-1.17.57.py",
+      "size": 2976,
+      "sha256": "9be4cb9aec07db60018bc3e47849fbb04081c77298b32bfaed22a0f17c74ed26"
     },
     {
       "path": "tests/default-repository-1.17.42.py",
@@ -4173,8 +4183,8 @@
     },
     {
       "path": "tests/server-backup-start-retention-status-1.17.56.py",
-      "size": 9765,
-      "sha256": "29bcaf7b2ceeb5288f3c586fc8f6be8f01027948810489eb34192017c6e7f1b7"
+      "size": 10340,
+      "sha256": "207666ceb6406f337d53072e94d9bf58509adc23d458ab1c1d8b341e97dd9293"
     },
     {
       "path": "tests/server-backup-status-1.17.54.py",

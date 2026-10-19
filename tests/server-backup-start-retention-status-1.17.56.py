@@ -216,10 +216,15 @@ def test_registration_and_compatibility() -> None:
 def test_docs_and_notes() -> None:
     doc = (ROOT / "docs" / "server-backup-capability.md").read_text(encoding="utf-8")
     assert "Non-waiting retention and status (1.11.0)" in doc and "start_apply_retention" in doc and "start_get_status" in doc
-    notes = (ROOT / "RELEASE_NOTES_1.17.56.md").read_text(encoding="utf-8")
+    notes_path = ROOT / "docs" / "releases" / "RELEASE_NOTES_1.17.56.md"  # moved there by 1.17.57
+    if not notes_path.exists():
+        notes_path = ROOT / "RELEASE_NOTES_1.17.56.md"
+    notes = notes_path.read_text(encoding="utf-8")
     assert "Module-facing change" in notes and ">=1.11.0" in notes
-    assert (ROOT / "VERSION").read_text(encoding="utf-8").strip() == "1.17.56"
-    assert json.loads((ROOT / "tec_tac_package.json").read_text(encoding="utf-8"))["version"] == "1.17.56"
+    def _at_least(text: str) -> bool:  # 1.17.57: at least 1.17.56, ignoring a -N rebuild suffix
+        return tuple(int(x) for x in text.strip().split("-")[0].split(".")) >= (1, 17, 56)
+    assert _at_least((ROOT / "VERSION").read_text(encoding="utf-8"))
+    assert _at_least(json.loads((ROOT / "tec_tac_package.json").read_text(encoding="utf-8"))["version"])
 
 
 if __name__ == "__main__":
