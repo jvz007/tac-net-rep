@@ -37,9 +37,9 @@ Tec-Tac Core exposes one narrow privileged recovery contract:
 
 ```text
 core.server_backup
-capability version 1.9.0
+capability version 1.10.0
 
-AD-3 keeps the capability on the 1.x compatibility line. The Backups module already consumes the stable operations and does not depend on the removed recovery-signer fields; the new archive hash and source-identity fields are additive for that consumer. Capability version 1.9.0 lets existing consumers pinned to `>=1.6.0,<2.0.0` continue to resolve the provider.
+AD-3 keeps the capability on the 1.x compatibility line. The Backups module already consumes the stable operations and does not depend on the removed recovery-signer fields; the new archive hash and source-identity fields are additive for that consumer. Capability version 1.10.0 lets existing consumers pinned to `>=1.6.0,<2.0.0` continue to resolve the provider.
 ```
 
 Modules request typed backup, inventory, restore, retention, destination-validation and secret-store operations. They never receive arbitrary `sudo`, shell, executable-path or unrestricted filesystem access.
@@ -373,3 +373,55 @@ Tec-Tac recovery payload creation canonicalizes requested source roots before ar
 - Command timeouts are wall-clock enforced even when a child process is silent; timeout kills the child process group.
 - Tec-Tac recovery components retain an allow-list of durable state: module state, repository configuration and publisher trust. Cache/history/staging data remains excluded.
 
+
+## Non-waiting operations, status read and validation stage (1.10.0)
+
+Capability version 1.10.0 is additive. Every earlier operation, argument and response field stays. Backups pins `>=1.6.0,<2.0.0`, so it still resolves.
+
+### Non-waiting operations
+
+```text
+start_create_backup        start_validate_restore     start_validate_destination
+start_list_backups         start_restore_backup
+```
+
+Each takes exactly the arguments of its waiting twin (`create_backup`, `validate_restore`, `validate_destination`, `list_backups`, `restore_backup`), runs the same argument checks and returns at once:
+
+```python
+{"job_id": "<uuid>", "status": "queued", "action": "<helper action>"}
+```
+
+`action` is the helper action, so `start_create_backup` reports `create_backup`. The job runs through the same root helper and the same request shape as the waiting twin. Read progress and the outcome with `get_job_status(job_id=...)`.
+
+**Result rule.** `get_job_status` returns a `result` key for the three registered-destination actions (as before, unchanged) and now also for any job started by a `start_` operation. The file of such a job carries `"nonwaiting": true`; jobs started by the waiting operations never carry it, so their `get_job_status` output is byte-identical to 1.9.0. For a `start_` job, `result` has the same content as the waiting twin returns, with every string value passed through the log scrubber (the same masks as `error` and `log_tail`). It is present for failed jobs too, so a module can read a failed validation.
+
+`start_restore_backup` adds no authority. The calling module makes the same checks it makes before `restore_backup` (role-based access and the signed install). It is listed under `dangerous_operations` next to `restore_backup`. The browser job route used by Backup & Restore stays limited to its three actions, so `start_` jobs are not readable through it.
+
+### `get_status(destinations=None, context=...)`
+
+Read-only. It is not part of `health()`, because `health()` runs on every capability listing.
+
+```python
+status = backup.get_status(destinations=[destination], context={...})
+# {"ok": True,
+#  "destinations": [{"id", "path", "available", "free_bytes", "total_bytes"}],
+#  "tactical_backup_schedule": {"checked", "present", "entries": [{"schedule", "command"}], "writes_to": [...]}}
+```
+
+- Only `local` destinations get a row. The path goes through the usual local allow-list. Free space comes from the folder, or from its nearest existing parent if the folder is not there yet. Nothing is created. `available` is false and the numbers are null if the path cannot be read.
+- `tactical_backup_schedule` lists the lines of the **Tactical user's crontab** whose command ends in `backup.sh --auto`. Root's crontab and `/etc/cron.d` are not read. `checked` is false and `present` is null, with a short `reason`, if `crontab` is missing or fails. A user with no crontab gives `checked` true and `present` false. `writes_to` is the fixed list `/rmmbackups/daily`, `/rmmbackups/weekly`, `/rmmbackups/monthly`.
+- Needs the 1.17.54 helper. With an older helper the job is refused and Core raises a `ServerBackupError` (dispatch failed). Nothing else is affected.
+
+### `validate_destination`: which step failed
+
+Every existing field and every short reason text stays. The result also carries `stage`, `protocol`, `host`, `port`, `reason_code` and `detail`.
+
+- `stage`: `name_resolution`, `tcp_connect`, `tls_handshake`, `certificate`, `login`, `data_connection`, `path_access`, `write`, `read`, `delete`, `configuration`, `integrity` or `unknown`. `complete` on success (`reason_code` `ok`).
+- `protocol` is the destination type. `host` and `port` are the destination's own values (`null` for local).
+- FTP names the step in full (for example `certificate_expired`, `certificate_name_mismatch`, `login_refused`, `passive_port_unreachable`, `banner_mismatch`). scp, sftp, s3 and webdav are best effort from the client's message; text Core cannot read gives `unknown`.
+- `detail` is the library or client message after scrubbing in the helper (the destination's own secret values and the usual patterns) and again in Core. It is capped at 500 characters.
+- Read the new keys with `.get`. A 1.9.0-era helper does not return them.
+
+### Retention and manual archives
+
+A `manual` archive counts as `unclassified` for retention and is kept or deleted by `keep_unclassified`. A policy without `keep_unclassified` still keeps 10000.

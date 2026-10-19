@@ -21,7 +21,7 @@ from .capabilities import register_capability
 from .config import load_layout
 
 CAPABILITY_ID = "core.server_backup"
-CAPABILITY_VERSION = "1.9.0"
+CAPABILITY_VERSION = "1.10.0"
 HELPER = Path("/usr/local/sbin/tec-tac-server-backup")
 DEFAULT_STATE_ROOT = Path("/var/lib/tec-tac/server-backup")
 TERMINAL_STATES = {"succeeded", "failed", "dispatch_failed"}
@@ -104,6 +104,7 @@ def _timeout_for(action: str) -> int:
         "restore_backup": 12 * 60 * 60,
         "apply_retention": 2 * 60 * 60,
         "validate_destination": 10 * 60,
+        "get_status": 120,
         "validate_restore": 45 * 60,
         "store_secret": 120,
         "delete_secret": 120,
@@ -151,8 +152,13 @@ def _dispatch(job_id: str) -> None:
         raise ServerBackupError(f"Unable to dispatch Core server-backup job: {detail}", job_id=job_id) from exc
 
 
-def _start(action: str, request: dict, *, context: dict | None) -> dict:
-    """Queue one privileged backup job and return immediately with its id."""
+def _start(action: str, request: dict, *, context: dict | None, nonwaiting: bool = False) -> dict:
+    """Queue one privileged backup job and return immediately with its id.
+
+    ``nonwaiting`` marks a job started by a ``start_*`` operation so that
+    ``get_job_status`` may return its scrubbed result. Jobs started by the
+    waiting operations never carry the flag.
+    """
     job_id = str(uuid.uuid4())
     payload = {
         "id": job_id,
@@ -168,6 +174,8 @@ def _start(action: str, request: dict, *, context: dict | None) -> dict:
         "request": request,
         "result": None,
     }
+    if nonwaiting:
+        payload["nonwaiting"] = True
     _atomic_job(_jobs_root() / f"{job_id}.json", payload)
     try:
         _dispatch(job_id)
@@ -282,6 +290,17 @@ def _sanitize_log_line(value: str) -> str:
             line = pattern.sub(r"\1=<redacted>", line)
     return line
 
+def _scrub_value(value):
+    """Return ``value`` with every string passed through the log scrubber."""
+    if isinstance(value, str):
+        return _sanitize_log_line(value)
+    if isinstance(value, dict):
+        return {key: _scrub_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_scrub_value(item) for item in value]
+    return value
+
+
 def _safe_log_tail(job_id: str, *, lines: int = 80) -> list[str]:
     path = _state_root() / "logs" / f"{job_id}.log"
     if not path.is_file() or path.is_symlink():
@@ -330,10 +349,14 @@ def _public_job_status(job: dict) -> dict:
         },
         "log_tail": _safe_log_tail(str(job.get("id") or "")),
     }
+    safe_result = job.get("result") if isinstance(job.get("result"), dict) else None
     if str(job.get("action") or "") in {"list_registered_backups", "validate_registered_restore", "restore_registered_backup"}:
-        safe_result = job.get("result") if isinstance(job.get("result"), dict) else None
         if safe_result is not None:
             result["result"] = safe_result
+    elif job.get("nonwaiting") is True and safe_result is not None:
+        # start_* jobs: same content as the waiting twin returns, scrubbed,
+        # and present for failed jobs too so a failed validation can be read.
+        result["result"] = _scrub_value(safe_result)
     return result
 
 
@@ -357,7 +380,8 @@ class ServerBackupProvider:
             job = _find_job_by_source_run_id(str(source_run_id))
         return _public_job_status(job)
 
-    def create_backup(self, *, backup_class: str, destinations: list[dict], include_tactical: bool = True, include_tec_tac: bool = True, context: dict) -> dict:
+    @staticmethod
+    def _create_backup_request(backup_class, destinations, include_tactical, include_tec_tac) -> dict:
         backup_class = str(backup_class or "").strip().lower()
         if backup_class not in BACKUP_CLASSES:
             raise ServerBackupError("backup_class must be daily, weekly, monthly, or manual.")
@@ -367,16 +391,18 @@ class ServerBackupProvider:
             raise ServerBackupError("include_tec_tac must be true or false.")
         if not include_tactical and not include_tec_tac:
             raise ServerBackupError("At least one recovery component must be included.")
-        return _run(
-            "create_backup",
-            {
-                "backup_class": backup_class,
-                "destinations": _validate_destinations(destinations),
-                "include_tactical": include_tactical,
-                "include_tec_tac": include_tec_tac,
-            },
-            context=context,
-        )
+        return {
+            "backup_class": backup_class,
+            "destinations": _validate_destinations(destinations),
+            "include_tactical": include_tactical,
+            "include_tec_tac": include_tec_tac,
+        }
+
+    def create_backup(self, *, backup_class: str, destinations: list[dict], include_tactical: bool = True, include_tec_tac: bool = True, context: dict) -> dict:
+        return _run("create_backup", self._create_backup_request(backup_class, destinations, include_tactical, include_tec_tac), context=context)
+
+    def start_create_backup(self, *, backup_class: str, destinations: list[dict], include_tactical: bool = True, include_tec_tac: bool = True, context: dict) -> dict:
+        return _start("create_backup", self._create_backup_request(backup_class, destinations, include_tactical, include_tec_tac), context=context, nonwaiting=True)
 
     def list_backups(self, *, destinations: list[dict], context: dict) -> list[dict]:
         result = _run(
@@ -389,7 +415,11 @@ class ServerBackupProvider:
             raise ServerBackupError("Core server-backup provider returned an invalid backup list.", result=result)
         return rows
 
-    def restore_backup(self, *, backup_ref: str, destination: dict | None, restore_mode: str | None = None, context: dict, restore_tec_tac: bool | None = None, overrides: dict | None = None) -> dict:
+    def start_list_backups(self, *, destinations: list[dict], context: dict) -> dict:
+        return _start("list_backups", {"destinations": _validate_destinations(destinations)}, context=context, nonwaiting=True)
+
+    @staticmethod
+    def _restore_backup_request(backup_ref, destination, restore_mode, restore_tec_tac, overrides) -> dict:
         # Compatibility bridge for 1.0/1.1 consumers. New modules must send
         # restore_mode explicitly; legacy bool maps to full/tactical only.
         if restore_mode in (None, "") and isinstance(restore_tec_tac, bool):
@@ -398,40 +428,61 @@ class ServerBackupProvider:
         if mode not in {"full", "tactical", "tec_tac"}:
             raise ServerBackupError("restore_mode must be full, tactical, or tec_tac.")
         destinations = _validate_destinations([destination]) if destination is not None else []
-        return _run(
-            "restore_backup",
-            {
-                "backup_ref": str(backup_ref or "").strip(),
-                "destination": destinations[0] if destinations else None,
-                "restore_mode": mode,
-                "overrides": _normalize_restore_overrides(overrides),
-            },
-            context=context,
-        )
+        return {
+            "backup_ref": str(backup_ref or "").strip(),
+            "destination": destinations[0] if destinations else None,
+            "restore_mode": mode,
+            "overrides": _normalize_restore_overrides(overrides),
+        }
+
+    def restore_backup(self, *, backup_ref: str, destination: dict | None, restore_mode: str | None = None, context: dict, restore_tec_tac: bool | None = None, overrides: dict | None = None) -> dict:
+        return _run("restore_backup", self._restore_backup_request(backup_ref, destination, restore_mode, restore_tec_tac, overrides), context=context)
+
+    def start_restore_backup(self, *, backup_ref: str, destination: dict | None, restore_mode: str | None = None, context: dict, restore_tec_tac: bool | None = None, overrides: dict | None = None) -> dict:
+        # Same authority as restore_backup: the calling module does the RBAC check.
+        return _start("restore_backup", self._restore_backup_request(backup_ref, destination, restore_mode, restore_tec_tac, overrides), context=context, nonwaiting=True)
+
+    @staticmethod
+    def _validate_destination_request(destination) -> dict:
+        return {"destination": _validate_destinations([destination])[0]}
 
     def validate_destination(self, *, destination: dict, context: dict) -> dict:
-        destinations = _validate_destinations([destination])
-        return _run(
-            "validate_destination",
-            {"destination": destinations[0]},
-            context=context,
-        )
+        request = self._validate_destination_request(destination)
+        try:
+            result = _run("validate_destination", request, context=context)
+        except ServerBackupError as exc:
+            if isinstance(exc.result, dict) and "detail" in exc.result:
+                exc.result["detail"] = _scrub_value(exc.result["detail"])
+            raise
+        if isinstance(result, dict) and "detail" in result:
+            result["detail"] = _scrub_value(result["detail"])
+        return result
 
-    def validate_restore(self, *, backup_ref: str, destination: dict | None, restore_mode: str, context: dict, overrides: list[str] | None = None) -> dict:
+    def start_validate_destination(self, *, destination: dict, context: dict) -> dict:
+        return _start("validate_destination", self._validate_destination_request(destination), context=context, nonwaiting=True)
+
+    @staticmethod
+    def _validate_restore_request(backup_ref, destination, restore_mode, overrides) -> dict:
         mode = str(restore_mode or "").strip().lower()
         if mode not in {"full", "tactical", "tec_tac"}:
             raise ServerBackupError("restore_mode must be full, tactical, or tec_tac.")
         destinations = _validate_destinations([destination]) if destination is not None else []
-        return _run(
-            "validate_restore",
-            {
-                "backup_ref": str(backup_ref or "").strip(),
-                "destination": destinations[0] if destinations else None,
-                "restore_mode": mode,
-                "overrides": _normalize_validation_overrides(overrides),
-            },
-            context=context,
-        )
+        return {
+            "backup_ref": str(backup_ref or "").strip(),
+            "destination": destinations[0] if destinations else None,
+            "restore_mode": mode,
+            "overrides": _normalize_validation_overrides(overrides),
+        }
+
+    def validate_restore(self, *, backup_ref: str, destination: dict | None, restore_mode: str, context: dict, overrides: list[str] | None = None) -> dict:
+        return _run("validate_restore", self._validate_restore_request(backup_ref, destination, restore_mode, overrides), context=context)
+
+    def start_validate_restore(self, *, backup_ref: str, destination: dict | None, restore_mode: str, context: dict, overrides: list[str] | None = None) -> dict:
+        return _start("validate_restore", self._validate_restore_request(backup_ref, destination, restore_mode, overrides), context=context, nonwaiting=True)
+
+    def get_status(self, *, destinations: list[dict] | None = None, context: dict) -> dict:
+        """Read-only: free space per local destination and Tactical's own backup cron entry."""
+        return _run("get_status", {"destinations": _validate_destinations(destinations)}, context=context)
 
     def apply_retention(self, *, policies: list[dict], context: dict) -> dict:
         if not isinstance(policies, list):
@@ -571,9 +622,15 @@ def register_core_server_backup_capability():
             "validate_restore",
             "store_secret",
             "delete_secret",
+            "start_create_backup",
+            "start_validate_restore",
+            "start_validate_destination",
+            "start_list_backups",
+            "start_restore_backup",
+            "get_status",
         ),
         metadata={
-            "dangerous_operations": ["restore_backup"],
+            "dangerous_operations": ["restore_backup", "start_restore_backup"],
             "destination_types": sorted(DESTINATION_TYPES),
             "backup_classes": sorted(BACKUP_CLASSES),
             "recovery_modes": ["full", "tactical", "tec_tac"],

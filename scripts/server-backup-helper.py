@@ -45,7 +45,7 @@ JOB_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 LEGACY_ARCHIVE_RE = re.compile(r"^rmm-backup-[A-Za-z0-9_.-]+\.tar$")
 BUNDLE_RE = re.compile(r"^tec-tac-backup-[A-Za-z0-9_.-]+\.tgz$")
 ARCHIVE_RE = BUNDLE_RE
-ALLOWED_ACTIONS = {"create_backup", "list_backups", "restore_backup", "apply_retention", "validate_destination", "validate_restore", "store_secret", "delete_secret", "list_registered_destinations", "list_registered_backups", "validate_registered_restore", "restore_registered_backup"}
+ALLOWED_ACTIONS = {"create_backup", "list_backups", "restore_backup", "apply_retention", "validate_destination", "validate_restore", "store_secret", "delete_secret", "list_registered_destinations", "list_registered_backups", "validate_registered_restore", "restore_registered_backup", "get_status"}
 OVERRIDEABLE_RESTORE_CHECKS = {"target.os"}
 TACTICAL_RESTORE_OVERRIDE_BASELINE = "67"
 TACTICAL_RESTORE_OS_GATE = """if [[ "$osname" == "debian" ]]; then
@@ -362,6 +362,12 @@ def load_job(job_id, config=None):
         overrides = request.get("overrides")
         if not isinstance(overrides, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in overrides.items()):
             raise SystemExit("invalid restore_backup overrides schema")
+    if job.get("action") == "get_status":
+        request = job["request"]
+        if set(request) != {"destinations"} or not isinstance(request.get("destinations"), list):
+            raise SystemExit("invalid get_status request schema")
+        if any(not isinstance(item, dict) for item in request["destinations"]):
+            raise SystemExit("invalid get_status destination schema")
     if job.get("action") == "list_registered_destinations":
         if request not in ({}, None):
             raise SystemExit("invalid list_registered_destinations request schema")
@@ -907,7 +913,9 @@ def ftp_tls_context():
     return ssl.create_default_context()
 
 
-def ftp_connect(config, destination, *, timeout=60):
+def ftp_connect(config, destination, *, timeout=60, progress=None):
+    """Connect and log in. ``progress`` (optional dict) records the step in
+    ``progress["step"]`` (connect, tls, login, prot_p) for validation reports."""
     destination = validate_destination(destination, config)
     secret = load_secret(config, destination)
     password = str(secret.get("password") or "")
@@ -919,9 +927,16 @@ def ftp_connect(config, destination, *, timeout=60):
     else:
         ftp = ftplib.FTP(timeout=timeout)
     try:
+        if progress is not None: progress["step"] = "connect"
         ftp.connect(destination["host"], destination["port"], timeout=timeout)
+        if progress is not None and isinstance(ftp, ftplib.FTP_TLS):
+            # login() would call auth() itself; doing it here only names the step.
+            progress["step"] = "tls"
+            ftp.auth()
+        if progress is not None: progress["step"] = "login"
         ftp.login(destination["username"], password)
         if isinstance(ftp, ftplib.FTP_TLS):
+            if progress is not None: progress["step"] = "prot_p"
             ftp.prot_p()
         ftp.set_pasv(True)
         return ftp
@@ -4072,11 +4087,161 @@ def validation_result(destination):
     }
 
 
-def _validation_fail(result, stage, reason):
+# Where a validation stopped. The eight check names above stay as they are;
+# these describe the failing step in more detail (additive fields).
+VALIDATION_STAGES = (
+    "name_resolution", "tcp_connect", "tls_handshake", "certificate", "login",
+    "data_connection", "path_access", "write", "read", "delete",
+    "configuration", "integrity", "unknown",
+)
+_CHECK_DIAG_DEFAULTS = {
+    "configuration": ("configuration", "configuration_invalid"),
+    "connection": ("unknown", "unknown"),
+    "authentication": ("login", "login_refused"),
+    "path_access": ("path_access", "path_inaccessible"),
+    "write": ("write", "write_failed"),
+    "read": ("read", "read_failed"),
+    "integrity": ("integrity", "integrity_mismatch"),
+    "delete": ("delete", "delete_failed"),
+}
+_DETAIL_PATTERNS = (
+    (re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+\-/=]+"), r"\1<redacted>"),
+    (re.compile(r"(?i)(basic\s+)[A-Za-z0-9+/=]+"), r"\1<redacted>"),
+    (re.compile(r"(?i)(https?://[^:/\s]+:)([^@/\s]+)(@)"), r"\1<redacted>\3"),
+    (re.compile(r"(?i)(password|passwd|pass|secret|token|access[_-]?key(?:_id)?|secret[_-]?access[_-]?key|authorization)\s*[:=]\s*([^\s,;]+)"), r"\1=<redacted>"),
+)
+DETAIL_LIMIT = 500
+
+
+def _scrub_detail(value, secret_values=(), limit=DETAIL_LIMIT):
+    """Make a library or client message safe to return: no control characters,
+    none of the destination's own secret values, the same patterns Core masks,
+    and a length cap."""
+    text = " ".join(str(value if value is not None else "").replace("\x00", "")[:4096].split())
+    if "-----BEGIN " in text or "PRIVATE KEY" in text:
+        return "[redacted private key material]"
+    for secret in sorted({str(item) for item in (secret_values or ()) if item not in (None, "")}, key=len, reverse=True):
+        text = text.replace(secret, "<redacted>")
+    for pattern, replacement in _DETAIL_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text[:limit]
+
+
+def _validation_fail(result, stage, reason, *, diag=None, detail=None):
     result["checks"][stage] = "failed"
     result["reason"] = str(reason)
     result["validated_at"] = now()
+    default_stage, default_code = _CHECK_DIAG_DEFAULTS.get(stage, ("unknown", "unknown"))
+    result["stage"], result["reason_code"] = diag or (default_stage, default_code)
+    if detail is not None:
+        # Raw for now; operation_validate_destination scrubs it before returning.
+        result["detail"] = str(detail)
     raise OperationFailed(str(reason), result=result)
+
+
+def _destination_secret_values(config, destination):
+    try:
+        return [str(value) for value in load_secret(config, destination).values() if value not in (None, "")]
+    except Exception:
+        return []
+
+
+def _destination_host_port(destination):
+    if destination.get("type") == "local":
+        return None, None
+    host = destination.get("host")
+    port = destination.get("port")
+    if not host:
+        endpoint = destination.get("url") or destination.get("endpoint")
+        if endpoint:
+            try:
+                from urllib.parse import urlsplit
+                parts = urlsplit(str(endpoint) if "//" in str(endpoint) else "//" + str(endpoint))
+                host = parts.hostname
+                port = port or parts.port
+            except ValueError:
+                host = None
+    return (str(host) if host else None), (int(port) if port else None)
+
+
+def _finalize_validation(result, destination, secret_values):
+    """Add stage, protocol, host, port, reason_code and detail to a result."""
+    if result.get("ok"):
+        result["stage"], result["reason_code"] = "complete", "ok"
+    elif not result.get("stage") or not result.get("reason_code"):
+        checks = result.get("checks") or {}
+        failed = next((n for n in VALIDATION_CHECKS if checks.get(n) == "failed"), None)
+        if failed is None:
+            failed = next((n for n in VALIDATION_CHECKS if checks.get(n) == "not_run"), "configuration")
+        result["stage"], result["reason_code"] = _CHECK_DIAG_DEFAULTS.get(failed, ("unknown", "unknown"))
+    result["protocol"] = str(destination.get("type") or result.get("type") or "")
+    result["host"], result["port"] = _destination_host_port(destination)
+    raw_detail = result.get("detail")
+    result["detail"] = _scrub_detail(raw_detail, secret_values) if raw_detail else None
+    return result
+
+
+def _classify_client_text(text):
+    """Best-effort stage and reason code from an ssh, scp or rclone message."""
+    lowered = str(text or "").lower()
+    if "could not resolve hostname" in lowered or "no such host" in lowered or "name or service not known" in lowered:
+        return "name_resolution", "name_not_resolved"
+    if "host key verification failed" in lowered:
+        return "certificate", "host_key_mismatch"
+    if "timed out" in lowered or lowered.strip() == "timeout":
+        return "tcp_connect", "timeout"
+    if "refused" in lowered and "permission denied" not in lowered:
+        return "tcp_connect", "refused"
+    if "permission denied" in lowered:
+        return "login", "login_refused"
+    return "unknown", "unknown"
+
+
+def _classify_ftp_exception(exc, step):
+    """Stage and reason code for an exception raised while connecting."""
+    if isinstance(exc, socket.gaierror):
+        return "name_resolution", "name_not_resolved"
+    if isinstance(exc, ssl.SSLCertVerificationError):
+        message = str(getattr(exc, "verify_message", "") or exc).lower()
+        code = getattr(exc, "verify_code", None)
+        if code == 10 or "expired" in message:
+            return "certificate", "certificate_expired"
+        if code in (62, 64) or "mismatch" in message or "match" in message:
+            return "certificate", "certificate_name_mismatch"
+        return "certificate", "certificate_untrusted"
+    if isinstance(exc, ssl.SSLError):
+        return "tls_handshake", "tls_handshake_failed"
+    if isinstance(exc, TimeoutError):
+        stage = {"connect": "tcp_connect", "tls": "tls_handshake", "login": "login", "prot_p": "tls_handshake"}.get(step, "tcp_connect")
+        return stage, "timeout"
+    if isinstance(exc, ConnectionRefusedError):
+        return "tcp_connect", "refused"
+    if isinstance(exc, ftplib.error_perm):
+        if step == "connect":
+            return "tcp_connect", "banner_mismatch"
+        if step in ("tls", "prot_p"):
+            return "tls_handshake", "tls_refused"
+        return "login", "login_refused"
+    if isinstance(exc, (ftplib.error_reply, ftplib.error_proto, EOFError)):
+        return ("tcp_connect", "banner_mismatch") if step == "connect" else ("unknown", "unknown")
+    if isinstance(exc, RuntimeError):
+        return "configuration", "configuration_invalid"
+    if isinstance(exc, OSError):
+        return "tcp_connect", "connect_failed"
+    return "unknown", "unknown"
+
+
+def _classify_ftp_transfer_exception(exc, default_stage, default_code):
+    """Stage for a failure during STOR or RETR: the data connection is the usual cause."""
+    if isinstance(exc, ssl.SSLCertVerificationError):
+        return _classify_ftp_exception(exc, "tls")
+    if isinstance(exc, ssl.SSLError):
+        return "tls_handshake", "tls_handshake_failed"
+    if isinstance(exc, ftplib.error_perm):
+        return default_stage, default_code
+    if isinstance(exc, (OSError, ftplib.error_temp)):
+        return "data_connection", "passive_port_unreachable"
+    return default_stage, default_code
 
 
 def _capture_command(args, *, timeout=120):
@@ -4091,6 +4256,14 @@ def _capture_command(args, *, timeout=120):
     except subprocess.TimeoutExpired as exc:
         return 124, "", "timeout"
     return proc.returncode, proc.stdout or "", proc.stderr or ""
+
+
+def _client_failure_diag(result, check_stage, stderr):
+    stage, code = _classify_client_text(stderr)
+    if stage == "unknown" and check_stage == "authentication":
+        stage, code = "login", "login_refused"
+    result["stage"], result["reason_code"] = stage, code
+    result["detail"] = str(stderr or "")
 
 
 def _connection_failure_stage(stderr):
@@ -4137,6 +4310,7 @@ def validate_rclone_roundtrip(config, destination, payload, expected_hash, resul
             else:
                 reason = "connection failed"
             result["reason"] = reason
+            _client_failure_diag(result, stage, err)
             raise OperationFailed(reason, result=result)
         result["checks"]["connection"] = "passed"
         result["checks"]["authentication"] = "passed"
@@ -4145,6 +4319,7 @@ def validate_rclone_roundtrip(config, destination, payload, expected_hash, resul
         if code != 0:
             result["checks"]["path_access"] = "failed"
             result["reason"] = "configured path is inaccessible"
+            result["stage"], result["reason_code"], result["detail"] = "path_access", "path_inaccessible", str(err or "")
             raise OperationFailed(result["reason"], result=result)
         result["checks"]["path_access"] = "passed"
 
@@ -4152,6 +4327,7 @@ def validate_rclone_roundtrip(config, destination, payload, expected_hash, resul
         if code != 0:
             result["checks"]["write"] = "failed"
             result["reason"] = "write failed"
+            result["stage"], result["reason_code"], result["detail"] = "write", "write_failed", str(err or "")
             raise OperationFailed(result["reason"], result=result)
         created = True
         result["checks"]["write"] = "passed"
@@ -4161,6 +4337,7 @@ def validate_rclone_roundtrip(config, destination, payload, expected_hash, resul
         if code != 0 or not downloaded.is_file():
             result["checks"]["read"] = "failed"
             result["reason"] = "read failed"
+            result["stage"], result["reason_code"], result["detail"] = "read", "read_failed", str(err or "")
             raise OperationFailed(result["reason"], result=result)
         result["checks"]["read"] = "passed"
         if downloaded.stat().st_size != payload.stat().st_size or sha256_file(downloaded) != expected_hash:
@@ -4217,6 +4394,7 @@ def validate_scp_roundtrip(config, destination, payload, expected_hash, result, 
             else:
                 reason = "connection failed"
             result["reason"] = reason
+            _client_failure_diag(result, stage, err)
             raise OperationFailed(reason, result=result)
         result["checks"]["connection"] = "passed"
         result["checks"]["authentication"] = "passed"
@@ -4225,6 +4403,7 @@ def validate_scp_roundtrip(config, destination, payload, expected_hash, result, 
         if code != 0:
             result["checks"]["path_access"] = "failed"
             result["reason"] = "configured path is inaccessible"
+            result["stage"], result["reason_code"], result["detail"] = "path_access", "path_inaccessible", str(err or "")
             raise OperationFailed(result["reason"], result=result)
         result["checks"]["path_access"] = "passed"
 
@@ -4232,6 +4411,7 @@ def validate_scp_roundtrip(config, destination, payload, expected_hash, result, 
         if code != 0:
             result["checks"]["write"] = "failed"
             result["reason"] = "write failed"
+            result["stage"], result["reason_code"], result["detail"] = "write", "write_failed", str(err or "")
             raise OperationFailed(result["reason"], result=result)
         created = True
         result["checks"]["write"] = "passed"
@@ -4241,6 +4421,7 @@ def validate_scp_roundtrip(config, destination, payload, expected_hash, result, 
         if code != 0 or not downloaded.is_file():
             result["checks"]["read"] = "failed"
             result["reason"] = "read failed"
+            result["stage"], result["reason_code"], result["detail"] = "read", "read_failed", str(err or "")
             raise OperationFailed(result["reason"], result=result)
         result["checks"]["read"] = "passed"
         if downloaded.stat().st_size != payload.stat().st_size or sha256_file(downloaded) != expected_hash:
@@ -4283,32 +4464,33 @@ def validate_ftp_roundtrip(config, destination, payload, expected_hash, result, 
             result["checks"]["configuration"]="passed"
         except Exception as exc:
             _validation_fail(result,"configuration",str(exc))
+        progress={}
         try:
-            ftp=ftp_connect(config,destination,timeout=60)
+            ftp=ftp_connect(config,destination,timeout=60,progress=progress)
             result["checks"]["connection"]="passed"
             result["checks"]["authentication"]="passed"
         except ftplib.error_perm as exc:
             result["checks"]["connection"]="passed"
-            _validation_fail(result,"authentication","authentication failed")
+            _validation_fail(result,"authentication","authentication failed",diag=_classify_ftp_exception(exc,progress.get("step")),detail=exc)
         except Exception as exc:
-            _validation_fail(result,"connection","connection failed")
+            _validation_fail(result,"connection","connection failed",diag=_classify_ftp_exception(exc,progress.get("step")),detail=exc)
         try:
             ftp_prepare_path(ftp,destination["remote_path"],create=True)
             result["checks"]["path_access"]="passed"
-        except Exception:
-            _validation_fail(result,"path_access","configured path is inaccessible")
+        except Exception as exc:
+            _validation_fail(result,"path_access","configured path is inaccessible",detail=exc)
         try:
             with payload.open("rb") as fh:
                 ftp.storbinary(f"STOR {object_name}",fh,blocksize=65536)
             created=True; result["checks"]["write"]="passed"
-        except Exception:
-            _validation_fail(result,"write","write failed")
+        except Exception as exc:
+            _validation_fail(result,"write","write failed",diag=_classify_ftp_transfer_exception(exc,"write","write_failed"),detail=exc)
         downloaded=bytearray()
         try:
             ftp.retrbinary(f"RETR {object_name}",downloaded.extend,blocksize=65536)
             result["checks"]["read"]="passed"
-        except Exception:
-            _validation_fail(result,"read","read failed")
+        except Exception as exc:
+            _validation_fail(result,"read","read failed",diag=_classify_ftp_transfer_exception(exc,"read","read_failed"),detail=exc)
         if len(downloaded)!=payload.stat().st_size or hashlib.sha256(downloaded).hexdigest()!=expected_hash:
             _validation_fail(result,"integrity","round-trip integrity verification failed")
         result["checks"]["integrity"]="passed"
@@ -4318,8 +4500,8 @@ def validate_ftp_roundtrip(config, destination, payload, expected_hash, result, 
             if object_name in names:
                 raise RuntimeError("delete could not be confirmed")
             created=False; result["checks"]["delete"]="passed"
-        except Exception:
-            _validation_fail(result,"delete","delete failed")
+        except Exception as exc:
+            _validation_fail(result,"delete","delete failed",detail=exc)
     finally:
         if ftp is not None and created:
             try:
@@ -4383,10 +4565,17 @@ def operation_validate_destination(config, job, log):
     try:
         destination = validate_destination(raw, config)
     except Exception as exc:
-        _validation_fail(result, "configuration", str(exc))
+        try:
+            _validation_fail(result, "configuration", str(exc))
+        except OperationFailed:
+            # The destination could not be validated, so nothing in it is trusted:
+            # report only the type it claimed.
+            _finalize_validation(result, {"type": result["type"]}, ())
+            raise
 
     result["destination_id"] = destination["id"]
     result["type"] = destination["type"]
+    secret_values = _destination_secret_values(config, destination)
     object_name = f".tectac-validation-{job['id']}.bin"
     with tempfile.TemporaryDirectory(prefix="tectac-validate-") as td:
         temp = Path(td)
@@ -4406,17 +4595,86 @@ def operation_validate_destination(config, job, log):
             result.update(exc.result or {})
             result["ok"] = False
             result["validated_at"] = now()
+            _finalize_validation(result, destination, secret_values)
             raise OperationFailed(str(exc), result=result) from exc
     if result["checks"]["delete"] != "passed":
         result["ok"] = False
         result["reason"] = "validation object cleanup was not confirmed"
+        result["stage"], result["reason_code"] = "delete", "delete_failed"
+        _finalize_validation(result, destination, secret_values)
         raise OperationFailed(result["reason"], result=result)
     result["ok"] = True
     result["validated_at"] = now()
     result.pop("reason", None)
+    _finalize_validation(result, destination, secret_values)
     register_destination(config, destination)
     log.write(f"[TEC-TAC-BACKUP] destination validation succeeded and registered id={destination['id']} type={destination['type']}\n")
     return result
+
+
+TACTICAL_BACKUP_WRITES_TO = ["/rmmbackups/daily", "/rmmbackups/weekly", "/rmmbackups/monthly"]
+_TACTICAL_AUTO_BACKUP_RE = re.compile(r"backup\.sh\s+--auto(?:\s+(?:\d*>>?\s*\S+|2>&1|&>>?\s*\S+))*\s*$")
+
+
+def _nearest_existing_parent(path):
+    probe = Path(path)
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    return probe
+
+
+def _local_destination_status(destination):
+    row = {"id": destination["id"], "path": destination["path"], "available": False, "free_bytes": None, "total_bytes": None}
+    try:
+        usage = shutil.disk_usage(str(_nearest_existing_parent(destination["path"])))
+        row.update(available=True, free_bytes=int(usage.free), total_bytes=int(usage.total))
+    except (OSError, ValueError):
+        pass
+    return row
+
+
+def _read_tactical_backup_schedule(config):
+    """Read-only: the matching lines of the Tactical user's crontab, nothing else."""
+    summary = {"checked": False, "present": None, "entries": [], "writes_to": list(TACTICAL_BACKUP_WRITES_TO)}
+    user = str(config.get("TACTICAL_USER") or "tactical")
+    if not SAFE_USER_RE.fullmatch(user):
+        summary["reason"] = "the Tactical user name is not valid"
+        return summary
+    try:
+        code, out, err = _capture_command(["crontab", "-l", "-u", user], timeout=20)
+    except OSError:
+        summary["reason"] = "crontab is not available"
+        return summary
+    if code != 0:
+        if str(err or "").strip().lower().startswith("no crontab for"):
+            summary.update(checked=True, present=False)
+        else:
+            summary["reason"] = "crontab could not be read"
+        return summary
+    entries = []
+    for line in str(out or "").splitlines():
+        text = line.strip()
+        if not text or text.startswith("#") or not _TACTICAL_AUTO_BACKUP_RE.search(text):
+            continue
+        parts = text.split(None, 1) if text.startswith("@") else text.split(None, 5)
+        if len(parts) < 2 or (not text.startswith("@") and len(parts) < 6):
+            continue
+        schedule = parts[0] if text.startswith("@") else " ".join(parts[:5])
+        command = parts[1] if text.startswith("@") else parts[5]
+        entries.append({"schedule": _scrub_detail(schedule, limit=100), "command": _scrub_detail(command)})
+    summary.update(checked=True, present=bool(entries), entries=entries)
+    return summary
+
+
+def operation_get_status(config, job, log):
+    destinations = job["request"].get("destinations") or []
+    rows = []
+    for raw in destinations:
+        destination = validate_destination(raw, config)
+        if destination["type"] == "local":
+            rows.append(_local_destination_status(destination))
+    log.write("[TEC-TAC-BACKUP] status read completed\n")
+    return {"ok": True, "destinations": rows, "tactical_backup_schedule": _read_tactical_backup_schedule(config)}
 
 
 def operation_apply_retention(config, job, log):
@@ -4453,6 +4711,10 @@ def operation_apply_retention(config, job, log):
                     })
                     continue
                 cls = item.get("backup_class") if item.get("backup_class") in BACKUP_CLASSES else "unclassified"
+                if cls == "manual":
+                    # A manual archive is not a retention class of its own: it
+                    # counts as unclassified (and a legacy policy keeps 10000).
+                    cls = "unclassified"
                 grouped[cls].append(item)
             for cls, items in grouped.items():
                 items.sort(key=lambda x: str(x.get("modified_at") or x.get("created_at") or ""), reverse=True)
@@ -4510,6 +4772,7 @@ OPERATIONS = {
     "list_registered_backups": operation_list_registered_backups,
     "validate_registered_restore": operation_validate_registered_restore,
     "restore_registered_backup": operation_restore_registered_backup,
+    "get_status": operation_get_status,
 }
 
 
