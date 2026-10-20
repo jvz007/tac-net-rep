@@ -22,6 +22,9 @@ exec(compile(HARNESS.read_text(encoding="utf-8"), str(HARNESS), "exec"), globals
 MARKER = "SECRET-MARKER-5d0e"
 BOTH = ("can_manage_winupdates", "can_run_bulk")
 IDS = [987654311, 987654312, 987654313]
+
+def _group_marks(run):  # 1.17.67: a call also leaves one plan mark (kind "plan")
+    return [m for m in run.system_action_marks if m.get("kind") != "plan"]
 SCAN = "patching.scan"
 CFG = {"action_id": SCAN, "agents": IDS, "parameters": None}
 LEAK = {}
@@ -143,7 +146,7 @@ must(out == {"outcome": "queued", "agents": 3, "message": "Queued in Tactical; t
 must(TASK_CALLS == [("scan", (IDS,), {})], TASK_CALLS)
 must(run.status == "succeeded" and run.result == out and run.schedule.last_run_at is not None, run.__dict__)
 must("done" not in out["message"].lower() and "completed" not in out["message"].lower(), "the result never says done")
-must(len(run.system_action_marks) == 1 and run.system_action_marks[0]["state"] == "sent" and run.system_action_marks[0]["task_id"].startswith("celery-scan"), run.system_action_marks)
+must(len(run.system_action_marks) == 2 and len(_group_marks(run)) == 1 and _group_marks(run)[0]["state"] == "sent" and _group_marks(run)[0]["task_id"].startswith("celery-scan"), run.system_action_marks)
 rows = [a for a in AUDITS if a["action"] == "run"]
 must(len(rows) == 1 and not deny_rows(), AUDITS)
 row = rows[0]
@@ -357,10 +360,13 @@ run.status, run.finished_at, run.result = "queued", None, {}  # a retry or a dup
 again = go(run)
 must(again["outcome"] == "queued" and again.get("duplicate") is True and len(TASK_CALLS) == 1, (again, TASK_CALLS))
 must(len([a for a in AUDITS if a["action"] == "run"]) == 1, "a duplicate delivery writes no second 'run' row")
-CFG["agents"] = IDS[:2]  # another list in the same run is another send
+CFG["agents"] = [max(IDS) + 1000, max(IDS) + 1001]  # a list with no endpoint in common, in the same run, is another send (1.17.67: an overlapping list is refused)
+OTHER = [max(IDS) + 1000, max(IDS) + 1001]
+run.targets_snapshot = {"type": "endpoint", "ids": [str(i) for i in IDS + OTHER]}
+SCOPE["alice"] |= set(OTHER)
 run.status, run.finished_at = "queued", None
 third = go(run)
-must(third["outcome"] == "queued" and len(TASK_CALLS) == 2 and len(run.system_action_marks) == 2, (third, TASK_CALLS))
+must(third["outcome"] == "queued" and len(TASK_CALLS) == 2 and len(_group_marks(run)) == 2, (third, TASK_CALLS))
 print("       a retry after a successful send sends nothing again; another endpoint list in the same run is its own send")
 
 fresh()
@@ -379,7 +385,7 @@ fresh()
 DELAY_FAIL["raise"] = True
 run, out = start()
 must(out == "run no longer active: failed" and run.status == "failed" and run.error_type == "OutcomeUnknown" and not TASK_CALLS, (out, run.__dict__))
-must(run.system_action_marks[0]["state"] == "claiming", "a send that raised stays unknown")
+must(_group_marks(run)[0]["state"] == "claiming", "a send that raised stays unknown")
 DELAY_FAIL["raise"] = False
 run.status, run.finished_at, run.error, run.error_type = "queued", None, "", ""
 again = go(run)
@@ -391,14 +397,14 @@ fresh()
 AUDIT_FAIL["strict"] = True
 run, out = start()
 must(isinstance(out, sched.SchedulerTransientError) and not TASK_CALLS and run.status == "failed", (out, run.__dict__))
-must(run.system_action_marks[0]["state"] == "aborted", run.system_action_marks)
+must(_group_marks(run)[0]["state"] == "aborted", run.system_action_marks)
 fresh()
 AUDIT_FAIL["strict"] = True
 run, out = start(retries=1)
 must(out == "retried" and run.status == "queued" and not TASK_CALLS, (out, run.__dict__))
 AUDIT_FAIL["strict"] = False
 out = go(run, retries=1)
-must(out["outcome"] == "queued" and len(TASK_CALLS) == 1 and run.system_action_marks[0]["state"] == "sent", (out, TASK_CALLS))
+must(out["outcome"] == "queued" and len(TASK_CALLS) == 1 and _group_marks(run)[0]["state"] == "sent", (out, TASK_CALLS))
 must(len([a for a in AUDITS if a["action"] == "run"]) == 1, "one row, one send")
 print("       an audit row that cannot be written means nothing is sent; the retry then sends once")
 

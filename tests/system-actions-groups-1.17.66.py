@@ -52,6 +52,10 @@ def start(retries=0):
     return run, go(run, retries=0)
 
 
+def group_marks(run):  # 1.17.67: a call also leaves one plan mark (kind "plan")
+    return [m for m in run.system_action_marks if m.get("kind") != "plan"]
+
+
 def sent_groups():
     return [list(call[1][0]) for call in TASK_CALLS]
 
@@ -87,14 +91,14 @@ for count, sizes in ((2001, [2000, 1]), (4500, [2000, 2000, 500]), (6000, [2000,
     must([r["metadata"]["group"] for r in rows] == list(range(1, len(sizes) + 1)) and all(r["metadata"]["groups"] == len(sizes) and r["metadata"]["total_agents"] == count for r in rows), rows)
     must([r["metadata"]["agent_count"] for r in rows] == sizes and all(r["strict"] is True for r in rows), "one strict row per group")
     must(len({r["metadata"]["targets_digest"] for r in rows}) == len(sizes), "each group has its own digest")
-    must(len(run.system_action_marks) == len(sizes) and all(m["state"] == "sent" for m in run.system_action_marks), run.system_action_marks)
+    must(len(group_marks(run)) == len(sizes) and all(m["state"] == "sent" for m in group_marks(run)), run.system_action_marks)
     must(no_ids_in_audit(count) and not any("agents" in r["metadata"] and isinstance(r["metadata"]["agents"], list) for r in rows), "no endpoint id in any audit row")
 print("       2001, 4500 and 6000 endpoints split into 2, 3 and 3 groups: no id twice, none lost, one strict audit row and one mark per group")
 
 # ---- the ceiling: 20 groups run, 40 001 is refused whole
 fresh(40000)
 run, out = start()
-must(out["outcome"] == "queued" and len(TASK_CALLS) == 20 and out["groups"]["total"] == 20 and len(run.system_action_marks) == 20, (out.get("groups"), len(TASK_CALLS)))
+must(out["outcome"] == "queued" and len(TASK_CALLS) == 20 and out["groups"]["total"] == 20 and len(group_marks(run)) == 20, (out.get("groups"), len(TASK_CALLS)))
 fresh(40001)
 run, out = start()
 must(isinstance(out, str) or isinstance(out, Exception), out)
@@ -134,14 +138,14 @@ run = make_run("patching.handler", "patching", user=alice, owner="user", retries
 out = go(run)
 must(out == "retried" and run.status == "queued", (out, run.__dict__))
 must(len(TASK_CALLS) == 1 and len(sent_groups()[0]) == 2000, "only group 1 was sent")
-states = [m["state"] for m in run.system_action_marks]
+states = [m["state"] for m in group_marks(run)]
 must(states == ["sent", "aborted"], states)
 calls["fail_on"] = 0  # the store is back
 out = go(run, retries=1)
 must(out["outcome"] == "queued" and out["groups"] == {"total": 3, "sent": 3, "failed": 0, "not_started": 0}, out)
 flat = [i for g in sent_groups() for i in g]
 must(len(TASK_CALLS) == 3 and flat == list(range(BASE, BASE + 4500)) and len(set(flat)) == 4500, "every group once: group 1 was not sent again, group 2 was sent on the retry")
-must([m["state"] for m in run.system_action_marks] == ["sent", "sent", "sent"], run.system_action_marks)
+must([m["state"] for m in group_marks(run)] == ["sent", "sent", "sent"], run.system_action_marks)
 must(len(run_rows()) == 3, "one strict row per group, none for the aborted attempt")
 sys.modules["tec_tac.audit"].record = real_record
 print("       an audit write that fails on group 2 sends nothing for it; the retry sends group 2 and 3 once and does not send group 1 again")
@@ -163,7 +167,7 @@ run, out = start()
 must(out == "run no longer active: failed" and run.status == "failed" and run.error_type == "OutcomeUnknown", (out, run.__dict__))
 must(len(sent_calls) == 1, "group 1 was sent; group 2 raised; group 3 was never started")
 must("2 sent" not in run.error and "1 sent, 1 failed, 1 not started" in run.error, run.error)
-states = [m["state"] for m in run.system_action_marks]
+states = [m["state"] for m in group_marks(run)]
 must(states == ["sent", "claiming"], states)
 must(len(run_rows()) == 2, "group 3 has no audit row")
 must(len([a for a in AUDITS if a["action"] == "custom:outcome-unknown"]) == 1, AUDITS)
@@ -175,7 +179,7 @@ again = go(run)
 must(again == "run no longer active: failed" and not TASK_CALLS, again)
 run.status, run.finished_at = "failed", NOW[0]  # the run is over: a late delivery changes nothing
 late = go(run)
-must(not TASK_CALLS and len(run.system_action_marks) == 2 and run.status == "failed", (late, run.__dict__))
+must(not TASK_CALLS and len(group_marks(run)) == 2 and run.status == "failed", (late, run.__dict__))
 print("       a crash in group 2 leaves it OutcomeUnknown, group 3 is not started and nothing is sent again")
 
 # ---- a duplicate delivery after a full success changes nothing

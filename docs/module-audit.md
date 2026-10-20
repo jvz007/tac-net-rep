@@ -375,3 +375,23 @@ change of one person's module preference. The object type is `module_preference`
 `add`, `modify` and `delete`. The metadata holds `module`, `name`, `source` (`module_python` or `browser`), `module_verified`, `user_id`
 and, for `add` and `modify` only, `size_bytes`. The stored value is never in the row. The rule is AD-19 condition 5; see
 `docs/module-preferences.md`.
+
+## Core's own rows for job log reads and finished system updates (1.17.67)
+
+Three views and one tick step write rows with `module_id` `core`. None of them holds log text, an error text or a path.
+
+| Row | Written by | Strict | What it holds |
+|---|---|---|---|
+| `view` of `system_update_job_log` (object id: the job id) | `GET /api/tfd/system/updates/jobs/<id>/log/` | yes: if it cannot be written, Core answers 503 and sends no text | `job_id`, `component`, `bytes`, `truncated`, `download` |
+| `view` of `server_maintenance_job_log` (object id: the job id) | `GET /api/tfd/system/maintenance/jobs/<id>/log/` | yes | `job_id`, `action`, `part`, `bytes`, `truncated`, `download` |
+| `install` of `system_update` (object id: `framework` or `ui`) | the Scheduler tick, from the job file | no | `job_id`, `component`, `from_version`, `to_version`, `operation`, `result` (`installed`), `requested_by`, `rollback_status` |
+| `custom:system-update-failed` of `system_update` | the Scheduler tick, from the job file | no | the same keys, `result` is `failed` |
+
+The two update rows are written by the service actor `core` / `system-update` / `system`, within about a minute of the job ending (the root helper cannot write Django audit). The wording is fixed:
+
+- `Update installed successfully 1.17.16 -> 1.17.17`. A job that the older helper ran has no recorded "from" version, so it reads `Update installed successfully to 1.17.17`.
+- `Update failed 1.17.16 -> 1.17.17. 1.17.16 was restored.` when the rollback worked or nothing was changed.
+- `Update failed 1.17.16 -> 1.17.17. The rollback did not finish, check the server.` when the rollback failed.
+- `Update failed to 1.17.17.` when the "from" version is not known.
+
+The correlation id is `system-update:<installed|failed>:<job id>`; a job gets one row, however often the tick runs. A downgrade reads the same, and `metadata.operation` says `downgrade`. The `system_update_downgrade` rows that the install route writes are unchanged. See `docs/system-update-logs.md`.

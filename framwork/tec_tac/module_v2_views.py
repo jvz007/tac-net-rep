@@ -292,25 +292,8 @@ class ModuleV2JobLogView(APIView):
         except OSError:
             logger.exception("Tec-Tac module job log could not be read")
             return Response({"detail": "The log could not be read. Check Tec-Tac diagnostics/logs."}, status=503)
-        try:
-            from . import audit
-            audit.record(
-                actor=request.user, module_id="core", action="view", object_type="module_job_log", object_id=log.job_id,
-                metadata={"job_id": log.job_id, "kind": log.kind, "action": log.action, "module": log.module,
-                          "bytes": log.size, "truncated": log.truncated, "download": download},
-                request=request, strict=True)
-        except Exception:
-            logger.exception("Tec-Tac module job log read was refused because its audit row could not be written")
-            return Response({"detail": "The log was not shown because the audit record of this read could not be saved. Try again."}, status=503)
-        from django.http import HttpResponse
-        response = HttpResponse(log.body, content_type="text/plain; charset=utf-8")
-        response["X-Content-Type-Options"] = "nosniff"
-        response["Cache-Control"] = "no-store"
-        response["X-Tec-Tac-Log-Truncated"] = "true" if log.truncated else "false"
-        response["X-Tec-Tac-Log-Bytes"] = str(log.size)
-        response["X-Tec-Tac-Log-Kept"] = log.kept
-        # 1.17.66 (UI 0.12.118): a browser on another origin may read these four headers. Only this route, only on a 200.
-        response["Access-Control-Expose-Headers"] = "X-Tec-Tac-Log-Truncated, X-Tec-Tac-Log-Bytes, X-Tec-Tac-Log-Kept, Content-Disposition"
-        if download:
-            response["Content-Disposition"] = f'attachment; filename="{module_job_logs.download_filename(log)}"'
-        return response
+        return module_job_logs.serve_log(
+            request, log, object_type="module_job_log",
+            metadata={"job_id": log.job_id, "kind": log.kind, "action": log.action, "module": log.module,
+                      "bytes": log.size, "truncated": log.truncated, "download": download},
+            filename=module_job_logs.download_filename(log) if download else None, label="module job log")

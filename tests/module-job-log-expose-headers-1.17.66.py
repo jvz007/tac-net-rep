@@ -99,9 +99,11 @@ print("       a 404, a 400 and a 503 carry no exposed headers")
 
 # ---- only this route sets it
 hits = [p.name for p in APP.glob("*.py") if "Access-Control-Expose-Headers" in p.read_text(encoding="utf-8") and p.name != "contracts.py"]
-must(hits == ["module_v2_views.py"], hits)
-source = (APP / "module_v2_views.py").read_text(encoding="utf-8")
-must(source.count("Access-Control-Expose-Headers") == 1 and source.index("class ModuleV2JobLogView") < source.index("Access-Control-Expose-Headers"), "set once, inside the log view")
+# 1.17.67: the header is built in one shared helper (module_job_logs.log_response) that the module, system update and maintenance log routes call
+must(hits == ["module_job_logs.py"], hits)
+source = (APP / "module_job_logs.py").read_text(encoding="utf-8")
+must(source.count("Access-Control-Expose-Headers") == 2 and source.index("def log_response(") < source.index("Access-Control-Expose-Headers"), "set once, inside the shared helper")
+must("serve_log(" in (APP / "module_v2_views.py").read_text(encoding="utf-8").split("class ModuleV2JobLogView")[1], "the module log view uses it")
 text = (APP / "contracts.py").read_text(encoding="utf-8")
 must(re.search(r"Access-Control-Expose-Headers: X-Tec-Tac-Log-Truncated, X-Tec-Tac-Log-Bytes, X-Tec-Tac-Log-Kept, Content-Disposition", text), "the contract row names the header")
 print("       only the log view sets the header, once; the contract row says so")

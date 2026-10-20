@@ -1318,6 +1318,7 @@ def run_job(job_id):
         if not target.is_dir():
             raise RuntimeError(f"installed component root is missing: {target}")
         old_version = (target / "VERSION").read_text(encoding="utf-8").strip() if (target / "VERSION").is_file() else "unknown"
+        job["installed_version"] = old_version  # 1.17.67: the version installed before this update; Core's audit row says "1.17.16 -> 1.17.17"
         dynamic_inventory = {}
         git_state = None
         backup = None

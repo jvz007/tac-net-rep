@@ -371,6 +371,40 @@ def _dispatch(command: str, job_id: str) -> None:
         raise ServerMaintenanceError(f"Unable to dispatch privileged server-maintenance operation: {detail}", job_id=job_id, classification="dispatch_failed") from exc
 
 
+LOG_PARTS = {
+    "all": (("log", ".log"), ("stdout", ".stdout.log"), ("stderr", ".stderr.log")),
+    "log": ((None, ".log"),),
+    "stdout": ((None, ".stdout.log"),),
+    "stderr": ((None, ".stderr.log"),),
+}
+
+
+def read_job_log(job_id, user, part: str = "all"):
+    """The scrubbed, capped text of the log, stdout and stderr of one job (1.17.67), for ``GET /api/tfd/system/maintenance/jobs/<id>/log/``.
+
+    Not an operation of the ``core.server_maintenance`` capability: nothing a module calls changes. A job of an action that needs a Tec-Tac
+    permission is hidden from a caller who does not hold it: the answer is the same ``ServerMaintenanceNotFound`` as for an unknown job. The
+    job's own sensitive parameter values are removed before the scrub. Raises ``module_job_logs.JobLogError`` (400 bad id or part, 404
+    ``no_log``) and ``ServerMaintenanceNotFound``."""
+    from . import module_job_logs
+
+    safe_id = module_job_logs.parse_job_id(str(job_id))
+    suffixes = LOG_PARTS.get(str(part or "all").strip().lower())
+    if suffixes is None:
+        raise module_job_logs.JobLogError(400, "part must be all, log, stdout or stderr.", "invalid_part")
+    hidden = ServerMaintenanceNotFound(f"Server-maintenance job {safe_id} was not found.", classification="not_found")
+    try:
+        job = _read_job(safe_id)
+    except ServerMaintenanceNotFound as exc:
+        raise hidden from exc
+    except ServerMaintenanceError as exc:
+        raise ServerMaintenanceNotFound(f"Server-maintenance job {safe_id} was not found.", classification="not_found") from exc
+    if not holds_action_permission(user, _job_permission(job)):
+        raise hidden  # denied means hidden (AD-12)
+    return module_job_logs.read_log_for(
+        safe_id, _logs_root(), suffixes, job, _sensitive_values(job), kind="server-maintenance", action=str(job.get("action") or ""), module="")
+
+
 class ServerMaintenanceProvider:
     """Public provider contract for ``core.server_maintenance`` 1.x."""
 

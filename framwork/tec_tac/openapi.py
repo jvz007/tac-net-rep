@@ -59,6 +59,8 @@ CORE_VIEW_CLASS_GROUPS = {
     "SystemUpdatePackageStageView": "Tec-Tac · System Updates",
     "SystemUpdatePackageInstallView": "Tec-Tac · System Updates",
     "SystemUpdateJobView": "Tec-Tac · System Updates",
+    "SystemUpdateJobListView": "Tec-Tac · System Updates",
+    "SystemUpdateJobLogView": "Tec-Tac · System Updates",
     "SystemUpdateOnlineStatusView": "Tec-Tac · System Updates",
     "SystemUpdateBranchesView": "Tec-Tac · System Updates",
     "SystemUpdateOnlineStageView": "Tec-Tac · System Updates",

@@ -206,12 +206,12 @@ def _folder_is_plain(folder: Path) -> bool:
     return os.path.realpath(folder) == expected
 
 
-def _log_size(logs_root: Path, job_id: str):
+def _log_size(logs_root: Path, job_id: str, suffix: str = ".log"):
     """Size of the regular, non-symlink log file of a job, or None when there is none. Reads no content."""
     if not _folder_is_plain(Path(logs_root)):
         return None
     try:
-        info = os.lstat(Path(logs_root) / f"{job_id}.log")
+        info = os.lstat(Path(logs_root) / f"{job_id}{suffix}")
     except OSError:
         return None
     return info.st_size if stat.S_ISREG(info.st_mode) else None
@@ -230,8 +230,8 @@ def _read_range(fd: int, offset: int, length: int) -> bytes:
     return b"".join(chunks)
 
 
-def _open_log(logs_root: Path, job_id: str):
-    """Open ``<logs folder>/<canonical uuid>.log`` for reading and return ``(fd, size)``.
+def _open_log(logs_root: Path, job_id: str, suffix: str = ".log"):
+    """Open ``<logs folder>/<canonical uuid><suffix>`` (``.log`` by default) for reading and return ``(fd, size)``.
 
     No symlink is followed, the folder must be the expected plain directory, and the opened file must be a regular file.
     """
@@ -241,7 +241,7 @@ def _open_log(logs_root: Path, job_id: str):
         if os.path.lexists(logs_root):
             logger.warning("Module job log folder refused: it is not a plain directory.")
         raise missing
-    path = logs_root / f"{job_id}.log"
+    path = logs_root / f"{job_id}{suffix}"
     try:
         before = os.lstat(path)
     except OSError as exc:
@@ -302,13 +302,14 @@ def locate_job(job_id: str):
     raise JobLogError(404, "That module job was not found.", "job_not_found")
 
 
-def _cut_log(fd: int, size: int):
+def _cut_log(fd: int, size: int, limit: int = MAX_LOG_BYTES):
     """Return ``(raw head, raw tail, omitted)``. A file at or under the cap comes back whole as the head with an empty tail."""
-    if size <= MAX_LOG_BYTES:
+    if size <= limit:
         data = _read_range(fd, 0, size)
         return data, b"", 0
-    head = _read_range(fd, 0, HALF_LOG_BYTES)
-    tail = _read_range(fd, size - HALF_LOG_BYTES, HALF_LOG_BYTES)
+    half = limit // 2
+    head = _read_range(fd, 0, half)
+    tail = _read_range(fd, size - half, half)
     cut = head.rfind(b"\n")
     if cut >= 0:
         head = head[:cut + 1]
@@ -338,6 +339,109 @@ def read_job_log(job_id) -> JobLog:
         kept = "all"
     return JobLog(job_id=job_id, kind=kind, action=safe_label(record.get("action")), module=_module_label(record),
                   body=text.encode("utf-8"), size=size, truncated=bool(omitted), kept=kept, omitted=omitted)
+
+
+def _scrub_with(raw: bytes, extra_redact_values, *, tail_segment: bool = False) -> str:
+    """``scrub_bytes`` after the caller's own secret values (a job's sensitive parameters) are replaced. Values under 3 characters are ignored."""
+    text = clean_text(raw)
+    for value in sorted({str(v) for v in (extra_redact_values or ()) if len(str(v)) >= 3}, key=len, reverse=True):
+        text = text.replace(value, _MARK)
+    return scrub_text(text, tail_segment=tail_segment)
+
+
+def _shares(sizes: list, limit: int) -> list:
+    """How many bytes of each part may be kept so that all parts together stay within ``limit``. Small parts are kept whole first."""
+    sizes = [int(v) for v in sizes]
+    if sum(sizes) <= limit:
+        return sizes
+    out = [0] * len(sizes)
+    order = sorted(range(len(sizes)), key=lambda i: sizes[i])
+    left = limit
+    for rank, i in enumerate(order):
+        fair = left // (len(order) - rank)
+        out[i] = min(sizes[i], fair)
+        left -= out[i]
+    return out
+
+
+def read_log_for(job_id, logs_root, suffixes, record, extra_redact_values=(), *, kind: str = "job", action: str = "", module: str = "") -> JobLog:
+    """The scrubbed, capped text of one job's log files in ``logs_root`` (system update and server-maintenance jobs, 1.17.67).
+
+    ``suffixes`` is a sequence of ``(label, suffix)``. With more than one part the body has a ``== label ==`` header before each part, in
+    order. The 5 MB cap is shared between the non-empty parts. A part that does not exist is left out; no part at all is a 404 ``no_log``.
+    Same safe file access as the module log: plain folder, no symlink, regular files only. ``extra_redact_values`` are removed before the scrub."""
+    job_id = parse_job_id(job_id)
+    parts = []
+    for label, suffix in suffixes:
+        size = _log_size(Path(logs_root), job_id, suffix)
+        if size is not None:
+            parts.append((label, suffix, size))
+    if not parts:
+        raise JobLogError(404, "No log was kept for this job.", "no_log")
+    multi = len(suffixes) > 1
+    nonempty = [p for p in parts if p[2] > 0]
+    limits = dict(zip((p[1] for p in nonempty), _shares([p[2] for p in nonempty], MAX_LOG_BYTES), strict=True))
+    pieces = []
+    total = 0
+    omitted_all = 0
+    for label, suffix, size in parts:
+        text = ""
+        if size > 0:
+            fd, real = _open_log(Path(logs_root), job_id, suffix)
+            try:
+                head, tail, omitted = _cut_log(fd, real, max(limits.get(suffix, MAX_LOG_BYTES), 2))
+            finally:
+                os.close(fd)
+            total += real
+            if omitted:
+                omitted_all += omitted
+                marker = f"[... {omitted} bytes were left out of the middle of this log ...]"
+                first = _scrub_with(head, extra_redact_values)
+                joiner = "" if not first or first.endswith(NEWLINE) else NEWLINE
+                text = first + joiner + marker + NEWLINE + _scrub_with(tail, extra_redact_values, tail_segment=True)
+            else:
+                text = _scrub_with(head, extra_redact_values)
+        if multi:
+            text = f"== {label} =={NEWLINE}{text}" + ("" if text.endswith(NEWLINE) or not text else NEWLINE)
+        pieces.append(text)
+    body = (NEWLINE if multi else "").join(pieces).encode("utf-8")
+    return JobLog(job_id=job_id, kind=kind, action=safe_label(action or (record or {}).get("action")), module=safe_label(module, "none") if module else "none",
+                  body=body, size=total, truncated=bool(omitted_all), kept="head-and-tail" if omitted_all else "all", omitted=omitted_all)
+
+
+def log_response(*, body: bytes, size: int, truncated: bool, kept: str, filename: str | None = None):
+    """The one place that builds the answer of every job log route: text, never cached, never sniffed, and the four headers a browser on another
+    origin may read (Access-Control-Expose-Headers, 200 only). ``filename`` makes it an attachment."""
+    from django.http import HttpResponse
+
+    response = HttpResponse(body, content_type="text/plain; charset=utf-8")
+    response["X-Content-Type-Options"] = "nosniff"
+    response["Cache-Control"] = "no-store"
+    response["X-Tec-Tac-Log-Truncated"] = "true" if truncated else "false"
+    response["X-Tec-Tac-Log-Bytes"] = str(size)
+    response["X-Tec-Tac-Log-Kept"] = kept
+    # 1.17.66 (UI 0.12.118): a browser on another origin may read these four headers. Only on a 200.
+    response["Access-Control-Expose-Headers"] = "X-Tec-Tac-Log-Truncated, X-Tec-Tac-Log-Bytes, X-Tec-Tac-Log-Kept, Content-Disposition"
+    if filename:
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response
+
+
+def serve_log(request, log: JobLog, *, object_type: str, metadata: dict, filename: str | None, label: str):
+    """Write the one strict audit row of a log read, then answer with the text. If the row cannot be written the answer is 503 and no text is
+    sent (1.17.67: shared by the module, system update and server-maintenance log routes)."""
+    from rest_framework.response import Response
+
+    try:
+        from . import audit
+
+        audit.record(
+            actor=request.user, module_id="core", action="view", object_type=object_type, object_id=log.job_id,
+            metadata=metadata, request=request, strict=True)
+    except Exception:
+        logger.exception("Tec-Tac %s read was refused because its audit row could not be written", label)
+        return Response({"detail": "The log was not shown because the audit record of this read could not be saved. Try again."}, status=503)
+    return log_response(body=log.body, size=log.size, truncated=log.truncated, kept=log.kept, filename=filename)
 
 
 def download_filename(log: JobLog, today: datetime | None = None) -> str:

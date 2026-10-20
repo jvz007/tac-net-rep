@@ -114,6 +114,16 @@ class Command(BaseCommand):
         except Exception:
             logging.getLogger("tec_tac.server_job_hooks").warning("The server job hook step failed; the next tick retries.", exc_info=True)
 
+        try:
+            # 1.17.67 (Q83): one audit row per finished system update, written from the job file the root helper left ("Update installed
+            # successfully 1.17.16 -> 1.17.17"). The step never raises and logs rather than writing to the output, so the tick's own line
+            # stays the same.
+            from tec_tac.system_update_audit import audit_finished_system_updates
+
+            audit_finished_system_updates()
+        except Exception:
+            logging.getLogger("tec_tac.system_update_audit").warning("The system update audit step failed; the next tick retries.", exc_info=True)
+
         sweep_state = "error" if sweep_error else "ran"
         cleanup_state = "error" if cleanup_error else ("ran" if cleanup and cleanup.get("ran") else "not_due")
         self.stdout.write(

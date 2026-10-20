@@ -200,9 +200,9 @@ def _valid_id(confirmation_id, user, action_id: str, targets_key: str, params_ke
 # ------------------------------------------------------------------------------------------------ the checks
 def is_system_action_schedule(module_id, action_id) -> bool:
     """Is this scheduled action a declared system action (in the signed manifest AND registered with core.system_actions)? Read now."""
-    from .scheduler import _action_declared_as_system_action
+    from .scheduler import system_action_state
 
-    return bool(isinstance(module_id, str) and isinstance(action_id, str) and _action_declared_as_system_action(module_id, action_id))
+    return system_action_state(module_id, action_id) == "declared"
 
 
 def _write_deny_row(user, reason: str, text: str, action_id, owner_module: str) -> None:
@@ -232,6 +232,17 @@ def record_refusal(exc) -> None:
     if pending:
         exc.pending = None
         _write_deny_row(*pending)
+
+
+def _declaration_state(user, action) -> str:
+    """``declared`` or ``not_declared``. When Core could not read the manifest or the registry (``unknown``) it refuses (1.17.67): a schedule that
+    might be a system action is never created, changed or started on a guess. One deny row; the caller saves and queues nothing."""
+    from .scheduler import system_action_state
+
+    state = system_action_state(action.module_id, action.id)
+    if state == "unknown":
+        _deny(user, "declaration_unreadable", action)
+    return state
 
 
 def _controls(user, action, targets, parameters) -> dict:
@@ -334,7 +345,7 @@ def describe_confirmation(user, action_id, targets, parameters=None, when=None) 
     that is not a declared system action it answers ``{"required": False}`` and issues nothing. Raises ``SystemActionCreationRefused`` or
     ``SchedulerError`` (an unknown action)."""
     action = get_scheduled_action(str(action_id or "").strip())
-    if not is_system_action_schedule(action.module_id, action.id):
+    if _declaration_state(user, action) == "not_declared":
         return {"required": False, "text": None, "confirmation_id": None, "total": None, "groups": None, "expires_in": None}
     info = _controls(user, action, targets, parameters)
     params_key = _digest(_parameters_of(parameters))
@@ -359,11 +370,11 @@ def require_creation(user, action, targets, parameters, when, confirmation_id, *
 
     ``defer=True`` is for a caller that holds a database transaction the refusal rolls back (``reconcile_schedule``): the exception then carries
     the deny row in ``pending`` and the caller writes it with ``record_refusal`` after the transaction ends."""
-    if not is_system_action_schedule(action.module_id, action.id):
-        return None
     previous = getattr(_STATE, "deferred", False)
-    _STATE.deferred = bool(defer)
+    _STATE.deferred = bool(defer)  # before the state call: a refusal of an unreadable declaration keeps its deny row after a rollback
     try:
+        if _declaration_state(user, action) == "not_declared":
+            return None
         info = _controls(user, action, targets, parameters)
         if confirmation_id in (None, ""):
             _deny(user, "confirmation_required", action)

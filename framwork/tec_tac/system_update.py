@@ -25,6 +25,7 @@ import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 
+from . import module_job_logs
 from .safe_files import atomic_json
 from .trusted_publishers import PublisherTrustError, verify_release_manifest_signature, verify_release_tree
 from .trust_policy import TrustPolicyError, acceptance as trust_acceptance, get_policy as get_trust_policy, require_accepted as require_trust_accepted
@@ -1161,13 +1162,20 @@ def queue_install(upload_id: str, *, allow_downgrade: bool = False, requested_by
     return public_job(job)
 
 
-def public_job(job: dict) -> dict:
+def public_job(job: dict, *, include_log_tail: bool = True) -> dict:
     allowed = {
         "id", "status", "created_at", "started_at", "finished_at", "stage", "error", "error_type",
         "rollback", "action", "component", "version", "installed_version", "operation", "package_sha256",
         "package_filename", "source", "release_trust", "backup_path", "requested_by", "source_git",
     }
     result = {k: v for k, v in job.items() if k in allowed}
+    # 1.17.67 (additive): the size of the kept log, so the UI can show a Download button only when there is something to download
+    job_key = str(job.get("id") or "")
+    log_bytes = module_job_logs._log_size(LOGS_ROOT, job_key) if module_job_logs._UUID_RE.match(job_key) else None
+    result["log_bytes"] = log_bytes
+    result["has_log"] = log_bytes is not None
+    if not include_log_tail:
+        return result
     log_path = LOGS_ROOT / f"{job.get('id')}.log"
     if log_path.is_file():
         try:
@@ -1186,12 +1194,77 @@ def get_job(job_id: str) -> dict:
         raise SystemUpdateError("Invalid job id.") from exc
     path = JOBS_ROOT / f"{job_id}.json"
     if not path.is_file():
-        raise SystemUpdateError("System update job was not found.")
+        # 1.17.67: a job that finished and was removed from the jobs folder is still in history
+        history = module_job_logs._read_json_file(HISTORY_ROOT / f"{str(job_id).lower()}.json")
+        if history is None:
+            raise SystemUpdateError("System update job was not found.")
+        return public_job(history)
     try:
         job = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise SystemUpdateError("System update job status is unreadable.") from exc
     return public_job(job)
+
+
+LIST_SCAN_FILES = 500  # the list reads the newest files by modification time, never more
+
+
+def _find_job_record(job_id: str):
+    """The record of one job: the jobs folder first, then history. None when neither has a readable regular file."""
+    for root in (JOBS_ROOT, HISTORY_ROOT):
+        record = module_job_logs._read_json_file(Path(root) / f"{job_id}.json")
+        if record is not None:
+            return record
+    return None
+
+
+def list_jobs(*, page=None, page_size=None, component=None, status=None) -> dict:
+    """The system update jobs, newest first, a page at a time (1.17.67). Jobs folder and history are merged by file name (history wins). Only
+    the newest ``LIST_SCAN_FILES`` files are read. Whitelisted fields only: no log text, no path of the backup. Raises
+    ``module_job_logs.HistoryParameterError`` for a bad page or page_size."""
+    page = module_job_logs._positive_int(page, "page", 1)
+    page_size = min(module_job_logs._positive_int(page_size, "page_size", module_job_logs.DEFAULT_PAGE_SIZE), module_job_logs.MAX_PAGE_SIZE)
+    component, status = str(component or "").strip().lower(), str(status or "").strip().lower()
+    files = {}
+    for root in (JOBS_ROOT, HISTORY_ROOT):  # history is read last, so its file wins
+        for job_id, path in module_job_logs._job_files(Path(root)):
+            try:
+                files[job_id] = (os.lstat(path).st_mtime, job_id, path)
+            except OSError:
+                continue
+    newest = sorted(files.values(), key=lambda item: (item[0], item[1]), reverse=True)[:LIST_SCAN_FILES]
+    rows = []
+    for _mtime, job_id, path in newest:
+        record = module_job_logs._read_json_file(path)
+        if record is None or str(record.get("id") or job_id) != job_id:
+            continue
+        if component and str(record.get("component") or "").lower() != component:
+            continue
+        if status and str(record.get("status") or "").lower() != status:
+            continue
+        row = public_job(record, include_log_tail=False)
+        row.pop("backup_path", None)
+        rows.append(row)
+    rows.sort(key=lambda row: (row.get("finished_at") or row.get("created_at") or "", str(row.get("id") or "")), reverse=True)
+    total = len(rows)
+    pages = (total + page_size - 1) // page_size if total else 0
+    offset = (page - 1) * page_size
+    return {
+        "jobs": rows[offset:offset + page_size], "count": len(rows[offset:offset + page_size]), "total": total, "page": page, "page_size": page_size,
+        "pages": pages, "next_page": page + 1 if page < pages else None, "previous_page": page - 1 if page > 1 and pages else None,
+    }
+
+
+def read_job_log(job_id):
+    """The scrubbed, capped text of the log of one system update job (1.17.67). Raises ``module_job_logs.JobLogError``: 400 for a bad id, 404
+    ``job_not_found`` for an unknown or unreadable job and 404 ``no_log`` when no log was kept."""
+    job_id = module_job_logs.parse_job_id(str(job_id))
+    record = _find_job_record(job_id)
+    if record is None:
+        raise module_job_logs.JobLogError(404, "That system update job was not found.", "job_not_found")
+    return module_job_logs.read_log_for(
+        job_id, LOGS_ROOT, ((None, ".log"),), record, (), kind="system-update", action=str(record.get("action") or "install"),
+        module=str(record.get("component") or ""))
 
 
 def _recent_history(limit: int = 12) -> list[dict]:

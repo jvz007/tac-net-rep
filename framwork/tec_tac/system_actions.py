@@ -30,6 +30,13 @@ are cut into groups of at most 2000. Every group has its own mark, its own stric
 once. A group that is already sent is skipped on a retry. A group whose mark is stuck or whose send failed ends the run failed as
 outcome-unknown, is never sent again, and every later group stays not started.
 
+The plan (1.17.67). The groups are fixed on the first attempt of a call and stored in a plan mark on the run (kind ``plan``: the endpoint
+numbers as ranges, and the digest of every group). A retry cuts its groups from that plan, never from the live endpoint list. A call is
+identified by its full sorted id set. A retry whose list differs but overlaps a plan, once any group of that plan was claimed, sent or
+left unknown, ends the run failed as outcome-unknown and sends nothing: an endpoint is never sent twice, a scan may be missed. When nothing was
+sent yet (every group mark of the plan is absent or aborted) the plan is replaced and the call goes on. A second call with no endpoint in
+common with a plan is a new call and is planned on its own.
+
 Honest limits: the owner re-check reads Tactical's role through Core's own helpers; modules share the Core process, so code that reaches
 into Core's private state is outside what this stops (the same limit as docs/caller-identity.md).
 """
@@ -59,7 +66,8 @@ MAX_AGENTS_PER_GROUP = 2000  # Johan, CQ178: more than this splits into groups o
 MAX_GROUPS = 20  # the ceiling of one run (assumption CQ195, asked): 20 groups
 MAX_AGENTS = MAX_AGENTS_PER_GROUP * MAX_GROUPS  # a Core constant: refused above, never truncated
 MAX_PERMISSIONS = 8
-MAX_MARKS_PER_RUN = 100  # one mark per group; room for five full calls
+MAX_MARKS_PER_RUN = 105  # one mark per group plus one plan mark per call; room for five full calls of 20 groups (1.17.67)
+KIND_PLAN = "plan"  # a mark with no ``kind`` is a group mark
 LABEL_MAX = 100
 SCOPE_KIND_AGENTS = "agents"
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}\.[a-z0-9][a-z0-9_-]{0,63}$")
@@ -490,6 +498,7 @@ REASONS = {
     "targets_unresolved": "Core cannot read this schedule's targets as endpoints, so nothing was run.",
     "not_permitted": "You do not hold the permission this system action needs.",
     "confirmation_required": "This system action needs the Yes or No confirmation, and none came with the request.",
+    "declaration_unreadable": "Core could not read the signed manifest or the registry just now, so it did not create or change this schedule. Try again in a minute.",
     "confirmation_invalid": "The confirmation does not match this person, action, endpoints, parameters and timing, or it has expired. Ask again.",
 }
 
@@ -602,6 +611,74 @@ def _agent_ids(agent_ids):
 def _digest(run_id, action_id: str, ids) -> str:
     raw = f"{run_id}|{action_id}|" + ",".join(str(i) for i in ids)
     return hashlib.sha256(raw.encode("ascii")).hexdigest()[:32]
+
+
+def _plan_digest(run_id, action_id: str, ids) -> str:
+    raw = f"{run_id}|{action_id}|plan|" + ",".join(str(i) for i in ids)
+    return hashlib.sha256(raw.encode("ascii")).hexdigest()[:32]
+
+
+def _ranges_of(ids) -> list:
+    """The sorted ids as ``[first, last]`` runs: compact, and enough to tell whether two id sets overlap."""
+    out = []
+    for value in ids:
+        if out and value == out[-1][1] + 1:
+            out[-1][1] = value
+        else:
+            out.append([value, value])
+    return out
+
+
+def _ranges_overlap(a, b) -> bool:
+    i = j = 0
+    while i < len(a) and j < len(b):
+        if a[i][1] < b[j][0]:
+            i += 1
+        elif b[j][1] < a[i][0]:
+            j += 1
+        else:
+            return True
+    return False
+
+
+def _is_plan(mark) -> bool:
+    return isinstance(mark, dict) and mark.get("kind") == KIND_PLAN
+
+
+def _claim_plan(run_id, action_id: str, ids, group_digests):
+    """Fix the group plan of this call under the run's row lock (1.17.67). Returns ``(state, plan)``: ``new`` or ``same`` (go on with
+    ``plan``), ``changed`` (an overlapping plan has a group that was claimed, sent or left unknown: send nothing), ``gone`` or ``full``."""
+    digest = _plan_digest(run_id, action_id, ids)
+    ranges = _ranges_of(ids)
+    with transaction.atomic():
+        current = _locked_run(run_id)
+        if str(current.status) != _RUNNING:
+            return "gone", None
+        marks = [dict(m) for m in (current.system_action_marks or []) if isinstance(m, dict)]
+        plans = [m for m in marks if _is_plan(m) and m.get("action_id") == action_id]
+        for plan in plans:
+            if plan.get("targets_digest") == digest:
+                return "same", plan
+        stale = []
+        for plan in plans:
+            if not _ranges_overlap(ranges, plan.get("ids") or []):
+                continue  # a second, disjoint call of the same run is legal
+            own = set(plan.get("group_digests") or [])
+            for mark in marks:
+                if not _is_plan(mark) and mark.get("action_id") == action_id and mark.get("targets_digest") in own and mark.get("state") != STATE_ABORTED:
+                    return "changed", plan
+            stale.append(plan)
+        if stale:  # nothing of the old plan was sent: it is replaced, and its aborted group marks go with it
+            gone_digests = {d for plan in stale for d in (plan.get("group_digests") or [])} | {plan.get("targets_digest") for plan in stale}
+            marks = [m for m in marks if not (m.get("action_id") == action_id and m.get("targets_digest") in gone_digests)]
+        if len(marks) >= MAX_MARKS_PER_RUN:
+            return "full", None
+        plan = {"action_id": action_id, "kind": KIND_PLAN, "targets_digest": digest, "ids": ranges, "group_digests": list(group_digests),
+                "group_size": MAX_AGENTS_PER_GROUP, "state": KIND_PLAN}
+        marks.append(plan)
+        current.system_action_marks = marks
+        current.save(update_fields=["system_action_marks"])
+        return "new", plan
 
 
 def _claim_mark(run_id, action_id: str, digest: str, agents: int):
@@ -821,9 +898,24 @@ def _run(context, identity, action_id, agent_ids, parameters) -> dict:
     groups = _groups_of(ids)
     digests = [_digest(run.id, definition.id, group) for group in groups]
     existing = [m for m in (getattr(run, "system_action_marks", None) or []) if isinstance(m, dict)]
-    ours = sum(1 for m in existing if m.get("action_id") == definition.id and m.get("targets_digest") in set(digests))
-    if len(existing) - ours + len(groups) > MAX_MARKS_PER_RUN:
+    plan_digest = _plan_digest(run.id, definition.id, ids)
+    ours = sum(1 for m in existing if m.get("action_id") == definition.id and m.get("targets_digest") in set(digests) | {plan_digest})
+    if len(existing) - ours + len(groups) + 1 > MAX_MARKS_PER_RUN:
         _refuse("mark_limit", **common)
+    plan_state, plan = _claim_plan(run.id, definition.id, ids, digests)
+    if plan_state == "gone":
+        raise SchedulerPermanentError("The run is no longer active, so nothing was sent.")
+    if plan_state == "full":
+        _refuse("mark_limit", **common)
+    if plan_state == "changed":
+        _unknown(run.id, owner, definition, definition.id, module_id, provenance,
+                 "The endpoint list changed after part of this run was sent, so Core did not send again. Check the endpoints.")
+    # the groups come from the stored plan, never from the live list again
+    size = int(plan.get("group_size") or MAX_AGENTS_PER_GROUP)
+    groups = [list(ids[i:i + size]) for i in range(0, len(ids), size)]
+    digests = list(plan.get("group_digests") or digests)
+    if len(digests) != len(groups):
+        _unknown(run.id, owner, definition, definition.id, module_id, provenance, "The stored plan of this run does not fit the endpoints, so Core did not send again. Check the endpoints.")
     extra = {"vanished_targets": int(vanished)} if vanished else {}  # 1.17.63: targets that no longer exist, while the rest still run
     row_extra = dict(entry.audit_extra(cleaned))
     if entry.reapproves_by_policy:

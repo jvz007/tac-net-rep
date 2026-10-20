@@ -4,7 +4,7 @@ from .resource_views import ResourceListView, ResourceDetailView, ResourceMutabl
 from .server_backup_views import BackupRestoreView, BackupRestoreJobView
 from .server_maintenance_views import (
     ServerMaintenanceActionListView, ServerMaintenanceJobListView,
-    ServerMaintenanceJobDetailView, ServerMaintenanceJobCancelView,
+    ServerMaintenanceJobDetailView, ServerMaintenanceJobCancelView, ServerMaintenanceJobLogView,
 )
 from .session_security_views import (
     CurrentSessionView, SessionActivityView, SessionListView, SessionRevokeView,
@@ -34,7 +34,7 @@ from .views import (
     ModuleRemoveView, RoleExtensionPermissionsView, TotpEnrollmentView, TotpQrView,
     SystemUpdateStatusView, SystemUpdatePackageInspectView, SystemUpdatePackageStageView,
     SystemUpdatePackageInstallView, SystemUpdateJobView, SystemUpdateOnlineStatusView,
-    SystemUpdateBranchesView, SystemUpdateOnlineStageView, SystemUpdateTrustPolicyView, UiContextView,
+    SystemUpdateBranchesView, SystemUpdateOnlineStageView, SystemUpdateJobListView, SystemUpdateJobLogView, SystemUpdateTrustPolicyView, UiContextView,
 )
 from .module_repository_views import (
     ModuleRepositoryListView, ModuleRepositoryDetailView, ModuleRepositorySyncView,
@@ -129,13 +129,16 @@ urlpatterns = [
     path("system/maintenance/actions/", ServerMaintenanceActionListView.as_view(), name="tec-tac-server-maintenance-actions"),
     path("system/maintenance/jobs/", ServerMaintenanceJobListView.as_view(), name="tec-tac-server-maintenance-jobs"),
     path("system/maintenance/jobs/<uuid:job_id>/", ServerMaintenanceJobDetailView.as_view(), name="tec-tac-server-maintenance-job-detail"),
+    path("system/maintenance/jobs/<uuid:job_id>/log/", ServerMaintenanceJobLogView.as_view(), name="tec-tac-server-maintenance-job-log"),
     path("system/maintenance/jobs/<uuid:job_id>/cancel/", ServerMaintenanceJobCancelView.as_view(), name="tec-tac-server-maintenance-job-cancel"),
     path("system/updates/", SystemUpdateStatusView.as_view(), name="tec-tac-system-update-status"),
     path("system/updates/trust-policy/", SystemUpdateTrustPolicyView.as_view(), name="tec-tac-system-update-trust-policy"),
     path("system/updates/packages/inspect/", SystemUpdatePackageInspectView.as_view(), name="tec-tac-system-update-package-inspect"),
     path("system/updates/packages/<uuid:upload_id>/", SystemUpdatePackageStageView.as_view(), name="tec-tac-system-update-package-stage"),
     path("system/updates/packages/<uuid:upload_id>/install/", SystemUpdatePackageInstallView.as_view(), name="tec-tac-system-update-package-install"),
+    path("system/updates/jobs/", SystemUpdateJobListView.as_view(), name="tec-tac-system-update-jobs"),
     path("system/updates/jobs/<uuid:job_id>/", SystemUpdateJobView.as_view(), name="tec-tac-system-update-job"),
+    path("system/updates/jobs/<uuid:job_id>/log/", SystemUpdateJobLogView.as_view(), name="tec-tac-system-update-job-log"),
     path("system/updates/online/", SystemUpdateOnlineStatusView.as_view(), name="tec-tac-system-update-online-status"),
     path("system/updates/branches/", SystemUpdateBranchesView.as_view(), name="tec-tac-system-update-branches"),
     path("system/updates/online/stage/", SystemUpdateOnlineStageView.as_view(), name="tec-tac-system-update-online-stage"),

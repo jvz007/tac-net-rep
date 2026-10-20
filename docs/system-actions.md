@@ -118,7 +118,8 @@ Each refusal ends the run `skipped` with error type `SystemActionRefused`, write
 | `out_of_scope` | Every endpoint exists and lies inside the owner's Tactical role scope. One endpoint outside refuses the whole call. Nothing is narrowed silently. A scheduler manager gets no bypass here, because Core's scheduler-manager shortcut would widen rights for a Tactical function. **Skipped for a scheduled run (1.17.65)** (the scope was checked when the schedule was made, and `outside_targets` below still holds the run to the saved targets). |
 | `reapproves_by_policy` | Not returned since 1.17.66 (CQ173). The code stays in the list so a module that names it does not break. |
 | `function_unavailable` | Core can import the Tactical function. A Tactical upgrade can never make Core call something else. |
-| `mark_limit` | A run holds at most 100 marks (one per group; five full calls of 20 groups). Judged before any group is sent. |
+| `mark_limit` | A run holds at most 105 marks (one per group and one plan mark per call; five full calls of 20 groups). Judged before any group is sent. |
+| `declaration_unreadable` | Since 1.17.67, at creation, edit, switch-on or a one-off start (and when the confirmation text is asked for). Core could not read the signed manifest or the registry just now, so it cannot tell whether the action is a system action. Nothing is saved, queued or issued, and one deny row is written. Try again in a minute. An action that the registry or the manifest already shows is not a system action is never refused for it, so an ordinary schedule is unaffected by a read fault. At run time a failed read still keeps every re-check. |
 | `not_permitted`, `confirmation_required`, `confirmation_invalid` | Since 1.17.66, at creation, edit or a one-off start (see "Creating or editing a schedule"). They are raised as `SystemActionCreationRefused`, not by `run_system_action`. |
 | `outside_targets` | Since 1.17.62: every endpoint is one of the run's snapshotted schedule targets. A run never widens the schedule's set. A target that no longer exists is counted in the refusal text. |
 | `targets_unresolved` | Since 1.17.62: Core can read the run's snapshot as endpoints (a client, a site, endpoints, or the Tactical scope of a dynamic target, which is an upper bound: the module's own filter only narrows it). A module-owned target type cannot be read, so it is refused. `none` names no endpoint, so it refuses as `outside_targets`. |
@@ -155,6 +156,12 @@ Johan signed this on 20 October 2026: more than 2000 splits into groups of at mo
 4. **Each group is its own at-most-once send:** its own mark (a digest of the run id, the action id and that group's ids), its own strict audit row and its own `.delay()`.
 5. **A failed audit write sends nothing for that group.** The mark is set to `aborted` and the run fails as a transient error. A retry sends that group once. A group that was already sent is skipped.
 6. **A group whose mark is stuck at `claiming`, or whose send raised, ends the run failed as `OutcomeUnknown`.** It is never sent again, and every later group stays not started.
+7. **The plan is fixed on the first attempt (1.17.67).** Core stores one plan mark per call (`kind: "plan"`, the endpoint numbers as ranges, the digest of every group). A retry cuts its groups from the stored plan, never from the live endpoint list. A call is identified by its full sorted id set.
+   - Same ids: a retry, as before.
+   - No endpoint in common with an earlier plan of the run: a new call, planned on its own.
+   - A different list that overlaps a plan, after any group of that plan was claimed, sent or left unknown: the run ends failed as `OutcomeUnknown`, nothing more is sent, one `custom:outcome-unknown` row (counts only). An endpoint is never sent twice. A scan may be missed, so check the endpoints.
+   - A different list that overlaps a plan when nothing was sent yet (every group mark is absent or aborted): the plan is replaced and the call goes on.
+   The plan mark carries no audit row and sends nothing.
 7. **The result** keeps `outcome`, `agents` (the total) and `message`, and gains `groups` (`{total, sent, failed, not_started}`) and one plain `summary` line, for example "4500 endpoint(s) in 3 group(s): 3 sent, 0 failed, 0 not started." A failure text carries the same counts. Counts only: no endpoint ids in any row, result or text.
 
 Core does not hold the Tactical work back between groups. Each group is queued at once and Tactical runs them as its workers allow.

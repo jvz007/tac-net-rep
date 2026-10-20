@@ -42,6 +42,8 @@ from .system_update import (
     SystemUpdateError,
     discard_stage as discard_system_stage,
     get_job as get_system_update_job,
+    list_jobs as list_system_update_jobs,
+    read_job_log as read_system_update_job_log,
     list_branches as system_update_branches,
     online_status as system_update_online_status,
     queue_install as queue_system_update,
@@ -859,6 +861,45 @@ class SystemUpdateJobView(APIView):
             return Response(get_system_update_job(str(job_id)))
         except SystemUpdateError as exc:
             return Response({"detail": str(exc)}, status=404)
+
+
+@extend_schema_view(get=extend_schema(tags=["Tec-Tac System Updates"], summary="List Tec-Tac system update jobs, newest first (1.17.67): jobs folder and history"))
+class SystemUpdateJobListView(APIView):
+    permission_classes = [SessionAuthenticated]
+
+    def get(self, request):
+        _require_module_manager(request.user)
+        from . import module_job_logs
+
+        params = request.query_params
+        try:
+            return Response(list_system_update_jobs(page=params.get("page"), page_size=params.get("page_size"), component=params.get("component"), status=params.get("status")))
+        except module_job_logs.HistoryParameterError as exc:
+            return Response({"detail": str(exc)}, status=400)
+
+
+@extend_schema_view(get=extend_schema(tags=["Tec-Tac System Updates"], summary="Full log of one system update job (1.17.67): scrubbed, capped at 5 MB, audited"))
+class SystemUpdateJobLogView(APIView):
+    """The job's log as plain text. Inline by default; ``?download=1`` sends it as a file. Every read writes one strict audit row."""
+    permission_classes = [SessionAuthenticated]
+
+    def get(self, request, job_id):
+        _require_module_manager(request.user)
+        from . import module_job_logs
+
+        download = request.query_params.get("download") == "1"
+        try:
+            log = read_system_update_job_log(str(job_id))
+        except module_job_logs.JobLogError as exc:
+            return Response({"detail": str(exc), "code": exc.code}, status=exc.status)
+        except OSError:
+            logger.exception("Tec-Tac system update job log could not be read")
+            return Response({"detail": "The log could not be read. Check Tec-Tac diagnostics/logs."}, status=503)
+        filename = f"system-update-{module_job_logs.safe_label(log.module)}-{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.log" if download else None
+        return module_job_logs.serve_log(
+            request, log, object_type="system_update_job_log",
+            metadata={"job_id": log.job_id, "component": log.module, "bytes": log.size, "truncated": log.truncated, "download": download},
+            filename=filename, label="system update job log")
 
 
 @extend_schema_view(get=extend_schema(tags=["Tec-Tac System Updates"], summary="Check the latest stable repository release for a system component"))

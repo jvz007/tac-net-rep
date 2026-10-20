@@ -178,6 +178,32 @@ def _action_declared_as_system_action(module_id: str, action_id: str) -> bool:
         return False
 
 
+def system_action_state(module_id, action_id) -> str:
+    """Is ``action_id`` a declared system action? ``'declared'`` (listed in the signed manifest AND registered with core.system_actions),
+    ``'not_declared'`` (a definite no from either fact) or ``'unknown'`` (a read failed and the other fact did not already settle it) (1.17.67).
+
+    The creation gate needs BOTH facts, so a definite False from either one proves an ordinary action. The cheap memory check runs first, so an
+    ordinary action never reads the manifest. ``_action_declared_as_system_action`` is not this: it stays the run-time exemption, where a failed
+    read means False and every re-check is kept (the safe side there)."""
+    if not isinstance(module_id, str) or not isinstance(action_id, str):
+        return "not_declared"
+    from . import system_actions
+
+    try:
+        registered = bool(system_actions.is_registered_system_action(module_id, action_id))
+    except Exception:  # noqa: BLE001 - a failed read is not an answer; the manifest may still settle it
+        registered = None
+    if registered is False:
+        return "not_declared"
+    try:
+        listed = action_id in _manifest_system_actions(module_id)
+    except Exception:  # noqa: BLE001
+        return "unknown"
+    if not listed:
+        return "not_declared"
+    return "declared" if registered else "unknown"
+
+
 def register_scheduled_action(*, id: str, module_id: str, label: str, handler, description: str = "", target_types=("none",), permission: str | list | tuple | None = None, dangerous: bool = False, timeout_seconds: int = 3600, unattended: bool = False):
     action_id = str(id or "").strip()
     module = str(module_id or "").strip()

@@ -5,15 +5,23 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+import logging
+from datetime import UTC, datetime
+
 from .capabilities import build_operation_context
+from . import module_job_logs
 from .server_maintenance import (
     ServerMaintenanceError,
+    ServerMaintenanceNotFound,
+    read_job_log,
     ServerMaintenancePermissionDenied,
     get_server_maintenance_provider,
     holds_action_permission,
 )
 from .session_security import SessionAuthenticated
 from .rbac import can_manage_privileged_operations
+
+logger = logging.getLogger(__name__)
 
 
 def _require_server_maintenance(user):
@@ -118,6 +126,33 @@ class ServerMaintenanceJobDetailView(APIView):
             return Response(job)
         except ServerMaintenanceError as exc:
             return Response({"detail": str(exc), "classification": exc.classification, "job_id": exc.job_id}, status=404)
+
+
+@extend_schema_view(get=extend_schema(tags=["Tec-Tac Server Maintenance"], summary="Log, stdout and stderr of one server-maintenance job (1.17.67): scrubbed, capped at 5 MB, audited"))
+class ServerMaintenanceJobLogView(APIView):
+    """The job's log as plain text. Inline by default; ``?download=1`` sends a file; ``?part=all|log|stdout|stderr`` (default all, three headed
+    sections). Every read writes one strict audit row; if it cannot be written nothing is sent."""
+    permission_classes = [SessionAuthenticated]
+
+    def get(self, request, job_id):
+        _require_server_maintenance(request.user)
+        download = request.query_params.get("download") == "1"
+        part = str(request.query_params.get("part") or "all").strip().lower()
+        try:
+            log = read_job_log(str(job_id), request.user, part)
+        except ServerMaintenanceNotFound:
+            return Response({"detail": f"Server-maintenance job {job_id} was not found.", "code": "job_not_found"}, status=404)
+        except module_job_logs.JobLogError as exc:
+            return Response({"detail": str(exc), "code": exc.code}, status=exc.status)
+        except OSError:
+            logger.exception("Tec-Tac server-maintenance job log could not be read")
+            return Response({"detail": "The log could not be read. Check Tec-Tac diagnostics/logs."}, status=503)
+        day = datetime.now(UTC).strftime("%Y-%m-%d")
+        filename = f"server-maintenance-{module_job_logs.safe_label(log.action)}-{day}.log" if download else None
+        return module_job_logs.serve_log(
+            request, log, object_type="server_maintenance_job_log",
+            metadata={"job_id": log.job_id, "action": log.action, "part": part, "bytes": log.size, "truncated": log.truncated, "download": download},
+            filename=filename, label="server-maintenance job log")
 
 
 @extend_schema_view(post=extend_schema(tags=["Tec-Tac Server Maintenance"], summary="Cancel a durable server-maintenance job"))
