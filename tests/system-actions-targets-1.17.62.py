@@ -98,7 +98,7 @@ print("       ids inside an endpoint, client, site or dynamic-scope snapshot run
 # ---- one id outside refuses the whole call
 run, out = start({"type": "endpoint", "ids": [str(i) for i in IDS]}, agents=[*IDS, OUTSIDE])
 row = refused(run, out, "outside_targets")
-must(row["metadata"] == {"reason": "outside_targets", "requested_by": "scheduler", "owner_module": "patching", "run_id": str(run.id)}, row["metadata"])
+must(row["metadata"] == {"reason": "outside_targets", "requested_by": "scheduler", "owner_module": "patching", "run_id": str(run.id), "run_kind": "scheduled", "creator": "alice", "confirmed_by": None}, row["metadata"])  # 1.17.63: run_kind, creator, confirmed_by
 must(row["actor"] is alice and "never widens" in run.error and "no longer exist" not in run.error, run.error)
 run, out = start({"type": "endpoint", "ids": [str(IDS[0])]})  # the handler names three; the schedule targets one
 refused(run, out, "outside_targets")

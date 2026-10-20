@@ -26,7 +26,11 @@ PAYLOAD_MAX_DEPTH = 4
 RESULT_MAX_BYTES = 2048
 ERROR_MAX_CHARS = 200
 
-JOB_ID_RE = re.compile(r"^([a-z0-9][a-z0-9_-]{0,63})\.([a-z0-9][a-z0-9._-]{0,79})$")
+# 1.17.63 (CQ183): the module part keeps the module id's own spelling (module ids are case-sensitive, docs/module-identifiers.md, and Core never
+# case-folds one), so ``securityWAF.server_job_finished`` can register. The job part after the dot stays lowercase. ``clean_spec`` compares the
+# module part with the module id exactly, so ``securitywaf.x`` and ``SecurityWAF.x`` cannot register for ``securityWAF``.
+MODULE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+JOB_ID_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_-]{0,63})\.([a-z0-9][a-z0-9._-]{0,79})$")
 LABEL_MAX_CHARS = 120
 
 # name: (minimum, default, maximum). Core's ceilings; a module cannot exceed the maximum.
@@ -180,13 +184,13 @@ def clean_spec(*, id: Any, module_id: Any, label: Any, soft_time_limit_seconds: 
                backoff_seconds: Any = None, max_backoff_seconds: Any = None, expires_seconds: Any = None, max_backlog: Any = None,
                dedupe_seconds: Any = None, audit_success: Any = False) -> EventJobSpec:
     """Check every registration argument but the handler and the module's own folder (``event_jobs`` does those)."""
-    if not isinstance(module_id, str) or not re.match(r"^[a-z0-9][a-z0-9_-]{0,63}$", module_id):
+    if not isinstance(module_id, str) or not MODULE_ID_RE.fullmatch(module_id):
         raise EventJobPolicyError("module_id must be the module's own id.")
     if not isinstance(id, str):
         raise EventJobPolicyError("id must be '<module_id>.<job>'.")
-    match = JOB_ID_RE.match(id)
+    match = JOB_ID_RE.fullmatch(id)  # fullmatch: a "$" alone also accepts one trailing newline (1.17.63)
     if match is None:
-        raise EventJobPolicyError("id must be '<module_id>.<job>' in lowercase letters, digits, - _ and . (the job part).")
+        raise EventJobPolicyError("id must be '<module_id>.<job>': the module id as it is spelled, then a dot, then the job part in lowercase letters, digits, - _ and .")
     if match.group(1) != module_id:
         raise EventJobPolicyError("id must start with the module's own id and a dot: a module cannot register under another module's id.")
     if not isinstance(label, str) or not label.strip() or len(label.strip()) > LABEL_MAX_CHARS or _CONTROL_RE.search(label):

@@ -50,7 +50,10 @@ from pathlib import Path
 logger = logging.getLogger("tec_tac.server_job_hooks")
 
 HOOK_JOB_NAME = "server_job_finished"
+# BATCH caps the jobs HANDED OVER (read as finished) in one tick. READ_BUDGET caps the job files read in one tick, so files that are not
+# finished yet cannot use up the batch (1.17.63, the held Medium of the 1.17.62 review).
 BATCH = 50
+READ_BUDGET = 200
 CANDIDATE_CAP = 2000
 LOOKUP_CHUNK = 500
 RECENT_WINDOW = timedelta(hours=6)
@@ -59,7 +62,8 @@ CLAIM_STALE = timedelta(minutes=15)
 RETENTION = timedelta(days=30)
 KEY_PREFIX = "server-job:"
 TERMINAL = frozenset({"succeeded", "failed", "cancelled", "dispatch_failed"})
-OWNER_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+# 1.17.63 (CQ183): an owner is read as the job file wrote it, with the module id's own spelling. Never lowercased.
+OWNER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 ACTION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 ACTION_SKIPPED = "custom:server-job-hook-skipped"
@@ -106,8 +110,8 @@ def _now() -> datetime:
     return timezone.now()
 
 
-def _recent_job_ids(now: datetime) -> list[str]:
-    """The ids of job files changed inside the window, oldest first, at most ``CANDIDATE_CAP``. A listing and a stat, no file is read."""
+def _recent_job_ids(now: datetime) -> list[tuple[float, str]]:
+    """``(mtime, job id)`` of the job files changed inside the window, oldest first, at most ``CANDIDATE_CAP``. A listing and a stat, no file is read."""
     root = Path(_sm()._jobs_root())
     if not root.is_dir():
         return []
@@ -128,7 +132,7 @@ def _recent_job_ids(now: datetime) -> list[str]:
             if mtime >= floor:
                 found.append((mtime, canonical))
     found.sort()
-    return [job_id for _mtime, job_id in found[:CANDIDATE_CAP]]
+    return [(mtime, job_id) for mtime, job_id in found[:CANDIDATE_CAP]]
 
 
 def _settled_ids(job_ids: list[str]) -> set[str]:
@@ -252,21 +256,40 @@ def hook_payload(job: dict) -> dict:
 
 
 # ------------------------------------------------------------------------------------------------ the tick step
-def _handle_one(job_id: str, counts: dict) -> None:
+# Job files read as not finished (or briefly not there): job id -> the file's mtime when it was read. While the mtime is the same the
+# file is skipped with no read, because a status change rewrites the job file and so changes its mtime. In memory, per process, and
+# cleared of every job outside the window each tick, so a stuck job costs one read and not one a minute. Never decides anything by
+# itself: a job it skips is simply looked at again once its file changes.
+_WAITING: dict[str, float] = {}
+
+
+def _handle_one(job_id: str, counts: dict, mtime: float | None = None) -> bool:
+    """Read one job file and hand it over when it is finished. True only when the job was read as FINISHED (it uses the batch)."""
     sm = _sm()
     try:
         job = sm._read_job(job_id)
     except sm.ServerMaintenanceNotFound:
         counts["waiting"] += 1
-        return
+        if mtime is not None:
+            _WAITING[job_id] = mtime
+        return False
     except Exception:
         counts["unreadable"] += 1
         logger.warning("A server job could not be read; the next tick tries again.", exc_info=True)
-        return
+        return False
     status = str(job.get("status") or "")
     if status not in TERMINAL:
         counts["waiting"] += 1
-        return
+        if mtime is not None:
+            _WAITING[job_id] = mtime
+        return False
+    _WAITING.pop(job_id, None)
+    _hand_over(job_id, job, status, counts)
+    return True
+
+
+def _hand_over(job_id: str, job: dict, status: str, counts: dict) -> None:
+    """Hand one job read as finished to the module that owns it (the part of the tick that stores the event)."""
     action_id = str(job.get("action") or "")
     action_id = action_id if ACTION_RE.fullmatch(action_id) else ""
     raw_owner = job.get("owner_module")
@@ -313,7 +336,9 @@ def _handle_one(job_id: str, counts: dict) -> None:
 
 
 def deliver_finished_server_jobs(now: datetime | None = None, limit: int = BATCH) -> dict:
-    """Hand every recently finished server-maintenance job to the module that owns it, once. Never raises; at most ``limit`` job files read.
+    """Hand every recently finished server-maintenance job to the module that owns it, once. Never raises. At most ``limit`` (and never more
+    than ``BATCH``) finished jobs are handed over a tick, and at most ``READ_BUDGET`` job files are read. A file that is not finished is
+    skipped with no read while its mtime is unchanged, so unfinished files cannot use the batch (1.17.63).
 
     Runs no module code: it stores one event job (``event_jobs.publish_for_core``) and a worker runs the handler. Returns counts:
     ``checked``, ``delivered``, ``waiting``, ``skipped``, ``ignored``, ``duplicate``, ``retry``, ``abandoned``, ``unreadable``, ``errors``."""
@@ -323,16 +348,28 @@ def deliver_finished_server_jobs(now: datetime | None = None, limit: int = BATCH
         if moment.tzinfo is None:
             moment = moment.replace(tzinfo=dt_timezone.utc)
         recent = _recent_job_ids(moment)
-        settled = _settled_ids(recent) if recent else set()
-        todo = [job_id for job_id in recent if job_id not in settled][:max(1, min(int(limit), BATCH))]
+        settled = _settled_ids([job_id for _mtime, job_id in recent]) if recent else set()
+        in_window = {job_id for _mtime, job_id in recent}
+        for stale in [job_id for job_id in _WAITING if job_id not in in_window]:
+            _WAITING.pop(stale, None)  # outside the window: forgotten
+        todo = [(mtime, job_id) for mtime, job_id in recent if job_id not in settled]
+        batch = max(1, min(int(limit), BATCH))
     except Exception:
         logger.exception("The finished server jobs could not be listed")
         counts["errors"] += 1
         return counts
-    for job_id in todo:
+    reads = handed = 0
+    for mtime, job_id in todo:
+        if _WAITING.get(job_id) == mtime:
+            counts["waiting"] += 1  # read as not finished and not changed since: no read, no cost
+            continue
+        if handed >= batch or reads >= READ_BUDGET:
+            break
+        reads += 1
         counts["checked"] += 1
         try:
-            _handle_one(job_id, counts)
+            if _handle_one(job_id, counts, mtime):
+                handed += 1
         except Exception:
             counts["errors"] += 1
             logger.exception("A finished server job could not be handed over; the next tick tries again.")

@@ -36,7 +36,7 @@ must([a["action"] for a in AUDITS] == ["run"], AUDITS)
 row = AUDITS[0]
 must(set(row) == {"actor", "module_id", "action", "object_type", "object_id", "message", "metadata", "strict"}, set(row))
 must(row["strict"] is True and row["actor"] is alice and row["module_id"] == "core" and row["object_type"] == "system_action" and row["object_id"] == "patching.scan", row)
-must(set(row["metadata"]) == {"requested_by", "run_id", "schedule_id", "owner_module", "function", "agent_count", "targets_digest"}, row["metadata"])
+must(set(row["metadata"]) == {"requested_by", "run_id", "schedule_id", "owner_module", "function", "agent_count", "targets_digest", "run_kind", "creator", "confirmed_by"}, row["metadata"])  # 1.17.63 added the last three: who is behind the run
 must(row["metadata"]["requested_by"] == "scheduler" and row["metadata"]["agent_count"] == 2, row["metadata"])
 must(not any(str(i) in repr(row) for i in IDS), "no endpoint number")
 must(re.fullmatch(r"[0-9a-f]{32}", row["metadata"]["targets_digest"]), row["metadata"]["targets_digest"])
@@ -55,7 +55,7 @@ must(len(AUDITS) == 1, AUDITS)
 row = AUDITS[0]
 must(set(row) == {"actor", "module_id", "action", "object_type", "object_id", "message", "metadata"} and "strict" not in row, set(row))
 must(row["action"] == "deny" and row["actor"] is alice and row["module_id"] == "core" and row["object_type"] == "system_action" and row["object_id"] == "patching.scan", row)
-must(row["metadata"] == {"reason": "permission_lost", "requested_by": "scheduler", "owner_module": "patching", "run_id": str(run.id)}, row["metadata"])
+must(row["metadata"] == {"reason": "permission_lost", "requested_by": "scheduler", "owner_module": "patching", "run_id": str(run.id), "run_kind": "scheduled", "creator": "alice", "confirmed_by": None}, row["metadata"])  # 1.17.63: run_kind, creator, confirmed_by
 must(row["message"].startswith("A scheduled system action was refused:") and not any(str(i) in repr(row) for i in IDS), row["message"])
 FLAGS["alice"] = set(BOTH)
 print("       the deny row: reason code, requested_by scheduler, owner module and run id; not strict; no ids")
@@ -66,7 +66,7 @@ run.system_action_marks = [{"action_id": "patching.scan", "targets_digest": sa._
 go(run)
 row = AUDITS[0]
 must([a["action"] for a in AUDITS] == ["custom:outcome-unknown"] and row["actor"] is alice and row["object_type"] == "system_action", AUDITS)
-must(row["metadata"] == {"requested_by": "scheduler", "run_id": str(run.id), "owner_module": "patching", "reason": "outcome_unknown"}, row["metadata"])
+must(row["metadata"] == {"requested_by": "scheduler", "run_id": str(run.id), "owner_module": "patching", "reason": "outcome_unknown", "run_kind": "scheduled", "creator": "alice", "confirmed_by": None}, row["metadata"])  # 1.17.63: run_kind, creator, confirmed_by
 print("       the outcome-unknown row: the owner as actor, reason and run id only")
 
 # every custom action this release writes is a valid audit action name and none is the Core-only failed action

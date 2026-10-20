@@ -75,7 +75,7 @@ def deliver_alert(context):
 
 | Argument | Meaning | Core's limit (default) |
 |---|---|---|
-| `id` | `"<module_id>.<job>"`; the prefix must be the module's own id | lowercase letters, digits, `-` `_` and `.` in the job part |
+| `id` | `"<module_id>.<job>"`; the prefix must be the module's own id, spelled exactly as the module spells it (since 1.17.63, so `securityWAF.server_job_finished` registers for `securityWAF`) | the job part after the dot: lowercase letters, digits, `-` `_` and `.`. Core never case-folds a module id: `securitywaf.x` and `SecurityWAF.x` do not register for `securityWAF`. |
 | `module_id` | the module that owns the job | an installed, enabled extension |
 | `label` | one plain line for the Scheduler page | 120 characters |
 | `handler` | `handler(context)`, a function or method in the module's own folder | not a partial, a built-in or generated code |

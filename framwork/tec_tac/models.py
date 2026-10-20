@@ -77,6 +77,11 @@ class TecTacSchedule(models.Model):
     last_run_at = models.DateTimeField(null=True, blank=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="tec_tac_schedules_created")
     updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="tec_tac_schedules_updated")
+    # 1.17.63 (CQ179 b): the names of the person who created the schedule and the person who last confirmed it, kept as text so an
+    # audit row can still name them after the user row is gone. Blank on a row made before migration 0036: a read falls back to
+    # created_by.username (see scheduler.schedule_creator_names).
+    created_by_username = models.CharField(max_length=150, blank=True, default="")
+    confirmed_by_username = models.CharField(max_length=150, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

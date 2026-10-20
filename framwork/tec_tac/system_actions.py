@@ -7,11 +7,17 @@ callable of its own.
 The five AD-13 conditions and how each is met (see docs/system-actions.md for the long form)
     1. Typed actions only. ``register_system_action`` takes a key of ``SYSTEM_FUNCTIONS``, never a dotted path. The action id must also be
        listed in the module's signed manifest under ``system_actions``.
-    2. Permission and scope are checked where Tactical checks them. At every run Core re-reads the owner (active, not an installer user),
-       the Tactical role flags and the role's client and site scope. A native scheduler manager gets no scope bypass for a Tactical
-       function. One agent outside the owner's scope refuses the whole call; nothing is narrowed silently.
-    3. Run as the owner. The audit row names the owner as the actor with ``requested_by`` scheduler. Tactical's own tasks for the first
-       two rows take no username, so only Core's audit row names the owner.
+    2. Permission and scope are checked where Tactical checks them. A run a person starts (a manual run or a one-off run) re-reads the
+       owner (active, not an installer user), the Tactical role flags and the role's client and site scope at that run. A native
+       scheduler manager gets no scope bypass for a Tactical function. One agent outside the owner's scope refuses the whole call;
+       nothing is narrowed silently. Johan answered CQ179 in chat on 20 October 2026 ("yes follow tactical's implementation"); it is NOT yet recorded
+       in the authority documents, so while ``scheduler.AD13_CONDITION_2_AMENDED`` is False every scheduled run keeps this re-read. Once it is
+       recorded: a SCHEDULED run of an action the module flagged ``unattended`` skips only that re-read. The person's right was checked when they created or edited
+       the schedule, and Core stores and audits who that was. The cost is plain: a person who is demoted or deactivated later keeps
+       their unattended schedules running until someone removes or edits them, as in Tactical.
+    3. Run as the owner. The audit row names the creator as the actor with ``requested_by`` scheduler (a Core service actor, with the
+       stored name in the metadata, when the user row is gone). Tactical's own tasks for the first two rows take no username, so only
+       Core's audit row names the person.
     4. No HTTP and no keys. Core imports the Tactical task named in the table and calls ``.delay()``, the way Tactical's bulk view does.
        No loopback request, no API key, no service account, no model write.
     5. Only the owning core module registers. The table names the owner; the honoured premium replacement (AD-20) may register too.
@@ -188,6 +194,16 @@ def _agents_in_scope(user, ids) -> bool:
     return bool(adapter.agent_pks_in_role_scope(user=user, pks=ids))
 
 
+def _declared_now(module_id: str, action_id: str) -> bool:
+    """Is ``action_id`` still listed in the module's signed manifest ``system_actions``? Read at every run (1.17.63); any error answers False."""
+    try:
+        plugin = next((p for p in _plugins() if p.plugin_id == module_id), None)
+        return plugin is not None and action_id in tuple(getattr(plugin, "system_actions", ()) or ())
+    except Exception:
+        logger.warning("The signed manifest of a module could not be read for a system action run.", exc_info=True)
+        return False
+
+
 def _target_pks(snapshot):
     """``(pks, missing)`` for the run's targets snapshot, or None when it cannot be read as endpoints."""
     from . import resources_adapter as adapter
@@ -340,6 +356,13 @@ def registered_system_actions() -> list[dict]:
     return [_describe(d) for d in rows]
 
 
+def is_registered_system_action(module_id, action_id) -> bool:
+    """Is ``action_id`` registered here by ``module_id``? Memory only (1.17.63; the scheduler asks it before it trusts an unattended flag)."""
+    with _LOCK:
+        definition = _ACTIONS.get(action_id) if isinstance(action_id, str) else None
+    return definition is not None and definition.module_id == module_id
+
+
 def get_system_action(action_id) -> dict | None:
     with _LOCK:
         definition = _ACTIONS.get(action_id) if isinstance(action_id, str) else None
@@ -357,6 +380,7 @@ REASONS = {
     "module_disabled": "The module that owns this action is not enabled.",
     "replacement_not_honoured": "The module that registered this action no longer replaces the core module right now.",
     "function_unavailable": "Core cannot reach the Tactical function this action needs.",
+    "action_not_declared": "This action is no longer listed in the module's signed manifest under system_actions.",
     "owner_inactive": "The person who owns this run is no longer an active, interactive user.",
     "permission_lost": "The person who owns this run no longer holds the Tactical permission this action needs.",
     "bad_parameters": "This system action takes no parameters.",
@@ -389,12 +413,32 @@ def _safe_action_id(value) -> str | None:
     return value if isinstance(value, str) and _ID_RE.fullmatch(value) else None
 
 
-def _deny_row(reason: str, text: str, *, owner, module_id, run_id, action_id) -> None:
+def _provenance(run) -> dict:
+    """Who is behind a run, for every audit row (1.17.63): ``run_kind`` (scheduled or person), the creator and the confirmer by stored name."""
+    try:
+        one_off = bool(getattr(run, "owner_type", "") == "module" and _run_context._is_one_off_key(getattr(run, "owner_key", "")))
+        kind = "person" if (bool(getattr(run, "manual", False)) or one_off) else "scheduled"
+        creator, confirmed = _run_context._creator_names(getattr(run, "schedule", None))
+    except Exception:
+        kind, creator, confirmed = "scheduled", "", ""
+    return {"run_kind": kind, "creator": creator or None, "confirmed_by": confirmed or None}
+
+
+def _actor_for(owner):
+    """The creator row when it still exists, otherwise a Core service actor (the stored name is in the row's metadata)."""
+    if owner is not None:
+        return owner
+    return _audit().service_audit_actor(module_id="core", service="scheduler", identity="system-action")
+
+
+def _deny_row(reason: str, text: str, *, owner, module_id, run_id, action_id, provenance=None) -> None:
     """ONE deny row: reason code, the owner as actor (a Core service actor when there is none), requested_by scheduler. No agent, no id list."""
     try:
         audit = _audit()
         actor = owner if owner is not None else audit.service_audit_actor(module_id="core", service="scheduler", identity="system-action")
         metadata = {"reason": reason, "requested_by": "scheduler"}
+        if provenance:
+            metadata.update(provenance)
         if module_id:
             metadata["owner_module"] = str(module_id)[:100]
         if run_id:
@@ -429,12 +473,12 @@ def _end_run(run_id, status: str, error_type: str, text: str) -> None:
 _KEEP_RUN_REASONS = frozenset({"caller_unverified", "wrong_module"})
 
 
-def _refuse(reason: str, *, run_id=None, owner=None, module_id=None, action_id=None, caller: str = "", detail: str = ""):
+def _refuse(reason: str, *, run_id=None, owner=None, module_id=None, action_id=None, caller: str = "", detail: str = "", provenance=None):
     text = REASONS.get(reason, "The system action was refused.") + detail
     if run_id is not None:
         if reason not in _KEEP_RUN_REASONS:
             _end_run(run_id, _SKIPPED, "SystemActionRefused", text)
-        _deny_row(reason, text, owner=owner, module_id=module_id, run_id=run_id, action_id=action_id)
+        _deny_row(reason, text, owner=owner, module_id=module_id, run_id=run_id, action_id=action_id, provenance=provenance)
     elif _unmatched_due(reason, caller):
         _deny_row(reason, text, owner=None, module_id=None, run_id=None, action_id=action_id)
     raise SystemActionRefused(text, reason=reason)
@@ -510,14 +554,14 @@ def _queued_result(entry: SystemFunction, agents: int, **extra) -> dict:
     return {"outcome": "queued", "agents": agents, "message": entry.result_text, **extra}
 
 
-def _unknown(run_id, owner, definition, action_id: str, module_id: str):
+def _unknown(run_id, owner, definition, action_id: str, module_id: str, provenance=None):
     text = "A system action may already have been sent for this run, so Core did not send it again. Check the endpoints before running it again."
     _end_run(run_id, _FAILED, "OutcomeUnknown", text)
     try:
         _audit().record(
-            actor=owner, module_id="core", action="custom:outcome-unknown", object_type="system_action", object_id=_safe_action_id(action_id),
+            actor=_actor_for(owner), module_id="core", action="custom:outcome-unknown", object_type="system_action", object_id=_safe_action_id(action_id),
             message=f"A scheduled system action has an unknown outcome: {text}",
-            metadata={"requested_by": "scheduler", "run_id": str(run_id), "owner_module": module_id, "reason": "outcome_unknown"},
+            metadata={"requested_by": "scheduler", "run_id": str(run_id), "owner_module": module_id, "reason": "outcome_unknown", **(provenance or {})},
         )
     except Exception:
         logger.exception("Tec-Tac audit row for a system action with an unknown outcome could not be written")
@@ -552,10 +596,14 @@ def _run(context, identity, action_id, agent_ids, parameters) -> dict:
         verified = _run_context.verify_run_context(context, expected_module_id=module_id, expected_action_id=str(run.action_id or ""), require_owner=False)
     except Exception as exc:
         reason = "owner_refused" if str(exc) == _run_context._OWNER_REFUSED else "context_invalid"
-        _refuse(reason, run_id=run.id, module_id=module_id, action_id=shown_id, caller=caller)
+        _refuse(reason, run_id=run.id, module_id=module_id, action_id=shown_id, caller=caller, provenance=_provenance(run))
+    # 1.17.63 (CQ179 b): a scheduled run of an unattended action skips only the three re-reads of the person (owner_inactive,
+    # permission_lost, out_of_scope). Core decided that in verify_run_context through the one helper; a manual or one-off run never is.
+    unattended = bool(getattr(verified, "unattended", False))
+    provenance = _provenance(run)
     # the person behind the schedule (as the schedule row holds them) is the actor of any refusal that follows, even before the fresh read
-    common = {"run_id": run.id, "module_id": module_id, "action_id": shown_id, "caller": caller, "owner": verified.user}
-    if verified.user is None:
+    common = {"run_id": run.id, "module_id": module_id, "action_id": shown_id, "caller": caller, "owner": verified.user, "provenance": provenance}
+    if verified.user is None and not (unattended and (getattr(verified, "creator_username", None) or "")):
         _refuse("no_owner", **common)
     # (2) the verified caller is the run's module
     if identity is None:
@@ -569,6 +617,8 @@ def _run(context, identity, action_id, agent_ids, parameters) -> dict:
         _refuse("unknown_action", **common)
     if definition.module_id != identity.module_id:
         _refuse("wrong_module", **common)
+    if not _declared_now(definition.module_id, definition.id):  # 1.17.63: listed in the signed manifest now, not only at registration
+        _refuse("action_not_declared", **common)
     entry = SYSTEM_FUNCTIONS.get(definition.function)
     if entry is None:
         _refuse("function_unavailable", **common)
@@ -585,30 +635,34 @@ def _run(context, identity, action_id, agent_ids, parameters) -> dict:
             honoured = False
         if not honoured:
             _refuse("replacement_not_honoured", **common)
-    # (4) the owner, read again from the database
-    try:
-        owner = verified._owner_now()
-    except Exception:
-        _refuse("owner_inactive", **common)
-    common["owner"] = owner
-    if bool(getattr(owner, "is_installer_user", False)):
-        _refuse("owner_inactive", **common)
-    for flag in sorted(set(entry.min_flags) | set(definition.permissions)):
-        if not verified.has_tactical_permission(flag):
-            _refuse("permission_lost", **common)
+    # (4) the owner, read again from the database. An unattended scheduled run skips this read (checked when the person made the schedule).
+    if unattended:
+        owner = verified.user  # None when the creator's row is gone: the audit actor is then a Core service actor
+    else:
+        try:
+            owner = verified._owner_now()
+        except Exception:
+            _refuse("owner_inactive", **common)
+        common["owner"] = owner
+        if bool(getattr(owner, "is_installer_user", False)):
+            _refuse("owner_inactive", **common)
+        for flag in sorted(set(entry.min_flags) | set(definition.permissions)):
+            if not verified.has_tactical_permission(flag):
+                _refuse("permission_lost", **common)
     if parameters not in (None, {}):
         _refuse("bad_parameters", **common)
     # (6) the count, judged before any lookup, then (5) the scope of every endpoint
     ids, reason = _agent_ids(agent_ids)
     if reason:
         _refuse(reason, **common)
-    try:
-        in_scope = _agents_in_scope(owner, ids)
-    except Exception:
-        logger.warning("The scope of a system action could not be checked; the run is refused.", exc_info=True)
-        in_scope = False
-    if not in_scope:  # a native scheduler manager has no bypass here: Tactical's own role scope decides, and one miss refuses all
-        _refuse("out_of_scope", **common)
+    if not unattended:
+        try:
+            in_scope = _agents_in_scope(owner, ids)
+        except Exception:
+            logger.warning("The scope of a system action could not be checked; the run is refused.", exc_info=True)
+            in_scope = False
+        if not in_scope:  # a native scheduler manager has no bypass here: Tactical's own role scope decides, and one miss refuses all
+            _refuse("out_of_scope", **common)
     # (6b) a run never widens the schedule's set: every endpoint must be one of the run's snapshotted targets (Core 1.17.62)
     try:
         resolved = _target_pks(run.targets_snapshot or {})
@@ -635,17 +689,18 @@ def _run(context, identity, action_id, agent_ids, parameters) -> dict:
         raise SchedulerPermanentError("The run is no longer active, so nothing was sent.")
     if state == "full":
         _refuse("mark_limit", **common)
+    extra = {"vanished_targets": int(vanished)} if vanished else {}  # 1.17.63: targets that no longer exist, while the rest still run
     if state == "sent":
-        return _queued_result(entry, len(ids), duplicate=True)
+        return _queued_result(entry, len(ids), duplicate=True, **extra)
     if state == "unknown":
-        _unknown(run.id, owner, definition, definition.id, module_id)
+        _unknown(run.id, owner, definition, definition.id, module_id, provenance)
     try:
         _audit().record(
-            actor=owner, module_id="core", action="run", object_type="system_action", object_id=definition.id,
+            actor=_actor_for(owner), module_id="core", action="run", object_type="system_action", object_id=definition.id,
             message=f"A scheduled system action is being sent to Tactical for {len(ids)} endpoint(s).",
             metadata={
                 "requested_by": "scheduler", "run_id": str(run.id), "schedule_id": str(verified.schedule_id), "owner_module": definition.module_id,
-                "function": definition.function, "agent_count": len(ids), "targets_digest": digest,
+                "function": definition.function, "agent_count": len(ids), "targets_digest": digest, **provenance, **extra,
             },
             strict=True,
         )
@@ -657,11 +712,11 @@ def _run(context, identity, action_id, agent_ids, parameters) -> dict:
         sent = function.delay(list(ids))  # exactly the way Tactical's own bulk view starts the task
     except Exception:
         logger.exception("Tactical's task could not be started; Core never sends again for this run.")
-        _unknown(run.id, owner, definition, definition.id, module_id)
+        _unknown(run.id, owner, definition, definition.id, module_id, provenance)
     task_id = str(getattr(sent, "id", "") or "")[:80]
     if not _set_mark(run.id, definition.id, digest, STATE_SENT, task_id):
         logger.error("The system action was sent but its mark could not be set to 'sent'; a retry would fail as outcome-unknown.")
-    return _queued_result(entry, len(ids))
+    return _queued_result(entry, len(ids), **extra)
 
 
 # ------------------------------------------------------------------------------------------------ the capability
@@ -705,6 +760,7 @@ def system_actions_contract_metadata() -> dict:
         "delivery": "at most once",
         "audit_actions": ["run (strict, before the send)", "deny (one per refusal)", "custom:outcome-unknown"],
         "requires_framework": ">=1.17.61",
+        "unattended": "A scheduled run of an action registered with unattended=True skips owner_inactive, permission_lost and out_of_scope (>=1.17.63); every other check stays.",
     }
 
 

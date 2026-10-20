@@ -31,7 +31,7 @@ def read(*parts):
 version = read("VERSION").strip()
 package = json.loads(read("tec_tac_package.json"))["version"]
 base = re.sub(r"-\d+$", "", version)
-must(base == re.sub(r"-\d+$", "", package) and base in ("1.17.60", "1.17.61", "1.17.62"), f"VERSION {version} and package {package} must be 1.17.60, 1.17.61 or 1.17.62")  # 1.17.61 and 1.17.62 follow
+must(base == re.sub(r"-\d+$", "", package) and base in ("1.17.60", "1.17.61", "1.17.62", "1.17.63"), f"VERSION {version} and package {package} must be 1.17.60 to 1.17.63")  # 1.17.61 to 1.17.63 follow
 must(not (ROOT / "RELEASE_NOTES_1.17.59.md").exists() and (ROOT / "docs" / "releases" / "RELEASE_NOTES_1.17.59.md").is_file(), "1.17.59 notes moved to docs/releases")
 
 # ---- the routes in urls.py

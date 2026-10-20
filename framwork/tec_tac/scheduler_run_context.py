@@ -104,6 +104,19 @@ def _is_one_off_key(owner_key) -> bool:
     return is_one_off_key(owner_key)
 
 
+def _is_unattended_scheduled_run(run) -> bool:
+    """Is this a scheduled run of an unattended action, which the owner re-check skips (1.17.63)? The one decision lives in scheduler.py."""
+    from .scheduler import _is_unattended_scheduled_run as decide
+
+    return decide(run)
+
+
+def _creator_names(schedule) -> tuple[str, str]:
+    from .scheduler import schedule_creator_names
+
+    return schedule_creator_names(schedule)
+
+
 def _authorization_error(schedule) -> str | None:
     from .scheduler import _runtime_authorization_error
 
@@ -149,6 +162,11 @@ class VerifiedSchedulerRun:
     user: Any
     owner_user_id: Any
     owner_username: str | None
+    # 1.17.63 (CQ179 b), last so a positional constructor stays as it was. ``unattended`` is True for a scheduled run of an unattended
+    # action: its creator's rights are not read again for this run. The names are the stored ones and survive a deleted user row.
+    creator_username: str | None = None
+    confirmed_by_username: str | None = None
+    unattended: bool = False
 
     def _owner_now(self):
         if self.user is None:
@@ -215,16 +233,19 @@ def verify_run_context(
         if module_id != want_module or action_id != want_action:
             raise _invalid(_OTHER_RUN)
         one_off = bool(run.owner_type == "module" and _is_one_off_key(run.owner_key))
-        user = schedule.created_by if (one_off or run.owner_type == "user") else None
+        unattended = _is_unattended_scheduled_run(run)  # the one helper; a manual run and a one-off are never unattended
+        user = schedule.created_by if (one_off or run.owner_type == "user" or unattended) else None
         if user is None and require_owner:
             raise _invalid(_NO_OWNER)
-        if user is not None and _authorization_error(schedule):
+        if user is not None and not unattended and _authorization_error(schedule):
             raise _invalid(_OWNER_REFUSED)
+        creator, confirmed = _creator_names(schedule) if (unattended or user is not None) else ("", "")
         return VerifiedSchedulerRun(
             run_id=str(run.id), schedule_id=str(run.schedule_snapshot_id or schedule.id),
             module_id=module_id, action_id=action_id,
             owner_module=run.owner_module or None, owner_key=run.owner_key or None, one_off=one_off, user=user,
             owner_user_id=getattr(user, "pk", None), owner_username=getattr(user, "username", None),
+            creator_username=creator or None, confirmed_by_username=confirmed or None, unattended=bool(unattended),
         )
     except Exception as exc:
         if type(exc).__name__ == "SchedulerRunContextInvalid":

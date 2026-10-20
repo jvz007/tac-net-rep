@@ -149,6 +149,7 @@ sched_ns = {
     "normalize_scheduler_targets": lambda targets: dict(targets),
     "_canonicalize_persisted_endpoint_identity": lambda targets: dict(targets),
     "_runtime_authorization_error": lambda sched: None,
+    "_is_unattended_scheduled_run": lambda sched: False,  # 1.17.63: the one helper the tick asks; an ordinary schedule is never unattended
     "latest_occurrence": lambda sched, current: occurrence,
     "due_key": lambda value, exact=False: "old-key",
     "_should_run_occurrence": lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("missed evaluation ran before revision baseline")),

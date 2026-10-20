@@ -122,7 +122,7 @@ def assert_refused(run, out, reason, *, ended=True, owner="alice"):
     must(len(rows) == 1, f"{reason}: exactly one deny row, got {AUDITS}")
     row = rows[0]
     must(row["module_id"] == "core" and row["metadata"]["reason"] == reason and row["metadata"]["requested_by"] == "scheduler", row)
-    must(set(row["metadata"]) <= {"reason", "requested_by", "owner_module", "run_id"}, row["metadata"])
+    must(set(row["metadata"]) <= {"reason", "requested_by", "owner_module", "run_id", "run_kind", "creator", "confirmed_by"}, row["metadata"])  # 1.17.63 added the last three
     text = repr(AUDITS) + repr({k: v for k, v in run.__dict__.items() if k != "targets_snapshot"})  # 1.17.62: the snapshot legitimately holds the schedule's endpoints
     must(MARKER not in text and not any(str(i) in text for i in IDS), f"{reason}: no id, hostname or parameter in the audit trail or the run")
     must(not [a for a in AUDITS if a["action"] == "run"], f"{reason}: no 'run' row")
@@ -149,7 +149,7 @@ must(row["actor"] is alice and row["module_id"] == "core" and row["object_type"]
 meta = row["metadata"]
 must(meta["requested_by"] == "scheduler" and meta["run_id"] == str(run.id) and meta["owner_module"] == "patching" and meta["function"] == "winupdate.scan"
      and meta["agent_count"] == 3 and len(meta["targets_digest"]) == 32 and meta["schedule_id"] == str(run.schedule.id), meta)
-must(set(meta) == {"requested_by", "run_id", "schedule_id", "owner_module", "function", "agent_count", "targets_digest"}, set(meta))
+must(set(meta) == {"requested_by", "run_id", "schedule_id", "owner_module", "function", "agent_count", "targets_digest", "run_kind", "creator", "confirmed_by"}, set(meta))  # 1.17.63 added the last three
 must(not any(str(i) in repr(AUDITS) for i in IDS), "no endpoint number in the audit row")
 must(SCOPE_CALLS == [("alice", IDS)], SCOPE_CALLS)
 print("       the happy path: one task with the right numbers, one strict audit row naming the owner, a plain 'queued' result")

@@ -87,6 +87,11 @@ class ScheduledAction:
     # 1.17.17: more than one accepted entry (any-of). Empty for a single entry or none. Last, so a positional constructor and
     # equality of every earlier action stay as they were. ``permission`` is then the entries joined with PERMISSION_ANY_JOIN.
     permission_any: tuple[str, ...] = ()
+    # 1.17.63 (CQ179 b): True marks unattended system work (a scheduled patch scan, for example). A SCHEDULED run of such an action is
+    # not re-checked against its creator's current rights, as in Tactical; the right was checked when the person created or edited
+    # the schedule. A person-started run (manual, one-off) is re-checked as before. Last, so equality and every positional
+    # constructor of an earlier action stay as they were. Core accepts True only for a module whose signed manifest lists system_actions.
+    unattended: bool = False
 
     @property
     def permission_entries(self) -> tuple[str, ...]:
@@ -143,7 +148,37 @@ _ACTIONS: dict[str, ScheduledAction] = {}
 _ACTION_LOCK = RLock()
 
 
-def register_scheduled_action(*, id: str, module_id: str, label: str, handler, description: str = "", target_types=("none",), permission: str | list | tuple | None = None, dangerous: bool = False, timeout_seconds: int = 3600):
+def _manifest_system_actions(module_id: str) -> tuple:
+    """The ``system_actions`` ids in the signed manifest of the installed extension ``module_id``, or () (1.17.63). A test replaces it."""
+    from . import registry
+
+    for plugin in registry.discover_plugins():
+        if plugin.plugin_id == module_id and plugin.plugin_type == "extension" and not getattr(plugin, "legacy", False):
+            return tuple(getattr(plugin, "system_actions", ()) or ())
+    return ()
+
+
+# Since 1.17.63: the run-time owner re-check of AD-13 condition 2 is skipped for an unattended scheduled run ONLY while this is True. It is False
+# because Johan's chat answer to CQ179 ("yes follow tactical's implementation") is not yet written into docs/review-accepted-decisions.md and
+# docs/tec-tac-module-standard.md section 1a (not Core's files). Set it True in the same release that those two documents carry the amended
+# condition 2; the scheduler unattended gate test under tests/ fails when the code and the documents disagree.
+AD13_CONDITION_2_AMENDED = False
+
+
+def _action_declared_as_system_action(module_id: str, action_id: str) -> bool:
+    """Is ``action_id`` listed in the signed manifest ``system_actions`` of ``module_id`` AND registered with core.system_actions for that
+    module? Read at decision time (1.17.63); any error answers False."""
+    try:
+        if action_id not in _manifest_system_actions(module_id):
+            return False
+        from . import system_actions
+
+        return bool(system_actions.is_registered_system_action(module_id, action_id))
+    except Exception:  # noqa: BLE001 - any failure to read means the exemption does not apply
+        return False
+
+
+def register_scheduled_action(*, id: str, module_id: str, label: str, handler, description: str = "", target_types=("none",), permission: str | list | tuple | None = None, dangerous: bool = False, timeout_seconds: int = 3600, unattended: bool = False):
     action_id = str(id or "").strip()
     module = str(module_id or "").strip()
     if not action_id or "." not in action_id:
@@ -160,7 +195,16 @@ def register_scheduled_action(*, id: str, module_id: str, label: str, handler, d
     if timeout < 60 or timeout > 7 * 24 * 60 * 60:
         raise SchedulerError("Scheduled action timeout_seconds must be between 60 and 604800.")
     permission_text, permission_any = _normalize_permission(permission)
-    action = ScheduledAction(action_id, module, str(label or action_id), handler, str(description or ""), targets, permission_text, bool(dangerous), timeout, permission_any)
+    if not isinstance(unattended, bool):
+        raise SchedulerError("Scheduled action unattended must be true or false.")
+    if unattended:
+        try:
+            declared = _manifest_system_actions(module)
+        except Exception as exc:
+            raise SchedulerError("Core could not read the module's signed manifest, so the action cannot be marked unattended.") from exc
+        if action_id not in declared:
+            raise SchedulerError("An unattended scheduled action's id must be listed in its module's signed manifest under system_actions.")
+    action = ScheduledAction(action_id, module, str(label or action_id), handler, str(description or ""), targets, permission_text, bool(dangerous), timeout, permission_any, unattended)
     with _ACTION_LOCK:
         previous = _ACTIONS.get(action_id)
         if previous and previous != action:
@@ -762,6 +806,45 @@ def is_one_off_schedule(schedule) -> bool:
     return schedule is not None and schedule.owner_type == TecTacSchedule.OwnerType.MODULE and is_one_off_key(schedule.owner_key)
 
 
+def schedule_creator_names(schedule) -> tuple[str, str]:
+    """``(creator, confirmed_by)`` as text (1.17.63). The stored names win. A row made before migration 0036 has none, so the creator
+    falls back to ``created_by.username``. Either may be an empty string."""
+    creator = str(getattr(schedule, "created_by_username", "") or "").strip()
+    if not creator:
+        creator = str(getattr(getattr(schedule, "created_by", None), "username", "") or "").strip()
+    return creator, str(getattr(schedule, "confirmed_by_username", "") or "").strip()
+
+
+def _is_unattended_scheduled_run(subject) -> bool:
+    """The ONE place that decides whether the run-time owner re-check is skipped (1.17.63, CQ179 b: match Tactical for unattended work).
+
+    ``subject`` is a ``TecTacSchedule`` (the tick, before the run exists) or a ``TecTacScheduleRun`` (verify_run_context). True only when
+    every one of these holds, otherwise False, so the re-check stays: the action is flagged ``unattended`` and still registered; the run
+    is a scheduled one (a run with ``manual`` set is never); the schedule is not a one-off; the schedule is owned by a user or by a
+    module; a creator name is stored (or readable from ``created_by``). Any error answers False. The person's right was checked when
+    they created or edited the schedule. What stays checked on every run is listed in docs/system-actions.md."""
+    if not AD13_CONDITION_2_AMENDED:
+        return False  # no signed amendment of AD-13 condition 2 is recorded: every scheduled run keeps the run-time re-check
+    try:
+        is_run = hasattr(subject, "manual")
+        schedule = getattr(subject, "schedule", None) if is_run else subject
+        if schedule is None or (is_run and bool(subject.manual)):
+            return False
+        owner_type = (getattr(subject, "owner_type", "") if is_run else "") or schedule.owner_type
+        owner_key = getattr(subject, "owner_key", "") if (is_run and getattr(subject, "owner_type", "")) else schedule.owner_key
+        if owner_type not in (TecTacSchedule.OwnerType.USER, TecTacSchedule.OwnerType.MODULE):
+            return False
+        if owner_type == TecTacSchedule.OwnerType.MODULE and (is_one_off_key(owner_key) or is_one_off_schedule(schedule)):
+            return False
+        action_id = (getattr(subject, "action_id", "") if is_run else "") or schedule.action_id
+        registered = get_scheduled_action(action_id)
+        if registered.unattended is not True or not _action_declared_as_system_action(registered.module_id, action_id):
+            return False
+        return bool(schedule_creator_names(schedule)[0])
+    except Exception:
+        return False
+
+
 def _runtime_authorization_error(schedule: TecTacSchedule) -> str | None:
     """Re-check the saved actor, action permission and Tactical target scope.
 
@@ -870,7 +953,8 @@ def dispatch_due_schedules(now: datetime | None = None) -> dict:
                         schedule.target_state = "valid"
                         schedule.target_state_detail = ""
                         schedule.save(update_fields=["targets", "target_state", "target_state_detail", "updated_at"])
-                    authorization_error = _runtime_authorization_error(schedule)
+                    # 1.17.63 (CQ179 b): an unattended action's scheduled run is not re-checked against its creator (the one helper decides)
+                    authorization_error = None if _is_unattended_scheduled_run(schedule) else _runtime_authorization_error(schedule)
                     if authorization_error:
                         occurrence = latest_occurrence(schedule, now)
                         if occurrence:
@@ -1017,12 +1101,20 @@ def reconcile_schedule(*, owner_module: str, owner_key: str, action_id: str, sch
                        target_mode: str = TecTacSchedule.TargetMode.SNAPSHOT,
                        missed_policy: str = TecTacSchedule.MissedPolicy.SKIP, missed_grace_minutes: int = 60,
                        concurrency_policy: str = TecTacSchedule.ConcurrencyPolicy.SKIP, retry_count: int = 0,
-                       retry_delay_seconds: int = 60) -> TecTacSchedule | None:
+                       retry_delay_seconds: int = 60, confirmed_by_request=None) -> TecTacSchedule | None:
     """Idempotently create/update a backend-module-owned scheduler definition.
 
     The ownership tuple is the stable identity. ``enabled=False`` disables an
     existing definition and is a no-op when one does not yet exist. Browser
     authentication is intentionally not part of this server-side contract.
+
+    1.17.63 (CQ176): ``confirmed_by_request`` (keyword-only, optional) names the person behind the schedule. It must be a real Django
+    or DRF request that passed Core's session check (the proof ``run_tactical_operation`` asks for), never a user id or an object
+    that merely has a ``user``. Core then checks, for that person, the action's permission and the Tactical scope of the targets, the
+    same checks ``start_one_off_run`` makes, stores the creator (the first time) and the confirmer by name, and writes one audit row
+    for the creation and one for every change. The module stays the owner and the executor. WITHOUT a request, a schedule that has a
+    stored creator can only be disabled or left unchanged: any change to its action, targets, parameters, timing or policies, and
+    switching it back on, raises ``SchedulerError``. A schedule with no stored creator behaves exactly as before 1.17.63.
     """
     module, key = _validate_owner(owner_module, owner_key)
     if is_one_off_key(key):
@@ -1085,7 +1177,25 @@ def reconcile_schedule(*, owner_module: str, owner_key: str, action_id: str, sch
         if target_type not in action.target_types:
             raise SchedulerError(f"Action {action.id} does not support target type {target_type!r}.")
 
+        stored_creator = bool(existing is not None and schedule_creator_names(existing)[0])
+        person = None
+        if confirmed_by_request is not None:
+            person = _verified_person(confirmed_by_request)
+            _check_person_may_schedule(person, action, data["targets"])
+            data["targets"] = _canonicalize_targets_for_person(person, data["targets"])
+        elif stored_creator and not enabled:
+            # A module can switch off a person's schedule, never rewire it: only ``enabled`` changes.
+            if existing.enabled:
+                existing.enabled = False
+                existing.save(update_fields=["enabled", "updated_at"])
+                _audit_schedule_row(None, existing, "disable", "A module switched off a schedule that a person created.")
+            return existing
         schedule = existing or TecTacSchedule(owner_type=TecTacSchedule.OwnerType.MODULE, owner_module=module, owner_key=key)
+        before_fields = {name: _comparable(name, getattr(existing, name)) for name in _LOCKED_FIELDS} if existing is not None else None
+        previous_names = schedule_creator_names(existing) if existing is not None else ("", "")
+        # a refused change must leave the row exactly as it was, whatever holds it (a fresh database read, or a cached object)
+        restore = ({name: getattr(existing, name) for name in (*_LOCKED_FIELDS, "name", "module_id", "target_state", "target_state_detail", "last_due_key")}
+                   if (stored_creator and person is None) else None)
         previous_signature = None
         if existing:
             previous_signature = (
@@ -1115,8 +1225,123 @@ def reconcile_schedule(*, owner_module: str, owner_key: str, action_id: str, sch
         )
         if previous_signature is not None and previous_signature != new_signature:
             schedule.last_due_key = ""
+        changed = existing is None or any(_comparable(name, getattr(schedule, name)) != value for name, value in before_fields.items())
+        if stored_creator and person is None and changed:
+            for field_name, value in restore.items():
+                setattr(existing, field_name, value)
+            raise SchedulerError(
+                "This schedule was created by a person. A module can switch it off or leave it as it is, but only that person's own "
+                "request can change its action, targets, parameters, timing or switch it back on."
+            )
+        if stored_creator and person is None:
+            return existing  # nothing changed: an identical call is a no-op and writes nothing
+        if person is not None:
+            first_time = existing is None or not schedule_creator_names(existing)[0]
+            name_now = str(getattr(person, "username", "") or "")[:150]
+            if first_time:
+                schedule.created_by = person
+                schedule.created_by_username = name_now
+            schedule.updated_by = person
+            schedule.confirmed_by_username = name_now
         schedule.save()
+        if person is not None and (changed or schedule_creator_names(schedule) != previous_names):
+            _audit_schedule_row(
+                person, schedule, "add" if existing is None else "modify",
+                f"Module {module} {'created' if existing is None else 'changed'} a schedule that a person confirmed.",
+                strict=True,
+            )
         return schedule
+
+
+# The fields a module may not change on a schedule a person created (1.17.63, CQ176). The name is display text and is left out.
+_LOCKED_FIELDS = (
+    "action_id", "target_mode", "targets", "parameters", "schedule_type", "timezone", "run_at", "run_time", "weekdays", "day_of_month",
+    "interval_seconds", "interval_anchor_at", "enabled", "missed_policy", "missed_grace_minutes", "concurrency_policy", "retry_count",
+    "retry_delay_seconds",
+)
+
+
+def _comparable(name: str, value):
+    """A value in a form that two spellings of the same time compare equal in (a text time or datetime against the stored one)."""
+    if isinstance(value, str) and name in ("run_time", "run_at", "interval_anchor_at"):
+        from django.utils.dateparse import parse_datetime, parse_time
+
+        parsed = parse_time(value) if name == "run_time" else parse_datetime(value)
+        value = parsed if parsed is not None else value
+    if name == "run_time" and hasattr(value, "hour") and not hasattr(value, "year"):
+        value = value.replace(second=0, microsecond=0, tzinfo=None)
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return value
+
+
+def _verified_person(request):
+    """The user behind a real, session-checked request, or ``SchedulerNotAllowed`` (1.17.63, CQ176). A user id, a stand-in object with
+    a ``user`` and a request that did not pass Core's session check are all refused. A test replaces this function."""
+    from .tactical_operations import _is_real_request
+
+    if not _is_real_request(request) or getattr(request, "tec_tac_session", None) is None:
+        raise SchedulerNotAllowed("A schedule a person confirms needs that person's own signed-in request.")
+    user = getattr(request, "user", None)
+    if user is None or not bool(getattr(user, "is_authenticated", False)):
+        raise SchedulerNotAllowed("A schedule a person confirms needs that person's own signed-in request.")
+    refusal = _one_off_user_refusal(user)
+    if refusal:
+        raise SchedulerNotAllowed("The person must be an active, interactive user.")
+    return user
+
+
+def _check_person_may_schedule(user, action: ScheduledAction, targets: dict) -> None:
+    """The permission and scope checks of ``start_one_off_run``, for the person who confirms a module-owned schedule."""
+    from .scheduler_views import _can_use_action, _can_access_target_scope
+
+    try:
+        may_run = _can_use_action(user, action)
+    except Exception as exc:
+        raise SchedulerNotAllowed("The person's permission to run this action could not be verified.") from exc
+    if not may_run:
+        raise SchedulerNotAllowed("The person does not have permission to run this action.")
+    try:
+        in_scope = _can_access_target_scope(user, targets)
+    except Exception as exc:
+        raise SchedulerNotAllowed("The targets are outside the person's Tactical scope.") from exc
+    if not in_scope:
+        raise SchedulerNotAllowed("The targets are outside the person's Tactical scope.")
+
+
+def _canonicalize_targets_for_person(user, targets: dict) -> dict:
+    from .scheduler_views import _canonicalize_endpoint_targets_for_user
+
+    try:
+        return _canonicalize_endpoint_targets_for_user(user, targets)
+    except SchedulerError:
+        raise
+    except Exception as exc:
+        raise SchedulerNotAllowed("The targets are outside the person's Tactical scope.") from exc
+
+
+def _audit_schedule_row(person, schedule, action: str, message: str, *, strict: bool = False) -> None:
+    """One audit row for a module-owned schedule a person created or changed (1.17.63). The actor is the person; with none, a Core service
+    actor. The row names the creator and the confirmer. A strict row that cannot be written stops the change (the caller's transaction
+    rolls back)."""
+    from . import audit
+
+    creator, confirmed = schedule_creator_names(schedule)
+    try:
+        actor = person if person is not None else audit.service_audit_actor(module_id="core", service="scheduler", identity="module-schedule")
+        audit.record(
+            actor=actor, module_id="core", action=action, object_type="scheduler_schedule", object_id=str(schedule.pk),
+            message=message,
+            metadata={
+                "owner_module": schedule.owner_module, "owner_key": schedule.owner_key, "action_id": schedule.action_id,
+                "requested_by": "module", "creator": creator, "confirmed_by": confirmed, "enabled": bool(schedule.enabled),
+            },
+            strict=strict,
+        )
+    except Exception as exc:
+        if strict:
+            raise SchedulerError("The audit row of this schedule could not be written, so nothing was changed.") from exc
+        logger.exception("Tec-Tac audit row for a module-owned schedule could not be written")
 
 
 def disable_owned_schedule(*, owner_module: str, owner_key: str) -> TecTacSchedule | None:
@@ -1279,6 +1504,7 @@ def get_owned_schedule(owner_module: str, owner_key: str) -> dict | None:
         "last_run_at": schedule.last_run_at.isoformat() if schedule.last_run_at else None,
         "last_run_status": latest.status if latest else None,
         "last_run_finished_at": latest.finished_at.isoformat() if latest and latest.finished_at else None,
+        "created_by_username": schedule_creator_names(schedule)[0] or None,  # 1.17.63, additive
     }
 
 
@@ -1372,6 +1598,8 @@ def serialize_schedule(schedule: TecTacSchedule, *, include_runs: bool = False) 
         "last_status": getattr(schedule, "latest_status", None) if hasattr(schedule, "latest_status") else (latest.status if latest else None),
         "created_by": schedule.created_by.username if schedule.created_by else None,
         "updated_by": schedule.updated_by.username if schedule.updated_by else None,
+        "created_by_username": schedule_creator_names(schedule)[0] or None,  # 1.17.63, additive: the stored name outlives the user row
+        "confirmed_by_username": schedule_creator_names(schedule)[1] or None,
         "created_at": schedule.created_at.isoformat(),
         "updated_at": schedule.updated_at.isoformat(),
     }

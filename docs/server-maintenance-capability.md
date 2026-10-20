@@ -217,6 +217,8 @@ A module that starts a job can have Core call its own handler when the job ends,
 
 The handler receives `context["payload"]` with `job_id`, `action_id`, `status` (`succeeded`, `failed`, `cancelled` or `dispatch_failed`), `exit_code` and, when the job file holds one, a short failure `classification`. It never receives output text or parameters. Read the job through `get_job` if you need more. The handler runs as your module with no user and cannot make a Tactical change.
 
+The module id in the event job id keeps the module's own spelling since 1.17.63, so a module with capital letters such as `securityWAF` registers `securityWAF.server_job_finished` (the job part stays lowercase). Core reads at most 200 job files and hands over at most 50 finished jobs a tick, and a file read as not finished is not read again until the file changes.
+
 Delivery is at most once per Core and the event job then follows `core.event_jobs` retries, so the handler must be idempotent. A browser poll of `JobView` can record the same job: key your outcome record on the job id. A job whose module is disabled, removed or not the honoured replacement when it finishes is skipped with one audit row. `start()`, `get_job()`, `cancel()`, `list_jobs()` and the job file are unchanged. See `docs/scheduler.md` ("Server job finished hook") for the limits.
 
 `list_actions()` gains one additive key, `disabled_reason` (null, or `module removed` for a registration the root helper disabled; see the section on registering from a module manifest).

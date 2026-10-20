@@ -26,6 +26,7 @@ from .scheduler import (
     is_one_off_schedule,
     is_tactical_permission_entry,
     queue_manual_run,
+    schedule_creator_names,
     scheduled_actions,
     serialize_action,
     serialize_run,
@@ -216,6 +217,35 @@ def _owner_type_filter(request):
     return value
 
 
+MAX_NAME_FILTER = 150  # the longest user name Core stores
+
+
+def _name_filter(request, key):
+    """``created_by`` or ``confirmed_by`` query value (1.17.63): trimmed text, or None when absent. A name that is not stored matches nothing."""
+    value = str(request.query_params.get(key) or "").strip()
+    return value or None
+
+
+def _name_filters_match(schedule, created_by, confirmed_by) -> bool:
+    """Does ``schedule`` pass the creator and confirmer filters (1.17.63, CQ179 b)? Exact, case-insensitive. The creator is the stored name or,
+    for a row made before migration 0036, the creator row's user name. No filter means every schedule passes. It adds no right: it is only
+    asked about a schedule the caller may already list."""
+    if created_by:
+        creator, _confirmed = schedule_creator_names(schedule)
+        if not creator or creator.casefold() != created_by.casefold():
+            return False
+    if confirmed_by:
+        _creator, confirmed = schedule_creator_names(schedule)
+        if not confirmed or confirmed.casefold() != confirmed_by.casefold():
+            return False
+    return True
+
+
+def _person_name(user) -> str:
+    """The user name stored on a schedule (1.17.63), at most 150 characters; empty when there is no user."""
+    return str(getattr(user, "username", "") or "")[:MAX_NAME_FILTER]
+
+
 def _require_user_managed(schedule):
     if schedule.owner_type == TecTacSchedule.OwnerType.MODULE:
         raise PermissionDenied(
@@ -316,6 +346,10 @@ class SchedulerListView(APIView):
             owner_type = _owner_type_filter(request)
         except SchedulerError as exc:
             return Response({"detail": str(exc)}, status=400)
+        # 1.17.63 (CQ179 b): an administrator can ask who made or confirmed a schedule. This only narrows the list: the scope and
+        # permission filtering below is unchanged, so nobody sees a schedule they could not see before, and no right is added.
+        created_by = _name_filter(request, "created_by")
+        confirmed_by = _name_filter(request, "confirmed_by")
         latest_status = TecTacScheduleRun.objects.filter(schedule_id=OuterRef("pk")).order_by("-created_at").values("status")[:1]
         qs = TecTacSchedule.objects.select_related("created_by", "updated_by").annotate(
             latest_status=Subquery(latest_status)
@@ -324,6 +358,8 @@ class SchedulerListView(APIView):
             qs = qs.filter(owner_type=owner_type)
         rows = []
         for schedule in qs:
+            if not _name_filters_match(schedule, created_by, confirmed_by):
+                continue  # only ever removes a row: the permission and scope test below is exactly what it was
             try:
                 action = get_scheduled_action(schedule.action_id)
             except SchedulerError:
@@ -354,7 +390,10 @@ class SchedulerListView(APIView):
             data["targets"] = _canonicalize_endpoint_targets_for_user(request.user, data["targets"])
             _validate_shape(data)
             _require_target_scope(request.user, data.get("targets"), payload=True)
-            schedule = TecTacSchedule(owner_type=TecTacSchedule.OwnerType.USER, created_by=request.user, updated_by=request.user)
+            schedule = TecTacSchedule(
+                owner_type=TecTacSchedule.OwnerType.USER, created_by=request.user, updated_by=request.user,
+                created_by_username=_person_name(request.user), confirmed_by_username=_person_name(request.user),
+            )
             _apply_schedule_fields(schedule, data)
             schedule.target_state = "valid"
             schedule.target_state_detail = ""
@@ -403,6 +442,11 @@ class SchedulerDetailView(APIView):
             schedule.target_state = "valid"
             schedule.target_state_detail = ""
             schedule.updated_by = request.user
+            # 1.17.63 (CQ179 b): the editor confirms the schedule, after the permission and scope checks above (unchanged). A row
+            # made before migration 0036 keeps its creator: the name is filled in from created_by the first time it is edited.
+            if not schedule.created_by_username:
+                schedule.created_by_username = _person_name(schedule.created_by)
+            schedule.confirmed_by_username = _person_name(request.user)
             schedule.last_due_key = ""
             schedule.save()
             return Response(serialize_schedule(schedule, include_runs=True))

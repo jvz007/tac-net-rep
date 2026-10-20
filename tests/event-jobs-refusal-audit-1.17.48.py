@@ -388,7 +388,7 @@ fields = re.findall(r"^    (\w+) = models\.", stat_block, flags=re.MULTILINE)
 must(fields and not [f for f in fields if "refus" in f or "caller" in f], fields)
 must(len(fields) == 15, fields)  # the 1.17.45 field list, unchanged
 migrations = sorted(p.name for p in (APP / "migrations").glob("0*.py"))
-must(migrations[-4:] == ["0032_event_jobs.py", "0033_runtime_licensing_mode.py", "0034_scheduler_run_completion.py", "0035_server_job_hook.py"], migrations[-4:])  # 1.17.58 added 0033 after the event jobs one; 1.17.61 added 0034; 1.17.62 added 0035
+must(migrations[-5:] == ["0032_event_jobs.py", "0033_runtime_licensing_mode.py", "0034_scheduler_run_completion.py", "0035_server_job_hook.py", "0036_schedule_creator_name.py"], migrations[-5:])  # 1.17.58 added 0033 after the event jobs one; 1.17.61 added 0034; 1.17.62 added 0035; 1.17.63 added 0036
 must("refus" not in (APP / "migrations" / migrations[-1]).read_text(encoding="utf-8").lower(), "the event jobs migration is untouched")
 print("       capability stays 1.1.0 and lists custom:event-job-refused; contract rows and docs agree; no migration, no new column")
 print("[TEST] PASS event jobs refusal audit 1.17.48")

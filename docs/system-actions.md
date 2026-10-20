@@ -29,8 +29,8 @@ Neither Tactical task takes a username. Only Core's audit row names the owner fo
 ## The five AD-13 conditions and how each is met
 
 1. **Typed actions only.** `register_system_action` takes a table key. The action id must also be listed in the module's signed manifest under `system_actions`, so the manifest shows an administrator that the module can run unattended Tactical work.
-2. **Permission and scope where Tactical checks them.** The save-time checks stay where they were (the action permission and the target scope when a schedule or one-off run is created). At every run Core also re-reads the owner (active, not an installer user), every Tactical flag the action needs, and the owner's Tactical role scope.
-3. **Run as the owner.** The audit row names the owner as the actor, with `requested_by` set to `scheduler`.
+2. **Permission and scope where Tactical checks them.** The save-time checks stay where they were (the action permission and the target scope when a schedule or one-off run is created or edited). A run a **person starts** (a manual run or a one-off run) also re-reads the owner at that run: active, not an installer user, every Tactical flag the action needs, and the owner's Tactical role scope. A **scheduled** run of an action the module flagged `unattended` skips only that re-read (since 1.17.63, see "Unattended scheduled runs" below).
+3. **Run as the creator.** The audit row names the person who created the schedule as the actor, with `requested_by` set to `scheduler`, and says who confirmed it and whether a person or the schedule started the run. When the creator's user row is gone, the actor is a Core service actor and the stored name is in the row.
 4. **No HTTP, no keys.** In-process only (see above).
 5. **Only the owning core module registers.** The table names the owner. The premium module that honourably replaces it (AD-20) may register too, and only while that is honoured.
 
@@ -97,17 +97,18 @@ Each refusal ends the run `skipped` with error type `SystemActionRefused`, write
 |---|---|
 | `context_invalid` | The context is the object Core issued for a run that is still going. A copy, a hand-built dict and a context from a finished run are refused. |
 | `owner_refused` | The person who owns the schedule may still run it (the same check as `verify_run_context`). |
-| `no_owner` | A person is behind the run. A module-owned run with no person is refused (AD-13 condition 2). |
+| `no_owner` | A person is behind the run: a user-owned schedule, a one-off run, or (since 1.17.63) a scheduled unattended run that has a stored creator name. A module-owned run with no person and no stored creator is refused. |
 | `caller_unverified` | Core can name the calling module from the call stack. |
 | `wrong_module` | The caller is the run's module and the action's registered module. |
 | `unknown_action` | The action is registered. |
+| `action_not_declared` | Since 1.17.63: the action id is still listed in the module's signed manifest under `system_actions` right now. Before, Core checked it only when the action was registered. |
 | `module_disabled` | The owning module is enabled right now (read fresh, never cached). |
 | `replacement_not_honoured` | An action registered by a replacement still has an honoured replacement right now. |
-| `owner_inactive` | The owner, read again from the database, is active and not an installer user. |
-| `permission_lost` | The owner holds every Tactical flag now. |
+| `owner_inactive` | The owner, read again from the database, is active and not an installer user. **Skipped for a scheduled unattended run.** |
+| `permission_lost` | The owner holds every Tactical flag now. **Skipped for a scheduled unattended run.** |
 | `bad_parameters` | The function takes none. |
 | `bad_agents`, `agent_count` | 1 to 2000 whole endpoint numbers. Above 2000 is refused, never truncated. |
-| `out_of_scope` | Every endpoint exists and lies inside the owner's Tactical role scope. One endpoint outside refuses the whole call. Nothing is narrowed silently. A scheduler manager gets no bypass here, because Core's scheduler-manager shortcut would widen rights for a Tactical function. |
+| `out_of_scope` | Every endpoint exists and lies inside the owner's Tactical role scope. One endpoint outside refuses the whole call. Nothing is narrowed silently. A scheduler manager gets no bypass here, because Core's scheduler-manager shortcut would widen rights for a Tactical function. **Skipped for a scheduled unattended run** (the scope was checked when the schedule was made, and `outside_targets` below still holds the run to the saved targets). |
 | `reapproves_by_policy` | A function that re-approves updates is not run for a replacement. |
 | `function_unavailable` | Core can import the Tactical function. A Tactical upgrade can never make Core call something else. |
 | `mark_limit` | A run sends at most 20 different system actions. |
@@ -118,10 +119,28 @@ The count and shape are judged before any database lookup. The targets check (1.
 
 A system action that names endpoints needs a schedule that targets them. A module whose schedule uses a module-owned target type has to give Core a way to read it: that is a request to Core (a target resolver contract), not a private path. Until it exists the run is refused with `targets_unresolved` and nothing is sent.
 
+## Unattended scheduled runs (Core 1.17.63, CQ179 b)
+
+Johan answered "yes follow tactical's implementation" in chat on 20 October 2026. **Status since 1.17.63-1: the exemption described below is built but switched off** (`scheduler.AD13_CONDITION_2_AMENDED = False`), because the amended AD-13 condition 2 is not yet recorded in `docs/review-accepted-decisions.md` and `docs/tec-tac-module-standard.md` section 1a. Every scheduled run keeps the run-time re-check until the release that records it also sets the switch to True. Core follows Tactical here once that is done. In Tactical, a scheduled task keeps running after the person who made it is demoted or deactivated: the right is checked when the task is created or edited, not at each run (reference `autotasks/views.py` `AutoTaskPerms` and `RunAutoTaskPerms`, `autotasks/models.py` `create_task_on_agent` over NATS, `apiv3/views.py` `TaskRunner.patch`). Core now does the same for one narrow kind of run.
+
+**What is unattended.** A module registers its Scheduler action with `register_scheduled_action(..., unattended=True)`. Core accepts that only when the scheduled action's own id is listed in the module's signed manifest `system_actions`; at decision time the id must still be listed and registered with `core.system_actions` by that module, else the run is re-checked as an ordinary one. A run is unattended only when all of these hold: the action is flagged; the run was started by the schedule (never `manual`, never a one-off); a creator name is stored on the schedule (or `created_by` still holds it). The one place that decides this is `tec_tac.scheduler._is_unattended_scheduled_run`.
+
+**What changes for such a run.** Core does not re-read the creator's rights. In the tick, a demoted or deactivated creator no longer causes `AuthorizationRevoked`. In `verify_run_context` the run verifies with `creator_username`, `confirmed_by_username` and `unattended` set. In `run_system_action` exactly three refusals are skipped: `owner_inactive`, `permission_lost` and `out_of_scope`.
+
+**What stays, for every run.** The signed context and the caller check (`context_invalid`, `caller_unverified`, `wrong_module`), `unknown_action`, `action_not_declared`, `module_disabled`, `replacement_not_honoured`, `bad_parameters`, `bad_agents`, `agent_count` (2000 at most, refused above), `outside_targets` (the snapshot is never widened), `targets_unresolved`, `reapproves_by_policy`, `function_unavailable`, `mark_limit`, the at-most-once mark and the strict audit row before the send. `has_tactical_permission` and `resource_context` stay fresh reads.
+
+**What a person-started run keeps.** A manual run and a one-off run keep every re-check, exactly as before (CQ50 a).
+
+**Who is on the record.** Migration 0036 adds `created_by_username` and `confirmed_by_username` to the schedule. Creating a schedule stores the signed-in person as both. An edit sets the editor as `confirmed_by_username`, after the unchanged permission and scope checks. A row made before 0036 reads its creator from `created_by`. Every `run`, `deny` and `custom:outcome-unknown` row of a system action carries `run_kind` (`scheduled` or `person`), `creator` and `confirmed_by`. An administrator can list schedules by creator or confirmer: `GET /api/tfd/scheduler/schedules/?created_by=<name>&confirmed_by=<name>` (see `docs/scheduler.md`).
+
+**The cost, in plain words.** A person who is demoted or deactivated later keeps their unattended schedules running until someone removes or edits them. That is how Tactical works. An administrator can find those schedules by creator and remove or disable them. Nothing else changes for an ordinary action: an action not flagged `unattended` is re-checked at every scheduled run as before.
+
+**When targets vanished.** If some snapshotted targets no longer exist but the endpoints you name are all still targets, the run goes ahead and the result gains `vanished_targets` (a count). The run's audit row carries it too. If you name an endpoint that is not a target, the whole call is refused as `outside_targets`, and the text says how many targets no longer exist.
+
 ## Then: at most once, audited, sent
 
 1. Core writes a mark on the run row (`{action_id, targets_digest, state: "claiming"}`) under a row lock and commits.
-2. Core writes one **strict** audit row: action `run`, object type `system_action`, object id the action id, actor the owner, metadata `requested_by`, `run_id`, `schedule_id`, `owner_module`, `function`, `agent_count`, `targets_digest`. No endpoint ids and no hostnames. The digest is a short hash bound to the run id. It is not a secret.
+2. Core writes one **strict** audit row: action `run`, object type `system_action`, object id the action id, actor the creator (or a Core service actor when the user row is gone), metadata `requested_by`, `run_id`, `schedule_id`, `owner_module`, `function`, `agent_count`, `targets_digest` and, since 1.17.63, `run_kind`, `creator`, `confirmed_by` (and `vanished_targets` when some targets no longer exist). No endpoint ids and no hostnames. The digest is a short hash bound to the run id. It is not a secret.
 3. Only if both commits worked, Core calls the Tactical task with `.delay()` and sets the mark to `sent` with the Celery task id.
 
 What follows from that:
@@ -134,7 +153,8 @@ What follows from that:
 ## The honest limits
 
 - Modules run in the same Python process as Core. Code that deliberately reaches into Core's private state is outside what this stops. The caller check (`docs/caller-identity.md`) names the module whose own code calls the function. Core code, library code, generated code, and disabled and legacy modules are refused.
-- Tactical's own tasks for the first two rows take no username. Only Core's audit row names the owner.
+- Tactical's own tasks for the first two rows take no username. Only Core's audit row names the person.
+- An unattended schedule outlives the creator's rights, as in Tactical (see "Unattended scheduled runs"). It is opt-in per action, and the audit row and the creator filter make it visible.
 - Core does not follow the work after the send. Tactical shows the result in each endpoint's update list.
 - There is no HTTP route for system actions and no global off switch. Disable the owning module, or its schedule, to stop a run. (CQ178.)
 - Scheduled install for Advanced Patch Management is not unblocked by this release. Only scan is. (CQ173.)
@@ -143,6 +163,7 @@ What follows from that:
 
 ## Not in this release
 
-- Module-owned recurring schedules with a named acting person (CQ176).
+- Scheduled install for Advanced Patch Management (CQ173), groups above 2000 endpoints (CQ178), more table rows such as reboot, uninstall, scripts, commands, checks, tasks and reports (CQ175), and pushing rule decisions (CQ174) still wait for Johan's sign-off.
+- Module-owned recurring schedules with a named acting person are built in 1.17.63 (CQ176, `reconcile_schedule(..., confirmed_by_request=request)`, see `docs/module-scheduling.md`).
 - Polling a module's capability for a final state from the tick (CQ177). A run that finishes later uses `pending_completion` (see `docs/scheduler.md`).
 - A UI for system actions. The Scheduler page shows a waiting run once the UI release for 1.17.61 ships.

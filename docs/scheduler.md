@@ -189,6 +189,7 @@ Core registers `tec-tac.module-repository-sync` (module `tec-tac`, no target, ti
   - paged responses include `total`, `page`, `page_size`, `pages`, `next_page`, and `previous_page`;
   - scoped users are counted only after action and Tactical target-scope authorization;
   - the legacy unpaged response remains bounded for compatibility with older consumers.
+- `GET /api/tfd/scheduler/schedules/` also takes `created_by=<user name>` and `confirmed_by=<user name>` (Core 1.17.63). The match is exact and not case-sensitive, on the stored creator or confirmer name (a row made before migration 0036 matches its creator row's user name). An unknown name returns an empty list. It needs no new right: it only narrows the list the caller may already see, and the scope and permission filtering is unchanged. Each schedule gains `created_by_username` and `confirmed_by_username`.
 
 ## Module developers
 
@@ -270,6 +271,20 @@ remove_owned_schedule(
 
 The owning module must match the registered action's `module_id`; a module cannot reconcile another module's scheduled action. These APIs are server-side framework APIs and intentionally do not depend on browser authentication.
 
+#### A schedule a person creates and the module owns (Core 1.17.63, CQ176)
+
+`reconcile_schedule` takes one more keyword-only, optional argument: `confirmed_by_request=None`. Pass the signed-in person's **real request** (a Django or DRF request that went through Core's session check, the same proof `run_tactical_operation` asks for) when that person creates or changes the schedule from your own view. A user id or an object that merely has a `user` is refused (`SchedulerNotAllowed`).
+
+```python
+reconcile_schedule(owner_module="patchmanagement", owner_key="nightly-scan", action_id="patchmanagement.scan",
+                   schedule_type="daily", run_time=time(2, 0), targets={"type": "client", "ids": [7]},
+                   confirmed_by_request=request)
+```
+
+With a request, Core checks for that person the action's permission and the Tactical scope of the targets (the same checks as `start_one_off_run`), stores the creator the first time and the confirmer each time, and writes an audit row for the creation (`add`) and for every change (`modify`) naming the person. The module stays the owner and the executor. If the action is flagged `unattended`, a run of this schedule is an unattended scheduled run with that creator.
+
+**Without** a request, a schedule that has a stored creator can only be switched off (`enabled=False`) or left as it is. Any change to its action, targets, parameters, timing or policies, and switching it back on, raises `SchedulerError` and changes nothing. An identical call is a no-op. So a module can never widen or rewire a person's schedule, and it can name only the person who created or confirmed it. A module-owned schedule with no stored creator, and any call without the new keyword on one, behaves exactly as before 1.17.63. `get_owned_schedule` gains the additive key `created_by_username`.
+
 
 ## Start a one-off run for a user (Core 1.17.16)
 
@@ -314,6 +329,8 @@ The owner check runs again on every attempt. If the user loses the action, the s
 ### The owner is re-checked before the handler (AD-13 condition 2)
 
 A run's authority is the user it was started for, and it does not outlive that user's access. Just before the handler runs, Core checks again that the user is still active, still holds the action (a `tactical:` flag is read from the role again), and still holds the targets' scope. If not, the run ends `skipped` with a plain reason (`error_type` `AuthorizationRevoked`) and an audit row, and the handler never runs. A check that cannot be made counts as a refusal. It never raises into Celery.
+
+**An exception for unattended work (Core 1.17.63, CQ179 b; switched OFF in 1.17.63-1 until the decision is recorded).** Johan answered "yes follow tactical's implementation" in chat on 20 October 2026, but the amended AD-13 condition 2 is not yet in `docs/review-accepted-decisions.md` and `docs/tec-tac-module-standard.md` section 1a. Until it is, `scheduler.AD13_CONDITION_2_AMENDED` is False and every scheduled run keeps the run-time re-check. Once recorded, a *scheduled* run of an action that its module registered with `unattended=True` is not re-checked against its creator: the right was checked when the person created or edited the schedule, as in Tactical. A manual run and a one-off run are always re-checked. Core accepts the flag only for an action whose own id is listed in its module's signed manifest `system_actions` (and it must be registered with `core.system_actions` for the exemption to apply). See `docs/system-actions.md` ("Unattended scheduled runs") for what still applies and the plain cost.
 
 ### More in the handler context
 
@@ -463,17 +480,18 @@ from tec_tac.server_job_hooks import hook_job_id
 register_event_job(id=hook_job_id("certificatemanagement"), module_id="certificatemanagement", label="Record a finished server job", handler=on_finished)
 ```
 
-The id is fixed: `<module id>.server_job_finished`. Core ties a job to a module through the `owner_module` it wrote in the job file when the job started (the action's `owner_module`, since 1.17.17). There is no new manifest key.
+The id is fixed: `<module id>.server_job_finished`, with the module id spelled exactly as the module spells it (`securityWAF.server_job_finished`). Core ties a job to a module through the `owner_module` it wrote in the job file when the job started (the action's `owner_module`, since 1.17.17). There is no new manifest key.
 
-- **One guarded step.** `deliver_finished_server_jobs()` runs after `settle_server_job_runs()`. It has its own try/except, never raises and writes nothing to the tick's output line. It looks at a directory listing, one query for the jobs it already handled and at most 50 job files a tick, oldest first. It reads only job files changed in the last six hours.
+- **One guarded step.** `deliver_finished_server_jobs()` runs after `settle_server_job_runs()`. It has its own try/except, never raises and writes nothing to the tick's output line. It looks at a directory listing, one query for the jobs it already handled, and hands over at most 50 finished jobs a tick, oldest first, reading at most 200 job files to find them (1.17.63; 1.17.62 read at most 50). It reads only job files changed in the last six hours.
 - **What the handler gets.** `context["payload"]` is `{job_id, action_id, status, exit_code, classification?}`. `status` is `succeeded`, `failed`, `cancelled` or `dispatch_failed`. Never output text and never parameters.
 - **At most once per Core.** Core inserts a row in `TecTacServerJobHook` (unique on the job id) before it stores the event. An event that could not be stored waits in `retry` and the next tick tries again, three tries in all, then it is `abandoned` with one audit row (`custom:server-job-hook-abandoned`). After the event is stored, `core.event_jobs` owns it: its attempts, back-off and expiry apply, so a handler may run more than once.
 - **The handler must be idempotent.** A browser poll of `JobView` can record the same job, and the event job can retry. Write the outcome with a key on the job id.
 - **A disabled, removed or not-honoured module** gets its job marked `skipped` with one audit row (`custom:server-job-hook-skipped`). Core does not retry it for ever, and enabling the module later does not replay it. A module state Core cannot read leaves the job for the next tick.
 - **A module with no hook** is left alone: its jobs are marked `ignored` once.
 - **The handler runs as the module, with no user.** It cannot make a Tactical change (AD-13 is unchanged).
-- **Honest limits.** The job context and `owner_module` are caller-asserted, the same limit as `docs/caller-identity.md`. A job that finished while Core was off for more than six hours is not handed over. A claim that a tick left half-done for 15 minutes is abandoned and never sent again (at most once wins over exactly once). The module id of an event job must be lowercase (letters, digits, `-` and `_`).
+- **Honest limits.** The job context and `owner_module` are caller-asserted, the same limit as `docs/caller-identity.md`. A job that finished while Core was off for more than six hours is not handed over. A claim that a tick left half-done for 15 minutes is abandoned and never sent again (at most once wins over exactly once). The module part of an event job id keeps the module id's own spelling (1.17.63, CQ183): a module such as `securityWAF` registers `securityWAF.server_job_finished`. The job part after the dot stays lowercase. Core never folds the case of a module id (`docs/module-identifiers.md`), so `securitywaf.x` and `SecurityWAF.x` do not register for `securityWAF`, and a job file whose owner is spelled differently is not handed to it.
 - **Migration.** `0035_server_job_hook` adds one table. Run `manage.py migrate tec_tac` on update.
+- **Reads per tick (1.17.63).** At most 50 *finished* jobs are handed over a tick, and at most 200 job files are read (`READ_BUDGET`). A file read as not finished is remembered in memory with its modification time and is not read again until the file changes (a status change rewrites the file), so jobs that are stuck cannot use up the batch and starve a finished job behind them. The memory is per process, holds only files inside the six-hour window and is dropped with them. A file that cannot be read is tried again every tick.
 
 ### Diagnostic action
 

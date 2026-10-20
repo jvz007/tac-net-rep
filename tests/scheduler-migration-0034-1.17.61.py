@@ -66,6 +66,6 @@ print("       0034 depends on 0033, adds exactly four blank-by-default columns, 
 
 # the other migrations of this release line are untouched: 0034 still follows 0033
 numbers = sorted(p.name for p in (APP / "migrations").glob("0*.py"))
-# 1.17.62 added 0035 after it; 0034 itself is unchanged
+# 1.17.62 added 0035 after it, 1.17.63 added 0036; 0034 itself is unchanged
 must("0034_scheduler_run_completion.py" in numbers and numbers[numbers.index("0034_scheduler_run_completion.py") - 1] == "0033_runtime_licensing_mode.py", numbers[-3:])
 print("PASS scheduler migration 0034 1.17.61")

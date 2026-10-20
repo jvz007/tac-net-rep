@@ -88,7 +88,7 @@ for question in ("CQ172", "CQ173", "CQ174", "CQ175", "CQ176", "CQ177", "CQ178", 
 steps = notes[notes.index("## Dev-server checklist"):]
 must(steps.count("**Step ") == 8 and steps.count("**FAIL**") >= 7 and "Expect" in steps, "eight checklist steps, each with its FAIL line")
 must((ROOT / "docs" / "releases" / "RELEASE_NOTES_1.17.60.md").is_file() and not (ROOT / "RELEASE_NOTES_1.17.60.md").exists(), "the earlier notes moved to docs/releases")
-must(ROOT.joinpath("VERSION").read_text(encoding="utf-8").strip() in ("1.17.61", "1.17.62") and any(f'"version": "{v}"' in ROOT.joinpath("tec_tac_package.json").read_text(encoding="utf-8") for v in ("1.17.61", "1.17.62")), "version 1.17.61 or the 1.17.62 that follows it")
+must(ROOT.joinpath("VERSION").read_text(encoding="utf-8").strip() in ("1.17.61", "1.17.62", "1.17.63") and any(f'"version": "{v}"' in ROOT.joinpath("tec_tac_package.json").read_text(encoding="utf-8") for v in ("1.17.61", "1.17.62", "1.17.63")), "version 1.17.61 or the 1.17.62 and 1.17.63 that follow it")
 reviews = ROOT.parents[1] / "reviews"
 if reviews.is_dir():
     questions = (reviews / "questions" / "core.md").read_text(encoding="utf-8")

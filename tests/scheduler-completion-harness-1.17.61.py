@@ -109,6 +109,9 @@ class Query(list):
     def exists(self):
         return bool(self)
 
+    def values_list(self, *fields, flat=False):  # 1.17.63: the tick lists the ids of the enabled schedules
+        return [getattr(r, fields[0]) for r in self]
+
     def filter(self, *qs, **kw):
         return Query(r for r in self if all(match(r, q) for q in qs) and match(r, kw))
 
@@ -177,7 +180,8 @@ class Schedule(Model):
                     weekdays=[], day_of_month=None, interval_seconds=None, interval_anchor_at=None, last_run_at=None, last_due_key="",
                     created_by=None, updated_by=None, parameters={}, targets={}, target_mode="snapshot", retry_count=0, retry_delay_seconds=60,
                     timezone="UTC", missed_policy="skip", missed_grace_minutes=60, concurrency_policy="skip", target_state="valid",
-                    target_state_detail="", updated_at=None, schedule_type="once")
+                    target_state_detail="", updated_at=None, schedule_type="once",
+                    created_by_username="", confirmed_by_username="")  # 1.17.63: the names migration 0036 adds
 
     @property
     def runs(self):

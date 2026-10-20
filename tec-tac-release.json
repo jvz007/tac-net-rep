@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.62",
+  "version": "1.17.63",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.17.62.md",
-      "size": 20281,
-      "sha256": "7918ee2563854e12be7f981810109c1c68244a98ab31535164bdf54483ce0662"
+      "path": "RELEASE_NOTES_1.17.63.md",
+      "size": 29377,
+      "sha256": "a12b04323a7e20a6ba97cafb76540e1db2a9a629b34e477537ea4635b15df660"
     },
     {
       "path": "VERSION",
       "size": 7,
-      "sha256": "080be1176b3bb3417e218efc185d03120f5963c941b9973312804ea8ad4b6d59"
+      "sha256": "8a127f945957d12627dedc7a3935bbf0a158ffcc56a83bfd3f02b4e94a27ebd6"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -93,8 +93,8 @@
     },
     {
       "path": "docs/event-jobs.md",
-      "size": 22041,
-      "sha256": "ca296087e538f98d904a697f434309d3425673a99381ab7f03f850a74fa0e061"
+      "size": 22283,
+      "sha256": "aa29605250d5ee25e7171a1df730981c764d2fcd81e0b62bf79d6ca01eae22d0"
     },
     {
       "path": "docs/extension-reportset-tutorial.html",
@@ -178,8 +178,8 @@
     },
     {
       "path": "docs/module-scheduling.md",
-      "size": 29944,
-      "sha256": "4ae1efc098108efb2a18a01f9bc8e69647f68cd99c28fee6601de1bdf32cffca"
+      "size": 31423,
+      "sha256": "4c99b1b5338aafe141b7a62ff42011cbd1c339ae223e9d38d6bbdd74a84f2f1f"
     },
     {
       "path": "docs/module-visibility.md",
@@ -1367,6 +1367,11 @@
       "sha256": "52716581d390433ca6cde436847a1696919ded81169fa12f402cf2d56a2ad91c"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.62.md",
+      "size": 20281,
+      "sha256": "7918ee2563854e12be7f981810109c1c68244a98ab31535164bdf54483ce0662"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.7.md",
       "size": 9249,
       "sha256": "f288a2d999944822827d8767f406f50bda6894c7dc9d8908a476e4f391a6c8cb"
@@ -1478,8 +1483,8 @@
     },
     {
       "path": "docs/scheduler.md",
-      "size": 32569,
-      "sha256": "a07a758bc5eeece157251a141f37bdf4b56466406ef84e0830ef40acceb46d80"
+      "size": 37016,
+      "sha256": "c4be3408d94bcd6eaac88ed20de224e133e1bf10b93af5b3e5cc559fe39d5efd"
     },
     {
       "path": "docs/server-backup-capability.md",
@@ -1488,8 +1493,8 @@
     },
     {
       "path": "docs/server-maintenance-capability.md",
-      "size": 17204,
-      "sha256": "459bc63c74bb4181f84c6084ebaae8e89e579338d88f6380ab746d29ef1492c3"
+      "size": 17572,
+      "sha256": "3146057392b5ba1adafaaf579ec12a34fe203d76b747006a81261c914a7c78cb"
     },
     {
       "path": "docs/session-security.md",
@@ -1503,8 +1508,8 @@
     },
     {
       "path": "docs/system-actions.md",
-      "size": 12073,
-      "sha256": "9fba21b20d5cc7a3964a20fc39e0eb72043faabff57fee52bd09cbfed262ff88"
+      "size": 17931,
+      "sha256": "ce777da6d03d5ac2f2dfc2ed30624b0cbbeea815b0e119e06e04e119ff3f6885"
     },
     {
       "path": "docs/system-update-signed-releases.md",
@@ -1788,8 +1793,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 360317,
-      "sha256": "db6615605c84583622a14204116529c307e067d46a90887f6935a3ad7c62bcbf"
+      "size": 364799,
+      "sha256": "040261ebdfb368cff56913daa1cd3ef1e833d6c2e83c749e1489b6f5e4bbfb09"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -1818,8 +1823,8 @@
     },
     {
       "path": "framwork/tec_tac/event_jobs_policy.py",
-      "size": 16488,
-      "sha256": "dd8e660cb781a1a0d1f90604214d6fb06552855ef6d1a27866b7be727eb90128"
+      "size": 17072,
+      "sha256": "e0fb1b460a31d643f75d71f0e42c9a4858c1a513135432cd374e4ac0d268f43c"
     },
     {
       "path": "framwork/tec_tac/filter_set_views.py",
@@ -2047,14 +2052,19 @@
       "sha256": "8be8eb7f4b132b7b8a9cef1a2d4d8c1339c6c4918b580448b34421d80c2d5b7c"
     },
     {
+      "path": "framwork/tec_tac/migrations/0036_schedule_creator_name.py",
+      "size": 1075,
+      "sha256": "518f34bee238f8e172436aaea6aff363692632d8c303b159b02de5d55564e1a1"
+    },
+    {
       "path": "framwork/tec_tac/migrations/__init__.py",
       "size": 0,
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "path": "framwork/tec_tac/models.py",
-      "size": 32845,
-      "sha256": "b14a325a250c382b1ed49108b8aa415c398ec7eb94b42a458c6caeee1c1a56dd"
+      "size": 33338,
+      "sha256": "846009a6dd99312abcc61c298e26387909ea4f6f031619539c333ce06f01aff6"
     },
     {
       "path": "framwork/tec_tac/module_category.py",
@@ -2233,8 +2243,8 @@
     },
     {
       "path": "framwork/tec_tac/scheduler.py",
-      "size": 70755,
-      "sha256": "90d66c05f7012e3d066ea93460834c285558066cfee9c4b1b62fd6808a2151ae"
+      "size": 85389,
+      "sha256": "0893efc74aca09c3bd24491090ecc2a147d6592d9d905736473e2ecd4115b7d7"
     },
     {
       "path": "framwork/tec_tac/scheduler_completion.py",
@@ -2243,8 +2253,8 @@
     },
     {
       "path": "framwork/tec_tac/scheduler_run_context.py",
-      "size": 10021,
-      "sha256": "810973c05b21eda34b26cfab5eb3161f9eaf62180cec80dab1fd0900c71a396c"
+      "size": 11201,
+      "sha256": "eb7e0f675c2c563fd5dbc86395876ce3dce58b958e7d5ca03c7bf1b564f1ffa3"
     },
     {
       "path": "framwork/tec_tac/scheduler_targets.py",
@@ -2258,8 +2268,8 @@
     },
     {
       "path": "framwork/tec_tac/scheduler_views.py",
-      "size": 40156,
-      "sha256": "a3ade88161b4b6ea115d7771903b382e510fb558a8d6b35a150e035b0a987dd9"
+      "size": 42683,
+      "sha256": "86bf3895f50d2b794834995a9cd92d330334bd54e61bf0710b6859dd9bd22c55"
     },
     {
       "path": "framwork/tec_tac/server_backup.py",
@@ -2273,8 +2283,8 @@
     },
     {
       "path": "framwork/tec_tac/server_job_hooks.py",
-      "size": 16789,
-      "sha256": "c7b99b43c10356321822df6030f09defbc9a08eee5cf188150d68258e399c079"
+      "size": 19124,
+      "sha256": "9dc3e20c2fc253b52402305220e69874c0a606594fb78c46615c42f66d9d6d28"
     },
     {
       "path": "framwork/tec_tac/server_maintenance.py",
@@ -2298,8 +2308,8 @@
     },
     {
       "path": "framwork/tec_tac/system_actions.py",
-      "size": 36452,
-      "sha256": "87309ecfdb8c889180eeebf30c8e0c825d81da22b69ab9c14701bb7cc4cef688"
+      "size": 40836,
+      "sha256": "8def2fbea1999d527676bfa783843be33e0d1a0f1847348681bc3b40bfba626f"
     },
     {
       "path": "framwork/tec_tac/system_update.py",
@@ -2564,7 +2574,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "30a9221b2f0bc8e71f965346faf05c11463012b92f7965cc921493f26fe6ffb2"
+      "sha256": "5fec63ce7a0c00a2f681db8ff775f1924624cd1b8b9abfd577fe5eb7219dcf06"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2858,8 +2868,8 @@
     },
     {
       "path": "tests/contract-catalog-1.17.61.py",
-      "size": 8432,
-      "sha256": "15a233966d1a2a3f72624d2f697b55f5e5583c6ba7ef22ff8db1dd6a36268866"
+      "size": 8466,
+      "sha256": "db39a19144e93787b0afe93a749fe72becf8b40fd85b571f30df190ea3ca3284"
     },
     {
       "path": "tests/contract-export-1.17.14.py",
@@ -3002,6 +3012,11 @@
       "sha256": "364169d14d82c56a852455a8c5d4d55dac2ce445e68345d4826a06d96501c9ec"
     },
     {
+      "path": "tests/event-jobs-mixed-case-id-1.17.63.py",
+      "size": 11047,
+      "sha256": "50741912f8123b99e5e64a97f203d7a881177f48d7aa13c41af2541a2d39a1ea"
+    },
+    {
       "path": "tests/event-jobs-module-gate-1.17.46.py",
       "size": 18580,
       "sha256": "ae5aac0bd150ef8b1296726306df933070160edada0ba54153c0f8c83fb75229"
@@ -3013,13 +3028,13 @@
     },
     {
       "path": "tests/event-jobs-refusal-audit-1.17.48.py",
-      "size": 17468,
-      "sha256": "35a9d10cd6227a65a72bcbc15a1038bd507b2180db24eca6e2fb24aa7b24a3b7"
+      "size": 17521,
+      "sha256": "619660603555b1f9b3654d08858686850f897d1d4a36e47398ba8413090a7a0d"
     },
     {
       "path": "tests/event-jobs-refusal-bound-1.17.49.py",
-      "size": 21526,
-      "sha256": "46af9db2dc90fe1d0fde29f4dc9a6a15b277881befc180664a7466a134b9ee37"
+      "size": 21579,
+      "sha256": "f4eaed98c502e9d78342f76573bf623aa9a39b1839b810fc553653e5566723c0"
     },
     {
       "path": "tests/event-jobs-runtime-1.17.45.py",
@@ -3308,8 +3323,8 @@
     },
     {
       "path": "tests/migration-model-id-agreement-1.17.36.py",
-      "size": 15019,
-      "sha256": "ff3145cd4786ce6d3cad4afc1d3b4821330b4e411b1572cfcf75f476447a5f1a"
+      "size": 15181,
+      "sha256": "79f266ea72345455041edecbfd7d1bae96df43e0506567d9651ca508cf633949"
     },
     {
       "path": "tests/module-artifact-immutable-claim.py",
@@ -3433,8 +3448,8 @@
     },
     {
       "path": "tests/module-job-contract-rows-1.17.60.py",
-      "size": 5380,
-      "sha256": "9076db60a599969bac40234455b0baaa7ad60acc48792d64e5b5847a851f075b"
+      "size": 5381,
+      "sha256": "1c815b6981f1e09eb8546b76128d67d5663ebc2553c3245ed1feedff851569d1"
     },
     {
       "path": "tests/module-job-dispatch-crlf-1.17.15.py",
@@ -4078,8 +4093,8 @@
     },
     {
       "path": "tests/runtime-settings-upload-1.17.14.py",
-      "size": 11549,
-      "sha256": "1458306e9f57ab1fd829c02a51927efb7e1e6651c9785b44c395e58b0d1b0fb9"
+      "size": 11599,
+      "sha256": "1bd1c93a07106a25c50b9108bd470fb0cfe0c31f6f269a21dae35aaec69a2d21"
     },
     {
       "path": "tests/runtime-settings-upload-runtime-1.17.14.py",
@@ -4128,8 +4143,13 @@
     },
     {
       "path": "tests/scheduler-closure-1.15.149.py",
-      "size": 8197,
-      "sha256": "14230e1b8787660a9707f6b4f5b08073e9986910b13fc848fcb96d5d0d5a85f0"
+      "size": 8337,
+      "sha256": "969caa93619c382da4275cc62fd83cbd664fa34b97121b3bd4077180853641b2"
+    },
+    {
+      "path": "tests/scheduler-compat-1.17.63.py",
+      "size": 10395,
+      "sha256": "9353a2a9a056842cafb720890013b5a09c1f72879c95e9cefe0a5d27ed243d5b"
     },
     {
       "path": "tests/scheduler-completion-caller-1.17.61.py",
@@ -4138,8 +4158,8 @@
     },
     {
       "path": "tests/scheduler-completion-harness-1.17.61.py",
-      "size": 19830,
-      "sha256": "9061e78ef226f7ae0ba20aef8bb8d6848f2e4291c6c5ea7be41be5dfb69b082e"
+      "size": 20108,
+      "sha256": "7d4ab414dfdf72042452066bd24b342ac40ba30800f02a19b003ee400bd2f0e5"
     },
     {
       "path": "tests/scheduler-completion-kind-1.17.62.py",
@@ -4152,14 +4172,19 @@
       "sha256": "89d1b1b8defda509b9c5fb41866cc2f961f8f9ee94b5ea514c455870c5464efd"
     },
     {
+      "path": "tests/scheduler-creator-filter-1.17.63.py",
+      "size": 8194,
+      "sha256": "63effaa2e55227ed68be566ef74528e08d1a8c82c9d154994bf1cd3ab23a882a"
+    },
+    {
       "path": "tests/scheduler-durability-review.sh",
       "size": 880,
       "sha256": "87e478526a7fdcdb5009eb4a9614d11a9cb83a313ee7b98f9941478a305d11c6"
     },
     {
       "path": "tests/scheduler-filter-value-compat-1.15.134-2.py",
-      "size": 5363,
-      "sha256": "64d2a6fd2ea8fb227b8b89d8745beff9b9b7e344acb594ba908b6f3684b0218e"
+      "size": 5503,
+      "sha256": "477ae7704d3f48cbd02ba943815fccfad31bf841fd467920f991464856c7aa7d"
     },
     {
       "path": "tests/scheduler-foundation.sh",
@@ -4208,8 +4233,13 @@
     },
     {
       "path": "tests/scheduler-migration-0034-1.17.61.py",
-      "size": 3765,
-      "sha256": "e638795615fa7a6284f00be0be904ce6d8ee68dc9247063282e7dd720eaf2f16"
+      "size": 3785,
+      "sha256": "c720ccb283bfdcef1a895dae09a813c3962ce0331535666d80a59c2238886498"
+    },
+    {
+      "path": "tests/scheduler-module-owned-creator-1.17.63.py",
+      "size": 17676,
+      "sha256": "c84af713a2525380a434c8fe9768ceff15c567a37e838976bf08135389725e20"
     },
     {
       "path": "tests/scheduler-native-type-compat-1.15.164-1.py",
@@ -4223,8 +4253,8 @@
     },
     {
       "path": "tests/scheduler-one-off-run-1.17.16.py",
-      "size": 26536,
-      "sha256": "297e8394897dc495c8bce1f1f71a7cf1b9148891a0d5a1147f7710866bc5c204"
+      "size": 26607,
+      "sha256": "285b7d438dba492ef74c893afb93e4f7af00c5bfd5f01c227c090711d7e3a2ee"
     },
     {
       "path": "tests/scheduler-one-off-run-now-1.17.17.py",
@@ -4243,8 +4273,8 @@
     },
     {
       "path": "tests/scheduler-run-context-1.17.19.py",
-      "size": 12178,
-      "sha256": "22021eb18047394cd2beaf5a400c0142c91f53691aa635b7cde314e9b562ca73"
+      "size": 12498,
+      "sha256": "5a6368a7fb4052b07ba41a4065c364fc59f5db73072f8fa46c00bf2d417efd4c"
     },
     {
       "path": "tests/scheduler-run-context-bind-1.17.20.py",
@@ -4290,6 +4320,21 @@
       "path": "tests/scheduler-target-shape.py",
       "size": 4024,
       "sha256": "112c489e100d5d071a95c4f7f8624d6496094676c01e8f11b1adcdb76b564d17"
+    },
+    {
+      "path": "tests/scheduler-unattended-gate-1.17.63-1.py",
+      "size": 8561,
+      "sha256": "62fe352c1950ec19f38b1db37da59dc1dbe77b7d74c49898db9804b816171c23"
+    },
+    {
+      "path": "tests/scheduler-unattended-owner-1.17.63.py",
+      "size": 16901,
+      "sha256": "1002cfd30592c07b67d47b069d9ad05ebc16aa3ad2f523f119804872528c4a8b"
+    },
+    {
+      "path": "tests/scheduler-unattended-runtime-1.17.63.py",
+      "size": 13357,
+      "sha256": "959fff08247c34fdb0c28f5a3b36746114b1527697b32fdb38296db3dc706f32"
     },
     {
       "path": "tests/scheduler-unrestricted-scope.py",
@@ -4423,8 +4468,13 @@
     },
     {
       "path": "tests/server-job-hook-migration-0035-1.17.62.py",
-      "size": 6469,
-      "sha256": "fdcfd05dceb60d38262d164fbac4228fa770f9ffaa1e32b9a1665228176fb8da"
+      "size": 6549,
+      "sha256": "310a2df03f65e2c424873729b7846f9c339ffcdc7791c2159a9ee46faa06ef0c"
+    },
+    {
+      "path": "tests/server-job-hook-starvation-1.17.63.py",
+      "size": 10735,
+      "sha256": "5ec393e3ab37e7e1bf46b1920a1cc9f2f0a05fc4a2f03dc75055e7f2b92abddd"
     },
     {
       "path": "tests/server-maintenance-foundation.sh",
@@ -4538,8 +4588,8 @@
     },
     {
       "path": "tests/session-theme-1.17.24.py",
-      "size": 9915,
-      "sha256": "ac30f04f6bef19f9ee4f2da94851be38aa6839f3d0b18b5369b11b9d31767d5c"
+      "size": 9938,
+      "sha256": "d2a13e25e945232993073456905d44a52bd6eefef392b19fa77e0a4fa890aa3e"
     },
     {
       "path": "tests/session-theme-runtime-1.17.24.py",
@@ -4568,13 +4618,13 @@
     },
     {
       "path": "tests/system-actions-audit-1.17.61.py",
-      "size": 6410,
-      "sha256": "246a7d18f3322d01dc39bfbb853f1a5858a5a986286057b102823e0d367b2849"
+      "size": 6726,
+      "sha256": "ed3b7948cffba661e182fe65a1d35c92473b265c0b5c07a773e15506e7081e74"
     },
     {
       "path": "tests/system-actions-compat-1.17.61.py",
-      "size": 6656,
-      "sha256": "b5e87a93c420d64bd2b219ba6e488d47d2e668c3b0758bac3b21cfd882a5284d"
+      "size": 6777,
+      "sha256": "8818e4093556749d993d1aabcd1b894e61f4cfd3e70e33bb7a3339bd995c98de"
     },
     {
       "path": "tests/system-actions-registry-1.17.61.py",
@@ -4583,8 +4633,8 @@
     },
     {
       "path": "tests/system-actions-run-1.17.61.py",
-      "size": 23533,
-      "sha256": "c91f8750354f484a49e64d5351c542b01bd4a6cf084516f0fb749d2ba69fc1c3"
+      "size": 23675,
+      "sha256": "5e295fe8071bec5c38b03f751f4e6e837a3c6d336a0bbd3b645d615e90e82dd0"
     },
     {
       "path": "tests/system-actions-runtime-1.17.61.py",
@@ -4598,8 +4648,13 @@
     },
     {
       "path": "tests/system-actions-targets-1.17.62.py",
-      "size": 11053,
-      "sha256": "0897c6a4fcd5d3440c05b024392c50802afe554e8a06ec7facc95d1e2eff2f03"
+      "size": 11164,
+      "sha256": "09ae680e964704be2fb31a960b28dec8b306e776e856f0fcb4b3b8e44d838060"
+    },
+    {
+      "path": "tests/system-actions-unattended-1.17.63.py",
+      "size": 18607,
+      "sha256": "90dff72f22b67fd6fd30583a27b9a6d0e5f1b65ad60b67bba01d1de6ed32cb3c"
     },
     {
       "path": "tests/system-name-1.17.23.py",
@@ -5063,8 +5118,8 @@
     },
     {
       "path": "tests/update-source-1.17.2.py",
-      "size": 29425,
-      "sha256": "28b74e69108ab6fed631f5ed45ca9e6490ba12d5ee966c209b9ae0cd11ff79c1"
+      "size": 29451,
+      "sha256": "6bc6db5697ec91e6883e99a820a0ae2fa290021738e4a79e21d8d23dfe28ae97"
     },
     {
       "path": "tests/update-source-1.17.3.py",

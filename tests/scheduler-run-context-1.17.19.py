@@ -78,6 +78,9 @@ def _load_run(run_id):
 ctx_mod._load_run = _load_run
 ctx_mod._is_one_off_key = lambda key: bool(key) and str(key).startswith("one-off:")
 ctx_mod._authorization_error = lambda schedule: STATE["auth_error"]
+# 1.17.63: the two helpers added with the unattended rule. An ordinary run is never unattended; the creator name is read from created_by.
+ctx_mod._is_unattended_scheduled_run = lambda run: False
+ctx_mod._creator_names = lambda schedule: (str(getattr(getattr(schedule, "created_by", None), "username", "") or ""), "")
 ctx_mod._reload_user = lambda pk: USERS.get(pk)
 ctx_mod._check_flag = lambda flag: flag if isinstance(flag, str) and re.fullmatch(r"can_[a-z_]+", flag) else (_ for _ in ()).throw(ValueError("bad flag"))
 

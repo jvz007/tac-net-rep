@@ -138,6 +138,7 @@ ns = {
     "_canonicalize_persisted_endpoint_identity": lambda value: dict(value),
     "SchedulerTargetShapeError": targets.SchedulerTargetShapeError,
     "_runtime_authorization_error": lambda sched: None,
+    "_is_unattended_scheduled_run": lambda sched: False,  # 1.17.63: the one helper the tick asks; an ordinary schedule is never unattended
     "latest_occurrence": lambda sched, value: occurrence,
     "due_key": lambda occurrence, exact=False: "due-1",
     "_should_run_occurrence": lambda sched, occurrence, value: True,

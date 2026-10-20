@@ -179,7 +179,12 @@ CORE_CONTRACTS = (
             "shape raises SchedulerError. A flag or code that does not exist fails closed when used (nobody but a scheduler manager passes) "
             "and is logged. The same check is repeated just before a one-off or user-owned run, so a run whose owner lost the flag is skipped. "
             "serialize_action and the exported scheduler_actions rows carry permission (the single entry, or the entries joined with ' | ') "
-            "and permission_any (the list, empty for a single entry)."
+            "and permission_any (the list, empty for a single entry). "
+            "Since 1.17.63 (requires framework >=1.17.63) an optional last keyword unattended=False marks unattended system work (CQ179 b, Johan's chat answer of 20 October 2026; not yet recorded in the authority documents, so since 1.17.63 Core keeps the run-time re-check for every run until it is; switch scheduler.AD13_CONDITION_2_AMENDED): "
+            "once recorded, a SCHEDULED run of such an action is not re-checked against its creator's current rights, because the right was checked when the person created or edited the schedule and Core stores and audits who that was. "
+            "A manual or one-off run is always re-checked. Core accepts unattended=True only when the action's own id is listed in its module's signed manifest system_actions (since 1.17.63), else it raises SchedulerError; the exemption also needs a system action registered under that id by the module. "
+            "Cost, stated plainly: a person who is demoted or deactivated later keeps their unattended schedules running until someone removes or edits them, as in Tactical. "
+            "ScheduledAction gains the last field unattended (default False); serialize_action is unchanged."
         ),
         "audience": "provider",
     },
@@ -188,7 +193,7 @@ CORE_CONTRACTS = (
         "import_path": "tec_tac.scheduler",
         "name": "reconcile_schedule",
         "kind": "python",
-        "purpose": "Idempotently create/update a backend-module-owned schedule using owner_module + owner_key. Since 1.17.17 an owner_key that starts with one-off: raises SchedulerError: that prefix is reserved to Core, and only start_one_off_run makes such a schedule.",
+        "purpose": "Idempotently create/update a backend-module-owned schedule using owner_module + owner_key. Since 1.17.17 an owner_key that starts with one-off: raises SchedulerError: that prefix is reserved to Core, and only start_one_off_run makes such a schedule. Since 1.17.63 (CQ176, requires framework >=1.17.63) an optional keyword-only confirmed_by_request=None names the person behind the schedule: it must be a real Django or DRF request that passed Core's session check (the proof run_tactical_operation asks for), never a user id or a stand-in object (SchedulerNotAllowed). Core checks that person's permission for the action and Tactical scope of the targets, stores the creator and the confirmer by name, writes one audit row for the creation and one for every change, and the module stays the owner and the executor. WITHOUT a request, a schedule that has a stored creator can only be switched off or left as it is: any change to its action, targets, parameters, timing or policies, and switching it back on, raises SchedulerError. A call without the keyword on a schedule with no stored creator behaves as in 1.17.62.",
         "audience": "provider/backend",
     },
     {
@@ -697,7 +702,7 @@ CORE_CONTRACTS = (
             "expires_seconds=None, max_backlog=None, dedupe_seconds=None, audit_success=False) -> EventJobPublisher (1.17.45, capability core.event_jobs 1.1.0 since 1.17.47, framework >=1.17.47 for the caller check, "
             "Johan 16 October 2026). The one sanctioned way for a module to do small background work because something happened (a Tactical alert was saved, a webhook arrived): "
             "no private thread, timer or event-started Celery task. Call it from AppConfig.ready(); it touches memory only and returns the one handle that can publish this job. "
-            "id is '<module_id>.<job>' (lowercase letters, digits, - _ and . in the job part) and must start with the module's own id. handler(context) gets an EventJobContext "
+            "id is '<module_id>.<job>' (the module part is the module's own id, exactly as spelled, since 1.17.63; lowercase letters, digits, - _ and . in the job part) and must start with the module's own id. handler(context) gets an EventJobContext "
             "(a dict with job_id, module_id, key, payload, attempt, max_attempts, final_attempt, enqueued_at and run_id, and no user fields) and returns None or a small JSON-safe "
             "dict. Registration is bound to the module: module_id must be an installed, enabled extension read from the registry and handler's code file must lie inside that module's "
             "own folder (real-path check); a partial, a built-in or generated code is refused. Refusals raise EventJobRegistrationError, a ValueError; a module wraps the call and logs, so "
@@ -847,7 +852,7 @@ CORE_CONTRACTS = (
         "import_path": "tec_tac.scheduler",
         "name": "get_owned_schedule",
         "kind": "python",
-        "purpose": "get_owned_schedule(owner_module, owner_key) -> dict | None (1.17.16): read one module-owned schedule without the model: {enabled, schedule_type, next_run_at, last_run_at, last_run_status, last_run_finished_at}, or None when no schedule has that tuple. next_run_at is None for a disabled schedule. Read only, no permission input: a module reads only its own tuple, the same trust as reconcile_schedule. Requires framework >=1.17.16.",
+        "purpose": "get_owned_schedule(owner_module, owner_key) -> dict | None (1.17.16): read one module-owned schedule without the model: {enabled, schedule_type, next_run_at, last_run_at, last_run_status, last_run_finished_at}, or None when no schedule has that tuple. next_run_at is None for a disabled schedule. Read only, no permission input: a module reads only its own tuple, the same trust as reconcile_schedule. Requires framework >=1.17.16. Since 1.17.63 the answer also carries created_by_username (the stored creator name, or None; additive).",
         "audience": "provider/backend",
     },
     {
@@ -863,7 +868,7 @@ CORE_CONTRACTS = (
         "import_path": "tec_tac.scheduler",
         "name": "verify_run_context",
         "kind": "python",
-        "purpose": "verify_run_context(context, *, expected_module_id, expected_action_id, require_owner=True) -> VerifiedSchedulerRun (1.17.19, CQ64 a; the two expected ids are required since 1.17.20): a Scheduler handler passes the context object it was given and its own module id and action id, and Core confirms it issued that exact object for a run that is still running, then reads the owner from the database (the schedule's created_by for a one-off or user-owned run), never from the dict, and checks again that the owner is active and still holds the action and the target scope. It raises SchedulerRunContextInvalid (a SchedulerError) for a plain dict, a copy ({**context}, dict(context), copy.copy), a JSON, pickle or Celery round-trip, a context a module builds, a finished or deleted run, a run with no person behind it (unless require_owner=False, which verifies with user None) and any lookup error. VerifiedSchedulerRun is frozen: run_id, schedule_id, module_id, action_id, owner_module, owner_key, one_off, user, owner_user_id, owner_username; has_tactical_permission(flag) reads the owner again on every call and answers False on any error or a name that is not a can_* flag; resource_context() gives the owner's Resource Directory context so a scope-bound read runs as the person. The handler context is a dict subclass with every key it had, so handlers that ignore it are unchanged. Modules run in the same Python process as Core: this stops a module naming a run or an owner Core did not issue, and cannot stop deliberately hostile signed module code (signed-module review stays the defence). There is no per-run signed token. Since 1.17.20 (module-facing, breaking only for a caller of the 1.17.19 form, of which modules/ has none) expected_module_id and expected_action_id are required keywords: Core compares them, exactly, with the module and action of the run it loaded and raises SchedulerRunContextInvalid ('This run belongs to another module or action.', no ids echoed) when either differs or is missing, empty or not a string, so a context issued for module A's action cannot verify inside module B's handler. Calling it without them raises TypeError. It is not the AD-13 system-action contract, which is still open. Needs framework >=1.17.19; the ids need >=1.17.20.",
+        "purpose": "verify_run_context(context, *, expected_module_id, expected_action_id, require_owner=True) -> VerifiedSchedulerRun (1.17.19, CQ64 a; the two expected ids are required since 1.17.20): a Scheduler handler passes the context object it was given and its own module id and action id, and Core confirms it issued that exact object for a run that is still running, then reads the owner from the database (the schedule's created_by for a one-off or user-owned run), never from the dict, and checks again that the owner is active and still holds the action and the target scope. It raises SchedulerRunContextInvalid (a SchedulerError) for a plain dict, a copy ({**context}, dict(context), copy.copy), a JSON, pickle or Celery round-trip, a context a module builds, a finished or deleted run, a run with no person behind it (unless require_owner=False, which verifies with user None) and any lookup error. VerifiedSchedulerRun is frozen: run_id, schedule_id, module_id, action_id, owner_module, owner_key, one_off, user, owner_user_id, owner_username; has_tactical_permission(flag) reads the owner again on every call and answers False on any error or a name that is not a can_* flag; resource_context() gives the owner's Resource Directory context so a scope-bound read runs as the person. The handler context is a dict subclass with every key it had, so handlers that ignore it are unchanged. Modules run in the same Python process as Core: this stops a module naming a run or an owner Core did not issue, and cannot stop deliberately hostile signed module code (signed-module review stays the defence). There is no per-run signed token. Since 1.17.20 (module-facing, breaking only for a caller of the 1.17.19 form, of which modules/ has none) expected_module_id and expected_action_id are required keywords: Core compares them, exactly, with the module and action of the run it loaded and raises SchedulerRunContextInvalid ('This run belongs to another module or action.', no ids echoed) when either differs or is missing, empty or not a string, so a context issued for module A's action cannot verify inside module B's handler. Calling it without them raises TypeError. It is not the AD-13 system-action contract, which is still open. Needs framework >=1.17.19; the ids need >=1.17.20. Since 1.17.63 (additive, framework >=1.17.63; inactive until the amended AD-13 condition 2 is recorded) a SCHEDULED run of an action registered with unattended=True verifies without the owner re-check (the creator was checked when the schedule was made); VerifiedSchedulerRun gains the last fields creator_username, confirmed_by_username (the stored names, which survive a deleted user row) and unattended. user may then be None when the creator's user row is gone and require_owner=False. has_tactical_permission and resource_context stay fresh reads. A manual run and a one-off run keep every re-check.",
         "audience": "provider/backend",
     },
     {
@@ -871,7 +876,7 @@ CORE_CONTRACTS = (
         "import_path": "tec_tac.scheduler",
         "name": "VerifiedSchedulerRun",
         "kind": "python",
-        "purpose": "VerifiedSchedulerRun (1.17.19): the frozen answer of verify_run_context. Fields run_id, schedule_id, module_id, action_id, owner_module, owner_key, one_off, user, owner_user_id, owner_username; methods has_tactical_permission(flag) and resource_context(). Built only by verify_run_context.",
+        "purpose": "VerifiedSchedulerRun (1.17.19): the frozen answer of verify_run_context. Fields run_id, schedule_id, module_id, action_id, owner_module, owner_key, one_off, user, owner_user_id, owner_username and, since 1.17.63, the last three creator_username, confirmed_by_username, unattended (defaults None, None, False); methods has_tactical_permission(flag) and resource_context(). Built only by verify_run_context.",
         "audience": "provider/backend",
     },
     {
@@ -984,7 +989,10 @@ CORE_CONTRACTS = (
             "metadata requested_by scheduler, run_id, schedule_id, owner_module, function, agent_count, targets_digest; no endpoint ids or hostnames) and only then calls Tactical's own Celery task with .delay, the way "
             "Tactical's bulk view does. No HTTP, no API key, no service account, no model write. If the audit row cannot be written nothing is sent. A retry or duplicate delivery that finds a sent mark sends nothing "
             "again and returns the same result with duplicate true; a mark stuck at 'claiming', or a send that raised, fails the run with error type OutcomeUnknown and is never sent again (at most once: a missed scan is "
-            "possible, a double install is not). Tactical's own tasks for the first two rows take no username, so only Core's audit row names the owner. Requires framework >=1.17.61."
+            "possible, a double install is not). Tactical's own tasks for the first two rows take no username, so only Core's audit row names the owner. Requires framework >=1.17.61. "
+            "Since 1.17.63 (CQ179 b, additive, framework >=1.17.63; inactive until the amended AD-13 condition 2 is recorded, so every scheduled run is re-checked): a SCHEDULED run of an action the module registered with unattended=True skips only owner_inactive, permission_lost and out_of_scope (the person's right was checked when they made the schedule); "
+            "every other check stays, and a manual or one-off run keeps all of them. The action id must still be listed in the module's signed manifest system_actions at run time (else action_not_declared). Every run, deny and unknown-outcome audit row carries run_kind (scheduled or person), creator and confirmed_by; "
+            "the actor is the creator's user row when it still exists, otherwise a Core service actor with the stored name in the metadata. When some snapshotted targets no longer exist but the rest still run, the result gains vanished_targets (a count) and the run row carries it."
         ),
         "audience": "provider/backend",
     },
@@ -993,7 +1001,7 @@ CORE_CONTRACTS = (
         "import_path": "tec_tac.system_actions",
         "name": "SystemActionRefused",
         "kind": "python",
-        "purpose": "SystemActionRefused (1.17.61): raised by run_system_action for a refusal. A SchedulerPermanentError with .reason (context_invalid, owner_refused, no_owner, caller_unverified, wrong_module, unknown_action, module_disabled, replacement_not_honoured, function_unavailable, owner_inactive, permission_lost, bad_parameters, bad_agents, agent_count, out_of_scope, reapproves_by_policy, mark_limit, and since 1.17.62 outside_targets and targets_unresolved: the endpoints must be among the run's snapshotted schedule targets) and a plain message that names no agent. SystemActionRegistrationError (a ValueError) is raised by register_system_action.",
+        "purpose": "SystemActionRefused (1.17.61): raised by run_system_action for a refusal. A SchedulerPermanentError with .reason (context_invalid, owner_refused, no_owner, caller_unverified, wrong_module, unknown_action, module_disabled, replacement_not_honoured, function_unavailable, owner_inactive, permission_lost, bad_parameters, bad_agents, agent_count, out_of_scope, reapproves_by_policy, mark_limit, since 1.17.62 outside_targets and targets_unresolved: the endpoints must be among the run's snapshotted schedule targets, and since 1.17.63 action_not_declared: the action id is no longer listed in the module's signed manifest system_actions) and a plain message that names no agent. SystemActionRegistrationError (a ValueError) is raised by register_system_action.",
         "audience": "provider/backend",
     },
     {
@@ -1048,8 +1056,9 @@ CORE_CONTRACTS = (
             "context['payload'] = {job_id, action_id, status (succeeded, failed, cancelled or dispatch_failed), exit_code (int or null), classification (only when the job file has one)}: never output text, never parameters. It "
             "runs as the module with no user and cannot make a Tactical change. The event job's own limits, retries, back-off and expiry apply, so the handler MUST be idempotent; it can also run for a job a browser poll of "
             "get_job already recorded. A job whose module is disabled, removed or not the honoured replacement when it finishes is marked skipped with one audit row (custom:server-job-hook-skipped), never retried for ever; an event "
-            "that could not be stored after three ticks is abandoned with one audit row (custom:server-job-hook-abandoned). start, get_job, cancel and list_jobs are unchanged. The module id of an event job must be lowercase "
-            "(letters, digits, - and _). See docs/server-maintenance-capability.md and docs/event-jobs.md."
+            "that could not be stored after three ticks is abandoned with one audit row (custom:server-job-hook-abandoned). start, get_job, cancel and list_jobs are unchanged. Since 1.17.63 (CQ183, requires framework >=1.17.63) the module part of an event job id keeps the module id's own spelling, so a module with capital letters such as securityWAF "
+            "registers securityWAF.server_job_finished; the job part after the dot stays lowercase, and Core never case-folds a module id. A tick reads at most 200 job files and hands over at most 50 finished jobs; a file read as not finished is not read again until its file changes. "
+            "See docs/server-maintenance-capability.md and docs/event-jobs.md."
         ),
         "audience": "provider/backend",
     },
@@ -1059,7 +1068,7 @@ CORE_CONTRACTS = (
         "name": "deliver_finished_server_jobs",
         "kind": "python",
         "purpose": (
-            "deliver_finished_server_jobs(now=None, limit=50) -> counts (1.17.62, R-22 part 2): Core's own step in the Scheduler tick (a module never calls it). Never raises, runs no module code, reads at most 50 job files, "
+            "deliver_finished_server_jobs(now=None, limit=50) -> counts (1.17.62, R-22 part 2): Core's own step in the Scheduler tick (a module never calls it). Never raises, runs no module code, hands over at most 50 finished jobs and reads at most 200 job files a tick (1.17.63), "
             "and leaves the tick's own output line unchanged. See hook_job_id for what a module receives. Requires framework >=1.17.62."
         ),
         "audience": "framework/internal",

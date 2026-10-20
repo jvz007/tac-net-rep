@@ -97,7 +97,7 @@ print("       the table holds ids, a status and a reason code; no column can car
 
 # 0035 is the only migration of this release and the newest
 names = sorted(p.name for p in (APP / "migrations").glob("0*.py"))
-must(names[-1] == "0035_server_job_hook.py" and names[-2] == "0034_scheduler_run_completion.py", names[-3:])
+must(names[-2] == "0035_server_job_hook.py" and names[-3] == "0034_scheduler_run_completion.py" and names[-1] == "0036_schedule_creator_name.py", names[-3:])  # 1.17.63 added 0036 after it
 must(len([n for n in names if n.startswith("0035_")]) == 1, "one 0035")
 text = (APP / "migrations" / "0035_server_job_hook.py").read_text(encoding="utf-8")
 must("RunPython" not in text and "RunSQL" not in text and "AlterField" not in text and "RemoveField" not in text and "DeleteModel" not in text, "additive only")
