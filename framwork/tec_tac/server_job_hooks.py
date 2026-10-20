@@ -55,6 +55,9 @@ HOOK_JOB_NAME = "server_job_finished"
 BATCH = 50
 READ_BUDGET = 200
 CANDIDATE_CAP = 2000
+# 1.17.64: a file read as not finished is skipped with no read for this many ticks at most, then read once more, so a rewrite that kept both
+# the mtime and the size cannot hide a finished job for ever (the held Low of the 1.17.63 review).
+WAITING_TICKS = 5
 LOOKUP_CHUNK = 500
 RECENT_WINDOW = timedelta(hours=6)
 MAX_ATTEMPTS = 3
@@ -110,8 +113,9 @@ def _now() -> datetime:
     return timezone.now()
 
 
-def _recent_job_ids(now: datetime) -> list[tuple[float, str]]:
-    """``(mtime, job id)`` of the job files changed inside the window, oldest first, at most ``CANDIDATE_CAP``. A listing and a stat, no file is read."""
+def _recent_job_ids(now: datetime) -> list[tuple[tuple[int, int], str]]:
+    """``(stamp, job id)`` of the job files changed inside the window, oldest first, at most ``CANDIDATE_CAP``. The stamp is
+    ``(st_mtime_ns, st_size)`` from the same stat (1.17.64). A listing and a stat, no file is read."""
     root = Path(_sm()._jobs_root())
     if not root.is_dir():
         return []
@@ -126,13 +130,13 @@ def _recent_job_ids(now: datetime) -> list[tuple[float, str]]:
                 canonical = str(uuid.UUID(name[:-5]))
                 if canonical != name[:-5]:
                     continue
-                mtime = entry.stat().st_mtime
+                info = entry.stat()
             except (ValueError, OSError):
                 continue
-            if mtime >= floor:
-                found.append((mtime, canonical))
+            if info.st_mtime >= floor:
+                found.append((info.st_mtime_ns, info.st_size, canonical))
     found.sort()
-    return [(mtime, job_id) for mtime, job_id in found[:CANDIDATE_CAP]]
+    return [((mtime_ns, size), job_id) for mtime_ns, size, job_id in found[:CANDIDATE_CAP]]
 
 
 def _settled_ids(job_ids: list[str]) -> set[str]:
@@ -256,22 +260,33 @@ def hook_payload(job: dict) -> dict:
 
 
 # ------------------------------------------------------------------------------------------------ the tick step
-# Job files read as not finished (or briefly not there): job id -> the file's mtime when it was read. While the mtime is the same the
-# file is skipped with no read, because a status change rewrites the job file and so changes its mtime. In memory, per process, and
-# cleared of every job outside the window each tick, so a stuck job costs one read and not one a minute. Never decides anything by
-# itself: a job it skips is simply looked at again once its file changes.
-_WAITING: dict[str, float] = {}
+# Job files read as not finished (or briefly not there): job id -> (the file's stamp when it was read, the tick it was remembered in). While the
+# stamp (mtime in nanoseconds and size) is unchanged and the entry is younger than WAITING_TICKS the file is skipped with no read, because a
+# status change rewrites the job file and so changes its stamp. An entry that has expired is read once more and remembered again, so a stuck
+# job costs one read every few minutes and not one a minute. In memory, per process, and cleared of every job outside the window each tick.
+# Never decides anything by itself: a job it skips is simply looked at again once its file changes or the entry expires.
+_WAITING: dict[str, tuple[tuple[int, int], int]] = {}
+_TICK = [0]  # advances once per deliver_finished_server_jobs call
 
 
-def _handle_one(job_id: str, counts: dict, mtime: float | None = None) -> bool:
+def _remember(job_id: str, stamp) -> None:
+    if stamp is not None:
+        _WAITING[job_id] = (stamp, _TICK[0])
+
+
+def _is_waiting(job_id: str, stamp) -> bool:
+    entry = _WAITING.get(job_id)
+    return entry is not None and entry[0] == stamp and _TICK[0] - entry[1] < WAITING_TICKS
+
+
+def _handle_one(job_id: str, counts: dict, stamp: tuple[int, int] | None = None) -> bool:
     """Read one job file and hand it over when it is finished. True only when the job was read as FINISHED (it uses the batch)."""
     sm = _sm()
     try:
         job = sm._read_job(job_id)
     except sm.ServerMaintenanceNotFound:
         counts["waiting"] += 1
-        if mtime is not None:
-            _WAITING[job_id] = mtime
+        _remember(job_id, stamp)
         return False
     except Exception:
         counts["unreadable"] += 1
@@ -280,8 +295,7 @@ def _handle_one(job_id: str, counts: dict, mtime: float | None = None) -> bool:
     status = str(job.get("status") or "")
     if status not in TERMINAL:
         counts["waiting"] += 1
-        if mtime is not None:
-            _WAITING[job_id] = mtime
+        _remember(job_id, stamp)
         return False
     _WAITING.pop(job_id, None)
     _hand_over(job_id, job, status, counts)
@@ -338,7 +352,7 @@ def _hand_over(job_id: str, job: dict, status: str, counts: dict) -> None:
 def deliver_finished_server_jobs(now: datetime | None = None, limit: int = BATCH) -> dict:
     """Hand every recently finished server-maintenance job to the module that owns it, once. Never raises. At most ``limit`` (and never more
     than ``BATCH``) finished jobs are handed over a tick, and at most ``READ_BUDGET`` job files are read. A file that is not finished is
-    skipped with no read while its mtime is unchanged, so unfinished files cannot use the batch (1.17.63).
+    skipped with no read while its mtime and size are unchanged and the entry is young (under ``WAITING_TICKS`` ticks), so unfinished files cannot use the batch (1.17.63, 1.17.64).
 
     Runs no module code: it stores one event job (``event_jobs.publish_for_core``) and a worker runs the handler. Returns counts:
     ``checked``, ``delivered``, ``waiting``, ``skipped``, ``ignored``, ``duplicate``, ``retry``, ``abandoned``, ``unreadable``, ``errors``."""
@@ -347,28 +361,29 @@ def deliver_finished_server_jobs(now: datetime | None = None, limit: int = BATCH
         moment = now or _now()
         if moment.tzinfo is None:
             moment = moment.replace(tzinfo=dt_timezone.utc)
+        _TICK[0] += 1
         recent = _recent_job_ids(moment)
-        settled = _settled_ids([job_id for _mtime, job_id in recent]) if recent else set()
-        in_window = {job_id for _mtime, job_id in recent}
+        settled = _settled_ids([job_id for _stamp, job_id in recent]) if recent else set()
+        in_window = {job_id for _stamp, job_id in recent}
         for stale in [job_id for job_id in _WAITING if job_id not in in_window]:
             _WAITING.pop(stale, None)  # outside the window: forgotten
-        todo = [(mtime, job_id) for mtime, job_id in recent if job_id not in settled]
+        todo = [(stamp, job_id) for stamp, job_id in recent if job_id not in settled]
         batch = max(1, min(int(limit), BATCH))
     except Exception:
         logger.exception("The finished server jobs could not be listed")
         counts["errors"] += 1
         return counts
     reads = handed = 0
-    for mtime, job_id in todo:
-        if _WAITING.get(job_id) == mtime:
-            counts["waiting"] += 1  # read as not finished and not changed since: no read, no cost
+    for stamp, job_id in todo:
+        if _is_waiting(job_id, stamp):
+            counts["waiting"] += 1  # read as not finished and not changed since (and still young): no read, no cost
             continue
         if handed >= batch or reads >= READ_BUDGET:
             break
         reads += 1
         counts["checked"] += 1
         try:
-            if _handle_one(job_id, counts, mtime):
+            if _handle_one(job_id, counts, stamp):
                 handed += 1
         except Exception:
             counts["errors"] += 1

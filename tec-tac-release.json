@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.63",
+  "version": "1.17.64",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.17.63.md",
-      "size": 29377,
-      "sha256": "a12b04323a7e20a6ba97cafb76540e1db2a9a629b34e477537ea4635b15df660"
+      "path": "RELEASE_NOTES_1.17.64.md",
+      "size": 2494,
+      "sha256": "13a874529852f370d3641830cd6c850f63954af9851107f9e85f81d60ab57bfc"
     },
     {
       "path": "VERSION",
       "size": 7,
-      "sha256": "8a127f945957d12627dedc7a3935bbf0a158ffcc56a83bfd3f02b4e94a27ebd6"
+      "sha256": "60af4240d77bea88a1ba15bf3fa9261fd309148a9263fec7fd3cbc2c2ce778d4"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -1372,6 +1372,11 @@
       "sha256": "7918ee2563854e12be7f981810109c1c68244a98ab31535164bdf54483ce0662"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.63.md",
+      "size": 29377,
+      "sha256": "a12b04323a7e20a6ba97cafb76540e1db2a9a629b34e477537ea4635b15df660"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.7.md",
       "size": 9249,
       "sha256": "f288a2d999944822827d8767f406f50bda6894c7dc9d8908a476e4f391a6c8cb"
@@ -2283,8 +2288,8 @@
     },
     {
       "path": "framwork/tec_tac/server_job_hooks.py",
-      "size": 19124,
-      "sha256": "9dc3e20c2fc253b52402305220e69874c0a606594fb78c46615c42f66d9d6d28"
+      "size": 20551,
+      "sha256": "2c33e23478e30215109d71ab3333c0483b5355edf0aab881ccdf02ab287b6517"
     },
     {
       "path": "framwork/tec_tac/server_maintenance.py",
@@ -2574,7 +2579,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "5fec63ce7a0c00a2f681db8ff775f1924624cd1b8b9abfd577fe5eb7219dcf06"
+      "sha256": "a819c4e87f4f744f5813cfcea213ab5d19c9479f182cc775d208a44ed379a035"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -4470,6 +4475,11 @@
       "path": "tests/server-job-hook-migration-0035-1.17.62.py",
       "size": 6549,
       "sha256": "310a2df03f65e2c424873729b7846f9c339ffcdc7791c2159a9ee46faa06ef0c"
+    },
+    {
+      "path": "tests/server-job-hook-skip-cache-1.17.64.py",
+      "size": 5801,
+      "sha256": "badd2e745a9a0db3a4d24d89d1a728c0d2d54253100ac0cf8d637264720a7be0"
     },
     {
       "path": "tests/server-job-hook-starvation-1.17.63.py",
