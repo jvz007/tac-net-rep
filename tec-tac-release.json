@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.59",
+  "version": "1.17.60",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.17.59.md",
-      "size": 8573,
-      "sha256": "c15af9f81e11f3672b50d0d05a056afee5f0cd79a7bbf1f8370d26b5a43309ad"
+      "path": "RELEASE_NOTES_1.17.60.md",
+      "size": 12479,
+      "sha256": "f5aae2664d6b05bdad2fdc964d0c8814e6fd0b058c6f1f0491d09417eb88ee8a"
     },
     {
       "path": "VERSION",
       "size": 7,
-      "sha256": "8636c5422b775543150a070a80862eb29800de45304f75c72be8d37c5a0289a6"
+      "sha256": "c0f04669bad127c2f37632fb95a51dee1f2e1e868f84db841f4274a1dbb723eb"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -142,6 +142,11 @@
       "sha256": "61668d7bfc326bbaddd884a02f9bce9e945b5e442b2e10ddc55a536f45b90261"
     },
     {
+      "path": "docs/module-job-logs.md",
+      "size": 9231,
+      "sha256": "3f4d71a07225995a0468ebeacd23c9d047e11f2b2ce5ef75d20e2fa9e488f41d"
+    },
+    {
       "path": "docs/module-licensing.md",
       "size": 10573,
       "sha256": "29b7ad896399e10eae4d6980c1207f905f5f2f2ca4a8c86a1131d29bfc551b54"
@@ -153,8 +158,8 @@
     },
     {
       "path": "docs/module-replacement.md",
-      "size": 37661,
-      "sha256": "433793ab55f0b54f926d1e2f45fa0c2e7c8199671bc1d6c87f2b6b6acf27302f"
+      "size": 37925,
+      "sha256": "968455ec2064b68ebde087fa5e0f4e36842ef5fa759b6e3e55d773a400fdcc5c"
     },
     {
       "path": "docs/module-reporting.md",
@@ -1342,6 +1347,11 @@
       "sha256": "ece6b75fcbfe6f9c67993dee2a4e02fc147be7ba010a15a7567064bcc06a82d6"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.59.md",
+      "size": 8573,
+      "sha256": "c15af9f81e11f3672b50d0d05a056afee5f0cd79a7bbf1f8370d26b5a43309ad"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.6.md",
       "size": 5908,
       "sha256": "ea9db558a822a993573bacd967e5b36f280d5102bd880f5ee503b7709e2145cf"
@@ -1763,8 +1773,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 339146,
-      "sha256": "d2b8f2315b38710461d9cafddcd9f64dff0ebf74c9d79d25340dbbb4526c3c1a"
+      "size": 343390,
+      "sha256": "bfc4fa6c27191403c8dafb8e72057a02c470beb9a3ea43f4fcc9d34d06a0799f"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -1833,8 +1843,8 @@
     },
     {
       "path": "framwork/tec_tac/management/commands/tec_tac_scheduler_tick.py",
-      "size": 6466,
-      "sha256": "8acc0eaf159160a0a8498f022644e090c2378fb39509b5a629cc31f965ab050d"
+      "size": 7114,
+      "sha256": "e21b7430e17c3bd3ce11b4cf635b972d527034f3518ca3e9a0fe98aa6342e118"
     },
     {
       "path": "framwork/tec_tac/mfa_backup.py",
@@ -2047,6 +2057,11 @@
       "sha256": "7a79c752c7ced980d2131b4b4d4aaf18a6a51ef009a60f852a9628050aa79e4a"
     },
     {
+      "path": "framwork/tec_tac/module_job_logs.py",
+      "size": 26444,
+      "sha256": "210487aae70087471c257a1c1c59b36f11c0254be1ea909c293fcb8135583125"
+    },
+    {
       "path": "framwork/tec_tac/module_licensing.py",
       "size": 18203,
       "sha256": "438eccc618a782d192b5350f6b42e876d0847cb7b750ea2dbda796f043edd581"
@@ -2103,8 +2118,8 @@
     },
     {
       "path": "framwork/tec_tac/module_v2_views.py",
-      "size": 12472,
-      "sha256": "65087410b6e32908317e756314a3040e023cae4285cad0d6bf285fc0be682150"
+      "size": 15962,
+      "sha256": "73dc5ac4b6025ab38d57903d8ec01b2e3c57f953463f273c0df9345c41fb03c4"
     },
     {
       "path": "framwork/tec_tac/notice_views.py",
@@ -2328,8 +2343,8 @@
     },
     {
       "path": "framwork/tec_tac/urls.py",
-      "size": 16271,
-      "sha256": "22b3640800231be9c3a875fc92b8a111615bfd3e7b61c1d20487c18b4dc5f470"
+      "size": 16550,
+      "sha256": "1ffd09874316b384210ec5c7e0d1cb742f513d8ac6de7ea3b8d9ee57b0b00a57"
     },
     {
       "path": "framwork/tec_tac/views.py",
@@ -2393,8 +2408,8 @@
     },
     {
       "path": "scripts/module-hotfix-job-helper.py",
-      "size": 32876,
-      "sha256": "e74c0f8f577e04231d7393537a6cd75a7bee64f36cbcd11c2536efcd44bc54ed"
+      "size": 34340,
+      "sha256": "a1d7a5c8332e941f6aec159d9af2bdb1fd88e360f312c3ee3cf9bc5eafd07e50"
     },
     {
       "path": "scripts/module-job-helper.py",
@@ -2403,8 +2418,8 @@
     },
     {
       "path": "scripts/module-v2-job-helper.py",
-      "size": 89095,
-      "sha256": "a8a0087d7b0d8e415cb507506cd3b03d0b2cad43929f43c3a199dc676bd3dffa"
+      "size": 90559,
+      "sha256": "848914f669724910c3510612e8d14bbac86fc0fd759f21528aad01c6d516fd8f"
     },
     {
       "path": "scripts/plugin-info.sh",
@@ -2509,7 +2524,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "caf9fc3846540e95a4ad078cf1271026ed0fb628bea7cf7c77a7a5f9dd0fb9e0"
+      "sha256": "7e7c154157c53f6c438437b2569e4d088df632c8d7a14142b131df2b941a3dc9"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -3372,6 +3387,11 @@
       "sha256": "76e32a68c5b5a98a27f2a4232dd52646b89f1e31eb935537a5b9ea5ba788d5c2"
     },
     {
+      "path": "tests/module-job-contract-rows-1.17.60.py",
+      "size": 5181,
+      "sha256": "ac4cbd03a89aa9b0017a639ff683db1259a8d1827917b8f8c67afe347a4b4241"
+    },
+    {
       "path": "tests/module-job-dispatch-crlf-1.17.15.py",
       "size": 3563,
       "sha256": "18fa0d67b9f83762bfb3173a8b5cbf9f96e792521e2d39473463f51328fc36dd"
@@ -3380,6 +3400,21 @@
       "path": "tests/module-job-helper-category-cleanup-1.17.14.py",
       "size": 9208,
       "sha256": "5ab4f85af37567e8496c2a94c50ec6383a44d173a41b81aacc758b04e1f9e164"
+    },
+    {
+      "path": "tests/module-job-history-1.17.60.py",
+      "size": 14283,
+      "sha256": "a61662bfe11ed0ff9f00c3811a3488380bb555d18f79c6beb380951a9ad75680"
+    },
+    {
+      "path": "tests/module-job-logs-1.17.60.py",
+      "size": 23623,
+      "sha256": "8148a274998b04cd7268ac9ae479f2aef7e4c4a48bb00cfcd16cc9fef8e1c907"
+    },
+    {
+      "path": "tests/module-job-retention-1.17.60.py",
+      "size": 18498,
+      "sha256": "81b581f6779ca09ae0664542cc8145459fdb319b34c3d9a194a490a20889252b"
     },
     {
       "path": "tests/module-management-foundation.sh",

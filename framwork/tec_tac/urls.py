@@ -47,7 +47,7 @@ from .scheduler_views import (
 )
 from .module_v2_views import (
     ModuleV2CatalogView, ModuleV2InspectView, ModuleV2StageView, ModuleV2InstallView,
-    ModuleV2StateView, ModuleV2VisibilityView, ModuleV2RemoveCheckView, ModuleV2JobHistoryView, ModuleV2JobView,
+    ModuleV2StateView, ModuleV2VisibilityView, ModuleV2RemoveCheckView, ModuleV2JobHistoryView, ModuleV2JobHistoryListView, ModuleV2JobView, ModuleV2JobLogView,
 )
 from .module_hotfix_views import (
     ModuleHotfixInspectView, ModuleHotfixStageView, ModuleHotfixApplyView,
@@ -161,7 +161,9 @@ urlpatterns = [
     path("modules/v2/<str:plugin_id>/visibility/", ModuleV2VisibilityView.as_view(), name="tec-tac-module-v2-visibility"),
     path("modules/v2/<str:plugin_id>/remove-check/", ModuleV2RemoveCheckView.as_view(), name="tec-tac-module-v2-remove-check"),
     path("modules/v2/jobs/", ModuleV2JobHistoryView.as_view(), name="tec-tac-module-v2-job-history"),
+    path("modules/v2/jobs/history/", ModuleV2JobHistoryListView.as_view(), name="tec-tac-module-v2-job-history-list"),
     path("modules/v2/jobs/<uuid:job_id>/", ModuleV2JobView.as_view(), name="tec-tac-module-v2-job"),
+    path("modules/v2/jobs/<uuid:job_id>/log/", ModuleV2JobLogView.as_view(), name="tec-tac-module-v2-job-log"),
     path("modules/hotfixes/inspect/", ModuleHotfixInspectView.as_view(), name="tec-tac-module-hotfix-inspect"),
     path("modules/hotfixes/<uuid:upload_id>/", ModuleHotfixStageView.as_view(), name="tec-tac-module-hotfix-stage"),
     path("modules/hotfixes/<uuid:upload_id>/apply/", ModuleHotfixApplyView.as_view(), name="tec-tac-module-hotfix-apply"),

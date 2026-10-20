@@ -7,7 +7,7 @@ from rest_framework.views import APIView
 
 from .session_security import SessionAuthenticated
 
-from . import module_licensing
+from . import module_job_logs, module_licensing
 from .module_manager import ModuleManagerError, discard_stage, get_job, list_jobs, page_jobs
 from .module_manager_v2 import (
     LicensingRequirementError,
@@ -252,3 +252,63 @@ class ModuleV2JobView(APIView):
         except ModuleManagerError as exc:
             return Response({"detail": str(exc)}, status=404)
 
+
+@extend_schema_view(get=extend_schema(tags=["Tec-Tac Framework"], summary="Module job history (1.17.60): no log text, no paths"))
+class ModuleV2JobHistoryListView(APIView):
+    """The whitelisted job list: install, replace, rename, batch, bundle, enable, disable, remove, visibility and hotfix jobs."""
+    permission_classes = [SessionAuthenticated]
+    def get(self, request):
+        _require_module_manager(request.user)
+        params = request.query_params
+        try:
+            result = module_job_logs.page_history(
+                page=params.get("page"), page_size=params.get("page_size"), module=params.get("module"),
+                action=params.get("action"), status=params.get("status"), kind=params.get("kind"))
+        except module_job_logs.HistoryParameterError as exc:
+            return Response({"detail": str(exc)}, status=400)
+        return Response({
+            "jobs": result["items"],
+            "count": len(result["items"]),
+            "total": result["count"],
+            "page": result["page"],
+            "page_size": result["page_size"],
+            "pages": result["pages"],
+            "next_page": result["next_page"],
+            "previous_page": result["previous_page"],
+        })
+
+
+@extend_schema_view(get=extend_schema(tags=["Tec-Tac Framework"], summary="Full log of one module job (1.17.60): scrubbed, capped at 5 MB, audited"))
+class ModuleV2JobLogView(APIView):
+    """One job's log as plain text. Inline by default; ``?download=1`` sends it as a file. Every read writes a strict audit row."""
+    permission_classes = [SessionAuthenticated]
+    def get(self, request, job_id):
+        _require_module_manager(request.user)
+        download = request.query_params.get("download") == "1"
+        try:
+            log = module_job_logs.read_job_log(str(job_id))
+        except module_job_logs.JobLogError as exc:
+            return Response({"detail": str(exc), "code": exc.code}, status=exc.status)
+        except OSError:
+            logger.exception("Tec-Tac module job log could not be read")
+            return Response({"detail": "The log could not be read. Check Tec-Tac diagnostics/logs."}, status=503)
+        try:
+            from . import audit
+            audit.record(
+                actor=request.user, module_id="core", action="view", object_type="module_job_log", object_id=log.job_id,
+                metadata={"job_id": log.job_id, "kind": log.kind, "action": log.action, "module": log.module,
+                          "bytes": log.size, "truncated": log.truncated, "download": download},
+                request=request, strict=True)
+        except Exception:
+            logger.exception("Tec-Tac module job log read was refused because its audit row could not be written")
+            return Response({"detail": "The log was not shown because the audit record of this read could not be saved. Try again."}, status=503)
+        from django.http import HttpResponse
+        response = HttpResponse(log.body, content_type="text/plain; charset=utf-8")
+        response["X-Content-Type-Options"] = "nosniff"
+        response["Cache-Control"] = "no-store"
+        response["X-Tec-Tac-Log-Truncated"] = "true" if log.truncated else "false"
+        response["X-Tec-Tac-Log-Bytes"] = str(log.size)
+        response["X-Tec-Tac-Log-Kept"] = log.kept
+        if download:
+            response["Content-Disposition"] = f'attachment; filename="{module_job_logs.download_filename(log)}"'
+        return response

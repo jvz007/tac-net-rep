@@ -178,6 +178,8 @@ Removing (uninstalling) a replacement does not enable the replaced module. It st
 
 A job row from `GET /api/tfd/modules/v2/jobs/` carries `disabled_modules`, `enabled_modules` and `reconciled_modules` once the root helper has run it. Since 1.17.14 a disable job also carries `hand_back_skipped`, the replaced modules a confirmed disable left off. They are additive and absent on older jobs. The request fields (`disable_modules`, `enable_modules`, `replacement_confirmed`) are not exposed.
 
+From 1.17.60 the Module Manager's full job history (including replacement switches and renames) and each job's full log are read through `GET /api/tfd/modules/v2/jobs/history/` and `GET /api/tfd/modules/v2/jobs/<uuid:job_id>/log/`. See `docs/module-job-logs.md`.
+
 ### Audit rows
 
 Audit follows what happened. Every row is module `core`, object type `module`, and non-strict (a failed write is logged and never stops a job).

@@ -1603,6 +1603,33 @@ HTTP_CONTRACT_DETAILS = {
         "response": {"items": "array", "total": "integer", "page": "integer", "page_size": "integer", "pages": "integer", "next_page": "integer|null", "previous_page": "integer|null"},
         "notes": ["Since 1.17.12 a job row carries disabled_modules, enabled_modules and reconciled_modules (arrays of module ids) once the root helper has run it: the modules the job disabled because of a replacement, the replaced modules it switched back on, and the replacements it found enabled next to their replaced module and disabled. Additive: absent on older jobs and on jobs that switched nothing. The request fields (disable_modules, enable_modules, replacement_confirmed) are not exposed."],
     },
+    "/api/tfd/modules/v2/jobs/history/": {
+        "GET": {
+            "authorization": "authenticated Tec-Tac session with core.privileged_operations (the same check as the other module-management routes). 403 without it, no audit row",
+            "query": {"page": "integer >=1 (400 when not a whole number or below 1)", "page_size": "integer 1..100, default 50 (a larger value is cut to 100; 400 when not a whole number or below 1)", "module": "optional exact module id; matches any module the job names", "action": "optional string", "status": "optional string", "kind": "optional module | hotfix"},
+            "response": {"jobs": "array of rows, newest first", "count": "integer, rows in this page", "total": "integer", "page": "integer", "page_size": "integer", "pages": "integer", "next_page": "integer|null", "previous_page": "integer|null"},
+            "row": {"id": "job id", "kind": "module | hotfix", "action": "as stored: install, replace, batch_install, bundle_install, enable, disable, remove, visibility, apply, rollback", "switch": "boolean, true for a replacement switch", "renamed_from": "module id | null", "module_ids": "array of module ids ('batch' is not listed)", "versions": "{module id: version} | null when the job carries none", "requested_by": "string | null", "created_at": "string | null", "started_at": "string | null", "finished_at": "string | null", "status": "string | null", "stage": "string | null", "error": "one short plain sentence, first line only, at most 200 characters, scrubbed | null", "has_log": "boolean", "log_bytes": "integer, size of the log file (0 when there is none)", "disabled_modules": "array", "enabled_modules": "array", "reconciled_modules": "array", "hand_back_skipped": "array"},
+            "notes": [
+                "Added in 1.17.60. The existing GET /api/tfd/modules/v2/jobs/ is unchanged and still puts log_tail on every row; this route is the one without log text.",
+                "No row carries log text, a file path, a package path or hash, or publisher trust. Each row is built from a fixed list of fields.",
+                "Rows come from module jobs and hotfix jobs together. A job record that cannot be read is skipped. Finished job records are removed after MODULE_JOB_RETENTION_DAYS (180) days; see docs/module-job-logs.md.",
+            ],
+        },
+    },
+    "/api/tfd/modules/v2/jobs/<uuid:job_id>/log/": {
+        "GET": {
+            "authorization": "authenticated Tec-Tac session with core.privileged_operations. 403 without it, no audit row",
+            "query": {"download": "optional; 1 sends the log as a file (Content-Disposition: attachment; filename=module-job-<module>-<action>-<YYYY-MM-DD>.log). Anything else shows it inline"},
+            "response": "text/plain; charset=utf-8, the scrubbed log. Headers: X-Content-Type-Options: nosniff, Cache-Control: no-store, X-Tec-Tac-Log-Truncated (true | false), X-Tec-Tac-Log-Bytes (size of the log file on disk), X-Tec-Tac-Log-Kept (all | head-and-tail)",
+            "errors": {"400": "the id is not a canonical lowercase uuid", "403": "no module-management permission", "404": "unknown job, or 'No log was kept for this job.'", "503": "the audit row of this read could not be written, so no log text is sent (strict), or the log could not be read"},
+            "audit": "one row per successful read: module core, action view, object type module_job_log, object id the job id, metadata job_id, kind, action, module, bytes, truncated, download. No log text.",
+            "notes": [
+                "Added in 1.17.60. A log over 5 MB comes back as its first and last 2.5 MB, each cut at a line boundary, with one marker line '[... N bytes were left out of the middle of this log ...]' between them. The headers say so as well.",
+                "Secrets are redacted by pattern (private key blocks, Authorization and API-key headers, Bearer, Basic and Token values, URL passwords, password, secret, token and key fields, secret-named paths). A package sha256 after 'sha256=' is kept. Pattern scrubbing cannot be perfect, which is why every read is audited.",
+                "The log is plain text. Show it as text, never as HTML.",
+            ],
+        },
+    },
     "/api/tfd/session/audit/": {
         "query": {"page": "integer >=1", "page_size": "integer 1..100", "username": "optional string", "event_type": "optional string"},
         "response": {"items": "array", "total": "integer", "page": "integer", "page_size": "integer", "pages": "integer", "next_page": "integer|null", "previous_page": "integer|null"},

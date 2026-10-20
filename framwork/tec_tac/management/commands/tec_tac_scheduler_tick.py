@@ -84,6 +84,16 @@ class Command(BaseCommand):
         except Exception:
             logging.getLogger("tec_tac.module_repository").warning("The module repository tick step failed; the next tick retries.", exc_info=True)
 
+        try:
+            # 1.17.60: finished module job records older than MODULE_JOB_RETENTION_DAYS are removed, at most once an hour and a
+            # bounded number per run. The step never raises; it logs rather than writing to the output, so the tick's own line
+            # stays the same. Only the root helpers can delete the logs (they sweep a log once its record is gone).
+            from tec_tac import module_job_logs
+
+            module_job_logs.prune_expired()
+        except Exception:
+            logging.getLogger("tec_tac.module_job_logs").warning("The module job retention step failed; the next tick retries.", exc_info=True)
+
         sweep_state = "error" if sweep_error else "ran"
         cleanup_state = "error" if cleanup_error else ("ran" if cleanup and cleanup.get("ran") else "not_due")
         self.stdout.write(

@@ -171,6 +171,37 @@ def mirror_job(job_id, payload, gid):
     atomic_json(path, payload, mode=0o640, uid=0, gid=gid)
 
 
+ORPHAN_LOG_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.log$")
+
+
+def sweep_orphan_logs(logs_root, jobs_root, limit=100):
+    """1.17.60: remove a job log whose job record is gone. Only root can delete here (the logs folder is root:tactical 2750);
+    Core's scheduler tick removes the record once it is past its retention, so the retention period lives in one place
+    (Django side) and this function has no number of days. Only a regular file named <uuid>.log, older than one day, with no
+    <uuid>.json in the jobs folder. It reads no job state and never raises: a failure here must not touch the job at hand."""
+    removed = 0
+    try:
+        for entry in os.scandir(logs_root):
+            if removed >= limit:
+                break
+            if not ORPHAN_LOG_RE.fullmatch(entry.name):
+                continue
+            path = os.path.join(logs_root, entry.name)
+            try:
+                info = os.lstat(path)
+                if not stat.S_ISREG(info.st_mode) or time.time() - info.st_mtime < 86400:
+                    continue
+                if os.path.lexists(os.path.join(jobs_root, entry.name[:-4] + ".json")):
+                    continue
+                os.unlink(path)
+                removed += 1
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return removed
+
+
 def claim_job(job_id):
     source, job = load_job(job_id)
     if job.get("status") != "queued":
@@ -187,6 +218,10 @@ def claim_job(job_id):
             os.chmod(directory, 0o2750)
         except OSError:
             pass
+    try:
+        sweep_orphan_logs(LOGS_ROOT, JOBS_ROOT)
+    except Exception:
+        pass
     claimed = RUNNING_ROOT / f"{job_id}.json"
     if claimed.exists():
         raise SystemExit("hotfix job is already claimed")
