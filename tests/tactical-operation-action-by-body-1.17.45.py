@@ -137,7 +137,7 @@ print("       describe, get_operation and list_operations show audit.action_by_b
 
 # (5) the capability
 meta = ops.tactical_operations_contract_metadata()
-must(ops.CAPABILITY_VERSION == "1.15.0" and meta["version"] == "1.15.0" and meta["version"].split(".")[0] == "1", meta["version"])
+must(ops.CAPABILITY_VERSION == "1.16.0" and meta["version"] == "1.16.0" and meta["version"].split(".")[0] == "1", meta["version"])
 must(len(meta["declaration_keys_added_in_1_14_0"]) == 2 and "audit.action_by_body" in meta["declaration_keys_added_in_1_14_0"][0], meta)
 must(any("action_by_body" in text for text in meta["behaviour_added_in_1_14_0"]), meta)
 print("       capability 1.14.0 and the contract metadata name audit.action_by_body")

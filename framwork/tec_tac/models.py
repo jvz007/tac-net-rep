@@ -166,6 +166,9 @@ class TecTacRuntimeConfig(models.Model):
     # Retired in 1.17.28 (AD-30 amendment): never read. The scheduler tick sets a stored True back to False with one audit row.
     # Dropped by a later migration, once installs have cleared it.
     priority_mail_private_relay = models.BooleanField(default=False)
+    # Licensing enforcement mode (1.17.58): off, log-only or enforce. Blank means "use Core's default" (module_licensing.DEFAULT_LICENSING_MODE),
+    # so a later release can change the default with one constant and no data migration. An explicit choice persists. Never null.
+    licensing_enforcement_mode = models.CharField(max_length=16, blank=True, default="")
     # Remembered update source per component (1.17.2): {"framework": {"type": "branch", "ref": "dev"}, ...}.
     # A missing or invalid entry reads as the default (release, ref null); see runtime_settings.
     update_sources = models.JSONField(default=dict, blank=True)

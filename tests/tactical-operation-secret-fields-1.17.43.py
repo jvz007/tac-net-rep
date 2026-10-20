@@ -242,7 +242,7 @@ print(f"       registration refused, each for its own reason: {len(REFUSALS)} ca
 
 # (10) the capability and the contract metadata name the key; a valid declaration registers
 meta_cap = ops.tactical_operations_contract_metadata()
-must(ops.CAPABILITY_VERSION == "1.15.0" and meta_cap["version"] == "1.15.0", meta_cap["version"])
+must(ops.CAPABILITY_VERSION == "1.16.0" and meta_cap["version"] == "1.16.0", meta_cap["version"])
 must(meta_cap["declaration_keys_added_in_1_12_0"] and "secret_fields" in meta_cap["declaration_keys_added_in_1_12_0"][0], meta_cap)
 text = " ".join(meta_cap["behaviour_added_in_1_12_0"])
 must("changed" in text and "never recorded in the row" in text, text)

@@ -1549,7 +1549,7 @@ def filter_sets_contract_metadata() -> dict[str, Any]:
         "stored_as": f"tec_tac saved views table, view_key prefix {VIEW_KEY_PREFIX!r} (reserved)",
         "field_declaration_keys": ["id", "label", "kind", "lookup", "row_key", "name_lookup", "name_key", "scope_kind (optional, kind id only, 'client' or 'site', since 1.17.51)", "values",
                                    "stored_as (optional, kind date only, 'datetime' default or 'date', since 1.17.52)",
-                                   "integer (optional, kind number only, bool, since 1.17.52)",
+                                   "integer (optional, kind number only, bool, since 1.17.52; declare integer true when the lookup is an integer column or a Count annotation, because Core cannot know the column type and a decimal rule value on such a column can match differently in build_q and matches)",
                                    "minimum, maximum (optional, kind number only, finite numbers, since 1.17.52)"],
         "reader_view": (
             "since 1.17.51 the owner sees the full definition; any other reader sees each rule value only when it is inside their scope, else the rule "

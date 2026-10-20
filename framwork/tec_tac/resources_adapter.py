@@ -432,7 +432,28 @@ def sites_queryset(*, user=None, trusted: bool = False, client_id: int | None = 
     return qs.order_by("client_id", "name", "pk")
 
 
-def agents_queryset(*, user=None, trusted: bool = False, client_id: int | None = None, site_id: int | None = None, search: str | None = None, active: bool | None = None):
+# 1.17.58 (core.resources 1.12.0): the columns of the agent list sort and the order every sort ends with, so paging is stable.
+AGENT_SORT_COLUMNS = {"hostname": "hostname", "client": "site__client__name", "site": "site__name", "platform": "plat", "last_seen": "last_seen"}
+AGENT_TIE_BREAK = ("site__client_id", "site_id", "hostname", "agent_id")
+
+
+def _agent_order(sort_by: str | None, sort_dir: str | None) -> tuple:
+    """The order_by arguments: the order before 1.17.58 without a sort_by, else the chosen column first and the same order after it.
+    last_seen puts NULL (never reported) last in both directions. The joins exist only for the client and site columns."""
+    if sort_by is None:
+        return AGENT_TIE_BREAK
+    column = AGENT_SORT_COLUMNS[sort_by]
+    descending = sort_dir == "desc"
+    if sort_by == "last_seen":
+        from django.db.models import F  # noqa: PLC0415 - only this sort needs it
+
+        first = F(column).desc(nulls_last=True) if descending else F(column).asc(nulls_last=True)
+    else:
+        first = f"-{column}" if descending else column
+    return (first, *AGENT_TIE_BREAK)
+
+
+def agents_queryset(*, user=None, trusted: bool = False, client_id: int | None = None, site_id: int | None = None, search: str | None = None, active: bool | None = None, sort_by: str | None = None, sort_dir: str | None = None):
     _, _, Agent = _models()
     qs = _scope_queryset(Agent.objects.all(), user=user, trusted=trusted)
     qs = _active_filter(qs, active)
@@ -446,7 +467,7 @@ def agents_queryset(*, user=None, trusted: bool = False, client_id: int | None =
             | Q(agent_id__icontains=search)
             | Q(operating_system__icontains=search)
         )
-    return qs.order_by("site__client_id", "site_id", "hostname", "agent_id")
+    return qs.order_by(*_agent_order(sort_by, sort_dir))
 
 
 def _template_id(row: dict[str, Any]) -> int | None:

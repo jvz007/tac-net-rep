@@ -2,7 +2,7 @@
 
 **Status:** Public Core developer contract, added in Core 1.17.7
 **Python:** `tec_tac.tactical_operations`
-**Capability:** `core.tactical_operations` 1.15.0 (1.14.0 before Core 1.17.52, 1.13.0 before Core 1.17.45, 1.12.0 before Core 1.17.44, 1.11.0 before Core 1.17.43, 1.10.0 before Core 1.17.41, 1.9.0 before Core 1.17.28, 1.8.0 before Core 1.17.26; major 1, additive since 1.0.0), owner `core`
+**Capability:** `core.tactical_operations` 1.16.0 (1.15.0 before Core 1.17.58, 1.14.0 before Core 1.17.52, 1.13.0 before Core 1.17.45, 1.12.0 before Core 1.17.44, 1.11.0 before Core 1.17.43, 1.10.0 before Core 1.17.41, 1.9.0 before Core 1.17.28, 1.8.0 before Core 1.17.26; major 1, additive since 1.0.0), owner `core`
 **HTTP:** `POST /api/tfd/tactical-operations/<module_id>/<operation_id>/`
 
 ## Why this exists
@@ -775,6 +775,12 @@ only its first ids. When the first scope entry names more than one id, the succe
 outcome-unknown rows of that call carry `metadata.object_count`: the number of ids. It is a number and never an id. The object id is unchanged.
 A row written before the scope is read (a permission, module permission or body refusal) carries no count, as before.
 
+**Since 1.17.58: the count follows the object.** A scope entry marked `names_object: false` does not name the row's object, so it no longer
+supplies the count either. The success, failed, tactical_denied deny and outcome-unknown rows count the first entry that names the object
+(so `object` and `object_count` describe the same thing). The scope's own refusal rows (`object_not_found`) keep counting the first scope entry,
+because they name the whole scope. An operation with no `names_object: false` entry writes the same rows as 1.17.57.
+Test: `tests/tactical-operation-object-count-1.17.58.py`.
+
 Tests: `tests/tactical-operation-secret-fields-1.17.43.py`, `tests/tactical-operation-object-count-1.17.43.py`.
 
 ## Added in 1.17.44
@@ -929,3 +935,31 @@ audit={"action": "add", "object_type": "report_schedule", "object_field": "id"}
 - Not built: making `audit.object_field` win over every scope object. That would change the rows of declarations that exist today.
 
 Tests: `tests/tactical-operation-audit-list-masks-1.17.52.py`, `tests/tactical-operation-names-object-1.17.52.py`.
+
+## Added in 1.17.58
+
+Capability `core.tactical_operations` is 1.16.0, still major 1. No new declaration key. A module needs framework 1.17.58 to rely on it and can
+feature-detect with `core.tactical_operations >= 1.16.0`. An operation that does not declare `audit_list_masks` writes the rows it wrote before.
+
+### A changed or unchanged marker for a masked list: `<list>_changed`
+
+A masked list records names and `***`, so a change to one script argument's value or to a command's text looked like no change. For each list
+named in `audit_list_masks`, the success row now carries `<list>_changed` on the after side (for example `actions_changed`): `true` or `false`.
+It is a bool and never a value.
+
+- Core digests the raw list in Tactical's before read and the raw list in the body the same way (the canonical-JSON SHA-256 that `audit.secret_fields`
+  uses). The digests are held in memory for the comparison. They are never stored, logged or returned.
+- `true`: the sent list differs from Tactical's list in any way. A masked value, a command text, an item added, an item removed and a changed order all count.
+  The order of keys inside an item does not.
+- `false`: the two lists are identical.
+- The marker is left out when the before read did not return the list (no `audit.before`, a read that failed, or an answer with no list there), when the
+  caller gave its own `audit_before` (that is not Core's evidence), and when the body sent no list. Core never claims "unchanged" without evidence.
+- It appears on the success row only. A failed, denied or outcome-unknown row carries no marker.
+- Tasks can drop the line in its help that says a masked value change shows as unchanged, in its own release.
+
+### The object count follows the object
+
+`metadata.object_count` is counted over the scope entries that name the row's object. A scope entry with `names_object: false` is not counted on the
+success, failed, Tactical-denied and outcome-unknown rows. The scope's own refusal rows keep the full count (see "A count of the ids a list scope names").
+
+Tests: `tests/tactical-operation-list-marker-1.17.58.py`, `tests/tactical-operation-object-count-1.17.58.py`.

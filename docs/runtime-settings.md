@@ -1,6 +1,6 @@
 # Core Runtime Settings
 
-Core stores a small set of settings. Three today: the module `register()` time limit, which the browser shell reads at startup, (1.17.14) the Tactical operation upload limit, which Core's own executor reads, and (1.17.23) the system name an authenticator app shows.
+Core stores a small set of settings. Four today: the module `register()` time limit, which the browser shell reads at startup, (1.17.14) the Tactical operation upload limit, which Core's own executor reads, (1.17.23) the system name an authenticator app shows, and (1.17.58) the licensing enforcement mode.
 
 ## Module `register()` time limit
 
@@ -107,3 +107,28 @@ addresses. Loopback, private networks and cloud metadata all stay refused, for e
 - A later release drops the column with a migration, once installs have cleared it.
 - The Priority 1 audit row (`custom:priority-mail`) has no `private_relay` key any more: `recipients`, `sent`, `refused`, `outcome`, `code` and `requested_by` only.
 - Tests: `tests/priority-mail-no-private-relay-1.17.28.py` (stubs), `tests/runtime-settings-1.17.28.py` (dev server).
+
+## Licensing enforcement mode (1.17.58)
+
+```text
+licensing_enforcement_mode   off | log-only | enforce   default log-only
+```
+
+What the module stage and install licence gate does: `enforce` refuses a module whose licence check fails, `log-only` lets it through and writes one audit row, `off`
+skips the check. Licensing never blocks sign-in, Tactical operations, module rollback or security updates, in any mode. The full rules are in `docs/module-licensing.md`.
+
+`GET /api/tfd/system/runtime-settings/` gains an object:
+
+```json
+"licensing_enforcement_mode": { "value": "log-only", "source": "default", "choices": ["off", "log-only", "enforce"], "default": "log-only" }
+```
+
+`source` is `default` while no choice has been made and `set` after a superuser chose one.
+
+`PATCH` accepts `{"licensing_enforcement_mode": "enforce"}`:
+
+- The text must be exactly `off`, `log-only` or `enforce`. Anything else (another case, a bool, a number, empty text) is a 400.
+- JSON `null` resets it to Core's default. The stored value goes blank, so moving the default in a later release needs no data migration.
+- Superuser only. A caller who holds only `core.runtime_settings.manage` gets 403, checked before the value is read, with one best-effort Core deny row (object `licensing_enforcement_mode`, no value). A body that mixes this setting with another is refused whole.
+- Each change writes its own strict audit row with the effective mode before and after, and the metadata `source_before` and `source_after` (`default` or `set`). Choosing `log-only` while the default is `log-only` pins the choice: it changes the source, so it writes a row.
+- Python: `tec_tac.module_licensing.get_licensing_enforcement_mode()` never raises. A read error or an invalid stored value reads as `log-only`.

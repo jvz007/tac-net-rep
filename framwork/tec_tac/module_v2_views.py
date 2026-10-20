@@ -7,6 +7,7 @@ from rest_framework.views import APIView
 
 from .session_security import SessionAuthenticated
 
+from . import module_licensing
 from .module_manager import ModuleManagerError, discard_stage, get_job, list_jobs, page_jobs
 from .module_manager_v2 import (
     LicensingRequirementError,
@@ -37,6 +38,13 @@ def _disable_replaced(request):
     if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
         raise ModuleManagerV2Error("disable_replaced must be an array of module IDs.")
     return value
+
+
+def _override_refusal(exc):
+    """The answer for a refused licence override (1.17.58): 403 for a caller who is not a superuser, 400 for a bad reason."""
+    if isinstance(exc, module_licensing.OverrideDenied):
+        return Response({"detail": str(exc), "code": "licence_override_superuser_required"}, status=403)
+    return Response({"detail": str(exc), "code": "invalid_licence_override_reason"}, status=400)
 
 
 def _confirm_replacement_switch(request):
@@ -75,6 +83,10 @@ class ModuleV2InspectView(APIView):
     parser_classes = [MultiPartParser, FormParser]
     def post(self, request):
         _require_module_manager(request.user)
+        try:
+            override_reason = module_licensing.read_override(request)  # 1.17.58: before any package work, in every mode
+        except (module_licensing.OverrideDenied, module_licensing.OverrideInvalid) as exc:
+            return _override_refusal(exc)
         uploads = request.FILES.getlist("packages") or request.FILES.getlist("package")
         if not uploads:
             return Response({"detail": "At least one package or bundle upload is required."}, status=400)
@@ -87,13 +99,14 @@ class ModuleV2InspectView(APIView):
         if release_metadata is not None:
             metadata_files.append(release_metadata)
         try:
-            if len(uploads) == 1 and len(signatures) <= 1 and len(metadata_files) <= 1 and (signatures or metadata_files):
-                # Single package, one pair at most: unchanged path (companions are checked by the trust step).
-                from .module_manager_v2 import stage_uploaded_artifact
-                return Response(stage_uploaded_artifact(
-                    uploads[0], signature_upload=signatures[0] if signatures else None,
-                    metadata_upload=metadata_files[0] if metadata_files else None), status=201)
-            return Response(stage_multiple_packages(uploads, signatures, metadata_files), status=201)
+            with module_licensing.override_scope(request.user, override_reason):
+                if len(uploads) == 1 and len(signatures) <= 1 and len(metadata_files) <= 1 and (signatures or metadata_files):
+                    # Single package, one pair at most: unchanged path (companions are checked by the trust step).
+                    from .module_manager_v2 import stage_uploaded_artifact
+                    return Response(stage_uploaded_artifact(
+                        uploads[0], signature_upload=signatures[0] if signatures else None,
+                        metadata_upload=metadata_files[0] if metadata_files else None), status=201)
+                return Response(stage_multiple_packages(uploads, signatures, metadata_files), status=201)
         except LicensingRequirementError as exc:
             return Response(exc.as_payload(), status=403)
         except (ModuleManagerError, ModuleManagerV2Error) as exc:
@@ -128,14 +141,19 @@ class ModuleV2InstallView(APIView):
     def post(self, request, upload_id):
         _require_module_manager(request.user)
         try:
+            override_reason = module_licensing.read_override(request)  # 1.17.58: before any package work, in every mode
+        except (module_licensing.OverrideDenied, module_licensing.OverrideInvalid) as exc:
+            return _override_refusal(exc)
+        try:
             kind = str(request.data.get("kind", "artifact"))
             order = request.data.get("order")
             if order is not None and not isinstance(order, list):
                 return Response({"detail": "order must be an array of module IDs."}, status=400)
             disable_replaced = _disable_replaced(request)
             queue = queue_batch_install if kind == "batch" else queue_v2_install
-            job = queue(str(upload_id), requested_order=order, requested_by=str(request.user.username),
-                        disable_replaced=disable_replaced, actor=request.user)
+            with module_licensing.override_scope(request.user, override_reason):
+                job = queue(str(upload_id), requested_order=order, requested_by=str(request.user.username),
+                            disable_replaced=disable_replaced, actor=request.user)
             return Response(job, status=202)
         except LicensingRequirementError as exc:
             return Response(exc.as_payload(), status=403)

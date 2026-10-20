@@ -169,7 +169,7 @@ print("       describe shows the nested source; a top-level source and a body-se
 
 # (9) the capability
 meta = ops.tactical_operations_contract_metadata()
-must(ops.CAPABILITY_VERSION == "1.15.0" and meta["version"] == "1.15.0", meta["version"])
+must(ops.CAPABILITY_VERSION == "1.16.0" and meta["version"] == "1.16.0", meta["version"])
 must(any("nested scope source" in text for text in meta["behaviour_added_in_1_14_0"]), meta)
 print("       capability 1.14.0 and the contract metadata name the nested source")
 print("[TEST] PASS tactical operation nested scope 1.17.45")

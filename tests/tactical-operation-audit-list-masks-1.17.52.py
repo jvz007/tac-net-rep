@@ -120,9 +120,9 @@ decl("edit-mask", {"actions": {"script_args": "mask", "env_vars": "mask", "comma
 decl("edit-clear", None)
 
 # ---- the capability, the declaration and describe()
-must(ops.CAPABILITY_VERSION == "1.15.0", ops.CAPABILITY_VERSION)
+must(ops.CAPABILITY_VERSION == "1.16.0", ops.CAPABILITY_VERSION)
 meta = ops.tactical_operations_contract_metadata()
-must(meta["version"] == "1.15.0" and meta["version"].split(".")[0] == "1", meta["version"])
+must(meta["version"] == "1.16.0" and meta["version"].split(".")[0] == "1", meta["version"])
 must("audit_list_masks" in meta["declaration"] and "audit_list_masks" in " ".join(meta["declaration_keys_added_in_1_15_0"]), meta["declaration_keys_added_in_1_15_0"])
 must(meta["limits_added_in_1_15_0"] == {"audit_list_mask_keys_per_list": 8, "audit_list_mask_modes": ["names", "mask"], "masked_text": "***"}, meta["limits_added_in_1_15_0"])
 must(any("names" in text and "***" in text and "base64" in text for text in meta["behaviour_added_in_1_15_0"]), "the rule text is exported")

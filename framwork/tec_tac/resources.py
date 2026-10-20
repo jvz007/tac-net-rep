@@ -14,7 +14,7 @@ from . import resources_adapter as adapter
 from .capabilities import register_capability
 
 CONTRACT_ID = "core.resources"
-CONTRACT_VERSION = "1.11.0"
+CONTRACT_VERSION = "1.12.0"
 RESOURCE_TYPES = ("client", "site", "agent")
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 500
@@ -38,6 +38,11 @@ SITE_MANAGE_PERMISSION = "core.resources.sites.manage"
 # 1.11.0 (Core 1.17.51, Automation 0.10.0 request) lets update_client and update_site take an optional compare-and-set guard
 # (expected_workstation_policy_id, expected_server_policy_id, expected_block_policy_inheritance): judged on the locked row, a stale
 # guard writes nothing and answers 409 record_changed. Additive; a call without a guard behaves exactly as before.
+# 1.12.0 (Core 1.17.58, Agent Management 0.15.0 request) lets list_agents take sort_by (hostname, client, site, platform, last_seen) and
+# sort_dir (asc, desc), validated strictly and applied inside the caller's scope before the page is cut. Additive; without sort_by the
+# order is the 1.11.0 order (client, site, hostname, agent id).
+AGENT_SORT_KEYS = ("hostname", "client", "site", "platform", "last_seen")
+AGENT_SORT_DIRS = ("asc", "desc")
 LIVE_FIELDS = ("failing_checks", "agent_count", "maintenance_mode")
 CLIENT_FIELDS = ("type", "id", "name", "active", "alert_template_id", "sites", "workstation_policy_id", "server_policy_id", "block_policy_inheritance") + LIVE_FIELDS
 SITE_FIELDS = ("type", "id", "name", "client_id", "active", "alert_template_id", "client_name", "workstation_policy_id", "server_policy_id", "block_policy_inheritance") + LIVE_FIELDS
@@ -524,12 +529,30 @@ def get_site(site_id: Any, *, context: ResourceAccessContext) -> dict[str, Any]:
     return adapter.live_sites([row])[0]
 
 
-def list_agents(*, context: ResourceAccessContext, client_id: Any | None = None, site_id: Any | None = None, search: str | None = None, active: bool | None = None, page: int = 1, page_size: int = DEFAULT_PAGE_SIZE) -> dict[str, Any]:
+def _agent_sort(sort_by: Any, sort_dir: Any) -> tuple[str | None, str]:
+    """The agent list order (1.12.0). None means the key is absent; an empty or unknown value is a 400, never a silent default.
+
+    Keys are lowercase and case-sensitive. A valid ``sort_dir`` without ``sort_by`` is accepted and ignored (the default order has no
+    direction); an invalid ``sort_dir`` is refused either way."""
+    if sort_by is not None and (not isinstance(sort_by, str) or sort_by not in AGENT_SORT_KEYS):
+        raise ResourceValidationError("sort_by must be one of: " + ", ".join(AGENT_SORT_KEYS) + ".")
+    if sort_dir is not None and (not isinstance(sort_dir, str) or sort_dir not in AGENT_SORT_DIRS):
+        raise ResourceValidationError("sort_dir must be one of: " + ", ".join(AGENT_SORT_DIRS) + ".")
+    return sort_by, sort_dir or "asc"
+
+
+def list_agents(*, context: ResourceAccessContext, client_id: Any | None = None, site_id: Any | None = None, search: str | None = None, active: bool | None = None, page: int = 1, page_size: int = DEFAULT_PAGE_SIZE, sort_by: str | None = None, sort_dir: str | None = None) -> dict[str, Any]:
+    """List the agents the caller's scope allows. ``sort_by`` (hostname, client, site, platform, last_seen) and ``sort_dir`` (asc, desc,
+    default asc) are keyword-only since 1.12.0. The order is applied after the scope filter and before the page is cut, always followed by
+    the 1.11.0 order (client, site, hostname, agent id) so paging is stable. last_seen puts agents that never reported last in both directions."""
     user, trusted = _authorize(context, "agent")
+    sort_by, sort_dir = _agent_sort(sort_by, sort_dir)
     page, page_size, offset = _pagination(page, page_size)
     client_id = _clean_positive_int(client_id, "client_id") if client_id not in (None, "") else None
     site_id = _clean_positive_int(site_id, "site_id") if site_id not in (None, "") else None
-    qs = adapter.agents_queryset(user=user, trusted=trusted, client_id=client_id, site_id=site_id, search=_search(search), active=_active(active))
+    # The sort keywords go to the adapter only when a sort was asked for, so an adapter that predates 1.12.0 keeps working unchanged.
+    order = {"sort_by": sort_by, "sort_dir": sort_dir} if sort_by is not None else {}
+    qs = adapter.agents_queryset(user=user, trusted=trusted, client_id=client_id, site_id=site_id, search=_search(search), active=_active(active), **order)
     items, total = adapter.page_agents(qs, offset=offset, limit=page_size)
     return _page(items, total, page, page_size)
 
@@ -941,7 +964,7 @@ def resource_contract_metadata() -> dict[str, Any]:
         "resource_types": {
             "client": {"id_type": "integer", "fields": list(CLIENT_FIELDS), "filters": ["search", "active", "alert_template_id", "policy_id", "page", "page_size"]},
             "site": {"id_type": "integer", "fields": list(SITE_FIELDS), "filters": ["client_id", "search", "active", "alert_template_id", "policy_id", "page", "page_size"]},
-            "agent": {"id_type": "string", "fields": list(AGENT_FIELDS), "filters": ["client_id", "site_id", "search", "active", "page", "page_size"]},
+            "agent": {"id_type": "string", "fields": list(AGENT_FIELDS), "filters": ["client_id", "site_id", "search", "active", "page", "page_size"], "sort": {"sort_by": list(AGENT_SORT_KEYS), "sort_dir": list(AGENT_SORT_DIRS), "default_sort_dir": "asc", "since": "1.12.0"}},
         },
         "operations": ["list_clients", "get_client", "create_client", "update_client", "delete_client", "list_sites", "get_site", "create_site", "update_site", "delete_site", "list_custom_fields", "update_custom_fields", "list_agents", "get_agent", "resolve_resource", "scope_descriptor", "scope_unrestricted", "has_whole_client_access", "list_custom_field_definitions"],
         "context_properties": ["ResourceAccessContext.scope"],

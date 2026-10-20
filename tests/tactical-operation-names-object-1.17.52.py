@@ -209,7 +209,7 @@ print("       an operation that does not use the flag names its object as before
 
 # (9) the capability and the docs
 meta = ops.tactical_operations_contract_metadata()
-must(ops.CAPABILITY_VERSION == "1.15.0" and meta["version"] == "1.15.0", meta["version"])
+must(ops.CAPABILITY_VERSION == "1.16.0" and meta["version"] == "1.16.0", meta["version"])
 must("scope names_object" in " ".join(meta["declaration_keys_added_in_1_15_0"]), meta["declaration_keys_added_in_1_15_0"])
 must(any("names_object" in text for text in meta["behaviour_added_in_1_15_0"]), "the rule is exported")
 root = Path(__file__).resolve().parents[1]

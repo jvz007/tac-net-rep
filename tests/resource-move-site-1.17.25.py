@@ -152,14 +152,14 @@ must(r.status_code == 404, r.__dict__)
 
 # ----------------------------------------------------------------------------------- contract text, docs and version
 meta = resources.resource_contract_metadata()
-must(meta["version"] == "1.11.0" and meta["version"].split(".")[0] == "1", meta["version"])
-must(resources.CONTRACT_VERSION == "1.11.0", resources.CONTRACT_VERSION)
+must(meta["version"] == "1.12.0" and meta["version"].split(".")[0] == "1", meta["version"])
+must(resources.CONTRACT_VERSION == "1.12.0", resources.CONTRACT_VERSION)
 text = meta["mutation_contracts"]["move_site"]["semantics"]
 for needle in ("1.8.0", "needs no grant", "Edit sites", "A missing destination client is a 400", "A client must retain at least one site.", "agents_moved"):
     must(needle in text, needle)
 must("stricter than Tactical" not in text and "grant on the destination" not in text, "the 1.7.0 destination grant is gone")
 doc = (ROOT / "docs" / "resource-directory.md").read_text(encoding="utf-8")
-must("Contract version: `1.11.0`" in doc and "Contract 1.8 (Core 1.17.25" in doc, "doc header and contract note")
+must("Contract version: `1.12.0`" in doc and "Contract 1.8 (Core 1.17.25" in doc, "doc header and contract note")
 must("needs no grant" in doc and "This loosens Core's 1.17.24 rule" in doc and "stricter than Tactical, which checks only" not in doc, "doc move section")
 contracts_text = (PKG / "contracts.py").read_text(encoding="utf-8")
 must("Since core.resources 1.8.0 (framework >=1.17.25, CQ79) it follows Tactical's Edit site" in contracts_text, "python contract row")

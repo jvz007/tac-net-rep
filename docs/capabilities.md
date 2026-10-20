@@ -289,6 +289,21 @@ Capability providers may also be owned directly by Tec-Tac Core rather than an i
 
 ### Metadata-only discovery
 
+### Health checks that call each other (since 1.17.58)
+
+A provider's health callback may ask for the status of another capability, and that provider's callback may ask for the first one. Before 1.17.58 that loop
+recursed until the web worker was killed (a dev-server request held a worker for 300 seconds). Core now keeps, per thread, the ids whose health callback is running.
+A nested `capability_status` for an id already running, or nested more than 8 deep, returns at once with:
+
+```json
+{"available": false, "state": "health-reentrant", "reason": "Capability health check re-entered: A -> B -> A"}
+```
+
+The reason names only capability ids, never provider text. `get_capability` raises `CapabilityUnhealthy` for it, and that class's `state` stays `unhealthy`, so a caller that
+handles `unhealthy` needs no change. A caller that compares the status dict's `state` against a list of names should treat any state other than `available` as not available.
+The stack is always popped, even when a callback raises, and it is per thread: another thread is unaffected. `check_health=False` never runs a callback, so it is unchanged.
+A provider should still not call another capability's status from its health callback when it can avoid it. Test: `tests/capability-health-reentrancy-1.17.58.py`.
+
 `check_health=false` is discovery-only. Core returns registered capability metadata without calling provider health callbacks, but it reports `available=false`, `state=health-unchecked`, and `health_checked=false`. Runtime callers must use the default live health check before treating a capability as available.
 
 `core.caller_identity` 1.0.0 (Core 1.17.21): the verified identity of the module whose code is calling a provider. See `docs/caller-identity.md`.

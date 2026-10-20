@@ -22,12 +22,17 @@ def must(ok: bool, label: str) -> None:
         failures.append(label)
 
 
-must((ROOT / "VERSION").read_text(encoding="utf-8").strip() == VERSION, "VERSION reads 1.17.57")
-must(json.loads((ROOT / "tec_tac_package.json").read_text(encoding="utf-8"))["version"] == VERSION, "tec_tac_package.json reads 1.17.57")
+def _at_least(text: str) -> bool:  # at least 1.17.57, ignoring a -N rebuild suffix (the later bumps and rebuilds keep this record true)
+    return tuple(int(x) for x in text.strip().split("-")[0].split(".")) >= (1, 17, 57)
 
-notes = ROOT / f"RELEASE_NOTES_{VERSION}.md"
-must(notes.is_file(), "release notes exist at the root")
-text = notes.read_text(encoding="utf-8") if notes.is_file() else ""
+
+version_text = (ROOT / "VERSION").read_text(encoding="utf-8")
+must(_at_least(version_text), "VERSION is at least 1.17.57")
+must(_at_least(json.loads((ROOT / "tec_tac_package.json").read_text(encoding="utf-8"))["version"]), "tec_tac_package.json is at least 1.17.57")
+
+notes = next((p for p in (ROOT / f"RELEASE_NOTES_{VERSION}.md", ROOT / "docs" / "releases" / f"RELEASE_NOTES_{VERSION}.md") if p.is_file()), None)
+must(notes is not None, "release notes exist at the root or in docs/releases")
+text = notes.read_text(encoding="utf-8") if notes else ""
 low = text.lower()
 must("decision record" in low and "no code change" in low, "notes say decision record and no code change")
 must("PASS if the version shows 1.17.57 and nothing else changed." in text, "notes carry the dev-server PASS line")
@@ -35,8 +40,9 @@ must("## Module-facing change" in text, "notes carry the module-facing heading")
 must((ROOT / "docs" / "releases" / "RELEASE_NOTES_1.17.56.md").is_file(), "1.17.56 notes moved to docs/releases")
 must(not (ROOT / "RELEASE_NOTES_1.17.56.md").exists(), "1.17.56 notes are not left at the root")
 
-framework_hits = [p for p in (ROOT / "framwork").rglob("*.py") if VERSION in p.read_text(encoding="utf-8", errors="ignore")]
-must(not framework_hits, "no file under framwork/ names 1.17.57")
+if version_text.strip() == VERSION:  # the no-code claim is about the 1.17.57 build itself
+    framework_hits = [p for p in (ROOT / "framwork").rglob("*.py") if VERSION in p.read_text(encoding="utf-8", errors="ignore")]
+    must(not framework_hits, "no file under framwork/ names 1.17.57")
 
 project = ROOT.parents[1]
 standard = project / "docs" / "tec-tac-module-standard.md"

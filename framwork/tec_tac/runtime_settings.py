@@ -19,6 +19,11 @@ best-effort Core ``deny`` row, and so does the upload-limit refusal.
 1.17.28 (AD-30 amendment, Johan, 14 October 2026): the private mail relay setting is retired. It is no longer in the GET answer and a
 PATCH that names it is the normal 400. Its stored column (1.17.26) is never read; ``clear_retired_private_relay`` sets a stored True
 back to False with one strict audit row, once, from the scheduler tick. The column is dropped in a later release.
+
+1.17.58 (Johan, 19 October 2026): ``licensing_enforcement_mode`` is ``off``, ``log-only`` or ``enforce``. Only an effective superuser changes
+it (checked before the value; a refusal writes a deny row; a body that mixes it with another setting is refused whole). JSON null resets it
+to Core's default, which is ``log-only``. The stored column is blank when no choice was made, so a later release can move the default to
+enforce with one constant. See ``module_licensing``.
 """
 from __future__ import annotations
 
@@ -33,6 +38,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .models import TecTacRuntimeConfig
+from .module_licensing import DEFAULT_LICENSING_MODE, LICENSING_MODES, SETTING_LICENSING_MODE, serialize_mode
 from .rbac import can_manage_runtime_settings, is_effective_superuser
 from .session_security import SessionAuthenticated
 from .throttles import RuntimeSettingsWriteDayThrottle, RuntimeSettingsWriteMinThrottle
@@ -52,7 +58,9 @@ _MIB = 2**20
 SETTING_SYSTEM_NAME = "system_name"
 DEFAULT_SYSTEM_NAME = "Tec-Tac"
 MAX_SYSTEM_NAME_LENGTH = 60
-RUNTIME_SETTING_NAMES = (SETTING_MODULE_REGISTER_TIMEOUT, SETTING_TACTICAL_UPLOAD_MAX_MIB, SETTING_SYSTEM_NAME)
+RUNTIME_SETTING_NAMES = (SETTING_MODULE_REGISTER_TIMEOUT, SETTING_TACTICAL_UPLOAD_MAX_MIB, SETTING_SYSTEM_NAME, SETTING_LICENSING_MODE)
+# The settings whose stored value is text, not a whole number (1.17.58): the change check must not read them as an int.
+_TEXT_SETTINGS = (SETTING_SYSTEM_NAME, SETTING_LICENSING_MODE)
 RETIRED_PRIVATE_RELAY_AUDIT_OBJECT = "priority_mail_private_relay"
 RETIRED_PRIVATE_RELAY_MESSAGE = "Tec-Tac runtime setting retired: the private mail relay was removed. Email uses Tactical's SMTP only."
 
@@ -72,6 +80,9 @@ UPLOAD_LIMIT_DENIED = "Only a Tec-Tac superuser may change the Tactical operatio
 
 # The system name: superusers only (1.17.24). The register timeout keeps core.runtime_settings.manage.
 SYSTEM_NAME_DENIED = "Only a Tec-Tac superuser may change the system name."
+
+# The licensing enforcement mode: superusers only (1.17.58).
+LICENSING_MODE_DENIED = "Only a Tec-Tac superuser may change the licensing enforcement mode."
 
 
 class RuntimeSettingsError(ValueError):
@@ -125,6 +136,14 @@ def validate_system_name(value) -> str:
     return name
 
 
+def validate_licensing_enforcement_mode(value) -> str:
+    """Accept only ``off``, ``log-only`` or ``enforce`` (exact, lowercase text). Anything else, including a bool, a number and
+    another case, is refused. JSON null is handled by the caller as a reset."""
+    if not isinstance(value, str) or value not in LICENSING_MODES:
+        raise RuntimeSettingsError(f"{SETTING_LICENSING_MODE} must be one of: " + ", ".join(LICENSING_MODES) + ".")
+    return value
+
+
 def get_system_name() -> str:
     """The name an authenticator shows for this system. Never raises: any failure or invalid stored value gives ``Tec-Tac``."""
     try:
@@ -171,6 +190,7 @@ def serialize_runtime_settings(config=None) -> dict:
         },
         SETTING_TACTICAL_UPLOAD_MAX_MIB: _serialize_upload_limit(config),
         SETTING_SYSTEM_NAME: _serialize_system_name(config),
+        SETTING_LICENSING_MODE: serialize_mode(getattr(config, SETTING_LICENSING_MODE, "")),
         "updated_at": config.updated_at.isoformat() if config.updated_at else None,
         "updated_by": config.updated_by.username if config.updated_by else None,
     }
@@ -231,9 +251,9 @@ def clear_retired_private_relay() -> bool:
         return False
 
 
-def _audit_change(user, before, after, setting: str = SETTING_MODULE_REGISTER_TIMEOUT) -> None:
+def _audit_change(user, before, after, setting: str = SETTING_MODULE_REGISTER_TIMEOUT, metadata: dict | None = None) -> None:
     """Strict Core audit row, written in the same transaction as the change. One row per changed setting, ``object_id`` is
-    the setting's name."""
+    the setting's name. ``metadata`` (1.17.58) is used by the licensing mode to say whether the value came from a choice or the default."""
     from .audit import record
 
     record(
@@ -245,6 +265,7 @@ def _audit_change(user, before, after, setting: str = SETTING_MODULE_REGISTER_TI
         message="Tec-Tac runtime setting changed.",
         before={setting: before},
         after={setting: after},
+        metadata=metadata,
         strict=True,
     )
 
@@ -298,6 +319,8 @@ class RuntimeSettingsView(APIView):
                 _deny_superuser_only(request, SETTING_TACTICAL_UPLOAD_MAX_MIB, UPLOAD_LIMIT_DENIED)
             if SETTING_SYSTEM_NAME in data:
                 _deny_superuser_only(request, SETTING_SYSTEM_NAME, SYSTEM_NAME_DENIED)
+            if SETTING_LICENSING_MODE in data:
+                _deny_superuser_only(request, SETTING_LICENSING_MODE, LICENSING_MODE_DENIED)
         changes = {}
         try:
             if SETTING_MODULE_REGISTER_TIMEOUT in data:
@@ -308,6 +331,10 @@ class RuntimeSettingsView(APIView):
                 # JSON null resets the name to the default.
                 name = data[SETTING_SYSTEM_NAME]
                 changes[SETTING_SYSTEM_NAME] = DEFAULT_SYSTEM_NAME if name is None else validate_system_name(name)
+            if SETTING_LICENSING_MODE in data:
+                # JSON null resets the mode to Core's default: the stored value goes blank, so the default can move later.
+                mode = data[SETTING_LICENSING_MODE]
+                changes[SETTING_LICENSING_MODE] = "" if mode is None else validate_licensing_enforcement_mode(mode)
         except RuntimeSettingsError as exc:
             return Response({"detail": str(exc)}, status=400)
         with transaction.atomic():
@@ -315,7 +342,7 @@ class RuntimeSettingsView(APIView):
             changed = []
             for setting, value in changes.items():
                 before = getattr(config, setting)
-                if setting != SETTING_SYSTEM_NAME:
+                if setting not in _TEXT_SETTINGS:
                     before = int(before)
                 if before != value:
                     setattr(config, setting, value)
@@ -325,7 +352,13 @@ class RuntimeSettingsView(APIView):
                 config.save(update_fields=[*(item[0] for item in changed), "updated_by", "updated_at"])
                 # One strict audit row per changed setting. A failed audit write raises and rolls every change back.
                 for setting, before, value in changed:
-                    _audit_change(request.user, before, value, setting)
+                    if setting == SETTING_LICENSING_MODE:
+                        # The row names the effective modes and whether each came from a choice or from Core's default.
+                        before_mode = before if before in LICENSING_MODES else ""
+                        _audit_change(request.user, before_mode or DEFAULT_LICENSING_MODE, value or DEFAULT_LICENSING_MODE, setting,
+                                      metadata={"source_before": "set" if before_mode else "default", "source_after": "set" if value else "default"})
+                    else:
+                        _audit_change(request.user, before, value, setting)
         return Response(serialize_runtime_settings(config))
 
 

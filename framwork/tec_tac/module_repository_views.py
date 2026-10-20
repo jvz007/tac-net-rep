@@ -4,6 +4,7 @@ from rest_framework.views import APIView
 
 from .session_security import SessionAuthenticated
 
+from . import module_licensing
 from .module_manager_v2 import LicensingRequirementError
 from .module_repository import (
     SKIPPED_REASON_FOR_OTHERS,
@@ -147,7 +148,14 @@ class ModuleOnlineStageView(APIView):
         if not repository_id or not module_id:
             return Response({"detail": "repository_id and module_id are required."}, status=400)
         try:
-            return Response(stage_repository_package(repository_id, module_id, version, allow_source_change=allow_source_change), status=201)
+            override_reason = module_licensing.read_override(request)  # 1.17.58: before the package is downloaded, in every mode
+        except (module_licensing.OverrideDenied, module_licensing.OverrideInvalid) as exc:
+            if isinstance(exc, module_licensing.OverrideDenied):
+                return Response({"detail": str(exc), "code": "licence_override_superuser_required"}, status=403)
+            return Response({"detail": str(exc), "code": "invalid_licence_override_reason"}, status=400)
+        try:
+            with module_licensing.override_scope(request.user, override_reason):
+                return Response(stage_repository_package(repository_id, module_id, version, allow_source_change=allow_source_change), status=201)
         except LicensingRequirementError as exc:
             return Response(exc.as_payload(), status=403)
         except ModuleRepositoryError as exc:

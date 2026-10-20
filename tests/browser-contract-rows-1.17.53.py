@@ -82,7 +82,7 @@ must(re.search(r"ui\.authenticated\.components.*FilterEditor", md), "the markdow
 fs = ast.parse((ROOT / "framwork/tec_tac/filter_sets.py").read_text(encoding="utf-8"))
 to = ast.parse((ROOT / "framwork/tec_tac/tactical_operations.py").read_text(encoding="utf-8"))
 must(literal("CAPABILITY_VERSION", fs) == "1.1.0", "core.filter_sets is still 1.1.0")
-must(literal("CAPABILITY_VERSION", to) == "1.15.0", "core.tactical_operations is still 1.15.0")
+must(literal("CAPABILITY_VERSION", to) == "1.16.0", "core.tactical_operations is still 1.16.0")
 
 # (f) the UI docs, when they sit beside this repository, agree
 UI = ROOT.parent / "ui" / "docs"

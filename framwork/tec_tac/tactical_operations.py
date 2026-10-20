@@ -140,6 +140,18 @@ registers and runs unchanged):
   ``body:dependencies.client`` can then have ``audit.object_field`` or ``audit.object_body_field`` name the created record. Registration
   refuses a non-bool, and a scope whose entries are all ``names_object: false`` unless the declaration has ``audit.object_param``,
   ``audit.object_field``, ``audit.object_body_field`` or ``audit.object_id``.
+
+1.17.58 (the capability is 1.16.0, still major 1; additive, no new declaration key, an operation without ``audit_list_masks`` writes exactly
+the rows it wrote before):
+
+* For each list named in ``audit_list_masks`` the success row records ``<list>_changed`` on the after side: ``true`` or ``false``, a bool
+  and never a value. Core keeps an in-memory digest (the canonical-JSON SHA-256 of ``_secret_digest``) of the raw list in Tactical's before
+  read and digests the body's raw list the same way; the digests exist only for the comparison and are never stored, logged or returned.
+  When the before read did not return the list, or the body sent no list, the marker is left out: a change is never claimed as unchanged.
+  This closes the gap that a change to one script argument's value or a command's text showed as unchanged, because the masked row keeps
+  only names and ``***``.
+* The success, failed, tactical_denied and outcome-unknown rows count ``metadata.object_count`` over the scope entries that name the row's
+  object (``names_object`` not false). The scope's own refusal rows keep counting the first scope entry.
 """
 from __future__ import annotations
 
@@ -160,7 +172,7 @@ from . import module_category as _module_category
 logger = logging.getLogger("tec_tac.tactical_operations")
 
 CAPABILITY_ID = "core.tactical_operations"
-CAPABILITY_VERSION = "1.15.0"  # 1.17.52: audit_list_masks (names and *** for a list's keys) and scope names_object; 1.17.45: audit.action_by_body, a nested body scope source (body:<field>.<key>), object_id on early core_refused rows; 1.17.44: audit.object_id (a declared literal object id); 1.17.43: audit.secret_fields and metadata.object_count
+CAPABILITY_VERSION = "1.16.0"  # 1.17.58: <list>_changed marker next to audit_list_masks; 1.17.52: audit_list_masks (names and *** for a list's keys) and scope names_object; 1.17.45: audit.action_by_body, a nested body scope source (body:<field>.<key>), object_id on early core_refused rows; 1.17.44: audit.object_id (a declared literal object id); 1.17.43: audit.secret_fields and metadata.object_count
 AUDIT_HEADER = "X-Tec-Tac-Audit"
 AUDIT_RECORDED = "recorded"
 AUDIT_NOT_RECORDED = "not-recorded"
@@ -2109,6 +2121,28 @@ def _secret_digests(operation: TacticalOperation, payload: Any) -> dict | None:
     return {name: _secret_digest(payload[name]) for name in operation.secret_fields if name in payload}
 
 
+def _list_digests(operation: TacticalOperation, payload: Any) -> dict | None:
+    """The digests of the raw lists that ``audit_list_masks`` masks, taken from Tactical's before read (1.17.58). None when the read is not
+    an object. Like ``_secret_digests`` it serves one in-memory comparison: it is never stored, logged or returned."""
+    if not operation.audit_list_masks or not isinstance(payload, dict):
+        return None
+    return {name: _secret_digest(payload[name]) for name, _pairs in operation.audit_list_masks if isinstance(payload.get(name), list)}
+
+
+def _list_markers(operation: TacticalOperation, body: Any, digests: dict | None) -> dict:
+    """The after-side markers ``<list>_changed`` of a success row (1.17.58): a bool only, never a value. Only for a list named in
+    ``audit_list_masks``. The marker is left out when the body sent no list or the before read did not return that list, so a change is
+    never claimed as 'unchanged' on no evidence. ``true`` means the sent list differs from Tactical's list in any way (an argument value,
+    a command text, an item added, removed or reordered), ``false`` means it is identical."""
+    markers: dict = {}
+    if not isinstance(body, dict) or not digests:
+        return markers
+    for name, _pairs in operation.audit_list_masks:
+        if name in digests and isinstance(body.get(name), list):
+            markers[f"{name}_changed"] = digests[name] != _secret_digest(body[name])
+    return markers
+
+
 def _secret_markers(operation: TacticalOperation, body: Any, digests: dict | None) -> tuple[dict, dict]:
     """The (after, before) markers of a success row for the declared secret fields (1.17.43). Never a value.
 
@@ -2234,7 +2268,9 @@ def _read_before(request, operation: TacticalOperation, params: dict[str, str]) 
         if spec.select:
             payload = _select_row(operation, payload, params)
         # 1.17.43: digests of the declared secret fields, for the in-memory comparison only; the values are not kept.
-        return {"status": status, "values": _before_values(operation, payload), "secret_digests": _secret_digests(operation, payload)}
+        # 1.17.58: the same for the lists audit_list_masks masks (<list>_changed on the success row).
+        return {"status": status, "values": _before_values(operation, payload), "secret_digests": _secret_digests(operation, payload),
+                "list_digests": _list_digests(operation, payload)}
     except Exception:
         logger.warning("The before-read of Tactical operation %s/%s did not answer.", operation.module_id, operation.id, exc_info=True)
         return {"status": None, "values": None}
@@ -2437,10 +2473,13 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
         scope_object_id = _object_id(scope, operation, params)  # names every scope entry: the scope's own deny rows keep it
         # 1.17.52: an entry flagged names_object false is checked above but does not name the row (the answer or body field does).
         object_id = _object_id([(kind, ids) for spec, kind, ids in entries if spec.names_object], operation, params) if entries else scope_object_id
-        count_extra = _object_count_extra(scope)  # 1.17.43: the rows of this call that read the scope carry how many ids it names
-        extra: dict = dict(count_extra)
+        count_extra = _object_count_extra(scope)  # 1.17.43: the scope's own refusal rows carry how many ids the whole scope names
+        # 1.17.58: the rows that name `object_id` (success, failed, tactical_denied, outcome unknown) count the same entries that name it,
+        # so object and object_count describe one thing. Without a names_object false entry this equals count_extra.
+        named_count_extra = _object_count_extra([(kind, ids) for spec, kind, ids in entries if spec.names_object])
+        extra: dict = dict(named_count_extra)
         action_now = _action_for(operation, body)  # 1.17.45: the success row's action (audit.action_by_body)
-        unknown_extra = {**count_extra, "declared_action": action_now} if operation.audit_action_by_body else count_extra
+        unknown_extra = {**named_count_extra, "declared_action": action_now} if operation.audit_action_by_body else named_count_extra
         if entries:
             from . import resources_adapter as adapter
 
@@ -2545,6 +2584,10 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
                 after_payload = {**(after_payload or {}), **secret_after}
             if secret_before:
                 before_payload = {**(before_payload or {}), **secret_before}
+        if operation.audit_list_masks:  # 1.17.58: one <list>_changed bool per masked list, never a value
+            list_markers = _list_markers(operation, body, before_state.get("list_digests") if before_state else None)
+            if list_markers:
+                after_payload = {**(after_payload or {}), **list_markers}
         audit = _write_row(
             request, operation, action=action_now, object_id=object_id,
             message=operation.message or f"Core ran Tactical operation {operation.id}.",
@@ -2553,7 +2596,7 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
     elif status in (401, 403):
         audit = _write_row(
             request, operation, action="deny", object_id=object_id, message=DENY_MESSAGES["tactical_denied"], tactical_status=status,
-            refusal=True, extra={"refused_action": operation.audit_action, "reason": "tactical_denied", "status": status, **count_extra},
+            refusal=True, extra={"refused_action": operation.audit_action, "reason": "tactical_denied", "status": status, **named_count_extra},
             correlation_id=correlation_id,
         )
     elif 400 <= status < 500 and operation.method != "GET":
@@ -2774,6 +2817,21 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
                 "the object id of the success, failed, tactical-denied and outcome-unknown rows, so audit.object_field or audit.object_body_field can name the "
                 "created record. Registration refuses a non-bool and a scope whose entries are all names_object false unless the declaration has audit.object_param, "
                 "audit.object_field, audit.object_body_field or audit.object_id"
+            ),
+        ],
+        # 1.17.58 (capability 1.16.0, still major 1): no new declaration key. A feature-detect for the list marker.
+        "declaration_keys_added_in_1_16_0": [],
+        "behaviour_added_in_1_16_0": [
+            (
+                "audit_list_masks: the success row records <list>_changed (true or false, a bool and never a value) on the after side for each masked list. "
+                "Core compares the canonical-JSON digest of the body's raw list with the digest of the list in Tactical's before read; the digests are held in "
+                "memory for that comparison only. true: the sent list differs from Tactical's in any way (a masked value, a command text, an item added, "
+                "removed or reordered); false: identical. The marker is omitted when the before read did not return the list or the body sent no list, and "
+                "never appears on a failed, denied or outcome-unknown row. An operation without audit_list_masks writes the same rows as before"
+            ),
+            (
+                "metadata.object_count counts the first scope entry that names the row's object, so a scope entry marked names_object false is not counted on the "
+                "success, failed, tactical-denied and outcome-unknown rows; the scope's own refusal rows keep the full-scope count"
             ),
         ],
         "refusal_row_codes": list(CORE_REFUSAL_ROW_CODES),

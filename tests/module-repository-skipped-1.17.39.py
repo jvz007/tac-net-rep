@@ -325,7 +325,9 @@ lowered = text.lower()
 for banned in ("entitle", "revok", "get_capability", "licensing capability", "core.licensing", "tec_tac_licensing", "capabilities import"):
     must(banned not in lowered, f"module repository code must not contain {banned!r}")
 licence_words = re.findall(r"licen[sc]\w*", text, flags=re.IGNORECASE)
-must(set(licence_words) <= {"LicensingRequirementError"}, f"licence words other than the existing install-time error: {set(licence_words)}")
+# 1.17.58: the stage route also reads the audited licence override (a superuser's reason, refused for anyone else). It checks no entitlement.
+must(set(licence_words) <= {"LicensingRequirementError", "licensing", "licence_override_reason", "licence_override_superuser_required"},
+     f"licence words other than the existing install-time error and the 1.17.58 override: {set(licence_words)}")
 must(all(word == "downgrade_policy" for word in re.findall(r"downgrad\w*", text, flags=re.IGNORECASE)),
      "downgrade appears only as the informational field downgrade_policy")
 print("       source scan: no licensing, entitlement, revocation or downgrade check")

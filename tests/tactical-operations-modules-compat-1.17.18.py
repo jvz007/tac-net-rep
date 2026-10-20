@@ -11,6 +11,7 @@ are registered without ``module_permission`` (that key is untouched by 1.17.18).
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import tomllib
 from pathlib import Path
@@ -22,7 +23,7 @@ source = BASE.read_text(encoding="utf-8")
 cut = source.index("fresh()\nmust(ops.list_operations() == []")
 G = {"__name__": "stubs", "__file__": str(BASE)}
 exec(compile(source[:cut], str(BASE), "exec"), G)
-ops, PLUGINS, fresh, must = (G[k] for k in ("ops", "PLUGINS", "fresh", "must"))
+ops, PLUGINS, ENABLED, fresh, must = (G[k] for k in ("ops", "PLUGINS", "ENABLED", "fresh", "must"))
 
 MODULES = Path(__file__).resolve().parents[3] / "modules"
 if not (MODULES / "catalog.toml").is_file():
@@ -57,6 +58,20 @@ for folder in sorted(p for p in MODULES.iterdir() if (p / "package").is_dir()):
             continue
         PLUGINS[module_id] = SimpleNamespace(plugin_id=module_id, plugin_type="extension", version="1.0.0", permission_groups=(), legacy=False,
                                              audit_events=(), category=category.get(module_id, "core"))
+        # 1.17.58: a premium module that replaces a core module (AD-20; patchmanagement replaces patching) registers its operations
+        # only while the replacement is honoured, so the stub state says so, as tests/module-replacement-registration-1.17.58.py does.
+        manifest = next(iter(sorted((folder / "package").rglob("tec_tac.json"))), None)
+        replaces = str(json.loads(manifest.read_text(encoding="utf-8")).get("replaces", "")) if manifest else ""
+        if replaces:
+            PLUGINS[module_id].replaces, PLUGINS[module_id].capabilities, PLUGINS[module_id].capabilities_declared = replaces, (), True
+            PLUGINS[replaces] = SimpleNamespace(plugin_id=replaces, plugin_type="extension", version="1.0.0", permission_groups=(), legacy=False,
+                                                audit_events=(), category="core", replaces="", capabilities=(), capabilities_declared=True)
+            ENABLED[replaces], ENABLED[module_id] = False, True
+            # the replaced module's own declarations are not live while its replacement is (one caller per route, AD-6)
+            for key in [key for key in ops._OPERATIONS if key[0] == replaces]:
+                del ops._OPERATIONS[key]
+            for route_key, holders in list(ops._ROUTES.items()):
+                ops._ROUTES[route_key] = [key for key in holders if key[0] != replaces]
         count = 0
         for op_id, kwargs in table.items():
             # a module's table may carry its own page hints; its apps.py passes only the keys the call takes

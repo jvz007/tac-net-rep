@@ -1,7 +1,7 @@
 # Core Resource Directory
 
 Contract ID: `core.resources`  
-Contract version: `1.11.0`  
+Contract version: `1.12.0`  
 Python namespace: `tec_tac.resources`
 
 ## Purpose
@@ -23,6 +23,8 @@ tec_tac.resources           <- stable public contract
         +-- Reporting
         +-- Alerts / Automation / other modules
 ```
+
+Contract 1.12 (Core 1.17.58, additive, still major 1) lets `list_agents` take `sort_by` (hostname, client, site, platform, last_seen) and `sort_dir` (asc, desc). Without `sort_by` the order is the 1.11 order. See "Sort the agent list (since 1.12.0)".
 
 Contract 1.11 (Core 1.17.51, additive, still major 1) lets `update_client` and `update_site` take an optional compare-and-set guard: `expected_workstation_policy_id`, `expected_server_policy_id` and `expected_block_policy_inheritance`. A call without a guard behaves exactly as before. See "Compare-and-set guard (since 1.11.0)".
 
@@ -150,7 +152,7 @@ There is no implicit service/global access when the user is absent. Trusted serv
 - `get_client(client_id, context=...)`
 - `list_sites(context=..., client_id=None, search=None, active=None, page=1, page_size=100)`
 - `get_site(site_id, context=...)`
-- `list_agents(context=..., client_id=None, site_id=None, search=None, active=None, page=1, page_size=100)`
+- `list_agents(context=..., client_id=None, site_id=None, search=None, active=None, page=1, page_size=100, sort_by=None, sort_dir=None)` (`sort_by` and `sort_dir` since 1.12.0)
 - `get_agent(agent_id, context=...)`
 - `resolve_resource(resource_type, resource_id, context=...)`
 - `user_context(user)`
@@ -261,6 +263,27 @@ Client and site records carry three read-only keys, appended after `block_policy
 
 `list_clients` and `list_sites` take `alert_template_id` and `policy_id`. Each is a positive whole number or the call fails with `invalid_resource_request`. `alert_template_id` keeps the records that use that alert template. `policy_id` keeps the records whose workstation policy or server policy is that policy. Both together mean both must match. The filters run inside the caller's scope and under the list's own permission. They let Alerts find where a template is used and Automation build the policy overview without reading every page. HTTP: `GET /api/tfd/resources/clients/?alert_template_id=5&policy_id=31` and the same on `sites/`.
 
+#### Sort the agent list (since 1.12.0, Core 1.17.58)
+
+`list_agents` takes two keyword-only arguments, and `GET /api/tfd/resources/agents/` takes the query parameters of the same names.
+
+| `sort_by` | Orders by |
+|---|---|
+| `hostname` | the agent's host name |
+| `client` | the client's name |
+| `site` | the site's name |
+| `platform` | the agent's platform (`windows`, `linux`, `darwin`) |
+| `last_seen` | when the agent last reported; an agent that never reported comes last in both directions |
+
+`sort_dir` is `asc` (the default) or `desc`.
+
+- Both are checked strictly. The text is lowercase and case-sensitive. An unknown key, an unknown direction, an empty value that is present (`?sort_by=`) and a value that is not text give `400` with `invalid_resource_request`. Nothing falls back to a default.
+- A valid `sort_dir` without `sort_by` is accepted and ignored: the default order has no direction. An invalid `sort_dir` is refused either way.
+- The order is applied after the caller's scope filter and before the page is cut. A person limited to one site never sees or counts the agents of another site, sorted or not.
+- Every sort ends with the 1.11 order (client, site, host name, agent id), so two agents with the same value always come in the same order and paging is stable.
+- Without `sort_by` the order is exactly the 1.11 order. The list still costs one count query and one page query.
+- Needs framework >=1.17.58. Feature-detect with `core.resources >= 1.12.0`. Test: `tests/resources-agent-sort-1.17.58.py`.
+
 #### Move a site (documented in 1.7.0, Core 1.17.24; rule changed in 1.8.0, Core 1.17.25)
 
 This rule is accepted decision AD-29 (Johan, 13 October 2026, CQ79) in `docs/review-accepted-decisions.md`: the source-site write scope is kept, a missing client is 400, a name clash is 409, one audit row is written, and the consequence below is accepted. Revisit when Johan declares parity reached or asks sooner.
@@ -347,7 +370,7 @@ Authenticated browser/external callers can use:
 - `GET /api/tfd/resources/agents/`
 - `GET /api/tfd/resources/agents/<agent_id>/`
 
-Read query parameters mirror the Python filters. HTTP always derives a user context from the authenticated Tactical/Tec-Tac session; it cannot create trusted service contexts.
+Read query parameters mirror the Python filters (the agent list also takes `sort_by` and `sort_dir` since 1.12.0). HTTP always derives a user context from the authenticated Tactical/Tec-Tac session; it cannot create trusted service contexts.
 
 Create payloads:
 
@@ -424,6 +447,8 @@ If Tactical later changes model/table/field layout, update the Core adapter whil
 `core.resources` follows semantic contract versioning.
 
 Contract `1.1.0` is additive over `1.0.0`: it preserves all read operations and resource shapes while adding client/site create/update operations, write authorization metadata and stable conflict errors. A Tactical internal schema change alone is not a reason to change this contract version.
+
+Contract `1.12.0` (Core 1.17.58) is additive over `1.11.0`: `list_agents` gains the optional keywords `sort_by` and `sort_dir`, and the agent list route accepts the same two query parameters. No record, route or earlier error changed. Needs framework >=1.17.58.
 
 Contract `1.11.0` (Core 1.17.51) is additive over `1.10.0`: `update_client` and `update_site` gain three optional keywords (the compare-and-set guard), `ResourceConflict` gains a `code` argument (`record_changed`), and the two PATCH routes accept the same three keys. No record, route or earlier error changed. Needs framework >=1.17.51.
 

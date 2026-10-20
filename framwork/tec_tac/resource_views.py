@@ -98,6 +98,9 @@ class ResourceListView(APIView):
             if self.resource_type == "agent":
                 params["client_id"] = request.query_params.get("client_id")
                 params["site_id"] = request.query_params.get("site_id")
+                # core.resources 1.12.0: absent is None, present but empty is refused by list_agents (a 400)
+                params["sort_by"] = request.query_params.get("sort_by")
+                params["sort_dir"] = request.query_params.get("sort_dir")
                 return Response(list_agents(**params))
             raise ResourceValidationError("Unsupported resource type.")
         except ResourceDirectoryError as exc:

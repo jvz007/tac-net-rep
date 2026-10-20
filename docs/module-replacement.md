@@ -283,6 +283,38 @@ run as before. The check is `tec_tac.module_replacement.disabled_install_refusal
 Core does not skip the migration step and does not change enable, disable or hand-back (AD-20). To install the module, switch
 the replacement off and the module on first, as the sentence says.
 
+## When a replacement registers its Tactical operations (1.17.58)
+
+Asked by Advanced Patch Management 0.11.0. Two questions, answered from the code and pinned by `tests/module-replacement-registration-1.17.58.py`.
+
+**Does a replacement's operation register under its own module id?** Yes. A premium module whose manifest says `replaces = "patching"` can
+register `scan`, `install`, `set-update-action` and `reset-patch-policy` on the `winupdate/` and `automation/patchpolicy/` routes while Core
+honours the replacement. The rows and the run use the replacement's own module id (`patchmanagement`). While Windows Patching is enabled (or
+the replacement is disabled, or two replacements compete) each of the four registrations is refused with `TacticalOperationRegistrationError`
+(a `ValueError`). Nothing else is raised and nothing is left registered. Routes outside the replaced module's rules stay refused.
+
+**When does Core decide, and does it retry?** Core decides at the moment `register_tactical_operation` is called, from the owner table and the
+live module state (`_honoured_pairs`, then `_check_route_owner`). A refused registration is not remembered and not retried. Core does not
+re-run a module's `ready()` when it starts to honour a replacement. The registration happens again only when a process starts and runs `ready()`.
+
+**What does the enable job restart?** The root job helper (`scripts/module-v2-job-helper.py`) writes the new module state first: it enables the
+replacement and disables the replaced module in one state write. Only then does `sync_and_reload` run, for an enable, a disable and an install:
+1. it runs the UI sync script, if it is present;
+2. it sends `SIGHUP` to the Tactical uWSGI master through `scripts/reload-rmm-uwsgi.sh` (unit `rmm`, or `TEC_TAC_RMM_SERVICE`). That starts new web
+   workers, which run `ready()` again. The workers that serve Tactical operations are these workers. If the reload script is not on the
+   server, this step is skipped without an error;
+3. it runs `systemctl restart celery` (up to three attempts) and fails the job if Celery is not active afterwards.
+
+The job does **not** restart `celery-beat`, nor Tactical's socket service (the uvicorn service behind `/ws/`). Those processes keep the
+registrations they made at their own last start. Neither serves Tactical operations today.
+
+So after an enable job that has finished, no extra restart is needed: the new workers start after the state changed, so Windows Patching
+is already disabled when their `ready()` runs and the four registrations are accepted. The first start can still refuse them in one case: a
+process that started before the state changed and is not one of the two that the job restarts. A server where the reload script is missing,
+or where state was changed by hand, needs `systemctl restart rmm celery`. The Help article "Replacing and handing back Windows Patching"
+can say: "Core restarts the web workers and Celery itself when you switch. If an operation is missing afterwards, restart the `rmm` service."
+This statement comes from reading the helper. It has not been run on a server.
+
 ## What this does not do
 
 - It adds no general `conflicts_with` key. AD-20 decides replacement only.

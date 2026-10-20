@@ -49,7 +49,7 @@ def declare_any(**over):
 
 
 # ---- the capability
-must(ops.CAPABILITY_VERSION == "1.15.0" and ops.tactical_operations_contract_metadata()["version"].split(".")[0] == "1", ops.CAPABILITY_VERSION)
+must(ops.CAPABILITY_VERSION == "1.16.0" and ops.tactical_operations_contract_metadata()["version"].split(".")[0] == "1", ops.CAPABILITY_VERSION)
 info = ops.tactical_operations_contract_metadata()
 must(info["declaration_keys_added_in_1_9_0"] == ["permissions_any", "body_max_bytes"] and info["behaviour_added_in_1_9_0"], info)
 must("permissions_any=None" in info["declaration"], "the declaration line shows the keyword")

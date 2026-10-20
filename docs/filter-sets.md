@@ -148,6 +148,13 @@ A worked example, the two fields Agents would declare:
 `pending_actions_count` is an annotation, for example `Count("pendingactions", filter=Q(status="pending"))`, added to the role-scoped queryset
 before `build_q` runs.
 
+**Declare `integer: True` on every number field whose lookup is an integer column or a `Count` annotation (since 1.17.58).** Core cannot
+know the type of a database column. A decimal rule value such as `2.5` on an integer column can give a different answer in `build_q` (the
+database compares) than in `matches` (Core compares exact decimals). With `integer: True` a decimal rule value is refused when the set is
+saved or evaluated (`2.5` is refused, `2.0` is stored as `2`), so the two can no longer disagree. Leave `integer` off only for a real decimal
+or float column. Core does not turn "equals a non-whole number" into "matches nothing" by itself: that would break decimal columns.
+Test: `tests/filter-sets-integer-number-1.17.58.py`.
+
 **The browser never sees a lookup or a key.** `GET /api/tfd/filter-sets/fields/?module=<id>` returns only `id`, `label`, `kind`, the
 operators and the value source (plus static options). A date or number field also carries `constraints` (`stored_as`; or `integer`,
 `minimum`, `maximum`). The answer's `operators` key stays the six; `date_operators`, `number_operators` and `relative_units` are new.

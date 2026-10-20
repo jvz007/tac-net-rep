@@ -151,7 +151,7 @@ print("       sixteen ids: the object id is cut at 255 characters as before, obj
 
 # (9) the contract metadata names the key, and the capability is 1.12.0
 meta_cap = ops.tactical_operations_contract_metadata()
-must(meta_cap["version"] == "1.15.0", meta_cap["version"])
+must(meta_cap["version"] == "1.16.0", meta_cap["version"])
 behaviour = " ".join(meta_cap["behaviour_added_in_1_12_0"])
 must("object_count" in behaviour and "never an id" in behaviour, behaviour)
 print("       contract metadata: object_count described, capability 1.12.0")

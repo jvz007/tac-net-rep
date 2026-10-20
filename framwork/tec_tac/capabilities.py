@@ -13,13 +13,28 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import json
 import logging
-from threading import RLock
+from threading import RLock, local
 from typing import Any, Callable
 
 from .module_state import ModuleStateError, is_enabled, version_satisfies
 from .registry import RegistryError, get_plugin
 
 logger = logging.getLogger(__name__)
+
+# Capability ids whose health callback is running on this thread. A health callback may
+# call capability_status() for another capability; without this a cycle (A -> B -> A)
+# recurses until the worker is killed. The stack is per thread and always popped in a
+# finally block, so an exception never leaves a stale id behind.
+MAX_HEALTH_DEPTH = 8
+_health_local = local()
+
+
+def _health_stack() -> list[str]:
+    stack = getattr(_health_local, "stack", None)
+    if stack is None:
+        stack = []
+        _health_local.stack = stack
+    return stack
 
 
 __all__ = [
@@ -444,7 +459,20 @@ def capability_status(
             return base
 
     if check_health:
-        healthy, health_reason, health_details = _health_status(registration)
+        stack = _health_stack()
+        if capability_id in stack or len(stack) >= MAX_HEALTH_DEPTH:
+            chain = " -> ".join([*stack, capability_id])
+            base.update(
+                available=False,
+                state="health-reentrant",
+                reason=f"Capability health check re-entered: {chain}",
+            )
+            return base
+        stack.append(capability_id)
+        try:
+            healthy, health_reason, health_details = _health_status(registration)
+        finally:
+            stack.pop()
         base["health"] = health_details
         if not healthy:
             base.update(state="unhealthy", reason=health_reason or "Capability provider is unhealthy.")
@@ -469,7 +497,7 @@ def _exception_for_status(status: dict) -> CapabilityUnavailable:
         return CapabilityDisabled(capability_id, reason, status=status)
     if state == "version-incompatible":
         return CapabilityVersionMismatch(capability_id, reason, status=status)
-    if state == "unhealthy":
+    if state in ("unhealthy", "health-reentrant"):
         return CapabilityUnhealthy(capability_id, reason, status=status)
     return CapabilityUnavailable(capability_id, reason, status=status)
 

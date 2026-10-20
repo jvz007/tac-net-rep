@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import module_category
+from . import module_licensing
 from . import module_replacement
 from . import registry as registry_module
 from .capabilities import capability_status, get_capability
@@ -423,9 +424,57 @@ def check_licensing_requirement(candidate: dict) -> dict:
 
 
 def _enforce_candidate_licensing(candidate: dict) -> dict:
-    result = check_licensing_requirement(candidate)
-    candidate["licensing_status"] = result
-    return result
+    """The licence gate of module stage and install (the only place licensing can refuse anything).
+
+    Core 1.17.58 (Johan, 19 October 2026): the mode decides. ``enforce`` refuses as before. ``log-only`` (the default) runs the check, lets
+    the module through and writes one best-effort audit row. ``off`` skips the check. In ``enforce`` only, a superuser's audited
+    override (``module_licensing.override_scope``) lets one refused module through. The override skips nothing but this licence refusal:
+    trust, signature, compatibility, dependency and replacement checks run elsewhere and are not touched here. This function is called
+    only from stage and install code, never from sign-in, Tactical operations, rollback or the system-update helper."""
+    mode = module_licensing.get_licensing_enforcement_mode()
+    licensing = candidate.get("licensing") if isinstance(candidate.get("licensing"), dict) else {}
+    if mode == module_licensing.MODE_OFF and licensing.get("required"):
+        status = module_licensing.not_checked_status(candidate)
+        candidate["licensing_status"] = status
+        return status
+    try:
+        result = check_licensing_requirement(candidate)
+    except LicensingRequirementError as caught:
+        refused = caught
+    except Exception as unexpected:
+        if mode == module_licensing.MODE_ENFORCE:
+            raise
+        # Licensing must never block outside enforce: a check that fails in an unexpected way is a would-block, not an error.
+        # Only the error's class is logged: its text can carry whatever a provider chose to say.
+        logger.warning("The licence check failed unexpectedly (%s); treated as a would-block in %s mode.", unexpected.__class__.__name__, mode)
+        refused = LicensingRequirementError({
+            "required": True, "module": str(candidate.get("id") or candidate.get("plugin_id") or ""),
+            "module_version": str(candidate.get("extension_version") or candidate.get("version") or ""),
+            "state": "check-error", "licensed": False,
+        })
+    else:
+        candidate["licensing_status"] = result
+        return result
+    if mode == module_licensing.MODE_LOG_ONLY:
+        summary = module_licensing.refusal_summary(refused.result, mode)
+        summary["audited"] = True if module_licensing.already_recorded(candidate, "audited") else module_licensing.audit_would_block(summary)
+        candidate["licensing_status"] = summary
+        return summary
+    refused.result["enforcement_mode"] = mode
+    override = module_licensing.active_override() if mode == module_licensing.MODE_ENFORCE else None
+    if override is None:
+        raise refused
+    summary = module_licensing.refusal_summary(refused.result, mode)
+    summary["would_block"] = False
+    if not module_licensing.already_recorded(candidate, "overridden"):
+        try:
+            module_licensing.audit_override(override[0], override[1], summary)
+        except Exception:
+            logger.exception("Could not write the licence override audit row for %s; the refusal stands.", summary.get("module"))
+            raise refused from None  # fail closed: no row, no override
+    summary["overridden"] = True
+    candidate["licensing_status"] = summary
+    return summary
 
 
 def _ui_default_visible(extension_root: Path) -> bool:

@@ -47,9 +47,9 @@ def recorded(before):
 
 
 # ---- the capability
-must(ops.CAPABILITY_VERSION == "1.15.0", ops.CAPABILITY_VERSION)
+must(ops.CAPABILITY_VERSION == "1.16.0", ops.CAPABILITY_VERSION)
 info = ops.tactical_operations_contract_metadata()
-must(info["version"] == "1.15.0" and info["version"].split(".")[0] == "1" and info["behaviour_added_in_1_8_0"], info)
+must(info["version"] == "1.16.0" and info["version"].split(".")[0] == "1" and info["behaviour_added_in_1_8_0"], info)
 
 # ---- lists of whole numbers and of short strings are recorded with their count
 must(recorded({"ids": [1, 2, 3]}) == {"ids": [1, 2, 3], "ids_count": 3}, "ints")

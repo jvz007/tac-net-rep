@@ -39,7 +39,7 @@ def refused(call, *errors):
 
 
 # ----------------------------------------------------------------------------------- record shape and field order
-must(resources.CONTRACT_VERSION == "1.11.0", resources.CONTRACT_VERSION)
+must(resources.CONTRACT_VERSION == "1.12.0", resources.CONTRACT_VERSION)
 must(resources.CLIENT_FIELDS[-6:-3] == POLICY_KEYS and resources.SITE_FIELDS[-6:-3] == POLICY_KEYS, "appended last")
 must(resources.CLIENT_FIELDS[:6] == ("type", "id", "name", "active", "alert_template_id", "sites"), resources.CLIENT_FIELDS)
 must(resources.SITE_FIELDS[:7] == ("type", "id", "name", "client_id", "active", "alert_template_id", "client_name"), resources.SITE_FIELDS)
@@ -271,7 +271,7 @@ must(resp.status_code == 400, resp.__dict__)
 
 # ----------------------------------------------------------------------------------- the contract text and the docs
 meta = resources.resource_contract_metadata()
-must(meta["version"] == "1.11.0" and meta["version"].split(".")[0] == "1", meta["version"])
+must(meta["version"] == "1.12.0" and meta["version"].split(".")[0] == "1", meta["version"])
 must(meta["write_support"]["update_fields"] == {"client": ["name", "alert_template_id", *POLICY_KEYS], "site": ["name", "client_id", "alert_template_id", *POLICY_KEYS]}, meta["write_support"])
 must(meta["resource_types"]["client"]["fields"] == list(resources.CLIENT_FIELDS) and meta["resource_types"]["site"]["fields"] == list(resources.SITE_FIELDS), "fields")
 must("alert_template_id" in meta["resource_types"]["client"]["filters"] and "policy_id" in meta["resource_types"]["site"]["filters"], "filters")
@@ -284,8 +284,8 @@ must("policy_fields" in meta and "list_filters_1_7" in meta, "contract notes")
 contracts_text = (PKG / "contracts.py").read_text(encoding="utf-8")
 must("workstation_policy_id" in contracts_text and "framework >=1.17.24" in contracts_text and "policy_changed" in contracts_text, "python rows")
 doc = (ROOT / "docs" / "resource-directory.md").read_text(encoding="utf-8")
-must("Contract version: `1.11.0`" in doc and "Policy fields (since 1.7.0" in doc and "List filters (since 1.7.0)" in doc and "can_manage_automation_policies" in doc, "docs")
+must("Contract version: `1.12.0`" in doc and "Policy fields (since 1.7.0" in doc and "List filters (since 1.7.0)" in doc and "can_manage_automation_policies" in doc, "docs")
 registration = resources.register_core_resources_capability()
-must(registration["version"] == "1.11.0", registration["version"])
+must(registration["version"] == "1.12.0", registration["version"])
 
 print("[TEST] PASS resource policy fields 1.17.24")

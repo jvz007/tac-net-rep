@@ -49,9 +49,9 @@ def patch(kind, rid, data, user=whole_client):
     return view.patch(Req(user, data), rid)
 
 
-must(resources.CONTRACT_VERSION == "1.11.0", resources.CONTRACT_VERSION)
+must(resources.CONTRACT_VERSION == "1.12.0", resources.CONTRACT_VERSION)
 meta = resources.resource_contract_metadata()
-must(meta["version"] == "1.11.0" and meta["write_support"]["update_guards"] == [
+must(meta["version"] == "1.12.0" and meta["write_support"]["update_guards"] == [
     "expected_workstation_policy_id", "expected_server_policy_id", "expected_block_policy_inheritance"], meta["write_support"])
 must("update_guard" in meta and "record_changed" in meta["update_guard"], "the metadata describes the guard")
 
