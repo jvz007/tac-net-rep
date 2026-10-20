@@ -592,3 +592,11 @@ an event job with `tec_tac.event_jobs.register_event_job` from `AppConfig.ready(
 runs the handler on a worker, retries it, limits it and audits it. A module does not start its own thread, timer or event-started Celery task for
 this. A scheduled action's handler context is a different object (`verify_run_context`); the event job context has no user and is checked with
 `verify_event_job_context`. See `docs/event-jobs.md`.
+
+## A run that finishes later, and system actions (Core 1.17.61)
+
+Both need framework >=1.17.61. The full descriptions are in `docs/scheduler.md` and `docs/system-actions.md`.
+
+- **Pending completion.** A handler that only starts work returns `tec_tac.scheduler.pending_completion("module", job_id)` (or `"server_maintenance_job"` with the job's UUID). The run stays `running`. Your own job later calls `complete_pending_run(run_id, external_job_id=..., outcome=...)` from your own code, after the handler has returned. A run nobody completes fails with `CompletionTimeout` after the action's `timeout_seconds`. `serialize_run` gains a `completion` key. A handler that returns a dict is unchanged.
+- **System actions.** For unattended Tactical work (today a patch scan), list the id under `system_actions` in your manifest, register it from `ready()` with `register_system_action`, and call `run_system_action(context, action_id=..., agent_ids=...)` from your own handler. The schedule needs a person behind it (a user-owned schedule or a one-off run). Core re-checks the owner, the flags and the scope at every run, sends at most once and audits it.
+- Neither feature changes `register_scheduled_action`, `reconcile_schedule`, `start_one_off_run` or `get_one_off_run`.

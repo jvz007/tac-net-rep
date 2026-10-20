@@ -68,6 +68,15 @@ class TecTacFrameworkConfig(AppConfig):
         except Exception:
             logger.exception("Tec-Tac core.event_jobs capability registration failed")
 
+        # 1.17.61: core.system_actions (typed Tactical functions Core runs unattended for a named owner, AD-13). Guarded like the others:
+        # a fault here never aborts start-up, and a module that finds no capability (has_capability) registers no system action.
+        try:
+            from .system_actions import register_core_system_actions_capability
+
+            register_core_system_actions_capability()
+        except Exception:
+            logger.exception("Tec-Tac core.system_actions capability registration failed")
+
         # 1.17.50: core.filter_sets (universal filters: vocabulary, validator, evaluators, saved filter sets). Guarded like core.event_jobs:
         # a fault here never aborts start-up, and a module that finds no capability (has_capability) offers no filters.
         try:

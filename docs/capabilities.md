@@ -309,3 +309,5 @@ A provider should still not call another capability's status from its health cal
 `core.caller_identity` 1.0.0 (Core 1.17.21): the verified identity of the module whose code is calling a provider. See `docs/caller-identity.md`.
 
 `core.event_jobs` 1.1.0 (Core 1.17.45; 1.1.0 in 1.17.47 verifies the caller of every publish): event-started, time-limited system jobs a module publishes from a signal. Core stores, retries, limits and audits them. See `docs/event-jobs.md`.
+
+`core.system_actions` 1.0.0 (Core 1.17.61): typed Tactical functions that Core runs unattended for a named owner, with the owner, the Tactical flags and the role scope checked at every run, at most once, with one audit row. Two table rows today (winupdate scan and install). See `docs/system-actions.md`.

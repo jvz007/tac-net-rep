@@ -34,6 +34,9 @@ SUPPORTED_KEYS = frozenset({
     "routes", "description",
     # 1.17.17: ``server_maintenance_actions`` lets a signed module register its own Core server-maintenance actions on install.
     "server_maintenance_actions",
+    # 1.17.61: ``system_actions`` lists the ids of the system actions (core.system_actions) the module registers, so the signed manifest shows
+    # an administrator that the module can run unattended Tactical work. Extensions only, at most 20.
+    "system_actions",
 })
 # Object types core.resources can scope-check for the browser audit writer. Any other
 # lowercase slug may be declared since 1.17.0, but carries no scope check (see docs/module-audit.md).
@@ -50,6 +53,8 @@ _URLCONF_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
 _CAPABILITY_VERSION_RE = re.compile(r"^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$")
 
 # 1.17.17: manifest key ``server_maintenance_actions`` (see docs/server-maintenance-capability.md, 'Registering from a module manifest').
+SYSTEM_ACTIONS_MAX = 20
+_SYSTEM_ACTION_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 SERVER_MAINTENANCE_ACTIONS_MAX = 16
 SERVER_MAINTENANCE_EXECUTABLE_PREFIX = "server_maintenance/actions/"
 SERVER_MAINTENANCE_REGISTER_PERMISSION = "server_maintenance.register"
@@ -89,6 +94,8 @@ class PluginSpec:
     # 1.17.17: the validated ``server_maintenance_actions`` entries (plain dicts, see ``_server_maintenance_actions``). Left out of
     # equality and hashing so a spec stays comparable and hashable.
     server_maintenance_actions: tuple = field(default=(), compare=False, repr=False)
+    # 1.17.61: the validated ``system_actions`` ids (empty when the key is absent). Left out of equality like the field above.
+    system_actions: tuple = field(default=(), compare=False, repr=False)
 
     def capability_map(self) -> dict[str, str]:
         return dict(self.capabilities)
@@ -320,6 +327,31 @@ def _server_maintenance_actions(payload: dict, plugin_type: str, plugin_id: str,
     return tuple(entries)
 
 
+def _system_actions(payload: dict, plugin_type: str, plugin_id: str) -> tuple[str, ...]:
+    """Parse the optional ``system_actions`` key (1.17.61): a list of at most 20 distinct ids, each ``<plugin id>.<name>``. Extensions only.
+
+    Only the shape is checked here. Whether the module may register an action, and whether Core's table has the function, is decided by
+    ``tec_tac.system_actions.register_system_action`` at ``AppConfig.ready()``."""
+    if "system_actions" not in payload:
+        return ()
+    if plugin_type != "extension":
+        raise RegistryError(f"Reportset {plugin_id!r} may not declare system_actions; they belong to the extension.")
+    raw = payload["system_actions"]
+    if not isinstance(raw, list):
+        raise RegistryError("Manifest key 'system_actions' must be a JSON list of action ids such as patching.scan.")
+    if len(raw) > SYSTEM_ACTIONS_MAX:
+        raise RegistryError(f"Manifest system_actions may not contain more than {SYSTEM_ACTIONS_MAX} entries.")
+    prefix = plugin_id + "."
+    seen: list[str] = []
+    for item in raw:
+        if not isinstance(item, str) or not item.startswith(prefix) or not _SYSTEM_ACTION_NAME_RE.fullmatch(item[len(prefix):]):
+            raise RegistryError(f"Manifest system_actions entry {item!r} must be '{prefix}<name>' in lowercase letters, digits, - and _.")
+        if item in seen:
+            raise RegistryError(f"Manifest system_actions repeats {item!r}.")
+        seen.append(item)
+    return tuple(seen)
+
+
 def _replacement_keys(payload: dict, plugin_type: str, plugin_id: str, category: str) -> tuple[str, tuple[tuple[str, str], ...], bool]:
     """Parse the optional AD-20 keys ``replaces`` and ``capabilities`` (extensions only).
 
@@ -521,7 +553,8 @@ def _load_manifest(plugin_type: str, plugin_dir: Path) -> PluginSpec | None:
     route_prefix, route_urlconf = _route_keys(payload, plugin_type, plugin_id, django_apps)
     description = _description(payload, plugin_id)
     server_maintenance_actions = _server_maintenance_actions(payload, plugin_type, plugin_id, plugin_dir, permission_groups, publisher_permissions)
-    return PluginSpec(plugin_id=plugin_id, plugin_type=plugin_type, root=plugin_root, version=version, python_paths=tuple(python_paths), django_apps=django_apps, permission_groups=permission_groups, publisher_permissions=publisher_permissions, name=name, category=category, audit_events=audit_events, replaces=replaces, capabilities=capabilities, capabilities_declared=capabilities_declared, route_prefix=route_prefix, route_urlconf=route_urlconf, description=description, server_maintenance_actions=server_maintenance_actions)
+    system_actions = _system_actions(payload, plugin_type, plugin_id)
+    return PluginSpec(plugin_id=plugin_id, plugin_type=plugin_type, root=plugin_root, version=version, python_paths=tuple(python_paths), django_apps=django_apps, permission_groups=permission_groups, publisher_permissions=publisher_permissions, name=name, category=category, audit_events=audit_events, replaces=replaces, capabilities=capabilities, capabilities_declared=capabilities_declared, route_prefix=route_prefix, route_urlconf=route_urlconf, description=description, server_maintenance_actions=server_maintenance_actions, system_actions=system_actions)
 
 def _discover_root(plugin_type: str, root: Path) -> list[PluginSpec]:
     if not root.exists():

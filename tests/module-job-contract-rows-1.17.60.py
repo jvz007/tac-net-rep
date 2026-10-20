@@ -31,7 +31,7 @@ def read(*parts):
 version = read("VERSION").strip()
 package = json.loads(read("tec_tac_package.json"))["version"]
 base = re.sub(r"-\d+$", "", version)
-must(base == re.sub(r"-\d+$", "", package) == "1.17.60", f"VERSION {version} and package {package} must be 1.17.60")
+must(base == re.sub(r"-\d+$", "", package) and base in ("1.17.60", "1.17.61"), f"VERSION {version} and package {package} must be 1.17.60 or 1.17.61")  # 1.17.61 follows
 must(not (ROOT / "RELEASE_NOTES_1.17.59.md").exists() and (ROOT / "docs" / "releases" / "RELEASE_NOTES_1.17.59.md").is_file(), "1.17.59 notes moved to docs/releases")
 
 # ---- the routes in urls.py
@@ -65,7 +65,7 @@ must("180" in docs and "MODULE_JOB_RETENTION_DAYS" in docs and "sweep_orphan_log
 must("docs/module-job-logs.md" in read("docs", "module-replacement.md"), "module-replacement.md points to the new doc")
 
 # ---- release notes
-notes = read(f"RELEASE_NOTES_{version}.md")
+notes = read("RELEASE_NOTES_1.17.60.md") if version == "1.17.60" else read("docs", "releases", "RELEASE_NOTES_1.17.60.md")  # moved to docs/releases by 1.17.61
 must("MODULE_JOB_RETENTION_DAYS" in notes and "## Module-facing" in notes, "notes name the constant and carry the module-facing heading")
 must(len(re.findall(r"^\d\. \*\*", notes, flags=re.M)) == 8 and notes.count("PASS:") >= 8 and notes.count("FAIL:") >= 8, "eight checklist steps, each with PASS and FAIL")
 must("From Core 1.17.60: Module Manager History tab and full logs" in notes and "CQ170" in notes and "CQ171" in notes, "notes name the UI request and the two questions")

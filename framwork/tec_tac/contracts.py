@@ -883,6 +883,119 @@ CORE_CONTRACTS = (
         "audience": "provider/backend",
     },
     {
+        "area": "scheduler",
+        "import_path": "tec_tac.scheduler",
+        "name": "PendingCompletion",
+        "kind": "python",
+        "purpose": (
+            "PendingCompletion(kind, external_job_id, note=None) (1.17.61, R-21): what a Scheduler handler returns for 'started, finished later'. A frozen Core class, not a dict with magic keys, so no existing handler "
+            "can park a run by accident; only an exact PendingCompletion counts (a subclass, or a dict with the same keys, is an ordinary result). kind is 'module' (the module completes the run with complete_pending_run) or "
+            "'server_maintenance_job' (Core settles the run when the job file is terminal; external_job_id is the job's lowercase UUID). external_job_id is 1 to 128 characters of letters, digits and . _ : -. note is optional "
+            "printable text up to 200 characters. A bad value raises SchedulerError when the object is built. Core keeps the run 'running' (the status values do not change, so the concurrency skip, once-cleanup and "
+            "remove_owned_schedule keep protecting it), stores completion_state 'pending' and the reference, does not set schedule.last_run_at and never retries it. A run that waits longer than its action's timeout_seconds "
+            "(7 days at most) fails with error type CompletionTimeout. For kind server_maintenance_job Core reads the job when the handler returns and fails the run with PendingRefused unless the job exists and its "
+            "context names this module (source_module) and this run (source_run_id); the binding stops mistakes and an honest module, not hostile signed code. Requires framework >=1.17.61."
+        ),
+        "audience": "provider/backend",
+    },
+    {
+        "area": "scheduler",
+        "import_path": "tec_tac.scheduler",
+        "name": "pending_completion",
+        "kind": "python",
+        "purpose": "pending_completion(kind, external_job_id, note=None) -> PendingCompletion (1.17.61, R-21): the way a handler builds the value above. Raises SchedulerError for a kind, id or note that is not valid. Requires framework >=1.17.61.",
+        "audience": "provider/backend",
+    },
+    {
+        "area": "scheduler",
+        "import_path": "tec_tac.scheduler",
+        "name": "complete_pending_run",
+        "kind": "python",
+        "purpose": (
+            "complete_pending_run(run_id, *, external_job_id, outcome, result=None, error=None, warnings=None) -> {run_id, status, duplicate} (1.17.61, R-21): the only way a module finishes a run whose handler returned a "
+            "PendingCompletion of kind 'module'. outcome is succeeded, failed, cancelled or timed_out (anything else raises SchedulerError). Every rule fails closed. (1) Core verifies the caller from the call stack "
+            "(the verified calling-module identity of core.caller_identity, AD-26): it must be the enabled module that owns the run's action, called from that module's own code; Core, library, generated, disabled and legacy frames are refused. The function "
+            "is a plain re-export with no wrapper frame, so do not wrap it in a decorator or call it through a library. (2) Under a row lock the run must still be running with completion_state 'pending' and external_job_id must "
+            "equal the one the handler returned; call it after the handler has returned (an earlier call is refused as not_pending). (3) The same completion twice is an idempotent no-op (no second audit row, finished_at "
+            "unchanged); a different second outcome (conflict), a completion after stale recovery (late), a wrong job id (wrong_job) and a completion by the wrong module (wrong_module, caller_unverified) are refused with "
+            "SchedulerCompletionRefused (a SchedulerError with .reason and a plain message) and at most one best-effort audit row custom:scheduler-completion-refused (reason code only, throttled to one per run and reason "
+            "per five minutes). (4) succeeded ends the run succeeded; failed, cancelled and timed_out end it failed with error type ExternalFailed, ExternalCancelled or ExternalTimedOut. A job created, or an "
+            "acknowledgement, is never success. (5) result is JSON up to 16 KiB (a non-object value is wrapped as {'value': ...}); error is printable text up to 500 characters; warnings (succeeded only) are up to 10 "
+            "printable texts of up to 200 characters, kept in result['warnings']. A bad payload raises SchedulerError and changes nothing. A completion writes one best-effort audit row custom:scheduler-completion (no result "
+            "text). Requires framework >=1.17.61."
+        ),
+        "audience": "provider/backend",
+    },
+    {
+        "area": "scheduler",
+        "import_path": "tec_tac.scheduler",
+        "name": "SchedulerCompletionRefused",
+        "kind": "python",
+        "purpose": "SchedulerCompletionRefused (1.17.61): raised by complete_pending_run when it refuses a completion. A subclass of SchedulerError with .reason (caller_unverified, wrong_module, action_unavailable, unknown_run, not_pending, wrong_job, conflict, late) and a plain message that names no ids.",
+        "audience": "provider/backend",
+    },
+    {
+        "area": "scheduler",
+        "import_path": "tec_tac.scheduler",
+        "name": "serialize_run",
+        "kind": "python",
+        "purpose": (
+            "serialize_run(run) -> dict (1.17.61, additive): gains the key 'completion': null for a run that never returned a PendingCompletion, otherwise {state, kind, since} where state is 'pending' (the run is waiting for its "
+            "result; status is still 'running'), 'completed' or 'expired' (failed with CompletionTimeout), kind is 'module' or 'server_maintenance_job' and since is the ISO time the wait began. Every earlier key and every "
+            "status value is unchanged, so a module that reads only the keys it read before is unaffected. New run error types: CompletionTimeout, ExternalFailed, ExternalCancelled, ExternalTimedOut, PendingRefused and "
+            "SystemActionRefused (plus OutcomeUnknown from a system action). The built-in diagnostic action tec-tac.scheduler-test-pending (managers only, harmless, timeout 120 s) parks a run that no module can complete, "
+            "so the run stays Running with a waiting label and then fails with CompletionTimeout; it is listed with the other scheduler actions in this export. Requires framework >=1.17.61."
+        ),
+        "audience": "provider/backend",
+    },
+    {
+        "area": "system-actions",
+        "import_path": "tec_tac.system_actions",
+        "name": "register_system_action",
+        "kind": "python",
+        "purpose": (
+            "register_system_action(id, module_id, label, function, permissions, scope_kind='agents', dangerous=False, username_param=None) -> SystemActionDefinition | None (1.17.61, R-20, AD-13, capability "
+            "core.system_actions 1.0.0): declare a typed Tactical function that Core may run unattended for a named owner. Call it from AppConfig.ready(); it touches memory only. Deny by default. (1) function is a key of "
+            "Core's fixed table SYSTEM_FUNCTIONS (today winupdate.scan and winupdate.install), never a dotted path: a module cannot name its own callable. (2) Only the module the table names (patching) or the premium module "
+            "that is its honoured replacement right now (AD-20) may register it; the owner must be a core module. A replacement that is not honoured is logged and nothing is registered (returns None, no exception). (3) "
+            "permissions must contain every minimum flag of the table row (for scan and install: can_manage_winupdates and can_run_bulk, stricter than either Tactical route alone); a module may add flags, never remove one. "
+            "(4) id is '<module_id>.<name>' and must be listed in the module's signed manifest key system_actions (a list of at most 20 ids; requires.framework >=1.17.61, an older Core refuses the unknown manifest "
+            "key). (5) Identical re-registration is idempotent; a different definition under the same id is refused. winupdate.install is refused for a replacement while R-36 is open (Tactical's bulk install task "
+            "re-approves updates by patch policy). username_param is allowed only for a function that takes a username (none of the first two rows does). A refusal raises SystemActionRegistrationError (a ValueError): "
+            "wrap the call, log and go on. Requires framework >=1.17.61. See docs/system-actions.md."
+        ),
+        "audience": "provider/backend",
+    },
+    {
+        "area": "system-actions",
+        "import_path": "tec_tac.system_actions",
+        "name": "run_system_action",
+        "kind": "python",
+        "purpose": (
+            "run_system_action(context, *, action_id, agent_ids, parameters=None) -> {outcome: 'queued', agents, message} (1.17.61, R-20, AD-13): call it from the module's own Scheduler handler with the context object the "
+            "handler received. The work is queued in Tactical, not done: the message says 'Queued in Tactical; the result shows in each endpoint's update list.' At every run Core checks, in order: the context is the object "
+            "Core issued and a person is behind the run (a user-owned schedule or a one-off run; a module-owned run has no owner and is refused); the verified caller is the run's module and the action's module; the action is "
+            "registered, its module is enabled right now and a replacement is honoured right now; the owner is re-read from the database (active, not an installer user) and holds every Tactical flag now; the count is 1 "
+            "to 2000 (refused above, never truncated); every endpoint number exists and lies inside the owner's Tactical role scope (one endpoint outside refuses the whole call, nothing is narrowed, and a scheduler manager "
+            "gets no bypass); the Tactical function can be imported (else function_unavailable, so a Tactical upgrade can never make Core call something else). A refusal ends the run skipped with error type "
+            "SystemActionRefused (not for caller_unverified and wrong_module, which fail the caller's own handler instead), writes one deny audit row (reason code, the owner as actor, requested_by scheduler, no ids) and "
+            "raises SystemActionRefused (a SchedulerPermanentError, never retried) with .reason. Then Core commits an at-most-once mark on the run, writes one STRICT audit row (action run, object system_action, actor the owner, "
+            "metadata requested_by scheduler, run_id, schedule_id, owner_module, function, agent_count, targets_digest; no endpoint ids or hostnames) and only then calls Tactical's own Celery task with .delay, the way "
+            "Tactical's bulk view does. No HTTP, no API key, no service account, no model write. If the audit row cannot be written nothing is sent. A retry or duplicate delivery that finds a sent mark sends nothing "
+            "again and returns the same result with duplicate true; a mark stuck at 'claiming', or a send that raised, fails the run with error type OutcomeUnknown and is never sent again (at most once: a missed scan is "
+            "possible, a double install is not). Tactical's own tasks for the first two rows take no username, so only Core's audit row names the owner. Requires framework >=1.17.61."
+        ),
+        "audience": "provider/backend",
+    },
+    {
+        "area": "system-actions",
+        "import_path": "tec_tac.system_actions",
+        "name": "SystemActionRefused",
+        "kind": "python",
+        "purpose": "SystemActionRefused (1.17.61): raised by run_system_action for a refusal. A SchedulerPermanentError with .reason (context_invalid, owner_refused, no_owner, caller_unverified, wrong_module, unknown_action, module_disabled, replacement_not_honoured, function_unavailable, owner_inactive, permission_lost, bad_parameters, bad_agents, agent_count, out_of_scope, reapproves_by_policy, mark_limit) and a plain message that names no agent. SystemActionRegistrationError (a ValueError) is raised by register_system_action.",
+        "audience": "provider/backend",
+    },
+    {
         "area": "server-maintenance",
         "import_path": "tec_tac.server_maintenance",
         "name": "get_server_maintenance_provider",
@@ -2362,6 +2475,7 @@ BROWSER_CONTRACTS = (
 )
 
 RULES = (
+    "System actions (core.system_actions 1.0.0, Core 1.17.61, AD-13): a module that needs Core to run typed Tactical work unattended for a named owner (a scheduled patch scan) lists the action ids in its manifest key `system_actions` (a JSON list of '<module id>.<name>', at most 20, extensions only) and registers each with tec_tac.system_actions.register_system_action from AppConfig.ready(). A manifest with the key needs requires.framework >=1.17.61: an older Core refuses an unknown manifest key. The function table is Core's: today winupdate.scan and winupdate.install, both Windows Patching's (patching, or the premium module that honourably replaces it; install is not allowed for a replacement while R-36 is open). There is no HTTP route for it and no global off switch: disable the owning module or its schedule to stop a run.",
     "A permissionless extension that needs a browser audit trail declares audit_events in tec_tac.json: [{\"object_type\": \"agent\", \"actions\": [\"view\", \"run\"]}]. object_type is a lowercase slug; each action is a standard Tec-Tac audit action or custom:<slug>. For client, site and agent Core checks the signed-in user's scope; other types have no scope check. Core sets the actor and marks the row browser_provenance. A module that declares audit_events must require framework >=1.16.0, and >=1.17.0 when it declares an object type other than client, site or agent.",
     "The UI, not modules, applies the module register() time limit. A module does not read or enforce module_register_timeout_seconds, and its register() must not assume more than the configured time. Core only stores and publishes the value (GET /api/tfd/ui/context/).",
     "Saved views belong to the Core saved views service (tec_tac.saved_views, /api/tfd/saved-views/). Modules must not keep saved views in browser storage, cookies or their own tables. A payload holds filters and layout only, never data, secrets or tokens. A module that uses the service must require framework >=1.17.0.",

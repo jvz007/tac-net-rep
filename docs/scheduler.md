@@ -399,3 +399,62 @@ A job a module starts because of an event (a Tactical alert was saved) is not a 
 same tick keeps healthy: `dispatch_due_schedules` calls `recover_event_jobs` after `recover_stale_runs`, in its own `try` block, so a fault there
 never stops a schedule. `scheduler_health()` gains an additive `event_jobs` block, and `GET /api/tfd/scheduler/event-jobs/` lists the jobs for
 people with server-maintenance authority. See `docs/event-jobs.md`.
+
+## A run that finishes later: pending completion (Core 1.17.61)
+
+A handler that only *starts* something (a server-maintenance job, work in its own job) used to have to wait inside the handler or report success too early. Now it can return a `PendingCompletion`. Core keeps the run `running` until the real result arrives. Nothing changes for a handler that returns a dict or nothing.
+
+```python
+from tec_tac.scheduler import pending_completion
+
+def renew_handler(context):
+    job_id = start_my_job(context)            # your own job, or a core.server_maintenance job
+    return pending_completion("module", job_id, note="Waiting for the renewal job.")
+```
+
+- `pending_completion(kind, external_job_id, note=None)` returns a frozen `PendingCompletion`. It is a Core class, not a dict with magic keys, so no existing handler can park a run by accident. A dict with the same keys is an ordinary result. A bad value raises `SchedulerError` when you build it.
+- `kind` is `module` (your code completes the run) or `server_maintenance_job` (Core settles the run from the job file). `external_job_id` is 1 to 128 characters of letters, digits and `. _ : -`. For a server job it is the job's lowercase UUID. `note` is optional printable text of 200 characters at most.
+- The run stays `running`. The `status` values do not change, so the concurrency skip, once-cleanup and `remove_owned_schedule` keep protecting it. `schedule.last_run_at` is not set and the run is never retried.
+- `serialize_run` gains one additive key, `completion`: `null` for a run that never parked, otherwise `{state, kind, since}`. `state` is `pending`, `completed` or `expired`. The Scheduler page can show a pending run as "Waiting for the result".
+- A run that waits longer than its action's `timeout_seconds` (7 days at most) fails with error type `CompletionTimeout`. `recover_stale_runs` does this under its normal lock-and-recheck. A completion that arrives later is refused.
+
+### Completing a run (kind `module`)
+
+```python
+from tec_tac.scheduler import complete_pending_run
+
+complete_pending_run(run_id, external_job_id=job_id, outcome="succeeded", result={"renewed": 4})
+```
+
+`outcome` is `succeeded`, `failed`, `cancelled` or `timed_out`. `failed`, `cancelled` and `timed_out` end the run `failed` with error type `ExternalFailed`, `ExternalCancelled` or `ExternalTimedOut`. A job created, or an acknowledgement, is never success.
+
+Every rule fails closed:
+
+1. **The caller is verified from the call stack** (`docs/caller-identity.md`). It must be the enabled module that owns the run's action, called from that module's own code. Core, library, generated, disabled and legacy frames are refused. `complete_pending_run` is a plain re-export, with no wrapper frame, so do not wrap it in a decorator or call it through a library.
+2. **Under a row lock** the run must still be `running` with completion state `pending`, and `external_job_id` must equal the one the handler returned. Call it after the handler has returned. A call before that finds no pending run and is refused as `not_pending`: try again shortly.
+3. **Duplicates and conflicts.** The same completion twice is an idempotent no-op: no second audit row, `finished_at` unchanged. A different second outcome (`conflict`), a completion after stale recovery (`late`), a wrong job id (`wrong_job`) and a completion by the wrong module (`wrong_module`, `caller_unverified`) raise `SchedulerCompletionRefused` (a `SchedulerError` with `.reason`). Each writes at most one best-effort audit row, `custom:scheduler-completion-refused`, with the reason code only. Rows are limited to one per run and reason per five minutes.
+4. **The payload.** `result` is JSON up to 16 KiB (a value that is not an object is wrapped as `{"value": ...}`). `error` is printable text up to 500 characters. `warnings` (for `succeeded` only) are up to 10 printable texts of 200 characters, kept in `result["warnings"]`. A bad payload raises `SchedulerError` and changes nothing.
+
+A completion writes one best-effort audit row, `custom:scheduler-completion`. It carries the outcome and the calling module, never the result text.
+
+### Waiting for a server-maintenance job (kind `server_maintenance_job`)
+
+Start the job with `source_module` and `source_run_id` (the handler context's `run_id`) in the operation context, then return `pending_completion("server_maintenance_job", job["id"])`.
+
+- When the handler returns, Core reads the job file. It fails the run with `PendingRefused` unless the job exists and its context names this module and this run.
+- The scheduler tick then runs one guarded step, `settle_server_job_runs()`. It looks at 50 runs a tick at most, runs no module code and never raises. When the job is terminal it settles the run once, under the same row lock: `succeeded` ends the run `succeeded`; `failed` and `dispatch_failed` end it `failed` (`ExternalFailed`); `cancelled` ends it `failed` (`ExternalCancelled`). A job record that stays missing for more than 10 minutes fails the run.
+- The run result carries the job id, the status, the exit code and the failure classification. Never output text and never parameters.
+- Honest limit: the job context is caller-asserted. The binding stops mistakes and an honest module, not hostile signed code. This is the same limit as `docs/caller-identity.md`.
+
+### What this release does not do
+
+- Core does not run a module's handler when a server job finishes (the job-finished hook, R-22 part 2). A module whose tab is closed still needs it. It is planned for 1.17.62.
+- The tick does not poll a module for a final state. Completion is pushed by the module, or read from a server job file (CQ177).
+
+### Diagnostic action
+
+`tec-tac.scheduler-test-pending` (managers only, harmless, timeout 120 seconds) parks a run that no module can complete. The run stays Running, then fails with `CompletionTimeout`. Use it on the dev server.
+
+## System actions (Core 1.17.61)
+
+A module can ask Core to run a fixed piece of Tactical work for a named owner when nobody is signed in, such as a scheduled patch scan. See `docs/system-actions.md`.

@@ -240,6 +240,13 @@ class TecTacScheduleRun(models.Model):
     last_queued_at = models.DateTimeField(null=True, blank=True, db_index=True)
     started_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)
+    # 1.17.61 (additive, blank by default): a handler may return "pending, finished later" (scheduler_completion.PendingCompletion). The run
+    # then stays RUNNING with completion_state "pending" and completion_ref {kind, external_job_id, note}; "completed" and "expired" follow.
+    completion_state = models.CharField(max_length=16, blank=True, default="")
+    completion_ref = models.JSONField(default=dict, blank=True)
+    completion_started_at = models.DateTimeField(null=True, blank=True)
+    # 1.17.61: the at-most-once marks of system actions (system_actions.py): [{action_id, targets_digest, state, task_id}].
+    system_action_marks = models.JSONField(default=list, blank=True)
 
     class Meta:
         ordering = ("-created_at",)

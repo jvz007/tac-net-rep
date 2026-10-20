@@ -8,6 +8,7 @@ from django.utils import timezone
 from tacticalrmm.celery import app
 
 from .models import TecTacScheduleRun
+from .scheduler_completion import PendingCompletion, park_pending_run
 from .scheduler_run_context import issue_run_context
 from .capabilities import capability_status, CapabilityDisabled, CapabilityUnavailable, CapabilityVersionMismatch, CapabilityUnhealthy
 from .scheduler import (
@@ -149,6 +150,10 @@ def execute_schedule_run(self, run_id: str):
             **_handler_owner(run, schedule),
         }, run_id=run.id)
         result = action.handler(context)
+        if type(result) is PendingCompletion:
+            # 1.17.61: "started, finished later". Core keeps the run RUNNING (never SUCCEEDED), does not touch last_run_at and does not
+            # retry. complete_pending_run, or the tick for a server-maintenance job, ends it. Anything else returned is as before.
+            return park_pending_run(run, result, module_id=module_id)
         with transaction.atomic():
             current = TecTacScheduleRun.objects.select_for_update().get(pk=run.pk)
             if current.status != TecTacScheduleRun.Status.RUNNING:

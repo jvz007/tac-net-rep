@@ -19,6 +19,9 @@ from .models import TecTacSchedule, TecTacScheduleRun, TecTacSchedulerConfig, Te
 from .scheduler_run_context import (  # noqa: F401  (1.17.19: public re-exports of the run-context contract)
     SchedulerRunContext, VerifiedSchedulerRun, is_core_issued_run_context, verify_run_context,
 )
+from .scheduler_completion import (  # noqa: F401  (1.17.61: public re-exports; complete_pending_run is a plain alias so caller identity works)
+    PendingCompletion, complete_pending_run, pending_completion,
+)
 from .scheduler_timing import queued_stale_deadline
 from .scheduler_targets import SchedulerTargetShapeError, normalize_scheduler_targets
 
@@ -41,6 +44,15 @@ class SchedulerRunContextInvalid(SchedulerError):
 
 class SchedulerNotAllowed(SchedulerError):
     """1.17.16: the user a module started a one-off run for may not run that action or touch those targets."""
+
+
+class SchedulerCompletionRefused(SchedulerError):
+    """1.17.61: ``complete_pending_run`` refused the completion. ``reason`` is a short code (caller_unverified, wrong_module, not_pending,
+    wrong_job, conflict, late, unknown_run, action_unavailable); the message is plain text and names no ids."""
+
+    def __init__(self, message, *, reason="refused"):
+        super().__init__(message)
+        self.reason = reason
 
 
 logger = logging.getLogger("tec_tac.scheduler")
@@ -220,6 +232,23 @@ register_scheduled_action(
     description="Framework diagnostic action that fails once, then succeeds when retry_count is at least 1.",
     target_types=("none",),
     handler=_test_retry_handler,
+)
+
+
+def _test_pending_handler(context):
+    # 1.17.61: parks the run as "pending, finished later". No module can complete it (Core is never a caller), so the run stays Running
+    # with a waiting label and recover_stale_runs fails it with CompletionTimeout after the action timeout. For the dev-server check.
+    return pending_completion("module", f"scheduler-test:{context.get('run_id')}", note="Diagnostic run: it waits until the action timeout.")
+
+
+register_scheduled_action(
+    id="tec-tac.scheduler-test-pending",
+    module_id="tec-tac",
+    label="Scheduler pending-completion test",
+    description="Framework diagnostic action that waits for a result nobody sends. The run stays Running and fails with CompletionTimeout after the action timeout. Harmless.",
+    target_types=("none",),
+    handler=_test_pending_handler,
+    timeout_seconds=120,
 )
 
 
@@ -574,7 +603,8 @@ def recover_stale_runs(now: datetime | None = None) -> dict[str, int]:
             if run.status != TecTacScheduleRun.Status.RUNNING:
                 continue
             task_id = str(run.celery_task_id or "").strip()
-            if task_id:
+            waiting = str(getattr(run, "completion_state", "") or "") == "pending"
+            if task_id and not waiting:  # a pending run's worker task has already returned: there is nothing to revoke
                 try:
                     from tacticalrmm.celery import app as celery_app
                     celery_app.control.revoke(task_id, terminate=True, signal="SIGTERM")
@@ -585,10 +615,18 @@ def recover_stale_runs(now: datetime | None = None) -> dict[str, int]:
                     # schedules to overlap the abandoned execution.
                     continue
             run.status = TecTacScheduleRun.Status.FAILED
-            run.error_type = "Stale"
-            run.error = f"Stale running run exceeded action timeout of {timeout_seconds} seconds."
-            run.finished_at = now
-            run.save(update_fields=["status", "error_type", "error", "finished_at"])
+            if waiting:
+                # 1.17.61: a run that waited for a result longer than its action timeout. The late completion is then refused.
+                run.error_type = "CompletionTimeout"
+                run.error = f"No result arrived within the action timeout of {timeout_seconds} seconds."
+                run.completion_state = "expired"
+                run.finished_at = now
+                run.save(update_fields=["status", "error_type", "error", "completion_state", "finished_at"])
+            else:
+                run.error_type = "Stale"
+                run.error = f"Stale running run exceeded action timeout of {timeout_seconds} seconds."
+                run.finished_at = now
+                run.save(update_fields=["status", "error_type", "error", "finished_at"])
             recovered_running += 1
     return {"queued": recovered_queued, "running": recovered_running}
 
@@ -1282,7 +1320,17 @@ def serialize_run(run: TecTacScheduleRun) -> dict:
         "created_at": run.created_at.isoformat(),
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        "completion": _serialize_completion(run),  # 1.17.61, additive: null unless the run was parked as pending
     }
+
+
+def _serialize_completion(run: TecTacScheduleRun) -> dict | None:
+    state = str(getattr(run, "completion_state", "") or "")
+    if not state:
+        return None
+    ref = getattr(run, "completion_ref", None)
+    since = getattr(run, "completion_started_at", None)
+    return {"state": state, "kind": (ref.get("kind") if isinstance(ref, dict) else None), "since": since.isoformat() if since else None}
 
 
 def serialize_schedule(schedule: TecTacSchedule, *, include_runs: bool = False) -> dict:

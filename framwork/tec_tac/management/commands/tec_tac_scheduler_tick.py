@@ -94,6 +94,16 @@ class Command(BaseCommand):
         except Exception:
             logging.getLogger("tec_tac.module_job_logs").warning("The module job retention step failed; the next tick retries.", exc_info=True)
 
+        try:
+            # 1.17.61 (R-22): a Scheduler run that awaits a server-maintenance job is settled when the job is terminal. The step never
+            # raises, runs no module code and looks at 50 runs at most. It logs rather than writing to the output, so the tick's own
+            # line stays the same.
+            from tec_tac.scheduler_completion import settle_server_job_runs
+
+            settle_server_job_runs()
+        except Exception:
+            logging.getLogger("tec_tac.scheduler_completion").warning("The server job settle step failed; the next tick retries.", exc_info=True)
+
         sweep_state = "error" if sweep_error else "ran"
         cleanup_state = "error" if cleanup_error else ("ran" if cleanup and cleanup.get("ran") else "not_due")
         self.stdout.write(

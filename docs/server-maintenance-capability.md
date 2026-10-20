@@ -200,3 +200,11 @@ The helper also appends durable JSONL audit events to `/var/lib/tec-tac/server-m
 ## Scope
 
 This capability is generic Core infrastructure. It contains no Tactical update logic and does not prescribe what registered maintenance actions do.
+
+## Letting a Scheduler run wait for a job (since 1.17.61)
+
+A module's Scheduler handler that starts a server-maintenance job can return `pending_completion("server_maintenance_job", job["id"])` instead of waiting. Put `source_module` (your module id) and `source_run_id` (the handler context's `run_id`) in the operation context you pass to `start()`.
+
+Core reads the job when the handler returns and fails the run (`PendingRefused`) unless the job exists and its context names your module and that run. The scheduler tick settles the run when the job is terminal, and it reads only the job's status, exit code and failure classification. It never copies output text or parameters into the run. `start()`, `cancel()` and the job file are unchanged. The step reads `_read_job` and `TERMINAL_STATES` and writes nothing here.
+
+The binding is caller-asserted, so it stops mistakes and an honest module, not hostile signed code. See `docs/scheduler.md`.

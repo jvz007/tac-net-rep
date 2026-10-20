@@ -270,6 +270,7 @@ for name, (migration_file, index_names, constraint_names) in NEW_TABLES.items():
 # 1.17.45: the one migration 0032 is the event jobs one (core.event_jobs). The id fix of 1.17.36 itself added none.
 must(sorted(p.name for p in MIGRATIONS.glob("0032_*.py")) == ["0032_event_jobs.py"], "the only migration 0032 is 0032_event_jobs (1.17.45)")
 must(sorted(p.name for p in MIGRATIONS.glob("0033_*.py")) == ["0033_runtime_licensing_mode.py"], "the only migration 0033 is the licensing mode column (1.17.58)")
-must(not list(MIGRATIONS.glob("0034_*.py")), "no migration 0034 yet")
+must(sorted(p.name for p in MIGRATIONS.glob("0034_*.py")) == ["0034_scheduler_run_completion.py"], "the only migration 0034 is the scheduler run completion columns (1.17.61)")
+must(not list(MIGRATIONS.glob("0035_*.py")), "no migration 0035 yet")
 
 print("[TEST] PASS migration and model id agreement 1.17.36")

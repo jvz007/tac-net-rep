@@ -249,7 +249,7 @@ print("PASS audit failure keeps the removal; the hourly gate; a cache error runs
 tick_path = ROOT / "framwork" / "tec_tac" / "management" / "commands" / "tec_tac_scheduler_tick.py"
 tick = tick_path.read_text(encoding="utf-8")
 start = tick.index("        try:\n            # 1.17.60")
-end = tick.index("        sweep_state = ")
+end = tick.index("        try:\n            # 1.17.61")  # 1.17.61 added its own guarded step after this one
 block = textwrap.dedent(tick[start:end])
 tree = ast.parse(block)
 must(len(tree.body) == 1 and isinstance(tree.body[0], ast.Try) and any(h.type is not None and getattr(h.type, "id", "") == "Exception" for h in tree.body[0].handlers),
