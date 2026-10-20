@@ -34,6 +34,7 @@ MAX_OUTPUT_BYTES = 65536
 # 1.17.17: an action manifest may carry a Tec-Tac permission code and the module that owns the action (both optional)
 PERMISSION_CODE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,149}$")
 OWNER_MODULE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$")
+MODULE_REMOVED_REASON = "module removed"  # what the root helper writes on a hand registration whose module was uninstalled (1.17.62, R-23)
 
 logger = logging.getLogger("tec_tac.server_maintenance")
 
@@ -141,7 +142,12 @@ def _read_action(action_id: str) -> dict:
     if str(action.get("id") or "") != action_id:
         raise ServerMaintenanceError(f"Registered action file {path.name} contains the wrong id.", classification="action_invalid")
     if action.get("enabled", True) is not True:
-        raise ServerMaintenanceValidationError(f"Registered action {action_id!r} is disabled.", classification="action_disabled")
+        # 1.17.62 (R-23): the root helper disables an administrator's hand registration when its module is uninstalled and says why
+        removed = action.get("disabled_reason") == MODULE_REMOVED_REASON
+        raise ServerMaintenanceValidationError(
+            f"Registered action {action_id!r} is disabled" + (": its module was removed. An administrator has to register it again." if removed else "."),
+            classification="action_disabled",
+        )
     return action
 
 
@@ -522,6 +528,8 @@ class ServerMaintenanceProvider:
                 "description": str(action.get("description") or ""),
                 "revision": str(action.get("revision") or "1"),
                 "enabled": action.get("enabled", True) is True,
+                # 1.17.62 (additive): "module removed" when the root helper disabled the registration because its module was uninstalled, else null
+                "disabled_reason": MODULE_REMOVED_REASON if action.get("disabled_reason") == MODULE_REMOVED_REASON else None,
                 "timeout_seconds": int(action.get("timeout_seconds") or 3600),
                 # 1.17.17 (additive): the Tec-Tac permission the action needs, and the module that owns it. Null when none.
                 "permission": action.get("permission") if isinstance(action.get("permission"), str) and action.get("permission") else None,

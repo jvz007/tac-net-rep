@@ -62,7 +62,7 @@ sa._ACTIONS[SYSTEM_ACTION] = sa.SystemActionDefinition(
     SYSTEM_ACTION, MODULE, "Probe scan", "winupdate.scan", ("can_manage_winupdates", "can_run_bulk"), "agents", False, None, False,
 )
 scheduler.register_scheduled_action(
-    id=ACTION, module_id=MODULE, label="System action probe", handler=namespace["handler"], target_types=("none",),
+    id=ACTION, module_id=MODULE, label="System action probe", handler=namespace["handler"], target_types=("none", "endpoint"),
     permission="tactical:can_manage_winupdates",
 )
 
@@ -74,7 +74,8 @@ try:
         real_queue = scheduler._queue_run
         scheduler._queue_run = lambda queued: queued  # keep the run QUEUED: this shell runs it, no broker message
         try:
-            run = scheduler.start_one_off_run(user=user, owner_module=MODULE, action_id=ACTION, name="System action probe")
+            run = scheduler.start_one_off_run(user=user, owner_module=MODULE, action_id=ACTION, name="System action probe",
+                                              targets={"type": "endpoint", "ids": [str(int(AGENT))]})  # 1.17.62: a system action must target what it sends
         finally:
             scheduler._queue_run = real_queue
         print(f"run id: {run.id}")

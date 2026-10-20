@@ -81,14 +81,14 @@ for name, needles in (("system-actions.md", ("run_system_action", "register_syst
 print("       the docs exist and name each public name")
 
 # the release notes: the module-facing heading, the questions, the requests and a PASS or FAIL checklist
-notes = (ROOT / "RELEASE_NOTES_1.17.61.md").read_text(encoding="utf-8")
+notes = next(p for p in (ROOT / "RELEASE_NOTES_1.17.61.md", ROOT / "docs" / "releases" / "RELEASE_NOTES_1.17.61.md") if p.is_file()).read_text(encoding="utf-8")  # 1.17.62 moved it to docs/releases
 must("## Module-facing" in notes and "What I checked in `modules/`" in notes and "## What was left out, and what ends each wait" in notes, "the notes carry the headings the plan names")
 for question in ("CQ172", "CQ173", "CQ174", "CQ175", "CQ176", "CQ177", "CQ178", "CQ50"):
     must(question in notes, f"the notes name {question}")
 steps = notes[notes.index("## Dev-server checklist"):]
 must(steps.count("**Step ") == 8 and steps.count("**FAIL**") >= 7 and "Expect" in steps, "eight checklist steps, each with its FAIL line")
 must((ROOT / "docs" / "releases" / "RELEASE_NOTES_1.17.60.md").is_file() and not (ROOT / "RELEASE_NOTES_1.17.60.md").exists(), "the earlier notes moved to docs/releases")
-must(ROOT.joinpath("VERSION").read_text(encoding="utf-8").strip() == "1.17.61" and '"version": "1.17.61"' in ROOT.joinpath("tec_tac_package.json").read_text(encoding="utf-8"), "version 1.17.61")
+must(ROOT.joinpath("VERSION").read_text(encoding="utf-8").strip() in ("1.17.61", "1.17.62") and any(f'"version": "{v}"' in ROOT.joinpath("tec_tac_package.json").read_text(encoding="utf-8") for v in ("1.17.61", "1.17.62")), "version 1.17.61 or the 1.17.62 that follows it")
 reviews = ROOT.parents[1] / "reviews"
 if reviews.is_dir():
     questions = (reviews / "questions" / "core.md").read_text(encoding="utf-8")

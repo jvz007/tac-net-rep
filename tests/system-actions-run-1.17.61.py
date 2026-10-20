@@ -25,6 +25,8 @@ IDS = [987654311, 987654312, 987654313]
 SCAN = "patching.scan"
 CFG = {"action_id": SCAN, "agents": IDS, "parameters": None}
 LEAK = {}
+# 1.17.62: a run must name only endpoints its schedule targets, so each run here snapshots exactly the endpoints the handler will send
+AUTO_TARGETS = lambda: {"type": "endpoint", "ids": [str(i) for i in CFG["agents"]] if isinstance(CFG["agents"], (list, tuple, set)) else []}
 
 alice, bob, carol, dave = User("alice"), User("bob"), User("carol", installer=True), User("dave")
 roots = {}
@@ -121,7 +123,7 @@ def assert_refused(run, out, reason, *, ended=True, owner="alice"):
     row = rows[0]
     must(row["module_id"] == "core" and row["metadata"]["reason"] == reason and row["metadata"]["requested_by"] == "scheduler", row)
     must(set(row["metadata"]) <= {"reason", "requested_by", "owner_module", "run_id"}, row["metadata"])
-    text = repr(AUDITS) + repr(run.__dict__)
+    text = repr(AUDITS) + repr({k: v for k, v in run.__dict__.items() if k != "targets_snapshot"})  # 1.17.62: the snapshot legitimately holds the schedule's endpoints
     must(MARKER not in text and not any(str(i) in text for i in IDS), f"{reason}: no id, hostname or parameter in the audit trail or the run")
     must(not [a for a in AUDITS if a["action"] == "run"], f"{reason}: no 'run' row")
     if ended:

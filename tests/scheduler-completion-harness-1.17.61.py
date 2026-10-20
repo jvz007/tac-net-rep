@@ -322,7 +322,30 @@ def _agents_in_role_scope(*, user, pks):
     return bool(pks) and set(pks) <= SCOPE.get(user.username, set())
 
 
-mod("tec_tac.resources_adapter", agent_pks_in_role_scope=_agents_in_role_scope)
+# 1.17.62: the targets of a run's snapshot, resolved to agent numbers (the stub of resources_adapter.agent_pks_for_scheduler_targets).
+EXISTING_AGENTS: set | None = None  # None: every endpoint number exists
+CLIENT_AGENTS: dict = {}  # client id -> agent numbers
+SITE_AGENTS: dict = {}  # site id -> agent numbers
+TARGET_CALLS: list = []
+
+
+def _agent_pks_for_scheduler_targets(*, targets):
+    TARGET_CALLS.append(targets)
+    ref = sys.modules["tec_tac.scheduler_targets"].tactical_scope_ref(targets)
+    kind, values = ref["kind"], ref["values"]
+    if kind == "module":
+        return None
+    if kind == "none":
+        return set(), 0
+    if kind == "endpoint":
+        found = {int(v) for v in values if str(v).isdigit() and (EXISTING_AGENTS is None or int(v) in EXISTING_AGENTS)}
+        return found, len({str(v) for v in values}) - len(found)
+    table = CLIENT_AGENTS if kind == "client" else SITE_AGENTS
+    known = [v for v in values if v in table]
+    return set().union(*[table[v] for v in known]) if known else set(), len(set(values)) - len(known)
+
+
+mod("tec_tac.resources_adapter", agent_pks_in_role_scope=_agents_in_role_scope, agent_pks_for_scheduler_targets=_agent_pks_for_scheduler_targets)
 
 # ---- the stub server-maintenance job store (the real file is read by the source-pin tests)
 JOBS: dict = {}
@@ -452,7 +475,10 @@ def go(run, retries=0):
         return exc
 
 
-def make_run(action_id, module_id, *, user=None, owner="one-off", retries=0, status="queued"):
+AUTO_TARGETS = None  # 1.17.62: a test may set a function that returns the targets snapshot of every run make_run builds
+
+
+def make_run(action_id, module_id, *, user=None, owner="one-off", retries=0, status="queued", targets=None):
     """A queued run on a fresh schedule. ``owner`` is ``one-off`` (a module's one-off run for ``user``), ``user`` or ``module`` (no person)."""
     if owner == "one-off":
         sched_kw = dict(owner_type="module", owner_module=module_id, owner_key=f"one-off:{uuid.uuid4()}", created_by=user, enabled=False)
@@ -465,11 +491,16 @@ def make_run(action_id, module_id, *, user=None, owner="one-off", retries=0, sta
         schedule=schedule, schedule_snapshot_id=schedule.id, schedule_name="s", module_id=module_id, action_id=action_id, owner_type=schedule.owner_type,
         owner_module=schedule.owner_module, owner_key=schedule.owner_key, status=status, scheduled_for=NOW[0], retry_count_snapshot=retries,
         last_queued_at=NOW[0], started_at=NOW[0] if status == "running" else None,
+        targets_snapshot=targets if targets is not None else (AUTO_TARGETS() if AUTO_TARGETS is not None else {}),
     )
 
 
 def reset():
-    del Schedule.objects.rows[:], Run.objects.rows[:], AUDITS[:], TASK_CALLS[:], SCOPE_CALLS[:], SAVES[:], QUEUED_IDS[:]
+    del Schedule.objects.rows[:], Run.objects.rows[:], AUDITS[:], TASK_CALLS[:], SCOPE_CALLS[:], SAVES[:], QUEUED_IDS[:], TARGET_CALLS[:]
+    global EXISTING_AGENTS
+    EXISTING_AGENTS = None
+    CLIENT_AGENTS.clear()
+    SITE_AGENTS.clear()
     AUDIT_FAIL.update(strict=False, all=False)
     AUTH["deny"] = False
     DELAY_FAIL["raise"] = False

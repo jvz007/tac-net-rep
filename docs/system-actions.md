@@ -111,8 +111,12 @@ Each refusal ends the run `skipped` with error type `SystemActionRefused`, write
 | `reapproves_by_policy` | A function that re-approves updates is not run for a replacement. |
 | `function_unavailable` | Core can import the Tactical function. A Tactical upgrade can never make Core call something else. |
 | `mark_limit` | A run sends at most 20 different system actions. |
+| `outside_targets` | Since 1.17.62: every endpoint is one of the run's snapshotted schedule targets. A run never widens the schedule's set. A target that no longer exists is counted in the refusal text. |
+| `targets_unresolved` | Since 1.17.62: Core can read the run's snapshot as endpoints (a client, a site, endpoints, or the Tactical scope of a dynamic target, which is an upper bound: the module's own filter only narrows it). A module-owned target type cannot be read, so it is refused. `none` names no endpoint, so it refuses as `outside_targets`. |
 
-The count and shape are judged before any database lookup.
+The count and shape are judged before any database lookup. The targets check (1.17.62) runs after the scope check, so the owner's role scope still decides first.
+
+A system action that names endpoints needs a schedule that targets them. A module whose schedule uses a module-owned target type has to give Core a way to read it: that is a request to Core (a target resolver contract), not a private path. Until it exists the run is refused with `targets_unresolved` and nothing is sent.
 
 ## Then: at most once, audited, sent
 

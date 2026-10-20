@@ -25,6 +25,7 @@ root = plugin("patching", system_actions=["patching.scan"])
 sa._clear_for_tests()
 sa.register_system_action("patching.scan", "patching", "Scan", "winupdate.scan", BOTH)
 CFG = {"agents": IDS}
+AUTO_TARGETS = lambda: {"type": "endpoint", "ids": [str(i) for i in CFG["agents"]]}  # 1.17.62: the schedule targets what the handler sends
 ns = compile_as(root / "h.py", "def h(context):\n    return sa.run_system_action(context, action_id='patching.scan', agent_ids=CFG['agents'])\n", sa=sa, CFG=CFG)
 sched.register_scheduled_action(id="patching.h", module_id="patching", label="h", handler=ns["h"], target_types=("none",), timeout_seconds=600)
 

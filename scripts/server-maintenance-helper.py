@@ -118,6 +118,7 @@ MAX_TIMEOUT_SECONDS = 7 * 24 * 60 * 60
 # 1.17.17: actions a signed module registers from its manifest (--register-module). Everything below is root-only.
 MODULE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+MODULE_REMOVED_REASON = "module removed"  # the reason written on a hand registration when its module is uninstalled (R-23, 1.17.62)
 MODULE_ACTIONS_KEY = "server_maintenance_actions"
 MODULE_ACTIONS_MAX = 16
 MODULE_EXECUTABLE_PREFIX = "server_maintenance/actions/"
@@ -395,17 +396,26 @@ def action_path(action_id):
     return REGISTRY_ROOT / f"{action_id}.json"
 
 
+def _disabled_message(payload):
+    """The plain refusal for a disabled registration. A registration the helper itself disabled when its module was removed says so (R-23)."""
+    if isinstance(payload, dict) and payload.get("disabled_reason") == MODULE_REMOVED_REASON:
+        return f"registered action is disabled: {MODULE_REMOVED_REASON}. An administrator has to register it again."
+    return "registered action is disabled"
+
+
 def load_action(action_id):
     path = action_path(action_id)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise RuntimeError("registered action is unavailable") from exc
+    if isinstance(payload, dict) and payload.get("enabled", True) is not True:
+        raise RuntimeError(_disabled_message(payload))  # before the executable is looked at: a removed module's path may no longer exist
     manifest = validate_manifest(payload)
     if manifest["id"] != str(action_id):
         raise RuntimeError("registered action id does not match its filename")
     if not manifest["enabled"]:
-        raise RuntimeError("registered action is disabled")
+        raise RuntimeError(_disabled_message(payload))
     verify_registered_executable_hash(manifest)
     return manifest
 
@@ -746,18 +756,65 @@ def register_module(module_id):
     print(",".join(registered))
 
 
+def _under_module_folder(executable, module_id):
+    """True when the registered executable path lies lexically below ``<action root>/<module id>/``. Lexical on purpose: the folder is
+    about to be deleted, so the path cannot be resolved, and a later package would fill exactly that path."""
+    if not isinstance(executable, str) or not executable:
+        return False
+    folder = os.path.normpath(str(ACTION_ROOT / module_id))
+    return os.path.normpath(executable).startswith(folder + os.sep)
+
+
+def _disable_surviving_hand_registrations(module_id):
+    """R-23 (Core 1.17.62, held Medium from the 1.17.18 review): a hand registration that survives its module's removal is disabled.
+
+    A hand registration (``registered_by`` is not ``module-manifest``) carries no hash. Its executable path, when it lies under the
+    module's own folder (or when its ``owner_module`` is the module), would run whatever a LATER package under the same module id puts
+    there, without the administrator opting in again. So the registration stays on disk (the administrator's record) but is marked
+    ``enabled: false`` with ``disabled_reason: module removed``. Dispatch and run refuse it with that sentence, and it is never runnable
+    again until the administrator registers it again knowingly (``--register``, which writes a fresh file). Nothing else about the
+    registration changes. A registration an administrator disabled already is left as it is. Returns the flagged action ids."""
+    flagged = []
+    if not REGISTRY_ROOT.is_dir():
+        return flagged
+    for path in sorted(REGISTRY_ROOT.glob("*.json")):
+        if path.is_symlink():
+            continue  # a registry file is never a link: not read, not rewritten
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(payload, dict) or payload.get("registered_by") == "module-manifest":
+            continue
+        if payload.get("owner_module") != module_id and not _under_module_folder(payload.get("executable"), module_id):
+            continue
+        if payload.get("enabled", True) is not True:
+            continue
+        payload["enabled"] = False
+        payload["disabled_reason"] = MODULE_REMOVED_REASON
+        payload["disabled_module"] = module_id
+        payload["disabled_at"] = now()
+        _write_root_file(path, (json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n").encode("utf-8"), 0o644)
+        action_id = str(payload.get("id") or path.stem)
+        append_audit("action.disabled_module_removed", detail={"action": action_id, "module": module_id})
+        flagged.append(action_id)
+    return flagged
+
+
 def unregister_module(module_id):
     """Remove every action and executable a module owns (1.17.17, ``--unregister-module <module-id>``): the registry files whose
-    owner_module is the module and that the helper registered (``registered_by`` is ``module-manifest``; a hand registration stays),
-    and the module's own folder under the Core action root. Nothing of another module's."""
+    owner_module is the module and that the helper registered (``registered_by`` is ``module-manifest``), and the module's own folder
+    under the Core action root. Nothing of another module's. Since 1.17.62 an administrator's hand registration that survives is not
+    deleted but disabled (``module removed``), so a later package under the same module id cannot fill its path and run it."""
     module_id = _module_id(module_id)
     removed = _remove_owned_actions(module_id)
+    disabled = _disable_surviving_hand_registrations(module_id)
     folder = ACTION_ROOT / module_id
     if folder.is_symlink():
         folder.unlink()
     elif folder.is_dir():
         shutil.rmtree(folder)
-    append_audit("module.actions_unregistered", detail={"module": module_id, "actions": removed})
+    append_audit("module.actions_unregistered", detail={"module": module_id, "actions": removed, "disabled": disabled})
     print(",".join(removed))
 
 

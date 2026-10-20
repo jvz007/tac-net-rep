@@ -393,6 +393,44 @@ def agent_pks_in_role_scope(*, user, pks) -> bool:
         return False
 
 
+def agent_pks_for_scheduler_targets(*, targets):
+    """The Tactical agent numbers a Scheduler target snapshot names, as ``(pks, missing)``, or None when Core cannot resolve it (1.17.62).
+
+    Used only to bound a system action: the run may touch these endpoints and no others. It is not an authorization decision (the
+    owner's role scope is checked separately). A client, site or endpoint target resolves to the endpoints it names; a dynamic target
+    resolves to its Tactical scope, an upper bound (the module's filter only narrows it); ``none`` resolves to no endpoint. A
+    module-owned target type returns None: Core has no contract to read it. ``missing`` counts the named clients, sites or endpoints
+    that no longer exist. An ambiguous endpoint identifier raises ``TacticalResourceAdapterError``, so the caller fails closed."""
+    from .scheduler_targets import tactical_scope_ref
+
+    ref = tactical_scope_ref(targets)
+    kind, values = ref["kind"], ref["values"]
+    if kind == "module":
+        return None
+    if kind == "none":
+        return set(), 0
+    Client, Site, Agent = _models()
+    if kind == "client":
+        found = set(Client.objects.filter(pk__in=values).values_list("pk", flat=True))
+        return {int(pk) for pk in Agent.objects.filter(site__client_id__in=found).values_list("pk", flat=True)}, len(set(values)) - len(found)
+    if kind == "site":
+        found = set(Site.objects.filter(pk__in=values).values_list("pk", flat=True))
+        return {int(pk) for pk in Agent.objects.filter(site_id__in=found).values_list("pk", flat=True)}, len(set(values)) - len(found)
+    requested = [str(value).strip() for value in values]
+    numeric = {int(value) for value in requested if value.isdigit() and int(value) > 0}
+    rows = list(Agent.objects.filter(Q(agent_id__in=set(requested)) | Q(pk__in=numeric)).values_list("pk", "agent_id"))
+    pks, missing = set(), 0
+    for token in dict.fromkeys(requested):
+        matches = {(int(pk), str(agent_id)) for pk, agent_id in rows if str(agent_id) == token or str(pk) == token}
+        if not matches:
+            missing += 1
+            continue
+        if len(matches) != 1:
+            raise TacticalResourceAdapterError(f"Endpoint identifier {token!r} is ambiguous; use the canonical agent_id.")
+        pks.add(next(iter(matches))[0])
+    return pks, missing
+
+
 def _active_filter(queryset, active: bool | None):
     # Tactical currently hard-deletes these resource rows and exposes no
     # soft-disabled field. Existing rows are therefore active in contract v1.

@@ -201,6 +201,10 @@ The job runs as the module, not as a person. The context has no user, and a hand
 signed-in person's request. So an event job cannot make a Tactical change. That stays the job of the AD-13 system-action contract, which is
 still open. Nothing runs at a person's authority and no permission check passes through a person.
 
+## Events Core itself publishes (since 1.17.62)
+
+One event job is published by Core, not by the module's own code: `<module id>.server_job_finished`, when a `core.server_maintenance` job that the module owns has finished (`tec_tac.server_job_hooks`, `docs/scheduler.md`). The module registers it like any other event job with `register_event_job`, from its own code. Core stores the event through its own path, `event_jobs.publish_for_core`, which checks everything `publish` checks except the caller frame: the job is registered by that module, the module is runnable right now (uncached), the key and payload are valid, and the rate and backlog caps apply. Only `server_job_hooks.py` may call it. The handler is idempotent by contract: it can run more than once, and it can run for a job a browser poll already recorded. Nothing changes for a module that publishes its own events.
+
 ## Security review points
 
 1. **One module cannot publish for another.** Only the handle that `register_event_job` returned can publish, and the handle cannot be built,

@@ -188,6 +188,13 @@ def _agents_in_scope(user, ids) -> bool:
     return bool(adapter.agent_pks_in_role_scope(user=user, pks=ids))
 
 
+def _target_pks(snapshot):
+    """``(pks, missing)`` for the run's targets snapshot, or None when it cannot be read as endpoints."""
+    from . import resources_adapter as adapter
+
+    return adapter.agent_pks_for_scheduler_targets(targets=snapshot)
+
+
 def _import_function(entry: SystemFunction):
     """The Tactical task named by the table row, or None. An ImportError or a missing function fails closed: a Tactical upgrade can never
     make Core call something else."""
@@ -358,6 +365,8 @@ REASONS = {
     "out_of_scope": "At least one endpoint is outside the owner's Tactical scope, so nothing was run.",
     "reapproves_by_policy": "This action would re-approve updates by patch policy, which is not allowed for a replacement module.",
     "mark_limit": "This run has already sent the most system actions it may send.",
+    "outside_targets": "At least one endpoint is not one of this schedule's targets, so nothing was run. A run never widens the schedule's set.",
+    "targets_unresolved": "Core cannot read this schedule's targets as endpoints, so nothing was run.",
 }
 
 _UNMATCHED: dict[tuple[str, str], float] = {}
@@ -420,8 +429,8 @@ def _end_run(run_id, status: str, error_type: str, text: str) -> None:
 _KEEP_RUN_REASONS = frozenset({"caller_unverified", "wrong_module"})
 
 
-def _refuse(reason: str, *, run_id=None, owner=None, module_id=None, action_id=None, caller: str = ""):
-    text = REASONS.get(reason, "The system action was refused.")
+def _refuse(reason: str, *, run_id=None, owner=None, module_id=None, action_id=None, caller: str = "", detail: str = ""):
+    text = REASONS.get(reason, "The system action was refused.") + detail
     if run_id is not None:
         if reason not in _KEEP_RUN_REASONS:
             _end_run(run_id, _SKIPPED, "SystemActionRefused", text)
@@ -600,6 +609,18 @@ def _run(context, identity, action_id, agent_ids, parameters) -> dict:
         in_scope = False
     if not in_scope:  # a native scheduler manager has no bypass here: Tactical's own role scope decides, and one miss refuses all
         _refuse("out_of_scope", **common)
+    # (6b) a run never widens the schedule's set: every endpoint must be one of the run's snapshotted targets (Core 1.17.62)
+    try:
+        resolved = _target_pks(run.targets_snapshot or {})
+    except Exception:
+        logger.warning("The targets of a system action run could not be resolved; the run is refused.", exc_info=True)
+        resolved = None
+    if resolved is None:
+        _refuse("targets_unresolved", **common)
+    target_pks, vanished = resolved
+    if not set(ids) <= set(target_pks):
+        note = f" {vanished} target(s) of this schedule no longer exist." if vanished else ""
+        _refuse("outside_targets", detail=note, **common)
     # (7) an install that re-approves by policy is not run for a replacement
     if entry.reapproves_by_policy and definition.via_replacement:
         _refuse("reapproves_by_policy", **common)

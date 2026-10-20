@@ -432,7 +432,7 @@ Every rule fails closed:
 
 1. **The caller is verified from the call stack** (`docs/caller-identity.md`). It must be the enabled module that owns the run's action, called from that module's own code. Core, library, generated, disabled and legacy frames are refused. `complete_pending_run` is a plain re-export, with no wrapper frame, so do not wrap it in a decorator or call it through a library.
 2. **Under a row lock** the run must still be `running` with completion state `pending`, and `external_job_id` must equal the one the handler returned. Call it after the handler has returned. A call before that finds no pending run and is refused as `not_pending`: try again shortly.
-3. **Duplicates and conflicts.** The same completion twice is an idempotent no-op: no second audit row, `finished_at` unchanged. A different second outcome (`conflict`), a completion after stale recovery (`late`), a wrong job id (`wrong_job`) and a completion by the wrong module (`wrong_module`, `caller_unverified`) raise `SchedulerCompletionRefused` (a `SchedulerError` with `.reason`). Each writes at most one best-effort audit row, `custom:scheduler-completion-refused`, with the reason code only. Rows are limited to one per run and reason per five minutes.
+3. **Duplicates and conflicts.** The same completion twice is an idempotent no-op: no second audit row, `finished_at` unchanged. A different second outcome (`conflict`), a completion after stale recovery (`late`), a wrong job id (`wrong_job`) and a completion by the wrong module (`wrong_module`, `caller_unverified`) raise `SchedulerCompletionRefused` (a `SchedulerError` with `.reason`). Since 1.17.62 a run that waits for a server-maintenance job is not the module's to complete: the module's call is refused as `wrong_kind` and the run is left as it was (Core settles that run from the job file). Each writes at most one best-effort audit row, `custom:scheduler-completion-refused`, with the reason code only. Rows are limited to one per run and reason per five minutes.
 4. **The payload.** `result` is JSON up to 16 KiB (a value that is not an object is wrapped as `{"value": ...}`). `error` is printable text up to 500 characters. `warnings` (for `succeeded` only) are up to 10 printable texts of 200 characters, kept in `result["warnings"]`. A bad payload raises `SchedulerError` and changes nothing.
 
 A completion writes one best-effort audit row, `custom:scheduler-completion`. It carries the outcome and the calling module, never the result text.
@@ -448,8 +448,32 @@ Start the job with `source_module` and `source_run_id` (the handler context's `r
 
 ### What this release does not do
 
-- Core does not run a module's handler when a server job finishes (the job-finished hook, R-22 part 2). A module whose tab is closed still needs it. It is planned for 1.17.62.
+- Before 1.17.62 Core did not run a module's handler when a server job finished. See "Server job finished hook" below.
 - The tick does not poll a module for a final state. Completion is pushed by the module, or read from a server job file (CQ177).
+
+### Server job finished hook (Core 1.17.62, R-22 part 2)
+
+A module that starts a server-maintenance job often has to record the outcome when the job ends, even if nobody has a page open. From 1.17.62 the scheduler tick does the waiting for it. The module registers one event job, and Core stores one event for it when its job finishes. No module code runs inside the tick.
+
+```python
+# AppConfig.ready()
+from tec_tac.event_jobs import register_event_job
+from tec_tac.server_job_hooks import hook_job_id
+
+register_event_job(id=hook_job_id("certificatemanagement"), module_id="certificatemanagement", label="Record a finished server job", handler=on_finished)
+```
+
+The id is fixed: `<module id>.server_job_finished`. Core ties a job to a module through the `owner_module` it wrote in the job file when the job started (the action's `owner_module`, since 1.17.17). There is no new manifest key.
+
+- **One guarded step.** `deliver_finished_server_jobs()` runs after `settle_server_job_runs()`. It has its own try/except, never raises and writes nothing to the tick's output line. It looks at a directory listing, one query for the jobs it already handled and at most 50 job files a tick, oldest first. It reads only job files changed in the last six hours.
+- **What the handler gets.** `context["payload"]` is `{job_id, action_id, status, exit_code, classification?}`. `status` is `succeeded`, `failed`, `cancelled` or `dispatch_failed`. Never output text and never parameters.
+- **At most once per Core.** Core inserts a row in `TecTacServerJobHook` (unique on the job id) before it stores the event. An event that could not be stored waits in `retry` and the next tick tries again, three tries in all, then it is `abandoned` with one audit row (`custom:server-job-hook-abandoned`). After the event is stored, `core.event_jobs` owns it: its attempts, back-off and expiry apply, so a handler may run more than once.
+- **The handler must be idempotent.** A browser poll of `JobView` can record the same job, and the event job can retry. Write the outcome with a key on the job id.
+- **A disabled, removed or not-honoured module** gets its job marked `skipped` with one audit row (`custom:server-job-hook-skipped`). Core does not retry it for ever, and enabling the module later does not replay it. A module state Core cannot read leaves the job for the next tick.
+- **A module with no hook** is left alone: its jobs are marked `ignored` once.
+- **The handler runs as the module, with no user.** It cannot make a Tactical change (AD-13 is unchanged).
+- **Honest limits.** The job context and `owner_module` are caller-asserted, the same limit as `docs/caller-identity.md`. A job that finished while Core was off for more than six hours is not handed over. A claim that a tick left half-done for 15 minutes is abandoned and never sent again (at most once wins over exactly once). The module id of an event job must be lowercase (letters, digits, `-` and `_`).
+- **Migration.** `0035_server_job_hook` adds one table. Run `manage.py migrate tec_tac` on update.
 
 ### Diagnostic action
 

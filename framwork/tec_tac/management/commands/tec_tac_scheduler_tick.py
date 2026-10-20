@@ -104,6 +104,16 @@ class Command(BaseCommand):
         except Exception:
             logging.getLogger("tec_tac.scheduler_completion").warning("The server job settle step failed; the next tick retries.", exc_info=True)
 
+        try:
+            # 1.17.62 (R-22 part 2): a finished server-maintenance job is handed once to the module that owns it, as one stored event job
+            # (no module code runs here). The step never raises, reads at most 50 job files and logs rather than writing to the output,
+            # so the tick's own line stays the same.
+            from tec_tac.server_job_hooks import deliver_finished_server_jobs
+
+            deliver_finished_server_jobs()
+        except Exception:
+            logging.getLogger("tec_tac.server_job_hooks").warning("The server job hook step failed; the next tick retries.", exc_info=True)
+
         sweep_state = "error" if sweep_error else "ran"
         cleanup_state = "error" if cleanup_error else ("ran" if cleanup and cleanup.get("ran") else "not_due")
         self.stdout.write(

@@ -271,6 +271,7 @@ for name, (migration_file, index_names, constraint_names) in NEW_TABLES.items():
 must(sorted(p.name for p in MIGRATIONS.glob("0032_*.py")) == ["0032_event_jobs.py"], "the only migration 0032 is 0032_event_jobs (1.17.45)")
 must(sorted(p.name for p in MIGRATIONS.glob("0033_*.py")) == ["0033_runtime_licensing_mode.py"], "the only migration 0033 is the licensing mode column (1.17.58)")
 must(sorted(p.name for p in MIGRATIONS.glob("0034_*.py")) == ["0034_scheduler_run_completion.py"], "the only migration 0034 is the scheduler run completion columns (1.17.61)")
-must(not list(MIGRATIONS.glob("0035_*.py")), "no migration 0035 yet")
+must(sorted(p.name for p in MIGRATIONS.glob("0035_*.py")) == ["0035_server_job_hook.py"], "the only migration 0035 is the server job hook table (1.17.62)")
+must(not list(MIGRATIONS.glob("0036_*.py")), "no migration 0036 yet")
 
 print("[TEST] PASS migration and model id agreement 1.17.36")

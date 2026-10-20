@@ -113,8 +113,8 @@ print("       each terminal state settles the run once; a queued or running job 
 reset()
 run, _ = park()
 jid = STARTED["job_id"]
-code1, _r = completion._apply_outcome(run.pk, external_job_id=jid, outcome="succeeded", result={"job_id": jid}, error="")
-code2, _r = completion._apply_outcome(run.pk, external_job_id=jid, outcome="succeeded", result={"job_id": jid}, error="")
+code1, _r = completion._apply_outcome(run.pk, allowed_kind="server_maintenance_job", external_job_id=jid, outcome="succeeded", result={"job_id": jid}, error="")
+code2, _r = completion._apply_outcome(run.pk, allowed_kind="server_maintenance_job", external_job_id=jid, outcome="succeeded", result={"job_id": jid}, error="")
 must((code1, code2) == ("applied", "duplicate"), (code1, code2))
 print("       a second settler that raced the first finds the run done under the lock")
 

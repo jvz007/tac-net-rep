@@ -931,7 +931,7 @@ CORE_CONTRACTS = (
         "import_path": "tec_tac.scheduler",
         "name": "SchedulerCompletionRefused",
         "kind": "python",
-        "purpose": "SchedulerCompletionRefused (1.17.61): raised by complete_pending_run when it refuses a completion. A subclass of SchedulerError with .reason (caller_unverified, wrong_module, action_unavailable, unknown_run, not_pending, wrong_job, conflict, late) and a plain message that names no ids.",
+        "purpose": "SchedulerCompletionRefused (1.17.61): raised by complete_pending_run when it refuses a completion. A subclass of SchedulerError with .reason (caller_unverified, wrong_module, action_unavailable, unknown_run, not_pending, wrong_job, conflict, late, and since 1.17.62 wrong_kind: the run is parked as server_maintenance_job, which only Core settles, so a module cannot complete it and the run is left unchanged) and a plain message that names no ids.",
         "audience": "provider/backend",
     },
     {
@@ -977,7 +977,8 @@ CORE_CONTRACTS = (
             "Core issued and a person is behind the run (a user-owned schedule or a one-off run; a module-owned run has no owner and is refused); the verified caller is the run's module and the action's module; the action is "
             "registered, its module is enabled right now and a replacement is honoured right now; the owner is re-read from the database (active, not an installer user) and holds every Tactical flag now; the count is 1 "
             "to 2000 (refused above, never truncated); every endpoint number exists and lies inside the owner's Tactical role scope (one endpoint outside refuses the whole call, nothing is narrowed, and a scheduler manager "
-            "gets no bypass); the Tactical function can be imported (else function_unavailable, so a Tactical upgrade can never make Core call something else). A refusal ends the run skipped with error type "
+            "gets no bypass); since 1.17.62 every endpoint is also one of the run's snapshotted schedule targets (client, site, endpoint or the scope of a dynamic target; a run never widens the set: outside_targets, or targets_unresolved when Core cannot read the "
+            "snapshot as endpoints, as for a module-owned target type; none names no endpoint and refuses as outside_targets; and a vanished target is counted in the refusal text); the Tactical function can be imported (else function_unavailable, so a Tactical upgrade can never make Core call something else). A refusal ends the run skipped with error type "
             "SystemActionRefused (not for caller_unverified and wrong_module, which fail the caller's own handler instead), writes one deny audit row (reason code, the owner as actor, requested_by scheduler, no ids) and "
             "raises SystemActionRefused (a SchedulerPermanentError, never retried) with .reason. Then Core commits an at-most-once mark on the run, writes one STRICT audit row (action run, object system_action, actor the owner, "
             "metadata requested_by scheduler, run_id, schedule_id, owner_module, function, agent_count, targets_digest; no endpoint ids or hostnames) and only then calls Tactical's own Celery task with .delay, the way "
@@ -992,7 +993,7 @@ CORE_CONTRACTS = (
         "import_path": "tec_tac.system_actions",
         "name": "SystemActionRefused",
         "kind": "python",
-        "purpose": "SystemActionRefused (1.17.61): raised by run_system_action for a refusal. A SchedulerPermanentError with .reason (context_invalid, owner_refused, no_owner, caller_unverified, wrong_module, unknown_action, module_disabled, replacement_not_honoured, function_unavailable, owner_inactive, permission_lost, bad_parameters, bad_agents, agent_count, out_of_scope, reapproves_by_policy, mark_limit) and a plain message that names no agent. SystemActionRegistrationError (a ValueError) is raised by register_system_action.",
+        "purpose": "SystemActionRefused (1.17.61): raised by run_system_action for a refusal. A SchedulerPermanentError with .reason (context_invalid, owner_refused, no_owner, caller_unverified, wrong_module, unknown_action, module_disabled, replacement_not_honoured, function_unavailable, owner_inactive, permission_lost, bad_parameters, bad_agents, agent_count, out_of_scope, reapproves_by_policy, mark_limit, and since 1.17.62 outside_targets and targets_unresolved: the endpoints must be among the run's snapshotted schedule targets) and a plain message that names no agent. SystemActionRegistrationError (a ValueError) is raised by register_system_action.",
         "audience": "provider/backend",
     },
     {
@@ -1032,6 +1033,36 @@ CORE_CONTRACTS = (
         "kind": "python",
         "purpose": "holds_action_permission(user, permission) -> bool (1.17.17): may this user use an action that declares permission? No permission means yes; otherwise the user must hold it through the Tec-Tac role grants (a superuser passes). No user, a failed lookup and an unknown code are False. The same test start() and cancel() apply, for a module that wants to hide an action it lists.",
         "audience": "consumer/backend",
+    },
+    {
+        "area": "server-maintenance",
+        "import_path": "tec_tac.server_job_hooks",
+        "name": "hook_job_id",
+        "kind": "python",
+        "purpose": (
+            "hook_job_id(module_id) -> '<module_id>.server_job_finished' (1.17.62, R-22 part 2, requires framework >=1.17.62, needs migration 0035_server_job_hook): the id of the core.event_jobs job through which Core hands a FINISHED "
+            "core.server_maintenance job to the module that owns it, with no page open. A module opts in by registering that event job from AppConfig.ready() with register_event_job(id=hook_job_id(<module id>), module_id=<module id>, "
+            "label=..., handler=...); no new manifest key. Core ties a job to a module through the owner_module Core wrote in the job file when the job started (the action's owner_module, since 1.17.17). A module that registers no "
+            "such job is left alone. The scheduler tick step deliver_finished_server_jobs() reads at most 50 job files a tick (only files changed in the last six hours), stores ONE event job per finished job through Core's own "
+            "publish path (event_jobs.publish_for_core; no module code runs in the tick) and records a durable unique row per job id before it stores the event, so a job is handed over at most once per Core. The handler gets "
+            "context['payload'] = {job_id, action_id, status (succeeded, failed, cancelled or dispatch_failed), exit_code (int or null), classification (only when the job file has one)}: never output text, never parameters. It "
+            "runs as the module with no user and cannot make a Tactical change. The event job's own limits, retries, back-off and expiry apply, so the handler MUST be idempotent; it can also run for a job a browser poll of "
+            "get_job already recorded. A job whose module is disabled, removed or not the honoured replacement when it finishes is marked skipped with one audit row (custom:server-job-hook-skipped), never retried for ever; an event "
+            "that could not be stored after three ticks is abandoned with one audit row (custom:server-job-hook-abandoned). start, get_job, cancel and list_jobs are unchanged. The module id of an event job must be lowercase "
+            "(letters, digits, - and _). See docs/server-maintenance-capability.md and docs/event-jobs.md."
+        ),
+        "audience": "provider/backend",
+    },
+    {
+        "area": "server-maintenance",
+        "import_path": "tec_tac.server_job_hooks",
+        "name": "deliver_finished_server_jobs",
+        "kind": "python",
+        "purpose": (
+            "deliver_finished_server_jobs(now=None, limit=50) -> counts (1.17.62, R-22 part 2): Core's own step in the Scheduler tick (a module never calls it). Never raises, runs no module code, reads at most 50 job files, "
+            "and leaves the tick's own output line unchanged. See hook_job_id for what a module receives. Requires framework >=1.17.62."
+        ),
+        "audience": "framework/internal",
     },
     {
         "area": "tactical-websocket",

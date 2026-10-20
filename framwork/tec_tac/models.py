@@ -647,3 +647,42 @@ class TecTacEventJobStat(models.Model):
 
     def __str__(self):
         return self.job_id
+
+
+class TecTacServerJobHook(models.Model):
+    """One finished server-maintenance job Core has dealt with for its owning module (Core 1.17.62, R-22 part 2).
+
+    The row is the at-most-once claim: the tick inserts it (unique on ``job_id``) before it publishes the module's event job, so a job is
+    handed over at most once per Core. ``state`` is ``claiming`` (the tick is publishing it now), ``retry`` (the event could not be stored
+    yet; the next tick tries again, three tries in all), ``queued`` (the event job is stored),
+    ``skipped`` (the module was not runnable, one audit row), ``ignored`` (the job has no owner module or the owner registered no hook)
+    or ``abandoned`` (the event job could not be stored after three tries). It holds ids and a status only: never output and never
+    parameters.
+    """
+
+    class State(models.TextChoices):
+        CLAIMING = "claiming", "Claiming"
+        RETRY = "retry", "Waiting to retry"
+        QUEUED = "queued", "Queued"
+        SKIPPED = "skipped", "Skipped"
+        IGNORED = "ignored", "Ignored"
+        ABANDONED = "abandoned", "Abandoned"
+
+    job_id = models.UUIDField(unique=True)
+    module_id = models.CharField(max_length=100, blank=True, default="")
+    action_id = models.CharField(max_length=128, blank=True, default="")
+    job_status = models.CharField(max_length=32, blank=True, default="")
+    state = models.CharField(max_length=16, choices=State.choices, default=State.CLAIMING)
+    reason = models.CharField(max_length=40, blank=True, default="")
+    attempts = models.PositiveSmallIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("created_at",)
+        indexes = [
+            models.Index(fields=("created_at",), name="tectac_svjobhook_created"),
+        ]
+
+    def __str__(self):
+        return f"{self.job_id}:{self.state}"

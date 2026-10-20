@@ -40,6 +40,15 @@ try:
         reg_file(action_id).write_text(json.dumps(payload), encoding="utf-8")
         return payload
 
+    def disabled_copy(original):
+        """1.17.62 (R-23): what --unregister-module leaves of a hand registration: the same file, disabled with the reason 'module removed'."""
+        return {**original, "enabled": False, "disabled_reason": "module removed", "disabled_module": "vendor"}
+
+    def kept_disabled(action_id, original):
+        got = dict(reg_json(action_id))
+        got.pop("disabled_at", None)
+        return got == disabled_copy(original)
+
     # ---- the module registers its own actions; an administrator also registered two by hand with the same owner
     put_module("vendor", manifest([action(), action("vendor.other", "sub/other.sh", permission="vendor.other")]), files=("rotate.sh", "sub/other.sh"))
     sm.register_module("vendor")
@@ -65,8 +74,9 @@ try:
     must(reg_file("vendor.rotate").is_file() and (ACT / "vendor" / "rotate.sh").is_file(), "registered again")
     sm.unregister_module("vendor")
     must(not reg_file("vendor.rotate").exists() and not (ACT / "vendor").exists(), "a module-manifest action and its folder are removed")
-    must(reg_json("vendor.manual") == keep_plain, "a hand registration with owner_module survives --unregister-module")
-    must(reg_json("vendor.danger") == keep_protected, "a protected hand registration survives --unregister-module")
+    # 1.17.62 (R-23): it survives, but disabled and flagged 'module removed' (it was kept as-is before; see server-maintenance-uninstall-1.17.62.py)
+    must(kept_disabled("vendor.manual", keep_plain), "a hand registration with owner_module survives --unregister-module, disabled")
+    must(kept_disabled("vendor.danger", keep_protected), "a protected hand registration survives --unregister-module, disabled")
     must(reg_file("vendor.ownerless").is_file() and HAND_EXE.is_file(), "an ownerless hand registration and its executable survive")
     events = audit_events()
     removed = [e["detail"]["action"] for e in events if e["event"] == "action.unregistered"]
@@ -75,7 +85,7 @@ try:
     must(last["detail"]["actions"] == ["vendor.rotate"], last)
     # nothing to remove, a second call: harmless
     sm.unregister_module("vendor")
-    must(reg_json("vendor.manual") == keep_plain, "still there")
+    must(kept_disabled("vendor.manual", keep_plain), "still there, still disabled")
 
     # ---- a hand registration that is later re-registered by the module becomes the module's (the migration path is unchanged)
     put_module("vendor", manifest([action("vendor.manual", permission="vendor.rotate")]), files=("rotate.sh",))
@@ -83,7 +93,7 @@ try:
     must(reg_json("vendor.manual")["registered_by"] == "module-manifest", "replaced by the module's registration")
     sm.unregister_module("vendor")
     must(not reg_file("vendor.manual").exists(), "and then it is the module's to remove")
-    must(reg_json("vendor.danger") == keep_protected, "the protected hand registration is still untouched")
+    must(kept_disabled("vendor.danger", keep_protected), "the protected hand registration is still there, disabled (nothing else about it changed)")
 
     # ---- a protected manifest entry: an earlier module-registered file is dropped, a hand one stays (unchanged from 1.17.17)
     put_module("vendor", manifest([action(), action("vendor.late", "danger.sh", permission="vendor.danger")]), files=("rotate.sh", "danger.sh"))

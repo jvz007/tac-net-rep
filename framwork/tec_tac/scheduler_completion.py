@@ -39,7 +39,8 @@ Server-maintenance jobs (R-22, the Core-owned half)
     parameters. Honest limit: the job context is caller-asserted, so the binding stops mistakes and an honest module, not hostile signed
     code (the same limit as docs/caller-identity.md).
 
-Not in this release: Core running a module's handler when a job finishes (the module-callback hook, R-22 part 2).
+Core 1.17.62: a module cannot complete a run parked as ``server_maintenance_job`` (refused as ``wrong_kind``, run unchanged). The
+module-callback hook for a finished job (R-22 part 2) lives in ``server_job_hooks.py``.
 """
 from __future__ import annotations
 
@@ -89,6 +90,7 @@ REFUSAL_TEXT = {
     "wrong_job": "The job id does not match the one this run is waiting for.",
     "conflict": "This run was already completed with a different outcome.",
     "late": "This run was already closed, so the late completion was refused.",
+    "wrong_kind": "This run waits for a server-maintenance job, which Core settles itself. A module cannot complete it.",
 }
 
 _REFUSALS: dict[tuple[str, str], float] = {}
@@ -220,8 +222,11 @@ def _as_utc(value: datetime) -> datetime:
     return value.replace(tzinfo=dt_timezone.utc) if value.tzinfo is None else value.astimezone(dt_timezone.utc)
 
 
-def _apply_outcome(run_pk, *, external_job_id: str, outcome: str, result: dict, error: str, error_type: str | None = None):
-    """Settle one pending run under a row lock. Returns ``(code, run)``; ``code`` is ``applied``, ``duplicate`` or a refusal reason."""
+def _apply_outcome(run_pk, *, allowed_kind: str, external_job_id: str, outcome: str, result: dict, error: str, error_type: str | None = None):
+    """Settle one pending run under a row lock. Returns ``(code, run)``; ``code`` is ``applied``, ``duplicate`` or a refusal reason.
+
+    ``allowed_kind`` is the pending kind the caller may settle (Core 1.17.62): ``complete_pending_run`` passes ``module`` and the tick
+    passes ``server_maintenance_job``. A run parked as the other kind is refused as ``wrong_kind`` and left untouched."""
     now = timezone.now()
     with transaction.atomic():
         try:
@@ -230,6 +235,8 @@ def _apply_outcome(run_pk, *, external_job_id: str, outcome: str, result: dict, 
             return "unknown_run", None
         ref = current.completion_ref if isinstance(current.completion_ref, dict) else {}
         state = current.completion_state or ""
+        if ref.get("kind") and ref.get("kind") != allowed_kind:
+            return "wrong_kind", current
         if state == STATE_COMPLETED:
             same = ref.get("external_job_id") == external_job_id and ref.get("outcome") == outcome
             return ("duplicate" if same else "conflict"), current
@@ -306,7 +313,7 @@ def complete_pending_run(run_id, *, external_job_id, outcome, result=None, error
     if outcome != "succeeded" and not clean_error:
         clean_error = {"failed": "The module reported that the work failed.", "cancelled": "The module reported that the work was cancelled.",
                        "timed_out": "The module reported that the work timed out."}[outcome]
-    code, current = _apply_outcome(run.pk, external_job_id=external_job_id, outcome=outcome, result=clean_result, error=clean_error)
+    code, current = _apply_outcome(run.pk, allowed_kind=KIND_MODULE, external_job_id=external_job_id, outcome=outcome, result=clean_result, error=clean_error)
     if code == "applied":
         _audit("custom:scheduler-completion", current, message=f"A pending run was completed: {outcome}.", outcome=outcome,
                caller_module=identity.module_id, kind=(current.completion_ref or {}).get("kind"))
@@ -394,7 +401,7 @@ def _settle_one(run, now: datetime, counts: dict) -> None:
     except sm.ServerMaintenanceNotFound:
         started = run.completion_started_at or run.started_at
         if started is not None and now - _as_utc(started) > MISSING_JOB_GRACE:
-            code, current = _apply_outcome(run.pk, external_job_id=job_id, outcome="failed", result={"job_id": job_id, "status": "missing"},
+            code, current = _apply_outcome(run.pk, allowed_kind=KIND_SERVER_JOB, external_job_id=job_id, outcome="failed", result={"job_id": job_id, "status": "missing"},
                                            error="The server job record is gone.")
             counts["settled" if code == "applied" else "skipped"] += 1
             if code == "applied":
@@ -408,7 +415,7 @@ def _settle_one(run, now: datetime, counts: dict) -> None:
         return
     context = job.get("context") if isinstance(job.get("context"), dict) else {}
     if str(context.get("source_module") or "") != str(run.module_id or "") or str(context.get("source_run_id") or "") != str(run.id):
-        code, current = _apply_outcome(run.pk, external_job_id=job_id, outcome="failed", result={"job_id": job_id},
+        code, current = _apply_outcome(run.pk, allowed_kind=KIND_SERVER_JOB, external_job_id=job_id, outcome="failed", result={"job_id": job_id},
                                        error="The server job was not started by this module for this run.", error_type="PendingRefused")
     else:
         status = str(job.get("status") or "")
@@ -417,7 +424,7 @@ def _settle_one(run, now: datetime, counts: dict) -> None:
             counts["waiting"] += 1
             return
         text = "" if outcome == "succeeded" else {"failed": "The server job failed.", "cancelled": "The server job was cancelled."}[outcome]
-        code, current = _apply_outcome(run.pk, external_job_id=job_id, outcome=outcome, result=_job_result(job, status), error=text)
+        code, current = _apply_outcome(run.pk, allowed_kind=KIND_SERVER_JOB, external_job_id=job_id, outcome=outcome, result=_job_result(job, status), error=text)
     if code == "applied":
         counts["settled"] += 1
         _audit("custom:scheduler-completion", current, message=f"A pending run was completed by the server job: {current.completion_ref.get('outcome')}.",

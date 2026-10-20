@@ -35,6 +35,10 @@ and must be safe to run twice. Retries, back-off and give-up are Core's. See doc
 
 The job runs as the module, not as a person. A handler cannot call ``run_tactical_operation`` (it needs a person's request), so an event
 job cannot make a Tactical change. That is the AD-13 system-action contract, which is still open.
+
+Since 1.17.62 Core itself publishes one event job for a module: ``<module id>.server_job_finished``, when a ``core.server_maintenance`` job the
+module owns has finished (``server_job_hooks.py``). The module registers it like any other. Core stores the event through ``publish_for_core``,
+which checks everything ``publish`` does except the caller frame, and only ``server_job_hooks.py`` may call it. The handler must be idempotent.
 """
 from __future__ import annotations
 
@@ -634,6 +638,75 @@ def _publish(handle, key, payload) -> PublishResult:
         return PublishResult(_persist_safely(definition, key, payload))
     except Exception:
         logger.exception("An event job could not be published.")
+        return PublishResult("error", "unexpected failure")
+
+
+def _core_caller_ok() -> bool:
+    """The internal Core publish path may be called by ``server_job_hooks.py`` only. A frame check, not a security boundary: modules share
+    the Core process (the same honest limit as docs/caller-identity.md), but a module that reaches for it by mistake is refused."""
+    try:
+        import sys
+
+        caller = sys._getframe(2).f_code.co_filename
+        return _norm(caller) == _norm(os.path.join(os.path.dirname(__file__), "server_job_hooks.py"))
+    except Exception:
+        logger.debug("The caller of publish_for_core could not be read; it is refused.", exc_info=True)
+        return False
+
+
+def has_registered_event_job(job_id: str, module_id: str) -> bool:
+    """True when ``job_id`` is registered in this process by ``module_id``. Memory only; says nothing about whether the module is enabled."""
+    with _LOCK:
+        definition = _JOBS.get(job_id) if isinstance(job_id, str) else None
+    return definition is not None and definition.module_id == module_id
+
+
+def module_status_for_core(module_id: str) -> str:
+    """``runnable``, ``unavailable`` or ``unknown``, read uncached (the worker's own test before a handler runs)."""
+    return _module_status_now(module_id)
+
+
+def publish_for_core(job_id: str, *, module_id: str, key, payload) -> PublishResult:
+    """Core's own publish path (1.17.62): store one event for a job a module registered, on Core's own authority. Never raises.
+
+    It exists for events Core itself observes (a finished server-maintenance job, ``server_job_hooks.py``), where no module code runs
+    that could hold the publisher handle. It checks everything ``publish`` checks except the caller frame: the job is registered in this
+    process by ``module_id``, the module is runnable right now (uncached; a failed read answers ``error`` so the caller tries again), the
+    key and payload are valid, and the rate cap and backlog cap still apply. Only ``server_job_hooks.py`` may call it. The row, the retries,
+    the back-off, the expiry and the audit are the ordinary event job ones."""
+    try:
+        if not _core_caller_ok():
+            logger.warning("publish_for_core was called from outside Core's server job hooks; it was ignored.")
+            return PublishResult("error", "not Core's own caller")
+        with _LOCK:
+            definition = _JOBS.get(job_id) if isinstance(job_id, str) else None
+        if definition is None or definition.module_id != module_id:
+            return PublishResult("error", "not a registered event job of this module")
+        status = _module_status_now(definition.module_id)
+        if status == UNKNOWN:
+            return PublishResult("error", "the module state could not be read")
+        if status != RUNNABLE:
+            return PublishResult("disabled")
+        try:
+            key = policy.clean_key(key)
+            payload = policy.clean_payload(payload)
+        except EventJobPolicyError as exc:
+            logger.warning("Event job %s: a Core publish was refused: %s", definition.id, exc)
+            return PublishResult("error", str(exc))
+        if not _RATE.allow(definition.id):
+            _count(definition, "dropped")
+            _maybe_flush_drops()
+            return PublishResult("dropped", "rate")
+        if policy.backlog_full(_GAUGES.get(definition.id), definition.spec.max_backlog):
+            _count(definition, "dropped")
+            _maybe_flush_drops()
+            return PublishResult("dropped", "backlog")
+        if connection.in_atomic_block:
+            transaction.on_commit(lambda: _persist_safely(definition, key, payload))
+            return PublishResult("queued")
+        return PublishResult(_persist_safely(definition, key, payload))
+    except Exception:
+        logger.exception("An event job could not be published by Core.")
         return PublishResult("error", "unexpected failure")
 
 
