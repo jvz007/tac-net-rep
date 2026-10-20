@@ -36,7 +36,7 @@ must([a["action"] for a in AUDITS] == ["run"], AUDITS)
 row = AUDITS[0]
 must(set(row) == {"actor", "module_id", "action", "object_type", "object_id", "message", "metadata", "strict"}, set(row))
 must(row["strict"] is True and row["actor"] is alice and row["module_id"] == "core" and row["object_type"] == "system_action" and row["object_id"] == "patching.scan", row)
-must(set(row["metadata"]) == {"requested_by", "run_id", "schedule_id", "owner_module", "function", "agent_count", "targets_digest", "run_kind", "creator", "confirmed_by"}, row["metadata"])  # 1.17.63 added the last three: who is behind the run
+must(set(row["metadata"]) == {"requested_by", "run_id", "schedule_id", "owner_module", "function", "agent_count", "targets_digest", "run_kind", "creator", "confirmed_by", "total_agents", "group", "groups"}, row["metadata"])  # 1.17.63 added three (who is behind the run); 1.17.66 added the last three (the group)
 must(row["metadata"]["requested_by"] == "scheduler" and row["metadata"]["agent_count"] == 2, row["metadata"])
 must(not any(str(i) in repr(row) for i in IDS), "no endpoint number")
 must(re.fullmatch(r"[0-9a-f]{32}", row["metadata"]["targets_digest"]), row["metadata"]["targets_digest"])

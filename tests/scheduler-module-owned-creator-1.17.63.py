@@ -30,8 +30,8 @@ for who in ("alice", "bob", "carol", "dave"):
     FLAGS[who] = set(BOTH)
     SCOPE[who] = set(IDS)
 root = plugin("patching", system_actions=["patching.scan", "patching.run"])
-for _sid in ("patching.scan", "patching.run"):
-    sa.register_system_action(_sid, "patching", _sid, "winupdate.scan", ("can_manage_winupdates", "can_run_bulk"))
+# 1.17.66: sections (1) to (5) prove the CQ176 mechanics of an ordinary scheduled action, so nothing is registered with core.system_actions here
+# (a declared system action needs a confirmation id at creation; tests/system-actions-creation-1.17.66.py proves that). Section (6) registers them.
 plugin("checks", system_actions=[])
 
 
@@ -197,11 +197,11 @@ must(sched._is_unattended_scheduled_run(plain) is False, "no creator: never unat
 exc = refused(lambda: sched.reconcile_schedule(owner_module="patching", owner_key="x", action_id="patching.scan", schedule_type="once", targets={"type": "none"}))
 sig = inspect.signature(sched.reconcile_schedule)
 names = list(sig.parameters)
-must(names[-1] == "confirmed_by_request" and sig.parameters["confirmed_by_request"].kind is inspect.Parameter.KEYWORD_ONLY and sig.parameters["confirmed_by_request"].default is None, names)
+must(names[-2:] == ["confirmed_by_request", "confirmation_id"] and all(sig.parameters[n].kind is inspect.Parameter.KEYWORD_ONLY and sig.parameters[n].default is None for n in names[-2:]), names)  # 1.17.66 added confirmation_id
 old = ["owner_module", "owner_key", "action_id", "schedule_type", "targets", "parameters", "enabled", "name", "timezone_name", "run_at", "run_time", "weekdays", "day_of_month",
        "interval_seconds", "interval_anchor_at", "target_mode", "missed_policy", "missed_grace_minutes", "concurrency_policy", "retry_count", "retry_delay_seconds"]
-must(names[:-1] == old and all(sig.parameters[n].kind is inspect.Parameter.KEYWORD_ONLY for n in old), names)
-print("       reconcile_schedule called as before behaves as before; confirmed_by_request is the one new, last, keyword-only, optional name")
+must(names[:-2] == old and all(sig.parameters[n].kind is inspect.Parameter.KEYWORD_ONLY for n in old), names)
+print("       reconcile_schedule called as before behaves as before; confirmed_by_request (1.17.63) and confirmation_id (1.17.66) are the new, last, keyword-only, optional names")
 
 # ---- (6) the system action on a module-owned schedule: no creator is no_owner, a stored creator runs as the creator
 CFG = {"action_id": "patching.scan", "agents": IDS, "parameters": None}
@@ -259,7 +259,7 @@ must("from .tactical_operations import _is_real_request" in src and 'getattr(req
 must("def start_one_off_run" in src and "def disable_owned_schedule" in src and "def remove_owned_schedule" in src, "the other helpers are still there")
 for name, expected in (("disable_owned_schedule", ["owner_module", "owner_key"]), ("remove_owned_schedule", ["owner_module", "owner_key"])):
     must(list(inspect.signature(getattr(sched, name)).parameters) == expected, name)
-must(list(inspect.signature(sched.start_one_off_run).parameters) == ["user", "owner_module", "action_id", "targets", "parameters", "name", "retry_count", "retry_delay_seconds"], "start_one_off_run is unchanged")
+must(list(inspect.signature(sched.start_one_off_run).parameters) == ["user", "owner_module", "action_id", "targets", "parameters", "name", "retry_count", "retry_delay_seconds", "confirmation_id"], "start_one_off_run only gained its last optional keyword (1.17.66)")
 must(sched.get_owned_schedule("patching", "nobody") is None, "an unknown tuple is still None")
 print("       start_one_off_run, disable_owned_schedule and remove_owned_schedule are unchanged; the proof is the one run_tactical_operation asks for")
 print("PASS scheduler module-owned creator 1.17.63")

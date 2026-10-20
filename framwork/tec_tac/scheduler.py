@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import calendar
+import functools
 import json
 import logging
 import re
@@ -1094,6 +1095,24 @@ def _validate_owner(owner_module: str, owner_key: str) -> tuple[str, str]:
     return module, key
 
 
+def _after_refusal_record_deny_row(function):
+    """1.17.66: ``reconcile_schedule`` runs its work in one transaction, which a refusal rolls back. A refused system action schedule writes
+    its deny audit row after that, so the row is kept. Any other exception passes through untouched."""
+    @functools.wraps(function)
+    def wrapper(*args, **kwargs):
+        try:
+            return function(*args, **kwargs)
+        except SchedulerNotAllowed as exc:
+            if getattr(exc, "pending", None):
+                from . import system_action_confirmation
+
+                system_action_confirmation.record_refusal(exc)
+            raise
+
+    return wrapper
+
+
+@_after_refusal_record_deny_row
 def reconcile_schedule(*, owner_module: str, owner_key: str, action_id: str, schedule_type: str,
                        targets: dict | None = None, parameters: dict | None = None, enabled: bool = True,
                        name: str | None = None, timezone_name: str = "UTC", run_at: datetime | None = None,
@@ -1102,7 +1121,7 @@ def reconcile_schedule(*, owner_module: str, owner_key: str, action_id: str, sch
                        target_mode: str = TecTacSchedule.TargetMode.SNAPSHOT,
                        missed_policy: str = TecTacSchedule.MissedPolicy.SKIP, missed_grace_minutes: int = 60,
                        concurrency_policy: str = TecTacSchedule.ConcurrencyPolicy.SKIP, retry_count: int = 0,
-                       retry_delay_seconds: int = 60, confirmed_by_request=None) -> TecTacSchedule | None:
+                       retry_delay_seconds: int = 60, confirmed_by_request=None, confirmation_id: str | None = None) -> TecTacSchedule | None:
     """Idempotently create/update a backend-module-owned scheduler definition.
 
     The ownership tuple is the stable identity. ``enabled=False`` disables an
@@ -1116,6 +1135,12 @@ def reconcile_schedule(*, owner_module: str, owner_key: str, action_id: str, sch
     for the creation and one for every change. The module stays the owner and the executor. WITHOUT a request, a schedule that has a
     stored creator can only be disabled or left unchanged: any change to its action, targets, parameters, timing or policies, and
     switching it back on, raises ``SchedulerError``. A schedule with no stored creator behaves exactly as before 1.17.63.
+
+    1.17.66: ``confirmation_id`` (keyword-only, optional) is the id the confirmation route (or ``core.system_actions`` ``describe_confirmation``)
+    issued for this person, action, targets, parameters and timing. It is read only when ``confirmed_by_request`` is given, the schedule is
+    enabled and the action is a declared system action (in the signed manifest ``system_actions`` and registered with ``core.system_actions``).
+    Then Core checks the person's permission, Tactical flags and scope at this creation or edit and refuses without a valid id
+    (``SystemActionCreationRefused``, a ``SchedulerNotAllowed``). Any other action behaves exactly as before.
     """
     module, key = _validate_owner(owner_module, owner_key)
     if is_one_off_key(key):
@@ -1180,9 +1205,12 @@ def reconcile_schedule(*, owner_module: str, owner_key: str, action_id: str, sch
 
         stored_creator = bool(existing is not None and schedule_creator_names(existing)[0])
         person = None
+        system_info = None
         if confirmed_by_request is not None:
             person = _verified_person(confirmed_by_request)
             _check_person_may_schedule(person, action, data["targets"])
+            if data.get("enabled", True):
+                system_info = _system_action_creation(person, action, data, confirmation_id, defer=True)
             data["targets"] = _canonicalize_targets_for_person(person, data["targets"])
         elif stored_creator and not enabled:
             # A module can switch off a person's schedule, never rewire it: only ``enabled`` changes.
@@ -1249,7 +1277,7 @@ def reconcile_schedule(*, owner_module: str, owner_key: str, action_id: str, sch
             _audit_schedule_row(
                 person, schedule, "add" if existing is None else "modify",
                 f"Module {module} {'created' if existing is None else 'changed'} a schedule that a person confirmed.",
-                strict=True,
+                strict=True, extra=_system_action_audit_extra(system_info),
             )
         return schedule
 
@@ -1310,6 +1338,27 @@ def _check_person_may_schedule(user, action: ScheduledAction, targets: dict) -> 
         raise SchedulerNotAllowed("The targets are outside the person's Tactical scope.")
 
 
+_TIMING_FIELDS = ("schedule_type", "run_at", "run_time", "weekdays", "day_of_month", "interval_seconds", "timezone")
+
+
+def _system_action_creation(person, action: ScheduledAction, data: dict, confirmation_id, *, defer: bool = False):
+    """The creation-time controls for a declared system action (1.17.66, AD-13 as amended). None for any other action: nothing changes for it.
+    Raises ``SystemActionCreationRefused`` (a ``SchedulerNotAllowed``) when the person may not, or when the confirmation id does not fit."""
+    from . import system_action_confirmation
+
+    when = {name: data.get(name) for name in _TIMING_FIELDS}
+    return system_action_confirmation.require_creation(person, action, data.get("targets"), data.get("parameters"), when, confirmation_id, defer=defer)
+
+
+def _system_action_audit_extra(info) -> dict:
+    """Counts for the audit row of a system action schedule (none for any other action)."""
+    if not info:
+        return {}
+    from . import system_action_confirmation
+
+    return system_action_confirmation.audit_extra(info)
+
+
 def _canonicalize_targets_for_person(user, targets: dict) -> dict:
     from .scheduler_views import _canonicalize_endpoint_targets_for_user
 
@@ -1321,7 +1370,7 @@ def _canonicalize_targets_for_person(user, targets: dict) -> dict:
         raise SchedulerNotAllowed("The targets are outside the person's Tactical scope.") from exc
 
 
-def _audit_schedule_row(person, schedule, action: str, message: str, *, strict: bool = False) -> None:
+def _audit_schedule_row(person, schedule, action: str, message: str, *, strict: bool = False, extra: dict | None = None) -> None:
     """One audit row for a module-owned schedule a person created or changed (1.17.63). The actor is the person; with none, a Core service
     actor. The row names the creator and the confirmer. A strict row that cannot be written stops the change (the caller's transaction
     rolls back)."""
@@ -1336,6 +1385,7 @@ def _audit_schedule_row(person, schedule, action: str, message: str, *, strict: 
             metadata={
                 "owner_module": schedule.owner_module, "owner_key": schedule.owner_key, "action_id": schedule.action_id,
                 "requested_by": "module", "creator": creator, "confirmed_by": confirmed, "enabled": bool(schedule.enabled),
+                **(extra or {}),
             },
             strict=strict,
         )
@@ -1377,7 +1427,7 @@ def _one_off_user_refusal(user) -> str | None:
 
 def start_one_off_run(*, user, owner_module: str, action_id: str, targets: dict | None = None,
                       parameters: dict | None = None, name: str | None = None, retry_count: int = 0,
-                      retry_delay_seconds: int = DEFAULT_RETRY_DELAY_SECONDS) -> TecTacScheduleRun:
+                      retry_delay_seconds: int = DEFAULT_RETRY_DELAY_SECONDS, confirmation_id: str | None = None) -> TecTacScheduleRun:
     """Start one run of a registered Scheduler action on behalf of ``user`` and return the queued run (1.17.16).
 
     A module starts only its own actions (``action.module_id == owner_module``, as ``reconcile_schedule`` requires). The user
@@ -1395,7 +1445,12 @@ def start_one_off_run(*, user, owner_module: str, action_id: str, targets: dict 
     the handler raises ``SchedulerTransientError`` (or another error the worker treats as retryable) the worker re-queues the
     run with that countdown until the attempts are used up. The owner re-check of a one-off run runs again on every attempt. Anything that is
     not a whole number in range (a bool, a text, a float) raises ``SchedulerError`` before anything is created. The defaults
-    equal the behaviour before 1.17.18."""
+    equal the behaviour before 1.17.18.
+
+    1.17.66: ``confirmation_id`` (keyword-only, optional). For a declared system action (in the signed manifest ``system_actions`` and registered
+    with ``core.system_actions``) Core checks the user's permission, Tactical flags and scope now and refuses without a valid id
+    (``SystemActionCreationRefused``, a ``SchedulerNotAllowed``); ask the confirmation route with timing ``{"schedule_type": "once", "run_at": "now"}``.
+    For any other action the argument is ignored and nothing changes."""
     refusal = _one_off_user_refusal(user)
     if refusal:
         raise SchedulerNotAllowed(refusal)
@@ -1429,6 +1484,7 @@ def start_one_off_run(*, user, owner_module: str, action_id: str, targets: dict 
     target_type = str(canonical.get("type") or "none")
     if target_type not in action.target_types:
         raise SchedulerError(f"Action {action.id} does not support target type {target_type!r}.")
+    system_info = _system_action_creation(user, action, {"targets": canonical, "parameters": data["parameters"], "schedule_type": "once", "run_at": "now"}, confirmation_id)
     # Runtime import avoids a scheduler <-> scheduler_views import cycle.
     from .scheduler_views import _can_use_action, _can_access_target_scope, _canonicalize_endpoint_targets_for_user
     try:
@@ -1468,7 +1524,7 @@ def start_one_off_run(*, user, owner_module: str, action_id: str, targets: dict 
         audit_record(
             actor=user, module_id="core", action="add", object_type="scheduler_run", object_id=str(run.id),
             message=f"Module {module} started a one-off run of {action.id}.",
-            metadata={"owner_module": module, "action_id": action.id, "requested_by": "scheduler"},
+            metadata={"owner_module": module, "action_id": action.id, "requested_by": "scheduler", **_system_action_audit_extra(system_info)},
         )
     except Exception:
         logger.exception("Tec-Tac audit row for a one-off scheduler run could not be written")

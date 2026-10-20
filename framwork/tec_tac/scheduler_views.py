@@ -35,6 +35,7 @@ from .scheduler import (
     validate_schedule_payload,
 )
 from .views import _role_for_user
+from .system_action_confirmation import SystemActionCreationRefused, describe_confirmation, require_creation, audit_extra as _system_audit_extra
 
 logger = logging.getLogger("tec_tac.scheduler")
 
@@ -246,6 +247,36 @@ def _person_name(user) -> str:
     return str(getattr(user, "username", "") or "")[:MAX_NAME_FILTER]
 
 
+_TIMING_FIELDS = ("schedule_type", "run_at", "run_time", "weekdays", "day_of_month", "interval_seconds", "timezone")
+_EDIT_FIELDS = ("action_id", "target_mode", "targets", "parameters", "schedule_type", "timezone", "run_at", "run_time", "weekdays", "day_of_month", "interval_seconds")
+
+
+def _system_action_creation(user, action, data, confirmation_id, *, schedule=None):
+    """1.17.66 (AD-13 as amended): the creation-time controls and the one Yes or No for a declared system action. None for any other action, for
+    a schedule that stays switched off and, on an edit, for a change that touches neither the action, targets, parameters nor timing and does not
+    switch it on. Raises ``SystemActionCreationRefused``."""
+    if not data.get("enabled", True):
+        return None
+    if schedule is not None and schedule.enabled:
+        from .scheduler import _comparable
+
+        if not any(_comparable(name, data.get(name)) != _comparable(name, getattr(schedule, name)) for name in _EDIT_FIELDS if name in data):
+            return None
+    when = {name: data.get(name) for name in _TIMING_FIELDS}
+    return require_creation(user, action, data.get("targets"), data.get("parameters"), when, confirmation_id)
+
+
+def _audit_system_schedule(user, schedule, verb, info):
+    """One strict audit row for a created or edited schedule of a system action: creator, confirmer, schedule, total, groups and timing. A row that
+    cannot be written stops the change (the caller's transaction rolls back)."""
+    from .scheduler import _audit_schedule_row
+
+    _audit_schedule_row(
+        user, schedule, verb, f"A person {'created' if verb == 'add' else 'changed'} a schedule for a system action.", strict=True,
+        extra={"requested_by": "person", **_system_audit_extra(info)},
+    )
+
+
 def _require_user_managed(schedule):
     if schedule.owner_type == TecTacSchedule.OwnerType.MODULE:
         raise PermissionDenied(
@@ -373,7 +404,9 @@ class SchedulerListView(APIView):
 
     def post(self, request):
         try:
-            data = validate_schedule_payload(_parse_fields(dict(request.data)))
+            incoming = _parse_fields(dict(request.data))
+            confirmation_id = incoming.pop("confirmation_id", None)
+            data = validate_schedule_payload(incoming)
             action = _require_action(request.user, data["action_id"])
             data.setdefault("targets", {"type": action.target_types[0]})
             data.setdefault("parameters", {})
@@ -387,6 +420,7 @@ class SchedulerListView(APIView):
             if data.get("schedule_type") == TecTacSchedule.ScheduleType.INTERVAL and not data.get("interval_anchor_at"):
                 data["interval_anchor_at"] = timezone.now().replace(second=0, microsecond=0)
             data["targets"] = _normalize_targets(data.get("targets"))
+            system_info = _system_action_creation(request.user, action, data, confirmation_id)
             data["targets"] = _canonicalize_endpoint_targets_for_user(request.user, data["targets"])
             _validate_shape(data)
             _require_target_scope(request.user, data.get("targets"), payload=True)
@@ -397,8 +431,15 @@ class SchedulerListView(APIView):
             _apply_schedule_fields(schedule, data)
             schedule.target_state = "valid"
             schedule.target_state_detail = ""
-            schedule.save()
+            if system_info is None:
+                schedule.save()
+            else:
+                with transaction.atomic():
+                    schedule.save()
+                    _audit_system_schedule(request.user, schedule, "add", system_info)
             return Response(serialize_schedule(schedule, include_runs=True), status=201)
+        except SystemActionCreationRefused as exc:
+            return Response({"detail": str(exc), "reason": exc.reason}, status=403)
         except SchedulerError as exc:
             return Response({"detail": str(exc)}, status=400)
 
@@ -431,10 +472,13 @@ class SchedulerDetailView(APIView):
                 "concurrency_policy": schedule.concurrency_policy, "retry_count": schedule.retry_count,
                 "retry_delay_seconds": schedule.retry_delay_seconds,
             }
-            merged.update(_parse_fields(dict(request.data)))
+            incoming = _parse_fields(dict(request.data))
+            confirmation_id = incoming.pop("confirmation_id", None)
+            merged.update(incoming)
             data = validate_schedule_payload(merged)
-            _require_action(request.user, data["action_id"])
+            action = _require_action(request.user, data["action_id"])
             data["targets"] = _normalize_targets(data.get("targets"))
+            system_info = _system_action_creation(request.user, action, data, confirmation_id, schedule=schedule)
             data["targets"] = _canonicalize_endpoint_targets_for_user(request.user, data["targets"])
             _validate_shape(data)
             _require_target_scope(request.user, data.get("targets"), payload=True)
@@ -448,8 +492,15 @@ class SchedulerDetailView(APIView):
                 schedule.created_by_username = _person_name(schedule.created_by)
             schedule.confirmed_by_username = _person_name(request.user)
             schedule.last_due_key = ""
-            schedule.save()
+            if system_info is None:
+                schedule.save()
+            else:
+                with transaction.atomic():
+                    schedule.save()
+                    _audit_system_schedule(request.user, schedule, "modify", system_info)
             return Response(serialize_schedule(schedule, include_runs=True))
+        except SystemActionCreationRefused as exc:
+            return Response({"detail": str(exc), "reason": exc.reason}, status=403)
         except SchedulerError as exc:
             return Response({"detail": str(exc)}, status=400)
 
@@ -874,3 +925,24 @@ class SchedulerSelfTestView(APIView):
             return Response({"mode": mode, "schedule": serialize_schedule(schedule)}, status=201)
         run = queue_manual_run(schedule)
         return Response({"mode": mode, "schedule": serialize_schedule(schedule), "run": serialize_run(run)}, status=202)
+
+
+@extend_schema_view(
+    post=extend_schema(tags=["Tec-Tac Scheduler"], summary="Confirmation text and id for a system action schedule"),
+)
+class SchedulerSystemActionConfirmationView(APIView):
+    """The plain Yes or No for a schedule of a system action (1.17.66). Body: ``action_id``, ``targets``, ``parameters`` (with the confirmed
+    values under ``system_action_parameters``) and ``when`` (the timing fields; ``{"schedule_type": "once", "run_at": "now"}`` for a one-off run).
+    Answers ``{required, text, confirmation_id, total, groups, expires_in}``. Every creation-time check runs first, so a person who may not
+    create the schedule gets a refusal and a deny row, never a text. For an action that is not a system action it answers ``required: false``."""
+    permission_classes = [SessionAuthenticated]
+
+    def post(self, request):
+        body = request.data if isinstance(request.data, dict) else {}
+        try:
+            result = describe_confirmation(request.user, body.get("action_id"), body.get("targets"), body.get("parameters"), body.get("when"))
+        except SystemActionCreationRefused as exc:
+            return Response({"detail": str(exc), "reason": exc.reason}, status=403)
+        except SchedulerError as exc:
+            return Response({"detail": str(exc)}, status=400)
+        return Response(result)

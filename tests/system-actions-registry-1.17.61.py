@@ -119,10 +119,10 @@ print("       a replacement that is not honoured is refused cleanly: no exceptio
 # install: refused for a replacement, allowed for Windows Patching
 setup()
 HONOURED["patchmanagement"] = "patching"
-message = refused(action_id="patchmanagement.install", module="patchmanagement", function="winupdate.install")
-must("re-approves" in message and "R-36" in message, message)
+# 1.17.66 (CQ173, Johan: yes): the honoured replacement may register install; R-36 is not built
+must(register("patchmanagement.install", "patchmanagement", "winupdate.install").via_replacement is True, "the honoured replacement may register install")
 must(register("patching.install", "patching", "winupdate.install").function == "winupdate.install", "Windows Patching may register install")
-print("       winupdate.install is refused for a replacement and accepted for Windows Patching")
+print("       winupdate.install is accepted for Windows Patching and for the honoured replacement (CQ173)")
 
 # the id
 setup()
@@ -171,16 +171,17 @@ sys.modules["tec_tac.capabilities"].register_capability = lambda **kw: CAPS.appe
 setup()
 sa.register_core_system_actions_capability()
 cap = CAPS[0]
-must(cap["id"] == "core.system_actions" and cap["version"] == "1.0.0" and cap["module_id"] == "core", cap)
-must(tuple(cap["operations"]) == ("list_actions", "get_action", "run"), cap["operations"])
+must(cap["id"] == "core.system_actions" and cap["version"] == "1.1.0" and cap["module_id"] == "core", cap)
+must(tuple(cap["operations"]) == ("list_actions", "get_action", "run", "describe_confirmation"), cap["operations"])
 meta = cap["metadata"]
-must(meta["max_agents"] == 2000 and meta["http"] is None and meta["delivery"] == "at most once" and set(meta["functions"]) == {"winupdate.scan", "winupdate.install"}, meta)
+must(meta["max_agents"] == 40000 and meta["max_agents_per_group"] == 2000 and meta["max_groups"] == 20 and meta["delivery"] == "at most once per group", meta)
+must(set(meta["functions"]) == {"winupdate.scan", "winupdate.install", "scripts.run"}, meta)
 must(meta["functions"]["winupdate.install"]["reapproves_by_policy"] is True and meta["functions"]["winupdate.scan"]["reapproves_by_policy"] is False)
 provider = cap["provider"]
 register()
 must([r["id"] for r in provider.list_actions()] == ["patching.scan"] and provider.get_action("patching.scan")["module_id"] == "patching" and provider.get_action("x.y") is None)
 must(callable(provider.run))
 must("list_actions" in repr(meta["refusal_reasons"]) or "out_of_scope" in meta["refusal_reasons"], meta["refusal_reasons"])
-print("       the capability core.system_actions 1.0.0 offers list_actions, get_action and run, and states its limits")
+print("       the capability core.system_actions 1.1.0 offers list_actions, get_action, run and describe_confirmation, and states its limits")
 
 print("PASS system actions registry 1.17.61")

@@ -36,7 +36,7 @@ def signature(path: Path, name: str) -> str:
 scheduler = APP / "scheduler.py"
 PINNED = {
     "register_scheduled_action": "*, id: str, module_id: str, label: str, handler, description: str='', target_types=('none',), permission: str | list | tuple | None=None, dangerous: bool=False, timeout_seconds: int=3600, unattended: bool=False",  # 1.17.63: one optional last keyword
-    "start_one_off_run": "*, user, owner_module: str, action_id: str, targets: dict | None=None, parameters: dict | None=None, name: str | None=None, retry_count: int=0, retry_delay_seconds: int=DEFAULT_RETRY_DELAY_SECONDS",
+    "start_one_off_run": "*, user, owner_module: str, action_id: str, targets: dict | None=None, parameters: dict | None=None, name: str | None=None, retry_count: int=0, retry_delay_seconds: int=DEFAULT_RETRY_DELAY_SECONDS, confirmation_id: str | None=None",  # 1.17.66: one optional last keyword
     "get_one_off_run": "run_id, *, owner_module: str",
     "get_owned_schedule": "owner_module: str, owner_key: str",
     "disable_owned_schedule": "*, owner_module: str, owner_key: str",
@@ -71,7 +71,8 @@ print("       the worker's success and failure paths are as they were for every 
 
 # no module uses the new names or reads the new keys
 if MODULES.is_dir():
-    names = re.compile(r"\b(run_system_action|register_system_action|PendingCompletion|pending_completion|complete_pending_run|system_actions|settle_server_job_runs)\b")
+    # 1.17.66: certificatemanagement has adopted pending_completion, so the search is for the system-action names only (the plan's grep)
+    names = re.compile(r"\b(run_system_action|register_system_action|system_actions|describe_confirmation|settle_server_job_runs)\b")
     reads = re.compile(r"""["']completion["']|completion_state|completion_ref|system_action_marks|scheduler_state""")
     hits, readers, scanned, users = [], [], 0, set()
     for path in MODULES.rglob("*"):

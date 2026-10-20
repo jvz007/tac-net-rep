@@ -138,7 +138,8 @@ def assert_refused(run, out, reason, *, ended=True, owner="alice"):
 # ---- the happy path
 fresh()
 run, out = start()
-must(out == {"outcome": "queued", "agents": 3, "message": "Queued in Tactical; the result shows in each endpoint's update list."}, out)
+must(out == {"outcome": "queued", "agents": 3, "message": "Queued in Tactical; the result shows in each endpoint's update list.",
+             "groups": {"total": 1, "sent": 1, "failed": 0, "not_started": 0}, "summary": "3 endpoint(s) in 1 group(s): 1 sent, 0 failed, 0 not started."}, out)  # 1.17.66 added groups and summary
 must(TASK_CALLS == [("scan", (IDS,), {})], TASK_CALLS)
 must(run.status == "succeeded" and run.result == out and run.schedule.last_run_at is not None, run.__dict__)
 must("done" not in out["message"].lower() and "completed" not in out["message"].lower(), "the result never says done")
@@ -150,7 +151,7 @@ must(row["actor"] is alice and row["module_id"] == "core" and row["object_type"]
 meta = row["metadata"]
 must(meta["requested_by"] == "scheduler" and meta["run_id"] == str(run.id) and meta["owner_module"] == "patching" and meta["function"] == "winupdate.scan"
      and meta["agent_count"] == 3 and len(meta["targets_digest"]) == 32 and meta["schedule_id"] == str(run.schedule.id), meta)
-must(set(meta) == {"requested_by", "run_id", "schedule_id", "owner_module", "function", "agent_count", "targets_digest", "run_kind", "creator", "confirmed_by"}, set(meta))  # 1.17.63 added the last three
+must(set(meta) == {"requested_by", "run_id", "schedule_id", "owner_module", "function", "agent_count", "targets_digest", "run_kind", "creator", "confirmed_by", "total_agents", "group", "groups"}, set(meta))  # 1.17.63 added three; 1.17.66 the group
 must(not any(str(i) in repr(AUDITS) for i in IDS), "no endpoint number in the audit row")
 must(SCOPE_CALLS == [("alice", IDS)], SCOPE_CALLS)
 print("       the happy path: one task with the right numbers, one strict audit row naming the owner, a plain 'queued' result")
@@ -295,7 +296,7 @@ for action in ("patching.nope", None, 5, "", "winupdate.scan", "PATCHING.SCAN"):
 print("       an unregistered action id is refused (unknown_action)")
 
 # counts and shapes
-for agents, reason in (([], "agent_count"), (list(range(5000, 7001)), "agent_count"), ("987654311", "bad_agents"), (None, "bad_agents"), ({IDS[0]: 1}, "bad_agents"),
+for agents, reason in (([], "agent_count"), (list(range(5000, 45001)), "agent_count"), ("987654311", "bad_agents"), (None, "bad_agents"), ({IDS[0]: 1}, "bad_agents"),
                        (["987654311"], "bad_agents"), ([True], "bad_agents"), ([0], "bad_agents"), ([-4], "bad_agents"), ([1.5], "bad_agents"), ([[IDS[0]]], "bad_agents"),
                        ([2 ** 63], "bad_agents")):
     fresh()
@@ -307,7 +308,7 @@ fresh()
 CFG["agents"] = list(range(5000, 7000))  # exactly 2000
 run, out = start()
 must(out["agents"] == 2000 and TASK_CALLS[0][1][0] == list(range(5000, 7000)), "2000 is allowed and nothing is truncated")
-print("       0 and 2001 endpoints, and malformed numbers, are refused before any lookup; 2000 is allowed whole")
+print("       0 and 40001 endpoints (above the ceiling), and malformed numbers, are refused before any lookup; 2000 is allowed whole (as one group)")
 
 fresh()
 CFG["parameters"] = {"x": MARKER}
@@ -335,17 +336,18 @@ run, out = start()
 assert_refused(run, out, "function_unavailable")
 print("       a missing Tactical module, function or a non-task callable fails closed (function_unavailable)")
 
-# defence in depth: an install that re-approves is refused for a replacement at run time even if the registry were bypassed
+# 1.17.66 (CQ173): an install that re-approves by policy runs for the honoured replacement; the audit row carries the plain warning
 fresh()
-sa._ACTIONS["patchmanagement.install"] = sa.SystemActionDefinition("patchmanagement.install", "patchmanagement", "APM install", "winupdate.install", BOTH, "agents", False, None, True)
+sa.register_system_action("patchmanagement.install", "patchmanagement", "APM install", "winupdate.install", BOTH)
 CFG["action_id"] = "patchmanagement.install"
 run, out = start("patchmanagement.handler")
-assert_refused(run, out, "reapproves_by_policy")
+must(out["outcome"] == "queued" and TASK_CALLS == [("install", (IDS,), {})], out)
+must([a for a in AUDITS if a["action"] == "run"][0]["metadata"]["warning"] == sa.REAPPROVE_WARNING, "the warning is in the audit row")
 fresh()
 CFG["action_id"] = "patching.install"
 run, out = start()
 must(out["outcome"] == "queued" and TASK_CALLS == [("install", (IDS,), {})], "Windows Patching may run install")
-print("       install is refused for a replacement at run time and runs for Windows Patching")
+print("       install runs for the honoured replacement (with the warning in the audit row) and for Windows Patching")
 
 # ---- at most once
 fresh()

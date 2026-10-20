@@ -285,7 +285,7 @@ out = go(run_for(make_schedule("patching.sys"), targets={"type": "endpoint", "id
 refused(out, "outside_targets")
 
 fresh()
-CFG["agents"] = [6000 + i for i in range(2001)]
+CFG["agents"] = [6000 + i for i in range(40001)]
 out = go(run_for(make_schedule("patching.sys")))
 refused(out, "agent_count")
 

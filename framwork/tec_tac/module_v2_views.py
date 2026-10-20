@@ -309,6 +309,8 @@ class ModuleV2JobLogView(APIView):
         response["X-Tec-Tac-Log-Truncated"] = "true" if log.truncated else "false"
         response["X-Tec-Tac-Log-Bytes"] = str(log.size)
         response["X-Tec-Tac-Log-Kept"] = log.kept
+        # 1.17.66 (UI 0.12.118): a browser on another origin may read these four headers. Only this route, only on a 200.
+        response["Access-Control-Expose-Headers"] = "X-Tec-Tac-Log-Truncated, X-Tec-Tac-Log-Bytes, X-Tec-Tac-Log-Kept, Content-Disposition"
         if download:
             response["Content-Disposition"] = f'attachment; filename="{module_job_logs.download_filename(log)}"'
         return response

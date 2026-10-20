@@ -75,8 +75,7 @@ for header in ("X-Tec-Tac-Log-Truncated", "X-Tec-Tac-Log-Bytes", "X-Tec-Tac-Log-
 # ---- requests and questions written for this release
 reviews = ROOT.parents[1] / "reviews"
 if reviews.is_dir():
-    ui = (reviews / "requests" / "ui.md").read_text(encoding="utf-8").replace("\r\n", "\n")
-    must("### From Core 1.17.60: Module Manager History tab and full logs (UI 0.12.118, requires Core >=1.17.60)" in ui and "docs/ui-brand-board" in ui, "the UI request is written")
+    # 1.17.66: the UI request was worked by UI 0.12.118 and removed from requests/ui.md, so only the questions file is read here
     questions = (reviews / "questions" / "core.md").read_text(encoding="utf-8")
     must("CQ170" in questions and "CQ171" in questions, "both questions are written")
 

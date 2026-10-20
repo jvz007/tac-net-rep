@@ -184,6 +184,7 @@ Core registers `tec-tac.module-repository-sync` (module `tec-tac`, no target, ti
 - `GET|POST /api/tfd/scheduler/schedules/`
 - `GET|PATCH|DELETE /api/tfd/scheduler/schedules/<id>/`
 - `POST /api/tfd/scheduler/schedules/<id>/run/`
+- `POST /api/tfd/scheduler/system-actions/confirmation/` (Core 1.17.66): the plain Yes or No text and a confirmation id for a schedule of a system action (see "System actions" below). For an action that is not a system action it answers `required: false`.
 - `GET /api/tfd/scheduler/runs/`
   - paged callers may use `page`, `page_size` (max 100), `owner_type`, `schedule_id`, `status`, and `search`;
   - paged responses include `total`, `page`, `page_size`, `pages`, `next_page`, and `previous_page`;
@@ -500,3 +501,7 @@ The id is fixed: `<module id>.server_job_finished`, with the module id spelled e
 ## System actions (Core 1.17.61)
 
 A module can ask Core to run a fixed piece of Tactical work for a named owner when nobody is signed in, such as a scheduled patch scan. See `docs/system-actions.md`.
+
+**Groups and the summary (Core 1.17.66).** A run of more than 2000 endpoints is split into groups of at most 2000 (up to 20 groups). The run result of a system action gains `groups` (`{total, sent, failed, not_started}`) and a plain `summary` line, such as "4500 endpoint(s) in 3 group(s): 3 sent, 0 failed, 0 not started." A run that fails part way carries the same counts in its error text. Counts only, no endpoint ids.
+
+**Creating or editing (Core 1.17.66).** For a declared system action, `POST` and `PATCH` on `/api/tfd/scheduler/schedules/` need a `confirmation_id` in the body, and Core checks the person's permission, Tactical flags and scope at that moment. Ask `POST /api/tfd/scheduler/system-actions/confirmation/` with `action_id`, `targets`, `parameters` and `when` first, show the returned `text` in the plain Yes/No dialog, and send the id back. A refusal is a 403 with a `reason`. Any other action is unchanged. Details: `docs/system-actions.md` ("Creating or editing a schedule").

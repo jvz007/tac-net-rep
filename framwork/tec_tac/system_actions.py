@@ -1,4 +1,4 @@
-"""System actions: typed Tactical work that Core runs unattended for a named owner (core.system_actions 1.0.0, Core 1.17.61, R-20, AD-13).
+"""System actions: typed Tactical work that Core runs unattended for a named owner (core.system_actions 1.1.0, Core 1.17.66; first built 1.17.61, R-20, AD-13).
 
 A system action is a Tactical function that Core may run when nobody is signed in: a scheduled patch scan, for example. It is not a free
 path into Tactical. Core holds a fixed table, ``SYSTEM_FUNCTIONS``, of the few Tactical functions it will reach. A module cannot name a
@@ -24,6 +24,12 @@ The five AD-13 conditions and how each is met (see docs/system-actions.md for th
 At-most-once. A mark is committed on the run row before the audit row, and the audit row before the send. A retry that finds a mark never
 sends again; a mark stuck at ``claiming`` fails the run as outcome-unknown. The cost is a possibly missed scan, never a double install.
 
+Groups (1.17.66, Johan CQ178). More than 2000 endpoints are not refused: they are split. The whole set is judged first (shape, count against
+the ceiling, scope, targets, parameters, declared, enabled, honoured); one failure refuses the whole call and nothing is sent. The sorted ids
+are cut into groups of at most 2000. Every group has its own mark, its own strict audit row written before its own send, and is sent at most
+once. A group that is already sent is skipped on a retry. A group whose mark is stuck or whose send failed ends the run failed as
+outcome-unknown, is never sent again, and every later group stays not started.
+
 Honest limits: the owner re-check reads Tactical's role through Core's own helpers; modules share the Core process, so code that reaches
 into Core's private state is outside what this stops (the same limit as docs/caller-identity.md).
 """
@@ -48,10 +54,12 @@ from .scheduler import SchedulerPermanentError, SchedulerTransientError
 logger = logging.getLogger("tec_tac.system_actions")
 
 CAPABILITY_ID = "core.system_actions"
-CAPABILITY_VERSION = "1.0.0"
-MAX_AGENTS = 2000  # a Core constant: refused above, never truncated
+CAPABILITY_VERSION = "1.1.0"
+MAX_AGENTS_PER_GROUP = 2000  # Johan, CQ178: more than this splits into groups of at most this many
+MAX_GROUPS = 20  # the ceiling of one run (assumption CQ195, asked): 20 groups
+MAX_AGENTS = MAX_AGENTS_PER_GROUP * MAX_GROUPS  # a Core constant: refused above, never truncated
 MAX_PERMISSIONS = 8
-MAX_MARKS_PER_RUN = 20
+MAX_MARKS_PER_RUN = 100  # one mark per group; room for five full calls
 LABEL_MAX = 100
 SCOPE_KIND_AGENTS = "agents"
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}\.[a-z0-9][a-z0-9_-]{0,63}$")
@@ -94,9 +102,85 @@ class _NotHonoured(Exception):
 
 
 # ------------------------------------------------------------------------------------------------ the fixed function table
+REAPPROVE_WARNING = "Tactical installs what its own patch policy approves, including updates set to Ignore elsewhere."
+PARAMETERS_KEY = "system_action_parameters"  # the key of a schedule's (and a run's) parameters that holds what the person confirmed
+MAX_LIST_ITEMS = 50
+MAX_ITEM_CHARS = 1000
+DEFAULT_SCRIPT_TIMEOUT = 90  # Tactical's own default for a script run
+
+
+def _no_parameters(values) -> dict:
+    if values:
+        raise ValueError("This system action takes no parameters.")
+    return {}
+
+
+def _agents_only_call(ids, cleaned, username):
+    return (list(ids),), {}  # exactly the way Tactical's bulk view starts these tasks: one positional list
+
+
+def _no_audit_extra(cleaned) -> dict:
+    return {}
+
+
+def _bounded_text_list(values, name):
+    if values is None:
+        return []
+    if isinstance(values, (str, bytes, dict)) or not isinstance(values, (list, tuple)) or len(values) > MAX_LIST_ITEMS:
+        raise ValueError(f"{name} must be a list of at most {MAX_LIST_ITEMS} texts.")
+    out = []
+    for item in values:
+        if not isinstance(item, str) or len(item) > MAX_ITEM_CHARS or any(ord(ch) < 32 and ch != "\t" for ch in item):
+            raise ValueError(f"every entry of {name} must be text of at most {MAX_ITEM_CHARS} characters.")
+        out.append(item)
+    return out
+
+
+def _script_parameters(values) -> dict:
+    """What a confirmed script run may carry. Anything else is refused; nothing is repaired or dropped silently."""
+    if not isinstance(values, dict):
+        raise ValueError("parameters must be an object.")
+    allowed = {"script_pk", "args", "env_vars", "timeout", "run_as_user", "collector_all_output", "save_to_agent_note"}
+    if set(values) - allowed:
+        raise ValueError("a script run takes only script_pk, args, env_vars, timeout, run_as_user, collector_all_output and save_to_agent_note.")
+    script_pk = values.get("script_pk")
+    if isinstance(script_pk, bool) or not isinstance(script_pk, int) or not 0 < script_pk < 2**63:
+        raise ValueError("script_pk must be a whole number.")
+    timeout = values.get("timeout", DEFAULT_SCRIPT_TIMEOUT)
+    if isinstance(timeout, bool) or not isinstance(timeout, int) or not 1 <= timeout <= 86400:
+        raise ValueError("timeout must be a whole number of seconds from 1 to 86400.")
+    flags = {}
+    for flag in ("run_as_user", "collector_all_output", "save_to_agent_note"):
+        flags[flag] = values.get(flag, False)
+        if not isinstance(flags[flag], bool):
+            raise ValueError(f"{flag} must be true or false.")
+    return {
+        "script_pk": script_pk, "args": _bounded_text_list(values.get("args"), "args"), "env_vars": _bounded_text_list(values.get("env_vars"), "env_vars"),
+        "timeout": timeout, **flags,
+    }
+
+
+def _script_call(ids, cleaned, username):
+    # scripts/tasks.py bulk_script_task takes keywords only. custom_field_pk is always None: a scheduled run saves no custom field.
+    return (), {
+        "script_pk": cleaned["script_pk"], "agent_pks": list(ids), "args": list(cleaned["args"]), "timeout": cleaned["timeout"],
+        "username": str(username or "")[:50], "run_as_user": cleaned["run_as_user"], "env_vars": list(cleaned["env_vars"]),
+        "custom_field_pk": None, "collector_all_output": cleaned["collector_all_output"], "save_to_agent_note": cleaned["save_to_agent_note"],
+    }
+
+
+def _script_audit_extra(cleaned) -> dict:
+    """Counts and the script number only: never an argument or an environment value."""
+    return {"script_pk": cleaned["script_pk"], "args_count": len(cleaned["args"]), "env_vars_count": len(cleaned["env_vars"])}
+
+
 @dataclass(frozen=True)
 class SystemFunction:
-    """One Tactical function Core will run for a system action. A new row is a Core release (additive), like ``ROUTE_OWNERS``."""
+    """One Tactical function Core will run for a system action. A new row is a Core release (additive), like ``ROUTE_OWNERS``.
+
+    1.17.66: a row declares its own call shape. ``validate_parameters(values)`` returns the cleaned parameters or raises ``ValueError``;
+    ``build_call(ids, cleaned, username)`` returns ``(args, kwargs)`` for ``.delay``; ``audit_extra(cleaned)`` returns counts for the audit
+    row. Parameters come only from what the person confirmed (the run's snapshot), never from the caller."""
 
     key: str
     module_path: str  # the Tactical module Core imports lazily at run time
@@ -107,6 +191,10 @@ class SystemFunction:
     takes_username: bool
     reapproves_by_policy: bool  # the task re-approves updates by patch policy (reference agents/models.py approve_updates)
     result_text: str
+    parameters: tuple = ()  # names of the parameters the row takes (for the contract metadata)
+    validate_parameters: object = _no_parameters
+    build_call: object = _agents_only_call
+    audit_extra: object = _no_audit_extra
 
 
 SYSTEM_FUNCTIONS = MappingProxyType({
@@ -117,11 +205,22 @@ SYSTEM_FUNCTIONS = MappingProxyType({
         result_text=QUEUED_TEXT,
     ),
     # winupdate/tasks.py bulk_install_updates_task(pks: list[int]) calls agent.approve_updates() first, which re-approves an update an
-    # administrator or Advanced Patch Management set to Ignore. Windows Patching only (see CQ173 and R-36).
+    # administrator or Advanced Patch Management set to Ignore. Since 1.17.66 (CQ173, Johan: yes) the honoured replacement may register it too;
+    # Core shows REAPPROVE_WARNING in the confirmation and the audit row. R-36 is not built.
     "winupdate.install": SystemFunction(
         key="winupdate.install", module_path="winupdate.tasks", function_name="bulk_install_updates_task", owner_module="patching",
         min_flags=("can_manage_winupdates", "can_run_bulk"), accepts="agent_pks", takes_username=False, reapproves_by_policy=True,
         result_text=QUEUED_TEXT,
+    ),
+    # scripts/tasks.py bulk_script_task(*, script_pk, agent_pks, args, timeout, username, run_as_user, env_vars, custom_field_pk,
+    # collector_all_output, save_to_agent_note); agents/views.py bulk() mode script. Tactical's bulk route needs only can_run_bulk; Core also
+    # asks can_run_scripts (stricter, on purpose). The username is the creator's stored name, never a name from the caller.
+    "scripts.run": SystemFunction(
+        key="scripts.run", module_path="scripts.tasks", function_name="bulk_script_task", owner_module="scriptexecution",
+        min_flags=("can_run_bulk", "can_run_scripts"), accepts="agent_pks", takes_username=True, reapproves_by_policy=False,
+        result_text=QUEUED_TEXT,
+        parameters=("script_pk", "args", "env_vars", "timeout", "run_as_user", "collector_all_output", "save_to_agent_note"),
+        validate_parameters=_script_parameters, build_call=_script_call, audit_extra=_script_audit_extra,
     ),
 })
 
@@ -305,10 +404,6 @@ def _build_definition(id, module_id, label, function, permissions, scope_kind, d
         raise SystemActionRegistrationError("Core could not read whether the module is enabled.") from None
     if not enabled:
         raise SystemActionRegistrationError("module_id is not enabled.")
-    if via_replacement and entry.reapproves_by_policy:
-        raise SystemActionRegistrationError(
-            f"{function!r} re-approves updates by patch policy, so it is not allowed for a replacement module while R-36 is open. Windows Patching may register it."
-        )
     return SystemActionDefinition(action_id, module, label.strip(), function, flags, SCOPE_KIND_AGENTS, dangerous, username_param, via_replacement)
 
 
@@ -345,6 +440,8 @@ def _describe(definition: SystemActionDefinition) -> dict:
         "username_param": definition.username_param, "via_replacement": definition.via_replacement,
         "owner_module": entry.owner_module if entry else None, "min_flags": list(entry.min_flags) if entry else [],
         "reapproves_by_policy": bool(entry.reapproves_by_policy) if entry else None,
+        "parameters": list(entry.parameters) if entry else [],
+        "warning": REAPPROVE_WARNING if (entry and entry.reapproves_by_policy) else None,
     }
 
 
@@ -382,14 +479,18 @@ REASONS = {
     "action_not_declared": "This action is no longer listed in the module's signed manifest under system_actions.",
     "owner_inactive": "The person who owns this run is no longer an active, interactive user.",
     "permission_lost": "The person who owns this run no longer holds the Tactical permission this action needs.",
-    "bad_parameters": "This system action takes no parameters.",
+    "bad_parameters": "The parameters of this system action are not valid.",
+    "parameters_changed": "The parameters passed to the run differ from what the person confirmed, so nothing was run.",
     "bad_agents": "The endpoint list is not a list of whole endpoint numbers.",
-    "agent_count": f"A system action runs on 1 to {MAX_AGENTS} endpoints.",
+    "agent_count": f"A system action runs on 1 to {MAX_AGENTS} endpoints, in groups of at most {MAX_AGENTS_PER_GROUP}.",
     "out_of_scope": "At least one endpoint is outside the owner's Tactical scope, so nothing was run.",
-    "reapproves_by_policy": "This action would re-approve updates by patch policy, which is not allowed for a replacement module.",
+    "reapproves_by_policy": "Not returned since 1.17.66: a replacement module may install, and Core shows a plain warning instead.",
     "mark_limit": "This run has already sent the most system actions it may send.",
     "outside_targets": "At least one endpoint is not one of this schedule's targets, so nothing was run. A run never widens the schedule's set.",
     "targets_unresolved": "Core cannot read this schedule's targets as endpoints, so nothing was run.",
+    "not_permitted": "You do not hold the permission this system action needs.",
+    "confirmation_required": "This system action needs the Yes or No confirmation, and none came with the request.",
+    "confirmation_invalid": "The confirmation does not match this person, action, endpoints, parameters and timing, or it has expired. Ask again.",
 }
 
 _UNMATCHED: dict[tuple[str, str], float] = {}
@@ -485,7 +586,7 @@ def _refuse(reason: str, *, run_id=None, owner=None, module_id=None, action_id=N
 
 # ------------------------------------------------------------------------------------------------ running
 def _agent_ids(agent_ids):
-    """The distinct, sorted endpoint numbers, or a reason code. The count is judged before anything is looked up."""
+    """The distinct, sorted endpoint numbers, or a reason code. The count is judged against the ceiling before anything is looked up."""
     if isinstance(agent_ids, (str, bytes, dict)) or not isinstance(agent_ids, (list, tuple, set, frozenset)):
         return None, "bad_agents"
     if len(agent_ids) == 0 or len(agent_ids) > MAX_AGENTS:
@@ -549,12 +650,30 @@ def _set_mark(run_id, action_id: str, digest: str, state: str, task_id: str = ""
         return False
 
 
-def _queued_result(entry: SystemFunction, agents: int, **extra) -> dict:
-    return {"outcome": "queued", "agents": agents, "message": entry.result_text, **extra}
+def _groups_of(ids) -> list:
+    """The sorted ids cut into groups of at most ``MAX_AGENTS_PER_GROUP`` (no id twice, none lost)."""
+    return [list(ids[i:i + MAX_AGENTS_PER_GROUP]) for i in range(0, len(ids), MAX_AGENTS_PER_GROUP)]
 
 
-def _unknown(run_id, owner, definition, action_id: str, module_id: str, provenance=None):
+def _group_counts(total: int, sent: int, failed: int = 0) -> dict:
+    return {"total": total, "sent": sent, "failed": failed, "not_started": max(total - sent - failed, 0)}
+
+
+def _summary(agents: int, counts: dict) -> str:
+    """One plain line. Counts only: no endpoint ids."""
+    return (f"{agents} endpoint(s) in {counts['total']} group(s): {counts['sent']} sent, {counts['failed']} failed, "
+            f"{counts['not_started']} not started.")
+
+
+def _queued_result(entry: SystemFunction, agents: int, counts: dict | None = None, **extra) -> dict:
+    counts = counts or _group_counts(1, 1)
+    return {"outcome": "queued", "agents": agents, "message": entry.result_text, "groups": dict(counts), "summary": _summary(agents, counts), **extra}
+
+
+def _unknown(run_id, owner, definition, action_id: str, module_id: str, provenance=None, summary: str = ""):
     text = "A system action may already have been sent for this run, so Core did not send it again. Check the endpoints before running it again."
+    if summary:
+        text = f"{text} {summary}"
     _end_run(run_id, _FAILED, "OutcomeUnknown", text)
     try:
         _audit().record(
@@ -568,10 +687,11 @@ def _unknown(run_id, owner, definition, action_id: str, module_id: str, provenan
 
 
 def run_system_action(context, *, action_id, agent_ids, parameters=None) -> dict:
-    """Run a registered system action for the owner of the Scheduler run ``context`` belongs to (core.system_actions 1.0.0).
+    """Run a registered system action for the owner of the Scheduler run ``context`` belongs to (core.system_actions 1.1.0).
 
     Call it from the module's own Scheduler handler, passing the context object the handler received. Returns
-    ``{"outcome": "queued", "agents": N, "message": ...}``: the work is queued in Tactical, not done. Every refusal ends the run
+    ``{"outcome": "queued", "agents": N, "message": ..., "groups": {total, sent, failed, not_started}, "summary": ...}``: the work is
+    queued in Tactical, not done. More than 2000 endpoints run in groups of at most 2000 (1.17.66). Every refusal ends the run
     ``skipped`` (error type ``SystemActionRefused``), writes one ``deny`` audit row and raises ``SystemActionRefused`` (a
     ``SchedulerPermanentError``, so the worker does not retry). See docs/system-actions.md for the checks and their reason codes."""
     identity = calling_module_for_core_provider(provider_file=__file__)  # the module whose own code called this function, or None
@@ -648,8 +768,26 @@ def _run(context, identity, action_id, agent_ids, parameters) -> dict:
         for flag in sorted(set(entry.min_flags) | set(definition.permissions)):
             if not verified.has_tactical_permission(flag):
                 _refuse("permission_lost", **common)
-    if parameters not in (None, {}):
-        _refuse("bad_parameters", **common)
+    # (5) the parameters: only what the person confirmed (the run's snapshot). The caller's own argument may only repeat it.
+    snapshot = run.parameters_snapshot if isinstance(getattr(run, "parameters_snapshot", None), dict) else {}
+    confirmed = snapshot.get(PARAMETERS_KEY)
+    caller_params = parameters
+    if not entry.parameters:
+        if caller_params not in (None, {}) or confirmed not in (None, {}):
+            _refuse("bad_parameters", **common)
+        cleaned = {}
+    else:
+        if caller_params not in (None, {}) and caller_params != confirmed:
+            _refuse("parameters_changed", **common)
+        try:
+            cleaned = entry.validate_parameters(confirmed if confirmed is not None else {})
+        except ValueError:
+            _refuse("bad_parameters", **common)
+    username = ""
+    if entry.takes_username:
+        username = str(provenance.get("creator") or getattr(owner, "username", "") or "")[:50]
+        if not username:
+            _refuse("no_owner", **common)
     # (6) the count, judged before any lookup, then (5) the scope of every endpoint
     ids, reason = _agent_ids(agent_ids)
     if reason:
@@ -674,53 +812,72 @@ def _run(context, identity, action_id, agent_ids, parameters) -> dict:
     if not set(ids) <= set(target_pks):
         note = f" {vanished} target(s) of this schedule no longer exist." if vanished else ""
         _refuse("outside_targets", detail=note, **common)
-    # (7) an install that re-approves by policy is not run for a replacement
-    if entry.reapproves_by_policy and definition.via_replacement:
-        _refuse("reapproves_by_policy", **common)
+    # (7) 1.17.66 (CQ173): an install that re-approves by policy is allowed for the honoured replacement; the warning is in the audit row
     function = _import_function(entry)
     if function is None:
         _refuse("function_unavailable", **common)
 
-    # at-most-once: the mark, then the strict audit row, then the send
-    digest = _digest(run.id, definition.id, ids)
-    state, _mark = _claim_mark(run.id, definition.id, digest, len(ids))
-    if state == "gone":
-        raise SchedulerPermanentError("The run is no longer active, so nothing was sent.")
-    if state == "full":
+    # at-most-once, group by group: the mark, then the strict audit row, then the send. The whole set was judged above.
+    groups = _groups_of(ids)
+    digests = [_digest(run.id, definition.id, group) for group in groups]
+    existing = [m for m in (getattr(run, "system_action_marks", None) or []) if isinstance(m, dict)]
+    ours = sum(1 for m in existing if m.get("action_id") == definition.id and m.get("targets_digest") in set(digests))
+    if len(existing) - ours + len(groups) > MAX_MARKS_PER_RUN:
         _refuse("mark_limit", **common)
     extra = {"vanished_targets": int(vanished)} if vanished else {}  # 1.17.63: targets that no longer exist, while the rest still run
-    if state == "sent":
-        return _queued_result(entry, len(ids), duplicate=True, **extra)
-    if state == "unknown":
-        _unknown(run.id, owner, definition, definition.id, module_id, provenance)
-    try:
-        _audit().record(
-            actor=_actor_for(owner), module_id="core", action="run", object_type="system_action", object_id=definition.id,
-            message=f"A scheduled system action is being sent to Tactical for {len(ids)} endpoint(s).",
-            metadata={
-                "requested_by": "scheduler", "run_id": str(run.id), "schedule_id": str(verified.schedule_id), "owner_module": definition.module_id,
-                "function": definition.function, "agent_count": len(ids), "targets_digest": digest, **provenance, **extra,
-            },
-            strict=True,
-        )
-    except Exception:
-        logger.exception("The audit row of a system action could not be written; nothing is sent.")
-        _set_mark(run.id, definition.id, digest, STATE_ABORTED)
-        raise SchedulerTransientError("The audit row could not be written, so nothing was sent.") from None
-    try:
-        sent = function.delay(list(ids))  # exactly the way Tactical's own bulk view starts the task
-    except Exception:
-        logger.exception("Tactical's task could not be started; Core never sends again for this run.")
-        _unknown(run.id, owner, definition, definition.id, module_id, provenance)
-    task_id = str(getattr(sent, "id", "") or "")[:80]
-    if not _set_mark(run.id, definition.id, digest, STATE_SENT, task_id):
-        logger.error("The system action was sent but its mark could not be set to 'sent'; a retry would fail as outcome-unknown.")
-    return _queued_result(entry, len(ids), **extra)
+    row_extra = dict(entry.audit_extra(cleaned))
+    if entry.reapproves_by_policy:
+        row_extra["warning"] = REAPPROVE_WARNING
+    sent_now = 0
+    sent_before = 0
+    for index, (group, digest) in enumerate(zip(groups, digests), start=1):
+        state, _mark = _claim_mark(run.id, definition.id, digest, len(group))
+        if state == "gone":
+            raise SchedulerPermanentError("The run is no longer active, so nothing was sent.")
+        if state == "full":
+            _unknown(run.id, owner, definition, definition.id, module_id, provenance,
+                     _summary(len(ids), _group_counts(len(groups), sent_now + sent_before, 1)))
+        if state == "sent":
+            sent_before += 1
+            continue
+        if state == "unknown":
+            _unknown(run.id, owner, definition, definition.id, module_id, provenance,
+                     _summary(len(ids), _group_counts(len(groups), sent_now + sent_before, 1)))
+        try:
+            _audit().record(
+                actor=_actor_for(owner), module_id="core", action="run", object_type="system_action", object_id=definition.id,
+                message=f"A scheduled system action is being sent to Tactical for {len(group)} endpoint(s) (group {index} of {len(groups)}).",
+                metadata={
+                    "requested_by": "scheduler", "run_id": str(run.id), "schedule_id": str(verified.schedule_id), "owner_module": definition.module_id,
+                    "function": definition.function, "agent_count": len(group), "total_agents": len(ids), "group": index, "groups": len(groups),
+                    "targets_digest": digest, **provenance, **extra, **row_extra,
+                },
+                strict=True,
+            )
+        except Exception:
+            logger.exception("The audit row of a system action could not be written; nothing is sent for this group.")
+            _set_mark(run.id, definition.id, digest, STATE_ABORTED)
+            raise SchedulerTransientError("The audit row could not be written, so nothing was sent for this group.") from None
+        try:
+            args, kwargs = entry.build_call(group, cleaned, username)
+            sent = function.delay(*args, **kwargs)  # exactly the way Tactical's own bulk view starts the task
+        except Exception:
+            logger.exception("Tactical's task could not be started; Core never sends again for this group.")
+            _unknown(run.id, owner, definition, definition.id, module_id, provenance,
+                     _summary(len(ids), _group_counts(len(groups), sent_now + sent_before, 1)))
+        task_id = str(getattr(sent, "id", "") or "")[:80]
+        sent_now += 1
+        if not _set_mark(run.id, definition.id, digest, STATE_SENT, task_id):
+            logger.error("The system action was sent but its mark could not be set to 'sent'; a retry would fail as outcome-unknown.")
+    counts = _group_counts(len(groups), sent_now + sent_before)
+    if sent_now == 0:
+        return _queued_result(entry, len(ids), counts, duplicate=True, **extra)
+    return _queued_result(entry, len(ids), counts, **extra)
 
 
 # ------------------------------------------------------------------------------------------------ the capability
 class _SystemActionsProvider:
-    """The ``core.system_actions`` 1.0.0 provider: list_actions, get_action, run."""
+    """The ``core.system_actions`` 1.1.0 provider: list_actions, get_action, run, describe_confirmation."""
 
     def list_actions(self) -> list[dict]:
         return registered_system_actions()
@@ -731,6 +888,12 @@ class _SystemActionsProvider:
     def run(self, context, *, action_id, agent_ids, parameters=None) -> dict:
         return run_system_action(context, action_id=action_id, agent_ids=agent_ids, parameters=parameters)
 
+    def describe_confirmation(self, request, *, action_id, targets, parameters=None, when=None) -> dict:
+        """The plain Yes or No text and a short-lived confirmation id for the person behind a real, session-checked ``request`` (1.17.66)."""
+        from . import system_action_confirmation
+
+        return system_action_confirmation.describe_confirmation_for_request(request, action_id=action_id, targets=targets, parameters=parameters, when=when)
+
 
 _PROVIDER = _SystemActionsProvider()
 
@@ -739,26 +902,30 @@ def system_actions_contract_metadata() -> dict:
     return {
         "id": CAPABILITY_ID,
         "version": CAPABILITY_VERSION,
-        "operations": ["list_actions", "get_action", "run"],
+        "operations": ["list_actions", "get_action", "run", "describe_confirmation"],
         "python": (
             "tec_tac.system_actions.register_system_action(id, module_id, label, function, permissions, scope_kind='agents', dangerous=False, "
             "username_param=None) -> SystemActionDefinition | None; tec_tac.system_actions.run_system_action(context, *, action_id, agent_ids, "
-            "parameters=None) -> {outcome: 'queued', agents, message}"
+            "parameters=None) -> {outcome: 'queued', agents, message, groups: {total, sent, failed, not_started}, summary}; "
+            "tec_tac.system_action_confirmation.describe_confirmation(user, action_id, targets, parameters, when) -> {text, confirmation_id, total, groups, expires_in}"
         ),
         "functions": {
             key: {
                 "tactical": f"{row.module_path}.{row.function_name}", "owner_module": row.owner_module, "min_flags": list(row.min_flags),
-                "takes_username": row.takes_username, "reapproves_by_policy": row.reapproves_by_policy,
+                "takes_username": row.takes_username, "reapproves_by_policy": row.reapproves_by_policy, "parameters": list(row.parameters),
             }
             for key, row in SYSTEM_FUNCTIONS.items()
         },
         "manifest_key": "system_actions: list of '<module id>.<name>' ids, at most 20 (extensions only)",
         "max_agents": MAX_AGENTS,
+        "max_agents_per_group": MAX_AGENTS_PER_GROUP,
+        "max_groups": MAX_GROUPS,
+        "parameters_key": PARAMETERS_KEY,
         "refusal_reasons": sorted(REASONS),
-        "http": None,
-        "delivery": "at most once",
-        "audit_actions": ["run (strict, before the send)", "deny (one per refusal)", "custom:outcome-unknown"],
-        "requires_framework": ">=1.17.61",
+        "http": {"confirmation": "POST /api/tfd/scheduler/system-actions/confirmation/"},
+        "delivery": "at most once per group",
+        "audit_actions": ["run (strict, before each group's send)", "deny (one per refusal)", "custom:outcome-unknown", "add and modify on the schedule (strict)"],
+        "requires_framework": ">=1.17.61 (groups, parameters, scripts.run and describe_confirmation need >=1.17.66)",
         "unattended": "A scheduled run of a user-owned schedule skips owner_inactive, permission_lost and out_of_scope (>=1.17.65; the unattended= flag has no effect); every other check stays. A manual or one-off run keeps all of them.",
     }
 
@@ -771,8 +938,8 @@ def register_core_system_actions_capability():
         module_id="core",
         version=CAPABILITY_VERSION,
         provider=_PROVIDER,
-        description="Typed Tactical functions that Core runs unattended for a named owner, with the owner and scope checked at every person-started run; a scheduled run is not re-checked against its creator (>=1.17.65).",
-        operations=("list_actions", "get_action", "run"),
+        description="Typed Tactical functions that Core runs unattended for a named owner, in groups of at most 2000 endpoints, with the owner and scope checked at every person-started run and the permission, scope and one Yes or No checked when a person creates or edits the schedule (>=1.17.66); a scheduled run is not re-checked against its creator (>=1.17.65).",
+        operations=("list_actions", "get_action", "run", "describe_confirmation"),
         metadata=system_actions_contract_metadata(),
     )
 

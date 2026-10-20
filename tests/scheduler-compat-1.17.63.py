@@ -74,9 +74,12 @@ reg = defs(APP / "scheduler.py", {"register_scheduled_action", "reconcile_schedu
 for name, new in (("register_scheduled_action", "unattended"), ("reconcile_schedule", "confirmed_by_request")):
     args = reg[name].args
     kwonly = [a.arg for a in args.kwonlyargs]
-    must(kwonly[-1] == new and args.kw_defaults[-1] is not None, f"{name}: {new} is the last keyword and has a default")
+    # 1.17.66 added one optional keyword after confirmed_by_request (confirmation_id), so the 1.17.63 keyword is last but one for reconcile_schedule
+    position = -2 if name == "reconcile_schedule" else -1
+    must(kwonly[position] == new and args.kw_defaults[position] is not None and args.kw_defaults[-1] is not None, f"{name}: {new} is where it was and has a default")
     must(not args.args and not args.posonlyargs, f"{name} stays keyword-only")
-must(ast.unparse(reg["register_scheduled_action"].args.kw_defaults[-1]) == "False" and ast.unparse(reg["reconcile_schedule"].args.kw_defaults[-1]) == "None", "defaults")
+must(ast.unparse(reg["register_scheduled_action"].args.kw_defaults[-1]) == "False" and ast.unparse(reg["reconcile_schedule"].args.kw_defaults[-2]) == "None"
+     and [a.arg for a in reg["reconcile_schedule"].args.kwonlyargs][-1] == "confirmation_id" and ast.unparse(reg["reconcile_schedule"].args.kw_defaults[-1]) == "None", "defaults")
 vr = ast.parse((APP / "scheduler_run_context.py").read_text(encoding="utf-8"))
 verified = next(n for n in vr.body if isinstance(n, ast.ClassDef) and n.name == "VerifiedSchedulerRun")
 fields = [(n.target.id, n.value is not None) for n in verified.body if isinstance(n, ast.AnnAssign)]
@@ -84,7 +87,7 @@ must([f for f, _d in fields][-3:] == ["creator_username", "confirmed_by_username
 must(ast.unparse(defs(APP / "scheduler_run_context.py", {"verify_run_context"})["verify_run_context"].args) == "context: Any, *, expected_module_id: str, expected_action_id: str, require_owner: bool=True", "verify_run_context")
 sa_tree = ast.parse((APP / "system_actions.py").read_text(encoding="utf-8"))
 must(ast.unparse(defs(APP / "system_actions.py", {"run_system_action"})["run_system_action"].args) == "context, *, action_id, agent_ids, parameters=None", "run_system_action")
-must(ast.unparse(defs(APP / "scheduler.py", {"start_one_off_run"})["start_one_off_run"].args) == "*, user, owner_module: str, action_id: str, targets: dict | None=None, parameters: dict | None=None, name: str | None=None, retry_count: int=0, retry_delay_seconds: int=DEFAULT_RETRY_DELAY_SECONDS", "start_one_off_run")
+must(ast.unparse(defs(APP / "scheduler.py", {"start_one_off_run"})["start_one_off_run"].args) == "*, user, owner_module: str, action_id: str, targets: dict | None=None, parameters: dict | None=None, name: str | None=None, retry_count: int=0, retry_delay_seconds: int=DEFAULT_RETRY_DELAY_SECONDS, confirmation_id: str | None=None", "start_one_off_run")  # 1.17.66: one optional last keyword
 print("       unattended and confirmed_by_request are the one new, last, optional keyword of their functions; VerifiedSchedulerRun adds three defaulted fields last")
 
 # ---- (2) every call in modules/ still binds, and none uses the new names

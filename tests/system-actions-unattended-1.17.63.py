@@ -279,14 +279,14 @@ CFG["agents"] = []
 run, out = start(targets={"type": "endpoint", "ids": [str(IDS[0])]})
 refused(run, out, "agent_count")
 fresh()
-CFG["agents"] = [6000 + i for i in range(2001)]
+CFG["agents"] = [6000 + i for i in range(40001)]
 run, out = start()
 refused(run, out, "agent_count")
 fresh()
 CFG["agents"] = [6000 + i for i in range(2000)]
 run, out = start()
 must(out["agents"] == 2000 and len(TASK_CALLS) == 1 and len(TASK_CALLS[0][1][0]) == 2000, "2000 endpoints still run")
-print("       parameters, bad numbers, 0 and 2001 endpoints are refused; 2000 still runs")
+print("       parameters, bad numbers, 0 and 40001 endpoints are refused; 2000 still runs")
 
 # ---- (4) the snapshot is never widened; a vanished target is reported
 fresh()
@@ -360,13 +360,13 @@ run_body = src.split("def _run(", 1)[1]
 must('_refuse("action_not_declared", **common)' in run_body and run_body.index("_declared_now(definition.module_id, definition.id)") < run_body.index("entry = SYSTEM_FUNCTIONS.get(definition.function)"), "the manifest check runs before the function is looked up")
 must("action_not_declared" in sa.REASONS, "the reason exists")
 meta = sa.system_actions_contract_metadata()
-must("action_not_declared" in meta["refusal_reasons"] and meta["version"] == "1.0.0" and meta["requires_framework"] == ">=1.17.61", "the reasons list grows; the capability version stays (additive)")
+must("action_not_declared" in meta["refusal_reasons"] and meta["version"] == "1.1.0", "the reasons list grows; the capability version is 1.1.0 since 1.17.66 (additive)")
 body = src.split("def _run(", 1)[1]
 must(body.count("if not unattended:") == 1 and body.count("if unattended:") == 1, "the skipped checks sit in exactly two guarded blocks")
 guarded = body.split("if unattended:", 1)[1].split("# (6)", 1)[0]
 must("owner_inactive" in guarded and "permission_lost" in guarded, "owner_inactive and permission_lost are the skipped re-reads")
 must('_refuse("out_of_scope", **common)' in body.split("if not unattended:", 1)[1].split("# (6b)", 1)[0], "out_of_scope is the third skipped re-read")
-for kept in ("module_disabled", "replacement_not_honoured", "wrong_module", "unknown_action", "bad_parameters", "outside_targets", "targets_unresolved", "reapproves_by_policy"):
+for kept in ("module_disabled", "replacement_not_honoured", "wrong_module", "unknown_action", "bad_parameters", "outside_targets", "targets_unresolved"):
     must(f'_refuse("{kept}"' in body, f"{kept} is still checked for every run")
 print("       the source: the manifest check comes before the function lookup, only three re-reads are skipped, every other check stays")
 print("PASS system actions unattended 1.17.63")

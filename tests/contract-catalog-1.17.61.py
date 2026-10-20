@@ -68,7 +68,7 @@ print("       the purposes state the caller rule, the idempotency, the limits, t
 
 must(any("system_actions" in rule and "1.17.61" in rule and "requires.framework" in rule for rule in rules), "the manifest key is described in the rules")
 meta = sa.system_actions_contract_metadata()
-must(meta["id"] == "core.system_actions" and meta["version"] == "1.0.0" and meta["requires_framework"] == ">=1.17.61", meta)
+must(meta["id"] == "core.system_actions" and meta["version"] == "1.1.0" and meta["requires_framework"].startswith(">=1.17.61"), meta)  # 1.17.66: 1.1.0, additive
 must(set(meta["functions"]) == set(sa.SYSTEM_FUNCTIONS) and set(meta["refusal_reasons"]) == set(sa.REASONS), meta)
 print("       the manifest key and the capability metadata are documented")
 
@@ -97,10 +97,7 @@ if reviews.is_dir():
     questions = (reviews / "questions" / "core.md").read_text(encoding="utf-8")
     for question in ("CQ172", "CQ173", "CQ174", "CQ175", "CQ176", "CQ177", "CQ178"):
         must(questions.count(f"### {question} (20 October 2026), Core 1.17.61") == 1, f"{question} is in the questions file once")
-    for area in ("premium-modules", "core-modules", "ui"):
-        must("From Core 1.17.61 (20 October 2026)" in (reviews / "requests" / f"{area}.md").read_text(encoding="utf-8"), f"{area} has the 1.17.61 request section")
-    own = (reviews / "requests" / "core.md").read_text(encoding="utf-8")
-    must("- Core 1.17.61 (20 October 2026" in own and "async completion for a Scheduler action" not in own.replace("'core: async completion for a Scheduler action' (patchmanagement 0.11.0)", ""), "the shipped line is there and the async request is gone")
+    # 1.17.66: the requests files move on as modules ship what they asked for, so only the questions file is read here (it is a record, not a queue)
 print("       the release notes, the questions and the requests are written")
 
 print("PASS contract catalog 1.17.61")

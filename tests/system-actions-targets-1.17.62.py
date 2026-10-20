@@ -143,9 +143,9 @@ refused(run, out, "targets_unresolved")
 print("       a module-owned target type and a failing resolver answer targets_unresolved; nothing is guessed")
 
 # ---- order: count and shape first, then the owner's scope, then the targets
-for bad in ([], None, "abc", [True], list(range(5000, 7001))):
+for bad in ([], None, "abc", [True], list(range(5000, 45001))):
     run, out = start({"type": "endpoint", "ids": [str(i) for i in IDS]}, agents=bad)
-    must(not TARGET_CALLS and len(deny_rows()) == 1 and deny_rows()[0]["metadata"]["reason"] in ("agent_count", "bad_agents"), (bad if not isinstance(bad, list) or len(bad) < 5 else "2001", AUDITS))
+    must(not TARGET_CALLS and len(deny_rows()) == 1 and deny_rows()[0]["metadata"]["reason"] in ("agent_count", "bad_agents"), (bad if not isinstance(bad, list) or len(bad) < 5 else "40001", AUDITS))
 run, out = start({"type": "endpoint", "ids": [str(i) for i in IDS]}, agents=[IDS[0], 4], manual=True)  # 4 is outside the owner's role scope; 1.17.65: only a person-started run reads the scope again
 refused(run, out, "out_of_scope")
 must(not TARGET_CALLS, "the owner's scope is judged before the snapshot is read")
@@ -185,7 +185,7 @@ must('"outside_targets"' in src and '"targets_unresolved"' in src and 'REASONS' 
 docs = (ROOT / "docs" / "system-actions.md").read_text(encoding="utf-8")
 must("outside_targets" in docs and "targets_unresolved" in docs, "the docs name the reasons")
 meta = sa.system_actions_contract_metadata()
-must({"outside_targets", "targets_unresolved"} <= set(meta["refusal_reasons"]) and meta["requires_framework"] == ">=1.17.61", "the capability's reasons list grows; its version stays (additive)")
+must({"outside_targets", "targets_unresolved"} <= set(meta["refusal_reasons"]) and meta["requires_framework"].startswith(">=1.17.61"), "the capability's reasons list grows (additive); the groups need 1.17.66")
 print("       the real resolver uses resources_adapter only and is a bound; the reasons are in the capability metadata and the docs")
 
 print("PASS system actions targets 1.17.62")

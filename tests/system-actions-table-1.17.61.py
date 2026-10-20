@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ruff: noqa: F821, E402
-"""1.17.61 regression (R-20): Core's fixed function table, SYSTEM_FUNCTIONS, holds exactly two rows and each is real in Tactical v1.5.2.
+"""1.17.61 regression (R-20): Core's fixed function table, SYSTEM_FUNCTIONS, holds exactly three rows since 1.17.66 (two before) and each is real in Tactical v1.5.2.
 
 Covered: exactly two rows (winupdate.scan and winupdate.install); every row names an owner module and at least the two minimum flags,
 takes no username, accepts one list of agent numbers; every named Tactical callable exists in a pinned excerpt of the v1.5.2 signatures
@@ -24,6 +24,7 @@ V152_SIGNATURES = {
     ("winupdate.tasks", "bulk_install_updates_task"): ("pks",),
 }
 REAL_FLAGS = {"can_manage_winupdates", "can_run_bulk"}
+WINUPDATE_ROWS = {"winupdate.scan", "winupdate.install"}  # scripts.run is pinned by system-actions-table-1.17.66.py
 
 
 def row_problems(row) -> list:
@@ -39,22 +40,24 @@ def row_problems(row) -> list:
         problems.append("a Tactical callable that is not in the pinned v1.5.2 excerpt")
     if row.accepts != "agent_pks":
         problems.append("accepts is not agent_pks")
-    if row.takes_username:
-        problems.append("a username parameter needs Johan's sign-off first")
+    if row.takes_username and row.key != "scripts.run":
+        problems.append("a username parameter needs Johan's sign-off first (CQ175 signed it for scripts.run only)")
     if "done" in row.result_text.lower() or "completed" in row.result_text.lower():
         problems.append("the result text claims more than 'queued' (AD-25)")
     return problems
 
 
 table = sa.SYSTEM_FUNCTIONS
-must(set(table) == {"winupdate.scan", "winupdate.install"}, f"exactly two rows, found {sorted(table)}")
+must(set(table) == WINUPDATE_ROWS | {"scripts.run"}, f"exactly three rows, found {sorted(table)}")
 for key, row in table.items():
     must(row.key == key, key)
+    if key not in WINUPDATE_ROWS:
+        continue
     must(row_problems(row) == [], (key, row_problems(row)))
     must(row.owner_module == "patching" and set(row.min_flags) == REAL_FLAGS, (key, row))
     must(row.result_text == "Queued in Tactical; the result shows in each endpoint's update list.", row.result_text)
 must(table["winupdate.scan"].reapproves_by_policy is False and table["winupdate.install"].reapproves_by_policy is True)
-print("       exactly two rows; each has an owner, both minimum flags, no username and an honest 'queued' text")
+print("       exactly three rows; each winupdate row has an owner, both minimum flags, no username and an honest 'queued' text")
 
 # the row check really catches a row with no owner or flags
 good = table["winupdate.scan"]
@@ -62,8 +65,8 @@ from dataclasses import replace  # noqa: E402
 
 must("no owner module" in row_problems(replace(good, owner_module="")))
 must("no minimum flags" in row_problems(replace(good, min_flags=())))
-must("a Tactical callable that is not in the pinned v1.5.2 excerpt" in row_problems(replace(good, function_name="bulk_script_task")))
-must("a username parameter needs Johan's sign-off first" in row_problems(replace(good, takes_username=True)))
+must("a Tactical callable that is not in the pinned v1.5.2 excerpt" in row_problems(replace(good, function_name="bulk_unknown_task")))
+must(any("a username parameter needs Johan's sign-off first" in p for p in row_problems(replace(good, takes_username=True))))
 must(row_problems(replace(good, result_text="Done")), "a text that says done is caught")
 print("       a row added without an owner or minimum flags (or a script task, or a username) fails the row check")
 
@@ -96,14 +99,10 @@ plugin("patching", system_actions=["patching.install", "patching.scan"])
 plugin("patchmanagement", category="premium", replaces="patching", system_actions=["patchmanagement.install", "patchmanagement.scan"])
 HONOURED["patchmanagement"] = "patching"
 BOTH = ["can_manage_winupdates", "can_run_bulk"]
-try:
-    sa.register_system_action("patchmanagement.install", "patchmanagement", "APM install", "winupdate.install", BOTH)
-    raise AssertionError("install was registered for a replacement")
-except sa.SystemActionRegistrationError:
-    pass
+must(sa.register_system_action("patchmanagement.install", "patchmanagement", "APM install", "winupdate.install", BOTH).via_replacement is True)  # 1.17.66, CQ173
 must(sa.register_system_action("patching.install", "patching", "Install", "winupdate.install", BOTH) is not None)
 must(sa.register_system_action("patchmanagement.scan", "patchmanagement", "APM scan", "winupdate.scan", BOTH).via_replacement is True)
-print("       install is refused for a replacement while R-36 is open and accepted for Windows Patching; scan is allowed for both")
+print("       install is accepted for Windows Patching and for the honoured replacement (CQ173, R-36 not built); scan is allowed for both")
 
 # immutable at run time
 for attempt in (lambda: table.__setitem__("os.system", good), lambda: table.pop("winupdate.scan"), lambda: table.update({"x": good}), lambda: table.clear()):
@@ -123,7 +122,7 @@ try:
 except FrozenInstanceError:
     pass
 must(isinstance(good.min_flags, tuple) and type(table).__name__ == "mappingproxy", "rows hold tuples and the table is a read-only mapping")
-must(set(table) == {"winupdate.scan", "winupdate.install"}, "unchanged after the attempts")
+must(set(table) == WINUPDATE_ROWS | {"scripts.run"}, "unchanged after the attempts")
 print("       the table is a read-only mapping of frozen rows: a module cannot add or change a row")
 
 # the table is the only place a Tactical callable is named
