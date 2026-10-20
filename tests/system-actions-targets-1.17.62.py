@@ -39,13 +39,13 @@ sched.register_scheduled_action(id="patching.h", module_id="patching", label="h"
 UNSET = object()
 
 
-def start(snapshot, agents=UNSET, owner="user"):
+def start(snapshot, agents=UNSET, owner="user", manual=False):
     reset()
     FLAGS["alice"] = set(BOTH)
     SCOPE["alice"] = set(IDS) | {OUTSIDE} | set(range(5000, 7100))
     CFG["agents"] = list(IDS) if agents is UNSET else agents
     SNAPSHOT["value"] = snapshot
-    run = make_run("patching.h", "patching", user=alice, owner=owner)
+    run = make_run("patching.h", "patching", user=alice, owner=owner, manual=manual)
     return run, go(run)
 
 
@@ -146,7 +146,7 @@ print("       a module-owned target type and a failing resolver answer targets_u
 for bad in ([], None, "abc", [True], list(range(5000, 7001))):
     run, out = start({"type": "endpoint", "ids": [str(i) for i in IDS]}, agents=bad)
     must(not TARGET_CALLS and len(deny_rows()) == 1 and deny_rows()[0]["metadata"]["reason"] in ("agent_count", "bad_agents"), (bad if not isinstance(bad, list) or len(bad) < 5 else "2001", AUDITS))
-run, out = start({"type": "endpoint", "ids": [str(i) for i in IDS]}, agents=[IDS[0], 4])  # 4 is outside the owner's role scope
+run, out = start({"type": "endpoint", "ids": [str(i) for i in IDS]}, agents=[IDS[0], 4], manual=True)  # 4 is outside the owner's role scope; 1.17.65: only a person-started run reads the scope again
 refused(run, out, "out_of_scope")
 must(not TARGET_CALLS, "the owner's scope is judged before the snapshot is read")
 run, out = start({"type": "endpoint", "ids": [str(i) for i in range(5000, 7000)]}, agents=list(range(5000, 7000)))
@@ -163,7 +163,7 @@ FLAGS["alice"] = set(BOTH)
 SCOPE["alice"] = set(IDS)
 SNAPSHOT["value"] = {"type": "endpoint", "ids": [str(OUTSIDE)]}
 CFG["agents"] = [OUTSIDE]
-run = make_run("patching.h", "patching", user=alice, owner="user")
+run = make_run("patching.h", "patching", user=alice, owner="user", manual=True)  # 1.17.65: a scheduled run is not re-checked, a person-started run is
 out = go(run)
 refused(run, out, "out_of_scope")
 print("       an endpoint in the snapshot but outside the owner's role scope is still refused as out_of_scope")

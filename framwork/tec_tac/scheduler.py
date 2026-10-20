@@ -87,10 +87,9 @@ class ScheduledAction:
     # 1.17.17: more than one accepted entry (any-of). Empty for a single entry or none. Last, so a positional constructor and
     # equality of every earlier action stay as they were. ``permission`` is then the entries joined with PERMISSION_ANY_JOIN.
     permission_any: tuple[str, ...] = ()
-    # 1.17.63 (CQ179 b): True marks unattended system work (a scheduled patch scan, for example). A SCHEDULED run of such an action is
-    # not re-checked against its creator's current rights, as in Tactical; the right was checked when the person created or edited
-    # the schedule. A person-started run (manual, one-off) is re-checked as before. Last, so equality and every positional
-    # constructor of an earlier action stay as they were. Core accepts True only for a module whose signed manifest lists system_actions.
+    # 1.17.63 (CQ179 b): kept for compatibility. Since 1.17.65 it has no effect (CQ188): every user-owned scheduled run is exempt from the
+    # creator re-check, flagged or not. Still last, so equality and every positional constructor of an earlier action stay as they were.
+    # Core still accepts True only for a module whose signed manifest lists system_actions.
     unattended: bool = False
 
     @property
@@ -158,11 +157,11 @@ def _manifest_system_actions(module_id: str) -> tuple:
     return ()
 
 
-# Since 1.17.63: the run-time owner re-check of AD-13 condition 2 is skipped for an unattended scheduled run ONLY while this is True. It is False
-# because Johan's chat answer to CQ179 ("yes follow tactical's implementation") is not yet written into docs/review-accepted-decisions.md and
-# docs/tec-tac-module-standard.md section 1a (not Core's files). Set it True in the same release that those two documents carry the amended
-# condition 2; the scheduler unattended gate test under tests/ fails when the code and the documents disagree.
-AD13_CONDITION_2_AMENDED = False
+# Since 1.17.65: True. Johan signed the amended AD-13 condition 2 (CQ184 b, CQ186, CQ189, chat, 20 October 2026); it is recorded in
+# docs/tec-tac-module-standard.md section 1a, docs/review-accepted-decisions.md row 13, development rules 1.7 and checklist A2. A scheduled run
+# is not re-checked against its creator at run time, as in Tactical. A person-started run (manual, one-off) still is. The scheduler gate test
+# under tests/ fails when this literal is False or the documents lose the amended text.
+AD13_CONDITION_2_AMENDED = True
 
 
 def _action_declared_as_system_action(module_id: str, action_id: str) -> bool:
@@ -816,15 +815,17 @@ def schedule_creator_names(schedule) -> tuple[str, str]:
 
 
 def _is_unattended_scheduled_run(subject) -> bool:
-    """The ONE place that decides whether the run-time owner re-check is skipped (1.17.63, CQ179 b: match Tactical for unattended work).
+    """The ONE place that decides whether the run-time owner re-check is skipped (1.17.65, AD-13 condition 2 amended, wide rule).
 
     ``subject`` is a ``TecTacSchedule`` (the tick, before the run exists) or a ``TecTacScheduleRun`` (verify_run_context). True only when
-    every one of these holds, otherwise False, so the re-check stays: the action is flagged ``unattended`` and still registered; the run
-    is a scheduled one (a run with ``manual`` set is never); the schedule is not a one-off; the schedule is owned by a user or by a
-    module; a creator name is stored (or readable from ``created_by``). Any error answers False. The person's right was checked when
-    they created or edited the schedule. What stays checked on every run is listed in docs/system-actions.md."""
+    ``AD13_CONDITION_2_AMENDED`` is True, the run is a scheduled one (a run with ``manual`` set is never), the schedule is not a one-off,
+    and a creator name is stored (or readable from ``created_by``); and then: a user-owned schedule is exempt for EVERY registered action;
+    a module-owned schedule is exempt only while the action id is still listed in the module's signed manifest ``system_actions`` and is
+    registered with core.system_actions. Any error, an unregistered action or an unreadable manifest answers False, so the re-check stays.
+    The person's right was checked when they created or edited the schedule. What stays checked on every run is listed in
+    docs/system-actions.md. The ``unattended`` field of a registered action has no effect here (CQ188)."""
     if not AD13_CONDITION_2_AMENDED:
-        return False  # no signed amendment of AD-13 condition 2 is recorded: every scheduled run keeps the run-time re-check
+        return False  # the signed amendment is switched off: every scheduled run keeps the run-time re-check
     try:
         is_run = hasattr(subject, "manual")
         schedule = getattr(subject, "schedule", None) if is_run else subject
@@ -838,7 +839,7 @@ def _is_unattended_scheduled_run(subject) -> bool:
             return False
         action_id = (getattr(subject, "action_id", "") if is_run else "") or schedule.action_id
         registered = get_scheduled_action(action_id)
-        if registered.unattended is not True or not _action_declared_as_system_action(registered.module_id, action_id):
+        if owner_type == TecTacSchedule.OwnerType.MODULE and not _action_declared_as_system_action(registered.module_id, action_id):
             return False
         return bool(schedule_creator_names(schedule)[0])
     except Exception:
@@ -953,7 +954,7 @@ def dispatch_due_schedules(now: datetime | None = None) -> dict:
                         schedule.target_state = "valid"
                         schedule.target_state_detail = ""
                         schedule.save(update_fields=["targets", "target_state", "target_state_detail", "updated_at"])
-                    # 1.17.63 (CQ179 b): an unattended action's scheduled run is not re-checked against its creator (the one helper decides)
+                    # 1.17.65 (AD-13 condition 2 amended): a scheduled run is not re-checked against its creator (the one helper decides)
                     authorization_error = None if _is_unattended_scheduled_run(schedule) else _runtime_authorization_error(schedule)
                     if authorization_error:
                         occurrence = latest_occurrence(schedule, now)
@@ -1392,7 +1393,7 @@ def start_one_off_run(*, user, owner_module: str, action_id: str, targets: dict 
     1.17.18: ``retry_count`` (0 to 10, default 0) and ``retry_delay_seconds`` (1 to 86400, default 60) are keyword-only retry
     settings, stored on the one-off schedule exactly as ``reconcile_schedule`` stores them and snapshotted onto the run. When
     the handler raises ``SchedulerTransientError`` (or another error the worker treats as retryable) the worker re-queues the
-    run with that countdown until the attempts are used up. The owner re-check runs again on every attempt. Anything that is
+    run with that countdown until the attempts are used up. The owner re-check of a one-off run runs again on every attempt. Anything that is
     not a whole number in range (a bool, a text, a float) raises ``SchedulerError`` before anything is created. The defaults
     equal the behaviour before 1.17.18."""
     refusal = _one_off_user_refusal(user)

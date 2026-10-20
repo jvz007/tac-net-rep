@@ -482,8 +482,8 @@ def go(run, retries=0):
 AUTO_TARGETS = None  # 1.17.62: a test may set a function that returns the targets snapshot of every run make_run builds
 
 
-def make_run(action_id, module_id, *, user=None, owner="one-off", retries=0, status="queued", targets=None):
-    """A queued run on a fresh schedule. ``owner`` is ``one-off`` (a module's one-off run for ``user``), ``user`` or ``module`` (no person)."""
+def make_run(action_id, module_id, *, user=None, owner="one-off", retries=0, status="queued", targets=None, manual=False):
+    """A queued run on a fresh schedule. ``owner`` is ``one-off`` (a module's one-off run for ``user``), ``user`` or ``module`` (no person). ``manual`` (1.17.65) makes it a person-started run, which keeps the owner re-check."""
     if owner == "one-off":
         sched_kw = dict(owner_type="module", owner_module=module_id, owner_key=f"one-off:{uuid.uuid4()}", created_by=user, enabled=False)
     elif owner == "user":
@@ -492,7 +492,7 @@ def make_run(action_id, module_id, *, user=None, owner="one-off", retries=0, sta
         sched_kw = dict(owner_type="module", owner_module=module_id, owner_key="recurring", created_by=None, enabled=True)
     schedule = Schedule.objects.create(name="s", module_id=module_id, action_id=action_id, **sched_kw)
     return Run.objects.create(
-        schedule=schedule, schedule_snapshot_id=schedule.id, schedule_name="s", module_id=module_id, action_id=action_id, owner_type=schedule.owner_type,
+        schedule=schedule, schedule_snapshot_id=schedule.id, schedule_name="s", module_id=module_id, action_id=action_id, owner_type=schedule.owner_type, manual=manual,
         owner_module=schedule.owner_module, owner_key=schedule.owner_key, status=status, scheduled_for=NOW[0], retry_count_snapshot=retries,
         last_queued_at=NOW[0], started_at=NOW[0] if status == "running" else None,
         targets_snapshot=targets if targets is not None else (AUTO_TARGETS() if AUTO_TARGETS is not None else {}),

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # ruff: noqa: F821, E402
-"""1.17.63 regression (CQ179 b, Johan 20 October 2026): a SCHEDULED run of an unattended action is not re-checked against its creator.
+"""1.17.63 regression (CQ179 b, Johan 20 October 2026): a SCHEDULED run is not re-checked against its creator. Since 1.17.65 (wide rule, CQ184 b / CQ186 / CQ189) that holds for every user-owned scheduled run, flagged or not; the flag has no effect.
 
 The real scheduler.py (its real tick, ``dispatch_due_schedules``), scheduler_run_context.py and tasks.py on the stub harness of
 scheduler-completion-harness-1.17.61.py. Covered: ``unattended`` is an optional last field and keyword (equality of every existing action is
 unchanged); Core accepts True only for a module whose signed manifest lists a system action; the tick still queues the scheduled run of an
-unattended action when its creator was demoted, deactivated or deleted (the name is stored), and still skips an ordinary user-owned schedule as
-AuthorizationRevoked, an unattended one with no stored creator name, and every other tick guard (disabled, bad targets, concurrency, missed);
+unattended action when its creator was demoted, deactivated or deleted (the name is stored), and (1.17.65) queues an ordinary user-owned schedule too; it still skips a schedule with no stored creator name as
+AuthorizationRevoked, and every other tick guard (disabled, bad targets, concurrency, missed);
 a person-started run (manual, one-off) of the same action is re-checked as before; verify_run_context exposes the stored names and still reads
 the owner fresh for has_tactical_permission and resource_context; the exemption is reached only through the one helper (source read).
 """
@@ -150,7 +150,7 @@ r = tick()
 must(not r["queued"] and skipped_types(r) == ["AuthorizationRevoked"], r)
 print("       no creator name at all is refused as before (AuthorizationRevoked)")
 
-# an ordinary (not unattended) user schedule is still skipped when its owner is demoted or deactivated
+# 1.17.65 (wide rule): an ordinary (not flagged) user schedule is not re-checked either, demoted or deactivated
 for how in ("deny", "inactive"):
     reset()
     if how == "deny":
@@ -158,12 +158,18 @@ for how in ("deny", "inactive"):
     else:
         alice.is_active = False
     s = make_schedule("patching.plain")
-    must(sched._is_unattended_scheduled_run(s) is False, "an ordinary action is never unattended")
+    must(sched._is_unattended_scheduled_run(s) is True, "a scheduled user-owned run is exempt whatever the flag says")
     r = tick()
-    must(not r["queued"] and skipped_types(r) == ["AuthorizationRevoked"], (how, r))
+    must(len(r["queued"]) == 1 and not r["skipped"], (how, r))
     AUTH["deny"] = False
     alice.is_active = True
-print("       an ordinary user-owned schedule is still skipped as AuthorizationRevoked (unchanged)")
+print("       an ordinary user-owned schedule is queued too: the unattended flag has no effect (1.17.65)")
+
+# a module-owned schedule with a creator name and an ordinary action (not in the signed manifest) gets no exemption
+reset()
+mo = make_schedule("patching.plain", owner_type="module", creator=None, name="alice")
+must(sched._is_unattended_scheduled_run(mo) is False, "module-owned, ordinary action: no exemption")
+print("       a module-owned schedule with an action outside the signed manifest system_actions gets no exemption")
 
 # every other guard of the tick still holds for an unattended action
 reset()
@@ -287,7 +293,7 @@ must("unattended" not in tasks_src, "tasks.py holds no exemption: the one-off re
 sa_src = (APP / "system_actions.py").read_text(encoding="utf-8")
 must("getattr(verified, \"unattended\", False)" in sa_src and "_is_unattended_scheduled_run" not in sa_src, "system actions read the verified answer and never decide it again")
 body = src.split("def _is_unattended_scheduled_run", 1)[1].split("def _runtime_authorization_error", 1)[0]
-for needle in ("manual", "is_one_off_key", "unattended is not True", "schedule_creator_names", "except Exception:\n        return False"):
+for needle in ("manual", "is_one_off_key", "_action_declared_as_system_action", "schedule_creator_names", "except Exception:\n        return False"):
     must(needle in body, f"the helper lacks {needle}")
 print("       the tick, verify_run_context and the system-action code reach the exemption only through the one helper (source read)")
 print("PASS scheduler unattended owner 1.17.63")

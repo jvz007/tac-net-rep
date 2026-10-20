@@ -150,7 +150,7 @@ must('"action_not_declared"' in sa_text, "the new refusal reason")
 migrations = sorted(p.name for p in (APP / "migrations").glob("0*.py"))
 must(migrations[-1] == "0036_schedule_creator_name.py" and migrations[-2] == "0035_server_job_hook.py", migrations[-2:])
 version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
-must(re.sub(r"-\d+$", "", version) == "1.17.63" and f'"version": "{version}"' in (ROOT / "tec_tac_package.json").read_text(encoding="utf-8"), version)
+must(tuple(int(x) for x in re.sub(r"-\d+$", "", version).split(".")) >= (1, 17, 63) and f'"version": "{version}"' in (ROOT / "tec_tac_package.json").read_text(encoding="utf-8"), version)  # 1.17.65: 1.17.63 or later
 notes = ROOT / f"RELEASE_NOTES_{version}.md"
 must(notes.is_file() and "## Module-facing" in notes.read_text(encoding="utf-8"), "release notes with a module-facing heading")
 print("PASS scheduler compat 1.17.63")

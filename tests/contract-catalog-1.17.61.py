@@ -12,6 +12,7 @@ action is registered and described; the module docs exist and name each public n
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 HARNESS = Path(__file__).resolve().parent / "scheduler-completion-harness-1.17.61.py"
@@ -88,7 +89,9 @@ for question in ("CQ172", "CQ173", "CQ174", "CQ175", "CQ176", "CQ177", "CQ178", 
 steps = notes[notes.index("## Dev-server checklist"):]
 must(steps.count("**Step ") == 8 and steps.count("**FAIL**") >= 7 and "Expect" in steps, "eight checklist steps, each with its FAIL line")
 must((ROOT / "docs" / "releases" / "RELEASE_NOTES_1.17.60.md").is_file() and not (ROOT / "RELEASE_NOTES_1.17.60.md").exists(), "the earlier notes moved to docs/releases")
-must(ROOT.joinpath("VERSION").read_text(encoding="utf-8").strip() in ("1.17.61", "1.17.62", "1.17.63") and any(f'"version": "{v}"' in ROOT.joinpath("tec_tac_package.json").read_text(encoding="utf-8") for v in ("1.17.61", "1.17.62", "1.17.63")), "version 1.17.61 or the 1.17.62 and 1.17.63 that follow it")
+_ver = ROOT.joinpath("VERSION").read_text(encoding="utf-8").strip()  # 1.17.65: 1.17.61 or any later version, never a fixed list
+_base = tuple(int(x) for x in re.sub(r"-\d+$", "", _ver).split("."))
+must(_base >= (1, 17, 61) and f'"version": "{_ver}"' in ROOT.joinpath("tec_tac_package.json").read_text(encoding="utf-8"), f"version 1.17.61 or later, got {_ver}")
 reviews = ROOT.parents[1] / "reviews"
 if reviews.is_dir():
     questions = (reviews / "questions" / "core.md").read_text(encoding="utf-8")

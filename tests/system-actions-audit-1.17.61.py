@@ -49,13 +49,13 @@ print("       the strict 'run' row: action run, object system_action, actor the 
 
 reset()
 FLAGS["alice"] = set()
-run = make_run("patching.h", "patching", user=alice, owner="user")
+run = make_run("patching.h", "patching", user=alice, owner="user", manual=True)  # 1.17.65: a scheduled run is not re-checked, so the permission_lost row comes from a person-started run
 go(run)
 must(len(AUDITS) == 1, AUDITS)
 row = AUDITS[0]
 must(set(row) == {"actor", "module_id", "action", "object_type", "object_id", "message", "metadata"} and "strict" not in row, set(row))
 must(row["action"] == "deny" and row["actor"] is alice and row["module_id"] == "core" and row["object_type"] == "system_action" and row["object_id"] == "patching.scan", row)
-must(row["metadata"] == {"reason": "permission_lost", "requested_by": "scheduler", "owner_module": "patching", "run_id": str(run.id), "run_kind": "scheduled", "creator": "alice", "confirmed_by": None}, row["metadata"])  # 1.17.63: run_kind, creator, confirmed_by
+must(row["metadata"] == {"reason": "permission_lost", "requested_by": "scheduler", "owner_module": "patching", "run_id": str(run.id), "run_kind": "person", "creator": "alice", "confirmed_by": None}, row["metadata"])  # 1.17.63: run_kind, creator, confirmed_by
 must(row["message"].startswith("A scheduled system action was refused:") and not any(str(i) in repr(row) for i in IDS), row["message"])
 FLAGS["alice"] = set(BOTH)
 print("       the deny row: reason code, requested_by scheduler, owner module and run id; not strict; no ids")

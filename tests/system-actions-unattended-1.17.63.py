@@ -169,7 +169,7 @@ must(not TASK_CALLS and not run_rows(), "no creator name: nothing is sent")
 print("       no creator at all: nothing is sent")
 
 # ---- (2) a person-started run, and any ordinary action, keep every re-check
-for label, kwargs, action in (("manual", dict(manual=True), "patching.handler"), ("ordinary scheduled", {}, "patching.plain")):
+for label, kwargs, action in (("manual", dict(manual=True), "patching.handler"), ("manual ordinary", dict(manual=True), "patching.plain")):  # 1.17.65: an ordinary SCHEDULED run is exempt too (see the next block)
     fresh()
     FLAGS["alice"].discard("can_run_bulk")
     run, out = start(action, **kwargs)
@@ -187,7 +187,16 @@ for label, kwargs, action in (("manual", dict(manual=True), "patching.handler"),
     run, out = start(action, owner_user=carol, **kwargs)
     carol.is_installer_user = False
     refused(run, out, "owner_inactive")
-print("       a manual run of the unattended action and an ordinary scheduled run still refuse permission_lost, out_of_scope and owner_refused")
+print("       a manual run of the flagged action and of an ordinary action still refuse permission_lost, out_of_scope and owner_refused")
+
+fresh()  # 1.17.65 (wide rule): the flag no longer matters; an ordinary scheduled run of a demoted, scope-less, deactivated creator still sends
+FLAGS["alice"] = set()
+SCOPE["alice"] = set()
+alice.is_active = False
+run, out = start("patching.plain")
+sent_once(out, run)
+alice.is_active = True
+print("       an ordinary (unflagged) scheduled run is not re-checked either (the unattended flag has no effect)")
 
 fresh()
 FLAGS["alice"].discard("can_manage_winupdates")

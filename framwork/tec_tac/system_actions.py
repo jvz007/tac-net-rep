@@ -10,11 +10,10 @@ The five AD-13 conditions and how each is met (see docs/system-actions.md for th
     2. Permission and scope are checked where Tactical checks them. A run a person starts (a manual run or a one-off run) re-reads the
        owner (active, not an installer user), the Tactical role flags and the role's client and site scope at that run. A native
        scheduler manager gets no scope bypass for a Tactical function. One agent outside the owner's scope refuses the whole call;
-       nothing is narrowed silently. Johan answered CQ179 in chat on 20 October 2026 ("yes follow tactical's implementation"); it is NOT yet recorded
-       in the authority documents, so while ``scheduler.AD13_CONDITION_2_AMENDED`` is False every scheduled run keeps this re-read. Once it is
-       recorded: a SCHEDULED run of an action the module flagged ``unattended`` skips only that re-read. The person's right was checked when they created or edited
+       nothing is narrowed silently. Johan signed the amended condition 2 on 20 October 2026 (CQ179, CQ184 b, CQ186, CQ189); it is recorded in the authority
+       documents and ``scheduler.AD13_CONDITION_2_AMENDED`` is True since Core 1.17.65: a SCHEDULED run of a user-owned schedule skips only that re-read. The person's right was checked when they created or edited
        the schedule, and Core stores and audits who that was. The cost is plain: a person who is demoted or deactivated later keeps
-       their unattended schedules running until someone removes or edits them, as in Tactical.
+       their schedules running until someone removes or edits them, as in Tactical.
     3. Run as the owner. The audit row names the creator as the actor with ``requested_by`` scheduler (a Core service actor, with the
        stored name in the metadata, when the user row is gone). Tactical's own tasks for the first two rows take no username, so only
        Core's audit row names the person.
@@ -597,7 +596,7 @@ def _run(context, identity, action_id, agent_ids, parameters) -> dict:
     except Exception as exc:
         reason = "owner_refused" if str(exc) == _run_context._OWNER_REFUSED else "context_invalid"
         _refuse(reason, run_id=run.id, module_id=module_id, action_id=shown_id, caller=caller, provenance=_provenance(run))
-    # 1.17.63 (CQ179 b): a scheduled run of an unattended action skips only the three re-reads of the person (owner_inactive,
+    # 1.17.65 (AD-13 condition 2 amended): a scheduled run of a user-owned schedule skips only the three re-reads of the person (owner_inactive,
     # permission_lost, out_of_scope). Core decided that in verify_run_context through the one helper; a manual or one-off run never is.
     unattended = bool(getattr(verified, "unattended", False))
     provenance = _provenance(run)
@@ -760,7 +759,7 @@ def system_actions_contract_metadata() -> dict:
         "delivery": "at most once",
         "audit_actions": ["run (strict, before the send)", "deny (one per refusal)", "custom:outcome-unknown"],
         "requires_framework": ">=1.17.61",
-        "unattended": "A scheduled run of an action registered with unattended=True skips owner_inactive, permission_lost and out_of_scope (>=1.17.63); every other check stays.",
+        "unattended": "A scheduled run of a user-owned schedule skips owner_inactive, permission_lost and out_of_scope (>=1.17.65; the unattended= flag has no effect); every other check stays. A manual or one-off run keeps all of them.",
     }
 
 
@@ -772,7 +771,7 @@ def register_core_system_actions_capability():
         module_id="core",
         version=CAPABILITY_VERSION,
         provider=_PROVIDER,
-        description="Typed Tactical functions that Core runs unattended for a named owner, with the owner and scope checked at every run.",
+        description="Typed Tactical functions that Core runs unattended for a named owner, with the owner and scope checked at every person-started run; a scheduled run is not re-checked against its creator (>=1.17.65).",
         operations=("list_actions", "get_action", "run"),
         metadata=system_actions_contract_metadata(),
     )

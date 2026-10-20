@@ -105,7 +105,7 @@ def _is_one_off_key(owner_key) -> bool:
 
 
 def _is_unattended_scheduled_run(run) -> bool:
-    """Is this a scheduled run of an unattended action, which the owner re-check skips (1.17.63)? The one decision lives in scheduler.py."""
+    """Is this a scheduled (not manual, not one-off) run, which the owner re-check skips (1.17.65)? The one decision lives in scheduler.py."""
     from .scheduler import _is_unattended_scheduled_run as decide
 
     return decide(run)
@@ -162,8 +162,8 @@ class VerifiedSchedulerRun:
     user: Any
     owner_user_id: Any
     owner_username: str | None
-    # 1.17.63 (CQ179 b), last so a positional constructor stays as it was. ``unattended`` is True for a scheduled run of an unattended
-    # action: its creator's rights are not read again for this run. The names are the stored ones and survive a deleted user row.
+    # 1.17.63 (CQ179 b), last so a positional constructor stays as it was. ``unattended`` is True for a scheduled run (since 1.17.65 every
+    # user-owned one, not only a flagged action): its creator's rights are not read again for this run. The names are the stored ones and survive a deleted user row.
     creator_username: str | None = None
     confirmed_by_username: str | None = None
     unattended: bool = False

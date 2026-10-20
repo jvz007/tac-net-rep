@@ -95,8 +95,9 @@ def fresh(register=True):
         sa.register_system_action("patchmanagement.scan", "patchmanagement", "APM scheduled scan", "winupdate.scan", BOTH)
 
 
-def start(handler="patching.handler", owner_user=alice, owner="user", retries=0):
-    run = make_run(handler, handler.split(".")[0], user=owner_user, owner=owner, retries=retries)
+def start(handler="patching.handler", owner_user=alice, owner="user", retries=0, manual=True):
+    # 1.17.65: a scheduled user-owned run is no longer re-checked against its creator, so these cases are person-started (manual) runs, which keep every re-check
+    run = make_run(handler, handler.split(".")[0], user=owner_user, owner=owner, retries=retries, manual=manual)
     return run, go(run)
 
 
