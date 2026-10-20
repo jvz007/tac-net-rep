@@ -28,6 +28,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import zipfile
@@ -613,6 +614,87 @@ def verify_install_disables(repo_root, order, actions, pre_installed, confirmed)
     return disables
 
 
+def package_replaces(package_path, module_id):
+    """The ``replaces`` value of the extension manifest inside the root-private package snapshot (1.17.59), or "".
+
+    Nothing is extracted: the manifest is read from the archive, which is the hash-checked copy this job installs. Raises
+    RuntimeError, so the install fails closed, when the archive holds no manifest or more than one at
+    extensions/<id>/tec_tac.json, when a manifest name tries to leave the archive, when the id does not match, when the
+    manifest is too large, or when ``replaces`` is present and is not a valid module id."""
+    package = Path(package_path)
+    found = []
+
+    def consider(name, size, reader):
+        parts = [part for part in str(name).replace("\\", "/").split("/") if part]
+        if len(parts) < 3 or parts[-1] != "tec_tac.json" or parts[-3] != "extensions":
+            return
+        if ".." in parts or str(name).startswith("/"):
+            raise RuntimeError("module package manifest has an unsafe path")
+        if size > MAX_MANIFEST_BYTES:
+            raise RuntimeError("module manifest is too large")
+        data = reader()
+        if len(data) > MAX_MANIFEST_BYTES:
+            raise RuntimeError("module manifest is too large")
+        try:
+            payload = json.loads(data.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise RuntimeError("module manifest is unreadable") from exc
+        if isinstance(payload, dict) and payload.get("type") == "extension":
+            found.append(payload)
+
+    try:
+        if package.name.lower().endswith(".zip"):
+            with zipfile.ZipFile(package) as archive:
+                for member in archive.infolist():
+                    if not member.is_dir():
+                        consider(member.filename, member.file_size, lambda m=member: archive.read(m))
+        else:
+            with tarfile.open(package, "r:*") as archive:
+                for member in archive:
+                    if member.isfile():
+                        consider(member.name, member.size, lambda m=member: archive.extractfile(m).read())
+    except (OSError, zipfile.BadZipFile, tarfile.TarError, EOFError) as exc:
+        raise RuntimeError(f"module package cannot be read: {exc}") from exc
+    if len(found) != 1:
+        raise RuntimeError(f"module package must contain exactly one extension manifest; found {len(found)}")
+    payload = found[0]
+    if payload.get("id") != module_id:
+        raise RuntimeError("module package manifest does not match the requested module")
+    if "replaces" not in payload:
+        return ""
+    raw = payload["replaces"]
+    if not isinstance(raw, str) or not PLUGIN_RE.fullmatch(raw.strip()):
+        raise RuntimeError("module manifest names an invalid replaces value")
+    return raw.strip()
+
+
+def apply_install_prepare_disable(repo_root, replaced_id, confirmed, order, record=None):
+    """Disable the confirmed replaced module right before its replacement's install shell runs (1.17.59, CQ169).
+
+    The replacement cannot import or migrate while its replaced module is enabled (Core's loader drops it), so the job does
+    what an operator does by hand: disable first. Everything is re-read under the module-state lock. Acts only when the
+    replaced module is installed with a trusted manifest, is a core or server module, is enabled, and is not installed by this
+    same job; anything else returns False and changes nothing. An enabled replaced module the operator did not confirm raises
+    the same sentence verify_install_disables uses, before the module's script runs. One state write; the name is added to
+    ``record`` (the job's rollback list) in the same step. Returns True when it disabled the module."""
+    result = {"done": False}
+
+    def apply(state):
+        model = replacement_model(read_installed_manifests(repo_root), state)
+        target = model.get(replaced_id)
+        if target is None or target["category"] not in REPLACEABLE_CATEGORIES or not target["enabled"] or replaced_id in order:
+            return
+        if replaced_id not in set(confirmed):
+            raise RuntimeError("module replacement would disable a module the operator did not confirm: " + replaced_id)
+        state["modules"][replaced_id] = {**(state["modules"].get(replaced_id) or {}), "enabled": False}
+        if record is not None and replaced_id not in record:
+            record.append(replaced_id)
+        result["done"] = True
+
+    mutate_module_state(apply)
+    return result["done"]
+
+
 def verify_install_categories(repo_root, order):
     """Read-only, after the packages are installed and before any module state is written (AD-21, 1.17.13).
 
@@ -1163,7 +1245,7 @@ def installer_refusal(log_path):
     return found[-1] if found else None
 
 
-def install_packages(repo_root, packages, order, actions, log, backup_root):
+def install_packages(repo_root, packages, order, actions, log, backup_root, prepare=None):
     install_script = repo_root / "scripts/install-extension.sh"
     if not install_script.is_file():
         raise RuntimeError("Tec-Tac install-extension.sh is missing")
@@ -1197,6 +1279,9 @@ def install_packages(repo_root, packages, order, actions, log, backup_root):
         verb = "renaming" if rename_from else ("replacing" if replace else "installing")
         log.write(f"[TEC-TAC-MODULE-V2] {verb} {module_id}\n")
         log.flush()
+        if prepare is not None:
+            # 1.17.59: after the backup, before this module's install shell (copy, check, migrate).
+            prepare(module_id, package)
         env = privileged_env({"TEC_TAC_DEFER_WORKER_REFRESH": "1"})
         result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, text=True, env=env)
         if result.returncode:
@@ -1621,8 +1706,21 @@ def run_job(job_id):
                 pre_installed = set(read_installed_manifests(repo_root))
                 disabled_by_job = []
                 try:
-                    backup_ids = install_packages(repo_root, packages, order, actions, log, backup)
-                    # Read-only, before any module state is written: what would the new replacements disable?
+                    actions_by_id = {str(item.get("id")): item for item in actions}
+
+                    def prepare_install(module_id, package):
+                        # 1.17.59: a fresh replacement is installed with its confirmed replaced module already disabled.
+                        # The module state is backed up by now, so a failure puts the enabled flag back (see the except).
+                        if module_id in pre_installed or (actions_by_id.get(module_id) or {}).get("action") != "install":
+                            return
+                        replaced = package_replaces(package, module_id)
+                        if replaced and apply_install_prepare_disable(repo_root, replaced, confirmed, order, disabled_by_job):
+                            log.write(f"[TEC-TAC-MODULE-V2] disabled replaced module before installing {module_id}: {replaced}\n")
+                            log.flush()
+
+                    backup_ids = install_packages(repo_root, packages, order, actions, log, backup, prepare=prepare_install)
+                    # Read-only, before any further state is written: what would the new replacements disable? A replaced
+                    # module switched off before its install shell is off already; the rules still run in full.
                     disables = verify_install_disables(repo_root, order, actions, pre_installed, confirmed)
                     categories = verify_install_categories(repo_root, order)
                     sources = {item.get("id"): item.get("source") for item in packages}
@@ -1632,11 +1730,13 @@ def run_job(job_id):
                             migrate_module_state_identity(action["previous_module_id"], action["id"])
                             applied_renames.append(action)
                         remember_version(action["id"], action.get("version") or "0.0.0", sources.get(action["id"]), categories.get(action["id"]))
-                    if disables:
-                        set_enabled(disables, False)
-                        disabled_by_job = list(disables)
-                        job["disabled_modules"] = disabled_by_job
-                        log.write(f"[TEC-TAC-MODULE-V2] disabled replaced module(s): {', '.join(disables)}\n")
+                    later = [name for name in disables if name not in disabled_by_job]
+                    if later:
+                        set_enabled(later, False)
+                        disabled_by_job.extend(later)
+                        log.write(f"[TEC-TAC-MODULE-V2] disabled replaced module(s): {', '.join(later)}\n")
+                    if disabled_by_job:
+                        job["disabled_modules"] = sorted(disabled_by_job)
                     job["stage"] = "runtime-sync"
                     atomic_json(path, job)
                     sync_and_reload(config, log, refresh_workers=True)

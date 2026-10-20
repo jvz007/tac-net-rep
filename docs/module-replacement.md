@@ -88,7 +88,21 @@ The list must match exactly. If it is missing or out of date, the answer is HTTP
 
 The job carries the confirmed list as `disable_modules`. Two queued jobs still cannot both pass, because a queued job's disable counts as done when the next one is checked.
 
-The root job helper does not trust the web side. Under the module-state lock it reads the installed manifests itself (regular, root-owned files under `extensions/` only), runs the same rules again, and requires what it would disable to be inside the confirmed list. Anything else fails the job with nothing changed. It then enables the replacement and disables the replaced module in one state write. If the runtime sync fails, it puts the flags back. An install does the same check after the packages land and before any state is written, disables after the versions are recorded, and re-enables the module if it has to roll back.
+The root job helper does not trust the web side. Under the module-state lock it reads the installed manifests itself (regular, root-owned files under `extensions/` only), runs the same rules again, and requires what it would disable to be inside the confirmed list. Anything else fails the job with nothing changed. It then enables the replacement and disables the replaced module in one state write. If the runtime sync fails, it puts the flags back. An install runs in this order (1.17.59):
+
+1. Back up the code and the module state.
+2. For each module, before its install shell: re-check under the lock, and disable the confirmed replaced module. This is what lets the replacement import and migrate, because Core's loader drops a replacement while its replaced module is enabled.
+3. Run the install shell (copy, check, migrate).
+4. Verify the rules and categories on the installed manifests, in full.
+5. Record the versions.
+6. Run the runtime sync.
+7. Register the server-maintenance actions.
+
+On any failure the job restores the code and the module state, re-enables the replaced module, and syncs again.
+
+Step 2 acts only on a fresh install of a replacement. It does nothing for an upgrade, for a module that was installed before the job, or when the replaced module is already off, is not a core or server module, or is installed by the same job. An enabled replaced module the operator did not confirm fails the job with "module replacement would disable a module the operator did not confirm", before that module's install shell runs. In a batch the disable comes right before the replacement's own install shell, not before a dependency's.
+
+The window: the replaced module is off from step 2 until the job ends or rolls back, about a minute. A helper process killed outright cannot roll back. That limit is not new.
 
 Audit follows what happened (1.17.12). When the job is queued, Core writes one row that records the request: module `core`, action `custom:module-replacement-switch-queued`, object the module being enabled, actor the person who asked, message "Module X was asked to switch: job J will disable A". It claims no change. The rows that say what the job did are written after it finishes. See "Audit rows" below.
 

@@ -388,7 +388,7 @@ def fake_validate(job, packages, root_trust):
     return list(job["plan"]["order"]), [dict(item) for item in job["plan"]["actions"]]
 
 
-def fake_install_packages(repo_root, packages, order, actions, log, backup_root):
+def fake_install_packages(repo_root, packages, order, actions, log, backup_root, prepare=None):
     EVENTS.append("install")
     helper.backup_modules(repo_root, order, backup_root)  # the real backup of the code and the module state
     for module_id in order:

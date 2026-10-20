@@ -614,7 +614,7 @@ v2.remember_version = lambda *a, **k: EVENTS.append("remember")
 v2.cleanup_successful_stage = lambda job, log: EVENTS.append("cleanup")
 v2._cleanup_claimed_job_inputs = lambda job_id: None
 v2._confirmed_disable_modules = lambda job: []
-v2.install_packages = lambda repo_root, packages, order, actions, log, backup: EVENTS.append("install") or list(order)
+v2.install_packages = lambda repo_root, packages, order, actions, log, backup, prepare=None: EVENTS.append("install") or list(order)
 v2.sync_and_reload = lambda config, log, **kw: EVENTS.append("sync")
 v2.restore_modules = lambda repo_root, ids, backup, log: EVENTS.append(("restore", list(ids)))
 v2.atomic_json = lambda path, payload, mode=0o640, **kw: JOBS.__setitem__("last", dict(payload))
