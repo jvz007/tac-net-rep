@@ -100,6 +100,9 @@ class PluginSpec:
     # raises; module_manager_v2 refuses a malformed manifest at install). Left out of equality like the fields above.
     dependencies: tuple = field(default=(), compare=False, repr=False)
     optional_dependencies: tuple = field(default=(), compare=False, repr=False)
+    # 1.17.72: True when either key was present but unusable (not an object) or had an entry that was skipped (blank or non-text id). The pairs
+    # above then may be short, so module_dependants answers ``complete`` False. Left out of equality like the fields above.
+    dependencies_incomplete: bool = field(default=False, compare=False, repr=False)
 
     def capability_map(self) -> dict[str, str]:
         return dict(self.capabilities)
@@ -356,20 +359,31 @@ def _system_actions(payload: dict, plugin_type: str, plugin_id: str) -> tuple[st
     return tuple(seen)
 
 
-def _dependency_pairs(payload: dict, key: str) -> tuple[tuple[str, str], ...]:
-    """The optional ``dependencies`` or ``optional_dependencies`` object (1.17.71) as sorted ``(module id, constraint)`` pairs. Never raises: a
-    missing key, a value that is not an object, a blank or non-text id, or a non-text constraint gives ``()`` for the key (or skips the entry).
-    module_manager_v2 refuses a malformed manifest at install; the registry must never stop Tactical from starting (rule 1.13)."""
-    raw = payload.get(key)
+def _dependency_pairs_checked(payload: dict, key: str) -> tuple[tuple[tuple[str, str], ...], bool]:
+    """The pairs of ``_dependency_pairs`` and whether the key was incomplete (1.17.72): present but not an object, or an entry skipped. A missing key
+    or ``None`` is complete (nothing declared). Never raises."""
+    if key not in payload or payload[key] is None:
+        return (), False
+    raw = payload[key]
     if not isinstance(raw, dict):
-        return ()
+        return (), True
     pairs = {}
+    incomplete = False
     for module_id, constraint in raw.items():
         if not isinstance(module_id, str) or not module_id.strip():
-            return ()
+            incomplete = True
+            continue
         text = constraint.strip() if isinstance(constraint, str) else ""
         pairs[module_id.strip()] = text or "*"
-    return tuple(sorted(pairs.items()))
+    return tuple(sorted(pairs.items())), incomplete
+
+
+def _dependency_pairs(payload: dict, key: str) -> tuple[tuple[str, str], ...]:
+    """The optional ``dependencies`` or ``optional_dependencies`` object (1.17.71) as sorted ``(module id, constraint)`` pairs. Never raises: a
+    missing key or a value that is not an object gives ``()`` for the key, a blank or non-text id skips only that entry (1.17.72; before, it dropped
+    every pair of the key), and a non-text constraint reads as ``*``. ``_dependency_pairs_checked`` also says whether anything was skipped.
+    module_manager_v2 refuses a malformed manifest at install; the registry must never stop Tactical from starting (rule 1.13)."""
+    return _dependency_pairs_checked(payload, key)[0]
 
 
 def _replacement_keys(payload: dict, plugin_type: str, plugin_id: str, category: str) -> tuple[str, tuple[tuple[str, str], ...], bool]:
@@ -574,7 +588,8 @@ def _load_manifest(plugin_type: str, plugin_dir: Path) -> PluginSpec | None:
     description = _description(payload, plugin_id)
     server_maintenance_actions = _server_maintenance_actions(payload, plugin_type, plugin_id, plugin_dir, permission_groups, publisher_permissions)
     system_actions = _system_actions(payload, plugin_type, plugin_id)
-    return PluginSpec(plugin_id=plugin_id, plugin_type=plugin_type, root=plugin_root, version=version, python_paths=tuple(python_paths), django_apps=django_apps, permission_groups=permission_groups, publisher_permissions=publisher_permissions, name=name, category=category, audit_events=audit_events, replaces=replaces, capabilities=capabilities, capabilities_declared=capabilities_declared, route_prefix=route_prefix, route_urlconf=route_urlconf, description=description, server_maintenance_actions=server_maintenance_actions, system_actions=system_actions, dependencies=_dependency_pairs(payload, "dependencies"), optional_dependencies=_dependency_pairs(payload, "optional_dependencies"))
+    _deps, _opt = _dependency_pairs_checked(payload, "dependencies"), _dependency_pairs_checked(payload, "optional_dependencies")
+    return PluginSpec(plugin_id=plugin_id, plugin_type=plugin_type, root=plugin_root, version=version, python_paths=tuple(python_paths), django_apps=django_apps, permission_groups=permission_groups, publisher_permissions=publisher_permissions, name=name, category=category, audit_events=audit_events, replaces=replaces, capabilities=capabilities, capabilities_declared=capabilities_declared, route_prefix=route_prefix, route_urlconf=route_urlconf, description=description, server_maintenance_actions=server_maintenance_actions, system_actions=system_actions, dependencies=_deps[0], optional_dependencies=_opt[0], dependencies_incomplete=_deps[1] or _opt[1])
 
 def _discover_root(plugin_type: str, root: Path) -> list[PluginSpec]:
     if not root.exists():

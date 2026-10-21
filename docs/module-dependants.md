@@ -35,3 +35,5 @@ Core calls no provider on behalf of a module. For Groups, a dependant that decla
 ## Registry fields
 
 `registry.PluginSpec` gets `dependencies` and `optional_dependencies`: sorted `(module id, constraint)` pairs, empty when the key is missing or malformed (the registry reads leniently and never stops Tactical starting; the module manager already refuses a malformed manifest at install). Both are left out of equality, so every older `PluginSpec(...)` construction still works.
+
+Since 1.17.72 a blank or non-text id in one dependency object skips only that entry; the good pairs are kept. `PluginSpec.dependencies_incomplete` (left out of equality like the other fields) is set when an entry was skipped or a key is present but not an object. `dependants()` then answers `complete: False`, because Core cannot know whether that module names the caller, and logs one warning that names module ids only. A caller treats an incomplete answer as "could not check".

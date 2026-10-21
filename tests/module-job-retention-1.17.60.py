@@ -295,6 +295,16 @@ for name, previous in PREVIOUS.items():
     call = "    try:\n        sweep_orphan_logs(LOGS_ROOT, JOBS_ROOT)\n    except Exception:\n        pass\n"
     must(text.count(call) == 1, f"{name}: exactly one guarded call")
     restored = (text[:block_start] + text[block_end:]).replace(call, "")
+    if name == "module-v2-job-helper.py":
+        # 1.17.72 (H2) added the repository-URL scrub to this helper; take exactly those additions out before comparing with 1.17.59
+        h2_start = restored.index("def strip_repository_url(value):")
+        h2_end = restored.index("def save_module_state_unlocked(state):")
+        restored = restored[:h2_start] + restored[h2_end:]
+        remember_lines = ('            if "repository_url" in record["source"]:\n'
+                          '                record["source"]["repository_url"] = strip_repository_url(record["source"]["repository_url"])\n')
+        for addition in ("import urllib.parse\n", "    scrub_state_sources(state)\n", remember_lines):
+            must(restored.count(addition) == 1, f"{name}: one 1.17.72 addition {addition.strip()[:30]!r}")
+            restored = restored.replace(addition, "")
     must(hashlib.sha256(restored.encode("utf-8")).hexdigest() == previous,
          f"{name} must be byte-identical to 1.17.59 apart from the added function and its one call")
     tree = ast.parse(text)

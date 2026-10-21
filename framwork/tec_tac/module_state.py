@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import urllib.parse
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -180,9 +181,43 @@ def load_state() -> dict:
         return _load_state_unlocked()
 
 
+def strip_repository_url(value):
+    """1.17.72 (H2): a repository URL as it may be stored in module-state.json: scheme, host, port and path only.
+
+    No query, fragment, ';params' or user info, so a token in a repository URL never reaches a file that anyone on the server can read. Anything
+    that is not an http or https URL with a host gives '' (fail closed). The fetch URL is never changed; only what is written to state is.
+    The two root helpers carry their own copy (they never import this tree); tests/module-state-source-url-1.17.72.py runs every copy over one matrix.
+    """
+    if not isinstance(value, str):
+        return ""
+    try:
+        parts = urllib.parse.urlsplit(value.strip())
+        host = parts.hostname
+        port = parts.port
+    except ValueError:
+        return ""
+    if parts.scheme.lower() not in ("http", "https") or not host:
+        return ""
+    if ":" in host:
+        host = "[" + host + "]"
+    return parts.scheme.lower() + "://" + host + (":" + str(port) if port is not None else "") + parts.path.split(";", 1)[0]
+
+
+def scrub_state_sources(state):
+    """1.17.72 (H2): clean ``source.repository_url`` of every module record in place. Other keys and fields stay as they were. Returns ``state``."""
+    modules = state.get("modules") if isinstance(state, dict) else None
+    if isinstance(modules, dict):
+        for record in modules.values():
+            source = record.get("source") if isinstance(record, dict) else None
+            if isinstance(source, dict) and "repository_url" in source:
+                source["repository_url"] = strip_repository_url(source["repository_url"])
+    return state
+
+
 def _save_state_unlocked(payload: dict) -> None:
     if payload.get("_corrupt"):
         raise ModuleStateError("Corrupt module state cannot be saved. Repair or restore module-state.json first.")
+    scrub_state_sources(payload)
     atomic_json(STATE_FILE, payload, mode=0o644)
 
 

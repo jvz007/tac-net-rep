@@ -37,7 +37,7 @@ from .module_manager_v2 import (
     discard_v2_stage,
     attach_source_provenance,
 )
-from .module_state import ModuleStateError, version_satisfies
+from .module_state import ModuleStateError, strip_repository_url, version_satisfies
 
 REPOSITORY_ROOT = Path("/var/lib/tec-tac/module-manager/repositories")
 CONFIG_FILE = REPOSITORY_ROOT / "repositories.json"
@@ -939,7 +939,7 @@ def stage_repository_package(repository_id: str, module_id: str, version: str | 
         "repository_name": repo["name"],
         "repository_trust": repo["trust"],
         "package_sha256": digest,
-        "repository_url": repo["url"],
+        "repository_url": strip_repository_url(repo["url"]),  # 1.17.72 (H2): no query or fragment in what is stored; repo["url"] still fetches
         "artifact_kind": str(staged.get("kind") or "package"),
         "publisher_trust": staged.get("publisher_trust") or (staged.get("preview") or {}).get("publisher_trust"),
         "requested_module_id": module_id,

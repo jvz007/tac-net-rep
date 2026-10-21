@@ -14,6 +14,7 @@ import tarfile
 import tempfile
 import subprocess
 import sys
+import urllib.parse
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -101,6 +102,40 @@ def privileged_env(extra=None):
     if extra:
         env.update({str(key): str(value) for key, value in extra.items()})
     return env
+
+
+def strip_repository_url(value):
+    """1.17.72 (H2): a repository URL as it may be stored in module-state.json: scheme, host, port and path only.
+
+    No query, fragment, ';params' or user info, so a token in a repository URL never reaches a file that anyone on the server can read. Anything
+    that is not an http or https URL with a host gives '' (fail closed). The fetch URL is never changed; only what is written to state is.
+    This is the root helper's own copy of tec_tac/module_state.py (it never imports the Tactical-writable tree); change both together.
+    tests/module-state-source-url-1.17.72.py runs every copy over one matrix.
+    """
+    if not isinstance(value, str):
+        return ""
+    try:
+        parts = urllib.parse.urlsplit(value.strip())
+        host = parts.hostname
+        port = parts.port
+    except ValueError:
+        return ""
+    if parts.scheme.lower() not in ("http", "https") or not host:
+        return ""
+    if ":" in host:
+        host = "[" + host + "]"
+    return parts.scheme.lower() + "://" + host + (":" + str(port) if port is not None else "") + parts.path.split(";", 1)[0]
+
+
+def scrub_state_sources(state):
+    """1.17.72 (H2): clean ``source.repository_url`` of every module record in place. Other keys and fields stay as they were. Returns ``state``."""
+    modules = state.get("modules") if isinstance(state, dict) else None
+    if isinstance(modules, dict):
+        for record in modules.values():
+            source = record.get("source") if isinstance(record, dict) else None
+            if isinstance(source, dict) and "repository_url" in source:
+                source["repository_url"] = strip_repository_url(source["repository_url"])
+    return state
 
 
 def atomic_json(path, payload, mode=0o640, *, uid=None, gid=None):
@@ -198,6 +233,7 @@ def forget_module_state(plugin_id, log=None):
             if plugin_id not in modules:
                 return False
             del modules[plugin_id]
+            scrub_state_sources(state)
             atomic_json(STATE_FILE, state)
             os.chown(STATE_FILE, 0, 0)
             os.chmod(STATE_FILE, 0o644)
@@ -360,6 +396,7 @@ def set_module_enabled(module_ids, enabled):
                 record = dict(modules.get(module_id) or {})
                 record["enabled"] = bool(enabled)
                 modules[module_id] = record
+            scrub_state_sources(state)
             atomic_json(STATE_FILE, state)
             os.chown(STATE_FILE, 0, 0)
             os.chmod(STATE_FILE, 0o644)
@@ -451,6 +488,7 @@ def remember_category(plugin_id, category):
             record = dict(modules.get(plugin_id) or {})
             record["category"] = str(category)
             modules[plugin_id] = record
+            scrub_state_sources(state)
             atomic_json(STATE_FILE, state)
             os.chown(STATE_FILE, 0, 0)
             os.chmod(STATE_FILE, 0o644)

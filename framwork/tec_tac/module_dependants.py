@@ -9,7 +9,8 @@ What it answers. ``dependants()`` returns ``{"module": <caller id>, "dependants"
 constraint the dependant declared, ``enabled`` is the dependant's current state (a disabled module is still listed: its saved configuration still
 points at the caller), ``capabilities`` are the ``{id, version}`` pairs the dependant's signed manifest declares. Nothing else: no routes,
 permissions, settings, paths, audit events or data of the dependant. Rows are sorted by id, at most 200; ``complete`` is False when more exist, and
-a caller that needs the whole answer must then treat it as "could not check".
+a caller that needs the whole answer must then treat it as "could not check". Since 1.17.72 ``complete`` is also False when another installed module's
+``dependencies`` or ``optional_dependencies`` could not be read in full (a skipped entry or a key that is not an object): Core cannot know whether that module names the caller.
 
 Who may ask (rule 1.10, AD-26). The caller is found by the frame walk of ``calling_module_for_core_provider``: only the code of an installed,
 enabled, non-legacy extension is a caller. Core itself, an unverified caller, a disabled or legacy module is refused with ``DependantsRefused``.
@@ -72,9 +73,12 @@ def dependants(*, context=None) -> dict:
         if isinstance(state, dict) and state.get("_corrupt"):
             raise RuntimeError("the module state is corrupt")
         rows = []
+        unreadable = []
         for spec in list(registry.discover_plugins()):
             if spec.plugin_type != "extension" or getattr(spec, "legacy", False) or spec.plugin_id == caller:
                 continue
+            if getattr(spec, "dependencies_incomplete", False) is True:
+                unreadable.append(spec.plugin_id)
             required = _pairs(spec, "dependencies")
             optional = _pairs(spec, "optional_dependencies")
             if caller in required:
@@ -91,8 +95,10 @@ def dependants(*, context=None) -> dict:
     except Exception:
         logger.warning("The dependants of a module could not be listed; failing closed.", exc_info=True)
         raise DependantsUnavailable(UNAVAILABLE_TEXT) from None
+    if unreadable:
+        logger.warning("The manifest dependencies of module %s could not be read in full, so the dependants answer is incomplete.", ", ".join(sorted(unreadable)))
     rows.sort(key=lambda row: row["id"])
-    return {"module": caller, "dependants": rows[:MAX_ROWS], "complete": len(rows) <= MAX_ROWS}
+    return {"module": caller, "dependants": rows[:MAX_ROWS], "complete": len(rows) <= MAX_ROWS and not unreadable}
 
 
 class _DependantsProvider:
