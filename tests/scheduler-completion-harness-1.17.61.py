@@ -181,7 +181,8 @@ class Schedule(Model):
                     created_by=None, updated_by=None, parameters={}, targets={}, target_mode="snapshot", retry_count=0, retry_delay_seconds=60,
                     timezone="UTC", missed_policy="skip", missed_grace_minutes=60, concurrency_policy="skip", target_state="valid",
                     target_state_detail="", updated_at=None, schedule_type="once",
-                    created_by_username="", confirmed_by_username="")  # 1.17.63: the names migration 0036 adds
+                    created_by_username="", confirmed_by_username="",  # 1.17.63: the names migration 0036 adds
+                    creation_scope={})  # 1.17.68: migration 0037 adds the scope a person had when they saved the schedule
 
     @property
     def runs(self):
@@ -209,6 +210,24 @@ Schedule.objects = Manager()
 Schedule.objects.model = Schedule
 Run.objects = Manager()
 Run.objects.model = Run
+
+
+class Grant(Model):
+    """1.17.68: the stand-in of TecTacDelegationGrant (migration 0037)."""
+    defaults = dict(owner_module="", grant_key="", provider_module="", action_id="", targets={}, parameters={}, parameters_digest="", created_by=None,
+                    created_by_username="", confirmed_by_username="", creation_scope={}, enabled=True, updated_at=None)
+
+    def save(self, update_fields=None):
+        self.updated_at = NOW[0] + timedelta(seconds=next(COUNTER))  # auto_now: every save moves it
+        if self not in Grant.objects.rows:
+            Grant.objects.rows.append(self)
+
+    def delete(self):
+        Grant.objects.rows.remove(self)
+
+
+Grant.objects = Manager()
+Grant.objects.model = Grant
 
 
 class State:
@@ -254,7 +273,7 @@ mod("django.utils")
 mod("django.utils.timezone", now=lambda: NOW[0], is_naive=lambda v: v.tzinfo is None)
 pkg = mod("tec_tac")
 pkg.__path__ = [str(APP)]
-mod("tec_tac.models", TecTacSchedule=Schedule, TecTacScheduleRun=Run, TecTacSchedulerConfig=Config, TecTacSchedulerState=State)
+mod("tec_tac.models", TecTacSchedule=Schedule, TecTacScheduleRun=Run, TecTacSchedulerConfig=Config, TecTacSchedulerState=State, TecTacDelegationGrant=Grant)
 QUEUED_IDS: list = []
 
 
@@ -270,8 +289,8 @@ mod("tec_tac.capabilities", capability_status=None, CapabilityDisabled=type("CD"
 mod("tacticalrmm")
 mod("tacticalrmm.celery", app=SimpleNamespace(task=lambda *a, **k: (lambda fn: fn)))
 AUTH = {"deny": False}
-mod("tec_tac.scheduler_views", _can_use_action=lambda user, action: not AUTH["deny"], _can_access_target_scope=lambda user, targets: not AUTH["deny"],
-    _canonicalize_endpoint_targets_for_user=lambda user, targets: targets)
+mod("tec_tac.scheduler_views", _can_use_action=lambda user, action: not AUTH["deny"], _can_access_target_scope=lambda user, targets, **kw: not AUTH["deny"],
+    _canonicalize_endpoint_targets_for_user=lambda user, targets: targets, _native_scheduler_manager=lambda user: False)
 audit_stub = mod("tec_tac.audit", record=audit_record, service_audit_actor=lambda **kw: SimpleNamespace(kind="service", **kw))
 pkg.audit = audit_stub
 
@@ -317,7 +336,8 @@ def _validate_tactical_flag(flag):
     return flag
 
 
-mod("tec_tac.rbac", _validate_tactical_flag=_validate_tactical_flag, has_tactical_permission=lambda user, flag: flag in FLAGS.get(user.username, set()))
+mod("tec_tac.rbac", _validate_tactical_flag=_validate_tactical_flag, has_tactical_permission=lambda user, flag: flag in FLAGS.get(user.username, set()),
+    tactical_permission_catalog=lambda user: {flag: flag in FLAGS.get(user.username, set()) for flag in sorted(KNOWN_FLAGS)})
 SCOPE_CALLS: list = []
 
 
@@ -333,12 +353,16 @@ SITE_AGENTS: dict = {}  # site id -> agent numbers
 TARGET_CALLS: list = []
 
 
-def _agent_pks_for_scheduler_targets(*, targets):
+RESOLVED_MODULE_TARGETS: dict = {}  # 1.17.68: (module id, target type) -> the agent numbers a registered resolver names (the stub of the resolver path)
+
+
+def _agent_pks_for_scheduler_targets(*, targets, module_id=None):
     TARGET_CALLS.append(targets)
     ref = sys.modules["tec_tac.scheduler_targets"].tactical_scope_ref(targets)
     kind, values = ref["kind"], ref["values"]
     if kind == "module":
-        return None
+        found = RESOLVED_MODULE_TARGETS.get((module_id, str(targets.get("type")))) if module_id else None
+        return None if found is None else (set(found), 0)
     if kind == "none":
         return set(), 0
     if kind == "endpoint":
@@ -349,7 +373,38 @@ def _agent_pks_for_scheduler_targets(*, targets):
     return set().union(*[table[v] for v in known]) if known else set(), len(set(values)) - len(known)
 
 
-mod("tec_tac.resources_adapter", agent_pks_in_role_scope=_agents_in_role_scope, agent_pks_for_scheduler_targets=_agent_pks_for_scheduler_targets)
+# 1.17.68: the creation-time scope reads and the endpoint rows of a stored scope (the stubs of resources_adapter.role_scope_descriptor and agent_rows_in_scope)
+DESCRIPTORS: dict = {}  # username -> the scope descriptor of the user
+AGENT_ROWS: dict = {}  # agent number -> {"agent_id", "hostname", "platform", "client_id", "site_id"}
+ROW_CALLS: list = []
+
+
+def _role_scope_descriptor(user):
+    return DESCRIPTORS.get(user.username, {"mode": "none", "unrestricted": False, "whole_client_ids": [], "site_ids": []})
+
+
+def _agent_rows_in_scope(*, pks, snapshot=None, user=None, limit):
+    ROW_CALLS.append({"pks": None if pks is None else list(pks), "snapshot": snapshot, "user": getattr(user, "username", None), "limit": limit})
+    if (snapshot is None) == (user is None):
+        raise RuntimeError("give a stored scope or a person")
+    out = []
+    for pk in sorted(AGENT_ROWS if pks is None else pks):
+        row = AGENT_ROWS.get(pk)
+        if row is None:
+            continue
+        if snapshot is not None:
+            scope = snapshot["scope"]
+            inside = scope["unrestricted"] or row["client_id"] in scope["whole_client_ids"] or row["site_id"] in scope["site_ids"]
+        else:
+            descriptor = _role_scope_descriptor(user)
+            inside = descriptor["unrestricted"] or row["client_id"] in descriptor["whole_client_ids"] or row["site_id"] in descriptor["site_ids"]
+        if inside:
+            out.append({"pk": pk, **row})
+    return out[: limit + 1]
+
+
+mod("tec_tac.resources_adapter", agent_pks_in_role_scope=_agents_in_role_scope, agent_pks_for_scheduler_targets=_agent_pks_for_scheduler_targets,
+    role_scope_descriptor=_role_scope_descriptor, agent_rows_in_scope=_agent_rows_in_scope, agent_pks_for_identifiers=lambda *, identifiers: {int(i) for i in identifiers})
 
 # ---- the stub server-maintenance job store (the real file is read by the source-pin tests)
 JOBS: dict = {}
@@ -430,6 +485,8 @@ sched = load("tec_tac.scheduler", "scheduler.py")
 sched._zone = lambda value: None
 tasks = load("tec_tac.tasks_real", "tasks.py")
 sa = load("tec_tac.system_actions", "system_actions.py")
+resolvers = load("tec_tac.scheduler_target_resolvers", "scheduler_target_resolvers.py")
+creation_scope = sys.modules["tec_tac.scheduler_creation_scope"]
 
 # ---- owners: the database users the run context re-reads
 USERS: dict = {}
@@ -501,6 +558,11 @@ def make_run(action_id, module_id, *, user=None, owner="one-off", retries=0, sta
 
 def reset():
     del Schedule.objects.rows[:], Run.objects.rows[:], AUDITS[:], TASK_CALLS[:], SCOPE_CALLS[:], SAVES[:], QUEUED_IDS[:], TARGET_CALLS[:]
+    del Grant.objects.rows[:], ROW_CALLS[:]
+    RESOLVED_MODULE_TARGETS.clear()
+    AGENT_ROWS.clear()
+    DESCRIPTORS.clear()
+    resolvers._clear_for_tests()
     global EXISTING_AGENTS
     EXISTING_AGENTS = None
     CLIENT_AGENTS.clear()

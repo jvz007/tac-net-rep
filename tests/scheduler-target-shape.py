@@ -103,6 +103,6 @@ assert rejected({"type": "dynamic", "scope": {"type": "client", "ids": [1], "sit
 # The API path must canonicalise before scope authorization and persistence.
 source = (ROOT / "framwork" / "tec_tac" / "scheduler_views.py").read_text()
 assert source.count('data["targets"] = _normalize_targets(data.get("targets"))') == 2
-assert source.index('data["targets"] = _normalize_targets(data.get("targets"))') < source.index('_require_target_scope(request.user, data.get("targets"), payload=True)')
+assert source.index('data["targets"] = _normalize_targets(data.get("targets"))') < source.index('_require_target_scope(request.user, data.get("targets"), payload=True, module_id=action.module_id)')
 
 print("scheduler target shape: PASS")

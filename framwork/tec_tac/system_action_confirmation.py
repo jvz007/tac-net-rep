@@ -245,8 +245,11 @@ def _declaration_state(user, action) -> str:
     return state
 
 
-def _controls(user, action, targets, parameters) -> dict:
-    """Every creation-time check except the confirmation id. Returns what the text and the audit row need, or raises a refusal."""
+def _controls(user, action, targets, parameters, *, resolver_module=None) -> dict:
+    """Every creation-time check except the confirmation id. Returns what the text and the audit row need, or raises a refusal.
+
+    ``resolver_module`` (1.17.68, keyword, optional) names the module whose registered target resolver reads a module-owned target type. It is the
+    action's own module unless a delegation grant (``delegation.py``) names the owner module of the profile that holds the targets."""
     sa = _sa
     with sa._LOCK:
         definition = sa._ACTIONS.get(action.id)
@@ -297,7 +300,7 @@ def _controls(user, action, targets, parameters) -> dict:
     try:
         shaped = normalize_scheduler_targets(targets)
         canonical = _canonical_for_user(user, shaped)
-        resolved = sa._target_pks(canonical)
+        resolved = sa._target_pks(canonical, resolver_module or action.module_id)
     except Exception as exc:  # noqa: BLE001 - a target outside the person's scope is a scope refusal; anything else is unresolved
         if type(exc).__name__ == "PermissionDenied":
             _deny(user, "out_of_scope", action)
@@ -328,7 +331,7 @@ def _text(info, user, when) -> str:
     if entry.parameters:
         cleaned = info["cleaned"]
         lines.append(f"Script number {cleaned['script_pk']}, {len(cleaned['args'])} argument(s), time limit {cleaned['timeout']} seconds.")
-    if entry.reapproves_by_policy:
+    if _sa._reapprove_warning_applies(definition, entry):  # 1.17.68: not when Core's patch lockdown has made Tactical's own approve inert
         lines.append(_sa.REAPPROVE_WARNING)
     if definition.dangerous:
         lines.append("This action can change many endpoints at once.")

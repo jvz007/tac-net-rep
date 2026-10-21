@@ -8,7 +8,7 @@ the creator and confirmer by name, and writes an audit row for the creation; a s
 the session proof are refused and change nothing; a person without the action permission, without the target scope, or who is inactive is
 refused; WITHOUT a request a schedule that has a stored creator can only be switched off or left alone (a changed action, target, parameter,
 timing or policy, and switching it back on, are refused; an identical call is a no-op that writes nothing); a second person's confirmation is
-audited with the original creator kept; a module-owned schedule with no creator behaves exactly as before and a system action on it is still
+audited and, since 1.17.68, moves the ownership to that person (tests/scheduler-ownership-move-1.17.68.py); a module-owned schedule with no creator behaves exactly as before and a system action on it is still
 refused as no_owner; a module-owned schedule with a stored creator and an unattended action runs as the creator (run_kind scheduled);
 reconcile_schedule called with every old keyword behaves as in 1.17.62; get_owned_schedule gains created_by_username.
 """
@@ -47,7 +47,7 @@ PERMS = {"alice": True, "bob": True, "carol": False, "dave": True}
 SCOPES = {"alice": True, "bob": True, "carol": True, "dave": True}
 views = sys.modules["tec_tac.scheduler_views"]
 views._can_use_action = lambda user, action: PERMS.get(user.username, False)
-views._can_access_target_scope = lambda user, targets: SCOPES.get(user.username, False)
+views._can_access_target_scope = lambda user, targets, **kw: SCOPES.get(user.username, False)  # 1.17.68: a takeover asks with strict=True
 
 # the harness model does not add a schedule that is built by hand; the real one saves it. Make save() do the same.
 _orig_save = Schedule.save
@@ -165,14 +165,14 @@ switched = sched.reconcile_schedule(**KW, confirmed_by_request=RealRequest(alice
 must(switched.enabled is True and audit_rows()[-1]["action"] == "modify", AUDITS)
 print("       with no request: an identical call writes nothing; any change to the action, targets, parameters, timing or policies is refused; only switching off works and re-enabling needs the person")
 
-# ---- (4) a person's later change is audited; the first creator is kept
+# ---- (4) a person's later change is audited; since 1.17.68 the next editor becomes the owner (Johan, 21 October 2026)
 fresh()
 sched.reconcile_schedule(**KW, confirmed_by_request=RealRequest(alice))
 del AUDITS[:]
 changed = sched.reconcile_schedule(**{**KW, "run_time": time(5, 0)}, confirmed_by_request=RealRequest(bob))
-must(changed.created_by is alice and changed.created_by_username == "alice" and changed.updated_by is bob and changed.confirmed_by_username == "bob", changed.__dict__)
+must(changed.created_by is bob and changed.created_by_username == "bob" and changed.updated_by is bob and changed.confirmed_by_username == "bob", changed.__dict__)
 log = audit_rows()
-must(len(log) == 1 and log[0]["action"] == "modify" and log[0]["actor"] is bob and log[0]["metadata"]["creator"] == "alice" and log[0]["metadata"]["confirmed_by"] == "bob", log)
+must(len(log) == 1 and log[0]["action"] == "modify" and log[0]["actor"] is bob and log[0]["metadata"]["creator"] == "bob" and log[0]["metadata"]["confirmed_by"] == "bob" and log[0]["metadata"]["owner_changed_from"] == "alice", log)
 del AUDITS[:]
 sched.reconcile_schedule(**{**KW, "run_time": time(5, 0)}, confirmed_by_request=RealRequest(bob))
 must(not audit_rows(), "the same person confirming the same thing again writes no new row")
@@ -181,7 +181,7 @@ must(len(audit_rows()) == 1 and audit_rows()[0]["metadata"]["confirmed_by"] == "
 AUDIT_FAIL["strict"] = True
 refused(lambda: sched.reconcile_schedule(**{**KW, "run_time": time(6, 0)}, confirmed_by_request=RealRequest(bob)))
 AUDIT_FAIL["strict"] = False
-print("       a second person's change is audited with the original creator kept; a repeat writes nothing; a failed strict audit row stops the change")
+print("       a second person's change is audited and moves the ownership (the earlier creator is named in the row); a repeat writes nothing; a failed strict audit row stops the change")
 
 # ---- (5) as before: no keyword, no creator
 fresh()

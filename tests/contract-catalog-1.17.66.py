@@ -52,7 +52,7 @@ for text in ("groups: {total, sent, failed, not_started}", "summary", "40000", "
              "scripts.run", "never an argument or an environment value", "1.17.66", "CQ178", "OutcomeUnknown"):
     must(text in run_row, f"run_system_action row lacks {text!r}")
 reg_row = index[("tec_tac.system_actions", "register_system_action")]["purpose"]
-for text in ("1.1.0", "scripts.run", "scriptexecution", "can_run_scripts", "CQ173", "Tactical installs what its own patch policy approves, including updates set to Ignore elsewhere.", "R-36 is not built"):
+for text in ("1.1.0", "scripts.run", "scriptexecution", "can_run_scripts", "CQ173", "Tactical installs what its own patch policy approves, including updates set to Ignore elsewhere.", "patch lockdown"):  # 1.17.68: R-36 is built (core.patch_lockdown)
     must(text in reg_row, f"register_system_action row lacks {text!r}")
 must("R-36 is open" not in reg_row and "inactive until" not in reg_row, "the old install refusal is gone from the row")
 rec_row = index[("tec_tac.scheduler", "reconcile_schedule")]["purpose"]
@@ -65,13 +65,13 @@ print("       the rows of register_system_action, run_system_action, reconcile_s
 route = http["/api/tfd/scheduler/system-actions/confirmation/"]["POST"]
 must(set(route["body"]) == {"action_id", "targets", "parameters", "when"} and set(route["response"]) == {"required", "text", "confirmation_id", "total", "groups", "expires_in"}, route)
 must(set(route["errors"]) == {"400", "401", "403"} and "1.17.66" in " ".join(route["notes"]) and "confirmation_id" in " ".join(route["notes"]), route)
-rule = next(r for r in rules if r.startswith("System actions (core.system_actions 1.1.0"))
+rule = next(r for r in rules if r.startswith("System actions (core.system_actions 1.2.0"))  # 1.17.68: 1.2.0 (additive)
 for text in ("scripts.run", "groups of at most 2000", "CQ178", "CQ173", "Yes or No", "POST /api/tfd/scheduler/system-actions/confirmation/", "requires.framework >=1.17.61"):
     must(text in rule, f"the rule lacks {text!r}")
 print("       the HTTP route has its entry (body, response, errors, notes) and the rule names capability 1.1.0, scripts.run and the groups")
 
 meta = sa.system_actions_contract_metadata()
-must(meta["version"] == "1.1.0" and meta["operations"] == ["list_actions", "get_action", "run", "describe_confirmation"], meta)
+must(meta["version"] == "1.2.0" and meta["operations"] == ["list_actions", "get_action", "run", "describe_confirmation", "describe_delegation", "register_delegation_grant", "remove_delegation_grant", "issue_delegation_ticket", "start_delegated_run"], meta)  # 1.17.68: the five delegation operations are appended, none of the four earlier ones changed
 must(set(meta["functions"]) == {"winupdate.scan", "winupdate.install", "scripts.run"} and set(meta["refusal_reasons"]) == set(sa.REASONS), meta)
 must(meta["functions"]["scripts.run"]["takes_username"] is True and meta["functions"]["scripts.run"]["min_flags"] == ["can_run_bulk", "can_run_scripts"], meta["functions"]["scripts.run"])
 must(meta["http"] == {"confirmation": "POST /api/tfd/scheduler/system-actions/confirmation/"} and meta["requires_framework"].startswith(">=1.17.61") and "1.17.66" in meta["requires_framework"], meta)

@@ -549,6 +549,6 @@ for phrase in ("tec_tac.note_event_job_refusals", "one bounded broker message", 
 must(policy.REFUSAL_FLUSH_SECONDS == 60 and policy.REFUSAL_MAX_ENTRIES == 64 and policy.REFUSAL_BUFFER_KEYS == 256, "policy limits")
 must(tuple(int(part) for part in (ROOT / "VERSION").read_text(encoding="utf-8").strip().split("-")[0].split(".")) >= (1, 17, 49), "VERSION")  # 1.17.50: at least 1.17.49
 migrations = sorted(p.name for p in (APP / "migrations").glob("0*.py"))
-must(migrations[-5:] == ["0032_event_jobs.py", "0033_runtime_licensing_mode.py", "0034_scheduler_run_completion.py", "0035_server_job_hook.py", "0036_schedule_creator_name.py"], migrations[-5:])  # 1.17.58 added 0033; 1.17.61 added 0034; 1.17.62 added 0035; 1.17.63 added 0036
+must(migrations[-5:] == ["0033_runtime_licensing_mode.py", "0034_scheduler_run_completion.py", "0035_server_job_hook.py", "0036_schedule_creator_name.py", "0037_creation_scope_and_delegation.py"], migrations[-5:])  # 1.17.58 added 0033; 1.17.61 added 0034; 1.17.62 added 0035; 1.17.63 added 0036; 1.17.68 added 0037
 print("       capability stays 1.1.0; contract row, capability text and docs agree; no migration")
 print("[TEST] PASS event jobs refusal bound 1.17.49")

@@ -18,7 +18,7 @@ assert mod.tactical_scope_ref({"type": "dynamic", "scope": {"client_id": 7}}) ==
 
 source = (ROOT / "framwork/tec_tac/scheduler_views.py").read_text(encoding="utf-8")
 # Managers bypass legacy-shape parsing; non-managers use Tactical role scope.
-manager_pos = source.index("if _native_scheduler_manager(user):", source.index("def _require_target_scope"))
+manager_pos = source.index("if not strict and _native_scheduler_manager(user):", source.index("def _require_target_scope"))
 refs_pos = source.index("refs = _scope_target_refs(targets)", source.index("def _require_target_scope"))
 assert manager_pos < refs_pos
 assert "resources_adapter.explicit_client_target_ids_in_scope" in source
@@ -34,7 +34,7 @@ assert "def agent_target_identifiers_in_scope" in adapter_source
 
 # Integration guards: create/edit/detail/delete/run-now/list/history retain scope enforcement.
 assert source.count("_require_target_scope(request.user") >= 5
-assert "_can_access_target_scope(request.user, schedule.targets)" in source
+assert "_can_access_target_scope(request.user, schedule.targets, module_id=schedule.module_id)" in source
 assert "resources_adapter.scheduler_scope_snapshot(user=request.user)" in source
 assert "_sql_scope_prefilter(qs, scope_snapshot)" in source
 assert "_scope_snapshot_allows(run_targets, scope_snapshot" in source

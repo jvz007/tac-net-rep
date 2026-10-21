@@ -52,6 +52,7 @@ class FakeSchedule:
         self.owner_type = owner_type
         self.created_by = created_by
         self.action_id = "module.patch"
+        self.module_id = "module"  # 1.17.68: run now passes the schedule's module id to the scope check
         self.targets = dict(targets)
         self.enabled = True
         self.target_state = "valid"
@@ -78,7 +79,7 @@ def _require_schedule_owner_or_manager(_user, _schedule):
 def _normalize_targets(targets):
     return dict(targets)
 
-def _require_target_scope(user, targets, payload=False):
+def _require_target_scope(user, targets, payload=False, module_id=None, strict=False):
     assert payload is False
     assert targets == {"type": "endpoints", "ids": ["agent-X"]}
     if user.username in {"module-tech", "restricted-manager"}:

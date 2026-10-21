@@ -395,3 +395,17 @@ The two update rows are written by the service actor `core` / `system-update` / 
 - `Update failed to 1.17.17.` when the "from" version is not known.
 
 The correlation id is `system-update:<installed|failed>:<job id>`; a job gets one row, however often the tick runs. A downgrade reads the same, and `metadata.operation` says `downgrade`. The `system_update_downgrade` rows that the install route writes are unchanged. See `docs/system-update-logs.md`.
+
+## Core's own rows for delegation, ownership moves and the patch lockdown (1.17.68)
+
+Written with `module_id` `core`. None holds an endpoint id, a hostname, a ticket or a confirmation id.
+
+| Row | Written by | Strict | What it holds |
+|---|---|---|---|
+| `add`, `modify` of `delegation_grant` (object id: the grant id) | `register_delegation_grant` | yes: if it cannot be written, nothing is stored | `owner_module`, `grant_key`, `provider_module`, `action_id`, `creator`, `confirmed_by`, `enabled`, `total_agents`, `groups`; on a takeover also `owner_changed_from`, `owner_changed_to`, `previous_confirmed_by` |
+| `delete` of `delegation_grant` | `remove_delegation_grant` | yes | `owner_module`, `grant_key`, `provider_module`, `action_id`, `creator`, `confirmed_by` |
+| `add` of `scheduler_run` (object id: the run id) | `start_delegated_run` | yes: if it cannot be written, nothing is started | `owner_module`, `provider_module`, `action_id`, `grant_key`, `creator`, `confirmed_by`, `total_agents`, `groups`, `ticket_run_id`, `requested_by` `delegation` |
+| `deny` of `delegation_grant` | every refused delegation call | no | `reason`, `requested_by` `delegation`, `owner_module`, `provider_module`, `grant_key`; a caller Core cannot place is written at most once per five minutes per reason |
+| `modify` of `scheduler_schedule` | `reconcile_schedule` and the browser edit, when ownership moved | yes for `reconcile_schedule` and for a system action; no for another browser edit | the usual keys plus `owner_changed_from`, `owner_changed_to`, `previous_confirmed_by` |
+| `deny` of `scheduler_schedule` | a refused takeover | no | `reason` `takeover_out_of_scope`, `owner_module`, `action_id`; written after the change was rolled back |
+| `custom:tactical-patch-lockdown` of `tactical_patch_lockdown` (object id `winupdate`) | the Scheduler tick, when the state differs from the newest row | no | `state` (`on` or `off`) and `honoured_module`; the actor is the service `core` / `patch-lockdown` / `system` |

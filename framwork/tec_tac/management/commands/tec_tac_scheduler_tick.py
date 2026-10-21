@@ -124,6 +124,15 @@ class Command(BaseCommand):
         except Exception:
             logging.getLogger("tec_tac.system_update_audit").warning("The system update audit step failed; the next tick retries.", exc_info=True)
 
+        try:
+            # 1.17.68: one audit row (state on, held or off) when Tactical's own patch policy is switched off or back on by an honoured replacement of Windows Patching (only
+            # when the state differs from the newest row). The step never raises, is never strict and logs rather than writing to the output.
+            from tec_tac.patch_lockdown import audit_transition
+
+            audit_transition()
+        except Exception:
+            logging.getLogger("tec_tac.patch_lockdown").warning("The patch lockdown audit step failed; the next tick retries.", exc_info=True)
+
         sweep_state = "error" if sweep_error else "ran"
         cleanup_state = "error" if cleanup_error else ("ran" if cleanup and cleanup.get("ran") else "not_due")
         self.stdout.write(

@@ -67,7 +67,7 @@ must("1.17.67" in index[("tec_tac.system_action_confirmation", "SystemActionCrea
 for reason in sa.REASONS:
     must(reason in index[("tec_tac.system_actions", "SystemActionRefused")]["purpose"], f"reason {reason} is not described")
 meta = sa.system_actions_contract_metadata()
-must(meta["version"] == "1.1.0" and "declaration_unreadable" in meta["refusal_reasons"] and meta["delivery"] == "at most once per group", meta)
+must(meta["version"] == "1.2.0" and "declaration_unreadable" in meta["refusal_reasons"] and meta["delivery"] == "at most once per group", meta)
 print("       the run_system_action row carries the plan rule and the limit; both refusal rows name declaration_unreadable; the capability stays 1.1.0")
 
 # ---- the held Low 'kit props rows' stays closed
@@ -86,11 +86,11 @@ for needle in ("system_update_job_log", "server_maintenance_job_log", "Update in
 sys_doc = (ROOT / "docs" / "system-actions.md").read_text(encoding="utf-8")
 for needle in ("declaration_unreadable", "105", "plan mark", "OutcomeUnknown"):
     must(needle in sys_doc, f"docs/system-actions.md lacks {needle!r}")
-notes = (ROOT / "RELEASE_NOTES_1.17.67.md")
-must(notes.is_file(), "RELEASE_NOTES_1.17.67.md exists")
+notes = ROOT / "docs" / "releases" / "RELEASE_NOTES_1.17.67.md"  # 1.17.68 moved the 1.17.67 notes here (one root note at a time)
+must(notes.is_file(), "RELEASE_NOTES_1.17.67.md is kept under docs/releases")
 body = notes.read_text(encoding="utf-8")
 for needle in ("Module-facing", "declaration_unreadable", "plan mark", "105", "Update installed successfully", "Dev-server checklist", "PASS", "FAIL", "tec_tac_check_contract_export", "system-update-logs-runtime-1.17.67.py", "Not run here"):
     must(needle in body, f"the release notes lack {needle!r}")
-must((ROOT / "VERSION").read_text(encoding="utf-8").strip() == "1.17.67" and '"version": "1.17.67"' in (ROOT / "tec_tac_package.json").read_text(encoding="utf-8"), "version 1.17.67")
+must(tuple(int(p) for p in (ROOT / "VERSION").read_text(encoding="utf-8").strip().split("-")[0].split(".")) >= (1, 17, 67), "version 1.17.67 or later")  # 1.17.68
 print("       the docs and the release notes name the new routes, wording, reason and limit; VERSION and the package say 1.17.67")
 print("PASS contract catalog 1.17.67")

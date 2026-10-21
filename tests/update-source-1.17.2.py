@@ -562,7 +562,7 @@ op = m25.Migration.operations[0]
 must(op.k["model_name"] == "tectacruntimeconfig" and op.k["name"] == "update_sources", op.k)
 must(op.k["field"].k == {"blank": True, "default": dict}, op.k["field"].k)
 latest = sorted(p.name for p in (APP / "migrations").glob("0*.py"))[-1]
-must(latest == "0036_schedule_creator_name.py", f"0036 must be the newest migration, found {latest}")  # 1.17.63 added 0036; 1.17.62 added 0035; 1.17.61 added 0034; 1.17.58 added 0033; 1.17.45 added 0032  # 1.17.14 added 0026 after 0025; 1.17.23 added 0027; 1.17.24 added 0028; 1.17.26 added 0029; 1.17.34 added 0030; 1.17.35 added 0031; 1.17.34 added 0030
+must(latest == "0037_creation_scope_and_delegation.py", f"0037 must be the newest migration, found {latest}")  # 1.17.68 added 0037; 1.17.63 added 0036; 1.17.62 added 0035; 1.17.61 added 0034; 1.17.58 added 0033; 1.17.45 added 0032  # 1.17.14 added 0026 after 0025; 1.17.23 added 0027; 1.17.24 added 0028; 1.17.26 added 0029; 1.17.34 added 0030; 1.17.35 added 0031; 1.17.34 added 0030
 must((APP / "migrations" / "0025_runtime_update_sources.py").is_file(), "0025 is still there")
 
 print("[TEST] PASS 1.17.2 remembered update source")

@@ -33,7 +33,7 @@ alice, bob, carol = User("alice"), User("bob"), User("carol")
 PERMS = {"alice": True, "bob": True, "carol": False}
 views = sys.modules["tec_tac.scheduler_views"]
 views._can_use_action = lambda user, action: PERMS.get(user.username, False)
-views._can_access_target_scope = lambda user, targets: True
+views._can_access_target_scope = lambda user, targets, **kw: True  # 1.17.68: a takeover asks with strict=True
 
 
 class RealRequest:
@@ -213,9 +213,9 @@ must(log[0]["object_id"] == str(created.pk) and meta["action_id"] == SCAN and no
 del AUDITS[:]
 edit_id = conf.describe_confirmation(bob, SCAN, endpoints(4500), None, {"schedule_type": "daily", "run_time": "05:00", "timezone": "UTC"})["confirmation_id"]
 changed = create(edit_id, user=bob, targets=endpoints(4500), run_time=time(5, 0))
-must(changed is created and changed.created_by is alice and changed.updated_by is bob and changed.confirmed_by_username == "bob", changed.__dict__)
+must(changed is created and changed.created_by is bob and changed.updated_by is bob and changed.confirmed_by_username == "bob", changed.__dict__)  # 1.17.68: the next editor becomes the owner
 log = schedule_rows()
-must(len(log) == 1 and log[0]["action"] == "modify" and log[0]["actor"] is bob and log[0]["metadata"]["creator"] == "alice" and log[0]["metadata"]["confirmed_by"] == "bob", log)
+must(len(log) == 1 and log[0]["action"] == "modify" and log[0]["actor"] is bob and log[0]["metadata"]["creator"] == "bob" and log[0]["metadata"]["owner_changed_from"] == "alice" and log[0]["metadata"]["confirmed_by"] == "bob", log)
 refused(lambda: create(edit_id, user=bob, targets=endpoints(4500), run_time=time(6, 0)), "confirmation_invalid")
 must(created.run_time == time(5, 0), "a refused edit changes nothing")
 print("       an allowed creation and edit write one strict audit row with creator, confirmer, schedule, total, groups and timing")

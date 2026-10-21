@@ -57,7 +57,7 @@ else:
 version = ROOT.joinpath("VERSION").read_text(encoding="utf-8").strip()
 base = tuple(int(x) for x in re.sub(r"-\d+$", "", version).split("."))
 must(base >= (1, 17, 66), version)
-notes_path = ROOT / f"RELEASE_NOTES_{version}.md"
+notes_path = ROOT / "docs" / "releases" / "RELEASE_NOTES_1.17.66.md"  # 1.17.68: this test is about the 1.17.66 notes, which are kept under docs/releases
 must(notes_path.is_file(), f"{notes_path.name} exists")
 notes = notes_path.read_text(encoding="utf-8").replace("\r\n", "\n")
 for heading in ("## What changed and why", "## Module-facing", "## What was left out, and what ends each wait", "## Dev-server checklist", "## Tests"):

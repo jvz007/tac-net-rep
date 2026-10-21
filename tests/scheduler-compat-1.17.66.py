@@ -42,7 +42,7 @@ class RealRequest:
 mod("tec_tac.tactical_operations", _is_real_request=lambda request: isinstance(request, RealRequest))
 views = sys.modules["tec_tac.scheduler_views"]
 views._can_use_action = lambda user, action: True
-views._can_access_target_scope = lambda user, targets: True
+views._can_access_target_scope = lambda user, targets, **kw: True  # 1.17.68: a takeover asks with strict=True
 _orig_save = Schedule.save
 
 

@@ -197,5 +197,5 @@ src = (APP / "system_actions.py").read_text(encoding="utf-8")
 must("MAX_AGENTS_PER_GROUP = 2000" in src and "MAX_GROUPS = 20" in src and "MAX_AGENTS = MAX_AGENTS_PER_GROUP * MAX_GROUPS" in src, "the constants")
 must("_digest(run.id, definition.id, group)" in src, "each group has its own digest")
 meta = sa.system_actions_contract_metadata()
-must(meta["max_agents"] == 40000 and meta["max_agents_per_group"] == 2000 and meta["max_groups"] == 20 and meta["version"] == "1.1.0", meta)
+must(meta["max_agents"] == 40000 and meta["max_agents_per_group"] == 2000 and meta["max_groups"] == 20 and meta["version"] == "1.2.0", meta)  # 1.17.68
 print("PASS system actions groups 1.17.66")

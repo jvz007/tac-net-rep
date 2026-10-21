@@ -28,6 +28,10 @@ from .scheduler import (
     queue_manual_run,
     schedule_creator_names,
     scheduled_actions,
+    TAKEOVER_REFUSED,
+    TakeoverRefused,
+    _record_takeover_refusal,
+    _resolver_scope_check,
     serialize_action,
     serialize_run,
     serialize_schedule,
@@ -36,6 +40,7 @@ from .scheduler import (
 )
 from .views import _role_for_user
 from .system_action_confirmation import SystemActionCreationRefused, describe_confirmation, require_creation, audit_extra as _system_audit_extra
+from . import scheduler_creation_scope
 
 logger = logging.getLogger("tec_tac.scheduler")
 
@@ -149,10 +154,12 @@ def _scope_target_refs(targets):
         raise SchedulerError(str(exc)) from exc
 
 
-def _require_target_scope(user, targets, *, payload=False):
+def _require_target_scope(user, targets, *, payload=False, module_id=None, strict=False):
     # Managers must be able to inspect and repair legacy/module schedules even
     # when their saved target object predates the canonical target contract.
-    if _native_scheduler_manager(user):
+    # 1.17.68: ``strict`` has no manager bypass (used before ownership moves to a person). ``module_id`` names the module that owns the
+    # schedule's action: a module-owned target type that module registered a resolver for is judged by the endpoints it names.
+    if not strict and _native_scheduler_manager(user):
         return
     try:
         refs = _scope_target_refs(targets)
@@ -167,6 +174,12 @@ def _require_target_scope(user, targets, *, payload=False):
     for ref in refs:
         kind, values = ref["kind"], ref["values"]
         if kind in {"none", "module"}:
+            if kind == "module" and module_id:
+                decided = _resolver_scope_check(user, module_id, targets, strict=strict)
+                if decided is True:
+                    continue
+                if decided is False:
+                    raise PermissionDenied("One or more scheduler targets are outside your Tactical client/site access scope.")
             if resources_adapter.tactical_scope_unrestricted(user=user):
                 continue
             raise PermissionDenied(
@@ -199,11 +212,11 @@ def _require_target_scope(user, targets, *, payload=False):
             raise PermissionDenied("One or more scheduler targets are outside your Tactical client/site access scope.")
 
 
-def _can_access_target_scope(user, targets) -> bool:
-    if _native_scheduler_manager(user):
+def _can_access_target_scope(user, targets, *, module_id=None, strict=False) -> bool:
+    if not strict and _native_scheduler_manager(user):
         return True
     try:
-        _require_target_scope(user, targets, payload=False)
+        _require_target_scope(user, targets, payload=False, module_id=module_id, strict=strict)
         return True
     except (PermissionDenied, SchedulerError):
         return False
@@ -266,14 +279,14 @@ def _system_action_creation(user, action, data, confirmation_id, *, schedule=Non
     return require_creation(user, action, data.get("targets"), data.get("parameters"), when, confirmation_id)
 
 
-def _audit_system_schedule(user, schedule, verb, info):
+def _audit_system_schedule(user, schedule, verb, info, extra=None):
     """One strict audit row for a created or edited schedule of a system action: creator, confirmer, schedule, total, groups and timing. A row that
-    cannot be written stops the change (the caller's transaction rolls back)."""
+    cannot be written stops the change (the caller's transaction rolls back). ``extra`` (1.17.68) carries the ownership move, when there was one."""
     from .scheduler import _audit_schedule_row
 
     _audit_schedule_row(
         user, schedule, verb, f"A person {'created' if verb == 'add' else 'changed'} a schedule for a system action.", strict=True,
-        extra={"requested_by": "person", **_system_audit_extra(info)},
+        extra={"requested_by": "person", **_system_audit_extra(info), **(extra or {})},
     )
 
 
@@ -395,7 +408,7 @@ class SchedulerListView(APIView):
                 action = get_scheduled_action(schedule.action_id)
             except SchedulerError:
                 action = None
-            if (_native_scheduler_manager(request.user) or (action and _can_use_action(request.user, action))) and _can_access_target_scope(request.user, schedule.targets):
+            if (_native_scheduler_manager(request.user) or (action and _can_use_action(request.user, action))) and _can_access_target_scope(request.user, schedule.targets, module_id=schedule.module_id):
                 rows.append(serialize_schedule(schedule))
         return Response({
             "schedules": rows, "count": len(rows), "manage": _native_scheduler_manager(request.user),
@@ -423,10 +436,11 @@ class SchedulerListView(APIView):
             system_info = _system_action_creation(request.user, action, data, confirmation_id)
             data["targets"] = _canonicalize_endpoint_targets_for_user(request.user, data["targets"])
             _validate_shape(data)
-            _require_target_scope(request.user, data.get("targets"), payload=True)
+            _require_target_scope(request.user, data.get("targets"), payload=True, module_id=action.module_id)
             schedule = TecTacSchedule(
                 owner_type=TecTacSchedule.OwnerType.USER, created_by=request.user, updated_by=request.user,
                 created_by_username=_person_name(request.user), confirmed_by_username=_person_name(request.user),
+                creation_scope=scheduler_creation_scope.capture(request.user),  # 1.17.68: what this person could reach when they saved it
             )
             _apply_schedule_fields(schedule, data)
             schedule.target_state = "valid"
@@ -449,7 +463,7 @@ class SchedulerDetailView(APIView):
     def get_object(self, request, schedule_id):
         schedule = get_object_or_404(TecTacSchedule.objects.select_related("created_by", "updated_by"), pk=schedule_id)
         action = _require_action(request.user, schedule.action_id)
-        _require_target_scope(request.user, schedule.targets, payload=False)
+        _require_target_scope(request.user, schedule.targets, payload=False, module_id=schedule.module_id)
         return schedule, action
 
     def get(self, request, schedule_id):
@@ -481,7 +495,22 @@ class SchedulerDetailView(APIView):
             system_info = _system_action_creation(request.user, action, data, confirmation_id, schedule=schedule)
             data["targets"] = _canonicalize_endpoint_targets_for_user(request.user, data["targets"])
             _validate_shape(data)
-            _require_target_scope(request.user, data.get("targets"), payload=True)
+            _require_target_scope(request.user, data.get("targets"), payload=True, module_id=action.module_id)
+            # 1.17.68 (Johan, 21 October 2026): a person other than the owner who edits the schedule (an edit field, or switching it on) takes the
+            # ownership, and the scope is stored again for the new owner. Never widens: their own scope must cover every target, with no manager
+            # bypass, or the edit is refused and nothing changes. Switching a schedule off, or a rename alone, moves nothing.
+            from .scheduler import _comparable
+
+            edit_fields = [name for name in _EDIT_FIELDS if name in data and _comparable(name, data.get(name)) != _comparable(name, getattr(schedule, name))]
+            turned_on = bool(data.get("enabled", schedule.enabled)) and not schedule.enabled
+            edited = bool(edit_fields) or turned_on
+            other_person = schedule.created_by_id != request.user.id
+            takeover = bool(edited and other_person and bool(data.get("enabled", schedule.enabled)))
+            if takeover and not _can_access_target_scope(request.user, data.get("targets"), module_id=action.module_id, strict=True):
+                refusal = TakeoverRefused(TAKEOVER_REFUSED)
+                refusal.takeover_row = (request.user, schedule.pk, action.id, action.module_id)
+                raise refusal
+            previous_names = schedule_creator_names(schedule)
             _apply_schedule_fields(schedule, data)
             schedule.target_state = "valid"
             schedule.target_state_detail = ""
@@ -490,15 +519,30 @@ class SchedulerDetailView(APIView):
             # made before migration 0036 keeps its creator: the name is filled in from created_by the first time it is edited.
             if not schedule.created_by_username:
                 schedule.created_by_username = _person_name(schedule.created_by)
+            owner_move = None
+            if takeover:
+                owner_move = {"owner_changed_from": previous_names[0], "owner_changed_to": _person_name(request.user), "previous_confirmed_by": previous_names[1]}
+                schedule.created_by = request.user
+                schedule.created_by_username = _person_name(request.user)
+            if takeover or (edited and not other_person):
+                schedule.creation_scope = scheduler_creation_scope.capture(request.user)
             schedule.confirmed_by_username = _person_name(request.user)
             schedule.last_due_key = ""
             if system_info is None:
                 schedule.save()
+                if owner_move:
+                    from .scheduler import _audit_schedule_row
+
+                    _audit_schedule_row(request.user, schedule, "modify", "The ownership of a schedule moved to the person who edited it.",
+                                        extra={"requested_by": "person", **owner_move})
             else:
                 with transaction.atomic():
                     schedule.save()
-                    _audit_system_schedule(request.user, schedule, "modify", system_info)
+                    _audit_system_schedule(request.user, schedule, "modify", system_info, owner_move)
             return Response(serialize_schedule(schedule, include_runs=True))
+        except TakeoverRefused as exc:
+            _record_takeover_refusal(exc)
+            return Response({"detail": str(exc), "reason": exc.reason}, status=403)
         except SystemActionCreationRefused as exc:
             return Response({"detail": str(exc), "reason": exc.reason}, status=403)
         except SchedulerError as exc:
@@ -567,7 +611,7 @@ class SchedulerRunNowView(APIView):
             schedule.target_state_detail = str(exc)[:500]
             schedule.save(update_fields=["enabled", "target_state", "target_state_detail", "updated_at"])
             return Response({"detail": str(exc)}, status=400)
-        _require_target_scope(request.user, canonical_targets, payload=False)
+        _require_target_scope(request.user, canonical_targets, payload=False, module_id=schedule.module_id)
         if canonical_targets != (schedule.targets or {}):
             schedule.targets = canonical_targets
             schedule.target_state = "valid"

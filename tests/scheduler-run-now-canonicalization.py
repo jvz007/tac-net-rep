@@ -37,6 +37,7 @@ TecTacSchedule = _ScheduleModel
 class FakeSchedule:
     def __init__(self, targets):
         self.action_id = "module.action"
+        self.module_id = "module"  # 1.17.68: run now passes the schedule's module id to the scope check
         self.targets = targets
         self.enabled = True
         self.target_state = "valid"
@@ -68,7 +69,7 @@ def _normalize_targets(targets):
 def _canonicalize_endpoint_targets_globally(targets):
     return dict(targets or {})
 
-def _require_target_scope(_user, targets, payload=False):
+def _require_target_scope(_user, targets, payload=False, module_id=None, strict=False):
     assert payload is False
     scope_seen.append(targets)
 

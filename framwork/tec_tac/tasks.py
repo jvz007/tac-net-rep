@@ -40,7 +40,15 @@ def _skip_unauthorized_one_off(run, schedule) -> str | None:
     """AD-13 condition 2 (1.17.16): a one-off run is re-checked against the user it was started for just before its handler.
 
     Returns None when the run may go on. Otherwise the run ends ``skipped`` with the plain reason, one audit row is
-    written (best effort) and the reason is returned. It never raises: a check that cannot be made counts as a refusal."""
+    written (best effort) and the reason is returned. It never raises: a check that cannot be made counts as a refusal.
+
+    1.17.68: the one-off that ``delegation.start`` makes for a grant a person confirmed is the continuation of a schedule that person confirmed. It is
+    exempt, and only while its marker (signed by Core for that very schedule) verifies and its grant is still enabled and unchanged. The one helper that
+    decides is ``scheduler._is_unattended_scheduled_run``; every other one-off, and any doubt, keeps this check."""
+    from .scheduler import _is_unattended_scheduled_run  # runtime import: one decision, in one place
+
+    if _is_unattended_scheduled_run(run):
+        return None
     if schedule is None:
         reason = "The one-off schedule no longer exists."
     else:

@@ -62,9 +62,9 @@ print("       the filter matches the stored creator or confirmer exactly and cas
 get_src = VIEWS.split("class SchedulerListView(APIView):", 1)[1].split("    def post(self, request):", 1)[0]
 must('_name_filter(request, "created_by")' in get_src and '_name_filter(request, "confirmed_by")' in get_src, "both query parameters are read")
 loop = get_src.split("for schedule in qs:", 1)[1]
-must(loop.index("_name_filters_match(schedule, created_by, confirmed_by)") < loop.index("_can_access_target_scope(request.user, schedule.targets)"), "the filter runs first")
+must(loop.index("_name_filters_match(schedule, created_by, confirmed_by)") < loop.index("_can_access_target_scope(request.user, schedule.targets, module_id=schedule.module_id)"), "the filter runs first")
 must("continue" in loop.split("_name_filters_match", 1)[1].split("try:", 1)[0], "a non-match is skipped, never added")
-must("(_native_scheduler_manager(request.user) or (action and _can_use_action(request.user, action))) and _can_access_target_scope(request.user, schedule.targets)" in loop, "the permission and scope test is exactly as in 1.17.62")
+must("(_native_scheduler_manager(request.user) or (action and _can_use_action(request.user, action))) and _can_access_target_scope(request.user, schedule.targets, module_id=schedule.module_id)" in loop, "the permission and scope test is as in 1.17.62; 1.17.68 only names the module so a profile type with a resolver can be judged")
 must(VIEWS.count("has_extension_permission(") + VIEWS.count("has_tactical_permission(") + VIEWS.count("_native_scheduler_manager(") == 18, "no new permission call (1.17.62 had 18)")
 rbac = (APP / "rbac.py").read_text(encoding="utf-8")
 must(not re.search(r"[\"'](core\.)?scheduler[.:]", rbac), "no scheduler permission code exists in rbac, and none was added")
@@ -85,10 +85,10 @@ print("       the serialized schedule keeps every earlier key and adds created_b
 # ---- create and edit store the person
 post_src = VIEWS.split("def post(self, request):", 1)[1].split("class SchedulerDetailView", 1)[0]
 must("created_by_username=_person_name(request.user), confirmed_by_username=_person_name(request.user)" in post_src, "create stores the signed-in person")
-must(post_src.index("_require_action(request.user") < post_src.index("_require_target_scope(request.user, data.get(\"targets\"), payload=True)") < post_src.index("created_by_username="), "the permission and scope checks come first")
+must(post_src.index("_require_action(request.user") < post_src.index("_require_target_scope(request.user, data.get(\"targets\"), payload=True, module_id=action.module_id)") < post_src.index("created_by_username="), "the permission and scope checks come first")
 patch_src = VIEWS.split("def patch(self, request, schedule_id):", 1)[1].split("def delete(self, request, schedule_id):", 1)[0]
 must("schedule.confirmed_by_username = _person_name(request.user)" in patch_src and "schedule.created_by_username = _person_name(schedule.created_by)" in patch_src, "edit confirms the editor and fills a missing creator name")
-must(patch_src.index("_require_target_scope(request.user, data.get(\"targets\"), payload=True)") < patch_src.index("confirmed_by_username"), "the checks come before the confirmation")
+must(patch_src.index("_require_target_scope(request.user, data.get(\"targets\"), payload=True, module_id=action.module_id)") < patch_src.index("confirmed_by_username"), "the checks come before the confirmation")
 must(patch_src.index("_require_user_managed(schedule)") < patch_src.index("confirmed_by_username") and "_require_schedule_owner_or_manager(request.user, schedule)" in patch_src, "the owner-or-manager check is unchanged")
 print("       create stores the creator and confirmer; edit sets the editor as confirmer after the unchanged permission and scope checks")
 print("PASS scheduler creator filter 1.17.63")

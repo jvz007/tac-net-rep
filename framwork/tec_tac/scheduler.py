@@ -25,6 +25,7 @@ from .scheduler_completion import (  # noqa: F401  (1.17.61: public re-exports; 
 )
 from .scheduler_timing import queued_stale_deadline
 from .scheduler_targets import SchedulerTargetShapeError, normalize_scheduler_targets
+from . import scheduler_creation_scope
 
 
 class SchedulerError(RuntimeError):
@@ -37,6 +38,17 @@ class SchedulerPermanentError(SchedulerError):
 
 class SchedulerTransientError(SchedulerError):
     """A failure that may recover and may use the configured retry policy."""
+
+
+class CreationScopeUnavailable(SchedulerPermanentError):
+    """1.17.68: a read that needs the schedule's creation-time scope (``VerifiedSchedulerRun.held_at_creation``, ``resolved_endpoints``) found none,
+    because the schedule was made before Core kept it (migration 0037) and nobody has edited it since. Core never invents one. The plain text
+    tells the person what to do: edit the schedule or profile and save it once."""
+
+    reason = "creation_scope_unavailable"
+
+    def __init__(self, message="This schedule was made before Core kept its scope. Edit it and save it once."):
+        super().__init__(message)
 
 
 class SchedulerRunContextInvalid(SchedulerError):
@@ -855,6 +867,8 @@ def _is_unattended_scheduled_run(subject) -> bool:
         return False  # the signed amendment is switched off: every scheduled run keeps the run-time re-check
     try:
         is_run = hasattr(subject, "manual")
+        if is_run and _delegated_run_is_valid(subject):
+            return True  # 1.17.68 (S4): the one-off a provider started under a valid delegation grant; its marker is signed and the grant is checked now
         schedule = getattr(subject, "schedule", None) if is_run else subject
         if schedule is None or (is_run and bool(subject.manual)):
             return False
@@ -870,6 +884,17 @@ def _is_unattended_scheduled_run(subject) -> bool:
             return False
         return bool(schedule_creator_names(schedule)[0])
     except Exception:
+        return False
+
+
+def _delegated_run_is_valid(run) -> bool:
+    """Is this run the one-off that ``delegation.start_delegated_run`` started, with a marker Core signed, while its grant is still enabled and
+    unchanged? Any other run, and any error, answers False, so every other one-off keeps all of its re-checks (CQ50)."""
+    try:
+        from . import delegation
+
+        return bool(delegation.run_is_validly_delegated(run))
+    except Exception:  # noqa: BLE001 - any failure means the re-check stays
         return False
 
 
@@ -894,7 +919,11 @@ def _runtime_authorization_error(schedule: TecTacSchedule) -> str | None:
         from .scheduler_views import _can_use_action, _can_access_target_scope
         if not _can_use_action(actor, action):
             return "Schedule owner no longer has permission to run this action."
-        if not _can_access_target_scope(actor, schedule.targets or {}):
+        decided = _resolver_scope_check(actor, action.module_id, schedule.targets or {})  # 1.17.68: a module-owned type with a resolver
+        if decided is None:
+            if not _can_access_target_scope(actor, schedule.targets or {}):
+                return "Schedule targets are no longer within the owner's Tactical scope."
+        elif not decided:
             return "Schedule targets are no longer within the owner's Tactical scope."
     except Exception:
         return "Schedule authorization could not be verified at run time."
@@ -1133,6 +1162,8 @@ def _after_refusal_record_deny_row(function):
                 from . import system_action_confirmation
 
                 system_action_confirmation.record_refusal(exc)
+            if getattr(exc, "takeover_row", None):
+                _record_takeover_refusal(exc)
             raise
 
     return wrapper
@@ -1231,10 +1262,18 @@ def reconcile_schedule(*, owner_module: str, owner_key: str, action_id: str, sch
 
         stored_creator = bool(existing is not None and schedule_creator_names(existing)[0])
         person = None
+        takeover = False
         system_info = None
         if confirmed_by_request is not None:
             person = _verified_person(confirmed_by_request)
             _check_person_may_schedule(person, action, data["targets"])
+            # 1.17.68 (Johan, 21 October 2026): a call with a person's request IS an edit, and the person who edits moves the ownership to
+            # themselves. Never widens: their own scope must cover every target. Decided before any field of the row is touched.
+            takeover = bool(enabled and existing is not None and schedule_creator_names(existing)[0] and _owner_differs(existing, person))
+            if takeover and not _person_covers_targets(person, action, data["targets"]):
+                refusal = TakeoverRefused(TAKEOVER_REFUSED)
+                refusal.takeover_row = (person, existing.pk, action.id, module)
+                raise refusal
             if data.get("enabled", True):
                 system_info = _system_action_creation(person, action, data, confirmation_id, defer=True)
             data["targets"] = _canonicalize_targets_for_person(person, data["targets"])
@@ -1290,20 +1329,30 @@ def reconcile_schedule(*, owner_module: str, owner_key: str, action_id: str, sch
             )
         if stored_creator and person is None:
             return existing  # nothing changed: an identical call is a no-op and writes nothing
+        owner_move = None
         if person is not None:
             first_time = existing is None or not schedule_creator_names(existing)[0]
             name_now = str(getattr(person, "username", "") or "")[:150]
             if first_time:
                 schedule.created_by = person
                 schedule.created_by_username = name_now
+            elif takeover:
+                owner_move = {"owner_changed_from": previous_names[0], "owner_changed_to": name_now, "previous_confirmed_by": previous_names[1]}
+                schedule.created_by = person
+                schedule.created_by_username = name_now
             schedule.updated_by = person
             schedule.confirmed_by_username = name_now
+            if first_time or takeover or not _owner_differs(existing, person):
+                # 1.17.68: what this person could reach when they saved it. Another person who only switches the schedule off changes neither
+                # the owner nor the stored scope.
+                schedule.creation_scope = scheduler_creation_scope.capture(person)
         schedule.save()
-        if person is not None and (changed or schedule_creator_names(schedule) != previous_names):
+        if person is not None and (changed or owner_move or schedule_creator_names(schedule) != previous_names):
             _audit_schedule_row(
                 person, schedule, "add" if existing is None else "modify",
-                f"Module {module} {'created' if existing is None else 'changed'} a schedule that a person confirmed.",
-                strict=True, extra=_system_action_audit_extra(system_info),
+                f"Module {module} {'created' if existing is None else 'changed'} a schedule that a person confirmed."
+                + (" The ownership moved to the person who edited it." if owner_move else ""),
+                strict=True, extra={**_system_action_audit_extra(system_info), **(owner_move or {})},
             )
         return schedule
 
@@ -1357,11 +1406,82 @@ def _check_person_may_schedule(user, action: ScheduledAction, targets: dict) -> 
     if not may_run:
         raise SchedulerNotAllowed("The person does not have permission to run this action.")
     try:
-        in_scope = _can_access_target_scope(user, targets)
+        decided = _resolver_scope_check(user, action.module_id, targets)  # 1.17.68: a module-owned type with a resolver is judged by its endpoints
+        in_scope = _can_access_target_scope(user, targets) if decided is None else decided
     except Exception as exc:
         raise SchedulerNotAllowed("The targets are outside the person's Tactical scope.") from exc
     if not in_scope:
         raise SchedulerNotAllowed("The targets are outside the person's Tactical scope.")
+
+
+TAKEOVER_REFUSED = "You cannot take over this schedule: some of its targets are outside your Tactical scope."
+
+
+class TakeoverRefused(SchedulerNotAllowed):
+    """1.17.68: a person other than the owner tried to edit a schedule whose targets are wider than that person's own Tactical scope. Owner and
+    scope stay as they were (CQ205 a: ownership never widens what a schedule runs as). ``reason`` is ``takeover_out_of_scope``."""
+
+    reason = "takeover_out_of_scope"
+    takeover_row = None  # (person, schedule id, action id, owner module): the deny row is written after the transaction rolls back
+
+
+def _resolver_scope_check(user, module_id, targets, *, strict: bool = False):
+    """For a module-owned target type that has a registered resolver (1.17.68): ``True`` when every endpoint it names is inside the person's
+    Tactical scope (a native scheduler manager passes unless ``strict``), ``False`` when one is not or the targets cannot be read, and ``None``
+    when no resolver applies, so the caller keeps its existing rule. Never raises for a missing resolver; a read fault is ``False``."""
+    from . import scheduler_target_resolvers as resolvers
+
+    kind = resolvers.target_type_of(targets)
+    if kind is None or not module_id or not resolvers.has_resolver(module_id, kind):
+        return None
+    if not strict:
+        from .scheduler_views import _native_scheduler_manager
+
+        if _native_scheduler_manager(user):
+            return True
+    pks = resolvers.resolve_agent_pks(module_id, targets)
+    if pks is None:
+        return False
+    if not pks:
+        return True  # a resolver that names no endpoint reaches nothing
+    from . import resources_adapter
+
+    return bool(resources_adapter.agent_pks_in_role_scope(user=user, pks=sorted(pks)))
+
+
+def _person_covers_targets(person, action: ScheduledAction, targets: dict) -> bool:
+    """Does the person's own Tactical scope cover every target? No bypass for a scheduler manager: used before ownership moves to them."""
+    decided = _resolver_scope_check(person, action.module_id, targets, strict=True)
+    if decided is not None:
+        return decided
+    from .scheduler_views import _can_access_target_scope
+
+    return bool(_can_access_target_scope(person, targets, strict=True))
+
+
+def _owner_differs(existing, person) -> bool:
+    """Is ``person`` someone other than the stored owner of ``existing`` (which has a stored creator name)?"""
+    owner = getattr(existing, "created_by", None)
+    if owner is not None:
+        return getattr(owner, "pk", None) != getattr(person, "pk", None)
+    stored = schedule_creator_names(existing)[0].casefold()
+    return stored != str(getattr(person, "username", "") or "").casefold()
+
+
+def _record_takeover_refusal(exc) -> None:
+    """One deny row for a refused takeover, written after the transaction that the refusal rolled back. Never raises."""
+    row, exc.takeover_row = exc.takeover_row, None
+    try:
+        from . import audit
+
+        person, schedule_id, action_id, owner_module = row
+        audit.record(
+            actor=person, module_id="core", action="deny", object_type="scheduler_schedule", object_id=str(schedule_id),
+            message=f"A schedule was not taken over: {TAKEOVER_REFUSED}",
+            metadata={"reason": TakeoverRefused.reason, "requested_by": "module", "owner_module": str(owner_module)[:100], "action_id": str(action_id)[:160]},
+        )
+    except Exception:
+        logger.exception("Tec-Tac audit row for a refused schedule takeover could not be written")
 
 
 _TIMING_FIELDS = ("schedule_type", "run_at", "run_time", "weekdays", "day_of_month", "interval_seconds", "timezone")
@@ -1521,7 +1641,8 @@ def start_one_off_run(*, user, owner_module: str, action_id: str, targets: dict 
         raise SchedulerNotAllowed("The user does not have permission to run this action.")
     try:
         canonical = _canonicalize_endpoint_targets_for_user(user, canonical)
-        in_scope = _can_access_target_scope(user, canonical)
+        decided = _resolver_scope_check(user, action.module_id, canonical)  # 1.17.68: a module-owned type with a resolver
+        in_scope = _can_access_target_scope(user, canonical) if decided is None else decided
     except SchedulerError:
         raise
     except Exception as exc:

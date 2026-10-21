@@ -393,20 +393,26 @@ def agent_pks_in_role_scope(*, user, pks) -> bool:
         return False
 
 
-def agent_pks_for_scheduler_targets(*, targets):
+def agent_pks_for_scheduler_targets(*, targets, module_id=None):
     """The Tactical agent numbers a Scheduler target snapshot names, as ``(pks, missing)``, or None when Core cannot resolve it (1.17.62).
 
     Used only to bound a system action: the run may touch these endpoints and no others. It is not an authorization decision (the
     owner's role scope is checked separately). A client, site or endpoint target resolves to the endpoints it names; a dynamic target
     resolves to its Tactical scope, an upper bound (the module's filter only narrows it); ``none`` resolves to no endpoint. A
-    module-owned target type returns None: Core has no contract to read it. ``missing`` counts the named clients, sites or endpoints
+    module-owned target type returns None unless ``module_id`` is given and that module registered a resolver for the type (1.17.68,
+    ``scheduler_target_resolvers``): then it resolves to the endpoints the resolver names, or None when the resolver cannot answer cleanly. ``missing`` counts the named clients, sites or endpoints
     that no longer exist. An ambiguous endpoint identifier raises ``TacticalResourceAdapterError``, so the caller fails closed."""
     from .scheduler_targets import tactical_scope_ref
 
     ref = tactical_scope_ref(targets)
     kind, values = ref["kind"], ref["values"]
     if kind == "module":
-        return None
+        if not module_id:
+            return None
+        from . import scheduler_target_resolvers
+
+        pks = scheduler_target_resolvers.resolve_agent_pks(module_id, targets)
+        return None if pks is None else (pks, 0)
     if kind == "none":
         return set(), 0
     Client, Site, Agent = _models()
@@ -429,6 +435,68 @@ def agent_pks_for_scheduler_targets(*, targets):
             raise TacticalResourceAdapterError(f"Endpoint identifier {token!r} is ambiguous; use the canonical agent_id.")
         pks.add(next(iter(matches))[0])
     return pks, missing
+
+
+def _chunks(values, size: int = 5000):
+    values = list(values)
+    for start in range(0, len(values), size):
+        yield values[start:start + size]
+
+
+def agent_pks_for_identifiers(*, identifiers) -> set[int]:
+    """Canonical Tactical agent numbers for a list of endpoint references (1.17.68, the target-resolver contract).
+
+    A whole number is a database number. Text is an agent id, and a numeric text may also be a database number. Every reference must name exactly
+    one endpoint: a reference that names none, or a number that is one endpoint's number and another endpoint's agent id, raises
+    ``TacticalResourceAdapterError``, so the caller treats the whole answer as unresolved. This is an identity step, not an authorization decision."""
+    numbers = {int(value) for value in identifiers if isinstance(value, int) and not isinstance(value, bool)}
+    texts = {value.strip() for value in identifiers if isinstance(value, str)}
+    _, _, Agent = _models()
+    found: dict[int, str] = {}
+    for part in _chunks(sorted(numbers)):
+        found.update({int(pk): str(agent_id) for pk, agent_id in Agent.objects.filter(pk__in=part).values_list("pk", "agent_id")})
+    for part in _chunks(sorted(texts)):
+        wanted = {int(value) for value in part if value.isdigit() and int(value) > 0}
+        query = Q(agent_id__in=set(part)) | Q(pk__in=wanted)
+        rows = [(int(pk), str(agent_id)) for pk, agent_id in Agent.objects.filter(query).values_list("pk", "agent_id")]
+        for token in part:
+            matches = {(pk, agent_id) for pk, agent_id in rows if agent_id == token or str(pk) == token}
+            if len(matches) != 1:
+                raise TacticalResourceAdapterError("An endpoint reference names no endpoint or more than one.")
+            found[next(iter(matches))[0]] = next(iter(matches))[1]
+    if not numbers <= set(found):
+        raise TacticalResourceAdapterError("An endpoint number names no endpoint.")
+    return set(found)
+
+
+def agent_rows_in_scope(*, pks, snapshot=None, user=None, limit: int) -> list[dict[str, Any]]:
+    """The endpoints among ``pks`` (every endpoint when ``pks`` is None) that lie inside a scope, as plain rows, at most ``limit + 1`` of them (1.17.68).
+
+    The scope is ``snapshot``, a creation-time snapshot (``scheduler_creation_scope``): unrestricted, or the endpoint's client is in
+    ``whole_client_ids``, or its site is in ``site_ids``, which is Tactical's own rule for agents. An empty snapshot reaches nothing. Or the scope is
+    ``user``'s live Tactical role scope. Exactly one of the two must be given. The caller compares the row count with its limit: more than ``limit``
+    rows is a refusal there, so nothing is ever truncated silently. Rows: ``{pk, agent_id, hostname, platform, client_id, site_id}`` by number."""
+    if (snapshot is None) == (user is None):
+        raise TacticalResourceAdapterError("Give either a stored scope or a person.")
+    _, _, Agent = _models()
+    base = Agent.objects.all()
+    if snapshot is not None:
+        scope = snapshot["scope"]
+        if not scope["unrestricted"]:
+            base = base.filter(Q(site__client_id__in=list(scope["whole_client_ids"])) | Q(site_id__in=list(scope["site_ids"])))
+    else:
+        base = _scope_queryset(base, user=user, trusted=False)
+    fields = ("pk", "agent_id", "hostname", "plat", "site__client_id", "site_id")
+    rows: list[dict[str, Any]] = []
+    sources = [base] if pks is None else [base.filter(pk__in=part) for part in _chunks(sorted(pks))]
+    for source in sources:
+        for pk, agent_id, hostname, plat, client_id, site_id in source.order_by("pk").values_list(*fields)[: limit + 1 - len(rows)]:
+            rows.append({"pk": int(pk), "agent_id": str(agent_id), "hostname": str(hostname or ""), "platform": str(plat or ""),
+                         "client_id": int(client_id), "site_id": int(site_id)})
+        if len(rows) > limit:
+            break
+    rows.sort(key=lambda row: row["pk"])
+    return rows
 
 
 def _active_filter(queryset, active: bool | None):

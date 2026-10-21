@@ -83,7 +83,7 @@ must(ast.unparse(reg["register_scheduled_action"].args.kw_defaults[-1]) == "Fals
 vr = ast.parse((APP / "scheduler_run_context.py").read_text(encoding="utf-8"))
 verified = next(n for n in vr.body if isinstance(n, ast.ClassDef) and n.name == "VerifiedSchedulerRun")
 fields = [(n.target.id, n.value is not None) for n in verified.body if isinstance(n, ast.AnnAssign)]
-must([f for f, _d in fields][-3:] == ["creator_username", "confirmed_by_username", "unattended"] and all(d for _f, d in fields[-3:]) and not any(d for _f, d in fields[:-3]), fields)
+must([f for f, _d in fields][-5:] == ["creator_username", "confirmed_by_username", "unattended", "_creation_scope", "_targets"] and all(d for _f, d in fields[-5:]) and not any(d for _f, d in fields[:-5]), fields)  # 1.17.68 appended the two private fields
 must(ast.unparse(defs(APP / "scheduler_run_context.py", {"verify_run_context"})["verify_run_context"].args) == "context: Any, *, expected_module_id: str, expected_action_id: str, require_owner: bool=True", "verify_run_context")
 sa_tree = ast.parse((APP / "system_actions.py").read_text(encoding="utf-8"))
 must(ast.unparse(defs(APP / "system_actions.py", {"run_system_action"})["run_system_action"].args) == "context, *, action_id, agent_ids, parameters=None", "run_system_action")
@@ -151,7 +151,7 @@ else:
 sa_text = (APP / "system_actions.py").read_text(encoding="utf-8")
 must('"action_not_declared"' in sa_text, "the new refusal reason")
 migrations = sorted(p.name for p in (APP / "migrations").glob("0*.py"))
-must(migrations[-1] == "0036_schedule_creator_name.py" and migrations[-2] == "0035_server_job_hook.py", migrations[-2:])
+must(migrations[-2] == "0036_schedule_creator_name.py" and migrations[-3] == "0035_server_job_hook.py" and migrations[-1] == "0037_creation_scope_and_delegation.py", migrations[-3:])  # 1.17.68 added 0037
 version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 must(tuple(int(x) for x in re.sub(r"-\d+$", "", version).split(".")) >= (1, 17, 63) and f'"version": "{version}"' in (ROOT / "tec_tac_package.json").read_text(encoding="utf-8"), version)  # 1.17.65: 1.17.63 or later
 notes = ROOT / f"RELEASE_NOTES_{version}.md"

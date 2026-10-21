@@ -68,7 +68,7 @@ print("       the purposes state the caller rule, the idempotency, the limits, t
 
 must(any("system_actions" in rule and "1.17.61" in rule and "requires.framework" in rule for rule in rules), "the manifest key is described in the rules")
 meta = sa.system_actions_contract_metadata()
-must(meta["id"] == "core.system_actions" and meta["version"] == "1.1.0" and meta["requires_framework"].startswith(">=1.17.61"), meta)  # 1.17.66: 1.1.0, additive
+must(meta["id"] == "core.system_actions" and meta["version"] == "1.2.0" and meta["requires_framework"].startswith(">=1.17.61"), meta)  # 1.17.66: 1.1.0, additive; 1.17.68: 1.2.0, additive
 must(set(meta["functions"]) == set(sa.SYSTEM_FUNCTIONS) and set(meta["refusal_reasons"]) == set(sa.REASONS), meta)
 print("       the manifest key and the capability metadata are documented")
 

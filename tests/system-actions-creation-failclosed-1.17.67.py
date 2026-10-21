@@ -27,7 +27,7 @@ BASE = 1000
 alice = User("alice")
 views = sys.modules["tec_tac.scheduler_views"]
 views._can_use_action = lambda user, action: True
-views._can_access_target_scope = lambda user, targets: True
+views._can_access_target_scope = lambda user, targets, **kw: True  # 1.17.68: a takeover asks with strict=True
 SCAN, PLAIN, LISTED_ONLY = "patching.scan", "checks.plain", "checks.listed"
 DAILY = {"schedule_type": "daily", "run_time": "03:00", "timezone": "UTC"}
 ENDPOINTS = {"type": "endpoint", "ids": [str(BASE + i) for i in range(3)]}

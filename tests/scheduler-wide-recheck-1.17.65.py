@@ -377,7 +377,10 @@ ctx_src = (APP / "scheduler_run_context.py").read_text(encoding="utf-8")
 must(ctx_src.count("= _is_unattended_scheduled_run(run)") == 1 and "from .scheduler import _is_unattended_scheduled_run as decide" in ctx_src, "verify_run_context asks the one helper")
 sa_src = (APP / "system_actions.py").read_text(encoding="utf-8")
 must("_is_unattended_scheduled_run" not in sa_src and 'getattr(verified, "unattended", False)' in sa_src, "system actions read the verified answer only")
-must("unattended" not in (APP / "tasks.py").read_text(encoding="utf-8"), "tasks.py holds no exemption")
+tasks_src = (APP / "tasks.py").read_text(encoding="utf-8")
+tasks_lines = [line for line in tasks_src.splitlines() if "unattended" in line]
+must(all("_is_unattended_scheduled_run" in line for line in tasks_lines), "tasks.py holds no exemption of its own: it only names the one helper (1.17.68)")
+must(sum(1 for line in tasks_lines if line.strip().startswith(("from .scheduler import _is_unattended_scheduled_run", "if _is_unattended_scheduled_run(run):"))) == 2 and tasks_src.count("_is_unattended_scheduled_run(run)") == 1, "the one-off re-check skips only through the helper, only for a run whose signed marker verifies (scheduler._delegated_run_is_valid)")
 body = src.split("def _is_unattended_scheduled_run", 1)[1].split("def _runtime_authorization_error", 1)[0]
 must("registered.unattended" not in body, "the flag is not read by the decision")
 print("       the tick, verify_run_context and the system-action code reach the exemption only through the one helper (source read)")

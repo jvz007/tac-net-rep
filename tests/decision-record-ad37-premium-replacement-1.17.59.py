@@ -50,7 +50,7 @@ if standard.is_file():
     must("does not cover the premium module's own routes" in bullet, "standard AD-37 bullet leaves the premium module's own routes out")
     row = next((line for line in ad.splitlines() if line.startswith("| 37 |")), "")
     must("20 Oct 2026" in row and "20 October 2026" in row, "AD index row 37 names the 20 October 2026 amendment")
-    must("| 41 |" not in ad, "no AD-41 was added")
+    must(ad.count("\n| 37 |") == 1, "AD row 37 is still one row (later rows such as AD-41 do not touch it)")
     must("log-only" not in ad.lower() and ad.lower().count("licens") == 1, "no licensing decision row was added")
 else:
     print("NOTE project documents not reachable from this tree; document checks skipped")

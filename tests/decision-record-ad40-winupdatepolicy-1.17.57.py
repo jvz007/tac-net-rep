@@ -53,7 +53,7 @@ if standard.is_file():
     must("WinUpdatePolicy" in std and "Agent model" in std, "standard names WinUpdatePolicy and the Agent model")
     row = next((line for line in ad.splitlines() if line.startswith("| 40 |")), "")
     must("WinUpdatePolicy" in row and "Agent model" in row, "AD row 40 names WinUpdatePolicy and the Agent model")
-    must("| 41 |" not in ad, "no AD-41 was added")
+    must(ad.count("\n| 40 |") == 1, "AD row 40 is still one row (later rows such as AD-41 do not touch it)")
     must("record the AD-20 amendment for patchmanagement" not in req, "the option (a) request is gone")
     must("reviews/requests/core.md`, \"read contract for Windows update rows\"" not in std.replace("core.md\", ", "core.md`, "), "standard no longer points at core.md for the read contract")
 else:

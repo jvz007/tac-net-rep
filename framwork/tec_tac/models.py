@@ -82,6 +82,10 @@ class TecTacSchedule(models.Model):
     # created_by.username (see scheduler.schedule_creator_names).
     created_by_username = models.CharField(max_length=150, blank=True, default="")
     confirmed_by_username = models.CharField(max_length=150, blank=True, default="")
+    # 1.17.68 (Johan, 21 October 2026, Q-APM12 b): the Tactical client and site scope and the role flags the owner held when they created or last
+    # edited the schedule (see scheduler_creation_scope.py). An unattended run reads this, never the owner's live row, so a disabled owner changes
+    # nothing. Empty on a row made before migration 0037: Core never invents one.
+    creation_scope = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -691,3 +695,43 @@ class TecTacServerJobHook(models.Model):
 
     def __str__(self):
         return f"{self.job_id}:{self.state}"
+
+
+class TecTacDelegationGrant(models.Model):
+    """What a person confirmed once so that one module may start another module's system action for them later (Core 1.17.68, S4).
+
+    The owner module (Maintenance) registers a grant when a person saves a profile. The provider module (Advanced Patch Management) names the
+    owner in ``delegable_to`` when it registers the system action. A grant holds the confirmed action, targets and parameters, the person (by
+    row and by stored name) and that person's scope at the time (``creation_scope``). It holds no endpoint list: the endpoints are read when a
+    run starts and are always inside the targets AND the stored scope. A person who saves the profile later takes the grant over. Editing or
+    removing it revokes every ticket made for it (see delegation.py).
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    owner_module = models.CharField(max_length=100)
+    grant_key = models.CharField(max_length=120)
+    provider_module = models.CharField(max_length=100)
+    action_id = models.CharField(max_length=160)
+    targets = models.JSONField(default=dict, blank=True)
+    parameters = models.JSONField(default=dict, blank=True)
+    parameters_digest = models.CharField(max_length=64, blank=True, default="")
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="tec_tac_delegation_grants_created")
+    created_by_username = models.CharField(max_length=150, blank=True, default="")
+    confirmed_by_username = models.CharField(max_length=150, blank=True, default="")
+    creation_scope = models.JSONField(default=dict, blank=True)
+    enabled = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("owner_module", "grant_key")
+        indexes = [
+            models.Index(fields=("provider_module", "action_id"), name="tectac_deleg_provider_idx"),
+        ]
+        constraints = [
+            models.UniqueConstraint(fields=("owner_module", "grant_key"), name="tectac_deleg_owner_key_unique"),
+        ]
+
+    def __str__(self):
+        return f"{self.owner_module}:{self.grant_key}"
+

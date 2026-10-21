@@ -180,7 +180,7 @@ for needle in ("tactical_scope_ref", "_models()", "Client.objects.filter(pk__in=
     must(needle in body, f"the resolver lacks {needle}")
 must("trusted" not in body and "filter_by_role" not in body, "the resolver is a bound, not an authorization decision: the owner's scope is checked separately")
 src = (APP / "system_actions.py").read_text(encoding="utf-8")
-must(re.search(r"_refuse\(\"out_of_scope\", \*\*common\)\n    # \(6b\).*\n    try:\n        resolved = _target_pks\(run.targets_snapshot or \{\}\)", src), "the targets check follows the scope check")
+must(re.search(r"_refuse\(\"out_of_scope\", \*\*common\)\n    # \(6b\).*\n    try:\n        resolved = _target_pks\(run.targets_snapshot or \{\}, module_id\)", src), "the targets check follows the scope check (1.17.68: the run resolves through its module's resolver)")
 must('"outside_targets"' in src and '"targets_unresolved"' in src and 'REASONS' in src, "the new reasons exist")
 docs = (ROOT / "docs" / "system-actions.md").read_text(encoding="utf-8")
 must("outside_targets" in docs and "targets_unresolved" in docs, "the docs name the reasons")

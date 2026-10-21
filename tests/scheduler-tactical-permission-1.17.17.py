@@ -147,7 +147,7 @@ tasks = load("tec_tac.tasks_real", "tasks.py")
 rbac = load("tec_tac.rbac", "rbac.py")
 sv = load("tec_tac.scheduler_views", "scheduler_views.py")
 # the target scope is item E's business and has its own tests: these two stand in for a user with unrestricted Tactical scope
-sv._can_access_target_scope = lambda user, targets: True
+sv._can_access_target_scope = lambda user, targets, **kw: True
 sv._canonicalize_endpoint_targets_for_user = lambda user, targets: targets
 
 

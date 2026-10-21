@@ -287,6 +287,10 @@ With a request, Core checks for that person the action's permission and the Tact
 **Without** a request, a schedule that has a stored creator can only be switched off (`enabled=False`) or left as it is. Any change to its action, targets, parameters, timing or policies, and switching it back on, raises `SchedulerError` and changes nothing. An identical call is a no-op. So a module can never widen or rewire a person's schedule, and it can name only the person who created or confirmed it. A module-owned schedule with no stored creator, and any call without the new keyword on one, behaves exactly as before 1.17.63. `get_owned_schedule` gains the additive key `created_by_username`.
 
 
+#### The scope a schedule keeps, and ownership (Core 1.17.68, framework >=1.17.68)
+
+A call to `reconcile_schedule(confirmed_by_request=request)` **is an edit by that person**. Core now also stores that person's Tactical client and site scope and role flags on the schedule at that moment (`creation_scope`), so an unattended run reads what the person could reach when they saved it and never their live row (see "Verify a run context", below). If the person is not the stored owner, ownership moves to them after the unchanged checks, with one strict `modify` audit row naming `owner_changed_from`, `owner_changed_to` and `previous_confirmed_by`. Their own scope must cover every target (no shortcut for a scheduler manager), or the call raises `TakeoverRefused` ("You cannot take over this schedule: some of its targets are outside your Tactical scope.") and nothing changes. A call that only switches the schedule off moves nothing. The browser create and edit follow the same rules. A module-owned target type that the module registered a resolver for (`tec_tac.scheduler_target_resolvers.register_target_resolver`) is judged by the endpoints it names. The signature of `reconcile_schedule` is unchanged. Details: `docs/system-actions.md`, "Creation-time scope and ownership".
+
 ## Start a one-off run for a user (Core 1.17.16)
 
 A module that needs to run one of its own registered actions once, on behalf of the person who clicked, calls `start_one_off_run`. It is for a manual sync, a bulk scan or an install that should not wait for the ticker.
@@ -394,6 +398,18 @@ a deleted owner or a name that is not a `can_*` flag. `run.resource_context()` g
 
 Each retry attempt issues a new context for the same run row, and the owner is checked again on every attempt. The context is still a
 `dict` with every key it had, so a handler that ignores verification is unchanged.
+
+Since 1.17.68 (framework >=1.17.68) `VerifiedSchedulerRun` also carries the scope the schedule was created with, through four additive reads. For an **unattended** run they use only that stored record, so a disabled or demoted owner changes nothing:
+
+```python
+if not run.has_creation_scope:                      # a schedule made before 1.17.68 and not edited since
+    raise SchedulerPermanentError("Edit the schedule and save it once.")
+if not run.held_at_creation("can_manage_winupdates"):  # the flag the person held when they saved it
+    raise SchedulerPermanentError("The person who set this up did not hold the permission.")
+endpoints = run.resolved_endpoints()                # [{pk, agent_id, hostname, platform, client_id, site_id}, ...], inside the targets AND the stored scope
+```
+
+`resolved_endpoints(*, whole_scope=False, limit=40000)` returns `[]` for a `none` target unless `whole_scope=True`, raises when more than `limit` endpoints are named (nothing is truncated), and raises `SchedulerTransientError` for a read fault. Without a stored record, `held_at_creation` and `resolved_endpoints` raise `CreationScopeUnavailable` (a `SchedulerPermanentError`) for an unattended run. For a run a person started they use that person's live scope, as before. `has_tactical_permission` and `resource_context` are unchanged and still read the owner fresh.
 
 What this does not do. Modules run in the same Python process as Core. This stops a module naming a run or an owner that Core did not issue.
 It cannot stop deliberately hostile signed module code; the review of signed modules stays the defence. There is no per-run signed token

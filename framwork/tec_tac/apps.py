@@ -111,6 +111,17 @@ class TecTacFrameworkConfig(AppConfig):
                 # Last-resort startup safety: log loudly but never abort Tactical.
                 logger.exception("Tec-Tac fail-closed Tactical account guard installation failed")
 
+        # 1.17.68 (Johan, 21 October 2026): while a replacement of Windows Patching (Advanced Patch Management) is honoured, Tactical's own patch
+        # policy is switched off: its two documented task switches are set and Agent.approve_updates is inert. Nothing is written to Tactical.
+        # Guarded step by step inside apply_at_startup: a fault leaves Tactical's own patching on and never aborts start-up.
+        try:
+            from .patch_lockdown import apply_at_startup, register_core_patch_lockdown_capability
+
+            register_core_patch_lockdown_capability()
+            apply_at_startup()
+        except Exception:
+            logger.exception("Tec-Tac patch lockdown could not be applied; Tactical's own patch policy stays as it was")
+
         # Core owns the compatibility boundary with Tactical Report Manager.
         # Install this before module AppConfig.ready() registrations execute so
         # modules never need to import ee.reporting internals themselves.

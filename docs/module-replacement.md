@@ -331,6 +331,16 @@ or where state was changed by hand, needs `systemctl restart rmm celery`. The He
 can say: "Core restarts the web workers and Celery itself when you switch. If an operation is missing afterwards, restart the `rmm` service."
 This statement comes from reading the helper. It has not been run on a server.
 
+## The statement for operations and row lookups (1.17.68, patchmanagement 0.11.0 and 0.11.2)
+
+Asked again by Advanced Patch Management 0.11.2, which registers seven operations (`scan`, `install`, `set-update-action`, `reset-patch-policy` and `add-patch-policy`, `edit-patch-policy`, `delete-patch-policy`, the last three `server_only`) and `register_tactical_row_lookup('patchmanagement', 'patch-policy-row', fn)`. This is a statement of how Core already works. No behaviour changed in 1.17.68. It is pinned by `tests/replacement-registration-statement-1.17.68.py`.
+
+- **Own module id.** While a replacement of Windows Patching is honoured, `register_tactical_operation` and `register_tactical_row_lookup` accept the replacement's own module id (`patchmanagement`), for the routes of the module it replaces (`winupdate/` and `automation/patchpolicy/`). The decision comes from `_honoured_pairs()`, the one source AD-20 uses. Every registration is its own start-up step: a refused one is logged and nothing else stops.
+- **Re-evaluated every time.** Core reads the honoured state on every registration call and again at every dispatch. It does not remember a refusal.
+- **First start: no extra restart by hand.** The registrations happen in each process's `ready()`. Enabling the replacement runs the root job helper, which writes the new module state first and then reloads the web workers and restarts Celery. Their `ready()` runs again with the new state, so the registrations are accepted. (If the reload script is missing from the server, or the state was changed by hand, restart `rmm` and `celery`.)
+- **When it stops being honoured.** Its operations answer 404 `tactical_operation_not_found` at once, before any restart, and the row lookup it registered is no longer reached, because every operation that names it is refused first.
+- **No honoured replacement.** The registrations are refused with `TacticalOperationRegistrationError` (a `ValueError`), as above.
+
 ## What this does not do
 
 - It adds no general `conflicts_with` key. AD-20 decides replacement only.

@@ -171,8 +171,8 @@ sys.modules["tec_tac.capabilities"].register_capability = lambda **kw: CAPS.appe
 setup()
 sa.register_core_system_actions_capability()
 cap = CAPS[0]
-must(cap["id"] == "core.system_actions" and cap["version"] == "1.1.0" and cap["module_id"] == "core", cap)
-must(tuple(cap["operations"]) == ("list_actions", "get_action", "run", "describe_confirmation"), cap["operations"])
+must(cap["id"] == "core.system_actions" and cap["version"] == "1.2.0" and cap["module_id"] == "core", cap)  # 1.17.68: 1.2.0 (additive)
+must(tuple(cap["operations"]) == ("list_actions", "get_action", "run", "describe_confirmation", "describe_delegation", "register_delegation_grant", "remove_delegation_grant", "issue_delegation_ticket", "start_delegated_run"), cap["operations"])  # 1.17.68: the five delegation operations are appended
 meta = cap["metadata"]
 must(meta["max_agents"] == 40000 and meta["max_agents_per_group"] == 2000 and meta["max_groups"] == 20 and meta["delivery"] == "at most once per group", meta)
 must(set(meta["functions"]) == {"winupdate.scan", "winupdate.install", "scripts.run"}, meta)

@@ -1,4 +1,4 @@
-"""System actions: typed Tactical work that Core runs unattended for a named owner (core.system_actions 1.1.0, Core 1.17.66; first built 1.17.61, R-20, AD-13).
+"""System actions: typed Tactical work that Core runs unattended for a named owner (core.system_actions 1.2.0, Core 1.17.68; first built 1.17.61, R-20, AD-13).
 
 A system action is a Tactical function that Core may run when nobody is signed in: a scheduled patch scan, for example. It is not a free
 path into Tactical. Core holds a fixed table, ``SYSTEM_FUNCTIONS``, of the few Tactical functions it will reach. A module cannot name a
@@ -39,6 +39,15 @@ common with a plan is a new call and is planned on its own.
 
 Honest limits: the owner re-check reads Tactical's role through Core's own helpers; modules share the Core process, so code that reaches
 into Core's private state is outside what this stops (the same limit as docs/caller-identity.md).
+
+1.17.68 (additive, capability 1.2.0). (1) A module-owned target type that its module registered a resolver for now reads as endpoints
+(``scheduler_target_resolvers``), so a run on such a schedule is no longer refused as ``targets_unresolved``. (2) ``register_system_action`` takes
+``delegable_to``: the modules that may start this action for someone else under a delegation grant. (3) Five functions let the owner module of
+a grant (Maintenance) and the provider (Advanced Patch Management) start a scheduled install without a person present: ``describe_delegation``,
+``register_delegation_grant``, ``remove_delegation_grant``, ``issue_delegation_ticket`` and ``start_delegated_run``. They are thin wrappers that
+verify the calling module here, in this file, then hand over to ``delegation.py``. ``run_system_action`` keeps its signature and its
+``wrong_module`` rule. (4) While Core's patch lockdown is active and its guard is installed in the process, Tactical's own approve is inert, so an
+install by the honoured replacement no longer carries the re-approve warning.
 """
 from __future__ import annotations
 
@@ -61,7 +70,7 @@ from .scheduler import SchedulerPermanentError, SchedulerTransientError
 logger = logging.getLogger("tec_tac.system_actions")
 
 CAPABILITY_ID = "core.system_actions"
-CAPABILITY_VERSION = "1.1.0"
+CAPABILITY_VERSION = "1.2.0"
 MAX_AGENTS_PER_GROUP = 2000  # Johan, CQ178: more than this splits into groups of at most this many
 MAX_GROUPS = 20  # the ceiling of one run (assumption CQ195, asked): 20 groups
 MAX_AGENTS = MAX_AGENTS_PER_GROUP * MAX_GROUPS  # a Core constant: refused above, never truncated
@@ -214,7 +223,8 @@ SYSTEM_FUNCTIONS = MappingProxyType({
     ),
     # winupdate/tasks.py bulk_install_updates_task(pks: list[int]) calls agent.approve_updates() first, which re-approves an update an
     # administrator or Advanced Patch Management set to Ignore. Since 1.17.66 (CQ173, Johan: yes) the honoured replacement may register it too;
-    # Core shows REAPPROVE_WARNING in the confirmation and the audit row. R-36 is not built.
+    # Core shows REAPPROVE_WARNING in the confirmation and the audit row. Since 1.17.68 (Johan, 21 October 2026) Core's patch lockdown makes Tactical's own
+    # approve inert while the replacement is honoured (patch_lockdown.py); the warning then goes for the replacement's install.
     "winupdate.install": SystemFunction(
         key="winupdate.install", module_path="winupdate.tasks", function_name="bulk_install_updates_task", owner_module="patching",
         min_flags=("can_manage_winupdates", "can_run_bulk"), accepts="agent_pks", takes_username=False, reapproves_by_policy=True,
@@ -245,6 +255,7 @@ class SystemActionDefinition:
     dangerous: bool
     username_param: str | None
     via_replacement: bool  # registered by the premium module that honourably replaces the owner
+    delegable_to: tuple = ()  # 1.17.68: the modules that may start this action for someone else under a delegation grant (last, so equality of an older definition holds)
 
 
 _ACTIONS: dict[str, SystemActionDefinition] = {}
@@ -310,11 +321,39 @@ def _declared_now(module_id: str, action_id: str) -> bool:
         return False
 
 
-def _target_pks(snapshot):
-    """``(pks, missing)`` for the run's targets snapshot, or None when it cannot be read as endpoints."""
+def _target_pks(snapshot, module_id=None):
+    """``(pks, missing)`` for the run's targets snapshot, or None when it cannot be read as endpoints. ``module_id`` (1.17.68) is the module whose
+    registered resolver may read a module-owned target type; without it, or without a resolver, such a type is None as before."""
     from . import resources_adapter as adapter
 
-    return adapter.agent_pks_for_scheduler_targets(targets=snapshot)
+    if module_id is None:
+        return adapter.agent_pks_for_scheduler_targets(targets=snapshot)
+    return adapter.agent_pks_for_scheduler_targets(targets=snapshot, module_id=module_id)
+
+
+def _is_module_target(snapshot) -> bool:
+    """Is this a module-owned target type (one only a module's resolver can read)? Anything unreadable counts as yes, the safe side."""
+    from .scheduler_targets import SchedulerTargetShapeError, tactical_scope_ref
+
+    try:
+        return tactical_scope_ref(snapshot)["kind"] == "module"
+    except (SchedulerTargetShapeError, KeyError, TypeError, ValueError):
+        return True
+
+
+def _reapprove_warning_applies(definition, entry) -> bool:
+    """Does the fixed re-approve warning belong to this install? Yes, unless the install is the honoured replacement's and Core's patch lockdown has made
+    Tactical's own approve inert in this process (1.17.68). Windows Patching's own install, and any case where the lockdown is not active, keep it."""
+    if not entry.reapproves_by_policy:
+        return False
+    if definition is not None and getattr(definition, "via_replacement", False) and entry.owner_module == "patching":
+        try:
+            from . import patch_lockdown
+
+            return not patch_lockdown.approve_neutralised()
+        except Exception:
+            return True
+    return True
 
 
 def _import_function(entry: SystemFunction):
@@ -365,7 +404,27 @@ def _registered_plugin(module_id: str):
     return plugin
 
 
-def _build_definition(id, module_id, label, function, permissions, scope_kind, dangerous, username_param) -> SystemActionDefinition:
+_MODULE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+MAX_DELEGABLE_TO = 5
+
+
+def _clean_delegable_to(delegable_to, module: str) -> tuple:
+    if delegable_to in (None, (), []):
+        return ()
+    if isinstance(delegable_to, (str, bytes)) or not isinstance(delegable_to, (list, tuple, set, frozenset)):
+        raise SystemActionRegistrationError("delegable_to must be a list of module ids.")
+    out = []
+    for value in delegable_to:
+        if not isinstance(value, str) or not _MODULE_ID_RE.fullmatch(value) or value == module:
+            raise SystemActionRegistrationError("every delegable_to entry must be the id of another module.")
+        out.append(value)
+    out = sorted(set(out))
+    if len(out) > MAX_DELEGABLE_TO:
+        raise SystemActionRegistrationError(f"delegable_to may list at most {MAX_DELEGABLE_TO} modules.")
+    return tuple(out)
+
+
+def _build_definition(id, module_id, label, function, permissions, scope_kind, dangerous, username_param, delegable_to=()) -> SystemActionDefinition:
     action_id = id if isinstance(id, str) else ""  # exact text: nothing is trimmed into a valid id
     module = module_id if isinstance(module_id, str) else ""
     entry = SYSTEM_FUNCTIONS.get(function) if isinstance(function, str) else None
@@ -412,18 +471,22 @@ def _build_definition(id, module_id, label, function, permissions, scope_kind, d
         raise SystemActionRegistrationError("Core could not read whether the module is enabled.") from None
     if not enabled:
         raise SystemActionRegistrationError("module_id is not enabled.")
-    return SystemActionDefinition(action_id, module, label.strip(), function, flags, SCOPE_KIND_AGENTS, dangerous, username_param, via_replacement)
+    return SystemActionDefinition(action_id, module, label.strip(), function, flags, SCOPE_KIND_AGENTS, dangerous, username_param, via_replacement,
+                                  _clean_delegable_to(delegable_to, module))
 
 
-def register_system_action(id, module_id, label, function, permissions, scope_kind="agents", dangerous=False, username_param=None):
+def register_system_action(id, module_id, label, function, permissions, scope_kind="agents", dangerous=False, username_param=None, delegable_to=()):
     """Register one system action. Call it from ``AppConfig.ready()``; it touches memory only and never raises out of ``ready()``'s own
     guard for a replacement that is not honoured (that is logged, nothing is registered, and ``None`` comes back).
 
     ``function`` is a key of Core's table (``winupdate.scan``, ``winupdate.install``); a dotted path, an unknown key or anything else is
     refused. Every other refusal raises ``SystemActionRegistrationError`` (a ValueError): the module wraps the call, logs and goes on.
-    Registering the identical definition again returns the same one; a different definition under the same id is refused."""
+    Registering the identical definition again returns the same one; a different definition under the same id is refused.
+
+    1.17.68: ``delegable_to`` (keyword, optional, default none) lists up to five other module ids that may start this action for someone else under a
+    delegation grant (see ``start_delegated_run``). It only names modules; each start is still judged by Core."""
     try:
-        definition = _build_definition(id, module_id, label, function, permissions, scope_kind, dangerous, username_param)
+        definition = _build_definition(id, module_id, label, function, permissions, scope_kind, dangerous, username_param, delegable_to)
     except _NotHonoured as exc:
         logger.warning("System action %r is not registered: %s.", id, exc)
         return None
@@ -449,7 +512,8 @@ def _describe(definition: SystemActionDefinition) -> dict:
         "owner_module": entry.owner_module if entry else None, "min_flags": list(entry.min_flags) if entry else [],
         "reapproves_by_policy": bool(entry.reapproves_by_policy) if entry else None,
         "parameters": list(entry.parameters) if entry else [],
-        "warning": REAPPROVE_WARNING if (entry and entry.reapproves_by_policy) else None,
+        "warning": REAPPROVE_WARNING if (entry and _reapprove_warning_applies(definition, entry)) else None,
+        "delegable_to": list(definition.delegable_to),
     }
 
 
@@ -496,6 +560,7 @@ REASONS = {
     "mark_limit": "This run has already sent the most system actions it may send.",
     "outside_targets": "At least one endpoint is not one of this schedule's targets, so nothing was run. A run never widens the schedule's set.",
     "targets_unresolved": "Core cannot read this schedule's targets as endpoints, so nothing was run.",
+    "creation_scope_unavailable": "Core has no stored scope for this schedule, so nothing was run. Save the schedule again.",
     "not_permitted": "You do not hold the permission this system action needs.",
     "confirmation_required": "This system action needs the Yes or No confirmation, and none came with the request.",
     "declaration_unreadable": "Core could not read the signed manifest or the registry just now, so it did not create or change this schedule. Try again in a minute.",
@@ -879,7 +944,7 @@ def _run(context, identity, action_id, agent_ids, parameters) -> dict:
             _refuse("out_of_scope", **common)
     # (6b) a run never widens the schedule's set: every endpoint must be one of the run's snapshotted targets (Core 1.17.62)
     try:
-        resolved = _target_pks(run.targets_snapshot or {})
+        resolved = _target_pks(run.targets_snapshot or {}, module_id)
     except Exception:
         logger.warning("The targets of a system action run could not be resolved; the run is refused.", exc_info=True)
         resolved = None
@@ -889,6 +954,22 @@ def _run(context, identity, action_id, agent_ids, parameters) -> dict:
     if not set(ids) <= set(target_pks):
         note = f" {vanished} target(s) of this schedule no longer exist." if vanished else ""
         _refuse("outside_targets", detail=note, **common)
+    # (6c) 1.17.68: an unattended run on a module-owned target type reads its endpoints from a module's resolver. Whatever the resolver names is
+    # cut to the scope the person had when they saved the schedule, so module code can never add an endpoint they did not confirm.
+    if unattended and _is_module_target(run.targets_snapshot or {}):
+        stored = verified.creation_scope_info()
+        if stored is None:
+            _refuse("creation_scope_unavailable", **common)
+        try:
+            from . import resources_adapter as adapter
+
+            inside = adapter.agent_rows_in_scope(pks=ids, snapshot=stored, limit=MAX_AGENTS)
+            all_inside = {int(row["pk"]) for row in inside} == set(ids)
+        except Exception:
+            logger.warning("The stored scope of a system action run could not be checked; the run is refused.", exc_info=True)
+            all_inside = False
+        if not all_inside:
+            _refuse("out_of_scope", **common)
     # (7) 1.17.66 (CQ173): an install that re-approves by policy is allowed for the honoured replacement; the warning is in the audit row
     function = _import_function(entry)
     if function is None:
@@ -918,8 +999,10 @@ def _run(context, identity, action_id, agent_ids, parameters) -> dict:
         _unknown(run.id, owner, definition, definition.id, module_id, provenance, "The stored plan of this run does not fit the endpoints, so Core did not send again. Check the endpoints.")
     extra = {"vanished_targets": int(vanished)} if vanished else {}  # 1.17.63: targets that no longer exist, while the rest still run
     row_extra = dict(entry.audit_extra(cleaned))
-    if entry.reapproves_by_policy:
+    if _reapprove_warning_applies(definition, entry):
         row_extra["warning"] = REAPPROVE_WARNING
+    elif entry.reapproves_by_policy:
+        row_extra["patch_lockdown"] = "active"  # 1.17.68: Tactical's own approve was inert for this install
     sent_now = 0
     sent_before = 0
     for index, (group, digest) in enumerate(zip(groups, digests), start=1):
@@ -968,8 +1051,54 @@ def _run(context, identity, action_id, agent_ids, parameters) -> dict:
 
 
 # ------------------------------------------------------------------------------------------------ the capability
+# ------------------------------------------------------------------------------------------------ delegation (1.17.68)
+# The five public functions below are thin: each verifies the calling module here (the frame walk skips every frame of this file, so the capability
+# route and a direct call give the same answer) and hands the verified id to ``delegation.py``. ``run_system_action`` is not one of them and is unchanged.
+def _verified_caller() -> str:
+    identity = calling_module_for_core_provider(provider_file=__file__)
+    return identity.module_id if identity is not None else ""
+
+
+def describe_delegation(request, *, owner_module, provider_module, action_id, targets, parameters=None) -> dict:
+    """The plain Yes or No text and a 600 second confirmation id for a delegation grant, for the person behind a real, session-checked ``request``
+    (1.17.68). The caller must be ``owner_module``. See docs/system-actions.md, "Delegation"."""
+    from . import delegation
+
+    return delegation.describe(_verified_caller(), request, owner_module=owner_module, provider_module=provider_module, action_id=action_id,
+                               targets=targets, parameters=parameters)
+
+
+def register_delegation_grant(request, *, owner_module, grant_key, provider_module, action_id, targets, parameters=None, confirmation_id=None) -> dict:
+    """Store (or replace) the grant a person confirmed. The caller must be ``owner_module``. A second person who registers the same grant takes it over."""
+    from . import delegation
+
+    return delegation.register(_verified_caller(), request, owner_module=owner_module, grant_key=grant_key, provider_module=provider_module,
+                               action_id=action_id, targets=targets, parameters=parameters, confirmation_id=confirmation_id)
+
+
+def remove_delegation_grant(*, owner_module, grant_key) -> bool:
+    """Remove a grant. The caller must be ``owner_module``. Every ticket made for it stops working."""
+    from . import delegation
+
+    return delegation.remove(_verified_caller(), owner_module=owner_module, grant_key=grant_key)
+
+
+def issue_delegation_ticket(context, *, grant_key) -> str:
+    """A signed 24 hour ticket for the owner module's own LIVE Scheduler run, bound to that run and to the grant as it is now."""
+    from . import delegation
+
+    return delegation.issue_ticket(_verified_caller(), context, grant_key=grant_key)
+
+
+def start_delegated_run(ticket, *, action_id, agent_ids, name=None):
+    """Start the provider's own one-off run for the grant behind ``ticket``. The caller must be the grant's provider module. Returns the queued run."""
+    from . import delegation
+
+    return delegation.start(_verified_caller(), ticket, action_id=action_id, agent_ids=agent_ids, name=name)
+
+
 class _SystemActionsProvider:
-    """The ``core.system_actions`` 1.1.0 provider: list_actions, get_action, run, describe_confirmation."""
+    """The ``core.system_actions`` 1.2.0 provider: list_actions, get_action, run, describe_confirmation and (1.17.68) the five delegation operations."""
 
     def list_actions(self) -> list[dict]:
         return registered_system_actions()
@@ -986,21 +1115,51 @@ class _SystemActionsProvider:
 
         return system_action_confirmation.describe_confirmation_for_request(request, action_id=action_id, targets=targets, parameters=parameters, when=when)
 
+    def describe_delegation(self, request, *, owner_module, provider_module, action_id, targets, parameters=None) -> dict:
+        return describe_delegation(request, owner_module=owner_module, provider_module=provider_module, action_id=action_id, targets=targets, parameters=parameters)
+
+    def register_delegation_grant(self, request, *, owner_module, grant_key, provider_module, action_id, targets, parameters=None, confirmation_id=None) -> dict:
+        return register_delegation_grant(request, owner_module=owner_module, grant_key=grant_key, provider_module=provider_module, action_id=action_id,
+                                         targets=targets, parameters=parameters, confirmation_id=confirmation_id)
+
+    def remove_delegation_grant(self, *, owner_module, grant_key) -> bool:
+        return remove_delegation_grant(owner_module=owner_module, grant_key=grant_key)
+
+    def issue_delegation_ticket(self, context, *, grant_key) -> str:
+        return issue_delegation_ticket(context, grant_key=grant_key)
+
+    def start_delegated_run(self, ticket, *, action_id, agent_ids, name=None):
+        return start_delegated_run(ticket, action_id=action_id, agent_ids=agent_ids, name=name)
+
 
 _PROVIDER = _SystemActionsProvider()
+OPERATIONS = (
+    "list_actions", "get_action", "run", "describe_confirmation",
+    "describe_delegation", "register_delegation_grant", "remove_delegation_grant", "issue_delegation_ticket", "start_delegated_run",
+)
 
 
 def system_actions_contract_metadata() -> dict:
     return {
         "id": CAPABILITY_ID,
         "version": CAPABILITY_VERSION,
-        "operations": ["list_actions", "get_action", "run", "describe_confirmation"],
+        "operations": list(OPERATIONS),
         "python": (
             "tec_tac.system_actions.register_system_action(id, module_id, label, function, permissions, scope_kind='agents', dangerous=False, "
-            "username_param=None) -> SystemActionDefinition | None; tec_tac.system_actions.run_system_action(context, *, action_id, agent_ids, "
+            "username_param=None, delegable_to=()) -> SystemActionDefinition | None; tec_tac.system_actions.run_system_action(context, *, action_id, agent_ids, "
             "parameters=None) -> {outcome: 'queued', agents, message, groups: {total, sent, failed, not_started}, summary}; "
-            "tec_tac.system_action_confirmation.describe_confirmation(user, action_id, targets, parameters, when) -> {text, confirmation_id, total, groups, expires_in}"
+            "tec_tac.system_action_confirmation.describe_confirmation(user, action_id, targets, parameters, when) -> {text, confirmation_id, total, groups, expires_in}; "
+            "tec_tac.system_actions.describe_delegation(request, *, owner_module, provider_module, action_id, targets, parameters=None) -> {required, text, confirmation_id, total, groups, expires_in}; "
+            "tec_tac.system_actions.register_delegation_grant(request, *, owner_module, grant_key, provider_module, action_id, targets, parameters=None, confirmation_id) -> {grant_key, created, owner_changed}; "
+            "tec_tac.system_actions.remove_delegation_grant(*, owner_module, grant_key) -> bool; "
+            "tec_tac.system_actions.issue_delegation_ticket(context, *, grant_key) -> str; "
+            "tec_tac.system_actions.start_delegated_run(ticket, *, action_id, agent_ids, name=None) -> TecTacScheduleRun (queued)"
         ),
+        "delegation": {
+            "grants_per_owner_module": 20, "ticket_seconds": 24 * 3600, "confirmation_seconds": 600,
+            "callers": {"describe_delegation": "owner module", "register_delegation_grant": "owner module", "remove_delegation_grant": "owner module",
+                        "issue_delegation_ticket": "owner module, from its own live Scheduler run", "start_delegated_run": "provider module named by the grant"},
+        },
         "functions": {
             key: {
                 "tactical": f"{row.module_path}.{row.function_name}", "owner_module": row.owner_module, "min_flags": list(row.min_flags),
@@ -1017,7 +1176,7 @@ def system_actions_contract_metadata() -> dict:
         "http": {"confirmation": "POST /api/tfd/scheduler/system-actions/confirmation/"},
         "delivery": "at most once per group",
         "audit_actions": ["run (strict, before each group's send)", "deny (one per refusal)", "custom:outcome-unknown", "add and modify on the schedule (strict)"],
-        "requires_framework": ">=1.17.61 (groups, parameters, scripts.run and describe_confirmation need >=1.17.66)",
+        "requires_framework": ">=1.17.61 (groups, parameters, scripts.run and describe_confirmation need >=1.17.66; delegable_to, the five delegation operations and module-owned target resolvers need >=1.17.68)",
         "unattended": "A scheduled run of a user-owned schedule skips owner_inactive, permission_lost and out_of_scope (>=1.17.65; the unattended= flag has no effect); every other check stays. A manual or one-off run keeps all of them.",
     }
 
@@ -1030,8 +1189,8 @@ def register_core_system_actions_capability():
         module_id="core",
         version=CAPABILITY_VERSION,
         provider=_PROVIDER,
-        description="Typed Tactical functions that Core runs unattended for a named owner, in groups of at most 2000 endpoints, with the owner and scope checked at every person-started run and the permission, scope and one Yes or No checked when a person creates or edits the schedule (>=1.17.66); a scheduled run is not re-checked against its creator (>=1.17.65).",
-        operations=("list_actions", "get_action", "run", "describe_confirmation"),
+        description="Typed Tactical functions that Core runs unattended for a named owner, in groups of at most 2000 endpoints, with the owner and scope checked at every person-started run and the permission, scope and one Yes or No checked when a person creates or edits the schedule (>=1.17.66); a scheduled run is not re-checked against its creator (>=1.17.65); a module may start another module's action under a delegation grant a person confirmed once (>=1.17.68).",
+        operations=OPERATIONS,
         metadata=system_actions_contract_metadata(),
     )
 

@@ -25,10 +25,11 @@ This is not the AD-13 system-action contract, which stays open.
 """
 from __future__ import annotations
 
+import copy
 import logging
 import threading
 import weakref
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 logger = logging.getLogger("tec_tac.scheduler_run_context")
@@ -148,6 +149,54 @@ def _user_resource_context(user):
     return resources.user_context(user)
 
 
+def _creation_scope_of(schedule):
+    """The creation-time scope snapshot stored on the schedule (1.17.68), or None for a row that has none."""
+    from . import scheduler_creation_scope
+
+    return scheduler_creation_scope.snapshot_of(schedule)
+
+
+def _max_agents() -> int:
+    from .system_actions import MAX_AGENTS
+
+    return MAX_AGENTS
+
+
+def _read_endpoint_rows(*, targets, module_id, snapshot, user, whole_scope: bool, limit: int) -> list:
+    """The endpoints of ``targets`` that lie inside ``snapshot`` (an unattended run) or ``user``'s live scope (a person-started run), as plain rows.
+    Raises ``SchedulerPermanentError`` when the targets cannot be read as endpoints or more than ``limit`` are named, ``SchedulerTransientError``
+    for a read fault. Nothing is truncated."""
+    from . import resources_adapter as adapter
+    from .scheduler import SchedulerPermanentError, SchedulerTransientError
+    from .scheduler_targets import normalize_scheduler_targets, tactical_scope_ref
+
+    try:
+        shaped = normalize_scheduler_targets(targets)
+        kind = tactical_scope_ref(shaped)["kind"]
+        if kind == "none":
+            if not whole_scope:
+                return []
+            pks = None  # the whole scope of the snapshot (or of the person), bounded by ``limit``
+        else:
+            resolved = adapter.agent_pks_for_scheduler_targets(targets=shaped, module_id=module_id)
+            if resolved is None:
+                raise SchedulerPermanentError("Core cannot read this schedule's targets as endpoints.")
+            pks = sorted(int(pk) for pk in resolved[0])
+            if len(pks) > limit:
+                raise SchedulerPermanentError(f"The targets name more than {limit} endpoints, so nothing was read.")
+        rows = adapter.agent_rows_in_scope(pks=pks, snapshot=snapshot, user=user, limit=limit)
+    except SchedulerPermanentError:
+        raise
+    except Exception as exc:
+        if type(exc).__name__ in ("TacticalResourceAdapterError", "SchedulerTargetShapeError"):
+            raise SchedulerPermanentError("Core cannot read this schedule's targets as endpoints.") from None
+        logger.warning("The endpoints of a scheduler run could not be read.", exc_info=True)
+        raise SchedulerTransientError("Core could not read the endpoints just now. Try again.") from None
+    if len(rows) > limit:
+        raise SchedulerPermanentError(f"The targets name more than {limit} endpoints, so nothing was read.")
+    return rows
+
+
 @dataclass(frozen=True)
 class VerifiedSchedulerRun:
     """What Core confirmed about a run: who started it, for whom, and what it is. Built only by ``verify_run_context``."""
@@ -167,6 +216,10 @@ class VerifiedSchedulerRun:
     creator_username: str | None = None
     confirmed_by_username: str | None = None
     unattended: bool = False
+    # 1.17.68 (Johan, 21 October 2026, Q-APM12 b), appended and private: the creation-time scope of the schedule and the run's targets. The public
+    # reads are ``has_creation_scope``, ``creation_scope_info``, ``held_at_creation`` and ``resolved_endpoints``.
+    _creation_scope: Any = field(default=None, repr=False, compare=False)
+    _targets: Any = field(default=None, repr=False, compare=False)
 
     def _owner_now(self):
         if self.user is None:
@@ -194,6 +247,58 @@ class VerifiedSchedulerRun:
     def resource_context(self):
         """The Resource Directory context of the owner, so a scope-bound read runs as the person and not as Core."""
         return _user_resource_context(self._owner_now())
+
+    # ---- 1.17.68: the scope the schedule was created with. Additive; every method above is unchanged.
+    @property
+    def has_creation_scope(self) -> bool:
+        """True when the schedule carries the scope its person had when they created or last edited it. False for a schedule made before Core 1.17.68
+        that nobody has edited since (the new reads then raise ``CreationScopeUnavailable``)."""
+        return self._creation_scope is not None
+
+    def creation_scope_info(self) -> dict | None:
+        """A copy of the stored scope, ``{v, captured_for, captured_at, scope: {unrestricted, whole_client_ids, site_ids}, flags}``, or None.
+        Changing the copy changes nothing."""
+        return copy.deepcopy(self._creation_scope) if self._creation_scope is not None else None
+
+    def _creation_scope_or_raise(self) -> dict:
+        if self._creation_scope is None:
+            from .scheduler import CreationScopeUnavailable
+
+            raise CreationScopeUnavailable()
+        return self._creation_scope
+
+    def held_at_creation(self, flag) -> bool:
+        """Did the person hold this Tactical role flag when they created or last edited the schedule? Never reads the owner's live row for an unattended
+        run, so a disabled or demoted owner changes nothing. For a run a person started it is ``has_tactical_permission(flag)``, as before. A flag that
+        is not a boolean ``can_*`` field of Tactical's Role answers False. Raises ``CreationScopeUnavailable`` for an unattended run with no stored scope."""
+        try:
+            name = _check_flag(flag)
+        except Exception:
+            return False
+        if not self.unattended:
+            return self.has_tactical_permission(name)
+        return name in self._creation_scope_or_raise()["flags"]
+
+    def resolved_endpoints(self, *, whole_scope: bool = False, limit: int | None = None) -> list:
+        """The endpoints this run may reach, as rows ``{pk, agent_id, hostname, platform, client_id, site_id}`` sorted by ``pk``.
+
+        An unattended run reads the stored creation-time scope and never the owner's live row; a run a person started reads that person's live scope,
+        as before. Either way the result is the run's targets AND that scope, so it is never wider than what the person could see. Native targets
+        (client, site, endpoint, dynamic) resolve as Core always read them; a module-owned type resolves through the module's registered resolver
+        (``scheduler_target_resolvers``). ``none`` names no endpoint, so it returns [] unless ``whole_scope=True``, which returns the whole scope.
+        ``limit`` (default and ceiling ``system_actions.MAX_AGENTS``): more endpoints than that raise, nothing is truncated. Raises
+        ``CreationScopeUnavailable`` (unattended, no stored scope), ``SchedulerPermanentError`` (targets that cannot be read as endpoints, too many)
+        or ``SchedulerTransientError`` (a read fault; try again)."""
+        ceiling = _max_agents()
+        if limit is None:
+            limit = ceiling
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= ceiling:
+            raise ValueError(f"limit must be a whole number from 1 to {ceiling}.")
+        if self.unattended:
+            snapshot, user = self._creation_scope_or_raise(), None
+        else:
+            snapshot, user = None, self._owner_now()
+        return _read_endpoint_rows(targets=self._targets or {}, module_id=self.module_id, snapshot=snapshot, user=user, whole_scope=bool(whole_scope), limit=limit)
 
 
 def _expected_id(value: Any) -> str:
@@ -246,6 +351,7 @@ def verify_run_context(
             owner_module=run.owner_module or None, owner_key=run.owner_key or None, one_off=one_off, user=user,
             owner_user_id=getattr(user, "pk", None), owner_username=getattr(user, "username", None),
             creator_username=creator or None, confirmed_by_username=confirmed or None, unattended=bool(unattended),
+            _creation_scope=_creation_scope_of(schedule), _targets=getattr(run, "targets_snapshot", None) or {},
         )
     except Exception as exc:
         if type(exc).__name__ == "SchedulerRunContextInvalid":
