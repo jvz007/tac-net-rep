@@ -29,7 +29,7 @@ def check(label, ok):
 
 meta = sa.system_actions_contract_metadata()
 row = sa.SYSTEM_FUNCTIONS.get("winupdate.set_action")
-check("capability core.system_actions is 1.3.0 and lists run_write", meta["version"] == "1.3.0" and "run_write" in meta["operations"])
+check("capability core.system_actions is 1.3.0 and lists run_write", tuple(int(x) for x in meta["version"].split("-")[0].split(".")) >= (1, 3, 0) and "run_write" in meta["operations"])
 check("the table has winupdate.set_action as a replacement-only write row",
       row is not None and row.kind == "write" and row.replacement_only is True and tuple(row.min_flags) == ("can_manage_winupdates",) and "winupdate.set_action" in meta["functions"])
 check("the metadata lists the four new refusal reasons", all(r in meta["refusal_reasons"] for r in ("wrong_kind", "bad_changes", "unknown_update", "action_not_allowed")))

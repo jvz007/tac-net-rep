@@ -1,4 +1,4 @@
-# System actions (core.system_actions 1.3.0, Core 1.17.70)
+# System actions (core.system_actions 1.4.0, Core 1.17.74)
 
 A system action lets Core run a small, fixed piece of Tactical work when nobody is signed in. The first use is a scheduled patch scan: "scan these endpoints for Windows updates every night". The person who set up the schedule is still the owner.
 
@@ -9,6 +9,8 @@ A system action lets Core run a small, fixed piece of Tactical work when nobody 
 **What is new in 1.17.68 (capability version 1.2.0, additive; Johan, 21 October 2026).** Four things, each in its own section below. (1) A schedule keeps the scope its person had when they created or last edited it, and the next person who edits it becomes its owner: "Creation-time scope and ownership". (2) A module-owned target type reads as endpoints through a resolver its module registers: "A module-owned target type". (3) Maintenance's unattended patch step can start Advanced Patch Management's scheduled install through a grant a person confirmed once: "Delegation". (4) While Advanced Patch Management is honoured, Tactical's own patch policy is switched off, so Core no longer shows the re-approve warning for its install: `docs/patch-lockdown.md`.
 
 **What is new in 1.17.70 (capability version 1.3.0, additive; Johan, 21 October 2026, CQ203 and AD-45; core.system_actions 1.2.0 was Core 1.17.68).** A second kind of row, a **write**, for the premium module that is the honoured replacement of Windows Patching. The first and only write row is `winupdate.set_action`. See "The second kind: a write". Every row and every module before it is untouched.
+
+**What is new in 1.17.74 (capability version 1.4.0, additive; Johan, 21 October 2026, Q-APM21 b).** `resolve_delegated_targets` tells a provider which endpoints a delegation ticket covers. See "Delegation" and "Durable runs with a reboot". Every row and every module before it is untouched. A reboot row and a delegated reboot are not built: they wait for Johan's signed decision (CQ213, CQ215).
 
 This page is for module developers and for administrators who want to know what a module with this power can and cannot do.
 
@@ -30,6 +32,7 @@ This is AD-13 (rules 1.7, standard section 1a). Core calling Tactical's own task
 | `scripts.run` | `scripts.tasks.bulk_script_task(script_pk, agent_pks, args, timeout, username, run_as_user, env_vars, custom_field_pk, collector_all_output, save_to_agent_note)`, keywords only (since 1.17.66) | `scriptexecution` | `can_run_bulk` and `can_run_scripts` | Takes the creator's stored name as the username and the parameters the person confirmed. |
 
 | `winupdate.set_action` | A write, not a task: `WinUpdateSerializer(update, data={"action": value}, partial=True).save()`, the same save as Tactical's `PUT winupdate/<update_id>/` (since 1.17.70) | `patching`, **honoured replacement only** | `can_manage_winupdates` | Sets one update's decision to `approve`, `ignore` or `nothing`. Takes `allowed_actions`. Always `dangerous`, never delegable. |
+
 
 The minimum flags are stricter than either Tactical route alone. Tactical's single-agent route needs `can_manage_winupdates`. Its bulk route needs `can_run_bulk`. Core needs both. For `scripts.run` Core needs `can_run_bulk` and `can_run_scripts`: Tactical's bulk route needs only `can_run_bulk`, so this is stricter on purpose.
 
@@ -217,6 +220,8 @@ Johan signed this on 21 October 2026: AD-43 (CQ204, "3) yes") for the grant, the
 4. **Maintenance's live run gets a ticket.** Inside its own LIVE Scheduler run, Maintenance calls `issue_delegation_ticket(context, grant_key=...)`. The ticket is signed, bound to that run, the grant and the grant's digest as it is now, and valid for 24 hours. The digest changes with every save of the grant, so editing, re-saving, switching off or removing the grant revokes every ticket.
 5. **APM starts the run.** Maintenance's patch step hands the ticket to APM. APM calls `start_delegated_run(ticket, action_id=..., agent_ids=[...])`. Core re-reads the grant (there, enabled, same digest, the provider and action it names), the declaration of the action, both modules and the replacement. It resolves the grant's targets and reads the endpoints inside the person's stored scope. Every endpoint passed must be in both, or the call is refused as `outside_grant` and nothing starts. Then Core creates APM's own one-off schedule and run: `created_by` the person who confirmed (the stored name when the user row is gone), targets exactly the endpoints passed, parameters exactly what was confirmed plus a marker Core signed for that schedule. APM's handler calls the unchanged `run_system_action`. APM reads the run with `get_one_off_run(run_id, owner_module="patchmanagement")`, and Maintenance reads it through APM.
 
+**Which endpoints does a ticket cover? (1.17.74, Q-APM21 option b, Johan, 21 October 2026).** `resolve_delegated_targets(ticket, *, action_id, endpoint_ids)` is called by the provider named in the grant, before it starts anything. `endpoint_ids` is a list of 1 to 40 000 whole endpoint numbers or agent id texts. Core opens the ticket and applies exactly the checks `start_delegated_run` applies before it makes a run (one shared helper), then reads the grant's targets (through the owner module's resolver) and the person's stored scope. It returns `{"agents": [{"agent_id": "...", "pk": N}], "covered": n, "not_covered": m}`: only what the ticket covers. It never names an id it refuses. It creates no run and no schedule, and it does not use up the ticket. Any ticket problem is the same single refusal, `ticket_invalid`, with one `deny` audit row; the audit row keeps the real cause (`cause`), the caller sees none, so a module cannot probe the grant. The caller is read from the call stack, as for the other delegation functions. This lets Advanced Patch Management and Maintenance stop reading Agents and Groups records for endpoint ids before the ticket is checked.
+
 **What the person reads.** One wording: the module starts it later with nobody signed in; Core checks at run time that the confirmation is unchanged, that the modules are on, that the replacement is still honoured and that every endpoint is inside the confirmed targets and the stored scope; Core does not look at the account again, so the run goes on if the account is later disabled; editing or removing the profile stops it.
 
 **Why this run is not re-checked against the person (AD-43).** A scheduled run is not re-checked against its creator (AD-13 condition 2 as amended). A one-off run a person starts is. This one-off is the continuation of a schedule the person confirmed, so it is treated as unattended, but **only while its marker verifies** (HMAC with the server's secret, bound to that very schedule) **and its grant is still enabled with the same digest**. A marker copied to another schedule, a plain one-off, the switched-off amendment (`AD13_CONDITION_2_AMENDED` False) and an edited or removed grant keep every re-check (CQ50).
@@ -293,7 +298,8 @@ The amended AD-13 puts the whole check where the person acts. For a **declared s
 - Core holds no run back between groups, and a group already queued in Tactical cannot be recalled.
 - A resolver, a stored scope and a delegation grant are module code and data read inside Core's process. They bound what Core sends. They cannot stop deliberately hostile signed module code (signed-module review stays the defence).
 - Tactical's own audit log does not show the update-decision write of 1.17.70. Core's strict audit rows are the record.
-- Commands, reboot with a result, software package uninstall, checks, tasks and reports are not in the table (see "Not in this release").
+- Commands, reboot, software package uninstall, checks, tasks and reports are not in the table (see "Not in this release").
+- Core publishes no "agent is back" event; polling is the supported path ("Durable runs with a reboot").
 
 ## The second kind: a write (Core 1.17.70, CQ203, AD-45)
 
@@ -315,18 +321,27 @@ Some Tactical work has no task. A person's decision on one Windows update is a `
 
 **Honest limits.** Tactical's own audit log does not show this write, because Core saves the column in its own process and not through Tactical's route. Core's strict rows are the record. Core writes only the decisions the module hands it, inside the envelope. It cannot judge whether a decision is wise. Reboot with a result is not part of this row.
 
+## Durable runs with a reboot (Core 1.17.74)
+
+This answers the request "Maintenance multi-step runs with reboot and resume" (agents 0.15.0, Johan, 21 October 2026). It adds no code and no new promise.
+
+**What exists today.** (1) The Scheduler's `start_one_off_run`, with its retry settings, for a module's own one-off run. (2) Delegation tickets, valid 24 hours; one ticket starts one run. (3) `register_target_resolver`, so a module-owned target type (a Maintenance profile) reads as endpoints. (4) New in this release: `resolve_delegated_targets`, which tells a provider which endpoints a ticket covers.
+
+**What is missing, and not built.** Core publishes no "agent is back" event. There is no Core call that waits for an endpoint to return. Polling is the supported path: after the reboot, Maintenance reads the endpoint's boot time through the Agents module's `get_reboot_status` (`agents.resources` 1.13.0), which compares it with the value read before the reboot, and resumes its next step when the boot time has moved. An "accepted" answer is not a restart, so a step must not resume on it. A Core event would be a later design (for example the Scheduler tick reading boot times); it is not part of this release. A release that adds one must change this section and its test together.
+
 ## Not in this release
 
 Johan answered CQ173 (yes), CQ174 (yes), CQ175 (the whole list is signed) and CQ178 (groups of at most 2000) on 20 October 2026. Core 1.17.66 builds scheduled install for the honoured replacement, groups, and the `scripts.run` row. What waits, and why:
 
 - **Pushing rule decisions (CQ174).** Johan said it runs the same Tactical operation a person uses, "never a synthetic request". Core's executor for declared operations needs a real authenticated request, and a scheduled run has none, so the two cannot both hold. A new question (CQ192) asks him how. Advanced Patch Management keeps a person-started "apply now" meanwhile.
-- **Reboot with a result, software package uninstall and checks.** Tactical v1.5.2 has no Celery task function for them. Its views send NATS commands in-process, and AD-13 says Core calls Tactical's own task functions. Tactical's own "reboot later" (`PATCH agents/<id>/reboot/` with a date) is a declared operation a person makes at creation time and needs no Core row. A new question (CQ193) asks Johan which dispatch path he signs.
+- **Software package uninstall and checks**. Tactical v1.5.2 has no Celery task function for them. Its views send NATS commands in-process, and AD-13 says Core calls Tactical's own task functions. Tactical's own "reboot later" (`PATCH agents/<id>/reboot/` with a date) is a declared operation a person makes at creation time and needs no Core row. A new question (CQ193) asks Johan which dispatch path he signs.
 - **Commands.** `bulk_command_task` exists, but the command text would have to be stored in the schedule and shown in the list, the run snapshot and the audit row. A new question (CQ194) asks how it is stored and masked.
 - **Patch KB uninstall.** Tactical has no such function. It runs as a script through `scripts.run` (Script Execution's contract), so Core builds no command text.
 - **Tasks and reports.** `run_win_task` takes a task number, not endpoint numbers, and a report email takes free recipients. Tactical already schedules tasks and reports natively. They wait on CQ193.
 - **A module-owned target type.** Built in 1.17.68 (see above). Until Maintenance and Advanced Patch Management register their resolvers, their profile targets are still refused as `targets_unresolved`.
 - **Pushing rule decisions (CQ203): built in 1.17.70** as the `winupdate.set_action` write row (see "The second kind: a write").
-- **Reboot with a result (CQ203).** Not Core's. It comes from Communicator's `communicator.messaging` contract, with Tactical's own reboot through the Agents core module's contract as the fallback, both built by module lanes (Johan, 21 October 2026).
+- **Reboot (AD-46, CQ213, CQ215): not built.** Core sends no reboot itself. Tactical v1.5.2 has no Celery task for it, and the dispatch path and the delegated reboot wait for Johan's signed decision (`reviews/questions/core.md`). A reboot that reports a result through Communicator's `communicator.messaging` is a module lane, not Core's.
+- **Other commands.** Not built. `commands.run` (CQ194, text masked in the audit row), reboot, reboot-later, shutdown and a free-text agent command are not in the table: it holds task rows and one write row, and Core builds no general command mechanism.
 - **Tactical's policy rows (`WinUpdatePolicy`).** Not asked. The patch lockdown makes a policy write unnecessary.
 - **Refusing Tactical's own `winupdate/` and `automation/patchpolicy/` mutating routes.** Not built. The patch lockdown already stops the harm Johan described (see `docs/patch-lockdown.md`).
 - **A list of delegation grants in the browser.** The audit rows and the capability carry the record for now.

@@ -37,6 +37,10 @@ Nothing here widens a scope. The endpoints of a run are inside the grant's targe
 cover every target with their own scope, or nothing changes. Honest limit: modules share Core's process, so code that reaches into Core's private state
 is outside what this stops (docs/caller-identity.md).
 
+1.17.74 (additive). ``resolve_targets`` (public as ``system_actions.resolve_delegated_targets``) tells the provider which endpoints a ticket covers before it
+starts anything. It shares one helper with ``start``, so the two apply the same ticket checks, and it gives one generic refusal for any ticket problem.
+A grant still names a task row only (an install, AD-43); a command or a write row is never delegated.
+
 Every read of Core is one small function so a test can replace it without Django.
 """
 from __future__ import annotations
@@ -268,12 +272,15 @@ def grant_digest(grant) -> str:
     })
 
 
-def _deny(reason: str, *, caller: str = "", person=None, owner_module="", provider_module="", action_id=None, grant=None, text=None):
-    """One deny row (not strict) and the refusal. A caller that Core cannot place is written at most once per five minutes per reason."""
+def _deny(reason: str, *, caller: str = "", person=None, owner_module="", provider_module="", action_id=None, grant=None, text=None, cause: str = ""):
+    """One deny row (not strict) and the refusal. A caller that Core cannot place is written at most once per five minutes per reason.
+    ``cause`` (1.17.74) is the real reason behind a generic refusal; it goes into the audit row only, never into what the caller sees."""
     message = text or REASONS.get(reason, "The delegation was refused.")
     if reason != "caller_unverified" or _sa._unmatched_due(reason, caller):
         try:
             metadata = {"reason": reason, "requested_by": "delegation"}
+            if cause:
+                metadata["cause"] = str(cause)[:60]
             if owner_module:
                 metadata["owner_module"] = str(owner_module)[:100]
             if provider_module:
@@ -319,43 +326,44 @@ def _check_ids(owner_module, provider_module, meta: dict) -> None:
         _deny("bad_module", **meta)
 
 
-def _provider_action(owner_module: str, provider_module: str, action_id, **extra):
+def _provider_action(owner_module: str, provider_module: str, action_id, *, deny=None, **extra):
     """``(scheduled action, definition, function row)`` when the provider's system action may be delegated to ``owner_module``, else a refusal.
-    ``extra`` (person, grant, caller) only goes into the deny row."""
+    ``extra`` (person, grant, caller) only goes into the deny row. ``deny`` (1.17.74) replaces ``_deny`` for a caller that gives one generic refusal."""
+    deny = deny or _deny
     meta = {"owner_module": owner_module, "provider_module": provider_module, "action_id": action_id if isinstance(action_id, str) else None, **extra}
     with _sa._LOCK:
         definition = _sa._ACTIONS.get(action_id) if isinstance(action_id, str) else None
     if definition is None or definition.module_id != provider_module:
-        _deny("unknown_action", **meta)
+        deny("unknown_action", **meta)
     try:
         action = get_scheduled_action(action_id)
     except Exception:  # noqa: BLE001 - fail closed: a fault here must never raise out of this path
         action = None
     if action is None or action.module_id != provider_module:
-        _deny("unknown_action", **meta)
+        deny("unknown_action", **meta)
     if owner_module not in definition.delegable_to:
-        _deny("not_delegable", **meta)
+        deny("not_delegable", **meta)
     entry = _sa.SYSTEM_FUNCTIONS.get(definition.function)
     if entry is None:
-        _deny("unknown_action", **meta)
+        deny("unknown_action", **meta)
     if entry.kind != _sa.KIND_TASK:  # 1.17.70: a write is never started for someone else (registration also keeps its delegable_to empty)
-        _deny("not_delegable", **meta)
+        deny("not_delegable", **meta)
     if not _sa._declared_now(provider_module, action_id):
-        _deny("action_not_declared", **meta)
+        deny("action_not_declared", **meta)
     for module in (provider_module, owner_module):
         try:
             enabled = _sa._enabled_now(module)
         except Exception:  # noqa: BLE001 - fail closed: a fault here must never raise out of this path
             enabled = False
         if not enabled:
-            _deny("module_disabled", **meta)
+            deny("module_disabled", **meta)
     if definition.via_replacement:
         try:
             honoured = _sa._honoured(provider_module) == entry.owner_module
         except Exception:  # noqa: BLE001 - fail closed: a fault here must never raise out of this path
             honoured = False
         if not honoured:
-            _deny("replacement_not_honoured", **meta)
+            deny("replacement_not_honoured", **meta)
     return action, definition, entry
 
 
@@ -587,34 +595,43 @@ def run_is_validly_delegated(run) -> bool:
         return False
 
 
+def _checked_ticket(caller: str, ticket, action_id, meta: dict, deny):
+    """The ticket checks ``start`` and ``resolve_targets`` share (1.17.74): signature, expiry, the grant present, enabled and unchanged, the caller is the
+    grant's provider, the action matches, and the provider's action may be delegated, is declared, its modules are on and its replacement is honoured.
+    ``deny(reason, **kw)`` raises: ``start`` passes ``_deny`` (a specific reason), ``resolve_targets`` a function that gives one generic refusal.
+    Returns ``(ticket body, grant, grant digest, scheduled action)``. ``meta`` is filled in as the ticket is read."""
+    body = _open(_TICKET_PREFIX, ticket)
+    if body is None:
+        deny("ticket_invalid", caller=caller, provider_module=caller, **meta)
+    meta.update(provider_module=caller, owner_module=str(body.get("o") or ""))
+    try:
+        if int(body.get("x", 0)) < int(_clock()):
+            deny("ticket_expired", caller=caller, **meta)
+    except (TypeError, ValueError):
+        deny("ticket_invalid", caller=caller, **meta)
+    grant = _grants().filter(pk=body.get("g")).first()
+    if grant is None:
+        deny("grant_missing", caller=caller, **meta)
+    if not grant.enabled:
+        deny("grant_disabled", caller=caller, grant=grant, **meta)
+    digest = grant_digest(grant)
+    if digest != body.get("d") or grant.owner_module != body.get("o") or grant.provider_module != body.get("p"):
+        deny("grant_changed", caller=caller, grant=grant, **meta)
+    if grant.provider_module != caller:
+        deny("wrong_module", caller=caller, grant=grant, **meta)
+    if grant.action_id != action_id:
+        deny("unknown_action", caller=caller, grant=grant, **meta)
+    action, _definition, _entry = _provider_action(grant.owner_module, caller, action_id, deny=deny, grant=grant, caller=caller)
+    return body, grant, digest, action
+
+
 def start(ticket, *, action_id, agent_ids, name=None):
     """Create and queue the provider's own one-off run for the grant behind ``ticket``. Returns the queued run."""
     caller = _verified_caller()
     meta = {"action_id": action_id if isinstance(action_id, str) else None}
     if not caller:
         _deny("caller_unverified", caller="", **meta)
-    body = _open(_TICKET_PREFIX, ticket)
-    if body is None:
-        _deny("ticket_invalid", caller=caller, provider_module=caller, **meta)
-    meta.update(provider_module=caller, owner_module=str(body.get("o") or ""))
-    try:
-        if int(body.get("x", 0)) < int(_clock()):
-            _deny("ticket_expired", caller=caller, **meta)
-    except (TypeError, ValueError):
-        _deny("ticket_invalid", caller=caller, **meta)
-    grant = _grants().filter(pk=body.get("g")).first()
-    if grant is None:
-        _deny("grant_missing", caller=caller, **meta)
-    if not grant.enabled:
-        _deny("grant_disabled", caller=caller, grant=grant, **meta)
-    digest = grant_digest(grant)
-    if digest != body.get("d") or grant.owner_module != body.get("o") or grant.provider_module != body.get("p"):
-        _deny("grant_changed", caller=caller, grant=grant, **meta)
-    if grant.provider_module != caller:
-        _deny("wrong_module", caller=caller, grant=grant, **meta)
-    if grant.action_id != action_id:
-        _deny("unknown_action", caller=caller, grant=grant, **meta)
-    action, _definition, _entry = _provider_action(grant.owner_module, caller, action_id, grant=grant, caller=caller)
+    body, grant, digest, action = _checked_ticket(caller, ticket, action_id, meta, _deny)
     ids, reason = _sa._agent_ids(agent_ids)
     if reason:
         _deny(reason, caller=caller, grant=grant, **meta)
@@ -691,3 +708,74 @@ def start(ticket, *, action_id, agent_ids, name=None):
         schedule.delete()
         raise SchedulerTransientError(REASONS["queue_failed"]) from exc
     return run
+
+
+# ------------------------------------------------------------------------------------------------ which endpoints a ticket covers (1.17.74)
+MAX_REF_CHARS = 100  # an agent id text is far shorter; anything longer is not one
+
+
+def _endpoint_refs(endpoint_ids):
+    """The distinct references (whole numbers and agent id texts) of a call, or a reason code. The count is judged before anything else."""
+    if isinstance(endpoint_ids, (str, bytes, dict)) or not isinstance(endpoint_ids, (list, tuple, set, frozenset)):
+        return None, "bad_agents"
+    if len(endpoint_ids) == 0 or len(endpoint_ids) > _sa.MAX_AGENTS:
+        return None, "agent_count"
+    refs = set()
+    for value in endpoint_ids:
+        if isinstance(value, bool):
+            return None, "bad_agents"
+        if isinstance(value, int):
+            if not 0 < value < 2**63:
+                return None, "bad_agents"
+        elif not isinstance(value, str) or not 0 < len(value) <= MAX_REF_CHARS or not value.isprintable():
+            return None, "bad_agents"
+        refs.add(value)
+    return sorted(refs, key=lambda ref: (isinstance(ref, str), ref)), None
+
+
+def resolve_targets(ticket, *, action_id, endpoint_ids) -> dict:
+    """Which of ``endpoint_ids`` does the grant behind ``ticket`` cover? ``{"agents": [{"agent_id", "pk"}], "covered", "not_covered"}``.
+
+    Exactly the checks ``start`` makes before it creates a run (one shared helper), then the grant's targets (the owner module's resolver) and the person's
+    stored creation-time scope. It names no endpoint it refuses, creates no run, no schedule and writes no audit row except one ``deny`` row per refusal.
+    Every ticket problem is the same single refusal (``ticket_invalid``), so a module cannot probe the grant; the real reason is in the audit row only."""
+    caller = _verified_caller()
+    meta = {"action_id": action_id if isinstance(action_id, str) else None}
+    if not caller:
+        _deny("caller_unverified", caller="", **meta)
+
+    def generic(reason, **kw):
+        _deny("ticket_invalid", caller=caller, provider_module=kw.get("provider_module") or caller, owner_module=kw.get("owner_module") or "",
+              action_id=kw.get("action_id"), grant=kw.get("grant"), cause=reason)
+
+    _body, grant, _digest, _action = _checked_ticket(caller, ticket, action_id, meta, generic)
+    refs, reason = _endpoint_refs(endpoint_ids)
+    if reason:
+        _deny(reason, caller=caller, grant=grant, **meta)
+    snapshot = scheduler_creation_scope.snapshot_of(grant)
+    if snapshot is None:
+        generic("creation_scope_unavailable", grant=grant, **meta)
+    try:
+        resolved = _sa._target_pks(grant.targets or {}, grant.owner_module)
+    except Exception:
+        logger.warning("The targets of a delegation grant could not be resolved; nothing is returned.", exc_info=True)
+        resolved = None
+    if resolved is None:
+        generic("targets_unresolved", grant=grant, **meta)
+    try:
+        rows = _agent_rows(pks=sorted({int(pk) for pk in resolved[0]}), snapshot=snapshot, limit=_sa.MAX_AGENTS)
+    except Exception:
+        logger.warning("The endpoints of a delegation grant could not be read.", exc_info=True)
+        raise SchedulerTransientError("Core could not read the endpoints just now. Try again.") from None
+    if len(rows) > _sa.MAX_AGENTS:
+        generic("targets_unresolved", grant=grant, **meta)
+    by_pk = {int(row["pk"]): row for row in rows}
+    by_id = {str(row["agent_id"]): row for row in rows}
+    covered, matched = {}, 0
+    for ref in refs:
+        row = by_pk.get(ref) if isinstance(ref, int) else by_id.get(ref)
+        if row is not None:
+            matched += 1
+            covered[int(row["pk"])] = row
+    agents = [{"agent_id": str(covered[pk]["agent_id"]), "pk": pk} for pk in sorted(covered)]
+    return {"agents": agents, "covered": len(agents), "not_covered": len(refs) - matched}

@@ -127,8 +127,8 @@ print("       a second call of the same run with other update numbers still work
 must(sa.REASONS["decisions_changed"] == TEXT, sa.REASONS.get("decisions_changed"))
 meta = sa.system_actions_contract_metadata()
 must("decisions_changed" in meta["write"]["refusal_reasons"] and set(meta["refusal_reasons"]) == set(sa.REASONS), meta["write"]["refusal_reasons"])
-must(meta["version"] == "1.3.0" if "version" in meta else True, "core.system_actions stays at 1.3.0")
-print("       decisions_changed is in REASONS and in the write refusal reasons; core.system_actions stays at 1.3.0")
+must((tuple(int(x) for x in meta["version"].split("-")[0].split(".")) >= (1, 3, 0)) if "version" in meta else True, "core.system_actions is 1.3.0 or later (1.4.0 since 1.17.74)")
+print("       decisions_changed is in REASONS and in the write refusal reasons; core.system_actions is 1.3.0 or later")
 
 # ---- (7) a plan written by 1.17.70 (no ids_key; targets_digest is the ids-only digest)
 fresh(4)

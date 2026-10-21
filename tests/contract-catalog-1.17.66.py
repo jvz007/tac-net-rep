@@ -71,7 +71,7 @@ for text in ("scripts.run", "groups of at most 2000", "CQ178", "CQ173", "Yes or 
 print("       the HTTP route has its entry (body, response, errors, notes) and the rule names capability 1.1.0, scripts.run and the groups")
 
 meta = sa.system_actions_contract_metadata()
-must(meta["version"] == "1.3.0" and meta["operations"] == ["list_actions", "get_action", "run", "describe_confirmation", "describe_delegation", "register_delegation_grant", "remove_delegation_grant", "issue_delegation_ticket", "start_delegated_run", "run_write"], meta)  # 1.17.68: the five delegation operations are appended, none of the four earlier ones changed; 1.17.70: run_write is appended
+must((tuple(int(x) for x in meta["version"].split("-")[0].split(".")) >= (1, 3, 0)) and meta["operations"][:10] == ["list_actions", "get_action", "run", "describe_confirmation", "describe_delegation", "register_delegation_grant", "remove_delegation_grant", "issue_delegation_ticket", "start_delegated_run", "run_write"], meta)  # 1.17.68: the five delegation operations are appended, none of the four earlier ones changed; 1.17.70: run_write is appended; 1.17.74: resolve_delegated_targets is appended (the first ten are checked, version is >=)
 must(set(meta["functions"]) == {"winupdate.scan", "winupdate.install", "scripts.run", "winupdate.set_action"} and set(meta["refusal_reasons"]) == set(sa.REASONS), meta)
 must(meta["functions"]["scripts.run"]["takes_username"] is True and meta["functions"]["scripts.run"]["min_flags"] == ["can_run_bulk", "can_run_scripts"], meta["functions"]["scripts.run"])
 must(meta["http"] == {"confirmation": "POST /api/tfd/scheduler/system-actions/confirmation/"} and meta["requires_framework"].startswith(">=1.17.61") and "1.17.66" in meta["requires_framework"], meta)

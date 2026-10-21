@@ -76,8 +76,8 @@ print("       the changed rows, the route notes and the system-actions rule say 
 
 # ---- the capabilities
 meta = sa.system_actions_contract_metadata()
-must(meta["version"] == "1.3.0" and meta["operations"][:4] == ["list_actions", "get_action", "run", "describe_confirmation"] and meta["operations"][4:] == [
-    "describe_delegation", "register_delegation_grant", "remove_delegation_grant", "issue_delegation_ticket", "start_delegated_run", "run_write"], meta["operations"])  # 1.17.70: run_write appended
+must((tuple(int(x) for x in meta["version"].split("-")[0].split(".")) >= (1, 3, 0)) and meta["operations"][:4] == ["list_actions", "get_action", "run", "describe_confirmation"] and meta["operations"][4:10] == [
+    "describe_delegation", "register_delegation_grant", "remove_delegation_grant", "issue_delegation_ticket", "start_delegated_run", "run_write"], meta["operations"])  # 1.17.70: run_write appended; 1.17.74: resolve_delegated_targets appended after the first ten (version is >=)
 must(">=1.17.68" in meta["requires_framework"] and ">=1.17.61" in meta["requires_framework"] and "delegation" in meta, meta["requires_framework"])
 for name in ("describe_delegation(", "register_delegation_grant(", "remove_delegation_grant(", "issue_delegation_ticket(", "start_delegated_run(", "delegable_to=()"):
     must(name in meta["python"], name)

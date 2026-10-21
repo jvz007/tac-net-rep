@@ -67,7 +67,7 @@ must("1.17.67" in index[("tec_tac.system_action_confirmation", "SystemActionCrea
 for reason in sa.REASONS:
     must(reason in index[("tec_tac.system_actions", "SystemActionRefused")]["purpose"], f"reason {reason} is not described")
 meta = sa.system_actions_contract_metadata()
-must(meta["version"] == "1.3.0" and "declaration_unreadable" in meta["refusal_reasons"] and meta["delivery"] == "at most once per group", meta)
+must((tuple(int(x) for x in meta["version"].split("-")[0].split(".")) >= (1, 3, 0)) and "declaration_unreadable" in meta["refusal_reasons"] and meta["delivery"] == "at most once per group", meta)
 print("       the run_system_action row carries the plan rule and the limit; both refusal rows name declaration_unreadable; the capability stays 1.1.0")
 
 # ---- the held Low 'kit props rows' stays closed

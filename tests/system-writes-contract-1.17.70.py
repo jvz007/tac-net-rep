@@ -22,8 +22,8 @@ exec(compile(H.read_text(encoding="utf-8"), str(H), "exec"), globals())  # noqa:
 meta = sa.system_actions_contract_metadata()
 EARLIER = ["list_actions", "get_action", "run", "describe_confirmation", "describe_delegation", "register_delegation_grant", "remove_delegation_grant",
            "issue_delegation_ticket", "start_delegated_run"]
-must(meta["version"] == "1.3.0" and sa.CAPABILITY_VERSION == "1.3.0", meta["version"])
-must(meta["operations"] == EARLIER + ["run_write"] and list(sa.OPERATIONS) == EARLIER + ["run_write"], meta["operations"])
+must((tuple(int(x) for x in meta["version"].split("-")[0].split(".")) >= (1, 3, 0)) and sa.CAPABILITY_VERSION == meta["version"], meta["version"])  # 1.17.74: 1.4.0 (>= so a -N rebuild passes)
+must(meta["operations"][:10] == EARLIER + ["run_write"] and list(sa.OPERATIONS)[:10] == EARLIER + ["run_write"], meta["operations"])  # 1.17.74: resolve_delegated_targets is appended after them
 must(all(callable(getattr(sa._PROVIDER, name, None)) for name in meta["operations"]), "the provider has every operation, run_write included")
 print("       core.system_actions is 1.3.0; the nine earlier operations stay first and in order; run_write is appended and exists on the provider")
 
@@ -88,7 +88,7 @@ print("       contracts.py: the run_system_write row, the register and refusal r
 
 # ---- the docs
 doc = (ROOT / "docs" / "system-actions.md").read_text(encoding="utf-8")
-must(doc.startswith("# System actions (core.system_actions 1.3.0, Core 1.17.70)"), doc[:80])
+must(doc.startswith("# System actions (core.system_actions 1."), doc[:80])  # 1.17.74: 1.4.0, Core 1.17.74
 for needle in ("The second kind: a write", "AD-45", "CQ203", "winupdate.set_action", "run_system_write", "replacement_only", "honoured replacement", "changed_meanwhile", "custom:write-closed",
                "Tactical's own audit log does not show", "Reboot with a result", "Communicator", "wrong_kind", "bad_changes", "unknown_update", "action_not_allowed"):
     must(needle in doc, f"docs/system-actions.md lacks {needle!r}")

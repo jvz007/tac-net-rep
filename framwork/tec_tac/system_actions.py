@@ -1,4 +1,4 @@
-"""System actions: typed Tactical work that Core runs unattended for a named owner (core.system_actions 1.3.0, Core 1.17.70; first built 1.17.61, R-20, AD-13).
+"""System actions: typed Tactical work that Core runs unattended for a named owner (core.system_actions 1.4.0, Core 1.17.74; first built 1.17.61, R-20, AD-13).
 
 A system action is a Tactical function that Core may run when nobody is signed in: a scheduled patch scan, for example. It is not a free
 path into Tactical. Core holds a fixed table, ``SYSTEM_FUNCTIONS``, of the few Tactical functions it will reach. A module cannot name a
@@ -56,6 +56,9 @@ serializer. The first and only write row is ``winupdate.set_action`` (the approv
 replacement of ``patching`` right now may. A module names only the key. ``run_system_write`` runs it with the same checks in the same order as
 ``run_system_action``, then reads each update's endpoint itself and judges the endpoint set like ``agent_ids``. See ``system_writes.py`` and
 docs/system-actions.md.
+
+1.17.74 (additive, capability 1.4.0, Q-APM21 b). ``resolve_delegated_targets`` (delegation.py) tells a provider which endpoints a delegation ticket covers.
+There is no command kind: a reboot row waits for Johan's signed decision (CQ213, CQ215). See docs/system-actions.md.
 """
 from __future__ import annotations
 
@@ -78,7 +81,7 @@ from .scheduler import SchedulerPermanentError, SchedulerTransientError
 logger = logging.getLogger("tec_tac.system_actions")
 
 CAPABILITY_ID = "core.system_actions"
-CAPABILITY_VERSION = "1.3.0"
+CAPABILITY_VERSION = "1.4.0"
 MAX_AGENTS_PER_GROUP = 2000  # Johan, CQ178: more than this splits into groups of at most this many
 MAX_GROUPS = 20  # the ceiling of one run (assumption CQ195, asked): 20 groups
 MAX_AGENTS = MAX_AGENTS_PER_GROUP * MAX_GROUPS  # a Core constant: refused above, never truncated
@@ -1276,8 +1279,17 @@ def start_delegated_run(ticket, *, action_id, agent_ids, name=None):
     return delegation.start(ticket, action_id=action_id, agent_ids=agent_ids, name=name)
 
 
+def resolve_delegated_targets(ticket, *, action_id, endpoint_ids) -> dict:
+    """Which of ``endpoint_ids`` (1 to 40 000 endpoint numbers or agent id texts) does ``ticket`` cover? (1.17.74, Q-APM21 b.) The caller must be the grant's
+    provider module. Applies the ticket checks ``start_delegated_run`` applies before it makes a run, then returns ``{"agents": [{"agent_id", "pk"}], "covered", "not_covered"}``
+    and names no endpoint it refuses. Any ticket problem is one generic refusal (``ticket_invalid``). Creates no run and no schedule."""
+    from . import delegation
+
+    return delegation.resolve_targets(ticket, action_id=action_id, endpoint_ids=endpoint_ids)
+
+
 class _SystemActionsProvider:
-    """The ``core.system_actions`` 1.3.0 provider: list_actions, get_action, run, describe_confirmation, (1.17.68) the five delegation operations and (1.17.70) run_write."""
+    """The ``core.system_actions`` 1.4.0 provider: list_actions, get_action, run, describe_confirmation, (1.17.68) the five delegation operations, (1.17.70) run_write and (1.17.74) resolve_delegated_targets."""
 
     def list_actions(self) -> list[dict]:
         return registered_system_actions()
@@ -1314,12 +1326,16 @@ class _SystemActionsProvider:
     def start_delegated_run(self, ticket, *, action_id, agent_ids, name=None):
         return start_delegated_run(ticket, action_id=action_id, agent_ids=agent_ids, name=name)
 
+    def resolve_delegated_targets(self, ticket, *, action_id, endpoint_ids) -> dict:
+        """1.17.74: which endpoints a delegation ticket covers. The caller is read from the stack, so this route and a direct import give the same answer."""
+        return resolve_delegated_targets(ticket, action_id=action_id, endpoint_ids=endpoint_ids)
+
 
 _PROVIDER = _SystemActionsProvider()
 OPERATIONS = (
     "list_actions", "get_action", "run", "describe_confirmation",
     "describe_delegation", "register_delegation_grant", "remove_delegation_grant", "issue_delegation_ticket", "start_delegated_run",
-    "run_write",
+    "run_write", "resolve_delegated_targets",
 )
 
 
@@ -1339,7 +1355,9 @@ def system_actions_contract_metadata() -> dict:
             "tec_tac.system_actions.issue_delegation_ticket(context, *, grant_key) -> str; "
             "tec_tac.system_actions.start_delegated_run(ticket, *, action_id, agent_ids, name=None) -> TecTacScheduleRun (queued); "
             "tec_tac.system_actions.run_system_write(context, *, action_id, changes) -> {outcome: 'written', changes, written, unchanged, changed_meanwhile, groups: {total, sent, failed, not_started}, message, summary} "
-            "(1.17.70, the second kind, honoured replacement only)"
+            "(1.17.70, the second kind, honoured replacement only); "
+            "tec_tac.system_actions.resolve_delegated_targets(ticket, *, action_id, endpoint_ids) -> {agents: [{agent_id, pk}], covered, not_covered} "
+            "(1.17.74, Q-APM21 b)"
         ),
         "write": {
             "kinds": ["task", "write"], "function": "winupdate.set_action", "changes": "list of {update_id: int, action: 'approve' | 'ignore' | 'nothing'}, exactly those keys, each update once",
@@ -1350,7 +1368,8 @@ def system_actions_contract_metadata() -> dict:
         "delegation": {
             "grants_per_owner_module": 20, "ticket_seconds": 24 * 3600, "confirmation_seconds": 600,
             "callers": {"describe_delegation": "owner module", "register_delegation_grant": "owner module", "remove_delegation_grant": "owner module",
-                        "issue_delegation_ticket": "owner module, from its own live Scheduler run", "start_delegated_run": "provider module named by the grant"},
+                        "issue_delegation_ticket": "owner module, from its own live Scheduler run", "start_delegated_run": "provider module named by the grant",
+                        "resolve_delegated_targets": "provider module named by the grant"},
         },
         "functions": {
             key: {
@@ -1369,7 +1388,7 @@ def system_actions_contract_metadata() -> dict:
         "http": {"confirmation": "POST /api/tfd/scheduler/system-actions/confirmation/"},
         "delivery": "at most once per group",
         "audit_actions": ["run (strict, before each group's send)", "deny (one per refusal)", "custom:outcome-unknown", "add and modify on the schedule (strict)"],
-        "requires_framework": ">=1.17.61 (groups, parameters, scripts.run and describe_confirmation need >=1.17.66; delegable_to, the five delegation operations and module-owned target resolvers need >=1.17.68; run_write and the winupdate.set_action row need >=1.17.70)",
+        "requires_framework": ">=1.17.61 (groups, parameters, scripts.run and describe_confirmation need >=1.17.66; delegable_to, the five delegation operations and module-owned target resolvers need >=1.17.68; run_write and the winupdate.set_action row need >=1.17.70; resolve_delegated_targets needs >=1.17.74)",
         "unattended": "A scheduled run of a user-owned schedule skips owner_inactive, permission_lost and out_of_scope (>=1.17.65; the unattended= flag has no effect); every other check stays. A manual or one-off run keeps all of them.",
     }
 
@@ -1382,7 +1401,7 @@ def register_core_system_actions_capability():
         module_id="core",
         version=CAPABILITY_VERSION,
         provider=_PROVIDER,
-        description="Typed Tactical functions that Core runs unattended for a named owner, in groups of at most 2000 endpoints, with the owner and scope checked at every person-started run and the permission, scope and one Yes or No checked when a person creates or edits the schedule (>=1.17.66); a scheduled run is not re-checked against its creator (>=1.17.65); a module may start another module's action under a delegation grant a person confirmed once (>=1.17.68); the honoured replacement of Windows Patching may write Windows update decisions through run_write, with a strict before and after audit row for every update (>=1.17.70).",
+        description="Typed Tactical functions that Core runs unattended for a named owner, in groups of at most 2000 endpoints, with the owner and scope checked at every person-started run and the permission, scope and one Yes or No checked when a person creates or edits the schedule (>=1.17.66); a scheduled run is not re-checked against its creator (>=1.17.65); a module may start another module's action under a delegation grant a person confirmed once (>=1.17.68); the honoured replacement of Windows Patching may write Windows update decisions through run_write, with a strict before and after audit row for every update (>=1.17.70); the provider named in a delegation grant may ask which endpoints a ticket covers through resolve_delegated_targets (>=1.17.74).",
         operations=OPERATIONS,
         metadata=system_actions_contract_metadata(),
     )
