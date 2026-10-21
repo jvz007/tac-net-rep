@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.70",
+  "version": "1.17.71",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.17.70.md",
-      "size": 14959,
-      "sha256": "3f0b5bcf4769e14701ca6d7892b8abef58c8be822ca492b60b6ccffc420daf62"
+      "path": "RELEASE_NOTES_1.17.71.md",
+      "size": 12953,
+      "sha256": "8e3e794e4a65ad46676a12ef1a8fdc0e4aaaa4f0d936e0cf3634ced02d0bf741"
     },
     {
       "path": "VERSION",
       "size": 7,
-      "sha256": "5866fb98187cfe962910060a5591400e98c83c038c9a673319d8439f1e74c0e2"
+      "sha256": "08532cb13d8bfc269a6e818ab266f91be1dffe57fd9c0f8c326eb789a8bd38bd"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -78,8 +78,8 @@
     },
     {
       "path": "docs/capabilities.md",
-      "size": 13007,
-      "sha256": "96865458ba8f2c1a7e43858b14023797914e059a6035a8f5008f91b77bb88638"
+      "size": 13263,
+      "sha256": "0d0f0a856fc374145379a71de5ed7b6e2b20eac026b7d471e5178e66fe66be94"
     },
     {
       "path": "docs/core-functions.md",
@@ -125,6 +125,11 @@
       "path": "docs/module-categories.md",
       "size": 5326,
       "sha256": "ead072ecb4afc1afd24bdb998b1d87b36e529bb7990a9441418b7f96f1d9f085"
+    },
+    {
+      "path": "docs/module-dependants.md",
+      "size": 2584,
+      "sha256": "36fe6ee1700a5fd391b5e8ade53ed42bafc3171daa799139504e51e08fd6dd33"
     },
     {
       "path": "docs/module-hotfixes.md",
@@ -1417,6 +1422,11 @@
       "sha256": "f288a2d999944822827d8767f406f50bda6894c7dc9d8908a476e4f391a6c8cb"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.70.md",
+      "size": 14959,
+      "sha256": "3f0b5bcf4769e14701ca6d7892b8abef58c8be822ca492b60b6ccffc420daf62"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.8.md",
       "size": 6017,
       "sha256": "522041d551b428c183247e1ecca653d55dc02c20a8e2344c51024a44d51bdb91"
@@ -1548,8 +1558,8 @@
     },
     {
       "path": "docs/system-actions.md",
-      "size": 51917,
-      "sha256": "ee8f52aa969b61e8625695be6a4a6826e74399a7c194a1b7cb5fa3664188b2d0"
+      "size": 53143,
+      "sha256": "a895dacaae65dfe14aba918f999d7613e412ba156f158c43b0ad483ecce7d076"
     },
     {
       "path": "docs/system-update-logs.md",
@@ -1793,8 +1803,8 @@
     },
     {
       "path": "framwork/tec_tac/apps.py",
-      "size": 8884,
-      "sha256": "2e0f9c98b832b20ac2e053d0931d9eb3e8ab96bf80efb77c43d8fa2ae5d298cc"
+      "size": 9364,
+      "sha256": "6d16b4389252856b07c8e86254dd9a48c860b2d8ed909c26a55f4ae3287a8de5"
     },
     {
       "path": "framwork/tec_tac/audit.py",
@@ -1843,8 +1853,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 411979,
-      "sha256": "4d093e4e9a4af80e92598d063edb64dd6eda42b68a942db1ec29080b8a5e2062"
+      "size": 414474,
+      "sha256": "98e634d00f1eb26e2a0cb738485953279b4998e7ef4129daad0bfa2236f82d4e"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -2137,6 +2147,11 @@
       "sha256": "6294d60d794d71a66966f27dcd2e6afe228cdaf304b4e1dfd4d04e2245f3072e"
     },
     {
+      "path": "framwork/tec_tac/module_dependants.py",
+      "size": 7081,
+      "sha256": "e9a6b024529d4cc3e8038f49e1deb06c37521ca431e5b13a7eaac0d38012a489"
+    },
+    {
       "path": "framwork/tec_tac/module_failure_notices.py",
       "size": 30285,
       "sha256": "83f1906edc875c1c9f6708d6bbba08636b2c3663399c75d08e84bd07a60ce64e"
@@ -2263,8 +2278,8 @@
     },
     {
       "path": "framwork/tec_tac/registry.py",
-      "size": 37569,
-      "sha256": "fd269eaef787dd43094844e37672d6ed6bd6a84b4aae3b2fcd26e4027e1389e1"
+      "size": 39006,
+      "sha256": "80031da06ebed3bc67d12353421eb8614dc17390ccb5640e1876584b15095bda"
     },
     {
       "path": "framwork/tec_tac/reporting.py",
@@ -2393,8 +2408,8 @@
     },
     {
       "path": "framwork/tec_tac/system_actions.py",
-      "size": 82898,
-      "sha256": "7710d32b9accbce6dce0bce5a8609b7102370be424fd696ef7636c5439e85aad"
+      "size": 85475,
+      "sha256": "8dce11fab432e0ef3629a31fc768b149a592d6e19b8867302309f2c3b635f4d5"
     },
     {
       "path": "framwork/tec_tac/system_update.py",
@@ -2669,7 +2684,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "56edc0f410907ac875ccc03ed9bf64226676ef2d1a85c290198c0ecddfd53c1f"
+      "sha256": "045ad9ca239ce471693bbc0f0f421bb2102730b14072e82f984e681e95fd2f58"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2773,8 +2788,8 @@
     },
     {
       "path": "tests/audit-declared-browser-events-1.16.0.py",
-      "size": 23735,
-      "sha256": "7713d3cec284ea500aee81b6f01aed7b42e2bf9c106fc281b05fd2935a55c3fe"
+      "size": 23845,
+      "sha256": "ba4fafbeecb0a7c92474dcc36e4022b67b0c54f85a92a88c1ad5d8c9595f97df"
     },
     {
       "path": "tests/audit-declared-browser-events-1.17.0.py",
@@ -3520,6 +3535,16 @@
       "path": "tests/module-category-install-route-1.17.13.py",
       "size": 10287,
       "sha256": "edf3e4c9a578a7b7fa93f8217fcb43019027b36a149d34f6bcbc369b4cbeee41"
+    },
+    {
+      "path": "tests/module-dependants-1.17.71.py",
+      "size": 14654,
+      "sha256": "0d1f812c1679b69a0c415cfc654a6598a3f958e5a1ee5839462f4cce6babb5b9"
+    },
+    {
+      "path": "tests/module-dependants-runtime-1.17.71.py",
+      "size": 4993,
+      "sha256": "cd2246889deb9aae561a37b96bfe568c0b60b52aaea3217673670aa466f5b580"
     },
     {
       "path": "tests/module-failure-notices-1.17.14.py",
@@ -5030,6 +5055,11 @@
       "path": "tests/system-writes-registration-1.17.70.py",
       "size": 6609,
       "sha256": "9624bb23020c82d63d432b7e030a876b18739c155da4dc1cf8e869d336cc6bbf"
+    },
+    {
+      "path": "tests/system-writes-retry-1.17.71.py",
+      "size": 10152,
+      "sha256": "f6671139fd245bf54a350c09082c12d9d4ab915901462d34e8443a4fb16c6f9b"
     },
     {
       "path": "tests/system-writes-run-1.17.70.py",

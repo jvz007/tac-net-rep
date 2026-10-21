@@ -632,6 +632,7 @@ REASONS = {
     "bad_changes": f"The changes are not a list of 1 to {MAX_WRITE_ITEMS} items of exactly update_id and action, each update once.",
     "unknown_update": "At least one update does not exist, so nothing was written.",
     "action_not_allowed": "At least one decision is not one the person confirmed, so nothing was written.",
+    "decisions_changed": "This run already tried these updates with other decisions, so Core wrote nothing new. Start a new run if you want the new decisions.",
 }
 
 _UNMATCHED: dict[tuple[str, str], float] = {}
@@ -740,14 +741,24 @@ def _agent_ids(agent_ids):
     return sorted(ids), None
 
 
-def _digest(run_id, action_id: str, ids) -> str:
+def _decision_pairs(ids, decisions) -> str:
+    """1.17.71: the sorted ``id:action`` pairs of a write, so a digest changes when a decision changes (and not when the input order does)."""
+    return ",".join(f"{i}:{decisions[i]}" for i in sorted(ids))
+
+
+def _digest(run_id, action_id: str, ids, decisions=None) -> str:
+    """The at-most-once key of one group. ``decisions`` (a write only) binds the decisions into it; None keeps the formula of every task row."""
     raw = f"{run_id}|{action_id}|" + ",".join(str(i) for i in ids)
-    return hashlib.sha256(raw.encode("ascii")).hexdigest()[:32]
+    if decisions is not None:
+        raw += "|decisions|" + _decision_pairs(ids, decisions)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
 
-def _plan_digest(run_id, action_id: str, ids) -> str:
+def _plan_digest(run_id, action_id: str, ids, decisions=None) -> str:
     raw = f"{run_id}|{action_id}|plan|" + ",".join(str(i) for i in ids)
-    return hashlib.sha256(raw.encode("ascii")).hexdigest()[:32]
+    if decisions is not None:
+        raw += "|decisions|" + _decision_pairs(ids, decisions)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
 
 def _ranges_of(ids) -> list:
@@ -777,10 +788,15 @@ def _is_plan(mark) -> bool:
     return isinstance(mark, dict) and mark.get("kind") == KIND_PLAN
 
 
-def _claim_plan(run_id, action_id: str, ids, group_digests):
+def _claim_plan(run_id, action_id: str, ids, group_digests, decisions=None):
     """Fix the group plan of this call under the run's row lock (1.17.67). Returns ``(state, plan)``: ``new`` or ``same`` (go on with
-    ``plan``), ``changed`` (an overlapping plan has a group that was claimed, sent or left unknown: send nothing), ``gone`` or ``full``."""
-    digest = _plan_digest(run_id, action_id, ids)
+    ``plan``), ``changed`` (an overlapping plan has a group that was claimed, sent or left unknown: send nothing), ``gone`` or ``full``.
+
+    1.17.71: a write binds its decisions into the digest. A stored plan for the same updates with other decisions is never replaced and never
+    written again: ``changed_decisions`` when one of its groups was claimed, sent or left unknown, ``decisions_changed`` when none was (nothing
+    is written in either case). A plan written by 1.17.70 has no ``ids_key``; its ``targets_digest`` is the ids-only digest."""
+    digest = _plan_digest(run_id, action_id, ids, decisions)
+    ids_digest = _plan_digest(run_id, action_id, ids) if decisions is not None else None
     ranges = _ranges_of(ids)
     with transaction.atomic():
         current = _locked_run(run_id)
@@ -791,6 +807,15 @@ def _claim_plan(run_id, action_id: str, ids, group_digests):
         for plan in plans:
             if plan.get("targets_digest") == digest:
                 return "same", plan
+        if ids_digest is not None:
+            for plan in plans:
+                if (plan.get("ids_key") or plan.get("targets_digest")) != ids_digest:
+                    continue  # the same updates with other decisions: nothing is written
+                own = set(plan.get("group_digests") or [])
+                for mark in marks:
+                    if not _is_plan(mark) and mark.get("action_id") == action_id and mark.get("targets_digest") in own and mark.get("state") != STATE_ABORTED:
+                        return "changed_decisions", plan
+                return "decisions_changed", plan
         stale = []
         for plan in plans:
             if not _ranges_overlap(ranges, plan.get("ids") or []):
@@ -807,6 +832,8 @@ def _claim_plan(run_id, action_id: str, ids, group_digests):
             return "full", None
         plan = {"action_id": action_id, "kind": KIND_PLAN, "targets_digest": digest, "ids": ranges, "group_digests": list(group_digests),
                 "group_size": MAX_AGENTS_PER_GROUP, "state": KIND_PLAN}
+        if ids_digest is not None:
+            plan["ids_key"] = ids_digest
         marks.append(plan)
         current.system_action_marks = marks
         current.save(update_fields=["system_action_marks"])
@@ -1074,17 +1101,23 @@ def _run(context, identity, action_id, agent_ids, parameters, *, writing=False, 
 
     # at-most-once, group by group: the mark, then the strict audit row, then the send. The whole set was judged above.
     groups = _groups_of(items)  # a write is grouped by update number; a task by endpoint number
-    digests = [_digest(run.id, definition.id, group) for group in groups]
+    bound = decisions if writing else None  # 1.17.71: a write's digests cover its decisions; a task's stay as they were
+    digests = [_digest(run.id, definition.id, group) if bound is None else _digest(run.id, definition.id, group, bound) for group in groups]
     existing = [m for m in (getattr(run, "system_action_marks", None) or []) if isinstance(m, dict)]
-    plan_digest = _plan_digest(run.id, definition.id, items)
+    plan_digest = _plan_digest(run.id, definition.id, items, bound)
     ours = sum(1 for m in existing if m.get("action_id") == definition.id and m.get("targets_digest") in set(digests) | {plan_digest})
     if len(existing) - ours + len(groups) + 1 > MAX_MARKS_PER_RUN:
         _refuse("mark_limit", **common)
-    plan_state, plan = _claim_plan(run.id, definition.id, items, digests)
+    plan_state, plan = _claim_plan(run.id, definition.id, items, digests, bound)
     if plan_state == "gone":
         raise SchedulerPermanentError("The run is no longer active, so nothing was sent.")
     if plan_state == "full":
         _refuse("mark_limit", **common)
+    if plan_state == "decisions_changed":
+        _refuse("decisions_changed", **common)
+    if plan_state == "changed_decisions":
+        _unknown(run.id, owner, definition, definition.id, module_id, provenance,
+                 "The decisions changed after part of this run was started, so Core did not write again. Check the updates.")
     if plan_state == "changed":
         _unknown(run.id, owner, definition, definition.id, module_id, provenance,
                  "The endpoint list changed after part of this run was sent, so Core did not send again. Check the endpoints.")
@@ -1311,7 +1344,7 @@ def system_actions_contract_metadata() -> dict:
         "write": {
             "kinds": ["task", "write"], "function": "winupdate.set_action", "changes": "list of {update_id: int, action: 'approve' | 'ignore' | 'nothing'}, exactly those keys, each update once",
             "max_changes": MAX_WRITE_ITEMS, "max_changes_per_group": MAX_AGENTS_PER_GROUP, "audit_chunk": 500,
-            "refusal_reasons": ["wrong_kind", "bad_changes", "unknown_update", "action_not_allowed"],
+            "refusal_reasons": ["wrong_kind", "bad_changes", "unknown_update", "action_not_allowed", "decisions_changed"],
             "limit": "Tactical's own audit log does not show Core's in-process write; Core's strict audit rows (before and after of every update) are the record.",
         },
         "delegation": {

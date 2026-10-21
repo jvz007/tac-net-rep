@@ -122,6 +122,15 @@ class TecTacFrameworkConfig(AppConfig):
         except Exception:
             logger.exception("Tec-Tac patch lockdown could not be applied; Tactical's own patch policy stays as it was")
 
+        # 1.17.71: the capability that tells a module which installed modules depend on it (Groups uses it before a delete). Its own try block:
+        # a fault is logged and never stops start-up.
+        try:
+            from .module_dependants import register_core_module_dependants_capability
+
+            register_core_module_dependants_capability()
+        except Exception:
+            logger.exception("Tec-Tac core.module_dependants capability could not be registered")
+
         # Core owns the compatibility boundary with Tactical Report Manager.
         # Install this before module AppConfig.ready() registrations execute so
         # modules never need to import ee.reporting internals themselves.
