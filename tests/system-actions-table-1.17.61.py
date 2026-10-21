@@ -48,7 +48,7 @@ def row_problems(row) -> list:
 
 
 table = sa.SYSTEM_FUNCTIONS
-must(set(table) == WINUPDATE_ROWS | {"scripts.run"}, f"exactly three rows, found {sorted(table)}")
+must(set(table) == WINUPDATE_ROWS | {"scripts.run", "winupdate.set_action"}, f"exactly four rows (1.17.70 adds winupdate.set_action), found {sorted(table)}")
 for key, row in table.items():
     must(row.key == key, key)
     if key not in WINUPDATE_ROWS:
@@ -122,7 +122,7 @@ try:
 except FrozenInstanceError:
     pass
 must(isinstance(good.min_flags, tuple) and type(table).__name__ == "mappingproxy", "rows hold tuples and the table is a read-only mapping")
-must(set(table) == WINUPDATE_ROWS | {"scripts.run"}, "unchanged after the attempts")
+must(set(table) == WINUPDATE_ROWS | {"scripts.run", "winupdate.set_action"}, "unchanged after the attempts")  # 1.17.70: four rows
 print("       the table is a read-only mapping of frozen rows: a module cannot add or change a row")
 
 # the table is the only place a Tactical callable is named

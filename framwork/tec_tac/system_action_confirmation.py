@@ -324,13 +324,20 @@ def _controls(user, action, targets, parameters, *, resolver_module=None) -> dic
 
 def _text(info, user, when) -> str:
     definition, entry = info["definition"], info["entry"]
+    if entry.kind == _sa.KIND_WRITE:  # 1.17.70: a write has no endpoint list to send; the decisions come at run time, inside what is confirmed here
+        first = (f"{definition.label}: decisions on the Windows updates of {info['total']} endpoint(s), at most {_sa.MAX_WRITE_ITEMS} decisions each time, "
+                 f"written in groups of at most {_sa.MAX_AGENTS_PER_GROUP}, {when_text(when)}.")
+    else:
+        first = f"{definition.label}: {info['total']} endpoint(s), sent to Tactical in {info['groups']} group(s) of at most {_sa.MAX_AGENTS_PER_GROUP}, {when_text(when)}."
     lines = [
-        f"{definition.label}: {info['total']} endpoint(s), sent to Tactical in {info['groups']} group(s) of at most {_sa.MAX_AGENTS_PER_GROUP}, {when_text(when)}.",
+        first,
         "It runs as a schedule. Core does not check your rights again when it runs, so it keeps running until someone edits or removes it.",
     ]
-    if entry.parameters:
-        cleaned = info["cleaned"]
+    cleaned = info["cleaned"]
+    if definition.function == "scripts.run":  # 1.17.70: guarded by row, so a new row with parameters never reads script keys
         lines.append(f"Script number {cleaned['script_pk']}, {len(cleaned['args'])} argument(s), time limit {cleaned['timeout']} seconds.")
+    elif callable(entry.confirmation_line):
+        lines.append(entry.confirmation_line(cleaned))
     if _sa._reapprove_warning_applies(definition, entry):  # 1.17.68: not when Core's patch lockdown has made Tactical's own approve inert
         lines.append(_sa.REAPPROVE_WARNING)
     if definition.dangerous:

@@ -47,7 +47,7 @@ print("       register_system_action called as in 1.17.67 gives the same definit
 
 # ---- the capability
 meta = sa.system_actions_contract_metadata()
-must(meta["id"] == "core.system_actions" and meta["version"] == "1.2.0" and meta["operations"][:4] == ["list_actions", "get_action", "run", "describe_confirmation"] and len(meta["operations"]) == 9, meta["operations"])
+must(meta["id"] == "core.system_actions" and meta["version"] == "1.3.0" and meta["operations"][:4] == ["list_actions", "get_action", "run", "describe_confirmation"] and len(meta["operations"]) == 10 and meta["operations"][9] == "run_write", meta["operations"])  # 1.17.70: one operation appended (capability 1.3.0)
 for key in ("python", "functions", "manifest_key", "max_agents", "max_agents_per_group", "max_groups", "parameters_key", "refusal_reasons", "http", "delivery", "audit_actions", "requires_framework", "unattended"):
     must(key in meta, key)
 must(meta["max_agents"] == 40000 and meta["delivery"] == "at most once per group" and meta["http"] == {"confirmation": "POST /api/tfd/scheduler/system-actions/confirmation/"}, "limits and routes unchanged")

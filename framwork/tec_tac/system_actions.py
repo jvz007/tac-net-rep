@@ -1,4 +1,4 @@
-"""System actions: typed Tactical work that Core runs unattended for a named owner (core.system_actions 1.2.0, Core 1.17.68; first built 1.17.61, R-20, AD-13).
+"""System actions: typed Tactical work that Core runs unattended for a named owner (core.system_actions 1.3.0, Core 1.17.70; first built 1.17.61, R-20, AD-13).
 
 A system action is a Tactical function that Core may run when nobody is signed in: a scheduled patch scan, for example. It is not a free
 path into Tactical. Core holds a fixed table, ``SYSTEM_FUNCTIONS``, of the few Tactical functions it will reach. A module cannot name a
@@ -48,6 +48,14 @@ a grant (Maintenance) and the provider (Advanced Patch Management) start a sched
 verify the calling module here, in this file, then hand over to ``delegation.py``. ``run_system_action`` keeps its signature and its
 ``wrong_module`` rule. (4) While Core's patch lockdown is active and its guard is installed in the process, Tactical's own approve is inert, so an
 install by the honoured replacement no longer carries the re-approve warning.
+
+1.17.70 (additive, capability 1.3.0, CQ203, AD-45). A row of the table has a ``kind``. Every row until now is a ``task`` (a Tactical Celery task that Core
+starts with ``.delay``). The new kind is ``write``: Core itself writes one fixed column of Tactical's own table, in Core's process, through Tactical's own
+serializer. The first and only write row is ``winupdate.set_action`` (the approve, ignore or do-nothing decision of one Windows update). It is
+``replacement_only``: Windows Patching never registers it (it uses a person's own request); only the premium module that is the HONOURED
+replacement of ``patching`` right now may. A module names only the key. ``run_system_write`` runs it with the same checks in the same order as
+``run_system_action``, then reads each update's endpoint itself and judges the endpoint set like ``agent_ids``. See ``system_writes.py`` and
+docs/system-actions.md.
 """
 from __future__ import annotations
 
@@ -70,13 +78,17 @@ from .scheduler import SchedulerPermanentError, SchedulerTransientError
 logger = logging.getLogger("tec_tac.system_actions")
 
 CAPABILITY_ID = "core.system_actions"
-CAPABILITY_VERSION = "1.2.0"
+CAPABILITY_VERSION = "1.3.0"
 MAX_AGENTS_PER_GROUP = 2000  # Johan, CQ178: more than this splits into groups of at most this many
 MAX_GROUPS = 20  # the ceiling of one run (assumption CQ195, asked): 20 groups
 MAX_AGENTS = MAX_AGENTS_PER_GROUP * MAX_GROUPS  # a Core constant: refused above, never truncated
 MAX_PERMISSIONS = 8
 MAX_MARKS_PER_RUN = 105  # one mark per group plus one plan mark per call; room for five full calls of 20 groups (1.17.67)
 KIND_PLAN = "plan"  # a mark with no ``kind`` is a group mark
+KIND_TASK = "task"  # 1.17.70: a row of the table is a Tactical Celery task that Core starts ...
+KIND_WRITE = "write"  # ... or one fixed column of a Tactical table that Core writes itself, through Tactical's own serializer
+WRITE_ACTIONS = ("approve", "ignore", "nothing")  # what a Windows update decision may be set to ('inherit' has no meaning on one update row; Tactical v1.5.2)
+MAX_WRITE_ITEMS = MAX_AGENTS  # one call writes at most this many decisions (2000 per group, 20 groups); refused above, never truncated
 LABEL_MAX = 100
 SCOPE_KIND_AGENTS = "agents"
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}\.[a-z0-9][a-z0-9_-]{0,63}$")
@@ -191,6 +203,35 @@ def _script_audit_extra(cleaned) -> dict:
     return {"script_pk": cleaned["script_pk"], "args_count": len(cleaned["args"]), "env_vars_count": len(cleaned["env_vars"])}
 
 
+def _winupdate_parameters(values) -> dict:
+    """What a confirmed update-decision write may carry: ``allowed_actions`` only, a non-empty subset of approve, ignore and nothing."""
+    if not isinstance(values, dict):
+        raise ValueError("parameters must be an object.")
+    if set(values) - {"allowed_actions"}:
+        raise ValueError("an update decision write takes only allowed_actions.")
+    allowed = values.get("allowed_actions")
+    if isinstance(allowed, (str, bytes, dict)) or not isinstance(allowed, (list, tuple)) or not 1 <= len(allowed) <= len(WRITE_ACTIONS):
+        raise ValueError("allowed_actions must be a list of one to three decisions.")
+    if not all(isinstance(item, str) and item in WRITE_ACTIONS for item in allowed) or len(set(allowed)) != len(allowed):
+        raise ValueError("allowed_actions may list approve, ignore and nothing, each once.")
+    return {"allowed_actions": [item for item in WRITE_ACTIONS if item in allowed]}
+
+
+def _winupdate_audit_extra(cleaned) -> dict:
+    return {"allowed_actions": list(cleaned["allowed_actions"])}
+
+
+_DECISION_WORDS = {"approve": "approve", "ignore": "ignore", "nothing": "do nothing"}
+
+
+def _winupdate_confirmation_line(cleaned) -> str:
+    words = [_DECISION_WORDS[item] for item in cleaned["allowed_actions"]]
+    listed = words[0] if len(words) == 1 else ", ".join(words[:-1]) + " or " + words[-1]
+    return (f"Each time it runs, the module you named decides which updates of these endpoints to {listed}, and Core writes that decision into Tactical. "
+            "Core records the earlier and the new decision of every update in its own audit log. "
+            "Tactical keeps the decisions even if the module is later removed. A decision a person changed in Tactical in the meantime is left as it is.")
+
+
 @dataclass(frozen=True)
 class SystemFunction:
     """One Tactical function Core will run for a system action. A new row is a Core release (additive), like ``ROUTE_OWNERS``.
@@ -212,6 +253,10 @@ class SystemFunction:
     validate_parameters: object = _no_parameters
     build_call: object = _agents_only_call
     audit_extra: object = _no_audit_extra
+    # 1.17.70 (CQ203): the second kind. Defaulted, so every earlier row and every module is untouched.
+    kind: str = KIND_TASK  # KIND_TASK: ``module_path.function_name`` is a Celery task called with ``.delay``; KIND_WRITE: Core writes it itself (system_writes.py)
+    replacement_only: bool = False  # True: only the HONOURED replacement of ``owner_module`` may register it, never ``owner_module`` itself
+    confirmation_line: object = None  # a function of the cleaned parameters that returns one plain line for the Yes or No text, or None
 
 
 SYSTEM_FUNCTIONS = MappingProxyType({
@@ -239,6 +284,16 @@ SYSTEM_FUNCTIONS = MappingProxyType({
         result_text=QUEUED_TEXT,
         parameters=("script_pk", "args", "env_vars", "timeout", "run_as_user", "collector_all_output", "save_to_agent_note"),
         validate_parameters=_script_parameters, build_call=_script_call, audit_extra=_script_audit_extra,
+    ),
+    # reference/tacticalrmm v1.5.2: winupdate/views.py EditWindowsUpdates.put (PUT winupdate/<pk>/): needs can_manage_winupdates and the person's right on the
+    # update's endpoint, then WinUpdateSerializer(update, data, partial=True).save(). WinUpdate.action is one of inherit, approve, ignore, nothing. There is no
+    # Celery task for it, so Core writes the one column itself (system_writes.py). Only the honoured replacement of patching (AD-45, CQ203 option a).
+    "winupdate.set_action": SystemFunction(
+        key="winupdate.set_action", module_path="winupdate.serializers", function_name="WinUpdateSerializer", owner_module="patching",
+        min_flags=("can_manage_winupdates",), accepts="update_actions", takes_username=False, reapproves_by_policy=False,
+        result_text="Written to Tactical's update decisions; Core's audit log holds the earlier and the new decision of every update.",
+        parameters=("allowed_actions",), validate_parameters=_winupdate_parameters, audit_extra=_winupdate_audit_extra,
+        kind=KIND_WRITE, replacement_only=True, confirmation_line=_winupdate_confirmation_line,
     ),
 })
 
@@ -454,6 +509,13 @@ def _build_definition(id, module_id, label, function, permissions, scope_kind, d
     plugin = _registered_plugin(module)
     category = _effective_category(getattr(plugin, "category", ""))
     via_replacement = False
+    if entry.kind == KIND_WRITE:  # 1.17.70: the strictest rules, all fixed here and none left to the module
+        if not dangerous:
+            raise SystemActionRegistrationError("a write to a Tactical table must be registered with dangerous=True.")
+        if _clean_delegable_to(delegable_to, module):
+            raise SystemActionRegistrationError("a write to a Tactical table cannot be delegated: delegable_to must be empty.")
+    if entry.replacement_only and module == entry.owner_module:
+        raise SystemActionRegistrationError(f"{function!r} may be registered only by the module that honourably replaces {entry.owner_module!r}, never by {entry.owner_module!r} itself.")
     if module != entry.owner_module:
         if _honoured(module) == entry.owner_module:
             via_replacement = True
@@ -514,6 +576,7 @@ def _describe(definition: SystemActionDefinition) -> dict:
         "parameters": list(entry.parameters) if entry else [],
         "warning": REAPPROVE_WARNING if (entry and _reapprove_warning_applies(definition, entry)) else None,
         "delegable_to": list(definition.delegable_to),
+        "kind": entry.kind if entry else None, "replacement_only": bool(entry.replacement_only) if entry else None,
     }
 
 
@@ -565,6 +628,10 @@ REASONS = {
     "confirmation_required": "This system action needs the Yes or No confirmation, and none came with the request.",
     "declaration_unreadable": "Core could not read the signed manifest or the registry just now, so it did not create or change this schedule. Try again in a minute.",
     "confirmation_invalid": "The confirmation does not match this person, action, endpoints, parameters and timing, or it has expired. Ask again.",
+    "wrong_kind": "This action is of the other kind: use run_system_action for a task and run_system_write for a write.",
+    "bad_changes": f"The changes are not a list of 1 to {MAX_WRITE_ITEMS} items of exactly update_id and action, each update once.",
+    "unknown_update": "At least one update does not exist, so nothing was written.",
+    "action_not_allowed": "At least one decision is not one the person confirmed, so nothing was written.",
 }
 
 _UNMATCHED: dict[tuple[str, str], float] = {}
@@ -801,9 +868,9 @@ def _group_counts(total: int, sent: int, failed: int = 0) -> dict:
     return {"total": total, "sent": sent, "failed": failed, "not_started": max(total - sent - failed, 0)}
 
 
-def _summary(agents: int, counts: dict) -> str:
+def _summary(agents: int, counts: dict, noun: str = "endpoint(s)") -> str:
     """One plain line. Counts only: no endpoint ids."""
-    return (f"{agents} endpoint(s) in {counts['total']} group(s): {counts['sent']} sent, {counts['failed']} failed, "
+    return (f"{agents} {noun} in {counts['total']} group(s): {counts['sent']} sent, {counts['failed']} failed, "
             f"{counts['not_started']} not started.")
 
 
@@ -840,7 +907,19 @@ def run_system_action(context, *, action_id, agent_ids, parameters=None) -> dict
     return _run(context, identity, action_id, agent_ids, parameters)
 
 
-def _run(context, identity, action_id, agent_ids, parameters) -> dict:
+def run_system_write(context, *, action_id, changes) -> dict:
+    """Run a registered WRITE action for the owner of the Scheduler run ``context`` belongs to (core.system_actions 1.3.0, Core 1.17.70, CQ203).
+
+    ``changes`` is a list of ``{"update_id": int, "action": "approve" | "ignore" | "nothing"}``, exactly those two keys, each update once, at most 40 000.
+    Call it from the honoured replacement's own Scheduler handler. Every check of ``run_system_action`` runs in the same order, then Core reads each
+    update's endpoint itself and judges that endpoint set like ``agent_ids``; one miss refuses the whole call and nothing is written. A task row
+    refuses here as ``wrong_kind``, and a write row refuses in ``run_system_action`` the same way. Returns ``{"outcome": "written", "changes", "written",
+    "unchanged", "changed_meanwhile", "groups": {...}, "message", "summary"}``. See docs/system-actions.md, "The second kind: a write"."""
+    identity = calling_module_for_core_provider(provider_file=__file__)
+    return _run(context, identity, action_id, None, None, writing=True, changes=changes)
+
+
+def _run(context, identity, action_id, agent_ids, parameters, *, writing=False, changes=None) -> dict:
     caller = identity.module_id if identity is not None else ""
     shown_id = action_id if isinstance(action_id, str) else None
     # (1) a context Core issued, a run still going and a person behind it
@@ -883,6 +962,8 @@ def _run(context, identity, action_id, agent_ids, parameters) -> dict:
     entry = SYSTEM_FUNCTIONS.get(definition.function)
     if entry is None:
         _refuse("function_unavailable", **common)
+    if entry.kind != (KIND_WRITE if writing else KIND_TASK):  # 1.17.70: a task row is run by run_system_action, a write row by run_system_write
+        _refuse("wrong_kind", **common)
     try:
         enabled = _enabled_now(definition.module_id)
     except Exception:
@@ -931,9 +1012,20 @@ def _run(context, identity, action_id, agent_ids, parameters) -> dict:
         if not username:
             _refuse("no_owner", **common)
     # (6) the count, judged before any lookup, then (5) the scope of every endpoint
-    ids, reason = _agent_ids(agent_ids)
-    if reason:
-        _refuse(reason, **common)
+    decisions = {}
+    if writing:  # 1.17.70: the endpoints are the ones Core reads off the update rows itself; the rest of the checks below judge them like agent_ids
+        from . import system_writes as writer
+
+        try:
+            decisions, ids = writer.resolve_changes(changes, cleaned)
+        except writer.WriteRefused as exc:
+            _refuse(exc.reason, detail=exc.detail, **common)
+        items = sorted(decisions)
+    else:
+        ids, reason = _agent_ids(agent_ids)
+        if reason:
+            _refuse(reason, **common)
+        items = ids
     if not unattended:
         try:
             in_scope = _agents_in_scope(owner, ids)
@@ -971,19 +1063,24 @@ def _run(context, identity, action_id, agent_ids, parameters) -> dict:
         if not all_inside:
             _refuse("out_of_scope", **common)
     # (7) 1.17.66 (CQ173): an install that re-approves by policy is allowed for the honoured replacement; the warning is in the audit row
-    function = _import_function(entry)
-    if function is None:
-        _refuse("function_unavailable", **common)
+    if writing:
+        function = None
+        if not writer.available():
+            _refuse("function_unavailable", **common)
+    else:
+        function = _import_function(entry)
+        if function is None:
+            _refuse("function_unavailable", **common)
 
     # at-most-once, group by group: the mark, then the strict audit row, then the send. The whole set was judged above.
-    groups = _groups_of(ids)
+    groups = _groups_of(items)  # a write is grouped by update number; a task by endpoint number
     digests = [_digest(run.id, definition.id, group) for group in groups]
     existing = [m for m in (getattr(run, "system_action_marks", None) or []) if isinstance(m, dict)]
-    plan_digest = _plan_digest(run.id, definition.id, ids)
+    plan_digest = _plan_digest(run.id, definition.id, items)
     ours = sum(1 for m in existing if m.get("action_id") == definition.id and m.get("targets_digest") in set(digests) | {plan_digest})
     if len(existing) - ours + len(groups) + 1 > MAX_MARKS_PER_RUN:
         _refuse("mark_limit", **common)
-    plan_state, plan = _claim_plan(run.id, definition.id, ids, digests)
+    plan_state, plan = _claim_plan(run.id, definition.id, items, digests)
     if plan_state == "gone":
         raise SchedulerPermanentError("The run is no longer active, so nothing was sent.")
     if plan_state == "full":
@@ -993,7 +1090,7 @@ def _run(context, identity, action_id, agent_ids, parameters) -> dict:
                  "The endpoint list changed after part of this run was sent, so Core did not send again. Check the endpoints.")
     # the groups come from the stored plan, never from the live list again
     size = int(plan.get("group_size") or MAX_AGENTS_PER_GROUP)
-    groups = [list(ids[i:i + size]) for i in range(0, len(ids), size)]
+    groups = [list(items[i:i + size]) for i in range(0, len(items), size)]
     digests = list(plan.get("group_digests") or digests)
     if len(digests) != len(groups):
         _unknown(run.id, owner, definition, definition.id, module_id, provenance, "The stored plan of this run does not fit the endpoints, so Core did not send again. Check the endpoints.")
@@ -1003,21 +1100,38 @@ def _run(context, identity, action_id, agent_ids, parameters) -> dict:
         row_extra["warning"] = REAPPROVE_WARNING
     elif entry.reapproves_by_policy:
         row_extra["patch_lockdown"] = "active"  # 1.17.68: Tactical's own approve was inert for this install
+    noun = "update decision(s)" if writing else "endpoint(s)"
     sent_now = 0
     sent_before = 0
+    totals = {"written": 0, "unchanged": 0, "changed_meanwhile": 0, "vanished": 0}
     for index, (group, digest) in enumerate(zip(groups, digests), start=1):
         state, _mark = _claim_mark(run.id, definition.id, digest, len(group))
         if state == "gone":
             raise SchedulerPermanentError("The run is no longer active, so nothing was sent.")
         if state == "full":
             _unknown(run.id, owner, definition, definition.id, module_id, provenance,
-                     _summary(len(ids), _group_counts(len(groups), sent_now + sent_before, 1)))
+                     _summary(len(items), _group_counts(len(groups), sent_now + sent_before, 1), noun))
         if state == "sent":
             sent_before += 1
             continue
         if state == "unknown":
             _unknown(run.id, owner, definition, definition.id, module_id, provenance,
-                     _summary(len(ids), _group_counts(len(groups), sent_now + sent_before, 1)))
+                     _summary(len(items), _group_counts(len(groups), sent_now + sent_before, 1), noun))
+        if writing:
+            outcome = _write_group(
+                writer, run=run, definition=definition, owner=owner, verified=verified, provenance=provenance, extra={**extra, **row_extra},
+                group=group, decisions=decisions, cleaned=cleaned, digest=digest, index=index, groups_total=len(groups), total=len(items),
+            )
+            sent_now += 1
+            for key in totals:
+                totals[key] += outcome.get(key, 0)
+            if not _set_mark(run.id, definition.id, digest, STATE_SENT):
+                logger.error("The write was made but its mark could not be set to 'sent'; a retry would fail as outcome-unknown.")
+            writer.record_closing(
+                actor=_actor_for(owner), definition=definition, run=run, schedule_id=verified.schedule_id, provenance=provenance, extra={**extra, **row_extra},
+                outcome=outcome, digest=digest, index=index, groups_total=len(groups), total=len(items),
+            )
+            continue
         try:
             _audit().record(
                 actor=_actor_for(owner), module_id="core", action="run", object_type="system_action", object_id=definition.id,
@@ -1045,9 +1159,46 @@ def _run(context, identity, action_id, agent_ids, parameters) -> dict:
         if not _set_mark(run.id, definition.id, digest, STATE_SENT, task_id):
             logger.error("The system action was sent but its mark could not be set to 'sent'; a retry would fail as outcome-unknown.")
     counts = _group_counts(len(groups), sent_now + sent_before)
+    if writing:
+        return _written_result(entry, len(items), counts, totals, duplicate=sent_now == 0, **extra)
     if sent_now == 0:
         return _queued_result(entry, len(ids), counts, duplicate=True, **extra)
     return _queued_result(entry, len(ids), counts, **extra)
+
+
+def _written_result(entry: SystemFunction, changes: int, counts: dict, totals: dict, **extra) -> dict:
+    """The result of ``run_system_write``. The totals are for the groups this attempt wrote; a group a retry found already written adds nothing."""
+    result = {
+        "outcome": "written", "changes": changes, "written": totals["written"], "unchanged": totals["unchanged"],
+        "changed_meanwhile": totals["changed_meanwhile"], "groups": dict(counts), "message": entry.result_text,
+        "summary": (f"{_summary(changes, counts, 'update decision(s)')} {totals['written']} written, {totals['unchanged']} already as decided, "
+                    f"{totals['changed_meanwhile']} left alone because a person changed them meanwhile."),
+    }
+    result.update(extra)
+    if result.pop("duplicate", False):
+        result["duplicate"] = True
+    return result
+
+
+def _write_group(writer, *, run, definition, owner, verified, provenance, extra, group, decisions, cleaned, digest, index, groups_total, total) -> dict:
+    """One group of a write: read the current decisions, write the strict audit rows, then write. At most once: a failure before the audit rows
+    are all written aborts the mark (nothing was written); a failure while writing ends the run as outcome-unknown and is never repeated."""
+    module_id = definition.module_id
+    try:
+        planned = writer.plan_group(group, decisions)
+        writer.write_audit_rows(
+            actor=_actor_for(owner), definition=definition, run=run, schedule_id=verified.schedule_id, provenance=provenance, extra=extra,
+            planned=planned, digest=digest, index=index, groups_total=groups_total, total=total,
+        )
+    except Exception:
+        logger.exception("The decisions of a write group could not be read or audited; nothing is written for this group.")
+        _set_mark(run.id, definition.id, digest, STATE_ABORTED)
+        raise SchedulerTransientError("The audit row could not be written, so nothing was written for this group.") from None
+    try:
+        return writer.apply_group(planned)
+    except Exception:
+        logger.exception("Tactical's update decisions could not be written; Core never writes this group again.")
+        _unknown(run.id, owner, definition, definition.id, module_id, provenance, _summary(total, _group_counts(groups_total, index - 1, 1), "update decision(s)"))
 
 
 # ------------------------------------------------------------------------------------------------ the capability
@@ -1093,7 +1244,7 @@ def start_delegated_run(ticket, *, action_id, agent_ids, name=None):
 
 
 class _SystemActionsProvider:
-    """The ``core.system_actions`` 1.2.0 provider: list_actions, get_action, run, describe_confirmation and (1.17.68) the five delegation operations."""
+    """The ``core.system_actions`` 1.3.0 provider: list_actions, get_action, run, describe_confirmation, (1.17.68) the five delegation operations and (1.17.70) run_write."""
 
     def list_actions(self) -> list[dict]:
         return registered_system_actions()
@@ -1103,6 +1254,10 @@ class _SystemActionsProvider:
 
     def run(self, context, *, action_id, agent_ids, parameters=None) -> dict:
         return run_system_action(context, action_id=action_id, agent_ids=agent_ids, parameters=parameters)
+
+    def run_write(self, context, *, action_id, changes) -> dict:
+        """1.17.70: the second kind (a write). The caller is read from the stack, so this route and a direct import give the same answer."""
+        return run_system_write(context, action_id=action_id, changes=changes)
 
     def describe_confirmation(self, request, *, action_id, targets, parameters=None, when=None) -> dict:
         """The plain Yes or No text and a short-lived confirmation id for the person behind a real, session-checked ``request`` (1.17.66)."""
@@ -1131,6 +1286,7 @@ _PROVIDER = _SystemActionsProvider()
 OPERATIONS = (
     "list_actions", "get_action", "run", "describe_confirmation",
     "describe_delegation", "register_delegation_grant", "remove_delegation_grant", "issue_delegation_ticket", "start_delegated_run",
+    "run_write",
 )
 
 
@@ -1148,8 +1304,16 @@ def system_actions_contract_metadata() -> dict:
             "tec_tac.system_actions.register_delegation_grant(request, *, owner_module, grant_key, provider_module, action_id, targets, parameters=None, confirmation_id) -> {grant_key, created, owner_changed}; "
             "tec_tac.system_actions.remove_delegation_grant(*, owner_module, grant_key) -> bool; "
             "tec_tac.system_actions.issue_delegation_ticket(context, *, grant_key) -> str; "
-            "tec_tac.system_actions.start_delegated_run(ticket, *, action_id, agent_ids, name=None) -> TecTacScheduleRun (queued)"
+            "tec_tac.system_actions.start_delegated_run(ticket, *, action_id, agent_ids, name=None) -> TecTacScheduleRun (queued); "
+            "tec_tac.system_actions.run_system_write(context, *, action_id, changes) -> {outcome: 'written', changes, written, unchanged, changed_meanwhile, groups: {total, sent, failed, not_started}, message, summary} "
+            "(1.17.70, the second kind, honoured replacement only)"
         ),
+        "write": {
+            "kinds": ["task", "write"], "function": "winupdate.set_action", "changes": "list of {update_id: int, action: 'approve' | 'ignore' | 'nothing'}, exactly those keys, each update once",
+            "max_changes": MAX_WRITE_ITEMS, "max_changes_per_group": MAX_AGENTS_PER_GROUP, "audit_chunk": 500,
+            "refusal_reasons": ["wrong_kind", "bad_changes", "unknown_update", "action_not_allowed"],
+            "limit": "Tactical's own audit log does not show Core's in-process write; Core's strict audit rows (before and after of every update) are the record.",
+        },
         "delegation": {
             "grants_per_owner_module": 20, "ticket_seconds": 24 * 3600, "confirmation_seconds": 600,
             "callers": {"describe_delegation": "owner module", "register_delegation_grant": "owner module", "remove_delegation_grant": "owner module",
@@ -1159,6 +1323,7 @@ def system_actions_contract_metadata() -> dict:
             key: {
                 "tactical": f"{row.module_path}.{row.function_name}", "owner_module": row.owner_module, "min_flags": list(row.min_flags),
                 "takes_username": row.takes_username, "reapproves_by_policy": row.reapproves_by_policy, "parameters": list(row.parameters),
+                "kind": row.kind, "replacement_only": row.replacement_only,
             }
             for key, row in SYSTEM_FUNCTIONS.items()
         },
@@ -1171,7 +1336,7 @@ def system_actions_contract_metadata() -> dict:
         "http": {"confirmation": "POST /api/tfd/scheduler/system-actions/confirmation/"},
         "delivery": "at most once per group",
         "audit_actions": ["run (strict, before each group's send)", "deny (one per refusal)", "custom:outcome-unknown", "add and modify on the schedule (strict)"],
-        "requires_framework": ">=1.17.61 (groups, parameters, scripts.run and describe_confirmation need >=1.17.66; delegable_to, the five delegation operations and module-owned target resolvers need >=1.17.68)",
+        "requires_framework": ">=1.17.61 (groups, parameters, scripts.run and describe_confirmation need >=1.17.66; delegable_to, the five delegation operations and module-owned target resolvers need >=1.17.68; run_write and the winupdate.set_action row need >=1.17.70)",
         "unattended": "A scheduled run of a user-owned schedule skips owner_inactive, permission_lost and out_of_scope (>=1.17.65; the unattended= flag has no effect); every other check stays. A manual or one-off run keeps all of them.",
     }
 
@@ -1184,7 +1349,7 @@ def register_core_system_actions_capability():
         module_id="core",
         version=CAPABILITY_VERSION,
         provider=_PROVIDER,
-        description="Typed Tactical functions that Core runs unattended for a named owner, in groups of at most 2000 endpoints, with the owner and scope checked at every person-started run and the permission, scope and one Yes or No checked when a person creates or edits the schedule (>=1.17.66); a scheduled run is not re-checked against its creator (>=1.17.65); a module may start another module's action under a delegation grant a person confirmed once (>=1.17.68).",
+        description="Typed Tactical functions that Core runs unattended for a named owner, in groups of at most 2000 endpoints, with the owner and scope checked at every person-started run and the permission, scope and one Yes or No checked when a person creates or edits the schedule (>=1.17.66); a scheduled run is not re-checked against its creator (>=1.17.65); a module may start another module's action under a delegation grant a person confirmed once (>=1.17.68); the honoured replacement of Windows Patching may write Windows update decisions through run_write, with a strict before and after audit row for every update (>=1.17.70).",
         operations=OPERATIONS,
         metadata=system_actions_contract_metadata(),
     )

@@ -338,6 +338,8 @@ def _provider_action(owner_module: str, provider_module: str, action_id, **extra
     entry = _sa.SYSTEM_FUNCTIONS.get(definition.function)
     if entry is None:
         _deny("unknown_action", **meta)
+    if entry.kind != _sa.KIND_TASK:  # 1.17.70: a write is never started for someone else (registration also keeps its delegable_to empty)
+        _deny("not_delegable", **meta)
     if not _sa._declared_now(provider_module, action_id):
         _deny("action_not_declared", **meta)
     for module in (provider_module, owner_module):

@@ -360,7 +360,7 @@ run_body = src.split("def _run(", 1)[1]
 must('_refuse("action_not_declared", **common)' in run_body and run_body.index("_declared_now(definition.module_id, definition.id)") < run_body.index("entry = SYSTEM_FUNCTIONS.get(definition.function)"), "the manifest check runs before the function is looked up")
 must("action_not_declared" in sa.REASONS, "the reason exists")
 meta = sa.system_actions_contract_metadata()
-must("action_not_declared" in meta["refusal_reasons"] and meta["version"] == "1.2.0", "the reasons list grows; the capability version is 1.2.0 since 1.17.68 (additive; 1.1.0 since 1.17.66)")
+must("action_not_declared" in meta["refusal_reasons"] and meta["version"] == "1.3.0", "the reasons list grows; the capability version is 1.3.0 since 1.17.70 (additive; 1.2.0 since 1.17.68, 1.1.0 since 1.17.66)")
 body = src.split("def _run(", 1)[1]
 must(body.count("if not unattended:") == 1 and body.count("if unattended:") == 1, "the skipped checks sit in exactly two guarded blocks")
 guarded = body.split("if unattended:", 1)[1].split("# (6)", 1)[0]

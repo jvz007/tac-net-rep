@@ -20,7 +20,7 @@ exec(compile(HARNESS.read_text(encoding="utf-8"), str(HARNESS), "exec"), globals
 BULK_SCRIPT_KEYWORDS = ("script_pk", "agent_pks", "args", "timeout", "username", "run_as_user", "env_vars", "custom_field_pk", "collector_all_output", "save_to_agent_note")
 
 table = sa.SYSTEM_FUNCTIONS
-must(set(table) == {"winupdate.scan", "winupdate.install", "scripts.run"}, f"exactly three rows, found {sorted(table)}")
+must(set(table) == {"winupdate.scan", "winupdate.install", "scripts.run", "winupdate.set_action"}, f"exactly four rows (1.17.70 adds winupdate.set_action), found {sorted(table)}")
 row = table["scripts.run"]
 must(row.module_path == "scripts.tasks" and row.function_name == "bulk_script_task" and row.owner_module == "scriptexecution", row)
 must(set(row.min_flags) == {"can_run_bulk", "can_run_scripts"} and row.takes_username is True and row.reapproves_by_policy is False and row.accepts == "agent_pks", row)

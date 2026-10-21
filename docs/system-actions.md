@@ -1,4 +1,4 @@
-# System actions (core.system_actions 1.2.0, Core 1.17.68)
+# System actions (core.system_actions 1.3.0, Core 1.17.70)
 
 A system action lets Core run a small, fixed piece of Tactical work when nobody is signed in. The first use is a scheduled patch scan: "scan these endpoints for Windows updates every night". The person who set up the schedule is still the owner.
 
@@ -7,6 +7,8 @@ A system action lets Core run a small, fixed piece of Tactical work when nobody 
 **What is new in 1.17.66 (capability version 1.1.0, additive).** A run of more than 2000 endpoints is split into groups of at most 2000 instead of being refused (CQ178). The table gains `scripts.run` (CQ175). `winupdate.install` may be registered by the honoured replacement, with a fixed warning (CQ173). Parameters come only from what the person confirmed. A person who creates or edits a schedule gets the permission and scope check and one Yes or No at that moment.
 
 **What is new in 1.17.68 (capability version 1.2.0, additive; Johan, 21 October 2026).** Four things, each in its own section below. (1) A schedule keeps the scope its person had when they created or last edited it, and the next person who edits it becomes its owner: "Creation-time scope and ownership". (2) A module-owned target type reads as endpoints through a resolver its module registers: "A module-owned target type". (3) Maintenance's unattended patch step can start Advanced Patch Management's scheduled install through a grant a person confirmed once: "Delegation". (4) While Advanced Patch Management is honoured, Tactical's own patch policy is switched off, so Core no longer shows the re-approve warning for its install: `docs/patch-lockdown.md`.
+
+**What is new in 1.17.70 (capability version 1.3.0, additive; Johan, 21 October 2026, CQ203 and AD-45; core.system_actions 1.2.0 was Core 1.17.68).** A second kind of row, a **write**, for the premium module that is the honoured replacement of Windows Patching. The first and only write row is `winupdate.set_action`. See "The second kind: a write". Every row and every module before it is untouched.
 
 This page is for module developers and for administrators who want to know what a module with this power can and cannot do.
 
@@ -26,6 +28,8 @@ This is AD-13 (rules 1.7, standard section 1a). Core calling Tactical's own task
 | `winupdate.scan` | `winupdate.tasks.bulk_check_for_updates_task(pks)` | `patching`, or its honoured replacement | `can_manage_winupdates` and `can_run_bulk` | Fire and forget. |
 | `winupdate.install` | `winupdate.tasks.bulk_install_updates_task(pks)` | `patching`, or its honoured replacement (since 1.17.66) | `can_manage_winupdates` and `can_run_bulk` | Re-approves updates by patch policy first (`reapproves_by_policy`). Core shows a fixed warning. |
 | `scripts.run` | `scripts.tasks.bulk_script_task(script_pk, agent_pks, args, timeout, username, run_as_user, env_vars, custom_field_pk, collector_all_output, save_to_agent_note)`, keywords only (since 1.17.66) | `scriptexecution` | `can_run_bulk` and `can_run_scripts` | Takes the creator's stored name as the username and the parameters the person confirmed. |
+
+| `winupdate.set_action` | A write, not a task: `WinUpdateSerializer(update, data={"action": value}, partial=True).save()`, the same save as Tactical's `PUT winupdate/<update_id>/` (since 1.17.70) | `patching`, **honoured replacement only** | `can_manage_winupdates` | Sets one update's decision to `approve`, `ignore` or `nothing`. Takes `allowed_actions`. Always `dangerous`, never delegable. |
 
 The minimum flags are stricter than either Tactical route alone. Tactical's single-agent route needs `can_manage_winupdates`. Its bulk route needs `can_run_bulk`. Core needs both. For `scripts.run` Core needs `can_run_bulk` and `can_run_scripts`: Tactical's bulk route needs only `can_run_bulk`, so this is stricter on purpose.
 
@@ -88,6 +92,8 @@ Needs `requires.framework >=1.17.61`. An older Core refuses a manifest that has 
 |---|---|
 | Not a key of the table (a dotted path, a callable, unknown text) | A module cannot name its own callable. |
 | Not the table's owner or its honoured replacement | Only the owning core module may register. |
+| A `replacement_only` row (`winupdate.set_action`) from the owner itself, from a module that replaces nothing or another group, or from a replacement that is not honoured | Only the honoured replacement of `patching` may register it. Windows Patching is refused. A replacement that is not honoured right now is logged and not registered (`None`). |
+| A write row with `dangerous` false, or with `delegable_to` set | A write to a Tactical table must say it is dangerous and can never be started for someone else. |
 | The owner is not a core module | AD-21. |
 | Replacement not honoured right now | Logged. Nothing is registered. `None` comes back, no exception, so `ready()` never fails. |
 | Flags below the table minimum, an unknown flag, more than 8 flags | A module may add flags, never remove one. |
@@ -286,8 +292,26 @@ The amended AD-13 puts the whole check where the person acts. For a **declared s
 - The confirmation id does not prove that a button was pressed (see above).
 - Core holds no run back between groups, and a group already queued in Tactical cannot be recalled.
 - A resolver, a stored scope and a delegation grant are module code and data read inside Core's process. They bound what Core sends. They cannot stop deliberately hostile signed module code (signed-module review stays the defence).
-- Pushing patch-rule decisions to Tactical on a schedule is not built (CQ174 and CQ203, see "Not in this release").
+- Tactical's own audit log does not show the update-decision write of 1.17.70. Core's strict audit rows are the record.
 - Commands, reboot with a result, software package uninstall, checks, tasks and reports are not in the table (see "Not in this release").
+
+## The second kind: a write (Core 1.17.70, CQ203, AD-45)
+
+Some Tactical work has no task. A person's decision on one Windows update is a `PUT winupdate/<update_id>/` that saves one column. Johan signed (21 October 2026, AD-45) that the premium module which honourably replaces a core module is the one that talks to Tactical for the piece it replaces, through Core's own channels. For Advanced Patch Management that is this row, in Core's own channel, with the same limits as a task: a typed action, run as the schedule's owner, groups of at most 2000, up to 20 groups, one Yes or No, a strict audit row before the write, at most once, fail closed.
+
+**What the module does.** It lists the action in its signed manifest `system_actions`, registers it from `ready()` with function `winupdate.set_action`, `dangerous=True` and permissions that include `can_manage_winupdates`, and creates its schedule with `confirmed_by_request`, `confirmation_id` and parameters `{"system_action_parameters": {"allowed_actions": ["approve", "ignore"]}}`. From its own Scheduler handler it calls `run_system_write(context, action_id=..., changes=[{"update_id": 1234, "action": "approve"}, ...])`. The module works out the decisions each time its rules run. The person confirms only the **envelope**: the schedule's endpoints, the allowed decisions and the count ceiling of 40 000. Core checks every decision against it.
+
+**What Core checks, in the same order as a task.** A context Core issued for a run that is still going; the verified caller is the run's module and owns the action; the action is listed in the signed manifest now; the module is enabled now; the replacement is honoured now; the parameters come from the confirmed record only; then the owner, the count, the scope and the targets. A task row refuses in `run_system_write` as `wrong_kind`, and a write row refuses in `run_system_action` the same way.
+
+**The changes.** Exactly `update_id` and `action` per item, whole numbers, each update once, 1 to 40 000 items (refused above, never cut). The action must be one of the confirmed `allowed_actions` (a subset of `approve`, `ignore`, `nothing`). `inherit` has no meaning on one update row and is refused. Any other key is refused, so a write can touch only the action column, never `installed`, `kb` or `result`. Reasons: `bad_changes`, `action_not_allowed`, `unknown_update`.
+
+**The endpoints.** Core reads each update's endpoint itself (one fixed read of Tactical's WinUpdate id and agent) and requires every update to exist. It then judges that endpoint set exactly like `agent_ids`: inside the run's snapshotted targets (never widened), inside the owner's role scope for a person-started run, inside the stored creation-time scope for an unattended run on a module-owned target type. One miss refuses the whole call and nothing is written. No id is named in the message.
+
+**Each group (at most 2000 updates).** Core marks the group, reads the current decision of every update (the "before"), then writes **one strict audit row per chunk of at most 500 changes before it writes**. Each row carries `[update_id, before, after]` and the run, schedule, creator, confirmer, action id and group digest. If a row cannot be written, nothing is written for the group and the mark is aborted. Then Core writes inside one transaction, with row locks, through Tactical's own `WinUpdateSerializer(partial=True)` with `{"action": value}`. A row whose decision changed after the "before" was read is **not overwritten**: a person's later decision wins, and it is counted as `changed_meanwhile`. A change that equals the current decision is counted as `unchanged` and not written. One closing audit row per group (`custom:write-closed`) carries the counts and the decisions actually saved. A failed write is outcome-unknown, as for a task: the group is never written again.
+
+**The Yes or No text** names the allowed decisions in plain words, says the module decides each time it runs, says Core records the earlier and the new decision of every update, and says Tactical keeps the decisions if the module is later removed. The script line of `scripts.run` shows only for that row.
+
+**Honest limits.** Tactical's own audit log does not show this write, because Core saves the column in its own process and not through Tactical's route. Core's strict rows are the record. Core writes only the decisions the module hands it, inside the envelope. It cannot judge whether a decision is wise. Reboot with a result is not part of this row.
 
 ## Not in this release
 
@@ -299,7 +323,9 @@ Johan answered CQ173 (yes), CQ174 (yes), CQ175 (the whole list is signed) and CQ
 - **Patch KB uninstall.** Tactical has no such function. It runs as a script through `scripts.run` (Script Execution's contract), so Core builds no command text.
 - **Tasks and reports.** `run_win_task` takes a task number, not endpoint numbers, and a report email takes free recipients. Tactical already schedules tasks and reports natively. They wait on CQ193.
 - **A module-owned target type.** Built in 1.17.68 (see above). Until Maintenance and Advanced Patch Management register their resolvers, their profile targets are still refused as `targets_unresolved`.
-- **Pushing rule decisions, reboot with a result and Tactical's policy rows (CQ203).** Johan's three answers cannot all hold with AD-13 and AD-19 as signed: Tactical has no task function for `PUT winupdate/<id>/` (a serializer save in a view) or for a reboot (`agent.nats_cmd`), and a scheduled run has no request. Core 1.17.68 does not write these. The design is ready and waits for the clause.
+- **Pushing rule decisions (CQ203): built in 1.17.70** as the `winupdate.set_action` write row (see "The second kind: a write").
+- **Reboot with a result (CQ203).** Not Core's. It comes from Communicator's `communicator.messaging` contract, with Tactical's own reboot through the Agents core module's contract as the fallback, both built by module lanes (Johan, 21 October 2026).
+- **Tactical's policy rows (`WinUpdatePolicy`).** Not asked. The patch lockdown makes a policy write unnecessary.
 - **Refusing Tactical's own `winupdate/` and `automation/patchpolicy/` mutating routes.** Not built. The patch lockdown already stops the harm Johan described (see `docs/patch-lockdown.md`).
 - **A list of delegation grants in the browser.** The audit rows and the capability carry the record for now.
 - Module-owned recurring schedules with a named acting person are built in 1.17.63 (CQ176, `reconcile_schedule(..., confirmed_by_request=request)`, see `docs/module-scheduling.md`).
