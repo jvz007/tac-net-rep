@@ -5,7 +5,8 @@ Advanced Patch Management (APM) owns the install. ``run_system_action`` answers 
 ``describe_confirmation`` needs a person's own request, so neither can serve Maintenance. This module is the supported path. It adds no way to reach
 Tactical: the work is still ``run_system_action`` inside a Core one-off run, with its groups, its at-most-once marks and its strict audit rows.
 
-The path, all checked by Core from the call stack, never from an argument:
+The path, all checked by Core from the call stack, never from an argument (since 1.17.69 the five public functions here take no caller at all: each
+reads it itself with ``_verified_caller``, so a module cannot name another module by importing this file):
 
 1. The provider (APM) registers its system action with ``delegable_to=("maintenance",)``. That only names who may ask.
 2. When a person saves a Maintenance profile, Maintenance calls ``describe_delegation(request, ...)``. Core runs every creation-time check for that
@@ -14,7 +15,8 @@ The path, all checked by Core from the call stack, never from an argument:
    id issued for a schedule cannot be reused here. Maintenance shows the text in the shell's dialog.
 3. On Yes, Maintenance calls ``register_delegation_grant(request, ..., confirmation_id=...)``. Core stores a grant: the confirmed action, targets and
    parameters, the person (by row and by stored name) and the person's Tactical scope at that moment. At most 20 grants per owner module. A second
-   person who registers the same grant takes it over (scope stored again, one strict audit row), and only if their own scope covers every target.
+   person who registers the same grant takes it over (scope stored again, one strict audit row), and only if their own scope covers every target, judged by the owner
+   module's target resolver (1.17.69) and, when that module registered none, by the native strict scope rule.
    ``remove_delegation_grant`` removes it.
 4. In its own LIVE Scheduler run, Maintenance calls ``issue_delegation_ticket(context, grant_key=...)``. The ticket is signed, bound to that run, the
    grant and the grant as it is now (a digest that changes with every edit), and valid for 24 hours.
@@ -53,6 +55,7 @@ from django.utils import timezone
 
 from . import scheduler_creation_scope
 from . import scheduler_run_context as _run_context
+from . import caller_identity as _caller_identity
 from . import system_actions as _sa
 from .scheduler import (
     SchedulerNotAllowed,
@@ -177,6 +180,18 @@ def _parameters_of(parameters):
     return confirmation._parameters_of(parameters)
 
 
+def _owner_scope_check(person, owner_module, targets):
+    """The owner module's own resolver judges the takeover (1.17.69): True or False when it answers, None when no resolver applies. Strict (no
+    scheduler-manager shortcut). Any fault fails closed to False."""
+    try:
+        from .scheduler import _resolver_scope_check
+
+        return _resolver_scope_check(person, owner_module, targets, strict=True)
+    except Exception:  # noqa: BLE001 - fail closed
+        logger.warning("The owner module's target resolver failed during a delegation takeover; refusing.", exc_info=True)
+        return False
+
+
 def _person_covers(person, action, targets) -> bool:
     from .scheduler import _person_covers_targets
 
@@ -274,6 +289,15 @@ def _deny(reason: str, *, caller: str = "", person=None, owner_module="", provid
     raise DelegationRefused(message, reason=reason)
 
 
+def _verified_caller() -> str:
+    """The module whose code called one of the five public functions, read from the call stack and never from an argument (1.17.69, AD-43).
+    The walk skips every frame of this file and of system_actions.py, so the capability route, a wrapper there and a direct import all give the
+    same answer. The first frame outside both must be an installed, enabled, non-legacy module; anything else (Core, a test, a disabled module)
+    is ``""`` and the caller is unverified. Core is never a caller."""
+    identity = _caller_identity.calling_module_for_core_provider(provider_file=(__file__, _sa.__file__))
+    return identity.module_id if identity is not None else ""
+
+
 def _need_caller(caller: str, expected: str, **meta) -> None:
     if not caller:
         _deny("caller_unverified", caller="", **meta)
@@ -361,9 +385,10 @@ def _confirmation_body(person, owner_module, provider_module, action_id, targets
 
 
 # ------------------------------------------------------------------------------------------------ describe and register (the person's own request)
-def describe(caller: str, request, *, owner_module, provider_module, action_id, targets, parameters=None) -> dict:
+def describe(request, *, owner_module, provider_module, action_id, targets, parameters=None) -> dict:
     """The plain Yes or No text for a delegation grant and a confirmation id. Every creation-time control runs first, so a person who may not
     create the grant gets a refusal and a deny row, never a text."""
+    caller = _verified_caller()
     meta = {"owner_module": owner_module, "provider_module": provider_module, "action_id": action_id if isinstance(action_id, str) else None}
     _check_ids(owner_module, provider_module, meta)
     _need_caller(caller, owner_module, **meta)
@@ -410,8 +435,9 @@ def _grant_audit(person, grant, verb: str, message: str, extra: dict) -> None:
         raise SchedulerTransientError("The audit row of this delegation could not be written, so nothing was changed.") from exc
 
 
-def register(caller: str, request, *, owner_module, grant_key, provider_module, action_id, targets, parameters=None, confirmation_id=None) -> dict:
+def register(request, *, owner_module, grant_key, provider_module, action_id, targets, parameters=None, confirmation_id=None) -> dict:
     """Store (or replace) the grant a person confirmed. Returns ``{grant_key, created, owner_changed}``."""
+    caller = _verified_caller()
     meta = {"owner_module": owner_module, "provider_module": provider_module, "action_id": action_id if isinstance(action_id, str) else None}
     _check_ids(owner_module, provider_module, meta)
     _need_caller(caller, owner_module, **meta)
@@ -440,7 +466,10 @@ def register(caller: str, request, *, owner_module, grant_key, provider_module, 
             else:
                 grant = existing
                 if _owner_differs(grant, person):
-                    if not _person_covers(person, action, canonical):  # the person's own scope, no bypass: ownership never widens a grant
+                    covered = _owner_scope_check(person, owner_module, canonical)  # the owner module's resolver judges its own target type
+                    if covered is None:
+                        covered = _person_covers(person, action, canonical)
+                    if not covered:  # the person's own scope, no bypass: ownership never widens a grant
                         raise _Rollback("takeover_out_of_scope", grant)
                     owner_move = {"owner_changed_from": grant.created_by_username, "owner_changed_to": name, "previous_confirmed_by": grant.confirmed_by_username}
                     grant.created_by, grant.created_by_username = person, name
@@ -468,8 +497,9 @@ def _owner_differs(grant, person) -> bool:
     return str(grant.created_by_username or "").casefold() != _name(person).casefold()
 
 
-def remove(caller: str, *, owner_module, grant_key) -> bool:
+def remove(*, owner_module, grant_key) -> bool:
     """Remove a grant. True when there was one. Every ticket made for it stops working."""
+    caller = _verified_caller()
     meta = {"owner_module": owner_module if isinstance(owner_module, str) else ""}
     if not isinstance(owner_module, str) or not _ID_RE.fullmatch(owner_module):
         _deny("bad_module", **meta)
@@ -495,7 +525,8 @@ def remove(caller: str, *, owner_module, grant_key) -> bool:
 
 
 # ------------------------------------------------------------------------------------------------ the ticket (the owner module's live run)
-def issue_ticket(caller: str, context, *, grant_key) -> str:
+def issue_ticket(context, *, grant_key) -> str:
+    caller = _verified_caller()
     meta = {}
     run_id = _run_context._issued_run_id(context)
     run = None
@@ -554,8 +585,9 @@ def run_is_validly_delegated(run) -> bool:
         return False
 
 
-def start(caller: str, ticket, *, action_id, agent_ids, name=None):
+def start(ticket, *, action_id, agent_ids, name=None):
     """Create and queue the provider's own one-off run for the grant behind ``ticket``. Returns the queued run."""
+    caller = _verified_caller()
     meta = {"action_id": action_id if isinstance(action_id, str) else None}
     if not caller:
         _deny("caller_unverified", caller="", **meta)

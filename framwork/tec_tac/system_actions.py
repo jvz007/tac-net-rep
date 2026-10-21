@@ -1052,19 +1052,14 @@ def _run(context, identity, action_id, agent_ids, parameters) -> dict:
 
 # ------------------------------------------------------------------------------------------------ the capability
 # ------------------------------------------------------------------------------------------------ delegation (1.17.68)
-# The five public functions below are thin: each verifies the calling module here (the frame walk skips every frame of this file, so the capability
-# route and a direct call give the same answer) and hands the verified id to ``delegation.py``. ``run_system_action`` is not one of them and is unchanged.
-def _verified_caller() -> str:
-    identity = calling_module_for_core_provider(provider_file=__file__)
-    return identity.module_id if identity is not None else ""
-
-
+# The five public functions below are thin: each hands over to ``delegation.py``, which reads the calling module itself (1.17.69: the frame walk skips
+# every frame of this file and of delegation.py, so the capability route, these wrappers and a direct import give the same answer). ``run_system_action`` is not one of them and is unchanged.
 def describe_delegation(request, *, owner_module, provider_module, action_id, targets, parameters=None) -> dict:
     """The plain Yes or No text and a 600 second confirmation id for a delegation grant, for the person behind a real, session-checked ``request``
     (1.17.68). The caller must be ``owner_module``. See docs/system-actions.md, "Delegation"."""
     from . import delegation
 
-    return delegation.describe(_verified_caller(), request, owner_module=owner_module, provider_module=provider_module, action_id=action_id,
+    return delegation.describe(request, owner_module=owner_module, provider_module=provider_module, action_id=action_id,
                                targets=targets, parameters=parameters)
 
 
@@ -1072,7 +1067,7 @@ def register_delegation_grant(request, *, owner_module, grant_key, provider_modu
     """Store (or replace) the grant a person confirmed. The caller must be ``owner_module``. A second person who registers the same grant takes it over."""
     from . import delegation
 
-    return delegation.register(_verified_caller(), request, owner_module=owner_module, grant_key=grant_key, provider_module=provider_module,
+    return delegation.register(request, owner_module=owner_module, grant_key=grant_key, provider_module=provider_module,
                                action_id=action_id, targets=targets, parameters=parameters, confirmation_id=confirmation_id)
 
 
@@ -1080,21 +1075,21 @@ def remove_delegation_grant(*, owner_module, grant_key) -> bool:
     """Remove a grant. The caller must be ``owner_module``. Every ticket made for it stops working."""
     from . import delegation
 
-    return delegation.remove(_verified_caller(), owner_module=owner_module, grant_key=grant_key)
+    return delegation.remove(owner_module=owner_module, grant_key=grant_key)
 
 
 def issue_delegation_ticket(context, *, grant_key) -> str:
     """A signed 24 hour ticket for the owner module's own LIVE Scheduler run, bound to that run and to the grant as it is now."""
     from . import delegation
 
-    return delegation.issue_ticket(_verified_caller(), context, grant_key=grant_key)
+    return delegation.issue_ticket(context, grant_key=grant_key)
 
 
 def start_delegated_run(ticket, *, action_id, agent_ids, name=None):
     """Start the provider's own one-off run for the grant behind ``ticket``. The caller must be the grant's provider module. Returns the queued run."""
     from . import delegation
 
-    return delegation.start(_verified_caller(), ticket, action_id=action_id, agent_ids=agent_ids, name=name)
+    return delegation.start(ticket, action_id=action_id, agent_ids=agent_ids, name=name)
 
 
 class _SystemActionsProvider:

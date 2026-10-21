@@ -268,6 +268,8 @@ def calling_module_for_core_provider(*, provider_file, cache_seconds: float = 0)
     non-legacy extension. A Core frame, a library or Django frame, a generated (``<...>``) frame, a disabled or legacy module and any error
     give ``None``. Core is never identified (AD-26 condition 2): this names module code and nothing else. Enabled state is read on every call
     unless the provider opts in with ``cache_seconds`` (1.17.47, event jobs: a path that runs on every Tactical alert save). With
+    ``provider_file`` is one path, or (1.17.69) a non-empty tuple of paths when a provider spans several Core files (delegation.py and
+    system_actions.py): a frame of any of them is skipped. An empty tuple or an item that is not a path cannot be verified and gives ``None``.
     ``cache_seconds`` above 0 the installed modules and each enabled flag come from a process-local snapshot kept that long; a failed read
     is kept for ``FAILED_READ_SECONDS`` at most (1.17.48) and refuses (fail closed). The frame walk is never cached. At 0 (the default)
     nothing is cached. Since 1.17.48 a thin wrapper over the same walk as ``core_provider_caller_checked``: it cannot tell a fault from a
@@ -300,8 +302,17 @@ def core_provider_caller_checked(*, provider_file, cache_seconds: float = 0) -> 
         return CallerCheck(None, True)
 
 
+def _provider_files(provider_file) -> tuple | None:
+    """The provider's file(s) as a tuple of non-empty strings, or None when the provider names no usable file (1.17.69: a tuple names several)."""
+    if isinstance(provider_file, str):
+        return (provider_file,) if provider_file.strip() else None
+    if isinstance(provider_file, tuple) and provider_file and all(isinstance(item, str) and item.strip() for item in provider_file):
+        return provider_file
+    return None
+
+
 def _checked_from(frame, provider_file, cache_seconds: float) -> CallerCheck:
-    if not isinstance(provider_file, str) or not provider_file.strip():
+    if _provider_files(provider_file) is None:
         return CallerCheck(None, True)  # a provider that names no file cannot be verified
     try:
         return CallerCheck(_core_provider_caller(frame, provider_file, cache_seconds), False)
@@ -312,7 +323,8 @@ def _checked_from(frame, provider_file, cache_seconds: float) -> CallerCheck:
 def _core_provider_caller(frame, provider_file, cache_seconds: float = 0) -> CallerIdentity | None:
     """Walk up from the provider's own frame (already the first argument), as ``_calling_module`` does for a module provider.
     Raises ``_ReadFault`` when a read failed; any other exception is the caller's to treat as a fault."""
-    if not isinstance(provider_file, str) or not provider_file.strip():
+    provider_files = _provider_files(provider_file)
+    if provider_files is None:
         return None
     if cache_seconds > 0:
         snap = _snapshot(cache_seconds)
@@ -334,13 +346,13 @@ def _core_provider_caller(frame, provider_file, cache_seconds: float = 0) -> Cal
                 return _enabled_checked(module_id)
             except Exception:
                 raise _ReadFault(module_id) from None
-    provider_path = norm(provider_file)
+    provider_paths = {norm(item) for item in provider_files}
     framework = norm(_FRAMEWORK_DIR)
     try:
         path = None
         while frame is not None:
             path = _code_path(frame, norm)
-            if path != provider_path:
+            if path not in provider_paths:
                 break
             frame = frame.f_back
         if frame is None or path is None:

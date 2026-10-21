@@ -1,4 +1,4 @@
-# Tec-Tac Framework 1.17.68
+# Tec-Tac Framework 1.17.68-2
 
 Second rebuild of 1.17.68, after the round 1 review and the promotion stop (see "Fixed after review", rounds 1 to 3). Johan signed the patch lockdown (AD-41, "1) signed") and the delegated start (AD-43, CQ204, "3) yes", with AD-42 and AD-44) on 21 October 2026. Both are now ON. The lockdown works only while its conditions hold and does nothing otherwise. The delegated start is live, but nothing calls it yet.
 
@@ -167,7 +167,7 @@ Module-facing: none. The audit row text and the confirmation text are not part o
 
 Not run here: `tests/patch-lockdown-runtime-1.17.68.py` and the other runtime scripts need Django and the dev server.
 
-## Fixed after review (round 3, 1.17.68, 21 October 2026)
+## Fixed after review (round 3, 1.17.68-2, 21 October 2026)
 
 Johan answered the two decisions in chat: "1) signed" (the patch lockdown, AD-41) and "3) yes" (the delegated start, CQ204, AD-43), with AD-42 and AD-44 recorded. This round switches both on and makes their texts true for the live state.
 

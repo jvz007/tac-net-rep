@@ -112,14 +112,14 @@ VERSION_NOW = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 roots = sorted(p.name for p in ROOT.glob("RELEASE_NOTES_*.md"))
 must(roots == [f"RELEASE_NOTES_{VERSION_NOW}.md"], f"exactly one root release note: {roots}")
 must((ROOT / "docs" / "releases" / "RELEASE_NOTES_1.17.67.md").is_file() and (ROOT / "docs" / "releases" / "RELEASE_NOTES_1.17.66.md").is_file(), "the earlier notes are kept")
-body = (ROOT / f"RELEASE_NOTES_{VERSION_NOW}.md").read_text(encoding="utf-8")
+body = (ROOT / "docs" / "releases" / "RELEASE_NOTES_1.17.68.md").read_text(encoding="utf-8")  # 1.17.69 moved the 1.17.68 notes here (one root note at a time)
 for needle in ("# Tec-Tac Framework 1.17.68", "## What changed and why", "## Module-facing", "## What I checked in modules/", "## What was left out, and what ends each wait", "## What I could not do", "## Questions I filed",
                "## Not run here", "## Dev-server checklist", "## Tests", "PASS", "FAIL", "Behaviour change 1", "Behaviour change 2", "CQ203", "CQ204", "CQ205", "tec_tac_check_contract_export", "migration 0037", "makemigrations --check",
                "patch-lockdown-runtime-1.17.68.py", "scheduler-creation-scope-runtime-1.17.68.py", "delegation-runtime-1.17.68.py", "delegation part (S4)", "checklist A2",
                "It never widens", "Closes", "R-36"):
     must(needle in body, f"the release notes lack {needle!r}")
-must(VERSION_NOW.split("-")[0] == "1.17.68" and f'"version": "{VERSION_NOW}"' in (ROOT / "tec_tac_package.json").read_text(encoding="utf-8"), "version 1.17.68")
-print("       one root release note, the earlier ones kept, VERSION and the package say 1.17.68")
+must(f'"version": "{VERSION_NOW}"' in (ROOT / "tec_tac_package.json").read_text(encoding="utf-8"), "VERSION and the package agree")
+print("       one root release note, the earlier ones kept, VERSION and the package agree")
 
 # ---- the questions and the requests
 reviews = ROOT.parents[1] / "reviews"

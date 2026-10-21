@@ -271,7 +271,7 @@ must(sched._resolver_scope_check(alice, "maintenance", {"type": "other"}) is Non
 resolvers._RESOLVERS[("maintenance", "profile")] = lambda targets: (_ for _ in ()).throw(RuntimeError("module bug"))
 must(sched._resolver_scope_check(alice, "maintenance", T) is False, "an unresolvable type is False (and not the old unrestricted-only rule)")
 resolvers._RESOLVERS[("maintenance", "profile")] = lambda targets: []
-must(sched._resolver_scope_check(bob, "maintenance", T, strict=True) is True, "a resolver that names no endpoint reaches nothing")
+must(sched._resolver_scope_check(bob, "maintenance", T, strict=True) is False, "a resolver that names no endpoint cannot be checked against a scope, so a takeover is refused (1.17.69, AD-42)")
 SCOPE["alice"], SCOPE["bob"] = {1, 2, 3}, {1}
 MANAGER["bob"] = False
 resolvers._RESOLVERS[("maintenance", "profile")] = lambda targets: [1, 2]

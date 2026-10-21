@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.68",
+  "version": "1.17.69",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.17.68.md",
-      "size": 36558,
-      "sha256": "fe0dfd9b9387e22f7b930bbf51fc2d78ff74be32a8127c9e16dd38a15c4542b7"
+      "path": "RELEASE_NOTES_1.17.69.md",
+      "size": 11523,
+      "sha256": "dd3a80b42a2f1fb6241b9f4007ace101d67e76157aebe5cb4fe30a6f4fda21f8"
     },
     {
       "path": "VERSION",
       "size": 7,
-      "sha256": "b4ed94ca4760b5232d448a49c2799a18aa187db987ca75c23700c3c79530991d"
+      "sha256": "180fbbac3d9f4909056bf05dfcdcccb11a30b26389e70ca7acfabc8a08bffad3"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -73,8 +73,8 @@
     },
     {
       "path": "docs/caller-identity.md",
-      "size": 10317,
-      "sha256": "84f4d83a24b6b47a5ab0e5e26f0720b53c8394c28207aec9f4db01c41aad364e"
+      "size": 10799,
+      "sha256": "a494654fae8cbdc6093b8c06d62acf1ebc14312c5eff67990de7a2be81f84260"
     },
     {
       "path": "docs/capabilities.md",
@@ -1402,6 +1402,11 @@
       "sha256": "f58cf7545fbad43d0ca23bb01a8b92b303c798dfde3bd6d5e976799e965d7d21"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.68.md",
+      "size": 36562,
+      "sha256": "be23a3b9edcd38b7e44273e72776e69f34226da41f082652624c7376f3021957"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.7.md",
       "size": 9249,
       "sha256": "f288a2d999944822827d8767f406f50bda6894c7dc9d8908a476e4f391a6c8cb"
@@ -1538,8 +1543,8 @@
     },
     {
       "path": "docs/system-actions.md",
-      "size": 45267,
-      "sha256": "d55418db91c084411e45aef8a981c6a76e34839f61aefb86648d0e1dc5f8c74c"
+      "size": 45953,
+      "sha256": "d2a137184285b8133769c4a496b6c449faa0b75b9bc5e809b59c41072f696491"
     },
     {
       "path": "docs/system-update-logs.md",
@@ -1803,8 +1808,8 @@
     },
     {
       "path": "framwork/tec_tac/caller_identity.py",
-      "size": 19829,
-      "sha256": "a490c764ece5da6778858d6baae1c50d5af64fad019419362f0abfab8109732c"
+      "size": 20616,
+      "sha256": "ceb4808de3cd42e32ab601f12df8b01c1a53660c9cec043e4c7cb33fbb3aee2a"
     },
     {
       "path": "framwork/tec_tac/capabilities.py",
@@ -1848,8 +1853,8 @@
     },
     {
       "path": "framwork/tec_tac/delegation.py",
-      "size": 36696,
-      "sha256": "97a5269963c19daf288d38290c7effd4c1a978440fcf7bdbac256aac9adcbbc1"
+      "size": 39372,
+      "sha256": "7ced2177b14ba76a3dd59ce9ea23d74935802a142e8dce7e37169a3c04204996"
     },
     {
       "path": "framwork/tec_tac/diagnostic_views.py",
@@ -2303,8 +2308,8 @@
     },
     {
       "path": "framwork/tec_tac/scheduler.py",
-      "size": 99263,
-      "sha256": "a11bde6585353090aa5a5c128bf6f83b179e76ccd4e67d6dbe60815aeefc6826"
+      "size": 101030,
+      "sha256": "440e61cc4a635d1dee31c068548074e65e82ec762fb4d7156e173b74868c67f3"
     },
     {
       "path": "framwork/tec_tac/scheduler_completion.py",
@@ -2383,8 +2388,8 @@
     },
     {
       "path": "framwork/tec_tac/system_actions.py",
-      "size": 69603,
-      "sha256": "4e9df41d99c34c19691e2fff9a0897f91e537e8f091faf3fd4442c422675625b"
+      "size": 69370,
+      "sha256": "065a07ce1b839c4a375546fddfddf0a52c4bee3fe80f449f5ae1390e90fdd2f2"
     },
     {
       "path": "framwork/tec_tac/system_update.py",
@@ -2654,7 +2659,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "a95754fbe71cb5fe3724ddeeb2d6d549a056630170391982cfc89158036dfc99"
+      "sha256": "f0d51ca7c95806f04f8762d75f5d698e9738218caf7dc2743c108eff46abd712"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2917,6 +2922,11 @@
       "sha256": "ec6123c980b7129d475892fbfba650ce937cc420f540ad485cbfada19a492b0a"
     },
     {
+      "path": "tests/caller-identity-1.17.69.py",
+      "size": 5864,
+      "sha256": "e4512f7a562693b98329be425e212ef1adcb4938dd5566e79bfbc5a68ed740a6"
+    },
+    {
       "path": "tests/caller-identity-core-provider-1.17.27.py",
       "size": 9112,
       "sha256": "d1f3ce0b01810cd063939815723eb99143be48d8181bc53d0363ea27793adb2d"
@@ -2968,8 +2978,8 @@
     },
     {
       "path": "tests/contract-catalog-1.17.68.py",
-      "size": 14310,
-      "sha256": "2d5f89e5aa73474101417dc8283865754d6eddb71ebe332ac39d33bf9473c19a"
+      "size": 14499,
+      "sha256": "b41866226313b08aff706a788b1b5edfa01a92bb6be27976f2aa7acaa88558e2"
     },
     {
       "path": "tests/contract-export-1.17.14.py",
@@ -3085,6 +3095,16 @@
       "path": "tests/delegation-compat-1.17.68.py",
       "size": 9155,
       "sha256": "b448d3d5d2296095c6b49dfa89d13a4f0b81787fbc5745dcd80c2509abc8c52d"
+    },
+    {
+      "path": "tests/delegation-fixes-1.17.69.py",
+      "size": 13657,
+      "sha256": "4f5923e27620f3450a772c7cc2ee72e73c475090954864e9f78f3f2fb4454c87"
+    },
+    {
+      "path": "tests/delegation-fixes-runtime-1.17.69.py",
+      "size": 4437,
+      "sha256": "d916da0807e10702ce46d8e2695ca166a9448ce639208ba8bec353b8fe2457fc"
     },
     {
       "path": "tests/delegation-grant-1.17.68.py",
@@ -4518,8 +4538,8 @@
     },
     {
       "path": "tests/scheduler-target-resolver-1.17.68.py",
-      "size": 23377,
-      "sha256": "211706640199439aff6b0229dfb9911d6fca99fce6478b437fff3eb8eb06a908"
+      "size": 23439,
+      "sha256": "28db8d8df9666a67d0d0002c910e65fea2ceb8635be5694a8a500bbc4a294d21"
     },
     {
       "path": "tests/scheduler-target-shape.py",

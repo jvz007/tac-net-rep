@@ -1406,11 +1406,13 @@ def _check_person_may_schedule(user, action: ScheduledAction, targets: dict) -> 
     if not may_run:
         raise SchedulerNotAllowed("The person does not have permission to run this action.")
     try:
-        decided = _resolver_scope_check(user, action.module_id, targets)  # 1.17.68: a module-owned type with a resolver is judged by its endpoints
+        decided = _resolver_scope_check(user, action.module_id, targets, refuse_empty=True)  # 1.17.68: a module-owned type with a resolver is judged by its endpoints
         in_scope = _can_access_target_scope(user, targets) if decided is None else decided
     except Exception as exc:
         raise SchedulerNotAllowed("The targets are outside the person's Tactical scope.") from exc
     if not in_scope:
+        if decided is False and _names_no_endpoints(action.module_id, targets):
+            raise SchedulerNotAllowed(EMPTY_TARGET_LIST_REFUSED)
         raise SchedulerNotAllowed("The targets are outside the person's Tactical scope.")
 
 
@@ -1425,10 +1427,30 @@ class TakeoverRefused(SchedulerNotAllowed):
     takeover_row = None  # (person, schedule id, action id, owner module): the deny row is written after the transaction rolls back
 
 
-def _resolver_scope_check(user, module_id, targets, *, strict: bool = False):
+EMPTY_TARGET_LIST_REFUSED = (
+    "This target list names no endpoints, so Core cannot check it against your Tactical scope. Add at least one endpoint and try again."
+)
+
+
+def _names_no_endpoints(module_id, targets) -> bool:
+    """True when a resolver applies to ``targets`` and names no endpoint (1.17.69). Used only to choose the refusal text."""
+    from . import scheduler_target_resolvers as resolvers
+
+    try:
+        pks = resolvers.resolve_agent_pks(module_id, targets)
+    except Exception:  # noqa: BLE001 - only picks a text
+        return False
+    return pks is not None and not pks
+
+
+def _resolver_scope_check(user, module_id, targets, *, strict: bool = False, refuse_empty: bool = False):
     """For a module-owned target type that has a registered resolver (1.17.68): ``True`` when every endpoint it names is inside the person's
     Tactical scope (a native scheduler manager passes unless ``strict``), ``False`` when one is not or the targets cannot be read, and ``None``
-    when no resolver applies, so the caller keeps its existing rule. Never raises for a missing resolver; a read fault is ``False``."""
+    when no resolver applies, so the caller keeps its existing rule. Never raises for a missing resolver; a read fault is ``False``.
+
+    A resolver that names no endpoint (1.17.69, AD-42) cannot be checked against a scope. It is ``False`` when ``strict`` (a takeover) and, with
+    ``refuse_empty`` (creation), for a person who is not a native scheduler manager and whose Tactical scope is not unrestricted. Every other path
+    keeps ``True`` for it: a run with nothing to do must not fail, and a schedule must not vanish from a scoped person's list."""
     from . import scheduler_target_resolvers as resolvers
 
     kind = resolvers.target_type_of(targets)
@@ -1442,9 +1464,17 @@ def _resolver_scope_check(user, module_id, targets, *, strict: bool = False):
     pks = resolvers.resolve_agent_pks(module_id, targets)
     if pks is None:
         return False
-    if not pks:
-        return True  # a resolver that names no endpoint reaches nothing
     from . import resources_adapter
+
+    if not pks:
+        if strict:
+            return False  # nothing to check the person's scope against: a takeover is refused
+        if refuse_empty:
+            try:
+                return bool(resources_adapter.tactical_scope_unrestricted(user=user))
+            except Exception:  # noqa: BLE001 - fail closed
+                return False
+        return True  # a run-time or read check: a resolver that names no endpoint reaches nothing
 
     return bool(resources_adapter.agent_pks_in_role_scope(user=user, pks=sorted(pks)))
 
@@ -1641,13 +1671,15 @@ def start_one_off_run(*, user, owner_module: str, action_id: str, targets: dict 
         raise SchedulerNotAllowed("The user does not have permission to run this action.")
     try:
         canonical = _canonicalize_endpoint_targets_for_user(user, canonical)
-        decided = _resolver_scope_check(user, action.module_id, canonical)  # 1.17.68: a module-owned type with a resolver
+        decided = _resolver_scope_check(user, action.module_id, canonical, refuse_empty=True)  # 1.17.68: a module-owned type with a resolver
         in_scope = _can_access_target_scope(user, canonical) if decided is None else decided
     except SchedulerError:
         raise
     except Exception as exc:
         raise SchedulerNotAllowed("The targets are outside the user's Tactical scope.") from exc
     if not in_scope:
+        if decided is False and _names_no_endpoints(action.module_id, canonical):
+            raise SchedulerNotAllowed(EMPTY_TARGET_LIST_REFUSED)
         raise SchedulerNotAllowed("The targets are outside the user's Tactical scope.")
 
     now = timezone.now()
