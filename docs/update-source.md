@@ -126,3 +126,14 @@ The state stays `unknown` (`basis` null) when the head VERSION cannot be read (n
 `tec_tac.runtime_settings.get_update_source(component)` returns `{type, ref}`. It never raises. A missing or invalid stored value reads as the default.
 
 Storage is the `update_sources` JSON column on `TecTacRuntimeConfig` (migration `0025_runtime_update_sources`).
+
+## Where the GitHub token is sent (1.17.73)
+
+Core reads the token file (`GITHUB_TOKEN_FILE`) as before and adds an `Authorization` header to GitHub requests: the release and branch checks, the VERSION read and the repository archive download.
+
+- The token goes only to `api.github.com`, `github.com` and `codeload.github.com`, over https, on the default port. A staged zipball starts at `api.github.com` and ends at `codeload.github.com`, so codeload receives the token.
+- A redirect to any other host, or to a host with a port other than 443, is followed without the `Authorization` header. The other headers stay.
+- Only https is followed. A redirect to http, file or ftp is refused with "GitHub redirected to a non-HTTPS address; the download was refused." A first address that is not https is refused too.
+- At most 5 redirects are followed. The sixth is refused with "GitHub redirected too many times; the request was refused."
+- Neither message holds the token or the address. Proxy settings from the service environment work as before.
+

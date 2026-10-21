@@ -195,3 +195,13 @@ A repository that wants each member of a suite to appear independently in the on
 ### Proxy-aware fetches
 
 Repository fetches honor the service environment's `HTTP_PROXY` / `HTTPS_PROXY` and `NO_PROXY` settings. Core still resolves and validates every repository or redirect target against the SSRF policy before contacting the configured proxy. When a proxy is used, Core sends the proxy a connection to the already-approved pinned destination address rather than allowing the proxy to choose a different target address. Proxy URLs must use an `http://` proxy endpoint.
+
+## What module-state.json keeps of a repository address
+
+`module-state.json` is readable by everyone on the server (mode 0o644). Since 1.17.72 Core and the two root helpers store only the scheme, host, port and path of a repository address in `source.repository_url`.
+
+- **Removed before the file is written:** the query string, the fragment, `;params` and user info.
+- **Not removed:** anything in the path. A token placed in the path, for example `/t/<token>/index.json`, still reaches the file.
+
+The 1.17.72 notes said a token in a repository URL no longer reaches the file. That is true only for the query, the fragment and user info. If a repository needs a token, carry it in the query or in user info (neither is stored), or hold it by repository id. Never put it in the path. The download itself always uses the full address, so a token in the query keeps working.
+

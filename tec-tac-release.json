@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.72",
+  "version": "1.17.73",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.17.72.md",
-      "size": 5357,
-      "sha256": "a79ed0bc06771805df9f553617db083c07993c638fcd44edf5d898b4e0703428"
+      "path": "RELEASE_NOTES_1.17.73.md",
+      "size": 5011,
+      "sha256": "560fcb3a7b922dac6a46b136493c3aa8c6fd71715f272ad7f8817f26c6505cfa"
     },
     {
       "path": "VERSION",
       "size": 7,
-      "sha256": "2131d89f41b3a641d88c6534a1d429d1aab0344ea47a3a9c7439a4e95f54e534"
+      "sha256": "e2d112bf3b0026f2f6bddc40293a919ecf13baafc5f1f6eef1746d8d8f16340e"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -173,8 +173,8 @@
     },
     {
       "path": "docs/module-repositories.md",
-      "size": 15015,
-      "sha256": "a28ead1fbea6a7bf1876b057550189f391f6d038549dd7b4fbb4ea15ae7cb7a4"
+      "size": 15890,
+      "sha256": "5fd8264f41bface6ff04639db5c16c9680230b7a919beeb88bc6bebb444a529d"
     },
     {
       "path": "docs/module-routes.md",
@@ -1432,6 +1432,11 @@
       "sha256": "8e3e794e4a65ad46676a12ef1a8fdc0e4aaaa4f0d936e0cf3634ced02d0bf741"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.72.md",
+      "size": 5917,
+      "sha256": "b504d99039a0986076557ffb46e1b95353c586370b4c951b541ac4968e21afbe"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.8.md",
       "size": 6017,
       "sha256": "522041d551b428c183247e1ecca653d55dc02c20a8e2344c51024a44d51bdb91"
@@ -1738,8 +1743,8 @@
     },
     {
       "path": "docs/update-source.md",
-      "size": 7677,
-      "sha256": "a0050559333e75462d8c40c1cb59d9cc5f57d33beeb6800a3f60d34b841574d4"
+      "size": 8722,
+      "sha256": "939e26e1a60a80f00792a529d463b5fae167834207646437e04840da8c7e8173"
     },
     {
       "path": "docs/user-preferences.md",
@@ -2233,8 +2238,8 @@
     },
     {
       "path": "framwork/tec_tac/module_state.py",
-      "size": 11073,
-      "sha256": "2e568cffbfd45db5909e8892867a77638110d24038568ef5997debba94832acb"
+      "size": 11179,
+      "sha256": "c9c6687262a61673e943c0057196e7199604873a6fe88c491f251a624478d0ad"
     },
     {
       "path": "framwork/tec_tac/module_v2_views.py",
@@ -2418,8 +2423,8 @@
     },
     {
       "path": "framwork/tec_tac/system_update.py",
-      "size": 60244,
-      "sha256": "39cb29c29ade745ef2810a4142b88787f342c6cb88170fa6241f86ba674e3fa1"
+      "size": 62894,
+      "sha256": "ffcb8b854e06a96cc71e1b2c47d52b0a7740fafec1c3aa0f2ae27a9430526fd6"
     },
     {
       "path": "framwork/tec_tac/system_update_audit.py",
@@ -2578,13 +2583,13 @@
     },
     {
       "path": "scripts/module-job-helper.py",
-      "size": 43957,
-      "sha256": "f0d63cedea82cba94d83d4aeba179e37606a3052aad57c50052a325e1fde711a"
+      "size": 44063,
+      "sha256": "fd3636c21973c9ddeb2a02a4f28a048ac057d0518d9b41e5f662c9b1042942c8"
     },
     {
       "path": "scripts/module-v2-job-helper.py",
-      "size": 92489,
-      "sha256": "e3e2ad7392ab2d75a5d74801cb5bbd0b87011a310164c1b10bd8a88f69d59d78"
+      "size": 92595,
+      "sha256": "757cabebf5db54d19940be912b52daa530ac5d4c059ddbc11773a1395e828e96"
     },
     {
       "path": "scripts/plugin-info.sh",
@@ -2689,7 +2694,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "76cb9b9b371ec9c506bd4a01c469b06a1987a200cadb3d858d7dcb4d0724d2fa"
+      "sha256": "983e9b50c6342e44589d81f20cee1ffa599ac7c2c80535d6e20bd6f84cb5f733"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -3867,6 +3872,11 @@
       "sha256": "f0e6748b2ec541cfc176d692d47fef3b3b8a815c38ceac209e87560d01181ff8"
     },
     {
+      "path": "tests/module-state-source-url-path-1.17.73.py",
+      "size": 5501,
+      "sha256": "5d5ac2d2eae3e30d440c69a58e9e2b200a1ead81c68f47f41ddbfc8dac0fffc2"
+    },
+    {
       "path": "tests/module-status-replaces-1.17.11.py",
       "size": 8551,
       "sha256": "97441651610d118abb709b828dd7bbf786674cfc88c1e7b23da2ec38d26dcf02"
@@ -5025,6 +5035,11 @@
       "path": "tests/system-update-logs-runtime-1.17.67.py",
       "size": 20093,
       "sha256": "453c559ca0d61c94180c468c73f485c30d60f7b1de02975cbc9bb85a04f4f8de"
+    },
+    {
+      "path": "tests/system-update-redirect-1.17.73.py",
+      "size": 9884,
+      "sha256": "81338e9369ec508a7d3270dfaea4fa0aa8fcf2155deb20c34e3abddc7e601ea3"
     },
     {
       "path": "tests/system-update-refused-1.17.43.py",

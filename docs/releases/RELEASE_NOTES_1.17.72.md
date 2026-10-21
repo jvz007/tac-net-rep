@@ -4,7 +4,7 @@ Date: 21 October 2026. No migration. No new route. No new capability. `core.modu
 
 Two small hardening changes. Both close findings that were waiting.
 
-- **A token in a repository URL no longer reaches `module-state.json`.** That file is readable by everyone on the server. We now store the scheme, host, port and path of a repository URL and nothing else.
+- **A token in the query, fragment or user info of a repository URL no longer reaches `module-state.json`.** That file is readable by everyone on the server. We now store the scheme, host, port and path of a repository URL and nothing else. A token in the path still reaches the file (see the correction below).
 - **One bad dependency entry no longer hides the good ones.** A broken entry in one module's manifest used to drop every dependency of that key. Now only the broken entry is skipped, and Core says the answer is incomplete.
 
 What changes for a person today: nothing you can see. Downloads from a repository still use the full URL, so a repository that needs a token in its address keeps working.
@@ -15,7 +15,7 @@ No module-facing change. No module calls `core.module_dependants` yet, and no mo
 
 ### 1. No query string or fragment in `source.repository_url` (external audit closure report, H2, LOW-MEDIUM)
 
-A repository URL can carry a secret, for example `https://repo.example.com/index.json?token=abc#frag`. Core copied that URL into the staged package record and then into `module-state.json`, which is mode 0o644. Any local account could read the token.
+A repository URL can carry a secret, for example `https://repo.example.com/index.json?token=abc#frag`. Core copied that URL into the staged package record and then into `module-state.json`, which is mode 0o644. Any local account could read a token in the query.
 
 1. A new function, `strip_repository_url(value)`, keeps `scheme://host[:port]/path` and drops the query, the fragment, `;params` and user info. The scheme and host are written in lower case. An IPv6 host keeps its brackets. Anything that is not text, not http or https, or has no host gives an empty string, so nothing risky is stored.
 2. The function is used at every place that writes `source.repository_url`:
@@ -46,3 +46,7 @@ Not done here, on purpose: making `module-state.json` 0o640 `root:tactical`. You
 - Unchanged and still passing: `tests/module-dependants-1.17.71.py`, `tests/module-dependants-runtime-1.17.71.py`.
 
 What could not run on the build PC: Django is not installed, and the root helpers cannot run as root here. The helper tests use the same stubs as the 1.17.12 and 1.17.13 tests. The install from a real repository and the real file owner are for the dev-server check.
+
+### Corrected in 1.17.73 (21 October 2026)
+
+The sentence "A token in a repository URL no longer reaches `module-state.json`" was too broad. It is true only for a token in the query string, the fragment, `;params` or user info. The path is kept, so a token placed in the path (for example `/t/<token>/index.json`) still reaches the file, which stays 0o644 and world-readable. See `RELEASE_NOTES_1.17.73.md` and `docs/module-repositories.md`.

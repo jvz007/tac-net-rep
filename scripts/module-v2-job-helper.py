@@ -186,7 +186,8 @@ def load_module_state():
 def strip_repository_url(value):
     """1.17.72 (H2): a repository URL as it may be stored in module-state.json: scheme, host, port and path only.
 
-    No query, fragment, ';params' or user info, so a token in a repository URL never reaches a file that anyone on the server can read. Anything
+    The query, fragment, ';params' and user info are dropped; the path is kept, so a token in the query or user info does not reach a file that anyone
+    on the server can read, but a token in the path does. Do not put a secret in the path. Anything
     that is not an http or https URL with a host gives '' (fail closed). The fetch URL is never changed; only what is written to state is.
     This is the root helper's own copy of tec_tac/module_state.py (it never imports the Tactical-writable tree); change both together.
     tests/module-state-source-url-1.17.72.py runs every copy over one matrix.

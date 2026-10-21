@@ -180,10 +180,67 @@ def _github_headers() -> dict[str, str]:
     return headers
 
 
+_GITHUB_TOKEN_HOSTS = frozenset({"api.github.com", "github.com", "codeload.github.com"})
+_MAX_GITHUB_REDIRECTS = 5
+
+
+def _keeps_github_token(url: str) -> bool:
+    """True only for https on one of the three approved GitHub hosts, on the default port."""
+    try:
+        parts = urllib.parse.urlsplit(url)
+        host = (parts.hostname or "").lower()
+        port = parts.port
+    except ValueError:
+        return False
+    return parts.scheme == "https" and host in _GITHUB_TOKEN_HOSTS and port in (None, 443)
+
+
+class _GithubRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Follow a GitHub redirect over https only, at most 5 hops, and send the token only to the approved hosts."""
+
+    max_redirections = _MAX_GITHUB_REDIRECTS
+    max_repeats = _MAX_GITHUB_REDIRECTS
+
+    def http_error_302(self, req, fp, code, msg, headers):
+        # urllib checks the scheme itself and raises HTTPError for file:// and friends; refuse every non-https target first, with our own message.
+        target = headers.get("location") or headers.get("uri") or ""
+        try:
+            scheme = urllib.parse.urlsplit(urllib.parse.urljoin(req.full_url, target)).scheme.lower()
+        except ValueError:
+            scheme = ""
+        if target and scheme != "https":
+            raise SystemUpdateError("GitHub redirected to a non-HTTPS address; the download was refused.")
+        return super().http_error_302(req, fp, code, msg, headers)
+
+    http_error_301 = http_error_303 = http_error_307 = http_error_308 = http_error_302
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if urllib.parse.urlsplit(newurl).scheme.lower() != "https":
+            raise SystemUpdateError("GitHub redirected to a non-HTTPS address; the download was refused.")
+        if len(getattr(req, "redirect_dict", {})) >= _MAX_GITHUB_REDIRECTS:
+            raise SystemUpdateError("GitHub redirected too many times; the request was refused.")
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None and not _keeps_github_token(newurl):
+            for store in (new.headers, new.unredirected_hdrs):
+                for key in [k for k in store if k.lower() == "authorization"]:
+                    del store[key]
+        return new
+
+
+def _build_github_opener(*extra_handlers):
+    return urllib.request.build_opener(_GithubRedirectHandler, *extra_handlers)
+
+
+def _github_open(request, *, timeout):
+    if urllib.parse.urlsplit(request.full_url).scheme.lower() != "https":
+        raise SystemUpdateError("GitHub address must use HTTPS; the request was refused.")
+    return _build_github_opener().open(request, timeout=timeout)
+
+
 def _github_json(url: str) -> object:
     request = urllib.request.Request(url, headers=_github_headers())
     try:
-        with urllib.request.urlopen(request, timeout=20) as response:
+        with _github_open(request, timeout=20) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[:500]
@@ -198,7 +255,7 @@ def _github_content_bytes(repo: str, path: str, ref: str) -> bytes | None:
     url = f"https://api.github.com/repos/{repo}/contents/{encoded_path}?ref={encoded_ref}"
     request = urllib.request.Request(url, headers=_github_headers())
     try:
-        with urllib.request.urlopen(request, timeout=20) as response:
+        with _github_open(request, timeout=20) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
@@ -629,7 +686,7 @@ def stage_uploaded_package(upload, *, release_manifest_upload=None, release_sign
 def _download_to_stage(url: str, *, filename: str, source: dict, component: str) -> dict:
     request = urllib.request.Request(url, headers=_github_headers())
     try:
-        response = urllib.request.urlopen(request, timeout=45)
+        response = _github_open(request, timeout=45)
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[:500]
         raise SystemUpdateError(f"Repository archive download failed ({exc.code}): {body or exc.reason}") from exc
