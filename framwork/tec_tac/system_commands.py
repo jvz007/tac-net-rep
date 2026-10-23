@@ -1,12 +1,18 @@
-"""System commands: the third kind of Tactical work Core does for a verified module (core.system_actions 1.5.0, Core 1.17.75, AD-45, AD-49).
+"""System commands: the third kind of Tactical work Core does for a verified module (core.system_actions 1.5.0, Core 1.17.75, rebuilt 1.17.76, AD-45, AD-49).
 
 The first kind starts a Tactical Celery task; the second writes one fixed column. A command has no task and no column: Tactical's own route
-``agents/views.py send_raw_cmd`` runs one command on one endpoint and waits for the text. Core holds ONE fixed row for it, ``agent.command``. The module that owns
-the piece of Tactical (Remote Background) registers it; Core defines and enforces everything else, so no module can widen it.
+``POST agents/<agent_id>/cmd/`` (``agents/views.py send_raw_cmd``, operation ``agents_cmd_create``, string agent id) runs one command on one endpoint and answers with
+the output text. Core holds ONE fixed row for it, ``agent.command``. The module that owns the piece of Tactical (Remote Background) registers it; Core defines and
+enforces everything else, so no module can widen it.
 
-AD-49 (Johan, 23 October 2026): Core never accepts a command string from a caller. It runs only FIXED TEMPLATES, hardcoded in the signed code of the owning
-module (Communicator), so they change only with a module update. A call is ``{agent_id, command_id, template_id, params}``; Core renders the final command itself
-from the template and the typed, validated params.
+1.17.76 (Johan, 23 October 2026, chat): Core no longer copies the steps of ``send_raw_cmd`` (the 1.17.75 history row and ``nats_cmd``). It runs Tactical's OWN
+view in process. Johan's signed call: the person's Communicator rights are checked when the schedule is made, and the command runs as the Communicator module, not
+as the owner and without the owner needing Tactical's ``can_send_cmd``. The narrowest build: a dedicated, least-privilege Tactical service user
+(``SERVICE_USERNAME``, role ``SERVICE_ROLE``) that Core makes at install or upgrade time (migration 0038) and checks on every call. It may hold ``can_send_cmd`` and nothing else, is not a superuser or
+installer user, cannot sign in (unusable password, ``block_dashboard_login``), and is used by ``_send`` only: ``run_one`` refuses any row but ``agent.command``, and
+``_send`` is reached only after every check of ``run_system_command`` (verified Communicator run, action bound to the run, owner scope, templates and hashes).
+Tactical's own scope check for that user is open (its role has no client or site limits); the endpoint was validated against the OWNER's creation-time scope
+before, and the string agent id is resolved from that one validated number. Known issue (Johan, fix next week): docs/system-actions.md.
 
 What is fixed here
     * Templates are registered at ``AppConfig.ready()`` through ``register_command_template`` by a module on REGISTRANTS only. A template is immutable: the same
@@ -21,21 +27,23 @@ What is fixed here
     * One endpoint per call, a timeout of 1 to 60 seconds, the caller on the row's allow-list (``communicator``), its Scheduler run being the run the context
       belongs to (checked in ``_run``).
     * One ``command_id`` per endpoint, once. The claim is ``cache.add`` with a 24-hour expiry: atomic, and shared by every worker when the cache is shared
-      (Tactical's Redis). A cache that cannot be reached refuses the call (fail closed). A claim that expires or is evicted lets the same id run again after
-      24 hours; that is the recorded limit.
+      (Tactical's Redis). A cache that cannot be reached refuses the call (fail closed). Since 1.17.76 the claim is backed by the strict audit 'before' row, which
+      is durable: after the claim Core looks for an earlier row of the same endpoint and command_id, and one that exists refuses the call (``duplicate_command``) even
+      after a cache flush or eviction. A lookup that fails refuses the call (fail closed).
+    * The route takes Tactical's STRING agent id, not the number; Core resolves it from the number and refuses the call when it cannot (``bad_agents``).
     * The strict audit row is written BEFORE the send and a closing row after. Neither holds the command text or the output: they hold the run, the schedule,
       the endpoint, the command_id, the template id and hash, the shell, the timeout and the lengths.
     * The output text is cut at MAX_OUTPUT_BYTES (1 MiB) and the result says so.
 """
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import logging
 import os
 import re
 import threading
+from io import BytesIO
 from pathlib import Path
 
 logger = logging.getLogger("tec_tac.system_actions")
@@ -56,6 +64,17 @@ SLOT_RE = re.compile(r"\{([a-z][a-z0-9_]{0,31})\}")
 HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 FORBIDDEN_CHARS = set("\"'`\\$&|;<>(){}[]^%!*?~#\r\n\t\0=,@")  # never allowed in a text slot's character set
 CLOSING_ACTION = "custom:command-closed"
+UNREACHABLE_REPLIES = ("timeout", "natsdown")  # send_raw_cmd answers 200 with this bare text when the agent never answered (as Remote Background's service.py maps it)
+OWNER_VIEW_DISPATCH_SIGNED = True  # 1.17.76 (Johan, chat, 23 October 2026): run as the Communicator module; False would switch the row off again (fail closed)
+SERVICE_USERNAME = "tectac-communicator"
+SERVICE_ROLE = "Tec-Tac Communicator (send commands only)"
+SERVICE_FLAG = "can_send_cmd"
+RIGHT_SEND, RIGHT_REBOOT = "communicator.send", "communicator.reboot"  # 1.17.76 (AD-50): the Communicator rights the person held when the schedule was made
+RIGHTS = (RIGHT_SEND, RIGHT_REBOOT)
+CLAIM_LOOKUP_DAYS = 7  # the durable claim lookup reads only this window of the audit log (the cache claim itself lasts 24 hours)
+MAX_COMMANDS_PER_RUN = 2000  # defense in depth (Communicator caps a call at 2 000 endpoints); one run sends at most this many, above it the call is refused
+RUN_COUNT_SECONDS = 2 * 24 * 3600
+UNREACHABLE_TEXT = "Unable to contact the agent"  # what send_raw_cmd answers with HTTP 400 when nats_cmd returned "timeout"
 
 
 class CommandRefused(Exception):
@@ -152,12 +171,13 @@ def _check_file_inside(module_id: str, file: str) -> None:
         raise CommandTemplateError("a template file must lie inside the module's install directory and may not be, or sit behind, a symlink.")
 
 
-def register_command_template(module_id, template_id, *, shell, text=None, file=None, slots=None, timeout=30) -> dict:
+def register_command_template(module_id, template_id, *, shell, text=None, file=None, slots=None, timeout=30, right=RIGHT_SEND) -> dict:
     """Register one fixed command template. Call it from ``AppConfig.ready()`` of a module on REGISTRANTS. Memory only.
 
     ``text`` is the fixed command with ``{slot}`` placeholders; ``file`` is the absolute path of a file shipped in the module (its content is the template,
     read and hashed again at every run). Exactly one of the two. ``slots`` maps a slot name to ``{"type": "int", "min", "max"}``,
-    ``{"type": "text", "max", "chars"}`` or ``{"type": "enum", "values"}``. ``template_id`` is ``<module_id>.<name>``. Returns ``{id, hash}``.
+    ``{"type": "text", "max", "chars"}`` or ``{"type": "enum", "values"}``. ``right`` (1.17.76) is the Communicator right a person needs for this template: ``communicator.send`` (default) or
+    ``communicator.reboot`` for a restart template; Core refuses a run whose confirmed ``rights`` do not hold it. ``template_id`` is ``<module_id>.<name>``. Returns ``{id, hash}``.
     The same content again returns the same record; different content under the same id is refused (``CommandTemplateError``) and logged."""
     try:
         from .caller_identity import calling_module_for_core_provider
@@ -175,8 +195,10 @@ def register_command_template(module_id, template_id, *, shell, text=None, file=
             raise CommandTemplateError("timeout must be 1 to 60 seconds.")
         if (text is None) == (file is None):
             raise CommandTemplateError("give exactly one of text and file.")
+        if right not in RIGHTS:
+            raise CommandTemplateError("right must be communicator.send or communicator.reboot.")
         clean = _clean_slots(slots)
-        record = {"id": template_id, "module_id": module_id, "shell": shell, "slots": clean, "timeout": timeout, "text": None, "file": None}
+        record = {"id": template_id, "module_id": module_id, "right": right, "shell": shell, "slots": clean, "timeout": timeout, "text": None, "file": None}
         if file is not None:
             if not isinstance(file, (str, Path)) or not Path(file).is_absolute() or not Path(file).is_file():
                 raise CommandTemplateError("file must be the absolute path of an existing file.")
@@ -192,7 +214,7 @@ def register_command_template(module_id, template_id, *, shell, text=None, file=
         with _LOCK:
             previous = _TEMPLATES.get(template_id)
             if previous is not None:
-                if previous["hash"] == record["hash"] and previous["file"] == record["file"] and previous["module_id"] == module_id:
+                if previous["hash"] == record["hash"] and previous["file"] == record["file"] and previous["module_id"] == module_id and previous.get("right") == right:
                     return {"id": template_id, "hash": previous["hash"]}
                 raise CommandTemplateError("this template id is already registered with different content; a template never changes after registration.")
             if len(_TEMPLATES) >= 64:
@@ -226,9 +248,11 @@ def template_hashes(template_ids) -> dict:
 
 # ------------------------------------------------------------------------------------------------ what the person confirms
 def parameters(values) -> dict:
-    """What the person confirmed: ``allowed_templates`` (1 to 16 registered ids), their ``template_hashes`` (as Core showed them) and ``max_timeout`` (1 to 60)."""
-    if not isinstance(values, dict) or not {"allowed_templates", "template_hashes"} <= set(values) <= {"allowed_templates", "template_hashes", "max_timeout"}:
-        raise ValueError("a command run takes allowed_templates, template_hashes and max_timeout.")
+    """What the person confirmed: ``allowed_templates`` (1 to 16 registered ids), their ``template_hashes`` (as Core showed them) and ``max_timeout`` (1 to 60), and since 1.17.76 ``rights``: the
+    Communicator rights the person held when the schedule was made (AD-50). Core cannot read a module permission, so the module attests them in what the person confirms;
+    ``communicator.send`` is always required, ``communicator.reboot`` too for a restart template, and a run refuses ``permission_lost`` without them."""
+    if not isinstance(values, dict) or not {"allowed_templates", "template_hashes", "rights"} <= set(values) <= {"allowed_templates", "template_hashes", "max_timeout", "rights"}:
+        raise ValueError("a command run takes allowed_templates, template_hashes, rights and max_timeout.")
     ids = values.get("allowed_templates")
     if isinstance(ids, (str, bytes, dict)) or not isinstance(ids, (list, tuple)) or not 1 <= len(ids) <= MAX_TEMPLATES:
         raise ValueError("allowed_templates must be a list of one to sixteen template ids.")
@@ -243,11 +267,19 @@ def parameters(values) -> dict:
     limit = values.get("max_timeout", MAX_TIMEOUT)
     if isinstance(limit, bool) or not isinstance(limit, int) or not MIN_TIMEOUT <= limit <= MAX_TIMEOUT:
         raise ValueError("max_timeout must be a whole number of seconds from 1 to 60.")
-    return {"allowed_templates": sorted(ids), "template_hashes": {i: hashes[i] for i in sorted(ids)}, "max_timeout": limit}
+    rights = values.get("rights")
+    if isinstance(rights, (str, bytes, dict)) or not isinstance(rights, (list, tuple)) or not rights or not all(r in RIGHTS for r in rights) or len(set(rights)) != len(rights) \
+            or RIGHT_SEND not in rights:
+        raise ValueError("rights must list the Communicator rights the person holds: communicator.send, and communicator.reboot for a restart template.")
+    with _LOCK:
+        needed = {_TEMPLATES[i].get("right", RIGHT_SEND) for i in ids}
+    if not needed <= set(rights):
+        raise ValueError("rights must cover every allowed template.")
+    return {"allowed_templates": sorted(ids), "template_hashes": {i: hashes[i] for i in sorted(ids)}, "max_timeout": limit, "rights": sorted(rights)}
 
 
 def audit_extra(cleaned) -> dict:
-    return {"allowed_templates": list(cleaned["allowed_templates"]), "template_hashes": dict(cleaned["template_hashes"]), "max_timeout": cleaned["max_timeout"]}
+    return {"allowed_templates": list(cleaned["allowed_templates"]), "template_hashes": dict(cleaned["template_hashes"]), "max_timeout": cleaned["max_timeout"], "rights": list(cleaned["rights"])}
 
 
 def confirmation_line(cleaned) -> str:
@@ -295,6 +327,8 @@ def resolve(command, cleaned) -> tuple[dict, int]:
     if current != record["hash"] or current != cleaned["template_hashes"].get(template_id):
         logger.warning("Command template %r no longer matches what was registered or confirmed; the call is refused.", template_id)
         raise CommandRefused("template_changed")
+    if record.get("right", RIGHT_SEND) not in cleaned.get("rights", ()):  # the Communicator right the person attested when the schedule was made (AD-50)
+        raise CommandRefused("permission_lost")
     slots = record["slots"]
     if set(params) != set(slots):
         raise CommandRefused("bad_command")
@@ -310,12 +344,47 @@ def _claim_key(run, agent_id: int, command_id: str) -> str:
     return "tectac:syscmd:" + hashlib.sha256(f"{agent_id}\0{command_id}".encode()).hexdigest()
 
 
+_RUN = threading.local()  # the run whose claims are being made (set by run_one around claim())
+_RECORDED: dict = {}  # run id -> {(agent_id, command_id)}: the audit lookup, read ONCE per run (at most the last few runs are kept)
+CLAIM_PREFETCH_MAX = 100000  # more recent rows than this in the window: the lookup is refused (fail closed), never truncated
+
+
+def _recent_recorded() -> set:
+    """1.17.76: the (agent_id, command_id) pairs of Core's strict 'run' rows of kind 'command' in the last CLAIM_LOOKUP_DAYS days: ONE query, bounded."""
+    from datetime import timedelta
+
+    from django.utils import timezone
+    from logs.models import AuditLog
+
+    rows = list(AuditLog.objects.filter(
+        entry_time__gte=timezone.now() - timedelta(days=CLAIM_LOOKUP_DAYS), action="run", object_type="system_action", debug_info__metadata__kind="command",
+    ).values_list("debug_info__metadata__agent_id", "debug_info__metadata__command_id")[: CLAIM_PREFETCH_MAX + 1])
+    if len(rows) > CLAIM_PREFETCH_MAX:
+        raise RuntimeError("Too many recent command rows to read safely.")
+    return {(int(a), str(c)) for a, c in rows if a is not None and c is not None}
+
+
+def _already_recorded(agent_id: int, command_id: str) -> bool:
+    """1.17.76: is there an earlier strict 'before' row of this endpoint and command_id in the last 7 days? The audit log is durable; the cache is not.
+    The rows are read once per run (not once per send); a send of this run is added to the set. A command_id older than 7 days is outside the lookup."""
+    run_id = getattr(_RUN, "run_id", None)
+    if run_id is None:
+        return (agent_id, command_id) in _recent_recorded()
+    if run_id not in _RECORDED:
+        _RECORDED[run_id] = _recent_recorded()
+        while len(_RECORDED) > 8:
+            _RECORDED.pop(next(iter(_RECORDED)))
+    return (agent_id, command_id) in _RECORDED[run_id]
+
+
 def claim(agent_id: int, command_id: str) -> bool:
-    """True once per (endpoint, command_id) across workers. A cache that raises refuses the call (fail closed)."""
+    """True once per (endpoint, command_id) across workers and cache flushes. A cache or a lookup that raises refuses the call (fail closed)."""
     from django.core.cache import cache
 
     try:
-        return bool(cache.add(_claim_key(None, agent_id, command_id), 1, CLAIM_SECONDS))
+        if not cache.add(_claim_key(None, agent_id, command_id), 1, CLAIM_SECONDS):
+            return False
+        return not _already_recorded(agent_id, command_id)  # the cache was flushed or evicted: the audit row remembers
     except Exception:
         logger.warning("The command claim could not be made; the call is refused.", exc_info=True)
         raise CommandRefused("function_unavailable") from None
@@ -330,10 +399,31 @@ def release(agent_id: int, command_id: str) -> None:
         logger.warning("A command claim could not be released.", exc_info=True)
 
 
-def available() -> bool:
+def count_run(run_id) -> int:
+    """The number of this call within its run (1 for the first), counted in the cache shared by the workers. Above ``MAX_COMMANDS_PER_RUN`` the call is refused
+    ``too_many_commands``; a cache that raises refuses too (fail closed)."""
+    from django.core.cache import cache
+
+    key = "tectac:syscmd-run:" + hashlib.sha256(str(run_id).encode()).hexdigest()
     try:
-        from agents.models import Agent, AgentHistory  # noqa: F401
-        from tacticalrmm.constants import AgentHistoryType  # noqa: F401
+        cache.add(key, 0, RUN_COUNT_SECONDS)
+        number = int(cache.incr(key))
+    except Exception:
+        logger.warning("The command count of a run could not be made; the call is refused.", exc_info=True)
+        raise CommandRefused("function_unavailable") from None
+    if number > MAX_COMMANDS_PER_RUN:
+        raise CommandRefused("too_many_commands", f"A run sends at most {MAX_COMMANDS_PER_RUN} commands; this was number {number}.")
+    return number
+
+
+def available() -> bool:
+    """True only when the signed dispatch is on and Tactical's agent and account models are importable."""
+    if not OWNER_VIEW_DISPATCH_SIGNED:
+        logger.warning("agent.command is switched off (fail closed).")
+        return False
+    try:
+        from accounts.models import Role, User  # noqa: F401
+        from agents.models import Agent  # noqa: F401
 
         return True
     except Exception:
@@ -341,19 +431,96 @@ def available() -> bool:
         return False
 
 
-def _send(agent_pk: int, call: dict, username: str):
-    """Tactical's own send_raw_cmd steps: a history row, then ``nats_cmd`` rawcmd and wait. Returns the reply or the text 'timeout'."""
-    from agents.models import Agent, AgentHistory
-    from tacticalrmm.constants import AgentHistoryType
+def route_agent_id(agent_pk: int) -> str:
+    """Tactical's STRING agent id for the route ``agents/{agent_id:agent}/cmd/`` (operationId agents_cmd_create) from the endpoint number. Fails closed."""
+    try:
+        from agents.models import Agent
 
-    agent = Agent.objects.get(pk=agent_pk)
-    hist = AgentHistory.objects.create(agent=agent, type=AgentHistoryType.CMD_RUN, command=call["command"], username=username[:50])
-    data = {"func": "rawcmd", "timeout": call["timeout"], "payload": {"command": call["command"], "shell": call["shell"]}, "run_as_user": False, "id": hist.pk}
-    return asyncio.run(agent.nats_cmd(data, timeout=call["timeout"] + 2))
+        value = Agent.objects.filter(pk=agent_pk).values_list("agent_id", flat=True).first()
+    except Exception:
+        logger.warning("The endpoint's agent id could not be read; the call is refused.", exc_info=True)
+        raise CommandRefused("bad_agents") from None
+    if not isinstance(value, str) or len(value) < 21 or "/" in value:
+        raise CommandRefused("bad_agents")
+    return value
 
 
-def _meta(definition, run, schedule_id, provenance, extra, agent_pk, call) -> dict:
-    return {
+def interpret_reply(reply) -> tuple[str, str, bool]:
+    """``(outcome, output, truncated)`` from the text the view answered with: the bare 'timeout' or 'natsdown' means the agent never answered (unreachable)."""
+    if reply is None or reply in UNREACHABLE_REPLIES:
+        return "unreachable", "", False
+    raw = str(reply).encode("utf-8", "replace")
+    return "ran", raw[:MAX_OUTPUT_BYTES].decode("utf-8", "ignore"), len(raw) > MAX_OUTPUT_BYTES
+
+
+def _service_user():
+    """The dedicated Tactical service user. It is made at install or upgrade time (Core migration 0038); this function only READS it and checks it on EVERY call.
+    It never creates anything (AD-50). Missing or deviating, the call is refused ``function_unavailable`` with a plain reason."""
+    from accounts.models import Role, User
+
+    role = Role.objects.filter(name=SERVICE_ROLE).first()
+    user = User.objects.filter(username=SERVICE_USERNAME).first()
+    if role is None or user is None:
+        raise CommandRefused("function_unavailable", "The Communicator service user is not installed. Run Core's upgrade (database migration) again; nothing was sent.")
+    for field in Role._meta.get_fields():
+        if getattr(field, "get_internal_type", lambda: "")() == "BooleanField" and bool(getattr(role, field.name, False)) != (field.name == SERVICE_FLAG):
+            raise CommandRefused("function_unavailable", "The service role holds more or less than can_send_cmd.")
+    if not user.is_active or user.is_superuser or user.is_staff or getattr(user, "is_installer_user", False) or not user.block_dashboard_login \
+            or user.role_id != role.pk or user.has_usable_password():
+        raise CommandRefused("function_unavailable", "The service user is not the least-privilege user Core made.")
+    return user
+
+
+def _build_view_request(call: dict, user, match, path: str):
+    from django.http import HttpRequest
+
+    payload = json.dumps({"shell": call["shell"], "cmd": call["command"], "timeout": call["timeout"], "custom_shell": None, "run_as_user": False},
+                         separators=(",", ":")).encode("utf-8")
+    clone = HttpRequest()
+    clone.META = {"REQUEST_METHOD": "POST", "PATH_INFO": path, "QUERY_STRING": "", "CONTENT_TYPE": "application/json", "CONTENT_LENGTH": str(len(payload)),
+                  "SERVER_NAME": "localhost", "SERVER_PORT": "443"}
+    clone.method, clone.path, clone.path_info = "POST", path, path
+    clone.content_type, clone.content_params = "application/json", {}
+    clone._body, clone._stream, clone._read_started = payload, BytesIO(payload), False
+    clone.resolver_match = match
+    clone._dont_enforce_csrf_checks = True
+    clone._force_auth_user = user  # DRF's ForcedAuthentication; no token is read or forwarded
+    clone._client_ip = "127.0.0.1"
+    return clone
+
+
+def _dispatch_view(match, request):
+    from .tactical_operations import _dispatch
+
+    return _dispatch(match, request)
+
+
+def _send(route_agent: str, call: dict, username: str, user=None):
+    """Run Tactical's own ``send_raw_cmd`` view for ``route_agent`` as the service user and return the answer text ('timeout' when the agent never answered).
+    ``username`` (the owner) is for the audit rows only. Any other answer raises, and the claim stays (at most once)."""
+    from django.urls import resolve
+
+    user = user if user is not None else _service_user()
+    path = f"/agents/{route_agent}/cmd/"
+    match = resolve(path)
+    if getattr(match.func, "__name__", "") != "send_raw_cmd":
+        raise CommandRefused("function_unavailable", "Tactical no longer serves the send-command view on this route.")
+    response = _dispatch_view(match, _build_view_request(call, user, match, path))
+    status = int(getattr(response, "status_code", 500))
+    content = bytes(getattr(response, "content", b"") or b"")
+    try:
+        data = json.loads(content.decode("utf-8")) if content else None
+    except ValueError:
+        data = content.decode("utf-8", "replace")
+    if 200 <= status < 300:
+        return data if isinstance(data, str) else ("" if data is None else str(data))
+    if status == 400 and isinstance(data, str) and UNREACHABLE_TEXT in data:
+        return "timeout"
+    raise RuntimeError(f"Tactical answered the send-command view with HTTP {status}.")
+
+
+def _meta(definition, run, schedule_id, provenance, extra, agent_pk, call, number=0) -> dict:
+    return {"run_send_number": number, "run_as": "communicator", "service_user": SERVICE_USERNAME, "owner_username": str(provenance.get("creator") or "")[:150],
         "requested_by": "scheduler", "run_id": str(run.id), "schedule_id": str(schedule_id), "owner_module": definition.module_id, "action_id": definition.id,
         "function": definition.function, "kind": "command", "agent_id": agent_pk, "command_id": call["command_id"], "template_id": call["template_id"],
         "template_hash": call["template_hash"], "shell": call["shell"],
@@ -362,38 +529,43 @@ def _meta(definition, run, schedule_id, provenance, extra, agent_pk, call) -> di
 
 
 def run_one(*, definition, run, verified, owner, provenance, extra, agent_pk, call) -> dict:
-    """Claim, audit (strict, before), send, audit (after). Returns the result dict. The command text is never logged or audited."""
+    """Claim (cache, then the durable audit row), audit (strict, before), send through Tactical's own view, audit (after). Returns the result dict. The command text is never logged or audited."""
+    if getattr(definition, "function", None) != "agent.command":  # the service path is this ONE row's, never another row's
+        raise CommandRefused("wrong_kind")
     from . import system_actions as _sa
     from .scheduler import SchedulerTransientError
 
     actor = _sa._actor_for(owner)
-    if not claim(agent_pk, call["command_id"]):
+    username = str(provenance.get("creator") or getattr(owner, "username", "") or "")
+    service_user = _service_user()  # read and re-checked BEFORE the claim and the audit row: a missing or deviant user sends nothing and creates nothing
+    route_agent = route_agent_id(agent_pk)  # before the claim: a number with no string id claims and sends nothing
+    number = count_run(run.id)  # the per-run cap, before the claim
+    _RUN.run_id = str(run.id)
+    try:
+        claimed = claim(agent_pk, call["command_id"])
+    finally:
+        _RUN.run_id = None
+    if not claimed:
         raise CommandRefused("duplicate_command")
+    _RECORDED.get(str(run.id), set()).add((agent_pk, call["command_id"]))
     try:
         _sa._audit().record(
             actor=actor, module_id="core", action="run", object_type="system_action", object_id=definition.id,
-            message="A scheduled command is being sent to one endpoint through Tactical.", metadata=_meta(definition, run, verified.schedule_id, provenance, extra, agent_pk, call),
+            message=f"Run as the communicator module for {username[:100] or 'unknown'}: a scheduled command is being sent to one endpoint through Tactical.", metadata=_meta(definition, run, verified.schedule_id, provenance, extra, agent_pk, call, number),
             strict=True,
         )
     except Exception:
         logger.exception("The audit row of a command could not be written; nothing is sent.")
         release(agent_pk, call["command_id"])
         raise SchedulerTransientError("The audit row could not be written, so nothing was sent.") from None
-    username = str(provenance.get("creator") or getattr(owner, "username", "") or "")
     outcome, output, truncated = "ran", "", False
     try:
-        reply = _send(agent_pk, call, username)
-        if reply == "timeout" or reply is None:
-            outcome = "unreachable"
-        else:
-            raw = str(reply).encode("utf-8", "replace")
-            truncated = len(raw) > MAX_OUTPUT_BYTES
-            output = raw[:MAX_OUTPUT_BYTES].decode("utf-8", "ignore")
+        outcome, output, truncated = interpret_reply(_send(route_agent, call, username, service_user))
     except Exception:
         logger.exception("The command could not be sent; Core never sends it again under this command_id.")  # the claim stays: at most once
         outcome = "failed"
     try:
-        metadata = _meta(definition, run, verified.schedule_id, provenance, extra, agent_pk, call)
+        metadata = _meta(definition, run, verified.schedule_id, provenance, extra, agent_pk, call, number)
         metadata.update(phase="closed", outcome=outcome, output_bytes=len(output.encode("utf-8")), truncated=truncated)
         _sa._audit().record(
             actor=actor, module_id="core", action=CLOSING_ACTION, object_type="system_action", object_id=definition.id,

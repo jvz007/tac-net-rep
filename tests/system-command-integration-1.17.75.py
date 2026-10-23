@@ -79,7 +79,11 @@ def fake_claim(agent_id, command_id):
 
 
 sc.run_one, sc.resolve, sc.claim, sc.release, sc.available = spy_run_one, spy_resolve, fake_claim, lambda a, c: None, lambda: True
-sc._send = lambda pk, call, username: (SEEN["sent"].append((pk, call["shell"], call["command"], call["timeout"])), "done")[1]
+sc.count_run = lambda run_id: 1
+sc.route_agent_id = lambda pk: "A" * 21 + str(pk)
+sc._already_recorded = lambda a, c: False
+sc._service_user = lambda: object()  # 1.17.76: run_one reads the installed service user first; the dispatch itself is faked here
+sc._send = lambda route_agent, call, username, user=None: (SEEN["sent"].append((int(route_agent[21:]), call["shell"], call["command"], call["timeout"])), "done")[1]
 
 LEAK = {}
 CFG = {"action_id": CMD, "command": None}
@@ -137,7 +141,7 @@ def world():
 
 def params(comm):
     ids = ["communicator.notice"]
-    return {"system_action_parameters": {"allowed_templates": ids, "template_hashes": comm["hashes"](ids), "max_timeout": 30}}
+    return {"system_action_parameters": {"allowed_templates": ids, "template_hashes": comm["hashes"](ids), "rights": ["communicator.send"], "max_timeout": 30}}
 
 
 KW = {"schedule_type": "daily", "run_time": time(3, 0)}

@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.75",
+  "version": "1.17.76",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.17.75.md",
-      "size": 11309,
-      "sha256": "f85e4441530b21ecf4298e983673fa67c9b9244a8c47e8fe8c19be4e28e35e18"
+      "path": "RELEASE_NOTES_1.17.76.md",
+      "size": 10230,
+      "sha256": "3bc9450b29e3aeb20367b12e6e06cfda0bb72ff3cc84aedb9a8b79a2fb75794e"
     },
     {
       "path": "VERSION",
       "size": 7,
-      "sha256": "9e83ee7bc1c5249950a56d593d33bf0f78e8b5eb3aa384ad71b935896b8faebc"
+      "sha256": "ab37d3cce50e8295dc16be4656c47b62e17d0dc321518f2a23ab77eb12286c03"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -1447,6 +1447,11 @@
       "sha256": "6636a5bdb3fd59f077caa6b7e2a44ab65169df4346ade6651baa50306f79db9f"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.75.md",
+      "size": 11309,
+      "sha256": "f85e4441530b21ecf4298e983673fa67c9b9244a8c47e8fe8c19be4e28e35e18"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.8.md",
       "size": 6017,
       "sha256": "522041d551b428c183247e1ecca653d55dc02c20a8e2344c51024a44d51bdb91"
@@ -1578,8 +1583,8 @@
     },
     {
       "path": "docs/system-actions.md",
-      "size": 60550,
-      "sha256": "864b8e49c642c89d424947bc06d6cc4014a4a8143540bc94c65c99efa9d96418"
+      "size": 64197,
+      "sha256": "3aaacc95128c8c774f2d3a7678f4bd5026e5d81cb6b9b6e112c8c4c0a7f2ee5e"
     },
     {
       "path": "docs/system-update-logs.md",
@@ -1873,8 +1878,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 420258,
-      "sha256": "8922e2a7c6438a378faebbe1aa1b2746ba98eebbceb0274705e5cbd3313eff2a"
+      "size": 418613,
+      "sha256": "80fe37355bffff9d8233afea96701b3bc71e6fad3905e4882fe541d985fdcef7"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -2150,6 +2155,11 @@
       "path": "framwork/tec_tac/migrations/0037_creation_scope_and_delegation.py",
       "size": 3035,
       "sha256": "93624c7c2bf94bf1ed1429a36b2c766dbca2896ba852afab89d2b8421d8fd1ad"
+    },
+    {
+      "path": "framwork/tec_tac/migrations/0038_communicator_service_user.py",
+      "size": 2487,
+      "sha256": "d5307b6242a0c1543bc79375cba04052c6f3fe7452b7f6f18c9c0681ec588e71"
     },
     {
       "path": "framwork/tec_tac/migrations/__init__.py",
@@ -2428,13 +2438,13 @@
     },
     {
       "path": "framwork/tec_tac/system_actions.py",
-      "size": 95995,
-      "sha256": "f601e23438128d42e57688787ac60c15784e645edce3b3f800e6e6c7c490a923"
+      "size": 95989,
+      "sha256": "f2c0528cb6d574c776e39338018376e4972a51a56307a0f9c09e413073fc4a0e"
     },
     {
       "path": "framwork/tec_tac/system_commands.py",
-      "size": 24611,
-      "sha256": "b1f69e8b7be86dc587a7cc5b556a7cc326ef0a5ce7f00560897eba3c1714e7cf"
+      "size": 36911,
+      "sha256": "2858a11ad773a2e0c3af43e12dd4def98e792d7f22dd7c783f8747ed93b720a8"
     },
     {
       "path": "framwork/tec_tac/system_update.py",
@@ -2709,7 +2719,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "feb38a01202801481bc8a08eac932b6ff7452b033698b2a3e96261a8271d406a"
+      "sha256": "eb716921c37d84e38fa07da696182ff12c5cd12850705b17d3ecd1197c3c4c73"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -5038,13 +5048,18 @@
     },
     {
       "path": "tests/system-command-1.17.75.py",
-      "size": 16840,
-      "sha256": "7a549f58d5436e91223297436b42eaedb867961779c856bde4cc7f943f90f493"
+      "size": 17345,
+      "sha256": "4dc191a37154f20048e86021fcca77135312f5673d1305487be45bcf81983056"
+    },
+    {
+      "path": "tests/system-command-1.17.76.py",
+      "size": 24583,
+      "sha256": "e62bd70d72dc972adc9919bc4676638c16e1088582ba0c1bea0aa530ff870099"
     },
     {
       "path": "tests/system-command-integration-1.17.75.py",
-      "size": 12010,
-      "sha256": "651bd10f23662393b66b6dd1e1f12cb90ce237ad004973d81e1454de517a83a9"
+      "size": 12336,
+      "sha256": "6acd8300a07767fa438539c5f1918118ca0eb763167e11b63cd7558a3f6bc5c3"
     },
     {
       "path": "tests/system-name-1.17.23.py",

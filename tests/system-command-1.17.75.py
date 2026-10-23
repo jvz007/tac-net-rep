@@ -43,6 +43,10 @@ class FakeCache:
     def delete(self, key):
         store.pop(key, None)
 
+    def incr(self, key):
+        store[key] += 1
+        return store[key]
+
 
 django = types.ModuleType("django")
 core = types.ModuleType("django.core")
@@ -80,6 +84,8 @@ spec = importlib.util.spec_from_file_location("tec_tac.system_commands", ROOT / 
 sc = importlib.util.module_from_spec(spec)
 sys.modules["tec_tac.system_commands"] = sc
 spec.loader.exec_module(sc)
+sc.route_agent_id = lambda pk: "A" * 21 + str(pk)  # 1.17.76: the string agent id (no Django here)
+sc._already_recorded = lambda a, c: False  # 1.17.76: the durable audit lookup (no Django here)
 
 # ---- registration
 import os
@@ -150,13 +156,13 @@ freg = sc.register_command_template("communicator", "communicator.filetpl", shel
 
 # ---- parameters
 h, fh = reg["hash"], freg["hash"]
-ok = sc.parameters({"allowed_templates": ["communicator.notice"], "template_hashes": {"communicator.notice": h}, "max_timeout": 10})
-must(ok == {"allowed_templates": ["communicator.notice"], "template_hashes": {"communicator.notice": h}, "max_timeout": 10}, "parameters are cleaned")
+ok = sc.parameters({"allowed_templates": ["communicator.notice"], "template_hashes": {"communicator.notice": h}, "rights": ["communicator.send"], "max_timeout": 10})
+must(ok == {"allowed_templates": ["communicator.notice"], "template_hashes": {"communicator.notice": h}, "rights": ["communicator.send"], "max_timeout": 10}, "parameters are cleaned")
 for bad in ({}, None, {"allowed_templates": [], "template_hashes": {}}, {"allowed_templates": ["communicator.notice"]},
             {"allowed_templates": ["communicator.notice"], "template_hashes": {"communicator.notice": "zz"}},
             {"allowed_templates": ["communicator.notice"], "template_hashes": {"communicator.other": h}},
             {"allowed_templates": ["communicator.nothere"], "template_hashes": {"communicator.nothere": h}},
-            {"allowed_templates": ["communicator.notice"], "template_hashes": {"communicator.notice": h}, "max_timeout": 61},
+            {"allowed_templates": ["communicator.notice"], "template_hashes": {"communicator.notice": h}, "rights": ["communicator.send"], "max_timeout": 61},
             {"allowed_templates": ["communicator.notice"], "template_hashes": {"communicator.notice": h}, "allowed_shells": ["cmd"]},
             {"allowed_templates": "communicator.notice", "template_hashes": {}}):
     try:
@@ -166,7 +172,7 @@ for bad in ({}, None, {"allowed_templates": [], "template_hashes": {}}, {"allowe
         must(True, f"parameters refuse {bad!r}")
 
 # ---- resolve
-cleaned = sc.parameters({"allowed_templates": ["communicator.notice", "communicator.filetpl"], "template_hashes": {"communicator.notice": h, "communicator.filetpl": fh}, "max_timeout": 10})
+cleaned = sc.parameters({"allowed_templates": ["communicator.notice", "communicator.filetpl"], "template_hashes": {"communicator.notice": h, "communicator.filetpl": fh}, "rights": ["communicator.send"], "max_timeout": 10})
 good = {"agent_id": 7, "command_id": "run1-7", "template_id": "communicator.notice", "params": {"text": "reboot soon", "mins": 5}}
 call, agent = sc.resolve(good, cleaned)
 must(agent == 7 and call["command"] == "msg * /time:5 reboot soon" and call["shell"] == "cmd" and call["timeout"] == 10 and call["template_hash"] == h,
@@ -244,7 +250,8 @@ logging.getLogger("tec_tac.system_actions").addHandler(Catch())
 
 
 def go(command_id, reply, agent_pk=70):
-    sc._send = lambda pk, call, username: (sent.append((pk, call["command_id"])), reply)[1]
+    sc._service_user = lambda: object()  # 1.17.76: read first by run_one
+    sc._send = lambda route_agent, call, username, user=None: (sent.append((route_agent, call["command_id"])), reply)[1]
     return sc.run_one(definition=definition, run=run, verified=verified, owner=None, provenance={"creator": "johan"}, extra={}, agent_pk=agent_pk,
                       call={"command_id": command_id, "template_id": "communicator.notice", "template_hash": "ab" * 32, "shell": "cmd", "command": SECRET, "timeout": 5})
 
@@ -265,7 +272,7 @@ must(big["truncated"] is True and len(big["output"].encode()) == sc.MAX_OUTPUT_B
 must(go("c3", "timeout")["outcome"] == "unreachable", "a timeout reads unreachable")
 
 
-def boom(pk, call, username):
+def boom(route_agent, call, username):
     raise RuntimeError("nats down")
 
 
@@ -284,7 +291,7 @@ audit_fail["before"] = False
 # ---- the wiring in system_actions.py
 src = (ROOT / "system_actions.py").read_text(encoding="utf-8")
 for needle in ('"agent.command": SystemFunction(', 'kind=KIND_COMMAND', 'callers=("communicator",)', 'a command action must be registered with dangerous=True',
-               'CAPABILITY_VERSION = "1.5.0"', '"run_command"', 'def run_system_command(', 'common["keep_run"] = True', 'verified.held_at_creation("can_send_cmd")',
+               'CAPABILITY_VERSION = "1.5.0"', '"run_command"', 'def run_system_command(', 'common["keep_run"] = True', 'verified.held_at_creation(flag)',
                "keep_run: bool = False", '"duplicate_command"', '"bad_command"', '"template_changed"', 'register_command_template = _sc.register_command_template'):
     must(needle in src, f"system_actions.py has: {needle}")
 
