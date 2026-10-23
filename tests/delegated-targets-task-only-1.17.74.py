@@ -17,12 +17,13 @@ H = Path(__file__).resolve().parent / "delegated-targets-harness-1.17.74.py"
 exec(compile(H.read_text(encoding="utf-8"), str(H), "exec"), globals())  # noqa: S102 - the shared test harness, not user input
 
 # ---- no command kind, no reboot row
-must(set(sa.SYSTEM_FUNCTIONS) == {"winupdate.scan", "winupdate.install", "scripts.run", "winupdate.set_action"}, sorted(sa.SYSTEM_FUNCTIONS))
-must(not hasattr(sa, "KIND_COMMAND") and not hasattr(sa, "_sent_result") and {row.kind for row in sa.SYSTEM_FUNCTIONS.values()} == {"task", "write"}, "no command kind")
-must(not (APP / "system_commands.py").exists(), "no system_commands.py")
+must(set(sa.SYSTEM_FUNCTIONS) == {"winupdate.scan", "winupdate.install", "scripts.run", "winupdate.set_action", "agent.command"}, sorted(sa.SYSTEM_FUNCTIONS))
+must(not hasattr(sa, "_sent_result") and {row.kind for row in sa.SYSTEM_FUNCTIONS.values()} == {"task", "write", "command"}, "the only command row is agent.command (1.17.75); no reboot row")
+must((APP / "system_commands.py").exists(), "system_commands.py is the 1.17.75 command kind")
 for path in APP.glob("*.py"):
     text = path.read_text(encoding="utf-8")
-    must("nats_cmd" not in text.replace("nats_cmd is never", "") and "rebootnow" not in text and "KIND_COMMAND" not in text, f"{path.name} sends a command")
+    home = path.name in ("system_commands.py", "system_actions.py")  # 1.17.75: the one command row lives here
+    must(("nats_cmd" not in text.replace("nats_cmd is never", "") or path.name == "system_commands.py") and "rebootnow" not in text and ("KIND_COMMAND" not in text or home), f"{path.name} sends a command")
 fresh(3)
 PLUGINS["patchmanagement"].system_actions = (ACTION, "patchmanagement.reboot")
 try:
@@ -31,7 +32,7 @@ try:
 except sa.SystemActionRegistrationError:
     pass
 meta = sa.system_actions_contract_metadata()
-must("command" not in meta and "kinds" not in meta and "agents.reboot" not in meta["functions"] and "delegable_kinds" not in meta["delegation"], "the metadata names no command")
+must(meta["command"]["function"] == "agent.command" and "kinds" not in meta and "agents.reboot" not in meta["functions"] and "delegable_kinds" not in meta["delegation"], "the metadata names no command")
 must(meta["delegation"]["callers"]["resolve_delegated_targets"] == "provider module named by the grant", meta["delegation"])
 print("       the table has no reboot or command row; agents.reboot cannot be registered; the framework sends no command")
 

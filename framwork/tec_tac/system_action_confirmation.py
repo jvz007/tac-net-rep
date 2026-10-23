@@ -253,7 +253,7 @@ def _controls(user, action, targets, parameters, *, resolver_module=None) -> dic
     sa = _sa
     with sa._LOCK:
         definition = sa._ACTIONS.get(action.id)
-    if definition is None or definition.module_id != action.module_id:
+    if definition is None or not sa.is_registered_system_action(action.module_id, action.id):  # a command row is scheduled by a module on its callers list (1.17.75)
         _deny(user, "unknown_action", action)
     entry = sa.SYSTEM_FUNCTIONS.get(definition.function)
     if entry is None:

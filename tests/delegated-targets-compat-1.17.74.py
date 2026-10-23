@@ -37,7 +37,7 @@ print("       the public functions keep their signatures; the new one is keyword
 # ---- the table and the definition are additive
 names = [f.name for f in fields(sa.SystemFunction)]
 must(names == ["key", "module_path", "function_name", "owner_module", "min_flags", "accepts", "takes_username", "reapproves_by_policy", "result_text", "parameters",
-               "validate_parameters", "build_call", "audit_extra", "kind", "replacement_only", "confirmation_line"], names)
+               "validate_parameters", "build_call", "audit_extra", "kind", "replacement_only", "confirmation_line", "callers"], names)  # 1.17.75: callers (command rows only)
 definition_fields = [f.name for f in fields(sa.SystemActionDefinition)]
 must(definition_fields == ["id", "module_id", "label", "function", "permissions", "scope_kind", "dangerous", "username_param", "via_replacement", "delegable_to"], definition_fields)
 scan = sa.SYSTEM_FUNCTIONS["winupdate.scan"]
@@ -54,7 +54,7 @@ print("       SystemFunction and the definition gain no field; the four earlier 
 # ---- the operations: the ten of 1.3.0 keep their place, one is appended
 earlier = ["list_actions", "get_action", "run", "describe_confirmation", "describe_delegation", "register_delegation_grant", "remove_delegation_grant", "issue_delegation_ticket",
            "start_delegated_run", "run_write"]
-must(list(sa.OPERATIONS)[:10] == earlier and list(sa.OPERATIONS)[10:] == ["resolve_delegated_targets"], sa.OPERATIONS)
+must(list(sa.OPERATIONS)[:10] == earlier and list(sa.OPERATIONS)[10:] == ["resolve_delegated_targets", "run_command"], sa.OPERATIONS)
 meta = sa.system_actions_contract_metadata()
 must(meta["write"]["kinds"] == ["task", "write"] and meta["write"]["function"] == "winupdate.set_action", "a 1.3.0 reader of write.kinds still finds what it read")
 must(set(meta["delegation"]["callers"]) >= {"describe_delegation", "register_delegation_grant", "remove_delegation_grant", "issue_delegation_ticket", "start_delegated_run"}, meta["delegation"])

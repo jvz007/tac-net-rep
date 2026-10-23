@@ -35,7 +35,7 @@ print("       run_system_action and register_system_action keep their signatures
 # ---- the table fields are additive and defaulted
 names = [f.name for f in fields(sa.SystemFunction)]
 must(names == ["key", "module_path", "function_name", "owner_module", "min_flags", "accepts", "takes_username", "reapproves_by_policy", "result_text", "parameters",
-               "validate_parameters", "build_call", "audit_extra", "kind", "replacement_only", "confirmation_line"], names)
+               "validate_parameters", "build_call", "audit_extra", "kind", "replacement_only", "confirmation_line", "callers"], names)  # 1.17.75: callers (command rows only)
 old = sa.SystemFunction(key="x.y", module_path="a.b", function_name="c", owner_module="patching", min_flags=("can_run_bulk",), accepts="agent_pks", takes_username=False,
                         reapproves_by_policy=False, result_text="Queued")
 must(old.kind == "task" and old.replacement_only is False and old.confirmation_line is None and old.parameters == (), old)

@@ -181,10 +181,10 @@ def _action_declared_as_system_action(module_id: str, action_id: str) -> bool:
     """Is ``action_id`` listed in the signed manifest ``system_actions`` of ``module_id`` AND registered with core.system_actions for that
     module? Read at decision time (1.17.63); any error answers False."""
     try:
-        if action_id not in _manifest_system_actions(module_id):
-            return False
         from . import system_actions
 
+        if action_id not in _manifest_system_actions(system_actions.declaring_module(module_id, action_id)):
+            return False
         return bool(system_actions.is_registered_system_action(module_id, action_id))
     except Exception:  # noqa: BLE001 - any failure to read means the exemption does not apply
         return False
@@ -208,7 +208,7 @@ def system_action_state(module_id, action_id) -> str:
     if registered is False:
         return "not_declared"
     try:
-        listed = action_id in _manifest_system_actions(module_id)
+        listed = action_id in _manifest_system_actions(system_actions.declaring_module(module_id, action_id))
     except Exception:  # noqa: BLE001
         return "unknown"
     if not listed:
@@ -237,7 +237,9 @@ def register_scheduled_action(*, id: str, module_id: str, label: str, handler, d
         raise SchedulerError("Scheduled action unattended must be true or false.")
     if unattended:
         try:
-            declared = _manifest_system_actions(module)
+            from . import system_actions as _sys_actions
+
+            declared = _manifest_system_actions(_sys_actions.declaring_module(module, action_id))
         except Exception as exc:
             raise SchedulerError("Core could not read the module's signed manifest, so the action cannot be marked unattended.") from exc
         if action_id not in declared:

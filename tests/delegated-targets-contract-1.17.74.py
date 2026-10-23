@@ -28,7 +28,7 @@ meta = sa.system_actions_contract_metadata()
 EARLIER = ["list_actions", "get_action", "run", "describe_confirmation", "describe_delegation", "register_delegation_grant", "remove_delegation_grant",
            "issue_delegation_ticket", "start_delegated_run", "run_write"]
 must(at_least(meta["version"], "1.4.0") and meta["version"] == sa.CAPABILITY_VERSION, meta["version"])
-must(meta["operations"] == EARLIER + ["resolve_delegated_targets"] and list(sa.OPERATIONS) == EARLIER + ["resolve_delegated_targets"], meta["operations"])
+must(meta["operations"] == EARLIER + ["resolve_delegated_targets", "run_command"] and list(sa.OPERATIONS) == EARLIER + ["resolve_delegated_targets", "run_command"], meta["operations"])  # 1.17.75: run_command appended
 must(all(callable(getattr(sa._PROVIDER, name, None)) for name in meta["operations"]), "the provider has every operation, resolve_delegated_targets included")
 print("       core.system_actions is 1.4.0 or later; the ten earlier operations stay first and in order; resolve_delegated_targets is appended and exists on the provider")
 
@@ -48,10 +48,10 @@ print("       the capability route gives the same answer as the direct call")
 for key in ("id", "version", "operations", "python", "delegation", "functions", "manifest_key", "max_agents", "max_agents_per_group", "max_groups", "parameters_key",
             "refusal_reasons", "http", "delivery", "audit_actions", "requires_framework", "unattended", "write"):
     must(key in meta, key)
-must("kinds" not in meta and "command" not in meta and "delegable_kinds" not in meta["delegation"], "the metadata names no command kind (CQ213, CQ215 are open)")
+must("kinds" not in meta and set(meta["command"]) >= {"function", "callers"} and meta["command"]["function"] == "agent.command" and "delegable_kinds" not in meta["delegation"], "the metadata names no command kind (CQ213, CQ215 are open)")
 must(meta["write"]["kinds"] == ["task", "write"] and meta["write"]["function"] == "winupdate.set_action" and meta["write"]["max_changes"] == 40000, "a 1.3.0 reader of the write block still finds what it read")
 rows = meta["functions"]
-must(set(rows) == {"winupdate.scan", "winupdate.install", "scripts.run", "winupdate.set_action"}, sorted(rows))
+must(set(rows) == {"winupdate.scan", "winupdate.install", "scripts.run", "winupdate.set_action", "agent.command"}, sorted(rows))
 for key in ("winupdate.scan", "winupdate.install", "scripts.run"):
     must(rows[key]["kind"] == "task" and rows[key]["replacement_only"] is False, key)
 must(rows["winupdate.set_action"]["kind"] == "write" and rows["winupdate.set_action"]["replacement_only"] is True, "the write row is unchanged")
@@ -95,7 +95,7 @@ for needle in ("Durable runs with a reboot (Core 1.17.74)", "CQ213", "CQ215", "g
 durable = doc.split("## Durable runs with a reboot (Core 1.17.74)")[1].split("\n## ")[0]
 must("Core publishes no \"agent is back\" event" in durable and "Polling is the supported path" in durable and "An \"accepted\" answer is not a restart" in durable, "polling is the supported path and no event is published")
 must("A release that adds one must change this section and its test together." in durable, "the section says who must change it")
-must("The third kind: a command" not in doc and "custom:command-closed" not in doc and "Reboot (AD-46, CQ213, CQ215): not built" in doc, "the docs say the reboot row is not built")
+must("The third kind: a command (1.17.75" in doc and "Reboot (AD-46, CQ213, CQ215): not built" in doc, "the docs say the reboot row is not built")
 print("       docs/system-actions.md: the durable-run section (polling is the supported path, no event) and the reboot row named as not built")
 
 # ---- the contract-export gate: an export made for 1.17.73 fails, a matching one passes

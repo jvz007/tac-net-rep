@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.74",
+  "version": "1.17.75",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.17.74.md",
-      "size": 7213,
-      "sha256": "6636a5bdb3fd59f077caa6b7e2a44ab65169df4346ade6651baa50306f79db9f"
+      "path": "RELEASE_NOTES_1.17.75.md",
+      "size": 11309,
+      "sha256": "f85e4441530b21ecf4298e983673fa67c9b9244a8c47e8fe8c19be4e28e35e18"
     },
     {
       "path": "VERSION",
       "size": 7,
-      "sha256": "c0140acb2a58f9d817e9dce72fffb12e1c868461c16a6cba2c0ac0fcc85e0956"
+      "sha256": "9e83ee7bc1c5249950a56d593d33bf0f78e8b5eb3aa384ad71b935896b8faebc"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -1442,6 +1442,11 @@
       "sha256": "560fcb3a7b922dac6a46b136493c3aa8c6fd71715f272ad7f8817f26c6505cfa"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.74.md",
+      "size": 7213,
+      "sha256": "6636a5bdb3fd59f077caa6b7e2a44ab65169df4346ade6651baa50306f79db9f"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.8.md",
       "size": 6017,
       "sha256": "522041d551b428c183247e1ecca653d55dc02c20a8e2344c51024a44d51bdb91"
@@ -1573,8 +1578,8 @@
     },
     {
       "path": "docs/system-actions.md",
-      "size": 56434,
-      "sha256": "852bc6d1b7ee81ec5996c080c26c1c64d51333906f13cff3ea5e19dba351be04"
+      "size": 60550,
+      "sha256": "864b8e49c642c89d424947bc06d6cc4014a4a8143540bc94c65c99efa9d96418"
     },
     {
       "path": "docs/system-update-logs.md",
@@ -1868,8 +1873,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 416640,
-      "sha256": "3d0cb2333d1b99a05730ee06c37bebe9a0fad8d499c37f8dbba73e26f745ef53"
+      "size": 420258,
+      "sha256": "8922e2a7c6438a378faebbe1aa1b2746ba98eebbceb0274705e5cbd3313eff2a"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -2343,8 +2348,8 @@
     },
     {
       "path": "framwork/tec_tac/scheduler.py",
-      "size": 101030,
-      "sha256": "440e61cc4a635d1dee31c068548074e65e82ec762fb4d7156e173b74868c67f3"
+      "size": 101220,
+      "sha256": "b855445bd6661f7536c00468b47b8cc15722b09cbdced9be0f540852975a3463"
     },
     {
       "path": "framwork/tec_tac/scheduler_completion.py",
@@ -2418,13 +2423,18 @@
     },
     {
       "path": "framwork/tec_tac/system_action_confirmation.py",
-      "size": 20722,
-      "sha256": "ca1d8299f409dcbcdbed978f0465d149421f9c6492e035073c58ad6292bb5b5e"
+      "size": 20817,
+      "sha256": "60381397058b5ae4c5b212163d8a8c993b7778c0007ec230d3b41c93c7d89e8a"
     },
     {
       "path": "framwork/tec_tac/system_actions.py",
-      "size": 87300,
-      "sha256": "cf88d575ee8774b1284bcf1b894623c1cf477a77113422b90d34f92bd13dc17d"
+      "size": 95995,
+      "sha256": "f601e23438128d42e57688787ac60c15784e645edce3b3f800e6e6c7c490a923"
+    },
+    {
+      "path": "framwork/tec_tac/system_commands.py",
+      "size": 24611,
+      "sha256": "b1f69e8b7be86dc587a7cc5b556a7cc326ef0a5ce7f00560897eba3c1714e7cf"
     },
     {
       "path": "framwork/tec_tac/system_update.py",
@@ -2699,7 +2709,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "04a78b91befbdd6131a2d59f00aeaba5141c44ac062577a05867d5cd85e5f157"
+      "sha256": "feb38a01202801481bc8a08eac932b6ff7452b033698b2a3e96261a8271d406a"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -3008,8 +3018,8 @@
     },
     {
       "path": "tests/contract-catalog-1.17.66.py",
-      "size": 8567,
-      "sha256": "6d0210e52b594922fb9cbfdcc756522ae9980ab3063380baa3982f43faff84eb"
+      "size": 8584,
+      "sha256": "de0d30dd21034bb1d0d3ea9c71fb53a067d5c6276a0bfde93dbb69ee31e24cd4"
     },
     {
       "path": "tests/contract-catalog-1.17.67.py",
@@ -3133,13 +3143,13 @@
     },
     {
       "path": "tests/delegated-targets-compat-1.17.74.py",
-      "size": 10715,
-      "sha256": "94eb6401372c76f0507fb965b4b0906c2dcedcbbf061783b8b23ac6ae00437b7"
+      "size": 10781,
+      "sha256": "5b90c44cca68d9185e74b0a56e86a0f786e857895932cd86c53a52556e42b7b6"
     },
     {
       "path": "tests/delegated-targets-contract-1.17.74.py",
-      "size": 11307,
-      "sha256": "1e40c5457dbdf70e34c9a9e2d4d0211f380562227b709d0a7f080acdf80756c6"
+      "size": 11304,
+      "sha256": "9dc96b1cf70e60f87eff5885359897e8c6781a3abdf6468917147c5847589df0"
     },
     {
       "path": "tests/delegated-targets-harness-1.17.74.py",
@@ -3153,8 +3163,8 @@
     },
     {
       "path": "tests/delegated-targets-task-only-1.17.74.py",
-      "size": 5337,
-      "sha256": "10966f3c511140a851898984089f840ba57546f6c24356a11feb9ce8faa8487d"
+      "size": 5582,
+      "sha256": "59ab938723b9eba7d8042c737e9a26e5088220c2bbb84b1f483c9b5c4877bcd2"
     },
     {
       "path": "tests/delegation-compat-1.17.68.py",
@@ -4978,8 +4988,8 @@
     },
     {
       "path": "tests/system-actions-registry-1.17.61.py",
-      "size": 11537,
-      "sha256": "658db233a592f369f20cdf4ffa68d72d1c3523de7d91b5511fed2bad6f3fa5db"
+      "size": 11554,
+      "sha256": "c9dadace49fdb95686d841c4551701db39d00a07f9c05e8d792ae11f0ed16e6c"
     },
     {
       "path": "tests/system-actions-rows-1.17.66.py",
@@ -5008,13 +5018,13 @@
     },
     {
       "path": "tests/system-actions-table-1.17.61.py",
-      "size": 8979,
-      "sha256": "b3531785bd63aab9f567d1fa1c9c62cbfb3aa2ae53612f81a7cd2238e5c9e46b"
+      "size": 9013,
+      "sha256": "0f589eb5a3746d642a7b1df310f4afc43f40b8d92a10795af5bd0a3fb0a6f1b9"
     },
     {
       "path": "tests/system-actions-table-1.17.66.py",
-      "size": 5358,
-      "sha256": "1d732cce2593fe1a05088f2880c7e99c215af391cfa676a3424dc1bf134a6eb1"
+      "size": 5398,
+      "sha256": "f355f7dff2313888ec6f5f6c2c6e4cf557e5016069d9572a702cab3ce4388d8c"
     },
     {
       "path": "tests/system-actions-targets-1.17.62.py",
@@ -5025,6 +5035,16 @@
       "path": "tests/system-actions-unattended-1.17.63.py",
       "size": 19546,
       "sha256": "9b6d47c4d0f95df79d48b277258fc2980691b4c2fce31c7e71eef56c1d7f4cde"
+    },
+    {
+      "path": "tests/system-command-1.17.75.py",
+      "size": 16840,
+      "sha256": "7a549f58d5436e91223297436b42eaedb867961779c856bde4cc7f943f90f493"
+    },
+    {
+      "path": "tests/system-command-integration-1.17.75.py",
+      "size": 12010,
+      "sha256": "651bd10f23662393b66b6dd1e1f12cb90ce237ad004973d81e1454de517a83a9"
     },
     {
       "path": "tests/system-name-1.17.23.py",
@@ -5093,13 +5113,13 @@
     },
     {
       "path": "tests/system-writes-compat-1.17.70.py",
-      "size": 8528,
-      "sha256": "f09790f47ea438487b0e76356a0c91d627d738fffa8b00c79b928e4c6321749f"
+      "size": 8579,
+      "sha256": "51a1ee6d17ddf5408e22385b8766d68a444268f7e9999220c5532105bc3bec17"
     },
     {
       "path": "tests/system-writes-contract-1.17.70.py",
-      "size": 11103,
-      "sha256": "6ff48d9b7d34011a97243b726db4ae70ff71cbf4a8e6db68ab4bea87cef67e14"
+      "size": 11120,
+      "sha256": "c03c6e28d0876993dbc4f7bfc6d6fc2f1faa8fe918df9019286ebadfedc2692d"
     },
     {
       "path": "tests/system-writes-creation-1.17.70.py",

@@ -75,13 +75,14 @@ from django.db import transaction
 from django.utils import timezone
 
 from . import scheduler_run_context as _run_context
+from . import system_commands as _sc
 from .caller_identity import calling_module_for_core_provider
 from .scheduler import SchedulerPermanentError, SchedulerTransientError
 
 logger = logging.getLogger("tec_tac.system_actions")
 
 CAPABILITY_ID = "core.system_actions"
-CAPABILITY_VERSION = "1.4.0"
+CAPABILITY_VERSION = "1.5.0"
 MAX_AGENTS_PER_GROUP = 2000  # Johan, CQ178: more than this splits into groups of at most this many
 MAX_GROUPS = 20  # the ceiling of one run (assumption CQ195, asked): 20 groups
 MAX_AGENTS = MAX_AGENTS_PER_GROUP * MAX_GROUPS  # a Core constant: refused above, never truncated
@@ -89,6 +90,7 @@ MAX_PERMISSIONS = 8
 MAX_MARKS_PER_RUN = 105  # one mark per group plus one plan mark per call; room for five full calls of 20 groups (1.17.67)
 KIND_PLAN = "plan"  # a mark with no ``kind`` is a group mark
 KIND_TASK = "task"  # 1.17.70: a row of the table is a Tactical Celery task that Core starts ...
+KIND_COMMAND = "command"  # 1.17.75: Core sends one command to one endpoint through Tactical and returns its text (system_commands.py)
 KIND_WRITE = "write"  # ... or one fixed column of a Tactical table that Core writes itself, through Tactical's own serializer
 WRITE_ACTIONS = ("approve", "ignore", "nothing")  # what a Windows update decision may be set to ('inherit' has no meaning on one update row; Tactical v1.5.2)
 MAX_WRITE_ITEMS = MAX_AGENTS  # one call writes at most this many decisions (2000 per group, 20 groups); refused above, never truncated
@@ -260,6 +262,7 @@ class SystemFunction:
     kind: str = KIND_TASK  # KIND_TASK: ``module_path.function_name`` is a Celery task called with ``.delay``; KIND_WRITE: Core writes it itself (system_writes.py)
     replacement_only: bool = False  # True: only the HONOURED replacement of ``owner_module`` may register it, never ``owner_module`` itself
     confirmation_line: object = None  # a function of the cleaned parameters that returns one plain line for the Yes or No text, or None
+    callers: tuple = ()  # 1.17.75: KIND_COMMAND only: the modules whose own verified Scheduler run may call it (the registering module need not be one)
 
 
 SYSTEM_FUNCTIONS = MappingProxyType({
@@ -297,6 +300,15 @@ SYSTEM_FUNCTIONS = MappingProxyType({
         result_text="Written to Tactical's update decisions; Core's audit log holds the earlier and the new decision of every update.",
         parameters=("allowed_actions",), validate_parameters=_winupdate_parameters, audit_extra=_winupdate_audit_extra,
         kind=KIND_WRITE, replacement_only=True, confirmation_line=_winupdate_confirmation_line,
+    ),
+    # reference/tacticalrmm v1.5.2: agents/views.py send_raw_cmd (POST agents/<agent_id>/cmd/, SendCMDPerms = can_send_cmd): AgentHistory row, then the agent call for a raw command and wait.
+    # Core does those two steps itself (system_commands.py). Registered by remote-background (AD-45: it owns the piece); only a verified Communicator run may call it (CQ175, strictest).
+    "agent.command": SystemFunction(
+        key="agent.command", module_path="agents.models", function_name="Agent", owner_module="remote-background",
+        min_flags=("can_send_cmd",), accepts="command", takes_username=False, reapproves_by_policy=False,
+        result_text="Sent through Tactical; the output text is in the result.",
+        parameters=("allowed_templates", "template_hashes", "max_timeout"), validate_parameters=_sc.parameters, audit_extra=_sc.audit_extra,
+        kind=KIND_COMMAND, confirmation_line=_sc.confirmation_line, callers=("communicator",),
     ),
 })
 
@@ -517,6 +529,11 @@ def _build_definition(id, module_id, label, function, permissions, scope_kind, d
             raise SystemActionRegistrationError("a write to a Tactical table must be registered with dangerous=True.")
         if _clean_delegable_to(delegable_to, module):
             raise SystemActionRegistrationError("a write to a Tactical table cannot be delegated: delegable_to must be empty.")
+    if entry.kind == KIND_COMMAND:  # 1.17.75: strictest (CQ175): always dangerous, never delegated
+        if not dangerous:
+            raise SystemActionRegistrationError("a command action must be registered with dangerous=True.")
+        if _clean_delegable_to(delegable_to, module):
+            raise SystemActionRegistrationError("a command action cannot be delegated: delegable_to must be empty.")
     if entry.replacement_only and module == entry.owner_module:
         raise SystemActionRegistrationError(f"{function!r} may be registered only by the module that honourably replaces {entry.owner_module!r}, never by {entry.owner_module!r} itself.")
     if module != entry.owner_module:
@@ -594,7 +611,21 @@ def is_registered_system_action(module_id, action_id) -> bool:
     """Is ``action_id`` registered here by ``module_id``? Memory only (1.17.63; the scheduler asks it before it trusts an unattended flag)."""
     with _LOCK:
         definition = _ACTIONS.get(action_id) if isinstance(action_id, str) else None
-    return definition is not None and definition.module_id == module_id
+    if definition is None:
+        return False
+    entry = SYSTEM_FUNCTIONS.get(definition.function)
+    if entry is not None and entry.kind == KIND_COMMAND:  # 1.17.75 (AD-45, AD-49): the command row is registered by its owner but scheduled only by a module on its callers list
+        return module_id in entry.callers and definition.module_id == entry.owner_module
+    return definition.module_id == module_id
+
+
+def declaring_module(module_id, action_id) -> str:
+    """The module whose signed manifest lists a scheduled system action: the module itself, except that the command row (``agent.command``) is listed by its owner
+    (``remote-background``) while a module on its ``callers`` list (``communicator``) schedules it. Static: it does not depend on the order of registrations."""
+    entry = SYSTEM_FUNCTIONS.get("agent.command")
+    if entry is not None and module_id in entry.callers and isinstance(action_id, str) and action_id.startswith(entry.owner_module + "."):
+        return entry.owner_module
+    return module_id
 
 
 def get_system_action(action_id) -> dict | None:
@@ -635,6 +666,9 @@ REASONS = {
     "bad_changes": f"The changes are not a list of 1 to {MAX_WRITE_ITEMS} items of exactly update_id and action, each update once.",
     "unknown_update": "At least one update does not exist, so nothing was written.",
     "action_not_allowed": "At least one decision is not one the person confirmed, so nothing was written.",
+    "bad_command": "The command call is not valid: exactly agent_id, command_id, template_id and params, and the params fit the template's slots.",
+    "template_changed": "This command template no longer matches the one the person confirmed (its module was updated), so nothing was sent. Confirm the schedule again.",
+    "duplicate_command": "This command_id was already used for this endpoint, so nothing was sent.",
     "decisions_changed": "This run already tried these updates with other decisions, so Core wrote nothing new. Start a new run if you want the new decisions.",
 }
 
@@ -718,10 +752,10 @@ def _end_run(run_id, status: str, error_type: str, text: str) -> None:
 _KEEP_RUN_REASONS = frozenset({"caller_unverified", "wrong_module"})
 
 
-def _refuse(reason: str, *, run_id=None, owner=None, module_id=None, action_id=None, caller: str = "", detail: str = "", provenance=None):
+def _refuse(reason: str, *, run_id=None, owner=None, module_id=None, action_id=None, caller: str = "", detail: str = "", provenance=None, keep_run: bool = False):
     text = REASONS.get(reason, "The system action was refused.") + detail
     if run_id is not None:
-        if reason not in _KEEP_RUN_REASONS:
+        if reason not in _KEEP_RUN_REASONS and not keep_run:  # 1.17.75: a command call is one endpoint of a batch; its refusal never ends the run
             _end_run(run_id, _SKIPPED, "SystemActionRefused", text)
         _deny_row(reason, text, owner=owner, module_id=module_id, run_id=run_id, action_id=action_id, provenance=provenance)
     elif _unmatched_due(reason, caller):
@@ -949,7 +983,21 @@ def run_system_write(context, *, action_id, changes) -> dict:
     return _run(context, identity, action_id, None, None, writing=True, changes=changes)
 
 
-def _run(context, identity, action_id, agent_ids, parameters, *, writing=False, changes=None) -> dict:
+def run_system_command(context, *, action_id, command) -> dict:
+    """Run a registered COMMAND action on ONE endpoint for the owner of the Scheduler run ``context`` belongs to (core.system_actions 1.5.0, Core 1.17.75).
+
+    ``command`` is exactly ``{"agent_id": int, "command_id": str, "template_id": str, "params": dict}`` (AD-49): there is no command text. Core renders the command itself from the
+    fixed template the module registered with ``register_command_template`` and the typed params.
+    Call it from the verified Scheduler handler of a module on the row's ``callers`` list (``communicator``). Every check of ``run_system_action`` runs in the
+    same order, then the template id and its hash against what the person confirmed (``template_changed`` when the module was updated), the owner's stored scope (also for an unattended run) and ``can_send_cmd``. A repeated
+    ``command_id`` for the same endpoint is refused (``duplicate_command``). A refusal of this call does NOT end the run: it is one endpoint of a batch.
+    Returns ``{"outcome": "ran" | "unreachable" | "failed", "agent_id", "command_id", "output", "truncated", "message"}``; the output is cut at 1 MiB. Neither the command
+    nor the output is audited or logged. See docs/system-actions.md."""
+    identity = calling_module_for_core_provider(provider_file=__file__)
+    return _run(context, identity, action_id, None, None, command=command)
+
+
+def _run(context, identity, action_id, agent_ids, parameters, *, writing=False, changes=None, command=None) -> dict:
     caller = identity.module_id if identity is not None else ""
     shown_id = action_id if isinstance(action_id, str) else None
     # (1) a context Core issued, a run still going and a person behind it
@@ -973,6 +1021,8 @@ def _run(context, identity, action_id, agent_ids, parameters, *, writing=False, 
     provenance = _provenance(run)
     # the person behind the schedule (as the schedule row holds them) is the actor of any refusal that follows, even before the fresh read
     common = {"run_id": run.id, "module_id": module_id, "action_id": shown_id, "caller": caller, "owner": verified.user, "provenance": provenance}
+    if command is not None:
+        common["keep_run"] = True  # 1.17.75: one endpoint of a batch; a refusal of this call never ends the run
     if verified.user is None and not (unattended and (getattr(verified, "creator_username", None) or "")):
         _refuse("no_owner", **common)
     # (2) the verified caller is the run's module
@@ -985,14 +1035,18 @@ def _run(context, identity, action_id, agent_ids, parameters, *, writing=False, 
         definition = _ACTIONS.get(action_id) if isinstance(action_id, str) else None
     if definition is None:
         _refuse("unknown_action", **common)
-    if definition.module_id != identity.module_id:
+    called = SYSTEM_FUNCTIONS.get(definition.function)
+    if called is not None and called.kind == KIND_COMMAND:  # 1.17.75: the run's own module (on callers) calls; the registering module (remote-background) owns the Tactical piece
+        if action_id != str(run.action_id or "") or identity.module_id not in called.callers or not is_registered_system_action(identity.module_id, action_id):
+            _refuse("wrong_module", **common)  # the action named is the very action this run is scheduled for, never another one (no confused deputy)
+    elif definition.module_id != identity.module_id:
         _refuse("wrong_module", **common)
     if not _declared_now(definition.module_id, definition.id):  # 1.17.63: listed in the signed manifest now, not only at registration
         _refuse("action_not_declared", **common)
     entry = SYSTEM_FUNCTIONS.get(definition.function)
     if entry is None:
         _refuse("function_unavailable", **common)
-    if entry.kind != (KIND_WRITE if writing else KIND_TASK):  # 1.17.70: a task row is run by run_system_action, a write row by run_system_write
+    if entry.kind != (KIND_COMMAND if command is not None else KIND_WRITE if writing else KIND_TASK):  # 1.17.70: a task row is run by run_system_action, a write row by run_system_write
         _refuse("wrong_kind", **common)
     try:
         enabled = _enabled_now(definition.module_id)
@@ -1043,7 +1097,23 @@ def _run(context, identity, action_id, agent_ids, parameters, *, writing=False, 
             _refuse("no_owner", **common)
     # (6) the count, judged before any lookup, then (5) the scope of every endpoint
     decisions = {}
-    if writing:  # 1.17.70: the endpoints are the ones Core reads off the update rows itself; the rest of the checks below judge them like agent_ids
+    call = None
+    if command is not None:  # 1.17.75: exactly one endpoint and one command
+        try:
+            call, agent_pk = _sc.resolve(command, cleaned)
+        except _sc.CommandRefused as exc:
+            _refuse(exc.reason, detail=exc.detail, **common)
+        from .scheduler import CreationScopeUnavailable
+
+        try:
+            held = verified.held_at_creation("can_send_cmd")  # stricter than the other kinds: the right is checked for an unattended run too, from what was stored
+        except CreationScopeUnavailable:
+            _refuse("creation_scope_unavailable", **common)
+        if not held:
+            _refuse("permission_lost", **common)
+        ids = [agent_pk]
+        items = ids
+    elif writing:  # 1.17.70: the endpoints are the ones Core reads off the update rows itself; the rest of the checks below judge them like agent_ids
         from . import system_writes as writer
 
         try:
@@ -1078,7 +1148,7 @@ def _run(context, identity, action_id, agent_ids, parameters, *, writing=False, 
         _refuse("outside_targets", detail=note, **common)
     # (6c) 1.17.68: an unattended run on a module-owned target type reads its endpoints from a module's resolver. Whatever the resolver names is
     # cut to the scope the person had when they saved the schedule, so module code can never add an endpoint they did not confirm.
-    if unattended and _is_module_target(run.targets_snapshot or {}):
+    if unattended and (command is not None or _is_module_target(run.targets_snapshot or {})):
         stored = verified.creation_scope_info()
         if stored is None:
             _refuse("creation_scope_unavailable", **common)
@@ -1093,6 +1163,13 @@ def _run(context, identity, action_id, agent_ids, parameters, *, writing=False, 
         if not all_inside:
             _refuse("out_of_scope", **common)
     # (7) 1.17.66 (CQ173): an install that re-approves by policy is allowed for the honoured replacement; the warning is in the audit row
+    if command is not None:
+        if not _sc.available():
+            _refuse("function_unavailable", **common)
+        try:
+            return _sc.run_one(definition=definition, run=run, verified=verified, owner=owner, provenance=provenance, extra=dict(entry.audit_extra(cleaned)), agent_pk=ids[0], call=call)
+        except _sc.CommandRefused as exc:
+            _refuse(exc.reason, detail=exc.detail, **common)
     if writing:
         function = None
         if not writer.available():
@@ -1304,6 +1381,10 @@ class _SystemActionsProvider:
         """1.17.70: the second kind (a write). The caller is read from the stack, so this route and a direct import give the same answer."""
         return run_system_write(context, action_id=action_id, changes=changes)
 
+    def run_command(self, context, *, action_id, command) -> dict:
+        """1.17.75: the third kind (one command on one endpoint). The caller is read from the stack, like ``run``."""
+        return run_system_command(context, action_id=action_id, command=command)
+
     def describe_confirmation(self, request, *, action_id, targets, parameters=None, when=None) -> dict:
         """The plain Yes or No text and a short-lived confirmation id for the person behind a real, session-checked ``request`` (1.17.66)."""
         from . import system_action_confirmation
@@ -1331,11 +1412,14 @@ class _SystemActionsProvider:
         return resolve_delegated_targets(ticket, action_id=action_id, endpoint_ids=endpoint_ids)
 
 
+register_command_template = _sc.register_command_template  # 1.17.75 (AD-49): a module on the row's callers list registers its fixed command templates from AppConfig.ready()
+command_template_hashes = _sc.template_hashes
+
 _PROVIDER = _SystemActionsProvider()
 OPERATIONS = (
     "list_actions", "get_action", "run", "describe_confirmation",
     "describe_delegation", "register_delegation_grant", "remove_delegation_grant", "issue_delegation_ticket", "start_delegated_run",
-    "run_write", "resolve_delegated_targets",
+    "run_write", "resolve_delegated_targets", "run_command",
 )
 
 
@@ -1357,8 +1441,19 @@ def system_actions_contract_metadata() -> dict:
             "tec_tac.system_actions.run_system_write(context, *, action_id, changes) -> {outcome: 'written', changes, written, unchanged, changed_meanwhile, groups: {total, sent, failed, not_started}, message, summary} "
             "(1.17.70, the second kind, honoured replacement only); "
             "tec_tac.system_actions.resolve_delegated_targets(ticket, *, action_id, endpoint_ids) -> {agents: [{agent_id, pk}], covered, not_covered} "
-            "(1.17.74, Q-APM21 b)"
+            "(1.17.74, Q-APM21 b); "
+            "tec_tac.system_actions.run_system_command(context, *, action_id, command) -> {outcome: 'ran' | 'unreachable' | 'failed', agent_id, command_id, output, truncated, message} "
+            "(1.17.75, the third kind: one command on one endpoint)"
         ),
+        "command": {
+            "function": "agent.command", "registered_by": "remote-background", "callers": ["communicator"],
+            "command": "{agent_id: int, command_id: str, template_id: str, params: {typed slots}}, exactly those keys; never a command text (AD-49)",
+            "registration": "register_command_template(module_id, template_id, *, shell, text=None, file=None, slots=None, timeout=30) from AppConfig.ready(); module_id on the callers list only; immutable; Core hashes it",
+            "parameters": "allowed_templates, template_hashes (from template_hashes(ids)) and max_timeout, confirmed by the person; a template outside them or whose hash changed is refused", "max_output_bytes": _sc.MAX_OUTPUT_BYTES,
+            "idempotency": "one command_id per endpoint, claimed with an atomic cache.add of 24 hours; an unreachable cache refuses the call",
+            "refusal_reasons": ["wrong_kind", "bad_command", "bad_agents", "duplicate_command", "action_not_allowed", "template_changed", "permission_lost", "out_of_scope"],
+            "audit": "strict row before the send and a closing row after: run, schedule, endpoint, command_id, template id and hash, shell, timeout and lengths; never the command or the output",
+        },
         "write": {
             "kinds": ["task", "write"], "function": "winupdate.set_action", "changes": "list of {update_id: int, action: 'approve' | 'ignore' | 'nothing'}, exactly those keys, each update once",
             "max_changes": MAX_WRITE_ITEMS, "max_changes_per_group": MAX_AGENTS_PER_GROUP, "audit_chunk": 500,
@@ -1388,7 +1483,7 @@ def system_actions_contract_metadata() -> dict:
         "http": {"confirmation": "POST /api/tfd/scheduler/system-actions/confirmation/"},
         "delivery": "at most once per group",
         "audit_actions": ["run (strict, before each group's send)", "deny (one per refusal)", "custom:outcome-unknown", "add and modify on the schedule (strict)"],
-        "requires_framework": ">=1.17.61 (groups, parameters, scripts.run and describe_confirmation need >=1.17.66; delegable_to, the five delegation operations and module-owned target resolvers need >=1.17.68; run_write and the winupdate.set_action row need >=1.17.70; resolve_delegated_targets needs >=1.17.74)",
+        "requires_framework": ">=1.17.61 (groups, parameters, scripts.run and describe_confirmation need >=1.17.66; delegable_to, the five delegation operations and module-owned target resolvers need >=1.17.68; run_write and the winupdate.set_action row need >=1.17.70; resolve_delegated_targets needs >=1.17.74; run_command and the agent.command row need >=1.17.75)",
         "unattended": "A scheduled run of a user-owned schedule skips owner_inactive, permission_lost and out_of_scope (>=1.17.65; the unattended= flag has no effect); every other check stays. A manual or one-off run keeps all of them.",
     }
 

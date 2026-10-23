@@ -46,7 +46,7 @@ for key in ("id", "version", "operations", "python", "delegation", "functions", 
 must(meta["write"]["kinds"] == ["task", "write"] and meta["write"]["function"] == "winupdate.set_action" and meta["write"]["max_changes"] == 40000, meta["write"])
 must(meta["write"]["max_changes_per_group"] == 2000 and meta["write"]["audit_chunk"] == 500 and "audit log does not show" in meta["write"]["limit"], meta["write"])
 rows = meta["functions"]
-must(set(rows) == {"winupdate.scan", "winupdate.install", "scripts.run", "winupdate.set_action"}, sorted(rows))
+must(set(rows) == {"winupdate.scan", "winupdate.install", "scripts.run", "winupdate.set_action", "agent.command"}, sorted(rows))
 must(rows["winupdate.set_action"] == {"tactical": "winupdate.serializers.WinUpdateSerializer", "owner_module": "patching", "min_flags": ["can_manage_winupdates"], "takes_username": False,
                                       "reapproves_by_policy": False, "parameters": ["allowed_actions"], "kind": "write", "replacement_only": True}, rows["winupdate.set_action"])
 for key in ("winupdate.scan", "winupdate.install", "scripts.run"):
