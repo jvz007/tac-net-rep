@@ -75,6 +75,7 @@ sc.run_one, sc.resolve, sc.claim, sc.release, sc.available = spy_run_one, spy_re
 sc.count_run = lambda run_id: 1
 sc.route_agent_id = lambda pk: "A" * 21 + str(pk)
 sc._already_recorded = lambda a, c: False
+sc._check_route = lambda path: None  # 1.17.79: run_one checks the route before the claim; the owner table is covered by system-command-1.17.78.py and 1.17.79.py
 sc._service_user = lambda: object()  # 1.17.76: run_one reads the installed service user first; the dispatch itself is faked here
 sc._send = lambda route_agent, call, username, user=None: (SEEN["sent"].append((int(route_agent[21:]), call["shell"], call["command"], call["timeout"])), "done")[1]
 

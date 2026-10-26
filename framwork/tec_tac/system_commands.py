@@ -559,6 +559,7 @@ def run_one(*, definition, run, verified, owner, provenance, extra, agent_pk, ca
     username = str(provenance.get("creator") or getattr(owner, "username", "") or "")
     service_user = _service_user()  # read and re-checked BEFORE the claim and the audit row: a missing or deviant user sends nothing and creates nothing
     route_agent = route_agent_id(agent_pk)  # before the claim: a number with no string id claims and sends nothing
+    _check_route(f"/agents/{route_agent}/cmd/")  # 1.17.79: before the count and the claim, so a refused route burns no command_id (_send checks again)
     number = count_run(run.id)  # the per-run cap, before the claim
     _RUN.run_id = str(run.id)
     try:
