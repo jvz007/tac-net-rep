@@ -6,7 +6,7 @@ Covered: run_system_action keeps its name, keyword-only signature and defaults; 
 with only the 1.17.68 fields (kind task, replacement_only False, no confirmation line), so an old row and every module keep working; the three earlier rows
 keep every earlier field value; the identity of the first nine operations is unchanged; a task row still runs through run_system_action exactly as in
 1.17.69 (scan, install and a script run, with the same Tactical calls and audit rows); delegation refuses a write row (not_delegable), by the kind check and by
-the empty delegable_to; no module in modules/ calls run_system_write, names winupdate.set_action or reads the new table fields, so nothing outside patchmanagement's
+the empty delegable_to; no module in modules/ except patchmanagement (its first user since 0.14.0) calls run_system_write, names winupdate.set_action or reads the new table fields, so nothing outside patchmanagement's
 future release is affected; the scheduler is not touched by this release (scheduler.py has no mention of the write kind).
 """
 from __future__ import annotations
@@ -95,9 +95,10 @@ if MODULES.is_dir():
         text = path.read_text(encoding="utf-8", errors="ignore")
         if any(name in text for name in ("run_system_write", "winupdate.set_action", "replacement_only", "KIND_WRITE", ".run_write(")):
             users.append(str(path.relative_to(MODULES)))
-    must(not users, f"modules that already use the second kind: {users}")
+    other = [u for u in users if not u.startswith("patchmanagement")]
+    must(not other, f"modules other than patchmanagement that use the second kind: {other}")
     must(all("winupdate.set_action" not in p.read_text(encoding="utf-8", errors="ignore") for p in MODULES.rglob("tec_tac*.json")), "no manifest names the row")
-    print("       no module in modules/ calls run_system_write, names winupdate.set_action or reads the new fields (patchmanagement 0.13.0 will be the first)")
+    print("       no module in modules/ except patchmanagement (its first user since 0.14.0) calls run_system_write, names winupdate.set_action or reads the new fields (patchmanagement 0.13.0 will be the first)")
 else:
     print("       modules/ is not beside this folder: the module scan is NOT RUN here")
 must("KIND_WRITE" not in (APP / "scheduler.py").read_text(encoding="utf-8") and "system_writes" not in (APP / "scheduler.py").read_text(encoding="utf-8"), "scheduler.py is untouched")

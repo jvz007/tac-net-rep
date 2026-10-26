@@ -25,7 +25,7 @@ must((row.module_path, row.function_name) == ("winupdate.serializers", "WinUpdat
 must("done" not in row.result_text.lower().split(), "an honest result text")
 for key in ("winupdate.scan", "winupdate.install", "scripts.run"):
     must(table[key].kind == "task" and table[key].replacement_only is False and table[key].confirmation_line is None, key)
-must(set(table) == {"winupdate.scan", "winupdate.install", "scripts.run", "winupdate.set_action"}, sorted(table))
+must(set(table) == {"winupdate.scan", "winupdate.install", "scripts.run", "winupdate.set_action", "agent.command"}, sorted(table))
 must(sa.KIND_TASK == "task" and sa.KIND_WRITE == "write" and sa.WRITE_ACTIONS == ("approve", "ignore", "nothing"), "the kinds and the decisions")
 print("       the row exists: write, replacement only, owner patching, one flag, allowed_actions; every earlier row stays a task")
 

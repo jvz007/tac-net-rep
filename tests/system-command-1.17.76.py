@@ -45,9 +45,16 @@ class FakeCache:
 cache_mod = types.ModuleType("django.core.cache")
 cache_mod.cache = FakeCache()
 sys.modules.update({"django": types.ModuleType("django"), "django.core": types.ModuleType("django.core"), "django.core.cache": cache_mod})
-spec = importlib.util.spec_from_file_location("tec_tac_system_commands", ROOT / "system_commands.py")
-sc = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(sc)
+# 1.17.78: system_commands.py now builds its request and checks the route owner through tactical_operations, so both load as one small package.
+pkg = types.ModuleType("tt76")
+pkg.__path__ = [str(ROOT)]
+sys.modules["tt76"] = pkg
+for _name in ("module_category", "tactical_operations", "system_commands"):
+    spec = importlib.util.spec_from_file_location(f"tt76.{_name}", ROOT / f"{_name}.py")
+    _mod = importlib.util.module_from_spec(spec)
+    sys.modules[f"tt76.{_name}"] = _mod
+    spec.loader.exec_module(_mod)
+sc = _mod
 
 src = (ROOT / "system_commands.py").read_text(encoding="utf-8")
 code = "\n".join(line.split("#")[0] for line in src.splitlines())

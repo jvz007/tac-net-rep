@@ -43,11 +43,11 @@ import logging
 import os
 import re
 import threading
-from io import BytesIO
 from pathlib import Path
 
 logger = logging.getLogger("tec_tac.system_actions")
 
+OWNER_MODULE = "remote-background"  # owns agents/{}/cmd (tactical_operations route owners; AD-18, AD-45)
 SHELLS = ("cmd", "powershell", "/bin/bash", "/bin/sh")
 REGISTRANTS = ("communicator",)  # the row's allow-list: the only module ids that may register a template (and call the row)
 MIN_TIMEOUT = 1
@@ -384,9 +384,14 @@ def claim(agent_id: int, command_id: str) -> bool:
     try:
         if not cache.add(_claim_key(None, agent_id, command_id), 1, CLAIM_SECONDS):
             return False
-        return not _already_recorded(agent_id, command_id)  # the cache was flushed or evicted: the audit row remembers
     except Exception:
         logger.warning("The command claim could not be made; the call is refused.", exc_info=True)
+        raise CommandRefused("function_unavailable") from None
+    try:
+        return not _already_recorded(agent_id, command_id)  # the cache was flushed or evicted: the audit row remembers; an earlier row keeps the claim
+    except Exception:
+        release(agent_id, command_id)  # 1.17.77: nothing was sent, so the claim must not read as a duplicate for 24 hours
+        logger.warning("The command's audit lookup failed; the claim was released and the call is refused.", exc_info=True)
         raise CommandRefused("function_unavailable") from None
 
 
@@ -472,27 +477,41 @@ def _service_user():
 
 
 def _build_view_request(call: dict, user, match, path: str):
-    from django.http import HttpRequest
+    """The in-process request for Tactical's view, built by the SAME builder every Tactical operation uses (``tactical_operations._build_request``: META without
+    credentials, DRF forced authentication as ``user``, no token read or forwarded, ``_client_ip`` through ``_source_client_ip``). The source is the scheduler's own
+    in-process call, so its address is the loopback one."""
+    from types import SimpleNamespace
 
-    payload = json.dumps({"shell": call["shell"], "cmd": call["command"], "timeout": call["timeout"], "custom_shell": None, "run_as_user": False},
-                         separators=(",", ":")).encode("utf-8")
-    clone = HttpRequest()
-    clone.META = {"REQUEST_METHOD": "POST", "PATH_INFO": path, "QUERY_STRING": "", "CONTENT_TYPE": "application/json", "CONTENT_LENGTH": str(len(payload)),
-                  "SERVER_NAME": "localhost", "SERVER_PORT": "443"}
-    clone.method, clone.path, clone.path_info = "POST", path, path
-    clone.content_type, clone.content_params = "application/json", {}
-    clone._body, clone._stream, clone._read_started = payload, BytesIO(payload), False
-    clone.resolver_match = match
-    clone._dont_enforce_csrf_checks = True
-    clone._force_auth_user = user  # DRF's ForcedAuthentication; no token is read or forwarded
-    clone._client_ip = "127.0.0.1"
-    return clone
+    from .tactical_operations import _build_request
+
+    body = {"shell": call["shell"], "cmd": call["command"], "timeout": call["timeout"], "custom_shell": None, "run_as_user": False}
+    source = SimpleNamespace(user=user, META={"SERVER_NAME": "localhost", "SERVER_PORT": "443"}, _client_ip="127.0.0.1")
+    return _build_request(source, SimpleNamespace(method="POST"), path, body, match)
 
 
 def _dispatch_view(match, request):
     from .tactical_operations import _dispatch
 
     return _dispatch(match, request)
+
+
+def _check_route(path: str) -> None:
+    """The same two guards every Tactical operation passes (1.17.77): the path is not a route Core owns, and the OWNER of this piece (``OWNER_MODULE``) still owns the
+    rule the path lands on (``tactical_operations._recheck_route_owner``). A refusal sends nothing."""
+    from types import SimpleNamespace
+
+    from .tactical_operations import (
+        TacticalOperationError,
+        _forbidden_route,
+        _recheck_route_owner,
+    )
+
+    try:
+        if _forbidden_route([part for part in path.strip("/").split("/")]):
+            raise TacticalOperationError("not found", status=404, code="tactical_operation_not_found")
+        _recheck_route_owner(SimpleNamespace(module_id=OWNER_MODULE), path)
+    except TacticalOperationError:
+        raise CommandRefused("function_unavailable", "The send-command route is not owned by the module that owns this piece of Tactical; nothing was sent.") from None
 
 
 def _send(route_agent: str, call: dict, username: str, user=None):
@@ -502,6 +521,7 @@ def _send(route_agent: str, call: dict, username: str, user=None):
 
     user = user if user is not None else _service_user()
     path = f"/agents/{route_agent}/cmd/"
+    _check_route(path)
     match = resolve(path)
     if getattr(match.func, "__name__", "") != "send_raw_cmd":
         raise CommandRefused("function_unavailable", "Tactical no longer serves the send-command view on this route.")
