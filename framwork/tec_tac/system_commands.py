@@ -89,10 +89,11 @@ class CommandRefused(Exception):
 class SendFailed(RuntimeError):
     """Tactical's send-command view did not answer 2xx. ``status`` is its HTTP status; ``reason`` is a short code (1.17.82). Never holds the command, the output or a token."""
 
-    def __init__(self, status: int):
+    def __init__(self, status: int, detail: str = ""):
         super().__init__(f"Tactical answered the send-command view with HTTP {status}.")
         self.status = status
         self.reason = failure_reason(status)
+        self.detail = detail
 
 
 def failure_reason(status) -> str:
@@ -558,7 +559,8 @@ def _send(route_agent: str, call: dict, username: str, user=None):
         return data if isinstance(data, str) else ("" if data is None else str(data))
     if status == 400 and isinstance(data, str) and UNREACHABLE_TEXT in data:
         return "timeout"
-    raise SendFailed(status)
+    detail = data.get("detail") if isinstance(data, dict) else None  # Tactical's own error sentence (DRF 'detail'), never the command or the output
+    raise SendFailed(status, " ".join(detail.split())[:160] if isinstance(detail, str) else "")
 
 
 def _meta(definition, run, schedule_id, provenance, extra, agent_pk, call, number=0) -> dict:
@@ -602,19 +604,20 @@ def run_one(*, definition, run, verified, owner, provenance, extra, agent_pk, ca
         release(agent_pk, call["command_id"])
         raise SchedulerTransientError("The audit row could not be written, so nothing was sent.") from None
     outcome, output, truncated = "ran", "", False
-    status, reason = None, ""
+    status, reason, error, tactical_detail = None, "", "", ""
     try:
         outcome, output, truncated = interpret_reply(_send(route_agent, call, username, service_user))
     except Exception as exc:
         logger.exception("The command could not be sent; Core never sends it again under this command_id.")  # the claim stays: at most once
         outcome = "failed"
+        error = type(exc).__name__[:60]  # the class name only: a message can hold the command
         if isinstance(exc, SendFailed):
-            status, reason = exc.status, exc.reason
+            status, reason, tactical_detail = exc.status, exc.reason, exc.detail
         elif isinstance(exc, CommandRefused):
             reason = str(exc.reason or "")[:60]  # a Core code, never the detail text
         else:
             reason = failure_reason(None)
-        logger.info("Scheduled command to endpoint %s failed: status=%s reason=%s (run %s).", agent_pk, status, reason, run.id)  # no command, no output, no token
+        logger.info("Scheduled command to endpoint %s failed: status=%s reason=%s error=%s detail=%s (run %s).", agent_pk, status, reason, error or "-", tactical_detail or "-", run.id)  # no command, no output, no token
     try:
         metadata = _meta(definition, run, verified.schedule_id, provenance, extra, agent_pk, call, number)
         metadata.update(phase="closed", outcome=outcome, output_bytes=len(output.encode("utf-8")), truncated=truncated)
@@ -627,5 +630,5 @@ def run_one(*, definition, run, verified, owner, provenance, extra, agent_pk, ca
     result = {"outcome": outcome, "agent_id": agent_pk, "command_id": call["command_id"], "output": output, "truncated": truncated,
               "message": "Sent through Tactical." if outcome == "ran" else "The endpoint did not answer in time." if outcome == "unreachable" else "The command could not be sent."}
     if outcome == "failed":  # 1.17.82, additive: the HTTP status of Tactical's view (None when it raised or Core refused the route) and a short code
-        result.update(status=status, reason=reason)
+        result.update(status=status, reason=reason, error=error, tactical_detail=tactical_detail)
     return result
