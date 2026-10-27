@@ -86,6 +86,28 @@ class CommandRefused(Exception):
         self.detail = detail
 
 
+class SendFailed(RuntimeError):
+    """Tactical's send-command view did not answer 2xx. ``status`` is its HTTP status; ``reason`` is a short code (1.17.82). Never holds the command, the output or a token."""
+
+    def __init__(self, status: int):
+        super().__init__(f"Tactical answered the send-command view with HTTP {status}.")
+        self.status = status
+        self.reason = failure_reason(status)
+
+
+def failure_reason(status) -> str:
+    """The short plain code for the HTTP status of Tactical's view (None: the view raised instead of answering)."""
+    if status is None:
+        return "tactical_view_raised"
+    if status in (401, 403):
+        return "tactical_permission_denied"
+    if status == 404:
+        return "tactical_not_found"
+    if 400 <= status < 500:
+        return "tactical_bad_request"
+    return "tactical_error"
+
+
 class CommandTemplateError(ValueError):
     """A template registration is refused."""
 
@@ -536,7 +558,7 @@ def _send(route_agent: str, call: dict, username: str, user=None):
         return data if isinstance(data, str) else ("" if data is None else str(data))
     if status == 400 and isinstance(data, str) and UNREACHABLE_TEXT in data:
         return "timeout"
-    raise RuntimeError(f"Tactical answered the send-command view with HTTP {status}.")
+    raise SendFailed(status)
 
 
 def _meta(definition, run, schedule_id, provenance, extra, agent_pk, call, number=0) -> dict:
@@ -580,11 +602,19 @@ def run_one(*, definition, run, verified, owner, provenance, extra, agent_pk, ca
         release(agent_pk, call["command_id"])
         raise SchedulerTransientError("The audit row could not be written, so nothing was sent.") from None
     outcome, output, truncated = "ran", "", False
+    status, reason = None, ""
     try:
         outcome, output, truncated = interpret_reply(_send(route_agent, call, username, service_user))
-    except Exception:
+    except Exception as exc:
         logger.exception("The command could not be sent; Core never sends it again under this command_id.")  # the claim stays: at most once
         outcome = "failed"
+        if isinstance(exc, SendFailed):
+            status, reason = exc.status, exc.reason
+        elif isinstance(exc, CommandRefused):
+            reason = str(exc.reason or "")[:60]  # a Core code, never the detail text
+        else:
+            reason = failure_reason(None)
+        logger.info("Scheduled command to endpoint %s failed: status=%s reason=%s (run %s).", agent_pk, status, reason, run.id)  # no command, no output, no token
     try:
         metadata = _meta(definition, run, verified.schedule_id, provenance, extra, agent_pk, call, number)
         metadata.update(phase="closed", outcome=outcome, output_bytes=len(output.encode("utf-8")), truncated=truncated)
@@ -594,5 +624,8 @@ def run_one(*, definition, run, verified, owner, provenance, extra, agent_pk, ca
         )
     except Exception:
         logger.exception("The closing audit row of a command could not be written; the 'before' row holds the record.")
-    return {"outcome": outcome, "agent_id": agent_pk, "command_id": call["command_id"], "output": output, "truncated": truncated,
-            "message": "Sent through Tactical." if outcome == "ran" else "The endpoint did not answer in time." if outcome == "unreachable" else "The command could not be sent."}
+    result = {"outcome": outcome, "agent_id": agent_pk, "command_id": call["command_id"], "output": output, "truncated": truncated,
+              "message": "Sent through Tactical." if outcome == "ran" else "The endpoint did not answer in time." if outcome == "unreachable" else "The command could not be sent."}
+    if outcome == "failed":  # 1.17.82, additive: the HTTP status of Tactical's view (None when it raised or Core refused the route) and a short code
+        result.update(status=status, reason=reason)
+    return result

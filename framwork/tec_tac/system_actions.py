@@ -993,7 +993,9 @@ def run_system_command(context, *, action_id, command) -> dict:
     Call it from the verified Scheduler handler of a module on the row's ``callers`` list (``communicator``). Every check of ``run_system_action`` runs in the
     same order, then the template id and its hash against what the person confirmed (``template_changed`` when the module was updated), the owner's stored scope (also for an unattended run) and ``can_send_cmd``. A repeated
     ``command_id`` for the same endpoint is refused (``duplicate_command``). A refusal of this call does NOT end the run: it is one endpoint of a batch.
-    Returns ``{"outcome": "ran" | "unreachable" | "failed", "agent_id", "command_id", "output", "truncated", "message"}``; the output is cut at 1 MiB. Neither the command
+    Returns ``{"outcome": "ran" | "unreachable" | "failed", "agent_id", "command_id", "output", "truncated", "message"}``; the output is cut at 1 MiB. A ``failed`` reply also carries ``status`` (the HTTP status of Tactical's
+    send-command view, or None when it raised) and ``reason`` (``tactical_permission_denied``, ``tactical_not_found``, ``tactical_bad_request``,
+    ``tactical_error``, ``tactical_view_raised`` or a Core refusal code), added in 1.17.82. Neither the command
     nor the output is audited or logged. See docs/system-actions.md."""
     identity = calling_module_for_core_provider(provider_file=__file__)
     return _run(context, identity, action_id, None, None, command=command)
@@ -1453,7 +1455,7 @@ def system_actions_contract_metadata() -> dict:
             "(1.17.70, the second kind, honoured replacement only); "
             "tec_tac.system_actions.resolve_delegated_targets(ticket, *, action_id, endpoint_ids) -> {agents: [{agent_id, pk}], covered, not_covered} "
             "(1.17.74, Q-APM21 b); "
-            "tec_tac.system_actions.run_system_command(context, *, action_id, command) -> {outcome: 'ran' | 'unreachable' | 'failed', agent_id, command_id, output, truncated, message} "
+            "tec_tac.system_actions.run_system_command(context, *, action_id, command) -> {outcome: 'ran' | 'unreachable' | 'failed', agent_id, command_id, output, truncated, message; a failed reply also holds status (HTTP status of Tactical's view or None) and reason, 1.17.82} "
             "(1.17.75, the third kind: one command on one endpoint; 1.17.76: Core runs Tactical's send_raw_cmd view in process as its own service user, after every check of run_system_command)"
         ),
         "command": {

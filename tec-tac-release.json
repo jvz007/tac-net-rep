@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.81",
+  "version": "1.17.82",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.17.81.md",
-      "size": 3163,
-      "sha256": "f9e9e72155c627bbcc7f24d1df26ec0a8c360f81fb2adec84a3db713a1c390d1"
+      "path": "RELEASE_NOTES_1.17.82.md",
+      "size": 4654,
+      "sha256": "7b618cf37f94c5f098f0bdcb96df0b191812d4671d98a4b8dc07436e124fd35d"
     },
     {
       "path": "VERSION",
       "size": 7,
-      "sha256": "aebbccae0a49be443117c3e571c0d600d59a17a7a4d8cc35531c835d9934b938"
+      "sha256": "839ec89253e3e47d388d2810fdf0ad1e72c8a41e99141dde2d26033af48ebca3"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -1482,6 +1482,11 @@
       "sha256": "6c15c7ad1e9f746c49af60074d8bce1bac7469f9d2968ca23ce53c7c94bf7de6"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.81.md",
+      "size": 3163,
+      "sha256": "f9e9e72155c627bbcc7f24d1df26ec0a8c360f81fb2adec84a3db713a1c390d1"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.9.md",
       "size": 10089,
       "sha256": "75ab9a22af1f1c0fbfe8dfcd23de4ce3cf5e85f4eeee245f0a80da27b879b75b"
@@ -2463,13 +2468,13 @@
     },
     {
       "path": "framwork/tec_tac/system_actions.py",
-      "size": 95989,
-      "sha256": "f2c0528cb6d574c776e39338018376e4972a51a56307a0f9c09e413073fc4a0e"
+      "size": 96395,
+      "sha256": "daff3b3f31a0a759953c21ac77ca3cf18a45cf9b5ff736f0222d53134484f0d5"
     },
     {
       "path": "framwork/tec_tac/system_commands.py",
-      "size": 38358,
-      "sha256": "3145bb1f366befde984b6a7d9b34c79d266f4ffc5ac0aa115564d10eae9d966d"
+      "size": 39854,
+      "sha256": "0a3acc66a438ffd65d3d43c8d8a972b05ed607db46abd2663f910f5680ec509b"
     },
     {
       "path": "framwork/tec_tac/system_update.py",
@@ -2744,7 +2749,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "4dc5e4967ce216cc34c5d1ff8e5e1ed7278ecba0369fd6a6e0b4693f57337d6f"
+      "sha256": "24f1f3b3ebf909fc2432d3b236f7f2e0de1be0993cf5fbf5fc8410ebc0a9cb38"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -5100,6 +5105,11 @@
       "path": "tests/system-command-1.17.79.py",
       "size": 3660,
       "sha256": "93b8646ebbf484e4506c650173d5b6aeeb30f3cdfd7e40fae7de6696e0a0965e"
+    },
+    {
+      "path": "tests/system-command-failed-reason-1.17.82.py",
+      "size": 5097,
+      "sha256": "1ef3c5db71e655db76564d9338418dd70769ff8a890b72754f401ad9adc9e956"
     },
     {
       "path": "tests/system-command-integration-1.17.75.py",
