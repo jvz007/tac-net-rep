@@ -170,6 +170,37 @@ def _manifest_system_actions(module_id: str) -> tuple:
     return ()
 
 
+def _manifest_person_actions(module_id: str) -> tuple:
+    """The ``scheduler_person_actions`` ids in the signed manifest of the installed extension ``module_id``, or () (1.17.80). A test replaces it."""
+    from . import registry
+
+    for plugin in registry.discover_plugins():
+        if plugin.plugin_id == module_id and plugin.plugin_type == "extension" and not getattr(plugin, "legacy", False):
+            return tuple(getattr(plugin, "scheduler_person_actions", ()) or ())
+    return ()
+
+
+def scheduled_person_action(schedule, action_id: str = "") -> bool:
+    """1.17.80: does this module-owned schedule's action run as the schedule's stored creator, with every re-check kept?
+
+    True only when ALL hold: the schedule is module-owned and not a one-off, a creator name is stored (so a person confirmed it through
+    ``reconcile_schedule(confirmed_by_request=...)``, which checked their permission and scope and wrote the audit row), the action is registered
+    with the Scheduler by the module that owns it, and that module's signed, installed manifest lists it under ``scheduler_person_actions``.
+    It is not the AD-13 exemption: ``_is_unattended_scheduled_run`` stays False for it, so the creator must be active and must still hold the
+    action permission and the scope on every run. Any error answers False."""
+    try:
+        if schedule is None or schedule.owner_type != TecTacSchedule.OwnerType.MODULE or is_one_off_schedule(schedule):
+            return False
+        action = get_scheduled_action(str(action_id or schedule.action_id))
+        if action.module_id != schedule.owner_module:
+            return False
+        if action.id not in _manifest_person_actions(action.module_id):
+            return False
+        return bool(schedule_creator_names(schedule)[0])
+    except Exception:  # noqa: BLE001 - any failure means the creator is not the person
+        return False
+
+
 # Since 1.17.65: True. Johan signed the amended AD-13 condition 2 (CQ184 b, CQ186, CQ189, chat, 20 October 2026); it is recorded in
 # docs/tec-tac-module-standard.md section 1a, docs/review-accepted-decisions.md row 13, development rules 1.7 and checklist A2. A scheduled run
 # is not re-checked against its creator at run time, as in Tactical. A person-started run (manual, one-off) still is. The scheduler gate test
@@ -907,11 +938,12 @@ def _runtime_authorization_error(schedule: TecTacSchedule) -> str | None:
     only while the original actor remains active and still has permission for
     both the registered action and the saved client/site/endpoint scope.
     Since 1.17.16 a module-owned one-off schedule (owner_key ``one-off:<id>``, AD-13 condition 2) is held to the same
-    check against ``created_by``, the user the module started it for.
+    check against ``created_by``, the user the module started it for. Since 1.17.80 so is a module-owned schedule whose action is declared in the
+    module's manifest ``scheduler_person_actions`` (``scheduled_person_action``) and that has a stored creator.
     """
     one_off = is_one_off_schedule(schedule)
-    if schedule.owner_type != TecTacSchedule.OwnerType.USER and not one_off:
-        return None
+    if schedule.owner_type != TecTacSchedule.OwnerType.USER and not one_off and not scheduled_person_action(schedule):
+        return None  # 1.17.80: a declared module scheduled action with a stored creator is checked like a user-owned one
     actor = schedule.created_by
     if actor is None or not bool(getattr(actor, "is_active", False)) or (one_off and bool(getattr(actor, "is_installer_user", False))):
         return "Schedule owner is missing or inactive."

@@ -13,7 +13,7 @@ from .scheduler_run_context import issue_run_context
 from .capabilities import capability_status, CapabilityDisabled, CapabilityUnavailable, CapabilityVersionMismatch, CapabilityUnhealthy
 from .scheduler import (
     SchedulerError, SchedulerPermanentError, SchedulerTransientError, _runtime_authorization_error, effective_retry_delay_seconds,
-    get_scheduled_action, is_one_off_key,
+    _audit_schedule_row, get_scheduled_action, is_one_off_key, scheduled_person_action,
 )
 
 logger = logging.getLogger("tec_tac.tasks")
@@ -138,6 +138,12 @@ def execute_schedule_run(self, run_id: str):
         skipped = _skip_unauthorized_one_off(run, schedule)
         if skipped:
             return skipped
+
+    if schedule is not None and not run.manual and scheduled_person_action(schedule, action_id) and not _runtime_authorization_error(schedule):
+        # 1.17.80: one audit row per run that uses the stored creator as the person, written only when the creator passes the re-check
+        # (best effort: a failed row is logged, the run goes on)
+        _audit_schedule_row(None, schedule, "run", "A scheduled run of a module action used the person who confirmed the schedule.",
+                            extra={"run_id": str(run.id), "run_as": "creator", "scheduled_run": True})
 
     try:
         action = get_scheduled_action(action_id)

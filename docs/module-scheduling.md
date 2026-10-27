@@ -620,3 +620,14 @@ All three need framework >=1.17.68 and are additive. The full text is in `docs/s
 - **A module-owned target type** (a profile) is registered with `register_target_resolver(module_id, target_type, resolver)` from `AppConfig.ready()`. The type must be listed in `target_types` of one of your scheduled actions. Core resolves the ids, checks they exist and refuses the whole answer on any doubt.
 - **A module that starts another module's scheduled install** (Maintenance and Advanced Patch Management) uses `describe_delegation`, `register_delegation_grant`, `remove_delegation_grant`, `issue_delegation_ticket` (owner module) and `start_delegated_run` (provider), with `delegable_to=` on the provider's `register_system_action`. `run_system_action` and `wrong_module` are unchanged. Johan signed the delegated start (AD-43, with AD-42 and AD-44); it is live in Core, and nothing calls it until Maintenance and Advanced Patch Management ship their side.
 - **Patch policy.** While Advanced Patch Management is honoured, Tactical's own patch policy is off (`core.patch_lockdown`, `docs/patch-lockdown.md`). `core.patch_lockdown.status()` tells a replacement when it may drop its own warning.
+
+## A module's own scheduled action that needs a person (Core 1.17.80)
+
+Needs framework >=1.17.80. Additive. For a Scheduler action that is **not** a Tactical function (a notice, a restart prompt, a background send) and still needs the person who saved the schedule.
+
+1. List the action id in your signed manifest under **`scheduler_person_actions`** (a JSON list of `<module id>.<name>`, at most 20, extensions only). Set `requires.framework` to >=1.17.80.
+2. Register the action with `register_scheduled_action` from your own module. Core honours an id only for the module that registers it.
+3. Create the schedule with `reconcile_schedule(..., confirmed_by_request=request)`. Core checks the person's permission and scope, stores the creator and writes the audit row, as for any module-owned schedule.
+4. In the handler call `verify_run_context(context, expected_module_id=..., expected_action_id=..., require_owner=True)`. A scheduled run gives `user` = the creator, with `unattended` False.
+
+This is not a system action and not the AD-13 exemption. On every run the creator must be active and still hold the action permission and the target scope. If not, the tick skips the run (`AuthorizationRevoked`) and `verify_run_context` raises `SchedulerRunContextInvalid`. A manual run, a one-off, a schedule with no stored creator, an action not listed or one registered by another module gets no person (`This run has no person behind it.`). Core writes one audit row (`run`, `run_as` = `creator`) per run that uses the creator.

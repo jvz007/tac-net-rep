@@ -37,6 +37,9 @@ SUPPORTED_KEYS = frozenset({
     # 1.17.61: ``system_actions`` lists the ids of the system actions (core.system_actions) the module registers, so the signed manifest shows
     # an administrator that the module can run unattended Tactical work. Extensions only, at most 20.
     "system_actions",
+    # 1.17.80: ``scheduler_person_actions`` lists the module's own Scheduler action ids that run as the person who confirmed the schedule
+    # (every run re-checks that person). Extensions only, at most 20.
+    "scheduler_person_actions",
 })
 # Object types core.resources can scope-check for the browser audit writer. Any other
 # lowercase slug may be declared since 1.17.0, but carries no scope check (see docs/module-audit.md).
@@ -96,6 +99,8 @@ class PluginSpec:
     server_maintenance_actions: tuple = field(default=(), compare=False, repr=False)
     # 1.17.61: the validated ``system_actions`` ids (empty when the key is absent). Left out of equality like the field above.
     system_actions: tuple = field(default=(), compare=False, repr=False)
+    # 1.17.80: the validated ``scheduler_person_actions`` ids (empty when the key is absent). Left out of equality like the field above.
+    scheduler_person_actions: tuple = field(default=(), compare=False, repr=False)
     # 1.17.71: the declared ``dependencies`` and ``optional_dependencies`` as sorted (module id, version constraint) pairs. Read leniently (never
     # raises; module_manager_v2 refuses a malformed manifest at install). Left out of equality like the fields above.
     dependencies: tuple = field(default=(), compare=False, repr=False)
@@ -332,6 +337,29 @@ def _server_maintenance_actions(payload: dict, plugin_type: str, plugin_id: str,
             "protected": protected,
         })
     return tuple(entries)
+
+
+def _scheduler_person_actions(payload: dict, plugin_type: str, plugin_id: str) -> tuple[str, ...]:
+    """Parse the optional ``scheduler_person_actions`` key (1.17.80): the same shape as ``system_actions`` (at most 20 distinct ids, each
+    ``<plugin id>.<name>``, extensions only). Shape only: Core honours an id only for an action that module registers with the Scheduler."""
+    if "scheduler_person_actions" not in payload:
+        return ()
+    if plugin_type != "extension":
+        raise RegistryError(f"Reportset {plugin_id!r} may not declare scheduler_person_actions; they belong to the extension.")
+    raw = payload["scheduler_person_actions"]
+    if not isinstance(raw, list):
+        raise RegistryError("Manifest key 'scheduler_person_actions' must be a JSON list of action ids such as patchmanagement.notice.")
+    if len(raw) > SYSTEM_ACTIONS_MAX:
+        raise RegistryError(f"Manifest scheduler_person_actions may not contain more than {SYSTEM_ACTIONS_MAX} entries.")
+    prefix = plugin_id + "."
+    seen: list[str] = []
+    for item in raw:
+        if not isinstance(item, str) or not item.startswith(prefix) or not _SYSTEM_ACTION_NAME_RE.fullmatch(item[len(prefix):]):
+            raise RegistryError(f"Manifest scheduler_person_actions entry {item!r} must be '{prefix}<name>' in lowercase letters, digits, - and _.")
+        if item in seen:
+            raise RegistryError(f"Manifest scheduler_person_actions repeats {item!r}.")
+        seen.append(item)
+    return tuple(seen)
 
 
 def _system_actions(payload: dict, plugin_type: str, plugin_id: str) -> tuple[str, ...]:
@@ -588,8 +616,9 @@ def _load_manifest(plugin_type: str, plugin_dir: Path) -> PluginSpec | None:
     description = _description(payload, plugin_id)
     server_maintenance_actions = _server_maintenance_actions(payload, plugin_type, plugin_id, plugin_dir, permission_groups, publisher_permissions)
     system_actions = _system_actions(payload, plugin_type, plugin_id)
+    scheduler_person_actions = _scheduler_person_actions(payload, plugin_type, plugin_id)
     _deps, _opt = _dependency_pairs_checked(payload, "dependencies"), _dependency_pairs_checked(payload, "optional_dependencies")
-    return PluginSpec(plugin_id=plugin_id, plugin_type=plugin_type, root=plugin_root, version=version, python_paths=tuple(python_paths), django_apps=django_apps, permission_groups=permission_groups, publisher_permissions=publisher_permissions, name=name, category=category, audit_events=audit_events, replaces=replaces, capabilities=capabilities, capabilities_declared=capabilities_declared, route_prefix=route_prefix, route_urlconf=route_urlconf, description=description, server_maintenance_actions=server_maintenance_actions, system_actions=system_actions, dependencies=_deps[0], optional_dependencies=_opt[0], dependencies_incomplete=_deps[1] or _opt[1])
+    return PluginSpec(plugin_id=plugin_id, plugin_type=plugin_type, root=plugin_root, version=version, python_paths=tuple(python_paths), django_apps=django_apps, permission_groups=permission_groups, publisher_permissions=publisher_permissions, name=name, category=category, audit_events=audit_events, replaces=replaces, capabilities=capabilities, capabilities_declared=capabilities_declared, route_prefix=route_prefix, route_urlconf=route_urlconf, description=description, server_maintenance_actions=server_maintenance_actions, system_actions=system_actions, scheduler_person_actions=scheduler_person_actions, dependencies=_deps[0], optional_dependencies=_opt[0], dependencies_incomplete=_deps[1] or _opt[1])
 
 def _discover_root(plugin_type: str, root: Path) -> list[PluginSpec]:
     if not root.exists():

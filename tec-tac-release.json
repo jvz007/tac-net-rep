@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.79",
+  "version": "1.17.80",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.17.79.md",
-      "size": 2689,
-      "sha256": "d47925fa1adf8cbf167b4be600c775259f9bb2ff6f51e98144078062b1c729fc"
+      "path": "RELEASE_NOTES_1.17.80.md",
+      "size": 5488,
+      "sha256": "6c15c7ad1e9f746c49af60074d8bce1bac7469f9d2968ca23ce53c7c94bf7de6"
     },
     {
       "path": "VERSION",
       "size": 7,
-      "sha256": "b5f6ef134a3c8f83deb375ec2a0a36124471c82bc7077bda0f673fde9be8f9b3"
+      "sha256": "2bf0e28e100d2acb50feb9ccb1126b1e3d40d2c692c5cc1fe39d91b2fcdb4b1e"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -183,8 +183,8 @@
     },
     {
       "path": "docs/module-scheduling.md",
-      "size": 35334,
-      "sha256": "28f49199f19d8bd57a2711aaa5d7c3bf66f9d2a291f3b27b78e6fea1579979f8"
+      "size": 36863,
+      "sha256": "ad1f90165a542a40f5b0775a78d6fca2e3a02dad789559d767a5fb73ebc8ebfe"
     },
     {
       "path": "docs/module-visibility.md",
@@ -1467,6 +1467,11 @@
       "sha256": "408275f6216af2554d9a7c0515eb786b1995af254b126178265e9a62b382c810"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.79.md",
+      "size": 2689,
+      "sha256": "d47925fa1adf8cbf167b4be600c775259f9bb2ff6f51e98144078062b1c729fc"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.8.md",
       "size": 6017,
       "sha256": "522041d551b428c183247e1ecca653d55dc02c20a8e2344c51024a44d51bdb91"
@@ -1893,8 +1898,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 418613,
-      "sha256": "80fe37355bffff9d8233afea96701b3bc71e6fad3905e4882fe541d985fdcef7"
+      "size": 419964,
+      "sha256": "5a232f074a786a655a5697bd0435fa1ca6f4f8ff8a45d86ec4e989c2a9196bcc"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -2323,8 +2328,8 @@
     },
     {
       "path": "framwork/tec_tac/registry.py",
-      "size": 40113,
-      "sha256": "1b5c1d25a64f93ec16ce8af19a7b703e32c49f219b9dcf892f2479b6181d6d5e"
+      "size": 42217,
+      "sha256": "505c60773e72d354db63de10414717906b8c93be97451f725455890a2f7132c5"
     },
     {
       "path": "framwork/tec_tac/reporting.py",
@@ -2373,8 +2378,8 @@
     },
     {
       "path": "framwork/tec_tac/scheduler.py",
-      "size": 101220,
-      "sha256": "b855445bd6661f7536c00468b47b8cc15722b09cbdced9be0f540852975a3463"
+      "size": 103487,
+      "sha256": "19922ce507050ef408e5e350968b5e3e392bafe6f44fcd2fd4eea6f53f5bfe7b"
     },
     {
       "path": "framwork/tec_tac/scheduler_completion.py",
@@ -2388,8 +2393,8 @@
     },
     {
       "path": "framwork/tec_tac/scheduler_run_context.py",
-      "size": 18161,
-      "sha256": "dc840b4a4e1eb9904c64ddc64077322fe4de1fbe347bee917fdc1f7eeb2d8ecd"
+      "size": 18179,
+      "sha256": "b53795c965de8e9a8787982adc30a931894e74db99e60454e684a9e7252104d6"
     },
     {
       "path": "framwork/tec_tac/scheduler_target_resolvers.py",
@@ -2518,8 +2523,8 @@
     },
     {
       "path": "framwork/tec_tac/tasks.py",
-      "size": 11294,
-      "sha256": "8150dc6e698184ac7e7e184c2e3daf320b4a9a47d5171d493afc74248fd3d16e"
+      "size": 11921,
+      "sha256": "599d6237059b7d2750465b7cad6b2ee10a8095570c056094c4503a0ccb7c69c1"
     },
     {
       "path": "framwork/tec_tac/tests/__init__.py",
@@ -2734,7 +2739,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "77381d7676e7d2387bda61bb8c5a6efc540fb37aa190aaccd3d8b44158a5d106"
+      "sha256": "c02cdd4488b6f139354c50412c17f17af25e6b870ca950558f08b2536da3b2a4"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -4438,8 +4443,8 @@
     },
     {
       "path": "tests/scheduler-claim-lock-1.17.55.py",
-      "size": 6251,
-      "sha256": "2572fa0555625168526c47abbda5675a21ecd18938b31f3d01eb94346bc1811e"
+      "size": 6340,
+      "sha256": "32674734e205b654d128798cb505b49ff5f85d477935d52b80f6432f75078ef8"
     },
     {
       "path": "tests/scheduler-claim-postgres-1.17.55.py",
@@ -4617,9 +4622,14 @@
       "sha256": "718267bc2cdac8641e0f816cfa917c3658f44f7d7b8ac31fa14e07dfa1da6599"
     },
     {
+      "path": "tests/scheduler-person-actions-1.17.80.py",
+      "size": 10657,
+      "sha256": "9ed42c29a34f9dc3542c557b9088e8ebef668db3ae60522bed155aae4673ccd0"
+    },
+    {
       "path": "tests/scheduler-run-context-1.17.19.py",
-      "size": 12498,
-      "sha256": "5a6368a7fb4052b07ba41a4065c364fc59f5db73072f8fa46c00bf2d417efd4c"
+      "size": 12625,
+      "sha256": "15abf90e22dab67d9844cb412742e04f21b96cc1a258ca521639fa868a1801f9"
     },
     {
       "path": "tests/scheduler-run-context-bind-1.17.20.py",

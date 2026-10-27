@@ -112,6 +112,12 @@ def _is_unattended_scheduled_run(run) -> bool:
     return decide(run)
 
 
+def _scheduled_person_action(schedule, action_id) -> bool:
+    from .scheduler import scheduled_person_action
+
+    return scheduled_person_action(schedule, action_id)
+
+
 def _creator_names(schedule) -> tuple[str, str]:
     from .scheduler import schedule_creator_names
 
@@ -339,7 +345,8 @@ def verify_run_context(
             raise _invalid(_OTHER_RUN)
         one_off = bool(run.owner_type == "module" and _is_one_off_key(run.owner_key))
         unattended = _is_unattended_scheduled_run(run)  # the one helper; a manual run and a one-off are never unattended
-        user = schedule.created_by if (one_off or run.owner_type == "user" or unattended) else None
+        person_action = bool(not unattended and not bool(getattr(run, "manual", False)) and _scheduled_person_action(schedule, action_id))  # 1.17.80: declared module action; re-checked below
+        user = schedule.created_by if (one_off or run.owner_type == "user" or unattended or person_action) else None
         if user is None and require_owner:
             raise _invalid(_NO_OWNER)
         if user is not None and not unattended and _authorization_error(schedule):
