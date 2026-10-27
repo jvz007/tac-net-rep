@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.83",
+  "version": "1.17.84",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.17.83.md",
-      "size": 3310,
-      "sha256": "8bc6dde7177982369aec52eddf61563fdfa34851e068e96f1c68d3c236f92d55"
+      "path": "RELEASE_NOTES_1.17.84.md",
+      "size": 3493,
+      "sha256": "b68cbd2a915ad721f89ee5a7e7640dd0f9f8687f4813b91855090af5e1bd8fce"
     },
     {
       "path": "VERSION",
       "size": 7,
-      "sha256": "0a8641a47ee7f1f7ed1efd65896f3e51313778c44c52f70f2b61adaf25459a52"
+      "sha256": "130521d556f624bffeeeb0d2fc80b6e1f8c3bfb07737116d5375b5380ddd645e"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -1492,6 +1492,11 @@
       "sha256": "7b618cf37f94c5f098f0bdcb96df0b191812d4671d98a4b8dc07436e124fd35d"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.83.md",
+      "size": 3310,
+      "sha256": "8bc6dde7177982369aec52eddf61563fdfa34851e068e96f1c68d3c236f92d55"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.9.md",
       "size": 10089,
       "sha256": "75ab9a22af1f1c0fbfe8dfcd23de4ce3cf5e85f4eeee245f0a80da27b879b75b"
@@ -2478,8 +2483,8 @@
     },
     {
       "path": "framwork/tec_tac/system_commands.py",
-      "size": 40376,
-      "sha256": "cae75f992051e787834eb8a2926ba5166382501e9169deb04f41c6775c7afd51"
+      "size": 42509,
+      "sha256": "8aa8eb5ec987be8a27ca46059c2493fa3419c8d1d42944beca7ab607419da617"
     },
     {
       "path": "framwork/tec_tac/system_update.py",
@@ -2754,7 +2759,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "666af76199808fcde6253f0af8fbbd6d4639d17ef1eca9d7d50a4676853e55b3"
+      "sha256": "d34a34343cdd4c2d9e9736a3a9acd89c4d989fa995e325a2fd6495677ee00b42"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -5120,6 +5125,11 @@
       "path": "tests/system-command-failed-reason-1.17.83.py",
       "size": 5464,
       "sha256": "242838056a52d2b890304ed7e1566360e09d2c408303ff6cb41ccb11aa94888d"
+    },
+    {
+      "path": "tests/system-command-failed-reason-1.17.84.py",
+      "size": 5749,
+      "sha256": "3b31154e590d11548938e1ec61f564086da6ce3b139c501e8267ca520b5049e5"
     },
     {
       "path": "tests/system-command-integration-1.17.75.py",

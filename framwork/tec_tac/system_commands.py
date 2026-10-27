@@ -537,17 +537,43 @@ def _check_route(path: str) -> None:
         raise CommandRefused("function_unavailable", "The send-command route is not owned by the module that owns this piece of Tactical; nothing was sent.") from None
 
 
+def _view_name(func) -> str:
+    """The name of the Tactical view behind a resolved route, read the way Django 4+ and DRF leave it. ``api_view`` makes a class named after the function and
+    ``as_view`` returns a plain function called ``view`` (csrf_exempt keeps that name), so the function's own ``__name__`` is NOT the view's name (1.17.84: that read
+    refused every send, in the web process and the Celery worker alike). The class is on ``view_class`` (Django) or ``cls`` (DRF)."""
+    for attribute in ("view_class", "cls"):
+        view_class = getattr(func, attribute, None)
+        if view_class is not None:
+            return str(getattr(view_class, "__name__", "") or "")
+    return str(getattr(func, "__name__", "") or "")
+
+
+def _resolve_view(path: str):
+    """Resolve ``path`` with Django's own resolver (it imports the root URLconf itself, so a worker that served no request is fine) and return the match only when it
+    lands on Tactical's ``send_raw_cmd`` of the agents app. Anything else refuses ``function_unavailable``: fail closed."""
+    from django.urls import resolve
+
+    try:
+        match = resolve(path)
+    except Exception:
+        logger.warning("The send-command route could not be resolved; the call is refused.", exc_info=True)
+        raise CommandRefused("function_unavailable", "Tactical's send-command route could not be resolved in this process; nothing was sent.") from None
+    func = match.func
+    name = _view_name(func)
+    module = str(getattr(getattr(func, "view_class", None) or getattr(func, "cls", None) or func, "__module__", "") or "")
+    if name != "send_raw_cmd" or (module and module.split(".")[0] != "agents"):
+        logger.warning("The send-command route landed on view %r in module %r; the call is refused.", name, module)
+        raise CommandRefused("function_unavailable", "Tactical no longer serves the send-command view on this route.")
+    return match
+
+
 def _send(route_agent: str, call: dict, username: str, user=None):
     """Run Tactical's own ``send_raw_cmd`` view for ``route_agent`` as the service user and return the answer text ('timeout' when the agent never answered).
     ``username`` (the owner) is for the audit rows only. Any other answer raises, and the claim stays (at most once)."""
-    from django.urls import resolve
-
     user = user if user is not None else _service_user()
     path = f"/agents/{route_agent}/cmd/"
     _check_route(path)
-    match = resolve(path)
-    if getattr(match.func, "__name__", "") != "send_raw_cmd":
-        raise CommandRefused("function_unavailable", "Tactical no longer serves the send-command view on this route.")
+    match = _resolve_view(path)
     response = _dispatch_view(match, _build_view_request(call, user, match, path))
     status = int(getattr(response, "status_code", 500))
     content = bytes(getattr(response, "content", b"") or b"")
@@ -584,6 +610,7 @@ def run_one(*, definition, run, verified, owner, provenance, extra, agent_pk, ca
     service_user = _service_user()  # read and re-checked BEFORE the claim and the audit row: a missing or deviant user sends nothing and creates nothing
     route_agent = route_agent_id(agent_pk)  # before the claim: a number with no string id claims and sends nothing
     _check_route(f"/agents/{route_agent}/cmd/")  # 1.17.79: before the count and the claim, so a refused route burns no command_id (_send checks again)
+    _resolve_view(f"/agents/{route_agent}/cmd/")  # 1.17.84: the view check too, before the count and the claim (a refusal burns no command_id)
     number = count_run(run.id)  # the per-run cap, before the claim
     _RUN.run_id = str(run.id)
     try:
@@ -605,12 +632,16 @@ def run_one(*, definition, run, verified, owner, provenance, extra, agent_pk, ca
         raise SchedulerTransientError("The audit row could not be written, so nothing was sent.") from None
     outcome, output, truncated = "ran", "", False
     status, reason, error, tactical_detail = None, "", "", ""
+    refused = None
     try:
         outcome, output, truncated = interpret_reply(_send(route_agent, call, username, service_user))
     except Exception as exc:
         logger.exception("The command could not be sent; Core never sends it again under this command_id.")  # the claim stays: at most once
         outcome = "failed"
         error = type(exc).__name__[:60]  # the class name only: a message can hold the command
+        if isinstance(exc, CommandRefused):  # 1.17.84: Core's own refusal, nothing reached Tactical: the caller gets the code, not a generic failed
+            refused = exc
+            outcome = "refused"
         if isinstance(exc, SendFailed):
             status, reason, tactical_detail = exc.status, exc.reason, exc.detail
         elif isinstance(exc, CommandRefused):
@@ -627,6 +658,8 @@ def run_one(*, definition, run, verified, owner, provenance, extra, agent_pk, ca
         )
     except Exception:
         logger.exception("The closing audit row of a command could not be written; the 'before' row holds the record.")
+    if refused is not None:
+        raise refused
     result = {"outcome": outcome, "agent_id": agent_pk, "command_id": call["command_id"], "output": output, "truncated": truncated,
               "message": "Sent through Tactical." if outcome == "ran" else "The endpoint did not answer in time." if outcome == "unreachable" else "The command could not be sent."}
     if outcome == "failed":  # 1.17.82, additive: the HTTP status of Tactical's view (None when it raised or Core refused the route) and a short code
