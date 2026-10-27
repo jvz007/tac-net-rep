@@ -170,14 +170,59 @@ def _manifest_system_actions(module_id: str) -> tuple:
     return ()
 
 
-def _manifest_person_actions(module_id: str) -> tuple:
-    """The ``scheduler_person_actions`` ids in the signed manifest of the installed extension ``module_id``, or () (1.17.80). A test replaces it."""
+_MANIFEST_CACHE: dict = {"signature": None, "actions": {}, "error": ""}
+_MANIFEST_CACHE_LOCK = RLock()
+
+
+def _manifest_signature() -> tuple:
+    """A cheap fingerprint of every installed manifest file: (folder, mtime_ns, size). It changes when a module is installed, upgraded or
+    removed, so the cache below needs no hook into the module manager (1.17.81)."""
     from . import registry
 
-    for plugin in registry.discover_plugins():
-        if plugin.plugin_id == module_id and plugin.plugin_type == "extension" and not getattr(plugin, "legacy", False):
-            return tuple(getattr(plugin, "scheduler_person_actions", ()) or ())
-    return ()
+    parts = []
+    for root in (registry.EXTENSIONS_ROOT, registry.REPORTSETS_ROOT):
+        if not root.is_dir():
+            continue
+        for child in sorted(root.iterdir(), key=lambda p: p.name):
+            manifest = child / registry.MANIFEST_NAME
+            try:
+                info = manifest.stat()
+            except OSError:
+                continue
+            parts.append((str(manifest), info.st_mtime_ns, info.st_size))
+    return tuple(parts)
+
+
+def _manifest_person_actions_table() -> tuple[dict, str]:
+    """(module id -> ``scheduler_person_actions`` ids, error reason code). One ``discover_plugins`` scan per change of the manifest files,
+    not one per run (1.17.81). A broken manifest gives ({}, 'manifest_unreadable'): fail closed, and the cache keeps the reason."""
+    from . import registry
+
+    try:
+        signature = _manifest_signature()
+    except Exception:  # noqa: BLE001 - an unreadable folder is never cached as good
+        return {}, "manifest_unreadable"
+    with _MANIFEST_CACHE_LOCK:
+        if _MANIFEST_CACHE["signature"] == signature:
+            return _MANIFEST_CACHE["actions"], _MANIFEST_CACHE["error"]
+        try:
+            actions = {
+                plugin.plugin_id: tuple(getattr(plugin, "scheduler_person_actions", ()) or ())
+                for plugin in registry.discover_plugins()
+                if plugin.plugin_type == "extension" and not getattr(plugin, "legacy", False)
+            }
+            error = ""
+        except Exception as exc:  # noqa: BLE001 - fail closed; the reason is logged
+            logger.warning("Scheduler manifest read failed (reason=manifest_unreadable): %s", exc)
+            actions, error = {}, "manifest_unreadable"
+        _MANIFEST_CACHE.update(signature=signature, actions=actions, error=error)
+        return actions, error
+
+
+def _manifest_person_actions(module_id: str) -> tuple:
+    """The ``scheduler_person_actions`` ids in the signed manifest of the installed extension ``module_id``, or () (1.17.80). Cached by
+    manifest fingerprint since 1.17.81. A test replaces it."""
+    return tuple(_manifest_person_actions_table()[0].get(module_id, ()))
 
 
 def scheduled_person_action(schedule, action_id: str = "") -> bool:
@@ -195,6 +240,8 @@ def scheduled_person_action(schedule, action_id: str = "") -> bool:
         if action.module_id != schedule.owner_module:
             return False
         if action.id not in _manifest_person_actions(action.module_id):
+            if _MANIFEST_CACHE.get("error"):
+                logger.warning("Schedule %s runs without a person (reason=manifest_unreadable): the module manifest could not be read.", getattr(schedule, "pk", ""))
             return False
         return bool(schedule_creator_names(schedule)[0])
     except Exception:  # noqa: BLE001 - any failure means the creator is not the person

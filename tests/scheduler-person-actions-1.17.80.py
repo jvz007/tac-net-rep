@@ -25,6 +25,8 @@ sched._recover_event_jobs_safely = lambda now: {}
 sched.cleanup_once_schedules = lambda now: 0
 sched.cleanup_run_history = lambda now: 0
 
+# 1.17.81: the manifest answer is cached by a fingerprint of the manifest files; here the fingerprint is the stub registry state
+sched._manifest_signature = lambda: (STATE_FAULT["registry"], tuple((k, tuple(getattr(p, "scheduler_person_actions", ()))) for k, p in PLUGINS.items()))
 alice, bob = User("alice"), User("bob")
 PERMS = {"alice": True, "bob": True}
 SCOPES = {"alice": True, "bob": True}
@@ -163,7 +165,7 @@ print("       a handler that names another action id is refused")
 # ---- (5) the manifest key has the shape rules of system_actions (the real parser, read from registry.py)
 tree = ast.parse((APP / "registry.py").read_text(encoding="utf-8"))
 fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_scheduler_person_actions")
-ns = {"RegistryError": type("RegistryError", (Exception,), {}), "SYSTEM_ACTIONS_MAX": 20, "_SYSTEM_ACTION_NAME_RE": re.compile(r"[a-z0-9][a-z0-9_-]*")}
+ns = {"RegistryError": type("RegistryError", (Exception,), {}), "SYSTEM_ACTIONS_MAX": 20, "_PERSON_ACTIONS_MIN_FRAMEWORK": (1, 17, 80), "_requires_framework_floor": lambda payload: (1, 17, 80), "_SYSTEM_ACTION_NAME_RE": re.compile(r"[a-z0-9][a-z0-9_-]*")}
 exec(compile(ast.Module(body=[fn], type_ignores=[]), "registry.py", "exec"), ns)  # noqa: S102 - Core's own source
 parse = ns["_scheduler_person_actions"]
 must(parse({}, "extension", "patchmanagement") == () and parse({"scheduler_person_actions": ["patchmanagement.notice"]}, "extension", "patchmanagement") == ("patchmanagement.notice",))
@@ -186,5 +188,5 @@ print("       the manifest key is parsed with the same shape rules as system_act
 con = (APP / "contracts.py").read_text(encoding="utf-8")
 must("Since 1.17.80 (module-facing, additive, framework >=1.17.80; fail closed)" in con and "scheduler_person_actions" in con)
 must("scheduler_person_actions" in (ROOT / "docs" / "module-scheduling.md").read_text(encoding="utf-8"))
-must((ROOT / "RELEASE_NOTES_1.17.80.md").is_file() and (ROOT / "VERSION").read_text().strip() == "1.17.80")
+must(any((ROOT / d / "RELEASE_NOTES_1.17.80.md").is_file() for d in (".", "docs/releases")))  # 1.17.81: earlier notes move to docs/releases
 print("PASS scheduler person actions 1.17.80")

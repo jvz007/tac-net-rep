@@ -339,6 +339,17 @@ def _server_maintenance_actions(payload: dict, plugin_type: str, plugin_id: str,
     return tuple(entries)
 
 
+_PERSON_ACTIONS_MIN_FRAMEWORK = (1, 17, 80)
+
+
+def _requires_framework_floor(payload: dict) -> tuple[int, ...]:
+    """The lowest framework in ``requires.framework`` (the ``>=X.Y.Z`` part), or () when none is stated (1.17.81)."""
+    requires = payload.get("requires")
+    spec = requires.get("framework") if isinstance(requires, dict) else None
+    match = re.search(r">=\s*(\d+)\.(\d+)\.(\d+)", spec) if isinstance(spec, str) else None
+    return tuple(int(part) for part in match.groups()) if match else ()
+
+
 def _scheduler_person_actions(payload: dict, plugin_type: str, plugin_id: str) -> tuple[str, ...]:
     """Parse the optional ``scheduler_person_actions`` key (1.17.80): the same shape as ``system_actions`` (at most 20 distinct ids, each
     ``<plugin id>.<name>``, extensions only). Shape only: Core honours an id only for an action that module registers with the Scheduler."""
@@ -351,6 +362,8 @@ def _scheduler_person_actions(payload: dict, plugin_type: str, plugin_id: str) -
         raise RegistryError("Manifest key 'scheduler_person_actions' must be a JSON list of action ids such as patchmanagement.notice.")
     if len(raw) > SYSTEM_ACTIONS_MAX:
         raise RegistryError(f"Manifest scheduler_person_actions may not contain more than {SYSTEM_ACTIONS_MAX} entries.")
+    if raw and _requires_framework_floor(payload) < _PERSON_ACTIONS_MIN_FRAMEWORK:
+        raise RegistryError("Manifest scheduler_person_actions needs requires.framework '>=1.17.80' or higher; raise the requirement.")
     prefix = plugin_id + "."
     seen: list[str] = []
     for item in raw:
