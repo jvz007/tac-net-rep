@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.88",
+  "version": "1.17.89",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.17.88.md",
-      "size": 4639,
-      "sha256": "dc1ff979e040bd8fdbe4f0712b75acb86a0daf5a26c8bbf3d3dc056f63613852"
+      "path": "RELEASE_NOTES_1.17.89.md",
+      "size": 2866,
+      "sha256": "44c0612485ce27174ff2dffc8902df20fa8902937cfa2c5d6fb294ef815c2f9b"
     },
     {
       "path": "VERSION",
       "size": 8,
-      "sha256": "f817d632071214a5c80d9fff1a032aadb51a0002fac2afc4332cc4166f5b699e"
+      "sha256": "0332432d0e95a8aeb155f682a1351d703b68eb2dc21219b2f8a360626c50de16"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -183,8 +183,8 @@
     },
     {
       "path": "docs/module-scheduling.md",
-      "size": 41562,
-      "sha256": "0c4a3e42f799740376414cb337b5ffad5aef04a8c9bece7e4fcb19d7a6d1b549"
+      "size": 41688,
+      "sha256": "504f000a71c958493116fc8bb21f6aec1db8da0c34fc22bd3386e39bbd4b5106"
     },
     {
       "path": "docs/module-visibility.md",
@@ -1517,6 +1517,11 @@
       "sha256": "962abb37b904cc7596afbbd9d399ce3af42cc7345fd486a332657d70b5a15498"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.88.md",
+      "size": 4639,
+      "sha256": "dc1ff979e040bd8fdbe4f0712b75acb86a0daf5a26c8bbf3d3dc056f63613852"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.9.md",
       "size": 10089,
       "sha256": "75ab9a22af1f1c0fbfe8dfcd23de4ce3cf5e85f4eeee245f0a80da27b879b75b"
@@ -2433,8 +2438,8 @@
     },
     {
       "path": "framwork/tec_tac/scheduler.py",
-      "size": 115145,
-      "sha256": "1d9dff91725e8c1dd44a70bf18bd5f81c8a2f1bfc63b60c74c0d536a8262b843"
+      "size": 115496,
+      "sha256": "5c6b39144d43b0162e3e661261e5104aea79e01950a284c149f5a9946c12515d"
     },
     {
       "path": "framwork/tec_tac/scheduler_completion.py",
@@ -2508,8 +2513,8 @@
     },
     {
       "path": "framwork/tec_tac/system_action_confirmation.py",
-      "size": 21687,
-      "sha256": "d66a1825f242e05ca3190a46ce07efe6993d75bac081cfc1b545faefe98bd3a5"
+      "size": 21852,
+      "sha256": "8b6e28e35a5f000bc869f84118e6d3c035c8861a23ea157fa81132b5f7f41a5c"
     },
     {
       "path": "framwork/tec_tac/system_actions.py",
@@ -2794,7 +2799,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "e6d065e2bb4da7ec8844e79082f9688fbab60aaa15e4041bc7f7f759e8f7d9d3"
+      "sha256": "9de0ee0ecd131b342923428cd1e90a3c7daba51f5262eaa74daaff1236a79533"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -3408,8 +3413,8 @@
     },
     {
       "path": "tests/filter-sets-1.17.50.py",
-      "size": 53595,
-      "sha256": "145b1043ca991520d5e468c9667e63d18d5ab732e64f4e3bf3e8521dbaf1a14b"
+      "size": 55434,
+      "sha256": "6f92129f4157f34902c5d7afe0a211936249a6761db47c9de07588edcf06ea1f"
     },
     {
       "path": "tests/filter-sets-1.17.51.py",
@@ -4533,8 +4538,8 @@
     },
     {
       "path": "tests/scheduler-compat-1.17.68.py",
-      "size": 9844,
-      "sha256": "9899971b5055689997fae2d9e6a7993b306220a2b992d35fc15a6fb0941f7814"
+      "size": 10254,
+      "sha256": "e59916f470e67a821ccd25312f20dbb7d5c4fed704ee52b7d8fc5c88e1bfb74b"
     },
     {
       "path": "tests/scheduler-completion-caller-1.17.61.py",
@@ -4668,8 +4673,8 @@
     },
     {
       "path": "tests/scheduler-nth-weekday-1.17.88.py",
-      "size": 16158,
-      "sha256": "67f67dc599ac7662f39c0facf42012d443ee7998f96706ead437f8948b40c015"
+      "size": 16531,
+      "sha256": "c128345c275edc90e97678bb07bd42064473d969d637c3362936ae51f938455a"
     },
     {
       "path": "tests/scheduler-one-off-retry-1.17.18.py",
@@ -4785,6 +4790,11 @@
       "path": "tests/scheduler-unrestricted-scope.py",
       "size": 3921,
       "sha256": "196209d4b21a7fc08b1b6b207c939edc889fd5dd3d7de27fccbc518ba10ba304"
+    },
+    {
+      "path": "tests/scheduler-views-monthly-1.17.89.py",
+      "size": 6924,
+      "sha256": "4185941061faaa8ad61c85c2dbfcdfd62ac2992f8a86a65efbb07916fad280e8"
     },
     {
       "path": "tests/scheduler-wide-recheck-1.17.65.py",

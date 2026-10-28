@@ -145,16 +145,16 @@ for bad, text in (({**mon}, "require day_of_month, or month_week"),
 print("       validation: ranges, types, booleans, pairs, exactly one monthly mode")
 
 # ---- the edit switch: sending one mode replaces the other
-merged = {"day_of_month": 12, "month_week": None, "month_weekday": None}
+merged = {"schedule_type": "monthly", "day_of_month": 12, "month_week": None, "month_weekday": None}
 sched.switch_monthly_mode(merged, {"month_week": 3, "month_weekday": 2})
 must(merged["day_of_month"] is None, merged)
-merged = {"day_of_month": None, "month_week": 3, "month_weekday": 2}
+merged = {"schedule_type": "monthly", "day_of_month": None, "month_week": 3, "month_weekday": 2}
 sched.switch_monthly_mode(merged, {"day_of_month": 9})
 must(merged["month_week"] is None and merged["month_weekday"] is None, merged)
-merged = {"day_of_month": None, "month_week": 3, "month_weekday": 2}
+merged = {"schedule_type": "monthly", "day_of_month": None, "month_week": 3, "month_weekday": 2}
 sched.switch_monthly_mode(merged, {"name": "renamed"})
-must(merged == {"day_of_month": None, "month_week": 3, "month_weekday": 2}, "an edit that sends neither mode keeps the stored one")
-merged = {"day_of_month": 4, "month_week": 3, "month_weekday": 2}
+must(merged == {"schedule_type": "monthly", "day_of_month": None, "month_week": 3, "month_weekday": 2}, "an edit that sends neither mode keeps the stored one")
+merged = {"schedule_type": "monthly", "day_of_month": 4, "month_week": 3, "month_weekday": 2}
 sched.switch_monthly_mode(merged, {"day_of_month": 4, "month_week": 3, "month_weekday": 2})
 must(merged["day_of_month"] == 4, "both sent: left for the shape check to refuse")
 try:

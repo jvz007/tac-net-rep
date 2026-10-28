@@ -137,9 +137,10 @@ def when_key(when) -> dict:
     }
     key = {k: out[k] for k in _WHEN_KEYS}
     # 1.17.88: the nth weekday of the month joins the key only when it is set, so the key of every other timing (and a confirmation id
-    # issued for it before this release) is exactly what it was.
+    # issued for it before this release) is exactly what it was. 1.17.89: and only for a monthly schedule, so a pair left on a schedule that is
+    # no longer monthly cannot change the key.
     week, weekday = source.get("month_week"), source.get("month_weekday")
-    if isinstance(week, int) and not isinstance(week, bool) and isinstance(weekday, int) and not isinstance(weekday, bool):
+    if out["schedule_type"] == "monthly" and isinstance(week, int) and not isinstance(week, bool) and isinstance(weekday, int) and not isinstance(weekday, bool):
         key["month_week"], key["month_weekday"] = week, weekday
     return key
 

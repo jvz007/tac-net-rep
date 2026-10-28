@@ -570,7 +570,11 @@ def check_monthly_shape(data: dict) -> None:
 
 def switch_monthly_mode(merged: dict, incoming: dict) -> None:
     """On an edit, sending one monthly mode replaces the other, so a person can move a schedule from day_of_month to the nth weekday
-    and back by sending only the new fields (1.17.88). Changes ``merged`` in place."""
+    and back by sending only the new fields (1.17.88). Changes ``merged`` in place. 1.17.89: a schedule that is not monthly after the merge keeps
+    none of the three monthly fields, so an old pair or day cannot come back when it is made monthly again."""
+    if merged.get("schedule_type") != TecTacSchedule.ScheduleType.MONTHLY:
+        merged["day_of_month"] = merged["month_week"] = merged["month_weekday"] = None
+        return
     sent_day = incoming.get("day_of_month") not in (None, "")
     sent_pair = incoming.get("month_week") not in (None, "") or incoming.get("month_weekday") not in (None, "")
     if sent_pair and not sent_day:

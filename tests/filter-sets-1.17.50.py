@@ -91,8 +91,22 @@ if groups_service.is_file():  # when the workspace sits beside modules/, read Gr
         legacy_ops = ast.literal_eval(node.value)
         must(list(legacy_ops) == list(zip(GROUPS_IDS, GROUPS_LABELS)), "Groups' STRING_OPERATORS and Core's vocabulary are the same")
     else:  # 1.17.87: Groups dropped the table from service.py; its evaluator is where the six ids live now
-        evaluator = (groups_service.parent / "evaluator.py").read_text(encoding="utf-8")
-        must(all(f'"{op}"' in evaluator for op in GROUPS_IDS), "Groups' evaluator still handles Core's six operator ids")
+        # 1.17.89: read the operator ids the evaluator really branches on (a comparison, a membership test or a dispatch-table key), not any
+        # quoted string: an id in a comment, a docstring or an error message does not count.
+        evaluator = ast.parse((groups_service.parent / "evaluator.py").read_text(encoding="utf-8"))
+        handled = set()
+        for n in ast.walk(evaluator):
+            if isinstance(n, ast.Compare):
+                for part in [n.left, *n.comparators]:
+                    if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                        handled.add(part.value)
+                    elif isinstance(part, (ast.Tuple, ast.List, ast.Set)):
+                        handled.update(e.value for e in part.elts if isinstance(e, ast.Constant) and isinstance(e.value, str))
+            elif isinstance(n, ast.Dict):
+                handled.update(k.value for k in n.keys if isinstance(k, ast.Constant) and isinstance(k.value, str))
+            elif isinstance(n, ast.MatchValue) and isinstance(n.value, ast.Constant):
+                handled.add(n.value.value)
+        must(set(GROUPS_IDS) <= handled, f"Groups' evaluator does not branch on Core's operator ids: {sorted(set(GROUPS_IDS) - handled)}")
 
 ids = lambda rows: [r["id"] for r in rows]  # noqa: E731
 must(ids(fs.operators_for("text")) == GROUPS_IDS, "text gets all six")

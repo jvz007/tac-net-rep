@@ -679,5 +679,5 @@ Rules:
 - there is no fifth week: weeks 1-4 exist in every month, so no month is skipped. Use -1 for "the last", which is the fifth when the month has five;
 - Core works out the date in the schedule's own timezone and keeps the local `run_time`, as for `day_of_month`;
 - to move a schedule between the two modes, call `reconcile_schedule` with the new mode only. The other mode's fields are cleared and the due key resets, as for any timing change;
-- the schedule API (`GET`, `POST`, `PATCH /api/tfd/scheduler/schedules/`) returns `month_week` and `month_weekday` (null when unused). On `PATCH`, sending one mode replaces the other;
+- the schedule API (`GET`, `POST`, `PATCH /api/tfd/scheduler/schedules/`) returns `month_week` and `month_weekday` (null when unused). On `PATCH`, sending one mode replaces the other, and a `PATCH` that makes the schedule anything but monthly clears `day_of_month`, `month_week` and `month_weekday` (1.17.89);
 - one-time schedules are unchanged: `run_at` is an exact moment.
