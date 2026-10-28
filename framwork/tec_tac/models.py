@@ -67,6 +67,8 @@ class TecTacSchedule(models.Model):
     owner_key = models.CharField(max_length=255, blank=True, default="")
 
     enabled = models.BooleanField(default=True)
+    # 1.17.86: set by Core while a module this schedule belongs to is disabled; blank otherwise. Never set by a person (migration 0040).
+    paused_reason = models.CharField(max_length=120, blank=True, default="")
     missed_policy = models.CharField(max_length=24, choices=MissedPolicy.choices, default=MissedPolicy.SKIP)
     missed_grace_minutes = models.PositiveIntegerField(default=60)
     concurrency_policy = models.CharField(max_length=16, choices=ConcurrencyPolicy.choices, default=ConcurrencyPolicy.SKIP)

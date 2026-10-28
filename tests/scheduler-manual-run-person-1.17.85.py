@@ -187,5 +187,5 @@ must("queue_manual_run(schedule, started_by=request.user if person_run else None
 must("started_by_username" in (APP / "scheduler_run_context.py").read_text(encoding="utf-8"))
 must("Since 1.17.85" in (APP / "contracts.py").read_text(encoding="utf-8"))
 must("1.17.85" in (ROOT / "docs" / "module-scheduling.md").read_text(encoding="utf-8"))
-must((ROOT / "RELEASE_NOTES_1.17.85.md").is_file())
+must((ROOT / "docs" / "releases" / "RELEASE_NOTES_1.17.85.md").is_file())
 print("PASS scheduler manual run person 1.17.85")

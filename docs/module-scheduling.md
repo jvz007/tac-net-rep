@@ -643,3 +643,11 @@ A manual run (Run now) of a declared `scheduler_person_actions` action now has a
 - Core checks them again, live, at verify time. An inactive person, or one who lost the permission or scope, makes `verify_run_context` raise `SchedulerRunContextInvalid` ("The person who pressed Run now may no longer run this action.").
 - Core writes one audit row (`run`, `run_as` = `clicker`) per run. The handler context also carries `started_by_username` for display only.
 - A manual run of any other action, and any scheduled run, is as before. A scheduled run still uses the creator.
+
+### A disabled module pauses its schedules (Core 1.17.86)
+
+Needs framework >=1.17.86. Additive. Nothing changes for a handler.
+
+While a module is disabled, Core does not queue its schedules. This covers a schedule whose `module_id` or `owner_module` is that module. The schedule stays `enabled`, so a person's own off switch is never touched. Core sets `paused_reason` to `paused: module disabled` and writes one `disable` audit row (`paused` true, `disabled_module` names the module). It writes no row per tick. When the module is enabled again, Core clears `paused_reason`, writes one `enable` audit row and the schedule runs on its next occurrence under its missed policy. A schedule a person had switched off is never paused or resumed by Core. If the module state cannot be read, Core skips the module's schedules for that tick and changes nothing.
+
+The schedule API and `get_owned_schedule` gain `paused` (true only for an enabled schedule Core paused) and `paused_reason` (a string or null). `next_run_at` is null while paused. A module whose own schedule depends on another module (a dependency) should pause it itself; Core pauses only for the owning module.

@@ -561,7 +561,7 @@ def _resolve_view(path: str):
     func = match.func
     name = _view_name(func)
     module = str(getattr(getattr(func, "view_class", None) or getattr(func, "cls", None) or func, "__module__", "") or "")
-    if name != "send_raw_cmd" or (module and module.split(".")[0] != "agents"):
+    if name != "send_raw_cmd" or not module or module.split(".")[0] != "agents":  # 1.17.86: a view with no __module__ is refused
         logger.warning("The send-command route landed on view %r in module %r; the call is refused.", name, module)
         raise CommandRefused("function_unavailable", "Tactical no longer serves the send-command view on this route.")
     return match

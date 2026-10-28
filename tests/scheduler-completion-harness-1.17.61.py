@@ -182,7 +182,7 @@ class Schedule(Model):
                     timezone="UTC", missed_policy="skip", missed_grace_minutes=60, concurrency_policy="skip", target_state="valid",
                     target_state_detail="", updated_at=None, schedule_type="once",
                     created_by_username="", confirmed_by_username="",  # 1.17.63: the names migration 0036 adds
-                    creation_scope={})  # 1.17.68: migration 0037 adds the scope a person had when they saved the schedule
+                    creation_scope={}, paused_reason="")  # 1.17.86 adds paused_reason; 1.17.68: migration 0037 adds the scope a person had when they saved the schedule
 
     @property
     def runs(self):

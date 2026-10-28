@@ -634,7 +634,7 @@ class SchedulerRunNowView(APIView):
             schedule.save(update_fields=["enabled", "target_state", "target_state_detail", "updated_at"])
             return Response({"detail": str(exc)}, status=400)
         try:
-            _require_target_scope(request.user, canonical_targets, payload=False, module_id=schedule.module_id)
+            _require_target_scope(request.user, canonical_targets, payload=False, module_id=schedule.module_id, strict=person_run)  # 1.17.86: no manager bypass for a declared person action
         except PermissionDenied:
             if person_run:
                 _audit_run_now_refusal(request.user, schedule, "outside_scope")

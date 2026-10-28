@@ -499,7 +499,7 @@ Schedule.objects.create(name="iv", module_id="cyberhoot", action_id="x.y", owner
 info = sched.get_owned_schedule("cyberhoot", "sync")
 must(info["enabled"] is True and info["schedule_type"] == "interval" and info["next_run_at"] == (anchor + timedelta(hours=1)).isoformat(), info)
 must(info["last_run_at"] == (NOW[0] - timedelta(minutes=70)).isoformat() and info["last_run_status"] is None and info["last_run_finished_at"] is None, info)
-must(set(info) == {"enabled", "schedule_type", "next_run_at", "last_run_at", "last_run_status", "last_run_finished_at", "created_by_username"}, "the model is not exposed")  # 1.17.63 added created_by_username (additive)
+must(set(info) == {"enabled", "schedule_type", "next_run_at", "last_run_at", "last_run_status", "last_run_finished_at", "created_by_username", "paused", "paused_reason"}, "the model is not exposed")  # 1.17.63 added created_by_username (additive)
 iv = Schedule.objects.rows[0]
 Run.objects.create(schedule=iv, status="failed", finished_at=NOW[0] - timedelta(minutes=5))
 info = sched.get_owned_schedule("cyberhoot", "sync")

@@ -82,9 +82,9 @@ m = sc._resolve_view("/agents/abc/cmd/")
 must(WARM["loaded"] and m.func.__name__ == "view" and sc._view_name(m.func) == "send_raw_cmd", "a view whose function is called 'view' is read by its class name (DRF cls)")
 CURRENT["func"] = view_func("send_raw_cmd", via="view_class")
 must(sc._resolve_view("/x/").func is CURRENT["func"], "Django's view_class works too")
-CURRENT["func"] = T.SimpleNamespace(__name__="send_raw_cmd", args=(), kwargs={})
-must(sc._resolve_view("/x/") is not None, "a plain function named send_raw_cmd (no class) still passes")
-for label, func in (("another view", view_func("other_view")), ("another app", view_func("send_raw_cmd", module="evil.views")), ("plain view name", T.SimpleNamespace(__name__="view", args=(), kwargs={})), ("no resolve", None)):
+CURRENT["func"] = T.SimpleNamespace(__name__="send_raw_cmd", __module__="agents.views", args=(), kwargs={})
+must(sc._resolve_view("/x/") is not None, "a plain function named send_raw_cmd (no class) in the agents app still passes")
+for label, func in (("another view", view_func("other_view")), ("another app", view_func("send_raw_cmd", module="evil.views")), ("no __module__ (1.17.86)", T.SimpleNamespace(__name__="send_raw_cmd", args=(), kwargs={})), ("plain view name", T.SimpleNamespace(__name__="view", args=(), kwargs={})), ("no resolve", None)):
     CURRENT["func"] = func
     try:
         sc._resolve_view("/x/")

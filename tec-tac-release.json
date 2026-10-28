@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.85",
+  "version": "1.17.86",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.17.85.md",
-      "size": 4065,
-      "sha256": "20b7fbbc7333a86e51dd5908532be6badc628fefb91f31a537e0f294b7f588ae"
+      "path": "RELEASE_NOTES_1.17.86.md",
+      "size": 2798,
+      "sha256": "18782fd42da1ff0f459d996d760e14aaa91d2ec2444e1192c8863643af2565f0"
     },
     {
       "path": "VERSION",
       "size": 8,
-      "sha256": "b6aec0fb2447b5f59f5273c59e547de6c0d8fd6b232483f08edfeb622ae31c83"
+      "sha256": "000565d655599159c7cdbe6a8c5d0ef8243d1b9fa00276e81a390646e3dc24d3"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -183,8 +183,8 @@
     },
     {
       "path": "docs/module-scheduling.md",
-      "size": 38183,
-      "sha256": "f6a1831d13a7bb059512b5c685caa921c6b8b2b0f475c8f6e6f1c7a058431ede"
+      "size": 39360,
+      "sha256": "b1613758e393bf9062a8cdb623a3a1f85d788d2b31acffe3ad3e0e62aac2bbcb"
     },
     {
       "path": "docs/module-visibility.md",
@@ -1502,6 +1502,11 @@
       "sha256": "b68cbd2a915ad721f89ee5a7e7640dd0f9f8687f4813b91855090af5e1bd8fce"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.85.md",
+      "size": 4065,
+      "sha256": "20b7fbbc7333a86e51dd5908532be6badc628fefb91f31a537e0f294b7f588ae"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.9.md",
       "size": 10089,
       "sha256": "75ab9a22af1f1c0fbfe8dfcd23de4ce3cf5e85f4eeee245f0a80da27b879b75b"
@@ -1628,8 +1633,8 @@
     },
     {
       "path": "docs/system-actions.md",
-      "size": 67075,
-      "sha256": "f0cfd272cfb1474902b16da153ff6ddb810408435e08ed60cd52ada8d89df658"
+      "size": 67560,
+      "sha256": "66ff92a80344cce06d8a4976a3bcc4a9cc9d2c5a994fe556541f0ab6b3f1ebe5"
     },
     {
       "path": "docs/system-update-logs.md",
@@ -2212,14 +2217,19 @@
       "sha256": "8d207376b5dc82663a7887d97d0d3e1329a0e867b211a1bad24dab7eee68baa8"
     },
     {
+      "path": "framwork/tec_tac/migrations/0040_schedule_paused_reason.py",
+      "size": 686,
+      "sha256": "880bc125d8e358ccf93e5b5ba3ec7926d2f8926f2e6877846cac188dbd2cf4e2"
+    },
+    {
       "path": "framwork/tec_tac/migrations/__init__.py",
       "size": 0,
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "path": "framwork/tec_tac/models.py",
-      "size": 37251,
-      "sha256": "a23f8ed119638e62f6ebd17c9741fa80e0689ec5ed7d053999acd3b5468a7a87"
+      "size": 37467,
+      "sha256": "2e625f00ca94e58e1a19d1c428d752ec68b909d63a563687d22a889ed6d4e29a"
     },
     {
       "path": "framwork/tec_tac/module_category.py",
@@ -2408,8 +2418,8 @@
     },
     {
       "path": "framwork/tec_tac/scheduler.py",
-      "size": 107679,
-      "sha256": "1e9a738f92fdb13a12196fb155fb62f66cb96398c4914dea158b7d1d54044c44"
+      "size": 111006,
+      "sha256": "be32e824f80a5a1291b46b201ca17088e4de2b3a5ac1d929ae0df1936055a217"
     },
     {
       "path": "framwork/tec_tac/scheduler_completion.py",
@@ -2443,8 +2453,8 @@
     },
     {
       "path": "framwork/tec_tac/scheduler_views.py",
-      "size": 52394,
-      "sha256": "c74428af44c8515083eaf44df7af9c5634e08f16aa4683492c7b80652c26a977"
+      "size": 53493,
+      "sha256": "d0a0b30dd2339d650fe864f92b916158a1eee8a87a8062e9773c4832379c739d"
     },
     {
       "path": "framwork/tec_tac/server_backup.py",
@@ -2493,8 +2503,8 @@
     },
     {
       "path": "framwork/tec_tac/system_commands.py",
-      "size": 42509,
-      "sha256": "8aa8eb5ec987be8a27ca46059c2493fa3419c8d1d42944beca7ab607419da617"
+      "size": 43226,
+      "sha256": "08aecb1927bac9c0866d79b995e32a6218f3bb1fdba8e06c49eac6dfa7b0769a"
     },
     {
       "path": "framwork/tec_tac/system_update.py",
@@ -2769,7 +2779,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "69521e88670f1339f7da27caa19506120f274f125d034e4a450bd92aa07843f2"
+      "sha256": "6f5ecfd20dbd82df965c2590a4029c465c8896ee29e2512d3e7393c6b36082d8"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -4488,8 +4498,8 @@
     },
     {
       "path": "tests/scheduler-closure-1.15.149.py",
-      "size": 8337,
-      "sha256": "969caa93619c382da4275cc62fd83cbd664fa34b97121b3bd4077180853641b2"
+      "size": 8482,
+      "sha256": "02fb76c61bbfb363b328989e17db33afab90b2e15f4f66350c14363761f2acde"
     },
     {
       "path": "tests/scheduler-compat-1.17.63.py",
@@ -4518,8 +4528,8 @@
     },
     {
       "path": "tests/scheduler-completion-harness-1.17.61.py",
-      "size": 23619,
-      "sha256": "e9e0e6dd14641bee3fe81efd47b2cd0ea0539610eca7125ad347d1392355bb39"
+      "size": 23086,
+      "sha256": "11afb91da3a01119f3dfd01a2ade15982c04a94eebf3645d3a9e34e67d1a94ce"
     },
     {
       "path": "tests/scheduler-completion-kind-1.17.62.py",
@@ -4553,8 +4563,8 @@
     },
     {
       "path": "tests/scheduler-filter-value-compat-1.15.134-2.py",
-      "size": 5503,
-      "sha256": "477ae7704d3f48cbd02ba943815fccfad31bf841fd467920f991464856c7aa7d"
+      "size": 5648,
+      "sha256": "8e96e9f0e070063d356fbf629d131c0114002cda77fcc9fbb46d1fb6c063d9ac"
     },
     {
       "path": "tests/scheduler-foundation.sh",
@@ -4608,8 +4618,8 @@
     },
     {
       "path": "tests/scheduler-manual-run-person-1.17.85.py",
-      "size": 8583,
-      "sha256": "7a8325e0d4c8352bc4071e2734b5c69b20303edfc4c8a3759da1600a9262c5c1"
+      "size": 8796,
+      "sha256": "cba61a1c5086597924d1bf3af63a027c5788368fca9ab2d0e336e300835f3d7e"
     },
     {
       "path": "tests/scheduler-migration-0034-1.17.61.py",
@@ -4627,6 +4637,11 @@
       "sha256": "f2cc6108209a61669951751bfc24a970c48b47aec2f69797d6ac33b501b81e38"
     },
     {
+      "path": "tests/scheduler-module-pause-1.17.86.py",
+      "size": 5420,
+      "sha256": "56f38e080e9fd7b0a133eee1ad65e61f597f5da833a19555c02853a102c3eda3"
+    },
+    {
       "path": "tests/scheduler-native-type-compat-1.15.164-1.py",
       "size": 6028,
       "sha256": "59884915611f8d32f358bd6cc11e7a6cf8ecfab91c7c15cb38ac5259e36c9dea"
@@ -4638,8 +4653,8 @@
     },
     {
       "path": "tests/scheduler-one-off-run-1.17.16.py",
-      "size": 26607,
-      "sha256": "285b7d438dba492ef74c893afb93e4f7af00c5bfd5f01c227c090711d7e3a2ee"
+      "size": 27163,
+      "sha256": "33c74efeadb007392253da3a3306c53d32ee759ad8b5d4f84673bf90a57da455"
     },
     {
       "path": "tests/scheduler-one-off-run-now-1.17.17.py",
@@ -5118,8 +5133,8 @@
     },
     {
       "path": "tests/system-command-1.17.76.py",
-      "size": 24936,
-      "sha256": "0fa04ba9f38ac49253116cf199f2c03cddbacb56d3163bcf4af99fa8cb537bf9"
+      "size": 25488,
+      "sha256": "6054f5bde7103fb337599768f2fc825b7f696f0f38cfef4a633b9433a90357e6"
     },
     {
       "path": "tests/system-command-1.17.78.py",
@@ -5143,8 +5158,8 @@
     },
     {
       "path": "tests/system-command-failed-reason-1.17.84.py",
-      "size": 5749,
-      "sha256": "3b31154e590d11548938e1ec61f564086da6ce3b139c501e8267ca520b5049e5"
+      "size": 5887,
+      "sha256": "e563958434bf5a03714936d1d345adebda7aee9656e8d1b6d00b282e638ecc0a"
     },
     {
       "path": "tests/system-command-integration-1.17.75.py",

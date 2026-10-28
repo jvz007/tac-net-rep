@@ -1068,6 +1068,55 @@ def _recover_event_jobs_safely(now: datetime) -> dict:
         return {"error": True}
 
 
+PAUSED_MODULE_DISABLED = "paused: module disabled"
+
+
+def _module_state_for_tick():
+    """The module state once per tick, or None when it cannot be read (then every module-bound schedule waits, unchanged: fail closed)."""
+    from . import module_state
+
+    try:
+        state = module_state.load_state()
+    except Exception:
+        logger.warning("The module state could not be read; module schedules wait this tick.", exc_info=True)
+        return None
+    return None if not isinstance(state, dict) or state.get("_corrupt") else state
+
+
+def _disabled_owner_module(schedule, state) -> str:
+    """The id of the first module bound to the schedule (its action's module, then its owner) that is disabled, or ''. An unreadable state names the
+    action's module (fail closed)."""
+    from . import module_state
+
+    ids = [m for m in dict.fromkeys((schedule.module_id, schedule.owner_module)) if m]
+    if state is None:
+        return ids[0] if ids else ""
+    for module_id in ids:
+        if not module_state.is_enabled(module_id, state):
+            return module_id
+    return ""
+
+
+def _apply_module_pause(schedule, state) -> bool:
+    """True when the schedule must not run this tick because a module it belongs to is disabled (1.17.86, Johan).
+
+    The schedule stays ``enabled`` (a person's own off switch is never touched); Core only sets ``paused_reason``, writes one audit row when it
+    pauses and one when it resumes, never one per tick. Only a schedule Core paused is resumed. An unreadable module state pauses nothing in the
+    database: the tick just skips the schedule."""
+    off = _disabled_owner_module(schedule, state)
+    if off:
+        if state is not None and schedule.paused_reason != PAUSED_MODULE_DISABLED:
+            schedule.paused_reason = PAUSED_MODULE_DISABLED
+            schedule.save(update_fields=["paused_reason", "updated_at"])
+            _audit_schedule_row(None, schedule, "disable", f"Core paused this schedule because module {off} is disabled.", extra={"paused": True, "paused_reason": PAUSED_MODULE_DISABLED, "disabled_module": off})
+        return True
+    if schedule.paused_reason:
+        schedule.paused_reason = ""
+        schedule.save(update_fields=["paused_reason", "updated_at"])
+        _audit_schedule_row(None, schedule, "enable", "Core resumed this schedule because its module is enabled again.", extra={"paused": False})
+    return False
+
+
 def dispatch_due_schedules(now: datetime | None = None) -> dict:
     now = _as_utc(now or timezone.now())
     state = TecTacSchedulerState.current()
@@ -1078,6 +1127,7 @@ def dispatch_due_schedules(now: datetime | None = None) -> dict:
     stale = recover_stale_runs(now)
     event_jobs_result = _recover_event_jobs_safely(now)  # 1.17.45: isolated, so a fault there never stops the schedules below
     schedule_ids = list(TecTacSchedule.objects.filter(enabled=True).values_list("id", flat=True))
+    module_state_now = _module_state_for_tick()  # 1.17.86: read once per tick, not once per schedule
     try:
         for schedule_id in schedule_ids:
             try:
@@ -1087,6 +1137,9 @@ def dispatch_due_schedules(now: datetime | None = None) -> dict:
                     except TecTacSchedule.DoesNotExist:
                         continue
                     if not schedule.enabled:
+                        continue
+                    # 1.17.86: a disabled module's schedules wait; Core resumes exactly the ones it paused (see _apply_module_pause)
+                    if _apply_module_pause(schedule, module_state_now):
                         continue
                     try:
                         canonical_targets = normalize_scheduler_targets(schedule.targets or {})
@@ -1835,9 +1888,12 @@ def get_owned_schedule(owner_module: str, owner_key: str) -> dict | None:
     if schedule is None:
         return None
     latest = schedule.runs.order_by("-created_at").first()
-    upcoming = next_occurrence(schedule) if schedule.enabled else None
+    paused = bool(schedule.enabled and getattr(schedule, "paused_reason", ""))
+    upcoming = next_occurrence(schedule) if schedule.enabled and not paused else None
     return {
         "enabled": bool(schedule.enabled),
+        "paused": paused,  # 1.17.86, additive
+        "paused_reason": (schedule.paused_reason or None) if paused else None,
         "schedule_type": schedule.schedule_type,
         "next_run_at": upcoming.isoformat() if upcoming else None,
         "last_run_at": schedule.last_run_at.isoformat() if schedule.last_run_at else None,
@@ -1927,13 +1983,15 @@ def serialize_schedule(schedule: TecTacSchedule, *, include_runs: bool = False) 
         "owner_label": (schedule.owner_module if schedule.owner_type == TecTacSchedule.OwnerType.MODULE else (schedule.created_by.username if schedule.created_by else "User")),
         "managed_by_module": schedule.owner_type == TecTacSchedule.OwnerType.MODULE,
         "enabled": schedule.enabled,
+        "paused": bool(schedule.enabled and getattr(schedule, "paused_reason", "")),  # 1.17.86, additive: Core paused it because its module is disabled
+        "paused_reason": (getattr(schedule, "paused_reason", "") or None) if schedule.enabled else None,
         "missed_policy": schedule.missed_policy,
         "missed_grace_minutes": schedule.missed_grace_minutes,
         "concurrency_policy": schedule.concurrency_policy,
         "retry_count": schedule.retry_count,
         "retry_delay_seconds": schedule.retry_delay_seconds,
         "last_run_at": schedule.last_run_at.isoformat() if schedule.last_run_at else None,
-        "next_run_at": (next_occurrence(schedule).isoformat() if schedule.enabled and next_occurrence(schedule) else None),
+        "next_run_at": (next_occurrence(schedule).isoformat() if schedule.enabled and not getattr(schedule, "paused_reason", "") and next_occurrence(schedule) else None),
         "last_status": getattr(schedule, "latest_status", None) if hasattr(schedule, "latest_status") else (latest.status if latest else None),
         "created_by": schedule.created_by.username if schedule.created_by else None,
         "updated_by": schedule.updated_by.username if schedule.updated_by else None,

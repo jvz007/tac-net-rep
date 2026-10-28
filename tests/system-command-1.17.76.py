@@ -163,7 +163,7 @@ class HttpRequest:
 
 
 django_http.HttpRequest = HttpRequest
-MATCH = types.SimpleNamespace(func=types.SimpleNamespace(__name__="send_raw_cmd"), args=(), kwargs={"agent_id": "x"})
+MATCH = types.SimpleNamespace(func=types.SimpleNamespace(__name__="send_raw_cmd", __module__="agents.views"), args=(), kwargs={"agent_id": "x"})
 django_urls.resolve = lambda path: MATCH
 sys.modules.update({"accounts": accounts, "accounts.models": accounts_models, "django.http": django_http, "django.urls": django_urls})
 sys.modules["agents"] = types.ModuleType("agents")

@@ -134,6 +134,8 @@ ns = {
     "_as_utc": lambda value: value,
     "recover_stale_runs": lambda value: 0,
     "_recover_event_jobs_safely": lambda value: {},  # 1.17.45: the event job step of the tick
+    "_module_state_for_tick": lambda: {},  # 1.17.86: the module state read once per tick
+    "_apply_module_pause": lambda sched, state: False,
     "normalize_scheduler_targets": normalize,
     "_canonicalize_persisted_endpoint_identity": lambda value: dict(value),
     "SchedulerTargetShapeError": targets.SchedulerTargetShapeError,
