@@ -40,6 +40,7 @@ logger = logging.getLogger("tec_tac.system_actions")
 
 CONFIRMATION_TTL_SECONDS = 600
 _PREFIX = b"tec-tac-system-action-confirmation-v1|"
+_MONTH_WEEKS = {1: "first", 2: "second", 3: "third", 4: "fourth", -1: "last"}
 _WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 _WHEN_KEYS = ("schedule_type", "run_at", "run_time", "weekdays", "day_of_month", "interval_seconds", "timezone")
 _TIME_RE = re.compile(r"^(\d{1,2}):(\d{2})")
@@ -134,7 +135,13 @@ def when_key(when) -> dict:
         "interval_seconds": source.get("interval_seconds") if isinstance(source.get("interval_seconds"), int) else None,
         "timezone": str(source.get("timezone") or "UTC"),
     }
-    return {k: out[k] for k in _WHEN_KEYS}
+    key = {k: out[k] for k in _WHEN_KEYS}
+    # 1.17.88: the nth weekday of the month joins the key only when it is set, so the key of every other timing (and a confirmation id
+    # issued for it before this release) is exactly what it was.
+    week, weekday = source.get("month_week"), source.get("month_weekday")
+    if isinstance(week, int) and not isinstance(week, bool) and isinstance(weekday, int) and not isinstance(weekday, bool):
+        key["month_week"], key["month_weekday"] = week, weekday
+    return key
 
 
 def when_text(when) -> str:
@@ -147,6 +154,10 @@ def when_text(when) -> str:
     if kind == "weekly":
         days = ", ".join(_WEEKDAYS[d] for d in key["weekdays"] if 0 <= d <= 6) or "no day"
         return f"every week on {days} at {at} ({zone})"
+    if kind == "monthly" and key.get("month_week") is not None:
+        which = _MONTH_WEEKS.get(key["month_week"], str(key["month_week"]))
+        day = _WEEKDAYS[key["month_weekday"]] if 0 <= key["month_weekday"] <= 6 else "no day"
+        return f"on the {which} {day} of every month at {at} ({zone})"
     if kind == "monthly":
         return f"on day {key['day_of_month']} of every month at {at} ({zone})"
     if kind == "interval":

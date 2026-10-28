@@ -200,7 +200,9 @@ names = list(sig.parameters)
 must(names[-2:] == ["confirmed_by_request", "confirmation_id"] and all(sig.parameters[n].kind is inspect.Parameter.KEYWORD_ONLY and sig.parameters[n].default is None for n in names[-2:]), names)  # 1.17.66 added confirmation_id
 old = ["owner_module", "owner_key", "action_id", "schedule_type", "targets", "parameters", "enabled", "name", "timezone_name", "run_at", "run_time", "weekdays", "day_of_month",
        "interval_seconds", "interval_anchor_at", "target_mode", "missed_policy", "missed_grace_minutes", "concurrency_policy", "retry_count", "retry_delay_seconds"]
-must(names[:-2] == old and all(sig.parameters[n].kind is inspect.Parameter.KEYWORD_ONLY for n in old), names)
+must([n for n in names[:-2] if n not in ("month_week", "month_weekday")] == old  # 1.17.88 added the two month fields (keyword-only, optional, after interval_anchor_at)
+     and all(sig.parameters[n].kind is inspect.Parameter.KEYWORD_ONLY and sig.parameters[n].default is None for n in ("month_week", "month_weekday"))
+     and all(sig.parameters[n].kind is inspect.Parameter.KEYWORD_ONLY for n in old), names)
 print("       reconcile_schedule called as before behaves as before; confirmed_by_request (1.17.63) and confirmation_id (1.17.66) are the new, last, keyword-only, optional names")
 
 # ---- (6) the system action on a module-owned schedule: no creator is no_owner, a stored creator runs as the creator

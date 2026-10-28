@@ -55,6 +55,10 @@ class TecTacSchedule(models.Model):
     run_time = models.TimeField(null=True, blank=True)
     weekdays = models.JSONField(default=list, blank=True)
     day_of_month = models.PositiveSmallIntegerField(null=True, blank=True)
+    # 1.17.88: "the nth weekday of the month" for monthly schedules. month_week is 1-4 or -1 (the last); month_weekday is 0 (Monday) to 6.
+    # Both are set, or neither. A monthly schedule uses day_of_month or this pair, never both (migration 0041).
+    month_week = models.SmallIntegerField(null=True, blank=True)
+    month_weekday = models.PositiveSmallIntegerField(null=True, blank=True)
     interval_seconds = models.PositiveIntegerField(null=True, blank=True)
     interval_anchor_at = models.DateTimeField(null=True, blank=True)
 

@@ -651,3 +651,33 @@ Needs framework >=1.17.86. Additive. Nothing changes for a handler.
 While a module is disabled, Core does not queue its schedules. This covers a schedule whose `module_id` or `owner_module` is that module. The schedule stays `enabled`, so a person's own off switch is never touched. Core sets `paused_reason` to `paused: module disabled` and writes one `disable` audit row (`paused` true, `disabled_module` names the module). It writes no row per tick. When the module is enabled again, Core clears `paused_reason`, writes one `enable` audit row and the schedule runs on its next occurrence under its missed policy. A schedule a person had switched off is never paused or resumed by Core. If the module state cannot be read, Core skips the module's schedules for that tick and changes nothing.
 
 The schedule API and `get_owned_schedule` gain `paused` (true only for an enabled schedule Core paused) and `paused_reason` (a string or null). `next_run_at` is null while paused. Core pauses only for the module that owns the schedule (its `module_id` or `owner_module`). It does not pause a schedule because a module the owner depends on is disabled: for example, a disabled Network Probe does not pause `checks.provider-run`, which belongs to Checks. A module whose schedule depends on another module must skip or pause that schedule itself when the other module is disabled (Checks does this with a clean skip). Since 1.17.87 a pause or resume does not change the schedule's `updated_at`, so the occurrence that fell inside the pause still runs, or is written as a missed row, under the missed policy.
+
+## Monthly on the nth weekday (Core 1.17.88)
+
+Needs framework >=1.17.88. Additive. A schedule with `day_of_month` behaves exactly as before.
+
+A monthly schedule can run on "the second Tuesday" instead of a day number. Pass two more optional keywords to `reconcile_schedule`:
+
+```python
+reconcile_schedule(
+    owner_module="patchmanagement",
+    owner_key="patch-window",
+    action_id="patchmanagement.scan",
+    schedule_type="monthly",
+    run_time=time(3, 0),
+    timezone_name="Africa/Johannesburg",
+    month_week=2,       # 1, 2, 3, 4 (first to fourth) or -1 (the last)
+    month_weekday=1,    # 0 = Monday ... 6 = Sunday
+)
+```
+
+Rules:
+
+- a monthly schedule uses `day_of_month` or the pair, never both; with neither it is refused;
+- `month_week` and `month_weekday` go together, send both or neither;
+- `month_week` is one of 1, 2, 3, 4, -1; `month_weekday` is an integer 0-6; booleans, strings and floats are refused with a plain message (`SchedulerError`);
+- there is no fifth week: weeks 1-4 exist in every month, so no month is skipped. Use -1 for "the last", which is the fifth when the month has five;
+- Core works out the date in the schedule's own timezone and keeps the local `run_time`, as for `day_of_month`;
+- to move a schedule between the two modes, call `reconcile_schedule` with the new mode only. The other mode's fields are cleared and the due key resets, as for any timing change;
+- the schedule API (`GET`, `POST`, `PATCH /api/tfd/scheduler/schedules/`) returns `month_week` and `month_weekday` (null when unused). On `PATCH`, sending one mode replaces the other;
+- one-time schedules are unchanged: `run_at` is an exact moment.

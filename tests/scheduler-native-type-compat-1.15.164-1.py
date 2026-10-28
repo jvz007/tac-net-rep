@@ -120,6 +120,11 @@ ns = {
     "TecTacSchedule": FakeSchedule,
     "get_scheduled_action": lambda action_id: Action,
 }
+# 1.17.88: _validate_shape calls check_monthly_shape, which lives in scheduler.py; run the real one too
+shape_node = next(n for n in ast.parse((ROOT / "framwork/tec_tac/scheduler.py").read_text(encoding="utf-8")).body if isinstance(n, ast.FunctionDef) and n.name == "check_monthly_shape")
+shape_module = ast.Module(body=[shape_node], type_ignores=[])
+ast.fix_missing_locations(shape_module)
+exec(compile(shape_module, str(ROOT / "framwork/tec_tac/scheduler.py"), "exec"), ns)
 exec(compile(module, str(ROOT / "framwork/tec_tac/scheduler_views.py"), "exec"), ns)
 ns["_validate_shape"]({
     "schedule_type": "once",

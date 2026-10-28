@@ -22,6 +22,7 @@ from . import resources_adapter
 from .scheduler import (
     TACTICAL_PERMISSION_PREFIX,
     SchedulerError,
+    check_monthly_shape,
     get_scheduled_action,
     is_one_off_schedule,
     is_tactical_permission_entry,
@@ -29,6 +30,7 @@ from .scheduler import (
     manual_person_action,
     schedule_creator_names,
     scheduled_actions,
+    switch_monthly_mode,
     TAKEOVER_REFUSED,
     TakeoverRefused,
     _record_takeover_refusal,
@@ -261,8 +263,8 @@ def _person_name(user) -> str:
     return str(getattr(user, "username", "") or "")[:MAX_NAME_FILTER]
 
 
-_TIMING_FIELDS = ("schedule_type", "run_at", "run_time", "weekdays", "day_of_month", "interval_seconds", "timezone")
-_EDIT_FIELDS = ("action_id", "target_mode", "targets", "parameters", "schedule_type", "timezone", "run_at", "run_time", "weekdays", "day_of_month", "interval_seconds")
+_TIMING_FIELDS = ("schedule_type", "run_at", "run_time", "weekdays", "day_of_month", "month_week", "month_weekday", "interval_seconds", "timezone")
+_EDIT_FIELDS = ("action_id", "target_mode", "targets", "parameters", "schedule_type", "timezone", "run_at", "run_time", "weekdays", "day_of_month", "month_week", "month_weekday", "interval_seconds")
 
 
 def _system_action_creation(user, action, data, confirmation_id, *, schedule=None):
@@ -339,7 +341,7 @@ def _apply_schedule_fields(schedule, data):
     allowed = {
         "name", "module_id", "action_id", "target_mode", "targets", "parameters",
         "schedule_type", "timezone", "run_at", "run_time", "weekdays", "day_of_month",
-        "interval_seconds", "interval_anchor_at", "enabled", "missed_policy", "missed_grace_minutes", "concurrency_policy",
+        "month_week", "month_weekday", "interval_seconds", "interval_anchor_at", "enabled", "missed_policy", "missed_grace_minutes", "concurrency_policy",
         "retry_count", "retry_delay_seconds",
     }
     for key in allowed:
@@ -363,8 +365,7 @@ def _validate_shape(data):
             raise SchedulerError("Interval schedules require interval_anchor_at.")
     if schedule_type == TecTacSchedule.ScheduleType.WEEKLY and not data.get("weekdays"):
         raise SchedulerError("Weekly schedules require at least one weekday.")
-    if schedule_type == TecTacSchedule.ScheduleType.MONTHLY and not data.get("day_of_month"):
-        raise SchedulerError("Monthly schedules require day_of_month.")
+    check_monthly_shape(data)
     action = get_scheduled_action(data["action_id"])
     targets = data.get("targets") or {}
     target_type = str(targets.get("type") or "none")
@@ -481,7 +482,8 @@ class SchedulerDetailView(APIView):
                 "target_mode": schedule.target_mode, "targets": schedule.targets, "parameters": schedule.parameters,
                 "schedule_type": schedule.schedule_type, "timezone": schedule.timezone,
                 "run_at": schedule.run_at, "run_time": schedule.run_time, "weekdays": schedule.weekdays,
-                "day_of_month": schedule.day_of_month, "interval_seconds": schedule.interval_seconds,
+                "day_of_month": schedule.day_of_month, "month_week": schedule.month_week,
+                "month_weekday": schedule.month_weekday, "interval_seconds": schedule.interval_seconds,
                 "interval_anchor_at": schedule.interval_anchor_at, "enabled": schedule.enabled,
                 "missed_policy": schedule.missed_policy, "missed_grace_minutes": schedule.missed_grace_minutes,
                 "concurrency_policy": schedule.concurrency_policy, "retry_count": schedule.retry_count,
@@ -490,6 +492,7 @@ class SchedulerDetailView(APIView):
             incoming = _parse_fields(dict(request.data))
             confirmation_id = incoming.pop("confirmation_id", None)
             merged.update(incoming)
+            switch_monthly_mode(merged, incoming)
             data = validate_schedule_payload(merged)
             action = _require_action(request.user, data["action_id"])
             data["targets"] = _normalize_targets(data.get("targets"))

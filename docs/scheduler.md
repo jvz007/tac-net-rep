@@ -52,7 +52,7 @@ The current framework supports:
 
 Each schedule stores an IANA timezone such as `Africa/Johannesburg`.
 
-One-time schedules use `run_at`. Calendar-recurring schedules use `run_time`; weekly schedules also use `weekdays` (`0` = Monday through `6` = Sunday), and monthly schedules use `day_of_month`. Interval schedules use `interval_seconds` plus a stable `interval_anchor_at`.
+One-time schedules use `run_at`. Calendar-recurring schedules use `run_time`; weekly schedules also use `weekdays` (`0` = Monday through `6` = Sunday), and monthly schedules use either `day_of_month` or the nth weekday of the month: `month_week` (`1` to `4` for the first to the fourth, `-1` for the last) with `month_weekday` (`0` = Monday through `6` = Sunday). Send one of the two, never both. `month_week` and `month_weekday` go together. Core finds the day in the schedule's timezone, so "the second Tuesday" is the second Tuesday where the schedule lives. A `day_of_month` of 29 to 31 runs on the last day of a shorter month. Interval schedules use `interval_seconds` plus a stable `interval_anchor_at`.
 
 ## Targets
 

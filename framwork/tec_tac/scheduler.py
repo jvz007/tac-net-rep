@@ -528,7 +528,72 @@ def validate_schedule_payload(data: dict, *, partial: bool = False) -> dict:
         if dom < 1 or dom > 31:
             raise SchedulerError("day_of_month must be between 1 and 31.")
         out["day_of_month"] = dom
+    # 1.17.88: nth weekday of the month. An empty value means "not set".
+    for key in ("month_week", "month_weekday"):
+        if key in out and out[key] == "":
+            out[key] = None
+    if out.get("month_week") is not None:
+        value = out["month_week"]
+        if isinstance(value, bool) or not isinstance(value, int) or value not in MONTH_WEEKS:
+            raise SchedulerError("month_week must be 1, 2, 3, 4 (the first to the fourth) or -1 (the last).")
+    if out.get("month_weekday") is not None:
+        value = out["month_weekday"]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0 or value > 6:
+            raise SchedulerError("month_weekday must be an integer 0-6 (0 is Monday, 6 is Sunday).")
+    if "month_week" in out and "month_weekday" in out and (out["month_week"] is None) != (out["month_weekday"] is None):
+        raise SchedulerError("month_week and month_weekday go together: send both or neither.")
     return out
+
+
+MONTH_WEEKS = (1, 2, 3, 4, -1)
+
+
+def uses_nth_weekday(schedule_or_data) -> bool:
+    """True when a monthly schedule (a model or a data dict) runs on the nth weekday of the month."""
+    get = schedule_or_data.get if isinstance(schedule_or_data, dict) else (lambda name: getattr(schedule_or_data, name, None))
+    return get("month_week") is not None and get("month_weekday") is not None
+
+
+def check_monthly_shape(data: dict) -> None:
+    """A monthly schedule needs exactly one of ``day_of_month`` or the pair ``month_week`` + ``month_weekday`` (1.17.88)."""
+    if data.get("schedule_type") != TecTacSchedule.ScheduleType.MONTHLY:
+        return
+    has_day = bool(data.get("day_of_month"))
+    has_pair = data.get("month_week") is not None or data.get("month_weekday") is not None
+    if has_pair and (data.get("month_week") is None or data.get("month_weekday") is None):
+        raise SchedulerError("month_week and month_weekday go together: send both or neither.")
+    if has_day and has_pair:
+        raise SchedulerError("A monthly schedule uses day_of_month or month_week with month_weekday, not both.")
+    if not has_day and not has_pair:
+        raise SchedulerError("Monthly schedules require day_of_month, or month_week with month_weekday.")
+
+
+def switch_monthly_mode(merged: dict, incoming: dict) -> None:
+    """On an edit, sending one monthly mode replaces the other, so a person can move a schedule from day_of_month to the nth weekday
+    and back by sending only the new fields (1.17.88). Changes ``merged`` in place."""
+    sent_day = incoming.get("day_of_month") not in (None, "")
+    sent_pair = incoming.get("month_week") not in (None, "") or incoming.get("month_weekday") not in (None, "")
+    if sent_pair and not sent_day:
+        merged["day_of_month"] = None
+    elif sent_day and not sent_pair:
+        merged["month_week"] = None
+        merged["month_weekday"] = None
+
+
+def nth_weekday_date(year: int, month: int, week: int, weekday: int):
+    """The date of the nth (1-4) or last (-1) ``weekday`` (0 Monday) of a month. Weeks 1-4 exist in every month, so this never misses."""
+    if week == -1:
+        last = datetime(year, month, calendar.monthrange(year, month)[1]).date()
+        return last - timedelta(days=(last.weekday() - weekday) % 7)
+    first = datetime(year, month, 1).date()
+    return first + timedelta(days=(weekday - first.weekday()) % 7 + 7 * (week - 1))
+
+
+def _monthly_day(schedule, year: int, month: int):
+    """The date a monthly schedule runs on in one month. ``day_of_month`` past the month's end falls on its last day."""
+    if uses_nth_weekday(schedule):
+        return nth_weekday_date(year, month, int(schedule.month_week), int(schedule.month_weekday))
+    return datetime(year, month, min(int(schedule.day_of_month), calendar.monthrange(year, month)[1])).date()
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -579,14 +644,11 @@ def latest_occurrence(schedule: TecTacSchedule, now: datetime) -> datetime | Non
                 return candidate
         return None
     if schedule.schedule_type == TecTacSchedule.ScheduleType.MONTHLY:
-        dom = int(schedule.day_of_month or 0)
-        if not dom:
+        if not uses_nth_weekday(schedule) and not int(schedule.day_of_month or 0):
             return None
         year, month = local_now.year, local_now.month
         for _ in range(14):
-            last = calendar.monthrange(year, month)[1]
-            day_num = min(dom, last)
-            candidate = _local_occurrence(schedule, datetime(year, month, day_num).date(), hour=hour, minute=minute)
+            candidate = _local_occurrence(schedule, _monthly_day(schedule, year, month), hour=hour, minute=minute)
             if candidate <= now:
                 return candidate
             month -= 1
@@ -634,12 +696,10 @@ def next_occurrence(schedule: TecTacSchedule, after: datetime | None = None) -> 
                 if candidate >= now:
                     return candidate
     elif schedule.schedule_type == TecTacSchedule.ScheduleType.MONTHLY:
-        dom = int(schedule.day_of_month or 0)
-        if dom:
+        if uses_nth_weekday(schedule) or int(schedule.day_of_month or 0):
             year, month = local_now.year, local_now.month
             for _ in range(14):
-                last = calendar.monthrange(year, month)[1]
-                candidate = _local_occurrence(schedule, datetime(year, month, min(dom, last)).date(), hour=hour, minute=minute)
+                candidate = _local_occurrence(schedule, _monthly_day(schedule, year, month), hour=hour, minute=minute)
                 if candidate >= now:
                     return candidate
                 month += 1
@@ -1331,6 +1391,7 @@ def reconcile_schedule(*, owner_module: str, owner_key: str, action_id: str, sch
                        name: str | None = None, timezone_name: str = "UTC", run_at: datetime | None = None,
                        run_time=None, weekdays: list[int] | None = None, day_of_month: int | None = None,
                        interval_seconds: int | None = None, interval_anchor_at: datetime | None = None,
+                       month_week: int | None = None, month_weekday: int | None = None,
                        target_mode: str = TecTacSchedule.TargetMode.SNAPSHOT,
                        missed_policy: str = TecTacSchedule.MissedPolicy.SKIP, missed_grace_minutes: int = 60,
                        concurrency_policy: str = TecTacSchedule.ConcurrencyPolicy.SKIP, retry_count: int = 0,
@@ -1386,6 +1447,8 @@ def reconcile_schedule(*, owner_module: str, owner_key: str, action_id: str, sch
             "run_time": run_time,
             "weekdays": weekdays or [],
             "day_of_month": day_of_month,
+            "month_week": month_week,
+            "month_weekday": month_weekday,
             "interval_seconds": interval_seconds,
             "target_mode": target_mode,
             "targets": targets or {"type": action.target_types[0]},
@@ -1408,8 +1471,7 @@ def reconcile_schedule(*, owner_module: str, owner_key: str, action_id: str, sch
             raise SchedulerError("Recurring calendar schedules require run_time.")
         if data["schedule_type"] == TecTacSchedule.ScheduleType.WEEKLY and not data.get("weekdays"):
             raise SchedulerError("Weekly schedules require at least one weekday.")
-        if data["schedule_type"] == TecTacSchedule.ScheduleType.MONTHLY and not data.get("day_of_month"):
-            raise SchedulerError("Monthly schedules require day_of_month.")
+        check_monthly_shape(data)
         if data["schedule_type"] == TecTacSchedule.ScheduleType.INTERVAL and not data.get("interval_seconds"):
             raise SchedulerError("Interval schedules require interval_seconds.")
         target_type = str((data.get("targets") or {}).get("type") or "none")
@@ -1451,10 +1513,11 @@ def reconcile_schedule(*, owner_module: str, owner_key: str, action_id: str, sch
             previous_signature = (
                 existing.schedule_type, existing.interval_seconds, existing.interval_anchor_at, existing.run_at,
                 existing.run_time, tuple(existing.weekdays or []), existing.day_of_month, existing.enabled,
+                existing.month_week, existing.month_weekday,
             )
         for field in (
             "name", "module_id", "action_id", "target_mode", "targets", "parameters", "schedule_type",
-            "timezone", "run_at", "run_time", "weekdays", "day_of_month", "interval_seconds", "enabled",
+            "timezone", "run_at", "run_time", "weekdays", "day_of_month", "month_week", "month_weekday", "interval_seconds", "enabled",
             "missed_policy", "missed_grace_minutes", "concurrency_policy", "retry_count", "retry_delay_seconds",
         ):
             if field in data:
@@ -1472,6 +1535,7 @@ def reconcile_schedule(*, owner_module: str, owner_key: str, action_id: str, sch
         new_signature = (
             schedule.schedule_type, schedule.interval_seconds, schedule.interval_anchor_at, schedule.run_at,
             schedule.run_time, tuple(schedule.weekdays or []), schedule.day_of_month, schedule.enabled,
+            schedule.month_week, schedule.month_weekday,
         )
         if previous_signature is not None and previous_signature != new_signature:
             schedule.last_due_key = ""
@@ -1516,7 +1580,7 @@ def reconcile_schedule(*, owner_module: str, owner_key: str, action_id: str, sch
 # The fields a module may not change on a schedule a person created (1.17.63, CQ176). The name is display text and is left out.
 _LOCKED_FIELDS = (
     "action_id", "target_mode", "targets", "parameters", "schedule_type", "timezone", "run_at", "run_time", "weekdays", "day_of_month",
-    "interval_seconds", "interval_anchor_at", "enabled", "missed_policy", "missed_grace_minutes", "concurrency_policy", "retry_count",
+    "month_week", "month_weekday", "interval_seconds", "interval_anchor_at", "enabled", "missed_policy", "missed_grace_minutes", "concurrency_policy", "retry_count",
     "retry_delay_seconds",
 )
 
@@ -1670,7 +1734,7 @@ def _record_takeover_refusal(exc) -> None:
         logger.exception("Tec-Tac audit row for a refused schedule takeover could not be written")
 
 
-_TIMING_FIELDS = ("schedule_type", "run_at", "run_time", "weekdays", "day_of_month", "interval_seconds", "timezone")
+_TIMING_FIELDS = ("schedule_type", "run_at", "run_time", "weekdays", "day_of_month", "month_week", "month_weekday", "interval_seconds", "timezone")
 
 
 def _system_action_creation(person, action: ScheduledAction, data: dict, confirmation_id, *, defer: bool = False):
@@ -1975,6 +2039,8 @@ def serialize_schedule(schedule: TecTacSchedule, *, include_runs: bool = False) 
         "run_time": schedule.run_time.isoformat() if schedule.run_time else None,
         "weekdays": schedule.weekdays,
         "day_of_month": schedule.day_of_month,
+        "month_week": schedule.month_week,
+        "month_weekday": schedule.month_weekday,
         "interval_seconds": schedule.interval_seconds,
         "interval_anchor_at": schedule.interval_anchor_at.isoformat() if schedule.interval_anchor_at else None,
         "owner_type": schedule.owner_type,

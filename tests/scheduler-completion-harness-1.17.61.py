@@ -177,7 +177,7 @@ class Schedule(Model):
     MissedPolicy = Choices(SKIP="skip", RUN_ON_RECOVERY="run_on_recovery", EXPIRE="expire")
     ConcurrencyPolicy = Choices(SKIP="skip", QUEUE="queue", ALLOW="allow")
     defaults = dict(name="", module_id="", action_id="", owner_type="user", owner_module="", owner_key="", enabled=True, run_at=None, run_time=None,
-                    weekdays=[], day_of_month=None, interval_seconds=None, interval_anchor_at=None, last_run_at=None, last_due_key="",
+                    weekdays=[], day_of_month=None, month_week=None, month_weekday=None, interval_seconds=None, interval_anchor_at=None, last_run_at=None, last_due_key="",
                     created_by=None, updated_by=None, parameters={}, targets={}, target_mode="snapshot", retry_count=0, retry_delay_seconds=60,
                     timezone="UTC", missed_policy="skip", missed_grace_minutes=60, concurrency_policy="skip", target_state="valid",
                     target_state_detail="", updated_at=None, schedule_type="once",
