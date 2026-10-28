@@ -69,7 +69,7 @@ pos, kw = params(conf["describe_confirmation"])
 must(pos == ["user", "action_id", "targets", "parameters", "when"], pos)
 fields = re.findall(r"^    (\w+): [^\n=]+(?: = [^\n]+)?$", ctx_src.split("class VerifiedSchedulerRun:", 1)[1].split("    def _owner_now", 1)[0].replace("\r\n", "\n"), re.MULTILINE)
 must(fields[:13] == ["run_id", "schedule_id", "module_id", "action_id", "owner_module", "owner_key", "one_off", "user", "owner_user_id", "owner_username", "creator_username", "confirmed_by_username", "unattended"], fields)
-must(fields[13:] == ["_creation_scope", "_targets"], "1.17.68 appended two private defaulted fields after the 1.17.63 ones")
+must(fields[13:] == ["_creation_scope", "_targets", "started_by_username"], "1.17.68 appended two private defaulted fields after the 1.17.63 ones; 1.17.85 appended started_by_username")
 must("_creation_scope: Any = field(default=None, repr=False, compare=False)" in ctx_src and "_targets: Any = field(default=None, repr=False, compare=False)" in ctx_src, "defaulted, out of equality and the repr")
 for method in ("has_tactical_permission", "resource_context", "has_creation_scope", "creation_scope_info", "held_at_creation", "resolved_endpoints"):
     must(f"def {method}(" in ctx_src, method)

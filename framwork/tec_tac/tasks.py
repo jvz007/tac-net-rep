@@ -13,7 +13,7 @@ from .scheduler_run_context import issue_run_context
 from .capabilities import capability_status, CapabilityDisabled, CapabilityUnavailable, CapabilityVersionMismatch, CapabilityUnhealthy
 from .scheduler import (
     SchedulerError, SchedulerPermanentError, SchedulerTransientError, _runtime_authorization_error, effective_retry_delay_seconds,
-    _audit_schedule_row, get_scheduled_action, is_one_off_key, scheduled_person_action,
+    _audit_schedule_row, get_scheduled_action, is_one_off_key, scheduled_person_action, manual_person_action,
 )
 
 logger = logging.getLogger("tec_tac.tasks")
@@ -145,6 +145,12 @@ def execute_schedule_run(self, run_id: str):
         _audit_schedule_row(None, schedule, "run", "A scheduled run of a module action used the person who confirmed the schedule.",
                             extra={"run_id": str(run.id), "run_as": "creator", "scheduled_run": True})
 
+    # 1.17.85: Run now of a declared person action runs as the person who pressed it, re-checked now. One audit row naming them (best effort).
+    if (schedule is not None and run.manual and getattr(run, "started_by_id", None) is not None and manual_person_action(schedule, action_id)
+            and not _runtime_authorization_error(schedule, getattr(run, "started_by", None))):
+        _audit_schedule_row(run.started_by, schedule, "run", "A manual run of a module action used the person who pressed Run now.",
+                            extra={"run_id": str(run.id), "run_as": "clicker", "manual": True, "started_by": run.started_by_username})
+
     try:
         action = get_scheduled_action(action_id)
         # 1.17.19: Core issues the context (a dict subclass with every key below) so a handler can ask
@@ -160,6 +166,7 @@ def execute_schedule_run(self, run_id: str):
             "parameters": parameters,
             "scheduled_for": run.scheduled_for,
             "manual": run.manual,
+            "started_by_username": getattr(run, "started_by_username", "") or None,  # 1.17.85: display only; the verified person comes from verify_run_context
             "attempt": run.attempt,
             **_handler_owner(run, schedule),
         }, run_id=run.id)

@@ -26,6 +26,7 @@ from .scheduler import (
     is_one_off_schedule,
     is_tactical_permission_entry,
     queue_manual_run,
+    manual_person_action,
     schedule_creator_names,
     scheduled_actions,
     TAKEOVER_REFUSED,
@@ -592,6 +593,20 @@ class SchedulerDetailView(APIView):
         return Response(status=204)
 
 
+def _audit_run_now_refusal(user, schedule, reason: str) -> None:
+    """One deny row for a Run now that Core refused for a declared person action (1.17.85). Best effort: a failed row is logged."""
+    try:
+        from . import audit
+
+        audit.record(
+            actor=user, module_id="core", action="deny", object_type="scheduler_schedule", object_id=str(schedule.pk),
+            message=f"Run now of {schedule.action_id} was refused: the person who pressed it {'lacks the permission' if reason == 'no_permission' else 'is outside the targets scope'}.",
+            metadata={"action_id": schedule.action_id, "owner_module": schedule.owner_module, "reason": reason, "manual": True},
+        )
+    except Exception:
+        logger.exception("Tec-Tac audit row for a refused Run now could not be written")
+
+
 class SchedulerRunNowView(APIView):
     permission_classes = [SessionAuthenticated]
     def post(self, request, schedule_id):
@@ -600,7 +615,14 @@ class SchedulerRunNowView(APIView):
             # 1.17.17: a one-off run belongs to the user who started it and happens once. Refused before any other check, so a
             # second user cannot queue a run under the first user's identity and nobody can repeat it from the browser.
             raise PermissionDenied(f"This one-off run is managed by module {schedule.owner_module!r} and cannot be run again.")
-        _require_action(request.user, schedule.action_id)
+        person_run = manual_person_action(schedule)
+        try:
+            _require_action(request.user, schedule.action_id)
+        except PermissionDenied:
+            if person_run:
+                _audit_run_now_refusal(request.user, schedule, "no_permission")
+                raise PermissionDenied("You do not have permission to run this action, so Run now was refused. Ask an administrator for the right.") from None
+            raise
         _require_schedule_owner_or_manager(request.user, schedule)
         try:
             canonical_targets = _normalize_targets(schedule.targets or {})
@@ -611,13 +633,20 @@ class SchedulerRunNowView(APIView):
             schedule.target_state_detail = str(exc)[:500]
             schedule.save(update_fields=["enabled", "target_state", "target_state_detail", "updated_at"])
             return Response({"detail": str(exc)}, status=400)
-        _require_target_scope(request.user, canonical_targets, payload=False, module_id=schedule.module_id)
+        try:
+            _require_target_scope(request.user, canonical_targets, payload=False, module_id=schedule.module_id)
+        except PermissionDenied:
+            if person_run:
+                _audit_run_now_refusal(request.user, schedule, "outside_scope")
+                raise PermissionDenied("These targets are outside your Tactical scope, so Run now was refused.") from None
+            raise
         if canonical_targets != (schedule.targets or {}):
             schedule.targets = canonical_targets
             schedule.target_state = "valid"
             schedule.target_state_detail = ""
             schedule.save(update_fields=["targets", "target_state", "target_state_detail", "updated_at"])
-        run = queue_manual_run(schedule)
+        # 1.17.85: Core records the person who pressed the button; a declared person action then runs as them (re-checked live at run time)
+        run = queue_manual_run(schedule, started_by=request.user if person_run else None)
         return Response(serialize_run(run), status=202)
 
 

@@ -38,6 +38,7 @@ _RUNNING = "running"  # TecTacScheduleRun.Status.RUNNING (a text choice)
 _PLAIN = "This is not a scheduler run context that Core issued for a run that is still going."
 _NO_OWNER = "This run has no person behind it."
 _OWNER_REFUSED = "The person who owns this schedule may no longer run it."
+_CLICKER_REFUSED = "The person who pressed Run now may no longer run this action."
 _UNVERIFIED = "The run could not be verified."
 _OTHER_RUN = "This run belongs to another module or action."
 
@@ -96,7 +97,7 @@ def _invalid(message: str):
 def _load_run(run_id: str):
     from .models import TecTacScheduleRun
 
-    return TecTacScheduleRun.objects.select_related("schedule", "schedule__created_by").filter(pk=run_id).first()
+    return TecTacScheduleRun.objects.select_related("schedule", "schedule__created_by", "started_by").filter(pk=run_id).first()
 
 
 def _is_one_off_key(owner_key) -> bool:
@@ -124,10 +125,16 @@ def _creator_names(schedule) -> tuple[str, str]:
     return schedule_creator_names(schedule)
 
 
-def _authorization_error(schedule) -> str | None:
+def _authorization_error(schedule, actor=None) -> str | None:
     from .scheduler import _runtime_authorization_error
 
-    return _runtime_authorization_error(schedule)
+    return _runtime_authorization_error(schedule, actor) if actor is not None else _runtime_authorization_error(schedule)
+
+
+def _manual_person_action(schedule, action_id) -> bool:
+    from .scheduler import manual_person_action
+
+    return manual_person_action(schedule, action_id)
 
 
 def _reload_user(pk):
@@ -226,6 +233,8 @@ class VerifiedSchedulerRun:
     # reads are ``has_creation_scope``, ``creation_scope_info``, ``held_at_creation`` and ``resolved_endpoints``.
     _creation_scope: Any = field(default=None, repr=False, compare=False)
     _targets: Any = field(default=None, repr=False, compare=False)
+    # 1.17.85, appended: the name of the person who pressed Run now, when ``user`` is that person (a manual run of a declared person action). None otherwise.
+    started_by_username: str | None = None
 
     def _owner_now(self):
         if self.user is None:
@@ -347,9 +356,17 @@ def verify_run_context(
         unattended = _is_unattended_scheduled_run(run)  # the one helper; a manual run and a one-off are never unattended
         person_action = bool(not unattended and not bool(getattr(run, "manual", False)) and _scheduled_person_action(schedule, action_id))  # 1.17.80: declared module action; re-checked below
         user = schedule.created_by if (one_off or run.owner_type == "user" or unattended or person_action) else None
+        clicker = None
+        if (user is None and bool(getattr(run, "manual", False)) and getattr(run, "started_by_id", None) is not None
+                and _manual_person_action(schedule, action_id)):
+            # 1.17.85: Run now of a declared person action. The person is the one who pressed it, read from the run row and checked again now
+            clicker = getattr(run, "started_by", None)
+            if clicker is None or _authorization_error(schedule, clicker):
+                raise _invalid(_CLICKER_REFUSED)
+            user = clicker
         if user is None and require_owner:
             raise _invalid(_NO_OWNER)
-        if user is not None and not unattended and _authorization_error(schedule):
+        if user is not None and clicker is None and not unattended and _authorization_error(schedule):
             raise _invalid(_OWNER_REFUSED)
         creator, confirmed = _creator_names(schedule) if (unattended or user is not None) else ("", "")
         return VerifiedSchedulerRun(
@@ -359,6 +376,7 @@ def verify_run_context(
             owner_user_id=getattr(user, "pk", None), owner_username=getattr(user, "username", None),
             creator_username=creator or None, confirmed_by_username=confirmed or None, unattended=bool(unattended),
             _creation_scope=_creation_scope_of(schedule), _targets=getattr(run, "targets_snapshot", None) or {},
+            started_by_username=(str(getattr(clicker, "username", "") or "") or None) if clicker is not None else None,
         )
     except Exception as exc:
         if type(exc).__name__ == "SchedulerRunContextInvalid":

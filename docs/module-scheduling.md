@@ -631,3 +631,15 @@ Needs framework >=1.17.80. Additive. For a Scheduler action that is **not** a Ta
 4. In the handler call `verify_run_context(context, expected_module_id=..., expected_action_id=..., require_owner=True)`. A scheduled run gives `user` = the creator, with `unattended` False.
 
 This is not a system action and not the AD-13 exemption. On every run the creator must be active and still hold the action permission and the target scope. If not, the tick skips the run (`AuthorizationRevoked`) and `verify_run_context` raises `SchedulerRunContextInvalid`. A manual run, a one-off, a schedule with no stored creator, an action not listed or one registered by another module gets no person (`This run has no person behind it.`). Core writes one audit row (`run`, `run_as` = `creator`) per run that uses the creator.
+
+### Run now of a declared person action (Core 1.17.85)
+
+Needs framework >=1.17.85. Additive. Nothing changes for a handler that already works.
+
+A manual run (Run now) of a declared `scheduler_person_actions` action now has a person: the signed-in person who pressed the button, not the schedule creator. A stored creator is not needed for it.
+
+- Before it queues the run Core checks that person's action permission and target scope. If they lack either, the run is refused with a plain message and one `deny` audit row names them.
+- Core stores them on the run (`started_by`). When the handler calls `verify_run_context(...)`, `user`, `owner_user_id` and `owner_username` are that person and `unattended` is False. The new `started_by_username` names them (None for every other run). `creator_username` still names the creator.
+- Core checks them again, live, at verify time. An inactive person, or one who lost the permission or scope, makes `verify_run_context` raise `SchedulerRunContextInvalid` ("The person who pressed Run now may no longer run this action.").
+- Core writes one audit row (`run`, `run_as` = `clicker`) per run. The handler context also carries `started_by_username` for display only.
+- A manual run of any other action, and any scheduled run, is as before. A scheduled run still uses the creator.

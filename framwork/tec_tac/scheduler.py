@@ -248,6 +248,21 @@ def scheduled_person_action(schedule, action_id: str = "") -> bool:
         return False
 
 
+def manual_person_action(schedule, action_id: str = "") -> bool:
+    """1.17.85: is a Run now of this schedule's action done as the person who pressed it, with every re-check kept?
+
+    True when the schedule is module-owned and not a one-off, the action is registered with the Scheduler by the module that owns it, and that
+    module's signed, installed manifest lists it under ``scheduler_person_actions``. Unlike ``scheduled_person_action`` no stored creator is needed:
+    the person is the one who pressed the button, so Core checks them, not the creator. Any error answers False."""
+    try:
+        if schedule is None or schedule.owner_type != TecTacSchedule.OwnerType.MODULE or is_one_off_schedule(schedule):
+            return False
+        action = get_scheduled_action(str(action_id or schedule.action_id))
+        return action.module_id == schedule.owner_module and action.id in _manifest_person_actions(action.module_id)
+    except Exception:  # noqa: BLE001 - any failure means the clicker is not the person
+        return False
+
+
 # Since 1.17.65: True. Johan signed the amended AD-13 condition 2 (CQ184 b, CQ186, CQ189, chat, 20 October 2026); it is recorded in
 # docs/tec-tac-module-standard.md section 1a, docs/review-accepted-decisions.md row 13, development rules 1.7 and checklist A2. A scheduled run
 # is not re-checked against its creator at run time, as in Tactical. A person-started run (manual, one-off) still is. The scheduler gate test
@@ -978,7 +993,7 @@ def _delegated_run_is_valid(run) -> bool:
         return False
 
 
-def _runtime_authorization_error(schedule: TecTacSchedule) -> str | None:
+def _runtime_authorization_error(schedule: TecTacSchedule, actor=None) -> str | None:
     """Re-check the saved actor, action permission and Tactical target scope.
 
     Save-time authorization is not durable authority. User-owned schedules run
@@ -987,13 +1002,15 @@ def _runtime_authorization_error(schedule: TecTacSchedule) -> str | None:
     Since 1.17.16 a module-owned one-off schedule (owner_key ``one-off:<id>``, AD-13 condition 2) is held to the same
     check against ``created_by``, the user the module started it for. Since 1.17.80 so is a module-owned schedule whose action is declared in the
     module's manifest ``scheduler_person_actions`` (``scheduled_person_action``) and that has a stored creator.
+    Since 1.17.85 ``actor`` (optional) is the person who pressed Run now on a declared person action: the same checks run for them and not for the creator.
     """
     one_off = is_one_off_schedule(schedule)
-    if schedule.owner_type != TecTacSchedule.OwnerType.USER and not one_off and not scheduled_person_action(schedule):
-        return None  # 1.17.80: a declared module scheduled action with a stored creator is checked like a user-owned one
-    actor = schedule.created_by
+    if actor is None:
+        if schedule.owner_type != TecTacSchedule.OwnerType.USER and not one_off and not scheduled_person_action(schedule):
+            return None  # 1.17.80: a declared module scheduled action with a stored creator is checked like a user-owned one
+        actor = schedule.created_by
     if actor is None or not bool(getattr(actor, "is_active", False)) or (one_off and bool(getattr(actor, "is_installer_user", False))):
-        return "Schedule owner is missing or inactive."
+        return "Schedule owner is missing or inactive." if actor is schedule.created_by else "The person who started this run is missing or inactive."
     try:
         action = get_scheduled_action(schedule.action_id)
         # Runtime import avoids a scheduler <-> scheduler_views import cycle.
@@ -1210,9 +1227,14 @@ def dispatch_due_schedules(now: datetime | None = None) -> dict:
         raise
 
 
-def queue_manual_run(schedule: TecTacSchedule):
+def queue_manual_run(schedule: TecTacSchedule, *, started_by=None):
+    """Queue a Run now. 1.17.85: ``started_by`` (keyword-only, optional) is the signed-in person who pressed the button. Core stores them on the run and
+    re-checks them live when a handler of a declared ``scheduler_person_actions`` action verifies its context. Without it a manual run has no person, as before."""
+    extra = {}
+    if started_by is not None:
+        extra = {"started_by": started_by, "started_by_username": str(getattr(started_by, "username", "") or "")[:150]}
     run = TecTacScheduleRun.objects.create(**_run_kwargs(
-        schedule, scheduled_for=timezone.now(), manual=True, targets_snapshot=schedule.targets or {},
+        schedule, scheduled_for=timezone.now(), manual=True, targets_snapshot=schedule.targets or {}, **extra,
     ))
     return _queue_run(run)
 

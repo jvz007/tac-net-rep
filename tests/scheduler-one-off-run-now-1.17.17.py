@@ -34,7 +34,7 @@ sched.register_scheduled_action(id="patching.scan", module_id="patching", label=
 
 CALLS = []
 _real_queue = sv.queue_manual_run
-sv.queue_manual_run = lambda schedule: CALLS.append(schedule) or _real_queue(schedule)
+sv.queue_manual_run = lambda schedule, **kw: CALLS.append(schedule) or _real_queue(schedule, **kw)
 
 
 def run_now(user, schedule):

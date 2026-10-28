@@ -256,6 +256,10 @@ class TecTacScheduleRun(models.Model):
     completion_started_at = models.DateTimeField(null=True, blank=True)
     # 1.17.61: the at-most-once marks of system actions (system_actions.py): [{action_id, targets_digest, state, task_id}].
     system_action_marks = models.JSONField(default=list, blank=True)
+    # 1.17.85: the signed-in person who pressed Run now (manual runs only). Core re-checks them live; a handler of a declared
+    # ``scheduler_person_actions`` action then acts for them. Null for every scheduled run, one-off and test run.
+    started_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    started_by_username = models.CharField(max_length=150, blank=True, default="")
 
     class Meta:
         ordering = ("-created_at",)
