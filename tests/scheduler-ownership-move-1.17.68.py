@@ -202,7 +202,7 @@ patch = view_src.split("    def patch(self, request, schedule_id):", 1)[1].split
 for needle in ("takeover = bool(edited and other_person and bool(data.get(\"enabled\", schedule.enabled)))", "strict=True", "TakeoverRefused(TAKEOVER_REFUSED)", "_record_takeover_refusal(exc)",
                "schedule.created_by = request.user", "\"owner_changed_from\": previous_names[0]", "except TakeoverRefused as exc:", "status=403"):
     must(needle in patch, needle)
-must("turned_on = " in patch and "edit_fields = [name for name in _EDIT_FIELDS" in patch, "an edit field or switching it on is an edit; a rename or switching it off is not")
+must("turned_on = " in patch and "edit_fields = _changed_edit_fields(schedule, data)" in patch, "an edit field or switching it on is an edit; a rename or switching it off is not")
 must(patch.index("takeover and not _can_access_target_scope") < patch.index("_apply_schedule_fields(schedule, data)"), "the takeover is decided before any field is touched")
 must("_audit_system_schedule(request.user, schedule, \"modify\", system_info, owner_move)" in patch and "_audit_schedule_row(request.user, schedule, \"modify\"" in patch, "one audit row in both cases")
 print("       the browser PATCH moves ownership only for an edit field or switching on, refuses a narrower editor with 403, and audits the move")

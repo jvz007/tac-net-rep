@@ -292,6 +292,8 @@ CORE_CONTEXT_KEYS = ("browser_provenance", "core_refusal", "server_provenance")
 SERVER_PROVENANCE_TACTICAL_OPERATION = "tactical-operation"
 # 1.17.31 (C4): provenance of the rows Core writes for a relayed Tactical terminal socket (tec_tac.tactical_websocket). Core-only.
 SERVER_PROVENANCE_TACTICAL_WEBSOCKET = "tactical-websocket"
+# 1.17.90: provenance of the rows Core writes for the endpoint agent socket (tec_tac.endpoint_transport). Core-only.
+SERVER_PROVENANCE_ENDPOINT_TRANSPORT = "endpoint-transport"
 # Core-internal authority. Passed only by Core's own executor to _record_row, never through the public record().
 _TACTICAL_OPERATION_AUTHORITY = object()
 
@@ -669,6 +671,34 @@ def _record_tactical_websocket(
         actor=actor, module_id=module_id, action=action, object_type=object_type, object_id=object_id,
         message=message, after=after, metadata=metadata, request=request, strict=strict,
         operation_context=context, authority=_TACTICAL_OPERATION_AUTHORITY, correlation_id=correlation_id,
+    )
+
+
+def _record_endpoint_transport(
+    *,
+    action: str,
+    agent_id: str | None = None,
+    message: Any = None,
+    metadata: dict | None = None,
+    refusal: bool = False,
+) -> dict[str, Any]:
+    """Write a row for the endpoint agent socket Core runs (1.17.90). Private: only tec_tac.endpoint_transport calls it. Never strict.
+
+    The module is core. The actor is the agent (device provenance, identity = the Tactical agent id) when the caller passes a valid agent
+    id, else the endpoint-transport service. The row carries operation_context.server_provenance = endpoint-transport. ``refusal`` adds
+    core_refusal = true. Callers pass only the fields listed in docs/endpoint-transport.md: never a token, an Authorization header or a
+    frame payload.
+    """
+    if agent_id:
+        actor = device_audit_actor(module_id="core", device_id=agent_id, service="endpoint-transport")
+    else:
+        actor = service_audit_actor(module_id="core", service="endpoint-transport")
+    context = {"server_provenance": SERVER_PROVENANCE_ENDPOINT_TRANSPORT}
+    if refusal:
+        context["core_refusal"] = True
+    return _record_row(
+        actor=actor, module_id="core", action=action, object_type="agent", object_id=agent_id,
+        message=message, metadata=metadata, strict=False, operation_context=context, authority=_TACTICAL_OPERATION_AUTHORITY,
     )
 
 

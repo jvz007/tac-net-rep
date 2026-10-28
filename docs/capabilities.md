@@ -283,6 +283,10 @@ Framework 1.10.0 includes registered capabilities in the Developer Contract cata
 Capability providers may also be owned directly by Tec-Tac Core rather than an installed extension. Core-owned IDs use the `core.` namespace and are always resolved against the framework runtime rather than Module Manager installed/enabled state. The first privileged Core provider is `core.server_backup` `2.x`; see `docs/server-backup-capability.md`.
 
 
+## Core endpoint transport
+
+`core.endpoint_transport` 1.0.0 (framework >=1.17.90) is the endpoint agent websocket: `register_owner`, `request`, `send_many` and `presence`, for the one owning module `nats-comms` only (Core verifies the caller). See `docs/endpoint-transport.md`.
+
 ## Core server maintenance
 
 `core.server_maintenance` is the generic durable privileged-job capability. See `docs/server-maintenance-capability.md`. It exposes registered actions only; it does not provide arbitrary root-shell execution.

@@ -267,17 +267,33 @@ _TIMING_FIELDS = ("schedule_type", "run_at", "run_time", "weekdays", "day_of_mon
 _EDIT_FIELDS = ("action_id", "target_mode", "targets", "parameters", "schedule_type", "timezone", "run_at", "run_time", "weekdays", "day_of_month", "month_week", "month_weekday", "interval_seconds")
 
 
+_MONTHLY_FIELDS = ("day_of_month", "month_week", "month_weekday")
+
+
+def _edit_value(name, schedule_type, value):
+    """1.17.90: the three monthly fields only mean something on a monthly schedule, so a non-monthly schedule compares them as None. A row
+    made before this release may still hold a stale one, and a stale value must not look like an edit (it would move the ownership)."""
+    from .scheduler import _comparable
+
+    if name in _MONTHLY_FIELDS and schedule_type != TecTacSchedule.ScheduleType.MONTHLY:
+        return None
+    return _comparable(name, value)
+
+
+def _changed_edit_fields(schedule, data):
+    """The edit fields ``data`` changes on ``schedule`` (1.17.90: one place for both the confirmation check and the ownership check)."""
+    new_type, old_type = data.get("schedule_type", schedule.schedule_type), schedule.schedule_type
+    return [name for name in _EDIT_FIELDS if name in data and _edit_value(name, new_type, data.get(name)) != _edit_value(name, old_type, getattr(schedule, name))]
+
+
 def _system_action_creation(user, action, data, confirmation_id, *, schedule=None):
     """1.17.66 (AD-13 as amended): the creation-time controls and the one Yes or No for a declared system action. None for any other action, for
     a schedule that stays switched off and, on an edit, for a change that touches neither the action, targets, parameters nor timing and does not
     switch it on. Raises ``SystemActionCreationRefused``."""
     if not data.get("enabled", True):
         return None
-    if schedule is not None and schedule.enabled:
-        from .scheduler import _comparable
-
-        if not any(_comparable(name, data.get(name)) != _comparable(name, getattr(schedule, name)) for name in _EDIT_FIELDS if name in data):
-            return None
+    if schedule is not None and schedule.enabled and not _changed_edit_fields(schedule, data):
+        return None
     when = {name: data.get(name) for name in _TIMING_FIELDS}
     return require_creation(user, action, data.get("targets"), data.get("parameters"), when, confirmation_id)
 
@@ -350,6 +366,9 @@ def _apply_schedule_fields(schedule, data):
     if schedule.schedule_type != TecTacSchedule.ScheduleType.INTERVAL:
         schedule.interval_seconds = None
         schedule.interval_anchor_at = None
+    if schedule.schedule_type != TecTacSchedule.ScheduleType.MONTHLY:
+        # 1.17.90: one place for POST and PATCH. A schedule that is not monthly stores none of the three monthly fields.
+        schedule.day_of_month = schedule.month_week = schedule.month_weekday = None
 
 
 def _validate_shape(data):
@@ -503,9 +522,7 @@ class SchedulerDetailView(APIView):
             # 1.17.68 (Johan, 21 October 2026): a person other than the owner who edits the schedule (an edit field, or switching it on) takes the
             # ownership, and the scope is stored again for the new owner. Never widens: their own scope must cover every target, with no manager
             # bypass, or the edit is refused and nothing changes. Switching a schedule off, or a rename alone, moves nothing.
-            from .scheduler import _comparable
-
-            edit_fields = [name for name in _EDIT_FIELDS if name in data and _comparable(name, data.get(name)) != _comparable(name, getattr(schedule, name))]
+            edit_fields = _changed_edit_fields(schedule, data)
             turned_on = bool(data.get("enabled", schedule.enabled)) and not schedule.enabled
             edited = bool(edit_fields) or turned_on
             other_person = schedule.created_by_id != request.user.id

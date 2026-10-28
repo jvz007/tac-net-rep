@@ -28,7 +28,7 @@ assert mod.normalize_scheduler_targets({
 })["filter"] == {"rule": {"id": 4, "site_id": 5}}
 
 views = (ROOT / "framwork" / "tec_tac" / "scheduler_views.py").read_text()
-manager_pos = views.index("if _native_scheduler_manager(user):", views.index("def _require_target_scope"))
+manager_pos = views.index("if not strict and _native_scheduler_manager(user):", views.index("def _require_target_scope"))
 refs_pos = views.index("refs = _scope_target_refs(targets)", views.index("def _require_target_scope"))
 assert manager_pos < refs_pos, "manager bypass must occur before saved-target normalization"
 assert 'raise PermissionDenied("The saved scheduler target definition is not in the supported canonical format.")' in views
@@ -45,7 +45,7 @@ import ast
 migration_path = ROOT / "framwork" / "tec_tac" / "migrations" / "0015_scheduler_target_canonicalization.py"
 tree = ast.parse(migration_path.read_text())
 keep_names = {"_NATIVE", "_ALIASES", "_RESERVED_FILTER_SCOPE_KEYS"}
-keep_funcs = {"_scope_alias_token", "_reserved_filter_value", "_values", "_ids", "_extract_native", "_legacy_normalize", "_endpoint_rows", "_canonical_endpoint_ids", "_canonicalize_endpoint_identity", "canonicalize_existing_targets"}
+keep_funcs = {"_scope_alias_token", "_reserved_filter_value", "_reject_unknown_keys", "_values", "_ids", "_extract_native", "_legacy_normalize", "_endpoint_rows", "_canonical_endpoint_ids", "_canonicalize_endpoint_identity", "canonicalize_existing_targets"}
 nodes = []
 for node in tree.body:
     if isinstance(node, ast.Import):

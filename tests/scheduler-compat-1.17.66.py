@@ -140,10 +140,10 @@ for label, src in (("post", post_src), ("patch", patch_src)):
     must(order == sorted(order), f"{label}: the id leaves the payload, the check runs on the normalised targets before they are canonicalised, and the old order of the other checks stays")
     must("if system_info is None:" in src and "transaction.atomic()" in src and "_audit_system_schedule(" in src, f"{label}: an ordinary schedule is saved as before; a system action is saved with its audit row in one transaction")
     must("except SystemActionCreationRefused as exc:" in src and 'status=403' in src and src.index("except SystemActionCreationRefused") < src.index("except SchedulerError"), f"{label}: a refusal is a 403 with its reason")
-helper_names = {"_TIMING_FIELDS", "_EDIT_FIELDS"}
-nodes = [n for n in tree.body if (isinstance(n, ast.Assign) and any(getattr(t, "id", "") in helper_names for t in n.targets)) or (isinstance(n, ast.FunctionDef) and n.name == "_system_action_creation")]
+helper_names = {"_TIMING_FIELDS", "_EDIT_FIELDS", "_MONTHLY_FIELDS"}
+nodes = [n for n in tree.body if (isinstance(n, ast.Assign) and any(getattr(t, "id", "") in helper_names for t in n.targets)) or (isinstance(n, ast.FunctionDef) and n.name in {"_system_action_creation", "_edit_value", "_changed_edit_fields"})]
 spy = []
-space = {"__package__": "tec_tac", "__name__": "tec_tac.scheduler_views", "require_creation": lambda *a: spy.append(a) or {"total": 1}}
+space = {"__package__": "tec_tac", "__name__": "tec_tac.scheduler_views", "TecTacSchedule": SimpleNamespace(ScheduleType=SimpleNamespace(MONTHLY="monthly")), "require_creation": lambda *a: spy.append(a) or {"total": 1}}
 exec(compile(ast.Module(body=nodes, type_ignores=[]), "scheduler_views_helper", "exec"), space)  # noqa: S102 - the helper's own source, under a spy
 helper = space["_system_action_creation"]
 stored = SimpleNamespace(enabled=True, action_id="patching.sys", targets=ENDPOINTS, parameters={}, schedule_type="daily", timezone="UTC", run_at=None, run_time=time(3, 0), weekdays=[], day_of_month=None, interval_seconds=None, target_mode="snapshot")

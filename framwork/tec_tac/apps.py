@@ -39,6 +39,13 @@ class TecTacFrameworkConfig(AppConfig):
             register_core_tactical_websocket_capability()
         except Exception:
             logger.exception("Tec-Tac core.tactical_websocket capability registration failed")
+        # 1.17.90: core.endpoint_transport (the endpoint agent transport, for the owning module nats-comms only). Guarded like the others.
+        try:
+            from .endpoint_transport import register_core_endpoint_transport_capability
+
+            register_core_endpoint_transport_capability()
+        except Exception:
+            logger.exception("Tec-Tac core.endpoint_transport capability registration failed")
         # 1.17.35: core.module_preferences (one per-person choice a module keeps through Core). Guarded like core.accounts.
         try:
             from .module_preferences import register_core_module_preferences_capability
@@ -168,3 +175,12 @@ class TecTacFrameworkConfig(AppConfig):
             install_tactical_websocket_route()
         except Exception:
             logger.exception("Tec-Tac ticketed terminal socket route installation failed")
+
+        # 1.17.90: the endpoint agent socket ws/tfd/endpoint-agent/ (AD-54). Its own guarded block: a fault here is logged and start-up
+        # goes on, and a fault in the consumer later closes the socket 4503 and never stops Tactical.
+        try:
+            from .endpoint_transport import install_endpoint_agent_route
+
+            install_endpoint_agent_route()
+        except Exception:
+            logger.exception("Tec-Tac endpoint agent socket route installation failed")

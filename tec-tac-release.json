@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.89",
+  "version": "1.17.90",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.17.89.md",
-      "size": 2866,
-      "sha256": "44c0612485ce27174ff2dffc8902df20fa8902937cfa2c5d6fb294ef815c2f9b"
+      "path": "RELEASE_NOTES_1.17.90.md",
+      "size": 11590,
+      "sha256": "da89adcc05df3a4cc5b34df8b1b0b06e36d8403567c9b1c7fc7db94d5114f354"
     },
     {
       "path": "VERSION",
       "size": 8,
-      "sha256": "0332432d0e95a8aeb155f682a1351d703b68eb2dc21219b2f8a360626c50de16"
+      "sha256": "6f83549348884fbe03bf10e7bf2d4923e37b53e274b4c223cea39a8211c06215"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -78,8 +78,8 @@
     },
     {
       "path": "docs/capabilities.md",
-      "size": 13263,
-      "sha256": "0d0f0a856fc374145379a71de5ed7b6e2b20eac026b7d471e5178e66fe66be94"
+      "size": 13863,
+      "sha256": "f6c5ad5523f96c85ead0008c832a2949351fba926e9d23cfb20d12f9f8c9635e"
     },
     {
       "path": "docs/core-functions.md",
@@ -90,6 +90,11 @@
       "path": "docs/developer-contracts.md",
       "size": 15441,
       "sha256": "933624087dd160491aa656139e0651cb5c92e583a754b23607053e315cb37be8"
+    },
+    {
+      "path": "docs/endpoint-transport.md",
+      "size": 7741,
+      "sha256": "21afd18f44cb2077cece7f55ec29e4aa8a9b9496698df19465b2f3fa1d4575f2"
     },
     {
       "path": "docs/event-jobs.md",
@@ -1522,6 +1527,11 @@
       "sha256": "dc1ff979e040bd8fdbe4f0712b75acb86a0daf5a26c8bbf3d3dc056f63613852"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.89.md",
+      "size": 2866,
+      "sha256": "44c0612485ce27174ff2dffc8902df20fa8902937cfa2c5d6fb294ef815c2f9b"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.9.md",
       "size": 10089,
       "sha256": "75ab9a22af1f1c0fbfe8dfcd23de4ce3cf5e85f4eeee245f0a80da27b879b75b"
@@ -1893,13 +1903,13 @@
     },
     {
       "path": "framwork/tec_tac/apps.py",
-      "size": 9364,
-      "sha256": "6d16b4389252856b07c8e86254dd9a48c860b2d8ed909c26a55f4ae3287a8de5"
+      "size": 10453,
+      "sha256": "d9662fbae833150f481005f95a526ee1f92e01bc4366ad2286f4b99b3962e6c6"
     },
     {
       "path": "framwork/tec_tac/audit.py",
-      "size": 35189,
-      "sha256": "472eee36e5f0725dbe44f3f4784b4284b8fc435bc62b16989997321f2e22eca2"
+      "size": 36761,
+      "sha256": "9dda49cabe853e11deec8733151ec9726479f01f67c2c370daa034ea3fee4770"
     },
     {
       "path": "framwork/tec_tac/audit_views.py",
@@ -1943,8 +1953,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 425238,
-      "sha256": "0ee0e8d4d4b133a0c8b077ca47c93d407e98a933aad5fc175344ff3d2f1048be"
+      "size": 427760,
+      "sha256": "e5091aaa8cbb42dc091470162b3ab68e9c62c2feaa940a5eb844bac38230d5ea"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -1970,6 +1980,16 @@
       "path": "framwork/tec_tac/diagnostics.py",
       "size": 16946,
       "sha256": "1798a7b0d98294a2cd5ffe1159fe20c72641a2cde9cfc4aca8137f741f6f4ed1"
+    },
+    {
+      "path": "framwork/tec_tac/endpoint_transport.py",
+      "size": 33306,
+      "sha256": "b39ca485de49fa1da79c103185540ace110cca1df02c7ca555abe4dd5d598107"
+    },
+    {
+      "path": "framwork/tec_tac/endpoint_transport_consumer.py",
+      "size": 14891,
+      "sha256": "37c395585700aa3a2de27f8ff8e2c04122ca980d29a2f6478cdc344a21bab2a2"
     },
     {
       "path": "framwork/tec_tac/event_jobs.py",
@@ -2025,6 +2045,11 @@
       "path": "framwork/tec_tac/management/commands/tec_tac_scheduler_tick.py",
       "size": 9560,
       "sha256": "aeea5a62396f10cb716de26c73653486927594c03735f8dda0ce2e806b91203b"
+    },
+    {
+      "path": "framwork/tec_tac/management/commands/tectac_endpoint_agent_loadseed.py",
+      "size": 4400,
+      "sha256": "d20ae8ac5189d54a169f1a2e291b714ca5ae018a77aac98834b51205b370de8d"
     },
     {
       "path": "framwork/tec_tac/mfa_backup.py",
@@ -2240,6 +2265,11 @@
       "path": "framwork/tec_tac/migrations/0041_schedule_nth_weekday.py",
       "size": 930,
       "sha256": "0e54587a42823dc176a15cb773de7c901b3f032d86e477b23e955d3116af3c5b"
+    },
+    {
+      "path": "framwork/tec_tac/migrations/0042_clear_monthly_fields_non_monthly.py",
+      "size": 732,
+      "sha256": "e18617a7d8da4d1a33f06b4933d3834990218ca1fb1367bf9268605922ef99a7"
     },
     {
       "path": "framwork/tec_tac/migrations/__init__.py",
@@ -2473,8 +2503,8 @@
     },
     {
       "path": "framwork/tec_tac/scheduler_views.py",
-      "size": 53645,
-      "sha256": "03c23402f27321f9a6fde16557927eb29e2f4f1714ef13730b95d61a5489226c"
+      "size": 54667,
+      "sha256": "b92ba518b6c9e8db2bb950dca8e3a621f04706a09b1e3572905abab6b04afdbb"
     },
     {
       "path": "framwork/tec_tac/server_backup.py",
@@ -2799,7 +2829,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "9de0ee0ecd131b342923428cd1e90a3c7daba51f5262eaa74daaff1236a79533"
+      "sha256": "45053c12c3991a08ca7f50258d6ae69e96b7357b0cadffe2a5e67738688c21a0"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -3295,6 +3325,36 @@
       "path": "tests/diagnostics-foundation.sh",
       "size": 1090,
       "sha256": "98dbf8ed01a8b223f51fe3690188d48a2f34ba9a71ceb7b35f1268c914acce07"
+    },
+    {
+      "path": "tests/endpoint-transport-consumer-1.17.90.py",
+      "size": 19748,
+      "sha256": "3c0dd0787f9a4c085fcb1c04c2edecb731653ddb94860156dd25f6555d0b42b8"
+    },
+    {
+      "path": "tests/endpoint-transport-contract-1.17.90.py",
+      "size": 13657,
+      "sha256": "8ad356187fe28d21c26160ce7723b50ff755315f8e4575e859dcae39ac99f49d"
+    },
+    {
+      "path": "tests/endpoint-transport-identity-1.17.90.py",
+      "size": 10487,
+      "sha256": "b4b3eb4beec1f8a0d6a9fa78e52e6558eae0fdc60482fb7a4dee08f109ef2762"
+    },
+    {
+      "path": "tests/endpoint-transport-loadseed-1.17.90.py",
+      "size": 5489,
+      "sha256": "0bf8410144d0872021a8cdeb902637b1eee3ed4b3840ee6ec1efc804ce70915f"
+    },
+    {
+      "path": "tests/endpoint-transport-runtime-1.17.90.py",
+      "size": 7190,
+      "sha256": "313ced7dd280fa9e6f83c727dc1750518fc5b1dcadfc17f8ea8bb74b2772971d"
+    },
+    {
+      "path": "tests/endpoint_transport_harness.py",
+      "size": 9117,
+      "sha256": "84050f389204cdf28863c60e0840d6a31492902d3101209d82dd9852b0834683"
     },
     {
       "path": "tests/event-jobs-1.17.45.py",
@@ -4528,8 +4588,8 @@
     },
     {
       "path": "tests/scheduler-compat-1.17.66.py",
-      "size": 13381,
-      "sha256": "2d049d57ed47feed09e7b02e407a11433ffedf4ce3935ccaf65c4492827e3206"
+      "size": 13525,
+      "sha256": "b9bc542751139e1d28491cf021b95aa768fd263f9373482d6f031363dcc71f99"
     },
     {
       "path": "tests/scheduler-compat-1.17.67.py",
@@ -4628,8 +4688,8 @@
     },
     {
       "path": "tests/scheduler-legacy-target-regression.py",
-      "size": 4414,
-      "sha256": "e6880e09c798fc1f2c952941f6ca03052cded4aff735aa9c431f189e8bdf483f"
+      "size": 4453,
+      "sha256": "b38b59a852115062ecbe0e650bbbac221ab028ea971afa36fd1598ca7ab032d5"
     },
     {
       "path": "tests/scheduler-manifest-cache-1.17.81.py",
@@ -4667,6 +4727,11 @@
       "sha256": "b1d167e65015a6a21b6b22ec223591398d77910c0cbb2cd920f2f3afba7e4e8e"
     },
     {
+      "path": "tests/scheduler-monthly-clear-1.17.90.py",
+      "size": 3818,
+      "sha256": "5904f36c889570b10e541a087aaa0d7fec0b8c34a562ee8e001a3f3bc35f51d5"
+    },
+    {
       "path": "tests/scheduler-native-type-compat-1.15.164-1.py",
       "size": 6504,
       "sha256": "7eb45b36d6dc4aae6d060df3894c2035881533d32a2572d93bec7085669a6d29"
@@ -4698,8 +4763,8 @@
     },
     {
       "path": "tests/scheduler-ownership-move-1.17.68.py",
-      "size": 14291,
-      "sha256": "4f39687507c4e4044a8dcd71dc66e86d5bc66d10f0d99d06c95b07864a993ced"
+      "size": 14518,
+      "sha256": "a5e07ecbcb4716f28fae16b71d9b43bc272af023c9980184ec19617b4f578039"
     },
     {
       "path": "tests/scheduler-permitted-action-ids.py",
