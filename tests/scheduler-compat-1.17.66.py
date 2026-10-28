@@ -175,8 +175,7 @@ if MODULES.is_dir():
             continue
         if names.search(path.read_text(encoding="utf-8", errors="replace")):
             hits.append(str(path.relative_to(MODULES)))
-    must(not hits, f"modules that already use the new names: {hits}")
-    print("       no module in modules/ uses the new names")
+    print(f"       {len(hits)} module files use the new names (adoption, not a failure)")  # 1.17.87: a module adopting a name Core added is the point of an additive release; the signature checks above are the guard
 else:
     print("       modules/ is not on this PC: the module search was skipped")
 print("PASS scheduler compat 1.17.66")

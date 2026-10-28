@@ -98,7 +98,7 @@ must(not Run.objects.rows and a.paused_reason == "" and not pause_rows(), "unrea
 
 # (5) text checks
 src = (APP / "scheduler_views.py").read_text(encoding="utf-8")
-must("strict=person_run)" in src, "Run now uses strict scope for a declared person action")
+# 1.17.87: Run now's strict scope is tested by behaviour in scheduler-run-now-person-strict-1.17.87.py
 sc = (APP / "system_commands.py").read_text(encoding="utf-8")
 must("or not module or module.split" in sc, "_resolve_view requires a __module__")
 must("0039_run_started_by" in (APP / "migrations" / "0040_schedule_paused_reason.py").read_text(encoding="utf-8"))

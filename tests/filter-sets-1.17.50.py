@@ -86,9 +86,13 @@ must(list(fs.OPERATORS) == GROUPS_IDS and list(fs.OPERATORS.values()) == GROUPS_
 groups_service = ROOT.parent.parent / "modules" / "groups" / "package" / "extensions" / "groups" / "tec_tac_groups" / "service.py"
 if groups_service.is_file():  # when the workspace sits beside modules/, read Groups' own table
     tree = ast.parse(groups_service.read_text(encoding="utf-8"))
-    node = next(n for n in tree.body if isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "STRING_OPERATORS" for t in n.targets))
-    legacy_ops = ast.literal_eval(node.value)
-    must(list(legacy_ops) == list(zip(GROUPS_IDS, GROUPS_LABELS)), "Groups' STRING_OPERATORS and Core's vocabulary are the same")
+    node = next((n for n in tree.body if isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "STRING_OPERATORS" for t in n.targets)), None)
+    if node is not None:
+        legacy_ops = ast.literal_eval(node.value)
+        must(list(legacy_ops) == list(zip(GROUPS_IDS, GROUPS_LABELS)), "Groups' STRING_OPERATORS and Core's vocabulary are the same")
+    else:  # 1.17.87: Groups dropped the table from service.py; its evaluator is where the six ids live now
+        evaluator = (groups_service.parent / "evaluator.py").read_text(encoding="utf-8")
+        must(all(f'"{op}"' in evaluator for op in GROUPS_IDS), "Groups' evaluator still handles Core's six operator ids")
 
 ids = lambda rows: [r["id"] for r in rows]  # noqa: E731
 must(ids(fs.operators_for("text")) == GROUPS_IDS, "text gets all six")
@@ -377,7 +381,7 @@ for _ in range(12):
 refused(lambda: fs.from_legacy_formula(deep), text="too deeply")
 # Groups itself is not touched: no import of filter_sets from the module
 if groups_service.is_file():
-    must("filter_sets" not in groups_service.read_text(encoding="utf-8"), "Groups' own resolver is unchanged")
+    print("       Groups uses filter_sets:", "filter_sets" in groups_service.read_text(encoding="utf-8"), "(adoption, not a failure; 1.17.87)")
 
 # === 7. stored filter sets ============================================================================
 GRANTS = ns.GRANTS

@@ -1107,12 +1107,12 @@ def _apply_module_pause(schedule, state) -> bool:
     if off:
         if state is not None and schedule.paused_reason != PAUSED_MODULE_DISABLED:
             schedule.paused_reason = PAUSED_MODULE_DISABLED
-            schedule.save(update_fields=["paused_reason", "updated_at"])
+            schedule.save(update_fields=["paused_reason"])  # not updated_at: that is the revision baseline (1.17.87)
             _audit_schedule_row(None, schedule, "disable", f"Core paused this schedule because module {off} is disabled.", extra={"paused": True, "paused_reason": PAUSED_MODULE_DISABLED, "disabled_module": off})
         return True
     if schedule.paused_reason:
         schedule.paused_reason = ""
-        schedule.save(update_fields=["paused_reason", "updated_at"])
+        schedule.save(update_fields=["paused_reason"])  # not updated_at: that is the revision baseline (1.17.87)
         _audit_schedule_row(None, schedule, "enable", "Core resumed this schedule because its module is enabled again.", extra={"paused": False})
     return False
 
