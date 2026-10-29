@@ -55,9 +55,9 @@ reset()
 import os  # noqa: E402
 
 FOLDER = os.path.normcase(os.path.realpath(str(Path(H.ROOT) / "nats-comms-folder")))
-et._owner_folder = lambda: None
+et._owner_folder = lambda module_id=None: None
 must(et.register_owner("nats-comms", "nats_comms.tasks.handle")["outcome"] == "denied", "owner not installed or not enabled")
-et._owner_folder = lambda: FOLDER
+et._owner_folder = lambda module_id=None: FOLDER if module_id in (None, "nats-comms") else None
 must(et.register_owner("someone-else", "nats_comms.tasks.handle")["outcome"] == "denied", "module_id must equal the verified caller")
 must(et.register_owner("nats-comms", "not a path!")["outcome"] == "invalid", "bad path text")
 

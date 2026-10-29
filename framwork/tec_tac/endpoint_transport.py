@@ -2,7 +2,7 @@
 
 The endpoint agent is a native client that connects to /ws/tfd/endpoint-agent/ with Tactical's own agent token (the DRF token Tactical
 created at install) and its agent id. Core checks that pair against Tactical's own tables, keeps one live connection per agent, answers
-ping, checks the frame shape, hands an event to the one owning module (nats-comms) and routes a reply back to the request that is waiting.
+ping, checks the frame shape, hands an event to the one owning module (endpoint-comms; nats-comms is accepted until the dev server has moved) and routes a reply back to the request that is waiting.
 Core never interprets ``func``. Meaning, the agent record and the page are the owner's.
 
 This file holds what has no channels import: the identity check, the failure rate limit, the header and frame checks, the presence keys,
@@ -36,7 +36,8 @@ logger = logging.getLogger("tec_tac.endpoint_transport")
 
 CAPABILITY_ID = "core.endpoint_transport"
 CAPABILITY_VERSION = "1.0.0"
-OWNER_MODULE = "nats-comms"  # the one module that may use the contract; a constant of Core's table, like OWNER_MODULE of remote-background
+OWNER_MODULES = ("endpoint-comms", "nats-comms")  # the module ids that may use the contract, preferred first; nats-comms only until dev02 has moved
+OWNER_MODULE = OWNER_MODULES[0]  # the preferred id; exactly one of them owns the transport at runtime
 ROUTE_PATTERN = "ws/tfd/endpoint-agent/"
 SOCKET_PATH = "/ws/tfd/endpoint-agent/"
 
@@ -596,17 +597,19 @@ def clear_owner_for_tests() -> None:
         _OWNER = None
 
 
-def _owner_folder() -> str | None:
-    """The real path of the installed, enabled nats-comms extension folder, or None."""
+def _owner_folder(module_id: str = OWNER_MODULE) -> str | None:
+    """The real path of the installed, enabled extension folder of one owner module id, or None."""
     from . import module_state, registry
 
-    plugin = next((p for p in registry.discover_plugins() if p.plugin_id == OWNER_MODULE), None)
+    if module_id not in OWNER_MODULES:
+        return None
+    plugin = next((p for p in registry.discover_plugins() if p.plugin_id == module_id), None)
     if plugin is None or plugin.plugin_type != "extension" or plugin.legacy:
         return None
     state = module_state.load_state()
     if isinstance(state, dict) and state.get("_corrupt"):
         return None
-    if not module_state.is_enabled(OWNER_MODULE, state):
+    if not module_state.is_enabled(module_id, state):
         return None
     return os.path.normcase(os.path.realpath(str(plugin.root)))
 
@@ -636,20 +639,24 @@ def _task_name_and_file(task) -> tuple[str, str]:
 
 def _register_owner(module_id: str, event_task_path: str) -> dict:
     global _OWNER
-    if module_id != OWNER_MODULE:
+    if module_id not in OWNER_MODULES:
         return {"outcome": "denied", "reason": "module_id must be the verified caller"}
     if not isinstance(event_task_path, str) or not re.fullmatch(r"[A-Za-z_][\w.]{0,200}", event_task_path or ""):
         return {"outcome": "invalid", "reason": "event_task_path must be a dotted path to a Celery task"}
     with _OWNER_LOCK:
         current = dict(_OWNER) if _OWNER else None
     if current is not None:
+        if current["module_id"] != module_id:
+            return {"outcome": "denied", "reason": f"another module already owns the transport ({current['module_id']})"}
         if current["path"] == event_task_path:
             return {"outcome": "ok", "registered": True, "idempotent": True}
         return {"outcome": "invalid", "reason": "an owner is already registered with a different task path"}
     try:
-        folder = _owner_folder()
+        if module_id != OWNER_MODULE and _owner_folder(OWNER_MODULE) is not None:
+            return {"outcome": "denied", "reason": f"{OWNER_MODULE} is installed and enabled, so it owns the transport"}
+        folder = _owner_folder(module_id)
         if folder is None:
-            return {"outcome": "denied", "reason": f"{OWNER_MODULE} is not an installed, enabled extension"}
+            return {"outcome": "denied", "reason": f"{module_id} is not an installed, enabled extension"}
         name, filename = _task_name_and_file(_load_task(event_task_path))
     except Exception:
         logger.warning("The endpoint event task could not be checked.", exc_info=True)
@@ -657,9 +664,13 @@ def _register_owner(module_id: str, event_task_path: str) -> dict:
     if not _inside(filename, folder):
         return {"outcome": "invalid", "reason": "the task's code must lie inside the owner module's own folder"}
     with _OWNER_LOCK:
-        if _OWNER is not None and _OWNER["path"] != event_task_path:
-            return {"outcome": "invalid", "reason": "an owner is already registered with a different task path"}
-        _OWNER = {"module_id": OWNER_MODULE, "path": event_task_path, "task_name": name}
+        if _OWNER is not None:
+            if _OWNER["module_id"] != module_id:
+                return {"outcome": "denied", "reason": f"another module already owns the transport ({_OWNER['module_id']})"}
+            if _OWNER["path"] != event_task_path:
+                return {"outcome": "invalid", "reason": "an owner is already registered with a different task path"}
+            return {"outcome": "ok", "registered": True, "idempotent": True}
+        _OWNER = {"module_id": module_id, "path": event_task_path, "task_name": name}
     return {"outcome": "ok", "registered": True, "idempotent": False}
 
 
@@ -738,16 +749,27 @@ def install_endpoint_agent_route() -> bool:
 
 
 # ------------------------------------------------------------------------------------------------ the contract
-def _caller_is_owner() -> bool:
-    """True only when the verified calling module is nats-comms (an enabled, installed extension). Never from an argument. Every frame of
-    this file is skipped by the walk, so this helper may be called from any depth of the provider."""
+def _verified_owner_id() -> str | None:
+    """The verified calling module id when it is an owner id (endpoint-comms or nats-comms) and, once an owner is registered in this process,
+    the registered one; else None. Never from an argument. An in-memory read: no plugin scan on the hot path. Every frame of this file is
+    skipped by the walk, so this helper may be called from any depth of the provider."""
     from .caller_identity import calling_module_for_core_provider
 
     try:
         identity = calling_module_for_core_provider(provider_file=__file__)
     except Exception:
         return False
-    return identity is not None and identity.module_id == OWNER_MODULE
+    if identity is None or identity.module_id not in OWNER_MODULES:
+        return None
+    with _OWNER_LOCK:
+        registered = _OWNER["module_id"] if _OWNER else None
+    if registered is not None and registered != identity.module_id:
+        return None
+    return identity.module_id
+
+
+def _caller_is_owner() -> bool:
+    return _verified_owner_id() is not None
 
 
 _DENIED = {"outcome": "denied"}
@@ -787,18 +809,22 @@ def _free_channel(layer, channel: str) -> None:
 
 
 def register_owner(module_id, event_task_path) -> dict:
-    """Register the Celery task that receives agent events. Only nats-comms (verified by Core) may call it. See docs/endpoint-transport.md."""
-    if not _caller_is_owner():
+    """Register the Celery task that receives agent events. Only endpoint-comms (nats-comms until the dev server has moved), verified by Core, may call it. See docs/endpoint-transport.md."""
+    caller = _verified_owner_id()
+    if caller is None:
         return dict(_DENIED)
+    if module_id != caller:
+        return {"outcome": "denied", "reason": "module_id must be the verified caller"}
     return _register_owner(module_id, event_task_path)
 
 
 def request(module_id, agent_id, frame, timeout=10) -> dict:
     """Send a request frame to one connected agent and wait for its reply. Returns {outcome: ok|timeout|offline|denied|invalid, reply}.
     Sync (async_to_sync): call it from a Celery task or a request thread, never from async code. Returns within timeout + 1 second."""
-    if not _caller_is_owner():
+    caller = _verified_owner_id()
+    if caller is None:
         return dict(_DENIED)
-    if module_id != OWNER_MODULE or not isinstance(agent_id, str) or not AGENT_ID_PATTERN.fullmatch(agent_id):
+    if module_id != caller or not isinstance(agent_id, str) or not AGENT_ID_PATTERN.fullmatch(agent_id):
         return {"outcome": "invalid", "reply": None}
     wait = _clamp_timeout(timeout)
     if wait is None or validate_frame(frame, allowed_types=("request",)) is not None or not frame_size_ok(frame):
@@ -839,10 +865,11 @@ def request(module_id, agent_id, frame, timeout=10) -> dict:
 def send_many(module_id, agent_ids, frame) -> dict:
     """Fire and forget one event frame to many agents (at most 2000 ids). Returns {outcome, queued, offline}. Agents with no presence key are
     listed in ``offline`` and not sent. One event loop for the whole batch. Sync."""
-    if not _caller_is_owner():
+    caller = _verified_owner_id()
+    if caller is None:
         return {**_DENIED, "queued": 0, "offline": []}
     ids = _agent_ids(agent_ids)
-    if module_id != OWNER_MODULE or ids is None or validate_frame(frame, allowed_types=("event",)) is not None or not frame_size_ok(frame):
+    if module_id != caller or ids is None or validate_frame(frame, allowed_types=("event",)) is not None or not frame_size_ok(frame):
         return {"outcome": "invalid", "queued": 0, "offline": []}
     try:
         live = presence_many(ids)
@@ -879,10 +906,11 @@ def send_many(module_id, agent_ids, frame) -> dict:
 
 def presence(module_id, agent_ids) -> dict:
     """Per agent {connected, since}, from the cache only (one get_many), at most 2000 ids. Sync."""
-    if not _caller_is_owner():
+    caller = _verified_owner_id()
+    if caller is None:
         return {**_DENIED, "presence": {}}
     ids = _agent_ids(agent_ids)
-    if module_id != OWNER_MODULE or ids is None:
+    if module_id != caller or ids is None:
         return {"outcome": "invalid", "presence": {}}
     try:
         return {"outcome": "ok", "presence": presence_many(ids)}
@@ -915,7 +943,7 @@ def endpoint_transport_contract_metadata() -> dict[str, Any]:
         "id": CAPABILITY_ID,
         "version": CAPABILITY_VERSION,
         "operations": ["register_owner", "request", "send_many", "presence"],
-        "owner": f"One module only: {OWNER_MODULE}. Core verifies the caller from the call stack (core.caller_identity), never from the module_id argument, which must equal the verified id. Any other caller, Core itself and an unverifiable caller get outcome denied from every operation. Core checks nothing about people: the owner checks the person's scope before it calls.",
+        "owner": f"One module only: {OWNER_MODULE} (nats-comms is accepted until the dev server has moved to endpoint-comms; when both are installed and enabled, endpoint-comms owns the transport and nats-comms is refused at register_owner; once an owner is registered in a process only that module may call). Core verifies the caller from the call stack (core.caller_identity), never from the module_id argument, which must equal the verified id. Any other caller, Core itself and an unverifiable caller get outcome denied from every operation. Core checks nothing about people: the owner checks the person's scope before it calls.",
         "socket": "wss://<host>/ws/tfd/endpoint-agent/ for the endpoint agent (a native client). Headers: Authorization: Token <Tactical agent token>, X-Agent-Id: <Tactical agent id>. No token in the URL, no Origin rule. TLS is terminated by nginx; Core refuses a connection the proxy reports as plain text (X-Forwarded-Proto http or ws).",
         "identity": "The token must be a Tactical agent token whose user is linked to the agent named in X-Agent-Id, and the user must be active. A dashboard user's token or a Knox session token is refused. Checked on connect and again every 10 minutes. There is no enrolment and no revoke call: Tactical deleting the agent or issuing a new token is the revoke.",
         "frame": {
@@ -956,7 +984,7 @@ def register_core_endpoint_transport_capability():
         module_id="core",
         version=CAPABILITY_VERSION,
         provider=_PROVIDER,
-        description="The endpoint agent websocket: identity, presence, requests, events and fan-out, for the owning module (nats-comms) only.",
+        description="The endpoint agent websocket: identity, presence, requests, events and fan-out, for the owning module (endpoint-comms; nats-comms is accepted until the dev server has moved) only.",
         operations=("register_owner", "request", "send_many", "presence"),
         metadata=endpoint_transport_contract_metadata(),
     )

@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.93",
+  "version": "1.17.94",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.17.93.md",
-      "size": 6299,
-      "sha256": "8a82fb6baaa0979aed6ee8b9aa6b6e4b4b6b37856cfc820535090341d2b213b7"
+      "path": "RELEASE_NOTES_1.17.94.md",
+      "size": 3411,
+      "sha256": "740c460910618b10a5ee948c72d42e8f55c8c39b5e9ed735916cf1130f851fb8"
     },
     {
       "path": "VERSION",
       "size": 8,
-      "sha256": "1bbf0e0ccaa408b3f1aa60babc6aa4d95d6153048086cc24f7352b86e09d5229"
+      "sha256": "182c6e8652c1fc8b1df7ecf99b4d29e75e61bdc69e89c999f05a5fdc5b0fed82"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -78,8 +78,8 @@
     },
     {
       "path": "docs/capabilities.md",
-      "size": 13863,
-      "sha256": "f6c5ad5523f96c85ead0008c832a2949351fba926e9d23cfb20d12f9f8c9635e"
+      "size": 13924,
+      "sha256": "5393c8aba7e3414f0f67abf6e7fa38277e51bdec49d9daca93d7f07c73d07acc"
     },
     {
       "path": "docs/core-functions.md",
@@ -93,8 +93,8 @@
     },
     {
       "path": "docs/endpoint-transport.md",
-      "size": 16082,
-      "sha256": "ace8140c8514fc3ad95480f25ca4f9d13dca2a65ccf153eced76005e9dfabbaf"
+      "size": 16462,
+      "sha256": "76fe85ea36013daa1a796e728b768df336870bd1f222c017bcf190ae65c2c62a"
     },
     {
       "path": "docs/event-jobs.md",
@@ -1547,6 +1547,11 @@
       "sha256": "a2ac1ab5dbc23bfe0fbb92075c63f37ecd6cd390ce035911bb85a7e2799551bc"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.93.md",
+      "size": 6299,
+      "sha256": "8a82fb6baaa0979aed6ee8b9aa6b6e4b4b6b37856cfc820535090341d2b213b7"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.2.0.md",
       "size": 1977,
       "sha256": "7d78abb704c7a3e459f7437cb0bdcc7ea738f76e97b925f2b4e16466a812cd54"
@@ -1963,8 +1968,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 427760,
-      "sha256": "e5091aaa8cbb42dc091470162b3ab68e9c62c2feaa940a5eb844bac38230d5ea"
+      "size": 428102,
+      "sha256": "9900d1e8860eaf5172cd00f2d2f12e2ef13ba660beb8bcf223c454828139ac7e"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -1993,8 +1998,8 @@
     },
     {
       "path": "framwork/tec_tac/endpoint_transport.py",
-      "size": 48638,
-      "sha256": "4cd9f2ab6856b47f7eaa37d40116746bfcb9065ad575d4be1a259c4593e2b516"
+      "size": 50577,
+      "sha256": "835f3f196c6ad4b038950f5f32613cdbfd7193f5a59d4f8e9f90f4906a887f6f"
     },
     {
       "path": "framwork/tec_tac/endpoint_transport_consumer.py",
@@ -2839,7 +2844,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "8d087940baa918e04dcd576330359329dfcc7c4b0a6ee28c050e7cba4515683d"
+      "sha256": "bd852e3188acc45bb700239392549fe083966d877d581d849f76afcb26cdd4c2"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -3348,8 +3353,8 @@
     },
     {
       "path": "tests/endpoint-transport-contract-1.17.90.py",
-      "size": 13665,
-      "sha256": "162c0057c0265e2aeb3d3212f39f1ce71c2476bd139f2159b2b15f4b4f924d84"
+      "size": 13742,
+      "sha256": "b173f6b606e5f377129780d465050260627f0b5edefd0f80268dd4b826ad1e07"
     },
     {
       "path": "tests/endpoint-transport-docs-1.17.92.py",
@@ -3358,8 +3363,13 @@
     },
     {
       "path": "tests/endpoint-transport-docs-1.17.93.py",
-      "size": 2691,
-      "sha256": "3317b1cbabf5805642965deb59ecbf768b372d0550dfbca3a25c24e9878c4639"
+      "size": 2751,
+      "sha256": "fc4a87744934b2f5514b78ae7577a98150ef1160154e58629c0b632248cd1d29"
+    },
+    {
+      "path": "tests/endpoint-transport-docs-1.17.94.py",
+      "size": 1918,
+      "sha256": "e751daeef3b12c40c0e24643ff6e93f60ad54f1b4e93d898a83e6ee7ec504946"
     },
     {
       "path": "tests/endpoint-transport-identity-1.17.90.py",
@@ -3380,6 +3390,11 @@
       "path": "tests/endpoint-transport-openfiles-1.17.93.py",
       "size": 6238,
       "sha256": "56f024536ee221cf552839f63401295bfcb802012f9405bbb89be463e6b38272"
+    },
+    {
+      "path": "tests/endpoint-transport-owner-1.17.94.py",
+      "size": 8095,
+      "sha256": "0d04228f9e57ba1b50ed5b1e4ecda239988b218c400bf95f240a2f3c973284ff"
     },
     {
       "path": "tests/endpoint-transport-pools-1.17.93.py",

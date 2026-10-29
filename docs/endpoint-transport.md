@@ -2,13 +2,13 @@
 
 Core 1.17.90 adds one websocket for the endpoint agent and one contract for the module that owns it. The capability is `core.endpoint_transport` 1.0.0. It needs framework 1.17.90 or later. Core 1.17.92 checks the identity before any per-agent decision, limits failed attempts to 10 a minute per address and 10 failed checks a minute per agent id, and adds close code 1013. Core 1.17.93 raises the process open-file limit, makes the 10 minute re-check close 1013 after 16 minutes without an answer, closes 1013 when the cache pool is full, and writes an audit row for the per-agent 4429 (see Failed attempts, Pools and bursts, Open files and Close codes). No operation, signature or return shape changed, so the capability stays at 1.0.0.
 
-Core owns the connection and its security. The module `nats-comms` owns what the messages mean, the agent record, the events and the page. Core never reads `func`.
+Core owns the connection and its security. The module `endpoint-comms` owns what the messages mean, the agent record, the events and the page. Core never reads `func`.
 
 ## What you get
 
 * An agent connects once and stays connected. Core checks who it is, keeps one live connection per agent and answers `ping`.
-* `nats-comms` can ask a connected agent a question and wait for the answer, send one event to many agents, and see who is online.
-* An event from an agent reaches `nats-comms` through a Celery task. The agent gets an `ack` only after that hand-over worked.
+* `endpoint-comms` can ask a connected agent a question and wait for the answer, send one event to many agents, and see who is online.
+* An event from an agent reaches `endpoint-comms` through a Celery task. The agent gets an `ack` only after that hand-over worked.
 
 ## The socket
 
@@ -101,9 +101,9 @@ When an agent sends an `event`, Core, in a worker thread (never in the receive l
 
 With no owner registered, or when the hand-over fails or times out, Core sends no ack and logs a throttled line. The agent keeps the event and sends it again after it reconnects. Core does not ack and drop an event, because that could lose a person's choice.
 
-## The contract, for `nats-comms` only
+## The contract, for `endpoint-comms` only
 
-Every operation verifies the calling module from the call stack (`core.caller_identity`), not from the `module_id` argument. The caller must be the enabled, installed extension `nats-comms`. Any other caller, Core itself and a caller Core cannot verify get `{"outcome": "denied"}`. `module_id` stays in the signatures and must equal the verified id. Core checks nothing about people: `nats-comms` checks the person's scope before it calls.
+Every operation verifies the calling module from the call stack (`core.caller_identity`), not from the `module_id` argument. The caller must be the enabled, installed extension `endpoint-comms`. Core 1.17.94 also accepts the older id `nats-comms` until the dev server has moved to `endpoint-comms`. Only one of them owns the transport at a time. When both are installed and enabled, `endpoint-comms` owns it and `nats-comms` is refused at `register_owner` (`denied`). Once an owner is registered in a process, only that module may call the operations. Any other caller, Core itself and a caller Core cannot verify get `{"outcome": "denied"}`. `module_id` stays in the signatures and must equal the verified id. Core checks nothing about people: `endpoint-comms` checks the person's scope before it calls.
 
 ```python
 from tec_tac.capabilities import get_capability
@@ -118,7 +118,7 @@ transport = get_capability("core.endpoint_transport", version=">=1.0.0,<2.0.0")
 | `send_many(module_id, agent_ids, frame)` | `{outcome, queued, offline: [...]}` |
 | `presence(module_id, agent_ids)` | `{outcome, presence: {agent_id: {connected, since}}}` |
 
-* `register_owner`: call it from `AppConfig.ready()`. `event_task_path` is the dotted import path of a Celery task. The task's code must lie inside the `nats-comms` folder. An identical re-registration is accepted (every process runs `ready()`). A different path is refused.
+* `register_owner`: call it from `AppConfig.ready()`. `event_task_path` is the dotted import path of a Celery task. The task's code must lie inside the owner's own folder. An identical re-registration is accepted (every process runs `ready()`). A different path is refused.
 * `request`: `frame.type` must be `request`. `timeout` is clamped to 1 to 30 seconds and the call returns within `timeout` + 1 second. `offline` is decided at once from presence. The call is sync: use it from a Celery task or a request thread, not from async code. The reply goes only to the connection the request was delivered to, so agent A cannot answer agent B's request.
 * `send_many`: `frame.type` must be `event`. At most 2000 agent ids (more is `invalid` and nothing is sent). Ids are de-duplicated. Offline agents are listed and not sent. Fire and forget.
 * `presence`: at most 2000 ids. One cache read.

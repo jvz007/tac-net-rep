@@ -285,7 +285,7 @@ Capability providers may also be owned directly by Tec-Tac Core rather than an i
 
 ## Core endpoint transport
 
-`core.endpoint_transport` 1.0.0 (framework >=1.17.90) is the endpoint agent websocket: `register_owner`, `request`, `send_many` and `presence`, for the one owning module `nats-comms` only (Core verifies the caller). See `docs/endpoint-transport.md`.
+`core.endpoint_transport` 1.0.0 (framework >=1.17.90) is the endpoint agent websocket: `register_owner`, `request`, `send_many` and `presence`, for the one owning module `endpoint-comms` only (Core verifies the caller; `nats-comms` is accepted until the dev server has moved). See `docs/endpoint-transport.md`.
 
 ## Core server maintenance
 
