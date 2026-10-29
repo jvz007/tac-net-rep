@@ -1,6 +1,6 @@
-# Tec-Tac Framework 1.17.90
+# Tec-Tac Framework 1.17.91
 
-Date: 28 October 2026. Closes the Low of the 1.17.89 review, repairs a test that failed before 1.17.89 and adds the endpoint agent transport (capability `core.endpoint_transport` 1.0.0). One data migration (0042), no model change. The transport is additive: no existing contract, route or capability changed.
+Date: 29 October 2026. Version note: the work was prepared under the labels 1.17.90 and 1.17.90-1. Neither was ever signed or released, so this is the first release after 1.17.89 and carries all of it. Code comments and test files that say 1.17.90 name the work, not a shipped version. Closes the Low of the 1.17.89 review, repairs a test that failed before 1.17.89 and adds the endpoint agent transport (capability `core.endpoint_transport` 1.0.0). One data migration (0042), no model change. The transport is additive: no existing contract, route or capability changed.
 
 ## What changed and why
 
@@ -67,7 +67,7 @@ New: `tests/endpoint-transport-identity-1.17.90.py`, `endpoint-transport-consume
 
 Django models, channels, Redis, Celery and Tactical are not on this PC. The tests above run the real Core files against stubs of those boundaries and an in-memory channel layer. `tests/endpoint-transport-runtime-1.17.90.py` (real ASGI application, real cache, real token table) was written and not run. The Celery hand-over was tested against a stub `send_task`: whether a real broker call stays inside the 5 second timeout during a broker outage is for the dev-server run. `makemigrations --check` was not run (no model change). The export of `core.endpoint_transport` into `docs/contracts` is made from the signed code on the dev server and is not part of this package.
 
-## Fixed after review (round 1, 1.17.90)
+## Fixed after the first internal review (labelled 1.17.90-1)
 
 1. **Unauthenticated refusals no longer grow the audit table without limit (High).** `EndpointAgentConsumer.connect` now checks the failure limiter first. An address over the limit is closed 4429 with no audit row (`_refuse(..., audit=False)`). The plaintext refusal (`X-Forwarded-Proto: http`, which Tactical's nginx `/ws/` location does not strip) now counts as a failure through `note_failure`. At most 10 refusal rows per address per minute are written. Test: `tests/endpoint-transport-consumer-1.17.90.py` (50 plaintext then 50 unknown-token connections from one address: 10 closed 4403, 90 closed 4429, no more than 11 rows). The older rate-limit case now asserts the 11th refusal writes no row.
 2. **Group membership is renewed (High).** channels_redis drops a group member after `group_expiry` (86400 s), after which requests, fan-out and takeover missed the connection. `_tick` now calls `group_add` on every ping (idempotent, once a minute). Test: the layer drops the member, the clock advances, one `_tick` renews it, a request reaches the consumer and a takeover still closes the older connection 4409.

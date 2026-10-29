@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.90",
+  "version": "1.17.91",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.17.90.md",
-      "size": 11590,
-      "sha256": "da89adcc05df3a4cc5b34df8b1b0b06e36d8403567c9b1c7fc7db94d5114f354"
+      "path": "RELEASE_NOTES_1.17.91.md",
+      "size": 11881,
+      "sha256": "0c6c1f3727a1df277aebbce153506db00238226b50ae29e1fbcbc39dd53d3113"
     },
     {
       "path": "VERSION",
       "size": 8,
-      "sha256": "6f83549348884fbe03bf10e7bf2d4923e37b53e274b4c223cea39a8211c06215"
+      "sha256": "e8011bbc92b6a1ba1247b1cd232ec0380e8765b3a0cbead187d0d850c107c991"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -2829,7 +2829,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "45053c12c3991a08ca7f50258d6ae69e96b7357b0cadffe2a5e67738688c21a0"
+      "sha256": "21d100b8b735d6c1142311d141589e500bddfcafae1b16bde15e942f0d6dd528"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
