@@ -111,7 +111,9 @@ async def case_500():
     must(len(THREADS["auth"]) == 500 and all(n.startswith("tectac-ea-auth") for n in THREADS["auth"]), set(THREADS["auth"]))
     must(len(set(THREADS["auth"])) <= 6, "at most six auth threads")
     must(THREADS["cache"] and all(n.startswith("tectac-ea-cache") for n in THREADS["cache"]) and len(set(THREADS["cache"])) <= 8, set(THREADS["cache"]))
-    must(DB["old"] == 1000 and DB["closed"] == 500, "close_old_connections before and after each job, and the connection closed: " + str(DB))
+    # 1.17.93: every audit row also calls close_old_connections twice (before and after the write), so count the auth jobs apart from them
+    auth_old = DB["old"] - 2 * len(AUDITS_)
+    must(auth_old == 1000 and DB["closed"] == 500, "close_old_connections before and after each auth job, and the connection closed: " + str(DB))
     for c in consumers:
         await c.disconnect(1000)
     must(et.pool_inflight("auth") == 0 and et.pool_inflight("cache") == 0 and et.pool_inflight("audit") == 0, "nothing left in flight")

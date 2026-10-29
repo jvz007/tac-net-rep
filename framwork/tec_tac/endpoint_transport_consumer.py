@@ -1,13 +1,15 @@
-"""The endpoint agent socket (Core 1.17.90; burst handling and limiter order 1.17.92). Loaded lazily by endpoint_transport._EndpointAgentRoute.
+"""The endpoint agent socket (Core 1.17.90; burst handling and limiter order 1.17.92; re-check deadline and busy cache 1.17.93). Loaded lazily by endpoint_transport._EndpointAgentRoute.
 
 Connect: headers from the scope, the address ceiling, the identity check, and only then any per-agent decision (a valid token is never
 refused because someone else failed). Then the group tectac-ea-<agent_id>, the takeover message and the presence key. A watcher task
 re-checks the token every 10 minutes, pings every 60 seconds and closes after two unanswered pings (the first ping and the re-check are
 jittered, so a fleet that connected in one ramp does not hit the database together). The receive loop never touches the database, the
-cache or the broker: every blocking call runs on one of Core's own small pools (auth, cache, audit, hand-over; see endpoint_transport)
+cache or the broker: every blocking call runs on one of Core's own small pools (auth, recheck, cache, audit, hand-over; see endpoint_transport)
 and never on the event loop's default executor, which Tactical's own sockets share. A full pool answers at once.
 
-A server-side fault while checking the token closes 1013 (retry later) and counts nothing. 4401 is an identity answer only.
+A server-side fault while checking the token closes 1013 (retry later) and counts nothing. 4401 is an identity answer only. A cache pool that
+is full closes 1013 too (the limiter could not be read or written, so it must not read as off). A re-check that gets no identity answer for
+RECHECK_SECONDS + jitter + RECHECK_GRACE_SECONDS closes 1013, so a long fault never keeps a socket open for good.
 
 The socket is accepted before a refusal is closed, so the native client can read the close code (4401, 4429, 1013). Core logs no
 frame, no payload, no token and no Authorization header. Close codes and limits: docs/endpoint-transport.md.
@@ -73,14 +75,22 @@ class EndpointAgentConsumer(AsyncWebsocketConsumer):
         self._unanswered_pings = 0
         self._ping_count = 0
         self._next_recheck = 0.0
+        self._identity_ok_at = 0.0  # the last time the token passed a check (connect or re-check)
         self._next_ping = 0.0
         self._last_log = {}
 
     # -------------------------------------------------------------------------------------------- helpers
-    async def _cache_call(self, func, *args, default=None):
-        """A blocking cache call on the CACHE pool. A fault or a full pool is logged (throttled) and gives ``default``."""
+    async def _cache_call(self, func, *args, default=None, busy_raises=False):
+        """A blocking cache call on the CACHE pool. A fault or a full pool is logged (throttled) and gives ``default``. With
+        ``busy_raises`` a full pool raises PoolFull instead, so the limiter never reads as off because the pool is busy; a real cache
+        error still gives ``default`` (the signed fail-open for a cache that is down)."""
         try:
             return await et.run_in_pool("cache", func, *args)
+        except et.PoolFull:
+            self._throttled_log("cache", "An endpoint cache call could not be made (%s).", getattr(func, "__name__", "call"))
+            if busy_raises:
+                raise
+            return default
         except Exception:
             logger.debug("An endpoint cache call failed.", exc_info=True)
             self._throttled_log("cache", "An endpoint cache call could not be made (%s).", getattr(func, "__name__", "call"))
@@ -135,7 +145,12 @@ class EndpointAgentConsumer(AsyncWebsocketConsumer):
         scope = self.scope
         self._ip = et.client_ip(scope)
         # The address ceiling is a NAT-sized pre-auth bound. An address over it is closed 4429 with no audit row.
-        if await self._cache_call(et.rate_limited, self._ip, default=False):
+        try:
+            limited = await self._cache_call(et.rate_limited, self._ip, default=False, busy_raises=True)
+        except et.PoolFull:
+            await self._unavailable(et._transient("busy"), None)  # the limiter could not be read: retry later, count nothing
+            return
+        if limited:
             await self._refuse(et.CLOSE_RATE_LIMITED, "rate_limited", audit=False)
             return
         if et.forwarded_plaintext(scope):
@@ -152,9 +167,13 @@ class EndpointAgentConsumer(AsyncWebsocketConsumer):
                 return
             reason = None if result.ok else result.reason
         if reason is not None:
-            over = await self._cache_call(et.note_failed_check, self._ip, agent_id, default=False)
+            try:
+                over = await self._cache_call(et.note_failed_check, self._ip, agent_id, default=False, busy_raises=True)
+            except et.PoolFull:
+                await self._unavailable(et._transient("busy"), agent_id)  # the failure could not be counted: never an uncounted 4401
+                return
             if over:
-                await self._refuse(et.CLOSE_RATE_LIMITED, "rate_limited", audit=False)
+                await self._refuse(et.CLOSE_RATE_LIMITED, "rate_limited_agent", agent_id=agent_id)
             else:
                 await self._refuse(et.CLOSE_UNAUTHORIZED, reason, agent_id=agent_id)
             return
@@ -171,6 +190,7 @@ class EndpointAgentConsumer(AsyncWebsocketConsumer):
         await self._cache_call(et.set_presence, self.agent_id, self._since, self._owner)
         await self.channel_layer.group_send(group, {"type": "endpoint.takeover", "channel": self.channel_name})
         now = self._clock()
+        self._identity_ok_at = now
         self._next_recheck = now + et.RECHECK_SECONDS + self._random() * et.RECHECK_JITTER_SECONDS
         self._next_ping = now + et.PING_SECONDS + self._random() * et.PING_JITTER_SECONDS
         self._spawn(self._audit("custom:endpoint-connect", agent_id=self.agent_id, ip=self._ip))
@@ -206,9 +226,15 @@ class EndpointAgentConsumer(AsyncWebsocketConsumer):
         """One pass of the watcher. False when the socket was closed. Tests drive it with an injected clock."""
         now = self._clock()
         if now >= self._next_recheck:
-            result = await et.authenticate_async(self._token, self.agent_id)
+            result = await et.authenticate_async(self._token, self.agent_id, pool="recheck")
             if result.transient:
-                # Not an answer about identity: the socket stays up and the re-check retries on a later tick.
+                # Not an answer about identity: the socket stays up and the re-check retries on a later tick, until the last good
+                # answer is older than the deadline. Then it closes 1013 and the agent reconnects through a fresh check.
+                if now - self._identity_ok_at > et.RECHECK_SECONDS + et.RECHECK_JITTER_SECONDS + et.RECHECK_GRACE_SECONDS:
+                    await self.close(et.CLOSE_RETRY_LATER)
+                    if et.transient_row_allowed():
+                        await self._audit("custom:endpoint-refused", agent_id=self.agent_id, reason="identity_stale", ip=self._ip)
+                    return False
                 self._throttled_log("recheck", "The endpoint token re-check could not be made (%s); it will be retried.", result.reason)
                 self._next_recheck = now + et.RECHECK_RETRY_SECONDS
             elif not result.ok:
@@ -216,6 +242,7 @@ class EndpointAgentConsumer(AsyncWebsocketConsumer):
                 await self._refusal_row(agent_id=self.agent_id, reason=result.reason)
                 return False
             else:
+                self._identity_ok_at = now
                 self._next_recheck = now + et.RECHECK_SECONDS + self._random() * et.RECHECK_JITTER_SECONDS
         if now >= self._next_ping:
             if self._unanswered_pings >= et.MAX_UNANSWERED_PINGS:

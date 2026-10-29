@@ -1,4 +1,4 @@
-"""Core's endpoint agent transport (Core 1.17.90; limiter order, dedicated pools and 1013 in 1.17.92, AD-54, plan section 9A): one websocket, one identity check, one contract.
+"""Core's endpoint agent transport (Core 1.17.90; limiter order, dedicated pools and 1013 in 1.17.92; open-file limit, re-check deadline and busy cache in 1.17.93; AD-54, plan section 9A): one websocket, one identity check, one contract.
 
 The endpoint agent is a native client that connects to /ws/tfd/endpoint-agent/ with Tactical's own agent token (the DRF token Tactical
 created at install) and its agent id. Core checks that pair against Tactical's own tables, keeps one live connection per agent, answers
@@ -26,6 +26,7 @@ import json
 import logging
 import os
 import re
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -55,14 +56,16 @@ CLOSE_PING_TIMEOUT = 4408
 CLOSE_RATE_LIMITED = 4429
 CLOSE_UNAVAILABLE = 4503
 CLOSE_TOO_BIG = 1009
-CLOSE_RETRY_LATER = 1013  # a server-side fault or a busy server: the agent backs off with jitter and tries again (never an identity answer)
+CLOSE_RETRY_LATER = 1013  # a server-side fault, a busy server or a stale re-check: the agent backs off with jitter and tries again (never an identity answer)
 
 FAILURES_PER_ADDRESS_PER_MINUTE = 10  # signed by AD-54 (plan 9A item 1): 10 failed attempts a minute per address (IPv6 grouped by its /64). Raising it needs a signed amendment
 FAILURES_PER_AGENT_PER_MINUTE = 10  # failed checks naming one agent id, read only after a failed check
-REFUSAL_ROWS_PER_MINUTE = 0  # global budget of custom:endpoint-refused audit rows a minute; 0 = off (every refusal is audited, as AD-54 signs). A number needs a signed amendment
+REFUSAL_ROWS_PER_MINUTE = 0  # global budget of custom:endpoint-refused audit rows a minute; 0 = off (as AD-54 signs). A number needs a signed amendment
 RECHECK_SECONDS = 600
 RECHECK_RETRY_SECONDS = 30  # after a transient fault at the re-check
 RECHECK_JITTER_SECONDS = 60
+RECHECK_GRACE_SECONDS = 300  # past RECHECK_SECONDS + jitter + this without an identity answer, the socket closes 1013 (Core 1.17.93)
+OPEN_FILES_TARGET = 65536  # the open-file soft limit Core asks for in a process that serves sockets (never above the hard limit)
 PING_SECONDS = 60
 PING_JITTER_SECONDS = 10
 AUTH_TIMEOUT_SECONDS = 10.0
@@ -95,6 +98,8 @@ REFUSAL_MESSAGES = {
     "lookup_failed": "the agent token could not be checked",
     "unavailable": "the agent token could not be checked just now; try again shortly",
     "busy": "the server is busy; try again shortly",
+    "identity_stale": "the agent token could not be re-checked in time; connect again",
+    "rate_limited_agent": "too many failed checks naming this agent id in a minute",
 }
 
 
@@ -380,7 +385,7 @@ class _BoundedPool:
             executor.shutdown(wait=False, cancel_futures=True)
 
 
-POOL_SPECS = {"auth": (6, 256), "cache": (8, 2000), "audit": (2, 1000), "handover": (4, 64)}  # name: (threads, backlog cap)
+POOL_SPECS = {"auth": (6, 256), "recheck": (2, 4096), "cache": (8, 2000), "audit": (2, 1000), "handover": (4, 64)}  # name: (threads, backlog cap)
 _POOLS = {name: _BoundedPool(name, *spec) for name, spec in POOL_SPECS.items()}
 
 
@@ -412,7 +417,7 @@ def _close_db(final: bool) -> None:
         if final:
             connections.close_all()
     except Exception:
-        logger.warning("The endpoint auth connection could not be closed.", exc_info=True)
+        logger.warning("The endpoint pool connection could not be closed.", exc_info=True)
 
 
 def _auth_job(token, agent_id) -> EndpointAuthResult:
@@ -423,11 +428,11 @@ def _auth_job(token, agent_id) -> EndpointAuthResult:
         _close_db(True)
 
 
-async def authenticate_async(token, agent_id) -> EndpointAuthResult:
-    """The identity check on the auth pool, bounded by AUTH_TIMEOUT_SECONDS. A full pool, a timeout or any fault is a transient result:
-    the consumer answers 1013 and counts nothing."""
+async def authenticate_async(token, agent_id, pool: str = "auth") -> EndpointAuthResult:
+    """The identity check on the auth pool (the re-check passes pool="recheck", so a connect flood cannot starve it), bounded by
+    AUTH_TIMEOUT_SECONDS. A full pool, a timeout or any fault is a transient result: the consumer answers 1013 and counts nothing."""
     try:
-        return await asyncio.wait_for(run_in_pool("auth", _auth_job, token, agent_id), timeout=AUTH_TIMEOUT_SECONDS)
+        return await asyncio.wait_for(run_in_pool(pool, _auth_job, token, agent_id), timeout=AUTH_TIMEOUT_SECONDS)
     except PoolFull:
         return _transient("busy")
     except asyncio.TimeoutError:
@@ -435,6 +440,49 @@ async def authenticate_async(token, agent_id) -> EndpointAuthResult:
     except Exception:
         logger.warning("The endpoint auth pool failed.", exc_info=True)
         return _transient("unavailable")
+
+
+# ------------------------------------------------------------------------------------------------ open files
+_OPEN_FILES_LOCK = threading.Lock()
+_OPEN_FILES_DONE = [False]
+
+
+def serves_asgi() -> bool:
+    """True when this process is an ASGI server (uvicorn, daphne or hypercorn is already imported), so Celery workers and manage.py
+    commands are left alone."""
+    return any(name in sys.modules for name in ("uvicorn", "daphne", "hypercorn"))
+
+
+def raise_open_file_limit():
+    """Raise the process's open-file SOFT limit to min(hard, OPEN_FILES_TARGET), once per process (Core 1.17.93, AD-54 E2: Core code, no
+    server change). Every agent socket is one descriptor, and a soft limit of 1024 ran out near 968 agents ([Errno 24]) in the 29 October
+    2026 load test. Never lowers a limit, never touches the hard limit, never raises: a fault is one warning and start-up goes on.
+    Returns the new soft limit, or None when nothing changed."""
+    with _OPEN_FILES_LOCK:
+        if _OPEN_FILES_DONE[0]:
+            return None
+        _OPEN_FILES_DONE[0] = True
+        try:
+            import resource  # not on Windows
+        except ImportError:
+            logger.debug("The open-file limit is not available on this platform.")
+            return None
+        try:
+            soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+            target = OPEN_FILES_TARGET if hard == resource.RLIM_INFINITY else min(hard, OPEN_FILES_TARGET)
+            if soft == resource.RLIM_INFINITY or soft >= target:
+                return None
+            resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+        except Exception:
+            logger.warning("The open-file soft limit could not be raised.", exc_info=True)
+            return None
+        logger.info("The open-file soft limit was raised from %s to %s (hard limit %s).", soft, target, hard)
+        return target
+
+
+def reset_open_files_for_tests() -> None:
+    with _OPEN_FILES_LOCK:
+        _OPEN_FILES_DONE[0] = False
 
 
 # ------------------------------------------------------------------------------------------------ frames
@@ -635,7 +683,9 @@ def enqueue_event(agent_id: str, frame: dict) -> str:
 def record_endpoint_event(action: str, agent_id: str | None = None, *, reason: str | None = None, ip: str | None = None,
                           func: str | None = None, frame_id: str | None = None, refusal: bool = False) -> None:
     """One non-strict Core audit row for the socket. Sync (a database write). Never raises. Holds only the fields named here: never a
-    token, an Authorization header or a payload. A refusal whose agent id is not valid is written without one."""
+    token, an Authorization header or a payload. A refusal whose agent id is not valid is written without one. Runs on the audit pool, so
+    it drops a stale database connection before and after the write (Core 1.17.93), like the auth job."""
+    _close_db(False)
     try:
         from . import audit as audit_core
 
@@ -649,6 +699,8 @@ def record_endpoint_event(action: str, agent_id: str | None = None, *, reason: s
         )
     except Exception:
         logger.warning("The endpoint transport audit row could not be written (%s).", action, exc_info=True)
+    finally:
+        _close_db(False)
 
 
 # ------------------------------------------------------------------------------------------------ route
@@ -657,6 +709,7 @@ class _EndpointAgentRoute:
     never stops Tactical from starting (rule 1.15)."""
 
     async def __call__(self, scope, receive, send):
+        raise_open_file_limit()  # once per process; covers a server whose start-up detection missed
         try:
             from .endpoint_transport_consumer import EndpointAgentConsumer
 
@@ -880,18 +933,18 @@ def endpoint_transport_contract_metadata() -> dict[str, Any]:
         "one_connection": "One live connection per agent, across processes. A new connection closes the older one with 4409.",
         "close_codes": {
             "4401": "identity refused (reason in the audit row), or the Tactical agent or token is gone at a re-check. Only a real answer about identity: never a server-side fault",
-            "1013": "retry later (added in 1.17.92): a server-side fault while checking the token (database, cache, pool full or timeout). Not an identity answer and never counted against the address or the agent. Back off with jitter and connect again",
+            "1013": "retry later (added in 1.17.92): a server-side fault while checking the token (database, pool full or timeout), and since 1.17.93 also a cache pool that is full at connect and a re-check that got no identity answer for 16 minutes. Not an identity answer and never counted against the address or the agent. Back off with jitter and connect again",
             "4403": "the proxy reports a plain-text connection",
             "4408": "two pings went unanswered",
             "4409": "another connection for the same agent took over",
-            "4429": "more than 10 failed attempts from one address in a minute (an IPv6 address counts by its /64), more than 10 failed checks naming one agent id in a minute (read only after a failed check, so a valid token is never refused for this), or more than 20 frames in a second",
+            "4429": "more than 10 failed attempts from one address in a minute (an IPv6 address counts by its /64), more than 10 failed checks naming one agent id in a minute (read only after a failed check, so a valid token is never refused for this; since 1.17.93 this close writes an audit row), or more than 20 frames in a second",
             "1009": "a frame over 64 KB",
             "4503": "the endpoint consumer could not be loaded; Tactical itself still runs",
         },
-        "load_target": "Pass target of the 2 000 agent test (one address, real 60 s ping, ramp 20 ms): all connect, no 4401 or 4429 for a valid token, ping p95 under 2 s after the ramp, no HTTP 502 (or 502 only during the ramp, with the agents' back-off recovering all).",
-        "audit": "Non-strict Core rows (module core, provenance endpoint-transport): connect, disconnect, refusals (agent id presented, reason code, address), and each event (agent, func, frame id). The owner registration is memory only and writes no row. Never a token, an Authorization header or a payload.",
+        "load_target": "Pass target of the 2 000 agent test (one address, real 60 s ping, ramp 20 ms): all connect, no 4401 or 4429 for a valid token, ping p95 under 2 s after the ramp, no HTTP 502 (or 502 only during the ramp, with the agents' back-off recovering all). Core raises the process open-file soft limit to min(hard, 65536) so 2 000 sockets fit.",
+        "audit": "Non-strict Core rows (module core, provenance endpoint-transport): connect, disconnect, refusals (agent id presented, reason code, address; every refusal except the per-address 4429 limit close), and each event (agent, func, frame id). The owner registration is memory only and writes no row. Never a token, an Authorization header or a payload.",
         "core_does_not": "Core does not interpret messages, keep an agent record, store events, check a person's scope or run module code.",
-        "added_in": "1.0.0 (Core 1.17.90). Needs framework >=1.17.90. Additive: nothing existing changed. Core 1.17.92: no operation, signature or return shape changed (the version stays 1.0.0); the socket's limits changed (Core 1.17.92 shipped 600 per address and a 600 row budget; the rebuild restores the signed 10 failures per address a minute, keeps 10 per agent id, and audits every refusal), close code 1013 was added, and the identity check runs before any per-agent decision.",
+        "added_in": "1.0.0 (Core 1.17.90). Needs framework >=1.17.90. Additive: nothing existing changed. Core 1.17.92: no operation, signature or return shape changed (the version stays 1.0.0); the socket checks the identity before any per-agent decision, limits failed attempts to 10 a minute per address and 10 failed checks a minute per agent id, and adds close code 1013. Core 1.17.93: no operation, signature or return shape changed; 1013 also closes a socket whose re-check got no identity answer for 16 minutes and a connect when the cache pool is full; the per-agent 4429 writes an audit row; the process open-file soft limit is raised to min(hard, 65536).",
     }
 
 

@@ -107,7 +107,8 @@ async def case_agent():
         await c.connect()
         codes.append(c.closed[0])
     must(codes == [4401] * 10 + [4429], codes)
-    must(len(AUDITS) == 10, "the limited refusal writes no row")
+    # 1.17.93: the per-agent 4429 writes a row (reason rate_limited_agent); only the per-address 4429 stays rowless
+    must(len(AUDITS) == 11 and AUDITS[-1]["metadata"]["reason"] == "rate_limited_agent", "the per-agent limited refusal writes its row")
     good = make_consumer(headers=H.headers_for(real_ip="192.0.2.77"), channel="specific.agentgood")
     await good.connect()
     must(good.accepted and not good.closed, "a valid token for that agent id still connects (read only after a failed check)")

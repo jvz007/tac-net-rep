@@ -1,6 +1,6 @@
-# Endpoint agent transport (Core 1.17.90)
+# Endpoint agent transport (Core 1.17.90, 1.17.92, 1.17.93)
 
-Core 1.17.90 adds one websocket for the endpoint agent and one contract for the module that owns it. The capability is `core.endpoint_transport` 1.0.0. It needs framework 1.17.90 or later. Core 1.17.92 changes the socket's limits and adds close code 1013 (see Failed attempts, Close codes and Load test). No operation, signature or return shape changed, so the capability stays at 1.0.0.
+Core 1.17.90 adds one websocket for the endpoint agent and one contract for the module that owns it. The capability is `core.endpoint_transport` 1.0.0. It needs framework 1.17.90 or later. Core 1.17.92 checks the identity before any per-agent decision, limits failed attempts to 10 a minute per address and 10 failed checks a minute per agent id, and adds close code 1013. Core 1.17.93 raises the process open-file limit, makes the 10 minute re-check close 1013 after 16 minutes without an answer, closes 1013 when the cache pool is full, and writes an audit row for the per-agent 4429 (see Failed attempts, Pools and bursts, Open files and Close codes). No operation, signature or return shape changed, so the capability stays at 1.0.0.
 
 Core owns the connection and its security. The module `nats-comms` owns what the messages mean, the agent record, the events and the page. Core never reads `func`.
 
@@ -43,30 +43,31 @@ Core checks the identity first. A valid token is never refused because someone e
 | Limit | Value | Over it |
 |---|---|---|
 | Failed attempts from one address | 10 a minute (signed, AD-54). An IPv6 address counts by its /64. An IPv4 address counts exactly | 4429, no audit row |
-| Failed checks naming one agent id | 10 a minute. Counted only for an id that is a valid agent id, read only after a failed check | 4429, no audit row |
-| Refusal audit rows | Every refusal is written. No global budget | None |
+| Failed checks naming one agent id | 10 a minute. Counted only for an id that is a valid agent id, read only after a failed check | 4429, with an audit row (reason `rate_limited_agent`, since 1.17.93) |
+| Refusal audit rows | Every refusal is written, except the per-address 4429 close. No global budget | None |
 
 * The address limit is the signed 10 failures a minute. A good connect never counts, so a site with a thousand agents behind one address is not refused for valid tokens, until ten attempts from that address fail within a minute. A higher NAT limit and a row budget are proposals in `reviews/questions/core.md`, off until Johan signs an amendment.
-* The agent id limit is read after the check, never before it. Someone who presents a real agent's id can therefore not lock that agent out. The 11th failed check naming one id gets 4429. A valid token for that id still connects.
+* The agent id limit is read after the check, never before it. Someone who presents a real agent's id can therefore not lock that agent out. The 11th failed check naming one id gets 4429 and one audit row. A valid token for that id still connects.
 * Only failures count. The plaintext refusal counts as a failure. A server-side fault (1013) counts for nothing.
 
-The address is nginx's `X-Real-IP` (nginx sets it from `$remote_addr`, so a client cannot choose it), then the address ASGI reports. The leftmost `X-Forwarded-For` is client controlled, because uvicorn trusts every proxy on a unix socket, so Core never uses it. If the cache is down, the counters read as not limited and Core logs it: a token has 160 bits, so a missing counter does not make guessing possible.
+The address is nginx's `X-Real-IP` (nginx sets it from `$remote_addr`, so a client cannot choose it), then the address ASGI reports. The leftmost `X-Forwarded-For` is client controlled, because uvicorn trusts every proxy on a unix socket, so Core never uses it. If the cache is down (a real backend error), the counters read as not limited and Core logs it: a token has 160 bits, so a missing counter does not make guessing possible. A cache pool that is full is different (Core 1.17.93): the limiter could not be read or written, so Core closes 1013 with the reason `busy`, counts nothing, and never closes 4401 for a failure it could not count. A valid agent can get 1013 during a cache overload and retries with back-off.
 
 ### A fault is not a refusal (1013)
 
-When Core cannot check the token because of its own fault (a database error, a cache error, a timeout of 10 seconds, or the auth pool being full), it closes the socket with 1013 (retry later). It never closes 4401 for this and it counts nothing against the address or the agent. It writes at most one `custom:endpoint-refused` row with the reason `unavailable` or `busy` every 10 seconds. The agent should treat 1013 like a network error: wait, with jitter, then connect again.
+When Core cannot check the token because of its own fault (a database error, a timeout of 10 seconds, or the auth pool being full), it closes the socket with 1013 (retry later). It never closes 4401 for this and it counts nothing against the address or the agent. It writes at most one `custom:endpoint-refused` row with the reason `unavailable` or `busy` every 10 seconds. The agent should treat 1013 like a network error: wait, with jitter, then connect again.
 
-The 10 minute re-check follows the same rule. A fault at the re-check never closes the socket. Core tries again 30 seconds later. Only a real identity answer closes 4401.
+The 10 minute re-check follows the same rule for as long as the fault is short. A fault at the re-check does not close 4401. Core tries again 30 seconds later. Since 1.17.93 a fault no longer keeps the socket open for good: when the last good identity check is older than 960 seconds (10 minutes, up to 60 seconds of jitter and 5 minutes of grace), Core closes 1013 with one audit row (reason `identity_stale`) and the agent reconnects through a fresh check. A database outage over 16 minutes therefore closes the sockets 1013, and the agents back off and reconnect when the database is back. Only a real identity answer closes 4401. The re-check runs on its own small pool, so a connect flood cannot starve it.
 
 ### Pools and bursts
 
-The consumer never blocks the event loop and never uses the loop's default executor, which Tactical's own sockets share. Core owns four small pools, created on first use. Each counts what is in flight, and a full pool answers at once instead of queueing.
+The consumer never blocks the event loop and never uses the loop's default executor, which Tactical's own sockets share. Core owns five small pools, created on first use. Each counts what is in flight, and a full pool answers at once instead of queueing.
 
 | Pool | Threads | Backlog cap | Used for | When full |
 |---|---|---|---|---|
 | auth | 6 | 256 | the identity check (each job closes its database connection) | the connect closes 1013 |
-| cache | 8 | 2000 | counters, presence | the call reads as a cache fault |
-| audit | 2 | 1000 | audit rows | the row is dropped, with a throttled log line |
+| recheck | 2 | 4096 | the 10 minute identity re-check (same job as auth) | the re-check is retried 30 seconds later |
+| cache | 8 | 2000 | counters, presence | at connect the socket closes 1013 `busy`; elsewhere the call reads as a cache fault |
+| audit | 2 | 1000 | audit rows (each job drops a stale database connection before and after the write, since 1.17.93) | the row is dropped, with a throttled log line |
 | hand-over | 4 | 64 | the Celery hand-over of an event (no publish retry) | no ack; the agent resends |
 
 The first ping goes out 60 to 70 seconds after connect and the re-check 600 to 660 seconds after, so a fleet that connected in one ramp does not hit the database together. The connect audit row is written in the background.
@@ -127,7 +128,7 @@ transport = get_capability("core.endpoint_transport", version=">=1.0.0,<2.0.0")
 | Code | Meaning |
 |---|---|
 | 4401 | Identity refused, or the Tactical agent or token is gone at a re-check. Only ever an answer about identity |
-| 1013 | Retry later (Core 1.17.92). A server-side fault or a busy server while checking the token. Not counted. Back off with jitter |
+| 1013 | Retry later (Core 1.17.92). A server-side fault or a busy server while checking the token. Since 1.17.93 also a full cache pool at connect and a re-check with no identity answer for 16 minutes. Not counted. Back off with jitter |
 | 4403 | The proxy reports a plain-text connection |
 | 4400 | Too many invalid frames |
 | 4408 | Two pings went unanswered |
@@ -152,13 +153,31 @@ The 29 October 2026 test ran the load simulator against Core 1.17.90 and nats-co
 | uvicorn CPU peak | about 67% of one core |
 | Memory | 222 to 240 MB |
 
-Core 1.17.92 changes how Core behaves under that burst: the identity check comes first, a fault closes 1013 and is not counted, and the work runs on Core's own pools. Core 1.17.92 was not load tested on this PC. The re-test runs on the dev server.
+Core 1.17.92 changed how Core behaves under that burst: the identity check comes first, a fault closes 1013 and is not counted, and the work runs on Core's own pools. The 29 October evidence for the failures that remained is in the next section. Core 1.17.93 was not load tested on this PC. The re-test runs on the dev server.
 
 **Pass target:** 2 000 agents at the real 60 s ping, ramp 20 ms, from one address. All connect. No 4401 or 4429 for a valid token. Ping p95 under 2 s after the ramp. No 502s, or 502s only during the ramp with the agents' back-off recovering all.
 
+## Open files and the 2 000 agent target
+
+Every agent socket is one open file (a descriptor) in the uvicorn worker that holds it. The 29 October 2026 load test showed the limit was too low: the uvicorn process had a soft limit of 1024 and a hard limit of 524288. At about 968 sockets Core hit `[Errno 24]` (too many open files). Then psycopg could not resolve `localhost`, `authenticate_endpoint_agent` answered 1013 for 996 agents, and nginx returned 36 HTTP 502. nginx was not the cause: `worker_connections` was 4096 and the log held 0 "worker_connections are not enough" lines.
+
+**What Core does (1.17.93).** Core raises the process soft limit to the smaller of the hard limit and 65536, once per process. It does this in each uvicorn worker, when Core starts (only where uvicorn, daphne or hypercorn is loaded, so Celery workers and `manage.py` commands are left alone) and again at the first endpoint socket. It never lowers a limit and never touches the hard limit. A failure is one warning line and start-up goes on. There is no systemd or nginx change (AD-54 E2).
+
+**Rough budget.** One descriptor per agent socket, plus the database, Redis and broker connections, Core's pools' threads and the files the process has open. For 2 000 agents on one worker that is well under 4 096 descriptors, so the 65536 target leaves a wide margin.
+
+**How to verify.** On the server:
+
+```
+cat /proc/$(pgrep -f uvicorn | head -1)/limits | grep -i 'open files'
+```
+
+The soft value should read 65536 (not 1024). The journal holds one info line per worker: "The open-file soft limit was raised from 1024 to 65536 (hard limit 524288)."
+
+**If the hard limit is low.** A hard limit below about 4 096 cannot hold 2 000 agents with headroom. Raising a hard limit is a server change (systemd `LimitNOFILE`), so it goes to Johan (AD-54 E2) and Core does not do it.
+
 ## Audit
 
-Non-strict Core rows (module `core`, provenance `endpoint-transport`, object type `agent`): `custom:endpoint-connect`, `custom:endpoint-disconnect`, `custom:endpoint-refused` (the agent id presented, a reason code and the address), `custom:endpoint-event`. They are records of what happened on the channel, not a gate: a failed audit write is logged and the event still goes to the owner. A payload is never audited. A token is never audited.
+Non-strict Core rows (module `core`, provenance `endpoint-transport`, object type `agent`): `custom:endpoint-connect`, `custom:endpoint-disconnect`, `custom:endpoint-refused` (the agent id presented, a reason code and the address; written for every refusal except the per-address 4429 limit close), `custom:endpoint-event`. They are records of what happened on the channel, not a gate: a failed audit write is logged and the event still goes to the owner. A payload is never audited. A token is never audited.
 
 ## Test-only load seed
 

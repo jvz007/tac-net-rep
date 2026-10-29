@@ -179,8 +179,12 @@ class TecTacFrameworkConfig(AppConfig):
         # 1.17.90: the endpoint agent socket ws/tfd/endpoint-agent/ (AD-54). Its own guarded block: a fault here is logged and start-up
         # goes on, and a fault in the consumer later closes the socket 4503 and never stops Tactical.
         try:
-            from .endpoint_transport import install_endpoint_agent_route
+            from .endpoint_transport import install_endpoint_agent_route, raise_open_file_limit, serves_asgi
 
             install_endpoint_agent_route()
+            # 1.17.93: an ASGI worker holds one descriptor per agent socket; the default soft limit of 1024 ran out near 968 agents.
+            # Celery workers and manage.py commands are left alone. The route raises it again at the first socket (once per process).
+            if serves_asgi():
+                raise_open_file_limit()
         except Exception:
             logger.exception("Tec-Tac endpoint agent socket route installation failed")
