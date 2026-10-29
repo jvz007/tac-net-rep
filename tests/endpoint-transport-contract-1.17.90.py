@@ -244,7 +244,7 @@ meta = et.endpoint_transport_contract_metadata()
 must(meta["id"] == "core.endpoint_transport" and meta["version"] == "1.0.0", meta["version"])
 must(meta["operations"] == ["register_owner", "request", "send_many", "presence"], meta["operations"])
 must("framework >=1.17.90" in meta["added_in"] and "nats-comms" in meta["owner"], "version and owner named")
-for word in ("4401", "4429", "4409", "4503", "2000", "1 to 30"):
+for word in ("4401", "4429", "4409", "4503", "1013", "2000", "1 to 30"):
     must(word in repr(meta), word)
 tree = ast.parse((H.APP / "contracts.py").read_text(encoding="utf-8"))
 rows = next(ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "CORE_CONTRACTS")

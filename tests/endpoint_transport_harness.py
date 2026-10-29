@@ -65,6 +65,14 @@ class FakeCache:
         self.set(key, value, timeout)
         return True
 
+    def touch(self, key, timeout=None):
+        self._check()
+        self.touched = getattr(self, "touched", []) + [key]
+        if key not in self.data:
+            return False
+        self.timeouts[key] = timeout
+        return True
+
     def incr(self, key):
         self._check()
         if key not in self.data:
@@ -231,6 +239,9 @@ stub("rest_framework")
 stub("rest_framework.authtoken")
 stub("rest_framework.authtoken.models", Token=FakeToken)
 stub("celery", current_app=CELERY)
+DB = {"old": 0, "closed": 0, "fail_close": False}  # django.db stub: counts what the auth pool does per job
+stub("django.db", close_old_connections=lambda: DB.__setitem__("old", DB["old"] + 1),
+     connections=SimpleNamespace(close_all=lambda: DB.__setitem__("closed", DB["closed"] + 1)))
 stub("django.core.cache", cache=CACHE)
 
 # the stub package: real files, lazily imported collaborators are the stubs above
@@ -248,6 +259,10 @@ def reset():
     CACHE.timeouts.clear()
     CACHE.down = False
     CACHE.get_many_calls = 0
+    CACHE.touched = []
+    DB.update(old=0, closed=0)
+    et.reset_pools_for_tests()
+    et._TRANSIENT_LAST[0] = 0.0
     TOKENS.clear()
     CELERY.sent.clear()
     CELERY.fail = False
@@ -293,11 +308,19 @@ def make_consumer(headers=None, clock=None, channel="specific.c1"):
     c = consumer_module.EndpointAgentConsumer()
     c.scope = {"headers": headers if headers is not None else headers_for(), "client": ("10.0.0.1", 5000)}
     c.channel_name = channel
+    c._random = lambda: 0.0  # no jitter unless a test asks for it
     if clock is not None:
         c._clock = clock
         c._bucket = consumer_module._Bucket(clock)
     LAYER.consumers[channel] = c
     return c
+
+
+async def settle(consumer):
+    """Wait for the background tasks of a connection (the connect audit row is written off the connect path)."""
+    while consumer._bg:
+        await asyncio.gather(*list(consumer._bg))
+        await asyncio.sleep(0)  # let the done callbacks discard the finished tasks
 
 
 def run(coro):

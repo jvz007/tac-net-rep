@@ -59,6 +59,7 @@ c = make_consumer()
 
 async def case_connect():
     await connect(c)
+    await H.settle(c)
     must(c.accepted and not c.closed, (c.accepted, c.closed))
     must(c._watch is not None, "the watcher runs")
     value = CACHE.data[et.presence_key("agentone")]
@@ -93,7 +94,7 @@ run(refused(H.headers_for(token="e" * 40, agent_id="agentoff"), "inactive"))
 run(refused(H.headers_for(token=None), "malformed_token"))
 run(refused(H.headers_for(agent_id=None), "malformed_agent_id"))
 
-# the 11th failure from one address gets 4429, other addresses and good agents are not counted
+# the 11th failed check naming one agent id gets 4429 (1.17.92: per agent id, read after the check); a valid token from the same address still connects
 reset()
 add_agent("agentone", pk=1)
 
@@ -111,7 +112,10 @@ async def case_rate():
     await other.connect()
     must(not other.closed, "another address connects")
     await other.disconnect(1000)
-    # a successful connect never counted
+    same = make_consumer(channel="specific.same")
+    await same.connect()
+    must(same.closed == [4429], "the signed AD-54 limit (10 failures a minute per address) is read before the check, so a valid token from the failing address waits for the next minute")
+    # a refused or successful connect never counted
     must(CACHE.data[et._failure_key("203.0.113.9")] == 10, CACHE.data)
 
 
@@ -265,6 +269,7 @@ c = make_consumer()
 async def case_event():
     await c.connect()
     c._watch.cancel()
+    await H.settle(c)
     AUDITS.clear()
     H.ORDER.clear()
     CELERY.on_send = lambda name, args: H.ORDER.append("enqueue")
@@ -381,7 +386,7 @@ must(not any(m in repr(AUDITS) for m in H.SECRET_MARKERS), "no audit row holds a
 consumer_source = (H.APP / "endpoint_transport_consumer.py").read_text(encoding="utf-8")
 must("logger" in consumer_source and "self._token" in consumer_source and "log" not in consumer_source.split("self._token")[1].split("\n")[0].lower(), "the token is only kept")
 
-# ---------------------------------------------------------------- 1.17.90-1: the audit table cannot be grown without limit
+# ---------------------------------------------------------------- 1.17.90-1: the audit table cannot be grown without limit (limits as of 1.17.92)
 reset()
 add_agent("agentone", pk=1)
 
@@ -396,9 +401,9 @@ async def case_flood():
         u = make_consumer(headers=H.headers_for(token="c" * 40), channel=f"specific.u{i}")
         await u.connect()
         codes.append(u.closed[0])
-    must(codes[:10] == [4403] * 10 and codes[10:] == [4429] * 90, codes)
+    must(codes == [4403] * 10 + [4429] * 90, codes)  # the signed limit of 10 failures a minute per address
     rows = [a for a in AUDITS if a["action"] == "custom:endpoint-refused"]
-    must(len(rows) <= 11 and len(AUDITS) <= 11, len(AUDITS))
+    must(len(rows) == 10 and len(AUDITS) == 10, len(AUDITS))
     must(CACHE.data[et._failure_key("203.0.113.9")] == 10, "the plaintext refusal counts as a failure")
 
 

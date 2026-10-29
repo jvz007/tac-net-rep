@@ -1,4 +1,4 @@
-"""Core's endpoint agent transport (Core 1.17.90, AD-54, plan section 9A): one websocket, one identity check, one contract.
+"""Core's endpoint agent transport (Core 1.17.90; limiter order, dedicated pools and 1013 in 1.17.92, AD-54, plan section 9A): one websocket, one identity check, one contract.
 
 The endpoint agent is a native client that connects to /ws/tfd/endpoint-agent/ with Tactical's own agent token (the DRF token Tactical
 created at install) and its agent id. Core checks that pair against Tactical's own tables, keeps one live connection per agent, answers
@@ -18,6 +18,7 @@ row, a refusal text or a return value. Refusals carry a reason code only.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import hmac
 import importlib
 import ipaddress
@@ -41,6 +42,8 @@ SOCKET_PATH = "/ws/tfd/endpoint-agent/"
 GROUP_PREFIX = "tectac-ea-"
 PRESENCE_PREFIX = "tec-tac:ea:presence:"
 FAILURE_PREFIX = "tec-tac:ea:fail:"
+AGENT_FAILURE_PREFIX = "tec-tac:ea:failagent:"
+REFUSAL_ROWS_PREFIX = "tec-tac:ea:refusalrows:"
 AGENT_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,80}$")  # a Tactical agent id, within the channel group name alphabet
 TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9]{16,128}$")  # a DRF token is 40 hex characters; the bound is loose, the lookup is exact
 
@@ -52,10 +55,18 @@ CLOSE_PING_TIMEOUT = 4408
 CLOSE_RATE_LIMITED = 4429
 CLOSE_UNAVAILABLE = 4503
 CLOSE_TOO_BIG = 1009
+CLOSE_RETRY_LATER = 1013  # a server-side fault or a busy server: the agent backs off with jitter and tries again (never an identity answer)
 
-FAILURES_PER_MINUTE = 10
+FAILURES_PER_ADDRESS_PER_MINUTE = 10  # signed by AD-54 (plan 9A item 1): 10 failed attempts a minute per address (IPv6 grouped by its /64). Raising it needs a signed amendment
+FAILURES_PER_AGENT_PER_MINUTE = 10  # failed checks naming one agent id, read only after a failed check
+REFUSAL_ROWS_PER_MINUTE = 0  # global budget of custom:endpoint-refused audit rows a minute; 0 = off (every refusal is audited, as AD-54 signs). A number needs a signed amendment
 RECHECK_SECONDS = 600
+RECHECK_RETRY_SECONDS = 30  # after a transient fault at the re-check
+RECHECK_JITTER_SECONDS = 60
 PING_SECONDS = 60
+PING_JITTER_SECONDS = 10
+AUTH_TIMEOUT_SECONDS = 10.0
+TRANSIENT_ROW_SECONDS = 10
 MAX_UNANSWERED_PINGS = 2
 PRESENCE_SECONDS = 150
 MAX_FRAME_BYTES = 64 * 1024
@@ -82,6 +93,8 @@ REFUSAL_MESSAGES = {
     "agent_mismatch": "the token belongs to a different agent",
     "inactive": "the agent account is inactive",
     "lookup_failed": "the agent token could not be checked",
+    "unavailable": "the agent token could not be checked just now; try again shortly",
+    "busy": "the server is busy; try again shortly",
 }
 
 
@@ -95,18 +108,24 @@ class EndpointAuthResult:
     reason: str | None = None
     agent_pk: int | None = None
     agent_id: str | None = None
+    transient: bool = False  # a server-side fault, not an answer about identity: never counted, never closes 4401
 
 
 def _refused(reason: str) -> EndpointAuthResult:
     return EndpointAuthResult(False, reason)
 
 
+def _transient(reason: str = "unavailable") -> EndpointAuthResult:
+    return EndpointAuthResult(False, reason, transient=True)
+
+
 def authenticate_endpoint_agent(token, agent_id) -> EndpointAuthResult:
-    """Check an agent token and agent id against Tactical's own tables (AD-54 E5). Sync: call it through database_sync_to_async.
+    """Check an agent token and agent id against Tactical's own tables (AD-54 E5). Sync: the consumer runs it on the auth pool.
 
     Accepted only when ALL hold: the token is a Tactical agent token (rest_framework.authtoken Token), its user is linked to an agent
     (a dashboard user's token or a Knox session token has no agent or is not in this table), that agent's agent_id equals the one
-    presented exactly, and the user is active. Every other case is a refusal with a reason code. Reads Tactical's tables only."""
+    presented exactly, and the user is active. Every other case is a refusal with a reason code. A database or pool fault is not an answer
+    about identity: it returns ok False, reason unavailable and transient True (Core 1.17.92). Reads Tactical's tables only."""
     if not isinstance(agent_id, str) or not AGENT_ID_PATTERN.fullmatch(agent_id):
         return _refused("malformed_agent_id")
     if not isinstance(token, str) or not TOKEN_PATTERN.fullmatch(token):
@@ -130,8 +149,8 @@ def authenticate_endpoint_agent(token, agent_id) -> EndpointAuthResult:
             return _refused("inactive")
         return EndpointAuthResult(True, None, getattr(agent, "pk", None), stored)
     except Exception:
-        logger.exception("The endpoint agent token could not be checked; refusing.")
-        return _refused("lookup_failed")
+        logger.exception("The endpoint agent token could not be checked; answering retry-later.")
+        return _transient("unavailable")
 
 
 # ------------------------------------------------------------------------------------------------ headers, address, failure limit
@@ -199,15 +218,51 @@ def _cache():
     return cache
 
 
+def _address_key(ip: str) -> str:
+    """The key an address is counted under: an IPv4 address exactly, an IPv6 address by its /64 (one subscriber holds a whole /64, so
+    counting single IPv6 addresses would let one host rotate through them). Anything else is kept as given."""
+    try:
+        address = ipaddress.ip_address(ip)
+    except ValueError:
+        return str(ip)
+    if address.version == 6:
+        return str(ipaddress.ip_network(f"{address}/64", strict=False))
+    return str(address)
+
+
+def _minute() -> int:
+    return int(time.time() // 60)
+
+
 def _failure_key(ip: str) -> str:
-    return f"{FAILURE_PREFIX}{ip}:{int(time.time() // 60)}"
+    return f"{FAILURE_PREFIX}{_address_key(ip)}:{_minute()}"
+
+
+def _agent_failure_key(agent_id: str) -> str:
+    return f"{AGENT_FAILURE_PREFIX}{agent_id}:{_minute()}"
+
+
+def _bump(key: str) -> int:
+    """Add one to a per-minute counter (atomic in the cache) and return it. Raises on a cache fault: callers catch."""
+    cache = _cache()
+    cache.add(key, 0, timeout=120)
+    try:
+        return int(cache.incr(key))
+    except ValueError:
+        cache.add(key, 1, timeout=120)
+        return 1
+
+
+def _count(key: str) -> int:
+    return int(_cache().get(key, 0) or 0)
 
 
 def rate_limited(ip: str) -> bool:
-    """True when this address has had FAILURES_PER_MINUTE failed attempts in the current minute. Sync (reads the cache). A cache fault
-    reads as not limited and is logged: a token has 160 bits, so a missing counter does not make guessing possible."""
+    """True when this address (an IPv6 address by its /64) has had FAILURES_PER_ADDRESS_PER_MINUTE failed attempts in the current minute.
+    The signed pre-auth limit (AD-54, 10 a minute). Sync (reads the cache). A cache fault reads as not limited and is logged:
+    a token has 160 bits, so a missing counter does not make guessing possible."""
     try:
-        return int(_cache().get(_failure_key(ip), 0) or 0) >= FAILURES_PER_MINUTE
+        return _count(_failure_key(ip)) >= FAILURES_PER_ADDRESS_PER_MINUTE
     except Exception:
         logger.warning("The endpoint failure counter could not be read.", exc_info=True)
         return False
@@ -216,15 +271,170 @@ def rate_limited(ip: str) -> bool:
 def note_failure(ip: str) -> None:
     """Count one failed attempt for this address (failures only: a good connect never counts). Sync."""
     try:
-        cache = _cache()
-        key = _failure_key(ip)
-        cache.add(key, 0, timeout=120)
-        try:
-            cache.incr(key)
-        except ValueError:
-            cache.add(key, 1, timeout=120)
+        _bump(_failure_key(ip))
     except Exception:
         logger.warning("The endpoint failure counter could not be written.", exc_info=True)
+
+
+def agent_limited(agent_id: str) -> bool:
+    """True when failed checks naming this agent id have reached FAILURES_PER_AGENT_PER_MINUTE this minute. Read only AFTER a failed
+    check, never before one: an attacker who presents a real agent's id can therefore never lock that agent out. Sync. A fault reads as
+    not limited."""
+    if not isinstance(agent_id, str) or not AGENT_ID_PATTERN.fullmatch(agent_id):
+        return False
+    try:
+        return _count(_agent_failure_key(agent_id)) >= FAILURES_PER_AGENT_PER_MINUTE
+    except Exception:
+        logger.warning("The endpoint agent failure counter could not be read.", exc_info=True)
+        return False
+
+
+def note_agent_failure(agent_id: str) -> None:
+    """Count one FAILED check for this presented, pattern-valid agent id. Sync."""
+    if not isinstance(agent_id, str) or not AGENT_ID_PATTERN.fullmatch(agent_id):
+        return
+    try:
+        _bump(_agent_failure_key(agent_id))
+    except Exception:
+        logger.warning("The endpoint agent failure counter could not be written.", exc_info=True)
+
+
+def note_failed_check(ip: str, agent_id) -> bool:
+    """One call for a failed identity check, so the consumer makes one cache round trip: True when this agent id is over its limit (read
+    BEFORE this failure is counted, so the 11th failure is the first one refused with 4429), then counts the failure against the address
+    and the id. Sync."""
+    limited = agent_limited(agent_id)
+    note_failure(ip)
+    note_agent_failure(agent_id)
+    return limited
+
+
+def refusal_row_allowed() -> bool:
+    """True while fewer than REFUSAL_ROWS_PER_MINUTE refusal audit rows were written this minute, across all addresses and ids. Past it
+    no row is written and one summary line is logged. Bounds the audit table however many source addresses a flood uses. Sync. A cache
+    fault reads as allowed (and is logged). With the budget at 0 (the signed default) it is off and every refusal is written."""
+    if REFUSAL_ROWS_PER_MINUTE <= 0:
+        return True
+    try:
+        used = _bump(f"{REFUSAL_ROWS_PREFIX}{_minute()}")
+    except Exception:
+        logger.warning("The endpoint refusal row budget could not be read.", exc_info=True)
+        return True
+    if used == REFUSAL_ROWS_PER_MINUTE + 1:
+        logger.warning("More than %d endpoint refusals in a minute: further refusal audit rows this minute are not written.", REFUSAL_ROWS_PER_MINUTE)
+    return used <= REFUSAL_ROWS_PER_MINUTE
+
+
+_TRANSIENT_LAST = [0.0]
+
+
+def transient_row_allowed() -> bool:
+    """One 'unavailable' audit row per TRANSIENT_ROW_SECONDS per process, so a database fault under a burst cannot flood the table."""
+    now = time.time()
+    if now - _TRANSIENT_LAST[0] >= TRANSIENT_ROW_SECONDS:
+        _TRANSIENT_LAST[0] = now
+        return True
+    return False
+
+
+# ------------------------------------------------------------------------------------------------ dedicated worker pools
+class PoolFull(Exception):
+    """A dedicated pool has its backlog cap in flight: the caller answers at once instead of queueing."""
+
+
+class _BoundedPool:
+    """A small ThreadPoolExecutor, created on first use, with an in-flight counter (queued plus running) so a full pool refuses at once."""
+
+    def __init__(self, name: str, workers: int, backlog: int):
+        self.name, self.workers, self.backlog = name, workers, backlog
+        self._lock = threading.Lock()
+        self._executor: concurrent.futures.ThreadPoolExecutor | None = None
+        self.inflight = 0
+
+    def submit(self, func, /, *args, **kwargs) -> concurrent.futures.Future:
+        with self._lock:
+            if self.inflight >= self.backlog:
+                raise PoolFull(self.name)
+            if self._executor is None:
+                self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix=f"tectac-ea-{self.name}")
+            self.inflight += 1
+            executor = self._executor
+        try:
+            future = executor.submit(func, *args, **kwargs)
+        except Exception:
+            with self._lock:
+                self.inflight -= 1
+            raise
+        future.add_done_callback(self._done)
+        return future
+
+    def _done(self, _future) -> None:
+        with self._lock:
+            self.inflight -= 1
+
+    def shutdown(self) -> None:
+        with self._lock:
+            executor, self._executor = self._executor, None
+            self.inflight = 0
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+
+POOL_SPECS = {"auth": (6, 256), "cache": (8, 2000), "audit": (2, 1000), "handover": (4, 64)}  # name: (threads, backlog cap)
+_POOLS = {name: _BoundedPool(name, *spec) for name, spec in POOL_SPECS.items()}
+
+
+async def run_in_pool(name: str, func, /, *args, **kwargs):
+    """Run a blocking call on one of Core's own pools and await it. Never uses the event loop's default executor, which Tactical's own
+    sockets share. Raises PoolFull at once when the pool's backlog is full."""
+    future = _POOLS[name].submit(func, *args, **kwargs)
+    return await asyncio.wrap_future(future)
+
+
+def pool_inflight(name: str) -> int:
+    return _POOLS[name].inflight
+
+
+def reset_pools_for_tests() -> None:
+    for pool in _POOLS.values():
+        pool.shutdown()
+
+
+def _close_db(final: bool) -> None:
+    """Drop stale or broken Django connections held by this pool thread; after a job also close its connection, so six threads in every
+    uvicorn worker do not each keep a Postgres connection open. Guarded: the test stubs may have no django.db."""
+    try:
+        from django.db import close_old_connections, connections
+    except ImportError:
+        return
+    try:
+        close_old_connections()
+        if final:
+            connections.close_all()
+    except Exception:
+        logger.warning("The endpoint auth connection could not be closed.", exc_info=True)
+
+
+def _auth_job(token, agent_id) -> EndpointAuthResult:
+    _close_db(False)
+    try:
+        return authenticate_endpoint_agent(token, agent_id)
+    finally:
+        _close_db(True)
+
+
+async def authenticate_async(token, agent_id) -> EndpointAuthResult:
+    """The identity check on the auth pool, bounded by AUTH_TIMEOUT_SECONDS. A full pool, a timeout or any fault is a transient result:
+    the consumer answers 1013 and counts nothing."""
+    try:
+        return await asyncio.wait_for(run_in_pool("auth", _auth_job, token, agent_id), timeout=AUTH_TIMEOUT_SECONDS)
+    except PoolFull:
+        return _transient("busy")
+    except asyncio.TimeoutError:
+        return _transient("unavailable")
+    except Exception:
+        logger.warning("The endpoint auth pool failed.", exc_info=True)
+        return _transient("unavailable")
 
 
 # ------------------------------------------------------------------------------------------------ frames
@@ -282,12 +492,20 @@ def set_presence(agent_id: str, since: str, owner: str = "") -> None:
     _cache().set(presence_key(agent_id), {"connected": True, "since": since, "owner": owner}, timeout=PRESENCE_SECONDS)
 
 
-def refresh_presence(agent_id: str, owner: str = "") -> None:
-    """Keep the key alive without taking it over: only while the cached owner is this connection. Sync."""
+def refresh_presence(agent_id: str, owner: str = "", since: str | None = None) -> None:
+    """Keep this connection's presence alive. Sync (the cache). The cached owner is this connection: touch the key (atomic, the value is
+    never rewritten, so a late refresh cannot overwrite a newer connection's value). The key is missing (Redis restarted or evicted it):
+    cache.add re-creates it with this connection's own ``since`` and owner (atomic SETNX). A different live owner is left alone. The
+    consumer never calls this for a superseded connection, so a superseded connection never re-acquires."""
     cache = _cache()
-    current = cache.get(presence_key(agent_id))
-    if isinstance(current, dict) and current.get("owner") == owner:
-        cache.set(presence_key(agent_id), current, timeout=PRESENCE_SECONDS)
+    key = presence_key(agent_id)
+    current = cache.get(key)
+    if isinstance(current, dict):
+        if current.get("owner") == owner:
+            cache.touch(key, PRESENCE_SECONDS)
+        return
+    if since is not None:
+        cache.add(key, {"connected": True, "since": since, "owner": owner}, timeout=PRESENCE_SECONDS)
 
 
 def clear_presence(agent_id: str, owner: str = "") -> bool:
@@ -398,15 +616,16 @@ def _register_owner(module_id: str, event_task_path: str) -> dict:
 
 
 def enqueue_event(agent_id: str, frame: dict) -> str:
-    """Hand an agent event to the owner's Celery task with (agent_id, frame). Sync and blocking (a broker call): the consumer runs it in a
-    worker thread under a timeout. Returns ok, no_owner or failed. Never raises."""
+    """Hand an agent event to the owner's Celery task with (agent_id, frame). Sync and blocking (a broker call): the consumer runs it on the
+    HANDOVER pool under a timeout, so a broker outage takes no thread from the default executor. No publish retry. Returns ok, no_owner or
+    failed. Never raises."""
     owner = get_owner()
     if owner is None:
         return "no_owner"
     try:
         from celery import current_app
 
-        current_app.send_task(owner["task_name"], args=(agent_id, frame))
+        current_app.send_task(owner["task_name"], args=(agent_id, frame), retry=False)
         return "ok"
     except Exception:
         logger.warning("The endpoint event could not be queued for its owner.", exc_info=True)
@@ -660,17 +879,19 @@ def endpoint_transport_contract_metadata() -> dict[str, Any]:
         "events": "An agent event frame is handed to the owner's registered task with (agent_id, frame), one audit row is written (agent, func, id; never the payload) and only then does Core send the ack (type ack, same id). With no owner registered, or when the hand-over fails, Core sends no ack: the agent keeps the event and resends after it reconnects.",
         "one_connection": "One live connection per agent, across processes. A new connection closes the older one with 4409.",
         "close_codes": {
-            "4401": "identity refused (reason in the audit row), or the Tactical agent or token is gone at a re-check",
+            "4401": "identity refused (reason in the audit row), or the Tactical agent or token is gone at a re-check. Only a real answer about identity: never a server-side fault",
+            "1013": "retry later (added in 1.17.92): a server-side fault while checking the token (database, cache, pool full or timeout). Not an identity answer and never counted against the address or the agent. Back off with jitter and connect again",
             "4403": "the proxy reports a plain-text connection",
             "4408": "two pings went unanswered",
             "4409": "another connection for the same agent took over",
-            "4429": "more than 10 failed attempts from one address in a minute, or more than 20 frames in a second",
+            "4429": "more than 10 failed attempts from one address in a minute (an IPv6 address counts by its /64), more than 10 failed checks naming one agent id in a minute (read only after a failed check, so a valid token is never refused for this), or more than 20 frames in a second",
             "1009": "a frame over 64 KB",
             "4503": "the endpoint consumer could not be loaded; Tactical itself still runs",
         },
+        "load_target": "Pass target of the 2 000 agent test (one address, real 60 s ping, ramp 20 ms): all connect, no 4401 or 4429 for a valid token, ping p95 under 2 s after the ramp, no HTTP 502 (or 502 only during the ramp, with the agents' back-off recovering all).",
         "audit": "Non-strict Core rows (module core, provenance endpoint-transport): connect, disconnect, refusals (agent id presented, reason code, address), and each event (agent, func, frame id). The owner registration is memory only and writes no row. Never a token, an Authorization header or a payload.",
         "core_does_not": "Core does not interpret messages, keep an agent record, store events, check a person's scope or run module code.",
-        "added_in": "1.0.0 (Core 1.17.90). Needs framework >=1.17.90. Additive: nothing existing changed.",
+        "added_in": "1.0.0 (Core 1.17.90). Needs framework >=1.17.90. Additive: nothing existing changed. Core 1.17.92: no operation, signature or return shape changed (the version stays 1.0.0); the socket's limits changed (Core 1.17.92 shipped 600 per address and a 600 row budget; the rebuild restores the signed 10 failures per address a minute, keeps 10 per agent id, and audits every refusal), close code 1013 was added, and the identity check runs before any per-agent decision.",
     }
 
 

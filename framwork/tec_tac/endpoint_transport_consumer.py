@@ -1,24 +1,27 @@
-"""The endpoint agent socket (Core 1.17.90). Loaded lazily by endpoint_transport._EndpointAgentRoute.
+"""The endpoint agent socket (Core 1.17.90; burst handling and limiter order 1.17.92). Loaded lazily by endpoint_transport._EndpointAgentRoute.
 
-Connect: headers from the scope, the failure limit, the identity check (once, in a worker thread), then the group tectac-ea-<agent_id>,
-the takeover message and the presence key. A watcher task re-checks the token every 10 minutes, pings every 60 seconds and closes after
-two unanswered pings. The receive loop never touches the database or the broker: the identity check, audit rows and the Celery hand-over
-run in worker threads and every wait is bounded.
+Connect: headers from the scope, the address ceiling, the identity check, and only then any per-agent decision (a valid token is never
+refused because someone else failed). Then the group tectac-ea-<agent_id>, the takeover message and the presence key. A watcher task
+re-checks the token every 10 minutes, pings every 60 seconds and closes after two unanswered pings (the first ping and the re-check are
+jittered, so a fleet that connected in one ramp does not hit the database together). The receive loop never touches the database, the
+cache or the broker: every blocking call runs on one of Core's own small pools (auth, cache, audit, hand-over; see endpoint_transport)
+and never on the event loop's default executor, which Tactical's own sockets share. A full pool answers at once.
 
-The socket is accepted before an identity refusal is closed, so the native client can read the close code (4401, 4429). Core logs no
+A server-side fault while checking the token closes 1013 (retry later) and counts nothing. 4401 is an identity answer only.
+
+The socket is accepted before a refusal is closed, so the native client can read the close code (4401, 4429, 1013). Core logs no
 frame, no payload, no token and no Authorization header. Close codes and limits: docs/endpoint-transport.md.
 """
 from __future__ import annotations
 
 import asyncio
-import functools
 import json
 import logging
+import random
 import time
 import uuid
 from datetime import datetime, timezone
 
-from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 
 from . import endpoint_transport as et
@@ -52,6 +55,8 @@ class EndpointAgentConsumer(AsyncWebsocketConsumer):
         super().__init__(*args, **kwargs)
         self._clock = time.monotonic  # replaced in tests
         self._sleep = asyncio.sleep
+        self._random = random.random  # replaced in tests
+        self._bg: set = set()
         self.agent_id = None
         self._token = None
         self._ip = "unknown"
@@ -72,54 +77,86 @@ class EndpointAgentConsumer(AsyncWebsocketConsumer):
         self._last_log = {}
 
     # -------------------------------------------------------------------------------------------- helpers
-    async def _off(self, func, *args, **kwargs):
-        """A plain blocking call (the cache, the broker) in a worker thread, never in the event loop."""
-        return await asyncio.get_running_loop().run_in_executor(None, functools.partial(func, *args, **kwargs))
+    async def _cache_call(self, func, *args, default=None):
+        """A blocking cache call on the CACHE pool. A fault or a full pool is logged (throttled) and gives ``default``."""
+        try:
+            return await et.run_in_pool("cache", func, *args)
+        except Exception:
+            logger.debug("An endpoint cache call failed.", exc_info=True)
+            self._throttled_log("cache", "An endpoint cache call could not be made (%s).", getattr(func, "__name__", "call"))
+            return default
 
     async def _audit(self, action, **kwargs):
+        """One non-strict audit row on the AUDIT pool. A full pool drops the row (throttled log line): rows are not a gate."""
         try:
-            await database_sync_to_async(et.record_endpoint_event)(action, **kwargs)
+            await et.run_in_pool("audit", et.record_endpoint_event, action, **kwargs)
+        except et.PoolFull:
+            self._throttled_log("audit_full", "The endpoint audit pool is full; an audit row was not written.")
         except Exception:
             logger.warning("The endpoint audit row could not be written.", exc_info=True)
 
-    def _throttled_log(self, key, message, *args):
+    def _spawn(self, coro):
+        task = asyncio.ensure_future(coro)
+        self._bg.add(task)
+        task.add_done_callback(self._bg.discard)
+        return task
+
+    async def _refusal_row(self, **kwargs):
+        """A refusal row, inside the global budget of REFUSAL_ROWS_PER_MINUTE."""
+        if await self._cache_call(et.refusal_row_allowed, default=True):
+            await self._audit("custom:endpoint-refused", ip=self._ip, refusal=True, **kwargs)
+
+    def _throttled_log(self, key, message, *args, **kwargs):
         now = self._clock()
         if now - self._last_log.get(key, -1e9) >= LOG_THROTTLE_SECONDS:
             self._last_log[key] = now
-            logger.warning(message, *args)
+            logger.warning(message, *args, **kwargs)
 
     async def _send_frame(self, frame):
         await self.send(text_data=json.dumps(frame, separators=(",", ":")))
 
     async def _refuse(self, code, reason, *, agent_id=None, audit=True):
-        """Accept, write the refusal row (unless audit is False) and close with the code, so the client can read it. The token is never
-        in the row."""
+        """Accept, close with the code (so the client can read it, and is not held by the audit write), then write the refusal row unless
+        audit is False or the row budget is spent. The token is never in the row."""
         await self.accept()
-        if audit:
-            await self._audit("custom:endpoint-refused", agent_id=agent_id, reason=reason, ip=self._ip, refusal=True)
         await self.close(code)
+        if audit:
+            await self._refusal_row(agent_id=agent_id, reason=reason)
+
+    async def _unavailable(self, result, agent_id):
+        """A server-side fault or a full pool: close 1013, count nothing, write at most a throttled non-strict row."""
+        await self.accept()
+        await self.close(et.CLOSE_RETRY_LATER)
+        if et.transient_row_allowed():
+            await self._audit("custom:endpoint-refused", agent_id=agent_id, reason=result.reason, ip=self._ip)
 
     # -------------------------------------------------------------------------------------------- connect and disconnect
     async def connect(self):
         scope = self.scope
         self._ip = et.client_ip(scope)
-        # The limiter comes first. An address over the limit is closed 4429 with no audit row, so an unauthenticated client cannot
-        # grow the audit table: at most FAILURES_PER_MINUTE refusal rows per address per minute.
-        if await self._off(et.rate_limited, self._ip):
+        # The address ceiling is a NAT-sized pre-auth bound. An address over it is closed 4429 with no audit row.
+        if await self._cache_call(et.rate_limited, self._ip, default=False):
             await self._refuse(et.CLOSE_RATE_LIMITED, "rate_limited", audit=False)
             return
         if et.forwarded_plaintext(scope):
-            await self._off(et.note_failure, self._ip)
+            await self._cache_call(et.note_failure, self._ip)
             await self._refuse(et.CLOSE_PLAINTEXT, "plaintext_refused")
             return
         token, agent_id, reason = et.parse_endpoint_headers(scope)
         result = None
         if reason is None:
-            result = await database_sync_to_async(et.authenticate_endpoint_agent)(token, agent_id)
+            # The identity check comes before any per-agent decision, so a valid token is never refused because someone else failed.
+            result = await et.authenticate_async(token, agent_id)
+            if result.transient:
+                await self._unavailable(result, agent_id)
+                return
             reason = None if result.ok else result.reason
         if reason is not None:
-            await self._off(et.note_failure, self._ip)
-            await self._refuse(et.CLOSE_UNAUTHORIZED, reason, agent_id=agent_id)
+            over = await self._cache_call(et.note_failed_check, self._ip, agent_id, default=False)
+            if over:
+                await self._refuse(et.CLOSE_RATE_LIMITED, "rate_limited", audit=False)
+            else:
+                await self._refuse(et.CLOSE_UNAUTHORIZED, reason, agent_id=agent_id)
             return
         if self.channel_layer is None:
             await self._refuse(et.CLOSE_UNAVAILABLE, "no_channel_layer", agent_id=agent_id)
@@ -131,12 +168,12 @@ class EndpointAgentConsumer(AsyncWebsocketConsumer):
         self._connected = True
         group = et.group_name(self.agent_id)
         await self.channel_layer.group_add(group, self.channel_name)
-        await self._off(et.set_presence, self.agent_id, self._since, self._owner)
+        await self._cache_call(et.set_presence, self.agent_id, self._since, self._owner)
         await self.channel_layer.group_send(group, {"type": "endpoint.takeover", "channel": self.channel_name})
         now = self._clock()
-        self._next_recheck = now + et.RECHECK_SECONDS
-        self._next_ping = now + et.PING_SECONDS
-        await self._audit("custom:endpoint-connect", agent_id=self.agent_id, ip=self._ip)
+        self._next_recheck = now + et.RECHECK_SECONDS + self._random() * et.RECHECK_JITTER_SECONDS
+        self._next_ping = now + et.PING_SECONDS + self._random() * et.PING_JITTER_SECONDS
+        self._spawn(self._audit("custom:endpoint-connect", agent_id=self.agent_id, ip=self._ip))
         self._watch = asyncio.ensure_future(self._watch_loop())
 
     async def disconnect(self, close_code):
@@ -155,10 +192,7 @@ class EndpointAgentConsumer(AsyncWebsocketConsumer):
         except Exception:
             logger.warning("The endpoint group could not be left.", exc_info=True)
         if not self._superseded:
-            try:
-                await self._off(et.clear_presence, self.agent_id, self._owner)
-            except Exception:
-                logger.warning("The endpoint presence could not be cleared.", exc_info=True)
+            await self._cache_call(et.clear_presence, self.agent_id, self._owner)
         await self._audit("custom:endpoint-disconnect", agent_id=self.agent_id, ip=self._ip, reason=str(close_code))
 
     # -------------------------------------------------------------------------------------------- the watcher
@@ -172,12 +206,17 @@ class EndpointAgentConsumer(AsyncWebsocketConsumer):
         """One pass of the watcher. False when the socket was closed. Tests drive it with an injected clock."""
         now = self._clock()
         if now >= self._next_recheck:
-            result = await database_sync_to_async(et.authenticate_endpoint_agent)(self._token, self.agent_id)
-            if not result.ok:
-                await self._audit("custom:endpoint-refused", agent_id=self.agent_id, reason=result.reason, ip=self._ip, refusal=True)
+            result = await et.authenticate_async(self._token, self.agent_id)
+            if result.transient:
+                # Not an answer about identity: the socket stays up and the re-check retries on a later tick.
+                self._throttled_log("recheck", "The endpoint token re-check could not be made (%s); it will be retried.", result.reason)
+                self._next_recheck = now + et.RECHECK_RETRY_SECONDS
+            elif not result.ok:
                 await self.close(et.CLOSE_UNAUTHORIZED)
+                await self._refusal_row(agent_id=self.agent_id, reason=result.reason)
                 return False
-            self._next_recheck = now + et.RECHECK_SECONDS
+            else:
+                self._next_recheck = now + et.RECHECK_SECONDS + self._random() * et.RECHECK_JITTER_SECONDS
         if now >= self._next_ping:
             if self._unanswered_pings >= et.MAX_UNANSWERED_PINGS:
                 await self.close(et.CLOSE_PING_TIMEOUT)
@@ -199,10 +238,10 @@ class EndpointAgentConsumer(AsyncWebsocketConsumer):
             logger.warning("The endpoint group could not be renewed.", exc_info=True)
 
     async def _refresh_presence(self):
-        try:
-            await self._off(et.refresh_presence, self.agent_id, self._owner)
-        except Exception:
-            logger.warning("The endpoint presence could not be refreshed.", exc_info=True)
+        """touch the key while this connection owns it, re-create it (atomic add) when it is gone; never for a superseded connection."""
+        if self._superseded:
+            return
+        await self._cache_call(et.refresh_presence, self.agent_id, self._owner, self._since)
 
     # -------------------------------------------------------------------------------------------- frames from the agent
     async def receive(self, text_data=None, bytes_data=None):
@@ -255,8 +294,8 @@ class EndpointAgentConsumer(AsyncWebsocketConsumer):
 
     async def _handle_event(self, frame):
         try:
-            outcome = await asyncio.wait_for(self._off(et.enqueue_event, self.agent_id, frame), timeout=et.ENQUEUE_TIMEOUT_SECONDS)
-        except asyncio.TimeoutError:
+            outcome = await asyncio.wait_for(et.run_in_pool("handover", et.enqueue_event, self.agent_id, frame), timeout=et.ENQUEUE_TIMEOUT_SECONDS)
+        except (asyncio.TimeoutError, et.PoolFull):
             outcome = "failed"
         if outcome != "ok":
             # No ack: the agent keeps the event in its outbox and resends after it reconnects.

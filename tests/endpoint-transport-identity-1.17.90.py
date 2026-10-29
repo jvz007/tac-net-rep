@@ -40,7 +40,7 @@ TOKENS["e" * 40] = FakeTokenRow("f" * 40, FakeUser("x", FakeAgent(9, "agentnine"
 must(et.authenticate_endpoint_agent("e" * 40, "agentnine").reason == "token_mismatch", "stored key must equal the presented one")
 
 
-# a database fault refuses (fail closed)
+# a database fault never accepts (fail closed) and is not an identity answer
 class _Raising:
     class objects:  # noqa: N801
         @staticmethod
@@ -49,7 +49,8 @@ class _Raising:
 
 
 sys.modules["rest_framework.authtoken.models"].Token = _Raising
-must(et.authenticate_endpoint_agent(TOKEN, "agentone").reason == "lookup_failed", "a fault refuses")
+fault = et.authenticate_endpoint_agent(TOKEN, "agentone")
+must(not fault.ok and fault.reason == "unavailable" and fault.transient, "a fault is transient, not an identity refusal (1.17.92)")
 sys.modules["rest_framework.authtoken.models"].Token = H.FakeToken
 
 # the comparison is constant time (hmac.compare_digest), not a plain ==
@@ -79,12 +80,12 @@ must(et.client_ip({"headers": []}) == "unknown", "nothing")
 must(et.forwarded_plaintext({"headers": [(b"x-forwarded-proto", b"http")]}) and not et.forwarded_plaintext({"headers": [(b"x-forwarded-proto", b"https")]})
      and not et.forwarded_plaintext({"headers": []}), "plain text only where the proxy says so")
 
-# the failure limit: 10 failures a minute from one address, then limited; another address and a new minute are free; a success never counts
+# the address ceiling (1.17.92): 10 failures a minute from one address (the signed AD-54 limit), then limited; another address and a new minute are free
 reset()
 ip = "203.0.113.9"
-for _ in range(9):
+for _ in range(et.FAILURES_PER_ADDRESS_PER_MINUTE - 1):
     et.note_failure(ip)
-    must(not et.rate_limited(ip), "under the limit")
+must(not et.rate_limited(ip), "under the ceiling")
 et.note_failure(ip)
 must(et.rate_limited(ip), "the 10 failures are counted; the next attempt is limited")
 must(not et.rate_limited("203.0.113.10"), "another address is free")

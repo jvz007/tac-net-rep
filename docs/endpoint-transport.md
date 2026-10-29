@@ -1,6 +1,6 @@
 # Endpoint agent transport (Core 1.17.90)
 
-Core 1.17.90 adds one websocket for the endpoint agent and one contract for the module that owns it. The capability is `core.endpoint_transport` 1.0.0. It needs framework 1.17.90 or later.
+Core 1.17.90 adds one websocket for the endpoint agent and one contract for the module that owns it. The capability is `core.endpoint_transport` 1.0.0. It needs framework 1.17.90 or later. Core 1.17.92 changes the socket's limits and adds close code 1013 (see Failed attempts, Close codes and Load test). No operation, signature or return shape changed, so the capability stays at 1.0.0.
 
 Core owns the connection and its security. The module `nats-comms` owns what the messages mean, the agent record, the events and the page. Core never reads `func`.
 
@@ -38,9 +38,38 @@ Core accepts the socket first and then closes a refusal with its code, so the ag
 
 ### Failed attempts
 
-Ten failed attempts from one address in a minute are allowed. The eleventh is closed with 4429. Only failures count. A good connect never does, so a fleet of agents behind one NAT cannot lock itself out. The plaintext refusal counts as a failure, and an address over the limit gets no audit row.
+Core checks the identity first. A valid token is never refused because someone else failed. Only after a failed check does Core look at how often an agent id failed.
 
-The address is nginx's `X-Real-IP` (nginx sets it from `$remote_addr`, so a client cannot choose it), then the address ASGI reports. The leftmost `X-Forwarded-For` is client controlled, because uvicorn trusts every proxy on a unix socket, so Core never uses it. If the cache is down, the counter reads as not limited and Core logs it: a token has 160 bits, so a missing counter does not make guessing possible.
+| Limit | Value | Over it |
+|---|---|---|
+| Failed attempts from one address | 10 a minute (signed, AD-54). An IPv6 address counts by its /64. An IPv4 address counts exactly | 4429, no audit row |
+| Failed checks naming one agent id | 10 a minute. Counted only for an id that is a valid agent id, read only after a failed check | 4429, no audit row |
+| Refusal audit rows | Every refusal is written. No global budget | None |
+
+* The address limit is the signed 10 failures a minute. A good connect never counts, so a site with a thousand agents behind one address is not refused for valid tokens, until ten attempts from that address fail within a minute. A higher NAT limit and a row budget are proposals in `reviews/questions/core.md`, off until Johan signs an amendment.
+* The agent id limit is read after the check, never before it. Someone who presents a real agent's id can therefore not lock that agent out. The 11th failed check naming one id gets 4429. A valid token for that id still connects.
+* Only failures count. The plaintext refusal counts as a failure. A server-side fault (1013) counts for nothing.
+
+The address is nginx's `X-Real-IP` (nginx sets it from `$remote_addr`, so a client cannot choose it), then the address ASGI reports. The leftmost `X-Forwarded-For` is client controlled, because uvicorn trusts every proxy on a unix socket, so Core never uses it. If the cache is down, the counters read as not limited and Core logs it: a token has 160 bits, so a missing counter does not make guessing possible.
+
+### A fault is not a refusal (1013)
+
+When Core cannot check the token because of its own fault (a database error, a cache error, a timeout of 10 seconds, or the auth pool being full), it closes the socket with 1013 (retry later). It never closes 4401 for this and it counts nothing against the address or the agent. It writes at most one `custom:endpoint-refused` row with the reason `unavailable` or `busy` every 10 seconds. The agent should treat 1013 like a network error: wait, with jitter, then connect again.
+
+The 10 minute re-check follows the same rule. A fault at the re-check never closes the socket. Core tries again 30 seconds later. Only a real identity answer closes 4401.
+
+### Pools and bursts
+
+The consumer never blocks the event loop and never uses the loop's default executor, which Tactical's own sockets share. Core owns four small pools, created on first use. Each counts what is in flight, and a full pool answers at once instead of queueing.
+
+| Pool | Threads | Backlog cap | Used for | When full |
+|---|---|---|---|---|
+| auth | 6 | 256 | the identity check (each job closes its database connection) | the connect closes 1013 |
+| cache | 8 | 2000 | counters, presence | the call reads as a cache fault |
+| audit | 2 | 1000 | audit rows | the row is dropped, with a throttled log line |
+| hand-over | 4 | 64 | the Celery hand-over of an event (no publish retry) | no ack; the agent resends |
+
+The first ping goes out 60 to 70 seconds after connect and the re-check 600 to 660 seconds after, so a fleet that connected in one ramp does not hit the database together. The connect audit row is written in the background.
 
 ### Frames
 
@@ -59,7 +88,7 @@ Text frames only. A frame is a JSON object:
 
 A new connection for an agent closes the older one with 4409, even across processes. Core pings every 60 seconds and closes with 4408 after two pings with no `pong`. The agent may ping too: Core answers `pong`.
 
-Presence is the cache key `tec-tac:ea:presence:<agent_id>` holding `{connected, since}` for 150 seconds. It is refreshed on connect and on every ping. A disconnect removes it only when that connection still owns it.
+Presence is the cache key `tec-tac:ea:presence:<agent_id>` holding `{connected, since}` for 150 seconds. It is set on connect and refreshed on every ping and pong. While the connection owns the key, the refresh only extends its life (it never rewrites the value, so a late refresh cannot overwrite a newer connection). When the key is gone (Redis restarted or evicted it), the refresh creates it again with that connection's own `since`, unless a newer connection took over. A different live owner is left alone. A disconnect removes the key only when that connection still owns it.
 
 ## Events
 
@@ -97,14 +126,35 @@ transport = get_capability("core.endpoint_transport", version=">=1.0.0,<2.0.0")
 
 | Code | Meaning |
 |---|---|
-| 4401 | Identity refused, or the Tactical agent or token is gone at a re-check |
+| 4401 | Identity refused, or the Tactical agent or token is gone at a re-check. Only ever an answer about identity |
+| 1013 | Retry later (Core 1.17.92). A server-side fault or a busy server while checking the token. Not counted. Back off with jitter |
 | 4403 | The proxy reports a plain-text connection |
 | 4400 | Too many invalid frames |
 | 4408 | Two pings went unanswered |
 | 4409 | Another connection for the same agent took over |
-| 4429 | Too many failed attempts from one address, or too many frames |
+| 4429 | More than 10 failed attempts from one address a minute (IPv6 by /64), more than 10 failed checks naming one agent id a minute, or more than 20 frames a second |
 | 1009 | A frame over 64 KB |
 | 4503 | The consumer could not be loaded. Tactical itself still runs |
+
+## Load test
+
+The 29 October 2026 test ran the load simulator against Core 1.17.90 and nats-comms 0.1.2 on the dev server, from one address.
+
+| Stage 3 | Result |
+|---|---|
+| Agents, ping, ramp | 2 000 agents, 60 s ping, 20 ms ramp, one address |
+| Opened (counting refusals) | 1968 of 2000 |
+| Connect p95 | 10.6 s |
+| Ping p95 | 6.6 s, 164 pings unanswered |
+| Close 4401 | 42 |
+| Close 4429 | 1129 |
+| HTTP 502 | 32 (nginx's answer to a slow upstream) |
+| uvicorn CPU peak | about 67% of one core |
+| Memory | 222 to 240 MB |
+
+Core 1.17.92 changes how Core behaves under that burst: the identity check comes first, a fault closes 1013 and is not counted, and the work runs on Core's own pools. Core 1.17.92 was not load tested on this PC. The re-test runs on the dev server.
+
+**Pass target:** 2 000 agents at the real 60 s ping, ramp 20 ms, from one address. All connect. No 4401 or 4429 for a valid token. Ping p95 under 2 s after the ramp. No 502s, or 502s only during the ramp with the agents' back-off recovering all.
 
 ## Audit
 

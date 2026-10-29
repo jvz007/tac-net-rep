@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.91",
+  "version": "1.17.92",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.17.91.md",
-      "size": 11881,
-      "sha256": "0c6c1f3727a1df277aebbce153506db00238226b50ae29e1fbcbc39dd53d3113"
+      "path": "RELEASE_NOTES_1.17.92.md",
+      "size": 9024,
+      "sha256": "a2ac1ab5dbc23bfe0fbb92075c63f37ecd6cd390ce035911bb85a7e2799551bc"
     },
     {
       "path": "VERSION",
       "size": 8,
-      "sha256": "e8011bbc92b6a1ba1247b1cd232ec0380e8765b3a0cbead187d0d850c107c991"
+      "sha256": "890e15256ac95ccfd4bee02a8f33d54bbda8048ab00a4bdd128223385b680a75"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -93,8 +93,8 @@
     },
     {
       "path": "docs/endpoint-transport.md",
-      "size": 7741,
-      "sha256": "21afd18f44cb2077cece7f55ec29e4aa8a9b9496698df19465b2f3fa1d4575f2"
+      "size": 12396,
+      "sha256": "abde1a6156fb1df3aa03d817c9ceeb0b9ab4a13f6633b4b1c781c2aad87b3893"
     },
     {
       "path": "docs/event-jobs.md",
@@ -1537,6 +1537,11 @@
       "sha256": "75ab9a22af1f1c0fbfe8dfcd23de4ce3cf5e85f4eeee245f0a80da27b879b75b"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.91.md",
+      "size": 11881,
+      "sha256": "0c6c1f3727a1df277aebbce153506db00238226b50ae29e1fbcbc39dd53d3113"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.2.0.md",
       "size": 1977,
       "sha256": "7d78abb704c7a3e459f7437cb0bdcc7ea738f76e97b925f2b4e16466a812cd54"
@@ -1983,13 +1988,13 @@
     },
     {
       "path": "framwork/tec_tac/endpoint_transport.py",
-      "size": 33306,
-      "sha256": "b39ca485de49fa1da79c103185540ace110cca1df02c7ca555abe4dd5d598107"
+      "size": 45201,
+      "sha256": "40e4728c7095b36ddba799e7941c14db0be8c6fbcb54c1e4ca775df475be483f"
     },
     {
       "path": "framwork/tec_tac/endpoint_transport_consumer.py",
-      "size": 14891,
-      "sha256": "37c395585700aa3a2de27f8ff8e2c04122ca980d29a2f6478cdc344a21bab2a2"
+      "size": 17573,
+      "sha256": "4a493145fc3279bfae3b314626bd4408a6e721b0df303cc90782c954fdbf80d4"
     },
     {
       "path": "framwork/tec_tac/event_jobs.py",
@@ -2829,7 +2834,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "21d100b8b735d6c1142311d141589e500bddfcafae1b16bde15e942f0d6dd528"
+      "sha256": "da950c62e6a0c746579d12df634677285f4d803f64cb62564d303f24d0b8cf8f"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -3327,24 +3332,44 @@
       "sha256": "98dbf8ed01a8b223f51fe3690188d48a2f34ba9a71ceb7b35f1268c914acce07"
     },
     {
+      "path": "tests/endpoint-transport-burst-1.17.92.py",
+      "size": 12538,
+      "sha256": "bca7a70ebb3d338d003da9b3978f9c62202344a1c4d338738e1fc9a093d42953"
+    },
+    {
       "path": "tests/endpoint-transport-consumer-1.17.90.py",
-      "size": 19748,
-      "sha256": "3c0dd0787f9a4c085fcb1c04c2edecb731653ddb94860156dd25f6555d0b42b8"
+      "size": 20185,
+      "sha256": "b21329d135b7049ad73abc7577a1988a1dc174634d7dc8e971cbe9d516b4b97b"
     },
     {
       "path": "tests/endpoint-transport-contract-1.17.90.py",
-      "size": 13657,
-      "sha256": "8ad356187fe28d21c26160ce7723b50ff755315f8e4575e859dcae39ac99f49d"
+      "size": 13665,
+      "sha256": "162c0057c0265e2aeb3d3212f39f1ce71c2476bd139f2159b2b15f4b4f924d84"
+    },
+    {
+      "path": "tests/endpoint-transport-docs-1.17.92.py",
+      "size": 3642,
+      "sha256": "a541434b6089887026e26f596580e8b376bf5c0149d480ab8dc10f70678aec34"
     },
     {
       "path": "tests/endpoint-transport-identity-1.17.90.py",
-      "size": 10487,
-      "sha256": "b4b3eb4beec1f8a0d6a9fa78e52e6558eae0fdc60482fb7a4dee08f109ef2762"
+      "size": 10661,
+      "sha256": "193fb635bfe648c19b6ec715a4cb82723afecc8b7b4c65507e4b701facbe2bec"
+    },
+    {
+      "path": "tests/endpoint-transport-limiter-1.17.92.py",
+      "size": 8591,
+      "sha256": "fa804618732a1257c09e391849ca7a8fd87ecb218121cb8333521c17b079c269"
     },
     {
       "path": "tests/endpoint-transport-loadseed-1.17.90.py",
       "size": 5489,
       "sha256": "0bf8410144d0872021a8cdeb902637b1eee3ed4b3840ee6ec1efc804ce70915f"
+    },
+    {
+      "path": "tests/endpoint-transport-retry-later-1.17.92.py",
+      "size": 7246,
+      "sha256": "465600d890bf801185c05dbd50e48d8d4bb0389e84b37b46b4e5d573ac153c48"
     },
     {
       "path": "tests/endpoint-transport-runtime-1.17.90.py",
@@ -3353,8 +3378,8 @@
     },
     {
       "path": "tests/endpoint_transport_harness.py",
-      "size": 9117,
-      "sha256": "84050f389204cdf28863c60e0840d6a31492902d3101209d82dd9852b0834683"
+      "size": 10463,
+      "sha256": "9bd6737395c215d444cabc929329de0564ff457ce1b785701dfe3cb6fe7061d3"
     },
     {
       "path": "tests/event-jobs-1.17.45.py",
