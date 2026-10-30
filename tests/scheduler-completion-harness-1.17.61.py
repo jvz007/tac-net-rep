@@ -109,6 +109,10 @@ class Query(list):
     def exists(self):
         return bool(self)
 
+    def delete(self):  # 1.17.97: the removed-schedule marker is cleared with .filter(...).delete()
+        for row in list(self):
+            row.delete()
+
     def values_list(self, *fields, flat=False):  # 1.17.63: the tick lists the ids of the enabled schedules
         return [getattr(r, fields[0]) for r in self]
 
@@ -230,6 +234,27 @@ Grant.objects = Manager()
 Grant.objects.model = Grant
 
 
+class RemovedSchedule(Model):
+    """1.17.97: the stand-in of TecTacRemovedSchedule (migration 0043)."""
+    defaults = dict(owner_module="", owner_key="", removed_by_username="", removed_at=None)
+
+    def delete(self):
+        RemovedSchedule.objects.rows.remove(self)
+
+
+class _RemovedManager(Manager):
+    def update_or_create(self, defaults=None, **lookup):
+        found = self.filter(**lookup).first()
+        if found is None:
+            return self.create(**lookup, **(defaults or {})), True
+        found.__dict__.update(defaults or {})
+        return found, False
+
+
+RemovedSchedule.objects = _RemovedManager()
+RemovedSchedule.objects.model = RemovedSchedule
+
+
 class State:
     @classmethod
     def current(cls):
@@ -273,7 +298,7 @@ mod("django.utils")
 mod("django.utils.timezone", now=lambda: NOW[0], is_naive=lambda v: v.tzinfo is None)
 pkg = mod("tec_tac")
 pkg.__path__ = [str(APP)]
-mod("tec_tac.models", TecTacSchedule=Schedule, TecTacScheduleRun=Run, TecTacSchedulerConfig=Config, TecTacSchedulerState=State, TecTacDelegationGrant=Grant)
+mod("tec_tac.models", TecTacSchedule=Schedule, TecTacScheduleRun=Run, TecTacSchedulerConfig=Config, TecTacSchedulerState=State, TecTacDelegationGrant=Grant, TecTacRemovedSchedule=RemovedSchedule)
 QUEUED_IDS: list = []
 
 
@@ -484,6 +509,9 @@ completion = load("tec_tac.scheduler_completion", "scheduler_completion.py")
 sched = load("tec_tac.scheduler", "scheduler.py")
 sched._zone = lambda value: None
 tasks = load("tec_tac.tasks_real", "tasks.py")
+WORKER_GUARD = {"on": False}  # 1.17.97: the worker skips a run of a disabled or removed module; off here so the older tests reach the system-action layer
+_real_run_blocked_reason = tasks.run_blocked_reason
+tasks.run_blocked_reason = lambda *a, **k: _real_run_blocked_reason(*a, **k) if WORKER_GUARD["on"] else ""
 sa = load("tec_tac.system_actions", "system_actions.py")
 resolvers = load("tec_tac.scheduler_target_resolvers", "scheduler_target_resolvers.py")
 creation_scope = sys.modules["tec_tac.scheduler_creation_scope"]
@@ -558,7 +586,7 @@ def make_run(action_id, module_id, *, user=None, owner="one-off", retries=0, sta
 
 def reset():
     del Schedule.objects.rows[:], Run.objects.rows[:], AUDITS[:], TASK_CALLS[:], SCOPE_CALLS[:], SAVES[:], QUEUED_IDS[:], TARGET_CALLS[:]
-    del Grant.objects.rows[:], ROW_CALLS[:]
+    del Grant.objects.rows[:], ROW_CALLS[:], RemovedSchedule.objects.rows[:]
     RESOLVED_MODULE_TARGETS.clear()
     AGENT_ROWS.clear()
     DESCRIPTORS.clear()

@@ -644,13 +644,46 @@ A manual run (Run now) of a declared `scheduler_person_actions` action now has a
 - Core writes one audit row (`run`, `run_as` = `clicker`) per run. The handler context also carries `started_by_username` for display only.
 - A manual run of any other action, and any scheduled run, is as before. A scheduled run still uses the creator.
 
-### A disabled module pauses its schedules (Core 1.17.86)
+### A disabled module pauses its schedules, and the API hides them (Core 1.17.86, 1.17.97)
 
-Needs framework >=1.17.86. Additive. Nothing changes for a handler.
+Needs framework >=1.17.86 (the pause) and >=1.17.97 (the bulk pause, one audit row per module change, the hide). Additive. Nothing changes for a handler.
 
-While a module is disabled, Core does not queue its schedules. This covers a schedule whose `module_id` or `owner_module` is that module. The schedule stays `enabled`, so a person's own off switch is never touched. Core sets `paused_reason` to `paused: module disabled` and writes one `disable` audit row (`paused` true, `disabled_module` names the module). It writes no row per tick. When the module is enabled again, Core clears `paused_reason`, writes one `enable` audit row and the schedule runs on its next occurrence under its missed policy. A schedule a person had switched off is never paused or resumed by Core. If the module state cannot be read, Core skips the module's schedules for that tick and changes nothing.
+While a module is disabled, Core does not queue its schedules. This covers a schedule whose `module_id` or `owner_module` is that module. The schedule stays `enabled`, so a person's own off switch is never touched. Core sets `paused_reason` to `paused: module disabled`. When the module is enabled again, Core clears exactly the `paused_reason` it set and the schedule runs on its next occurrence under its missed policy. A schedule a person had switched off is never paused or resumed by Core, and `updated_at` is never written by a pause or a resume (1.17.87): the occurrence that fell inside the pause still runs, or is written as a missed row, under the missed policy.
 
-The schedule API and `get_owned_schedule` gain `paused` (true only for an enabled schedule Core paused) and `paused_reason` (a string or null). `next_run_at` is null while paused. Core pauses only for the module that owns the schedule (its `module_id` or `owner_module`). It does not pause a schedule because a module the owner depends on is disabled: for example, a disabled Network Probe does not pause `checks.provider-run`, which belongs to Checks. A module whose schedule depends on another module must skip or pause that schedule itself when the other module is disabled (Checks does this with a clean skip). Since 1.17.87 a pause or resume does not change the schedule's `updated_at`, so the occurrence that fell inside the pause still runs, or is written as a missed row, under the missed policy.
+Since 1.17.97 this is done in bulk by `scheduler.sync_module_schedule_state()`. The Scheduler tick calls it once at its start, and the schedule list calls it too, so the pause and its audit row never lag the root helper that wrote the module state. It writes ONE audit row per module change, not one per schedule and not one per tick: action `disable` (or `enable` when the module is back), object type `scheduler_module`, object id the module id, metadata `module_id`, `count` (how many schedules changed) and `paused_reason`. The per-schedule rows of 1.17.86 are gone.
+
+The schedules of a disabled module are hidden. `GET /api/tfd/scheduler/schedules/` leaves them out. `GET`, `PATCH` and `DELETE` of one answer 404, `POST .../run/` answers 404, and `GET /api/tfd/scheduler/runs/` leaves out their runs. The hide is read live from the module state at request time, not from `paused_reason`, so it does not wait for a tick. A run queued before the module was disabled never starts: Run now refuses a paused or hidden schedule (409 `schedule_paused`) and the worker ends such a queued run `skipped` with the plain reason "This schedule was not run because its module is disabled." (error type `ModuleUnavailable`); no handler runs. If the module state cannot be read, Core fails closed: module-bound schedules are hidden and skipped, nothing is written to the database, and the list answer carries `module_state_unreadable: true`. Core's own actions (`module_id` `tec-tac` or `core`) and legacy plugins are never paused or hidden.
+
+`get_owned_schedule` and the schedule API keep `paused` (true only for an enabled schedule Core paused) and `paused_reason` (a string or null). `next_run_at` is null while paused. Core pauses only for the module that owns the schedule (its `module_id` or `owner_module`). It does not pause a schedule because a module the owner depends on is disabled: for example, a disabled Network Probe does not pause `checks.provider-run`, which belongs to Checks. A module whose schedule depends on another module must skip or pause that schedule itself when the other module is disabled (Checks does this with a clean skip).
+
+### A module that is no longer installed (Core 1.17.97)
+
+Needs framework >=1.17.97. Additive.
+
+A schedule whose owner module is not installed (the module-owned schedule's `owner_module`, or a user schedule's action module) is not hidden. Core pauses it (`paused_reason` `paused: owner module not installed`), never runs it and never fails a run for it, and the schedule list shows it with three additive fields: `orphaned` (true), `owner_module_installed` (false) and `orphan_label` (`Owner module not installed`). `GET /api/tfd/scheduler/schedules/?orphaned=true|false` filters on it. "Installed" is read from the module registry. If the registry cannot be read, or lists no module at all, every module counts as installed, so nothing destructive is ever offered on an error.
+
+Scheduler managers can switch such a schedule off or remove it:
+
+| Route | What it does |
+|---|---|
+| `GET /api/tfd/scheduler/orphaned/` | the modules that are not installed but still own schedules, with counts (`modules`, `out_of_scope`, `registry_unreadable`) |
+| `POST /api/tfd/scheduler/orphaned/<id>/disable/` | switches one schedule off |
+| `DELETE /api/tfd/scheduler/orphaned/<id>/` | removes one schedule |
+| `POST /api/tfd/scheduler/orphaned/modules/<module_id>/disable/` | switches off every schedule of the module (body `confirm: true`) |
+| `DELETE /api/tfd/scheduler/orphaned/modules/<module_id>/` | removes every schedule of the module (body `confirm: true`) |
+
+Every route needs the Scheduler manager right (403 otherwise) and re-checks that the module is still not installed (409 `owner_module_installed`). A schedule with a queued or running run answers 409 `active_runs`; there is no force. A bulk call without `confirm: true` is a 400. A row outside the caller's target scope is skipped and counted (`skipped_out_of_scope`). Every call writes a strict audit row (the owner module and key and the schedule id for one schedule; the module id, the `count` and the ids for a bulk call); if the row cannot be written, nothing changes (503). The plain Yes or No dialog is the UI's.
+
+### Module developers: a removed schedule is remembered (Core 1.17.97)
+
+When an administrator removes a module-owned schedule, Core remembers it (table `TecTacRemovedSchedule`, migration 0043). A module that calls `reconcile_schedule` on every start must not bring it back by itself, so:
+
+- `reconcile_schedule(...)` WITHOUT `confirmed_by_request`, for an `(owner_module, owner_key)` an administrator removed, creates nothing, logs once and returns `None`. That is the answer it already gave for `enabled=False` when none exists, so no start-up code breaks. A key nobody removed behaves exactly as before.
+- `reconcile_schedule(..., confirmed_by_request=request)`, a person saving it in the module, creates the schedule normally and clears the marker.
+- `scheduler.removed_owned_schedule(owner_module, owner_key)` is a new read: `{removed_by_administrator: True, removed_at, removed_by_username}`, or `None`. Show "removed by an administrator" until a person saves the schedule in the module again.
+- `disable_owned_schedule` and `remove_owned_schedule` called by the module itself clear the marker.
+- A schedule that was only switched off, not removed, comes back exactly as it was when the module is installed again: Core clears the pause it set, `enabled` is untouched.
+- A schedule the module builds that no person ever saves (for example a system maintenance schedule) stays removed until a person saves it.
 
 ## Monthly on the nth weekday (Core 1.17.88)
 

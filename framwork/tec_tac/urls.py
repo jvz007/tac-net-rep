@@ -44,6 +44,8 @@ from .scheduler_views import (
     SchedulerActionListView, SchedulerListView, SchedulerDetailView,
     SchedulerRunNowView, SchedulerRunListView, SchedulerConfigView, SchedulerHealthView, SchedulerSelfTestView,
     SchedulerEventJobsView, SchedulerSystemActionConfirmationView,
+    SchedulerOrphanedListView, SchedulerOrphanedDisableView, SchedulerOrphanedRemoveView,
+    SchedulerOrphanedModuleDisableView, SchedulerOrphanedModuleRemoveView,
 )
 from .module_v2_views import (
     ModuleV2CatalogView, ModuleV2InspectView, ModuleV2StageView, ModuleV2InstallView,
@@ -108,6 +110,11 @@ urlpatterns = [
     path("scheduler/health/", SchedulerHealthView.as_view(), name="tec-tac-scheduler-health"),
     path("scheduler/event-jobs/", SchedulerEventJobsView.as_view(), name="tec-tac-scheduler-event-jobs"),
     path("scheduler/self-test/", SchedulerSelfTestView.as_view(), name="tec-tac-scheduler-self-test"),
+    path("scheduler/orphaned/", SchedulerOrphanedListView.as_view(), name="tec-tac-scheduler-orphaned"),
+    path("scheduler/orphaned/<uuid:schedule_id>/disable/", SchedulerOrphanedDisableView.as_view(), name="tec-tac-scheduler-orphaned-disable"),
+    path("scheduler/orphaned/<uuid:schedule_id>/", SchedulerOrphanedRemoveView.as_view(), name="tec-tac-scheduler-orphaned-remove"),
+    path("scheduler/orphaned/modules/<str:module_id>/disable/", SchedulerOrphanedModuleDisableView.as_view(), name="tec-tac-scheduler-orphaned-module-disable"),
+    path("scheduler/orphaned/modules/<str:module_id>/", SchedulerOrphanedModuleRemoveView.as_view(), name="tec-tac-scheduler-orphaned-module-remove"),
     path("scheduler/system-actions/confirmation/", SchedulerSystemActionConfirmationView.as_view(), name="tec-tac-scheduler-system-action-confirmation"),
 
     path("ui/context/", UiContextView.as_view(), name="tec-tac-ui-context"),

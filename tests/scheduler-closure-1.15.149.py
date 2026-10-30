@@ -147,7 +147,9 @@ sched_ns = {
     "recover_stale_runs": lambda current: [],
     "_recover_event_jobs_safely": lambda current: {},  # 1.17.45: the event job step of the tick
     "_module_state_for_tick": lambda: {},  # 1.17.86: the module state read once per tick
-    "_apply_module_pause": lambda sched, state: False,
+    "_apply_module_pause": lambda sched, state, visibility=None: False,
+    "ScheduleVisibility": lambda *a, **k: None,  # 1.17.97
+    "sync_module_schedule_state": lambda **k: {},
     "normalize_scheduler_targets": lambda targets: dict(targets),
     "_canonicalize_persisted_endpoint_identity": lambda targets: dict(targets),
     "_runtime_authorization_error": lambda sched: None,

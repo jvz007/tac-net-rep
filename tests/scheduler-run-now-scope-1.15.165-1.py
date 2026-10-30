@@ -99,6 +99,9 @@ def queue_manual_run(schedule, **_kw):
 def serialize_run(run):
     return {"id": run.id}
 
+ScheduleVisibility = lambda *a, **k: SimpleNamespace(hidden=lambda s: False, orphan_module=lambda s: "")  # 1.17.97
+_hide_if_module_disabled = lambda *a, **k: None
+CORE_REASONS = ()
 # Execute the production global repair helper and RunNow class.
 tree = ast.parse(VIEWS.read_text(encoding="utf-8"), filename=str(VIEWS))
 selected = []

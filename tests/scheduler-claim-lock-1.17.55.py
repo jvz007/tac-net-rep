@@ -45,10 +45,11 @@ class Run:
 
     def __init__(self):
         self.pk = "run-1"; self.status = Status.QUEUED
-        self.schedule = SimpleNamespace(id="s1", action_id="x.y", module_id="x", target_mode="snapshot")
+        self.schedule = SimpleNamespace(id="s1", action_id="x.y", module_id="x", owner_module="", target_mode="snapshot")
         self.action_id = ""; self.module_id = ""; self.target_mode_snapshot = ""
         self.parameters_snapshot = {}; self.retry_count_snapshot = 0
         self.started_at = None; self.finished_at = None; self.attempt = 0; self.error = ""; self.error_type = ""
+        self.owner_module = ""; self.owner_type = "user"  # 1.17.97: the worker reads them for its module guard
         self.saved = 0
 
     def save(self, **kw):
@@ -92,7 +93,8 @@ stub("tec_tac.capabilities", capability_status=None, CapabilityDisabled=type("A"
      CapabilityUnhealthy=type("D", (Exception,), {}))
 stub("tec_tac.scheduler", SchedulerError=Exception, SchedulerPermanentError=Exception, SchedulerTransientError=Exception,
      _runtime_authorization_error=None, effective_retry_delay_seconds=None, get_scheduled_action=lambda *a: None,
-     is_one_off_key=lambda k: False, _audit_schedule_row=lambda *a, **k: None, scheduled_person_action=lambda *a, **k: False, manual_person_action=lambda *a, **k: False)
+     is_one_off_key=lambda k: False, _audit_schedule_row=lambda *a, **k: None, scheduled_person_action=lambda *a, **k: False, manual_person_action=lambda *a, **k: False,
+     run_blocked_reason=lambda *a, **k: "")
 
 spec = importlib.util.spec_from_file_location("tec_tac.tasks_claim_probe", APP / "tasks.py")
 tasks = importlib.util.module_from_spec(spec)

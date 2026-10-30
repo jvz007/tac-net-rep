@@ -1133,6 +1133,11 @@ def _recover_event_jobs_safely(now: datetime) -> dict:
 
 
 PAUSED_MODULE_DISABLED = "paused: module disabled"
+PAUSED_OWNER_NOT_INSTALLED = "paused: owner module not installed"
+CORE_REASONS = (PAUSED_MODULE_DISABLED, PAUSED_OWNER_NOT_INSTALLED)  # the only paused_reason values Core writes, so the only ones it clears
+ORPHAN_LABEL = "Owner module not installed"
+CORE_OWN_MODULE_IDS = frozenset({"tec-tac", "core"})  # Core's own actions: never paused, hidden or orphaned (1.17.97)
+_UNREAD = object()
 
 
 def _module_state_for_tick():
@@ -1147,37 +1152,198 @@ def _module_state_for_tick():
     return None if not isinstance(state, dict) or state.get("_corrupt") else state
 
 
-def _disabled_owner_module(schedule, state) -> str:
-    """The id of the first module bound to the schedule (its action's module, then its owner) that is disabled, or ''. An unreadable state names the
-    action's module (fail closed)."""
+def _registry_ids():
+    """``(installed ids, legacy ids)`` from the module registry, or None when it cannot be read (1.17.97). An unreadable registry means every
+    module counts as installed, so nothing destructive is ever offered or paused on an error."""
+    try:
+        from . import registry
+
+        plugins = list(registry.get_plugins())
+        installed = frozenset(str(getattr(p, "plugin_id", "") or "") for p in plugins) - {""}
+        if not installed:
+            return None  # an empty list cannot be told from a read fault, so it is never taken as 'nothing is installed'
+        legacy = frozenset(str(getattr(p, "plugin_id", "") or "") for p in plugins if getattr(p, "legacy", False)) - {""}
+        return installed, legacy
+    except Exception:
+        logger.warning("The module registry could not be read; every module counts as installed.", exc_info=True)
+        return None
+
+
+def installed_module_ids():
+    """The ids of the installed modules (registry), plus Core's own ids and every legacy plugin (1.17.97), or None when the registry cannot be
+    read. None means 'treat every module as installed'."""
+    found = _registry_ids()
+    return None if found is None else frozenset(found[0] | CORE_OWN_MODULE_IDS)
+
+
+def hidden_module_ids(state, extra_ids=()):
+    """The ids of the disabled modules, read from a module state at request time (1.17.97): the modules the state records plus ``extra_ids``.
+    Core's own ids and legacy plugins are never named. An unreadable state (None) names none: the caller handles that case (module-bound
+    schedules are hidden, fail closed)."""
+    if state is None:
+        return frozenset()
     from . import module_state
 
-    ids = [m for m in dict.fromkeys((schedule.module_id, schedule.owner_module)) if m]
-    if state is None:
-        return ids[0] if ids else ""
-    for module_id in ids:
-        if not module_state.is_enabled(module_id, state):
-            return module_id
+    found = _registry_ids()
+    legacy = found[1] if found else frozenset()
+    candidates = set(state.get("modules") or {}) | {str(i) for i in extra_ids}
+    return frozenset(m for m in candidates if m and m not in CORE_OWN_MODULE_IDS and m not in legacy and not module_state.is_enabled(m, state))
+
+
+class ScheduleVisibility:
+    """What the module state and the module registry say about a schedule, read once (1.17.97).
+
+    ``kind`` answers ``""`` (an ordinary schedule), ``"disabled"`` (a module it belongs to is disabled, or the module state cannot be read: hidden
+    and paused) or ``"orphaned"`` (its owner module is not installed: shown, paused, offered Disable and Remove). Core's own ids and legacy
+    plugins are never either. A module that is not installed is orphaned, not disabled. ``read_state=False`` skips the module state (only the
+    orphan answer is then meaningful)."""
+
+    def __init__(self, state=_UNREAD, *, read_state: bool = True):
+        if state is _UNREAD:
+            state = _module_state_for_tick() if read_state else None
+            self.unreadable = bool(read_state and state is None)
+        else:
+            self.unreadable = state is None
+        self.state = state
+        found = _registry_ids()
+        self.installed, self.legacy = found if found is not None else (None, frozenset())
+        self._disabled: dict = {}
+
+    def _is_disabled(self, module_id: str) -> bool:
+        if module_id not in self._disabled:
+            from . import module_state
+
+            self._disabled[module_id] = bool(self.state is not None and not module_state.is_enabled(module_id, self.state))
+        return self._disabled[module_id]
+
+    def bound_ids(self, module_id, owner_module) -> list:
+        return [m for m in dict.fromkeys((module_id, owner_module)) if m and m not in CORE_OWN_MODULE_IDS and m not in self.legacy]
+
+    def orphan_module_of(self, module_id, owner_module, owner_type) -> str:
+        if self.installed is None:
+            return ""
+        owner = owner_module if owner_type == TecTacSchedule.OwnerType.MODULE else module_id
+        if not owner or owner in CORE_OWN_MODULE_IDS or owner in self.legacy or owner in self.installed:
+            return ""
+        return owner
+
+    def disabled_module_of(self, module_id, owner_module) -> str:
+        """The first module bound to the schedule that is disabled, '' when none; with an unreadable state the first bound module (fail closed)."""
+        ids = self.bound_ids(module_id, owner_module)
+        if self.unreadable:
+            return ids[0] if ids else ""
+        for bound in ids:
+            if self.installed is not None and bound not in self.installed:
+                continue
+            if self._is_disabled(bound):
+                return bound
+        return ""
+
+    def kind_of(self, module_id, owner_module, owner_type) -> str:
+        if self.orphan_module_of(module_id, owner_module, owner_type):
+            return "orphaned"
+        return "disabled" if self.disabled_module_of(module_id, owner_module) else ""
+
+    def kind(self, schedule) -> str:
+        return self.kind_of(schedule.module_id, schedule.owner_module, schedule.owner_type)
+
+    def orphan_module(self, schedule) -> str:
+        return self.orphan_module_of(schedule.module_id, schedule.owner_module, schedule.owner_type)
+
+    def hidden(self, schedule) -> bool:
+        return self.kind(schedule) == "disabled"
+
+    def responsible_module(self, schedule) -> str:
+        return self.orphan_module(schedule) or self.disabled_module_of(schedule.module_id, schedule.owner_module) or (self.bound_ids(schedule.module_id, schedule.owner_module) or [""])[0]
+
+    def hidden_run_filter(self):
+        """``(ids, keep_only_core)`` for a run query: leave out runs whose module_id or owner_module is in ``ids``; with an unreadable state keep only
+        Core's own, legacy and unbound runs (``keep_only_core``)."""
+        if self.unreadable:
+            return frozenset(), True
+        return frozenset(m for m in hidden_module_ids(self.state) if self.installed is None or m in self.installed), False
+
+
+def run_blocked_reason(module_id, owner_module="", owner_type="module", visibility=None) -> str:
+    """A plain reason why a run of this module's action must not start now, or '' (1.17.97). Used by the worker and by Run now."""
+    visibility = visibility or ScheduleVisibility()
+    kind = visibility.kind_of(module_id, owner_module, owner_type)
+    if kind == "orphaned":
+        return "This schedule was not run because the module that owns it is not installed."
+    if kind == "disabled":
+        return "This schedule was not run because the module state could not be read." if visibility.unreadable else "This schedule was not run because its module is disabled."
     return ""
 
 
-def _apply_module_pause(schedule, state) -> bool:
-    """True when the schedule must not run this tick because a module it belongs to is disabled (1.17.86, Johan).
+def sync_module_schedule_state(state=_UNREAD, visibility=None) -> dict:
+    """Bring ``paused_reason`` in line with the module state and the module registry for every schedule (1.17.97, Johan, 30 October 2026).
 
-    The schedule stays ``enabled`` (a person's own off switch is never touched); Core only sets ``paused_reason``, writes one audit row when it
-    pauses and one when it resumes, never one per tick. Only a schedule Core paused is resumed. An unreadable module state pauses nothing in the
-    database: the tick just skips the schedule."""
-    off = _disabled_owner_module(schedule, state)
-    if off:
-        if state is not None and schedule.paused_reason != PAUSED_MODULE_DISABLED:
-            schedule.paused_reason = PAUSED_MODULE_DISABLED
+    A schedule of a disabled module gets ``paused: module disabled``; one whose owner module is not installed gets ``paused: owner module not
+    installed``; Core clears exactly the reason it set once the module is enabled or installed again. ``enabled`` is never touched, so a schedule a
+    person switched off stays off and an enabled one runs again as it was, and ``updated_at`` is never written (it is the revision baseline). One
+    audit row per module change (action disable or enable, object type ``scheduler_module``) carries the count: never one row per schedule or per
+    tick. An unreadable module state pauses nothing in the database."""
+    visibility = visibility or ScheduleVisibility(state)
+    paused: dict = {}
+    resumed: dict = {}
+    for schedule in TecTacSchedule.objects.filter():
+        kind = visibility.kind(schedule)
+        if kind == "disabled" and visibility.unreadable:
+            continue  # nothing is decided, nothing is written
+        wanted = PAUSED_OWNER_NOT_INSTALLED if kind == "orphaned" else (PAUSED_MODULE_DISABLED if kind else "")
+        current = schedule.paused_reason or ""
+        if wanted:
+            if schedule.enabled and current != wanted:
+                schedule.paused_reason = wanted
+                schedule.save(update_fields=["paused_reason"])  # not updated_at: that is the revision baseline (1.17.87)
+                key = (visibility.responsible_module(schedule), wanted)
+                paused[key] = paused.get(key, 0) + 1
+        elif current in CORE_REASONS and not (visibility.unreadable and current == PAUSED_MODULE_DISABLED):
+            schedule.paused_reason = ""
+            schedule.save(update_fields=["paused_reason"])
+            key = (visibility.responsible_module(schedule), current)
+            resumed[key] = resumed.get(key, 0) + 1
+    for (module_id, reason), count in paused.items():
+        _audit_module_sync("disable", module_id, count, reason)
+    for (module_id, reason), count in resumed.items():
+        _audit_module_sync("enable", module_id, count, reason)
+    return {"paused": sum(paused.values()), "resumed": sum(resumed.values()), "state_unreadable": visibility.unreadable}
+
+
+def _audit_module_sync(action: str, module_id: str, count: int, reason: str) -> None:
+    """One audit row for a module change (best effort: a failed row is logged and the pause still stands)."""
+    from . import audit
+
+    off = "disabled" if reason == PAUSED_MODULE_DISABLED else "not installed"
+    message = (f"Core paused {count} schedule(s) because module {module_id} is {off}." if action == "disable"
+               else f"Core resumed {count} schedule(s) because module {module_id} is back.")
+    try:
+        audit.record(
+            actor=audit.service_audit_actor(module_id="core", service="scheduler", identity="module-schedule"), module_id="core", action=action,
+            object_type="scheduler_module", object_id=module_id, message=message,
+            metadata={"module_id": module_id, "count": count, "paused": action == "disable", "paused_reason": reason},
+        )
+    except Exception:
+        logger.exception("Tec-Tac audit row for a module schedule change could not be written")
+
+
+def _apply_module_pause(schedule, state, visibility=None) -> bool:
+    """True when the schedule must not run this tick because a module it belongs to is disabled or not installed (1.17.86, Johan; 1.17.97).
+
+    The schedule stays ``enabled`` (a person's own off switch is never touched); Core only sets ``paused_reason``. The audit row is written by
+    ``sync_module_schedule_state``, one per module change, never one per schedule. Only a reason Core set is cleared. An unreadable module state
+    pauses nothing in the database: the tick just skips the schedule."""
+    visibility = visibility or ScheduleVisibility(state)
+    kind = visibility.kind(schedule)
+    if kind:
+        wanted = PAUSED_OWNER_NOT_INSTALLED if kind == "orphaned" else PAUSED_MODULE_DISABLED
+        if not (kind == "disabled" and visibility.unreadable) and schedule.paused_reason != wanted:
+            schedule.paused_reason = wanted
             schedule.save(update_fields=["paused_reason"])  # not updated_at: that is the revision baseline (1.17.87)
-            _audit_schedule_row(None, schedule, "disable", f"Core paused this schedule because module {off} is disabled.", extra={"paused": True, "paused_reason": PAUSED_MODULE_DISABLED, "disabled_module": off})
         return True
-    if schedule.paused_reason:
+    if schedule.paused_reason in CORE_REASONS:
         schedule.paused_reason = ""
         schedule.save(update_fields=["paused_reason"])  # not updated_at: that is the revision baseline (1.17.87)
-        _audit_schedule_row(None, schedule, "enable", "Core resumed this schedule because its module is enabled again.", extra={"paused": False})
     return False
 
 
@@ -1191,7 +1357,11 @@ def dispatch_due_schedules(now: datetime | None = None) -> dict:
     stale = recover_stale_runs(now)
     event_jobs_result = _recover_event_jobs_safely(now)  # 1.17.45: isolated, so a fault there never stops the schedules below
     schedule_ids = list(TecTacSchedule.objects.filter(enabled=True).values_list("id", flat=True))
-    module_state_now = _module_state_for_tick()  # 1.17.86: read once per tick, not once per schedule
+    visibility_now = ScheduleVisibility()  # 1.17.86: the module state is read once per tick, not once per schedule (1.17.97: with the module registry)
+    try:
+        sync_module_schedule_state(visibility=visibility_now)  # 1.17.97: one audit row per module change, then the per-schedule check below
+    except Exception:
+        logger.exception("Pausing the schedules of disabled or removed modules failed; the tick goes on and skips them one by one.")
     try:
         for schedule_id in schedule_ids:
             try:
@@ -1203,7 +1373,7 @@ def dispatch_due_schedules(now: datetime | None = None) -> dict:
                     if not schedule.enabled:
                         continue
                     # 1.17.86: a disabled module's schedules wait; Core resumes exactly the ones it paused (see _apply_module_pause)
-                    if _apply_module_pause(schedule, module_state_now):
+                    if _apply_module_pause(schedule, None, visibility_now):
                         continue
                     try:
                         canonical_targets = normalize_scheduler_targets(schedule.targets or {})
@@ -1347,6 +1517,9 @@ def dispatch_due_schedules(now: datetime | None = None) -> dict:
 def queue_manual_run(schedule: TecTacSchedule, *, started_by=None):
     """Queue a Run now. 1.17.85: ``started_by`` (keyword-only, optional) is the signed-in person who pressed the button. Core stores them on the run and
     re-checks them live when a handler of a declared ``scheduler_person_actions`` action verifies its context. Without it a manual run has no person, as before."""
+    blocked = run_blocked_reason(schedule.module_id, schedule.owner_module, schedule.owner_type)  # 1.17.97: a paused or hidden schedule never starts
+    if blocked or getattr(schedule, "paused_reason", "") in CORE_REASONS:
+        raise SchedulerError(blocked or "This schedule is paused by Core, so it cannot be run now.")
     extra = {}
     if started_by is not None:
         extra = {"started_by": started_by, "started_by_username": str(getattr(started_by, "username", "") or "")[:150]}
@@ -1436,6 +1609,11 @@ def reconcile_schedule(*, owner_module: str, owner_key: str, action_id: str, sch
     with transaction.atomic():
         existing = TecTacSchedule.objects.select_for_update().filter(owner_module=module, owner_key=key).first()
         if not enabled and existing is None:
+            return None
+        if existing is None and confirmed_by_request is None and _removed_marker(module, key) is not None:
+            # 1.17.97: an administrator removed this schedule. A module that reconciles on every start must not bring it back; only a person's
+            # own save in the module does (confirmed_by_request). Answered as 'nothing was created', like enabled=False with none stored.
+            _log_removed_once(module, key)
             return None
 
         anchor = interval_anchor_at
@@ -1571,6 +1749,8 @@ def reconcile_schedule(*, owner_module: str, owner_key: str, action_id: str, sch
                 # the owner nor the stored scope.
                 schedule.creation_scope = scheduler_creation_scope.capture(person)
         schedule.save()
+        if person is not None:
+            _clear_removed_marker(module, key)  # 1.17.97: a person saved it in the module, so it is no longer 'removed by an administrator'
         if person is not None and (changed or owner_move or schedule_creator_names(schedule) != previous_names):
             _audit_schedule_row(
                 person, schedule, "add" if existing is None else "modify",
@@ -1795,9 +1975,59 @@ def _audit_schedule_row(person, schedule, action: str, message: str, *, strict: 
         logger.exception("Tec-Tac audit row for a module-owned schedule could not be written")
 
 
+_REMOVED_LOGGED: set = set()
+
+
+def _removed_marker_model():
+    from . import models
+
+    return models.TecTacRemovedSchedule
+
+
+def _removed_marker(owner_module: str, owner_key: str):
+    return _removed_marker_model().objects.filter(owner_module=owner_module, owner_key=owner_key).first()
+
+
+def _clear_removed_marker(owner_module: str, owner_key: str) -> None:
+    _removed_marker_model().objects.filter(owner_module=owner_module, owner_key=owner_key).delete()
+    _REMOVED_LOGGED.discard((owner_module, owner_key))
+
+
+def _log_removed_once(owner_module: str, owner_key: str) -> None:
+    if (owner_module, owner_key) not in _REMOVED_LOGGED:
+        _REMOVED_LOGGED.add((owner_module, owner_key))
+        logger.info("Schedule %s/%s was removed by an administrator; reconcile_schedule creates nothing until a person saves it in the module.", owner_module, owner_key)
+
+
+def removed_owned_schedule(owner_module: str, owner_key: str) -> dict | None:
+    """Was this module-owned schedule removed by an administrator? (1.17.97, additive) ``{removed_by_administrator: True, removed_at,
+    removed_by_username}``, or None when it was not. A module reads only its own tuple (the same trust as ``get_owned_schedule``). While the marker
+    holds, ``reconcile_schedule`` without a person's request creates nothing; a person's own save in the module (``confirmed_by_request``) clears it."""
+    module, key = _validate_owner(owner_module, owner_key)
+    marker = _removed_marker(module, key)
+    if marker is None:
+        return None
+    return {
+        "removed_by_administrator": True,
+        "removed_at": marker.removed_at.isoformat() if marker.removed_at else None,
+        "removed_by_username": marker.removed_by_username or None,
+    }
+
+
+def remember_removed_schedule(schedule, username: str) -> None:
+    """Remember that an administrator removed a module-owned schedule (1.17.97). Called inside the transaction that deletes it."""
+    if schedule.owner_type != TecTacSchedule.OwnerType.MODULE or not schedule.owner_module or not schedule.owner_key:
+        return  # a user-created schedule has no owner key: nothing for a module to be told
+    _removed_marker_model().objects.update_or_create(
+        owner_module=schedule.owner_module, owner_key=schedule.owner_key,
+        defaults={"removed_by_username": str(username or "")[:150], "removed_at": timezone.now()},
+    )
+
+
 def disable_owned_schedule(*, owner_module: str, owner_key: str) -> TecTacSchedule | None:
     module, key = _validate_owner(owner_module, owner_key)
     with transaction.atomic():
+        _clear_removed_marker(module, key)  # 1.17.97: the module itself acts, so it is no longer 'removed by an administrator'
         schedule = TecTacSchedule.objects.select_for_update().filter(owner_module=module, owner_key=key).first()
         if schedule is None:
             return None
@@ -1810,6 +2040,7 @@ def disable_owned_schedule(*, owner_module: str, owner_key: str) -> TecTacSchedu
 def remove_owned_schedule(*, owner_module: str, owner_key: str) -> bool:
     module, key = _validate_owner(owner_module, owner_key)
     with transaction.atomic():
+        _clear_removed_marker(module, key)  # 1.17.97: the module itself removes it, so no marker
         schedule = TecTacSchedule.objects.select_for_update().filter(owner_module=module, owner_key=key).first()
         if schedule is None:
             return False
@@ -2022,8 +2253,9 @@ def _serialize_completion(run: TecTacScheduleRun) -> dict | None:
     return {"state": state, "kind": (ref.get("kind") if isinstance(ref, dict) else None), "since": since.isoformat() if since else None}
 
 
-def serialize_schedule(schedule: TecTacSchedule, *, include_runs: bool = False) -> dict:
+def serialize_schedule(schedule: TecTacSchedule, *, include_runs: bool = False, visibility: ScheduleVisibility | None = None) -> dict:
     action = _ACTIONS.get(schedule.action_id)
+    orphan_module = (visibility or ScheduleVisibility(read_state=False)).orphan_module(schedule)
     latest = None if hasattr(schedule, "latest_status") else schedule.runs.first()
     payload = {
         "id": str(schedule.id),
@@ -2055,6 +2287,9 @@ def serialize_schedule(schedule: TecTacSchedule, *, include_runs: bool = False) 
         "enabled": schedule.enabled,
         "paused": bool(schedule.enabled and getattr(schedule, "paused_reason", "")),  # 1.17.86, additive: Core paused it because its module is disabled
         "paused_reason": (getattr(schedule, "paused_reason", "") or None) if schedule.enabled else None,
+        "orphaned": bool(orphan_module),  # 1.17.97, additive: the module that owns it is not installed
+        "owner_module_installed": not orphan_module,
+        "orphan_label": ORPHAN_LABEL if orphan_module else None,
         "missed_policy": schedule.missed_policy,
         "missed_grace_minutes": schedule.missed_grace_minutes,
         "concurrency_policy": schedule.concurrency_policy,

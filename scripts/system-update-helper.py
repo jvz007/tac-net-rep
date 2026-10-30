@@ -1219,14 +1219,16 @@ def _installer_refusal_reason(log_path):
     return reason[:300] or "the installer gave no reason"
 
 
-# 1.17.96: a rollback must not fail on a verification step. install.sh now exits INSTALL_VERIFY_FAILED_EXIT (79) with a
-# "[TEC-TAC-INSTALL] VERIFY-FAILED: <step>" line when one of its checks fails after the files are in place. The installer a rollback runs is
-# the previous version's (it exits 1 and writes "[TEC-TAC] ERROR: <step> verification failed or timed out."), so the same failure is also
-# recognised from that text, but only for the known steps below and only in what the rollback installer itself wrote. Any other failure
-# (a restore error, another exit status, another error text) stays a real ROLLBACK FAILED.
+# 1.17.96, narrowed in 1.17.97: a rollback must not fail only because one of the installer's verification steps TIMED OUT. install.sh exits
+# INSTALL_VERIFY_FAILED_EXIT (79) with a "[TEC-TAC-INSTALL] VERIFY-FAILED: Verifying <step>" line when a check fails after the files are in place,
+# and run_verify_step logs "VERIFY STEP FAILED: <step> (timed out after N s; ...)" when that check hit its time limit (exit 124). Only that pair,
+# for the same step, in what the rollback installer itself wrote, is a warning. A check that failed for any other reason (a model or RBAC
+# assertion, a missing route, a registry assertion) means the restored Core may not load, so it is a real ROLLBACK FAILED, like a restore error,
+# another exit status, no marker, or the old installer's text (exit 1 and "ERROR: ... verification failed or timed out."), which cannot prove a
+# timeout. All 12 verification steps run before install.sh restarts the services, so "timeout only" is the whole rule.
 INSTALL_VERIFY_FAILED_EXIT = 79
 INSTALLER_VERIFY_MARKER = "[TEC-TAC-INSTALL] VERIFY-FAILED:"
-INSTALLER_ERROR_MARKER = "[TEC-TAC] ERROR:"
+INSTALLER_VERIFY_STEP_FAILED = "VERIFY STEP FAILED:"
 INSTALLER_VERIFY_STEPS = (
     "Framework model/RBAC",
     "Framework API route",
@@ -1241,7 +1243,6 @@ INSTALLER_VERIFY_STEPS = (
     "Core Tactical operations capability",
     "Core Tactical websocket ticket capability",
 )
-INSTALLER_VERIFY_SUFFIXES = (" verification failed or timed out.", " registration failed or timed out.", " verification failed.")
 
 
 def _log_size(log_path):
@@ -1265,25 +1266,29 @@ def _log_tail_lines(log_path, since):
 
 
 def _rollback_verification_step(rc, log_path, since):
-    """The label of the verification step the rollback installer stopped at, or None when its failure was anything else."""
+    """The label of the verification step that TIMED OUT in the rollback installer, or None for any other failure (1.17.97).
+
+    A warning needs all of: exit status 79, the "[TEC-TAC-INSTALL] VERIFY-FAILED: Verifying <step>" marker, and the installer's own
+    "VERIFY STEP FAILED: <step> (timed out after N s ..." line for that same step, all written after byte offset ``since``. Nothing else counts: no
+    marker, a step that failed without a timeout, a timeout line of another step, or the old installer's text (exit 1) is a failed rollback."""
+    if rc != INSTALL_VERIFY_FAILED_EXIT:
+        return None
     lines = _log_tail_lines(log_path, since)
-    if rc == INSTALL_VERIFY_FAILED_EXIT:
-        for line in reversed(lines or []):
-            if INSTALLER_VERIFY_MARKER in line:
-                label = re.sub(r"\s+", " ", line.split(INSTALLER_VERIFY_MARKER, 1)[1]).strip()
-                if label:
-                    return label[:200]
-        return "an installer verification step"
-    if rc != 1 or not lines:
+    if not lines:
         return None
-    errors = [line for line in lines if INSTALLER_ERROR_MARKER in line]
-    if not errors:
+    step = ""
+    for line in reversed(lines):
+        if INSTALLER_VERIFY_MARKER in line:
+            label = re.sub(r"\s+", " ", line.split(INSTALLER_VERIFY_MARKER, 1)[1]).strip()
+            if label.startswith("Verifying "):
+                step = label[len("Verifying "):].strip()
+            break
+    if not step or step not in INSTALLER_VERIFY_STEPS:
         return None
-    text = re.sub(r"\s+", " ", errors[-1].split(INSTALLER_ERROR_MARKER, 1)[1]).strip()
-    for suffix in INSTALLER_VERIFY_SUFFIXES:
-        if text.endswith(suffix) and text[: -len(suffix)] in INSTALLER_VERIFY_STEPS:
-            return "Verifying " + text[: -len(suffix)]
-    return None
+    timed_out = f"{INSTALLER_VERIFY_STEP_FAILED} {step} (timed out after "
+    if not any(timed_out in line for line in lines):
+        return None
+    return "Verifying " + step
 
 
 def run_install(component, target, log):
@@ -1545,7 +1550,11 @@ def run_job(job_id):
                         job["rollback"] = {
                             "performed": True, "status": "warning", "version": old_version, "warning": verification_warning,
                             "installer_exit_status": rollback_rc,
-                            "advice": f"Restart the Tec-Tac services and check {verification_warning}.",
+                            # 1.17.97: the installer stopped at that step, so what comes after it did not run
+                            "incomplete_stages": ["helper scripts", "timers", "service restart"],
+                            "restart": "systemctl restart rmm daphne celery celerybeat",
+                            "advice": (f"{verification_warning} timed out, so the installer stopped there. The helper scripts, the timers and the restart of the "
+                                       f"Tec-Tac services may not have run. Restart the services (rmm, daphne, celery, celerybeat) and check {verification_warning}."),
                         }
                         log.write(f"[TEC-TAC-UPDATE] restored {old_version}, verification warning: {verification_warning}\n")
                 except Exception as rb_exc:

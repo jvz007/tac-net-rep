@@ -20,6 +20,10 @@ from .models import TecTacSchedule, TecTacScheduleRun, TecTacSchedulerConfig
 from .rbac import has_extension_permission, has_tactical_permission
 from . import resources_adapter
 from .scheduler import (
+    CORE_REASONS,
+    CORE_OWN_MODULE_IDS,
+    ORPHAN_LABEL,
+    ScheduleVisibility,
     TACTICAL_PERMISSION_PREFIX,
     SchedulerError,
     check_monthly_shape,
@@ -27,7 +31,9 @@ from .scheduler import (
     is_one_off_schedule,
     is_tactical_permission_entry,
     queue_manual_run,
+    remember_removed_schedule,
     manual_person_action,
+    sync_module_schedule_state,
     schedule_creator_names,
     scheduled_actions,
     switch_monthly_mode,
@@ -400,6 +406,31 @@ class SchedulerActionListView(APIView):
         return Response({"actions": items, "count": len(items), "manage": _native_scheduler_manager(request.user)})
 
 
+def _sync_module_state_safely(visibility) -> None:
+    """1.17.97: bring paused_reason and its audit row up to date before a list (the tick does the same). A fault here never stops the answer."""
+    try:
+        sync_module_schedule_state(visibility=visibility)
+    except Exception:
+        logger.exception("Pausing the schedules of disabled or removed modules failed; the list is answered from the live module state.")
+
+
+def _hide_if_module_disabled(schedule, visibility=None):
+    """1.17.97: a schedule of a disabled module (or one whose module state cannot be read) does not exist for the API: 404, like an unknown id."""
+    if (visibility or ScheduleVisibility()).hidden(schedule):
+        raise NotFound("No schedule with that id was found.")
+
+
+def _orphaned_filter(request):
+    value = str(request.query_params.get("orphaned") or "").strip().lower()
+    if not value:
+        return None
+    if value in {"true", "1", "yes"}:
+        return True
+    if value in {"false", "0", "no"}:
+        return False
+    raise SchedulerError("orphaned must be true or false.")
+
+
 @extend_schema_view(
     get=extend_schema(tags=["Tec-Tac Scheduler"], summary="List schedules"),
     post=extend_schema(tags=["Tec-Tac Scheduler"], summary="Create schedule"),
@@ -415,6 +446,12 @@ class SchedulerListView(APIView):
         # permission filtering below is unchanged, so nobody sees a schedule they could not see before, and no right is added.
         created_by = _name_filter(request, "created_by")
         confirmed_by = _name_filter(request, "confirmed_by")
+        try:
+            orphaned = _orphaned_filter(request)
+        except SchedulerError as exc:
+            return Response({"detail": str(exc)}, status=400)
+        visibility = ScheduleVisibility()  # 1.17.97: read live at request time, so the answer never lags the helper that wrote the module state
+        _sync_module_state_safely(visibility)
         latest_status = TecTacScheduleRun.objects.filter(schedule_id=OuterRef("pk")).order_by("-created_at").values("status")[:1]
         qs = TecTacSchedule.objects.select_related("created_by", "updated_by").annotate(
             latest_status=Subquery(latest_status)
@@ -423,6 +460,10 @@ class SchedulerListView(APIView):
             qs = qs.filter(owner_type=owner_type)
         rows = []
         for schedule in qs:
+            if visibility.hidden(schedule):
+                continue  # a disabled module's schedules are left out (1.17.97); an unreadable module state hides every module-bound one
+            if orphaned is not None and bool(visibility.orphan_module(schedule)) != orphaned:
+                continue
             if not _name_filters_match(schedule, created_by, confirmed_by):
                 continue  # only ever removes a row: the permission and scope test below is exactly what it was
             try:
@@ -430,10 +471,11 @@ class SchedulerListView(APIView):
             except SchedulerError:
                 action = None
             if (_native_scheduler_manager(request.user) or (action and _can_use_action(request.user, action))) and _can_access_target_scope(request.user, schedule.targets, module_id=schedule.module_id):
-                rows.append(serialize_schedule(schedule))
+                rows.append(serialize_schedule(schedule, visibility=visibility))
         return Response({
             "schedules": rows, "count": len(rows), "manage": _native_scheduler_manager(request.user),
             "owner_type": owner_type,
+            "module_state_unreadable": visibility.unreadable,  # 1.17.97, additive: true means module-bound schedules are hidden (fail closed)
         })
 
     def post(self, request):
@@ -483,6 +525,7 @@ class SchedulerDetailView(APIView):
     permission_classes = [SessionAuthenticated]
     def get_object(self, request, schedule_id):
         schedule = get_object_or_404(TecTacSchedule.objects.select_related("created_by", "updated_by"), pk=schedule_id)
+        _hide_if_module_disabled(schedule)
         action = _require_action(request.user, schedule.action_id)
         _require_target_scope(request.user, schedule.targets, payload=False, module_id=schedule.module_id)
         return schedule, action
@@ -575,6 +618,7 @@ class SchedulerDetailView(APIView):
             schedule = get_object_or_404(
                 TecTacSchedule.objects.select_for_update(of=("self",)).select_related("created_by", "updated_by"), pk=schedule_id
             )
+            _hide_if_module_disabled(schedule)
             _require_user_managed(schedule)
             _require_action(request.user, schedule.action_id, allow_unregistered_manager=True)
             _require_schedule_owner_or_manager(request.user, schedule)
@@ -631,6 +675,10 @@ class SchedulerRunNowView(APIView):
     permission_classes = [SessionAuthenticated]
     def post(self, request, schedule_id):
         schedule = get_object_or_404(TecTacSchedule, pk=schedule_id)
+        visibility = ScheduleVisibility()
+        _hide_if_module_disabled(schedule, visibility)
+        if visibility.orphan_module(schedule) or getattr(schedule, "paused_reason", "") in CORE_REASONS:
+            return Response({"detail": "This schedule is paused because the module that owns it is not installed.", "code": "schedule_paused"}, status=409)
         if is_one_off_schedule(schedule):
             # 1.17.17: a one-off run belongs to the user who started it and happens once. Refused before any other check, so a
             # second user cannot queue a run under the first user's identity and nobody can repeat it from the browser.
@@ -666,7 +714,10 @@ class SchedulerRunNowView(APIView):
             schedule.target_state_detail = ""
             schedule.save(update_fields=["targets", "target_state", "target_state_detail", "updated_at"])
         # 1.17.85: Core records the person who pressed the button; a declared person action then runs as them (re-checked live at run time)
-        run = queue_manual_run(schedule, started_by=request.user if person_run else None)
+        try:
+            run = queue_manual_run(schedule, started_by=request.user if person_run else None)
+        except SchedulerError as exc:
+            return Response({"detail": str(exc), "code": "schedule_paused"}, status=409)
         return Response(serialize_run(run), status=202)
 
 
@@ -702,6 +753,13 @@ class SchedulerRunListView(APIView):
             qs = qs.filter(schedule_snapshot_id=schedule_uuid)
         if owner_type:
             qs = qs.filter(owner_type=owner_type)
+        # 1.17.97: the runs of a disabled module's schedules are left out with the schedules. An unreadable module state keeps only Core's own runs.
+        hidden_ids, keep_core_only = ScheduleVisibility().hidden_run_filter()
+        if keep_core_only:
+            keep = [*CORE_OWN_MODULE_IDS, ""]
+            qs = qs.filter(module_id__in=keep, owner_module__in=keep)
+        elif hidden_ids:
+            qs = qs.exclude(Q(module_id__in=hidden_ids) | Q(owner_module__in=hidden_ids))
 
         status_value = str(request.query_params.get("status") or "").strip().lower()
         if status_value:
@@ -1039,3 +1097,180 @@ class SchedulerSystemActionConfirmationView(APIView):
         except SchedulerError as exc:
             return Response({"detail": str(exc)}, status=400)
         return Response(result)
+
+
+# ---- 1.17.97: schedules whose owner module is not installed ('Owner module not installed'): list, Disable and Remove -----------------------------
+
+class _OrphanAuditFailed(Exception):
+    """A strict audit row could not be written; nothing was changed."""
+
+
+def _require_scheduler_manager(user):
+    if not _native_scheduler_manager(user):
+        raise PermissionDenied("Only a Scheduler manager can manage the schedules of a module that is not installed.")
+
+
+def _orphan_audit(user, action, message, *, object_type, object_id, metadata, before=None):
+    from . import audit
+
+    try:
+        audit.record(actor=user, module_id="core", action=action, object_type=object_type, object_id=str(object_id), message=message,
+                     before=before, metadata={"orphaned": True, **metadata}, strict=True)
+    except Exception as exc:
+        logger.exception("Tec-Tac audit row for an orphaned schedule could not be written")
+        raise _OrphanAuditFailed() from exc
+
+
+_AUDIT_FAILED = {"detail": "The audit row could not be written, so nothing was changed.", "code": "audit_unavailable"}
+
+
+def _orphan_in_scope(user, schedule) -> bool:
+    """The target scope check the list and DELETE make (``_can_access_target_scope``). A row that fails it is skipped and counted."""
+    return _can_access_target_scope(user, schedule.targets, module_id=schedule.module_id)
+
+
+def _active_run_count(schedule) -> int:
+    return schedule.runs.filter(status__in=[TecTacScheduleRun.Status.QUEUED, TecTacScheduleRun.Status.RUNNING]).count()
+
+
+def _orphan_apply(schedule, request, mode: str) -> None:
+    """Disable or remove one orphaned schedule inside the caller's transaction (the audit row is written first, strictly)."""
+    if mode == "disable":
+        schedule.enabled = False
+        schedule.save(update_fields=["enabled", "updated_at"])
+    else:
+        remember_removed_schedule(schedule, getattr(request.user, "username", ""))  # a module can then answer 'removed by an administrator'
+        schedule.delete()
+
+
+class _OrphanSingleView(APIView):
+    permission_classes = [SessionAuthenticated]
+    mode = "disable"
+
+    def _run(self, request, schedule_id):
+        _require_scheduler_manager(request.user)
+        visibility = ScheduleVisibility(read_state=False)
+        try:
+            with transaction.atomic():
+                schedule = get_object_or_404(TecTacSchedule.objects.select_for_update(of=("self",)).select_related("created_by", "updated_by"), pk=schedule_id)
+                module_id = visibility.orphan_module(schedule)
+                if not module_id:
+                    return Response({"detail": "The module that owns this schedule is installed, or Core cannot tell. Change the schedule from the module.",
+                                     "code": "owner_module_installed"}, status=409)
+                if not _orphan_in_scope(request.user, schedule):
+                    raise PermissionDenied("The targets of this schedule are outside your Tactical scope.")
+                active = _active_run_count(schedule)
+                if active:
+                    return Response({"detail": "This schedule has a queued or running run. Wait for it to end.", "code": "active_runs", "active_runs": active}, status=409)
+                removing = self.mode == "remove"
+                _orphan_audit(
+                    request.user, "delete" if removing else "disable",
+                    f"Schedule of module {module_id} {'removed' if removing else 'switched off'} because the module is not installed.",
+                    object_type="scheduler_schedule", object_id=schedule.pk,
+                    before=serialize_schedule(schedule, visibility=visibility) if removing else None,
+                    metadata={"owner_module": schedule.owner_module or None, "owner_key": schedule.owner_key or None, "module_id": module_id, "count": 1},
+                )
+                _orphan_apply(schedule, request, self.mode)
+                return Response({"module_id": module_id, "count": 1, "schedule_id": str(schedule_id), "mode": self.mode, "skipped_out_of_scope": 0})
+        except _OrphanAuditFailed:
+            return Response(_AUDIT_FAILED, status=503)
+
+
+class _OrphanModuleView(APIView):
+    permission_classes = [SessionAuthenticated]
+    mode = "disable"
+
+    def _run(self, request, module_id):
+        _require_scheduler_manager(request.user)
+        body = request.data if isinstance(request.data, dict) else {}
+        if body.get("confirm") is not True:
+            return Response({"detail": "Send confirm: true. The person has to say Yes first.", "code": "confirmation_required"}, status=400)
+        visibility = ScheduleVisibility(read_state=False)
+        if visibility.installed is None or module_id in visibility.installed or module_id in CORE_OWN_MODULE_IDS:
+            return Response({"detail": "That module is installed, or Core cannot tell. Change its schedules from the module.", "code": "owner_module_installed"}, status=409)
+        try:
+            with transaction.atomic():
+                candidates = TecTacSchedule.objects.select_for_update(of=("self",)).filter(
+                    Q(owner_type=TecTacSchedule.OwnerType.MODULE, owner_module=module_id) | Q(owner_type=TecTacSchedule.OwnerType.USER, module_id=module_id)
+                )
+                rows = [s for s in candidates if visibility.orphan_module(s) == module_id]
+                if not rows:
+                    return Response({"detail": "No schedule of that module was found.", "code": "not_found"}, status=404)
+                in_scope = [s for s in rows if _orphan_in_scope(request.user, s)]
+                skipped = len(rows) - len(in_scope)
+                busy = sum(1 for s in in_scope if _active_run_count(s) > 0)
+                if busy:
+                    return Response({"detail": "Some of these schedules have a queued or running run. Wait for them to end.", "code": "active_runs", "active_runs": busy}, status=409)
+                removing = self.mode == "remove"
+                targets = [s for s in in_scope if removing or s.enabled]
+                if targets:
+                    _orphan_audit(
+                        request.user, "delete" if removing else "disable",
+                        f"{len(targets)} schedule(s) of module {module_id} {'removed' if removing else 'switched off'} because the module is not installed.",
+                        object_type="scheduler_module", object_id=module_id,
+                        metadata={"module_id": module_id, "count": len(targets), "skipped_out_of_scope": skipped, "schedule_ids": [str(s.pk) for s in targets][:200]},
+                    )
+                    for schedule in targets:
+                        _orphan_apply(schedule, request, self.mode)
+                return Response({"module_id": module_id, "count": len(targets), "mode": self.mode, "skipped_out_of_scope": skipped})
+        except _OrphanAuditFailed:
+            return Response(_AUDIT_FAILED, status=503)
+
+
+@extend_schema_view(get=extend_schema(tags=["Tec-Tac Scheduler"], summary="Schedules whose owner module is not installed, by module"))
+class SchedulerOrphanedListView(APIView):
+    """Scheduler managers only. The modules that are not installed but still own schedules, with their counts. A row outside the manager's target
+    scope is left out and counted in ``out_of_scope``. When the module registry cannot be read nothing is listed and ``registry_unreadable`` is true."""
+    permission_classes = [SessionAuthenticated]
+
+    def get(self, request):
+        _require_scheduler_manager(request.user)
+        visibility = ScheduleVisibility(read_state=False)
+        modules: dict = {}
+        out_of_scope = 0
+        for schedule in TecTacSchedule.objects.select_related("created_by", "updated_by"):
+            module_id = visibility.orphan_module(schedule)
+            if not module_id:
+                continue
+            if not _orphan_in_scope(request.user, schedule):
+                out_of_scope += 1
+                continue
+            entry = modules.setdefault(module_id, {"module_id": module_id, "label": ORPHAN_LABEL, "count": 0, "enabled_count": 0, "schedules": []})
+            entry["count"] += 1
+            entry["enabled_count"] += 1 if schedule.enabled else 0
+            entry["schedules"].append({"id": str(schedule.pk), "name": schedule.name, "action_id": schedule.action_id, "owner_key": schedule.owner_key or None,
+                                       "owner_type": schedule.owner_type, "enabled": bool(schedule.enabled)})
+        return Response({"modules": sorted(modules.values(), key=lambda m: m["module_id"]), "count": len(modules), "out_of_scope": out_of_scope,
+                         "registry_unreadable": visibility.installed is None})
+
+
+@extend_schema_view(post=extend_schema(tags=["Tec-Tac Scheduler"], summary="Switch off one schedule whose owner module is not installed"))
+class SchedulerOrphanedDisableView(_OrphanSingleView):
+    mode = "disable"
+
+    def post(self, request, schedule_id):
+        return self._run(request, schedule_id)
+
+
+@extend_schema_view(delete=extend_schema(tags=["Tec-Tac Scheduler"], summary="Remove one schedule whose owner module is not installed"))
+class SchedulerOrphanedRemoveView(_OrphanSingleView):
+    mode = "remove"
+
+    def delete(self, request, schedule_id):
+        return self._run(request, schedule_id)
+
+
+@extend_schema_view(post=extend_schema(tags=["Tec-Tac Scheduler"], summary="Switch off every schedule of a module that is not installed"))
+class SchedulerOrphanedModuleDisableView(_OrphanModuleView):
+    mode = "disable"
+
+    def post(self, request, module_id):
+        return self._run(request, module_id)
+
+
+@extend_schema_view(delete=extend_schema(tags=["Tec-Tac Scheduler"], summary="Remove every schedule of a module that is not installed"))
+class SchedulerOrphanedModuleRemoveView(_OrphanModuleView):
+    mode = "remove"
+
+    def delete(self, request, module_id):
+        return self._run(request, module_id)

@@ -392,8 +392,8 @@ run_verify_step() {
     local out rc=0 started="${SECONDS}" elapsed reason
     out="$(mktemp)" || fail "Unable to create a temporary file for the ${label} check."
     run_as_tactical timeout "${VERIFY_STEP_TIMEOUT_SECONDS}s" bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${code}\"" >"${out}" 2>&1 || rc=$?
-    cat "${out}"
     if [[ "${rc}" -eq 0 ]]; then
+        scrub_verify_output < "${out}"  # 1.17.97: a passing step still shows its OK line, masked; a failed step's full output never reaches the log
         rm -f "${out}"
         return 0
     fi

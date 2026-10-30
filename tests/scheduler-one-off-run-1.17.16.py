@@ -206,10 +206,13 @@ mod("django.core.exceptions", ValidationError=ValidationError)
 mod("django.db", transaction=SimpleNamespace(atomic=_Atomic()))
 mod("django.db.models", Q=lambda *a, **k: None)
 mod("django.utils")
+mod("tec_tac.module_state", load_state=lambda: {"schema": 1, "modules": {}}, is_enabled=lambda module_id, state=None: True)  # 1.17.97
 mod("django.utils.timezone", now=lambda: NOW[0], is_naive=lambda v: v.tzinfo is None)
 pkg = mod("tec_tac")
 pkg.__path__ = [str(APP)]
-mod("tec_tac.models", TecTacSchedule=Schedule, TecTacScheduleRun=Run, TecTacSchedulerConfig=Config, TecTacSchedulerState=State)
+RemovedSchedule = SimpleNamespace(objects=SimpleNamespace(filter=lambda **kw: SimpleNamespace(first=lambda: None, delete=lambda: None)))  # 1.17.97: no marker
+mod("tec_tac.registry", get_plugins=lambda: ())  # 1.17.97: an empty list reads as unknown, so every module counts as installed
+mod("tec_tac.models", TecTacSchedule=Schedule, TecTacScheduleRun=Run, TecTacSchedulerConfig=Config, TecTacSchedulerState=State, TecTacRemovedSchedule=RemovedSchedule)
 mod("tec_tac.tasks", execute_schedule_run=FakeTask())
 mod("tec_tac.capabilities", capability_status=None, CapabilityDisabled=type("CD", (Exception,), {}), CapabilityUnavailable=type("CU", (Exception,), {}),
     CapabilityVersionMismatch=type("CV", (Exception,), {}), CapabilityUnhealthy=type("CH", (Exception,), {}))

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""1.17.96: a rollback must not fail on a verification step.
+"""1.17.96 (narrowed in 1.17.97, see tests/system-update-rollback-timeout-only-1.17.97.py): a rollback must not fail on a TIMED-OUT verification step.
 
 When the update fails and the rollback restores the previous source, the previous version's installer runs. If that installer fails only
 at one of its own verification checks (new installers: exit 79 and a "[TEC-TAC-INSTALL] VERIFY-FAILED: <step>" line; old installers: exit 1
@@ -50,8 +50,8 @@ def extract(tree, names):
 
 
 NAMES = {"INSTALL_REFUSED_EXIT", "INSTALLER_REFUSAL_MARKER", "_UpdateRefused", "_installer_refusal_reason", "run_job",
-         "INSTALL_VERIFY_FAILED_EXIT", "INSTALLER_VERIFY_MARKER", "INSTALLER_ERROR_MARKER", "INSTALLER_VERIFY_STEPS",
-         "INSTALLER_VERIFY_SUFFIXES", "_log_size", "_log_tail_lines", "_rollback_verification_step"}
+         "INSTALL_VERIFY_FAILED_EXIT", "INSTALLER_VERIFY_MARKER", "INSTALLER_VERIFY_STEP_FAILED", "INSTALLER_VERIFY_STEPS",
+         "_log_size", "_log_tail_lines", "_rollback_verification_step"}
 EXTRACTED = extract(TREE, NAMES)
 
 fake_fcntl = types.ModuleType("fcntl")
@@ -160,31 +160,32 @@ VERIFY_STEP = "Tec-Tac developer contract catalog"
 FORWARD_ERR = "[TEC-TAC] ERROR: Framework API route verification failed or timed out."
 OLD_ERR = f"[TEC-TAC] ERROR: {VERIFY_STEP} verification failed or timed out."
 NEW_MARK = f"[TEC-TAC-INSTALL] VERIFY-FAILED: Verifying {VERIFY_STEP}"
+TIMEOUT_LINE = f"[TEC-TAC] VERIFY STEP FAILED: {VERIFY_STEP} (timed out after 120 s; 121 s elapsed)"  # 1.17.97: what run_verify_step logs for exit 124
+TIMED_OUT = (79, TIMEOUT_LINE + "\n" + NEW_MARK)
 WARN_LOG = f"[TEC-TAC-UPDATE] restored 1.17.42, verification warning: Verifying {VERIFY_STEP}"
 # The forward installer fails with a verification error too: its line must never classify the rollback.
 FORWARD_FAIL = (1, FORWARD_ERR)
 
-# (1) new installer: exit 79 and the VERIFY-FAILED marker -> a warning, rolled-back, no ROLLBACK FAILED
-s = scenario(effects=[FORWARD_FAIL, (79, OLD_ERR + "\n" + NEW_MARK)], git_state=GIT_STATE)
+# (1) new installer: exit 79, the timed-out line and the VERIFY-FAILED marker of the same step -> a warning, rolled-back, no ROLLBACK FAILED
+s = scenario(effects=[FORWARD_FAIL, (79, OLD_ERR + "\n" + TIMEOUT_LINE + "\n" + NEW_MARK)], git_state=GIT_STATE)
 f = s["final"]
 must(s["calls"]["run_install"] == 2 and s["calls"]["restore_git_source"] == 1 and s["calls"]["verify_source_runtime_layout"] == 1, s["calls"])
 must(f["rollback"] == {"performed": True, "status": "warning", "version": "1.17.42", "warning": f"Verifying {VERIFY_STEP}",
-                       "installer_exit_status": 79, "advice": f"Restart the Tec-Tac services and check Verifying {VERIFY_STEP}."}, f["rollback"])
+                       "installer_exit_status": 79, "incomplete_stages": ["helper scripts", "timers", "service restart"],
+                       "restart": "systemctl restart rmm daphne celery celerybeat", "advice": f["rollback"]["advice"]}, f["rollback"])
+must(f"Verifying {VERIFY_STEP} timed out" in f["rollback"]["advice"] and "helper scripts" in f["rollback"]["advice"] and "timers" in f["rollback"]["advice"]
+     and "restart" in f["rollback"]["advice"], f["rollback"]["advice"])
 must(f["stage"] == "rolled-back" and f["status"] == "failed", (f["stage"], f["status"]))
 must(f["error"] == "framework installer exited with status 1", f["error"])
 must(WARN_LOG in s["log"] and "ROLLBACK FAILED" not in s["log"], s["log"])
-print("       exit 79 + marker: rollback warning, stage rolled-back, status failed, log line, no ROLLBACK FAILED")
+print("       exit 79 + timed-out line + marker: rollback warning, stage rolled-back, status failed, log line, no ROLLBACK FAILED")
 
-# (2) old installer: exit 1 and its known ERROR line -> the same warning
-s = scenario(effects=[FORWARD_FAIL, (1, OLD_ERR)], git_state=GIT_STATE)
-f = s["final"]
-must(f["rollback"]["status"] == "warning" and f["rollback"]["installer_exit_status"] == 1 and f["stage"] == "rolled-back", f["rollback"])
-must(f["rollback"]["warning"] == f"Verifying {VERIFY_STEP}" and WARN_LOG in s["log"] and "ROLLBACK FAILED" not in s["log"], s["log"])
-for text, label in (("[TEC-TAC] ERROR: Tec-Tac scheduler/capability Celery task registration failed or timed out.", "Tec-Tac scheduler/capability Celery task"),
-                    ("[TEC-TAC] ERROR: Core server-backup capability verification failed.", "Core server-backup capability")):
+# (2) old installer: exit 1 and its known ERROR line cannot prove a timeout -> ROLLBACK FAILED (1.17.97)
+for text in (OLD_ERR, "[TEC-TAC] ERROR: Tec-Tac scheduler/capability Celery task registration failed or timed out.",
+             "[TEC-TAC] ERROR: Core server-backup capability verification failed."):
     s = scenario(effects=[FORWARD_FAIL, (1, text)], git_state=GIT_STATE)
-    must(s["final"]["rollback"]["status"] == "warning" and s["final"]["rollback"]["warning"] == f"Verifying {label}", s["final"]["rollback"])
-print("       exit 1 + a known verification ERROR line (old installer): the same warning")
+    must(s["final"]["rollback"]["status"] == "failed" and s["final"]["stage"] == "rollback-failed" and "ROLLBACK FAILED" in s["log"], s["final"]["rollback"])
+print("       exit 1 + a known verification ERROR line (old installer): no longer a warning, a real ROLLBACK FAILED")
 
 # (3) another error, no error line, an unknown step, a longer text or another exit status -> failed
 for rollback_effect, why in (((1, "[TEC-TAC] ERROR: Docker is not installed."), "another error"),
@@ -200,16 +201,16 @@ for rollback_effect, why in (((1, "[TEC-TAC] ERROR: Docker is not installed."), 
 print("       any other installer failure stays a real ROLLBACK FAILED")
 
 # (4) the restore itself failing is failed, with no installer_exit_status
-s = scenario(effects=[FORWARD_FAIL, (79, NEW_MARK)], git_state=GIT_STATE, restore_git_error="git reset failed")
+s = scenario(effects=[FORWARD_FAIL, TIMED_OUT], git_state=GIT_STATE, restore_git_error="git reset failed")
 f = s["final"]
 must(f["rollback"]["status"] == "failed" and "installer_exit_status" not in f["rollback"] and f["stage"] == "rollback-failed", f["rollback"])
 must("ROLLBACK FAILED: git reset failed" in s["log"] and s["calls"]["run_install"] == 1, s["log"])
-s = scenario(effects=[FORWARD_FAIL, (79, NEW_MARK)], git_state={}, restore_backup_error="backup unreadable")
+s = scenario(effects=[FORWARD_FAIL, TIMED_OUT], git_state={}, restore_backup_error="backup unreadable")
 must(s["final"]["rollback"]["status"] == "failed" and s["calls"]["restore_backup"] == 1, s["final"]["rollback"])
 print("       a failing restore: failed, not a warning")
 
 # (5) verify_dynamic_plugins failing after a verification warning -> failed (call 1 is before the installer, call 2 is after the rollback)
-s = scenario(effects=[FORWARD_FAIL, (79, NEW_MARK)], git_state=GIT_STATE, dynamic_error_on_call=2)
+s = scenario(effects=[FORWARD_FAIL, TIMED_OUT], git_state=GIT_STATE, dynamic_error_on_call=2)
 must(s["final"]["rollback"]["status"] == "failed" and "dynamic plugin check failed" in s["final"]["rollback"]["error"], s["final"]["rollback"])
 must("verification warning" not in s["log"] and "ROLLBACK FAILED" in s["log"], s["log"])
 print("       verify_dynamic_plugins failing after a verification warning: failed")
@@ -224,14 +225,15 @@ print("       a clean rollback and a refusal (78) are unchanged")
 # (7) the classifier reads only what the rollback installer wrote (the offset); bad input is safe
 probe_dir = Path(tempfile.mkdtemp(prefix="suh-classify-"))
 log_path = probe_dir / "job.log"
-log_path.write_text(OLD_ERR + "\n", encoding="utf-8")
+log_path.write_text(OLD_ERR + "\n" + TIMEOUT_LINE + "\n" + NEW_MARK + "\n", encoding="utf-8")
 offset = log_path.stat().st_size
 ns2: dict = {"re": re, "os": os}
 exec(compile(ast.Module(body=EXTRACTED, type_ignores=[]), str(HELPER), "exec"), ns2)  # noqa: S102 - test only
 classify = ns2["_rollback_verification_step"]
-must(classify(1, log_path, offset) is None, "the forward installer's line is before the offset")
-must(classify(1, log_path, 0) == f"Verifying {VERIFY_STEP}", "from offset 0 the line counts")
-must(classify(1, log_path, None) is None and classify(79, log_path, None) == "an installer verification step", "no offset: exit 1 never classifies, 79 does")
+must(classify(79, log_path, offset) is None, "the forward installer's lines are before the offset")
+must(classify(79, log_path, 0) == f"Verifying {VERIFY_STEP}", "from offset 0 the pair counts")
+must(classify(1, log_path, 0) is None, "exit 1 (the old installer) never classifies")
+must(classify(1, log_path, None) is None and classify(79, log_path, None) is None, "no offset: nothing classifies")
 must(classify(1, probe_dir / "missing.log", 0) is None, "a missing log is not a verification failure")
 must(classify(0, log_path, 0) is None, "exit 0 is not a failure")
 print("       classifier: reads from the offset only; missing log, no offset and exit 0 are safe")

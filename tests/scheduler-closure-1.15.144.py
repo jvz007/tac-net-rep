@@ -280,6 +280,7 @@ delete_ns = {
     "TecTacSchedule": ScheduleModel,
     "TecTacScheduleRun": RunModel,
     "_require_user_managed": noop,
+    "_hide_if_module_disabled": noop,  # 1.17.97
     "_require_action": noop,
     "_require_schedule_owner_or_manager": noop,
     "_require_target_scope": noop,

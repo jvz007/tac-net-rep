@@ -13,7 +13,7 @@ from .scheduler_run_context import issue_run_context
 from .capabilities import capability_status, CapabilityDisabled, CapabilityUnavailable, CapabilityVersionMismatch, CapabilityUnhealthy
 from .scheduler import (
     SchedulerError, SchedulerPermanentError, SchedulerTransientError, _runtime_authorization_error, effective_retry_delay_seconds,
-    _audit_schedule_row, get_scheduled_action, is_one_off_key, scheduled_person_action, manual_person_action,
+    _audit_schedule_row, get_scheduled_action, is_one_off_key, scheduled_person_action, manual_person_action, run_blocked_reason,
 )
 
 logger = logging.getLogger("tec_tac.tasks")
@@ -119,6 +119,17 @@ def execute_schedule_run(self, run_id: str):
         if run.status != TecTacScheduleRun.Status.QUEUED:
             return f"run already {run.status}"
         schedule = run.schedule
+        # 1.17.97: a run queued before its module was disabled or removed never starts. It ends skipped with a plain reason, and no handler runs.
+        blocked = run_blocked_reason(
+            run.module_id or (schedule.module_id if schedule else ""), run.owner_module or (schedule.owner_module if schedule else ""), run.owner_type or "module",
+        )
+        if blocked:
+            run.status = TecTacScheduleRun.Status.SKIPPED
+            run.error = blocked
+            run.error_type = "ModuleUnavailable"
+            run.finished_at = timezone.now()
+            run.save(update_fields=["status", "error", "error_type", "finished_at"])
+            return f"run skipped: {blocked}"
         run.status = TecTacScheduleRun.Status.RUNNING
         run.started_at = timezone.now()
         run.finished_at = None

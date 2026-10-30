@@ -5,6 +5,7 @@ import uuid
 from django.conf import settings
 from django.db import models
 from django.db.models import Q
+from django.utils import timezone as django_timezone
 
 
 def default_session_trusted_proxies():
@@ -113,6 +114,28 @@ class TecTacSchedule(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class TecTacRemovedSchedule(models.Model):
+    """The memory that an administrator removed a module-owned schedule (Core 1.17.97, migration 0043).
+
+    One row per ``(owner_module, owner_key)``. While it exists, ``reconcile_schedule`` called without a person's request creates nothing, so a module
+    that reconciles on every start does not bring the schedule back, and ``scheduler.removed_owned_schedule`` answers 'removed by an administrator'.
+    A person's own save in the module, or the module removing or disabling the schedule itself, deletes the row. It holds names and a time only.
+    """
+
+    owner_module = models.CharField(max_length=100)
+    owner_key = models.CharField(max_length=255)
+    removed_by_username = models.CharField(max_length=150, blank=True, default="")
+    removed_at = models.DateTimeField(default=django_timezone.now)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("owner_module", "owner_key"), name="tectac_removed_sched_unique"),
+        ]
+
+    def __str__(self):
+        return f"{self.owner_module}/{self.owner_key}"
 
 
 class TecTacSchedulerConfig(models.Model):

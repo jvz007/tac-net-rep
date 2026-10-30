@@ -65,7 +65,7 @@ loop = get_src.split("for schedule in qs:", 1)[1]
 must(loop.index("_name_filters_match(schedule, created_by, confirmed_by)") < loop.index("_can_access_target_scope(request.user, schedule.targets, module_id=schedule.module_id)"), "the filter runs first")
 must("continue" in loop.split("_name_filters_match", 1)[1].split("try:", 1)[0], "a non-match is skipped, never added")
 must("(_native_scheduler_manager(request.user) or (action and _can_use_action(request.user, action))) and _can_access_target_scope(request.user, schedule.targets, module_id=schedule.module_id)" in loop, "the permission and scope test is as in 1.17.62; 1.17.68 only names the module so a profile type with a resolver can be judged")
-must(VIEWS.count("has_extension_permission(") + VIEWS.count("has_tactical_permission(") + VIEWS.count("_native_scheduler_manager(") == 18, "no new permission call (1.17.62 had 18)")
+must(VIEWS.count("has_extension_permission(") + VIEWS.count("has_tactical_permission(") + VIEWS.count("_native_scheduler_manager(") == 19, "no new permission call (1.17.62 had 18; 1.17.97 adds the one in _require_scheduler_manager)")
 rbac = (APP / "rbac.py").read_text(encoding="utf-8")
 must(not re.search(r"[\"'](core\.)?scheduler[.:]", rbac), "no scheduler permission code exists in rbac, and none was added")
 print("       the filter runs inside the list loop before the unchanged permission and scope test and only removes rows; no permission was added")
