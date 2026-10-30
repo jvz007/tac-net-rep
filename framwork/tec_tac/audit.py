@@ -130,18 +130,21 @@ def _declared_owner_row_allowed(actor, module: dict, action: Any) -> bool:
         return False
 
 
-def _server_module_deny_allowed(actor, module: dict, action: Any) -> bool:
-    """May a server module write a deny row for a signed-in person who holds none of its permissions? (1.17.30, AD-34 condition 2)
+_DENY_ROW_CATEGORIES = frozenset({"server", "core"})  # 1.17.95 (AD-34, Johan 29 October 2026): a core module may write a deny row too
+
+
+def _module_deny_allowed(actor, module: dict, action: Any) -> bool:
+    """May a server or core module write a deny row for a signed-in person who holds none of its permissions? (1.17.30, AD-34 condition 2; core since 1.17.95)
 
     Yes only when all of these hold: the actor is an authenticated person (not an installer user), the module is a signed, enabled,
-    non-legacy module whose manifest category is ``server``, the action is exactly ``deny``, and the verified caller (read from the call
+    non-legacy module whose manifest category is ``server`` or ``core`` (module ``core`` itself, premium, test and empty are refused), the action is exactly ``deny``, and the verified caller (read from the call
     stack, never from an argument) is that same module. A missing or different caller, a Core, library or generated frame, and any other
     action or category are refused. Never raises: any error is a refusal.
     """
     try:
         if not getattr(actor, "is_authenticated", False) or getattr(actor, "is_installer_user", False):
             return False
-        if module.get("id") == "core" or module.get("legacy") or module.get("category") != "server":
+        if module.get("id") == "core" or module.get("legacy") or module.get("category") not in _DENY_ROW_CATEGORIES:
             return False
         try:
             if _normalize_action(action) != "deny":
@@ -153,11 +156,91 @@ def _server_module_deny_allowed(actor, module: dict, action: Any) -> bool:
         identity = calling_module_for_core_provider(provider_file=__file__)
         return identity is not None and identity.module_id == module["id"]
     except Exception:
-        logger.exception("Unable to decide whether server module %s may write a deny row", module.get("id"))
+        logger.exception("Unable to decide whether module %s may write a deny row", module.get("id"))
         return False
 
 
-def _actor_provenance(actor, module: dict, authority=None, action: Any = None, declared_owner_ok: bool = True) -> tuple[str, dict[str, Any]]:
+_server_module_deny_allowed = _module_deny_allowed  # the 1.17.30 name, kept for the existing test
+
+# 1.17.95 (AD-54 eighth amendment, AD-31, AD-34): debug_info.actor_authority on a run or deny row written for a person (or verified-run owner)
+# through a module that allows the verified calling module (for example WAPM through endpoint-comms). Set only in _actor_provenance.
+ACTOR_AUTHORITY_VERIFIED_MODULE_CALLER = "verified-module-caller"
+_VERIFIED_CALLER_ACTIONS = frozenset({"run", "deny"})
+
+
+def _is_real_request(request) -> bool:
+    """A Django HttpRequest, or a DRF Request that wraps one (the proof tec_tac.tactical_operations uses). A stand-in object is no proof."""
+    try:
+        from django.http import HttpRequest
+    except ImportError:
+        return False
+    if isinstance(request, HttpRequest):
+        return True
+    try:
+        from rest_framework.request import Request as DRFRequest
+    except ImportError:
+        return False
+    return isinstance(request, DRFRequest) and isinstance(getattr(request, "_request", None), HttpRequest)
+
+
+def _same_person(actor, user) -> bool:
+    actor_pk, user_pk = getattr(actor, "pk", None), getattr(user, "pk", None)
+    actor_name, user_name = str(getattr(actor, "username", "") or ""), str(getattr(user, "username", "") or "")
+    return user is not None and actor_pk is not None and actor_pk == user_pk and bool(actor_name) and actor_name == user_name
+
+
+def _verified_caller_actor_allowed(actor, module: dict, action: Any, request=None, verified_run=None) -> str | None:
+    """The verified calling module's id when it may have this run or deny row written for ``actor``, else ``None`` (1.17.95).
+
+    All of these must hold, and any error or doubt is a refusal (never raises): the actor is an authenticated person who is not an installer
+    user; the provider module is an enabled, non-legacy extension and not Core; the action is exactly ``run`` or ``deny``; the provider
+    registered a capability that opts in (``allowed_callers`` plus ``audit_person_for_allowed_callers: true``); Core itself finds from the
+    call stack that the module that called the provider is installed, enabled, not legacy and on that list; and the person is proved either
+    (a) by a real request with a session whose user is the actor, or (b) with no request, by a ``VerifiedSchedulerRun`` Core returned for a run
+    of that calling module that is still running and whose owner is the actor.
+    """
+    try:
+        if isinstance(actor, AuditActor) or not getattr(actor, "is_authenticated", False) or getattr(actor, "is_installer_user", False):
+            return None
+        if module.get("id") == "core" or module.get("legacy"):
+            return None
+        try:
+            if _normalize_action(action) not in _VERIFIED_CALLER_ACTIONS:
+                return None
+        except AuditContractError:
+            return None
+        # Imported here, not at module level: standalone loaders (spec_from_file_location) have no parent package, and a failed import is a refusal.
+        from . import capabilities
+        allowed = capabilities.provider_audit_callers(module["id"])
+        if not allowed:
+            return None
+        from .caller_identity import core_provider_second_caller
+        caller = core_provider_second_caller(provider_file=__file__, through_module_id=module["id"])
+        if caller is None or caller.kind != "module" or caller.module_id == module["id"] or caller.module_id not in allowed:
+            return None
+        if verified_run is None:
+            if not _is_real_request(request) or getattr(request, "tec_tac_session", None) is None:
+                return None
+            if not _same_person(actor, getattr(request, "user", None)):
+                return None
+            return caller.module_id
+        if request is not None:
+            return None  # a run has no browser request: refuse the mix
+        from . import scheduler_run_context
+        if not scheduler_run_context.is_core_verified_run(verified_run) or verified_run.module_id != caller.module_id:
+            return None
+        owner = str(getattr(verified_run, "owner_username", "") or "")
+        if not owner or owner != str(getattr(actor, "username", "") or "") or not scheduler_run_context.verified_run_still_running(verified_run):
+            return None
+        return caller.module_id
+    except Exception:
+        logger.exception("Unable to decide whether a verified module caller may write a row for module %s", module.get("id"))
+        return None
+
+
+def _actor_provenance(
+    actor, module: dict, authority=None, action: Any = None, declared_owner_ok: bool = True, request=None, verified_run=None,
+) -> tuple[str, dict[str, Any]]:
     if isinstance(actor, AuditActor):
         if actor.module_id != module["id"]:
             raise AuditContractError("non-human audit actor module_id must match the audit event module_id.")
@@ -178,14 +261,18 @@ def _actor_provenance(actor, module: dict, authority=None, action: Any = None, d
     # already checked Tactical's permission and scope, so it passes its own internal authority.
     declared_owner = False
     server_deny = False
+    verified_via = None
     if authority is not _TACTICAL_OPERATION_AUTHORITY and not _actor_can_use_module(actor, module):
         # 1.17.20: a person with none of the module's permissions, for an action the module declared through a Tactical operation.
         if declared_owner_ok and _declared_owner_row_allowed(actor, module, action):
             declared_owner = True
-        elif authority is None and declared_owner_ok and _server_module_deny_allowed(actor, module, action):
+        elif authority is None and declared_owner_ok and _module_deny_allowed(actor, module, action):
             server_deny = True
         else:
-            raise AuditContractError(f"actor is not permitted to use Tec-Tac module {module['id']!r}.")
+            via = _verified_caller_actor_allowed(actor, module, action, request, verified_run) if authority is None and declared_owner_ok else None
+            if via is None:
+                raise AuditContractError(f"actor is not permitted to use Tec-Tac module {module['id']!r}.")
+            verified_via = via
     username = str(getattr(actor, "username", "") or "").strip()
     if not username:
         raise AuditContractError("authenticated actor does not expose a username.")
@@ -194,6 +281,9 @@ def _actor_provenance(actor, module: dict, authority=None, action: Any = None, d
         details["actor_authority"] = ACTOR_AUTHORITY_DECLARED_OWNER  # set here only: a caller cannot supply it
     elif server_deny:
         details["actor_authority"] = ACTOR_AUTHORITY_SERVER_MODULE_DENY  # set here only: a caller cannot supply it
+    elif verified_via is not None:
+        details["actor_authority"] = ACTOR_AUTHORITY_VERIFIED_MODULE_CALLER  # set here only: a caller cannot supply either key
+        details["actor_via_module_id"] = verified_via
     return username, details
 
 
@@ -511,6 +601,7 @@ def record(
     request=None,
     correlation_id: Any = None,
     strict: bool = False,
+    verified_run=None,
 ) -> dict[str, Any]:
     """Persist one Tec-Tac event through Tactical's native AuditLog.
 
@@ -525,6 +616,9 @@ def record(
     since 1.17.6 and 1.17.7). The action ``custom:operation-failed`` is Core-only too (1.17.20): Core writes it when
     Tactical refuses a change, so a module cannot forge it. ``custom:outcome-unknown`` stays open to a module that
     writes its own outcome row.
+
+    verified_run (1.17.95, optional): the VerifiedSchedulerRun Core returned to the calling module, for a run or deny row of a verified
+    module caller whose actor is the run owner (see _verified_caller_actor_allowed and docs/module-audit.md). Ignored in every other case.
     """
     if isinstance(operation_context, dict):
         for key in CORE_CONTEXT_KEYS:
@@ -534,7 +628,7 @@ def record(
     return _record_row(
         actor=actor, module_id=module_id, action=action, object_type=object_type, object_id=object_id,
         message=message, before=before, after=after, metadata=metadata, operation_context=operation_context,
-        request=request, correlation_id=correlation_id, strict=strict,
+        request=request, correlation_id=correlation_id, strict=strict, verified_run=verified_run,
     )
 
 
@@ -719,9 +813,10 @@ def _record_row(
     strict: bool = False,
     authority=None,
     declared_owner_ok: bool = True,
+    verified_run=None,
 ) -> dict[str, Any]:
     module = _resolve_module(module_id)
-    username, actor_info = _actor_provenance(actor, module, authority, action, declared_owner_ok)
+    username, actor_info = _actor_provenance(actor, module, authority, action, declared_owner_ok, request, verified_run)
     normalized_action = _normalize_action(action)
     normalized_object_type = _normalize_object_type(object_type)
     oid = None if object_id is None else str(object_id)[:255]

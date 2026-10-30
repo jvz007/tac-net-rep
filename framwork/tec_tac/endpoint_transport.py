@@ -595,6 +595,7 @@ def clear_owner_for_tests() -> None:
     global _OWNER
     with _OWNER_LOCK:
         _OWNER = None
+    _PREFERRED_OWNER[0] = None
 
 
 def _owner_folder(module_id: str = OWNER_MODULE) -> str | None:
@@ -749,22 +750,47 @@ def install_endpoint_agent_route() -> bool:
 
 
 # ------------------------------------------------------------------------------------------------ the contract
-def _verified_owner_id() -> str | None:
+_clock = time.monotonic  # a test replaces it
+PREFERRED_OWNER_SECONDS = 3  # how long 'endpoint-comms is installed and enabled' is kept (1.17.95)
+PREFERRED_OWNER_FAULT_SECONDS = 1  # a failed read is kept this long at most, as in caller_identity
+_PREFERRED_OWNER: list = [None]  # [(read_at, present, lifetime)]
+
+
+def _preferred_owner_present() -> bool:
+    """Is endpoint-comms installed and enabled right now (kept a few seconds, so the hot path adds no plugin scan per call)? A read fault
+    counts as present (fail closed) and is kept for one second only. Never raises."""
+    now = _clock()
+    known = _PREFERRED_OWNER[0]
+    if known is not None and 0 <= now - known[0] < known[2]:
+        return known[1]
+    try:
+        present, lifetime = _owner_folder(OWNER_MODULE) is not None, PREFERRED_OWNER_SECONDS
+    except Exception:
+        logger.warning("Could not read whether %s is installed; nats-comms is refused for now.", OWNER_MODULE, exc_info=True)
+        present, lifetime = True, PREFERRED_OWNER_FAULT_SECONDS
+    _PREFERRED_OWNER[0] = (now, present, lifetime)
+    return present
+
+
+def _verified_owner_id(precheck: bool = True) -> str | None:
     """The verified calling module id when it is an owner id (endpoint-comms or nats-comms) and, once an owner is registered in this process,
     the registered one; else None. Never from an argument. An in-memory read: no plugin scan on the hot path. Every frame of this file is
-    skipped by the walk, so this helper may be called from any depth of the provider."""
+    skipped by the walk, so this helper may be called from any depth of the provider. ``precheck`` (1.17.95) is False only for register_owner, which
+    refuses nats-comms itself with a reason."""
     from .caller_identity import calling_module_for_core_provider
 
     try:
         identity = calling_module_for_core_provider(provider_file=__file__)
     except Exception:
-        return False
+        return None
     if identity is None or identity.module_id not in OWNER_MODULES:
         return None
     with _OWNER_LOCK:
         registered = _OWNER["module_id"] if _OWNER else None
     if registered is not None and registered != identity.module_id:
         return None
+    if precheck and registered is None and identity.module_id != OWNER_MODULE and _preferred_owner_present():
+        return None  # 1.17.95: before any owner registered, nats-comms is refused while endpoint-comms is installed and enabled
     return identity.module_id
 
 
@@ -810,7 +836,7 @@ def _free_channel(layer, channel: str) -> None:
 
 def register_owner(module_id, event_task_path) -> dict:
     """Register the Celery task that receives agent events. Only endpoint-comms (nats-comms until the dev server has moved), verified by Core, may call it. See docs/endpoint-transport.md."""
-    caller = _verified_owner_id()
+    caller = _verified_owner_id(precheck=False)  # _register_owner refuses nats-comms itself while endpoint-comms is installed, with a reason
     if caller is None:
         return dict(_DENIED)
     if module_id != caller:

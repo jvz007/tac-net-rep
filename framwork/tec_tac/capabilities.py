@@ -323,6 +323,31 @@ def register_capability(
     return registration
 
 
+def provider_audit_callers(module_id: str) -> frozenset:
+    """Core-internal (1.17.95, AD-54 eighth amendment): the module ids a provider module allows to call it on a person's behalf for audit.
+
+    The union of ``metadata.allowed_callers`` of every capability ``module_id`` registered that also sets
+    ``metadata.audit_person_for_allowed_callers`` to ``True``. A capability with allowed_callers alone is not counted. Reads the registry
+    only (no plugin scan). Never raises: any problem is an empty set."""
+    try:
+        wanted = str(module_id or "").strip()
+        if not wanted:
+            return frozenset()
+        with _CAPABILITY_LOCK:
+            registrations = tuple(_CAPABILITIES.values())
+        found: set[str] = set()
+        for registration in registrations:
+            meta = registration.metadata
+            if registration.module_id != wanted or not isinstance(meta, dict) or meta.get("audit_person_for_allowed_callers") is not True:
+                continue
+            callers = meta.get("allowed_callers")
+            if isinstance(callers, (list, tuple)):
+                found.update(item.strip() for item in callers if isinstance(item, str) and item.strip())
+        return frozenset(found)
+    except Exception:
+        return frozenset()
+
+
 def _registration(capability_id: str) -> CapabilityRegistration | None:
     with _CAPABILITY_LOCK:
         return _CAPABILITIES.get(capability_id)

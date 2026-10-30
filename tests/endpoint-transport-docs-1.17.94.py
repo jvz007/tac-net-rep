@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""1.17.94 regression: metadata and docs name endpoint-comms and nats-comms as owners; the contract stays 1.0.0; release files are at 1.17.94."""
+"""1.17.94 regression: metadata and docs name endpoint-comms and nats-comms as owners; the contract stays 1.0.0; the 1.17.94 release notes say so."""
 from __future__ import annotations
 
 import importlib.util
@@ -24,8 +24,7 @@ contracts = (H.ROOT / "framwork" / "tec_tac" / "contracts.py").read_text(encodin
 must(contracts.count("nats-comms is accepted until the dev server has moved to endpoint-comms") >= 4, "the four operation purposes")
 
 version = (H.ROOT / "VERSION").read_text(encoding="utf-8").strip()
-must(version.startswith("1.17.94"), version)
 must(json.loads((H.ROOT / "tec_tac_package.json").read_text(encoding="utf-8"))["version"] == version, "package version")
-notes = (H.ROOT / f"RELEASE_NOTES_{version}.md").read_text(encoding="utf-8")
+notes = (H.ROOT / "docs" / "releases" / "RELEASE_NOTES_1.17.94.md").read_text(encoding="utf-8")  # the 1.17.94 notes moved to docs/releases in 1.17.95
 must("## Module-facing change" in notes and "endpoint-comms" in notes and "nats-comms" in notes, "release notes")
 print("PASS endpoint transport docs 1.17.94")

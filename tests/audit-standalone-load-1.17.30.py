@@ -20,9 +20,9 @@ for name in ("audit.py", "resources.py"):
     inner = [n for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.level and n.module == "caller_identity"]
     assert inner, f"{name}: the function-level import is missing"
 
-# audit._server_module_deny_allowed keeps the import inside its try block, so a failed import is a refusal.
+# audit._module_deny_allowed (1.17.95; _server_module_deny_allowed is its alias) keeps the import inside its try block, so a failed import is a refusal.
 tree = ast.parse((PKG / "audit.py").read_text(encoding="utf-8"))
-fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_server_module_deny_allowed")
+fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_module_deny_allowed")
 tries = [n for n in ast.walk(fn) if isinstance(n, ast.Try)]
 assert any(isinstance(s, ast.ImportFrom) for t in tries for s in ast.walk(t) if s in ast.walk(ast.Module(body=t.body, type_ignores=[]))), "import must sit in the try block"
 print("ok")

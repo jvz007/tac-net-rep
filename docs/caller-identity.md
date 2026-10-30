@@ -128,3 +128,12 @@ call. The public `calling_module` is never cached (AD-26: enabled state is read 
 `has_capability("core.caller_identity")` is true from Core 1.17.21. The capability metadata lists the limits above in `limits`, gives
 `kinds: ["module"]` and `core_is_caller: false`.
 Tests: `tests/caller-identity-1.17.21.py`.
+
+## The second caller (Core 1.17.95, private)
+
+`tec_tac.audit` needs one more fact for the AD-54 eighth amendment: which module called a provider module that in turn called Core. Core answers it with
+`core_provider_second_caller(provider_file=..., through_module_id=...)` in `tec_tac.caller_identity`. It skips every frame in Core's own file, then every
+contiguous frame inside the provider module's folder, and the next frame is the caller. The same rules as `calling_module_for_core_provider` apply to that frame
+(an installed, enabled, non-legacy extension; a Core, library or generated frame gives `None`). The provider module itself must be enabled and not legacy.
+Nothing is cached and it never raises. It is not a public contract: it is not in the contract export and no module may import it. Modules see only its effect, the
+`verified-module-caller` audit row described in `docs/module-audit.md`.

@@ -86,6 +86,45 @@ def is_core_issued_run_context(context: Any) -> bool:
         return False
 
 
+_RETURNED: dict[int, weakref.ref] = {}  # 1.17.95: the VerifiedSchedulerRun instances verify_run_context returned (identity registry, never copies)
+
+
+def _remember_verified(verified) -> None:
+    key = id(verified)
+
+    def _forget(_ref, key=key):
+        with _LOCK:
+            if _RETURNED.get(key) is _ref:
+                del _RETURNED[key]
+
+    with _LOCK:
+        _RETURNED[key] = weakref.ref(verified, _forget)
+
+
+def is_core_verified_run(value: Any) -> bool:
+    """True when ``value`` is the exact VerifiedSchedulerRun object ``verify_run_context`` returned (1.17.95). A hand-built or copied one is False.
+    Never raises."""
+    try:
+        if type(value) is not VerifiedSchedulerRun:
+            return False
+        with _LOCK:
+            entry = _RETURNED.get(id(value))
+        return entry is not None and entry() is value
+    except Exception:
+        return False
+
+
+def verified_run_still_running(value: Any) -> bool:
+    """True when ``value`` is a Core-returned VerifiedSchedulerRun whose run is still running right now (one fresh read). Never raises."""
+    try:
+        if not is_core_verified_run(value):
+            return False
+        run = _load_run(value.run_id)
+        return run is not None and str(getattr(run, "status", "")) == _RUNNING
+    except Exception:
+        return False
+
+
 def _invalid(message: str):
     from .scheduler import SchedulerRunContextInvalid
 
@@ -369,7 +408,7 @@ def verify_run_context(
         if user is not None and clicker is None and not unattended and _authorization_error(schedule):
             raise _invalid(_OWNER_REFUSED)
         creator, confirmed = _creator_names(schedule) if (unattended or user is not None) else ("", "")
-        return VerifiedSchedulerRun(
+        verified = VerifiedSchedulerRun(
             run_id=str(run.id), schedule_id=str(run.schedule_snapshot_id or schedule.id),
             module_id=module_id, action_id=action_id,
             owner_module=run.owner_module or None, owner_key=run.owner_key or None, one_off=one_off, user=user,
@@ -378,6 +417,8 @@ def verify_run_context(
             _creation_scope=_creation_scope_of(schedule), _targets=getattr(run, "targets_snapshot", None) or {},
             started_by_username=(str(getattr(clicker, "username", "") or "") or None) if clicker is not None else None,
         )
+        _remember_verified(verified)
+        return verified
     except Exception as exc:
         if type(exc).__name__ == "SchedulerRunContextInvalid":
             raise

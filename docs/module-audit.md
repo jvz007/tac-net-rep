@@ -148,23 +148,47 @@ Since 1.17.20 the action `custom:operation-failed` is Core-only. Core writes it 
 `docs/tactical-operations.md`), so `record()` refuses it with `AuditContractError`. `custom:outcome-unknown` stays open to a module that
 writes its own outcome row.
 
-## Deny rows from a server module (Core 1.17.30, AD-34)
+## Deny rows from a server module (Core 1.17.30, AD-34; core modules too since 1.17.95)
 
-A module whose signed manifest category is `server` (User Invite is the first) can refuse a person who holds none of its permissions and
+A module whose signed manifest category is `server` (User Invite is the first), or, since Core 1.17.95 (Johan, 29 October 2026: denied entries are audited), `core` (Endpoint Comms is the first) can refuse a person who holds none of its permissions and
 still leave a trace. `audit.record` accepts that person as the actor when all of these hold:
 
 * the action is exactly `deny` (no other action, no `custom:` action);
-* the module is enabled, not legacy and its category is `server` (a `core`, `premium`, `test` or empty category is refused);
+* the module is enabled, not legacy and its category is `server` or `core` (a `premium`, `test` or empty category is refused, and so is module `core` itself);
 * Core verifies from the call stack that the caller is that same module. A missing caller, another module, a Core frame, a library
   frame, a generated frame and a disabled module all fail closed with `AuditContractError`;
 * the person is signed in and is not an installer user.
 
-Core marks the row `debug_info.actor_authority = server-module-deny`. A caller cannot supply it. The row names the person (`actor_kind`
+Core marks the row `debug_info.actor_authority = server-module-deny` (the same value for a core module, so exports stay valid; the module's category is visible from `module_id`). A caller cannot supply it. The row names the person (`actor_kind`
 human, `actor_identity` the username). A person who does hold a module permission gets the normal row, with no `actor_authority`.
 Core's own rows (`record_core_refusal`, `record_browser_declared`, the Tactical operation executor) never take this path. The check
 never raises: any error is a refusal. The helper that verifies the caller is Core-private and no module may import it.
 This is AD-34 conditions 1 and 2. Any further module needs Johan's sign-off in chat (AD-34 condition 2). Pinned by
 `tests/audit-server-module-deny-1.17.30.py`.
+
+## Verified module caller (1.17.95)
+
+Needs framework `>=1.17.95`. AD-54 eighth amendment, AD-31 and AD-34. Endpoint Comms is the provider that sends work to devices. A premium
+module such as WAPM calls it for a person. The person holds WAPM's permissions and not Endpoint Comms's, so the audit row used to be refused.
+Core now accepts that row, and Core proves who called. The calling module does not say so.
+
+`audit.record` accepts a signed-in person (or a verified-run owner) who holds none of the provider module's permissions, only when all six hold:
+
+1. The actor is an authenticated person, not an installer user and not an `AuditActor`. The provider is an enabled, signed, non-legacy extension and not Core.
+2. The action is exactly `run` or `deny`. Every other action stays refused.
+3. The provider opted in. One capability it registered sets metadata `allowed_callers: [module ids]` and `audit_person_for_allowed_callers: true`. `allowed_callers` alone does not count, so a provider that already publishes it (Patch Management lists Maintenance and Groups) is not widened.
+4. Core finds the caller from the call stack. It skips Core's own audit frames, then the provider's frames at any depth, and takes the next frame. That frame must be the code of an installed, enabled, non-legacy module on the provider's list. A Core, library, Django, Celery or generated frame, a disabled or legacy module, the provider itself and a read fault give a refusal.
+5. Person path: `request` is a real Django `HttpRequest` (or a DRF `Request` around one) with a Tec-Tac session, and `request.user` is the actor. A stand-in object, another person's request and a missing request are refused.
+6. Run-owner path (no request): pass the optional keyword `verified_run=` with the `VerifiedSchedulerRun` that `verify_run_context` returned to the calling module. Core keeps a registry of what it returned, so a hand-built or copied one is refused. Its `module_id` must be the verified caller, the run must still be running (Core reads the run again), and the actor's username must be the run's owner. A plain context dict is never trusted. A run and a request together are refused.
+
+Core marks the row `debug_info.actor_authority = verified-module-caller` and `debug_info.actor_via_module_id = <calling module id>`. A caller cannot
+supply either key. The row keeps `actor_kind` human, `actor_identity` the username, and the request's IP, session and correlation id.
+
+Endpoint Comms uses it like this. Its patching registration adds `allowed_callers: ["wapm"]` and `audit_person_for_allowed_callers: true`. It then drops its own
+`endpoint-comms.run` and `endpoint-comms.view` check for WAPM and the other listed callers, and writes the run and deny rows with the person as actor
+and the real request. The calling module keeps its own check (`wapm.view`, `wapm.manage`) before every call. A caller that is not verified, not listed,
+or a provider that did not opt in behaves as before: `AuditContractError`, which a module's wrapper treats as a non-fatal `recorded=False`.
+The helper that walks the stack (`core_provider_second_caller`) is Core-private and no module may import it.
 
 ## Standard action vocabulary
 

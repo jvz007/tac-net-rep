@@ -302,6 +302,25 @@ def core_provider_caller_checked(*, provider_file, cache_seconds: float = 0) -> 
         return CallerCheck(None, True)
 
 
+def core_provider_second_caller(*, provider_file, through_module_id) -> CallerIdentity | None:
+    """Core-internal (1.17.95, AD-54 eighth amendment), private, not a contract and not exported: the module whose code called the module
+    ``through_module_id``, which in turn called the Core-owned provider function that called this. Every frame in ``provider_file`` is
+    skipped, then every contiguous frame inside the folder of ``through_module_id`` (any depth: its own helpers), and the next frame is the
+    caller, and only that frame. It gives a module only when that frame is the code of an installed, enabled, non-legacy extension. A Core,
+    library, Django, Celery or generated frame in that position, a disabled, legacy or missing module (either one), a read fault and any
+    error give ``None``. The enabled state is read on every call and nothing is cached. Never raises. The call stack, not an argument, is the proof."""
+    try:
+        if not isinstance(through_module_id, str) or not through_module_id.strip() or _provider_files(provider_file) is None:
+            return None
+        getter = getattr(sys, "_getframe", None)
+        if getter is None:
+            return None
+        return _core_provider_caller(getter(1), provider_file, 0, through_module_id.strip())  # frame 1 is the provider function that called this
+    except Exception:
+        logger.warning("Could not verify the second caller of a Core provider; treating it as unverified.", exc_info=True)
+        return None
+
+
 def _provider_files(provider_file) -> tuple | None:
     """The provider's file(s) as a tuple of non-empty strings, or None when the provider names no usable file (1.17.69: a tuple names several)."""
     if isinstance(provider_file, str):
@@ -320,9 +339,10 @@ def _checked_from(frame, provider_file, cache_seconds: float) -> CallerCheck:
         return CallerCheck(None, True)
 
 
-def _core_provider_caller(frame, provider_file, cache_seconds: float = 0) -> CallerIdentity | None:
+def _core_provider_caller(frame, provider_file, cache_seconds: float = 0, through_module_id=None) -> CallerIdentity | None:
     """Walk up from the provider's own frame (already the first argument), as ``_calling_module`` does for a module provider.
-    Raises ``_ReadFault`` when a read failed; any other exception is the caller's to treat as a fault."""
+    ``through_module_id`` (1.17.95, private) names a module whose own frames sit between the Core provider and the caller: they are skipped,
+    and the next frame is the caller. Raises ``_ReadFault`` when a read failed; any other exception is the caller's to treat as a fault."""
     provider_files = _provider_files(provider_file)
     if provider_files is None:
         return None
@@ -357,6 +377,21 @@ def _core_provider_caller(frame, provider_file, cache_seconds: float = 0) -> Cal
             frame = frame.f_back
         if frame is None or path is None:
             return None  # nothing above the provider, or a generated frame: refuse
+        if through_module_id is not None:
+            # 1.17.95: the first frame after Core's provider must be code of the named (through) module, enabled, signed and not legacy
+            through = next((p for p in plugins if p.plugin_id == through_module_id), None)
+            if through is None or through.plugin_type != "extension" or through.legacy or not enabled(through.plugin_id):
+                return None
+            through_root = norm(through.root)
+            if not _under(path, through_root):
+                return None
+            while frame is not None:
+                path = _code_path(frame, norm)
+                if path is None or not _under(path, through_root):
+                    break
+                frame = frame.f_back
+            if frame is None or path is None:
+                return None
         if _under(path, framework):
             return None  # Core code (the Scheduler, a row lookup, signal dispatch): Core is never a caller
         for plugin in plugins:

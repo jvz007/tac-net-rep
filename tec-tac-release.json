@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.94",
+  "version": "1.17.95",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.17.94.md",
-      "size": 3411,
-      "sha256": "740c460910618b10a5ee948c72d42e8f55c8c39b5e9ed735916cf1130f851fb8"
+      "path": "RELEASE_NOTES_1.17.95.md",
+      "size": 7294,
+      "sha256": "d548727465089ccb122e8f24bf22a7cbce1e3f4a70b3ad5f80b9b4ea15881b01"
     },
     {
       "path": "VERSION",
       "size": 8,
-      "sha256": "182c6e8652c1fc8b1df7ecf99b4d29e75e61bdc69e89c999f05a5fdc5b0fed82"
+      "sha256": "4d2c1772f124fd39d1fd10f5808ca92212f6c5ba43dcf00f1f22e32f1b7e0766"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -73,8 +73,8 @@
     },
     {
       "path": "docs/caller-identity.md",
-      "size": 10799,
-      "sha256": "a494654fae8cbdc6093b8c06d62acf1ebc14312c5eff67990de7a2be81f84260"
+      "size": 11713,
+      "sha256": "74cd3c226f555f58f6bd656741d747dfd0f0b2b7bf4d371721ed8f59056ab87b"
     },
     {
       "path": "docs/capabilities.md",
@@ -93,8 +93,8 @@
     },
     {
       "path": "docs/endpoint-transport.md",
-      "size": 16462,
-      "sha256": "76fe85ea36013daa1a796e728b768df336870bd1f222c017bcf190ae65c2c62a"
+      "size": 16747,
+      "sha256": "b977e6c322d2fded31eca880d3ed8b602297e721e97f7dae9361e7824b081130"
     },
     {
       "path": "docs/event-jobs.md",
@@ -123,8 +123,8 @@
     },
     {
       "path": "docs/module-audit.md",
-      "size": 30999,
-      "sha256": "a9b74c0bb9d3480668c3c6caa1137ef4f65e75b10987bffab6f4d382c4b655ac"
+      "size": 34478,
+      "sha256": "0a5ba3c671a08ea38603063a6c799156a3caddef55a296bc5d1d4aa3844eff6e"
     },
     {
       "path": "docs/module-categories.md",
@@ -1552,6 +1552,11 @@
       "sha256": "8a82fb6baaa0979aed6ee8b9aa6b6e4b4b6b37856cfc820535090341d2b213b7"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.94.md",
+      "size": 3411,
+      "sha256": "740c460910618b10a5ee948c72d42e8f55c8c39b5e9ed735916cf1130f851fb8"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.2.0.md",
       "size": 1977,
       "sha256": "7d78abb704c7a3e459f7437cb0bdcc7ea738f76e97b925f2b4e16466a812cd54"
@@ -1923,8 +1928,8 @@
     },
     {
       "path": "framwork/tec_tac/audit.py",
-      "size": 36761,
-      "sha256": "9dda49cabe853e11deec8733151ec9726479f01f67c2c370daa034ea3fee4770"
+      "size": 42483,
+      "sha256": "3e242fe898e468d9217d8e6436e28addbac7a05a3c2e332db2f3792bad462ef7"
     },
     {
       "path": "framwork/tec_tac/audit_views.py",
@@ -1938,13 +1943,13 @@
     },
     {
       "path": "framwork/tec_tac/caller_identity.py",
-      "size": 20616,
-      "sha256": "ceb4808de3cd42e32ab601f12df8b01c1a53660c9cec043e4c7cb33fbb3aee2a"
+      "size": 23187,
+      "sha256": "f9fd517d61d1843252d1470408c07e1ec4d16dbde2233d9764e25bb30833f01f"
     },
     {
       "path": "framwork/tec_tac/capabilities.py",
-      "size": 24569,
-      "sha256": "44780d42752b4500c21ed7e03f592e42d5a99dcb88de5538f67153897699ef45"
+      "size": 25875,
+      "sha256": "dd4597f4208c6729e53f03b4b065371ab083456c1993ff920a6f61e94c43a80a"
     },
     {
       "path": "framwork/tec_tac/capability_views.py",
@@ -1968,8 +1973,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 428102,
-      "sha256": "9900d1e8860eaf5172cd00f2d2f12e2ef13ba660beb8bcf223c454828139ac7e"
+      "size": 429396,
+      "sha256": "34e3d0f3100464ddefe595c0ff1f3f0538e748c274694c1f78212f208a61136c"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -1998,8 +2003,8 @@
     },
     {
       "path": "framwork/tec_tac/endpoint_transport.py",
-      "size": 50577,
-      "sha256": "835f3f196c6ad4b038950f5f32613cdbfd7193f5a59d4f8e9f90f4906a887f6f"
+      "size": 52209,
+      "sha256": "cdcd5d07b280df9d6b6ad31f9976b26990f66fbc92aa67652f8c00aefea39827"
     },
     {
       "path": "framwork/tec_tac/endpoint_transport_consumer.py",
@@ -2498,8 +2503,8 @@
     },
     {
       "path": "framwork/tec_tac/scheduler_run_context.py",
-      "size": 19799,
-      "sha256": "8b9ba3d33daf786820f3a8aab521775eac6e7498d4a13610a05db2d07e98a1f3"
+      "size": 21222,
+      "sha256": "0fed4163c886fcd06b4d86364d15e52befe9f4307ed8c982ebd81d151feab44e"
     },
     {
       "path": "framwork/tec_tac/scheduler_target_resolvers.py",
@@ -2844,7 +2849,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "bd852e3188acc45bb700239392549fe083966d877d581d849f76afcb26cdd4c2"
+      "sha256": "2cc1f580ef3928ed5f0b4ccc82b26f3be0f02f43ea59b30cac73eaa2adbc2747"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -2942,6 +2947,11 @@
       "sha256": "9705e5013c1335763a617b858678e29bcaf0ca516ff783892d2b470c4ba07210"
     },
     {
+      "path": "tests/audit-core-module-deny-1.17.95.py",
+      "size": 6786,
+      "sha256": "65ec2dcca175f0117c49bda83a62c8bfbe60ad101ecc39ad6b7186b99a39832f"
+    },
+    {
       "path": "tests/audit-correlation-1.17.16.py",
       "size": 8960,
       "sha256": "6ed3ec538ce33cc6ff3a7043fc27e9c5110f4d29fe31b30e49c74e6c155a4f2c"
@@ -2983,8 +2993,8 @@
     },
     {
       "path": "tests/audit-server-module-deny-1.17.30.py",
-      "size": 11525,
-      "sha256": "216d2f2a58d459b6d29be2927ddbddabf1849364f732e72e7909cd5a81a04715"
+      "size": 11710,
+      "sha256": "0f5f571ec1ecdc8159433d3522c89bed2aad8a0eef9013fbf106afc2c82a03ca"
     },
     {
       "path": "tests/audit-server-provenance-1.17.7.py",
@@ -2993,8 +3003,13 @@
     },
     {
       "path": "tests/audit-standalone-load-1.17.30.py",
-      "size": 1639,
-      "sha256": "ff4b7f3c5ffa7f940f100ded685097e0a805be2c4f95ba040760c1f7cd2f650f"
+      "size": 1677,
+      "sha256": "6fa74a2779c8f74afa1224c002935fc250c5c58d426cb314551d2b61d76e60ec"
+    },
+    {
+      "path": "tests/audit-verified-caller-actor-1.17.95.py",
+      "size": 16934,
+      "sha256": "7d03d95e6897953a11961d5ca984eebd92b07221a0ef3e61d6526f51bdad79fb"
     },
     {
       "path": "tests/backup-closure-1.15.145.py",
@@ -3115,6 +3130,11 @@
       "path": "tests/caller-identity-core-provider-1.17.27.py",
       "size": 9112,
       "sha256": "d1f3ce0b01810cd063939815723eb99143be48d8181bc53d0363ea27793adb2d"
+    },
+    {
+      "path": "tests/caller-identity-second-caller-1.17.95.py",
+      "size": 10874,
+      "sha256": "b326064a229b41a8b26526fa0625a3617aedcb0cf8ae99034f12fbc3d8a58742"
     },
     {
       "path": "tests/caller-identity-server-module-1.17.26.py",
@@ -3368,8 +3388,8 @@
     },
     {
       "path": "tests/endpoint-transport-docs-1.17.94.py",
-      "size": 1918,
-      "sha256": "e751daeef3b12c40c0e24643ff6e93f60ad54f1b4e93d898a83e6ee7ec504946"
+      "size": 1951,
+      "sha256": "a2b328845c4ad6f459e7234d2785b62f021c02f424ba170d84b2884deb60f154"
     },
     {
       "path": "tests/endpoint-transport-identity-1.17.90.py",
@@ -3395,6 +3415,11 @@
       "path": "tests/endpoint-transport-owner-1.17.94.py",
       "size": 8095,
       "sha256": "0d04228f9e57ba1b50ed5b1e4ecda239988b218c400bf95f240a2f3c973284ff"
+    },
+    {
+      "path": "tests/endpoint-transport-owner-precheck-1.17.95.py",
+      "size": 7526,
+      "sha256": "a5eb64d0444c106eb874f5be852446f2652820c456a3708d90c615f3def83cde"
     },
     {
       "path": "tests/endpoint-transport-pools-1.17.93.py",

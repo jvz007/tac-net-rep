@@ -7,7 +7,7 @@ Django is not installed on the development PC.
 
 Accepted: action deny from a module whose category is server, with the verified caller being that same module, for a signed-in person
 with none of its permissions; the row carries actor_kind human, actor_identity the username and debug_info.actor_authority server-module-deny.
-Refused (AuditContractError, nothing written): any other action (add, modify, view, custom:*), category core, premium, test or empty, a
+Refused (AuditContractError, nothing written): any other action (add, modify, view, custom:*), category premium, test or empty, a
 verified caller that is another module, no verified caller, a Core caller, an installer user, an unauthenticated actor, a disabled module and
 a legacy module. Service and device actors are unchanged; custom:operation-failed is still refused by record(); a person who holds a module
 permission gets the normal row with no actor_authority; the browser paths never take the new path; a caller cannot supply the marker; the
@@ -145,7 +145,7 @@ except audit.AuditContractError:
     pass
 
 # ---- other categories, and modules that cannot take the path
-for module in ("coremod-demo", "premium-demo", "test-demo", "nocat-demo", "serverdis-demo", "serverleg-demo", "unknown-demo"):
+for module in ("premium-demo", "test-demo", "nocat-demo", "serverdis-demo", "serverleg-demo", "unknown-demo"):
     refused(person, module=module)
 reset()
 CALLER["value"] = who("core")
@@ -158,7 +158,7 @@ except audit.AuditContractError:
 # ---- the verified caller
 refused(person, caller=who("server-other"))  # another module's code calls
 refused(person, caller=who("premium-demo"))
-refused(person, caller=who("coremod-demo"))
+refused(person, caller=who("coremod-demo"))  # a core module calling a server module's audit
 refused(person, caller=None)  # no verified caller: a Core frame, a library, a generated frame or an error all answer None
 refused(person, caller=who("core"))  # Core is never a module caller
 refused(person, caller=SimpleNamespace(module_id="", kind="module", module_version="1"))
@@ -232,6 +232,7 @@ must(audit._server_module_deny_allowed(person, {"id": "server-demo", "category":
 CALLER["value"] = who("server-demo")
 must(audit._server_module_deny_allowed(person, {"id": "server-demo", "category": "server"}, "deny") is True, "the one accepted case")
 must(audit._server_module_deny_allowed(person, {"id": "server-demo", "category": "premium"}, "deny") is False, "category")
+must(audit._server_module_deny_allowed(person, {"id": "server-demo", "category": "core"}, "deny") is True, "category core is accepted since 1.17.95 (AD-34)")
 must(audit._server_module_deny_allowed(person, {"id": "server-demo", "category": "server", "legacy": True}, "deny") is False, "legacy")
 
 # ---- docs and contract text
