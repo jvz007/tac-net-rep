@@ -79,6 +79,9 @@ def describe(job: dict) -> dict | None:
         message = f"Update failed {old} -> {new}." if old != "unknown" else f"Update failed to {new}."
         if rollback and rollback.get("status") == "failed":
             message += " The rollback did not finish, check the server."
+        elif old != "unknown" and rollback and rollback.get("status") == "warning":
+            # 1.17.96: the files are restored; one of the installer's own checks after the restore reported a warning.
+            message += f" {old} was restored; the check after the restore reported a warning, check the server."
         elif old != "unknown" and rollback and (rollback.get("status") == "succeeded" or rollback.get("performed") is False):
             message += f" {old} was restored."
         action = FAILED_ACTION

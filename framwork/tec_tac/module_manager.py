@@ -20,15 +20,19 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
-from .safe_files import atomic_json
+from . import module_job_logs
 from .registry import RegistryError, discover_plugins, get_plugins
+from .safe_files import atomic_json
+from .trust_policy import TrustPolicyError
+from .trust_policy import require_accepted as require_trust_accepted
 from .trusted_publishers import PublisherTrustError, verify_release_files
-from .trust_policy import TrustPolicyError, require_accepted as require_trust_accepted
 
 STATE_ROOT = Path("/var/lib/tec-tac/module-manager")
 STAGED_ROOT = STATE_ROOT / "staged"
 JOBS_ROOT = STATE_ROOT / "jobs"
 LOGS_ROOT = STATE_ROOT / "logs"
+# 1.17.96: a single job returns the last 200 log lines; each row of the old history list (up to 1000 rows) keeps 40 so that payload does not grow five-fold.
+HISTORY_ROW_LOG_TAIL_LINES = 40
 HELPER = Path("/usr/local/sbin/tec-tac-module-job")
 MAX_PACKAGE_BYTES = 100 * 1024 * 1024
 MAX_EXTRACTED_BYTES = 512 * 1024 * 1024
@@ -573,6 +577,9 @@ def _helper_has_crlf(path: Path) -> bool:
 
 
 def _dispatch(job_id: str) -> None:
+    # 1.17.96: imported when used (tests stub the registry module)
+    from .registry import invalidate_plugin_cache
+    invalidate_plugin_cache()  # 1.17.96: the root helper is about to change module files; the fingerprint also guards other processes
     if not HELPER.is_file():
         raise ModuleManagerError(f"Privileged module helper is not installed at {HELPER}.")
     try:
@@ -687,7 +694,7 @@ def queue_remove(plugin_id: str, requested_by: str | None = None, confirm_withou
     return public_job(job)
 
 
-def public_job(job: dict) -> dict:
+def public_job(job: dict, *, tail_lines: int = 200) -> dict:
     allowed = {
         "id", "status", "created_at", "started_at", "finished_at", "stage", "error", "error_type",
         "action", "plugin_id", "replace", "purge_data", "package_sha256", "package_filename", "requested_by",
@@ -697,15 +704,8 @@ def public_job(job: dict) -> dict:
         "hand_back_skipped",
     }
     result = {key: value for key, value in job.items() if key in allowed}
-    log_path = LOGS_ROOT / f"{job.get('id')}.log"
-    if log_path.is_file():
-        try:
-            lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
-            result["log_tail"] = lines[-40:]
-        except OSError:
-            result["log_tail"] = []
-    else:
-        result["log_tail"] = []
+    # 1.17.96: the last 200 lines (was 40), read from the end of the file only. The history list asks for 40 per row (see _load_job_history_rows).
+    result["log_tail"] = module_job_logs.tail_lines(LOGS_ROOT / f"{job.get('id')}.log", tail_lines)
     return result
 
 
@@ -733,7 +733,7 @@ def _load_job_history_rows() -> list[dict]:
             payload = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(payload, dict):
                 continue
-            row = public_job(payload)
+            row = public_job(payload, tail_lines=HISTORY_ROW_LOG_TAIL_LINES)
             actions = ((payload.get("plan") or {}).get("actions") or []) if isinstance(payload.get("plan"), dict) else []
             module_ids = [str(item.get("id")) for item in actions if isinstance(item, dict) and item.get("id")]
             if not module_ids and payload.get("plugin_id") and payload.get("plugin_id") != "batch":

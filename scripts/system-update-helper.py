@@ -1174,7 +1174,7 @@ def restore_backup(backup, target):
 
 
 INSTALL_TIMEOUT_SECONDS = 1800
-VERIFY_TIMEOUT_SECONDS = 90
+VERIFY_TIMEOUT_SECONDS = 120  # 1.17.96: was 90; this check runs the same contract-catalog step as install.sh (46 s on dev02)
 
 
 def _run_bounded(command, *, log, timeout, cwd=None, env=None, label="command"):
@@ -1217,6 +1217,73 @@ def _installer_refusal_reason(log_path):
         return "the installer gave no reason"
     reason = re.sub(r"\s+", " ", lines[-1].split(INSTALLER_REFUSAL_MARKER, 1)[1]).strip().rstrip(".")
     return reason[:300] or "the installer gave no reason"
+
+
+# 1.17.96: a rollback must not fail on a verification step. install.sh now exits INSTALL_VERIFY_FAILED_EXIT (79) with a
+# "[TEC-TAC-INSTALL] VERIFY-FAILED: <step>" line when one of its checks fails after the files are in place. The installer a rollback runs is
+# the previous version's (it exits 1 and writes "[TEC-TAC] ERROR: <step> verification failed or timed out."), so the same failure is also
+# recognised from that text, but only for the known steps below and only in what the rollback installer itself wrote. Any other failure
+# (a restore error, another exit status, another error text) stays a real ROLLBACK FAILED.
+INSTALL_VERIFY_FAILED_EXIT = 79
+INSTALLER_VERIFY_MARKER = "[TEC-TAC-INSTALL] VERIFY-FAILED:"
+INSTALLER_ERROR_MARKER = "[TEC-TAC] ERROR:"
+INSTALLER_VERIFY_STEPS = (
+    "Framework model/RBAC",
+    "Framework API route",
+    "Tec-Tac developer contract catalog",
+    "Tec-Tac Tactical Report Manager bridge",
+    "Tec-Tac scheduler/capability Celery task",
+    "Tec-Tac capability registry",
+    "Tec-Tac session-security capability",
+    "Tec-Tac Core Resource Directory capability",
+    "Core server-backup capability",
+    "Core server-maintenance capability",
+    "Core Tactical operations capability",
+    "Core Tactical websocket ticket capability",
+)
+INSTALLER_VERIFY_SUFFIXES = (" verification failed or timed out.", " registration failed or timed out.", " verification failed.")
+
+
+def _log_size(log_path):
+    try:
+        return log_path.stat().st_size
+    except OSError:
+        return None
+
+
+def _log_tail_lines(log_path, since):
+    """The lines written to the update log from byte offset ``since`` on (at most the last 64 KiB). None when the log cannot be read."""
+    if since is None:
+        return None
+    try:
+        with log_path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            handle.seek(max(since, handle.tell() - 65536))
+            return handle.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return None
+
+
+def _rollback_verification_step(rc, log_path, since):
+    """The label of the verification step the rollback installer stopped at, or None when its failure was anything else."""
+    lines = _log_tail_lines(log_path, since)
+    if rc == INSTALL_VERIFY_FAILED_EXIT:
+        for line in reversed(lines or []):
+            if INSTALLER_VERIFY_MARKER in line:
+                label = re.sub(r"\s+", " ", line.split(INSTALLER_VERIFY_MARKER, 1)[1]).strip()
+                if label:
+                    return label[:200]
+        return "an installer verification step"
+    if rc != 1 or not lines:
+        return None
+    errors = [line for line in lines if INSTALLER_ERROR_MARKER in line]
+    if not errors:
+        return None
+    text = re.sub(r"\s+", " ", errors[-1].split(INSTALLER_ERROR_MARKER, 1)[1]).strip()
+    for suffix in INSTALLER_VERIFY_SUFFIXES:
+        if text.endswith(suffix) and text[: -len(suffix)] in INSTALLER_VERIFY_STEPS:
+            return "Verifying " + text[: -len(suffix)]
+    return None
 
 
 def run_install(component, target, log):
@@ -1459,13 +1526,28 @@ def run_job(job_id):
                         restore_backup(backup, target)
                     else:
                         raise RuntimeError("rollback source is unavailable")
+                    log.flush()
+                    rollback_log_start = _log_size(log_path)
                     rollback_rc = run_install(component, target, log)
+                    verification_warning = None
                     if rollback_rc != 0:
-                        raise RuntimeError(f"rollback installer exited with status {rollback_rc}")
+                        log.flush()
+                        verification_warning = _rollback_verification_step(rollback_rc, log_path, rollback_log_start)
+                        if verification_warning is None:
+                            raise RuntimeError(f"rollback installer exited with status {rollback_rc}")
                     if component == "framework":
                         verify_dynamic_plugins(Path(cfg.get("TEC_TAC_ROOT", "/opt/tec-tac")).resolve(), dynamic_inventory)
                     verify_source_runtime_layout(component, target)
-                    job["rollback"] = {"performed": True, "status": "succeeded", "version": old_version}
+                    if verification_warning is None:
+                        job["rollback"] = {"performed": True, "status": "succeeded", "version": old_version}
+                    else:
+                        # 1.17.96: the files are restored and checked; only one of the installer's own checks reported a failure. A warning, not a failed rollback.
+                        job["rollback"] = {
+                            "performed": True, "status": "warning", "version": old_version, "warning": verification_warning,
+                            "installer_exit_status": rollback_rc,
+                            "advice": f"Restart the Tec-Tac services and check {verification_warning}.",
+                        }
+                        log.write(f"[TEC-TAC-UPDATE] restored {old_version}, verification warning: {verification_warning}\n")
                 except Exception as rb_exc:
                     rollback_error = str(rb_exc)
                     job["rollback"] = {"performed": True, "status": "failed", "version": old_version, "error": rollback_error}

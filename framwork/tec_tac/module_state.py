@@ -222,9 +222,16 @@ def _save_state_unlocked(payload: dict) -> None:
     atomic_json(STATE_FILE, payload, mode=0o644)
 
 
+def _invalidate_plugin_cache() -> None:
+    # 1.17.96: imported when used, so a test that stubs the registry module still imports this one
+    from .registry import invalidate_plugin_cache
+    invalidate_plugin_cache()
+
+
 def save_state(payload: dict) -> None:
     with _state_lock(True):
         _save_state_unlocked(payload)
+    _invalidate_plugin_cache()  # 1.17.96
 
 
 def module_record(module_id: str, state: dict | None = None) -> dict:
@@ -280,6 +287,7 @@ def forget_module(module_id: str) -> None:
         if module_id in state["modules"]:
             del state["modules"][module_id]
             _save_state_unlocked(state)
+    _invalidate_plugin_cache()  # 1.17.96
 
 
 def filter_enabled_plugins(plugins: Iterable) -> tuple:

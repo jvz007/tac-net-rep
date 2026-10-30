@@ -52,7 +52,10 @@ def extract(tree, names):
     return picked
 
 
-NAMES = {"INSTALL_REFUSED_EXIT", "INSTALLER_REFUSAL_MARKER", "_UpdateRefused", "_installer_refusal_reason", "run_job"}
+NAMES = {"INSTALL_REFUSED_EXIT", "INSTALLER_REFUSAL_MARKER", "_UpdateRefused", "_installer_refusal_reason", "run_job",
+         # 1.17.96: run_job also classifies a rollback installer that stops at a verification check
+         "INSTALL_VERIFY_FAILED_EXIT", "INSTALLER_VERIFY_MARKER", "INSTALLER_ERROR_MARKER", "INSTALLER_VERIFY_STEPS",
+         "INSTALLER_VERIFY_SUFFIXES", "_log_size", "_log_tail_lines", "_rollback_verification_step"}
 EXTRACTED = extract(TREE, NAMES)
 must(next(n for n in EXTRACTED if getattr(n, "name", "") == "run_job") is not None, "run_job extracted")
 

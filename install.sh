@@ -367,59 +367,85 @@ else
     printf '%s\n' "${MODULE_MIGRATION_OUTPUT}"
 fi
 
+# 1.17.96: every post-install verification step runs through run_verify_step with one time limit. A step that takes longer than the limit
+# (the contract catalog check took 46 s on dev02 and the old 45 s limit stopped the install) now has 120 s. On a failure the step label, the
+# elapsed seconds, the exit status (124 is the time limit) and the last 20 lines of the step's output are logged, with passwords, secrets,
+# tokens, keys and authorization text masked. A fatal step exits 79 (INSTALL_VERIFY_FAILED_EXIT) after the same "[TEC-TAC] ERROR:" line as
+# before and a "[TEC-TAC-INSTALL] VERIFY-FAILED: <step>" marker; the update helper reads either to tell a failed check from a failed restore.
+VERIFY_STEP_TIMEOUT_SECONDS=120
+INSTALL_VERIFY_FAILED_EXIT=79
+verify_fail() {
+    printf '[TEC-TAC] ERROR: %s\n' "$2" >&2
+    printf '[TEC-TAC-INSTALL] VERIFY-FAILED: Verifying %s\n' "$1" >&2
+    exit "${INSTALL_VERIFY_FAILED_EXIT}"
+}
+scrub_verify_output() {
+    # GNU sed. The I flag makes the names case-insensitive (PASSWORD, Secret, TOKEN, api_key, SECRET_KEY ...).
+    sed -E \
+        -e 's#(://[^/:@[:space:]]+:)[^@[:space:]]+@#\1***@#g' \
+        -e 's/(authorization["'"'"']?[[:space:]]*[:=][[:space:]]*)([A-Za-z]+[[:space:]]+)?[^[:space:],;&]+/\1***/gI' \
+        -e 's/(bearer[[:space:]]+)[A-Za-z0-9._~+\/=-]+/\1***/gI' \
+        -e 's/([A-Za-z0-9_.-]*(pass(word|wd)?|secret|token|key)[A-Za-z0-9_.-]*["'"'"']?[[:space:]]*[=:][[:space:]]*)("[^"]*"|'"'"'[^'"'"']*'"'"'|[^[:space:],;&]+)/\1***/gI'
+}
+run_verify_step() {
+    local label="$1" code="$2" mode="${3:-fatal}" noun="${4:-verification}"
+    local out rc=0 started="${SECONDS}" elapsed reason
+    out="$(mktemp)" || fail "Unable to create a temporary file for the ${label} check."
+    run_as_tactical timeout "${VERIFY_STEP_TIMEOUT_SECONDS}s" bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${code}\"" >"${out}" 2>&1 || rc=$?
+    cat "${out}"
+    if [[ "${rc}" -eq 0 ]]; then
+        rm -f "${out}"
+        return 0
+    fi
+    elapsed=$(( SECONDS - started ))
+    if [[ "${rc}" -eq 124 ]]; then reason="timed out after ${VERIFY_STEP_TIMEOUT_SECONDS} s"; else reason="exit status ${rc}"; fi
+    log "VERIFY STEP FAILED: ${label} (${reason}; ${elapsed} s elapsed)"
+    log "Last 20 lines of the ${label} output (passwords, secrets, tokens and keys masked):"
+    tail -n 20 "${out}" | scrub_verify_output | sed 's/^/[TEC-TAC]   /'
+    rm -f "${out}"
+    if [[ "${mode}" == "fatal" ]]; then
+        verify_fail "${label}" "${label} ${noun} failed or timed out."
+    fi
+    return "${rc}"
+}
+
 log "Verifying framework models and RBAC."
 VERIFY_MODEL_CODE="from django.apps import apps; assert apps.is_installed('tec_tac'), 'tec_tac app is not installed'; p=apps.get_model('tec_tac','ExtensionRolePermission'); assert p._meta.db_table=='tfdreporting_extensionrolepermission', p._meta.db_table; from tec_tac.rbac import registered_permissions; assert len(registered_permissions()) >= 1, 'no registered Tec-Tac permissions'; rc=apps.get_model('tec_tac','TecTacRuntimeConfig'); sm=apps.get_model('tec_tac','TecTacSchedule'); sr=apps.get_model('tec_tac','TecTacScheduleRun'); ss=apps.get_model('tec_tac','TecTacSessionTrust'); sc=apps.get_model('tec_tac','TecTacSessionSecurityConfig'); sa=apps.get_model('tec_tac','TecTacSessionAudit'); print('TEC-TAC model/RBAC verification OK:', p._meta.label, rc._meta.label, sm._meta.label, sr._meta.label, ss._meta.label, sc._meta.label, sa._meta.label)"
-if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_MODEL_CODE}\""; then
-    fail "Framework model/RBAC verification failed or timed out."
-fi
+run_verify_step "Framework model/RBAC" "${VERIFY_MODEL_CODE}"
 
 log "Returning old saved views with a reserved 'fs-' key to the saved views list."
 VERIFY_STRAY_VIEWS_CODE="from tec_tac.filter_sets import repair_stray_saved_views; r=repair_stray_saved_views(); print('TEC-TAC saved views repaired:', r['renamed'], 'renamed,', r['skipped'], 'skipped')"
-if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_STRAY_VIEWS_CODE}\""; then
+if ! run_verify_step "Saved views repair" "${VERIFY_STRAY_VIEWS_CODE}" warn; then
     log "WARNING: The saved views repair step failed or timed out; installation will continue. It is safe to run again on the next install."
 fi
 
 log "Verifying Tec-Tac API routes."
 VERIFY_ROUTE_CODE="from django.urls import resolve; checks=[('/api/tfd/ui/context/','tec-tac-ui-context'),('/api/tfd/system/runtime-settings/','tec-tac-runtime-settings'),('/api/tfd/system/update-source/','tec-tac-update-source'),('/api/tfd/access/extensions/','tec-tac-extension-permissions'),('/api/tfd/access/security-policy/','tec-tac-access-security-policy'),('/api/tfd/modules/','tec-tac-module-catalog'),('/api/tfd/system/updates/','tec-tac-system-update-status'),('/api/tfd/system/diagnostics/','tec-tac-system-diagnostics'),('/api/tfd/capabilities/','tec-tac-capabilities'),('/api/tfd/contracts/','tec-tac-contracts'),('/api/tfd/contracts/export/','tec-tac-contract-export'),('/api/tfd/resources/clients/','tec-tac-resource-clients'),('/api/tfd/resources/sites/','tec-tac-resource-sites'),('/api/tfd/resources/agents/','tec-tac-resource-agents'),('/api/tfd/audit/record/','tec-tac-audit-record'),('/api/tfd/scheduler/actions/','tec-tac-scheduler-actions'),('/api/tfd/scheduler/schedules/','tec-tac-scheduler-schedules'),('/api/tfd/scheduler/runs/','tec-tac-scheduler-runs'),('/api/tfd/modules/repositories/','tec-tac-module-repositories'),('/api/tfd/modules/catalog/online/','tec-tac-module-online-catalog'),('/api/tfd/modules/hotfixes/inspect/','tec-tac-module-hotfix-inspect'),('/api/tfd/session/current/','tec-tac-session-current'),('/api/tfd/session/activity/','tec-tac-session-activity'),('/api/tfd/session/policy/','tec-tac-session-policy'),('/api/tfd/session/audit/','tec-tac-session-audit'),('/api/tfd/session/diagnostics/','tec-tac-session-diagnostics')]; resolved=[(path, resolve(path).url_name) for path,_ in checks]; assert all(actual == expected for (path,actual),(_,expected) in zip(resolved,checks)), resolved; print('TEC-TAC route verification OK:', resolved)"
-if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_ROUTE_CODE}\""; then
-    fail "Framework API route verification failed or timed out."
-fi
+run_verify_step "Framework API route" "${VERIFY_ROUTE_CODE}"
 
 log "Verifying Tec-Tac developer contract catalog."
 VERIFY_CONTRACT_CODE="from tec_tac.contracts import build_contract_catalog,render_markdown,render_text; from tec_tac.resources import CONTRACT_ID,CONTRACT_VERSION; c=build_contract_catalog(); expected='${PACKAGE_VERSION}'; resource_version=tuple(int(x) for x in CONTRACT_VERSION.split('.')); assert c['framework_version']==expected, f'framework version mismatch: expected {expected}, got {c[\"framework_version\"]}'; assert any(x['name']=='get_capability' for x in c['core']), 'get_capability missing from core contract catalog'; assert any(x['name']=='revoke_user_sessions' and x['area']=='session-security' for x in c['core']), 'session-security revoke_user_sessions contract missing'; assert any(x['name']=='record' and x['area']=='audit' for x in c['core']), 'audit record contract missing'; assert any(x['name']=='list_clients' and x['area']=='resources' for x in c['core']), 'resource list_clients contract missing'; assert (1,1,0) <= resource_version < (2,0,0), f'unsupported core.resources contract version {CONTRACT_VERSION}; expected >=1.1.0,<2.0.0'; assert c['resource_directory']['id']==CONTRACT_ID, f'resource directory id mismatch: expected {CONTRACT_ID}, got {c[\"resource_directory\"][\"id\"]}'; assert c['resource_directory']['version']==CONTRACT_VERSION, f'resource directory version mismatch: expected {CONTRACT_VERSION}, got {c[\"resource_directory\"][\"version\"]}'; assert all(x.get('health_checked') is False for x in c['capabilities']), 'contract catalog unexpectedly performed capability health checks'; assert any(x['route']=='/api/tfd/contracts/' for x in c['http']), 'contracts HTTP route missing'; assert any(x['route']=='/api/tfd/audit/record/' for x in c['http']), 'audit record HTTP route missing'; assert any(x['route']=='/api/tfd/session/current/' for x in c['http']), 'session current HTTP route missing'; assert '# Tec-Tac Public Contracts' in render_markdown(c), 'markdown contract rendering header missing'; assert 'TEC-TAC PUBLIC CONTRACTS' in render_text(c), 'text contract rendering header missing'; print('TEC-TAC developer contract catalog OK:', c['counts'], 'version='+expected, 'core.resources='+CONTRACT_VERSION)"
-if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_CONTRACT_CODE}\""; then
-    fail "Tec-Tac developer contract catalog verification failed or timed out."
-fi
+run_verify_step "Tec-Tac developer contract catalog" "${VERIFY_CONTRACT_CODE}"
 
 log "Verifying Core Tactical Report Manager bridge."
 VERIFY_REPORTING_CODE="from tec_tac.reporting import reporting_bridge_status; from ee.reporting import constants as c,utils as u,views as v; s=reporting_bridge_status(); assert s['installed'] or s['handover'], s; assert not s['bridge_error'], s; s['handover_error'] and print('TEC-TAC reporting handover warning (Report Manager owns the bridge but is unhealthy):', s['handover_error']); assert (not s['installed']) or s['available'], s; assert (not s['installed']) or c.REPORTING_MODELS == u.REPORTING_MODELS, 'Report Manager model registry mismatch'; assert (not s['installed']) or getattr(v.QuerySchema.get,'_tec_tac_reporting_bridge',False), 'QuerySchema reporting bridge marker missing'; assert (not s['installed']) or getattr(u.resolve_model,'_tec_tac_reporting_bridge',False), 'resolve_model reporting bridge marker missing'; print('TEC-TAC reporting bridge OK:', s)"
-if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_REPORTING_CODE}\""; then
-    fail "Tec-Tac Tactical Report Manager bridge verification failed or timed out."
-fi
+run_verify_step "Tec-Tac Tactical Report Manager bridge" "${VERIFY_REPORTING_CODE}"
 
 log "Verifying Tec-Tac scheduler/capability Celery task registration."
 VERIFY_SCHEDULER_CODE="from tacticalrmm.celery import app; app.autodiscover_tasks(force=True); assert 'tec_tac.execute_schedule_run' in app.tasks and 'tec_tac.capability_probe' in app.tasks, sorted(k for k in app.tasks if k.startswith('tec_tac')); print('TEC-TAC scheduler/capability Celery tasks OK')"
-if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_SCHEDULER_CODE}\""; then
-    fail "Tec-Tac scheduler/capability Celery task registration failed or timed out."
-fi
+run_verify_step "Tec-Tac scheduler/capability Celery task" "${VERIFY_SCHEDULER_CODE}" fatal "registration"
 
 log "Verifying Tec-Tac capability registry."
 VERIFY_CAPABILITY_CODE="from tec_tac.capabilities import register_capability,get_capability,capability_status; provider=object(); register_capability(id='tec-tac.install-probe',module_id='tec-tac',version='1.0.0',provider=provider); assert get_capability('tec-tac.install-probe',version='>=1,<2') is provider, 'install-probe capability provider mismatch'; status=capability_status('tec-tac.install-probe'); assert status['available'] and status['state']=='available', status; print('TEC-TAC capability registry OK:', status['id'], status['capability_version'])"
-if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_CAPABILITY_CODE}\""; then
-    fail "Tec-Tac capability registry verification failed or timed out."
-fi
+run_verify_step "Tec-Tac capability registry" "${VERIFY_CAPABILITY_CODE}"
 
 log "Verifying Core session-security capability."
 VERIFY_SESSION_SECURITY_CODE="from tec_tac.capabilities import get_capability,capability_status; p=get_capability('core.session_security',version='>=2.0.0,<3.0.0'); policy=p.get_policy(context={'source':'installer'}); assert policy['idle_timeout_minutes']>=1 and policy['absolute_lifetime_minutes']>=1, f'invalid session-security policy: {policy}'; status=capability_status('core.session_security'); assert status['available'] and status['capability_version']=='2.0.0', status; print('TEC-TAC session-security capability OK:', policy['ip_change_policy'])"
-if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_SESSION_SECURITY_CODE}\""; then
-    fail "Tec-Tac session-security capability verification failed or timed out."
-fi
+run_verify_step "Tec-Tac session-security capability" "${VERIFY_SESSION_SECURITY_CODE}"
 
 log "Verifying Core Resource Directory capability."
 VERIFY_RESOURCE_CODE="from tec_tac.capabilities import get_capability,capability_status; from tec_tac.resources import CONTRACT_ID,CONTRACT_VERSION,resource_contract_metadata; resource_version=tuple(int(x) for x in CONTRACT_VERSION.split('.')); assert (1,1,0) <= resource_version < (2,0,0), f'unsupported core.resources contract version {CONTRACT_VERSION}; expected >=1.1.0,<2.0.0'; p=get_capability(CONTRACT_ID,version='>=1.1.0,<2.0.0'); m=resource_contract_metadata(); assert m['version']==CONTRACT_VERSION, f'resource metadata version mismatch: expected {CONTRACT_VERSION}, got {m[\"version\"]}'; assert set(m['resource_types'])=={'client','site','agent'}, f'unexpected resource types: {m[\"resource_types\"]}'; required=('list_clients','get_client','create_client','update_client','list_sites','get_site','create_site','update_site','list_agents','get_agent','resolve_resource'); missing=[n for n in required if not hasattr(p,n)]; assert not missing, f'core.resources provider missing operations: {missing}'; status=capability_status(CONTRACT_ID); assert status['available'], f'core.resources capability unavailable: {status}'; assert status['capability_version']==CONTRACT_VERSION, f'capability version mismatch: expected {CONTRACT_VERSION}, got {status[\"capability_version\"]}'; print('TEC-TAC Resource Directory OK:', CONTRACT_VERSION, m['resource_types'].keys())"
-if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_RESOURCE_CODE}\""; then
-    fail "Tec-Tac Core Resource Directory capability verification failed or timed out."
-fi
+run_verify_step "Tec-Tac Core Resource Directory capability" "${VERIFY_RESOURCE_CODE}"
 
 MODULE_HELPER="/usr/local/sbin/tec-tac-module-job"
 MODULE_V2_HELPER="/usr/local/sbin/tec-tac-module-v2-job"
@@ -876,28 +902,20 @@ log "Installed Core housekeeping helper: ${HOUSEKEEPING_HELPER}"
 
 log "Verifying Core server-backup capability registration."
 VERIFY_SERVER_BACKUP_CODE="from tec_tac.capabilities import capability_status,get_capability; s=capability_status('core.server_backup',version='>=1.6.0,<2.0.0'); assert s['available'], s; p=get_capability('core.server_backup',version='>=1.6.0,<2.0.0'); assert all(hasattr(p,n) for n in ('create_backup','list_backups','restore_backup','validate_restore','apply_retention','store_secret','delete_secret')); print('TEC-TAC core.server_backup OK:', s['capability_version'], s['operations'])"
-if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_SERVER_BACKUP_CODE}\""; then
-    fail "Core server-backup capability verification failed or timed out."
-fi
+run_verify_step "Core server-backup capability" "${VERIFY_SERVER_BACKUP_CODE}"
 
 
 log "Verifying Core server-maintenance capability registration."
 VERIFY_SERVER_MAINTENANCE_CODE="from tec_tac.capabilities import capability_status,get_capability; s=capability_status('core.server_maintenance',version='>=1,<2'); assert s['available'], s; p=get_capability('core.server_maintenance',version='>=1,<2'); assert all(hasattr(p,n) for n in ('start','get_job','cancel','list_jobs')); print('TEC-TAC core.server_maintenance OK:', s['capability_version'], s['operations'])"
-if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_SERVER_MAINTENANCE_CODE}\""; then
-    fail "Core server-maintenance capability verification failed or timed out."
-fi
+run_verify_step "Core server-maintenance capability" "${VERIFY_SERVER_MAINTENANCE_CODE}"
 
 log "Verifying Core Tactical operations capability registration."
 VERIFY_TACTICAL_OPERATIONS_CODE="from django.urls import resolve; from tec_tac.capabilities import capability_status,get_capability; s=capability_status('core.tactical_operations',version='>=1,<2'); assert s['available'], s; p=get_capability('core.tactical_operations',version='>=1,<2'); assert all(hasattr(p,n) for n in ('run','list_operations','get_operation')), 'core.tactical_operations provider incomplete'; assert resolve('/api/tfd/tactical-operations/probe/probe/').url_name=='tec-tac-tactical-operations', 'tactical-operations route missing'; print('TEC-TAC core.tactical_operations OK:', s['capability_version'], len(p.list_operations()), 'declared operation(s)')"
-if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_TACTICAL_OPERATIONS_CODE}\""; then
-    fail "Core Tactical operations capability verification failed or timed out."
-fi
+run_verify_step "Core Tactical operations capability" "${VERIFY_TACTICAL_OPERATIONS_CODE}"
 
 log "Verifying Core Tactical websocket ticket capability registration."
 VERIFY_TACTICAL_WEBSOCKET_CODE="from tec_tac.capabilities import capability_status,get_capability; s=capability_status('core.tactical_websocket',version='>=1,<2'); assert s['available'], s; p=get_capability('core.tactical_websocket',version='>=1,<2'); assert hasattr(p,'issue_ticket'), 'core.tactical_websocket provider incomplete'; print('TEC-TAC core.tactical_websocket OK:', s['capability_version'])"
-if ! run_as_tactical timeout 45s bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${VERIFY_TACTICAL_WEBSOCKET_CODE}\""; then
-    fail "Core Tactical websocket ticket capability verification failed or timed out."
-fi
+run_verify_step "Core Tactical websocket ticket capability" "${VERIFY_TACTICAL_WEBSOCKET_CODE}"
 
 
 SCHEDULER_SERVICE="/etc/systemd/system/tec-tac-scheduler.service"

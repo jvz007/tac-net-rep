@@ -12,6 +12,8 @@ All routes need an authenticated Tec-Tac session with `core.privileged_operation
 | `GET /api/tfd/system/updates/jobs/<id>/` | One job. Since 1.17.67 a job that is no longer in the jobs folder is read from history instead of answering 404. |
 | `GET /api/tfd/system/updates/jobs/<id>/log/` | The log as plain text. `?download=1` sends a file named `system-update-<component>-<YYYY-MM-DD>.log`. |
 
+Since 1.17.96 a job answer that carries `log_tail` (the detail route and the recent-history list) returns the last 200 lines, each cut at 2000 characters, read from the last 512 KiB of the log (it was 80 lines).
+
 A list row has the same whitelisted fields as the detail answer, without `log_tail` and without `backup_path`. Every job answer (list and detail) gains two additive keys: `log_bytes` (the size of the kept log, or `null`) and `has_log`. The UI shows the Download button only when `has_log` is true.
 
 ## Server-maintenance job logs

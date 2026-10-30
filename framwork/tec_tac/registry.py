@@ -15,7 +15,11 @@ do not own permissions.
 from __future__ import annotations
 
 import json
+import os
 import re
+import stat
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
@@ -665,14 +669,123 @@ def _validate_pairs(extensions: Iterable[PluginSpec], reportsets: Iterable[Plugi
     if orphan_reportsets:
         raise RegistryError("Reportset(s) without matching extension: " + ", ".join(orphan_reportsets))
 
-def discover_plugins(extensions_root: Path | None = None, reportsets_root: Path | None = None) -> tuple[PluginSpec, ...]:
-    extensions = _discover_root("extension", extensions_root or EXTENSIONS_ROOT)
-    reportsets = _discover_root("reportset", reportsets_root or REPORTSETS_ROOT)
+def _discover_uncached(extensions_root: Path, reportsets_root: Path) -> tuple[PluginSpec, ...]:
+    extensions = _discover_root("extension", extensions_root)
+    reportsets = _discover_root("reportset", reportsets_root)
     _validate_pairs(extensions, reportsets)
     return tuple([*extensions, *reportsets])
 
-def get_plugins() -> tuple[PluginSpec, ...]:
-    plugins = [*discover_plugins()]
+
+# 1.17.96: process-level plugin cache. Reading and checking every manifest took about 70 ms and ran 122 times in one Django start-up on
+# dev02. The cache keeps the validated PluginSpec tuple and checks a cheap fingerprint of both roots on every call (no time-based expiry):
+# the root and module folders (name, mtime, inode), each tec_tac.json (mode, mtime, ctime, size, inode) and the extra paths a manifest
+# depends on (python_paths other than the module root, server_maintenance_actions executables). The root helper changes files in another
+# process, so the fingerprint is the cross-process guard; invalidate_plugin_cache() only clears this process at once. Fail closed: an error
+# while reading or fingerprinting is never stored, and a file changed within _RACY_WINDOW_NS of the read is not trusted until it is older
+# (a same-size rewrite inside one timestamp tick).
+_CACHE_LOCK = threading.RLock()
+_RACY_WINDOW_NS = 2_000_000_000
+_DISCOVERY_CACHE: tuple | None = None  # (fingerprint, extra_paths, extra_signature, discovered)
+_VALIDATED_CACHE: tuple | None = None  # (discovered tuple, validated tuple), keyed by the identity of the discovered tuple
+_INDEX_CACHE: tuple | None = None  # (validated tuple, {plugin_id: [specs]}), keyed by identity
+
+
+def invalidate_plugin_cache() -> None:
+    """Forget the cached plugins in this process. Core calls it after a module install, upgrade, enable, disable, removal or hotfix."""
+    global _DISCOVERY_CACHE, _VALIDATED_CACHE, _INDEX_CACHE
+    with _CACHE_LOCK:
+        _DISCOVERY_CACHE = _VALIDATED_CACHE = _INDEX_CACHE = None
+
+
+def _file_sig(path: str, mtimes: list) -> tuple | None:
+    try:
+        st = os.lstat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    mtimes.append(st.st_mtime_ns)
+    return (st.st_mode, st.st_mtime_ns, st.st_ctime_ns, st.st_size, st.st_ino)
+
+
+def _root_fingerprint(root: Path, mtimes: list) -> tuple:
+    try:
+        st = os.stat(root)
+    except (FileNotFoundError, NotADirectoryError):
+        return (str(root), "absent")
+    if not stat.S_ISDIR(st.st_mode):
+        return (str(root), "not-a-directory", st.st_mtime_ns)  # the uncached read raises; this is never stored
+    mtimes.append(st.st_mtime_ns)
+    entries = []
+    with os.scandir(root) as scan:
+        for entry in scan:
+            if entry.name.startswith(".") or not entry.is_dir():
+                continue
+            child = entry.stat()
+            mtimes.append(child.st_mtime_ns)
+            entries.append((entry.name, child.st_mtime_ns, child.st_ino, _file_sig(os.path.join(entry.path, MANIFEST_NAME), mtimes)))
+    entries.sort()
+    return (str(root), "dir", st.st_mtime_ns, st.st_ino, tuple(entries))
+
+
+def _fingerprint(extensions_root: Path, reportsets_root: Path, mtimes: list) -> tuple:
+    return (_root_fingerprint(extensions_root, mtimes), _root_fingerprint(reportsets_root, mtimes))
+
+
+def _extra_paths(plugins: Iterable[PluginSpec]) -> tuple[str, ...]:
+    """Paths outside the manifest file that ``_load_manifest`` checked for existence."""
+    paths: list[str] = []
+    for spec in plugins:
+        paths.extend(str(path) for path in spec.python_paths if path != spec.root)
+        for entry in spec.server_maintenance_actions:
+            current = spec.root
+            for part in str(entry.get("executable", "")).split("/"):
+                current = current / part
+                paths.append(str(current))
+    return tuple(paths)
+
+
+def _extra_signature(paths: Iterable[str], mtimes: list) -> tuple:
+    return tuple((path, _file_sig(path, mtimes)) for path in paths)
+
+
+def _cached_discovery() -> tuple[PluginSpec, ...]:
+    global _DISCOVERY_CACHE
+    extensions_root, reportsets_root = EXTENSIONS_ROOT, REPORTSETS_ROOT
+    with _CACHE_LOCK:
+        try:
+            mtimes: list = []
+            before = _fingerprint(extensions_root, reportsets_root, mtimes)
+            cache = _DISCOVERY_CACHE
+            if cache is not None and cache[0] == before and _extra_signature(cache[1], []) == cache[2]:
+                return cache[3]
+        except OSError:
+            _DISCOVERY_CACHE = None
+            return _discover_uncached(extensions_root, reportsets_root)
+        _DISCOVERY_CACHE = None
+        discovered = _discover_uncached(extensions_root, reportsets_root)  # any RegistryError or OSError leaves nothing stored
+        try:
+            extra_mtimes: list = []
+            extra_paths = _extra_paths(discovered)
+            extra_signature = _extra_signature(extra_paths, extra_mtimes)
+            if _fingerprint(extensions_root, reportsets_root, []) != before:
+                return discovered  # something changed while reading: do not store
+            newest = max([*mtimes, *extra_mtimes], default=0)
+            if newest >= time.time_ns() - _RACY_WINDOW_NS:
+                return discovered  # modified too recently to tell a later same-tick rewrite apart: read again next time
+        except OSError:
+            return discovered
+        _DISCOVERY_CACHE = (before, extra_paths, extra_signature, discovered)
+        return discovered
+
+
+def discover_plugins(extensions_root: Path | None = None, reportsets_root: Path | None = None) -> tuple[PluginSpec, ...]:
+    if extensions_root is not None or reportsets_root is not None:
+        # Explicit roots (module_manager staging) are never cached.
+        return _discover_uncached(extensions_root or EXTENSIONS_ROOT, reportsets_root or REPORTSETS_ROOT)
+    return _cached_discovery()
+
+
+def _validate_plugins(discovered: Iterable[PluginSpec]) -> tuple[PluginSpec, ...]:
+    plugins = [*discovered]
     seen_apps = {}
     seen_identity = set()
     seen_permissions = {}
@@ -695,8 +808,31 @@ def get_plugins() -> tuple[PluginSpec, ...]:
                     seen_permissions[codename] = plugin.plugin_id
     return tuple(plugins)
 
+def get_plugins() -> tuple[PluginSpec, ...]:
+    global _VALIDATED_CACHE
+    discovered = discover_plugins()
+    with _CACHE_LOCK:
+        cached = _VALIDATED_CACHE
+    if cached is not None and cached[0] is discovered:
+        return cached[1]
+    validated = _validate_plugins(discovered)  # a failure is raised every call and never stored
+    with _CACHE_LOCK:
+        _VALIDATED_CACHE = (discovered, validated)
+    return validated
+
 def get_plugin(plugin_id: str, plugin_type: str | None = None) -> PluginSpec:
-    matches = [plugin for plugin in get_plugins() if plugin.plugin_id == plugin_id and (plugin_type is None or plugin.plugin_type == plugin_type)]
+    global _INDEX_CACHE
+    plugins = get_plugins()
+    with _CACHE_LOCK:
+        cached = _INDEX_CACHE
+    if cached is None or cached[0] is not plugins:
+        index: dict = {}
+        for plugin in plugins:
+            index.setdefault(plugin.plugin_id, []).append(plugin)
+        cached = (plugins, index)
+        with _CACHE_LOCK:
+            _INDEX_CACHE = cached
+    matches = [plugin for plugin in cached[1].get(plugin_id, ()) if plugin_type is None or plugin.plugin_type == plugin_type]
     if not matches:
         qualifier = f" type={plugin_type!r}" if plugin_type else ""
         raise RegistryError(f"Plugin {plugin_id!r}{qualifier} was not found.")

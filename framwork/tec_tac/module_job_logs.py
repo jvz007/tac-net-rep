@@ -249,7 +249,7 @@ def _open_log(logs_root: Path, job_id: str, suffix: str = ".log"):
     if not stat.S_ISREG(before.st_mode):
         logger.warning("Module job log refused: not a regular file.")
         raise missing
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
         fd = os.open(path, flags)
     except OSError as exc:
@@ -291,6 +291,42 @@ def _module_label(job: dict) -> str:
         if isinstance(value, str) and value:
             return safe_label(value)
     return "batch"
+
+
+# 1.17.96: the log tail every lifecycle job (module, hotfix, system update) returns. One helper so the three never differ.
+TAIL_MAX_LINES = 200
+TAIL_MAX_LINE_CHARS = 2000
+TAIL_READ_BYTES = 512 * 1024
+
+
+def tail_lines(path, max_lines: int = TAIL_MAX_LINES, max_line_chars: int = TAIL_MAX_LINE_CHARS) -> list[str]:
+    """The last ``max_lines`` lines of a log, each cut at ``max_line_chars`` characters. Reads only the last 512 KiB of the file, never the
+    whole log. When the read starts inside the file its first (partial) line is dropped. A missing, unreadable or non-regular file gives
+    ``[]``. The text is not scrubbed here (the helper logs hold no secrets by design), as before."""
+    try:
+        fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0))
+    except OSError:
+        return []
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            return []
+        offset = max(0, info.st_size - TAIL_READ_BYTES)
+        os.lseek(fd, offset, os.SEEK_SET)
+        raw = b""
+        while len(raw) < TAIL_READ_BYTES:
+            chunk = os.read(fd, TAIL_READ_BYTES - len(raw))
+            if not chunk:
+                break
+            raw += chunk
+    except OSError:
+        return []
+    finally:
+        os.close(fd)
+    lines = raw.decode("utf-8", errors="replace").splitlines()
+    if offset > 0 and lines:
+        lines = lines[1:]  # the first line began before the bytes that were read
+    return [line[:max_line_chars] for line in lines[-max(0, int(max_lines)):]]
 
 
 def locate_job(job_id: str):

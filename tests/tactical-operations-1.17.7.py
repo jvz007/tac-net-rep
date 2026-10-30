@@ -889,7 +889,7 @@ for needle in ("accounts/", "api/tfd/", "api/v3/", "api/v4/", "_allauth/", "logo
     must(needle in docs, needle)
 install = (ROOT / "install.sh").read_text(encoding="utf-8")
 must("VERIFY_TACTICAL_OPERATIONS_CODE=" in install and "core.tactical_operations" in install and "tec-tac-tactical-operations" in install, "install.sh verifies the capability and route")
-must("Core Tactical operations capability verification failed or timed out." in install, "install.sh fails the install when it is missing")
+must('run_verify_step "Core Tactical operations capability"' in install, "install.sh fails the install when it is missing")
 # the executor reads no token and makes no HTTP call
 source = (APP / "tactical_operations.py").read_text(encoding="utf-8")
 for banned in ("requests", "urllib", "httpx", "http.client", "knox", "Authorization", "request_local", "api_key", "service_account"):

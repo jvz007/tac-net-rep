@@ -1384,6 +1384,7 @@ def _load_bundle(upload_id: str) -> dict:
 
 
 def _dispatch_v2(job_id: str) -> None:
+    registry_module.invalidate_plugin_cache()  # 1.17.96: install, upgrade, replace, bundle, enable, disable, visibility and remove all dispatch here
     if not V2_HELPER.is_file():
         raise ModuleManagerV2Error(f"Module Management v2 helper is not installed at {V2_HELPER}.")
     import subprocess

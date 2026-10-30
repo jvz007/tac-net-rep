@@ -414,25 +414,23 @@ print("PASS a non-manager is refused (403) before any file is read, no audit row
 src = (ROOT / "framwork" / "tec_tac" / "module_manager.py").read_text(encoding="utf-8")
 tree = ast.parse(src)
 PINNED = {  # sha256 of the function source as of 1.17.59
-    "public_job": "0b63c95def8806f0cb64753e31caf23fa2240e8fea30037703ea108aa6883e71",
     "get_job": "68c42bf68f22b56c91da2b05b6d67ffce0ab8d559c2ce290cb9822065aa40b9e",
     "list_jobs": "676e80f43ac7a145fbd5a33a3aa81b588ce393ca64913fa9b45fc4bdbc79528e",
-    "_load_job_history_rows": "824e93816d8ea6f34e4c5f8f21d96821c6baf3262e6889788fe7774f0a680d1d",
     "page_jobs": "f42907e74e997faa568f6001674c4315e7c71529a9edee8bd01bb1bab5a9c11d",
 }
 seen = {}
 for node in tree.body:
     if isinstance(node, ast.FunctionDef) and node.name in PINNED:
         seen[node.name] = hashlib.sha256(ast.get_source_segment(src, node).encode()).hexdigest()
-must(seen == PINNED, f"module_manager.public_job, get_job and the list code must stay byte-identical to 1.17.59: {seen}")
+must(seen == PINNED, f"module_manager.get_job, list_jobs and page_jobs must stay byte-identical to 1.17.59: {seen}")  # 1.17.96: public_job and _load_job_history_rows changed on purpose (200-line tail, 40 per list row)
 from tec_tac import module_manager as mm  # noqa: E402
 
 mm.LOGS_ROOT = m.LOGS_ROOT
 jid = make_job(text="".join(f"line {i} password=KEEP-AS-IS\n" for i in range(60)))
 shown = mm.public_job({"id": jid, "status": "failed", "action": "install"})
-must(shown["log_tail"] == [f"line {i} password=KEEP-AS-IS" for i in range(20, 60)] and len(shown["log_tail"]) == 40, "log_tail is still the last 40 raw lines")
-must("log_job_view" not in src and "module_job_logs" not in src, "module_manager does not import the new module")
-print("PASS log_tail in the existing routes is unchanged (source pinned, output checked)")
+must(shown["log_tail"] == [f"line {i} password=KEEP-AS-IS" for i in range(60)], "1.17.96: log_tail is the last 200 raw lines (all 60 here), still not scrubbed")
+must("log_job_view" not in src, "module_manager does not import the log view")
+print("PASS log_tail in the existing routes keeps the raw text (200 lines since 1.17.96, 40 per list row; the old 40 is pinned by lifecycle-log-tail-1.17.96.py)")
 
 for word in ("password", "token", "secret", "key", "session"):
     for sep in ("-", "_"):

@@ -1233,14 +1233,8 @@ def public_job(job: dict, *, include_log_tail: bool = True) -> dict:
     result["has_log"] = log_bytes is not None
     if not include_log_tail:
         return result
-    log_path = LOGS_ROOT / f"{job.get('id')}.log"
-    if log_path.is_file():
-        try:
-            result["log_tail"] = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-80:]
-        except OSError:
-            result["log_tail"] = []
-    else:
-        result["log_tail"] = []
+    # 1.17.96: the last 200 lines (was 80), read from the end of the file only.
+    result["log_tail"] = module_job_logs.tail_lines(LOGS_ROOT / f"{job.get('id')}.log")
     return result
 
 

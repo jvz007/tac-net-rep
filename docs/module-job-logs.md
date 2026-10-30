@@ -8,6 +8,8 @@ Core 1.17.60. Three additions to the Module Manager's job records. Nothing that 
 
 Why: the Module Manager page showed only the last 40 log lines of a job, which is rarely enough to see why an install failed (Johan, 20 October 2026).
 
+**Log tail (1.17.96).** Every single-job answer (module job, hotfix job, system update job) now carries the last 200 lines in `log_tail`, each cut at 2000 characters (it was 40 for module and hotfix jobs, 80 for system updates). One helper, `module_job_logs.tail_lines`, reads only the last 512 KiB of the file, never the whole log. The old list route keeps 40 per row, so a list of up to 1000 rows does not grow five-fold. The text is not scrubbed in `log_tail`, as before; use the full log route for scrubbed text.
+
 ## Who may read
 
 The same check as every other module-management route: `core.privileged_operations`. There is no new permission. Anyone else gets a 403 and no log is read. A 403 writes no audit row.
@@ -44,7 +46,7 @@ Each row is built from a fixed list of fields. Nothing else can reach it.
 
 A row never carries `log_tail`, a path, a package path or hash, or publisher trust. A record that cannot be read, or is not a JSON object, is skipped.
 
-The older `GET /api/tfd/modules/v2/jobs/` keeps its exact answer, including `log_tail` on every row. Use the history route for new screens.
+The older `GET /api/tfd/modules/v2/jobs/` keeps its answer, including `log_tail` on every row (40 lines per row since 1.17.96; the single-job routes return 200). Use the history route for new screens.
 
 ## Full log
 

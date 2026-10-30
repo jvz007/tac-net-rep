@@ -16,9 +16,11 @@ import uuid
 import zipfile
 from pathlib import Path, PurePosixPath
 
+from . import module_job_logs
 from .module_manager import ModuleManagerError, _atomic_json, _utcnow
+from .trust_policy import TrustPolicyError
+from .trust_policy import require_accepted as require_trust_accepted
 from .trusted_publishers import PublisherTrustError, verify_release_files
-from .trust_policy import TrustPolicyError, require_accepted as require_trust_accepted
 
 HOTFIX_ROOT = Path("/var/lib/tec-tac/module-manager/hotfixes")
 HOTFIX_STAGED_ROOT = HOTFIX_ROOT / "staged"
@@ -398,6 +400,9 @@ def discard_hotfix_stage(upload_id: str) -> None:
 
 
 def _dispatch(job_id: str) -> None:
+    # 1.17.96: imported when used (tests stub the registry module)
+    from .registry import invalidate_plugin_cache
+    invalidate_plugin_cache()  # 1.17.96: a hotfix apply or rollback changes module files
     if not HOTFIX_HELPER.is_file():
         raise ModuleHotfixError(f"Module hotfix helper is not installed at {HOTFIX_HELPER}.")
     try:
@@ -530,14 +535,8 @@ def public_hotfix_job(job: dict) -> dict:
         "action", "module_id", "hotfix_id", "base_version", "description", "package_sha256", "requested_by", "rolled_back",
     }
     result = {key: value for key, value in job.items() if key in allowed}
-    log = HOTFIX_LOGS_ROOT / f"{job.get('id')}.log"
-    if log.is_file():
-        try:
-            result["log_tail"] = log.read_text(encoding="utf-8", errors="replace").splitlines()[-40:]
-        except OSError:
-            result["log_tail"] = []
-    else:
-        result["log_tail"] = []
+    # 1.17.96: the last 200 lines (was 40), read from the end of the file only.
+    result["log_tail"] = module_job_logs.tail_lines(HOTFIX_LOGS_ROOT / f"{job.get('id')}.log")
     return result
 
 
