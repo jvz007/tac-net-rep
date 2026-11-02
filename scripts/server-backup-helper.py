@@ -1118,7 +1118,7 @@ def parse_archive_hash_text(text: str, archive_name: str) -> str:
 
 def metadata_for_archive(path, backup_class, config, *, components=None, recovery_modes=None):
     identity = backup_identity(config)
-    core_version = detect_version(Path(config["TEC_TAC_FRAMEWORK_SOURCE"])) or detect_version(Path(config["TEC_TAC_ROOT"]))
+    core_version = detect_version(Path(config["TEC_TAC_ROOT"]))  # 1.17.98: the root-owned runtime, never the Tactical-owned checkout
     return {
         "format_version": 2,
         "artifact_type": "tec-tac-recovery-bundle",
@@ -1411,36 +1411,110 @@ def _canonical_payload_roots(paths):
     return roots
 
 
-def make_payload_tar(output: Path, paths, *, exclude_paths=()):
+def _add_tree_nofollow(tf, dirfd, arcname):
+    """Add one directory's entries through descriptors (1.17.98): no link is followed and no path is re-resolved.
+
+    Used for trees another account can write (the source checkouts). Links, sockets and pipes are left out; a file is opened
+    with O_NOFOLLOW and must be the inode that was listed; a root-owned file with a second hard link is left out, so a link
+    planted to a root-only file elsewhere is never read into a backup.
+    """
+    with os.scandir(dirfd) as entries:
+        names = sorted(entry.name for entry in entries)
+    for name in names:
+        listed = os.stat(name, dir_fd=dirfd, follow_symlinks=False)
+        arc = f"{arcname}/{name}"
+        if stat.S_ISDIR(listed.st_mode):
+            child = os.open(name, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0), dir_fd=dirfd)
+            try:
+                info = os.fstat(child)
+                if (info.st_dev, info.st_ino) != (listed.st_dev, listed.st_ino):
+                    raise RuntimeError(f"source checkout changed while the backup was taken: /{arc}")
+                member = tarfile.TarInfo(arc)
+                member.type = tarfile.DIRTYPE
+                member.mode, member.uid, member.gid, member.mtime = stat.S_IMODE(info.st_mode), info.st_uid, info.st_gid, int(info.st_mtime)
+                tf.addfile(member)
+                _add_tree_nofollow(tf, child, arc)
+            finally:
+                os.close(child)
+        elif stat.S_ISREG(listed.st_mode):
+            if listed.st_uid == 0 and listed.st_nlink > 1:
+                continue
+            fd = os.open(name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0), dir_fd=dirfd)
+            with os.fdopen(fd, "rb") as handle:
+                info = os.fstat(handle.fileno())
+                if not stat.S_ISREG(info.st_mode) or (info.st_dev, info.st_ino) != (listed.st_dev, listed.st_ino):
+                    raise RuntimeError(f"source checkout changed while the backup was taken: /{arc}")
+                member = tarfile.TarInfo(arc)
+                member.size = info.st_size
+                member.mode, member.uid, member.gid, member.mtime = stat.S_IMODE(info.st_mode), info.st_uid, info.st_gid, int(info.st_mtime)
+                tf.addfile(member, handle)
+
+
+def make_payload_tar(output: Path, paths, *, exclude_paths=(), nofollow_roots=()):
     """Create a gzip tar preserving original absolute paths beneath payload root.
 
     Requested roots are canonicalized before archiving. Descendants already
     covered recursively by another included directory are omitted; duplicate
     member validation remains authoritative for the resulting archive.
+    1.17.98: roots in ``nofollow_roots`` (trees another account can write) are archived through descriptors without following
+    any link (_add_tree_nofollow); every other root keeps the old behaviour and never descends into them.
     """
     excluded = [str(Path(item).resolve()).lstrip("/").rstrip("/") for item in exclude_paths]
+    guarded = [Path(item).resolve() for item in nofollow_roots if Path(item).exists()]
+    guarded_names = [str(item).lstrip("/").rstrip("/") for item in guarded]
 
     def _filter(info):
         name = info.name.lstrip("/").rstrip("/")
-        if any(name == prefix or name.startswith(prefix + "/") for prefix in excluded):
+        if any(name == prefix or name.startswith(prefix + "/") for prefix in excluded + guarded_names):
             return None
         return info
 
+    roots = _canonical_payload_roots([*paths, *guarded])
     with tarfile.open(output, "w:gz") as tf:
         tf.dereference = True
-        for resolved in _canonical_payload_roots(paths):
+        for resolved in roots:
             arcname = str(resolved).lstrip("/")
+            if resolved in guarded:
+                continue
             tf.add(resolved, arcname=arcname, recursive=True, filter=_filter)
+        for resolved in guarded:
+            arcname = str(resolved).lstrip("/")
+            if any(name == arcname or arcname.startswith(name + "/") for name in excluded):
+                continue
+            fd = os.open(str(resolved), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
+            try:
+                info = os.fstat(fd)
+                member = tarfile.TarInfo(arcname)
+                member.type = tarfile.DIRTYPE
+                member.mode, member.uid, member.gid, member.mtime = stat.S_IMODE(info.st_mode), info.st_uid, info.st_gid, int(info.st_mtime)
+                tf.addfile(member)
+                _add_tree_nofollow(tf, fd, arcname)
+            finally:
+                os.close(fd)
+
+
+_VERSION_TEXT = re.compile(r"^[0-9A-Za-z.+-]{1,64}$")
 
 
 def detect_version(path: Path):
-    version = path / "VERSION"
-    if version.is_file():
-        try:
-            return version.read_text(encoding="utf-8").strip() or None
-        except OSError:
+    """VERSION of a tree, read without following a link (at most 256 bytes); None unless it is a plain version (1.17.98).
+
+    Several of these trees (the source checkouts, the deployed UI) are writable by other accounts, so a link to a root-only
+    file or arbitrary text never reaches a manifest, a log or a job file.
+    """
+    try:
+        fd = os.open(str(Path(path) / "VERSION"), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0))
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
             return None
-    return None
+        text = os.read(fd, 256).decode("utf-8", "replace").strip()
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    return text if _VERSION_TEXT.fullmatch(text) else None
 
 
 def tec_tac_paths(config):
@@ -1497,6 +1571,8 @@ def create_tec_tac_component(config, output: Path):
             paths["system_etc_root"] / "recovery-signing",
             paths["system_etc_root"] / "recovery-trust",
         ),
+        # 1.17.98: the source checkouts belong to the Tactical account, so root never follows a link inside them.
+        nofollow_roots=(paths["framework_source"], paths["ui_source"]),
     )
     ensure_regular(output, max_bytes=max_backup_bytes(config))
     return {
@@ -1505,8 +1581,10 @@ def create_tec_tac_component(config, output: Path):
         "archive_name": "tec-tac-backup.tar.gz",
         "sha256": sha256_file(output),
         "size_bytes": output.stat().st_size,
-        "framework_version": detect_version(paths["framework_source"]) or detect_version(paths["runtime_root"]),
-        "ui_version": detect_version(Path(config["TEC_TAC_UI_DEPLOY_ROOT"])) or detect_version(paths["ui_source"]),
+        # 1.17.98: recorded from the deployed runtime and UI, never from the Tactical-owned checkouts. A restore verifies the
+        # restored trees against these versions before any installer runs.
+        "framework_version": detect_version(paths["runtime_root"]),
+        "ui_version": detect_version(Path(config["TEC_TAC_UI_DEPLOY_ROOT"])),
         "paths": {key: str(value) for key, value in paths.items()},
         "state_policy": {
             "state_root": str(paths["state_root"]),
@@ -2039,7 +2117,7 @@ def _version_key(value: object):
 
 
 def _restore_version_transition(config, manifest: dict) -> dict:
-    current = detect_version(Path(config["TEC_TAC_FRAMEWORK_SOURCE"])) or detect_version(Path(config["TEC_TAC_ROOT"]))
+    current = detect_version(Path(config["TEC_TAC_ROOT"]))  # 1.17.98: the root-owned runtime, never the checkout
     restored = str((((manifest.get("components") or {}).get("tec_tac") or {}).get("framework_version") or "").strip()) or None
     ck, rk = _version_key(current), _version_key(restored)
     older = bool(ck and rk and rk < ck)
@@ -2964,6 +3042,7 @@ TEC_TAC_PRIVILEGED_INSTALL_PATHS = (
     "/usr/local/lib/tec-tac-housekeeping",
     "/usr/local/lib/tec-tac-security",
     "/usr/local/lib/tec-tac-updater",
+    "/usr/local/lib/tec-tac-ui-sync",  # 1.17.98: the root-owned UI module sync script the system updater publishes
     "/usr/local/sbin/tec-tac-module-job",
     "/usr/local/sbin/tec-tac-module-v2-job",
     "/usr/local/sbin/tec-tac-module-hotfix",
@@ -3387,6 +3466,39 @@ def _clear_tec_tac_restore_roots(config, log):
         log.write(f"[TEC-TAC-BACKUP] cleared restore root before extraction: {path}\n")
 
 
+SYSTEM_UPDATE_HELPER = Path("/usr/local/sbin/tec-tac-system-update")
+
+
+def _snapshot_restore_installer_helper(dest_dir: Path) -> Path:
+    """Copy the installed root system update helper into a root-only folder (1.17.98).
+
+    The link and the file it names must be root-owned and not group/world writable. The copy is what runs, so the restored
+    Framework installer, which installs its own helper, cannot change the code that stages and verifies the UI afterwards.
+    """
+    if SYSTEM_UPDATE_HELPER.exists() and not SYSTEM_UPDATE_HELPER.is_symlink():
+        real = SYSTEM_UPDATE_HELPER
+    else:
+        real = SYSTEM_UPDATE_HELPER.resolve(strict=True)
+    for path in (real, real.parent):
+        info = path.stat()
+        if info.st_uid != 0 or info.st_mode & 0o022:
+            raise RuntimeError(f"system update helper {path} must be root-owned and not group/world writable")
+    os.chmod(dest_dir, 0o700)
+    copy = dest_dir / "system-update-helper.py"
+    with real.open("rb") as source, open(copy, "xb") as target:
+        shutil.copyfileobj(source, target)
+    os.chmod(copy, 0o700)
+    return copy
+
+
+def _run_restored_installer(helper: Path, component: str, log, expected=None):
+    # 1.17.98: the version the restored tree must be signed for comes from the backup's manifest, not from the restored checkout.
+    args = [sys.executable, "-I", str(helper), "--install-restored", component]
+    if expected and _VERSION_TEXT.fullmatch(str(expected)):
+        args.append(str(expected))
+    run_logged(args, log, timeout=2*60*60)
+
+
 def run_post_restore_tec_tac(config, component_meta, component_archive, log, *, security_snapshot=None, actor="restore", source_installation_id=None):
     # Destination paths and executable installers are chosen exclusively from
     # the root-owned local config. Manifest paths are descriptive metadata and
@@ -3402,9 +3514,19 @@ def run_post_restore_tec_tac(config, component_meta, component_archive, log, *, 
     backend_installer=framework_source/"install.sh"
     if not backend_installer.is_file():
         raise RuntimeError(f"restored Tec-Tac framework installer not found at {backend_installer}")
-    run_logged([TRUSTED_BASH,str(backend_installer)],log,timeout=2*60*60)
-    ui_installer=ui_source/"scripts"/"install.sh"
-    if ui_installer.is_file(): run_logged([TRUSTED_BASH,str(ui_installer)],log,timeout=2*60*60)
+    # 1.17.98: root never runs an installer straight from a restored source checkout, which belongs to the Tactical account.
+    # The system update helper stages each component in a root-only folder, checks it against its signed release manifest
+    # with the privileged verifier, and only then runs its installer from that copy. A changed install.sh stops the restore
+    # before any installer runs. The helper is copied first: the restored Framework installer replaces the installed one.
+    helper_dir=Path(tempfile.mkdtemp(prefix=".tt-restore-installer-"))
+    try:
+        helper=_snapshot_restore_installer_helper(helper_dir)
+        meta=component_meta or {}
+        _run_restored_installer(helper,"framework",log,meta.get("framework_version"))
+        ui_installer=ui_source/"scripts"/"install.sh"
+        if ui_installer.is_file(): _run_restored_installer(helper,"ui",log,meta.get("ui_version"))
+    finally:
+        shutil.rmtree(helper_dir,ignore_errors=True)
     run_logged(["nginx","-t"],log,timeout=60)
     subprocess.run(["systemctl","reload","nginx"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     tactical_python=Path(config["TACTICAL_PYTHON"]); manage=Path(config["TACTICAL_BACKEND_ROOT"])/"manage.py"

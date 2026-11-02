@@ -269,6 +269,8 @@ tmp = Path(tempfile.mkdtemp(prefix="update-source-test-"))
 su.CACHE_ROOT = tmp / "cache"
 su.RELEASE_CACHE = su.CACHE_ROOT / "release-cache.json"
 su.HISTORY_ROOT = tmp / "history"
+su.BRANCH_SUPPRESS_SECONDS = 0  # 1.17.98: the suppression windows are tested in github-rate-limit-1.17.98.py
+su.RELEASE_SUPPRESS_SECONDS = 0
 su.JOBS_ROOT = tmp / "jobs"
 su.HISTORY_ROOT.mkdir()
 su.JOBS_ROOT.mkdir()
@@ -312,15 +314,15 @@ def write_job(name, *, component="framework", status="succeeded", finished="2026
 BRANCH = {"type": "branch", "ref": "dev"}
 
 # Release source: exactly today's answer, no new keys.
-plain = su.online_status("framework", force=True)
-via_release = su.online_status("framework", force=True, source=DEFAULT)
+plain = su.online_status("framework", refresh="all")
+via_release = su.online_status("framework", refresh="all", source=DEFAULT)
 must(set(plain) == set(via_release) and "source" not in via_release and "branch" not in via_release and "branch_error" not in via_release,
      "a release source must give today's response")
 must(plain["latest_release"]["tag"] == "v1.17.1", plain)
 
 # Unknown: no history at all.
 GH["calls"].clear()
-out = su.online_status("framework", force=True, source=BRANCH)
+out = su.online_status("framework", refresh="all", source=BRANCH)
 must(out["source"] == BRANCH and out["branch_error"] is None, out)
 # 1.17.3: latest_release is null for a branch source; every key stays present. 1.17.4: the stable release is the
 # secondary stable_release key (tests/update-source-1.17.4.py), latest_release is still null.
@@ -332,43 +334,43 @@ must(any(u.endswith("/branches/dev") for u in branch_calls()), branch_calls())
 
 # Same: the latest install recorded the head commit.
 write_job("j1", source={"type": "branch", "repository": REPO, "ref": "dev", "commit": SHA_A})
-out = su.online_status("framework", force=True, source=BRANCH)
+out = su.online_status("framework", refresh="all", source=BRANCH)
 b = out["branch"]
 must(b["state"] == "same" and b["differs"] is False and b["installed_commit"] == SHA_A, b)
 must(b["installed_source"] == {"type": "branch", "ref": "dev"}, b)
 
 # Differs: the head moved on.
 GH["head"] = SHA_B
-out = su.online_status("framework", force=True, source=BRANCH)
+out = su.online_status("framework", refresh="all", source=BRANCH)
 b = out["branch"]
 must(b["state"] == "differs" and b["differs"] is True and b["head_commit"] == SHA_B and b["installed_commit"] == SHA_A, b)
 
 # The newest succeeded install decides. A later offline upload makes the installed commit unknown.
 write_job("j2", finished="2026-10-08T11:00:00Z", source={"type": "offline"})
-b = su.online_status("framework", force=True, source=BRANCH)["branch"]
+b = su.online_status("framework", refresh="all", source=BRANCH)["branch"]
 must(b["state"] == "unknown" and b["differs"] is None and b["installed_commit"] is None, b)
 # So does an install from before 1.17.2 (no source at all).
 write_job("j3", finished="2026-10-08T12:00:00Z")
-b = su.online_status("framework", force=True, source=BRANCH)["branch"]
+b = su.online_status("framework", refresh="all", source=BRANCH)["branch"]
 must(b["state"] == "unknown" and b["differs"] is None, b)
 # A matching install from another repository, another component, a failed job or a rollback is not counted.
 write_job("j4", finished="2026-10-08T13:00:00Z", source={"type": "branch", "repository": "someone/else", "ref": "dev", "commit": SHA_B})
 write_job("j5", finished="2026-10-08T14:00:00Z", component="ui", source={"type": "branch", "repository": REPO, "ref": "dev", "commit": SHA_B})
 write_job("j6", finished="2026-10-08T15:00:00Z", status="failed", source={"type": "branch", "repository": REPO, "ref": "dev", "commit": SHA_B})
-b = su.online_status("framework", force=True, source=BRANCH)["branch"]
+b = su.online_status("framework", refresh="all", source=BRANCH)["branch"]
 must(b["state"] == "unknown", b)
 # A job with no commit gives unknown, not a guess.
 write_job("j7", finished="2026-10-08T16:00:00Z", source={"type": "branch", "repository": REPO, "ref": "dev"})
-b = su.online_status("framework", force=True, source=BRANCH)["branch"]
+b = su.online_status("framework", refresh="all", source=BRANCH)["branch"]
 must(b["state"] == "unknown" and b["differs"] is None, b)
 # A newer matching install with a commit restores an exact answer.
 write_job("j8", finished="2026-10-08T17:00:00Z", source={"type": "branch", "repository": REPO, "ref": "dev", "commit": SHA_B.upper()})
-b = su.online_status("framework", force=True, source=BRANCH)["branch"]
+b = su.online_status("framework", refresh="all", source=BRANCH)["branch"]
 must(b["state"] == "same" and b["installed_commit"] == SHA_B, b)
 
 # branch_error leaves the release data intact.
 GH["branch_fail"] = True
-out = su.online_status("framework", force=True, source={"type": "branch", "ref": "nope"})
+out = su.online_status("framework", refresh="all", source={"type": "branch", "ref": "nope"})
 must("Branch not found" in out["branch_error"], out)
 # 1.17.3: no release data is fetched for a branch source, so a branch failure leaves latest_release null and release_error null.
 must(out["latest_release"] is None and out["release_error"] is None, "a branch failure sets branch_error only")
@@ -378,18 +380,20 @@ GH["branch_fail"] = False
 # Cache: 5 minutes, bypassed by force.
 GH["head"] = SHA_A
 GH["calls"].clear()
-su.online_status("framework", force=True, source=BRANCH)
+su.online_status("framework", refresh="all", source=BRANCH)
 must(len(branch_calls()) == 1, "force must hit GitHub")
 su.online_status("framework", source=BRANCH)
 su.online_status("framework", source=BRANCH)
 must(len(branch_calls()) == 1, "a fresh branch cache must serve the next calls")
 GH["head"] = SHA_B
 must(su.online_status("framework", source=BRANCH)["branch"]["head_commit"] == SHA_A, "cached head is served within 5 minutes")
-must(su.online_status("framework", force=True, source=BRANCH)["branch"]["head_commit"] == SHA_B, "force bypasses the branch cache")
+must(su.online_status("framework", refresh="all", source=BRANCH)["branch"]["head_commit"] == SHA_B, "force bypasses the branch cache")
 must(len(branch_calls()) == 2, branch_calls())
 # Expire it.
 doc = json.loads(su.RELEASE_CACHE.read_text(encoding="utf-8"))
 doc["branches"]["framework"]["checked_at"] = (datetime.now(timezone.utc) - timedelta(minutes=6)).isoformat()
+for _row in doc["branch_sources"].values():  # 1.17.98: schema 2 keeps the per-ref row
+    _row["checked_at"] = doc["branches"]["framework"]["checked_at"]
 su.RELEASE_CACHE.write_text(json.dumps(doc), encoding="utf-8")
 GH["head"] = SHA_A
 must(su.online_status("framework", source=BRANCH)["branch"]["head_commit"] == SHA_A, "an expired cache must refetch")
@@ -474,12 +478,23 @@ class SystemUpdateError(Exception):
     pass
 
 
+class StaleCandidateError(SystemUpdateError):  # 1.17.98
+    code = "stale_candidate"
+
+
+class GithubRateLimitError(SystemUpdateError):  # 1.17.98
+    pass
+
+
 vns = {
     "Response": Response,
     "SystemUpdateError": SystemUpdateError,
+    "StaleCandidateError": StaleCandidateError,
+    "GithubRateLimitError": GithubRateLimitError,
+    "_github_rate_limit_response": lambda exc: Response({}, status=429),
     "_require_module_manager": lambda user: None,
     "get_update_source": rs.get_update_source,
-    "stage_online_package": lambda component, source_type, ref=None: staged.append((component, source_type, ref)) or {"ok": True},
+    "stage_online_package": lambda component, source_type, ref=None, commit=None: staged.append((component, source_type, ref)) or {"ok": True},
     "logger": types.SimpleNamespace(exception=lambda *a, **k: None),
 }
 exec(compile(ast.Module(body=[stage_fn], type_ignores=[]), "stage-view", "exec"), vns)  # noqa: S102 - test-only extraction
@@ -504,7 +519,7 @@ CONFIG.update_sources = {}
 
 status_fn = method_of("SystemUpdateOnlineStatusView", "get")
 status_src = ast.get_source_segment(views_src, next(n for n in vtree.body if isinstance(n, ast.ClassDef) and n.name == "SystemUpdateOnlineStatusView"))
-must("system_update_online_status(component, force=force, source=source)" in status_src and "get_update_source(component)" in status_src, "the online status view must pass the saved source")
+must("system_update_online_status(component, force=force, source=source, refresh=refresh)" in status_src and "get_update_source(component)" in status_src, "the online status view must pass the saved source")
 must("from .runtime_settings import get_module_register_timeout_seconds, get_system_name, get_update_source" in views_src, "views.py must import get_update_source")
 
 # ------------------------------------------------------------------ wiring by source
@@ -528,7 +543,7 @@ stage_entry = details["/api/tfd/system/updates/online/stage/"]["POST"]
 stage_text = json.dumps(stage_entry)
 for needle in ("component", "source_type", "ref", "remembered", "core.privileged_operations"):
     must(needle in stage_text, f"stage contract entry lacks {needle}")
-must(set(stage_entry["errors"]) == {"400", "403", "500"} and "201" in stage_entry["response"], "stage contract entry must list 201, 400, 403 and 500")
+must(set(stage_entry["errors"]) == {"400", "403", "409", "429", "500"} and "201" in stage_entry["response"], "stage contract entry must list 201, 400, 403 and 500")
 
 # ------------------------------------------------------------------ model and migration
 model_src = (APP / "models.py").read_text(encoding="utf-8")

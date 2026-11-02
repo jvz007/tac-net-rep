@@ -1711,6 +1711,7 @@ HTTP_CONTRACT_DETAILS = {
             "authorization": "authenticated Tec-Tac session with privileged lifecycle authority",
             "response": {
                 "update_sources": "added in 1.17.2: {framework, ui}, each {type: release|branch, ref}. The remembered update source, so the UI needs no extra call. Additive: older UI builds ignore it.",
+                "github_rate_limit": "added in 1.17.98: the saved GitHub rate-limit telemetry {limit, remaining, used, reset, reset_at, resource, authenticated, observed_at, limited} or null. Read from the cache only; this route never calls GitHub",
                 "release_cache": "{framework, ui}, each the persisted stable-release row (read only, no GitHub call). Added in 1.17.4: when that component's saved update source is a branch, its row has latest_release null, stable_release (the cached stable release, same shape as latest_release, or null when none is cached) and source {type: branch, ref}. For a release source, or none, the row is unchanged and has no stable_release key.",
             },
             "notes": ["Only the keys added in 1.17.2 and 1.17.4 are listed here."],
@@ -1719,18 +1720,22 @@ HTTP_CONTRACT_DETAILS = {
     "/api/tfd/system/updates/online/": {
         "GET": {
             "authorization": "authenticated Tec-Tac session with privileged lifecycle authority",
-            "query": {"component": "framework or ui", "force": "1 bypasses the caches"},
+            "query": {"component": "framework or ui", "force": "1 bypassed the caches before 1.17.98. Kept as an alias since 1.17.98: for a branch source it means refresh=branch (the stable release is not refreshed), for a release source refresh=release, never all", "refresh": "added in 1.17.98: none (default, saved answers; an empty value is none), branch, release or all. An invalid value returns 400. A branch refresh sends one request (GET /branches/<ref>, conditional) and never refreshes the stable release; the release is refreshed only by refresh=release or all"},
             "response": {
                 "latest_release": "null for a branch source (1.17.3). A release source, or none, is unchanged. 1.17.4: the stable release for a branch source is in stable_release, never here",
-                "stable_release": "added in 1.17.4, only for a branch source: the latest stable GitHub release as secondary information, {tag, name, published_at, html_url, commit, release_trust, operation}, the same shape as latest_release, or null when it could not be fetched and none is cached. Fetched with the same 24-hour release cache and stale-on-error behaviour as the release answer; force=1 bypasses the cache. A release source, or none, has no stable_release key",
+                "stable_release": "added in 1.17.4, only for a branch source: the latest stable GitHub release as secondary information, {tag, name, published_at, html_url, commit, release_trust, operation}, the same shape as latest_release, or null when none is saved. 1.17.98: read from the saved copy only; cache.stale says when it is older than 24 hours. It is refreshed only by refresh=release or refresh=all. force=1 under a branch source means refresh=branch and no longer refreshes it. A release source, or none, has no stable_release key",
                 "checked_at": "for a branch source (1.17.4) the time of the stable-release check; null when there is none",
                 "cache": "for a branch source (1.17.4) the stable-release cache state {hit, stale, ttl_hours}",
-                "release_error": "text when the stable release could not be fetched (1.17.4: this can now be non-null for a branch source; before 1.17.4 it was always null there), else null. It never sets branch_error",
+                "release_error": "text when the stable release could not be fetched (1.17.4: this can now be non-null for a branch source; before 1.17.4 it was always null there), else null. It never sets branch_error. 1.17.98: when GitHub cannot be reached the saved release is shown with its old checked_at, cache.stale true and this text set",
                 "source": "added in 1.17.2, only when the remembered source is a branch: {type: branch, ref}. For a release source the response is unchanged",
                 "branch": "added in 1.17.2, only for a branch source: {ref, head_commit, head_short, head_date, installed_commit, installed_short, installed_source {type, ref}, state same|differs|unknown, differs true|false|null, basis commit|version|null, head_version, installed_version}. basis, head_version and installed_version were added in 1.17.3. basis commit: the installed commit is the GitHub commit recorded when the component was last installed, and it wins when present. basis version: no install recorded a commit (offline upload, another repository, or an install before 1.17.2), so the VERSION file at the branch head is compared with the installed VERSION. A version match is weaker than a commit match: a branch can gain commits without a VERSION bump, so basis version can read same while commits differ. State stays unknown (differs null, basis null) when either VERSION cannot be read or is not a plausible version",
-                "branch_error": "added in 1.17.2, only for a branch source: text when the branch could not be read, else null. Failing to read the branch VERSION never sets it. A branch failure never hides stable_release",
+                "branch_error": "added in 1.17.2, only for a branch source: text when the branch could not be read, else null. Failing to read the branch VERSION never sets it. A branch failure never hides stable_release. 1.17.98: when GitHub cannot be reached the saved head is shown, its check time is not renewed and this text is set",
+                "refresh": "added in 1.17.98: {network_request true|false, reason refreshed|cache_stale|cache_fresh|recently_refreshed|rate_limited|refreshed_by_another_request, requested none|branch|release|all}. recently_refreshed: a forced branch refresh inside 20 seconds, or a forced release refresh inside 45 seconds, of the last network check returned the saved answer",
+                "github_rate_limit": "added in 1.17.98: the last GitHub rate-limit telemetry seen {limit, remaining, used, reset, reset_at, resource, authenticated, observed_at, limited}, or null. Read from the saved cache; the token is never part of it",
+                "github_rate_limit_error": "added in 1.17.98, only when GitHub's API limit is exhausted and a saved answer is shown: {code github_rate_limit_exceeded, detail, reset_at, cached_data_available true}. HTTP 200 with the saved (stale) answer. While reset_at is in the future Core sends no request",
             },
-            "notes": ["The branch head and its VERSION are cached for 5 minutes in the release cache file; force=1 bypasses them. Every earlier key stays present. 1.17.3: the value of latest_release is null for a branch source. 1.17.4: stable_release carries the stable release for a branch source."],
+            "errors": {"400": "unknown component or invalid refresh value", "429": "added in 1.17.98: GitHub's API limit is exhausted and nothing is saved to show: {code github_rate_limit_exceeded, detail, reset_at, cached_data_available false}"},
+            "notes": ["The branch head is cached for 5 minutes in the release cache file; the VERSION file at a commit is saved by commit and reused. Every earlier key stays present. 1.17.3: the value of latest_release is null for a branch source. 1.17.4: stable_release carries the stable release for a branch source. 1.17.98: a branch source's stable_release is read from the saved copy (cache.stale says whether it is old) and is refreshed only by refresh=release or all; saved answers are revalidated with ETags; a page load with a fresh cache makes no request."],
         },
     },
     "/api/tfd/system/updates/online/stage/": {
@@ -1740,11 +1745,14 @@ HTTP_CONTRACT_DETAILS = {
                 "component": "required: framework or ui",
                 "source_type": "optional: release or branch. The default is the remembered source from /api/tfd/system/update-source/, release when none is saved; an explicit value wins (default changed in 1.17.2)",
                 "ref": "branch name. With source_type branch and no ref, the saved branch ref is used only when source_type was omitted; an explicit branch with no ref returns 400 'A branch name is required'",
+                "commit": "optional, added in 1.17.98: 40 hex characters, the commit the check showed. Core stages exactly that commit with no metadata call, only the archive download. It must equal the saved branch head or the saved release commit; otherwise 409 stale_candidate. Without it the branch or release is resolved as before",
             },
             "response": {"201": "the staged package inspection, unchanged"},
             "errors": {
-                "400": "unknown component, invalid source_type, or a branch or release that cannot be resolved",
+                "400": "unknown component, invalid source_type, invalid commit, or a branch or release that cannot be resolved",
                 "403": "caller does not hold core.privileged_operations",
+                "409": "added in 1.17.98: {code stale_candidate, detail}. The commit does not match the saved head, or nothing is saved. Refresh the check and try again; Core never installs another commit silently",
+                "429": "added in 1.17.98: GitHub's API limit is exhausted: {code github_rate_limit_exceeded, detail, reset_at, cached_data_available false}",
                 "500": "unexpected staging failure",
             },
             "notes": [

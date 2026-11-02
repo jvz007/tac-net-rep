@@ -190,9 +190,12 @@ print("       a first URL that is not https is refused")
 source = (APP / "system_update.py").read_text(encoding="utf-8")
 tree = ast.parse(source)
 funcs = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
-for name in ("_github_json", "_github_content_bytes", "_download_to_stage"):
+for name in ("github_get_json", "_github_content_bytes", "_download_to_stage"):
     calls = [ast.unparse(c.func) for c in ast.walk(funcs[name]) if isinstance(c, ast.Call)]
     must("urllib.request.urlopen" not in calls, f"{name} still calls urlopen")
+    if name == "_github_content_bytes":
+        must("github_get_json" in calls, f"{name} does not go through github_get_json")  # 1.17.98: one transport
+        continue
     must("_github_open" in calls, f"{name} does not call _github_open")
 must(not any(isinstance(c, ast.Call) and ast.unparse(c.func) == "urllib.request.urlopen" for c in ast.walk(tree)), "a urlopen call remains")
 print("       the three call sites use _github_open and no urlopen call remains")

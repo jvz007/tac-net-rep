@@ -21,7 +21,9 @@ with tempfile.TemporaryDirectory() as td:
     }
 
     # Transition detection explicitly permits going backwards.
-    (framework / 'VERSION').write_text('1.15.121\n', encoding='utf-8')
+    # 1.17.98: the current version is the root-owned runtime's, never the Tactical-owned checkout's.
+    (framework / 'VERSION').write_text('0.0.0\n', encoding='utf-8')
+    (runtime / 'VERSION').write_text('1.15.121\n', encoding='utf-8')
     manifest = {'components': {'tec_tac': {'framework_version': '1.15.108'}}}
     transition = h._restore_version_transition(config, manifest)
     assert transition['current_core_version'] == '1.15.121'

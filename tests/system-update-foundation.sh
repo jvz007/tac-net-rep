@@ -89,14 +89,17 @@ grep -q 'TEC_TAC_UI_SOURCE' "${ROOT}/scripts/system-update-helper.py" || fail "s
 grep -q 'runtime_root = Path' "${ROOT}/scripts/system-update-helper.py" || fail "runtime module inventory verification missing"
 echo "[TEST] PASS source/runtime update layout"
 
-# Source checkout integrity: privileged execution uses only the root-verified
-# staged source bytes. Web-tier online/offline provenance is non-authoritative;
-# every update becomes an auditable local verified-package commit.
+# Source checkout integrity (1.17.98): the checkout is a Tactical-owned working copy. System Update logs and restores tracked
+# changes, moves it to exactly the selected commit, and never writes release bytes into it. Root runs installers only from a
+# verified staging copy (tests/system-update-linux-staging-1.17.98.py covers ownership, staging and rollback as root).
 python3 - "${ROOT}/scripts/system-update-helper.py" <<'PY_GIT_SOURCE'
-import importlib.util, json, subprocess, tempfile
+import importlib.util, subprocess, tempfile
 from pathlib import Path
 import sys
 spec=importlib.util.spec_from_file_location('tt_update_git', sys.argv[1]); mod=importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+# The owner rule needs the Tactical account, which a test machine may not have; the Linux staging test covers it as root.
+mod._git_runas=lambda cfg: None
+mod.normalise_source_owner=lambda *a, **k: 0
 
 def run(*args, cwd=None):
     subprocess.run(args, cwd=cwd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -104,88 +107,96 @@ def run(*args, cwd=None):
 def out(*args, cwd=None):
     return subprocess.check_output(args, cwd=cwd, text=True).strip()
 
+class Log:
+    def __init__(self): self.text=''
+    def write(self, value): self.text+=value
+    def flush(self): pass
+
 with tempfile.TemporaryDirectory() as tmp:
     base=Path(tmp)
-    remote=base/'remote.git'; run('git','init','--bare',str(remote))
-    seed=base/'seed'; run('git','init',str(seed)); run('git','config','user.name','test',cwd=seed); run('git','config','user.email','test@example.invalid',cwd=seed)
+    remote=base/'remote.git'; run('git','init','-q','--bare',str(remote))
+    seed=base/'seed'; run('git','init','-q',str(seed)); run('git','config','user.name','test',cwd=seed); run('git','config','user.email','test@example.invalid',cwd=seed)
     (seed/'VERSION').write_text('1.0.0\n'); (seed/'install.sh').write_text('#!/bin/sh\n'); (seed/'framwork'/'tec_tac').mkdir(parents=True); (seed/'framwork'/'tec_tac'/'__init__.py').write_text('')
-    run('git','add','-A',cwd=seed); run('git','commit','-m','one',cwd=seed); run('git','branch','-M','main',cwd=seed); run('git','remote','add','origin',str(remote),cwd=seed); run('git','push','-u','origin','main',cwd=seed)
-    checkout=base/'checkout'; run('git','clone','-b','main',str(remote),str(checkout))
+    (seed/'.gitignore').write_text('node_modules/\n')
+    run('git','add','-A',cwd=seed); run('git','commit','-q','-m','one',cwd=seed); run('git','branch','-M','dev',cwd=seed); run('git','remote','add','origin',str(remote),cwd=seed); run('git','push','-q','-u','origin','dev',cwd=seed)
+    checkout=base/'checkout'; run('git','clone','-q','-b','dev',str(remote),str(checkout))
+    cfg={'TEC_TAC_FRAMEWORK_SOURCE': str(checkout), 'TEC_TAC_UI_SOURCE': str(base/'ui'), 'TEC_TAC_ROOT': str(base/'runtime')}
+    mod.load_config=lambda: dict(cfg)
     old=out('git','rev-parse','HEAD',cwd=checkout)
 
-    # Even when web metadata claims an online branch/commit, privileged
-    # deployment commits only the already root-verified staged bytes.
-    (seed/'VERSION').write_text('1.0.1\n'); (seed/'online.txt').write_text('remote-only\n'); run('git','add','-A',cwd=seed); run('git','commit','-m','two',cwd=seed); run('git','push',cwd=seed)
-    online=out('git','rev-parse','HEAD',cwd=seed)
-    source=base/'online-source'; source.mkdir(); (source/'VERSION').write_text('1.0.1\n'); (source/'verified.txt').write_text('signed bytes\n')
-    state=mod.apply_source_update(source,checkout,'framework',{'id':'12345678-x','version':'1.0.1','source':{'type':'branch','commit':online}})
-    branch=out('git','symbolic-ref','--short','HEAD',cwd=checkout)
-    assert branch.startswith('tec-tac/verified/framework-1.0.1-12345678'), branch
-    assert (checkout/'verified.txt').read_text()=='signed bytes\n'
-    assert not (checkout/'online.txt').exists()
+    # Tracked changes are logged and restored to HEAD; known generated files go; ignored files stay; HEAD is recorded.
+    (checkout/'install.sh').write_text('#!/bin/sh\necho changed\n'); (checkout/'VERSION').unlink()
+    (checkout/'framwork'/'tec_tac'/'__pycache__').mkdir(); (checkout/'framwork'/'tec_tac'/'__pycache__'/'x.pyc').write_bytes(b'cache')
+    (checkout/'node_modules').mkdir(); (checkout/'node_modules'/'kept.js').write_text('ignored\n')
+    log=Log()
+    state=mod.prepare_source_checkout(checkout,'framework',cfg,log)
+    assert state['head']==old and state['branch']=='dev', state
+    assert any('install.sh' in line for line in state['restored_changes']) and any('VERSION' in line for line in state['restored_changes']), state
+    assert 'tracked change(s); restoring them to HEAD' in log.text, log.text
+    assert (checkout/'install.sh').read_text()=='#!/bin/sh\n' and (checkout/'VERSION').is_file()
+    assert not (checkout/'framwork'/'tec_tac'/'__pycache__'/'x.pyc').exists()
+    assert (checkout/'node_modules'/'kept.js').is_file(), 'ignored files are never deleted'
     assert not out('git','status','--porcelain',cwd=checkout)
-    mod.restore_git_source(checkout,state)
-    assert out('git','rev-parse','HEAD',cwd=checkout)==old
-    assert out('git','symbolic-ref','--short','HEAD',cwd=checkout)=='main'
 
-    # UI online updates must remove ignored build/dependency residue before the
-    # signed execution-tree verification. git clean -fd is insufficient because
-    # node_modules is ignored and contains symlinks such as .bin/rollup.
-    ui_remote=base/'ui-remote.git'; run('git','init','--bare',str(ui_remote))
-    ui_seed=base/'ui-seed'; run('git','init',str(ui_seed)); run('git','config','user.name','test',cwd=ui_seed); run('git','config','user.email','test@example.invalid',cwd=ui_seed)
-    (ui_seed/'VERSION').write_text('0.1.0\n'); (ui_seed/'package.json').write_text('{}\n'); (ui_seed/'src').mkdir(); (ui_seed/'src'/'App.vue').write_text('<template/>\n'); (ui_seed/'scripts').mkdir(); (ui_seed/'scripts'/'install.sh').write_text('#!/bin/sh\n'); (ui_seed/'.gitignore').write_text('node_modules/\ndist/\n.env\n')
-    run('git','add','-A',cwd=ui_seed); run('git','commit','-m','ui one',cwd=ui_seed); run('git','branch','-M','main',cwd=ui_seed); run('git','remote','add','origin',str(ui_remote),cwd=ui_seed); run('git','push','-u','origin','main',cwd=ui_seed)
-    ui_checkout=base/'ui-checkout'; run('git','clone','-b','main',str(ui_remote),str(ui_checkout))
-    (ui_checkout/'node_modules'/'.bin').mkdir(parents=True); (ui_checkout/'node_modules'/'rollup').write_text('binary')
-    (ui_checkout/'node_modules'/'.bin'/'rollup').symlink_to('../rollup')
-    (ui_checkout/'dist').mkdir(); (ui_checkout/'dist'/'index.html').write_text('generated')
-    (ui_checkout/'.env').write_text('SHOULD_NOT_SURVIVE=1\n')
-    (ui_seed/'VERSION').write_text('0.1.1\n'); (ui_seed/'src'/'App.vue').write_text('<template>updated</template>\n'); run('git','add','-A',cwd=ui_seed); run('git','commit','-m','ui two',cwd=ui_seed); run('git','push',cwd=ui_seed)
-    ui_online=out('git','rev-parse','HEAD',cwd=ui_seed)
-    ui_source=base/'ui-source'; ui_source.mkdir(); (ui_source/'VERSION').write_text('0.1.1\n')
-    mod.apply_source_update(ui_source,ui_checkout,'ui',{'id':'ui-clean-1','version':'0.1.1','source':{'type':'release','commit':ui_online}})
-    assert not (ui_checkout/'node_modules').exists()
-    assert not (ui_checkout/'dist').exists()
-    assert not (ui_checkout/'.env').exists()
-    assert not out('git','status','--porcelain',cwd=ui_checkout)
+    # An unknown untracked file may be an administrator's: the update stops and nothing is deleted.
+    (checkout/'notes.txt').write_text('mine\n')
+    try:
+        mod.prepare_source_checkout(checkout,'framework',cfg,Log())
+    except RuntimeError as exc:
+        assert 'untracked files that System Update will not delete' in str(exc) and 'notes.txt' in str(exc), exc
+    else:
+        raise AssertionError('an unknown untracked file was not refused')
+    assert (checkout/'notes.txt').read_text()=='mine\n'
+    (checkout/'notes.txt').unlink()
 
-    # Offline package becomes its own clean local branch/commit.
-    offline=base/'offline'; offline.mkdir(); (offline/'VERSION').write_text('1.0.2\n'); (offline/'install.sh').write_text('#!/bin/sh\n'); (offline/'framwork'/'tec_tac').mkdir(parents=True); (offline/'framwork'/'tec_tac'/'__init__.py').write_text(''); (offline/'offline.txt').write_text('package\n')
-    state=mod.apply_source_update(offline,checkout,'framework',{'id':'abcdef12-0000','version':'1.0.2','source':{'type':'offline'}})
-    branch=out('git','symbolic-ref','--short','HEAD',cwd=checkout)
-    assert branch.startswith('tec-tac/verified/framework-1.0.2-abcdef12'), branch
+    # The exact selected commit, with no second branch lookup: the remote moves on after the selection, HEAD does not follow it.
+    (seed/'VERSION').write_text('1.0.1\n'); run('git','add','-A',cwd=seed); run('git','commit','-q','-m','two',cwd=seed); run('git','push','-q',cwd=seed)
+    selected=out('git','rev-parse','HEAD',cwd=seed)
+    (seed/'VERSION').write_text('1.0.2\n'); run('git','add','-A',cwd=seed); run('git','commit','-q','-m','three',cwd=seed); run('git','push','-q',cwd=seed)
+    state=mod.prepare_source_checkout(checkout,'framework',cfg,Log())
+    mod.move_source_to_commit(checkout,'framework',{'type':'branch','ref':'dev','commit':selected},cfg,Log())
+    assert out('git','rev-parse','HEAD',cwd=checkout)==selected
+    assert out('git','symbolic-ref','--short','HEAD',cwd=checkout)=='dev'
+    assert (checkout/'VERSION').read_text()=='1.0.1\n'
     assert not out('git','status','--porcelain',cwd=checkout)
-    assert (checkout/'offline.txt').read_text()=='package\n'
-    mod.restore_git_source(checkout,state)
-    assert out('git','rev-parse','HEAD',cwd=checkout)==old
-    assert out('git','symbolic-ref','--short','HEAD',cwd=checkout)=='main'
+    assert (checkout/'node_modules'/'kept.js').is_file()
 
-    # Reinstalling an identical offline tree must still produce an auditable
-    # local commit instead of failing with 'nothing to commit'.
-    identical=base/'identical'; identical.mkdir()
-    for item in checkout.iterdir():
-        if item.name == '.git':
-            continue
-        dest=identical/item.name
-        if item.is_dir():
-            import shutil; shutil.copytree(item,dest)
-        else:
-            import shutil; shutil.copy2(item,dest)
-    state=mod.apply_source_update(identical,checkout,'framework',{'id':'feedbeef-0000','version':'1.0.0','source':{'type':'offline'}})
-    branch=out('git','symbolic-ref','--short','HEAD',cwd=checkout)
-    assert branch.startswith('tec-tac/verified/framework-1.0.0-feedbeef'), branch
-    assert out('git','rev-parse','HEAD',cwd=checkout) != old
-    assert not out('git','status','--porcelain',cwd=checkout)
-    mod.restore_git_source(checkout,state)
+    # Rollback: back to the exact old HEAD and branch, clean.
+    mod.restore_source_checkout(checkout,'framework',state,cfg)
     assert out('git','rev-parse','HEAD',cwd=checkout)==old
-    assert out('git','symbolic-ref','--short','HEAD',cwd=checkout)=='main'
+    assert out('git','symbolic-ref','--short','HEAD',cwd=checkout)=='dev'
+    assert not out('git','status','--porcelain',cwd=checkout)
+
+    # A release source leaves a detached HEAD at the tag's commit.
+    mod.move_source_to_commit(checkout,'framework',{'type':'release','ref':'v1.0.1','commit':selected},cfg,Log())
+    assert out('git','rev-parse','HEAD',cwd=checkout)==selected
+    assert subprocess.run(['git','symbolic-ref','-q','HEAD'],cwd=checkout).returncode!=0
+    mod.restore_source_checkout(checkout,'framework',state,cfg)
+
+    # A commit the remote does not have stops the update with the fetch command to check.
+    try:
+        mod.move_source_to_commit(checkout,'framework',{'type':'branch','ref':'dev','commit':'f'*40},cfg,Log())
+    except RuntimeError as exc:
+        assert 'does not have commit' in str(exc) and 'fetch origin' in str(exc), exc
+    else:
+        raise AssertionError('an unknown commit was accepted')
+    assert out('git','rev-parse','HEAD',cwd=checkout)==old
+
+    # Unsafe refs are never passed to Git as a branch name.
+    for bad in ('-x','a..b','a/','.hidden','x.lock','a//b','a@{1}'):
+        assert not mod._SAFE_REF.fullmatch(bad), bad
+    assert mod._SAFE_REF.fullmatch('dev') and mod._SAFE_REF.fullmatch('release/1.17') and mod._SAFE_REF.fullmatch('v1.17.98')
+    # An offline package has no commit, so the checkout is not moved.
+    assert mod._source_commit({'type':'offline','commit':selected}) is None
+    assert mod._source_commit({'type':'branch','commit':selected.upper()})==selected
 print('[TEST] PASS source Git transaction and rollback')
 PY_GIT_SOURCE
 
 grep -q 'verify_source_runtime_layout' "${ROOT}/scripts/system-update-helper.py" || fail "post-update source/runtime separation verification missing"
 grep -q 'source checkout is not clean' "${ROOT}/scripts/system-update-helper.py" || fail "dirty source preflight missing"
-grep -q 'tec-tac/verified/' "${ROOT}/scripts/system-update-helper.py" || fail "verified source update Git branch missing"
-! grep -A60 'def apply_source_update' "${ROOT}/scripts/system-update-helper.py" | grep -q 'source_meta' || fail "web-tier source metadata still controls privileged deployment"
+grep -q 'def move_source_to_commit' "${ROOT}/scripts/system-update-helper.py" || fail "exact-commit source move missing"
+! grep -Eq 'def (finish_source_update|apply_source_update|seal_execution_tree|restore_source_owner)\b' "${ROOT}/scripts/system-update-helper.py" || fail "the helper still writes release bytes into, seals or hands back the source checkout"
+grep -q 'not staged and verified by the root helper' "${ROOT}/scripts/system-update-helper.py" || fail "installers may run from an unverified tree"
 echo "[TEST] PASS source checkout hardening"
 
 # 1.13.5 cross-lifecycle serialization: module mutations and system updates must
@@ -224,7 +235,9 @@ python3 "${ROOT}/tests/review-regressions-1.15.50.py"
 # cannot carry setuid/setgid or group/world-write bits into root installer execution.
 python3 "${ROOT}/tests/system-update-root-extraction-boundary.py"
 grep -q 'with private_update_work_dir(job_id) as work:' "${ROOT}/scripts/system-update-helper.py" || fail "root-private update work context missing"
-grep -q 'normalize_release_tree_security(target)' "${ROOT}/scripts/system-update-helper.py" || fail "execution tree ownership/mode normalization missing"
+# 1.17.98: the execution tree is a root-only staging copy written with explicit root ownership and safe modes, not the checkout.
+grep -q 'staged = stage_release_tree(' "${ROOT}/scripts/system-update-helper.py" || fail "execution tree staging missing"
+grep -q 'os.fchown(out, 0, 0)' "${ROOT}/scripts/system-update-helper.py" || fail "execution tree ownership/mode normalization missing"
 echo "[TEST] PASS system update R2 extraction boundary"
 
 # Privileged claim must never follow Tactical-controlled staged symlinks or

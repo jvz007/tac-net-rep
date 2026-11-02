@@ -136,6 +136,8 @@ Reportsets may not declare publisher permissions.
 
 This is intentionally a narrow signing/trust contract. Broader module capability/privilege declarations belong to the later Core privilege-manifest security layer.
 
+System updates use two more publisher permissions: `framework.update` for a Framework release and `ui.update` for a UI release. Since 1.17.98 (Johan, 2 November 2026) `install.sh` grants both to the Tech Flow Dynamics dev publisher `tech_flow_dynamics-dev`, next to its `module.install` and `server_maintenance.register`, so a fresh install needs no manual edit. The grant is made only while that publisher is trusted and only when its active key `tech-key-dev-1025` is the real Tech Flow Dynamics public key; no key is written or replaced, and no other publisher changes.
+
 ## Server environment
 
 Core reads the security environment from the root-owned `/opt/tec-tac/etc/tec-tac.conf`, defaulting to `production`. Privileged trust verification deliberately ignores process-environment overrides for the environment and trust-store path.
@@ -221,7 +223,7 @@ Troubleshooting & Diagnostics exposes `core.security.publisher-trust`, including
 
 ## Signed Framework source trees (publisher tool v0.2.0)
 
-System Updates also understands the publisher tool's schema-2 source-tree format. A signed repository root contains `tec-tac-release.json` and `tec-tac-release.json.sig`. The web tier verifies it for inspection, but the root worker does not trust that result: it independently verifies the extracted staged tree against `/etc/tec-tac/trusted-publishers`, applies the root-owned trust floor, deploys only those verified bytes into the local source checkout, and verifies that execution checkout again before `install.sh`. Framework releases require publisher permission `framework.update`; UI releases require `ui.update`. See `docs/system-update-signed-releases.md`.
+System Updates also understands the publisher tool's schema-2 source-tree format. A signed repository root contains `tec-tac-release.json` and `tec-tac-release.json.sig`. The web tier verifies it for inspection, but the root worker does not trust that result: it independently verifies the extracted staged tree against `/etc/tec-tac/trusted-publishers`, applies the root-owned trust floor, copies the release into a root-only staging folder, and verifies that copy again before `install.sh` runs from it (since 1.17.98 the source checkout is never written by root). Framework releases require publisher permission `framework.update`; UI releases require `ui.update`. See `docs/system-update-signed-releases.md`.
 
 ## Global acceptance policy
 

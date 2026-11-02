@@ -58,6 +58,51 @@ def _resolve_trusted_bash() -> str:
 
 TRUSTED_BASH = _resolve_trusted_bash()
 
+
+# 1.17.98: the UI module sync script runs as root. It is the root-owned copy the system updater publishes from a verified UI
+# tree (/usr/local/lib/tec-tac-ui-sync), never a file in the UI source checkout, which belongs to the Tactical account.
+UI_SYNC_PUBLISHED = Path("/usr/local/lib/tec-tac-ui-sync/scripts/sync-modules.sh")
+UI_SYNC_OFF_MESSAGE = ("UI module sync is off: no verified UI sync script was published at {path}. Run a UI System Update, "
+                       "or reinstall Core (sudo bash install.sh), to publish it; the backend part of the module is unchanged by this.")
+
+
+def _require_trusted_root_file(path, label):
+    """Open without following a link; a regular, root-owned file that is not group/world writable, in folders that are all
+    root-owned and not group/world writable, so no other account can change or swap it between this check and the run."""
+    path = Path(path)
+    if not path.is_absolute():
+        raise RuntimeError(f"refusing {label} {path}: the path is not absolute")
+    try:
+        fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0))
+    except OSError as exc:
+        raise RuntimeError(f"refusing {label} {path}: it is a symbolic link or cannot be opened ({exc.strerror or exc})") from exc
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+            raise RuntimeError(f"refusing non-root-owned or writable {label}: {path}")
+    finally:
+        os.close(fd)
+    for parent in path.parents:
+        info = os.stat(parent)
+        if info.st_uid != 0 or info.st_mode & 0o022:
+            raise RuntimeError(f"refusing {label} {path}: the folder {parent} is not root-owned or is group/world writable. "
+                               "Reinstall Core or run a UI System Update to publish the verified copy.")
+
+
+def trusted_ui_sync_script(config):
+    """The UI sync script to run as root, checked now; None when no verified copy was published (UI sync is then off).
+
+    The config reader it sources from its own folder (tec-tac-config.sh) is held to the same rule.
+    """
+    path = Path(config.get("UI_SYNC_SCRIPT") or UI_SYNC_PUBLISHED)
+    if not os.path.lexists(path):
+        return None
+    _require_trusted_root_file(path, "UI sync script")
+    sourced = path.parent / "tec-tac-config.sh"
+    if os.path.lexists(sourced):
+        _require_trusted_root_file(sourced, "UI sync config reader")
+    return path
+
 def acquire_lifecycle_lock():
     """Serialize module lifecycle work with framework/UI system updates."""
     global _LIFECYCLE_LOCK_HANDLE
@@ -763,7 +808,10 @@ def run_job(job_id):
     if root_trust is not None:
         job["publisher_trust"] = root_trust
     repo_root = Path(config.get("REPO_ROOT", "/opt/tec-tac")).resolve()
-    ui_sync = Path(config.get("UI_SYNC_SCRIPT", "/opt/tec-tac-src/ui/scripts/sync-modules.sh"))
+    try:
+        ui_sync = trusted_ui_sync_script(config)  # 1.17.98: the published root-owned copy only, or None (UI sync off)
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
     ui_root = config.get("UI_ROOT", "/var/lib/tec-tac/ui/tec-tac")
     install_script = repo_root / "scripts/install-extension.sh"
     remove_script = repo_root / "scripts/remove-extension.sh"
@@ -777,8 +825,6 @@ def run_job(job_id):
 
     require_root_owned_executable_source(install_script)
     require_root_owned_executable_source(remove_script)
-    if ui_sync.is_file():
-        require_root_owned_executable_source(ui_sync)
 
     log_path = LOGS_ROOT / f"{job_id}.log"
     job["status"] = "running"
@@ -845,13 +891,18 @@ def run_job(job_id):
                         job["enabled_modules"] = list(handback)
                         log.write(f"[TEC-TAC-MODULE] enabled replaced module(s) handed back: {', '.join(handback)}\n")
                         log.flush()
-                if rc == 0 and ui_sync.is_file():
+                if rc == 0 and ui_sync is not None:
                     job["stage"] = "ui-sync"
                     atomic_json(path, job)
                     log.write("[TEC-TAC-MODULE] synchronizing deployed UI modules\n")
                     log.flush()
                     sync_env = privileged_env({"TEC_TAC_UI_ROOT": ui_root})
-                    sync = subprocess.run([TRUSTED_BASH, str(ui_sync)], stdout=log, stderr=subprocess.STDOUT, text=True, env=sync_env)
+                    try:
+                        trusted_ui_sync_script(config)  # checked again immediately before it runs
+                        sync = subprocess.run([TRUSTED_BASH, str(ui_sync)], stdout=log, stderr=subprocess.STDOUT, text=True, env=sync_env)
+                    except RuntimeError as exc:
+                        log.write(f"[TEC-TAC-MODULE] {exc}\n")
+                        sync = subprocess.CompletedProcess([], 1)
                     if sync.returncode != 0:
                         rc = sync.returncode
                         log.write(f"[TEC-TAC-MODULE] UI module sync failed rc={rc}\n")
@@ -867,7 +918,7 @@ def run_job(job_id):
                             else:
                                 log.write(f"[TEC-TAC-MODULE] UI verification OK: {module_dir}\n")
                 elif rc == 0:
-                    log.write(f"[TEC-TAC-MODULE] UI sync script not found at {ui_sync}; backend install succeeded\n")
+                    log.write("[TEC-TAC-MODULE] " + UI_SYNC_OFF_MESSAGE.format(path=config.get("UI_SYNC_SCRIPT") or UI_SYNC_PUBLISHED) + "\n")
                 if rc == 0 and job["action"] == "install":
                     # 1.17.17: register the server-maintenance actions the installed module declares (and drop what an upgrade
                     # dropped). Same step, in the same place after the runtime sync, as module-v2-job-helper.py.

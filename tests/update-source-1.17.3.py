@@ -57,6 +57,8 @@ tmp = Path(tempfile.mkdtemp(prefix="update-source-1173-"))
 su.CACHE_ROOT = tmp / "cache"
 su.RELEASE_CACHE = su.CACHE_ROOT / "release-cache.json"
 su.HISTORY_ROOT = tmp / "history"
+su.BRANCH_SUPPRESS_SECONDS = 0  # 1.17.98: the suppression windows are tested in github-rate-limit-1.17.98.py
+su.RELEASE_SUPPRESS_SECONDS = 0
 su.JOBS_ROOT = tmp / "jobs"
 su.HISTORY_ROOT.mkdir()
 su.JOBS_ROOT.mkdir()
@@ -112,9 +114,9 @@ def release_calls():
 # 1.17.4 amendment: the 1.17.3 version asserted that no release call was made and the release cache was untouched. From
 # 1.17.4 the stable release is fetched as the secondary stable_release (tests/update-source-1.17.4.py covers it in full);
 # latest_release stays null.
-OLD_KEYS = {"component", "repository", "installed_version", "latest_release", "checked_at", "release_error", "cache"}
+OLD_KEYS = {"component", "repository", "installed_version", "latest_release", "checked_at", "release_error", "cache", "refresh", "github_rate_limit"}  # 1.17.98 additive keys
 GH["calls"].clear()
-out = su.online_status("framework", force=True, source=BRANCH)
+out = su.online_status("framework", refresh="all", source=BRANCH)
 must(len(release_calls()) == 2, f"1.17.4: a branch source fetches the stable release once: {GH['calls']}")
 must(out["latest_release"] is None and out["release_error"] is None, out)
 must(out["stable_release"]["tag"] == "v1.17.1" and out["checked_at"] is not None, out)
@@ -135,19 +137,19 @@ su.RELEASE_CACHE.unlink()
 
 # A branch failure still sets branch_error only.
 GH["branch_fail"] = True
-out = su.online_status("framework", force=True, source={"type": "branch", "ref": "nope"})
+out = su.online_status("framework", refresh="all", source={"type": "branch", "ref": "nope"})
 must("Branch not found" in out["branch_error"] and out["release_error"] is None and out["latest_release"] is None, out)
 must(out["branch"]["state"] == "unknown" and out["branch"]["differs"] is None and out["branch"]["basis"] is None, out["branch"])
 GH["branch_fail"] = False
 
 # Release and no source: same keys and values as before, and the release is fetched.
 GH["calls"].clear()
-plain = su.online_status("framework", force=True)
-via_release = su.online_status("framework", force=True, source=RELEASE)
+plain = su.online_status("framework", refresh="all")
+via_release = su.online_status("framework", refresh="all", source=RELEASE)
 must(set(plain) == set(via_release) == OLD_KEYS, set(plain))
 must(plain["latest_release"]["tag"] == "v1.17.1" and via_release["latest_release"]["tag"] == "v1.17.1", plain)
 must(len([u for u in GH["calls"] if u.endswith("/releases/latest")]) == 2, GH["calls"])
-must(su.online_status("framework", force=True, source={"type": "other"})["latest_release"]["tag"] == "v1.17.1", "a non-branch source is a release answer")
+must(su.online_status("framework", refresh="all", source={"type": "other"})["latest_release"]["tag"] == "v1.17.1", "a non-branch source is a release answer")
 su.RELEASE_CACHE.unlink()
 
 
@@ -212,38 +214,26 @@ for label, result, installed in (("404", None, "1.17.2"), ("error", su.SystemUpd
     fresh()
     VER["result"] = result
     INSTALLED["v"] = installed
-    out = su.online_status("framework", force=True, source=BRANCH)
+    out = su.online_status("framework", refresh="all", source=BRANCH)
     b = out["branch"]
     must(b["state"] == "unknown" and b["differs"] is None and b["basis"] is None and out["branch_error"] is None, (label, out))
     must(b["head_commit"] == SHA_A, (label, "head still resolved", b))
-# (6) the read is against the head SHA, cached for the TTL, bypassed by force, refetched when the head moves
+# (6) 1.17.98: the read is against the head SHA and saved by commit with no expiry; force does not refetch it
 fresh()
 branch(force=True)
 must(VER["calls"] == [(REPO, "VERSION", SHA_A)], VER["calls"])
 branch()
 branch()
-must(len(VER["calls"]) == 1, "a cached head_version is reused within 5 minutes")
-row = json.loads(su.RELEASE_CACHE.read_text(encoding="utf-8"))["branches"]["framework"]
-must(row["head_version"] == "1.17.3" and row["head_version_commit"] == SHA_A, row)
 branch(force=True)
-must(len(VER["calls"]) == 2, "force refetches")
+must(len(VER["calls"]) == 1, "a version saved for a commit is reused, even on force: content at a commit never changes")
+meta = json.loads(su.RELEASE_CACHE.read_text(encoding="utf-8"))["commit_metadata"][f"{REPO}:{SHA_A}"]
+must(meta["version"] == "1.17.3", meta)
 GH["head"] = SHA_B
 branch(force=True)
 must(VER["calls"][-1] == (REPO, "VERSION", SHA_B), "the new head is read at its own SHA")
-# a cached version recorded for another commit is not reused
-doc = json.loads(su.RELEASE_CACHE.read_text(encoding="utf-8"))
-doc["branches"]["framework"]["head_version_commit"] = SHA_A
-su.RELEASE_CACHE.write_text(json.dumps(doc), encoding="utf-8")
 n = len(VER["calls"])
-branch()
-must(len(VER["calls"]) == n + 1, "a cached version for another commit is not reused")
-# an expired row refetches
-doc = json.loads(su.RELEASE_CACHE.read_text(encoding="utf-8"))
-doc["branches"]["framework"]["checked_at"] = (datetime.now(timezone.utc) - timedelta(minutes=6)).isoformat()
-su.RELEASE_CACHE.write_text(json.dumps(doc), encoding="utf-8")
-n = len(VER["calls"])
-branch()
-must(len(VER["calls"]) == n + 1, "an expired cache refetches")
+branch(force=True)
+must(len(VER["calls"]) == n, "the second check of the same commit makes no VERSION request")
 # a failed read is not cached
 fresh()
 VER["result"] = None
@@ -266,7 +256,7 @@ for node in ast.walk(post):
         base = node.func.value
         if isinstance(base, ast.Attribute) and base.attr == "data" and isinstance(node.args[0], ast.Constant):
             read.add(node.args[0].value)
-must(read == {"component", "source_type", "ref"}, f"the stage view reads {read}")
+must(read == {"component", "source_type", "ref", "commit"}, f"the stage view reads {read}")
 must(set(entry["request"]) == read, "the contract must list the keys the view reads")
 must("_require_module_manager" in ast.get_source_segment(views_src, post), "the view must require module manager rights")
 online = details["/api/tfd/system/updates/online/"]["GET"]

@@ -288,6 +288,33 @@ PREVIOUS = {  # sha256 of each helper as released in 1.17.59 (commit 519531c)
     "module-v2-job-helper.py": "a8a0087d7b0d8e415cb507506cd3b03d0b2cad43929f43c3a199dc676bd3dffa",
     "module-hotfix-job-helper.py": "e74c0f8f577e04231d7393537a6cd75a7bee64f36cbcd11c2536efcd44bc54ed",
 }
+UI_SYNC_1_17_98 = {  # (1.17.98 text, 1.17.59 text) of the UI sync call sites
+    "module-v2-job-helper.py": [(
+        """    ui_sync = trusted_ui_sync_script(config)  # 1.17.98: the published root-owned copy only, checked just before it runs
+    ui_root = config.get("UI_ROOT", "/var/lib/tec-tac/ui/tec-tac")
+    reload_script = Path(config.get("REPO_ROOT", "/opt/tec-tac")) / "scripts/reload-rmm-uwsgi.sh"
+    if ui_sync is None:
+        log.write("[TEC-TAC-MODULE-V2] " + UI_SYNC_OFF_MESSAGE.format(path=config.get("UI_SYNC_SCRIPT") or UI_SYNC_PUBLISHED) + "\\n")
+        log.flush()
+    else:
+        env = privileged_env""",
+        """    ui_sync = Path(config.get("UI_SYNC_SCRIPT", "/opt/tec-tac-src/ui/scripts/sync-modules.sh"))
+    ui_root = config.get("UI_ROOT", "/var/lib/tec-tac/ui/tec-tac")
+    reload_script = Path(config.get("REPO_ROOT", "/opt/tec-tac")) / "scripts/reload-rmm-uwsgi.sh"
+    if ui_sync.is_file():
+        require_root_owned(ui_sync)
+        env = privileged_env""")],
+    "module-hotfix-job-helper.py": [(
+        """        ui_sync = trusted_ui_sync_script(config)  # 1.17.98: the published root-owned copy only, checked just before it runs
+        if ui_sync is None:
+            log.write("[TEC-TAC-HOTFIX] " + UI_SYNC_OFF_MESSAGE.format(path=config.get("UI_SYNC_SCRIPT") or UI_SYNC_PUBLISHED) + "\\n")
+        else:
+            env = privileged_env""",
+        """        ui_sync = Path(config.get("UI_SYNC_SCRIPT", "/opt/tec-tac-src/ui/scripts/sync-modules.sh"))
+        if ui_sync.is_file():
+            require_root_owned(ui_sync)
+            env = privileged_env""")],
+}
 for name, previous in PREVIOUS.items():
     text = (ROOT / "scripts" / name).read_bytes().decode("utf-8")
     block_start = text.index("ORPHAN_LOG_RE = ")
@@ -305,6 +332,13 @@ for name, previous in PREVIOUS.items():
         for addition in ("import urllib.parse\n", "    scrub_state_sources(state)\n", remember_lines):
             must(restored.count(addition) == 1, f"{name}: one 1.17.72 addition {addition.strip()[:30]!r}")
             restored = restored.replace(addition, "")
+    # 1.17.98: the shared UI sync guard and its call site; take exactly those additions out before comparing with 1.17.59
+    guard_start = restored.index("\n\n# 1.17.98: the UI module sync script runs as root.")
+    guard_end = restored.index("    return path\n", guard_start) + len("    return path\n")
+    restored = restored[:guard_start] + restored[guard_end:]
+    for new, old in UI_SYNC_1_17_98.get(name, ()):
+        must(restored.count(new) == 1, f"{name}: one 1.17.98 UI sync change")
+        restored = restored.replace(new, old)
     must(hashlib.sha256(restored.encode("utf-8")).hexdigest() == previous,
          f"{name} must be byte-identical to 1.17.59 apart from the added function and its one call")
     tree = ast.parse(text)

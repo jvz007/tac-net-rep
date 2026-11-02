@@ -59,7 +59,7 @@ fake_fcntl.LOCK_EX, fake_fcntl.LOCK_NB = 2, 4
 fake_fcntl.flock = lambda fd, op: None
 
 
-def scenario(*, effects, git_state, restore_git_error=None, restore_backup_error=None, dynamic_error_on_call=None):
+def scenario(*, effects, git_state, restore_git_error=None, restore_backup_error=None, dynamic_error_on_call=None, extract_error=None):
     """Run the real run_job once. ``effects`` is one (exit status, text the installer writes to the log) per installer run."""
     tmp = Path(tempfile.mkdtemp(prefix="suh-rbwarn-"))
     target = tmp / "framework"
@@ -82,7 +82,7 @@ def scenario(*, effects, git_state, restore_git_error=None, restore_backup_error
     queue = list(effects)
     dynamic_calls = [0]
 
-    def run_install(component, target_path, log):
+    def run_install(component, target_path, log, source_checkout=None):
         calls["run_install"] += 1
         status, text = queue.pop(0)
         if text:
@@ -90,7 +90,7 @@ def scenario(*, effects, git_state, restore_git_error=None, restore_backup_error
             log.flush()
         return status
 
-    def restore_git(target_path, state):
+    def restore_git(target_path, component, state, cfg=None):
         calls["restore_git_source"] += 1
         if restore_git_error:
             raise RuntimeError(restore_git_error)
@@ -112,8 +112,28 @@ def scenario(*, effects, git_state, restore_git_error=None, restore_backup_error
     def work_dir(_job_id):
         yield work
 
-    def verify_layout(component, root):
+    def verify_layout(component, root, cfg=None, expected_head=None):
         calls["verify_source_runtime_layout"] += 1
+
+    @contextlib.contextmanager
+    def stage(_job_id, label):
+        folder = tmp / f"stage-{label}"
+        folder.mkdir()
+        yield folder
+
+    def stage_tree(source_root, dest, component, allow_unsigned=False):
+        dest.mkdir()
+        return dest
+
+    def extract_backup(backup, dest, target_path):
+        calls["restore_backup"] += 1
+        if extract_error:
+            raise RuntimeError(extract_error)
+        return dest
+
+    def root_verify(cfg, root, component):
+        return {"publisher_id": "tf", "key_id": "k", "root_policy": {"actual_level": "signed_production"},
+                "manifest_sha256": "m", "file_count": 1, "signed": True, "verified": True}
 
     ns: dict = {
         "os": os, "re": re, "json": json, "shutil": shutil, "Path": Path, "contextlib": contextlib, "fcntl": fake_fcntl,
@@ -124,6 +144,7 @@ def scenario(*, effects, git_state, restore_git_error=None, restore_backup_error
             "version": "1.17.43", "source": "test",
         }),
         "load_config": lambda: {"TEC_TAC_FRAMEWORK_SOURCE": str(target), "TEC_TAC_ROOT": str(tmp / "runtime")},
+        "source_checkout_path": lambda component, cfg=None: target,
         "tactical_gid": lambda cfg: 4242,
         "acquire_lifecycle_lock": lambda: None,
         "now": lambda: "2026-10-30T00:00:00+00:00",
@@ -131,20 +152,31 @@ def scenario(*, effects, git_state, restore_git_error=None, restore_backup_error
         "private_update_work_dir": work_dir,
         "extract_archive": lambda *a, **k: None,
         "detect_root": lambda work_root, component: source,
-        "_root_verify_tree": lambda cfg, root, component: {
-            "publisher_id": "tf", "key_id": "k", "root_policy": {"actual_level": "signed_production"},
-            "manifest_sha256": "m", "file_count": 1,
-        },
+        "_root_verify_tree": root_verify,
+        "TREE_MANIFEST": "tec-tac-release.json", "TREE_SIGNATURE": "tec-tac-release.json.sig",
         "_version_key": lambda value: tuple(int(part) for part in value.split(".")),
         "backup_root": lambda target_path, component, old_version, job_id: tmp / "backup.tar.gz",
-        "apply_source_update": lambda source_root, target_path, component, job: dict(git_state),
+        # 1.17.98: prepare (owner, clean HEAD), backup, exact commit, stage, verify, install from the staging copy
+        "prepare_source_checkout": lambda target_path, component, cfg=None, log=None: {**git_state, "restored_changes": [], "moved": False},
+        "_source_commit": lambda source: None,
+        "move_source_to_commit": lambda *a, **k: None,
+        "_read_version_file": lambda root: ((Path(root) / "VERSION").read_text(encoding="utf-8").strip() if (Path(root) / "VERSION").is_file() else ""),
+        "_read_provenance": lambda component: None,
+        "installed_version": lambda component, cfg: (target / "VERSION").read_text(encoding="utf-8").strip(),  # 1.17.98: root-held in real life
+        "write_provenance": lambda component, payload, gid: None,
+        "install_stage": stage,
+        "stage_release_tree": stage_tree,
+        "verify_staged_tree": lambda cfg, staged, component, against=None, expected_version=None: root_verify(cfg, staged, component),
+        "extract_rollback_backup": extract_backup,
+        "repin_framework_source": lambda expected, log=None: False,
+        "enforce_runtime_ownership": lambda cfg, log=None: None,
+        "verify_rollback_tree": lambda cfg, target_path, component, old_version, purpose="rollback": {"signed": True, "verified": True, "version": old_version},
         "snapshot_dynamic_plugins": lambda root: {},
-        "normalize_release_tree_security": lambda root: None,
         "verify_dynamic_plugins": dynamic,
         "run_install": run_install,
         "verify": lambda component, target_path, expected, log: None,
         "verify_source_runtime_layout": verify_layout,
-        "restore_git_source": restore_git,
+        "restore_source_checkout": restore_git,
         "restore_backup": restore_bk,
         "running_request_path": lambda _id: tmp / "request.json",
     }
@@ -200,17 +232,18 @@ for rollback_effect, why in (((1, "[TEC-TAC] ERROR: Docker is not installed."), 
     must("rollback installer exited with status" in s["final"]["rollback"]["error"], s["final"]["rollback"])
 print("       any other installer failure stays a real ROLLBACK FAILED")
 
-# (4) the restore itself failing is failed, with no installer_exit_status
+# (4) the restore itself failing is failed, with no installer_exit_status. 1.17.98: the old installer runs from the staged backup
+# first and the source checkout goes back to its old HEAD afterwards, so a failing source restore comes after the second install.
 s = scenario(effects=[FORWARD_FAIL, TIMED_OUT], git_state=GIT_STATE, restore_git_error="git reset failed")
 f = s["final"]
 must(f["rollback"]["status"] == "failed" and "installer_exit_status" not in f["rollback"] and f["stage"] == "rollback-failed", f["rollback"])
-must("ROLLBACK FAILED: git reset failed" in s["log"] and s["calls"]["run_install"] == 1, s["log"])
-s = scenario(effects=[FORWARD_FAIL, TIMED_OUT], git_state={}, restore_backup_error="backup unreadable")
-must(s["final"]["rollback"]["status"] == "failed" and s["calls"]["restore_backup"] == 1, s["final"]["rollback"])
+must("ROLLBACK FAILED: git reset failed" in s["log"] and s["calls"]["run_install"] == 2, s["log"])
+s = scenario(effects=[FORWARD_FAIL, TIMED_OUT], git_state=GIT_STATE, extract_error="backup unreadable")
+must(s["final"]["rollback"]["status"] == "failed" and s["calls"]["restore_backup"] == 1 and s["calls"]["run_install"] == 1, s["final"]["rollback"])
 print("       a failing restore: failed, not a warning")
 
-# (5) verify_dynamic_plugins failing after a verification warning -> failed (call 1 is before the installer, call 2 is after the rollback)
-s = scenario(effects=[FORWARD_FAIL, TIMED_OUT], git_state=GIT_STATE, dynamic_error_on_call=2)
+# (5) verify_dynamic_plugins failing after a verification warning -> failed (1.17.98: call 1 is the one after the rollback installer)
+s = scenario(effects=[FORWARD_FAIL, TIMED_OUT], git_state=GIT_STATE, dynamic_error_on_call=1)
 must(s["final"]["rollback"]["status"] == "failed" and "dynamic plugin check failed" in s["final"]["rollback"]["error"], s["final"]["rollback"])
 must("verification warning" not in s["log"] and "ROLLBACK FAILED" in s["log"], s["log"])
 print("       verify_dynamic_plugins failing after a verification warning: failed")

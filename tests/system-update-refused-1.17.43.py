@@ -64,7 +64,7 @@ fake_fcntl.LOCK_EX, fake_fcntl.LOCK_NB = 2, 4
 fake_fcntl.flock = lambda fd, op: None
 
 
-def scenario(*, rcs, git_state, refusal_text=None, restore_git_error=None, restore_backup_error=None):
+def scenario(*, rcs, git_state, refusal_text=None, restore_git_error=None, restore_backup_error=None, rollback_verify_error=None, backup_error=None, root_verify_error=None):
     """Run the real run_job once with the given installer statuses and return what it wrote and did."""
     tmp = Path(tempfile.mkdtemp(prefix="suh-refused-"))
     target = tmp / "framework"
@@ -83,10 +83,10 @@ def scenario(*, rcs, git_state, refusal_text=None, restore_git_error=None, resto
     package = tmp / "package.zip"
     package.write_bytes(b"not-a-real-package")
     writes: list = []
-    calls = {"run_install": 0, "restore_git_source": 0, "restore_backup": 0, "verify_source_runtime_layout": 0}
+    calls = {"run_install": 0, "restore_git_source": 0, "restore_backup": 0, "verify_source_runtime_layout": 0, "stage_release_tree": 0}
     queue = list(rcs)
 
-    def run_install(component, target_path, log):
+    def run_install(component, target_path, log, source_checkout=None):
         calls["run_install"] += 1
         status = queue.pop(0)
         if status == 78 and refusal_text is not None:
@@ -94,9 +94,10 @@ def scenario(*, rcs, git_state, refusal_text=None, restore_git_error=None, resto
             log.flush()
         return status
 
-    def restore_git(target_path, state):
+    def restore_git(target_path, component, state, cfg=None):
+        # 1.17.98: restore_source_checkout puts the Tactical-owned checkout back to its old HEAD as the Tactical account
         calls["restore_git_source"] += 1
-        must(state == git_state or not git_state, f"restore got the wrong state: {state}")
+        must({k: v for k, v in state.items() if k in git_state} == git_state, f"restore got the wrong state: {state}")
         if restore_git_error:
             raise RuntimeError(restore_git_error)
 
@@ -105,6 +106,17 @@ def scenario(*, rcs, git_state, refusal_text=None, restore_git_error=None, resto
         if restore_backup_error:
             raise RuntimeError(restore_backup_error)
 
+    def backup_stub(target_path, component, old_version, job_id):
+        if backup_error:
+            raise RuntimeError(backup_error)
+        return tmp / "backup.tar.gz"
+
+    def rollback_verify(cfg, target_path, component, old_version, purpose="rollback"):
+        calls["verify_rollback_tree"] = calls.get("verify_rollback_tree", 0) + 1
+        if rollback_verify_error:
+            raise RuntimeError(rollback_verify_error)
+        return {"signed": True, "verified": True, "version": old_version}
+
     def fake_atomic(path, payload, *args, **kwargs):
         writes.append((Path(path), json.loads(json.dumps(payload)), dict(kwargs)))
 
@@ -112,8 +124,25 @@ def scenario(*, rcs, git_state, refusal_text=None, restore_git_error=None, resto
     def work_dir(_job_id):
         yield work
 
-    def verify_layout(component, root):
+    def verify_layout(component, root, cfg=None, expected_head=None):
         calls["verify_source_runtime_layout"] += 1
+
+    @contextlib.contextmanager
+    def stage(_job_id, label):
+        folder = tmp / f"stage-{label}"
+        folder.mkdir()
+        yield folder
+
+    def stage_tree(source_root, dest, component, allow_unsigned=False):
+        calls["stage_release_tree"] += 1
+        dest.mkdir()
+        return dest
+
+    def root_verify(cfg, root, component):
+        if root_verify_error:
+            raise RuntimeError(root_verify_error)
+        return {"publisher_id": "tf", "key_id": "k", "root_policy": {"actual_level": "signed_production"},
+                "manifest_sha256": "m", "file_count": 1, "signed": True, "verified": True}
 
     ns: dict = {
         "os": os, "re": re, "json": json, "shutil": shutil, "Path": Path, "contextlib": contextlib, "fcntl": fake_fcntl,
@@ -124,6 +153,7 @@ def scenario(*, rcs, git_state, refusal_text=None, restore_git_error=None, resto
             "version": "1.17.43", "source": "test",
         }),
         "load_config": lambda: {"TEC_TAC_FRAMEWORK_SOURCE": str(target), "TEC_TAC_ROOT": str(tmp / "runtime")},
+        "source_checkout_path": lambda component, cfg=None: target,
         "tactical_gid": lambda cfg: 4242,
         "acquire_lifecycle_lock": lambda: None,
         "now": lambda: "2026-10-16T00:00:00+00:00",
@@ -131,20 +161,31 @@ def scenario(*, rcs, git_state, refusal_text=None, restore_git_error=None, resto
         "private_update_work_dir": work_dir,
         "extract_archive": lambda *a, **k: None,
         "detect_root": lambda work_root, component: source,
-        "_root_verify_tree": lambda cfg, root, component: {
-            "publisher_id": "tf", "key_id": "k", "root_policy": {"actual_level": "signed_production"},
-            "manifest_sha256": "m", "file_count": 1,
-        },
+        "_root_verify_tree": root_verify,
+        "TREE_MANIFEST": "tec-tac-release.json", "TREE_SIGNATURE": "tec-tac-release.json.sig",
         "_version_key": lambda value: tuple(int(part) for part in value.split(".")),
-        "backup_root": lambda target_path, component, old_version, job_id: tmp / "backup.tar.gz",
-        "apply_source_update": lambda source_root, target_path, component, job: dict(git_state),
+        "backup_root": backup_stub,
+        # 1.17.98: prepare (owner, clean HEAD), backup, exact commit, stage, verify, install from the staging copy
+        "prepare_source_checkout": lambda target_path, component, cfg=None, log=None: {**git_state, "restored_changes": [], "moved": False},
+        "_source_commit": lambda source: None,
+        "move_source_to_commit": lambda *a, **k: None,
+        "_read_version_file": lambda root: ((Path(root) / "VERSION").read_text(encoding="utf-8").strip() if (Path(root) / "VERSION").is_file() else ""),
+        "_read_provenance": lambda component: None,
+        "installed_version": lambda component, cfg: (target / "VERSION").read_text(encoding="utf-8").strip(),  # 1.17.98: root-held in real life
+        "write_provenance": lambda component, payload, gid: None,
+        "install_stage": stage,
+        "stage_release_tree": stage_tree,
+        "verify_staged_tree": lambda cfg, staged, component, against=None, expected_version=None: root_verify(cfg, staged, component),
+        "extract_rollback_backup": lambda backup, dest, target_path: dest,
+        "repin_framework_source": lambda expected, log=None: False,
+        "enforce_runtime_ownership": lambda cfg, log=None: None,
+        "verify_rollback_tree": rollback_verify,
         "snapshot_dynamic_plugins": lambda root: {},
-        "normalize_release_tree_security": lambda root: None,
         "verify_dynamic_plugins": lambda root, inventory: None,
         "run_install": run_install,
         "verify": lambda component, target_path, expected, log: None,
         "verify_source_runtime_layout": verify_layout,
-        "restore_git_source": restore_git,
+        "restore_source_checkout": restore_git,
         "restore_backup": restore_bk,
         "running_request_path": lambda _id: tmp / "request.json",
     }
@@ -186,12 +227,11 @@ must(f["error"].endswith("The installed version is unchanged."), f["error"])
 must(any(p.get("status") == "failed" for _path, p, _kw in s["writes"] if _path == s["job_path"]), "a terminal write was made")
 print("       refusal, source restore fails: SOURCE RESTORE FAILED logged, failed job with a terminal write")
 
-# (3) a refusal with no git state restores the backup, not git
-s = scenario(rcs=[78], git_state={}, refusal_text="Layout is wrong.")
-must(s["calls"]["restore_backup"] == 1 and s["calls"]["restore_git_source"] == 0, s["calls"])
-must(s["calls"]["run_install"] == 1, s["calls"])
-must(s["final"]["stage"] == "failed-pre-mutation", s["final"])
-print("       refusal without git state: the backup is restored, the installer is not re-run")
+# (3) 1.17.98: a failure before the checkout was prepared (root verification) restores nothing and runs no installer
+s = scenario(rcs=[0], git_state=GIT_STATE, root_verify_error="signed package is not trusted")
+must(s["calls"]["restore_backup"] == 0 and s["calls"]["restore_git_source"] == 0 and s["calls"]["run_install"] == 0, s["calls"])
+must(s["final"]["stage"] == "failed-pre-mutation" and s["final"]["rollback"] == {"performed": False, "status": "not-required"}, s["final"])
+print("       failure before the checkout was prepared: nothing restored, no installer")
 
 # (4) a refusal that gives no reason says so
 s = scenario(rcs=[78], git_state=GIT_STATE, refusal_text=None)
@@ -202,9 +242,27 @@ print("       refusal with no marker line: the error says the installer gave no 
 s = scenario(rcs=[1, 0], git_state=GIT_STATE)
 must(s["calls"]["run_install"] == 2, f"the rollback installer did not run: {s['calls']}")
 must(s["calls"]["restore_git_source"] == 1 and s["calls"]["verify_source_runtime_layout"] == 1, s["calls"])
+must(s["calls"]["stage_release_tree"] == 2, f"the forward and the rollback installer each ran from a staged copy: {s['calls']}")
 must(s["final"]["rollback"]["status"] == "succeeded" and s["final"]["stage"] == "rolled-back", s["final"])
 must("ROLLBACK FAILED" not in s["log"], s["log"])
 print("       status 1: full rollback (restore, second install, verify) as before")
+
+# (5b) 1.17.98: the rollback tree must verify against the signed release before ANY rollback installer runs
+s = scenario(rcs=[1, 0], git_state=GIT_STATE)
+must(s["calls"]["verify_rollback_tree"] == 1 and s["calls"]["run_install"] == 2, s["calls"])
+s = scenario(rcs=[1, 0], git_state=GIT_STATE, rollback_verify_error="rollback verification failed: the restored framework tree does not match a signed release (changed=1); its installer was not run")
+must(s["calls"]["run_install"] == 1, f"the rollback installer ran on bytes that did not verify: {s['calls']}")
+must(s["final"]["stage"] == "rollback-failed" and s["final"]["rollback"]["status"] == "failed", s["final"])
+must("rollback verification failed" in s["final"]["rollback"]["error"] and "ROLLBACK FAILED: rollback verification failed" in s["log"], s["final"]["rollback"])
+must(s["calls"]["verify_source_runtime_layout"] == 0, "nothing after the refused installer runs")
+s = scenario(rcs=[78], git_state=GIT_STATE, refusal_text="x", rollback_verify_error="never reached: no installer runs after a refusal")
+must(s["calls"].get("verify_rollback_tree", 0) == 0, "a refusal runs no installer, so nothing needs verifying")
+# a failure before the installer ran: only the source checkout goes back, no installer, no verification
+s = scenario(rcs=[1, 0], git_state=GIT_STATE, backup_error="disk full")
+must(s["calls"]["run_install"] == 0 and s["calls"].get("verify_rollback_tree", 0) == 0, s["calls"])
+must(s["calls"]["restore_git_source"] == 1, s["calls"])
+must(s["final"]["stage"] == "failed-pre-mutation" and s["final"]["rollback"]["reason"] == "before-install", s["final"])
+print("       rollback tree verified before the installer; a failed verification means no installer and a ROLLBACK FAILED; a never-changed worktree runs no installer")
 
 # (6) a failing rollback still logs ROLLBACK FAILED (the old behaviour is pinned)
 s = scenario(rcs=[1, 1], git_state=GIT_STATE)

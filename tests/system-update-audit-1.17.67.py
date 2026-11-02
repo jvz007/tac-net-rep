@@ -254,7 +254,8 @@ must(sua.audit_finished_system_updates(now=NOW, jobs=5) == 0, "a jobs value that
 # ---- source pins
 helper = (ROOT / "scripts" / "system-update-helper.py").read_text(encoding="utf-8")
 lines = helper.splitlines()
-at = next(i for i, line in enumerate(lines) if line.strip().startswith("old_version = (target / \"VERSION\")"))
+# 1.17.98: read without following a link and validated (_read_version_file); still recorded right after it is read
+at = next(i for i, line in enumerate(lines) if line.strip().startswith("old_version = installed_version(component, cfg)"))
 must(lines[at + 1].strip().startswith('job["installed_version"] = old_version'), "run_job records the version that was installed before, right after it reads it")
 must(helper.count('job["installed_version"]') == 1, "set once")
 tick = (APP / "management" / "commands" / "tec_tac_scheduler_tick.py").read_text(encoding="utf-8")

@@ -28,6 +28,8 @@ load_tec_tac_config() {
 # wrote last time, Tactical's PROD_URL) and checks the format. Core only keeps the key. The caller's value is read before the config is
 # loaded, because the loader would otherwise let the file override the caller, and the UI installer deliberately lets the caller win.
 CALLER_API_URL="${TEC_TAC_API_URL-}"
+# 1.17.98: read before the config, like CALLER_API_URL, so only the caller (the root system updater) can set it.
+CALLER_STAGED_SOURCE="${TEC_TAC_STAGED_SOURCE_CHECKOUT-}"
 load_tec_tac_config "${TEC_TAC_CONFIG_FILE}" || exit 1
 if [[ -n "${CALLER_API_URL}" ]]; then
     TEC_TAC_API_URL="${CALLER_API_URL}"
@@ -80,6 +82,20 @@ if [[ -f "${VERSION_FILE}" ]]; then
 fi
 log "Installing Tec-Tac framework ${PACKAGE_VERSION}."
 log "Tec-Tac source: ${SOURCE_ROOT}"
+# 1.17.98: System Update runs this installer from a root-owned staging copy that was verified against the signed release, and
+# names the source checkout that copy stands for. The config then keeps pointing at the checkout, never at the staging copy.
+# A direct run (sudo bash install.sh in the checkout) records its own folder, as before.
+RECORDED_FRAMEWORK_SOURCE="${CALLER_STAGED_SOURCE:-${SOURCE_ROOT}}"
+[[ "${RECORDED_FRAMEWORK_SOURCE}" == /* ]] || fail "TEC_TAC_STAGED_SOURCE_CHECKOUT must be an absolute path."
+if [[ "${RECORDED_FRAMEWORK_SOURCE}" != "${SOURCE_ROOT}" ]]; then
+    log "Running from a verified staging copy of the source checkout ${RECORDED_FRAMEWORK_SOURCE}."
+fi
+# 1.17.98: the one runtime ownership rule (framework, scripts and templates root:root 0755; VERSION and tec_tac_package.json
+# root:root 0644). The system updater, a rollback and a restore apply and check the same rule from the same code.
+runtime_ownership_rule() {
+    /usr/bin/python3 -I "${SOURCE_ROOT}/scripts/system-update-helper.py" --runtime-ownership "$1" \
+        "${TEC_TAC_ROOT}" "${FRAMEWORK_DIR}" "${RUNTIME_SCRIPTS_DIR}"
+}
 log "Tec-Tac runtime: ${TEC_TAC_ROOT}"
 
 [[ -d "${TACTICAL_ROOT}/.git" ]] || fail "${TACTICAL_ROOT} is not a Tactical RMM Git checkout."
@@ -214,9 +230,10 @@ TEC_TAC_INSTALLATION_ID="$(tr -d '\r\n' < "${INSTALLATION_ID_FILE}")"
 rm -f /usr/local/sbin/tec-tac-recovery-key
 log "Backup provenance installation identity: OK (${TEC_TAC_INSTALLATION_ID})"
 rm -rf "${FRAMEWORK_DIR}" "${RUNTIME_SCRIPTS_DIR}" "${TEC_TAC_ROOT}/templates"
-cp -a "${SOURCE_FRAMEWORK_DIR}" "${FRAMEWORK_DIR}"
-cp -a "${SOURCE_SCRIPTS_DIR}" "${RUNTIME_SCRIPTS_DIR}"
-cp -a "${SOURCE_TEMPLATES_DIR}" "${TEC_TAC_ROOT}/templates"
+# 1.17.98: ownership is set explicitly below, never carried over by cp -a from a Tactical-owned checkout.
+cp -R --preserve=mode,timestamps "${SOURCE_FRAMEWORK_DIR}" "${FRAMEWORK_DIR}"
+cp -R --preserve=mode,timestamps "${SOURCE_SCRIPTS_DIR}" "${RUNTIME_SCRIPTS_DIR}"
+cp -R --preserve=mode,timestamps "${SOURCE_TEMPLATES_DIR}" "${TEC_TAC_ROOT}/templates"
 for rel in extensions/example reportsets/example; do
     source_path="${SOURCE_ROOT}/${rel}"
     target_path="${TEC_TAC_ROOT}/${rel}"
@@ -226,9 +243,10 @@ for rel in extensions/example reportsets/example; do
         cp -a "${source_path}" "${target_path}"
     fi
 done
-cp -a "${SOURCE_ROOT}/VERSION" "${TEC_TAC_ROOT}/VERSION"
-cp -a "${SOURCE_ROOT}/tec_tac_package.json" "${TEC_TAC_ROOT}/tec_tac_package.json"
+install -o root -g root -m 0644 "${SOURCE_ROOT}/VERSION" "${TEC_TAC_ROOT}/VERSION"
+install -o root -g root -m 0644 "${SOURCE_ROOT}/tec_tac_package.json" "${TEC_TAC_ROOT}/tec_tac_package.json"
 chmod -R a+rX "${FRAMEWORK_DIR}" "${EXTENSIONS_DIR}" "${REPORTSETS_DIR}" "${RUNTIME_SCRIPTS_DIR}"
+runtime_ownership_rule apply || fail "Could not apply the Tec-Tac runtime ownership rule."
 log "Deployed framework-owned runtime code without altering dynamic modules."
 
 [[ -f "${LOCAL_SETTINGS}" ]] || fail "Tactical local_settings.py was not found at ${LOCAL_SETTINGS}."
@@ -391,7 +409,9 @@ run_verify_step() {
     local label="$1" code="$2" mode="${3:-fatal}" noun="${4:-verification}"
     local out rc=0 started="${SECONDS}" elapsed reason
     out="$(mktemp)" || fail "Unable to create a temporary file for the ${label} check."
-    run_as_tactical timeout "${VERIFY_STEP_TIMEOUT_SECONDS}s" bash -lc "cd '${BACKEND_DIR}' && '${VENV_PYTHON}' '${MANAGE_PY}' shell -c \"${code}\"" >"${out}" 2>&1 || rc=$?
+    # 1.17.98: the code travels as a positional argument ($4), so no character of it is parsed by a second shell. Before, a double quote
+    # inside a check (c["framework_version"]) ended the quoting and Python saw c[framework_version]: a NameError hid the real assertion.
+    run_as_tactical timeout "${VERIFY_STEP_TIMEOUT_SECONDS}s" bash -lc 'cd "$1" && "$2" "$3" shell -c "$4"' _ "${BACKEND_DIR}" "${VENV_PYTHON}" "${MANAGE_PY}" "${code}" >"${out}" 2>&1 || rc=$?
     if [[ "${rc}" -eq 0 ]]; then
         scrub_verify_output < "${out}"  # 1.17.97: a passing step still shows its OK line, masked; a failed step's full output never reaches the log
         rm -f "${out}"
@@ -542,7 +562,7 @@ mkdir -p "${MODULE_CONFIG_DIR}"
 # each value on exactly one line so an environment/path cannot inject another
 # privileged configuration key. Shell metacharacters are therefore literal.
 for config_value in \
-    "${TEC_TAC_ROOT}" "${TEC_TAC_CONFIG_FILE}" "${TEC_TAC_SOURCE_ROOT}" "${SOURCE_ROOT}" \
+    "${TEC_TAC_ROOT}" "${TEC_TAC_CONFIG_FILE}" "${TEC_TAC_SOURCE_ROOT}" "${SOURCE_ROOT}" "${RECORDED_FRAMEWORK_SOURCE}" \
     "${TEC_TAC_UI_SOURCE}" "${FRAMEWORK_DIR}" "${EXTENSIONS_DIR}" "${REPORTSETS_DIR}" \
     "${RUNTIME_SCRIPTS_DIR}" "${MODULE_STATE_ROOT}" "${TRUSTED_PUBLISHERS_ROOT}" \
     "${TEC_TAC_UI_ROOT}" "${TACTICAL_ROOT}" "${BACKEND_DIR}" "${VENV_PYTHON}" "${TACTICAL_USER}" \
@@ -551,12 +571,16 @@ for config_value in \
     "${TEC_TAC_INSTALLATION_ID}" "${TEC_TAC_API_URL:-}"; do
     [[ "${config_value}" != *$'\n'* && "${config_value}" != *$'\r'* ]] || fail "Tec-Tac config values may not contain CR/LF characters."
 done
+# 1.17.98: module jobs run the UI module sync script as root. The UI checkout belongs to the Tactical account, so they use the
+# root-owned copy the system updater publishes from a verified UI tree (--publish-ui-sync below), and never a file in the UI
+# source checkout. Until a verified copy is published, module jobs leave UI sync off and say so in their log.
+UI_SYNC_SCRIPT_PATH="/usr/local/lib/tec-tac-ui-sync/scripts/sync-modules.sh"
 cat > "${MODULE_CONFIG}" <<EOF
 # Tec-Tac installation layout. Managed by install.sh.
 TEC_TAC_ROOT=${TEC_TAC_ROOT}
 TEC_TAC_CONFIG_FILE=${TEC_TAC_CONFIG_FILE}
 TEC_TAC_SOURCE_ROOT=${TEC_TAC_SOURCE_ROOT}
-TEC_TAC_FRAMEWORK_SOURCE=${SOURCE_ROOT}
+TEC_TAC_FRAMEWORK_SOURCE=${RECORDED_FRAMEWORK_SOURCE}
 TEC_TAC_UI_SOURCE=${TEC_TAC_UI_SOURCE}
 TEC_TAC_FRAMEWORK_ROOT=${FRAMEWORK_DIR}
 TEC_TAC_EXTENSIONS_ROOT=${EXTENSIONS_DIR}
@@ -580,7 +604,7 @@ TEC_TAC_HOUSEKEEPING_ROOT=/var/lib/tec-tac/housekeeping
 TEC_TAC_SERVER_BACKUP_LOCAL_ROOTS=${TEC_TAC_SERVER_BACKUP_LOCAL_ROOTS:-/rmmbackups,/mnt,/media,/srv,/backup,/backups}
 TEC_TAC_UI_DEPLOY_ROOT=${TEC_TAC_UI_ROOT}
 REPO_ROOT=${TEC_TAC_ROOT}
-UI_SYNC_SCRIPT=${TEC_TAC_UI_SOURCE}/scripts/sync-modules.sh
+UI_SYNC_SCRIPT=${UI_SYNC_SCRIPT_PATH}
 UI_ROOT=${TEC_TAC_UI_ROOT}
 GITHUB_TOKEN_FILE=${TEC_TAC_ROOT}/etc/github-token
 TACTICAL_ROOT=${TACTICAL_ROOT}
@@ -668,6 +692,71 @@ for path in root.glob("*/publisher.json"):
     tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.chmod(tmp, 0o644); os.replace(tmp, path)
 PY_PUBLISHERS
+
+# 1.17.98 (Johan, 2 November 2026, spec "Trust Bundle Fix"): the Tech Flow Dynamics dev publisher signs Core and UI releases, so it
+# holds framework.update and ui.update next to module.install and server_maintenance.register. The grant is made only to that
+# publisher id, only while it is trusted, and only when its active key is the real Tech Flow Dynamics public key below. No key
+# is written, created or replaced: a server without that publisher, or with another key under that id, is left as it is.
+# Other publishers and every other permission are untouched; Framework updates still need framework.update and UI updates ui.update.
+DEV_PUBLISHER_ID="tech_flow_dynamics-dev"
+DEV_PUBLISHER_KEY_ID="tech-key-dev-1025"
+DEV_PUBLISHER_PUBLIC_KEY="ed25519:SddWHe5LBIIPA4rbOsFVagnNyO2xQzbMfNgWvRy1+5k="
+/usr/bin/python3 -I - "${TRUSTED_PUBLISHERS_ROOT}" "${DEV_PUBLISHER_ID}" "${DEV_PUBLISHER_KEY_ID}" "${DEV_PUBLISHER_PUBLIC_KEY}" <<'PY_DEV_PUBLISHER'
+import base64, binascii, json, os, pathlib, re, sys, tempfile
+root, publisher_id, key_id, expected_text = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
+GRANT = ("framework.update", "ui.update")
+
+def raw_key(text):
+    text = text.strip()
+    if text.lower().startswith("ed25519:"):
+        text = text.split(":", 1)[1].strip()
+    if re.fullmatch(r"[0-9a-fA-F]{64}", text):
+        return bytes.fromhex(text)
+    try:
+        value = base64.b64decode(text, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    return value if len(value) == 32 else None
+
+def done(message):
+    print(f"[TEC-TAC] Dev publisher update permissions: {message}")
+    sys.exit(0)
+
+expected = raw_key(expected_text)
+folder = root / publisher_id
+path = folder / "publisher.json"
+if folder.is_symlink() or path.is_symlink() or not path.is_file():
+    done(f"{publisher_id} is not installed here; nothing changed.")
+data = json.loads(path.read_text(encoding="utf-8"))
+if not isinstance(data, dict) or data.get("publisher_id") != publisher_id or str(data.get("status") or "").lower() != "trusted":
+    done(f"{publisher_id} is not a trusted publisher policy; nothing changed.")
+record = next((k for k in data.get("keys") or [] if isinstance(k, dict) and k.get("key_id") == key_id), None)
+if record is None or str(record.get("status") or "").lower() != "active":
+    done(f"{publisher_id} has no active key {key_id}; nothing changed.")
+key_name = str(record.get("public_key_file") or record.get("public_key") or "public.key")
+key_path = folder / key_name
+if "/" in key_name or key_name in {"", ".", ".."} or key_path.is_symlink() or not key_path.is_file():
+    done(f"{publisher_id} key file is missing or unsafe; nothing changed.")
+if expected is None or raw_key(key_path.read_bytes().decode("ascii", "ignore")) != expected:
+    done(f"{publisher_id} key {key_id} is not the Tech Flow Dynamics key; nothing changed.")
+perms = data.get("permissions")
+if not isinstance(perms, list):
+    done(f"{publisher_id} permissions are not a list; nothing changed.")
+missing = [value for value in GRANT if value not in perms]
+if not missing:
+    done(f"{publisher_id} already holds {', '.join(GRANT)}.")
+data["permissions"] = [*perms, *missing]
+fd, tmp = tempfile.mkstemp(prefix=".publisher.", suffix=".tmp", dir=str(folder))
+try:
+    os.write(fd, (json.dumps(data, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+    os.fchmod(fd, 0o644)
+    if os.geteuid() == 0:
+        os.fchown(fd, 0, 0)
+finally:
+    os.close(fd)
+os.replace(tmp, path)
+done(f"granted {', '.join(missing)} to {publisher_id} (key {key_id}).")
+PY_DEV_PUBLISHER
 
 PRIVILEGED_TRUST_DIR="/usr/local/lib/tec-tac-security"
 PRIVILEGED_TRUST_HELPER="${PRIVILEGED_TRUST_DIR}/privileged-trust.py"
@@ -779,6 +868,11 @@ if command -v visudo >/dev/null 2>&1; then
     visudo -cf "${SYSTEM_UPDATE_SUDOERS}" >/dev/null || fail "System update sudoers validation failed."
 fi
 log "Installed independent Tec-Tac system update worker: ${SYSTEM_UPDATE_HELPER}"
+# 1.17.98: publish the UI module sync script as a root-owned copy, taken from the UI checkout only after it verified against its
+# signed release (the same staging and verifier as a System Update). Without a signed UI checkout nothing changes.
+if ! /usr/bin/python3 -I "${SOURCE_ROOT}/scripts/system-update-helper.py" --publish-ui-sync; then
+    log "WARNING: the UI module sync script was not published from a verified UI checkout, so module UI sync stays off until a UI System Update publishes it (${UI_SYNC_SCRIPT_PATH})."
+fi
 
 
 SERVER_BACKUP_ROOT="${TEC_TAC_SERVER_BACKUP_ROOT:-/var/lib/tec-tac/server-backup}"
@@ -956,13 +1050,19 @@ log "Installed Tec-Tac scheduler timer: tec-tac-scheduler.timer"
 # not unpacked directly: they are staged, dependency-planned, license-checked,
 # audited and installed through the same Module Manager lifecycle used by the UI.
 if [[ -d "${BOOTSTRAP_MODULE_DIR}" ]]; then
-    chmod a+rx "${BOOTSTRAP_MODULE_DIR}"
-    find "${BOOTSTRAP_MODULE_DIR}" -maxdepth 1 -type f \
-        \( -iname '*.zip' -o -iname '*.tgz' -o -iname '*.tar.gz' \) -exec chmod a+r {} +
+    # 1.17.98: the Tactical account reads the packages from a root-owned, read-only copy. The source folder may be a root-only
+    # staging copy (System Update), and it is no longer chmod-ed here.
+    BOOTSTRAP_COPY="$(mktemp -d /tmp/tec-tac-bootstrap.XXXXXX)"
+    trap 'rm -f "${TMP_SETTINGS}"; rm -rf "${BOOTSTRAP_COPY}"' EXIT
+    cp -R --no-preserve=ownership,mode "${BOOTSTRAP_MODULE_DIR}/." "${BOOTSTRAP_COPY}/"
+    chown -R root:root "${BOOTSTRAP_COPY}"
+    chmod -R u=rwX,go=rX "${BOOTSTRAP_COPY}"
     log "Checking bootstrap module intake: ${BOOTSTRAP_MODULE_DIR}"
     run_as_tactical "${VENV_PYTHON}" "${MANAGE_PY}" tec_tac_install_bootstrap_modules \
-        --path "${BOOTSTRAP_MODULE_DIR}" \
+        --path "${BOOTSTRAP_COPY}" \
         --requested-by "bootstrap:install.sh"
+    rm -rf "${BOOTSTRAP_COPY}"
+    trap 'rm -f "${TMP_SETTINGS}"' EXIT
 else
     log "Bootstrap module directory not present; Core-only installation continues."
 fi
@@ -1009,8 +1109,10 @@ case " ${LIVE_GROUPS} " in
     *) fail "Live rmm process is missing Tec-Tac runtime group ${TACTICAL_GROUP} (gid ${TACTICAL_GID})." ;;
 esac
 
+runtime_ownership_rule verify || fail "The Tec-Tac runtime does not match the ownership rule after installation."
+
 log "Installation complete."
-log "Framework source: ${SOURCE_ROOT}"
+log "Framework source: ${RECORDED_FRAMEWORK_SOURCE}"
 log "Framework runtime: ${FRAMEWORK_DIR}"
 log "Extensions: ${EXTENSIONS_DIR}"
 log "Reportsets: ${REPORTSETS_DIR}"

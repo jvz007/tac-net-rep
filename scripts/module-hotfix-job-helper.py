@@ -61,6 +61,51 @@ def _resolve_trusted_bash() -> str:
 
 TRUSTED_BASH = _resolve_trusted_bash()
 
+
+# 1.17.98: the UI module sync script runs as root. It is the root-owned copy the system updater publishes from a verified UI
+# tree (/usr/local/lib/tec-tac-ui-sync), never a file in the UI source checkout, which belongs to the Tactical account.
+UI_SYNC_PUBLISHED = Path("/usr/local/lib/tec-tac-ui-sync/scripts/sync-modules.sh")
+UI_SYNC_OFF_MESSAGE = ("UI module sync is off: no verified UI sync script was published at {path}. Run a UI System Update, "
+                       "or reinstall Core (sudo bash install.sh), to publish it; the backend part of the module is unchanged by this.")
+
+
+def _require_trusted_root_file(path, label):
+    """Open without following a link; a regular, root-owned file that is not group/world writable, in folders that are all
+    root-owned and not group/world writable, so no other account can change or swap it between this check and the run."""
+    path = Path(path)
+    if not path.is_absolute():
+        raise RuntimeError(f"refusing {label} {path}: the path is not absolute")
+    try:
+        fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0))
+    except OSError as exc:
+        raise RuntimeError(f"refusing {label} {path}: it is a symbolic link or cannot be opened ({exc.strerror or exc})") from exc
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+            raise RuntimeError(f"refusing non-root-owned or writable {label}: {path}")
+    finally:
+        os.close(fd)
+    for parent in path.parents:
+        info = os.stat(parent)
+        if info.st_uid != 0 or info.st_mode & 0o022:
+            raise RuntimeError(f"refusing {label} {path}: the folder {parent} is not root-owned or is group/world writable. "
+                               "Reinstall Core or run a UI System Update to publish the verified copy.")
+
+
+def trusted_ui_sync_script(config):
+    """The UI sync script to run as root, checked now; None when no verified copy was published (UI sync is then off).
+
+    The config reader it sources from its own folder (tec-tac-config.sh) is held to the same rule.
+    """
+    path = Path(config.get("UI_SYNC_SCRIPT") or UI_SYNC_PUBLISHED)
+    if not os.path.lexists(path):
+        return None
+    _require_trusted_root_file(path, "UI sync script")
+    sourced = path.parent / "tec-tac-config.sh"
+    if os.path.lexists(sourced):
+        _require_trusted_root_file(sourced, "UI sync config reader")
+    return path
+
 def now():
     return datetime.now(timezone.utc).isoformat()
 
@@ -506,9 +551,10 @@ def validate_runtime(config, targets, effective, log):
 
 def sync_reload(config, effective, log):
     if effective.get("ui_sync"):
-        ui_sync = Path(config.get("UI_SYNC_SCRIPT", "/opt/tec-tac-src/ui/scripts/sync-modules.sh"))
-        if ui_sync.is_file():
-            require_root_owned(ui_sync)
+        ui_sync = trusted_ui_sync_script(config)  # 1.17.98: the published root-owned copy only, checked just before it runs
+        if ui_sync is None:
+            log.write("[TEC-TAC-HOTFIX] " + UI_SYNC_OFF_MESSAGE.format(path=config.get("UI_SYNC_SCRIPT") or UI_SYNC_PUBLISHED) + "\n")
+        else:
             env = privileged_env({"TEC_TAC_UI_ROOT": config.get("UI_ROOT", "/var/lib/tec-tac/ui/tec-tac")})
             result = subprocess.run([TRUSTED_BASH, str(ui_sync)], stdout=log, stderr=subprocess.STDOUT, text=True, env=env)
             if result.returncode:

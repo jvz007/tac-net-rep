@@ -44,6 +44,9 @@ with tempfile.TemporaryDirectory() as td_raw:
     framework = td / "framework"
     framework.mkdir()
     (framework / "VERSION").write_text("1.15.172\n", encoding="utf-8")
+    # 1.17.98: the current Core version is read from the root-owned runtime, never from the Tactical-owned checkout.
+    (td / "runtime").mkdir()
+    (td / "runtime" / "VERSION").write_text("1.15.172\n", encoding="utf-8")
     component = td / "tec-tac-component.tar.gz"
     component.write_bytes(b"component")
 

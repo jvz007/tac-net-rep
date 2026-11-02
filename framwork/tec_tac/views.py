@@ -39,6 +39,8 @@ logger = logging.getLogger("tec_tac.module_manager")
 
 
 from .system_update import (
+    GithubRateLimitError,
+    StaleCandidateError,
     SystemUpdateError,
     discard_stage as discard_system_stage,
     get_job as get_system_update_job,
@@ -902,6 +904,11 @@ class SystemUpdateJobLogView(APIView):
             filename=filename, label="system update job log")
 
 
+def _github_rate_limit_response(exc):
+    """The structured answer when GitHub's API limit is exhausted and no saved answer can stand in (1.17.98)."""
+    return Response(exc.as_dict(cached_data_available=False), status=429)
+
+
 @extend_schema_view(get=extend_schema(tags=["Tec-Tac System Updates"], summary="Check the latest stable repository release for a system component"))
 class SystemUpdateOnlineStatusView(APIView):
     permission_classes = [SessionAuthenticated]
@@ -910,9 +917,13 @@ class SystemUpdateOnlineStatusView(APIView):
         _require_module_manager(request.user)
         component = str(request.query_params.get("component", "")).strip()
         force = str(request.query_params.get("force", "")).strip().lower() in {"1", "true", "yes", "on"}
+        # refresh is validated in one place, the service: empty means none, an invalid value is a SystemUpdateError (400).
+        refresh = request.query_params.get("refresh")
         try:
             source = get_update_source(component)
-            return Response(system_update_online_status(component, force=force, source=source))
+            return Response(system_update_online_status(component, force=force, source=source, refresh=refresh))
+        except GithubRateLimitError as exc:
+            return _github_rate_limit_response(exc)
         except SystemUpdateError as exc:
             return Response({"detail": str(exc)}, status=400)
 
@@ -926,6 +937,8 @@ class SystemUpdateBranchesView(APIView):
         component = str(request.query_params.get("component", "")).strip()
         try:
             return Response(system_update_branches(component))
+        except GithubRateLimitError as exc:
+            return _github_rate_limit_response(exc)
         except SystemUpdateError as exc:
             return Response({"detail": str(exc)}, status=400)
 
@@ -946,8 +959,15 @@ class SystemUpdateOnlineStageView(APIView):
                 ref = saved["ref"]
         else:
             source_type = str(request.data.get("source_type")).strip()
+        commit = request.data.get("commit")
+        if commit is not None and not isinstance(commit, str):
+            return Response({"detail": "commit must be a 40-character hexadecimal SHA."}, status=400)
         try:
-            return Response(stage_online_package(component, source_type, str(ref).strip() if ref is not None else None), status=201)
+            return Response(stage_online_package(component, source_type, str(ref).strip() if ref is not None else None, commit=commit), status=201)
+        except StaleCandidateError as exc:
+            return Response({"code": exc.code, "detail": str(exc)}, status=409)
+        except GithubRateLimitError as exc:
+            return _github_rate_limit_response(exc)
         except SystemUpdateError as exc:
             return Response({"detail": str(exc)}, status=400)
         except Exception as exc:

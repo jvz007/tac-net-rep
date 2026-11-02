@@ -42,7 +42,7 @@ if os.geteuid() != 0:
 with tempfile.TemporaryDirectory() as td:
     td=pathlib.Path(td)
     framework=td/'framework'; framework.mkdir(); (framework/'VERSION').write_text('1.15.188\n')
-    runtime=td/'runtime'; runtime.mkdir()
+    runtime=td/'runtime'; runtime.mkdir(); (runtime/'VERSION').write_text('1.15.188\n')  # 1.17.98: recorded from the runtime, not the checkout
     config={
         'TEC_TAC_INSTALLATION_ID':'install-a',
         'TEC_TAC_FRAMEWORK_SOURCE':str(framework),

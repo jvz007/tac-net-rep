@@ -26,6 +26,7 @@ with tempfile.TemporaryDirectory() as td_raw:
     runtime = td / 'runtime'
     framework.mkdir(); runtime.mkdir()
     (framework / 'VERSION').write_text('1.15.166\n', encoding='utf-8')
+    (runtime / 'VERSION').write_text('1.15.166\n', encoding='utf-8')  # 1.17.98: read from the runtime, not the checkout
 
     config = {
         'TEC_TAC_SERVER_BACKUP_ROOT': str(state),

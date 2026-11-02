@@ -58,6 +58,8 @@ tmp = Path(tempfile.mkdtemp(prefix="update-source-1174-"))
 su.CACHE_ROOT = tmp / "cache"
 su.RELEASE_CACHE = su.CACHE_ROOT / "release-cache.json"
 su.HISTORY_ROOT = tmp / "history"
+su.BRANCH_SUPPRESS_SECONDS = 0  # 1.17.98: the suppression windows are tested in github-rate-limit-1.17.98.py
+su.RELEASE_SUPPRESS_SECONDS = 0
 su.JOBS_ROOT = tmp / "jobs"
 su.HISTORY_ROOT.mkdir()
 su.JOBS_ROOT.mkdir()
@@ -88,7 +90,8 @@ su._github_json = fake_github
 su._github_content_bytes = lambda repo, path, ref: VER["result"]
 BRANCH = {"type": "branch", "ref": "dev"}
 RELEASE = {"type": "release", "ref": None}
-OLD_KEYS = {"component", "repository", "installed_version", "latest_release", "checked_at", "release_error", "cache"}
+OLD_KEYS = {"component", "repository", "installed_version", "latest_release", "checked_at", "release_error", "cache", "refresh", "github_rate_limit"}  # 1.17.98 additive keys
+CACHED_KEYS = OLD_KEYS - {"refresh", "github_rate_limit"}  # cached_online_status carries no refresh keys
 BRANCH_KEYS = OLD_KEYS | {"source", "branch", "branch_error", "stable_release"}
 
 
@@ -108,7 +111,7 @@ def reset():
 
 # (1) branch primary, stable_release secondary, latest_release null
 reset()
-out = su.online_status("framework", force=True, source=BRANCH)
+out = su.online_status("framework", refresh="all", source=BRANCH)
 must(out["latest_release"] is None, out)
 must(set(out) == BRANCH_KEYS, set(out))
 sr = out["stable_release"]
@@ -118,24 +121,28 @@ must(sr["release_trust"] == {"level": "signed_development"}, sr)
 must(out["checked_at"] is not None and out["release_error"] is None and out["branch_error"] is None, out)
 must(out["source"] == BRANCH and out["branch"]["head_commit"] == SHA_A, out)
 must(len(rcalls()) == 1, GH["calls"])
-plain = su.online_status("framework", force=True)
+plain = su.online_status("framework", refresh="all")
 must(plain["latest_release"] == sr, (plain["latest_release"], sr))  # same shape as the release answer
 
 # (2) the second call is served from cache; force bypasses it
 reset()
-su.online_status("framework", force=True, source=BRANCH)
+su.online_status("framework", refresh="all", source=BRANCH)
 GH["calls"].clear()
 out = su.online_status("framework", source=BRANCH)
 must(rcalls() == [] and not [u for u in GH["calls"] if "/commits/v" in u], f"a fresh cache must serve the release: {GH['calls']}")
 must(out["stable_release"]["tag"] == "v1.17.1" and out["cache"]["hit"] is True and out["cache"]["stale"] is False, out)
-su.online_status("framework", force=True, source=BRANCH)
+su.online_status("framework", refresh="all", source=BRANCH)
 must(len(rcalls()) == 1, "force bypasses the cache")
 doc = json.loads(su.RELEASE_CACHE.read_text(encoding="utf-8"))
 doc["components"]["framework"]["checked_at"] = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
 su.RELEASE_CACHE.write_text(json.dumps(doc), encoding="utf-8")
 GH["calls"].clear()
 su.online_status("framework", source=BRANCH)
-must(len(rcalls()) == 1, "a 25-hour-old cache refetches")
+must(len(rcalls()) == 0, "1.17.98: a branch source never fetches the stable release on its own")
+stale_out = su.online_status("framework", source=BRANCH)
+must(stale_out["cache"]["stale"] is True and stale_out["stable_release"]["tag"] == "v1.17.1", "the old release is shown, marked stale")
+su.online_status("framework", refresh="release", source=BRANCH)
+must(len(rcalls()) == 1, "a 25-hour-old cache refetches on refresh=release")
 
 # (3) a GitHub release failure: release_error set, branch intact, branch_error null
 reset()
@@ -149,14 +156,14 @@ def release_down(url):
 
 
 su._github_json = release_down
-out = su.online_status("framework", force=True, source=BRANCH)
+out = su.online_status("framework", refresh="all", source=BRANCH)
 must(out["release_error"] == "GitHub request failed (500)" and out["stable_release"] is None and out["latest_release"] is None, out)
 must(out["branch_error"] is None and out["branch"]["head_commit"] == SHA_A and out["branch"]["state"] == "differs", out)
 # stale-on-error: a cached release survives the failure as a stale stable_release
 su._github_json = good
-su.online_status("framework", force=True, source=BRANCH)
+su.online_status("framework", refresh="all", source=BRANCH)
 su._github_json = release_down
-out = su.online_status("framework", force=True, source=BRANCH)
+out = su.online_status("framework", refresh="all", source=BRANCH)
 must(out["stable_release"]["tag"] == "v1.17.1" and out["cache"]["stale"] is True and out["release_error"], out)
 must(out["branch_error"] is None, out)
 su._github_json = good
@@ -164,12 +171,12 @@ su._github_json = good
 # (4) a branch failure: branch_error set, stable_release intact, release_error null
 reset()
 GH["branch_fail"] = True
-out = su.online_status("framework", force=True, source=BRANCH)
+out = su.online_status("framework", refresh="all", source=BRANCH)
 must("Branch not found" in out["branch_error"] and out["release_error"] is None, out)
 must(out["stable_release"]["tag"] == "v1.17.1" and out["latest_release"] is None, out)
 GH["branch_fail"] = False
 
-# (5) a cache write failure becomes release_error, never an exception
+# (5) a cache write failure never fails the answer (1.17.98: the cache is an optimisation, writes go through _cache_update)
 reset()
 real_write = su._write_release_cache
 
@@ -179,8 +186,8 @@ def failing_write(payload):
 
 
 su._write_release_cache = failing_write
-out = su.online_status("framework", force=True, source=BRANCH)
-must(out["release_error"] and "OSError" in out["release_error"] and out["stable_release"] is None, out)
+out = su.online_status("framework", refresh="all", source=BRANCH)
+must(out["release_error"] is None and out["stable_release"]["tag"] == "v1.17.1", out)
 must(set(out) == BRANCH_KEYS and out["latest_release"] is None, out)
 must(out["branch"]["head_commit"] == SHA_A, "the branch answer survives a release cache write failure")
 su._write_release_cache = real_write
@@ -188,20 +195,20 @@ su._write_release_cache = real_write
 # (6) a release source or no source: the 1.17.3 answer, no stable_release key
 reset()
 for src in (None, RELEASE, {"type": "other"}):
-    out = su.online_status("framework", force=True, source=src)
+    out = su.online_status("framework", refresh="all", source=src)
     must(set(out) == OLD_KEYS and "stable_release" not in out and out["latest_release"]["tag"] == "v1.17.1", (src, set(out)))
 
 # (7) the held 1.17.3 Low: cached_online_status under a branch source
 reset()
-su.online_status("framework", force=True)  # seed the cache through a release check
+su.online_status("framework", refresh="all")  # seed the cache through a release check
 GH["calls"].clear()
 old = su.cached_online_status("framework")
-must(set(old) == OLD_KEYS and old["latest_release"]["tag"] == "v1.17.1" and "stable_release" not in old, "no source: unchanged")
+must(set(old) == CACHED_KEYS and old["latest_release"]["tag"] == "v1.17.1" and "stable_release" not in old, "no source: unchanged")
 rel = su.cached_online_status("framework", RELEASE)
-must(set(rel) == OLD_KEYS and rel["latest_release"]["tag"] == "v1.17.1", "release source: unchanged")
+must(set(rel) == CACHED_KEYS and rel["latest_release"]["tag"] == "v1.17.1", "release source: unchanged")
 cb = su.cached_online_status("framework", BRANCH)
 must(cb["latest_release"] is None and cb["stable_release"]["tag"] == "v1.17.1" and cb["source"] == BRANCH, cb)
-must(set(cb) == OLD_KEYS | {"stable_release", "source"}, set(cb))
+must(set(cb) == CACHED_KEYS | {"stable_release", "source"}, set(cb))
 must(cb["cache"]["hit"] is True and cb["checked_at"] == old["checked_at"], cb)
 must(GH["calls"] == [], "cached_online_status never calls GitHub")
 su.RELEASE_CACHE.unlink()
@@ -223,8 +230,8 @@ must(seen == saved and status["update_sources"] == saved, seen)
 su.cached_online_status = real_cached
 # end to end: a cached release row is the secondary line, not latest_release, under a saved branch source
 reset()
-su.online_status("framework", force=True)
-su.online_status("ui", force=True)
+su.online_status("framework", refresh="all")
+su.online_status("ui", refresh="all")
 status = su.system_status()
 fw, ui = status["release_cache"]["framework"], status["release_cache"]["ui"]
 must(fw["latest_release"] is None and fw["stable_release"]["tag"] == "v1.17.1" and fw["source"] == BRANCH, fw)
