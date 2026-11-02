@@ -1570,6 +1570,9 @@ def create_tec_tac_component(config, output: Path):
         exclude_paths=(
             paths["system_etc_root"] / "recovery-signing",
             paths["system_etc_root"] / "recovery-trust",
+            # 1.17.100 (AD-57, design 6.5): the secret store's master key is never in a routine backup. Kept beside the encrypted
+            # rows it would give the key to every copy of the backup. Johan keeps one offline copy.
+            paths["system_etc_root"] / "secrets",
         ),
         # 1.17.98: the source checkouts belong to the Tactical account, so root never follows a link inside them.
         nofollow_roots=(paths["framework_source"], paths["ui_source"]),
@@ -2883,7 +2886,8 @@ def _validate_tec_tac_restore_member(name, config):
         return
     # Recovery trust and signing identity are target-local security state. They
     # are intentionally neither backed up nor restorable from a bundle.
-    forbidden=("etc/tec-tac/recovery-signing", "etc/tec-tac/recovery-trust")
+    # 1.17.100 (AD-57): the secret store's master key is target-local too. A bundle may not replace it.
+    forbidden=("etc/tec-tac/recovery-signing", "etc/tec-tac/recovery-trust", "etc/tec-tac/secrets")
     if any(rel == prefix or rel.startswith(prefix + "/") for prefix in forbidden):
         raise RuntimeError(f"Tec-Tac recovery payload may not replace target recovery trust: {rel}")
     allowed=_tec_tac_restore_allowed_roots(config)

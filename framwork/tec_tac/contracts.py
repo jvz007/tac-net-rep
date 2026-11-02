@@ -1359,6 +1359,46 @@ CORE_CONTRACTS = (
         "purpose": "list_for(user, *, module_id) -> {name: value} of every preference of the signed-in person for the module, sorted by name (1.17.35; capability core.module_preferences 1.2.0 from 1.17.38). The calling module is verified by Core (1.17.37): a module may use it only for its own id; any other caller gets caller_not_allowed (403). Since 1.17.38 a person who may not use the module gets module_not_allowed (403). A read is not audited. Requires framework >=1.17.38.",
         "audience": "consumer/backend",
     },
+    {
+        "area": "secret-store",
+        "import_path": "tec_tac.secret_store",
+        "name": "put",
+        "kind": "python",
+        "purpose": "put(name, value) -> 'created' or 'replaced'. Stores one secret of the calling module, encrypted (AES-256-GCM, a random nonce per write, owner and name as authenticated data). value is text or bytes, 1 byte to 16 KiB (else invalid_value, 400); a module may keep 100 names (secret_limit, 400). The write is audited first, in the same transaction: one strict Core audit row (action add or modify, object_type core_secret, object_id <owner>/<name>, size, value type and key id, never the value); if it cannot be written nothing is changed (audit_failed, 503). (1.17.100, AD-57, additive; capability core.secrets 1.0.0; needs framework >=1.17.100). The owner is the module whose code makes the call, found by Core from the call stack (AD-26); nothing is passed in, so a module cannot name another module's secrets. Core, a library, a generated frame, a disabled or legacy module and any other caller get SecretStoreError caller_not_allowed (403) before any name or value is looked at, with one deny audit row. name matches [a-z0-9][a-z0-9._-]{0,63} (else invalid_name, 400). If the master key (/etc/tec-tac/secrets/master.key, made by install.sh only) is missing or unsafe the call raises master_key_unavailable (503) and nothing is read or written; Core never makes a new key. No value appears in a log, an error, an audit row or an HTTP answer, and no HTTP route returns a value. Feature-detect with has_capability('core.secrets'). See docs/secret-store.md.",
+        "audience": "consumer/backend",
+    },
+    {
+        "area": "secret-store",
+        "import_path": "tec_tac.secret_store",
+        "name": "get",
+        "kind": "python",
+        "purpose": "get(name) -> the value (str or bytes, as stored) or None when the module has none. Owner only, server-side only: never return it to a browser. A secret that cannot be decrypted with the current key raises secret_unreadable (503) and writes one decrypt-failed audit row; the module asks for the value again. A successful read writes no audit row; the row keeps a read count and a last-read time. (1.17.100, AD-57, additive; capability core.secrets 1.0.0; needs framework >=1.17.100). The owner is the module whose code makes the call, found by Core from the call stack (AD-26); nothing is passed in, so a module cannot name another module's secrets. Core, a library, a generated frame, a disabled or legacy module and any other caller get SecretStoreError caller_not_allowed (403) before any name or value is looked at, with one deny audit row. name matches [a-z0-9][a-z0-9._-]{0,63} (else invalid_name, 400). If the master key (/etc/tec-tac/secrets/master.key, made by install.sh only) is missing or unsafe the call raises master_key_unavailable (503) and nothing is read or written; Core never makes a new key. No value appears in a log, an error, an audit row or an HTTP answer, and no HTTP route returns a value. Feature-detect with has_capability('core.secrets'). See docs/secret-store.md.",
+        "audience": "consumer/backend",
+    },
+    {
+        "area": "secret-store",
+        "import_path": "tec_tac.secret_store",
+        "name": "delete",
+        "kind": "python",
+        "purpose": "delete(name) -> True when the module's secret was removed, else False. A removal is audited first like a put (action delete); deleting a name that does not exist writes no row. (1.17.100, AD-57, additive; capability core.secrets 1.0.0; needs framework >=1.17.100). The owner is the module whose code makes the call, found by Core from the call stack (AD-26); nothing is passed in, so a module cannot name another module's secrets. Core, a library, a generated frame, a disabled or legacy module and any other caller get SecretStoreError caller_not_allowed (403) before any name or value is looked at, with one deny audit row. name matches [a-z0-9][a-z0-9._-]{0,63} (else invalid_name, 400). If the master key (/etc/tec-tac/secrets/master.key, made by install.sh only) is missing or unsafe the call raises master_key_unavailable (503) and nothing is read or written; Core never makes a new key. No value appears in a log, an error, an audit row or an HTTP answer, and no HTTP route returns a value. Feature-detect with has_capability('core.secrets'). See docs/secret-store.md.",
+        "audience": "consumer/backend",
+    },
+    {
+        "area": "secret-store",
+        "import_path": "tec_tac.secret_store",
+        "name": "configured",
+        "kind": "python",
+        "purpose": "configured(name) -> True or False. Never the value. Needs no master key and writes nothing. (1.17.100, AD-57, additive; capability core.secrets 1.0.0; needs framework >=1.17.100). The owner is the module whose code makes the call, found by Core from the call stack (AD-26); nothing is passed in, so a module cannot name another module's secrets. Core, a library, a generated frame, a disabled or legacy module and any other caller get SecretStoreError caller_not_allowed (403) before any name or value is looked at, with one deny audit row. name matches [a-z0-9][a-z0-9._-]{0,63} (else invalid_name, 400). If the master key (/etc/tec-tac/secrets/master.key, made by install.sh only) is missing or unsafe the call raises master_key_unavailable (503) and nothing is read or written; Core never makes a new key. No value appears in a log, an error, an audit row or an HTTP answer, and no HTTP route returns a value. Feature-detect with has_capability('core.secrets'). See docs/secret-store.md.",
+        "audience": "consumer/backend",
+    },
+    {
+        "area": "secret-store",
+        "import_path": "tec_tac.secret_store",
+        "name": "list_names",
+        "kind": "python",
+        "purpose": "list_names() -> the names the calling module owns, sorted. No values. Needs no master key and writes nothing. (1.17.100, AD-57, additive; capability core.secrets 1.0.0; needs framework >=1.17.100). The owner is the module whose code makes the call, found by Core from the call stack (AD-26); nothing is passed in, so a module cannot name another module's secrets. Core, a library, a generated frame, a disabled or legacy module and any other caller get SecretStoreError caller_not_allowed (403) before any name or value is looked at, with one deny audit row. name matches [a-z0-9][a-z0-9._-]{0,63} (else invalid_name, 400). If the master key (/etc/tec-tac/secrets/master.key, made by install.sh only) is missing or unsafe the call raises master_key_unavailable (503) and nothing is read or written; Core never makes a new key. No value appears in a log, an error, an audit row or an HTTP answer, and no HTTP route returns a value. Feature-detect with has_capability('core.secrets'). See docs/secret-store.md.",
+        "audience": "consumer/backend",
+    },
 )
 
 HTTP_CONTRACT_DETAILS = {
@@ -2917,6 +2957,7 @@ RULES = (
     "Scheduled handlers must propagate downstream execution failures so Scheduler history and retry semantics reflect the real result.",
     "When dispatching raw OS commands, build and test the command for the exact shell used by the agent; Windows cmd.exe quoting, especially Program Files paths, must be deliberate.",
     "Module user preferences (core.module_preferences 1.2.0, Core 1.17.38): a module that uses tec_tac.module_preferences or /api/tfd/module-preferences/ must require framework >=1.17.38. A module may use the Python functions only for its own module id: Core verifies the calling module (AD-26, from 1.17.37) and refuses any other caller with 403 caller_not_allowed. Each real add, modify or delete writes one strict Core audit row (1.17.38) that names the person, the module and the name, and holds the size but never the value; reads and unchanged writes write nothing; if the row cannot be written the change is rolled back with 503 audit_failed. Core checks that the person may use the module (403 module_not_allowed, from 1.17.38). A preference is one person's own non-secret display choice for one module. No secret, token or personal data may be stored. Core checks the person and that the module is installed and enabled. Rows of a removed module stay until the person is deleted. What Core can and cannot prove about the module id (1.17.38): Core can prove the person (their session), that the module is installed and enabled, that the person may use it, and that a row belongs only to that person and that module id pair; Core cannot prove that a browser request came from that module's page, so the browser route's module id is a claim and the audit row records it as source browser, module_verified false. See docs/module-preferences.md.",
+    "Module secrets (core.secrets 1.0.0, Core 1.17.100, AD-57): a module that keeps a token, a private key or any other private value uses tec_tac.secret_store (put, get, delete, configured, list_names) and must require framework >=1.17.100, after has_capability('core.secrets'). Never keep a secret in a database column, a file, a setting, a log or an audit row. The owner is the verified calling module, so a module reads only its own secrets, only in its server-side code. No route returns a value; do not build one. Core refuses with caller_not_allowed (403) a caller it cannot verify, master_key_unavailable (503) when the master key file is missing or unsafe (an administrator fixes the file; Core never makes a key), secret_unreadable (503) when a row cannot be decrypted (ask for the value again) and audit_failed (503) when the change could not be audited. See docs/secret-store.md.",
 )
 
 

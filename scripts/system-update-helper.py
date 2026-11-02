@@ -1803,6 +1803,54 @@ def repin_framework_source(expected, log=None):
     return changed
 
 
+LICENSING_SERVER_URL_KEY = "TEC_TAC_LICENSING_SERVER_URL"
+
+
+def read_config_line(key):
+    """The value of the last KEY=value line of the root-owned config, or None when there is none or it cannot be read safely.
+
+    Read as data, never sourced. A config that is a link, not root-owned or group/world writable is not trusted (None).
+    """
+    try:
+        if CONFIG.is_symlink() or not CONFIG.is_file():
+            return None
+        info = CONFIG.stat()
+        if info.st_uid != 0 or info.st_mode & 0o022:
+            return None
+        value = None
+        for line in CONFIG.read_text(encoding="utf-8").splitlines():
+            if line.startswith(f"{key}="):
+                value = line[len(key) + 1:]
+        return value
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def reapply_licensing_server_url(before, log=None):
+    """Put TEC_TAC_LICENSING_SERVER_URL back after a rollback or a restore ran an installer older than 1.17.99 (1.17.100).
+
+    An installer older than 1.17.99 rewrites the config without that key, which would drop an administrator's own address and fall
+    back to the default. ``before`` is the value read just before the installer ran. When the installer kept the key (1.17.99 or later),
+    or there was no key before, nothing changes. The value is data: one line, restored exactly as it was, never executed or logged.
+    """
+    if before is None or read_config_line(LICENSING_SERVER_URL_KEY) is not None:
+        return False
+    try:
+        changed = _set_config_line(LICENSING_SERVER_URL_KEY, before)
+    except (OSError, RuntimeError):
+        changed = False
+    if not changed:
+        # The rollback or restore itself is not failed for this. The administrator is told, and the default address applies meanwhile.
+        if log is not None:
+            log.write(f"[TEC-TAC-UPDATE] config {LICENSING_SERVER_URL_KEY} could not be put back; set it again by hand (see Troubleshooting)\n")
+            log.flush()
+        return False
+    if changed and log is not None:
+        log.write(f"[TEC-TAC-UPDATE] config {LICENSING_SERVER_URL_KEY} put back: the installer that ran does not keep it\n")
+        log.flush()
+    return changed
+
+
 # 1.17.98: module jobs run the UI's module sync script as root (UI_SYNC_SCRIPT), and the module helpers refuse a script that is not
 # root-owned. The UI checkout now belongs to the Tactical account, so root keeps its own copy of that script, and of the config
 # reader it sources, in a root-only folder. The copy is taken only from a UI tree the privileged verifier checked.
@@ -1936,11 +1984,13 @@ def install_restored_component(component, out=None, expected=None):
         ui_tools = capture_ui_sync_tools(staged) if component == "ui" else None
         out.write(f"[TEC-TAC-RESTORE] {component} {version} staged and verified against its signed release; running its installer\n")
         out.flush()
+        licensing_url_before = read_config_line(LICENSING_SERVER_URL_KEY) if component == "framework" else None
         rc = run_install(component, staged, out, source_checkout=target)
         if component == "ui" and rc == 0:
             publish_ui_sync_tools(ui_tools, out)
     if component == "framework":
         repin_framework_source(target, out)
+        reapply_licensing_server_url(licensing_url_before, out)  # 1.17.100: an installer older than 1.17.99 drops the key
     if rc != 0:
         raise RuntimeError(f"restored {component} installer exited with status {rc}")
     # Only after the copy was staged and verified: the restored checkout goes to the Tactical account, one owner.
@@ -2600,11 +2650,13 @@ def run_job(job_id):
                         log.write(f"[TEC-TAC-UPDATE] rollback tree verified against the signed release {old_version}\n")
                         log.flush()
                         rollback_log_start = _log_size(log_path)
+                        licensing_url_before = read_config_line(LICENSING_SERVER_URL_KEY) if component == "framework" else None
                         rollback_rc = run_install(component, staged, log, source_checkout=target)
                         if component == "ui" and rollback_rc == 0:
                             publish_ui_sync_tools(ui_tools, log)
                     if component == "framework":
                         repin_framework_source(target, log)
+                        reapply_licensing_server_url(licensing_url_before, log)  # 1.17.100: an installer older than 1.17.99 drops the key
                     verification_warning = None
                     if rollback_rc != 0:
                         log.flush()

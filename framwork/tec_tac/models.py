@@ -768,3 +768,30 @@ class TecTacDelegationGrant(models.Model):
     def __str__(self):
         return f"{self.owner_module}:{self.grant_key}"
 
+
+
+class TecTacSecret(models.Model):
+    """One private value a module keeps through Core (core.secrets 1.0.0, Core 1.17.100, AD-57).
+
+    ``ciphertext`` is nonce + AES-256-GCM ciphertext + tag. The owner module id and the name are bound in as authenticated data, so a row
+    copied to another owner or name does not decrypt. ``key_id`` names the master key that made the row (for a later rotation). No
+    plain text is ever stored, and no route returns a value. See tec_tac/secret_store.py.
+    """
+
+    owner_module = models.CharField(max_length=100)
+    name = models.CharField(max_length=64)
+    ciphertext = models.BinaryField()
+    key_id = models.CharField(max_length=32)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    last_read_at = models.DateTimeField(null=True, blank=True)
+    read_count = models.PositiveBigIntegerField(default=0)
+
+    class Meta:
+        db_table = "core_secret"
+        constraints = [
+            models.UniqueConstraint(fields=("owner_module", "name"), name="core_secret_owner_name_unique"),
+        ]
+
+    def __str__(self):
+        return f"{self.owner_module}:{self.name}"

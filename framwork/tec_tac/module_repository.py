@@ -106,6 +106,15 @@ RETIRED_MESSAGE = (
     ".release.json on Settings → Modules until the licensed catalogue arrives."
 )
 RETIRED_RELEASE_REASON = "The repository no longer offers public downloads, so this release cannot be fetched from it."
+# 1.17.100: a 401 or 403 from a repository that is set up with credentials (a private or custom source) is not "retired". The
+# repository answered, and it refused the credentials. Nothing is offered from it until a sync succeeds again.
+CREDENTIALS_STATUSES = frozenset({401, 403})
+CREDENTIALS_REJECTED_MESSAGE = (
+    "A module repository refused the credentials set up for it. Check them with the repository owner, then sync again. "
+    "Nothing is offered from it until it accepts them. You can still install modules by uploading the signed .zip, .zip.sig and "
+    ".release.json on Settings → Modules."
+)
+CREDENTIALS_RELEASE_REASON = "The repository refused its credentials, so this release cannot be fetched from it."
 
 
 class _RemoteAddressRefused(ModuleRepositoryError):
@@ -482,6 +491,14 @@ def delete_repository(repository_id: str) -> None:
     (CACHE_ROOT / f"{repository_id}.json").unlink(missing_ok=True)
 
 
+def _repo_raw(repository_id: str) -> dict:
+    """The stored record, or an empty one when it is gone. It still holds ``auth_token``; never return it to a caller."""
+    try:
+        return _repo(repository_id)
+    except ModuleRepositoryError:
+        return {}
+
+
 def _repo(repository_id: str) -> dict:
     for item in load_repositories()["repositories"]:
         if item.get("id") == repository_id:
@@ -676,27 +693,56 @@ def sync_repository(repository_id: str) -> dict:
             except Exception:
                 existing = {}
         existing.update({"schema": 1, "repository_id": repository_id, "status": "error", "last_attempt_at": started, "error": str(exc)})
-        if isinstance(exc, RepositoryHttpError) and exc.status in RETIRED_STATUSES:
+        if isinstance(exc, RepositoryHttpError) and exc.status in CREDENTIALS_STATUSES and _has_credentials(repo):
+            # 1.17.100: a repository with credentials that answers 401 or 403 refused them. It is not retired. Nothing is offered.
+            existing.update({"retired": False, "credentials_rejected": True, "credentials_rejected_at": started, "error_status": exc.status})
+        elif isinstance(exc, RepositoryHttpError) and exc.status in RETIRED_STATUSES:
             # 1.17.99: the old releases stay in the file but are no longer offered. A later successful sync rewrites the whole file.
-            existing.update({"retired": True, "retired_at": started, "error_status": exc.status})
+            existing.update({"retired": True, "retired_at": started, "error_status": exc.status, "credentials_rejected": False})
         CACHE_ROOT.mkdir(parents=True, exist_ok=True)
         _atomic_repo_json(cache_path, existing)
         raise ModuleRepositoryError(str(exc)) from exc
 
 
-def _cache_retired(payload: dict) -> bool:
-    """True when a cache file says its repository is retired. A 1.17.98 file has no flag, so its stored error text is read once."""
+def _has_credentials(repo: dict) -> bool:
+    """True when the stored repository record carries credentials (an ``auth_token``). Read from the raw record: public_repository drops it."""
+    token = repo.get("auth_token") if isinstance(repo, dict) else None
+    return isinstance(token, str) and bool(token.strip())
+
+
+def _legacy_error_status(payload: dict) -> int | None:
+    """The HTTP status a cache written before 1.17.99 recorded only in its error text, or None. Used only when the file has no flags."""
+    if "retired" in payload or "credentials_rejected" in payload:
+        return None
+    match = _LEGACY_RETIRED_ERROR.match(str(payload.get("error") or "")) if payload.get("status") == "error" else None
+    return int(match.group(1)) if match else None
+
+
+def _cache_credentials_rejected(payload: dict, credentialed: bool = False) -> bool:
+    """True when a cache file says its repository refused its credentials (1.17.100). An older file is read from its error text, 401 or 403 only."""
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("credentials_rejected") is True:
+        return True
+    return credentialed and _legacy_error_status(payload) in CREDENTIALS_STATUSES
+
+
+def _cache_retired(payload: dict, credentialed: bool = False) -> bool:
+    """True when a cache file says its repository is retired. A 1.17.98 file has no flag, so its stored error text is read once.
+    A 401 or 403 on a repository with credentials is read as a refused credential (see _cache_credentials_rejected), not retired."""
     if not isinstance(payload, dict):
         return False
     if payload.get("retired") is True:
         return True
-    return payload.get("status") == "error" and bool(_LEGACY_RETIRED_ERROR.match(str(payload.get("error") or "")))
+    status = _legacy_error_status(payload)
+    return status is not None and not (credentialed and status in CREDENTIALS_STATUSES)
 
 
 def repository_status(repository_id: str) -> dict:
     repo = _repo(repository_id)
     path = CACHE_ROOT / f"{repository_id}.json"
-    sync = {"status": "never", "synced_at": None, "error": None, "module_count": 0, "skipped_count": 0, "skipped": [], "retired": False}
+    sync = {"status": "never", "synced_at": None, "error": None, "module_count": 0, "skipped_count": 0, "skipped": [], "retired": False, "credentials_rejected": False}
+    credentialed = _has_credentials(repo)
     if path.is_file():
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -709,10 +755,11 @@ def repository_status(repository_id: str) -> dict:
                 "module_count": len(payload.get("modules") or []),
                 "skipped_count": skipped_count,
                 "skipped": skipped,
-                "retired": _cache_retired(payload),
+                "retired": _cache_retired(payload, credentialed),
+                "credentials_rejected": _cache_credentials_rejected(payload, credentialed),
             }
         except Exception as exc:
-            sync = {"status": "error", "synced_at": None, "error": str(exc), "module_count": 0, "skipped_count": 0, "skipped": [], "retired": False}
+            sync = {"status": "error", "synced_at": None, "error": str(exc), "module_count": 0, "skipped_count": 0, "skipped": [], "retired": False, "credentials_rejected": False}
     return {**public_repository(repo), "sync": sync}
 
 
@@ -743,15 +790,23 @@ def _cached_modules(repo: dict) -> list[dict]:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return []
-    retired = _cache_retired(payload)
+    credentialed = _has_credentials(_repo_raw(repo["id"]))
+    retired = _cache_retired(payload, credentialed)
+    rejected = _cache_credentials_rejected(payload, credentialed)
     result = []
     for item in payload.get("modules") or []:
         if isinstance(item, dict):
             row = {**item, "repository_id": repo["id"], "repository_name": repo["name"], "repository_priority": repo["priority"], "repository_trust": repo["trust"]}
-            if retired:
+            if rejected:
+                # 1.17.100: still listed in the cache, never offered for staging.
+                row["download_unavailable"] = True
+                row["download_unavailable_reason"] = CREDENTIALS_RELEASE_REASON
+                row["download_unavailable_state"] = "credentials_rejected"
+            elif retired:
                 # 1.17.99: still listed in the cache, never offered for staging.
                 row["download_unavailable"] = True
                 row["download_unavailable_reason"] = RETIRED_RELEASE_REASON
+                row["download_unavailable_state"] = "repository_retired"
             result.append(row)
     return result
 
@@ -780,6 +835,7 @@ _AVAILABILITY_MESSAGES = {
     "not_synced": "A module repository is set up but has not been synced yet. Sync it to see what is available.",
     "sync_failed": "Every module repository failed its last sync. Check the repository address, then sync again.",
     "repository_retired": RETIRED_MESSAGE,
+    "credentials_rejected": CREDENTIALS_REJECTED_MESSAGE,
     "empty": "The module repositories were synced, but they offer no modules.",
     "ready": "",
 }
@@ -793,11 +849,13 @@ def _availability(repos: list[dict], offered_count: int, installed_only_count: i
     statuses = [repository_status(repo["id"])["sync"] for repo in repos]
     synced = sum(1 for sync in statuses if sync.get("synced_at"))
     retired = sum(1 for sync in statuses if sync.get("retired"))
+    rejected = sum(1 for sync in statuses if sync.get("credentials_rejected"))
     if not repos:
         state = "no_repository"
-    elif retired == len(repos):
+    elif retired + rejected == len(repos):
         # 1.17.99: every enabled repository is retired. Nothing is offered, whatever an old cache holds.
-        state = "repository_retired"
+        # 1.17.100: when any of them refused its credentials, that is the more useful thing to say.
+        state = "credentials_rejected" if rejected else "repository_retired"
     elif not synced:
         state = "sync_failed" if all(sync.get("status") == "error" for sync in statuses) else "not_synced"
     elif not offered_count:
@@ -811,6 +869,7 @@ def _availability(repos: list[dict], offered_count: int, installed_only_count: i
         "message": _AVAILABILITY_MESSAGES[state],
         "installed_only_count": installed_only_count,
         "retired_repositories": retired,
+        "credentials_rejected_repositories": rejected,
     }
 
 
@@ -930,7 +989,9 @@ def stage_repository_package(repository_id: str, module_id: str, version: str | 
     if not candidates:
         raise ModuleRepositoryError("Requested module/version is not present in the repository cache. Sync the repository first.")
     if all(item.get("download_unavailable") for item in candidates):
-        raise ModuleRepositoryError(RETIRED_MESSAGE)
+        # 1.17.100: a repository that refused its credentials says so; a retired one keeps the 1.17.99 message.
+        refused = all(item.get("download_unavailable_state") == "credentials_rejected" for item in candidates)
+        raise ModuleRepositoryError(CREDENTIALS_REJECTED_MESSAGE if refused else RETIRED_MESSAGE)
     candidates = [item for item in candidates if not item.get("download_unavailable")]
     candidate = candidates[0]
     for item in candidates[1:]:

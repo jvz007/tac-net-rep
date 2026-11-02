@@ -215,12 +215,22 @@ The online catalogue can break when a repository server stops serving public dow
 - **Recovery.** The next successful sync clears the retired state. A cache written by Core 1.17.98 that stored one of those four errors is read as retired with no migration step.
 - **Install today.** Upload the signed `.zip`, `.zip.sig` and `.release.json` together on Settings → Modules. Core checks the signature and the publisher before it installs.
 
+### A repository that refuses its credentials (1.17.100)
+
+A repository can be set up with credentials (a private or custom source). If it answers HTTP 401 or 403, it did not go away. It refused the credentials. Core now says that, instead of "retired".
+
+- **What triggers it.** A sync that gets HTTP 401 or 403 from a repository that has credentials. A repository with no credentials, such as the public default, keeps the 1.17.99 behaviour: 401 and 403 still mean **retired**. A 404 or 410 is retired for every repository. A network error, a timeout or an HTTP 5xx changes nothing.
+- **What you see.** The Online catalogue shows the state `credentials_rejected` and this message: "A module repository refused the credentials set up for it. Check them with the repository owner, then sync again. Nothing is offered from it until it accepts them." Releases from that repository carry `download_unavailable` with `download_unavailable_state` set to `credentials_rejected`. Nothing is downloaded.
+- **Recovery.** Fix the credentials with the repository owner, then sync again. The next successful sync clears the state.
+- **Today.** Core 1.17.100 does not yet send a stored repository credential. The state is shown so the message is honest when it does. Until then, upload the signed `.zip`, `.zip.sig` and `.release.json` on Settings → Modules.
+
 ### The Licensing Server address (1.17.99)
 
 `TEC_TAC_LICENSING_SERVER_URL` in `/opt/tec-tac/etc/tec-tac.conf` holds the Licensing Server address. Only an administrator with root access can change it. Nothing on the web can.
 
 - It must be `https`, have a host, and hold no user name, password, query or fragment. A value that fails is ignored, the default `https://lic-service.tec-tac.techxflow.net.za` applies, and the reason is written to the Core log (never the value).
 - The installer writes the key only when it is absent. It keeps an existing value exactly as it is.
+- **After a rollback or a restore.** A rollback, or a restore that installs an older Core (before 1.17.99), runs that older installer, which writes the config without this key. Core 1.17.100 reads the line just before it runs the installer and puts it back afterwards, exactly as it was, only when the installer left it out. The job log says "config TEC_TAC_LICENSING_SERVER_URL put back". If it cannot (the config is not root-owned, for example) the log says so, the default address applies, and you set the line again as root.
 - Core only reads the address, for the Licensing module (`tec_tac.licensing_server_url.get_licensing_server_url()`). Core holds no Licensing Server credential and calls that server itself never.
 
 ### Troubleshooting
@@ -230,6 +240,9 @@ The online catalogue can break when a repository server stops serving public dow
 | Online catalogue empty, state `repository_retired` | The repository answered 401, 403, 404 or 410 | Upload the signed `.zip`, `.zip.sig` and `.release.json` on Settings → Modules |
 | "This module repository no longer offers public downloads" when you stage | The release came from a retired repository | The same upload; sync again later |
 | Sync says "returned HTTP 500", the list is still shown | A temporary server fault | Sync again later. Nothing changed |
+| Online catalogue empty, state `credentials_rejected` | A repository with credentials answered 401 or 403 | Check the credentials with the repository owner, sync again. Upload the signed `.zip`, `.zip.sig` and `.release.json` meanwhile |
+| "A module repository refused the credentials set up for it" when you stage | The release came from a repository that refused its credentials | The same; nothing was downloaded |
+| The Licensing Server address went back to the default after a rollback or restore | The job log says "could not be put back" | Set `TEC_TAC_LICENSING_SERVER_URL` in `/opt/tec-tac/etc/tec-tac.conf` as root again |
 | A custom Licensing Server address is ignored | The value is not https, holds credentials, a query or a fragment, or has no host | Fix the key in `tec-tac.conf` as root. The Core log names the reason |
 
 ---

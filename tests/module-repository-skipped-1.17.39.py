@@ -82,6 +82,7 @@ names = {
     "_informational_text", "_plain_text", "_skipped_record", "_accepted_releases", "_skipped_summary", "sync_repository",
     "repository_status", "_cached_modules", "_candidate_compatibility", "online_catalog", "all_repository_status", "public_repository",
     "_AVAILABILITY_MESSAGES", "_availability", "RETIRED_MESSAGE", "RETIRED_STATUSES", "RETIRED_RELEASE_REASON", "_LEGACY_RETIRED_ERROR",
+    "CREDENTIALS_STATUSES", "CREDENTIALS_REJECTED_MESSAGE", "CREDENTIALS_RELEASE_REASON", "_has_credentials", "_legacy_error_status", "_cache_credentials_rejected", "_repo_raw",  # 1.17.100
     "_cache_retired", "RepositoryHttpError",
 }
 exec(compile(ast.Module(body=extract(REPO_TREE, names), type_ignores=[]), str(REPO_PATH), "exec"), ns)  # noqa: S102 - test only

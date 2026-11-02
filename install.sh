@@ -271,6 +271,42 @@ touch "${MODULE_STATE_LOCK}"
 chown root:root "${MODULE_STATE_LOCK}"
 chmod 0600 "${MODULE_STATE_LOCK}"
 
+# 1.17.100 (AD-57): the master key of Core's secret store. This installer is the only thing that ever creates it: Core never makes
+# one, so a missing key is a loud fault and not a silent new key. An existing key is NEVER overwritten (not even by an empty or wrong
+# one): only its owner and mode are put right when it is a regular 32-byte file. A link, or a file of the wrong size, stops the install
+# with the path named, because a new key would make every stored secret unreadable. The key bytes are never printed.
+# Not part of any routine backup (the backup helper excludes it); keep one offline copy (docs/secret-store.md).
+# BEGIN secret-store-master-key
+SECRETS_ROOT="/etc/tec-tac/secrets"
+SECRET_MASTER_KEY="${SECRETS_ROOT}/master.key"
+if [[ -L "${SECRETS_ROOT}" || ( -e "${SECRETS_ROOT}" && ! -d "${SECRETS_ROOT}" ) ]]; then
+    fail "The secret store folder ${SECRETS_ROOT} must be a real folder. Nothing was changed there."
+fi
+install -d -o root -g "${TACTICAL_GROUP}" -m 0750 "${SECRETS_ROOT}"
+if [[ -L "${SECRET_MASTER_KEY}" ]]; then
+    fail "The secret store master key ${SECRET_MASTER_KEY} is a link. Nothing was changed. See Troubleshooting."
+elif [[ -e "${SECRET_MASTER_KEY}" ]]; then
+    [[ -f "${SECRET_MASTER_KEY}" ]] || fail "The secret store master key ${SECRET_MASTER_KEY} is not a regular file. Nothing was changed. See Troubleshooting."
+    [[ "$(stat -c %s "${SECRET_MASTER_KEY}")" == "32" ]] || fail "The secret store master key ${SECRET_MASTER_KEY} is not 32 bytes. It was NOT replaced, because a new key would make every stored secret unreadable. Restore your offline copy. See Troubleshooting."
+    chown root:"${TACTICAL_GROUP}" "${SECRET_MASTER_KEY}"
+    chmod 0640 "${SECRET_MASTER_KEY}"
+    log "Secret store master key: kept (${SECRET_MASTER_KEY}, root:${TACTICAL_GROUP} 0640)"
+else
+    SECRET_KEY_TMP="$(mktemp "${SECRETS_ROOT}/.master.key.XXXXXX")" || fail "Could not create a temporary file in ${SECRETS_ROOT}."
+    if ! head -c 32 /dev/urandom > "${SECRET_KEY_TMP}" || [[ "$(stat -c %s "${SECRET_KEY_TMP}")" != "32" ]]; then
+        rm -f "${SECRET_KEY_TMP}"
+        fail "Could not create the secret store master key."
+    fi
+    chown root:"${TACTICAL_GROUP}" "${SECRET_KEY_TMP}"
+    chmod 0640 "${SECRET_KEY_TMP}"
+    # mv -n never replaces a key that appeared since the check; a leftover temporary file means it did.
+    mv -n -- "${SECRET_KEY_TMP}" "${SECRET_MASTER_KEY}"
+    rm -f "${SECRET_KEY_TMP}"
+    [[ -f "${SECRET_MASTER_KEY}" && "$(stat -c %s "${SECRET_MASTER_KEY}")" == "32" ]] || fail "The secret store master key was not created."
+    log "Secret store master key: created (${SECRET_MASTER_KEY}, root:${TACTICAL_GROUP} 0640). Keep one offline copy of it; it is not in any backup."
+fi
+# END secret-store-master-key
+
 run_as_tactical() {
     runuser -u "${TACTICAL_USER}" -- "$@"
 }

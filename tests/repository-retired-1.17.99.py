@@ -85,6 +85,7 @@ names = {
     "MAX_INDEX_BYTES", "MAX_SKIPPED_RECORDS", "MAX_SKIPPED_TEXT", "MAX_SKIPPED_REASON", "MAX_INFORMATIONAL_TEXT",
     "SKIPPED_REASON_FOR_OTHERS", "_CONTROL_CHARACTERS", "ModuleRepositoryError", "RepositoryHttpError", "RETIRED_STATUSES",
     "_LEGACY_RETIRED_ERROR", "RETIRED_MESSAGE", "RETIRED_RELEASE_REASON", "_skipped_summary", "repository_status",
+    "CREDENTIALS_STATUSES", "CREDENTIALS_REJECTED_MESSAGE", "CREDENTIALS_RELEASE_REASON", "_has_credentials", "_legacy_error_status", "_cache_credentials_rejected", "_repo_raw",  # 1.17.100
     "_cache_retired", "_cached_modules", "_candidate_compatibility", "online_catalog", "all_repository_status", "public_repository",
     "_AVAILABILITY_MESSAGES", "_availability", "sync_repository", "stage_repository_package", "_PathUpload",
 }
