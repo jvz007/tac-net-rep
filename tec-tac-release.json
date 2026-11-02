@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.100",
+  "version": "1.17.101",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.17.100.md",
-      "size": 13186,
-      "sha256": "77fcc274dd0672a36349132d9eb274592e19d0126245c2b79cf64722f6922d8b"
+      "path": "RELEASE_NOTES_1.17.101.md",
+      "size": 10749,
+      "sha256": "38a9ca4f16ad53d0c97d3881f6823ea22c57c737077ed67196a3a9d89473cfb8"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "4fbe8661d870e344c477d6f433ee735c40f1cc70f8aa7b3e6063dc44e00521ae"
+      "sha256": "fcff39b2997c8b768be6eed88d2a686ce7f7babfb6e282ff7c86121ca639aedb"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -1107,6 +1107,11 @@
       "sha256": "27ee455fb1af1b27f9776c10894d94cb6a2f5669b70299c1542443062927634e"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.100.md",
+      "size": 13186,
+      "sha256": "77fcc274dd0672a36349132d9eb274592e19d0126245c2b79cf64722f6922d8b"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.11.md",
       "size": 13772,
       "sha256": "84e4f9ea427823efeaf9248f3926735dd9850e2c420411970ef51b7d8310a545"
@@ -1688,8 +1693,8 @@
     },
     {
       "path": "docs/secret-store.md",
-      "size": 5244,
-      "sha256": "2698a7a950c7635fe533663a7221da28209878c09e0216549f8b85b343b9fd29"
+      "size": 7130,
+      "sha256": "1cec3f68708c3e5eebb5ac6a7eac04479ed123287244fb531349b3d27e70d322"
     },
     {
       "path": "docs/server-backup-capability.md",
@@ -1743,8 +1748,8 @@
     },
     {
       "path": "docs/troubleshooting-diagnostics.md",
-      "size": 4499,
-      "sha256": "afec2f0c6971f96486b31ce98e7ea90ab652af733bfe122cb88efd33c2a12560"
+      "size": 5271,
+      "sha256": "5f779aee23d149428bcb745b0aca0e553bf9942f519de35b4c49e11095ddac4a"
     },
     {
       "path": "docs/trusted-publisher-verification.md",
@@ -2008,8 +2013,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 451213,
-      "sha256": "dc4dd5dd7f47c1e90d6d7976bb0ed4a240fba3fe3b70c6541f119c0ae15d05dc"
+      "size": 451578,
+      "sha256": "3d069e77a07f44dfb12b0c821572ed86ca099f54787d3a45c72d001299dc6d90"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -2578,8 +2583,8 @@
     },
     {
       "path": "framwork/tec_tac/secret_store.py",
-      "size": 20812,
-      "sha256": "e7fe30f6c94c7efaf655c9de13f84f3edefdaa5c51d045bceca67735627e7b2f"
+      "size": 27304,
+      "sha256": "00e3045874426df2481aa2c07a1db1acbb17ad828308d50e487fe7d386877e66"
     },
     {
       "path": "framwork/tec_tac/server_backup.py",
@@ -2733,8 +2738,8 @@
     },
     {
       "path": "install.sh",
-      "size": 74124,
-      "sha256": "7b1ce3b4c4b34214890f0fa4541b0ee31bbd930a398340acaf2200de316af335"
+      "size": 74767,
+      "sha256": "90e7d148f0ceb74c6524cc922d893a8be19ff4d06943d5f14ed4e9ca93e0d479"
     },
     {
       "path": "reportsets/.gitkeep",
@@ -2904,7 +2909,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "637fc719307fd233d32483b2e9ab5bd9e7efae38552615767efb24f65aa3a683"
+      "sha256": "d1fc085a3d1ea0b10800e1d0ae5760513bfa3de6ff08868ee1e0a553268452ac"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -5078,8 +5083,13 @@
     },
     {
       "path": "tests/secret-store-1.17.100.py",
-      "size": 56034,
-      "sha256": "7d91652fbc0db0d50f92411e951387b7fd3708b1d75a9dddd1bda97bd7275343"
+      "size": 57167,
+      "sha256": "ef546fbd378b9365ee2440aa33fb219416d5bb0c6dec13480448a0e7140f676b"
+    },
+    {
+      "path": "tests/secret-store-hardening-1.17.101.py",
+      "size": 22426,
+      "sha256": "5104a300bb47e8742b4f3592c88a30dd88f43d64437471963e1658e2a0756796"
     },
     {
       "path": "tests/server-backup-capability-compat-1.15.189-1.py",

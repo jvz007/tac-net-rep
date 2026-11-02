@@ -299,10 +299,17 @@ else
     fi
     chown root:"${TACTICAL_GROUP}" "${SECRET_KEY_TMP}"
     chmod 0640 "${SECRET_KEY_TMP}"
-    # mv -n never replaces a key that appeared since the check; a leftover temporary file means it did.
-    mv -n -- "${SECRET_KEY_TMP}" "${SECRET_MASTER_KEY}"
+    # mv -n never replaces a key that appeared since the check. On coreutils 9.2 to 9.4 it can also exit non-zero when it skips, which
+    # would end the install under set -e, so its status is handled here and the checks below decide whether the key is right.
+    if ! mv -n -- "${SECRET_KEY_TMP}" "${SECRET_MASTER_KEY}"; then
+        log "Secret store master key: mv -n reported a non-zero status; checking the key file."
+    fi
     rm -f "${SECRET_KEY_TMP}"
-    [[ -f "${SECRET_MASTER_KEY}" && "$(stat -c %s "${SECRET_MASTER_KEY}")" == "32" ]] || fail "The secret store master key was not created."
+    if [[ -L "${SECRET_MASTER_KEY}" || ! -f "${SECRET_MASTER_KEY}" ]]; then
+        fail "The secret store master key was not created. See Troubleshooting."
+    fi
+    SECRET_KEY_FACTS="$(stat -c '%U:%G %a %s' "${SECRET_MASTER_KEY}")" || fail "Could not check the secret store master key."
+    [[ "${SECRET_KEY_FACTS}" == "root:${TACTICAL_GROUP} 640 32" ]] || fail "The secret store master key has the wrong owner, mode or size (${SECRET_KEY_FACTS}; expected root:${TACTICAL_GROUP} 640 32). See Troubleshooting."
     log "Secret store master key: created (${SECRET_MASTER_KEY}, root:${TACTICAL_GROUP} 0640). Keep one offline copy of it; it is not in any backup."
 fi
 # END secret-store-master-key

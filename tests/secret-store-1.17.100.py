@@ -140,6 +140,17 @@ mod("django")
 mod("django.db", transaction=SimpleNamespace(atomic=lambda: _Atomic()))
 
 
+class F:  # 1.17.101: the read counter is F("read_count") + 1
+    def __init__(self, name):
+        self.name = name
+
+    def __add__(self, other):
+        return ("F+", self.name, other)
+
+
+mod("django.db.models", F=F)
+
+
 class Row(SimpleNamespace):
     pass
 
@@ -169,6 +180,8 @@ class Query:
     def update(self, **kwargs):
         for row in self.rows:
             for key, value in kwargs.items():
+                if isinstance(value, tuple) and value and value[0] == "F+":
+                    value = getattr(row, value[1]) + value[2]
                 setattr(row, key, value)
         ORDER.append(("update", len(self.rows), sorted(kwargs)))
         return len(self.rows)
@@ -234,7 +247,7 @@ ss.MASTER_KEY_PATH = KEY_FILE
 def fake_fstat(fd):
     info = real_fstat(fd)
     mode = (stat_module.S_IFDIR if KEY_STATE["kind"] == "dir" else stat_module.S_IFREG) | KEY_STATE["mode"]
-    return SimpleNamespace(st_mode=mode, st_uid=KEY_STATE["uid"], st_size=info.st_size)
+    return SimpleNamespace(st_mode=mode, st_uid=KEY_STATE["uid"], st_gid=KEY_STATE.get("gid", 1001), st_size=info.st_size)
 
 
 def fake_stat(path, *args, **kwargs):
@@ -243,7 +256,7 @@ def fake_stat(path, *args, **kwargs):
     return real_stat(path, *args, **kwargs)
 
 
-ss._fstat, ss._stat = fake_fstat, fake_stat
+ss._fstat, ss._lstat, ss._key_group_id = fake_fstat, fake_stat, lambda: 1001  # 1.17.101: lstat and the tactical group
 
 
 def write_key(data=None):
@@ -257,7 +270,8 @@ def reset(key=True):
     AUDIT.clear()
     LOGS.clear()
     AUDIT_FAIL[0] = False
-    KEY_STATE.update(uid=0, mode=0o640, kind="regular")
+    ss._repeat_seen.clear()  # 1.17.101: deny and decrypt-failed rows are rate limited per owner, name and reason
+    KEY_STATE.update(uid=0, mode=0o640, kind="regular", gid=1001)
     FOLDER_STATE.update(uid=0, mode=0o40750)
     if KEY_FILE.is_symlink() or KEY_FILE.exists():
         KEY_FILE.unlink()
@@ -380,15 +394,16 @@ LIC(ss.put, "licence_key", SENTINEL)
 rows_before = [vars(r).copy() for r in TABLE.rows]
 for label, caller in (("core", CORE), ("library", LIBRARY), ("generated", GENERATED), ("disabled", OFF), ("legacy", OLD), ("test file", lambda fn, *a: fn(*a))):
     del ORDER[:]
+    ss._repeat_seen.clear()
     audit_before = len(AUDIT)
     for op, args in (("put", ("licence_key", "x")), ("get", ("licence_key",)), ("delete", ("licence_key",)), ("configured", ("licence_key",)), ("list_names", ())):
         refused(caller, getattr(ss, op), *args, code="caller_not_allowed")
     must([vars(r) for r in TABLE.rows] == rows_before, f"{label}: a row changed")
     must(not [o for o in ORDER if o[0] in {"create", "update", "delete"}], f"{label}: a write happened")
     denies = AUDIT[audit_before:]
-    must(len(denies) == 5 and all(a["action"] == "deny" and a["strict"] is False and a["module_id"] == "core" for a in denies), (label, denies))
+    must(len(denies) == 2 and all(a["action"] == "deny" and a["strict"] is False and a["module_id"] == "core" for a in denies), (label, denies))
 must(SENTINEL not in everything_text())
-print("       caller check: another module reads, lists and deletes nothing of the owner's; Core, a library, a generated frame, a disabled module, a legacy module and the test file are refused with one deny row each and nothing read or written")
+print("       caller check: another module reads, lists and deletes nothing of the owner's; Core, a library, a generated frame, a disabled module, a legacy module and the test file are refused and nothing is read or written; the five calls leave one deny row per name (licence_key, and the invalid name of list_names), 1.17.101")
 
 # --- 6. the master key fails closed
 def expect_key_fault(reason, setup):
@@ -489,8 +504,8 @@ must(LIC(ss.get, "licence_key") == SENTINEL)
 n = len(AUDIT)
 for _ in range(3):
     LIC(ss.get, "licence_key")
-must(len(AUDIT) == n and TABLE.rows[0].read_count == 4 and TABLE.rows[0].last_read_at is not None, (len(AUDIT), n, TABLE.rows[0].read_count))
-print("       audit first and in the same transaction (add, modify, delete); no value in a row; an audit that fails changes nothing (503 audit_failed); a read writes no row and is counted")
+must(len(AUDIT) == n and TABLE.rows[0].read_count == 1 and TABLE.rows[0].last_read_at is not None, (len(AUDIT), n, TABLE.rows[0].read_count))
+print("       audit first and in the same transaction (add, modify, delete); no value in a row; an audit that fails changes nothing (503 audit_failed); a read writes no row and is counted (once a minute since 1.17.101)")
 
 # --- 9. limits
 reset()
@@ -611,6 +626,7 @@ def run_block(setup, expect_ok):
         "fail() { printf '[TEC-TAC] ERROR: %s\\n' \"$*\" >&2; exit 1; }\n"
         "TACTICAL_GROUP=tactical\n"
         "chown() { :; }\n"
+        "stat() { if [[ \"$2\" == '%U:%G %a %s' ]]; then echo \"root:tactical 640 $(command stat -c %s \"$3\")\"; else command stat \"$@\"; fi; }\n"
         f"chmod() {{ echo \"chmod $*\" >> '{(work / 'chmod.log').as_posix()}'; command chmod \"$@\"; }}\n"
         "install() { local d=''; for a in \"$@\"; do d=\"$a\"; done; mkdir -p \"$d\"; }\n"
         + block + "\n",
@@ -1047,13 +1063,13 @@ for text in (DOC, TS):
 must("custom:decrypt-failed" in DOC and "offline copy" in DOC and "not in a backup" in DOC.lower().replace("**", ""), "help text incomplete")
 must("credentials_rejected" in REPOS_DOC and "credentials_rejected" in TS and "put back" in REPOS_DOC and "could not be put back" in TS, "the Low 1 or Low 2 text is missing")
 must("refused the credentials set up for it" in REPOS_DOC, "the credentials message is not in the help")
-NOTES = read(ROOT / "RELEASE_NOTES_1.17.100.md")
+NOTES = read(ROOT / "docs" / "releases" / "RELEASE_NOTES_1.17.100.md")  # moved by 1.17.101
 must((ROOT / "docs" / "releases" / "RELEASE_NOTES_1.17.99.md").is_file() and not (ROOT / "RELEASE_NOTES_1.17.99.md").exists(), "the 1.17.99 notes were not moved")
-must(sorted(p.name for p in ROOT.glob("RELEASE_NOTES_*.md")) == ["RELEASE_NOTES_1.17.100.md"], "exactly one root release note")
+must(len(list(ROOT.glob("RELEASE_NOTES_*.md"))) == 1, "exactly one root release note")
 for heading in ("## What changed and why", "## Module-facing changes", "## Assumptions", "## Tests", "## Checks on the test server", "## Not done here"):
     must(heading in NOTES, heading)
 must("stat -c" in NOTES and "master.key" in NOTES and "AD-57" in NOTES and "AD-56" in NOTES, "the notes miss the key check or the decisions")
-must(read(ROOT / "VERSION").strip() == "1.17.100" and json.loads(read(ROOT / "tec_tac_package.json"))["version"] == "1.17.100", "version not bumped")
+must(tuple(int(x) for x in read(ROOT / "VERSION").strip().split("-")[0].split(".")) >= (1, 17, 100) and json.loads(read(ROOT / "tec_tac_package.json"))["version"] == read(ROOT / "VERSION").strip(), "version not bumped")
 
 # no module under modules/ already calls a name that changed shape
 MODULES = ROOT.parents[1] / "modules"
@@ -1065,6 +1081,8 @@ if MODULES.is_dir():
             hits.append(str(path.relative_to(MODULES)))
     print(f"       modules/ users of the new store (informational): {hits or 'none'}")
     for path in MODULES.rglob("*.py"):
+        if "tests" in path.relative_to(MODULES).parts:
+            continue  # a module test may name a stub file after Core code (licensing tests do); only module code counts
         text = path.read_text(encoding="utf-8", errors="ignore")
         must("module_repository" not in text and "online_catalog" not in text and "credentials_rejected" not in text, f"a module uses the repository code: {path}")
 print("       help and troubleshooting cover every code and reason, the footer is last, the 1.17.99 notes moved, the version is bumped")
