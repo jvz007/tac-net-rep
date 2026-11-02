@@ -48,6 +48,14 @@ CORE_RESOURCE_CONTRACTS = (
 
 CORE_CONTRACTS = (
     {
+        "area": "licensing-server",
+        "import_path": "tec_tac.licensing_server_url",
+        "name": "get_licensing_server_url",
+        "kind": "python",
+        "purpose": "Read-only (added 1.17.99, AD-56, additive): the Licensing Server address as a root setting. get_licensing_server_url() returns {url, source, configured, reason}. url is the https address from the root-owned key TEC_TAC_LICENSING_SERVER_URL in tec-tac.conf, without a trailing slash; source is config or default; configured is true only when a valid value is set; reason is null, or a plain sentence when a configured value was refused. A value is valid when it is https, has a host, and holds no user info, query, fragment, space or control character; an invalid value is treated as unset (the default https://lic-service.tec-tac.techxflow.net.za applies) and the reason is logged. Nothing on the web can change it. The call reads one small file and makes no network call. Core holds no Licensing Server credential and calls that server itself never: the Licensing module is the only client. Also validate_licensing_server_url(value) -> (address or None, reason or None). Needs framework >=1.17.99.",
+        "audience": "licensing module/backend",
+    },
+    {
         "area": "publisher-trust",
         "import_path": "tec_tac.trusted_publishers",
         "name": "list_trusted_publishers",
@@ -1905,12 +1913,13 @@ HTTP_CONTRACT_DETAILS = {
                 "modules": "array of the online catalog items: the modules that at least one enabled repository's cache offers (since 1.17.41; before it, modules that were only installed also appeared here)",
                 "count": "whole number, len(modules) (since 1.17.41)",
                 "installed_only": "array of {id, name, installed_version, installed_source} (added 1.17.41): installed modules that no enabled repository offers. They are not presented as available",
-                "availability": "object (added 1.17.41): state (no_repository, not_synced, sync_failed, empty or ready), enabled_repositories, synced_repositories, message (one plain sentence, empty when ready) and installed_only_count",
+                "availability": "object (added 1.17.41): state (no_repository, not_synced, sync_failed, repository_retired, empty or ready), enabled_repositories, synced_repositories, message (one plain sentence, empty when ready) and installed_only_count; added 1.17.99: retired_repositories (whole number) and the state repository_retired",
                 "repositories": "the repository status rows, with sync.skipped_count and sync.skipped[]",
             },
             "notes": [
                 "Changed 1.17.41 (module-facing: used by the browser only, no module calls this route): modules[] now holds only what an enabled repository offers, each item still carrying installed, installed_version, update_available, compatible, available_sources and releases. An installed module that no enabled repository offers moves to the additive installed_only[]. availability.state says why the list is empty: no_repository (no enabled repository), not_synced (enabled, none synced yet), sync_failed (every enabled repository's last sync failed and none has a cache), empty (synced, no modules) or ready. A cache kept after a failed sync still counts as synced, so its modules stay offered. A caller who cannot manage modules gets the same redaction as before and no repository URL. This GET never calls a repository: syncing stays the manual Sync action.",
                 "Added 1.17.39, additive, informational: each modules[] item and each modules[].releases[] row carries channel, lifecycle, downgrade_policy and signing_environment (a string of at most 64 characters, or null) and recommended (true, false or null). A modules[] item takes them from the selected release, and is null when nothing is selected or the cache predates them. Core shows them and never acts on them: they are not used for selection, ordering, compatibility, staging or any refusal, and no value is checked against a list.",
+                "Added 1.17.99 (AD-56, additive; no module calls this route): a repository sync that gets HTTP 401, 403, 404 or 410 marks the repository retired (cache keys retired, retired_at, error_status; sync.retired in the repository status). Its cached releases carry download_unavailable true and download_unavailable_reason, are left out of modules[] and cannot be staged (the stage route answers 400 with the plain retired message). When every enabled repository is retired, availability.state is repository_retired and message says to upload the signed .zip, .zip.sig and .release.json on Settings > Modules. A network error, a timeout or an HTTP 5xx is not retired: the state and the cached modules stay as before. A 1.17.98 cache whose error reads HTTP 401, 403, 404 or 410 is read as retired without a new sync; the next successful sync clears it.",
                 "Module download and staging are not gated on any entitlement or licence (added 1.17.39): Core does not check a licence on sync, listing or download.",
             ],
         },

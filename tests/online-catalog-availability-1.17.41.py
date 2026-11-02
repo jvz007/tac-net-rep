@@ -68,7 +68,8 @@ names = {
     "MAX_INDEX_BYTES", "MAX_SKIPPED_RECORDS", "MAX_SKIPPED_TEXT", "MAX_SKIPPED_REASON", "MAX_INFORMATIONAL_TEXT",
     "SKIPPED_REASON_FOR_OTHERS", "_CONTROL_CHARACTERS", "ModuleRepositoryError", "_skipped_summary", "repository_status",
     "_cached_modules", "_candidate_compatibility", "online_catalog", "all_repository_status", "public_repository",
-    "_AVAILABILITY_MESSAGES", "_availability",
+    "_AVAILABILITY_MESSAGES", "_availability", "RETIRED_MESSAGE", "RETIRED_STATUSES", "RETIRED_RELEASE_REASON", "_LEGACY_RETIRED_ERROR",
+    "_cache_retired", "RepositoryHttpError",
 }
 exec(compile(ast.Module(body=extract(REPO_TREE, names), type_ignores=[]), str(REPO_PATH), "exec"), ns)  # noqa: S102 - test only
 ns["list_repositories"] = lambda: [ns["public_repository"](dict(r)) for r in REPOS]

@@ -81,7 +81,8 @@ names = {
     "SKIPPED_REASON_FOR_OTHERS", "_CONTROL_CHARACTERS", "ModuleRepositoryError", "_RemoteAddressRefused", "_validate_release",
     "_informational_text", "_plain_text", "_skipped_record", "_accepted_releases", "_skipped_summary", "sync_repository",
     "repository_status", "_cached_modules", "_candidate_compatibility", "online_catalog", "all_repository_status", "public_repository",
-    "_AVAILABILITY_MESSAGES", "_availability",
+    "_AVAILABILITY_MESSAGES", "_availability", "RETIRED_MESSAGE", "RETIRED_STATUSES", "RETIRED_RELEASE_REASON", "_LEGACY_RETIRED_ERROR",
+    "_cache_retired", "RepositoryHttpError",
 }
 exec(compile(ast.Module(body=extract(REPO_TREE, names), type_ignores=[]), str(REPO_PATH), "exec"), ns)  # noqa: S102 - test only
 
@@ -326,7 +327,8 @@ for banned in ("entitle", "revok", "get_capability", "licensing capability", "co
     must(banned not in lowered, f"module repository code must not contain {banned!r}")
 licence_words = re.findall(r"licen[sc]\w*", text, flags=re.IGNORECASE)
 # 1.17.58: the stage route also reads the audited licence override (a superuser's reason, refused for anyone else). It checks no entitlement.
-must(set(licence_words) <= {"LicensingRequirementError", "licensing", "licence_override_reason", "licence_override_superuser_required"},
+# 1.17.99: the retired-repository message names "the licensed catalogue" (text only; no check). Nothing here calls a licensing server.
+must(set(licence_words) <= {"LicensingRequirementError", "licensing", "licence_override_reason", "licence_override_superuser_required", "licensed"},
      f"licence words other than the existing install-time error and the 1.17.58 override: {set(licence_words)}")
 must(all(word == "downgrade_policy" for word in re.findall(r"downgrad\w*", text, flags=re.IGNORECASE)),
      "downgrade appears only as the informational field downgrade_policy")

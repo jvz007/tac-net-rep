@@ -90,6 +90,24 @@ class ModuleRepositoryError(RuntimeError):
     pass
 
 
+class RepositoryHttpError(ModuleRepositoryError):
+    """The repository answered with a non-2xx status (1.17.99). status is the HTTP code; the text is unchanged from before."""
+
+    def __init__(self, message: str, status: int):
+        super().__init__(message)
+        self.status = int(status)
+
+
+# 1.17.99 (AD-56): these answers mean the server no longer offers this repository to the public. A 5xx, a timeout or a TLS error does not.
+RETIRED_STATUSES = frozenset({401, 403, 404, 410})
+_LEGACY_RETIRED_ERROR = re.compile(r"^Repository request returned HTTP (401|403|404|410)\.$")
+RETIRED_MESSAGE = (
+    "This module repository no longer offers public downloads. Install modules by uploading the signed .zip, .zip.sig and "
+    ".release.json on Settings → Modules until the licensed catalogue arrives."
+)
+RETIRED_RELEASE_REASON = "The repository no longer offers public downloads, so this release cannot be fetched from it."
+
+
 class _RemoteAddressRefused(ModuleRepositoryError):
     """The SSRF guard refused an address. This fails the whole index; it is never a skipped entry (1.17.39)."""
 
@@ -318,7 +336,7 @@ def _fetch(url: str, maximum: int, timeout: int = 12, *, trust: str = "custom") 
             current = urllib.parse.urljoin(safe_url, location)
             continue
         if status < 200 or status >= 300:
-            raise ModuleRepositoryError(f"Repository request returned HTTP {status}.")
+            raise RepositoryHttpError(f"Repository request returned HTTP {status}.", status)
         return body
     raise ModuleRepositoryError("Repository request exceeded the redirect limit.")
 
@@ -658,15 +676,27 @@ def sync_repository(repository_id: str) -> dict:
             except Exception:
                 existing = {}
         existing.update({"schema": 1, "repository_id": repository_id, "status": "error", "last_attempt_at": started, "error": str(exc)})
+        if isinstance(exc, RepositoryHttpError) and exc.status in RETIRED_STATUSES:
+            # 1.17.99: the old releases stay in the file but are no longer offered. A later successful sync rewrites the whole file.
+            existing.update({"retired": True, "retired_at": started, "error_status": exc.status})
         CACHE_ROOT.mkdir(parents=True, exist_ok=True)
         _atomic_repo_json(cache_path, existing)
         raise ModuleRepositoryError(str(exc)) from exc
 
 
+def _cache_retired(payload: dict) -> bool:
+    """True when a cache file says its repository is retired. A 1.17.98 file has no flag, so its stored error text is read once."""
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("retired") is True:
+        return True
+    return payload.get("status") == "error" and bool(_LEGACY_RETIRED_ERROR.match(str(payload.get("error") or "")))
+
+
 def repository_status(repository_id: str) -> dict:
     repo = _repo(repository_id)
     path = CACHE_ROOT / f"{repository_id}.json"
-    sync = {"status": "never", "synced_at": None, "error": None, "module_count": 0, "skipped_count": 0, "skipped": []}
+    sync = {"status": "never", "synced_at": None, "error": None, "module_count": 0, "skipped_count": 0, "skipped": [], "retired": False}
     if path.is_file():
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -679,9 +709,10 @@ def repository_status(repository_id: str) -> dict:
                 "module_count": len(payload.get("modules") or []),
                 "skipped_count": skipped_count,
                 "skipped": skipped,
+                "retired": _cache_retired(payload),
             }
         except Exception as exc:
-            sync = {"status": "error", "synced_at": None, "error": str(exc), "module_count": 0, "skipped_count": 0, "skipped": []}
+            sync = {"status": "error", "synced_at": None, "error": str(exc), "module_count": 0, "skipped_count": 0, "skipped": [], "retired": False}
     return {**public_repository(repo), "sync": sync}
 
 
@@ -712,10 +743,16 @@ def _cached_modules(repo: dict) -> list[dict]:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return []
+    retired = _cache_retired(payload)
     result = []
     for item in payload.get("modules") or []:
         if isinstance(item, dict):
-            result.append({**item, "repository_id": repo["id"], "repository_name": repo["name"], "repository_priority": repo["priority"], "repository_trust": repo["trust"]})
+            row = {**item, "repository_id": repo["id"], "repository_name": repo["name"], "repository_priority": repo["priority"], "repository_trust": repo["trust"]}
+            if retired:
+                # 1.17.99: still listed in the cache, never offered for staging.
+                row["download_unavailable"] = True
+                row["download_unavailable_reason"] = RETIRED_RELEASE_REASON
+            result.append(row)
     return result
 
 
@@ -742,6 +779,7 @@ _AVAILABILITY_MESSAGES = {
     "no_repository": "No module repository is set up. Add one under Repositories, then sync it.",
     "not_synced": "A module repository is set up but has not been synced yet. Sync it to see what is available.",
     "sync_failed": "Every module repository failed its last sync. Check the repository address, then sync again.",
+    "repository_retired": RETIRED_MESSAGE,
     "empty": "The module repositories were synced, but they offer no modules.",
     "ready": "",
 }
@@ -754,8 +792,12 @@ def _availability(repos: list[dict], offered_count: int, installed_only_count: i
     """
     statuses = [repository_status(repo["id"])["sync"] for repo in repos]
     synced = sum(1 for sync in statuses if sync.get("synced_at"))
+    retired = sum(1 for sync in statuses if sync.get("retired"))
     if not repos:
         state = "no_repository"
+    elif retired == len(repos):
+        # 1.17.99: every enabled repository is retired. Nothing is offered, whatever an old cache holds.
+        state = "repository_retired"
     elif not synced:
         state = "sync_failed" if all(sync.get("status") == "error" for sync in statuses) else "not_synced"
     elif not offered_count:
@@ -768,6 +810,7 @@ def _availability(repos: list[dict], offered_count: int, installed_only_count: i
         "synced_repositories": synced,
         "message": _AVAILABILITY_MESSAGES[state],
         "installed_only_count": installed_only_count,
+        "retired_repositories": retired,
     }
 
 
@@ -777,7 +820,8 @@ def online_catalog() -> dict:
     installed = {item["id"]: item for item in installed_list}
     releases = []
     for repo in repos:
-        releases.extend(_cached_modules(repo))
+        # 1.17.99: a release whose repository is retired is not offered (no install button that cannot work).
+        releases.extend(item for item in _cached_modules(repo) if not item.get("download_unavailable"))
     by_module: dict[str, list[dict]] = {}
     for release in releases:
         by_module.setdefault(release["id"], []).append(release)
@@ -885,6 +929,9 @@ def stage_repository_package(repository_id: str, module_id: str, version: str | 
         candidates = [item for item in candidates if item.get("version") == version]
     if not candidates:
         raise ModuleRepositoryError("Requested module/version is not present in the repository cache. Sync the repository first.")
+    if all(item.get("download_unavailable") for item in candidates):
+        raise ModuleRepositoryError(RETIRED_MESSAGE)
+    candidates = [item for item in candidates if not item.get("download_unavailable")]
     candidate = candidates[0]
     for item in candidates[1:]:
         if version_satisfies(item["version"], f">{candidate['version']}"):

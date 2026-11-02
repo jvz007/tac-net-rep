@@ -575,6 +575,20 @@ done
 # root-owned copy the system updater publishes from a verified UI tree (--publish-ui-sync below), and never a file in the UI
 # source checkout. Until a verified copy is published, module jobs leave UI sync off and say so in their log.
 UI_SYNC_SCRIPT_PATH="/usr/local/lib/tec-tac-ui-sync/scripts/sync-modules.sh"
+# 1.17.99 (AD-56): TEC_TAC_LICENSING_SERVER_URL is written only when the key is absent. An administrator's value is carried over
+# exactly as it is, valid or not (Core reads it and refuses a bad one with a logged reason). A first install may pass the value in the
+# environment. Read as data, never sourced; one line only.
+EXISTING_LICENSING_SERVER_URL=""
+LICENSING_SERVER_URL_PRESENT=0
+if [[ -f "${MODULE_CONFIG}" && ! -L "${MODULE_CONFIG}" ]]; then
+    while IFS= read -r licensing_line || [[ -n "${licensing_line}" ]]; do
+        licensing_line="${licensing_line%$'\r'}"
+        if [[ "${licensing_line}" == TEC_TAC_LICENSING_SERVER_URL=* ]]; then
+            LICENSING_SERVER_URL_PRESENT=1
+            EXISTING_LICENSING_SERVER_URL="${licensing_line#TEC_TAC_LICENSING_SERVER_URL=}"
+        fi
+    done < "${MODULE_CONFIG}"
+fi
 cat > "${MODULE_CONFIG}" <<EOF
 # Tec-Tac installation layout. Managed by install.sh.
 TEC_TAC_ROOT=${TEC_TAC_ROOT}
@@ -617,6 +631,12 @@ EOF
 # 1.17.48: exactly one TEC_TAC_API_URL line when there is a value, none when there is not. Written as data with printf, never sourced.
 if [[ -n "${TEC_TAC_API_URL:-}" ]]; then
     printf 'TEC_TAC_API_URL=%s\n' "${TEC_TAC_API_URL}" >> "${MODULE_CONFIG}"
+fi
+if [[ "${LICENSING_SERVER_URL_PRESENT}" == "1" ]]; then
+    printf 'TEC_TAC_LICENSING_SERVER_URL=%s\n' "${EXISTING_LICENSING_SERVER_URL}" >> "${MODULE_CONFIG}"
+elif [[ -n "${TEC_TAC_LICENSING_SERVER_URL:-}" ]]; then
+    [[ "${TEC_TAC_LICENSING_SERVER_URL}" != *$'\n'* && "${TEC_TAC_LICENSING_SERVER_URL}" != *$'\r'* ]] || fail "TEC_TAC_LICENSING_SERVER_URL may not contain CR/LF characters."
+    printf 'TEC_TAC_LICENSING_SERVER_URL=%s\n' "${TEC_TAC_LICENSING_SERVER_URL}" >> "${MODULE_CONFIG}"
 fi
 chown root:root "${MODULE_CONFIG}"
 chmod 0644 "${MODULE_CONFIG}"

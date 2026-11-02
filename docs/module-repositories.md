@@ -205,3 +205,32 @@ Repository fetches honor the service environment's `HTTP_PROXY` / `HTTPS_PROXY` 
 
 The 1.17.72 notes said a token in a repository URL no longer reaches the file. That is true only for the query, the fragment and user info. If a repository needs a token, carry it in the query or in user info (neither is stored), or hold it by repository id. Never put it in the path. The download itself always uses the full address, so a token in the query keeps working.
 
+## When a repository stops offering downloads (1.17.99)
+
+The online catalogue can break when a repository server stops serving public downloads. Core now says so plainly instead of listing modules you cannot install.
+
+- **What triggers it.** A sync that gets HTTP 401, 403, 404 or 410 marks the repository **retired**. A network error, a timeout, a TLS error or an HTTP 5xx does not. Those keep the last good list, as before.
+- **What you see.** The Online catalogue shows the state `repository_retired` and this message: "This module repository no longer offers public downloads. Install modules by uploading the signed .zip, .zip.sig and .release.json on Settings → Modules until the licensed catalogue arrives."
+- **Cached releases.** Releases from a retired repository stay in the cache file but carry `download_unavailable`. They are not offered, and staging one answers the same message. Nothing is downloaded.
+- **Recovery.** The next successful sync clears the retired state. A cache written by Core 1.17.98 that stored one of those four errors is read as retired with no migration step.
+- **Install today.** Upload the signed `.zip`, `.zip.sig` and `.release.json` together on Settings → Modules. Core checks the signature and the publisher before it installs.
+
+### The Licensing Server address (1.17.99)
+
+`TEC_TAC_LICENSING_SERVER_URL` in `/opt/tec-tac/etc/tec-tac.conf` holds the Licensing Server address. Only an administrator with root access can change it. Nothing on the web can.
+
+- It must be `https`, have a host, and hold no user name, password, query or fragment. A value that fails is ignored, the default `https://lic-service.tec-tac.techxflow.net.za` applies, and the reason is written to the Core log (never the value).
+- The installer writes the key only when it is absent. It keeps an existing value exactly as it is.
+- Core only reads the address, for the Licensing module (`tec_tac.licensing_server_url.get_licensing_server_url()`). Core holds no Licensing Server credential and calls that server itself never.
+
+### Troubleshooting
+
+| What you see | What it means | What to do |
+|---|---|---|
+| Online catalogue empty, state `repository_retired` | The repository answered 401, 403, 404 or 410 | Upload the signed `.zip`, `.zip.sig` and `.release.json` on Settings → Modules |
+| "This module repository no longer offers public downloads" when you stage | The release came from a retired repository | The same upload; sync again later |
+| Sync says "returned HTTP 500", the list is still shown | A temporary server fault | Sync again later. Nothing changed |
+| A custom Licensing Server address is ignored | The value is not https, holds credentials, a query or a fragment, or has no host | Fix the key in `tec-tac.conf` as root. The Core log names the reason |
+
+---
+Tech Flow Dynamics · techxflow.co.za
