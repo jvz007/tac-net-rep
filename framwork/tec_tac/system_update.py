@@ -328,7 +328,12 @@ def _file_lock(path: Path, timeout: float):
         if fcntl is not None:
             held = False
             try:
-                fd = os.open(key, os.O_RDWR | os.O_CREAT, 0o660)
+                try:
+                    fd = os.open(key, os.O_RDWR | os.O_CREAT, 0o660)
+                except PermissionError:
+                    # 1.17.106: a lock file left by root (umask 022, so 0640) refused the Tactical account and every
+                    # branch check silently fell back to its saved head. flock needs no write access.
+                    fd = os.open(key, os.O_RDONLY)
                 deadline = time.monotonic() + timeout
                 while True:
                     try:
@@ -825,6 +830,8 @@ def inspect_archive(archive: Path, *, source: dict | None = None, release_manife
             raise SystemUpdateError(f"Update trust policy rejected {component} package: {exc}") from exc
 
     installed = _installed_version(component)
+    operation = _operation(installed, version)
+    component_label = "Tec-Tac Framework" if component == "framework" else "Tec-Tac UI"
     installable = True
     block_reason = None
     compatibility = {}
@@ -840,10 +847,17 @@ def inspect_archive(archive: Path, *, source: dict | None = None, release_manife
                 block_reason = f"Requires Tec-Tac Framework {fw_constraint}; installed {fw_version or 'none'}."
     return {
         "component": component,
-        "component_label": "Tec-Tac Framework" if component == "framework" else "Tec-Tac UI",
+        "component_label": component_label,
         "version": version,
         "installed_version": installed,
-        "operation": _operation(installed, version),
+        "operation": operation,
+        # 1.17.106: a lower version is flagged so the UI shows its own confirmation; install still needs allow_downgrade.
+        "downgrade": operation == "downgrade",
+        "confirmation_required": "downgrade" if operation == "downgrade" else None,
+        "downgrade_warning": (
+            f"This package is {component_label} {version}, older than the installed {installed}. Installing it is a downgrade."
+            if operation == "downgrade" else None
+        ),
         "manifest": package_manifest,
         "source": source,
         "release_trust": release_trust,
@@ -1316,7 +1330,7 @@ def _branch_head(component: str, repo: str, ref: str, *, force: bool, notes: dic
         notes = {}
 
     def out(row: dict) -> dict:
-        return {"head_commit": row["head_commit"], "head_date": row.get("head_date")}
+        return {"head_commit": row["head_commit"], "head_date": row.get("head_date"), "checked_at": row.get("checked_at")}
 
     row = _branch_row(component, repo, ref)
     if row is not None:
@@ -1341,6 +1355,8 @@ def _branch_head(component: str, repo: str, ref: str, *, force: bool, notes: dic
         if not held:
             if row is not None:
                 notes["lock_unavailable"] = True
+                # 1.17.106: said so, never shown as a fresh answer (dev02, 3 November 2026).
+                notes["branch_error"] = "The branch head could not be refreshed (the update-check lock was not available); the saved head is shown."
                 return out(row)  # fail closed to the saved head, never a second request
             raise SystemUpdateError("Another update check is already running; try again in a moment.")
         url = f"https://api.github.com/repos/{repo}/branches/{urllib.parse.quote(ref, safe='')}"
@@ -1382,7 +1398,7 @@ def _branch_head(component: str, repo: str, ref: str, *, force: bool, notes: dic
             }
 
         _cache_update(mutate)  # the cache is an optimisation; the answer is still good
-        return {"head_commit": commit, "head_date": head_date}
+        return {"head_commit": commit, "head_date": head_date, "checked_at": _utcnow()}
 
 
 _PLAUSIBLE_VERSION = re.compile(r"v?\d+(?:\.\d+){1,2}(?:-[0-9A-Za-z.]+)?")
@@ -1431,6 +1447,7 @@ def _branch_status(component: str, ref: str, *, force: bool, notes: dict | None 
         "installed_commit": None, "installed_short": None, "installed_source": None,
         "state": "unknown", "differs": None,
         "basis": None, "head_version": None, "installed_version": None,
+        "head_checked_at": None, "head_stale": None,
     }
     error = None
     if notes is None:
@@ -1439,6 +1456,12 @@ def _branch_status(component: str, ref: str, *, force: bool, notes: dict | None 
         head = _branch_head(component, repo, ref, force=force, notes=notes)
         error = notes.pop("branch_error", None)  # the saved head is shown, flagged as not refreshed
         branch.update(head_commit=head["head_commit"].lower(), head_short=_short(head["head_commit"]), head_date=head["head_date"])
+        # 1.17.106: a head older than the 5-minute limit is never presented as current. The UI must not offer it.
+        head_age = _age_seconds(head.get("checked_at"))
+        branch["head_checked_at"] = head.get("checked_at")
+        branch["head_stale"] = head_age is None or head_age >= BRANCH_CACHE_TTL.total_seconds()
+        if branch["head_stale"]:
+            notes["head_stale"] = True
         installed_commit, installed_source = _installed_source_commit(component, repo)
         branch.update(installed_commit=installed_commit, installed_short=_short(installed_commit), installed_source=installed_source)
         if installed_commit:
@@ -1477,6 +1500,13 @@ def _normalize_refresh(refresh: object, force: bool, source: dict | None) -> str
     return value
 
 
+def _primary_stale(payload: dict, notes: dict) -> bool:
+    """Whether the primary answer is a saved one past its limit: the branch head for a branch source, else the release."""
+    if "branch" in payload:
+        return bool(notes.get("head_stale"))
+    return bool(payload.get("latest_release")) and bool((payload.get("cache") or {}).get("stale"))
+
+
 def _finish_online(payload: dict, *, requested: str, calls_before: int, notes: dict, has_data: bool) -> dict:
     """Add the refresh object and the saved rate-limit telemetry; surface exhaustion with or without saved data."""
     network = _network_calls() > calls_before
@@ -1489,9 +1519,16 @@ def _finish_online(payload: dict, *, requested: str, calls_before: int, notes: d
         reason = "refreshed" if requested != "none" else "cache_stale"
     elif notes.get("shared"):
         reason = "refreshed_by_another_request"
+    elif _primary_stale(payload, notes):
+        reason = "not_refreshed"  # 1.17.106: a saved answer past its limit that could not be refreshed is never cache_fresh
     else:
         reason = "cache_fresh"
-    payload["refresh"] = {"network_request": network, "reason": reason, "requested": requested}
+    stale = []
+    if notes.get("head_stale"):
+        stale.append("branch_head")
+    if (payload.get("cache") or {}).get("stale"):
+        stale.append("stable_release" if "stable_release" in payload else "latest_release")
+    payload["refresh"] = {"network_request": network, "reason": reason, "requested": requested, "stale": stale}
     payload["github_rate_limit"] = _github_rate_limit_status()
     if limited is not None:
         if not has_data:
@@ -1589,6 +1626,32 @@ def list_branches(component: str) -> dict:
 _STALE_MESSAGE = "The update you checked is no longer the one on record. Refresh the check and try again."
 
 
+def _current_branch_head(component: str, repo: str, ref: str) -> str:
+    """The branch head a pinned stage must match (1.17.106), resolved on the server, never just the saved copy.
+
+    One forced conditional GET /branches/<ref>: a 304 costs no rate limit, the 20-second guard and the single-flight
+    lock still apply, and nothing is sent while a saved rate-limit reset is in the future. The saved head is
+    accepted only when it was checked inside the 5-minute limit; otherwise the stage is refused (stale_candidate).
+    """
+    if _branch_row(component, repo, ref) is None:
+        raise StaleCandidateError(_STALE_MESSAGE)
+    notes: dict = {}
+    try:
+        head = _branch_head(component, repo, ref, force=True, notes=notes)
+    except GithubRateLimitError:
+        raise StaleCandidateError(
+            f"Core could not confirm the current head of {ref}: GitHub's API limit is exhausted. Try again after the reset."
+        ) from None
+    except SystemUpdateError as exc:
+        raise StaleCandidateError(f"Core could not confirm the current head of {ref}: {exc}") from exc
+    age = _age_seconds(head.get("checked_at"))
+    if age is None or age >= BRANCH_CACHE_TTL.total_seconds():
+        raise StaleCandidateError(
+            f"Core could not confirm the current head of {ref} (the saved head is {head['head_commit'][:7]}). Refresh the check and try again."
+        )
+    return head["head_commit"].lower()
+
+
 def stage_online_package(component: str, source_type: str, ref: str | None = None, commit: str | None = None) -> dict:
     """Download, inspect and stage an online package.
 
@@ -1630,9 +1693,11 @@ def stage_online_package(component: str, source_type: str, ref: str | None = Non
         if not branch or len(branch) > 200:
             raise SystemUpdateError("A branch name is required.")
         if pinned:
-            row = _branch_row(component, repo, branch)
-            if row is None or row["head_commit"].lower() != pinned:
-                raise StaleCandidateError(_STALE_MESSAGE)
+            current = _current_branch_head(component, repo, branch)
+            if current != pinned:
+                raise StaleCandidateError(
+                    f"{branch} has moved to {current[:7]}; the check showed {pinned[:7]}. Refresh the check and try again."
+                )
             commit = pinned
         else:
             encoded = urllib.parse.quote(branch, safe="")

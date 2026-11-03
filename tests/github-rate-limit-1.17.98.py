@@ -203,7 +203,7 @@ def age(seconds):
 reset()
 out = su.online_status("framework", source=BRANCH)
 must(n() == 1 and n("/branches/dev") == 1, G["calls"])
-must(out["refresh"] == {"network_request": True, "reason": "cache_stale", "requested": "none"}, out["refresh"])
+must({k: out["refresh"][k] for k in ("network_request", "reason", "requested")} == {"network_request": True, "reason": "cache_stale", "requested": "none"}, out["refresh"])
 must(out["branch"]["head_commit"] == SHA_A and out["branch"]["state"] == "same" and out["stable_release"] is None, out)
 out = su.online_status("framework", source=BRANCH)
 must(n() == 1 and out["refresh"]["network_request"] is False and out["refresh"]["reason"] == "cache_fresh", (G["calls"], out["refresh"]))
@@ -403,7 +403,7 @@ G["delay"] = 0.0
 su.online_status("framework", source=BRANCH, refresh="branch")
 outs = [su.online_status("framework", source=BRANCH, refresh="branch") for _ in range(9)]
 must(n("/branches/dev") == 1, G["calls"])
-must(all(o["refresh"] == {"network_request": False, "reason": "recently_refreshed", "requested": "branch"} for o in outs), outs[0]["refresh"])
+must(all({k: o["refresh"][k] for k in ("network_request", "reason", "requested")} == {"network_request": False, "reason": "recently_refreshed", "requested": "branch"} for o in outs), outs[0]["refresh"])
 age(30)  # older than 20 s: a forced branch refresh goes out again
 su.online_status("framework", source=BRANCH, refresh="branch")
 must(n("/branches/dev") == 2, G["calls"])
