@@ -303,7 +303,7 @@ QUEUED_IDS: list = []
 
 
 class FakeQueueTask:
-    def apply_async(self, *, args, time_limit):
+    def apply_async(self, *, args, time_limit, soft_time_limit=None):
         QUEUED_IDS.append(args[0])
         return SimpleNamespace(id="celery-queue-1")
 

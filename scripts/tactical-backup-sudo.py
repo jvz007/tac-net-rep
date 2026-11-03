@@ -1,10 +1,11 @@
 #!/usr/bin/python3
 """Narrow sudo compatibility shim for Tactical backup.sh.
 
-Tactical backup.sh v34 invokes sudo for a fixed set of root-owned backup
+Tactical backup.sh v34 and v35 invoke sudo for a fixed set of root-owned backup
 sources. This shim recognizes only those exact command shapes and delegates to
 Core's root-owned server-backup helper, which independently validates the
-active job and workspace before collecting anything.
+active job and workspace before collecting anything. v35 (Tactical 1.6.1)
+builds its workspace in /var/tmp; the helper decides whether that is allowed.
 """
 from __future__ import annotations
 

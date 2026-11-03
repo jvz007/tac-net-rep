@@ -969,14 +969,29 @@ def _authorization_revoked_health(authorization_revoked) -> dict:
     }
 
 
+# 1.17.110: the handler gets SoftTimeLimitExceeded this many seconds before the hard limit, so it can clean up and Core can
+# record the run. Without an explicit soft limit Tactical 1.6.1's worker default (14 100 seconds) would cut long runs.
+SCHEDULE_RUN_SOFT_LIMIT_MARGIN_SECONDS = 60
+
+
+def schedule_run_time_limits(timeout_seconds) -> tuple[int, int]:
+    """Return (hard, soft) Celery time limits for a run of an action with this timeout (1.17.110).
+
+    hard = timeout + the stale-run grace (300 s), as before. soft = hard - 60 s, always above the action's own timeout, so the
+    worker's default soft limit never applies. Works the same on Tactical 1.5.2 (no worker soft limit) and 1.6.1 (14 100 s)."""
+    timeout = min(MAX_ACTION_TIMEOUT_SECONDS, max(1, int(timeout_seconds)))
+    hard = timeout + int(DEFAULT_RUNNING_STALE_GRACE.total_seconds())
+    return hard, hard - SCHEDULE_RUN_SOFT_LIMIT_MARGIN_SECONDS
+
+
 def _queue_run(run: TecTacScheduleRun):
     from .tasks import execute_schedule_run
     state = TecTacSchedulerState.current()
     try:
         action = _ACTIONS.get(run.action_id)
         timeout_seconds = int(action.timeout_seconds if action else 3600)
-        hard_time_limit = min(MAX_ACTION_TIMEOUT_SECONDS, timeout_seconds) + int(DEFAULT_RUNNING_STALE_GRACE.total_seconds())
-        async_result = execute_schedule_run.apply_async(args=[str(run.id)], time_limit=hard_time_limit)
+        hard_time_limit, soft_time_limit = schedule_run_time_limits(timeout_seconds)
+        async_result = execute_schedule_run.apply_async(args=[str(run.id)], time_limit=hard_time_limit, soft_time_limit=soft_time_limit)
         run.celery_task_id = str(async_result.id or "")
         run.save(update_fields=["celery_task_id"])
         state.last_dispatch_at = timezone.now()

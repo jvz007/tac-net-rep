@@ -47,7 +47,6 @@ BUNDLE_RE = re.compile(r"^tec-tac-backup-[A-Za-z0-9_.-]+\.tgz$")
 ARCHIVE_RE = BUNDLE_RE
 ALLOWED_ACTIONS = {"create_backup", "list_backups", "restore_backup", "apply_retention", "validate_destination", "validate_restore", "store_secret", "delete_secret", "list_registered_destinations", "list_registered_backups", "validate_registered_restore", "restore_registered_backup", "get_status"}
 OVERRIDEABLE_RESTORE_CHECKS = {"target.os"}
-TACTICAL_RESTORE_OVERRIDE_BASELINE = "67"
 TACTICAL_RESTORE_OS_GATE = """if [[ "$osname" == "debian" ]]; then
   if [[ "$relno" -ne 11 && "$relno" -ne 12 ]]; then
     not_supported
@@ -63,6 +62,33 @@ else
   exit 1
 fi
 """
+# 1.17.110: Tactical 1.6.1 ships restore.sh v68, which accepts only Debian 13 and Ubuntu 26.04 and writes its OS gate in a
+# different form. Core picks the profile that matches the restore.sh installed on this server; any other version is refused.
+TACTICAL_RESTORE_OS_GATE_V68 = """if [[ "$osname" == "debian" ]]; then
+  [[ "$relno" -eq 13 ]] || {
+    not_supported
+    exit 1
+  }
+elif [[ "$osname" == "ubuntu" ]]; then
+  [[ "$fullrelno" == "26.04" ]] || {
+    not_supported
+    exit 1
+  }
+else
+  not_supported
+  exit 1
+fi
+"""
+TACTICAL_RESTORE_PROFILES = {
+    "67": {"tactical": "1.5.2", "os_gate": TACTICAL_RESTORE_OS_GATE, "debian": ("11", "12"), "ubuntu": ("22.04",)},
+    "68": {"tactical": "1.6.1", "os_gate": TACTICAL_RESTORE_OS_GATE_V68, "debian": ("13",), "ubuntu": ("26.04",)},
+}
+# 1.17.110: backup.sh v34 (Tactical 1.5.2) builds its work folder with mktemp -t, so it honours TMPDIR and lands in Core's
+# job staging folder. v35 (Tactical 1.6.1) always uses mktemp -d -p /var/tmp. Core accepts exactly that folder for the job,
+# checked without following links, and removes it afterwards. Any other backup.sh version is refused.
+TACTICAL_BACKUP_WORKSPACE_MODES = {"34": "staging", "35": "var-tmp"}
+TACTICAL_VAR_TMP = Path("/var/tmp")
+TACTICAL_WORKSPACE_NAME_RE = re.compile(r"^tacticalrmm-[A-Za-z0-9]{21}$")
 BACKUP_CLASSES = {"daily", "weekly", "monthly", "manual"}
 DEST_TYPES = {"local", "sftp", "ftp", "scp", "webdav", "s3"}
 SAFE_DEST_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
@@ -1599,10 +1625,120 @@ def create_tec_tac_component(config, output: Path):
     }
 
 
+TACTICAL_VAR_TMP_OWNER_UID = 0
+
+
+def _tactical_workspace_binding_path(config, job_id):
+    if not JOB_RE.fullmatch(str(job_id)):
+        raise SystemExit("invalid job id")
+    return roots(config)["staging"] / f"tactical-workspace-{job_id}.json"
+
+
+def _var_tmp_root_problem(root: Path):
+    """Return why /var/tmp is unsafe to accept a work folder from, or None (1.17.110)."""
+    try:
+        st = os.lstat(root)
+    except OSError:
+        return f"{root} is missing"
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+        return f"{root} is not a real directory"
+    if st.st_uid != TACTICAL_VAR_TMP_OWNER_UID:
+        return f"{root} is not owned by root"
+    if not st.st_mode & stat.S_ISVTX:
+        return f"{root} does not have the sticky bit"
+    return None
+
+
+def _var_tmp_workspace_names(root: Path):
+    with os.scandir(root) as entries:
+        return sorted(entry.name for entry in entries if TACTICAL_WORKSPACE_NAME_RE.fullmatch(entry.name))
+
+
+def _load_workspace_binding(config, job_id):
+    path = _tactical_workspace_binding_path(config, job_id)
+    try:
+        st = path.lstat()
+    except OSError as exc:
+        raise SystemExit("Tactical backup workspace binding is missing for this job") from exc
+    if not stat.S_ISREG(st.st_mode) or st.st_uid != os.geteuid() or stat.S_IMODE(st.st_mode) & 0o077:
+        raise SystemExit("Tactical backup workspace binding is unsafe")
+    binding = _read_json_nofollow(path, max_bytes=1024 * 1024, label="Tactical backup workspace binding")
+    if binding.get("job_id") != str(job_id) or binding.get("mode") not in set(TACTICAL_BACKUP_WORKSPACE_MODES.values()):
+        raise SystemExit("Tactical backup workspace binding is invalid")
+    if not isinstance(binding.get("preexisting"), list):
+        raise SystemExit("Tactical backup workspace binding is invalid")
+    return path, binding
+
+
+def _validate_var_tmp_workspace(binding_path: Path, binding: dict, path: Path, tactical_uid: int):
+    """Accept only the job's own backup.sh v35 work folder in /var/tmp, checked without following links (1.17.110)."""
+    if not path.is_absolute() or path.parent != TACTICAL_VAR_TMP or not TACTICAL_WORKSPACE_NAME_RE.fullmatch(path.name):
+        raise SystemExit("Tactical backup privileged workspace is not a backup.sh work folder in /var/tmp")
+    if path.name in set(binding.get("preexisting") or []):
+        raise SystemExit("Tactical backup privileged workspace existed before this backup started")
+    claimed = binding.get("claimed")
+    if claimed and claimed != path.name:
+        raise SystemExit("Tactical backup privileged workspace is not the work folder this backup already uses")
+    problem = _var_tmp_root_problem(TACTICAL_VAR_TMP)
+    if problem:
+        raise SystemExit(f"Tactical backup privileged workspace parent is unsafe: {problem}")
+    try:
+        st = os.lstat(path)
+    except OSError as exc:
+        raise SystemExit("invalid Tactical backup privileged workspace") from exc
+    if not stat.S_ISDIR(st.st_mode):
+        raise SystemExit("invalid Tactical backup privileged workspace")
+    if st.st_uid != tactical_uid:
+        raise SystemExit("Tactical backup privileged workspace is not owned by the Tactical service user")
+    if stat.S_IMODE(st.st_mode) != 0o700:
+        raise SystemExit("Tactical backup privileged workspace is not private (mktemp creates it with mode 0700)")
+    if not claimed:
+        binding["claimed"] = path.name
+        atomic_json(binding_path, binding, mode=0o600)
+    return path
+
+
+def _cleanup_var_tmp_workspace(config, job_id, log):
+    """Remove the /var/tmp work folder this job claimed; never anything else (1.17.110)."""
+    try:
+        _, binding = _load_workspace_binding(config, job_id)
+    except SystemExit as exc:
+        log.write(f"[TEC-TAC-BACKUP] /var/tmp work folder not cleaned: {exc}\n")
+        return
+    name = binding.get("claimed")
+    if not name or not TACTICAL_WORKSPACE_NAME_RE.fullmatch(str(name)):
+        new = sorted(set(_var_tmp_workspace_names(TACTICAL_VAR_TMP)) - set(binding.get("preexisting") or []))
+        if new:
+            log.write(f"[TEC-TAC-BACKUP] {len(new)} unclaimed tacticalrmm-* folder(s) in /var/tmp left in place; they were never bound to this job\n")
+        return
+    workspace = TACTICAL_VAR_TMP / name
+    try:
+        st = os.lstat(workspace)
+    except FileNotFoundError:
+        return
+    tactical_uid, _, _, _ = tactical_identity(config)
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != tactical_uid:
+        log.write("[TEC-TAC-BACKUP] /var/tmp work folder left in place: it is no longer a folder owned by the Tactical service user\n")
+        return
+    if not shutil.rmtree.avoids_symlink_attacks:
+        log.write("[TEC-TAC-BACKUP] /var/tmp work folder left in place: this platform has no link-safe removal\n")
+        return
+    shutil.rmtree(workspace, ignore_errors=True)
+    log.write(f"[TEC-TAC-BACKUP] removed backup.sh work folder {workspace}\n")
+
+
 def create_tactical_component(config, log, job_id):
     tactical_root = Path(config["TACTICAL_ROOT"])
     script = tactical_root / "backup.sh"
     ensure_regular(script)
+    # 1.17.110: refuse an unchecked backup.sh before anything is created.
+    script_version = _tactical_script_version(script)
+    workspace_mode = TACTICAL_BACKUP_WORKSPACE_MODES.get(script_version or "")
+    if workspace_mode is None:
+        raise RuntimeError(
+            f"Tactical backup.sh v{script_version or 'unknown'} is not a version Core has checked "
+            f"({_known_backup_versions_text()}); refusing to run it. Update Tec-Tac Core first."
+        )
     backup_root = Path("/rmmbackups")
     backup_root.mkdir(parents=True, exist_ok=True)
     uid, gid, user, home = tactical_identity(config)
@@ -1612,12 +1748,23 @@ def create_tactical_component(config, log, job_id):
         pass
     before = {p.name: p.stat().st_mtime_ns for p in backup_root.glob("rmm-backup-*.tar") if p.is_file()}
 
-    # Tactical backup.sh v34 still invokes sudo for a small set of root-owned
+    # Tactical backup.sh v34/v35 still invokes sudo for a small set of root-owned
     # files but does not fail closed if those sudo calls fail. Core supplies a
     # narrow sudo shim which can request only those fixed collection operations
     # through this helper. The Tactical-generated temporary workspace is bound
     # to this opaque create_backup job and no caller-selected source path or
     # command is ever accepted by the privileged helper.
+    # 1.17.110: v34 (Tactical 1.5.2) works under TMPDIR, Core's job staging
+    # folder. v35 (Tactical 1.6.1) always works in /var/tmp; the privileged
+    # helper then accepts only one new tacticalrmm-* folder there, recorded in a
+    # root-only binding file, and Core removes it afterwards. Other versions are
+    # refused before the script runs.
+    binding = {"job_id": str(job_id), "backup_script_version": script_version, "mode": workspace_mode, "preexisting": [], "claimed": None}
+    if workspace_mode == "var-tmp":
+        problem = _var_tmp_root_problem(TACTICAL_VAR_TMP)
+        if problem:
+            raise RuntimeError(f"Tactical backup.sh v{script_version} works in {TACTICAL_VAR_TMP}, but {problem}; refusing to run it")
+        binding["preexisting"] = _var_tmp_workspace_names(TACTICAL_VAR_TMP)
     rs = roots(config)
     tmp_parent = rs["staging"] / f"tactical-native-{job_id}"
     shutil.rmtree(tmp_parent, ignore_errors=True)
@@ -1645,12 +1792,19 @@ def create_tactical_component(config, log, job_id):
         "TEC_TAC_BACKUP_JOB_ID": str(job_id),
         "PATH": str(shim_dir) + os.pathsep + env.get("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"),
     })
+    binding_path = _tactical_workspace_binding_path(config, job_id)
+    atomic_json(binding_path, binding, mode=0o600)
     set_job_stage(config, job_id, "tactical.backup", current=2, total=CREATE_BACKUP_PROGRESS_TOTAL)
-    log.write(f"[TEC-TAC-BACKUP] running Tactical backup as {user} with Core narrow privilege bridge\n")
+    log.write(f"[TEC-TAC-BACKUP] running Tactical backup.sh v{script_version} as {user} with Core narrow privilege bridge (work folder: {workspace_mode})\n")
     try:
         run_logged([str(script)], log, env=env, cwd=str(tactical_root), timeout=6 * 60 * 60, user=user)
     finally:
-        shutil.rmtree(tmp_parent, ignore_errors=True)
+        try:
+            if workspace_mode == "var-tmp":
+                _cleanup_var_tmp_workspace(config, job_id, log)
+        finally:
+            shutil.rmtree(tmp_parent, ignore_errors=True)
+            binding_path.unlink(missing_ok=True)
 
     candidates = []
     for path in backup_root.glob("rmm-backup-*.tar"):
@@ -2668,7 +2822,7 @@ def _stream_tar_gzip_member(tf, member, label):
 
 
 def validate_tactical_native_archive(archive: Path):
-    """Read-only compatibility validation for Tactical backup.sh v34 / restore.sh v67."""
+    """Read-only compatibility validation for Tactical backup.sh v34/v35 / restore.sh v67/v68 (Tactical 1.5.2 and 1.6.1; the archive layout is the same)."""
     ensure_regular(archive, max_bytes=max_backup_bytes(load_config()))
     required_exact = {
         "rmm/local_settings.py",
@@ -3583,7 +3737,7 @@ def _vr_new(request, name):
         "legacy": False,
         "validated_at": now(),
         "staged_bytes": 0,
-        "compatibility_baseline": {"tactical_backup_script": "34", "tactical_restore_script": "67"},
+        "compatibility_baseline": {"tactical_backup_script": "34, 35", "tactical_restore_script": "67, 68"},
         "sections": {key: _vr_section() for key in ("source", "bundle", "tactical", "tec_tac", "target")},
         "warnings": [],
         "errors": [],
@@ -3626,7 +3780,17 @@ def validate_target_preflight(config, report, mode, staged_bytes, *, mutation_lo
     if mode in {"full", "tactical"}:
         _vr_check(report, "target", "target.arch", "CPU architecture", "passed" if arch in {"x86_64", "aarch64"} else "failed", arch)
         osr = _os_release(); os_id = str(osr.get("ID") or "").lower(); ver = str(osr.get("VERSION_ID") or "")
-        supported = (os_id == "debian" and ver.split(".")[0] in {"11", "12"}) or (os_id == "ubuntu" and ver == "22.04")
+        # 1.17.110: the supported systems follow the restore.sh installed here (v67: Debian 11/12, Ubuntu 22.04; v68: Debian 13,
+        # Ubuntu 26.04). An unchecked restore.sh fails its own check, which no override can accept.
+        restore_version, profile = _installed_tactical_restore_profile(config)
+        if profile is None:
+            _vr_check(report, "target", "target.restore_script", "Tactical restore script", "failed",
+                      f"Tactical restore.sh v{restore_version or 'unknown'} is not a version Core has checked ({_known_restore_versions_text()}). Update Tec-Tac Core first.")
+            supported = False
+        else:
+            _vr_check(report, "target", "target.restore_script", "Tactical restore script", "passed",
+                      f"restore.sh v{restore_version} (Tactical {profile['tactical']}) supports Debian {', '.join(profile['debian'])} and Ubuntu {', '.join(profile['ubuntu'])}.")
+            supported = (os_id == "debian" and ver.split(".")[0] in profile["debian"]) or (os_id == "ubuntu" and ver in profile["ubuntu"])
         _vr_check(report, "target", "target.os", "Operating system", "passed" if supported else "failed", f"{os_id or 'unknown'} {ver or 'unknown'}")
         mem_kb = 0
         try:
@@ -3886,7 +4050,7 @@ def operation_validate_restore(config, job, log):
                 _vr_check(report, "bundle", "bundle.legacy", "Legacy Tactical archive", "passed", "Native Tactical archive selected for Tactical-only validation.")
                 try:
                     validate_tactical_native_archive(downloaded)
-                    _vr_check(report, "tactical", "tactical.compatibility", "Tactical restore compatibility", "passed", "Validated against backup.sh v34 / restore.sh v67 compatibility baseline.")
+                    _vr_check(report, "tactical", "tactical.compatibility", "Tactical restore compatibility", "passed", "Validated against backup.sh v34/v35 / restore.sh v67/v68 compatibility baseline.")
                 except Exception as exc:
                     _vr_check(report, "tactical", "tactical.compatibility", "Tactical restore compatibility", "failed", str(exc))
             _vr_check(report, "tec_tac", "tec_tac.component", "Tec-Tac component", "not_applicable", "Legacy native Tactical archive has no independent Tec-Tac component.")
@@ -3914,7 +4078,7 @@ def operation_validate_restore(config, job, log):
             if "tactical" in extracted:
                 try:
                     validate_tactical_native_archive(extracted["tactical"])
-                    _vr_check(report, "tactical", "tactical.compatibility", "Tactical restore compatibility", "passed", "Native Tactical component is safe/readable and compatible with backup.sh v34 / restore.sh v67 requirements.")
+                    _vr_check(report, "tactical", "tactical.compatibility", "Tactical restore compatibility", "passed", "Native Tactical component is safe/readable and compatible with backup.sh v34/v35 / restore.sh v67/v68 requirements.")
                 except Exception as exc:
                     _vr_check(report, "tactical", "tactical.compatibility", "Tactical restore compatibility", "failed", str(exc))
             else:
@@ -3951,15 +4115,59 @@ def operation_validate_restore(config, job, log):
             report["warnings"].append(f"validation staging cleanup failed: {exc}")
 
 
+def _script_version_from_text(text: str):
+    match = re.search(r'^SCRIPT_VERSION=["\']?([0-9]+)["\']?\s*$', text, re.MULTILINE)
+    return match.group(1) if match else None
+
+
+def _tactical_script_version(path: Path):
+    """Read SCRIPT_VERSION from a Tactical shell script without following a link (1.17.110)."""
+    try:
+        st = path.lstat()
+    except OSError:
+        return None
+    if not stat.S_ISREG(st.st_mode) or st.st_size > 4 * 1024 * 1024:
+        return None
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return None
+    with os.fdopen(fd, "rb") as handle:
+        text = handle.read(4 * 1024 * 1024).decode("utf-8", errors="replace")
+    return _script_version_from_text(text)
+
+
+def _known_restore_versions_text():
+    return " or ".join(f"v{v} (Tactical {p['tactical']})" for v, p in TACTICAL_RESTORE_PROFILES.items())
+
+
+def _known_backup_versions_text():
+    return " or ".join(f"v{v}" for v in TACTICAL_BACKUP_WORKSPACE_MODES)
+
+
+def _installed_tactical_restore_profile(config):
+    """Return (version, profile) for the restore.sh installed on this server; profile is None when Core has not checked it."""
+    version = _tactical_script_version(Path(config["TACTICAL_ROOT"]) / "restore.sh")
+    return version, TACTICAL_RESTORE_PROFILES.get(version or "")
+
+
 def _prepare_tactical_restore_script(source: Path, staged: Path, *, os_override_audit_id: str | None, log):
     """Prepare restore.sh before any destructive restore step.
 
     No override means an exact byte-for-byte copy. An authorized target.os
-    override removes only the inspected Tactical v67 support rejection while
+    override removes only the inspected Tactical v67 or v68 support rejection while
     retaining the real lsb_release-derived identity and codename variables.
     """
     ensure_regular(source)
     raw = source.read_bytes()
+    # 1.17.110: Core runs only a restore.sh it has checked (v67 for Tactical 1.5.2, v68 for Tactical 1.6.1), with or without an
+    # override. A newer or unknown script is refused before anything destructive happens.
+    found = _script_version_from_text(raw.decode("utf-8", errors="replace"))
+    if found not in TACTICAL_RESTORE_PROFILES:
+        raise RuntimeError(
+            f"Tactical restore.sh v{found or 'unknown'} is not a version Core has checked "
+            f"({_known_restore_versions_text()}); refusing to restore. Update Tec-Tac Core first."
+        )
     if not os_override_audit_id:
         staged.write_bytes(raw)
         os.chmod(staged, 0o755)
@@ -3970,16 +4178,16 @@ def _prepare_tactical_restore_script(source: Path, staged: Path, *, os_override_
     except UnicodeDecodeError as exc:
         raise RuntimeError("Tactical restore.sh is not UTF-8; refusing target.os override patch") from exc
 
-    match = re.search(r'^SCRIPT_VERSION=["\']?([0-9]+)["\']?\s*$', text, re.MULTILINE)
-    version = match.group(1) if match else None
-    if version != TACTICAL_RESTORE_OVERRIDE_BASELINE:
+    version = _script_version_from_text(text)
+    profile = TACTICAL_RESTORE_PROFILES.get(version or "")
+    if profile is None:
         raise RuntimeError(
-            f"target.os override is bound to Tactical restore.sh v{TACTICAL_RESTORE_OVERRIDE_BASELINE}; "
+            f"target.os override is bound to Tactical restore.sh {_known_restore_versions_text()}; "
             f"found {version or 'unknown'}"
         )
-    if text.count(TACTICAL_RESTORE_OS_GATE) != 1:
+    if text.count(profile["os_gate"]) != 1:
         raise RuntimeError(
-            "Tactical restore.sh v67 OS-support gate did not match the inspected baseline exactly; "
+            f"Tactical restore.sh v{version} OS-support gate did not match the inspected baseline exactly; "
             "refusing to prepare an override-aware restore script"
         )
 
@@ -3987,7 +4195,7 @@ def _prepare_tactical_restore_script(source: Path, staged: Path, *, os_override_
         '# TEC-TAC: Tactical OS support rejection bypassed under an authorized target.os override.\n'
         'printf >&2 "${YELLOW}Tec-Tac: continuing under authorized target.os restore override.${NC}\\n"\n'
     )
-    patched = text.replace(TACTICAL_RESTORE_OS_GATE, replacement, 1)
+    patched = text.replace(profile["os_gate"], replacement, 1)
     if patched == text or 'osname=$(lsb_release -si)' not in patched or 'codename=$(lsb_release -sc)' not in patched:
         raise RuntimeError("Unable to prove safe target.os override patch while preserving real OS identity")
     staged.write_text(patched, encoding="utf-8")
@@ -4939,8 +5147,13 @@ def run_job(job_id):
 
 def _validate_tactical_workspace(config, job_id, workspace):
     rs = roots(config)
-    expected_parent = (rs["staging"] / f"tactical-native-{job_id}").resolve()
     path = Path(workspace)
+    # 1.17.110: the root-only binding the job wrote says which work folder this backup.sh version uses.
+    binding_path, binding = _load_workspace_binding(config, job_id)
+    if binding["mode"] == "var-tmp":
+        uid, _, _, _ = tactical_identity(config)
+        return _validate_var_tmp_workspace(binding_path, binding, path, uid)
+    expected_parent = (rs["staging"] / f"tactical-native-{job_id}").resolve()
     if path.is_symlink() or not path.is_dir():
         raise SystemExit("invalid Tactical backup privileged workspace")
     resolved = path.resolve()

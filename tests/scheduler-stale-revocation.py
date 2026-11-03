@@ -11,7 +11,7 @@ from contextlib import nullcontext
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "framwork/tec_tac/scheduler.py"
 TREE = ast.parse(SOURCE.read_text(encoding="utf-8"), filename=str(SOURCE))
-WANTED = {"recover_stale_runs", "_queue_run"}
+WANTED = {"recover_stale_runs", "_queue_run", "schedule_run_time_limits"}
 NODES = [node for node in TREE.body if isinstance(node, ast.FunctionDef) and node.name in WANTED]
 assert {node.name for node in NODES} == WANTED
 MODULE = ast.Module(body=NODES, type_ignores=[])
@@ -108,7 +108,7 @@ sys.modules["tacticalrmm.celery"] = celery_mod
 class AsyncTask:
     def __init__(self):
         self.calls = []
-    def apply_async(self, *, args, time_limit):
+    def apply_async(self, *, args, time_limit, soft_time_limit=None):
         self.calls.append((list(args), time_limit))
         return types.SimpleNamespace(id="celery-456")
 
@@ -144,6 +144,7 @@ ns = {
     "TecTacSchedulerState": State,
     "DEFAULT_RUNNING_STALE_GRACE": dt.timedelta(minutes=5),
     "MAX_ACTION_TIMEOUT_SECONDS": 604800,
+    "SCHEDULE_RUN_SOFT_LIMIT_MARGIN_SECONDS": 60,
     "_ACTIONS": {"test.action": Action()},
     "_as_utc": as_utc,
     "queued_stale_deadline": queued_deadline,

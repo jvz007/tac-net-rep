@@ -180,7 +180,7 @@ QUEUED = []
 
 
 class FakeTask:
-    def apply_async(self, *, args, time_limit):
+    def apply_async(self, *, args, time_limit, soft_time_limit=None):
         if FAIL_QUEUE[0]:
             raise RuntimeError("broker down")
         QUEUED.append(args[0])

@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.109",
+  "version": "1.17.110",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.17.109.md",
-      "size": 6326,
-      "sha256": "ae76f404f23c0b1d3c8a2ab6e4d67c669fbf1bc7c49222bafaf9fbd63bf84cd4"
+      "path": "RELEASE_NOTES_1.17.110.md",
+      "size": 11270,
+      "sha256": "b0d80be3aa46e160f5efd1a12d1b5023250bc951f94d0a9e7d541483ae5f833b"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "593425f58b7ec48b22c0095663f72d58dcba9ddb2bf85639ff3d8436c3bef20f"
+      "sha256": "7b6ef390a246e8e2c4e415eb798442571371fa0583b9b03e42609db54e037af9"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -1157,6 +1157,11 @@
       "sha256": "3f6be5b16cf74d3d2304104e0fef755183f96907dd419defe33b14c2b74c7b20"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.109.md",
+      "size": 6326,
+      "sha256": "ae76f404f23c0b1d3c8a2ab6e4d67c669fbf1bc7c49222bafaf9fbd63bf84cd4"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.11.md",
       "size": 13772,
       "sha256": "84e4f9ea427823efeaf9248f3926735dd9850e2c420411970ef51b7d8310a545"
@@ -1733,8 +1738,8 @@
     },
     {
       "path": "docs/scheduler.md",
-      "size": 42437,
-      "sha256": "a1437c1cfe93a848325a939fe57670ebb0817ac2438f2c538ee2c18071c41bd0"
+      "size": 45689,
+      "sha256": "52b9878fbf4ae11c3d8a46cf263c741ab249db4d5ee49f362e495971b94eccfa"
     },
     {
       "path": "docs/secret-store.md",
@@ -1743,8 +1748,8 @@
     },
     {
       "path": "docs/server-backup-capability.md",
-      "size": 29309,
-      "sha256": "804727dc3405468d00cdd0fceaf5b6ae359f0d50e8388778b972544f5991dc6d"
+      "size": 31987,
+      "sha256": "258ec43b6e04bf2e36501697c9fb99df5d8b2dca76a150d36b6d06d9b4da2c5e"
     },
     {
       "path": "docs/server-maintenance-capability.md",
@@ -2603,8 +2608,8 @@
     },
     {
       "path": "framwork/tec_tac/scheduler.py",
-      "size": 129594,
-      "sha256": "32179661e4244016323713304792b5f5237237cd362e81e32fbff69812fd8488"
+      "size": 130522,
+      "sha256": "e6953d21d82a096d7dbe838dd079a58d22f7ac0382445d6459185a8d79932c21"
     },
     {
       "path": "framwork/tec_tac/scheduler_completion.py",
@@ -2753,8 +2758,8 @@
     },
     {
       "path": "framwork/tec_tac/tasks.py",
-      "size": 13982,
-      "sha256": "3e32a172866404f3530fabc76dba4e82cc3d605bffcb5733db98ff02a82f2313"
+      "size": 14368,
+      "sha256": "45c339db3369e1441798d5963376f0968731238d8c9c2b939ffaf0fef0633eb8"
     },
     {
       "path": "framwork/tec_tac/tests/__init__.py",
@@ -2933,8 +2938,8 @@
     },
     {
       "path": "scripts/server-backup-helper.py",
-      "size": 257195,
-      "sha256": "e638ac50cf406c64e42c073f23f75e858ec0d01484848c5a0da1b86c687dac42"
+      "size": 268324,
+      "sha256": "e9ad140f81ad862fdaee1c5a689dccf3136057b6f63539ba0f29db89d58ca8b7"
     },
     {
       "path": "scripts/server-maintenance-helper.py",
@@ -2948,8 +2953,8 @@
     },
     {
       "path": "scripts/tactical-backup-sudo.py",
-      "size": 3706,
-      "sha256": "a7cf11fe2902f8f15e35f8d6711717118c0c84a8aede36e59e6ad7ee0b727443"
+      "size": 3812,
+      "sha256": "fde28f07d0190c7ff85fb0345c65d78a351d080e4c6534990c9594c972c11b7b"
     },
     {
       "path": "scripts/tec-tac-config.sh",
@@ -2969,7 +2974,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "78405e8a112d7255be07203db7ba6c050e9f3a848d03f53e235f25a308541df9"
+      "sha256": "aa3a3270c6b04f09e6c6cb4f74e7847b04d6241f35ca1d0900001fd36ba985c7"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -4898,8 +4903,8 @@
     },
     {
       "path": "tests/scheduler-completion-harness-1.17.61.py",
-      "size": 24336,
-      "sha256": "cbc6b7b474fd2f826a8d3024886bd6c6e05ad805ad231b55841fbda167380597"
+      "size": 24358,
+      "sha256": "12b47660b48e0a759bf461f123a130ad51e8beb10648fd76f77adf372e61ae1a"
     },
     {
       "path": "tests/scheduler-completion-kind-1.17.62.py",
@@ -5043,13 +5048,13 @@
     },
     {
       "path": "tests/scheduler-one-off-retry-1.17.18.py",
-      "size": 15046,
-      "sha256": "c57840d60918e08d51d0e9c1c215f837208cadcb31c222d1b2eff460452a25d6"
+      "size": 15068,
+      "sha256": "ed542eb4f49b7ce35f98e25970cee6aef2a84f9b95a0fa75336ef74a1cf37a11"
     },
     {
       "path": "tests/scheduler-one-off-run-1.17.16.py",
-      "size": 27627,
-      "sha256": "e8ac5df7413822e737566e3e686d64b7745bf76f32d174ddb7e8b262429633bb"
+      "size": 27649,
+      "sha256": "54a665220358fbe9b8b32e6862108d358c1bb2755fd81f3cf04bc3fb236667e7"
     },
     {
       "path": "tests/scheduler-one-off-run-now-1.17.17.py",
@@ -5123,8 +5128,8 @@
     },
     {
       "path": "tests/scheduler-stale-revocation.py",
-      "size": 6975,
-      "sha256": "d9d6b3613a95f8078ab6bebee15f6b2e96ea2b47984b22aca8dff7889ab5630f"
+      "size": 7075,
+      "sha256": "9ca050d1059e7b0d33a6162134c76fc34cd0c8b8ec62545cb67ba9a20e97b1ea"
     },
     {
       "path": "tests/scheduler-tactical-permission-1.17.17.py",
@@ -5740,6 +5745,11 @@
       "path": "tests/system-writes-table-1.17.70.py",
       "size": 7385,
       "sha256": "a17bca9541f15fadeb9933789b5e196f7c7cd71875295e6577900e1e53a8dec4"
+    },
+    {
+      "path": "tests/tactical-1.6.1-compat-1.17.110.py",
+      "size": 20590,
+      "sha256": "37cd87d2379d39dc361bf5e23c53805480feb40c3c6072e143ea7746d491cf79"
     },
     {
       "path": "tests/tactical-operation-action-by-body-1.17.45.py",

@@ -268,7 +268,7 @@ The report separates `artifact_valid` from `target_ready`. `ok` is true only whe
 
 For `tactical` mode only the Tactical component is hashed/validated; an unused corrupt Tec-Tac component does not fail the artifact result. `tec_tac` behaves symmetrically. Legacy native `rmm-backup-*.tar` files are valid only for `tactical` mode.
 
-Current Tactical compatibility reporting tracks the inspected upstream baseline of backup script v34 and restore script v67. Target preflight is read-only and covers OS/architecture, memory, staging disk space, required executables, Tactical identity/current installation requirements, DNS needed by the current Tactical restore path, and whether another Core backup/restore mutation is active.
+Current Tactical compatibility reporting tracks the inspected upstream baselines: backup script v34 and restore script v67 (Tactical 1.5.2), and backup script v35 and restore script v68 (Tactical 1.6.1, since Core 1.17.110). Target preflight is read-only and covers OS/architecture, memory, staging disk space, required executables, Tactical identity/current installation requirements, DNS needed by the current Tactical restore path, and whether another Core backup/restore mutation is active.
 
 ## Restore overrides and native-backup trust boundary (1.4.0)
 
@@ -320,11 +320,11 @@ result = backup.restore_backup(
 
 Core now validates the exact `rmm-backup-*.tar` emitted by Tactical `backup.sh` immediately after creation and before SHA-256 calculation, recovery-bundle finalisation or destination upload. A failed native validation fails the backup job and the invalid native TAR is removed.
 
-Tactical `backup.sh` v34 still uses `sudo` for a small fixed set of root-owned backup sources but does not fail closed when those commands fail. Core therefore supplies a narrow compatibility shim only while the Tactical backup is running. The shim can request only fixed collection operations for nginx configuration, Tactical systemd units, `/etc/conf.d`, optional `/etc/letsencrypt` and optional `/opt/tactical`. The privileged helper independently binds every request to the active opaque `create_backup` job and its job-owned Tactical temporary workspace. No caller-provided shell command, executable, arbitrary source path or arbitrary destination path is accepted.
+Tactical `backup.sh` v34 and v35 still use `sudo` for a small fixed set of root-owned backup sources but does not fail closed when those commands fail. Core therefore supplies a narrow compatibility shim only while the Tactical backup is running. The shim can request only fixed collection operations for nginx configuration, Tactical systemd units, `/etc/conf.d`, optional `/etc/letsencrypt` and optional `/opt/tactical`. The privileged helper independently binds every request to the active opaque `create_backup` job and its job-owned Tactical temporary workspace. No caller-provided shell command, executable, arbitrary source path or arbitrary destination path is accepted.
 
 ## 1.15.7 restore-script OS override execution
 
-When `target.os` has a valid persisted override audit ID, Core prepares a staged Tactical `restore.sh` before any destructive action. The patch is bound to the inspected Tactical restore baseline (`SCRIPT_VERSION=67`) and requires the exact known OS-support rejection block to occur once. Only that rejection block is removed; real `lsb_release` OS identity, release and codename variables remain unchanged and continue to drive repository/package logic.
+When `target.os` has a valid persisted override audit ID, Core prepares a staged Tactical `restore.sh` before any destructive action. The patch is bound to the inspected Tactical restore baselines (`SCRIPT_VERSION=67`, and `68` since 1.17.110) and requires the exact known OS-support rejection block to occur once. Only that rejection block is removed; real `lsb_release` OS identity, release and codename variables remain unchanged and continue to drive repository/package logic.
 
 If the restore-script version or expected OS-check block differs, Core aborts before stopping services or moving `/rmm`. Without an authorized `target.os` override, Core copies Tactical `restore.sh` byte-for-byte unchanged.
 
@@ -447,3 +447,20 @@ Read the outcome with `get_job_status(job_id=...)`. The result rule of 1.10.0 ap
 - `start_apply_retention` deletes archives. It is listed under `dangerous_operations` next to `restore_backup` and `start_restore_backup`. It adds no authority: the calling module keeps its own role check, its own plan guards and its own confirmation.
 - The waiting `get_status` (120 s) and `apply_retention` (7200 s) are unchanged.
 - Core publishes no helper version. For `validate_destination`, a missing `stage` in the result is the only sign of a helper older than 1.17.54.
+
+## Tactical 1.5.2 and 1.6.1 (1.17.110)
+
+Core backup and restore work on both Tactical versions. Core reads `SCRIPT_VERSION` from the installed script and picks what to do.
+
+| Script | Tactical | What Core does |
+|---|---|---|
+| `backup.sh` v34 | 1.5.2 | Runs it with `TMPDIR` set to the job's staging folder (`mktemp -t` honours it). The privileged helper accepts only a `tacticalrmm-*` folder inside `staging/tactical-native-<job>`, as before. |
+| `backup.sh` v35 | 1.6.1 | The script always runs `mktemp -d -p /var/tmp`, which ignores `TMPDIR`. Before it runs, Core checks that `/var/tmp` is a real root-owned folder with the sticky bit and writes a root-only binding file (`staging/tactical-workspace-<job>.json`, mode 0600) with the `tacticalrmm-*` folders that already exist. The privileged helper then accepts exactly one new folder `/var/tmp/tacticalrmm-` + 21 letters or digits: not in that list, not a link (checked with `lstat` and opened with `O_NOFOLLOW`), owned by the Tactical service user and mode 0700, as `mktemp` creates it. The first accepted folder is recorded in the binding; any other folder is refused for the rest of the job. After the script ends, Core removes that folder (link-safe removal) and the binding. A `tacticalrmm-*` folder the job never claimed is left alone and logged. |
+| `backup.sh`, any other version | - | Refused before anything is created: "Tactical backup.sh vN is not a version Core has checked (v34 or v35)". |
+| `restore.sh` v67 | 1.5.2 | Supported systems: Debian 11 and 12, Ubuntu 22.04. A `target.os` override removes the v67 OS gate only. |
+| `restore.sh` v68 | 1.6.1 | Supported systems: Debian 13 and Ubuntu 26.04. A `target.os` override removes the v68 OS gate only (written as `[[ ... ]] \|\| { ... }`). |
+| `restore.sh`, any other version | - | Validation adds a failed `target.restore_script` check, which no override can accept. A restore refuses before any destructive step, with or without an override. |
+
+Validation now reports a `target.restore_script` check ("Tactical restore script") for `full` and `tactical` modes, and `compatibility_baseline` reads `{"tactical_backup_script": "34, 35", "tactical_restore_script": "67, 68"}`. The native archive layout is the same for v34 and v35, so `validate_tactical_native_archive` is unchanged.
+
+An upgraded Debian 12 or Ubuntu 22.04 server can run Tactical 1.6.1, but its `restore.sh` v68 refuses that system. A restore there needs a `target.os` override (the same audited path as before) or a new server on Debian 13 or Ubuntu 26.04.

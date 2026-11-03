@@ -525,3 +525,22 @@ A module can ask Core to run a fixed piece of Tactical work for a named owner wh
 ## The Communicator background sending schedule (Core 1.17.77)
 
 A person makes it in the Scheduler like any other schedule: action `remote-background.command` (module `communicator`, label "Communicator background sending"), a client or site target inside their scope, their timing, and the parameters Communicator returns from `GET /api/tfd/communicator/background-worker/`. Core re-reads the client's or site's endpoints at every run and cuts them to the scope stored when the schedule was saved. Full answers: `docs/system-actions.md`, "The Communicator background sending schedule".
+
+## Time limits and worker slots on Tactical 1.5.2 and 1.6.1 (Core 1.17.110)
+
+Tactical 1.6.1 starts its Celery worker with `--time-limit=14400 --soft-time-limit=14100 --autoscale=10,4` (it was `--time-limit=86400 --autoscale=20,2`). A task that sets no soft limit inherits the worker's 14 100 seconds (3 h 55 min), so before 1.17.110 a schedule run longer than that would have been cut with `SoftTimeLimitExceeded`.
+
+Since 1.17.110 Core sets both limits itself, so the worker default never applies:
+
+- `_queue_run` sends `time_limit` = action timeout + 300 seconds (the stale-run grace, as before) and `soft_time_limit` = that hard limit - 60 seconds. `tec_tac.scheduler.schedule_run_time_limits(timeout_seconds)` returns the pair. A one-hour action gets 3 900 and 3 840 seconds; a seven-day action (604 800 seconds, the maximum) gets 605 100 and 605 040.
+- The task itself, `tec_tac.execute_schedule_run`, declares the same seven-day pair (`time_limit=605100`, `soft_time_limit=605040`) as a backstop for any dispatch that does not pass limits.
+- The soft limit always falls after the action's own `timeout_seconds`. A handler that gets `SoftTimeLimitExceeded` is past its declared timeout; Core records the run as it does any other exception (retried while retries remain, then failed). Stale recovery still fails a run that is still Running at timeout + 5 minutes.
+- The same values apply on Tactical 1.5.2, where the worker has no soft limit. Nothing changes for a run there.
+
+### What a 2 000-endpoint run should expect
+
+- **One run holds one worker slot for its whole duration.** Tactical 1.6.1 runs at most 10 Celery workers (4 when idle), shared with Tactical's own tasks (checks, alerts, agent updates, reports). A schedule run is one task, however many endpoints it targets. Ten long runs at the same time would leave Tactical with no free worker, so stagger long schedules and keep their concurrency on `skip`.
+- **Plan the time from the per-endpoint cost.** A handler that sends one Tactical command per endpoint, one after the other, needs about 2 000 x the per-command time. At 1 to 2 seconds per online endpoint that is about 35 to 70 minutes. On Tactical 1.6.1 a command to an *offline* agent waits out its full timeout before it fails (NATS "no responders" now waits), so 200 offline endpoints at a 30-second timeout add about 100 minutes. Check each endpoint's online status first (the Agents contract) and skip offline ones.
+- **Set `timeout_seconds` to cover the whole run, with margin.** For 2 000 endpoints declare at least 7 200 seconds (two hours); the soft and hard limits follow it. Anything over 14 100 seconds is now safe, because Core sets the soft limit itself.
+- **Long work belongs in pending completion.** A run that waits on something outside Core (an agent job, a server-maintenance job) should return `PendingCompletion` and free its worker at once; see "A run that finishes later: pending completion" above. Only work the handler does itself should hold the slot.
+- **Fan-out runs are not split by Core.** Core does not cut a 2 000-endpoint run into several tasks. A module that needs parallel work uses its own batching inside the run or several schedules; it never starts its own Celery tasks.

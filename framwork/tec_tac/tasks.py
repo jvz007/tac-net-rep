@@ -107,7 +107,10 @@ def _retryable(exc) -> bool:
     return True
 
 
-@app.task(bind=True, name="tec_tac.execute_schedule_run", time_limit=605100)
+# 1.17.110: explicit soft and hard limits. Tactical 1.6.1 starts its worker with --soft-time-limit=14100, and a task that sets no
+# soft limit inherits it, so a run longer than 3 h 55 min would be cut. These defaults cover the longest action (604 800 seconds);
+# _queue_run sends the limits for the action it queues (soft = timeout + 240, hard = timeout + 300).
+@app.task(bind=True, name="tec_tac.execute_schedule_run", time_limit=605100, soft_time_limit=605040)
 def execute_schedule_run(self, run_id: str):
     # Claim exactly once. Duplicate broker delivery must not execute an action
     # twice, and a stale-recovery decision must not be overwritten by a late task.
