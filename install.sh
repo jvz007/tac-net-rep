@@ -312,6 +312,15 @@ else
     [[ "${SECRET_KEY_FACTS}" == "root:${TACTICAL_GROUP} 640 32" ]] || fail "The secret store master key has the wrong owner, mode or size (${SECRET_KEY_FACTS}; expected root:${TACTICAL_GROUP} 640 32). See Troubleshooting."
     log "Secret store master key: created (${SECRET_MASTER_KEY}, root:${TACTICAL_GROUP} 0640). Keep one offline copy of it; it is not in any backup."
 fi
+# 1.17.102: record the group the key was given, so Core checks the same group (it is not always "tactical"). Root-owned, 0640.
+SECRET_GROUP_FILE="${SECRETS_ROOT}/key-group"
+[[ "${TACTICAL_GROUP}" =~ ^[a-z_][a-z0-9_.-]{0,63}$ ]] || fail "The Tactical group name '${TACTICAL_GROUP}' is not one Core can record for the secret store. See Troubleshooting."
+# Written in place (root only until the owner and mode are set): until it is complete Core fails closed, never open.
+rm -f "${SECRET_GROUP_FILE}"
+(umask 077 && printf '%s\n' "${TACTICAL_GROUP}" > "${SECRET_GROUP_FILE}") || fail "Could not record the secret store key group."
+chown root:"${TACTICAL_GROUP}" "${SECRET_GROUP_FILE}"
+chmod 0640 "${SECRET_GROUP_FILE}"
+log "Secret store key group: recorded (${SECRET_GROUP_FILE}: ${TACTICAL_GROUP})"
 # END secret-store-master-key
 
 run_as_tactical() {

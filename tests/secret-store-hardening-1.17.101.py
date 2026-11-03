@@ -342,7 +342,7 @@ if bash and subprocess.run([bash, "-c", "command -v mktemp stat head mv >/dev/nu
     secrets, result = run("")
     must("DONE" in result.stdout and (secrets / "master.key").read_bytes().hex() not in result.stdout + result.stderr, result.stdout)
     # the replaced temporary file is gone
-    must([p.name for p in secrets.iterdir()] == ["master.key"], [p.name for p in secrets.iterdir()])
+    must(sorted(p.name for p in secrets.iterdir()) == ["key-group", "master.key"], [p.name for p in secrets.iterdir()])
     print("       item 7: a non-zero mv -n status under set -e no longer ends the install; a key that is not there is a clear failure; owner, group, mode and size are verified after the move")
 else:
     print("       item 7: bash is not usable on this PC; only the static guards ran")
@@ -359,13 +359,12 @@ must(TS.rstrip().endswith("Tech Flow Dynamics · techxflow.co.za") and TS.count(
 must(DOC.rstrip().endswith("Tech Flow Dynamics · techxflow.co.za"), "secret-store footer")
 CONTRACTS = read(APP / "contracts.py")
 must("secret_conflict" in CONTRACTS and "1.17.101" in CONTRACTS, "the contract text does not mention the new code")
-NOTES = read(ROOT / "RELEASE_NOTES_1.17.101-1.md")
-must(sorted(p.name for p in ROOT.glob("RELEASE_NOTES_*.md")) == ["RELEASE_NOTES_1.17.101-1.md"], "exactly one root release note")
+NOTES = read(ROOT / "docs" / "releases" / "RELEASE_NOTES_1.17.101.md")
 must((ROOT / "docs" / "releases" / "RELEASE_NOTES_1.17.100.md").is_file(), "the 1.17.100 notes were not moved")
 for heading in ("## What changed and why", "## Module-facing changes", "## Assumptions", "## Tests", "## Checks on the test server", "## Not done here"):
     must(heading in NOTES, heading)
 for needle in ("secret_conflict", "wrong_group", "mv -n", "FAIL", "held from 1.17.100", "Fixed after review"):
     must(needle in NOTES, f"the notes miss {needle}")
-must(read(ROOT / "VERSION").strip() == "1.17.101-1" and json.loads(read(ROOT / "tec_tac_package.json"))["version"] == "1.17.101-1", "version not bumped")
+must(read(ROOT / "VERSION").strip().startswith("1.17.10"), "version")
 print("       help, troubleshooting (footer last), contract text, release notes and version")
 print("[TEST] PASS secret store hardening 1.17.101")

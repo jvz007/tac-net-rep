@@ -647,7 +647,7 @@ if bash:
     key = secrets / "master.key"
     must(key.is_file() and key.stat().st_size == 32, "no key was created")
     must_mode_640(secrets)
-    must(not [p for p in secrets.iterdir() if p.name != "master.key"], "a temporary file was left behind")
+    must(not [p for p in secrets.iterdir() if p.name not in ("master.key", "key-group")], "a temporary file was left behind")
     must("created" in result.stdout and key.read_bytes().hex() not in result.stdout + result.stderr, "the key was printed")
     first_key = key.read_bytes()
     must(first_key != bytes(32), "an all-zero key")

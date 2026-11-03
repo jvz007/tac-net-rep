@@ -71,10 +71,11 @@ MAX_VALUE_BYTES = 16 * 1024
 MAX_NAMES_PER_OWNER = 100
 NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
 AUDIT_OBJECT_TYPE = "core_secret"
-KEY_GROUP = "tactical"  # the group install.sh gives the key file (the Tactical user's group)
+KEY_GROUP_PATH = Path("/etc/tec-tac/secrets/key-group")  # 1.17.102: install.sh writes the group name it gave the key (the Tactical user's group)
+_GROUP_NAME_PATTERN = re.compile(r"[a-z_][a-z0-9_.-]{0,63}")
 READ_STATS_SECONDS = 60  # a read updates its counters at most this often
 AUDIT_REPEAT_SECONDS = 300  # one deny or decrypt-failed row per owner, name and reason in this time (per Core process)
-_AUDIT_REPEAT_MAX = 512  # entries kept for that; when full and none has expired, further rows are left out, never flooded
+_AUDIT_REPEAT_MAX = 512  # entries kept for that per row type; when full and none has expired, further rows are left out, never flooded
 _AAD_PREFIX = b"tec-tac/core.secrets/v1\x00"
 _TYPE_TEXT = b"t"
 _TYPE_BYTES = b"b"
@@ -145,9 +146,30 @@ def _key_group_id() -> int | None:
     try:
         import grp
 
-        return grp.getgrnam(KEY_GROUP).gr_gid
+        name = _key_group_name()
+        return None if name is None else grp.getgrnam(name).gr_gid
     except (ImportError, KeyError, OSError):
         return None
+
+
+def _key_group_name() -> str | None:
+    """The group name install.sh recorded beside the key (1.17.102), or ``None``. The record must be a regular file (no link) owned by
+    root, not writable by group or others, small, and hold one plain group name; anything else is ``None`` (a fault, never a default)."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_BINARY", 0)
+    try:
+        fd = os.open(str(KEY_GROUP_PATH), flags)
+    except OSError:
+        return None
+    try:
+        info = _fstat(fd)
+        if not stat_module.S_ISREG(info.st_mode) or getattr(info, "st_uid", 0) != 0 or info.st_mode & 0o022 or info.st_size > 128:
+            return None
+        text = os.read(fd, 129).decode("ascii", "ignore").strip()
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    return text if _GROUP_NAME_PATTERN.fullmatch(text) else None
 
 
 def _key_fault(reason: str, message: str) -> SecretStoreError:
@@ -313,10 +335,11 @@ def _repeat_gate(scope: _Scope, name: str, reason: str) -> int | None:
                 return None
             left_out = entry[1]
         else:
-            if len(_repeat_seen) >= _AUDIT_REPEAT_MAX:
-                for old in [k for k, v in _repeat_seen.items() if now - v[0] >= AUDIT_REPEAT_SECONDS]:
+            # 1.17.102: the cap is per row type (the reason), so unverified callers filling deny rows cannot silence decrypt-failed rows
+            if sum(1 for k in _repeat_seen if k[2] == reason) >= _AUDIT_REPEAT_MAX:
+                for old in [k for k, v in _repeat_seen.items() if k[2] == reason and now - v[0] >= AUDIT_REPEAT_SECONDS]:
                     del _repeat_seen[old]
-                if len(_repeat_seen) >= _AUDIT_REPEAT_MAX:
+                if sum(1 for k in _repeat_seen if k[2] == reason) >= _AUDIT_REPEAT_MAX:
                     return None
             left_out = 0
         _repeat_seen[key] = [now, 0]

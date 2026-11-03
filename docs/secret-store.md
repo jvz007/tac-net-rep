@@ -75,7 +75,7 @@ Expected: the folder `root:tactical` mode `750`; the file `root:tactical 640 32`
 | What you see | What to do |
 |---|---|
 | Log reason `missing` | Restore your offline copy as `root:tactical` 0640. If no secret was ever stored, run the installer: it creates a key. |
-| `wrong_owner`, `wrong_group` or `wrong_mode` | `sudo chown root:tactical /etc/tec-tac/secrets/master.key` and `sudo chmod 0640 /etc/tec-tac/secrets/master.key` |
+| `wrong_owner`, `wrong_group` or `wrong_mode` | Read the group the installer recorded: `sudo cat /etc/tec-tac/secrets/key-group` (normally `tactical`). Then `sudo chown root:<that group> /etc/tec-tac/secrets/master.key` and `sudo chmod 0640 /etc/tec-tac/secrets/master.key`. `wrong_group` also appears when `key-group` is missing or unsafe: run `install.sh` again (it keeps the key and rewrites `key-group`). |
 | `folder_unsafe` (also a link in the folder's place) | `sudo chown root:tactical /etc/tec-tac/secrets` and `sudo chmod 0750 /etc/tec-tac/secrets` |
 | `wrong_size`, `not_a_file`, `placeholder` | The file is damaged. Restore your offline copy. The installer refuses to replace a file of the wrong size, on purpose. |
 | `secret_unreadable` for every secret | The key was replaced. Restore the key that made the secrets, or have each module store its values again. |
