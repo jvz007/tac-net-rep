@@ -1028,8 +1028,40 @@ def _cached_modules(repo: dict) -> list[dict]:
                 row["download_unavailable"] = True
                 row["download_unavailable_reason"] = RETIRED_RELEASE_REASON
                 row["download_unavailable_state"] = "repository_retired"
+            if repo.get("kind") == _lcs.KIND:
+                # 1.17.108: one state per licensed release, also for a cache written before this release. Only "available" is offered.
+                _lcs.apply_availability(row)
             result.append(row)
     return result
+
+
+MAX_UNAVAILABLE_ROWS = 500
+
+
+def _unavailable_licensed(repos: list[dict]) -> list[dict]:
+    """1.17.108: the licensed releases that are listed but not offered, each with its state and Core's reason. Display only: nothing here
+    can be staged, and no field comes from the server except the id, name, version and channel already in the cache."""
+    rows = []
+    for repo in repos:
+        if repo.get("kind") != _lcs.KIND:
+            continue
+        for item in _cached_modules(repo):
+            state = item.get("availability_state")
+            if not item.get("download_unavailable") or state not in _lcs.ROW_TEXT or item.get("download_unavailable_state") != state:
+                continue
+            rows.append({
+                "id": item.get("id"),
+                "name": item.get("name") or item.get("id"),
+                "version": item.get("version"),
+                "channel": item.get("channel"),
+                "category": item.get("category"),
+                "repository_id": repo["id"],
+                "repository_name": repo["name"],
+                "availability_state": state,
+                "reason": _lcs.ROW_TEXT[state],
+            })
+    rows.sort(key=lambda row: (str(row["id"]), str(row["version"])))
+    return rows[:MAX_UNAVAILABLE_ROWS]
 
 
 def _candidate_compatibility(candidate: dict, installed: dict[str, dict]) -> dict:
@@ -1182,6 +1214,7 @@ def online_catalog() -> dict:
         "count": len(items),
         "installed_only": installed_only,
         "availability": _availability(repos, len(items), len(installed_only)),
+        "unavailable": _unavailable_licensed(repos),
         "repositories": all_repository_status(),
     }
 
@@ -1220,7 +1253,9 @@ def stage_repository_package(repository_id: str, module_id: str, version: str | 
         # 1.17.100: a repository that refused its credentials says so; a retired one keeps the 1.17.99 message.
         refused = all(item.get("download_unavailable_state") == "credentials_rejected" for item in candidates)
         if repo.get("kind") == "licensing":
-            raise ModuleRepositoryError(_lcs.message_for("not_in_licence"))
+            # 1.17.108: the reason of the release asked for (not in the licence, no category, channel, missing ...).
+            state = candidates[0].get("download_unavailable_state")
+            raise ModuleRepositoryError(_lcs.ROW_TEXT.get(state) or _lcs.message_for("not_in_licence"))
         raise ModuleRepositoryError(CREDENTIALS_REJECTED_MESSAGE if refused else RETIRED_MESSAGE)
     candidates = [item for item in candidates if not item.get("download_unavailable")]
     candidate = candidates[0]

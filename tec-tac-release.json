@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.107",
+  "version": "1.17.108",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.17.107.md",
-      "size": 6308,
-      "sha256": "be3d580f07290b164572ded271bea49d40026e941b297417cc1ecae2a5d55dcb"
+      "path": "RELEASE_NOTES_1.17.108.md",
+      "size": 6121,
+      "sha256": "3f6be5b16cf74d3d2304104e0fef755183f96907dd419defe33b14c2b74c7b20"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "fc9e097308fef1f4a4b7ca77765a52b155d36fdb504abdda61a77ea7a25b68da"
+      "sha256": "f6f6fafc703ea189bdfe63f4119385a945bf2425f61ee2de4af4a82282a9fe71"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -178,8 +178,8 @@
     },
     {
       "path": "docs/module-repositories.md",
-      "size": 29399,
-      "sha256": "cc156aa09083f3661c1503d27ae72af9e081dedae4c87aa5c90f92f3c0dfe838"
+      "size": 31110,
+      "sha256": "a2c72dd48e20b87a38edb2c5a2f460fb3a39e69f7dc55fa63c5c8323afd3fa56"
     },
     {
       "path": "docs/module-routes.md",
@@ -1147,6 +1147,11 @@
       "sha256": "7373d4af8c1d901d24a13792d179998367c74c7d3c7b9e11f135870c2f416856"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.107.md",
+      "size": 6308,
+      "sha256": "be3d580f07290b164572ded271bea49d40026e941b297417cc1ecae2a5d55dcb"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.11.md",
       "size": 13772,
       "sha256": "84e4f9ea427823efeaf9248f3926735dd9850e2c420411970ef51b7d8310a545"
@@ -1783,8 +1788,8 @@
     },
     {
       "path": "docs/troubleshooting-diagnostics.md",
-      "size": 10373,
-      "sha256": "d41b9a36262369bd630bc235c75157ec7fa3eea3ec014a3148b87999a42524a7"
+      "size": 11412,
+      "sha256": "87a57d6dbe16e4a1bf86d37c2b02c8411ab0da1b6de3a3afc05540defc03ede7"
     },
     {
       "path": "docs/trusted-publisher-verification.md",
@@ -2048,8 +2053,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 461666,
-      "sha256": "05080650e8afe7864c555978c94f01fe1311bb7f1dd888223bfa23cefd5c25d3"
+      "size": 463074,
+      "sha256": "26c1ae0b220cb1cded8de7869898f843395d3ebf9f77c331ea368fe2e223fe04"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -2118,8 +2123,8 @@
     },
     {
       "path": "framwork/tec_tac/licensing_catalogue_source.py",
-      "size": 23814,
-      "sha256": "2aec33f9a31bc0cbebd4bc1555bd8b1f8998199e576ed85962d0a4d610e24ffd"
+      "size": 26841,
+      "sha256": "da5c810f43201751a8195da747971a28786d761f0d8fcea7ec97e7e17742b7e9"
     },
     {
       "path": "framwork/tec_tac/licensing_server_url.py",
@@ -2468,8 +2473,8 @@
     },
     {
       "path": "framwork/tec_tac/module_repository.py",
-      "size": 83133,
-      "sha256": "5b2e2a6334a4ac0025604a161dd8a7adffa1a98f55c209c2f01d29bc65043988"
+      "size": 84942,
+      "sha256": "955571483426c446e7a164eab73be5a22eb45f050f6a3a1b77e392b70b73639b"
     },
     {
       "path": "framwork/tec_tac/module_repository_views.py",
@@ -2959,7 +2964,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "d8b7a383af9a922f8ebe1abb5c1a7e3e97a244ce5920ae34c4d4052d1a58f951"
+      "sha256": "c95d459dd6c66962dbac8ea82756685a4fdae8aa8205e75d2991fc62f796b41b"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -3840,6 +3845,11 @@
       "path": "tests/legacy/tracker-final-closure-1.15.171.py",
       "size": 3634,
       "sha256": "7248d88df08c3d04110df4b8ae900a8f2f2a23a50f8feba3965d3c84e3b82a5a"
+    },
+    {
+      "path": "tests/licensing-availability-1.17.108.py",
+      "size": 13476,
+      "sha256": "d032d9dfcab542fa8e663954baf2881cecf30698992c7ed62c43fffebc419762"
     },
     {
       "path": "tests/licensing-download-1.17.103.py",

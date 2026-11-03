@@ -60,6 +60,7 @@ TEXT = {
     "licence_expired": "The licence has expired, so the licensed catalogue and new module installs are stopped. Check the Licensing page.",
     "licence_grace_expired": "Licensing has no recent verified licence (the 7 day offline grace has ended, or none was checked yet). Use Refresh now on the Licensing page, then sync again.",
     "licence_refused": "The Licensing Server refused this server's licence, so new module installs are stopped. Check the Licensing page.",
+    "licence_policy_unreadable": "This Licensing version cannot read the licence's module policy. Update Licensing, then use Refresh now.",
     "channel_not_permitted": "This licence does not allow the release channel set for this repository. Pick another channel, or leave it empty to use the licence's own. Core does not switch channels for you.",
     "licensing_unavailable": "Core could not get an answer from the Licensing module or the Licensing Server. Check that the Licensing module is installed, enabled and healthy, then try again.",
     "invalid_response": "The Licensing answer was not in the expected form, so Core did not use it. Try again later.",
@@ -77,14 +78,29 @@ TEXT = {
 KNOWN_STATES = frozenset({
     "ok", "not_registered", "licence_revoked", "licence_expired", "licence_grace_expired", "licence_refused", "channel_not_permitted",
     "licensing_unavailable", "invalid_response", "bad_request", "release_not_found", "audit_unavailable",
+    "licence_policy_unreadable",  # 1.17.108: Licensing 0.10.2 cannot read the licence's module policy (fails closed like grace_expired)
 })
 # A temporary fault keeps the last good list (installs still need a fresh grant). Every other state empties the list: nothing is offered.
 TRANSIENT_STATES = frozenset({"licensing_unavailable", "invalid_response", "audit_unavailable"})
 # States that need an administrator's attention but are not a failure of the sync itself (the daily run does not count them as failed).
 ATTENTION_STATES = frozenset({
     "not_registered", "licence_revoked", "licence_expired", "licence_grace_expired", "licence_refused", "channel_not_permitted",
+    "licence_policy_unreadable",
 })
 AVAILABILITY_STATES = tuple(sorted(KNOWN_STATES - {"ok"}))
+
+# 1.17.108: the state of one licensed release, read from the Licensing Server's entitled, availability and category (handoff v0.1.44,
+# section 4 item 4). Only "available" is offered for staging. Every other state is listed with its reason and never offered.
+CATEGORIES = frozenset({"core", "server", "premium"})
+ROW_AVAILABLE = "available"
+ROW_TEXT = {
+    "entitled_unavailable": "Your licence includes this module, but the Licensing Server says this release is not available now. Sync again later.",
+    "blocked_by_channel": "This release is not offered on the release channel set for this repository. Pick another channel, or leave it empty to use the licence's own.",
+    "missing_or_dependency": "This release is missing on the Licensing Server, or a module it needs is not available. Sync again later, or install what it needs first.",
+    "not_in_licence": TEXT["not_in_licence"],
+    "unclassified": "The Licensing Server lists this module with no category, so Core does not offer it. Every module needs one (core, server or premium).",
+}
+ROW_STATES = (ROW_AVAILABLE, *sorted(ROW_TEXT))
 
 
 class LicensingSourceError(RuntimeError):
@@ -297,14 +313,48 @@ def _release_row(module: dict, release: dict) -> dict:
         "publisher_id": publisher_id,
         "key_id": key_id,
         "entitled": module.get("entitled") is True,
-        "category": _text(module.get("category"), 32),
+        "category": _category(module.get("category")),
         "entitlement_source": _text(module.get("entitlement_source"), 32),
         "availability": _text(module.get("availability"), 32),
     }
-    if not row["entitled"]:
+    return apply_availability(row)
+
+
+def _category(value: Any) -> str | None:
+    """core, server or premium; anything else (None, missing, unclassified or an unknown word) is None (AD-21)."""
+    text = _text(value, 32)
+    return text.lower() if text and text.lower() in CATEGORIES else None
+
+
+def row_availability(row: dict) -> str:
+    """One state per licensed release (1.17.108). Order: not in the licence, no category, then the server's availability word.
+
+    The server's word is read loosely (it is free text up to 32 characters): no word or "available" is available; a word that names the
+    channel is blocked_by_channel; a word that names a missing release or a dependency is missing_or_dependency; any other word is
+    entitled_unavailable. An unknown word is never read as available."""
+    if row.get("entitled") is not True:
+        return "not_in_licence"
+    if _category(row.get("category")) is None:
+        return "unclassified"
+    word = (row.get("availability") or "").strip().lower()
+    if word in ("", ROW_AVAILABLE):
+        return ROW_AVAILABLE
+    if "channel" in word:
+        return "blocked_by_channel"
+    if "missing" in word or "dependen" in word:
+        return "missing_or_dependency"
+    return "entitled_unavailable"
+
+
+def apply_availability(row: dict) -> dict:
+    """Set availability_state on a licensed row; a row that is not available is marked never offered, with its reason. Idempotent, and
+    it never clears a mark another rule set (a retired or refused repository)."""
+    state = row_availability(row)
+    row["availability_state"] = state
+    if state != ROW_AVAILABLE and not row.get("download_unavailable"):
         row["download_unavailable"] = True
-        row["download_unavailable_reason"] = TEXT["not_in_licence"]
-        row["download_unavailable_state"] = "not_in_licence"
+        row["download_unavailable_reason"] = ROW_TEXT[state]
+        row["download_unavailable_state"] = state
     return row
 
 

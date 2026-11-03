@@ -265,6 +265,20 @@ The online catalogue lists the modules your licence includes, and installs them,
 | `release_mismatch` | The downloaded files do not match what the catalogue listed for this release, so nothing was staged. | Do not install it. Sync again. The files differ from what the catalogue listed. |
 | `not_in_licence` | This licence does not include this module, so it cannot be downloaded. | The module is not part of the licence. Ask Tech Flow Dynamics. |
 | `audit_not_saved` | The download did not start because its audit record could not be saved. Try again. | Try again. Core does not start a download when it cannot write the audit record first. |
+| `licence_policy_unreadable` | This Licensing version cannot read the licence's module policy. Update Licensing, then use Refresh now. | Update the Licensing module, then use Refresh now on the Licensing page. New installs stay stopped and installed modules keep working (1.17.108). |
+
+### Release states in the licensed catalogue (1.17.108)
+
+Each licensed release now has one state. Only `available` can be installed. Every other release is listed under **Not available** with its reason, and Core never offers it.
+
+| State | What you see | What to do |
+|---|---|---|
+| `available` | The release is listed with an Install button. | Nothing. |
+| `entitled_unavailable` | Your licence includes this module, but the Licensing Server says this release is not available now. Sync again later. | Sync again later. If it stays, ask Tech Flow Dynamics. |
+| `blocked_by_channel` | This release is not offered on the release channel set for this repository. Pick another channel, or leave it empty to use the licence's own. | Change the channel of the source, or empty it. |
+| `missing_or_dependency` | This release is missing on the Licensing Server, or a module it needs is not available. Sync again later, or install what it needs first. | Sync again later, or install the module it needs first. |
+| `not_in_licence` | This licence does not include this module, so it cannot be downloaded. | The module is not part of the licence. Ask Tech Flow Dynamics. |
+| `unclassified` | The Licensing Server lists this module with no category, so Core does not offer it. Every module needs one (core, server or premium). | Ask Tech Flow Dynamics to classify the module on the Licensing Server, then sync again. |
 
 ### Troubleshooting
 
