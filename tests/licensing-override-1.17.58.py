@@ -77,7 +77,7 @@ def fake_install(upload_id, requested_order=None, requested_by=None, disable_rep
     return {"job_id": "j1", "licensing": cand["licensing_status"]}
 
 
-def fake_repo_stage(repository_id, module_id, version, allow_source_change=False):
+def fake_repo_stage(repository_id, module_id, version, allow_source_change=False, request=None):
     WORK.append("repo-stage")
     cand = candidate()
     gate(cand)

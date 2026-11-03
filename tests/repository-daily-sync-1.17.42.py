@@ -136,7 +136,7 @@ ns["logger"] = logging.getLogger("tec-tac-test")
 names = {
     "SYNC_ACTION_ID", "SYNC_OWNER_MODULE", "SYNC_OWNER_KEY", "SYNC_RUN_TIME", "SYNC_MISSED_GRACE_MINUTES",
     "_utcnow", "_default_config", "load_repositories", "public_repository", "list_repositories", "_skipped_summary",
-    "_repo", "repository_status", "sync_all", "run_scheduled_sync", "ensure_repository_sync_schedule", "sync_schedule_status",
+    "_repo", "repository_status", "sync_all", "run_scheduled_sync", "_has_credentials", "_legacy_error_status", "_cache_credentials_rejected", "_cache_retired", "_repo_raw", "RETIRED_STATUSES", "CREDENTIALS_STATUSES", "_LEGACY_RETIRED_ERROR", "ensure_repository_sync_schedule", "sync_schedule_status",
     "_atomic_repo_json", "_cached_modules",
 }
 exec(compile(ast.Module(body=extract(REPO_TREE, names), type_ignores=[]), str(REPO_PATH), "exec"), ns)  # noqa: S102 - test only

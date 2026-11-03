@@ -314,13 +314,21 @@ else
 fi
 # 1.17.102: record the group the key was given, so Core checks the same group (it is not always "tactical"). Root-owned, 0640.
 SECRET_GROUP_FILE="${SECRETS_ROOT}/key-group"
-[[ "${TACTICAL_GROUP}" =~ ^[a-z_][a-z0-9_.-]{0,63}$ ]] || fail "The Tactical group name '${TACTICAL_GROUP}' is not one Core can record for the secret store. See Troubleshooting."
-# Written in place (root only until the owner and mode are set): until it is complete Core fails closed, never open.
-rm -f "${SECRET_GROUP_FILE}"
-(umask 077 && printf '%s\n' "${TACTICAL_GROUP}" > "${SECRET_GROUP_FILE}") || fail "Could not record the secret store key group."
-chown root:"${TACTICAL_GROUP}" "${SECRET_GROUP_FILE}"
-chmod 0640 "${SECRET_GROUP_FILE}"
-log "Secret store key group: recorded (${SECRET_GROUP_FILE}: ${TACTICAL_GROUP})"
+if [[ "${TACTICAL_GROUP}" =~ ^[a-z_][a-z0-9_.-]{0,63}$ ]]; then
+    # 1.17.103: written to a temporary file in the same folder, then moved over the record in one step (mv -f), so Core never sees a
+    # half-written or missing record. Until the move it keeps reading the old one, or fails closed (wrong_group) if there was none.
+    SECRET_GROUP_TMP="$(mktemp "${SECRETS_ROOT}/.key-group.XXXXXX")" || fail "Could not create a temporary file in ${SECRETS_ROOT}."
+    (umask 077 && printf '%s\n' "${TACTICAL_GROUP}" > "${SECRET_GROUP_TMP}") || { rm -f "${SECRET_GROUP_TMP}"; fail "Could not record the secret store key group."; }
+    chown root:"${TACTICAL_GROUP}" "${SECRET_GROUP_TMP}"
+    chmod 0640 "${SECRET_GROUP_TMP}"
+    mv -f -- "${SECRET_GROUP_TMP}" "${SECRET_GROUP_FILE}" || { rm -f "${SECRET_GROUP_TMP}"; fail "Could not record the secret store key group."; }
+    log "Secret store key group: recorded (${SECRET_GROUP_FILE}: ${TACTICAL_GROUP})"
+else
+    # 1.17.103: an unusual group name no longer stops the whole install. The record is not written (a stale one is removed), so Core
+    # fails closed with wrong_group for the secret store only. Everything else installs.
+    rm -f "${SECRET_GROUP_FILE}"
+    log "WARNING: the Tactical group name '${TACTICAL_GROUP}' is not one Core can record for the secret store. The record was not written, so the secret store stays closed (wrong_group). Nothing else is affected. See Troubleshooting."
+fi
 # END secret-store-master-key
 
 run_as_tactical() {

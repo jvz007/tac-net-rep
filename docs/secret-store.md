@@ -33,7 +33,7 @@ Read a secret only inside your module's server-side code, at the moment you need
 ## How it is kept
 
 - **Encryption.** AES-256-GCM through the `cryptography` package. Every write gets a new random nonce. The owner id and the name are bound in as authenticated data, so a row copied to another owner or name does not decrypt.
-- **Master key.** `/etc/tec-tac/secrets/master.key`: 32 random bytes, `root:tactical`, mode 0640, in a `root:tactical` 0750 folder. Only `install.sh` creates it. It never overwrites an existing key. Core never creates, repairs or replaces it.
+- **Master key.** `/etc/tec-tac/secrets/master.key`: 32 random bytes, `root:<group in key-group>` (normally `root:tactical`), mode 0640, in a `root:<that group>` 0750 folder. Only `install.sh` creates it. It never overwrites an existing key. Core never creates, repairs or replaces it.
 - **Key id.** Each row records which key made it, so a later key rotation can find the rows to re-encrypt. This release has one key and no rotation command.
 - **Not in a backup.** The routine server backup leaves the secrets folder out, and a restore refuses a bundle that carries it. The key beside the encrypted rows would undo the protection. Keep one offline copy of `master.key`, for example in your password manager.
 
@@ -60,7 +60,7 @@ A successful read writes no row, because a key read on every download would floo
 
 ## Troubleshooting
 
-The installer now checks the key after it creates it: `root:tactical`, mode 640, 32 bytes. If it stops with "wrong owner, mode or size", run the three commands below and send the output.
+The installer now checks the key after it creates it: `root:<group in key-group>` (normally `root:tactical`), mode 640, 32 bytes. If it stops with "wrong owner, mode or size", run the three commands below and send the output.
 
 Check the key as root:
 
@@ -70,13 +70,13 @@ sudo ls -l /etc/tec-tac/secrets/master.key
 sudo stat -c '%U:%G %a %s' /etc/tec-tac/secrets/master.key
 ```
 
-Expected: the folder `root:tactical` mode `750`; the file `root:tactical 640 32`.
+Expected: the folder `root:<group>` mode `750`; the file `root:<group> 640 32`. The group is the one in `/etc/tec-tac/secrets/key-group` (normally `tactical`).
 
 | What you see | What to do |
 |---|---|
-| Log reason `missing` | Restore your offline copy as `root:tactical` 0640. If no secret was ever stored, run the installer: it creates a key. |
+| Log reason `missing` | Restore your offline copy as `root:<group in key-group>` 0640. If no secret was ever stored, run the installer: it creates a key. |
 | `wrong_owner`, `wrong_group` or `wrong_mode` | Read the group the installer recorded: `sudo cat /etc/tec-tac/secrets/key-group` (normally `tactical`). Then `sudo chown root:<that group> /etc/tec-tac/secrets/master.key` and `sudo chmod 0640 /etc/tec-tac/secrets/master.key`. `wrong_group` also appears when `key-group` is missing or unsafe: run `install.sh` again (it keeps the key and rewrites `key-group`). |
-| `folder_unsafe` (also a link in the folder's place) | `sudo chown root:tactical /etc/tec-tac/secrets` and `sudo chmod 0750 /etc/tec-tac/secrets` |
+| `folder_unsafe` (also a link in the folder's place) | `sudo chown root:<group in key-group> /etc/tec-tac/secrets` and `sudo chmod 0750 /etc/tec-tac/secrets` |
 | `wrong_size`, `not_a_file`, `placeholder` | The file is damaged. Restore your offline copy. The installer refuses to replace a file of the wrong size, on purpose. |
 | `secret_unreadable` for every secret | The key was replaced. Restore the key that made the secrets, or have each module store its values again. |
 

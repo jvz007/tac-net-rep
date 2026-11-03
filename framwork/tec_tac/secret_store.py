@@ -24,7 +24,7 @@ the name bound in as authenticated data. A row copied to another owner or anothe
 nonce + ciphertext + tag. Each row also carries the id of the master key that made it (``key_id``), so a later key rotation can find
 the rows that need re-encrypting.
 
-The master key. 32 random bytes in ``/etc/tec-tac/secrets/master.key``, root:tactical, mode 0640, made by ``install.sh`` only.
+The master key. 32 random bytes in ``/etc/tec-tac/secrets/master.key``, root:<group recorded in key-group> (normally tactical), mode 0640, made by ``install.sh`` only.
 Core never creates, repairs or replaces it. A missing key, a link, a file of the wrong size, one not owned by root or one that others
 can write or read is a loud fault: the call raises ``master_key_unavailable`` (503), one error line is logged with the reason (never
 any key byte), and nothing is read or written. There is no silent new key. A row whose ``key_id`` is not the current key's is
@@ -182,7 +182,7 @@ def _load_master_key() -> bytes:
     """Read and check the master key. Fails closed with ``master_key_unavailable``; never creates or repairs a key.
 
     The folder must be a real folder (not a link) that belongs to root and is not writable by group or others. The file must be a regular
-    file (no link), owned by root, in the tactical group (1.17.101), with no group write or execute and no access for others (0640 or
+    file (no link), owned by root, in the group recorded in key-group (1.17.101, normally tactical), with no group write or execute and no access for others (0640 or
     tighter), and exactly 32 bytes. Read on every call: 32 bytes,
     and a key that was swapped is never served from a stale copy. Option B replaces this function only.
     """
@@ -471,8 +471,9 @@ def get(name: Any) -> str | bytes | None:
             raise ValueError("key id differs")
         value = _decode_value(_decrypt(key, scope, key_name, row.ciphertext))
     except ValueError:
-        if _audit_limited("custom:decrypt-failed", scope, key_name, "secret_unreadable", row_key_id=str(row.key_id)[:32], key_id=current_id):
-            logger.error("Core secret store could not decrypt one secret (owner %s, name %s). The row or the master key changed.", owner, key_name)
+        # 1.17.103: the log line is written every time. The limiter caps only the audit row, so a flood of repeats cannot hide the fault.
+        logger.error("Core secret store could not decrypt one secret (owner %s, name %s). The row or the master key changed.", owner, key_name)
+        _audit_limited("custom:decrypt-failed", scope, key_name, "secret_unreadable", row_key_id=str(row.key_id)[:32], key_id=current_id)
         raise SecretStoreError("secret_unreadable", "This secret cannot be read with the current master key. Enter it again; see Troubleshooting.", 503) from None
     _count_read(row)
     return value
@@ -537,7 +538,7 @@ def secrets_contract_metadata() -> dict:
         ),
         "access": "owner only, server-side only. No HTTP route returns a value, for any role. The browser never sees one.",
         "storage": "AES-256-GCM, a random nonce per write, the owner id and the name as authenticated data; key id per row.",
-        "master_key": "/etc/tec-tac/secrets/master.key, 32 random bytes, root:tactical 0640, created by install.sh only. Missing or unsafe: 503 master_key_unavailable, nothing read or written, no new key.",
+        "master_key": "/etc/tec-tac/secrets/master.key, 32 random bytes, root:<group in key-group, normally tactical> 0640, created by install.sh only. Missing or unsafe: 503 master_key_unavailable, nothing read or written, no new key.",
         "audit": (
             "one strict Core audit row before each put (add or modify) and delete (object_type core_secret, object_id <owner>/<name>, "
             "metadata owner, name, size, key id; never the value); a deny row for a refused caller; a custom:decrypt-failed row for "

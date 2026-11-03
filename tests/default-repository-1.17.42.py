@@ -98,6 +98,7 @@ names = {
 exec(compile(ast.Module(body=extract(REPO_TREE, names) + [
     n for n in REPO_TREE.body if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "TRUST_LEVELS" for t in n.targets)
 ], type_ignores=[]), str(REPO_PATH), "exec"), ns)  # noqa: S102 - test only
+ns["DEFAULT_REPOSITORIES"] = tuple(d for d in ns["DEFAULT_REPOSITORIES"] if not d.get("kind"))  # 1.17.103: these tests cover the legacy entry; the licensing seed is in tests/licensing-repository-1.17.103.py
 
 # the remote check: the real _clean_url runs, and a host that is local is refused the way the real guard refuses it
 ns["_validate_remote_url"] = lambda value, trust="custom": _checked(value)

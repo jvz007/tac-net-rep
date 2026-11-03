@@ -187,7 +187,7 @@ before = len(AUDIT)
 for _ in range(30):
     refused(LIC, ss.get, "licence_key", code="secret_unreadable")
 fails = [a for a in AUDIT[before:] if a["action"] == "custom:decrypt-failed"]
-must(len(fails) == 1 and len([l for l in LOGS if "could not decrypt" in l]) == 1, (len(fails), LOGS))
+must(len(fails) == 1 and len([l for l in LOGS if "could not decrypt" in l]) == 30, (len(fails), len(LOGS)))  # 1.17.103: the log line is written every time; only the audit row is limited
 now[0] += ss.AUDIT_REPEAT_SECONDS + 1
 refused(LIC, ss.get, "licence_key", code="secret_unreadable")
 fails = [a for a in AUDIT[before:] if a["action"] == "custom:decrypt-failed"]
@@ -205,7 +205,7 @@ now[0] += ss.AUDIT_REPEAT_SECONDS + 1
 refused(CORE, ss.get, "after-expiry", code="caller_not_allowed")
 must(len([a for a in AUDIT if a["action"] == "deny"]) == ss._AUDIT_REPEAT_MAX + 1, "expired entries were not purged")
 ss._monotonic = __import__("time").monotonic
-print("       item 4: one deny or decrypt-failed row per owner, name and reason every 5 minutes; the next says how many were left out; the Core log line follows; a flood of names cannot grow the table or the audit log")
+print("       item 4: one deny or decrypt-failed row per owner, name and reason every 5 minutes; the next says how many were left out; the Core log line is written every time (1.17.103); a flood of names cannot grow the table or the audit log")
 
 # ---------------------------------------------------------------------------------------------------------------- 5. concurrent first put
 reset()
@@ -324,7 +324,7 @@ if bash and subprocess.run([bash, "-c", "command -v mktemp stat head mv >/dev/nu
         return secrets, result
 
     # coreutils 9.2 to 9.4: mv -n moves the file and still exits 1 -> the install goes on, the key is verified
-    secrets, result = run("mv() { command mv \"$@\"; return 1; }\n")
+    secrets, result = run("mv() { if [[ \"$1\" == \"-n\" ]]; then command mv \"$@\"; return 1; fi; command mv \"$@\"; }\n")  # only mv -n has the quirk; the key-group move (mv -f, 1.17.103) is normal
     must((secrets / "master.key").is_file() and (secrets / "master.key").stat().st_size == 32 and "DONE" in result.stdout and "created" in result.stdout, (result.stdout, result.stderr))
     must("non-zero status" in result.stdout, "the non-zero status is not logged")
     # mv fails and nothing was moved: a clear failure, not a silent pass

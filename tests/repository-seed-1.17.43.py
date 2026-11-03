@@ -99,6 +99,7 @@ names = {
     "_seed_address_check", "_correct_superseded_url", "seed_default_repositories",
 }
 exec(compile(ast.Module(body=extract(REPO_TREE, names), type_ignores=[]), str(REPO_PATH), "exec"), ns)  # noqa: S102 - test only
+ns["DEFAULT_REPOSITORIES"] = tuple(d for d in ns["DEFAULT_REPOSITORIES"] if not d.get("kind"))  # 1.17.103: these tests cover the legacy entry; the licensing seed is in tests/licensing-repository-1.17.103.py
 
 log = TestLog()
 ns["logger"] = log

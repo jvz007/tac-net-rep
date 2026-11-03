@@ -85,7 +85,7 @@ class ModuleRepositoryDetailView(APIView):
     def patch(self, request, repository_id):
         _require_module_manager(request.user)
         try:
-            return Response(upsert_repository(request.data, repository_id=repository_id))
+            return Response(upsert_repository(request.data, repository_id=repository_id, request=request))
         except ModuleRepositoryError as exc:
             return Response({"detail": str(exc)}, status=400)
 
@@ -155,7 +155,7 @@ class ModuleOnlineStageView(APIView):
             return Response({"detail": str(exc), "code": "invalid_licence_override_reason"}, status=400)
         try:
             with module_licensing.override_scope(request.user, override_reason):
-                return Response(stage_repository_package(repository_id, module_id, version, allow_source_change=allow_source_change), status=201)
+                return Response(stage_repository_package(repository_id, module_id, version, allow_source_change=allow_source_change, request=request), status=201)
         except LicensingRequirementError as exc:
             return Response(exc.as_payload(), status=403)
         except ModuleRepositoryError as exc:

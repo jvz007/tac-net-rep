@@ -152,9 +152,10 @@ names = {
     "_resolve_remote_url", "_validate_remote_url", "_clean_repo_id", "public_repository", "list_repositories",
     "_find_repository", "_requested_name", "_requested_trust", "_requested_url", "upsert_repository", "delete_repository",
     "_seed_address_check", "_correct_superseded_url", "seed_default_repositories", "_repo", "_cached_modules",
-    "repository_status", "_skipped_summary", "all_repository_status", "sync_all", "run_scheduled_sync",
+    "repository_status", "_skipped_summary", "all_repository_status", "sync_all", "run_scheduled_sync", "_has_credentials", "_legacy_error_status", "_cache_credentials_rejected", "_cache_retired", "_repo_raw", "RETIRED_STATUSES", "CREDENTIALS_STATUSES", "_LEGACY_RETIRED_ERROR",
 }
 exec(compile(ast.Module(body=extract(REPO_TREE, names), type_ignores=[]), str(REPO_PATH), "exec"), ns)  # noqa: S102 - test only
+ns["DEFAULT_REPOSITORIES"] = tuple(d for d in ns["DEFAULT_REPOSITORIES"] if not d.get("kind"))  # 1.17.103: these tests cover the legacy entry; the licensing seed is in tests/licensing-repository-1.17.103.py
 
 log = TestLog()
 ns["logger"] = log

@@ -119,7 +119,7 @@ must(b"\r\n" in (ROOT / "framwork" / "tec_tac" / "secret_store.py").read_bytes()
 INSTALL = raw.decode()
 block = INSTALL[INSTALL.index("# BEGIN secret-store-master-key"):INSTALL.index("# END secret-store-master-key")]
 must('"${SECRETS_ROOT}/key-group"' in block and "printf '%s\\n' \"${TACTICAL_GROUP}\"" in block, "install.sh does not record the group")
-must('chown root:"${TACTICAL_GROUP}" "${SECRET_GROUP_FILE}"' in block and 'chmod 0640 "${SECRET_GROUP_FILE}"' in block, "the record's owner and mode")
+must('chown root:"${TACTICAL_GROUP}" "${SECRET_GROUP_TMP}"' in block and 'chmod 0640 "${SECRET_GROUP_TMP}"' in block, "the record's owner and mode")  # 1.17.103: set on the temporary file, then moved over the record
 try:
     syntax = subprocess.run(["bash", "-n", "install.sh"], cwd=str(ROOT), capture_output=True, text=True, check=False)
 except OSError:
@@ -130,10 +130,10 @@ DOC, TS = read(ROOT / "docs" / "secret-store.md"), read(ROOT / "docs" / "trouble
 for text, label in ((DOC, "secret-store.md"), (TS, "troubleshooting")):
     must("key-group" in text, f"{label} misses key-group")
     must(text.rstrip().endswith("Tech Flow Dynamics · techxflow.co.za") and text.count("Tech Flow Dynamics · techxflow.co.za") == 1, f"{label} footer")
-NOTES = read(ROOT / "RELEASE_NOTES_1.17.102.md")
+NOTES = read(ROOT / "docs" / "releases" / "RELEASE_NOTES_1.17.102.md")  # moved by 1.17.103
 for heading in ("## What changed and why", "## Module-facing changes", "## Assumptions", "## Tests", "## Checks on the test server", "## Not done here"):
     must(heading in NOTES, heading)
 must("FAIL" in NOTES and (ROOT / "docs" / "releases" / "RELEASE_NOTES_1.17.101.md").is_file(), "notes or move")
-must(sorted(p.name for p in ROOT.glob("RELEASE_NOTES_*.md")) == ["RELEASE_NOTES_1.17.102.md"], "exactly one root release note")
-must(read(ROOT / "VERSION").strip() == "1.17.102" and json.loads(read(ROOT / "tec_tac_package.json"))["version"] == "1.17.102", "version")
+must(len(list(ROOT.glob("RELEASE_NOTES_*.md"))) == 1, "exactly one root release note")
+must(tuple(int(x) for x in read(ROOT / "VERSION").strip().split("-")[0].split(".")) >= (1, 17, 102) and json.loads(read(ROOT / "tec_tac_package.json"))["version"] == read(ROOT / "VERSION").strip(), "version")
 print("[TEST] PASS secret store group 1.17.102")

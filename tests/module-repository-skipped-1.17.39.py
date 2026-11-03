@@ -329,7 +329,11 @@ for banned in ("entitle", "revok", "get_capability", "licensing capability", "co
 licence_words = re.findall(r"licen[sc]\w*", text, flags=re.IGNORECASE)
 # 1.17.58: the stage route also reads the audited licence override (a superuser's reason, refused for anyone else). It checks no entitlement.
 # 1.17.99: the retired-repository message names "the licensed catalogue" (text only; no check). Nothing here calls a licensing server.
-must(set(licence_words) <= {"LicensingRequirementError", "licensing", "licence_override_reason", "licence_override_superuser_required", "licensed"},
+# 1.17.103: the Licensing source (kind licensing) lives here as a thin branch; every capability call and every entitlement or signature step is in
+# licensing_catalogue_source.py, which this file only imports. The words below are names of that branch, not checks.
+must(set(licence_words) <= {"LicensingRequirementError", "licensing", "licence_override_reason", "licence_override_superuser_required", "licensed",
+                            "Licensed", "Licensing", "LicensingSourceError", "licence", "licensed_module_release", "licensing_attention", "licensing_audit",
+                            "licensing_catalogue_source", "licensing_release", "licensing_server_url", "licensing_state", "licensing_states"},
      f"licence words other than the existing install-time error and the 1.17.58 override: {set(licence_words)}")
 must(all(word == "downgrade_policy" for word in re.findall(r"downgrad\w*", text, flags=re.IGNORECASE)),
      "downgrade appears only as the informational field downgrade_policy")

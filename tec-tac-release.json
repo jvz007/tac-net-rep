@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.102",
+  "version": "1.17.103",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.17.102.md",
-      "size": 3914,
-      "sha256": "ba2c12114f26572492425d74f0727fd20a93864f2c4a0944abcce4b5b979ff80"
+      "path": "RELEASE_NOTES_1.17.103.md",
+      "size": 11684,
+      "sha256": "382c3e021a5be5420a29caba567fc940d8bd706578db80e33391e2ee877bce43"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "ec9977d441f7142e4c6d5e4f5658fddf4cb18c8aa291bfd78be8651449f0733e"
+      "sha256": "4c1d7c7581c8ebab1c0b7373671b926fa24137d73f08e76138d19a0ca1fe2cb5"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -178,8 +178,8 @@
     },
     {
       "path": "docs/module-repositories.md",
-      "size": 21288,
-      "sha256": "ab4b2ee038510e1b473d524593c3420f0334f33df6daa93214723a6fd1383256"
+      "size": 28881,
+      "sha256": "03b71799a6bf09f620709a39d4318c7e854a3153b5c982fe368eba3814d6e17e"
     },
     {
       "path": "docs/module-routes.md",
@@ -1117,6 +1117,11 @@
       "sha256": "38a9ca4f16ad53d0c97d3881f6823ea22c57c737077ed67196a3a9d89473cfb8"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.102.md",
+      "size": 3914,
+      "sha256": "ba2c12114f26572492425d74f0727fd20a93864f2c4a0944abcce4b5b979ff80"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.11.md",
       "size": 13772,
       "sha256": "84e4f9ea427823efeaf9248f3926735dd9850e2c420411970ef51b7d8310a545"
@@ -1698,8 +1703,8 @@
     },
     {
       "path": "docs/secret-store.md",
-      "size": 7378,
-      "sha256": "4f80657d0f9b2b3290a9c48abdf1144298b44806c7a0f77a9df88a39e941158e"
+      "size": 7562,
+      "sha256": "7f031c2968860b06f8dc0f60dd0a74e431f7878bc977ad58da7fa26bb6bece32"
     },
     {
       "path": "docs/server-backup-capability.md",
@@ -1753,8 +1758,8 @@
     },
     {
       "path": "docs/troubleshooting-diagnostics.md",
-      "size": 5541,
-      "sha256": "8fb02d91cf0c248566f2ea101a28d264e612b69486a012af4d72a3cf05ef6c28"
+      "size": 10373,
+      "sha256": "d41b9a36262369bd630bc235c75157ec7fa3eea3ec014a3148b87999a42524a7"
     },
     {
       "path": "docs/trusted-publisher-verification.md",
@@ -2018,8 +2023,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 451578,
-      "sha256": "3d069e77a07f44dfb12b0c821572ed86ca099f54787d3a45c72d001299dc6d90"
+      "size": 454769,
+      "sha256": "934fa0fd3dce521569f8b07b9b051b046ac99af9bf7143fd6fc879a4f8466971"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -2085,6 +2090,11 @@
       "path": "framwork/tec_tac/housekeeping_views.py",
       "size": 1272,
       "sha256": "0513ca35206f22fdbb359dd17ef3ece33f050fd08c3698ba9b895f9600a1903d"
+    },
+    {
+      "path": "framwork/tec_tac/licensing_catalogue_source.py",
+      "size": 23814,
+      "sha256": "2aec33f9a31bc0cbebd4bc1555bd8b1f8998199e576ed85962d0a4d610e24ffd"
     },
     {
       "path": "framwork/tec_tac/licensing_server_url.py",
@@ -2433,13 +2443,13 @@
     },
     {
       "path": "framwork/tec_tac/module_repository.py",
-      "size": 61902,
-      "sha256": "1ef01c28e4dceda4e51fe940d204c4b01f8ca523dd78a230779b8c453ce208d5"
+      "size": 79421,
+      "sha256": "b94e2daa61c5ad18dff7f11ba9b7e7a7d20f3f60d0b44d6a21d5fd37604e3bcb"
     },
     {
       "path": "framwork/tec_tac/module_repository_views.py",
-      "size": 7016,
-      "sha256": "0b18085eccf12ead2172ecc3cafbcc263189a70326051c423c96f6cd185c9ba1"
+      "size": 7050,
+      "sha256": "a1a15babc82adcc213d211fb30933acda0958101ff4a2b724cc2e74be249d743"
     },
     {
       "path": "framwork/tec_tac/module_runtime.py",
@@ -2588,8 +2598,8 @@
     },
     {
       "path": "framwork/tec_tac/secret_store.py",
-      "size": 28640,
-      "sha256": "be0f65b43d995c875386a06d62f492ef09099af04daf55acaff13ee23f0b852a"
+      "size": 28875,
+      "sha256": "fe6937f3bb8ce88e2c42d5f0971b90112e996c8647310f423b595d9f591d6d80"
     },
     {
       "path": "framwork/tec_tac/server_backup.py",
@@ -2743,8 +2753,8 @@
     },
     {
       "path": "install.sh",
-      "size": 75563,
-      "sha256": "da9f9dfd6ba765426de889223b5824aa2c563b20aedfc75ca9d3fbfaab9e9147"
+      "size": 76392,
+      "sha256": "4d53d7c159fa950cf5da0d44714d4bdd201fe1cdd03bc72f9b144332ba4abfe3"
     },
     {
       "path": "reportsets/.gitkeep",
@@ -2914,7 +2924,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "ab7c04ff6aabcd768e85bc557f136c60e6896fc4a4d7825d42fa56eca90aeb57"
+      "sha256": "3542c6774f6a7f27b22156f2d5c49e83327d18110c1465698bebcf5bc2d950bd"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -3358,8 +3368,8 @@
     },
     {
       "path": "tests/default-repository-1.17.42.py",
-      "size": 12439,
-      "sha256": "22846398f2dfa3c45174b39b0ad6eff9077ad345073346c339ff227c2185bb3c"
+      "size": 12647,
+      "sha256": "da81a99756e13255f6326ffa5283d717fa8d75e079b795324572b7fdaefc884f"
     },
     {
       "path": "tests/delegated-targets-compat-1.17.74.py",
@@ -3797,6 +3807,11 @@
       "sha256": "7248d88df08c3d04110df4b8ae900a8f2f2a23a50f8feba3965d3c84e3b82a5a"
     },
     {
+      "path": "tests/licensing-download-1.17.103.py",
+      "size": 33045,
+      "sha256": "1ce18f8efcf55efd93bc6a6a554d740ddb9d0e03d271064b4490bd83aeead674"
+    },
+    {
       "path": "tests/licensing-enforcement-mode-1.17.58.py",
       "size": 24163,
       "sha256": "ed4b42c8928ad11db2e91385e359feed66e88e69ab6a9046afdb49aef99520a0"
@@ -3813,8 +3828,13 @@
     },
     {
       "path": "tests/licensing-override-1.17.58.py",
-      "size": 16490,
-      "sha256": "141769d319b8d991f49de2ec7354a610bd20d1a4aa94164523f8a0d846d944cd"
+      "size": 16504,
+      "sha256": "3deb7035c948c37e3bbed4eb4e57545af9058b442b60a8eb9ba9c5f3dc273b51"
+    },
+    {
+      "path": "tests/licensing-repository-1.17.103.py",
+      "size": 37246,
+      "sha256": "6149bb6ae6fe0581f6b261d959a1d5773178cfc7c760f4d19d465c321acf745b"
     },
     {
       "path": "tests/licensing-status-1.17.58.py",
@@ -4223,8 +4243,8 @@
     },
     {
       "path": "tests/module-repository-skipped-1.17.39.py",
-      "size": 19916,
-      "sha256": "f31cc61a55e49bcc3e1cfc3405f103c029ec6ebd59f0ced0bf4708626909c8c5"
+      "size": 20483,
+      "sha256": "31c37361c18b8c8814fd3774f91bbdad155f7a0511e1028f7a07f760a421bb89"
     },
     {
       "path": "tests/module-route-mount-1.17.16.py",
@@ -4468,8 +4488,8 @@
     },
     {
       "path": "tests/repository-daily-sync-1.17.42.py",
-      "size": 15685,
-      "sha256": "d08d4a55457c5be7a8799f38e746ccfbe3ce129656fcbc2a06fbeb996ed356ba"
+      "size": 15860,
+      "sha256": "01399128c274d74549fdadac049aebf125ef546d0dac4c831f6a4580b1fef5af"
     },
     {
       "path": "tests/repository-retired-1.17.99.py",
@@ -4478,13 +4498,13 @@
     },
     {
       "path": "tests/repository-seed-1.17.43.py",
-      "size": 10481,
-      "sha256": "77ec365a3d8aa83e2865c2ba0af5fcc2654539d5d2faa1e4f67dc9b8c0775979"
+      "size": 10689,
+      "sha256": "5cb09d436240751c53e764aa58a73e0609f0a48eb0dd31c41fba6169f58115c5"
     },
     {
       "path": "tests/repository-seed-lock-1.17.43.py",
-      "size": 15850,
-      "sha256": "e339bf3bcb1859c211308b3fe5f148d13405921e4139c4629e7cbf8441564821"
+      "size": 16233,
+      "sha256": "822f92296574b717dcab343710067ffbd59289a908e6ed57d5be113da74e45f1"
     },
     {
       "path": "tests/resource-alert-template-1.17.17.py",
@@ -5093,13 +5113,13 @@
     },
     {
       "path": "tests/secret-store-group-1.17.102.py",
-      "size": 7691,
-      "sha256": "9092f0dfe8a6d116efba00cba894f93cab017f0a43fc7b24f71690ec5516b75b"
+      "size": 7828,
+      "sha256": "03b9fa1f93fae3cb072e0d944b854b7e6e85b546245f0ade48fb498d797ffcaf"
     },
     {
       "path": "tests/secret-store-hardening-1.17.101.py",
-      "size": 22251,
-      "sha256": "6d912b0d3abcf8910e18fd4b29f89542dbd154595c6a529c7c6fe65b048c5aa9"
+      "size": 22492,
+      "sha256": "c948a5884d348379ee17b2ec4473b503053548806b8bbb631011f92dd98def65"
     },
     {
       "path": "tests/server-backup-capability-compat-1.15.189-1.py",

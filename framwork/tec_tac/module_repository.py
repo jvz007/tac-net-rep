@@ -38,6 +38,7 @@ from .module_manager_v2 import (
     attach_source_provenance,
 )
 from .module_state import ModuleStateError, strip_repository_url, version_satisfies
+from . import licensing_catalogue_source as _lcs
 
 REPOSITORY_ROOT = Path("/var/lib/tec-tac/module-manager/repositories")
 CONFIG_FILE = REPOSITORY_ROOT / "repositories.json"
@@ -69,6 +70,19 @@ DEFAULT_REPOSITORIES = (
         "trust": "official",
         "priority": 100,
         "enabled": False,
+    },
+    # 1.17.103 (AD-56, AD-58 D6): the licensed catalogue, seeded once beside the old entry above. Its address is display only: Core always
+    # reads the pinned address from get_licensing_server_url() when it downloads, and asks the Licensing module (never this address)
+    # for the list. An empty channel means the licence's own preferred channel. An administrator edits the channel per source.
+    {
+        "id": "tec-tac-licensing",
+        "name": "Tec-Tac licensed modules (Licensing)",
+        "url": "https://lic-service.tec-tac.techxflow.net.za",
+        "trust": "official",
+        "priority": 50,
+        "enabled": True,
+        "kind": "licensing",
+        "channel": "",
     },
 )
 # 1.17.43: the addresses a 1.17.42 seed wrote before Johan confirmed the path (CQ125), keyed by the seeded id. The seed replaces the
@@ -247,7 +261,7 @@ def _proxy_authorization(parsed: urllib.parse.ParseResult) -> str | None:
     return f"Basic {token}"
 
 
-def _pinned_proxy_get(url: str, address: ipaddress._BaseAddress, proxy_url: str, *, maximum: int, timeout: int) -> tuple[int, str | None, bytes]:
+def _pinned_proxy_get(url: str, address: ipaddress._BaseAddress, proxy_url: str, *, maximum: int, timeout: int, extra_headers: dict | None = None) -> tuple[int, str | None, bytes]:
     parsed = urllib.parse.urlparse(url)
     host = str(parsed.hostname or "")
     port = _validated_port(parsed, label="Repository URL") or (443 if parsed.scheme == "https" else 80)
@@ -263,6 +277,8 @@ def _pinned_proxy_get(url: str, address: ipaddress._BaseAddress, proxy_url: str,
         "Accept": "application/json, application/octet-stream;q=0.9, */*;q=0.1",
         "Host": target_authority,
     }
+    if extra_headers:
+        headers.update(extra_headers)  # 1.17.103: the end-to-end request (inside the tunnel for https), never the proxy's own header
     try:
         if parsed.scheme == "https":
             tunnel_headers = {"Host": target_authority}
@@ -290,7 +306,7 @@ def _pinned_proxy_get(url: str, address: ipaddress._BaseAddress, proxy_url: str,
         conn.close()
 
 
-def _pinned_get(url: str, address: ipaddress._BaseAddress, *, maximum: int, timeout: int) -> tuple[int, str | None, bytes]:
+def _pinned_get(url: str, address: ipaddress._BaseAddress, *, maximum: int, timeout: int, extra_headers: dict | None = None) -> tuple[int, str | None, bytes]:
     parsed = urllib.parse.urlparse(url)
     host = str(parsed.hostname or "")
     port = _validated_port(parsed, label="Repository URL") or (443 if parsed.scheme == "https" else 80)
@@ -306,7 +322,10 @@ def _pinned_get(url: str, address: ipaddress._BaseAddress, *, maximum: int, time
             conn = http.client.HTTPConnection(host, port, timeout=timeout)
             conn.sock = raw
         path = urllib.parse.urlunparse(("", "", parsed.path or "/", parsed.params, parsed.query, ""))
-        conn.request("GET", path, headers={"User-Agent": "Tec-Tac-Module-Repository/1.8", "Accept": "application/json, application/octet-stream;q=0.9, */*;q=0.1"})
+        request_headers = {"User-Agent": "Tec-Tac-Module-Repository/1.8", "Accept": "application/json, application/octet-stream;q=0.9, */*;q=0.1"}
+        if extra_headers:
+            request_headers.update(extra_headers)
+        conn.request("GET", path, headers=request_headers)
         response = conn.getresponse()
         location = response.getheader("Location")
         body = _read_bounded(response, maximum)
@@ -348,6 +367,39 @@ def _fetch(url: str, maximum: int, timeout: int = 12, *, trust: str = "custom") 
             raise RepositoryHttpError(f"Repository request returned HTTP {status}.", status)
         return body
     raise ModuleRepositoryError("Repository request exceeded the redirect limit.")
+
+
+def _fetch_authorized(url: str, maximum: int, *, bearer: str, timeout: int = 30) -> bytes:
+    """One authenticated GET to the Licensing Server for a licensed download (1.17.103, AD-56).
+
+    The address is checked like every repository address (https, no private address) and the connection is pinned to the checked
+    address. A redirect is never followed: Core would otherwise send the bearer to whatever host the answer names. The bearer is
+    only put in the request header. No message, log line or exception from here holds it. A non-2xx answer raises RepositoryHttpError
+    (status only), a network or TLS fault a plain ModuleRepositoryError.
+    """
+    safe_url, parsed, addresses = _resolve_remote_url(url, trust="official")
+    if parsed.scheme != "https":
+        raise ModuleRepositoryError("Licensed downloads are only fetched over https.")
+    headers = {"Authorization": f"Bearer {bearer}"}
+    proxy_url = _proxy_url_for(urllib.parse.urlparse(safe_url))
+    result = None
+    for address in addresses:
+        try:
+            if proxy_url:
+                result = _pinned_proxy_get(safe_url, address, proxy_url, maximum=maximum, timeout=timeout, extra_headers=headers)
+            else:
+                result = _pinned_get(safe_url, address, maximum=maximum, timeout=timeout, extra_headers=headers)
+            break
+        except (OSError, ssl.SSLError, http.client.HTTPException):
+            continue
+    if result is None:
+        raise ModuleRepositoryError("The Licensing Server could not be reached (network or TLS error).")
+    status, _location, body = result
+    if 300 <= status < 400:
+        raise RepositoryHttpError("The Licensing Server answered with a redirect. Core does not follow redirects for licensed downloads.", status)
+    if status < 200 or status >= 300:
+        raise RepositoryHttpError(f"The Licensing Server answered HTTP {status}.", status)
+    return body
 
 
 def _clean_repo_id(value: str | None, name: str) -> str:
@@ -425,9 +477,89 @@ def _requested_url(data: dict, current: dict | None):
     return data.get("url", current.get("url") if current else "")
 
 
-def upsert_repository(data: dict, repository_id: str | None = None) -> dict:
+def _requested_priority(data: dict, current: dict | None) -> int:
+    try:
+        priority = int(data.get("priority", current.get("priority") if current else 100))
+    except (TypeError, ValueError) as exc:
+        raise ModuleRepositoryError("Repository priority must be an integer.") from exc
+    if priority < 0 or priority > 10000:
+        raise ModuleRepositoryError("Repository priority must be between 0 and 10000.")
+    return priority
+
+
+def _upsert_licensing(data: dict, repository_id: str, request=None) -> dict:
+    """Edit the Licensing source (1.17.103, AD-58 D6): name, priority, enabled and channel. Its address, trust and kind are Core's.
+
+    The channel is a setting of this source, edited by a module manager. An empty value means the licence's preferred channel. A change
+    writes its audit row first (strict): if the row cannot be written nothing is saved. A changed channel drops the cached list, because
+    the old list belongs to the old channel. Core never switches a channel on its own.
+    """
+    with _config_lock():
+        config = load_repositories()
+        repos = list(config["repositories"])
+        current = _find_repository(config, repository_id)
+        if current is None or current.get("kind") != _lcs.KIND:
+            raise ModuleRepositoryError(f"Repository {repository_id!r} was not found.")
+        if data.get("kind", _lcs.KIND) != _lcs.KIND:
+            raise ModuleRepositoryError("The kind of a repository cannot be changed.")
+        enabled = data.get("enabled", current.get("enabled", True))
+        if not isinstance(enabled, bool):
+            raise ModuleRepositoryError("Repository enabled must be true or false.")
+        try:
+            channel = _lcs.clean_channel(data.get("channel", current.get("channel", "")))
+        except ValueError as exc:
+            raise ModuleRepositoryError("The channel must be empty or a name of 1 to 32 lower case letters, digits, '-' or '_', starting with a letter.") from exc
+        old_channel = str(current.get("channel") or "")
+        record = {
+            **current,
+            "name": _requested_name(data, current),
+            "priority": _requested_priority(data, current),
+            "enabled": enabled,
+            "channel": channel,
+            "updated_at": _utcnow(),
+        }
+        if channel != old_channel:
+            _licensing_audit(
+                request, action="modify", object_type="module_repository", object_id=repository_id, strict=True,
+                message="The release channel of the Licensing module source was changed.",
+                metadata={"channel_before": old_channel or "default", "channel_after": channel or "default"},
+            )
+        config["repositories"] = [record if item.get("id") == repository_id else item for item in repos]
+        _atomic_repo_json(CONFIG_FILE, config)
+        if channel != old_channel:
+            (CACHE_ROOT / f"{repository_id}.json").unlink(missing_ok=True)
+    return public_repository(record)
+
+
+def _licensing_audit(request, *, action: str, object_type: str, object_id, message: str, metadata: dict, strict: bool) -> None:
+    """One audit row for the Licensing source: the person when there is a request, Core's service otherwise. Never a credential.
+    Strict: a failed write raises ModuleRepositoryError and the caller does nothing. Not strict: a failed write is logged and ignored."""
+    from .audit import record, service_audit_actor
+
+    try:
+        user = getattr(request, "user", None) if request is not None else None
+        actor = user if user is not None else service_audit_actor(module_id="core", service="module-repository", identity="licensing-source")
+        record(
+            actor=actor, module_id="core", action=action, object_type=object_type, object_id=object_id, message=message,
+            metadata=metadata, request=request, strict=strict,
+        )
+    except Exception:
+        if strict:
+            raise ModuleRepositoryError(_lcs.message_for("audit_not_saved")) from None
+        logger.warning("An audit row of the Licensing source could not be written.")
+
+
+def upsert_repository(data: dict, repository_id: str | None = None, request=None) -> dict:
     if not isinstance(data, dict):
         raise ModuleRepositoryError("Repository payload must be an object.")
+    if repository_id:
+        stored = _find_repository(load_repositories(), repository_id)
+        if stored is not None and stored.get("kind") == "licensing":
+            return _upsert_licensing(data, repository_id, request=request)
+    if data.get("kind") not in (None, "", "index"):
+        raise ModuleRepositoryError("Only Core creates the Licensing source. Other repositories are plain index addresses.")
+    if "channel" in data:
+        raise ModuleRepositoryError("A channel is set on the Licensing source only. Other repositories carry the channel in their address.")
     # 1.17.43: the address check can do a DNS lookup, so it runs before the configuration lock is taken. It uses a first read here,
     # which only supplies the values it checks. The change is applied to a fresh read inside the lock.
     first = _find_repository(load_repositories(), repository_id)
@@ -650,8 +782,70 @@ def _skipped_summary(payload: dict) -> tuple[int, list]:
     )
 
 
+def _sync_licensing(repo: dict) -> dict:
+    """Sync the Licensing source (1.17.103, AD-56): ask the Licensing module's catalogue provider, never an index address.
+
+    A state other than ok raises with Core's own plain sentence and records the state in the cache. Temporary faults (the provider
+    is unavailable, a bad answer, no audit row) keep the last good list. Every other state empties the list, so nothing is offered
+    to someone whose licence says otherwise. The cache holds no credential and no address."""
+    repository_id = repo["id"]
+    started = _utcnow()
+    channel = str(repo.get("channel") or "") or None
+    state, answer = _lcs.fetch_catalogue(channel)
+    cache_path = CACHE_ROOT / f"{repository_id}.json"
+    if state == "ok":
+        releases, skipped = _lcs.map_catalogue(answer)
+        provider_channel = answer.get("channel") if isinstance(answer.get("channel"), str) and _lcs.CHANNEL_RE.fullmatch(answer["channel"]) else None
+        cache = {
+            "schema": 1,
+            "repository_id": repository_id,
+            "repository": {"kind": "licensing", "channel": provider_channel or channel},
+            "synced_at": _utcnow(),
+            "status": "ok",
+            "error": None,
+            "licensing_state": "ok",
+            "modules": releases,
+            "skipped": skipped[:MAX_SKIPPED_RECORDS],
+            "skipped_count": len(skipped),
+        }
+        CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+        _atomic_repo_json(cache_path, cache)
+        sync = {
+            "status": "ok",
+            "synced_at": cache["synced_at"],
+            "error": None,
+            "module_count": len(releases),
+            "skipped_count": len(skipped),
+            "skipped": skipped[:MAX_SKIPPED_RECORDS],
+            "licensing_state": "ok",
+        }
+        return {**public_repository(repo), "sync": sync}
+    existing: dict = {}
+    if state in _lcs.TRANSIENT_STATES and cache_path.is_file():
+        try:
+            existing = json.loads(cache_path.read_text(encoding="utf-8"))
+        except Exception:
+            existing = {}
+        if not isinstance(existing, dict):
+            existing = {}
+    message = _lcs.message_for(state)
+    existing.update({
+        "schema": 1, "repository_id": repository_id, "status": "error", "last_attempt_at": started, "error": message,
+        "licensing_state": state, "retired": False, "credentials_rejected": False,
+    })
+    if state not in _lcs.TRANSIENT_STATES:
+        existing.update({"modules": [], "synced_at": None, "skipped": [], "skipped_count": 0})
+    else:
+        existing.setdefault("modules", [])
+    CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+    _atomic_repo_json(cache_path, existing)
+    raise ModuleRepositoryError(message)
+
+
 def sync_repository(repository_id: str) -> dict:
     repo = _repo(repository_id)
+    if repo.get("kind") == "licensing":
+        return _sync_licensing(repo)
     started = _utcnow()
     try:
         body = _fetch(repo["url"], MAX_INDEX_BYTES, trust=repo.get("trust", "custom"))
@@ -758,9 +952,19 @@ def repository_status(repository_id: str) -> dict:
                 "retired": _cache_retired(payload, credentialed),
                 "credentials_rejected": _cache_credentials_rejected(payload, credentialed),
             }
+            if repo.get("kind") == "licensing":
+                sync["licensing_state"] = payload.get("licensing_state") if isinstance(payload.get("licensing_state"), str) else None
         except Exception as exc:
             sync = {"status": "error", "synced_at": None, "error": str(exc), "module_count": 0, "skipped_count": 0, "skipped": [], "retired": False, "credentials_rejected": False}
-    return {**public_repository(repo), "sync": sync}
+    row = {**public_repository(repo), "sync": sync}
+    if repo.get("kind") == "licensing":
+        # The address is display only: show the pinned address (from the root-owned setting), not the stored seed value.
+        from .licensing_server_url import get_licensing_server_url
+
+        row["url"] = get_licensing_server_url()["url"]
+        row["channel"] = str(repo.get("channel") or "")
+        sync.setdefault("licensing_state", None)
+    return row
 
 
 def all_repository_status() -> list[dict]:
@@ -839,6 +1043,8 @@ _AVAILABILITY_MESSAGES = {
     "empty": "The module repositories were synced, but they offer no modules.",
     "ready": "",
 }
+# 1.17.103: the states of the Licensing source (the same sentences the repository row shows).
+_AVAILABILITY_MESSAGES.update({state: _lcs.message_for(state) for state in _lcs.AVAILABILITY_STATES})
 
 
 def _availability(repos: list[dict], offered_count: int, installed_only_count: int) -> dict:
@@ -850,12 +1056,16 @@ def _availability(repos: list[dict], offered_count: int, installed_only_count: i
     synced = sum(1 for sync in statuses if sync.get("synced_at"))
     retired = sum(1 for sync in statuses if sync.get("retired"))
     rejected = sum(1 for sync in statuses if sync.get("credentials_rejected"))
+    licensing_states = [sync["licensing_state"] for sync in statuses if sync.get("licensing_state") and sync["licensing_state"] != "ok"]
     if not repos:
         state = "no_repository"
     elif retired + rejected == len(repos):
         # 1.17.99: every enabled repository is retired. Nothing is offered, whatever an old cache holds.
         # 1.17.100: when any of them refused its credentials, that is the more useful thing to say.
         state = "credentials_rejected" if rejected else "repository_retired"
+    elif not synced and licensing_states:
+        # 1.17.103: the Licensing source says why nothing is offered (not registered, channel refused ...). Never an open list.
+        state = licensing_states[0]
     elif not synced:
         state = "sync_failed" if all(sync.get("status") == "error" for sync in statuses) else "not_synced"
     elif not offered_count:
@@ -870,6 +1080,7 @@ def _availability(repos: list[dict], offered_count: int, installed_only_count: i
         "installed_only_count": installed_only_count,
         "retired_repositories": retired,
         "credentials_rejected_repositories": rejected,
+        "licensing_state": licensing_states[0] if licensing_states else None,
     }
 
 
@@ -972,7 +1183,7 @@ class _PathUpload:
                 yield chunk
 
 
-def stage_repository_package(repository_id: str, module_id: str, version: str | None = None, allow_source_change: bool = False) -> dict:
+def stage_repository_package(repository_id: str, module_id: str, version: str | None = None, allow_source_change: bool = False, request=None) -> dict:
     repo = _repo(repository_id)
     if not repo.get("enabled", True):
         raise ModuleRepositoryError("Repository is disabled.")
@@ -991,12 +1202,16 @@ def stage_repository_package(repository_id: str, module_id: str, version: str | 
     if all(item.get("download_unavailable") for item in candidates):
         # 1.17.100: a repository that refused its credentials says so; a retired one keeps the 1.17.99 message.
         refused = all(item.get("download_unavailable_state") == "credentials_rejected" for item in candidates)
+        if repo.get("kind") == "licensing":
+            raise ModuleRepositoryError(_lcs.message_for("not_in_licence"))
         raise ModuleRepositoryError(CREDENTIALS_REJECTED_MESSAGE if refused else RETIRED_MESSAGE)
     candidates = [item for item in candidates if not item.get("download_unavailable")]
     candidate = candidates[0]
     for item in candidates[1:]:
         if version_satisfies(item["version"], f">{candidate['version']}"):
             candidate = item
+    if repo.get("kind") == "licensing":
+        return _stage_licensing_release(repo, repository_id, module_id, candidate, request=request)
     data = _fetch(candidate["download_url"], MAX_PACKAGE_BYTES, trust=repo.get("trust", "custom"))
     digest = hashlib.sha256(data).hexdigest()
     if digest != candidate["sha256"]:
@@ -1061,6 +1276,93 @@ def stage_repository_package(repository_id: str, module_id: str, version: str | 
     attach_source_provenance(staged["upload_id"], source)
     staged["source"] = source
     return staged
+
+
+def _stage_licensing_release(repo: dict, repository_id: str, module_id: str, candidate: dict, request=None) -> dict:
+    """Stage one licensed release (1.17.103, AD-56): grant, three downloads, Core's own checks, then the existing install queue.
+
+    The audit row is written first and strict: no row, no grant. The files are fetched from the pinned Licensing Server address
+    with the bearer in memory only, the SHA-256 and the Ed25519 signature are verified with Core's trusted publisher keys, and only
+    then does the existing staging (the same code as an upload with both sidecars) take them. No second installer. A rejected
+    release leaves nothing staged.
+    """
+    from .licensing_server_url import get_licensing_server_url
+
+    release_id = str(candidate.get("release_id") or "")
+    try:
+        channel = _lcs.clean_channel(candidate.get("channel") or repo.get("channel")) or None
+    except ValueError:
+        channel = None
+    meta = {"module_id": module_id, "version": candidate["version"], "channel": channel or "default", "release_id": release_id}
+    _licensing_audit(
+        request, action="run", object_type="licensed_module_release", object_id=release_id, strict=True,
+        message=f"Core started downloading licensed module {module_id} {candidate['version']}.", metadata={**meta, "result": "started"},
+    )
+    result = "failed"
+    try:
+        with tempfile.TemporaryDirectory(prefix="tec-tac-licensed-module-") as tmp:
+            files = _lcs.download_release(
+                release=candidate, channel=channel, fetch=_fetch_authorized, origin=get_licensing_server_url()["url"],
+                tmp=Path(tmp), max_package_bytes=MAX_PACKAGE_BYTES,
+            )
+            staged = stage_uploaded_artifact(
+                _PathUpload(files.package, files.filename),
+                signature_upload=_PathUpload(files.signature, files.signature_name),
+                metadata_upload=_PathUpload(files.metadata, files.metadata_name),
+            )
+        trust = staged.get("publisher_trust") or (staged.get("preview") or {}).get("publisher_trust") or {}
+        preview = staged.get("preview") or {}
+        kind = str(staged.get("kind") or preview.get("kind") or "package")
+        if kind == "bundle":
+            child = next((
+                item for item in (preview.get("packages") or [])
+                if item.get("id") == module_id and item.get("extension_version") == candidate["version"]
+            ), None)
+            identity_matches = child is not None
+        else:
+            identity_matches = preview.get("id") == module_id and preview.get("extension_version") == candidate["version"]
+        if not (trust.get("signed") and trust.get("verified")) or not identity_matches:
+            try:
+                discard_v2_stage(staged["upload_id"])
+            except Exception:
+                pass
+            raise _lcs.LicensingSourceError("verification_failed" if not (trust.get("signed") and trust.get("verified")) else "release_mismatch")
+        source = {
+            "repository_id": repository_id,
+            "repository_name": repo["name"],
+            "repository_trust": repo["trust"],
+            "package_sha256": files.sha256,
+            "repository_url": strip_repository_url(get_licensing_server_url()["url"]),
+            "artifact_kind": kind,
+            "publisher_trust": trust,
+            "requested_module_id": module_id,
+            "requested_version": candidate["version"],
+            "version": candidate["version"],
+            "staged_at": _utcnow(),
+            "release_id": release_id,
+            "licensed": True,
+        }
+        if kind == "bundle":
+            source["bundle_id"] = (preview or {}).get("id")
+            source["bundle_version"] = (preview or {}).get("version")
+        attach_source_provenance(staged["upload_id"], source)
+        staged["source"] = source
+        result = "staged"
+        return staged
+    except _lcs.LicensingSourceError as exc:
+        result = exc.state
+        raise ModuleRepositoryError(exc.message) from None
+    except (ModuleRepositoryError, LicensingRequirementError):
+        result = "refused"
+        raise
+    except Exception as exc:
+        raise ModuleRepositoryError(f"Downloaded package inspection failed: {exc}") from exc
+    finally:
+        # The end row is best effort (the started row was strict). It holds the state only, never a token, a path or a file name.
+        _licensing_audit(
+            request, action="run", object_type="licensed_module_release", object_id=release_id, strict=False,
+            message=f"Licensed module {module_id} {candidate['version']} download ended: {result}.", metadata={**meta, "result": result},
+        )
 
 
 # ---------------------------------------------------------------------------------------------- 1.17.42: default repository and daily sync
@@ -1139,6 +1441,7 @@ def seed_default_repositories() -> list[str]:
                         "trust": default["trust"],
                         "created_at": now,
                         "updated_at": now,
+                        **({"kind": default["kind"], "channel": default.get("channel", "")} if default.get("kind") else {}),
                     })
                     seeded.append(default["id"])
                 marked.append(default["id"])
@@ -1163,20 +1466,25 @@ def run_scheduled_sync(context=None) -> dict:
     from .audit import record, service_audit_actor
     from .scheduler import SchedulerPermanentError
 
-    tried = ok = failed = skipped_entries = 0
+    tried = ok = failed = skipped_entries = attention = 0
     for item in sync_all(enabled_only=True):
         sync = item.get("sync") or {}
         if sync.get("status") == "disabled":
             continue
         tried += 1
         # sync_all sets sync.error when a repository's sync raised, and leaves it empty on success.
-        if sync.get("error"):
+        if sync.get("error") and sync.get("licensing_state") and sync["licensing_state"] in _lcs.ATTENTION_STATES:
+            # 1.17.103: not registered, a licence state or a refused channel is a state for an administrator, not a failed run.
+            attention += 1
+        elif sync.get("error"):
             failed += 1
         else:
             ok += 1
             # 1.17.43: only a sync that succeeded in this run counts its skipped entries. A failed repository's count is from its old cache.
             skipped_entries += int(sync.get("skipped_count") or 0)
     counts = {"repositories": tried, "ok": ok, "failed": failed, "entries_skipped": skipped_entries}
+    if attention:
+        counts["licensing_attention"] = attention
     record(
         actor=service_audit_actor(module_id="core", service="module-repository", identity="daily-sync"),
         module_id="core",
@@ -1186,7 +1494,7 @@ def run_scheduled_sync(context=None) -> dict:
         message="Daily module repository sync ran.",
         after=counts,
     )
-    if tried and not ok:
+    if tried and not ok and not attention:
         raise SchedulerPermanentError(f"Every enabled module repository failed its sync ({failed} of {tried}). The previous catalogs are kept.")
     return counts
 

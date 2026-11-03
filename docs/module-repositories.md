@@ -233,6 +233,38 @@ A repository can be set up with credentials (a private or custom source). If it 
 - **After a rollback or a restore.** A rollback, or a restore that installs an older Core (before 1.17.99), runs that older installer, which writes the config without this key. Core 1.17.100 reads the line just before it runs the installer and puts it back afterwards, exactly as it was, only when the installer left it out. The job log says "config TEC_TAC_LICENSING_SERVER_URL put back". If it cannot (the config is not root-owned, for example) the log says so, the default address applies, and you set the line again as root.
 - Core only reads the address, for the Licensing module (`tec_tac.licensing_server_url.get_licensing_server_url()`). Core holds no Licensing Server credential and calls that server itself never.
 
+### The licensed catalogue (1.17.103)
+
+The online catalogue lists the modules your licence includes, and installs them, again. Core asks the Licensing module for the list. The Licensing module is the only part that talks to the Licensing Server.
+
+- **The source.** Core adds one repository of kind `licensing` (id `tec-tac-licensing`, "Tec-Tac licensed modules (Licensing)") beside the old retired entry. It is enabled and has no address you can change: the Licensing Server address comes from `TEC_TAC_LICENSING_SERVER_URL` in `tec-tac.conf` (see below), which only root can change. A server that already ran 1.17.102 gets the source on the next scheduler tick. Remove it and it stays removed.
+- **Sync.** Press Sync on the source, or wait for the daily sync at 03:00. Nothing is fetched when you open the catalogue page. The page reads what the last sync stored.
+- **The channel.** Each source has a channel. Leave it empty to use the channel your licence prefers. Or enter `production`, `testing` or `development` (any name of 1 to 32 lower case letters, digits, `-` or `_`). The Licensing Server decides which channels your licence allows. If it refuses, you see `channel_not_permitted` and an empty list. Core does not switch to another channel. Changing the channel writes an audit row and clears the list of the old channel, so sync again. Only a module manager can change it.
+- **No list when the licence says no.** A missing, disabled or unhealthy Licensing module, a server that is not registered, a revoked or expired licence, or an ended offline grace gives an empty list and a plain message. Core never shows an unrestricted list. A short fault (the Licensing Server does not answer) keeps the last good list; installs still need a fresh download permission.
+- **Installing.** Staging a licensed release writes an audit row first. Then Core asks the Licensing module for a download permission (a grant, about five minutes), fetches the three files from the Licensing Server with it, and checks them itself: the file names come from the signed `release.json`, the SHA-256 must match, and the Ed25519 signature must verify against the trusted publisher keys on this server. The catalogue is only a cross-check. Only then does the release join the normal install queue and Module Manager. Core follows no redirect and keeps the permission in memory only. It never appears in a log, an audit row or an answer. If the permission runs out, Core asks once more, then stops.
+- **Without a registered Licensing module.** The source shows `not_registered` (or `licensing_unavailable` when the module is missing). You can still install modules by uploading the signed `.zip`, `.zip.sig` and `.release.json` on Settings → Modules.
+
+| State | What you see | What to do |
+|---|---|---|
+| `not_registered` | This server is not registered with the Licensing Server. Register it on the Licensing page first, then sync again. | Register this server on the Licensing page, then sync again. |
+| `licence_revoked` | The licence was revoked, so the licensed catalogue and new module installs are stopped. Check the Licensing page. | Open the Licensing page and read the state. Fix the licence with Tech Flow Dynamics. New installs stay stopped until it is fixed. |
+| `licence_expired` | The licence has expired, so the licensed catalogue and new module installs are stopped. Check the Licensing page. | Renew the licence, then use Refresh now on the Licensing page. |
+| `licence_grace_expired` | Licensing has no recent verified licence (the 7 day offline grace has ended, or none was checked yet). Use Refresh now on the Licensing page, then sync again. | Use Refresh now on the Licensing page. Core needs one verified refresh to continue. |
+| `licence_refused` | The Licensing Server refused this server's licence, so new module installs are stopped. Check the Licensing page. | Open the Licensing page and read the state. Contact Tech Flow Dynamics if it does not clear. |
+| `channel_not_permitted` | This licence does not allow the release channel set for this repository. Pick another channel, or leave it empty to use the licence's own. Core does not switch channels for you. | Change the channel of the source (Settings → Modules → Repositories), or empty it to use the licence's own channel. Core never switches it for you. |
+| `licensing_unavailable` | Core could not get an answer from the Licensing module or the Licensing Server. Check that the Licensing module is installed, enabled and healthy, then try again. | Check that the Licensing module is installed, enabled and healthy on the Modules page. Then sync again. A network fault to the Licensing Server looks the same; it clears when the server answers. |
+| `invalid_response` | The Licensing answer was not in the expected form, so Core did not use it. Try again later. | Sync again later. If it repeats, send us the Core log line that starts with `licensing.catalogue`. |
+| `bad_request` | The request was not valid. Check the channel name set for this repository. | Fix the channel name of the source (lower case letters, digits, `-` or `_`). |
+| `audit_unavailable` | Licensing could not write its audit record, so it did nothing. Try again. | Try again. If it repeats, check the Core log: Licensing needs its audit record before it asks the server. |
+| `release_not_found` | The Licensing Server does not have this release for your licence and channel. Sync the repository again. | Sync the repository again. The release may have been withdrawn. |
+| `grant_expired` | The download permission ran out before the files arrived, and a second one ran out too. Try again in a moment. | Stage the module again. The download permission lasts about five minutes. |
+| `download_refused` | The Licensing Server refused the download. The licence, the module or the publisher may have changed. Check the Licensing page, then sync again. | Check the Licensing page. The licence, the module or the publisher key may have changed. Then sync again. |
+| `download_failed` | The files could not be downloaded from the Licensing Server. Try again later. | Try again later. Nothing was staged. |
+| `verification_failed` | The downloaded files failed Core's own checks, so nothing was staged. | Do not install it. The files did not pass Core's own signature check against the trusted publisher keys. Sync again; send us the Core log line if it repeats. |
+| `release_mismatch` | The downloaded files do not match what the catalogue listed for this release, so nothing was staged. | Do not install it. Sync again. The files differ from what the catalogue listed. |
+| `not_in_licence` | This licence does not include this module, so it cannot be downloaded. | The module is not part of the licence. Ask Tech Flow Dynamics. |
+| `audit_not_saved` | The download did not start because its audit record could not be saved. Try again. | Try again. Core does not start a download when it cannot write the audit record first. |
+
 ### Troubleshooting
 
 | What you see | What it means | What to do |
@@ -242,6 +274,9 @@ A repository can be set up with credentials (a private or custom source). If it 
 | Sync says "returned HTTP 500", the list is still shown | A temporary server fault | Sync again later. Nothing changed |
 | Online catalogue empty, state `credentials_rejected` | A repository with credentials answered 401 or 403 | Check the credentials with the repository owner, sync again. Upload the signed `.zip`, `.zip.sig` and `.release.json` meanwhile |
 | "A module repository refused the credentials set up for it" when you stage | The release came from a repository that refused its credentials | The same; nothing was downloaded |
+| Online catalogue empty, state `not_registered` or `licensing_unavailable` (1.17.103) | The licensed source has no answer from the Licensing module | See the table under "The licensed catalogue (1.17.103)". Register the server, or fix the Licensing module, then sync |
+| "download permission ran out" when you stage a licensed module | The grant expired twice (`grant_expired`) | Stage again |
+| "failed Core's own checks" or "do not match what the catalogue listed" | `verification_failed` or `release_mismatch`: nothing was staged | Sync again. Send us the Core log line if it repeats |
 | The Licensing Server address went back to the default after a rollback or restore | The job log says "could not be put back" | Set `TEC_TAC_LICENSING_SERVER_URL` in `/opt/tec-tac/etc/tec-tac.conf` as root again |
 | A custom Licensing Server address is ignored | The value is not https, holds credentials, a query or a fragment, or has no host | Fix the key in `tec-tac.conf` as root. The Core log names the reason |
 
