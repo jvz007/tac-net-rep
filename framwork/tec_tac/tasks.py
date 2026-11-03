@@ -246,3 +246,12 @@ def note_event_job_refusals(entries):
 def capability_probe(capability_id: str, version: str | None = None):
     """Return capability state from the Celery worker process for diagnostics."""
     return capability_status(capability_id, version=version)
+
+
+@app.task(name="tec_tac.detect_module_updates", ignore_result=True, time_limit=300, soft_time_limit=240)
+def detect_module_updates(trigger: str = "manual-sync"):
+    """Core 1.17.104: find installed modules with a newer release and announce each new version once to the superusers. The sync routes
+    queue it, so a request thread never does this work; ``detect_and_notify`` never raises and makes no network call."""
+    from .module_updates import detect_and_notify
+
+    return detect_and_notify(trigger=trigger)

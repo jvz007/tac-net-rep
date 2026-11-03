@@ -694,6 +694,17 @@ def _validate_release(raw: dict, repo_url: str, *, trust: str = "custom") -> dic
     if signature_url:
         _validate_remote_url(signature_url, trust=trust)
         _validate_remote_url(metadata_url, trust=trust)
+    # 1.17.104: an optional release notes link, shown to a module manager next to an available update. Core never fetches it. https only,
+    # no credential, no query and no fragment, at most 500 characters; anything else becomes null and never invalidates the entry.
+    release_notes_url = None
+    notes_ref = raw.get("release_notes")
+    if isinstance(notes_ref, str) and notes_ref.strip() and len(notes_ref) <= 500 and not _CONTROL_CHARACTERS.search(notes_ref):
+        try:
+            notes = urllib.parse.urlparse(urllib.parse.urljoin(repo_url, notes_ref.strip()))
+            if notes.scheme == "https" and notes.hostname and notes.username is None and notes.password is None:
+                release_notes_url = urllib.parse.urlunparse((notes.scheme, notes.netloc, notes.path, "", "", ""))
+        except ValueError:
+            release_notes_url = None
     return {
         "id": module_id,
         "name": str(raw.get("name") or module_id),
@@ -713,6 +724,7 @@ def _validate_release(raw: dict, repo_url: str, *, trust: str = "custom") -> dic
         "recommended": raw.get("recommended") if isinstance(raw.get("recommended"), bool) else None,
         "downgrade_policy": _informational_text(raw.get("downgrade_policy")),
         "signing_environment": _informational_text(raw.get("signing_environment")),
+        "release_notes_url": release_notes_url,
     }
 
 
@@ -1494,6 +1506,14 @@ def run_scheduled_sync(context=None) -> dict:
         message="Daily module repository sync ran.",
         after=counts,
     )
+    try:
+        # 1.17.104: the daily update check (module automatic updates, phase 1). This run is already a Celery task. It never raises; the
+        # guard only catches an import failure, so the sync's own result and audit row stay as they were.
+        from .module_updates import detect_and_notify
+
+        detect_and_notify(trigger="daily-sync")
+    except Exception:
+        logger.warning("The daily module update check did not run; the next sync tries again.", exc_info=True)
     if tried and not ok and not attention:
         raise SchedulerPermanentError(f"Every enabled module repository failed its sync ({failed} of {tried}). The previous catalogs are kept.")
     return counts

@@ -607,12 +607,12 @@ for sentence in lcs.TEXT.values():
     must(sentence[:40] in DOC or sentence[:40] in TS, f"a message is not in the help: {sentence[:50]}")
 CONTRACTS = read(APP / "contracts.py")
 must('"kind"' in CONTRACTS and "licensing_state" in CONTRACTS and "1.17.103" in CONTRACTS, "the contract rows")
-NOTES = read(ROOT / "RELEASE_NOTES_1.17.103.md")
+NOTES = read(ROOT / "docs" / "releases" / "RELEASE_NOTES_1.17.103.md")  # moved by 1.17.104
 for heading in ("## What changed and why", "## Module-facing changes", "## Assumptions", "## Tests", "## Checks on the test server", "## Not done here", "FAIL"):
     must(heading in NOTES, heading)
 must("not registered" in NOTES.lower() and "registered" in NOTES.lower(), "both paths in the dev02 checklist")
 must(len(list(ROOT.glob("RELEASE_NOTES_*.md"))) == 1 and (ROOT / "docs" / "releases" / "RELEASE_NOTES_1.17.102.md").is_file(), "notes: one in the root, the old one moved")
-must(read(ROOT / "VERSION").strip() == "1.17.103" and json.loads(read(ROOT / "tec_tac_package.json"))["version"] == "1.17.103", "version")
+must(tuple(int(x) for x in read(ROOT / "VERSION").strip().split("-")[0].split(".")) >= (1, 17, 103) and json.loads(read(ROOT / "tec_tac_package.json"))["version"] == read(ROOT / "VERSION").strip(), "version")
 for path in (APP / "module_repository.py", APP / "contracts.py", ROOT / "docs" / "module-repositories.md", ROOT / "docs" / "troubleshooting-diagnostics.md"):
     must(b"\r\n" in path.read_bytes() and b"\n" not in path.read_bytes().replace(b"\r\n", b""), f"{path.name} lost its CRLF")
 must(b"\r" not in (ROOT / "install.sh").read_bytes(), "install.sh has CR")

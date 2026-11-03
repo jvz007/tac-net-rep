@@ -1399,6 +1399,14 @@ CORE_CONTRACTS = (
         "purpose": "list_names() -> the names the calling module owns, sorted. No values. Needs no master key and writes nothing. (1.17.100, AD-57, additive; capability core.secrets 1.0.0; needs framework >=1.17.100). The owner is the module whose code makes the call, found by Core from the call stack (AD-26); nothing is passed in, so a module cannot name another module's secrets. Core, a library, a generated frame, a disabled or legacy module and any other caller get SecretStoreError caller_not_allowed (403) before any name or value is looked at, with one deny audit row. name matches [a-z0-9][a-z0-9._-]{0,63} (else invalid_name, 400). If the master key (/etc/tec-tac/secrets/master.key, made by install.sh only) is missing or unsafe the call raises master_key_unavailable (503) and nothing is read or written; Core never makes a new key. No value appears in a log, an error, an audit row or an HTTP answer, and no HTTP route returns a value. Feature-detect with has_capability('core.secrets'). See docs/secret-store.md.",
         "audience": "consumer/backend",
     },
+    {
+        "area": "module-updates",
+        "import_path": "tec_tac.module_updates",
+        "name": "updates_for_module",
+        "kind": "python",
+        "purpose": "updates_for_module() -> the same payload as GET /api/tfd/modules/updates/: {schema, contract, updates[], count, installable_count, levels {major, minor, patch, other}, availability {state, message}, last_detection, generated_at}. Each updates[] row is {module_id, name, installed_version, available_version, level (patch, minor or major from plain X.Y.Z; a pre-release, a -N rebuild or any other version is other), repository_id, repository_name, channel, release_notes_url (https or null), installable, blocked_reasons[] {code, message}, blocked_reason (the first message or null), source_current}. Codes: core_required, ui_required, runtime_unknown, dependency_missing, dependency_update, source_changed. Read-only: nothing is written and no network call is made; the list is the cached Online catalog, so a licensed repository lists only entitled releases and a refused licence lists none. (1.17.104, additive; capability core.module_updates 1.0.0; needs framework >=1.17.104). The caller must be an installed, enabled module of catalog category server, its own server-side code, verified by Core from the call stack (AD-26); any other caller (a core, premium or test module, Core, a library) gets ModuleUpdatesError caller_not_allowed (403) and one deny audit row (object_type module_update, at most one per caller and reason every 5 minutes per process). Feature-detect with has_capability('core.module_updates'). See docs/module-updates.md.",
+        "audience": "consumer/backend",
+    },
 )
 
 HTTP_CONTRACT_DETAILS = {
@@ -2018,6 +2026,33 @@ HTTP_CONTRACT_DETAILS = {
             "response": {"202": "the queued job"},
             "errors": {"400": "invalid field or an unsatisfiable plan, or code replacement_confirmation_required (added 1.17.11) with the fresh will_disable when the install would disable modules the request did not name"},
             "notes": ["A single local package that would disable a module is installed by the v2 worker (like a rename), because only the v2 worker disables in the same job. An upgrade of an installed replacement names nothing.", "Added 1.17.58: the licence gate follows the licensing mode as on the inspect route; the 403 licensing_requirement_failed payload gains licensing.enforcement_mode, and a candidate's licensing_status gains enforcement_mode, would_block, audited (log-only) and overridden (an audited override). Additive."],
+        },
+    },
+    "/api/tfd/modules/updates/": {
+        "GET": {
+            "authorization": "authenticated Tec-Tac session with module management permission (core.privileged_operations); anyone else gets 403",
+            "response": {
+                "updates": "array of {module_id, name, installed_version, available_version, level, repository_id, repository_name, channel, release_notes_url, installable, blocked_reasons[] {code, message}, blocked_reason, source_current}, sorted by module_id: every installed module the Online catalog marks update_available",
+                "count": "whole number, len(updates)",
+                "installable_count": "whole number, the rows with installable true",
+                "levels": "object {major, minor, patch, other}: the count per level. other is any version that is not plain X.Y.Z on both sides (a pre-release, a -N rebuild, build metadata)",
+                "availability": "{state, message} from the Online catalog",
+                "last_detection": "{at, trigger, updates, current, new} of the last detection run, or null",
+                "generated_at": "ISO time the list was built (it is kept for up to 30 seconds per process)",
+            },
+            "errors": {"403": "no module management permission", "503": "the catalogue could not be read"},
+            "notes": [
+                "Added 1.17.104 (module automatic updates, phase 1: notify and highlight only; no module calls this route). Read-only and no network call. source_current is true when the release's repository's last sync succeeded; only those releases are announced to superusers as a Core notice (one per module version, never repeated, source core, title 'Module update available') with one custom:update-detected audit row (object_type module_update) when first detected. Detection runs in Celery after a manual sync (the sync routes queue it) and after the daily sync. No email is sent.",
+                "Added 1.17.104, additive: a repository index entry may carry release_notes (a link, relative to the index or absolute). Core keeps it as releases[].release_notes_url only when it is https with no credential, query or fragment and at most 500 characters, and never fetches it.",
+            ],
+        },
+    },
+    "/api/tfd/modules/updates/count/": {
+        "GET": {
+            "authorization": "authenticated Tec-Tac session with module management permission (core.privileged_operations); anyone else gets 403",
+            "response": {"schema": "1", "count": "whole number", "installable_count": "whole number", "levels": "object {major, minor, patch, other}"},
+            "errors": {"403": "no module management permission", "503": "the catalogue could not be read"},
+            "notes": ["Added 1.17.104: the badge for the Modules menu entry. The same numbers as /api/tfd/modules/updates/."],
         },
     },
     "/api/tfd/modules/catalog/online/stage/": {
@@ -2962,6 +2997,7 @@ RULES = (
     "Scheduled handlers must propagate downstream execution failures so Scheduler history and retry semantics reflect the real result.",
     "When dispatching raw OS commands, build and test the command for the exact shell used by the agent; Windows cmd.exe quoting, especially Program Files paths, must be deliberate.",
     "Module user preferences (core.module_preferences 1.2.0, Core 1.17.38): a module that uses tec_tac.module_preferences or /api/tfd/module-preferences/ must require framework >=1.17.38. A module may use the Python functions only for its own module id: Core verifies the calling module (AD-26, from 1.17.37) and refuses any other caller with 403 caller_not_allowed. Each real add, modify or delete writes one strict Core audit row (1.17.38) that names the person, the module and the name, and holds the size but never the value; reads and unchanged writes write nothing; if the row cannot be written the change is rolled back with 503 audit_failed. Core checks that the person may use the module (403 module_not_allowed, from 1.17.38). A preference is one person's own non-secret display choice for one module. No secret, token or personal data may be stored. Core checks the person and that the module is installed and enabled. Rows of a removed module stay until the person is deleted. What Core can and cannot prove about the module id (1.17.38): Core can prove the person (their session), that the module is installed and enabled, that the person may use it, and that a row belongs only to that person and that module id pair; Core cannot prove that a browser request came from that module's page, so the browser route's module id is a claim and the audit row records it as source browser, module_verified false. See docs/module-preferences.md.",
+    "Module updates (core.module_updates 1.0.0, Core 1.17.104): a server module that reports available module updates calls tec_tac.module_updates.updates_for_module() from its own server-side code (other categories are refused) and must require framework >=1.17.104, after has_capability('core.module_updates'). It is read-only. Core already announces each new version to the superusers as a Core notice.",
     "Module secrets (core.secrets 1.0.0, Core 1.17.100, AD-57): a module that keeps a token, a private key or any other private value uses tec_tac.secret_store (put, get, delete, configured, list_names) and must require framework >=1.17.100, after has_capability('core.secrets'). Never keep a secret in a database column, a file, a setting, a log or an audit row. The owner is the verified calling module, so a module reads only its own secrets, only in its server-side code. No route returns a value; do not build one. Core refuses with caller_not_allowed (403) a caller it cannot verify, master_key_unavailable (503) when the master key file is missing or unsafe (an administrator fixes the file; Core never makes a key), secret_unreadable (503) when a row cannot be decrypted (ask for the value again) audit_failed (503) when the change could not be audited and, since 1.17.101, secret_conflict (409) when two first writes of one name collided twice. A read updates its counters at most once a minute. See docs/secret-store.md.",
 )
 

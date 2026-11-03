@@ -101,6 +101,15 @@ class TecTacFrameworkConfig(AppConfig):
         except Exception:
             logger.exception("Tec-Tac core.filter_sets capability registration failed")
 
+        # 1.17.104: core.module_updates (the read-only list of available module updates, phase 1 of module automatic updates). Guarded like
+        # the others: a fault here never aborts start-up, and a module that finds no capability (has_capability) reads nothing.
+        try:
+            from .module_updates import register_core_module_updates_capability
+
+            register_core_module_updates_capability()
+        except Exception:
+            logger.exception("Tec-Tac core.module_updates capability registration failed")
+
         # Tactical's native role/account editors can otherwise grant effective
         # superuser authority to mid-level managers. Install the Core-owned,
         # authenticated mutation guard without modifying upstream Tactical code.

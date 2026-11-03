@@ -35,6 +35,7 @@ CORE_CALLBACK_GROUPS = {
     "tec_tac.housekeeping_views": "Tec-Tac · Storage",
     "tec_tac.server_maintenance_views": "Tec-Tac · Server Maintenance",
     "tec_tac.module_repository_views": "Tec-Tac · Module Repository",
+    "tec_tac.module_update_views": "Tec-Tac · Module Repository",
     "tec_tac.module_v2_views": "Tec-Tac · Modules",
     "tec_tac.module_hotfix_views": "Tec-Tac · Module Hotfixes",
 }
@@ -98,6 +99,7 @@ CORE_PATH_GROUPS = (
     ("/api/tfd/system/updates/", "Tec-Tac · System Updates"),
     ("/api/tfd/modules/repositories/", "Tec-Tac · Module Repository"),
     ("/api/tfd/modules/catalog/online/", "Tec-Tac · Module Repository"),
+    ("/api/tfd/modules/updates/", "Tec-Tac · Module Repository"),
     ("/api/tfd/modules/hotfixes/", "Tec-Tac · Module Hotfixes"),
     # v2 hotfix routes live below /modules/v2/<id>/hotfixes and are classified
     # by callback ownership when spectacular metadata is present.

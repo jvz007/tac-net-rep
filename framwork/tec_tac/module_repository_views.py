@@ -18,6 +18,7 @@ from .module_repository import (
     sync_schedule_status,
     upsert_repository,
 )
+from .module_updates import queue_detection
 from .views import _can_manage_modules, _require_module_manager
 
 
@@ -104,9 +105,11 @@ class ModuleRepositorySyncView(APIView):
     def post(self, request, repository_id):
         _require_module_manager(request.user)
         try:
-            return Response(sync_repository(repository_id))
+            result = sync_repository(repository_id)
         except ModuleRepositoryError as exc:
             return Response({"detail": str(exc)}, status=400)
+        queue_detection("manual-sync")  # 1.17.104: the update check runs in Celery, never in this request; it never raises
+        return Response(result)
 
 
 class ModuleRepositorySyncAllView(APIView):
@@ -114,7 +117,9 @@ class ModuleRepositorySyncAllView(APIView):
 
     def post(self, request):
         _require_module_manager(request.user)
-        return Response({"repositories": sync_all(enabled_only=True)})
+        results = sync_all(enabled_only=True)
+        queue_detection("manual-sync")  # 1.17.104: the update check runs in Celery, never in this request; it never raises
+        return Response({"repositories": results})
 
 
 @extend_schema_view(get=extend_schema(tags=["Tec-Tac Framework"], summary="List online module catalog"))

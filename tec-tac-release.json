@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.103",
+  "version": "1.17.104",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.17.103.md",
-      "size": 11684,
-      "sha256": "382c3e021a5be5420a29caba567fc940d8bd706578db80e33391e2ee877bce43"
+      "path": "RELEASE_NOTES_1.17.104.md",
+      "size": 10031,
+      "sha256": "70a89f2f6ff1cc3499b509acfe612f28d0f6ac2c9922a232d1ea62045d026a1d"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "4c1d7c7581c8ebab1c0b7373671b926fa24137d73f08e76138d19a0ca1fe2cb5"
+      "sha256": "5a6c9bc816cda1567b9b4b3e9cec533b68d61d3268848978f6566e212f32ca99"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -190,6 +190,11 @@
       "path": "docs/module-scheduling.md",
       "size": 46616,
       "sha256": "30fa8ec9e0f4263c93ef26e9a78a3270fd45894b0aba4f3abfcdf85e7234876f"
+    },
+    {
+      "path": "docs/module-updates.md",
+      "size": 4052,
+      "sha256": "ad20259f78cdad90c1dfe972953ec329747b0788c9b96a1ed5f9fff243bf0dab"
     },
     {
       "path": "docs/module-visibility.md",
@@ -1122,6 +1127,11 @@
       "sha256": "ba2c12114f26572492425d74f0727fd20a93864f2c4a0944abcce4b5b979ff80"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.103.md",
+      "size": 11684,
+      "sha256": "382c3e021a5be5420a29caba567fc940d8bd706578db80e33391e2ee877bce43"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.11.md",
       "size": 13772,
       "sha256": "84e4f9ea427823efeaf9248f3926735dd9850e2c420411970ef51b7d8310a545"
@@ -1973,8 +1983,8 @@
     },
     {
       "path": "framwork/tec_tac/apps.py",
-      "size": 11355,
-      "sha256": "b99eece10f28c5ed114000327e8dcd21d74201b7ccc94473fdd8d3b78c8300e7"
+      "size": 11898,
+      "sha256": "52a94a7805a50e649e2e231bb32e3815626ffde3c4d61a01959c6bd31a3e2771"
     },
     {
       "path": "framwork/tec_tac/audit.py",
@@ -2023,8 +2033,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 454769,
-      "sha256": "934fa0fd3dce521569f8b07b9b051b046ac99af9bf7143fd6fc879a4f8466971"
+      "size": 459738,
+      "sha256": "05fc3eeb5e0b99e5aea335561cbcc1ded849dc113b01e8fd57a6a0930ff4664d"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -2443,13 +2453,13 @@
     },
     {
       "path": "framwork/tec_tac/module_repository.py",
-      "size": 79421,
-      "sha256": "b94e2daa61c5ad18dff7f11ba9b7e7a7d20f3f60d0b44d6a21d5fd37604e3bcb"
+      "size": 80841,
+      "sha256": "1d1326bb2c3b2a6b9ca2987bdfe847dee2d77cbba2555e71998de9b190c35034"
     },
     {
       "path": "framwork/tec_tac/module_repository_views.py",
-      "size": 7050,
-      "sha256": "a1a15babc82adcc213d211fb30933acda0958101ff4a2b724cc2e74be249d743"
+      "size": 7392,
+      "sha256": "bfd3e234afdfd463878098995da04b74957b2c434d1b46da9c361c16f0a2fce2"
     },
     {
       "path": "framwork/tec_tac/module_runtime.py",
@@ -2460,6 +2470,16 @@
       "path": "framwork/tec_tac/module_state.py",
       "size": 11484,
       "sha256": "afea70f3b9db8bd9756cdcc81f7256475fe3ed07f00566d739fd6f4dbef84923"
+    },
+    {
+      "path": "framwork/tec_tac/module_update_views.py",
+      "size": 1813,
+      "sha256": "24688c1fbb8a0e351443ab74a3ddf743891e6c3e42ca6d8695672e0e151fb0a7"
+    },
+    {
+      "path": "framwork/tec_tac/module_updates.py",
+      "size": 28053,
+      "sha256": "7b1d60684edb29a81503cce3e87abf3868f95cd01400e75c05ff6e3dd7683393"
     },
     {
       "path": "framwork/tec_tac/module_v2_views.py",
@@ -2478,8 +2498,8 @@
     },
     {
       "path": "framwork/tec_tac/openapi.py",
-      "size": 12873,
-      "sha256": "e9fc568164e443c168853b5c79ca1e5fbdbb41bc0d0d54d1ef2bd2e2482b4340"
+      "size": 13007,
+      "sha256": "c6282b0b81db4a28af1f103dda6ec95525b32d59e40566905e978d88eb7fb017"
     },
     {
       "path": "framwork/tec_tac/patch_lockdown.py",
@@ -2708,8 +2728,8 @@
     },
     {
       "path": "framwork/tec_tac/tasks.py",
-      "size": 13464,
-      "sha256": "0e6cf79a2f9ae455dc0ccd578bd42896a560498364e9e4ff2732bfc092e84559"
+      "size": 13982,
+      "sha256": "3e32a172866404f3530fabc76dba4e82cc3d605bffcb5733db98ff02a82f2313"
     },
     {
       "path": "framwork/tec_tac/tests/__init__.py",
@@ -2743,8 +2763,8 @@
     },
     {
       "path": "framwork/tec_tac/urls.py",
-      "size": 18045,
-      "sha256": "389e708ddd2050af98f4d2db8605f6e89cb42c201b7e7eb99f9fa1f674435bbc"
+      "size": 18321,
+      "sha256": "ad04208247c0a7a0d4e0cb364e38936dcf272ac9235739569b82bfc7abb7dec1"
     },
     {
       "path": "framwork/tec_tac/views.py",
@@ -2924,7 +2944,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "3542c6774f6a7f27b22156f2d5c49e83327d18110c1465698bebcf5bc2d950bd"
+      "sha256": "7b06a1bc220491ebf3015039ad003d64eabe18968848247db700c780d2b38031"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -3833,8 +3853,8 @@
     },
     {
       "path": "tests/licensing-repository-1.17.103.py",
-      "size": 37246,
-      "sha256": "6149bb6ae6fe0581f6b261d959a1d5773178cfc7c760f4d19d465c321acf745b"
+      "size": 37359,
+      "sha256": "655b7e75c6b109d8c93e65824abb91d220cc32f9cf08e1f26ab3c1f5437abd97"
     },
     {
       "path": "tests/licensing-status-1.17.58.py",
@@ -4275,6 +4295,11 @@
       "path": "tests/module-ui-sync-guard-1.17.98.py",
       "size": 5743,
       "sha256": "4573529907759c1fed77447fb412d332eb8fe83f0dde69f0d4e17935d7da2c0c"
+    },
+    {
+      "path": "tests/module-updates-1.17.104.py",
+      "size": 23249,
+      "sha256": "3442926f683bdd122295bff2ad75b6369961c1ed0e0dbd543f8184ab74b5f5d4"
     },
     {
       "path": "tests/module-v2-signed-bundle-mapping.py",

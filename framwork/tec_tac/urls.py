@@ -40,6 +40,7 @@ from .module_repository_views import (
     ModuleRepositoryListView, ModuleRepositoryDetailView, ModuleRepositorySyncView,
     ModuleRepositorySyncAllView, ModuleOnlineCatalogView, ModuleOnlineStageView,
 )
+from .module_update_views import ModuleUpdateListView, ModuleUpdateCountView
 from .scheduler_views import (
     SchedulerActionListView, SchedulerListView, SchedulerDetailView,
     SchedulerRunNowView, SchedulerRunListView, SchedulerConfigView, SchedulerHealthView, SchedulerSelfTestView,
@@ -164,6 +165,8 @@ urlpatterns = [
     path("modules/repositories/<str:repository_id>/sync/", ModuleRepositorySyncView.as_view(), name="tec-tac-module-repository-sync"),
     path("modules/catalog/online/", ModuleOnlineCatalogView.as_view(), name="tec-tac-module-online-catalog"),
     path("modules/catalog/online/stage/", ModuleOnlineStageView.as_view(), name="tec-tac-module-online-stage"),
+    path("modules/updates/", ModuleUpdateListView.as_view(), name="tec-tac-module-updates"),
+    path("modules/updates/count/", ModuleUpdateCountView.as_view(), name="tec-tac-module-updates-count"),
     path("modules/v2/", ModuleV2CatalogView.as_view(), name="tec-tac-module-v2-catalog"),
     path("modules/v2/packages/inspect/", ModuleV2InspectView.as_view(), name="tec-tac-module-v2-inspect"),
     path("modules/v2/packages/<uuid:upload_id>/", ModuleV2StageView.as_view(), name="tec-tac-module-v2-stage"),
