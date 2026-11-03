@@ -278,7 +278,9 @@ Each licensed release now has one state. Only `available` can be installed. Ever
 | `blocked_by_channel` | This release is not offered on the release channel set for this repository. Pick another channel, or leave it empty to use the licence's own. | Change the channel of the source, or empty it. |
 | `missing_or_dependency` | This release is missing on the Licensing Server, or a module it needs is not available. Sync again later, or install what it needs first. | Sync again later, or install the module it needs first. |
 | `not_in_licence` | This licence does not include this module, so it cannot be downloaded. | The module is not part of the licence. Ask Tech Flow Dynamics. |
-| `unclassified` | The Licensing Server lists this module with no category, so Core does not offer it. Every module needs one (core, server or premium). | Ask Tech Flow Dynamics to classify the module on the Licensing Server, then sync again. |
+| `unclassified` | The Licensing Server lists this module with no category. Core treats it as test: offered only on a development server, in the development channel. | Ask Tech Flow Dynamics to classify the module on the Licensing Server, then sync again. On a development server, use the development channel. |
+
+**No category on the Licensing Server (1.17.109, AD-21).** Core treats a licensed release with no category as `test`. On a development server, in the `development` channel, it is offered with the warning "Unclassified on the Licensing Server: treated as test" (`category_warning` on the row). On any other server, or in the testing or production channel, it is `unclassified` and never offered. The development-server test is the one Core already uses for test modules at install (`TEC_TAC_ENVIRONMENT=development` in the root config). The category Core acts on at install is always the signed manifest's: the Licensing Server's category is for display and filtering only.
 
 ### Troubleshooting
 

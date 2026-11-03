@@ -98,8 +98,13 @@ ROW_TEXT = {
     "blocked_by_channel": "This release is not offered on the release channel set for this repository. Pick another channel, or leave it empty to use the licence's own.",
     "missing_or_dependency": "This release is missing on the Licensing Server, or a module it needs is not available. Sync again later, or install what it needs first.",
     "not_in_licence": TEXT["not_in_licence"],
-    "unclassified": "The Licensing Server lists this module with no category, so Core does not offer it. Every module needs one (core, server or premium).",
+    "unclassified": "The Licensing Server lists this module with no category. Core treats it as test: offered only on a development server, in the development channel.",
 }
+# 1.17.109 (AD-21, handoff v0.1.44 section 2): a release with no category is treated as test. On a development server, in the
+# development channel only, it is offered with this warning; anywhere else it stays unclassified and is never offered. The category
+# used at install is always the signed manifest's (Core's install-time AD-21 check); this one is for display and filtering only.
+UNCLASSIFIED_TEST_CHANNEL = "development"
+UNCLASSIFIED_TEST_WARNING = "Unclassified on the Licensing Server: treated as test"
 ROW_STATES = (ROW_AVAILABLE, *sorted(ROW_TEXT))
 
 
@@ -320,21 +325,35 @@ def _release_row(module: dict, release: dict) -> dict:
     return apply_availability(row)
 
 
+def category_of(value: Any) -> str | None:
+    """The public name of _category (1.17.109): core, server or premium, else None."""
+    return _category(value)
+
+
 def _category(value: Any) -> str | None:
     """core, server or premium; anything else (None, missing, unclassified or an unknown word) is None (AD-21)."""
     text = _text(value, 32)
     return text.lower() if text and text.lower() in CATEGORIES else None
 
 
-def row_availability(row: dict) -> str:
+def _unclassified_offered(row: dict, development: bool) -> bool:
+    """1.17.109: a release with no category is treated as test, so it is offered on a development server in the development channel only."""
+    channel = row.get("channel")
+    return development is True and isinstance(channel, str) and channel.strip().lower() == UNCLASSIFIED_TEST_CHANNEL
+
+
+def row_availability(row: dict, *, development: bool = False) -> str:
     """One state per licensed release (1.17.108). Order: not in the licence, no category, then the server's availability word.
+
+    1.17.109: no category is unclassified unless development is True and the release is in the development channel (AD-21: treated as
+    test). The caller passes Core's own development-server test (module_category.is_development_server); the default is not a dev server.
 
     The server's word is read loosely (it is free text up to 32 characters): no word or "available" is available; a word that names the
     channel is blocked_by_channel; a word that names a missing release or a dependency is missing_or_dependency; any other word is
     entitled_unavailable. An unknown word is never read as available."""
     if row.get("entitled") is not True:
         return "not_in_licence"
-    if _category(row.get("category")) is None:
+    if _category(row.get("category")) is None and not _unclassified_offered(row, development):
         return "unclassified"
     word = (row.get("availability") or "").strip().lower()
     if word in ("", ROW_AVAILABLE):
@@ -346,11 +365,21 @@ def row_availability(row: dict) -> str:
     return "entitled_unavailable"
 
 
-def apply_availability(row: dict) -> dict:
+def apply_availability(row: dict, *, development: bool = False) -> dict:
     """Set availability_state on a licensed row; a row that is not available is marked never offered, with its reason. Idempotent, and
-    it never clears a mark another rule set (a retired or refused repository)."""
-    state = row_availability(row)
+    it never clears a mark another rule set (a retired or refused repository).
+
+    1.17.109: a mark this function set earlier (a state of ROW_TEXT, for example in a cache written at sync) is worked out again, so the
+    development-server answer of this request decides. A release with no category that is offered carries category_warning."""
+    if row.get("download_unavailable") and row.get("download_unavailable_state") in ROW_TEXT:
+        for key in ("download_unavailable", "download_unavailable_reason", "download_unavailable_state"):
+            row.pop(key, None)
+    state = row_availability(row, development=development)
     row["availability_state"] = state
+    if state == ROW_AVAILABLE and _category(row.get("category")) is None:
+        row["category_warning"] = UNCLASSIFIED_TEST_WARNING
+    else:
+        row.pop("category_warning", None)
     if state != ROW_AVAILABLE and not row.get("download_unavailable"):
         row["download_unavailable"] = True
         row["download_unavailable_reason"] = ROW_TEXT[state]

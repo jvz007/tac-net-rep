@@ -39,6 +39,7 @@ from .module_manager_v2 import (
 )
 from .module_state import ModuleStateError, strip_repository_url, version_satisfies
 from . import licensing_catalogue_source as _lcs
+from .module_category import is_development_server
 
 REPOSITORY_ROOT = Path("/var/lib/tec-tac/module-manager/repositories")
 CONFIG_FILE = REPOSITORY_ROOT / "repositories.json"
@@ -1003,7 +1004,9 @@ def sync_all(enabled_only: bool = True, skip_ids=frozenset()) -> list[dict]:
     return results
 
 
-def _cached_modules(repo: dict) -> list[dict]:
+def _cached_modules(repo: dict, *, development: bool | None = None) -> list[dict]:
+    """The cached releases of one repository. For a licensing source, development is Core's own development-server test (the one the
+    install of a test module uses); it is read once per call when the caller does not pass it (1.17.109)."""
     path = CACHE_ROOT / f"{repo['id']}.json"
     if not path.is_file():
         return []
@@ -1015,6 +1018,8 @@ def _cached_modules(repo: dict) -> list[dict]:
     retired = _cache_retired(payload, credentialed)
     rejected = _cache_credentials_rejected(payload, credentialed)
     result = []
+    if repo.get("kind") == _lcs.KIND and development is None:
+        development = is_development_server()
     for item in payload.get("modules") or []:
         if isinstance(item, dict):
             row = {**item, "repository_id": repo["id"], "repository_name": repo["name"], "repository_priority": repo["priority"], "repository_trust": repo["trust"]}
@@ -1030,7 +1035,8 @@ def _cached_modules(repo: dict) -> list[dict]:
                 row["download_unavailable_state"] = "repository_retired"
             if repo.get("kind") == _lcs.KIND:
                 # 1.17.108: one state per licensed release, also for a cache written before this release. Only "available" is offered.
-                _lcs.apply_availability(row)
+                # 1.17.109 (AD-21): no category is treated as test, so offered on a development server in the development channel only.
+                _lcs.apply_availability(row, development=bool(development))
             result.append(row)
     return result
 
@@ -1038,14 +1044,17 @@ def _cached_modules(repo: dict) -> list[dict]:
 MAX_UNAVAILABLE_ROWS = 500
 
 
-def _unavailable_licensed(repos: list[dict]) -> list[dict]:
+def _unavailable_licensed(repos: list[dict], cached: dict[str, list[dict]] | None = None) -> list[dict]:
     """1.17.108: the licensed releases that are listed but not offered, each with its state and Core's reason. Display only: nothing here
-    can be staged, and no field comes from the server except the id, name, version and channel already in the cache."""
+    can be staged, and no field comes from the server except the id, name, version and channel already in the cache.
+
+    1.17.109: cached maps a repository id to the rows online_catalog already read, so the cache is read once per request."""
     rows = []
     for repo in repos:
         if repo.get("kind") != _lcs.KIND:
             continue
-        for item in _cached_modules(repo):
+        items = cached[repo["id"]] if cached is not None and repo["id"] in cached else _cached_modules(repo)
+        for item in items:
             state = item.get("availability_state")
             if not item.get("download_unavailable") or state not in _lcs.ROW_TEXT or item.get("download_unavailable_state") != state:
                 continue
@@ -1054,7 +1063,7 @@ def _unavailable_licensed(repos: list[dict]) -> list[dict]:
                 "name": item.get("name") or item.get("id"),
                 "version": item.get("version"),
                 "channel": item.get("channel"),
-                "category": item.get("category"),
+                "category": _lcs.category_of(item.get("category")),
                 "repository_id": repo["id"],
                 "repository_name": repo["name"],
                 "availability_state": state,
@@ -1133,14 +1142,22 @@ def _availability(repos: list[dict], offered_count: int, installed_only_count: i
     }
 
 
+def _development_for(repos: list[dict]) -> bool:
+    """1.17.109: Core's own development-server test, read once per request and only when a licensing source is enabled."""
+    return is_development_server() if any(repo.get("kind") == _lcs.KIND for repo in repos) else False
+
+
 def online_catalog() -> dict:
     repos = [repo for repo in list_repositories() if repo.get("enabled", True)]
     installed_list = [item for item in installed_catalog_v2() if not item.get("legacy")]
     installed = {item["id"]: item for item in installed_list}
     releases = []
+    # 1.17.109: each cache is read once per request (online and unavailable[] share it), and the development-server test once.
+    development = _development_for(repos)
+    cached = {repo["id"]: _cached_modules(repo, development=development) for repo in repos}
     for repo in repos:
         # 1.17.99: a release whose repository is retired is not offered (no install button that cannot work).
-        releases.extend(item for item in _cached_modules(repo) if not item.get("download_unavailable"))
+        releases.extend(item for item in cached[repo["id"]] if not item.get("download_unavailable"))
     by_module: dict[str, list[dict]] = {}
     for release in releases:
         by_module.setdefault(release["id"], []).append(release)
@@ -1206,6 +1223,9 @@ def online_catalog() -> dict:
             "recommended": (selected or {}).get("recommended"),
             "downgrade_policy": (selected or {}).get("downgrade_policy"),
             "signing_environment": (selected or {}).get("signing_environment"),
+            # 1.17.109 (AD-21): display and filtering only. The install uses the signed manifest's category, never this one.
+            "category": (selected or {}).get("category"),
+            "category_warning": (selected or {}).get("category_warning"),
             "releases": choices,
         })
     return {
@@ -1214,7 +1234,7 @@ def online_catalog() -> dict:
         "count": len(items),
         "installed_only": installed_only,
         "availability": _availability(repos, len(items), len(installed_only)),
-        "unavailable": _unavailable_licensed(repos),
+        "unavailable": _unavailable_licensed(repos, cached),
         "repositories": all_repository_status(),
     }
 
@@ -1254,7 +1274,12 @@ def stage_repository_package(repository_id: str, module_id: str, version: str | 
         refused = all(item.get("download_unavailable_state") == "credentials_rejected" for item in candidates)
         if repo.get("kind") == "licensing":
             # 1.17.108: the reason of the release asked for (not in the licence, no category, channel, missing ...).
-            state = candidates[0].get("download_unavailable_state")
+            # 1.17.109: with no version given, the reason of the newest release, not of whichever came first in the cache.
+            newest = candidates[0]
+            for item in candidates[1:]:
+                if version_satisfies(item["version"], f">{newest['version']}"):
+                    newest = item
+            state = newest.get("download_unavailable_state")
             raise ModuleRepositoryError(_lcs.ROW_TEXT.get(state) or _lcs.message_for("not_in_licence"))
         raise ModuleRepositoryError(CREDENTIALS_REJECTED_MESSAGE if refused else RETIRED_MESSAGE)
     candidates = [item for item in candidates if not item.get("download_unavailable")]

@@ -69,7 +69,7 @@ Diagnostics require the same Core server-maintenance authority used by other sys
 - **`entitled_unavailable` (licensed release, 1.17.108).** Your licence includes this module, but the Licensing Server says this release is not available now. Sync again later.
 - **`blocked_by_channel` (licensed release, 1.17.108).** This release is not offered on the release channel set for this repository. Pick another channel, or leave it empty to use the licence's own.
 - **`missing_or_dependency` (licensed release, 1.17.108).** This release is missing on the Licensing Server, or a module it needs is not available. Sync again later, or install what it needs first.
-- **`unclassified` (licensed release, 1.17.108).** The Licensing Server lists this module with no category, so Core does not offer it. Every module needs one (core, server or premium).
+- **`unclassified` (licensed release, 1.17.108; 1.17.109).** The Licensing Server lists this module with no category. Core treats it as test: offered only on a development server, in the development channel. On a development server in the development channel the release is offered with the warning "Unclassified on the Licensing Server: treated as test".
 
 ---
 Tech Flow Dynamics · techxflow.co.za
