@@ -45,7 +45,7 @@ The first detection of a version writes one audit row: action `custom:update-det
 
 `core.module_updates` 1.0.0: call `tec_tac.module_updates.updates_for_module()` from your module's own server-side code, after `has_capability('core.module_updates')`, and require framework `>=1.17.104`. It's open to **server modules only**: your module's catalog category must be `server`. It returns the same payload as the list route. Any other caller (a core, premium or test module, Core itself, a library) gets `caller_not_allowed` (403), and Core writes one `deny` audit row (object type `module_update`, at most one per caller and reason every 5 minutes).
 
-A repository index entry may add `release_notes`: a link to the release notes, relative to the index or absolute. Core keeps it only when it's `https` with no credential, query or fragment, and never fetches it.
+A repository index entry may add `release_notes`: a link to the release notes, relative to the index or absolute. Core keeps it only when it's `https` with no credential, query, fragment or `;params`; any other link becomes null (1.17.105: it was stripped before). Core never fetches it.
 
 ## Troubleshooting
 

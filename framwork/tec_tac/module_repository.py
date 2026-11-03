@@ -696,12 +696,14 @@ def _validate_release(raw: dict, repo_url: str, *, trust: str = "custom") -> dic
         _validate_remote_url(metadata_url, trust=trust)
     # 1.17.104: an optional release notes link, shown to a module manager next to an available update. Core never fetches it. https only,
     # no credential, no query and no fragment, at most 500 characters; anything else becomes null and never invalidates the entry.
+    # 1.17.105: a link with a query, a fragment or ;params is null, as the contract says (it was stripped before).
     release_notes_url = None
     notes_ref = raw.get("release_notes")
     if isinstance(notes_ref, str) and notes_ref.strip() and len(notes_ref) <= 500 and not _CONTROL_CHARACTERS.search(notes_ref):
         try:
             notes = urllib.parse.urlparse(urllib.parse.urljoin(repo_url, notes_ref.strip()))
-            if notes.scheme == "https" and notes.hostname and notes.username is None and notes.password is None:
+            if (notes.scheme == "https" and notes.hostname and notes.username is None and notes.password is None
+                    and not notes.query and not notes.fragment and not notes.params and not any(c in notes_ref for c in "?#;")):
                 release_notes_url = urllib.parse.urlunparse((notes.scheme, notes.netloc, notes.path, "", "", ""))
         except ValueError:
             release_notes_url = None
@@ -983,9 +985,12 @@ def all_repository_status() -> list[dict]:
     return [repository_status(item["id"]) for item in list_repositories()]
 
 
-def sync_all(enabled_only: bool = True) -> list[dict]:
+def sync_all(enabled_only: bool = True, skip_ids=frozenset()) -> list[dict]:
+    """Sync every repository (the enabled ones when enabled_only). An id in skip_ids is left out of the result (1.17.105, daily sync)."""
     results = []
     for repo in list_repositories():
+        if repo["id"] in skip_ids:
+            continue
         if enabled_only and not repo.get("enabled", True):
             results.append({**repo, "sync": {"status": "disabled", "synced_at": None, "error": None, "module_count": 0, "skipped_count": 0, "skipped": []}})
             continue
@@ -1468,6 +1473,22 @@ def seed_default_repositories() -> list[str]:
         return []
 
 
+def _licensing_sources_without_provider() -> frozenset:
+    """The ids of the enabled Licensing sources when the Licensing module (the licensing.catalogue provider) is not installed (1.17.105).
+
+    Only a provider module that is missing counts. A disabled or unhealthy one is still a failed sync, so an administrator sees it.
+    When the state cannot be read, nothing is skipped and the run behaves as before."""
+    try:
+        from .capabilities import capability_status
+
+        if capability_status(_lcs.CAPABILITY_ID, check_health=False).get("state") != "missing":
+            return frozenset()
+        return frozenset(repo["id"] for repo in list_repositories() if repo.get("kind") == "licensing" and repo.get("enabled", True))
+    except Exception:
+        logger.warning("The Licensing provider state could not be read; the daily sync tries every enabled source.", exc_info=True)
+        return frozenset()
+
+
 def run_scheduled_sync(context=None) -> dict:
     """The daily sync (1.17.42, CQ122). Called by the Scheduler action tec-tac.module-repository-sync.
 
@@ -1479,7 +1500,11 @@ def run_scheduled_sync(context=None) -> dict:
     from .scheduler import SchedulerPermanentError
 
     tried = ok = failed = skipped_entries = attention = 0
-    for item in sync_all(enabled_only=True):
+    # 1.17.105: on a server with no Licensing module the Licensing source is skipped, with one info line, instead of failing every night.
+    skip_ids = _licensing_sources_without_provider()
+    if skip_ids:
+        logger.info("Daily module repository sync: the Licensing module is not installed, so %d licensed module source(s) were skipped.", len(skip_ids))
+    for item in sync_all(enabled_only=True, skip_ids=skip_ids):
         sync = item.get("sync") or {}
         if sync.get("status") == "disabled":
             continue
@@ -1497,6 +1522,8 @@ def run_scheduled_sync(context=None) -> dict:
     counts = {"repositories": tried, "ok": ok, "failed": failed, "entries_skipped": skipped_entries}
     if attention:
         counts["licensing_attention"] = attention
+    if skip_ids:
+        counts["licensing_skipped"] = len(skip_ids)
     record(
         actor=service_audit_actor(module_id="core", service="module-repository", identity="daily-sync"),
         module_id="core",

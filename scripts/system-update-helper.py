@@ -939,7 +939,9 @@ def normalise_source_owner(target, component, config=None, *, require_git=True):
     A checkout an older update left mixed (a root-owned worktree with a Tactical-owned .git, "dubious ownership") is repaired
     here. A path owned by any third account is refused, as before, with the command that fixes it. Every name is changed through
     the directory descriptor that listed it and no link is followed. A root-owned file with a second hard link is refused, so a
-    link planted to a root file elsewhere can never be handed over. Returns the number of paths changed.
+    link planted to a root file elsewhere can never be handed over; the message names the top-level folder that holds it (1.17.105).
+    The UI checkout's top-level node_modules and dist (Git-ignored build folders, never run and never copied) are not walked and
+    keep their owner (1.17.105). Returns the number of paths changed.
     """
     config = load_config() if config is None else config
     tactical, uid, gid = _tactical_account(config)
@@ -962,14 +964,35 @@ def normalise_source_owner(target, component, config=None, *, require_git=True):
         os.close(root_fd)
 
 
+# 1.17.105: the UI checkout's Git-ignored build folders at its top level (the UI .gitignore lists both). Nothing runs from them and
+# stage_release_tree never copies them, so the owner hand-over does not walk them and leaves them as they are (never removed: the
+# update leaves ignored files alone). An old root `npm install` left root-owned, hard-linked files in node_modules on dev02.
+UNWALKED_BUILD_FOLDERS = {"ui": frozenset({"node_modules", "dist"})}
+
+
+def _hard_link_refusal(root, rel_path, component, tactical):
+    """The refusal for a root-owned file with a second hard link (1.17.98). From 1.17.105 it names the top-level folder to remove."""
+    path = os.path.normpath(os.path.join(str(root), rel_path))
+    parts = PurePosixPath(os.path.normpath(rel_path)).parts
+    if len(parts) > 1:
+        folder = os.path.join(str(root), parts[0])
+        advice = f"Remove the top-level folder {folder} that holds it (Git restores tracked files on the next update), then update again."
+    else:
+        advice = "Remove it, then update again."
+    return RuntimeError(f"{component} source checkout {path} is a root-owned file with more than one hard link, so it is not handed to {tactical}. {advice}")
+
+
 def _normalise_owner_from_fd(root_fd, root, component, tactical, uid, gid):
     allowed = {0, uid}
     fix = f"chown -R {tactical}:{_group_name(gid)} {root}"
     changed = 0
     top = True
     for current, dirs, files, dirfd in os.fwalk(".", dir_fd=root_fd, follow_symlinks=False):
+        rel_current = current
         current = os.path.normpath(os.path.join(str(root), current))
         if top:
+            # Pruned in place, so fwalk neither lists nor enters them. Only at the top level: a folder of that name deeper down is walked.
+            dirs[:] = [name for name in dirs if name not in UNWALKED_BUILD_FOLDERS.get(component, ())]
             info = os.fstat(dirfd)
             if info.st_uid not in allowed:
                 raise RuntimeError(f"{component} source checkout {root} is owned by {_owner_name(info.st_uid)}, but it must be owned by {tactical}. Fix it with: {fix}")
@@ -1000,7 +1023,7 @@ def _normalise_owner_from_fd(root_fd, root, component, tactical, uid, gid):
                 if (info.st_dev, info.st_ino) != (listed.st_dev, listed.st_ino) or info.st_uid not in allowed:
                     raise RuntimeError(f"{component} source checkout {os.path.join(current, name)} changed while its owner was set")
                 if stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_nlink > 1:
-                    raise RuntimeError(f"{component} source checkout {os.path.join(current, name)} is a root-owned file with more than one hard link, so it is not handed to {tactical}. Remove it, then update again.")
+                    raise _hard_link_refusal(root, os.path.join(rel_current, name), component, tactical)
                 os.fchown(fd, uid, gid)
             finally:
                 os.close(fd)

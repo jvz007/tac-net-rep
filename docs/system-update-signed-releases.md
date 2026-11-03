@@ -55,7 +55,7 @@ The check and the stage are separate. The stage route accepts the commit the che
 A Framework or UI update:
 
 1. verifies the downloaded candidate as root (signed tree, publisher permission, root trust floor);
-2. gives any path of the checkout that is not the Tactical account's back to it (a path owned by a third account is refused with the `chown` command; a root-owned file with a second hard link is refused);
+2. gives any path of the checkout that is not the Tactical account's back to it (a path owned by a third account is refused with the `chown` command; a root-owned file with a second hard link is refused, and the message names the top-level folder that holds it; from 1.17.105 the UI checkout's Git-ignored top-level `node_modules` and `dist` are not walked and keep their owner, because nothing runs from them and they are never copied);
 3. writes any tracked changes to the update log and restores them to `HEAD`; removes untracked files only when they are generated (Python bytecode, an untracked UI `package-lock.json`); any other untracked file stops the update with the list, and ignored files (`node_modules`, `dist`) are left alone;
 4. backs up the checkout (root-held archive);
 5. moves the checkout to exactly the commit the candidate came from (`git checkout -B <ref> <sha>` for a branch, a detached `HEAD` for a release; a fetch only brings the objects in, nothing looks the branch up again). An offline package has no commit and leaves the checkout where it is;

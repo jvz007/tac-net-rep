@@ -305,7 +305,7 @@ names = {
     "_availability", "run_scheduled_sync", "RETIRED_STATUSES", "CREDENTIALS_STATUSES", "_LEGACY_RETIRED_ERROR", "DEFAULT_REPOSITORIES",
     "DEFAULTS_SEEDED_KEY", "SUPERSEDED_DEFAULT_URLS", "seed_default_repositories", "_seed_address_check", "_correct_superseded_url",
     "_clean_url", "_normalize_address", "_always_blocked_address", "_private_address", "_CGNAT", "_validated_port", "_cached_modules",
-    "SYNC_OWNER_KEY",
+    "SYNC_OWNER_KEY", "_licensing_sources_without_provider",
 }
 update_node = next(n for n in REPO_TREE.body if isinstance(n, ast.Expr) and isinstance(n.value, ast.Call) and "_AVAILABILITY_MESSAGES" in ast.dump(n.value))
 body = extract(REPO_TREE, names) + [update_node]

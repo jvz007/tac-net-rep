@@ -25,6 +25,7 @@ No email is sent in this release (assumption recorded in reviews/questions/core.
 from __future__ import annotations
 
 import contextlib
+import copy
 import hashlib
 import json
 import logging
@@ -258,17 +259,18 @@ def _build_list() -> dict:
 
 def list_updates(*, fresh: bool = False) -> dict:
     """Every available update as the read route and the contract return it. Kept for LIST_CACHE_SECONDS in this process, so a badge
-    that many browsers load stays cheap. A detection run clears the cache. Raises when the catalogue cannot be read."""
+    that many browsers load stays cheap. A detection run clears the cache. Raises when the catalogue cannot be read.
+    1.17.105: every caller gets its own deep copy, so a contract caller that changes its result never changes what the routes serve."""
     now = time.monotonic()
     with _LIST_CACHE_LOCK:
         cached = _LIST_CACHE["value"]
         if not fresh and cached is not None and now - float(_LIST_CACHE["at"]) < LIST_CACHE_SECONDS:
-            return cached
+            return copy.deepcopy(cached)
     value = _build_list()
     with _LIST_CACHE_LOCK:
         _LIST_CACHE["at"] = time.monotonic()
         _LIST_CACHE["value"] = value
-    return value
+    return copy.deepcopy(value)
 
 
 def update_count() -> dict:

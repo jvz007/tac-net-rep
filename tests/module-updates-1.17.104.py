@@ -396,7 +396,7 @@ exec(compile(ast.Module(body=picked, type_ignores=[]), "module_repository.py", "
 base = {"id": "alpha", "version": "1.0.1", "download": "alpha.zip", "sha256": "a" * 64}
 for notes, expected in [
     ("notes/alpha.html", "https://repo.test/idx/notes/alpha.html"),
-    ("https://docs.test/a.html?token=x#top", "https://docs.test/a.html"),
+    ("https://docs.test/a.html?token=x#top", None),  # 1.17.105: null, as the contract says (it was stripped before)
     ("http://docs.test/a.html", None), ("javascript:alert(1)", None), ("https://user:pw@docs.test/a", None),
     ("https://docs.test/\x00", None), ("https://[bad/", None), (12, None), ("x" * 501, None), (None, None),
 ]:

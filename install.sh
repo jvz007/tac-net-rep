@@ -319,8 +319,9 @@ if [[ "${TACTICAL_GROUP}" =~ ^[a-z_][a-z0-9_.-]{0,63}$ ]]; then
     # half-written or missing record. Until the move it keeps reading the old one, or fails closed (wrong_group) if there was none.
     SECRET_GROUP_TMP="$(mktemp "${SECRETS_ROOT}/.key-group.XXXXXX")" || fail "Could not create a temporary file in ${SECRETS_ROOT}."
     (umask 077 && printf '%s\n' "${TACTICAL_GROUP}" > "${SECRET_GROUP_TMP}") || { rm -f "${SECRET_GROUP_TMP}"; fail "Could not record the secret store key group."; }
-    chown root:"${TACTICAL_GROUP}" "${SECRET_GROUP_TMP}"
-    chmod 0640 "${SECRET_GROUP_TMP}"
+    # 1.17.105: a failed chown or chmod removes the temporary file too, so no .key-group.XXXXXX is left in the secret store.
+    chown root:"${TACTICAL_GROUP}" "${SECRET_GROUP_TMP}" || { rm -f "${SECRET_GROUP_TMP}"; fail "Could not record the secret store key group."; }
+    chmod 0640 "${SECRET_GROUP_TMP}" || { rm -f "${SECRET_GROUP_TMP}"; fail "Could not record the secret store key group."; }
     mv -f -- "${SECRET_GROUP_TMP}" "${SECRET_GROUP_FILE}" || { rm -f "${SECRET_GROUP_TMP}"; fail "Could not record the secret store key group."; }
     log "Secret store key group: recorded (${SECRET_GROUP_FILE}: ${TACTICAL_GROUP})"
 else
