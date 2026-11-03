@@ -910,7 +910,16 @@ FRAMEWORK_REPOSITORY="${TEC_TAC_FRAMEWORK_REPOSITORY:-jvz007/tac-net-rep}"
 UI_REPOSITORY="${TEC_TAC_UI_REPOSITORY:-jvz007/tec-tac-ui}"
 
 mkdir -p "${SYSTEM_UPDATE_ROOT}/staged" "${SYSTEM_UPDATE_ROOT}/jobs" "${SYSTEM_UPDATE_ROOT}/cache" "${SYSTEM_UPDATE_ROOT}/running" "${SYSTEM_UPDATE_ROOT}/logs" "${SYSTEM_UPDATE_ROOT}/backups" "${SYSTEM_UPDATE_ROOT}/history"
-chown -R root:"${TACTICAL_GROUP}" "${SYSTEM_UPDATE_ROOT}"
+# 1.17.107: the cache folder's contents are left out of the recursive owner change. Its lock files are the Tactical account's
+# (Core opens them read-write); a recursive chown made them root:tactical 0640, so the Tactical account fell back to a stale
+# branch head. -h and find -P change a link itself and never follow it.
+find -P "${SYSTEM_UPDATE_ROOT}" -path "${SYSTEM_UPDATE_ROOT}/cache/*" -prune -o -exec chown -h root:"${TACTICAL_GROUP}" {} +
+# Repair: delete a cache lock file left root-owned by an earlier install or a root run. Core re-creates it as the Tactical account
+# on the next check. Lock files only; release-cache.json stays as it is. Deleting a name never follows a link.
+SYSTEM_UPDATE_ROOT_LOCKS="$(find -P "${SYSTEM_UPDATE_ROOT}/cache" -maxdepth 1 -name '*.lock' -type f -user root -print -delete | wc -l)"
+if (( SYSTEM_UPDATE_ROOT_LOCKS > 0 )); then
+    log "Removed ${SYSTEM_UPDATE_ROOT_LOCKS} root-owned System Update cache lock file(s) from ${SYSTEM_UPDATE_ROOT}/cache; Core re-creates them as ${TACTICAL_USER}."
+fi
 chmod 2750 "${SYSTEM_UPDATE_ROOT}" "${SYSTEM_UPDATE_ROOT}/running" "${SYSTEM_UPDATE_ROOT}/logs" "${SYSTEM_UPDATE_ROOT}/backups" "${SYSTEM_UPDATE_ROOT}/history"
 chmod 2770 "${SYSTEM_UPDATE_ROOT}/staged" "${SYSTEM_UPDATE_ROOT}/jobs" "${SYSTEM_UPDATE_ROOT}/cache"
 

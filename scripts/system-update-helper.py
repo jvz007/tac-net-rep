@@ -992,7 +992,13 @@ def _normalise_owner_from_fd(root_fd, root, component, tactical, uid, gid):
         current = os.path.normpath(os.path.join(str(root), current))
         if top:
             # Pruned in place, so fwalk neither lists nor enters them. Only at the top level: a folder of that name deeper down is walked.
+            unwalked = [name for name in dirs if name in UNWALKED_BUILD_FOLDERS.get(component, ())]
             dirs[:] = [name for name in dirs if name not in UNWALKED_BUILD_FOLDERS.get(component, ())]
+            # 1.17.107: the pruned folder itself is still owner-checked (never entered): root or the Tactical account, else refused.
+            for name in unwalked:
+                listed = os.stat(name, dir_fd=dirfd, follow_symlinks=False)
+                if listed.st_uid not in allowed:
+                    raise RuntimeError(f"{component} source checkout {os.path.join(current, name)} is owned by {_owner_name(listed.st_uid)}, but it must be owned by {tactical}. Fix it with: {fix}")
             info = os.fstat(dirfd)
             if info.st_uid not in allowed:
                 raise RuntimeError(f"{component} source checkout {root} is owned by {_owner_name(info.st_uid)}, but it must be owned by {tactical}. Fix it with: {fix}")

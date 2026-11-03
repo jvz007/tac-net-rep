@@ -1477,10 +1477,15 @@ def _licensing_sources_without_provider() -> frozenset:
     """The ids of the enabled Licensing sources when the Licensing module (the licensing.catalogue provider) is not installed (1.17.105).
 
     Only a provider module that is missing counts. A disabled or unhealthy one is still a failed sync, so an administrator sees it.
-    When the state cannot be read, nothing is skipped and the run behaves as before."""
+    When the state cannot be read, nothing is skipped and the run behaves as before.
+
+    1.17.107: capability_status reports 'missing' for any registry error, a registry that fails validation included. The registry is
+    read first, so only a provider that is really not installed is skipped; a registry error skips nothing and is logged with its reason."""
     try:
         from .capabilities import capability_status
+        from .registry import get_plugins
 
+        get_plugins()  # raises RegistryError when the whole registry fails validation: that is not "not installed"
         if capability_status(_lcs.CAPABILITY_ID, check_health=False).get("state") != "missing":
             return frozenset()
         return frozenset(repo["id"] for repo in list_repositories() if repo.get("kind") == "licensing" and repo.get("enabled", True))

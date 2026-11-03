@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.106",
+  "version": "1.17.107",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.17.106.md",
-      "size": 7262,
-      "sha256": "7373d4af8c1d901d24a13792d179998367c74c7d3c7b9e11f135870c2f416856"
+      "path": "RELEASE_NOTES_1.17.107.md",
+      "size": 6308,
+      "sha256": "be3d580f07290b164572ded271bea49d40026e941b297417cc1ecae2a5d55dcb"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "f38eb8eed968a8724949a943ed38f6413b1392e90b327d5de20475658cc57303"
+      "sha256": "fc9e097308fef1f4a4b7ca77765a52b155d36fdb504abdda61a77ea7a25b68da"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -178,8 +178,8 @@
     },
     {
       "path": "docs/module-repositories.md",
-      "size": 29214,
-      "sha256": "22701de7644fc5e13676e7f92a410d7faed052e946a3284d081f38aecac36d8c"
+      "size": 29399,
+      "sha256": "cc156aa09083f3661c1503d27ae72af9e081dedae4c87aa5c90f92f3c0dfe838"
     },
     {
       "path": "docs/module-routes.md",
@@ -1142,6 +1142,11 @@
       "sha256": "908c9f262e11760255a00aa4790cf4a43f58d678d422f7c18549d44b2c967c30"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.106.md",
+      "size": 7262,
+      "sha256": "7373d4af8c1d901d24a13792d179998367c74c7d3c7b9e11f135870c2f416856"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.11.md",
       "size": 13772,
       "sha256": "84e4f9ea427823efeaf9248f3926735dd9850e2c420411970ef51b7d8310a545"
@@ -1758,8 +1763,8 @@
     },
     {
       "path": "docs/system-update-signed-releases.md",
-      "size": 12477,
-      "sha256": "8e821899f2084ba299be766a269aaaa6f2d9d2c6a4657102aaa32463a325dc6a"
+      "size": 13043,
+      "sha256": "68f24107541dd158e1ca1576ea079fcec2e50f72c66b09b47130be8e24aeafb8"
     },
     {
       "path": "docs/tactical-operations.md",
@@ -2463,8 +2468,8 @@
     },
     {
       "path": "framwork/tec_tac/module_repository.py",
-      "size": 82698,
-      "sha256": "078d74dccaf1ce14353a9f0df6c28bbbbcbcc0039e03c601318f2b6a192bbe01"
+      "size": 83133,
+      "sha256": "5b2e2a6334a4ac0025604a161dd8a7adffa1a98f55c209c2f01d29bc65043988"
     },
     {
       "path": "framwork/tec_tac/module_repository_views.py",
@@ -2683,8 +2688,8 @@
     },
     {
       "path": "framwork/tec_tac/system_update.py",
-      "size": 91587,
-      "sha256": "ef702cb31903c9593068ec536792bdbb554cb5a7cd1ab43dfac440a81bfa7bae"
+      "size": 92641,
+      "sha256": "c46d6d42f400db5c2789de5e246d7243646092d1f083f6e8effa04e4f23232ef"
     },
     {
       "path": "framwork/tec_tac/system_update_audit.py",
@@ -2783,8 +2788,8 @@
     },
     {
       "path": "install.sh",
-      "size": 76695,
-      "sha256": "d95c615ee6c32a46f2eb4590ae0b8c25ff05ef4eab919bf94be6b00d34a2bd61"
+      "size": 77677,
+      "sha256": "820ec3cdebb72ef75e3f764396c8e47ab8f56ff4da9d45d7eb5d78cb2279071b"
     },
     {
       "path": "reportsets/.gitkeep",
@@ -2928,8 +2933,8 @@
     },
     {
       "path": "scripts/system-update-helper.py",
-      "size": 140119,
-      "sha256": "abb10dabd1169b62cad88f876ccee95610b274986f511490a5d84fd80eceb1fe"
+      "size": 140709,
+      "sha256": "7e2ae30b93548343ed11cec78bb0862a621569d1069f692e6f18858ca4d46e93"
     },
     {
       "path": "scripts/tactical-backup-sudo.py",
@@ -2954,7 +2959,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "24266d28cf095085497b3768341bdecfecc99cbcae5e2ff4437b6fe799d3e6ca"
+      "sha256": "d8b7a383af9a922f8ebe1abb5c1a7e3e97a244ce5920ae34c4d4052d1a58f951"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -5650,6 +5655,11 @@
       "path": "tests/system-update-rollback-verify-warning-1.17.96.py",
       "size": 19613,
       "sha256": "8828a72b178df5d3f4aa71eb10ed6128c9ad21e604a2e00340e479df63b43418"
+    },
+    {
+      "path": "tests/system-update-root-cache-locks-1.17.107.py",
+      "size": 9978,
+      "sha256": "8808b93984f072cc1838a9791e2e74b4a05171dff7520f8325309467b7ac7643"
     },
     {
       "path": "tests/system-update-root-extraction-boundary.py",

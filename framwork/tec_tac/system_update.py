@@ -309,6 +309,12 @@ def _network_calls() -> int:
     return int(getattr(_NET, "count", 0))
 
 
+def _running_as_root() -> bool:
+    """True when this process runs as root (1.17.107). Never on the development PC, which has no geteuid."""
+    geteuid = getattr(os, "geteuid", None)
+    return geteuid is not None and geteuid() == 0
+
+
 @contextlib.contextmanager
 def _file_lock(path: Path, timeout: float):
     """Exclusive lock on ``path``: a thread lock plus fcntl.flock across worker processes.
@@ -328,12 +334,19 @@ def _file_lock(path: Path, timeout: float):
         if fcntl is not None:
             held = False
             try:
-                try:
-                    fd = os.open(key, os.O_RDWR | os.O_CREAT, 0o660)
-                except PermissionError:
-                    # 1.17.106: a lock file left by root (umask 022, so 0640) refused the Tactical account and every
-                    # branch check silently fell back to its saved head. flock needs no write access.
-                    fd = os.open(key, os.O_RDONLY)
+                nofollow = getattr(os, "O_NOFOLLOW", 0)
+                if _running_as_root():
+                    # 1.17.107: a root run (a management command under sudo) never creates a cache lock file, so it can never
+                    # leave a root-owned lock that the Tactical account cannot open. It uses an existing lock read-only (flock
+                    # needs no write access); with no lock file it holds nothing, and callers fail closed on False.
+                    fd = os.open(key, os.O_RDONLY | nofollow)
+                else:
+                    try:
+                        fd = os.open(key, os.O_RDWR | os.O_CREAT | nofollow, 0o660)
+                    except PermissionError:
+                        # 1.17.106: a lock file left by root (umask 022, so 0640) refused the Tactical account and every
+                        # branch check silently fell back to its saved head. flock needs no write access.
+                        fd = os.open(key, os.O_RDONLY | nofollow)
                 deadline = time.monotonic() + timeout
                 while True:
                     try:
@@ -364,7 +377,8 @@ def _cache_update(mutator) -> bool:
     try:
         if not CACHE_ROOT.parent.is_dir():
             return False
-        CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+        if not _running_as_root():  # 1.17.107: root never creates the cache folder; install.sh owns it
+            CACHE_ROOT.mkdir(parents=True, exist_ok=True)
         with _file_lock(CACHE_ROOT / "release-cache.lock", CACHE_LOCK_WAIT_SECONDS) as held:
             if not held:
                 return False
@@ -379,10 +393,11 @@ def _cache_update(mutator) -> bool:
 def _refresh_lock(component: str, kind: str, ref: str):
     """Single-flight lock for one refresh: github-refresh:<component>:<branch|release>:<ref>."""
     name = hashlib.sha256(f"github-refresh:{component}:{kind}:{ref}".encode()).hexdigest()[:24]
-    try:
-        CACHE_ROOT.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass
+    if not _running_as_root():  # 1.17.107: root never creates the cache folder; install.sh owns it
+        try:
+            CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
     return _file_lock(CACHE_ROOT / f"github-refresh-{name}.lock", SINGLE_FLIGHT_WAIT_SECONDS)
 
 
