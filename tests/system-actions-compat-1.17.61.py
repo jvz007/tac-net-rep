@@ -35,7 +35,7 @@ def signature(path: Path, name: str) -> str:
 
 scheduler = APP / "scheduler.py"
 PINNED = {
-    "register_scheduled_action": "*, id: str, module_id: str, label: str, handler, description: str='', target_types=('none',), permission: str | list | tuple | None=None, dangerous: bool=False, timeout_seconds: int=3600, unattended: bool=False",  # 1.17.63: one optional last keyword
+    "register_scheduled_action": "*, id: str, module_id: str, label: str, handler, description: str='', target_types=('none',), permission: str | list | tuple | None=None, dangerous: bool=False, timeout_seconds: int=3600, unattended: bool=False, delegable_to=()",  # 1.17.63: one optional last keyword; 1.17.111: delegable_to
     "start_one_off_run": "*, user, owner_module: str, action_id: str, targets: dict | None=None, parameters: dict | None=None, name: str | None=None, retry_count: int=0, retry_delay_seconds: int=DEFAULT_RETRY_DELAY_SECONDS, confirmation_id: str | None=None",  # 1.17.66: one optional last keyword
     "get_one_off_run": "run_id, *, owner_module: str",
     "get_owned_schedule": "owner_module: str, owner_key: str",
@@ -52,7 +52,7 @@ print("       the Scheduler functions modules call keep their 1.17.60 signatures
 tree = ast.parse(scheduler.read_text(encoding="utf-8"))
 action = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "ScheduledAction")
 fields = [n.target.id for n in action.body if isinstance(n, ast.AnnAssign)]
-must(fields == ["id", "module_id", "label", "handler", "description", "target_types", "permission", "dangerous", "timeout_seconds", "permission_any", "unattended"], fields)  # 1.17.63: unattended is the new last field
+must(fields == ["id", "module_id", "label", "handler", "description", "target_types", "permission", "dangerous", "timeout_seconds", "permission_any", "unattended", "delegable_to"], fields)  # 1.17.63: unattended is the new last field; 1.17.111: delegable_to follows it
 models = ast.parse((APP / "models.py").read_text(encoding="utf-8"))
 run = next(n for n in models.body if isinstance(n, ast.ClassDef) and n.name == "TecTacScheduleRun")
 status = next(n for n in run.body if isinstance(n, ast.ClassDef) and n.name == "Status")

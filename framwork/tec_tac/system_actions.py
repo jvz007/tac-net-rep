@@ -59,6 +59,10 @@ docs/system-actions.md.
 
 1.17.74 (additive, capability 1.4.0, Q-APM21 b). ``resolve_delegated_targets`` (delegation.py) tells a provider which endpoints a delegation ticket covers.
 There is no command kind: a reboot row waits for Johan's signed decision (CQ213, CQ215). See docs/system-actions.md.
+
+1.17.111 (additive, capability 1.6.0, AD-43). A module's own Scheduler person action (listed in its signed manifest under ``scheduler_person_actions``) can be
+named in a delegation grant: ``register_scheduled_action`` takes ``delegable_to``, and the five delegation functions accept such an action for the one pair
+Core's allow-list names (``delegation.PERSON_ACTION_DELEGATION``). The operations are unchanged. See delegation.py and docs/system-actions.md.
 """
 from __future__ import annotations
 
@@ -82,7 +86,7 @@ from .scheduler import SchedulerPermanentError, SchedulerTransientError
 logger = logging.getLogger("tec_tac.system_actions")
 
 CAPABILITY_ID = "core.system_actions"
-CAPABILITY_VERSION = "1.5.0"
+CAPABILITY_VERSION = "1.6.0"
 MAX_AGENTS_PER_GROUP = 2000  # Johan, CQ178: more than this splits into groups of at most this many
 MAX_GROUPS = 20  # the ceiling of one run (assumption CQ195, asked): 20 groups
 MAX_AGENTS = MAX_AGENTS_PER_GROUP * MAX_GROUPS  # a Core constant: refused above, never truncated
@@ -1436,6 +1440,26 @@ OPERATIONS = (
 )
 
 
+def _person_action_metadata() -> dict:
+    """What a delegation grant may hold when its action is a module's person action rather than a Tactical function (1.17.111, framework >=1.17.111)."""
+    from . import delegation
+
+    return {
+        "since": "1.17.111",
+        "registration": "register_scheduled_action(..., delegable_to=('<owner module>',)); the id must be listed in the module's signed manifest under scheduler_person_actions, must not also be a system action, and the pair must be in Core's allow-list",
+        "allowed": {owner: list(actions) for owner, actions in sorted(delegation.PERSON_ACTION_DELEGATION.items())},
+        "describe_kind": "describe_delegation answers kind 'person_action' (groups is None) or 'system_action'",
+        "permission": "the action's own permission, held by the person, with no bypass for a scheduler manager; an action with no permission entry refuses",
+        "parameters": {
+            "key": PARAMETERS_KEY, "shape": "None, {} or a flat dict", "max_keys": delegation.MAX_PERSON_PARAMETERS, "key_pattern": "[a-z][a-z0-9_]{0,39}",
+            "values": "bool, int or printable text of at most %d characters" % delegation.MAX_PERSON_PARAMETER_TEXT, "marker_key_refused": delegation.MARKER_KEY,
+            "fixed_at_confirmation": True,
+        },
+        "targets": "read through the owner module's resolver, 1 to max_agents endpoints, every one inside the person's live Tactical scope at the confirmation; the run keeps that stored scope",
+        "kind": "person_action",
+    }
+
+
 def system_actions_contract_metadata() -> dict:
     return {
         "id": CAPABILITY_ID,
@@ -1474,6 +1498,7 @@ def system_actions_contract_metadata() -> dict:
             "limit": "Tactical's own audit log does not show Core's in-process write; Core's strict audit rows (before and after of every update) are the record.",
         },
         "delegation": {
+            "person_actions": _person_action_metadata(),
             "grants_per_owner_module": 20, "ticket_seconds": 24 * 3600, "confirmation_seconds": 600,
             "callers": {"describe_delegation": "owner module", "register_delegation_grant": "owner module", "remove_delegation_grant": "owner module",
                         "issue_delegation_ticket": "owner module, from its own live Scheduler run", "start_delegated_run": "provider module named by the grant",
@@ -1496,7 +1521,7 @@ def system_actions_contract_metadata() -> dict:
         "http": {"confirmation": "POST /api/tfd/scheduler/system-actions/confirmation/"},
         "delivery": "at most once per group",
         "audit_actions": ["run (strict, before each group's send)", "deny (one per refusal)", "custom:outcome-unknown", "add and modify on the schedule (strict)"],
-        "requires_framework": ">=1.17.61 (groups, parameters, scripts.run and describe_confirmation need >=1.17.66; delegable_to, the five delegation operations and module-owned target resolvers need >=1.17.68; run_write and the winupdate.set_action row need >=1.17.70; resolve_delegated_targets needs >=1.17.74; run_command and the agent.command row need >=1.17.75)",
+        "requires_framework": ">=1.17.61 (groups, parameters, scripts.run and describe_confirmation need >=1.17.66; delegable_to, the five delegation operations and module-owned target resolvers need >=1.17.68; run_write and the winupdate.set_action row need >=1.17.70; resolve_delegated_targets needs >=1.17.74; run_command and the agent.command row need >=1.17.75; delegable_to on register_scheduled_action and a person action in a delegation grant need >=1.17.111)",
         "unattended": "A scheduled run of a user-owned schedule skips owner_inactive, permission_lost and out_of_scope (>=1.17.65; the unattended= flag has no effect); every other check stays. A manual or one-off run keeps all of them.",
     }
 
@@ -1509,7 +1534,7 @@ def register_core_system_actions_capability():
         module_id="core",
         version=CAPABILITY_VERSION,
         provider=_PROVIDER,
-        description="Typed Tactical functions that Core runs unattended for a named owner, in groups of at most 2000 endpoints, with the owner and scope checked at every person-started run and the permission, scope and one Yes or No checked when a person creates or edits the schedule (>=1.17.66); a scheduled run is not re-checked against its creator (>=1.17.65); a module may start another module's action under a delegation grant a person confirmed once (>=1.17.68); the honoured replacement of Windows Patching may write Windows update decisions through run_write, with a strict before and after audit row for every update (>=1.17.70); the provider named in a delegation grant may ask which endpoints a ticket covers through resolve_delegated_targets (>=1.17.74).",
+        description="Typed Tactical functions that Core runs unattended for a named owner, in groups of at most 2000 endpoints, with the owner and scope checked at every person-started run and the permission, scope and one Yes or No checked when a person creates or edits the schedule (>=1.17.66); a scheduled run is not re-checked against its creator (>=1.17.65); a module may start another module's action under a delegation grant a person confirmed once (>=1.17.68); the honoured replacement of Windows Patching may write Windows update decisions through run_write, with a strict before and after audit row for every update (>=1.17.70); the provider named in a delegation grant may ask which endpoints a ticket covers through resolve_delegated_targets (>=1.17.74); a module's own Scheduler person action may be delegated for the one pair Core's allow-list names (>=1.17.111).",
         operations=OPERATIONS,
         metadata=system_actions_contract_metadata(),
     )

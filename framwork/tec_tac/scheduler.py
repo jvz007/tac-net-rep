@@ -104,6 +104,10 @@ class ScheduledAction:
     # creator re-check, flagged or not. Still last, so equality and every positional constructor of an earlier action stay as they were.
     # Core still accepts True only for a module whose signed manifest lists system_actions.
     unattended: bool = False
+    # 1.17.111: the modules that may start this action for someone else under a delegation grant (delegation.py). Only a manifest-listed
+    # ``scheduler_person_actions`` id may carry one, and only for a pair Core's allow-list names. Last, so equality and every positional
+    # constructor of an earlier action stay as they were.
+    delegable_to: tuple = ()
 
     @property
     def permission_entries(self) -> tuple[str, ...]:
@@ -309,7 +313,39 @@ def system_action_state(module_id, action_id) -> str:
     return "declared" if registered else "unknown"
 
 
-def register_scheduled_action(*, id: str, module_id: str, label: str, handler, description: str = "", target_types=("none",), permission: str | list | tuple | None = None, dangerous: bool = False, timeout_seconds: int = 3600, unattended: bool = False):
+def _checked_person_delegable_to(action_id: str, module: str, delegable_to) -> tuple:
+    """1.17.111: the ``delegable_to`` of a person action, or a SchedulerError. () is always fine. A non-empty list is refused unless ALL hold: it is a
+    list of up to five other module ids, the action id is listed in the module's signed manifest ``scheduler_person_actions`` (an unreadable manifest
+    refuses), the id is not also a declared system action, and every named module is one Core's allow-list names for this action
+    (``delegation.PERSON_ACTION_DELEGATION``). Anything wider is refused: Core does not trust a module to widen who may start its action."""
+    if delegable_to in (None, (), []):
+        return ()
+    from . import system_actions as _sys_actions
+
+    try:
+        cleaned = _sys_actions._clean_delegable_to(delegable_to, module)
+    except ValueError as exc:
+        raise SchedulerError(f"Scheduled action delegable_to is not valid: {exc}") from None
+    if not cleaned:
+        return ()
+    try:
+        listed = action_id in _manifest_person_actions(module)
+        also_system = action_id in _manifest_system_actions(_sys_actions.declaring_module(module, action_id)) or bool(_sys_actions.is_registered_system_action(module, action_id))
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        raise SchedulerError("Core could not read the module's signed manifest, so the action cannot be made delegable.") from exc
+    if not listed:
+        raise SchedulerError("A delegable scheduled action's id must be listed in its module's signed manifest under scheduler_person_actions.")
+    if also_system:
+        raise SchedulerError("A system action is delegated through register_system_action, not through register_scheduled_action.")
+    from . import delegation
+
+    for owner in cleaned:
+        if action_id not in delegation.PERSON_ACTION_DELEGATION.get(owner, ()):
+            raise SchedulerError("Core does not allow this module to be named in delegable_to for this action.")
+    return cleaned
+
+
+def register_scheduled_action(*, id: str, module_id: str, label: str, handler, description: str = "", target_types=("none",), permission: str | list | tuple | None = None, dangerous: bool = False, timeout_seconds: int = 3600, unattended: bool = False, delegable_to=()):
     action_id = str(id or "").strip()
     module = str(module_id or "").strip()
     if not action_id or "." not in action_id:
@@ -337,7 +373,8 @@ def register_scheduled_action(*, id: str, module_id: str, label: str, handler, d
             raise SchedulerError("Core could not read the module's signed manifest, so the action cannot be marked unattended.") from exc
         if action_id not in declared:
             raise SchedulerError("An unattended scheduled action's id must be listed in its module's signed manifest under system_actions.")
-    action = ScheduledAction(action_id, module, str(label or action_id), handler, str(description or ""), targets, permission_text, bool(dangerous), timeout, permission_any, unattended)
+    delegable = _checked_person_delegable_to(action_id, module, delegable_to)
+    action = ScheduledAction(action_id, module, str(label or action_id), handler, str(description or ""), targets, permission_text, bool(dangerous), timeout, permission_any, unattended, delegable)
     with _ACTION_LOCK:
         previous = _ACTIONS.get(action_id)
         if previous and previous != action:

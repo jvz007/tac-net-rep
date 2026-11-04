@@ -56,7 +56,7 @@ pos, kw = params(sched["start_one_off_run"])
 must(kw[:3] == ["user", "owner_module", "action_id"] and kw[-1] == "confirmation_id" and len(kw) == 9, kw)
 ONE_OFF = set(kw)
 pos, kw = params(sched["register_scheduled_action"])
-must(kw == ["id", "module_id", "label", "handler", "description", "target_types", "permission", "dangerous", "timeout_seconds", "unattended"], kw)
+must(kw == ["id", "module_id", "label", "handler", "description", "target_types", "permission", "dangerous", "timeout_seconds", "unattended", "delegable_to"], kw)  # 1.17.111: one optional last keyword
 REGISTER_ACTION = set(kw)
 ctx_src = (APP / "scheduler_run_context.py").read_text(encoding="utf-8")
 must("def verify_run_context(\n    context: Any, *, expected_module_id: str, expected_action_id: str, require_owner: bool = True,\n) -> VerifiedSchedulerRun:" in ctx_src.replace("\r\n", "\n"), "verify_run_context keeps its signature")

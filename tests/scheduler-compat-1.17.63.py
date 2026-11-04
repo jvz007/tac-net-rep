@@ -75,10 +75,11 @@ for name, new in (("register_scheduled_action", "unattended"), ("reconcile_sched
     args = reg[name].args
     kwonly = [a.arg for a in args.kwonlyargs]
     # 1.17.66 added one optional keyword after confirmed_by_request (confirmation_id), so the 1.17.63 keyword is last but one for reconcile_schedule
-    position = -2 if name == "reconcile_schedule" else -1
+    # 1.17.111 added one optional keyword after unattended (delegable_to), so unattended is last but one for register_scheduled_action too
+    position = -2
     must(kwonly[position] == new and args.kw_defaults[position] is not None and args.kw_defaults[-1] is not None, f"{name}: {new} is where it was and has a default")
     must(not args.args and not args.posonlyargs, f"{name} stays keyword-only")
-must(ast.unparse(reg["register_scheduled_action"].args.kw_defaults[-1]) == "False" and ast.unparse(reg["reconcile_schedule"].args.kw_defaults[-2]) == "None"
+must(ast.unparse(reg["register_scheduled_action"].args.kw_defaults[-2]) == "False" and ast.unparse(reg["register_scheduled_action"].args.kw_defaults[-1]) == "()" and ast.unparse(reg["reconcile_schedule"].args.kw_defaults[-2]) == "None"
      and [a.arg for a in reg["reconcile_schedule"].args.kwonlyargs][-1] == "confirmation_id" and ast.unparse(reg["reconcile_schedule"].args.kw_defaults[-1]) == "None", "defaults")
 vr = ast.parse((APP / "scheduler_run_context.py").read_text(encoding="utf-8"))
 verified = next(n for n in vr.body if isinstance(n, ast.ClassDef) and n.name == "VerifiedSchedulerRun")

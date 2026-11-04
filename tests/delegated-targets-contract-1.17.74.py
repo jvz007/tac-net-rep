@@ -89,7 +89,7 @@ print("       contracts.py: the resolve_delegated_targets row, the system-action
 
 # ---- the docs
 doc = (ROOT / "docs" / "system-actions.md").read_text(encoding="utf-8")
-must(doc.startswith("# System actions (core.system_actions 1.4.0, Core 1.17.74)"), doc[:80])
+must(doc.startswith("# System actions (core.system_actions 1."), doc[:80])  # 1.17.111: the title names the newest capability version (1.6.0), so only its start is pinned
 for needle in ("Durable runs with a reboot (Core 1.17.74)", "CQ213", "CQ215", "get_reboot_status", "resolve_delegated_targets", "Q-APM21", "ticket_invalid", "start_one_off_run", "register_target_resolver"):
     must(needle in doc, f"docs/system-actions.md lacks {needle!r}")
 durable = doc.split("## Durable runs with a reboot (Core 1.17.74)")[1].split("\n## ")[0]

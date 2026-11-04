@@ -360,7 +360,7 @@ try:
 except sched.SchedulerError:
     pass
 flagged = sched.register_scheduled_action(id="patching.scan", module_id="patching", label="scan", handler=ignoring_handler, unattended=True)
-must(flagged.unattended is True and dataclasses.fields(sched.ScheduledAction)[-1].name == "unattended", "the field stays last")
+must(flagged.unattended is True and dataclasses.fields(sched.ScheduledAction)[-2].name == "unattended", "the field keeps its place (1.17.111 appended delegable_to after it)")
 fresh()
 for aid in ("patching.ordinary", "patching.scan"):
     if aid not in sched._ACTIONS:

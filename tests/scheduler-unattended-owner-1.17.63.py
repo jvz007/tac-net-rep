@@ -46,8 +46,9 @@ def strict_handler(context):  # the default require_owner=True
 import dataclasses
 
 names = [f.name for f in dataclasses.fields(sched.ScheduledAction)]
-must(names[-1] == "unattended" and names[-2] == "permission_any", names)
-must(dataclasses.fields(sched.ScheduledAction)[-1].default is False, "unattended defaults to False")
+must(names[-2] == "unattended" and names[-3] == "permission_any" and names[-1] == "delegable_to", names)  # 1.17.111 appended delegable_to after unattended
+must(dataclasses.fields(sched.ScheduledAction)[-2].default is False, "unattended defaults to False")
+must(dataclasses.fields(sched.ScheduledAction)[-1].default == (), "delegable_to (1.17.111) defaults to ()")
 plain = sched.register_scheduled_action(id="patching.plain", module_id="patching", label="plain", handler=handler)
 must(plain.unattended is False, "an action registered as before is not unattended")
 must(plain == sched.ScheduledAction("patching.plain", "patching", "plain", handler, "", ("none",), None, False, 3600, ()), "equality of an existing action is unchanged")

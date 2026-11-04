@@ -291,7 +291,7 @@ audit_fail["before"] = False
 # ---- the wiring in system_actions.py
 src = (ROOT / "system_actions.py").read_text(encoding="utf-8")
 for needle in ('"agent.command": SystemFunction(', 'kind=KIND_COMMAND', 'callers=("communicator",)', 'a command action must be registered with dangerous=True',
-               'CAPABILITY_VERSION = "1.5.0"', '"run_command"', 'def run_system_command(', 'common["keep_run"] = True', 'verified.held_at_creation(flag)',
+               'CAPABILITY_VERSION = "1.6.0"', '"run_command"', 'def run_system_command(', 'common["keep_run"] = True', 'verified.held_at_creation(flag)',
                "keep_run: bool = False", '"duplicate_command"', '"bad_command"', '"template_changed"', 'register_command_template = _sc.register_command_template'):
     must(needle in src, f"system_actions.py has: {needle}")
 

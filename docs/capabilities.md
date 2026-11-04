@@ -114,6 +114,25 @@ capability-unavailable
 
 The status includes provider module ID, installed module version, capability contract version, required version range, description, operations, health details and a readable reason.
 
+The dict `capability_status` returns has exactly these keys (documented since Core 1.17.111; every key existed earlier, so this is additive). A new key is added only together with a new line here and in the contract row:
+
+| Key | What it holds |
+| --- | --- |
+| `id` | The capability id that was asked for. |
+| `module_id` | The module that provides the capability: the registering module, or for a capability nobody registered the module named by the id (or by the `module_id` argument). Automation Manager reads it for its "Managed by" message. |
+| `available` | `True` only when `state` is `available`. |
+| `state` | `available`, `missing`, `disabled`, `capability-unavailable`, `version-incompatible`, `unhealthy`, `health-reentrant` or `health-unchecked`. |
+| `required_version` | The version range that was asked for, or `None`. |
+| `installed_version` | The provider module's installed version, or `None`. |
+| `capability_version` | The registered capability's own version, or `None` when it is not registered. |
+| `description` | The registered description, or an empty text. |
+| `operations` | A list of the registered operation names. |
+| `metadata` | A copy of the registered metadata dict. |
+| `reason` | Plain text for a state other than `available`, otherwise `None`. |
+| `health` | The provider's health details, `{}` when there are none, or `{"checked": false}` for `check_health=False`. |
+| `health_checked` | The `check_health` argument as a bool. |
+| `replaces` | The core module a replacement registered this capability for, or `None`. |
+
 Boolean check:
 
 ```python
@@ -315,6 +334,8 @@ A provider should still not call another capability's status from its health cal
 `core.event_jobs` 1.1.0 (Core 1.17.45; 1.1.0 in 1.17.47 verifies the caller of every publish): event-started, time-limited system jobs a module publishes from a signal. Core stores, retries, limits and audits them. See `docs/event-jobs.md`.
 
 `core.system_actions` 1.2.0 (Core 1.17.68, additive: `delegable_to` and five delegation operations; 1.1.0 in Core 1.17.66; 1.0.0 in Core 1.17.61): typed Tactical functions that Core runs unattended for a named owner, in groups of at most 2000 endpoints, at most once per group, with one strict audit row per group. A person who creates or edits a schedule for one gets the permission, Tactical flags and scope check and one plain Yes or No (`describe_confirmation`); a person-started run keeps every re-check; a scheduled run is not re-checked against its creator. Three table rows today (winupdate scan and install, and scripts.run). Since 1.17.68 a module-owned target type reads as endpoints through a resolver its module registers, a schedule keeps the scope its person had and moves to the next editor, and one module may start another's scheduled install through a grant a person confirmed once. See `docs/system-actions.md`.
+
+`core.system_actions` 1.6.0 (Core 1.17.111, additive; the operations are unchanged): a module's own Scheduler person action (listed in its signed manifest under `scheduler_person_actions`) can be named in a delegation grant for the one pair Core's allow-list names, owner module `maintenance` and action `wapm.profile-install` (AD-43). The provider registers it with `register_scheduled_action(..., delegable_to=("maintenance",))`. Needs framework >=1.17.111. See `docs/system-actions.md`, "Delegating a person action".
 
 `core.patch_lockdown` 1.0.0 (Core 1.17.68, read-only `status()`): whether Tactical's own patch policy is switched off because a replacement of Windows Patching (Advanced Patch Management) is honoured. On while that replacement is honoured and does nothing otherwise (AD-41, Johan, 21 October 2026). See `docs/patch-lockdown.md`.
 

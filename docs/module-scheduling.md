@@ -632,6 +632,10 @@ Needs framework >=1.17.80. Additive. For a Scheduler action that is **not** a Ta
 
 This is not a system action and not the AD-13 exemption. On every run the creator must be active and still hold the action permission and the target scope. If not, the tick skips the run (`AuthorizationRevoked`) and `verify_run_context` raises `SchedulerRunContextInvalid`. A manual run, a one-off, a schedule with no stored creator, an action not listed or one registered by another module gets no person (`This run has no person behind it.`). Core writes one audit row (`run`, `run_as` = `creator`) per run that uses the creator.
 
+### Starting your person action for another module's person (Core 1.17.111)
+
+Needs framework >=1.17.111. Additive. A workflow module (module id `maintenance`) can start a person action of yours, unattended, for a person who confirmed it once. Today Core allows exactly one pair: owner `maintenance`, action `wapm.profile-install`. Register the action with `register_scheduled_action(..., delegable_to=("maintenance",))`. Core refuses the registration unless the id is in your signed manifest under `scheduler_person_actions`, is not also a system action, and the pair is in its allow-list. The owner module then uses the five delegation functions of `core.system_actions` (>=1.6.0) with `provider_module=<your module id>` and your action id; you read the run with `verify_run_context` and `resolved_endpoints()`, and the confirmed parameters sit under `system_action_parameters`. Core checks the person's own permission with no bypass for a scheduler manager. See `docs/system-actions.md`, "Delegating a person action".
+
 ### Run now of a declared person action (Core 1.17.85)
 
 Needs framework >=1.17.85. Additive. Nothing changes for a handler that already works.

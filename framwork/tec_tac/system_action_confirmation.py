@@ -308,11 +308,23 @@ def _controls(user, action, targets, parameters, *, resolver_module=None) -> dic
             cleaned = entry.validate_parameters(confirmed if confirmed is not None else {})
         except ValueError:
             _deny(user, "bad_parameters", action)
+    ids, vanished = _checked_target_ids(user, action, targets, resolver_module or action.module_id)
+    return {
+        "definition": definition, "entry": entry, "cleaned": cleaned, "total": len(ids), "groups": len(sa._groups_of(ids)),
+        "vanished": int(vanished or 0),
+    }
+
+
+def _checked_target_ids(user, action, targets, resolver_module) -> tuple:
+    """The target step of every creation-time check (shared with ``delegation._person_controls`` since 1.17.111): the targets in the person's own
+    canonical form, read as endpoints through ``resolver_module``'s resolver, 1 to MAX_AGENTS of them, every one inside the person's live Tactical
+    scope. Returns ``(sorted endpoint numbers, vanished count)`` or raises the refusal (out_of_scope, targets_unresolved, agent_count)."""
+    sa = _sa
     resolved = None
     try:
         shaped = normalize_scheduler_targets(targets)
         canonical = _canonical_for_user(user, shaped)
-        resolved = sa._target_pks(canonical, resolver_module or action.module_id)
+        resolved = sa._target_pks(canonical, resolver_module)
     except Exception as exc:  # noqa: BLE001 - a target outside the person's scope is a scope refusal; anything else is unresolved
         if type(exc).__name__ == "PermissionDenied":
             _deny(user, "out_of_scope", action)
@@ -328,10 +340,7 @@ def _controls(user, action, targets, parameters, *, resolver_module=None) -> dic
         in_scope = False
     if not in_scope:
         _deny(user, "out_of_scope", action)
-    return {
-        "definition": definition, "entry": entry, "cleaned": cleaned, "total": len(ids), "groups": len(sa._groups_of(ids)),
-        "vanished": int(vanished or 0),
-    }
+    return ids, vanished
 
 
 def _text(info, user, when) -> str:

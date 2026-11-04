@@ -41,6 +41,13 @@ is outside what this stops (docs/caller-identity.md).
 starts anything. It shares one helper with ``start``, so the two apply the same ticket checks, and it gives one generic refusal for any ticket problem.
 A grant still names a task row only (an install, AD-43); a command or a write row is never delegated.
 
+1.17.111 (additive, capability 1.6.0). A module's own Scheduler person action (one its signed manifest lists under ``scheduler_person_actions``, not a Tactical
+function) can be the action of a grant, for ONE pair Core's allow-list names (``PERSON_ACTION_DELEGATION``: Maintenance's unattended install of a WAPM profile,
+AD-43). The provider registers it with ``register_scheduled_action(..., delegable_to=("maintenance",))``. The same five functions, the same grant, ticket, one-off
+run, marker, audit rows and revocation apply. What differs is the creation-time check (``_person_controls``): a person action has no row in the table of Tactical
+functions, so Core checks the person (active), the action's own permission (no bypass for a scheduler manager), the parameters (a small flat record, fixed at the
+confirmation) and the targets (the owner module's resolver, the person's live scope, the ceiling). Any doubt answers as the one-off it always was, with every re-check.
+
 Every read of Core is one small function so a test can replace it without Django.
 """
 from __future__ import annotations
@@ -75,6 +82,13 @@ TICKET_TTL_SECONDS = 24 * 3600
 CONFIRMATION_TTL_SECONDS = 600
 MAX_GRANTS_PER_OWNER = 20
 MARKER_KEY = "system_action_delegation"
+# 1.17.111 (inside AD-43): the person actions that may be delegated, as {owner module: the action ids it may be given}. AD-43 signs Maintenance's unattended install
+# of a WAPM profile and nothing wider (the reboot, the removal and the download are not named), so a module that names anything else in delegable_to is refused at
+# registration and a grant for it is refused here. A wider pair needs Johan's signature and one line here.
+PERSON_ACTION_DELEGATION = {"maintenance": ("wapm.profile-install",)}
+MAX_PERSON_PARAMETERS = 10
+MAX_PERSON_PARAMETER_TEXT = 200
+_PARAMETER_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 # Johan signed the delegated start on 21 October 2026 (AD-43, CQ204, with AD-42 and AD-44). A delegated one-off skips the run-time owner re-check (CQ50, AD-13 condition 2)
 # only when this is True, and then only for a run whose signed marker, grant, grant digest and provider module all still hold. False is the switch that makes a delegated
 # one-off an ordinary one-off again: the owner's permission and scope are re-checked at run time and a disabled owner fails closed.
@@ -96,7 +110,7 @@ REASONS = {
     "bad_module": "The module ids are not valid.",
     "unknown_action": "This system action is not registered, or it is not a scheduled action of the provider.",
     "not_delegable": "The provider has not allowed this module to start this action for someone else.",
-    "action_not_declared": "This action is no longer listed in the module's signed manifest under system_actions.",
+    "action_not_declared": "This action is no longer listed in the module's signed manifest under system_actions or scheduler_person_actions.",
     "module_disabled": "A module this grant needs is not enabled.",
     "replacement_not_honoured": "The module that registered this action no longer replaces the core module right now.",
     "grant_limit": f"A module may hold at most {MAX_GRANTS_PER_OWNER} delegation grants.",
@@ -163,6 +177,78 @@ def _controls(person, action, targets, parameters, owner_module):
     from . import system_action_confirmation as confirmation
 
     return confirmation._controls(person, action, targets, parameters, resolver_module=owner_module)
+
+
+def _creation_controls(person, action, definition, targets, parameters, owner_module):
+    """Every creation-time check: the system-action ones for a Tactical function (``definition`` given), ``_person_controls`` for a module's person action."""
+    if definition is None:
+        return _person_controls(person, action, targets, parameters, owner_module)
+    return _controls(person, action, targets, parameters, owner_module)
+
+
+def _holds_permission(person, action) -> bool:
+    """Does the person hold the action's own permission, with NO bypass for a native scheduler manager? An action with no permission entry refuses.
+    An entry that cannot be checked counts as not held."""
+    try:
+        from .rbac import has_extension_permission, has_tactical_permission
+        from .scheduler import TACTICAL_PERMISSION_PREFIX, is_tactical_permission_entry
+
+        for entry in action.permission_entries:
+            try:
+                if is_tactical_permission_entry(entry):
+                    if has_tactical_permission(person, entry[len(TACTICAL_PERMISSION_PREFIX):]):
+                        return True
+                elif has_extension_permission(person, entry):
+                    return True
+            except Exception:  # noqa: BLE001 - an entry that cannot be checked is not held
+                logger.warning("A permission of a delegated person action could not be checked.", exc_info=True)
+    except Exception:  # noqa: BLE001 - fail closed
+        return False
+    return False
+
+
+def _clean_person_parameters(confirmed):
+    """The confirmed parameters of a person action: None, {} or a flat record of at most 10 keys named [a-z][a-z0-9_]{0,39} whose values are bool, int
+    or printable text of at most 200 characters, never the marker key. Returns the cleaned dict, or None when the record is not acceptable."""
+    if confirmed is None:
+        return {}
+    if not isinstance(confirmed, dict) or len(confirmed) > MAX_PERSON_PARAMETERS:
+        return None
+    out = {}
+    for key, value in confirmed.items():
+        if not isinstance(key, str) or not _PARAMETER_NAME_RE.fullmatch(key) or key == MARKER_KEY:
+            return None
+        if isinstance(value, bool):
+            out[key] = value
+        elif isinstance(value, int):
+            if not -(2**63) < value < 2**63:
+                return None
+            out[key] = value
+        elif isinstance(value, str) and len(value) <= MAX_PERSON_PARAMETER_TEXT and value.isprintable():
+            out[key] = value
+        else:
+            return None
+    return out
+
+
+def _person_controls(person, action, targets, parameters, owner_module) -> dict:
+    """The creation-time checks for a module's person action (1.17.111). A person action has no row in the table of Tactical functions, so there is no
+    flag list: the person must be active, hold the action's own permission (no manager bypass), confirm a small flat parameter record and have every
+    target endpoint inside their live Tactical scope (the owner module's resolver reads the targets). One deny row per refusal, through the same
+    ``_deny`` the system actions use. Returns ``{total, groups (None), vanished, cleaned}``."""
+    from . import system_action_confirmation as confirmation
+
+    if person is None or not bool(getattr(person, "is_active", False)) or bool(getattr(person, "is_installer_user", False)):
+        confirmation._deny(person, "owner_inactive", action)
+    if not _holds_permission(person, action):
+        confirmation._deny(person, "not_permitted", action)
+    if parameters is not None and not isinstance(parameters, dict):
+        confirmation._deny(person, "bad_parameters", action)
+    cleaned = _clean_person_parameters(_parameters_of(parameters))
+    if cleaned is None:
+        confirmation._deny(person, "bad_parameters", action)
+    ids, vanished = confirmation._checked_target_ids(person, action, targets, owner_module)
+    return {"total": len(ids), "groups": None, "vanished": int(vanished or 0), "cleaned": cleaned}
 
 
 def _canonical_targets(person, targets):
@@ -333,7 +419,9 @@ def _provider_action(owner_module: str, provider_module: str, action_id, *, deny
     meta = {"owner_module": owner_module, "provider_module": provider_module, "action_id": action_id if isinstance(action_id, str) else None, **extra}
     with _sa._LOCK:
         definition = _sa._ACTIONS.get(action_id) if isinstance(action_id, str) else None
-    if definition is None or definition.module_id != provider_module:
+    if definition is None:  # 1.17.111: not a Tactical function, so it can only be a module's person action
+        return _person_action(owner_module, provider_module, action_id, deny, meta)
+    if definition.module_id != provider_module:
         deny("unknown_action", **meta)
     try:
         action = get_scheduled_action(action_id)
@@ -367,7 +455,64 @@ def _provider_action(owner_module: str, provider_module: str, action_id, *, deny
     return action, definition, entry
 
 
-def _text(info: dict, person, owner_module: str, definition, entry) -> str:
+def _person_action_reason(owner_module: str, provider_module: str, action_id):
+    """``(scheduled action, None)`` when the provider's person action may be delegated to ``owner_module`` right now, else ``(None, reason)``. Every part is
+    read now: the action is registered by the provider, it names the owner in its own ``delegable_to``, Core's allow-list names the same pair, the id is
+    still in the provider's signed manifest under ``scheduler_person_actions``, and both modules are enabled. Any fault is a refusal."""
+    if not isinstance(action_id, str):
+        return None, "unknown_action"
+    try:
+        action = get_scheduled_action(action_id)
+    except Exception:  # noqa: BLE001 - fail closed: a fault here must never raise out of this path
+        action = None
+    if action is None or action.module_id != provider_module:
+        return None, "unknown_action"
+    if owner_module not in action.delegable_to or action_id not in PERSON_ACTION_DELEGATION.get(owner_module, ()):
+        return None, "not_delegable"
+    try:
+        from .scheduler import _manifest_person_actions
+
+        listed = action_id in _manifest_person_actions(provider_module)
+    except Exception:  # noqa: BLE001 - an unreadable manifest refuses
+        listed = False
+    if not listed:
+        return None, "action_not_declared"
+    for module in (provider_module, owner_module):
+        try:
+            enabled = _sa._enabled_now(module)
+        except Exception:  # noqa: BLE001 - fail closed
+            enabled = False
+        if not enabled:
+            return None, "module_disabled"
+    return action, None
+
+
+def _person_action(owner_module: str, provider_module: str, action_id, deny, meta: dict):
+    """The person-action branch of ``_provider_action`` (1.17.111): ``(action, None, None)`` or a refusal. There is no honoured-replacement check: a
+    person action is not a Tactical function."""
+    action, reason = _person_action_reason(owner_module, provider_module, action_id)
+    if reason:
+        deny(reason, **meta)
+    return action, None, None
+
+
+def _text(info: dict, person, owner_module: str, definition, entry, action=None) -> str:
+    if definition is None:  # a module's person action (1.17.111)
+        lines = [
+            f"{action.label}: {info['total']} endpoint(s).",
+            f"{owner_module} will start this for you later, with nobody signed in, each time its own schedule says so.",
+            (
+                "Each time, Core checks that this confirmation is unchanged, that the modules involved are on, "
+                "and that every endpoint is inside the targets you confirm here and inside what you can reach as of this confirmation."
+            ),
+            "Core does not look at your account again, so the run goes on even if your account is later disabled. Editing or removing the profile stops it.",
+        ]
+        if action.dangerous:
+            lines.append("This action can change many endpoints at once.")
+        if info["vanished"]:
+            lines.append(f"{info['vanished']} target(s) no longer exist and are left out.")
+        lines.append(f"Requested by {_name(person)}. Do you want to continue?")
+        return " ".join(lines)
     lines = [
         f"{definition.label}: {info['total']} endpoint(s), sent to Tactical in {info['groups']} group(s) of at most {_sa.MAX_AGENTS_PER_GROUP}.",
         f"{owner_module} will start this for you later, with nobody signed in, each time its own schedule says so.",
@@ -407,12 +552,12 @@ def describe(request, *, owner_module, provider_module, action_id, targets, para
     except SchedulerNotAllowed:
         _deny("no_person", caller=caller, **meta)
     action, definition, entry = _provider_action(owner_module, provider_module, action_id, person=person, caller=caller)
-    info = _controls(person, action, targets, parameters, owner_module)
+    info = _creation_controls(person, action, definition, targets, parameters, owner_module)
     body = _confirmation_body(person, owner_module, provider_module, action_id, targets, parameters)
     token = _sign(_CONFIRMATION_PREFIX, {**body, "x": int(_clock()) + CONFIRMATION_TTL_SECONDS})
     return {
-        "required": True, "text": _text(info, person, owner_module, definition, entry), "confirmation_id": token, "total": info["total"],
-        "groups": info["groups"], "expires_in": CONFIRMATION_TTL_SECONDS,
+        "required": True, "text": _text(info, person, owner_module, definition, entry, action), "confirmation_id": token, "total": info["total"],
+        "groups": info["groups"], "expires_in": CONFIRMATION_TTL_SECONDS, "kind": "system_action" if definition is not None else "person_action",
     }
 
 
@@ -457,8 +602,8 @@ def register(request, *, owner_module, grant_key, provider_module, action_id, ta
         person = _person(request)
     except SchedulerNotAllowed:
         _deny("no_person", caller=caller, **meta)
-    action, _definition, _entry = _provider_action(owner_module, provider_module, action_id, person=person, caller=caller)
-    info = _controls(person, action, targets, parameters, owner_module)
+    action, definition, _entry = _provider_action(owner_module, provider_module, action_id, person=person, caller=caller)
+    info = _creation_controls(person, action, definition, targets, parameters, owner_module)
     if confirmation_id in (None, ""):
         _deny("confirmation_required", caller=caller, person=person, **meta)
     if not _confirmation_ok(confirmation_id, person, owner_module, provider_module, action_id, targets, parameters):
@@ -485,6 +630,8 @@ def register(request, *, owner_module, grant_key, provider_module, action_id, ta
                     grant.created_by, grant.created_by_username = person, name
             grant.provider_module, grant.action_id = provider_module, action_id
             grant.targets, grant.parameters = canonical, (parameters if isinstance(parameters, dict) else {})
+            if definition is None:  # a person action keeps only the confirmed record, under the one key, so the run parameters are that record plus the marker
+                grant.parameters = {_sa.PARAMETERS_KEY: info["cleaned"]} if info["cleaned"] else {}
             grant.parameters_digest = _digest(_parameters_of(parameters))
             grant.confirmed_by_username = name
             grant.creation_scope = scheduler_creation_scope.capture(person)
@@ -590,6 +737,11 @@ def run_is_validly_delegated(run) -> bool:
         grant = _grants().filter(pk=body.get("g")).first()
         if grant is None or not grant.enabled or grant.provider_module != getattr(run, "owner_module", None):
             return False
+        with _sa._LOCK:
+            is_system_action = grant.action_id in _sa._ACTIONS
+        if not is_system_action:  # 1.17.111: a person action's one-off also needs the same action and the person-action state of this moment
+            if getattr(run, "action_id", None) != grant.action_id or _person_action_reason(grant.owner_module, grant.provider_module, grant.action_id)[1]:
+                return False
         return grant_digest(grant) == body.get("d")
     except Exception:  # noqa: BLE001 - fail closed: a fault here must never raise out of this path
         return False

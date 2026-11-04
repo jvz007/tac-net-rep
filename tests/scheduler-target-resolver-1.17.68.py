@@ -376,6 +376,7 @@ must("module_id=schedule.module_id" in views_src, "the saved schedule's own modu
 must("def _require_target_scope(user, targets, *, payload=False, module_id=None, strict=False):" in views_src and "def _can_access_target_scope(user, targets, *, module_id=None, strict=False) -> bool:" in views_src, "the new keywords have defaults, so every old call still works")
 sa_src = (APP / "system_actions.py").read_text(encoding="utf-8")
 must("resolved = _target_pks(run.targets_snapshot or {}, module_id)" in sa_src, "the run resolves through the run's module")
-must("resolved = sa._target_pks(canonical, resolver_module or action.module_id)" in (APP / "system_action_confirmation.py").read_text(encoding="utf-8"), "creation resolves through the action's module")
+_conf_src = (APP / "system_action_confirmation.py").read_text(encoding="utf-8")
+must("resolved = sa._target_pks(canonical, resolver_module)" in _conf_src and "_checked_target_ids(user, action, targets, resolver_module or action.module_id)" in _conf_src, "creation resolves through the action's module")  # 1.17.111: one shared target step
 print("       the browser routes, the confirmation and the run pass the module id; every new keyword has a default")
 print("PASS scheduler target resolver 1.17.68")
