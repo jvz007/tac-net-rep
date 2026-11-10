@@ -47,8 +47,8 @@ sa_src = (APP / "system_actions.py").read_text(encoding="utf-8")
 must(__import__("re").search(r'CAPABILITY_VERSION = "1\.[3-9]\.\d+"', sa_src) is not None and '"describe_confirmation",' in sa_src and '"operations": list(OPERATIONS)' in sa_src, "core.system_actions is 1.3.0 (1.17.70, additive; 1.2.0 since 1.17.68) and keeps its four first operations")
 must("MAX_MARKS_PER_RUN = 105" in sa_src and 'KIND_PLAN = "plan"' in sa_src, "the plan mark and the new limit")
 sm_src = (APP / "server_maintenance.py").read_text(encoding="utf-8")
-must('CAPABILITY_VERSION = "1.1.0"' in sm_src or re.search(r'version="1\.1\.0"', sm_src), "core.server_maintenance stays 1.1.0")
-print("       core.system_actions and core.server_maintenance keep version 1.1.0 and their operations")
+must(re.search(r'CAPABILITY_VERSION = "1\.[1-9]\.\d+"', sm_src) is not None, "core.server_maintenance is 1.1.0 or higher in major 1 (1.2.0 since 1.17.112)")
+print("       core.system_actions and core.server_maintenance keep their version (major 1) and their operations")
 
 modules = ROOT.parents[1] / "modules"
 if modules.is_dir():

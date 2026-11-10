@@ -539,8 +539,9 @@ sm_src = (APP / "server_maintenance.py").read_text(encoding="utf-8")
 for needle in ("def start(self, *, action: str, parameters: dict | None = None, context: dict, user=None) -> dict:",
                "def get_job(self, *, job_id: str, context: dict) -> dict:",
                "def cancel(self, *, job_id: str, context: dict, user=None) -> dict:",
-               'operations=("start", "get_job", "cancel", "list_jobs", "list_actions"),', 'CAPABILITY_VERSION = "1.1.0"'):
+               'operations=("start", "get_job", "cancel", "list_jobs", "list_actions", "send_signal"),'):  # 1.17.112 appended send_signal after the five
     must(needle in sm_src, needle)
+must(__import__("re").search(r'CAPABILITY_VERSION = "1\.[1-9]\.\d+"', sm_src) is not None, "capability version is 1.1.0 or higher in major 1")
 print("       no module code runs in the tick; the claim is written before the event; start, get_job, cancel and list_jobs keep their signatures")
 
 print("PASS server job finished hook 1.17.62")

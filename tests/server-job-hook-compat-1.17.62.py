@@ -47,7 +47,8 @@ PINS = {
 for name, pin in PINS.items():
     must(signature_of(SM, "ServerMaintenanceProvider", name) == pin, (name, signature_of(SM, "ServerMaintenanceProvider", name)))
 text = SM.read_text(encoding="utf-8")
-must('CAPABILITY_VERSION = "1.1.0"' in text and 'operations=("start", "get_job", "cancel", "list_jobs", "list_actions"),' in text, "capability version and operations")
+# 1.17.112: the capability is 1.2.0 and send_signal is appended after the first five operations
+must(__import__("re").search(r'CAPABILITY_VERSION = "1\.[1-9]\.\d+"', text) is not None and 'operations=("start", "get_job", "cancel", "list_jobs", "list_actions", "send_signal"),' in text, "capability version and operations")
 must(signature_of(APP / "event_jobs.py", "EventJobPublisher", "publish") == "self, key, payload=None -> PublishResult", "publish")
 ej_text = (APP / "event_jobs.py").read_text(encoding="utf-8")
 must("def register_event_job(*, id, module_id, label, handler, soft_time_limit_seconds=None, max_attempts=None, backoff_seconds=None,\n                       max_backoff_seconds=None, expires_seconds=None, max_backlog=None, dedupe_seconds=None, audit_success=False):" in ej_text, "register_event_job")
@@ -119,7 +120,7 @@ registry_text = (APP / "registry.py").read_text(encoding="utf-8")
 must("server_job" not in registry_text and "server_job" not in (APP / "urls.py").read_text(encoding="utf-8"), "no manifest key, no route")
 must("register_capability" not in hooks_text, "the hook is not a capability")
 helper = (ROOT / "scripts" / "server-maintenance-helper.py").read_text(encoding="utf-8")
-must("MODULE_ACTION_KEYS = frozenset({" in helper and '"protected"})' in helper, "the manifest action keys are the same set")
+must("MODULE_ACTION_KEYS = frozenset({" in helper and '"protected", "signals", "waits_for_person"})' in helper, "the manifest action keys are the 1.17.62 set plus the two keys of 1.17.112")
 print("       no manifest key, no capability and no route was added")
 
 print("PASS server job hook compat 1.17.62")

@@ -6,7 +6,7 @@
 
 Capability ID: `core.server_maintenance`
 
-Version: `1.1.0` (1.0.0 until Core 1.17.16; still major 1 and additive; ask for `>=1.1,<2` and framework `>=1.17.17`)
+Version: `1.2.0` (1.1.0 since Core 1.17.17, 1.0.0 before; still major 1 and additive; ask for `>=1.1,<2` and framework `>=1.17.17`, or `>=1.2,<2` and framework `>=1.17.112` to use `send_signal`)
 
 Operations:
 
@@ -15,6 +15,7 @@ Operations:
 - `cancel(job_id, context, user=None)`
 - `list_jobs(status=None, action=None, limit=100, include_output=False, context=None)`
 - `list_actions(context=None)`
+- `send_signal(job_id, name, context, user=None)` (since 1.2.0, Core 1.17.112)
 
 Since 1.17.17, `parameters=None` means no parameters. Before, `start` refused it with "parameters must be an object". `user` is new in 1.1.0 and is the person a permissioned action runs for (see below).
 
@@ -77,6 +78,8 @@ All jobs share one exclusive Core lock:
 `/var/lib/tec-tac/server-maintenance/server-maintenance.lock`
 
 A dispatched job may remain in `waiting_for_lock` while another maintenance job is running. Once acquired, the lock remains held for the complete privileged action and is released on success, failure, timeout, or cancellation.
+
+One exception, since Core 1.17.112: an action whose module manifest says `waits_for_person: true` (see "Actions that wait for a person" below). Core does not take the lock for that job. The action program takes it itself.
 
 ## Operation context and RBAC
 
@@ -181,7 +184,38 @@ An action marked `protected: true` is never registered automatically. An adminis
 
 ### Sudo
 
-The sudoers rule for the Tactical account is unchanged. It allows `--dispatch` and `--cancel` and nothing else. `--register-module` and `--unregister-module` are reachable only from the root job helpers.
+The sudoers rule for the Tactical account allows `--dispatch`, `--cancel` and, since Core 1.17.112, `--signal`, and nothing else. `--register-module` and `--unregister-module` are reachable only from the root job helpers.
+
+## Signalling a running job (since 1.17.112)
+
+`send_signal(job_id, name, context, user=None)` posts a short named signal to a job that is running. Today Core starts a job with stdin closed, so a running action cannot otherwise be told anything. The first user is Certificate Management: a manual DNS-challenge renewal waits for a person, and the person says "Record added, continue".
+
+- **Names.** Only `continue` and `abort`. Anything else is refused (`validation_failed`).
+- **Manifest.** An action lists the names it accepts in `signals` (at most 2 different names from that set). An action that does not list a name can never receive it. A job that started before the upgrade has no recorded list and accepts nothing (`signal_not_accepted`).
+- **Permission.** The same check as `cancel`: the caller needs the action's permission. A refusal writes the usual `deny` audit row and raises `ServerMaintenancePermissionDenied`.
+- **State.** The job must be `running` (otherwise `job_not_running`).
+- **Delivery.** Core writes `signal-requests/<job>.<name>.json` and calls the root helper with `--signal <job-id>` through sudo. The helper takes the accepted names from the root registry (never from the job file Tactical can write), requires the claimed job to be `running`, and creates one file, `running/<job>/signals/<name>`, with `O_CREAT|O_EXCL|O_NOFOLLOW`, mode 0600, at most 512 bytes. The parent folder is root-only. A second send of the same name does nothing and never overwrites. The helper removes the request file and records `signals: [{name, sent_at}]` on the job.
+- **The action program** learns where to look from two environment variables the helper sets for an action that lists signals: `TEC_TAC_SERVER_MAINTENANCE_JOB_ID` and `TEC_TAC_SERVER_MAINTENANCE_SIGNAL_DIR`. It polls that folder for a file named after the signal. Nothing else in the child's environment changes. Core never reads a signal.
+- **`abort` does not stop the job.** It is only a name the program may act on. Cancel stays the way to stop a job.
+- **Audit.** One Core row per send: module `core`, action `run`, object type `server_maintenance_job`, object id the job id, metadata `job_id`, `action`, `name`, `owner_module`. Never the parameters. The helper also writes `job.signal_sent`, `job.signal_already_sent` and `job.signal_refused` to its own log.
+- **Job and action rows** gain `signals` (names and times received), `accepts_signals` and `waits_for_person`. `list_actions` rows gain `signals` and `waits_for_person`.
+- **Install.** `install.sh` creates `signal-requests` (2770, root:tactical, like `cancel-requests`) and adds `--signal *` to the sudoers line. A server that did not run `install.sh` again refuses `send_signal` with a plain `dispatch_failed` message.
+
+## Actions that wait for a person (since 1.17.112)
+
+An action may declare `waits_for_person: true` in the module manifest entry (default false). Without it nothing changes: Core holds the global lock for the whole job.
+
+With it, `run_job` does not queue the job for the global lock. The job is `running` at once with `lock = {scope: global, state: program_managed, acquired_at: null}`. The child's environment gets `TEC_TAC_SERVER_MAINTENANCE_LOCK`, the path of the lock file. The action program must take `flock` on that file itself for the part that changes the server (a certificate renewal, an Nginx test and reload, service restarts) and release it by closing the file or exiting. The finished states and cancel are unchanged, and the lock state ends `released`. The systemd unit uses `KillMode=control-group`, so a lock the program holds is released when the group dies.
+
+Why the program takes the lock and Core does not: Certbot's manual hook does the waiting inside one Certbot run, so the wait cannot be split off as a separate Core-run stage without rewriting the module.
+
+Limits that keep it narrow:
+
+- Only a signed module's manifest can set it. `--register` (an administrator's hand registration) refuses the key, and the helper honours it only for a registry file written by `--register-module`.
+- `timeout_seconds` must be at most 14400 (4 hours). `registry.py` and the helper both refuse more.
+- The executable is the root-installed, SHA-256-checked copy, as for every module action.
+
+Core cannot enforce that the program really takes the lock. A job that waits and never takes it is the program's fault. It shows in the job log. Core does not police it.
 
 ## Durable job state
 

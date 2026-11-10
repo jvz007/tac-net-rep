@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.111",
+  "version": "1.17.112",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.17.111.md",
-      "size": 7387,
-      "sha256": "ddae59a697bc01b0b5264869f3b3aae2e2b621f273e208f81fde99de4ae6c802"
+      "path": "RELEASE_NOTES_1.17.112.md",
+      "size": 7797,
+      "sha256": "602dd65c53d3e6bbc5c0b5e9ff92047b74e21f40d9ce771f970b64fb06e69d9f"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "240cc45b9e894623e0a97fe1973275eb8bd7f7b8c56a7774d457667017176f1a"
+      "sha256": "648c8f5e2ab73d0dc223f8f1b993e7eeb9a88dc8ae27e0fe1167efa7802b87bf"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -183,8 +183,8 @@
     },
     {
       "path": "docs/module-routes.md",
-      "size": 4704,
-      "sha256": "23e5f3af83a2bd16fd38704057bd7e096de0d92406eec649889d9b60c9650081"
+      "size": 5100,
+      "sha256": "cd0d41142575c50890ece0cbc898a409f4f839639cd3938c6fa7608fb9cd2b47"
     },
     {
       "path": "docs/module-scheduling.md",
@@ -1172,6 +1172,11 @@
       "sha256": "b0d80be3aa46e160f5efd1a12d1b5023250bc951f94d0a9e7d541483ae5f833b"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.111.md",
+      "size": 7387,
+      "sha256": "ddae59a697bc01b0b5264869f3b3aae2e2b621f273e208f81fde99de4ae6c802"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.12.md",
       "size": 13099,
       "sha256": "54b477c6c30da12458c421a1eb24eb7bcba6fc6b6fdf4285e56656b4d6ac3eb1"
@@ -1758,8 +1763,8 @@
     },
     {
       "path": "docs/server-maintenance-capability.md",
-      "size": 17572,
-      "sha256": "3146057392b5ba1adafaaf579ec12a34fe203d76b747006a81261c914a7c78cb"
+      "size": 22403,
+      "sha256": "37454e5c1e2201af3819a94b7da5baa1e609ffdb52a9687efecdaf1056e8a19f"
     },
     {
       "path": "docs/session-security.md",
@@ -2068,8 +2073,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 469810,
-      "sha256": "3dc4171b4afe305684b83ee5afc9214b09e3997d16a4962f921d1cdd69e2aaab"
+      "size": 472471,
+      "sha256": "4508e5056c59a72a6ef54838fb7e567b9f1da35b37d87ccbff245c0721cb259d"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -2563,8 +2568,8 @@
     },
     {
       "path": "framwork/tec_tac/registry.py",
-      "size": 49228,
-      "sha256": "2ce45282251bcbd3f1e55b9345060db2858312698c303812045ca6b20709510a"
+      "size": 50435,
+      "sha256": "00f227fcba3ef5a8e35f6d17a01855d95a241d60c92d5385671a68e2d103a99a"
     },
     {
       "path": "framwork/tec_tac/reporting.py",
@@ -2673,8 +2678,8 @@
     },
     {
       "path": "framwork/tec_tac/server_maintenance.py",
-      "size": 30129,
-      "sha256": "50f2abc4794460a13a821e3823ff5d376081772c0bc98f1afd3a64d608315952"
+      "size": 35583,
+      "sha256": "5927adb2bdaa49fe4d5621abc03fc598b44b2fce28835c793fc79aeef6ebee45"
     },
     {
       "path": "framwork/tec_tac/server_maintenance_views.py",
@@ -2808,8 +2813,8 @@
     },
     {
       "path": "install.sh",
-      "size": 77677,
-      "sha256": "820ec3cdebb72ef75e3f764396c8e47ab8f56ff4da9d45d7eb5d78cb2279071b"
+      "size": 78025,
+      "sha256": "99d588864fed43917fafb64717e0b974255d3db96d93b3c0023cb6ca6a386e6e"
     },
     {
       "path": "reportsets/.gitkeep",
@@ -2948,8 +2953,8 @@
     },
     {
       "path": "scripts/server-maintenance-helper.py",
-      "size": 51803,
-      "sha256": "d263ece9e77df586cf3445e267f24abee4d90f32eb02c88bad4c08d2a5531f97"
+      "size": 58752,
+      "sha256": "819ddf586e9e28c729abe8e03f42de1c219d28d1f4391a962a0d98bb00e06a57"
     },
     {
       "path": "scripts/system-update-helper.py",
@@ -2979,7 +2984,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "16cdcdde383db3293023c513dc6b5c145256928137a25c5b6551d42c4b8acdd3"
+      "sha256": "6e7ea6668442ff3bf527834c842db3eac461b59a8553042e6217d69769c4aeab"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -3345,6 +3350,11 @@
       "path": "tests/contract-export-ui-pin-1.17.35.py",
       "size": 2780,
       "sha256": "4f8d995603e6ac1a416279ea484c116d6a2986d9706b612b28f680cd821d6519"
+    },
+    {
+      "path": "tests/contract-text-spacing-1.17.112.py",
+      "size": 2909,
+      "sha256": "f06d73e53cd34c8d74c2954ab9935f4cc331532e317596d3e5fe23e51fd667cb"
     },
     {
       "path": "tests/contracts-foundation.sh",
@@ -3848,8 +3858,8 @@
     },
     {
       "path": "tests/job-log-routes-1.17.67.py",
-      "size": 27056,
-      "sha256": "1087945fd0eec49d813bf06a61018cf2f1ae7ea810388b047cfd4d2298138a63"
+      "size": 27123,
+      "sha256": "27ecf2eddf9db805c9d8f907aa6a6acd3d9e2077563bfb47b42fc2f5060b2a11"
     },
     {
       "path": "tests/l10-publication-atomicity-1.15.171.py",
@@ -4913,8 +4923,8 @@
     },
     {
       "path": "tests/scheduler-compat-1.17.67.py",
-      "size": 5079,
-      "sha256": "d283469cc0a12580a08badda50b4d89e03dacd5ee944a48428d1474c3b61c85a"
+      "size": 5117,
+      "sha256": "a502f192bb46d859aef116f9e6faa650224e5829d53cb8724c3ecdd1d0a31638"
     },
     {
       "path": "tests/scheduler-compat-1.17.68.py",
@@ -5343,8 +5353,8 @@
     },
     {
       "path": "tests/server-job-finished-hook-1.17.62.py",
-      "size": 27472,
-      "sha256": "36a0f7bcc940270c4a842a717b6a19199f5ac666d4d3eca3f5645dd2f123bd04"
+      "size": 27646,
+      "sha256": "6627cc57d7c3b668f783895a807a3d624bb95bb48b3a12368a88db8d0554b460"
     },
     {
       "path": "tests/server-job-finished-runtime-1.17.62.py",
@@ -5353,8 +5363,8 @@
     },
     {
       "path": "tests/server-job-hook-compat-1.17.62.py",
-      "size": 7827,
-      "sha256": "9ead2b5113cc67ce963c43b2b3d646ced767a4c0a671881e472eea19218e649c"
+      "size": 8046,
+      "sha256": "2c34c806ac58f125f977a0e0812d758107395015f776c5610169a6b849bdede6"
     },
     {
       "path": "tests/server-job-hook-migration-0035-1.17.62.py",
@@ -5393,8 +5403,8 @@
     },
     {
       "path": "tests/server-maintenance-permission-1.17.17.py",
-      "size": 23717,
-      "sha256": "ceb392efb3939b10219c96b190f465f33719998c278d68e60fe8fbca037b3ebc"
+      "size": 23906,
+      "sha256": "3de9d7e38eb69d1d9ccb47a5eb05912902e5c4ac5e649bd49fcacf4c1fe32bad"
     },
     {
       "path": "tests/server-maintenance-privilege-boundary.py",
@@ -5407,14 +5417,34 @@
       "sha256": "4f889a43df521a160524ab62f83929efdd006cfed191d21d94685c92d65decd4"
     },
     {
+      "path": "tests/server-maintenance-signals-1.17.112.py",
+      "size": 29599,
+      "sha256": "fb918720e92c332c7f51a882dc93cf5b644f91a19c9f56bd45dabd5d56c7bfd2"
+    },
+    {
+      "path": "tests/server-maintenance-signals-runtime-1.17.112.sh",
+      "size": 10691,
+      "sha256": "3d873679136562e7bfa0013dbd35c89d42ce07d1a170893258de2e10be715be1"
+    },
+    {
       "path": "tests/server-maintenance-uninstall-1.17.62.py",
-      "size": 14322,
-      "sha256": "e34cac6a72792308e86120e04641cc7dc65f67fd239ac46fdb15001794d9b22d"
+      "size": 14410,
+      "sha256": "3766bd59db24381fdf23836f57f729ac89308e8d1350537742da65a58852d7a9"
     },
     {
       "path": "tests/server-maintenance-uninstall-runtime-1.17.62.sh",
       "size": 8784,
       "sha256": "b31046762ed2d714f54eea59b8a77588eef1e3b700c954595d652e4baedea27e"
+    },
+    {
+      "path": "tests/server-maintenance-waits-for-person-1.17.112.py",
+      "size": 16222,
+      "sha256": "fff86cac97718031c3b16c5dd387b60090a753d5c7dd1e22cdf9dcbaccfd5028"
+    },
+    {
+      "path": "tests/server-maintenance-waits-runtime-1.17.112.sh",
+      "size": 8038,
+      "sha256": "ca3c4f7ed01ac2a6387074d5b69971ed88d5509d5e0799efc7f37a12f8fc6d90"
     },
     {
       "path": "tests/session-expiry-sweep-1.17.1.py",

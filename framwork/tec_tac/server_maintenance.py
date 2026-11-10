@@ -23,7 +23,7 @@ from .capabilities import build_operation_context, register_capability
 from .config import load_layout
 
 CAPABILITY_ID = "core.server_maintenance"
-CAPABILITY_VERSION = "1.1.0"
+CAPABILITY_VERSION = "1.2.0"
 DEFAULT_STATE_ROOT = Path("/var/lib/tec-tac/server-maintenance")
 DEFAULT_REGISTRY_ROOT = Path("/etc/tec-tac/server-maintenance/actions.d")
 DEFAULT_ACTION_ROOT = Path("/usr/local/lib/tec-tac/server-maintenance/actions")
@@ -31,6 +31,8 @@ HELPER = Path("/usr/local/sbin/tec-tac-server-maintenance")
 TERMINAL_STATES = frozenset({"succeeded", "failed", "cancelled", "dispatch_failed"})
 ACTION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 MAX_OUTPUT_BYTES = 65536
+# 1.2.0 (Core 1.17.112): the fixed names a job may be signalled with. An action lists the ones it accepts in its manifest (``signals``).
+SIGNAL_NAMES = ("continue", "abort")
 # 1.17.17: an action manifest may carry a Tec-Tac permission code and the module that owns the action (both optional)
 PERMISSION_CODE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,149}$")
 OWNER_MODULE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$")
@@ -87,6 +89,10 @@ def _jobs_root() -> Path:
 
 def _cancel_root() -> Path:
     return _state_root() / "cancel-requests"
+
+
+def _signal_root() -> Path:
+    return _state_root() / "signal-requests"
 
 
 def _logs_root() -> Path:
@@ -161,6 +167,14 @@ def _action_permission(action: dict) -> str | None:
             f"Registered action {str(action.get('id') or '')!r} declares an invalid permission.", classification="action_invalid"
         )
     return value
+
+
+def _action_signals(action: dict) -> list[str]:
+    """The signal names an action's manifest lists (1.2.0). Anything that is not a list of fixed names means none (fail closed)."""
+    value = action.get("signals")
+    if not isinstance(value, list) or any(not isinstance(n, str) or n not in SIGNAL_NAMES for n in value) or len(set(value)) != len(value):
+        return []
+    return list(value)
 
 
 def _action_owner(action: dict) -> str | None:
@@ -344,6 +358,14 @@ def _public_job(job: dict, *, include_output: bool = True) -> dict:
         "failure": dict(job.get("failure") or {}) if isinstance(job.get("failure"), dict) else None,
         # 1.17.17 (additive): the Tec-Tac permission the job's action needed when it started, null when it needed none
         "permission": job.get("action_permission") if isinstance(job.get("action_permission"), str) and job.get("action_permission") else None,
+        # 1.2.0 (additive): the signals the job's action accepts, the ones received so far (name and time), and whether the action waits for
+        # a person (its program, not Core, then holds the global lock)
+        "accepts_signals": [name for name in (job.get("action_signals") or []) if name in SIGNAL_NAMES] if isinstance(job.get("action_signals"), list) else [],
+        "signals": [
+            {"name": str(row.get("name")), "sent_at": row.get("sent_at")}
+            for row in (job.get("signals") or []) if isinstance(row, dict) and row.get("name") in SIGNAL_NAMES
+        ] if isinstance(job.get("signals"), list) else [],
+        "waits_for_person": job.get("action_waits_for_person") is True,
     }
     if include_output:
         jid = result["id"]
@@ -442,6 +464,8 @@ class ServerMaintenanceProvider:
             "action": str(action_def["id"]),
             "action_revision": str(action_def.get("revision") or "1"),
             "action_permission": permission,
+            "action_signals": _action_signals(action_def),
+            "action_waits_for_person": action_def.get("waits_for_person") is True,
             "owner_module": owner_module,
             "status": "queued",
             "stage": "queued",
@@ -453,6 +477,7 @@ class ServerMaintenanceProvider:
             "parameters": normalized,
             "public_parameters": public_parameters,
             "lock": {"scope": "global", "state": "pending", "acquired_at": None},
+            "signals": [],
             "exit_result": None,
             "failure": None,
         }
@@ -509,6 +534,51 @@ class ServerMaintenanceProvider:
         except Exception:
             cancel_path.unlink(missing_ok=True)
             raise
+        return self.get_job(job_id=safe_id, context=operation_context)
+
+    def send_signal(self, *, job_id: str, name: str, context: dict, user=None) -> dict:
+        """Send a fixed-name signal (``continue`` or ``abort``) to a running job (1.2.0, Core 1.17.112).
+
+        The caller needs the action's permission, checked as ``cancel`` checks it (a refusal writes the usual ``deny`` audit row). The
+        job must be ``running`` (``job_not_running``) and its action must list the name in its manifest (``signal_not_accepted``). Core
+        writes a request file and the root helper (``--signal``) delivers it, taking the accepted names from the root registry, not from
+        the job file. One signal per name per job: a second send is a no-op. The action program polls the folder named by
+        ``TEC_TAC_SERVER_MAINTENANCE_SIGNAL_DIR``. Core never reads the signal, and ``abort`` does not stop the job by itself: cancel does."""
+        operation_context = _validate_context(context)
+        safe_id = _safe_job_id(job_id)
+        if not isinstance(name, str) or name not in SIGNAL_NAMES:
+            raise ServerMaintenanceValidationError("Signal name must be one of: " + ", ".join(SIGNAL_NAMES) + ".", job_id=safe_id, classification="validation_failed")
+        job = _read_job(safe_id)
+        permission = _job_permission(job)
+        owner_module = job.get("owner_module") if isinstance(job.get("owner_module"), str) else None
+        _require_action_permission(
+            user=user, action_id=str(job.get("action") or ""), permission=permission, owner_module=owner_module,
+            operation="signal", context=operation_context, job_id=safe_id,
+        )
+        if str(job.get("status")) != "running":
+            raise ServerMaintenanceValidationError(f"Server-maintenance job {safe_id} is not running.", job_id=safe_id, classification="job_not_running")
+        accepted = job.get("action_signals")
+        if not isinstance(accepted, list) or name not in accepted:
+            raise ServerMaintenanceValidationError(f"The action of job {safe_id} does not accept the signal {name!r}.", job_id=safe_id, classification="signal_not_accepted")
+        request_path = _signal_root() / f"{safe_id}.{name}.json"
+        _atomic_job(request_path, {"job_id": safe_id, "name": name, "requested_at": _utcnow(), "context": operation_context})
+        try:
+            _dispatch("--signal", safe_id)
+        except Exception:
+            request_path.unlink(missing_ok=True)
+            raise
+        try:
+            from . import audit
+
+            actor = user if getattr(user, "is_authenticated", False) else audit.service_audit_actor(module_id="core", service="server-maintenance", identity="signal")
+            audit.record(
+                actor=actor, module_id="core", action="run", object_type="server_maintenance_job", object_id=safe_id,
+                message=f"Signal {name} was sent to server-maintenance job {safe_id}.",
+                metadata={"job_id": safe_id, "action": str(job.get("action") or ""), "name": name, "owner_module": owner_module},
+                operation_context=operation_context,
+            )
+        except Exception:
+            logger.exception("Tec-Tac audit row for a server-maintenance signal could not be written")
         return self.get_job(job_id=safe_id, context=operation_context)
 
     def list_jobs(
@@ -568,6 +638,9 @@ class ServerMaintenanceProvider:
                 # 1.17.17 (additive): the Tec-Tac permission the action needs, and the module that owns it. Null when none.
                 "permission": action.get("permission") if isinstance(action.get("permission"), str) and action.get("permission") else None,
                 "owner_module": _action_owner(action),
+                # 1.2.0 (additive): the signals the action accepts, and whether it waits for a person (its program takes the global lock)
+                "signals": _action_signals(action),
+                "waits_for_person": action.get("waits_for_person") is True,
                 "parameters": {
                     name: {k: v for k, v in spec.items() if k != "default" or not bool(spec.get("sensitive", False))}
                     for name, spec in parameters.items() if isinstance(spec, dict)
@@ -581,7 +654,7 @@ class ServerMaintenanceProvider:
             "helper_installed": HELPER.is_file(),
             "state_root": str(_state_root()),
             "registered_actions": sum(1 for path in _registry_root().glob("*.json")) if _registry_root().is_dir() else 0,
-            "global_lock": str(_state_root() / "server-maintenance.lock"),
+            "global_lock": str(_state_root() / "server-maintenance.lock"),  # held by Core for a whole job, except one of an action that waits_for_person (its program takes it)
             "execution_model": "systemd-detached-root-helper",
         }
 
@@ -597,7 +670,7 @@ def register_core_server_maintenance_capability():
         provider=_PROVIDER,
         description="Durable registered privileged server-maintenance job orchestration.",
         health=_PROVIDER.health,
-        operations=("start", "get_job", "cancel", "list_jobs", "list_actions"),
+        operations=("start", "get_job", "cancel", "list_jobs", "list_actions", "send_signal"),
         metadata={
             "durable": True,
             "global_lock": True,
@@ -607,6 +680,10 @@ def register_core_server_maintenance_capability():
             # 1.1.0: an action manifest may carry permission and owner_module; start and cancel take user=
             "action_manifest_keys_added_in_1_1_0": ["permission", "owner_module"],
             "per_action_permission": True,
+            # 1.2.0: a fixed-name signal to a running job, and actions that wait for a person
+            "action_manifest_keys_added_in_1_2_0": ["signals", "waits_for_person"],
+            "signal_names": list(SIGNAL_NAMES),
+            "waits_for_person_actions": True,
         },
     )
 

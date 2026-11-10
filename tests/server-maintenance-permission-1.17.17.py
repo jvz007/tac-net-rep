@@ -16,6 +16,7 @@ import importlib.util
 import json
 import logging
 import os
+import re
 import sys
 import tempfile
 import types
@@ -372,8 +373,9 @@ must(post_job(bob, "nope.nothing").status_code == 400, "unknown action")
 
 # ------------------------------------------------------------------------------------------------ the capability and the helper
 registered = sm.register_core_server_maintenance_capability()
-must(sm.CAPABILITY_VERSION == "1.1.0" and registered.version == "1.1.0" and registered.id == "core.server_maintenance", registered.version)
-must(registered.operations == ("start", "get_job", "cancel", "list_jobs", "list_actions"), "the operations are unchanged")
+# 1.17.112: the capability is 1.2.0; this test accepts 1.1.0 or higher in major 1 and checks that the first five operations stay
+must(re.fullmatch(r"1\.[1-9]\.\d+", sm.CAPABILITY_VERSION) and registered.version == sm.CAPABILITY_VERSION and registered.id == "core.server_maintenance", registered.version)
+must(registered.operations[:5] == ("start", "get_job", "cancel", "list_jobs", "list_actions"), "the first five operations are unchanged")
 must(registered.metadata["per_action_permission"] is True and registered.metadata["action_manifest_keys_added_in_1_1_0"] == ["permission", "owner_module"], registered.metadata)
 must(registered.metadata["arbitrary_shell"] is False and registered.metadata["global_lock"] is True, "earlier metadata stays")
 base = {"id": "vendor.rotate", "executable": "/x", "argv": [], "parameters": {}}

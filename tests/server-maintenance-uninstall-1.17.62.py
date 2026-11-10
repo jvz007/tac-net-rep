@@ -172,8 +172,8 @@ must(load.index("_disabled_message(payload)") < load.index("validate_manifest(pa
 must("verify_registered_executable_hash(manifest)" in load, "the SHA-256 recheck at dispatch and run stays")
 dispatch_run = helper.split("def dispatch(", 1)[1] + helper.split("def run_job(", 1)[1]
 must(dispatch_run.count("load_action(") >= 2, "dispatch and run both go through load_action")
-must('MODULE_ACTION_KEYS = frozenset({"id", "description", "permission", "executable", "argv", "parameters", "timeout_seconds", "success_exit_codes", "revision", "protected"})' in helper,
-     "no manifest key was added")
+must('MODULE_ACTION_KEYS = frozenset({"id", "description", "permission", "executable", "argv", "parameters", "timeout_seconds", "success_exit_codes", "revision", "protected", "signals", "waits_for_person"})' in helper,
+     "1.17.62 added no manifest key; 1.17.112 added exactly signals and waits_for_person")
 for name in ("module-job-helper.py", "module-v2-job-helper.py"):
     text = (ROOT / "scripts" / name).read_text(encoding="utf-8")
     must("disabled_reason" not in text and "module removed" not in text and "action_allow" not in text, f"{name} keeps no allow-list and needs no change")

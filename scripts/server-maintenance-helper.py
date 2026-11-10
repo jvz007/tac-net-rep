@@ -115,6 +115,14 @@ ALLOWED_PARAMETER_TYPES = {"string", "integer", "boolean", "enum"}
 PERMISSION_CODE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,149}$")
 OWNER_MODULE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$")
 MAX_TIMEOUT_SECONDS = 7 * 24 * 60 * 60
+# 1.17.112: a job input channel (fixed signal names) and actions that wait for a person (the program takes the global lock itself)
+SIGNAL_NAMES = ("continue", "abort")
+SIGNALS_MAX = 2
+SIGNAL_MAX_BYTES = 512
+WAITS_MAX_TIMEOUT_SECONDS = 4 * 60 * 60
+ENV_JOB_ID = "TEC_TAC_SERVER_MAINTENANCE_JOB_ID"
+ENV_SIGNAL_DIR = "TEC_TAC_SERVER_MAINTENANCE_SIGNAL_DIR"
+ENV_LOCK = "TEC_TAC_SERVER_MAINTENANCE_LOCK"
 # 1.17.17: actions a signed module registers from its manifest (--register-module). Everything below is root-only.
 MODULE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -123,7 +131,7 @@ MODULE_ACTIONS_KEY = "server_maintenance_actions"
 MODULE_ACTIONS_MAX = 16
 MODULE_EXECUTABLE_PREFIX = "server_maintenance/actions/"
 MODULE_REGISTER_PERMISSION = "server_maintenance.register"
-MODULE_ACTION_KEYS = frozenset({"id", "description", "permission", "executable", "argv", "parameters", "timeout_seconds", "success_exit_codes", "revision", "protected"})
+MODULE_ACTION_KEYS = frozenset({"id", "description", "permission", "executable", "argv", "parameters", "timeout_seconds", "success_exit_codes", "revision", "protected", "signals", "waits_for_person"})
 MAX_MODULE_MANIFEST_BYTES = 1024 * 1024
 MAX_MODULE_EXECUTABLE_BYTES = 64 * 1024 * 1024
 ROOT_UID = 0
@@ -151,9 +159,14 @@ def tactical_gid():
         return os.getgid()
 
 
+def signal_request_root():
+    # derived from STATE_ROOT at call time, like the folders ensure_layout makes (1.17.112)
+    return STATE_ROOT / "signal-requests"
+
+
 def ensure_layout():
     gid = tactical_gid()
-    for path, mode in ((STATE_ROOT, 0o2750), (JOBS_ROOT, 0o2770), (CANCEL_ROOT, 0o2770), (LOGS_ROOT, 0o2750), (RUNNING_ROOT, 0o700)):
+    for path, mode in ((STATE_ROOT, 0o2750), (JOBS_ROOT, 0o2770), (CANCEL_ROOT, 0o2770), (signal_request_root(), 0o2770), (LOGS_ROOT, 0o2750), (RUNNING_ROOT, 0o700)):
         path.mkdir(parents=True, exist_ok=True)
         try:
             os.chown(path, 0, 0 if path == RUNNING_ROOT else gid)
@@ -361,8 +374,19 @@ def validate_manifest(payload, *, require_executable=True):
     success_codes = payload.get("success_exit_codes", [0])
     if not isinstance(success_codes, list) or not success_codes or any(isinstance(v, bool) or not isinstance(v, int) for v in success_codes):
         raise RuntimeError("success_exit_codes must be a non-empty integer array")
+    signals = payload.get("signals", [])
+    if (not isinstance(signals, list) or len(signals) > SIGNALS_MAX or len(set(map(str, signals))) != len(signals)
+            or any(not isinstance(name, str) or name not in SIGNAL_NAMES for name in signals)):
+        raise RuntimeError(f"action signals must be at most {SIGNALS_MAX} different names from {list(SIGNAL_NAMES)}")
+    waits = payload.get("waits_for_person", False)
+    if not isinstance(waits, bool):
+        raise RuntimeError("action waits_for_person must be true or false")
+    if waits and timeout > WAITS_MAX_TIMEOUT_SECONDS:
+        raise RuntimeError(f"action waits_for_person needs timeout_seconds of at most {WAITS_MAX_TIMEOUT_SECONDS}")
     return {
         **payload,
+        "signals": list(signals),
+        "waits_for_person": waits,
         "id": action_id,
         "executable": str(executable),
         "argv": argv,
@@ -484,6 +508,9 @@ def render_argv(action, parameters):
 def register_manifest(source):
     source = Path(source).resolve(strict=True)
     payload = json.loads(source.read_text(encoding="utf-8"))
+    if isinstance(payload, dict) and "waits_for_person" in payload:
+        # 1.17.112: only a signed module's own manifest may let its program take the global lock itself (--register-module)
+        raise RuntimeError("waits_for_person can be set only by a module manifest, not by a hand registration")
     manifest = validate_manifest(payload)
     ensure_layout()
     target = action_path(manifest["id"])
@@ -702,6 +729,7 @@ def register_module(module_id):
             "id": action["id"], "executable": str(ACTION_ROOT / module_id / relative[len(MODULE_EXECUTABLE_PREFIX):]), "argv": action.get("argv") or [],
             "parameters": action.get("parameters") or {}, "timeout_seconds": action.get("timeout_seconds", 3600),
             "success_exit_codes": action.get("success_exit_codes", [0]), "permission": action["permission"], "owner_module": module_id,
+            "signals": action.get("signals", []), "waits_for_person": action.get("waits_for_person", False),
         }, require_executable=False)
         existing = action_path(action["id"])
         if existing.is_file():
@@ -732,6 +760,7 @@ def register_module(module_id):
             "timeout_seconds": action.get("timeout_seconds", 3600), "success_exit_codes": action.get("success_exit_codes", [0]), "enabled": True,
             "permission": action["permission"], "owner_module": module_id, "owner_version": version,
             "executable_sha256": hashlib.sha256(data).hexdigest(), "registered_by": "module-manifest",
+            "signals": action.get("signals", []), "waits_for_person": action.get("waits_for_person", False),
         })
         _write_root_file(action_path(action["id"]), (json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n").encode("utf-8"), 0o644)
         append_audit("action.registered", detail={"action": manifest["id"], "revision": manifest["revision"], "module": module_id, "module_version": version,
@@ -895,15 +924,24 @@ def run_job(job_id):
 
     signal.signal(signal.SIGTERM, _signal_cancel)
     signal.signal(signal.SIGINT, _signal_cancel)
-    lock_handle = LOCK_FILE.open("a+")
-    write_claimed_job(path, job, status="waiting_for_lock", stage="waiting_for_lock", lock={"scope":"global","state":"waiting","acquired_at":None})
-    append_audit("job.waiting_for_lock", job=job)
-    try:
-        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
-    except Exception as exc:
-        write_claimed_job(path, job, status="failed", stage="lock", finished_at=now(), failure={"classification":"lock_failed","message":str(exc),"error_type":exc.__class__.__name__})
-        append_audit("job.lock_failed", job=job, detail={"message": str(exc)})
-        raise
+    # 1.17.112: an action of a signed module that waits for a person does not queue for the global lock. Its program takes the lock itself
+    # (flock on TEC_TAC_SERVER_MAINTENANCE_LOCK) for the part that changes the server. Only a module-manifest registration is trusted with it.
+    program_lock = action.get("waits_for_person") is True and action.get("registered_by") == "module-manifest"
+    lock_handle = None
+    acquired = None
+    if program_lock:
+        LOCK_FILE.touch(exist_ok=True)
+        os.chmod(LOCK_FILE, 0o600)
+    else:
+        lock_handle = LOCK_FILE.open("a+")
+        write_claimed_job(path, job, status="waiting_for_lock", stage="waiting_for_lock", lock={"scope":"global","state":"waiting","acquired_at":None})
+        append_audit("job.waiting_for_lock", job=job)
+        try:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        except Exception as exc:
+            write_claimed_job(path, job, status="failed", stage="lock", finished_at=now(), failure={"classification":"lock_failed","message":str(exc),"error_type":exc.__class__.__name__})
+            append_audit("job.lock_failed", job=job, detail={"message": str(exc)})
+            raise
 
     current = load_claimed_job(job_id)[1]
     if current.get("cancel_requested_at") or _cancel_requested:
@@ -911,10 +949,25 @@ def run_job(job_id):
         append_audit("job.cancelled", job=current, detail={"before_execution": True})
         return
 
-    acquired = now()
     job = current
-    write_claimed_job(path, job, status="running", stage="running", started_at=job.get("started_at") or acquired, lock={"scope":"global","state":"acquired","acquired_at":acquired})
-    append_audit("job.started", job=job)
+    if program_lock:
+        write_claimed_job(path, job, status="running", stage="running", started_at=job.get("started_at") or now(), lock={"scope":"global","state":"program_managed","acquired_at":None})
+        append_audit("job.started", job=job, detail={"lock": "program_managed"})
+    else:
+        acquired = now()
+        write_claimed_job(path, job, status="running", stage="running", started_at=job.get("started_at") or acquired, lock={"scope":"global","state":"acquired","acquired_at":acquired})
+        append_audit("job.started", job=job)
+    child_env = None
+    if action.get("signals") or program_lock:
+        child_env = dict(os.environ)
+        if action.get("signals"):
+            signal_dir = claimed_dir(job_id) / "signals"
+            signal_dir.mkdir(mode=0o700, exist_ok=True)
+            os.chmod(signal_dir, 0o700)
+            child_env[ENV_JOB_ID] = str(job_id)
+            child_env[ENV_SIGNAL_DIR] = str(signal_dir)
+        if program_lock:
+            child_env[ENV_LOCK] = str(LOCK_FILE)
 
     stdout_path = LOGS_ROOT / f"{job_id}.stdout.log"
     stderr_path = LOGS_ROOT / f"{job_id}.stderr.log"
@@ -933,7 +986,7 @@ def run_job(job_id):
         with lifecycle_path.open("a", encoding="utf-8") as lifecycle, stdout_path.open("ab") as stdout, stderr_path.open("ab") as stderr:
             lifecycle.write(f"[{now()}] action={action['id']} revision={action['revision']} started\n")
             lifecycle.flush()
-            _child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, close_fds=True)
+            _child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, close_fds=True, env=child_env)
             deadline = time.monotonic() + timeout
             while _child.poll() is None:
                 if _cancel_requested:
@@ -966,9 +1019,10 @@ def run_job(job_id):
         raise
     finally:
         _child = None
-        try: fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
-        except Exception: pass
-        lock_handle.close()
+        if lock_handle is not None:
+            try: fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+            except Exception: pass
+            lock_handle.close()
 
     job = load_claimed_job(job_id)[1]
     cancelled = bool(job.get("cancel_requested_at")) or _cancel_requested
@@ -1043,8 +1097,84 @@ def cancel_job(job_id):
         )
         append_audit("job.cancelled", job=current)
 
+def _safe_requested_by(value):
+    text = "".join(ch for ch in str(value or "") if " " <= ch <= "~")
+    return text[:100]
+
+
+def signal_job(job_id):
+    """Deliver a fixed-name signal a module asked for (1.17.112, ``--signal <job-id>``).
+
+    The names an action accepts come from the ROOT registry (``load_action``), never from the Tactical-writable job file. The job must be
+    ``running`` in the claimed (root-only) copy. A signal is one file below ``running/<job>/signals/``, created with O_EXCL: a second send of
+    the same name is a no-op. The request files Core wrote are always removed."""
+    ensure_layout()
+    path, job = load_claimed_job(job_id)
+    if job.get("status") != "running":
+        raise RuntimeError("job is not running")
+    action = load_action(str(job.get("action") or ""))
+    if str(job.get("action_revision") or "1") != action["revision"]:
+        raise RuntimeError("registered action revision changed after the job was created")
+    accepted = set(action.get("signals") or [])
+    requests = []
+    for name in SIGNAL_NAMES:
+        request = signal_request_root() / f"{job_id}.{name}.json"
+        try:
+            info = os.lstat(request)
+        except FileNotFoundError:
+            continue
+        payload = None
+        if stat.S_ISREG(info.st_mode):
+            try:
+                payload = _read_json_nofollow(request)
+            except (OSError, ValueError, RuntimeError):
+                payload = None
+        try:
+            request.unlink(missing_ok=True)  # never follows a symlink; a FIFO is removed without being opened
+        except OSError:
+            pass
+        if isinstance(payload, dict) and str(payload.get("job_id")) == str(job_id) and payload.get("name") == name:
+            requests.append((name, payload))
+    if not requests:
+        raise RuntimeError("no signal request was found for this job")
+    sent = []
+    for name, payload in requests:
+        if name not in accepted:
+            append_audit("job.signal_refused", job=job, detail={"name": name, "reason": "not_accepted"})
+            continue
+        signals_dir = claimed_dir(job_id) / "signals"
+        signals_dir.mkdir(mode=0o700, exist_ok=True)
+        os.chmod(signals_dir, 0o700)
+        context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+        sent_at = now()
+        data = (json.dumps({"name": name, "sent_at": sent_at, "requested_by": _safe_requested_by(context.get("requested_by"))}, sort_keys=True) + "\n").encode("ascii")
+        if len(data) > SIGNAL_MAX_BYTES:
+            raise RuntimeError("signal content is too large")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+        try:
+            fd = os.open(signals_dir / name, flags, 0o600)
+        except FileExistsError:
+            append_audit("job.signal_already_sent", job=job, detail={"name": name})
+            continue
+        try:
+            os.fchmod(fd, 0o600)
+            os.write(fd, data)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        current = load_claimed_job(job_id)[1]
+        recorded = [row for row in (current.get("signals") or []) if isinstance(row, dict)]
+        if not any(row.get("name") == name for row in recorded):
+            recorded.append({"name": name, "sent_at": sent_at})
+        write_claimed_job(path, current, signals=recorded)
+        append_audit("job.signal_sent", job=current, detail={"name": name})
+        sent.append(name)
+        job = current
+    print(",".join(sent))
+
+
 def usage():
-    raise SystemExit("usage: tec-tac-server-maintenance --dispatch|--run|--cancel <job-id> | --register <manifest.json> | --unregister <action-id> | --register-module|--unregister-module <module-id>")
+    raise SystemExit("usage: tec-tac-server-maintenance --dispatch|--run|--cancel|--signal <job-id> | --register <manifest.json> | --unregister <action-id> | --register-module|--unregister-module <module-id>")
 
 
 def main():
@@ -1056,6 +1186,7 @@ def main():
     if mode == "--dispatch": dispatch(value)
     elif mode == "--run": run_job(value)
     elif mode == "--cancel": cancel_job(value)
+    elif mode == "--signal": signal_job(value)
     elif mode == "--register": register_manifest(value)
     elif mode == "--unregister": unregister_manifest(value)
     elif mode == "--register-module": register_module(value)

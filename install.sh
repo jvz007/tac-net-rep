@@ -1004,21 +1004,22 @@ if command -v visudo >/dev/null 2>&1; then
 fi
 log "Installed privileged Core server-backup helper: ${SERVER_BACKUP_HELPER}"
 
-mkdir -p "${SERVER_MAINTENANCE_ROOT}/jobs" "${SERVER_MAINTENANCE_ROOT}/cancel-requests" "${SERVER_MAINTENANCE_ROOT}/logs" "${SERVER_MAINTENANCE_ROOT}/running" "${SERVER_MAINTENANCE_REGISTRY_ROOT}" "${SERVER_MAINTENANCE_ACTION_ROOT}" "${SERVER_MAINTENANCE_LIB}"
-chown root:"${TACTICAL_GROUP}" "${SERVER_MAINTENANCE_ROOT}" "${SERVER_MAINTENANCE_ROOT}/jobs" "${SERVER_MAINTENANCE_ROOT}/cancel-requests" "${SERVER_MAINTENANCE_ROOT}/logs"
+mkdir -p "${SERVER_MAINTENANCE_ROOT}/jobs" "${SERVER_MAINTENANCE_ROOT}/cancel-requests" "${SERVER_MAINTENANCE_ROOT}/signal-requests" "${SERVER_MAINTENANCE_ROOT}/logs" "${SERVER_MAINTENANCE_ROOT}/running" "${SERVER_MAINTENANCE_REGISTRY_ROOT}" "${SERVER_MAINTENANCE_ACTION_ROOT}" "${SERVER_MAINTENANCE_LIB}"
+chown root:"${TACTICAL_GROUP}" "${SERVER_MAINTENANCE_ROOT}" "${SERVER_MAINTENANCE_ROOT}/jobs" "${SERVER_MAINTENANCE_ROOT}/cancel-requests" "${SERVER_MAINTENANCE_ROOT}/signal-requests" "${SERVER_MAINTENANCE_ROOT}/logs"
 chown root:root "${SERVER_MAINTENANCE_ROOT}/running"
 chmod 2750 "${SERVER_MAINTENANCE_ROOT}" "${SERVER_MAINTENANCE_ROOT}/logs"
-chmod 2770 "${SERVER_MAINTENANCE_ROOT}/jobs" "${SERVER_MAINTENANCE_ROOT}/cancel-requests"
+chmod 2770 "${SERVER_MAINTENANCE_ROOT}/jobs" "${SERVER_MAINTENANCE_ROOT}/cancel-requests" "${SERVER_MAINTENANCE_ROOT}/signal-requests"
 chmod 0700 "${SERVER_MAINTENANCE_ROOT}/running"
 chown root:root "${SERVER_MAINTENANCE_REGISTRY_ROOT}" "${SERVER_MAINTENANCE_ACTION_ROOT}" "${SERVER_MAINTENANCE_LIB}"
 chmod 0755 "${SERVER_MAINTENANCE_REGISTRY_ROOT}" "${SERVER_MAINTENANCE_ACTION_ROOT}" "${SERVER_MAINTENANCE_LIB}"
 run_as_tactical test -w "${SERVER_MAINTENANCE_ROOT}/jobs" || fail "Tactical service user cannot write ${SERVER_MAINTENANCE_ROOT}/jobs."
 run_as_tactical test -w "${SERVER_MAINTENANCE_ROOT}/cancel-requests" || fail "Tactical service user cannot write ${SERVER_MAINTENANCE_ROOT}/cancel-requests."
+run_as_tactical test -w "${SERVER_MAINTENANCE_ROOT}/signal-requests" || fail "Tactical service user cannot write ${SERVER_MAINTENANCE_ROOT}/signal-requests."
 install_root_script "${REPO_ROOT}/scripts/server-maintenance-helper.py" "${SERVER_MAINTENANCE_LIB}/server-maintenance-helper.py"
 ln -sfn "${SERVER_MAINTENANCE_LIB}/server-maintenance-helper.py" "${SERVER_MAINTENANCE_HELPER}"
 chown -h root:root "${SERVER_MAINTENANCE_HELPER}"
 cat > "${SERVER_MAINTENANCE_SUDOERS}" <<EOF
-${TACTICAL_USER} ALL=(root) NOPASSWD: ${SERVER_MAINTENANCE_HELPER} --dispatch *, ${SERVER_MAINTENANCE_HELPER} --cancel *
+${TACTICAL_USER} ALL=(root) NOPASSWD: ${SERVER_MAINTENANCE_HELPER} --dispatch *, ${SERVER_MAINTENANCE_HELPER} --cancel *, ${SERVER_MAINTENANCE_HELPER} --signal *
 EOF
 chown root:root "${SERVER_MAINTENANCE_SUDOERS}"
 chmod 0440 "${SERVER_MAINTENANCE_SUDOERS}"
@@ -1090,7 +1091,7 @@ run_verify_step "Core server-backup capability" "${VERIFY_SERVER_BACKUP_CODE}"
 
 
 log "Verifying Core server-maintenance capability registration."
-VERIFY_SERVER_MAINTENANCE_CODE="from tec_tac.capabilities import capability_status,get_capability; s=capability_status('core.server_maintenance',version='>=1,<2'); assert s['available'], s; p=get_capability('core.server_maintenance',version='>=1,<2'); assert all(hasattr(p,n) for n in ('start','get_job','cancel','list_jobs')); print('TEC-TAC core.server_maintenance OK:', s['capability_version'], s['operations'])"
+VERIFY_SERVER_MAINTENANCE_CODE="from tec_tac.capabilities import capability_status,get_capability; s=capability_status('core.server_maintenance',version='>=1,<2'); assert s['available'], s; p=get_capability('core.server_maintenance',version='>=1,<2'); assert all(hasattr(p,n) for n in ('start','get_job','cancel','list_jobs','send_signal')); print('TEC-TAC core.server_maintenance OK:', s['capability_version'], s['operations'])"
 run_verify_step "Core server-maintenance capability" "${VERIFY_SERVER_MAINTENANCE_CODE}"
 
 log "Verifying Core Tactical operations capability registration."

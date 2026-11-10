@@ -67,7 +67,12 @@ SERVER_MAINTENANCE_EXECUTABLE_PREFIX = "server_maintenance/actions/"
 SERVER_MAINTENANCE_REGISTER_PERMISSION = "server_maintenance.register"
 _SM_ACTION_KEYS = frozenset({
     "id", "description", "permission", "executable", "argv", "parameters", "timeout_seconds", "success_exit_codes", "revision", "protected",
+    "signals", "waits_for_person",
 })
+# 1.17.112: the fixed signal names an action may list, and the longest wait an action that waits for a person may declare
+SERVER_MAINTENANCE_SIGNAL_NAMES = ("continue", "abort")
+SERVER_MAINTENANCE_SIGNALS_MAX = 2
+SERVER_MAINTENANCE_WAITS_MAX_SECONDS = 4 * 60 * 60
 _SM_ACTION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _SM_PARAMETER_TYPES = frozenset({"string", "integer", "boolean", "enum"})
 _SM_MAX_TIMEOUT_SECONDS = 7 * 24 * 60 * 60
@@ -335,10 +340,19 @@ def _server_maintenance_actions(payload: dict, plugin_type: str, plugin_id: str,
         protected = entry.get("protected", False)
         if not isinstance(protected, bool):
             raise RegistryError(f"{label} protected must be true or false.")
+        signals = entry.get("signals", [])
+        if (not isinstance(signals, list) or len(signals) > SERVER_MAINTENANCE_SIGNALS_MAX or len(set(map(str, signals))) != len(signals)
+                or any(not isinstance(name, str) or name not in SERVER_MAINTENANCE_SIGNAL_NAMES for name in signals)):
+            raise RegistryError(f"{label} signals must be a list of at most {SERVER_MAINTENANCE_SIGNALS_MAX} different names from {list(SERVER_MAINTENANCE_SIGNAL_NAMES)!r}.")
+        waits = entry.get("waits_for_person", False)
+        if not isinstance(waits, bool):
+            raise RegistryError(f"{label} waits_for_person must be true or false.")
+        if waits and timeout > SERVER_MAINTENANCE_WAITS_MAX_SECONDS:
+            raise RegistryError(f"{label} waits_for_person needs timeout_seconds of at most {SERVER_MAINTENANCE_WAITS_MAX_SECONDS}.")
         entries.append({
             "id": action_id, "description": description.strip(), "permission": permission, "executable": executable, "argv": list(argv),
             "parameters": dict(schema), "timeout_seconds": timeout, "success_exit_codes": list(codes), "revision": str(revision).strip(),
-            "protected": protected,
+            "protected": protected, "signals": list(signals), "waits_for_person": waits,
         })
     return tuple(entries)
 

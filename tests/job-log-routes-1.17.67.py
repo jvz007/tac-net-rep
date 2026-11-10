@@ -460,7 +460,7 @@ urls = (APP / "urls.py").read_text(encoding="utf-8")
 for needle in ('"system/updates/jobs/", SystemUpdateJobListView', '"system/updates/jobs/<uuid:job_id>/log/", SystemUpdateJobLogView', '"system/maintenance/jobs/<uuid:job_id>/log/", ServerMaintenanceJobLogView'):
     must(urls.count(needle) == 1, needle)
 cap = (APP / "server_maintenance.py").read_text(encoding="utf-8")
-must('CAPABILITY_VERSION = "1.1.0"' in cap or "1.1.0" in cap, "core.server_maintenance stays 1.1.0")
+must(__import__("re").search(r'CAPABILITY_VERSION = "1\.[1-9]\.\d+"', cap) is not None, "core.server_maintenance is 1.1.0 or higher in major 1 (1.2.0 since 1.17.112)")
 must(sm.get_server_maintenance_provider().__class__.__name__ == "ServerMaintenanceProvider" and not hasattr(sm.ServerMaintenanceProvider, "read_job_log"), "read_job_log is a module function, not a provider operation")
 print("       the module route uses the shared helper; the three routes are registered once; the capability has no new operation")
 print("PASS job log routes 1.17.67")
