@@ -1091,7 +1091,7 @@ run_verify_step "Core server-backup capability" "${VERIFY_SERVER_BACKUP_CODE}"
 
 
 log "Verifying Core server-maintenance capability registration."
-VERIFY_SERVER_MAINTENANCE_CODE="from tec_tac.capabilities import capability_status,get_capability; s=capability_status('core.server_maintenance',version='>=1,<2'); assert s['available'], s; p=get_capability('core.server_maintenance',version='>=1,<2'); assert all(hasattr(p,n) for n in ('start','get_job','cancel','list_jobs','send_signal')); print('TEC-TAC core.server_maintenance OK:', s['capability_version'], s['operations'])"
+VERIFY_SERVER_MAINTENANCE_CODE="from tec_tac.capabilities import capability_status,get_capability; s=capability_status('core.server_maintenance',version='>=1,<2'); assert s['available'], s; p=get_capability('core.server_maintenance',version='>=1,<2'); assert all(hasattr(p,n) for n in ('start','get_job','cancel','list_jobs','send_signal')); import tec_tac.server_maintenance as m; assert callable(getattr(m,'_resolve_secret_inputs',None)) and tuple(map(int,s['capability_version'].split('.')))>=(1,3,0), 'core.server_maintenance secret_inputs missing'; print('TEC-TAC core.server_maintenance OK:', s['capability_version'], s['operations'])"
 run_verify_step "Core server-maintenance capability" "${VERIFY_SERVER_MAINTENANCE_CODE}"
 
 log "Verifying Core Tactical operations capability registration."

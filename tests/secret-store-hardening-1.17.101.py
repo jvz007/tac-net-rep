@@ -142,12 +142,15 @@ for attr, value in vars(ss).items():
 # which functions touch the table: only the five public ones, plus the read counter (it gets a row, not an owner)
 PUBLIC = {"put", "get", "delete", "configured", "list_names"}
 touch = {fn.name for fn in all_functions(TREE) if isinstance(fn, ast.FunctionDef) and "_table(" in ast.get_source_segment(SOURCE, fn)}
-must(touch - {"_table"} == PUBLIC | {"_count_read"}, touch)
+# 1.17.113: plus the one private Core-internal read for server_maintenance (frame-checked, owner found from the signed registry, not a contract)
+PRIVATE_CORE = {"_read_for_server_maintenance"}
+must(touch - {"_table"} == PUBLIC | {"_count_read"} | PRIVATE_CORE, touch)
 own_filter = {fn.name for fn in all_functions(TREE) if isinstance(fn, ast.FunctionDef) and "owner_module=" in ast.get_source_segment(SOURCE, fn)}
-must(own_filter <= PUBLIC, own_filter)
+must(own_filter <= PUBLIC | PRIVATE_CORE, own_filter)
 must(not any(n.startswith("_") and n in {"_put", "_get", "_delete", "_configured", "_list_names"} for n in vars(ss)), "an owner-taking helper is back")
 # the verified scope is built in one place (plus the fixed unverified one)
-must(SOURCE.count("_Scope(") == 2 and "_UNVERIFIED = _Scope(" in SOURCE and "return None if identity is None else _Scope(identity.module_id)" in SOURCE, SOURCE.count("_Scope("))
+# 1.17.113: the private server-maintenance read makes one more, from the owner it found in the ROOT registry after its own checks
+must(SOURCE.count("_Scope(") == 3 and "    scope = _Scope(owner)" in SOURCE and "_UNVERIFIED = _Scope(" in SOURCE and "return None if identity is None else _Scope(identity.module_id)" in SOURCE, SOURCE.count("_Scope("))
 # behaviour is unchanged: another module still sees nothing of the owner's
 reset()
 LIC(ss.put, "licence_key", SENTINEL)

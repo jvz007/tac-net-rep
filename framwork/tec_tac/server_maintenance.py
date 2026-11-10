@@ -8,11 +8,13 @@ unit so Tactical Django, Celery, NATS and nginx restarts do not own job lifetime
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
 import re
 import subprocess
+import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,7 +25,7 @@ from .capabilities import build_operation_context, register_capability
 from .config import load_layout
 
 CAPABILITY_ID = "core.server_maintenance"
-CAPABILITY_VERSION = "1.2.0"
+CAPABILITY_VERSION = "1.3.0"
 DEFAULT_STATE_ROOT = Path("/var/lib/tec-tac/server-maintenance")
 DEFAULT_REGISTRY_ROOT = Path("/etc/tec-tac/server-maintenance/actions.d")
 DEFAULT_ACTION_ROOT = Path("/usr/local/lib/tec-tac/server-maintenance/actions")
@@ -31,6 +33,13 @@ HELPER = Path("/usr/local/sbin/tec-tac-server-maintenance")
 TERMINAL_STATES = frozenset({"succeeded", "failed", "cancelled", "dispatch_failed"})
 ACTION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 MAX_OUTPUT_BYTES = 65536
+# 1.3.0 (Core 1.17.113): secret_inputs of an action. At most 8 names, 16 KiB per value (core.secrets), 64 KiB in all on the helper's stdin.
+# OFF until Johan signs Core's read of an owner's secret for that owner's own action (reviews/questions/core.md, Core 1.17.113 Question 1).
+SECRET_INPUTS_ENABLED = False
+SECRET_INPUTS_MAX = 8
+SECRET_VALUE_MAX_BYTES = 16 * 1024
+SECRET_TOTAL_MAX_BYTES = 64 * 1024
+SECRET_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 # 1.2.0 (Core 1.17.112): the fixed names a job may be signalled with. An action lists the ones it accepts in its manifest (``signals``).
 SIGNAL_NAMES = ("continue", "abort")
 # 1.17.17: an action manifest may carry a Tec-Tac permission code and the module that owns the action (both optional)
@@ -175,6 +184,102 @@ def _action_signals(action: dict) -> list[str]:
     if not isinstance(value, list) or any(not isinstance(n, str) or n not in SIGNAL_NAMES for n in value) or len(set(value)) != len(value):
         return []
     return list(value)
+
+
+def _action_secret_inputs(action: dict) -> list[dict]:
+    """The ``[{name, required}]`` an action's registry file lists (1.3.0). Anything that is not a valid list means none (fail closed)."""
+    value = action.get("secret_inputs")
+    if not isinstance(value, list) or len(value) > SECRET_INPUTS_MAX:
+        return []
+    rows = []
+    for item in value:
+        if (not isinstance(item, dict) or set(item) != {"name", "required"} or not isinstance(item["name"], str)
+                or not SECRET_NAME_RE.fullmatch(item["name"]) or not isinstance(item["required"], bool)):
+            return []
+        rows.append({"name": item["name"], "required": item["required"]})
+    if len({row["name"] for row in rows}) != len(rows):
+        return []
+    return rows
+
+
+class _SecretHandOver:
+    """The secrets resolved for one start: ``names`` (safe to show). The bytes live only in the closures below, never in an attribute.
+    repr and str never show a value."""
+
+    __slots__ = ("names", "scrub", "stdin_text")
+
+    def __init__(self, names: list[str], values: dict[str, bytes]):
+        held = dict(values)
+
+        def stdin_text() -> str:
+            return json.dumps({name: base64.b64encode(value).decode("ascii") for name, value in held.items()}, sort_keys=True)
+
+        def scrub(text: str) -> str:
+            """Remove every value (and its base64 form) from a piece of text, for an error message that must not carry one."""
+            for value in sorted(held.values(), key=len, reverse=True):
+                if value:
+                    text = text.replace(value.decode("utf-8", "replace"), "***").replace(base64.b64encode(value).decode("ascii"), "***")
+            return text
+
+        self.names = names
+        self.stdin_text = stdin_text
+        self.scrub = scrub
+
+    def __repr__(self) -> str:
+        return "<redacted>"
+
+    __str__ = __repr__
+
+    def __reduce__(self):
+        raise TypeError("a secret hand-over cannot be pickled")
+
+
+def _resolve_secret_inputs(action_id: str) -> _SecretHandOver | None:
+    """Read the owner's own secrets an action lists (1.3.0). None when the action lists none.
+
+    Takes only an action id and reads the ROOT registry itself, so a caller cannot supply its own action rows. Its immediate caller must
+    be ``ServerMaintenanceProvider.start`` in this file (code-object identity); any other caller is refused. Runs before any job file
+    exists. A required name that is not configured is ``secret_not_configured``, one that cannot be read is ``secret_unreadable``.
+    Messages name the secret, never a value. The only caller of ``secret_store._read_for_server_maintenance``.
+
+    Since the 1.17.113 precheck the feature is OFF (``SECRET_INPUTS_ENABLED``) until Johan signs the new Core read as a decision: an
+    action that lists secret inputs then refuses to start with ``secret_inputs_disabled`` and nothing is read."""
+    caller = sys._getframe(1).f_code
+    if caller is not ServerMaintenanceProvider.start.__code__:
+        raise ServerMaintenanceValidationError("Secret inputs can be resolved only by start().", classification="secret_not_allowed")
+    action = _read_action(str(action_id))
+    rows = _action_secret_inputs(action)
+    if not rows:
+        return None
+    action_id = str(action.get("id") or "")
+    if not SECRET_INPUTS_ENABLED:
+        raise ServerMaintenanceValidationError(
+            f"Action {action_id!r} lists secret inputs, which Core does not hand over yet (disabled until the decision is signed).", classification="secret_inputs_disabled"
+        )
+    if action.get("registered_by") != "module-manifest" or _action_owner(action) is None:
+        raise ServerMaintenanceValidationError(
+            f"Action {action_id!r} lists secret inputs but is not registered by a signed module manifest, so Core hands over none.", classification="secret_not_configured"
+        )
+    from . import secret_store
+
+    values: dict[str, bytes] = {}
+    total = 0
+    for row in rows:
+        try:
+            secret = secret_store._read_for_server_maintenance(action_id, row["name"])
+        except secret_store.SecretStoreError as exc:
+            kind = "secret_unreadable" if exc.code in {"secret_unreadable", "master_key_unavailable"} else "secret_not_allowed"
+            raise ServerMaintenanceValidationError(f"Secret {row['name']!r} of action {action_id!r} could not be read ({exc.code}).", classification=kind) from None
+        if secret is None:
+            if row["required"]:
+                raise ServerMaintenanceValidationError(f"Secret {row['name']!r} of action {action_id!r} is not configured.", classification="secret_not_configured")
+            continue
+        data = secret.reveal_for_core()
+        total += len(data)
+        if len(data) > SECRET_VALUE_MAX_BYTES or total > SECRET_TOTAL_MAX_BYTES:
+            raise ServerMaintenanceValidationError(f"Secret {row['name']!r} of action {action_id!r} is too large to hand over.", classification="secret_unreadable")
+        values[row["name"]] = data
+    return _SecretHandOver(sorted(values), values)
 
 
 def _action_owner(action: dict) -> str | None:
@@ -366,6 +471,8 @@ def _public_job(job: dict, *, include_output: bool = True) -> dict:
             for row in (job.get("signals") or []) if isinstance(row, dict) and row.get("name") in SIGNAL_NAMES
         ] if isinstance(job.get("signals"), list) else [],
         "waits_for_person": job.get("action_waits_for_person") is True,
+        # 1.3.0 (additive): the NAMES of the secrets handed to the program (never a value); empty for an action with none
+        "secret_inputs": [n for n in (job.get("secret_inputs") or []) if isinstance(n, str) and SECRET_NAME_RE.fullmatch(n)] if isinstance(job.get("secret_inputs"), list) else [],
     }
     if include_output:
         jid = result["id"]
@@ -376,9 +483,10 @@ def _public_job(job: dict, *, include_output: bool = True) -> dict:
     return result
 
 
-def _dispatch(command: str, job_id: str) -> None:
+def _dispatch(command: str, job_id: str, handover: "_SecretHandOver | None" = None) -> None:
     if not HELPER.is_file():
         raise ServerMaintenanceError(f"Core server-maintenance helper is not installed at {HELPER}.", job_id=job_id, classification="dispatch_failed")
+    options = {"input": handover.stdin_text()} if handover is not None else {}  # 1.3.0: secrets travel on stdin only, never argv or env
     try:
         subprocess.run(
             ["sudo", "-n", str(HELPER), command, job_id],
@@ -387,9 +495,12 @@ def _dispatch(command: str, job_id: str) -> None:
             stderr=subprocess.PIPE,
             text=True,
             timeout=20,
+            **options,
         )
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         detail = str(getattr(exc, "stderr", "") or exc).strip()
+        if handover is not None:
+            detail = handover.scrub(detail)
         raise ServerMaintenanceError(f"Unable to dispatch privileged server-maintenance operation: {detail}", job_id=job_id, classification="dispatch_failed") from exc
 
 
@@ -458,6 +569,9 @@ class ServerMaintenanceProvider:
         if operation_context is None:
             operation_context = _validate_context(context)
         job_id = str(uuid.uuid4())
+        handover = _resolve_secret_inputs(str(action_def["id"]))  # 1.3.0: before any job file; a missing required secret creates no job
+        if handover is not None:
+            self._audit_secret_handover(job_id=job_id, action_def=action_def, owner_module=owner_module, names=handover.names, user=user, context=operation_context)
         payload = {
             "schema": 1,
             "id": job_id,
@@ -466,6 +580,7 @@ class ServerMaintenanceProvider:
             "action_permission": permission,
             "action_signals": _action_signals(action_def),
             "action_waits_for_person": action_def.get("waits_for_person") is True,
+            "secret_inputs": list(handover.names) if handover is not None else [],  # names only, never a value
             "owner_module": owner_module,
             "status": "queued",
             "stage": "queued",
@@ -483,7 +598,10 @@ class ServerMaintenanceProvider:
         }
         _atomic_job(_jobs_root() / f"{job_id}.json", payload)
         try:
-            _dispatch("--dispatch", job_id)
+            if handover is None:
+                _dispatch("--dispatch", job_id)
+            else:
+                _dispatch("--dispatch", job_id, handover)
         except Exception as exc:
             # The root helper may already have persisted a more specific
             # validation/action failure. Preserve that durable classification
@@ -510,6 +628,24 @@ class ServerMaintenanceProvider:
             _atomic_job(_jobs_root() / f"{job_id}.json", payload)
             raise
         return self.get_job(job_id=job_id, context=operation_context)
+
+    def _audit_secret_handover(self, *, job_id: str, action_def: dict, owner_module: str | None, names: list[str], user, context: dict) -> None:
+        """One strict Core audit row for a start that hands secrets over, written BEFORE the job file and the dispatch (1.3.0). A
+        hand-over that cannot be audited is not made. Names only, never a value."""
+        from . import audit
+
+        actor = user if getattr(user, "is_authenticated", False) else audit.service_audit_actor(module_id="core", service="server-maintenance", identity="secret-handover")
+        try:
+            audit.record(
+                actor=actor, module_id="core", action="run", object_type="server_maintenance_job", object_id=job_id,
+                message=f"Secrets were handed to server-maintenance action {action_def.get('id')} for job {job_id}.",
+                metadata={"job_id": job_id, "action": str(action_def.get("id") or ""), "owner_module": owner_module, "secret_names": list(names)},
+                operation_context=context, strict=True,
+            )
+        except Exception as exc:
+            raise ServerMaintenanceError(
+                "The secrets were not handed over because the hand-over could not be audited.", job_id=job_id, classification="audit_failed"
+            ) from exc
 
     def get_job(self, *, job_id: str, context: dict) -> dict:
         _validate_context(context)
@@ -641,6 +777,8 @@ class ServerMaintenanceProvider:
                 # 1.2.0 (additive): the signals the action accepts, and whether it waits for a person (its program takes the global lock)
                 "signals": _action_signals(action),
                 "waits_for_person": action.get("waits_for_person") is True,
+                # 1.3.0 (additive): the secrets Core hands the program, names and required flags only
+                "secret_inputs": _action_secret_inputs(action),
                 "parameters": {
                     name: {k: v for k, v in spec.items() if k != "default" or not bool(spec.get("sensitive", False))}
                     for name, spec in parameters.items() if isinstance(spec, dict)
@@ -684,6 +822,12 @@ def register_core_server_maintenance_capability():
             "action_manifest_keys_added_in_1_2_0": ["signals", "waits_for_person"],
             "signal_names": list(SIGNAL_NAMES),
             "waits_for_person_actions": True,
+            # 1.3.0: secrets handed to a module's own action without a job, argv, environment or log value
+            "action_manifest_keys_added_in_1_3_0": ["secret_inputs"],
+            "secret_input_limits": {"names_per_action": SECRET_INPUTS_MAX, "value_bytes": SECRET_VALUE_MAX_BYTES, "total_bytes": SECRET_TOTAL_MAX_BYTES},
+            "secret_inputs_env": "TEC_TAC_SERVER_MAINTENANCE_SECRET_DIR",
+            "secret_inputs_enabled": SECRET_INPUTS_ENABLED,  # false until the decision is signed: start() refuses such an action (secret_inputs_disabled)
+            "requires_framework_added_in_1_3_0": ">=1.17.113",
         },
     )
 

@@ -48,6 +48,7 @@ import logging
 import os
 import re
 import stat as stat_module
+import sys
 import threading
 import time
 from contextlib import nullcontext
@@ -510,6 +511,89 @@ def list_names() -> list[str]:
     if scope is None:
         raise _deny("list_names", None)
     return [row.name for row in _table().filter(owner_module=scope.module_id).order_by("name")]
+
+
+# --- the one Core-internal read: a module's own secret for its own server-maintenance action (1.17.113) -----------------------------
+
+class SecretValue:
+    """A decrypted secret on its way to the root helper. ``repr`` and ``str`` are ``<redacted>``, it cannot be pickled, and the bytes are
+    reached only through ``reveal_for_core``. Core holds it for the moment of one call; Python cannot wipe it from memory."""
+
+    __slots__ = ("_data",)
+
+    def __init__(self, data: bytes):
+        self._data = bytes(data)
+
+    def __repr__(self) -> str:
+        return "<redacted>"
+
+    __str__ = __repr__
+
+    def __reduce__(self):
+        raise TypeError("a secret value cannot be pickled")
+
+    def reveal_for_core(self) -> bytes:
+        return self._data
+
+
+def _read_for_server_maintenance(action_id: str, name: str) -> "SecretValue | None":
+    """Core-internal, private: not in the contract export, not listed in ``secrets_contract_metadata`` and not for any module.
+
+    Decrypts one secret of the module that owns a server-maintenance action, so ``server_maintenance`` can hand it to that module's own root
+    program (core.server_maintenance 1.3.0, ``secret_inputs``). It refuses (403 ``caller_not_allowed``, one deny audit row) unless: its
+    immediate caller is the code object of ``server_maintenance._resolve_secret_inputs`` and ``SECRET_INPUTS_ENABLED`` is on (it is off until Johan signs the decision); the action is registered by a signed module manifest in the ROOT
+    registry; the owner is that action's own module (the action id starts with ``<owner>.``) and is an installed, enabled, non-legacy
+    extension; and ``name`` is one of the action's ``secret_inputs``. The owner is never passed in, so another module's secret cannot be
+    named. It counts the read like ``get`` and raises the same ``SecretStoreError`` codes. ``None`` means no such secret. It never logs or
+    audits a value, and the value is returned only inside a ``SecretValue``."""
+    frame = sys._getframe(1)
+    try:
+        from . import server_maintenance
+
+        # Fail closed while the decision is unsigned, then accept only the real function's code object (not its name, file or globals,
+        # which a module can imitate with compile()).
+        from_core = bool(server_maintenance.SECRET_INPUTS_ENABLED) and frame.f_code is server_maintenance._resolve_secret_inputs.__code__
+    except Exception:  # noqa: BLE001 - anything unclear is a refusal
+        from_core = False
+    if not from_core:
+        raise _deny("server_maintenance_read", name)
+    try:
+        from . import module_state, server_maintenance
+        from .registry import get_plugins
+
+        action = server_maintenance._read_action(str(action_id))
+        owner = server_maintenance._action_owner(action)
+        listed = {row["name"] for row in server_maintenance._action_secret_inputs(action)}
+        plugin = next((p for p in get_plugins() if owner and p.plugin_id == owner and p.plugin_type == "extension"), None)
+        allowed = (
+            owner is not None
+            and action.get("registered_by") == "module-manifest"
+            and str(action.get("id") or "").startswith(owner + ".")
+            and isinstance(name, str) and name in listed
+            and plugin is not None and not plugin.legacy and bool(module_state.is_enabled(owner))
+        )
+    except Exception:  # noqa: BLE001 - a registry or state fault is a refusal, never a guess
+        allowed = False
+    if not allowed:
+        raise _deny("server_maintenance_read", name)
+    scope = _Scope(owner)
+    key_name = _clean_name(name)
+    key = _load_master_key()
+    row = _table().filter(owner_module=owner, name=key_name).first()
+    if row is None:
+        return None
+    current_id = _key_id(key)
+    try:
+        if row.key_id != current_id:
+            raise ValueError("key id differs")
+        plain = _decrypt(key, scope, key_name, row.ciphertext)
+        value = _decode_value(plain)
+    except ValueError:
+        logger.error("Core secret store could not decrypt one secret (owner %s, name %s). The row or the master key changed.", owner, key_name)
+        _audit_limited("custom:decrypt-failed", scope, key_name, "secret_unreadable", row_key_id=str(row.key_id)[:32], key_id=current_id)
+        raise SecretStoreError("secret_unreadable", "This secret cannot be read with the current master key. Enter it again; see Troubleshooting.", 503) from None
+    _count_read(row)
+    return SecretValue(value.encode("utf-8") if isinstance(value, str) else value)
 
 
 # --- capability registration ------------------------------------------------------------------

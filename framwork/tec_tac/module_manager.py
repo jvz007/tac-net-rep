@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 from . import module_job_logs
-from .registry import RegistryError, discover_plugins, get_plugins
+from .registry import RegistryError, discover_plugins, framework_requirement_problem, get_plugins
 from .safe_files import atomic_json
 from .trust_policy import TrustPolicyError
 from .trust_policy import require_accepted as require_trust_accepted
@@ -315,6 +315,25 @@ def installed_catalog() -> list[dict]:
     return result
 
 
+def _refuse_unmet_framework(ext_root: Path) -> None:
+    """1.17.113: refuse an unmet ``requires.framework`` first, with the Core version the module needs, before the per-key checks.
+
+    Install and upgrade only. Start-up discovery never calls this, so a module already installed is not stopped by a Core downgrade.
+    Anything unreadable falls through to the later checks, which fail closed."""
+    try:
+        payload = json.loads((ext_root / "tec_tac.json").read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return
+    from . import module_manager_v2  # lazy: module_manager_v2 imports this module
+    try:
+        running = module_manager_v2._runtime_versions().get("framework")
+    except OSError:
+        return
+    problem = framework_requirement_problem(payload, running)
+    if problem:
+        raise ModuleManagerError(f"This module {problem}.")
+
+
 def inspect_archive(archive: Path) -> dict:
     archive = archive.resolve()
     if not archive.is_file():
@@ -326,6 +345,7 @@ def inspect_archive(archive: Path) -> dict:
         ext_root, rep_root = _find_pair(extracted)
         if rep_root is not None and ext_root.name != rep_root.name:
             raise ModuleManagerError("Extension and ReportSet IDs do not match.")
+        _refuse_unmet_framework(ext_root)
         stage = Path(tmp) / "registry"
         (stage / "extensions").mkdir(parents=True)
         (stage / "reportsets").mkdir(parents=True)

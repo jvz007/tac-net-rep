@@ -217,6 +217,26 @@ Limits that keep it narrow:
 
 Core cannot enforce that the program really takes the lock. A job that waits and never takes it is the program's fault. It shows in the job log. Core does not police it.
 
+## Secret inputs (since 1.17.113, capability 1.3.0)
+
+A module's root program sometimes needs a secret, such as a DNS-provider credential or a certificate-manager API key. You keep it in `core.secrets` (see `docs/secret-store.md`). Core hands it to your own program without it passing through the job, `argv`, the environment or the logs.
+
+Add the optional key `secret_inputs` to a `server_maintenance_actions` entry: a list of at most 8 entries, each `{"name": "dns-token", "required": true}`. A plain string is accepted and means required. Names follow `core.secrets`: `[a-z0-9][a-z0-9._-]{0,63}`, no repeats. The module needs `requires.framework` of `>=1.17.113`. There is no owner field. The owner is always the module that owns the action, so you can name only your own secrets. A hand registration (`--register`) cannot set the key.
+
+What happens when someone starts the action:
+
+1. Core reads each named secret inside its own process, before any job file exists. A required secret that is not configured refuses the start with `secret_not_configured`. One it cannot read refuses with `secret_unreadable`. Nothing is created in either case.
+2. Core writes one strict audit row (module `core`, action `run`, object type `server_maintenance_job`, with the job id, action, owner module and the secret names, never a value) before it dispatches. A hand-over that cannot be audited is not made.
+3. The values travel on the stdin of the existing `--dispatch` call. The sudoers line does not change.
+4. The root helper writes each value to `/run/tec-tac/server-maintenance/secrets/<job id>/<name>` (folder `0700`, files `0400`, root). `/run` is memory only. The job file, `list_actions` rows and public jobs show the names only.
+5. Your program gets one new environment variable, `TEC_TAC_SERVER_MAINTENANCE_SECRET_DIR`: the path of that folder. Read `<dir>/<name>`. It is set only for an action that lists `secret_inputs`.
+6. The folder is removed when the job ends for any reason (success, failure, timeout, cancel, cancelled before it ran, worker error). The helper also sweeps the folder of any job that is finished or unknown whenever it starts work. A reboot clears `/run`.
+7. After your program exits, the helper replaces the exact secret values in the job's three logs with `***`.
+
+If the helper does not receive a required secret, the job fails with `secret_missing`.
+
+What you must do: read the file and never print it. What Core cannot enforce: your program is trusted, signed code and could still leak the value (the log scrub only limits the damage in the logs, and it runs after the program exits). The Core worker also holds the plaintext in memory for the moment of the call, and Python cannot wipe it. An action that lists `secret_inputs` and was not registered by a signed module manifest runs without secrets and fails `secret_missing`.
+
 ## Durable job state
 
 Public job state includes:

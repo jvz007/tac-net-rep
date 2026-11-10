@@ -6,6 +6,7 @@ a command, shell text, environment or executable path from a module request.
 """
 from __future__ import annotations
 
+import base64
 import fcntl
 import grp
 import hashlib
@@ -123,6 +124,16 @@ WAITS_MAX_TIMEOUT_SECONDS = 4 * 60 * 60
 ENV_JOB_ID = "TEC_TAC_SERVER_MAINTENANCE_JOB_ID"
 ENV_SIGNAL_DIR = "TEC_TAC_SERVER_MAINTENANCE_SIGNAL_DIR"
 ENV_LOCK = "TEC_TAC_SERVER_MAINTENANCE_LOCK"
+# 1.17.113: secret_inputs. The values live only on tmpfs (/run is memory, cleared at boot) between --dispatch and the end of the job.
+SECRETS_ROOT = Path("/run/tec-tac/server-maintenance/secrets")
+ENV_SECRET_DIR = "TEC_TAC_SERVER_MAINTENANCE_SECRET_DIR"
+SECRET_INPUTS_MAX = 8
+SECRET_VALUE_MAX_BYTES = 16 * 1024
+SECRET_TOTAL_MAX_BYTES = 64 * 1024
+SECRET_STDIN_MAX_BYTES = 160 * 1024  # base64 of 64 KiB plus the JSON around it
+SECRET_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+SECRET_INPUTS_MIN_FRAMEWORK = (1, 17, 113)
+TERMINAL_STATES = frozenset({"succeeded", "failed", "cancelled", "dispatch_failed"})
 # 1.17.17: actions a signed module registers from its manifest (--register-module). Everything below is root-only.
 MODULE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -131,7 +142,7 @@ MODULE_ACTIONS_KEY = "server_maintenance_actions"
 MODULE_ACTIONS_MAX = 16
 MODULE_EXECUTABLE_PREFIX = "server_maintenance/actions/"
 MODULE_REGISTER_PERMISSION = "server_maintenance.register"
-MODULE_ACTION_KEYS = frozenset({"id", "description", "permission", "executable", "argv", "parameters", "timeout_seconds", "success_exit_codes", "revision", "protected", "signals", "waits_for_person"})
+MODULE_ACTION_KEYS = frozenset({"id", "description", "permission", "executable", "argv", "parameters", "timeout_seconds", "success_exit_codes", "revision", "protected", "signals", "waits_for_person", "secret_inputs"})
 MAX_MODULE_MANIFEST_BYTES = 1024 * 1024
 MAX_MODULE_EXECUTABLE_BYTES = 64 * 1024 * 1024
 ROOT_UID = 0
@@ -175,6 +186,199 @@ def ensure_layout():
         os.chmod(path, mode)
     REGISTRY_ROOT.mkdir(parents=True, exist_ok=True)
     ACTION_ROOT.mkdir(parents=True, exist_ok=True)
+    try:
+        sweep_secret_dirs()  # 1.17.113: a helper crash leaves no secret folder for long
+    except Exception as exc:  # never stops a job; the folder is swept again next time
+        print(f"secret folder sweep failed: {exc.__class__.__name__}", file=sys.stderr)
+
+
+class SecretInputError(RuntimeError):
+    """A failure of the secret hand-over. ``classification`` is written to the job; the message names secrets, never a value."""
+
+    def __init__(self, classification, message):
+        super().__init__(message)
+        self.classification = classification
+
+
+def normalize_secret_inputs(value):
+    """The ``[{name, required}]`` of an action's ``secret_inputs`` (1.17.113): at most 8, names ``[a-z0-9][a-z0-9._-]{0,63}``, no repeats,
+    a plain name means required. Raises RuntimeError. None or [] is no secrets."""
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > SECRET_INPUTS_MAX:
+        raise RuntimeError(f"action secret_inputs must be a list of at most {SECRET_INPUTS_MAX} entries")
+    rows, seen = [], set()
+    for item in value:
+        if isinstance(item, str):
+            name, required = item, True
+        elif isinstance(item, dict) and set(item) <= {"name", "required"}:
+            name, required = item.get("name"), item.get("required", True)
+        else:
+            raise RuntimeError("action secret_inputs entries must be a name or an object with name and required")
+        if not isinstance(name, str) or not SECRET_NAME_RE.fullmatch(name):
+            raise RuntimeError("action secret_inputs names must match [a-z0-9][a-z0-9._-]{0,63}")
+        if not isinstance(required, bool):
+            raise RuntimeError("action secret_inputs required must be true or false")
+        if name in seen:
+            raise RuntimeError(f"action secret_inputs repeats {name!r}")
+        seen.add(name)
+        rows.append({"name": name, "required": required})
+    return rows
+
+
+def secret_dir(job_id):
+    if not JOB_RE.fullmatch(str(job_id or "")):
+        raise RuntimeError("invalid job id")
+    return SECRETS_ROOT / str(job_id)
+
+
+def read_secret_stdin(action):
+    """Read the secrets Core sent on stdin: a JSON object of {name: base64}. Only names the ROOT registry lists are kept (extras are
+    dropped). A missing required name is ``secret_missing``. Never prints or returns a value in a message."""
+    wanted = {row["name"]: row["required"] for row in action["secret_inputs"]}
+    raw = sys.stdin.buffer.read(SECRET_STDIN_MAX_BYTES + 1)
+    if len(raw) > SECRET_STDIN_MAX_BYTES:
+        raise SecretInputError("secret_missing", "the secret input is larger than the limit")
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise SecretInputError("secret_missing", "the secret input is not valid JSON") from None
+    finally:
+        raw = None
+    if not isinstance(data, dict):
+        raise SecretInputError("secret_missing", "the secret input must be a JSON object")
+    values, total = {}, 0
+    for name, encoded in data.items():
+        if name not in wanted:
+            continue
+        try:
+            value = base64.b64decode(encoded, validate=True) if isinstance(encoded, str) else b""
+        except ValueError:
+            value = b""
+        if not value or len(value) > SECRET_VALUE_MAX_BYTES:
+            raise SecretInputError("secret_missing", f"the value of secret {name!r} is empty or larger than the limit")
+        total += len(value)
+        if total > SECRET_TOTAL_MAX_BYTES:
+            raise SecretInputError("secret_missing", "the secret inputs are larger than the total limit")
+        values[name] = value
+    missing = sorted(name for name, required in wanted.items() if required and name not in values)
+    if missing:
+        raise SecretInputError("secret_missing", "required secret(s) not received: " + ", ".join(missing))
+    return values
+
+
+def write_secret_dir(job_id, values):
+    """Write each value to ``<secrets root>/<job id>/<name>``: folder 0700 root, files 0400 root, created with O_EXCL and O_NOFOLLOW."""
+    SECRETS_ROOT.mkdir(parents=True, exist_ok=True)
+    folder = secret_dir(job_id)
+    try:
+        if os.geteuid() == 0:
+            os.chown(SECRETS_ROOT, 0, 0)
+        os.chmod(SECRETS_ROOT, 0o700)
+        folder.mkdir(mode=0o700, exist_ok=False)
+        if os.geteuid() == 0:
+            os.chown(folder, 0, 0)
+        os.chmod(folder, 0o700)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+        for name, value in values.items():
+            fd = os.open(folder / name, flags, 0o400)
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(value)
+            if os.geteuid() == 0:
+                os.chown(folder / name, 0, 0)
+            os.chmod(folder / name, 0o400)
+    except Exception:
+        remove_secret_dir(job_id)
+        raise
+
+
+def read_secret_values(job_id):
+    values = []
+    try:
+        folder = secret_dir(job_id)
+        if folder.is_dir() and not folder.is_symlink():
+            for child in folder.iterdir():
+                if child.is_file() and not child.is_symlink():
+                    values.append(child.read_bytes())
+    except (OSError, RuntimeError):
+        pass
+    return values
+
+
+def remove_secret_dir(job_id):
+    try:
+        folder = secret_dir(job_id)
+    except RuntimeError:
+        return
+    _remove_tree(folder)
+
+
+def _remove_tree(path):
+    try:
+        if path.is_symlink():
+            path.unlink()
+        elif path.is_dir():
+            for child in path.iterdir():
+                if child.is_dir() and not child.is_symlink():
+                    _remove_tree(child)
+                    continue
+                try:
+                    child.unlink()
+                except PermissionError:  # a 0400 file on a platform that treats it as read-only
+                    os.chmod(child, 0o600)
+                    child.unlink()
+            path.rmdir()
+    except OSError as exc:
+        print(f"secret folder could not be removed: {exc.__class__.__name__}", file=sys.stderr)
+
+
+def scrub_logs(job_id, values):
+    """Replace the exact secret values in the job's three logs with ``***``, in place (owner and mode stay). Defence in depth: a program
+    that echoes a value by mistake does not leave it in the logs the Tactical account can read."""
+    needles = sorted({v for v in values if v}, key=len, reverse=True)
+    if not needles:
+        return
+    for suffix in (".stdout.log", ".stderr.log", ".log"):
+        path = LOGS_ROOT / f"{job_id}{suffix}"
+        if not path.is_file() or path.is_symlink():
+            continue
+        data = path.read_bytes()
+        cleaned = data
+        for needle in needles:
+            cleaned = cleaned.replace(needle, b"***")
+        if cleaned != data:
+            with path.open("r+b") as handle:
+                handle.write(cleaned)
+                handle.truncate()
+
+
+def finish_secrets(job_id):
+    """The end of a job, for any reason: scrub the logs, then remove the secret folder. Never raises."""
+    try:
+        if not JOB_RE.fullmatch(str(job_id or "")) or not secret_dir(job_id).exists():
+            return
+        try:
+            scrub_logs(job_id, read_secret_values(job_id))
+        except Exception as exc:
+            print(f"log scrub failed: {exc.__class__.__name__}", file=sys.stderr)
+        remove_secret_dir(job_id)
+    except Exception as exc:
+        print(f"secret cleanup failed: {exc.__class__.__name__}", file=sys.stderr)
+
+
+def sweep_secret_dirs():
+    """Remove the secret folder of every job that is terminal or has no claimed job (a crash, a reboot-surviving remnant)."""
+    if not SECRETS_ROOT.is_dir():
+        return
+    for child in SECRETS_ROOT.iterdir():
+        keep = False
+        if JOB_RE.fullmatch(child.name) and child.is_dir() and not child.is_symlink():
+            try:
+                keep = load_claimed_job(child.name)[1].get("status") not in TERMINAL_STATES
+            except Exception:
+                keep = False
+        if not keep:
+            _remove_tree(child)
 
 
 def atomic_json(path, payload, mode=0o640, *, uid=None, gid=None):
@@ -383,8 +587,10 @@ def validate_manifest(payload, *, require_executable=True):
         raise RuntimeError("action waits_for_person must be true or false")
     if waits and timeout > WAITS_MAX_TIMEOUT_SECONDS:
         raise RuntimeError(f"action waits_for_person needs timeout_seconds of at most {WAITS_MAX_TIMEOUT_SECONDS}")
+    secret_inputs = normalize_secret_inputs(payload.get("secret_inputs"))
     return {
         **payload,
+        **({"secret_inputs": secret_inputs} if secret_inputs else {}),
         "signals": list(signals),
         "waits_for_person": waits,
         "id": action_id,
@@ -511,6 +717,9 @@ def register_manifest(source):
     if isinstance(payload, dict) and "waits_for_person" in payload:
         # 1.17.112: only a signed module's own manifest may let its program take the global lock itself (--register-module)
         raise RuntimeError("waits_for_person can be set only by a module manifest, not by a hand registration")
+    if isinstance(payload, dict) and "secret_inputs" in payload:
+        # 1.17.113: only a signed module's own manifest may name secrets for its action (--register-module)
+        raise RuntimeError("secret_inputs can be set only by a module manifest, not by a hand registration")
     manifest = validate_manifest(payload)
     ensure_layout()
     target = action_path(manifest["id"])
@@ -652,8 +861,18 @@ def _module_actions_from_manifest(module_id, payload):
         protected = entry.get("protected", False)
         if not isinstance(protected, bool):
             raise RuntimeError(f"action {action_id!r} protected must be true or false")
-        actions.append({**entry, "protected": protected})
+        secret_inputs = normalize_secret_inputs(entry.get("secret_inputs"))
+        if secret_inputs and _framework_floor(payload) < SECRET_INPUTS_MIN_FRAMEWORK:
+            raise RuntimeError(f"action {action_id!r} secret_inputs needs requires.framework '>=1.17.113' or higher")
+        actions.append({**entry, "protected": protected, **({"secret_inputs": secret_inputs} if secret_inputs else {})})
     return version, actions
+
+
+def _framework_floor(payload):
+    requires = payload.get("requires")
+    spec = requires.get("framework") if isinstance(requires, dict) else None
+    match = re.search(r">=\s*(\d+)\.(\d+)\.(\d+)", spec) if isinstance(spec, str) else None
+    return tuple(int(part) for part in match.groups()) if match else ()
 
 
 def _module_managed(action_id):
@@ -730,6 +949,7 @@ def register_module(module_id):
             "parameters": action.get("parameters") or {}, "timeout_seconds": action.get("timeout_seconds", 3600),
             "success_exit_codes": action.get("success_exit_codes", [0]), "permission": action["permission"], "owner_module": module_id,
             "signals": action.get("signals", []), "waits_for_person": action.get("waits_for_person", False),
+            "secret_inputs": action.get("secret_inputs", []),
         }, require_executable=False)
         existing = action_path(action["id"])
         if existing.is_file():
@@ -761,6 +981,7 @@ def register_module(module_id):
             "permission": action["permission"], "owner_module": module_id, "owner_version": version,
             "executable_sha256": hashlib.sha256(data).hexdigest(), "registered_by": "module-manifest",
             "signals": action.get("signals", []), "waits_for_person": action.get("waits_for_person", False),
+            "secret_inputs": action.get("secret_inputs", []),
         })
         _write_root_file(action_path(action["id"]), (json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n").encode("utf-8"), 0o644)
         append_audit("action.registered", detail={"action": manifest["id"], "revision": manifest["revision"], "module": module_id, "module_version": version,
@@ -875,6 +1096,20 @@ def dispatch(job_id):
         append_audit("job.validation_failed", job=job, detail={"message": str(exc)})
         raise
 
+    if action.get("secret_inputs"):
+        # 1.17.113: stdin is read ONLY because the ROOT registry lists secret_inputs for this action (the job file cannot ask for it)
+        try:
+            if action.get("registered_by") != "module-manifest":
+                raise SecretInputError("secret_missing", "this action lists secret inputs but was not registered by a signed module manifest")
+            write_secret_dir(job_id, read_secret_stdin(action))
+        except Exception as exc:
+            remove_secret_dir(job_id)
+            write_claimed_job(path, job,
+                status="failed", stage="secrets", finished_at=now(),
+                failure={"classification": getattr(exc, "classification", "secret_missing"), "message": str(exc), "error_type": exc.__class__.__name__},
+            )
+            append_audit("job.secret_inputs_failed", job=job, detail={"message": str(exc)})
+            raise
     write_claimed_job(path, job, status="dispatched", stage="dispatched", unit=_systemd_unit(job_id))
     append_audit("job.dispatched", job=job)
     command = [
@@ -890,6 +1125,7 @@ def dispatch(job_id):
     try:
         subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=20)
     except Exception as exc:
+        remove_secret_dir(job_id)
         write_claimed_job(path, job,
             status="dispatch_failed", stage="dispatch", finished_at=now(),
             failure={"classification":"dispatch_failed","message":str(getattr(exc,"stderr","") or exc),"error_type":exc.__class__.__name__},
@@ -910,6 +1146,14 @@ def _signal_cancel(signum, frame):
 
 
 def run_job(job_id):
+    try:
+        _run_job(job_id)
+    finally:
+        # 1.17.113: success, failure, timeout, cancel, cancelled before execution or a worker error: scrub the logs, remove the folder
+        finish_secrets(job_id)
+
+
+def _run_job(job_id):
     global _child, _cancel_requested
     ensure_layout()
     path, job = load_claimed_job(job_id)
@@ -950,6 +1194,19 @@ def run_job(job_id):
         return
 
     job = current
+    secret_folder = None
+    if action.get("secret_inputs"):
+        # 1.17.113: the program gets only the PATH of the folder. A folder that is gone (swept, reboot) or a missing required file fails closed.
+        secret_folder = secret_dir(job_id)
+        trusted = action.get("registered_by") == "module-manifest" and secret_folder.is_dir() and not secret_folder.is_symlink()
+        absent = sorted(row["name"] for row in action["secret_inputs"]
+                        if row["required"] and not ((secret_folder / row["name"]).is_file() and not (secret_folder / row["name"]).is_symlink()))
+        if not trusted or absent:
+            write_claimed_job(path, job, status="failed", stage="secrets", finished_at=now(), lock={"scope":"global","state":"released","acquired_at":None},
+                exit_result={"success":False,"exit_code":None,"signal":None,"timed_out":False},
+                failure={"classification":"secret_missing","message":"The secret inputs of this job are not available" + (": " + ", ".join(absent) if absent and trusted else "") + "."})
+            append_audit("job.secret_inputs_failed", job=job, detail={"missing": absent})
+            return
     if program_lock:
         write_claimed_job(path, job, status="running", stage="running", started_at=job.get("started_at") or now(), lock={"scope":"global","state":"program_managed","acquired_at":None})
         append_audit("job.started", job=job, detail={"lock": "program_managed"})
@@ -958,8 +1215,10 @@ def run_job(job_id):
         write_claimed_job(path, job, status="running", stage="running", started_at=job.get("started_at") or acquired, lock={"scope":"global","state":"acquired","acquired_at":acquired})
         append_audit("job.started", job=job)
     child_env = None
-    if action.get("signals") or program_lock:
+    if action.get("signals") or program_lock or secret_folder is not None:
         child_env = dict(os.environ)
+        if secret_folder is not None:
+            child_env[ENV_SECRET_DIR] = str(secret_folder)  # a path, never a value
         if action.get("signals"):
             signal_dir = claimed_dir(job_id) / "signals"
             signal_dir.mkdir(mode=0o700, exist_ok=True)
@@ -1087,6 +1346,7 @@ def cancel_job(job_id):
             writer(path, current, status="failed", stage="cancel", finished_at=now(), failure={"classification":"cancel_failed","message":(result.stderr or "Unable to stop maintenance unit.").strip()})
             append_audit("job.cancel_failed", job=current, detail={"message": result.stderr.strip()})
             raise RuntimeError((result.stderr or "Unable to stop maintenance unit.").strip())
+    finish_secrets(job_id)  # the unit is stopped: nothing can still read the secret folder
     current = (load_job(job_id)[1] if legacy_public_only else load_claimed_job(job_id)[1])
     if current.get("status") not in {"succeeded", "failed", "cancelled", "dispatch_failed"}:
         writer(path, current,

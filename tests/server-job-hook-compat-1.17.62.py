@@ -120,7 +120,7 @@ registry_text = (APP / "registry.py").read_text(encoding="utf-8")
 must("server_job" not in registry_text and "server_job" not in (APP / "urls.py").read_text(encoding="utf-8"), "no manifest key, no route")
 must("register_capability" not in hooks_text, "the hook is not a capability")
 helper = (ROOT / "scripts" / "server-maintenance-helper.py").read_text(encoding="utf-8")
-must("MODULE_ACTION_KEYS = frozenset({" in helper and '"protected", "signals", "waits_for_person"})' in helper, "the manifest action keys are the 1.17.62 set plus the two keys of 1.17.112")
+must("MODULE_ACTION_KEYS = frozenset({" in helper and '"protected", "signals", "waits_for_person", "secret_inputs"})' in helper, "the manifest action keys are the 1.17.62 set plus the two keys of 1.17.112 and secret_inputs of 1.17.113")
 print("       no manifest key, no capability and no route was added")
 
 print("PASS server job hook compat 1.17.62")

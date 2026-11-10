@@ -28,6 +28,8 @@ Core tells you when an installed module has a newer version. It doesn't install 
 | `dependency_update` | "Needs module ... Version ... is installed." | Update that module first. |
 | `source_changed` | "The installed copy came from another repository." | Confirm the source change on the Online catalogue. |
 
+A module that needs a newer Core is refused first, before any other check, with a plain reason such as "This module needs Tec-Tac Core 1.17.113 or later; this server runs 1.17.111." (since 1.17.113). This applies when a package is inspected for install or upgrade. It does not run at start-up, so a module that is already installed is not stopped by a Core downgrade.
+
 New permissions aren't listed here. A repository index doesn't carry them, so the install preview shows them before you install.
 
 ## When Core checks

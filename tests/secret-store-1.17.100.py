@@ -547,6 +547,10 @@ for path in sorted(APP.glob("*.py")):
     if path.name in {"secret_store.py", "apps.py", "contracts.py", "models.py"}:
         continue
     code = read(path)
+    if path.name == "server_maintenance.py":
+        # 1.17.113: the one Core file that may name the secret store, and only the private read made for it (core.server_maintenance 1.3.0)
+        must("TecTacSecret" not in code and "core_secret" not in code and code.count("secret_store.") == code.count("secret_store._read_for_server_maintenance") + code.count("secret_store.SecretStoreError") and "secret_store._read_for_server_maintenance" in code, "server_maintenance.py uses more than its private read")
+        continue
     must("secret_store" not in code and "TecTacSecret" not in code and "core_secret" not in code, f"{path.name} touches the secret store")
 for path in sorted((APP / "migrations").glob("*.py")):
     if path.name != "0044_core_secret.py":

@@ -51,7 +51,7 @@ for name in ("describe_delegation", "register_delegation_grant", "start_delegate
 
 # the new text of this release is in the export, and reads cleanly too
 server = " ".join(by_name["get_server_maintenance_provider"])
-for needle in ("now 1.2.0", "send_signal(*, job_id, name, context, user=None)", "job_not_running", "signal_not_accepted", "waits_for_person",
+for needle in ("now 1.3.0", "(1.2.0 since 1.17.112", "send_signal(*, job_id, name, context, user=None)", "job_not_running", "signal_not_accepted", "waits_for_person",
                "TEC_TAC_SERVER_MAINTENANCE_SIGNAL_DIR", "TEC_TAC_SERVER_MAINTENANCE_LOCK", "Since 1.17.112"):
     must(needle in server, f"get_server_maintenance_provider names {needle}")
 source = SOURCE.read_text(encoding="utf-8")

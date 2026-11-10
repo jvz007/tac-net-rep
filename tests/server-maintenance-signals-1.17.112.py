@@ -178,7 +178,7 @@ def audits(action):
 
 # ------------------------------------------------------------------------------------------------ the capability
 registered = sm.register_core_server_maintenance_capability()
-must(sm.CAPABILITY_VERSION == "1.2.0" and registered.version == "1.2.0" and registered.id == "core.server_maintenance", registered.version)
+must(tuple(map(int, sm.CAPABILITY_VERSION.split("."))) >= (1, 2, 0) and sm.CAPABILITY_VERSION.startswith("1.") and registered.version == sm.CAPABILITY_VERSION and registered.id == "core.server_maintenance", registered.version)  # 1.3.0 since 1.17.113
 must(registered.operations[:5] == ("start", "get_job", "cancel", "list_jobs", "list_actions") and "send_signal" in registered.operations, registered.operations)
 must(registered.metadata["signal_names"] == ["continue", "abort"] and registered.metadata["waits_for_person_actions"] is True, registered.metadata)
 must(registered.metadata["per_action_permission"] is True and registered.metadata["global_lock"] is True, "earlier metadata stays")

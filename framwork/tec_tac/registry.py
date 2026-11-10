@@ -67,12 +67,16 @@ SERVER_MAINTENANCE_EXECUTABLE_PREFIX = "server_maintenance/actions/"
 SERVER_MAINTENANCE_REGISTER_PERMISSION = "server_maintenance.register"
 _SM_ACTION_KEYS = frozenset({
     "id", "description", "permission", "executable", "argv", "parameters", "timeout_seconds", "success_exit_codes", "revision", "protected",
-    "signals", "waits_for_person",
+    "signals", "waits_for_person", "secret_inputs",
 })
 # 1.17.112: the fixed signal names an action may list, and the longest wait an action that waits for a person may declare
 SERVER_MAINTENANCE_SIGNAL_NAMES = ("continue", "abort")
 SERVER_MAINTENANCE_SIGNALS_MAX = 2
 SERVER_MAINTENANCE_WAITS_MAX_SECONDS = 4 * 60 * 60
+# 1.17.113: secret_inputs lists the owner's own secrets (core.secrets names) a root program may read from a tmpfs folder while its job runs
+SERVER_MAINTENANCE_SECRET_INPUTS_MAX = 8
+SERVER_MAINTENANCE_SECRET_INPUTS_MIN_FRAMEWORK = (1, 17, 113)
+_SM_SECRET_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _SM_ACTION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _SM_PARAMETER_TYPES = frozenset({"string", "integer", "boolean", "enum"})
 _SM_MAX_TIMEOUT_SECONDS = 7 * 24 * 60 * 60
@@ -349,12 +353,41 @@ def _server_maintenance_actions(payload: dict, plugin_type: str, plugin_id: str,
             raise RegistryError(f"{label} waits_for_person must be true or false.")
         if waits and timeout > SERVER_MAINTENANCE_WAITS_MAX_SECONDS:
             raise RegistryError(f"{label} waits_for_person needs timeout_seconds of at most {SERVER_MAINTENANCE_WAITS_MAX_SECONDS}.")
+        secret_inputs = _sm_secret_inputs(entry.get("secret_inputs", []), label)
+        if secret_inputs and _requires_framework_floor(payload) < SERVER_MAINTENANCE_SECRET_INPUTS_MIN_FRAMEWORK:
+            raise RegistryError(f"{label} secret_inputs needs requires.framework '>=1.17.113' or higher; raise the requirement.")
         entries.append({
             "id": action_id, "description": description.strip(), "permission": permission, "executable": executable, "argv": list(argv),
             "parameters": dict(schema), "timeout_seconds": timeout, "success_exit_codes": list(codes), "revision": str(revision).strip(),
             "protected": protected, "signals": list(signals), "waits_for_person": waits,
+            "secret_inputs": secret_inputs,
         })
     return tuple(entries)
+
+
+def _sm_secret_inputs(raw, label: str) -> list[dict]:
+    """Parse ``secret_inputs`` of a server-maintenance action (1.17.113): at most 8 entries, each ``{name, required}`` (``required``
+    defaults to true) or a plain name (required). Names follow core.secrets (``[a-z0-9][a-z0-9._-]{0,63}``) and may not repeat. The owner
+    is always the module that owns the action; there is no field to name another module's secret."""
+    if not isinstance(raw, list) or len(raw) > SERVER_MAINTENANCE_SECRET_INPUTS_MAX:
+        raise RegistryError(f"{label} secret_inputs must be a list of at most {SERVER_MAINTENANCE_SECRET_INPUTS_MAX} entries.")
+    rows, seen = [], set()
+    for item in raw:
+        if isinstance(item, str):
+            name, required = item, True
+        elif isinstance(item, dict) and set(item) <= {"name", "required"}:
+            name, required = item.get("name"), item.get("required", True)
+        else:
+            raise RegistryError(f"{label} secret_inputs entries must be a name or an object with name and required.")
+        if not isinstance(name, str) or not _SM_SECRET_NAME_RE.fullmatch(name):
+            raise RegistryError(f"{label} secret_inputs names must match [a-z0-9][a-z0-9._-]{{0,63}}.")
+        if not isinstance(required, bool):
+            raise RegistryError(f"{label} secret_inputs required must be true or false.")
+        if name in seen:
+            raise RegistryError(f"{label} secret_inputs repeats {name!r}.")
+        seen.add(name)
+        rows.append({"name": name, "required": required})
+    return rows
 
 
 _PERSON_ACTIONS_MIN_FRAMEWORK = (1, 17, 80)
@@ -366,6 +399,30 @@ def _requires_framework_floor(payload: dict) -> tuple[int, ...]:
     spec = requires.get("framework") if isinstance(requires, dict) else None
     match = re.search(r">=\s*(\d+)\.(\d+)\.(\d+)", spec) if isinstance(spec, str) else None
     return tuple(int(part) for part in match.groups()) if match else ()
+
+
+def framework_requirement_problem(payload: dict, current_version: str | None) -> str | None:
+    """Plain reason when ``requires.framework`` is not met by ``current_version``, else None (1.17.113).
+
+    Used by ``module_manager.inspect_archive`` so an install or upgrade names the Core the module needs before any manifest key is
+    checked. It never raises: no constraint, no readable running version or a constraint that does not parse returns None and the
+    later checks (which fail closed) decide. Not called at start-up discovery."""
+    requires = payload.get("requires") if isinstance(payload, dict) else None
+    spec = requires.get("framework") if isinstance(requires, dict) else None
+    current = str(current_version or "").strip()
+    if not isinstance(spec, str) or not spec.strip() or not current:
+        return None
+    try:
+        from .module_state import version_satisfies
+        if version_satisfies(current, spec):
+            return None
+    except Exception:
+        return None
+    floor = _requires_framework_floor(payload)
+    running = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", current)
+    if floor and running and tuple(int(part) for part in running.groups()) < floor:
+        return f"needs Tec-Tac Core {'.'.join(map(str, floor))} or later; this server runs {current}"
+    return f"needs Tec-Tac Core {spec.strip()}; this server runs {current}"
 
 
 def _scheduler_person_actions(payload: dict, plugin_type: str, plugin_id: str) -> tuple[str, ...]:
