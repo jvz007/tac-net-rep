@@ -169,7 +169,7 @@ sm = load("tec_tac.server_maintenance", APP / "server_maintenance.py")
 HELPER_FILE = BASE / "helper-present"
 HELPER_FILE.write_text("x", encoding="utf-8")
 sm.HELPER = HELPER_FILE
-must(sm.SECRET_INPUTS_ENABLED is False, "1.17.113 precheck: secret_inputs is OFF by default until Johan signs the decision")
+must(sm.SECRET_INPUTS_ENABLED is True, "1.17.114 (AD-62): secret_inputs is ON by default; the 1.17.114 tests pin it")
 sm.SECRET_INPUTS_ENABLED = True  # the checks below test the mechanism with the switch on
 
 

@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.113",
+  "version": "1.17.114",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.17.113.md",
-      "size": 14219,
-      "sha256": "e47ac34b9824eae1e798563f7eb85cf2aa2f71cbec8b40e82b26e58c49a6553b"
+      "path": "RELEASE_NOTES_1.17.114.md",
+      "size": 9935,
+      "sha256": "ec952f47fe8472165deb57b187f05a163060376ae65811130c15673f3d6a1b6c"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "b2c799acfc42632725f10fd7e6eedb4f11681a1f132cc177fb7e282e11506aef"
+      "sha256": "42e5c3c4b9b99f67d44de6200e9b9aa87ebd7532e8e95bd2485e9cbbf9cc2e56"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -1182,6 +1182,11 @@
       "sha256": "602dd65c53d3e6bbc5c0b5e9ff92047b74e21f40d9ce771f970b64fb06e69d9f"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.113.md",
+      "size": 14219,
+      "sha256": "e47ac34b9824eae1e798563f7eb85cf2aa2f71cbec8b40e82b26e58c49a6553b"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.12.md",
       "size": 13099,
       "sha256": "54b477c6c30da12458c421a1eb24eb7bcba6fc6b6fdf4285e56656b4d6ac3eb1"
@@ -1768,8 +1773,8 @@
     },
     {
       "path": "docs/server-maintenance-capability.md",
-      "size": 25258,
-      "sha256": "166f1d0adadcb513c1177ba2037639685e7db25cebae6ed63b7eff1e5f249d29"
+      "size": 25698,
+      "sha256": "2dd267da74661b559fb0bdca3e38f9385e56e711954fa4a13f7ef1aabd0b0dca"
     },
     {
       "path": "docs/session-security.md",
@@ -2078,8 +2083,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 474975,
-      "sha256": "8107f4e169164cb49b168e7cfb447307678d454034e2ff500064f8c3fd410871"
+      "size": 475617,
+      "sha256": "d52f9fc3f609082c42603860353aef0282c0f6c49d9eeafbb95a9a68ba3a17dd"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -2663,8 +2668,8 @@
     },
     {
       "path": "framwork/tec_tac/secret_store.py",
-      "size": 33496,
-      "sha256": "d8f147a0c8a2c3538ff8a25df4382aef9f594d3b8a634cbed2be71fef46a624b"
+      "size": 33509,
+      "sha256": "8212d81d3828a79dacbbf7f6c40bcc87b82eb6108a075781f50584f539ef6674"
     },
     {
       "path": "framwork/tec_tac/server_backup.py",
@@ -2683,8 +2688,8 @@
     },
     {
       "path": "framwork/tec_tac/server_maintenance.py",
-      "size": 44357,
-      "sha256": "c64bbd6d72314edfd62cfc08c977196456f49b28f001309cbaa59e6fdafe5023"
+      "size": 46049,
+      "sha256": "7f1cb8c3051b6d459cb3e3d4dedbb9953e97ea2d464b90f11d13653caee70ed9"
     },
     {
       "path": "framwork/tec_tac/server_maintenance_views.py",
@@ -2958,8 +2963,8 @@
     },
     {
       "path": "scripts/server-maintenance-helper.py",
-      "size": 71321,
-      "sha256": "f3c2bea92deb84234f6c3c1335aee984a4380c59a41afb5319980c003804891e"
+      "size": 72566,
+      "sha256": "cf77d1b368c3adb9f064d77b16727d070642a478ee45ef26535cc6c4d6bf5527"
     },
     {
       "path": "scripts/system-update-helper.py",
@@ -2989,7 +2994,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "b84d9ec4e2e08261b17f330d5f12613126dc72f395f96a416be5b099447f289a"
+      "sha256": "45071a4fd33ac04303b28574b0b3e2ee7b2a6ca499807d1a8bdf26fdd97cccad"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -5427,9 +5432,24 @@
       "sha256": "4f889a43df521a160524ab62f83929efdd006cfed191d21d94685c92d65decd4"
     },
     {
+      "path": "tests/server-maintenance-secret-cancel-failed-1.17.114.py",
+      "size": 9521,
+      "sha256": "5ed9904480d613a610b9758894c23c43cf4b406d7d3d87a90b63a224ffc86608"
+    },
+    {
       "path": "tests/server-maintenance-secret-inputs-1.17.113.py",
-      "size": 49663,
-      "sha256": "53dd012638b9596d09ad002fed769b4cf861a94928e05d5a56b4de1a126c97ef"
+      "size": 49656,
+      "sha256": "6919b7a4e9a374aa1241466dcced1177884929c5241c0b9e3847f5c5e671f403"
+    },
+    {
+      "path": "tests/server-maintenance-secret-parse-1.17.114.py",
+      "size": 13779,
+      "sha256": "a11e97f115d6312e8048c745ddca9cde39109e7ff9e415b04231ebc32b02823a"
+    },
+    {
+      "path": "tests/server-maintenance-secrets-on-1.17.114.py",
+      "size": 13109,
+      "sha256": "a640666385baa7bf6d4082d66fd01ad171212f09ea4309225549378c670356e0"
     },
     {
       "path": "tests/server-maintenance-secrets-runtime-1.17.113.sh",

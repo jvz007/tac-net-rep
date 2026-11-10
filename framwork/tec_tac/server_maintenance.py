@@ -34,8 +34,8 @@ TERMINAL_STATES = frozenset({"succeeded", "failed", "cancelled", "dispatch_faile
 ACTION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 MAX_OUTPUT_BYTES = 65536
 # 1.3.0 (Core 1.17.113): secret_inputs of an action. At most 8 names, 16 KiB per value (core.secrets), 64 KiB in all on the helper's stdin.
-# OFF until Johan signs Core's read of an owner's secret for that owner's own action (reviews/questions/core.md, Core 1.17.113 Question 1).
-SECRET_INPUTS_ENABLED = False
+# ON since 1.17.114 (AD-62, Johan, 10 November 2026). Kept as the fail-closed kill switch: False refuses with secret_inputs_disabled and reads nothing.
+SECRET_INPUTS_ENABLED = True
 SECRET_INPUTS_MAX = 8
 SECRET_VALUE_MAX_BYTES = 16 * 1024
 SECRET_TOTAL_MAX_BYTES = 64 * 1024
@@ -186,20 +186,36 @@ def _action_signals(action: dict) -> list[str]:
     return list(value)
 
 
-def _action_secret_inputs(action: dict) -> list[dict]:
-    """The ``[{name, required}]`` an action's registry file lists (1.3.0). Anything that is not a valid list means none (fail closed)."""
-    value = action.get("secret_inputs")
+def _parse_secret_inputs(value) -> list[dict]:
+    """The ``[{name, required}]`` of an action's ``secret_inputs``, by the same rules as the root helper's ``normalize_secret_inputs``
+    (1.17.114): None means none; a plain name string means required; an object has ``name`` and optionally ``required`` and no other key;
+    ``required`` must be boolean; names match ``SECRET_NAME_RE`` with no repeats; at most 8 entries. Raises ValueError for anything else."""
+    if value is None:
+        return []
     if not isinstance(value, list) or len(value) > SECRET_INPUTS_MAX:
-        return []
-    rows = []
+        raise ValueError(f"secret_inputs must be a list of at most {SECRET_INPUTS_MAX} entries")
+    rows, seen = [], set()
     for item in value:
-        if (not isinstance(item, dict) or set(item) != {"name", "required"} or not isinstance(item["name"], str)
-                or not SECRET_NAME_RE.fullmatch(item["name"]) or not isinstance(item["required"], bool)):
-            return []
-        rows.append({"name": item["name"], "required": item["required"]})
-    if len({row["name"] for row in rows}) != len(rows):
-        return []
+        if isinstance(item, str):
+            name, required = item, True
+        elif isinstance(item, dict) and set(item) <= {"name", "required"}:
+            name, required = item.get("name"), item.get("required", True)
+        else:
+            raise ValueError("secret_inputs entries must be a name or an object with name and required")
+        if not isinstance(name, str) or not SECRET_NAME_RE.fullmatch(name) or not isinstance(required, bool) or name in seen:
+            raise ValueError("secret_inputs has an invalid, repeated or mistyped entry")
+        seen.add(name)
+        rows.append({"name": name, "required": required})
     return rows
+
+
+def _action_secret_inputs(action: dict) -> list[dict]:
+    """The ``[{name, required}]`` an action's registry file lists (1.3.0), for display. Never raises: a value that cannot be parsed shows as
+    none here, and ``_resolve_secret_inputs`` refuses to start such an action."""
+    try:
+        return _parse_secret_inputs(action.get("secret_inputs"))
+    except ValueError:
+        return []
 
 
 class _SecretHandOver:
@@ -242,13 +258,20 @@ def _resolve_secret_inputs(action_id: str) -> _SecretHandOver | None:
     exists. A required name that is not configured is ``secret_not_configured``, one that cannot be read is ``secret_unreadable``.
     Messages name the secret, never a value. The only caller of ``secret_store._read_for_server_maintenance``.
 
-    Since the 1.17.113 precheck the feature is OFF (``SECRET_INPUTS_ENABLED``) until Johan signs the new Core read as a decision: an
-    action that lists secret inputs then refuses to start with ``secret_inputs_disabled`` and nothing is read."""
+    The feature is ON since 1.17.114 (AD-62). ``SECRET_INPUTS_ENABLED`` stays as the kill switch: when False, an action that lists secret
+    inputs refuses to start with ``secret_inputs_disabled`` and nothing is read. A ``secret_inputs`` value the root helper would refuse
+    is ``action_invalid`` and nothing is read or created."""
     caller = sys._getframe(1).f_code
     if caller is not ServerMaintenanceProvider.start.__code__:
         raise ServerMaintenanceValidationError("Secret inputs can be resolved only by start().", classification="secret_not_allowed")
     action = _read_action(str(action_id))
-    rows = _action_secret_inputs(action)
+    try:
+        rows = _parse_secret_inputs(action.get("secret_inputs"))
+    except ValueError:
+        # 1.17.114: a registry value the helper's rules refuse is refused here too, before anything is read or created (fail closed)
+        raise ServerMaintenanceError(
+            f"Registered action {str(action.get('id') or '')!r} has a secret_inputs value that cannot be read.", classification="action_invalid"
+        ) from None
     if not rows:
         return None
     action_id = str(action.get("id") or "")
@@ -486,7 +509,9 @@ def _public_job(job: dict, *, include_output: bool = True) -> dict:
 def _dispatch(command: str, job_id: str, handover: "_SecretHandOver | None" = None) -> None:
     if not HELPER.is_file():
         raise ServerMaintenanceError(f"Core server-maintenance helper is not installed at {HELPER}.", job_id=job_id, classification="dispatch_failed")
-    options = {"input": handover.stdin_text()} if handover is not None else {}  # 1.3.0: secrets travel on stdin only, never argv or env
+    # 1.3.0: secrets travel on stdin only, never argv or env. 1.17.114: without a hand-over the helper gets no stdin at all (DEVNULL),
+    # so it can never read or block on the worker's inherited stdin.
+    options = {"input": handover.stdin_text()} if handover is not None else {"stdin": subprocess.DEVNULL}
     try:
         subprocess.run(
             ["sudo", "-n", str(HELPER), command, job_id],
@@ -826,7 +851,7 @@ def register_core_server_maintenance_capability():
             "action_manifest_keys_added_in_1_3_0": ["secret_inputs"],
             "secret_input_limits": {"names_per_action": SECRET_INPUTS_MAX, "value_bytes": SECRET_VALUE_MAX_BYTES, "total_bytes": SECRET_TOTAL_MAX_BYTES},
             "secret_inputs_env": "TEC_TAC_SERVER_MAINTENANCE_SECRET_DIR",
-            "secret_inputs_enabled": SECRET_INPUTS_ENABLED,  # false until the decision is signed: start() refuses such an action (secret_inputs_disabled)
+            "secret_inputs_enabled": SECRET_INPUTS_ENABLED,  # true since 1.17.114 (AD-62); False is the kill switch: start() then refuses such an action (secret_inputs_disabled)
             "requires_framework_added_in_1_3_0": ">=1.17.113",
         },
     )

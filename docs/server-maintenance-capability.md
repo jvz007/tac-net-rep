@@ -219,6 +219,8 @@ Core cannot enforce that the program really takes the lock. A job that waits and
 
 ## Secret inputs (since 1.17.113, capability 1.3.0)
 
+Status: ON since Core 1.17.114 (AD-62, Johan, 10 November 2026). The provider metadata field `secret_inputs_enabled` is `true`. A module that needs it sets `requires.framework` to `>=1.17.114`. On a Core where the switch is off, an action that lists `secret_inputs` is refused with `secret_inputs_disabled` and nothing is read. A `secret_inputs` value in the registry that does not follow the rules below is refused with `action_invalid`.
+
 A module's root program sometimes needs a secret, such as a DNS-provider credential or a certificate-manager API key. You keep it in `core.secrets` (see `docs/secret-store.md`). Core hands it to your own program without it passing through the job, `argv`, the environment or the logs.
 
 Add the optional key `secret_inputs` to a `server_maintenance_actions` entry: a list of at most 8 entries, each `{"name": "dns-token", "required": true}`. A plain string is accepted and means required. Names follow `core.secrets`: `[a-z0-9][a-z0-9._-]{0,63}`, no repeats. The module needs `requires.framework` of `>=1.17.113`. There is no owner field. The owner is always the module that owns the action, so you can name only your own secrets. A hand registration (`--register`) cannot set the key.

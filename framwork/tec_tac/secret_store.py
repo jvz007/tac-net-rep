@@ -541,7 +541,7 @@ def _read_for_server_maintenance(action_id: str, name: str) -> "SecretValue | No
 
     Decrypts one secret of the module that owns a server-maintenance action, so ``server_maintenance`` can hand it to that module's own root
     program (core.server_maintenance 1.3.0, ``secret_inputs``). It refuses (403 ``caller_not_allowed``, one deny audit row) unless: its
-    immediate caller is the code object of ``server_maintenance._resolve_secret_inputs`` and ``SECRET_INPUTS_ENABLED`` is on (it is off until Johan signs the decision); the action is registered by a signed module manifest in the ROOT
+    immediate caller is the code object of ``server_maintenance._resolve_secret_inputs`` and ``SECRET_INPUTS_ENABLED`` is on (on since 1.17.114, AD-62; it stays as the kill switch); the action is registered by a signed module manifest in the ROOT
     registry; the owner is that action's own module (the action id starts with ``<owner>.``) and is an installed, enabled, non-legacy
     extension; and ``name`` is one of the action's ``secret_inputs``. The owner is never passed in, so another module's secret cannot be
     named. It counts the read like ``get`` and raises the same ``SecretStoreError`` codes. ``None`` means no such secret. It never logs or

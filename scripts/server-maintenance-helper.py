@@ -375,6 +375,9 @@ def sweep_secret_dirs():
         if JOB_RE.fullmatch(child.name) and child.is_dir() and not child.is_symlink():
             try:
                 keep = load_claimed_job(child.name)[1].get("status") not in TERMINAL_STATES
+                if not keep:
+                    # 1.17.114: a job marked failed after a failed stop may still run; keep its folder until the unit is gone
+                    keep = not _unit_gone(_systemd_unit(child.name))
             except Exception:
                 keep = False
         if not keep:
@@ -1072,6 +1075,18 @@ def _systemd_unit(job_id):
     return "tec-tac-server-maintenance-" + str(job_id)
 
 
+def _unit_gone(unit):
+    """Is this systemd unit certainly not running? True for inactive, failed and an unknown unit. False for active, activating,
+    deactivating, reloading and any other state. A systemctl that cannot be run counts as gone (1.17.114): root-only plaintext does not
+    stay on tmpfs on a guess."""
+    try:
+        result = subprocess.run(["systemctl", "is-active", str(unit)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=20, check=False)
+    except (OSError, ValueError, subprocess.SubprocessError):  # cannot be run or timed out: treat as gone, as before 1.17.114
+        return True
+    state = str(result.stdout or "").strip().lower()
+    return state in {"inactive", "failed", "unknown", ""}
+
+
 def dispatch(job_id):
     ensure_layout()
     public_path = job_path(job_id)
@@ -1345,6 +1360,10 @@ def cancel_job(job_id):
         if current.get("status") not in {"succeeded", "failed", "cancelled", "dispatch_failed"}:
             writer(path, current, status="failed", stage="cancel", finished_at=now(), failure={"classification":"cancel_failed","message":(result.stderr or "Unable to stop maintenance unit.").strip()})
             append_audit("job.cancel_failed", job=current, detail={"message": result.stderr.strip()})
+            if _unit_gone(unit):
+                finish_secrets(job_id)  # the program is not running: remove the plaintext now
+            else:
+                print("secret folder kept: the unit may still run; the sweep removes it once the unit is gone", file=sys.stderr)
             raise RuntimeError((result.stderr or "Unable to stop maintenance unit.").strip())
     finish_secrets(job_id)  # the unit is stopped: nothing can still read the secret folder
     current = (load_job(job_id)[1] if legacy_public_only else load_claimed_job(job_id)[1])
