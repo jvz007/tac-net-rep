@@ -41,14 +41,14 @@ must(re.search(r"""bash -lc 'cd "\$1" && "\$2" "\$3" shell -c "\$4"' _ "\$\{BACK
 must('shell -c \\"${code}\\"' not in INSTALL, "the old inline interpolation is gone")
 must(len(re.findall(r"shell -c ", INSTALL)) == 1, "one manage.py shell command, inside run_verify_step")
 steps = re.findall(r'run_verify_step "([^"]+)" "\$\{(VERIFY_\w+_CODE)\}"(?: (fatal|warn))?(?: "(\w+)")?', INSTALL, re.MULTILINE)
-must(len(steps) == 13, steps)
+must(len(steps) == 14, steps)
 code_lines = re.findall(r'^(VERIFY_\w+_CODE)="(.*)"$', INSTALL, re.MULTILINE)
 must(sorted(n for n, _ in code_lines) == sorted(c for _, c, _, _ in steps), "every VERIFY_*_CODE has a step and the reverse")
 fatal_labels = [label for label, _, mode, _ in steps if mode != "warn"]
 helper_tree = ast.parse(HELPER)
 helper_steps = next(ast.literal_eval(n.value) for n in helper_tree.body if isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "INSTALLER_VERIFY_STEPS" for t in n.targets))
-must(list(helper_steps) == fatal_labels and len(fatal_labels) == 12, (helper_steps, fatal_labels))
-print("       install.sh: the code is argument $4; 13 steps; helper INSTALLER_VERIFY_STEPS equals the 12 fatal labels in order")
+must(list(helper_steps) == fatal_labels and len(fatal_labels) == 13, (helper_steps, fatal_labels))
+print("       install.sh: the code is argument $4; 14 steps; helper INSTALLER_VERIFY_STEPS equals the 13 fatal labels in order")
 
 bash = shutil.which("bash")
 if bash is None:
@@ -101,7 +101,7 @@ def run(version="1.17.98"):
 done = run()
 must(done.returncode == 0 and "ALL-STEPS-DONE" in done.stdout, (done.returncode, done.stdout[-800:], done.stderr[-800:]))
 captured = sorted((work / "cap").iterdir())
-must(len(captured) == 13, [p.name for p in captured])
+must(len(captured) == 14, [p.name for p in captured])
 for (label, var, _mode, _noun), path in zip(steps, captured):
     got = path.read_bytes()
     intended = (work / "intended" / var).read_bytes()
@@ -110,7 +110,7 @@ for (label, var, _mode, _noun), path in zip(steps, captured):
     compile(got.decode("utf-8"), label, "exec")  # the string is valid Python exactly as received
 quoted = [label for (label, var, _m, _n), p in zip(steps, captured) if b'["' in p.read_bytes() or b'\\"' in p.read_bytes()]
 must(any("contract" in label.lower() for label in quoted) and any("Resource Directory" in label for label in quoted), f"the steps with quoted keys are covered: {quoted}")
-print(f"       all 13 steps reach Python byte for byte and compile; steps that use double quotes: {len(quoted)}")
+print(f"       all 14 steps reach Python byte for byte and compile; steps that use double quotes: {len(quoted)}")
 
 # (3) the contract-catalog check reports the real assertion, not a NameError ----------------------------------------------------------------
 contract = next(p for (label, _v, _m, _n), p in zip(steps, captured) if label == "Tec-Tac developer contract catalog")
@@ -157,11 +157,11 @@ print("       contract-catalog code against a stub whose version differs: Assert
 # (4) a rollback: the installer of the previous version asks for a version that is not the installed one --------------------------------------
 rollback = run(version="1.17.96")
 must(rollback.returncode == 0 and "ALL-STEPS-DONE" in rollback.stdout and "VERIFY STEP FAILED" not in rollback.stdout, (rollback.stdout[-600:], rollback.stderr[-600:]))
-must(len(list((work / "cap").iterdir())) == 13, "every verification step ran on the rollback path")
+must(len(list((work / "cap").iterdir())) == 14, "every verification step ran on the rollback path")
 position = [label for label, *_ in steps].index("Tec-Tac developer contract catalog") + 1
 rolled = (work / "cap" / f"step-{position:02d}").read_text(encoding="utf-8")
 must("expected='1.17.96'" in rolled and "NameError" not in rolled, "the previous version is asserted by name")
-print("       rollback scenario (previous version fed to the harness): all 13 steps run to the end")
+print("       rollback scenario (previous version fed to the harness): all 14 steps run to the end")
 
 shutil.rmtree(work, ignore_errors=True)
 print("[TEST] PASS installer rollback verify 1.17.98")

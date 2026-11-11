@@ -44,6 +44,9 @@ SUPPORTED_KEYS = frozenset({
     # 1.17.80: ``scheduler_person_actions`` lists the module's own Scheduler action ids that run as the person who confirmed the schedule
     # (every run re-checks that person). Extensions only, at most 20.
     "scheduler_person_actions",
+    # 1.17.116: ``sandbox_runners`` lets a signed module register up to 4 programs that core.sandbox may run as an unprivileged,
+    # resource-limited process (docs/sandbox-capability.md). Extensions only.
+    "sandbox_runners",
 })
 # Object types core.resources can scope-check for the browser audit writer. Any other
 # lowercase slug may be declared since 1.17.0, but carries no scope check (see docs/module-audit.md).
@@ -78,6 +81,26 @@ SERVER_MAINTENANCE_SECRET_INPUTS_MAX = 8
 SERVER_MAINTENANCE_SECRET_INPUTS_MIN_FRAMEWORK = (1, 17, 113)
 _SM_SECRET_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _SM_ACTION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+# 1.17.116: manifest key ``sandbox_runners`` (see docs/sandbox-capability.md). The root helper scripts/sandbox-helper.py applies the same rules again.
+SANDBOX_RUNNERS_MAX = 4
+SANDBOX_REGISTER_PERMISSION = "sandbox.register"
+SANDBOX_MIN_FRAMEWORK = (1, 17, 116)
+SANDBOX_EXECUTABLE_PREFIX = "sandbox/runners/"
+_SANDBOX_RUNNER_KEYS = frozenset({
+    "id", "description", "executable", "argv", "parameters", "environment", "runtime_roots", "credential_files", "credential_return",
+    "limits", "revision",
+})
+# name -> (default, Core ceiling). A Core patch raises a ceiling, never a module.
+SANDBOX_LIMITS = {
+    "memory_mb": (1024, 2048), "cpu_percent": (100, 200), "tasks": (256, 512), "run_seconds": (240, 600), "stdout_kib": (512, 1024),
+    "stderr_kib": (64, 64), "scratch_mb": (64, 256), "input_kib": (64, 256), "queue_seconds": (10, 30),
+}
+SANDBOX_RESERVED_ENV = frozenset({"HOME", "TMPDIR", "SSL_CERT_FILE", "SANDBOX_WORK", "SANDBOX_OUT"})
+SANDBOX_CREDENTIAL_FILES_MAX = 2
+SANDBOX_RUNTIME_ROOTS_MAX = 8
+SANDBOX_ENV_MAX = 32
+_SANDBOX_ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+_SANDBOX_SECRET_ENV_RE = re.compile(r"(TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|APIKEY|API_KEY|PRIVATE)", re.IGNORECASE)
 _SM_PARAMETER_TYPES = frozenset({"string", "integer", "boolean", "enum"})
 _SM_MAX_TIMEOUT_SECONDS = 7 * 24 * 60 * 60
 
@@ -114,6 +137,8 @@ class PluginSpec:
     system_actions: tuple = field(default=(), compare=False, repr=False)
     # 1.17.80: the validated ``scheduler_person_actions`` ids (empty when the key is absent). Left out of equality like the field above.
     scheduler_person_actions: tuple = field(default=(), compare=False, repr=False)
+    # 1.17.116: the validated ``sandbox_runners`` entries (plain dicts, empty when the key is absent). Left out of equality like the fields above.
+    sandbox_runners: tuple = field(default=(), compare=False, repr=False)
     # 1.17.71: the declared ``dependencies`` and ``optional_dependencies`` as sorted (module id, version constraint) pairs. Read leniently (never
     # raises; module_manager_v2 refuses a malformed manifest at install). Left out of equality like the fields above.
     dependencies: tuple = field(default=(), compare=False, repr=False)
@@ -226,7 +251,7 @@ def _publisher_permissions(payload: dict, plugin_type: str, plugin_id: str) -> t
     values = tuple(value.strip() for value in raw)
     if len(set(values)) != len(values):
         raise RegistryError("Manifest publisher_permissions contains duplicates.")
-    allowed = {"module.install", "server_maintenance.register"}
+    allowed = {"module.install", "server_maintenance.register", SANDBOX_REGISTER_PERMISSION}
     unknown = sorted(set(values) - allowed)
     if unknown:
         raise RegistryError(f"Manifest publisher_permissions contains unsupported permission(s): {unknown!r}.")
@@ -361,6 +386,161 @@ def _server_maintenance_actions(payload: dict, plugin_type: str, plugin_id: str,
             "parameters": dict(schema), "timeout_seconds": timeout, "success_exit_codes": list(codes), "revision": str(revision).strip(),
             "protected": protected, "signals": list(signals), "waits_for_person": waits,
             "secret_inputs": secret_inputs,
+        })
+    return tuple(entries)
+
+
+def _sandbox_relative_file(value, label: str, plugin_dir: Path, *, prefix: str = "", min_parts: int = 1) -> str:
+    """A relative file path inside the module folder: no ``..``, no backslash, no symlink along the way, an existing file."""
+    if not isinstance(value, str) or not value or "\x00" in value or "\\" in value or value.startswith("/") or len(value) > 512:
+        raise RegistryError(f"{label} must be a relative path inside the module folder.")
+    parts = value.split("/")
+    if any(part in ("", ".", "..") for part in parts):
+        raise RegistryError(f"{label} may not contain empty, '.' or '..' path parts.")
+    if prefix and (not value.startswith(prefix) or len(parts) < min_parts):
+        raise RegistryError(f"{label} must be a file below {prefix!r} in the module folder.")
+    current = plugin_dir
+    for part in parts:
+        current = current / part
+        if current.is_symlink():
+            raise RegistryError(f"{label} may not use a symlink.")
+    if not current.is_file():
+        raise RegistryError(f"{label} {value!r} does not exist in the module folder.")
+    return value
+
+
+def _sandbox_runtime_path(value, label: str) -> str:
+    if (not isinstance(value, str) or not value.startswith("/") or "\x00" in value or "\\" in value or len(value) > 512
+            or any(ord(ch) < 32 or ord(ch) == 127 for ch in value)):
+        raise RegistryError(f"{label} path must be an absolute path without control characters.")
+    parts = value.split("/")[1:]
+    if len(parts) < 2 or any(part in ("", ".", "..") for part in parts):
+        raise RegistryError(f"{label} path must be absolute and normalised, with at least two parts and no '..'.")
+    return value
+
+
+def _sandbox_limits(raw, label: str) -> dict:
+    if not isinstance(raw, dict):
+        raise RegistryError(f"{label} limits must be an object.")
+    unknown = sorted(set(raw) - set(SANDBOX_LIMITS))
+    if unknown:
+        raise RegistryError(f"{label} limits contains unsupported keys {unknown!r}.")
+    limits = {}
+    for name, (default, ceiling) in SANDBOX_LIMITS.items():
+        value = raw.get(name, default)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise RegistryError(f"{label} limit {name} must be a whole number of at least 1.")
+        if value > ceiling:
+            raise RegistryError(f"{label} limit {name} is above the Core ceiling of {ceiling}.")
+        limits[name] = value
+    return limits
+
+
+def _sandbox_runners(payload: dict, plugin_type: str, plugin_id: str, plugin_dir: Path, publisher_permissions) -> tuple[dict, ...]:
+    """Parse the optional ``sandbox_runners`` key (1.17.116): the programs a signed module lets core.sandbox run unprivileged.
+
+    Each entry is ``{id, description, executable, argv, parameters, environment, runtime_roots, credential_files, credential_return,
+    limits, revision}``; any other key is refused. Extensions only, at most 4 entries. The module must also declare publisher_permissions
+    ``sandbox.register`` and ``requires.framework`` of ``>=1.17.116`` or higher. ``allowed_hosts`` is refused: the smaller sandbox has no
+    host list (plan section 15, AD-63). The root helper checks the same rules again from the root-owned installed manifest. Returns plain
+    dicts, or ``()`` when the key is absent or empty."""
+    if "sandbox_runners" not in payload:
+        return ()
+    raw = payload["sandbox_runners"]
+    if plugin_type != "extension":
+        raise RegistryError(f"Reportset {plugin_id!r} may not declare sandbox_runners; they belong to the extension.")
+    if not isinstance(raw, list):
+        raise RegistryError("Manifest key 'sandbox_runners' must be a JSON array.")
+    if len(raw) > SANDBOX_RUNNERS_MAX:
+        raise RegistryError(f"Manifest sandbox_runners may not contain more than {SANDBOX_RUNNERS_MAX} entries.")
+    if not raw:
+        return ()
+    if SANDBOX_REGISTER_PERMISSION not in publisher_permissions:
+        raise RegistryError(
+            f"Module {plugin_id!r} declares sandbox_runners and must also declare publisher_permissions "
+            f"{SANDBOX_REGISTER_PERMISSION!r}: the publisher that signs it must hold that permission."
+        )
+    if _requires_framework_floor(payload) < SANDBOX_MIN_FRAMEWORK:
+        raise RegistryError("Manifest sandbox_runners needs requires.framework '>=1.17.116' or higher; raise the requirement.")
+    entries, seen = [], set()
+    for index, entry in enumerate(raw):
+        label = f"Manifest sandbox_runners entry {index + 1}"
+        if not isinstance(entry, dict):
+            raise RegistryError(f"{label} must be a JSON object.")
+        if "allowed_hosts" in entry:
+            raise RegistryError(f"{label} declares allowed_hosts; the smaller sandbox has no host list, so remove it.")
+        unknown = sorted(set(entry) - _SANDBOX_RUNNER_KEYS)
+        if unknown:
+            raise RegistryError(f"{label} contains unsupported keys {unknown!r}.")
+        runner_id = entry.get("id")
+        if not isinstance(runner_id, str) or not _SM_ACTION_ID_RE.fullmatch(runner_id):
+            raise RegistryError(f"{label} id must be letters, digits, '.', '_' or '-' (1 to 128 characters).")
+        if not runner_id.startswith(plugin_id + ".") or runner_id == plugin_id + ".":
+            raise RegistryError(f"Sandbox runner id {runner_id!r} must begin with the module ID prefix {plugin_id + '.'!r}.")
+        if runner_id in seen:
+            raise RegistryError(f"Manifest sandbox_runners declares {runner_id!r} more than once.")
+        seen.add(runner_id)
+        label = f"Sandbox runner {runner_id!r}"
+        description = entry.get("description")
+        if (not isinstance(description, str) or not description.strip() or len(description) > 200
+                or any(ord(ch) < 32 or ord(ch) == 127 for ch in description)):
+            raise RegistryError(f"{label} description must be plain text of 1 to 200 characters.")
+        executable = _sandbox_relative_file(entry.get("executable"), f"{label} executable", plugin_dir,
+                                            prefix=SANDBOX_EXECUTABLE_PREFIX, min_parts=3)
+        schema = _sm_parameters(entry.get("parameters", {}), label)
+        argv = entry.get("argv", [])
+        if not isinstance(argv, list) or len(argv) > 64:
+            raise RegistryError(f"{label} argv must be an array with at most 64 entries.")
+        for item in argv:
+            if isinstance(item, str):
+                if "\x00" in item or len(item) > 4096:
+                    raise RegistryError(f"{label} has an invalid literal argv entry.")
+            elif not (isinstance(item, dict) and set(item) == {"param"} and isinstance(item["param"], str) and item["param"] in schema):
+                raise RegistryError(f"{label} argv entries must be literal strings or {{'param': '<declared parameter>'}}; no shell text.")
+        environment = entry.get("environment", {})
+        if not isinstance(environment, dict) or len(environment) > SANDBOX_ENV_MAX:
+            raise RegistryError(f"{label} environment must be an object with at most {SANDBOX_ENV_MAX} entries.")
+        for name, value in environment.items():
+            if not isinstance(name, str) or not _SANDBOX_ENV_NAME_RE.fullmatch(name):
+                raise RegistryError(f"{label} environment name {name!r} is invalid.")
+            if name in SANDBOX_RESERVED_ENV:
+                raise RegistryError(f"{label} environment name {name!r} is reserved for Core.")
+            if name.startswith("LD_") or _SANDBOX_SECRET_ENV_RE.search(name):
+                raise RegistryError(f"{label} environment name {name!r} is not allowed (no loader or secret-looking names).")
+            if not isinstance(value, str) or len(value) > 1024 or any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+                raise RegistryError(f"{label} environment value for {name!r} must be plain text of up to 1024 characters.")
+        roots_raw = entry.get("runtime_roots", [])
+        if not isinstance(roots_raw, list) or len(roots_raw) > SANDBOX_RUNTIME_ROOTS_MAX:
+            raise RegistryError(f"{label} runtime_roots must be a list of at most {SANDBOX_RUNTIME_ROOTS_MAX} entries.")
+        roots, root_paths = [], set()
+        for root_entry in roots_raw:
+            if not isinstance(root_entry, dict) or set(root_entry) != {"path", "tree_sha256_file"}:
+                raise RegistryError(f"{label} runtime_roots entries must be objects with path and tree_sha256_file.")
+            path = _sandbox_runtime_path(root_entry["path"], label + " runtime_roots")
+            if path in root_paths:
+                raise RegistryError(f"{label} runtime_roots repeats {path!r}.")
+            root_paths.add(path)
+            tree_file = _sandbox_relative_file(root_entry["tree_sha256_file"], f"{label} tree_sha256_file", plugin_dir)
+            roots.append({"path": path, "tree_sha256_file": tree_file})
+        names = entry.get("credential_files", [])
+        if not isinstance(names, list) or len(names) > SANDBOX_CREDENTIAL_FILES_MAX or len(set(map(str, names))) != len(names):
+            raise RegistryError(f"{label} credential_files must be a list of at most {SANDBOX_CREDENTIAL_FILES_MAX} different names.")
+        for name in names:
+            if not isinstance(name, str) or not _SM_SECRET_NAME_RE.fullmatch(name):
+                raise RegistryError(f"{label} credential_files names must match [a-z0-9][a-z0-9._-]{{0,63}}.")
+        credential_return = entry.get("credential_return", False)
+        if not isinstance(credential_return, bool):
+            raise RegistryError(f"{label} credential_return must be true or false.")
+        if credential_return and not names:
+            raise RegistryError(f"{label} credential_return needs a declared credential file name.")
+        limits = _sandbox_limits(entry.get("limits", {}), label)
+        revision = entry.get("revision", "1")
+        if isinstance(revision, bool) or not isinstance(revision, (str, int)) or not str(revision).strip() or len(str(revision)) > 64:
+            raise RegistryError(f"{label} revision must be a short text or whole number.")
+        entries.append({
+            "id": runner_id, "description": description.strip(), "executable": executable, "argv": list(argv), "parameters": dict(schema),
+            "environment": dict(environment), "runtime_roots": roots, "credential_files": list(names),
+            "credential_return": credential_return, "limits": limits, "revision": str(revision).strip(),
         })
     return tuple(entries)
 
@@ -705,8 +885,9 @@ def _load_manifest(plugin_type: str, plugin_dir: Path) -> PluginSpec | None:
     server_maintenance_actions = _server_maintenance_actions(payload, plugin_type, plugin_id, plugin_dir, permission_groups, publisher_permissions)
     system_actions = _system_actions(payload, plugin_type, plugin_id)
     scheduler_person_actions = _scheduler_person_actions(payload, plugin_type, plugin_id)
+    sandbox_runners = _sandbox_runners(payload, plugin_type, plugin_id, plugin_dir, publisher_permissions)
     _deps, _opt = _dependency_pairs_checked(payload, "dependencies"), _dependency_pairs_checked(payload, "optional_dependencies")
-    return PluginSpec(plugin_id=plugin_id, plugin_type=plugin_type, root=plugin_root, version=version, python_paths=tuple(python_paths), django_apps=django_apps, permission_groups=permission_groups, publisher_permissions=publisher_permissions, name=name, category=category, audit_events=audit_events, replaces=replaces, capabilities=capabilities, capabilities_declared=capabilities_declared, route_prefix=route_prefix, route_urlconf=route_urlconf, description=description, server_maintenance_actions=server_maintenance_actions, system_actions=system_actions, scheduler_person_actions=scheduler_person_actions, dependencies=_deps[0], optional_dependencies=_opt[0], dependencies_incomplete=_deps[1] or _opt[1])
+    return PluginSpec(plugin_id=plugin_id, plugin_type=plugin_type, root=plugin_root, version=version, python_paths=tuple(python_paths), django_apps=django_apps, permission_groups=permission_groups, publisher_permissions=publisher_permissions, name=name, category=category, audit_events=audit_events, replaces=replaces, capabilities=capabilities, capabilities_declared=capabilities_declared, route_prefix=route_prefix, route_urlconf=route_urlconf, description=description, server_maintenance_actions=server_maintenance_actions, system_actions=system_actions, scheduler_person_actions=scheduler_person_actions, sandbox_runners=sandbox_runners, dependencies=_deps[0], optional_dependencies=_opt[0], dependencies_incomplete=_deps[1] or _opt[1])
 
 def _discover_root(plugin_type: str, root: Path) -> list[PluginSpec]:
     if not root.exists():
@@ -811,6 +992,14 @@ def _extra_paths(plugins: Iterable[PluginSpec]) -> tuple[str, ...]:
             for part in str(entry.get("executable", "")).split("/"):
                 current = current / part
                 paths.append(str(current))
+        # 1.17.116: runner executables and tree-hash files, so a swap on disk invalidates the cache like a manifest change
+        for entry in spec.sandbox_runners:
+            names = [str(entry.get("executable", ""))] + [str(root.get("tree_sha256_file", "")) for root in entry.get("runtime_roots", ())]
+            for name in names:
+                current = spec.root
+                for part in name.split("/"):
+                    current = current / part
+                    paths.append(str(current))
     return tuple(paths)
 
 

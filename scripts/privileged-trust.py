@@ -348,7 +348,7 @@ def _hotfix_target_permissions(path: Path, cfg: dict[str, str]) -> set[str]:
     if not isinstance(requested, list) or any(not isinstance(v, str) or not v.strip() for v in requested):
         raise RuntimeError("installed target module publisher_permissions is invalid")
     values = {v.strip() for v in requested}
-    allowed = {"module.install", "server_maintenance.register"}
+    allowed = {"module.install", "server_maintenance.register", "sandbox.register"}
     unknown = sorted(values - allowed)
     if unknown:
         raise RuntimeError("installed target module declares unsupported publisher permission(s): " + ", ".join(unknown))
@@ -592,7 +592,8 @@ def verify_package(package: Path, signature: Path | None, metadata: Path | None)
         required_permissions=required, require_signed=False,
         trust_root=TRUST_ROOT, server_environment=_environment(cfg),
     )
-    # 1.17.17: a permission beyond module.install (server_maintenance.register leads to root code execution) is never granted to an
+    # 1.17.17: a permission beyond module.install (server_maintenance.register leads to root code execution; sandbox.register, 1.17.116,
+    # leads to an unprivileged process that is handed a person's login) is never granted to an
     # unsigned package, whatever the policy floor or the development override says. Same rule as verify_hotfix.
     if set(required) - {"module.install"} and not trust.get("signed"):
         PublisherTrustError, _, _ = _imports()

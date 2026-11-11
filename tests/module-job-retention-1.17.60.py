@@ -323,6 +323,19 @@ for name, previous in PREVIOUS.items():
     must(text.count(call) == 1, f"{name}: exactly one guarded call")
     restored = (text[:block_start] + text[block_end:]).replace(call, "")
     if name == "module-v2-job-helper.py":
+        # 1.17.116: the sandbox runner registration (two functions and their call sites) is new; take exactly those additions out first
+        def cut(source, start_marker, end_marker, search_from=None):
+            begin = source.index(start_marker)
+            end = source.index(end_marker, begin if search_from is None else source.index(search_from, begin))
+            return source[:begin] + source[end:]
+        restored = cut(restored, "# 1.17.116: a signed module registers", "\ndef ", "def sync_sandbox_runners")
+        restored = cut(restored, "\ndef restore_sandbox_runners", "\n\ndef backup_modules")
+        restored = cut(restored, "                    # 1.17.116: then the sandbox runners", "                    cleanup_successful_stage")
+        restore_call = "                    restore_sandbox_runners(repo_root, backup_ids, log)\n"
+        must(restored.count(restore_call) == 1, f"{name}: one sandbox restore call")
+        restored = restored.replace(restore_call, "")
+        must("sandbox" not in restored.lower(), f"{name}: no sandbox text left after the 1.17.116 carve-out")
+    if name == "module-v2-job-helper.py":
         # 1.17.72 (H2) added the repository-URL scrub to this helper; take exactly those additions out before comparing with 1.17.59
         h2_start = restored.index("def strip_repository_url(value):")
         h2_end = restored.index("def save_module_state_unlocked(state):")

@@ -61,6 +61,14 @@ class TecTacFrameworkConfig(AppConfig):
             register_core_secrets_capability()
         except Exception:
             logger.exception("Tec-Tac core.secrets capability registration failed")
+        # 1.17.116: core.sandbox (runs a signed module's program unprivileged; AD-63). Patch 1: status and describe only, the kill switch is off.
+        # Guarded like core.secrets: a fault here never aborts start-up, and a module that finds no capability (has_capability) does not use it.
+        try:
+            from .sandbox import register_core_sandbox_capability
+
+            register_core_sandbox_capability()
+        except Exception:
+            logger.exception("Tec-Tac core.sandbox capability registration failed")
         # 1.17.7: the server-side Tactical operation path. Guarded, because a fault here must never abort start-up.
         # The registry is empty until an owning core module declares an operation, so this changes nothing by itself.
         try:

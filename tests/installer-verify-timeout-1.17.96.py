@@ -28,12 +28,12 @@ def must(condition, message=""):
         raise AssertionError(message)
 
 
-# (1) static: constants, no 45 s, 13 steps through the function, messages kept --------------------------------------------------------
+# (1) static: constants, no 45 s, 14 steps through the function, messages kept --------------------------------------------------------
 must("timeout 45s" not in INSTALL, "a 'timeout 45s' is left in install.sh")
 must(len(re.findall(r"^VERIFY_STEP_TIMEOUT_SECONDS=120$", INSTALL, re.MULTILINE)) == 1, "one constant, 120")
 must(len(re.findall(r"shell -c ", INSTALL)) == 1, "the manage.py shell command exists once, inside run_verify_step")
 steps = re.findall(r'run_verify_step "([^"]+)" "\$\{(VERIFY_\w+_CODE)\}"(?: (fatal|warn))?(?: "(\w+)")?', INSTALL)
-must(len(steps) == 13, steps)
+must(len(steps) == 14, steps)
 codes = re.findall(r"^(VERIFY_\w+_CODE)=", INSTALL, re.MULTILINE)
 must(sorted(c for _, c, _, _ in steps) == sorted(codes), "every VERIFY_*_CODE has a step")
 must(sum(1 for _, _, mode, _ in steps if mode == "warn") == 1 and any(label == "Saved views repair" and mode == "warn" for label, _, mode, _ in steps), steps)
@@ -50,6 +50,7 @@ wanted_messages = {
     "Core server-maintenance capability": "Core server-maintenance capability verification failed or timed out.",
     "Core Tactical operations capability": "Core Tactical operations capability verification failed or timed out.",
     "Core Tactical websocket ticket capability": "Core Tactical websocket ticket capability verification failed or timed out.",
+    "Core sandbox capability": "Core sandbox capability verification failed or timed out.",
 }
 for label, _code, mode, noun in steps:
     if mode == "warn":
@@ -59,7 +60,7 @@ for label, _code, mode, noun in steps:
 must("WARNING: The saved views repair step failed or timed out; installation will continue." in INSTALL, "the repair step stays non-fatal")
 must("INSTALL_TIMEOUT_SECONDS = 1800" in HELPER and "VERIFY_TIMEOUT_SECONDS = 120" in HELPER, "helper limits")
 must("INSTALL_VERIFY_FAILED_EXIT=79" in INSTALL, "exit 79 defined")
-print("       install.sh: no 'timeout 45s', 13 steps through run_verify_step (12 fatal, saved views repair warn), 120 s, helper 120 s")
+print("       install.sh: no 'timeout 45s', 14 steps through run_verify_step (13 fatal, saved views repair warn), 120 s, helper 120 s")
 
 # (2) run the real function under bash --------------------------------------------------------------------------------------------------
 start = INSTALL.index("VERIFY_STEP_TIMEOUT_SECONDS=120")

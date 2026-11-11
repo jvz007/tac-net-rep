@@ -2325,6 +2325,7 @@ INSTALLER_VERIFY_STEPS = (
     "Core server-maintenance capability",
     "Core Tactical operations capability",
     "Core Tactical websocket ticket capability",
+    "Core sandbox capability",
 )
 
 

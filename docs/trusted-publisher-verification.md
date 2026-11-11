@@ -129,8 +129,11 @@ Framework 1.15.36 supports:
 
 - `module.install`
 - `server_maintenance.register`
+- `sandbox.register` (since 1.17.116)
 
 `module.install` is automatically required for every signed package. Declaring `server_maintenance.register` makes signing mandatory and the local publisher policy must explicitly grant it.
+
+`sandbox.register` works the same way. A module that declares `sandbox_runners` (programs that `core.sandbox` may run as an unprivileged process, see `docs/sandbox-capability.md`) must declare it, the package must be signed, and the publisher must hold it. `install.sh` grants it to no publisher, not even the development publisher: the local trust policy is the only authority, and an administrator grants it on the server when a module needs it.
 
 Reportsets may not declare publisher permissions.
 

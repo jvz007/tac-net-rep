@@ -181,7 +181,7 @@ try:
 except ns["RegistryError"]:
     pass
 reg = (APP / "registry.py").read_text(encoding="utf-8")
-must('"scheduler_person_actions",\n})' in reg and "scheduler_person_actions=scheduler_person_actions" in reg, "supported key, carried by the PluginSpec")
+must('"scheduler_person_actions",\n' in reg and "scheduler_person_actions=scheduler_person_actions" in reg, "supported key, carried by the PluginSpec")
 print("       the manifest key is parsed with the same shape rules as system_actions; reportsets may not declare it")
 
 # ---- (6)/(7) text

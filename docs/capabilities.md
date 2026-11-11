@@ -306,6 +306,10 @@ Capability providers may also be owned directly by Tec-Tac Core rather than an i
 
 `core.endpoint_transport` 1.0.0 (framework >=1.17.90) is the endpoint agent websocket: `register_owner`, `request`, `send_many` and `presence`, for the one owning module `endpoint-comms` only (Core verifies the caller; `nats-comms` is accepted until the dev server has moved). See `docs/endpoint-transport.md`.
 
+## Core sandbox
+
+`core.sandbox` 1.0.0 (framework >=1.17.116) will run a signed module's declared program as an unprivileged, resource-limited process that cannot see the server's files or reach the server itself or private networks. In 1.17.116 it is the foundation only: `status()` and `describe(runner_id)` are real, and `start`, `run` and `cancel` raise `sandbox_disabled`. See `docs/sandbox-capability.md`.
+
 ## Core server maintenance
 
 `core.server_maintenance` is the generic durable privileged-job capability. See `docs/server-maintenance-capability.md`. It exposes registered actions only; it does not provide arbitrary root-shell execution.

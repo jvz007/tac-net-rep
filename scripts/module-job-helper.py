@@ -256,6 +256,59 @@ def sync_server_maintenance_actions(repo_root, module_id, log, *, remove=False):
         verb = "registration" if declared else "removal"
         raise RuntimeError(f"server-maintenance action {verb} failed for module {module_id} (status {result.returncode}). See the job log for the reason.")
 
+# 1.17.116: a signed module registers the programs core.sandbox may run (``sandbox_runners``) when it is installed, and they are removed
+# when it is removed. The work is done by Core's root sandbox helper, which re-checks the root-owned installed manifest. This helper only
+# asks for it: --register-module and --unregister-module are reachable here and never through the Tactical account's sudo rule. On a
+# server that has no sandbox helper (older Core) a module that declares no runners is not touched at all.
+SANDBOX_HELPER = Path("/usr/local/sbin/tec-tac-sandbox")
+
+
+def manifest_declares_sandbox_runners(repo_root, module_id):
+    """True when the installed manifest declares at least one sandbox_runners entry. Only the decision is made here, so the read is
+    lenient; the root helper checks the owner, the mode and every rule before it registers anything."""
+    path = Path(repo_root) / "extensions" / module_id / "tec_tac.json"
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError:
+        return False
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return False
+        data = os.read(fd, MAX_SERVER_ACTION_MANIFEST_BYTES + 1)
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+    try:
+        payload = json.loads(data[:MAX_SERVER_ACTION_MANIFEST_BYTES].decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return False
+    runners = payload.get("sandbox_runners") if isinstance(payload, dict) else None
+    return isinstance(runners, list) and bool(runners)
+
+
+def sync_sandbox_runners(repo_root, module_id, log, *, remove=False):
+    """Register (or, with ``remove``, unregister) the sandbox runners of one module. A module that declares none has its earlier runners
+    dropped, which is how an upgrade removes a stale runner. No helper and nothing declared is a silent no-op. Raises RuntimeError with a
+    plain message when the root helper is missing for a module that declares runners, refuses or fails, so the job fails."""
+    declared = (not remove) and manifest_declares_sandbox_runners(repo_root, module_id)
+    helper = SANDBOX_HELPER
+    if not helper.is_file():
+        if declared:
+            raise RuntimeError(f"module {module_id} declares sandbox runners but the Core sandbox helper is not installed")
+        return
+    info = helper.stat()
+    if info.st_uid != 0 or info.st_mode & 0o022:
+        raise RuntimeError(f"refusing to run a non-root-owned or writable sandbox helper: {helper}")
+    flag = "--register-module" if declared else "--unregister-module"
+    log.write(f"[TEC-TAC-SANDBOX] {'registering' if declared else 'removing'} sandbox runners of {module_id}\n")
+    log.flush()
+    result = subprocess.run([str(helper), flag, module_id], stdout=log, stderr=subprocess.STDOUT, text=True, env=privileged_env(), check=False)
+    if result.returncode:
+        verb = "registration" if declared else "removal"
+        raise RuntimeError(f"sandbox runner {verb} failed for module {module_id} (status {result.returncode}). See the job log for the reason.")
+
 
 def forget_module_state(plugin_id, log=None):
     """Remove lifecycle state for a module whose files were successfully removed."""
@@ -885,6 +938,8 @@ def run_job(job_id):
                     forget_module_state(job["plugin_id"], log)
                     # 1.17.17: the module's server-maintenance actions go with it.
                     sync_server_maintenance_actions(repo_root, job["plugin_id"], log, remove=True)
+                    # 1.17.116: and its sandbox runners.
+                    sync_sandbox_runners(repo_root, job["plugin_id"], log, remove=True)
                     if handback:
                         # 1.17.15 (CQ43): the replaced module comes back on in the same job, after the uninstall.
                         set_module_enabled(handback, True)
@@ -925,6 +980,10 @@ def run_job(job_id):
                     job["stage"] = "server-maintenance-actions"
                     atomic_json(path, job)
                     sync_server_maintenance_actions(repo_root, job["plugin_id"], log)
+                    # 1.17.116: then the sandbox runners it declares (and drop what an upgrade dropped).
+                    job["stage"] = "sandbox-runners"
+                    atomic_json(path, job)
+                    sync_sandbox_runners(repo_root, job["plugin_id"], log)
         except Exception as exc:
             with log_path.open("a", encoding="utf-8") as log:
                 log.write(f"[TEC-TAC-MODULE] worker exception: {exc}\n")

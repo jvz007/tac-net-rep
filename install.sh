@@ -1028,6 +1028,87 @@ if command -v visudo >/dev/null 2>&1; then
 fi
 log "Installed durable Core server-maintenance helper: ${SERVER_MAINTENANCE_HELPER}"
 
+# 1.17.116: core.sandbox, Patch 1 (the foundation, AD-63). The root helper registers the programs a signed module declares, tests this
+# server and keeps the kill switch, which is a constant inside the helper and stays off in this release. Nothing here lets a program run.
+# The sudo rule has exactly three commands, with no trailing wildcard: a command with no arguments in sudoers allows no extra arguments.
+# The register, unregister, selftest and sweep modes are root only. Nothing here grants the publisher permission
+# sandbox.register to anyone: the local trust policy stays the authority.
+SANDBOX_HELPER="/usr/local/sbin/tec-tac-sandbox"
+SANDBOX_LIB="/usr/local/lib/tec-tac/sandbox"
+SANDBOX_STATE="/var/lib/tec-tac/sandbox"
+SANDBOX_SUDOERS="/etc/sudoers.d/tec-tac-sandbox"
+SANDBOX_SLICE="/etc/systemd/system/tec-tac-sandbox.slice"
+SANDBOX_SLICE_DROPIN_DIR="/etc/systemd/system/tec-tac-sandbox.slice.d"
+SANDBOX_SWEEP_SERVICE="/etc/systemd/system/tec-tac-sandbox-sweep.service"
+SANDBOX_SWEEP_TIMER="/etc/systemd/system/tec-tac-sandbox-sweep.timer"
+SANDBOX_SELFTEST_TIMEOUT_SECONDS=300
+
+mkdir -p "${SANDBOX_LIB}/runners" "${SANDBOX_LIB}/registry" "${SANDBOX_STATE}" "${SANDBOX_SLICE_DROPIN_DIR}"
+chown root:root "${SANDBOX_LIB}" "${SANDBOX_LIB}/runners" "${SANDBOX_LIB}/registry" "${SANDBOX_STATE}"
+chmod 0755 "${SANDBOX_LIB}" "${SANDBOX_LIB}/runners" "${SANDBOX_LIB}/registry" "${SANDBOX_STATE}"
+install_root_script "${REPO_ROOT}/scripts/sandbox-helper.py" "${SANDBOX_LIB}/sandbox-helper.py"
+ln -sfn "${SANDBOX_LIB}/sandbox-helper.py" "${SANDBOX_HELPER}"
+chown -h root:root "${SANDBOX_HELPER}"
+cat > "${SANDBOX_SUDOERS}" <<EOF
+${TACTICAL_USER} ALL=(root) NOPASSWD: ${SANDBOX_HELPER} --start, ${SANDBOX_HELPER} --stop, ${SANDBOX_HELPER} --status
+EOF
+chown root:root "${SANDBOX_SUDOERS}"
+chmod 0440 "${SANDBOX_SUDOERS}"
+if command -v visudo >/dev/null 2>&1; then
+    visudo -cf "${SANDBOX_SUDOERS}" >/dev/null || fail "Sandbox sudoers validation failed."
+fi
+# One group for every sandbox run, with a server-wide memory and task cap for all runs together. A run is limited on its own as well.
+cat > "${SANDBOX_SLICE}" <<EOF
+[Unit]
+Description=Tec-Tac sandbox runs
+
+[Slice]
+EOF
+cat > "${SANDBOX_SLICE_DROPIN_DIR}/limits.conf" <<EOF
+[Slice]
+MemoryMax=6G
+MemorySwapMax=0
+TasksMax=2048
+EOF
+# Boot and daily: check the runtime folders of every registered program again, and remove stray selftest folders.
+cat > "${SANDBOX_SWEEP_SERVICE}" <<EOF
+[Unit]
+Description=Tec-Tac sandbox sweep
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=${SANDBOX_HELPER} --sweep
+EOF
+cat > "${SANDBOX_SWEEP_TIMER}" <<EOF
+[Unit]
+Description=Run the Tec-Tac sandbox sweep at boot and daily
+
+[Timer]
+OnBootSec=3min
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=15min
+Unit=tec-tac-sandbox-sweep.service
+
+[Install]
+WantedBy=timers.target
+EOF
+chown root:root "${SANDBOX_SLICE}" "${SANDBOX_SLICE_DROPIN_DIR}" "${SANDBOX_SLICE_DROPIN_DIR}/limits.conf" "${SANDBOX_SWEEP_SERVICE}" "${SANDBOX_SWEEP_TIMER}"
+chmod 0644 "${SANDBOX_SLICE}" "${SANDBOX_SLICE_DROPIN_DIR}/limits.conf" "${SANDBOX_SWEEP_SERVICE}" "${SANDBOX_SWEEP_TIMER}"
+chmod 0755 "${SANDBOX_SLICE_DROPIN_DIR}"
+systemctl daemon-reload
+systemctl enable --now tec-tac-sandbox-sweep.timer >/dev/null
+log "Installed Core sandbox helper: ${SANDBOX_HELPER}"
+# The selftest probes this server. A failed or not-ready selftest never fails the Core install: the sandbox stays off, with its reason.
+if timeout "${SANDBOX_SELFTEST_TIMEOUT_SECONDS}s" "${SANDBOX_HELPER}" --selftest >/dev/null 2>&1; then
+    log "Sandbox selftest passed: this server can host the sandbox. It stays switched off in this Core release."
+else
+    SANDBOX_OFF_REASON="$("${SANDBOX_HELPER}" --status 2>/dev/null | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["status"]["reason"])' 2>/dev/null || true)"
+    [[ -n "${SANDBOX_OFF_REASON}" ]] || SANDBOX_OFF_REASON="the selftest did not finish"
+    log "WARNING: Sandbox is off: ${SANDBOX_OFF_REASON}. ai ChatGPT stays off."
+fi
+
 # Housekeeping trust boundary: the parent must not be writable by Tactical,
 # otherwise Tactical can replace root-owned running/results entries with
 # symlinks before the privileged helper touches them.
@@ -1101,6 +1182,12 @@ run_verify_step "Core Tactical operations capability" "${VERIFY_TACTICAL_OPERATI
 log "Verifying Core Tactical websocket ticket capability registration."
 VERIFY_TACTICAL_WEBSOCKET_CODE="from tec_tac.capabilities import capability_status,get_capability; s=capability_status('core.tactical_websocket',version='>=1,<2'); assert s['available'], s; p=get_capability('core.tactical_websocket',version='>=1,<2'); assert hasattr(p,'issue_ticket'), 'core.tactical_websocket provider incomplete'; print('TEC-TAC core.tactical_websocket OK:', s['capability_version'])"
 run_verify_step "Core Tactical websocket ticket capability" "${VERIFY_TACTICAL_WEBSOCKET_CODE}"
+
+# 1.17.116: core.sandbox is registered, status() answers, and start refuses with sandbox_disabled (the kill switch is off). The inner exec keeps
+# the try/except on one line of shell; it runs in the same namespace as this code.
+log "Verifying Core sandbox capability registration."
+VERIFY_SANDBOX_CODE="from tec_tac.capabilities import capability_status,get_capability; from tec_tac.sandbox import SandboxError; s=capability_status('core.sandbox',version='>=1,<2'); assert s['available'], s; p=get_capability('core.sandbox',version='>=1,<2'); st=p.status(); assert isinstance(st, dict) and st['enabled'] is False and 'ready' in st and isinstance(st['runners'], list), st; sandbox_code=None; exec('try:\n p.start()\nexcept SandboxError as e:\n sandbox_code=e.code'); assert sandbox_code=='sandbox_disabled', sandbox_code; print('TEC-TAC core.sandbox verification OK: ready=%s enabled=%s' % (st['ready'], st['enabled']))"
+run_verify_step "Core sandbox capability" "${VERIFY_SANDBOX_CODE}"
 
 
 SCHEDULER_SERVICE="/etc/systemd/system/tec-tac-scheduler.service"
