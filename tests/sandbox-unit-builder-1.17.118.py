@@ -39,7 +39,7 @@ joined_props = "\n".join(props)
 GOLDEN = [
     "DynamicUser=yes", "ProtectSystem=strict", "ProtectHome=yes", "PrivateTmp=yes", "PrivateDevices=yes", "PrivateIPC=yes", "NoNewPrivileges=yes",
     "CapabilityBoundingSet=", "AmbientCapabilities=", "SystemCallFilter=@system-service", "SystemCallFilter=~@privileged @resources",
-    "SystemCallArchitectures=native", "SystemCallErrorNumber=EPERM", "RestrictAddressFamilies=AF_INET AF_UNIX", "RestrictNamespaces=yes",
+    "SystemCallArchitectures=native", "SystemCallErrorNumber=EPERM", "RestrictAddressFamilies=AF_INET", "RestrictNamespaces=yes",
     "RestrictRealtime=yes", "RestrictSUIDSGID=yes", "LockPersonality=yes", "MemoryDenyWriteExecute=no", "ProtectKernelTunables=yes",
     "ProtectKernelModules=yes", "ProtectKernelLogs=yes", "ProtectControlGroups=yes", "ProtectClock=yes", "ProtectHostname=yes",
     "ProtectProc=invisible", "ProcSubset=pid", "UMask=0077", "KillMode=control-group", "SendSIGKILL=yes", "MemorySwapMax=0", "OOMPolicy=kill", "LimitNOFILE=1024",
@@ -47,7 +47,8 @@ GOLDEN = [
 ]
 for item in GOLDEN:
     must(props.count(item) == 1, (item, props.count(item)))
-must("RestrictAddressFamilies=AF_INET AF_UNIX" in props and "AF_INET6" not in joined_props, "no IPv6 (kept as a question for Johan)")
+must("RestrictAddressFamilies=AF_INET" in props and "AF_INET6" not in joined_props, "no IPv6 (kept as a question for Johan)")
+must("AF_UNIX" not in joined_props, "1.17.124: no AF_UNIX for a run (the abstract namespace is not reachable); tests/sandbox-unix-1.17.124.py proves the rest")
 # limits come from the row
 for item in ("MemoryMax=512M", "CPUQuota=50%", "TasksMax=100", f"LimitFSIZE={32 * 1024 * 1024}", "RuntimeMaxSec=65"):
     must(props.count(item) == 1, (item, [p for p in props if p.split("=")[0] == item.split("=")[0]]))

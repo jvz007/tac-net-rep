@@ -10,9 +10,10 @@ own throw-away abstract listener shows whether the namespace is shared at all.
 canary_summary: a SKIPPED row in any security group fails the canary (only 'public tcp 443', for a server with no public route, may be
 SKIPPED); canary.json lists the skipped rows.
 
-Decision recorded (AF_UNIX stays in RestrictAddressFamilies for runners): the runners are Node-based CLIs and libuv creates socketpair(AF_UNIX)
-pipes for child processes; seccomp cannot tell a pathname or abstract connect from a socketpair; the abstract namespace belongs to the network
-namespace, which IPAddressDeny does not change. So the unit does not keep abstract sockets out, the canary detects them. Nothing is widened.
+1.17.124 UPDATE: the 1.17.123 decision "AF_UNIX stays in RestrictAddressFamilies" is superseded. Runs now get AF_INET only, so socket(AF_UNIX)
+is refused before any connect (socketpair() and pipes are not covered by that filter). _abstract_connect therefore returns a three-state
+result (connected, unreachable, or refused at creation with the errno name), and the old two-outcome expectations below were changed to it.
+tests/sandbox-unix-1.17.124.py and tests/sandbox-abstract-cap-1.17.124.py cover the new rows and the list cap.
 
 Not runnable here: the real unit (dev02). The real AF_UNIX abstract listener case runs only on Linux and says so on other systems.
 """
@@ -82,17 +83,17 @@ rows = []
 runner.row = lambda attack, tag, actual: rows.append((attack, tag, actual))
 tried = []
 reachable = {"ISCSIADM_ABSTRACT_NAMESPACE"}
-runner._abstract_connect = lambda name: (tried.append(name) or name in reachable)
+runner._abstract_connect = lambda name: (tried.append(name) or (("connected" if name in reachable else "unreachable"), ""))
 runner.g_abstract({"abstract": names, "abstract_seconds": 30})
 must(tried == names, "every listed name was tried")
-must(rows == [("abstract sockets (4 listed)", "SUCCEEDED", "Medium finding R1, connected to: @ISCSIADM_ABSTRACT_NAMESPACE")], rows)
+must(rows == [("abstract sockets (4 listed)", "SUCCEEDED", "Medium finding R1, connected to: @ISCSIADM_ABSTRACT_NAMESPACE (4 listed, 0 left out)")], rows)
 rows.clear()
 reachable.clear()
 runner.g_abstract({"abstract": names, "abstract_seconds": 30})
-must(rows == [("abstract sockets (4 listed)", "OK", "none reachable")], rows)
+must(rows == [("abstract sockets (4 listed)", "OK", "none reachable (4 listed, 0 left out)")], rows)
 rows.clear()
 runner.g_abstract({"abstract": [], "abstract_seconds": 30})
-must(rows == [("abstract sockets (0 listed)", "OK", "none reachable")], "an empty list is a result, not a skip")
+must(rows == [("abstract sockets (0 listed)", "OK", "none reachable (0 listed, 0 left out)")], "an empty list is a result, not a skip")
 rows.clear()
 runner.g_abstract({"abstract_seconds": 30})
 must(rows == [], "no list in the plan prints nothing: the table says NOT RUN")
@@ -102,7 +103,7 @@ must('"SKIP"' not in body and "open(" not in body, "no SKIP path in the abstract
 # a name with control characters is shown cleaned by the real row(): one line, three tab separators, nothing else
 fresh = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fresh)
-fresh._abstract_connect = lambda name: True
+fresh._abstract_connect = lambda name: ("connected", "")
 captured = io.StringIO()
 with contextlib.redirect_stdout(captured):
     fresh.g_abstract({"abstract": ["evil" + chr(10) + "name" + chr(9) + chr(0)], "abstract_seconds": 30})
@@ -145,7 +146,7 @@ def collect(group, plan, **kwargs):
         lines = []
         saved = runner.row
         runner.row = lambda attack, tag, actual: lines.append(f"CANARYROW\t{attack}\t{tag}\t{actual}")
-        runner._abstract_connect = lambda name: name in OUT["abstract"]
+        runner._abstract_connect = lambda name: ("connected" if name in OUT["abstract"] else "unreachable", "")
         runner.time.monotonic = time.monotonic
         try:
             runner.g_abstract(plan)
@@ -176,23 +177,23 @@ sh.read_abstract_names = lambda: list(names)
 OUT["abstract"] = {"ISCSIADM_ABSTRACT_NAMESPACE"}
 table = sh.run_canary(status=STATUS, collect=collect, outside=Outside())
 plan, kwargs = PLANS["abstract"]
-must(plan["abstract"] == names and plan["abstract_seconds"] >= 30 and kwargs.get("run_seconds") == sh.CANARY_ABSTRACT_SECONDS and sh.CANARY_ABSTRACT_SECONDS > 20, (plan, kwargs))
-hit = [r for r in abstract_rows(table) if r["attack"].startswith("abstract sockets")]
+must(plan["abstract"] == names and plan["abstract_left_out"] == 0 and plan["abstract_seconds"] >= 30 and kwargs.get("run_seconds") == sh.CANARY_ABSTRACT_SECONDS and sh.CANARY_ABSTRACT_SECONDS > 20, (plan, kwargs))
+hit = [r for r in abstract_rows(table) if r["attack"].startswith("abstract sockets (")]
 must(len(hit) == 1 and hit[0]["verdict"] == "ATTACK SUCCEEDED" and "@ISCSIADM_ABSTRACT_NAMESPACE" in hit[0]["actual"] and "(4 listed)" in hit[0]["attack"], hit)
 must(sh.canary_summary(table)[0] is False, "a reachable host listener fails the canary")
 OUT["abstract"] = set()
 table = sh.run_canary(status=STATUS, collect=collect, outside=Outside())
-hit = [r for r in abstract_rows(table) if r["attack"].startswith("abstract sockets")]
+hit = [r for r in abstract_rows(table) if r["attack"].startswith("abstract sockets (")]
 must(hit[0]["verdict"] == "OK" and "(4 listed)" in hit[0]["attack"], hit)
 # root cannot read the list: the row is NOT RUN (the plan carries no list), never SKIPPED
 sh.read_abstract_names = lambda: None
 table = sh.run_canary(status=STATUS, collect=collect, outside=Outside())
 plan, _kwargs = PLANS["abstract"]
 must("abstract" not in plan, plan)
-hit = [r for r in abstract_rows(table) if r["attack"].startswith("abstract sockets")]
+hit = [r for r in abstract_rows(table) if r["attack"].startswith("abstract sockets (")]
 must(len(hit) == 1 and hit[0]["verdict"] == "NOT RUN" and not [r for r in table if r["verdict"] == "SKIPPED"], hit)
 must(sh.canary_summary(table)[0] is False, "NOT RUN fails")
-must(sh.CANARY_REQUIRED["abstract"] == ([], [("abstract sockets", 1)]), "the table requires the row")
+must(sh.CANARY_REQUIRED["abstract"] == ([], [("abstract sockets (", 1)]), "the table requires the main row (1.17.124: the prefix excludes the left-out information row)")
 
 # ---- canary_summary and canary.json: a skipped security row fails; only 'public tcp 443' may be skipped
 def row(attack, verdict, wall="X"):

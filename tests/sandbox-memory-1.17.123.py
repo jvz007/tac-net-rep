@@ -12,6 +12,11 @@ then records 'exit-code', not 'oom-kill', so the helper reported 'exited' and th
   below MemoryMax plus one block; allocating past it, or finishing normally, is ATTACK SUCCEEDED; no end frame is NOT RUN; the actual
   column always names the MiB and how the run ended.
 
+1.17.124 UPDATE: the row rule below ("stopped = oom or exit 137, plus one block of slack") is superseded; the expectations in the row section
+of this file were changed to the new rule (OK only with kernel evidence or a refused allocation, no slack, NOT RUN for an unexplained end such
+as exit 137 or exit 1 with no oom_kills). tests/sandbox-memory-1.17.124.py has the full table. The unit properties and the progress line
+checks here are unchanged.
+
 Not runnable here: the real kernel kill (dev02 runs tests/sandbox-canary-1.17.123.sh).
 """
 from __future__ import annotations
@@ -65,7 +70,7 @@ with contextlib.redirect_stdout(out):
     runner.g_mem({"alloc_mb": 48})
 lines = out.getvalue().splitlines()
 must(lines[:3] == ["CANARYMEM\t16", "CANARYMEM\t32", "CANARYMEM\t48"], lines)
-must(lines[3].startswith("CANARYROW\tmemory beyond MemoryMax\tSUCCEEDED\tallocated 48 MiB"), lines)
+must(lines[3].startswith("CANARYROW\tmemory beyond MemoryMax\tSUCCEEDED\tallocated 48 MiB") and lines[4] == "CANARYEND\tdone", lines)
 P = sh.parse_progress
 must(P(out.getvalue().encode()) == 48 and P(b"CANARYMEM\t16\nCANARYMEM\t32\n") == 32 and P(b"") is None and P(b"CANARYMEM\tx\n") is None, "last number wins")
 must(P(b"CANARYROW\tx\tOK\tCANARYMEM\t99\nCANARYMEM\t5\n") == 5, "only a line that is exactly the progress line counts")
@@ -86,13 +91,13 @@ def row(mib, reason, exit_code=None, peak=None, refused=None, end=True):
 
 
 killed = row(112, "exited", 137, peak=127.9)
-must(killed["verdict"] == "OK" and "allocated 112 MiB" in killed["actual"] and "ended exited (exit 137)" in killed["actual"], killed)  # 1.17.122 said ATTACK SUCCEEDED here
+must(killed["verdict"] == "NOT RUN" and "allocated 112 MiB" in killed["actual"] and "ended exited (exit 137)" in killed["actual"], killed)  # 1.17.124: no oom evidence, so not OK
 oom = row(112, "oom", 137, peak=128.0)
 must(oom["verdict"] == "OK" and "allocated 112 MiB, ended oom" in oom["actual"], oom)
 at_limit = row(128 + 16, "exited", 137)
-must(at_limit["verdict"] == "OK" and "allocated 144 MiB" in at_limit["actual"], "MemoryMax plus one block is still inside the rule")
+must(at_limit["verdict"] == "ATTACK SUCCEEDED" and "allocated 144 MiB" in at_limit["actual"], "1.17.124: no slack above MemoryMax any more")
 none_yet = sh.memory_row({"stdout": b"", "refused": None, "end": {"reason": "oom", "exit": 137, "peak_mb": 10.0}}, LIMIT)
-must(none_yet["verdict"] == "OK" and "allocated 0 MiB" in none_yet["actual"], none_yet)
+must(none_yet["verdict"] == "OK" and "no allocation reported" in none_yet["actual"], none_yet)
 past = row(600, "exited", 0)
 must(past["verdict"] == "ATTACK SUCCEEDED" and "allocated 592 MiB, ended exited (exit 0)" in past["actual"], past)  # the 1.17.122 logic said OK for 'oom' and attack for the rest
 past_killed = row(160, "exited", 137)
@@ -101,8 +106,8 @@ past_oom = row(600, "oom", 137)
 must(past_oom["verdict"] == "ATTACK SUCCEEDED", "an oom label does not excuse a 592 MiB allocation")
 normal = row(128, "exited", 0)
 must(normal["verdict"] == "ATTACK SUCCEEDED", "finishing normally is an attack that succeeded, whatever it allocated")
-must(row(112, "timeout")["verdict"] == "ATTACK SUCCEEDED" and row(112, "cancelled")["verdict"] == "ATTACK SUCCEEDED", "stopped by something else is not the memory wall")
-must(row(112, "exited", 1)["verdict"] == "ATTACK SUCCEEDED", "an ordinary non-zero exit is not a kill")
+must(row(112, "timeout")["verdict"] == "NOT RUN" and row(112, "cancelled")["verdict"] == "NOT RUN", "stopped by something else is not the memory wall (1.17.124: unexplained, NOT RUN)")
+must(row(112, "exited", 1)["verdict"] == "NOT RUN", "1.17.124: dev02's exit 1 with no evidence is NOT RUN, neither OK nor an attack")
 big_peak = row(112, "exited", 137, peak=300.0)
 must(big_peak["verdict"] == "ATTACK SUCCEEDED" and "peak 300.0 MiB" in big_peak["actual"], "the handoff memory peak is over the limit")
 must(row(112, "oom", 137, peak=None)["verdict"] == "OK", "no peak reported: the allocation alone decides")
@@ -121,7 +126,7 @@ def collect(group, plan, **kwargs):
     calls.append((group, plan, kwargs))
     base = {"stdout": b"", "stderr": b"", "refused": None, "run_id": "r"}
     if group == "mem":
-        return {**base, "stdout": stdout_for(112), "end": {"reason": "exited", "exit": 137, "peak_mb": 127.0}}
+        return {**base, "stdout": stdout_for(112), "end": {"reason": "exited", "exit": 137, "peak_mb": 127.0, "oom_kills": 1}}
     if group == "loop":
         return {**base, "end": {"reason": "timeout", "exit": None}}
     if group == "flood":

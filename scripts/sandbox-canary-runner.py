@@ -19,10 +19,16 @@ import json
 import os
 import socket
 import struct
+import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 ROWS = []
+ROW_LOCK = threading.Lock()  # 1.17.124: the loopback probes run in threads; one lock keeps every line whole
+LOOPBACK_WORKERS = 12
+LOOPBACK_PROBE_SECONDS = 1.0
 
 
 def clean(value, limit):
@@ -31,7 +37,10 @@ def clean(value, limit):
 
 def row(attack, tag, actual):
     """One result line. Every field is cleaned, so a path with a tab or a newline in it cannot break the line format."""
-    print(f"CANARYROW	{clean(attack, 200)}	{clean(tag, 20)}	{clean(actual, 300)}", flush=True)
+    line = f"CANARYROW\t{clean(attack, 200)}\t{clean(tag, 20)}\t{clean(actual, 300)}\n"
+    with ROW_LOCK:
+        sys.stdout.write(line)
+        sys.stdout.flush()
 
 
 def libc():
@@ -113,39 +122,158 @@ def g_work_peer(plan):
     row("another run's /work", "SUCCEEDED" if seen else "OK", "visible" if seen else "not found")
 
 
+def _errname(exc):
+    return errno.errorcode.get(exc.errno, "error")
+
+
 def g_sockets(plan):
+    """Pathname unix sockets of the host's services. 1.17.124: runs no longer get AF_UNIX (RestrictAddressFamilies=AF_INET), so socket() itself is
+    refused (EAFNOSUPPORT) before any connect; the socket is therefore made inside the try and a refusal at creation is OK. Only a connect that
+    works is SUCCEEDED. All 13 rows are always printed."""
     paths = ["/var/run/postgresql/.s.PGSQL.5432", "/run/postgresql/.s.PGSQL.5432", "/var/run/redis/redis-server.sock",
              "/run/redis/redis-server.sock", "/run/redis/redis.sock", "/var/run/redis/redis.sock", "/run/nats/nats.sock",
              "/rmm/api/tacticalrmm/tacticalrmm.sock", "/run/tactical/tacticalrmm.sock", "/run/uwsgi/tactical.sock",
              "/var/run/docker.sock", "/run/dbus/system_bus_socket", "/run/systemd/private"]
     for path in paths:
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        s.settimeout(1)
+        s = None
         try:
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.settimeout(1)
             s.connect(path)
             row("unix " + path, "SUCCEEDED", "connected")
         except OSError as exc:
-            row("unix " + path, "OK", errno.errorcode.get(exc.errno, "error"))
+            row("unix " + path, "OK", ("socket creation refused: " if s is None else "") + _errname(exc))
         finally:
+            if s is not None:
+                s.close()
+    unix_creation_rows()
+    control_rows()
+
+
+UNIX_KINDS = (("stream", "SOCK_STREAM"), ("dgram", "SOCK_DGRAM"), ("seqpacket", "SOCK_SEQPACKET"))
+UNIX_REFUSED = (errno.EAFNOSUPPORT, errno.EPERM)
+
+
+def unix_creation_rows():
+    """1.17.124: the filter itself. Creating an AF_UNIX socket must fail with EAFNOSUPPORT or EPERM; a socket that is created means the
+    address family filter is not in force (ATTACK SUCCEEDED). Any other error is not evidence (NOTRUN)."""
+    for label, constant in UNIX_KINDS:
+        name = f"unix socket creation refused ({label})"
+        try:
+            s = socket.socket(socket.AF_UNIX, getattr(socket, constant, 0))
+        except OSError as exc:
+            if exc.errno in UNIX_REFUSED:
+                row(name, "OK", _errname(exc))
+            else:
+                row(name, "NOTRUN", "unexpected error " + _errname(exc))
+        except (AttributeError, ValueError) as exc:
+            row(name, "NOTRUN", "cannot try: " + type(exc).__name__)
+        else:
             s.close()
+            row(name, "SUCCEEDED", "the socket was created: the address family filter is not in force")
+    name = "unix pathname socket refused"
+    path = os.path.join(os.environ.get("SANDBOX_WORK", "/work"), "canary.sock")
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    except OSError as exc:
+        if exc.errno in UNIX_REFUSED:
+            row(name, "OK", _errname(exc))
+        else:
+            row(name, "NOTRUN", "unexpected error " + _errname(exc))
+        return
+    try:
+        s.bind(path)
+        row(name, "SUCCEEDED", "bound a unix socket in /work")
+    except OSError as exc:
+        row(name, "SUCCEEDED", "the socket was created (bind failed: " + _errname(exc) + ")")
+    finally:
+        s.close()
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+def _control(name, check):
+    """A positive control: it must work. Anything else is NOTRUN ('control failed'), never an attack, and it fails the canary."""
+    try:
+        detail = check()
+    except BaseException as exc:  # a control must never take the group down
+        row(name, "NOTRUN", "control failed: " + type(exc).__name__)
+        return
+    if detail:
+        row(name, "OK", detail)
+    else:
+        row(name, "NOTRUN", "control failed")
+
+
+def _socketpair_check():
+    a, b = socket.socketpair()
+    try:
+        a.settimeout(2)
+        b.settimeout(2)
+        a.sendall(b"ping")
+        got = b.recv(16)
+        b.sendall(b"pong")
+        return "worked" if got == b"ping" and a.recv(16) == b"pong" else ""
+    finally:
+        a.close()
+        b.close()
+
+
+def _pipe_check():
+    r, w = os.pipe()
+    try:
+        os.write(w, b"ping")
+        return "worked" if os.read(r, 16) == b"ping" else ""
+    finally:
+        os.close(r)
+        os.close(w)
+
+
+def _child_pipes_check():
+    data = b"canary\x00\xff" * 100
+    done = subprocess.run([sys.executable, "-I", "-c", "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read()[::-1])"], input=data,
+                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=15, check=False)
+    return "worked" if done.returncode == 0 and done.stdout == data[::-1] else ""
+
+
+def control_rows():
+    """1.17.124 positive controls: what the CLIs rely on must still work without AF_UNIX (socketpair() and pipes are not covered by the
+    address family filter, and a child process gets its stdio over pipes)."""
+    _control("socketpair round trip", _socketpair_check)
+    _control("pipe round trip", _pipe_check)
+    _control("child process with stdio pipes", _child_pipes_check)
 
 
 def g_loopback(plan):
+    """Every listening port on 127.0.0.1 and the whole stub (1.17.123), probed in parallel (1.17.124). A dropped SYN times out instead of
+    failing, so one at a time the 20 s budget ran out before the stub rows. Stub probes go first, then 127.0.0.1, then ::1; at most 12 workers
+    (TasksMax counts threads); about 1 s per probe; a probe that would start or finish after ``loopback_seconds`` prints nothing and the helper's
+    table says NOT RUN. Result words are unchanged: connected is SUCCEEDED, a timeout or an errno is OK."""
     ports = [int(p) for p in plan.get("ports", [])]
-    for host in ("127.0.0.1", "::1"):
-        family = socket.AF_INET6 if ":" in host else socket.AF_INET
-        for port in ports:
-            try:
-                result = tcp_connect(host, port, family=family)
-            except OSError as exc:
-                result = errno.errorcode.get(exc.errno, "error")
-            row(f"loopback {host}:{port}", "SUCCEEDED" if result == "connected" else "OK", result)
-    # 1.17.123: nothing is allowed on the stub any more (the upstream resolver is public), so every port on it must refuse too
     stub = plan.get("stub", "")
+    jobs = []
     if stub:
-        for port in [int(p) for p in plan.get("stub_ports", [])]:
-            result = tcp_connect(stub, port)
-            row(f"loopback {stub}:{port}", "SUCCEEDED" if result == "connected" else "OK", result)
+        jobs += [(stub, int(p), socket.AF_INET) for p in plan.get("stub_ports", [])]
+    jobs += [("127.0.0.1", p, socket.AF_INET) for p in ports]
+    jobs += [("::1", p, socket.AF_INET6) for p in ports]
+    deadline = time.monotonic() + float(plan.get("loopback_seconds", 15))
+
+    def probe(job):
+        host, port, family = job
+        if time.monotonic() >= deadline:
+            return
+        try:
+            result = tcp_connect(host, port, timeout=LOOPBACK_PROBE_SECONDS, family=family)
+        except OSError as exc:
+            result = errno.errorcode.get(exc.errno, "error")
+        if time.monotonic() >= deadline:
+            return
+        row(f"loopback {host}:{port}", "SUCCEEDED" if result == "connected" else "OK", result)
+
+    with ThreadPoolExecutor(max_workers=LOOPBACK_WORKERS) as pool:
+        list(pool.map(probe, jobs))
 
 
 def _reached(tcp_result):
@@ -254,15 +382,27 @@ def g_processes(plan):
 
 def g_mem(plan):
     """Allocate in 16 MiB blocks and report the total after each one (flushed), so the helper still knows how far the run got when the kernel
-    kills it. The line is not a table row: the root helper reads the last CANARYMEM number."""
+    kills it. The lines are not table rows: the root helper reads the last CANARYMEM number and the CANARYEND word, which names how the
+    probe ended (memoryerror, enomem, other:<ExceptionName>, done). A SIGKILL from the kernel prints no end word; the helper then needs the
+    kernel's own oom_kill counter."""
     blocks = []
+    ended = "done"
     try:
         for _ in range(int(plan.get("alloc_mb", 600)) // 16):
             blocks.append(bytearray(b"\x01") * (16 * 1024 * 1024))
-            print(f"CANARYMEM	{len(blocks) * 16}", flush=True)
+            print(f"CANARYMEM\t{len(blocks) * 16}", flush=True)
         row("memory beyond MemoryMax", "SUCCEEDED", f"allocated {len(blocks) * 16} MiB")
     except MemoryError:
+        ended = "memoryerror"
         row("memory beyond MemoryMax", "OK", f"MemoryError after {len(blocks) * 16} MiB")
+    except OSError as exc:
+        ended = "enomem" if exc.errno == errno.ENOMEM else "other:" + type(exc).__name__
+        raise
+    except BaseException as exc:
+        ended = "other:" + type(exc).__name__
+        raise
+    finally:
+        print(f"CANARYEND\t{clean(ended, 60)}", flush=True)
 
 
 def g_fork(plan):
@@ -314,46 +454,72 @@ def g_flood(plan):
 
 
 def _abstract_connect(name):
-    """True when an abstract unix socket (the name's bytes are kept exactly, latin-1) accepts a connection from here, stream or seqpacket."""
+    """How an abstract unix socket (the name's bytes are kept exactly, latin-1) answers: ('connected', ''), ('unreachable', '') when a socket
+    was made and the connect failed, or ('refused', <errno name>) when no socket could be made at all (1.17.124: AF_UNIX is not allowed).
+    Stream and seqpacket are both tried. It never raises for a creation failure."""
     address = b"\0" + name.encode("latin-1", "replace")
+    refused, tried = "", False
     for kind in (socket.SOCK_STREAM, getattr(socket, "SOCK_SEQPACKET", socket.SOCK_STREAM)):
-        s = socket.socket(socket.AF_UNIX, kind)
+        try:
+            s = socket.socket(socket.AF_UNIX, kind)
+        except OSError as exc:
+            refused = errno.errorcode.get(exc.errno, "error")
+            continue
+        tried = True
         s.settimeout(0.3)
         try:
             s.connect(address)
-            return True
+            return "connected", ""
         except OSError:
             pass
         finally:
             s.close()
-    return False
+    if not tried and refused:
+        return "refused", refused
+    return "unreachable", ""
 
 
 def g_abstract(plan):
     """1.17.123: root lists the host's abstract listeners before the run (this unit cannot read /proc/net/unix) and passes them in the plan;
     every one is tried here and only a name and a verdict are printed, never any content. No list in the plan prints nothing (the table says
-    NOT RUN). Information only: whether a throw-away listener of root's own is reachable shows whether the abstract namespace is shared."""
+    NOT RUN). Information only: whether a throw-away listener of root's own is reachable shows whether the abstract namespace is shared.
+    1.17.124: with AF_UNIX gone, creating the socket is refused; every name refused at creation is OK 'all refused', a name that connects is
+    SUCCEEDED. The plan may say how many names root left out to keep the plan under the 64 KiB stdin read (abstract_left_out); the count is
+    shown, and every left-out name is covered by the 'unix socket creation refused' rows."""
     probe = plan.get("abstract_probe")
     if probe:
-        shared = _abstract_connect(probe)
+        state, why = _abstract_connect(probe)
         row("abstract probe listener (information)", "OK",
-            "reachable: the abstract namespace is shared with the host" if shared else "not reachable from this unit")
+            "reachable: the abstract namespace is shared with the host" if state == "connected"
+            else f"not reachable from this unit (socket refused: {why})" if state == "refused" else "not reachable from this unit")
+    left_out = int(plan.get("abstract_left_out") or 0)
+    if "abstract_left_out" in plan:
+        row("abstract sockets left out (information)", "OK", f"{left_out} left out (covered by the unix socket creation rows)")
     if "abstract" not in plan:
         return
     names = [str(n) for n in plan.get("abstract", [])]
     deadline = time.monotonic() + float(plan.get("abstract_seconds", 40))
-    reached, tried = [], 0
+    reached, refused, tried = [], [], 0
     for name in names:
         if time.monotonic() > deadline:
             break
         tried += 1
-        if _abstract_connect(name):
+        state, why = _abstract_connect(name)
+        if state == "connected":
             reached.append(name)
+        elif state == "refused":
+            refused.append(why)
+    counts = f"{len(names)} listed, {left_out} left out"
     if tried < len(names):
         row(f"abstract sockets ({len(names)} listed)", "NOTRUN", f"only {tried} of {len(names)} could be tried in time")
         return
-    row(f"abstract sockets ({len(names)} listed)", "SUCCEEDED" if reached else "OK",
-        ("Medium finding R1, connected to: " + ", ".join("@" + n for n in reached[:5])) if reached else "none reachable")
+    if reached:
+        row(f"abstract sockets ({len(names)} listed)", "SUCCEEDED",
+            "Medium finding R1, connected to: " + ", ".join("@" + n for n in reached[:5]) + f" ({counts})")
+    elif names and len(refused) == len(names):
+        row(f"abstract sockets ({len(names)} listed)", "OK", f"all refused: {refused[0]} ({counts})")
+    else:
+        row(f"abstract sockets ({len(names)} listed)", "OK", f"none reachable ({counts})")
 
 
 def g_cred(plan):
@@ -401,8 +567,11 @@ def main(argv=None):
     try:
         plan = json.loads(raw) if raw.strip() else {}
     except ValueError:
-        plan = {}
-    GROUPS[args[0]](plan if isinstance(plan, dict) else {})
+        plan = None
+    if not isinstance(plan, dict):  # 1.17.124: a plan cut at the 64 KiB read must never look like an absent row
+        row("plan unreadable", "NOTRUN", f"the plan for {args[0]} did not parse ({len(raw)} characters read)")
+        return 0
+    GROUPS[args[0]](plan)
     return 0
 
 

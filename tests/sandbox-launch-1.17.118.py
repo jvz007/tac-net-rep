@@ -454,7 +454,7 @@ reply_dir = sh.HANDOFF_ROOT
 rid = os.urandom(16).hex()
 must(sh.finish_run(rid, {"SERVICE_RESULT": "oom-kill"}) == 0, "")
 handoff = json.loads((sh.HANDOFF_ROOT / f"{rid}.json").read_text(encoding="utf-8"))
-must(handoff == {"cpu_ns": 1000, "memory_peak": 52428800, "result": "oom-kill"} and CHMODS[norm(sh.HANDOFF_ROOT / f"{rid}.json")] == 0o600, handoff)
+must(handoff == {"cpu_ns": 1000, "memory_peak": 52428800, "result": "oom-kill", "oom_kills": None} and CHMODS[norm(sh.HANDOFF_ROOT / f"{rid}.json")] == 0o600, handoff)
 must(sh.read_handoff(rid)["result"] == "oom-kill" and not (sh.HANDOFF_ROOT / f"{rid}.json").exists(), "read once, then deleted")
 for bad in ("../x", "abc", "G" * 32, ""):
     try:

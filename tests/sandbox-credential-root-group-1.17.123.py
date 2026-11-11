@@ -90,7 +90,7 @@ must(run(uid=U, gid="61999", acl="ACL none")["ready"] is False, "any dynamic gid
 # the correction is on record
 notes = (H.ROOT / "docs" / "releases" / "RELEASE_NOTES_1.17.122.md").read_text(encoding="utf-8")
 must("Correction (Core 1.17.123)" in notes and "not a pure narrowing" in notes and "61184" in notes and "group root" in notes, "the 1.17.122 notes carry the correction")
-new = (H.ROOT / "RELEASE_NOTES_1.17.123.md").read_text(encoding="utf-8")
+new = (H.ROOT / "docs" / "releases" / "RELEASE_NOTES_1.17.123.md").read_text(encoding="utf-8")
 must("not a pure narrowing" in new and "ACL" in new and "61184" in new, "the 1.17.123 notes say it plainly too")
 
 print("[TEST] PASS sandbox credential root group 1.17.123")

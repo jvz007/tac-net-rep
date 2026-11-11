@@ -45,7 +45,7 @@ verdicts = {r["attack"]: r["verdict"] for r in table}
 must(verdicts["setuid(0)"] == "OK" and verdicts["mount"] == "NOT RUN" and verdicts["raw socket"] == "NOT RUN" and len(table) == 8, verdicts)
 table = sh.group_table("Public", "public", "x", [{"attack": "public tcp 443", "tag": "SKIP", "actual": "no public route"}])
 must(table[0]["verdict"] == "SKIPPED" and table[0]["verdict"] != "OK", table)
-table = sh.group_table("Sockets", "sockets", "x", [{"attack": "unix a", "tag": "OK", "actual": "ENOENT"}] * 5)
+table = sh.group_table("Sockets", "sockets", "x", [{"attack": "unix /a", "tag": "OK", "actual": "ENOENT"}] * 5)
 must(any(r["verdict"] == "NOT RUN" and "5 of 13" in r["actual"] for r in table), table)
 table = sh.group_table("Files", "files", "x", [], plan_names=["read /etc/x"])
 must(table[0]["verdict"] == "NOT RUN", "a planted marker with no result is NOT RUN")
@@ -66,7 +66,10 @@ def lines(*pairs):
     return ("\n".join(f"CANARYROW\t{a}\t{t}\t{d}" for a, t, d in pairs) + "\n").encode()
 
 
-FILES_SOCKS = [(f"unix /s{k}", "OK", "ENOENT") for k in range(13)]
+FILES_SOCKS = [(f"unix /s{k}", "OK", "ENOENT") for k in range(13)] + [
+    (f"unix socket creation refused ({k})", "OK", "EAFNOSUPPORT") for k in ("stream", "dgram", "seqpacket")] + [
+    ("unix pathname socket refused", "OK", "EAFNOSUPPORT"), ("socketpair round trip", "OK", "worked"), ("pipe round trip", "OK", "worked"),
+    ("child process with stdio pipes", "OK", "worked")]  # 1.17.124: the filter rows and the positive controls
 GOOD = {
     "files": None, "work_peer": lines(("another run's /work", "OK", "not found")), "sockets": lines(*FILES_SOCKS),
     "loopback": lines(("loopback 127.0.0.1:80", "OK", "EPERM"), *[(f"loopback 127.0.0.53:{p}", "OK", "EPERM") for p in (22, 80, 443, 1024, 4430, 4433)]),
@@ -104,7 +107,8 @@ def make_collect(overrides=None, boom_on=None):
         elif group in GOOD:
             result["stdout"] = GOOD[group]
         if group == "mem":
-            result["end"] = {"reason": "oom"}
+            result["stdout"] = b"CANARYMEM" + chr(9).encode() + b"112" + chr(10).encode()  # 1.17.124: the memory row needs evidence (allocated MiB and the kernel's oom_kills)
+            result["end"] = {"reason": "oom", "oom_kills": 1, "peak_mb": 127.0}
         elif group == "loop":
             result["end"] = {"reason": "timeout"}
         elif group == "flood":
@@ -158,7 +162,7 @@ for wall in ("Files", "Sockets", "Loopback", "LAN", "DNS", "Public", "Privilege"
 # plan details handed to the unit (1.17.123): listening ports and the stub with the six ports that connected on dev02; the own address and
 # the gateway for the LAN group; the host's own resolv.conf entries (and always the stub) for the DNS group
 must(PLANS["loopback"]["ports"] == [22, 53, 443, 5432] and PLANS["loopback"]["stub"] == "127.0.0.53", PLANS["loopback"])
-must(PLANS["loopback"]["stub_ports"] == [22, 53, 80, 443, 1024, 4430, 4433, 5432], PLANS["loopback"])
+must(PLANS["loopback"]["stub_ports"] == [22, 80, 443, 1024, 4430, 4433, 53, 5432], PLANS["loopback"])  # 1.17.124: the six stub ports first
 must("resolver" not in PLANS["loopback"] and "resolver_ports" not in PLANS["loopback"], "the old resolver rows are gone")
 must(PLANS["lan"]["lan"][0] == "10.255.255.254" and "169.254.169.254" in PLANS["lan"]["lan"] and len(PLANS["lan"]["lan"]) == 5, PLANS["lan"])
 must(PLANS["lan"]["own"] == ["192.168.1.5"] and PLANS["lan"]["gateways"] == ["192.168.1.1"], PLANS["lan"])

@@ -191,7 +191,8 @@ DNS_PROBE_NAME = "example.com"
 RESOLV_UPSTREAM = "/run/systemd/resolve/resolv.conf"  # 1.17.123: the upstream list a run's Core-owned resolv.conf is built from
 RESOLVERS_MAX = 3
 LOCAL_DENY_MAX = 64  # 1.17.123: most local addresses and gateways added to a unit's IPAddressDeny (those already inside the ranges are not counted)
-MEMORY_BLOCK_MIB = 16  # the canary's memory probe allocates in blocks of this size and reports after each
+MEMORY_BLOCK_MIB = 16  # kept for older callers; 1.17.124 no longer allows a block of slack over MemoryMax
+CGROUP_ROOT = Path("/sys/fs/cgroup")  # a test replaces this
 ZSWAP_MIN_SYSTEMD = 255  # MemoryZSwapMax= is only added from this systemd version on (an unknown property must not make every start fail)
 UNIT_TIMEOUT_SECONDS = 30
 PROBE_PROPERTIES = {
@@ -1890,7 +1891,7 @@ def build_properties(row, run_id, *, credential_names, exists=os.path.lexists, d
         "DynamicUser=yes", "ProtectSystem=strict", "ProtectHome=yes", "PrivateTmp=yes", "PrivateDevices=yes", "PrivateIPC=yes",
         "NoNewPrivileges=yes", "CapabilityBoundingSet=", "AmbientCapabilities=",
         "SystemCallFilter=@system-service", "SystemCallFilter=~@privileged @resources", "SystemCallArchitectures=native",
-        "SystemCallErrorNumber=EPERM", "RestrictAddressFamilies=AF_INET AF_UNIX", "RestrictNamespaces=yes", "RestrictRealtime=yes",
+        "SystemCallErrorNumber=EPERM", "RestrictAddressFamilies=AF_INET", "RestrictNamespaces=yes", "RestrictRealtime=yes",
         "RestrictSUIDSGID=yes", "LockPersonality=yes", "MemoryDenyWriteExecute=no", "ProtectKernelTunables=yes",
         "ProtectKernelModules=yes", "ProtectKernelLogs=yes", "ProtectControlGroups=yes", "ProtectClock=yes", "ProtectHostname=yes",
         "ProtectProc=invisible", "ProcSubset=pid", "UMask=0077", "KillMode=control-group", "SendSIGKILL=yes",
@@ -2100,10 +2101,38 @@ def finish_run(run_id, environ=None):
         if len(values) >= 2:
             peak = int(values[0]) if values[0].isdigit() else None
             cpu = int(values[1]) if values[1].isdigit() else None
+    oom_kills, cgroup_peak = read_cgroup_memory(run_id)
+    if peak is None:
+        peak = cgroup_peak
     result = re.sub(r"[^a-z-]", "", str(environ.get("SERVICE_RESULT", ""))[:32])
     HANDOFF_ROOT.mkdir(parents=True, exist_ok=True)
-    _write_private(handoff_path(run_id), _json_bytes({"memory_peak": peak, "cpu_ns": cpu, "result": result}))
+    _write_private(handoff_path(run_id), _json_bytes({"memory_peak": peak, "cpu_ns": cpu, "result": result, "oom_kills": oom_kills}))
     return 0
+
+
+def read_cgroup_memory(run_id):
+    """1.17.124: (oom_kill count, memory.peak in bytes) from the unit's own cgroup while it still exists (ExecStopPost runs before it goes).
+    ``systemd-run --wait`` returns 1 for a unit ended by a signal and MemoryPeak can be empty, so the kernel's own counter is the evidence the
+    canary's memory row needs. Either value is None when it cannot be read (a missing file is never an error)."""
+    code, out, _err = systemctl("show", unit_name(run_id) + ".service", "-P", "ControlGroup")
+    path = out.strip() if code == 0 else ""
+    if not path.startswith("/") or ".." in path.split("/") or "\x00" in path:
+        return None, None
+    folder = CGROUP_ROOT / path.lstrip("/")
+    oom_kills, peak = None, None
+    try:
+        for line in (folder / "memory.events").read_text(encoding="ascii", errors="replace").splitlines():
+            parts = line.split()
+            if len(parts) == 2 and parts[0] == "oom_kill" and parts[1].isdigit():
+                oom_kills = int(parts[1])
+    except (OSError, ValueError):
+        pass
+    try:
+        text = (folder / "memory.peak").read_text(encoding="ascii", errors="replace").strip()
+        peak = int(text) if text.isdigit() else None
+    except (OSError, ValueError):
+        pass
+    return oom_kills, peak
 
 
 # ------------------------------------------------------------------------------------------------------------- the launch
@@ -2287,9 +2316,11 @@ def _supervise(process, row, run_id, input_data, emit, stdin_eof, started_at, cl
             reason = "exited"
     credential = parser.credential if row.get("credential_return") else None
     peak = handoff.get("memory_peak")
+    oom_kills = handoff.get("oom_kills")
     end = {
         "t": "end", "exit": None if reason == "start_failed" else code, "reason": reason, "ms": int((clock() - started_at) * 1000),
         "peak_mb": round(peak / 1048576, 1) if isinstance(peak, int) else None,
+        "oom_kills": oom_kills if isinstance(oom_kills, int) and not isinstance(oom_kills, bool) else None,
         "credential_b64": base64.b64encode(credential).decode("ascii") if credential is not None else None,
         "bytes_out": sent["out"], "bytes_err": sent["err"],
     }
@@ -2392,17 +2423,22 @@ CANARY_PUBLIC_TARGET = "1.1.1.1"
 VERDICTS = ("OK", "ATTACK SUCCEEDED", "SKIPPED", "NOT RUN", "WARN")
 CANARY_STUB = "127.0.0.53"  # 1.17.123: systemd-resolved's stub; no longer allowed for anyone, so every port on it must refuse
 CANARY_STUB_PORTS = (22, 80, 443, 1024, 4430, 4433)  # the six rows that connected in the 1.17.122 dev02 run
+ACTUAL_COLUMN_MAX = 140
 CANARY_ABSTRACT_MAX = 200
 CANARY_ABSTRACT_SECONDS = 60
+CANARY_ABSTRACT_BUDGET = 49152  # characters of json.dumps(list of names): keeps the whole plan under the runner's 64 KiB stdin read
+CANARY_LOOPBACK_SECONDS = 60  # the loopback group's run time (under the Core ceiling); probes stop at loopback_seconds inside it
+CANARY_LOOPBACK_DEADLINE = 40
 CANARY_SKIP_ALLOWED = ("public tcp 443",)  # the only row that may be SKIPPED (no public route from this server); any other SKIPPED row fails the canary
 CANARY_REQUIRED = {  # group -> (exact attack names, [(prefix, minimum count)])
-    "sockets": ([], [("unix ", 13)]),
+    "sockets": (["unix socket creation refused (stream)", "unix socket creation refused (dgram)", "unix socket creation refused (seqpacket)",
+                 "unix pathname socket refused", "socketpair round trip", "pipe round trip", "child process with stdio pipes"], [("unix /", 13)]),
     "privilege": (["setuid(0)", "ptrace attach to parent", "mount", "unshare", "mknod", "raw socket", "write /proc/sys", "load a kernel module"], []),
     "writes": ([], [("write /", 9)]),
     "processes": (["host processes invisible", "pid 1 invisible"], []),
     "mem": (["memory beyond MemoryMax"], []), "fork": (["fork bomb"], []), "scratch": (["scratch past its size"], []),
     "cred": (["credential arrives", "credential mode", "credential not in environment"], []),
-    "dns": (["allowed resolver answers"], [("other resolver ", 1)]), "public": (["public tcp 443"], []), "abstract": ([], [("abstract sockets", 1)]),
+    "dns": (["allowed resolver answers"], [("other resolver ", 1)]), "public": (["public tcp 443"], []), "abstract": ([], [("abstract sockets (", 1)]),
     "work_peer": (["another run's /work"], []), "lan": ([], [("udp ", 5), ("tcp ", 5), ("own address ", 4)]),
     "loopback": ([], [("loopback ", 1), ("loopback " + CANARY_STUB + ":", len(CANARY_STUB_PORTS))]),
 }
@@ -2502,6 +2538,18 @@ def parse_abstract_sockets(data):
         if len(names) >= CANARY_ABSTRACT_MAX:
             break
     return names
+
+
+def fit_abstract_names(names, budget=CANARY_ABSTRACT_BUDGET):
+    """1.17.124: (kept, left_out_count). Names are added in order while the exact ``json.dumps`` length of the kept list stays within the
+    budget (the plan is sent with ensure_ascii, so a latin-1 byte costs up to six characters and 200 long names can pass the runner's 64 KiB
+    read, which would make the plan unreadable). A left-out name is still covered by the 'unix socket creation refused' rows."""
+    kept = []
+    for name in names:
+        if len(json.dumps(kept + [name])) > budget:
+            break
+        kept.append(name)
+    return kept, len(names) - len(kept)
 
 
 def read_abstract_names(path="/proc/net/unix"):
@@ -2667,7 +2715,7 @@ def run_canary(*, status=None, collect=None, outside=None):
     abstract_names = read_abstract_names()
     abstract_plan = {"abstract_seconds": CANARY_ABSTRACT_SECONDS - 20}
     if abstract_names is not None:
-        abstract_plan["abstract"] = abstract_names
+        abstract_plan["abstract"], abstract_plan["abstract_left_out"] = fit_abstract_names(abstract_names)
     listener, listener_name = open_abstract_listener()
     if listener_name:
         abstract_plan["abstract_probe"] = listener_name
@@ -2692,8 +2740,10 @@ def run_canary(*, status=None, collect=None, outside=None):
         group("Files", "work_peer", "not found", {"work_token": peer_token}, person="canary-peer")
         holder.join(10)
         group("Sockets", "sockets", "not present or refused")
+        stub_ports = list(CANARY_STUB_PORTS) + [p for p in sorted(set(ports)) if p not in CANARY_STUB_PORTS]  # the six stub ports come first
         group("Loopback", "loopback", "connection refused",
-              {"ports": ports, "stub": CANARY_STUB, "stub_ports": sorted(set(ports) | set(CANARY_STUB_PORTS))[:200]})
+              {"ports": ports, "stub": CANARY_STUB, "stub_ports": stub_ports[:200], "loopback_seconds": CANARY_LOOPBACK_DEADLINE},
+              run_seconds=CANARY_LOOPBACK_SECONDS)
         group("LAN", "lan", "dropped (EPERM)", {"lan": list(CANARY_LAN_TARGETS), "own": own, "gateways": gateways}, plan_names=lan_names)
         group("DNS", "dns", "the upstream answers directly; the host's own entries dropped", {"resolver": resolver, "other_resolvers": others})
         group("Public", "public", "TCP 443 works (SKIPPED without a public route)", {"public": CANARY_PUBLIC_TARGET})
@@ -2724,24 +2774,62 @@ def parse_progress(data, marker="CANARYMEM"):
     return found
 
 
+def parse_end_word(data, marker="CANARYEND"):
+    """1.17.124: the last ``CANARYEND<TAB><word>`` line (same exact-line rule as parse_progress, never a table row): how the memory probe
+    ended (memoryerror, enomem, other:<ExceptionName>, done), or None when it printed none (a SIGKILL cannot print)."""
+    text = data.decode("utf-8", "replace") if isinstance(data, (bytes, bytearray)) else str(data)
+    found = None
+    for line in text.splitlines():
+        parts = line.split("\t")
+        if len(parts) == 2 and parts[0] == marker and re.fullmatch(r"[A-Za-z0-9_:.?-]{1,60}", parts[1]):
+            found = parts[1]
+    return found
+
+
+def _first_line(data, limit=80):
+    text = data.decode("utf-8", "replace") if isinstance(data, (bytes, bytearray)) else str(data or "")
+    for line in text.splitlines():
+        if line.strip():
+            return "".join(ch if 32 <= ord(ch) < 127 else "?" for ch in line.strip())[:limit]
+    return ""
+
+
 def memory_row(result, memory_mb, block=MEMORY_BLOCK_MIB):
-    """1.17.123: the 'memory beyond MemoryMax' row, judged on what happened, not on systemd's label alone. The kernel may kill only the runner
-    child; the launcher then exits 137 and systemd records 'exit-code', not 'oom-kill'. OK only when the run was stopped (reason oom, or the
-    runner died by SIGKILL, launcher exit 137) AND the last reported allocation and the memory peak are at or below MemoryMax plus one block.
-    Allocating past the limit, or finishing normally, is ATTACK SUCCEEDED; no end frame is NOT RUN."""
-    row = {"wall": "Limits", "attack": "memory beyond MemoryMax", "expected": f"stopped at or below {memory_mb} MiB (plus one {block} MiB block)"}
+    """1.17.124: the 'memory beyond MemoryMax' row, judged on evidence, never on a label alone.
+
+    OK only when (A) the kernel stopped the run (end reason 'oom', or the end frame's oom_kills >= 1 from the cgroup's memory.events) or the
+    probe itself reported a refused allocation (CANARYEND memoryerror or enomem) AND (B) the allocated MiB and the memory peak, whichever are
+    known, are at or below MemoryMax (no slack) and at least one of them is known.
+    ATTACK SUCCEEDED: allocated or peak above MemoryMax, the probe finished the whole allocation (CANARYEND done), or a normal exit 0.
+    NOT RUN, never OK: no end frame, no evidence at all (the 1.17.123 hole: OK with nothing to show), or an end nothing explains, for example
+    dev02's 'exited (exit 1)' with no oom_kills and no CANARYEND (systemd-run --wait returns 1 for a unit ended by a signal)."""
+    row = {"wall": "Limits", "attack": "memory beyond MemoryMax", "expected": f"stopped by the kernel at or below {memory_mb} MiB"}
     end = result.get("end") or {}
     if result.get("refused") or not end:
         row.update(actual="refused: " + str(result["refused"]) if result.get("refused") else "no end frame", verdict="NOT RUN")
         return row
-    allocated = parse_progress(result.get("stdout", b""))
-    reason, code, peak = end.get("reason"), end.get("exit"), end.get("peak_mb")
-    stopped = reason == "oom" or (reason == "exited" and code == 137)
-    limit = memory_mb + block
-    over = (allocated is not None and allocated > limit) or (isinstance(peak, (int, float)) and peak > limit)
-    row["actual"] = f"allocated {allocated if allocated is not None else 0} MiB, ended {reason}" + (f" (exit {code})" if reason == "exited" else "") + \
-        (f", peak {peak} MiB" if isinstance(peak, (int, float)) else "")
-    row["verdict"] = "OK" if stopped and not over else "ATTACK SUCCEEDED"
+    stdout = result.get("stdout", b"")
+    allocated = parse_progress(stdout)
+    word = parse_end_word(stdout)
+    reason, code, peak, oom_kills = end.get("reason"), end.get("exit"), end.get("peak_mb"), end.get("oom_kills")
+    peak = peak if isinstance(peak, (int, float)) and not isinstance(peak, bool) else None
+    oom_kills = oom_kills if isinstance(oom_kills, int) and not isinstance(oom_kills, bool) else None
+    killed = reason == "oom" or (oom_kills is not None and oom_kills >= 1)
+    refused_alloc = word in ("memoryerror", "enomem")
+    over = (allocated is not None and allocated > memory_mb) or (peak is not None and peak > memory_mb)
+    finished = word == "done" or (reason == "exited" and code == 0)
+    how = f"ended {reason}" + (f" (exit {code})" if reason == "exited" else "") + (f", probe {word}" if word else "")
+    row["actual"] = (f"allocated {allocated} MiB" if allocated is not None else "no allocation reported") + f", {how}, oom_kills " + \
+        (str(oom_kills) if oom_kills is not None else "unknown") + (f", peak {peak} MiB" if peak is not None else ", no peak")
+    if over or finished:
+        row["verdict"] = "ATTACK SUCCEEDED"
+    elif (killed or refused_alloc) and (allocated is not None or peak is not None):
+        row["verdict"] = "OK"
+    else:
+        row["verdict"] = "NOT RUN"
+        why = "no evidence of how it ended" if not (killed or refused_alloc) else "no allocation or peak to check against the limit"
+        err = _first_line(result.get("stderr", b""))
+        row["actual"] += f"; {why}" + (f"; stderr: {err}" if err else "")
     return row
 
 
@@ -2999,7 +3087,7 @@ def _latency_rows(collect, status):
 
 def format_table(table):
     widths = {key: max([len(key)] + [len(str(entry[key])) for entry in table]) for key in ("wall", "attack", "expected", "actual", "verdict")}
-    widths = {key: min(width, 60) for key, width in widths.items()}
+    widths = {key: min(width, ACTUAL_COLUMN_MAX if key == "actual" else 60) for key, width in widths.items()}  # 1.17.124: the actual column keeps its end (peak, stderr)
     header = "  ".join(key.upper().ljust(widths[key]) for key in widths)
     lines = [header.rstrip(), "-" * len(header)]  # 1.17.122: no line ends in padding, so a consumer can match the verdict at the line end
     for entry in table:

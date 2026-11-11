@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.123",
+  "version": "1.17.124",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.17.123.md",
-      "size": 13255,
-      "sha256": "9f9c95dfc262409b4e087614e0956c0ce19ed6466dc34f4e9d8a3eac6167fc94"
+      "path": "RELEASE_NOTES_1.17.124.md",
+      "size": 11856,
+      "sha256": "bdb3cf1303ea0a17d3989d83f2fbc02e3b9e6a962359f8fd824b36bff3fe5b30"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "86223225ce3544bf5b62650a6d9335ec7ad8488a65641f0a8825a0d66546bf00"
+      "sha256": "01b964274c538e461d550d5dc6afb5288ae4e24329d16c1187b1957cac929c0f"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -1237,6 +1237,11 @@
       "sha256": "5aed8a638b9285e14d2a9f5b0bd03f03ddb704b88d9c5afe27e28a500c5be30a"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.123.md",
+      "size": 13255,
+      "sha256": "9f9c95dfc262409b4e087614e0956c0ce19ed6466dc34f4e9d8a3eac6167fc94"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.13.md",
       "size": 17578,
       "sha256": "ab7757dde5556b790f15494af1c69184ef2c2b0a95e84b3e7b3f2605074be1dc"
@@ -1798,8 +1803,8 @@
     },
     {
       "path": "docs/sandbox-capability.md",
-      "size": 19183,
-      "sha256": "245a4b823b09e76fa134969c23991d4ce5dff6e9f7ffd27226531305f8e0ddda"
+      "size": 20699,
+      "sha256": "1116b32a7bf10c8ba1d4f5b7cb1e6479a62c0ef1137a5c91e597338fa823d9d8"
     },
     {
       "path": "docs/saved-views.md",
@@ -3013,13 +3018,13 @@
     },
     {
       "path": "scripts/sandbox-canary-runner.py",
-      "size": 16952,
-      "sha256": "81def8327be4f8c2b4741a9463365f468b46c9a3908316af5017367915576ac3"
+      "size": 24411,
+      "sha256": "45b8036cfcb0d8e96f2b4b3157f03cb79f6c5d7a3570060277a6ae851d233c7d"
     },
     {
       "path": "scripts/sandbox-helper.py",
-      "size": 161267,
-      "sha256": "f4801c0169d9866564164a06aebc5ebc6480d178aa7ccb47106e520bdd5107c2"
+      "size": 166688,
+      "sha256": "2c81f68caabf2a0d8bdc29b84e3f4a74efad19d321682b6a9efb9f7830fc68c7"
     },
     {
       "path": "scripts/sandbox-launcher.py",
@@ -3069,7 +3074,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "9f6e4f329d48be561cffa483329db3365a0ecf178c5c400074fb039c9273a02c"
+      "sha256": "57e1f440461cd2b2ca2e0e8c5b0086f7fdbe4c4822adff871368c21f5fd24ff0"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -4988,8 +4993,13 @@
     },
     {
       "path": "tests/sandbox-abstract-1.17.123.py",
-      "size": 13993,
-      "sha256": "c95928625a508306100925816d722a955ff10e0b12aa7aece1f29f5c8c7d763b"
+      "size": 14369,
+      "sha256": "bddeee2d657da4798f5283cf806b2a09126d719ab89dee2dcef217e77b19a1ac"
+    },
+    {
+      "path": "tests/sandbox-abstract-cap-1.17.124.py",
+      "size": 7993,
+      "sha256": "59aaab3d1ba69658d4da3619d0ef302a578655d337c87ca9e7827d326d3a21dc"
     },
     {
       "path": "tests/sandbox-address-numeric-1.17.120.py",
@@ -5003,8 +5013,8 @@
     },
     {
       "path": "tests/sandbox-canary-1.17.118.py",
-      "size": 26128,
-      "sha256": "32435720bc857abfc480f1934f4283e064500a3fa6687634ebceff8ed4999470"
+      "size": 26745,
+      "sha256": "630724e52a6ad3d8a6a8ca38aba89674e0454877ef7b3771cd4dbe4bd2a94a04"
     },
     {
       "path": "tests/sandbox-canary-1.17.118.sh",
@@ -5032,6 +5042,11 @@
       "sha256": "e358b1babc838a193d1602d8cf8a7539408850a7d2dd59b500db5416e6874e1f"
     },
     {
+      "path": "tests/sandbox-canary-1.17.124.sh",
+      "size": 24869,
+      "sha256": "5a6cee3090cafcb589983a570b98adc9e1a1a8b3bcc9434f963e967caf497dcc"
+    },
+    {
       "path": "tests/sandbox-canary-script-1.17.120.py",
       "size": 5615,
       "sha256": "db9148705f4b97cccba6405a0daf38d07859793e0741dacf6e2a396d4f3af044"
@@ -5050,6 +5065,11 @@
       "path": "tests/sandbox-canary-script-1.17.123.py",
       "size": 12039,
       "sha256": "72f0770ad3b648285ad1922be27b4af687963ef9161add4d4c97a9a31431b83f"
+    },
+    {
+      "path": "tests/sandbox-canary-script-1.17.124.py",
+      "size": 15140,
+      "sha256": "64b837747f080987594edd07ddcfc703d9991718be84ae300339d69607445316"
     },
     {
       "path": "tests/sandbox-canary-table-1.17.122.py",
@@ -5088,8 +5108,8 @@
     },
     {
       "path": "tests/sandbox-credential-root-group-1.17.123.py",
-      "size": 6681,
-      "sha256": "2a289eaa47f756e0471b22e6719272f875e031bdb7640806404afd2738d9aa0c"
+      "size": 6703,
+      "sha256": "5f4b82b00cfba3bfcf7536a15448c94725f01e3fb52988d7a17306d8ee0bef01"
     },
     {
       "path": "tests/sandbox-django-launch-1.17.118.py",
@@ -5128,8 +5148,8 @@
     },
     {
       "path": "tests/sandbox-launch-1.17.118.py",
-      "size": 31024,
-      "sha256": "67f478d3814bfedf316a1fb15ccce09dd31ac448f98007fb33c37f43a62107b0"
+      "size": 30537,
+      "sha256": "7526bcbd885b625ccd75baccf8729b4f48cf5cf4a4661fdf7a899b972dfad5a0"
     },
     {
       "path": "tests/sandbox-local-deny-1.17.123.py",
@@ -5137,9 +5157,19 @@
       "sha256": "19cd0d3dbf141c6ae3fe9b3fe55075d5ec3e404a98b9cb431608a9413752efbd"
     },
     {
+      "path": "tests/sandbox-loopback-1.17.124.py",
+      "size": 9059,
+      "sha256": "e80f0bb6be8b83f16ea792ffce99ebabb2060e2a151db0a72d4716c442fb77ef"
+    },
+    {
       "path": "tests/sandbox-memory-1.17.123.py",
-      "size": 8486,
-      "sha256": "12f99e474c645f33093eca5a8cd6f1b92aaa6424559a0a4c177b20ea5212b4ad"
+      "size": 9052,
+      "sha256": "45a298670a6a4eb550100ba2691eefc3992bb8e832556759f091e038c4ae9c1a"
+    },
+    {
+      "path": "tests/sandbox-memory-1.17.124.py",
+      "size": 12674,
+      "sha256": "ec3ebe50f969b7148d32be1f2860f5917f3ff2d54d6385e4fe6261db51626903"
     },
     {
       "path": "tests/sandbox-path-chars-1.17.119.py",
@@ -5183,8 +5213,13 @@
     },
     {
       "path": "tests/sandbox-unit-builder-1.17.118.py",
-      "size": 15274,
-      "sha256": "4548f82a842e743f912e9e8acdc837ad0fadb34e2c3ee939791c05f09246e8bb"
+      "size": 15418,
+      "sha256": "5d6097332ee4e0573ac3f5af935d783a8abc70950379bf713e910ca2dbb5f262"
+    },
+    {
+      "path": "tests/sandbox-unix-1.17.124.py",
+      "size": 11729,
+      "sha256": "13b22302408594cf0189811ba7c790fbc56d814721d1caf8beca6cb32ce90340"
     },
     {
       "path": "tests/sandbox-verify-step-1.17.116.py",
