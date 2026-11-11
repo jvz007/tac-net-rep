@@ -18,14 +18,16 @@ Some modules need to run a program they did not write: a command line tool from 
 
 The network rule is deliberately small. Core uses systemd's address filter (a built-in kernel feature that drops traffic to chosen addresses). A run cannot reach:
 
-- the server itself (`localhost`),
+- the server itself: loopback, and (from 1.17.123) every address of every local network interface and the default gateway(s), read again at each start,
 - link-local addresses, which include the cloud metadata address 169.254.169.254,
 - multicast,
 - private ranges: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10 and fc00::/7.
 
 Public HTTPS stays open. There is no host list and no proxy. We accept that a run can reach any public site, because it has no files to read and no tools to act with.
 
-Name lookup still works. Core finds the server's name server in `/etc/resolv.conf` (for example `127.0.0.53` with systemd-resolved, or a name server on your LAN) and allows exactly that address.
+Name lookup still works, and nothing on the server is allowed for it (1.17.123). At each start Core writes its own `resolv.conf` (root-owned, mode 0644, at most three IPv4 `nameserver` lines) and the unit binds it read only over `/etc/resolv.conf`. The lines come from the server's real upstream name servers in `/run/systemd/resolve/resolv.conf` (when that file is missing, from `/etc/resolv.conf`, but only a regular file, never the link to the `127.0.0.53` stub). A public upstream needs no allow, so a run cannot reach the `127.0.0.53` stub on any port. If an upstream name server is loopback, private, link-local, carrier-grade NAT, one of the server's own addresses or its gateway, the sandbox stays off with a plain reason that names the address. Core never allows it automatically. IPv6 upstreams are skipped, because a run has IPv4 only.
+
+The filter judges the destination address, not the next hop, so the public internet keeps working while the server's own public address and its gateway are refused. Known limit: an address that appears after a run has started (a DHCP change) is covered from the next start.
 
 If the server cannot enforce this, the sandbox stays off with a plain reason. It never runs in a weaker mode.
 
@@ -62,7 +64,7 @@ With the switch on, a run goes like this.
 
 **Permissions and routes.** The permission group `Sandbox` holds `core.sandbox.view` and `core.sandbox.manage` (an effective superuser passes, AD-10). `GET /api/tfd/system/sandbox/status/` (view) gives the same answer as `status(live=True)`. `POST /api/tfd/system/sandbox/runs/<run_id>/cancel/` (manage) stops any run by id and writes an audit row. The plan named `/api/tfd/core/sandbox/...`; Core has no `core/` route prefix, so both routes sit under `system/`.
 
-**The canary.** `sudo /usr/local/sbin/tec-tac-sandbox --selftest --canary` (root only, not in the sudo rule) runs an in-memory runner `core.canary` through the same launch code and tries to break out: planted files, sockets, loopback and every listening port, LAN and cloud metadata, DNS, privilege calls, writes, host processes, memory, fork, loop, scratch and output limits, abstract sockets, credentials (including `ps`, `/proc/*/cmdline`, `systemctl show` and journald), cancel and kill, slots and latency. It prints a table and writes `/var/lib/tec-tac/sandbox/canary.json` (counts and failing rows, no secret). `CANARY PASSED` appears only when no row says `ATTACK SUCCEEDED` or `NOT RUN`. A skipped row is shown and never counted as a pass. `tests/sandbox-canary-1.17.118.sh` runs it on a dev server.
+**The canary.** `sudo /usr/local/sbin/tec-tac-sandbox --selftest --canary` (root only, not in the sudo rule) runs an in-memory runner `core.canary` through the same launch code and tries to break out: planted files, sockets, loopback and every listening port, LAN and cloud metadata, DNS, privilege calls, writes, host processes, memory, fork, loop, scratch and output limits, abstract sockets, credentials (including `ps`, `/proc/*/cmdline`, `systemctl show` and journald), cancel and kill, slots and latency. It prints a table and writes `/var/lib/tec-tac/sandbox/canary.json` (counts and failing rows, no secret). `CANARY PASSED` appears only when no row says `ATTACK SUCCEEDED` or `NOT RUN` and no security row is `SKIPPED` (1.17.123: only `public tcp 443`, for a server with no public route, may be skipped). A skipped row is shown and never counted as a pass. From 1.17.123 the table also has rows for the server's own addresses and gateway, `127.0.0.53` on the listening ports and six more, the memory limit (judged on the MiB allocated and how the run ended, not on systemd's label), the credential frame (it looks for the real nonce frame, the launcher header and the tokens, not for the word `CRED`), and every abstract unix socket the host listens on (root lists them, the unit tries each one). Runners keep `AF_UNIX`: the Node-based CLIs need `socketpair`, and seccomp cannot tell it from an abstract connect. The abstract namespace belongs to the network namespace, so the canary detects a reachable host listener instead of the unit preventing it. `tests/sandbox-canary-1.17.123.sh` runs it on a dev server.
 
 ## Declaring a runner in a manifest
 

@@ -188,8 +188,11 @@ ADDRESS_DENY = ("127.0.0.0/8 ::1/128 169.254.0.0/16 fe80::/10 224.0.0.0/4 ff00::
                 "10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7")
 PRIVATE_PROBE_TARGETS = ("10.255.255.254", "172.31.255.254", "192.168.255.254", "100.127.255.254", "169.254.169.254")
 DNS_PROBE_NAME = "example.com"
-RESOLV_UPSTREAM = "/run/systemd/resolve/resolv.conf"  # 1.17.120: read only, shown in the DNS detail when no resolver answers
+RESOLV_UPSTREAM = "/run/systemd/resolve/resolv.conf"  # 1.17.123: the upstream list a run's Core-owned resolv.conf is built from
 RESOLVERS_MAX = 3
+LOCAL_DENY_MAX = 64  # 1.17.123: most local addresses and gateways added to a unit's IPAddressDeny (those already inside the ranges are not counted)
+MEMORY_BLOCK_MIB = 16  # the canary's memory probe allocates in blocks of this size and reports after each
+ZSWAP_MIN_SYSTEMD = 255  # MemoryZSwapMax= is only added from this systemd version on (an unknown property must not make every start fail)
 UNIT_TIMEOUT_SECONDS = 30
 PROBE_PROPERTIES = {
     "transient": (),
@@ -201,14 +204,22 @@ PROBE_PROPERTIES = {
     "address_filter_loopback": ("DynamicUser=yes", "IPAddressDeny=" + ADDRESS_DENY),
     "address_filter_private": ("DynamicUser=yes", "IPAddressDeny=" + ADDRESS_DENY),
     "pipe_streams": ("DynamicUser=yes",),
-    "dns": ("DynamicUser=yes", "IPAddressDeny=" + ADDRESS_DENY),  # plus one IPAddressAllow= per resolver
+    "address_filter_local": ("DynamicUser=yes", "IPAddressDeny=" + ADDRESS_DENY),  # 1.17.123: plus this server's own addresses and gateways
+    "dns": ("DynamicUser=yes", "IPAddressDeny=" + ADDRESS_DENY),  # 1.17.123: no IPAddressAllow at all; the upstream is public and needs none
 }
+DENIED_NETWORKS = tuple(ipaddress.ip_network(item) for item in ADDRESS_DENY.split())
 
 
-def allow_property(address):
-    """1.17.120: ``IPAddressAllow=<address>/32`` (IPv4) or ``/128`` (IPv6). A bare address is never handed to systemd."""
+def denied_by_ranges(address):
+    """True when the address is inside the numeric ranges of ``ADDRESS_DENY`` (or is the unspecified address)."""
     parsed = ipaddress.ip_address(str(address))
-    return f"IPAddressAllow={parsed}/{32 if parsed.version == 4 else 128}"
+    return parsed.is_unspecified or any(parsed.version == net.version and parsed in net for net in DENIED_NETWORKS)
+
+
+def host_network(address):
+    """``<address>/32`` or ``/128``: the only form an address ever takes in IPAddressDeny=."""
+    parsed = ipaddress.ip_address(str(address))
+    return f"{parsed}/{32 if parsed.version == 4 else 128}"
 
 
 # The python the probes run inside a unit. Each prints one plain word or line and nothing else.
@@ -816,9 +827,9 @@ def parse_systemd_version(text):
     return int(match.group(1)) if match else None
 
 
-def parse_resolvers(text):
-    """Up to three different nameserver addresses from resolv.conf text, in order. Zone ids and anything that is not an address are
-    skipped. Returns [] when there is none."""
+def parse_resolvers(text, limit=RESOLVERS_MAX, ipv4_only=False):
+    """Up to ``limit`` (three) different nameserver addresses from resolv.conf text, in order. Zone ids and anything that is not an address
+    are skipped; ``ipv4_only`` also skips IPv6 (a run has AF_INET only). Returns [] when there is none."""
     found = []
     for raw in (text or "").splitlines():
         parts = raw.split("#", 1)[0].split(";", 1)[0].split()
@@ -826,14 +837,133 @@ def parse_resolvers(text):
             if "%" in parts[1]:
                 continue  # a zone id (fe80::1%eth0) cannot be allowed by address
             try:
-                address = str(ipaddress.ip_address(parts[1]))
+                parsed = ipaddress.ip_address(parts[1])
             except ValueError:
                 continue
+            if ipv4_only and parsed.version != 4:
+                continue
+            address = str(parsed)
             if address not in found:
                 found.append(address)
-        if len(found) >= RESOLVERS_MAX:
+        if len(found) >= limit:
             break
     return found
+
+
+def parse_local_addresses(text):
+    """Every address of every local interface from ``ip -o addr show`` text (IPv4 and IPv6, no prefix length, no zone id), in order and
+    without repeats. A peer address of a point-to-point link is not this server's own and is not listed."""
+    found = []
+    for line in (text or "").splitlines():
+        parts = line.split()
+        for index in range(2, len(parts) - 1):  # parts[0] is the index, parts[1] the interface name
+            if parts[index] in ("inet", "inet6"):
+                try:
+                    address = str(ipaddress.ip_address(parts[index + 1].split("/", 1)[0].split("%", 1)[0]))
+                except ValueError:
+                    break
+                if address not in found:
+                    found.append(address)
+                break
+    return found
+
+
+def parse_gateways(text):
+    """Every next hop of a default route from ``ip route show default`` text (IPv4 or IPv6; a multipath route has one ``nexthop`` line each).
+    A default route with no ``via`` (on-link, for example a tunnel) has no next hop to list. A ``via`` with no readable address raises
+    ValueError: the caller fails closed."""
+    found = []
+    for line in (text or "").splitlines():
+        parts = line.split()
+        if not parts or parts[0] not in ("default", "nexthop") or "via" not in parts:
+            continue
+        index = parts.index("via") + 1
+        if index < len(parts) and parts[index] in ("inet", "inet6"):
+            index += 1  # 'via inet6 fe80::1' (an IPv4 route through an IPv6 next hop)
+        if index >= len(parts):
+            raise ValueError("a default route has no readable next hop")
+        try:
+            address = str(ipaddress.ip_address(parts[index].split("%", 1)[0]))
+        except ValueError as exc:
+            raise ValueError("a default route has no readable next hop") from exc
+        if address not in found:
+            found.append(address)
+    return found
+
+
+def local_deny(addr_text, route4_text, route6_text):
+    """1.17.123: this server's own addresses and default gateways as ``{addresses, gateways, extra}``. ``extra`` is each one that is not
+    already inside the numeric ranges of ADDRESS_DENY, as ``<address>/32`` or ``/128``, numeric only, without repeats, at most LOCAL_DENY_MAX.
+    Raises ValueError (the caller refuses the start: fail closed) when no address can be read, a default route has no readable next hop,
+    or there are too many to list."""
+    addresses = parse_local_addresses(addr_text)
+    if not addresses:
+        raise ValueError("this server's own addresses could not be read")
+    gateways = parse_gateways(route4_text)
+    gateways += [gateway for gateway in parse_gateways(route6_text) if gateway not in gateways]
+    extra = []
+    for address in addresses + gateways:
+        if not denied_by_ranges(address) and host_network(address) not in extra:
+            extra.append(host_network(address))
+    if len(extra) > LOCAL_DENY_MAX:
+        raise ValueError("this server has more local addresses than the address filter can list")
+    return {"addresses": addresses, "gateways": gateways, "extra": extra}
+
+
+def read_local_deny(run_cmd=None):
+    """Read the live addresses and default routes with ``ip`` (as root, numeric output) and build ``local_deny``. ValueError when ``ip`` fails."""
+    run_cmd = run_cmd or UnitRunner().run_cmd
+    texts = []
+    for argv in (["ip", "-o", "addr", "show"], ["ip", "-4", "route", "show", "default"], ["ip", "-6", "route", "show", "default"]):
+        code, out, _err = run_cmd(argv)
+        if code != 0:
+            raise ValueError("the `ip` command could not read this server's addresses or routes")
+        texts.append(out)
+    return local_deny(*texts)
+
+
+def local_deny_now():
+    """The live answer at this moment (a test replaces this name)."""
+    return read_local_deny()
+
+
+def read_upstream_text(upstream_path=None, fallback_path=None):
+    """1.17.123: the upstream name server list a run's Core-owned resolv.conf is built from: systemd-resolved's own file; when that file is
+    missing, /etc/resolv.conf, but only a regular file (never the symlink to the 127.0.0.53 stub). '' when neither can be read."""
+    try:
+        return Path(upstream_path or RESOLV_UPSTREAM).read_text(encoding="utf-8", errors="replace")[:8192]
+    except OSError:
+        pass
+    fallback = Path(fallback_path or RESOLV_CONF)
+    try:
+        if fallback.is_symlink() or not fallback.is_file():
+            return ""
+        return fallback.read_text(encoding="utf-8", errors="replace")[:8192]
+    except OSError:
+        return ""
+
+
+def upstream_problem(address, local):
+    """'' when a run may use this upstream resolver directly, else the plain reason naming the address (never an automatic allow)."""
+    if denied_by_ranges(address):
+        why = "inside a range a run may not reach (loopback, private, link-local or carrier-grade NAT)"
+    elif address in local["addresses"]:
+        why = "one of this server's own addresses"
+    elif address in local["gateways"]:
+        why = "this server's gateway"
+    else:
+        return ""
+    return f"the upstream name server {address} is {why}; a run cannot use it, so point the server at a public resolver"
+
+
+def core_resolv_file():
+    return RUN_ROOT / "resolv.conf"
+
+
+def resolv_conf_bytes(resolvers):
+    """The Core-owned resolv.conf: at most three IPv4 ``nameserver`` lines and nothing else."""
+    lines = [f"nameserver {ipaddress.IPv4Address(address)}" for address in list(resolvers)[:RESOLVERS_MAX]]
+    return ("# written by Tec-Tac core.sandbox at each start" + chr(10) + chr(10).join(lines) + chr(10)).encode("ascii")
 
 
 class UnitRunner:
@@ -873,7 +1003,7 @@ def _check(table, name, ok, detail):
     return bool(ok)
 
 
-def selftest(runner=None, *, resolv_conf_path="/etc/resolv.conf", run_root=None):
+def selftest(runner=None, *, resolv_conf_path="/etc/resolv.conf", run_root=None, upstream_path=None):
     """Probe this server and return the status dict that ``status.json`` carries. Never raises for a failed probe: a failed probe is
     ``ready: false`` with a plain reason. There is no weaker mode."""
     runner = runner or UnitRunner()
@@ -896,6 +1026,10 @@ def selftest(runner=None, *, resolv_conf_path="/etc/resolv.conf", run_root=None)
         fail("systemd_version", f"systemd {version} is older than {MIN_SYSTEMD_VERSION}")
     else:
         _check(checks, "systemd_version", True, f"systemd {version}")
+    # 1.17.123: information. MemoryZSwapMax=0 is only handed to a unit from systemd 255, an older systemd would refuse the unknown property
+    if version is not None:
+        _check(checks, "memory_zswap", True, (f"MemoryZSwapMax=0 is set (systemd {version})" if version >= ZSWAP_MIN_SYSTEMD
+                                              else f"MemoryZSwapMax=0 is not set: systemd {version} is older than {ZSWAP_MIN_SYSTEMD} (information only)"))
     # 1.17.120: information only. The address filter uses kernel cgroup BPF, which systemd's own BPF framework flag does not describe; the
     # control, loopback and private-range probes below decide readiness, so a server that cannot filter still ends ready=false.
     if "-BPF_FRAMEWORK" in (out or ""):
@@ -931,36 +1065,55 @@ def selftest(runner=None, *, resolv_conf_path="/etc/resolv.conf", run_root=None)
     code, out, err = runner.run_unit("proc_hidden", PROBE_PROPERTIES["proc_hidden"], ["/bin/sh", "-c", script])
     if not _check(checks, "proc_hidden", code == 0 and out.strip() == "ok", out.strip() or err.strip()[:200]):
         fail("proc_hidden", "ProtectProc=invisible or ProcSubset=pid is not working")
+    # 1.17.123: this server's own addresses and gateways, read the way a start reads them; they join the deny list
+    local = None
+    try:
+        local = read_local_deny(runner.run_cmd)
+        _check(checks, "local_addresses", True, f"own addresses: {', '.join(local['addresses'])}; gateways: {', '.join(local['gateways']) or 'none'}; "
+                                                f"added to the deny list: {len(local['extra'])}")
+    except ValueError as exc:
+        _check(checks, "local_addresses", False, str(exc))
+        fail("local_addresses", f"{exc}, so the address filter cannot be completed")
+    extra = local["extra"] if local else []
     # the section 15 address filter, with a control run so a probe that cannot connect anyway is never read as a pass
     filter_ok, detail = _probe_address_filter(runner, checks)
     if not filter_ok:
         fail("address_filter", detail)
+    local_ok, detail = _probe_address_local(runner, checks, extra) if local else (False, "not run")
+    if local and not local_ok:
+        fail("address_filter_local", detail)
     # stdout and stderr arrive on separate pipes through systemd-run --pipe (plan section 10, item 1)
     command = ["/usr/bin/python3", "-I", "-c", "import sys;sys.stdout.write('out');sys.stdout.flush();sys.stderr.write('err')"]
     code, out, err = runner.run_unit("pipe_streams", PROBE_PROPERTIES["pipe_streams"], command)
     if not _check(checks, "pipe_streams", code == 0 and out.strip() == "out" and err.strip() == "err", f"out={out.strip()[:40]!r} err={err.strip()[:40]!r}"):
         fail("pipe_streams", "systemd-run --pipe did not keep stdout and stderr apart")
-    # DNS
-    try:
-        text = Path(resolv_conf_path).read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        text = ""
-    resolvers = parse_resolvers(text)
-    resolver, dns_ok = "", False
+    # DNS (1.17.123): the upstream list, vetted, probed directly from a unit under the full deny list. Nothing is ever allowed by address.
+    text = read_upstream_text(upstream_path, resolv_conf_path)
+    resolvers = parse_resolvers(text, ipv4_only=True)
+    proven, dns_ok = [], False
     if not resolvers:
-        _check(checks, "dns", False, "no nameserver in resolv.conf")
-        fail("dns", "no name server is listed in /etc/resolv.conf, so a run could not look up names")
+        _check(checks, "dns", False, "no IPv4 nameserver in the upstream list")
+        fail("dns", "no IPv4 name server is listed as an upstream (/run/systemd/resolve/resolv.conf or /etc/resolv.conf), so a run could not look up names")
+    elif local is None:
+        _check(checks, "dns", False, "not run: this server's own addresses could not be read")
     else:
-        resolver, detail = _probe_dns(runner, resolvers)
-        dns_ok = bool(resolver)
-        if not _check(checks, "dns", dns_ok, detail):
-            fail("dns", detail)
-    address_filter_ok = all(checks.get(name, {}).get("ok") for name in ("address_filter_control", "address_filter_loopback", "address_filter_private"))
+        problems = [upstream_problem(address, local) for address in resolvers]
+        problems = [problem for problem in problems if problem]
+        if problems:
+            _check(checks, "dns", False, problems[0])
+            fail("dns", problems[0])
+        else:
+            proven, detail = _probe_dns(runner, resolvers, extra)
+            dns_ok = bool(proven)
+            if not _check(checks, "dns", dns_ok, detail):
+                fail("dns", detail)
+    _check(checks, "upstream_resolvers", True, "upstream list: " + (", ".join(resolvers) or "none") + "; Core resolv.conf at each start: " + (", ".join(proven) or "none"))
+    address_filter_ok = all(checks.get(name, {}).get("ok") for name in ("address_filter_control", "address_filter_loopback", "address_filter_private", "address_filter_local"))
     ready = not reasons
     return {
         "ready": ready, "reason": "ready" if ready else reasons[0], "enabled": False, "systemd_version": version,
-        "address_filter_ok": address_filter_ok, "dns_ok": dns_ok, "resolver": resolver, "resolvers": resolvers,
-        "dns_method": "ip_address_allow" if resolvers else "", "selftest_at": now(), "checks": checks,
+        "address_filter_ok": address_filter_ok, "dns_ok": dns_ok, "resolver": proven[0] if proven else "", "resolvers": proven,
+        "dns_method": "resolv_conf_bind" if proven else "", "selftest_at": now(), "checks": checks,
         "slots_total": slot_count(mem_available_kib(), LIMITS["memory_mb"][0]),
     }
 
@@ -1049,10 +1202,10 @@ def _credential_acl_problem(entries, uid):
 
 
 def credential_mode_problem(stat_line, uid_line, gid_line, acl_line):
-    """1.17.122: the credential file inside the unit is mode exactly 0400 or 0440 (no 'other' bit); the owner is root or the unit's uid; the
-    group is root or the unit's own gid; the unit's own uid and gid are in the dynamic range (>= 61184); and the POSIX ACL is absent or holds
-    one named entry only, user:<unit uid>, read only (see _credential_acl_problem). Anything else, and any missing or garbled answer, fails
-    closed. The 1.17.120 'any dynamic group' acceptance is gone. Returns a plain problem text naming what was found, or '' when acceptable."""
+    """The credential file inside the unit is mode exactly 0400 or 0440 (no 'other' bit); the owner is root or the unit's uid; the group is
+    root or the unit's own gid; the unit's own uid and gid are in the dynamic range (>= 61184); and the POSIX ACL is absent or holds one named
+    entry only, user:<unit uid>, read only (see _credential_acl_problem). 1.17.123: group root is accepted only when that named entry exists.
+    Anything else, and any missing or garbled answer, fails closed. Returns a plain problem text naming what was found, or '' when acceptable."""
     parts = stat_line.split()
     if len(parts) != 3 or not all(part.isdigit() for part in parts) or not uid_line.strip().isdigit() or not gid_line.strip().isdigit():
         return "the credential file's mode and owner could not be read"
@@ -1074,6 +1227,10 @@ def credential_mode_problem(stat_line, uid_line, gid_line, acl_line):
         problem = _credential_acl_problem(entries, uid)
         if problem:
             return problem + found
+    # 1.17.123: group root is only acceptable when the ACL is what lets the unit read the file: a named read-only entry for its uid.
+    # Mode 400 or 440 root:root with no such entry could not be read by the unit at all, so it is refused with that reason.
+    if group == 0 and ("user", str(uid), "r--") not in entries:
+        return f"the credential file's group is root and its ACL has no read-only entry for the unit's own user (uid {uid}), so the unit could not read it" + found
     return ""
 
 
@@ -1163,16 +1320,54 @@ def _probe_address_filter(runner, checks):
     return True, "loopback and private ranges refused"
 
 
-def _probe_dns(runner, resolvers):
-    """Allow exactly the listed resolvers and prove any DNS reply arrives from inside the filtered unit. NXDOMAIN counts, no reply does not.
-    Returns (answering resolver or '', plain detail)."""
-    allow = [allow_property(address) for address in resolvers]
+def _probe_address_local(runner, checks, extra):
+    """1.17.123: a send to this server's own address or gateway must be refused under the filter, and the same send must work without it
+    (the control run: a send that cannot work anyway is never read as a pass). ``extra`` is the ``<address>/32`` list a start adds."""
+    targets = [item.split("/", 1)[0] for item in extra if ":" not in item][:6]
+    if not targets:
+        _check(checks, "address_filter_local", True, "no own IPv4 address or gateway outside the numeric ranges (nothing to add for IPv4)")
+        return True, ""
+    command = ["/usr/bin/python3", "-I", "-c", _PROBE_PRIVATE, *targets]
+
+    def results(out):
+        found = {}
+        for line in out.strip().splitlines():
+            parts = line.split()
+            if len(parts) == 2:
+                found[parts[0]] = parts[1]
+        return found
+
+    code, out, err = runner.run_unit("address_filter_local_control", PROBE_PROPERTIES["address_filter_control"], command)
+    control = results(out)
+    if code != 0 or any(control.get(target) != "sent" for target in targets):
+        _check(checks, "address_filter_local", False, "control run without the filter could not send to " + ", ".join(targets))
+        return False, "the own-address probe could not be checked (a send to this server's own address or gateway without the filter did not work)"
+    properties = list(PROBE_PROPERTIES["address_filter_local"])
+    properties[1] = "IPAddressDeny=" + ADDRESS_DENY + " " + " ".join(extra)
+    code, out, err = runner.run_unit("address_filter_local", properties, command)
+    filtered = results(out)
+    ok = code == 0 and all(filtered.get(target) == "eperm" for target in targets)
+    _check(checks, "address_filter_local", ok, ", ".join(f"{a} {r}" for a, r in filtered.items()) or err.strip()[:200])
+    if not ok:
+        return False, "the address filter did not refuse a send to this server's own address or gateway"
+    return True, "own addresses and gateways refused"
+
+
+def _probe_dns(runner, resolvers, extra=()):
+    """Ask each upstream directly from a unit under the full deny list (the numeric ranges and this server's own addresses and gateways); no
+    address is allowed. Any DNS reply counts (NXDOMAIN too), no reply does not. Returns (answering upstreams, plain detail)."""
+    properties = list(PROBE_PROPERTIES["dns"])
+    if extra:
+        properties[1] = "IPAddressDeny=" + ADDRESS_DENY + " " + " ".join(extra)
+    answered = []
     for address in resolvers:
         command = ["/usr/bin/python3", "-I", "-c", _PROBE_DNS, address, DNS_PROBE_NAME]
-        code, out, _err = runner.run_unit("dns", list(PROBE_PROPERTIES["dns"]) + allow, command)
+        code, out, _err = runner.run_unit("dns", properties, command)
         if code == 0 and out.strip().startswith("reply"):
-            return address, f"{address} answered ({out.strip()})"
-    return "", ("no DNS reply from inside the unit from " + ", ".join(resolvers) + "; upstream resolvers: " + upstream_resolvers_text())
+            answered.append(address)
+    if answered:
+        return answered, ", ".join(answered) + " answered from inside the filtered unit"
+    return [], ("no DNS reply from inside the unit from " + ", ".join(resolvers) + "; upstream resolvers: " + upstream_resolvers_text())
 
 
 def write_status(status):
@@ -1272,7 +1467,8 @@ UNIT_PYTHON = "/usr/bin/python3"
 CHILD_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin"}  # the only environment a child of the helper gets
 WORK_DIR = "/work"
 PROC_MEMINFO = "/proc/meminfo"
-RESOLV_CONF = "/etc/resolv.conf"
+RESOLV_CONF = "/etc/resolv.conf"  # the host's own file (read only, fallback for the upstream list)
+RESOLV_TARGET = "/etc/resolv.conf"  # where Core's own resolv.conf is bound inside a unit
 
 SLICE = "tec-tac-sandbox.slice"
 UNIT_PREFIX = "tectac-sbx-"
@@ -1291,7 +1487,7 @@ LAUNCHER_HEADER_RE = re.compile(rb"TECTAC-SBX-LAUNCHER ([0-9a-f]{32})")
 SANDBOX_PATH_ENV = "/usr/local/bin:/usr/bin:/bin"
 # The unit's file system (plan sections 3 and 15). Hidden folders, then only what the runner needs bound back, read only.
 HIDDEN_FOLDERS = ("/etc", "/var", "/run", "/opt", "/srv", "/mnt", "/media", "/home", "/root", "/rmm", "/meshcentral", "/usr/local/lib/tec-tac")
-BASE_BINDS_REQUIRED = ("/etc/ssl/certs", "/etc/passwd", "/etc/group", "/etc/ld.so.cache", "/etc/resolv.conf")
+BASE_BINDS_REQUIRED = ("/etc/ssl/certs", "/etc/passwd", "/etc/group", "/etc/ld.so.cache")  # 1.17.123: /etc/resolv.conf is Core's own file, bound below
 BASE_BINDS_OPTIONAL = ("/etc/ca-certificates", "/etc/nsswitch.conf", "/etc/localtime")
 CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt"
 
@@ -1638,11 +1834,12 @@ def ready_status():
     return status
 
 
-def usable_resolvers(status, text):
-    """The addresses a run may reach for DNS: the IPv4 resolvers in resolv.conf right now that the selftest proved (it got an answer
-    from inside a filtered unit). IPv6 and zone-id addresses are skipped (a run has no IPv6). None means ``sandbox_unavailable``."""
-    proven = status.get("resolver")
-    return [a for a in parse_resolvers(text) if a == proven and ipaddress.ip_address(a).version == 4]
+def usable_resolvers(status, text, local):
+    """The upstream resolvers a run may use: the IPv4 upstreams listed right now (``read_upstream_text``) that are also in the selftest's proven
+    list and are still outside the denied ranges, this server's own addresses and its gateways. They become the Core-owned resolv.conf.
+    An empty list means ``sandbox_unavailable``. IPv6 and zone-id addresses are skipped (a run has no IPv6)."""
+    proven = status.get("resolvers") if isinstance(status.get("resolvers"), list) else []
+    return [a for a in parse_resolvers(text, ipv4_only=True) if a in proven and not upstream_problem(a, local)]
 
 
 # -------------------------------------------------------------------------------------------------------- the unit builder
@@ -1657,14 +1854,29 @@ def _bind_path_safe(path):
             and not any(ch.isspace() or ch in ":%$" or ord(ch) < 32 or ord(ch) == 127 for ch in path))
 
 
-def build_properties(row, run_id, *, resolvers, credential_names, exists=os.path.lexists):
+def build_properties(row, run_id, *, credential_names, exists=os.path.lexists, deny_extra=(), resolv_file=None, zswap=False):
     """Every property of the unit, as ``Key=Value`` strings. Built from the registry row and the constants above only: nothing here comes
-    from the caller or from the module's manifest text (argv and environment values travel as arguments, never as properties)."""
+    from the caller or from the module's manifest text (argv and environment values travel as arguments, never as properties).
+    ``deny_extra`` is this server's own addresses and gateways as ``<address>/32`` or ``/128`` (``local_deny``), added to IPAddressDeny;
+    ``resolv_file`` is Core's own resolv.conf, bound read only over /etc/resolv.conf; ``zswap`` adds MemoryZSwapMax=0 (systemd 255 or newer).
+    1.17.123: there is no IPAddressAllow at all."""
     limits = row["limits"]
     scratch = int(limits["scratch_mb"])
+    resolv_file = str(resolv_file or core_resolv_file())
     for path in BASE_BINDS_REQUIRED:
         if not exists(path):
             raise Refusal("sandbox_unavailable", f"this server has no {path} to hand a run")
+    if not _bind_path_safe(resolv_file) or not exists(resolv_file):
+        raise Refusal("sandbox_unavailable", "Core's resolv.conf for the run is missing")
+    deny_extra = list(deny_extra)
+    for item in deny_extra:  # numeric only: an address and its prefix length, nothing else ever reaches IPAddressDeny=
+        address, _slash, length = str(item).partition("/")
+        try:
+            numeric = str(ipaddress.ip_address(address)) == address and length == ("128" if ":" in address else "32")
+        except ValueError:
+            numeric = False
+        if not numeric:
+            raise Refusal("sandbox_unavailable", "an address for the deny list is not numeric")
     binds = list(BASE_BINDS_REQUIRED) + [path for path in BASE_BINDS_OPTIONAL if exists(path)]
     own = [root["path"] for root in row.get("runtime_roots") or []]
     if not all(_bind_path_safe(path) for path in own):
@@ -1682,7 +1894,7 @@ def build_properties(row, run_id, *, resolvers, credential_names, exists=os.path
         "RestrictSUIDSGID=yes", "LockPersonality=yes", "MemoryDenyWriteExecute=no", "ProtectKernelTunables=yes",
         "ProtectKernelModules=yes", "ProtectKernelLogs=yes", "ProtectControlGroups=yes", "ProtectClock=yes", "ProtectHostname=yes",
         "ProtectProc=invisible", "ProcSubset=pid", "UMask=0077", "KillMode=control-group", "SendSIGKILL=yes",
-        f"MemoryMax={int(limits['memory_mb'])}M", "MemorySwapMax=0", f"CPUQuota={int(limits['cpu_percent'])}%",
+        f"MemoryMax={int(limits['memory_mb'])}M", "MemorySwapMax=0", "OOMPolicy=kill", f"CPUQuota={int(limits['cpu_percent'])}%",
         f"TasksMax={int(limits['tasks'])}", "LimitNOFILE=1024", "LimitCORE=0", f"LimitFSIZE={scratch * 1024 * 1024}",
         f"RuntimeMaxSec={int(limits['run_seconds']) + TIMER_SLACK_SECONDS}",
         "TemporaryFileSystem=" + " ".join(f"{folder}:ro" for folder in HIDDEN_FOLDERS),
@@ -1690,8 +1902,10 @@ def build_properties(row, run_id, *, resolvers, credential_names, exists=os.path
         f"WorkingDirectory={WORK_DIR}",
     ]
     props += [f"BindReadOnlyPaths={path}" for path in binds]
-    props.append("IPAddressDeny=" + ADDRESS_DENY)
-    props += [allow_property(address) for address in resolvers]
+    props.append(f"BindReadOnlyPaths={resolv_file}:{RESOLV_TARGET}")
+    props.append("IPAddressDeny=" + " ".join([ADDRESS_DENY, *deny_extra]))
+    if zswap:
+        props.insert(props.index("MemorySwapMax=0") + 1, "MemoryZSwapMax=0")
     folder = SECRETS_ROOT / run_id
     props += [f"LoadCredential={name}:{folder / name}" for name in credential_names]
     if credential_names:
@@ -1716,9 +1930,10 @@ def _exec_escape(text):
     return str(text).replace("$", "$$")
 
 
-def build_argv(row, run_id, parameters, *, resolvers, credential_names, exists=os.path.lexists):
+def build_argv(row, run_id, parameters, *, credential_names, exists=os.path.lexists, deny_extra=(), resolv_file=None, zswap=False):
     argv = [*SYSTEMD_RUN, "--pipe", "--wait", "--collect", "--quiet", f"--unit={unit_name(run_id)}", f"--slice={SLICE}"]
-    argv += [f"--property={item}" for item in build_properties(row, run_id, resolvers=resolvers, credential_names=credential_names, exists=exists)]
+    argv += [f"--property={item}" for item in build_properties(row, run_id, credential_names=credential_names, exists=exists, deny_extra=deny_extra,
+                                                                resolv_file=resolv_file, zswap=zswap)]
     argv += [f"--setenv={name}={value}" for name, value in build_environment(row).items()]
     argv.append("--")
     command = [UNIT_PYTHON, "-I", str(LAUNCHER_FILE)]
@@ -1796,10 +2011,18 @@ class StreamParser:
         return b""
 
     def finish(self):
-        """What is still held at the end of the stream (nothing when a credential frame was open)."""
-        out = b"" if (self.in_credential or self.closed) else self.buf
-        self.buf = b""
-        return out
+        """What is still held at the end of the stream. Nothing when a credential frame was open or closed, and nothing when the launcher
+        header never arrived (that text is not the runner's). When the tail is the start of a marker (a prefix of the nonce line) that part
+        is dropped, so no byte of the nonce can reach stdout."""
+        buf, self.buf = self.buf, b""
+        if self.in_credential or self.closed or not self.header_done:
+            return b""
+        if not self.frames:
+            return buf
+        for size in range(min(len(buf), len(self.marker) - 1), 1, -1):  # a lone newline shows nothing of the nonce and stays
+            if self.marker.startswith(buf[-size:]):
+                return buf[:-size]
+        return buf
 
 
 # ------------------------------------------------------------------------------------------------------ run bookkeeping
@@ -1890,16 +2113,19 @@ def launch(row, *, run_id, person, parameters, credentials, input_data, emit, st
     threading.Event set when the caller closed its end. Used by ``--start`` and by the root-only canary. The kill switch is the caller's
     business. Returns the end frame."""
     status = status or ready_status()
-    try:
-        text = Path(RESOLV_CONF).read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        text = ""
-    resolvers = usable_resolvers(status, text)
+    try:  # 1.17.123: read at every start; unreadable means no run (fail closed)
+        local = local_deny_now()
+    except ValueError as exc:
+        raise Refusal("sandbox_unavailable", "this server's own addresses or gateway could not be read, so the address filter cannot be completed") from exc
+    resolvers = usable_resolvers(status, read_upstream_text(), local)
     if not resolvers:
-        raise Refusal("sandbox_unavailable", "no resolver that the selftest proved is in resolv.conf now")
+        raise Refusal("sandbox_unavailable", "no upstream name server that the selftest proved is still listed and outside the denied ranges")
     check_runner_ready(row)
     values = validate_run_parameters(row["parameters"], parameters)
-    argv = build_argv(row, run_id, values, resolvers=resolvers, credential_names=sorted(credentials))
+    resolv_file = core_resolv_file()
+    _write_root_file(resolv_file, resolv_conf_bytes(resolvers), 0o644)
+    zswap = isinstance(status.get("systemd_version"), int) and status["systemd_version"] >= ZSWAP_MIN_SYSTEMD
+    argv = build_argv(row, run_id, values, credential_names=sorted(credentials), deny_extra=local["extra"], resolv_file=resolv_file, zswap=zswap)
     holder = acquire_slots(person, row, slots_n=slots_n, person_n=person_n, clock=clock, sleep=sleep)
     process = None
     started_at = clock()
@@ -2164,6 +2390,11 @@ CANARY_REAL_FILES = ("/rmm/api/tacticalrmm/tacticalrmm/local_settings.py", "/etc
 CANARY_LAN_TARGETS = ("10.255.255.254", "172.31.255.254", "192.168.255.254", "100.127.255.254", "169.254.169.254")
 CANARY_PUBLIC_TARGET = "1.1.1.1"
 VERDICTS = ("OK", "ATTACK SUCCEEDED", "SKIPPED", "NOT RUN", "WARN")
+CANARY_STUB = "127.0.0.53"  # 1.17.123: systemd-resolved's stub; no longer allowed for anyone, so every port on it must refuse
+CANARY_STUB_PORTS = (22, 80, 443, 1024, 4430, 4433)  # the six rows that connected in the 1.17.122 dev02 run
+CANARY_ABSTRACT_MAX = 200
+CANARY_ABSTRACT_SECONDS = 60
+CANARY_SKIP_ALLOWED = ("public tcp 443",)  # the only row that may be SKIPPED (no public route from this server); any other SKIPPED row fails the canary
 CANARY_REQUIRED = {  # group -> (exact attack names, [(prefix, minimum count)])
     "sockets": ([], [("unix ", 13)]),
     "privilege": (["setuid(0)", "ptrace attach to parent", "mount", "unshare", "mknod", "raw socket", "write /proc/sys", "load a kernel module"], []),
@@ -2171,8 +2402,9 @@ CANARY_REQUIRED = {  # group -> (exact attack names, [(prefix, minimum count)])
     "processes": (["host processes invisible", "pid 1 invisible"], []),
     "mem": (["memory beyond MemoryMax"], []), "fork": (["fork bomb"], []), "scratch": (["scratch past its size"], []),
     "cred": (["credential arrives", "credential mode", "credential not in environment"], []),
-    "dns": (["allowed resolver answers"], []), "public": (["public tcp 443"], []), "abstract": ([], [("abstract sockets", 1)]),
-    "work_peer": (["another run's /work"], []), "lan": ([], [("udp ", 5), ("tcp ", 5)]), "loopback": ([], [("loopback ", 1)]),
+    "dns": (["allowed resolver answers"], [("other resolver ", 1)]), "public": (["public tcp 443"], []), "abstract": ([], [("abstract sockets", 1)]),
+    "work_peer": (["another run's /work"], []), "lan": ([], [("udp ", 5), ("tcp ", 5), ("own address ", 4)]),
+    "loopback": ([], [("loopback ", 1), ("loopback " + CANARY_STUB + ":", len(CANARY_STUB_PORTS))]),
 }
 
 
@@ -2229,18 +2461,68 @@ def group_table(wall, group, expected, runner_rows, plan_names=()):
     return table
 
 
+def _skipped_security(table):
+    """SKIPPED rows that count as a failure: every one except 'public tcp 443' (a server with no public route)."""
+    return [entry for entry in table if entry["verdict"] == "SKIPPED" and entry.get("attack") not in CANARY_SKIP_ALLOWED]
+
+
 def canary_summary(table):
-    """(passed, counts). PASSED only when no row is ATTACK SUCCEEDED and none is NOT RUN. SKIPPED and WARN never fail it and are never OK."""
+    """(passed, counts). PASSED only when no row is ATTACK SUCCEEDED, none is NOT RUN and no security row is SKIPPED (1.17.123: only
+    'public tcp 443' may be skipped, because a server may have no public route). WARN never fails it and is never OK."""
     counts = {verdict: 0 for verdict in VERDICTS}
     for entry in table:
         counts[entry["verdict"] if entry["verdict"] in counts else "NOT RUN"] += 1
-    return counts["ATTACK SUCCEEDED"] == 0 and counts["NOT RUN"] == 0, counts
+    return counts["ATTACK SUCCEEDED"] == 0 and counts["NOT RUN"] == 0 and not _skipped_security(table), counts
 
 
 def canary_record(table, passed, counts):
-    """canary.json: counts and failing rows only. No marker, no credential, no path of a secret."""
-    failing = [{"wall": e["wall"], "attack": e["attack"], "verdict": e["verdict"]} for e in table if e["verdict"] in ("ATTACK SUCCEEDED", "NOT RUN")]
+    """canary.json: counts and failing rows only. No marker, no credential, no path of a secret. A SKIPPED security row is listed as failing."""
+    failing = [{"wall": e["wall"], "attack": e["attack"], "verdict": e["verdict"]} for e in table
+               if e["verdict"] in ("ATTACK SUCCEEDED", "NOT RUN") or e in _skipped_security(table)]
     return {"ok": bool(passed), "at": now(), "counts": counts, "failing": failing[:50], "skipped": [e["attack"] for e in table if e["verdict"] == "SKIPPED"][:20]}
+
+
+def parse_abstract_sockets(data):
+    """1.17.123: the names of the host's abstract unix listeners from /proc/net/unix text (bytes or str): entries in the listening state whose
+    path starts with '@', without that '@', as latin-1 text so every byte survives a JSON round trip (the kernel prints a NUL inside a name as
+    '@' too, which cannot be told apart). Pathname sockets are ignored, names are unique, at most CANARY_ABSTRACT_MAX."""
+    raw = data if isinstance(data, (bytes, bytearray)) else str(data).encode("utf-8", "surrogateescape")
+    names = []
+    for line in bytes(raw).splitlines()[1:]:
+        parts = line.split(None, 7)
+        if len(parts) < 8 or not parts[7].startswith(b"@"):
+            continue
+        try:
+            listening = int(parts[3], 16) & 0x10000
+        except ValueError:
+            continue
+        name = parts[7][1:].decode("latin-1")
+        if listening and name not in names:
+            names.append(name)
+        if len(names) >= CANARY_ABSTRACT_MAX:
+            break
+    return names
+
+
+def read_abstract_names(path="/proc/net/unix"):
+    """The host's abstract listener names, or None when root cannot read them (the row is then NOT RUN, never SKIPPED)."""
+    try:
+        return parse_abstract_sockets(Path(path).read_bytes())
+    except OSError:
+        return None
+
+
+def open_abstract_listener():
+    """Root's own throw-away abstract listener, for the information row that shows whether the abstract namespace is shared at all.
+    (listener or None, its name or '')."""
+    try:
+        name = "tectac-canary-" + secrets.token_hex(8)
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind("\0" + name)
+        listener.listen(4)
+        return listener, name
+    except (OSError, AttributeError):
+        return None, ""
 
 
 def parse_listening(text):
@@ -2265,11 +2547,6 @@ def resolver_ports(by_address, resolver):
     for host in ("*", "0.0.0.0", "::"):
         wild |= by_address.get(host, set())
     return sorted(by_address.get(resolver, set()) | wild)[:200]
-
-
-def parse_gateway(text):
-    match = re.search(r"default via (\d+\.\d+\.\d+\.\d+)", text or "")
-    return match.group(1) if match else ""
 
 
 def collect_run(group, plan, *, person="canary", slots_n=None, person_n=PERSON_SLOTS, credentials=None, status=None, run_id=None, **limit_overrides):
@@ -2366,16 +2643,34 @@ def run_canary(*, status=None, collect=None, outside=None):
     if status.get("ready") is not True:
         return [{"wall": "Selftest", "attack": "selftest ready", "expected": "ready", "actual": status.get("reason", "not ready"), "verdict": "NOT RUN"}]
     resolver = status.get("resolver") or ""
+    proven = status.get("resolvers") if isinstance(status.get("resolvers"), list) else []
     try:
         resolv_text = Path(RESOLV_CONF).read_text(encoding="utf-8", errors="replace")
     except OSError:
         resolv_text = ""
-    others = [a for a in parse_resolvers(resolv_text) if a != resolver and ipaddress.ip_address(a).version == 4]
+    # 1.17.123: the host's own resolv.conf entries (the stub, any private upstream) are not reachable from a run, so each must be dropped;
+    # the stub is always tested, so the row exists on every server and is never SKIPPED
+    others = [a for a in parse_resolvers(resolv_text, ipv4_only=True) if a not in proven]
+    if CANARY_STUB not in others:
+        others.append(CANARY_STUB)
     _c, ss_text, _e = outside.run_cmd(["ss", "-ltnH"])
-    ports, by_address = parse_listening(ss_text)
-    _c, route_text, _e = outside.run_cmd(["ip", "-4", "route", "show", "default"])
-    gateway = parse_gateway(route_text)
-    lan = ([gateway] if gateway else []) + list(CANARY_LAN_TARGETS)
+    ports, _by_address = parse_listening(ss_text)
+    try:
+        local = read_local_deny(outside.run_cmd)
+    except ValueError as exc:
+        local = {"addresses": [], "gateways": [], "extra": []}
+        table.append({"wall": "LAN", "attack": "own addresses and gateway", "expected": "read", "actual": str(exc)[:200], "verdict": "NOT RUN"})
+    own = [a for a in local["addresses"] if ":" not in a and not a.startswith("127.")][:4]
+    gateways = [g for g in local["gateways"] if ":" not in g][:4]
+    lan_names = [f"own address {a} tcp {port}" for a in own for port in (22, 80, 443)] + [f"own address {a} udp" for a in own]
+    lan_names += [f"gateway {g} tcp {port}" for g in gateways for port in (80, 443)] + [f"gateway {g} udp" for g in gateways]
+    abstract_names = read_abstract_names()
+    abstract_plan = {"abstract_seconds": CANARY_ABSTRACT_SECONDS - 20}
+    if abstract_names is not None:
+        abstract_plan["abstract"] = abstract_names
+    listener, listener_name = open_abstract_listener()
+    if listener_name:
+        abstract_plan["abstract_probe"] = listener_name
 
     def group(wall, name, expected, plan=None, plan_names=(), **kwargs):
         result = collect(name, plan or {}, status=status, **kwargs)
@@ -2397,14 +2692,15 @@ def run_canary(*, status=None, collect=None, outside=None):
         group("Files", "work_peer", "not found", {"work_token": peer_token}, person="canary-peer")
         holder.join(10)
         group("Sockets", "sockets", "not present or refused")
-        group("Loopback", "loopback", "connection refused", {"ports": ports, "resolver": resolver, "resolver_ports": resolver_ports(by_address, resolver)})
-        group("LAN", "lan", "dropped (EPERM)", {"lan": lan})
-        group("DNS", "dns", "allowed resolver answers; others dropped", {"resolver": resolver, "other_resolvers": others})
+        group("Loopback", "loopback", "connection refused",
+              {"ports": ports, "stub": CANARY_STUB, "stub_ports": sorted(set(ports) | set(CANARY_STUB_PORTS))[:200]})
+        group("LAN", "lan", "dropped (EPERM)", {"lan": list(CANARY_LAN_TARGETS), "own": own, "gateways": gateways}, plan_names=lan_names)
+        group("DNS", "dns", "the upstream answers directly; the host's own entries dropped", {"resolver": resolver, "other_resolvers": others})
         group("Public", "public", "TCP 443 works (SKIPPED without a public route)", {"public": CANARY_PUBLIC_TARGET})
         group("Privilege", "privilege", "EPERM")
         group("Writes", "writes", "read-only or private")
         group("Processes", "processes", "host processes invisible")
-        group("Abstract sockets", "abstract", "none reachable (Medium finding R1 otherwise)")
+        group("Abstract sockets", "abstract", "none reachable (Medium finding R1 otherwise)", abstract_plan, run_seconds=CANARY_ABSTRACT_SECONDS)
         table.extend(_limit_rows(collect, status))
         table.extend(_credential_rows(collect, status))
         table.extend(_cancel_rows(collect, status))
@@ -2412,7 +2708,41 @@ def run_canary(*, status=None, collect=None, outside=None):
         table.extend(_latency_rows(collect, status))
     finally:
         remove_markers()
+        if listener is not None:
+            listener.close()
     return table
+
+
+def parse_progress(data, marker="CANARYMEM"):
+    """The last ``<marker><TAB><number>`` line of the in-unit program's output, as an integer, or None when there is none."""
+    text = data.decode("utf-8", "replace") if isinstance(data, (bytes, bytearray)) else str(data)
+    found = None
+    for line in text.splitlines():
+        parts = line.split("\t")
+        if len(parts) == 2 and parts[0] == marker and parts[1].isdigit():
+            found = int(parts[1])
+    return found
+
+
+def memory_row(result, memory_mb, block=MEMORY_BLOCK_MIB):
+    """1.17.123: the 'memory beyond MemoryMax' row, judged on what happened, not on systemd's label alone. The kernel may kill only the runner
+    child; the launcher then exits 137 and systemd records 'exit-code', not 'oom-kill'. OK only when the run was stopped (reason oom, or the
+    runner died by SIGKILL, launcher exit 137) AND the last reported allocation and the memory peak are at or below MemoryMax plus one block.
+    Allocating past the limit, or finishing normally, is ATTACK SUCCEEDED; no end frame is NOT RUN."""
+    row = {"wall": "Limits", "attack": "memory beyond MemoryMax", "expected": f"stopped at or below {memory_mb} MiB (plus one {block} MiB block)"}
+    end = result.get("end") or {}
+    if result.get("refused") or not end:
+        row.update(actual="refused: " + str(result["refused"]) if result.get("refused") else "no end frame", verdict="NOT RUN")
+        return row
+    allocated = parse_progress(result.get("stdout", b""))
+    reason, code, peak = end.get("reason"), end.get("exit"), end.get("peak_mb")
+    stopped = reason == "oom" or (reason == "exited" and code == 137)
+    limit = memory_mb + block
+    over = (allocated is not None and allocated > limit) or (isinstance(peak, (int, float)) and peak > limit)
+    row["actual"] = f"allocated {allocated if allocated is not None else 0} MiB, ended {reason}" + (f" (exit {code})" if reason == "exited" else "") + \
+        (f", peak {peak} MiB" if isinstance(peak, (int, float)) else "")
+    row["verdict"] = "OK" if stopped and not over else "ATTACK SUCCEEDED"
+    return row
 
 
 def _limit_rows(collect, status):
@@ -2428,7 +2758,7 @@ def _limit_rows(collect, status):
         rows.append({"wall": "Limits", "attack": attack, "expected": expected_reason, "actual": str(reason), "verdict": verdict})
         return result
 
-    one("memory beyond MemoryMax", "mem", {"alloc_mb": 600}, "oom", memory_mb=128)
+    rows.append(memory_row(collect("mem", {"alloc_mb": 600}, status=status, memory_mb=128), 128))
     fork = collect("fork", {"forks": 300}, status=status, tasks=64)
     rows.extend(group_table("Limits", "fork", "EAGAIN before 64 tasks", parse_runner_rows(fork["stdout"])))
     one("infinite loop", "loop", {}, "timeout", run_seconds=4)
@@ -2493,6 +2823,29 @@ def _foreign_row(foreign, before, after):
 CANARY_CRED_HOLD_SECONDS = 10
 
 
+NONCE_FRAME_RE = re.compile(rb"[0-9a-f]{32} CRED ")
+
+
+def credential_leak_findings(token, result):
+    """1.17.123: what the launcher's credential frame or the secrets left in the places a caller sees. Looks for the real thing, not a word:
+    the nonce-shaped frame start (32 hex digits, ' CRED '), the launcher header text, the token and the refreshed token (plain and base64).
+    Searches stdout, stderr and every field of the end frame except ``credential_b64`` (the one place that value belongs), and the refusal.
+    A runner line that merely says CREDENTIALS_DIRECTORY or CRED is not a finding. Returns plain findings such as 'stdout: token'."""
+    token_bytes = str(token).encode()
+    refreshed = b"refreshed-" + token_bytes
+    needles = {"the nonce frame": None, "the launcher header": b"TECTAC-SBX-LAUNCHER", "the token": token_bytes, "the refreshed token": refreshed,
+               "the token (base64)": base64.b64encode(token_bytes), "the refreshed token (base64)": base64.b64encode(refreshed)}
+    end = {key: value for key, value in (result.get("end") or {}).items() if key != "credential_b64"}
+    places = {"stdout": bytes(result.get("stdout", b"")), "stderr": bytes(result.get("stderr", b"")),
+              "end frame": json.dumps(end, sort_keys=True, default=str).encode(), "refusal": str(result.get("refused") or "").encode()}
+    found = []
+    for place, data in places.items():
+        for label, needle in needles.items():
+            if (NONCE_FRAME_RE.search(data) if needle is None else (bool(needle) and needle in data)):
+                found.append(f"{place}: {label}")
+    return found
+
+
 def _credential_rows(collect, status, probe=None, ready=None):
     probe = probe or _foreign_credential_probe
     ready = ready or _credential_file_ready
@@ -2540,9 +2893,10 @@ def _credential_rows(collect, status, probe=None, ready=None):
     got = base64.b64decode(back).decode("utf-8", "replace") if back else ""
     rows.append({"wall": "Credential", "attack": "credential_return round trip", "expected": "refreshed token back",
                  "actual": "came back" if got == expected_back else "missing or wrong", "verdict": "OK" if got == expected_back else "ATTACK SUCCEEDED"})
-    leaked_out = token.encode() in result.get("stdout", b"") or "CRED" in result.get("stdout", b"").decode("utf-8", "replace")
-    rows.append({"wall": "Credential", "attack": "credential frame stripped from output", "expected": "no CRED line in stdout",
-                 "actual": "found in output" if leaked_out else "stripped", "verdict": "ATTACK SUCCEEDED" if leaked_out else "OK"})
+    found = credential_leak_findings(token, result)
+    rows.append({"wall": "Credential", "attack": "credential frame stripped from output", "expected": "no frame, header, token or refreshed token in stdout, stderr or events",
+                 "actual": ("found: " + "; ".join(found)) if found else "stripped (checked stdout, stderr and the end frame for the nonce frame, the launcher header, the token and the refreshed token)",
+                 "verdict": "ATTACK SUCCEEDED" if found else "OK"})
     return rows
 
 

@@ -54,7 +54,8 @@ must(sh.group_table("Limits", "unknown-group", "x", [])[0]["verdict"] == "NOT RU
 S = sh.canary_summary
 ok_row = {"verdict": "OK"}
 must(S([ok_row] * 3)[0] is True, "all OK")
-must(S([ok_row, {"verdict": "SKIPPED"}, {"verdict": "WARN"}])[0] is True and S([{"verdict": "SKIPPED"}])[1]["OK"] == 0, "SKIPPED and WARN do not fail, and are not counted OK")
+must(S([ok_row, {"verdict": "SKIPPED", "attack": "public tcp 443"}, {"verdict": "WARN"}])[0] is True and S([{"verdict": "SKIPPED"}])[1]["OK"] == 0, "a skipped 'public tcp 443' and WARN do not fail, and are not counted OK")
+must(S([ok_row, {"verdict": "SKIPPED", "attack": "abstract sockets"}])[0] is False, "1.17.123: a skipped security row fails the canary")
 must(S([ok_row, {"verdict": "ATTACK SUCCEEDED"}])[0] is False, "a succeeded attack fails")
 must(S([ok_row, {"verdict": "NOT RUN"}])[0] is False, "a probe that did not run fails")
 must(S([ok_row, {"verdict": "something else"}])[0] is False, "an unknown verdict fails")
@@ -68,14 +69,16 @@ def lines(*pairs):
 FILES_SOCKS = [(f"unix /s{k}", "OK", "ENOENT") for k in range(13)]
 GOOD = {
     "files": None, "work_peer": lines(("another run's /work", "OK", "not found")), "sockets": lines(*FILES_SOCKS),
-    "loopback": lines(("loopback 127.0.0.1:80", "OK", "EPERM")),
-    "lan": lines(*([(f"udp {a}", "OK", "eperm") for a in range(5)] + [(f"tcp {a}:80", "OK", "EPERM") for a in range(5)])),
-    "dns": lines(("allowed resolver answers", "OK", "answered"), ("other resolver dropped", "SKIP", "none listed")),
+    "loopback": lines(("loopback 127.0.0.1:80", "OK", "EPERM"), *[(f"loopback 127.0.0.53:{p}", "OK", "EPERM") for p in (22, 80, 443, 1024, 4430, 4433)]),
+    "lan": lines(*([(f"udp {a}", "OK", "eperm") for a in range(5)] + [(f"tcp {a}:80", "OK", "EPERM") for a in range(5)]
+                   + [(f"own address 192.168.1.5 tcp {p}", "OK", "timeout") for p in (22, 80, 443)] + [("own address 192.168.1.5 udp", "OK", "eperm")]
+                   + [(f"gateway 192.168.1.1 tcp {p}", "OK", "timeout") for p in (80, 443)] + [("gateway 192.168.1.1 udp", "OK", "eperm")])),
+    "dns": lines(("allowed resolver answers", "OK", "answered"), ("other resolver 127.0.0.53 dropped", "OK", "dropped"), ("other resolver 10.0.0.2 dropped", "OK", "dropped")),
     "public": lines(("public tcp 443", "OK", "connected")),
     "privilege": lines(*[(n, "OK", "EPERM") for n in ("setuid(0)", "ptrace attach to parent", "mount", "unshare", "mknod", "raw socket", "write /proc/sys", "load a kernel module")]),
     "writes": lines(*[(f"write /{k}", "OK", "EROFS") for k in range(9)]),
     "processes": lines(("host processes invisible", "OK", "2"), ("pid 1 invisible", "OK", "not found")),
-    "abstract": lines(("abstract sockets (3 listed)", "OK", "none reachable")),
+    "abstract": lines(("abstract probe listener (information)", "OK", "reachable"), ("abstract sockets (3 listed)", "OK", "none reachable")),
     "mem": lines(("memory beyond MemoryMax", "OK", "x")), "fork": lines(("fork bomb", "OK", "63 children, then EAGAIN")),
     "scratch": lines(("scratch past its size", "OK", "ENOSPC after 8 MiB")),
     "cred": lines(("credential arrives", "OK", "arrived"), ("credential mode", "OK", "0o400"), ("credential not in environment", "OK", "absent")),
@@ -116,8 +119,12 @@ class Outside:
     def run_cmd(self, argv, *, timeout=15):
         if argv[0] == "ss":
             return 0, "LISTEN 0 4096 127.0.0.53:53 0.0.0.0:*\nLISTEN 0 511 *:443 *:*\nLISTEN 0 128 [::]:22 [::]:*\nLISTEN 0 100 127.0.0.1:5432 0.0.0.0:*\n", ""
-        if argv[0] == "ip":
+        if argv[0] == "ip" and argv[1] == "-o":
+            return 0, "1: lo    inet 127.0.0.1/8 scope host lo" + chr(10) + "2: eth0    inet 192.168.1.5/24 brd 192.168.1.255 scope global eth0" + chr(10), ""
+        if argv[0] == "ip" and argv[1] == "-4":
             return 0, "default via 192.168.1.1 dev eth0 proto dhcp\n", ""
+        if argv[0] == "ip":
+            return 0, "", ""
         return 0, "", ""
 
 
@@ -138,21 +145,24 @@ sh.CANARY_MARKER_DIRS = tuple(MARK_DIRS) + (str(BASE / "does-not-exist"),)
 real_file = BASE / "local_settings.py"
 real_file.write_text("SECRET_KEY='x'\n", encoding="utf-8")
 sh.CANARY_REAL_FILES = (str(real_file), str(BASE / "absent-real-file"))
-status = {"ready": True, "resolver": "127.0.0.53", "resolvers": ["127.0.0.53"]}
+status = {"ready": True, "resolver": "9.9.9.9", "resolvers": ["9.9.9.9"]}
 Path(sh.RESOLV_CONF).write_text("nameserver 127.0.0.53\nnameserver 10.0.0.2\nnameserver ::1\n", encoding="utf-8")
 
 table = sh.run_canary(status=status, collect=make_collect(), outside=Outside())
 passed, counts = sh.canary_summary(table)
 must(passed, [r for r in table if r["verdict"] not in ("OK", "SKIPPED")])
-must(counts["SKIPPED"] == 1 and counts["OK"] > 40 and counts["ATTACK SUCCEEDED"] == 0 and counts["NOT RUN"] == 0, counts)
+must(counts["SKIPPED"] == 0 and counts["OK"] > 40 and counts["ATTACK SUCCEEDED"] == 0 and counts["NOT RUN"] == 0, counts)
 walls = {r["wall"] for r in table}
 for wall in ("Files", "Sockets", "Loopback", "LAN", "DNS", "Public", "Privilege", "Writes", "Processes", "Limits", "Abstract sockets", "Credential", "Cancel", "Concurrency", "Latency"):
     must(wall in walls, (wall, walls))
-# plan details handed to the unit: listening ports, the resolver's ports without DNS, the gateway first, other resolvers IPv4 only
-must(PLANS["loopback"]["ports"] == [22, 53, 443, 5432] and PLANS["loopback"]["resolver"] == "127.0.0.53", PLANS["loopback"])
-must(PLANS["loopback"]["resolver_ports"] == [22, 53, 443] or PLANS["loopback"]["resolver_ports"] == [53, 443, 22] or sorted(PLANS["loopback"]["resolver_ports"]) == [22, 53, 443], PLANS["loopback"])
-must(PLANS["lan"]["lan"][0] == "192.168.1.1" and "169.254.169.254" in PLANS["lan"]["lan"] and len(PLANS["lan"]["lan"]) == 6, PLANS["lan"])
-must(PLANS["dns"]["other_resolvers"] == ["10.0.0.2"], PLANS["dns"])
+# plan details handed to the unit (1.17.123): listening ports and the stub with the six ports that connected on dev02; the own address and
+# the gateway for the LAN group; the host's own resolv.conf entries (and always the stub) for the DNS group
+must(PLANS["loopback"]["ports"] == [22, 53, 443, 5432] and PLANS["loopback"]["stub"] == "127.0.0.53", PLANS["loopback"])
+must(PLANS["loopback"]["stub_ports"] == [22, 53, 80, 443, 1024, 4430, 4433, 5432], PLANS["loopback"])
+must("resolver" not in PLANS["loopback"] and "resolver_ports" not in PLANS["loopback"], "the old resolver rows are gone")
+must(PLANS["lan"]["lan"][0] == "10.255.255.254" and "169.254.169.254" in PLANS["lan"]["lan"] and len(PLANS["lan"]["lan"]) == 5, PLANS["lan"])
+must(PLANS["lan"]["own"] == ["192.168.1.5"] and PLANS["lan"]["gateways"] == ["192.168.1.1"], PLANS["lan"])
+must(PLANS["dns"]["other_resolvers"] == ["127.0.0.53", "10.0.0.2"] and PLANS["dns"]["resolver"] == "9.9.9.9", PLANS["dns"])
 # markers: distinct random content, real files marked as "readable at all", the runner told, and all removed afterwards
 markers = PLANS["files"]["markers"]
 planted = [m for m in markers if m["content"] is not None]
@@ -197,7 +207,7 @@ must(sh.canary_summary(bad)[0] is False and any(r["verdict"] == "NOT RUN" and r[
 bad = sh.run_canary(status=status, collect=make_collect({"files": b"garbage"}), outside=Outside())
 must(sh.canary_summary(bad)[0] is False, "markers with no results")
 skip = sh.run_canary(status=status, collect=make_collect({"public": lines(("public tcp 443", "SKIP", "no public route"))}), outside=Outside())
-must(sh.canary_summary(skip)[0] is True and sum(1 for r in skip if r["verdict"] == "SKIPPED") == 2 and not [r for r in skip if r["attack"] == "public tcp 443" and r["verdict"] == "OK"], "skipped public is not OK")
+must(sh.canary_summary(skip)[0] is True and sum(1 for r in skip if r["verdict"] == "SKIPPED") == 1 and not [r for r in skip if r["attack"] == "public tcp 443" and r["verdict"] == "OK"], "skipped public is not OK")
 refused = sh.run_canary(status=status, collect=lambda g, p, **k: {"stdout": b"", "end": None, "refused": "sandbox_unavailable"}, outside=Outside())
 must(sh.canary_summary(refused)[0] is False and all(r["verdict"] in ("NOT RUN", "OK", "SKIPPED", "ATTACK SUCCEEDED") for r in refused), "a refused start is NOT RUN")
 notready = sh.run_canary(status={"ready": False, "reason": "no cgroup v2"}, collect=make_collect(), outside=Outside())
@@ -323,7 +333,7 @@ must(sh.SANDBOX_ENABLED is False and "SANDBOX_ENABLED = False" in HELPER.read_te
 ports, by_addr = sh.parse_listening("LISTEN 0 4096 127.0.0.53%lo:53 0.0.0.0:*\nLISTEN 0 1 [::1]:631 [::]:*\nLISTEN 0 5 *:8080 *:*\ngarbage\nLISTEN 0 1 1.2.3.4:abc x\n")
 must(ports == [53, 631, 8080] and by_addr["*"] == {8080} and by_addr["::1"] == {631}, (ports, by_addr))
 must(sh.resolver_ports({"127.0.0.53": {53}, "*": {80}, "0.0.0.0": {443}}, "127.0.0.53") == [53, 80, 443], "wildcard binds count for the resolver address")
-must(sh.parse_gateway("default via 10.1.2.3 dev eth0\n") == "10.1.2.3" and sh.parse_gateway("") == "" and sh.parse_gateway("x") == "", "gateway")
+must(sh.parse_gateways("default via 10.1.2.3 dev eth0") == ["10.1.2.3"] and sh.parse_gateways("") == [] and sh.parse_gateways("x") == [], "gateway (1.17.123: parse_gateways)")
 
 # ------------------------------------------------------------------------------------------------ the in-unit program
 RUNNER = ROOT / "scripts" / "sandbox-canary-runner.py"

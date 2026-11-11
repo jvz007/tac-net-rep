@@ -183,7 +183,8 @@ must(sh.parse_acl(decode(good))[1] == ("user", "61908", "r--"), "parse")
 # ---- pure function checks
 P = sh.credential_mode_problem
 must(P("440 0 0", "61500", "61500", FULL) == "" and P("400 61500 61500", "61500", "61500", "ACL none") == "", "accepted")
-must(P("440 0 0", "61500", "61500", "") != "" and P("440 0 0", "61500", "61500", "ACL none") == "", "an empty answer fails, 'ACL none' passes")
+must(P("440 0 0", "61500", "61500", "") != "" and P("440 61500 61500", "61500", "61500", "ACL none") == "", "an empty answer fails, 'ACL none' passes")
+must(P("440 0 0", "61500", "61500", "ACL none") != "", "1.17.123: group root with no ACL is refused (tests/sandbox-credential-root-group-1.17.123.py)")
 must(P("440 0 0", "61500", "61500", FULL.replace("user:61500", "user:61501")) != "", "other uid")
 must(sh.credential_found_text("440 0 0", FULL) == "owner root, group root, mode 440, ACL user::r--, user:61500:r--, group::r--, mask::r--, other::---", "found text")
 must(sh.credential_found_text("x", "") == "owner, group and mode unreadable, ACL answer missing or garbled", "found text, unreadable")

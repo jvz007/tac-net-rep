@@ -140,12 +140,17 @@ def g_loopback(plan):
             except OSError as exc:
                 result = errno.errorcode.get(exc.errno, "error")
             row(f"loopback {host}:{port}", "SUCCEEDED" if result == "connected" else "OK", result)
-    resolver = plan.get("resolver", "")
-    for port in [int(p) for p in plan.get("resolver_ports", []) if int(p) != 53]:
-        result = tcp_connect(resolver, port)
-        row(f"resolver {resolver}:{port}", "SUCCEEDED" if result == "connected" else "OK", result)
-    if not ports:
-        row("loopback ports", "SKIP", "no listening port found to test")
+    # 1.17.123: nothing is allowed on the stub any more (the upstream resolver is public), so every port on it must refuse too
+    stub = plan.get("stub", "")
+    if stub:
+        for port in [int(p) for p in plan.get("stub_ports", [])]:
+            result = tcp_connect(stub, port)
+            row(f"loopback {stub}:{port}", "SUCCEEDED" if result == "connected" else "OK", result)
+
+
+def _reached(tcp_result):
+    """A TCP answer that proves the packet got to a host: connected, or refused (a reset only comes back from a host that was reached)."""
+    return tcp_result in ("connected", "ECONNREFUSED")
 
 
 def g_lan(plan):
@@ -155,6 +160,19 @@ def g_lan(plan):
         row("udp " + target, "SUCCEEDED" if result == "sent" else "OK", result)
         tcp = tcp_connect(target, 80, timeout=1.0)
         row("tcp " + target + ":80", "SUCCEEDED" if tcp == "connected" else "OK", tcp)
+    # 1.17.123: this server's own addresses and its gateways are denied by address, whatever the next hop is
+    for address in plan.get("own", []):
+        for port in (22, 80, 443):
+            tcp = tcp_connect(address, port, timeout=1.0)
+            row(f"own address {address} tcp {port}", "SUCCEEDED" if _reached(tcp) else "OK", tcp)
+        sent = udp_send(address)
+        row(f"own address {address} udp", "SUCCEEDED" if sent == "sent" else "OK", sent)
+    for address in plan.get("gateways", []):
+        for port in (80, 443):
+            tcp = tcp_connect(address, port, timeout=1.0)
+            row(f"gateway {address} tcp {port}", "SUCCEEDED" if _reached(tcp) else "OK", tcp)
+        sent = udp_send(address)
+        row(f"gateway {address} udp", "SUCCEEDED" if sent == "sent" else "OK", sent)
 
 
 def g_dns(plan):
@@ -162,10 +180,7 @@ def g_dns(plan):
     if allowed:
         ok = dns_query(allowed)
         row("allowed resolver answers", "OK" if ok else "SUCCEEDED", "answered" if ok else "no answer (DNS broken)")
-    others = plan.get("other_resolvers", [])
-    if not others:
-        row("other resolver dropped", "SKIP", "resolv.conf lists no other resolver")
-    for address in others:
+    for address in plan.get("other_resolvers", []):  # 1.17.123: the host's own resolv.conf entries; none given means the table says NOT RUN
         answered = dns_query(address)
         row(f"other resolver {address} dropped", "SUCCEEDED" if answered else "OK", "answered" if answered else "dropped")
 
@@ -238,13 +253,16 @@ def g_processes(plan):
 
 
 def g_mem(plan):
+    """Allocate in 16 MiB blocks and report the total after each one (flushed), so the helper still knows how far the run got when the kernel
+    kills it. The line is not a table row: the root helper reads the last CANARYMEM number."""
     blocks = []
     try:
         for _ in range(int(plan.get("alloc_mb", 600)) // 16):
             blocks.append(bytearray(b"\x01") * (16 * 1024 * 1024))
+            print(f"CANARYMEM	{len(blocks) * 16}", flush=True)
         row("memory beyond MemoryMax", "SUCCEEDED", f"allocated {len(blocks) * 16} MiB")
     except MemoryError:
-        row("memory beyond MemoryMax", "OK", "MemoryError")
+        row("memory beyond MemoryMax", "OK", f"MemoryError after {len(blocks) * 16} MiB")
 
 
 def g_fork(plan):
@@ -295,30 +313,47 @@ def g_flood(plan):
     row("stdout past its cap", "SUCCEEDED", "wrote everything")
 
 
-def g_abstract(plan):
-    names = []
-    try:
-        with open("/proc/net/unix", encoding="utf-8", errors="replace") as handle:
-            for line in handle.read().splitlines()[1:]:
-                parts = line.split()
-                if len(parts) >= 8 and parts[7].startswith("@"):
-                    names.append(parts[7][1:])
-    except OSError as exc:
-        row("abstract sockets", "SKIP", f"cannot list /proc/net/unix ({errno.errorcode.get(exc.errno, 'error')})")
-        return
-    reached = []
-    for name in names[:200]:
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        s.settimeout(0.5)
+def _abstract_connect(name):
+    """True when an abstract unix socket (the name's bytes are kept exactly, latin-1) accepts a connection from here, stream or seqpacket."""
+    address = b"\0" + name.encode("latin-1", "replace")
+    for kind in (socket.SOCK_STREAM, getattr(socket, "SOCK_SEQPACKET", socket.SOCK_STREAM)):
+        s = socket.socket(socket.AF_UNIX, kind)
+        s.settimeout(0.3)
         try:
-            s.connect("\0" + name)
-            reached.append(name)
+            s.connect(address)
+            return True
         except OSError:
             pass
         finally:
             s.close()
+    return False
+
+
+def g_abstract(plan):
+    """1.17.123: root lists the host's abstract listeners before the run (this unit cannot read /proc/net/unix) and passes them in the plan;
+    every one is tried here and only a name and a verdict are printed, never any content. No list in the plan prints nothing (the table says
+    NOT RUN). Information only: whether a throw-away listener of root's own is reachable shows whether the abstract namespace is shared."""
+    probe = plan.get("abstract_probe")
+    if probe:
+        shared = _abstract_connect(probe)
+        row("abstract probe listener (information)", "OK",
+            "reachable: the abstract namespace is shared with the host" if shared else "not reachable from this unit")
+    if "abstract" not in plan:
+        return
+    names = [str(n) for n in plan.get("abstract", [])]
+    deadline = time.monotonic() + float(plan.get("abstract_seconds", 40))
+    reached, tried = [], 0
+    for name in names:
+        if time.monotonic() > deadline:
+            break
+        tried += 1
+        if _abstract_connect(name):
+            reached.append(name)
+    if tried < len(names):
+        row(f"abstract sockets ({len(names)} listed)", "NOTRUN", f"only {tried} of {len(names)} could be tried in time")
+        return
     row(f"abstract sockets ({len(names)} listed)", "SUCCEEDED" if reached else "OK",
-        ("Medium finding R1, connected to: " + ", ".join(reached[:5])) if reached else "none reachable")
+        ("Medium finding R1, connected to: " + ", ".join("@" + n for n in reached[:5])) if reached else "none reachable")
 
 
 def g_cred(plan):

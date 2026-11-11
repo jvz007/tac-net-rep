@@ -12,6 +12,12 @@ import socket
 from pathlib import Path
 
 
+IP_ADDR = ("1: lo    inet 127.0.0.1/8 scope host lo\\       valid_lft forever preferred_lft forever\n"
+           "2: eth0    inet 129.232.197.50/24 brd 129.232.197.255 scope global eth0\\       valid_lft forever preferred_lft forever\n")
+IP_ROUTE4 = "default via 129.232.197.1 dev eth0 proto static\n"
+PUBLIC = "nameserver 156.38.225.225\noptions edns0\n"
+
+
 class Fake:
     """Answers each probe by name. ``script`` maps a name to (code, stdout), a callable(properties, command) or a keyword."""
 
@@ -29,15 +35,22 @@ class Fake:
             "address_filter_loopback": (0, "blocked\n"),
             "address_filter_private": (0, "10.255.255.254 eperm\n172.31.255.254 eperm\n192.168.255.254 eperm\n100.127.255.254 eperm\n169.254.169.254 eperm\n"),
             "pipe_streams": lambda properties, command: (0, "out", "err"),
+            "address_filter_local_control": lambda properties, command: (0, "".join(f"{a} sent\n" for a in command[4:]), ""),
+            "address_filter_local": lambda properties, command: (0, "".join(f"{a} eperm\n" for a in command[4:]), ""),
             "dns": (0, "reply 0\n"),
         }
         self.script.update(overrides)
+        # 1.17.123: what `ip` says (the dev02 shape: loopback, a public address, its gateway)
+        self.ip = {"addr": IP_ADDR, "route4": IP_ROUTE4, "route6": ""}
         # 1.17.122: the default is the real dev02 shape (root:root, mode 440, ACL user:<unit uid>:r--, mask r--). acl: None builds that ACL line
         # from unit_uid, False leaves the line out (a missing answer), a string is sent as it is.
         self.credential = {"mode": "440", "uid": "0", "gid": "0", "unit_uid": "61500", "unit_gid": "61500", "stat": None, "token": None, "remove": True,
                            "acl": None}
 
     def run_cmd(self, argv, *, timeout=15):
+        if argv[0] == "ip":
+            key = "addr" if argv[1] == "-o" else ("route4" if argv[1] == "-4" else "route6")
+            return 0, self.ip[key], ""
         answer = self.script["systemctl" if argv[0] == "systemctl" else "stat"]
         return (answer[0], answer[1], "")
 
@@ -70,7 +83,7 @@ class Fake:
         return answer[0], answer[1], "err text" if answer[0] else ""
 
 
-def run_selftest(sh, run_root, base, fake, resolv="nameserver 127.0.0.53\noptions edns0\n"):
+def run_selftest(sh, run_root, base, fake, resolv=PUBLIC):
     path = Path(base) / f"resolv-{len(list(Path(base).glob('resolv-*')))}.conf"
     path.write_text(resolv, encoding="utf-8")
-    return sh.selftest(fake, resolv_conf_path=path, run_root=run_root)
+    return sh.selftest(fake, resolv_conf_path=path, run_root=run_root, upstream_path=Path(base) / "no-upstream-file.conf")  # 1.17.123: upstream missing, so the file above is the fallback

@@ -57,7 +57,7 @@ must(ok["ready"] is True and ok["checks"]["credential"]["detail"] == "arrived, o
 ok = credential(mode="440", uid="61500", gid="61500", acl="ACL none")
 must(ok["ready"] is True and "mode 440" in ok["checks"]["credential"]["detail"] and "ACL none" in ok["checks"]["credential"]["detail"], ok["checks"]["credential"])
 must(credential(mode="440", uid="0", gid="61500", acl="ACL none")["ready"] is True, "440 owned by root, group is the unit's own")
-must(credential(mode="440", uid="61500", gid="0", acl="ACL none")["ready"] is True, "440 owned by the unit, group root")
+must(credential(mode="440", uid="61500", gid="0", acl="ACL none")["ready"] is False, "1.17.123: 440 owned by the unit, group root and no ACL is refused")
 must(credential(mode="440", uid="65000", gid="65000", unit_uid="65000", unit_gid="65000", acl="ACL none")["ready"] is True, "a dynamic gid that is the unit's own")
 must(credential(mode="440", uid="61184", gid="61184", unit_uid="61184", unit_gid="61184", acl="ACL none")["ready"] is True, "the floor itself is in the dynamic range")
 must(not [p for p in H.RUN.iterdir() if p.name.startswith(sh.SELFTEST_PREFIX)], "the probe folder is removed")

@@ -81,7 +81,7 @@ raises(lambda: V({"s": {"type": "string", "max_length": 4}}, {"s": "ab%cdefgh"})
 RUN_ID = "cd" * 16
 EXISTS = lambda path: str(path).startswith(str(BASE)) or str(path) == str(sh.LAUNCHER_FILE) or str(path).startswith("/opt/tec-tac")
 row = make_runner("ai.pct", parameters={"text": {"type": "string", "max_length": 80}}, argv=["--t", {"param": "text"}])
-R = lambda rw, params: sh.build_argv(rw, RUN_ID, params, resolvers=["127.0.0.53"], credential_names=[], exists=EXISTS)
+R = lambda rw, params: sh.build_argv(rw, RUN_ID, params, credential_names=[], exists=EXISTS)
 built = R(row, {"text": "a$b"})
 must(built[-1] == "a$$b" and built[-2] == "--t", built[-2:])
 refusal = raises(lambda: R(row, {"text": SECRET}), sh.Refusal, "'%'")  # render_command refuses a rendered word even if validation was skipped
@@ -99,7 +99,7 @@ finally:
     sh.UNIT_PYTHON = real_python
 try:
     sh.LAUNCHER_FILE = Path(str(real_launcher) + "%x")
-    raises(lambda: sh.build_argv(row, RUN_ID, {"text": "fine"}, resolvers=["127.0.0.53"], credential_names=[], exists=lambda p: True), sh.Refusal, "'%'")
+    raises(lambda: sh.build_argv(row, RUN_ID, {"text": "fine"}, credential_names=[], exists=lambda p: True), sh.Refusal, "'%'")
 finally:
     sh.LAUNCHER_FILE = real_launcher
 # options before '--' are not command words: a '%' in an environment value is a --setenv= item and is unchanged

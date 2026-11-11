@@ -101,13 +101,22 @@ sh.CANARY_RUNNER_FILE = sh.CANARY_DIR / "sandbox-canary-runner.py"
 sh.LAUNCHER_FILE = ROOT / "scripts" / "sandbox-launcher.py"
 sh.WORK_DIR = str(BASE / "work")
 sh.RESOLV_CONF = str(BASE / "resolv.conf")
+sh.RESOLV_UPSTREAM = str(BASE / "upstream-resolv.conf")  # 1.17.123: the upstream list a start builds Core's own resolv.conf from
+# 1.17.123: what `ip` would say about this server (a public address, its gateway, loopback); no real `ip` here
+LOCAL = {"addresses": ["203.0.113.5", "127.0.0.1"], "gateways": ["203.0.113.1"], "extra": ["203.0.113.5/32", "203.0.113.1/32"]}
+sh.local_deny_now = lambda: LOCAL
+# the folders of this fake server are Windows paths here (a drive letter and backslashes); the real check refuses those, so only paths
+# under BASE are let through, every other path still goes through the real rule
+_real_bind_safe = sh._bind_path_safe
+sh._bind_path_safe = lambda path: str(path).startswith(str(BASE)) or _real_bind_safe(path)
 sh.PROC_MEMINFO = str(BASE / "meminfo")
 (BASE / "work").mkdir()
 (BASE / "meminfo").write_text("MemTotal: 16000000 kB\nMemAvailable: 8000000 kB\n", encoding="utf-8")
 (BASE / "resolv.conf").write_text("nameserver 127.0.0.53\noptions edns0\n", encoding="utf-8")
-for name in ("ssl-certs", "passwd", "group", "ld.so.cache", "resolv.conf", "ca-certificates", "nsswitch.conf", "localtime"):
+(BASE / "upstream-resolv.conf").write_text("nameserver 9.9.9.9" + chr(10) + "options edns0" + chr(10), encoding="utf-8")
+for name in ("ssl-certs", "passwd", "group", "ld.so.cache", "ca-certificates", "nsswitch.conf", "localtime"):
     (ETC / name).write_text("x", encoding="utf-8")
-sh.BASE_BINDS_REQUIRED = tuple(str(ETC / n) for n in ("ssl-certs", "passwd", "group", "ld.so.cache", "resolv.conf"))
+sh.BASE_BINDS_REQUIRED = tuple(str(ETC / n) for n in ("ssl-certs", "passwd", "group", "ld.so.cache"))
 sh.BASE_BINDS_OPTIONAL = tuple(str(ETC / n) for n in ("ca-certificates", "nsswitch.conf", "localtime"))
 
 # ---------------------------------------------------------------------------------------------------------- fake systemd
@@ -248,7 +257,7 @@ def make_runner(runner_id="ai.chat", *, body="print('hello')", limits=None, para
 
 
 def write_ready_status(**over):
-    status = {"ready": True, "reason": "ready", "enabled": False, "systemd_version": 252, "resolver": "127.0.0.53", "resolvers": ["127.0.0.53"],
+    status = {"ready": True, "reason": "ready", "enabled": False, "systemd_version": 252, "resolver": "9.9.9.9", "resolvers": ["9.9.9.9"],
               "address_filter_ok": True, "dns_ok": True, "selftest_at": "2026-11-11T10:00:00Z"}
     status.update(over)
     sh.STATE_ROOT.mkdir(parents=True, exist_ok=True)

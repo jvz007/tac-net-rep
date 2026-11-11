@@ -51,7 +51,7 @@ VALUE = "a$HOME b${X}$$"
 row = make_runner("ai.chat", parameters={"text": {"type": "string", "max_length": 50}}, argv=["--lit", "x$Y z", "--t", {"param": "text"}],
                   environment={"MSG": "a b $X %h"})
 EXISTS = lambda path: str(path).startswith(str(BASE)) or str(path) == str(sh.LAUNCHER_FILE) or str(path).startswith("/opt/tec-tac")
-argv = sh.build_argv(row, RUN_ID, {"text": VALUE}, resolvers=["127.0.0.53"], credential_names=[], exists=EXISTS)
+argv = sh.build_argv(row, RUN_ID, {"text": VALUE}, credential_names=[], exists=EXISTS)
 cut = argv.index("--")
 before, after = argv[:cut], argv[cut + 1:]
 must(after[-4:] == ["--lit", "x$$Y z", "--t", sh._exec_escape(VALUE)], after)
@@ -62,7 +62,7 @@ must([systemd_unescape(i) for i in after][-4:] == ["--lit", "x$Y z", "--t", VALU
 # options before the separator are untouched ('%' in an environment value is a --setenv= item, not a command word)
 must(f"--unit={sh.unit_name(RUN_ID)}" in before and "--setenv=MSG=a b $X %h" in before, before)
 props = [i for i in before if i.startswith("--property=")]
-expected = ["--property=" + p for p in sh.build_properties(row, RUN_ID, resolvers=["127.0.0.53"], credential_names=[], exists=EXISTS)]
+expected = ["--property=" + p for p in sh.build_properties(row, RUN_ID, credential_names=[], exists=EXISTS)]
 must(props == expected, "properties unchanged")
 
 # real child through the fake systemd-run: the program sees the validated value verbatim

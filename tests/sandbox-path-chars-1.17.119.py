@@ -68,7 +68,7 @@ TREE = {"tree_sha256_file": "sandbox/t.txt", "listing_sha256": "0" * 64}
 
 def props_for(path):
     row = make_runner("ai.chat", roots=[{"path": path, **TREE}])
-    return sh.build_properties(row, RUN_ID, resolvers=["127.0.0.53"], credential_names=[], exists=EXISTS)
+    return sh.build_properties(row, RUN_ID, credential_names=[], exists=EXISTS)
 
 
 good = props_for("/opt/tec-tac/runtimes/ai/claude")

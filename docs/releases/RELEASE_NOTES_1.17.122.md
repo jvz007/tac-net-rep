@@ -66,3 +66,13 @@ Update dev02 to Core 1.17.122 and export the public contract as usual. Then run 
 ## Module-facing changes
 
 None. A search of `modules/` finds `core.sandbox` used only by `modules/ai` (`providers.py`, `runner.py`) and `reportmanager` (`ai_schema`), through `tec_tac.sandbox`. None reads the selftest credential detail, the canary table or `hold_seconds`. The public contract surface (`sandbox.py`, `sandbox_views.py`, `contracts.py`) is unchanged.
+
+## Correction (Core 1.17.123), 11 November 2026
+
+Section 1 above, and Question 1 of Core 1.17.122 in `reviews/questions/core.md`, call the credential change a narrowing. That is not fully true. The 1.17.122 rule was **not a pure narrowing of 1.17.120**:
+
+* it **newly accepted root as owner or group** of the credential file (1.17.120 accepted only the unit's own dynamic group), and
+* it **added the uid floor of 61184** for the unit's own user and group ids,
+* while it removed the "any dynamic gid" case.
+
+So a file that 1.17.120 refused (root:root, mode 440) became acceptable, as long as its ACL passed. Core 1.17.123 narrows group root to the one case that works: the file's ACL exists and holds the named entry `user:<unit uid>` with read only. Mode 400 or 440 `root:root` with no ACL is now refused with a plain reason, because the unit could not read it anyway. The owner rule is unchanged. The dev02 shape (root:root, 440, ACL `user::r--`, `user:<uid>:r--`, `group::---`, `mask::r--`, `other::---`) stays accepted. This text only corrects the record; no 1.17.122 code is touched.
