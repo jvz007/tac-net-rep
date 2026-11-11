@@ -68,9 +68,9 @@ real_line = next(line for line in (ROOT / "scripts/sandbox-helper.py").read_text
 must('"/etc/resolv.conf"' in real_line and '"/etc/ssl/certs"' in real_line, real_line)
 must(sh.HELPER_COMMAND == "/usr/local/sbin/tec-tac-sandbox" and any(p == f"ExecStopPost=+{sh.HELPER_COMMAND} --finish {RUN_ID}" for p in props), "finish hook")
 # network: the section 15 string exactly, then the resolver by address
-must(f"IPAddressDeny={sh.ADDRESS_DENY}" in props and sh.ADDRESS_DENY == "localhost link-local multicast 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7", "address filter")
-must([p for p in props if p.startswith("IPAddressAllow=")] == ["IPAddressAllow=127.0.0.53"], "exactly the resolver")
-must(props.index("IPAddressDeny=" + sh.ADDRESS_DENY) < props.index("IPAddressAllow=127.0.0.53"), "")
+must(f"IPAddressDeny={sh.ADDRESS_DENY}" in props and sh.ADDRESS_DENY == "127.0.0.0/8 ::1/128 169.254.0.0/16 fe80::/10 224.0.0.0/4 ff00::/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7", "address filter")
+must([p for p in props if p.startswith("IPAddressAllow=")] == ["IPAddressAllow=127.0.0.53/32"], "exactly the resolver")
+must(props.index("IPAddressDeny=" + sh.ADDRESS_DENY) < props.index("IPAddressAllow=127.0.0.53/32"), "")
 # credentials: LoadCredential per name from the run's own folder, and the folder is removed by a root ExecStartPost
 must([p for p in props if p.startswith("LoadCredential=")] == [f"LoadCredential=auth:{sh.SECRETS_ROOT / RUN_ID / 'auth'}", f"LoadCredential=extra:{sh.SECRETS_ROOT / RUN_ID / 'extra'}"], props)
 must(f"ExecStartPost=+/bin/rm -rf {sh.SECRETS_ROOT / RUN_ID}" in props, "")

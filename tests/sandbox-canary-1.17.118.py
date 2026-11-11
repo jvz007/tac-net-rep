@@ -125,6 +125,7 @@ REAL_CONCURRENCY, REAL_LATENCY = sh._concurrency_rows, sh._latency_rows
 # neutralise the parts that need a real server
 sh._cancel_rows = lambda collect, status: [{"wall": "Cancel", "attack": "stop mid-run", "expected": "gone", "actual": "gone=True", "verdict": "OK"}]
 sh._holders_search = lambda token, unit: []
+sh._foreign_credential_probe = lambda unit: "DENIED"  # 1.17.120: the second unit that tries to read the credential (dev02 runs it for real)
 sh._latency_rows = lambda collect, status: [{"wall": "Latency", "attack": "50 no-op runs", "expected": "p95", "actual": "p95 40 ms", "verdict": "OK"}]
 sh._concurrency_rows = lambda collect, status: [{"wall": "Concurrency", "attack": "3 starts", "expected": "2 run", "actual": "ok", "verdict": "OK"}]
 MARK_DIRS = []
@@ -218,6 +219,9 @@ must([r["verdict"] for r in liv if r["attack"] == "infinite loop"] == ["ATTACK S
 # the credential rows
 cr = sh._credential_rows(make_collect(), status)
 must(all(r["verdict"] == "OK" for r in cr), [r for r in cr if r["verdict"] != "OK"])
+must([r["verdict"] for r in cr if r["attack"] == "another dynamic user reads the credential file"] == ["OK"], "1.17.120 foreign-reader row")
+cr = sh._credential_rows(make_collect(), status, lambda unit: "READ")
+must([r["verdict"] for r in cr if r["attack"] == "another dynamic user reads the credential file"] == ["ATTACK SUCCEEDED"], "a readable credential is a finding")
 sh._holders_search = lambda token, unit: ["ps"]
 cr = sh._credential_rows(make_collect(), status)
 must([r["verdict"] for r in cr if "ps," in r["attack"]] == ["ATTACK SUCCEEDED"], "a token visible in ps is a finding")

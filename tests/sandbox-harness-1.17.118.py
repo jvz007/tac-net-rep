@@ -120,8 +120,8 @@ args = sys.argv[1:]
 unit, props, setenv, command = None, [], {}, []
 for i, a in enumerate(args):
     if a == "--":
-        # 1.17.119: systemd turns '$$' into '$' and '%%' into '%' in ExecStart, one pass, left to right; so does this fake
-        command = [re.sub(r"\$\$|%%", lambda m: m.group()[0], item) for item in args[i + 1:]]
+        # 1.17.120: systemd turns '$$' into '$' in ExecStart; so does this fake. '%' is left alone (the helper refuses it before any start)
+        command = [re.sub(r"\$\$", lambda m: m.group()[0], item) for item in args[i + 1:]]
         break
     if a.startswith("--unit="):
         unit = a[7:]

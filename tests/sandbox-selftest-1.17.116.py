@@ -6,7 +6,7 @@ The selftest only talks to a ``UnitRunner``. Here a fake runner answers each pro
 * systemd version parsing; resolv.conf parsing (systemd-resolved stub, LAN resolver, none, comments, zone ids, duplicates, at most three);
 * the probe property list is a golden list: the address filter is exactly section 15 of the plan, and the resolvers are allowed by
   address, one ``IPAddressAllow=`` each, only in the DNS probe;
-* status.json says ready only when every probe passes; a missing cgroup BPF, a LoadCredential failure, cgroup v1, an old or missing
+* status.json says ready only when every probe passes; (1.17.120: -BPF_FRAMEWORK alone is information only) a LoadCredential failure, cgroup v1, an old or missing
   systemd, a control probe that cannot connect, a private-range send that succeeds or cannot be judged, and a DNS probe without any reply
   each give ``ready: false`` with a plain reason, and never a weaker mode;
 * any DNS reply counts (NXDOMAIN, SERVFAIL); no reply does not;
@@ -111,7 +111,7 @@ must(R("nameserver fe80::1%eth0\nnameserver not-an-address\nnameserver 2606:4700
 must(R("nameserver\nnameserver ::1\n") == ["::1"], "bare keyword")
 
 # ------------------------------------------------------------------------------------------------ the golden list (plan section 15)
-must(sh.ADDRESS_DENY == "localhost link-local multicast 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7", sh.ADDRESS_DENY)
+must(sh.ADDRESS_DENY == "127.0.0.0/8 ::1/128 169.254.0.0/16 fe80::/10 224.0.0.0/4 ff00::/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7", sh.ADDRESS_DENY)
 must(sh.PROBE_PROPERTIES == {
     "transient": (),
     "dynamic_user": ("DynamicUser=yes",),
@@ -119,10 +119,10 @@ must(sh.PROBE_PROPERTIES == {
     "credential": ("DynamicUser=yes",),
     "proc_hidden": ("DynamicUser=yes", "ProtectProc=invisible", "ProcSubset=pid"),
     "address_filter_control": ("DynamicUser=yes",),
-    "address_filter_loopback": ("DynamicUser=yes", "IPAddressDeny=localhost link-local multicast 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7"),
-    "address_filter_private": ("DynamicUser=yes", "IPAddressDeny=localhost link-local multicast 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7"),
+    "address_filter_loopback": ("DynamicUser=yes", "IPAddressDeny=127.0.0.0/8 ::1/128 169.254.0.0/16 fe80::/10 224.0.0.0/4 ff00::/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7"),
+    "address_filter_private": ("DynamicUser=yes", "IPAddressDeny=127.0.0.0/8 ::1/128 169.254.0.0/16 fe80::/10 224.0.0.0/4 ff00::/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7"),
     "pipe_streams": ("DynamicUser=yes",),
-    "dns": ("DynamicUser=yes", "IPAddressDeny=localhost link-local multicast 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7"),
+    "dns": ("DynamicUser=yes", "IPAddressDeny=127.0.0.0/8 ::1/128 169.254.0.0/16 fe80::/10 224.0.0.0/4 ff00::/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7"),
 }, sh.PROBE_PROPERTIES)
 must(sh.PRIVATE_PROBE_TARGETS == ("10.255.255.254", "172.31.255.254", "192.168.255.254", "100.127.255.254", "169.254.169.254"), "private probe targets, metadata included")
 must(sh.MIN_SYSTEMD_VERSION == 249 and sh.RESOLVERS_MAX == 3, "floor and resolver cap")
@@ -153,7 +153,7 @@ class Fake:
             "dns": (0, "reply 0\n"),
         }
         self.script.update(overrides)
-        self.credential = {"mode": "400", "token": None, "remove": True}
+        self.credential = {"mode": "400", "uid": "61500", "gid": "61500", "stat": None, "token": None, "remove": True}
 
     def run_cmd(self, argv, *, timeout=15):
         self.cmds.append(argv)
@@ -181,7 +181,9 @@ class Fake:
             token = self.credential["token"] if self.credential["token"] is not None else source.read_text(encoding="utf-8")
             if self.credential["remove"]:
                 source.unlink()
-            return 0, f"{token}\n{self.credential['mode']}\n", ""
+            c = self.credential
+            stat_line = c["stat"] if c["stat"] is not None else f"{c['mode']} {c['uid']} {c['gid']}"
+            return 0, f"{token}\n{stat_line}\n61500\n61500\n", ""
         if callable(answer):
             return answer(properties, command)
         return answer[0], answer[1], "err text" if answer[0] else ""
@@ -213,7 +215,7 @@ for name, properties, command in fake.calls:
     if name == "credential":
         must(properties[:1] == expected and len(properties) == 3, properties)
     elif name == "dns":
-        must(properties == expected + ("IPAddressAllow=127.0.0.53",), properties)   # the resolver is allowed by address, exactly
+        must(properties == expected + ("IPAddressAllow=127.0.0.53/32",), properties)   # the resolver is allowed by address, exactly
     else:
         must(properties == expected, (name, properties))
 must([c for c in fake.cmds] == [["systemctl", "--version"], ["stat", "-fc", "%T", "/sys/fs/cgroup"]], fake.cmds)
@@ -235,7 +237,9 @@ def check_fail(label, reason_part, fake=None, resolv="nameserver 127.0.0.53\n", 
 
 check_fail("no systemd", "systemd is not available", Fake(systemctl=(127, "")), expect_check="systemd_version")
 check_fail("old systemd", "systemd 248 is older than 249", Fake(systemctl=(0, "systemd 248 (248.3)\n+BPF_FRAMEWORK\n")), expect_check="systemd_version")
-status = check_fail("no BPF framework", "without cgroup BPF", Fake(systemctl=(0, "systemd 252 (252)\n+PAM -BPF_FRAMEWORK\n")), expect_check="bpf_framework")
+# 1.17.120: -BPF_FRAMEWORK is information only; readiness comes from the probes (tests/sandbox-bpf-info-1.17.120.py covers all three cases)
+status = selftest(Fake(systemctl=(0, "systemd 252 (252)\n+PAM -BPF_FRAMEWORK\n")))
+must(status["ready"] is True and status["checks"]["bpf_framework"]["ok"] is True and "information only" in status["checks"]["bpf_framework"]["detail"], status)
 check_fail("cgroup v1", "cgroup v2", Fake(stat=(0, "tmpfs\n")), expect_check="cgroup_v2")
 check_fail("no stat", "cgroup v2", Fake(stat=(1, "")), expect_check="cgroup_v2")
 check_fail("transient", "transient unit", Fake(transient=(1, "")), expect_check="transient_unit")
@@ -251,8 +255,8 @@ fake = Fake()
 fake.credential["token"] = "someone else's text"
 check_fail("credential wrong content", "did not arrive", fake, expect_check="credential")
 fake = Fake()
-fake.credential["mode"] = "440"
-check_fail("credential mode", "mode is 440", fake, expect_check="credential")
+fake.credential["mode"] = "640"
+check_fail("credential mode", "mode is 640", fake, expect_check="credential")
 fake = Fake()
 fake.credential["remove"] = False
 check_fail("credential source stays", "not removable", fake, expect_check="credential")
@@ -295,7 +299,7 @@ fake = Fake(dns=lambda properties, command: (0, "reply 0\n", "") if command[-2] 
 ok = selftest(fake, "nameserver 192.168.1.1\nnameserver 1.1.1.1\n")
 must(ok["ready"] is True and ok["resolver"] == "1.1.1.1" and ok["resolvers"] == ["192.168.1.1", "1.1.1.1"], ok)
 dns_calls = [call for call in fake.calls if call[0] == "dns"]
-must(len(dns_calls) == 2 and all({p for p in call[1] if p.startswith("IPAddressAllow=")} == {"IPAddressAllow=192.168.1.1", "IPAddressAllow=1.1.1.1"} for call in dns_calls), dns_calls)
+must(len(dns_calls) == 2 and all({p for p in call[1] if p.startswith("IPAddressAllow=")} == {"IPAddressAllow=192.168.1.1/32", "IPAddressAllow=1.1.1.1/32"} for call in dns_calls), dns_calls)
 # a server that is offline: its stub resolver still replies (SERVFAIL), so the sandbox is not turned off for that reason
 offline = selftest(Fake(dns=(0, "reply 2\n")))
 must(offline["ready"] is True, offline)

@@ -280,6 +280,20 @@ def _sm_parameters(schema, label: str) -> dict:
     return schema
 
 
+_SANDBOX_PERCENT_TEXT = "may not contain '%' (systemd would read it as a specifier; refused until the dev02 canary shows how it is treated)"
+
+
+def _sandbox_no_percent(schema: dict, label: str) -> dict:
+    """1.17.120: a sandbox runner's string default and enum choices never hold '%' (the root helper refuses it again). Applies to
+    ``sandbox_runners`` only: server_maintenance_actions share ``_sm_parameters`` and keep allowing '%'."""
+    for name, spec in schema.items():
+        if spec.get("type", "string") == "string" and isinstance(spec.get("default"), str) and "%" in spec["default"]:
+            raise RegistryError(f"{label} parameter {name!r} default {_SANDBOX_PERCENT_TEXT}.")
+        if spec.get("type") == "enum" and any(isinstance(choice, str) and "%" in choice for choice in spec["choices"]):
+            raise RegistryError(f"{label} enum parameter {name!r} choices {_SANDBOX_PERCENT_TEXT}.")
+    return schema
+
+
 def _server_maintenance_actions(payload: dict, plugin_type: str, plugin_id: str, plugin_dir: Path,
                                 permission_groups, publisher_permissions) -> tuple[dict, ...]:
     """Parse the optional ``server_maintenance_actions`` key (1.17.17): the Core server-maintenance actions a signed module registers.
@@ -498,7 +512,9 @@ def _sandbox_runners(payload: dict, plugin_type: str, plugin_id: str, plugin_dir
             raise RegistryError(f"{label} description must be plain text of 1 to 200 characters.")
         executable = _sandbox_relative_file(entry.get("executable"), f"{label} executable", plugin_dir,
                                             prefix=SANDBOX_EXECUTABLE_PREFIX, min_parts=3)
-        schema = _sm_parameters(entry.get("parameters", {}), label)
+        if "%" in executable:
+            raise RegistryError(f"{label} executable path {_SANDBOX_PERCENT_TEXT}.")
+        schema = _sandbox_no_percent(_sm_parameters(entry.get("parameters", {}), label), label)
         argv = entry.get("argv", [])
         if not isinstance(argv, list) or len(argv) > 64:
             raise RegistryError(f"{label} argv must be an array with at most 64 entries.")
@@ -506,6 +522,8 @@ def _sandbox_runners(payload: dict, plugin_type: str, plugin_id: str, plugin_dir
             if isinstance(item, str):
                 if "\x00" in item or len(item) > 4096:
                     raise RegistryError(f"{label} has an invalid literal argv entry.")
+                if "%" in item:
+                    raise RegistryError(f"{label} literal argv entry {_SANDBOX_PERCENT_TEXT}.")
             elif not (isinstance(item, dict) and set(item) == {"param"} and isinstance(item["param"], str) and item["param"] in schema):
                 raise RegistryError(f"{label} argv entries must be literal strings or {{'param': '<declared parameter>'}}; no shell text.")
         environment = entry.get("environment", {})

@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Root-owned helper for core.sandbox (Core 1.17.118, Patch 2: the launch path; the kill switch is still off).
+"""Root-owned helper for core.sandbox (Core 1.17.120, Patch 2: the launch path; the kill switch is still off).
 
 core.sandbox runs a signed module's declared program as an unprivileged, resource-limited process that cannot see the server's files
 or reach the server itself or private networks (AD-63, docs/planning/sandbox/PLAN-CORE-SANDBOX.md sections 2, 3 and 15).
@@ -182,9 +182,13 @@ REGISTERED_BY = "module-manifest"
 # ----------------------------------------------------------------------------------------------------- the selftest rules
 MIN_SYSTEMD_VERSION = 249  # Ubuntu 22.04, the oldest server Tec-Tac supports (plan section 10)
 # Plan section 15: private ranges and the server itself are blocked; public HTTPS stays open. 169.254.169.254 is inside link-local.
-ADDRESS_DENY = "localhost link-local multicast 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7"
+# 1.17.120: numeric only. dev02 showed that the symbolic names (localhost, link-local, multicast) make the filter unreliable, so every
+# IPAddressDeny=/IPAddressAllow= string the helper builds is an address or a network. 169.254.169.254 is inside 169.254.0.0/16.
+ADDRESS_DENY = ("127.0.0.0/8 ::1/128 169.254.0.0/16 fe80::/10 224.0.0.0/4 ff00::/8 "
+                "10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7")
 PRIVATE_PROBE_TARGETS = ("10.255.255.254", "172.31.255.254", "192.168.255.254", "100.127.255.254", "169.254.169.254")
 DNS_PROBE_NAME = "example.com"
+RESOLV_UPSTREAM = "/run/systemd/resolve/resolv.conf"  # 1.17.120: read only, shown in the DNS detail when no resolver answers
 RESOLVERS_MAX = 3
 UNIT_TIMEOUT_SECONDS = 30
 PROBE_PROPERTIES = {
@@ -199,6 +203,13 @@ PROBE_PROPERTIES = {
     "pipe_streams": ("DynamicUser=yes",),
     "dns": ("DynamicUser=yes", "IPAddressDeny=" + ADDRESS_DENY),  # plus one IPAddressAllow= per resolver
 }
+
+
+def allow_property(address):
+    """1.17.120: ``IPAddressAllow=<address>/32`` (IPv4) or ``/128`` (IPv6). A bare address is never handed to systemd."""
+    parsed = ipaddress.ip_address(str(address))
+    return f"IPAddressAllow={parsed}/{32 if parsed.version == 4 else 128}"
+
 
 # The python the probes run inside a unit. Each prints one plain word or line and nothing else.
 _PROBE_CONNECT = (
@@ -368,6 +379,9 @@ def _plain(value, limit):
     return isinstance(value, str) and len(value) <= limit and not any(ord(ch) < 32 or ord(ch) == 127 for ch in value)
 
 
+PERCENT_REFUSAL = "may not contain '%' (systemd would read it as a specifier; refused until the dev02 canary shows how it is treated)"
+
+
 def _check_parameters(schema, label):
     if not isinstance(schema, dict) or len(schema) > 64:
         raise RuntimeError(f"{label} parameters must be an object with at most 64 entries")
@@ -386,6 +400,11 @@ def _check_parameters(schema, label):
                 re.compile(str(spec["pattern"]))
             except re.error as exc:
                 raise RuntimeError(f"{label} parameter {name!r} has an invalid pattern") from exc
+        # 1.17.120: '%' never reaches a systemd-run command word (string default, enum choices)
+        if ptype == "string" and isinstance(spec.get("default"), str) and "%" in spec["default"]:
+            raise RuntimeError(f"{label} parameter {name!r} default {PERCENT_REFUSAL}")
+        if ptype == "enum" and any(isinstance(choice, str) and "%" in choice for choice in spec["choices"]):
+            raise RuntimeError(f"{label} enum parameter {name!r} choices {PERCENT_REFUSAL}")
     return schema
 
 
@@ -468,6 +487,8 @@ def parse_runners(module_id, payload, check_file):
             raise RuntimeError(f"{label} description must be plain text of 1 to 200 characters")
         executable = entry.get("executable")
         _check_relative(executable, f"{label} executable", prefix=EXECUTABLE_PREFIX, min_parts=3)
+        if "%" in executable:
+            raise RuntimeError(f"{label} executable path {PERCENT_REFUSAL}")
         check_file(executable, f"{label} executable")
         schema = _check_parameters(entry.get("parameters", {}), label)
         argv = entry.get("argv", [])
@@ -477,6 +498,8 @@ def parse_runners(module_id, payload, check_file):
             if isinstance(item, str):
                 if "\x00" in item or len(item) > 4096:
                     raise RuntimeError(f"{label} has an invalid literal argv entry")
+                if "%" in item:
+                    raise RuntimeError(f"{label} literal argv entry {PERCENT_REFUSAL}")
             elif not (isinstance(item, dict) and set(item) == {"param"} and isinstance(item["param"], str) and item["param"] in schema):
                 raise RuntimeError(f"{label} argv entries must be literal strings or {{'param': name}}")
         environment = entry.get("environment", {})
@@ -835,6 +858,16 @@ class UnitRunner:
         return done.returncode, done.stdout, done.stderr
 
 
+def upstream_resolvers_text(path=RESOLV_UPSTREAM):
+    """Up to three upstream resolver addresses from systemd-resolved's own file, as plain text (information for the DNS detail)."""
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")[:8192]
+    except OSError:
+        return "not readable"
+    found = parse_resolvers(text)
+    return ", ".join(found) if found else "none listed"
+
+
 def _check(table, name, ok, detail):
     table[name] = {"ok": bool(ok), "detail": str(detail)[:300]}
     return bool(ok)
@@ -863,9 +896,10 @@ def selftest(runner=None, *, resolv_conf_path="/etc/resolv.conf", run_root=None)
         fail("systemd_version", f"systemd {version} is older than {MIN_SYSTEMD_VERSION}")
     else:
         _check(checks, "systemd_version", True, f"systemd {version}")
+    # 1.17.120: information only. The address filter uses kernel cgroup BPF, which systemd's own BPF framework flag does not describe; the
+    # control, loopback and private-range probes below decide readiness, so a server that cannot filter still ends ready=false.
     if "-BPF_FRAMEWORK" in (out or ""):
-        _check(checks, "bpf_framework", False, "systemd is built without BPF")
-        fail("bpf_framework", "systemd is built without cgroup BPF, so the address filter cannot work")
+        _check(checks, "bpf_framework", True, "systemd is built without its BPF framework (information only; the address filter uses kernel cgroup BPF and is proved by the probes)")
     else:
         _check(checks, "bpf_framework", True, "BPF_FRAMEWORK is not disabled")
     # cgroup v2
@@ -931,6 +965,34 @@ def selftest(runner=None, *, resolv_conf_path="/etc/resolv.conf", run_root=None)
     }
 
 
+DYNAMIC_GID_MIN = 61184  # systemd's dynamic user range starts here (the same floor the dynamic_user probe uses for uids)
+
+
+def credential_mode_text(stat_line):
+    mode = (stat_line.split() or ["?"])[0]
+    return "mode 400, owned by the unit's user" if mode == "400" else "mode 440, group is the unit's own dynamic group"
+
+
+def credential_mode_problem(stat_line, uid_line, gid_line):
+    """1.17.120: the credential file inside the unit is 0400 (owner is the unit's uid), or 0440 only when its group is the unit's own
+    dynamic group (gid >= 61184) and the owner is the unit's uid or root. Any 'other' bit, any other group or any other mode fails closed.
+    Returns a plain problem text, or '' when the file is acceptable."""
+    parts = stat_line.split()
+    if len(parts) != 3 or not all(part.isdigit() for part in parts) or not uid_line.strip().isdigit() or not gid_line.strip().isdigit():
+        return "the credential file's mode and owner could not be read"
+    mode, owner, group = parts[0], int(parts[1]), int(parts[2])
+    uid, gid = int(uid_line.strip()), int(gid_line.strip())
+    if not re.fullmatch(r"[0-7]{3,4}", mode) or int(mode, 8) & 0o007:
+        return f"the credential file mode is {mode}: other users could read it"
+    if mode == "400" and owner == uid:
+        return ""
+    if mode == "440" and group == gid and gid >= DYNAMIC_GID_MIN and owner in (uid, 0):
+        return ""
+    if mode in ("400", "440"):
+        return f"the credential file mode is {mode} but its owner or group is not the unit's own"
+    return f"the credential file mode is {mode}, not 400 or 440"
+
+
 def _probe_credential(runner, run_root):
     """A random token in a root-only folder arrives through LoadCredential, is readable only by the unit's user, and the source can be
     removed after start. Returns (ok, plain detail)."""
@@ -943,18 +1005,20 @@ def _probe_credential(runner, run_root):
         source.write_text(token, encoding="utf-8")
         os.chmod(source, 0o600)
         properties = list(PROBE_PROPERTIES["credential"]) + [f"LoadCredential=probe:{source}", f"ExecStartPost=+/bin/rm -f {source}"]
-        script = 'sleep 1; cat "$CREDENTIALS_DIRECTORY/probe"; echo; stat -c %a "$CREDENTIALS_DIRECTORY/probe"'
+        # 1.17.120: line 1 the content, line 2 "mode uid gid" of the file, line 3 the unit's uid, line 4 the unit's gid
+        script = ('sleep 1; cat "$CREDENTIALS_DIRECTORY/probe"; echo; stat -c "%a %u %g" "$CREDENTIALS_DIRECTORY/probe"; id -u; id -g')
         code, out, err = runner.run_unit("credential", properties, ["/bin/sh", "-c", script])
         lines = out.strip().splitlines()
-        if code != 0 or len(lines) < 2:
-            return False, (err.strip()[:200] or "the unit did not start")
+        if code != 0 or len(lines) < 4:
+            return False, (err.strip()[:200] or "the unit did not start, or the credential answer was incomplete")
         if lines[0] != token:
             return False, "the credential did not arrive"
-        if lines[1].strip() != "400":
-            return False, f"the credential file mode is {lines[1].strip()}, not 400"
+        problem = credential_mode_problem(lines[1], lines[2], lines[3])
+        if problem:
+            return False, problem
         if source.exists():
             return False, "the source file was not removable after the start"
-        return True, "arrived, mode 400, source removed"
+        return True, "arrived, " + credential_mode_text(lines[1]) + ", source removed"
     except OSError as exc:
         return False, f"cannot prepare the probe folder ({exc.strerror or 'error'})"
     finally:
@@ -1016,13 +1080,13 @@ def _probe_address_filter(runner, checks):
 def _probe_dns(runner, resolvers):
     """Allow exactly the listed resolvers and prove any DNS reply arrives from inside the filtered unit. NXDOMAIN counts, no reply does not.
     Returns (answering resolver or '', plain detail)."""
-    allow = [f"IPAddressAllow={address}" for address in resolvers]
+    allow = [allow_property(address) for address in resolvers]
     for address in resolvers:
         command = ["/usr/bin/python3", "-I", "-c", _PROBE_DNS, address, DNS_PROBE_NAME]
         code, out, _err = runner.run_unit("dns", list(PROBE_PROPERTIES["dns"]) + allow, command)
         if code == 0 and out.strip().startswith("reply"):
             return address, f"{address} answered ({out.strip()})"
-    return "", "no DNS reply from inside the unit from " + ", ".join(resolvers)
+    return "", ("no DNS reply from inside the unit from " + ", ".join(resolvers) + "; upstream resolvers: " + upstream_resolvers_text())
 
 
 def write_status(status):
@@ -1375,6 +1439,8 @@ def validate_run_parameters(schema, raw):
                 bad = "must be a string"
             elif "\x00" in value or len(value) > max(1, min(int(spec.get("max_length", 4096)), 65536)):
                 bad = "is too long or holds a NUL"
+            elif "%" in value:
+                raise Refusal("invalid_input", f"parameter {name!r} may not contain '%'")
             elif spec.get("pattern") and not re.fullmatch(str(spec["pattern"]), value):
                 bad = "does not match its pattern"
         elif ptype == "integer":
@@ -1387,6 +1453,8 @@ def validate_run_parameters(schema, raw):
                 bad = "must be true or false"
         elif ptype == "enum" and value not in spec.get("choices", []):
             bad = "must be one of its choices"
+        elif ptype == "enum" and isinstance(value, str) and "%" in value:
+            raise Refusal("invalid_input", f"parameter {name!r} may not contain '%'")
         if bad:
             raise Refusal("invalid_input", f"parameter {name!r} {bad}")
         values[name] = value
@@ -1421,6 +1489,8 @@ def render_command(row, parameters):
             raise Refusal("invalid_input", f"the runner's argv needs the omitted optional parameter {name!r}")
         value = parameters[name]
         items.append(("true" if value else "false") if isinstance(value, bool) else str(value))
+    if any("%" in item for item in items):  # second line of defence after validate_run_parameters and registration
+        raise Refusal("invalid_input", "a command word may not contain '%'")
     return items
 
 
@@ -1535,7 +1605,7 @@ def build_properties(row, run_id, *, resolvers, credential_names, exists=os.path
     ]
     props += [f"BindReadOnlyPaths={path}" for path in binds]
     props.append("IPAddressDeny=" + ADDRESS_DENY)
-    props += [f"IPAddressAllow={address}" for address in resolvers]
+    props += [allow_property(address) for address in resolvers]
     folder = SECRETS_ROOT / run_id
     props += [f"LoadCredential={name}:{folder / name}" for name in credential_names]
     if credential_names:
@@ -1555,8 +1625,9 @@ def build_environment(row):
 
 
 def _exec_escape(text):
-    """1.17.119: systemd expands '$VAR' and '%specifier' in the command of a transient unit. '$$' and '%%' reach the program as '$' and '%'."""
-    return str(text).replace("$", "$$").replace("%", "%%")
+    """1.17.120: systemd expands '$VAR' in the command of a transient unit, and '$$' reaches the program as '$'. '%' is not escaped: it is
+    refused instead (build_argv, validate_run_parameters, registration), until the dev02 canary shows how real systemd treats it."""
+    return str(text).replace("$", "$$")
 
 
 def build_argv(row, run_id, parameters, *, resolvers, credential_names, exists=os.path.lexists):
@@ -1568,6 +1639,8 @@ def build_argv(row, run_id, parameters, *, resolvers, credential_names, exists=o
     if row.get("credential_return"):
         command.append("--return-credential")
     command += ["--", str(row["executable"]), *render_command(row, parameters)]
+    if any("%" in item for item in command):  # 1.17.120: before any unit is started; the message never repeats the word
+        raise Refusal("invalid_input", "a command word may not contain '%'")
     return argv + [_exec_escape(item) for item in command]
 
 
@@ -2279,7 +2352,25 @@ def _limit_rows(collect, status):
     return rows
 
 
-def _credential_rows(collect, status):
+_FOREIGN_READ = ("import sys\n"
+                 "try:\n"
+                 "    open(sys.argv[1], 'rb').read(1)\n"
+                 "    print('READ')\n"
+                 "except OSError:\n"
+                 "    print('DENIED')\n")
+
+
+def _foreign_credential_probe(unit):
+    """1.17.120: while the credential run is live, a second transient unit (its own dynamic user, nothing shared) tries to read that run's
+    credential file. Returns 'READ', 'DENIED' or '' when the probe unit did not start or said something else. Never prints the content."""
+    path = f"/run/credentials/{unit}.service/auth"
+    code, out, _err = UnitRunner().run_unit("credential_foreign", ("DynamicUser=yes",), [UNIT_PYTHON, "-I", "-c", _FOREIGN_READ, path])
+    word = (out or "").strip()
+    return word if code == 0 and word in ("READ", "DENIED") else ""
+
+
+def _credential_rows(collect, status, probe=None):
+    probe = probe or _foreign_credential_probe
     token = secrets.token_hex(16)
     cred_run = secrets.token_hex(16)
     box = {}
@@ -2292,12 +2383,19 @@ def _credential_rows(collect, status):
     thread.start()
     time.sleep(1.5)
     leaks = _holders_search(token, unit_name(cred_run))
+    try:
+        foreign = probe(unit_name(cred_run))
+    except Exception:  # noqa: BLE001 - a probe that breaks is NOT RUN, never a pass
+        foreign = ""
     thread.join(30)
     result = box.get("result") or {"stdout": b"", "end": None, "refused": "no result"}
     rows = []
     if result.get("refused"):
         return [{"wall": "Credential", "attack": "credential hand-in", "expected": "arrives", "actual": "refused: " + str(result["refused"]), "verdict": "NOT RUN"}]
     rows.extend(group_table("Credential", "cred", "only under CREDENTIALS_DIRECTORY", parse_runner_rows(result["stdout"])))
+    rows.append({"wall": "Credential", "attack": "another dynamic user reads the credential file", "expected": "denied",
+                 "actual": {"DENIED": "denied", "READ": "read it"}.get(foreign, "probe unit did not start"),
+                 "verdict": {"DENIED": "OK", "READ": "ATTACK SUCCEEDED"}.get(foreign, "NOT RUN")})
     rows.append({"wall": "Credential", "attack": "token in ps, /proc/*/cmdline, systemctl show, journald", "expected": "absent",
                  "actual": ", ".join(leaks) or "absent", "verdict": "ATTACK SUCCEEDED" if leaks else "OK"})
     left = [p.name for p in SECRETS_ROOT.iterdir()] if SECRETS_ROOT.is_dir() else []

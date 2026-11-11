@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.119",
+  "version": "1.17.120",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.17.119.md",
-      "size": 3469,
-      "sha256": "404bccf2f2c2a076d4117d6aa862e92c3e1d3f7960611df98cbc26c73ee4b4be"
+      "path": "RELEASE_NOTES_1.17.120.md",
+      "size": 6821,
+      "sha256": "508d9aec8bd4d093da608f68b22f0d1a4616d9e0ab610b7ad3b116d297d2f209"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "48f119cefd9695dc005f07075945097bbece639218f1310974faceff97b10264"
+      "sha256": "97f0db840ce5331e3260b2720d6534fa5727c1c6fcc62aa7b4db6c93fa82a3e3"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -1210,6 +1210,11 @@
       "path": "docs/releases/RELEASE_NOTES_1.17.118.md",
       "size": 21337,
       "sha256": "193fbb3445c4b941ac8822842dddf56db8138673f598f683fc16c29dfe6f7507"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.17.119.md",
+      "size": 3469,
+      "sha256": "404bccf2f2c2a076d4117d6aa862e92c3e1d3f7960611df98cbc26c73ee4b4be"
     },
     {
       "path": "docs/releases/RELEASE_NOTES_1.17.12.md",
@@ -2608,8 +2613,8 @@
     },
     {
       "path": "framwork/tec_tac/registry.py",
-      "size": 67626,
-      "sha256": "b0a5d772062d970b527516fa242052155f998d86a6a1ca690f562a5489aea599"
+      "size": 68831,
+      "sha256": "80c1d3d18b53a2224d4414751d20aa09a5638fb543eeb9afa770f6d92c1b6504"
     },
     {
       "path": "framwork/tec_tac/reporting.py",
@@ -2998,8 +3003,8 @@
     },
     {
       "path": "scripts/sandbox-helper.py",
-      "size": 125375,
-      "sha256": "34ce1d5270235371aea5e8ab210156b694a9d35413d775aa84f88b40cce20c28"
+      "size": 131661,
+      "sha256": "f5bc5c42ec15a6dcea6ef1b4ac2c13144925bc617d10480dcb325712bb8f599f"
     },
     {
       "path": "scripts/sandbox-launcher.py",
@@ -3049,7 +3054,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "21f08ec0551a4a688108bf98e305ea91a5f9a10bc7cd8fc4e2a247f745973bb3"
+      "sha256": "77d45c04531dd82ecec43b8a7cc20be259dbb89d553cd3a6f4d12b215f4b27c5"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -4967,9 +4972,19 @@
       "sha256": "077d664bbb477e667ea2a1247b8abc91152df733c394eb1d5e472266a8cce196"
     },
     {
+      "path": "tests/sandbox-address-numeric-1.17.120.py",
+      "size": 10396,
+      "sha256": "b1f12f55aff507a4b6b635a7141dbc05845817a6ff44740a52bae46ead420c37"
+    },
+    {
+      "path": "tests/sandbox-bpf-info-1.17.120.py",
+      "size": 4320,
+      "sha256": "f44cb0a253ebc9a5de03762dd3b9eb14ed919227a03adf6e52e11718d422ad43"
+    },
+    {
       "path": "tests/sandbox-canary-1.17.118.py",
-      "size": 24204,
-      "sha256": "ef50a5e509563e08117707dd04d601dfceb8b9239844fd3e032b7ffd057d8c5a"
+      "size": 24722,
+      "sha256": "0b283850b669a6b15a56dc09313a930f09657455bd4349992f02cbd235bd80f7"
     },
     {
       "path": "tests/sandbox-canary-1.17.118.sh",
@@ -4977,9 +4992,24 @@
       "sha256": "c8f469c94a018d10f757537678f1f508f3fe13a52d8a6d2253ed8e7b76931368"
     },
     {
+      "path": "tests/sandbox-canary-1.17.120.sh",
+      "size": 13371,
+      "sha256": "3100fca2f7f2cdd38275ad708878d71ac1cfbbd2cdc5b1eb1b2b430d133a76cb"
+    },
+    {
+      "path": "tests/sandbox-canary-script-1.17.120.py",
+      "size": 5615,
+      "sha256": "db9148705f4b97cccba6405a0daf38d07859793e0741dacf6e2a396d4f3af044"
+    },
+    {
       "path": "tests/sandbox-contract-1.17.116.py",
       "size": 28203,
       "sha256": "33026ba92c5b9de1ca684855cdfba52ab7860fb18a2fe5ef8032ea42d6b0ec28"
+    },
+    {
+      "path": "tests/sandbox-credential-mode-1.17.120.py",
+      "size": 10343,
+      "sha256": "08a1d648720eb500c2e2f40c615847d329c2497acd36a3e501ab7df1e75142ac"
     },
     {
       "path": "tests/sandbox-django-launch-1.17.118.py",
@@ -4988,13 +5018,18 @@
     },
     {
       "path": "tests/sandbox-exec-escape-1.17.119.py",
-      "size": 3655,
-      "sha256": "6d8739d6324c04b21ed9b54e7de6aacdb2333f817bb9177b5163305016285189"
+      "size": 5876,
+      "sha256": "b7a28945565d44d627d681872b028da73188c7496ac5a477db7d336b3cf49fd1"
+    },
+    {
+      "path": "tests/sandbox-fake-runner-1.17.120.py",
+      "size": 3712,
+      "sha256": "48d733d7646de4c5399b48281553d3bcce2e5a5a608f76220dd99ebf3e7f9ab2"
     },
     {
       "path": "tests/sandbox-harness-1.17.118.py",
-      "size": 13597,
-      "sha256": "9fd4029ab6c0279d8a2ad9046f0c5b1555774810d9f159b75367807c58d32444"
+      "size": 13611,
+      "sha256": "37019a70a113d3f09b5404a43b8afc70a6e74ea3921cb9c301b48d59dc4a86af"
     },
     {
       "path": "tests/sandbox-helper-register-1.17.116.py",
@@ -5022,6 +5057,11 @@
       "sha256": "4eeb71e745faa6ee9e5e58762753ffd8e040df34e2c4f875de8d88381bec27eb"
     },
     {
+      "path": "tests/sandbox-percent-refuse-1.17.120.py",
+      "size": 12030,
+      "sha256": "014cf5fcb4357ebb72c104547212b285e33bf7e36cc1a36e710ed3ee88345dcd"
+    },
+    {
       "path": "tests/sandbox-registry-1.17.116.py",
       "size": 15844,
       "sha256": "f1d1d44ef7286c2f481859510ae6d519c501a0579226fe75eee0acaca0f3997e"
@@ -5033,8 +5073,8 @@
     },
     {
       "path": "tests/sandbox-selftest-1.17.116.py",
-      "size": 22760,
-      "sha256": "c12f01d006e20900f0f834113383a8788a713797eef94497e7408eff7f3d18e3"
+      "size": 23349,
+      "sha256": "47f7fd0a08372f97f3ee16b47fefadbc150af8cfeb7ba3567f4d57a7157a0244"
     },
     {
       "path": "tests/sandbox-selftest-runtime-1.17.116.sh",
@@ -5048,8 +5088,8 @@
     },
     {
       "path": "tests/sandbox-unit-builder-1.17.118.py",
-      "size": 14047,
-      "sha256": "ff287de6102aefb5fd4b92f5ce7651a2e3df74d886a1a10360dac9cc0111c724"
+      "size": 14088,
+      "sha256": "c3c7b8af3b93f639f1dd180aa066df5c9308ded408f741bf92b9ff40a6350d54"
     },
     {
       "path": "tests/sandbox-verify-step-1.17.116.py",
