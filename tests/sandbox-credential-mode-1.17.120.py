@@ -135,7 +135,7 @@ WALL = "another dynamic user reads the credential file"
 
 
 def rows_for(probe):
-    rows = sh._credential_rows(collect, status, probe)
+    rows = sh._credential_rows(collect, status, probe, lambda unit: True)  # 1.17.121: the root-side pre-check is injected (no real systemd here)
     found = [r for r in rows if r["attack"] == WALL]
     must(len(found) == 1 and found[0]["wall"] == "Credential" and found[0]["expected"] == "denied", rows)
     text = json.dumps(rows)
@@ -155,7 +155,7 @@ passed, counts = sh.canary_summary(rows)
 must(passed is False and counts["ATTACK SUCCEEDED"] == 1, "CANARY FAILED on READ")
 for label, probe in (("did not start", lambda unit: ""), ("odd answer", lambda unit: "maybe"), ("raises", lambda unit: (_ for _ in ()).throw(RuntimeError("boom")))):
     rows, row = rows_for(probe)
-    must(row["verdict"] == "NOT RUN" and row["actual"] == "probe unit did not start", (label, row))
+    must(row["verdict"] == "NOT RUN" and row["actual"] == "probe unit did not start or gave no usable answer", (label, row))
     passed, counts = sh.canary_summary(rows)
     must(passed is False and counts["NOT RUN"] == 1, (label, "NOT RUN fails the canary"))
 
@@ -192,7 +192,7 @@ import io
 
 secret = BASE / "foreign-secret"
 secret.write_text("TOPSECRET", encoding="utf-8")
-for path, want in ((secret, "READ"), (BASE / "no-such-credential", "DENIED")):
+for path, want in ((secret, "READ"), (BASE / "no-such-credential", "MISSING")):  # 1.17.121: a missing file is MISSING, never DENIED
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         sys.argv = ["-c", str(path)]

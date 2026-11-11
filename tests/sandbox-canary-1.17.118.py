@@ -125,6 +125,7 @@ REAL_CONCURRENCY, REAL_LATENCY = sh._concurrency_rows, sh._latency_rows
 # neutralise the parts that need a real server
 sh._cancel_rows = lambda collect, status: [{"wall": "Cancel", "attack": "stop mid-run", "expected": "gone", "actual": "gone=True", "verdict": "OK"}]
 sh._holders_search = lambda token, unit: []
+sh._credential_file_ready = lambda unit: True  # 1.17.121: no real systemd or credential path here
 sh._foreign_credential_probe = lambda unit: "DENIED"  # 1.17.120: the second unit that tries to read the credential (dev02 runs it for real)
 sh._latency_rows = lambda collect, status: [{"wall": "Latency", "attack": "50 no-op runs", "expected": "p95", "actual": "p95 40 ms", "verdict": "OK"}]
 sh._concurrency_rows = lambda collect, status: [{"wall": "Concurrency", "attack": "3 starts", "expected": "2 run", "actual": "ok", "verdict": "OK"}]

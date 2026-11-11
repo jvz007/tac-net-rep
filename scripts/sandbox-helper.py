@@ -2352,25 +2352,59 @@ def _limit_rows(collect, status):
     return rows
 
 
-_FOREIGN_READ = ("import sys\n"
+_FOREIGN_READ = ("import errno, sys\n"
                  "try:\n"
                  "    open(sys.argv[1], 'rb').read(1)\n"
                  "    print('READ')\n"
+                 "except PermissionError as error:\n"
+                 "    print('DENIED' if error.errno in (errno.EACCES, errno.EPERM) else 'ERROR')\n"
+                 "except (FileNotFoundError, NotADirectoryError):\n"
+                 "    print('MISSING')\n"
                  "except OSError:\n"
-                 "    print('DENIED')\n")
+                 "    print('ERROR')\n")
 
 
 def _foreign_credential_probe(unit):
     """1.17.120: while the credential run is live, a second transient unit (its own dynamic user, nothing shared) tries to read that run's
-    credential file. Returns 'READ', 'DENIED' or '' when the probe unit did not start or said something else. Never prints the content."""
+    credential file. 1.17.121: returns 'READ', 'DENIED' or 'MISSING' (the file was not there); only READ and DENIED can count as a result,
+    anything else is ''. Never prints the content or the path."""
     path = f"/run/credentials/{unit}.service/auth"
     code, out, _err = UnitRunner().run_unit("credential_foreign", ("DynamicUser=yes",), [UNIT_PYTHON, "-I", "-c", _FOREIGN_READ, path])
     word = (out or "").strip()
-    return word if code == 0 and word in ("READ", "DENIED") else ""
+    if code != 0:
+        return ""
+    return word if word in ("READ", "DENIED", "MISSING") else ""
 
 
-def _credential_rows(collect, status, probe=None):
+def _credential_file_ready(unit):
+    """1.17.121: root-side check that the credential run's file exists and its unit is active, so a denial can only mean 'refused', not 'absent'."""
+    try:
+        return os.path.exists(f"/run/credentials/{unit}.service/auth") and systemctl("is-active", unit + ".service")[0] == 0
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+def _foreign_row(foreign, before, after):
+    """1.17.121: the 'another dynamic user reads the credential file' row. OK only on DENIED with the file and unit proven present before and after."""
+    row = {"wall": "Credential", "attack": "another dynamic user reads the credential file", "expected": "denied"}
+    if not before:
+        row.update(actual="credential file or unit was not there when the probe would have run", verdict="NOT RUN")
+    elif foreign == "READ":
+        row.update(actual="read it", verdict="ATTACK SUCCEEDED")
+    elif foreign == "DENIED" and after:
+        row.update(actual="denied", verdict="OK")
+    elif foreign == "DENIED":
+        row.update(actual="denied, but the credential file or unit was gone afterwards, so the denial proves nothing", verdict="NOT RUN")
+    elif foreign == "MISSING":
+        row.update(actual="the probe found no credential file", verdict="NOT RUN")
+    else:
+        row.update(actual="probe unit did not start or gave no usable answer", verdict="NOT RUN")
+    return row
+
+
+def _credential_rows(collect, status, probe=None, ready=None):
     probe = probe or _foreign_credential_probe
+    ready = ready or _credential_file_ready
     token = secrets.token_hex(16)
     cred_run = secrets.token_hex(16)
     box = {}
@@ -2383,19 +2417,27 @@ def _credential_rows(collect, status, probe=None):
     thread.start()
     time.sleep(1.5)
     leaks = _holders_search(token, unit_name(cred_run))
+    foreign, after = "", False
     try:
-        foreign = probe(unit_name(cred_run))
-    except Exception:  # noqa: BLE001 - a probe that breaks is NOT RUN, never a pass
-        foreign = ""
+        before = bool(ready(unit_name(cred_run)))
+    except Exception:  # noqa: BLE001 - a pre-check that breaks is NOT RUN
+        before = False
+    if before:
+        try:
+            foreign = probe(unit_name(cred_run))
+        except Exception:  # noqa: BLE001 - a probe that breaks is NOT RUN, never a pass
+            foreign = ""
+        try:
+            after = bool(ready(unit_name(cred_run)))
+        except Exception:  # noqa: BLE001
+            after = False
     thread.join(30)
     result = box.get("result") or {"stdout": b"", "end": None, "refused": "no result"}
     rows = []
     if result.get("refused"):
         return [{"wall": "Credential", "attack": "credential hand-in", "expected": "arrives", "actual": "refused: " + str(result["refused"]), "verdict": "NOT RUN"}]
     rows.extend(group_table("Credential", "cred", "only under CREDENTIALS_DIRECTORY", parse_runner_rows(result["stdout"])))
-    rows.append({"wall": "Credential", "attack": "another dynamic user reads the credential file", "expected": "denied",
-                 "actual": {"DENIED": "denied", "READ": "read it"}.get(foreign, "probe unit did not start"),
-                 "verdict": {"DENIED": "OK", "READ": "ATTACK SUCCEEDED"}.get(foreign, "NOT RUN")})
+    rows.append(_foreign_row(foreign, before, after))
     rows.append({"wall": "Credential", "attack": "token in ps, /proc/*/cmdline, systemctl show, journald", "expected": "absent",
                  "actual": ", ".join(leaks) or "absent", "verdict": "ATTACK SUCCEEDED" if leaks else "OK"})
     left = [p.name for p in SECRETS_ROOT.iterdir()] if SECRETS_ROOT.is_dir() else []
