@@ -543,17 +543,25 @@ def _installed_extension_metadata(module_id: str) -> dict:
     return _extension_metadata(root)
 
 
+def _read_version_text(path) -> str | None:
+    """1.17.115: the trimmed text of a version file, or None when it cannot be read or decoded (the later checks then answer 'version unavailable')."""
+    try:
+        return path.read_text(encoding="utf-8").strip() or None
+    except (OSError, ValueError):
+        return None
+
+
 def _runtime_versions() -> dict[str, str | None]:
     framework = None
     ui = None
     if FRAMEWORK_VERSION_FILE.is_file():
-        framework = FRAMEWORK_VERSION_FILE.read_text(encoding="utf-8").strip()
+        framework = _read_version_text(FRAMEWORK_VERSION_FILE)
     if UI_VERSION_FILE.is_file():
-        ui = UI_VERSION_FILE.read_text(encoding="utf-8").strip()
+        ui = _read_version_text(UI_VERSION_FILE)
     elif UI_PACKAGE_FILE.is_file():
         try:
             ui = str(json.loads(UI_PACKAGE_FILE.read_text(encoding="utf-8")).get("version") or "").strip() or None
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError):
             ui = None
     return {"framework": framework, "ui": ui}
 

@@ -327,7 +327,7 @@ def _refuse_unmet_framework(ext_root: Path) -> None:
     from . import module_manager_v2  # lazy: module_manager_v2 imports this module
     try:
         running = module_manager_v2._runtime_versions().get("framework")
-    except OSError:
+    except (OSError, ValueError):  # 1.17.115: a corrupt VERSION file falls through to the later fail-closed checks
         return
     problem = framework_requirement_problem(payload, running)
     if problem:

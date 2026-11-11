@@ -544,3 +544,7 @@ Since 1.17.110 Core sets both limits itself, so the worker default never applies
 - **Set `timeout_seconds` to cover the whole run, with margin.** For 2 000 endpoints declare at least 7 200 seconds (two hours); the soft and hard limits follow it. Anything over 14 100 seconds is now safe, because Core sets the soft limit itself.
 - **Long work belongs in pending completion.** A run that waits on something outside Core (an agent job, a server-maintenance job) should return `PendingCompletion` and free its worker at once; see "A run that finishes later: pending completion" above. Only work the handler does itself should hold the slot.
 - **Fan-out runs are not split by Core.** Core does not cut a 2 000-endpoint run into several tasks. A module that needs parallel work uses its own batching inside the run or several schedules; it never starts its own Celery tasks.
+
+## Reading the next run of an action (Core 1.17.115)
+
+A module can ask when one of its scheduled actions next runs with `tec_tac.scheduler.next_run_for_action(module_id, action_id)`. It returns the earliest next time and the number of live schedules, never their names, owners or targets. Disabled, paused, orphaned and finished one-time schedules are left out. See `docs/module-scheduling.md`.

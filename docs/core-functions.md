@@ -127,6 +127,7 @@ Do not POST from one Tec-Tac backend module to another module's localhost API me
 | Check module enablement | `is_enabled()` |
 | Compare semantic version ranges | `version_satisfies()` |
 | Check Tec-Tac extension permission | `has_extension_permission()` |
+| Is this user an active superuser? (fails closed, since 1.17.115) | `tec_tac.rbac.is_effective_superuser()` |
 | Build cross-module audit source | `build_operation_context()` |
 ## Live contract catalog
 

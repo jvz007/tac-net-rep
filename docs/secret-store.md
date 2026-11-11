@@ -56,6 +56,17 @@ Core fails closed. It never guesses and never makes a new key.
 
 Losing the master key makes every stored secret unreadable. No other data is lost. Each module asks for its values again.
 
+## When a module is uninstalled
+
+Core keeps a module's secrets when the module is uninstalled. The remove job deletes the module's files and lifecycle state. It never touches the encrypted rows.
+
+- While the module is not installed and enabled, nobody can read its secrets. The caller check refuses every call.
+- A module with the same id that you install later reads the old values again.
+- A module removes its own values with `delete(name)`. Core has no route that deletes another module's secrets.
+
+If your module keeps a login or a key, offer a "remove connection" action. Tell the person to use it before they uninstall the module.
+
+Core does not purge secrets at uninstall on purpose. A purge would need a new hook in the remove job. A registry read glitch or an upgrade could then wipe a stored login. If Core ever adds a purge, it must update this section and `tests/secret-store-uninstall-state-1.17.115.py`.
 ## Audit
 
 Each `put` (action `add` or `modify`) and `delete` writes one strict Core audit row **before** the change, in the same transaction. If the row cannot be written, nothing changes. The row holds the owner, the name, the size, the value type and the key id. It never holds the value. A refused caller writes a `deny` row. An unreadable secret writes a `custom:decrypt-failed` row. Since 1.17.101 these two rows are limited: at most one per owner, name and reason every 5 minutes in each Core process, and the next row says how many were left out (`left_out_since_last_row`). The Core log line for an unreadable secret follows the same limit.

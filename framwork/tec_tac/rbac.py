@@ -128,15 +128,25 @@ def effective_permissions(user, *, plugins=None, role=None) -> frozenset[str]:
 
 
 def is_effective_superuser(user) -> bool:
-    if not getattr(user, "is_authenticated", False):
-        return False
-    if bool(getattr(user, "is_superuser", False)):
-        return True
+    """Is this an active, signed-in superuser, by Django's flag or by the Tactical role (public since 1.17.115)?
+
+    True only for an authenticated user who is not explicitly inactive and whose ``is_superuser`` is exactly True, or whose Tactical role has
+    ``is_superuser`` exactly True (Tactical's own ``_has_perm`` rule). A user object with no ``is_active`` is judged by the rest. Fails closed and
+    never raises: a role read that fails, or any odd object, answers False. A user without ``get_and_set_role_cache`` falls back to ``user.role``."""
     try:
-        role = user.get_and_set_role_cache()
+        if getattr(user, "is_authenticated", False) is not True:
+            return False
+        if getattr(user, "is_active", True) is False:
+            return False
+        if getattr(user, "is_superuser", False) is True:
+            return True
+        try:
+            role = user.get_and_set_role_cache()
+        except AttributeError:
+            role = getattr(user, "role", None)
+        return bool(role is not None and getattr(role, "is_superuser", False) is True)
     except Exception:
-        role = getattr(user, "role", None)
-    return bool(getattr(role, "is_superuser", False)) if role else False
+        return False
 
 
 def can_manage_privileged_operations(user) -> bool:

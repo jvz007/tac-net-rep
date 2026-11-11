@@ -2254,6 +2254,51 @@ def get_owned_schedule(owner_module: str, owner_key: str) -> dict | None:
     }
 
 
+NEXT_RUN_ROW_CAP = 500
+_NEXT_RUN_FIELDS = (
+    "module_id", "owner_module", "owner_type", "enabled", "paused_reason", "schedule_type", "timezone", "run_at", "run_time", "weekdays",
+    "day_of_month", "month_week", "month_weekday", "interval_seconds", "interval_anchor_at",
+)
+
+
+def next_run_for_action(module_id: str, action_id: str) -> dict:
+    """When does a scheduled action next run (1.17.115)? ``{next_run_at: ISO-8601 UTC string | None, enabled_schedules: int}``.
+
+    The earliest next due time over every live schedule of the action, whether the module owns it or a person made it on the Scheduler page. Time
+    and a count only: never a schedule id, name, owner, target, parameter or run history. A schedule counts when it is enabled, not paused, its
+    owner and action modules are installed and enabled (an unreadable module state counts as none) and it has a next time (a finished 'once'
+    schedule has none). ``module_id`` must be the module of the registered action, else SchedulerError: the same caller-asserted trust as
+    ``get_owned_schedule``. Reads at most 500 rows; one row that fails to compute is logged and skipped."""
+    module = str(module_id or "").strip()
+    if not module:
+        raise SchedulerError("module_id is required.")
+    if len(module) > 100:
+        raise SchedulerError("module_id exceeds 100 characters.")
+    action = get_scheduled_action(str(action_id or "").strip())
+    if action.module_id != module:
+        raise SchedulerError("A module may ask only about its own scheduled actions.")
+    visibility = ScheduleVisibility()
+    rows = TecTacSchedule.objects.filter(action_id=action.id, enabled=True, paused_reason="").only(*_NEXT_RUN_FIELDS)[:NEXT_RUN_ROW_CAP]
+    earliest = None
+    count = 0
+    for schedule in rows:
+        try:
+            if not schedule.enabled or getattr(schedule, "paused_reason", ""):
+                continue
+            if visibility.kind(schedule) != "":
+                continue
+            upcoming = next_occurrence(schedule)
+            if upcoming is None:
+                continue
+        except Exception:
+            logger.exception("next_run_for_action: a schedule row could not be read; it is skipped.")
+            continue
+        count += 1
+        if earliest is None or upcoming < earliest:
+            earliest = upcoming
+    return {"next_run_at": earliest.isoformat() if earliest else None, "enabled_schedules": count}
+
+
 def serialize_action(action: ScheduledAction) -> dict:
     return {
         "id": action.id,

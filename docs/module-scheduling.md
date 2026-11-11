@@ -718,3 +718,15 @@ Rules:
 - to move a schedule between the two modes, call `reconcile_schedule` with the new mode only. The other mode's fields are cleared and the due key resets, as for any timing change;
 - the schedule API (`GET`, `POST`, `PATCH /api/tfd/scheduler/schedules/`) returns `month_week` and `month_weekday` (null when unused). On `PATCH`, sending one mode replaces the other, and a `PATCH` that makes the schedule anything but monthly clears `day_of_month`, `month_week` and `month_weekday` (1.17.89);
 - one-time schedules are unchanged: `run_at` is an exact moment.
+
+## When does my action next run? (Core 1.17.115)
+
+`tec_tac.scheduler.next_run_for_action(module_id, action_id)` answers `{"next_run_at": "<ISO-8601 UTC>" | None, "enabled_schedules": <int>}`. It needs framework 1.17.115 or later.
+
+- It gives the earliest next time over every live schedule of that action. The schedule can be yours or one a person made on the Scheduler page.
+- It returns a time and a count only. It never returns a schedule id, name, owner, target, parameter or run history.
+- A schedule counts when it is enabled, not paused, and its owner and action modules are installed and enabled. If Core cannot read the module state, nothing counts. A finished one-time schedule has no next time and does not count.
+- `module_id` must be the module that registered the action. Anything else raises `SchedulerError`, as does an unknown action. Like `get_owned_schedule`, Core trusts the module to name itself.
+- Core reads at most 500 schedules. A row it cannot compute is logged and skipped.
+
+Use it for a "next scheduled run" line on a status panel. For one schedule you own, with its last run status, keep using `get_owned_schedule`.

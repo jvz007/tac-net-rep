@@ -52,8 +52,8 @@ class BrokenUser(User):
         raise RuntimeError("cache down")
 
 
-# the real check falls back to .role when the cache call fails, so a broken cache on a role superuser still answers
-must(wide.filter_by_role(BrokenUser(Role(superuser=True))).is_none is False, "a failing role cache falls back to the role")
+# 1.17.115: the check now fails closed when the role cache call fails (only a user with no cache method falls back to .role)
+must(wide.filter_by_role(BrokenUser(Role(superuser=True))).is_none is True, "a failing role cache fails closed (1.17.115)")
 must(wide.filter_by_role(BrokenUser(Role())).is_none is True, "a failing role cache and no superuser: none")
 
 real_check = _rbac.is_effective_superuser
