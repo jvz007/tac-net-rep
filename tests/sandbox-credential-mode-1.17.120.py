@@ -3,8 +3,10 @@
 
 systemd 255 creates a LoadCredential file with mode 0440, not 0400. The selftest accepts exactly two shapes:
 
-* mode 400, owner is the unit's uid;
-* mode 440, group is the unit's own gid, that gid is in the dynamic range (>= 61184), owner is the unit's uid or root.
+(1.17.122: the rule is tightened, see tests/sandbox-credential-acl-1.17.122.py; the 'any dynamic group' acceptance is gone.)
+
+* mode exactly 400 or 440, owner is root or the unit's uid, group is root or the unit's own gid, the unit's ids are in the dynamic range
+  (>= 61184), and an ACL, if any, holds one named entry only: user:<unit uid>, read only.
 
 Everything else fails closed with a plain detail: any 'other' bit (444, 404, 640 has group write but no other bit and is still not 400/440),
 a group that is not the unit's own, a gid below 61184, a foreign owner, a missing or garbled stat line, a wrong token, a source that stays.
@@ -47,13 +49,17 @@ def credential(**changes):
 
 
 # ---- the two accepted shapes
+# 1.17.122: the default fake answer is the real dev02 shape; the detail names owner, group, mode and every ACL entry
 ok = credential()
-must(ok["ready"] is True and ok["checks"]["credential"] == {"ok": True, "detail": "arrived, mode 400, owned by the unit's user, source removed"}, ok["checks"]["credential"])
-ok = credential(mode="440", uid="61500", gid="61500")
-must(ok["ready"] is True and "mode 440" in ok["checks"]["credential"]["detail"] and "unit's own" in ok["checks"]["credential"]["detail"], ok["checks"]["credential"])
-must(credential(mode="440", uid="0", gid="61500")["ready"] is True, "440 owned by root, group is the unit's own")
-must(credential(mode="440", uid="65000", gid="65000", unit_uid="65000", unit_gid="65000")["ready"] is True, "any dynamic gid that is the unit's own")
-must(credential(mode="440", uid="61184", gid="61184", unit_uid="61184", unit_gid="61184")["ready"] is True, "the floor itself is in the dynamic range")
+must(ok["ready"] is True and ok["checks"]["credential"] == {"ok": True, "detail": "arrived, owner root, group root, mode 440, ACL user::r--, user:61500:r--, group::r--, mask::r--, other::---, source removed"}, ok["checks"]["credential"])
+ok = credential(mode="400", uid="61500", gid="61500", acl="ACL none")
+must(ok["ready"] is True and ok["checks"]["credential"]["detail"] == "arrived, owner 61500, group 61500, mode 400, ACL none, source removed", ok["checks"]["credential"])
+ok = credential(mode="440", uid="61500", gid="61500", acl="ACL none")
+must(ok["ready"] is True and "mode 440" in ok["checks"]["credential"]["detail"] and "ACL none" in ok["checks"]["credential"]["detail"], ok["checks"]["credential"])
+must(credential(mode="440", uid="0", gid="61500", acl="ACL none")["ready"] is True, "440 owned by root, group is the unit's own")
+must(credential(mode="440", uid="61500", gid="0", acl="ACL none")["ready"] is True, "440 owned by the unit, group root")
+must(credential(mode="440", uid="65000", gid="65000", unit_uid="65000", unit_gid="65000", acl="ACL none")["ready"] is True, "a dynamic gid that is the unit's own")
+must(credential(mode="440", uid="61184", gid="61184", unit_uid="61184", unit_gid="61184", acl="ACL none")["ready"] is True, "the floor itself is in the dynamic range")
 must(not [p for p in H.RUN.iterdir() if p.name.startswith(sh.SELFTEST_PREFIX)], "the probe folder is removed")
 
 
@@ -67,11 +73,10 @@ def refused(label, part="", **changes):
     return status
 
 
-refused("440, another group", "not the unit's own", mode="440", uid="61500", gid="61999")
-refused("440, group is a normal group below 61184", "not the unit's own", mode="440", uid="500", gid="500", unit_uid="500", unit_gid="500")
-refused("440, group is root", "not the unit's own", mode="440", uid="61500", gid="0")
-refused("440, a foreign owner", "not the unit's own", mode="440", uid="1000", gid="61500")
-refused("400, a foreign owner", "not the unit's own", mode="400", uid="1000", gid="61500")
+refused("440, another group", "not root or the unit's own", mode="440", uid="61500", gid="61999", acl="ACL none")
+refused("440, group is a normal group below 61184", "dynamic range", mode="440", uid="500", gid="500", unit_uid="500", unit_gid="500", acl="ACL none")
+refused("440, a foreign owner", "not root or the unit's own", mode="440", uid="1000", gid="61500")
+refused("400, a foreign owner", "not root or the unit's own", mode="400", uid="1000", gid="61500")
 refused("640", "mode is 640", mode="640")
 refused("444, others can read", "other users could read it", mode="444")
 refused("404, others can read", "other users could read it", mode="404")
@@ -88,7 +93,7 @@ refused("a source that was not removed", "not removable", remove=False)
 must(credential(stat="400 -1 61500")["ready"] is False, "a negative owner is not a number")
 # the unit's own ids come from the unit itself: a lying file group does not match a different unit gid
 fake = F.Fake()
-fake.credential.update(mode="440", uid="61500", gid="61500")
+fake.credential.update(mode="440", uid="61500", gid="61500", acl="ACL none")
 real_run = fake.run_unit
 
 
@@ -112,9 +117,10 @@ must(script[0] == "/bin/sh" and script[1] == "-c" and "stat -c" in script[2] and
 
 # the pure function
 P = sh.credential_mode_problem
-must(P("400 61500 61500", "61500", "61500") == "" and P("440 61500 61500", "61500", "61500") == "" and P("440 0 61500", "61500", "61500") == "", "accepted")
-must(P("440 61500 61183", "61183", "61183") != "" and P("440 61500 61500", "61500", "61501") != "" and P("0440 61500 61500", "61500", "61500") != "", "refused")
-must(P("", "1", "1") != "" and P("440 1 1", "", "1") != "" and P("440 1 1", "1", "x") != "", "unreadable")
+N = "ACL none"
+must(P("400 61500 61500", "61500", "61500", N) == "" and P("440 61500 61500", "61500", "61500", N) == "" and P("440 0 61500", "61500", "61500", N) == "", "accepted")
+must(P("440 61500 61183", "61183", "61183", N) != "" and P("440 61500 61500", "61500", "61501", N) != "" and P("0440 61500 61500", "61500", "61500", N) != "", "refused")
+must(P("", "1", "1", N) != "" and P("440 1 1", "", "1", N) != "" and P("440 1 1", "1", "x", N) != "", "unreadable")
 
 # ---- the canary row
 TOKEN = {}

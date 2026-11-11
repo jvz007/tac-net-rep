@@ -32,7 +32,10 @@ class Fake:
             "dns": (0, "reply 0\n"),
         }
         self.script.update(overrides)
-        self.credential = {"mode": "400", "uid": "61500", "gid": "61500", "unit_uid": "61500", "unit_gid": "61500", "stat": None, "token": None, "remove": True}
+        # 1.17.122: the default is the real dev02 shape (root:root, mode 440, ACL user:<unit uid>:r--, mask r--). acl: None builds that ACL line
+        # from unit_uid, False leaves the line out (a missing answer), a string is sent as it is.
+        self.credential = {"mode": "440", "uid": "0", "gid": "0", "unit_uid": "61500", "unit_gid": "61500", "stat": None, "token": None, "remove": True,
+                           "acl": None}
 
     def run_cmd(self, argv, *, timeout=15):
         answer = self.script["systemctl" if argv[0] == "systemctl" else "stat"]
@@ -57,7 +60,11 @@ class Fake:
                 source.unlink()
             c = self.credential
             stat_line = c["stat"] if c["stat"] is not None else f"{c['mode']} {c['uid']} {c['gid']}"
-            return 0, f"{token}\n{stat_line}\n{c['unit_uid']}\n{c['unit_gid']}\n", ""
+            acl = c["acl"]
+            if acl is None:
+                acl = f"ACL user::r--,user:{c['unit_uid']}:r--,group::r--,mask::r--,other::---"
+            tail = f"{acl}\n" if acl is not False else ""
+            return 0, f"{token}\n{stat_line}\n{c['unit_uid']}\n{c['unit_gid']}\n{tail}", ""
         if callable(answer):
             return answer(properties, command)
         return answer[0], answer[1], "err text" if answer[0] else ""

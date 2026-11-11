@@ -967,30 +967,114 @@ def selftest(runner=None, *, resolv_conf_path="/etc/resolv.conf", run_root=None)
 
 DYNAMIC_GID_MIN = 61184  # systemd's dynamic user range starts here (the same floor the dynamic_user probe uses for uids)
 
+# 1.17.122: the in-unit program that reads the credential file's POSIX ACL (system.posix_acl_access) with the standard library only, so the
+# probe does not need getfacl. It prints one line: 'ACL none', 'ACL error' or 'ACL ' and the entries as tag:id:perm (the id is empty for the
+# owner, group, mask and other entries). No single quote, '%' or '$' in the text: it travels inside 'sh -c' and a systemd command line.
+_PROBE_ACL = (
+    "import os,struct,sys\n"
+    "try:\n"
+    " d=os.getxattr(sys.argv[1],\"system.posix_acl_access\")\n"
+    "except OSError as e:\n"
+    " print(\"ACL none\" if e.errno in (61,95) else \"ACL error\");sys.exit(0)\n"
+    "if len(d)<12 or len(d)&7!=4 or struct.unpack(\"<I\",d[:4])[0]!=2:\n"
+    " print(\"ACL error\");sys.exit(0)\n"
+    "names={1:\"user\",2:\"user\",4:\"group\",8:\"group\",16:\"mask\",32:\"other\"}\n"
+    "out=[]\n"
+    "for i in range(4,len(d),8):\n"
+    " t,p,q=struct.unpack(\"<HHI\",d[i:i+8])\n"
+    " if t not in names or p>7:\n"
+    "  print(\"ACL error\");sys.exit(0)\n"
+    " out.append(names[t]+\":\"+(str(q) if t in (2,8) else \"\")+\":\"+(\"r\" if p&4 else \"-\")+(\"w\" if p&2 else \"-\")+(\"x\" if p&1 else \"-\"))\n"
+    "print(\"ACL \"+\",\".join(out))\n"
+)
+_ACL_ENTRY = re.compile(r"(user|group|mask|other):(\d*):([r-][w-][x-])")
 
-def credential_mode_text(stat_line):
-    mode = (stat_line.split() or ["?"])[0]
-    return "mode 400, owned by the unit's user" if mode == "400" else "mode 440, group is the unit's own dynamic group"
+
+def parse_acl(acl_line):
+    """The in-unit ACL answer as a list of (tag, id, perms), [] for 'no ACL', or None when the answer is missing, garbled or truncated."""
+    text = str(acl_line or "").strip()
+    if text == "ACL none":
+        return []
+    if not text.startswith("ACL ") or text == "ACL error":
+        return None
+    entries = []
+    for part in text[4:].split(","):
+        match = _ACL_ENTRY.fullmatch(part)
+        if not match:
+            return None
+        tag, qual, perms = match.groups()
+        if tag in ("mask", "other") and qual:
+            return None
+        entries.append((tag, qual, perms))
+    return entries
 
 
-def credential_mode_problem(stat_line, uid_line, gid_line):
-    """1.17.120: the credential file inside the unit is 0400 (owner is the unit's uid), or 0440 only when its group is the unit's own
-    dynamic group (gid >= 61184) and the owner is the unit's uid or root. Any 'other' bit, any other group or any other mode fails closed.
-    Returns a plain problem text, or '' when the file is acceptable."""
+def credential_found_text(stat_line, acl_line):
+    """Plain information: owner, group, mode and every ACL entry, as found. Never the token or the path."""
+    parts = str(stat_line).split()
+    if len(parts) != 3 or not all(part.isdigit() for part in parts):
+        found = "owner, group and mode unreadable"
+    else:
+        found = f"owner {'root' if int(parts[1]) == 0 else parts[1]}, group {'root' if int(parts[2]) == 0 else parts[2]}, mode {parts[0]}"
+    entries = parse_acl(acl_line)
+    if entries is None:
+        return found + ", ACL answer missing or garbled"
+    return found + ", ACL " + (", ".join(f"{tag}:{qual}:{perms}" for tag, qual, perms in entries) if entries else "none")
+
+
+def _credential_acl_problem(entries, uid):
+    """The ACL rule (1.17.122): the only named entry is user:<the unit's uid> with read only; no named group; the mask and every entry except
+    the owner entry carry no write; no entry carries execute; 'other' grants nothing. A missing owner, group or other entry fails closed."""
+    kinds = [(tag, qual) for tag, qual, _perms in entries]
+    for need in (("user", ""), ("group", ""), ("other", "")):
+        if kinds.count(need) != 1:
+            return "the credential file's ACL is incomplete"
+    if kinds.count(("mask", "")) > 1:
+        return "the credential file's ACL is garbled"
+    named = [(tag, qual, perms) for tag, qual, perms in entries if tag in ("user", "group") and qual]
+    if any(tag == "group" for tag, _qual, _perms in named):
+        return "the credential file has an ACL entry for a named group"
+    if len(named) > 1 or any(qual != str(uid) or perms != "r--" for _tag, qual, perms in named):
+        return "the credential file has an ACL entry for a user that is not the unit's own, or one that is not read only"
+    if named and ("mask", "") not in kinds:
+        return "the credential file's ACL has no mask"
+    for tag, qual, perms in entries:
+        if perms[2] == "x":
+            return "the credential file's ACL grants execute"
+        if perms[1] == "w" and not (tag == "user" and not qual):
+            return "the credential file's ACL grants write"
+        if tag == "other" and perms != "---":
+            return "the credential file's ACL gives other users access"
+    return ""
+
+
+def credential_mode_problem(stat_line, uid_line, gid_line, acl_line):
+    """1.17.122: the credential file inside the unit is mode exactly 0400 or 0440 (no 'other' bit); the owner is root or the unit's uid; the
+    group is root or the unit's own gid; the unit's own uid and gid are in the dynamic range (>= 61184); and the POSIX ACL is absent or holds
+    one named entry only, user:<unit uid>, read only (see _credential_acl_problem). Anything else, and any missing or garbled answer, fails
+    closed. The 1.17.120 'any dynamic group' acceptance is gone. Returns a plain problem text naming what was found, or '' when acceptable."""
     parts = stat_line.split()
     if len(parts) != 3 or not all(part.isdigit() for part in parts) or not uid_line.strip().isdigit() or not gid_line.strip().isdigit():
         return "the credential file's mode and owner could not be read"
     mode, owner, group = parts[0], int(parts[1]), int(parts[2])
     uid, gid = int(uid_line.strip()), int(gid_line.strip())
+    found = " (found: " + credential_found_text(stat_line, acl_line) + ")"
     if not re.fullmatch(r"[0-7]{3,4}", mode) or int(mode, 8) & 0o007:
-        return f"the credential file mode is {mode}: other users could read it"
-    if mode == "400" and owner == uid:
-        return ""
-    if mode == "440" and group == gid and gid >= DYNAMIC_GID_MIN and owner in (uid, 0):
-        return ""
-    if mode in ("400", "440"):
-        return f"the credential file mode is {mode} but its owner or group is not the unit's own"
-    return f"the credential file mode is {mode}, not 400 or 440"
+        return f"the credential file mode is {mode}: other users could read it" + found
+    if mode not in ("400", "440"):
+        return f"the credential file mode is {mode}, not 400 or 440" + found
+    if uid < DYNAMIC_GID_MIN or gid < DYNAMIC_GID_MIN:
+        return f"the unit's own user or group id (uid {uid}, gid {gid}) is not in the dynamic range" + found
+    if owner not in (0, uid) or group not in (0, gid):
+        return f"the credential file mode is {mode} but its owner or group is not root or the unit's own" + found
+    entries = parse_acl(acl_line)
+    if entries is None:
+        return "the credential file's ACL answer is missing or garbled" + found
+    if entries:
+        problem = _credential_acl_problem(entries, uid)
+        if problem:
+            return problem + found
+    return ""
 
 
 def _probe_credential(runner, run_root):
@@ -1005,20 +1089,22 @@ def _probe_credential(runner, run_root):
         source.write_text(token, encoding="utf-8")
         os.chmod(source, 0o600)
         properties = list(PROBE_PROPERTIES["credential"]) + [f"LoadCredential=probe:{source}", f"ExecStartPost=+/bin/rm -f {source}"]
-        # 1.17.120: line 1 the content, line 2 "mode uid gid" of the file, line 3 the unit's uid, line 4 the unit's gid
-        script = ('sleep 1; cat "$CREDENTIALS_DIRECTORY/probe"; echo; stat -c "%a %u %g" "$CREDENTIALS_DIRECTORY/probe"; id -u; id -g')
+        # 1.17.122: line 1 the content, line 2 "mode uid gid" of the file, line 3 the unit's uid, line 4 the unit's gid, line 5 the ACL
+        script = ('sleep 1; cat "$CREDENTIALS_DIRECTORY/probe"; echo; stat -c "%a %u %g" "$CREDENTIALS_DIRECTORY/probe"; id -u; id -g; '
+                  f"/usr/bin/python3 -I -c '{_PROBE_ACL}' \"$CREDENTIALS_DIRECTORY/probe\"")
         code, out, err = runner.run_unit("credential", properties, ["/bin/sh", "-c", script])
         lines = out.strip().splitlines()
         if code != 0 or len(lines) < 4:
             return False, (err.strip()[:200] or "the unit did not start, or the credential answer was incomplete")
         if lines[0] != token:
             return False, "the credential did not arrive"
-        problem = credential_mode_problem(lines[1], lines[2], lines[3])
+        acl_line = lines[4] if len(lines) > 4 else ""
+        problem = credential_mode_problem(lines[1], lines[2], lines[3], acl_line)
         if problem:
             return False, problem
         if source.exists():
             return False, "the source file was not removable after the start"
-        return True, "arrived, " + credential_mode_text(lines[1]) + ", source removed"
+        return True, "arrived, " + credential_found_text(lines[1], acl_line) + ", source removed"
     except OSError as exc:
         return False, f"cannot prepare the probe folder ({exc.strerror or 'error'})"
     finally:
@@ -2402,6 +2488,11 @@ def _foreign_row(foreign, before, after):
     return row
 
 
+# 1.17.122: how long the credential run stays alive so the root-side checks and the foreign reader can finish; it stays under canary_row's
+# 20 s run_seconds, so the run ends on its own and the limit never fires first.
+CANARY_CRED_HOLD_SECONDS = 10
+
+
 def _credential_rows(collect, status, probe=None, ready=None):
     probe = probe or _foreign_credential_probe
     ready = ready or _credential_file_ready
@@ -2410,7 +2501,7 @@ def _credential_rows(collect, status, probe=None, ready=None):
     box = {}
 
     def live():
-        box["result"] = collect("cred", {"credential_token": token, "hold_seconds": 3}, status=status, credentials={"auth": token.encode()},
+        box["result"] = collect("cred", {"credential_token": token, "hold_seconds": CANARY_CRED_HOLD_SECONDS}, status=status, credentials={"auth": token.encode()},
                                 person="canary-cred", run_id=cred_run)
 
     thread = threading.Thread(target=live, daemon=True)
@@ -2556,9 +2647,9 @@ def format_table(table):
     widths = {key: max([len(key)] + [len(str(entry[key])) for entry in table]) for key in ("wall", "attack", "expected", "actual", "verdict")}
     widths = {key: min(width, 60) for key, width in widths.items()}
     header = "  ".join(key.upper().ljust(widths[key]) for key in widths)
-    lines = [header, "-" * len(header)]
+    lines = [header.rstrip(), "-" * len(header)]  # 1.17.122: no line ends in padding, so a consumer can match the verdict at the line end
     for entry in table:
-        lines.append("  ".join(str(entry[key])[:widths[key]].ljust(widths[key]) for key in widths))
+        lines.append("  ".join(str(entry[key])[:widths[key]].ljust(widths[key]) for key in widths).rstrip())
     return "\n".join(lines)
 
 

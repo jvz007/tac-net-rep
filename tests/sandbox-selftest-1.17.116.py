@@ -183,7 +183,7 @@ class Fake:
                 source.unlink()
             c = self.credential
             stat_line = c["stat"] if c["stat"] is not None else f"{c['mode']} {c['uid']} {c['gid']}"
-            return 0, f"{token}\n{stat_line}\n61500\n61500\n", ""
+            return 0, f"{token}\n{stat_line}\n61500\n61500\nACL none\n", ""
         if callable(answer):
             return answer(properties, command)
         return answer[0], answer[1], "err text" if answer[0] else ""
