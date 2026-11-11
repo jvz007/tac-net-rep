@@ -1047,6 +1047,12 @@ mkdir -p "${SANDBOX_LIB}/runners" "${SANDBOX_LIB}/registry" "${SANDBOX_STATE}" "
 chown root:root "${SANDBOX_LIB}" "${SANDBOX_LIB}/runners" "${SANDBOX_LIB}/registry" "${SANDBOX_STATE}"
 chmod 0755 "${SANDBOX_LIB}" "${SANDBOX_LIB}/runners" "${SANDBOX_LIB}/registry" "${SANDBOX_STATE}"
 install_root_script "${REPO_ROOT}/scripts/sandbox-helper.py" "${SANDBOX_LIB}/sandbox-helper.py"
+# 1.17.118: the in-unit launcher (credential return, dead-man watch) and the canary's attack program. Both root-owned 0755, bound read-only into a unit.
+mkdir -p "${SANDBOX_LIB}/canary"
+chown root:root "${SANDBOX_LIB}/canary"
+chmod 0755 "${SANDBOX_LIB}/canary"
+install_root_script "${REPO_ROOT}/scripts/sandbox-launcher.py" "${SANDBOX_LIB}/sandbox-launcher.py"
+install_root_script "${REPO_ROOT}/scripts/sandbox-canary-runner.py" "${SANDBOX_LIB}/canary/sandbox-canary-runner.py"
 ln -sfn "${SANDBOX_LIB}/sandbox-helper.py" "${SANDBOX_HELPER}"
 chown -h root:root "${SANDBOX_HELPER}"
 cat > "${SANDBOX_SUDOERS}" <<EOF

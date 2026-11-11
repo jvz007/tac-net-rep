@@ -2,6 +2,7 @@ from .account_security_views import AccountSecurityPolicyView
 from .account_self_service_views import MyAccountPasswordView, MyAccountTacticalUiView, MyAccountTotpResetView, MyAccountView
 from .resource_views import ResourceListView, ResourceDetailView, ResourceMutableListView, ResourceMutableDetailView, ResourceCustomFieldsView, ResourceCustomFieldDefinitionsView
 from .server_backup_views import BackupRestoreView, BackupRestoreJobView
+from .sandbox_views import SandboxRunCancelView, SandboxStatusView
 from .server_maintenance_views import (
     ServerMaintenanceActionListView, ServerMaintenanceJobListView,
     ServerMaintenanceJobDetailView, ServerMaintenanceJobCancelView, ServerMaintenanceJobLogView,
@@ -139,6 +140,8 @@ urlpatterns = [
     path("system/maintenance/jobs/<uuid:job_id>/", ServerMaintenanceJobDetailView.as_view(), name="tec-tac-server-maintenance-job-detail"),
     path("system/maintenance/jobs/<uuid:job_id>/log/", ServerMaintenanceJobLogView.as_view(), name="tec-tac-server-maintenance-job-log"),
     path("system/maintenance/jobs/<uuid:job_id>/cancel/", ServerMaintenanceJobCancelView.as_view(), name="tec-tac-server-maintenance-job-cancel"),
+    path("system/sandbox/status/", SandboxStatusView.as_view(), name="tec-tac-sandbox-status"),
+    path("system/sandbox/runs/<str:run_id>/cancel/", SandboxRunCancelView.as_view(), name="tec-tac-sandbox-run-cancel"),
     path("system/updates/", SystemUpdateStatusView.as_view(), name="tec-tac-system-update-status"),
     path("system/updates/trust-policy/", SystemUpdateTrustPolicyView.as_view(), name="tec-tac-system-update-trust-policy"),
     path("system/updates/packages/inspect/", SystemUpdatePackageInspectView.as_view(), name="tec-tac-system-update-package-inspect"),

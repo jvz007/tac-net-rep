@@ -102,7 +102,7 @@ SERVER_MAINTENANCE_LIB="/usr/local/lib/tec-tac-server-maintenance"
 SERVER_MAINTENANCE_SUDOERS="/etc/sudoers.d/tec-tac-server-maintenance"
 rm -f "${MODULE_SUDOERS}" "${MODULE_HELPER}" "${MODULE_HOTFIX_SUDOERS}" "${MODULE_HOTFIX_HELPER}" "${MODULE_CONFIG}" "${RMM_DROPIN}" "${SYSTEM_UPDATE_SUDOERS}" "${SYSTEM_UPDATE_HELPER}" "${SYSTEM_UPDATE_CONFIG}" "${SERVER_BACKUP_SUDOERS}" "${SERVER_BACKUP_HELPER}" "${SERVER_MAINTENANCE_SUDOERS}" "${SERVER_MAINTENANCE_HELPER}" /usr/local/sbin/tec-tac-repair /usr/local/sbin/tec-tac-diagnostics
 rm -rf "${SYSTEM_UPDATE_LIB}" "${SERVER_BACKUP_LIB}" "${SERVER_MAINTENANCE_LIB}"
-# 1.17.116: core.sandbox. The helper, its registry and copied programs (the lib folder), the sudo rule, the slice with its drop-in, the sweep
+# 1.17.116: core.sandbox (1.17.118: the lib folder also holds the launcher and the canary program, so the same removal covers them). The helper, its registry and copied programs (the lib folder), the sudo rule, the slice with its drop-in, the sweep
 # timer and service, and the tmpfs folder go. The helper's own audit log and status file under /var/lib/tec-tac/sandbox are kept, like the
 # other persistent records.
 SANDBOX_HELPER="/usr/local/sbin/tec-tac-sandbox"

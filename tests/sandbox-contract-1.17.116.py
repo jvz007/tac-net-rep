@@ -168,13 +168,13 @@ must(re.search(r"^SANDBOX_ENABLED = False$", (ROOT / "scripts" / "sandbox-helper
 write_status(GOOD_STATUS)
 answer = sandbox.status()
 must(answer == {"enabled": False, "ready": True, "reason": "ready", "systemd_version": 252, "address_filter_ok": True, "dns_ok": True,
-                "selftest_at": "2026-11-11T10:00:00Z", "runners": []}, answer)
+                "selftest_at": "2026-11-11T10:00:00Z", "slots_total": None, "slots_used": None, "canary_ok": False, "canary_at": None, "runners": []}, answer)
 # a ready selftest never makes enabled true, and a status file cannot claim it
 write_status({**GOOD_STATUS, "enabled": True})
 must(sandbox.status()["enabled"] is False, "enabled comes from the constant")
 # keys not in the contract are never copied (resolver, checks, anything a later helper adds)
 write_status({**GOOD_STATUS, "token": "x", "credential": "y", "resolver": "10.0.0.1"})
-must(set(sandbox.status()) == {"enabled", "ready", "reason", "systemd_version", "address_filter_ok", "dns_ok", "selftest_at", "runners"}, sorted(sandbox.status()))
+must(set(sandbox.status()) == {"enabled", "ready", "reason", "systemd_version", "address_filter_ok", "dns_ok", "selftest_at", "slots_total", "slots_used", "canary_ok", "canary_at", "runners"}, sorted(sandbox.status()))  # 1.17.118: four additive keys
 # a failed selftest keeps its plain reason
 write_status({**GOOD_STATUS, "ready": False, "reason": "the server does not use the unified cgroup v2 hierarchy", "dns_ok": False})
 answer = sandbox.status()
@@ -366,12 +366,16 @@ finally:
     FORBID["on"] = False
 for name in ("start", "run", "cancel"):
     source = inspect.getsource(getattr(sandbox, name))
-    must("_refuse()" in source and "open(" not in source and "os." not in source, f"{name} refuses first and touches nothing")
-must("raise SandboxError" in inspect.getsource(sandbox._refuse) and "if not SANDBOX_ENABLED" in inspect.getsource(sandbox._refuse), "_refuse")
-# even if the constant were flipped, the launch path does not exist yet: sandbox_unavailable, never a run
+    body = source.split('"""')[2]
+    must(body.lstrip().startswith("_check_enabled()") or (name == "run" and body.lstrip().startswith("handle = start(")), f"{name} checks the switch first (run through start)")
+must("raise SandboxError" in inspect.getsource(sandbox._check_enabled) and "if not SANDBOX_ENABLED" in inspect.getsource(sandbox._check_enabled), "_check_enabled")
+# 1.17.118: with the switch off, nothing is spawned either
+sandbox._popen = lambda *a, **k: (_ for _ in ()).throw(AssertionError("a process was started while the switch is off"))
+# 1.17.118: with the switch on (test only), the real checks run and a refusal never spawns a process
 sandbox.SANDBOX_ENABLED = True
 try:
-    must(code_of(AI, sandbox.start) == "sandbox_unavailable" and code_of(AI, sandbox.run) == "sandbox_unavailable" and code_of(AI, sandbox.cancel) == "sandbox_unavailable", "fail closed")
+    must(code_of(AI, sandbox.start) == "invalid_input" and code_of(CORE, sandbox.start, "ai.claude") == "not_owner" and code_of(HALO, sandbox.start, "ai.claude") == "not_owner", "caller and id checks")
+    must(code_of(AI, sandbox.cancel) == "invalid_input" and code_of(CORE, sandbox.cancel, "0" * 32) == "not_owner" and code_of(AI, sandbox.cancel, "0" * 32) == "not_owner", "an unknown run is not_owner")
 finally:
     sandbox.SANDBOX_ENABLED = False
 # SandboxError
@@ -419,24 +423,33 @@ for node in ast.walk(tree):
         pairs = {k.value: v for k, v in zip(node.keys, node.values) if isinstance(k, ast.Constant) and isinstance(k.value, str)}
         if "area" in pairs and isinstance(pairs["area"], ast.Constant) and pairs["area"].value == "sandbox":
             rows.append({k: ast.literal_eval(v) for k, v in pairs.items()})
-must(sorted(row["name"] for row in rows) == ["cancel", "describe", "run", "start", "status"], [row["name"] for row in rows])
+must(sorted(row["name"] for row in rows) == ["RunHandle", "cancel", "describe", "run", "start", "status"], [row["name"] for row in rows])
 for row in rows:
     must(set(row) == {"area", "import_path", "name", "kind", "purpose", "audience"}, row.keys())
     must(row["import_path"] == "tec_tac.sandbox" and row["kind"] == "python" and row["audience"] == "consumer/backend", row)
-    must("additive" in row["purpose"] and "core.sandbox 1.0.0" in row["purpose"] and "needs framework >=1.17.116" in row["purpose"] and "AD-63" in row["purpose"], row["name"])
-    must(". Since 1.17.116" in row["purpose"] and not re.search(r"[A-Za-z0-9)\].]Since 1\.17\.", row["purpose"]), (row["name"], "the 1.17.112 spacing rule"))
-    must(hasattr(sandbox, row["name"]), row["name"])
+    floor = "1.17.118" if row["name"] == "RunHandle" else "1.17.116"
+    must("additive" in row["purpose"] and "core.sandbox 1.0.0" in row["purpose"] and f"needs framework >={floor}" in row["purpose"] and "AD-63" in row["purpose"], row["name"])
+    must(f". Since {floor}" in row["purpose"] and not re.search(r"[A-Za-z0-9)\].]Since 1\.17\.", row["purpose"]), (row["name"], "the 1.17.112 spacing rule"))
+    must(hasattr(sandbox, row["name"]) or row["name"] == "RunHandle", row["name"])
 by_name = {row["name"]: row["purpose"] for row in rows}
-for needle in ("selftest_not_run", "status_unreadable", "enabled is False in 1.17.116", "ready is True only when"):
+for needle in ("selftest_not_run", "status_unreadable", "enabled is False", "ready is True only when", "slots_total", "canary_ok", "added in 1.17.118, additive"):
     must(needle in by_name["status"], needle)
 for needle in ("not_owner", "runner_unknown", "invalid_input", "AD-26"):
     must(needle in by_name["describe"], needle)
 must("sandbox_disabled before it reads anything" in by_name["start"] and all(code in by_name["start"] for code in sandbox.ERROR_CODES), "start lists the codes")
 for name in ("run", "cancel"):
     must("sandbox_disabled before it reads anything" in by_name[name], name)
+for needle in ("events(timeout=None)", "wait(raise_on_failure=False)", "close()", "dead-man", "output_limit", "sandbox.run.ended"):
+    must(needle in by_name["RunHandle"], needle)
+for needle in ("strict audit row sandbox.run.started", "stdin only", "person_busy", "requested_by", "AD-26"):
+    must(needle in by_name["start"], needle)
 RULES = next(ast.literal_eval(node.value) for node in ast.parse(CONTRACTS).body if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "RULES")
 rule = [text for text in RULES if isinstance(text, str) and text.startswith("Core sandbox (core.sandbox 1.0.0")]
 must(len(rule) == 1 and "framework >=1.17.116" in rule[0] and "sandbox.register" in rule[0] and "docs/sandbox-capability.md" in rule[0], rule)
+must("core.sandbox.view" in rule[0] and "core.sandbox.manage" in rule[0] and "No module uses core.sandbox yet" in rule[0], "1.17.118 permissions in the rule")
+HTTP = next(ast.literal_eval(node.value) for node in ast.parse(CONTRACTS).body if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "HTTP_CONTRACT_DETAILS")
+for route, method, perm in (("/api/tfd/system/sandbox/status/", "GET", "core.sandbox.view"), ("/api/tfd/system/sandbox/runs/<str:run_id>/cancel/", "POST", "core.sandbox.manage")):
+    must(perm in HTTP[route][method]["authorization"] and "1.17.118" in " ".join(HTTP[route][method]["notes"]), route)
 manifest_rule = [text for text in RULES if isinstance(text, str) and text.startswith("Manifest key added in 1.17.116: sandbox_runners")]
 must(len(manifest_rule) == 1 and "allowed_hosts is refused" in manifest_rule[0] and "install.sh grants to nobody" in manifest_rule[0] and "A manifest without the key is unchanged." in manifest_rule[0], manifest_rule)
 must(not re.search(r"[A-Za-z0-9)\].]Since 1\.17\.", manifest_rule[0] + rule[0]), "spacing")
@@ -444,7 +457,7 @@ must(not re.search(r"[A-Za-z0-9)\].]Since 1\.17\.", manifest_rule[0] + rule[0]),
 must('"Manifest key added in 1.17.17: server_maintenance_actions' in CONTRACTS, "the 1.17.17 sentence is unchanged")
 # the documents
 doc = (ROOT / "docs" / "sandbox-capability.md").read_text(encoding="utf-8")
-for needle in ("core.sandbox", "sandbox_runners", "sandbox.register", "sandbox_disabled", "smaller sandbox", "allowed_hosts", "1.17.116", "AD-63"):
+for needle in ("core.sandbox", "sandbox_runners", "sandbox.register", "sandbox_disabled", "smaller sandbox", "allowed_hosts", "1.17.116", "AD-63", "1.17.118", "RunHandle", "core.sandbox.view", "system/sandbox/status"):
     must(needle in doc, needle)
 must("docs/sandbox-capability.md" in (ROOT / "docs" / "capabilities.md").read_text(encoding="utf-8"), "pointer in capabilities.md")
 must("sandbox.register" in (ROOT / "docs" / "trusted-publisher-verification.md").read_text(encoding="utf-8"), "the permission is listed")

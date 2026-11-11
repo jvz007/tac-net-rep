@@ -121,6 +121,7 @@ must(sh.PROBE_PROPERTIES == {
     "address_filter_control": ("DynamicUser=yes",),
     "address_filter_loopback": ("DynamicUser=yes", "IPAddressDeny=localhost link-local multicast 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7"),
     "address_filter_private": ("DynamicUser=yes", "IPAddressDeny=localhost link-local multicast 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7"),
+    "pipe_streams": ("DynamicUser=yes",),
     "dns": ("DynamicUser=yes", "IPAddressDeny=localhost link-local multicast 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7"),
 }, sh.PROBE_PROPERTIES)
 must(sh.PRIVATE_PROBE_TARGETS == ("10.255.255.254", "172.31.255.254", "192.168.255.254", "100.127.255.254", "169.254.169.254"), "private probe targets, metadata included")
@@ -148,6 +149,7 @@ class Fake:
             "address_filter_control": "connect",
             "address_filter_loopback": (0, "blocked\n"),
             "address_filter_private": (0, "10.255.255.254 eperm\n172.31.255.254 eperm\n192.168.255.254 eperm\n100.127.255.254 eperm\n169.254.169.254 eperm\n"),
+            "pipe_streams": lambda properties, command: (0, "out", "err"),   # 1.17.118: stdout and stderr on separate pipes
             "dns": (0, "reply 0\n"),
         }
         self.script.update(overrides)
@@ -200,12 +202,12 @@ must(status["systemd_version"] == 252 and status["address_filter_ok"] is True an
 must(status["resolver"] == "127.0.0.53" and status["resolvers"] == ["127.0.0.53"] and status["dns_method"] == "ip_address_allow", status)
 must(status["selftest_at"].endswith("Z"), status["selftest_at"])
 must(sorted(status["checks"]) == sorted(["systemd_version", "bpf_framework", "cgroup_v2", "transient_unit", "dynamic_user", "filesystem_view", "credential", "proc_hidden",
-                                         "address_filter_control", "address_filter_loopback", "address_filter_private", "dns"]), sorted(status["checks"]))
+                                         "address_filter_control", "address_filter_loopback", "address_filter_private", "pipe_streams", "dns"]), sorted(status["checks"]))
 must(all(row["ok"] for row in status["checks"].values()), status["checks"])
 must(json.dumps(status) and "token" not in json.dumps(status).lower().replace("tectac-probe", ""), "no credential-like text in the status")
 # the probes ran in this order, each with exactly its golden properties
 names = [call[0] for call in fake.calls]
-must(names == ["transient", "dynamic_user", "filesystem_view", "credential", "proc_hidden", "address_filter_control", "address_filter_loopback", "address_filter_private", "dns"], names)
+must(names == ["transient", "dynamic_user", "filesystem_view", "credential", "proc_hidden", "address_filter_control", "address_filter_loopback", "address_filter_private", "pipe_streams", "dns"], names)
 for name, properties, command in fake.calls:
     expected = sh.PROBE_PROPERTIES[name]
     if name == "credential":
@@ -256,6 +258,12 @@ fake.credential["remove"] = False
 check_fail("credential source stays", "not removable", fake, expect_check="credential")
 must(not list(RUN.iterdir()), "the probe folder is removed after each failure too")
 check_fail("credential too few lines", "LoadCredential did not work", Fake(credential=(0, "just one line\n")), expect_check="credential")
+
+# ---- 1.17.118: the pipe_streams row (plan section 10, item 1) and slots_total in the status
+must(isinstance(status["slots_total"], int) and 1 <= status["slots_total"] <= 6, status["slots_total"])
+check_fail("streams merged", "stdout and stderr apart", Fake(pipe_streams=lambda properties, command: (0, "outerr", "")), expect_check="pipe_streams")
+check_fail("streams swapped", "stdout and stderr apart", Fake(pipe_streams=lambda properties, command: (0, "err", "out")), expect_check="pipe_streams")
+check_fail("streams unit fails", "stdout and stderr apart", Fake(pipe_streams=(1, "")), expect_check="pipe_streams")
 
 # ---- the address filter: a missing BPF shows as a loopback that stays reachable
 status = check_fail("filter leaks", "reaching the server itself", Fake(address_filter_loopback="leak"), expect_check="address_filter_loopback")

@@ -13,11 +13,14 @@ CORE_PRIVILEGED_PERMISSION = "core.privileged_operations"
 CORE_RUNTIME_SETTINGS_MANAGE_PERMISSION = "core.runtime_settings.manage"
 CORE_RESOURCES_CLIENTS_MANAGE_PERMISSION = "core.resources.clients.manage"
 CORE_RESOURCES_SITES_MANAGE_PERMISSION = "core.resources.sites.manage"
+CORE_SANDBOX_VIEW_PERMISSION = "core.sandbox.view"  # 1.17.118: read the sandbox status route
+CORE_SANDBOX_MANAGE_PERMISSION = "core.sandbox.manage"  # 1.17.118: cancel a sandbox run by id
 CORE_PERMISSION_GROUPS = {
     "Privileged operations": (CORE_PRIVILEGED_PERMISSION,),
     "Runtime settings": (CORE_RUNTIME_SETTINGS_MANAGE_PERMISSION,),
     "Client resource management": (CORE_RESOURCES_CLIENTS_MANAGE_PERMISSION,),
     "Site resource management": (CORE_RESOURCES_SITES_MANAGE_PERMISSION,),
+    "Sandbox": (CORE_SANDBOX_VIEW_PERMISSION, CORE_SANDBOX_MANAGE_PERMISSION),
 }
 
 
@@ -156,6 +159,26 @@ def can_manage_privileged_operations(user) -> bool:
         return has_extension_permission(user, CORE_PRIVILEGED_PERMISSION)
     except Exception:
         return False
+
+
+def _has_core_permission(user, codename: str) -> bool:
+    """An effective superuser (AD-10) or a role that holds ``codename``. Fails closed."""
+    if is_effective_superuser(user):
+        return True
+    try:
+        return has_extension_permission(user, codename)
+    except Exception:
+        return False
+
+
+def can_view_sandbox(user) -> bool:
+    """May this user read the core.sandbox status route (1.17.118)? core.sandbox.view, or a superuser."""
+    return _has_core_permission(user, CORE_SANDBOX_VIEW_PERMISSION)
+
+
+def can_manage_sandbox(user) -> bool:
+    """May this user cancel a sandbox run by id (1.17.118)? core.sandbox.manage, or a superuser."""
+    return _has_core_permission(user, CORE_SANDBOX_MANAGE_PERMISSION)
 
 
 

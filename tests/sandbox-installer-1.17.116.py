@@ -129,6 +129,24 @@ for line in (
     must(line in INSTALL, line)
 must("sandbox" not in between(INSTALL, 'cat > "${SERVER_MAINTENANCE_SUDOERS}"', "\nEOF\n"), "the server-maintenance sudoers file is unchanged")
 
+# ---- 1.17.118: the launcher and the canary program go in root-owned through the CR strip, and the sudo rule did not change
+must('install_root_script "${REPO_ROOT}/scripts/sandbox-launcher.py" "${SANDBOX_LIB}/sandbox-launcher.py"' in INSTALL, "launcher via install_root_script")
+must('install_root_script "${REPO_ROOT}/scripts/sandbox-canary-runner.py" "${SANDBOX_LIB}/canary/sandbox-canary-runner.py"' in INSTALL, "canary runner via install_root_script")
+must('mkdir -p "${SANDBOX_LIB}/canary"' in INSTALL and 'chown root:root "${SANDBOX_LIB}/canary"' in INSTALL and 'chmod 0755 "${SANDBOX_LIB}/canary"' in INSTALL, "canary folder root 0755")
+helper_at = INSTALL.index('"${SANDBOX_LIB}/sandbox-helper.py"')
+launcher_at = INSTALL.index('"${SANDBOX_LIB}/sandbox-launcher.py"')
+must(helper_at < launcher_at < INSTALL.index('cat > "${SANDBOX_SUDOERS}"'), "after the helper, before the sudoers file")
+must(not re.search(r"\bcp\b[^\n]*sandbox-(launcher|canary)", INSTALL), "no cp of the new programs")
+direct = INSTALL.replace('install_root_script "${REPO_ROOT}/scripts/sandbox-launcher.py"', "").replace('install_root_script "${REPO_ROOT}/scripts/sandbox-canary-runner.py"', "")
+must(not re.search(r"install[^\n]*scripts/sandbox-(launcher|canary-runner)\.py", direct), "no direct install of the new programs")
+must("--canary" not in rule and "--finish" not in rule and "--canary-launch" not in rule, "the root-only modes are not in the sudo rule")
+for name in ("scripts/sandbox-launcher.py", "scripts/sandbox-canary-runner.py", "tests/sandbox-canary-1.17.118.sh"):
+    must(b"\r" not in (ROOT / name).read_bytes(), f"{name} has a carriage return")
+must("/usr/local/lib/tec-tac/sandbox" in INSTALL and 'rm -rf "${SANDBOX_LIB}"' in UNINSTALL, "uninstall removes the lib folder, which holds the new programs")
+# every new install path sits under an existing SANDBOX_* literal, so the 1.17.116 review lesson (the rollback list) needs no new entry
+literals = set(re.findall(r'^(SANDBOX_[A-Z_]+)="', INSTALL, re.MULTILINE))
+must(literals == {"SANDBOX_HELPER", "SANDBOX_LIB", "SANDBOX_STATE", "SANDBOX_SUDOERS", "SANDBOX_SLICE", "SANDBOX_SLICE_DROPIN_DIR", "SANDBOX_SWEEP_SERVICE", "SANDBOX_SWEEP_TIMER"}, literals)
+
 # ---- line endings and syntax
 for name in ("install.sh", "uninstall.sh", "scripts/sandbox-helper.py"):
     must(b"\r" not in (ROOT / name).read_bytes(), f"{name} has a carriage return")

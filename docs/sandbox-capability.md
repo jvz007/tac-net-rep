@@ -1,10 +1,10 @@
 # Core sandbox
 
-Core 1.17.116 (AD-63). Capability `core.sandbox` 1.0.0. Python only: `tec_tac.sandbox`.
+Core 1.17.116 (AD-63), launch path built in 1.17.118. Capability `core.sandbox` 1.0.0. Python only: `tec_tac.sandbox`, plus two routes (below).
 
 Some modules need to run a program they did not write: a command line tool from an AI provider, for example. Core can run that program in a sandbox. A sandbox is a small, locked room. The program can do its work, and it cannot see the server's files or reach the server itself.
 
-**Nothing runs in Core 1.17.116.** This release adds the foundation: the manifest key, the publisher permission, the root helper that registers programs and tests the server, and the contract. The switch that lets a program run is off, and a later Core release turns it on after a full test on a real server. Until then `start`, `run` and `cancel` refuse.
+**Nothing runs in Core 1.17.118 either.** 1.17.116 added the foundation: the manifest key, the publisher permission, the root helper that registers programs and tests the server, and the contract. 1.17.118 builds the launch path (below) and the full attack test (the canary). The switch that lets a program run is still off. A later Core release turns it on, after the canary passes in full on a real server. Until then `start`, `run` and `cancel` refuse with `sandbox_disabled` before they read anything.
 
 ## What a run will be
 
@@ -32,13 +32,37 @@ If the server cannot enforce this, the sandbox stays off with a plain reason. It
 ## What this release installs
 
 - `/usr/local/sbin/tec-tac-sandbox`: the root helper. Root-owned, installed by `install.sh`.
-- One sudo rule for the Tactical service account with exactly three commands: `--start`, `--stop` and `--status`. `--start` and `--stop` read nothing and refuse with `sandbox_disabled`.
-- `--register-module`, `--unregister-module`, `--selftest` and `--sweep` are root only. The module install helpers call the first two.
+- One sudo rule for the Tactical service account with exactly three commands: `--start`, `--stop` and `--status`. While the switch is off `--start` and `--stop` read nothing and refuse with `sandbox_disabled`. The rule is unchanged in 1.17.118.
+- `--register-module`, `--unregister-module`, `--selftest` (with `--canary`), `--sweep` and `--finish` are root only. The module install helpers call the first two; the unit calls `--finish` when it stops.
+- 1.17.118 adds the in-unit launcher and the canary programs under `/usr/local/lib/tec-tac/sandbox/` (root-owned, 0755) and the run folders under `/run/tec-tac/sandbox/` (slots, secrets, handoff, runs; root, 0700).
 - `tec-tac-sandbox.slice`, a systemd group with a server-wide memory and task cap for all runs together.
 - `tec-tac-sandbox-sweep.timer`: at boot and daily it checks the runtime folders again and removes stray test folders.
 - A selftest at every install. If the server cannot host the sandbox, the install still succeeds and prints `Sandbox is off: <reason>. ai ChatGPT stays off.`
 
 The selftest checks: the systemd version (249 or newer), that cgroup v2 is in use, a harmless transient unit, a dynamic user, a hidden file system with a read-only bind, `LoadCredential`, `ProtectProc`, the address filter (the helper opens its own loopback listener and the probe must not reach it; private ranges must be refused; the same probe without the filter must connect, so a probe that cannot connect anyway is never read as a pass), and that a DNS reply arrives from inside the filtered unit. Any reply counts, including "no such name". The result is `/var/lib/tec-tac/sandbox/status.json`, root-owned and small.
+
+## The launch path (Core 1.17.118)
+
+With the switch on, a run goes like this.
+
+1. The owning module calls `tec_tac.sandbox.start(runner_id, input=..., parameters=..., credentials=..., requested_by=..., user=...)`. Core finds the caller from the call stack (AD-26). Only the module that owns the runner may start it.
+2. Core checks the server is ready, the runner and its runtime, the input size, the parameters and the credential names, and writes one strict audit row `sandbox.run.started` **before** the launch. A run that cannot be audited does not start.
+3. Core starts the root helper through sudo (`--start`). The header, the input and the credentials go to its stdin, never to argv or the environment. The helper checks every rule again against the root-owned registry row, re-checks the runtime folder and the program's SHA-256, and takes a slot.
+4. The helper builds the unit itself, from the registry row and its own constants. The caller cannot add or change a property. The unit carries a dynamic user, a hidden file system (only the files the run needs are bound back, read only), a private scratch folder `/work`, the section 15 address filter, the system-call filter and the limits.
+5. A small Core-owned launcher runs inside the unit and starts the program. The program's output streams back as frames.
+6. Credentials sit only on tmpfs (`/run/tec-tac/sandbox/secrets/<run id>/`, folder 0700, files 0600), reach the unit through `LoadCredential`, and are deleted by `ExecStartPost`, again when the run ends for any reason, and again by the sweep.
+
+**Slots.** At most `min(6, floor((MemAvailable - 1.5 GiB) / memory_max))` runs at once, never fewer than 1; at most 2 per person. A start waits in the queue for up to the runner's `queue_seconds`, then raises `busy` or `person_busy` with `retry_after`. The person is the signed-in `user` you pass; without it Core uses `requested_by`, which it cannot verify, so that is used for the limit and the audit row only, never for access.
+
+**`RunHandle`.** `start()` returns it: `run_id`, `events(timeout=None)` (started, then out and err as the program prints, then one end), `wait()`, `cancel()` and `close()`. Closing the handle closes the helper's pipes, and that stops the unit (a dead-man switch). If the caller or the helper dies, the launcher inside the unit sees its output pipe close and stops the program as well. `run()` is the blocking form and returns `{run_id, exit_code, stdout, stderr, reason, duration_ms, peak_mb, credentials_out, stdout_truncated, stderr_truncated}`. `reason` is `exited`, `timeout`, `output_limit`, `oom`, `cancelled` or `start_failed`. The partial output is kept for every reason; `wait(raise_on_failure=True)` raises `SandboxError` with that code instead.
+
+**Credential return.** When a runner declares `credential_return`, the program may write a refreshed credential to `$SANDBOX_OUT/credential` (a regular file, at most 16 KiB). The launcher sends it as one final line framed with a random nonce that only the launcher knows. The helper takes only that line and strips it from the output, so a program cannot forge it. It arrives as `credentials_out`.
+
+**Audit rows.** Module `core`, object type `sandbox_run`, never the credential, the input or the output: `sandbox.run.started` (strict), `sandbox.run.ended` (exit code, reason, duration, bytes, peak memory), `sandbox.run.refused` and `sandbox.run.cancelled`.
+
+**Permissions and routes.** The permission group `Sandbox` holds `core.sandbox.view` and `core.sandbox.manage` (an effective superuser passes, AD-10). `GET /api/tfd/system/sandbox/status/` (view) gives the same answer as `status(live=True)`. `POST /api/tfd/system/sandbox/runs/<run_id>/cancel/` (manage) stops any run by id and writes an audit row. The plan named `/api/tfd/core/sandbox/...`; Core has no `core/` route prefix, so both routes sit under `system/`.
+
+**The canary.** `sudo /usr/local/sbin/tec-tac-sandbox --selftest --canary` (root only, not in the sudo rule) runs an in-memory runner `core.canary` through the same launch code and tries to break out: planted files, sockets, loopback and every listening port, LAN and cloud metadata, DNS, privilege calls, writes, host processes, memory, fork, loop, scratch and output limits, abstract sockets, credentials (including `ps`, `/proc/*/cmdline`, `systemctl show` and journald), cancel and kill, slots and latency. It prints a table and writes `/var/lib/tec-tac/sandbox/canary.json` (counts and failing rows, no secret). `CANARY PASSED` appears only when no row says `ATTACK SUCCEEDED` or `NOT RUN`. A skipped row is shown and never counted as a pass. `tests/sandbox-canary-1.17.118.sh` runs it on a dev server.
 
 ## Declaring a runner in a manifest
 
@@ -106,13 +130,15 @@ On an upgrade the helper drops the runners and programs that the new manifest no
 
 ## The calls
 
-Check `has_capability('core.sandbox')` first and require framework >=1.17.116.
+Check `has_capability('core.sandbox')` first and require framework >=1.17.116 (>=1.17.118 for the launch path).
 
-| Call | What it does in 1.17.116 |
+| Call | What it does |
 |---|---|
-| `status()` | `{enabled, ready, reason, systemd_version, address_filter_ok, dns_ok, selftest_at, runners}`. `enabled` is `False`. `ready` is `True` only when the selftest passed. No secret. |
+| `status(live=False)` | `{enabled, ready, reason, systemd_version, address_filter_ok, dns_ok, selftest_at, slots_total, slots_used, canary_ok, canary_at, runners}`. `enabled` is `False` until the switch is on. `ready` is `True` only when the selftest passed. `slots_used` is `None` unless `live` is `True` (one `sudo --status` call, 3 seconds at most). `canary_ok` is `True` only when the last full canary passed. No secret. The last four keys and `live` are new in 1.17.118 and additive. |
 | `describe(runner_id)` | The declared limits, SHA-256, version and runtime state of one runner. The owning module only. |
-| `start(...)`, `run(...)`, `cancel(...)` | Exist so you can code against the final shape. They raise `SandboxError` `sandbox_disabled` before they read anything. |
+| `start(...)` | Returns a `RunHandle` (see the launch path). Raises `SandboxError` `sandbox_disabled` before it reads anything while the switch is off. |
+| `run(...)` | The blocking form of `start`. |
+| `cancel(run_id)` | Stops a run this process started. Another module's run, or one this process does not know, is `not_owner`. |
 
 `status()` reasons for an unready answer: the plain reason from the selftest, `selftest_not_run` when `status.json` is missing, and `status_unreadable` when it is a link, not root-owned, writable by others, too big or not JSON. New keys are added later; read the keys you know and ignore the rest.
 
@@ -124,10 +150,12 @@ Check `has_capability('core.sandbox')` first and require framework >=1.17.116.
 
 ## What is not in this release
 
-- The launch path (`--start`, `--stop`, `--finish`, the unit builder, slots, output streaming, cancel). It follows in the next patch, with the full canary test on a real server.
-- Permissions `core.sandbox.view` and `core.sandbox.manage`, a status route and a status panel in the UI.
-- Django audit rows. The helper keeps its own append-only log of registrations, removals, selftests and sweeps. It never holds a credential.
+- The switch. `SANDBOX_ENABLED` is `False` in `tec_tac/sandbox.py` and in the helper. It is turned on by a separate patch after the dev02 canary passes in full.
+- A setting to lower the slot count, and a status panel in the UI.
+- IPv6 for a run (`RestrictAddressFamilies` is `AF_INET AF_UNIX`), an egress proxy, a host list, a warm pool.
+- Copying the helper's registered and removed rows into Core's audit log. The helper's log file is not readable by the Tactical account and Core has nowhere to keep a read position yet; a later patch adds both.
+- No module uses `core.sandbox` yet.
 
 ## For administrators
 
-To read the state on the server: `sudo /usr/local/sbin/tec-tac-sandbox --status`. To run the test again as root: `/usr/local/sbin/tec-tac-sandbox --selftest`. The helper's log is `/var/lib/tec-tac/sandbox/audit.jsonl`. `uninstall.sh` removes the helper, the sudo rule, the slice and the sweep timer, and keeps that log.
+To read the state on the server: `sudo /usr/local/sbin/tec-tac-sandbox --status`. To run the test again as root: `/usr/local/sbin/tec-tac-sandbox --selftest`. The helper's log is `/var/lib/tec-tac/sandbox/audit.jsonl`. The last canary result is `/var/lib/tec-tac/sandbox/canary.json`. `uninstall.sh` removes the helper, the sudo rule, the slice and the sweep timer, and keeps that log.

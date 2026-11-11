@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.117",
+  "version": "1.17.118",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.17.117.md",
-      "size": 9387,
-      "sha256": "8419db5b21319e3e4d047ba7d61ee5adce7eba02e12482db78d8b5ea7b43c166"
+      "path": "RELEASE_NOTES_1.17.118.md",
+      "size": 21337,
+      "sha256": "193fbb3445c4b941ac8822842dddf56db8138673f598f683fc16c29dfe6f7507"
     },
     {
       "path": "VERSION",
       "size": 9,
-      "sha256": "56995d37e068c3a78b66051728cc9cd33d66dcebe6f72598e12976e45cb83789"
+      "sha256": "95d22dbf4ebf6497febe669e6a855028c302ce0cf84baa68042791cd229ff484"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -78,8 +78,8 @@
     },
     {
       "path": "docs/capabilities.md",
-      "size": 16441,
-      "sha256": "111bc5ba4cde8ab6aff7a912346609d302d111e57b323148a55a0f50c9d8fea4"
+      "size": 16848,
+      "sha256": "a96919f4c3d986ce33f2ff3bdf323827581cfbc249727c7ffe0f089bca9b96f0"
     },
     {
       "path": "docs/core-functions.md",
@@ -1202,6 +1202,11 @@
       "sha256": "cd115a3b9f86db63d6ba8fea93cc87e2093c27fd4e251315f3a9769a5e82586e"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.17.117.md",
+      "size": 9387,
+      "sha256": "8419db5b21319e3e4d047ba7d61ee5adce7eba02e12482db78d8b5ea7b43c166"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.17.12.md",
       "size": 13099,
       "sha256": "54b477c6c30da12458c421a1eb24eb7bcba6fc6b6fdf4285e56656b4d6ac3eb1"
@@ -1768,8 +1773,8 @@
     },
     {
       "path": "docs/sandbox-capability.md",
-      "size": 11376,
-      "sha256": "8c9cdebeaf63ae6886a285eedf3d0892c706b0ebb406eed44478cefc98282d21"
+      "size": 17325,
+      "sha256": "5471792f1e95a87c25f74f50e7a9ac8ec933c9798063bcd19029bedb90ea1a61"
     },
     {
       "path": "docs/saved-views.md",
@@ -2103,8 +2108,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 486386,
-      "sha256": "8414a7aba86188c92587716af3267d8a6b0d15e823dc10d89659bf78934fa83c"
+      "size": 492631,
+      "sha256": "dee3d23e98332f80bbaacb072d70f0a1f93a3c8d9d49444d6f99606528b654ec"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -2568,8 +2573,8 @@
     },
     {
       "path": "framwork/tec_tac/openapi.py",
-      "size": 13007,
-      "sha256": "c6282b0b81db4a28af1f103dda6ec95525b32d59e40566905e978d88eb7fb017"
+      "size": 13114,
+      "sha256": "05153b84fa42573c5a51d29d9ed13d5f07e60e477912253247086046e1a61a83"
     },
     {
       "path": "framwork/tec_tac/patch_lockdown.py",
@@ -2593,8 +2598,8 @@
     },
     {
       "path": "framwork/tec_tac/rbac.py",
-      "size": 12393,
-      "sha256": "a545d788dc6fc01cc43ea9a35eb4c2edc4fdddf305714169bff19076d7f7ab9c"
+      "size": 13418,
+      "sha256": "0f730f7e6ce4ce39447b2e97a43334fbfeef0ed4172ae9c12fa078c76770f9a0"
     },
     {
       "path": "framwork/tec_tac/registry.py",
@@ -2638,8 +2643,13 @@
     },
     {
       "path": "framwork/tec_tac/sandbox.py",
-      "size": 14477,
-      "sha256": "6bed60e1af559797acae3027561b79ba19d238998be7d044251f4715c9f36eb7"
+      "size": 40510,
+      "sha256": "1cf5633cb6d204350a2de823fb9aa752e6b571109bf199614a293a19b5851b72"
+    },
+    {
+      "path": "framwork/tec_tac/sandbox_views.py",
+      "size": 2073,
+      "sha256": "f82ea2eb0968508bd409545296ba793764398f250af14606bc7f436ad2ce2724"
     },
     {
       "path": "framwork/tec_tac/saved_view_views.py",
@@ -2838,8 +2848,8 @@
     },
     {
       "path": "framwork/tec_tac/urls.py",
-      "size": 18321,
-      "sha256": "ad04208247c0a7a0d4e0cb364e38936dcf272ac9235739569b82bfc7abb7dec1"
+      "size": 18605,
+      "sha256": "6bab608eb2bfd969b1e1dccb7687973ee486c53912ab908e8c8947fdf9013e6a"
     },
     {
       "path": "framwork/tec_tac/views.py",
@@ -2848,8 +2858,8 @@
     },
     {
       "path": "install.sh",
-      "size": 83214,
-      "sha256": "65423b27fe8d3e49de28fc10f7692af6e3ec208690358077db0cc5e672b406d4"
+      "size": 83692,
+      "sha256": "27280b2dcf26167d7948accb63aab7f401ef1d9f21e5ad381fc04b276d5ec173"
     },
     {
       "path": "reportsets/.gitkeep",
@@ -2977,9 +2987,19 @@
       "sha256": "b0407c74be9844326c252f0df96926becfb3a9b8b89b5fb2f085012c12635fc9"
     },
     {
+      "path": "scripts/sandbox-canary-runner.py",
+      "size": 14559,
+      "sha256": "62c3d37819683aad582f7084d06a7ed78a4f0eef92e1f490943268f731dadd28"
+    },
+    {
       "path": "scripts/sandbox-helper.py",
-      "size": 58754,
-      "sha256": "205c9c6926e88da3d610a214f1d9e453ce4aa91e00de3e524ecc0075348de948"
+      "size": 124193,
+      "sha256": "1dedd428351ab95023e47ce561639ad1c83182e343a69d3dd6803990c2eecae0"
+    },
+    {
+      "path": "scripts/sandbox-launcher.py",
+      "size": 5452,
+      "sha256": "9d918ee455c9a03b3ce8cd2ccac7dd1026bcdf5537b34182acdf28e8e3fc2427"
     },
     {
       "path": "scripts/scaffold-plugin.sh",
@@ -3024,7 +3044,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 78,
-      "sha256": "be3bc2978d81ee00ca779170ec75c8482f3833f77bb83821fb00ba9288a08e5b"
+      "sha256": "d3231040710796375f8b12b9f7eebca645d03add5addadbff3d9f033ab24dc4a"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -4942,9 +4962,29 @@
       "sha256": "077d664bbb477e667ea2a1247b8abc91152df733c394eb1d5e472266a8cce196"
     },
     {
+      "path": "tests/sandbox-canary-1.17.118.py",
+      "size": 24204,
+      "sha256": "ef50a5e509563e08117707dd04d601dfceb8b9239844fd3e032b7ffd057d8c5a"
+    },
+    {
+      "path": "tests/sandbox-canary-1.17.118.sh",
+      "size": 10146,
+      "sha256": "c8f469c94a018d10f757537678f1f508f3fe13a52d8a6d2253ed8e7b76931368"
+    },
+    {
       "path": "tests/sandbox-contract-1.17.116.py",
-      "size": 26324,
-      "sha256": "54a99ffe6556bdc0cf546e2b74aa28909e3e93ca09183c08bd92a6415686efd0"
+      "size": 28203,
+      "sha256": "33026ba92c5b9de1ca684855cdfba52ab7860fb18a2fe5ef8032ea42d6b0ec28"
+    },
+    {
+      "path": "tests/sandbox-django-launch-1.17.118.py",
+      "size": 31722,
+      "sha256": "932c1b27d7f325375e2a8c7bce5d678b1256936efdce9b283916d023887722f8"
+    },
+    {
+      "path": "tests/sandbox-harness-1.17.118.py",
+      "size": 13407,
+      "sha256": "e062ac408291634d4a7cb4633fb989f5737a4f8772b37dc6396e492b032a6793"
     },
     {
       "path": "tests/sandbox-helper-register-1.17.116.py",
@@ -4953,13 +4993,18 @@
     },
     {
       "path": "tests/sandbox-installer-1.17.116.py",
-      "size": 11150,
-      "sha256": "eafa29262a784f141cd87adb845d17a21c6038c68e49d628ec85a3c9abbe08e1"
+      "size": 13375,
+      "sha256": "96ed8485b089d103a410ead3b92be7380f62a7feae47850e1f4a0c98976a68a0"
     },
     {
       "path": "tests/sandbox-job-helpers-1.17.116.py",
       "size": 18512,
       "sha256": "ac45c498565681b9aea7af7a440048f54a142bb4a94b0d32fb556ba3e7aa2e58"
+    },
+    {
+      "path": "tests/sandbox-launch-1.17.118.py",
+      "size": 30278,
+      "sha256": "333333ea75ca279d552c24d625060cf5a416d76dcedf2ced1a432c3f4b9d890e"
     },
     {
       "path": "tests/sandbox-registry-1.17.116.py",
@@ -4973,13 +5018,23 @@
     },
     {
       "path": "tests/sandbox-selftest-1.17.116.py",
-      "size": 21934,
-      "sha256": "2bc137ee69441fd8d2747c08759aff2889d41f4b52fc9368d6bd79178725917c"
+      "size": 22760,
+      "sha256": "c12f01d006e20900f0f834113383a8788a713797eef94497e7408eff7f3d18e3"
     },
     {
       "path": "tests/sandbox-selftest-runtime-1.17.116.sh",
       "size": 15318,
       "sha256": "7aa8e6ca9eb17deaed06ab97651f14acb01140c83edd5b7c9033f44335745b40"
+    },
+    {
+      "path": "tests/sandbox-sweep-tree-file-1.17.118.py",
+      "size": 5586,
+      "sha256": "87fc808d22249ce8aec48e1b1bdf44f314c010f8c7a502cfd59a16a5a5227cdc"
+    },
+    {
+      "path": "tests/sandbox-unit-builder-1.17.118.py",
+      "size": 14047,
+      "sha256": "ff287de6102aefb5fd4b92f5ce7651a2e3df74d886a1a10360dac9cc0111c724"
     },
     {
       "path": "tests/sandbox-verify-step-1.17.116.py",
@@ -6408,8 +6463,8 @@
     },
     {
       "path": "uninstall.sh",
-      "size": 6984,
-      "sha256": "2701eecab99f1b655b68b5ad75fb2f78860db8d339aa52980c195d1c89d9666b"
+      "size": 7091,
+      "sha256": "4359b698c493faa79fb0954afbea77e0714b957bf3c08a5c1284cf2b8ea2fdcc"
     }
   ]
 }

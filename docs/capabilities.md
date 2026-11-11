@@ -308,7 +308,7 @@ Capability providers may also be owned directly by Tec-Tac Core rather than an i
 
 ## Core sandbox
 
-`core.sandbox` 1.0.0 (framework >=1.17.116) will run a signed module's declared program as an unprivileged, resource-limited process that cannot see the server's files or reach the server itself or private networks. In 1.17.116 it is the foundation only: `status()` and `describe(runner_id)` are real, and `start`, `run` and `cancel` raise `sandbox_disabled`. See `docs/sandbox-capability.md`.
+`core.sandbox` 1.0.0 (framework >=1.17.116) will run a signed module's declared program as an unprivileged, resource-limited process that cannot see the server's files or reach the server itself or private networks. `status(live=False)` and `describe(runner_id)` are real. Since 1.17.118 the launch path is built (`start` returns a `RunHandle`, `run` waits, `cancel` stops) behind the kill switch, so `start`, `run` and `cancel` still raise `sandbox_disabled` before they read anything. `status()` gained `slots_total`, `slots_used`, `canary_ok` and `canary_at`; the routes `GET /api/tfd/system/sandbox/status/` and `POST /api/tfd/system/sandbox/runs/<run_id>/cancel/` and the permissions `core.sandbox.view` and `core.sandbox.manage` are new. No module uses it yet. See `docs/sandbox-capability.md`.
 
 ## Core server maintenance
 

@@ -1,28 +1,36 @@
 #!/usr/bin/python3
-"""Root-owned helper for core.sandbox (Core 1.17.116, Patch 1: the foundation; nothing can run yet).
+"""Root-owned helper for core.sandbox (Core 1.17.118, Patch 2: the launch path; the kill switch is still off).
 
-core.sandbox will run a signed module's declared program as an unprivileged, resource-limited process that cannot see the server's files
-or reach the server itself or private networks (AD-63, docs/planning/sandbox/PLAN-CORE-SANDBOX.md sections 2, 3 and 15). This first
-patch only adds what has to exist before anything may run:
+core.sandbox runs a signed module's declared program as an unprivileged, resource-limited process that cannot see the server's files
+or reach the server itself or private networks (AD-63, docs/planning/sandbox/PLAN-CORE-SANDBOX.md sections 2, 3 and 15).
 
 * ``--register-module <id>`` and ``--unregister-module <id>`` (root callers: the module job helpers): the registry of declared runners;
 * ``--selftest`` (root: install.sh, an administrator): proves systemd, cgroup v2, DynamicUser, the hidden file system, credential
-  hand-in, ProtectProc and the section 15 address filter work here, and writes ``status.json``. A failed check means ``ready: false``
-  with a plain reason, never a weaker mode;
-* ``--status`` (the Tactical account, through sudo): read only;
-* ``--sweep`` (root: a boot and daily timer): re-verifies runtime folders, removes stray selftest folders;
-* ``--start`` and ``--stop`` (the Tactical account, through sudo): stubs that read nothing and refuse with ``sandbox_disabled``.
+  hand-in, separate stdout and stderr pipes, ProtectProc and the section 15 address filter work here, and writes ``status.json``. A failed
+  check means ``ready: false`` with a plain reason, never a weaker mode;
+* ``--selftest --canary`` (root only, never in sudoers): the full attack test with an in-memory runner ``core.canary``; writes canary.json;
+* ``--status`` (the Tactical account, through sudo): read only, with slot numbers and the canary result;
+* ``--sweep`` (root: a boot and daily timer): re-verifies runtime folders; removes stray selftest folders, secrets folders, handoff and run
+  files of units that are not active, and old canary markers;
+* ``--start`` and ``--stop`` (the Tactical account, through sudo): the launch path. While ``SANDBOX_ENABLED`` is False both refuse with the
+  ``sandbox_disabled`` frame BEFORE they read stdin. When on, ``--start`` reads one JSON header line and the input, re-checks the registry
+  row, builds the unit itself from the row and Core constants, takes a server slot and a per-person slot, hands credentials in through
+  LoadCredential from tmpfs, and streams one JSON frame per line (started, out, err, end). Closing its stdin or stdout stops the unit;
+* ``--finish <run-id>`` (root, ExecStopPost=+): writes the unit's usage and result to a root-only handoff file for the end frame.
 
-``SANDBOX_ENABLED`` is a constant in this file, so a fault in Django cannot switch the sandbox on. There is no ``--finish`` and no
-unit builder yet (Patch 2). Nothing here reads a command, a path or a limit from a caller: every rule is applied again to the root-owned
-installed manifest.
+``SANDBOX_ENABLED`` is a constant in this file, so a fault in Django cannot switch the sandbox on. Nothing here reads a command, a path or a
+limit from a caller: every rule is applied again to the root-owned registry row.
 """
 from __future__ import annotations
 
+import base64
+import glob
 import hashlib
+import io
 import ipaddress
 import json
 import os
+import queue as queue_module
 import re
 import secrets
 import shutil
@@ -31,6 +39,8 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -186,6 +196,7 @@ PROBE_PROPERTIES = {
     "address_filter_control": ("DynamicUser=yes",),
     "address_filter_loopback": ("DynamicUser=yes", "IPAddressDeny=" + ADDRESS_DENY),
     "address_filter_private": ("DynamicUser=yes", "IPAddressDeny=" + ADDRESS_DENY),
+    "pipe_streams": ("DynamicUser=yes",),
     "dns": ("DynamicUser=yes", "IPAddressDeny=" + ADDRESS_DENY),  # plus one IPAddressAllow= per resolver
 }
 
@@ -337,7 +348,8 @@ def append_audit(event, *, detail=None):
 
 def ensure_layout():
     _require_layout()
-    for folder, mode in ((LIB_ROOT, 0o755), (RUNNERS_ROOT, 0o755), (REGISTRY_ROOT, 0o755), (STATE_ROOT, 0o755), (RUN_ROOT, 0o700)):
+    for folder, mode in ((LIB_ROOT, 0o755), (RUNNERS_ROOT, 0o755), (REGISTRY_ROOT, 0o755), (STATE_ROOT, 0o755), (RUN_ROOT, 0o700),
+                         (SLOTS_ROOT, 0o700), (PERSON_SLOTS_ROOT, 0o700), (SECRETS_ROOT, 0o700), (HANDOFF_ROOT, 0o700), (RUNS_ROOT, 0o700)):
         folder.mkdir(parents=True, exist_ok=True)
         if hasattr(os, "geteuid") and os.geteuid() == 0:
             os.chown(folder, 0, 0)
@@ -884,6 +896,11 @@ def selftest(runner=None, *, resolv_conf_path="/etc/resolv.conf", run_root=None)
     filter_ok, detail = _probe_address_filter(runner, checks)
     if not filter_ok:
         fail("address_filter", detail)
+    # stdout and stderr arrive on separate pipes through systemd-run --pipe (plan section 10, item 1)
+    command = ["/usr/bin/python3", "-I", "-c", "import sys;sys.stdout.write('out');sys.stdout.flush();sys.stderr.write('err')"]
+    code, out, err = runner.run_unit("pipe_streams", PROBE_PROPERTIES["pipe_streams"], command)
+    if not _check(checks, "pipe_streams", code == 0 and out.strip() == "out" and err.strip() == "err", f"out={out.strip()[:40]!r} err={err.strip()[:40]!r}"):
+        fail("pipe_streams", "systemd-run --pipe did not keep stdout and stderr apart")
     # DNS
     try:
         text = Path(resolv_conf_path).read_text(encoding="utf-8", errors="replace")
@@ -905,6 +922,7 @@ def selftest(runner=None, *, resolv_conf_path="/etc/resolv.conf", run_root=None)
         "ready": ready, "reason": "ready" if ready else reasons[0], "enabled": False, "systemd_version": version,
         "address_filter_ok": address_filter_ok, "dns_ok": dns_ok, "resolver": resolver, "resolvers": resolvers,
         "dns_method": "ip_address_allow" if resolvers else "", "selftest_at": now(), "checks": checks,
+        "slots_total": slot_count(mem_available_kib(), LIMITS["memory_mb"][0]),
     }
 
 
@@ -1041,11 +1059,6 @@ def registered_runners():
     return rows
 
 
-def show_status():
-    print(json.dumps({"status": read_status(), "runners": registered_runners()}, sort_keys=True))
-    return 0
-
-
 def _sweep_reasons(payload):
     """The runtime_reason parts for one registry row. The path is checked against the row's owner first (defence in depth against a row
     from an older registration) and a path outside the module's own runtime folder is never walked. The listing file must still hash to
@@ -1063,6 +1076,7 @@ def _sweep_reasons(payload):
         try:
             path, tree_file, recorded = root["path"], root["tree_sha256_file"], root.get("listing_sha256")
             _check_runtime_path(path, "runtime root", owner)
+            _check_relative(tree_file, "runtime root tree_sha256_file")  # 1.17.118: the stored row is judged by the same syntax rule
         except (RuntimeError, KeyError, TypeError, AttributeError):
             reasons.append(reason_text("unsafe_path", number))
             continue
@@ -1083,9 +1097,1357 @@ def _sweep_reasons(payload):
     return reasons
 
 
-def sweep():
-    """``--sweep`` (boot and daily): re-verify the runtime folders of every registered runner, and remove stray selftest folders. Patch 1
-    keeps nothing else under /run/tec-tac/sandbox."""
+# ============================================================================ Patch 2 (1.17.118): the launch path
+# ``--start`` and ``--stop`` (the Tactical account, through sudo), ``--finish`` (root, ExecStopPost), the unit builder, the slots, the
+# credential hand-in, the framing and the canary. SANDBOX_ENABLED stays False: ``--start`` and ``--stop`` refuse before they read stdin.
+LAUNCHER_FILE = LIB_ROOT / "sandbox-launcher.py"
+CANARY_DIR = LIB_ROOT / "canary"
+CANARY_RUNNER_FILE = CANARY_DIR / "sandbox-canary-runner.py"
+SLOTS_ROOT = RUN_ROOT / "slots"
+PERSON_SLOTS_ROOT = SLOTS_ROOT / "person"
+SECRETS_ROOT = RUN_ROOT / "secrets"
+HANDOFF_ROOT = RUN_ROOT / "handoff"
+RUNS_ROOT = RUN_ROOT / "runs"
+CANARY_FILE = STATE_ROOT / "canary.json"
+CANARY_MARKERS_FILE = RUN_ROOT / "canary-markers.json"
+HELPER_COMMAND = "/usr/local/sbin/tec-tac-sandbox"
+SYSTEMD_RUN = ["systemd-run"]  # a test replaces these names
+SYSTEMCTL = ["systemctl"]
+UNIT_PYTHON = "/usr/bin/python3"
+CHILD_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin"}  # the only environment a child of the helper gets
+WORK_DIR = "/work"
+PROC_MEMINFO = "/proc/meminfo"
+RESOLV_CONF = "/etc/resolv.conf"
+
+SLICE = "tec-tac-sandbox.slice"
+UNIT_PREFIX = "tectac-sbx-"
+RUN_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+SERVER_SLOTS_MAX = 6
+SLOT_RESERVE_KIB = int(1.5 * 1024 * 1024)
+PERSON_SLOTS = 2
+RETRY_AFTER_SECONDS = 5
+HEADER_MAX_BYTES = 256 * 1024
+HEADER_KEYS = frozenset({"runner_id", "run_id", "person", "parameters", "credentials", "input_bytes"})
+FLUSH_SECONDS = 0.05
+FLUSH_BYTES = 4096
+STOP_GRACE_SECONDS = 5
+TIMER_SLACK_SECONDS = 5  # RuntimeMaxSec is the run's own limit plus this, so the helper's timer fires first
+LAUNCHER_HEADER_RE = re.compile(rb"TECTAC-SBX-LAUNCHER ([0-9a-f]{32})")
+SANDBOX_PATH_ENV = "/usr/local/bin:/usr/bin:/bin"
+# The unit's file system (plan sections 3 and 15). Hidden folders, then only what the runner needs bound back, read only.
+HIDDEN_FOLDERS = ("/etc", "/var", "/run", "/opt", "/srv", "/mnt", "/media", "/home", "/root", "/rmm", "/meshcentral", "/usr/local/lib/tec-tac")
+BASE_BINDS_REQUIRED = ("/etc/ssl/certs", "/etc/passwd", "/etc/group", "/etc/ld.so.cache", "/etc/resolv.conf")
+BASE_BINDS_OPTIONAL = ("/etc/ca-certificates", "/etc/nsswitch.conf", "/etc/localtime")
+CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt"
+
+_REFUSAL_TEXT = {
+    "sandbox_unavailable": "this server cannot host a sandbox run right now",
+    "runtime_unverified": "the runner's runtime is not verified",
+    "runner_unknown": "that runner is not registered",
+    "invalid_input": "the start request is not valid",
+    "input_too_large": "the input is larger than the runner allows",
+    "credential_invalid": "a credential is not allowed for this runner",
+    "busy": "all sandbox slots are in use",
+    "person_busy": "this person already has the most runs allowed at once",
+    "start_failed": "the run could not be started",
+}
+
+
+class Refusal(Exception):
+    """A refusal before or at the start of a run. ``code`` is one of the SandboxError codes of the Django side."""
+
+    def __init__(self, code, message=None, retry_after=None):
+        super().__init__(message or _REFUSAL_TEXT.get(code, code))
+        self.code = code
+        self.message = message or _REFUSAL_TEXT.get(code, code)
+        self.retry_after = retry_after
+
+    def frame(self):
+        frame = {"t": "refused", "code": self.code, "message": self.message}
+        if self.retry_after is not None:
+            frame["retry_after"] = self.retry_after
+        return frame
+
+
+class DeadMan(Exception):
+    """The caller is gone (stdin EOF or a broken stdout pipe): the run must be stopped."""
+
+
+def _frame_bytes(payload):
+    return (json.dumps(payload, separators=(",", ":"), sort_keys=True) + "\n").encode("utf-8")
+
+
+def stdout_emitter(stream=None):
+    """The frame writer for the real ``--start``: one JSON object per line on stdout. A broken pipe is a dead man."""
+    stream = stream or sys.stdout.buffer
+
+    def emit(payload):
+        try:
+            stream.write(_frame_bytes(payload))
+            stream.flush()
+        except (BrokenPipeError, OSError, ValueError) as exc:
+            raise DeadMan("stdout is closed") from exc
+    return emit
+
+
+# ---------------------------------------------------------------------------------------------------------------------- slots
+_FAKE_LOCKS = set()  # used only where fcntl does not exist (tests on another system)
+
+
+def norm_key(path):
+    return os.path.normcase(os.path.abspath(str(path)))
+
+
+def _lock_nonblocking(fd, key):
+    if fcntl is not None:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return False
+        return True
+    if key in _FAKE_LOCKS:
+        return False
+    _FAKE_LOCKS.add(key)
+    return True
+
+
+def _unlock(fd, key):
+    if fcntl is None:
+        _FAKE_LOCKS.discard(key)
+
+
+def mem_available_kib(path=None):
+    try:
+        for line in Path(path or PROC_MEMINFO).read_text(encoding="utf-8").splitlines():
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    return 0
+
+
+def slot_count(available_kib, memory_max_mb):
+    """N = min(6, floor((MemAvailable - 1.5 GiB) / memory_max)), at least 1 (plan section 6)."""
+    free = int(available_kib) - SLOT_RESERVE_KIB
+    per = max(1, int(memory_max_mb)) * 1024
+    return max(1, min(SERVER_SLOTS_MAX, free // per if free > 0 else 0))
+
+
+def person_key(person):
+    return hashlib.sha256(str(person).encode("utf-8")).hexdigest()[:32]
+
+
+class SlotHolder:
+    """Holds flock'd files for the life of one run. A crash of the helper closes the descriptors, so a slot is never left behind."""
+
+    def __init__(self):
+        self.held = []
+
+    def take(self, folder, names, *, deadline, clock=time.monotonic, sleep=time.sleep):
+        folder.mkdir(parents=True, exist_ok=True)
+        while True:
+            for name in names:
+                path = folder / name
+                fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o600)
+                if _lock_nonblocking(fd, norm_key(path)):
+                    self.held.append((fd, norm_key(path)))
+                    return True
+                os.close(fd)
+            if clock() >= deadline:
+                return False
+            sleep(0.05)
+
+    def release(self):
+        while self.held:
+            fd, key = self.held.pop()
+            _unlock(fd, key)
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def acquire_slots(person, row, *, slots_n=None, person_n=PERSON_SLOTS, clock=time.monotonic, sleep=time.sleep):
+    """Per-person slot first, then a server slot; each waits up to queue_seconds. Returns the holder or raises busy / person_busy."""
+    holder = SlotHolder()
+    total = slots_n if slots_n else slot_count(mem_available_kib(), row["limits"]["memory_mb"])
+    deadline = clock() + int(row["limits"]["queue_seconds"])
+    try:
+        if not holder.take(PERSON_SLOTS_ROOT, [f"{person_key(person)}-{k}" for k in range(person_n)], deadline=deadline, clock=clock, sleep=sleep):
+            raise Refusal("person_busy", retry_after=RETRY_AFTER_SECONDS)
+        if not holder.take(SLOTS_ROOT, [str(k) for k in range(total)], deadline=deadline, clock=clock, sleep=sleep):
+            raise Refusal("busy", retry_after=RETRY_AFTER_SECONDS)
+    except BaseException:
+        holder.release()
+        raise
+    return holder
+
+
+def slots_in_use(total):
+    """How many server slots are held right now (a root read: try each lock and let it go)."""
+    used = 0
+    for k in range(total):
+        path = SLOTS_ROOT / str(k)
+        if not path.exists():
+            continue
+        try:
+            fd = os.open(path, os.O_RDWR | getattr(os, "O_BINARY", 0))
+        except OSError:
+            continue
+        try:
+            if _lock_nonblocking(fd, norm_key(path)):
+                _unlock(fd, norm_key(path))
+            else:
+                used += 1
+        finally:
+            os.close(fd)
+    return used
+
+
+# ------------------------------------------------------------------------------------------------------ the start request
+def _plain_id(value, regex):
+    return isinstance(value, str) and bool(regex.fullmatch(value))
+
+
+def read_header(stdin):
+    """One JSON header line. Returns (header, input size). Nothing is trusted yet."""
+    line = stdin.readline(HEADER_MAX_BYTES + 1)
+    if not line or len(line) > HEADER_MAX_BYTES or not line.endswith(b"\n"):
+        raise Refusal("invalid_input", "the start request header is missing or too long")
+    try:
+        header = json.loads(line.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise Refusal("invalid_input", "the start request header is not valid JSON") from exc
+    if not isinstance(header, dict) or set(header) - HEADER_KEYS:
+        raise Refusal("invalid_input", "the start request header has unknown keys")
+    if not _plain_id(header.get("runner_id"), RUNNER_ID_RE):
+        raise Refusal("invalid_input", "the runner id is invalid")
+    if not _plain_id(header.get("run_id"), RUN_ID_RE):
+        raise Refusal("invalid_input", "the run id is invalid")
+    person = header.get("person")
+    if not isinstance(person, str) or not 1 <= len(person) <= 128 or any(ord(ch) < 32 or ord(ch) == 127 for ch in person):
+        raise Refusal("invalid_input", "the person is invalid")
+    if not isinstance(header.get("parameters", {}), dict) or not isinstance(header.get("credentials", {}), dict):
+        raise Refusal("invalid_input", "parameters and credentials must be objects")
+    size = header.get("input_bytes", 0)
+    if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+        raise Refusal("invalid_input", "input_bytes must be a whole number")
+    return header, size
+
+
+def read_input(stdin, size, limits):
+    """Exactly ``size`` bytes of input, refused first when ``size`` is over the runner's input_kib."""
+    if size > int(limits["input_kib"]) * 1024:
+        raise Refusal("input_too_large")
+    data = b""
+    while len(data) < size:
+        chunk = stdin.read(size - len(data))
+        if not chunk:
+            raise Refusal("invalid_input", "the input ended early")
+        data += chunk
+    return data
+
+
+def validate_run_parameters(schema, raw):
+    """The registered schema applied again (enum, integer range, pattern, length). No value reaches a shell: the runner is exec'd."""
+    unknown = sorted(set(raw) - set(schema))
+    if unknown:
+        raise Refusal("invalid_input", "unknown parameter(s): " + ", ".join(unknown))
+    values = {}
+    for name, spec in schema.items():
+        if name in raw:
+            value = raw[name]
+        elif "default" in spec:
+            value = spec["default"]
+        elif spec.get("required", False):
+            raise Refusal("invalid_input", f"required parameter {name!r} is missing")
+        else:
+            continue
+        ptype = str(spec.get("type") or "string")
+        bad = None
+        if ptype == "string":
+            if not isinstance(value, str):
+                bad = "must be a string"
+            elif "\x00" in value or len(value) > max(1, min(int(spec.get("max_length", 4096)), 65536)):
+                bad = "is too long or holds a NUL"
+            elif spec.get("pattern") and not re.fullmatch(str(spec["pattern"]), value):
+                bad = "does not match its pattern"
+        elif ptype == "integer":
+            if isinstance(value, bool) or not isinstance(value, int):
+                bad = "must be an integer"
+            elif ("minimum" in spec and value < int(spec["minimum"])) or ("maximum" in spec and value > int(spec["maximum"])):
+                bad = "is out of range"
+        elif ptype == "boolean":
+            if not isinstance(value, bool):
+                bad = "must be true or false"
+        elif ptype == "enum" and value not in spec.get("choices", []):
+            bad = "must be one of its choices"
+        if bad:
+            raise Refusal("invalid_input", f"parameter {name!r} {bad}")
+        values[name] = value
+    return values
+
+
+def decode_credentials(row, raw):
+    """Names must be declared for the runner, each at most 16 KiB. Returns {name: bytes}."""
+    declared = set(row.get("credential_files") or [])
+    out = {}
+    for name, value in raw.items():
+        if name not in declared or not isinstance(value, str):
+            raise Refusal("credential_invalid", "a credential name is not declared for this runner")
+        try:
+            data = base64.b64decode(value.encode("ascii"), validate=True)
+        except (ValueError, UnicodeEncodeError) as exc:
+            raise Refusal("credential_invalid", "a credential is not valid base64") from exc
+        if len(data) > CREDENTIAL_FILE_MAX_BYTES:
+            raise Refusal("credential_invalid", "a credential is larger than 16 KiB")
+        out[name] = data
+    return out
+
+
+def render_command(row, parameters):
+    items = []
+    for item in row["argv"]:
+        if isinstance(item, str):
+            items.append(item)
+            continue
+        name = str(item["param"])
+        if name not in parameters:
+            raise Refusal("invalid_input", f"the runner's argv needs the omitted optional parameter {name!r}")
+        value = parameters[name]
+        items.append(("true" if value else "false") if isinstance(value, bool) else str(value))
+    return items
+
+
+# --------------------------------------------------------------------------------------------- readiness at every start
+def runner_base(owner):
+    """Where a runner's root-installed executable must live: the module's own runner folder, or Core's canary folder."""
+    return CANARY_DIR if owner == CANARY_OWNER else RUNNERS_ROOT / owner
+
+
+def load_runner_row(runner_id):
+    row = _load_registry_file(runner_path(runner_id))
+    if not row or row.get("registered_by") != REGISTERED_BY or row.get("id") != runner_id or row.get("owner_module") == CANARY_OWNER:
+        raise Refusal("runner_unknown")  # a registry row can never claim the canary's owner id
+    try:
+        _module_id(row.get("owner_module"))
+    except RuntimeError as exc:
+        raise Refusal("runner_unknown") from exc
+    if not runner_id.startswith(row["owner_module"] + "."):
+        raise Refusal("runner_unknown")
+    return row
+
+
+def check_runner_ready(row):
+    """The root registry row is checked again at every start: verified runtime, runtime roots still root-owned with no writable parent,
+    runner executable root-owned, inside its folder and unchanged."""
+    if row.get("runtime_verified") is not True:
+        raise Refusal("runtime_unverified")
+    owner = row["owner_module"]
+    for root in row.get("runtime_roots") or []:
+        try:
+            path = _check_runtime_path(root["path"], "runtime root", owner)
+        except (RuntimeError, KeyError, TypeError) as exc:
+            raise Refusal("runtime_unverified") from exc
+        current = None
+        for index, part in enumerate(Path(path).parts):
+            current = Path(part) if index == 0 else current / part
+            try:
+                st = _lstat(current)
+            except OSError as exc:
+                raise Refusal("runtime_unverified") from exc
+            if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode) or _untrusted(st):
+                raise Refusal("runtime_unverified")
+    executable = Path(str(row.get("executable") or ""))
+    try:
+        if not executable.is_absolute() or not executable.resolve().is_relative_to(runner_base(owner).resolve()):
+            raise RuntimeError("outside the runner folder")
+        _require_trusted_path(executable, "runner executable")
+        digest = _sha256_nofollow(executable)
+    except (RuntimeError, OSError) as exc:
+        raise Refusal("runtime_unverified", "the runner executable is missing, not root-owned or outside its folder") from exc
+    if not isinstance(row.get("executable_sha256"), str) or digest != row["executable_sha256"]:
+        raise Refusal("runtime_unverified", "the runner executable changed since it was registered")
+
+
+def ready_status():
+    status = read_status()
+    if status.get("ready") is not True:
+        raise Refusal("sandbox_unavailable", "the sandbox selftest has not passed on this server")
+    return status
+
+
+def usable_resolvers(status, text):
+    """The addresses a run may reach for DNS: the IPv4 resolvers in resolv.conf right now that the selftest proved (it got an answer
+    from inside a filtered unit). IPv6 and zone-id addresses are skipped (a run has no IPv6). None means ``sandbox_unavailable``."""
+    proven = status.get("resolver")
+    return [a for a in parse_resolvers(text) if a == proven and ipaddress.ip_address(a).version == 4]
+
+
+# -------------------------------------------------------------------------------------------------------- the unit builder
+def unit_name(run_id):
+    return UNIT_PREFIX + run_id
+
+
+def build_properties(row, run_id, *, resolvers, credential_names, exists=os.path.lexists):
+    """Every property of the unit, as ``Key=Value`` strings. Built from the registry row and the constants above only: nothing here comes
+    from the caller or from the module's manifest text (argv and environment values travel as arguments, never as properties)."""
+    limits = row["limits"]
+    scratch = int(limits["scratch_mb"])
+    for path in BASE_BINDS_REQUIRED:
+        if not exists(path):
+            raise Refusal("sandbox_unavailable", f"this server has no {path} to hand a run")
+    binds = list(BASE_BINDS_REQUIRED) + [path for path in BASE_BINDS_OPTIONAL if exists(path)]
+    own = [root["path"] for root in row.get("runtime_roots") or []]
+    own += [str(runner_base(row["owner_module"])), str(LAUNCHER_FILE)]
+    for path in own:
+        if not exists(path):
+            raise Refusal("sandbox_unavailable", "a folder the run needs is missing")  # a missing bind fails loudly, never leaks
+    binds += own
+    props = [
+        "DynamicUser=yes", "ProtectSystem=strict", "ProtectHome=yes", "PrivateTmp=yes", "PrivateDevices=yes", "PrivateIPC=yes",
+        "NoNewPrivileges=yes", "CapabilityBoundingSet=", "AmbientCapabilities=",
+        "SystemCallFilter=@system-service", "SystemCallFilter=~@privileged @resources", "SystemCallArchitectures=native",
+        "SystemCallErrorNumber=EPERM", "RestrictAddressFamilies=AF_INET AF_UNIX", "RestrictNamespaces=yes", "RestrictRealtime=yes",
+        "RestrictSUIDSGID=yes", "LockPersonality=yes", "MemoryDenyWriteExecute=no", "ProtectKernelTunables=yes",
+        "ProtectKernelModules=yes", "ProtectKernelLogs=yes", "ProtectControlGroups=yes", "ProtectClock=yes", "ProtectHostname=yes",
+        "ProtectProc=invisible", "ProcSubset=pid", "UMask=0077", "KillMode=control-group", "SendSIGKILL=yes",
+        f"MemoryMax={int(limits['memory_mb'])}M", "MemorySwapMax=0", f"CPUQuota={int(limits['cpu_percent'])}%",
+        f"TasksMax={int(limits['tasks'])}", "LimitNOFILE=1024", "LimitCORE=0", f"LimitFSIZE={scratch * 1024 * 1024}",
+        f"RuntimeMaxSec={int(limits['run_seconds']) + TIMER_SLACK_SECONDS}",
+        "TemporaryFileSystem=" + " ".join(f"{folder}:ro" for folder in HIDDEN_FOLDERS),
+        f"TemporaryFileSystem={WORK_DIR}:rw,nosuid,nodev,size={scratch}M,mode=1777",
+        f"WorkingDirectory={WORK_DIR}",
+    ]
+    props += [f"BindReadOnlyPaths={path}" for path in binds]
+    props.append("IPAddressDeny=" + ADDRESS_DENY)
+    props += [f"IPAddressAllow={address}" for address in resolvers]
+    folder = SECRETS_ROOT / run_id
+    props += [f"LoadCredential={name}:{folder / name}" for name in credential_names]
+    if credential_names:
+        props.append(f"ExecStartPost=+/bin/rm -rf {folder}")
+    props.append(f"ExecStopPost=+{HELPER_COMMAND} --finish {run_id}")
+    return props
+
+
+def build_environment(row):
+    """The manifest's fixed map first, the reserved names last, so a manifest can never override them (the registry refuses them too)."""
+    env = {name: str(value) for name, value in (row.get("environment") or {}).items() if name not in RESERVED_ENV}
+    env.update({
+        "HOME": f"{WORK_DIR}/home", "TMPDIR": f"{WORK_DIR}/tmp", "SANDBOX_WORK": WORK_DIR, "SANDBOX_OUT": f"{WORK_DIR}/out",
+        "SSL_CERT_FILE": CA_BUNDLE, "PATH": SANDBOX_PATH_ENV,
+    })
+    return env
+
+
+def build_argv(row, run_id, parameters, *, resolvers, credential_names, exists=os.path.lexists):
+    argv = [*SYSTEMD_RUN, "--pipe", "--wait", "--collect", "--quiet", f"--unit={unit_name(run_id)}", f"--slice={SLICE}"]
+    argv += [f"--property={item}" for item in build_properties(row, run_id, resolvers=resolvers, credential_names=credential_names, exists=exists)]
+    argv += [f"--setenv={name}={value}" for name, value in build_environment(row).items()]
+    argv.append("--")
+    command = [UNIT_PYTHON, "-I", str(LAUNCHER_FILE)]
+    if row.get("credential_return"):
+        command.append("--return-credential")
+    command += ["--", str(row["executable"]), *render_command(row, parameters)]
+    return argv + command
+
+
+# ------------------------------------------------------------------------------------------------ the output stream parser
+class LauncherError(Exception):
+    pass
+
+
+class StreamParser:
+    """Strips the launcher's header line and its final credential frame from stdout. The nonce comes from the header line (printed before
+    the runner starts, never given to it); only a line that begins with ``\\n<nonce> CRED `` counts, so a runner cannot forge one. The last
+    len(marker)-1 bytes are held back until more arrives, so a frame split across reads is still found."""
+
+    def __init__(self, frames=True):
+        self.frames = frames  # False: the runner has no credential_return, so no frame is expected and nothing is held back
+        self.header_done = False
+        self.marker = b""
+        self.buf = b""
+        self.in_credential = False
+        self.credential = None
+        self.closed = False
+
+    def feed(self, data):
+        if self.closed:
+            return b""
+        self.buf += data
+        if not self.header_done:
+            i = self.buf.find(b"\n")
+            if i < 0:
+                if len(self.buf) > 200:
+                    raise LauncherError("no launcher header")
+                return b""
+            match = LAUNCHER_HEADER_RE.fullmatch(self.buf[:i])
+            if not match:
+                raise LauncherError("bad launcher header")
+            self.marker = b"\n" + match.group(1) + b" CRED "
+            self.buf = self.buf[i + 1:]
+            self.header_done = True
+        if not self.frames:
+            out, self.buf = self.buf, b""
+            return out
+        if self.in_credential:
+            return self._credential()
+        i = self.buf.find(self.marker)
+        if i >= 0:
+            out, self.buf, self.in_credential = self.buf[:i], self.buf[i + len(self.marker):], True
+            self._credential()
+            return out
+        hold = len(self.marker) - 1
+        if len(self.buf) > hold:
+            out, self.buf = self.buf[:-hold], self.buf[-hold:]
+            return out
+        return b""
+
+    def _credential(self):
+        i = self.buf.find(b"\n")
+        if i < 0:
+            if len(self.buf) > CREDENTIAL_FILE_MAX_BYTES * 2:
+                self.closed, self.buf = True, b""
+            return b""
+        try:
+            data = base64.b64decode(self.buf[:i], validate=True)
+            self.credential = data if len(data) <= CREDENTIAL_FILE_MAX_BYTES else None
+        except ValueError:
+            self.credential = None
+        self.closed, self.buf = True, b""
+        return b""
+
+    def finish(self):
+        """What is still held at the end of the stream (nothing when a credential frame was open)."""
+        out = b"" if (self.in_credential or self.closed) else self.buf
+        self.buf = b""
+        return out
+
+
+# ------------------------------------------------------------------------------------------------------ run bookkeeping
+def _write_private(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0), 0o600)
+    try:
+        os.write(fd, data)
+    finally:
+        os.close(fd)
+    os.chmod(path, 0o600)
+
+
+def write_secrets(run_id, credentials):
+    """Credentials land only on tmpfs: /run/tec-tac/sandbox/secrets/<run id>/ (0700) with 0600 files. Never in argv, env, audit or a log."""
+    folder = SECRETS_ROOT / run_id
+    SECRETS_ROOT.mkdir(parents=True, exist_ok=True)
+    folder.mkdir(mode=0o700)
+    os.chmod(folder, 0o700)
+    for name, data in credentials.items():
+        _write_private(folder / name, data)
+    return folder
+
+
+def remove_secrets(run_id):
+    shutil.rmtree(SECRETS_ROOT / run_id, ignore_errors=True)
+
+
+def run_record_path(run_id):
+    return RUNS_ROOT / f"{run_id}.json"
+
+
+def cancel_flag_path(run_id):
+    return RUNS_ROOT / f"{run_id}.cancel"
+
+
+def handoff_path(run_id):
+    return HANDOFF_ROOT / f"{run_id}.json"
+
+
+def read_handoff(run_id):
+    path = handoff_path(run_id)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    path.unlink(missing_ok=True)
+    return data if isinstance(data, dict) else {}
+
+
+def systemctl(*args, timeout=15):
+    try:
+        done = subprocess.run([*SYSTEMCTL, *args], capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL,
+                              env=dict(CHILD_ENV), check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return 127, "", str(exc)
+    return done.returncode, done.stdout, done.stderr
+
+
+def stop_unit(run_id):
+    return systemctl("stop", unit_name(run_id) + ".service")[0] == 0
+
+
+def finish_run(run_id, environ=None):
+    """``--finish <run-id>`` (root, called by ExecStopPost=+): write usage and the unit's result to a root-only handoff file, which the
+    ``--start`` of the same run puts into its end frame and deletes. SERVICE_RESULT is systemd's own word (success, exit-code, signal,
+    timeout, oom-kill ...)."""
+    if not _plain_id(run_id, RUN_ID_RE):
+        raise RuntimeError("run id is invalid")
+    environ = os.environ if environ is None else environ
+    peak, cpu = None, None
+    code, out, _err = systemctl("show", unit_name(run_id) + ".service", "-P", "MemoryPeak", "-P", "CPUUsageNSec")
+    if code == 0:
+        values = out.split()
+        if len(values) >= 2:
+            peak = int(values[0]) if values[0].isdigit() else None
+            cpu = int(values[1]) if values[1].isdigit() else None
+    result = re.sub(r"[^a-z-]", "", str(environ.get("SERVICE_RESULT", ""))[:32])
+    HANDOFF_ROOT.mkdir(parents=True, exist_ok=True)
+    _write_private(handoff_path(run_id), _json_bytes({"memory_peak": peak, "cpu_ns": cpu, "result": result}))
+    return 0
+
+
+# ------------------------------------------------------------------------------------------------------------- the launch
+def launch(row, *, run_id, person, parameters, credentials, input_data, emit, stdin_eof=None, slots_n=None, person_n=PERSON_SLOTS,
+           status=None, clock=time.monotonic, sleep=time.sleep):
+    """Start one run and stream it. ``emit(frame)`` writes one frame (and raises DeadMan when the caller is gone); ``stdin_eof`` is a
+    threading.Event set when the caller closed its end. Used by ``--start`` and by the root-only canary. The kill switch is the caller's
+    business. Returns the end frame."""
+    status = status or ready_status()
+    try:
+        text = Path(RESOLV_CONF).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        text = ""
+    resolvers = usable_resolvers(status, text)
+    if not resolvers:
+        raise Refusal("sandbox_unavailable", "no resolver that the selftest proved is in resolv.conf now")
+    check_runner_ready(row)
+    values = validate_run_parameters(row["parameters"], parameters)
+    argv = build_argv(row, run_id, values, resolvers=resolvers, credential_names=sorted(credentials))
+    holder = acquire_slots(person, row, slots_n=slots_n, person_n=person_n, clock=clock, sleep=sleep)
+    process = None
+    started_at = clock()
+    try:
+        RUNS_ROOT.mkdir(parents=True, exist_ok=True)
+        _write_private(run_record_path(run_id), _json_bytes({"run_id": run_id, "runner": row["id"], "unit": unit_name(run_id), "at": now()}))
+        if credentials:
+            write_secrets(run_id, credentials)
+        process = _spawn(argv)
+        return _supervise(process, row, run_id, input_data, emit, stdin_eof, started_at, clock)
+    finally:
+        if process is not None and process.poll() is None:
+            stop_unit(run_id)
+            try:
+                process.kill()
+            except OSError:
+                pass
+        remove_secrets(run_id)
+        run_record_path(run_id).unlink(missing_ok=True)
+        cancel_flag_path(run_id).unlink(missing_ok=True)
+        handoff_path(run_id).unlink(missing_ok=True)
+        holder.release()
+
+
+def _spawn(argv):
+    options = {}
+    if os.name == "posix":
+        def die_with_parent():
+            try:
+                import ctypes
+
+                ctypes.CDLL(None).prctl(1, 9, 0, 0, 0)  # PR_SET_PDEATHSIG = 1, SIGKILL
+            except (ImportError, OSError, AttributeError, TypeError):
+                return
+        options["preexec_fn"] = die_with_parent
+    try:
+        return subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True,
+                                env=dict(CHILD_ENV), **options)
+    except OSError as exc:
+        raise Refusal("start_failed", "systemd-run could not be started") from exc
+
+
+def _reader(stream, tag, sink):
+    try:
+        while True:
+            chunk = os.read(stream.fileno(), 65536)
+            if not chunk:
+                break
+            sink.put((tag, chunk))
+    except (OSError, ValueError):
+        pass
+    sink.put((tag, None))
+
+
+def _feed_input(process, data):
+    try:
+        process.stdin.write(data)
+        process.stdin.flush()
+    except (OSError, ValueError):
+        pass
+    finally:
+        try:
+            process.stdin.close()
+        except (OSError, ValueError):
+            pass
+
+
+def _supervise(process, row, run_id, input_data, emit, stdin_eof, started_at, clock):
+    limits = row["limits"]
+    caps = {"out": int(limits["stdout_kib"]) * 1024, "err": int(limits["stderr_kib"]) * 1024}
+    sent = {"out": 0, "err": 0}
+    truncated = {"out": False, "err": False}
+    pending = {"out": bytearray(), "err": bytearray()}
+    sink = queue_module.Queue()
+    threading.Thread(target=_reader, args=(process.stdout, "out", sink), daemon=True).start()
+    threading.Thread(target=_reader, args=(process.stderr, "err", sink), daemon=True).start()
+    threading.Thread(target=_feed_input, args=(process, input_data), daemon=True).start()
+    parser = StreamParser(bool(row.get("credential_return")))
+    state = {"reason": None, "stopped": False, "launcher_ok": True, "last_flush": clock()}
+    deadline = started_at + int(limits["run_seconds"])
+
+    def flush(force=False):
+        due = clock() - state["last_flush"] >= FLUSH_SECONDS
+        for tag in ("out", "err"):
+            if pending[tag] and (force or due or len(pending[tag]) >= FLUSH_BYTES):
+                data = bytes(pending[tag])
+                pending[tag].clear()
+                emit({"t": tag, "b": base64.b64encode(data).decode("ascii"), "truncated": truncated[tag]})
+        state["last_flush"] = clock()
+
+    def take(tag, data):
+        room = caps[tag] - sent[tag]
+        if len(data) > room:
+            data = data[:max(0, room)]
+            truncated[tag] = True
+            stop("output_limit")
+        sent[tag] += len(data)
+        pending[tag].extend(data)
+
+    def stop(why):
+        state["reason"] = state["reason"] or why
+        if not state["stopped"]:
+            state["stopped"] = True
+            stop_unit(run_id)
+
+    emit({"t": "started", "run_id": run_id, "unit": unit_name(run_id)})
+    open_streams = 2
+    try:
+        while open_streams:
+            try:
+                tag, chunk = sink.get(timeout=FLUSH_SECONDS)
+            except queue_module.Empty:
+                tag, chunk = None, b""
+            if tag is not None and chunk is None:
+                open_streams -= 1
+            elif tag == "out" and chunk:
+                try:
+                    clean = parser.feed(chunk)
+                except LauncherError:
+                    state["launcher_ok"] = False
+                    clean = b""
+                    stop("start_failed")
+                if clean and not state["stopped"]:
+                    take("out", clean)
+            elif tag == "err" and chunk and not state["stopped"]:
+                take("err", chunk)
+            if stdin_eof is not None and stdin_eof.is_set():
+                stop("cancelled")
+                raise DeadMan("the caller closed stdin")
+            if clock() >= deadline:
+                stop("timeout")
+            flush()
+        tail = parser.finish()
+        if tail and not state["stopped"]:
+            take("out", tail)
+        flush(force=True)
+    except DeadMan:
+        stop("cancelled")
+        raise
+    try:
+        code = process.wait(timeout=STOP_GRACE_SECONDS * 3)
+    except subprocess.TimeoutExpired:
+        stop_unit(run_id)
+        process.kill()
+        code = process.wait()
+    handoff = read_handoff(run_id)
+    reason = state["reason"]
+    if cancel_flag_path(run_id).exists():
+        reason = "cancelled"
+    result = str(handoff.get("result") or "")
+    if reason is None:
+        if result == "oom-kill":
+            reason = "oom"
+        elif result == "timeout":
+            reason = "timeout"
+        elif not parser.header_done or not state["launcher_ok"]:
+            reason = "start_failed"
+        else:
+            reason = "exited"
+    credential = parser.credential if row.get("credential_return") else None
+    peak = handoff.get("memory_peak")
+    end = {
+        "t": "end", "exit": None if reason == "start_failed" else code, "reason": reason, "ms": int((clock() - started_at) * 1000),
+        "peak_mb": round(peak / 1048576, 1) if isinstance(peak, int) else None,
+        "credential_b64": base64.b64encode(credential).decode("ascii") if credential is not None else None,
+        "bytes_out": sent["out"], "bytes_err": sent["err"],
+    }
+    emit(end)
+    return end
+
+
+# ------------------------------------------------------------------------------------------------------- --start / --stop
+def start_command(stdin=None, *, canary=False, out_stream=None):
+    """``--start``: read the header and the input, re-check everything, launch, stream frames, always clean up. ``canary`` is the root-only
+    ``--canary-launch`` path: the same code, only for core.canary; the kill-switch constant is not asked there (main already refused the
+    real ``--start`` while it is off)."""
+    stdin = stdin or sys.stdin.buffer
+    emit = stdout_emitter(out_stream)
+    try:
+        ensure_layout()
+        header, size = read_header(stdin)
+        if canary:
+            if header["runner_id"] != CANARY_RUNNER_ID:
+                raise Refusal("runner_unknown")
+            row = canary_row()
+        else:
+            row = load_runner_row(header["runner_id"])
+        data = read_input(stdin, size, row["limits"])
+        credentials = decode_credentials(row, header.get("credentials", {}))
+        eof = threading.Event()
+
+        def watch_stdin():
+            try:
+                while stdin.read(1):
+                    pass
+            except (OSError, ValueError):
+                pass
+            eof.set()
+        threading.Thread(target=watch_stdin, daemon=True).start()
+        launch(row, run_id=header["run_id"], person=header["person"], parameters=header.get("parameters", {}), credentials=credentials,
+               input_data=data, emit=emit, stdin_eof=eof)
+        return 0
+    except Refusal as exc:
+        try:
+            emit(exc.frame())
+        except DeadMan:
+            pass
+        return 3
+    except DeadMan:
+        return 4
+    except (RuntimeError, OSError) as exc:  # a fault is a refusal, never a traceback with a path
+        append_audit_safely("start.fault", {"error": type(exc).__name__})
+        try:
+            emit(Refusal("start_failed").frame())
+        except DeadMan:
+            pass
+        return 3
+
+
+def append_audit_safely(event, detail):
+    try:
+        append_audit(event, detail=detail)
+    except OSError:
+        pass
+
+
+def stop_command(stdin=None, out=None):
+    """``--stop``: one run id on stdin. Only a unit this helper started (it holds a run record for it) is stopped."""
+    stdin = stdin or sys.stdin.buffer
+    out = out or sys.stdout
+    run_id = stdin.readline(200).decode("ascii", "replace").strip()
+    if not _plain_id(run_id, RUN_ID_RE):
+        out.write(json.dumps({"t": "refused", "code": "invalid_input"}) + "\n")
+        return 3
+    record = _load_registry_file(run_record_path(run_id)) if run_record_path(run_id).is_file() else None
+    if not record or record.get("unit") != unit_name(run_id):
+        out.write(json.dumps({"t": "refused", "code": "runner_unknown"}) + "\n")
+        return 3
+    _write_private(cancel_flag_path(run_id), b"1")
+    stop_unit(run_id)
+    append_audit_safely("run.cancel_requested", {"run_id": run_id})
+    out.write(json.dumps({"t": "stopped", "run_id": run_id}) + "\n")
+    out.flush()
+    return 0
+
+
+# ======================================================================================================== the canary (attack test)
+# ``--selftest --canary`` (root only, never in the sudo rule) runs every wall of plan 8.2 and section 15 against this server with an
+# in-memory runner ``core.canary`` that is never written to the registry. It uses the same ``launch`` as ``--start`` and bypasses only
+# the kill-switch constant, because nothing else can start a run while the switch is off. The result table goes to stdout and a
+# secret-free summary to /var/lib/tec-tac/sandbox/canary.json, which status() reports as canary_ok and canary_at.
+CANARY_RUNNER_ID = "core.canary"
+CANARY_OWNER = "core"
+CANARY_GROUPS = ("files", "work_hold", "work_peer", "sockets", "loopback", "lan", "dns", "public", "privilege", "writes", "processes",
+                 "mem", "fork", "loop", "scratch", "flood", "abstract", "cred", "sleep", "noop")
+CANARY_LATENCY_RUNS = 50
+CANARY_LATENCY_TARGET_MS = 400
+CANARY_MARKER_DIRS = ("/etc", "/var", "/opt", "/srv", "/mnt", "/media", "/home", "/root", "/etc/tactical", "/etc/tec-tac", "/opt/tec-tac",
+                      "/rmm", "/usr/local/lib/tec-tac", "/var/lib/tec-tac", "/run/tec-tac")
+CANARY_REAL_FILES = ("/rmm/api/tacticalrmm/tacticalrmm/local_settings.py", "/etc/tec-tac/config-path", "/opt/tec-tac/etc/tec-tac.conf",
+                     "/etc/shadow")
+CANARY_LAN_TARGETS = ("10.255.255.254", "172.31.255.254", "192.168.255.254", "100.127.255.254", "169.254.169.254")
+CANARY_PUBLIC_TARGET = "1.1.1.1"
+VERDICTS = ("OK", "ATTACK SUCCEEDED", "SKIPPED", "NOT RUN", "WARN")
+CANARY_REQUIRED = {  # group -> (exact attack names, [(prefix, minimum count)])
+    "sockets": ([], [("unix ", 13)]),
+    "privilege": (["setuid(0)", "ptrace attach to parent", "mount", "unshare", "mknod", "raw socket", "write /proc/sys", "load a kernel module"], []),
+    "writes": ([], [("write /", 9)]),
+    "processes": (["host processes invisible", "pid 1 invisible"], []),
+    "mem": (["memory beyond MemoryMax"], []), "fork": (["fork bomb"], []), "scratch": (["scratch past its size"], []),
+    "cred": (["credential arrives", "credential mode", "credential not in environment"], []),
+    "dns": (["allowed resolver answers"], []), "public": (["public tcp 443"], []), "abstract": ([], [("abstract sockets", 1)]),
+    "work_peer": (["another run's /work"], []), "lan": ([], [("udp ", 5), ("tcp ", 5)]), "loopback": ([], [("loopback ", 1)]),
+}
+
+
+def canary_row(**limit_overrides):
+    """The in-memory canary runner record. Limits are small and always under the Core ceilings. Never written to the registry."""
+    limits = {"memory_mb": 256, "cpu_percent": 100, "tasks": 64, "run_seconds": 20, "stdout_kib": 64, "stderr_kib": 16, "scratch_mb": 16,
+              "input_kib": 16, "queue_seconds": 3}
+    limits.update(limit_overrides)
+    for name, value in limits.items():
+        if value > LIMITS[name][1]:
+            raise RuntimeError(f"canary limit {name} is over the Core ceiling")
+    try:
+        digest = _sha256_nofollow(CANARY_RUNNER_FILE)
+    except (OSError, RuntimeError):
+        digest = ""
+    return {
+        "id": CANARY_RUNNER_ID, "owner_module": CANARY_OWNER, "version": "core", "revision": "1", "description": "Core's own attack test",
+        "executable": str(CANARY_RUNNER_FILE), "executable_sha256": digest, "argv": [{"param": "group"}],
+        "parameters": {"group": {"type": "enum", "choices": list(CANARY_GROUPS)}}, "environment": {}, "runtime_roots": [],
+        "credential_files": ["auth"], "credential_return": True, "limits": limits, "runtime_verified": True, "registered_by": REGISTERED_BY,
+    }
+
+
+def parse_runner_rows(data):
+    """CANARYROW lines from the (untrusted) in-unit program. Anything else is ignored."""
+    rows = []
+    text = data.decode("utf-8", "replace") if isinstance(data, (bytes, bytearray)) else str(data)
+    for line in text.splitlines():
+        parts = line.split("\t")
+        if len(parts) == 4 and parts[0] == "CANARYROW" and parts[1]:
+            rows.append({"attack": parts[1][:200], "tag": parts[2], "actual": parts[3][:300]})
+    return rows
+
+
+def classify_tag(tag):
+    """OK stays OK, SUCCEEDED is a finding, SKIP is SKIPPED (never OK). Any other word from the unit is NOT RUN, which also fails."""
+    return {"OK": "OK", "SUCCEEDED": "ATTACK SUCCEEDED", "SKIP": "SKIPPED"}.get(tag, "NOT RUN")
+
+
+def group_table(wall, group, expected, runner_rows, plan_names=()):
+    """Table rows for one group of attacks. A row the program was expected to print and did not is NOT RUN."""
+    table = [{"wall": wall, "attack": r["attack"], "expected": expected, "actual": r["actual"], "verdict": classify_tag(r["tag"])} for r in runner_rows]
+    names = [r["attack"] for r in runner_rows]
+    exact, prefixes = CANARY_REQUIRED.get(group, ([], []))
+    for name in list(exact) + list(plan_names):
+        if name not in names:
+            table.append({"wall": wall, "attack": name, "expected": expected, "actual": "the probe printed no result", "verdict": "NOT RUN"})
+    for prefix, minimum in prefixes:
+        found = sum(1 for name in names if name.startswith(prefix))
+        if found < minimum:
+            table.append({"wall": wall, "attack": prefix.strip() + " probes", "expected": expected, "actual": f"{found} of {minimum} results", "verdict": "NOT RUN"})
+    if not table:
+        table.append({"wall": wall, "attack": group, "expected": expected, "actual": "the probe printed no result", "verdict": "NOT RUN"})
+    return table
+
+
+def canary_summary(table):
+    """(passed, counts). PASSED only when no row is ATTACK SUCCEEDED and none is NOT RUN. SKIPPED and WARN never fail it and are never OK."""
+    counts = {verdict: 0 for verdict in VERDICTS}
+    for entry in table:
+        counts[entry["verdict"] if entry["verdict"] in counts else "NOT RUN"] += 1
+    return counts["ATTACK SUCCEEDED"] == 0 and counts["NOT RUN"] == 0, counts
+
+
+def canary_record(table, passed, counts):
+    """canary.json: counts and failing rows only. No marker, no credential, no path of a secret."""
+    failing = [{"wall": e["wall"], "attack": e["attack"], "verdict": e["verdict"]} for e in table if e["verdict"] in ("ATTACK SUCCEEDED", "NOT RUN")]
+    return {"ok": bool(passed), "at": now(), "counts": counts, "failing": failing[:50], "skipped": [e["attack"] for e in table if e["verdict"] == "SKIPPED"][:20]}
+
+
+def parse_listening(text):
+    """(ports, {address: ports}) from ``ss -ltnH`` output. A wildcard address belongs to every address."""
+    ports, by_address = set(), {}
+    for line in (text or "").splitlines():
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        local = parts[3]
+        host, _, port = local.rpartition(":")
+        if not port.isdigit():
+            continue
+        host = host.strip("[]")
+        ports.add(int(port))
+        by_address.setdefault(host, set()).add(int(port))
+    return sorted(ports)[:200], by_address
+
+
+def resolver_ports(by_address, resolver):
+    wild = set()
+    for host in ("*", "0.0.0.0", "::"):
+        wild |= by_address.get(host, set())
+    return sorted(by_address.get(resolver, set()) | wild)[:200]
+
+
+def parse_gateway(text):
+    match = re.search(r"default via (\d+\.\d+\.\d+\.\d+)", text or "")
+    return match.group(1) if match else ""
+
+
+def collect_run(group, plan, *, person="canary", slots_n=None, person_n=PERSON_SLOTS, credentials=None, status=None, run_id=None, **limit_overrides):
+    """One canary run through the same ``launch`` as ``--start``. Returns {stdout, stderr, end, refused}. Never raises for a refusal."""
+    out = {"stdout": b"", "stderr": b"", "end": None, "refused": None, "run_id": run_id or secrets.token_hex(16), "frames": []}
+    row = canary_row(**limit_overrides)
+
+    def emit(frame):
+        out["frames"].append(frame["t"])
+        if frame["t"] in ("out", "err"):
+            out["stdout" if frame["t"] == "out" else "stderr"] += base64.b64decode(frame["b"])
+        elif frame["t"] == "end":
+            out["end"] = frame
+
+    data = json.dumps(plan).encode("utf-8")
+    try:
+        launch(row, run_id=out["run_id"], person=person, parameters={"group": group}, credentials=credentials or {}, input_data=data,
+               emit=emit, slots_n=slots_n, person_n=person_n, status=status)
+    except Refusal as exc:
+        out["refused"] = exc.code
+    return out
+
+
+def _plant_markers():
+    """Random-content 0644 markers in the places a run must never see. The list is written first, so a crash leaves it for the sweep."""
+    planted, entries = [], []
+    for folder in CANARY_MARKER_DIRS:
+        if Path(folder).is_dir():
+            planted.append((str(Path(folder) / (".tectac-canary-" + secrets.token_hex(6))), secrets.token_hex(16)))
+    _write_private(CANARY_MARKERS_FILE, _json_bytes({"paths": [p for p, _ in planted]}))
+    for path, content in planted:
+        try:
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(content)
+            os.chmod(path, 0o644)
+            entries.append({"path": path, "content": content})
+        except OSError:
+            pass
+    for real in CANARY_REAL_FILES:
+        if os.path.exists(real):
+            entries.append({"path": real, "content": None})  # None: being able to read it at all is the finding
+    return entries
+
+
+def remove_markers():
+    try:
+        paths = json.loads(CANARY_MARKERS_FILE.read_text(encoding="utf-8")).get("paths", [])
+    except (OSError, ValueError, AttributeError):
+        paths = []
+    for path in paths:
+        if isinstance(path, str) and os.path.basename(path).startswith(".tectac-canary-"):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+    CANARY_MARKERS_FILE.unlink(missing_ok=True)
+
+
+def _percentile(values, fraction):
+    ordered = sorted(values)
+    return ordered[min(len(ordered) - 1, int(len(ordered) * fraction))]
+
+
+def _holders_search(token, unit):
+    """Where the credential token shows up on the host while a run is live: other processes' command lines and environments, ps,
+    systemctl show, journald. Returns the list of places (empty is the pass)."""
+    found = []
+    for pattern in ("/proc/[0-9]*/cmdline", "/proc/[0-9]*/environ"):
+        try:
+            for path in glob.glob(pattern):
+                try:
+                    with open(path, "rb") as handle:
+                        if token.encode() in handle.read(262144):
+                            found.append(path)
+                except OSError:
+                    continue
+        except OSError:
+            continue
+    runner = UnitRunner()
+    for label, argv in (("ps", ["ps", "-eo", "args"]), ("systemctl show", [*SYSTEMCTL, "show", unit + ".service"]),
+                        ("journald", ["journalctl", "-u", unit + ".service", "-o", "cat", "--no-pager"])):
+        _code, out, err = runner.run_cmd(argv)
+        if token in (out or "") or token in (err or ""):
+            found.append(label)
+    return found
+
+
+def run_canary(*, status=None, collect=None, outside=None):
+    """Run every row and return the table. ``collect`` and ``outside`` can be replaced by a test."""
+    collect = collect or collect_run
+    outside = outside or UnitRunner()
+    status = status or read_status()
+    table = []
+    if status.get("ready") is not True:
+        return [{"wall": "Selftest", "attack": "selftest ready", "expected": "ready", "actual": status.get("reason", "not ready"), "verdict": "NOT RUN"}]
+    resolver = status.get("resolver") or ""
+    try:
+        resolv_text = Path(RESOLV_CONF).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        resolv_text = ""
+    others = [a for a in parse_resolvers(resolv_text) if a != resolver and ipaddress.ip_address(a).version == 4]
+    _c, ss_text, _e = outside.run_cmd(["ss", "-ltnH"])
+    ports, by_address = parse_listening(ss_text)
+    _c, route_text, _e = outside.run_cmd(["ip", "-4", "route", "show", "default"])
+    gateway = parse_gateway(route_text)
+    lan = ([gateway] if gateway else []) + list(CANARY_LAN_TARGETS)
+
+    def group(wall, name, expected, plan=None, plan_names=(), **kwargs):
+        result = collect(name, plan or {}, status=status, **kwargs)
+        if result["refused"]:
+            table.append({"wall": wall, "attack": name, "expected": expected, "actual": "refused: " + str(result["refused"]), "verdict": "NOT RUN"})
+            return result
+        table.extend(group_table(wall, name, expected, parse_runner_rows(result["stdout"]), plan_names))
+        return result
+
+    markers = []
+    try:
+        markers = _plant_markers()
+        group("Files", "files", "not found or other content", {"markers": markers}, plan_names=["read " + m["path"] for m in markers])
+        peer_token = secrets.token_hex(8)
+        holder = threading.Thread(target=collect, args=("work_hold", {"work_token": peer_token, "hold_seconds": 4}),
+                                  kwargs={"person": "canary-hold", "status": status}, daemon=True)
+        holder.start()
+        time.sleep(1.5)
+        group("Files", "work_peer", "not found", {"work_token": peer_token}, person="canary-peer")
+        holder.join(10)
+        group("Sockets", "sockets", "not present or refused")
+        group("Loopback", "loopback", "connection refused", {"ports": ports, "resolver": resolver, "resolver_ports": resolver_ports(by_address, resolver)})
+        group("LAN", "lan", "dropped (EPERM)", {"lan": lan})
+        group("DNS", "dns", "allowed resolver answers; others dropped", {"resolver": resolver, "other_resolvers": others})
+        group("Public", "public", "TCP 443 works (SKIPPED without a public route)", {"public": CANARY_PUBLIC_TARGET})
+        group("Privilege", "privilege", "EPERM")
+        group("Writes", "writes", "read-only or private")
+        group("Processes", "processes", "host processes invisible")
+        group("Abstract sockets", "abstract", "none reachable (Medium finding R1 otherwise)")
+        table.extend(_limit_rows(collect, status))
+        table.extend(_credential_rows(collect, status))
+        table.extend(_cancel_rows(collect, status))
+        table.extend(_concurrency_rows(collect, status))
+        table.extend(_latency_rows(collect, status))
+    finally:
+        remove_markers()
+    return table
+
+
+def _limit_rows(collect, status):
+    rows = []
+
+    def one(attack, group, plan, expected_reason, **limits):
+        result = collect(group, plan, status=status, **limits)
+        end = result.get("end") or {}
+        reason = result.get("refused") or end.get("reason") or "no end frame"
+        verdict = "OK" if reason == expected_reason else "ATTACK SUCCEEDED"
+        if result.get("refused") or not end:
+            verdict = "NOT RUN"
+        rows.append({"wall": "Limits", "attack": attack, "expected": expected_reason, "actual": str(reason), "verdict": verdict})
+        return result
+
+    one("memory beyond MemoryMax", "mem", {"alloc_mb": 600}, "oom", memory_mb=128)
+    fork = collect("fork", {"forks": 300}, status=status, tasks=64)
+    rows.extend(group_table("Limits", "fork", "EAGAIN before 64 tasks", parse_runner_rows(fork["stdout"])))
+    one("infinite loop", "loop", {}, "timeout", run_seconds=4)
+    scratch = collect("scratch", {"fill_mb": 32}, status=status, scratch_mb=8)
+    rows.extend(group_table("Limits", "scratch", "ENOSPC or EFBIG", parse_runner_rows(scratch["stdout"])))
+    one("stdout past its cap", "flood", {"flood_kib": 64}, "output_limit", stdout_kib=16)
+    return rows
+
+
+def _credential_rows(collect, status):
+    token = secrets.token_hex(16)
+    cred_run = secrets.token_hex(16)
+    box = {}
+
+    def live():
+        box["result"] = collect("cred", {"credential_token": token, "hold_seconds": 3}, status=status, credentials={"auth": token.encode()},
+                                person="canary-cred", run_id=cred_run)
+
+    thread = threading.Thread(target=live, daemon=True)
+    thread.start()
+    time.sleep(1.5)
+    leaks = _holders_search(token, unit_name(cred_run))
+    thread.join(30)
+    result = box.get("result") or {"stdout": b"", "end": None, "refused": "no result"}
+    rows = []
+    if result.get("refused"):
+        return [{"wall": "Credential", "attack": "credential hand-in", "expected": "arrives", "actual": "refused: " + str(result["refused"]), "verdict": "NOT RUN"}]
+    rows.extend(group_table("Credential", "cred", "only under CREDENTIALS_DIRECTORY", parse_runner_rows(result["stdout"])))
+    rows.append({"wall": "Credential", "attack": "token in ps, /proc/*/cmdline, systemctl show, journald", "expected": "absent",
+                 "actual": ", ".join(leaks) or "absent", "verdict": "ATTACK SUCCEEDED" if leaks else "OK"})
+    left = [p.name for p in SECRETS_ROOT.iterdir()] if SECRETS_ROOT.is_dir() else []
+    rows.append({"wall": "Credential", "attack": "nothing left in secrets folder", "expected": "empty", "actual": f"{len(left)} left",
+                 "verdict": "ATTACK SUCCEEDED" if left else "OK"})
+    expected_back = "refreshed-" + token
+    end = result.get("end") or {}
+    back = end.get("credential_b64")
+    got = base64.b64decode(back).decode("utf-8", "replace") if back else ""
+    rows.append({"wall": "Credential", "attack": "credential_return round trip", "expected": "refreshed token back",
+                 "actual": "came back" if got == expected_back else "missing or wrong", "verdict": "OK" if got == expected_back else "ATTACK SUCCEEDED"})
+    leaked_out = token.encode() in result.get("stdout", b"") or "CRED" in result.get("stdout", b"").decode("utf-8", "replace")
+    rows.append({"wall": "Credential", "attack": "credential frame stripped from output", "expected": "no CRED line in stdout",
+                 "actual": "found in output" if leaked_out else "stripped", "verdict": "ATTACK SUCCEEDED" if leaked_out else "OK"})
+    return rows
+
+
+def _unit_gone(run_id, seconds=5.0):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if systemctl("is-active", unit_name(run_id) + ".service")[0] != 0:
+            return True
+        time.sleep(0.25)
+    return False
+
+
+def _cancel_rows(collect, status):
+    rows = []
+    box = {}
+    run_id = secrets.token_hex(16)
+
+    def worker():
+        row = canary_row(run_seconds=30)
+        frames = []
+        try:
+            launch(row, run_id=run_id, person="canary-cancel", parameters={"group": "sleep"}, credentials={}, input_data=b'{"hold_seconds": 25}',
+                   emit=frames.append, status=status)
+        except Refusal as exc:
+            box["refused"] = exc.code
+        box["frames"] = frames
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    time.sleep(2)
+    stop_command(io.BytesIO(run_id.encode() + b"\n"), out=io.StringIO())
+    gone = _unit_gone(run_id)
+    thread.join(15)
+    end = next((f for f in box.get("frames", []) if f.get("t") == "end"), {})
+    rows.append({"wall": "Cancel", "attack": "stop mid-run", "expected": "unit gone within 5 s, reason cancelled",
+                 "actual": f"gone={gone} reason={end.get('reason')}", "verdict": "OK" if gone and end.get("reason") == "cancelled" else "ATTACK SUCCEEDED"})
+    for label, how in (("SIGKILL the helper", "kill"), ("kill the caller (stdin closes)", "eof")):
+        run_id = secrets.token_hex(16)
+        header = json.dumps({"runner_id": CANARY_RUNNER_ID, "run_id": run_id, "person": "canary-" + how, "parameters": {"group": "sleep"},
+                             "input_bytes": len(b'{"hold_seconds": 25}')}).encode() + b"\n" + b'{"hold_seconds": 25}'
+        child = subprocess.Popen([sys.executable, os.path.abspath(__file__), "--canary-launch"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                 stderr=subprocess.DEVNULL)
+        child.stdin.write(header)
+        child.stdin.flush()
+        time.sleep(2.5)
+        if how == "kill":
+            child.kill()
+        else:
+            child.stdin.close()
+        gone = _unit_gone(run_id)
+        try:
+            child.wait(10)
+        except subprocess.TimeoutExpired:
+            child.kill()
+        rows.append({"wall": "Cancel", "attack": label, "expected": "unit gone within 5 s", "actual": f"gone={gone}", "verdict": "OK" if gone else "ATTACK SUCCEEDED"})
+    sweep(min_age=0)  # the canary is the only thing running: anything left over for a stopped unit goes now
+    leftovers = [p.name for folder in (SECRETS_ROOT, HANDOFF_ROOT, RUNS_ROOT) if folder.is_dir() for p in folder.iterdir()]
+    rows.append({"wall": "Cancel", "attack": "nothing left after cancel and kills", "expected": "no secrets, handoff or run files",
+                 "actual": f"{len(leftovers)} left", "verdict": "OK" if not leftovers else "ATTACK SUCCEEDED"})
+    return rows
+
+
+def _concurrency_rows(collect, status):
+    rows = []
+
+    def trio(person_for, **kwargs):
+        results, threads = [None] * 3, []
+        for k in range(3):
+            def go(k=k):
+                results[k] = collect("sleep", {"hold_seconds": 4}, status=status, person=person_for(k), queue_seconds=1, **kwargs)
+            thread = threading.Thread(target=go, daemon=True)
+            threads.append(thread)
+            thread.start()
+            time.sleep(0.4)
+        for thread in threads:
+            thread.join(30)
+        return [(r or {}).get("refused") or "ran" for r in results]
+
+    server = trio(lambda k: f"canary-s{k}", slots_n=2)
+    rows.append({"wall": "Concurrency", "attack": "3 starts on 2 slots", "expected": "2 run, 1 busy", "actual": ", ".join(server),
+                 "verdict": "OK" if sorted(server) == ["busy", "ran", "ran"] else "ATTACK SUCCEEDED"})
+    person = trio(lambda k: "canary-one-person", slots_n=4)
+    rows.append({"wall": "Concurrency", "attack": "per-person limit", "expected": "2 run, 1 person_busy", "actual": ", ".join(person),
+                 "verdict": "OK" if sorted(person) == ["person_busy", "ran", "ran"] else "ATTACK SUCCEEDED"})
+    return rows
+
+
+def _latency_rows(collect, status):
+    times = []
+    for _ in range(CANARY_LATENCY_RUNS):
+        started = time.monotonic()
+        result = collect("noop", {}, status=status, person="canary-latency")
+        if result.get("refused") or not result.get("end"):
+            return [{"wall": "Latency", "attack": "no-op runs", "expected": f"p95 under {CANARY_LATENCY_TARGET_MS} ms", "actual": "a run did not finish", "verdict": "NOT RUN"}]
+        times.append((time.monotonic() - started) * 1000)
+    p50, p95 = _percentile(times, 0.5), _percentile(times, 0.95)
+    return [{"wall": "Latency", "attack": f"{CANARY_LATENCY_RUNS} no-op runs", "expected": f"p95 under {CANARY_LATENCY_TARGET_MS} ms",
+             "actual": f"p50 {p50:.0f} ms, p95 {p95:.0f} ms", "verdict": "OK" if p95 <= CANARY_LATENCY_TARGET_MS else "WARN"}]
+
+
+def format_table(table):
+    widths = {key: max([len(key)] + [len(str(entry[key])) for entry in table]) for key in ("wall", "attack", "expected", "actual", "verdict")}
+    widths = {key: min(width, 60) for key, width in widths.items()}
+    header = "  ".join(key.upper().ljust(widths[key]) for key in widths)
+    lines = [header, "-" * len(header)]
+    for entry in table:
+        lines.append("  ".join(str(entry[key])[:widths[key]].ljust(widths[key]) for key in widths))
+    return "\n".join(lines)
+
+
+def run_canary_command():
+    ensure_layout()
+    table = run_canary()
+    passed, counts = canary_summary(table)
+    print(format_table(table))
+    print(f"\n{counts['OK']} OK, {counts['ATTACK SUCCEEDED']} ATTACK SUCCEEDED, {counts['NOT RUN']} NOT RUN, {counts['SKIPPED']} SKIPPED, {counts['WARN']} WARN")
+    print("CANARY PASSED" if passed else "CANARY FAILED")
+    _write_root_file(CANARY_FILE, _json_bytes(canary_record(table, passed, counts)), 0o644)
+    append_audit("canary", detail={"passed": passed, "counts": counts})
+    return 0 if passed else 1
+
+
+# ------------------------------------------------------------------------------------------------------ status and sweep
+def show_status():
+    status = read_status()
+    total = slot_count(mem_available_kib(), LIMITS["memory_mb"][0])
+    status["slots_total"] = total
+    status["slots_used"] = slots_in_use(total)
+    try:
+        canary = json.loads(_read_trusted_file(CANARY_FILE, "canary file", max_bytes=64 * 1024).decode("utf-8"))
+        status["canary_ok"] = canary.get("ok") is True
+        status["canary_at"] = canary.get("at") if isinstance(canary.get("at"), str) else None
+    except (RuntimeError, ValueError, OSError):
+        status["canary_ok"], status["canary_at"] = False, None
+    print(json.dumps({"status": status, "runners": registered_runners()}, sort_keys=True))
+    return 0
+
+
+STALE_SECONDS = 120  # a run file younger than this may belong to a run that is still starting
+
+
+def _unit_active(run_id):
+    return systemctl("is-active", unit_name(run_id) + ".service")[0] == 0
+
+
+def _stale(path, min_age=STALE_SECONDS, *, clock=time.time):
+    try:
+        return clock() - path.stat().st_mtime >= min_age
+    except OSError:
+        return False
+
+
+def sweep(min_age=STALE_SECONDS):
+    """``--sweep`` (boot and daily): re-verify the runtime folders of every registered runner; remove stray selftest folders; remove
+    secrets folders, handoff files and run records whose unit ``tectac-sbx-<id>`` is not active; remove old canary markers."""
     _require_layout()
     checked, changed = 0, []
     if REGISTRY_ROOT.is_dir():
@@ -1106,39 +2468,62 @@ def sweep():
             if entry.name.startswith(SELFTEST_PREFIX) and entry.is_dir() and not entry.is_symlink():
                 shutil.rmtree(entry, ignore_errors=True)
                 removed.append(entry.name)
+    for folder in (SECRETS_ROOT, HANDOFF_ROOT, RUNS_ROOT):
+        if not folder.is_dir() or folder.is_symlink():
+            continue
+        for entry in sorted(folder.iterdir()):
+            run_id = entry.name.split(".")[0]
+            if _plain_id(run_id, RUN_ID_RE) and (_unit_active(run_id) or not _stale(entry, min_age)):
+                continue  # a live run (or one that is still starting) keeps its files
+            if entry.is_dir() and not entry.is_symlink():
+                shutil.rmtree(entry, ignore_errors=True)
+            else:
+                entry.unlink(missing_ok=True)
+            removed.append(f"{folder.name}/{entry.name}")
+    remove_markers()
     append_audit("sweep", detail={"runners_checked": checked, "runtime_state_changed": changed, "removed": removed})
     print(json.dumps({"checked": checked, "changed": changed, "removed": removed}, sort_keys=True))
 
 
 def refuse_disabled():
-    """``--start`` and ``--stop`` in Patch 1: read nothing from stdin, start nothing, answer with the final refusal frame."""
+    """``--start`` and ``--stop`` while the kill switch is off: read nothing from stdin, start nothing, answer with the final refusal frame."""
     sys.stdout.write(json.dumps({"t": "refused", "code": "sandbox_disabled"}, separators=(",", ":")) + "\n")
     sys.stdout.flush()
     return 3
 
 
 def usage():
-    raise SystemExit("usage: tec-tac-sandbox --start|--stop|--status | --selftest|--sweep | --register-module|--unregister-module <module-id>")
+    raise SystemExit("usage: tec-tac-sandbox --start|--stop|--status | --finish <run-id> | --selftest [--canary] | --sweep | --register-module|--unregister-module <module-id>")
 
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    if argv in (["--start"], ["--stop"]):
-        return refuse_disabled()  # before anything else: the kill switch is a constant in this file
+    if argv in (["--start"], ["--stop"]) and not SANDBOX_ENABLED:
+        return refuse_disabled()  # before anything else, and before stdin is read: the kill switch is a constant in this file
     if len(argv) not in (1, 2):
         usage()
     mode = argv[0]
-    if mode not in ("--status", "--selftest", "--sweep", "--register-module", "--unregister-module"):
+    if mode not in ("--start", "--stop", "--status", "--selftest", "--sweep", "--register-module", "--unregister-module", "--finish", "--canary-launch"):
         usage()
     if os.geteuid() != 0:
         raise SystemExit("must run as root")
+    if mode == "--start" and len(argv) == 1:
+        return start_command()
+    if mode == "--stop" and len(argv) == 1:
+        return stop_command()
+    if mode == "--canary-launch" and len(argv) == 1:
+        return start_command(canary=True)  # root only, never in sudoers; core.canary only
     if mode == "--status" and len(argv) == 1:
         return show_status()
     if mode == "--selftest" and len(argv) == 1:
         return run_selftest()
+    if mode == "--selftest" and argv[1:] == ["--canary"]:
+        return run_canary_command()
     if mode == "--sweep" and len(argv) == 1:
         sweep()
         return 0
+    if mode == "--finish" and len(argv) == 2:
+        return finish_run(argv[1])
     if mode == "--register-module" and len(argv) == 2:
         register_module(argv[1])
         return 0
