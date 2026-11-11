@@ -151,7 +151,7 @@ def write_runner(runner_id="ai.claude", owner="ai", **over):
         "id": runner_id, "owner_module": owner, "version": "0.9.0", "revision": "3", "description": "Run the Claude program",
         "executable": "/usr/local/lib/tec-tac/sandbox/runners/ai/claude.sh", "executable_sha256": "a" * 64, "argv": ["--model"],
         "environment": {"LANG": "C.UTF-8"}, "credential_files": ["auth"], "credential_return": True,
-        "limits": {"memory_mb": 1536, "run_seconds": 240, "tasks": 256}, "runtime_verified": False, "runtime_reason": "the runtime folder is not there yet",
+        "limits": {"memory_mb": 1536, "run_seconds": 240, "tasks": 256}, "runtime_verified": False, "runtime_reason": "root 1: runtime_missing (the runtime folder is not there yet; the module builds it after install)",
         "runtime_roots": [{"path": "/opt/tec-tac/runtimes/ai/claude", "tree_sha256_file": "sandbox/claude.sha256"}], "registered_by": "module-manifest",
     }
     row.update(over)
@@ -301,7 +301,7 @@ described = AI(sandbox.describe, "ai.claude")
 must(described["id"] == "ai.claude" and described["owner"] == "ai" and described["version"] == "0.9.0" and described["revision"] == "3", described)
 must(described["limits"] == {"memory_mb": 1536, "tasks": 256, "run_seconds": 240}, described["limits"])
 must(described["executable_sha256"] == "a" * 64 and described["credential_files"] == ["auth"] and described["credential_return"] is True, described)
-must(described["runtime_verified"] is False and "not there yet" in described["runtime_reason"], described)
+must(described["runtime_verified"] is False and "runtime_missing" in described["runtime_reason"], described)
 text = json.dumps(described)
 must("/usr/local/lib" not in text and "/opt/tec-tac" not in text and "LANG" not in text and "--model" not in text, "no path, environment value or argument is returned")
 must(set(described) == {"id", "owner", "version", "revision", "description", "limits", "executable_sha256", "credential_files", "credential_return", "runtime_verified", "runtime_reason"}, sorted(described))

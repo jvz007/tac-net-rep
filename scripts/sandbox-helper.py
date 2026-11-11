@@ -150,6 +150,22 @@ MAX_MANIFEST_BYTES = 1024 * 1024
 MAX_EXECUTABLE_BYTES = 8 * 1024 * 1024
 MAX_TREE_LISTING_BYTES = 4 * 1024 * 1024
 MAX_TREE_FILES = 50000
+RUNTIME_BASE = "/opt/tec-tac/runtimes"  # 1.17.117: every runtime path sits strictly below RUNTIME_BASE/<module id>/
+# 1.17.117: runtime_reason is a fixed code plus a fixed sentence. Never a path, a file name or an error text: the registry file is world-readable.
+REASON_SENTENCES = {
+    "runtime_missing": "the runtime folder is not there yet; the module builds it after install",
+    "unreadable": "the runtime folder or one of its files could not be read",
+    "unsafe_path": "the runtime path is not inside the module's own runtime folder",
+    "unsafe_entry": "a link, a special file, or an entry that is not root-owned or is writable by others was found in the runtime folder or its path",
+    "extra_file": "the runtime folder holds a file that is not in the signed listing",
+    "missing_file": "a file in the signed listing is missing from the runtime folder",
+    "hash_mismatch": "a file in the runtime folder differs from the signed listing",
+    "too_many_files": "the runtime folder holds too many files",
+    "listing_empty": "the signed tree listing is empty",
+    "listing_unreadable": "the signed tree listing could not be read",
+    "listing_changed": "the signed tree listing changed after the module registered; the module must register again",
+    "listing_not_recorded": "the signed tree listing was not recorded at registration; the module must register again",
+}
 ROOT_UID = 0
 REGISTERED_BY = "module-manifest"
 
@@ -373,13 +389,18 @@ def _check_relative(value, label, *, prefix="", min_parts=1):
     return parts
 
 
-def _check_runtime_path(value, label):
+def _check_runtime_path(value, label, module_id):
+    """1.17.117: the same rule as registry.py ``_sandbox_runtime_path``: absolute, normalised, and strictly below
+    /opt/tec-tac/runtimes/<module id>/ (the module's own folder, at least one further part)."""
     if (not isinstance(value, str) or not value.startswith("/") or "\x00" in value or "\\" in value or len(value) > 512
             or any(ord(ch) < 32 or ord(ch) == 127 for ch in value)):
         raise RuntimeError(f"{label} path must be an absolute path without control characters")
     parts = value.split("/")[1:]
     if len(parts) < 2 or any(part in ("", ".", "..") for part in parts):
         raise RuntimeError(f"{label} path must be absolute and normalised, with at least two parts and no '..'")
+    own = RUNTIME_BASE.split("/")[1:] + [module_id]
+    if parts[:len(own)] != own or len(parts) <= len(own):
+        raise RuntimeError(f"{label} path must sit below {RUNTIME_BASE}/{module_id}/ (at least one folder deeper)")
     return value
 
 
@@ -458,7 +479,7 @@ def parse_runners(module_id, payload, check_file):
         for root_entry in roots_raw:
             if not isinstance(root_entry, dict) or set(root_entry) != {"path", "tree_sha256_file"}:
                 raise RuntimeError(f"{label} runtime_roots entries need path and tree_sha256_file")
-            path = _check_runtime_path(root_entry["path"], f"{label} runtime_roots")
+            path = _check_runtime_path(root_entry["path"], f"{label} runtime_roots", module_id)
             if path in paths:
                 raise RuntimeError(f"{label} runtime_roots repeats {path!r}")
             paths.add(path)
@@ -522,10 +543,17 @@ def parse_tree_listing(data):
     return listing
 
 
+def reason_text(code, index=None):
+    """The one place a runtime_reason is built: the root's number (when there is one) and a fixed code and sentence."""
+    where = f"root {index}: " if index else ""
+    return f"{where}{code} ({REASON_SENTENCES[code]})"
+
+
 def verify_runtime(path, listing):
-    """(ok, reason). The folder and every parent are real directories, root-owned and not group or world writable; nothing inside is a
-    link or a special file or writable by others; the files are exactly the listed ones with the listed SHA-256. A missing folder is the
-    normal first state (the module builds its runtime after install) and is reported as such."""
+    """(ok, code). The folder and every parent are real directories, root-owned and not group or world writable; nothing inside is a
+    link or a special file or writable by others; the files are exactly the listed ones with the listed SHA-256. ``code`` is "" when ok,
+    else a key of REASON_SENTENCES. A missing folder is the normal first state (the module builds its runtime after install). The
+    ``os.walk`` below is the only place that touches names, and no name leaves this function."""
     parts = Path(path).parts
     current = Path(parts[0])
     for index, part in enumerate(parts):
@@ -534,51 +562,43 @@ def verify_runtime(path, listing):
         try:
             st = _lstat(current)
         except FileNotFoundError:
-            return False, "the runtime folder is not there yet; the module builds it after install"
-        except OSError as exc:
-            return False, f"the runtime folder cannot be read ({exc.strerror or 'error'})"
-        if stat.S_ISLNK(st.st_mode):
-            return False, f"a symlink sits in the path of the runtime folder: {current}"
-        if not stat.S_ISDIR(st.st_mode):
-            return False, f"not a folder: {current}"
-        if _untrusted(st):
-            return False, f"not root-owned, or writable by a group or anyone else: {current}"
+            return False, "runtime_missing"
+        except OSError:
+            return False, "unreadable"
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode) or _untrusted(st):
+            return False, "unsafe_entry"
     if not listing:
-        return False, "the signed tree listing is empty"
+        return False, "listing_empty"
     found = {}
     count = 0
     for folder, dirnames, filenames in os.walk(path, followlinks=False):
         for name in dirnames + filenames:
             count += 1
             if count > MAX_TREE_FILES:
-                return False, "the runtime folder holds too many files"
+                return False, "too_many_files"
             full = os.path.join(folder, name)
             try:
                 st = _lstat(full)
             except OSError:
-                return False, f"cannot read {full}"
-            if stat.S_ISLNK(st.st_mode):
-                return False, f"a symlink inside the runtime folder: {full}"
-            if _untrusted(st):
-                return False, f"not root-owned, or writable by a group or anyone else: {full}"
+                return False, "unreadable"
+            if stat.S_ISLNK(st.st_mode) or _untrusted(st):
+                return False, "unsafe_entry"
             if stat.S_ISDIR(st.st_mode):
                 continue
             if not stat.S_ISREG(st.st_mode):
-                return False, f"a special file inside the runtime folder: {full}"
+                return False, "unsafe_entry"
             found[os.path.relpath(full, path).replace(os.sep, "/")] = full
-    extra = sorted(set(found) - set(listing))
-    if extra:
-        return False, f"a file that is not in the signed listing: {extra[0]}"
-    missing = sorted(set(listing) - set(found))
-    if missing:
-        return False, f"a listed file is missing: {missing[0]}"
+    if set(found) - set(listing):
+        return False, "extra_file"
+    if set(listing) - set(found):
+        return False, "missing_file"
     for rel in sorted(found):
         try:
             digest = _sha256_nofollow(found[rel])
         except (OSError, RuntimeError):
-            return False, f"cannot read {rel}"
+            return False, "unreadable"
         if digest != listing[rel]:
-            return False, f"a file differs from the signed listing: {rel}"
+            return False, "hash_mismatch"
     return True, ""
 
 
@@ -610,10 +630,11 @@ def _read_installed(module_id):
 
 
 def _tree_listing(folder, relative):
+    """(sha256 hex of the file's bytes, parsed listing), both from one read of the trusted file, so the hash and the listing cannot differ."""
     data = _read_trusted_file(folder.joinpath(*relative.split("/")), "runtime tree listing", max_bytes=MAX_TREE_LISTING_BYTES)
     if len(data) > MAX_TREE_LISTING_BYTES:
         raise RuntimeError("runtime tree listing is too large")
-    return parse_tree_listing(data)
+    return hashlib.sha256(data).hexdigest(), parse_tree_listing(data)
 
 
 def runner_path(runner_id):
@@ -685,22 +706,24 @@ def register_module(module_id):
         target.parent.mkdir(parents=True, exist_ok=True)
         _write_root_file(target, data, 0o755)
         wanted.add(target.resolve())
-        reasons = []
-        for root, listing in zip(runner["runtime_roots"], listings):
-            ok, reason = verify_runtime(root["path"], listing)
+        reasons, stored_roots = [], []
+        for number, (root, (digest, listing)) in enumerate(zip(runner["runtime_roots"], listings), 1):
+            stored_roots.append({"path": root["path"], "tree_sha256_file": root["tree_sha256_file"], "listing_sha256": digest})
+            ok, code = verify_runtime(root["path"], listing)
             if not ok:
-                reasons.append(f"{root['path']}: {reason}")
+                reasons.append(reason_text(code, number))
         record = {
             "id": runner["id"], "owner_module": module_id, "version": version, "revision": runner["revision"], "description": runner["description"],
             "executable": str(target), "executable_sha256": hashlib.sha256(data).hexdigest(), "argv": runner["argv"],
-            "parameters": runner["parameters"], "environment": runner["environment"], "runtime_roots": runner["runtime_roots"],
+            "parameters": runner["parameters"], "environment": runner["environment"], "runtime_roots": stored_roots,
             "credential_files": runner["credential_files"], "credential_return": runner["credential_return"], "limits": runner["limits"],
             "runtime_verified": not reasons, "runtime_reason": "; ".join(reasons), "runtime_checked_at": now(),
             "registered_by": REGISTERED_BY, "registered_at": now(),
         }
         _write_root_file(runner_path(runner["id"]), _json_bytes(record), 0o644)
         append_audit("runner.registered", detail={"runner": runner["id"], "module": module_id, "module_version": version,
-                                                   "executable_sha256": record["executable_sha256"], "runtime_verified": record["runtime_verified"]})
+                                                   "executable_sha256": record["executable_sha256"], "runtime_verified": record["runtime_verified"],
+                                                   "listing_sha256": [root["listing_sha256"] for root in stored_roots]})
         registered.append(runner["id"])
     removed = []
     for path, payload_row in _owned_registry_files(module_id):
@@ -1023,6 +1046,43 @@ def show_status():
     return 0
 
 
+def _sweep_reasons(payload):
+    """The runtime_reason parts for one registry row. The path is checked against the row's owner first (defence in depth against a row
+    from an older registration) and a path outside the module's own runtime folder is never walked. The listing file must still hash to
+    what registration recorded: a changed listing means the runtime is not walked either."""
+    reasons = []
+    try:
+        owner = _module_id(payload.get("owner_module"))
+        folder = EXTENSIONS_ROOT / owner
+        roots = payload.get("runtime_roots") or []
+        if not isinstance(roots, list):
+            raise TypeError("roots")
+    except (RuntimeError, TypeError):
+        return [reason_text("unreadable")]
+    for number, root in enumerate(roots, 1):
+        try:
+            path, tree_file, recorded = root["path"], root["tree_sha256_file"], root.get("listing_sha256")
+            _check_runtime_path(path, "runtime root", owner)
+        except (RuntimeError, KeyError, TypeError, AttributeError):
+            reasons.append(reason_text("unsafe_path", number))
+            continue
+        if not isinstance(recorded, str) or not re.fullmatch(r"[0-9a-f]{64}", recorded):
+            reasons.append(reason_text("listing_not_recorded", number))
+            continue
+        try:
+            digest, listing = _tree_listing(folder, tree_file)
+        except (RuntimeError, OSError, TypeError, AttributeError):
+            reasons.append(reason_text("listing_unreadable", number))
+            continue
+        if digest != recorded:
+            reasons.append(reason_text("listing_changed", number))
+            continue
+        ok, code = verify_runtime(path, listing)
+        if not ok:
+            reasons.append(reason_text(code, number))
+    return reasons
+
+
 def sweep():
     """``--sweep`` (boot and daily): re-verify the runtime folders of every registered runner, and remove stray selftest folders. Patch 1
     keeps nothing else under /run/tec-tac/sandbox."""
@@ -1034,15 +1094,7 @@ def sweep():
             if not payload or payload.get("registered_by") != REGISTERED_BY:
                 continue
             checked += 1
-            reasons = []
-            try:
-                folder = EXTENSIONS_ROOT / str(_module_id(payload.get("owner_module")))
-                for root in payload.get("runtime_roots") or []:
-                    ok, reason = verify_runtime(root["path"], _tree_listing(folder, root["tree_sha256_file"]))
-                    if not ok:
-                        reasons.append(f"{root['path']}: {reason}")
-            except (RuntimeError, KeyError, TypeError, OSError) as exc:
-                reasons.append(f"the signed listing cannot be read: {exc}")
+            reasons = _sweep_reasons(payload)
             verified, reason = not reasons, "; ".join(reasons)
             if payload.get("runtime_verified") != verified or payload.get("runtime_reason") != reason:
                 payload.update({"runtime_verified": verified, "runtime_reason": reason, "runtime_checked_at": now()})

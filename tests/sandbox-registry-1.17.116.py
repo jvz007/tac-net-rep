@@ -178,7 +178,7 @@ for bad_roots in ("x", [{"path": "relative/path", "tree_sha256_file": "sandbox/c
                   [{"path": f"/opt/r{i}", "tree_sha256_file": "sandbox/claude.sha256"} for i in range(9)]):
     refused(manifest([good(runtime_roots=bad_roots)]), "runtime_roots")
 for bad_tree in ("/etc/passwd", "../x", "sandbox/../x", "sandbox/missing.sha256", "", None, "a\\b"):
-    refused(manifest([good(runtime_roots=[{"path": "/opt/x/y", "tree_sha256_file": bad_tree}])]), "tree_sha256_file")
+    refused(manifest([good(runtime_roots=[{"path": "/opt/tec-tac/runtimes/ai/claude", "tree_sha256_file": bad_tree}])]), "tree_sha256_file")
 for bad_cred in (["a", "b", "c"], ["auth", "auth"], ["Auth"], ["a b"], [""], [5], "auth", ["x" * 65]):
     refused(manifest([good(credential_files=bad_cred)]), "credential_files")
 refused(manifest([good(credential_files=[], credential_return=True)]), "credential_return needs")

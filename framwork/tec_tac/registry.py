@@ -409,13 +409,19 @@ def _sandbox_relative_file(value, label: str, plugin_dir: Path, *, prefix: str =
     return value
 
 
-def _sandbox_runtime_path(value, label: str) -> str:
+SANDBOX_RUNTIME_BASE = "/opt/tec-tac/runtimes"  # 1.17.117: a runtime path sits strictly below SANDBOX_RUNTIME_BASE/<module id>/
+
+
+def _sandbox_runtime_path(value, label: str, plugin_id: str) -> str:
     if (not isinstance(value, str) or not value.startswith("/") or "\x00" in value or "\\" in value or len(value) > 512
             or any(ord(ch) < 32 or ord(ch) == 127 for ch in value)):
         raise RegistryError(f"{label} path must be an absolute path without control characters.")
     parts = value.split("/")[1:]
     if len(parts) < 2 or any(part in ("", ".", "..") for part in parts):
         raise RegistryError(f"{label} path must be absolute and normalised, with at least two parts and no '..'.")
+    own = SANDBOX_RUNTIME_BASE.split("/")[1:] + [plugin_id]
+    if parts[:len(own)] != own or len(parts) <= len(own):
+        raise RegistryError(f"{label} path must sit below {SANDBOX_RUNTIME_BASE}/{plugin_id}/ (at least one folder deeper).")
     return value
 
 
@@ -516,7 +522,7 @@ def _sandbox_runners(payload: dict, plugin_type: str, plugin_id: str, plugin_dir
         for root_entry in roots_raw:
             if not isinstance(root_entry, dict) or set(root_entry) != {"path", "tree_sha256_file"}:
                 raise RegistryError(f"{label} runtime_roots entries must be objects with path and tree_sha256_file.")
-            path = _sandbox_runtime_path(root_entry["path"], label + " runtime_roots")
+            path = _sandbox_runtime_path(root_entry["path"], label + " runtime_roots", plugin_id)
             if path in root_paths:
                 raise RegistryError(f"{label} runtime_roots repeats {path!r}.")
             root_paths.add(path)

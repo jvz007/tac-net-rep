@@ -20,6 +20,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import stat
 import sys
@@ -257,6 +258,7 @@ must(record["limits"]["memory_mb"] == 1536 and record["limits"]["run_seconds"] =
 must(record["credential_files"] == ["auth"] and record["credential_return"] is True and record["environment"] == {"LANG": "C.UTF-8"}, record)
 must(record["runtime_verified"] is True and record["runtime_reason"] == "", record)
 must(record["argv"] == ["--model", {"param": "model"}] and record["runtime_roots"][0]["path"] == RUNTIME, record)
+must(set(record["runtime_roots"][0]) == {"path", "tree_sha256_file", "listing_sha256"} and re.fullmatch("[0-9a-f]{64}", record["runtime_roots"][0]["listing_sha256"]), record["runtime_roots"])  # 1.17.117
 events = [row["event"] for row in audit_events()]
 must("runner.registered" in events and "module.runners_registered" in events, events)
 must(all("credential" not in json.dumps(row).lower() or "credential_" in json.dumps(row).lower() for row in audit_events()), "no credential in the audit")
@@ -366,37 +368,37 @@ def registered_with(runtime_listing, mutate=None):
 rec = registered_with(None)
 must(rec["runtime_verified"] is True, rec)
 rec = registered_with(None, lambda d: (d / "lib" / "a.js").write_bytes(b"tampered"))
-must(rec["runtime_verified"] is False and "differs from the signed listing: lib/a.js" in rec["runtime_reason"], rec["runtime_reason"])
+must(rec["runtime_verified"] is False and "hash_mismatch" in rec["runtime_reason"] and "a.js" not in rec["runtime_reason"], rec["runtime_reason"])
 rec = registered_with(None, lambda d: (d / "extra.txt").write_bytes(b"x"))
-must(rec["runtime_verified"] is False and "not in the signed listing: extra.txt" in rec["runtime_reason"], rec["runtime_reason"])
+must(rec["runtime_verified"] is False and "extra_file" in rec["runtime_reason"] and "extra.txt" not in rec["runtime_reason"], rec["runtime_reason"])
 rec = registered_with(None, lambda d: (d / "README").unlink())
-must(rec["runtime_verified"] is False and "listed file is missing: README" in rec["runtime_reason"], rec["runtime_reason"])
+must(rec["runtime_verified"] is False and "missing_file" in rec["runtime_reason"] and "README" not in rec["runtime_reason"], rec["runtime_reason"])
 rec = registered_with(None, lambda d: WRITABLE.add(norm(d / "bin")))
 WRITABLE.clear()
-must(rec["runtime_verified"] is False and "writable by a group or anyone else" in rec["runtime_reason"], rec["runtime_reason"])
+must(rec["runtime_verified"] is False and "unsafe_entry" in rec["runtime_reason"], rec["runtime_reason"])
 rec = registered_with(None, lambda d: SYMLINKS.add(norm(d / "lib" / "a.js")))
 SYMLINKS.clear()
-must(rec["runtime_verified"] is False and "symlink inside the runtime folder" in rec["runtime_reason"], rec["runtime_reason"])
+must(rec["runtime_verified"] is False and "unsafe_entry" in rec["runtime_reason"], rec["runtime_reason"])
 rec = registered_with(None, lambda d: NOTROOT.add(norm(d / "README")))
 NOTROOT.clear()
-must(rec["runtime_verified"] is False and "root-owned" in rec["runtime_reason"], rec["runtime_reason"])
+must(rec["runtime_verified"] is False and "unsafe_entry" in rec["runtime_reason"], rec["runtime_reason"])
 # a symlink or a writable folder in the path above the runtime
 rec = registered_with(None, lambda d: WRITABLE.add(norm(d)))
 WRITABLE.clear()
-must(rec["runtime_verified"] is False and "writable by a group or anyone else" in rec["runtime_reason"], rec["runtime_reason"])
+must(rec["runtime_verified"] is False and "unsafe_entry" in rec["runtime_reason"], rec["runtime_reason"])
 rec = registered_with(None, lambda d: SYMLINKS.add(norm(d)))
 SYMLINKS.clear()
-must(rec["runtime_verified"] is False and "symlink sits in the path" in rec["runtime_reason"], rec["runtime_reason"])
+must(rec["runtime_verified"] is False and "unsafe_entry" in rec["runtime_reason"], rec["runtime_reason"])
 # the folder is not there yet: the normal first state, with its plain reason
 RUNTIME_MAP[RUNTIME] = str(BASE / "no-such-runtime")
 put_module(payload=manifest(), listing=listing)
 unregister("ai")
 register("ai")
 rec = reg_json("ai.claude")
-must(rec["runtime_verified"] is False and "not there yet" in rec["runtime_reason"], rec["runtime_reason"])
+must(rec["runtime_verified"] is False and "runtime_missing" in rec["runtime_reason"], rec["runtime_reason"])
 # an empty or malformed signed listing
 rec = registered_with("")
-must(rec["runtime_verified"] is False and "listing is empty" in rec["runtime_reason"], rec["runtime_reason"])
+must(rec["runtime_verified"] is False and "listing_empty" in rec["runtime_reason"], rec["runtime_reason"])
 put_module(payload=manifest(), listing="not a listing line\n")
 unregister("ai")
 refuses(lambda: register("ai"), "tree listing")
@@ -428,7 +430,7 @@ must(not (RUN / "selftest-abc").exists() and (RUN / "keep-me").exists(), "only s
 (tree_dir / "README").write_bytes(b"changed after the fact")
 with contextlib.redirect_stdout(io.StringIO()):
     sh.sweep()
-must(reg_json("ai.claude")["runtime_verified"] is False and "README" in reg_json("ai.claude")["runtime_reason"], "a later change is noticed")
+must(reg_json("ai.claude")["runtime_verified"] is False and "hash_mismatch" in reg_json("ai.claude")["runtime_reason"] and "README" not in reg_json("ai.claude")["runtime_reason"], "a later change is noticed")
 must(any(row["event"] == "sweep" for row in audit_events()), "the sweep is audited")
 unregister("ai")
 # --status reads the registry and a missing status.json is a plain not-ready
@@ -491,10 +493,10 @@ CASES = [
     ("root dotdot", manifest([runner(runtime_roots=[{"path": "/opt/x/../y", "tree_sha256_file": "sandbox/claude.sha256"}])]), False),
     ("root shallow", manifest([runner(runtime_roots=[{"path": "/opt", "tree_sha256_file": "sandbox/claude.sha256"}])]), False),
     ("root trailing slash", manifest([runner(runtime_roots=[{"path": "/opt/x/", "tree_sha256_file": "sandbox/claude.sha256"}])]), False),
-    ("root missing tree", manifest([runner(runtime_roots=[{"path": "/opt/x/y", "tree_sha256_file": "sandbox/none.sha256"}])]), False),
-    ("root tree dotdot", manifest([runner(runtime_roots=[{"path": "/opt/x/y", "tree_sha256_file": "../tec_tac.json"}])]), False),
-    ("root extra key", manifest([runner(runtime_roots=[{"path": "/opt/x/y", "tree_sha256_file": "sandbox/claude.sha256", "x": 1}])]), False),
-    ("root repeated", manifest([runner(runtime_roots=[{"path": "/opt/x/y", "tree_sha256_file": "sandbox/claude.sha256"}] * 2)]), False),
+    ("root missing tree", manifest([runner(runtime_roots=[{"path": RUNTIME, "tree_sha256_file": "sandbox/none.sha256"}])]), False),
+    ("root tree dotdot", manifest([runner(runtime_roots=[{"path": RUNTIME, "tree_sha256_file": "../tec_tac.json"}])]), False),
+    ("root extra key", manifest([runner(runtime_roots=[{"path": RUNTIME, "tree_sha256_file": "sandbox/claude.sha256", "x": 1}])]), False),
+    ("root repeated", manifest([runner(runtime_roots=[{"path": RUNTIME, "tree_sha256_file": "sandbox/claude.sha256"}] * 2)]), False),
     ("three credentials", manifest([runner(credential_files=["a", "b", "c"])]), False),
     ("bad credential name", manifest([runner(credential_files=["Auth"])]), False),
     ("return without name", manifest([runner(credential_files=[], credential_return=True)]), False),

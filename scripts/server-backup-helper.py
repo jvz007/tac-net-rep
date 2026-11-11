@@ -3188,6 +3188,12 @@ TEC_TAC_SYSTEMD_INSTALL_UNIT_NAMES = (
     "tec-tac-trust-policy-revert.timer",
     "tec-tac-scheduler.service",
     "tec-tac-scheduler.timer",
+    # 1.17.117: the core.sandbox units written by install.sh (1.17.116). Absent entries are recorded too, so rollback removes what a
+    # failed restore introduced. The drop-in file sits inside a directory the unit glob below skips, so it is named here.
+    "tec-tac-sandbox.slice",
+    "tec-tac-sandbox.slice.d/limits.conf",
+    "tec-tac-sandbox-sweep.service",
+    "tec-tac-sandbox-sweep.timer",
 )
 
 
@@ -3208,6 +3214,7 @@ TEC_TAC_PRIVILEGED_INSTALL_PATHS = (
     "/usr/local/sbin/tec-tac-system-update",
     "/usr/local/sbin/tec-tac-server-backup",
     "/usr/local/sbin/tec-tac-server-maintenance",
+    "/usr/local/sbin/tec-tac-sandbox",  # 1.17.117: the core.sandbox helper link (the script is under /usr/local/lib/tec-tac/sandbox)
     "/usr/local/sbin/tec-tac-housekeeping",
     "/usr/local/sbin/tec-tac-repair",
     "/usr/local/sbin/tec-tac-diagnostics",
@@ -3217,6 +3224,7 @@ TEC_TAC_PRIVILEGED_INSTALL_PATHS = (
     "/etc/sudoers.d/tec-tac-system-update",
     "/etc/sudoers.d/tec-tac-server-backup",
     "/etc/sudoers.d/tec-tac-server-maintenance",
+    "/etc/sudoers.d/tec-tac-sandbox",  # 1.17.117: the core.sandbox sudo rule
     "/etc/sudoers.d/tec-tac-housekeeping",
 )
 

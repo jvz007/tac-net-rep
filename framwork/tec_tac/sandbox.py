@@ -213,7 +213,7 @@ def describe(runner_id: Any) -> dict:
         "executable_sha256": _text(row.get("executable_sha256"), 64),
         "credential_files": [name for name in (row.get("credential_files") or []) if isinstance(name, str)][:2],
         "credential_return": row.get("credential_return") is True,
-        "runtime_verified": row.get("runtime_verified") is True, "runtime_reason": _text(row.get("runtime_reason")),
+        "runtime_verified": row.get("runtime_verified") is True, "runtime_reason": _text(row.get("runtime_reason"), 2000),
     }
 
 

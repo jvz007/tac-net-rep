@@ -74,7 +74,7 @@ Add the optional top-level key `sandbox_runners` to `tec_tac.json`. It is a list
 | `argv` | Literal strings or `{"param": name}`. At most 64. No shell text. |
 | `parameters` | Typed values the caller may pass: `string`, `integer`, `boolean` or `enum`. |
 | `environment` | A fixed map of non-secret text. `HOME`, `TMPDIR`, `SSL_CERT_FILE`, `SANDBOX_WORK` and `SANDBOX_OUT` are Core's. Names that start `LD_` or look like a secret (`TOKEN`, `SECRET`, `PASSWORD`, `CREDENTIAL`, `API_KEY`, `PRIVATE`) are refused. |
-| `runtime_roots` | A list of `{path, tree_sha256_file}`. `path` is absolute, normalised, with at least two parts and no `..`. `tree_sha256_file` is a file inside the signed module with one `<sha256>  <relative path>` line per file of the runtime. |
+| `runtime_roots` | A list of `{path, tree_sha256_file}`. `path` is absolute and normalised (no `..`, no empty part, no backslash, no control character, 512 characters at most) and sits strictly below `/opt/tec-tac/runtimes/<module id>/`, at least one folder deeper (since 1.17.117). `/opt/tec-tac/runtimes/ai/claude` is valid for module `ai`; `/opt/tec-tac/runtimes/ai` alone, another module's folder and any path outside `/opt/tec-tac/runtimes/` are refused when the package is installed and again by the root helper. `tree_sha256_file` is a file inside the signed module with one `<sha256>  <relative path>` line per file of the runtime. |
 | `credential_files` | At most 2 names (`[a-z0-9][a-z0-9._-]{0,63}`), 16 KiB per file. |
 | `credential_return` | `true` lets the run hand one refreshed credential back. Needs a declared name. |
 | `limits` | Whole numbers, at most the Core ceiling. See the table below. |
@@ -98,7 +98,9 @@ The module must declare `sandbox.register` in `publisher_permissions`, and the p
 
 Core checks every rule twice: `registry.py` when the package is installed, and the root helper again, from the root-owned installed manifest, when it registers the runners. The helper never trusts job metadata.
 
-A runner whose runtime folder is missing or does not match its signed listing is still registered, marked `runtime_unverified`, with a plain reason. A missing folder is the normal first state: the module builds its runtime after install. The boot and daily sweep checks it again.
+A runner whose runtime folder is missing or does not match its signed listing is still registered, marked `runtime_unverified`. `runtime_reason` is a fixed code and a fixed sentence per runtime root, for example `root 1: hash_mismatch (a file in the runtime folder differs from the signed listing)`. It never holds a path or a file name, because the registry file is world-readable. The codes are `runtime_missing` (the normal first state: the module builds its runtime after install), `unreadable`, `unsafe_path`, `unsafe_entry` (a link, a special file, or an entry that is not root-owned or is writable by others, anywhere in the path or tree), `extra_file`, `missing_file`, `hash_mismatch`, `too_many_files`, `listing_empty`, `listing_unreadable`, `listing_changed` and `listing_not_recorded`. To find the file, run your own tree-listing tool again.
+
+Registration records the SHA-256 of each tree listing file in the registry row (a hash only, no names). The boot and daily sweep reads the listing again and compares it with that hash first. A listing that changed after registration gives `listing_changed` and the runtime folder is not walked; the module registers again (an install or upgrade does this) to record the new hash. A row from Core 1.17.116 has no recorded hash and shows `listing_not_recorded` until its module registers again. A path outside `/opt/tec-tac/runtimes/<module id>/` in a row is never walked (`unsafe_path`).
 
 On an upgrade the helper drops the runners and programs that the new manifest no longer declares. A module that declares none loses all. A module removal removes them too.
 

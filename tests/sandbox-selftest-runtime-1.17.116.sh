@@ -21,7 +21,8 @@ LIB=/usr/local/lib/tec-tac/sandbox
 EXT=${TEC_TAC_EXTENSIONS_ROOT:-/opt/tec-tac/extensions}
 TACTICAL_ROOT=${TACTICAL_ROOT:-/rmm}
 MOD=sbprobe
-PROBE_RUNTIME="$LIB/probe-runtime/$MOD"
+# 1.17.117: a runtime path must sit below /opt/tec-tac/runtimes/<module id>/
+PROBE_RUNTIME="/opt/tec-tac/runtimes/$MOD/probe"
 FAILS=0
 
 pass() { echo "PASS $1"; }
@@ -33,7 +34,7 @@ print(d)' "$1" 2>/dev/null; }
 
 cleanup() {
   "$HELPER" --unregister-module "$MOD" >/dev/null 2>&1
-  rm -rf "${EXT:?}/${MOD:?}" "${LIB:?}/probe-runtime" "${LIB:?}/runners/${MOD:?}"
+  rm -rf "${EXT:?}/${MOD:?}" "/opt/tec-tac/runtimes/${MOD:?}" "${LIB:?}/runners/${MOD:?}"
 }
 trap cleanup EXIT
 
