@@ -401,6 +401,9 @@ def _check_relative(value, label, *, prefix="", min_parts=1):
     return parts
 
 
+_RUNTIME_PART_RE = re.compile(r"[A-Za-z0-9._-]+")  # 1.17.119: one path part is never more than one bind (no space, ':', '%', '$', quote, non-ASCII)
+
+
 def _check_runtime_path(value, label, module_id):
     """1.17.117: the same rule as registry.py ``_sandbox_runtime_path``: absolute, normalised, and strictly below
     /opt/tec-tac/runtimes/<module id>/ (the module's own folder, at least one further part)."""
@@ -410,6 +413,8 @@ def _check_runtime_path(value, label, module_id):
     parts = value.split("/")[1:]
     if len(parts) < 2 or any(part in ("", ".", "..") for part in parts):
         raise RuntimeError(f"{label} path must be absolute and normalised, with at least two parts and no '..'")
+    if not all(_RUNTIME_PART_RE.fullmatch(part) for part in parts):
+        raise RuntimeError(f"{label} path parts may only hold letters, digits, '.', '_' and '-'")
     own = RUNTIME_BASE.split("/")[1:] + [module_id]
     if parts[:len(own)] != own or len(parts) <= len(own):
         raise RuntimeError(f"{label} path must sit below {RUNTIME_BASE}/{module_id}/ (at least one folder deeper)")
@@ -1489,6 +1494,13 @@ def unit_name(run_id):
     return UNIT_PREFIX + run_id
 
 
+def _bind_path_safe(path):
+    """1.17.119: a path that comes from the registry row must stay one BindReadOnlyPaths= entry: no whitespace (systemd splits a bind
+    line on it), no ':' (source:destination:options), no '%' or '$' (expansion), no control character, no backslash."""
+    return (isinstance(path, str) and bool(path) and "\\" not in path
+            and not any(ch.isspace() or ch in ":%$" or ord(ch) < 32 or ord(ch) == 127 for ch in path))
+
+
 def build_properties(row, run_id, *, resolvers, credential_names, exists=os.path.lexists):
     """Every property of the unit, as ``Key=Value`` strings. Built from the registry row and the constants above only: nothing here comes
     from the caller or from the module's manifest text (argv and environment values travel as arguments, never as properties)."""
@@ -1499,6 +1511,8 @@ def build_properties(row, run_id, *, resolvers, credential_names, exists=os.path
             raise Refusal("sandbox_unavailable", f"this server has no {path} to hand a run")
     binds = list(BASE_BINDS_REQUIRED) + [path for path in BASE_BINDS_OPTIONAL if exists(path)]
     own = [root["path"] for root in row.get("runtime_roots") or []]
+    if not all(_bind_path_safe(path) for path in own):
+        raise Refusal("runtime_unverified")  # fail closed: never a unit with an extra bind
     own += [str(runner_base(row["owner_module"])), str(LAUNCHER_FILE)]
     for path in own:
         if not exists(path):
@@ -1540,6 +1554,11 @@ def build_environment(row):
     return env
 
 
+def _exec_escape(text):
+    """1.17.119: systemd expands '$VAR' and '%specifier' in the command of a transient unit. '$$' and '%%' reach the program as '$' and '%'."""
+    return str(text).replace("$", "$$").replace("%", "%%")
+
+
 def build_argv(row, run_id, parameters, *, resolvers, credential_names, exists=os.path.lexists):
     argv = [*SYSTEMD_RUN, "--pipe", "--wait", "--collect", "--quiet", f"--unit={unit_name(run_id)}", f"--slice={SLICE}"]
     argv += [f"--property={item}" for item in build_properties(row, run_id, resolvers=resolvers, credential_names=credential_names, exists=exists)]
@@ -1549,7 +1568,7 @@ def build_argv(row, run_id, parameters, *, resolvers, credential_names, exists=o
     if row.get("credential_return"):
         command.append("--return-credential")
     command += ["--", str(row["executable"]), *render_command(row, parameters)]
-    return argv + command
+    return argv + [_exec_escape(item) for item in command]
 
 
 # ------------------------------------------------------------------------------------------------ the output stream parser

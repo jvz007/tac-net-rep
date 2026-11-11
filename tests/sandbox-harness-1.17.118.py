@@ -114,13 +114,14 @@ sh.BASE_BINDS_OPTIONAL = tuple(str(ETC / n) for n in ("ca-certificates", "nsswit
 FAKE_RUN = BASE / "fake-systemd-run.py"
 FAKE_CTL = BASE / "fake-systemctl.py"
 FAKE_RUN.write_text(r'''
-import json, os, shutil, subprocess, sys, threading, time
+import json, os, re, shutil, subprocess, sys, threading, time
 base = os.environ["FAKE_BASE"]
 args = sys.argv[1:]
 unit, props, setenv, command = None, [], {}, []
 for i, a in enumerate(args):
     if a == "--":
-        command = args[i + 1:]
+        # 1.17.119: systemd turns '$$' into '$' and '%%' into '%' in ExecStart, one pass, left to right; so does this fake
+        command = [re.sub(r"\$\$|%%", lambda m: m.group()[0], item) for item in args[i + 1:]]
         break
     if a.startswith("--unit="):
         unit = a[7:]

@@ -412,6 +412,9 @@ def _sandbox_relative_file(value, label: str, plugin_dir: Path, *, prefix: str =
 SANDBOX_RUNTIME_BASE = "/opt/tec-tac/runtimes"  # 1.17.117: a runtime path sits strictly below SANDBOX_RUNTIME_BASE/<module id>/
 
 
+_SANDBOX_RUNTIME_PART_RE = re.compile(r"[A-Za-z0-9._-]+")  # 1.17.119: same set as scripts/sandbox-helper.py
+
+
 def _sandbox_runtime_path(value, label: str, plugin_id: str) -> str:
     if (not isinstance(value, str) or not value.startswith("/") or "\x00" in value or "\\" in value or len(value) > 512
             or any(ord(ch) < 32 or ord(ch) == 127 for ch in value)):
@@ -419,6 +422,8 @@ def _sandbox_runtime_path(value, label: str, plugin_id: str) -> str:
     parts = value.split("/")[1:]
     if len(parts) < 2 or any(part in ("", ".", "..") for part in parts):
         raise RegistryError(f"{label} path must be absolute and normalised, with at least two parts and no '..'.")
+    if not all(_SANDBOX_RUNTIME_PART_RE.fullmatch(part) for part in parts):
+        raise RegistryError(f"{label} path parts may only hold letters, digits, '.', '_' and '-'.")
     own = SANDBOX_RUNTIME_BASE.split("/")[1:] + [plugin_id]
     if parts[:len(own)] != own or len(parts) <= len(own):
         raise RegistryError(f"{label} path must sit below {SANDBOX_RUNTIME_BASE}/{plugin_id}/ (at least one folder deeper).")
