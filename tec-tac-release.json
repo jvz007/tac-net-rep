@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.17.124",
+  "version": "1.18.0",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.17.124.md",
-      "size": 11856,
-      "sha256": "bdb3cf1303ea0a17d3989d83f2fbc02e3b9e6a962359f8fd824b36bff3fe5b30"
+      "path": "RELEASE_NOTES_1.18.0.md",
+      "size": 2506,
+      "sha256": "cd2b64a9ca30cfc1db8ce8078873b106c52d705f8562a571995b3c4ff7a4b39b"
     },
     {
       "path": "VERSION",
-      "size": 9,
-      "sha256": "01b964274c538e461d550d5dc6afb5288ae4e24329d16c1187b1957cac929c0f"
+      "size": 7,
+      "sha256": "04d659518a1793d5396007fcabdc9211a8c1db8406bf4e0fa8069171fdb06518"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -1240,6 +1240,11 @@
       "path": "docs/releases/RELEASE_NOTES_1.17.123.md",
       "size": 13255,
       "sha256": "9f9c95dfc262409b4e087614e0956c0ce19ed6466dc34f4e9d8a3eac6167fc94"
+    },
+    {
+      "path": "docs/releases/RELEASE_NOTES_1.17.124.md",
+      "size": 11856,
+      "sha256": "bdb3cf1303ea0a17d3989d83f2fbc02e3b9e6a962359f8fd824b36bff3fe5b30"
     },
     {
       "path": "docs/releases/RELEASE_NOTES_1.17.13.md",
@@ -3073,8 +3078,8 @@
     },
     {
       "path": "tec_tac_package.json",
-      "size": 78,
-      "sha256": "57e1f440461cd2b2ca2e0e8c5b0086f7fdbe4c4822adff871368c21f5fd24ff0"
+      "size": 76,
+      "sha256": "9708d14aa6f0164801208b0b94ba13ecc88db55e06ebede2acb3104e652b8708"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -6640,6 +6645,11 @@
       "path": "tests/user-preferences-foundation.sh",
       "size": 2122,
       "sha256": "9fc70da5923a2808e009896ff1fce0abb1ae507e847cf28b05faea1575d30714"
+    },
+    {
+      "path": "tests/version-1.18.0.py",
+      "size": 1741,
+      "sha256": "1a1fe20d0c314b9020351fd71a0a67750937e433976f5db3a14f6b81277de556"
     },
     {
       "path": "tests/version-rebuild-ordering.py",
