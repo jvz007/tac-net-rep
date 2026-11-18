@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import hashlib
 import hmac
 import secrets
@@ -100,7 +101,14 @@ def _new_code() -> str:
     return "".join(secrets.choice(BACKUP_CODE_ALPHABET) for _ in range(BACKUP_CODE_LENGTH))
 
 
-_DUMMY_CODE_HASH = make_password("TEC-TAC-DUMMY-BACKUP-CODE")
+@functools.cache
+def _dummy_code_hash() -> str:
+    """The dummy hash for failed-login timing, built on first use (1.18.1).
+
+    Building it at import cost about 445 ms of CPU in every process that loaded Core.
+    Each process still gets its own salt. A race at first use may hash twice, which is harmless.
+    """
+    return make_password("TEC-TAC-DUMMY-BACKUP-CODE")
 
 
 def burn_backup_code_hash_cost(*, checks: int = BACKUP_CODE_COUNT) -> None:
@@ -110,7 +118,7 @@ def burn_backup_code_hash_cost(*, checks: int = BACKUP_CODE_COUNT) -> None:
     closes the second-factor timing gap: a wrong password and a correct password
     paired with a wrong recovery code both pay the same backup-code hash budget.
     """
-    dummy = _DUMMY_CODE_HASH
+    dummy = _dummy_code_hash()
     for _ in range(max(0, int(checks))):
         check_password("TEC-TAC-INVALID-CODE", dummy)
 

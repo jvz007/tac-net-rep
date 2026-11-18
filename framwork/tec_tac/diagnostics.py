@@ -7,8 +7,6 @@ state without repairing or mutating production state.
 from __future__ import annotations
 
 import os
-import shutil
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -16,9 +14,6 @@ from typing import Any
 from django.apps import apps
 from django.core import checks
 from django.db import connection
-from django.db.migrations.autodetector import MigrationAutodetector
-from django.db.migrations.loader import MigrationLoader
-from django.db.migrations.state import ProjectState
 
 from .capabilities import list_capabilities
 from .contracts import build_contract_catalog, framework_version
@@ -100,6 +95,11 @@ def _django_check() -> dict:
 
 
 def _migration_changes() -> dict[str, list[dict]]:
+    # 1.18.1: imported here, so start-up does not load Django's migration machinery for a rarely used check.
+    from django.db.migrations.autodetector import MigrationAutodetector
+    from django.db.migrations.loader import MigrationLoader
+    from django.db.migrations.state import ProjectState
+
     loader = MigrationLoader(connection, ignore_no_migrations=True)
     from_state = loader.project_state()
     to_state = ProjectState.from_apps(apps)
@@ -154,6 +154,8 @@ def _migration_checks() -> list[dict]:
 
 
 def _systemd_state(unit: str) -> dict:
+    import subprocess
+
     try:
         proc = subprocess.run(
             ["systemctl", "is-active", unit],
@@ -316,6 +318,8 @@ def _helper_check() -> dict:
 
 
 def _storage_check() -> dict:
+    import shutil
+
     path = Path("/opt/tec-tac")
     try:
         usage = shutil.disk_usage(path if path.exists() else "/")

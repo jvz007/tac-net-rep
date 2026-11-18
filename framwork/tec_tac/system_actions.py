@@ -68,7 +68,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import re
 import threading
 import time
 from dataclasses import dataclass
@@ -81,6 +80,7 @@ from django.utils import timezone
 from . import scheduler_run_context as _run_context
 from . import system_commands as _sc
 from .caller_identity import calling_module_for_core_provider
+from .lazy_patterns import lazy_pattern
 from .scheduler import SchedulerPermanentError, SchedulerTransientError
 
 logger = logging.getLogger("tec_tac.system_actions")
@@ -100,9 +100,9 @@ WRITE_ACTIONS = ("approve", "ignore", "nothing")  # what a Windows update decisi
 MAX_WRITE_ITEMS = MAX_AGENTS  # one call writes at most this many decisions (2000 per group, 20 groups); refused above, never truncated
 LABEL_MAX = 100
 SCOPE_KIND_AGENTS = "agents"
-_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}\.[a-z0-9][a-z0-9_-]{0,63}$")
-_FLAG_RE = re.compile(r"^can_[a-z0-9_]+$")
-_PARAM_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+_ID_RE = lazy_pattern(r"^[a-z0-9][a-z0-9_-]{0,63}\.[a-z0-9][a-z0-9_-]{0,63}$")
+_FLAG_RE = lazy_pattern(r"^can_[a-z0-9_]+$")
+_PARAM_RE = lazy_pattern(r"^[a-z][a-z0-9_]{0,39}$")
 UNMATCHED_WINDOW_SECONDS = 300.0
 
 STATE_CLAIMING = "claiming"
@@ -478,7 +478,7 @@ def _registered_plugin(module_id: str):
     return plugin
 
 
-_MODULE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+_MODULE_ID_RE = lazy_pattern(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 MAX_DELEGABLE_TO = 5
 
 

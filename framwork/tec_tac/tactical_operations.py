@@ -168,6 +168,7 @@ from io import BytesIO
 from typing import Any
 
 from . import module_category as _module_category
+from .lazy_patterns import lazy_pattern
 
 logger = logging.getLogger("tec_tac.tactical_operations")
 
@@ -199,25 +200,25 @@ FORBIDDEN_FIRST_SEGMENTS = ("accounts", "_allauth", "v2")
 FORBIDDEN_FIRST_PREFIXES = ("logout",)  # logout, logoutall
 FORBIDDEN_FIRST_TWO = (("api", "tfd"), ("api", "v3"), ("api", "v4"), ("agents", "installer"))
 
-_ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
-_LITERAL_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}$")
-_PARAM_RE = re.compile(r"^\{([a-z][a-z0-9_]{0,31})(?::(str|int|agent|service))?\}$")
-_FIELD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
-_OBJECT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")  # 1.17.44: audit.object_id, a fixed text such as tactical-server
-_CORRELATION_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
-_SECRET_NAME_RE = re.compile(r"(pass|secret|token|key|credential|auth|cookie|signature)", re.IGNORECASE)
-_PARAM_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
-_SCOPE_SOURCE_RE = re.compile(r"^(path|body):([A-Za-z_][A-Za-z0-9_]{0,63})(?:\.([A-Za-z_][A-Za-z0-9_]{0,63}))?$")  # 1.17.45: body:<field>.<key>
-_SCOPE_TYPE_BODY_RE = re.compile(r"^body:([A-Za-z_][A-Za-z0-9_]{0,63})$")
-_EXTENSION_RE = re.compile(r"^[a-z0-9]{1,10}$")
-_CONTENT_TYPE_RE = re.compile(r"^[A-Za-z0-9!#$&^_.+-]{1,60}/[A-Za-z0-9!#$&^_.+-]{1,60}$")
+_ID_RE = lazy_pattern(r"^[a-z][a-z0-9_-]{0,63}$")
+_LITERAL_RE = lazy_pattern(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}$")
+_PARAM_RE = lazy_pattern(r"^\{([a-z][a-z0-9_]{0,31})(?::(str|int|agent|service))?\}$")
+_FIELD_RE = lazy_pattern(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+_OBJECT_ID_RE = lazy_pattern(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")  # 1.17.44: audit.object_id, a fixed text such as tactical-server
+_CORRELATION_RE = lazy_pattern(r"^[A-Za-z0-9._:-]{1,128}$")
+_SECRET_NAME_RE = lazy_pattern(r"(pass|secret|token|key|credential|auth|cookie|signature)", re.IGNORECASE)
+_PARAM_NAME_RE = lazy_pattern(r"^[a-z][a-z0-9_]{0,31}$")
+_SCOPE_SOURCE_RE = lazy_pattern(r"^(path|body):([A-Za-z_][A-Za-z0-9_]{0,63})(?:\.([A-Za-z_][A-Za-z0-9_]{0,63}))?$")  # 1.17.45: body:<field>.<key>
+_SCOPE_TYPE_BODY_RE = lazy_pattern(r"^body:([A-Za-z_][A-Za-z0-9_]{0,63})$")
+_EXTENSION_RE = lazy_pattern(r"^[a-z0-9]{1,10}$")
+_CONTENT_TYPE_RE = lazy_pattern(r"^[A-Za-z0-9!#$&^_.+-]{1,60}/[A-Za-z0-9!#$&^_.+-]{1,60}$")
 _PARAM_VALUE_RE = {
-    "str": re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,254}$"),
-    "agent": re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{20,254}$"),
-    "int": re.compile(r"^[0-9]{1,12}$"),
+    "str": lazy_pattern(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,254}$"),
+    "agent": lazy_pattern(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{20,254}$"),
+    "int": lazy_pattern(r"^[0-9]{1,12}$"),
     # 1.17.41: a Windows service name (services/{agent_id:agent}/{svcname:service}/). It may hold a space and $ # ( ) , which the
     # str kind refuses, but never a slash or a leading dot or space. The value is checked for '..' as every kind is.
-    "service": re.compile(r"^[A-Za-z0-9_][A-Za-z0-9 $#().,_-]{0,255}$"),
+    "service": lazy_pattern(r"^[A-Za-z0-9_][A-Za-z0-9 $#().,_-]{0,255}$"),
 }
 _MAX_SEGMENTS = 12
 _MAX_ROUTE_LENGTH = 200
@@ -240,14 +241,14 @@ _LIST_MAX_KEYS = 24  # keys kept from one object
 _LIST_MAX_ITEMS = 100  # scalars kept from one list value inside an object
 _LIST_VALUE_MAX_CHARS = 4096  # characters kept from one text value
 _LIST_MAX_TEXT_BYTES = 64 * 1024  # text bytes kept across one list field
-_LIST_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")  # control characters, but not tab (\x09) or newline (\x0a)
+_LIST_CONTROL = lazy_pattern(r"[\x00-\x08\x0b-\x1f\x7f]")  # control characters, but not tab (\x09) or newline (\x0a)
 _DROPPED = object()
 _LIST_MASK_MODES = ("names", "mask")  # 1.17.52: audit_list_masks
 _MAX_LIST_MASK_KEYS = 8  # keys one list may mask
 _MASKED = "***"
 # A name Core will record from a list item (1.17.52): optional dashes, then a letter or underscore. A switch may start with one "/".
-_ITEM_NAME_RE = re.compile(r"^-{0,2}[A-Za-z_][A-Za-z0-9_.\-]{0,63}$")
-_ITEM_SWITCH_RE = re.compile(r"^(?:-{1,2}|/)[A-Za-z0-9_?][A-Za-z0-9_.\-]{0,63}$")
+_ITEM_NAME_RE = lazy_pattern(r"^-{0,2}[A-Za-z_][A-Za-z0-9_.\-]{0,63}$")
+_ITEM_SWITCH_RE = lazy_pattern(r"^(?:-{1,2}|/)[A-Za-z0-9_?][A-Za-z0-9_.\-]{0,63}$")
 _MAX_FILE_NAME = 255
 
 # One fixed Core text per refusal. None carries any wording from the declaring module or from Tactical.
@@ -1531,7 +1532,7 @@ def _clean_body(operation: TacticalOperation, body: Any) -> dict:
 
 
 _QUERY_SAFE = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
-_PERCENT_RE = re.compile(r"%([0-9A-Fa-f]{2})")
+_PERCENT_RE = lazy_pattern(r"%([0-9A-Fa-f]{2})")
 
 
 def _quote(text: str) -> str:
