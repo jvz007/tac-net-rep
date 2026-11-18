@@ -61,6 +61,7 @@ from .preferences import get_user_preferences
 from .runtime_settings import get_module_register_timeout_seconds, get_system_name, get_update_source
 from .account_self_service import tactical_ui_context
 from .session_security import SessionAuthenticated, _audit, session_theme_of
+from .log_negotiation import LogNegotiationMixin
 from .trust_policy import TrustPolicyError, LEVEL_RANK, console_guidance as trust_policy_console_guidance, get_policy as get_update_trust_policy, set_policy as set_update_trust_policy
 
 from . import resources_adapter
@@ -881,7 +882,7 @@ class SystemUpdateJobListView(APIView):
 
 
 @extend_schema_view(get=extend_schema(tags=["Tec-Tac System Updates"], summary="Full log of one system update job (1.17.67): scrubbed, capped at 5 MB, audited"))
-class SystemUpdateJobLogView(APIView):
+class SystemUpdateJobLogView(LogNegotiationMixin, APIView):
     """The job's log as plain text. Inline by default; ``?download=1`` sends it as a file. Every read writes one strict audit row."""
     permission_classes = [SessionAuthenticated]
 

@@ -120,7 +120,7 @@ with tempfile.TemporaryDirectory() as td:
                 raise RuntimeError("tactical identity disappeared during update")
             return 4242
         update.tactical_gid = one_gid
-        update.acquire_lifecycle_lock = lambda: None
+        update.acquire_lifecycle_lock = lambda *_a, **_k: None  # 1.18.5: run_job passes wait_seconds
         update.extract_archive = lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("forced extraction failure"))
         def fake_atomic(path, payload, *args, **kwargs):
             writes.append((Path(path), json.loads(json.dumps(payload)), dict(kwargs)))

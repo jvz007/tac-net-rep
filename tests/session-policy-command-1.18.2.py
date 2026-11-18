@@ -78,6 +78,8 @@ pkg.session_security = ss
 assert mod.IP_CHANGE_CHOICES == ("off", "audit", "reauthenticate", "terminate")
 for value in mod.IP_CHANGE_CHOICES:
     rec["update"].clear()
+    # 1.18.5: a same-value call writes nothing, so start each pass from a different value.
+    state["ip_change_policy"] = "off" if value != "off" else "terminate"
     mod.Command().handle(show=False, ip_change=value)
     assert rec["update"] == [({"ip_change_policy": value}, mod.ACTOR_LABEL)], rec
     assert "server command" in rec["update"][0][1]

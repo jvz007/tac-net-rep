@@ -6,6 +6,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .session_security import SessionAuthenticated
+from .log_negotiation import LogNegotiationMixin
 
 from . import module_job_logs, module_licensing
 from .module_manager import ModuleManagerError, discard_stage, get_job, list_jobs, page_jobs
@@ -279,7 +280,7 @@ class ModuleV2JobHistoryListView(APIView):
 
 
 @extend_schema_view(get=extend_schema(tags=["Tec-Tac Framework"], summary="Full log of one module job (1.17.60): scrubbed, capped at 5 MB, audited"))
-class ModuleV2JobLogView(APIView):
+class ModuleV2JobLogView(LogNegotiationMixin, APIView):
     """One job's log as plain text. Inline by default; ``?download=1`` sends it as a file. Every read writes a strict audit row."""
     permission_classes = [SessionAuthenticated]
     def get(self, request, job_id):

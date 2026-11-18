@@ -19,6 +19,7 @@ from .server_maintenance import (
     holds_action_permission,
 )
 from .session_security import SessionAuthenticated
+from .log_negotiation import LogNegotiationMixin
 from .rbac import can_manage_privileged_operations
 
 logger = logging.getLogger(__name__)
@@ -129,7 +130,7 @@ class ServerMaintenanceJobDetailView(APIView):
 
 
 @extend_schema_view(get=extend_schema(tags=["Tec-Tac Server Maintenance"], summary="Log, stdout and stderr of one server-maintenance job (1.17.67): scrubbed, capped at 5 MB, audited"))
-class ServerMaintenanceJobLogView(APIView):
+class ServerMaintenanceJobLogView(LogNegotiationMixin, APIView):
     """The job's log as plain text. Inline by default; ``?download=1`` sends a file; ``?part=all|log|stdout|stderr`` (default all, three headed
     sections). Every read writes one strict audit row; if it cannot be written nothing is sent."""
     permission_classes = [SessionAuthenticated]

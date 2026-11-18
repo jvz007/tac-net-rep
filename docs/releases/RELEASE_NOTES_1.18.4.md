@@ -48,7 +48,7 @@ Update the server to Core 1.18.4 first.
 3. On an idle server, run a full restore.
    * PASS: the restore completes. `/usr/local/lib/tec-tac-ui-sync/scripts/sync-modules.sh` exists and is owned by root. `journalctl -u tec-tac-ui-sync-publish.service` shows the skip line or the published line, with no rename error.
    * FAIL: an ENOENT or ENOTEMPTY error, or a missing tools folder. Send the restore log and the journal.
-4. Make `/var/lib/tec-tac` read-only or give it the wrong owner on a test box, then run `sudo python3 -I /usr/local/lib/tec-tac-system-update/system-update-helper.py --publish-ui-sync`.
+4. Make `/var/lib/tec-tac` read-only or give it the wrong owner on a test box, then run `sudo python3 -I /usr/local/lib/tec-tac-updater/system-update-helper.py --publish-ui-sync`.
    * PASS: one stderr line, `[TEC-TAC] UI module sync script not published: ...`, exit code 1 (`echo $?`), no traceback.
    * FAIL: a Python traceback. Send the output.
 5. Hold the lock with `sudo flock -n /var/lib/tec-tac/lifecycle.lock sleep 60 &`, then run the same command.

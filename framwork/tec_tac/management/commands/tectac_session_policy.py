@@ -24,12 +24,16 @@ class Command(BaseCommand):
 
         if value is not None:
             old = session_security.get_effective_policy().get("ip_change_policy")
-            try:
-                session_security._update_global_policy({"ip_change_policy": value}, requested_by=ACTOR_LABEL)
-            except session_security.SessionSecurityError as exc:
-                raise CommandError(str(exc))
-            self.stdout.write(f"ip_change_policy changed: {old} -> {value}")
-            self.stdout.write("Open sessions follow the new policy on their next request. An audit row (session_policy_changed) was written.")
+            if old is not None and old == value:
+                # 1.18.5: nothing changes, so nothing is saved and no audit row is written.
+                self.stdout.write(f"ip_change_policy unchanged: {value}")
+            else:
+                try:
+                    session_security._update_global_policy({"ip_change_policy": value}, requested_by=ACTOR_LABEL)
+                except session_security.SessionSecurityError as exc:
+                    raise CommandError(str(exc))
+                self.stdout.write(f"ip_change_policy changed: {old} -> {value}")
+                self.stdout.write("Open sessions follow the new policy on their next request. An audit row (session_policy_changed) was written.")
         if show:
             policy = session_security.get_effective_policy()
             first = "ip_change_policy"

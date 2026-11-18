@@ -6,7 +6,7 @@ import sys
 import types
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 PKG_DIR = ROOT / "framwork" / "tec_tac"
 if "fcntl" not in sys.modules:
     try:
@@ -20,23 +20,12 @@ sys.modules["tec_tac"] = package_stub
 module = importlib.import_module("tec_tac.module_state")
 satisfies = module.version_satisfies
 
-raw = (ROOT / "VERSION").read_bytes()
-assert raw == b"1.18.4\n", raw
-
+# Moved to tests/legacy in 1.18.5: the current VERSION and root notes belong to the newest version test.
 package = json.loads((ROOT / "tec_tac_package.json").read_text(encoding="utf-8"))
-assert package["version"] == "1.18.4"
 assert package["id"] == "tec-tac"
 assert package["type"] == "tec-tac-framework"
-
-notes = sorted(p.name for p in ROOT.glob("RELEASE_NOTES_*.md"))
-assert notes == ["RELEASE_NOTES_1.18.4.md"], notes
-assert (ROOT / "docs" / "releases" / "RELEASE_NOTES_1.17.124.md").is_file()
-assert (ROOT / "docs" / "releases" / "RELEASE_NOTES_1.18.0.md").is_file()
-assert (ROOT / "docs" / "releases" / "RELEASE_NOTES_1.18.1.md").is_file()
-assert (ROOT / "docs" / "releases" / "RELEASE_NOTES_1.18.2.md").is_file()
-assert (ROOT / "docs" / "releases" / "RELEASE_NOTES_1.18.3.md").is_file()
-
-text = (ROOT / "RELEASE_NOTES_1.18.4.md").read_text(encoding="utf-8")
+assert (ROOT / "docs" / "releases" / "RELEASE_NOTES_1.18.4.md").is_file()
+text = (ROOT / "docs" / "releases" / "RELEASE_NOTES_1.18.4.md").read_text(encoding="utf-8")
 for needle in ("Module-facing", "What is not in this release", "lifecycle lock", "restore was not started", "Johan test checklist", "FAIL"):
     assert needle in text, needle
 

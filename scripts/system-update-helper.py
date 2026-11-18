@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import uuid
 import zipfile
 from datetime import datetime, timezone
@@ -42,6 +43,7 @@ HISTORY_ROOT = STATE_ROOT / "history"
 LOCK_PATH = STATE_ROOT / "update.lock"
 LIFECYCLE_LOCK_PATH = Path("/var/lib/tec-tac/lifecycle.lock")
 _LIFECYCLE_LOCK_HANDLE = None
+LIFECYCLE_WAIT_SECONDS = 10
 CONFIG = Path("/opt/tec-tac/etc/tec-tac.conf")
 SELF = Path("/usr/local/sbin/tec-tac-system-update")
 PRIVILEGED_TRUST = Path("/usr/local/lib/tec-tac-security/privileged-trust.py")
@@ -199,21 +201,50 @@ def tactical_gid(config):
     return pwd.getpwnam(config.get("TACTICAL_USER", "tactical")).pw_gid
 
 
-def acquire_lifecycle_lock():
-    """Serialize system updates with all module lifecycle mutations."""
+def acquire_lifecycle_lock(wait_seconds=0, _sleep=None, _clock=None):
+    """Serialize system updates with all module lifecycle mutations.
+
+    wait_seconds (1.18.5) is 0 for every caller except run_job: it polls every 0.25 s for at most that long, so a lock that is
+    still being let go by a process that just finished does not fail the job. After the wait a real overlap is still refused.
+    """
     global _LIFECYCLE_LOCK_HANDLE
+    sleep = _sleep or time.sleep
+    clock = _clock or time.monotonic
     LIFECYCLE_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    handle = LIFECYCLE_LOCK_PATH.open("a+")
+    deadline = clock() + max(0, wait_seconds)
+    while True:
+        handle = LIFECYCLE_LOCK_PATH.open("a+")
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            handle.close()
+            if clock() >= deadline:
+                raise RuntimeError("another Tec-Tac lifecycle operation is already running") from exc
+            sleep(0.25)
+            continue
+        except OSError:
+            # 1.18.4: any other failure closes the handle and is raised as is; callers decide how to report it.
+            handle.close()
+            raise
+        _LIFECYCLE_LOCK_HANDLE = handle
+        return
+
+
+def release_lifecycle_lock():
+    """Let go of lifecycle.lock (1.18.5). Idempotent; never raises. run_job calls it before it writes a final job status."""
+    global _LIFECYCLE_LOCK_HANDLE
+    handle = _LIFECYCLE_LOCK_HANDLE
+    _LIFECYCLE_LOCK_HANDLE = None
+    if handle is None:
+        return
     try:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError as exc:
-        handle.close()
-        raise RuntimeError("another Tec-Tac lifecycle operation is already running") from exc
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
     except OSError:
-        # 1.18.4: any other failure closes the handle and is raised as is; callers decide how to report it.
+        pass
+    try:
         handle.close()
-        raise
-    _LIFECYCLE_LOCK_HANDLE = handle
+    except OSError:
+        pass
 
 
 def running_request_path(job_id):
@@ -2477,7 +2508,7 @@ def run_job(job_id):
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise RuntimeError("another Tec-Tac system update is already running") from exc
-        acquire_lifecycle_lock()
+        acquire_lifecycle_lock(wait_seconds=LIFECYCLE_WAIT_SECONDS)  # 1.18.5: bounded wait, only here
 
         job["status"] = "running"
         job["started_at"] = now()
@@ -2734,6 +2765,13 @@ def run_job(job_id):
             # Reuse the config-derived Tactical gid captured before the update
             # starts. Re-reading config/user identity here can fail after an
             # otherwise handled update error and leave the job stuck running.
+            # 1.18.5: nothing mutating runs after this point, so let go of both locks before the final status is visible.
+            # A job that shows Finished must never still hold lifecycle.lock or update.lock.
+            release_lifecycle_lock()
+            try:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
             atomic_json(path, job, mode=0o640, uid=0, gid=result_gid)
             HISTORY_ROOT.mkdir(parents=True, exist_ok=True)
             atomic_json(HISTORY_ROOT / path.name, job, mode=0o640, uid=0, gid=result_gid)
@@ -2760,10 +2798,18 @@ def run_job(job_id):
 
 
 def mark_failed(job_id, error):
+    release_lifecycle_lock()  # 1.18.5: a failed status is never visible while this process holds the lock
     try:
         path, job = load_job(job_id)
         if job.get("status") in {"succeeded", "failed"}:
             return
+        if not job.get("installed_version"):
+            try:  # best effort: a job that failed at the lock still shows "<installed> -> <target>"
+                found = installed_version(job.get("component"), load_config())
+                if found:
+                    job["installed_version"] = found
+            except (OSError, ValueError, KeyError, RuntimeError, SystemExit) as exc:
+                print(f"[TEC-TAC-UPDATE] installed version not recorded on the failed job: {exc}", file=sys.stderr)
         job["status"] = "failed"
         job["finished_at"] = now()
         job["error"] = str(error) or error.__class__.__name__
