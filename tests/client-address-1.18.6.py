@@ -173,7 +173,7 @@ must("core.client_address" not in installer, "install.sh unchanged")
 # line endings: each touched file keeps one style (CRLF where the repo has it, LF in the new files)
 for rel, crlf in (
     ("framwork/tec_tac/client_address.py", False), ("docs/client-address.md", False), ("VERSION", False), ("tec_tac_package.json", False),
-    ("RELEASE_NOTES_1.18.6.md", False), ("tests/client-address-1.18.6.py", False), ("tests/version-1.18.6.py", False),
+    ("docs/releases/RELEASE_NOTES_1.18.6.md", False), ("tests/client-address-1.18.6.py", False), ("tests/legacy/version-1.18.6.py", False),
     ("framwork/tec_tac/apps.py", True), ("framwork/tec_tac/contracts.py", True), ("docs/capabilities.md", True),
 ):
     data = (ROOT / rel).read_bytes()

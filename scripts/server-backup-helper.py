@@ -8,6 +8,7 @@ vectors itself; no module/browser supplied command or executable is executed.
 from __future__ import annotations
 
 import base64
+import contextlib
 import fcntl
 import ftplib
 import gzip
@@ -1195,15 +1196,216 @@ def sidecar_path(path: Path):
 
 
 def write_sidecar(path: Path, metadata):
-    atomic_json(sidecar_path(path), metadata, mode=0o640)
+    atomic_json(sidecar_path(path), metadata, mode=0o600)
+
+
+@contextlib.contextmanager
+def _private_umask():
+    """1.18.7: every file made inside this block starts private (0600, folders 0700)."""
+    old = os.umask(0o077)
+    try:
+        yield
+    finally:
+        os.umask(old)
+
+
+def _private_copy(source: Path, target: Path):
+    """Copy a file so the new inode is created 0600 and keeps the source mtime.
+
+    shutil.copy2 would copy the source mode (0644 for a Tactical archive) onto
+    the new file. O_EXCL and O_NOFOLLOW stop a planted link at the target.
+    """
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(target, flags, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        with open(source, "rb") as src, os.fdopen(fd, "wb", closefd=False) as dst:
+            shutil.copyfileobj(src, dst, 1024 * 1024)
+            dst.flush()
+            os.fsync(dst.fileno())
+        st = os.stat(source)
+        os.utime(fd, ns=(st.st_atime_ns, st.st_mtime_ns))  # by fd: a swapped link cannot redirect it
+    finally:
+        os.close(fd)
+
+
+def _private_write_text(target: Path, text: str):
+    """Write a new 0600 file through an fd. O_EXCL and O_NOFOLLOW refuse a planted link;
+    the mode is set on the fd, never by path, because the folder may be Tactical-writable."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(target, flags, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb", closefd=False) as handle:
+            handle.write(text.encode("utf-8"))
+            handle.flush()
+            os.fsync(handle.fileno())
+    finally:
+        os.close(fd)
+
+
+def _make_private(path: Path):
+    """Set a regular file to 0600 and read the mode back. False when it did not stick."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    fd = os.open(path, flags)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return False
+        os.fchmod(fd, 0o600)
+        return stat.S_IMODE(os.fstat(fd).st_mode) == 0o600
+    finally:
+        os.close(fd)
+
+
+_BACKUP_FILE_SUFFIXES = (".tectac.json", ".sha256")
+
+
+def _is_core_backup_name(name: str):
+    """True for a recovery bundle or Tactical archive name, or its sidecar, hash or .partial file."""
+    name = name.removesuffix(".partial")
+    for suffix in _BACKUP_FILE_SUFFIXES:
+        if name.endswith(suffix):
+            name = name.removesuffix(suffix)
+            break
+    return bool(BUNDLE_RE.fullmatch(name) or LEGACY_ARCHIVE_RE.fullmatch(name))
+
+
+def _repair_file_mode(path: Path):
+    """Set one regular file to 0600 without following links. Returns 'set', 'private' or None."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError:
+        return None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return None
+        if stat.S_IMODE(st.st_mode) == 0o600:
+            return "private"
+        os.fchmod(fd, 0o600)
+        return "set"
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
+def _scan_backup_folder(folder: Path, counts):
+    """Tighten every Core-named backup file directly inside folder. Returns True when it held any."""
+    found = False
+    try:
+        entries = sorted(os.scandir(folder), key=lambda e: e.name)
+    except OSError:
+        return False
+    for entry in entries:
+        try:
+            if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
+                continue
+        except OSError:
+            continue
+        if not _is_core_backup_name(entry.name):
+            continue
+        found = True
+        outcome = _repair_file_mode(Path(entry.path))
+        if outcome == "set":
+            counts["set"] += 1
+        elif outcome == "private":
+            counts["private"] += 1
+    return found
+
+
+def repair_backup_permissions(config, log=None, destinations=None):
+    """1.18.7: make every recovery file private and the default backup folder 0700 tactical:tactical.
+
+    /rmmbackups is 0700 for the Tactical user, not 0750 root:tactical, because
+    Tactical's own backup.sh writes and rotates rmm-backup-*.tar there as that
+    user. Root reads everything. Folders Core does not own (/backup, /mnt, an
+    operator's NAS mount) keep their mode; only the Core-named files in them are
+    tightened, and one NOTICE is logged when such a folder is world-readable.
+    Safe to run again: a second run changes nothing.
+    """
+    def say(text):
+        if log is not None:
+            log.write(f"[TEC-TAC-BACKUP] {text}\n")
+
+    counts = {"set": 0, "private": 0}
+    default = Path(DEFAULT_LOCAL_RECOVERY_ROOT)
+    uid, gid, user, _home = tactical_identity(config)
+    folders = []
+    folder_state = "not present"
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(default, flags)
+    except OSError:
+        fd = -1
+    if fd >= 0:
+        try:
+            try:
+                os.fchown(fd, uid, gid)
+            except OSError:
+                pass
+            os.fchmod(fd, 0o700)
+            folder_state = f"{stat.S_IMODE(os.fstat(fd).st_mode):04o} {user}"
+        except OSError as exc:
+            folder_state = f"mode not changed ({exc})"
+        finally:
+            os.close(fd)
+        folders.append(default)
+        for sub in ("daily", "weekly", "monthly"):
+            folders.append(default / sub)
+
+    owned = {default}
+    foreign = []
+    raw_roots = str(config.get("TEC_TAC_SERVER_BACKUP_LOCAL_ROOTS") or "/rmmbackups,/mnt,/media,/srv,/backup,/backups")
+    for item in raw_roots.split(","):
+        item = item.strip()
+        if not item or Path(item) == default:
+            continue
+        root = Path(item)
+        if root.is_dir() and not root.is_symlink():
+            foreign.append(root)
+            if root.name in ("backup", "backups"):
+                try:
+                    foreign.extend(sorted(c for c in root.iterdir() if c.is_dir() and not c.is_symlink()))
+                except OSError:
+                    pass
+    for item in destinations or []:
+        if isinstance(item, dict) and item.get("type") == "local" and item.get("path"):
+            path = Path(str(item["path"]))
+            if path not in owned and path not in foreign and path.is_dir() and not path.is_symlink():
+                foreign.append(path)
+
+    for folder in folders:
+        if folder.is_dir() and not folder.is_symlink():
+            _scan_backup_folder(folder, counts)
+    seen = set()
+    for folder in foreign:
+        key = str(folder)
+        if key in seen:
+            continue
+        seen.add(key)
+        if _scan_backup_folder(folder, counts):
+            try:
+                if stat.S_IMODE(folder.stat().st_mode) & 0o005:
+                    say(f"NOTICE {folder} is readable or listable by every user; Core tightened its backup files but does not own the folder")
+            except OSError:
+                pass
+    say(f"backup permissions: {default} {folder_state}, {counts['set']} file(s) set to 0600, {counts['private']} already private")
+    return {"folder": str(default), "set": counts["set"], "already_private": counts["private"]}
 
 
 def destination_name(destination):
     return str(destination.get("name") or f"{destination['type']}:{destination['id']}")
 
 
-def store_local(destination, archive: Path, metadata):
-    root = Path(destination["path"]); root.mkdir(parents=True, exist_ok=True)
+def store_local(destination, archive: Path, metadata, log=None):
+    with _private_umask():
+        return _store_local(destination, archive, metadata, log)
+
+
+def _store_local(destination, archive: Path, metadata, log=None):
+    root = Path(destination["path"]); root.mkdir(parents=True, exist_ok=True, mode=0o700)
     if root.is_symlink(): raise RuntimeError("local destination root may not be a symlink")
     target = root / archive.name; target_sidecar = sidecar_path(target); target_hash = archive_hash_path(target)
     archive_tmp = target.with_name(target.name + ".partial")
@@ -1214,10 +1416,9 @@ def store_local(destination, archive: Path, metadata):
         raise RuntimeError("local recovery archive names are immutable; final archive, sidecar or hash already exists")
     published=[]
     try:
-        shutil.copy2(archive,archive_tmp)
-        atomic_json(sidecar_tmp,metadata,mode=0o640)
-        hash_tmp.write_text(archive_hash_text(archive.name, metadata["sha256"]), encoding="utf-8")
-        os.chmod(hash_tmp,0o640)
+        _private_copy(archive,archive_tmp)
+        atomic_json(sidecar_tmp,metadata,mode=0o600)
+        _private_write_text(hash_tmp,archive_hash_text(archive.name, metadata["sha256"]))
         if archive_tmp.stat().st_size != metadata["size_bytes"] or sha256_file(archive_tmp) != metadata["sha256"]:
             raise RuntimeError("local backup copy verification failed")
         os.replace(sidecar_tmp,target_sidecar); published.append(target_sidecar)
@@ -1231,7 +1432,15 @@ def store_local(destination, archive: Path, metadata):
         if not os.path.lexists(target):
             for item in published: item.unlink(missing_ok=True)
         raise
-    return {"id":destination["id"],"type":"local","name":destination_name(destination),"ok":True,"location":str(target),"size_verified":True,"hash_verified":True,"hash_file":str(target_hash)}
+    # 1.18.7: set the published files private and read the mode back. A
+    # filesystem that keeps no Unix modes (some CIFS/vfat mounts) warns once.
+    private = True
+    for item in (target,target_sidecar,target_hash):
+        try: private = _make_private(item) and private
+        except OSError: private = False
+    if not private and log is not None:
+        log.write(f"[TEC-TAC-BACKUP] WARNING {root} does not keep Unix file modes; recovery files there cannot be made private (mode_private=false)\n")
+    return {"id":destination["id"],"type":"local","name":destination_name(destination),"ok":True,"location":str(target),"size_verified":True,"hash_verified":True,"hash_file":str(target_hash),"mode_private":private}
 
 def rclone_path_exists(remote, cfg):
     result = subprocess.run(
@@ -1349,7 +1558,7 @@ def destination_results_strongly_verified(results):
 def store_destination(config, destination, archive, metadata, log):
     destination = validate_destination(destination, config)
     if destination["type"] == "local":
-        return store_local(destination, archive, metadata)
+        return store_local(destination, archive, metadata, log)
     if destination["type"] == "scp":
         return store_scp(config, destination, archive, metadata, log)
     if destination["type"] == "ftp":
@@ -1776,6 +1985,10 @@ def create_tactical_component(config, log, job_id):
         os.chown(backup_root, uid, gid)
     except PermissionError:
         pass
+    try:
+        os.chmod(backup_root, 0o700)  # 1.18.7: only the Tactical user (and root) may list or read it
+    except OSError:
+        pass
     before = {p.name: p.stat().st_mtime_ns for p in backup_root.glob("rmm-backup-*.tar") if p.is_file()}
 
     # Tactical backup.sh v34/v35 still invokes sudo for a small set of root-owned
@@ -1847,6 +2060,10 @@ def create_tactical_component(config, log, job_id):
         raise RuntimeError("Tactical backup completed without a detectable new /rmmbackups/rmm-backup-*.tar archive")
     archive = max(candidates, key=lambda p: p.stat().st_mtime_ns)
     ensure_regular(archive, max_bytes=max_backup_bytes(config))
+    try:
+        _make_private(archive)  # 1.18.7: stays tactical-owned so backup.sh can rotate it; root still reads it
+    except OSError as exc:
+        log.write(f"[TEC-TAC-BACKUP] WARNING could not make {archive.name} private: {exc}\n")
     set_job_stage(config, job_id, "tactical.validate", current=3, total=CREATE_BACKUP_PROGRESS_TOTAL)
     try:
         # Mandatory trust boundary: never hash, bundle or upload a native
@@ -2347,7 +2564,7 @@ def create_recovery_bundle(config, temp: Path, *, backup_class, tactical_archive
     checksums=temp/"checksums.sha256"; checksums.write_text("\n".join(checksum_lines)+"\n",encoding="utf-8")
     bundle_name=datetime.now(timezone.utc).strftime("tec-tac-backup-%Y_%m_%d__%H_%M_%S_%f.tgz"); output=temp/bundle_name; partial=output.with_name(output.name+".partial")
     try:
-        with tarfile.open(partial,"w:gz") as tf:
+        with _private_umask(), tarfile.open(partial,"w:gz") as tf:
             tf.add(manifest_path,arcname="manifest.json",recursive=False); tf.add(checksums,arcname="checksums.sha256",recursive=False)
             if tactical_archive is not None: tf.add(tactical_archive,arcname=f"tactical/{tactical_archive.name}",recursive=False)
             if tec_tac_archive is not None: tf.add(tec_tac_archive,arcname="tec-tac/tec-tac-backup.tar.gz",recursive=False)
@@ -2383,6 +2600,10 @@ def operation_create_backup(config, job, log):
     tactical_archive = None
     tactical_meta = None
     try:
+        try:
+            repair_backup_permissions(config, log, destinations)
+        except (OSError, RuntimeError, KeyError, ValueError) as exc:  # a repair fault never stops a backup; the next run repairs again
+            log.write(f"[TEC-TAC-BACKUP] WARNING backup permission repair failed: {exc}\n")
         with tempfile.TemporaryDirectory(prefix="tectac-recovery-bundle-", dir=str(roots(config)["staging"])) as td:
             temp=Path(td)
             if include_tactical:
@@ -2422,7 +2643,7 @@ def operation_create_backup(config, job, log):
             }
 
             def retain_local_fallback(reason):
-                result = store_local(fallback_destination, bundle, metadata)
+                result = store_local(fallback_destination, bundle, metadata, log)
                 final_path = Path(fallback_destination["path"]) / bundle.name
                 log.write(f"[TEC-TAC-BACKUP] retained recovery bundle locally after {reason}: {final_path}\n")
                 return str(final_path), result
@@ -2739,7 +2960,7 @@ def parse_backup_ref(value):
 def download_local(destination, name, target):
     source = Path(destination["path"]) / name
     ensure_regular(source, max_bytes=max_backup_bytes(load_config()))
-    shutil.copy2(source, target)
+    _private_copy(Path(source), Path(target))
     meta, _status = sidecar_metadata_local(source)
     return meta
 
@@ -4899,14 +5120,14 @@ def validate_local_roundtrip(config, destination, payload, expected_hash, result
         result["checks"]["connection"] = "not_applicable"
         result["checks"]["authentication"] = "not_applicable"
         root = Path(destination["path"])
-        root.mkdir(parents=True, exist_ok=True)
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
         if root.is_symlink():
             _validation_fail(result, "path_access", "local destination root may not be a symlink")
         result["checks"]["path_access"] = "passed"
         target = root / object_name
         created = False
         try:
-            shutil.copy2(payload, target)
+            _private_copy(Path(payload), target)
             created = True
             result["checks"]["write"] = "passed"
             with target.open("rb") as fh:
@@ -5348,8 +5569,12 @@ def main(argv):
             raise SystemExit("invalid job id")
         tactical_privileged(job_id, operation, workspace)
         return
+    if len(argv) == 2 and argv[1] == "--repair-backup-permissions":
+        # Root-only: install.sh calls it. The sudoers lines do not allow it.
+        repair_backup_permissions(load_config(), sys.stdout)
+        return
     if len(argv) != 3 or argv[1] not in {"--dispatch", "--run"}:
-        raise SystemExit("usage: tec-tac-server-backup --dispatch <uuid> | --run <uuid> | --tactical-privileged <uuid> <operation> <workspace>")
+        raise SystemExit("usage: tec-tac-server-backup --dispatch <uuid> | --run <uuid> | --tactical-privileged <uuid> <operation> <workspace> | --repair-backup-permissions")
     job_id = argv[2]
     if not JOB_RE.fullmatch(job_id):
         raise SystemExit("invalid job id")

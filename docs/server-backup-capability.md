@@ -65,6 +65,19 @@ The root-owned helper validates job ownership/mode, operation allow-list and typ
 
 The privileged helper ignores process-environment attempts to redirect its config or state roots. Layout is read only from the fixed `/opt/tec-tac/etc/tec-tac.conf`; when present that file must be a regular root-owned non-writable file.
 
+## File permissions (1.18.7)
+
+Recovery files hold secrets, so only root and the Tactical user may reach them.
+
+* Every recovery bundle (`tec-tac-backup-*.tgz`), its `.tectac.json` sidecar and `.sha256` hash, and the native `rmm-backup-*.tar`, is mode `0600`. Core writes them under a private umask, copies with `0600` from the first byte, and reads the mode back after publishing.
+* `/rmmbackups` is `0700` owned by the Tactical user and group, not `0750 root:tactical`. Tactical's own `backup.sh` (cron and Core run) writes and rotates `rmm-backup-*.tar` there as the Tactical user and needs write access to the folder. Root reads everything. Folders Core creates itself for a local destination are `0700`.
+* Only the root helper reads a bundle, so no group reader is needed. The Backups module reaches bundles only through the `core.server_backup` contract.
+* Folders Core does not own (`/backup`, `/backups`, `/mnt`, `/media`, `/srv`, an operator's NAS mount) keep their mode. Core tightens only the files it names there and logs one NOTICE when such a folder is readable by every user.
+* Repair runs at install (`tec-tac-server-backup --repair-backup-permissions`, root only, not in the sudoers lines) and at the start of every backup run. It logs one line: `backup permissions: /rmmbackups 0700 tactical, N file(s) set to 0600, M already private`.
+* A filesystem that cannot hold Unix modes (some CIFS or vfat mounts) does not fail the backup. Core logs one WARNING and the destination result carries `mode_private: false`.
+* Tactical's nightly cron backup recreates its `.tar` as `0644`. The `0700` folder still blocks other users, and Core tightens the file at the next install or backup run.
+* A manual `tar -xzf` of a bundle now needs `sudo`.
+
 ## `create_backup(...)`
 
 ```python

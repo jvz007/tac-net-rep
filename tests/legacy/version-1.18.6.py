@@ -6,7 +6,7 @@ import sys
 import types
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 PKG_DIR = ROOT / "framwork" / "tec_tac"
 if "fcntl" not in sys.modules:
     try:

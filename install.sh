@@ -1041,6 +1041,8 @@ if command -v visudo >/dev/null 2>&1; then
     visudo -cf "${SERVER_BACKUP_SUDOERS}" >/dev/null || fail "Server backup sudoers validation failed."
 fi
 log "Installed privileged Core server-backup helper: ${SERVER_BACKUP_HELPER}"
+# 1.18.7: make existing recovery files private (0600) and /rmmbackups 0700. Root only; the sudoers lines above do not allow this argument.
+"${SERVER_BACKUP_HELPER}" --repair-backup-permissions || log "WARNING: backup permission repair did not finish; the next backup run repairs again."
 
 mkdir -p "${SERVER_MAINTENANCE_ROOT}/jobs" "${SERVER_MAINTENANCE_ROOT}/cancel-requests" "${SERVER_MAINTENANCE_ROOT}/signal-requests" "${SERVER_MAINTENANCE_ROOT}/logs" "${SERVER_MAINTENANCE_ROOT}/running" "${SERVER_MAINTENANCE_REGISTRY_ROOT}" "${SERVER_MAINTENANCE_ACTION_ROOT}" "${SERVER_MAINTENANCE_LIB}"
 chown root:"${TACTICAL_GROUP}" "${SERVER_MAINTENANCE_ROOT}" "${SERVER_MAINTENANCE_ROOT}/jobs" "${SERVER_MAINTENANCE_ROOT}/cancel-requests" "${SERVER_MAINTENANCE_ROOT}/signal-requests" "${SERVER_MAINTENANCE_ROOT}/logs"
