@@ -209,6 +209,10 @@ def acquire_lifecycle_lock():
     except BlockingIOError as exc:
         handle.close()
         raise RuntimeError("another Tec-Tac lifecycle operation is already running") from exc
+    except OSError:
+        # 1.18.4: any other failure closes the handle and is raised as is; callers decide how to report it.
+        handle.close()
+        raise
     _LIFECYCLE_LOCK_HANDLE = handle
 
 
@@ -1990,6 +1994,7 @@ def install_restored_component(component, out=None, expected=None):
     The restored checkout is given to the Tactical account, copied into a root-only staging directory and checked by the privileged
     verifier against its signed manifest for the version it says it is (signed required, like a rollback). Only then does its
     installer run, from the staging copy. A changed install.sh, or any other changed file, stops here before anything runs.
+    It runs only under the restore's lifecycle.lock (taken by server-backup-helper, 1.18.4) and never takes the lock itself.
     """
     if component not in {"framework", "ui"}:
         raise RuntimeError("component must be framework or ui")
@@ -2810,6 +2815,11 @@ if __name__ == "__main__":
         except RuntimeError:
             sys.stdout.write("[TEC-TAC] UI module sync script not published: a System Update, restore or module job is running; it publishes the script itself or the next UI install does\n")
             raise SystemExit(0)
+        except OSError as exc:
+            # 1.18.4: only busy (RuntimeError above) exits 0. Any other lock failure is one line on stderr and exit 1.
+            reason = " ".join(str(exc).split()) or exc.__class__.__name__
+            sys.stderr.write(f"[TEC-TAC] UI module sync script not published: {reason}\n")
+            raise SystemExit(1)
         try:
             publish_ui_sync_from_checkout()
         except (RuntimeError, OSError) as exc:
@@ -2818,6 +2828,8 @@ if __name__ == "__main__":
             sys.stderr.write(f"[TEC-TAC] UI module sync script not published: {reason}\n")
             raise SystemExit(1)
     elif len(sys.argv) in {3, 4} and sys.argv[1] == "--install-restored":
+        # 1.18.4: runs only as a child of a server-backup restore that already holds lifecycle.lock. Never take it here: a
+        # second flock from this process would be refused and break every restore.
         try:
             install_restored_component(sys.argv[2], expected=sys.argv[3] if len(sys.argv) == 4 else None)
         except RuntimeError as exc:

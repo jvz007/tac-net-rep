@@ -559,6 +559,36 @@ def acquire_lock(config, *, blocking=False):
     return handle
 
 
+LIFECYCLE_LOCK_PATH = Path("/var/lib/tec-tac/lifecycle.lock")
+_LIFECYCLE_LOCK_HANDLE = None
+
+
+def acquire_lifecycle_lock():
+    """Hold the Tec-Tac lifecycle lock for the rest of this process (1.18.4).
+
+    A restore that installs Tec-Tac components must not overlap a System Update, a module job or the UI sync publish, because
+    they rename the same folders. Non-blocking: busy refuses the restore before anything is changed. The handle stays open
+    until the process exits. The --install-restored child runs under this lock and must never take it again.
+    """
+    global _LIFECYCLE_LOCK_HANDLE
+    try:
+        LIFECYCLE_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+        handle = LIFECYCLE_LOCK_PATH.open("a+")
+    except OSError as exc:
+        reason = " ".join(str(exc).split()) or exc.__class__.__name__
+        raise RuntimeError(f"the Tec-Tac lifecycle lock could not be opened ({reason}); the restore was not started") from exc
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        handle.close()
+        raise RuntimeError("another Tec-Tac lifecycle operation is already running; the restore was not started") from exc
+    except OSError as exc:
+        handle.close()
+        reason = " ".join(str(exc).split()) or exc.__class__.__name__
+        raise RuntimeError(f"the Tec-Tac lifecycle lock could not be taken ({reason}); the restore was not started") from exc
+    _LIFECYCLE_LOCK_HANDLE = handle
+
+
 def sha256_file(path: Path):
     digest = hashlib.sha256()
     with path.open("rb") as fh:
@@ -4275,6 +4305,10 @@ def operation_restore_backup(config, job, log):
         atomic_json(job_path(job["id"],config),job)
 
         job["stage"]="restore-prepared"; atomic_json(job_path(job["id"],config),job)
+        if mode in {"full", "tec_tac"}:
+            # 1.18.4: these modes install Tec-Tac components, so exclude System Update, module jobs and the UI sync publish
+            # first. Busy refuses here, before any snapshot, service stop or file move.
+            acquire_lifecycle_lock()
         security_snapshot = _capture_restore_security_state(config, stage) if mode in {"full", "tec_tac"} else None
         moved_root=None
         snapshot=None

@@ -86,11 +86,13 @@ branch = helper_src[branch_at : helper_src.index('sys.argv[1] == "--install-rest
 assert "except (RuntimeError, OSError) as exc:" in branch
 assert "[TEC-TAC] UI module sync script not published: {reason}" in branch
 assert "raise SystemExit(1)" in branch
-assert branch.count("sys.stderr.write") == 1
+# 1.18.4: two lines, one per failure source (lock failure, publish failure); each is a single stderr line and exit 1
+assert branch.count("sys.stderr.write") == 2
 
 # (4b) 1.18.3: the lifecycle lock is taken before the publish; busy means a stdout skip line and exit 0
 assert branch.index("acquire_lifecycle_lock()") < branch.index("publish_ui_sync_from_checkout()")
-lock_part = branch[: branch.index("publish_ui_sync_from_checkout()")]
+# 1.18.4 adds an "except OSError" clause (one stderr line, exit 1); the busy clause is what comes before it
+lock_part = branch[: branch.index("except OSError as exc:")]
 assert "except RuntimeError:" in lock_part
 assert "sys.stdout.write(" in lock_part and "a System Update, restore or module job is running" in lock_part
 assert "raise SystemExit(0)" in lock_part and "SystemExit(1)" not in lock_part
