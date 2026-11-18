@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.18.2",
+  "version": "1.18.3",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.18.2.md",
-      "size": 5748,
-      "sha256": "79f2c7d65574d4cda0587f6f026293ecd9cfca05ccf7427388c92fc977bdbfea"
+      "path": "RELEASE_NOTES_1.18.3.md",
+      "size": 6085,
+      "sha256": "b920050c465e0a302ae37b42267bfa3c636311622510749863e9ff35a612fc9a"
     },
     {
       "path": "VERSION",
       "size": 7,
-      "sha256": "0a1b17e91d514c0c9e88520e6091e2d52a6faf8296892cad7355ff0723a42914"
+      "sha256": "971171832ee417b360496643c2ab1b02138c5fbea6bbcdb2f2d774ff85c4e77f"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -1727,6 +1727,11 @@
       "sha256": "7552358e5c87a0e5a05f87368d0fad48a80e1870975722858587a58b1c9e9917"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.18.2.md",
+      "size": 5748,
+      "sha256": "79f2c7d65574d4cda0587f6f026293ecd9cfca05ccf7427388c92fc977bdbfea"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.2.0.md",
       "size": 1977,
       "sha256": "7d78abb704c7a3e459f7437cb0bdcc7ea738f76e97b925f2b4e16466a812cd54"
@@ -2913,8 +2918,8 @@
     },
     {
       "path": "install.sh",
-      "size": 85097,
-      "sha256": "41ee6a01a3d99c845751201a68a82881031c7c2ea005d21e341ad369c654b623"
+      "size": 85360,
+      "sha256": "1d9fd486809112e11ce134e3ec58e54a66371f67fb2b8f164a44e7888f4a2b50"
     },
     {
       "path": "reportsets/.gitkeep",
@@ -3073,8 +3078,8 @@
     },
     {
       "path": "scripts/system-update-helper.py",
-      "size": 141029,
-      "sha256": "673406eb959e8ea634f32073017dc6d4a07b353709da3151840a94588fcd015c"
+      "size": 141579,
+      "sha256": "eaf0a97bcf29a823e196c6bedf631dc9e6b10fccd6495eb2b78d91db7a7d71df"
     },
     {
       "path": "scripts/tactical-backup-sudo.py",
@@ -3099,7 +3104,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 76,
-      "sha256": "cd2ee933ddb7f7717807d456865ed804da188c60452aa6715bb6f14d26d19072"
+      "sha256": "b95863a970b1d36e5cdf4100fc9eed5ac675dc5bf02b28a0cd1ee95ef430f139"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -6657,9 +6662,9 @@
       "sha256": "93bfa171a7518fd31c3c35e0bffbf17e9608476dc8f7b59f977a83a74551d352"
     },
     {
-      "path": "tests/ui-sync-auto-publish-1.18.2.py",
-      "size": 4388,
-      "sha256": "e0bb47f0d13d8215661b58395931af44dec2db71db4fcfe2726b90822fbaefa4"
+      "path": "tests/ui-sync-auto-publish-1.18.3.py",
+      "size": 9976,
+      "sha256": "a18ab3a7c9c42381e7cdc222a6b0b1ba0f508da91e8bd2c4bb2570dffcc861a6"
     },
     {
       "path": "tests/update-source-1.17.2.py",
@@ -6692,9 +6697,9 @@
       "sha256": "9fc70da5923a2808e009896ff1fce0abb1ae507e847cf28b05faea1575d30714"
     },
     {
-      "path": "tests/version-1.18.2.py",
-      "size": 1990,
-      "sha256": "fbfcaad1ddcc3551d1c7f1db7df93b71f039a6d1209198269655c3db91903004"
+      "path": "tests/version-1.18.3.py",
+      "size": 2128,
+      "sha256": "aa852265f37d2325e1e4c562fa84ce43948c5749707e17b1f1ce549f2375bae7"
     },
     {
       "path": "tests/version-rebuild-ordering.py",

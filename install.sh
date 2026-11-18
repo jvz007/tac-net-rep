@@ -960,9 +960,14 @@ fi
 log "Installed independent Tec-Tac system update worker: ${SYSTEM_UPDATE_HELPER}"
 # 1.17.98: publish the UI module sync script as a root-owned copy, taken from the UI checkout only after it verified against its
 # signed release (the same staging and verifier as a System Update). Without a signed UI checkout nothing changes.
-UI_SYNC_REASON="$(/usr/bin/python3 -I "${SOURCE_ROOT}/scripts/system-update-helper.py" --publish-ui-sync 2>&1 >/dev/null)" || {
+# 1.18.3: the helper's stdout (published line or skip reason) goes to the install output; only stderr is kept for the warning.
+UI_SYNC_ERR="$(mktemp)"
+if ! /usr/bin/python3 -I "${SOURCE_ROOT}/scripts/system-update-helper.py" --publish-ui-sync 2>"${UI_SYNC_ERR}"; then
+    UI_SYNC_REASON="$(tr -s '\n' ' ' < "${UI_SYNC_ERR}")"
+    UI_SYNC_REASON="${UI_SYNC_REASON% }"
     log "WARNING: ${UI_SYNC_REASON:-the UI module sync script was not published from a verified UI checkout}. Module UI sync stays off until a UI install or System Update publishes it (${UI_SYNC_SCRIPT_PATH}); a later UI install publishes it automatically."
-}
+fi
+rm -f "${UI_SYNC_ERR}"
 
 # 1.18.2: publish the UI sync script after a UI install without a second Core install. The UI installer re-creates the deployed
 # UI folder; this root path unit sees its VERSION file change and runs the same verified --publish-ui-sync (no new sudoers line).

@@ -2803,6 +2803,13 @@ if __name__ == "__main__":
         except RuntimeError as exc:
             raise SystemExit(str(exc))
     elif len(sys.argv) == 2 and sys.argv[1] == "--publish-ui-sync":
+        # 1.18.3: take the lifecycle lock first, so the publish never overlaps a System Update, restore or module job (they
+        # rename the same folders). The handle stays open for the life of the process. Busy: skip, publish nothing, exit 0.
+        try:
+            acquire_lifecycle_lock()
+        except RuntimeError:
+            sys.stdout.write("[TEC-TAC] UI module sync script not published: a System Update, restore or module job is running; it publishes the script itself or the next UI install does\n")
+            raise SystemExit(0)
         try:
             publish_ui_sync_from_checkout()
         except (RuntimeError, OSError) as exc:
