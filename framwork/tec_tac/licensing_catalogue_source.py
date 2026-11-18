@@ -549,3 +549,271 @@ def download_release(
     if files.trust.get("package_sha256") != release.get("sha256"):
         raise LicensingSourceError("release_mismatch")
     return files
+
+
+# --- the allowed-module list (1.18.10) -----------------------------------------------------------------------------------------
+#
+# ``licensing.allowed_modules`` 1.0.0 is Core-only too (AD-56) and checks the same thing: the first frame outside Licensing must be this
+# file. So every call below goes straight from this file to the provider method. Core's views never call the provider. What leaves this
+# file is whitelisted and type-checked: no key, grant, token, Licensing Server address, SHA-256, publisher id or key id.
+
+ALLOWED_CAPABILITY_ID = "licensing.allowed_modules"
+ALLOWED_CAPABILITY_RANGE = ">=1.0.0,<2.0.0"
+
+_ALLOWED_ID_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
+_CHANNEL_WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,31}")
+PLAN_STATES = frozenset({"valid", "expired", "none", "invalid"})
+# Every state Licensing's allowed_modules answers with (its TEXT keys). Any other word is an invalid answer.
+ALLOWED_STATES = frozenset({
+    "ok", "cached", "saved", "not_fetched", "not_registered", "licence_revoked", "licence_expired", "licence_grace_expired",
+    "licence_refused", "licence_policy_unreadable", "channel_not_permitted", "licensing_unavailable", "invalid_response", "audit_unavailable",
+    "plan_unavailable", "plan_invalid", "plan_expired", "plan_rollback", "plan_wrong_server", "plan_channel_not_permitted",
+    "issuer_not_pinned", "caller_not_allowed", "plan_conflict", "category_unknown", "locked", "required_by", "bad_request",
+})
+# Core's own sentences for the selection route (they never come from Licensing).
+CORE_ALLOWED_TEXT = {
+    "unknown_module": "That module is not on the list of modules this licence allows, so nothing was changed.",
+    "locked": "That module cannot be deselected. Only licensed premium modules can.",
+    "bad_request": "The request was not valid. Send a module id and true or false.",
+    "saved": "Saved.",
+    "not_fetched": "Licensing has not asked the Licensing Server for the allowed modules yet. Use Refresh.",
+    "cached": "The list was refreshed less than a minute ago, so Licensing used the saved list.",
+}
+_ALLOWED_TOP_DEFAULTS = {
+    "plan_state": "none", "plan_revision": None, "channel": None, "plan_issued_at": None, "plan_expires_at": None, "fetched_at": None,
+    "from_cache": True, "last_refresh_state": None,
+}
+
+
+class _BadAllowed(ValueError):
+    pass
+
+
+def _allowed_provider():
+    """The licensing.allowed_modules provider, or None. Looked up fresh on each call and never kept."""
+    try:
+        from .capabilities import get_capability
+
+        return get_capability(ALLOWED_CAPABILITY_ID, version=ALLOWED_CAPABILITY_RANGE)
+    except Exception as exc:
+        logger.warning("The licensing.allowed_modules provider is not available (%s).", exc.__class__.__name__)
+        return None
+
+
+def _call_allowed(operation: str, **kwargs) -> tuple[str, dict | None]:
+    """(state, answer). Unlike ``_call`` this returns the answer for every state Licensing knows, because a list that is not fetched yet
+    or a refresh that was cached still carries a message the administrator needs. The provider method is called from this function, so
+    the first frame Licensing judges is this file."""
+    provider = _allowed_provider()
+    if provider is None:
+        return "licensing_unavailable", None
+    try:
+        answer = getattr(provider, operation)(**kwargs)
+    except Exception as exc:
+        # A refused caller, a missing method, a bug or a crash: all read as "no answer". Only the class name is logged.
+        logger.warning("licensing.allowed_modules.%s failed (%s).", operation, exc.__class__.__name__)
+        return "licensing_unavailable", None
+    if not isinstance(answer, dict) or not isinstance(answer.get("state"), str) or answer["state"] not in ALLOWED_STATES:
+        return "invalid_response", None
+    return answer["state"], answer
+
+
+def _allowed_message(state: str, answer: dict | None = None) -> str:
+    """Core's own sentence when it has one. Otherwise Licensing's sentence for its own state, stripped of control characters and cut to
+    400 characters. It is shown as text and never read as anything else."""
+    own = TEXT.get(state) or CORE_ALLOWED_TEXT.get(state)
+    if own:
+        return own
+    return _text((answer or {}).get("message"), 400) or TEXT["licensing_unavailable"]
+
+
+def _strict_bool(value: Any) -> bool:
+    if not isinstance(value, bool):
+        raise _BadAllowed("bool")
+    return value
+
+
+def _id_list(value: Any, limit: int = 200) -> list[str]:
+    if not isinstance(value, list) or len(value) > limit:
+        raise _BadAllowed("list")
+    out = []
+    for item in value:
+        if not isinstance(item, str) or not _ALLOWED_ID_RE.fullmatch(item):
+            raise _BadAllowed("id")
+        out.append(item)
+    return out
+
+
+def _release_dependencies(value: Any) -> dict[str, str]:
+    """{module id: constraint}, for display. Core re-reads and checks the dependencies itself at install."""
+    if value is None or value == [] or value == {}:
+        return {}
+    pairs: list[tuple[Any, Any]] = []
+    if isinstance(value, dict):
+        pairs = list(value.items())
+    elif isinstance(value, list):
+        for item in value:
+            if isinstance(item, str):
+                match = _DEP_ID_RE.fullmatch(item.strip())
+                if not match:
+                    raise _BadAllowed("dependency")
+                pairs.append((match.group(1), match.group(2).strip() or "*"))
+            elif isinstance(item, dict):
+                pairs.append((item.get("id") or item.get("module_id") or item.get("module"),
+                              item.get("constraint") or item.get("version") or item.get("requires") or item.get("range") or "*"))
+            else:
+                raise _BadAllowed("dependency")
+    else:
+        raise _BadAllowed("dependency")
+    if len(pairs) > 100:
+        raise _BadAllowed("dependency")
+    result: dict[str, str] = {}
+    for dep_id, constraint in pairs:
+        constraint = "*" if constraint in (None, "") else constraint
+        if not isinstance(dep_id, str) or not _MODULE_ID_RE.fullmatch(dep_id) or not isinstance(constraint, str):
+            raise _BadAllowed("dependency")
+        cleaned = _text(constraint, 64)
+        if cleaned is None:
+            raise _BadAllowed("dependency")
+        result[dep_id] = cleaned
+    return result
+
+
+def _trimmed_release(value: Any) -> dict | None:
+    """release_id, version, channel and dependencies only. The SHA-256, publisher id and key id stay inside Core's later install check."""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise _BadAllowed("release")
+    try:
+        release_id = str(uuid.UUID(str(value.get("release_id"))))
+    except ValueError:
+        raise _BadAllowed("release_id") from None
+    version = _text(value.get("version"), 64)
+    channel = value.get("channel")
+    if version is None or (channel is not None and not (isinstance(channel, str) and _CHANNEL_WORD_RE.fullmatch(channel))):
+        raise _BadAllowed("release")
+    return {"release_id": release_id, "version": version, "channel": channel, "dependencies": _release_dependencies(value.get("dependencies"))}
+
+
+def _allowed_row(item: Any) -> dict:
+    if not isinstance(item, dict):
+        raise _BadAllowed("row")
+    module_id = item.get("id")
+    if not isinstance(module_id, str) or not _ALLOWED_ID_RE.fullmatch(module_id):
+        raise _BadAllowed("id")
+    category = item.get("category")
+    if category is not None and (not isinstance(category, str) or category not in CATEGORIES):
+        raise _BadAllowed("category")
+    notes = item.get("notes") if item.get("notes") is not None else []
+    if not isinstance(notes, list) or len(notes) > 20:
+        raise _BadAllowed("notes")
+    for key in ("availability", "category_source", "name"):
+        if item.get(key) is not None and not isinstance(item.get(key), str):
+            raise _BadAllowed(key)
+    return {
+        "id": module_id,
+        "name": _text(item.get("name"), 120) or module_id,
+        "category": category,
+        "entitled": _strict_bool(item.get("entitled")),
+        "availability": _text(item.get("availability"), 32),
+        "locked": _strict_bool(item.get("locked")),
+        "optional": _strict_bool(item.get("optional")),
+        "selected": _strict_bool(item.get("selected")),
+        "in_plan": _strict_bool(item.get("in_plan")),
+        "required_by": _id_list(item.get("required_by") if item.get("required_by") is not None else []),
+        "notes": [t for t in (_text(n, 64) for n in notes if isinstance(n, str)) if t],
+        "category_source": _text(item.get("category_source"), 32),
+        "release": _trimmed_release(item.get("release")),
+    }
+
+
+def _allowed_top(answer: dict) -> dict:
+    """The plan fields of an answer, best effort. A field that is not the expected type becomes its default (display only)."""
+    top = dict(_ALLOWED_TOP_DEFAULTS)
+    plan_state = answer.get("plan_state")
+    if isinstance(plan_state, str) and plan_state in PLAN_STATES:
+        top["plan_state"] = plan_state
+    revision = answer.get("plan_revision")
+    if isinstance(revision, int) and not isinstance(revision, bool):
+        top["plan_revision"] = revision
+    elif isinstance(revision, str):
+        top["plan_revision"] = _text(revision, 64)
+    for key, limit in (("channel", 32), ("plan_issued_at", 40), ("plan_expires_at", 40), ("fetched_at", 40), ("last_refresh_state", 64)):
+        top[key] = _text(answer.get(key), limit)
+    if isinstance(answer.get("from_cache"), bool):
+        top["from_cache"] = answer["from_cache"]
+    return top
+
+
+def _allowed_body(state: str, answer: dict | None) -> dict:
+    """One whitelisted body. Rows come out only for ok (and a cached refresh). A malformed answer is invalid_response with no rows."""
+    body: dict[str, Any] = {"ok": False, "state": state, "message": _allowed_message(state, answer), **_ALLOWED_TOP_DEFAULTS, "count": 0, "modules": []}
+    if answer is None:
+        return body
+    body.update(_allowed_top(answer))
+    if state not in ("ok", "cached"):
+        return body
+    try:
+        modules = answer.get("modules")
+        if not isinstance(modules, list) or len(modules) > MAX_RELEASES:
+            raise _BadAllowed("modules")
+        rows = [_allowed_row(item) for item in modules]
+        if len({row["id"] for row in rows}) != len(rows):
+            raise _BadAllowed("duplicate")
+    except _BadAllowed:
+        return {**body, "ok": False, "state": "invalid_response", "message": TEXT["invalid_response"], "modules": [], "count": 0}
+    body.update(ok=True, modules=rows, count=len(rows))
+    return body
+
+
+def read_allowed_modules() -> dict:
+    """The allowed-module list for the browser: Licensing's ``list_modules`` through Core, whitelisted. A missing, disabled, unhealthy or
+    refusing provider is ``licensing_unavailable`` with no rows, never an unrestricted list. No network call: Licensing reads saved state."""
+    state, answer = _call_allowed("list_modules")
+    return _allowed_body(state, answer)
+
+
+def refresh_allowed_modules() -> dict:
+    """Licensing's ``refresh`` through Core. Licensing asks the Licensing Server at most once a minute and answers ``cached`` inside it."""
+    state, answer = _call_allowed("refresh")
+    return _allowed_body(state, answer)
+
+
+def _selection_body(state: str, module_id: str, selected: bool, answer: dict | None = None) -> dict:
+    body: dict[str, Any] = {"ok": state == "saved", "state": state, "message": _allowed_message(state, answer), "module_id": module_id,
+                            "selected": selected, "before": [], "after": [], "required_by": []}
+    if answer is None:
+        return body
+    try:
+        if state == "saved":
+            body["before"] = _id_list(answer.get("before"), 5000)
+            body["after"] = _id_list(answer.get("after"), 5000)
+        elif state == "required_by":
+            body["required_by"] = _id_list(answer.get("required_by") if answer.get("required_by") is not None else [])
+    except _BadAllowed:
+        return {**body, "ok": False, "state": "invalid_response", "message": TEXT["invalid_response"], "before": [], "after": [], "required_by": []}
+    return body
+
+
+def set_premium_selection(module_id: Any, selected: Any) -> dict:
+    """Select or deselect one entitled, optional premium module (the administrator's own choice in Licensing's saved state).
+
+    Core checks first, before it calls Licensing: the id's shape, a real bool, and that the id is on the list Licensing just gave as an
+    entitled, optional premium row. A Core or Server row, an unentitled row and an id outside the list are refused here. Licensing's own
+    ``set_selection`` then keeps the ``required_by`` refusal and the row-locked write. There is no fallback: a provider without
+    ``set_selection`` is ``licensing_unavailable``. Nothing is installed or removed."""
+    if not isinstance(module_id, str) or not _ALLOWED_ID_RE.fullmatch(module_id) or not isinstance(selected, bool):
+        return _selection_body("bad_request", module_id if isinstance(module_id, str) and _ALLOWED_ID_RE.fullmatch(module_id) else "", False)
+    current = read_allowed_modules()
+    if current["state"] != "ok":
+        return _selection_body(current["state"], module_id, selected)
+    row = next((r for r in current["modules"] if r["id"] == module_id), None)
+    if row is None:
+        return _selection_body("unknown_module", module_id, selected)
+    if row["category"] != "premium" or not row["optional"] or row["locked"] or not row["entitled"]:
+        return _selection_body("locked", module_id, selected)
+    state, answer = _call_allowed("set_selection", module_id=module_id, selected=selected)
+    if state not in ("saved", "locked", "required_by", "bad_request"):
+        return _selection_body(state if state in ("licensing_unavailable", "invalid_response") else "licensing_unavailable", module_id, selected)
+    return _selection_body(state, module_id, selected, answer)

@@ -2160,6 +2160,47 @@ HTTP_CONTRACT_DETAILS = {
             ],
         },
     },
+    "/api/tfd/modules/catalog/allowed/": {
+        "GET": {
+            "authorization": "authenticated Tec-Tac session with core.privileged_operations (module management); anyone else gets 403 and no rows",
+            "response": {
+                "ok": "boolean; true only when Licensing answered ok with a readable list",
+                "state": "ok, not_fetched, a Licensing state (not_registered, licence_revoked, licence_expired, licence_grace_expired, licence_refused, channel_not_permitted, plan_*), licensing_unavailable or invalid_response",
+                "message": "one plain sentence",
+                "modules": "array of {id, name, category (core, server, premium or null), entitled, availability, locked, optional, selected, in_plan, required_by (module ids), notes, category_source, release}; release is null or {release_id, version, channel, dependencies {module id: constraint}}; empty unless state is ok",
+                "count": "whole number, len(modules)",
+                "plan_state": "valid, expired, none or invalid", "plan_revision": "whole number or null", "channel": "text or null",
+                "plan_issued_at": "text or null", "plan_expires_at": "text or null", "fetched_at": "text or null", "from_cache": "boolean", "last_refresh_state": "text or null",
+            },
+            "errors": {"403": "no module management permission", "502": "Licensing's answer was not in the expected form (state invalid_response)", "503": "the Licensing module is missing, disabled, unhealthy or refused Core (state licensing_unavailable)"},
+            "notes": [
+                "Added 1.18.10 (module-facing, additive; the first reader is Welcome 1.2.15, no other module calls this route). Core reads the Core-only capability licensing.allowed_modules 1.0.0 (AD-56) from licensing_catalogue_source.py, the one file Licensing accepts, and answers a whitelisted copy. The release object carries no SHA-256, publisher_id or key_id (Core checks those itself at install). No key, grant, token or Licensing Server address is ever returned. A missing or refusing provider is never an unrestricted list. This GET makes no call to the Licensing Server and installs nothing.",
+            ],
+        },
+    },
+    "/api/tfd/modules/catalog/allowed/refresh/": {
+        "POST": {
+            "authorization": "authenticated Tec-Tac session with core.privileged_operations; audited (action run, object type allowed_modules, object id refresh)",
+            "response": {"body": "the same shape as GET /api/tfd/modules/catalog/allowed/; state cached when Licensing refreshed less than a minute ago (modules then hold the saved list)"},
+            "errors": {"403": "no module management permission", "502": "invalid_response", "503": "licensing_unavailable"},
+            "notes": ["Added 1.18.10 (additive). Licensing asks the Licensing Server at most once a minute. Nothing is installed."],
+        },
+    },
+    "/api/tfd/modules/catalog/allowed/selection/": {
+        "PUT": {
+            "authorization": "authenticated Tec-Tac session with core.privileged_operations; audited (modify on a saved change, deny on a refusal; object type module_selection)",
+            "request": {"module_id": "required lower-case module id", "selected": "required boolean"},
+            "response": {"200": "{ok, state saved, message, module_id, selected, before, after}: before and after are the lists of deselected premium module ids"},
+            "errors": {
+                "400": "bad_request: not a valid id or not a boolean",
+                "403": "locked: a Core or Server module, an unlicensed module, or no module management permission",
+                "404": "unknown_module: the id is not on the allowed list, so nothing can be added",
+                "409": "required_by: another selected module needs this one (required_by lists them)",
+                "502": "invalid_response", "503": "licensing_unavailable (also when Licensing has no set_selection)",
+            },
+            "notes": ["Added 1.18.10 (additive). Core refuses before it calls Licensing anything that is not an entitled, optional premium row of the list it just read, then calls Licensing's own set_selection. Deselecting never installs, removes or disables an installed module."],
+        },
+    },
     "/api/tfd/modules/v2/packages/inspect/": {
         "POST": {
             "request": {

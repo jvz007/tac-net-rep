@@ -35,6 +35,8 @@ Two read-only checks sit in the Runtime services section. Both use only `lstat` 
 
 Limit: the UI sync check cannot prove the published bytes match the signed UI release, because that needs root.
 
+If either check raises an unexpected error (for example an unreadable path or odd text from `systemctl`), the report still answers with every other check, and that check shows `unknown` with the error class name (1.18.10). `unknown` counts as a warning in the overall result.
+
 ## Module repository (1.17.99)
 
 - **`repository_retired` on the Online catalogue.** The repository answered HTTP 401, 403, 404 or 410. Its old releases are not offered. Upload the signed `.zip`, `.zip.sig` and `.release.json` on Settings → Modules. See `docs/module-repositories.md`.

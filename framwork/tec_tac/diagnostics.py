@@ -6,6 +6,7 @@ state without repairing or mutating production state.
 """
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +21,8 @@ from .contracts import build_contract_catalog, framework_version
 from .module_manager_v2 import installed_catalog_v2
 from .scheduler import scheduler_health
 from .trusted_publishers import TRUST_ROOT, list_trusted_publishers
+
+logger = logging.getLogger(__name__)
 
 STATUS_ORDER = {"pass": 0, "warning": 1, "fail": 2, "unknown": 1}
 
@@ -317,28 +320,42 @@ def _helper_check() -> dict:
     return _check("core.helpers.privileged", "Privileged helpers", "fail" if bad else "pass", f"{len(rows) - len(bad)} of {len(rows)} Core helper entrypoints are present and executable.", details=rows, help_id="core.troubleshooting-diagnostics")
 
 
-def _source_ownership_check() -> dict:
-    from .config import load_layout
-    from .diagnostics_install import source_ownership_check
+def _could_not_run(check_id: str, label: str, exc: Exception) -> dict:
+    """1.18.10: a check that raised is one 'unknown' row, so the report still answers with every other check. Only the exception's class
+    name is logged and shown: no path and no message text."""
+    name = exc.__class__.__name__
+    logger.warning("The diagnostics check %s could not run (%s).", check_id, name)
+    return _check(check_id, label, "unknown", f"This check could not run ({name}). The rest of the report is unaffected.", help_id="core.troubleshooting-diagnostics")
 
-    return source_ownership_check(load_layout)
+
+def _source_ownership_check() -> dict:
+    try:
+        from .config import load_layout
+        from .diagnostics_install import source_ownership_check
+
+        return source_ownership_check(load_layout)
+    except Exception as exc:
+        return _could_not_run("core.install.source-ownership", "Source folder ownership", exc)
 
 
 def _ui_module_sync_check() -> dict:
-    from .config import load_layout
-    from .diagnostics_install import ui_module_sync_check
+    try:
+        from .config import load_layout
+        from .diagnostics_install import ui_module_sync_check
 
-    def _is_enabled(unit: str) -> dict:
-        import subprocess
+        def _is_enabled(unit: str) -> dict:
+            import subprocess
 
-        try:
-            proc = subprocess.run(["systemctl", "is-enabled", unit], capture_output=True, text=True, timeout=3, check=False)
-        except subprocess.TimeoutExpired as exc:
-            raise TimeoutError("systemctl is-enabled took longer than 3 seconds") from exc
-        text = (proc.stdout or proc.stderr or "").strip().splitlines()
-        return {"state": text[0] if text else "unknown"}
+            try:
+                proc = subprocess.run(["systemctl", "is-enabled", unit], capture_output=True, text=True, timeout=3, check=False)
+            except subprocess.TimeoutExpired as exc:
+                raise TimeoutError("systemctl is-enabled took longer than 3 seconds") from exc
+            text = (proc.stdout or proc.stderr or "").strip().splitlines()
+            return {"state": text[0] if text else "unknown"}
 
-    return ui_module_sync_check(load_layout, systemctl_runner=_is_enabled)
+        return ui_module_sync_check(load_layout, systemctl_runner=_is_enabled)
+    except Exception as exc:
+        return _could_not_run("core.ui.module-sync", "UI module sync", exc)
 
 
 def _storage_check() -> dict:

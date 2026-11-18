@@ -282,6 +282,29 @@ Each licensed release now has one state. Only `available` can be installed. Ever
 
 **No category on the Licensing Server (1.17.109, AD-21).** Core treats a licensed release with no category as `test`. On a development server, in the `development` channel, it is offered with the warning "Unclassified on the Licensing Server: treated as test" (`category_warning` on the row). On any other server, or in the testing or production channel, it is `unclassified` and never offered. The development-server test is the one Core already uses for test modules at install (`TEC_TAC_ENVIRONMENT=development` in the root config). The category Core acts on at install is always the signed manifest's: the Licensing Server's category is for display and filtering only.
 
+### The modules this licence allows (1.18.10)
+
+Licensing keeps a list of the modules your licence allows, and the releases an administrator wants installed. Core serves that list to the browser through three routes. Welcome 1.2.15 builds its module picker on them. Nothing on this page installs or removes a module.
+
+| Route | What it does |
+|---|---|
+| `GET /api/tfd/modules/catalog/allowed/` | Reads the saved list. It makes no call to the Licensing Server. |
+| `POST /api/tfd/modules/catalog/allowed/refresh/` | Asks Licensing to refresh the list. Licensing calls the Licensing Server at most once a minute and answers `cached` inside that minute. Core writes an audit row (`run`, `allowed_modules`). |
+| `PUT /api/tfd/modules/catalog/allowed/selection/` | Body `{"module_id": "...", "selected": true or false}`. Ticks or unticks one licensed premium module. Core writes an audit row (`modify`, `module_selection`, with the before and after lists, or `deny` for a refusal). |
+
+**Who may use them.** Anyone with `core.privileged_operations` (a module manager). Everyone else gets 403. The check runs first and fails closed.
+
+**What a row holds.** `id`, `name`, `category` (`core`, `server` or `premium`), `entitled`, `availability`, `locked`, `optional`, `selected`, `in_plan`, `required_by`, `notes`, `category_source` and `release`. A release holds `release_id`, `version`, `channel` and `dependencies`. It never holds the SHA-256, the publisher id or the key id: Core checks those itself when it installs. The top level holds `ok`, `state`, `message`, `plan_state`, `plan_revision`, `channel`, `plan_issued_at`, `plan_expires_at`, `fetched_at`, `from_cache`, `count`, `modules` and `last_refresh_state`. No key, grant, token or Licensing Server address ever leaves Core.
+
+**Rules.**
+
+- Core and Server modules are `locked` and always `selected`. Only an entitled premium module can be unticked.
+- Core refuses a Core or Server module, an unlicensed module and an id that is not on the list before it calls Licensing. Nothing can be added from outside the list.
+- Licensing refuses to untick a module that another selected module needs (`required_by`, answered with 409).
+- A missing, disabled, unhealthy or refusing Licensing module gives `licensing_unavailable` (503) and an empty list. It is never an unrestricted list. A Licensing answer in the wrong shape gives `invalid_response` (502) and no rows.
+- Any other Licensing state (`not_fetched`, `plan_expired`, `licence_revoked` and so on) comes back with its sentence and no rows, so nothing is offered for install.
+- Unticking a module never installs, uninstalls or disables anything.
+
 ### Troubleshooting
 
 | What you see | What it means | What to do |
