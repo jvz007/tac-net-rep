@@ -61,6 +61,14 @@ class TecTacFrameworkConfig(AppConfig):
             register_core_secrets_capability()
         except Exception:
             logger.exception("Tec-Tac core.secrets capability registration failed")
+        # 1.18.6: core.client_address (the request's client address as Core resolves it). Guarded like core.secrets: a fault here never
+        # aborts start-up, and a module that finds no capability (has_capability) refuses.
+        try:
+            from .client_address import register_core_client_address_capability
+
+            register_core_client_address_capability()
+        except Exception:
+            logger.exception("Tec-Tac core.client_address capability registration failed")
         # 1.17.116: core.sandbox (runs a signed module's program unprivileged; AD-63). Patch 1: status and describe only, the kill switch is off.
         # Guarded like core.secrets: a fault here never aborts start-up, and a module that finds no capability (has_capability) does not use it.
         try:

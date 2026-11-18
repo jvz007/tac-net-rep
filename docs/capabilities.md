@@ -344,3 +344,5 @@ A provider should still not call another capability's status from its health cal
 `core.patch_lockdown` 1.0.0 (Core 1.17.68, read-only `status()`): whether Tactical's own patch policy is switched off because a replacement of Windows Patching (Advanced Patch Management) is honoured. On while that replacement is honoured and does nothing otherwise (AD-41, Johan, 21 October 2026). See `docs/patch-lockdown.md`.
 
 `core.module_dependants` 1.0.0 (Core 1.17.71, `dependants()`): which installed modules name the calling module in their signed `dependencies` or `optional_dependencies`. Answers only about the caller itself, fails closed. See `docs/module-dependants.md`.
+
+`core.client_address` 1.0.0 (Core 1.18.6, additive, read-only `client_address(request)`): the address of a request as Core itself resolves it, with Core's own trusted proxy list and no policy argument. An empty string means unknown, and the consumer refuses. Needs framework >=1.18.6. See `docs/client-address.md`.
