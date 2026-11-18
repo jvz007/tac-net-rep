@@ -1,0 +1,221 @@
+"""Install-state checks for the diagnostics report (1.18.9, request R2 from Welcome).
+
+Django-free on purpose: the stat calls, the config reader and the systemctl runner are passed in, so the rules run in tests
+on any PC. Everything here is read-only: os.lstat on a few paths and one injected ``systemctl is-enabled`` call. No root,
+no helper, no privilege rule. A fact that cannot be read is "unknown" with the reason, never "pass".
+"""
+from __future__ import annotations
+
+import os
+import posixpath
+import stat as stat_module
+from collections.abc import Callable
+from typing import Any
+
+SOURCE_OWNERSHIP_ID = "core.install.source-ownership"
+UI_SYNC_ID = "core.ui.module-sync"
+HELP_ID = "core.troubleshooting-diagnostics"
+DEFAULT_UI_SYNC_SCRIPT = "/usr/local/lib/tec-tac-ui-sync/scripts/sync-modules.sh"
+DEFAULT_UI_DEPLOY_ROOT = "/var/lib/tec-tac/ui/tec-tac"
+UI_SYNC_UNIT = "tec-tac-ui-sync-publish.path"
+_DISABLED_STATES = {"disabled", "masked", "masked-runtime", "not-found", "linked", "linked-runtime", "static", "indirect", "generated", "transient", "bad"}
+
+
+def _check(check_id: str, label: str, status: str, summary: str, *, details: Any = None, metadata: dict | None = None) -> dict:
+    return {"id": check_id, "label": label, "status": status, "summary": str(summary or ""), "details": details, "help_id": HELP_ID, "metadata": dict(metadata or {})}
+
+
+def _read_layout(layout_reader: Callable[[], dict]) -> tuple[dict | None, str | None]:
+    try:
+        return dict(layout_reader()), None
+    except (OSError, ValueError) as exc:  # the config file can be unreadable or malformed
+        return None, f"{exc.__class__.__name__}: {exc}"
+
+
+def _parents(path: str) -> list[str]:
+    """Every folder from / down to the parent of path, in order."""
+    parts = [p for p in posixpath.normpath(path).split("/") if p]
+    folders = ["/"]
+    for index in range(1, len(parts)):
+        folders.append("/" + "/".join(parts[:index]))
+    return folders
+
+
+def _folder_problem(info: Any) -> str | None:
+    """The rule open_source_checkout applies in system-update-helper.py: a real folder, root-owned, not group/world writable."""
+    if stat_module.S_ISLNK(info.st_mode):
+        return "a symbolic link"
+    if not stat_module.S_ISDIR(info.st_mode):
+        return "not a folder"
+    if info.st_uid != 0 or info.st_mode & 0o022:
+        return "not root-owned" if info.st_uid != 0 else "group or world writable"
+    return None
+
+
+def _owner_fix(folder: str) -> str:
+    return f"Run: sudo chown root:root {folder} && sudo chmod 0755 {folder}"
+
+
+def _reason(exc: OSError) -> str:
+    return f"{exc.__class__.__name__}: {exc.strerror or exc}"
+
+
+def source_ownership_check(layout_reader: Callable[[], dict], lstat: Callable[[str], Any] = os.lstat) -> dict:
+    label = "Source folder ownership"
+    layout, error = _read_layout(layout_reader)
+    if layout is None:
+        return _check(SOURCE_OWNERSHIP_ID, label, "unknown", f"The Tec-Tac layout could not be read ({error}).")
+    checkouts = [posixpath.normpath(layout.get(key) or default) for key, default in
+                 (("TEC_TAC_FRAMEWORK_SOURCE", "/opt/tec-tac-src/framework"), ("TEC_TAC_UI_SOURCE", "/opt/tec-tac-src/ui"))]
+    folders: list[str] = []
+    for checkout in checkouts:
+        for folder in _parents(checkout):
+            if folder not in folders:
+                folders.append(folder)
+    rows: list[dict] = []
+    first_fail: str | None = None
+    first_unknown: str | None = None
+    for folder in folders:
+        try:
+            problem = _folder_problem(lstat(folder))
+        except FileNotFoundError:
+            rows.append({"path": folder, "status": "missing"})
+            continue
+        except OSError as exc:
+            rows.append({"path": folder, "status": "unknown", "reason": _reason(exc)})
+            first_unknown = first_unknown or f"{folder} could not be read ({_reason(exc)})."
+            continue
+        if not problem:
+            rows.append({"path": folder, "status": "pass"})
+            continue
+        rows.append({"path": folder, "status": "fail", "problem": problem})
+        if first_fail is None:
+            if problem in {"a symbolic link", "not a folder"}:
+                first_fail = f"{folder} is {problem}. Replace it with a real folder owned by root. {_owner_fix(folder)}"
+            else:
+                first_fail = f"{folder} is {problem}. {_owner_fix(folder)}"
+    notes: list[str] = []
+    for checkout in checkouts:
+        try:
+            info = lstat(checkout)
+        except FileNotFoundError:
+            notes.append(f"{checkout} does not exist yet; only the folders above it were checked.")
+            continue
+        except OSError as exc:
+            notes.append(f"{checkout} could not be read ({exc.__class__.__name__}).")
+            continue
+        # The checkout itself belongs to the Tactical account by design (1.17.98): only a real folder is required.
+        if stat_module.S_ISLNK(info.st_mode) or not stat_module.S_ISDIR(info.st_mode):
+            problem = "a symbolic link" if stat_module.S_ISLNK(info.st_mode) else "not a folder"
+            rows.append({"path": checkout, "status": "fail", "problem": problem})
+            first_fail = first_fail or f"{checkout} is {problem}. Replace it with a real folder owned by the Tactical account."
+    details = {"folders": rows, "checkouts": checkouts, "notes": notes}
+    metadata = {"checkouts": checkouts, "folders_checked": folders}
+    if first_fail:
+        return _check(SOURCE_OWNERSHIP_ID, label, "fail", first_fail, details=details, metadata=metadata)
+    if first_unknown:
+        return _check(SOURCE_OWNERSHIP_ID, label, "unknown", first_unknown, details=details, metadata=metadata)
+    return _check(SOURCE_OWNERSHIP_ID, label, "pass", "Every folder above the source checkouts is root-owned and not writable by others.", details=details, metadata=metadata)
+
+
+def _file_part(path: str, lstat: Callable[[str], Any], *, executable: bool) -> dict:
+    try:
+        info = lstat(path)
+    except FileNotFoundError:
+        return {"path": path, "status": "fail", "reason": "missing"}
+    except OSError as exc:
+        return {"path": path, "status": "unknown", "reason": _reason(exc)}
+    if stat_module.S_ISLNK(info.st_mode):
+        return {"path": path, "status": "fail", "reason": "a symbolic link"}
+    if not stat_module.S_ISREG(info.st_mode):
+        return {"path": path, "status": "fail", "reason": "not a regular file"}
+    if info.st_uid != 0:
+        return {"path": path, "status": "fail", "reason": "not root-owned"}
+    if info.st_mode & 0o022:
+        return {"path": path, "status": "fail", "reason": "group or world writable"}
+    if executable and not info.st_mode & 0o111:
+        return {"path": path, "status": "fail", "reason": "not executable"}
+    return {"path": path, "status": "pass", "mtime": info.st_mtime}
+
+
+def _published_part(script: str, lstat: Callable[[str], Any]) -> dict:
+    reader = posixpath.join(posixpath.dirname(script), "tec-tac-config.sh")
+    files = [_file_part(script, lstat, executable=True), _file_part(reader, lstat, executable=False)]
+    folders = []
+    for folder in _parents(script):
+        try:
+            problem = _folder_problem(lstat(folder))
+        except FileNotFoundError:
+            folders.append({"path": folder, "status": "fail", "reason": "missing"})
+            continue
+        except OSError as exc:
+            folders.append({"path": folder, "status": "unknown", "reason": _reason(exc)})
+            continue
+        folders.append({"path": folder, "status": "fail", "reason": problem} if problem else {"path": folder, "status": "pass"})
+    rows = files + folders
+    failed = [row for row in rows if row["status"] == "fail"]
+    unknown = [row for row in rows if row["status"] == "unknown"]
+    if failed:
+        first = failed[0]
+        if first["path"] == script and first["reason"] == "missing":
+            fix = "The UI sync script is not published. Install Core or run a UI System Update to publish it."
+        else:
+            fix = f"{first['path']} is {first['reason']}. Run a UI System Update, or reinstall Core, to publish a root-owned copy."
+        return {"part": "published", "status": "fail", "fix": fix, "rows": rows}
+    if unknown:
+        return {"part": "published", "status": "unknown", "fix": f"{unknown[0]['path']} could not be read ({unknown[0]['reason']}).", "rows": rows}
+    return {"part": "published", "status": "pass", "rows": rows, "mtime": files[0]["mtime"]}
+
+
+def _current_part(script_mtime: float, version_path: str, stat: Callable[[str], Any]) -> dict:
+    try:
+        deployed = stat(version_path).st_mtime
+    except OSError as exc:
+        return {"part": "current", "status": "unknown", "fix": f"The installed UI VERSION file could not be read ({exc.__class__.__name__}).", "path": version_path}
+    if script_mtime < deployed:
+        return {"part": "current", "status": "fail", "fix": "The UI sync script is older than the installed UI. Run a UI System Update, or wait for the path unit to publish it.", "path": version_path}
+    return {"part": "current", "status": "pass", "path": version_path}
+
+
+def _unit_part(runner: Callable[[str], Any]) -> dict:
+    try:
+        result = runner(UI_SYNC_UNIT)
+    except (OSError, TimeoutError) as exc:  # missing systemctl, no bus, or the runner's 3 second limit
+        return {"part": "path-unit", "status": "unknown", "fix": f"systemctl could not be run ({exc.__class__.__name__}).", "unit": UI_SYNC_UNIT}
+    state = str((result.get("state") if isinstance(result, dict) else result) or "").strip().lower()
+    if state in {"enabled", "enabled-runtime"}:
+        return {"part": "path-unit", "status": "pass", "state": state, "unit": UI_SYNC_UNIT}
+    if state in _DISABLED_STATES:
+        return {"part": "path-unit", "status": "fail", "state": state, "unit": UI_SYNC_UNIT,
+                "fix": f"The path unit {UI_SYNC_UNIT} is not enabled ({state}). Reinstall Core to re-create it."}
+    return {"part": "path-unit", "status": "unknown", "state": state or "unknown", "unit": UI_SYNC_UNIT, "fix": f"systemctl gave no clear answer for {UI_SYNC_UNIT}."}
+
+
+def ui_module_sync_check(layout_reader: Callable[[], dict], lstat: Callable[[str], Any] = os.lstat,
+                         systemctl_runner: Callable[[str], Any] | None = None, stat: Callable[[str], Any] = os.stat) -> dict:
+    label = "UI module sync"
+    layout, error = _read_layout(layout_reader)
+    if layout is None:
+        return _check(UI_SYNC_ID, label, "unknown", f"The Tec-Tac layout could not be read ({error}).")
+    script = posixpath.normpath(layout.get("UI_SYNC_SCRIPT") or DEFAULT_UI_SYNC_SCRIPT)
+    version_path = posixpath.join(layout.get("TEC_TAC_UI_DEPLOY_ROOT") or DEFAULT_UI_DEPLOY_ROOT, "VERSION")
+    published = _published_part(script, lstat)
+    if published["status"] == "pass":
+        current = _current_part(published["mtime"], version_path, stat)
+    else:
+        current = {"part": "current", "status": "skipped", "path": version_path}
+    if systemctl_runner is None:
+        unit = {"part": "path-unit", "status": "unknown", "unit": UI_SYNC_UNIT, "fix": "No systemctl runner was available."}
+    else:
+        unit = _unit_part(systemctl_runner)
+    parts = [published, current, unit]
+    failed = [p for p in parts if p["status"] == "fail"]
+    unknown = [p for p in parts if p["status"] == "unknown"]
+    details = {"script": script, "parts": parts,
+               "limit": "Cannot prove the published bytes match the signed UI release (that needs root). Proves published, root-owned, not writable by others and not older than the installed UI."}
+    metadata = {"script": script, "version_file": version_path, "unit": UI_SYNC_UNIT, "parts": {p["part"]: p["status"] for p in parts}}
+    if failed:
+        return _check(UI_SYNC_ID, label, "fail", " ".join(p["fix"] for p in failed), details=details, metadata=metadata)
+    if unknown:
+        return _check(UI_SYNC_ID, label, "unknown", " ".join(p["fix"] for p in unknown), details=details, metadata=metadata)
+    return _check(UI_SYNC_ID, label, "pass", "The UI sync program is published, root-owned, not older than the installed UI, and its path unit is enabled.", details=details, metadata=metadata)

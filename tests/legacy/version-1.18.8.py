@@ -7,7 +7,7 @@ import sys
 import types
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 PKG_DIR = ROOT / "framwork" / "tec_tac"
 if "fcntl" not in sys.modules:
     try:
@@ -30,14 +30,14 @@ assert package["id"] == "tec-tac"
 assert package["type"] == "tec-tac-framework"
 
 notes = sorted(p.name for p in ROOT.glob("RELEASE_NOTES_*.md"))
-assert notes == ["RELEASE_NOTES_1.18.8.md"], notes
+assert notes == ["RELEASE_NOTES_1.18.8.md"], notes  # historic: the note is in docs/releases/ from 1.18.9 on
 for v in ("1.17.124", "1.18.0", "1.18.1", "1.18.2", "1.18.3", "1.18.4", "1.18.5", "1.18.6", "1.18.7"):
     assert (ROOT / "docs" / "releases" / f"RELEASE_NOTES_{v}.md").is_file(), v
 assert (ROOT / "tests" / "legacy" / "version-1.18.7.py").is_file() and not (ROOT / "tests" / "version-1.18.7.py").exists()
 legacy = (ROOT / "tests" / "legacy" / "version-1.18.7.py").read_text(encoding="utf-8")
 assert "parents[2]" in legacy and 'b"1.18.7-1' not in legacy and "RELEASE_NOTES_1.18.7-1" not in legacy, "the legacy test is corrected"
 
-text = (ROOT / "RELEASE_NOTES_1.18.8.md").read_text(encoding="utf-8")
+text = (ROOT / "docs" / "releases" / "RELEASE_NOTES_1.18.8.md").read_text(encoding="utf-8")
 assert text.count("## Module-facing") == 1
 for needle in ("BEFORE you update", "sudo bash tests/sandbox-canary-1.18.8.sh before", "ls -l /usr/local/sbin/tec-tac-sandbox", "PASS", "FAIL", "ATTACK SUCCEEDED", "BEFORE RUN: N ATTACK SUCCEEDED",
                "ALL CANARY STEPS PASSED", "0 rows `ATTACK SUCCEEDED`", "0 rows `NOT RUN`", "public tcp 443", "ls -ld /usr/local/lib/tec-tac/sandbox/root", "--status", "\"enabled\": false",

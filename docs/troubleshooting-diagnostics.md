@@ -24,6 +24,17 @@ Migration detection is performed in memory with Django's migration loader/autode
 - Installed `tec_tac_*` module drift is a warning because the owning module must ship the required migration in its next package.
 - Operators should not use `makemigrations` on production as the permanent repair path.
 
+## Install checks (1.18.9)
+
+Two read-only checks sit in the Runtime services section. Both use only `lstat` on a few paths (the second also asks `systemctl is-enabled` once, with a 3 second limit). Neither needs root.
+
+| Check id | Passes when | On failure |
+|---|---|---|
+| `core.install.source-ownership` | `/`, `/opt` and `/opt/tec-tac-src` (and every folder above a custom source checkout) are real folders, root-owned, not group or world writable. The checkout folders themselves belong to the Tactical account and only have to be real folders. | The summary names the first failing folder and the fix: `sudo chown root:root <folder> && sudo chmod 0755 <folder>`. An unreadable folder is `unknown`, never `pass`. |
+| `core.ui.module-sync` | The root-owned UI sync script and its `tec-tac-config.sh` are published as regular files (root-owned, not writable by others, script executable, folders above them safe), the script is not older than the installed UI `VERSION` file, and `tec-tac-ui-sync-publish.path` is enabled. | The summary names each failing part: not published (install Core or run a UI System Update), stale (run a UI System Update), path unit not enabled (reinstall Core). The details list each part. |
+
+Limit: the UI sync check cannot prove the published bytes match the signed UI release, because that needs root.
+
 ## Module repository (1.17.99)
 
 - **`repository_retired` on the Online catalogue.** The repository answered HTTP 401, 403, 404 or 410. Its old releases are not offered. Upload the signed `.zip`, `.zip.sig` and `.release.json` on Settings → Modules. See `docs/module-repositories.md`.

@@ -317,6 +317,30 @@ def _helper_check() -> dict:
     return _check("core.helpers.privileged", "Privileged helpers", "fail" if bad else "pass", f"{len(rows) - len(bad)} of {len(rows)} Core helper entrypoints are present and executable.", details=rows, help_id="core.troubleshooting-diagnostics")
 
 
+def _source_ownership_check() -> dict:
+    from .config import load_layout
+    from .diagnostics_install import source_ownership_check
+
+    return source_ownership_check(load_layout)
+
+
+def _ui_module_sync_check() -> dict:
+    from .config import load_layout
+    from .diagnostics_install import ui_module_sync_check
+
+    def _is_enabled(unit: str) -> dict:
+        import subprocess
+
+        try:
+            proc = subprocess.run(["systemctl", "is-enabled", unit], capture_output=True, text=True, timeout=3, check=False)
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError("systemctl is-enabled took longer than 3 seconds") from exc
+        text = (proc.stdout or proc.stderr or "").strip().splitlines()
+        return {"state": text[0] if text else "unknown"}
+
+    return ui_module_sync_check(load_layout, systemctl_runner=_is_enabled)
+
+
 def _storage_check() -> dict:
     import shutil
 
@@ -351,7 +375,7 @@ def diagnostic_report(*, live_capabilities: bool = False) -> dict:
     sections = [
         _section("versions", "Framework & UI", _version_checks()),
         _section("django", "Django & database", [_django_check(), *_migration_checks()]),
-        _section("runtime", "Runtime services", [_service_check(), _scheduler_check(), _helper_check()]),
+        _section("runtime", "Runtime services", [_service_check(), _scheduler_check(), _helper_check(), _source_ownership_check(), _ui_module_sync_check()]),
         _section("modules", "Modules & capabilities", [_module_check(), _capability_check(live=live_capabilities)]),
         _section("contracts", "Contracts & audit", [_contract_check(), _audit_check(), _publisher_trust_check()]),
         _section("storage", "Storage", [_storage_check()]),
