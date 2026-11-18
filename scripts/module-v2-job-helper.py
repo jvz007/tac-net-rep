@@ -637,7 +637,40 @@ def plan_hand_back(model, module_ids, confirmed_enable):
     return enables
 
 
-def apply_disable_job(repo_root, module_ids, confirmed_enable):
+# Core 1.18.11 (Johan, 18 November 2026): a core module always stays installed and on. The category comes from the root-owned
+# manifest (and the category recorded in module state), never from the job file, which the Tactical user can write.
+CORE_LOCK_SENTENCE = ("{name} is a core module and always stays installed and on. "
+                      "A premium module that replaces it can take over, and a development server can switch it off.")
+
+
+def core_locked_ids(model, state, module_ids, development=None):
+    """The ids among ``module_ids`` that are core modules (manifest or recorded category) with no honoured replacement,
+    on a server that is not a development server. Empty when nothing is locked."""
+    development = development_server() if development is None else development
+    if development:
+        return []
+    recorded = state.get("modules") or {}
+    locked = []
+    for module_id in module_ids:
+        node = model.get(module_id)
+        record = recorded.get(module_id) if isinstance(recorded.get(module_id), dict) else {}
+        categories = {str((node or {}).get("category") or "").strip().lower(), str(record.get("category") or "").strip().lower()}
+        if "core" not in categories:
+            continue
+        honoured = any(other["id"] != module_id and other["enabled"] and other["replaces"] == module_id
+                       and replacement_check(model, other["id"]) is None for other in model.values())
+        if not honoured:
+            locked.append(module_id)
+    return locked
+
+
+def refuse_core_locked(model, state, module_ids):
+    locked = core_locked_ids(model, state, module_ids)
+    if locked:
+        raise RuntimeError(CORE_LOCK_SENTENCE.format(name=", ".join(sorted(set(locked)))))
+
+
+def apply_disable_job(repo_root, module_ids, confirmed_enable, skip_core_lock=False):
     """Disable ``module_ids`` and switch the confirmed replaced modules back on in ONE state write, under the lock.
 
     Manifests are re-read here, under the lock. Returns (enabled, previous): the modules this job switched on, and the
@@ -648,8 +681,11 @@ def apply_disable_job(repo_root, module_ids, confirmed_enable):
     def apply(state):
         modules = state["modules"]
         enables = []
+        model = replacement_model(read_installed_manifests(repo_root), state)
+        if not skip_core_lock:
+            # 1.18.11: refused with nothing changed. Only the root server command skips this, and it is not reachable by sudo.
+            refuse_core_locked(model, state, module_ids)
         if confirmed_enable:
-            model = replacement_model(read_installed_manifests(repo_root), state)
             enables = plan_hand_back(model, module_ids, confirmed_enable)
         touched = list(module_ids) + [mid for mid in enables if mid not in module_ids]
         result["previous"] = {mid: bool((modules.get(mid) or {}).get("enabled", True)) for mid in touched}
@@ -1987,6 +2023,137 @@ def run_job(job_id):
     _cleanup_claimed_job_inputs(job_id)
 
 
+def installed_dependencies(repo_root):
+    """{module id: [ids it hard-depends on]} from the root-owned installed manifests (same trust rules as read_installed_manifests)."""
+    root = Path(repo_root) / "extensions"
+    found = {}
+    try:
+        folders = sorted(root.iterdir())
+    except OSError:
+        return found
+    for folder in folders:
+        try:
+            info = os.lstat(folder)
+        except OSError:
+            continue
+        if not stat.S_ISDIR(info.st_mode) or not _manifest_stat_ok(info):
+            continue
+        payload = _read_manifest_nofollow(folder / "tec_tac.json") or {}
+        raw = payload.get("dependencies")
+        found[folder.name] = sorted(key for key in raw if isinstance(key, str)) if isinstance(raw, dict) else []
+    return found
+
+
+def server_command(action, module_id, cascade=False, log=None):
+    """Root-only enable or disable for ``sudo tec-tac-module-v2-job --server-command`` (1.18.11).
+
+    Same rules as the browser path: an enable that would switch a replacement off is refused with the list (the command
+    does not confirm that switch), a disable with enabled dependants is refused unless ``cascade``, and a disabled
+    replacement hands its replaced module back. The one thing it skips is the core-module lock. Returns a result dict."""
+    if action not in ("enable", "disable") or not PLUGIN_RE.fullmatch(str(module_id)):
+        raise RuntimeError("usage: --server-command enable|disable <module-id> [--cascade]")
+    log = log or sys.stderr
+    acquire_lifecycle_lock()
+    config = load_config()
+    repo_root = Path(config.get("REPO_ROOT", "/opt/tec-tac")).resolve()
+    manifests = read_installed_manifests(repo_root)
+    if module_id not in manifests:
+        raise RuntimeError(f"module {module_id} is not installed or has no trusted manifest")
+    model = replacement_model(manifests, load_module_state())
+    before = model[module_id]["enabled"]
+    result = {"ok": True, "module": module_id, "action": action, "cascade": bool(cascade), "before": before,
+              "after": action == "enable", "changed": before != (action == "enable"), "affected": [module_id], "enabled_back": []}
+    if not result["changed"]:
+        return result
+    if action == "enable":
+        disabled, reconciled, previous = apply_enable_job(repo_root, [module_id], [], False)
+        result["disabled"] = disabled + reconciled
+    else:
+        dependencies = installed_dependencies(repo_root)
+        affected = [module_id]
+        pending = [module_id]
+        while pending:
+            current = pending.pop()
+            for other, needs in sorted(dependencies.items()):
+                if current in needs and other not in affected and (model.get(other) or {}).get("enabled"):
+                    affected.insert(0, other)
+                    pending.append(other)
+        dependants = [mid for mid in affected if mid != module_id]
+        if dependants and not cascade:
+            raise RuntimeError(f"module {module_id} is required by enabled module(s): {', '.join(sorted(dependants))}. Use --cascade to switch them off too.")
+        hand_back = []
+        for mid in affected:
+            node = model.get(mid) or {}
+            target = model.get(node.get("replaces") or "")
+            if node.get("enabled") and target and target["category"] in REPLACEABLE_CATEGORIES and not target["enabled"] and target["id"] not in affected:
+                hand_back.append(target["id"])
+        enabled_back, previous = apply_disable_job(repo_root, affected, sorted(set(hand_back)), skip_core_lock=True)
+        result["affected"], result["enabled_back"] = affected, enabled_back
+    try:
+        sync_and_reload(config, log, refresh_workers=True)
+    except Exception:
+        restore_enabled_flags(previous)
+        try:
+            sync_and_reload(config, log, refresh_workers=True)
+        except (RuntimeError, OSError) as rollback_exc:
+            log.write(f"[TEC-TAC-MODULE-V2] rollback runtime sync failed: {rollback_exc}\n")
+        raise
+    return result
+
+
+def record_server_command_audit(config, module_id, result, cascade, log):
+    """Write the ``modify`` audit row of a server command without running Django as root (1.18.11).
+
+    manage.py imports Tactical's virtualenv, settings and local_settings.py, all Tactical-owned, so it is demoted with
+    runuser to the Tactical user, the way system-update-helper does. The state change is already done; a failed audit
+    step is reported on stderr and never undoes it."""
+    tactical_user = config.get("TACTICAL_USER", "tactical")
+    py = Path(config.get("TACTICAL_PYTHON", "/rmm/api/env/bin/python"))
+    manage = Path(config.get("TACTICAL_BACKEND_ROOT", "/rmm/api/tacticalrmm")) / "manage.py"
+    framework = Path(config.get("TEC_TAC_FRAMEWORK_ROOT", "/opt/tec-tac/framework"))
+    outcome = {key: result.get(key) for key in ("before", "after", "affected", "enabled_back")}
+    outcome["cascade"] = bool(cascade)
+    command = ["runuser", "-u", tactical_user, "--", str(py), str(manage), "tectac_module_state", module_id,
+               "--record-outcome", json.dumps(outcome, sort_keys=True)]
+    env = privileged_env({"PYTHONPATH": str(framework)})
+    try:
+        done = subprocess.run(command, cwd=str(manage.parent), env=env, capture_output=True, text=True, check=False, timeout=120)
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.write(f"[TEC-TAC-MODULE-V2] the audit step could not run: {exc}\n")
+        return False
+    if done.returncode != 0:
+        detail = (done.stderr or done.stdout or "").strip().splitlines()
+        log.write(f"[TEC-TAC-MODULE-V2] the audit step failed: {detail[-1] if detail else done.returncode}\n")
+        return False
+    return True
+
+
+def server_command_main(argv):
+    """The ``--server-command`` entry point: ``argv`` is ``[script, "--server-command", action, module id, ["--cascade"]]``.
+
+    Returns the exit code. The root check stays in the ``__main__`` block (1.18.11)."""
+    # 1.18.11: the root entry point, run by the server owner as ``sudo tec-tac-module-v2-job --server-command ...``.
+    # The sudoers lines allow ``--dispatch *`` only. The audit row is written by manage.py demoted to the Tactical user.
+    if len(argv) == 5 and argv[4] != "--cascade":
+        raise SystemExit("usage: tec-tac-module-v2-job --server-command enable|disable <module-id> [--cascade]")
+    action, module_id = argv[2], argv[3]
+    cascade = len(argv) == 5
+    try:
+        outcome = server_command(action, module_id, cascade=cascade)
+    except RuntimeError as exc:
+        raise SystemExit(f"refused: {exc}")
+    if not outcome.get("changed"):
+        print(f"{module_id} is already {'on' if outcome.get('after') else 'off'}. Nothing changed.")
+        return 0
+    audited = record_server_command_audit(load_config(), module_id, outcome, cascade, sys.stderr)
+    print(f"{module_id} is now {'on' if outcome.get('after') else 'off'}." + (" An audit row was written." if audited else " The audit row could not be written; see the message above."))
+    for label, key in (("Also switched off", "affected"), ("Switched back on", "enabled_back"), ("Also switched off by the replacement rule", "disabled")):
+        extra = [item for item in (outcome.get(key) or []) if item != module_id]
+        if extra:
+            print(f"{label}: " + ", ".join(extra) + ".")
+    return 0
+
+
 def mark_failed(job_id, error):
     try:
         path, job = load_job(job_id)
@@ -2002,6 +2169,8 @@ def mark_failed(job_id, error):
 if __name__ == "__main__":
     if os.geteuid() != 0:
         raise SystemExit("must run as root")
+    if len(sys.argv) in (4, 5) and sys.argv[1] == "--server-command":
+        raise SystemExit(server_command_main(sys.argv))
     if len(sys.argv) != 3 or sys.argv[1] not in {"--dispatch", "--run"}:
         raise SystemExit("usage: tec-tac-module-v2-job --dispatch|--run <job-id>")
     if sys.argv[1] == "--dispatch":

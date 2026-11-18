@@ -70,6 +70,64 @@ class ModuleManagerV2Error(ModuleManagerError):
     pass
 
 
+class ModuleCoreLockedError(ModuleManagerV2Error):
+    """A core module may not be disabled or uninstalled here (1.18.11). The views answer HTTP 400 with ``code``."""
+    code = module_category.LOCK_REASON
+
+    def __init__(self, message: str, module_id: str = "", action: str = ""):
+        super().__init__(message)
+        self.module_id, self.action = module_id, action
+
+    def as_payload(self) -> dict:
+        return {"detail": str(self), "code": self.code}
+
+
+def _audit_core_lock_refusal(actor, module_id: str, action: str, reason: str) -> None:
+    """One Core audit row (deny) for a refused disable or uninstall. Never fatal."""
+    try:
+        from . import audit
+
+        if actor is None:
+            actor = audit.service_audit_actor(module_id="core", service="module-lifecycle", identity="system")
+        audit.record(actor=actor, module_id="core", action="deny", object_type="module", object_id=module_id,
+                     message=f"Refused to {action} the core module {module_id}: it always stays installed and on.",
+                     metadata={"module": module_id, "action": action, "reason": reason}, strict=False)
+    except Exception:
+        logger.exception("Could not write the core-module lock audit row for %s.", module_id)
+
+
+def core_lock_for_row(row: dict, *, development: bool, model) -> dict | None:
+    """The lifecycle lock of one catalogue row (module_category.core_lifecycle_lock), from the row's own facts.
+    ``model`` is a replacement model already built by the caller, so no disk is read here."""
+    if row.get("legacy"):
+        return None
+    return module_category.core_lifecycle_lock(
+        row["id"], row.get("category"), row.get("category_state"), name=row.get("name"), development=development,
+        replaced_by_honoured=(module_replacement.replaced_by(row["id"], model=model) if model else None))
+
+
+def enforce_core_lock(rows, module_ids, action: str, actor=None) -> None:
+    """Raise ModuleCoreLockedError (after one deny audit row) when any of ``module_ids`` is a locked core module.
+    ``rows`` is {id: catalogue row}. Called before anything is queued, for the target and every cascaded module."""
+    development = module_category.is_development_server()
+    model = None
+    for module_id in module_ids:
+        row = rows.get(module_id)
+        if not row or not (module_category.normalize(row.get("category")) == "core"
+                           or module_category.normalize(row.get("category_state")) == "core"):
+            continue
+        if model is None:
+            try:
+                model = module_replacement.live_model()
+            except Exception:
+                logger.exception("Could not read the replacement model; treating %s as having no replacement.", module_id)
+                model = {}
+        lock = core_lock_for_row(row, development=development, model=model)
+        if lock:
+            _audit_core_lock_refusal(actor, module_id, action, lock["reason"])
+            raise ModuleCoreLockedError(lock["message"], module_id, action)
+
+
 class LicensingRequirementError(ModuleManagerV2Error):
     """Raised when a package-declared licensing gate is not satisfied."""
 
@@ -609,6 +667,7 @@ def installed_catalog_v2() -> list[dict]:
         replacement_model, replacement_rows = {}, {}
     planning_model = _model_with_pending_jobs(replacement_model) if replacement_model else {}
 
+    development = module_category.is_development_server()  # once per catalogue build (1.18.11)
     result = []
     for item in base:
         item = dict(item)
@@ -616,7 +675,8 @@ def installed_catalog_v2() -> list[dict]:
             item.update({"enabled": True, "visible": True, "dependencies": {}, "optional_dependencies": {}, "requires": {}, "dependants": [],
                          "replaces": None, "replacement": None, "replaced_by": None, "will_disable": [], "will_enable": [],
                          "second_confirmation_required": False, "replacement_dependants": [],
-                         "hand_back_unavailable": [], "hand_back_confirmation_required": False})
+                         "hand_back_unavailable": [], "hand_back_confirmation_required": False,
+                         "always_on": False, "lifecycle_locked": False, "lifecycle_lock_reason": None})
             result.append(item)
             continue
         meta = metadata.get(item["id"], {})
@@ -678,6 +738,14 @@ def installed_catalog_v2() -> list[dict]:
             "replacement_dependants": [],
             "hand_back_unavailable": [],
             "hand_back_confirmation_required": False,
+        })
+        # 1.18.11: read-only status of the core-module lock. ``always_on`` is the signed category; ``lifecycle_locked`` says
+        # Disable and Uninstall are refused right now (no development server, no honoured replacement).
+        lock = core_lock_for_row(item, development=development, model=replacement_model)
+        item.update({
+            "always_on": "core" in (module_category.normalize(item.get("category")), module_category.normalize(item.get("category_state"))),
+            "lifecycle_locked": lock is not None,
+            "lifecycle_lock_reason": lock["message"] if lock else None,
         })
         result.append(item)
     _add_replacement_warnings(result, planning_model)
@@ -1774,8 +1842,9 @@ def validate_disable(module_id: str, affected=None) -> dict:
         raise ModuleManagerV2Error(f"Module {module_id!r} is not installed.")
     if target.get("protected"):
         raise ModuleManagerV2Error("Protected framework modules cannot be enabled/disabled from the UI.")
-    model = _model_with_pending_jobs(module_replacement.live_model())
     off = list(dict.fromkeys([*(affected or ()), module_id]))
+    enforce_core_lock(catalog, off, "disable")
+    model = _model_with_pending_jobs(module_replacement.live_model())
     wanted = _hand_back_wanted(model, off)
     can, cannot = _hand_back_split(catalog, model, module_id, wanted, off) if wanted else ([], [])
     problems = _hand_back_problems(catalog, model, module_id, wanted, off) if cannot else []
@@ -1895,6 +1964,7 @@ def queue_set_enabled(module_id: str, enabled: bool, cascade: bool = False, requ
         # 1.17.12 (CQ33): disabling a replacement switches the module it replaces back on, when it can come back. The
         # dependants of that module stay satisfied throughout, so they do not block the disable. 1.17.14: a replaced
         # module that cannot come back does not stop the disable; it asks for a confirmation and stays off.
+        enforce_core_lock(catalog, [module_id], "disable", actor)  # 1.18.11: the target first, before any dependants message
         live = _model_with_pending_jobs(module_replacement.live_model())
         first_plan = module_replacement.hand_back_plan(live, module_id)
         coming_back, _ = _hand_back_split(catalog, live, module_id, first_plan, {module_id}) if first_plan else ([], [])
@@ -1917,6 +1987,8 @@ def queue_set_enabled(module_id: str, enabled: bool, cascade: bool = False, requ
                         affected.append(dep["id"])
             visit(module_id)
             affected = [mid for mid in affected if mid != module_id] + [module_id]
+        # 1.18.11: a core module may not be switched off, as the target or in the cascade. Nothing is queued.
+        enforce_core_lock(catalog, affected, "disable", actor)
         # 1.17.14 (CQ36): a deliberate disable always hands back, a replacement disabled in a cascade included.
         wanted = _hand_back_wanted(live, affected)
         if wanted:
@@ -1961,6 +2033,23 @@ def queue_set_visibility(module_id: str, visible: bool, requested_by: str | None
     })
 
 
+def remove_lock(module_id: str) -> dict | None:
+    """The core-module lock on uninstalling ``module_id`` (1.18.11), or None. Reads the catalogue once."""
+    row = {item["id"]: item for item in installed_catalog_v2()}.get(module_id)
+    if not row:
+        return None
+    model = None
+    if module_category.normalize(row.get("category")) == "core" or module_category.normalize(row.get("category_state")) == "core":
+        try:
+            model = module_replacement.live_model()
+        except Exception:
+            logger.exception("Could not read the replacement model; treating %s as having no replacement.", module_id)
+            model = {}
+    return core_lock_for_row(row, development=module_category.is_development_server(), model=model)
+
+
 def validate_remove(module_id: str) -> dict:
+    lock = remove_lock(module_id)
     dependants = _enabled_dependants(module_id)
-    return {"valid": not dependants, "dependants": dependants}
+    return {"valid": not dependants, "dependants": dependants,
+            "locked": lock is not None, "message": lock["message"] if lock else None}

@@ -277,6 +277,10 @@ Since 1.17.15 an uninstall of an enabled replacement hands the replaced module b
 
 Since 1.17.16 the outcome audit rows follow. For each module that came back, Core writes the audit action `custom:module-replacement-enabled` ("Module X was enabled again because its replacement Y was uninstalled"). When a confirmed uninstall left a module off, Core writes one more row (`custom:module-replacement-disabled`), with the same metadata as the disable case (`replacement`, `replaced`, `hand_back_skipped`): "Replacement Y was uninstalled. The module it replaces, X, stayed off because it cannot be enabled." Before 1.17.16 that row was written for a disable only. Rows are written once per job id.
 
+### A replaced core module may be uninstalled (1.18.11)
+
+A core module cannot be disabled or uninstalled in the browser (`module-categories.md`, rule 4). One exception is this flow: while a premium module honourably replaces it, the replaced core module is already off, and it may be uninstalled. The lock returns the moment the replacement is gone or disabled. Enabling a replacement, installing one, and disabling one (which hands the core module back) are not touched by the lock.
+
 ## Installing a module that is disabled (1.17.18, CQ59)
 
 An install or an upgrade of a module that is disabled used to run to the end and then fail, or leave a half-finished change.

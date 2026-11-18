@@ -472,6 +472,29 @@ def plan_remove_hand_back(repo_root, plugin_id, enable_modules):
     return wanted
 
 
+# Core 1.18.11 (Johan, 18 November 2026): a core module always stays installed. The category comes from the root-owned manifest and
+# from module state, never from the job file (the Tactical user can write that). Twin of the v2 helper's lock, one rule narrower on
+# purpose: the replaced module must already be OFF and an installed, enabled, premium module must replace it. Any doubt refuses.
+CORE_LOCK_SENTENCE = ("{name} is a core module and always stays installed and on. "
+                      "A premium module that replaces it can take over, and a development server can switch it off.")
+
+
+def plan_remove_core_lock(repo_root, plugin_id):
+    """Raise RuntimeError, with nothing changed, when ``plugin_id`` is a core module that may not be uninstalled here."""
+    manifest = _installed_manifest(repo_root, plugin_id)
+    modules = _state_modules()
+    record = modules.get(plugin_id) if isinstance(modules.get(plugin_id), dict) else {}
+    categories = {str((manifest or {}).get("category") or "").strip().lower(), str(record.get("category") or "").strip().lower()}
+    if "core" not in categories or development_server():
+        return
+    if not _enabled_in(modules, plugin_id):
+        for other_id in _installed_ids(repo_root):
+            other = _installed_manifest(repo_root, other_id)
+            if other is not None and other_id != plugin_id and other["replaces"] == plugin_id and other["category"] == "premium" and _enabled_in(modules, other_id):
+                return
+    raise RuntimeError(CORE_LOCK_SENTENCE.format(name=plugin_id))
+
+
 def set_module_enabled(module_ids, enabled):
     """Write the enabled flag of each module into module-state.json, under the state lock (1.17.15, CQ43)."""
     STATE_ROOT.mkdir(parents=True, exist_ok=True)
@@ -911,13 +934,14 @@ def run_job(job_id):
     else:
         # 1.17.15 (CQ43): the hand-back is checked while the module being removed is still installed, before anything changes.
         try:
+            plan_remove_core_lock(repo_root, job["plugin_id"])  # 1.18.11
             handback = plan_remove_hand_back(repo_root, job["plugin_id"], job.get("enable_modules"))
             command = [TRUSTED_BASH, str(remove_script), job["plugin_id"], "", "--yes"]
         except (RuntimeError, OSError) as exc:
             with log_path.open("a", encoding="utf-8") as log:
                 log.write(f"[TEC-TAC-MODULE] hand-back check failed: {exc}\n")
             job["error"] = str(exc)
-            job["error_type"] = "HandBackRefused"
+            job["error_type"] = "CoreModuleLocked" if "always stays installed" in str(exc) else "HandBackRefused"
 
     rc = 1
     if command is not None:

@@ -12,6 +12,7 @@ from . import module_job_logs, module_licensing
 from .module_manager import ModuleManagerError, discard_stage, get_job, list_jobs, page_jobs
 from .module_manager_v2 import (
     LicensingRequirementError,
+    ModuleCoreLockedError,
     ModuleManagerV2Error,
     ModuleReplacementConfirmationRequired,
     ModuleReplacementHandBackConfirmationRequired,
@@ -181,7 +182,7 @@ class ModuleV2StateView(APIView):
                                               confirm_replacement_switch=confirm_switch,
                                               confirm_without_hand_back=confirm_without), status=202)
         except (ModuleReplacementConfirmationRequired, ModuleReplacementSecondConfirmationRequired,
-                ModuleReplacementHandBackConfirmationRequired) as exc:
+                ModuleReplacementHandBackConfirmationRequired, ModuleCoreLockedError) as exc:
             return Response(exc.as_payload(), status=400)
         except (ModuleManagerError, ModuleManagerV2Error) as exc:
             return Response({"detail": str(exc)}, status=400)

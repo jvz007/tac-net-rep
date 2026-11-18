@@ -352,6 +352,24 @@ for name, previous in PREVIOUS.items():
     for new, old in UI_SYNC_1_17_98.get(name, ()):
         must(restored.count(new) == 1, f"{name}: one 1.17.98 UI sync change")
         restored = restored.replace(new, old)
+    if name == "module-v2-job-helper.py":
+        # 1.18.11: the core-module lock (helpers, apply_disable_job guard) and the root-only server command are new; take exactly those out
+        begin = restored.index("# Core 1.18.11 (Johan, 18 November 2026): a core module always stays installed and on.")
+        restored = restored[:begin] + restored[restored.index("def apply_disable_job(", begin):]
+        restored = restored.replace("def apply_disable_job(repo_root, module_ids, confirmed_enable, skip_core_lock=False):",
+                                    "def apply_disable_job(repo_root, module_ids, confirmed_enable):")
+        locked = ("        model = replacement_model(read_installed_manifests(repo_root), state)\n"
+                  "        if not skip_core_lock:\n"
+                  "            # 1.18.11: refused with nothing changed. Only the root server command skips this, and it is not reachable by sudo.\n"
+                  "            refuse_core_locked(model, state, module_ids)\n"
+                  "        if confirmed_enable:\n"
+                  "            enables = plan_hand_back")
+        must(restored.count(locked) == 1, f"{name}: one 1.18.11 lock guard")
+        restored = restored.replace(locked, "        if confirmed_enable:\n            model = replacement_model(read_installed_manifests(repo_root), state)\n            enables = plan_hand_back")
+        begin = restored.index("def installed_dependencies(repo_root):")
+        restored = restored[:begin] + restored[restored.index("def mark_failed(", begin):]
+        begin = restored.index("    if len(sys.argv) in (4, 5) and sys.argv[1] == \"--server-command\":")
+        restored = restored[:begin] + restored[restored.index("    if len(sys.argv) != 3 or", begin):]
     must(hashlib.sha256(restored.encode("utf-8")).hexdigest() == previous,
          f"{name} must be byte-identical to 1.17.59 apart from the added function and its one call")
     tree = ast.parse(text)

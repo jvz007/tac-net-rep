@@ -111,3 +111,37 @@ def refusal_problem(module_id: str, declared: Any, *, development: bool | None =
         "effective_category": DEFAULT_CATEGORY,
         "message": REFUSED_MESSAGE,
     }
+
+
+# Core 1.18.11 (Johan, 18 November 2026): a core module always stays installed and on.
+LOCK_REASON = "core_module_locked"
+_LOOKUP = object()
+
+
+def core_lifecycle_lock(module_id: str, manifest_category: Any, state_category: Any = None, *, name: Any = None,
+                        development: bool | None = None, replaced_by_honoured: Any = _LOOKUP) -> dict[str, str] | None:
+    """None when ``module_id`` may be disabled or uninstalled, else ``{"reason": code, "message": plain sentence}``.
+
+    A module is locked when its manifest category OR the category recorded in module state is ``core`` (a mismatch fails
+    closed). It is not locked on a development server, or while a premium replacement of it is honoured
+    (``replaced_by_honoured`` is that module's id or a true value; left out, Core looks it up). Never raises: a doubt locks."""
+    try:
+        if "core" not in (normalize(manifest_category), normalize(state_category)):
+            return None
+        development = is_development_server() if development is None else bool(development)
+        if development:
+            return None
+        if replaced_by_honoured is _LOOKUP:
+            from . import module_replacement
+
+            replaced_by_honoured = module_replacement.replaced_by(module_id)
+        if replaced_by_honoured:
+            return None
+    except Exception:
+        logger.exception("Could not work out the core lifecycle lock for %s; treating it as locked.", module_id)
+    shown = " ".join(str(name or module_id).split()) or str(module_id)
+    return {
+        "reason": LOCK_REASON,
+        "message": (f"{shown} is a core module and always stays installed and on. "
+                    "A premium module that replaces it can take over, and a development server can switch it off."),
+    }

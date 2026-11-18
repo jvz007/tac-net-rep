@@ -687,6 +687,10 @@ def queue_remove(plugin_id: str, requested_by: str | None = None, confirm_withou
         raise ModuleManagerError("Module is not installed.")
     if not item.get("managed"):
         raise ModuleManagerError("This module is framework-protected and cannot be removed from the UI.")
+    # 1.18.11: a core module always stays installed (unless a premium replacement is honoured or this is a development server).
+    from . import module_manager_v2 as v2  # lazy: module_manager_v2 imports this module
+
+    v2.enforce_core_lock({row["id"]: row for row in v2.installed_catalog_v2()}, [plugin_id], "remove", actor)
     enable_modules, hand_back_skipped = _remove_hand_back(plugin_id, confirm_without_hand_back)
     job = _new_job({
         "action": "remove",

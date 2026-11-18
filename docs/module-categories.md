@@ -46,6 +46,19 @@ They appear on every `module_status` row of `GET /api/tfd/ui/context/` (legacy p
 2. **Tactical operations (AD-21 condition 3).** The executor uses the effective category. A `premium`, `server` or `test` module is refused every route, even one the owner table lists by id. The refusal names the category. Licensing keeps `core/codesign/` (AD-16). An honoured AD-20 replacement keeps its rights.
 3. **Replacement (AD-20).** A replacement must be `premium`. A replacement with no category is honoured on a development server only. Otherwise the status reports the reason code `replacement-category`. A `test` module may not declare `replaces`, and neither may a `core` or `server` module. The capability prefix rule (a capability begins with the module's own id) stays for `core` and `server` only.
 
+4. **A core module always stays installed and on (1.18.11, Johan, 18 November 2026).** Disable and Uninstall are refused for a module whose signed category is `core` (or whose category recorded at install is `core`; a difference fails closed). The refusal is HTTP 400 with `code: core_module_locked` and a plain `detail`, and Core writes one `deny` audit row. The check sits in Core's queue functions, and both root job helpers re-check it from root-owned manifests, because the job files are Tactical-writable. Enabling is never refused, so a core module that was switched off earlier can always come back, and then cannot be switched off again in the browser. A `server` or `premium` module is not covered.
+
+   The lock does not apply in two cases:
+   - **A development server** (`TEC_TAC_ENVIRONMENT=development`).
+   - **An honoured premium replacement.** While a premium module replaces the core module (see `module-replacement.md`), the replacement flow switches the core module off and the core module may be uninstalled. A premium module's install, enable and hand-back work as before.
+
+   Three ways round the lock:
+   1. Install a premium module that replaces it.
+   2. Use a development server.
+   3. Run the server command as root: `sudo /usr/local/sbin/tec-tac-module-v2-job --server-command disable <module id>` (or `enable`, with `--cascade` to switch off the modules that need it). It is the root-only `--server-command` mode of the module helper, which is not reachable by sudo from the web side. The helper writes the audit row by running `manage.py tectac_module_state` demoted to the Tactical user with `runuser`; manage.py is never run as root. It enables and disables only; it never uninstalls. It writes one `modify` audit row with the actor `server command (tectac_module_state)`, and nothing when the module is already in that state.
+
+   The catalogue rows of `GET /api/tfd/modules/v2/` carry `always_on`, `lifecycle_locked` and `lifecycle_lock_reason` so a UI can show the state.
+
 Core does not build the production gate (AD-21 condition 6) in this release. A module without a category is still treated as `test`, not refused at load time.
 
 ## What a module author does

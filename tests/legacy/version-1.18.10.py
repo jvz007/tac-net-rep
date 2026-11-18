@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 assert (ROOT / "VERSION").read_bytes() == b"1.18.10\n"
 package = json.loads((ROOT / "tec_tac_package.json").read_text(encoding="utf-8"))
