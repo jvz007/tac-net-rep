@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression: the dummy backup-code hash is built on first use, not at import (Core 1.18.1)."""
+"""Regression: the dummy backup-code hash is built on first use, not at import (Core 1.18.1, zero budget Core 1.18.2)."""
 import ast
 import importlib
 import sys
@@ -70,6 +70,16 @@ mfa.burn_backup_code_hash_cost(checks=-2)
 assert len(calls["check"]) - before == 3
 assert len(calls["make"]) == 1
 
+# (4b) 1.18.2: a zero or negative budget builds no dummy and checks nothing in a fresh process
+mfa._dummy_code_hash.cache_clear()
+makes, checks_before = len(calls["make"]), len(calls["check"])
+mfa.burn_backup_code_hash_cost(checks=0)
+mfa.burn_backup_code_hash_cost(checks=-2)
+assert len(calls["make"]) == makes and len(calls["check"]) == checks_before
+mfa.burn_backup_code_hash_cost(checks=3)
+assert len(calls["make"]) == makes + 1
+assert len(calls["check"]) - checks_before == 3
+
 # (5) no module-level statement calls make_password
 tree = ast.parse((PKG_DIR / "mfa_backup.py").read_text(encoding="utf-8"))
 for node in tree.body:
@@ -81,4 +91,4 @@ for node in tree.body:
             name = getattr(func, "id", getattr(func, "attr", ""))
             assert name != "make_password", f"module-level make_password at line {node.lineno}"
 
-print("mfa backup lazy dummy hash 1.18.1 regression: PASS")
+print("mfa backup lazy dummy hash 1.18.2 regression: PASS")

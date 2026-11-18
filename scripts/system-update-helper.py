@@ -2805,8 +2805,11 @@ if __name__ == "__main__":
     elif len(sys.argv) == 2 and sys.argv[1] == "--publish-ui-sync":
         try:
             publish_ui_sync_from_checkout()
-        except RuntimeError as exc:
-            raise SystemExit(str(exc))
+        except (RuntimeError, OSError) as exc:
+            # 1.18.2: exactly one line says why nothing was published (the path unit's journal and install.sh show it).
+            reason = " ".join(str(exc).split()) or exc.__class__.__name__
+            sys.stderr.write(f"[TEC-TAC] UI module sync script not published: {reason}\n")
+            raise SystemExit(1)
     elif len(sys.argv) in {3, 4} and sys.argv[1] == "--install-restored":
         try:
             install_restored_component(sys.argv[2], expected=sys.argv[3] if len(sys.argv) == 4 else None)

@@ -117,9 +117,14 @@ def burn_backup_code_hash_cost(*, checks: int = BACKUP_CODE_COUNT) -> None:
     Password authentication already has Django's constant-cost behaviour. This
     closes the second-factor timing gap: a wrong password and a correct password
     paired with a wrong recovery code both pay the same backup-code hash budget.
+    The dummy hash is built on the first call that needs at least one check; a
+    budget of zero or less returns before any hash work (Core 1.18.2).
     """
+    count = max(0, int(checks))
+    if count == 0:
+        return
     dummy = _dummy_code_hash()
-    for _ in range(max(0, int(checks))):
+    for _ in range(count):
         check_password("TEC-TAC-INVALID-CODE", dummy)
 
 

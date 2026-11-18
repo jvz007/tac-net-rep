@@ -401,3 +401,16 @@ Accepted decision AD-4 (30 Sep 2026): Tec-Tac follows Tactical's authentication 
 - Tactical's password sign-in remains unavailable for an SSO-linked account.
 
 The integration regression is `tec_tac.tests.test_f8_sso_ad4_tactical_integration` and runs only through Django's test runner as a `TestCase`. Django creates and destroys a separate throwaway test database; the regression fails closed if it is pointed at the configured live database. Tactical/allauth models are used only for fixtures inside that isolated test database. Production sign-in crosses Tactical's supported SSO/token HTTP view and Tec-Tac's `/api/tfd/ui/context/` boundary; Tec-Tac never uses Tactical's database as an integration contract.
+
+## Server command: session policy and lock-out recovery (1.18.2)
+
+If the IP-change policy signs everyone out ("Your network address changed"), set it from the server. Run as the Tactical user, from the Tactical backend folder, with its virtual environment:
+
+- `python manage.py tectac_session_policy --show` prints the effective global policy, `ip_change_policy` first.
+- `python manage.py tectac_session_policy --ip-change off|audit|reauthenticate|terminate` sets it. It uses the same validated path as the settings page, so it writes the same `session_policy_changed` audit row (before, after, fields). The actor is recorded as `server command (tectac_session_policy)`.
+
+Open sessions follow the new policy on their next request. The command adds no web route and no permission; it needs shell access on the server.
+
+## UI module sync script after a UI install (1.18.2)
+
+Core's `install.sh` installs a root `systemd` path unit, `tec-tac-ui-sync-publish.path`, that watches the deployed UI `VERSION` file (`TEC_TAC_UI_DEPLOY_ROOT/VERSION`, default `/var/lib/tec-tac/ui/tec-tac/VERSION`). When a UI install rewrites it, the oneshot `tec-tac-ui-sync-publish.service` waits 5 seconds, then runs `system-update-helper.py --publish-ui-sync` as root. The helper's checks are unchanged: signed UI checkout, installed version from root-held state, root-owned parents. If it cannot publish, it prints one line, `[TEC-TAC] UI module sync script not published: <reason>`, to the journal. No sudoers line was added, and the UI installer is not edited. To retry by hand: `systemctl start tec-tac-ui-sync-publish.service`.

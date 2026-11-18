@@ -960,9 +960,42 @@ fi
 log "Installed independent Tec-Tac system update worker: ${SYSTEM_UPDATE_HELPER}"
 # 1.17.98: publish the UI module sync script as a root-owned copy, taken from the UI checkout only after it verified against its
 # signed release (the same staging and verifier as a System Update). Without a signed UI checkout nothing changes.
-if ! /usr/bin/python3 -I "${SOURCE_ROOT}/scripts/system-update-helper.py" --publish-ui-sync; then
-    log "WARNING: the UI module sync script was not published from a verified UI checkout, so module UI sync stays off until a UI System Update publishes it (${UI_SYNC_SCRIPT_PATH})."
-fi
+UI_SYNC_REASON="$(/usr/bin/python3 -I "${SOURCE_ROOT}/scripts/system-update-helper.py" --publish-ui-sync 2>&1 >/dev/null)" || {
+    log "WARNING: ${UI_SYNC_REASON:-the UI module sync script was not published from a verified UI checkout}. Module UI sync stays off until a UI install or System Update publishes it (${UI_SYNC_SCRIPT_PATH}); a later UI install publishes it automatically."
+}
+
+# 1.18.2: publish the UI sync script after a UI install without a second Core install. The UI installer re-creates the deployed
+# UI folder; this root path unit sees its VERSION file change and runs the same verified --publish-ui-sync (no new sudoers line).
+UI_SYNC_PUBLISH_SERVICE="/etc/systemd/system/tec-tac-ui-sync-publish.service"
+UI_SYNC_PUBLISH_PATH="/etc/systemd/system/tec-tac-ui-sync-publish.path"
+UI_DEPLOYED_VERSION_FILE="${TEC_TAC_UI_DEPLOY_ROOT:-/var/lib/tec-tac/ui/tec-tac}/VERSION"
+cat > "${UI_SYNC_PUBLISH_SERVICE}" <<EOF
+[Unit]
+Description=Tec-Tac publish UI module sync script after a UI install
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStartPre=/bin/sleep 5
+ExecStart=/usr/bin/python3 -I ${SYSTEM_UPDATE_LIB}/system-update-helper.py --publish-ui-sync
+EOF
+cat > "${UI_SYNC_PUBLISH_PATH}" <<EOF
+[Unit]
+Description=Watch the deployed Tec-Tac UI version
+
+[Path]
+PathChanged=${UI_DEPLOYED_VERSION_FILE}
+Unit=tec-tac-ui-sync-publish.service
+
+[Install]
+WantedBy=multi-user.target
+EOF
+chown root:root "${UI_SYNC_PUBLISH_SERVICE}" "${UI_SYNC_PUBLISH_PATH}"
+chmod 0644 "${UI_SYNC_PUBLISH_SERVICE}" "${UI_SYNC_PUBLISH_PATH}"
+systemctl daemon-reload
+systemctl enable --now tec-tac-ui-sync-publish.path >/dev/null
+log "Installed UI sync publish path unit: tec-tac-ui-sync-publish.path"
 
 
 SERVER_BACKUP_ROOT="${TEC_TAC_SERVER_BACKUP_ROOT:-/var/lib/tec-tac/server-backup}"
