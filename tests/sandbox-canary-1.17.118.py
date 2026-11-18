@@ -71,7 +71,8 @@ FILES_SOCKS = [(f"unix /s{k}", "OK", "ENOENT") for k in range(13)] + [
     ("unix pathname socket refused", "OK", "EAFNOSUPPORT"), ("socketpair round trip", "OK", "worked"), ("pipe round trip", "OK", "worked"),
     ("child process with stdio pipes", "OK", "worked")]  # 1.17.124: the filter rows and the positive controls
 GOOD = {
-    "files": None, "work_peer": lines(("another run's /work", "OK", "not found")), "sockets": lines(*FILES_SOCKS),
+    "files": None, "rootview": lines(*[("view " + f, "OK", "x") for f in sh.CANARY_VIEW_FOLDERS], ("/ lists only the allowed set", "OK", "x")),  # 1.18.8
+    "work_peer": lines(("another run's /work", "OK", "not found")), "sockets": lines(*FILES_SOCKS),
     "loopback": lines(("loopback 127.0.0.1:80", "OK", "EPERM"), *[(f"loopback 127.0.0.53:{p}", "OK", "EPERM") for p in (22, 80, 443, 1024, 4430, 4433)]),
     "lan": lines(*([(f"udp {a}", "OK", "eperm") for a in range(5)] + [(f"tcp {a}:80", "OK", "EPERM") for a in range(5)]
                    + [(f"own address 192.168.1.5 tcp {p}", "OK", "timeout") for p in (22, 80, 443)] + [("own address 192.168.1.5 udp", "OK", "eperm")]
@@ -170,9 +171,9 @@ must(PLANS["dns"]["other_resolvers"] == ["127.0.0.53", "10.0.0.2"] and PLANS["dn
 # markers: distinct random content, real files marked as "readable at all", the runner told, and all removed afterwards
 markers = PLANS["files"]["markers"]
 planted = [m for m in markers if m["content"] is not None]
-must(len(planted) == 3 and len({m["content"] for m in planted}) == 3 and all(len(m["content"]) == 32 for m in planted), markers)
+must(len(planted) == 4 and len({m["content"] for m in planted}) == 4 and all(len(m["content"]) == 32 for m in planted), markers)
 must([m for m in markers if m["content"] is None] == [{"path": str(real_file), "content": None}], "the real file, no content")
-must(len({os.path.basename(m["path"]) for m in planted}) == 3 and all(os.path.basename(m["path"]).startswith(".tectac-canary-") for m in planted), "distinct names")
+must(len({os.path.basename(m["path"]) for m in planted}) == 4 and all(os.path.basename(m["path"]).startswith(".tectac-canary-") for m in planted), "distinct names")
 must(not list(BASE.glob("*/.tectac-canary-*")) and not sh.CANARY_MARKERS_FILE.exists(), "markers removed on success")
 must(real_file.exists(), "a real file is never touched")
 # the markers were on disk, 0644, with that content, while the files group ran
@@ -188,7 +189,7 @@ def collect_seen(group, plan, **kwargs):
 
 
 sh.run_canary(status=status, collect=collect_seen, outside=Outside())
-must(len(seen) == 3 and all(v[0] and v[1] == 0o644 and k in v[2]["paths"] for k, v in seen.items()), seen)
+must(len(seen) == 4 and all(v[0] and v[1] is None and k in v[2]["paths"] for k, v in seen.items()), seen)  # 1.18.8: the mode is set on the open descriptor, never by a path chmod (tests/sandbox-canary-rootview-1.18.8.py)
 # an error in the middle still removes them
 try:
     sh.run_canary(status=status, collect=make_collect(boom_on="sockets"), outside=Outside())
@@ -198,7 +199,7 @@ except RuntimeError:
 must(not list(BASE.glob("*/.tectac-canary-*")) and not sh.CANARY_MARKERS_FILE.exists(), "markers removed on error")
 # a crash that leaves the list behind is cleaned by the sweep
 sh._plant_markers()
-must(len(list(BASE.glob("*/.tectac-canary-*"))) == 3, "planted")
+must(len(list(BASE.glob("*/.tectac-canary-*"))) == 4, "planted")
 with contextlib.redirect_stdout(io.StringIO()):
     sh.sweep()
 must(not list(BASE.glob("*/.tectac-canary-*")), "the sweep removes planted markers")

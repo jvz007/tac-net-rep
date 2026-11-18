@@ -1093,6 +1093,79 @@ chown root:root "${SANDBOX_LIB}/canary"
 chmod 0755 "${SANDBOX_LIB}/canary"
 install_root_script "${REPO_ROOT}/scripts/sandbox-launcher.py" "${SANDBOX_LIB}/sandbox-launcher.py"
 install_root_script "${REPO_ROOT}/scripts/sandbox-canary-runner.py" "${SANDBOX_LIB}/canary/sandbox-canary-runner.py"
+# 1.18.8: the sandbox root. A run no longer gets the host's file system with a list of hidden folders: its root (RootDirectory=) is this
+# Core-made skeleton of EMPTY mount points, and only what a runner needs is bound into it, read only. The skeleton is rebuilt in place on every
+# install: entries that are not on the list (or are the wrong type) are removed, missing ones are created, root:root 0755 (files 0644). For each
+# of bin sbin lib lib64 lib32 libx32 the skeleton copies this server's own form: a symlink with the same target on a merged-/usr host (Ubuntu
+# 22.04 and later), an empty folder on a host with a real folder (it is then bound read only), absent where the host has none. The helper
+# re-checks the whole skeleton at every start and in the selftest (check_skeleton); a mismatch means no run, with the plain reason.
+# Nothing here removes anything outside ${SANDBOX_ROOT_DIR}: only entries found by find under it, with rm -f (links, files) or rmdir.
+SANDBOX_ROOT_DIR="${SANDBOX_LIB}/root"
+declare -A SANDBOX_SKEL=()
+for sandbox_entry in usr work tmp var var/tmp proc sys dev run opt opt/tec-tac opt/tec-tac/runtimes etc etc/ssl etc/ssl/certs etc/ca-certificates; do
+    SANDBOX_SKEL["${sandbox_entry}"]="d"
+done
+for sandbox_entry in etc/passwd etc/group etc/ld.so.cache etc/nsswitch.conf etc/localtime etc/resolv.conf; do
+    SANDBOX_SKEL["${sandbox_entry}"]="f"
+done
+for sandbox_entry in bin sbin lib lib64 lib32 libx32; do
+    if [[ -L "/${sandbox_entry}" ]]; then
+        SANDBOX_SKEL["${sandbox_entry}"]="l:$(readlink "/${sandbox_entry}")"
+    elif [[ -d "/${sandbox_entry}" ]]; then
+        SANDBOX_SKEL["${sandbox_entry}"]="d"
+    fi
+done
+if [[ -L "${SANDBOX_ROOT_DIR}" ]]; then
+    rm -f -- "${SANDBOX_ROOT_DIR}"
+fi
+mkdir -p "${SANDBOX_ROOT_DIR}"
+chown root:root "${SANDBOX_ROOT_DIR}"
+chmod 0755 "${SANDBOX_ROOT_DIR}"
+while IFS= read -r -d '' sandbox_path; do
+    sandbox_rel="${sandbox_path#"${SANDBOX_ROOT_DIR}"/}"
+    sandbox_want="${SANDBOX_SKEL[${sandbox_rel}]-}"
+    sandbox_keep=0
+    if [[ -L "${sandbox_path}" ]]; then
+        [[ "${sandbox_want}" == "l:$(readlink "${sandbox_path}")" ]] && sandbox_keep=1
+    elif [[ -d "${sandbox_path}" ]]; then
+        # an empty mount point per module that has run (opt/tec-tac/runtimes/<module id>) is the one entry that is not on the fixed list
+        if [[ "${sandbox_want}" == "d" ]] || [[ "${sandbox_rel}" =~ ^opt/tec-tac/runtimes/[A-Za-z0-9][A-Za-z0-9_-]{0,99}$ ]]; then sandbox_keep=1; fi
+    elif [[ -f "${sandbox_path}" ]]; then
+        [[ "${sandbox_want}" == "f" ]] && sandbox_keep=1
+    fi
+    if [[ "${sandbox_keep}" -ne 1 ]]; then
+        if [[ -d "${sandbox_path}" && ! -L "${sandbox_path}" ]]; then
+            rmdir -- "${sandbox_path}" || fail "Sandbox root: cannot remove an unexpected folder."
+        else
+            rm -f -- "${sandbox_path}" || fail "Sandbox root: cannot remove an unexpected entry."
+        fi
+    fi
+done < <(find "${SANDBOX_ROOT_DIR}" -mindepth 1 -depth -print0)
+# parents before children: a plain sort puts "etc" before "etc/passwd" (the order of an associative array is not defined)
+mapfile -t SANDBOX_ORDER < <(printf '%s
+' "${!SANDBOX_SKEL[@]}" | LC_ALL=C sort)
+for sandbox_rel in "${SANDBOX_ORDER[@]}"; do
+    sandbox_want="${SANDBOX_SKEL[${sandbox_rel}]}"
+    sandbox_path="${SANDBOX_ROOT_DIR}/${sandbox_rel}"
+    case "${sandbox_want}" in
+        d)
+            [[ -L "${sandbox_path}" ]] && fail "Sandbox root: a folder is a symlink."
+            mkdir -p "${sandbox_path}"
+            chown root:root "${sandbox_path}"
+            chmod 0755 "${sandbox_path}"
+            ;;
+        f)
+            [[ -L "${sandbox_path}" ]] && fail "Sandbox root: a file is a symlink."
+            [[ -e "${sandbox_path}" ]] || install -m 0644 -o root -g root /dev/null "${sandbox_path}"
+            chown root:root "${sandbox_path}"
+            chmod 0644 "${sandbox_path}"
+            ;;
+        l:*)
+            [[ -L "${sandbox_path}" ]] || ln -s -- "${sandbox_want#l:}" "${sandbox_path}"
+            chown -h root:root "${sandbox_path}"
+            ;;
+    esac
+done
 ln -sfn "${SANDBOX_LIB}/sandbox-helper.py" "${SANDBOX_HELPER}"
 chown -h root:root "${SANDBOX_HELPER}"
 cat > "${SANDBOX_SUDOERS}" <<EOF

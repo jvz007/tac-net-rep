@@ -145,7 +145,10 @@ for name in ("scripts/sandbox-launcher.py", "scripts/sandbox-canary-runner.py", 
 must("/usr/local/lib/tec-tac/sandbox" in INSTALL and 'rm -rf "${SANDBOX_LIB}"' in UNINSTALL, "uninstall removes the lib folder, which holds the new programs")
 # every new install path sits under an existing SANDBOX_* literal, so the 1.17.116 review lesson (the rollback list) needs no new entry
 literals = set(re.findall(r'^(SANDBOX_[A-Z_]+)="', INSTALL, re.MULTILINE))
-must(literals == {"SANDBOX_HELPER", "SANDBOX_LIB", "SANDBOX_STATE", "SANDBOX_SUDOERS", "SANDBOX_SLICE", "SANDBOX_SLICE_DROPIN_DIR", "SANDBOX_SWEEP_SERVICE", "SANDBOX_SWEEP_TIMER"}, literals)
+# 1.18.8 (updated in place): SANDBOX_ROOT_DIR is the allow-list root, "${SANDBOX_LIB}/root", so the uninstall of the lib folder removes it too
+must(literals == {"SANDBOX_HELPER", "SANDBOX_LIB", "SANDBOX_STATE", "SANDBOX_SUDOERS", "SANDBOX_SLICE", "SANDBOX_SLICE_DROPIN_DIR", "SANDBOX_SWEEP_SERVICE", "SANDBOX_SWEEP_TIMER",
+                   "SANDBOX_ROOT_DIR"}, literals)
+must('SANDBOX_ROOT_DIR="${SANDBOX_LIB}/root"' in INSTALL, "the root sits inside the lib folder")
 
 # ---- line endings and syntax
 for name in ("install.sh", "uninstall.sh", "scripts/sandbox-helper.py"):

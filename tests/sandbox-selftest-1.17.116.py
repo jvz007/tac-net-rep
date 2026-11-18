@@ -97,6 +97,11 @@ sh._ROOT_LAYOUT_ERROR = None
 sh.STATE_ROOT, sh.RUN_ROOT, sh.LIB_ROOT = STATE, RUN, LIB
 sh.RUNNERS_ROOT, sh.REGISTRY_ROOT = LIB / "runners", LIB / "registry"
 sh.STATUS_FILE, sh.AUDIT_FILE = STATE / "status.json", STATE / "audit.jsonl"
+# 1.18.8 (updated in place): the allow-list root and the host's /etc and merged-/usr names are not on this PC; the skeleton check and the base-file
+# check are replaced here (tests/sandbox-file-view-1.18.8.py tests check_skeleton and file_view_properties with a fake file system)
+sh.check_skeleton = lambda *a, **k: None
+_real_file_view = sh.file_view_properties
+sh.file_view_properties = lambda exists=None: _real_file_view(lambda path: True)
 
 # ------------------------------------------------------------------------------------------------ parsing
 V = sh.parse_systemd_version
@@ -115,7 +120,6 @@ must(sh.ADDRESS_DENY == "127.0.0.0/8 ::1/128 169.254.0.0/16 fe80::/10 224.0.0.0/
 must(sh.PROBE_PROPERTIES == {
     "transient": (),
     "dynamic_user": ("DynamicUser=yes",),
-    "filesystem_view": ("DynamicUser=yes", "TemporaryFileSystem=/etc:ro", "BindReadOnlyPaths=/etc/passwd"),
     "credential": ("DynamicUser=yes",),
     "proc_hidden": ("DynamicUser=yes", "ProtectProc=invisible", "ProcSubset=pid"),
     "address_filter_control": ("DynamicUser=yes",),
@@ -216,7 +220,7 @@ must(status["ready"] is True and status["reason"] == "ready" and status["enabled
 must(status["systemd_version"] == 252 and status["address_filter_ok"] is True and status["dns_ok"] is True, status)
 must(status["resolver"] == "156.38.225.225" and status["resolvers"] == ["156.38.225.225"] and status["dns_method"] == "resolv_conf_bind", status)
 must(status["selftest_at"].endswith("Z"), status["selftest_at"])
-must(sorted(status["checks"]) == sorted(["systemd_version", "bpf_framework", "cgroup_v2", "transient_unit", "dynamic_user", "filesystem_view", "credential", "proc_hidden",
+must(sorted(status["checks"]) == sorted(["systemd_version", "bpf_framework", "cgroup_v2", "transient_unit", "dynamic_user", "filesystem_view", "sandbox_root", "credential", "proc_hidden",
                                          "address_filter_control", "address_filter_loopback", "address_filter_private", "pipe_streams", "dns", "memory_zswap", "local_addresses",
                                          "address_filter_local", "upstream_resolvers"]), sorted(status["checks"]))
 must(all(row["ok"] for row in status["checks"].values()), status["checks"])
@@ -227,7 +231,9 @@ must(names == ["transient", "dynamic_user", "filesystem_view", "credential", "pr
                "address_filter_local_control", "address_filter_local", "pipe_streams", "dns"], names)
 for name, properties, command in fake.calls:
     expected = sh.PROBE_PROPERTIES.get(name, ())
-    if name == "credential":
+    if name == "filesystem_view":  # 1.18.8: the REAL file view, from the one function the unit builder uses
+        must(properties == ("DynamicUser=yes", *sh.file_view_properties()) and "RootDirectory=" + str(sh.SANDBOX_ROOT) in properties and "MountAPIVFS=yes" in properties, properties)
+    elif name == "credential":
         must(properties[:1] == expected and len(properties) == 3, properties)
     elif name == "dns":
         must(properties == expected[:1] + ("IPAddressDeny=" + sh.ADDRESS_DENY + " 129.232.197.50/32 129.232.197.1/32",), properties)   # the full deny list, nothing allowed
@@ -265,7 +271,7 @@ check_fail("no stat", "cgroup v2", Fake(stat=(1, "")), expect_check="cgroup_v2")
 check_fail("transient", "transient unit", Fake(transient=(1, "")), expect_check="transient_unit")
 check_fail("dynamic user is root", "dynamic user", Fake(dynamic_user=(0, "0\n")), expect_check="dynamic_user")
 check_fail("dynamic user fails", "dynamic user", Fake(dynamic_user=(1, "")), expect_check="dynamic_user")
-check_fail("filesystem view", "hidden file system", Fake(filesystem_view=(0, "bad\n")), expect_check="filesystem_view")
+check_fail("filesystem view", "allow-list file system", Fake(filesystem_view=(0, "bad\n")), expect_check="filesystem_view")
 check_fail("proc visible", "ProtectProc", Fake(proc_hidden=(0, "bad 40\n")), expect_check="proc_hidden")
 check_fail("proc fails", "ProtectProc", Fake(proc_hidden=(1, "")), expect_check="proc_hidden")
 

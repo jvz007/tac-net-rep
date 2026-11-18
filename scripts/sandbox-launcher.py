@@ -1,8 +1,13 @@
 #!/usr/bin/python3
-"""In-unit launcher for core.sandbox (Core 1.17.118, Patch 2).
+"""In-unit launcher for core.sandbox (Core 1.17.118, Patch 2; 1.18.8: credential slots).
 
-The root helper starts every run as ``systemd-run ... python3 -I <this file> [--return-credential] -- <runner> <args>``. This small
-Core-owned program runs inside the unit, as the unit's own unprivileged user, and does four things:
+The root helper starts every run as ``systemd-run ... python3 -I <this file> [--credential=<name> ...] [--return-credential] -- <runner> <args>``.
+This small Core-owned program runs inside the unit, as the unit's own unprivileged user, and does five things:
+
+* 1.18.8: the unit's LoadCredential files carry the fixed slot names ``cred0`` and ``cred1`` (no module text in a unit property). Each
+  ``--credential=<name>`` argument (strict name, in slot order) becomes a symlink ``/work/credentials/<name>`` to
+  ``$CREDENTIALS_DIRECTORY/cred<i>`` (the folder is 0700 and holds no secret), and the runner gets ``CREDENTIALS_DIRECTORY=/work/credentials``,
+  so it still reads ``$CREDENTIALS_DIRECTORY/<declared name>`` and the file keeps its mode and ACL;
 
 * prints one header line ``TECTAC-SBX-LAUNCHER <nonce>`` before the runner starts. The nonce is random, lives only in this process and is
   never given to the runner (this process also turns off its own dumpable flag, so the runner cannot read its memory);
@@ -21,7 +26,9 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 import secrets
+import shutil
 import signal
 import stat
 import subprocess
@@ -30,6 +37,8 @@ import threading
 import time
 
 CREDENTIAL_MAX_BYTES = 16 * 1024
+CREDENTIAL_SLOTS_MAX = 2
+CREDENTIAL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")  # the same rule as the helper's CREDENTIAL_NAME_RE
 HEADER = "TECTAC-SBX-LAUNCHER"
 
 
@@ -70,6 +79,40 @@ def read_credential(out_dir):
     return data if len(data) <= CREDENTIAL_MAX_BYTES else None
 
 
+def link_credentials(names, source, work):
+    """Make ``<work>/credentials/<name>`` for each name whose slot file exists in ``source`` (the real CREDENTIALS_DIRECTORY). A name that fails
+    the strict rule, a slot past the second and a missing slot file are skipped (never an error); slot i belongs to the i-th name. The links
+    hold no secret. Returns the new folder, or None when nothing was linked. Where symlinks do not exist (the tests on a non-POSIX system)
+    the slot file is copied instead; a server always has symlinks."""
+    if not names or not source:
+        return None
+    folder = os.path.join(work, "credentials")
+    os.makedirs(folder, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(folder, 0o700)
+    except OSError:
+        pass
+    linked = 0
+    for index, name in enumerate(names[:CREDENTIAL_SLOTS_MAX]):
+        if not CREDENTIAL_NAME_RE.fullmatch(name):
+            continue
+        slot = os.path.join(source, f"cred{index}")
+        if not os.path.lexists(slot):
+            continue
+        target = os.path.join(folder, name)
+        try:
+            if os.path.lexists(target):
+                os.unlink(target)  # a reused work folder behaves like a fresh one
+            if os.name == "posix":
+                os.symlink(slot, target)
+            else:
+                shutil.copyfile(slot, target)
+            linked += 1
+        except OSError:
+            continue
+    return folder if linked else None
+
+
 def credential_line(nonce, data):
     return ("\n" + nonce + " CRED " + base64.b64encode(data).decode("ascii") + "\n").encode("ascii")
 
@@ -96,11 +139,15 @@ def _watch_stdout(child, interval=0.5):
 def main(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
     return_credential = False
-    if args and args[0] == "--return-credential":
-        return_credential = True
+    names = []
+    while args and (args[0] == "--return-credential" or args[0].startswith("--credential=")):
+        if args[0] == "--return-credential":
+            return_credential = True
+        else:
+            names.append(args[0][len("--credential="):])
         args = args[1:]
     if not args or args[0] != "--" or len(args) < 2:
-        sys.stderr.write("usage: sandbox-launcher [--return-credential] -- <program> [args]\n")
+        sys.stderr.write("usage: sandbox-launcher [--credential=<name> ...] [--return-credential] -- <program> [args]\n")
         return 64
     command = args[1:]
     nonce = secrets.token_hex(16)
@@ -115,8 +162,14 @@ def main(argv=None):
     except OSError:
         pass
     options = {"start_new_session": True} if os.name == "posix" else {}
+    child_env = dict(os.environ)
+    credentials = link_credentials(names, os.environ.get("CREDENTIALS_DIRECTORY"), work)
+    if credentials:
+        child_env["CREDENTIALS_DIRECTORY"] = credentials
+    elif names:
+        child_env.pop("CREDENTIALS_DIRECTORY", None)  # slots were declared but none could be linked: the runner finds no file, never the raw slot folder
     try:
-        child = subprocess.Popen(command, close_fds=True, **options)
+        child = subprocess.Popen(command, close_fds=True, env=child_env, **options)
     except OSError as exc:
         sys.stderr.write(f"sandbox-launcher: cannot start the runner ({exc.strerror or 'error'})\n")
         return 127

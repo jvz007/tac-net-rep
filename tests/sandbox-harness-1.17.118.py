@@ -109,6 +109,13 @@ sh.local_deny_now = lambda: LOCAL
 # under BASE are let through, every other path still goes through the real rule
 _real_bind_safe = sh._bind_path_safe
 sh._bind_path_safe = lambda path: str(path).startswith(str(BASE)) or _real_bind_safe(path)
+# 1.18.8: the allow-list root and the module mount point are real folders under /usr/local/lib/tec-tac/sandbox/root on a server; here they are
+# not there, so the checks that need them are replaced (the tests of check_skeleton and ensure_runtime_mountpoint inject a fake file system)
+sh.require_skeleton = lambda: None
+sh.prepare_runtime_mount = lambda row: None
+sh.check_skeleton = lambda *a, **k: None
+sh.CANARY_STANDIN_PARENT = str(BASE)  # the canary's stand-in folder is made here, never at the drive root
+sh.CGROUP_ROOT = BASE / "cgroup-none"  # no real cgroup folder here: the live poll finds nothing and the end frame says so
 sh.PROC_MEMINFO = str(BASE / "meminfo")
 (BASE / "work").mkdir()
 (BASE / "meminfo").write_text("MemTotal: 16000000 kB\nMemAvailable: 8000000 kB\n", encoding="utf-8")

@@ -72,15 +72,18 @@ def props_for(path):
 
 
 good = props_for("/opt/tec-tac/runtimes/ai/claude")
-must("BindReadOnlyPaths=/opt/tec-tac/runtimes/ai/claude" in good, "good bind kept")
+# 1.18.8 (updated in place): the module's runtime is ONE bind of its own folder; a per-root path never reaches a property, so a bad path can no longer
+# split a bind. The start still refuses a row with a bad path: check_runner_ready (below) runs the same rule at every start.
+must("BindReadOnlyPaths=/opt/tec-tac/runtimes/ai" in good and "BindReadOnlyPaths=/opt/tec-tac/runtimes/ai/claude" not in good, "good bind kept")
 for path in ("/opt/tec-tac/runtimes/ai/x /rmm/api", "/opt/tec-tac/runtimes/ai/a:b", "/opt/tec-tac/runtimes/ai/x:/rmm/api", "/opt/tec-tac/runtimes/ai/x\ty",
              "/opt/tec-tac/runtimes/ai/%h", "/opt/tec-tac/runtimes/ai/$HOME"):
+    must(props_for(path) == good and not any(path in item for item in props_for(path)), ("a bad root path reached a property", path))
     try:
-        props_for(path)
+        sh.check_runner_ready(make_runner("ai.chat", roots=[{"path": path, **TREE}]))
     except sh.Refusal as exc:
         must(exc.code == "runtime_unverified", exc.code)
     else:
-        raise AssertionError(("build_properties accepted", path))
+        raise AssertionError(("check_runner_ready accepted", path))
 
 # an old row with a bad path: ready check and sweep
 bad_row = make_runner("ai.chat", roots=[{"path": "/opt/tec-tac/runtimes/ai/x /rmm/api", **TREE}])

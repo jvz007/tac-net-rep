@@ -183,7 +183,7 @@ try:
     must(sh._foreign_credential_probe("tectac-sbx-abc") == "DENIED", "denied")
     name, properties, command = calls[-1]
     must(properties == ("DynamicUser=yes",), properties)  # no LoadCredential, no bind, no share with the first unit
-    must(command[:3] == (sh.UNIT_PYTHON, "-I", "-c") and command[-1] == "/run/credentials/tectac-sbx-abc.service/auth", command)
+    must(command[:3] == (sh.UNIT_PYTHON, "-I", "-c") and command[-1] == "/run/credentials/tectac-sbx-abc.service/cred0", command)  # 1.18.8: the fixed slot name
     must("%" not in "".join(command) and "$" not in "".join(command), "no systemd specifier in the probe command")
     StubRunner.answer = (0, "READ\n", "")
     must(sh._foreign_credential_probe("tectac-sbx-abc") == "READ", "read")

@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""1.17.118 regression: the unit builder of scripts/sandbox-helper.py (core.sandbox Patch 2, part B).
+"""1.18.8 note: updated in place for the allow-list file view (RootDirectory=, no TemporaryFileSystem deny list), the single module runtime bind
+and the fixed credential slot names cred0/cred1. The new tests are tests/sandbox-file-view-1.18.8.py and tests/sandbox-template-1.18.8.py.
+
+1.17.118 regression: the unit builder of scripts/sandbox-helper.py (core.sandbox Patch 2, part B).
 
 Golden test: every hardening property is present, none is taken from the caller or from the module's manifest text, the address filter is
 the section 15 string, there is no IPAddressAllow (1.17.123: Core's own resolv.conf is bound over /etc/resolv.conf; the resolvers are the
@@ -54,15 +57,16 @@ for item in ("MemoryMax=512M", "CPUQuota=50%", "TasksMax=100", f"LimitFSIZE={32 
     must(props.count(item) == 1, (item, [p for p in props if p.split("=")[0] == item.split("=")[0]]))
 must(f"TemporaryFileSystem={sh.WORK_DIR}:rw,nosuid,nodev,size=32M,mode=1777" in props, "scratch tmpfs sized from the row")
 must(f"WorkingDirectory={sh.WORK_DIR}" in props, "")
-# hidden file system
-hidden = [p for p in props if p.startswith("TemporaryFileSystem=") and sh.WORK_DIR not in p]
-must(len(hidden) == 1 and hidden[0].split("=", 1)[1].split() == [f"{f}:ro" for f in ("/etc", "/var", "/run", "/opt", "/srv", "/mnt", "/media", "/home", "/root", "/rmm", "/meshcentral", "/usr/local/lib/tec-tac")], hidden)
+# 1.18.8: the allow-list file view: a Core-made root, API file systems, and an empty /usr/local; there is no deny list of folders any more
+tmpfs = [p for p in props if p.startswith("TemporaryFileSystem=") and sh.WORK_DIR not in p]
+must(tmpfs == ["TemporaryFileSystem=/usr/local:ro"] and f"RootDirectory={sh.SANDBOX_ROOT}" in props and "MountAPIVFS=yes" in props, tmpfs)
+must(not hasattr(sh, "HIDDEN_FOLDERS"), "the hidden-folder list is gone")
 # binds: all read only, the base set, the runtime root, the runner folder and the launcher; each is its own property
 binds = [p.split("=", 1)[1] for p in props if p.startswith("BindReadOnlyPaths=")]
 must(not [p for p in props if p.startswith(("BindPaths=", "ReadWritePaths="))], "no writable bind and no ReadWritePaths")
 for path in sh.BASE_BINDS_REQUIRED + sh.BASE_BINDS_OPTIONAL:
     must(path in binds, path)
-must("/opt/tec-tac/runtimes/ai/claude" in binds and str(sh.RUNNERS_ROOT / "ai") in binds and str(sh.LAUNCHER_FILE) in binds, binds)
+must("/usr" in binds and "/opt/tec-tac/runtimes/ai" in binds and "/opt/tec-tac/runtimes/ai/claude" not in binds and str(sh.RUNNERS_ROOT / "ai") in binds and str(sh.LAUNCHER_FILE) in binds, binds)
 must(len(binds) == len(set(binds)) and all(" " not in b for b in binds if b != str(sh.LAUNCHER_FILE)), "one path per property")
 # 1.17.123: /etc/resolv.conf is no longer bound from the host: Core's own file is bound over it, read only
 real_line = next(line for line in (ROOT / "scripts/sandbox-helper.py").read_text(encoding="utf-8").splitlines() if line.startswith("BASE_BINDS_REQUIRED"))
@@ -80,7 +84,7 @@ must("MemoryZSwapMax=0" not in props and "OOMPolicy=kill" in props and "MemorySw
 zs = sh.build_properties(row, RUN_ID, credential_names=["auth"], exists=EXISTS, zswap=True)
 must(zs.count("MemoryZSwapMax=0") == 1 and zs.index("MemoryZSwapMax=0") == zs.index("MemorySwapMax=0") + 1, "ZSwap beside the swap limit")
 # credentials: LoadCredential per name from the run's own folder, and the folder is removed by a root ExecStartPost
-must([p for p in props if p.startswith("LoadCredential=")] == [f"LoadCredential=auth:{sh.SECRETS_ROOT / RUN_ID / 'auth'}", f"LoadCredential=extra:{sh.SECRETS_ROOT / RUN_ID / 'extra'}"], props)
+must([p for p in props if p.startswith("LoadCredential=")] == [f"LoadCredential=cred0:{sh.SECRETS_ROOT / RUN_ID / 'cred0'}", f"LoadCredential=cred1:{sh.SECRETS_ROOT / RUN_ID / 'cred1'}"], props)
 must(f"ExecStartPost=+/bin/rm -rf {sh.SECRETS_ROOT / RUN_ID}" in props, "")
 none = sh.build_properties(row, RUN_ID, credential_names=[], exists=EXISTS)
 must(not [p for p in none if p.startswith(("LoadCredential=", "ExecStartPost="))], "no credential, no hook")
@@ -88,7 +92,7 @@ must(not [p for p in none if p.startswith(("LoadCredential=", "ExecStartPost="))
 for p in props:
     must("=" in p and "\n" not in p and "\x00" not in p, p)
 ALLOWED_KEYS = {p.split("=")[0] for p in GOLDEN} | {"MemoryMax", "CPUQuota", "TasksMax", "LimitFSIZE", "RuntimeMaxSec", "TemporaryFileSystem", "WorkingDirectory",
-                                                  "BindReadOnlyPaths", "IPAddressDeny", "LoadCredential", "ExecStartPost", "ExecStopPost"}
+                                                  "BindReadOnlyPaths", "IPAddressDeny", "RootDirectory", "MountAPIVFS", "LoadCredential", "ExecStartPost", "ExecStopPost"}
 must({p.split("=")[0] for p in props} <= ALLOWED_KEYS, {p.split("=")[0] for p in props} - ALLOWED_KEYS)
 
 # ---- nothing comes from the caller or the manifest text
@@ -126,7 +130,7 @@ except sh.Refusal as exc:
     must(exc.code == "sandbox_unavailable", exc.code)
 sh.BASE_BINDS_REQUIRED = real_required
 try:
-    sh.build_properties(row, RUN_ID, credential_names=[], exists=lambda p: p != "/opt/tec-tac/runtimes/ai/claude" and EXISTS(p))
+    sh.build_properties(row, RUN_ID, credential_names=[], exists=lambda p: p != "/opt/tec-tac/runtimes/ai" and EXISTS(p))
     raise AssertionError("a missing runtime folder was accepted")
 except sh.Refusal as exc:
     must(exc.code == "sandbox_unavailable", exc.code)
@@ -177,15 +181,15 @@ try:
 except sh.Refusal:
     pass
 
-# ---- every canary marker folder is hidden by the unit (a folder outside the hidden list would stay readable): Tactical's /rmm and MeshCentral too
-def _hidden(folder):
-    return any(folder == h or folder.startswith(h + "/") for h in sh.HIDDEN_FOLDERS)
+# ---- 1.18.8: every canary marker folder is out of the unit's view: the skeleton holds only mount points, and /usr/local is masked
+def _out_of_view(folder):
+    top = folder.split("/")[1]
+    return top != "usr" or folder == "/usr/local" or folder.startswith("/usr/local/")
 for folder in sh.CANARY_MARKER_DIRS:
-    must(_hidden(folder), f"canary marker folder {folder} is not under HIDDEN_FOLDERS")
-for folder in ("/rmm", "/meshcentral"):
-    must(folder in sh.HIDDEN_FOLDERS, f"{folder} is not hidden")
-must(_hidden("/rmm/api/tacticalrmm/tacticalrmm/local_settings.py"), "local_settings.py readable")
-must(any(f"{f}:ro" in p for p in props for f in ("/rmm",)) or "/rmm:ro" in joined_props, "TemporaryFileSystem does not hide /rmm")
+    must(_out_of_view(folder), f"canary marker folder {folder} is under a bound /usr folder")
+for folder in ("/rmm", "/rmmbackups", "/meshcentral"):
+    must(folder.split("/")[1] not in sh.CANARY_VIEW_ALLOWED["/"], f"{folder} is in the allowed top-level set")
+must("TemporaryFileSystem=/usr/local:ro" in props, "the host's /usr/local is masked")
 
 print("[TEST] PASS sandbox unit builder 1.17.118")
 shutil.rmtree(BASE, ignore_errors=True)

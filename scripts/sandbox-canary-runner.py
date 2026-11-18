@@ -105,6 +105,68 @@ def g_files(plan):
             row("read " + path, "OK", errno.errorcode.get(exc.errno, "error"))
 
 
+VIEW_NAME_LENGTH = 100  # the helper cleans the host's names the same way (view_clean)
+VIEW_LISTED_MAX = 10
+RUNTIMES_FOLDER = "/opt/tec-tac/runtimes"
+
+
+def _view_names(folder):
+    """The names this unit sees in ``folder``, cleaned like the helper cleans the host's. (names, raw names) or (None, errno name)."""
+    try:
+        raw = os.listdir(folder)
+    except OSError as exc:
+        return None, errno.errorcode.get(exc.errno, "error")
+    return [clean(name, VIEW_NAME_LENGTH) for name in raw], raw
+
+
+def _is_empty_dir(path):
+    try:
+        return os.path.isdir(path) and not os.path.islink(path) and not os.listdir(path)
+    except OSError:
+        return False
+
+
+def g_rootview(plan):
+    """1.18.8: root lists the HOST's own entries of a fixed set of folders (names only) and the allowed names for each; this unit lists its own
+    view of the same folders. A name that the host has, this unit sees and is not allowed is a finding (the first ten are named). A second
+    row checks this unit's own ``/`` against the allowed set, whatever the host has."""
+    view = plan.get("view")
+    if not isinstance(view, dict) or not view:
+        row("rootview plan", "NOTRUN", "the plan held no folder listing")
+        return
+    for folder, entry in view.items():
+        if not isinstance(entry, dict):
+            continue
+        host, allowed = set(entry.get("host") or []), set(entry.get("allowed") or [])
+        seen, raw = _view_names(folder)
+        if seen is None:
+            row("view " + folder, "OK", f"not visible ({raw})")
+            continue
+        leaked = []
+        for shown, name in zip(seen, raw):
+            if shown in host and shown not in allowed:
+                if folder == RUNTIMES_FOLDER and shown == name and _is_empty_dir(os.path.join(folder, name)):
+                    continue  # an empty mount point, not the host's runtime folder
+                leaked.append(shown)
+        leaked.sort()
+        if leaked:
+            more = f" (+{len(leaked) - VIEW_LISTED_MAX} more)" if len(leaked) > VIEW_LISTED_MAX else ""
+            row("view " + folder, "SUCCEEDED", "visible: " + ", ".join(leaked[:VIEW_LISTED_MAX]) + more)
+        else:
+            row("view " + folder, "OK", f"{len(seen)} entries, none of the host's unlisted names")
+    root_entry = view.get("/") if isinstance(view.get("/"), dict) else {}
+    allowed_root = set(root_entry.get("allowed") or [])
+    own, raw = _view_names("/")
+    if own is None or not allowed_root:
+        row("/ lists only the allowed set", "NOTRUN", "the unit could not list / or the plan had no allowed set")
+        return
+    extra = sorted(name for name in own if name not in allowed_root)
+    if extra:
+        row("/ lists only the allowed set", "SUCCEEDED", "outside the set: " + ", ".join(extra[:VIEW_LISTED_MAX]))
+    else:
+        row("/ lists only the allowed set", "OK", f"{len(own)} entries, all allowed")
+
+
 def g_work_hold(plan):
     token = plan.get("work_token", "")
     with open(os.path.join(os.environ["SANDBOX_WORK"], "peer-" + token), "w", encoding="utf-8") as handle:
@@ -551,7 +613,7 @@ def g_noop(plan):
 
 
 GROUPS = {
-    "files": g_files, "work_hold": g_work_hold, "work_peer": g_work_peer, "sockets": g_sockets, "loopback": g_loopback, "lan": g_lan,
+    "files": g_files, "rootview": g_rootview, "work_hold": g_work_hold, "work_peer": g_work_peer, "sockets": g_sockets, "loopback": g_loopback, "lan": g_lan,
     "dns": g_dns, "public": g_public, "privilege": g_privilege, "writes": g_writes, "processes": g_processes, "mem": g_mem,
     "fork": g_fork, "loop": g_loop, "scratch": g_scratch, "flood": g_flood, "abstract": g_abstract, "cred": g_cred, "sleep": g_sleep,
     "noop": g_noop,

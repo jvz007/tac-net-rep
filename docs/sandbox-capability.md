@@ -1,6 +1,6 @@
 # Core sandbox
 
-Core 1.17.116 (AD-63), launch path built in 1.17.118. Capability `core.sandbox` 1.0.0. Python only: `tec_tac.sandbox`, plus two routes (below).
+Core 1.17.116 (AD-63), launch path built in 1.17.118, allow-list file view and helper audit rows added in 1.18.8. Capability `core.sandbox` 1.0.0. Python only: `tec_tac.sandbox`, plus two routes (below).
 
 Some modules need to run a program they did not write: a command line tool from an AI provider, for example. Core can run that program in a sandbox. A sandbox is a small, locked room. The program can do its work, and it cannot see the server's files or reach the server itself.
 
@@ -41,7 +41,7 @@ If the server cannot enforce this, the sandbox stays off with a plain reason. It
 - `tec-tac-sandbox-sweep.timer`: at boot and daily it checks the runtime folders again and removes stray test folders.
 - A selftest at every install. If the server cannot host the sandbox, the install still succeeds and prints `Sandbox is off: <reason>. ai ChatGPT stays off.`
 
-The selftest checks: the systemd version (249 or newer), that cgroup v2 is in use, a harmless transient unit, a dynamic user, a hidden file system with a read-only bind, `LoadCredential`, `ProtectProc`, the address filter (the helper opens its own loopback listener and the probe must not reach it; private ranges must be refused; the same probe without the filter must connect, so a probe that cannot connect anyway is never read as a pass), and that a DNS reply arrives from inside the filtered unit. Any reply counts, including "no such name". The result is `/var/lib/tec-tac/sandbox/status.json`, root-owned and small.
+The selftest checks: the systemd version (249 or newer), that cgroup v2 is in use, a harmless transient unit, a dynamic user, the allow-list file system (the sandbox root folder must match this server, then the real file view is probed), `LoadCredential`, `ProtectProc`, the address filter (the helper opens its own loopback listener and the probe must not reach it; private ranges must be refused; the same probe without the filter must connect, so a probe that cannot connect anyway is never read as a pass), and that a DNS reply arrives from inside the filtered unit. Any reply counts, including "no such name". The result is `/var/lib/tec-tac/sandbox/status.json`, root-owned and small.
 
 ## The launch path (Core 1.17.118)
 
@@ -50,9 +50,9 @@ With the switch on, a run goes like this.
 1. The owning module calls `tec_tac.sandbox.start(runner_id, input=..., parameters=..., credentials=..., requested_by=..., user=...)`. Core finds the caller from the call stack (AD-26). Only the module that owns the runner may start it.
 2. Core checks the server is ready, the runner and its runtime, the input size, the parameters and the credential names, and writes one strict audit row `sandbox.run.started` **before** the launch. A run that cannot be audited does not start.
 3. Core starts the root helper through sudo (`--start`). The header, the input and the credentials go to its stdin, never to argv or the environment. The helper checks every rule again against the root-owned registry row, re-checks the runtime folder and the program's SHA-256, and takes a slot.
-4. The helper builds the unit itself, from the registry row and its own constants. The caller cannot add or change a property. The unit carries a dynamic user, a hidden file system (only the files the run needs are bound back, read only), a private scratch folder `/work`, the section 15 address filter, the system-call filter and the limits.
+4. The helper builds the unit itself, from the registry row and its own constants. The caller cannot add or change a property. The unit carries a dynamic user, an allow-list file system (since 1.18.8: its root is a Core-made folder of empty mount points, `/usr/local/lib/tec-tac/sandbox/root`, and only what the run needs is bound into it, read only), a private scratch folder `/work`, the section 15 address filter, the system-call filter and the limits.
 5. A small Core-owned launcher runs inside the unit and starts the program. The program's output streams back as frames.
-6. Credentials sit only on tmpfs (`/run/tec-tac/sandbox/secrets/<run id>/`, folder 0700, files 0600), reach the unit through `LoadCredential`, and are deleted by `ExecStartPost`, again when the run ends for any reason, and again by the sweep.
+6. Credentials sit only on tmpfs (`/run/tec-tac/sandbox/secrets/<run id>/`, folder 0700, files 0600), reach the unit through `LoadCredential`, and are deleted by `ExecStartPost`, again when the run ends for any reason, and again by the sweep. Since 1.18.8 the unit only ever sees the fixed names `cred0` and `cred1`; the launcher links each declared name to its slot under `/work/credentials`, so a runner still reads `$CREDENTIALS_DIRECTORY/<declared name>`.
 
 **Slots.** At most `min(6, floor((MemAvailable - 1.5 GiB) / memory_max))` runs at once, never fewer than 1; at most 2 per person. A start waits in the queue for up to the runner's `queue_seconds`, then raises `busy` or `person_busy` with `retry_after`. The person is the signed-in `user` you pass; without it Core uses `requested_by`, which it cannot verify, so that is used for the limit and the audit row only, never for access.
 
@@ -155,8 +155,15 @@ Check `has_capability('core.sandbox')` first and require framework >=1.17.116 (>
 - The switch. `SANDBOX_ENABLED` is `False` in `tec_tac/sandbox.py` and in the helper. It is turned on by a separate patch after the dev02 canary passes in full.
 - A setting to lower the slot count, and a status panel in the UI.
 - IPv6 for a run (`RestrictAddressFamilies` is `AF_INET` only since 1.17.124; there is no `AF_UNIX` either), an egress proxy, a host list, a warm pool.
+- Audit log rotation: the helper's own file `/var/lib/tec-tac/sandbox/audit.jsonl` grows by about 300 bytes a row and is not rotated yet.
 - Copying the helper's registered and removed rows into Core's audit log. The helper's log file is not readable by the Tactical account and Core has nowhere to keep a read position yet; a later patch adds both.
 - No module uses `core.sandbox` yet.
+
+## The file system a run sees (1.18.8)
+
+A run does not get the server's file system with some folders hidden. It gets a small root of its own, built by `install.sh` and checked at every start and in the selftest. The root holds only empty mount points: `usr`, `work`, `tmp`, `var/tmp`, `proc`, `sys`, `dev`, `run`, `opt/tec-tac/runtimes`, `etc/ssl/certs`, `etc/ca-certificates`, a few empty files under `etc`, and the merged-`/usr` names (`bin`, `sbin`, `lib`, `lib64`, `lib32`, `libx32`) in the form this server has. What the run needs is bound into those points, read only: `/usr`, the system's certificates and account files, its own runner, its own runtime folder `/opt/tec-tac/runtimes/<module id>` (one bind for the whole folder) and the launcher. The server's own `/usr/local` is replaced by an empty folder. If the root does not match the server, the selftest says so in plain words and no run starts: run the Core install again. There is no weaker mode.
+
+**The helper's own audit rows.** Besides Core's `sandbox.run.*` rows, the root helper writes `run.started` (before the unit is started; no row, no run) and `run.ended` to `/var/lib/tec-tac/sandbox/audit.jsonl`. They hold the runner id, the run id, a key made from the person (never the person's text), whether it was a canary run, the end reason, the exit code, the duration, the output sizes, the memory peak and the kernel's kill count. They never hold the input, an output, a parameter, a credential or a path. A direct `sudo tec-tac-sandbox --start` call leaves a record even if Django is bypassed.
 
 ## For administrators
 

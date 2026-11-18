@@ -226,8 +226,8 @@ def spy_spawn(argv):
     run_id = next(a for a in argv if a.startswith("--unit="))[len("--unit=tectac-sbx-"):]
     folder = sh.SECRETS_ROOT / run_id
     seen["folder_mode"] = CHMODS.get(norm(folder))
-    seen["file_mode"] = CHMODS.get(norm(folder / "auth"))
-    seen["exists"] = (folder / "auth").is_file()
+    seen["file_mode"] = CHMODS.get(norm(folder / "cred0"))  # 1.18.8: the slot file name
+    seen["exists"] = (folder / "cred0").is_file()
     seen["argv"] = list(argv)
     return real_spawn(argv)
 
@@ -244,7 +244,7 @@ must(not leftovers() and not (sh.SECRETS_ROOT / frames[0]["run_id"]).exists(), "
 must(TOKEN not in json.dumps(seen["argv"]) and TOKEN not in json.dumps(unit_log(frames[0]["run_id"])["args"]), "never in argv")
 must(TOKEN not in json.dumps(sorted(sh.CHILD_ENV.items())) and TOKEN not in audit_text(), "never in the helper's environment or audit log")
 props = unit_log(frames[0]["run_id"])["props"]
-must(any(p.startswith("LoadCredential=auth:") for p in props) and any(p.startswith("ExecStartPost=+/bin/rm -rf ") for p in props), props)
+must(any(p.startswith("LoadCredential=cred0:") for p in props) and any(p.startswith("ExecStartPost=+/bin/rm -rf ") for p in props), props)
 must(any(p.startswith("ExecStopPost=+/usr/local/sbin/tec-tac-sandbox --finish ") for p in props), props)
 # without credential_return no credential comes back, even when the program writes one
 make_runner("ai.cred2", body="open(os.path.join(os.environ['SANDBOX_OUT'], 'credential'), 'w').write('x')", credential_files=["auth"], credential_return=False)

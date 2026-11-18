@@ -1,11 +1,11 @@
 #!/usr/bin/python3
-"""Root-owned helper for core.sandbox (Core 1.17.120, Patch 2: the launch path; the kill switch is still off).
+"""Root-owned helper for core.sandbox (Core 1.18.8, Patch A: allow-list file view, fixed unit template, memory evidence and root audit rows; the kill switch is still off).
 
 core.sandbox runs a signed module's declared program as an unprivileged, resource-limited process that cannot see the server's files
 or reach the server itself or private networks (AD-63, docs/planning/sandbox/PLAN-CORE-SANDBOX.md sections 2, 3 and 15).
 
 * ``--register-module <id>`` and ``--unregister-module <id>`` (root callers: the module job helpers): the registry of declared runners;
-* ``--selftest`` (root: install.sh, an administrator): proves systemd, cgroup v2, DynamicUser, the hidden file system, credential
+* ``--selftest`` (root: install.sh, an administrator): proves systemd, cgroup v2, DynamicUser, the allow-list file system, credential
   hand-in, separate stdout and stderr pipes, ProtectProc and the section 15 address filter work here, and writes ``status.json``. A failed
   check means ``ready: false`` with a plain reason, never a weaker mode;
 * ``--selftest --canary`` (root only, never in sudoers): the full attack test with an in-memory runner ``core.canary``; writes canary.json;
@@ -198,7 +198,6 @@ UNIT_TIMEOUT_SECONDS = 30
 PROBE_PROPERTIES = {
     "transient": (),
     "dynamic_user": ("DynamicUser=yes",),
-    "filesystem_view": ("DynamicUser=yes", "TemporaryFileSystem=/etc:ro", "BindReadOnlyPaths=/etc/passwd"),
     "credential": ("DynamicUser=yes",),  # plus LoadCredential and ExecStartPost, which carry the run's own paths
     "proc_hidden": ("DynamicUser=yes", "ProtectProc=invisible", "ProcSubset=pid"),
     "address_filter_control": ("DynamicUser=yes",),
@@ -1051,11 +1050,31 @@ def selftest(runner=None, *, resolv_conf_path="/etc/resolv.conf", run_root=None,
     dyn_ok = code == 0 and uid.isdigit() and int(uid) >= 61184
     if not _check(checks, "dynamic_user", dyn_ok, f"uid {uid}" if uid else err.strip()[:200]):
         fail("dynamic_user", "a unit could not run as a dynamic user")
-    # hidden file system, read-only bind
-    script = "if test -r /etc/passwd && ! test -e /etc/shadow && ! test -e /etc/tec-tac; then echo ok; else echo bad; fi"
-    code, out, err = runner.run_unit("filesystem_view", PROBE_PROPERTIES["filesystem_view"], ["/bin/sh", "-c", script])
-    if not _check(checks, "filesystem_view", code == 0 and out.strip() == "ok", out.strip() or err.strip()[:200]):
-        fail("filesystem_view", "a unit could not be given a hidden file system with read-only binds")
+    # 1.18.8: the allow-list root. The skeleton must match this server, then the REAL view (the same properties the builder uses) is probed.
+    try:
+        check_skeleton()
+        skeleton_ok = True
+    except Refusal as exc:
+        skeleton_ok = False
+        _check(checks, "sandbox_root", False, exc.message)
+        _check(checks, "filesystem_view", False, "not run: the sandbox root folder is wrong")
+        fail("sandbox_root", exc.message)
+    if skeleton_ok:
+        _check(checks, "sandbox_root", True, "the sandbox root folder matches this server")
+        try:
+            view = file_view_properties()
+        except Refusal as exc:
+            view = None
+            _check(checks, "filesystem_view", False, exc.message)
+            fail("filesystem_view", exc.message)
+        if view is not None:
+            script = ("if test -r /etc/passwd && ! test -e /etc/shadow && ! test -e /etc/tec-tac && ! test -e /rmm && ! test -e /opt/tec-tac/etc "
+                      "&& ! test -e /usr/local/lib/tec-tac/sandbox/registry; then bad=; for n in $(ls -A /); do case \"$n\" in "
+                      + "|".join(CANARY_VIEW_ALLOWED["/"]) + ") ;; *) bad=\"$bad $n\";; esac; done; "
+                      "if [ -z \"$bad\" ]; then echo ok; else echo \"bad:$bad\"; fi; else echo bad; fi")
+            code, out, err = runner.run_unit("filesystem_view", ["DynamicUser=yes", *view], ["/bin/sh", "-c", script])
+            if not _check(checks, "filesystem_view", code == 0 and out.strip() == "ok", out.strip() or err.strip()[:200]):
+                fail("filesystem_view", "a unit could not be given the allow-list file system with read-only binds")
     # credential hand-in
     ok, detail = _probe_credential(runner, run_root)
     if not _check(checks, "credential", ok, detail):
@@ -1486,8 +1505,17 @@ STOP_GRACE_SECONDS = 5
 TIMER_SLACK_SECONDS = 5  # RuntimeMaxSec is the run's own limit plus this, so the helper's timer fires first
 LAUNCHER_HEADER_RE = re.compile(rb"TECTAC-SBX-LAUNCHER ([0-9a-f]{32})")
 SANDBOX_PATH_ENV = "/usr/local/bin:/usr/bin:/bin"
-# The unit's file system (plan sections 3 and 15). Hidden folders, then only what the runner needs bound back, read only.
-HIDDEN_FOLDERS = ("/etc", "/var", "/run", "/opt", "/srv", "/mnt", "/media", "/home", "/root", "/rmm", "/meshcentral", "/usr/local/lib/tec-tac")
+# The unit's file system (1.18.8, AD-65): an allow-list root. RootDirectory= points at a Core-made skeleton of empty mount points
+# (install.sh builds it, check_skeleton re-checks it at every start); only what the runner needs is bound into it, read only.
+SANDBOX_ROOT = LIB_ROOT / "root"
+MERGED_USR_NAMES = ("bin", "sbin", "lib", "lib64", "lib32", "libx32")  # a symlink into /usr on a merged-/usr host, a real folder (then bound) otherwise
+SKELETON_DIRS = ("usr", "work", "tmp", "var", "var/tmp", "proc", "sys", "dev", "run", "opt", "opt/tec-tac", "opt/tec-tac/runtimes", "etc",
+                 "etc/ssl", "etc/ssl/certs", "etc/ca-certificates")
+SKELETON_FILES = ("etc/passwd", "etc/group", "etc/ld.so.cache", "etc/nsswitch.conf", "etc/localtime", "etc/resolv.conf")
+SKELETON_TOP = ("usr", "work", "tmp", "var", "proc", "sys", "dev", "run", "opt", "etc")  # merged-/usr names are added per host
+SKELETON_ENTRIES = {"": SKELETON_TOP, "var": ("tmp",), "opt": ("tec-tac",), "opt/tec-tac": ("runtimes",), "etc": ("ssl", "ca-certificates", "passwd", "group", "ld.so.cache", "nsswitch.conf", "localtime", "resolv.conf"),
+                    "etc/ssl": ("certs",),
+                    **{name: () for name in ("usr", "work", "tmp", "var/tmp", "proc", "sys", "dev", "run", "etc/ssl/certs", "etc/ca-certificates")}}
 BASE_BINDS_REQUIRED = ("/etc/ssl/certs", "/etc/passwd", "/etc/group", "/etc/ld.so.cache")  # 1.17.123: /etc/resolv.conf is Core's own file, bound below
 BASE_BINDS_OPTIONAL = ("/etc/ca-certificates", "/etc/nsswitch.conf", "/etc/localtime")
 CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt"
@@ -1855,18 +1883,100 @@ def _bind_path_safe(path):
             and not any(ch.isspace() or ch in ":%$" or ord(ch) < 32 or ord(ch) == 127 for ch in path))
 
 
-def build_properties(row, run_id, *, credential_names, exists=os.path.lexists, deny_extra=(), resolv_file=None, zswap=False):
-    """Every property of the unit, as ``Key=Value`` strings. Built from the registry row and the constants above only: nothing here comes
-    from the caller or from the module's manifest text (argv and environment values travel as arguments, never as properties).
-    ``deny_extra`` is this server's own addresses and gateways as ``<address>/32`` or ``/128`` (``local_deny``), added to IPAddressDeny;
-    ``resolv_file`` is Core's own resolv.conf, bound read only over /etc/resolv.conf; ``zswap`` adds MemoryZSwapMax=0 (systemd 255 or newer).
-    1.17.123: there is no IPAddressAllow at all."""
-    limits = row["limits"]
-    scratch = int(limits["scratch_mb"])
-    resolv_file = str(resolv_file or core_resolv_file())
+UNIT_FIXED_PROPERTIES = (  # 1.18.8: Core constants only; no module text, number or path is ever part of these
+    "DynamicUser=yes", "ProtectSystem=strict", "ProtectHome=yes", "PrivateTmp=yes", "PrivateDevices=yes", "PrivateIPC=yes",
+    "NoNewPrivileges=yes", "CapabilityBoundingSet=", "AmbientCapabilities=",
+    "SystemCallFilter=@system-service", "SystemCallFilter=~@privileged @resources", "SystemCallArchitectures=native",
+    "SystemCallErrorNumber=EPERM", "RestrictAddressFamilies=AF_INET", "RestrictNamespaces=yes", "RestrictRealtime=yes",
+    "RestrictSUIDSGID=yes", "LockPersonality=yes", "MemoryDenyWriteExecute=no", "ProtectKernelTunables=yes",
+    "ProtectKernelModules=yes", "ProtectKernelLogs=yes", "ProtectControlGroups=yes", "ProtectClock=yes", "ProtectHostname=yes",
+    "ProtectProc=invisible", "ProcSubset=pid", "UMask=0077", "KillMode=control-group", "SendSIGKILL=yes",
+    "MemorySwapMax=0", "OOMPolicy=kill", "LimitNOFILE=1024", "LimitCORE=0",
+)
+
+
+def _limit_value(limits, name):
+    """1.18.8: every number in a property is re-checked against its Core ceiling here, so nothing above a ceiling (or not a whole number) is formatted."""
+    value = limits.get(name) if isinstance(limits, dict) else None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1 or value > LIMITS[name][1]:
+        raise Refusal("runtime_unverified")
+    return value
+
+
+def credential_slots(names):
+    """1.18.8: a unit only ever sees the fixed slot names cred0, cred1 (in the order of ``names``); the declared name travels to the launcher as
+    an argument and never reaches a unit property. Returns [(slot, name)]."""
+    names = list(names)
+    if len(names) > CREDENTIAL_FILES_MAX or len(set(names)) != len(names):
+        raise Refusal("credential_invalid", "too many credentials for this runner")
+    for name in names:
+        if not isinstance(name, str) or not CREDENTIAL_NAME_RE.fullmatch(name):
+            raise Refusal("credential_invalid", "a credential name is not allowed")
+    return [(f"cred{index}", name) for index, name in enumerate(names)]
+
+
+def file_view_properties(exists=os.path.lexists):
+    """1.18.8: the file view of a unit, in one place for the real builder and the selftest probe so they cannot drift: the Core-made skeleton as
+    RootDirectory=, API file systems, then read-only binds of /usr, the merged-/usr names that are real folders on this host, the base files,
+    and an empty /usr/local over the host's own (the launcher and the runner folder are bound back inside it by the builder)."""
     for path in BASE_BINDS_REQUIRED:
         if not exists(path):
             raise Refusal("sandbox_unavailable", f"this server has no {path} to hand a run")
+    props = [f"RootDirectory={SANDBOX_ROOT}", "MountAPIVFS=yes", "BindReadOnlyPaths=/usr"]
+    for name in MERGED_USR_NAMES:
+        path = "/" + name
+        if exists(path) and not os.path.islink(path):
+            props.append(f"BindReadOnlyPaths={path}")
+    props += [f"BindReadOnlyPaths={path}" for path in BASE_BINDS_REQUIRED]
+    props += [f"BindReadOnlyPaths={path}" for path in BASE_BINDS_OPTIONAL if exists(path)]
+    props.append("TemporaryFileSystem=/usr/local:ro")
+    return props
+
+
+def _module_folders(row):
+    """(runtime folder or None, runner folder, launcher file): the paths of the three module-related binds, from Core constants and the
+    validated module id only. The per-root paths of ``runtime_roots`` are used by check_runner_ready for the tree hashes and never get here."""
+    owner = row.get("owner_module")
+    if not isinstance(owner, str) or not MODULE_ID_RE.fullmatch(owner):
+        raise Refusal("runtime_unverified")
+    runtime = f"{RUNTIME_BASE}/{owner}" if row.get("runtime_roots") else None
+    return runtime, str(runner_base(owner)), str(LAUNCHER_FILE)
+
+
+def check_unit_properties(props, row, run_id, *, resolv_file):
+    """1.18.8: the closed set. Every emitted property must be fixed text, a number, a validated module id, the hex run id or one of Core's
+    own folders. A later edit that adds a module string (or anything else) makes every start fail here instead of reaching systemd."""
+    runtime, runner_folder, launcher = _module_folders(row)
+    exact = set(UNIT_FIXED_PROPERTIES) | set(file_view_properties(lambda path: True)) | {
+        f"BindReadOnlyPaths={path}" for path in (*BASE_BINDS_OPTIONAL, *("/" + name for name in MERGED_USR_NAMES), runner_folder, launcher, runtime) if path}
+    exact.add(f"BindReadOnlyPaths={resolv_file}:{RESOLV_TARGET}")
+    exact.add("MemoryZSwapMax=0")
+    exact.add(f"WorkingDirectory={WORK_DIR}")
+    folder = SECRETS_ROOT / run_id
+    patterns = [re.compile(item) for item in (
+        r"MemoryMax=[0-9]{1,6}M", r"CPUQuota=[0-9]{1,5}%", r"TasksMax=[0-9]{1,6}", r"LimitFSIZE=[0-9]{1,12}", r"RuntimeMaxSec=[0-9]{1,6}",
+        re.escape(f"TemporaryFileSystem={WORK_DIR}:rw,nosuid,nodev,size=") + r"[0-9]{1,6}M,mode=1777",
+        re.escape("IPAddressDeny=" + ADDRESS_DENY) + r"(?: [0-9a-f.:]{2,45}/[0-9]{1,3}){0," + str(LOCAL_DENY_MAX + 8) + "}",
+        re.escape("LoadCredential=cred") + r"[0-9]:" + re.escape(str(folder / "cred")) + r"[0-9]",
+        re.escape(f"ExecStartPost=+/bin/rm -rf {folder}"), re.escape(f"ExecStopPost=+{HELPER_COMMAND} --finish {run_id}"))]
+    for item in props:
+        if item not in exact and not any(pattern.fullmatch(item) for pattern in patterns):
+            raise Refusal("sandbox_unavailable", "the unit would carry a property that is not on Core's fixed list")
+
+
+def build_properties(row, run_id, *, credential_names, exists=os.path.lexists, deny_extra=(), resolv_file=None, zswap=False):
+    """Every property of the unit, as ``Key=Value`` strings. 1.18.8 (AD-65): built from Core constants, the validated module id and the hex
+    run id only; no module-supplied string (a runtime root path, a credential name) is ever part of a property, and the last step checks
+    the whole list against a closed set. Argv and environment values travel as arguments, never as properties.
+    ``deny_extra`` is this server's own addresses and gateways as ``<address>/32`` or ``/128`` (``local_deny``), added to IPAddressDeny;
+    ``resolv_file`` is Core's own resolv.conf, bound read only over /etc/resolv.conf; ``zswap`` adds MemoryZSwapMax=0 (systemd 255 or newer).
+    1.17.123: there is no IPAddressAllow at all."""
+    if not _plain_id(run_id, RUN_ID_RE):
+        raise Refusal("invalid_input", "the run id is not valid")
+    limits = row["limits"]
+    memory, cpu, tasks, seconds, scratch = (_limit_value(limits, name) for name in ("memory_mb", "cpu_percent", "tasks", "run_seconds", "scratch_mb"))
+    resolv_file = str(resolv_file or core_resolv_file())
+    view = file_view_properties(exists)
     if not _bind_path_safe(resolv_file) or not exists(resolv_file):
         raise Refusal("sandbox_unavailable", "Core's resolv.conf for the run is missing")
     deny_extra = list(deny_extra)
@@ -1878,29 +1988,15 @@ def build_properties(row, run_id, *, credential_names, exists=os.path.lexists, d
             numeric = False
         if not numeric:
             raise Refusal("sandbox_unavailable", "an address for the deny list is not numeric")
-    binds = list(BASE_BINDS_REQUIRED) + [path for path in BASE_BINDS_OPTIONAL if exists(path)]
-    own = [root["path"] for root in row.get("runtime_roots") or []]
-    if not all(_bind_path_safe(path) for path in own):
-        raise Refusal("runtime_unverified")  # fail closed: never a unit with an extra bind
-    own += [str(runner_base(row["owner_module"])), str(LAUNCHER_FILE)]
-    for path in own:
+    runtime, runner_folder, launcher = _module_folders(row)
+    binds = [path for path in (runtime, runner_folder, launcher) if path]
+    for path in binds:
         if not exists(path):
             raise Refusal("sandbox_unavailable", "a folder the run needs is missing")  # a missing bind fails loudly, never leaks
-    binds += own
     props = [
-        "DynamicUser=yes", "ProtectSystem=strict", "ProtectHome=yes", "PrivateTmp=yes", "PrivateDevices=yes", "PrivateIPC=yes",
-        "NoNewPrivileges=yes", "CapabilityBoundingSet=", "AmbientCapabilities=",
-        "SystemCallFilter=@system-service", "SystemCallFilter=~@privileged @resources", "SystemCallArchitectures=native",
-        "SystemCallErrorNumber=EPERM", "RestrictAddressFamilies=AF_INET", "RestrictNamespaces=yes", "RestrictRealtime=yes",
-        "RestrictSUIDSGID=yes", "LockPersonality=yes", "MemoryDenyWriteExecute=no", "ProtectKernelTunables=yes",
-        "ProtectKernelModules=yes", "ProtectKernelLogs=yes", "ProtectControlGroups=yes", "ProtectClock=yes", "ProtectHostname=yes",
-        "ProtectProc=invisible", "ProcSubset=pid", "UMask=0077", "KillMode=control-group", "SendSIGKILL=yes",
-        f"MemoryMax={int(limits['memory_mb'])}M", "MemorySwapMax=0", "OOMPolicy=kill", f"CPUQuota={int(limits['cpu_percent'])}%",
-        f"TasksMax={int(limits['tasks'])}", "LimitNOFILE=1024", "LimitCORE=0", f"LimitFSIZE={scratch * 1024 * 1024}",
-        f"RuntimeMaxSec={int(limits['run_seconds']) + TIMER_SLACK_SECONDS}",
-        "TemporaryFileSystem=" + " ".join(f"{folder}:ro" for folder in HIDDEN_FOLDERS),
-        f"TemporaryFileSystem={WORK_DIR}:rw,nosuid,nodev,size={scratch}M,mode=1777",
-        f"WorkingDirectory={WORK_DIR}",
+        *UNIT_FIXED_PROPERTIES, *view,
+        f"MemoryMax={memory}M", f"CPUQuota={cpu}%", f"TasksMax={tasks}", f"LimitFSIZE={scratch * 1024 * 1024}", f"RuntimeMaxSec={seconds + TIMER_SLACK_SECONDS}",
+        f"TemporaryFileSystem={WORK_DIR}:rw,nosuid,nodev,size={scratch}M,mode=1777", f"WorkingDirectory={WORK_DIR}",
     ]
     props += [f"BindReadOnlyPaths={path}" for path in binds]
     props.append(f"BindReadOnlyPaths={resolv_file}:{RESOLV_TARGET}")
@@ -1908,10 +2004,12 @@ def build_properties(row, run_id, *, credential_names, exists=os.path.lexists, d
     if zswap:
         props.insert(props.index("MemorySwapMax=0") + 1, "MemoryZSwapMax=0")
     folder = SECRETS_ROOT / run_id
-    props += [f"LoadCredential={name}:{folder / name}" for name in credential_names]
-    if credential_names:
+    slots = credential_slots(credential_names)
+    props += [f"LoadCredential={slot}:{folder / slot}" for slot, _name in slots]
+    if slots:
         props.append(f"ExecStartPost=+/bin/rm -rf {folder}")
     props.append(f"ExecStopPost=+{HELPER_COMMAND} --finish {run_id}")
+    check_unit_properties(props, row, run_id, resolv_file=resolv_file)
     return props
 
 
@@ -1938,12 +2036,144 @@ def build_argv(row, run_id, parameters, *, credential_names, exists=os.path.lexi
     argv += [f"--setenv={name}={value}" for name, value in build_environment(row).items()]
     argv.append("--")
     command = [UNIT_PYTHON, "-I", str(LAUNCHER_FILE)]
+    command += [f"--credential={name}" for _slot, name in credential_slots(credential_names)]  # 1.18.8: the declared name only travels here
     if row.get("credential_return"):
         command.append("--return-credential")
     command += ["--", str(row["executable"]), *render_command(row, parameters)]
     if any("%" in item for item in command):  # 1.17.120: before any unit is started; the message never repeats the word
         raise Refusal("invalid_input", "a command word may not contain '%'")
     return argv + [_exec_escape(item) for item in command]
+
+
+# ------------------------------------------------------------------------------------------------ the sandbox root (1.18.8)
+SKELETON_PROBLEM = "the sandbox root folder does not match this server; run the Core install again"
+
+
+def _skeleton_refusal(detail=None):
+    return Refusal("sandbox_unavailable", SKELETON_PROBLEM)
+
+
+def check_skeleton(exists=os.path.lexists, lstat=None, *, root=None, listdir=os.listdir, readlink=os.readlink):
+    """1.18.8: the skeleton RootDirectory= points at must be exactly what install.sh builds: root-owned, not writable, no symlink where a
+    folder is expected, every expected entry present and of the right type, the merged-/usr names in the form this host has, and nothing
+    unexpected in the folders that hold only skeleton entries. A mismatch is a refusal (the selftest turns it into ready: false); there is
+    no weaker mode. ``exists``, ``lstat``, ``listdir`` and ``readlink`` can be replaced by a test."""
+    lstat = lstat or _lstat
+    base = Path(root) if root is not None else SANDBOX_ROOT
+
+    def info(relative):
+        try:
+            return lstat(base / relative if relative else base)
+        except OSError:
+            raise _skeleton_refusal() from None
+
+    def require(relative, kind):
+        st = info(relative)
+        wanted = stat.S_ISDIR(st.st_mode) if kind == "dir" else stat.S_ISREG(st.st_mode)
+        if stat.S_ISLNK(st.st_mode) or not wanted or _untrusted(st):
+            raise _skeleton_refusal()
+
+    require("", "dir")
+    for relative in SKELETON_DIRS:
+        require(relative, "dir")
+    for relative in SKELETON_FILES:
+        require(relative, "file")
+    merged, real_dirs = [], []
+    for name in MERGED_USR_NAMES:
+        host_path = "/" + name
+        if not exists(host_path):
+            expected = None
+        else:
+            try:
+                host = lstat(host_path)
+            except OSError:
+                raise _skeleton_refusal() from None
+            expected = "link" if stat.S_ISLNK(host.st_mode) else "dir"
+        if expected is None:
+            if exists(base / name):
+                raise _skeleton_refusal()
+            continue
+        merged.append(name)
+        if expected == "dir":
+            require(name, "dir")
+            real_dirs.append(name)
+        else:
+            st = info(name)
+            try:
+                same = stat.S_ISLNK(st.st_mode) and readlink(base / name) == readlink(host_path)
+            except OSError:
+                same = False
+            if not same or st.st_uid != ROOT_UID:
+                raise _skeleton_refusal()
+    for relative, allowed in SKELETON_ENTRIES.items():
+        wanted = set(allowed) | (set(merged) if not relative else set())
+        try:
+            found = set(listdir(base / relative if relative else base))
+        except OSError:
+            raise _skeleton_refusal() from None
+        if found != wanted:
+            raise _skeleton_refusal()
+    try:
+        mounts = listdir(base / "opt" / "tec-tac" / "runtimes")
+    except OSError:
+        raise _skeleton_refusal() from None
+    for name in mounts:  # one empty mount point per module that has run, never anything else
+        if not MODULE_ID_RE.fullmatch(name):
+            raise _skeleton_refusal()
+        require(f"opt/tec-tac/runtimes/{name}", "dir")
+    for relative in (*real_dirs, *(f"opt/tec-tac/runtimes/{name}" for name in mounts)):  # a mount point holds nothing of its own
+        try:
+            if listdir(base / relative):
+                raise _skeleton_refusal()
+        except OSError:
+            raise _skeleton_refusal() from None
+
+
+def ensure_runtime_mountpoint(module_id, *, root=None, lstat=None, mkdir=os.mkdir):
+    """1.18.8: the one mount point a module's runtime bind needs, ``opt/tec-tac/runtimes/<module id>`` inside the skeleton, made by the helper
+    (root, 0755). The id is validated, the parent chain was checked by check_skeleton, an existing entry must be a real root-owned folder
+    that is not writable, and the result is checked again. Anything else is a refusal."""
+    lstat = lstat or _lstat
+    if not isinstance(module_id, str) or not MODULE_ID_RE.fullmatch(module_id):
+        raise _skeleton_refusal()
+    base = Path(root) if root is not None else SANDBOX_ROOT
+    for relative in ("", "opt", "opt/tec-tac", "opt/tec-tac/runtimes"):
+        try:
+            st = lstat(base / relative if relative else base)
+        except OSError:
+            raise _skeleton_refusal() from None
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode) or _untrusted(st):
+            raise _skeleton_refusal()
+    target = base / "opt" / "tec-tac" / "runtimes" / module_id
+    for attempt in (0, 1):
+        try:
+            st = lstat(target)
+        except FileNotFoundError:
+            if attempt:
+                raise _skeleton_refusal() from None
+            try:
+                mkdir(target, 0o755)
+                os.chmod(target, 0o755)
+            except OSError:
+                raise _skeleton_refusal() from None
+            continue
+        except OSError:
+            raise _skeleton_refusal() from None
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode) or _untrusted(st):
+            raise _skeleton_refusal()
+        return target
+    raise _skeleton_refusal()
+
+
+def require_skeleton():
+    """At every start (and in the selftest): the skeleton must match this server. A test replaces this name."""
+    check_skeleton()
+
+
+def prepare_runtime_mount(row):
+    """At every start of a runner that has runtime roots: its single mount point exists inside the skeleton. A test replaces this name."""
+    if row.get("runtime_roots"):
+        ensure_runtime_mountpoint(row.get("owner_module"))
 
 
 # ------------------------------------------------------------------------------------------------ the output stream parser
@@ -2038,13 +2268,15 @@ def _write_private(path, data):
 
 
 def write_secrets(run_id, credentials):
-    """Credentials land only on tmpfs: /run/tec-tac/sandbox/secrets/<run id>/ (0700) with 0600 files. Never in argv, env, audit or a log."""
+    """Credentials land only on tmpfs: /run/tec-tac/sandbox/secrets/<run id>/ (0700) with 0600 files. Never in argv, env, audit or a log.
+    1.18.8: the files carry the fixed slot names cred0, cred1 (sorted declared names); the launcher maps the declared name to its slot."""
+    slots = credential_slots(sorted(credentials))
     folder = SECRETS_ROOT / run_id
     SECRETS_ROOT.mkdir(parents=True, exist_ok=True)
     folder.mkdir(mode=0o700)
     os.chmod(folder, 0o700)
-    for name, data in credentials.items():
-        _write_private(folder / name, data)
+    for slot, name in slots:
+        _write_private(folder / slot, credentials[name])
     return folder
 
 
@@ -2110,10 +2342,91 @@ def finish_run(run_id, environ=None):
     return 0
 
 
+def slice_cgroup_folders(slice_name=None):
+    """1.18.8: where the sandbox slice lives in the cgroup tree, from the slice name alone. systemd reads a dash in a slice name as nesting
+    (``tec-tac-sandbox.slice`` sits in ``tec-tac.slice`` in ``tec.slice``), so the nested path is tried first and the flat one second. The
+    plan named only the flat path; the nested one is what systemd builds, and a path that does not exist is never an error."""
+    slice_name = slice_name or SLICE
+    stem = slice_name.removesuffix(".slice")
+    parts = stem.split("-")
+    nested = [CGROUP_ROOT.joinpath(*("-".join(parts[:count]) + ".slice" for count in range(1, len(parts) + 1)))]
+    return nested + [CGROUP_ROOT / slice_name]
+
+
+def unit_cgroup_folders(run_id):
+    """The candidate cgroup folders of one run, built from constants and the hex run id only (no systemctl, no module string, no '..')."""
+    if not _plain_id(run_id, RUN_ID_RE):
+        raise RuntimeError("run id is invalid")
+    return [folder / (unit_name(run_id) + ".service") for folder in slice_cgroup_folders()]
+
+
+def parse_memory_events(text):
+    """``oom_kill`` and ``oom`` from memory.events text. Anything that is not ``<word> <digits>`` is ignored. Returns (oom_kill, oom), each None when absent."""
+    found = {}
+    for line in str(text).splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0] in ("oom_kill", "oom") and parts[1].isdigit():
+            found[parts[0]] = int(parts[1])
+    return found.get("oom_kill"), found.get("oom")
+
+
+def _read_small(path):
+    try:
+        with open(path, "rb") as handle:
+            return handle.read(4096).decode("ascii", "replace")
+    except (OSError, ValueError):
+        return None
+
+
+class CgroupWatch:
+    """1.18.8: a live view of one run's memory evidence. The path is fixed (``unit_cgroup_folders``); ``sample()`` reads memory.events (oom_kill,
+    oom) and memory.peak (the highest memory.current seen when memory.peak does not exist, a kernel older than 5.19) and keeps the maximum of
+    each. A missing or vanished file is tolerated: never an error, never a guess. ``evidence`` names where a number came from."""
+
+    INTERVAL = 0.2
+
+    def __init__(self, run_id):
+        self.folders = unit_cgroup_folders(run_id)
+        self.oom_kill = None
+        self.oom = None
+        self.peak = None
+        self.current_max = None
+        self.last = None
+
+    @staticmethod
+    def _keep(old, new):
+        return new if old is None or (new is not None and new > old) else old
+
+    def sample(self, now_value=None, *, force=False):
+        if not force and now_value is not None and self.last is not None and now_value - self.last < self.INTERVAL:
+            return
+        self.last = now_value
+        for folder in self.folders:
+            events = _read_small(folder / "memory.events")
+            if events is None:
+                continue
+            kill, oom = parse_memory_events(events)
+            self.oom_kill, self.oom = self._keep(self.oom_kill, kill), self._keep(self.oom, oom)
+            peak = _read_small(folder / "memory.peak")
+            if peak is not None and peak.strip().isdigit():
+                self.peak = self._keep(self.peak, int(peak.strip()))
+            current = _read_small(folder / "memory.current")
+            if current is not None and current.strip().isdigit():
+                self.current_max = self._keep(self.current_max, int(current.strip()))
+            return
+
+    def peak_bytes(self):
+        return self.peak if self.peak is not None else self.current_max
+
+
 def read_cgroup_memory(run_id):
-    """1.17.124: (oom_kill count, memory.peak in bytes) from the unit's own cgroup while it still exists (ExecStopPost runs before it goes).
-    ``systemd-run --wait`` returns 1 for a unit ended by a signal and MemoryPeak can be empty, so the kernel's own counter is the evidence the
-    canary's memory row needs. Either value is None when it cannot be read (a missing file is never an error)."""
+    """(oom_kill count, memory.peak in bytes) from the unit's own cgroup while it still exists (ExecStopPost runs before it goes). 1.18.8: the
+    fixed path first (same as CgroupWatch); if no file is there, 1.17.124's lookup through ``systemctl show -P ControlGroup`` still runs, so a
+    server whose slice nests differently does not lose the evidence. Either value is None when it cannot be read (a missing file is never an error)."""
+    watch = CgroupWatch(run_id)
+    watch.sample(force=True)
+    if watch.oom_kill is not None or watch.peak is not None:
+        return watch.oom_kill, watch.peak
     code, out, _err = systemctl("show", unit_name(run_id) + ".service", "-P", "ControlGroup")
     path = out.strip() if code == 0 else ""
     if not path.startswith("/") or ".." in path.split("/") or "\x00" in path:
@@ -2121,10 +2434,7 @@ def read_cgroup_memory(run_id):
     folder = CGROUP_ROOT / path.lstrip("/")
     oom_kills, peak = None, None
     try:
-        for line in (folder / "memory.events").read_text(encoding="ascii", errors="replace").splitlines():
-            parts = line.split()
-            if len(parts) == 2 and parts[0] == "oom_kill" and parts[1].isdigit():
-                oom_kills = int(parts[1])
+        oom_kills = parse_memory_events((folder / "memory.events").read_text(encoding="ascii", errors="replace"))[0]
     except (OSError, ValueError):
         pass
     try:
@@ -2150,6 +2460,8 @@ def launch(row, *, run_id, person, parameters, credentials, input_data, emit, st
     if not resolvers:
         raise Refusal("sandbox_unavailable", "no upstream name server that the selftest proved is still listed and outside the denied ranges")
     check_runner_ready(row)
+    require_skeleton()  # 1.18.8: the allow-list root must still match this server (fail closed)
+    prepare_runtime_mount(row)
     values = validate_run_parameters(row["parameters"], parameters)
     resolv_file = core_resolv_file()
     _write_root_file(resolv_file, resolv_conf_bytes(resolvers), 0o644)
@@ -2158,13 +2470,21 @@ def launch(row, *, run_id, person, parameters, credentials, input_data, emit, st
     holder = acquire_slots(person, row, slots_n=slots_n, person_n=person_n, clock=clock, sleep=sleep)
     process = None
     started_at = clock()
+    progress = {}
+    audited = False
+    canary = row.get("owner_module") == CANARY_OWNER
     try:
         RUNS_ROOT.mkdir(parents=True, exist_ok=True)
         _write_private(run_record_path(run_id), _json_bytes({"run_id": run_id, "runner": row["id"], "unit": unit_name(run_id), "at": now()}))
         if credentials:
             write_secrets(run_id, credentials)
+        try:  # 1.18.8: the root audit row comes BEFORE the unit is spawned; no row, no run
+            append_audit("run.started", detail={"runner": row["id"], "run_id": run_id, "person": person_key(person), "canary": canary})
+        except OSError as exc:
+            raise Refusal("start_failed", "the run could not be recorded in the audit log") from exc
+        audited = True
         process = _spawn(argv)
-        return _supervise(process, row, run_id, input_data, emit, stdin_eof, started_at, clock)
+        return _supervise(process, row, run_id, input_data, emit, stdin_eof, started_at, clock, progress=progress)
     finally:
         if process is not None and process.poll() is None:
             stop_unit(run_id)
@@ -2177,6 +2497,20 @@ def launch(row, *, run_id, person, parameters, credentials, input_data, emit, st
         cancel_flag_path(run_id).unlink(missing_ok=True)
         handoff_path(run_id).unlink(missing_ok=True)
         holder.release()
+        if audited:
+            append_audit_safely("run.ended", run_ended_detail(row, run_id, person, canary, progress, int((clock() - started_at) * 1000)))
+
+
+def run_ended_detail(row, run_id, person, canary, progress, elapsed_ms):
+    """1.18.8: the fields of the root ``run.ended`` audit row. Counts, words and ids only: never the input, an output, a parameter, a credential
+    or a path. ``progress`` is what _supervise knew when the run ended (the whole end frame for a normal end, a few counters otherwise)."""
+    end = progress.get("end") or {}
+    return {
+        "runner": row["id"], "run_id": run_id, "person": person_key(person), "canary": canary,
+        "reason": end.get("reason") or progress.get("reason") or "aborted", "exit": end.get("exit"), "ms": end.get("ms", elapsed_ms),
+        "bytes_out": end.get("bytes_out", progress.get("bytes_out")), "bytes_err": end.get("bytes_err", progress.get("bytes_err")),
+        "peak_mb": end.get("peak_mb"), "oom_kills": end.get("oom_kills"), "evidence": end.get("evidence"),
+    }
 
 
 def _spawn(argv):
@@ -2222,8 +2556,32 @@ def _feed_input(process, data):
             pass
 
 
-def _supervise(process, row, run_id, input_data, emit, stdin_eof, started_at, clock):
+def _whole(value):
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def merge_memory_evidence(watch, handoff, result):
+    """1.18.8: (peak bytes, oom_kills, evidence). ``oom_kills`` is the larger of the live poll and the ExecStopPost handoff; the peak is the
+    largest of the poll, the handoff and systemd's own MemoryPeak (the handoff already holds that). ``evidence`` names where the kill count
+    came from: 'poll', 'finish', 'service_result' (SERVICE_RESULT=oom-kill) or None. Nothing is guessed."""
+    kills = [value for value in (_whole(watch.oom_kill), _whole(handoff.get("oom_kills"))) if value is not None]
+    peaks = [value for value in (_whole(watch.peak_bytes()), _whole(handoff.get("memory_peak"))) if value is not None]
+    oom_kills = max(kills) if kills else None
+    if _whole(watch.oom_kill) is not None and watch.oom_kill >= 1:
+        evidence = "poll"
+    elif _whole(handoff.get("oom_kills")) is not None and handoff["oom_kills"] >= 1:
+        evidence = "finish"
+    elif result == "oom-kill":
+        evidence = "service_result"
+    else:
+        evidence = None
+    return (max(peaks) if peaks else None), oom_kills, evidence
+
+
+def _supervise(process, row, run_id, input_data, emit, stdin_eof, started_at, clock, progress=None):
+    progress = progress if progress is not None else {}
     limits = row["limits"]
+    watch = CgroupWatch(run_id)
     caps = {"out": int(limits["stdout_kib"]) * 1024, "err": int(limits["stderr_kib"]) * 1024}
     sent = {"out": 0, "err": 0}
     truncated = {"out": False, "err": False}
@@ -2281,6 +2639,7 @@ def _supervise(process, row, run_id, input_data, emit, stdin_eof, started_at, cl
                     take("out", clean)
             elif tag == "err" and chunk and not state["stopped"]:
                 take("err", chunk)
+            watch.sample(clock())  # 1.18.8: at most every 0.2 s; a vanished cgroup is tolerated
             if stdin_eof is not None and stdin_eof.is_set():
                 stop("cancelled")
                 raise DeadMan("the caller closed stdin")
@@ -2293,6 +2652,7 @@ def _supervise(process, row, run_id, input_data, emit, stdin_eof, started_at, cl
         flush(force=True)
     except DeadMan:
         stop("cancelled")
+        progress.update(reason="cancelled", bytes_out=sent["out"], bytes_err=sent["err"])
         raise
     try:
         code = process.wait(timeout=STOP_GRACE_SECONDS * 3)
@@ -2300,6 +2660,7 @@ def _supervise(process, row, run_id, input_data, emit, stdin_eof, started_at, cl
         stop_unit(run_id)
         process.kill()
         code = process.wait()
+    watch.sample(force=True)
     handoff = read_handoff(run_id)
     reason = state["reason"]
     if cancel_flag_path(run_id).exists():
@@ -2315,15 +2676,14 @@ def _supervise(process, row, run_id, input_data, emit, stdin_eof, started_at, cl
         else:
             reason = "exited"
     credential = parser.credential if row.get("credential_return") else None
-    peak = handoff.get("memory_peak")
-    oom_kills = handoff.get("oom_kills")
+    peak, oom_kills, evidence = merge_memory_evidence(watch, handoff, result)
     end = {
         "t": "end", "exit": None if reason == "start_failed" else code, "reason": reason, "ms": int((clock() - started_at) * 1000),
-        "peak_mb": round(peak / 1048576, 1) if isinstance(peak, int) else None,
-        "oom_kills": oom_kills if isinstance(oom_kills, int) and not isinstance(oom_kills, bool) else None,
+        "peak_mb": round(peak / 1048576, 1) if isinstance(peak, int) else None, "oom_kills": oom_kills, "evidence": evidence,
         "credential_b64": base64.b64encode(credential).decode("ascii") if credential is not None else None,
         "bytes_out": sent["out"], "bytes_err": sent["err"],
     }
+    progress["end"] = end
     emit(end)
     return end
 
@@ -2410,12 +2770,26 @@ def stop_command(stdin=None, out=None):
 # secret-free summary to /var/lib/tec-tac/sandbox/canary.json, which status() reports as canary_ok and canary_at.
 CANARY_RUNNER_ID = "core.canary"
 CANARY_OWNER = "core"
-CANARY_GROUPS = ("files", "work_hold", "work_peer", "sockets", "loopback", "lan", "dns", "public", "privilege", "writes", "processes",
+CANARY_GROUPS = ("files", "rootview", "work_hold", "work_peer", "sockets", "loopback", "lan", "dns", "public", "privilege", "writes", "processes",
                  "mem", "fork", "loop", "scratch", "flood", "abstract", "cred", "sleep", "noop")
 CANARY_LATENCY_RUNS = 50
 CANARY_LATENCY_TARGET_MS = 400
 CANARY_MARKER_DIRS = ("/etc", "/var", "/opt", "/srv", "/mnt", "/media", "/home", "/root", "/etc/tactical", "/etc/tec-tac", "/opt/tec-tac",
-                      "/rmm", "/usr/local/lib/tec-tac", "/var/lib/tec-tac", "/run/tec-tac")
+                      "/rmm", "/usr/local/lib/tec-tac", "/var/lib/tec-tac", "/run/tec-tac", "/rmmbackups", "/backup", "/backups", "/snap")
+CANARY_STANDIN_PARENT = "/"  # 1.18.8: the one folder the canary makes directly under this folder (a test moves it); only this shape is ever removed
+CANARY_STANDIN_NAME_RE = re.compile(r"^tectac-canary-[0-9a-f]{12}$")
+CANARY_VIEW_FOLDERS = ("/", "/etc", "/var", "/opt", "/opt/tec-tac", "/opt/tec-tac/runtimes", "/run", "/usr/local", "/usr/local/lib",
+                       "/usr/local/lib/tec-tac", "/usr/local/lib/tec-tac/sandbox")
+CANARY_VIEW_ALLOWED = {  # 1.18.8: the names a run may see in each folder; the canary run has no module runtime, so runtimes allows nothing
+    "/": ("usr", "bin", "sbin", "lib", "lib64", "lib32", "libx32", "etc", "var", "opt", "run", "tmp", "proc", "sys", "dev", "work"),
+    "/etc": ("ssl", "ca-certificates", "passwd", "group", "ld.so.cache", "nsswitch.conf", "localtime", "resolv.conf"),
+    "/var": ("tmp",), "/opt": ("tec-tac",), "/opt/tec-tac": ("runtimes",), "/opt/tec-tac/runtimes": (), "/run": ("credentials",),
+    "/usr/local": ("lib",), "/usr/local/lib": ("tec-tac",), "/usr/local/lib/tec-tac": ("sandbox",),
+    "/usr/local/lib/tec-tac/sandbox": ("runners", "canary", "sandbox-launcher.py"),
+}
+CANARY_VIEW_NAMES_MAX = 200
+CANARY_VIEW_NAME_LENGTH = 100
+CANARY_VIEW_BUDGET = 49152  # characters of the json plan: keeps it under the runner's 64 KiB stdin read
 CANARY_REAL_FILES = ("/rmm/api/tacticalrmm/tacticalrmm/local_settings.py", "/etc/tec-tac/config-path", "/opt/tec-tac/etc/tec-tac.conf",
                      "/etc/shadow")
 CANARY_LAN_TARGETS = ("10.255.255.254", "172.31.255.254", "192.168.255.254", "100.127.255.254", "169.254.169.254")
@@ -2431,6 +2805,7 @@ CANARY_LOOPBACK_SECONDS = 60  # the loopback group's run time (under the Core ce
 CANARY_LOOPBACK_DEADLINE = 40
 CANARY_SKIP_ALLOWED = ("public tcp 443",)  # the only row that may be SKIPPED (no public route from this server); any other SKIPPED row fails the canary
 CANARY_REQUIRED = {  # group -> (exact attack names, [(prefix, minimum count)])
+    "rootview": (["view " + folder for folder in CANARY_VIEW_FOLDERS] + ["/ lists only the allowed set"], []),
     "sockets": (["unix socket creation refused (stream)", "unix socket creation refused (dgram)", "unix socket creation refused (seqpacket)",
                  "unix pathname socket refused", "socketpair round trip", "pipe round trip", "child process with stdio pipes"], [("unix /", 13)]),
     "privilege": (["setuid(0)", "ptrace attach to parent", "mount", "unshare", "mknod", "raw socket", "write /proc/sys", "load a kernel module"], []),
@@ -2618,36 +2993,114 @@ def collect_run(group, plan, *, person="canary", slots_n=None, person_n=PERSON_S
     return out
 
 
+def view_clean(name):
+    """One file name as the runner will see it after the same cleaning (control characters and non-ASCII become '?', at most 100 characters)."""
+    return "".join(ch if 32 <= ord(ch) < 127 else "?" for ch in str(name))[:CANARY_VIEW_NAME_LENGTH]
+
+
+def view_plan(scandir=os.scandir, limit=CANARY_VIEW_NAMES_MAX):
+    """1.18.8: the HOST's own entries (names only, read as root with os.scandir, at most ``limit`` per folder, cleaned) for every folder of
+    CANARY_VIEW_FOLDERS. A folder that cannot be read gives an empty list. The in-unit runner prints a row per folder: any name the host
+    has that the unit also sees and that is not in the allowed list is ATTACK SUCCEEDED."""
+    plan = {}
+    for folder in CANARY_VIEW_FOLDERS:
+        try:
+            with scandir(folder) as entries:
+                names = sorted(view_clean(entry.name) for entry in entries)
+        except OSError:
+            names = []
+        plan[folder] = names[:limit]
+    return plan
+
+
+def rootview_plan(scandir=os.scandir):
+    """The plan of the ``rootview`` group: host listings plus the allowed names, cut down in steps if the json would not fit the runner's stdin read."""
+    limit = CANARY_VIEW_NAMES_MAX
+    while True:
+        host = view_plan(scandir, limit)
+        plan = {"view": {folder: {"host": host[folder], "allowed": list(CANARY_VIEW_ALLOWED[folder])} for folder in CANARY_VIEW_FOLDERS}}
+        if len(json.dumps(plan)) <= CANARY_VIEW_BUDGET or limit <= 10:
+            return plan
+        limit = max(10, limit * 3 // 4)
+
+
+def _create_marker(path, content):
+    """A marker file made with O_CREAT|O_EXCL|O_NOFOLLOW and an explicit mode on the open descriptor (no path chmod, no symlink followed, an
+    existing name is refused: the lesson of 1.18.7-1). Returns True when it was created."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    try:
+        fd = os.open(path, flags, 0o644)
+    except OSError:
+        return False
+    try:
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o644)
+        os.write(fd, content.encode("utf-8"))
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+    return True
+
+
 def _plant_markers():
-    """Random-content 0644 markers in the places a run must never see. The list is written first, so a crash leaves it for the sweep."""
-    planted, entries = [], []
+    """Random-content 0644 markers in the places a run must never see. The list is written first, so a crash leaves it for the sweep.
+    1.18.8: every marker is created exclusively without following a link; a fresh root-made folder ``/tectac-canary-<12 hex>`` (0755) holds one
+    more, so a server whose own folders are all closed to a run still shows whether the root view hides a folder it should hide."""
+    planned = []
     for folder in CANARY_MARKER_DIRS:
         if Path(folder).is_dir():
-            planted.append((str(Path(folder) / (".tectac-canary-" + secrets.token_hex(6))), secrets.token_hex(16)))
-    _write_private(CANARY_MARKERS_FILE, _json_bytes({"paths": [p for p, _ in planted]}))
-    for path, content in planted:
-        try:
-            with open(path, "w", encoding="utf-8") as handle:
-                handle.write(content)
-            os.chmod(path, 0o644)
+            planned.append((str(Path(folder) / (".tectac-canary-" + secrets.token_hex(6))), secrets.token_hex(16)))
+    standin = os.path.join(CANARY_STANDIN_PARENT, "tectac-canary-" + secrets.token_hex(6))
+    planned.append((os.path.join(standin, ".tectac-canary-" + secrets.token_hex(6)), secrets.token_hex(16)))
+    _write_private(CANARY_MARKERS_FILE, _json_bytes({"paths": [path for path, _ in planned], "folders": [standin]}))
+    made_folder = False
+    try:
+        os.mkdir(standin, 0o755)
+        os.chmod(standin, 0o755)
+        made_folder = True
+    except OSError:
+        pass
+    entries = []
+    for path, content in planned:
+        if os.path.dirname(path) == standin and not made_folder:
+            continue
+        if _create_marker(path, content):
             entries.append({"path": path, "content": content})
-        except OSError:
-            pass
+    _write_private(CANARY_MARKERS_FILE, _json_bytes({"paths": [e["path"] for e in entries], "folders": [standin] if made_folder else []}))
     for real in CANARY_REAL_FILES:
         if os.path.exists(real):
             entries.append({"path": real, "content": None})  # None: being able to read it at all is the finding
     return entries
 
 
+def _standin_ok(folder):
+    """Only a folder named exactly ``tectac-canary-<12 hex>`` directly under CANARY_STANDIN_PARENT (``/``) that is not a link."""
+    if not isinstance(folder, str):
+        return False
+    parent = CANARY_STANDIN_PARENT if CANARY_STANDIN_PARENT == "/" else CANARY_STANDIN_PARENT.rstrip("/\\")
+    return (os.path.dirname(folder) == parent and bool(CANARY_STANDIN_NAME_RE.fullmatch(os.path.basename(folder)))
+            and not os.path.islink(folder))
+
+
 def remove_markers():
+    """Remove what _plant_markers made: the marker files by their name, then the stand-in folder, which must be named exactly
+    ``/tectac-canary-<12 hex>`` directly under /, is not a link and is empty by now (os.rmdir, never a recursive delete)."""
     try:
-        paths = json.loads(CANARY_MARKERS_FILE.read_text(encoding="utf-8")).get("paths", [])
+        record = json.loads(CANARY_MARKERS_FILE.read_text(encoding="utf-8"))
+        paths, folders = record.get("paths", []), record.get("folders", [])
     except (OSError, ValueError, AttributeError):
-        paths = []
-    for path in paths:
+        paths, folders = [], []
+    for path in paths if isinstance(paths, list) else []:
         if isinstance(path, str) and os.path.basename(path).startswith(".tectac-canary-"):
             try:
                 os.unlink(path)
+            except OSError:
+                pass
+    for folder in folders if isinstance(folders, list) else []:
+        if _standin_ok(folder):
+            try:
+                os.rmdir(folder)
             except OSError:
                 pass
     CANARY_MARKERS_FILE.unlink(missing_ok=True)
@@ -2732,6 +3185,7 @@ def run_canary(*, status=None, collect=None, outside=None):
     try:
         markers = _plant_markers()
         group("Files", "files", "not found or other content", {"markers": markers}, plan_names=["read " + m["path"] for m in markers])
+        group("Files", "rootview", "only the allowed names are visible", rootview_plan())
         peer_token = secrets.token_hex(8)
         holder = threading.Thread(target=collect, args=("work_hold", {"work_token": peer_token, "hold_seconds": 4}),
                                   kwargs={"person": "canary-hold", "status": status}, daemon=True)
@@ -2812,6 +3266,7 @@ def memory_row(result, memory_mb, block=MEMORY_BLOCK_MIB):
     allocated = parse_progress(stdout)
     word = parse_end_word(stdout)
     reason, code, peak, oom_kills = end.get("reason"), end.get("exit"), end.get("peak_mb"), end.get("oom_kills")
+    evidence = end.get("evidence") if end.get("evidence") in ("poll", "finish", "service_result") else None  # 1.18.8: where the kill count came from
     peak = peak if isinstance(peak, (int, float)) and not isinstance(peak, bool) else None
     oom_kills = oom_kills if isinstance(oom_kills, int) and not isinstance(oom_kills, bool) else None
     killed = reason == "oom" or (oom_kills is not None and oom_kills >= 1)
@@ -2820,7 +3275,8 @@ def memory_row(result, memory_mb, block=MEMORY_BLOCK_MIB):
     finished = word == "done" or (reason == "exited" and code == 0)
     how = f"ended {reason}" + (f" (exit {code})" if reason == "exited" else "") + (f", probe {word}" if word else "")
     row["actual"] = (f"allocated {allocated} MiB" if allocated is not None else "no allocation reported") + f", {how}, oom_kills " + \
-        (str(oom_kills) if oom_kills is not None else "unknown") + (f", peak {peak} MiB" if peak is not None else ", no peak")
+        (str(oom_kills) if oom_kills is not None else "unknown") + (f", peak {peak} MiB" if peak is not None else ", no peak") + \
+        (f", evidence {evidence}" if evidence else "")
     if over or finished:
         row["verdict"] = "ATTACK SUCCEEDED"
     elif (killed or refused_alloc) and (allocated is not None or peak is not None):
@@ -2872,7 +3328,7 @@ def _foreign_credential_probe(unit):
     """1.17.120: while the credential run is live, a second transient unit (its own dynamic user, nothing shared) tries to read that run's
     credential file. 1.17.121: returns 'READ', 'DENIED' or 'MISSING' (the file was not there); only READ and DENIED can count as a result,
     anything else is ''. Never prints the content or the path."""
-    path = f"/run/credentials/{unit}.service/auth"
+    path = f"/run/credentials/{unit}.service/cred0"  # 1.18.8: the fixed slot name; the canary's one credential is slot 0
     code, out, _err = UnitRunner().run_unit("credential_foreign", ("DynamicUser=yes",), [UNIT_PYTHON, "-I", "-c", _FOREIGN_READ, path])
     word = (out or "").strip()
     if code != 0:
@@ -2883,7 +3339,7 @@ def _foreign_credential_probe(unit):
 def _credential_file_ready(unit):
     """1.17.121: root-side check that the credential run's file exists and its unit is active, so a denial can only mean 'refused', not 'absent'."""
     try:
-        return os.path.exists(f"/run/credentials/{unit}.service/auth") and systemctl("is-active", unit + ".service")[0] == 0
+        return os.path.exists(f"/run/credentials/{unit}.service/cred0") and systemctl("is-active", unit + ".service")[0] == 0
     except (OSError, RuntimeError, ValueError):
         return False
 
