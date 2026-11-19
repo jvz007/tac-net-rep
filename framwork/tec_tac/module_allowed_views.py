@@ -4,7 +4,7 @@ from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from . import licensing_catalogue_source
+from . import licensing_catalogue_source, module_install_plan
 from .session_security import SessionAuthenticated
 from .views import _require_module_manager
 
@@ -91,4 +91,20 @@ class ModuleAllowedSelectionView(APIView):
             message = (f"Refused to change the selection of {who}: {state}." if refused
                        else f"Could not change the selection of {who}: {state}. Nothing was changed.")
             _audit_allowed(request, action="deny", object_type="module_selection", object_id=shown_id, message=message, metadata=metadata)
+        return Response(body, status=_allowed_http(body["state"]))
+
+
+@extend_schema_view(post=extend_schema(tags=["Tec-Tac Framework"], summary="Plan the install of several licensed modules (read-only)"))
+class ModuleOnlineInstallPlanView(APIView):
+    """Core 1.18.19 (R1a). Advisory and read-only: no job, no package fetch, no grant, no audit row. The later install re-checks the signed package."""
+    permission_classes = (SessionAuthenticated,)
+
+    def post(self, request):
+        _require_module_manager(request.user)
+        data = request.data if hasattr(request.data, "get") else {}
+        try:
+            selection = module_install_plan.clean_selection(data.get("modules"))
+        except module_install_plan.BadSelection as exc:
+            return Response({"ok": False, "state": "bad_request", "message": str(exc)}, status=400)
+        body = module_install_plan.plan_online_install(selection)
         return Response(body, status=_allowed_http(body["state"]))

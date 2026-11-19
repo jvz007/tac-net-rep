@@ -291,8 +291,11 @@ Licensing keeps a list of the modules your licence allows, and the releases an a
 | `GET /api/tfd/modules/catalog/allowed/` | Reads the saved list. It makes no call to the Licensing Server. |
 | `POST /api/tfd/modules/catalog/allowed/refresh/` | Asks Licensing to refresh the list. Licensing calls the Licensing Server at most once a minute and answers `cached` inside that minute. Core writes an audit row (`run`, `allowed_modules`). |
 | `PUT /api/tfd/modules/catalog/allowed/selection/` | Body `{"module_id": "...", "selected": true or false}`. Ticks or unticks one licensed premium module. Core writes an audit row (`modify`, `module_selection`, with the before and after lists, or `deny` for every attempt that does not end saved, with `outcome` `refused` or `failed` in the metadata). |
+| `POST /api/tfd/modules/catalog/online/plan/` | Body `{"modules": ["id", ...]}` (1 to 50 ids). A read-only plan for the licensed modules you ticked: the install order, the licensed modules it adds because others need them, and what is blocked and why. It starts no job, fetches no package and writes no audit row. |
 
 **Needs Licensing 0.10.7 or later (1.18.18).** Core requires `licensing.allowed_modules` 1.1.0, which publishes the Core-only `set_selection`. With an older Licensing the three routes answer `licensing_unavailable`.
+
+**The plan is advice (1.18.19).** Core builds it from the allowed list and the saved Licensing catalogue entry, and asks the same resolver a real install uses. It cannot check replacement, rename, the signature or the licence block, because those need the package. The install checks them again on the signed package. If a release has no saved catalogue entry, the plan blocks it with `not_in_catalogue_cache`: sync the repository, then plan again.
 
 **Who may use them.** Anyone with `core.privileged_operations` (a module manager). Everyone else gets 403. The check runs first and fails closed.
 

@@ -2205,6 +2205,30 @@ HTTP_CONTRACT_DETAILS = {
             "notes": ["Added 1.18.10 (additive). Core refuses before it calls Licensing anything that is not an entitled, optional premium row of the list it just read, then calls Licensing's own set_selection. Deselecting never installs, removes or disables an installed module."],
         },
     },
+    "/api/tfd/modules/catalog/online/plan/": {
+        "POST": {
+            "authorization": "authenticated Tec-Tac session with core.privileged_operations (module management); checked first, anyone else gets 403 and no plan",
+            "request": {"modules": "required list of 1 to 50 lower-case module ids; duplicates are dropped, order is kept"},
+            "response": {
+                "ok": "boolean; true when Core built a plan (blocked modules can still be listed)",
+                "state": "ok, or the state of the allowed list when it gave no usable answer (not_fetched, a Licensing state, licensing_unavailable, invalid_response); then there is no plan",
+                "message": "one plain sentence", "valid": "boolean; true when none of the requested modules is blocked",
+                "requested": "the cleaned ids",
+                "order": "array of {id, name, version, action (install or replace), current_version, added, added_for, dependencies}; the install order Core's own resolver gives",
+                "added_dependencies": "array of {id, version, required_by}: licensed modules added because a requested module needs them",
+                "will_disable": "module ids a replacement would disable (empty for licensed releases today)",
+                "conflicts": "array of {type, module, dependency, constraint, version, message} the plan could not tie to one module",
+                "blocked": "array of {id, code, message, detail}; codes: not_in_allowed_list, not_selected, no_release, not_available, not_in_catalogue_cache, protected, already_installed, older_than_installed, disabled_install, dependency_blocked, plan_conflict, plan_unstable, or a resolver problem type (runtime, category_refused, replacement_conflict, ...)",
+                "optional_dependencies": "array of {module, dependency, constraint, installed, satisfied}",
+                "plan_state": "text", "plan_revision": "whole number, text or null", "fetched_at": "text or null",
+                "checks_deferred": "replacement, rename, signature and licence-in-manifest: they need the package and run at install",
+            },
+            "errors": {"400": "bad_request: modules is not a list of 1 to 50 valid ids", "403": "no module management permission", "502": "invalid_response", "503": "licensing_unavailable"},
+            "notes": [
+                "Added 1.18.19 (module-facing, additive; no module calls this route yet, the first reader is Welcome). Read-only and advisory: it starts no job, fetches no package, makes no network call and writes no audit row. The allowed list is read once through licensing_catalogue_source.py; the release facts the list does not carry come from the saved Licensing catalogue entry with the same module and release id, and a missing entry blocks the module (not_in_catalogue_cache). Every dependency, version, runtime, category, replacement and order rule is the one resolve_install_plan applies to a real install. The install re-checks the signed package and stays authoritative.",
+            ],
+        },
+    },
     "/api/tfd/modules/v2/packages/inspect/": {
         "POST": {
             "request": {
