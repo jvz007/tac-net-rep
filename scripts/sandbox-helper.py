@@ -2516,13 +2516,23 @@ def unit_cgroup_folders(run_id):
     return [folder / (unit_name(run_id) + ".service") for folder in slice_cgroup_folders()]
 
 
-def parse_memory_events(text):
-    """``oom_kill`` and ``oom`` from memory.events text. Anything that is not ``<word> <digits>`` is ignored. Returns (oom_kill, oom), each None when absent."""
+MEMORY_COUNTERS = ("max", "high", "oom", "oom_kill")
+
+
+def parse_memory_counters(text):
+    """1.18.16: ``max``, ``high``, ``oom`` and ``oom_kill`` from memory.events text, as a dict holding only the counters that were present.
+    Anything that is not ``<word> <digits>`` is ignored (same rule as before), and a number of more than 18 digits is ignored."""
     found = {}
     for line in str(text).splitlines():
         parts = line.split()
-        if len(parts) == 2 and parts[0] in ("oom_kill", "oom") and parts[1].isdigit():
+        if len(parts) == 2 and parts[0] in MEMORY_COUNTERS and parts[1].isascii() and parts[1].isdigit() and len(parts[1]) <= 18:
             found[parts[0]] = int(parts[1])
+    return found
+
+
+def parse_memory_events(text):
+    """``oom_kill`` and ``oom`` from memory.events text. Anything that is not ``<word> <digits>`` is ignored. Returns (oom_kill, oom), each None when absent."""
+    found = parse_memory_counters(text)
     return found.get("oom_kill"), found.get("oom")
 
 
@@ -2547,6 +2557,7 @@ class CgroupWatch:
         self.folders = unit_cgroup_folders(run_id)
         self.oom_kill = None
         self.oom = None
+        self.events = {}  # 1.18.16: the highest value seen of each memory.events counter (max, high, oom, oom_kill)
         self.peak = None
         self.current_max = None
         self.last = None
@@ -2563,8 +2574,11 @@ class CgroupWatch:
             events = _read_small(folder / "memory.events")
             if events is None:
                 continue
-            kill, oom = parse_memory_events(events)
+            counters = parse_memory_counters(events)
+            kill, oom = counters.get("oom_kill"), counters.get("oom")
             self.oom_kill, self.oom = self._keep(self.oom_kill, kill), self._keep(self.oom, oom)
+            for name, value in counters.items():
+                self.events[name] = self._keep(self.events.get(name), value)
             peak = _read_small(folder / "memory.peak")
             if peak is not None and peak.strip().isdigit():
                 self.peak = self._keep(self.peak, int(peak.strip()))
@@ -2862,6 +2876,8 @@ def _supervise(process, row, run_id, input_data, emit, stdin_eof, started_at, cl
         "credential_b64": base64.b64encode(credential).decode("ascii") if credential is not None else None,
         "bytes_out": sent["out"], "bytes_err": sent["err"],
     }
+    if watch.events:  # 1.18.16: additive and internal; Core's _end_event drops it and it is not in the run.ended audit row
+        end["memory_events"] = {name: watch.events[name] for name in MEMORY_COUNTERS if name in watch.events}
     progress["end"] = end
     emit(end)
     return end
@@ -3420,11 +3436,11 @@ def parse_run_marker(data):
     return names[-1] if names else None
 
 
-def parse_run_listing(data):
-    """Names the next run listed in /run, or None when it did not list at all (no CANARYRUNLISTED line)."""
-    if not parse_tab_values(data, "CANARYRUNLISTED"):
-        return None
-    return parse_tab_values(data, "CANARYRUNLIST")
+def parse_run_seen(data):
+    """1.18.16: what the next run said about the marker: True (``CANARYRUNSEEN<TAB>1``), False (``0``) or None (no exact line with 0 or 1). The
+    last exact line counts; a table-shaped or partial line never does."""
+    values = [v for v in parse_tab_values(data, "CANARYRUNSEEN") if v in ("0", "1")]
+    return None if not values else values[-1] == "1"
 
 
 def skeleton_run_names(list_dir=os.listdir):
@@ -3438,8 +3454,9 @@ def skeleton_run_names(list_dir=os.listdir):
 def run_private_row(runner_row, marker, skeleton, following):
     """1.18.15: the 'write /run' row after the proof. ``runner_row`` is the table row the probe's own line gave; a refused write (OK) stays as
     it is. A write that worked (ATTACK SUCCEEDED so far) is judged on evidence: OK only when the marker is NOT in the skeleton's run/ folder
-    (``skeleton``: list of names, None when unreadable) and NOT in the next run's listing of /run (``following``: list, None when that run
-    did not list). The marker in either place stays ATTACK SUCCEEDED; a check that cannot be made is NOT RUN."""
+    (``skeleton``: list of names, None when unreadable) and the next run says the marker is NOT in its /run (``following``: 1.18.16, True when
+    seen, False when absent, None when that run could not say). The marker in either place stays ATTACK SUCCEEDED; a check that cannot be made
+    is NOT RUN."""
     if runner_row.get("verdict") != "ATTACK SUCCEEDED":
         return runner_row
     row = dict(runner_row, expected="read-only or a private per-run /run (the marker stays in the unit)")
@@ -3448,11 +3465,11 @@ def run_private_row(runner_row, marker, skeleton, following):
     elif skeleton is None:
         row.update(actual="written; the skeleton's run/ folder could not be listed", verdict="NOT RUN")
     elif following is None:
-        row.update(actual="written; the next run's /run could not be listed", verdict="NOT RUN")
+        row.update(actual="written; the next run could not report on /run", verdict="NOT RUN")
     elif marker in skeleton:
         row.update(actual="written, and the marker is in the skeleton's run/ folder", verdict="ATTACK SUCCEEDED")
-    elif marker in following:
-        row.update(actual="written, and the next run lists the marker", verdict="ATTACK SUCCEEDED")
+    elif following:
+        row.update(actual="written, and the next run sees the marker", verdict="ATTACK SUCCEEDED")
     else:
         row.update(actual=RUN_PRIVATE_TEXT, verdict="OK")
     return row
@@ -3473,8 +3490,8 @@ def table_private_run(table, written, marker, collect, status, list_dir=os.listd
     skeleton = skeleton_run_names(list_dir)
     following = None
     if reported is not None:
-        nxt = collect("runview", {}, status=status)
-        following = None if nxt.get("refused") else parse_run_listing(nxt.get("stdout", b""))
+        nxt = collect("runview", {"run_marker": reported}, status=status)
+        following = None if nxt.get("refused") else parse_run_seen(nxt.get("stdout", b""))
     table[index] = run_private_row(entry, reported, skeleton, following)
 
 
@@ -3530,6 +3547,7 @@ def memory_row(result, memory_mb, block=MEMORY_BLOCK_MIB):
     evidence = end.get("evidence") if end.get("evidence") in ("poll", "finish", "service_result") else None  # 1.18.8: where the kill count came from
     peak = peak if isinstance(peak, (int, float)) and not isinstance(peak, bool) else None
     oom_kills = oom_kills if isinstance(oom_kills, int) and not isinstance(oom_kills, bool) else None
+    counters = _end_counters(end.get("memory_events"))
     killed = reason == "oom" or (oom_kills is not None and oom_kills >= 1)
     refused_alloc = word in ("memoryerror", "enomem")
     over = (allocated is not None and allocated > memory_mb) or (peak is not None and peak > memory_mb)
@@ -3540,16 +3558,43 @@ def memory_row(result, memory_mb, block=MEMORY_BLOCK_MIB):
     row["actual"] = (f"allocated {allocated} MiB" if allocated is not None else "no allocation reported") + f", {how}, oom_kills " + \
         (str(oom_kills) if oom_kills is not None else "unknown") + (f", peak {peak} MiB" if peak is not None else ", no peak") + \
         (f", evidence {evidence}" if evidence else "")
+    if counters:  # 1.18.16: the kernel's own counters are always shown when they were read
+        row["actual"] += ", memory.events " + ", ".join(f"{name} {counters[name]}" for name in MEMORY_COUNTERS if name in counters)
+    err = _first_line(result.get("stderr", b""))  # 1.18.16: the probe's first stderr line, whenever there is one (a SIGKILL prints none)
+    if err:
+        row["actual"] += f"; stderr: {err}"
+    cap_hit = counters.get("max")
+    name = None
     if over or finished:
         row["verdict"] = "ATTACK SUCCEEDED"
-    elif (killed or refused_alloc) and (allocated is not None or peak is not None):
+    elif killed and (allocated is not None or peak is not None):
+        name = f"oom_kill {oom_kills} (memory.events)" if oom_kills is not None and oom_kills >= 1 else "oom_kill (end reason oom)"
+    elif refused_alloc and (allocated is not None or peak is not None):
+        label = "MemoryError" if word == "memoryerror" else "enomem"
+        name = f"probe {label}" + (f" at {allocated} MiB" if allocated is not None else "")
+    elif cap_hit is not None and cap_hit >= 1 and peak is not None and allocated is not None:
+        name = f"memory.events max {cap_hit}, peak {peak} MiB <= {memory_mb} MiB"  # over and finished were ruled out above
+    if name:
         row["verdict"] = "OK"
-    else:
+        row["actual"] += f"; proof: {name}"
+    elif not (over or finished):
         row["verdict"] = "NOT RUN"
-        why = "no evidence of how it ended" if not (killed or refused_alloc) else "no allocation or peak to check against the limit"
-        err = _first_line(result.get("stderr", b""))
-        row["actual"] += f"; {why}" + (f"; stderr: {err}" if err else "")
+        if killed or refused_alloc:
+            why = "no allocation or peak to check against the limit"
+        elif cap_hit is not None and cap_hit >= 1:
+            why = "memory.events max seen, but no peak or allocation to check it against the limit"
+        else:
+            why = "no evidence of how it ended"
+        row["actual"] += f"; {why}"
     return row
+
+
+def _end_counters(value):
+    """The ``memory_events`` of an end frame, kept only when it is a dict of known counter names with whole, non-negative numbers."""
+    if not isinstance(value, dict):
+        return {}
+    return {name: value[name] for name in MEMORY_COUNTERS
+            if isinstance(value.get(name), int) and not isinstance(value.get(name), bool) and value[name] >= 0}
 
 
 CANARY_MEMORY_MB = 128  # the memory row's MemoryMax
@@ -3932,6 +3977,34 @@ RUN_RECORD_RE = re.compile(r"^[0-9a-f]{32}\.json$")
 PERSON_KEY_RE = re.compile(r"^[0-9a-f]{32}$")
 
 
+AUDIT_TAIL_BYTES = 1048576
+
+
+def run_already_ended(run_id):
+    """1.18.16: True when the last 1 MiB of audit.jsonl holds a ``run.ended`` row for ``run_id`` (a record that still exists belongs to a
+    recent run, so the tail is enough). Only lines containing ``"run.ended"`` are parsed; a corrupt line is ignored. An unreadable audit file
+    claims nothing (False), so the caller still writes its one row."""
+    try:
+        with open(AUDIT_FILE, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - AUDIT_TAIL_BYTES))
+            data = handle.read(AUDIT_TAIL_BYTES)
+    except OSError:
+        return False
+    for line in data.decode("utf-8", "replace").splitlines():
+        if '"run.ended"' not in line:
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        detail = row.get("detail") if isinstance(row, dict) else None
+        if isinstance(row, dict) and row.get("event") == "run.ended" and isinstance(detail, dict) and detail.get("run_id") == run_id:
+            return True
+    return False
+
+
 def note_swept_run(entry):
     """1.18.15: a run record the sweep removes belongs to a run that never reached its own ``run.ended`` (a killed helper cannot write it).
     Write that row now with reason ``swept``. Only ``runs/<32 hex>.json`` files that are plain files; never a live unit (the caller skips
@@ -3946,6 +4019,8 @@ def note_swept_run(entry):
     run_id = entry.name.split(".")[0]
     if not isinstance(record, dict):
         record = {}
+    if run_already_ended(run_id) or not entry.exists():  # 1.18.16: the run wrote its own row (or just removed its record); a second row would contradict it
+        return True
     runner, person = record.get("runner"), record.get("person")
     append_audit_safely("run.ended", {
         "runner": runner if isinstance(runner, str) and RUNNER_ID_RE.match(runner) else None, "run_id": run_id,

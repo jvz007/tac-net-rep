@@ -83,14 +83,14 @@ must(("write /run", "SUCCEEDED", "written") in rows and printed == "" and len(un
 # ---- the reading side
 must(sh.parse_run_marker(f"CANARYRUNMARKER{TAB}{MARKER}{NL}".encode()) == MARKER, "marker line")
 must(sh.parse_run_marker(f"CANARYRUNMARKER{TAB}/etc/passwd{NL}".encode()) is None and sh.parse_run_marker(b"") is None, "only the exact shape")
-must(sh.parse_run_listing(b"") is None, "no end line: did not list")
-must(sh.parse_run_listing(f"CANARYRUNLISTED{TAB}0{NL}".encode()) == [], "listed, empty")
-must(sh.parse_run_listing(f"CANARYRUNLIST{TAB}systemd{NL}CANARYRUNLISTED{TAB}1{NL}".encode()) == ["systemd"], "one name")
+must(sh.parse_run_seen(b"") is None, "no line: the next run did not say")  # 1.18.16: the probe answers seen or not seen, no listing
+must(sh.parse_run_seen(f"CANARYRUNSEEN{TAB}0{NL}".encode()) is False, "not seen")
+must(sh.parse_run_seen(f"CANARYRUNSEEN{TAB}1{NL}".encode()) is True, "seen")
 must("runview" in sh.CANARY_GROUPS and "runview" in runner.GROUPS, "the next-run listing group exists")
 
 # ---- the verdicts (fake collect, fake skeleton listing)
-LISTING_OK = f"CANARYRUNLIST{TAB}credentials{NL}CANARYRUNLIST{TAB}systemd{NL}CANARYRUNLISTED{TAB}2{NL}".encode()
-LISTING_BAD = f"CANARYRUNLIST{TAB}credentials{NL}CANARYRUNLIST{TAB}{MARKER}{NL}CANARYRUNLISTED{TAB}2{NL}".encode()
+LISTING_OK = f"CANARYRUNSEEN{TAB}0{NL}".encode()
+LISTING_BAD = f"CANARYRUNSEEN{TAB}1{NL}".encode()
 WRITTEN = {"stdout": f"CANARYRUNMARKER{TAB}{MARKER}{NL}".encode(), "refused": None, "end": {"reason": "exited"}}
 SUCCEEDED_ROW = {"wall": "Writes", "attack": "write /run", "expected": "read-only or private", "actual": "written", "verdict": "ATTACK SUCCEEDED"}
 
@@ -124,7 +124,7 @@ must(calls == ["runview"], calls)
 table, _ = check(WRITTEN, LISTING_OK, [MARKER])  # (b)
 must(table[1]["verdict"] == "ATTACK SUCCEEDED" and "skeleton" in table[1]["actual"], table[1])
 table, _ = check(WRITTEN, LISTING_BAD, [])  # (c)
-must(table[1]["verdict"] == "ATTACK SUCCEEDED" and "next run lists the marker" in table[1]["actual"], table[1])
+must(table[1]["verdict"] == "ATTACK SUCCEEDED" and "next run sees the marker" in table[1]["actual"], table[1])
 table, calls = check({"stdout": b"", "refused": None}, LISTING_OK, [])  # (d)
 must(table[1]["verdict"] == "NOT RUN" and "no marker" in table[1]["actual"] and calls == [], (table[1], calls))
 other = sh.RUN_MARKER_PREFIX + "ffffffffffffffff"

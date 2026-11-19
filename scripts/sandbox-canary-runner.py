@@ -455,15 +455,17 @@ def g_writes(plan):
 
 
 def g_runview(plan):
-    """1.18.15: the next run after ``writes``: its own listing of /run, one CANARYRUNLIST line per name, then CANARYRUNLISTED with the count
-    (so 'nothing listed' differs from 'could not list'). Not table rows; the root helper looks for the marker the writes run left."""
+    """1.18.16: the next run after ``writes`` answers one question: is the marker the writes run left (named by the helper in the plan) in this
+    run's /run? One line, ``CANARYRUNSEEN<TAB>1`` or ``0``; no listing, so no cut can hide the marker. Not a table row. No valid marker name in
+    the plan, or a /run that cannot be checked, prints nothing (the helper then reports NOT RUN)."""
+    marker = run_marker_name(plan)
+    if marker is None:
+        return
     try:
-        names = sorted(os.listdir("/run"))
+        seen = marker in os.listdir("/run")
     except OSError:
         return
-    for name in names[:200]:
-        print(f"CANARYRUNLIST\t{clean(name, 100)}", flush=True)
-    print(f"CANARYRUNLISTED\t{len(names)}", flush=True)
+    print(f"CANARYRUNSEEN	{1 if seen else 0}", flush=True)
 
 
 def g_processes(plan):
