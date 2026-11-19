@@ -151,15 +151,15 @@ must(end["oom_kills"] == 1 and end["evidence"] == "poll" and end["peak_mb"] == 1
 rid6 = os.urandom(16).hex()
 code, frames = H.start(H.header("ai.mem", run_id=rid6))
 end = H.end_of(frames)
-must(end["oom_kills"] is None and end["evidence"] is None and end["peak_mb"] == 50.0 and end["reason"] == "exited", end)
-real_read = sh.read_handoff
-sh.read_handoff = lambda run_id: {"oom_kills": 2, "memory_peak": 60 * 1048576, "result": "exit-code"}
+must(end["oom_kills"] is None and end["evidence"] is None and end["peak_mb"] is None and end["reason"] == "exited", end)  # 1.18.14: no poll, no number
+real_read = sh.in_memory_handoff  # 1.18.14: the merge still takes a handoff dict, now the helper's own
+sh.in_memory_handoff = lambda *a, **k: {"oom_kills": 2, "memory_peak": 60 * 1048576, "result": ""}
 end = H.end_of(H.start(H.header("ai.mem", run_id=os.urandom(16).hex()))[1])
 must(end["oom_kills"] == 2 and end["evidence"] == "finish" and end["peak_mb"] == 60.0, end)
-sh.read_handoff = lambda run_id: {"result": "oom-kill"}
+sh.in_memory_handoff = lambda *a, **k: {"result": "oom-kill"}
 end = H.end_of(H.start(H.header("ai.mem", run_id=os.urandom(16).hex()))[1])
 must(end["reason"] == "oom" and end["evidence"] == "service_result" and end["oom_kills"] is None, end)
-sh.read_handoff = real_read
+sh.in_memory_handoff = real_read
 must(H.leftovers() == [] or not H.leftovers(), H.leftovers())
 # the frame is still valid json with the known keys (the Django side reads known keys only: the new key is additive)
 must({"t", "exit", "reason", "ms", "peak_mb", "oom_kills", "credential_b64", "bytes_out", "bytes_err", "evidence"} == set(end), sorted(end))

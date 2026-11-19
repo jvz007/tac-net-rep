@@ -16,7 +16,9 @@ or reach the server itself or private networks (AD-63, docs/planning/sandbox/PLA
   ``sandbox_disabled`` frame BEFORE they read stdin. When on, ``--start`` reads one JSON header line and the input, re-checks the registry
   row, builds the unit itself from the row and Core constants, takes a server slot and a per-person slot, hands credentials in through
   LoadCredential from tmpfs, and streams one JSON frame per line (started, out, err, end). Closing its stdin or stdout stops the unit;
-* ``--finish <run-id>`` (root, ExecStopPost=+): writes the unit's usage and result to a root-only handoff file for the end frame.
+* 1.18.14: no unit property runs a command (no ``ExecStartPost=+``, no ``ExecStopPost=+``): on systemd 255 such a command sees only the
+  RootDirectory skeleton, not the host. The helper removes the run's credential folder itself once the unit holds its own copy, and builds
+  the end frame's memory evidence from its own live cgroup poll.
 
 ``SANDBOX_ENABLED`` is a constant in this file, so a fault in Django cannot switch the sandbox on. Nothing here reads a command, a path or a
 limit from a caller: every rule is applied again to the root-owned registry row.
@@ -198,7 +200,7 @@ UNIT_TIMEOUT_SECONDS = 30
 PROBE_PROPERTIES = {
     "transient": (),
     "dynamic_user": ("DynamicUser=yes",),
-    "credential": ("DynamicUser=yes",),  # plus LoadCredential and ExecStartPost, which carry the run's own paths
+    "credential": ("DynamicUser=yes",),  # plus LoadCredential, which carries the run's own path
     "proc_hidden": ("DynamicUser=yes", "ProtectProc=invisible", "ProcSubset=pid"),
     "address_filter_control": ("DynamicUser=yes",),
     "address_filter_loopback": ("DynamicUser=yes", "IPAddressDeny=" + ADDRESS_DENY),
@@ -970,8 +972,8 @@ class UnitRunner:
     """Runs one probe in a transient unit and returns (returncode, stdout, stderr). The selftest only talks to this interface, so a test
     can replace it. ``name`` is the probe name; ``properties`` the unit properties; ``command`` the argv inside the unit."""
 
-    def run_unit(self, name, properties, command, *, timeout=UNIT_TIMEOUT_SECONDS):
-        argv = ["systemd-run", "--pipe", "--wait", "--collect", "--quiet", f"--unit=tectac-selftest-{secrets.token_hex(6)}"]
+    def run_unit(self, name, properties, command, *, timeout=UNIT_TIMEOUT_SECONDS, unit=None):
+        argv = ["systemd-run", "--pipe", "--wait", "--collect", "--quiet", f"--unit={unit or 'tectac-selftest-' + secrets.token_hex(6)}"]
         argv += [f"--property={item}" for item in properties]
         argv += ["--", *command]
         try:
@@ -1269,6 +1271,21 @@ def credential_mode_problem(stat_line, uid_line, gid_line, acl_line):
     return ""
 
 
+def _run_probe_unit(runner, name, properties, command, folder, slots):
+    """1.18.14: run one probe unit under a name the helper knows, and remove the probe's credential folder the way a real run does: the
+    helper itself, once the unit holds its own copy (no ``+`` property command, which cannot see the host). The probe fails if the
+    token does not still arrive after the source is gone."""
+    unit = f"tectac-selftest-{secrets.token_hex(6)}"
+    stop = threading.Event()
+    remover = threading.Thread(target=remove_credentials_when_active, args=(unit, folder, slots), kwargs={"stop": stop}, daemon=True)
+    remover.start()
+    try:
+        return runner.run_unit(name, properties, command, unit=unit)
+    finally:
+        stop.set()
+        remover.join(5)
+
+
 def _probe_credential(runner, run_root):
     """A random token in a root-only folder arrives through LoadCredential, is readable only by the unit's user, and the source can be
     removed after start. Returns (ok, plain detail)."""
@@ -1280,11 +1297,11 @@ def _probe_credential(runner, run_root):
         token = secrets.token_hex(16)
         source.write_text(token, encoding="utf-8")
         os.chmod(source, 0o600)
-        properties = list(PROBE_PROPERTIES["credential"]) + [f"LoadCredential=probe:{source}", f"ExecStartPost=+/bin/rm -f {source}"]
+        properties = list(PROBE_PROPERTIES["credential"]) + [f"LoadCredential=probe:{source}"]
         # 1.17.122: line 1 the content, line 2 "mode uid gid" of the file, line 3 the unit's uid, line 4 the unit's gid, line 5 the ACL
         script = ('sleep 1; cat "$CREDENTIALS_DIRECTORY/probe"; echo; stat -c "%a %u %g" "$CREDENTIALS_DIRECTORY/probe"; id -u; id -g; '
                   f"/usr/bin/python3 -I -c '{_PROBE_ACL}' \"$CREDENTIALS_DIRECTORY/probe\"")
-        code, out, err = runner.run_unit("credential", properties, ["/bin/sh", "-c", script])
+        code, out, err = _run_probe_unit(runner, "credential", properties, ["/bin/sh", "-c", script], folder, ["probe"])
         lines = out.strip().splitlines()
         if code != 0 or len(lines) < 4:
             return False, (err.strip()[:200] or "the unit did not start, or the credential answer was incomplete")
@@ -1295,7 +1312,7 @@ def _probe_credential(runner, run_root):
         if problem:
             return False, problem
         if source.exists():
-            return False, "the source file was not removable after the start"
+            return False, "the source file was not removed by the helper once the unit was active"
         return True, "arrived, " + credential_found_text(lines[1], acl_line) + ", source removed"
     except OSError as exc:
         return False, f"cannot prepare the probe folder ({exc.strerror or 'error'})"
@@ -1305,7 +1322,7 @@ def _probe_credential(runner, run_root):
 
 def _probe_real_shape(runner, run_root):
     """1.18.13: one unit with the shape of a real run: the allow-list root and read-only binds (file_view_properties, the same function the
-    builder uses), DynamicUser, and a LoadCredential whose source is removed by ExecStartPost. Only this shape makes systemd create
+    builder uses), DynamicUser, and a LoadCredential whose source folder the helper removes once the unit is active (1.18.14). Only this shape makes systemd create
     run/systemd/incoming inside the root (dev02, 19 November 2026); a probe without the credential never showed it. The probe is honest only as
     far as real systemd shows it: the dev02 re-run decides. The caller's sandbox_root_after check reports any entry this unit made that is not
     on the list. Returns (ok, plain detail); neither the token nor any output or path goes into the detail."""
@@ -1321,15 +1338,15 @@ def _probe_real_shape(runner, run_root):
         token = secrets.token_hex(16)
         source.write_text(token, encoding="utf-8")
         os.chmod(source, 0o600)
-        properties = [*view, *PROBE_PROPERTIES["credential"], f"LoadCredential=probe:{source}", f"ExecStartPost=+/bin/rm -f {source}"]
+        properties = [*view, *PROBE_PROPERTIES["credential"], f"LoadCredential=probe:{source}"]
         script = 'sleep 1; cat "$CREDENTIALS_DIRECTORY/probe"'
-        code, out, _err = runner.run_unit("real_unit_shape", properties, ["/bin/sh", "-c", script])
+        code, out, _err = _run_probe_unit(runner, "real_unit_shape", properties, ["/bin/sh", "-c", script], folder, ["probe"])
         if code != 0:
             return False, "the unit did not start or did not finish"
         if out.strip() != token:
             return False, "the credential did not arrive in the real unit shape"
         if source.exists():
-            return False, "the source file was not removable after the start"
+            return False, "the source file was not removed by the helper once the unit was active"
         return True, "the credential arrived, source removed"
     except OSError as exc:
         return False, f"cannot prepare the probe folder ({exc.strerror or 'error'})"
@@ -1517,7 +1534,7 @@ def _sweep_reasons(payload):
 
 
 # ============================================================================ Patch 2 (1.17.118): the launch path
-# ``--start`` and ``--stop`` (the Tactical account, through sudo), ``--finish`` (root, ExecStopPost), the unit builder, the slots, the
+# ``--start`` and ``--stop`` (the Tactical account, through sudo), the unit builder, the slots, the
 # credential hand-in, the framing and the canary. SANDBOX_ENABLED stays False: ``--start`` and ``--stop`` refuse before they read stdin.
 LAUNCHER_FILE = LIB_ROOT / "sandbox-launcher.py"
 CANARY_DIR = LIB_ROOT / "canary"
@@ -1974,6 +1991,7 @@ def file_view_properties(exists=os.path.lexists):
     for path in BASE_BINDS_REQUIRED:
         if not exists(path):
             raise Refusal("sandbox_unavailable", f"this server has no {path} to hand a run")
+    # 1.18.14: a property command (``+`` or not) sees only this skeleton, never a host path, so no Exec* property may be built on a host path.
     props = [f"RootDirectory={SANDBOX_ROOT}", "MountAPIVFS=yes", "BindReadOnlyPaths=/usr"]
     for name in MERGED_USR_NAMES:
         path = "/" + name
@@ -2009,9 +2027,10 @@ def check_unit_properties(props, row, run_id, *, resolv_file):
         r"MemoryMax=[0-9]{1,6}M", r"CPUQuota=[0-9]{1,5}%", r"TasksMax=[0-9]{1,6}", r"LimitFSIZE=[0-9]{1,12}", r"RuntimeMaxSec=[0-9]{1,6}",
         re.escape(f"TemporaryFileSystem={WORK_DIR}:rw,nosuid,nodev,size=") + r"[0-9]{1,6}M,mode=1777",
         re.escape("IPAddressDeny=" + ADDRESS_DENY) + r"(?: [0-9a-f.:]{2,45}/[0-9]{1,3}){0," + str(LOCAL_DENY_MAX + 8) + "}",
-        re.escape("LoadCredential=cred") + r"[0-9]:" + re.escape(str(folder / "cred")) + r"[0-9]",
-        re.escape(f"ExecStartPost=+/bin/rm -rf {folder}"), re.escape(f"ExecStopPost=+{HELPER_COMMAND} --finish {run_id}"))]
+        re.escape("LoadCredential=cred") + r"[0-9]:" + re.escape(str(folder / "cred")) + r"[0-9]")]
     for item in props:
+        if item.startswith("Exec"):  # 1.18.14: a property command sees only the skeleton root, so none is ever allowed (never a `+` command)
+            raise Refusal("sandbox_unavailable", "the unit would carry a property that is not on Core's fixed list (a command property is never allowed)")
         if item not in exact and not any(pattern.fullmatch(item) for pattern in patterns):
             raise Refusal("sandbox_unavailable", "the unit would carry a property that is not on Core's fixed list")
 
@@ -2058,9 +2077,7 @@ def build_properties(row, run_id, *, credential_names, exists=os.path.lexists, d
     folder = SECRETS_ROOT / run_id
     slots = credential_slots(credential_names)
     props += [f"LoadCredential={slot}:{folder / slot}" for slot, _name in slots]
-    if slots:
-        props.append(f"ExecStartPost=+/bin/rm -rf {folder}")
-    props.append(f"ExecStopPost=+{HELPER_COMMAND} --finish {run_id}")
+    # 1.18.14: no Exec* property. The helper removes the folder once the unit holds its copy (remove_credentials_when_active).
     check_unit_properties(props, row, run_id, resolv_file=resolv_file)
     return props
 
@@ -2418,6 +2435,30 @@ def remove_secrets(run_id):
     shutil.rmtree(SECRETS_ROOT / run_id, ignore_errors=True)
 
 
+CREDENTIALS_RUNTIME = Path("/run/credentials")  # systemd's own per-unit copies; a constant so a test can point it at a fake
+
+
+def remove_credentials_when_active(unit, folder, slots, *, credentials_root=None, stop=None, clock=time.monotonic, sleep=time.sleep, timeout=15.0):
+    """1.18.14: remove ``folder`` (the run's credential sources, root 0700 on tmpfs) as soon as the unit holds its own complete copy.
+    Replaces ``ExecStartPost=+/bin/rm -rf``, which ran inside the RootDirectory skeleton on systemd 255 and could not see the host folder.
+    A copy counts as complete only when it exists with the same size as its source. Returns True after removing the folder; False when
+    the unit never showed its copies (or ``stop`` was set): the caller's own clean-up then removes the folder, so every failure path
+    still ends with the folder gone. The folder is never read for content, only for sizes."""
+    root = Path(credentials_root) if credentials_root is not None else CREDENTIALS_RUNTIME
+    copies, folder = root / f"{unit}.service", Path(folder)
+    deadline = clock() + timeout
+    while clock() < deadline and not (stop is not None and stop.is_set()):
+        try:
+            ready = bool(slots) and all((copies / slot).stat().st_size == (folder / slot).stat().st_size for slot in slots)
+        except OSError:
+            ready = False
+        if ready:
+            shutil.rmtree(folder, ignore_errors=True)
+            return True
+        sleep(0.02)
+    return False
+
+
 def run_record_path(run_id):
     return RUNS_ROOT / f"{run_id}.json"
 
@@ -2428,16 +2469,6 @@ def cancel_flag_path(run_id):
 
 def handoff_path(run_id):
     return HANDOFF_ROOT / f"{run_id}.json"
-
-
-def read_handoff(run_id):
-    path = handoff_path(run_id)
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        data = {}
-    path.unlink(missing_ok=True)
-    return data if isinstance(data, dict) else {}
 
 
 def systemctl(*args, timeout=15):
@@ -2451,29 +2482,6 @@ def systemctl(*args, timeout=15):
 
 def stop_unit(run_id):
     return systemctl("stop", unit_name(run_id) + ".service")[0] == 0
-
-
-def finish_run(run_id, environ=None):
-    """``--finish <run-id>`` (root, called by ExecStopPost=+): write usage and the unit's result to a root-only handoff file, which the
-    ``--start`` of the same run puts into its end frame and deletes. SERVICE_RESULT is systemd's own word (success, exit-code, signal,
-    timeout, oom-kill ...)."""
-    if not _plain_id(run_id, RUN_ID_RE):
-        raise RuntimeError("run id is invalid")
-    environ = os.environ if environ is None else environ
-    peak, cpu = None, None
-    code, out, _err = systemctl("show", unit_name(run_id) + ".service", "-P", "MemoryPeak", "-P", "CPUUsageNSec")
-    if code == 0:
-        values = out.split()
-        if len(values) >= 2:
-            peak = int(values[0]) if values[0].isdigit() else None
-            cpu = int(values[1]) if values[1].isdigit() else None
-    oom_kills, cgroup_peak = read_cgroup_memory(run_id)
-    if peak is None:
-        peak = cgroup_peak
-    result = re.sub(r"[^a-z-]", "", str(environ.get("SERVICE_RESULT", ""))[:32])
-    HANDOFF_ROOT.mkdir(parents=True, exist_ok=True)
-    _write_private(handoff_path(run_id), _json_bytes({"memory_peak": peak, "cpu_ns": cpu, "result": result, "oom_kills": oom_kills}))
-    return 0
 
 
 def slice_cgroup_folders(slice_name=None):
@@ -2554,7 +2562,7 @@ class CgroupWatch:
 
 
 def read_cgroup_memory(run_id):
-    """(oom_kill count, memory.peak in bytes) from the unit's own cgroup while it still exists (ExecStopPost runs before it goes). 1.18.8: the
+    """(oom_kill count, memory.peak in bytes) from the unit's own cgroup while it still exists. 1.18.8: the
     fixed path first (same as CgroupWatch); if no file is there, 1.17.124's lookup through ``systemctl show -P ControlGroup`` still runs, so a
     server whose slice nests differently does not lose the evidence. Either value is None when it cannot be read (a missing file is never an error)."""
     watch = CgroupWatch(run_id)
@@ -2607,6 +2615,7 @@ def launch(row, *, run_id, person, parameters, credentials, input_data, emit, st
     progress = {}
     audited = False
     canary = row.get("owner_module") == CANARY_OWNER
+    remover_stop = threading.Event()
     try:
         RUNS_ROOT.mkdir(parents=True, exist_ok=True)
         _write_private(run_record_path(run_id), _json_bytes({"run_id": run_id, "runner": row["id"], "unit": unit_name(run_id), "at": now()}))
@@ -2618,8 +2627,12 @@ def launch(row, *, run_id, person, parameters, credentials, input_data, emit, st
             raise Refusal("start_failed", "the run could not be recorded in the audit log") from exc
         audited = True
         process = _spawn(argv)
+        if credentials:  # 1.18.14: the helper removes the folder once the unit holds its copy; the finally below is the fail-closed path
+            threading.Thread(target=remove_credentials_when_active, daemon=True, kwargs={"stop": remover_stop},
+                             args=(unit_name(run_id), SECRETS_ROOT / run_id, [slot for slot, _n in credential_slots(sorted(credentials))])).start()
         return _supervise(process, row, run_id, input_data, emit, stdin_eof, started_at, clock, progress=progress)
     finally:
+        remover_stop.set()
         if process is not None and process.poll() is None:
             stop_unit(run_id)
             try:
@@ -2695,10 +2708,23 @@ def _whole(value):
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
+def in_memory_handoff(watch, exit_code, elapsed, run_seconds, stop_reason_set):
+    """1.18.14: what ``--finish`` used to hand over, built by the helper from its own last forced cgroup poll. ``result`` is 'oom-kill' only
+    when the poll saw one or more kills and the exit code is not 0, 'timeout' only when no helper stop reason is set and the run lasted at
+    least its limit plus the timer slack (systemd's RuntimeMaxSec fired), otherwise ''. A kill between the last poll and the cgroup going
+    away is reported as unknown, never guessed."""
+    result = ""
+    if _whole(watch.oom_kill) is not None and watch.oom_kill >= 1 and exit_code != 0:
+        result = "oom-kill"
+    elif not stop_reason_set and elapsed >= run_seconds + TIMER_SLACK_SECONDS:
+        result = "timeout"
+    return {"memory_peak": watch.peak_bytes(), "oom_kills": watch.oom_kill, "result": result}
+
+
 def merge_memory_evidence(watch, handoff, result):
-    """1.18.8: (peak bytes, oom_kills, evidence). ``oom_kills`` is the larger of the live poll and the ExecStopPost handoff; the peak is the
-    largest of the poll, the handoff and systemd's own MemoryPeak (the handoff already holds that). ``evidence`` names where the kill count
-    came from: 'poll', 'finish', 'service_result' (SERVICE_RESULT=oom-kill) or None. Nothing is guessed."""
+    """1.18.8: (peak bytes, oom_kills, evidence). ``oom_kills`` is the larger of the live poll and ``handoff``; the peak the larger of the two.
+    1.18.14: ``handoff`` is the helper's own in-memory copy of the last forced poll (no file, no ExecStopPost), so the two agree. ``evidence``
+    names where the kill count came from: 'poll', 'finish', 'service_result' or None. Nothing is guessed."""
     kills = [value for value in (_whole(watch.oom_kill), _whole(handoff.get("oom_kills"))) if value is not None]
     peaks = [value for value in (_whole(watch.peak_bytes()), _whole(handoff.get("memory_peak"))) if value is not None]
     oom_kills = max(kills) if kills else None
@@ -2796,11 +2822,11 @@ def _supervise(process, row, run_id, input_data, emit, stdin_eof, started_at, cl
         process.kill()
         code = process.wait()
     watch.sample(force=True)
-    handoff = read_handoff(run_id)
     reason = state["reason"]
     if cancel_flag_path(run_id).exists():
         reason = "cancelled"
-    result = str(handoff.get("result") or "")
+    handoff = in_memory_handoff(watch, code, clock() - started_at, int(limits["run_seconds"]), bool(state["reason"]))
+    result = handoff["result"]
     if reason is None:
         if result == "oom-kill":
             reason = "oom"
@@ -3525,9 +3551,37 @@ def credential_leak_findings(token, result):
     return found
 
 
-def _credential_rows(collect, status, probe=None, ready=None):
+def _live_exec_properties(unit):
+    """1.18.14: the Exec* properties of the live unit as systemd shows them: {name: text}. An empty text means no command is set."""
+    found = {}
+    for name in ("ExecStartPre", "ExecStartPost", "ExecStopPost"):
+        code, out, _err = systemctl("show", unit + ".service", "-P", name)
+        found[name] = out.strip() if code == 0 else "unreadable"
+    return found
+
+
+def credential_cleanup_rows(folder_present, exec_properties, active):
+    """1.18.14: the two canary rows for the credential clean-up. ``folder_present`` is whether secrets/<run id> still exists while the unit
+    is active; ``exec_properties`` the live unit's Exec* values; ``active`` whether the unit was proven active (otherwise NOT RUN)."""
+    if not active:
+        return [{"wall": "Credential", "attack": name, "expected": expected, "actual": "the unit was not proven active", "verdict": "NOT RUN"}
+                for name, expected in (("credential source folder is gone while the run is still active", "absent"),
+                                       ("no host command property on the live unit", "all empty"))]
+    set_ones = sorted(name for name, text in exec_properties.items() if text and text != "unreadable")
+    unreadable = not exec_properties or any(text == "unreadable" for text in exec_properties.values())
+    return [
+        {"wall": "Credential", "attack": "credential source folder is gone while the run is still active", "expected": "absent",
+         "actual": "still present" if folder_present else "absent", "verdict": "ATTACK SUCCEEDED" if folder_present else "OK"},
+        {"wall": "Credential", "attack": "no host command property on the live unit", "expected": "ExecStartPre, ExecStartPost, ExecStopPost empty",
+         "actual": ("set: " + ", ".join(set_ones)) if set_ones else ("could not be read" if unreadable else "all empty"),
+         "verdict": "ATTACK SUCCEEDED" if set_ones else ("NOT RUN" if unreadable else "OK")},
+    ]
+
+
+def _credential_rows(collect, status, probe=None, ready=None, exec_properties=None):
     probe = probe or _foreign_credential_probe
     ready = ready or _credential_file_ready
+    exec_properties = exec_properties or _live_exec_properties
     token = secrets.token_hex(16)
     cred_run = secrets.token_hex(16)
     box = {}
@@ -3545,7 +3599,12 @@ def _credential_rows(collect, status, probe=None, ready=None):
         before = bool(ready(unit_name(cred_run)))
     except Exception:  # noqa: BLE001 - a pre-check that breaks is NOT RUN
         before = False
+    cleanup = None
     if before:
+        try:  # 1.18.14: written first, while the unit is proven active
+            cleanup = credential_cleanup_rows((SECRETS_ROOT / cred_run).exists(), exec_properties(unit_name(cred_run)), True)
+        except Exception:  # noqa: BLE001 - a check that breaks is NOT RUN
+            cleanup = None
         try:
             foreign = probe(unit_name(cred_run))
         except Exception:  # noqa: BLE001 - a probe that breaks is NOT RUN, never a pass
@@ -3559,6 +3618,7 @@ def _credential_rows(collect, status, probe=None, ready=None):
     rows = []
     if result.get("refused"):
         return [{"wall": "Credential", "attack": "credential hand-in", "expected": "arrives", "actual": "refused: " + str(result["refused"]), "verdict": "NOT RUN"}]
+    rows.extend(cleanup or credential_cleanup_rows(False, {}, False))
     rows.extend(group_table("Credential", "cred", "only under CREDENTIALS_DIRECTORY", parse_runner_rows(result["stdout"])))
     rows.append(_foreign_row(foreign, before, after))
     rows.append({"wall": "Credential", "attack": "token in ps, /proc/*/cmdline, systemctl show, journald", "expected": "absent",
@@ -3776,7 +3836,7 @@ def refuse_disabled():
 
 
 def usage():
-    raise SystemExit("usage: tec-tac-sandbox --start|--stop|--status | --finish <run-id> | --selftest [--canary] | --sweep | --register-module|--unregister-module <module-id>")
+    raise SystemExit("usage: tec-tac-sandbox --start|--stop|--status | --selftest [--canary] | --sweep | --register-module|--unregister-module <module-id>")
 
 
 def main(argv=None):
@@ -3786,7 +3846,7 @@ def main(argv=None):
     if len(argv) not in (1, 2):
         usage()
     mode = argv[0]
-    if mode not in ("--start", "--stop", "--status", "--selftest", "--sweep", "--register-module", "--unregister-module", "--finish", "--canary-launch"):
+    if mode not in ("--start", "--stop", "--status", "--selftest", "--sweep", "--register-module", "--unregister-module", "--canary-launch"):
         usage()
     if os.geteuid() != 0:
         raise SystemExit("must run as root")
@@ -3805,8 +3865,6 @@ def main(argv=None):
     if mode == "--sweep" and len(argv) == 1:
         sweep()
         return 0
-    if mode == "--finish" and len(argv) == 2:
-        return finish_run(argv[1])
     if mode == "--register-module" and len(argv) == 2:
         register_module(argv[1])
         return 0

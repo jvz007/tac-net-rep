@@ -72,7 +72,7 @@ must(len(binds) == len(set(binds)) and all(" " not in b for b in binds if b != s
 real_line = next(line for line in (ROOT / "scripts/sandbox-helper.py").read_text(encoding="utf-8").splitlines() if line.startswith("BASE_BINDS_REQUIRED"))
 must('"/etc/resolv.conf"' not in real_line and '"/etc/ssl/certs"' in real_line, real_line)
 must(binds.count(str(sh.core_resolv_file()) + ":/etc/resolv.conf") == 1 and "/etc/resolv.conf" not in binds, binds)
-must(sh.HELPER_COMMAND == "/usr/local/sbin/tec-tac-sandbox" and any(p == f"ExecStopPost=+{sh.HELPER_COMMAND} --finish {RUN_ID}" for p in props), "finish hook")
+must(sh.HELPER_COMMAND == "/usr/local/sbin/tec-tac-sandbox" and not any(p.startswith("Exec") for p in props), "no property command (1.18.14)")
 # network: the section 15 string exactly; 1.17.123: no Allow at all, the resolver is Core's own resolv.conf
 must(f"IPAddressDeny={sh.ADDRESS_DENY}" in props and sh.ADDRESS_DENY == "127.0.0.0/8 ::1/128 169.254.0.0/16 fe80::/10 224.0.0.0/4 ff00::/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7", "address filter")
 must("IPAddressAllow" not in joined_props, "no IPAddressAllow anywhere")
@@ -83,16 +83,16 @@ must([p for p in extra_props if p.startswith("IPAddressDeny=")] == ["IPAddressDe
 must("MemoryZSwapMax=0" not in props and "OOMPolicy=kill" in props and "MemorySwapMax=0" in props, "no ZSwap property by default")
 zs = sh.build_properties(row, RUN_ID, credential_names=["auth"], exists=EXISTS, zswap=True)
 must(zs.count("MemoryZSwapMax=0") == 1 and zs.index("MemoryZSwapMax=0") == zs.index("MemorySwapMax=0") + 1, "ZSwap beside the swap limit")
-# credentials: LoadCredential per name from the run's own folder, and the folder is removed by a root ExecStartPost
+# credentials: LoadCredential per name from the run's own folder, and (1.18.14) the helper itself removes the folder, no property command
 must([p for p in props if p.startswith("LoadCredential=")] == [f"LoadCredential=cred0:{sh.SECRETS_ROOT / RUN_ID / 'cred0'}", f"LoadCredential=cred1:{sh.SECRETS_ROOT / RUN_ID / 'cred1'}"], props)
-must(f"ExecStartPost=+/bin/rm -rf {sh.SECRETS_ROOT / RUN_ID}" in props, "")
+must(not [p for p in props if p.startswith("Exec")], "no Exec property with credentials either")
 none = sh.build_properties(row, RUN_ID, credential_names=[], exists=EXISTS)
 must(not [p for p in none if p.startswith(("LoadCredential=", "ExecStartPost="))], "no credential, no hook")
 # every property is Key=Value from a fixed vocabulary
 for p in props:
     must("=" in p and "\n" not in p and "\x00" not in p, p)
 ALLOWED_KEYS = {p.split("=")[0] for p in GOLDEN} | {"MemoryMax", "CPUQuota", "TasksMax", "LimitFSIZE", "RuntimeMaxSec", "TemporaryFileSystem", "WorkingDirectory",
-                                                  "BindReadOnlyPaths", "IPAddressDeny", "RootDirectory", "MountAPIVFS", "LoadCredential", "ExecStartPost", "ExecStopPost"}
+                                                  "BindReadOnlyPaths", "IPAddressDeny", "RootDirectory", "MountAPIVFS", "LoadCredential"}
 must({p.split("=")[0] for p in props} <= ALLOWED_KEYS, {p.split("=")[0] for p in props} - ALLOWED_KEYS)
 
 # ---- nothing comes from the caller or the manifest text

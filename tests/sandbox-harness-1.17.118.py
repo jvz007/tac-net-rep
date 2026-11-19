@@ -158,15 +158,13 @@ for k, v in setenv.items():
     env[k] = per + v[len(workroot):] if v.startswith(workroot) else v
 creds = [p for p in props if p.startswith("LoadCredential=")]
 if creds:
-    cd = os.path.join(base, "creds", unit)
+    cd = os.path.join(base, "creds", unit + ".service")  # 1.18.14: the place systemd keeps a unit's own copies (CREDENTIALS_RUNTIME)
     os.makedirs(cd, exist_ok=True)
     for c in creds:
         name, path = c[len("LoadCredential="):].split(":", 1)
         shutil.copyfile(path, os.path.join(cd, name))
     env["CREDENTIALS_DIRECTORY"] = cd
-    for p in props:
-        if p.startswith("ExecStartPost=+/bin/rm -rf "):
-            shutil.rmtree(p.split("rm -rf ", 1)[1], ignore_errors=True)
+    # 1.18.14: no property command is run; the helper itself removes the source folder once the copies above exist
 idx = command.index("--")
 if command[idx + 1].endswith(".py"):
     command[idx + 1:idx + 1] = [sys.executable]
@@ -193,11 +191,6 @@ try:
     os.unlink(os.path.join(base, "pids", unit))
 except OSError:
     pass
-result = os.environ.get("FAKE_RESULT") or ("signal" if stopped["v"] else "success")
-os.makedirs(os.environ["FAKE_HANDOFF"], exist_ok=True)
-rid = unit[len("tectac-sbx-"):]
-with open(os.path.join(os.environ["FAKE_HANDOFF"], rid + ".json"), "w") as h:
-    json.dump({"memory_peak": 52428800, "cpu_ns": 1000, "result": result}, h)
 sys.exit(code if code >= 0 else 1)
 ''', encoding="utf-8")
 FAKE_CTL.write_text(r'''
@@ -214,11 +207,15 @@ if args[:1] == ["is-active"]:
     unit = args[1][:-len(".service")]
     sys.exit(0 if os.path.exists(os.path.join(base, "pids", unit)) else 3)
 if args[:1] == ["show"]:
+    if any(a.startswith("Exec") for a in args):  # 1.18.14: the live unit carries no command property
+        print("")
+        sys.exit(0)
     print("52428800")
     print("1000")
     sys.exit(0)
 sys.exit(1)
 ''', encoding="utf-8")
+sh.CREDENTIALS_RUNTIME = BASE / "creds"  # 1.18.14: the fake copies LoadCredential files here, like systemd's /run/credentials
 sh.SYSTEMD_RUN = [sys.executable, str(FAKE_RUN)]
 sh.SYSTEMCTL = [sys.executable, str(FAKE_CTL)]
 sh.UNIT_PYTHON = sys.executable

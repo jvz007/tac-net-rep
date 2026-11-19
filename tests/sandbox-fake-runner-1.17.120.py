@@ -9,7 +9,25 @@ Not runnable here: real systemd. The dev02 canary (tests/sandbox-canary-1.17.120
 from __future__ import annotations
 
 import socket
+import tempfile
+import time
 from pathlib import Path
+
+CREDS_ROOT = Path(tempfile.mkdtemp(prefix="tectac-fake-credentials-"))  # 1.18.14: stands in for /run/credentials
+
+
+def hand_in(unit, source, remove=True):
+    """1.18.14: what systemd does at start: copy the source into the unit's own credential folder. The helper (not the fake) must then
+    remove the source folder; the fake waits for that, up to 5 s. ``remove`` False means the unit never shows its copy."""
+    token = source.read_text(encoding="utf-8")
+    if remove and unit:
+        folder = CREDS_ROOT / f"{unit}.service"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / source.name).write_text(token, encoding="utf-8")
+        deadline = time.monotonic() + 5
+        while source.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+    return token
 
 
 IP_ADDR = ("1: lo    inet 127.0.0.1/8 scope host lo\\       valid_lft forever preferred_lft forever\n"
@@ -55,7 +73,7 @@ class Fake:
         answer = self.script["systemctl" if argv[0] == "systemctl" else "stat"]
         return (answer[0], answer[1], "")
 
-    def run_unit(self, name, properties, command, *, timeout=30):
+    def run_unit(self, name, properties, command, *, timeout=30, unit=None):
         self.calls.append((name, tuple(properties), tuple(command)))
         answer = self.script[name]
         if answer == "connect":
@@ -69,17 +87,16 @@ class Fake:
             for item in properties:
                 if item.startswith("LoadCredential=probe:"):
                     source = Path(item.split(":", 1)[1])
-            token = source.read_text(encoding="utf-8")
-            source.unlink()
+            token = hand_in(unit, source)
             return 0, token, ""
         if answer == "credential":
             source = None
             for item in properties:
                 if item.startswith("LoadCredential=probe:"):
                     source = Path(item.split(":", 1)[1])
-            token = self.credential["token"] if self.credential["token"] is not None else source.read_text(encoding="utf-8")
-            if self.credential["remove"]:
-                source.unlink()
+            token = hand_in(unit, source, self.credential["remove"])
+            if self.credential["token"] is not None:
+                token = self.credential["token"]
             c = self.credential
             stat_line = c["stat"] if c["stat"] is not None else f"{c['mode']} {c['uid']} {c['gid']}"
             acl = c["acl"]
@@ -95,4 +112,5 @@ class Fake:
 def run_selftest(sh, run_root, base, fake, resolv=PUBLIC):
     path = Path(base) / f"resolv-{len(list(Path(base).glob('resolv-*')))}.conf"
     path.write_text(resolv, encoding="utf-8")
+    sh.CREDENTIALS_RUNTIME = CREDS_ROOT
     return sh.selftest(fake, resolv_conf_path=path, run_root=run_root, upstream_path=Path(base) / "no-upstream-file.conf")  # 1.17.123: upstream missing, so the file above is the fallback

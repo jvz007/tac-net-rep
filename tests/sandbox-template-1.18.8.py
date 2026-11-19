@@ -147,7 +147,7 @@ for extra in INJECTED:
             must(exc.code == "sandbox_unavailable" and "fixed list" in exc.message, (extra, exc.code, exc.message))
 # every emitted key is on the fixed vocabulary
 KEYS = {p.split("=")[0] for p in sh.UNIT_FIXED_PROPERTIES} | {"MemoryMax", "CPUQuota", "TasksMax", "LimitFSIZE", "RuntimeMaxSec", "TemporaryFileSystem", "WorkingDirectory", "BindReadOnlyPaths",
-                                                              "IPAddressDeny", "LoadCredential", "ExecStartPost", "ExecStopPost", "RootDirectory", "MountAPIVFS", "MemoryZSwapMax"}
+                                                              "IPAddressDeny", "LoadCredential", "RootDirectory", "MountAPIVFS", "MemoryZSwapMax"}
 must({p.split("=")[0] for p in good} <= KEYS, {p.split("=")[0] for p in good} - KEYS)
 for p in good:
     must(re.fullmatch(r"[A-Za-z]+=[^\n\x00]*", p), p)

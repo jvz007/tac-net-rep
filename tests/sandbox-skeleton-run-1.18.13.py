@@ -259,10 +259,10 @@ class Probing(Fake):
         super().__init__(**kw)
         self.add = add
 
-    def run_unit(self, name, properties, command, *, timeout=30):
+    def run_unit(self, name, properties, command, *, timeout=30, unit=None):
         if self.add and name == "real_unit_shape":
             (tree_live / self.add).mkdir(parents=True, exist_ok=True)
-        return super().run_unit(name, properties, command, timeout=timeout)
+        return super().run_unit(name, properties, command, timeout=timeout, unit=unit)
 
 
 fake = Probing()
@@ -273,7 +273,7 @@ must(len(shape) == 1, "one real-shape unit")
 properties = shape[0][1]
 must(f"RootDirectory={sh2.SANDBOX_ROOT}" in properties and "DynamicUser=yes" in properties, properties)
 must(all(item in properties for item in sh2.file_view_properties()), "the real read-only binds")
-must(any(p.startswith("LoadCredential=probe:") for p in properties) and any(p.startswith("ExecStartPost=+/bin/rm -f ") for p in properties), properties)
+must(any(p.startswith("LoadCredential=probe:") for p in properties) and not any(p.startswith("Exec") for p in properties), properties)  # 1.18.14: no property command
 names = [call[0] for call in fake.calls]
 must(names.index("credential") < names.index("real_unit_shape") < names.index("proc_hidden"), names)
 must("token" not in json.dumps(status).lower().replace("tectac-probe", ""), "no token in the status")

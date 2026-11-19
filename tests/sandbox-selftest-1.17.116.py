@@ -25,6 +25,7 @@ import socket
 import stat
 import sys
 import tempfile
+import time
 import types
 from pathlib import Path
 
@@ -178,7 +179,7 @@ class Fake:
         answer = self.script["systemctl" if argv[0] == "systemctl" else "stat"]
         return (answer[0], answer[1], "")
 
-    def run_unit(self, name, properties, command, *, timeout=30):
+    def run_unit(self, name, properties, command, *, timeout=30, unit=None):
         self.calls.append((name, tuple(properties), tuple(command)))
         answer = self.script[name]
         if answer == "connect":   # a real connection to the helper's own listener, as an unfiltered unit would make
@@ -195,18 +196,17 @@ class Fake:
             for item in properties:
                 if item.startswith("LoadCredential=probe:"):
                     source = Path(item.split(":", 1)[1])
-            token = source.read_text(encoding="utf-8")
-            source.unlink()
+            token = hand_in(unit, source)
             return 0, token, ""
         if answer == "credential":
             source = None
             for item in properties:
                 if item.startswith("LoadCredential=probe:"):
                     source = Path(item.split(":", 1)[1])
-            must(source is not None and any(p.startswith("ExecStartPost=+/bin/rm -f ") for p in properties), properties)
-            token = self.credential["token"] if self.credential["token"] is not None else source.read_text(encoding="utf-8")
-            if self.credential["remove"]:
-                source.unlink()
+            must(source is not None and not any(p.startswith("Exec") for p in properties), properties)
+            token = hand_in(unit, source, self.credential["remove"])
+            if self.credential["token"] is not None:
+                token = self.credential["token"]
             c = self.credential
             stat_line = c["stat"] if c["stat"] is not None else f"{c['mode']} {c['uid']} {c['gid']}"
             return 0, f"{token}\n{stat_line}\n61500\n61500\nACL none\n", ""
@@ -215,7 +215,25 @@ class Fake:
         return answer[0], answer[1], "err text" if answer[0] else ""
 
 
+
+CREDS_ROOT = Path(tempfile.mkdtemp(prefix="tectac-fake-credentials-"))  # 1.18.14: stands in for /run/credentials
+
+
+def hand_in(unit, source, remove=True):
+    """1.18.14: systemd copies the source into the unit's own folder; the helper must then remove the source folder (the fake waits up to 5 s)."""
+    token = source.read_text(encoding="utf-8")
+    if remove and unit:
+        folder = CREDS_ROOT / f"{unit}.service"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / source.name).write_text(token, encoding="utf-8")
+        deadline = time.monotonic() + 5
+        while source.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+    return token
+
+
 def selftest(fake, resolv=PUBLIC):
+    sh.CREDENTIALS_RUNTIME = CREDS_ROOT
     path = BASE / f"resolv-{len(list(BASE.glob('resolv-*')))}.conf"
     if resolv is not None:
         path.write_text(resolv, encoding="utf-8")
@@ -243,9 +261,9 @@ for name, properties, command in fake.calls:
     if name == "filesystem_view":  # 1.18.8: the REAL file view, from the one function the unit builder uses
         must(properties == ("DynamicUser=yes", *sh.file_view_properties()) and "RootDirectory=" + str(sh.SANDBOX_ROOT) in properties and "MountAPIVFS=yes" in properties, properties)
     elif name == "credential":
-        must(properties[:1] == expected and len(properties) == 3, properties)
+        must(properties[:1] == expected and len(properties) == 2, properties)  # 1.18.14: DynamicUser and LoadCredential only, no property command
     elif name == "real_unit_shape":  # 1.18.13
-        must(properties[:len(sh.file_view_properties())] == tuple(sh.file_view_properties()) and "DynamicUser=yes" in properties and len(properties) == len(sh.file_view_properties()) + 3, properties)
+        must(properties[:len(sh.file_view_properties())] == tuple(sh.file_view_properties()) and "DynamicUser=yes" in properties and len(properties) == len(sh.file_view_properties()) + 2, properties)
     elif name == "dns":
         must(properties == expected[:1] + ("IPAddressDeny=" + sh.ADDRESS_DENY + " 129.232.197.50/32 129.232.197.1/32",), properties)   # the full deny list, nothing allowed
     elif name == "address_filter_local_control":
@@ -296,7 +314,7 @@ fake.credential["mode"] = "640"
 check_fail("credential mode", "mode is 640", fake, expect_check="credential")
 fake = Fake()
 fake.credential["remove"] = False
-check_fail("credential source stays", "not removable", fake, expect_check="credential")
+check_fail("credential source stays", "not removed by the helper", fake, expect_check="credential")
 must(not list(RUN.iterdir()), "the probe folder is removed after each failure too")
 check_fail("credential too few lines", "LoadCredential did not work", Fake(credential=(0, "just one line\n")), expect_check="credential")
 

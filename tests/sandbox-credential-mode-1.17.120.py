@@ -89,7 +89,7 @@ refused("a missing stat line", "", stat="")
 refused("a stat line without the group", "could not be read", stat="440 61500")
 refused("a stat line with words", "could not be read", stat="440 uid gid")
 refused("a wrong token", "did not arrive", token="someone else's text")
-refused("a source that was not removed", "not removable", remove=False)
+refused("a source that was not removed", "not removed by the helper", remove=False)
 must(credential(stat="400 -1 61500")["ready"] is False, "a negative owner is not a number")
 # the unit's own ids come from the unit itself: a lying file group does not match a different unit gid
 fake = F.Fake()
@@ -97,8 +97,8 @@ fake.credential.update(mode="440", uid="61500", gid="61500", acl="ACL none")
 real_run = fake.run_unit
 
 
-def mismatched(name, properties, command, *, timeout=30):
-    code, out, err = real_run(name, properties, command, timeout=timeout)
+def mismatched(name, properties, command, *, timeout=30, unit=None):
+    code, out, err = real_run(name, properties, command, timeout=timeout, unit=unit)
     if name == "credential":
         lines = out.splitlines()
         lines[3] = "61501"  # the unit's gid is not the file's group
@@ -141,7 +141,7 @@ WALL = "another dynamic user reads the credential file"
 
 
 def rows_for(probe):
-    rows = sh._credential_rows(collect, status, probe, lambda unit: True)  # 1.17.121: the root-side pre-check is injected (no real systemd here)
+    rows = sh._credential_rows(collect, status, probe, lambda unit: True, lambda unit: {"ExecStartPre": "", "ExecStartPost": "", "ExecStopPost": ""})  # 1.17.121: the root-side pre-check is injected (no real systemd here)
     found = [r for r in rows if r["attack"] == WALL]
     must(len(found) == 1 and found[0]["wall"] == "Credential" and found[0]["expected"] == "denied", rows)
     text = json.dumps(rows)

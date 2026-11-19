@@ -11,8 +11,8 @@ evidence at all) was the opposite hole. The rule now:
 * ATTACK SUCCEEDED when allocated or peak is above MemoryMax, the probe finished (CANARYEND done) or the run exited 0;
 * NOT RUN, never OK, when there is no evidence or the end is unexplained (exit 1 or 137 with no oom_kills and no CANARYEND).
 
-finish_run (root, ExecStopPost=+) now reads memory.events (oom_kill) and memory.peak from the unit's cgroup while it exists and writes
-oom_kills and a peak fallback to the handoff file; launch() adds oom_kills to the end frame (additive).
+The end frame carries oom_kills (additive). 1.18.14: the numbers come from the helper's own live poll of memory.events and memory.peak
+(finish_run and its handoff file are gone).
 
 Not runnable here: the real cgroup and OOM kill (dev02).
 """
@@ -21,7 +21,6 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
-import json
 import os
 import sys
 from pathlib import Path
@@ -163,19 +162,17 @@ Boom.count = 0
 lines, error = run_mem({"alloc_mb": 64}, Boom(KeyboardInterrupt()))
 must(lines[-1] == f"CANARYEND{TAB}other:KeyboardInterrupt" and isinstance(error, KeyboardInterrupt), (lines, error))
 
-# ---- finish_run reads the unit's cgroup: oom_kill from memory.events and memory.peak, and tolerates a missing file
+# ---- the unit's cgroup: oom_kill from memory.events and memory.peak, and a missing file is tolerated (1.18.14: read by the helper's own poll)
 CG = H.BASE / "cgroup"
 sh.CGROUP_ROOT = CG
 unit_dir = CG / "system.slice" / "tectac-sbx-test.service"
 unit_dir.mkdir(parents=True)
-state = {"group": "/system.slice/tectac-sbx-test.service", "peak": ""}
+state = {"group": "/system.slice/tectac-sbx-test.service"}
 
 
 def fake_systemctl(*args, timeout=15):
     if "ControlGroup" in args:
         return 0, state["group"] + NL, ""
-    if "MemoryPeak" in args:
-        return 0, f"{state['peak']}{NL}1000{NL}", ""
     return 0, "", ""
 
 
@@ -183,38 +180,36 @@ sh.systemctl = fake_systemctl
 rid = os.urandom(16).hex()
 (unit_dir / "memory.events").write_text("low 0\nhigh 0\nmax 214\noom 1\noom_kill 3\noom_group_kill 0\n", encoding="ascii")
 (unit_dir / "memory.peak").write_text("134217728\n", encoding="ascii")
-must(sh.finish_run(rid, {"SERVICE_RESULT": "exit-code"}) == 0, "")
-handoff = json.loads((sh.HANDOFF_ROOT / f"{rid}.json").read_text(encoding="utf-8"))
-must(handoff["oom_kills"] == 3 and handoff["memory_peak"] == 134217728 and handoff["result"] == "exit-code", handoff)  # MemoryPeak was empty: the cgroup's value is used
-state["peak"] = "52428800"
-sh.finish_run(rid, {})
-must(json.loads((sh.HANDOFF_ROOT / f"{rid}.json").read_text(encoding="utf-8"))["memory_peak"] == 52428800, "systemd's MemoryPeak wins when it has a number")
 (unit_dir / "memory.events").unlink()
 (unit_dir / "memory.peak").unlink()
-state["peak"] = ""
-sh.finish_run(rid, {})
-handoff = json.loads((sh.HANDOFF_ROOT / f"{rid}.json").read_text(encoding="utf-8"))
-must(handoff["oom_kills"] is None and handoff["memory_peak"] is None, "a missing file is tolerated and reported as unknown")
 (unit_dir / "memory.events").write_text("oom_kill notanumber\n", encoding="ascii")
-sh.finish_run(rid, {})
-must(json.loads((sh.HANDOFF_ROOT / f"{rid}.json").read_text(encoding="utf-8"))["oom_kills"] is None, "garbage is unknown, never an error")
+must(sh.read_cgroup_memory(rid)[0] is None, "garbage is unknown, never an error")
 for bad in ("/../etc", "relative/path", "/a/../../b", "", "/x\x00y"):
     state["group"] = bad
     must(sh.read_cgroup_memory(rid) == (None, None), bad)
-sh.finish_run(rid, {})
-(sh.HANDOFF_ROOT / f"{rid}.json").unlink()
 
-# ---- the end frame carries oom_kills (additive) and a peak from the handoff
+# ---- the end frame carries oom_kills (additive) and a peak from the helper's own poll
 make_runner("ai.chat", body="print('hello')")
 H.write_ready_status()
-sh.read_handoff = lambda run_id: {"oom_kills": 2, "memory_peak": 100 * 1048576, "result": "exit-code"}
+
+
+class PollWatch(sh.CgroupWatch):
+    values = (2, 100 * 1048576)
+
+    def sample(self, now_value=None, *, force=False):
+        self.oom_kill, self.peak = PollWatch.values
+
+
+real_watch = sh.CgroupWatch
+sh.CgroupWatch = PollWatch
 code, frames = start(header("ai.chat"))
 end = [f for f in frames if f["t"] == "end"][0]
 must(end["oom_kills"] == 2 and end["peak_mb"] == 100.0, end)
-sh.read_handoff = lambda run_id: {"oom_kills": True, "result": "exit-code"}
+PollWatch.values = (True, True)  # a bool is not a number
 code, frames = start(header("ai.chat"))
 end = [f for f in frames if f["t"] == "end"][0]
 must(end["oom_kills"] is None and end["peak_mb"] is None, end)
+sh.CgroupWatch = real_watch
 # Core's own reader of end frames takes known keys only, so an extra key is ignored
 core_source = (H.ROOT / "framwork" / "tec_tac" / "sandbox.py").read_text(encoding="utf-8")
 must('frame.get("peak_mb")' in core_source and "oom_kills" not in core_source, "Core reads named keys of the end frame, so oom_kills passes through unseen")

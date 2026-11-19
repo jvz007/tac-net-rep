@@ -187,10 +187,10 @@ class Probing(Fake):
         super().__init__(**kw)
         self.add = add
 
-    def run_unit(self, name, properties, command, *, timeout=30):
+    def run_unit(self, name, properties, command, *, timeout=30, unit=None):
         if self.add and name == "pipe_streams":
             (live / self.add).mkdir(exist_ok=True)
-        return super().run_unit(name, properties, command, timeout=timeout)
+        return super().run_unit(name, properties, command, timeout=timeout, unit=unit)
 
 
 status = selftest(Probing())

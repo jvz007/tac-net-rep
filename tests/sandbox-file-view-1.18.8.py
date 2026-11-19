@@ -256,7 +256,7 @@ class Probe:
             return 0, ("1: lo    inet 127.0.0.1/8 scope host lo\n2: eth0    inet 129.232.197.50/24 scope global eth0\n" if argv[1] == "-o" else ""), ""
         return 1, "", ""
 
-    def run_unit(self, name, properties, command, *, timeout=30):
+    def run_unit(self, name, properties, command, *, timeout=30, unit=None):
         self.units.append(name)
         return 1, "", "not important here"
 
@@ -271,7 +271,7 @@ must("filesystem_view" not in probe.units, "the real view is not probed on a wro
 
 # the reason that leads is the skeleton one when nothing earlier failed
 class OnlySkeleton(Probe):
-    def run_unit(self, name, properties, command, *, timeout=30):
+    def run_unit(self, name, properties, command, *, timeout=30, unit=None):
         answers = {"transient": (0, "tectac-probe\n", ""), "dynamic_user": (0, "61500\n", "")}
         return answers.get(name, (1, "", "x"))
 

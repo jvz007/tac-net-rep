@@ -152,7 +152,7 @@ for label, ready in (("file or unit missing", lambda unit: False), ("pre-check r
     must(counter["n"] == 0, (label, "the probe must not start"))
     must(row["verdict"] == "NOT RUN" and "not there" in row["actual"], (label, row))
     passed, counts = sh.canary_summary(rows)
-    must(passed is False and counts["NOT RUN"] == 1, (label, counts))
+    must(passed is False and counts["NOT RUN"] == 3, (label, counts))  # 1.18.14: the foreign row and the two clean-up rows are NOT RUN together
 
 # (d) MISSING never gives OK
 rows, row = rows_for(counting("MISSING"), lambda unit: True)

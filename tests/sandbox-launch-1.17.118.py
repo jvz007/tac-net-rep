@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""1.17.118 regression: the helper's launch path (core.sandbox Patch 2, part A): --start, --stop, --finish, slots, credential hand-in,
+"""1.17.118 regression: the helper's launch path (core.sandbox Patch 2, part A): --start, --stop, slots, credential hand-in,
 framing, the launcher, cancel and the dead-man switch, sweep.
 
 Django-free. The helper runs for real, in this process, against a fake file-system layer and a fake systemd-run and systemctl (tests/
@@ -11,7 +11,7 @@ not-ready selftest are refused; slot limits (server and per person), the queue t
 modes and removal on success, failure, cancel and exception, and no credential in argv, in the child's environment or in the audit log;
 frame order, partial UTF-8 across frames, output caps with the truncated flag, the timeout, the dead-man stop on stdin EOF; the launcher's
 nonce framing (a forged frame from the runner is plain output) and the credential round trip; --stop accepts only a unit this helper
-started; --finish writes a root-only handoff; sweep removes strays and keeps live runs.
+started; 1.18.14: no --finish, the end frame's evidence is the helper's own poll; sweep removes strays and keeps live runs.
 
 Not runnable here: real systemd, cgroups and the unit's own file system (the dev02 canary).
 """
@@ -65,7 +65,7 @@ try:
 finally:
     sys.stdin = real_stdin
 must(not leftovers() and not (sh.SLOTS_ROOT / "0").exists(), "the refusal touched nothing")
-# --finish and the canary are root only commands; they exist but are not in the sudo rule (installer test)
+# the canary is a root only command (1.18.14: --finish is gone); they exist but are not in the sudo rule (installer test)
 must(sh.main.__doc__ is None or True, "")
 
 # ------------------------------------------------------------------------------------------------ refusals before anything is written
@@ -164,7 +164,7 @@ tags = [f["t"] for f in frames]
 must(tags[0] == "started" and tags[-1] == "end" and set(tags) <= {"started", "out", "err", "end"}, tags)
 must(joined(frames, "out").decode("utf-8").strip() == "héllo wörld" and joined(frames, "err").strip() == b"warn", frames)
 end = end_of(frames)
-must(end["exit"] == 3 and end["reason"] == "exited" and end["peak_mb"] == 50.0 and end["credential_b64"] is None and isinstance(end["ms"], int), end)
+must(end["exit"] == 3 and end["reason"] == "exited" and end["peak_mb"] is None and end["credential_b64"] is None and isinstance(end["ms"], int), end)
 must(not leftovers(), leftovers())
 log = unit_log(frames[0]["run_id"])
 must(frames[0]["unit"] == "tectac-sbx-" + frames[0]["run_id"], frames[0])
@@ -204,12 +204,22 @@ started = time.monotonic()
 code, frames = start(header("ai.slow"))
 must(end_of(frames)["reason"] == "timeout" and time.monotonic() - started < 15, frames)
 must(not leftovers(), leftovers())
-sh.CHILD_ENV["FAKE_RESULT"] = "oom-kill"
-make_runner("ai.oom", body="print('x')")
-must(end_of(start(header("ai.oom"))[1])["reason"] == "oom", "systemd's oom-kill result becomes reason oom")
-sh.CHILD_ENV["FAKE_RESULT"] = "timeout"
-must(end_of(start(header("ai.oom"))[1])["reason"] == "timeout", "systemd's own timeout result")
-sh.CHILD_ENV.pop("FAKE_RESULT")
+# 1.18.14: the result comes from the helper's own poll: a kill seen by the poll and a failing exit is reason oom, an exit 0 is not
+class OomWatch(sh.CgroupWatch):
+    def sample(self, now_value=None, *, force=False):
+        self.oom_kill, self.peak = 1, 50 * 1048576
+
+
+real_watch = sh.CgroupWatch
+sh.CgroupWatch = OomWatch
+try:
+    make_runner("ai.oom", body="sys.exit(9)")
+    end = end_of(start(header("ai.oom"))[1])
+    must(end["reason"] == "oom" and end["oom_kills"] == 1 and end["peak_mb"] == 50.0 and end["evidence"] == "poll", end)
+    make_runner("ai.oomzero", body="print('x')")
+    must(end_of(start(header("ai.oomzero"))[1])["reason"] == "exited", "a clean exit is not an oom result")
+finally:
+    sh.CgroupWatch = real_watch
 
 # ------------------------------------------------------------------------------------------------ credentials
 TOKEN = "s3cret-" + os.urandom(8).hex()
@@ -244,8 +254,7 @@ must(not leftovers() and not (sh.SECRETS_ROOT / frames[0]["run_id"]).exists(), "
 must(TOKEN not in json.dumps(seen["argv"]) and TOKEN not in json.dumps(unit_log(frames[0]["run_id"])["args"]), "never in argv")
 must(TOKEN not in json.dumps(sorted(sh.CHILD_ENV.items())) and TOKEN not in audit_text(), "never in the helper's environment or audit log")
 props = unit_log(frames[0]["run_id"])["props"]
-must(any(p.startswith("LoadCredential=cred0:") for p in props) and any(p.startswith("ExecStartPost=+/bin/rm -rf ") for p in props), props)
-must(any(p.startswith("ExecStopPost=+/usr/local/sbin/tec-tac-sandbox --finish ") for p in props), props)
+must(any(p.startswith("LoadCredential=cred0:") for p in props) and not any(p.startswith("Exec") for p in props), props)  # 1.18.14: no property command
 # without credential_return no credential comes back, even when the program writes one
 make_runner("ai.cred2", body="open(os.path.join(os.environ['SANDBOX_OUT'], 'credential'), 'w').write('x')", credential_files=["auth"], credential_return=False)
 must(end_of(start(header("ai.cred2", credentials={"auth": "a"}))[1])["credential_b64"] is None, "no return unless declared")
@@ -449,22 +458,22 @@ except RuntimeError:
     holder.release()
 sh.acquire_slots("crash", row, slots_n=1, clock=clock, sleep=sleeper).release()
 
-# ------------------------------------------------------------------------------------------------ --finish
-reply_dir = sh.HANDOFF_ROOT
-rid = os.urandom(16).hex()
-must(sh.finish_run(rid, {"SERVICE_RESULT": "oom-kill"}) == 0, "")
-handoff = json.loads((sh.HANDOFF_ROOT / f"{rid}.json").read_text(encoding="utf-8"))
-must(handoff == {"cpu_ns": 1000, "memory_peak": 52428800, "result": "oom-kill", "oom_kills": None} and CHMODS[norm(sh.HANDOFF_ROOT / f"{rid}.json")] == 0o600, handoff)
-must(sh.read_handoff(rid)["result"] == "oom-kill" and not (sh.HANDOFF_ROOT / f"{rid}.json").exists(), "read once, then deleted")
-for bad in ("../x", "abc", "G" * 32, ""):
-    try:
-        sh.finish_run(bad, {})
-        raise AssertionError(bad)
-    except RuntimeError:
-        pass
-sh.finish_run(rid, {"SERVICE_RESULT": "x" * 100 + "\n;rm"})
-must(set(json.loads((sh.HANDOFF_ROOT / f"{rid}.json").read_text(encoding="utf-8"))["result"]) <= set("abcdefghijklmnopqrstuvwxyz-"), "the result is sanitised")
-(sh.HANDOFF_ROOT / f"{rid}.json").unlink()
+# ------------------------------------------------------------------------------------------------ the end frame's own evidence (1.18.14)
+class W:
+    def __init__(self, kills, peak):
+        self.oom_kill, self._peak = kills, peak
+
+    def peak_bytes(self):
+        return self._peak
+
+
+must(not hasattr(sh, "finish_run") and not hasattr(sh, "read_handoff"), "--finish and the handoff file read are gone")
+must(sh.in_memory_handoff(W(1, 5), 9, 3, 20, False) == {"memory_peak": 5, "oom_kills": 1, "result": "oom-kill"}, "oom only with a kill and a failing exit")
+must(sh.in_memory_handoff(W(1, 5), 0, 3, 20, False)["result"] == "", "a kill with exit 0 is not an oom result")
+must(sh.in_memory_handoff(W(None, None), 9, 3, 20, False) == {"memory_peak": None, "oom_kills": None, "result": ""}, "unknown stays unknown")
+must(sh.in_memory_handoff(W(0, 5), 0, 25, 20, False)["result"] == "timeout", "past the limit plus slack with no stop reason")
+must(sh.in_memory_handoff(W(0, 5), 0, 25, 20, True)["result"] == "", "a helper stop reason is never a systemd timeout")
+must(sh.in_memory_handoff(W(0, 5), 0, 24, 20, False)["result"] == "", "not yet past the slack")
 
 # ------------------------------------------------------------------------------------------------ sweep
 live, dead = os.urandom(16).hex(), os.urandom(16).hex()
