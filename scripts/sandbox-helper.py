@@ -2919,8 +2919,10 @@ def _supervise(process, row, run_id, input_data, emit, stdin_eof, started_at, cl
             reason = "exited"
     credential = parser.credential if row.get("credential_return") else None
     peak, oom_kills, evidence = merge_memory_evidence(watch, handoff, result, unit)
+    # 1.18.22: 'exit' and 'signal' below describe the unit's main process, which is sandbox-launcher.py (it runs the runner as its child and returns
+    # 128 plus the signal when the child died by one), not the sandboxed program itself. A cgroup OOM kill ends the whole unit, launcher included.
     real_exit, signal_number, exit_source = code, None, "systemd-run"
-    if unit is not None and unit["code"] == "exited":  # 1.18.17: the program's own exit code, not systemd-run's
+    if unit is not None and unit["code"] == "exited":  # 1.18.17: systemd's record of the unit's main process (the launcher), not systemd-run's code
         real_exit, exit_source = unit["status"], "unit"
     elif unit is not None and unit["code"] in ("killed", "dumped"):
         real_exit, signal_number, exit_source = None, unit["status"], "unit"
@@ -3592,8 +3594,9 @@ def memory_row(result, memory_mb, block=MEMORY_BLOCK_MIB):
     dev02's 'exited (exit 1)' with no oom_kills and no CANARYEND (systemd-run --wait returns 1 for a unit ended by a signal).
 
     1.18.17: the end frame also carries systemd's own unit result (``unit_result``, whitelisted) and the signal that ended the program; a unit
-    result of oom-kill with the end reason 'oom' is proof by itself (the cgroup counters are gone by the time the helper looks). The program's
-    real end is shown ('exit N' or 'killed by signal N'), never systemd-run's code. The memory.events max proof counts only when the kernel
+    result of oom-kill with the end reason 'oom' is proof by itself (the cgroup counters are gone by the time the helper looks). The end of the
+    unit's main process is shown ('exit N' or 'killed by signal N'), never systemd-run's code. That process is the launcher (1.18.22 wording):
+    'killed by signal 9' means the launcher was ended by signal 9, because the cgroup OOM kill took the whole unit. The memory.events max proof counts only when the kernel
     ended the run (reason 'oom' or 'exited'): a timeout, a cancel or an output limit is not the memory limit."""
     row = {"wall": "Limits", "attack": "memory beyond MemoryMax", "expected": f"stopped by the kernel at or below {memory_mb} MiB"}
     end = result.get("end") or {}
@@ -3982,6 +3985,7 @@ def format_table(table):
 
 
 ROW_ID_MAX = 40
+DETAIL_TEXT_MAX = 600
 ROW_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 
 
@@ -4013,12 +4017,27 @@ def row_lines(table):
     return [f"ROW {row_id} {entry['verdict']}" for row_id, entry in zip(assign_row_ids(table), table)]
 
 
+def detail_lines(table):
+    """1.18.22: ``DETAIL <row id> <actual>`` for every row whose 'actual' text is longer than the table's actual column (format_table cut it).
+
+    The table is for people and keeps its width. The canary script reads the full text here (dev02 canary of 1.18.21: the memory row's
+    '; proof: ...' was cut off at 140 characters). One line, printable ASCII only, at most 600 characters. Same ids as row_lines."""
+    lines = []
+    for row_id, entry in zip(assign_row_ids(table), table):
+        text = str(entry.get("actual", ""))
+        if len(text) > ACTUAL_COLUMN_MAX:
+            lines.append(f"DETAIL {row_id} " + "".join(ch if 32 <= ord(ch) < 127 else "?" for ch in text)[:DETAIL_TEXT_MAX])
+    return lines
+
+
 def run_canary_command():
     ensure_layout()
     table = run_canary()
     passed, counts = canary_summary(table)
     print(format_table(table))
     for line in row_lines(table):
+        print(line)
+    for line in detail_lines(table):
         print(line)
     print(f"\n{counts['OK']} OK, {counts['ATTACK SUCCEEDED']} ATTACK SUCCEEDED, {counts['NOT RUN']} NOT RUN, {counts['SKIPPED']} SKIPPED, {counts['WARN']} WARN")
     print("CANARY PASSED" if passed else "CANARY FAILED")

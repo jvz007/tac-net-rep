@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.18.21",
+  "version": "1.18.22",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.18.21.md",
-      "size": 8053,
-      "sha256": "cfcad5f2f58493b7c805a278976dff6d4926ecd4b232e82e0ef57816343a7eb5"
+      "path": "RELEASE_NOTES_1.18.22.md",
+      "size": 5561,
+      "sha256": "7b8d4661436240160cd1b926bed82c763dd1cf5928ebbe3809a3234055765f15"
     },
     {
       "path": "VERSION",
       "size": 8,
-      "sha256": "4a830c412419a3308d095a64e4fd2504b26d1e975366e089d886c03d90fa016c"
+      "sha256": "c8df13def282c20b16211441bc3151c9ba7dd42ddf81f16525bbabebb9222736"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -1792,6 +1792,11 @@
       "sha256": "2a4e37f6077eadbbaea0bea2bc96d7aa4c087eb589630eb6c2b32957a0ead729"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.18.21.md",
+      "size": 8053,
+      "sha256": "cfcad5f2f58493b7c805a278976dff6d4926ecd4b232e82e0ef57816343a7eb5"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.18.3.md",
       "size": 6085,
       "sha256": "b920050c465e0a302ae37b42267bfa3c636311622510749863e9ff35a612fc9a"
@@ -3188,8 +3193,8 @@
     },
     {
       "path": "scripts/sandbox-helper.py",
-      "size": 225561,
-      "sha256": "435a822ce61e962f616c7b66b153d0a4bce8b34274cf2866e90ff6a5246a5656"
+      "size": 226890,
+      "sha256": "f6125e66a57b5c2eaff0861bf3dc7723b0d2ac3ba8dc7419ed389e118574574a"
     },
     {
       "path": "scripts/sandbox-launcher.py",
@@ -3239,7 +3244,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "b8db5a863b18c417bafc3c9f7b861228f6f7d5022d6590bc84c26429f1bc5c0f"
+      "sha256": "a307b7d5c02d3ed09c9f045c4ada101e7be884fffb4fee08d237204722dfc8ad"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -4250,6 +4255,11 @@
       "path": "tests/legacy/version-1.18.20.py",
       "size": 2597,
       "sha256": "939182075a139cab920203328b6bc858ac5228c282ad450d373b8b8a8b9cbfde"
+    },
+    {
+      "path": "tests/legacy/version-1.18.21.py",
+      "size": 2381,
+      "sha256": "dda68eab1703d2f32b6c5a85ba8637ed83097c0b29d3ae6ad73ed2b64ab8a012"
     },
     {
       "path": "tests/legacy/version-1.18.3.py",
@@ -5402,6 +5412,11 @@
       "sha256": "8b459b53a33ab3fcdb8e070733473144f9f6c40f58cbc6dfd83daed14c3c0555"
     },
     {
+      "path": "tests/sandbox-canary-1.18.22.sh",
+      "size": 42782,
+      "sha256": "63b2f62ab0b8a41a33530448e568344d1b5ea77127459a6f18493c0c983db66c"
+    },
+    {
       "path": "tests/sandbox-canary-1.18.8-before.py",
       "size": 6909,
       "sha256": "f246099311bc38ed0428a8efb9d1ab79b7f2ef1a454ffa3dcbf3e964e88a9699"
@@ -5410,6 +5425,11 @@
       "path": "tests/sandbox-canary-1.18.8.sh",
       "size": 32915,
       "sha256": "4449c33bd94f32ec00854c040cd94bfe12ce345d877b35c819f7746e60c1d338"
+    },
+    {
+      "path": "tests/sandbox-canary-detail-1.18.22.py",
+      "size": 5538,
+      "sha256": "99207ec9f62b921adee33b35253d6c483b4a5c8110742b36d9e7dba45d16a299"
     },
     {
       "path": "tests/sandbox-canary-ids-1.18.15.py",
@@ -5445,6 +5465,11 @@
       "path": "tests/sandbox-canary-script-1.17.124.py",
       "size": 15140,
       "sha256": "64b837747f080987594edd07ddcfc703d9991718be84ae300339d69607445316"
+    },
+    {
+      "path": "tests/sandbox-canary-script-1.18.22.py",
+      "size": 4391,
+      "sha256": "5b2af39c969d957b5838c0f00945dda00a8ea3f08188d1f8591536221bd83434"
     },
     {
       "path": "tests/sandbox-canary-script-1.18.8.py",
@@ -7147,9 +7172,9 @@
       "sha256": "9fc70da5923a2808e009896ff1fce0abb1ae507e847cf28b05faea1575d30714"
     },
     {
-      "path": "tests/version-1.18.21.py",
-      "size": 2381,
-      "sha256": "dda68eab1703d2f32b6c5a85ba8637ed83097c0b29d3ae6ad73ed2b64ab8a012"
+      "path": "tests/version-1.18.22.py",
+      "size": 2082,
+      "sha256": "7ea78e927931a4d7c4e40e4299ec198054edd27198f9b3f124e155cd92de8c55"
     },
     {
       "path": "tests/version-rebuild-ordering.py",
