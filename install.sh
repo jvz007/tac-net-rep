@@ -1102,7 +1102,7 @@ install_root_script "${REPO_ROOT}/scripts/sandbox-canary-runner.py" "${SANDBOX_L
 # Nothing here removes anything outside ${SANDBOX_ROOT_DIR}: only entries found by find under it, with rm -f (links, files) or rmdir.
 SANDBOX_ROOT_DIR="${SANDBOX_LIB}/root"
 declare -A SANDBOX_SKEL=()
-for sandbox_entry in usr work tmp var var/tmp proc sys dev run opt opt/tec-tac opt/tec-tac/runtimes etc etc/ssl etc/ssl/certs etc/ca-certificates; do
+for sandbox_entry in usr work tmp var var/tmp proc sys dev run root opt opt/tec-tac opt/tec-tac/runtimes etc etc/ssl etc/ssl/certs etc/ca-certificates; do
     SANDBOX_SKEL["${sandbox_entry}"]="d"
 done
 for sandbox_entry in etc/passwd etc/group etc/ld.so.cache etc/nsswitch.conf etc/localtime etc/resolv.conf; do
@@ -1152,7 +1152,8 @@ for sandbox_rel in "${SANDBOX_ORDER[@]}"; do
             [[ -L "${sandbox_path}" ]] && fail "Sandbox root: a folder is a symlink."
             mkdir -p "${sandbox_path}"
             chown root:root "${sandbox_path}"
-            chmod 0755 "${sandbox_path}"
+            # 1.18.12: `root` is only the mount point systemd covers (ProtectHome=yes); it is 0700, every other folder 0755
+            if [[ "${sandbox_rel}" == "root" ]]; then chmod 0700 "${sandbox_path}"; else chmod 0755 "${sandbox_path}"; fi
             ;;
         f)
             [[ -L "${sandbox_path}" ]] && fail "Sandbox root: a file is a symlink."

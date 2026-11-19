@@ -220,7 +220,7 @@ must(status["ready"] is True and status["reason"] == "ready" and status["enabled
 must(status["systemd_version"] == 252 and status["address_filter_ok"] is True and status["dns_ok"] is True, status)
 must(status["resolver"] == "156.38.225.225" and status["resolvers"] == ["156.38.225.225"] and status["dns_method"] == "resolv_conf_bind", status)
 must(status["selftest_at"].endswith("Z"), status["selftest_at"])
-must(sorted(status["checks"]) == sorted(["systemd_version", "bpf_framework", "cgroup_v2", "transient_unit", "dynamic_user", "filesystem_view", "sandbox_root", "credential", "proc_hidden",
+must(sorted(status["checks"]) == sorted(["systemd_version", "bpf_framework", "cgroup_v2", "transient_unit", "dynamic_user", "filesystem_view", "sandbox_root", "sandbox_root_after", "credential", "proc_hidden",
                                          "address_filter_control", "address_filter_loopback", "address_filter_private", "pipe_streams", "dns", "memory_zswap", "local_addresses",
                                          "address_filter_local", "upstream_resolvers"]), sorted(status["checks"]))
 must(all(row["ok"] for row in status["checks"].values()), status["checks"])

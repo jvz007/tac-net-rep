@@ -1129,6 +1129,14 @@ def selftest(runner=None, *, resolv_conf_path="/etc/resolv.conf", run_root=None,
                 fail("dns", detail)
     _check(checks, "upstream_resolvers", True, "upstream list: " + (", ".join(resolvers) or "none") + "; Core resolv.conf at each start: " + (", ".join(proven) or "none"))
     address_filter_ok = all(checks.get(name, {}).get("ok") for name in ("address_filter_control", "address_filter_loopback", "address_filter_private", "address_filter_local"))
+    # 1.18.12: the probe units run with ProtectHome=yes, which makes systemd add the /root mount point inside the sandbox root. The skeleton lists it;
+    # anything else a probe left there is a refusal, so a pass is never logged on a skeleton a probe changed.
+    try:
+        check_skeleton()
+        _check(checks, "sandbox_root_after", True, "the sandbox root folder is unchanged after the probe units")
+    except Refusal as exc:
+        _check(checks, "sandbox_root_after", False, exc.message)
+        fail("sandbox_root_after", f"{exc.message} (a probe unit changed the sandbox root folder)")
     ready = not reasons
     return {
         "ready": ready, "reason": "ready" if ready else reasons[0], "enabled": False, "systemd_version": version,
@@ -1509,13 +1517,13 @@ SANDBOX_PATH_ENV = "/usr/local/bin:/usr/bin:/bin"
 # (install.sh builds it, check_skeleton re-checks it at every start); only what the runner needs is bound into it, read only.
 SANDBOX_ROOT = LIB_ROOT / "root"
 MERGED_USR_NAMES = ("bin", "sbin", "lib", "lib64", "lib32", "libx32")  # a symlink into /usr on a merged-/usr host, a real folder (then bound) otherwise
-SKELETON_DIRS = ("usr", "work", "tmp", "var", "var/tmp", "proc", "sys", "dev", "run", "opt", "opt/tec-tac", "opt/tec-tac/runtimes", "etc",
+SKELETON_DIRS = ("usr", "work", "tmp", "var", "var/tmp", "proc", "sys", "dev", "run", "root", "opt", "opt/tec-tac", "opt/tec-tac/runtimes", "etc",
                  "etc/ssl", "etc/ssl/certs", "etc/ca-certificates")
 SKELETON_FILES = ("etc/passwd", "etc/group", "etc/ld.so.cache", "etc/nsswitch.conf", "etc/localtime", "etc/resolv.conf")
-SKELETON_TOP = ("usr", "work", "tmp", "var", "proc", "sys", "dev", "run", "opt", "etc")  # merged-/usr names are added per host
+SKELETON_TOP = ("usr", "work", "tmp", "var", "proc", "sys", "dev", "run", "root", "opt", "etc")  # merged-/usr names are added per host
 SKELETON_ENTRIES = {"": SKELETON_TOP, "var": ("tmp",), "opt": ("tec-tac",), "opt/tec-tac": ("runtimes",), "etc": ("ssl", "ca-certificates", "passwd", "group", "ld.so.cache", "nsswitch.conf", "localtime", "resolv.conf"),
                     "etc/ssl": ("certs",),
-                    **{name: () for name in ("usr", "work", "tmp", "var/tmp", "proc", "sys", "dev", "run", "etc/ssl/certs", "etc/ca-certificates")}}
+                    **{name: () for name in ("usr", "work", "tmp", "var/tmp", "proc", "sys", "dev", "run", "root", "etc/ssl/certs", "etc/ca-certificates")}}
 BASE_BINDS_REQUIRED = ("/etc/ssl/certs", "/etc/passwd", "/etc/group", "/etc/ld.so.cache")  # 1.17.123: /etc/resolv.conf is Core's own file, bound below
 BASE_BINDS_OPTIONAL = ("/etc/ca-certificates", "/etc/nsswitch.conf", "/etc/localtime")
 CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt"
@@ -2781,7 +2789,7 @@ CANARY_STANDIN_NAME_RE = re.compile(r"^tectac-canary-[0-9a-f]{12}$")
 CANARY_VIEW_FOLDERS = ("/", "/etc", "/var", "/opt", "/opt/tec-tac", "/opt/tec-tac/runtimes", "/run", "/usr/local", "/usr/local/lib",
                        "/usr/local/lib/tec-tac", "/usr/local/lib/tec-tac/sandbox")
 CANARY_VIEW_ALLOWED = {  # 1.18.8: the names a run may see in each folder; the canary run has no module runtime, so runtimes allows nothing
-    "/": ("usr", "bin", "sbin", "lib", "lib64", "lib32", "libx32", "etc", "var", "opt", "run", "tmp", "proc", "sys", "dev", "work"),
+    "/": ("usr", "bin", "sbin", "lib", "lib64", "lib32", "libx32", "etc", "var", "opt", "run", "tmp", "proc", "sys", "dev", "work", "root"),
     "/etc": ("ssl", "ca-certificates", "passwd", "group", "ld.so.cache", "nsswitch.conf", "localtime", "resolv.conf"),
     "/var": ("tmp",), "/opt": ("tec-tac",), "/opt/tec-tac": ("runtimes",), "/opt/tec-tac/runtimes": (), "/run": ("credentials",),
     "/usr/local": ("lib",), "/usr/local/lib": ("tec-tac",), "/usr/local/lib/tec-tac": ("sandbox",),

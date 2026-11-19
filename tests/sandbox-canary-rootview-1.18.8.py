@@ -183,7 +183,7 @@ must(sh.view_plan(host_scandir(unreadable))["/var"] == [] and set(sh.view_plan(h
 must(set(plan["view"]) == set(sh.CANARY_VIEW_FOLDERS) and plan["view"]["/"]["allowed"] == list(sh.CANARY_VIEW_ALLOWED["/"]), "the plan carries host names and allowed names")
 must(all(not (set(sh.CANARY_VIEW_ALLOWED[f]) - set(plan["view"][f]["allowed"])) for f in sh.CANARY_VIEW_FOLDERS), "allowed lists are the helper's constant")
 must(sh.CANARY_VIEW_ALLOWED["/opt/tec-tac/runtimes"] == () and "credentials" in sh.CANARY_VIEW_ALLOWED["/run"], "the fixed allowed lists")
-must(set(sh.CANARY_VIEW_ALLOWED["/"]) == {"usr", "bin", "sbin", "lib", "lib64", "lib32", "libx32", "etc", "var", "opt", "run", "tmp", "proc", "sys", "dev", "work"}, "the / list")
+must(set(sh.CANARY_VIEW_ALLOWED["/"]) == {"usr", "bin", "sbin", "lib", "lib64", "lib32", "libx32", "etc", "var", "opt", "run", "tmp", "proc", "sys", "dev", "work", "root"}, "the / list")
 must(set(sh.CANARY_VIEW_ALLOWED["/etc"]) == {"ssl", "ca-certificates", "passwd", "group", "ld.so.cache", "nsswitch.conf", "localtime", "resolv.conf"}, "the /etc list")
 must(set(sh.CANARY_VIEW_ALLOWED["/usr/local/lib/tec-tac/sandbox"]) == {"runners", "canary", "sandbox-launcher.py"}, "the sandbox folder list")
 # the json stays under the runner's stdin read even with huge listings
