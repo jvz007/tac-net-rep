@@ -107,7 +107,7 @@ if bash:
             extra = set(first) - expected
             must(all(item.split("/")[0] in sh.MERGED_USR_NAMES for item in extra) or not extra, sorted(extra))
             must(all((first[e] == "d") == (e in sh.SKELETON_DIRS or e in sh.MERGED_USR_NAMES) for e in expected), "folders are folders and mount files are files")
-            must(all(not any(skeleton.joinpath(e).iterdir()) for e in sh.SKELETON_DIRS if e not in ("var", "opt", "opt/tec-tac", "etc", "etc/ssl")), "mount points are empty")
+            must(all(not any(skeleton.joinpath(e).iterdir()) for e in sh.SKELETON_DIRS if e not in ("var", "run", "run/systemd", "opt", "opt/tec-tac", "etc", "etc/ssl")), "mount points are empty")  # 1.18.13: run and run/systemd hold the one folder each
             second = run_block(lib)
             must("BLOCK-DONE" in second.stdout and tree(skeleton) == first, "running it again changes nothing")
             # damage the skeleton in every way the block must repair

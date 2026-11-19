@@ -1102,7 +1102,7 @@ install_root_script "${REPO_ROOT}/scripts/sandbox-canary-runner.py" "${SANDBOX_L
 # Nothing here removes anything outside ${SANDBOX_ROOT_DIR}: only entries found by find under it, with rm -f (links, files) or rmdir.
 SANDBOX_ROOT_DIR="${SANDBOX_LIB}/root"
 declare -A SANDBOX_SKEL=()
-for sandbox_entry in usr work tmp var var/tmp proc sys dev run root opt opt/tec-tac opt/tec-tac/runtimes etc etc/ssl etc/ssl/certs etc/ca-certificates; do
+for sandbox_entry in usr work tmp var var/tmp proc sys dev run run/systemd run/systemd/incoming root opt opt/tec-tac opt/tec-tac/runtimes etc etc/ssl etc/ssl/certs etc/ca-certificates; do
     SANDBOX_SKEL["${sandbox_entry}"]="d"
 done
 for sandbox_entry in etc/passwd etc/group etc/ld.so.cache etc/nsswitch.conf etc/localtime etc/resolv.conf; do

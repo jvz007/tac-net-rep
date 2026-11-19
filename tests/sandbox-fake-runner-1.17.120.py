@@ -30,6 +30,7 @@ class Fake:
             "dynamic_user": (0, "61500\n"),
             "filesystem_view": (0, "ok\n"),
             "credential": "credential",
+            "real_unit_shape": "real_shape",  # 1.18.13
             "proc_hidden": (0, "ok\n"),
             "address_filter_control": "connect",
             "address_filter_loopback": (0, "blocked\n"),
@@ -63,6 +64,14 @@ class Fake:
         if answer == "leak":  # a filter that does not hold: it connects, and says so
             socket.create_connection(("127.0.0.1", int(command[-1])), timeout=2).close()
             return 0, "connected\n", ""
+        if answer == "real_shape":  # 1.18.13: the real unit shape hands the token in through LoadCredential and removes the source
+            source = None
+            for item in properties:
+                if item.startswith("LoadCredential=probe:"):
+                    source = Path(item.split(":", 1)[1])
+            token = source.read_text(encoding="utf-8")
+            source.unlink()
+            return 0, token, ""
         if answer == "credential":
             source = None
             for item in properties:

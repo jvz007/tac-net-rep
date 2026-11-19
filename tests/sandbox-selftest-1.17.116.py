@@ -156,6 +156,7 @@ class Fake:
             "dynamic_user": (0, "61500\n"),
             "filesystem_view": (0, "ok\n"),
             "credential": "credential",
+            "real_unit_shape": "real_shape",  # 1.18.13
             "proc_hidden": (0, "ok\n"),
             "address_filter_control": "connect",
             "address_filter_loopback": (0, "blocked\n"),
@@ -189,6 +190,14 @@ class Fake:
         if answer == "lie":       # says blocked, but the listener sees a connection anyway
             socket.create_connection(("127.0.0.1", int(command[-1])), timeout=2).close()
             return 0, "blocked\n", ""
+        if answer == "real_shape":  # 1.18.13: the real unit shape hands the token in through LoadCredential and removes the source
+            source = None
+            for item in properties:
+                if item.startswith("LoadCredential=probe:"):
+                    source = Path(item.split(":", 1)[1])
+            token = source.read_text(encoding="utf-8")
+            source.unlink()
+            return 0, token, ""
         if answer == "credential":
             source = None
             for item in properties:
@@ -220,14 +229,14 @@ must(status["ready"] is True and status["reason"] == "ready" and status["enabled
 must(status["systemd_version"] == 252 and status["address_filter_ok"] is True and status["dns_ok"] is True, status)
 must(status["resolver"] == "156.38.225.225" and status["resolvers"] == ["156.38.225.225"] and status["dns_method"] == "resolv_conf_bind", status)
 must(status["selftest_at"].endswith("Z"), status["selftest_at"])
-must(sorted(status["checks"]) == sorted(["systemd_version", "bpf_framework", "cgroup_v2", "transient_unit", "dynamic_user", "filesystem_view", "sandbox_root", "sandbox_root_after", "credential", "proc_hidden",
+must(sorted(status["checks"]) == sorted(["systemd_version", "bpf_framework", "cgroup_v2", "transient_unit", "dynamic_user", "filesystem_view", "sandbox_root", "sandbox_root_after", "credential", "real_unit_shape", "proc_hidden",
                                          "address_filter_control", "address_filter_loopback", "address_filter_private", "pipe_streams", "dns", "memory_zswap", "local_addresses",
                                          "address_filter_local", "upstream_resolvers"]), sorted(status["checks"]))
 must(all(row["ok"] for row in status["checks"].values()), status["checks"])
 must(json.dumps(status) and "token" not in json.dumps(status).lower().replace("tectac-probe", ""), "no credential-like text in the status")
 # the probes ran in this order, each with exactly its golden properties
 names = [call[0] for call in fake.calls]
-must(names == ["transient", "dynamic_user", "filesystem_view", "credential", "proc_hidden", "address_filter_control", "address_filter_loopback", "address_filter_private",
+must(names == ["transient", "dynamic_user", "filesystem_view", "credential", "real_unit_shape", "proc_hidden", "address_filter_control", "address_filter_loopback", "address_filter_private",
                "address_filter_local_control", "address_filter_local", "pipe_streams", "dns"], names)
 for name, properties, command in fake.calls:
     expected = sh.PROBE_PROPERTIES.get(name, ())
@@ -235,6 +244,8 @@ for name, properties, command in fake.calls:
         must(properties == ("DynamicUser=yes", *sh.file_view_properties()) and "RootDirectory=" + str(sh.SANDBOX_ROOT) in properties and "MountAPIVFS=yes" in properties, properties)
     elif name == "credential":
         must(properties[:1] == expected and len(properties) == 3, properties)
+    elif name == "real_unit_shape":  # 1.18.13
+        must(properties[:len(sh.file_view_properties())] == tuple(sh.file_view_properties()) and "DynamicUser=yes" in properties and len(properties) == len(sh.file_view_properties()) + 3, properties)
     elif name == "dns":
         must(properties == expected[:1] + ("IPAddressDeny=" + sh.ADDRESS_DENY + " 129.232.197.50/32 129.232.197.1/32",), properties)   # the full deny list, nothing allowed
     elif name == "address_filter_local_control":

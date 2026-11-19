@@ -17,7 +17,7 @@ for v in ("1.18.9", "1.18.10"):
 for v in ("1.18.9", "1.18.10"):
     assert (ROOT / "tests" / "legacy" / f"version-{v}.py").is_file() and not (ROOT / "tests" / f"version-{v}.py").exists(), v
 legacy = (ROOT / "tests" / "legacy" / "version-1.18.10.py").read_text(encoding="utf-8")
-assert "parents[2]" in legacy and "parents[2]" not in legacy
+assert "parents[2]" in legacy and "parents[1]" not in legacy
 
 text = (ROOT / f"RELEASE_NOTES_{version}.md").read_text(encoding="utf-8")
 assert text.startswith(f"# Tec-Tac Framework {version}\n\nDate: 18 November 2026.")

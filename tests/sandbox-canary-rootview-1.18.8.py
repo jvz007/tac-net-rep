@@ -46,7 +46,7 @@ HOST = {
 }
 GOOD_UNIT = {
     "/": ["bin", "lib", "lib64", "sbin", "usr", "etc", "var", "opt", "run", "tmp", "proc", "sys", "dev", "work"], "/etc": ["passwd", "group", "ssl", "resolv.conf"],
-    "/var": ["tmp"], "/opt": ["tec-tac"], "/opt/tec-tac": ["runtimes"], "/opt/tec-tac/runtimes": [], "/run": ["credentials"], "/usr/local": ["lib"],
+    "/var": ["tmp"], "/opt": ["tec-tac"], "/opt/tec-tac": ["runtimes"], "/opt/tec-tac/runtimes": [], "/run": ["credentials", "systemd"], "/usr/local": ["lib"],
     "/usr/local/lib": ["tec-tac"], "/usr/local/lib/tec-tac": ["sandbox"], "/usr/local/lib/tec-tac/sandbox": ["canary", "sandbox-launcher.py"],
 }
 

@@ -1079,6 +1079,13 @@ def selftest(runner=None, *, resolv_conf_path="/etc/resolv.conf", run_root=None,
     ok, detail = _probe_credential(runner, run_root)
     if not _check(checks, "credential", ok, detail):
         fail("credential", "LoadCredential did not work: " + detail)
+    # 1.18.13: one probe with the real unit shape, so an entry only the real shape makes (run/systemd/incoming) shows up before sandbox_root_after
+    if skeleton_ok:
+        ok, detail = _probe_real_shape(runner, run_root)
+        if not _check(checks, "real_unit_shape", ok, detail):
+            fail("real_unit_shape", "a unit with the real run shape did not work: " + detail)
+    else:
+        _check(checks, "real_unit_shape", False, "not run: the sandbox root folder is wrong")
     # ProtectProc and ProcSubset
     script = ("n=$(ls -d /proc/[0-9]* 2>/dev/null | wc -l); "
               "if [ \"$n\" -le 6 ] && [ ! -e /proc/cpuinfo ]; then echo ok; else echo bad $n; fi")
@@ -1290,6 +1297,40 @@ def _probe_credential(runner, run_root):
         if source.exists():
             return False, "the source file was not removable after the start"
         return True, "arrived, " + credential_found_text(lines[1], acl_line) + ", source removed"
+    except OSError as exc:
+        return False, f"cannot prepare the probe folder ({exc.strerror or 'error'})"
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+def _probe_real_shape(runner, run_root):
+    """1.18.13: one unit with the shape of a real run: the allow-list root and read-only binds (file_view_properties, the same function the
+    builder uses), DynamicUser, and a LoadCredential whose source is removed by ExecStartPost. Only this shape makes systemd create
+    run/systemd/incoming inside the root (dev02, 19 November 2026); a probe without the credential never showed it. The probe is honest only as
+    far as real systemd shows it: the dev02 re-run decides. The caller's sandbox_root_after check reports any entry this unit made that is not
+    on the list. Returns (ok, plain detail); neither the token nor any output or path goes into the detail."""
+    folder = Path(run_root) / (SELFTEST_PREFIX + secrets.token_hex(6))
+    try:
+        view = file_view_properties()
+    except Refusal as exc:
+        return False, exc.message
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        os.chmod(folder, 0o700)
+        source = folder / "probe"
+        token = secrets.token_hex(16)
+        source.write_text(token, encoding="utf-8")
+        os.chmod(source, 0o600)
+        properties = [*view, *PROBE_PROPERTIES["credential"], f"LoadCredential=probe:{source}", f"ExecStartPost=+/bin/rm -f {source}"]
+        script = 'sleep 1; cat "$CREDENTIALS_DIRECTORY/probe"'
+        code, out, _err = runner.run_unit("real_unit_shape", properties, ["/bin/sh", "-c", script])
+        if code != 0:
+            return False, "the unit did not start or did not finish"
+        if out.strip() != token:
+            return False, "the credential did not arrive in the real unit shape"
+        if source.exists():
+            return False, "the source file was not removable after the start"
+        return True, "the credential arrived, source removed"
     except OSError as exc:
         return False, f"cannot prepare the probe folder ({exc.strerror or 'error'})"
     finally:
@@ -1517,13 +1558,14 @@ SANDBOX_PATH_ENV = "/usr/local/bin:/usr/bin:/bin"
 # (install.sh builds it, check_skeleton re-checks it at every start); only what the runner needs is bound into it, read only.
 SANDBOX_ROOT = LIB_ROOT / "root"
 MERGED_USR_NAMES = ("bin", "sbin", "lib", "lib64", "lib32", "libx32")  # a symlink into /usr on a merged-/usr host, a real folder (then bound) otherwise
-SKELETON_DIRS = ("usr", "work", "tmp", "var", "var/tmp", "proc", "sys", "dev", "run", "root", "opt", "opt/tec-tac", "opt/tec-tac/runtimes", "etc",
+SKELETON_DIRS = ("usr", "work", "tmp", "var", "var/tmp", "proc", "sys", "dev", "run", "run/systemd", "run/systemd/incoming", "root", "opt", "opt/tec-tac", "opt/tec-tac/runtimes", "etc",
                  "etc/ssl", "etc/ssl/certs", "etc/ca-certificates")
 SKELETON_FILES = ("etc/passwd", "etc/group", "etc/ld.so.cache", "etc/nsswitch.conf", "etc/localtime", "etc/resolv.conf")
 SKELETON_TOP = ("usr", "work", "tmp", "var", "proc", "sys", "dev", "run", "root", "opt", "etc")  # merged-/usr names are added per host
-SKELETON_ENTRIES = {"": SKELETON_TOP, "var": ("tmp",), "opt": ("tec-tac",), "opt/tec-tac": ("runtimes",), "etc": ("ssl", "ca-certificates", "passwd", "group", "ld.so.cache", "nsswitch.conf", "localtime", "resolv.conf"),
+# 1.18.13: a real run also leaves run/systemd/incoming (systemd makes it inside RootDirectory=); both are empty mount points, nothing else in run
+SKELETON_ENTRIES = {"": SKELETON_TOP, "var": ("tmp",), "run": ("systemd",), "run/systemd": ("incoming",), "opt": ("tec-tac",), "opt/tec-tac": ("runtimes",), "etc": ("ssl", "ca-certificates", "passwd", "group", "ld.so.cache", "nsswitch.conf", "localtime", "resolv.conf"),
                     "etc/ssl": ("certs",),
-                    **{name: () for name in ("usr", "work", "tmp", "var/tmp", "proc", "sys", "dev", "run", "root", "etc/ssl/certs", "etc/ca-certificates")}}
+                    **{name: () for name in ("usr", "work", "tmp", "var/tmp", "proc", "sys", "dev", "run/systemd/incoming", "root", "etc/ssl/certs", "etc/ca-certificates")}}
 BASE_BINDS_REQUIRED = ("/etc/ssl/certs", "/etc/passwd", "/etc/group", "/etc/ld.so.cache")  # 1.17.123: /etc/resolv.conf is Core's own file, bound below
 BASE_BINDS_OPTIONAL = ("/etc/ca-certificates", "/etc/nsswitch.conf", "/etc/localtime")
 CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt"
@@ -1867,6 +1909,8 @@ def check_runner_ready(row):
 def ready_status():
     status = read_status()
     if status.get("ready") is not True:
+        if status.get("skeleton_changed") is True and isinstance(status.get("reason"), str):  # 1.18.13: a run left a new entry; name it
+            raise Refusal("sandbox_unavailable", status["reason"][:300])
         raise Refusal("sandbox_unavailable", "the sandbox selftest has not passed on this server")
     return status
 
@@ -2135,6 +2179,88 @@ def check_skeleton(exists=os.path.lexists, lstat=None, *, root=None, listdir=os.
                 raise _skeleton_refusal()
         except OSError:
             raise _skeleton_refusal() from None
+
+
+SKELETON_CHANGES_MAX = 10
+SKELETON_CHANGE_NAME_LENGTH = 100
+
+
+def _change_name(relative):
+    text = "".join(c if c.isprintable() and c not in "\\" else "?" for c in str(relative))
+    return text[:SKELETON_CHANGE_NAME_LENGTH]
+
+
+def skeleton_changes(*, root=None, lstat=None, listdir=os.listdir, exists=os.path.lexists):
+    """1.18.13: the relative paths (names only, sorted, at most 10, each at most 100 characters) inside the skeleton that are not on the lists
+    check_skeleton uses, or are of the wrong type. It reads the same lists (SKELETON_DIRS, SKELETON_FILES, SKELETON_ENTRIES), so the two cannot
+    drift. An unlisted folder is named once, never walked. Missing entries are not reported here (check_skeleton refuses them at the next start).
+    Never raises: a folder that cannot be read is skipped."""
+    lstat = lstat or _lstat
+    base = Path(root) if root is not None else SANDBOX_ROOT
+    found = set()
+    merged = [name for name in MERGED_USR_NAMES if exists("/" + name)]
+
+    def kind_of(relative):
+        try:
+            st = lstat(base / relative)
+        except OSError:
+            return None
+        return "link" if stat.S_ISLNK(st.st_mode) else "dir" if stat.S_ISDIR(st.st_mode) else "file" if stat.S_ISREG(st.st_mode) else "other"
+
+    for relative, allowed in SKELETON_ENTRIES.items():
+        allowed = set(allowed) | (set(merged) if not relative else set())
+        try:
+            names = listdir(base / relative if relative else base)
+        except OSError:
+            continue
+        for name in names:
+            child = f"{relative}/{name}" if relative else name
+            if name not in allowed:
+                found.add(child)
+    for relative in SKELETON_DIRS:
+        if kind_of(relative) not in (None, "dir"):
+            found.add(relative)
+    for relative in SKELETON_FILES:
+        if kind_of(relative) not in (None, "file"):
+            found.add(relative)
+    for name in merged:  # a merged-/usr name is a link or a folder, never a file
+        if kind_of(name) in ("file", "other"):
+            found.add(name)
+    mounts_path = "opt/tec-tac/runtimes"
+    try:
+        mounts = listdir(base / mounts_path)
+    except OSError:
+        mounts = []
+    for name in mounts:  # one empty mount point per module that has run
+        child = f"{mounts_path}/{name}"
+        if not MODULE_ID_RE.fullmatch(name) or kind_of(child) != "dir":
+            found.add(child)
+            continue
+        try:
+            found.update(f"{child}/{inner}" for inner in listdir(base / child))
+        except OSError:
+            continue
+    return sorted(_change_name(item) for item in found)[:SKELETON_CHANGES_MAX]
+
+
+def recheck_skeleton_after_run(row, run_id):
+    """1.18.13: after a run has ended (the unit stopped, the secrets removed, run.ended written) look at the skeleton again. A clean skeleton
+    writes nothing. Otherwise: one ``skeleton.changed`` audit row naming the relative paths, and status.json goes to ready: false with a plain
+    reason that names them, so the next start is refused with it and the status endpoint shows it. Only a new selftest (the install runs one)
+    makes it ready again. The entry is reported, never accepted. Never raises and never touches the run's result."""
+    try:
+        names = skeleton_changes()
+        if not names:
+            return
+        append_audit_safely("skeleton.changed", {"run_id": run_id, "runner": row.get("id"), "entries": names})
+        status = read_status()
+        status.pop("enabled", None)
+        status["ready"] = False
+        status["skeleton_changed"] = True
+        status["reason"] = "a run left a new entry in the sandbox root: " + ", ".join(names)
+        write_status(status)
+    except (OSError, RuntimeError, ValueError, TypeError):
+        pass
 
 
 def ensure_runtime_mountpoint(module_id, *, root=None, lstat=None, mkdir=os.mkdir):
@@ -2507,6 +2633,7 @@ def launch(row, *, run_id, person, parameters, credentials, input_data, emit, st
         holder.release()
         if audited:
             append_audit_safely("run.ended", run_ended_detail(row, run_id, person, canary, progress, int((clock() - started_at) * 1000)))
+            recheck_skeleton_after_run(row, run_id)  # 1.18.13: a new entry in the sandbox root is named at once
 
 
 def run_ended_detail(row, run_id, person, canary, progress, elapsed_ms):
@@ -2791,7 +2918,7 @@ CANARY_VIEW_FOLDERS = ("/", "/etc", "/var", "/opt", "/opt/tec-tac", "/opt/tec-ta
 CANARY_VIEW_ALLOWED = {  # 1.18.8: the names a run may see in each folder; the canary run has no module runtime, so runtimes allows nothing
     "/": ("usr", "bin", "sbin", "lib", "lib64", "lib32", "libx32", "etc", "var", "opt", "run", "tmp", "proc", "sys", "dev", "work", "root"),
     "/etc": ("ssl", "ca-certificates", "passwd", "group", "ld.so.cache", "nsswitch.conf", "localtime", "resolv.conf"),
-    "/var": ("tmp",), "/opt": ("tec-tac",), "/opt/tec-tac": ("runtimes",), "/opt/tec-tac/runtimes": (), "/run": ("credentials",),
+    "/var": ("tmp",), "/opt": ("tec-tac",), "/opt/tec-tac": ("runtimes",), "/opt/tec-tac/runtimes": (), "/run": ("credentials", "systemd"),
     "/usr/local": ("lib",), "/usr/local/lib": ("tec-tac",), "/usr/local/lib/tec-tac": ("sandbox",),
     "/usr/local/lib/tec-tac/sandbox": ("runners", "canary", "sandbox-launcher.py"),
 }
