@@ -102,6 +102,8 @@ def build_plan(selection, allowed_body, cache_rows, installed, resolve, satisfie
         if cache is None or cache.get("download_unavailable"):
             return None, ("not_in_catalogue_cache", {})
         version = str(release.get("version") or "")
+        if cache.get("version") and str(cache["version"]) != version:  # 1.18.20: the entry must be this release, not another one with the same id
+            return None, ("not_in_catalogue_cache", {})
         candidate = {"id": module_id, "name": cache.get("name") or row.get("name") or module_id, "extension_version": version,
                      "dependencies": dict(cache.get("dependencies") or {}), "optional_dependencies": dict(cache.get("optional_dependencies") or {}),
                      "requires": dict(cache.get("requires") or {}), "category": cache.get("category") or row.get("category")}
@@ -170,7 +172,13 @@ def build_plan(selection, allowed_body, cache_rows, installed, resolve, satisfie
         if not chosen:
             result = None
             break
-        result = resolve(list(chosen.values()))
+        try:
+            result = resolve(list(chosen.values()))
+        except (RuntimeError, ValueError, KeyError, TypeError) as exc:  # 1.18.20: ModuleManagerV2Error and ModuleStateError are RuntimeErrors; never a 500
+            for name in chosen:
+                block(name, "plan_conflict")
+            return _finish(base, selection, blocked, {}, {}, None, [{"type": "plan_conflict", "module": None, "dependency": None, "constraint": None,
+                                                                     "version": None, "message": _cut(exc) or TEXT["plan_conflict"]}])
         problems = result.get("problems") or []
         if not problems:
             break

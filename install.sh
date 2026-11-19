@@ -582,6 +582,7 @@ for writable_path in \
     "${MODULE_STATE_ROOT}/staged/bundles" \
     "${MODULE_STATE_ROOT}/staged/batches" \
     "${MODULE_STATE_ROOT}/jobs" \
+    "${MODULE_STATE_ROOT}/install-runs" \
     "${HOTFIX_ROOT}/staged" \
     "${HOTFIX_ROOT}/jobs"; do
     run_as_tactical test -w "${writable_path}" || fail "Tactical service user cannot write ${writable_path} after permission repair."

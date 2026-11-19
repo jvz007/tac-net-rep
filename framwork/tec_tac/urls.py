@@ -42,6 +42,7 @@ from .module_repository_views import (
     ModuleRepositorySyncAllView, ModuleOnlineCatalogView, ModuleOnlineStageView,
 )
 from .module_allowed_views import ModuleAllowedCatalogView, ModuleAllowedRefreshView, ModuleAllowedSelectionView, ModuleOnlineInstallPlanView
+from .module_install_run_views import ModuleOnlineInstallProgressView, ModuleOnlineInstallRunView, ModuleOnlineInstallStopView
 from .module_update_views import ModuleUpdateListView, ModuleUpdateCountView
 from .scheduler_views import (
     SchedulerActionListView, SchedulerListView, SchedulerDetailView,
@@ -173,6 +174,9 @@ urlpatterns = [
     path("modules/catalog/allowed/refresh/", ModuleAllowedRefreshView.as_view(), name="tec-tac-module-allowed-refresh"),
     path("modules/catalog/allowed/selection/", ModuleAllowedSelectionView.as_view(), name="tec-tac-module-allowed-selection"),
     path("modules/catalog/online/plan/", ModuleOnlineInstallPlanView.as_view(), name="tec-tac-module-online-plan"),
+    path("modules/catalog/online/install/", ModuleOnlineInstallRunView.as_view(), name="tec-tac-module-online-install"),
+    path("modules/catalog/online/install/<uuid:run_id>/", ModuleOnlineInstallProgressView.as_view(), name="tec-tac-module-online-install-progress"),
+    path("modules/catalog/online/install/<uuid:run_id>/stop/", ModuleOnlineInstallStopView.as_view(), name="tec-tac-module-online-install-stop"),
     path("modules/updates/", ModuleUpdateListView.as_view(), name="tec-tac-module-updates"),
     path("modules/updates/count/", ModuleUpdateCountView.as_view(), name="tec-tac-module-updates-count"),
     path("modules/v2/", ModuleV2CatalogView.as_view(), name="tec-tac-module-v2-catalog"),

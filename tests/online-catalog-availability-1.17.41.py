@@ -16,6 +16,7 @@ import ast
 import json
 import re
 import tempfile
+import types
 import urllib.parse
 from collections import Counter
 from pathlib import Path
@@ -71,12 +72,15 @@ names = {
     "_AVAILABILITY_MESSAGES", "_availability", "RETIRED_MESSAGE", "RETIRED_STATUSES", "RETIRED_RELEASE_REASON", "_LEGACY_RETIRED_ERROR",
     "CREDENTIALS_STATUSES", "CREDENTIALS_REJECTED_MESSAGE", "CREDENTIALS_RELEASE_REASON", "_has_credentials", "_legacy_error_status", "_cache_credentials_rejected", "_repo_raw",  # 1.17.100
     "_cache_retired", "RepositoryHttpError",
+    "_development_for", "_unavailable_licensed", "MAX_UNAVAILABLE_ROWS",  # 1.18.20: online_catalog() reads the development-server test through this helper (added 1.17.109)
 }
 exec(compile(ast.Module(body=extract(REPO_TREE, names), type_ignores=[]), str(REPO_PATH), "exec"), ns)  # noqa: S102 - test only
 ns["list_repositories"] = lambda: [ns["public_repository"](dict(r)) for r in REPOS]
 ns["_repo"] = lambda rid: next(dict(r) for r in REPOS if r["id"] == rid)
 ns["installed_catalog_v2"] = lambda: [dict(i) for i in INSTALLED]
 ns["_check_runtime_requirements"] = lambda requires: []
+ns["is_development_server"] = lambda: False
+ns["_lcs"] = types.SimpleNamespace(KIND="licensing", ROW_TEXT={}, category_of=lambda value: value)  # these repositories are index repositories: the helper never asks for the development test
 
 views_ns: dict = {"SKIPPED_REASON_FOR_OTHERS": ns["SKIPPED_REASON_FOR_OTHERS"]}
 views_body = extract(VIEWS_TREE, {"_SENSITIVE_REPOSITORY_KEYS", "_redact_repository_status_for_non_manager"})

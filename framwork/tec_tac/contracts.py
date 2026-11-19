@@ -2229,6 +2229,31 @@ HTTP_CONTRACT_DETAILS = {
             ],
         },
     },
+    "/api/tfd/modules/catalog/online/install/": {
+        "POST": {
+            "authorization": "authenticated Tec-Tac session with core.privileged_operations (module management); checked first, anyone else gets 403 and no run",
+            "request": {"modules": "required list of 1 to 50 lower-case module ids; Core plans again and ignores any order or version from the client. licence_override_reason and disable_replaced are refused with 400"},
+            "response": {"ok": "boolean", "run_id": "uuid", "status": "running", "started_by": "text", "started_at": "UTC time", "finished_at": "null", "stop_requested": "boolean", "counts": "{pending, downloading, installing, succeeded, failed, skipped, total}", "modules": "array of {id, name, version, action, state, reason ({code, message} or null), job_id, job_status, job_stage, started_at, ended_at}"},
+            "errors": {"400": "bad_request or nothing_to_install (the plan body comes back)", "403": "no module management permission", "409": "run_in_progress with the run_id of the run that is going", "502": "invalid_response", "503": "licensing_unavailable or audit_not_saved"},
+            "notes": ["Added 1.18.20 (module-facing, additive; no module calls it yet, the first reader is Welcome 1.2.16). Installs through the same stage and queue calls as the single online install, one module at a time in plan order, by short Celery ticks (task tec_tac.advance_module_install_run, Core-internal). Nothing is removed, uninstalled, enabled or disabled; a module that needs a licence override or a confirmed replacement fails with its sentence."],
+        },
+    },
+    "/api/tfd/modules/catalog/online/install/<uuid:run_id>/": {
+        "GET": {
+            "authorization": "authenticated Tec-Tac session with core.privileged_operations; checked first",
+            "response": {"ok": "boolean", "run_id": "uuid", "status": "running, stopping, completed, stopped or interrupted", "started_by": "text", "started_at": "UTC time", "finished_at": "UTC time or null", "stop_requested": "boolean", "counts": "{pending, downloading, installing, succeeded, failed, skipped, total}", "modules": "array of {id, name, version, action, state, reason, job_id, job_status, job_stage, started_at, ended_at}; no log tail, hash, URL, publisher or key id"},
+            "errors": {"403": "no module management permission", "404": "not_found: unknown or malformed run id"},
+            "notes": ["Added 1.18.20 (additive). Never starts a module. It reconciles a finished job, queues a tick again when none ran for 30 seconds, and closes a run with no step for 15 minutes and no active job as interrupted."],
+        },
+    },
+    "/api/tfd/modules/catalog/online/install/<uuid:run_id>/stop/": {
+        "POST": {
+            "authorization": "authenticated Tec-Tac session with core.privileged_operations; checked first",
+            "response": {"ok": "boolean", "...": "the same body as the progress route; status is stopping while a module is installing"},
+            "errors": {"403": "no module management permission", "404": "not_found", "409": "already_finished", "503": "busy: try again"},
+            "notes": ["Added 1.18.20 (additive). The module being installed finishes; no further module starts and the rest end skipped (stopped). A job in flight is never touched."],
+        },
+    },
     "/api/tfd/modules/v2/packages/inspect/": {
         "POST": {
             "request": {

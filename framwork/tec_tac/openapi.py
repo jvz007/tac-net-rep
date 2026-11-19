@@ -37,6 +37,7 @@ CORE_CALLBACK_GROUPS = {
     "tec_tac.sandbox_views": "Tec-Tac · Sandbox",
     "tec_tac.module_repository_views": "Tec-Tac · Module Repository",
     "tec_tac.module_allowed_views": "Tec-Tac · Module Repository",
+    "tec_tac.module_install_run_views": "Tec-Tac · Module Repository",
     "tec_tac.module_update_views": "Tec-Tac · Module Repository",
     "tec_tac.module_v2_views": "Tec-Tac · Modules",
     "tec_tac.module_hotfix_views": "Tec-Tac · Module Hotfixes",

@@ -310,6 +310,22 @@ Licensing keeps a list of the modules your licence allows, and the releases an a
 - Any other Licensing state (`not_fetched`, `plan_expired`, `licence_revoked` and so on) comes back with its sentence and no rows, so nothing is offered for install.
 - Unticking a module never installs, uninstalls or disables anything.
 
+### Installing several licensed modules in one run (1.18.20)
+
+Three routes install the modules you ticked in one server-side run. They need `core.privileged_operations` (checked first, fails closed). Nothing here removes, uninstalls, enables or disables a module.
+
+| Route | What it does |
+|---|---|
+| `POST /api/tfd/modules/catalog/online/install/` | Body `{"modules": ["id", ...]}` (1 to 50 ids). Core plans again on the server, ignores any order or version the browser sends, and starts one run. Answers 202 with the progress body. 409 `run_in_progress` (with the `run_id`) while another run is going, 400 `nothing_to_install` when nothing can be installed, 400 for a `licence_override_reason` or `disable_replaced` field, 503 `audit_not_saved` when the start row cannot be written. |
+| `GET /api/tfd/modules/catalog/online/install/<run_id>/` | Progress: `status` (`running`, `stopping`, `completed`, `stopped`, `interrupted`), `counts`, and per module its `state` (`pending`, `downloading`, `installing`, `succeeded`, `failed`, `skipped`), the reason and the Module Manager `job_id`. It never starts a module. 404 for an unknown run. |
+| `POST /api/tfd/modules/catalog/online/install/<run_id>/stop/` | The module being installed finishes, then nothing else starts and the rest end `skipped` (`stopped`). 409 `already_finished` for a finished run. |
+
+**How the run works.** Each module goes through the same two steps as the single online install: Core stages the package (licence grant, SHA-256, publisher signature, identity), then queues the install (trust, licence, dependency, compatibility and replacement rules). Before each module Core reads the allowed list again and skips a module that is no longer ticked, has no release, or has a different version than planned. A module that fails is reported, and only the modules that need it are skipped (`dependency_failed`). A module whose manifest would disable a replaced module, or whose licence check needs an override, fails with its sentence: install it on its own through the single route.
+
+**Why it keeps going when Celery restarts.** The run is one JSON file under `/var/lib/tec-tac/module-manager/install-runs/` (the last 20 are kept). The Celery task `tec_tac.advance_module_install_run` does one short step and queues itself again three seconds later. A progress request queues a step again if none ran for 30 seconds. A run with no step for 15 minutes and no active job ends `interrupted`.
+
+**Audit.** One start row (`run`, `module_install_run`, the person), one row per module outcome and one end row (service actor `core/module-install-run`), and `modify` "Stop requested" when someone stops it.
+
 ### Troubleshooting
 
 | What you see | What it means | What to do |
