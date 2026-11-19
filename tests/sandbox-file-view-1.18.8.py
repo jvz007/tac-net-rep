@@ -54,8 +54,7 @@ must(sorted(tmpfs) == sorted(["TemporaryFileSystem=/usr/local:ro", f"TemporaryFi
 for kept in ("ProtectSystem=strict", "ProtectHome=yes", "PrivateTmp=yes", "PrivateDevices=yes", "ProtectProc=invisible", "ProcSubset=pid"):
     must(props.count(kept) == 1, kept)
 binds = [p.split("=", 1)[1] for p in props if p.startswith("BindReadOnlyPaths=")]
-allowed_binds = {"/usr", *sh.BASE_BINDS_REQUIRED, *(p for p in sh.BASE_BINDS_OPTIONAL), "/opt/tec-tac/runtimes/ai", str(sh.RUNNERS_ROOT / "ai"), str(sh.LAUNCHER_FILE),
-                 f"{sh.core_resolv_file()}:/etc/resolv.conf"}
+allowed_binds = {"/usr", *sh.BASE_BINDS_REQUIRED, *(p for p in sh.BASE_BINDS_OPTIONAL), "/opt/tec-tac/runtimes/ai", str(sh.RUNNERS_ROOT / "ai"), str(sh.LAUNCHER_FILE)}  # 1.18.24: no resolv.conf bind
 must(set(binds) == allowed_binds and len(binds) == len(set(binds)), (sorted(set(binds) ^ allowed_binds)))
 must(props.index("BindReadOnlyPaths=/usr") < props.index("TemporaryFileSystem=/usr/local:ro") < props.index(f"BindReadOnlyPaths={sh.LAUNCHER_FILE}"), "/usr, then the mask, then what is bound back into it")
 # the builder and the probe use one function
@@ -78,7 +77,7 @@ except sh.Refusal as exc:
     must(exc.code == "sandbox_unavailable", exc.code)
 # every base bind has a mount point in the skeleton
 skeleton_names = set(REAL_CHECK.SKELETON_DIRS) | set(REAL_CHECK.SKELETON_FILES)
-for path in (*REAL_CHECK.BASE_BINDS_REQUIRED, *REAL_CHECK.BASE_BINDS_OPTIONAL, "/etc/resolv.conf"):
+for path in (*REAL_CHECK.BASE_BINDS_REQUIRED, *REAL_CHECK.BASE_BINDS_OPTIONAL):
     must(path.lstrip("/") in skeleton_names, f"{path} has no mount point")
 for folder in ("usr", "work", "tmp", "var/tmp", "proc", "sys", "dev", "run", "opt/tec-tac/runtimes"):
     must(folder in sh.SKELETON_DIRS, folder)
@@ -169,7 +168,7 @@ fs = FakeFS(); fs.add(fs.root, "dir", mode=0o757); refused(fs, "root is world wr
 fs = FakeFS(); fs.add(fs.root, "dir", uid=1000); refused(fs, "root is owned by someone else")
 fs = FakeFS(); fs.remove("etc/ssl/certs"); refused(fs, "a mount point is missing")
 fs = FakeFS(); fs.remove("run"); refused(fs, "a top-level mount point is missing")
-fs = FakeFS(); fs.remove("etc/resolv.conf"); refused(fs, "a mount file is missing")
+fs = FakeFS(); fs.remove("etc/passwd"); refused(fs, "a mount file is missing")  # 1.18.24: etc/resolv.conf is no longer in the skeleton
 fs = FakeFS(); fs.add(f"{fs.root}/etc/passwd", "dir"); refused(fs, "a file is a folder")
 fs = FakeFS(); fs.add(f"{fs.root}/etc/ssl/certs", "file"); refused(fs, "a folder is a file")
 fs = FakeFS(); fs.add(f"{fs.root}/work", "link", target="/tmp"); refused(fs, "a mount folder is a symlink")

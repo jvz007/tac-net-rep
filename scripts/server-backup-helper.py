@@ -3445,6 +3445,9 @@ TEC_TAC_SYSTEMD_INSTALL_UNIT_NAMES = (
     "tec-tac-sandbox.slice.d/limits.conf",
     "tec-tac-sandbox-sweep.service",
     "tec-tac-sandbox-sweep.timer",
+    # 1.18.24: the egress door templates written by install.sh (core.sandbox Patch B); named here so rollback also records and removes them
+    "tec-tac-sandbox-egress@.socket",
+    "tec-tac-sandbox-egress@.service",
 )
 
 

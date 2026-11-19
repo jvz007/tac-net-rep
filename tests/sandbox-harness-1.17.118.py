@@ -101,7 +101,6 @@ sh.CANARY_RUNNER_FILE = sh.CANARY_DIR / "sandbox-canary-runner.py"
 sh.LAUNCHER_FILE = ROOT / "scripts" / "sandbox-launcher.py"
 sh.WORK_DIR = str(BASE / "work")
 sh.RESOLV_CONF = str(BASE / "resolv.conf")
-sh.RESOLV_UPSTREAM = str(BASE / "upstream-resolv.conf")  # 1.17.123: the upstream list a start builds Core's own resolv.conf from
 # 1.17.123: what `ip` would say about this server (a public address, its gateway, loopback); no real `ip` here
 LOCAL = {"addresses": ["203.0.113.5", "127.0.0.1"], "gateways": ["203.0.113.1"], "extra": ["203.0.113.5/32", "203.0.113.1/32"]}
 sh.local_deny_now = lambda: LOCAL
@@ -120,7 +119,6 @@ sh.PROC_MEMINFO = str(BASE / "meminfo")
 (BASE / "work").mkdir()
 (BASE / "meminfo").write_text("MemTotal: 16000000 kB\nMemAvailable: 8000000 kB\n", encoding="utf-8")
 (BASE / "resolv.conf").write_text("nameserver 127.0.0.53\noptions edns0\n", encoding="utf-8")
-(BASE / "upstream-resolv.conf").write_text("nameserver 9.9.9.9" + chr(10) + "options edns0" + chr(10), encoding="utf-8")
 for name in ("ssl-certs", "passwd", "group", "ld.so.cache", "ca-certificates", "nsswitch.conf", "localtime"):
     (ETC / name).write_text("x", encoding="utf-8")
 sh.BASE_BINDS_REQUIRED = tuple(str(ETC / n) for n in ("ssl-certs", "passwd", "group", "ld.so.cache"))

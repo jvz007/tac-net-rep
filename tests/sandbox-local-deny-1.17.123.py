@@ -5,6 +5,8 @@ dev02 (Core 1.17.122) showed a run could connect to the server's own public addr
 address, and the own public address is neither loopback nor private. Now, at every start, root reads ``ip -o addr show``, ``ip -4 route show
 default`` and ``ip -6 route show default`` and appends each address and next hop as /32 or /128 to the unit's IPAddressDeny (numeric only,
 without repeats, at most 64 outside the ranges already denied). The same function feeds the selftest probes.
+1.18.24 (AD-65 Patch B): the unit no longer has IPAddressDeny, so the built-unit and own-address probe parts of this test are gone (retired with the
+filter); what remains is what still exists: the ip parsers, local_deny, the unreadable-output refusals, the selftest's own-address row and the canary LAN group.
 
 * the parsers read real ip text (the dev02 shape: loopback, public 129.232.197.x/24 with gateway 129.232.197.1, IPv6, a docker bridge, a
   multipath default route, a tunnel with no next hop);
@@ -82,25 +84,10 @@ for item in local["extra"]:
     net = ipaddress.ip_network(item, strict=True)
     must(net.prefixlen == (32 if net.version == 4 else 128), item)
 
-# ---- the built unit
-RUN_ID = "ab" * 16
-row = make_runner("ai.chat", credential_files=["auth"])
-RESOLV = str(BASE / "core-resolv.conf")
-Path(RESOLV).write_text("nameserver 9.9.9.9\n", encoding="utf-8")
-EXISTS = lambda path: str(path).startswith(str(BASE)) or str(path) == str(sh.LAUNCHER_FILE)
-props = sh.build_properties(row, RUN_ID, credential_names=[], exists=EXISTS, deny_extra=local["extra"], resolv_file=RESOLV)
-deny = [p for p in props if p.startswith("IPAddressDeny=")]
-must(len(deny) == 1, deny)
-tokens = deny[0].split("=", 1)[1].split()
-must(tokens[:len(sh.ADDRESS_DENY.split())] == sh.ADDRESS_DENY.split(), "the numeric ranges are still first and unchanged")
-must(tokens[len(sh.ADDRESS_DENY.split()):] == local["extra"], tokens)
-must(len(tokens) == len(set(tokens)), "no repeats")
-for token in tokens:
-    must(str(ipaddress.ip_network(token, strict=True)) == token, ("numeric and canonical", token))
-must(not any(word in deny[0] for word in ("localhost", "link-local", "multicast", "any", "Allow")), deny)
-# every address outside the ranges, and the gateway, is in the unit's deny list
-for address in ("129.232.197.50", "129.232.197.51", "2c0f:f5c0:1:1::50", "129.232.197.1"):
-    must(any(ipaddress.ip_address(address) in ipaddress.ip_network(t) for t in tokens if (":" in t) == (":" in address)), address)
+# ---- (1.18.24: the unit no longer carries IPAddressDeny; these addresses and gateways now go to the egress proxy's configuration, see
+# tests/sandbox-egress-audit-1.18.24.py and tests/sandbox-private-network-1.18.24.py)
+make_runner("ai.chat")
+
 
 # ---- unreadable output refuses (fail closed)
 
@@ -130,53 +117,24 @@ except ValueError as exc:
 else:
     raise AssertionError("70 public addresses were accepted")
 must(len(sh.local_deny(ADDR + many[:0], ROUTE4, "")["extra"]) <= sh.LOCAL_DENY_MAX, "bounded")
-# the live reader is the helper's own `ip` call; with a refusing reader a start is refused (tests/sandbox-launch-1.17.118.py covers launch)
-real = sh.local_deny_now
-sh.local_deny_now = lambda: sh.read_local_deny(cmd(fail="addr"))
-make_runner("ai.chat2", body="print('x')")
-H.write_ready_status()
-code, frames = H.start(H.header("ai.chat2"), hold=False)
-must(frames[0]["t"] == "refused" and frames[0]["code"] == "sandbox_unavailable" and "address filter" in frames[0]["message"], frames)
-sh.local_deny_now = real
+# the live reader is the helper's own `ip` call; with a refusing reader a start that needs the egress door is refused (tests/sandbox-private-network-1.18.24.py)
 
-# ---- the selftest probes the own address and the gateway from a filtered unit, with a control run
+# ---- the selftest still reads this server's own addresses and gateways, now for the egress proxy
 
 
 def selftest(fake):
     return F.run_selftest(sh, H.RUN, BASE, fake)
 
 
-fake = F.Fake()
-ok = selftest(fake)
-must(ok["ready"] is True and ok["address_filter_ok"] is True and ok["checks"]["address_filter_local"]["ok"] is True, ok["checks"])
+ok = selftest(F.Fake())
+must(ok["ready"] is True and ok["checks"]["local_addresses"]["ok"] is True, ok["checks"])
 must("129.232.197.50" in ok["checks"]["local_addresses"]["detail"] and "129.232.197.1" in ok["checks"]["local_addresses"]["detail"], ok["checks"]["local_addresses"])
-calls = {c[0]: c for c in fake.calls}
-must(calls["address_filter_local_control"][1] == sh.PROBE_PROPERTIES["address_filter_control"], "the control has no filter")
-must(calls["address_filter_local"][1][1] == "IPAddressDeny=" + sh.ADDRESS_DENY + " 129.232.197.50/32 129.232.197.1/32", calls["address_filter_local"][1])
-must(list(calls["address_filter_local"][2][4:]) == ["129.232.197.50", "129.232.197.1"], calls["address_filter_local"][2])
-# a filter that lets the own-address send through is not ready (the 1.17.122 code had no such probe, so it passed this server)
-leak = selftest(F.Fake(address_filter_local=lambda properties, command: (0, "".join(f"{a} sent\n" for a in command[4:]), "")))
-must(leak["ready"] is False and leak["address_filter_ok"] is False and "own address or gateway" in leak["reason"], leak)
-half = selftest(F.Fake(address_filter_local=lambda properties, command: (0, f"{command[4]} eperm\n{command[5]} sent\n", "")))
-must(half["ready"] is False, "one send through is enough to fail")
-unjudged = selftest(F.Fake(address_filter_local=lambda properties, command: (0, "".join(f"{a} other\n" for a in command[4:]), "")))
-must(unjudged["ready"] is False, "an unjudgeable answer is never a pass")
-# a control that cannot send: the probe cannot be read as a pass
-nocontrol = selftest(F.Fake(address_filter_local_control=lambda properties, command: (0, "".join(f"{a} other\n" for a in command[4:]), "")))
-must(nocontrol["ready"] is False and "could not be checked" in nocontrol["reason"], nocontrol)
-# unreadable addresses: not ready, and the DNS probe is not run
+# unreadable addresses: not ready, and the egress proxy is not started
 bad = F.Fake()
 bad.ip["addr"] = ""
 status = selftest(bad)
 must(status["ready"] is False and "could not be read" in status["reason"] and status["checks"]["local_addresses"]["ok"] is False, status)
-must(not [c for c in bad.calls if c[0] == "dns"], "no DNS probe without the deny list")
-# a private-only server has nothing outside the ranges: nothing to add, and nothing to probe
-quiet = F.Fake()
-quiet.ip["addr"] = "2: eth0    inet 192.168.1.5/24 scope global eth0\n"
-quiet.ip["route4"] = "default via 192.168.1.1 dev eth0\n"
-status = selftest(quiet)
-must(status["ready"] is True and "no own IPv4 address or gateway outside" in status["checks"]["address_filter_local"]["detail"], status["checks"]["address_filter_local"])
-must(not [c for c in quiet.calls if c[0].startswith("address_filter_local")], "no local probe when there is nothing to add")
+must(bad.egress["started"] == [], "no egress proxy without this server's own addresses")
 
 # ---- the canary: the LAN group runs the real runner functions against a fake network; the table needs every row
 spec = importlib.util.spec_from_file_location("canary_runner_123b", H.ROOT / "scripts" / "sandbox-canary-runner.py")

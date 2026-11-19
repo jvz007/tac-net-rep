@@ -88,14 +88,22 @@ SANDBOX_MIN_FRAMEWORK = (1, 17, 116)
 SANDBOX_EXECUTABLE_PREFIX = "sandbox/runners/"
 _SANDBOX_RUNNER_KEYS = frozenset({
     "id", "description", "executable", "argv", "parameters", "environment", "runtime_roots", "credential_files", "credential_return",
-    "limits", "revision",
+    "limits", "revision", "allowed_hosts",
 })
+# 1.18.24 (AD-65 Patch B): ``allowed_hosts`` is back. Exact lower-case DNS names the run's egress proxy may open a tunnel to, on port 443 only.
+# scripts/sandbox-helper.py applies the same rules again (parse_runners); a test keeps the two in step.
+SANDBOX_ALLOWED_HOSTS_MAX = 16
+SANDBOX_HOST_LABEL_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
+SANDBOX_HOST_BLOCKED_SUFFIXES = (".local", ".internal", ".localhost", ".lan")
 # name -> (default, Core ceiling). A Core patch raises a ceiling, never a module.
 SANDBOX_LIMITS = {
     "memory_mb": (1024, 2048), "cpu_percent": (100, 200), "tasks": (256, 512), "run_seconds": (240, 600), "stdout_kib": (512, 1024),
     "stderr_kib": (64, 64), "scratch_mb": (64, 256), "input_kib": (64, 256), "queue_seconds": (10, 30),
 }
-SANDBOX_RESERVED_ENV = frozenset({"HOME", "TMPDIR", "SSL_CERT_FILE", "SANDBOX_WORK", "SANDBOX_OUT"})
+SANDBOX_RESERVED_ENV = frozenset({
+    "HOME", "TMPDIR", "SSL_CERT_FILE", "SANDBOX_WORK", "SANDBOX_OUT",
+    "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "NO_PROXY", "no_proxy",  # 1.18.24: Core alone sets the proxy
+})
 SANDBOX_CREDENTIAL_FILES_MAX = 2
 SANDBOX_RUNTIME_ROOTS_MAX = 8
 SANDBOX_ENV_MAX = 32
@@ -461,13 +469,44 @@ def _sandbox_limits(raw, label: str) -> dict:
     return limits
 
 
+def _sandbox_allowed_hosts(value, label: str) -> list[str]:
+    """1.18.24: validate ``allowed_hosts`` of one runner: an optional list of at most 16 exact lower-case DNS names (letters, digits and '-' in
+    labels of 1 to 63 characters, at least two labels, at most 253 characters in all). No wildcard, no port syntax (the port is always 443),
+    no IP literal in any spelling (the last label of a name is never all digits or a 0x number), nothing ending in .local, .internal,
+    .localhost or .lan, no duplicates."""
+    if not isinstance(value, list):
+        raise RegistryError(f"{label} allowed_hosts must be a list of host names.")
+    if len(value) > SANDBOX_ALLOWED_HOSTS_MAX:
+        raise RegistryError(f"{label} allowed_hosts may not contain more than {SANDBOX_ALLOWED_HOSTS_MAX} hosts.")
+    found: list[str] = []
+    for host in value:
+        if not isinstance(host, str) or not host or len(host) > 253:
+            raise RegistryError(f"{label} allowed_hosts entries must be host names of 1 to 253 characters.")
+        if host != host.lower():
+            raise RegistryError(f"{label} allowed_hosts entries must be lower case.")
+        if "*" in host or ":" in host or "/" in host or "@" in host or "[" in host or "%" in host:
+            raise RegistryError(f"{label} allowed_hosts entry {host!r} must be a plain host name: no wildcard, port, path or address syntax.")
+        parts = host.split(".")
+        if len(parts) < 2 or any(not SANDBOX_HOST_LABEL_RE.fullmatch(part) for part in parts):
+            raise RegistryError(f"{label} allowed_hosts entry {host!r} must be a full DNS name of letters, digits and '-' with at least two labels.")
+        last = parts[-1]
+        if last.isdigit() or (last.startswith("0x") and all(ch in "0123456789abcdef" for ch in last[2:])):
+            raise RegistryError(f"{label} allowed_hosts entry {host!r} looks like an IP address; only names are allowed.")
+        if any(host.endswith(suffix) for suffix in SANDBOX_HOST_BLOCKED_SUFFIXES):
+            raise RegistryError(f"{label} allowed_hosts entry {host!r} is a local name; only public names are allowed.")
+        if host in found:
+            raise RegistryError(f"{label} allowed_hosts repeats {host!r}.")
+        found.append(host)
+    return found
+
+
 def _sandbox_runners(payload: dict, plugin_type: str, plugin_id: str, plugin_dir: Path, publisher_permissions) -> tuple[dict, ...]:
     """Parse the optional ``sandbox_runners`` key (1.17.116): the programs a signed module lets core.sandbox run unprivileged.
 
     Each entry is ``{id, description, executable, argv, parameters, environment, runtime_roots, credential_files, credential_return,
     limits, revision}``; any other key is refused. Extensions only, at most 4 entries. The module must also declare publisher_permissions
-    ``sandbox.register`` and ``requires.framework`` of ``>=1.17.116`` or higher. ``allowed_hosts`` is refused: the smaller sandbox has no
-    host list (plan section 15, AD-63). The root helper checks the same rules again from the root-owned installed manifest. Returns plain
+    ``sandbox.register`` and ``requires.framework`` of ``>=1.17.116`` or higher. ``allowed_hosts`` (1.18.24, AD-65 Patch B) is the optional
+    list of exact names the run's egress proxy may reach on port 443; a runner without it has no network at all. The root helper checks the same rules again from the root-owned installed manifest. Returns plain
     dicts, or ``()`` when the key is absent or empty."""
     if "sandbox_runners" not in payload:
         return ()
@@ -492,8 +531,6 @@ def _sandbox_runners(payload: dict, plugin_type: str, plugin_id: str, plugin_dir
         label = f"Manifest sandbox_runners entry {index + 1}"
         if not isinstance(entry, dict):
             raise RegistryError(f"{label} must be a JSON object.")
-        if "allowed_hosts" in entry:
-            raise RegistryError(f"{label} declares allowed_hosts; the smaller sandbox has no host list, so remove it.")
         unknown = sorted(set(entry) - _SANDBOX_RUNNER_KEYS)
         if unknown:
             raise RegistryError(f"{label} contains unsupported keys {unknown!r}.")
@@ -563,6 +600,7 @@ def _sandbox_runners(payload: dict, plugin_type: str, plugin_id: str, plugin_dir
         if credential_return and not names:
             raise RegistryError(f"{label} credential_return needs a declared credential file name.")
         limits = _sandbox_limits(entry.get("limits", {}), label)
+        allowed_hosts = _sandbox_allowed_hosts(entry["allowed_hosts"], label) if "allowed_hosts" in entry else []
         revision = entry.get("revision", "1")
         if isinstance(revision, bool) or not isinstance(revision, (str, int)) or not str(revision).strip() or len(str(revision)) > 64:
             raise RegistryError(f"{label} revision must be a short text or whole number.")
@@ -570,6 +608,7 @@ def _sandbox_runners(payload: dict, plugin_type: str, plugin_id: str, plugin_dir
             "id": runner_id, "description": description.strip(), "executable": executable, "argv": list(argv), "parameters": dict(schema),
             "environment": dict(environment), "runtime_roots": roots, "credential_files": list(names),
             "credential_return": credential_return, "limits": limits, "revision": str(revision).strip(),
+            "allowed_hosts": allowed_hosts,
         })
     return tuple(entries)
 

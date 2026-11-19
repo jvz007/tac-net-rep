@@ -151,7 +151,7 @@ must(len(table) == 1 and calls == [], "no write /run row")
 table, _ = check(WRITTEN, LISTING_OK, [])
 must(table[0] == table_of(dict(SUCCEEDED_ROW))[0] and table[2] == table_of(dict(SUCCEEDED_ROW))[2], "neighbours")
 must(sh.CANARY_REQUIRED["writes"] == ([], [("write /", 9)]), sh.CANARY_REQUIRED["writes"])
-must(sh.CANARY_VIEW_ALLOWED["/run"] == ("credentials", "systemd"), "the view row is unchanged")
+must(sh.CANARY_VIEW_ALLOWED["/run"] == ("credentials", "systemd", "egress"), "the view row is unchanged (1.18.24: plus the empty egress mount point)")
 missing = sh.group_table("Writes", "writes", "e", [{"attack": "write /usr", "tag": "OK", "actual": "EROFS"}])
 must(any(r["verdict"] == "NOT RUN" and "results" in r["actual"] for r in missing), missing)
 

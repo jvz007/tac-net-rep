@@ -50,14 +50,13 @@ class Fake:
             "credential": "credential",
             "real_unit_shape": "real_shape",  # 1.18.13
             "proc_hidden": (0, "ok\n"),
-            "address_filter_control": "connect",
-            "address_filter_loopback": (0, "blocked\n"),
-            "address_filter_private": (0, "10.255.255.254 eperm\n172.31.255.254 eperm\n192.168.255.254 eperm\n100.127.255.254 eperm\n169.254.169.254 eperm\n"),
+            # 1.18.24 (AD-65 Patch B): the network probes. The control reaches this server's loopback listener, the wall sees only lo and reaches nothing.
+            "network_control": "net_control",
+            "network_private": lambda properties, command: (0, f"ifaces lo\nconnect 1.1.1.1 443 ENETUNREACH\nconnect 127.0.0.1 {command[-1]} ECONNREFUSED\nresolv absent\n", ""),
             "pipe_streams": lambda properties, command: (0, "out", "err"),
-            "address_filter_local_control": lambda properties, command: (0, "".join(f"{a} sent\n" for a in command[4:]), ""),
-            "address_filter_local": lambda properties, command: (0, "".join(f"{a} eperm\n" for a in command[4:]), ""),
-            "dns": (0, "reply 0\n"),
         }
+        # 1.18.24: what the selftest's egress probe sees (HTTP status per request); run_selftest hands these to the helper's egress hooks
+        self.egress = {"listed": 200, "unlisted": 403, "literal": 403, "port80": 403, "start_fails": False, "started": [], "stopped": []}
         self.script.update(overrides)
         # 1.17.123: what `ip` says (the dev02 shape: loopback, a public address, its gateway)
         self.ip = {"addr": IP_ADDR, "route4": IP_ROUTE4, "route6": ""}
@@ -79,9 +78,14 @@ class Fake:
         if answer == "connect":
             socket.create_connection(("127.0.0.1", int(command[-1])), timeout=2).close()
             return 0, "connected\n", ""
-        if answer == "leak":  # a filter that does not hold: it connects, and says so
-            socket.create_connection(("127.0.0.1", int(command[-1])), timeout=2).close()
-            return 0, "connected\n", ""
+        if answer == "net_control":  # 1.18.24: no wall: the run sees the host's interfaces, reaches 1.1.1.1 and this server's loopback listener
+            port = int(command[-1])
+            socket.create_connection(("127.0.0.1", port), timeout=2).close()
+            return 0, f"ifaces lo,eth0\nconnect 1.1.1.1 443 connected\nconnect 127.0.0.1 {port} connected\nresolv present\n", ""
+        if answer == "leak":  # a wall that does not hold: it reaches the listener, and says so
+            port = int(command[-1])
+            socket.create_connection(("127.0.0.1", port), timeout=2).close()
+            return 0, f"ifaces lo\nconnect 1.1.1.1 443 ENETUNREACH\nconnect 127.0.0.1 {port} connected\nresolv absent\n", ""
         if answer == "real_shape":  # 1.18.13: the real unit shape hands the token in through LoadCredential and removes the source
             source = None
             for item in properties:
@@ -113,4 +117,35 @@ def run_selftest(sh, run_root, base, fake, resolv=PUBLIC):
     path = Path(base) / f"resolv-{len(list(Path(base).glob('resolv-*')))}.conf"
     path.write_text(resolv, encoding="utf-8")
     sh.CREDENTIALS_RUNTIME = CREDS_ROOT
-    return sh.selftest(fake, resolv_conf_path=path, run_root=run_root, upstream_path=Path(base) / "no-upstream-file.conf")  # 1.17.123: upstream missing, so the file above is the fallback
+    # 1.18.24: the egress door is real systemd and a real socket; here the helper's hooks answer from ``fake.egress`` (the tests of the proxy itself are
+    # tests/sandbox-egress-proxy-1.18.24.py, the units are tests/sandbox-egress-units-1.18.24.py)
+    saved = (sh.egress_start, sh.egress_stop, sh.egress_clean, sh.egress_exchange, sh.egress_door_socket)
+    state = fake.egress
+
+    def start(row, run_id, local, **kw):
+        state["started"].append(run_id)
+        if state["start_fails"]:
+            raise sh.Refusal("sandbox_unavailable", "the egress door could not be started")
+        return True
+
+    def exchange(sock_path, request, **kw):
+        head = request.split(b"\r\n", 1)[0].decode("ascii")
+        target = head.split(" ")[1]
+        if target == "example.com:443":
+            return state["listed"]
+        if target == "example.net:443":
+            return state["unlisted"]
+        if target == "1.1.1.1:443":
+            return state["literal"]
+        if target == "example.com:80":
+            return state["port80"]
+        return 0
+
+    sh.egress_start, sh.egress_exchange = start, exchange
+    sh.egress_stop = lambda run_id, **kw: state["stopped"].append(run_id)
+    sh.egress_clean = lambda run_id: None
+    sh.egress_door_socket = lambda run_id: Path(base) / "door.sock"
+    try:
+        return sh.selftest(fake, resolv_conf_path=path, run_root=run_root)
+    finally:
+        sh.egress_start, sh.egress_stop, sh.egress_clean, sh.egress_exchange, sh.egress_door_socket = saved

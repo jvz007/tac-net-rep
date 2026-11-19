@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""1.17.116 regression: the selftest logic of scripts/sandbox-helper.py (core.sandbox Patch 1, part 2).
+"""1.18.24 note: updated in place for AD-65 Patch B. The address filter, own-address and DNS probes are retired; the selftest now probes the network wall
+(network_private) and the egress proxy (egress_proxy), see tests/sandbox-selftest-network-1.18.24.py. Everything else here (version, cgroup, dynamic user,
+file view, credential, proc, pipes, status.json) is unchanged. tests/sandbox-skeleton-root-1.18.12.py loads the first part of this file as its harness.
+
+1.17.116 regression: the selftest logic of scripts/sandbox-helper.py (core.sandbox Patch 1, part 2).
 
 The selftest only talks to a ``UnitRunner``. Here a fake runner answers each probe by name, so the logic is tested without systemd:
 
@@ -123,16 +127,13 @@ must(sh.PROBE_PROPERTIES == {
     "dynamic_user": ("DynamicUser=yes",),
     "credential": ("DynamicUser=yes",),
     "proc_hidden": ("DynamicUser=yes", "ProtectProc=invisible", "ProcSubset=pid"),
-    "address_filter_control": ("DynamicUser=yes",),
-    "address_filter_loopback": ("DynamicUser=yes", "IPAddressDeny=127.0.0.0/8 ::1/128 169.254.0.0/16 fe80::/10 224.0.0.0/4 ff00::/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7"),
-    "address_filter_private": ("DynamicUser=yes", "IPAddressDeny=127.0.0.0/8 ::1/128 169.254.0.0/16 fe80::/10 224.0.0.0/4 ff00::/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7"),
+    "network_control": ("DynamicUser=yes",),
+    "network_private": ("DynamicUser=yes", "PrivateNetwork=yes", "RestrictAddressFamilies=AF_INET AF_UNIX"),
     "pipe_streams": ("DynamicUser=yes",),
-    "address_filter_local": ("DynamicUser=yes", "IPAddressDeny=127.0.0.0/8 ::1/128 169.254.0.0/16 fe80::/10 224.0.0.0/4 ff00::/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7"),
-    "dns": ("DynamicUser=yes", "IPAddressDeny=127.0.0.0/8 ::1/128 169.254.0.0/16 fe80::/10 224.0.0.0/4 ff00::/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7"),
 }, sh.PROBE_PROPERTIES)
 must(sh.PRIVATE_PROBE_TARGETS == ("10.255.255.254", "172.31.255.254", "192.168.255.254", "100.127.255.254", "169.254.169.254"), "private probe targets, metadata included")
 must(sh.MIN_SYSTEMD_VERSION == 249 and sh.RESOLVERS_MAX == 3, "floor and resolver cap")
-must("IPAddressDeny=any" not in json.dumps(sh.PROBE_PROPERTIES), "Patch 1 does not use the Patch 2 plan-3.4 filter")
+must("IPAddressDeny" not in json.dumps(sh.PROBE_PROPERTIES), "1.18.24: no unit probe carries an address filter")
 for forbidden in ("nft", "iptables", "HTTPS_PROXY", "allowed_hosts"):
     must(forbidden not in "".join(sh.PROBE_PROPERTIES[k][i] for k in sh.PROBE_PROPERTIES for i in range(len(sh.PROBE_PROPERTIES[k]))), forbidden)
 
@@ -159,14 +160,11 @@ class Fake:
             "credential": "credential",
             "real_unit_shape": "real_shape",  # 1.18.13
             "proc_hidden": (0, "ok\n"),
-            "address_filter_control": "connect",
-            "address_filter_loopback": (0, "blocked\n"),
-            "address_filter_private": (0, "10.255.255.254 eperm\n172.31.255.254 eperm\n192.168.255.254 eperm\n100.127.255.254 eperm\n169.254.169.254 eperm\n"),
+            "network_control": "net_control",  # 1.18.24: no wall: the unit reaches this server's loopback listener
+            "network_private": lambda properties, command: (0, f"ifaces lo\nconnect 1.1.1.1 443 ENETUNREACH\nconnect 127.0.0.1 {command[-1]} ECONNREFUSED\nresolv absent\n", ""),
             "pipe_streams": lambda properties, command: (0, "out", "err"),   # 1.17.118: stdout and stderr on separate pipes
-            "address_filter_local_control": lambda properties, command: (0, "".join(f"{a} sent\n" for a in command[4:]), ""),
-            "address_filter_local": lambda properties, command: (0, "".join(f"{a} eperm\n" for a in command[4:]), ""),
-            "dns": (0, "reply 0\n"),
         }
+        self.egress = {"listed": 200, "unlisted": 403, "literal": 403, "port80": 403, "start_fails": False, "started": [], "stopped": []}
         self.ip = {"addr": IP_ADDR, "route4": IP_ROUTE4, "route6": ""}
         self.script.update(overrides)
         self.credential = {"mode": "400", "uid": "61500", "gid": "61500", "stat": None, "token": None, "remove": True}
@@ -182,15 +180,12 @@ class Fake:
     def run_unit(self, name, properties, command, *, timeout=30, unit=None):
         self.calls.append((name, tuple(properties), tuple(command)))
         answer = self.script[name]
-        if answer == "connect":   # a real connection to the helper's own listener, as an unfiltered unit would make
+        if answer == "net_control":   # a real connection to the helper's own listener, as a unit without the wall would make
             socket.create_connection(("127.0.0.1", int(command[-1])), timeout=2).close()
-            return 0, "connected\n", ""
-        if answer == "leak":      # a filter that does not hold: connects, and says so
+            return 0, f"ifaces lo,eth0\nconnect 1.1.1.1 443 connected\nconnect 127.0.0.1 {command[-1]} connected\nresolv present\n", ""
+        if answer == "leak":      # a wall that does not hold: it reaches the listener, and says so
             socket.create_connection(("127.0.0.1", int(command[-1])), timeout=2).close()
-            return 0, "connected\n", ""
-        if answer == "lie":       # says blocked, but the listener sees a connection anyway
-            socket.create_connection(("127.0.0.1", int(command[-1])), timeout=2).close()
-            return 0, "blocked\n", ""
+            return 0, f"ifaces lo\nconnect 1.1.1.1 443 ENETUNREACH\nconnect 127.0.0.1 {command[-1]} connected\nresolv absent\n", ""
         if answer == "real_shape":  # 1.18.13: the real unit shape hands the token in through LoadCredential and removes the source
             source = None
             for item in properties:
@@ -237,25 +232,44 @@ def selftest(fake, resolv=PUBLIC):
     path = BASE / f"resolv-{len(list(BASE.glob('resolv-*')))}.conf"
     if resolv is not None:
         path.write_text(resolv, encoding="utf-8")
-    return sh.selftest(fake, resolv_conf_path=path, run_root=RUN)
+    # 1.18.24: the egress door is real systemd and a real socket; the helper's hooks answer from ``fake.egress``
+    saved = (sh.egress_start, sh.egress_stop, sh.egress_clean, sh.egress_exchange, sh.egress_door_socket)
+    state = fake.egress
+
+    def start(row, run_id, local, **kw):
+        state["started"].append(run_id)
+        if state["start_fails"]:
+            raise sh.Refusal("sandbox_unavailable", "the egress door could not be started")
+        return True
+
+    def exchange(sock_path, request, **kw):
+        target = request.split(b"\r\n", 1)[0].decode("ascii").split(" ")[1]
+        return {"example.com:443": state["listed"], "example.net:443": state["unlisted"], "1.1.1.1:443": state["literal"], "example.com:80": state["port80"]}.get(target, 0)
+
+    sh.egress_start, sh.egress_exchange = start, exchange
+    sh.egress_stop = lambda run_id, **kw: state["stopped"].append(run_id)
+    sh.egress_clean = lambda run_id: None
+    sh.egress_door_socket = lambda run_id: BASE / "door.sock"
+    try:
+        return sh.selftest(fake, resolv_conf_path=path, run_root=RUN)
+    finally:
+        sh.egress_start, sh.egress_stop, sh.egress_clean, sh.egress_exchange, sh.egress_door_socket = saved
 
 
 # ---- everything passes
 fake = Fake()
 status = selftest(fake)
 must(status["ready"] is True and status["reason"] == "ready" and status["enabled"] is False, status)
-must(status["systemd_version"] == 252 and status["address_filter_ok"] is True and status["dns_ok"] is True, status)
-must(status["resolver"] == "156.38.225.225" and status["resolvers"] == ["156.38.225.225"] and status["dns_method"] == "resolv_conf_bind", status)
+must(status["systemd_version"] == 252 and status["address_filter_ok"] is True and status["dns_ok"] is True and status["network_private_ok"] is True and status["egress_ok"] is True, status)
+must(status["resolver"] == "" and status["resolvers"] == [] and status["dns_method"] == "", status)  # 1.18.24: kept as empty values for every status reader
 must(status["selftest_at"].endswith("Z"), status["selftest_at"])
 must(sorted(status["checks"]) == sorted(["systemd_version", "bpf_framework", "cgroup_v2", "transient_unit", "dynamic_user", "filesystem_view", "sandbox_root", "sandbox_root_after", "credential", "real_unit_shape", "proc_hidden",
-                                         "address_filter_control", "address_filter_loopback", "address_filter_private", "pipe_streams", "dns", "memory_zswap", "local_addresses",
-                                         "address_filter_local", "upstream_resolvers"]), sorted(status["checks"]))
+                                         "network_private", "pipe_streams", "egress_proxy", "memory_zswap", "local_addresses"]), sorted(status["checks"]))
 must(all(row["ok"] for row in status["checks"].values()), status["checks"])
 must(json.dumps(status) and "token" not in json.dumps(status).lower().replace("tectac-probe", ""), "no credential-like text in the status")
 # the probes ran in this order, each with exactly its golden properties
 names = [call[0] for call in fake.calls]
-must(names == ["transient", "dynamic_user", "filesystem_view", "credential", "real_unit_shape", "proc_hidden", "address_filter_control", "address_filter_loopback", "address_filter_private",
-               "address_filter_local_control", "address_filter_local", "pipe_streams", "dns"], names)
+must(names == ["transient", "dynamic_user", "filesystem_view", "credential", "real_unit_shape", "proc_hidden", "network_control", "network_private", "pipe_streams"], names)
 for name, properties, command in fake.calls:
     expected = sh.PROBE_PROPERTIES.get(name, ())
     if name == "filesystem_view":  # 1.18.8: the REAL file view, from the one function the unit builder uses
@@ -264,20 +278,15 @@ for name, properties, command in fake.calls:
         must(properties[:1] == expected and len(properties) == 2, properties)  # 1.18.14: DynamicUser and LoadCredential only, no property command
     elif name == "real_unit_shape":  # 1.18.13
         must(properties[:len(sh.file_view_properties())] == tuple(sh.file_view_properties()) and "DynamicUser=yes" in properties and len(properties) == len(sh.file_view_properties()) + 2, properties)
-    elif name == "dns":
-        must(properties == expected[:1] + ("IPAddressDeny=" + sh.ADDRESS_DENY + " 129.232.197.50/32 129.232.197.1/32",), properties)   # the full deny list, nothing allowed
-    elif name == "address_filter_local_control":
-        must(properties == sh.PROBE_PROPERTIES["address_filter_control"], properties)
-    elif name == "address_filter_local":
-        must(properties == expected[:1] + ("IPAddressDeny=" + sh.ADDRESS_DENY + " 129.232.197.50/32 129.232.197.1/32",), properties)
+    elif name == "network_private":  # 1.18.24: the real network properties and the real file view (so there is no resolv.conf to see)
+        must(properties == (*expected, *sh.file_view_properties()), properties)
     else:
         must(properties == expected, (name, properties))
 must([c for c in fake.cmds] == [["systemctl", "--version"], ["stat", "-fc", "%T", "/sys/fs/cgroup"], ["ip", "-o", "addr", "show"],
                          ["ip", "-4", "route", "show", "default"], ["ip", "-6", "route", "show", "default"]], fake.cmds)
 must(not list(RUN.iterdir()), "the credential probe folder is removed")
-# no probe carries an Allow (1.17.123), and every probe command is a fixed program with no shell string from outside
-must("IPAddressAllow" not in json.dumps([call[1] for call in fake.calls]), "no IPAddressAllow in any probe")
-must(fake.calls[-1][2][-2:] == ("156.38.225.225", "example.com"), fake.calls[-1][2])
+must("IPAddressAllow" not in json.dumps([call[1] for call in fake.calls]) and "IPAddressDeny" not in json.dumps([call[1] for call in fake.calls]), "no address filter in any probe")
+must(len(fake.egress["started"]) == 1 and fake.egress["stopped"] == fake.egress["started"], "the throw-away egress door was started and stopped once")
 
 # ---- failures: ready false, a plain reason, never a weaker mode
 def check_fail(label, reason_part, fake=None, resolv=PUBLIC, expect_check=None):
@@ -324,40 +333,24 @@ check_fail("streams merged", "stdout and stderr apart", Fake(pipe_streams=lambda
 check_fail("streams swapped", "stdout and stderr apart", Fake(pipe_streams=lambda properties, command: (0, "err", "out")), expect_check="pipe_streams")
 check_fail("streams unit fails", "stdout and stderr apart", Fake(pipe_streams=(1, "")), expect_check="pipe_streams")
 
-# ---- the address filter: a missing BPF shows as a loopback that stays reachable
-status = check_fail("filter leaks", "reaching the server itself", Fake(address_filter_loopback="leak"), expect_check="address_filter_loopback")
-must(status["address_filter_ok"] is False, status)
-check_fail("filter lies", "reaching the server itself", Fake(address_filter_loopback="lie"), expect_check="address_filter_loopback")
-check_fail("loopback probe errors", "reaching the server itself", Fake(address_filter_loopback=(1, "")), expect_check="address_filter_loopback")
-check_fail("control cannot connect", "could not be checked", Fake(address_filter_control=(0, "blocked\n")), expect_check="address_filter_control")
-check_fail("private send succeeds", "private-range", Fake(address_filter_private=(0, "10.255.255.254 sent\n172.31.255.254 eperm\n")), expect_check="address_filter_private")
-check_fail("private unjudgeable", "private-range", Fake(address_filter_private=(0, "10.255.255.254 other\n172.31.255.254 other\n")), expect_check="address_filter_private")
-check_fail("private probe fails", "private-range", Fake(address_filter_private=(1, "")), expect_check="address_filter_private")
-# one conclusive refusal among unroutable ranges is enough
-ok = selftest(Fake(address_filter_private=(0, "10.255.255.254 other\n192.168.255.254 eperm\n169.254.169.254 eperm\n")))
-must(ok["ready"] is True and ok["address_filter_ok"] is True, ok)
-# the helper's listener really saw the control connection and nothing from the filtered probe
+# ---- the network wall (1.18.24): a missing wall shows as a loopback that stays reachable (tests/sandbox-selftest-network-1.18.24.py has every case)
+status = check_fail("wall leaks", "reached an address", Fake(network_private="leak"), expect_check="network_private")
+must(status["address_filter_ok"] is False and status["network_private_ok"] is False, status)
+check_fail("wall probe errors", "PrivateNetwork", Fake(network_private=(1, "")), expect_check="network_private")
+check_fail("control cannot connect", "could not be checked", Fake(network_control=(0, "ifaces lo\n")), expect_check="network_private")
 listener_checks = selftest(Fake())["checks"]
-must("connected" in listener_checks["address_filter_control"]["detail"] and listener_checks["address_filter_loopback"]["detail"] == "blocked", listener_checks)
+must("interfaces lo" in listener_checks["network_private"]["detail"] and "resolv.conf absent" in listener_checks["network_private"]["detail"], listener_checks["network_private"])
 
-# ---- DNS: any reply counts, no reply does not
-for reply in ("reply 0", "reply 3", "reply 2", "reply 5"):
-    ok = selftest(Fake(dns=(0, reply + "\n")))
-    must(ok["ready"] is True and ok["dns_ok"] is True, (reply, ok))   # NXDOMAIN (3) and SERVFAIL (2) are replies
-bad = check_fail("dns no reply", "no DNS reply", Fake(dns=(0, "noreply\n")), expect_check="dns")
-must(bad["dns_ok"] is False and bad["resolver"] == "", bad)
-check_fail("dns unit fails", "no DNS reply", Fake(dns=(1, "")), expect_check="dns")
-check_fail("no resolver", "no IPv4 name server", Fake(), resolv="search lan\n", expect_check="dns")
-check_fail("no resolv.conf", "no IPv4 name server", Fake(), resolv=None, expect_check="dns")
-# two public upstreams: both are asked directly; only the one that answers goes into Core's resolv.conf (the proven list)
-fake = Fake(dns=lambda properties, command: (0, "reply 0\n", "") if command[-2] == "1.1.1.1" else (0, "noreply\n", ""))
-ok = selftest(fake, "nameserver 9.9.9.9\nnameserver 1.1.1.1\n")
-must(ok["ready"] is True and ok["resolver"] == "1.1.1.1" and ok["resolvers"] == ["1.1.1.1"], ok)
-dns_calls = [call for call in fake.calls if call[0] == "dns"]
-must(len(dns_calls) == 2 and not any("IPAddressAllow" in p for call in dns_calls for p in call[1]), dns_calls)
-# a server that is offline: its stub resolver still replies (SERVFAIL), so the sandbox is not turned off for that reason
-offline = selftest(Fake(dns=(0, "reply 2\n")))
-must(offline["ready"] is True, offline)
+# ---- the egress proxy (1.18.24): the stand-in host answers 200, refusals answer 403, a private resolver fails closed
+bad_egress = Fake()
+bad_egress.egress["listed"] = 502
+bad = check_fail("proxy cannot tunnel", "could not open a tunnel", bad_egress, expect_check="egress_proxy")
+must(bad["dns_ok"] is False and bad["egress_ok"] is False and bad["address_filter_ok"] is True, bad)
+check_fail("private resolver", "systemd-resolved stub", Fake(), resolv="nameserver 10.0.0.2\n", expect_check="egress_proxy")
+check_fail("no resolver", "no name server is listed", Fake(), resolv="search lan\n", expect_check="egress_proxy")
+check_fail("no resolv.conf", "no name server is listed", Fake(), resolv=None, expect_check="egress_proxy")
+ok = selftest(Fake(), "nameserver 127.0.0.53\n")
+must(ok["ready"] is True and ok["egress_ok"] is True, ok)  # the systemd-resolved stub is the one local resolver the proxy may use
 
 # ---- several failures: the reason is the first failing check, and the checks table lists all of them
 many = selftest(Fake(stat=(0, "tmpfs\n"), proc_hidden=(0, "bad 9\n")))

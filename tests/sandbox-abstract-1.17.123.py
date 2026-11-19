@@ -7,8 +7,7 @@ JSON plan, shown cleaned) and the in-unit probe tries every one: refused or unre
 name and never any content. If root cannot read the list the row is NOT RUN. The row reports how many were listed. Information only: root's
 own throw-away abstract listener shows whether the namespace is shared at all.
 
-canary_summary: a SKIPPED row in any security group fails the canary (only 'public tcp 443', for a server with no public route, may be
-SKIPPED); canary.json lists the skipped rows.
+canary_summary: a SKIPPED row fails the canary (1.18.24: the 'public tcp 443' exception is gone; the public group is retired); canary.json lists the skipped rows.
 
 1.17.124 UPDATE: the 1.17.123 decision "AF_UNIX stays in RestrictAddressFamilies" is superseded. Runs now get AF_INET only, so socket(AF_UNIX)
 is refused before any connect (socketpair() and pipes are not covered by that filter). _abstract_connect therefore returns a three-state
@@ -195,27 +194,26 @@ must(len(hit) == 1 and hit[0]["verdict"] == "NOT RUN" and not [r for r in table 
 must(sh.canary_summary(table)[0] is False, "NOT RUN fails")
 must(sh.CANARY_REQUIRED["abstract"] == ([], [("abstract sockets (", 1)]), "the table requires the main row (1.17.124: the prefix excludes the left-out information row)")
 
-# ---- canary_summary and canary.json: a skipped security row fails; only 'public tcp 443' may be skipped
+# ---- canary_summary and canary.json: a skipped row fails (1.18.24: the 'public tcp 443' exception is gone with the retired public group)
 def row(attack, verdict, wall="X"):
     return {"wall": wall, "attack": attack, "expected": "x", "actual": "x", "verdict": verdict}
 
 
 S = sh.canary_summary
-must(S([row("a", "OK"), row("public tcp 443", "SKIPPED", "Public")])[0] is True, "a server with no public route may skip public tcp 443")
-for attack in ("abstract sockets (0 listed)", "loopback ports", "other resolver dropped", "read /etc/shadow", "unix /run/x", "public tcp 4430", ""):
+must(sh.CANARY_SKIP_ALLOWED == (), "no row may be skipped any more")
+for attack in ("public tcp 443", "abstract sockets (0 listed)", "loopback ports", "read /etc/shadow", "unix /run/x", "public tcp 4430", ""):
     must(S([row("a", "OK"), row(attack, "SKIPPED")])[0] is False, attack)
-must(S([row("a", "OK"), row("public tcp 443", "SKIPPED"), row("loopback x", "SKIPPED")])[0] is False, "one skipped security row among allowed ones")
 ok, counts = S([row("a", "OK"), row("public tcp 443", "SKIPPED")])
-must(counts["SKIPPED"] == 1 and counts["OK"] == 1, "SKIPPED is counted but never OK")
+must(ok is False and counts["SKIPPED"] == 1 and counts["OK"] == 1, "SKIPPED is counted, never OK, and fails")
 table = [row("a", "OK"), row("public tcp 443", "SKIPPED", "Public"), row("abstract sockets (0 listed)", "SKIPPED", "Abstract sockets")]
 passed, counts = S(table)
 record = sh.canary_record(table, passed, counts)
 must(record["ok"] is False and record["skipped"] == ["public tcp 443", "abstract sockets (0 listed)"], record)
-must(record["failing"] == [{"wall": "Abstract sockets", "attack": "abstract sockets (0 listed)", "verdict": "SKIPPED"}], "the failing skipped row is listed; the allowed one is not")
+must([item["attack"] for item in record["failing"]] == ["public tcp 443", "abstract sockets (0 listed)"], "every skipped row is listed as failing")
 must("content" not in json.dumps(record), "no content in canary.json")
-ok_table = [row("a", "OK"), row("public tcp 443", "SKIPPED", "Public")]
+ok_table = [row("a", "OK"), row("b", "OK")]
 record = sh.canary_record(ok_table, *S(ok_table))
-must(record["ok"] is True and record["failing"] == [] and record["skipped"] == ["public tcp 443"], record)
+must(record["ok"] is True and record["failing"] == [] and record["skipped"] == [], record)
 
 # ---- root's own throw-away abstract listener (information row), and a real AF_UNIX abstract socket where the platform has one
 if not sys.platform.startswith("linux") or not hasattr(socket, "AF_UNIX"):

@@ -2,12 +2,13 @@
 """Root-owned helper for core.sandbox (Core 1.18.8, Patch A: allow-list file view, fixed unit template, memory evidence and root audit rows; the kill switch is still off).
 
 core.sandbox runs a signed module's declared program as an unprivileged, resource-limited process that cannot see the server's files
-or reach the server itself or private networks (AD-63, docs/planning/sandbox/PLAN-CORE-SANDBOX.md sections 2, 3 and 15).
+or reach the server itself or private networks (AD-63, docs/planning/sandbox/PLAN-CORE-SANDBOX.md sections 2, 3 and 15). Since 1.18.24 (AD-65 Patch B)
+a run has its own, empty network space and reaches only its runner's ``allowed_hosts`` on port 443, through a per-run egress proxy (the egress_* functions).
 
 * ``--register-module <id>`` and ``--unregister-module <id>`` (root callers: the module job helpers): the registry of declared runners;
 * ``--selftest`` (root: install.sh, an administrator): proves systemd, cgroup v2, DynamicUser, the allow-list file system, credential
-  hand-in, separate stdout and stderr pipes, ProtectProc and the section 15 address filter work here, and writes ``status.json``. A failed
-  check means ``ready: false`` with a plain reason, never a weaker mode;
+  hand-in, separate stdout and stderr pipes, ProtectProc, the private network wall and the egress proxy work here (1.18.24, AD-65 Patch B),
+  and writes ``status.json``. A failed check means ``ready: false`` with a plain reason, never a weaker mode;
 * ``--selftest --canary`` (root only, never in sudoers): the full attack test with an in-memory runner ``core.canary``; writes canary.json;
 * ``--status`` (the Tactical account, through sudo): read only, with slot numbers and the canary result;
 * ``--sweep`` (root: a boot and daily timer): re-verifies runtime folders; removes stray selftest folders, secrets folders, handoff and run
@@ -146,14 +147,20 @@ MIN_FRAMEWORK = (1, 17, 116)
 EXECUTABLE_PREFIX = "sandbox/runners/"
 RUNNER_KEYS = frozenset({
     "id", "description", "executable", "argv", "parameters", "environment", "runtime_roots", "credential_files", "credential_return",
-    "limits", "revision",
+    "limits", "revision", "allowed_hosts",
 })
+ALLOWED_HOSTS_MAX = 16  # 1.18.24 (AD-65 Patch B): registry.py applies the same rules (_sandbox_allowed_hosts)
+HOST_LABEL_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
+HOST_BLOCKED_SUFFIXES = (".local", ".internal", ".localhost", ".lan")
 # name -> (default, Core ceiling). A Core patch raises a ceiling, never a module.
 LIMITS = {
     "memory_mb": (1024, 2048), "cpu_percent": (100, 200), "tasks": (256, 512), "run_seconds": (240, 600), "stdout_kib": (512, 1024),
     "stderr_kib": (64, 64), "scratch_mb": (64, 256), "input_kib": (64, 256), "queue_seconds": (10, 30),
 }
-RESERVED_ENV = frozenset({"HOME", "TMPDIR", "SSL_CERT_FILE", "SANDBOX_WORK", "SANDBOX_OUT"})
+RESERVED_ENV = frozenset({
+    "HOME", "TMPDIR", "SSL_CERT_FILE", "SANDBOX_WORK", "SANDBOX_OUT",
+    "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "NO_PROXY", "no_proxy",  # 1.18.24: Core alone sets the proxy
+})
 CREDENTIAL_FILES_MAX = 2
 CREDENTIAL_FILE_MAX_BYTES = 16 * 1024  # used by Patch 2 when a credential is handed in
 RUNTIME_ROOTS_MAX = 8
@@ -189,25 +196,23 @@ MIN_SYSTEMD_VERSION = 249  # Ubuntu 22.04, the oldest server Tec-Tac supports (p
 ADDRESS_DENY = ("127.0.0.0/8 ::1/128 169.254.0.0/16 fe80::/10 224.0.0.0/4 ff00::/8 "
                 "10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7")
 PRIVATE_PROBE_TARGETS = ("10.255.255.254", "172.31.255.254", "192.168.255.254", "100.127.255.254", "169.254.169.254")
-DNS_PROBE_NAME = "example.com"
-RESOLV_UPSTREAM = "/run/systemd/resolve/resolv.conf"  # 1.17.123: the upstream list a run's Core-owned resolv.conf is built from
+DNS_PROBE_NAME = "example.com"  # 1.18.24: the stand-in host of the egress proxy selftest
 RESOLVERS_MAX = 3
-LOCAL_DENY_MAX = 64  # 1.17.123: most local addresses and gateways added to a unit's IPAddressDeny (those already inside the ranges are not counted)
+STUB_RESOLVER = "127.0.0.53"  # 1.18.24: systemd-resolved's stub, the one local address the egress proxy may reach (its second wall allows it by address)
+LOCAL_DENY_MAX = 64  # 1.17.123: most local addresses and gateways read for the egress proxy's own-address list (those already inside the ranges are not counted)
 MEMORY_BLOCK_MIB = 16  # kept for older callers; 1.17.124 no longer allows a block of slack over MemoryMax
 CGROUP_ROOT = Path("/sys/fs/cgroup")  # a test replaces this
 ZSWAP_MIN_SYSTEMD = 255  # MemoryZSwapMax= is only added from this systemd version on (an unknown property must not make every start fail)
 UNIT_TIMEOUT_SECONDS = 30
+NETWORK_PROPERTIES = ("PrivateNetwork=yes", "RestrictAddressFamilies=AF_INET AF_UNIX")  # 1.18.24 (AD-65 Patch B): a run has its own, empty network space; AF_UNIX only for the egress door
 PROBE_PROPERTIES = {
     "transient": (),
     "dynamic_user": ("DynamicUser=yes",),
     "credential": ("DynamicUser=yes",),  # plus LoadCredential, which carries the run's own path
     "proc_hidden": ("DynamicUser=yes", "ProtectProc=invisible", "ProcSubset=pid"),
-    "address_filter_control": ("DynamicUser=yes",),
-    "address_filter_loopback": ("DynamicUser=yes", "IPAddressDeny=" + ADDRESS_DENY),
-    "address_filter_private": ("DynamicUser=yes", "IPAddressDeny=" + ADDRESS_DENY),
+    "network_control": ("DynamicUser=yes",),
+    "network_private": ("DynamicUser=yes", *NETWORK_PROPERTIES),
     "pipe_streams": ("DynamicUser=yes",),
-    "address_filter_local": ("DynamicUser=yes", "IPAddressDeny=" + ADDRESS_DENY),  # 1.17.123: plus this server's own addresses and gateways
-    "dns": ("DynamicUser=yes", "IPAddressDeny=" + ADDRESS_DENY),  # 1.17.123: no IPAddressAllow at all; the upstream is public and needs none
 }
 DENIED_NETWORKS = tuple(ipaddress.ip_network(item) for item in ADDRESS_DENY.split())
 
@@ -231,25 +236,16 @@ _PROBE_CONNECT = (
     "try:\n s.connect(('127.0.0.1',int(sys.argv[1])));print('connected')\n"
     "except Exception as e:\n print('blocked')\n"
 )
-_PROBE_PRIVATE = (
-    "import socket,sys\n"
-    "for a in sys.argv[1:]:\n"
-    " s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.settimeout(2)\n"
-    " try:\n  s.connect((a,9));s.send(b'x');print(a,'sent')\n"
-    " except PermissionError:\n  print(a,'eperm')\n"
-    " except Exception:\n  print(a,'other')\n"
-)
-_PROBE_DNS = (
-    "import socket,struct,sys\n"
-    "q=struct.pack('>HHHHHH',0x7a31,0x0100,1,0,0,0)\n"
-    "for part in sys.argv[2].split('.'):\n q+=bytes([len(part)])+part.encode()\n"
-    "q+=b'\\x00'+struct.pack('>HH',1,1)\n"
-    "fam=socket.AF_INET6 if ':' in sys.argv[1] else socket.AF_INET\n"
-    "s=socket.socket(fam,socket.SOCK_DGRAM);s.settimeout(4)\n"
-    "try:\n s.sendto(q,(sys.argv[1],53));d,_=s.recvfrom(2048)\n"
-    " ok=len(d)>=12 and d[:2]==q[:2] and d[2]&0x80\n"
-    " print('reply %d'%(d[3]&15) if ok else 'noreply')\n"
-    "except Exception:\n print('noreply')\n"
+_PROBE_NETWORK = (
+    "import errno,os,socket,sys\n"
+    "names=[l.split(':')[0].strip() for l in open('/proc/self/net/dev').read().splitlines()[2:] if ':' in l]\n"
+    "print('ifaces',','.join(names))\n"
+    "for h,p in(('1.1.1.1',443),('127.0.0.1',int(sys.argv[1]))):\n"
+    " s=socket.socket();s.settimeout(3)\n"
+    " try:\n  s.connect((h,p));r='connected'\n"
+    " except Exception as e:\n  r=errno.errorcode.get(getattr(e,'errno',0) or 0,'timeout' if isinstance(e,TimeoutError) else 'error')\n"
+    " s.close();print('connect',h,p,r)\n"
+    "print('resolv','present' if os.path.exists('/etc/resolv.conf') else 'absent')\n"
 )
 
 
@@ -453,6 +449,36 @@ def _check_runtime_path(value, label, module_id):
     return value
 
 
+def check_allowed_hosts(value, label):
+    """1.18.24: the ``allowed_hosts`` rules of registry.py (_sandbox_allowed_hosts) again: an optional list of at most 16 exact lower-case DNS names
+    (at least two labels, at most 253 characters), no wildcard, no port, no IP literal in any spelling, no .local/.internal/.localhost/.lan, no
+    repeats. Returns the list; raises RuntimeError (TypeError for a value that is not a list) with a plain message."""
+    if not isinstance(value, list):
+        raise TypeError(f"{label} allowed_hosts must be a list of host names")
+    if len(value) > ALLOWED_HOSTS_MAX:
+        raise RuntimeError(f"{label} allowed_hosts may not contain more than {ALLOWED_HOSTS_MAX} hosts")
+    found = []
+    for host in value:
+        if not isinstance(host, str) or not host or len(host) > 253:
+            raise RuntimeError(f"{label} allowed_hosts entries must be host names of 1 to 253 characters")
+        if host != host.lower():
+            raise RuntimeError(f"{label} allowed_hosts entries must be lower case")
+        if any(ch in host for ch in "*:/@[%"):
+            raise RuntimeError(f"{label} allowed_hosts entry {host!r} must be a plain host name")
+        parts = host.split(".")
+        if len(parts) < 2 or any(not HOST_LABEL_RE.fullmatch(part) for part in parts):
+            raise RuntimeError(f"{label} allowed_hosts entry {host!r} must be a full DNS name with at least two labels")
+        last = parts[-1]
+        if last.isdigit() or (last.startswith("0x") and all(ch in "0123456789abcdef" for ch in last[2:])):
+            raise RuntimeError(f"{label} allowed_hosts entry {host!r} looks like an IP address")
+        if any(host.endswith(suffix) for suffix in HOST_BLOCKED_SUFFIXES):
+            raise RuntimeError(f"{label} allowed_hosts entry {host!r} is a local name")
+        if host in found:
+            raise RuntimeError(f"{label} allowed_hosts repeats {host!r}")
+        found.append(host)
+    return found
+
+
 def parse_runners(module_id, payload, check_file):
     """The runners an installed manifest declares, after every rule of part 1 (registry.py) again. ``check_file(relative, label)`` raises
     unless the file exists in the module folder without a symlink and (in the helper) is root-owned. Returns (version, runners);
@@ -481,8 +507,6 @@ def parse_runners(module_id, payload, check_file):
         label = f"sandbox_runners entry {index + 1}"
         if not isinstance(entry, dict):
             raise TypeError(f"{label} must be a JSON object")
-        if "allowed_hosts" in entry:
-            raise RuntimeError(f"{label} declares allowed_hosts; the smaller sandbox has no host list")
         unknown = sorted(set(entry) - RUNNER_KEYS)
         if unknown:
             raise RuntimeError(f"{label} contains unsupported keys {unknown!r}")
@@ -558,6 +582,7 @@ def parse_runners(module_id, payload, check_file):
             if isinstance(value, bool) or not isinstance(value, int) or value < 1 or value > ceiling:
                 raise RuntimeError(f"{label} limit {name} must be a whole number from 1 to {ceiling}")
             limits[name] = value
+        allowed_hosts = check_allowed_hosts(entry["allowed_hosts"], label) if "allowed_hosts" in entry else []
         revision = entry.get("revision", "1")
         if isinstance(revision, bool) or not isinstance(revision, (str, int)) or not str(revision).strip() or len(str(revision)) > 64:
             raise RuntimeError(f"{label} revision must be a short text or whole number")
@@ -565,6 +590,7 @@ def parse_runners(module_id, payload, check_file):
             "id": runner_id, "description": description.strip(), "executable": executable, "argv": list(argv), "parameters": dict(schema),
             "environment": dict(environment), "runtime_roots": roots, "credential_files": list(names),
             "credential_return": credential_return, "limits": limits, "revision": str(revision).strip(),
+            "allowed_hosts": allowed_hosts,
         })
     return version, runners
 
@@ -770,6 +796,7 @@ def register_module(module_id):
             "executable": str(target), "executable_sha256": hashlib.sha256(data).hexdigest(), "argv": runner["argv"],
             "parameters": runner["parameters"], "environment": runner["environment"], "runtime_roots": stored_roots,
             "credential_files": runner["credential_files"], "credential_return": runner["credential_return"], "limits": runner["limits"],
+            "allowed_hosts": runner["allowed_hosts"],
             "runtime_verified": not reasons, "runtime_reason": "; ".join(reasons), "runtime_checked_at": now(),
             "registered_by": REGISTERED_BY, "registered_at": now(),
         }
@@ -929,45 +956,6 @@ def local_deny_now():
     return read_local_deny()
 
 
-def read_upstream_text(upstream_path=None, fallback_path=None):
-    """1.17.123: the upstream name server list a run's Core-owned resolv.conf is built from: systemd-resolved's own file; when that file is
-    missing, /etc/resolv.conf, but only a regular file (never the symlink to the 127.0.0.53 stub). '' when neither can be read."""
-    try:
-        return Path(upstream_path or RESOLV_UPSTREAM).read_text(encoding="utf-8", errors="replace")[:8192]
-    except OSError:
-        pass
-    fallback = Path(fallback_path or RESOLV_CONF)
-    try:
-        if fallback.is_symlink() or not fallback.is_file():
-            return ""
-        return fallback.read_text(encoding="utf-8", errors="replace")[:8192]
-    except OSError:
-        return ""
-
-
-def upstream_problem(address, local):
-    """'' when a run may use this upstream resolver directly, else the plain reason naming the address (never an automatic allow)."""
-    if denied_by_ranges(address):
-        why = "inside a range a run may not reach (loopback, private, link-local or carrier-grade NAT)"
-    elif address in local["addresses"]:
-        why = "one of this server's own addresses"
-    elif address in local["gateways"]:
-        why = "this server's gateway"
-    else:
-        return ""
-    return f"the upstream name server {address} is {why}; a run cannot use it, so point the server at a public resolver"
-
-
-def core_resolv_file():
-    return RUN_ROOT / "resolv.conf"
-
-
-def resolv_conf_bytes(resolvers):
-    """The Core-owned resolv.conf: at most three IPv4 ``nameserver`` lines and nothing else."""
-    lines = [f"nameserver {ipaddress.IPv4Address(address)}" for address in list(resolvers)[:RESOLVERS_MAX]]
-    return ("# written by Tec-Tac core.sandbox at each start" + chr(10) + chr(10).join(lines) + chr(10)).encode("ascii")
-
-
 class UnitRunner:
     """Runs one probe in a transient unit and returns (returncode, stdout, stderr). The selftest only talks to this interface, so a test
     can replace it. ``name`` is the probe name; ``properties`` the unit properties; ``command`` the argv inside the unit."""
@@ -990,28 +978,19 @@ class UnitRunner:
         return done.returncode, done.stdout, done.stderr
 
 
-def upstream_resolvers_text(path=RESOLV_UPSTREAM):
-    """Up to three upstream resolver addresses from systemd-resolved's own file, as plain text (information for the DNS detail)."""
-    try:
-        text = Path(path).read_text(encoding="utf-8", errors="replace")[:8192]
-    except OSError:
-        return "not readable"
-    found = parse_resolvers(text)
-    return ", ".join(found) if found else "none listed"
-
-
 def _check(table, name, ok, detail):
     table[name] = {"ok": bool(ok), "detail": str(detail)[:300]}
     return bool(ok)
 
 
-def selftest(runner=None, *, resolv_conf_path="/etc/resolv.conf", run_root=None, upstream_path=None):
+def selftest(runner=None, *, resolv_conf_path="/etc/resolv.conf", run_root=None):
     """Probe this server and return the status dict that ``status.json`` carries. Never raises for a failed probe: a failed probe is
     ``ready: false`` with a plain reason. There is no weaker mode."""
     runner = runner or UnitRunner()
     run_root = Path(run_root) if run_root else RUN_ROOT
     checks = {}
     reasons = []
+    started_at = time.monotonic()  # 1.18.24: the selftest time is recorded in status.json (the install-speed request depends on it)
 
     def fail(name, reason):
         reasons.append(reason)
@@ -1053,6 +1032,7 @@ def selftest(runner=None, *, resolv_conf_path="/etc/resolv.conf", run_root=None,
     if not _check(checks, "dynamic_user", dyn_ok, f"uid {uid}" if uid else err.strip()[:200]):
         fail("dynamic_user", "a unit could not run as a dynamic user")
     # 1.18.8: the allow-list root. The skeleton must match this server, then the REAL view (the same properties the builder uses) is probed.
+    view = None
     try:
         check_skeleton()
         skeleton_ok = True
@@ -1094,50 +1074,28 @@ def selftest(runner=None, *, resolv_conf_path="/etc/resolv.conf", run_root=None,
     code, out, err = runner.run_unit("proc_hidden", PROBE_PROPERTIES["proc_hidden"], ["/bin/sh", "-c", script])
     if not _check(checks, "proc_hidden", code == 0 and out.strip() == "ok", out.strip() or err.strip()[:200]):
         fail("proc_hidden", "ProtectProc=invisible or ProcSubset=pid is not working")
-    # 1.17.123: this server's own addresses and gateways, read the way a start reads them; they join the deny list
+    # 1.17.123: this server's own addresses and gateways, read the way a start reads them (1.18.24: they go to the egress proxy, never to a unit)
     local = None
     try:
         local = read_local_deny(runner.run_cmd)
         _check(checks, "local_addresses", True, f"own addresses: {', '.join(local['addresses'])}; gateways: {', '.join(local['gateways']) or 'none'}; "
-                                                f"added to the deny list: {len(local['extra'])}")
+                                                f"handed to the egress proxy at each start")
     except ValueError as exc:
         _check(checks, "local_addresses", False, str(exc))
-        fail("local_addresses", f"{exc}, so the address filter cannot be completed")
-    extra = local["extra"] if local else []
-    # the section 15 address filter, with a control run so a probe that cannot connect anyway is never read as a pass
-    filter_ok, detail = _probe_address_filter(runner, checks)
-    if not filter_ok:
-        fail("address_filter", detail)
-    local_ok, detail = _probe_address_local(runner, checks, extra) if local else (False, "not run")
-    if local and not local_ok:
-        fail("address_filter_local", detail)
+        fail("local_addresses", f"{exc}, so the egress proxy cannot be given this server's own addresses")
+    # 1.18.24 (AD-65 Patch B): the network wall. A run has its own empty network space; a control run without it must reach this server first.
+    network_ok, detail = _probe_network(runner, checks, view)
+    if not network_ok:
+        fail("network_private", detail)
     # stdout and stderr arrive on separate pipes through systemd-run --pipe (plan section 10, item 1)
     command = ["/usr/bin/python3", "-I", "-c", "import sys;sys.stdout.write('out');sys.stdout.flush();sys.stderr.write('err')"]
     code, out, err = runner.run_unit("pipe_streams", PROBE_PROPERTIES["pipe_streams"], command)
     if not _check(checks, "pipe_streams", code == 0 and out.strip() == "out" and err.strip() == "err", f"out={out.strip()[:40]!r} err={err.strip()[:40]!r}"):
         fail("pipe_streams", "systemd-run --pipe did not keep stdout and stderr apart")
-    # DNS (1.17.123): the upstream list, vetted, probed directly from a unit under the full deny list. Nothing is ever allowed by address.
-    text = read_upstream_text(upstream_path, resolv_conf_path)
-    resolvers = parse_resolvers(text, ipv4_only=True)
-    proven, dns_ok = [], False
-    if not resolvers:
-        _check(checks, "dns", False, "no IPv4 nameserver in the upstream list")
-        fail("dns", "no IPv4 name server is listed as an upstream (/run/systemd/resolve/resolv.conf or /etc/resolv.conf), so a run could not look up names")
-    elif local is None:
-        _check(checks, "dns", False, "not run: this server's own addresses could not be read")
-    else:
-        problems = [upstream_problem(address, local) for address in resolvers]
-        problems = [problem for problem in problems if problem]
-        if problems:
-            _check(checks, "dns", False, problems[0])
-            fail("dns", problems[0])
-        else:
-            proven, detail = _probe_dns(runner, resolvers, extra)
-            dns_ok = bool(proven)
-            if not _check(checks, "dns", dns_ok, detail):
-                fail("dns", detail)
-    _check(checks, "upstream_resolvers", True, "upstream list: " + (", ".join(resolvers) or "none") + "; Core resolv.conf at each start: " + (", ".join(proven) or "none"))
-    address_filter_ok = all(checks.get(name, {}).get("ok") for name in ("address_filter_control", "address_filter_loopback", "address_filter_private", "address_filter_local"))
+    # 1.18.24: the one door. The proxy units start for a throw-away run id with one stand-in host; a listed host answers 200, a refusal 403.
+    egress_ok, detail = _probe_egress(runner, checks, local, resolv_conf_path)
+    if not egress_ok:
+        fail("egress_proxy", detail)
     # 1.18.12: the probe units run with ProtectHome=yes, which makes systemd add the /root mount point inside the sandbox root. The skeleton lists it;
     # anything else a probe left there is a refusal, so a pass is never logged on a skeleton a probe changed.
     try:
@@ -1149,8 +1107,10 @@ def selftest(runner=None, *, resolv_conf_path="/etc/resolv.conf", run_root=None,
     ready = not reasons
     return {
         "ready": ready, "reason": "ready" if ready else reasons[0], "enabled": False, "systemd_version": version,
-        "address_filter_ok": address_filter_ok, "dns_ok": dns_ok, "resolver": proven[0] if proven else "", "resolvers": proven,
-        "dns_method": "resolv_conf_bind" if proven else "", "selftest_at": now(), "checks": checks,
+        # 1.18.24: the old keys keep their names for every reader and change meaning: address_filter_ok = the network wall is proven,
+        # dns_ok = the egress proxy resolves names and opens a tunnel; resolver, resolvers and dns_method stay as empty values.
+        "address_filter_ok": network_ok, "dns_ok": egress_ok, "network_private_ok": network_ok, "egress_ok": egress_ok,
+        "resolver": "", "resolvers": [], "dns_method": "", "selftest_at": now(), "selftest_ms": int((time.monotonic() - started_at) * 1000), "checks": checks,
         "slots_total": slot_count(mem_available_kib(), LIMITS["memory_mb"][0]),
     }
 
@@ -1354,8 +1314,10 @@ def _probe_real_shape(runner, run_root):
         shutil.rmtree(folder, ignore_errors=True)
 
 
-def _probe_address_filter(runner, checks):
-    """Loopback and private ranges must be refused under the section 15 filter, and the same probes must succeed without it."""
+def _probe_network(runner, checks, view):
+    """1.18.24: a unit with the real network properties sees only ``lo``, cannot connect to a public address or to a loopback port of this server,
+    and has no resolv.conf; the same probe without the wall must reach the loopback listener (the control: a probe that cannot connect anyway is
+    never read as a pass). ``view`` is the real file view (file_view_properties) or None when the skeleton is wrong. Returns (ok, plain reason)."""
     listener = socket.socket()
     try:
         listener.bind(("127.0.0.1", 0))
@@ -1364,96 +1326,142 @@ def _probe_address_filter(runner, checks):
         port = listener.getsockname()[1]
     except OSError as exc:
         listener.close()
-        _check(checks, "address_filter_control", False, f"cannot open a loopback listener ({exc.strerror or 'error'})")
-        _check(checks, "address_filter_loopback", False, "not run")
-        _check(checks, "address_filter_private", False, "not run")
+        _check(checks, "network_private", False, f"cannot open a loopback listener ({exc.strerror or 'error'})")
         return False, "the selftest could not open a loopback listener"
-    try:
-        def accepted():
-            seen = 0
-            while True:
-                try:
-                    conn, _ = listener.accept()
-                except OSError:
-                    return seen
-                conn.close()
-                seen += 1
 
-        command = ["/usr/bin/python3", "-I", "-c", _PROBE_CONNECT, str(port)]
-        code, out, err = runner.run_unit("address_filter_control", PROBE_PROPERTIES["address_filter_control"], command)
-        control_ok = code == 0 and out.strip() == "connected" and accepted() >= 1
-        _check(checks, "address_filter_control", control_ok, out.strip() or err.strip()[:200])
-        code, out, err = runner.run_unit("address_filter_loopback", PROBE_PROPERTIES["address_filter_loopback"], command)
-        loop_ok = code == 0 and out.strip() == "blocked" and accepted() == 0
-        _check(checks, "address_filter_loopback", loop_ok, out.strip() or err.strip()[:200])
-    finally:
-        listener.close()
-    command = ["/usr/bin/python3", "-I", "-c", _PROBE_PRIVATE, *PRIVATE_PROBE_TARGETS]
-    code, out, err = runner.run_unit("address_filter_private", PROBE_PROPERTIES["address_filter_private"], command)
-    results = {}
-    for line in out.strip().splitlines():
-        parts = line.split()
-        if len(parts) == 2:
-            results[parts[0]] = parts[1]
-    private_ok = code == 0 and "sent" not in results.values() and "eperm" in results.values()
-    _check(checks, "address_filter_private", private_ok, ", ".join(f"{a} {r}" for a, r in results.items()) or err.strip()[:200])
-    if not control_ok:
-        return False, "the address filter probe could not be checked (a loopback connection without the filter did not work)"
-    if not loop_ok:
-        return False, "the address filter does not stop a unit from reaching the server itself (cgroup BPF may be missing)"
-    if not private_ok:
-        return False, "the address filter did not refuse private-range traffic"
-    return True, "loopback and private ranges refused"
+    def accepted():
+        seen = 0
+        while True:
+            try:
+                conn, _ = listener.accept()
+            except OSError:
+                return seen
+            conn.close()
+            seen += 1
 
-
-def _probe_address_local(runner, checks, extra):
-    """1.17.123: a send to this server's own address or gateway must be refused under the filter, and the same send must work without it
-    (the control run: a send that cannot work anyway is never read as a pass). ``extra`` is the ``<address>/32`` list a start adds."""
-    targets = [item.split("/", 1)[0] for item in extra if ":" not in item][:6]
-    if not targets:
-        _check(checks, "address_filter_local", True, "no own IPv4 address or gateway outside the numeric ranges (nothing to add for IPv4)")
-        return True, ""
-    command = ["/usr/bin/python3", "-I", "-c", _PROBE_PRIVATE, *targets]
-
-    def results(out):
-        found = {}
+    def read(out):
+        found = {"ifaces": "", "connect": {}, "resolv": ""}
         for line in out.strip().splitlines():
             parts = line.split()
-            if len(parts) == 2:
-                found[parts[0]] = parts[1]
+            if parts[:1] == ["ifaces"]:
+                found["ifaces"] = parts[1] if len(parts) > 1 else ""
+            elif len(parts) == 4 and parts[0] == "connect":
+                found["connect"][f"{parts[1]}:{parts[2]}"] = parts[3]
+            elif len(parts) == 2 and parts[0] == "resolv":
+                found["resolv"] = parts[1]
         return found
 
-    code, out, err = runner.run_unit("address_filter_local_control", PROBE_PROPERTIES["address_filter_control"], command)
-    control = results(out)
-    if code != 0 or any(control.get(target) != "sent" for target in targets):
-        _check(checks, "address_filter_local", False, "control run without the filter could not send to " + ", ".join(targets))
-        return False, "the own-address probe could not be checked (a send to this server's own address or gateway without the filter did not work)"
-    properties = list(PROBE_PROPERTIES["address_filter_local"])
-    properties[1] = "IPAddressDeny=" + ADDRESS_DENY + " " + " ".join(extra)
-    code, out, err = runner.run_unit("address_filter_local", properties, command)
-    filtered = results(out)
-    ok = code == 0 and all(filtered.get(target) == "eperm" for target in targets)
-    _check(checks, "address_filter_local", ok, ", ".join(f"{a} {r}" for a, r in filtered.items()) or err.strip()[:200])
+    try:
+        command = ["/usr/bin/python3", "-I", "-c", _PROBE_NETWORK, str(port)]
+        code, out, err = runner.run_unit("network_control", PROBE_PROPERTIES["network_control"], command)
+        control = read(out)
+        control_ok = code == 0 and control["connect"].get(f"127.0.0.1:{port}") == "connected" and accepted() >= 1
+        if view is None:
+            _check(checks, "network_private", False, "not run: the sandbox root folder is wrong")
+            return False, "the network wall could not be checked (the sandbox root folder is wrong)"
+        properties = [*PROBE_PROPERTIES["network_private"], *view]
+        code, out, err = runner.run_unit("network_private", properties, command)
+        found = read(out)
+    finally:
+        listener.close()
+    names = [name for name in found["ifaces"].split(",") if name]
+    only_lo = names == ["lo"]
+    public = found["connect"].get("1.1.1.1:443", "")
+    local_try = found["connect"].get(f"127.0.0.1:{port}", "")
+    ok_connect = public not in ("connected", "") and local_try not in ("connected", "")
+    resolv_gone = found["resolv"] == "absent"
+    ok = code == 0 and only_lo and ok_connect and resolv_gone
+    detail = (f"interfaces {','.join(names) or 'none'}; 1.1.1.1:443 {public or 'no answer'}; this server's loopback port {local_try or 'no answer'}; "
+              f"resolv.conf {found['resolv'] or 'no answer'}") if code == 0 else (err.strip()[:200] or out.strip()[:200] or "the unit did not finish")
+    _check(checks, "network_private", ok and control_ok, detail)
+    if not control_ok:
+        return False, "the network probe could not be checked (a loopback connection without the wall did not work)"
     if not ok:
-        return False, "the address filter did not refuse a send to this server's own address or gateway"
-    return True, "own addresses and gateways refused"
+        return False, "a unit with PrivateNetwork=yes still saw a network, reached an address or had a resolv.conf: " + detail
+    return True, "private network space, nothing reachable"
 
 
-def _probe_dns(runner, resolvers, extra=()):
-    """Ask each upstream directly from a unit under the full deny list (the numeric ranges and this server's own addresses and gateways); no
-    address is allowed. Any DNS reply counts (NXDOMAIN too), no reply does not. Returns (answering upstreams, plain detail)."""
-    properties = list(PROBE_PROPERTIES["dns"])
-    if extra:
-        properties[1] = "IPAddressDeny=" + ADDRESS_DENY + " " + " ".join(extra)
-    answered = []
-    for address in resolvers:
-        command = ["/usr/bin/python3", "-I", "-c", _PROBE_DNS, address, DNS_PROBE_NAME]
-        code, out, _err = runner.run_unit("dns", properties, command)
-        if code == 0 and out.strip().startswith("reply"):
-            answered.append(address)
-    if answered:
-        return answered, ", ".join(answered) + " answered from inside the filtered unit"
-    return [], ("no DNS reply from inside the unit from " + ", ".join(resolvers) + "; upstream resolvers: " + upstream_resolvers_text())
+def resolver_problem(text):
+    """'' when the host's own resolver list works for the egress proxy, else a plain reason. The proxy's own wall allows exactly one local
+    address, the systemd-resolved stub 127.0.0.53, so another resolver inside a private or loopback range makes the proxy fail closed (never an
+    automatic allow). No listed server at all is a problem too."""
+    listed = parse_resolvers(text, limit=8)
+    if not listed:
+        return "no name server is listed in /etc/resolv.conf, so the egress proxy could not look up names"
+    for address in listed:
+        if address != STUB_RESOLVER and denied_by_ranges(address):
+            return (f"the name server {address} is inside a loopback or private range; the egress proxy may only reach the systemd-resolved stub "
+                    f"{STUB_RESOLVER} or a public resolver, so point the server at one of them")
+    return ""
+
+
+def egress_exchange(sock_path, request, *, timeout=15, connector=None):
+    """Send one request to a door socket as the root helper does for the selftest and read the first line of the answer. Returns the HTTP status
+    as an int, 0 for an unreadable answer, or None when the door cannot be reached. ``connector`` is replaced by a test."""
+    try:
+        sock = connector(sock_path) if connector else socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        if not connector:
+            sock.settimeout(timeout)
+            sock.connect(sock_path)
+    except OSError:
+        return None
+    try:
+        sock.settimeout(timeout)
+        sock.sendall(request)
+        head = sock.recv(512).split(b"\r\n", 1)[0].split()
+        return int(head[1]) if len(head) >= 2 and head[0].startswith(b"HTTP/") and head[1].isdigit() else 0
+    except OSError:
+        return 0
+    finally:
+        sock.close()
+
+
+def connect_request(host, port):
+    return f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n".encode("ascii", "replace")
+
+
+def _probe_egress(runner, checks, local, resolv_conf_path, *, exchange=None):
+    """1.18.24: start the template units for a throw-away run id with one stand-in host (example.com); a CONNECT to it must answer 200, a CONNECT to
+    a host that is not listed and one to an IP literal must answer 403, and the units are always stopped and cleaned. A host whose resolver the
+    proxy's own wall cannot reach fails closed with a plain reason. Returns (ok, plain reason)."""
+    exchange = exchange or egress_exchange
+    try:
+        text = Path(resolv_conf_path).read_text(encoding="utf-8", errors="replace")[:8192]
+    except OSError:
+        text = ""
+    problem = resolver_problem(text)
+    if problem:
+        _check(checks, "egress_proxy", False, problem)
+        return False, problem
+    if local is None:
+        _check(checks, "egress_proxy", False, "not run: this server's own addresses could not be read")
+        return False, "the egress proxy could not be checked (this server's own addresses could not be read)"
+    run_id = secrets.token_hex(16)
+    row = {"allowed_hosts": [DNS_PROBE_NAME]}
+    try:
+        egress_start(row, run_id, local, run_cmd=runner.run_cmd)
+        door = str(egress_door_socket(run_id))
+        listed = exchange(door, connect_request(DNS_PROBE_NAME, 443))
+        unlisted = exchange(door, connect_request("example.net", 443))
+        literal = exchange(door, connect_request("1.1.1.1", 443))
+        wrong_port = exchange(door, connect_request(DNS_PROBE_NAME, 80))
+    except Refusal as exc:
+        _check(checks, "egress_proxy", False, exc.message)
+        return False, "the egress proxy did not start: " + exc.message
+    finally:
+        egress_stop(run_id, run_cmd=runner.run_cmd)
+        egress_clean(run_id)
+    refusals_ok = unlisted == 403 and literal == 403 and wrong_port == 403
+    detail = f"listed host {listed}; unlisted host {unlisted}; IP literal {literal}; port 80 {wrong_port}"
+    if listed == 200 and refusals_ok:
+        _check(checks, "egress_proxy", True, detail)
+        return True, ""
+    if refusals_ok:
+        why = f"the egress proxy refuses what it should, but it could not open a tunnel to {DNS_PROBE_NAME} (answer {listed}): this server needs DNS and a public route"
+    else:
+        why = "the egress proxy did not refuse a request it must refuse (policy wall)"
+    _check(checks, "egress_proxy", False, detail)
+    return False, why
 
 
 def write_status(status):
@@ -1544,6 +1552,26 @@ PERSON_SLOTS_ROOT = SLOTS_ROOT / "person"
 SECRETS_ROOT = RUN_ROOT / "secrets"
 HANDOFF_ROOT = RUN_ROOT / "handoff"
 RUNS_ROOT = RUN_ROOT / "runs"
+# 1.18.24 (AD-65 Patch B): the egress door. One socket-activated proxy per run that has allowed_hosts (templates written by install.sh).
+EGRESS_DOOR_ROOT = RUN_ROOT / "egress-door"  # root 0700; <run id>/door.sock is bound read only into the run at /run/egress
+EGRESS_CONFIG_ROOT = RUN_ROOT / "egress-config"  # root 0700; <run id>.json is the proxy's LoadCredential
+EGRESS_STATE_ROOT = Path("/run/tec-tac-sbx-egress")  # RuntimeDirectory of the proxy service: <run id>/audit.jsonl
+EGRESS_BIND_TARGET = "/run/egress"
+EGRESS_UNIT_PREFIX = "tec-tac-sandbox-egress@"
+EGRESS_PROXY_PORT = 3128  # the in-unit forwarder's port (127.0.0.1, inside the run's own network space)
+EGRESS_PROXY_URL = f"http://127.0.0.1:{EGRESS_PROXY_PORT}"
+EGRESS_AUDIT_NAME = "audit.jsonl"
+EGRESS_AUDIT_MAX_BYTES = 256 * 1024
+EGRESS_AUDIT_MAX_ROWS = 200
+EGRESS_START_SECONDS = 20
+EGRESS_LIMITS = {"tunnels_live": 16, "tunnels_total": 100, "bytes_total": 256 * 1024 * 1024, "connect_seconds": 10, "idle_seconds": 60, "head_bytes": 8192,
+                 "head_seconds": 10}
+EGRESS_REASONS = frozenset({
+    "listed", "method", "malformed", "head_too_large", "head_too_slow", "port", "ip_literal", "local_name", "not_listed", "limit",
+    "resolve_failed", "address_blocked", "connect_failed", "connect_timeout", "run_limit", "idle", "closed",
+})
+EGRESS_HOST_RE = re.compile(r"^[A-Za-z0-9.-]{1,253}$")
+PROXY_ENV_NAMES = ("HTTPS_PROXY", "https_proxy")  # set only for a run that has allowed_hosts
 CANARY_FILE = STATE_ROOT / "canary.json"
 CANARY_MARKERS_FILE = RUN_ROOT / "canary-markers.json"
 HELPER_COMMAND = "/usr/local/sbin/tec-tac-sandbox"
@@ -1553,8 +1581,7 @@ UNIT_PYTHON = "/usr/bin/python3"
 CHILD_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin"}  # the only environment a child of the helper gets
 WORK_DIR = "/work"
 PROC_MEMINFO = "/proc/meminfo"
-RESOLV_CONF = "/etc/resolv.conf"  # the host's own file (read only, fallback for the upstream list)
-RESOLV_TARGET = "/etc/resolv.conf"  # where Core's own resolv.conf is bound inside a unit
+RESOLV_CONF = "/etc/resolv.conf"  # the host's own file: the canary reads it for the DNS detail only; a run never sees it
 
 SLICE = "tec-tac-sandbox.slice"
 UNIT_PREFIX = "tectac-sbx-"
@@ -1575,15 +1602,16 @@ SANDBOX_PATH_ENV = "/usr/local/bin:/usr/bin:/bin"
 # (install.sh builds it, check_skeleton re-checks it at every start); only what the runner needs is bound into it, read only.
 SANDBOX_ROOT = LIB_ROOT / "root"
 MERGED_USR_NAMES = ("bin", "sbin", "lib", "lib64", "lib32", "libx32")  # a symlink into /usr on a merged-/usr host, a real folder (then bound) otherwise
-SKELETON_DIRS = ("usr", "work", "tmp", "var", "var/tmp", "proc", "sys", "dev", "run", "run/systemd", "run/systemd/incoming", "root", "opt", "opt/tec-tac", "opt/tec-tac/runtimes", "etc",
+SKELETON_DIRS = ("usr", "work", "tmp", "var", "var/tmp", "proc", "sys", "dev", "run", "run/systemd", "run/systemd/incoming", "run/egress", "root", "opt", "opt/tec-tac", "opt/tec-tac/runtimes", "etc",
                  "etc/ssl", "etc/ssl/certs", "etc/ca-certificates")
-SKELETON_FILES = ("etc/passwd", "etc/group", "etc/ld.so.cache", "etc/nsswitch.conf", "etc/localtime", "etc/resolv.conf")
+SKELETON_FILES = ("etc/passwd", "etc/group", "etc/ld.so.cache", "etc/nsswitch.conf", "etc/localtime")  # 1.18.24: no resolv.conf: a run has no name server
 SKELETON_TOP = ("usr", "work", "tmp", "var", "proc", "sys", "dev", "run", "root", "opt", "etc")  # merged-/usr names are added per host
 # 1.18.13: a real run also leaves run/systemd/incoming (systemd makes it inside RootDirectory=); both are empty mount points, nothing else in run
-SKELETON_ENTRIES = {"": SKELETON_TOP, "var": ("tmp",), "run": ("systemd",), "run/systemd": ("incoming",), "opt": ("tec-tac",), "opt/tec-tac": ("runtimes",), "etc": ("ssl", "ca-certificates", "passwd", "group", "ld.so.cache", "nsswitch.conf", "localtime", "resolv.conf"),
+# 1.18.24: run/egress is the empty mount point of the per-run egress door folder (the only bind that holds a socket)
+SKELETON_ENTRIES = {"": SKELETON_TOP, "var": ("tmp",), "run": ("systemd", "egress"), "run/systemd": ("incoming",), "opt": ("tec-tac",), "opt/tec-tac": ("runtimes",), "etc": ("ssl", "ca-certificates", "passwd", "group", "ld.so.cache", "nsswitch.conf", "localtime"),
                     "etc/ssl": ("certs",),
-                    **{name: () for name in ("usr", "work", "tmp", "var/tmp", "proc", "sys", "dev", "run/systemd/incoming", "root", "etc/ssl/certs", "etc/ca-certificates")}}
-BASE_BINDS_REQUIRED = ("/etc/ssl/certs", "/etc/passwd", "/etc/group", "/etc/ld.so.cache")  # 1.17.123: /etc/resolv.conf is Core's own file, bound below
+                    **{name: () for name in ("usr", "work", "tmp", "var/tmp", "proc", "sys", "dev", "run/systemd/incoming", "run/egress", "root", "etc/ssl/certs", "etc/ca-certificates")}}
+BASE_BINDS_REQUIRED = ("/etc/ssl/certs", "/etc/passwd", "/etc/group", "/etc/ld.so.cache")  # 1.18.24: no resolv.conf at all
 BASE_BINDS_OPTIONAL = ("/etc/ca-certificates", "/etc/nsswitch.conf", "/etc/localtime")
 CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt"
 
@@ -1932,14 +1960,6 @@ def ready_status():
     return status
 
 
-def usable_resolvers(status, text, local):
-    """The upstream resolvers a run may use: the IPv4 upstreams listed right now (``read_upstream_text``) that are also in the selftest's proven
-    list and are still outside the denied ranges, this server's own addresses and its gateways. They become the Core-owned resolv.conf.
-    An empty list means ``sandbox_unavailable``. IPv6 and zone-id addresses are skipped (a run has no IPv6)."""
-    proven = status.get("resolvers") if isinstance(status.get("resolvers"), list) else []
-    return [a for a in parse_resolvers(text, ipv4_only=True) if a in proven and not upstream_problem(a, local)]
-
-
 # -------------------------------------------------------------------------------------------------------- the unit builder
 def unit_name(run_id):
     return UNIT_PREFIX + run_id
@@ -1956,7 +1976,7 @@ UNIT_FIXED_PROPERTIES = (  # 1.18.8: Core constants only; no module text, number
     "DynamicUser=yes", "ProtectSystem=strict", "ProtectHome=yes", "PrivateTmp=yes", "PrivateDevices=yes", "PrivateIPC=yes",
     "NoNewPrivileges=yes", "CapabilityBoundingSet=", "AmbientCapabilities=",
     "SystemCallFilter=@system-service", "SystemCallFilter=~@privileged @resources", "SystemCallArchitectures=native",
-    "SystemCallErrorNumber=EPERM", "RestrictAddressFamilies=AF_INET", "RestrictNamespaces=yes", "RestrictRealtime=yes",
+    "SystemCallErrorNumber=EPERM", *NETWORK_PROPERTIES, "RestrictNamespaces=yes", "RestrictRealtime=yes",
     "RestrictSUIDSGID=yes", "LockPersonality=yes", "MemoryDenyWriteExecute=no", "ProtectKernelTunables=yes",
     "ProtectKernelModules=yes", "ProtectKernelLogs=yes", "ProtectControlGroups=yes", "ProtectClock=yes", "ProtectHostname=yes",
     "ProtectProc=invisible", "ProcSubset=pid", "UMask=0077", "KillMode=control-group", "SendSIGKILL=yes",
@@ -2013,20 +2033,20 @@ def _module_folders(row):
     return runtime, str(runner_base(owner)), str(LAUNCHER_FILE)
 
 
-def check_unit_properties(props, row, run_id, *, resolv_file):
+def check_unit_properties(props, row, run_id):
     """1.18.8: the closed set. Every emitted property must be fixed text, a number, a validated module id, the hex run id or one of Core's
     own folders. A later edit that adds a module string (or anything else) makes every start fail here instead of reaching systemd."""
     runtime, runner_folder, launcher = _module_folders(row)
     exact = set(UNIT_FIXED_PROPERTIES) | set(file_view_properties(lambda path: True)) | {
         f"BindReadOnlyPaths={path}" for path in (*BASE_BINDS_OPTIONAL, *("/" + name for name in MERGED_USR_NAMES), runner_folder, launcher, runtime) if path}
-    exact.add(f"BindReadOnlyPaths={resolv_file}:{RESOLV_TARGET}")
+    if row_allowed_hosts(row):  # 1.18.24: the one extra bind, built from the hex run id only
+        exact.add(f"BindReadOnlyPaths={egress_door_folder(run_id)}:{EGRESS_BIND_TARGET}")
     exact.add("MemoryZSwapMax=0")
     exact.add(f"WorkingDirectory={WORK_DIR}")
     folder = SECRETS_ROOT / run_id
     patterns = [re.compile(item) for item in (
         r"MemoryMax=[0-9]{1,6}M", r"CPUQuota=[0-9]{1,5}%", r"TasksMax=[0-9]{1,6}", r"LimitFSIZE=[0-9]{1,12}", r"RuntimeMaxSec=[0-9]{1,6}",
         re.escape(f"TemporaryFileSystem={WORK_DIR}:rw,nosuid,nodev,size=") + r"[0-9]{1,6}M,mode=1777",
-        re.escape("IPAddressDeny=" + ADDRESS_DENY) + r"(?: [0-9a-f.:]{2,45}/[0-9]{1,3}){0," + str(LOCAL_DENY_MAX + 8) + "}",
         re.escape("LoadCredential=cred") + r"[0-9]:" + re.escape(str(folder / "cred")) + r"[0-9]")]
     for item in props:
         if item.startswith("Exec"):  # 1.18.14: a property command sees only the skeleton root, so none is ever allowed (never a `+` command)
@@ -2035,30 +2055,24 @@ def check_unit_properties(props, row, run_id, *, resolv_file):
             raise Refusal("sandbox_unavailable", "the unit would carry a property that is not on Core's fixed list")
 
 
-def build_properties(row, run_id, *, credential_names, exists=os.path.lexists, deny_extra=(), resolv_file=None, zswap=False):
+def build_properties(row, run_id, *, credential_names, exists=os.path.lexists, zswap=False):
     """Every property of the unit, as ``Key=Value`` strings. 1.18.8 (AD-65): built from Core constants, the validated module id and the hex
     run id only; no module-supplied string (a runtime root path, a credential name) is ever part of a property, and the last step checks
     the whole list against a closed set. Argv and environment values travel as arguments, never as properties.
-    ``deny_extra`` is this server's own addresses and gateways as ``<address>/32`` or ``/128`` (``local_deny``), added to IPAddressDeny;
-    ``resolv_file`` is Core's own resolv.conf, bound read only over /etc/resolv.conf; ``zswap`` adds MemoryZSwapMax=0 (systemd 255 or newer).
-    1.17.123: there is no IPAddressAllow at all."""
+    1.18.24 (AD-65 Patch B): the unit has its own, empty network space (PrivateNetwork=yes) and AF_INET plus AF_UNIX; there is no IPAddressDeny,
+    no resolv.conf and no resolver address. A row with ``allowed_hosts`` gets exactly one more bind: the per-run egress door folder, read only,
+    at /run/egress (built from the hex run id only). ``zswap`` adds MemoryZSwapMax=0 (systemd 255 or newer)."""
     if not _plain_id(run_id, RUN_ID_RE):
         raise Refusal("invalid_input", "the run id is not valid")
     limits = row["limits"]
     memory, cpu, tasks, seconds, scratch = (_limit_value(limits, name) for name in ("memory_mb", "cpu_percent", "tasks", "run_seconds", "scratch_mb"))
-    resolv_file = str(resolv_file or core_resolv_file())
     view = file_view_properties(exists)
-    if not _bind_path_safe(resolv_file) or not exists(resolv_file):
-        raise Refusal("sandbox_unavailable", "Core's resolv.conf for the run is missing")
-    deny_extra = list(deny_extra)
-    for item in deny_extra:  # numeric only: an address and its prefix length, nothing else ever reaches IPAddressDeny=
-        address, _slash, length = str(item).partition("/")
-        try:
-            numeric = str(ipaddress.ip_address(address)) == address and length == ("128" if ":" in address else "32")
-        except ValueError:
-            numeric = False
-        if not numeric:
-            raise Refusal("sandbox_unavailable", "an address for the deny list is not numeric")
+    hosts = row_allowed_hosts(row)
+    door = None
+    if hosts:
+        door = str(egress_door_folder(run_id))
+        if not _bind_path_safe(door):  # the folder is made by egress_start just before the unit; a bind of a missing folder fails loudly
+            raise Refusal("sandbox_unavailable", "the egress door path is not usable")
     runtime, runner_folder, launcher = _module_folders(row)
     binds = [path for path in (runtime, runner_folder, launcher) if path]
     for path in binds:
@@ -2070,25 +2084,40 @@ def build_properties(row, run_id, *, credential_names, exists=os.path.lexists, d
         f"TemporaryFileSystem={WORK_DIR}:rw,nosuid,nodev,size={scratch}M,mode=1777", f"WorkingDirectory={WORK_DIR}",
     ]
     props += [f"BindReadOnlyPaths={path}" for path in binds]
-    props.append(f"BindReadOnlyPaths={resolv_file}:{RESOLV_TARGET}")
-    props.append("IPAddressDeny=" + " ".join([ADDRESS_DENY, *deny_extra]))
+    if door:
+        props.append(f"BindReadOnlyPaths={door}:{EGRESS_BIND_TARGET}")
     if zswap:
         props.insert(props.index("MemorySwapMax=0") + 1, "MemoryZSwapMax=0")
     folder = SECRETS_ROOT / run_id
     slots = credential_slots(credential_names)
     props += [f"LoadCredential={slot}:{folder / slot}" for slot, _name in slots]
     # 1.18.14: no Exec* property. The helper removes the folder once the unit holds its copy (remove_credentials_when_active).
-    check_unit_properties(props, row, run_id, resolv_file=resolv_file)
+    check_unit_properties(props, row, run_id)
     return props
 
 
+def row_allowed_hosts(row):
+    """The runner's ``allowed_hosts`` after the registration rules are applied again to the registry row (a row that holds an invalid list
+    is not a runner this start may run). [] when it declares none: that run gets no door, no forwarder and no proxy variable."""
+    hosts = row.get("allowed_hosts")
+    if hosts is None:
+        return []
+    try:
+        return check_allowed_hosts(hosts, "runner")
+    except (RuntimeError, TypeError) as exc:
+        raise Refusal("runtime_unverified") from exc
+
+
 def build_environment(row):
-    """The manifest's fixed map first, the reserved names last, so a manifest can never override them (the registry refuses them too)."""
+    """The manifest's fixed map first, the reserved names last, so a manifest can never override them (the registry refuses them too).
+    1.18.24: HTTPS_PROXY and https_proxy point at the in-unit forwarder (127.0.0.1:3128) only for a row that has allowed_hosts."""
     env = {name: str(value) for name, value in (row.get("environment") or {}).items() if name not in RESERVED_ENV}
     env.update({
         "HOME": f"{WORK_DIR}/home", "TMPDIR": f"{WORK_DIR}/tmp", "SANDBOX_WORK": WORK_DIR, "SANDBOX_OUT": f"{WORK_DIR}/out",
         "SSL_CERT_FILE": CA_BUNDLE, "PATH": SANDBOX_PATH_ENV,
     })
+    if row_allowed_hosts(row):
+        env.update({name: EGRESS_PROXY_URL for name in PROXY_ENV_NAMES})
     return env
 
 
@@ -2098,13 +2127,14 @@ def _exec_escape(text):
     return str(text).replace("$", "$$")
 
 
-def build_argv(row, run_id, parameters, *, credential_names, exists=os.path.lexists, deny_extra=(), resolv_file=None, zswap=False):
+def build_argv(row, run_id, parameters, *, credential_names, exists=os.path.lexists, zswap=False):
     argv = [*SYSTEMD_RUN, "--pipe", "--wait", "--quiet", f"--unit={unit_name(run_id)}", f"--slice={SLICE}"]  # 1.18.17: no --collect, systemd keeps the unit record until the helper has read it
-    argv += [f"--property={item}" for item in build_properties(row, run_id, credential_names=credential_names, exists=exists, deny_extra=deny_extra,
-                                                                resolv_file=resolv_file, zswap=zswap)]
+    argv += [f"--property={item}" for item in build_properties(row, run_id, credential_names=credential_names, exists=exists, zswap=zswap)]
     argv += [f"--setenv={name}={value}" for name, value in build_environment(row).items()]
     argv.append("--")
     command = [UNIT_PYTHON, "-I", str(LAUNCHER_FILE)]
+    if row_allowed_hosts(row):
+        command.append("--egress")  # 1.18.24: the launcher binds 127.0.0.1:3128 and relays it to /run/egress/door.sock
     command += [f"--credential={name}" for _slot, name in credential_slots(credential_names)]  # 1.18.8: the declared name only travels here
     if row.get("credential_return"):
         command.append("--return-credential")
@@ -2498,6 +2528,186 @@ def stop_unit(run_id):
     return systemctl("stop", unit_name(run_id) + ".service")[0] == 0
 
 
+# ------------------------------------------------------------------------------------------------ the egress door (1.18.24, AD-65 Patch B)
+def _egress_id(run_id):
+    if not _plain_id(run_id, RUN_ID_RE):
+        raise Refusal("invalid_input", "the run id is not valid")
+    return run_id
+
+
+def egress_unit(run_id, kind):
+    """``tec-tac-sandbox-egress@<run id>.socket`` or ``.service``: the instance name is the validated 32-hex run id and nothing else."""
+    if kind not in ("socket", "service"):
+        raise ValueError("kind")
+    return f"{EGRESS_UNIT_PREFIX}{_egress_id(run_id)}.{kind}"
+
+
+def egress_door_folder(run_id):
+    return EGRESS_DOOR_ROOT / _egress_id(run_id)
+
+
+def egress_door_socket(run_id):
+    return egress_door_folder(run_id) / "door.sock"
+
+
+def egress_config_path(run_id):
+    return EGRESS_CONFIG_ROOT / f"{_egress_id(run_id)}.json"
+
+
+def egress_audit_path(run_id):
+    return EGRESS_STATE_ROOT / _egress_id(run_id) / EGRESS_AUDIT_NAME
+
+
+def egress_config_bytes(hosts, local, fqdn):
+    """The proxy's per-run configuration (root 0600, handed in through LoadCredential): the allowed hosts, this server's own addresses and
+    gateways, this server's own name, and the run limits. No credential, no module text beyond the validated host list."""
+    payload = {"allowed_hosts": list(hosts), "own": list(local.get("addresses", [])), "gateways": list(local.get("gateways", [])),
+               "fqdn": str(fqdn or "")[:253], "limits": dict(EGRESS_LIMITS)}
+    return (json.dumps(payload, sort_keys=True) + "\n").encode("utf-8")
+
+
+def _egress_cmd(run_cmd, *args):
+    """One systemctl call: through the helper's own ``systemctl`` (fixed environment), or through ``run_cmd`` (the selftest's runner)."""
+    if run_cmd is None:
+        return systemctl(*args)
+    return run_cmd([*SYSTEMCTL, *args])
+
+
+def egress_stop(run_id, *, run_cmd=None):
+    """Stop the proxy's service and socket and forget a failed state. Never raises: this is the clean-up path."""
+    try:
+        _egress_cmd(run_cmd, "stop", egress_unit(run_id, "service"), egress_unit(run_id, "socket"))
+        _egress_cmd(run_cmd, "reset-failed", egress_unit(run_id, "service"), egress_unit(run_id, "socket"))
+    except (Refusal, OSError, ValueError):
+        pass
+
+
+def egress_clean(run_id):
+    """Remove the run's door folder, proxy configuration and audit state. Only paths built from the validated run id; never raises."""
+    try:
+        shutil.rmtree(egress_door_folder(run_id), ignore_errors=True)
+        egress_config_path(run_id).unlink(missing_ok=True)
+        shutil.rmtree(EGRESS_STATE_ROOT / _egress_id(run_id), ignore_errors=True)
+    except (Refusal, OSError):
+        pass
+
+
+def egress_start(row, run_id, local, *, run_cmd=None, fqdn=None):
+    """Start the one door for a run that has allowed_hosts (nothing for a run that has none: no proxy, no forwarder, no variable). Writes the proxy
+    configuration and starts the socket unit before the run unit exists. Fail closed: a door that does not start is ``sandbox_unavailable`` and
+    everything it made is removed. Returns True when a door was started."""
+    hosts = row_allowed_hosts(row)
+    if not hosts:
+        return False
+    _egress_id(run_id)
+    try:
+        for folder, mode in ((EGRESS_DOOR_ROOT, 0o700), (EGRESS_CONFIG_ROOT, 0o700)):
+            folder.mkdir(parents=True, exist_ok=True)
+            os.chmod(folder, mode)
+        door = egress_door_folder(run_id)
+        door.mkdir(exist_ok=True)
+        os.chmod(door, 0o755)  # the run's user walks into this folder (through the bind) to reach the socket; the parent stays 0700
+        if fqdn is None:
+            try:
+                fqdn = socket.getfqdn()
+            except OSError:
+                fqdn = ""
+        _write_root_file(egress_config_path(run_id), egress_config_bytes(hosts, local, fqdn), 0o600)
+    except OSError as exc:
+        egress_clean(run_id)
+        raise Refusal("sandbox_unavailable", "the egress door folder could not be prepared") from exc
+    code, _out, _err = _egress_cmd(run_cmd, "start", egress_unit(run_id, "socket"))
+    try:
+        is_socket = stat.S_ISSOCK(_lstat(egress_door_socket(run_id)).st_mode)
+    except OSError:
+        is_socket = False
+    if code != 0 or not is_socket:
+        egress_stop(run_id, run_cmd=run_cmd)
+        egress_clean(run_id)
+        raise Refusal("sandbox_unavailable", "the egress door could not be started")
+    return True
+
+
+def egress_row(item):
+    """One audit row of the proxy after the strict schema, or None. Exactly host, port, result, reason, up and down; nothing else is kept."""
+    if not isinstance(item, dict) or set(item) != {"host", "port", "result", "reason", "up", "down"}:
+        return None
+    host, port, result, reason, up, down = (item[key] for key in ("host", "port", "result", "reason", "up", "down"))
+    if not isinstance(host, str) or not (host == "<invalid>" or EGRESS_HOST_RE.fullmatch(host)):
+        return None
+    for number in (port, up, down):
+        if isinstance(number, bool) or not isinstance(number, int) or number < 0 or number > 2 ** 40:
+            return None
+    if port > 65535 or result not in ("allowed", "refused") or reason not in EGRESS_REASONS:
+        return None
+    return {"host": host, "port": port, "result": result, "reason": reason, "up": up, "down": down}
+
+
+def parse_egress_audit(data):
+    """(rows, truncated) from the proxy's audit.jsonl bytes: at most 200 valid rows; a malformed, oversized or foreign line is dropped."""
+    rows, truncated = [], False
+    text = data.decode("utf-8", "replace") if isinstance(data, (bytes, bytearray)) else str(data)
+    for line in text.splitlines():
+        if len(rows) >= EGRESS_AUDIT_MAX_ROWS:
+            truncated = True
+            break
+        if not line.strip() or len(line) > 1024:
+            continue
+        try:
+            item = json.loads(line)
+        except ValueError:
+            continue
+        found = egress_row(item)
+        if found is not None:
+            rows.append(found)
+    return rows, truncated
+
+
+def read_egress_audit(run_id):
+    """The proxy's audit rows for the run, read as root with O_NOFOLLOW: a regular file, at most 256 KiB (a longer file is cut at its last whole line
+    and counted as truncated). ([], False) when there is none."""
+    path = egress_audit_path(run_id)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError:
+        return [], False
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return [], False
+        data = os.read(fd, EGRESS_AUDIT_MAX_BYTES + 1)
+    except OSError:
+        return [], False
+    finally:
+        os.close(fd)
+    cut_short = len(data) > EGRESS_AUDIT_MAX_BYTES
+    if cut_short:
+        data = data[:EGRESS_AUDIT_MAX_BYTES]
+        data = data[:data.rfind(b"\n") + 1] if b"\n" in data else b""
+    rows, truncated = parse_egress_audit(data)
+    return rows, truncated or cut_short
+
+
+def egress_counts(rows):
+    return {"allowed": sum(1 for r in rows if r["result"] == "allowed"), "refused": sum(1 for r in rows if r["result"] == "refused"),
+            "bytes": sum(r["up"] + r["down"] for r in rows)}
+
+
+def egress_finish(row, run_id, progress, *, run_cmd=None):
+    """After the run: stop the proxy (it writes what is left), read its audit, write the root audit row ``run.egress`` (counts plus the capped rows)
+    BEFORE ``run.ended``, remember the counts for ``run.ended``, and remove the door, configuration and audit state. Never raises."""
+    try:
+        egress_stop(run_id, run_cmd=run_cmd)
+        rows, truncated = read_egress_audit(run_id)
+        counts = egress_counts(rows)
+        progress["egress"] = counts
+        append_audit_safely("run.egress", {"runner": row["id"], "run_id": run_id, **counts, "truncated": truncated, "rows": rows})
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    finally:
+        egress_clean(run_id)
+
+
 UNIT_RESULTS = frozenset({"success", "exit-code", "signal", "core-dump", "timeout", "oom-kill", "watchdog", "resources", "protocol",
                           "start-limit-hit", "dependency", "skipped", "exec-condition", "capture-failure"})
 UNIT_SHOW_KEYS = ("LoadState", "ActiveState", "Result", "ExecMainCode", "ExecMainStatus")
@@ -2664,21 +2874,19 @@ def launch(row, *, run_id, person, parameters, credentials, input_data, emit, st
     threading.Event set when the caller closed its end. Used by ``--start`` and by the root-only canary. The kill switch is the caller's
     business. Returns the end frame."""
     status = status or ready_status()
-    try:  # 1.17.123: read at every start; unreadable means no run (fail closed)
-        local = local_deny_now()
-    except ValueError as exc:
-        raise Refusal("sandbox_unavailable", "this server's own addresses or gateway could not be read, so the address filter cannot be completed") from exc
-    resolvers = usable_resolvers(status, read_upstream_text(), local)
-    if not resolvers:
-        raise Refusal("sandbox_unavailable", "no upstream name server that the selftest proved is still listed and outside the denied ranges")
+    hosts = row_allowed_hosts(row)  # 1.18.24: a row with no allowed_hosts gets no door, no forwarder and no proxy variable
+    local = None
+    if hosts:
+        try:  # read at every start; unreadable means no run (fail closed)
+            local = local_deny_now()
+        except ValueError as exc:
+            raise Refusal("sandbox_unavailable", "this server's own addresses or gateway could not be read, so the egress door cannot be given them") from exc
     check_runner_ready(row)
     require_skeleton()  # 1.18.8: the allow-list root must still match this server (fail closed)
     prepare_runtime_mount(row)
     values = validate_run_parameters(row["parameters"], parameters)
-    resolv_file = core_resolv_file()
-    _write_root_file(resolv_file, resolv_conf_bytes(resolvers), 0o644)
     zswap = isinstance(status.get("systemd_version"), int) and status["systemd_version"] >= ZSWAP_MIN_SYSTEMD
-    argv = build_argv(row, run_id, values, credential_names=sorted(credentials), deny_extra=local["extra"], resolv_file=resolv_file, zswap=zswap)
+    argv = build_argv(row, run_id, values, credential_names=sorted(credentials), zswap=zswap)
     holder = acquire_slots(person, row, slots_n=slots_n, person_n=person_n, clock=clock, sleep=sleep)
     process = None
     started_at = clock()
@@ -2686,6 +2894,7 @@ def launch(row, *, run_id, person, parameters, credentials, input_data, emit, st
     audited = False
     canary = row.get("owner_module") == CANARY_OWNER
     remover_stop = threading.Event()
+    egress_begun = False
     try:
         RUNS_ROOT.mkdir(parents=True, exist_ok=True)
         _write_private(run_record_path(run_id), _json_bytes({"run_id": run_id, "runner": row["id"], "unit": unit_name(run_id), "at": now(),
@@ -2697,6 +2906,9 @@ def launch(row, *, run_id, person, parameters, credentials, input_data, emit, st
         except OSError as exc:
             raise Refusal("start_failed", "the run could not be recorded in the audit log") from exc
         audited = True
+        if hosts:  # 1.18.24: the door is up before the unit exists; a door that does not start is a refusal and no run
+            egress_begun = True
+            egress_start(row, run_id, local)
         process = _spawn(argv)
         if credentials:  # 1.18.14: the helper removes the folder once the unit holds its copy; the finally below is the fail-closed path
             threading.Thread(target=remove_credentials_noted, daemon=True, kwargs={"stop": remover_stop, "run_id": run_id, "runner": row["id"]},
@@ -2710,6 +2922,8 @@ def launch(row, *, run_id, person, parameters, credentials, input_data, emit, st
                 process.kill()
             except OSError:
                 pass
+        if egress_begun:
+            egress_finish(row, run_id, progress)
         remove_secrets(run_id)
         run_record_path(run_id).unlink(missing_ok=True)
         cancel_flag_path(run_id).unlink(missing_ok=True)
@@ -2731,6 +2945,8 @@ def run_ended_detail(row, run_id, person, canary, progress, elapsed_ms):
         "reason": end.get("reason") or progress.get("reason") or "aborted", "exit": end.get("exit"), "ms": end.get("ms", elapsed_ms),
         "bytes_out": end.get("bytes_out", progress.get("bytes_out")), "bytes_err": end.get("bytes_err", progress.get("bytes_err")),
         "peak_mb": end.get("peak_mb"), "oom_kills": end.get("oom_kills"), "evidence": end.get("evidence"),
+        "egress_allowed": (progress.get("egress") or {}).get("allowed", 0), "egress_refused": (progress.get("egress") or {}).get("refused", 0),
+        "egress_bytes": (progress.get("egress") or {}).get("bytes", 0),
     }
 
 
@@ -3022,7 +3238,7 @@ def stop_command(stdin=None, out=None):
 # secret-free summary to /var/lib/tec-tac/sandbox/canary.json, which status() reports as canary_ok and canary_at.
 CANARY_RUNNER_ID = "core.canary"
 CANARY_OWNER = "core"
-CANARY_GROUPS = ("files", "rootview", "work_hold", "work_peer", "sockets", "loopback", "lan", "dns", "public", "privilege", "writes", "processes",
+CANARY_GROUPS = ("files", "rootview", "work_hold", "work_peer", "sockets", "loopback", "lan", "privilege", "writes", "processes",
                  "mem", "fork", "loop", "scratch", "flood", "abstract", "cred", "sleep", "noop", "runview")
 CANARY_LATENCY_RUNS = 50
 CANARY_LATENCY_TARGET_MS = 400
@@ -3034,8 +3250,8 @@ CANARY_VIEW_FOLDERS = ("/", "/etc", "/var", "/opt", "/opt/tec-tac", "/opt/tec-ta
                        "/usr/local/lib/tec-tac", "/usr/local/lib/tec-tac/sandbox")
 CANARY_VIEW_ALLOWED = {  # 1.18.8: the names a run may see in each folder; the canary run has no module runtime, so runtimes allows nothing
     "/": ("usr", "bin", "sbin", "lib", "lib64", "lib32", "libx32", "etc", "var", "opt", "run", "tmp", "proc", "sys", "dev", "work", "root"),
-    "/etc": ("ssl", "ca-certificates", "passwd", "group", "ld.so.cache", "nsswitch.conf", "localtime", "resolv.conf"),
-    "/var": ("tmp",), "/opt": ("tec-tac",), "/opt/tec-tac": ("runtimes",), "/opt/tec-tac/runtimes": (), "/run": ("credentials", "systemd"),
+    "/etc": ("ssl", "ca-certificates", "passwd", "group", "ld.so.cache", "nsswitch.conf", "localtime"),
+    "/var": ("tmp",), "/opt": ("tec-tac",), "/opt/tec-tac": ("runtimes",), "/opt/tec-tac/runtimes": (), "/run": ("credentials", "systemd", "egress"),
     "/usr/local": ("lib",), "/usr/local/lib": ("tec-tac",), "/usr/local/lib/tec-tac": ("sandbox",),
     "/usr/local/lib/tec-tac/sandbox": ("runners", "canary", "sandbox-launcher.py"),
 }
@@ -3055,17 +3271,16 @@ CANARY_ABSTRACT_SECONDS = 60
 CANARY_ABSTRACT_BUDGET = 49152  # characters of json.dumps(list of names): keeps the whole plan under the runner's 64 KiB stdin read
 CANARY_LOOPBACK_SECONDS = 60  # the loopback group's run time (under the Core ceiling); probes stop at loopback_seconds inside it
 CANARY_LOOPBACK_DEADLINE = 40
-CANARY_SKIP_ALLOWED = ("public tcp 443",)  # the only row that may be SKIPPED (no public route from this server); any other SKIPPED row fails the canary
+CANARY_SKIP_ALLOWED = ()  # 1.18.24: the 'public tcp 443' row is retired (the network group covers it); no row of the normal table may be SKIPPED
 CANARY_REQUIRED = {  # group -> (exact attack names, [(prefix, minimum count)])
     "rootview": (["view " + folder for folder in CANARY_VIEW_FOLDERS] + ["/ lists only the allowed set"], []),
-    "sockets": (["unix socket creation refused (stream)", "unix socket creation refused (dgram)", "unix socket creation refused (seqpacket)",
-                 "unix pathname socket refused", "socketpair round trip", "pipe round trip", "child process with stdio pipes"], [("unix /", 13)]),
+    "sockets": (["unix door path without a door", "socketpair round trip", "pipe round trip", "child process with stdio pipes"], [("unix /", 13)]),
     "privilege": (["setuid(0)", "ptrace attach to parent", "mount", "unshare", "mknod", "raw socket", "write /proc/sys", "load a kernel module"], []),
     "writes": ([], [("write /", 9)]),
     "processes": (["host processes invisible", "pid 1 invisible"], []),
     "mem": (["memory beyond MemoryMax"], []), "fork": (["fork bomb"], []), "scratch": (["scratch past its size"], []),
     "cred": (["credential arrives", "credential mode", "credential not in environment"], []),
-    "dns": (["allowed resolver answers"], [("other resolver ", 1)]), "public": (["public tcp 443"], []), "abstract": ([], [("abstract sockets (", 1)]),
+    "abstract": ([], [("abstract sockets (", 1)]),
     "work_peer": (["another run's /work"], []), "lan": ([], [("udp ", 5), ("tcp ", 5), ("own address ", 4)]),
     "loopback": ([], [("loopback ", 1), ("loopback " + CANARY_STUB + ":", len(CANARY_STUB_PORTS))]),
 }
@@ -3395,17 +3610,6 @@ def run_canary(*, status=None, collect=None, outside=None):
     table = []
     if status.get("ready") is not True:
         return [{"wall": "Selftest", "attack": "selftest ready", "expected": "ready", "actual": status.get("reason", "not ready"), "verdict": "NOT RUN"}]
-    resolver = status.get("resolver") or ""
-    proven = status.get("resolvers") if isinstance(status.get("resolvers"), list) else []
-    try:
-        resolv_text = Path(RESOLV_CONF).read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        resolv_text = ""
-    # 1.17.123: the host's own resolv.conf entries (the stub, any private upstream) are not reachable from a run, so each must be dropped;
-    # the stub is always tested, so the row exists on every server and is never SKIPPED
-    others = [a for a in parse_resolvers(resolv_text, ipv4_only=True) if a not in proven]
-    if CANARY_STUB not in others:
-        others.append(CANARY_STUB)
     _c, ss_text, _e = outside.run_cmd(["ss", "-ltnH"])
     ports, _by_address = parse_listening(ss_text)
     try:
@@ -3451,8 +3655,6 @@ def run_canary(*, status=None, collect=None, outside=None):
               {"ports": ports, "stub": CANARY_STUB, "stub_ports": stub_ports[:200], "loopback_seconds": CANARY_LOOPBACK_DEADLINE},
               run_seconds=CANARY_LOOPBACK_SECONDS)
         group("LAN", "lan", "dropped (EPERM)", {"lan": list(CANARY_LAN_TARGETS), "own": own, "gateways": gateways}, plan_names=lan_names)
-        group("DNS", "dns", "the upstream answers directly; the host's own entries dropped", {"resolver": resolver, "other_resolvers": others})
-        group("Public", "public", "TCP 443 works (SKIPPED without a public route)", {"public": CANARY_PUBLIC_TARGET})
         group("Privilege", "privilege", "EPERM")
         marker = RUN_MARKER_PREFIX + secrets.token_hex(8)
         written = group("Writes", "writes", "read-only or private", {"run_marker": marker})
@@ -4187,8 +4389,10 @@ def sweep(min_age=STALE_SECONDS):
             if entry.name.startswith(SELFTEST_PREFIX) and entry.is_dir() and not entry.is_symlink():
                 shutil.rmtree(entry, ignore_errors=True)
                 removed.append(entry.name)
-    for folder in (SECRETS_ROOT, HANDOFF_ROOT, RUNS_ROOT):
-        if not folder.is_dir() or folder.is_symlink():
+    egress_folders = (EGRESS_DOOR_ROOT, EGRESS_CONFIG_ROOT, EGRESS_STATE_ROOT)
+    for folder in (SECRETS_ROOT, HANDOFF_ROOT, RUNS_ROOT, *egress_folders):
+        # the proxy's RuntimeDirectory is a symlink into /run/private (systemd makes it for a DynamicUser): its entries are still swept
+        if not folder.is_dir() or (folder.is_symlink() and folder != EGRESS_STATE_ROOT):
             continue
         for entry in sorted(folder.iterdir()):
             run_id = entry.name.split(".")[0]
@@ -4196,6 +4400,8 @@ def sweep(min_age=STALE_SECONDS):
                 continue  # a live run (or one that is still starting) keeps its files
             if folder == RUNS_ROOT:
                 note_swept_run(entry)
+            if folder in egress_folders and _plain_id(run_id, RUN_ID_RE):
+                egress_stop(run_id)  # a stale instance: its units are stopped before its files go
             if entry.is_dir() and not entry.is_symlink():
                 shutil.rmtree(entry, ignore_errors=True)
             else:

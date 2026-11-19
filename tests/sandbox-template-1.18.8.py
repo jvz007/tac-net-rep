@@ -124,9 +124,8 @@ must(sorted(p.name for p in folder.iterdir()) == ["cred0", "cred1"] and (folder 
 sh.remove_secrets(RUN_ID)
 
 # ---- the closed set
-resolv = str(sh.core_resolv_file())
-good = props_of(plain, credential_names=["auth"], deny_extra=["203.0.113.5/32", "2001:db8::5/128"], zswap=True)
-sh.check_unit_properties(good, plain, RUN_ID, resolv_file=resolv)
+good = props_of(plain, credential_names=["auth"], zswap=True)  # 1.18.24: no deny list and no resolv.conf bind any more
+sh.check_unit_properties(good, plain, RUN_ID)
 folder_text = str(sh.SECRETS_ROOT / RUN_ID)
 INJECTED = [
     "Environment=X=1", "User=root", "Group=root", "ExecStart=/bin/sh", "PrivateNetwork=no", "BindPaths=/etc", "ReadWritePaths=/etc", "BindReadOnlyPaths=/etc/shadow",
@@ -136,12 +135,12 @@ INJECTED = [
     "MemoryMax=1G", "MemoryMax=infinity", "CPUQuota=100", "TasksMax=infinity", "RuntimeMaxSec=1e9", "LimitFSIZE=-1", "TemporaryFileSystem=/etc:rw",
     f"TemporaryFileSystem={sh.WORK_DIR}:rw,nosuid,nodev,size=1G,mode=1777", "IPAddressDeny=any", "IPAddressAllow=0.0.0.0/0",
     "IPAddressDeny=" + sh.ADDRESS_DENY + " ;evil", "IPAddressDeny=" + sh.ADDRESS_DENY + " 10.0.0.1/32\nUser=root", "RootDirectory=/", "ProtectSystem=no",
-    "WorkingDirectory=/etc", "DynamicUser=no", "RestrictAddressFamilies=AF_INET AF_UNIX", "SystemCallFilter=@all", "NoNewPrivileges=no",
+    "WorkingDirectory=/etc", "DynamicUser=no", "RestrictAddressFamilies=AF_INET6", "SystemCallFilter=@all", "NoNewPrivileges=no",
 ]
 for extra in INJECTED:
     for position in (0, len(good)):
         try:
-            sh.check_unit_properties(good[:position] + [extra] + good[position:], plain, RUN_ID, resolv_file=resolv)
+            sh.check_unit_properties(good[:position] + [extra] + good[position:], plain, RUN_ID)
             raise AssertionError(f"an injected property was accepted: {extra!r}")
         except sh.Refusal as exc:
             must(exc.code == "sandbox_unavailable" and "fixed list" in exc.message, (extra, exc.code, exc.message))

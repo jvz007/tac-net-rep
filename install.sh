@@ -1093,6 +1093,12 @@ mkdir -p "${SANDBOX_LIB}/canary"
 chown root:root "${SANDBOX_LIB}/canary"
 chmod 0755 "${SANDBOX_LIB}/canary"
 install_root_script "${REPO_ROOT}/scripts/sandbox-launcher.py" "${SANDBOX_LIB}/sandbox-launcher.py"
+# 1.18.24 (AD-65 Patch B): the egress door. A run has its own, empty network space and reaches the network only through this proxy, one
+# socket-activated instance per run (the helper starts and stops tec-tac-sandbox-egress@<run id>.socket; the instance name is the validated
+# 32-hex run id). The units are static templates: nothing in them comes from a module.
+install_root_script "${REPO_ROOT}/scripts/sandbox-egress.py" "${SANDBOX_LIB}/sandbox-egress.py"
+SANDBOX_EGRESS_SOCKET="/etc/systemd/system/tec-tac-sandbox-egress@.socket"
+SANDBOX_EGRESS_SERVICE="/etc/systemd/system/tec-tac-sandbox-egress@.service"
 install_root_script "${REPO_ROOT}/scripts/sandbox-canary-runner.py" "${SANDBOX_LIB}/canary/sandbox-canary-runner.py"
 # 1.18.8: the sandbox root. A run no longer gets the host's file system with a list of hidden folders: its root (RootDirectory=) is this
 # Core-made skeleton of EMPTY mount points, and only what a runner needs is bound into it, read only. The skeleton is rebuilt in place on every
@@ -1103,10 +1109,10 @@ install_root_script "${REPO_ROOT}/scripts/sandbox-canary-runner.py" "${SANDBOX_L
 # Nothing here removes anything outside ${SANDBOX_ROOT_DIR}: only entries found by find under it, with rm -f (links, files) or rmdir.
 SANDBOX_ROOT_DIR="${SANDBOX_LIB}/root"
 declare -A SANDBOX_SKEL=()
-for sandbox_entry in usr work tmp var var/tmp proc sys dev run run/systemd run/systemd/incoming root opt opt/tec-tac opt/tec-tac/runtimes etc etc/ssl etc/ssl/certs etc/ca-certificates; do
+for sandbox_entry in usr work tmp var var/tmp proc sys dev run run/systemd run/systemd/incoming run/egress root opt opt/tec-tac opt/tec-tac/runtimes etc etc/ssl etc/ssl/certs etc/ca-certificates; do
     SANDBOX_SKEL["${sandbox_entry}"]="d"
 done
-for sandbox_entry in etc/passwd etc/group etc/ld.so.cache etc/nsswitch.conf etc/localtime etc/resolv.conf; do
+for sandbox_entry in etc/passwd etc/group etc/ld.so.cache etc/nsswitch.conf etc/localtime; do
     SANDBOX_SKEL["${sandbox_entry}"]="f"
 done
 for sandbox_entry in bin sbin lib lib64 lib32 libx32; do
@@ -1191,6 +1197,71 @@ MemoryMax=6G
 MemorySwapMax=0
 TasksMax=2048
 EOF
+# The egress door templates. The socket lives in a per-run folder below a root 0700 parent (the helper makes both); only the run, through its own
+# read-only bind of that one folder, can reach it. The service runs as its own dynamic user with the run's configuration as a credential, no
+# capabilities, a strict system call filter and a second wall of its own: the numeric private ranges are denied by address and only the
+# systemd-resolved stub (127.0.0.53) is allowed through, so a flaw in its own checks still cannot reach loopback, the LAN or another service.
+cat > "${SANDBOX_EGRESS_SOCKET}" <<EOF
+[Unit]
+Description=Tec-Tac sandbox egress door %i
+
+[Socket]
+ListenStream=/run/tec-tac/sandbox/egress-door/%i/door.sock
+SocketMode=0666
+DirectoryMode=0755
+Accept=no
+RemoveOnStop=yes
+EOF
+cat > "${SANDBOX_EGRESS_SERVICE}" <<EOF
+[Unit]
+Description=Tec-Tac sandbox egress proxy %i
+RefuseManualStart=yes
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I ${SANDBOX_LIB}/sandbox-egress.py
+DynamicUser=yes
+LoadCredential=run.json:/run/tec-tac/sandbox/egress-config/%i.json
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=64M
+MemorySwapMax=0
+TasksMax=64
+LimitNOFILE=256
+LimitCORE=0
+UMask=0077
+RuntimeMaxSec=720
+IPAddressDeny=127.0.0.0/8 ::1/128 169.254.0.0/16 fe80::/10 224.0.0.0/4 ff00::/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7
+IPAddressAllow=127.0.0.53/32
+RuntimeDirectory=tec-tac-sbx-egress/%i
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+KillMode=control-group
+EOF
+chown root:root "${SANDBOX_EGRESS_SOCKET}" "${SANDBOX_EGRESS_SERVICE}"
+chmod 0644 "${SANDBOX_EGRESS_SOCKET}" "${SANDBOX_EGRESS_SERVICE}"
 # Boot and daily: check the runtime folders of every registered program again, and remove stray selftest folders.
 cat > "${SANDBOX_SWEEP_SERVICE}" <<EOF
 [Unit]

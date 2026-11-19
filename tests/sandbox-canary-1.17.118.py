@@ -43,8 +43,8 @@ must(sh.parse_runner_rows(b"\xff\xfeCANARYROW\tz\tOK\tfine\n") != [] or True, "b
 table = sh.group_table("Privilege", "privilege", "EPERM", [{"attack": "setuid(0)", "tag": "OK", "actual": "EPERM"}])
 verdicts = {r["attack"]: r["verdict"] for r in table}
 must(verdicts["setuid(0)"] == "OK" and verdicts["mount"] == "NOT RUN" and verdicts["raw socket"] == "NOT RUN" and len(table) == 8, verdicts)
-table = sh.group_table("Public", "public", "x", [{"attack": "public tcp 443", "tag": "SKIP", "actual": "no public route"}])
-must(table[0]["verdict"] == "SKIPPED" and table[0]["verdict"] != "OK", table)
+table = sh.group_table("Sockets", "sockets", "x", [{"attack": "unix door path without a door", "tag": "SKIP", "actual": "x"}])
+must(table[0]["verdict"] == "SKIPPED" and table[0]["verdict"] != "OK", table)  # 1.18.24: the public group is retired; any SKIP is still SKIPPED, never OK
 table = sh.group_table("Sockets", "sockets", "x", [{"attack": "unix /a", "tag": "OK", "actual": "ENOENT"}] * 5)
 must(any(r["verdict"] == "NOT RUN" and "5 of 13" in r["actual"] for r in table), table)
 table = sh.group_table("Files", "files", "x", [], plan_names=["read /etc/x"])
@@ -54,7 +54,8 @@ must(sh.group_table("Limits", "unknown-group", "x", [])[0]["verdict"] == "NOT RU
 S = sh.canary_summary
 ok_row = {"verdict": "OK"}
 must(S([ok_row] * 3)[0] is True, "all OK")
-must(S([ok_row, {"verdict": "SKIPPED", "attack": "public tcp 443"}, {"verdict": "WARN"}])[0] is True and S([{"verdict": "SKIPPED"}])[1]["OK"] == 0, "a skipped 'public tcp 443' and WARN do not fail, and are not counted OK")
+must(S([ok_row, {"verdict": "WARN"}])[0] is True and S([{"verdict": "SKIPPED"}])[1]["OK"] == 0, "WARN does not fail, and is not counted OK")
+must(S([ok_row, {"verdict": "SKIPPED", "attack": "public tcp 443"}])[0] is False, "1.18.24: no row may be skipped (the 'public tcp 443' exception is gone with the retired group)")
 must(S([ok_row, {"verdict": "SKIPPED", "attack": "abstract sockets"}])[0] is False, "1.17.123: a skipped security row fails the canary")
 must(S([ok_row, {"verdict": "ATTACK SUCCEEDED"}])[0] is False, "a succeeded attack fails")
 must(S([ok_row, {"verdict": "NOT RUN"}])[0] is False, "a probe that did not run fails")
@@ -67,9 +68,8 @@ def lines(*pairs):
 
 
 FILES_SOCKS = [(f"unix /s{k}", "OK", "ENOENT") for k in range(13)] + [
-    (f"unix socket creation refused ({k})", "OK", "EAFNOSUPPORT") for k in ("stream", "dgram", "seqpacket")] + [
-    ("unix pathname socket refused", "OK", "EAFNOSUPPORT"), ("socketpair round trip", "OK", "worked"), ("pipe round trip", "OK", "worked"),
-    ("child process with stdio pipes", "OK", "worked")]  # 1.17.124: the filter rows and the positive controls
+    ("unix door path without a door", "OK", "ENOENT"), ("socketpair round trip", "OK", "worked"), ("pipe round trip", "OK", "worked"),
+    ("child process with stdio pipes", "OK", "worked")]  # 1.18.24: the door row (the filter rows are retired) and the positive controls
 GOOD = {
     "files": None, "rootview": lines(*[("view " + f, "OK", "x") for f in sh.CANARY_VIEW_FOLDERS], ("/ lists only the allowed set", "OK", "x")),  # 1.18.8
     "work_peer": lines(("another run's /work", "OK", "not found")), "sockets": lines(*FILES_SOCKS),
@@ -77,8 +77,6 @@ GOOD = {
     "lan": lines(*([(f"udp {a}", "OK", "eperm") for a in range(5)] + [(f"tcp {a}:80", "OK", "EPERM") for a in range(5)]
                    + [(f"own address 192.168.1.5 tcp {p}", "OK", "timeout") for p in (22, 80, 443)] + [("own address 192.168.1.5 udp", "OK", "eperm")]
                    + [(f"gateway 192.168.1.1 tcp {p}", "OK", "timeout") for p in (80, 443)] + [("gateway 192.168.1.1 udp", "OK", "eperm")])),
-    "dns": lines(("allowed resolver answers", "OK", "answered"), ("other resolver 127.0.0.53 dropped", "OK", "dropped"), ("other resolver 10.0.0.2 dropped", "OK", "dropped")),
-    "public": lines(("public tcp 443", "OK", "connected")),
     "privilege": lines(*[(n, "OK", "EPERM") for n in ("setuid(0)", "ptrace attach to parent", "mount", "unshare", "mknod", "raw socket", "write /proc/sys", "load a kernel module")]),
     "writes": lines(*[(f"write /{k}", "OK", "EROFS") for k in range(9)]),
     "processes": lines(("host processes invisible", "OK", "2"), ("pid 1 invisible", "OK", "not found")),
@@ -158,7 +156,7 @@ passed, counts = sh.canary_summary(table)
 must(passed, [r for r in table if r["verdict"] not in ("OK", "SKIPPED")])
 must(counts["SKIPPED"] == 0 and counts["OK"] > 40 and counts["ATTACK SUCCEEDED"] == 0 and counts["NOT RUN"] == 0, counts)
 walls = {r["wall"] for r in table}
-for wall in ("Files", "Sockets", "Loopback", "LAN", "DNS", "Public", "Privilege", "Writes", "Processes", "Limits", "Abstract sockets", "Credential", "Cancel", "Concurrency", "Latency"):
+for wall in ("Files", "Sockets", "Loopback", "LAN", "Privilege", "Writes", "Processes", "Limits", "Abstract sockets", "Credential", "Cancel", "Concurrency", "Latency"):
     must(wall in walls, (wall, walls))
 # plan details handed to the unit (1.17.123): listening ports and the stub with the six ports that connected on dev02; the own address and
 # the gateway for the LAN group; the host's own resolv.conf entries (and always the stub) for the DNS group
@@ -167,7 +165,7 @@ must(PLANS["loopback"]["stub_ports"] == [22, 80, 443, 1024, 4430, 4433, 53, 5432
 must("resolver" not in PLANS["loopback"] and "resolver_ports" not in PLANS["loopback"], "the old resolver rows are gone")
 must(PLANS["lan"]["lan"][0] == "10.255.255.254" and "169.254.169.254" in PLANS["lan"]["lan"] and len(PLANS["lan"]["lan"]) == 5, PLANS["lan"])
 must(PLANS["lan"]["own"] == ["192.168.1.5"] and PLANS["lan"]["gateways"] == ["192.168.1.1"], PLANS["lan"])
-must(PLANS["dns"]["other_resolvers"] == ["127.0.0.53", "10.0.0.2"] and PLANS["dns"]["resolver"] == "9.9.9.9", PLANS["dns"])
+must("dns" not in PLANS and "public" not in PLANS, "1.18.24: the dns and public groups are not run (the network group covers them)")
 # markers: distinct random content, real files marked as "readable at all", the runner told, and all removed afterwards
 markers = PLANS["files"]["markers"]
 planted = [m for m in markers if m["content"] is not None]
@@ -204,15 +202,15 @@ with contextlib.redirect_stdout(io.StringIO()):
     sh.sweep()
 must(not list(BASE.glob("*/.tectac-canary-*")), "the sweep removes planted markers")
 
-# ---- an attack that works, a probe that did not run, a skipped public check
+# ---- an attack that works, a probe that did not run, a skipped row
 bad = sh.run_canary(status=status, collect=make_collect({"privilege": lines(*[(n, "OK", "EPERM") for n in ("setuid(0)", "mount", "unshare", "mknod", "raw socket", "write /proc/sys", "load a kernel module")] + [("ptrace attach to parent", "SUCCEEDED", "returned 0")])}), outside=Outside())
 must(sh.canary_summary(bad)[0] is False and next(r for r in bad if r["verdict"] == "ATTACK SUCCEEDED")["attack"] == "ptrace attach to parent", "attack succeeded")
 bad = sh.run_canary(status=status, collect=make_collect({"writes": lines(("write /usr", "OK", "EROFS"))}), outside=Outside())
 must(sh.canary_summary(bad)[0] is False and any(r["verdict"] == "NOT RUN" and r["wall"] == "Writes" for r in bad), "a probe that printed too little")
 bad = sh.run_canary(status=status, collect=make_collect({"files": b"garbage"}), outside=Outside())
 must(sh.canary_summary(bad)[0] is False, "markers with no results")
-skip = sh.run_canary(status=status, collect=make_collect({"public": lines(("public tcp 443", "SKIP", "no public route"))}), outside=Outside())
-must(sh.canary_summary(skip)[0] is True and sum(1 for r in skip if r["verdict"] == "SKIPPED") == 1 and not [r for r in skip if r["attack"] == "public tcp 443" and r["verdict"] == "OK"], "skipped public is not OK")
+skip = sh.run_canary(status=status, collect=make_collect({"sockets": lines(*FILES_SOCKS[:13], ("unix door path without a door", "SKIP", "x"), *FILES_SOCKS[14:])}), outside=Outside())
+must(sh.canary_summary(skip)[0] is False and sum(1 for r in skip if r["verdict"] == "SKIPPED") == 1 and not [r for r in skip if r["attack"] == "unix door path without a door" and r["verdict"] == "OK"], "a skipped row fails and is not OK")
 refused = sh.run_canary(status=status, collect=lambda g, p, **k: {"stdout": b"", "end": None, "refused": "sandbox_unavailable"}, outside=Outside())
 must(sh.canary_summary(refused)[0] is False and all(r["verdict"] in ("NOT RUN", "OK", "SKIPPED", "ATTACK SUCCEEDED") for r in refused), "a refused start is NOT RUN")
 notready = sh.run_canary(status={"ready": False, "reason": "no cgroup v2"}, collect=make_collect(), outside=Outside())

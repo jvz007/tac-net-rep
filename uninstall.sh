@@ -114,6 +114,10 @@ SANDBOX_SLICE_DROPIN_DIR="/etc/systemd/system/tec-tac-sandbox.slice.d"
 SANDBOX_SWEEP_SERVICE="/etc/systemd/system/tec-tac-sandbox-sweep.service"
 SANDBOX_SWEEP_TIMER="/etc/systemd/system/tec-tac-sandbox-sweep.timer"
 systemctl disable --now tec-tac-sandbox-sweep.timer >/dev/null 2>&1 || true
+# 1.18.24: the egress door templates (a running instance is stopped first; the instance names are validated run ids made by the helper)
+systemctl stop 'tec-tac-sandbox-egress@*.socket' 'tec-tac-sandbox-egress@*.service' >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/tec-tac-sandbox-egress@.socket /etc/systemd/system/tec-tac-sandbox-egress@.service
+rm -rf /run/tec-tac-sbx-egress /run/private/tec-tac-sbx-egress
 rm -f "${SANDBOX_SUDOERS}" "${SANDBOX_HELPER}" "${SANDBOX_SWEEP_TIMER}" "${SANDBOX_SWEEP_SERVICE}" "${SANDBOX_SLICE}"
 rm -rf "${SANDBOX_LIB}" "${SANDBOX_SLICE_DROPIN_DIR}" "${SANDBOX_RUN}"
 systemctl daemon-reload

@@ -169,8 +169,10 @@ def _int_or_none(value: Any) -> int | None:
 def status(live: bool = False) -> dict:
     """What this server can do and which runners are registered. Read only, no secret.
 
-    ``{enabled, ready, reason, systemd_version, address_filter_ok, dns_ok, selftest_at, slots_total, slots_used, canary_ok, canary_at,
-    runners: [{id, owner, version, runtime_verified}]}``. ``enabled`` is False until the kill switch is switched on. ``ready`` is True only when
+    ``{enabled, ready, reason, systemd_version, address_filter_ok, dns_ok, network_private_ok, egress_ok, selftest_at, slots_total, slots_used,
+    canary_ok, canary_at, runners: [{id, owner, version, runtime_verified}]}``. Since 1.18.24 (AD-65 Patch B) ``address_filter_ok`` means the network
+    wall is proven (a run has its own, empty network space) and ``dns_ok`` means the egress proxy resolves names and opens a tunnel; the additive keys
+    ``network_private_ok`` and ``egress_ok`` carry the same two answers under their own names. ``enabled`` is False until the kill switch is switched on. ``ready`` is True only when
     the root selftest proved every wall works on this server; otherwise ``reason`` says why in plain words. A status file that is missing,
     not root-owned, writable by others, a link, too big or not JSON gives ``ready: false`` (``selftest_not_run`` when it is missing,
     ``status_unreadable`` otherwise). ``slots_total`` is the selftest's number (None when unknown); ``slots_used`` is None unless ``live`` is
@@ -179,7 +181,7 @@ def status(live: bool = False) -> dict:
     Never raises."""
     answer: dict[str, Any] = {
         "enabled": bool(SANDBOX_ENABLED), "ready": False, "reason": "status_unreadable", "systemd_version": None,
-        "address_filter_ok": False, "dns_ok": False, "selftest_at": None, "slots_total": None, "slots_used": None,
+        "address_filter_ok": False, "dns_ok": False, "network_private_ok": False, "egress_ok": False, "selftest_at": None, "slots_total": None, "slots_used": None,
         "canary_ok": False, "canary_at": None, "runners": [],
     }
     try:
@@ -196,6 +198,8 @@ def status(live: bool = False) -> dict:
             "systemd_version": version if isinstance(version, int) and not isinstance(version, bool) else None,
             "address_filter_ok": raw.get("address_filter_ok") is True,
             "dns_ok": raw.get("dns_ok") is True,
+            "network_private_ok": raw.get("network_private_ok") is True,
+            "egress_ok": raw.get("egress_ok") is True,
             "selftest_at": _text(raw.get("selftest_at"), 40) or None,
             "slots_total": _int_or_none(raw.get("slots_total")),
         })
@@ -249,6 +253,7 @@ def describe(runner_id: Any) -> dict:
         "executable_sha256": _text(row.get("executable_sha256"), 64),
         "credential_files": [name for name in (row.get("credential_files") or []) if isinstance(name, str)][:2],
         "credential_return": row.get("credential_return") is True,
+        "allowed_hosts": [name for name in (row.get("allowed_hosts") or []) if isinstance(name, str)][:16],  # 1.18.24, additive
         "runtime_verified": row.get("runtime_verified") is True, "runtime_reason": _text(row.get("runtime_reason"), 2000),
     }
 
@@ -722,8 +727,9 @@ def sandbox_contract_metadata() -> dict:
             "stack; nothing is passed in. Core, a library, a generated frame, a disabled or legacy module and any other module get not_owner."
         ),
         "network": (
-            "the smaller sandbox (plan section 15): a run cannot reach loopback, link-local, multicast or private ranges; public HTTPS stays open. "
-            "There is no host list."
+            "since Core 1.18.24 (AD-65 Patch B) a run has its own, empty network space: no interface but loopback, no route, no DNS and no resolv.conf. "
+            "It reaches only the hosts its runner lists in allowed_hosts, on port 443, through the egress proxy (HTTPS_PROXY points at 127.0.0.1:3128 "
+            "inside the run). AF_UNIX is allowed only for that door. A runner with no allowed_hosts has no network at all."
         ),
         "manifest": "sandbox_runners (at most 4 entries) with publisher_permissions sandbox.register and requires.framework >=1.17.116.",
         "audit": (

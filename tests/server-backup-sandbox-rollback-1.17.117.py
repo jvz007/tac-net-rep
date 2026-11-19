@@ -70,6 +70,8 @@ with tempfile.TemporaryDirectory(prefix="tectac-sandbox-rollback-") as td:
         systemd / "tec-tac-sandbox.slice.d" / "limits.conf",
         systemd / "tec-tac-sandbox-sweep.service",
         systemd / "tec-tac-sandbox-sweep.timer",
+        systemd / "tec-tac-sandbox-egress@.socket",  # 1.18.24 (updated in place): the egress door templates
+        systemd / "tec-tac-sandbox-egress@.service",
     }
     must(wanted <= units, f"missing from the unit inventory: {sorted(map(str, wanted - units))}")
     systemd.mkdir()

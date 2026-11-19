@@ -126,26 +126,9 @@ make_runner("ai.badroot", body="print('a')", roots=[{"path": "/etc", "tree_sha25
 refused(start(header("ai.badroot"), hold=False)[1], "runtime_unverified")  # outside /opt/tec-tac/runtimes/ai/
 write_ready_status(ready=False, reason="no cgroup v2")
 refused(start(header("ai.chat", parameters={"mode": "fast"}), hold=False)[1], "sandbox_unavailable")
-write_ready_status(resolver="1.1.1.1", resolvers=["1.1.1.1"])  # the proven resolver is no longer listed in the upstream file
-refused(start(header("ai.chat", parameters={"mode": "fast"}), hold=False)[1], "sandbox_unavailable")
-write_ready_status(resolver="::1", resolvers=["::1"])
-Path(sh.RESOLV_UPSTREAM).write_text("nameserver ::1\n", encoding="utf-8")
-refused(start(header("ai.chat", parameters={"mode": "fast"}), hold=False)[1], "sandbox_unavailable")  # an IPv6 resolver cannot be used
-Path(sh.RESOLV_UPSTREAM).write_text("nameserver 127.0.0.53\n", encoding="utf-8")
-write_ready_status(resolver="127.0.0.53", resolvers=["127.0.0.53"])
-refused(start(header("ai.chat", parameters={"mode": "fast"}), hold=False)[1], "sandbox_unavailable")  # 1.17.123: the stub is in a denied range, never an allow
-Path(sh.RESOLV_UPSTREAM).write_text("nameserver 9.9.9.9\n", encoding="utf-8")
-# 1.17.123: unreadable local addresses or gateway refuse the start (fail closed)
-real_local = sh.local_deny_now
-
-
-def _unreadable():
-    raise ValueError("the `ip` command could not read this server's addresses or routes")
-
-
-sh.local_deny_now = _unreadable
-refused(start(header("ai.chat", parameters={"mode": "fast"}), hold=False)[1], "sandbox_unavailable")
-sh.local_deny_now = real_local
+# 1.18.24 (AD-65 Patch B): a run has no resolver and no deny list, so the start no longer reads an upstream list or checks a proven resolver, and a run
+# that has no allowed_hosts never reads this server's addresses; the fail-closed cases that remain (a door that cannot be given the server's own
+# addresses, a door that does not start) are in tests/sandbox-private-network-1.18.24.py and tests/sandbox-egress-audit-1.18.24.py.
 write_ready_status()
 (sh.REGISTRY_ROOT / "ai.nonroot.json").write_text("{}", encoding="utf-8")
 refused(start(header("ai.nonroot"), hold=False)[1], "runner_unknown")

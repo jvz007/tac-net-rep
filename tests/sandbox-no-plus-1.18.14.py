@@ -41,14 +41,14 @@ seen = {}
 
 # ---- (1) no Exec* property, with and without credentials; the closed set refuses one
 for names in ([], ["auth"], ["auth", "key"]):
-    props = sh.build_properties(ROW, RUN_ID, credential_names=names, exists=lambda p: True, resolv_file=str(BASE / "resolv.conf"))
+    props = sh.build_properties(ROW, RUN_ID, credential_names=names, exists=lambda p: True)
     must(not [p for p in props if p.startswith("Exec")], props)
     must(len([p for p in props if p.startswith("LoadCredential=")]) == len(names), props)
-good = sh.build_properties(ROW, RUN_ID, credential_names=["auth"], exists=lambda p: True, resolv_file=str(BASE / "resolv.conf"))
+good = sh.build_properties(ROW, RUN_ID, credential_names=["auth"], exists=lambda p: True)
 for bad in ("ExecStartPost=+/bin/sh", f"ExecStopPost=+{sh.HELPER_COMMAND} --finish {RUN_ID}", "ExecStartPre=/bin/true", "ExecStart=/bin/true",
             f"ExecStartPost=+/bin/rm -rf {sh.SECRETS_ROOT / RUN_ID}", "ExecAnything"):
     try:
-        sh.check_unit_properties([*good, bad], ROW, RUN_ID, resolv_file=str(BASE / "resolv.conf"))
+        sh.check_unit_properties([*good, bad], ROW, RUN_ID)
         raise AssertionError(bad)
     except sh.Refusal as exc:
         must(exc.code == "sandbox_unavailable", exc.code)

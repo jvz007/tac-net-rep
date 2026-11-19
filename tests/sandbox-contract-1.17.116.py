@@ -168,13 +168,13 @@ must(re.search(r"^SANDBOX_ENABLED = False$", (ROOT / "scripts" / "sandbox-helper
 write_status(GOOD_STATUS)
 answer = sandbox.status()
 must(answer == {"enabled": False, "ready": True, "reason": "ready", "systemd_version": 252, "address_filter_ok": True, "dns_ok": True,
-                "selftest_at": "2026-11-11T10:00:00Z", "slots_total": None, "slots_used": None, "canary_ok": False, "canary_at": None, "runners": []}, answer)
+                "network_private_ok": False, "egress_ok": False, "selftest_at": "2026-11-11T10:00:00Z", "slots_total": None, "slots_used": None, "canary_ok": False, "canary_at": None, "runners": []}, answer)
 # a ready selftest never makes enabled true, and a status file cannot claim it
 write_status({**GOOD_STATUS, "enabled": True})
 must(sandbox.status()["enabled"] is False, "enabled comes from the constant")
 # keys not in the contract are never copied (resolver, checks, anything a later helper adds)
 write_status({**GOOD_STATUS, "token": "x", "credential": "y", "resolver": "10.0.0.1"})
-must(set(sandbox.status()) == {"enabled", "ready", "reason", "systemd_version", "address_filter_ok", "dns_ok", "selftest_at", "slots_total", "slots_used", "canary_ok", "canary_at", "runners"}, sorted(sandbox.status()))  # 1.17.118: four additive keys
+must(set(sandbox.status()) == {"enabled", "ready", "reason", "systemd_version", "address_filter_ok", "dns_ok", "network_private_ok", "egress_ok", "selftest_at", "slots_total", "slots_used", "canary_ok", "canary_at", "runners"}, sorted(sandbox.status()))  # 1.17.118: four additive keys
 # a failed selftest keeps its plain reason
 write_status({**GOOD_STATUS, "ready": False, "reason": "the server does not use the unified cgroup v2 hierarchy", "dns_ok": False})
 answer = sandbox.status()
@@ -278,6 +278,7 @@ finally:
 # no credential-like key anywhere in status(), whatever the files hold
 write_runner("ai.claude", "ai", credentials="s3cret", token="t0ken", password="p")
 CRED = re.compile(r"(secret|token|password|credential|apikey|api_key|private|key)", re.IGNORECASE)
+NOT_A_CREDENTIAL = {"network_private_ok"}  # 1.18.24: a yes/no answer about the network wall (PrivateNetwork), not a secret
 
 
 def walk_keys(value, found):
@@ -292,7 +293,7 @@ def walk_keys(value, found):
 
 
 keys = walk_keys(sandbox.status(), [])
-must(not [key for key in keys if CRED.search(key)], keys)
+must(not [key for key in keys if CRED.search(key) and key not in NOT_A_CREDENTIAL], keys)
 must("s3cret" not in json.dumps(sandbox.status()) and "t0ken" not in json.dumps(sandbox.status()), "no value leaks")
 write_runner("ai.claude", "ai")
 
@@ -304,7 +305,7 @@ must(described["executable_sha256"] == "a" * 64 and described["credential_files"
 must(described["runtime_verified"] is False and "runtime_missing" in described["runtime_reason"], described)
 text = json.dumps(described)
 must("/usr/local/lib" not in text and "/opt/tec-tac" not in text and "LANG" not in text and "--model" not in text, "no path, environment value or argument is returned")
-must(set(described) == {"id", "owner", "version", "revision", "description", "limits", "executable_sha256", "credential_files", "credential_return", "runtime_verified", "runtime_reason"}, sorted(described))
+must(set(described) == {"id", "owner", "version", "revision", "description", "limits", "executable_sha256", "credential_files", "credential_return", "allowed_hosts", "runtime_verified", "runtime_reason"}, sorted(described))  # 1.18.24: allowed_hosts is additive
 
 
 def code_of(call, *a):
@@ -397,7 +398,7 @@ for operation in cap["operations"]:
 must(not [name for name in dir(cap["provider"]) if not name.startswith("_") and name not in cap["operations"]], "the provider offers only the five operations")
 meta = cap["metadata"]
 must(meta == sandbox.sandbox_contract_metadata() and meta["operations"] == list(cap["operations"]) and meta["version"] == "1.0.0" and meta["enabled"] is False, meta)
-must(meta["requires_framework"] == ">=1.17.116" and meta["namespace"] == "tec_tac.sandbox" and "smaller sandbox" in meta["network"], meta)
+must(meta["requires_framework"] == ">=1.17.116" and meta["namespace"] == "tec_tac.sandbox" and "own, empty network space" in meta["network"] and "allowed_hosts" in meta["network"], meta)  # 1.18.24 (Patch B)
 must(meta["limits"]["memory_mb"] == {"default": 1024, "ceiling": 2048} and meta["limits"]["queue_seconds"] == {"default": 10, "ceiling": 30}, meta["limits"])
 must(meta["errors"] == list(sandbox.ERROR_CODES), "errors in the metadata")
 # the limits in the contract are the registry's
@@ -451,7 +452,7 @@ HTTP = next(ast.literal_eval(node.value) for node in ast.parse(CONTRACTS).body i
 for route, method, perm in (("/api/tfd/system/sandbox/status/", "GET", "core.sandbox.view"), ("/api/tfd/system/sandbox/runs/<str:run_id>/cancel/", "POST", "core.sandbox.manage")):
     must(perm in HTTP[route][method]["authorization"] and "1.17.118" in " ".join(HTTP[route][method]["notes"]), route)
 manifest_rule = [text for text in RULES if isinstance(text, str) and text.startswith("Manifest key added in 1.17.116: sandbox_runners")]
-must(len(manifest_rule) == 1 and "allowed_hosts is refused" in manifest_rule[0] and "install.sh grants to nobody" in manifest_rule[0] and "A manifest without the key is unchanged." in manifest_rule[0], manifest_rule)
+must(len(manifest_rule) == 1 and "allowed_hosts (optional again since 1.18.24" in manifest_rule[0] and "HTTPS_PROXY" in manifest_rule[0] and "install.sh grants to nobody" in manifest_rule[0] and "A manifest without the key is unchanged." in manifest_rule[0], manifest_rule)
 must(not re.search(r"[A-Za-z0-9)\].]Since 1\.17\.", manifest_rule[0] + rule[0]), "spacing")
 # the 1.17.17 sentence is still there and the new one is its own sentence next to it
 must('"Manifest key added in 1.17.17: server_maintenance_actions' in CONTRACTS, "the 1.17.17 sentence is unchanged")

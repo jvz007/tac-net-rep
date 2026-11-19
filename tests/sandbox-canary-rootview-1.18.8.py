@@ -45,8 +45,8 @@ HOST = {
     "/usr/local/lib/tec-tac/sandbox": ["registry", "runners", "canary", "sandbox-launcher.py", "sandbox-helper.py", "root"],
 }
 GOOD_UNIT = {
-    "/": ["bin", "lib", "lib64", "sbin", "usr", "etc", "var", "opt", "run", "tmp", "proc", "sys", "dev", "work"], "/etc": ["passwd", "group", "ssl", "resolv.conf"],
-    "/var": ["tmp"], "/opt": ["tec-tac"], "/opt/tec-tac": ["runtimes"], "/opt/tec-tac/runtimes": [], "/run": ["credentials", "systemd"], "/usr/local": ["lib"],
+    "/": ["bin", "lib", "lib64", "sbin", "usr", "etc", "var", "opt", "run", "tmp", "proc", "sys", "dev", "work"], "/etc": ["passwd", "group", "ssl"],
+    "/var": ["tmp"], "/opt": ["tec-tac"], "/opt/tec-tac": ["runtimes"], "/opt/tec-tac/runtimes": [], "/run": ["credentials", "systemd", "egress"], "/usr/local": ["lib"],
     "/usr/local/lib": ["tec-tac"], "/usr/local/lib/tec-tac": ["sandbox"], "/usr/local/lib/tec-tac/sandbox": ["canary", "sandbox-launcher.py"],
 }
 
@@ -184,7 +184,8 @@ must(set(plan["view"]) == set(sh.CANARY_VIEW_FOLDERS) and plan["view"]["/"]["all
 must(all(not (set(sh.CANARY_VIEW_ALLOWED[f]) - set(plan["view"][f]["allowed"])) for f in sh.CANARY_VIEW_FOLDERS), "allowed lists are the helper's constant")
 must(sh.CANARY_VIEW_ALLOWED["/opt/tec-tac/runtimes"] == () and "credentials" in sh.CANARY_VIEW_ALLOWED["/run"], "the fixed allowed lists")
 must(set(sh.CANARY_VIEW_ALLOWED["/"]) == {"usr", "bin", "sbin", "lib", "lib64", "lib32", "libx32", "etc", "var", "opt", "run", "tmp", "proc", "sys", "dev", "work", "root"}, "the / list")
-must(set(sh.CANARY_VIEW_ALLOWED["/etc"]) == {"ssl", "ca-certificates", "passwd", "group", "ld.so.cache", "nsswitch.conf", "localtime", "resolv.conf"}, "the /etc list")
+must(set(sh.CANARY_VIEW_ALLOWED["/etc"]) == {"ssl", "ca-certificates", "passwd", "group", "ld.so.cache", "nsswitch.conf", "localtime"}, "the /etc list (1.18.24: no resolv.conf)")
+must(set(sh.CANARY_VIEW_ALLOWED["/run"]) == {"credentials", "systemd", "egress"}, "the /run list (1.18.24: the empty egress mount point)")
 must(set(sh.CANARY_VIEW_ALLOWED["/usr/local/lib/tec-tac/sandbox"]) == {"runners", "canary", "sandbox-launcher.py"}, "the sandbox folder list")
 # the json stays under the runner's stdin read even with huge listings
 huge = {folder: [("x" * 90) + f"{n:04d}" for n in range(300)] for folder in sh.CANARY_VIEW_FOLDERS}

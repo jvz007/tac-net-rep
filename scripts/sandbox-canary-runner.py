@@ -189,9 +189,9 @@ def _errname(exc):
 
 
 def g_sockets(plan):
-    """Pathname unix sockets of the host's services. 1.17.124: runs no longer get AF_UNIX (RestrictAddressFamilies=AF_INET), so socket() itself is
-    refused (EAFNOSUPPORT) before any connect; the socket is therefore made inside the try and a refusal at creation is OK. Only a connect that
-    works is SUCCEEDED. All 13 rows are always printed."""
+    """Pathname unix sockets of the host's services. 1.18.24 (AD-65 Patch B): a run may create AF_UNIX sockets (only the egress door needs them), so
+    every connect is tried for real: host path sockets do not exist in the run's root view and abstract names are private to its own network space,
+    so each must fail to connect. Only a connect that works is SUCCEEDED. All 13 rows are always printed, then the door row."""
     paths = ["/var/run/postgresql/.s.PGSQL.5432", "/run/postgresql/.s.PGSQL.5432", "/var/run/redis/redis-server.sock",
              "/run/redis/redis-server.sock", "/run/redis/redis.sock", "/var/run/redis/redis.sock", "/run/nats/nats.sock",
              "/rmm/api/tacticalrmm/tacticalrmm.sock", "/run/tactical/tacticalrmm.sock", "/run/uwsgi/tactical.sock",
@@ -208,52 +208,28 @@ def g_sockets(plan):
         finally:
             if s is not None:
                 s.close()
-    unix_creation_rows()
+    door_row()
     control_rows()
 
 
-UNIX_KINDS = (("stream", "SOCK_STREAM"), ("dgram", "SOCK_DGRAM"), ("seqpacket", "SOCK_SEQPACKET"))
-UNIX_REFUSED = (errno.EAFNOSUPPORT, errno.EPERM)
+DOOR_PATH = "/run/egress/door.sock"  # the one pathname that may connect, and only for a run whose runner declares allowed_hosts
+R_DOOR_NONE = "unix door path without a door"
 
 
-def unix_creation_rows():
-    """1.17.124: the filter itself. Creating an AF_UNIX socket must fail with EAFNOSUPPORT or EPERM; a socket that is created means the
-    address family filter is not in force (ATTACK SUCCEEDED). Any other error is not evidence (NOTRUN)."""
-    for label, constant in UNIX_KINDS:
-        name = f"unix socket creation refused ({label})"
-        try:
-            s = socket.socket(socket.AF_UNIX, getattr(socket, constant, 0))
-        except OSError as exc:
-            if exc.errno in UNIX_REFUSED:
-                row(name, "OK", _errname(exc))
-            else:
-                row(name, "NOTRUN", "unexpected error " + _errname(exc))
-        except (AttributeError, ValueError) as exc:
-            row(name, "NOTRUN", "cannot try: " + type(exc).__name__)
-        else:
-            s.close()
-            row(name, "SUCCEEDED", "the socket was created: the address family filter is not in force")
-    name = "unix pathname socket refused"
-    path = os.path.join(os.environ.get("SANDBOX_WORK", "/work"), "canary.sock")
+def door_row():
+    """1.18.24: this run has no allowed_hosts, so no egress door is bound into it: the door path must not connect. (A run with a door shows the
+    door working in the proxy rows of the network group; every other pathname fails in the 13 rows above.)"""
+    s = None
     try:
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s = make_socket(getattr(socket, "AF_UNIX", 1), socket.SOCK_STREAM)
+        s.settimeout(1)
+        s.connect(DOOR_PATH)
+        row(R_DOOR_NONE, "SUCCEEDED", "connected: a door exists for a run that declares no allowed_hosts")
     except OSError as exc:
-        if exc.errno in UNIX_REFUSED:
-            row(name, "OK", _errname(exc))
-        else:
-            row(name, "NOTRUN", "unexpected error " + _errname(exc))
-        return
-    try:
-        s.bind(path)
-        row(name, "SUCCEEDED", "bound a unix socket in /work")
-    except OSError as exc:
-        row(name, "SUCCEEDED", "the socket was created (bind failed: " + _errname(exc) + ")")
+        row(R_DOOR_NONE, "OK", ("socket creation refused: " if s is None else "") + _errname(exc))
     finally:
-        s.close()
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
+        if s is not None:
+            s.close()
 
 
 def _control(name, check):
@@ -313,7 +289,7 @@ def g_loopback(plan):
     failing, so one at a time the 20 s budget ran out before the stub rows. Stub probes go first, then 127.0.0.1, then ::1; at most 12 workers
     (TasksMax counts threads); about 1 s per probe; a probe that would start or finish after ``loopback_seconds`` prints nothing and the helper's
     table says NOT RUN. Result words are unchanged: connected is SUCCEEDED, a timeout or an errno is OK."""
-    ports = [int(p) for p in plan.get("ports", [])]
+    ports = [int(p) for p in plan.get("ports", []) if int(p) != NET_PROXY_DEFAULT[1]]  # 1.18.24: 3128 is the in-unit forwarder, never a host service
     stub = plan.get("stub", "")
     jobs = []
     if stub:
@@ -363,24 +339,6 @@ def g_lan(plan):
             row(f"gateway {address} tcp {port}", "SUCCEEDED" if _reached(tcp) else "OK", tcp)
         sent = udp_send(address)
         row(f"gateway {address} udp", "SUCCEEDED" if sent == "sent" else "OK", sent)
-
-
-def g_dns(plan):
-    allowed = plan.get("resolver", "")
-    if allowed:
-        ok = dns_query(allowed)
-        row("allowed resolver answers", "OK" if ok else "SUCCEEDED", "answered" if ok else "no answer (DNS broken)")
-    for address in plan.get("other_resolvers", []):  # 1.17.123: the host's own resolv.conf entries; none given means the table says NOT RUN
-        answered = dns_query(address)
-        row(f"other resolver {address} dropped", "SUCCEEDED" if answered else "OK", "answered" if answered else "dropped")
-
-
-def g_public(plan):
-    result = tcp_connect(plan.get("public", "1.1.1.1"), 443, timeout=4)
-    if result == "connected":
-        row("public tcp 443", "OK", "connected")
-    else:
-        row("public tcp 443", "SKIP", f"no public route from this server ({result})")
 
 
 def _syscall_row(name, number, args):
@@ -592,9 +550,10 @@ def g_abstract(plan):
     """1.17.123: root lists the host's abstract listeners before the run (this unit cannot read /proc/net/unix) and passes them in the plan;
     every one is tried here and only a name and a verdict are printed, never any content. No list in the plan prints nothing (the table says
     NOT RUN). Information only: whether a throw-away listener of root's own is reachable shows whether the abstract namespace is shared.
-    1.17.124: with AF_UNIX gone, creating the socket is refused; every name refused at creation is OK 'all refused', a name that connects is
-    SUCCEEDED. The plan may say how many names root left out to keep the plan under the 64 KiB stdin read (abstract_left_out); the count is
-    shown, and every left-out name is covered by the 'unix socket creation refused' rows."""
+    1.17.124: with AF_UNIX refused, creating the socket failed; every name refused at creation is OK 'all refused'. 1.18.24 (AD-65 Patch B):
+    AF_UNIX is allowed again, for the egress door only; abstract names belong to the run's own network space, so a host name must not connect
+    ('none reachable'); a name that connects is SUCCEEDED. The plan may say how many names root left out to keep the plan under the 64 KiB
+    stdin read (abstract_left_out); the count is shown."""
     probe = plan.get("abstract_probe")
     if probe:
         state, why = _abstract_connect(probe)
@@ -661,27 +620,29 @@ def g_noop(plan):
 
 GROUPS = {
     "files": g_files, "rootview": g_rootview, "work_hold": g_work_hold, "work_peer": g_work_peer, "sockets": g_sockets, "loopback": g_loopback, "lan": g_lan,
-    "dns": g_dns, "public": g_public, "privilege": g_privilege, "writes": g_writes, "processes": g_processes, "mem": g_mem,
+    "privilege": g_privilege, "writes": g_writes, "processes": g_processes, "mem": g_mem,
     "runview": g_runview, "fork": g_fork, "loop": g_loop, "scratch": g_scratch, "flood": g_flood, "abstract": g_abstract, "cred": g_cred, "sleep": g_sleep,
     "noop": g_noop,
 }
 
 
-# ------------------------------------------------------------------------------------------------ Patch B network rows (1.18.23)
-# Canary rows first (AD-65): these probes describe what a run can do on the network TODAY, before the Patch B wall exists. They live in
-# NETWORK_GROUPS, not GROUPS, so the root helper's CANARY_GROUPS and its normal table stay as they are; the root driver
-# tests/sandbox-canary-network-1.18.23.py starts this group through the real launch path. Row rule: SUCCEEDED when the run can do what
-# Patch B will forbid, OK when it cannot, SKIP when the host itself cannot do the thing (no control), NOTRUN when the probe proves nothing.
+# ------------------------------------------------------------------------------------------------ Patch B network rows (1.18.23, flipped in 1.18.24)
+# These probes describe what a run can do on the network. They live in NETWORK_GROUPS, not GROUPS, so the root helper's CANARY_GROUPS and its normal
+# table stay as they are; the root driver tests/sandbox-canary-network-1.18.24.py starts this group through the real launch path, with an allowed
+# host so the run has its egress door. Row rule: SUCCEEDED when the run can do what Patch B forbids, OK when it cannot, SKIP when the host itself
+# cannot do the thing (the row's OWN control is missing), NOTRUN when the probe proves nothing. After Patch B every row must be OK.
 NET_PUBLIC_TARGET = "1.1.1.1"
 NET_PUBLIC_OTHER = "9.9.9.9"  # a host no runner is allowed to reach
 NET_PUBLIC_V6 = "2606:4700:4700::1111"
 NET_PROXY_DEFAULT = ("127.0.0.1", 3128)  # Patch B's in-unit forwarder; its own port is never counted as a host service
 NET_PUBLIC_SECONDS = 2.5
-NET_LOCAL_SECONDS = 1.0
+NET_LOCAL_SECONDS = 0.5  # one host-service connect; NET_HOST_PORTS_MAX x this stays well under the run's time limit (45 s) even if nothing ran in parallel
+NET_LOCAL_DEADLINE = 15.0  # no host-service probe starts after this many seconds; what is done is printed, never an empty row
 NET_HOST_PORTS_MAX = 40
 NET_LISTEN_SECONDS = 8.0
+NET_LISTEN_BIND = "0.0.0.0"  # inside the unit's own network space only; a test on a development PC passes 127.0.0.1
 NET_REFUSED_CREATE = (errno.EAFNOSUPPORT, errno.EPERM, errno.EACCES)
-NET_NO_PROXY = "no proxy yet (Patch B)"
+NET_NO_DOOR = "the proxy door is not reachable from the run (no listener on 127.0.0.1:3128)"
 NET_CHECK_SECONDS = 5.0
 
 R_PUB_443 = "public tcp 443 to 1.1.1.1"
@@ -905,14 +866,15 @@ def _iface_row():
     return "OK", "only lo is visible"
 
 
-def _listen_row(seconds):
-    """Bind 0.0.0.0, print ``CANARYLISTEN<TAB>port`` so the root driver can connect from the host, and accept for ``seconds``."""
+def _listen_row(seconds, bind_host=NET_LISTEN_BIND):
+    """Bind ``bind_host`` (0.0.0.0 inside the unit), print ``CANARYLISTEN<TAB>port`` so the root driver can look for the port in the HOST's own
+    network namespace, and accept for ``seconds``. A connection from the host is SUCCEEDED too, but the driver decides this row from ``ss``."""
     try:
         srv = make_socket(socket.AF_INET, socket.SOCK_STREAM)
     except OSError as exc:
         return ("OK", "socket refused: " + _errname(exc)) if exc.errno in NET_REFUSED_CREATE else ("NOTRUN", "unexpected error " + _errname(exc))
     try:
-        srv.bind(("0.0.0.0", 0))
+        srv.bind((bind_host, 0))
         srv.listen(4)
         port = srv.getsockname()[1]
         with ROW_LOCK:
@@ -932,6 +894,7 @@ def _listen_row(seconds):
 
 
 def _dns_rows(plan, run):
+    """The DNS rows. Each has its own host control: the host resolved (rows 1 and 2), asked its listed name server (row 3) or asked 9.9.9.9 (row 4)."""
     ok = bool(plan.get("host_dns"))
     why = "the host itself cannot resolve, so this row has no control"
     listed = []
@@ -950,34 +913,56 @@ def _dns_rows(plan, run):
 
     run(R_DNS_LISTED, lambda: _skip_unless(ok, why) or (("SUCCEEDED", "listed: " + ", ".join(listed[:3])) if listed else ("OK", "no name server listed")))
     run(R_DNS_GAI, lambda: _skip_unless(ok, why) or resolves())
-    run(R_DNS_LISTED_ASK, lambda: _skip_unless(ok, why) or (ask(listed[0]) if listed else ("OK", "no name server listed")))
-    run(R_DNS_PUBLIC_ASK, lambda: _skip_unless(ok, why) or ask(NET_PUBLIC_OTHER))
+    run(R_DNS_LISTED_ASK, lambda: _skip_unless(plan.get("host_udp53_listed"), "the host itself got no answer from its first listed name server, so this row has no control")
+        or (ask(plan.get("listed_name_server") or listed[0]) if (plan.get("listed_name_server") or listed) else ("OK", "no name server listed")))
+    run(R_DNS_PUBLIC_ASK, lambda: _skip_unless(plan.get("host_udp53_9999"), "the host itself got no answer from 9.9.9.9, so this row has no control")
+        or ask(NET_PUBLIC_OTHER))
 
 
-def _host_rows(plan, run):
+def _host_rows(plan, run, side):
+    """The host-services rows. Their probes are split into separate pool jobs (``side``) with a deadline, so 40 slow ports can never eat the run's
+    time; the row is printed after the pool finished, from what was done (a partial result says how many ports were tried)."""
     ports = [int(p) for p in plan.get("loopback_ports", []) if int(p) != NET_PROXY_DEFAULT[1]][:NET_HOST_PORTS_MAX]
     own = [str(a) for a in plan.get("own", []) if ":" not in str(a)][:4]
     gateways = [str(g) for g in plan.get("gateways", []) if ":" not in str(g)][:4]
+    deadline = time.monotonic() + NET_LOCAL_DEADLINE
+    done = {"loop": {}, "own": {}, "gateway": {}}
 
-    def loopback():
-        if not ports:
-            return "SKIP", "the plan listed no listening port of the host"
-        reached = [p for p in ports if tcp_connect("127.0.0.1", p, timeout=NET_LOCAL_SECONDS) == "connected"]
-        return ("SUCCEEDED", "connected on " + ", ".join(map(str, reached[:5]))) if reached else ("OK", f"none of {len(ports)} ports connected")
+    def attempt(kind, host, port, reached_test):
+        if time.monotonic() >= deadline:
+            return
+        done[kind][(host, port)] = reached_test(tcp_connect(host, port, timeout=NET_LOCAL_SECONDS))
 
-    def addresses(targets, numbers, empty):
-        if not targets:
-            return "SKIP", empty
-        hits = [f"{a}:{p}" for a in targets for p in numbers if _reached(tcp_connect(a, p, timeout=NET_LOCAL_SECONDS))]
-        return ("SUCCEEDED", "reached " + ", ".join(hits[:5])) if hits else ("OK", f"dropped or refused by address ({len(targets)} address(es))")
+    for port in ports:
+        side.append(lambda port=port: attempt("loop", "127.0.0.1", port, lambda result: result == "connected"))
+    for address in own:
+        for port in (22, 80, 443):
+            side.append(lambda address=address, port=port: attempt("own", address, port, _reached))
+    for address in gateways:
+        for port in (80, 443):
+            side.append(lambda address=address, port=port: attempt("gateway", address, port, _reached))
 
-    run(R_LOOPBACK, loopback)
-    run(R_OWN, lambda: addresses(own, (22, 80, 443), "the plan listed no address of this server"))
-    run(R_GATEWAY, lambda: addresses(gateways, (80, 443), "the plan listed no default gateway"))
+    def summary(kind, total, empty, dropped):
+        def probe():
+            if not total:
+                return "SKIP", empty
+            hits = sorted(f"{host}:{port}" for (host, port), reached in done[kind].items() if reached)
+            tried = len(done[kind])
+            if hits:
+                return "SUCCEEDED", "reached " + ", ".join(hits[:5])
+            note = "" if tried >= total else f" (partial: {tried} of {total} tried before the deadline)"
+            return "OK", dropped + note
+        return probe
+
+    run(R_LOOPBACK, summary("loop", len(ports), "the plan listed no listening port of the host", f"none of {len(ports)} ports connected"), after_pool=True)
+    run(R_OWN, summary("own", len(own) * 3, "the plan listed no address of this server", f"dropped or refused by address ({len(own)} address(es))"), after_pool=True)
+    run(R_GATEWAY, summary("gateway", len(gateways) * 2, "the plan listed no default gateway", f"dropped or refused by address ({len(gateways)} gateway(s))"), after_pool=True)
 
 
 def _proxy_rows(plan, run):
-    """The proxy door Patch B adds. With no proxy every row is NOTRUN ('no proxy yet (Patch B)'); with one, 200 on a refusal row is SUCCEEDED."""
+    """The proxy door (1.18.24). The positive control is one CONNECT to the allowed host: 200 is OK, and it is SKIPPED when the host itself cannot
+    reach that host (a control that cannot work is never OK). Each refusal row sends a CONNECT that must be refused: a 200 is SUCCEEDED. A door
+    that cannot be reached is NOTRUN."""
     proxy = proxy_address()
     allowed = str(plan.get("allowed_host") or "")
     own = [str(a) for a in plan.get("own", []) if ":" not in str(a)]
@@ -986,23 +971,34 @@ def _proxy_rows(plan, run):
              (R_PROXY_OWN, own[0] if own else "", 443), (R_PROXY_80, allowed, 80), (R_PROXY_22, allowed, 22))
     state = {}
 
-    def door(host, port, positive):
+    def up():
         if "up" not in state:
             state["up"] = proxy_status(proxy, NET_PUBLIC_TARGET, 443) is not None
-        if not state["up"]:
-            return "NOTRUN", NET_NO_PROXY
+        return state["up"]
+
+    def positive():
+        if not plan.get("host_tcp443_allowed"):
+            return "SKIP", "the host itself cannot reach the allowed host on 443 (no public route), so this positive control cannot work"
+        if not allowed or not up():
+            return "NOTRUN", NET_NO_DOOR
+        status = proxy_status(proxy, allowed, 443)
+        if status is None:
+            return "NOTRUN", NET_NO_DOOR
+        return ("OK", "answered 200") if status == 200 else ("NOTRUN", f"the positive control answered {status or 'nothing'}, not 200")
+
+    def refusal(host, port):
         if not host:
-            return "NOTRUN", "the plan named no host for this row"
+            return "SKIP", "the plan named no host for this row (no address of this server was listed)"
+        if not up():
+            return "NOTRUN", NET_NO_DOOR
         status = proxy_status(proxy, host, port)
         if status is None:
-            return "NOTRUN", NET_NO_PROXY
-        if positive:
-            return ("OK", "answered 200") if status == 200 else ("NOTRUN", f"the positive control answered {status}, not 200")
+            return "NOTRUN", NET_NO_DOOR
         return ("SUCCEEDED", f"the proxy opened a tunnel (200) to {host}:{port}") if status == 200 else ("OK", f"refused ({status or 'closed'})")
 
-    run(R_PROXY_OK, lambda: door(allowed, 443, True))
+    run(R_PROXY_OK, positive)
     for name, host, port in cases:
-        run(name, lambda host=host, port=port: door(host, port, False))
+        run(name, lambda host=host, port=port: refusal(host, port))
 
 
 def g_patchb_network(plan):
@@ -1012,26 +1008,26 @@ def g_patchb_network(plan):
         row(name, *result)
     net_row(R_ROUTE, lambda: _route_row(read_proc("/proc/self/net/route")))
     net_row(R_IFACES, _iface_row)
-    # 2. the listener waits in its own thread while the host connects
+    # 2. the listener waits in its own thread while the host looks for its port
     try:
         seconds = float(plan.get("listen_seconds") or NET_LISTEN_SECONDS)
     except (TypeError, ValueError):
         seconds = NET_LISTEN_SECONDS
-    listener = threading.Thread(target=net_row, args=(R_LISTEN, lambda: _listen_row(seconds)), daemon=True)
+    bind_host = str(plan.get("listen_bind") or NET_LISTEN_BIND)
+    listener = threading.Thread(target=net_row, args=(R_LISTEN, lambda: _listen_row(seconds, bind_host)), daemon=True)
     listener.start()
     # 3. every other probe, in a small pool (TasksMax counts threads)
-    jobs = []
+    jobs, side, after = [], [], []
 
-    def run(name, probe):
-        jobs.append((name, probe))
+    def run(name, probe, after_pool=False):
+        (after if after_pool else jobs).append((name, probe))
 
-    public = bool(plan.get("host_public"))
     why = "the host itself cannot reach it, so this row has no control"
-    run(R_PUB_443, lambda: _reach(NET_PUBLIC_TARGET, 443, public, why))
-    run(R_PUB_80, lambda: _reach(NET_PUBLIC_TARGET, 80, public, why))
-    run(R_PUB_OTHER, lambda: _reach(NET_PUBLIC_OTHER, 443, public, why))
+    run(R_PUB_443, lambda: _reach(NET_PUBLIC_TARGET, 443, plan.get("host_tcp443_1111"), why))
+    run(R_PUB_80, lambda: _reach(NET_PUBLIC_TARGET, 80, plan.get("host_tcp80_1111"), why))
+    run(R_PUB_OTHER, lambda: _reach(NET_PUBLIC_OTHER, 443, plan.get("host_tcp443_9999"), why))
     address = str(plan.get("allowed_host_address") or "")
-    run(R_PUB_DIRECT, lambda: _reach(address, 443, public and bool(address), "the allowed host did not resolve on the host, or the host cannot reach it"))
+    run(R_PUB_DIRECT, lambda: _reach(address, 443, plan.get("host_tcp443_allowed") and bool(address), "the allowed host did not resolve on the host, or the host cannot reach it"))
     _dns_rows(plan, run)
     run(R_PACKET, lambda: _sock_refused("AF_PACKET", "SOCK_RAW", 3))
     run(R_RAW, lambda: _sock_refused("AF_INET", "SOCK_RAW", getattr(socket, "IPPROTO_ICMP", 1)))
@@ -1056,11 +1052,23 @@ def g_patchb_network(plan):
 
     run(R_PING, ping)
     run(R_V6_443, v6)
-    _host_rows(plan, run)
+    _host_rows(plan, run, side)
     _proxy_rows(plan, run)
     with ThreadPoolExecutor(max_workers=LOOPBACK_WORKERS) as pool:
-        list(pool.map(lambda job: net_row(*job), jobs))
+        futures = [pool.submit(net_row, *job) for job in jobs]
+        futures += [pool.submit(_quiet, work) for work in side]  # the host-service probes: one connect each, in parallel, each with the deadline inside it
+        for future in futures:
+            future.result()
+    for job in after:  # printed from what the side jobs finished
+        net_row(*job)
     listener.join(seconds + 5)
+
+
+def _quiet(work):
+    try:
+        work()
+    except (OSError, ValueError, TypeError, LookupError, RuntimeError):
+        pass
 
 
 NETWORK_GROUPS = {"patchb_network": g_patchb_network}

@@ -40,8 +40,9 @@ spec.loader.exec_module(sh)
 
 # ---- constants
 must("run/systemd" in sh.SKELETON_DIRS and "run/systemd/incoming" in sh.SKELETON_DIRS, "listed")
-must(sh.SKELETON_ENTRIES["run"] == ("systemd",) and sh.SKELETON_ENTRIES["run/systemd"] == ("incoming",) and sh.SKELETON_ENTRIES["run/systemd/incoming"] == (), "entries")
-must(sh.CANARY_VIEW_ALLOWED["/run"] == ("credentials", "systemd"), sh.CANARY_VIEW_ALLOWED["/run"])
+must(sh.SKELETON_ENTRIES["run"] == ("systemd", "egress") and sh.SKELETON_ENTRIES["run/systemd"] == ("incoming",) and sh.SKELETON_ENTRIES["run/systemd/incoming"] == (), "entries")  # 1.18.24: plus run/egress
+must("run/egress" in sh.SKELETON_DIRS and sh.SKELETON_ENTRIES["run/egress"] == (), "the egress mount point is an empty folder")
+must(sh.CANARY_VIEW_ALLOWED["/run"] == ("credentials", "systemd", "egress"), sh.CANARY_VIEW_ALLOWED["/run"])  # 1.18.24: plus the empty egress mount point
 dirs = re.search(r"for sandbox_entry in (usr work [^;]+); do", INSTALL)
 must(dirs and dirs.group(1).split() == list(sh.SKELETON_DIRS), "install.sh lists the helper's folders in the same order")
 must(b"\r" not in (ROOT / "install.sh").read_bytes() and b"\r" not in (ROOT / "scripts" / "sandbox-helper.py").read_bytes(), "LF line endings")
@@ -74,7 +75,7 @@ if bash:
             skeleton = lib / "root"
             first = tree(skeleton)
             must(first.get("run") == "d" and first.get("run/systemd") == "d" and first.get("run/systemd/incoming") == "d", "folders exist")
-            must(sorted(k for k in first if k.startswith("run")) == ["run", "run/systemd", "run/systemd/incoming"], "nothing else in run")
+            must(sorted(k for k in first if k.startswith("run")) == ["run", "run/egress", "run/systemd", "run/systemd/incoming"], "nothing else in run")  # 1.18.24: plus run/egress
             if os.name != "nt":
                 for rel in ("run", "run/systemd", "run/systemd/incoming"):
                     must(stat.S_IMODE((skeleton / rel).stat().st_mode) == 0o755, rel + " is 0755")

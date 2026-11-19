@@ -331,8 +331,17 @@ refuses(lambda: register("missing"), "not available")
 put_module(payload=manifest([runner(runtime_roots=[], limits={"memory_mb": 4096})]), listing=listing)
 refuses(lambda: register("ai"), "limit memory_mb")
 must(not reg_exists("ai.claude") and not (sh.RUNNERS_ROOT / "ai").exists(), "refused before any change")
+# 1.18.24 (AD-65 Patch B): allowed_hosts is accepted (exact names only); a wildcard or an IP literal is refused, and the registry row carries the list
+put_module(payload=manifest([runner(runtime_roots=[], allowed_hosts=["*.example.com"])]), listing=listing)
+refuses(lambda: register("ai"), "plain host name")
+put_module(payload=manifest([runner(runtime_roots=[], allowed_hosts=["10.0.0.1"])]), listing=listing)
+refuses(lambda: register("ai"), "looks like an IP address")
+must(not reg_exists("ai.claude"), "refused before any change")
 put_module(payload=manifest([runner(runtime_roots=[], allowed_hosts=["a.example.com"])]), listing=listing)
-refuses(lambda: register("ai"), "no host list")
+must(register("ai") == "ai.claude" and reg_json("ai.claude")["allowed_hosts"] == ["a.example.com"], "a valid list is registered and kept in the row")
+put_module(payload=manifest([runner(runtime_roots=[])]), listing=listing)
+must(register("ai") == "ai.claude" and reg_json("ai.claude")["allowed_hosts"] == [], "no key: an empty list, a door-less run")
+unregister("ai")
 put_module(payload=manifest(publisher_permissions=["module.install"]), listing=listing)
 refuses(lambda: register("ai"), "sandbox.register")
 put_module(payload=manifest(requires={"framework": ">=1.17.115"}), listing=listing)
@@ -457,7 +466,9 @@ CASES = [
     ("empty", manifest([]), True),
     ("absent", manifest(None, sandbox_runners=None, publisher_permissions=None, requires=None), True),
     ("five", manifest([runner(f"ai.r{i}") for i in range(5)]), False),
-    ("allowed_hosts", manifest([runner(allowed_hosts=["a.example.com"])]), False),
+    ("allowed_hosts valid", manifest([runner(allowed_hosts=["a.example.com"])]), True),  # 1.18.24: accepted by both, as before they refused it together
+    ("allowed_hosts wildcard", manifest([runner(allowed_hosts=["*.example.com"])]), False),
+    ("allowed_hosts ip literal", manifest([runner(allowed_hosts=["0x7f000001"])]), False),
     ("unknown key", manifest([runner(colour="red")]), False),
     ("not a list", manifest("nope"), False),
     ("entry not object", manifest(["nope"]), False),

@@ -146,8 +146,10 @@ must("/usr/local/lib/tec-tac/sandbox" in INSTALL and 'rm -rf "${SANDBOX_LIB}"' i
 # every new install path sits under an existing SANDBOX_* literal, so the 1.17.116 review lesson (the rollback list) needs no new entry
 literals = set(re.findall(r'^(SANDBOX_[A-Z_]+)="', INSTALL, re.MULTILINE))
 # 1.18.8 (updated in place): SANDBOX_ROOT_DIR is the allow-list root, "${SANDBOX_LIB}/root", so the uninstall of the lib folder removes it too
+# 1.18.24 (updated in place): the two egress template units are written under /etc/systemd/system like the slice and the sweep units, and uninstall.sh removes them
 must(literals == {"SANDBOX_HELPER", "SANDBOX_LIB", "SANDBOX_STATE", "SANDBOX_SUDOERS", "SANDBOX_SLICE", "SANDBOX_SLICE_DROPIN_DIR", "SANDBOX_SWEEP_SERVICE", "SANDBOX_SWEEP_TIMER",
-                   "SANDBOX_ROOT_DIR"}, literals)
+                   "SANDBOX_ROOT_DIR", "SANDBOX_EGRESS_SOCKET", "SANDBOX_EGRESS_SERVICE"}, literals)
+must("tec-tac-sandbox-egress@.socket" in UNINSTALL and "tec-tac-sandbox-egress@.service" in UNINSTALL, "uninstall removes the egress units")
 must('SANDBOX_ROOT_DIR="${SANDBOX_LIB}/root"' in INSTALL, "the root sits inside the lib folder")
 
 # ---- line endings and syntax

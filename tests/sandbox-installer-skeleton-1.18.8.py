@@ -52,7 +52,7 @@ must(dirs and files and merged, "the three entry lists")
 must(dirs.group(1).split() == list(sh.SKELETON_DIRS), (dirs.group(1).split(), sh.SKELETON_DIRS))
 must(files.group(1).split() == list(sh.SKELETON_FILES), (files.group(1).split(), sh.SKELETON_FILES))
 must(merged.group(1).split() == list(sh.MERGED_USR_NAMES), (merged.group(1).split(), sh.MERGED_USR_NAMES))
-for relative in sh.BASE_BINDS_REQUIRED + sh.BASE_BINDS_OPTIONAL + ("/etc/resolv.conf",):
+for relative in sh.BASE_BINDS_REQUIRED + sh.BASE_BINDS_OPTIONAL:  # 1.18.24: no /etc/resolv.conf mount point
     must(relative.lstrip("/") in sh.SKELETON_DIRS + sh.SKELETON_FILES, f"{relative} has a mount point")
 
 # ---- modes, owners, links, removal

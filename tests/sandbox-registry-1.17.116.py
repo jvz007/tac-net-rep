@@ -129,8 +129,12 @@ must(registry.PluginSpec(plugin_id="ai", plugin_type="extension", root=spec.root
 
 # ---- refusals
 refused(manifest([good(colour="red")]), "unsupported keys")
-refused(manifest([good(allowed_hosts=["api.example.com"])]), "no host list")
-refused(manifest([good(allowed_hosts=[])]), "no host list")
+# 1.18.24 (AD-65 Patch B): allowed_hosts is accepted again, with strict rules (tests/sandbox-allowed-hosts-1.18.24.py has every case)
+must(parse(manifest([good(allowed_hosts=["api.example.com"])])).sandbox_runners[0]["allowed_hosts"] == ["api.example.com"], "a valid list")
+must(parse(manifest([good(allowed_hosts=[])])).sandbox_runners[0]["allowed_hosts"] == [], "an empty list")
+must(parse(manifest([good()])).sandbox_runners[0]["allowed_hosts"] == [], "no key: an empty list")
+refused(manifest([good(allowed_hosts=["*.example.com"])]), "plain host name")
+refused(manifest([good(allowed_hosts=["1.1.1.1"])]), "looks like an IP address")
 refused(manifest("nope"), "must be a JSON array")
 refused(manifest(["nope"]), "must be a JSON object")
 refused(manifest([good(runner_id=f"ai.r{i}") for i in range(5)]), "more than 4")

@@ -491,7 +491,7 @@ finally:
 sandbox.SANDBOX_ENABLED = False
 write_status(slots_total=4)
 answer = sandbox.status()
-must(set(answer) == {"enabled", "ready", "reason", "systemd_version", "address_filter_ok", "dns_ok", "selftest_at", "slots_total", "slots_used", "canary_ok", "canary_at", "runners"}, sorted(answer))
+must(set(answer) == {"enabled", "ready", "reason", "systemd_version", "address_filter_ok", "dns_ok", "network_private_ok", "egress_ok", "selftest_at", "slots_total", "slots_used", "canary_ok", "canary_at", "runners"}, sorted(answer))
 must(answer["slots_total"] == 4 and answer["slots_used"] is None and answer["canary_ok"] is False and answer["canary_at"] is None, answer)
 (STATE / "canary.json").write_text(json.dumps({"ok": True, "at": "2026-11-12T08:00:00Z"}), encoding="utf-8")
 answer = sandbox.status()

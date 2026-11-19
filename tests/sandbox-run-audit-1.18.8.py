@@ -37,7 +37,7 @@ H = load("sandbox_harness_188a", HERE / "sandbox-harness-1.17.118.py")
 sh, must, BASE = H.sh, H.must, H.BASE
 H.write_ready_status()
 STARTED = {"runner", "run_id", "person", "canary"}
-ENDED = STARTED | {"reason", "exit", "ms", "bytes_out", "bytes_err", "peak_mb", "oom_kills", "evidence"}
+ENDED = STARTED | {"reason", "exit", "ms", "bytes_out", "bytes_err", "peak_mb", "oom_kills", "evidence", "egress_allowed", "egress_refused", "egress_bytes"}  # 1.18.24: the egress counts
 
 
 def audit_rows(event=None):

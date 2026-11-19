@@ -2,6 +2,10 @@
 """1.18.8 note: updated in place for the allow-list file view (RootDirectory=, no TemporaryFileSystem deny list), the single module runtime bind
 and the fixed credential slot names cred0/cred1. The new tests are tests/sandbox-file-view-1.18.8.py and tests/sandbox-template-1.18.8.py.
 
+1.18.24 note: updated in place for AD-65 Patch B: the unit has its own network space (PrivateNetwork=yes), AF_INET AF_UNIX, no IPAddressDeny and no
+resolv.conf bind; the resolver rule (usable_resolvers) is retired. The new tests are tests/sandbox-private-network-1.18.24.py (the unit properties and the closed
+set), tests/sandbox-egress-audit-1.18.24.py (the door) and tests/sandbox-selftest-network-1.18.24.py.
+
 1.17.118 regression: the unit builder of scripts/sandbox-helper.py (core.sandbox Patch 2, part B).
 
 Golden test: every hardening property is present, none is taken from the caller or from the module's manifest text, the address filter is
@@ -42,7 +46,7 @@ joined_props = "\n".join(props)
 GOLDEN = [
     "DynamicUser=yes", "ProtectSystem=strict", "ProtectHome=yes", "PrivateTmp=yes", "PrivateDevices=yes", "PrivateIPC=yes", "NoNewPrivileges=yes",
     "CapabilityBoundingSet=", "AmbientCapabilities=", "SystemCallFilter=@system-service", "SystemCallFilter=~@privileged @resources",
-    "SystemCallArchitectures=native", "SystemCallErrorNumber=EPERM", "RestrictAddressFamilies=AF_INET", "RestrictNamespaces=yes",
+    "SystemCallArchitectures=native", "SystemCallErrorNumber=EPERM", "PrivateNetwork=yes", "RestrictAddressFamilies=AF_INET AF_UNIX", "RestrictNamespaces=yes",
     "RestrictRealtime=yes", "RestrictSUIDSGID=yes", "LockPersonality=yes", "MemoryDenyWriteExecute=no", "ProtectKernelTunables=yes",
     "ProtectKernelModules=yes", "ProtectKernelLogs=yes", "ProtectControlGroups=yes", "ProtectClock=yes", "ProtectHostname=yes",
     "ProtectProc=invisible", "ProcSubset=pid", "UMask=0077", "KillMode=control-group", "SendSIGKILL=yes", "MemorySwapMax=0", "OOMPolicy=kill", "LimitNOFILE=1024",
@@ -50,8 +54,8 @@ GOLDEN = [
 ]
 for item in GOLDEN:
     must(props.count(item) == 1, (item, props.count(item)))
-must("RestrictAddressFamilies=AF_INET" in props and "AF_INET6" not in joined_props, "no IPv6 (kept as a question for Johan)")
-must("AF_UNIX" not in joined_props, "1.17.124: no AF_UNIX for a run (the abstract namespace is not reachable); tests/sandbox-unix-1.17.124.py proves the rest")
+must("RestrictAddressFamilies=AF_INET AF_UNIX" in props and "AF_INET6" not in joined_props, "no IPv6 (kept as a question for Johan)")
+must("RestrictAddressFamilies=AF_INET" not in props, "1.18.24: AF_UNIX is allowed for the egress door only; abstract names are private to the run's own network space")
 # limits come from the row
 for item in ("MemoryMax=512M", "CPUQuota=50%", "TasksMax=100", f"LimitFSIZE={32 * 1024 * 1024}", "RuntimeMaxSec=65"):
     must(props.count(item) == 1, (item, [p for p in props if p.split("=")[0] == item.split("=")[0]]))
@@ -68,17 +72,14 @@ for path in sh.BASE_BINDS_REQUIRED + sh.BASE_BINDS_OPTIONAL:
     must(path in binds, path)
 must("/usr" in binds and "/opt/tec-tac/runtimes/ai" in binds and "/opt/tec-tac/runtimes/ai/claude" not in binds and str(sh.RUNNERS_ROOT / "ai") in binds and str(sh.LAUNCHER_FILE) in binds, binds)
 must(len(binds) == len(set(binds)) and all(" " not in b for b in binds if b != str(sh.LAUNCHER_FILE)), "one path per property")
-# 1.17.123: /etc/resolv.conf is no longer bound from the host: Core's own file is bound over it, read only
+# 1.18.24: a run has no resolv.conf at all: no bind of the host's file and none of Core's own
 real_line = next(line for line in (ROOT / "scripts/sandbox-helper.py").read_text(encoding="utf-8").splitlines() if line.startswith("BASE_BINDS_REQUIRED"))
 must('"/etc/resolv.conf"' not in real_line and '"/etc/ssl/certs"' in real_line, real_line)
-must(binds.count(str(sh.core_resolv_file()) + ":/etc/resolv.conf") == 1 and "/etc/resolv.conf" not in binds, binds)
+must(not any("resolv.conf" in b for b in binds), binds)
 must(sh.HELPER_COMMAND == "/usr/local/sbin/tec-tac-sandbox" and not any(p.startswith("Exec") for p in props), "no property command (1.18.14)")
-# network: the section 15 string exactly; 1.17.123: no Allow at all, the resolver is Core's own resolv.conf
-must(f"IPAddressDeny={sh.ADDRESS_DENY}" in props and sh.ADDRESS_DENY == "127.0.0.0/8 ::1/128 169.254.0.0/16 fe80::/10 224.0.0.0/4 ff00::/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7", "address filter")
-must("IPAddressAllow" not in joined_props, "no IPAddressAllow anywhere")
-must(props.count("IPAddressDeny=" + sh.ADDRESS_DENY + " 203.0.113.5/32 203.0.113.1/32") == 0 and [p for p in props if p.startswith("IPAddressDeny=")] == ["IPAddressDeny=" + sh.ADDRESS_DENY], "no extra without deny_extra")
-extra_props = sh.build_properties(row, RUN_ID, credential_names=["auth"], exists=EXISTS, deny_extra=["203.0.113.5/32", "2001:db8::5/128"])
-must([p for p in extra_props if p.startswith("IPAddressDeny=")] == ["IPAddressDeny=" + sh.ADDRESS_DENY + " 203.0.113.5/32 2001:db8::5/128"], "own addresses are appended to the one deny property")
+# network (1.18.24): the run's own, empty network space; no address filter, no Allow, no resolver. The numeric range string stays: the egress proxy's own unit uses it
+must("PrivateNetwork=yes" in props and not any(p.startswith("IPAddress") for p in props) and "IPAddressAllow" not in joined_props, "no address filter in a run unit")
+must(sh.ADDRESS_DENY == "127.0.0.0/8 ::1/128 169.254.0.0/16 fe80::/10 224.0.0.0/4 ff00::/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7", "the numeric string")
 # 1.17.123: memory. MemorySwapMax=0 and OOMPolicy=kill always; MemoryZSwapMax=0 only when asked (systemd 255 or newer)
 must("MemoryZSwapMax=0" not in props and "OOMPolicy=kill" in props and "MemorySwapMax=0" in props, "no ZSwap property by default")
 zs = sh.build_properties(row, RUN_ID, credential_names=["auth"], exists=EXISTS, zswap=True)
@@ -92,7 +93,7 @@ must(not [p for p in none if p.startswith(("LoadCredential=", "ExecStartPost="))
 for p in props:
     must("=" in p and "\n" not in p and "\x00" not in p, p)
 ALLOWED_KEYS = {p.split("=")[0] for p in GOLDEN} | {"MemoryMax", "CPUQuota", "TasksMax", "LimitFSIZE", "RuntimeMaxSec", "TemporaryFileSystem", "WorkingDirectory",
-                                                  "BindReadOnlyPaths", "IPAddressDeny", "RootDirectory", "MountAPIVFS", "LoadCredential"}
+                                                  "BindReadOnlyPaths", "RootDirectory", "MountAPIVFS", "LoadCredential"}
 must({p.split("=")[0] for p in props} <= ALLOWED_KEYS, {p.split("=")[0] for p in props} - ALLOWED_KEYS)
 
 # ---- nothing comes from the caller or the manifest text
@@ -151,22 +152,7 @@ default_row = make_runner("ai.defaults")
 dp = sh.build_properties(default_row, RUN_ID, credential_names=[], exists=EXISTS)
 must("MemoryMax=1024M" in dp and "CPUQuota=100%" in dp and "TasksMax=256" in dp and f"RuntimeMaxSec={20 + sh.TIMER_SLACK_SECONDS}" in dp, "defaults from the row")
 
-# ---- the resolver rule at start time (1.17.123: the upstream list, proven by the selftest, outside the denied ranges)
-U = sh.usable_resolvers
-LOCAL = {"addresses": ["203.0.113.5", "127.0.0.1"], "gateways": ["203.0.113.1"], "extra": []}
-status = {"ready": True, "resolvers": ["9.9.9.9"]}
-must(U(status, "nameserver 9.9.9.9\noptions edns0\n", LOCAL) == ["9.9.9.9"], "proven and still listed")
-must(U(status, "nameserver 1.1.1.1\n", LOCAL) == [], "changed since the selftest: no resolver")
-must(U(status, "", LOCAL) == [] and U({"ready": True}, "nameserver 9.9.9.9\n", LOCAL) == [], "none")
-must(U({"resolvers": ["1.1.1.1", "9.9.9.9"]}, "nameserver 192.168.1.1\nnameserver 1.1.1.1\n", LOCAL) == ["1.1.1.1"], "only the proven one of several")
-must(U({"resolvers": ["::1"]}, "nameserver ::1\n", LOCAL) == [], "IPv6 skipped (the unit has no AF_INET6)")
-must(U({"resolvers": ["fe80::1"]}, "nameserver fe80::1%eth0\n", LOCAL) == [], "zone id skipped")
-must(U({"resolvers": ["127.0.0.53"]}, "nameserver 127.0.0.53\n", LOCAL) == [], "the stub is inside a denied range: never usable, even if a status file lists it")
-must(U({"resolvers": ["203.0.113.1"]}, "nameserver 203.0.113.1\n", LOCAL) == [], "the gateway is never usable")
-# the same, end to end through launch(): refuses before anything starts
-write_ready_status(resolver="10.9.9.9", resolvers=["10.9.9.9"])
-code, frames = start(header("ai.defaults"), hold=False)
-must(frames == [{"t": "refused", "code": "sandbox_unavailable", "message": "no upstream name server that the selftest proved is still listed and outside the denied ranges"}], frames)
+# ---- 1.18.24: the resolver rule is retired (a run has no resolver); a not-ready status still refuses before anything starts
 write_ready_status(ready=False, reason="x")
 code, frames = start(header("ai.defaults"), hold=False)
 must(frames[0]["code"] == "sandbox_unavailable" and "selftest" in frames[0]["message"], frames)

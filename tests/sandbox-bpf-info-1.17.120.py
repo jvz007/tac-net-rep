@@ -50,18 +50,18 @@ must(status["address_filter_ok"] is True, status)
 status = selftest(F.Fake(systemctl=(0, WITH_BPF)))
 must(status["ready"] is True and status["checks"]["bpf_framework"] == {"ok": True, "detail": "BPF_FRAMEWORK is not disabled"}, status["checks"]["bpf_framework"])
 
-# ---- -BPF_FRAMEWORK and a loopback that stays reachable: not ready, with the address filter reason
-status = selftest(F.Fake(systemctl=(0, NO_BPF), address_filter_loopback="leak"))
-must(status["ready"] is False and "reaching the server itself" in status["reason"], status)
-must(status["checks"]["address_filter_loopback"]["ok"] is False and status["address_filter_ok"] is False, status["checks"])
+# ---- -BPF_FRAMEWORK and a loopback that stays reachable: not ready, with the network wall reason (1.18.24: PrivateNetwork, not an address filter)
+status = selftest(F.Fake(systemctl=(0, NO_BPF), network_private="leak"))
+must(status["ready"] is False and "reached an address" in status["reason"], status)
+must(status["checks"]["network_private"]["ok"] is False and status["address_filter_ok"] is False, status["checks"])
 must(status["checks"]["bpf_framework"]["ok"] is True, "the row stays information")
 must(status["reason"] != "ready" and "weaker" not in status["reason"], status["reason"])
 
 # ---- +BPF_FRAMEWORK and a failing filter probe: not ready (the flag never makes a broken filter pass)
 for label, overrides, part in (
-    ("loopback reachable", {"address_filter_loopback": "leak"}, "reaching the server itself"),
-    ("private range sent", {"address_filter_private": (0, "10.255.255.254 sent\n172.31.255.254 sent\n")}, "private-range"),
-    ("control cannot connect", {"address_filter_control": (0, "blocked\n")}, "could not be checked"),
+    ("loopback reachable", {"network_private": "leak"}, "reached an address"),
+    ("an interface beyond lo", {"network_private": (0, "ifaces lo,eth0\nconnect 1.1.1.1 443 ENETUNREACH\nconnect 127.0.0.1 1 ECONNREFUSED\nresolv absent\n")}, "still saw a network"),
+    ("control cannot connect", {"network_control": (0, "ifaces lo\n")}, "could not be checked"),
 ):
     status = selftest(F.Fake(systemctl=(0, WITH_BPF), **overrides))
     must(status["ready"] is False and part in status["reason"] and status["address_filter_ok"] is False, (label, status["reason"]))
