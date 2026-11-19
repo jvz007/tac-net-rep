@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.18.17",
+  "version": "1.18.18",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.18.17.md",
-      "size": 9351,
-      "sha256": "ae8246e31caa61376af4090e7b4d329bffb916101453bd9a28ff4c5376717796"
+      "path": "RELEASE_NOTES_1.18.18.md",
+      "size": 4668,
+      "sha256": "013d8a11cd878fa2ab95d3f4956ab6f542e4e38cf4db21080e99244ee0581b3d"
     },
     {
       "path": "VERSION",
       "size": 8,
-      "sha256": "7000788a5cee8a441905da2b118d5f0c19e398e669345a276eae298b2dc87991"
+      "sha256": "4c40e3f2d9fe364d21b14d766e9d597551f023a19ae7bb2b387bd86dd43d1031"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -183,8 +183,8 @@
     },
     {
       "path": "docs/module-repositories.md",
-      "size": 34522,
-      "sha256": "92d759cf9a70dbb9021a18ad64375d7e7aa96fb0de948d9d4720de7b9250b85e"
+      "size": 34823,
+      "sha256": "8e50b1cc9a06bc705852c06e28dea824025c01753dcac8606848e28c56e2e05e"
     },
     {
       "path": "docs/module-routes.md",
@@ -1767,6 +1767,11 @@
       "sha256": "6b9e285b665e5fe3cd5e50d66f78fea0e8d1e7300ceefdf3f840360af0c4138c"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.18.17.md",
+      "size": 9351,
+      "sha256": "ae8246e31caa61376af4090e7b4d329bffb916101453bd9a28ff4c5376717796"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.18.2.md",
       "size": 5748,
       "sha256": "79f2c7d65574d4cda0587f6f026293ecd9cfca05ccf7427388c92fc977bdbfea"
@@ -2238,8 +2243,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 501483,
-      "sha256": "22fb78d126ca952ea6ac12e493bf599b62a9e0515f4385a8e6c4e4a9e6d2f661"
+      "size": 501627,
+      "sha256": "d7a3e349cff85eca63dd6efd07d18e9835136cf27abf9a701789b08961b2aeee"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -2318,8 +2323,8 @@
     },
     {
       "path": "framwork/tec_tac/licensing_catalogue_source.py",
-      "size": 42964,
-      "sha256": "6a22f482b853791070b18ffdf401178f97ae2eb6acd2da9367febc123e94f72d"
+      "size": 43324,
+      "sha256": "93b9caad8e7580322c4dfd54e0ed44aafd2ee192474c2da594578fac9eff3272"
     },
     {
       "path": "framwork/tec_tac/licensing_server_url.py",
@@ -2613,8 +2618,8 @@
     },
     {
       "path": "framwork/tec_tac/module_allowed_views.py",
-      "size": 4532,
-      "sha256": "43d0866d4f6408f9bfac621f29b4b2e309da9c7b9d1543371386222e123c8718"
+      "size": 5459,
+      "sha256": "b86539a42baa07e85508e4e74834790113637797d78c595091cce3c0e4b850d4"
     },
     {
       "path": "framwork/tec_tac/module_category.py",
@@ -3204,7 +3209,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "c4cee3ab75d713dcdb132bab8185c0d53481b8372ceb20ac4bad30314a51651e"
+      "sha256": "1380894f8870a27d156fa7221853ef419d94ef17122b0a4bd3621f5e9112cc9e"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -3274,7 +3279,7 @@
     {
       "path": "tests/allowed-modules-route-1.18.10.py",
       "size": 16213,
-      "sha256": "a6f3a8e2100939ad167b5db7dc06c76835304ce9794d1e5855b69acb329dddff"
+      "sha256": "d76804deabc64b9d3bc322ce24d71471c14d7722ddab6f9dd1576c1869764780"
     },
     {
       "path": "tests/api-key-audit-1.17.26.py",
@@ -4197,6 +4202,11 @@
       "sha256": "e0c0ce59c986622c4c63fd11bb76378b43b2437362b75cda34aad0b7e1b941ca"
     },
     {
+      "path": "tests/legacy/version-1.18.17.py",
+      "size": 2680,
+      "sha256": "24f621df7c6ef727d5389f85e63827ed21ac1462c727523f08312e289269cbdb"
+    },
+    {
       "path": "tests/legacy/version-1.18.3.py",
       "size": 2128,
       "sha256": "aa852265f37d2325e1e4c562fa84ce43948c5749707e17b1f1ce549f2375bae7"
@@ -4845,6 +4855,11 @@
       "path": "tests/portable-privileged-foundation.sh",
       "size": 371,
       "sha256": "3e1e7801cfd2e01d2bc8870dc77997662260e74070b2384544bd6c66aab34585"
+    },
+    {
+      "path": "tests/premium-untick-audit-1.18.18.py",
+      "size": 8514,
+      "sha256": "8218867fab617c1535505ce5e4374b26096dd87c6162489fb7fdc6dad3223090"
     },
     {
       "path": "tests/priority-mail-1.17.25.py",
@@ -7072,9 +7087,9 @@
       "sha256": "9fc70da5923a2808e009896ff1fce0abb1ae507e847cf28b05faea1575d30714"
     },
     {
-      "path": "tests/version-1.18.17.py",
-      "size": 2680,
-      "sha256": "24f621df7c6ef727d5389f85e63827ed21ac1462c727523f08312e289269cbdb"
+      "path": "tests/version-1.18.18.py",
+      "size": 2350,
+      "sha256": "7ed145d9719abb8d6ad52b60a88af7b8ac76a713ac8b4fd439ad970ee328434a"
     },
     {
       "path": "tests/version-rebuild-ordering.py",

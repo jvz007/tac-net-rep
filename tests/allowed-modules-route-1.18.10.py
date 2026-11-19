@@ -19,7 +19,7 @@ caps_stub = types.ModuleType("tec_tac.capabilities")
 
 
 def get_capability(capability_id, version=None):
-    assert capability_id == "licensing.allowed_modules" and version == ">=1.0.0,<2.0.0", (capability_id, version)
+    assert capability_id == "licensing.allowed_modules" and version == ">=1.1.0,<2.0.0", (capability_id, version)
     if PROVIDER["missing"]:
         raise LookupError("not installed")
     return PROVIDER["object"]

@@ -21,6 +21,9 @@ _ALLOWED_STATUS = {
     "licensing_unavailable": 503, "invalid_response": 502,
 }
 
+# The states that are a "no" to the request itself. Any other state that is not saved means no usable answer (a failure).
+_REFUSED_STATES = frozenset({"locked", "unknown_module", "bad_request", "required_by"})
+
 
 def _allowed_http(state):
     """200 for a list or a saved choice, 4xx for a refusal, 503 or 502 when Licensing gave no usable answer. Any other Licensing state
@@ -75,8 +78,17 @@ class ModuleAllowedSelectionView(APIView):
             _audit_allowed(request, action="modify", object_type="module_selection", object_id=shown_id,
                            message=f"{'Selected' if body['selected'] else 'Deselected'} the premium module {shown_id} for the allowed-module list.",
                            before={"deselected": body["before"]}, after={"deselected": body["after"]}, metadata={"selected": body["selected"]})
-        elif body["state"] in ("locked", "unknown_module", "bad_request", "required_by"):
-            _audit_allowed(request, action="deny", object_type="module_selection", object_id=shown_id,
-                           message=f"Refused to change the selection of {shown_id or 'a module'}: {body['state']}.",
-                           metadata={"result": body["state"], "selected": body["selected"]})
+        else:
+            # Every attempt that does not end saved leaves one deny row (1.18.18). A refusal is Core's or Licensing's "no"; a failure is
+            # Licensing or the plan giving no usable answer. record() refuses the Core-only failed-operation action, so both are "deny"
+            # and the metadata outcome tells them apart. The text uses state words only, never anything Licensing sent.
+            state = body["state"]
+            refused = state in _REFUSED_STATES
+            who = shown_id or "a module"
+            metadata = {"result": state, "selected": body["selected"], "outcome": "refused" if refused else "failed"}
+            if state == "required_by":
+                metadata["required_by"] = [str(item) for item in (body.get("required_by") or [])[:50]]
+            message = (f"Refused to change the selection of {who}: {state}." if refused
+                       else f"Could not change the selection of {who}: {state}. Nothing was changed.")
+            _audit_allowed(request, action="deny", object_type="module_selection", object_id=shown_id, message=message, metadata=metadata)
         return Response(body, status=_allowed_http(body["state"]))

@@ -290,7 +290,9 @@ Licensing keeps a list of the modules your licence allows, and the releases an a
 |---|---|
 | `GET /api/tfd/modules/catalog/allowed/` | Reads the saved list. It makes no call to the Licensing Server. |
 | `POST /api/tfd/modules/catalog/allowed/refresh/` | Asks Licensing to refresh the list. Licensing calls the Licensing Server at most once a minute and answers `cached` inside that minute. Core writes an audit row (`run`, `allowed_modules`). |
-| `PUT /api/tfd/modules/catalog/allowed/selection/` | Body `{"module_id": "...", "selected": true or false}`. Ticks or unticks one licensed premium module. Core writes an audit row (`modify`, `module_selection`, with the before and after lists, or `deny` for a refusal). |
+| `PUT /api/tfd/modules/catalog/allowed/selection/` | Body `{"module_id": "...", "selected": true or false}`. Ticks or unticks one licensed premium module. Core writes an audit row (`modify`, `module_selection`, with the before and after lists, or `deny` for every attempt that does not end saved, with `outcome` `refused` or `failed` in the metadata). |
+
+**Needs Licensing 0.10.7 or later (1.18.18).** Core requires `licensing.allowed_modules` 1.1.0, which publishes the Core-only `set_selection`. With an older Licensing the three routes answer `licensing_unavailable`.
 
 **Who may use them.** Anyone with `core.privileged_operations` (a module manager). Everyone else gets 403. The check runs first and fails closed.
 

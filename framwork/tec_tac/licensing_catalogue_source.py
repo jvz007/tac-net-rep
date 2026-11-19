@@ -553,12 +553,14 @@ def download_release(
 
 # --- the allowed-module list (1.18.10) -----------------------------------------------------------------------------------------
 #
-# ``licensing.allowed_modules`` 1.0.0 is Core-only too (AD-56) and checks the same thing: the first frame outside Licensing must be this
+# ``licensing.allowed_modules`` (1.1.0 or later since 1.18.18) is Core-only too (AD-56) and checks the same thing: the first frame outside Licensing must be this
 # file. So every call below goes straight from this file to the provider method. Core's views never call the provider. What leaves this
 # file is whitelisted and type-checked: no key, grant, token, Licensing Server address, SHA-256, publisher id or key id.
 
 ALLOWED_CAPABILITY_ID = "licensing.allowed_modules"
-ALLOWED_CAPABILITY_RANGE = ">=1.0.0,<2.0.0"
+# Since 1.18.18 Core needs 1.1.0, which publishes the Core-only ``set_selection`` operation (Licensing 0.10.7). A Licensing that registers
+# only 1.0.0 reads as licensing_unavailable for the list, refresh and selection routes: never an unrestricted list, no fallback.
+ALLOWED_CAPABILITY_RANGE = ">=1.1.0,<2.0.0"
 
 _ALLOWED_ID_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 _CHANNEL_WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,31}")
@@ -801,8 +803,8 @@ def set_premium_selection(module_id: Any, selected: Any) -> dict:
 
     Core checks first, before it calls Licensing: the id's shape, a real bool, and that the id is on the list Licensing just gave as an
     entitled, optional premium row. A Core or Server row, an unentitled row and an id outside the list are refused here. Licensing's own
-    ``set_selection`` then keeps the ``required_by`` refusal and the row-locked write. There is no fallback: a provider without
-    ``set_selection`` is ``licensing_unavailable``. Nothing is installed or removed."""
+    ``set_selection`` (a published, gated Core-only operation of licensing.allowed_modules 1.1.0) then keeps the ``required_by`` refusal
+    and the row-locked write. There is no fallback: a provider older than 1.1.0 is ``licensing_unavailable``. Nothing is installed or removed."""
     if not isinstance(module_id, str) or not _ALLOWED_ID_RE.fullmatch(module_id) or not isinstance(selected, bool):
         return _selection_body("bad_request", module_id if isinstance(module_id, str) and _ALLOWED_ID_RE.fullmatch(module_id) else "", False)
     current = read_allowed_modules()

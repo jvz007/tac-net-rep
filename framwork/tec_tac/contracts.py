@@ -2178,7 +2178,7 @@ HTTP_CONTRACT_DETAILS = {
             },
             "errors": {"403": "no module management permission", "502": "Licensing's answer was not in the expected form (state invalid_response)", "503": "the Licensing module is missing, disabled, unhealthy or refused Core (state licensing_unavailable)"},
             "notes": [
-                "Added 1.18.10 (module-facing, additive; the first reader is Welcome 1.2.15, no other module calls this route). Core reads the Core-only capability licensing.allowed_modules 1.0.0 (AD-56) from licensing_catalogue_source.py, the one file Licensing accepts, and answers a whitelisted copy. The release object carries no SHA-256, publisher_id or key_id (Core checks those itself at install). No key, grant, token or Licensing Server address is ever returned. A missing or refusing provider is never an unrestricted list. This GET makes no call to the Licensing Server and installs nothing.",
+                "Added 1.18.10 (module-facing, additive; the first reader is Welcome 1.2.15, no other module calls this route). Core reads the Core-only capability licensing.allowed_modules (AD-56; since 1.18.18 Core requires licensing.allowed_modules >=1.1.0 and calls its Core-only set_selection; a 1.0.0 provider reads as licensing_unavailable) from licensing_catalogue_source.py, the one file Licensing accepts, and answers a whitelisted copy. The release object carries no SHA-256, publisher_id or key_id (Core checks those itself at install). No key, grant, token or Licensing Server address is ever returned. A missing or refusing provider is never an unrestricted list. This GET makes no call to the Licensing Server and installs nothing.",
             ],
         },
     },
