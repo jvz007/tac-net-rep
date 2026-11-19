@@ -2099,7 +2099,7 @@ def _exec_escape(text):
 
 
 def build_argv(row, run_id, parameters, *, credential_names, exists=os.path.lexists, deny_extra=(), resolv_file=None, zswap=False):
-    argv = [*SYSTEMD_RUN, "--pipe", "--wait", "--collect", "--quiet", f"--unit={unit_name(run_id)}", f"--slice={SLICE}"]
+    argv = [*SYSTEMD_RUN, "--pipe", "--wait", "--quiet", f"--unit={unit_name(run_id)}", f"--slice={SLICE}"]  # 1.18.17: no --collect, systemd keeps the unit record until the helper has read it
     argv += [f"--property={item}" for item in build_properties(row, run_id, credential_names=credential_names, exists=exists, deny_extra=deny_extra,
                                                                 resolv_file=resolv_file, zswap=zswap)]
     argv += [f"--setenv={name}={value}" for name, value in build_environment(row).items()]
@@ -2498,6 +2498,46 @@ def stop_unit(run_id):
     return systemctl("stop", unit_name(run_id) + ".service")[0] == 0
 
 
+UNIT_RESULTS = frozenset({"success", "exit-code", "signal", "core-dump", "timeout", "oom-kill", "watchdog", "resources", "protocol",
+                          "start-limit-hit", "dependency", "skipped", "exec-condition", "capture-failure"})
+UNIT_SHOW_KEYS = ("LoadState", "ActiveState", "Result", "ExecMainCode", "ExecMainStatus")
+UNIT_ACTIVE_STATES = frozenset({"active", "inactive", "failed", "activating", "deactivating", "reloading", "maintenance", "refreshing"})
+UNIT_NUMBER_RE = re.compile(r"^[0-9]{1,4}$")
+
+
+def read_unit_result(run_id):
+    """1.18.17: systemd's own record of a finished run unit, or None. One ``systemctl show`` (through systemctl(), so CHILD_ENV and the 15 s
+    timeout apply), parsed line by line as an exact ``Key=Value``; every value is checked against a whitelist. None for a failed call, an
+    unloaded unit (a unit that exited 0 is garbage-collected, and systemd then reports Result=success and status 0 by default, which proves
+    nothing), a duplicate, an unknown or a malformed line. Nothing is guessed. Never reads the run's streams: the sandboxed program writes to
+    the same stderr as systemd-run. Returns {"result", "code", "status", "active"} with code 'exited', 'killed' or 'dumped' (or None)."""
+    code, out, _err = systemctl("show", "--property=" + ",".join(UNIT_SHOW_KEYS), unit_name(run_id) + ".service")
+    if code != 0 or not isinstance(out, str):
+        return None
+    found = {}
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        key, sep, value = line.partition("=")
+        if not sep or key not in UNIT_SHOW_KEYS or key in found:
+            return None
+        found[key] = value
+    if set(found) != set(UNIT_SHOW_KEYS) or found["LoadState"] != "loaded":
+        return None
+    if found["Result"] not in UNIT_RESULTS or found["ActiveState"] not in UNIT_ACTIVE_STATES:
+        return None
+    if not UNIT_NUMBER_RE.match(found["ExecMainCode"]) or not UNIT_NUMBER_RE.match(found["ExecMainStatus"]):
+        return None
+    main_code, status = int(found["ExecMainCode"]), int(found["ExecMainStatus"])
+    kind = {1: "exited", 2: "killed", 3: "dumped"}.get(main_code)  # CLD_EXITED, CLD_KILLED, CLD_DUMPED; 0 means never ran
+    return {"result": found["Result"], "code": kind, "status": status, "active": found["ActiveState"]}
+
+
+def reset_failed_unit(run_id):
+    """1.18.17: forget a failed run unit. The result is ignored: 'not loaded' is normal."""
+    systemctl("reset-failed", unit_name(run_id) + ".service")
+
+
 def slice_cgroup_folders(slice_name=None):
     """1.18.8: where the sandbox slice lives in the cgroup tree, from the slice name alone. systemd reads a dash in a slice name as nesting
     (``tec-tac-sandbox.slice`` sits in ``tec-tac.slice`` in ``tec.slice``), so the nested path is tried first and the flat one second. The
@@ -2674,6 +2714,8 @@ def launch(row, *, run_id, person, parameters, credentials, input_data, emit, st
         run_record_path(run_id).unlink(missing_ok=True)
         cancel_flag_path(run_id).unlink(missing_ok=True)
         handoff_path(run_id).unlink(missing_ok=True)
+        if process is not None and progress.get("unit_loaded") is not False:  # 1.18.17: a failed run unit is forgotten (cancel, fault and refusal paths too)
+            reset_failed_unit(run_id)
         holder.release()
         if audited:
             append_audit_safely("run.ended", run_ended_detail(row, run_id, person, canary, progress, int((clock() - started_at) * 1000)))
@@ -2739,23 +2781,26 @@ def _whole(value):
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
-def in_memory_handoff(watch, exit_code, elapsed, run_seconds, stop_reason_set):
+def in_memory_handoff(watch, exit_code, elapsed, run_seconds, stop_reason_set, unit=None):
     """1.18.14: what ``--finish`` used to hand over, built by the helper from its own last forced cgroup poll. ``result`` is 'oom-kill' only
     when the poll saw one or more kills and the exit code is not 0, 'timeout' only when no helper stop reason is set and the run lasted at
     least its limit plus the timer slack (systemd's RuntimeMaxSec fired), otherwise ''. A kill between the last poll and the cgroup going
-    away is reported as unknown, never guessed."""
+    away is reported as unknown, never guessed. 1.18.17: ``unit`` is read_unit_result(); systemd's record is kept after the cgroup is gone, so
+    its 'oom-kill' and its 'timeout' count too, and a helper stop reason still wins."""
     result = ""
-    if _whole(watch.oom_kill) is not None and watch.oom_kill >= 1 and exit_code != 0:
+    unit_result = unit.get("result") if isinstance(unit, dict) else None
+    unit_said = None if stop_reason_set else unit_result  # a helper stop reason always wins over the unit's word
+    if (_whole(watch.oom_kill) is not None and watch.oom_kill >= 1 and exit_code != 0) or unit_said == "oom-kill":
         result = "oom-kill"
-    elif not stop_reason_set and elapsed >= run_seconds + TIMER_SLACK_SECONDS:
+    elif unit_said == "timeout" or (not stop_reason_set and unit_result is None and elapsed >= run_seconds + TIMER_SLACK_SECONDS):
         result = "timeout"
     return {"memory_peak": watch.peak_bytes(), "oom_kills": watch.oom_kill, "result": result}
 
 
-def merge_memory_evidence(watch, handoff, result):
+def merge_memory_evidence(watch, handoff, result, unit=None):
     """1.18.8: (peak bytes, oom_kills, evidence). ``oom_kills`` is the larger of the live poll and ``handoff``; the peak the larger of the two.
     1.18.14: ``handoff`` is the helper's own in-memory copy of the last forced poll (no file, no ExecStopPost), so the two agree. ``evidence``
-    names where the kill count came from: 'poll', 'finish', 'service_result' or None. Nothing is guessed."""
+    names where the kill count came from: 'poll', 'finish', 'unit_result', 'service_result' (old tests) or None. Nothing is guessed."""
     kills = [value for value in (_whole(watch.oom_kill), _whole(handoff.get("oom_kills"))) if value is not None]
     peaks = [value for value in (_whole(watch.peak_bytes()), _whole(handoff.get("memory_peak"))) if value is not None]
     oom_kills = max(kills) if kills else None
@@ -2763,6 +2808,8 @@ def merge_memory_evidence(watch, handoff, result):
         evidence = "poll"
     elif _whole(handoff.get("oom_kills")) is not None and handoff["oom_kills"] >= 1:
         evidence = "finish"
+    elif isinstance(unit, dict) and unit.get("result") == "oom-kill":
+        evidence = "unit_result"
     elif result == "oom-kill":
         evidence = "service_result"
     else:
@@ -2854,10 +2901,12 @@ def _supervise(process, row, run_id, input_data, emit, stdin_eof, started_at, cl
         process.kill()
         code = process.wait()
     watch.sample(force=True)
+    unit = read_unit_result(run_id)  # 1.18.17: systemd's own record; the run unit is not collected, so it is still there
+    progress["unit_loaded"] = unit is not None
     reason = state["reason"]
     if cancel_flag_path(run_id).exists():
         reason = "cancelled"
-    handoff = in_memory_handoff(watch, code, clock() - started_at, int(limits["run_seconds"]), bool(state["reason"]))
+    handoff = in_memory_handoff(watch, code, clock() - started_at, int(limits["run_seconds"]), bool(state["reason"]), unit)
     result = handoff["result"]
     if reason is None:
         if result == "oom-kill":
@@ -2869,13 +2918,19 @@ def _supervise(process, row, run_id, input_data, emit, stdin_eof, started_at, cl
         else:
             reason = "exited"
     credential = parser.credential if row.get("credential_return") else None
-    peak, oom_kills, evidence = merge_memory_evidence(watch, handoff, result)
+    peak, oom_kills, evidence = merge_memory_evidence(watch, handoff, result, unit)
+    real_exit, signal_number, exit_source = code, None, "systemd-run"
+    if unit is not None and unit["code"] == "exited":  # 1.18.17: the program's own exit code, not systemd-run's
+        real_exit, exit_source = unit["status"], "unit"
+    elif unit is not None and unit["code"] in ("killed", "dumped"):
+        real_exit, signal_number, exit_source = None, unit["status"], "unit"
     end = {
-        "t": "end", "exit": None if reason == "start_failed" else code, "reason": reason, "ms": int((clock() - started_at) * 1000),
+        "t": "end", "exit": None if reason == "start_failed" else real_exit, "reason": reason, "ms": int((clock() - started_at) * 1000),
         "peak_mb": round(peak / 1048576, 1) if isinstance(peak, int) else None, "oom_kills": oom_kills, "evidence": evidence,
         "credential_b64": base64.b64encode(credential).decode("ascii") if credential is not None else None,
         "bytes_out": sent["out"], "bytes_err": sent["err"],
     }
+    end.update(signal=signal_number, unit_result=unit["result"] if unit is not None else None, exit_source=exit_source)  # 1.18.17: additive, internal
     if watch.events:  # 1.18.16: additive and internal; Core's _end_event drops it and it is not in the run.ended audit row
         end["memory_events"] = {name: watch.events[name] for name in MEMORY_COUNTERS if name in watch.events}
     progress["end"] = end
@@ -3534,7 +3589,12 @@ def memory_row(result, memory_mb, block=MEMORY_BLOCK_MIB):
     known, are at or below MemoryMax (no slack) and at least one of them is known.
     ATTACK SUCCEEDED: allocated or peak above MemoryMax, the probe finished the whole allocation (CANARYEND done), or a normal exit 0.
     NOT RUN, never OK: no end frame, no evidence at all (the 1.17.123 hole: OK with nothing to show), or an end nothing explains, for example
-    dev02's 'exited (exit 1)' with no oom_kills and no CANARYEND (systemd-run --wait returns 1 for a unit ended by a signal)."""
+    dev02's 'exited (exit 1)' with no oom_kills and no CANARYEND (systemd-run --wait returns 1 for a unit ended by a signal).
+
+    1.18.17: the end frame also carries systemd's own unit result (``unit_result``, whitelisted) and the signal that ended the program; a unit
+    result of oom-kill with the end reason 'oom' is proof by itself (the cgroup counters are gone by the time the helper looks). The program's
+    real end is shown ('exit N' or 'killed by signal N'), never systemd-run's code. The memory.events max proof counts only when the kernel
+    ended the run (reason 'oom' or 'exited'): a timeout, a cancel or an output limit is not the memory limit."""
     row = {"wall": "Limits", "attack": "memory beyond MemoryMax", "expected": f"stopped by the kernel at or below {memory_mb} MiB"}
     end = result.get("end") or {}
     if result.get("refused") or not end:
@@ -3544,15 +3604,22 @@ def memory_row(result, memory_mb, block=MEMORY_BLOCK_MIB):
     allocated = parse_progress(stdout)
     word = parse_end_word(stdout)
     reason, code, peak, oom_kills = end.get("reason"), end.get("exit"), end.get("peak_mb"), end.get("oom_kills")
-    evidence = end.get("evidence") if end.get("evidence") in ("poll", "finish", "service_result") else None  # 1.18.8: where the kill count came from
+    evidence = end.get("evidence") if end.get("evidence") in ("poll", "finish", "unit_result", "service_result") else None  # 1.18.8: where the kill count came from
     peak = peak if isinstance(peak, (int, float)) and not isinstance(peak, bool) else None
     oom_kills = oom_kills if isinstance(oom_kills, int) and not isinstance(oom_kills, bool) else None
     counters = _end_counters(end.get("memory_events"))
+    unit_word = _unit_result_word(end.get("unit_result"))
+    signal_number = _signal_number(end.get("signal"))
     killed = reason == "oom" or (oom_kills is not None and oom_kills >= 1)
+    kernel_end = reason in ("oom", "exited")  # 1.18.17: the only ends the memory limit can have caused
     refused_alloc = word in ("memoryerror", "enomem")
     over = (allocated is not None and allocated > memory_mb) or (peak is not None and peak > memory_mb)
     finished = word == "done" or (reason == "exited" and code == 0)
-    how = f"ended {reason}" + (f" (exit {code})" if reason == "exited" else "") + (f", probe {word}" if word else "")
+    how = f"ended {reason}" + (f" (exit {code})" if reason == "exited" and code is not None else "") + (f", probe {word}" if word else "")
+    if signal_number is not None:
+        how += f", killed by signal {signal_number}"
+    if unit_word:
+        how += f", unit result {unit_word}"
     if word in ("memoryerror", "enomem") and allocated is not None:  # 1.18.15: the refused allocation is named in the table, with the size held
         how += f", {'MemoryError' if word == 'memoryerror' else 'enomem'} at {allocated} MiB"
     row["actual"] = (f"allocated {allocated} MiB" if allocated is not None else "no allocation reported") + f", {how}, oom_kills " + \
@@ -3568,11 +3635,16 @@ def memory_row(result, memory_mb, block=MEMORY_BLOCK_MIB):
     if over or finished:
         row["verdict"] = "ATTACK SUCCEEDED"
     elif killed and (allocated is not None or peak is not None):
-        name = f"oom_kill {oom_kills} (memory.events)" if oom_kills is not None and oom_kills >= 1 else "oom_kill (end reason oom)"
+        if oom_kills is not None and oom_kills >= 1:
+            name = f"oom_kill {oom_kills} (memory.events)"
+        elif unit_word == "oom-kill" and reason == "oom":
+            name = "systemd unit result oom-kill"
+        else:
+            name = "oom_kill (end reason oom)"
     elif refused_alloc and (allocated is not None or peak is not None):
         label = "MemoryError" if word == "memoryerror" else "enomem"
         name = f"probe {label}" + (f" at {allocated} MiB" if allocated is not None else "")
-    elif cap_hit is not None and cap_hit >= 1 and peak is not None and allocated is not None:
+    elif cap_hit is not None and cap_hit >= 1 and kernel_end and peak is not None and allocated is not None:
         name = f"memory.events max {cap_hit}, peak {peak} MiB <= {memory_mb} MiB"  # over and finished were ruled out above
     if name:
         row["verdict"] = "OK"
@@ -3581,12 +3653,24 @@ def memory_row(result, memory_mb, block=MEMORY_BLOCK_MIB):
         row["verdict"] = "NOT RUN"
         if killed or refused_alloc:
             why = "no allocation or peak to check against the limit"
+        elif cap_hit is not None and cap_hit >= 1 and not kernel_end:
+            why = f"ended by {reason}, not by the memory limit"
         elif cap_hit is not None and cap_hit >= 1:
             why = "memory.events max seen, but no peak or allocation to check it against the limit"
         else:
             why = "no evidence of how it ended"
         row["actual"] += f"; {why}"
     return row
+
+
+def _unit_result_word(value):
+    """The ``unit_result`` of an end frame, kept only when it is one of systemd's known result words."""
+    return value if isinstance(value, str) and value in UNIT_RESULTS else None
+
+
+def _signal_number(value):
+    """The ``signal`` of an end frame, kept only when it is a whole number from 1 to 64."""
+    return value if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 64 else None
 
 
 def _end_counters(value):
@@ -4029,6 +4113,38 @@ def note_swept_run(entry):
     return True
 
 
+FAILED_UNIT_RE = re.compile(r"^tectac-[a-z0-9-]+\.service$")
+SBX_UNIT_RE = re.compile(r"^tectac-sbx-([0-9a-f]{32})\.service$")
+
+
+def reset_failed_units(min_age=STALE_SECONDS):
+    """1.18.17: run units are not collected, so a failed one stays in systemd until it is reset. List the failed ``tectac-*`` units and reset
+    the ones that are safe: the name must match ``^tectac-[a-z0-9-]+\\.service$`` exactly (nothing else ever reaches systemctl), a run unit
+    whose run record or handoff is younger than ``min_age`` is left (its helper may still be about to read its Result), an active unit is
+    left. Returns the names that were reset. A failed call never aborts the sweep."""
+    code, out, _err = systemctl("list-units", "--state=failed", "--plain", "--no-legend", "--no-pager", "tectac-*")
+    if code != 0 or not isinstance(out, str):
+        return []
+    reset = []
+    for line in out.splitlines():
+        fields = line.split()
+        name = fields[0] if fields else ""
+        if not FAILED_UNIT_RE.match(name):
+            continue
+        sbx = SBX_UNIT_RE.match(name)
+        if sbx:
+            run_id = sbx.group(1)
+            if any(path.exists() and not _stale(path, min_age) for path in (run_record_path(run_id), handoff_path(run_id))):
+                continue
+            if _unit_active(run_id):
+                continue
+        elif systemctl("is-active", name)[0] == 0:
+            continue
+        systemctl("reset-failed", name)
+        reset.append(name)
+    return reset
+
+
 def sweep(min_age=STALE_SECONDS):
     """``--sweep`` (boot and daily): re-verify the runtime folders of every registered runner; remove stray selftest folders; remove
     secrets folders, handoff files and run records whose unit ``tectac-sbx-<id>`` is not active; remove old canary markers."""
@@ -4067,8 +4183,12 @@ def sweep(min_age=STALE_SECONDS):
                 entry.unlink(missing_ok=True)
             removed.append(f"{folder.name}/{entry.name}")
     remove_markers()
-    append_audit("sweep", detail={"runners_checked": checked, "runtime_state_changed": changed, "removed": removed})
-    print(json.dumps({"checked": checked, "changed": changed, "removed": removed}, sort_keys=True))
+    try:
+        units_reset = reset_failed_units(min_age)
+    except (OSError, ValueError):
+        units_reset = []
+    append_audit("sweep", detail={"runners_checked": checked, "runtime_state_changed": changed, "removed": removed, "units_reset": units_reset})
+    print(json.dumps({"checked": checked, "changed": changed, "removed": removed, "units_reset": units_reset}, sort_keys=True))
 
 
 def refuse_disabled():

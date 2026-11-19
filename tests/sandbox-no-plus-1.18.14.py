@@ -157,7 +157,7 @@ must(sh.merge_memory_evidence(Watch(1, 5 * 1048576), handoff, handoff["result"])
 make_runner("ai.keys", body="print('x')")
 code, frames = start(header("ai.keys"))
 end = end_of(frames)
-must(sorted(end) == sorted(["t", "exit", "reason", "ms", "peak_mb", "oom_kills", "evidence", "credential_b64", "bytes_out", "bytes_err"]), sorted(end))
+must(sorted(end) == sorted(["t", "exit", "reason", "ms", "peak_mb", "oom_kills", "evidence", "credential_b64", "bytes_out", "bytes_err", "signal", "unit_result", "exit_source"]), sorted(end))
 must(end["reason"] == "exited" and end["evidence"] is None, end)
 
 

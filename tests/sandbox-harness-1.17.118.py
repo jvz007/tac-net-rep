@@ -187,6 +187,30 @@ def watch():
         time.sleep(0.05)
 threading.Thread(target=watch, daemon=True).start()
 code = child.wait()
+# 1.18.17: systemd keeps the record of a unit that was not started with --collect. The fake mimics it: FAKE_RESULT forces success, exit-code,
+# signal or oom-kill; otherwise a stop request gives a killed main process, a non-zero exit gives exit-code and a clean exit leaves no record
+# (systemd garbage-collects a unit that exited 0). The record is a JSON file that the fake systemctl answers `show` from.
+mode = os.environ.get("FAKE_RESULT", "")
+record = None
+if mode == "oom-kill":
+    record = {"Result": "oom-kill", "ExecMainCode": "2", "ExecMainStatus": "9"}
+elif mode == "signal":
+    record = {"Result": "signal", "ExecMainCode": "2", "ExecMainStatus": "9"}
+elif mode == "exit-code":
+    record = {"Result": "exit-code", "ExecMainCode": "1", "ExecMainStatus": str(code if code > 0 else 3)}
+elif mode == "success":
+    record = {"Result": "success", "ExecMainCode": "1", "ExecMainStatus": "0"}
+elif stopped["v"]:
+    record = {"Result": "success", "ExecMainCode": "2", "ExecMainStatus": "15"}
+elif code > 0:
+    record = {"Result": "exit-code", "ExecMainCode": "1", "ExecMainStatus": str(code)}
+elif code < 0:
+    record = {"Result": "signal", "ExecMainCode": "2", "ExecMainStatus": str(-code)}
+if record is not None:
+    os.makedirs(os.path.join(base, "result"), exist_ok=True)
+    record.update(LoadState="loaded", ActiveState="failed" if record["Result"] != "success" else "inactive")
+    with open(os.path.join(base, "result", unit + ".json"), "w") as h:
+        json.dump(record, h)
 try:
     os.unlink(os.path.join(base, "pids", unit))
 except OSError:
@@ -194,9 +218,40 @@ except OSError:
 sys.exit(code if code >= 0 else 1)
 ''', encoding="utf-8")
 FAKE_CTL.write_text(r'''
-import os, sys
+import json, os, sys
 base = os.environ["FAKE_BASE"]
 args = sys.argv[1:]
+if args[:1] == ["reset-failed"]:  # 1.18.17: forget the unit record, and log the call
+    unit = args[1][:-len(".service")]
+    open(os.path.join(base, "resets.log"), "a").write(unit + "\n")
+    try:
+        os.unlink(os.path.join(base, "result", unit + ".json"))
+    except OSError:
+        pass
+    sys.exit(0 if os.environ.get("FAKE_RESET_FAIL") != "1" else 1)
+if args[:1] == ["list-units"]:  # 1.18.17: failed units come from failed.txt (one line per unit, written by the test)
+    if os.environ.get("FAKE_LIST_FAIL") == "1":
+        sys.exit(1)
+    path = os.path.join(base, "failed.txt")
+    if os.path.exists(path):
+        sys.stdout.write(open(path).read())
+    sys.exit(0)
+if args[:1] == ["show"] and any("LoadState" in a for a in args):  # 1.18.17: BEFORE the 'startswith(Exec)' branch below (ExecMainCode starts with Exec)
+    if os.environ.get("FAKE_SHOW_FAIL") == "1":
+        sys.exit(1)
+    unit = args[-1][:-len(".service")]
+    raw = os.path.join(base, "result", unit + ".raw")
+    if os.path.exists(raw):
+        sys.stdout.write(open(raw).read())
+        sys.exit(0)
+    path = os.path.join(base, "result", unit + ".json")
+    if os.path.exists(path):
+        rec = json.load(open(path))
+    else:  # an unloaded unit: systemd answers with defaults, Result=success and status 0 included
+        rec = {"LoadState": "not-found", "ActiveState": "inactive", "Result": "success", "ExecMainCode": "0", "ExecMainStatus": "0"}
+    for key in ("LoadState", "ActiveState", "Result", "ExecMainCode", "ExecMainStatus"):
+        print(key + "=" + rec[key])
+    sys.exit(0)
 if args[:1] == ["stop"]:
     os.makedirs(os.path.join(base, "stop"), exist_ok=True)
     unit = args[1][:-len(".service")]
@@ -225,6 +280,12 @@ sh.CHILD_ENV = {"PATH": os.environ.get("PATH", ""), "SYSTEMROOT": os.environ.get
 
 def stops():
     path = BASE / "stops.log"
+    return path.read_text(encoding="utf-8").split() if path.is_file() else []
+
+
+def resets():
+    """1.18.17: the units the fake systemctl was asked to reset-failed, in order."""
+    path = BASE / "resets.log"
     return path.read_text(encoding="utf-8").split() if path.is_file() else []
 
 

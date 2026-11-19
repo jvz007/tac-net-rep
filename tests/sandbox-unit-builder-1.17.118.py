@@ -101,7 +101,7 @@ evil_props = sh.build_properties(evil, RUN_ID, credential_names=[], exists=EXIST
 must(evil_props.count("ProtectSystem=strict") == 1 and "ProtectSystem=no" not in evil_props and "NoNewPrivileges=no" not in evil_props, "manifest text is not a property")
 must(not any("User=root" in p or "IPAddressDeny=any" in p for p in evil_props), evil_props)
 argv = sh.build_argv(evil, RUN_ID, {}, credential_names=[], exists=EXISTS)
-must(argv[:len(sh.SYSTEMD_RUN) + 6] == [*sh.SYSTEMD_RUN, "--pipe", "--wait", "--collect", "--quiet", f"--unit=tectac-sbx-{RUN_ID}", f"--slice={sh.SLICE}"], argv[:9])
+must(argv[:len(sh.SYSTEMD_RUN) + 5] == [*sh.SYSTEMD_RUN, "--pipe", "--wait", "--quiet", f"--unit=tectac-sbx-{RUN_ID}", f"--slice={sh.SLICE}"], argv[:9])
 split = argv.index("--")
 head, tail = argv[:split], argv[split + 1:]
 must(not any(a.startswith("--property=") and ("ProtectSystem=no" in a or "User=root" in a) for a in head), "")

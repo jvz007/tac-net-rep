@@ -162,7 +162,7 @@ must(end["reason"] == "oom" and end["evidence"] == "service_result" and end["oom
 sh.in_memory_handoff = real_read
 must(H.leftovers() == [] or not H.leftovers(), H.leftovers())
 # the frame is still valid json with the known keys (the Django side reads known keys only: the new key is additive)
-must({"t", "exit", "reason", "ms", "peak_mb", "oom_kills", "credential_b64", "bytes_out", "bytes_err", "evidence"} == set(end), sorted(end))
+must({"t", "exit", "reason", "ms", "peak_mb", "oom_kills", "credential_b64", "bytes_out", "bytes_err", "evidence", "signal", "unit_result", "exit_source"} == set(end), sorted(end))
 django_side = (HERE.parent / "framwork" / "tec_tac" / "sandbox.py").read_text(encoding="utf-8")
 must("evidence" not in django_side, "the Django side does not read the new key, so adding it changes no contract")
 

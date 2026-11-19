@@ -168,7 +168,7 @@ supervise(True)
 must(seen == [0.02] and waits and all(w == 0.02 for w in waits), (seen, waits))
 source = (H.ROOT / "scripts" / "sandbox-helper.py").read_text(encoding="utf-8")
 must("progress=progress, canary=canary)" in source, "launch passes the canary flag")
-must("--collect" in source, "--collect stays")
+must('"--wait", "--collect", "--quiet", f"--unit={unit or' in source and '"--wait", "--quiet", f"--unit={unit_name(run_id)}"' in source, "1.18.17: --collect stays on the probe units and is gone from the run unit")
 
 # ---- the table row names a refused allocation with the size held, and keeps its verdict rules
 refused = sh.memory_row({"stdout": f"CANARYMEM{TAB}4{NL}CANARYMEM{TAB}8{NL}CANARYEND{TAB}memoryerror{NL}".encode(), "stderr": b"", "refused": None,

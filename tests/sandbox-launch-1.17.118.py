@@ -168,7 +168,7 @@ must(end["exit"] == 3 and end["reason"] == "exited" and end["peak_mb"] is None a
 must(not leftovers(), leftovers())
 log = unit_log(frames[0]["run_id"])
 must(frames[0]["unit"] == "tectac-sbx-" + frames[0]["run_id"], frames[0])
-must("--pipe" in log["args"] and "--wait" in log["args"] and "--collect" in log["args"] and f"--slice={sh.SLICE}" in log["args"], log["args"])
+must("--pipe" in log["args"] and "--wait" in log["args"] and "--collect" not in log["args"] and f"--slice={sh.SLICE}" in log["args"], log["args"])
 must(sh.CHILD_ENV["FAKE_BASE"] and "TOKEN" not in "".join(log["environ_keys"]), "the child's environment is only what the helper gives")
 
 # stdin sent to the runner
