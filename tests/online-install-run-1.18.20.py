@@ -117,8 +117,8 @@ class Env:
             raise run_mod.AuditNotSaved()
         self.audits.append({"kind": kind, "message": message, "metadata": metadata, "run_id": run["run_id"], "strict": strict})
 
-    def enqueue_tick(self, run_id, countdown):
-        self.ticks.append((run_id, countdown))
+    def enqueue_tick(self, run_id, countdown, seq=None):
+        self.ticks.append((run_id, countdown, seq))
         return True
 
     # helpers
@@ -154,7 +154,7 @@ run_id = body["run_id"]
 must(env.plan_calls == [["b"]], "the run plans on the server from the ids only")
 must(len(env.kinds("start")) == 1 and env.kinds("start")[0]["strict"] is True, "one strict start row")
 must(env.kinds("start")[0]["metadata"]["order"] == ["a", "b"], env.kinds("start")[0])
-must(env.ticks == [(run_id, 0)], env.ticks)
+must(env.ticks == [(run_id, 0, 0)], env.ticks)
 must(run_mod.advance_run(env, run_id) is False, "first tick queues a")
 must(env.stage_calls == [("repo-1", "a", "1.0.0")] and env.queue_calls == [("up-a", "alice")], (env.stage_calls, env.queue_calls))
 must(states(env, run_id) == {"a": "installing", "b": "pending"}, states(env, run_id))
@@ -318,7 +318,7 @@ _, body = start(env)
 run_id = body["run_id"]
 env.t += 20
 must(run_mod.progress(env, run_id)[1]["status"] == "running", "20 seconds: not stale yet")
-must(env.ticks[-1] == (run_id, 0) or len(env.ticks) >= 1, "ticks queued")
+must(len(env.ticks) >= 1, "ticks queued")
 ticks_before = len(env.ticks)
 env.t += 20  # 40 s with no heartbeat: queue a tick again
 run_mod.progress(env, run_id)
@@ -377,16 +377,16 @@ must(states(env, body["run_id"]) == {"a": "failed", "b": "skipped"} and env.runs
 # ---------------------------------------------------------------- 10. broker failure and a crashing tick never raise
 env = Env(order=["a"])
 _, body = start(env)
-run_mod.advance_and_requeue(env, body["run_id"])
-must(env.ticks[-1] == (body["run_id"], 3), "next tick in 3 seconds: " + repr(env.ticks))
+run_mod.advance_and_requeue(env, body["run_id"], 0)
+must(env.ticks[-1] == (body["run_id"], 3, 1), "next tick in 3 seconds, next seq: " + repr(env.ticks))
 env.finish_job("a")
 count = len(env.ticks)
-run_mod.advance_and_requeue(env, body["run_id"])
+run_mod.advance_and_requeue(env, body["run_id"], 1)
 must(len(env.ticks) == count, "a final run queues no more ticks")
 env = Env(order=["a"])
 env.load = lambda run_id: (_ for _ in ()).throw(OSError("disk"))
 run_mod.advance_and_requeue(env, "00000000-0000-4000-8000-000000000001")
-must(env.ticks == [("00000000-0000-4000-8000-000000000001", 3)], "a crashed tick is retried, never raised")
+must(env.ticks == [("00000000-0000-4000-8000-000000000001", 3, None)], "a crashed tick is retried with the same seq, never raised")
 
 # ---------------------------------------------------------------- 11. only the last 20 runs are kept
 env = Env(order=["a"])
@@ -489,7 +489,8 @@ must("${MODULE_ROOT}/install-runs|root:${group}|2770" in lib_src, "install-runs 
 must('"${MODULE_ROOT}/install-runs" "${MODULE_ROOT}/hotfixes/staged"' in lib_src, "install-runs missing from the recovery runtime-write check")
 install_src = (ROOT / "install.sh").read_text(encoding="utf-8")
 must('"${MODULE_STATE_ROOT}/install-runs"' in install_src, "install-runs missing from the install.sh writable verification")
-# Review round 1: a busy run lock must not multiply tick chains on Celery.
+# Review round 1 (rewritten in 1.18.21): a busy run lock must not multiply tick chains on Celery. A busy tick requeues itself with the same seq and
+# a delay; a poll never queues while the lock is held; the dead-chain recovery queues exactly one tick.
 env = Env(order=["a"])
 _, body = start(env, ["a"])
 run_id = body["run_id"]
@@ -499,9 +500,9 @@ for _ in range(10):
     env.t += 40  # past STALE_TICK_SECONDS, the heartbeat is not refreshed while the lock holder works
     run_mod.progress(env, run_id)
 must(env.ticks == [], "progress queues nothing while the lock is held: " + repr(env.ticks))
+run_mod.advance_and_requeue(env, run_id, 0)
+must(env.ticks == [(run_id, run_mod.BUSY_DELAY_SECONDS, 0)], "a tick on a busy lock requeues itself with the same seq: " + repr(env.ticks))
 env.ticks.clear()
-run_mod.advance_and_requeue(env, run_id)
-must(env.ticks == [], "a tick on a busy lock queues nothing")
 must(run_mod.advance_run(env, run_id) is False, "advance_run still reports not final on a busy lock")
 env.locked.discard(run_id)  # the holder died: the flock is released
 env.t += 40
@@ -511,7 +512,7 @@ outstanding = list(env.ticks)
 env.ticks.clear()
 for _ in range(5):
     for tick in outstanding:
-        run_mod.advance_and_requeue(env, tick[0])
+        run_mod.advance_and_requeue(env, tick[0], tick[2])
     outstanding = list(env.ticks)
     env.ticks.clear()
     must(len(outstanding) <= 1, "outstanding ticks stay at 1 or less")

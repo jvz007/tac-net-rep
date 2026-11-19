@@ -138,7 +138,7 @@ must(row["download_unavailable_state"] == "credentials_rejected" and row["availa
 print("       release states: available only for entitled, classified and available (or no word); an unknown word is never available")
 
 # ---------------------------------------------------------------------------------------------- 3. module_repository: cache read, unavailable[], staging
-names = {"_cached_modules", "_unavailable_licensed", "MAX_UNAVAILABLE_ROWS"}
+names = {"_cached_modules", "_unavailable_licensed", "MAX_UNAVAILABLE_ROWS", "_development_for"}
 picked = [n for n in REPO_TREE.body if (isinstance(n, ast.FunctionDef) and n.name in names)
           or (isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id in names for t in n.targets))]
 must({getattr(n, "name", None) or n.targets[0].id for n in picked} == names, "functions not found")
@@ -151,6 +151,7 @@ ns = {
     "_has_credentials": lambda raw: False, "_repo_raw": lambda rid: {},
     "_cache_retired": lambda payload, credentialed: FLAGS["retired"], "_cache_credentials_rejected": lambda payload, credentialed: False,
     "CREDENTIALS_RELEASE_REASON": "c", "RETIRED_RELEASE_REASON": "r",
+    "is_development_server": lambda: False,  # a production server; the source imports it from module_category (stand-in since 1.18.21)
 }
 exec(compile(ast.Module(body=picked, type_ignores=[]), str(REPO_PATH), "exec"), ns)  # noqa: S102 - test only
 LIC = {"id": "tec-tac-licensing", "name": "Licensed", "priority": 10, "trust": "official", "kind": "licensing"}
@@ -186,7 +187,7 @@ must(ns["MAX_UNAVAILABLE_ROWS"] == 500, "bounded")
 print("       cache: a 1.17.107 cache gets the states on read; only available is offered; unavailable[] lists the rest with Core's sentence")
 
 SRC = REPO_PATH.read_text(encoding="utf-8")
-must('"unavailable": _unavailable_licensed(repos),' in SRC, "online_catalog returns unavailable[]")
+must('"unavailable": _unavailable_licensed(repos, cached),' in SRC, "online_catalog returns unavailable[]")
 must("_lcs.ROW_TEXT.get(state) or _lcs.message_for(\"not_in_licence\")" in SRC, "staging names the reason of the release")
 print("       online catalog and staging: unavailable[] returned; staging a release that is not offered gives its own sentence")
 
@@ -205,10 +206,7 @@ for text, label in ((DOC, "module-repositories.md"), (TS, "troubleshooting")):
 must("1.17.108" in DOC and "Not available" in DOC, "the help section")
 CONTRACTS = read(APP / "contracts.py")
 must('"unavailable": "array (added 1.17.108)' in CONTRACTS and "licence_policy_unreadable" in CONTRACTS and "availability_state" in CONTRACTS, "contract")
-NOTES = read(ROOT / "RELEASE_NOTES_1.17.108.md")
-for heading in ("## What changed and why", "## Module-facing changes", "## Assumptions", "## Tests", "FAIL"):
-    must(heading in NOTES, heading)
-must(read(ROOT / "VERSION").strip() == "1.17.108" and json.loads(read(ROOT / "tec_tac_package.json"))["version"] == "1.17.108", "version")
+# Retired in 1.18.21: the release-notes headings and the VERSION equality of this release (the notes moved to docs/releases/; each release's version-<n> test guards the version).
 for path in (REPO_PATH, APP / "contracts.py", ROOT / "docs" / "module-repositories.md", ROOT / "docs" / "troubleshooting-diagnostics.md"):
     data = path.read_bytes()
     must(b"\r\n" in data and b"\n" not in data.replace(b"\r\n", b""), f"{path.name} lost its CRLF")

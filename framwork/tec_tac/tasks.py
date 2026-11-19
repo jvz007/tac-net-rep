@@ -261,9 +261,9 @@ def detect_module_updates(trigger: str = "manual-sync"):
 
 
 @app.task(name="tec_tac.advance_module_install_run", ignore_result=True, acks_late=True, reject_on_worker_lost=True, time_limit=900)
-def advance_module_install_run(run_id: str):
-    """Core 1.18.20 (R1b to R1d): one short tick of a module install run, then the next tick three seconds later. The module helper restarts
+def advance_module_install_run(run_id: str, seq=None):
+    """Core 1.18.20 (R1b to R1d): one short tick of a module install run, then the next tick three seconds later. ``seq`` is the tick token of Core 1.18.21 (a message queued by 1.18.20 has none and still runs). The module helper restarts
     Celery during an install, so the run lives in a file and no task waits for a job. ``advance_and_requeue`` never raises."""
     from .module_install_run import advance_and_requeue, live_env
 
-    return advance_and_requeue(live_env(), run_id)
+    return advance_and_requeue(live_env(), run_id, seq)

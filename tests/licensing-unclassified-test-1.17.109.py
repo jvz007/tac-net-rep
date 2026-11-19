@@ -244,10 +244,7 @@ for text, label in ((DOC, "module-repositories.md"), (TS, "troubleshooting")):
     must(lcs.ROW_TEXT["unclassified"] in text and WARNING in text and "1.17.109" in text, label)
 CONTRACTS = read(APP / "contracts.py")
 must("Added 1.17.109 (AD-21, additive)" in CONTRACTS and "category_warning" in CONTRACTS, "contract")
-NOTES = read(ROOT / "RELEASE_NOTES_1.17.109.md")
-for heading in ("## What changed and why", "## Module-facing changes", "## Assumptions", "## Tests", "FAIL"):
-    must(heading in NOTES, heading)
-must(read(ROOT / "VERSION").strip() == "1.17.109" and json.loads(read(ROOT / "tec_tac_package.json"))["version"] == "1.17.109", "version")
+# Retired in 1.18.21: the release-notes headings and the VERSION equality of this release (the notes moved to docs/releases/; each release's version-<n> test guards the version).
 for path in (REPO_PATH, APP / "contracts.py", ROOT / "docs" / "module-repositories.md", ROOT / "docs" / "troubleshooting-diagnostics.md"):
     data = path.read_bytes()
     must(b"\r\n" in data and b"\n" not in data.replace(b"\r\n", b""), f"{path.name} lost its CRLF")

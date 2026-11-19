@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.18.20",
+  "version": "1.18.21",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.18.20.md",
-      "size": 12486,
-      "sha256": "2a4e37f6077eadbbaea0bea2bc96d7aa4c087eb589630eb6c2b32957a0ead729"
+      "path": "RELEASE_NOTES_1.18.21.md",
+      "size": 8053,
+      "sha256": "cfcad5f2f58493b7c805a278976dff6d4926ecd4b232e82e0ef57816343a7eb5"
     },
     {
       "path": "VERSION",
       "size": 8,
-      "sha256": "a7a4010b5233d5dfa03b436284847160c52de98b769cd29a357221237f86903c"
+      "sha256": "4a830c412419a3308d095a64e4fd2504b26d1e975366e089d886c03d90fa016c"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -1787,6 +1787,11 @@
       "sha256": "79f2c7d65574d4cda0587f6f026293ecd9cfca05ccf7427388c92fc977bdbfea"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.18.20.md",
+      "size": 12486,
+      "sha256": "2a4e37f6077eadbbaea0bea2bc96d7aa4c087eb589630eb6c2b32957a0ead729"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.18.3.md",
       "size": 6085,
       "sha256": "b920050c465e0a302ae37b42267bfa3c636311622510749863e9ff35a612fc9a"
@@ -2668,8 +2673,8 @@
     },
     {
       "path": "framwork/tec_tac/module_install_run.py",
-      "size": 24305,
-      "sha256": "37f03bcd85aa49defcbce1ffea21d64150068c0aa59abc6ac7b9493f0d627560"
+      "size": 28259,
+      "sha256": "e563b37cc203df30b4f61bb44991b21f5439afe61794274f1201d88489918733"
     },
     {
       "path": "framwork/tec_tac/module_install_run_views.py",
@@ -3003,8 +3008,8 @@
     },
     {
       "path": "framwork/tec_tac/tasks.py",
-      "size": 14934,
-      "sha256": "f986d0365017c76622416ffeb0affc4c2cc302ae95114f87ac2d83db9b3c357e"
+      "size": 15046,
+      "sha256": "f88fcfc665662df80c4b4da384d0d149f5d167f56669255d57605c3f83f57fe9"
     },
     {
       "path": "framwork/tec_tac/tests/__init__.py",
@@ -3234,7 +3239,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "b1ee6f23f52ffcaf9137256da9237216136f552a1a2f3a45e1d5f36832c40121"
+      "sha256": "b8db5a863b18c417bafc3c9f7b861228f6f7d5022d6590bc84c26429f1bc5c0f"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -4242,6 +4247,11 @@
       "sha256": "2152b368cf6af115ee01ab3607b48cb6c6b769e6442b4d3429f9c17a078e7dc0"
     },
     {
+      "path": "tests/legacy/version-1.18.20.py",
+      "size": 2597,
+      "sha256": "939182075a139cab920203328b6bc858ac5228c282ad450d373b8b8a8b9cbfde"
+    },
+    {
       "path": "tests/legacy/version-1.18.3.py",
       "size": 2128,
       "sha256": "aa852265f37d2325e1e4c562fa84ce43948c5749707e17b1f1ce549f2375bae7"
@@ -4278,8 +4288,8 @@
     },
     {
       "path": "tests/licensing-availability-1.17.108.py",
-      "size": 13476,
-      "sha256": "d032d9dfcab542fa8e663954baf2881cecf30698992c7ed62c43fffebc419762"
+      "size": 13485,
+      "sha256": "e1989d7ed960499446930c66c5b88783498515e8cadd04675f2e17cac903d578"
     },
     {
       "path": "tests/licensing-download-1.17.103.py",
@@ -4323,8 +4333,8 @@
     },
     {
       "path": "tests/licensing-unclassified-test-1.17.109.py",
-      "size": 15651,
-      "sha256": "d2c9b09f4366bb4ea29213943669c4f45dd984f23def5ed040e7af0b8eae9dea"
+      "size": 15496,
+      "sha256": "d69c74d3cf063ff76440efadf55e22bdec8f0dcac3ee5ac7bf946ef2f4664fe1"
     },
     {
       "path": "tests/licensing_harness_1_17_58.py",
@@ -4837,14 +4847,19 @@
       "sha256": "0ab6ec3e8ad858a4406bf8956fac301bdfc5a21b6fdf39e43eebcf990b3f88fc"
     },
     {
+      "path": "tests/online-install-chain-1.18.21.py",
+      "size": 17698,
+      "sha256": "dec2349f0727fe37b382e7959b1e6b7acd30368829a3d9e5a471606c1ba6973f"
+    },
+    {
       "path": "tests/online-install-plan-1.18.19.py",
       "size": 16217,
       "sha256": "bf5652c18e221a95e84aa5e8b0a78b397124e2078025f6c4c2e181f0e6ff85c8"
     },
     {
       "path": "tests/online-install-run-1.18.20.py",
-      "size": 29518,
-      "sha256": "36854836ffafcf63bcd1509559ff86665b6e5b17a049aef317ec1a578b785698"
+      "size": 29814,
+      "sha256": "016ddeec57a0ace503a263b11242c35265592ce3fdc2e7b943412b4ac7c801f0"
     },
     {
       "path": "tests/open-list-closure-1.15.117.py",
@@ -5038,8 +5053,8 @@
     },
     {
       "path": "tests/repository-retired-1.17.99.py",
-      "size": 22586,
-      "sha256": "dd9cf8e88c7dd2903346ca0180a7a47be95fdedaa5362b0528d84220d555fdf7"
+      "size": 22905,
+      "sha256": "71a8f8c1467d5596dfb2930a2286e53b75637f1656490c0dfe18adc271d9b006"
     },
     {
       "path": "tests/repository-seed-1.17.43.py",
@@ -6033,8 +6048,8 @@
     },
     {
       "path": "tests/secret-store-1.17.100.py",
-      "size": 57709,
-      "sha256": "ff43bad76cb7adf7d4ef2396eb3d881731ca8a91ce29e66d0b5215be369b5abb"
+      "size": 58028,
+      "sha256": "76d529b07c8470db2ef4dbde96b395738419d7e7f2c4763f55d26dd9eca1046e"
     },
     {
       "path": "tests/secret-store-group-1.17.102.py",
@@ -7132,9 +7147,9 @@
       "sha256": "9fc70da5923a2808e009896ff1fce0abb1ae507e847cf28b05faea1575d30714"
     },
     {
-      "path": "tests/version-1.18.20.py",
-      "size": 2597,
-      "sha256": "939182075a139cab920203328b6bc858ac5228c282ad450d373b8b8a8b9cbfde"
+      "path": "tests/version-1.18.21.py",
+      "size": 2381,
+      "sha256": "dda68eab1703d2f32b6c5a85ba8637ed83097c0b29d3ae6ad73ed2b64ab8a012"
     },
     {
       "path": "tests/version-rebuild-ordering.py",

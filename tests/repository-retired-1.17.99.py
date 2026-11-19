@@ -80,6 +80,8 @@ def _utcnow():
 ns: dict = {
     "json": json, "re": re, "urllib": urllib, "Path": Path, "CACHE_ROOT": CACHE_DIR, "version_satisfies": version_satisfies,
     "ModuleStateError": ModuleStateError, "Counter": Counter, "_utcnow": _utcnow, "datetime": datetime, "timezone": timezone,
+    "is_development_server": lambda: False,  # a production server (stand-in since 1.18.21; the source imports it from module_category)
+    "_lcs": __import__("types").SimpleNamespace(KIND="licensing"),  # _development_for reads only the source kind
 }
 names = {
     "MAX_INDEX_BYTES", "MAX_SKIPPED_RECORDS", "MAX_SKIPPED_TEXT", "MAX_SKIPPED_REASON", "MAX_INFORMATIONAL_TEXT",
@@ -87,7 +89,7 @@ names = {
     "_LEGACY_RETIRED_ERROR", "RETIRED_MESSAGE", "RETIRED_RELEASE_REASON", "_skipped_summary", "repository_status",
     "CREDENTIALS_STATUSES", "CREDENTIALS_REJECTED_MESSAGE", "CREDENTIALS_RELEASE_REASON", "_has_credentials", "_legacy_error_status", "_cache_credentials_rejected", "_repo_raw",  # 1.17.100
     "_cache_retired", "_cached_modules", "_candidate_compatibility", "online_catalog", "all_repository_status", "public_repository",
-    "_AVAILABILITY_MESSAGES", "_availability", "sync_repository", "stage_repository_package", "_PathUpload",
+    "_AVAILABILITY_MESSAGES", "_availability", "sync_repository", "stage_repository_package", "_PathUpload", "_development_for", "_unavailable_licensed", "MAX_UNAVAILABLE_ROWS",
 }
 exec(compile(ast.Module(body=extract(REPO_TREE, names), type_ignores=[]), str(REPO_PATH), "exec"), ns)  # noqa: S102 - test only
 Err = ns["ModuleRepositoryError"]

@@ -8,8 +8,12 @@ licence override: a module that needs one fails with Core's own sentence.
 
 Why short ticks and a file: the module helper restarts Tactical's Celery and reloads uwsgi during an install, so neither a request thread nor
 one long task can wait for a job. Each tick (``advance_run``) reads the run file under a lock, moves it one step and ends. The Celery task
-queues the next tick three seconds later. If the chain dies, the progress route queues a tick again; a run with no heartbeat for 15 minutes
-and no active job is closed as interrupted, so a lost worker never blocks new runs.
+queues the next tick three seconds later.
+
+One live chain per run (1.18.21): every queued tick carries the run's ``seq``. A tick whose seq is not the run's current one is a duplicate and
+ends at once. A tick that finds the lock busy requeues itself with the same seq. Only a dead chain (no heartbeat for 30 seconds, lock free) is
+restarted by a progress poll, and the restart bumps the seq under the lock so any older tick still in the broker dies on the check. A run with
+no heartbeat for 15 minutes and no active job is closed as interrupted, so a lost worker never blocks new runs.
 
 The pure part takes an ``env`` of collaborators, so it runs without Django. ``live_env()`` wires the real ones with lazy imports.
 """
@@ -17,6 +21,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -32,6 +37,9 @@ STALE_TICK_SECONDS = 30
 INTERRUPT_SECONDS = 900
 JOB_MISSING_TICKS = 20
 TICK_DELAY_SECONDS = 3
+BUSY_DELAY_SECONDS = 5
+MAX_SENTENCE = 240
+_ANY_SEQ = object()  # advance_run: a direct call that skips the seq check
 ACTIVE_JOB_STATES = ("queued", "dispatched", "running")
 FAILED_JOB_STATES = ("failed", "dispatch_failed")
 FINAL_STATUSES = ("completed", "stopped", "interrupted")
@@ -46,6 +54,8 @@ TEXT = {
     "download_interrupted": "The download was interrupted. Install it again.",
     "job_unreadable": "The install job record could not be read. Check the job history.",
     "job_failed": "The install job failed.",
+    "job_failed_detail": 'The install job failed at the stage "{stage}". The job history has the details.',
+    "install_refused": "Core refused to install this module. The Core log has the reason.",
     "unexpected": "Core could not install this module. The Core log has the details.",
     "no_repository": "Core has no enabled licensing repository with this release. Sync the repository, then plan again.",
 }
@@ -89,7 +99,7 @@ def new_run(env, plan: dict, selection: list[str], username: str) -> dict:
         modules.append(_module_record(item, planned=True, state="pending"))
     now = env.now()
     return {"run_id": str(uuid.uuid4()), "status": "running", "started_by": username, "started_at": now, "finished_at": None, "heartbeat": now,
-            "stop_requested": False, "end_audited": False, "requested": list(selection), "modules": modules}
+            "stop_requested": False, "end_audited": False, "seq": 0, "requested": list(selection), "modules": modules}
 
 
 def public_run(env, run: dict) -> dict:
@@ -136,18 +146,25 @@ def _locked(env, run_id, wait=0.0):
         time.sleep(0.05)
 
 
-def _lock_held(env, run_id) -> bool:
-    """True when a tick holds the run lock right now (a download in flight): its holder queues the next tick, so nothing is added."""
-    with env.lock(run_id) as got:
-        return not got
-
-
 # ------------------------------------------------------------------------------------------------------------------ audit rows
 
 
 def _outcome(env, run, m) -> None:
     env.audit(run, "outcome", f"Module {m['id']} {m['state']}", {"module": m["id"], "version": m["version"], "state": m["state"], "job_id": m["job_id"],
                                                                 "code": m["code"], "reason": m["reason"]})
+
+
+def _stage_word(stage) -> str:
+    """The helper's short stage word, limited to [a-z0-9_ -] and 40 characters (never a path or a message)."""
+    return re.sub(r"[^a-z0-9_ -]", "", str(stage or "").lower())[:40].strip()
+
+
+def _safe_sentence(text) -> str | None:
+    """Core's own refusal sentence when it holds no path, URL or drive letter and is short; else None (the caller uses a generic sentence)."""
+    text = _cut(text, MAX_SENTENCE + 1)
+    if not text or len(text) > MAX_SENTENCE or "/" in text or "\\" in text or "://" in text or re.search(r"(?<![A-Za-z0-9])[A-Za-z]:", text):
+        return None
+    return text
 
 
 def _conclude(env, run, m, state, code=None, reason=None) -> None:
@@ -209,7 +226,10 @@ def _settle_installing(env, run) -> bool:
         elif status == "succeeded":
             _conclude(env, run, m, "succeeded")
         elif status in FAILED_JOB_STATES:
-            _conclude(env, run, m, "failed", "job_failed", job.get("error") or TEXT["job_failed"])
+            stage = _stage_word(job.get("stage"))
+            if job.get("error"):
+                logger.warning("Module install run %s: job %s of %s failed at stage %r: %s", run["run_id"], m["job_id"], m["id"], stage, _cut(job["error"], 1000))
+            _conclude(env, run, m, "failed", "job_failed", TEXT["job_failed_detail"].format(stage=stage) if stage else TEXT["job_failed"])
         else:
             m["job_missing"] = 0
             flying = True
@@ -232,18 +252,34 @@ def _recheck(allowed_body: dict, m: dict):
 
 
 def advance_run(env, run_id: str) -> bool:
-    """One idempotent tick. True when the run is final (or gone), False when another tick is needed (or the lock was busy)."""
-    return _advance(env, run_id) is True
+    """One idempotent tick, without the seq check (a direct call). True when the run is final (or gone), False when another tick is needed
+    (or the lock was busy)."""
+    return _advance(env, run_id, _ANY_SEQ)[0] is True
 
 
-def _advance(env, run_id: str):
-    """True when final or gone, False when another tick is needed, None when the run lock was busy (the holder queues its own next tick)."""
+def _again(env, run) -> int:
+    """The run needs another tick: take the next seq and stamp the heartbeat in the saved record, so one tick is live and a poll sees a fresh chain."""
+    run["seq"] = int(run.get("seq") or 0) + 1
+    run["heartbeat"] = env.now()
+    env.save(run)
+    return run["seq"]
+
+
+def _advance(env, run_id: str, seq=None):
+    """(state, next seq). State is True when final, gone or a duplicate tick, False when another tick is needed (next seq set), None when the
+    run lock was busy (the caller requeues the same seq)."""
     with _locked(env, run_id) as got:
         if not got:
-            return None
+            return None, seq
         run = env.load(run_id)
         if run is None or is_final(run):
-            return True
+            return True, None
+        if seq is not _ANY_SEQ:
+            current = run.get("seq")
+            if seq is None and current is None:
+                run["seq"] = seq = current = 0  # a tick queued by 1.18.20 on a run file with no seq: accepted once, adopts the seq
+            if seq != current:
+                return True, None  # superseded or redelivered duplicate: ends, queues nothing
         run["heartbeat"] = env.now()
         for m in run["modules"]:
             if m["state"] == "downloading":  # an earlier tick died between staging and queueing
@@ -251,19 +287,18 @@ def _advance(env, run_id: str):
         flying = _settle_installing(env, run)
         _cascade(env, run)
         if flying:
-            env.save(run)
-            return False
+            return False, _again(env, run)
         allowed_body = None
         while True:
             _cascade(env, run)
             if run["stop_requested"]:
                 _skip_pending(env, run, "stopped", TEXT["stopped"])
                 _finish(env, run, "stopped")
-                return True
+                return True, None
             nxt = next((m for m in run["modules"] if m["state"] == "pending"), None)
             if nxt is None:
                 _finish(env, run, "completed")
-                return True
+                return True, None
             if allowed_body is None:
                 allowed_body = env.allowed()
             why = _recheck(allowed_body, nxt)
@@ -275,6 +310,7 @@ def _advance(env, run_id: str):
                 _conclude(env, run, nxt, "skipped", "not_in_catalogue_cache", TEXT["no_repository"])
                 continue
             nxt.update(state="downloading", started_at=env.now())
+            run["heartbeat"] = env.now()  # the download below can take minutes while this tick holds the lock
             env.save(run)
             upload_id = None
             try:
@@ -283,7 +319,8 @@ def _advance(env, run_id: str):
                 job = env.queue(upload_id, run["started_by"])
             except env.known_errors as exc:
                 _discard(env, upload_id)
-                _conclude(env, run, nxt, "failed", "install_refused", str(exc) or TEXT["unexpected"])
+                logger.warning("Module install run %s: %s was refused: %s", run_id, nxt["id"], _cut(exc, 1000))
+                _conclude(env, run, nxt, "failed", "install_refused", _safe_sentence(exc) or TEXT["install_refused"])
                 continue
             except Exception:
                 logger.exception("Module install run %s: %s failed unexpectedly", run_id, nxt["id"])
@@ -291,8 +328,7 @@ def _advance(env, run_id: str):
                 _conclude(env, run, nxt, "failed", "unexpected", TEXT["unexpected"])
                 continue
             nxt.update(state="installing", job_id=job.get("id"), upload_id=upload_id)
-            env.save(run)
-            return False
+            return False, _again(env, run)  # saves the 'installing' state with a fresh heartbeat
 
 
 def _discard(env, upload_id) -> None:
@@ -324,17 +360,36 @@ def close_if_stale(env, run_id: str) -> None:
         _finish(env, run, "interrupted")
 
 
-def advance_and_requeue(env, run_id: str) -> None:
+def advance_and_requeue(env, run_id: str, seq=None) -> None:
     """The Celery task body: one tick, then the next one three seconds later unless the run is final. Never raises.
 
-    A tick that finds the run lock busy ends without queuing: the holder queues the next tick itself, so a long download cannot multiply chains."""
+    The tick carries the seq it was queued with. A tick that finds the run lock busy (a poll or a stop holds it for milliseconds) requeues itself
+    with the same seq after a short delay, so the chain does not die and a duplicate of it ends on the seq check."""
     try:
-        final = _advance(env, run_id)
+        state, next_seq = _advance(env, run_id, seq)
     except Exception:
         logger.exception("Module install run %s: a tick failed", run_id)
-        final = False
-    if final is False:
-        env.enqueue_tick(run_id, TICK_DELAY_SECONDS)
+        env.enqueue_tick(run_id, TICK_DELAY_SECONDS, seq)  # nothing was bumped before a failure: retry the same seq
+        return
+    if state is None:
+        env.enqueue_tick(run_id, BUSY_DELAY_SECONDS, next_seq)
+    elif state is False:
+        env.enqueue_tick(run_id, TICK_DELAY_SECONDS, next_seq)
+
+
+def _recover_dead_chain(env, run_id: str) -> None:
+    """A progress poll restarts a dead chain, and only a dead one: heartbeat older than STALE_TICK_SECONDS and the run lock free.
+
+    The lock is taken without waiting and the heartbeat is checked again under it. The new seq and heartbeat are saved before the tick is queued,
+    so a second poll sees a fresh heartbeat and queues nothing, and any older tick still in the broker dies on the seq check."""
+    with _locked(env, run_id) as got:
+        if not got:
+            return
+        run = env.load(run_id)
+        if run is None or is_final(run) or env.now() - run["heartbeat"] <= STALE_TICK_SECONDS:
+            return
+        seq = _again(env, run)
+    env.enqueue_tick(run_id, 0, seq)
 
 
 # ------------------------------------------------------------------------------------------------------------------ routes' logic
@@ -368,7 +423,7 @@ def start_run(env, selection: list[str], username: str, http_for_state, request=
             return 503, {"ok": False, "state": "audit_not_saved", "message": "Core could not write the audit row, so nothing was started."}
         env.save(run)
         _prune(env)
-    env.enqueue_tick(run["run_id"], 0)
+    env.enqueue_tick(run["run_id"], 0, run["seq"])
     return 202, public_run(env, run)
 
 
@@ -383,13 +438,15 @@ def progress(env, run_id: str) -> tuple[int, dict]:
     if not is_final(run):
         close_if_stale(env, run_id)
         run = env.load(run_id) or run
-        if not is_final(run) and env.now() - run["heartbeat"] > STALE_TICK_SECONDS and not _lock_held(env, run_id):
-            env.enqueue_tick(run_id, 0)
+        if not is_final(run) and env.now() - run["heartbeat"] > STALE_TICK_SECONDS:
+            _recover_dead_chain(env, run_id)
+            run = env.load(run_id) or run
     return 200, public_run(env, run)
 
 
 def request_stop(env, run_id: str, audit_stop) -> tuple[int, dict]:
-    """Stop never touches a job in flight: the current module finishes, then nothing else starts."""
+    """Stop only sets the flag. The live chain reads it on its next tick (within TICK_DELAY_SECONDS) and ends the run; a dead chain is picked up by
+    the progress poll's recovery. Stop never touches a job in flight: the current module finishes, then nothing else starts."""
     with _locked(env, run_id, wait=2.0) as got:
         if not got:
             return 503, {"ok": False, "state": "busy", "message": "The run is busy. Try again in a moment."}
@@ -398,14 +455,14 @@ def request_stop(env, run_id: str, audit_stop) -> tuple[int, dict]:
             return 404, {"ok": False, "state": "not_found", "message": "This install run was not found."}
         if is_final(run):
             return 409, {"ok": False, "state": "already_finished", "message": "This install run has finished.", "run_id": run_id}
+        if run["stop_requested"]:
+            return 200, public_run(env, run)  # a repeated Stop: same answer, nothing saved, audited or queued
         run["stop_requested"] = True
         if any(m["state"] in ("installing", "downloading") for m in run["modules"]):
             run["status"] = "stopping"
         env.save(run)
         audit_stop(run)
-        body = public_run(env, run)
-    env.enqueue_tick(run_id, 0)
-    return 200, body
+        return 200, public_run(env, run)
 
 
 # ------------------------------------------------------------------------------------------------------------------ real wiring
@@ -512,17 +569,17 @@ def live_env() -> SimpleNamespace:
                 raise AuditNotSaved() from exc
             logger.warning("An audit row of a module install run could not be written.")
 
-    def enqueue_tick(run_id, countdown):
-        """One bounded broker attempt, never raises (the same way module_updates.queue_detection does)."""
+    def enqueue_tick(run_id, countdown, seq=None):
+        """One bounded broker attempt, never raises (the same way module_updates.queue_detection does). The seq is the tick token."""
         try:
             from .tasks import advance_module_install_run
 
             options = {"socket_timeout": 2, "socket_connect_timeout": 2}
             with advance_module_install_run.app.connection_for_write(transport_options=options, connect_timeout=2) as broker:
-                advance_module_install_run.apply_async(args=[run_id], countdown=countdown, connection=broker, retry=False, expires=3600, ignore_result=True)
+                advance_module_install_run.apply_async(args=[run_id] if seq is None else [run_id, seq], countdown=countdown, connection=broker, retry=False, expires=3600, ignore_result=True)
             return True
         except Exception:
-            logger.warning("A module install tick was not queued; the progress route queues it again.", exc_info=True)
+            logger.warning("A module install tick was not queued; the progress route restarts the chain.", exc_info=True)
             return False
 
     return SimpleNamespace(
