@@ -228,7 +228,7 @@ except sh.Refusal as exc:
 
 # ---- run.ended is written before the re-check (source order in launch)
 source = (ROOT / "scripts" / "sandbox-helper.py").read_text(encoding="utf-8")
-must(source.rindex('append_audit_safely("run.ended"') < source.rindex("recheck_skeleton_after_run(row, run_id)"), "run.ended first")
+must(source.rindex('append_audit_safely("run.ended", run_ended_detail') < source.rindex("recheck_skeleton_after_run(row, run_id)"), "run.ended first")
 
 # ---- the selftest probe: take the harness of the 1.17.116 test up to its first case
 harness_src = (HERE / "sandbox-selftest-1.17.116.py").read_text(encoding="utf-8").split("# ---- everything passes")[0]

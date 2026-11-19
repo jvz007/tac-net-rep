@@ -65,6 +65,7 @@ must("older than 255" in check["detail"] and "information only" in check["detail
 spec = importlib.util.spec_from_file_location("canary_runner_123c", H.ROOT / "scripts" / "sandbox-canary-runner.py")
 runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
+runner.MEM_STEP_MIB, runner.MEM_STEP_SLEEP = 16, 0  # 1.18.15: the probe now steps 4 MiB with a pause; this test keeps its 16 MiB arithmetic
 out = io.StringIO()
 with contextlib.redirect_stdout(out):
     runner.g_mem({"alloc_mb": 48})
@@ -135,7 +136,7 @@ def collect(group, plan, **kwargs):
 
 
 rows = sh._limit_rows(collect, {"ready": True})
-must(calls[0][0] == "mem" and calls[0][1] == {"alloc_mb": 600} and calls[0][2]["memory_mb"] == 128, calls[0])
+must(calls[0][0] == "mem" and calls[0][1] == {"alloc_mb": 256} and calls[0][2]["memory_mb"] == 128, calls[0])  # 1.18.15: alloc is twice MemoryMax
 must(rows[0]["verdict"] == "OK" and rows[0]["actual"].startswith("allocated 112 MiB"), rows[0])
 must([r["attack"] for r in rows if r["verdict"] == "OK"].count("infinite loop") == 1 and any(r["attack"] == "stdout past its cap" and r["verdict"] == "OK" for r in rows), rows)
 # the old logic compared the reason with 'oom'; the source no longer does

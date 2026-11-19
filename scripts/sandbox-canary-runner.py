@@ -424,16 +424,46 @@ def g_privilege(plan):
     _syscall_row("load a kernel module", 175, (0, 0, 0))  # init_module on x86-64
 
 
+RUN_MARKER_PREFIX = ".tectac-run-marker-"
+
+
+def run_marker_name(plan):
+    """1.18.15: the marker file name the root helper chose for /run (prefix plus 16 hex digits). Anything else is ignored: the plan can name a
+    file, never a path."""
+    name = plan.get("run_marker") if isinstance(plan, dict) else None
+    if isinstance(name, str) and name.startswith(RUN_MARKER_PREFIX) and len(name) == len(RUN_MARKER_PREFIX) + 16 \
+            and all(ch in "0123456789abcdef" for ch in name[len(RUN_MARKER_PREFIX):]):
+        return name
+    return None
+
+
 def g_writes(plan):
+    marker = run_marker_name(plan)
     for folder in ("/usr", "/usr/local", "/usr/bin", "/etc", "/var", "/boot", "/opt", "/run", "/sys"):
-        path = os.path.join(folder, ".tectac-write-test")
+        keep = folder == "/run" and marker is not None
+        path = os.path.join(folder, marker if keep else ".tectac-write-test")
         try:
             with open(path, "w") as handle:
                 handle.write("x")
-            os.unlink(path)
+            if keep:  # 1.18.15: /run is left written. The marker lives in the unit's tmpfs; the helper checks from outside that it stays there
+                print(f"CANARYRUNMARKER\t{marker}", flush=True)
+            else:
+                os.unlink(path)
             row("write " + folder, "SUCCEEDED", "written")
         except OSError as exc:
             row("write " + folder, "OK", errno.errorcode.get(exc.errno, "error"))
+
+
+def g_runview(plan):
+    """1.18.15: the next run after ``writes``: its own listing of /run, one CANARYRUNLIST line per name, then CANARYRUNLISTED with the count
+    (so 'nothing listed' differs from 'could not list'). Not table rows; the root helper looks for the marker the writes run left."""
+    try:
+        names = sorted(os.listdir("/run"))
+    except OSError:
+        return
+    for name in names[:200]:
+        print(f"CANARYRUNLIST\t{clean(name, 100)}", flush=True)
+    print(f"CANARYRUNLISTED\t{len(names)}", flush=True)
 
 
 def g_processes(plan):
@@ -442,24 +472,39 @@ def g_processes(plan):
     row("pid 1 invisible", "SUCCEEDED" if os.path.exists("/proc/1/cmdline") else "OK", "visible" if os.path.exists("/proc/1/cmdline") else "not found")
 
 
+MEM_STEP_MIB = 4  # 1.18.15: small steps, so the last number printed is close to where the kernel stopped the run
+MEM_STEP_SLEEP = 0.02  # 1.18.15: lets the helper's fast poll see the cgroup while it still exists
+
+
+def allocate_block(mib):
+    """One block with every page written (a copy of one byte is touched, not just reserved). A test replaces this name."""
+    return bytearray(b"\x01") * (mib * 1024 * 1024)
+
+
 def g_mem(plan):
-    """Allocate in 16 MiB blocks and report the total after each one (flushed), so the helper still knows how far the run got when the kernel
-    kills it. The lines are not table rows: the root helper reads the last CANARYMEM number and the CANARYEND word, which names how the
-    probe ended (memoryerror, enomem, other:<ExceptionName>, done). A SIGKILL from the kernel prints no end word; the helper then needs the
-    kernel's own oom_kill counter."""
+    """Allocate in 4 MiB steps, writing every page, up to the plan's ``alloc_mb`` (the helper sends twice MemoryMax), and report the total after
+    each step (flushed), so the helper still knows how far the run got when the kernel kills it. The lines are not table rows: the root helper
+    reads the last CANARYMEM number and the CANARYEND word, which names how the probe ended (memoryerror, enomem, other:<ExceptionName>, done).
+    A refused allocation prints the row 'MemoryError at <N> MiB' (or 'enomem at <N> MiB'): N is what was held before the refused step. A
+    SIGKILL from the kernel prints no end word; the helper then needs the kernel's own oom_kill counter."""
     blocks = []
     ended = "done"
     try:
-        for _ in range(int(plan.get("alloc_mb", 600)) // 16):
-            blocks.append(bytearray(b"\x01") * (16 * 1024 * 1024))
-            print(f"CANARYMEM\t{len(blocks) * 16}", flush=True)
-        row("memory beyond MemoryMax", "SUCCEEDED", f"allocated {len(blocks) * 16} MiB")
+        for _ in range(int(plan.get("alloc_mb", 600)) // MEM_STEP_MIB):
+            blocks.append(allocate_block(MEM_STEP_MIB))
+            print(f"CANARYMEM\t{len(blocks) * MEM_STEP_MIB}", flush=True)
+            time.sleep(MEM_STEP_SLEEP)
+        row("memory beyond MemoryMax", "SUCCEEDED", f"allocated {len(blocks) * MEM_STEP_MIB} MiB")
     except MemoryError:
         ended = "memoryerror"
-        row("memory beyond MemoryMax", "OK", f"MemoryError after {len(blocks) * 16} MiB")
+        row("memory beyond MemoryMax", "OK", f"MemoryError at {len(blocks) * MEM_STEP_MIB} MiB")
     except OSError as exc:
-        ended = "enomem" if exc.errno == errno.ENOMEM else "other:" + type(exc).__name__
-        raise
+        if exc.errno == errno.ENOMEM:
+            ended = "enomem"
+            row("memory beyond MemoryMax", "OK", f"enomem at {len(blocks) * MEM_STEP_MIB} MiB")
+        else:
+            ended = "other:" + type(exc).__name__
+            raise
     except BaseException as exc:
         ended = "other:" + type(exc).__name__
         raise
@@ -615,7 +660,7 @@ def g_noop(plan):
 GROUPS = {
     "files": g_files, "rootview": g_rootview, "work_hold": g_work_hold, "work_peer": g_work_peer, "sockets": g_sockets, "loopback": g_loopback, "lan": g_lan,
     "dns": g_dns, "public": g_public, "privilege": g_privilege, "writes": g_writes, "processes": g_processes, "mem": g_mem,
-    "fork": g_fork, "loop": g_loop, "scratch": g_scratch, "flood": g_flood, "abstract": g_abstract, "cred": g_cred, "sleep": g_sleep,
+    "runview": g_runview, "fork": g_fork, "loop": g_loop, "scratch": g_scratch, "flood": g_flood, "abstract": g_abstract, "cred": g_cred, "sleep": g_sleep,
     "noop": g_noop,
 }
 

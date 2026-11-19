@@ -41,6 +41,7 @@ spec = importlib.util.spec_from_file_location("canary_runner_124m", H.ROOT / "sc
 runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
 TAB, NL = chr(9), chr(10)
+runner.MEM_STEP_MIB, runner.MEM_STEP_SLEEP = 16, 0  # 1.18.15: the probe now steps 4 MiB with a pause; this test keeps its 16 MiB arithmetic
 
 LIMIT = 128
 
@@ -154,7 +155,7 @@ lines, error = run_mem({"alloc_mb": 64}, Boom(MemoryError()))
 must(lines == [f"CANARYMEM{TAB}16", f"CANARYEND{TAB}memoryerror"] and error is None, lines)
 Boom.count = 0
 lines, error = run_mem({"alloc_mb": 64}, Boom(OSError(12, "Cannot allocate memory")))
-must(lines[-1] == f"CANARYEND{TAB}enomem" and isinstance(error, OSError), (lines, error))
+must(lines[-1] == f"CANARYEND{TAB}enomem" and error is None, (lines, error))  # 1.18.15: a refused allocation is a row, not a crash
 Boom.count = 0
 lines, error = run_mem({"alloc_mb": 64}, Boom(ValueError("x")))
 must(lines[-1] == f"CANARYEND{TAB}other:ValueError" and isinstance(error, ValueError), (lines, error))

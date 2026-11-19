@@ -2459,6 +2459,20 @@ def remove_credentials_when_active(unit, folder, slots, *, credentials_root=None
     return False
 
 
+CREDENTIAL_REMOVER_SECONDS = 15.0
+
+
+def remove_credentials_noted(unit, folder, slots, *, run_id, runner, stop=None, audit=None, **kwargs):
+    """1.18.15: ``remove_credentials_when_active`` plus a record when it genuinely gave up. A False answer with ``stop`` not set means the unit
+    never showed its copies within the window (a run that ended early sets ``stop`` and is not a timeout). The row holds ids and a number only:
+    no path, no credential, no slot name. The caller's own clean-up still removes the folder on every path, so nothing here widens trust."""
+    kwargs.setdefault("timeout", CREDENTIAL_REMOVER_SECONDS)
+    removed = remove_credentials_when_active(unit, folder, slots, stop=stop, **kwargs)
+    if removed is False and not (stop is not None and stop.is_set()):
+        (audit or append_audit_safely)("run.credentials_lingered", {"run_id": run_id, "runner": runner, "seconds": int(kwargs["timeout"])})
+    return removed
+
+
 def run_record_path(run_id):
     return RUNS_ROOT / f"{run_id}.json"
 
@@ -2525,9 +2539,11 @@ class CgroupWatch:
     oom) and memory.peak (the highest memory.current seen when memory.peak does not exist, a kernel older than 5.19) and keeps the maximum of
     each. A missing or vanished file is tolerated: never an error, never a guess. ``evidence`` names where a number came from."""
 
-    INTERVAL = 0.2
+    INTERVAL = 0.2  # production runs: the cost stays as it was
+    CANARY_INTERVAL = 0.02  # 1.18.15: the canary's runs end in a fraction of a second after the kill; the cgroup of a --collect unit is gone soon after
 
-    def __init__(self, run_id):
+    def __init__(self, run_id, interval=None):
+        self.interval = self.INTERVAL if interval is None else float(interval)
         self.folders = unit_cgroup_folders(run_id)
         self.oom_kill = None
         self.oom = None
@@ -2540,7 +2556,7 @@ class CgroupWatch:
         return new if old is None or (new is not None and new > old) else old
 
     def sample(self, now_value=None, *, force=False):
-        if not force and now_value is not None and self.last is not None and now_value - self.last < self.INTERVAL:
+        if not force and now_value is not None and self.last is not None and now_value - self.last < self.interval:
             return
         self.last = now_value
         for folder in self.folders:
@@ -2618,7 +2634,8 @@ def launch(row, *, run_id, person, parameters, credentials, input_data, emit, st
     remover_stop = threading.Event()
     try:
         RUNS_ROOT.mkdir(parents=True, exist_ok=True)
-        _write_private(run_record_path(run_id), _json_bytes({"run_id": run_id, "runner": row["id"], "unit": unit_name(run_id), "at": now()}))
+        _write_private(run_record_path(run_id), _json_bytes({"run_id": run_id, "runner": row["id"], "unit": unit_name(run_id), "at": now(),
+                                                          "person": person_key(person), "canary": canary}))
         if credentials:
             write_secrets(run_id, credentials)
         try:  # 1.18.8: the root audit row comes BEFORE the unit is spawned; no row, no run
@@ -2628,9 +2645,9 @@ def launch(row, *, run_id, person, parameters, credentials, input_data, emit, st
         audited = True
         process = _spawn(argv)
         if credentials:  # 1.18.14: the helper removes the folder once the unit holds its copy; the finally below is the fail-closed path
-            threading.Thread(target=remove_credentials_when_active, daemon=True, kwargs={"stop": remover_stop},
+            threading.Thread(target=remove_credentials_noted, daemon=True, kwargs={"stop": remover_stop, "run_id": run_id, "runner": row["id"]},
                              args=(unit_name(run_id), SECRETS_ROOT / run_id, [slot for slot, _n in credential_slots(sorted(credentials))])).start()
-        return _supervise(process, row, run_id, input_data, emit, stdin_eof, started_at, clock, progress=progress)
+        return _supervise(process, row, run_id, input_data, emit, stdin_eof, started_at, clock, progress=progress, canary=canary)
     finally:
         remover_stop.set()
         if process is not None and process.poll() is None:
@@ -2739,10 +2756,11 @@ def merge_memory_evidence(watch, handoff, result):
     return (max(peaks) if peaks else None), oom_kills, evidence
 
 
-def _supervise(process, row, run_id, input_data, emit, stdin_eof, started_at, clock, progress=None):
+def _supervise(process, row, run_id, input_data, emit, stdin_eof, started_at, clock, progress=None, canary=False):
     progress = progress if progress is not None else {}
     limits = row["limits"]
-    watch = CgroupWatch(run_id)
+    watch = CgroupWatch(run_id, CgroupWatch.CANARY_INTERVAL if canary else None)  # 1.18.15: only canary runs poll fast
+    wake = CgroupWatch.CANARY_INTERVAL if canary else FLUSH_SECONDS
     caps = {"out": int(limits["stdout_kib"]) * 1024, "err": int(limits["stderr_kib"]) * 1024}
     sent = {"out": 0, "err": 0}
     truncated = {"out": False, "err": False}
@@ -2784,7 +2802,7 @@ def _supervise(process, row, run_id, input_data, emit, stdin_eof, started_at, cl
     try:
         while open_streams:
             try:
-                tag, chunk = sink.get(timeout=FLUSH_SECONDS)
+                tag, chunk = sink.get(timeout=wake)
             except queue_module.Empty:
                 tag, chunk = None, b""
             if tag is not None and chunk is None:
@@ -2932,7 +2950,7 @@ def stop_command(stdin=None, out=None):
 CANARY_RUNNER_ID = "core.canary"
 CANARY_OWNER = "core"
 CANARY_GROUPS = ("files", "rootview", "work_hold", "work_peer", "sockets", "loopback", "lan", "dns", "public", "privilege", "writes", "processes",
-                 "mem", "fork", "loop", "scratch", "flood", "abstract", "cred", "sleep", "noop")
+                 "mem", "fork", "loop", "scratch", "flood", "abstract", "cred", "sleep", "noop", "runview")
 CANARY_LATENCY_RUNS = 50
 CANARY_LATENCY_TARGET_MS = 400
 CANARY_MARKER_DIRS = ("/etc", "/var", "/opt", "/srv", "/mnt", "/media", "/home", "/root", "/etc/tactical", "/etc/tec-tac", "/opt/tec-tac",
@@ -3363,7 +3381,9 @@ def run_canary(*, status=None, collect=None, outside=None):
         group("DNS", "dns", "the upstream answers directly; the host's own entries dropped", {"resolver": resolver, "other_resolvers": others})
         group("Public", "public", "TCP 443 works (SKIPPED without a public route)", {"public": CANARY_PUBLIC_TARGET})
         group("Privilege", "privilege", "EPERM")
-        group("Writes", "writes", "read-only or private")
+        marker = RUN_MARKER_PREFIX + secrets.token_hex(8)
+        written = group("Writes", "writes", "read-only or private", {"run_marker": marker})
+        table_private_run(table, written, marker, collect, status)
         group("Processes", "processes", "host processes invisible")
         group("Abstract sockets", "abstract", "none reachable (Medium finding R1 otherwise)", abstract_plan, run_seconds=CANARY_ABSTRACT_SECONDS)
         table.extend(_limit_rows(collect, status))
@@ -3376,6 +3396,86 @@ def run_canary(*, status=None, collect=None, outside=None):
         if listener is not None:
             listener.close()
     return table
+
+
+RUN_MARKER_PREFIX = ".tectac-run-marker-"
+RUN_MARKER_RE = re.compile(r"^\.tectac-run-marker-[0-9a-f]{16}$")
+RUN_PRIVATE_TEXT = "written, private per-run /run: not in the skeleton, not seen by the next run"
+
+
+def parse_tab_values(data, marker):
+    """The values of every exact ``<marker><TAB><value>`` line (never a table row); the value is kept as text up to 200 characters."""
+    text = data.decode("utf-8", "replace") if isinstance(data, (bytes, bytearray)) else str(data)
+    found = []
+    for line in text.splitlines():
+        parts = line.split("	")
+        if len(parts) == 2 and parts[0] == marker:
+            found.append(parts[1][:200])
+    return found
+
+
+def parse_run_marker(data):
+    """The marker name the writes probe reported, or None: only a name of the exact shape the helper chose counts (the probe is untrusted)."""
+    names = [v for v in parse_tab_values(data, "CANARYRUNMARKER") if RUN_MARKER_RE.match(v)]
+    return names[-1] if names else None
+
+
+def parse_run_listing(data):
+    """Names the next run listed in /run, or None when it did not list at all (no CANARYRUNLISTED line)."""
+    if not parse_tab_values(data, "CANARYRUNLISTED"):
+        return None
+    return parse_tab_values(data, "CANARYRUNLIST")
+
+
+def skeleton_run_names(list_dir=os.listdir):
+    """The names inside the skeleton's run/ folder (SANDBOX_ROOT/run, an empty mount point), or None when it cannot be read."""
+    try:
+        return sorted(list_dir(SANDBOX_ROOT / "run"))
+    except OSError:
+        return None
+
+
+def run_private_row(runner_row, marker, skeleton, following):
+    """1.18.15: the 'write /run' row after the proof. ``runner_row`` is the table row the probe's own line gave; a refused write (OK) stays as
+    it is. A write that worked (ATTACK SUCCEEDED so far) is judged on evidence: OK only when the marker is NOT in the skeleton's run/ folder
+    (``skeleton``: list of names, None when unreadable) and NOT in the next run's listing of /run (``following``: list, None when that run
+    did not list). The marker in either place stays ATTACK SUCCEEDED; a check that cannot be made is NOT RUN."""
+    if runner_row.get("verdict") != "ATTACK SUCCEEDED":
+        return runner_row
+    row = dict(runner_row, expected="read-only or a private per-run /run (the marker stays in the unit)")
+    if marker is None:
+        row.update(actual="written, but the probe reported no marker name, so privacy was not checked", verdict="NOT RUN")
+    elif skeleton is None:
+        row.update(actual="written; the skeleton's run/ folder could not be listed", verdict="NOT RUN")
+    elif following is None:
+        row.update(actual="written; the next run's /run could not be listed", verdict="NOT RUN")
+    elif marker in skeleton:
+        row.update(actual="written, and the marker is in the skeleton's run/ folder", verdict="ATTACK SUCCEEDED")
+    elif marker in following:
+        row.update(actual="written, and the next run lists the marker", verdict="ATTACK SUCCEEDED")
+    else:
+        row.update(actual=RUN_PRIVATE_TEXT, verdict="OK")
+    return row
+
+
+def table_private_run(table, written, marker, collect, status, list_dir=os.listdir):
+    """Replace the 'write /run' row of ``table`` by the proof row. The extra run (``runview``) only happens when /run could be written."""
+    for index, entry in enumerate(table):
+        if entry.get("attack") == "write /run":
+            break
+    else:
+        return
+    if entry.get("verdict") != "ATTACK SUCCEEDED":
+        return
+    reported = parse_run_marker((written or {}).get("stdout", b""))
+    if reported != marker:  # the probe must name exactly the file the helper chose
+        reported = None
+    skeleton = skeleton_run_names(list_dir)
+    following = None
+    if reported is not None:
+        nxt = collect("runview", {}, status=status)
+        following = None if nxt.get("refused") else parse_run_listing(nxt.get("stdout", b""))
+    table[index] = run_private_row(entry, reported, skeleton, following)
 
 
 def parse_progress(data, marker="CANARYMEM"):
@@ -3435,6 +3535,8 @@ def memory_row(result, memory_mb, block=MEMORY_BLOCK_MIB):
     over = (allocated is not None and allocated > memory_mb) or (peak is not None and peak > memory_mb)
     finished = word == "done" or (reason == "exited" and code == 0)
     how = f"ended {reason}" + (f" (exit {code})" if reason == "exited" else "") + (f", probe {word}" if word else "")
+    if word in ("memoryerror", "enomem") and allocated is not None:  # 1.18.15: the refused allocation is named in the table, with the size held
+        how += f", {'MemoryError' if word == 'memoryerror' else 'enomem'} at {allocated} MiB"
     row["actual"] = (f"allocated {allocated} MiB" if allocated is not None else "no allocation reported") + f", {how}, oom_kills " + \
         (str(oom_kills) if oom_kills is not None else "unknown") + (f", peak {peak} MiB" if peak is not None else ", no peak") + \
         (f", evidence {evidence}" if evidence else "")
@@ -3450,6 +3552,10 @@ def memory_row(result, memory_mb, block=MEMORY_BLOCK_MIB):
     return row
 
 
+CANARY_MEMORY_MB = 128  # the memory row's MemoryMax
+MEMORY_ALLOC_FACTOR = 2  # 1.18.15: the probe tries to hold twice MemoryMax, in 4 MiB steps
+
+
 def _limit_rows(collect, status):
     rows = []
 
@@ -3463,7 +3569,7 @@ def _limit_rows(collect, status):
         rows.append({"wall": "Limits", "attack": attack, "expected": expected_reason, "actual": str(reason), "verdict": verdict})
         return result
 
-    rows.append(memory_row(collect("mem", {"alloc_mb": 600}, status=status, memory_mb=128), 128))
+    rows.append(memory_row(collect("mem", {"alloc_mb": CANARY_MEMORY_MB * MEMORY_ALLOC_FACTOR}, status=status, memory_mb=CANARY_MEMORY_MB), CANARY_MEMORY_MB))
     fork = collect("fork", {"forks": 300}, status=status, tasks=64)
     rows.extend(group_table("Limits", "fork", "EAGAIN before 64 tasks", parse_runner_rows(fork["stdout"])))
     one("infinite loop", "loop", {}, "timeout", run_seconds=4)
@@ -3564,15 +3670,15 @@ def credential_cleanup_rows(folder_present, exec_properties, active):
     """1.18.14: the two canary rows for the credential clean-up. ``folder_present`` is whether secrets/<run id> still exists while the unit
     is active; ``exec_properties`` the live unit's Exec* values; ``active`` whether the unit was proven active (otherwise NOT RUN)."""
     if not active:
-        return [{"wall": "Credential", "attack": name, "expected": expected, "actual": "the unit was not proven active", "verdict": "NOT RUN"}
-                for name, expected in (("credential source folder is gone while the run is still active", "absent"),
-                                       ("no host command property on the live unit", "all empty"))]
+        return [{"wall": "Credential", "id": row_id, "attack": name, "expected": expected, "actual": "the unit was not proven active", "verdict": "NOT RUN"}
+                for row_id, name, expected in (("credential-source-gone", "credential source folder is gone while the run is still active", "absent"),
+                                               ("no-host-command-property", "no host command property on the live unit", "all empty"))]
     set_ones = sorted(name for name, text in exec_properties.items() if text and text != "unreadable")
     unreadable = not exec_properties or any(text == "unreadable" for text in exec_properties.values())
     return [
-        {"wall": "Credential", "attack": "credential source folder is gone while the run is still active", "expected": "absent",
+        {"wall": "Credential", "id": "credential-source-gone", "attack": "credential source folder is gone while the run is still active", "expected": "absent",
          "actual": "still present" if folder_present else "absent", "verdict": "ATTACK SUCCEEDED" if folder_present else "OK"},
-        {"wall": "Credential", "attack": "no host command property on the live unit", "expected": "ExecStartPre, ExecStartPost, ExecStopPost empty",
+        {"wall": "Credential", "id": "no-host-command-property", "attack": "no host command property on the live unit", "expected": "ExecStartPre, ExecStartPost, ExecStopPost empty",
          "actual": ("set: " + ", ".join(set_ones)) if set_ones else ("could not be read" if unreadable else "all empty"),
          "verdict": "ATTACK SUCCEEDED" if set_ones else ("NOT RUN" if unreadable else "OK")},
     ]
@@ -3746,11 +3852,45 @@ def format_table(table):
     return "\n".join(lines)
 
 
+ROW_ID_MAX = 40
+ROW_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+
+
+def row_slug(label):
+    """1.18.15: a stable short id from a label: lower case, every other run of characters becomes one '-', at most 40 characters, no edge '-'."""
+    slug = re.sub(r"[^a-z0-9]+", "-", str(label).lower()).strip("-")[:ROW_ID_MAX].strip("-")
+    return slug or "row"
+
+
+def assign_row_ids(table):
+    """1.18.15: one unique id per table row, in table order. A row's own ``id`` (set where the row is built, [a-z0-9-], at most 40 characters)
+    wins; any other row gets the slug of its label. A repeated id gets '-2', '-3' and so on (still at most 40 characters). The id is what the
+    canary script reads: the printed label is cut at 60 characters, an id never is. Never a path or module text."""
+    seen, ids = set(), []
+    for entry in table:
+        base = entry.get("id") if isinstance(entry.get("id"), str) and ROW_ID_RE.match(entry["id"]) else row_slug(entry.get("attack", ""))
+        candidate, n = base, 1
+        while candidate in seen:
+            n += 1
+            suffix = f"-{n}"
+            candidate = base[:ROW_ID_MAX - len(suffix)].rstrip("-") + suffix
+        seen.add(candidate)
+        ids.append(candidate)
+    return ids
+
+
+def row_lines(table):
+    """1.18.15: one machine line per row, ``ROW <id> <verdict>``, for the canary script (the table is for people)."""
+    return [f"ROW {row_id} {entry['verdict']}" for row_id, entry in zip(assign_row_ids(table), table)]
+
+
 def run_canary_command():
     ensure_layout()
     table = run_canary()
     passed, counts = canary_summary(table)
     print(format_table(table))
+    for line in row_lines(table):
+        print(line)
     print(f"\n{counts['OK']} OK, {counts['ATTACK SUCCEEDED']} ATTACK SUCCEEDED, {counts['NOT RUN']} NOT RUN, {counts['SKIPPED']} SKIPPED, {counts['WARN']} WARN")
     print("CANARY PASSED" if passed else "CANARY FAILED")
     _write_root_file(CANARY_FILE, _json_bytes(canary_record(table, passed, counts)), 0o644)
@@ -3788,6 +3928,32 @@ def _stale(path, min_age=STALE_SECONDS, *, clock=time.time):
         return False
 
 
+RUN_RECORD_RE = re.compile(r"^[0-9a-f]{32}\.json$")
+PERSON_KEY_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+def note_swept_run(entry):
+    """1.18.15: a run record the sweep removes belongs to a run that never reached its own ``run.ended`` (a killed helper cannot write it).
+    Write that row now with reason ``swept``. Only ``runs/<32 hex>.json`` files that are plain files; never a live unit (the caller skips
+    those), never secrets or handoff entries. Keys stay inside the run.ended allow-list: runner, run_id, person, canary, reason. A record
+    from before 1.18.15 has no person or canary: the row then holds person None and canary False. No credential, input, output or path."""
+    try:
+        if not RUN_RECORD_RE.match(entry.name) or entry.is_symlink() or not entry.is_file():
+            return False
+        record = json.loads(_read_small(entry) or "")  # the runs folder is root 0700; a record is a few hundred bytes
+    except (OSError, ValueError):
+        record = None
+    run_id = entry.name.split(".")[0]
+    if not isinstance(record, dict):
+        record = {}
+    runner, person = record.get("runner"), record.get("person")
+    append_audit_safely("run.ended", {
+        "runner": runner if isinstance(runner, str) and RUNNER_ID_RE.match(runner) else None, "run_id": run_id,
+        "person": person if isinstance(person, str) and PERSON_KEY_RE.match(person) else None, "canary": record.get("canary") is True,
+        "reason": "swept"})
+    return True
+
+
 def sweep(min_age=STALE_SECONDS):
     """``--sweep`` (boot and daily): re-verify the runtime folders of every registered runner; remove stray selftest folders; remove
     secrets folders, handoff files and run records whose unit ``tectac-sbx-<id>`` is not active; remove old canary markers."""
@@ -3818,6 +3984,8 @@ def sweep(min_age=STALE_SECONDS):
             run_id = entry.name.split(".")[0]
             if _plain_id(run_id, RUN_ID_RE) and (_unit_active(run_id) or not _stale(entry, min_age)):
                 continue  # a live run (or one that is still starting) keeps its files
+            if folder == RUNS_ROOT:
+                note_swept_run(entry)
             if entry.is_dir() and not entry.is_symlink():
                 shutil.rmtree(entry, ignore_errors=True)
             else:
