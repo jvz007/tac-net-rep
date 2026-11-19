@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.18.22",
+  "version": "1.18.23",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.18.22.md",
-      "size": 5561,
-      "sha256": "7b8d4661436240160cd1b926bed82c763dd1cf5928ebbe3809a3234055765f15"
+      "path": "RELEASE_NOTES_1.18.23.md",
+      "size": 10686,
+      "sha256": "fb039dd17252f572fda9e27817bd4f2ea80dace5601fe7c1ca0095221203d779"
     },
     {
       "path": "VERSION",
       "size": 8,
-      "sha256": "c8df13def282c20b16211441bc3151c9ba7dd42ddf81f16525bbabebb9222736"
+      "sha256": "158df2ced2a9bded1cde05ac10469495bf85814fab7c7606a0720f6d01bde5ee"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -1797,6 +1797,11 @@
       "sha256": "cfcad5f2f58493b7c805a278976dff6d4926ecd4b232e82e0ef57816343a7eb5"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.18.22.md",
+      "size": 5561,
+      "sha256": "7b8d4661436240160cd1b926bed82c763dd1cf5928ebbe3809a3234055765f15"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.18.3.md",
       "size": 6085,
       "sha256": "b920050c465e0a302ae37b42267bfa3c636311622510749863e9ff35a612fc9a"
@@ -3188,8 +3193,8 @@
     },
     {
       "path": "scripts/sandbox-canary-runner.py",
-      "size": 29731,
-      "sha256": "61af526eb18c03948967d2021132e5bcf50a6dd24e511fd5dc50b04fd0b08270"
+      "size": 47576,
+      "sha256": "c8648aac892ea7684e39aa294919bc5accbbd574414c49543ff5e9454d2434cd"
     },
     {
       "path": "scripts/sandbox-helper.py",
@@ -3244,7 +3249,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "a307b7d5c02d3ed09c9f045c4ada101e7be884fffb4fee08d237204722dfc8ad"
+      "sha256": "8b6d2a7c522ebb7d080a894bb5d074a7dc497427afbc369827b8acd1f0d8a144"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -4260,6 +4265,11 @@
       "path": "tests/legacy/version-1.18.21.py",
       "size": 2381,
       "sha256": "dda68eab1703d2f32b6c5a85ba8637ed83097c0b29d3ae6ad73ed2b64ab8a012"
+    },
+    {
+      "path": "tests/legacy/version-1.18.22.py",
+      "size": 2082,
+      "sha256": "7ea78e927931a4d7c4e40e4299ec198054edd27198f9b3f124e155cd92de8c55"
     },
     {
       "path": "tests/legacy/version-1.18.3.py",
@@ -5417,6 +5427,11 @@
       "sha256": "63b2f62ab0b8a41a33530448e568344d1b5ea77127459a6f18493c0c983db66c"
     },
     {
+      "path": "tests/sandbox-canary-1.18.23.sh",
+      "size": 46848,
+      "sha256": "979632b47419452e83da3b23d1992f622d27a5865e3faa8b4acd24d168892050"
+    },
+    {
       "path": "tests/sandbox-canary-1.18.8-before.py",
       "size": 6909,
       "sha256": "f246099311bc38ed0428a8efb9d1ab79b7f2ef1a454ffa3dcbf3e964e88a9699"
@@ -5435,6 +5450,21 @@
       "path": "tests/sandbox-canary-ids-1.18.15.py",
       "size": 8265,
       "sha256": "89ee20eaff554b9272565f434ccf2d43a3b83e3dd4e78a0fee463dfb6f21b449"
+    },
+    {
+      "path": "tests/sandbox-canary-network-1.18.23.py",
+      "size": 16624,
+      "sha256": "1fa47f817e9bbead8673b61516be605841b75a21c82634fc0b9da32b6ea779a8"
+    },
+    {
+      "path": "tests/sandbox-canary-network-driver-1.18.23.py",
+      "size": 11314,
+      "sha256": "a0798054a63b9233be0ce659c0a241113e64ce1280c8d841b25eb0411ae9a76b"
+    },
+    {
+      "path": "tests/sandbox-canary-network-runner-1.18.23.py",
+      "size": 16151,
+      "sha256": "e26f583ea96516643b8c105aaa158040a479207495923270c918d72d2f29d497"
     },
     {
       "path": "tests/sandbox-canary-rootview-1.18.8.py",
@@ -5470,6 +5500,11 @@
       "path": "tests/sandbox-canary-script-1.18.22.py",
       "size": 4391,
       "sha256": "5b2af39c969d957b5838c0f00945dda00a8ea3f08188d1f8591536221bd83434"
+    },
+    {
+      "path": "tests/sandbox-canary-script-1.18.23.py",
+      "size": 7021,
+      "sha256": "5c6398c1e0975a8b28a305cb40c363060ebf75a140e1b02cd8a9298220f6f5bf"
     },
     {
       "path": "tests/sandbox-canary-script-1.18.8.py",
@@ -7172,9 +7207,9 @@
       "sha256": "9fc70da5923a2808e009896ff1fce0abb1ae507e847cf28b05faea1575d30714"
     },
     {
-      "path": "tests/version-1.18.22.py",
-      "size": 2082,
-      "sha256": "7ea78e927931a4d7c4e40e4299ec198054edd27198f9b3f124e155cd92de8c55"
+      "path": "tests/version-1.18.23.py",
+      "size": 2405,
+      "sha256": "7dea11776121353a05f96bb599fd7c8279f683c16812754d102f2732c16f339d"
     },
     {
       "path": "tests/version-rebuild-ordering.py",

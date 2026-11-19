@@ -667,9 +667,408 @@ GROUPS = {
 }
 
 
+# ------------------------------------------------------------------------------------------------ Patch B network rows (1.18.23)
+# Canary rows first (AD-65): these probes describe what a run can do on the network TODAY, before the Patch B wall exists. They live in
+# NETWORK_GROUPS, not GROUPS, so the root helper's CANARY_GROUPS and its normal table stay as they are; the root driver
+# tests/sandbox-canary-network-1.18.23.py starts this group through the real launch path. Row rule: SUCCEEDED when the run can do what
+# Patch B will forbid, OK when it cannot, SKIP when the host itself cannot do the thing (no control), NOTRUN when the probe proves nothing.
+NET_PUBLIC_TARGET = "1.1.1.1"
+NET_PUBLIC_OTHER = "9.9.9.9"  # a host no runner is allowed to reach
+NET_PUBLIC_V6 = "2606:4700:4700::1111"
+NET_PROXY_DEFAULT = ("127.0.0.1", 3128)  # Patch B's in-unit forwarder; its own port is never counted as a host service
+NET_PUBLIC_SECONDS = 2.5
+NET_LOCAL_SECONDS = 1.0
+NET_HOST_PORTS_MAX = 40
+NET_LISTEN_SECONDS = 8.0
+NET_REFUSED_CREATE = (errno.EAFNOSUPPORT, errno.EPERM, errno.EACCES)
+NET_NO_PROXY = "no proxy yet (Patch B)"
+NET_CHECK_SECONDS = 5.0
+
+R_PUB_443 = "public tcp 443 to 1.1.1.1"
+R_PUB_80 = "public tcp 80 to 1.1.1.1"
+R_PUB_OTHER = "public tcp 443 to 9.9.9.9"
+R_PUB_DIRECT = "tcp 443 to the allowed host's own address, no proxy"
+R_DNS_LISTED = "resolv.conf lists a name server"
+R_DNS_GAI = "getaddrinfo resolves example.com"
+R_DNS_LISTED_ASK = "udp 53 answered by the listed name server"
+R_DNS_PUBLIC_ASK = "udp 53 answered by public 9.9.9.9"
+R_LISTEN = "listener reachable from the host"
+R_PROC_TCP = "proc net tcp lists host sockets"
+R_PROC_UDP = "proc net udp lists host sockets"
+R_IFACES = "network interfaces other than lo visible"
+R_ROUTE = "default route visible"
+R_PACKET = "AF_PACKET socket"
+R_RAW = "raw ICMP socket"
+R_NETLINK = "AF_NETLINK route socket"
+R_INET6 = "AF_INET6 socket creation"
+R_PING = "ICMP ping socket echo to 1.1.1.1"
+R_V6_443 = "tcp 443 to 2606:4700:4700::1111"
+R_LOOPBACK = "host loopback services"
+R_OWN = "own address tcp 22, 80, 443"
+R_GATEWAY = "default gateway tcp 80, 443"
+R_PROXY_OK = "proxy CONNECT to the allowed host on 443 answers 200"
+R_PROXY_HOST = "proxy refuses a host not in allowed_hosts"
+R_PROXY_IP = "proxy refuses an IP literal"
+R_PROXY_PRIVATE = "proxy refuses a private address"
+R_PROXY_OWN = "proxy refuses this server's own address"
+R_PROXY_80 = "proxy refuses the allowed host on port 80"
+R_PROXY_22 = "proxy refuses the allowed host on port 22"
+NETWORK_ROW_NAMES = (R_PUB_443, R_PUB_80, R_PUB_OTHER, R_PUB_DIRECT, R_DNS_LISTED, R_DNS_GAI, R_DNS_LISTED_ASK, R_DNS_PUBLIC_ASK, R_LISTEN, R_PROC_TCP,
+                     R_PROC_UDP, R_IFACES, R_ROUTE, R_PACKET, R_RAW, R_NETLINK, R_INET6, R_PING, R_V6_443, R_LOOPBACK, R_OWN, R_GATEWAY, R_PROXY_OK,
+                     R_PROXY_HOST, R_PROXY_IP, R_PROXY_PRIVATE, R_PROXY_OWN, R_PROXY_80, R_PROXY_22)
+
+
+def make_socket(family, kind, proto=0):
+    """The one place a probe socket is made (a test replaces this name)."""
+    return socket.socket(family, kind, proto)
+
+
+def read_proc(path):
+    """A /proc file as text, or None when it cannot be read (a test replaces this name)."""
+    try:
+        with open(path, "r", encoding="ascii", errors="replace") as handle:
+            return handle.read(1024 * 1024)
+    except OSError:
+        return None
+
+
+def if_names():
+    """Interface names: if_nameindex() first, /proc/self/net/dev when that is refused (glibc needs netlink for it). None when neither works."""
+    try:
+        return [name for _index, name in socket.if_nameindex()]
+    except (OSError, AttributeError):
+        pass
+    text = read_proc("/proc/self/net/dev")
+    if text is None:
+        return None
+    return [line.split(":", 1)[0].strip() for line in text.splitlines()[2:] if ":" in line]
+
+
+def resolve_v4(name):
+    """Addresses of ``name`` through the system resolver, with a time limit (getaddrinfo has none). [] when it did not resolve."""
+    found = []
+
+    def work():
+        try:
+            found.extend(item[4][0] for item in socket.getaddrinfo(name, 443, socket.AF_INET, socket.SOCK_STREAM))
+        except OSError:
+            pass
+
+    thread = threading.Thread(target=work, daemon=True)
+    thread.start()
+    thread.join(NET_CHECK_SECONDS)
+    return list(found)
+
+
+def icmp_echo(address):
+    """'reply', 'noreply' or an errno name when the ping socket (SOCK_DGRAM, IPPROTO_ICMP) cannot be made or used."""
+    try:
+        s = make_socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_ICMP)
+    except OSError as exc:
+        return _errname(exc)
+    try:
+        s.settimeout(2)
+        body = struct.pack(">BBHHH", 8, 0, 0, 0, 1) + b"tectac"
+        total = sum(struct.unpack(f">{len(body) // 2}H", body))
+        total = (total >> 16) + (total & 0xFFFF)
+        total += total >> 16
+        packet = struct.pack(">BBHHH", 8, 0, (~total) & 0xFFFF, 0, 1) + b"tectac"
+        s.sendto(packet, (address, 0))
+        data, _peer = s.recvfrom(1024)
+        return "reply" if data else "noreply"
+    except TimeoutError:
+        return "noreply"
+    except OSError as exc:
+        return _errname(exc)
+    finally:
+        s.close()
+
+
+def proxy_status(proxy, target_host, target_port):
+    """The HTTP status the proxy answers a CONNECT with: an int, 0 for a closed or unreadable answer, or None when the proxy cannot be reached."""
+    try:
+        s = make_socket(socket.AF_INET, socket.SOCK_STREAM)
+    except OSError:
+        return None
+    try:
+        s.settimeout(3)
+        try:
+            s.connect(proxy)
+        except OSError:
+            return None
+        try:
+            s.sendall(f"CONNECT {target_host}:{target_port} HTTP/1.1\r\nHost: {target_host}:{target_port}\r\n\r\n".encode("ascii", "replace"))
+            head = s.recv(512).split(b"\r\n", 1)[0].split()
+        except OSError:
+            return 0
+        return int(head[1]) if len(head) >= 2 and head[0].startswith(b"HTTP/") and head[1].isdigit() else 0
+    finally:
+        s.close()
+
+
+def proxy_address():
+    """HTTPS_PROXY (``http://host:port``) when the run has one, else Patch B's default 127.0.0.1:3128."""
+    value = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or ""
+    rest = value.split("://", 1)[-1].split("/", 1)[0]
+    host, _, port = rest.rpartition(":")
+    if host and port.isdigit():
+        return host, int(port)
+    return NET_PROXY_DEFAULT
+
+
+def net_row(name, probe):
+    """Run one probe that returns (tag, text) and print its row once. A probe that raises is NOTRUN, never a missing line."""
+    try:
+        tag, text = probe()
+    except (OSError, ValueError, TypeError, LookupError, AttributeError, RuntimeError, struct.error) as exc:  # one broken probe must not take the group down
+        tag, text = "NOTRUN", "probe failed: " + type(exc).__name__
+    row(name, tag, text)
+
+
+def _skip_unless(flag, why):
+    return None if flag else ("SKIP", why)
+
+
+def _reach(host, port, flag, why, family=socket.AF_INET, timeout=NET_PUBLIC_SECONDS):
+    skipped = _skip_unless(flag, why)
+    if skipped:
+        return skipped
+    try:
+        result = tcp_connect(host, port, timeout=timeout, family=family)
+    except OSError as exc:
+        result = _errname(exc)
+    return ("SUCCEEDED", "connected: the run can reach it") if result == "connected" else ("OK", result)
+
+
+def _sock_refused(family_name, kind_name, proto=0):
+    """One socket creation that Patch B forbids: refused (EAFNOSUPPORT, EPERM, EACCES) is OK, created is SUCCEEDED, any other error NOTRUN."""
+    family, kind = getattr(socket, family_name, None), getattr(socket, kind_name, None)
+    if family is None or kind is None:
+        return "NOTRUN", "cannot try: " + family_name + " is not available here"
+    try:
+        s = make_socket(family, kind, proto)
+    except OSError as exc:
+        if exc.errno in NET_REFUSED_CREATE:
+            return "OK", "refused: " + _errname(exc)
+        return "NOTRUN", "unexpected error " + _errname(exc)
+    s.close()
+    return "SUCCEEDED", "the socket was created"
+
+
+def _proc_rows(proc_tables):
+    """Rows from the /proc/self/net tables, read before any probe socket exists (so a private network namespace shows none of its own)."""
+    out = {}
+    for name, files in ((R_PROC_TCP, ("tcp", "tcp6")), (R_PROC_UDP, ("udp", "udp6"))):
+        listen = other = 0
+        readable = False
+        for file in files:
+            text = proc_tables.get(file)
+            if text is None:
+                continue
+            readable = True
+            for line in text.splitlines()[1:]:
+                parts = line.split()
+                if len(parts) < 4:
+                    continue
+                if parts[1].rpartition(":")[2].upper() == f"{NET_PROXY_DEFAULT[1]:04X}":
+                    continue  # Patch B's own forwarder is not a host socket
+                if parts[3] == "0A":
+                    listen += 1
+                else:
+                    other += 1
+        if not readable:
+            out[name] = ("OK", "not readable")
+        elif listen + other:
+            out[name] = ("SUCCEEDED", f"{listen} LISTEN and {other} other socket lines of the host are visible")
+        else:
+            out[name] = ("OK", "no socket lines visible")
+    return out
+
+
+def _route_row(text):
+    if text is None:
+        return "OK", "not readable"
+    for line in text.splitlines()[1:]:
+        parts = line.split()
+        if len(parts) >= 8 and parts[1] == "00000000" and parts[7] == "00000000":
+            return "SUCCEEDED", "a default route is visible"
+    return "OK", "no default route visible"
+
+
+def _iface_row():
+    names = if_names()
+    if names is None:
+        return "OK", "the interface list cannot be read"
+    others = [n for n in names if n != "lo"]
+    if others:
+        return "SUCCEEDED", "visible: " + ", ".join(others[:5]) + (f" (+{len(others) - 5} more)" if len(others) > 5 else "")
+    return "OK", "only lo is visible"
+
+
+def _listen_row(seconds):
+    """Bind 0.0.0.0, print ``CANARYLISTEN<TAB>port`` so the root driver can connect from the host, and accept for ``seconds``."""
+    try:
+        srv = make_socket(socket.AF_INET, socket.SOCK_STREAM)
+    except OSError as exc:
+        return ("OK", "socket refused: " + _errname(exc)) if exc.errno in NET_REFUSED_CREATE else ("NOTRUN", "unexpected error " + _errname(exc))
+    try:
+        srv.bind(("0.0.0.0", 0))
+        srv.listen(4)
+        port = srv.getsockname()[1]
+        with ROW_LOCK:
+            sys.stdout.write(f"CANARYLISTEN\t{port}\n")
+            sys.stdout.flush()
+        srv.settimeout(seconds)
+        try:
+            conn, peer = srv.accept()
+        except TimeoutError:
+            return "OK", f"no connection arrived in {seconds:g} s"
+        conn.close()
+        return "SUCCEEDED", "a connection from " + clean(peer[0], 40) + " arrived: the host can reach a run's listener"
+    except OSError as exc:
+        return ("OK", "bind refused: " + _errname(exc)) if exc.errno in NET_REFUSED_CREATE else ("NOTRUN", "unexpected error " + _errname(exc))
+    finally:
+        srv.close()
+
+
+def _dns_rows(plan, run):
+    ok = bool(plan.get("host_dns"))
+    why = "the host itself cannot resolve, so this row has no control"
+    listed = []
+    text = read_proc("/etc/resolv.conf") or ""
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0] == "nameserver":
+            listed.append(parts[1])
+
+    def resolves():
+        found = resolve_v4("example.com")
+        return ("SUCCEEDED", "resolved to " + found[0]) if found else ("OK", "did not resolve")
+
+    def ask(address):
+        return ("SUCCEEDED", "answered by " + address) if dns_query(address) else ("OK", "no answer from " + address)
+
+    run(R_DNS_LISTED, lambda: _skip_unless(ok, why) or (("SUCCEEDED", "listed: " + ", ".join(listed[:3])) if listed else ("OK", "no name server listed")))
+    run(R_DNS_GAI, lambda: _skip_unless(ok, why) or resolves())
+    run(R_DNS_LISTED_ASK, lambda: _skip_unless(ok, why) or (ask(listed[0]) if listed else ("OK", "no name server listed")))
+    run(R_DNS_PUBLIC_ASK, lambda: _skip_unless(ok, why) or ask(NET_PUBLIC_OTHER))
+
+
+def _host_rows(plan, run):
+    ports = [int(p) for p in plan.get("loopback_ports", []) if int(p) != NET_PROXY_DEFAULT[1]][:NET_HOST_PORTS_MAX]
+    own = [str(a) for a in plan.get("own", []) if ":" not in str(a)][:4]
+    gateways = [str(g) for g in plan.get("gateways", []) if ":" not in str(g)][:4]
+
+    def loopback():
+        if not ports:
+            return "SKIP", "the plan listed no listening port of the host"
+        reached = [p for p in ports if tcp_connect("127.0.0.1", p, timeout=NET_LOCAL_SECONDS) == "connected"]
+        return ("SUCCEEDED", "connected on " + ", ".join(map(str, reached[:5]))) if reached else ("OK", f"none of {len(ports)} ports connected")
+
+    def addresses(targets, numbers, empty):
+        if not targets:
+            return "SKIP", empty
+        hits = [f"{a}:{p}" for a in targets for p in numbers if _reached(tcp_connect(a, p, timeout=NET_LOCAL_SECONDS))]
+        return ("SUCCEEDED", "reached " + ", ".join(hits[:5])) if hits else ("OK", f"dropped or refused by address ({len(targets)} address(es))")
+
+    run(R_LOOPBACK, loopback)
+    run(R_OWN, lambda: addresses(own, (22, 80, 443), "the plan listed no address of this server"))
+    run(R_GATEWAY, lambda: addresses(gateways, (80, 443), "the plan listed no default gateway"))
+
+
+def _proxy_rows(plan, run):
+    """The proxy door Patch B adds. With no proxy every row is NOTRUN ('no proxy yet (Patch B)'); with one, 200 on a refusal row is SUCCEEDED."""
+    proxy = proxy_address()
+    allowed = str(plan.get("allowed_host") or "")
+    own = [str(a) for a in plan.get("own", []) if ":" not in str(a)]
+    other = "example.net" if allowed != "example.net" else "example.org"
+    cases = ((R_PROXY_HOST, other, 443), (R_PROXY_IP, NET_PUBLIC_TARGET, 443), (R_PROXY_PRIVATE, "10.255.255.254", 443),
+             (R_PROXY_OWN, own[0] if own else "", 443), (R_PROXY_80, allowed, 80), (R_PROXY_22, allowed, 22))
+    state = {}
+
+    def door(host, port, positive):
+        if "up" not in state:
+            state["up"] = proxy_status(proxy, NET_PUBLIC_TARGET, 443) is not None
+        if not state["up"]:
+            return "NOTRUN", NET_NO_PROXY
+        if not host:
+            return "NOTRUN", "the plan named no host for this row"
+        status = proxy_status(proxy, host, port)
+        if status is None:
+            return "NOTRUN", NET_NO_PROXY
+        if positive:
+            return ("OK", "answered 200") if status == 200 else ("NOTRUN", f"the positive control answered {status}, not 200")
+        return ("SUCCEEDED", f"the proxy opened a tunnel (200) to {host}:{port}") if status == 200 else ("OK", f"refused ({status or 'closed'})")
+
+    run(R_PROXY_OK, lambda: door(allowed, 443, True))
+    for name, host, port in cases:
+        run(name, lambda host=host, port=port: door(host, port, False))
+
+
+def g_patchb_network(plan):
+    # 1. what the kernel shows, read first: no probe socket exists yet
+    tables = {name: read_proc("/proc/self/net/" + name) for name in ("tcp", "tcp6", "udp", "udp6")}
+    for name, result in _proc_rows(tables).items():
+        row(name, *result)
+    net_row(R_ROUTE, lambda: _route_row(read_proc("/proc/self/net/route")))
+    net_row(R_IFACES, _iface_row)
+    # 2. the listener waits in its own thread while the host connects
+    try:
+        seconds = float(plan.get("listen_seconds") or NET_LISTEN_SECONDS)
+    except (TypeError, ValueError):
+        seconds = NET_LISTEN_SECONDS
+    listener = threading.Thread(target=net_row, args=(R_LISTEN, lambda: _listen_row(seconds)), daemon=True)
+    listener.start()
+    # 3. every other probe, in a small pool (TasksMax counts threads)
+    jobs = []
+
+    def run(name, probe):
+        jobs.append((name, probe))
+
+    public = bool(plan.get("host_public"))
+    why = "the host itself cannot reach it, so this row has no control"
+    run(R_PUB_443, lambda: _reach(NET_PUBLIC_TARGET, 443, public, why))
+    run(R_PUB_80, lambda: _reach(NET_PUBLIC_TARGET, 80, public, why))
+    run(R_PUB_OTHER, lambda: _reach(NET_PUBLIC_OTHER, 443, public, why))
+    address = str(plan.get("allowed_host_address") or "")
+    run(R_PUB_DIRECT, lambda: _reach(address, 443, public and bool(address), "the allowed host did not resolve on the host, or the host cannot reach it"))
+    _dns_rows(plan, run)
+    run(R_PACKET, lambda: _sock_refused("AF_PACKET", "SOCK_RAW", 3))
+    run(R_RAW, lambda: _sock_refused("AF_INET", "SOCK_RAW", getattr(socket, "IPPROTO_ICMP", 1)))
+    run(R_NETLINK, lambda: _sock_refused("AF_NETLINK", "SOCK_RAW", 0))
+    run(R_INET6, lambda: _sock_refused("AF_INET6", "SOCK_STREAM"))
+
+    def ping():
+        skipped = _skip_unless(plan.get("host_ping"), "the host itself cannot ping it, so this row has no control")
+        if skipped:
+            return skipped
+        result = icmp_echo(NET_PUBLIC_TARGET)
+        return ("SUCCEEDED", "an echo reply came back") if result == "reply" else ("OK", result)
+
+    def v6():
+        skipped = _skip_unless(plan.get("host_ipv6"), "the host itself has no IPv6 route, so this row has no control")
+        if skipped:
+            return skipped
+        try:
+            return _reach(NET_PUBLIC_V6, 443, True, "", family=socket.AF_INET6)
+        except OSError as exc:
+            return "OK", _errname(exc)
+
+    run(R_PING, ping)
+    run(R_V6_443, v6)
+    _host_rows(plan, run)
+    _proxy_rows(plan, run)
+    with ThreadPoolExecutor(max_workers=LOOPBACK_WORKERS) as pool:
+        list(pool.map(lambda job: net_row(*job), jobs))
+    listener.join(seconds + 5)
+
+
+NETWORK_GROUPS = {"patchb_network": g_patchb_network}
+
+
 def main(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
-    if len(args) != 1 or args[0] not in GROUPS:
+    if len(args) != 1 or (args[0] not in GROUPS and args[0] not in NETWORK_GROUPS):
         print("usage: sandbox-canary-runner <group>", file=sys.stderr)
         return 64
     raw = sys.stdin.read(65536)
@@ -680,7 +1079,7 @@ def main(argv=None):
     if not isinstance(plan, dict):  # 1.17.124: a plan cut at the 64 KiB read must never look like an absent row
         row("plan unreadable", "NOTRUN", f"the plan for {args[0]} did not parse ({len(raw)} characters read)")
         return 0
-    GROUPS[args[0]](plan)
+    (GROUPS.get(args[0]) or NETWORK_GROUPS[args[0]])(plan)  # 1.18.23: the Patch B network group is kept out of GROUPS (the helper's CANARY_GROUPS)
     return 0
 
 
