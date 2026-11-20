@@ -234,14 +234,14 @@ must(names == ["credential source folder is gone while the run is still active",
 
 # ---- (9) line endings: every touched file keeps its own (LF here unless it was CRLF before; no file may be mixed)
 for name in ("scripts/sandbox-helper.py", "docs/sandbox-capability.md", "VERSION", "tec_tac_package.json", "install.sh", "tests/sandbox-canary-1.18.14.sh",
-             "tests/sandbox-harness-1.17.118.py", "tests/sandbox-launch-1.17.118.py", "tests/sandbox-memory-1.17.124.py", "tests/sandbox-cgroup-evidence-1.18.8.py",
-             "tests/sandbox-unit-builder-1.17.118.py", "tests/sandbox-template-1.18.8.py", "tests/sandbox-skeleton-run-1.18.13.py",
-             "tests/sandbox-fake-runner-1.17.120.py", "tests/sandbox-selftest-1.17.116.py", "tests/sandbox-credential-mode-1.17.120.py", f"RELEASE_NOTES_{(ROOT / 'VERSION').read_text().strip()}.md"):
+             "tests/sandbox-harness-1.17.118.py", "tests/sandbox-launch-1.18.27.py", "tests/sandbox-memory-1.17.124.py", "tests/sandbox-cgroup-evidence-1.18.8.py",
+             "tests/sandbox-unit-builder-1.18.27.py", "tests/sandbox-template-1.18.8.py", "tests/sandbox-skeleton-run-1.18.27.py",
+             "tests/sandbox-fake-runner-1.17.120.py", "tests/sandbox-selftest-1.18.27.py", "tests/sandbox-credential-mode-1.17.120.py", f"RELEASE_NOTES_{(ROOT / 'VERSION').read_text().strip()}.md"):
     data = (ROOT / name).read_bytes()
     must(data.count(b"\r") in (0, data.count(b"\n")) and (b"\r\n" not in data or data.count(b"\r\n") == data.count(b"\n")), f"{name}: mixed line endings")
 for name in ("scripts/sandbox-helper.py", "docs/sandbox-capability.md", "VERSION", "tec_tac_package.json", "install.sh", "tests/sandbox-canary-1.18.14.sh"):
     must(b"\r" not in (ROOT / name).read_bytes(), f"{name} was LF and must stay LF")
-for name in ("tests/sandbox-fake-runner-1.17.120.py", "tests/sandbox-selftest-1.17.116.py", "tests/sandbox-credential-mode-1.17.120.py"):
+for name in ("tests/sandbox-fake-runner-1.17.120.py", "tests/sandbox-selftest-1.18.27.py", "tests/sandbox-credential-mode-1.17.120.py"):
     data = (ROOT / name).read_bytes()
     must(data.count(b"\r\n") == data.count(b"\n"), f"{name} was CRLF and must stay CRLF")
 bash = subprocess.run(["bash", "-n", "tests/sandbox-canary-1.18.14.sh"], capture_output=True, text=True, check=False, cwd=ROOT)

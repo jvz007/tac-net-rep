@@ -14,7 +14,7 @@ from .session_security import SessionAuthenticated
 
 _RUN_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _STATUS_FOR_CODE = {
-    "sandbox_disabled": 409, "sandbox_unavailable": 503, "runner_unknown": 404, "invalid_input": 400, "not_owner": 403, "start_failed": 502,
+    "sandbox_disabled": 409, "sandbox_unavailable": 503, "sandbox_not_ready": 503, "runner_unknown": 404, "invalid_input": 400, "not_owner": 403, "start_failed": 502,
 }
 
 

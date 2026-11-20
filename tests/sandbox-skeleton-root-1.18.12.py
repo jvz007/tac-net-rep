@@ -159,12 +159,12 @@ pattern = re.compile("^(" + case_list + ")$")
 must(all(pattern.match(n) for n in ("root", "usr", "work")) and not pattern.match("home"), "root passes, home is rejected")
 
 # ---- the selftest: take the harness of the 1.17.116 test up to its first case
-source = (HERE / "sandbox-selftest-1.17.116.py").read_text(encoding="utf-8").split("# ---- everything passes")[0]
+source = (HERE / "sandbox-selftest-1.18.27.py").read_text(encoding="utf-8").split("# ---- everything passes")[0]
 harness_file = Path(tempfile.mkdtemp(prefix="tectac-harness-1812-")) / "selftest_harness_1812.py"
 harness_file.write_text(source, encoding="utf-8")
 harness_spec = importlib.util.spec_from_file_location("selftest_harness_1812", harness_file)
 harness = importlib.util.module_from_spec(harness_spec)
-harness.__file__ = str(HERE / "sandbox-selftest-1.17.116.py")  # the harness reads files next to the test it came from
+harness.__file__ = str(HERE / "sandbox-selftest-1.18.27.py")  # the harness reads files next to the test it came from
 harness_spec.loader.exec_module(harness)
 ns = vars(harness)
 sh2 = ns["sh"]

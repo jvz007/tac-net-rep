@@ -1,4 +1,4 @@
-"""Core sandbox: ``core.sandbox`` 1.0.0 (Core 1.17.118, Patch 2: the launch path; the kill switch is still off).
+"""Core sandbox: ``core.sandbox`` 1.1.0 (Core 1.18.27: switch-on code and readiness gate built; the kill switch stays off until AD-65's condition is met).
 
 core.sandbox runs a signed module's declared program as an unprivileged, resource-limited process that cannot see the server's files
 or reach the server itself or private networks (AD-63, docs/sandbox-capability.md).
@@ -9,9 +9,11 @@ or reach the server itself or private networks (AD-63, docs/sandbox-capability.m
 * ``start()`` returns a ``RunHandle`` (events, wait, cancel, close); ``run()`` is the blocking form; ``cancel(run_id)`` stops a run. Since
   1.17.118 these are built. Each is the owning module's call (AD-26) and each checks ``SANDBOX_ENABLED`` first.
 
-``SANDBOX_ENABLED`` is False here and in scripts/sandbox-helper.py. The root helper decides, not this file; it is switched on by a later
-Core release after the full canary passes on a real server, so today start, run and cancel raise ``sandbox_disabled`` before they read a
-file, a runner or an argument. With the switch on, a run is recorded in Core's audit log (module core, object type sandbox_run; one strict
+``SANDBOX_ENABLED`` is False here and in scripts/sandbox-helper.py (AD-65: the canary must pass in full on dev02 and on a second kind of server, or Johan's signed amendment
+must be recorded in docs/review-accepted-decisions.md, before the switch goes on). Core 1.18.27 builds the readiness gate; a later release flips the constant. There is no admin toggle.
+The switch alone runs nothing: start and run read the root selftest's status.json fresh on every call and refuse with ``sandbox_not_ready``
+(one ``sandbox.run.refused`` audit row) unless it says ready, and the root helper checks the same again. cancel() is never gated by readiness, so
+a live run can always be stopped. A run is recorded in Core's audit log (module core, object type sandbox_run; one strict
 row BEFORE the launch, then ended, refused and cancelled rows). Credentials travel to the helper on its stdin only.
 
 Only the audit rows and the helper process are written or started here. It never returns a credential, a path outside the registry or an
@@ -40,7 +42,7 @@ logger = logging.getLogger("tec_tac.sandbox")
 SANDBOX_ENABLED = False
 
 CAPABILITY_ID = "core.sandbox"
-CAPABILITY_VERSION = "1.0.0"
+CAPABILITY_VERSION = "1.1.0"
 OPERATIONS = ("status", "describe", "start", "run", "cancel")
 
 # Fixed locations, the same as the root helper's (scripts/sandbox-helper.py). Not configurable.
@@ -63,7 +65,7 @@ _RUN_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _CREDENTIAL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 
 ERROR_CODES = (
-    "sandbox_disabled", "sandbox_unavailable", "runner_unknown", "runner_disabled", "runtime_unverified", "not_owner", "invalid_input",
+    "sandbox_disabled", "sandbox_unavailable", "sandbox_not_ready", "runner_unknown", "runner_disabled", "runtime_unverified", "not_owner", "invalid_input",
     "input_too_large", "credential_invalid", "busy", "person_busy", "start_failed", "timeout", "output_limit", "oom", "cancelled",
 )
 
@@ -169,10 +171,10 @@ def _int_or_none(value: Any) -> int | None:
 def status(live: bool = False) -> dict:
     """What this server can do and which runners are registered. Read only, no secret.
 
-    ``{enabled, ready, reason, systemd_version, address_filter_ok, dns_ok, network_private_ok, egress_ok, selftest_at, slots_total, slots_used,
+    ``{enabled, ready, active, reason, systemd_version, address_filter_ok, dns_ok, network_private_ok, egress_ok, selftest_at, slots_total, slots_used,
     canary_ok, canary_at, runners: [{id, owner, version, runtime_verified}]}``. Since 1.18.24 (AD-65 Patch B) ``address_filter_ok`` means the network
     wall is proven (a run has its own, empty network space) and ``dns_ok`` means the egress proxy resolves names and opens a tunnel; the additive keys
-    ``network_private_ok`` and ``egress_ok`` carry the same two answers under their own names. ``enabled`` is False until the kill switch is switched on. ``ready`` is True only when
+    ``network_private_ok`` and ``egress_ok`` carry the same two answers under their own names. ``enabled`` is the kill-switch constant (False until AD-65's switch-on condition is met). ``active`` (additive, 1.18.27) is ``enabled and ready``: True means a run can start. ``ready`` is True only when
     the root selftest proved every wall works on this server; otherwise ``reason`` says why in plain words. A status file that is missing,
     not root-owned, writable by others, a link, too big or not JSON gives ``ready: false`` (``selftest_not_run`` when it is missing,
     ``status_unreadable`` otherwise). ``slots_total`` is the selftest's number (None when unknown); ``slots_used`` is None unless ``live`` is
@@ -180,7 +182,7 @@ def status(live: bool = False) -> dict:
     last full canary passed and ``canary_at`` says when (None when it never ran). The four slot and canary keys are additive since 1.17.118.
     Never raises."""
     answer: dict[str, Any] = {
-        "enabled": bool(SANDBOX_ENABLED), "ready": False, "reason": "status_unreadable", "systemd_version": None,
+        "enabled": bool(SANDBOX_ENABLED), "ready": False, "active": False, "reason": "status_unreadable", "systemd_version": None,
         "address_filter_ok": False, "dns_ok": False, "network_private_ok": False, "egress_ok": False, "selftest_at": None, "slots_total": None, "slots_used": None,
         "canary_ok": False, "canary_at": None, "runners": [],
     }
@@ -223,6 +225,7 @@ def status(live: bool = False) -> dict:
         ]
     except Exception:
         logger.warning("core.sandbox registry could not be listed.", exc_info=True)
+    answer["active"] = bool(answer["enabled"] and answer["ready"])
     return answer
 
 
@@ -261,7 +264,7 @@ def describe(runner_id: Any) -> dict:
 def _check_enabled() -> None:
     """Every launch call ends here first, before it reads a file, a runner or an argument."""
     if not SANDBOX_ENABLED:
-        raise SandboxError("sandbox_disabled", "The sandbox is switched off in this Core release. Nothing can run in it yet.")
+        raise SandboxError("sandbox_disabled", "The sandbox is switched off in this Core release. Nothing can run in it.")
 
 
 # ------------------------------------------------------------------------------------------------------------------ audit rows
@@ -325,6 +328,7 @@ _FRAME_MESSAGES = {
     "input_too_large": "The input is larger than the runner allows.", "credential_invalid": "A credential is not allowed for this runner.",
     "busy": "All sandbox slots are in use. Try again shortly.", "person_busy": "This person already has the most sandbox runs allowed at once.",
     "start_failed": "The sandbox run could not be started.", "sandbox_disabled": "The sandbox is switched off.",
+    "sandbox_not_ready": "This server's sandbox selftest is not ready, so no run can start.",
 }
 
 
@@ -581,8 +585,9 @@ def _first_frame(process, wait_seconds: float) -> dict:
 def start(runner_id: Any = None, *, input: Any = None, parameters: Any = None, credentials: Any = None, requested_by: Any = None, user: Any = None):
     """Start a run and return a RunHandle. Only the module that owns the runner may call it (found by Core from the call stack, AD-26).
 
-    While the kill switch is off it raises ``sandbox_disabled`` before it reads anything. Otherwise: the caller, the server's readiness,
-    the runner and its runtime, the input size, the parameters and the credential names are checked (the root helper checks every one
+    While the kill-switch constant is off it raises ``sandbox_disabled`` before it reads anything. Otherwise: the caller, the runner, the server's
+    readiness (read fresh from status.json on every call; not ready gives ``sandbox_not_ready`` and one ``sandbox.run.refused`` audit row, and the
+    helper is never started), the runner's runtime, the input size, the parameters and the credential names are checked (the root helper checks every one
     again); one strict audit row ``sandbox.run.started`` is written BEFORE the launch (a run that cannot be audited does not start); the
     helper is started through sudo and the header, the input and the credentials travel on its stdin only (never argv or environment).
     The call returns when the run has started, after waiting in the queue for at most the runner's queue_seconds. ``user`` (the signed-in
@@ -602,8 +607,9 @@ def start(runner_id: Any = None, *, input: Any = None, parameters: Any = None, c
     if row["owner_module"] != identity.module_id:
         raise SandboxError("not_owner", "Only the module that owns a sandbox runner may start it.")
     state = status()
-    if not state["ready"]:
-        raise SandboxError("sandbox_unavailable", "This server cannot host a sandbox run right now: " + (state["reason"] or "not ready"))
+    if state["ready"] is not True:
+        _refused_row(secrets.token_hex(16), runner_id, identity.module_id, "sandbox_not_ready", user, requested_by)
+        raise SandboxError("sandbox_not_ready", "This server's sandbox is not ready, so no run can start: " + (state["reason"] or "not ready"))
     if row.get("runtime_verified") is not True:
         raise SandboxError("runtime_unverified", "The runner's runtime is not verified. The module has to build it again.")
     limits = row.get("limits") if isinstance(row.get("limits"), dict) else {}
@@ -665,7 +671,7 @@ def _refused_row(run_id, runner_id, owner, code, user, requested_by, retry_after
 
 def run(runner_id: Any = None, *, input: Any = None, parameters: Any = None, credentials: Any = None, requested_by: Any = None, user: Any = None):
     """Start a run and wait for it: ``{run_id, exit_code, stdout, stderr, reason, duration_ms, peak_mb, credentials_out, ...}`` (see
-    RunHandle.wait). The same checks as start(), and the same ``sandbox_disabled`` first while the switch is off."""
+    RunHandle.wait). The same checks as start(), including ``sandbox_not_ready`` when the selftest is not ready."""
     handle = start(runner_id, input=input, parameters=parameters, credentials=credentials, requested_by=requested_by, user=user)
     try:
         return handle.wait()
@@ -675,8 +681,8 @@ def run(runner_id: Any = None, *, input: Any = None, parameters: Any = None, cre
 
 def cancel(run_id: Any = None):
     """Cancel a run this process started. Only the module that owns the run may cancel it (found by Core from the call stack). A run id that
-    this process does not know, or that another module owns, gives ``not_owner``. While the switch is off it raises ``sandbox_disabled``
-    before it reads anything."""
+    this process does not know, or that another module owns, gives ``not_owner``. Readiness does not gate cancel (a live run must always be
+    stoppable); only the kill-switch constant does."""
     _check_enabled()
     identity = calling_module_for_core_provider(provider_file=__file__)
     if identity is None:
@@ -719,7 +725,7 @@ def sandbox_contract_metadata() -> dict:
         "version": CAPABILITY_VERSION,
         "namespace": "tec_tac.sandbox",
         "operations": list(OPERATIONS),
-        "enabled": False,
+        "enabled": bool(SANDBOX_ENABLED),
         "limits": {name: dict(value) for name, value in LIMITS.items()},
         "errors": list(ERROR_CODES),
         "caller": (
@@ -740,9 +746,11 @@ def sandbox_contract_metadata() -> dict:
         "routes": ["GET /api/tfd/system/sandbox/status/", "POST /api/tfd/system/sandbox/runs/<run_id>/cancel/"],
         "requires_framework": ">=1.17.116",
         "notes": (
-            "1.17.118: the launch path is built (start returns a RunHandle, run waits, cancel stops) and still behind the kill switch, so start, run and cancel "
-            "raise sandbox_disabled before they read anything. status() gains the additive keys slots_total, slots_used, canary_ok and canary_at. The switch is "
-            "turned on by a later release after the dev02 canary passes in full."
+            "1.18.27: the readiness gate is built (AD-65). enabled stays False until the switch-on condition is met, there is no admin toggle and no new permission. start and run read the root selftest's "
+            "status.json fresh on every call; when it is not ready they raise sandbox_not_ready (503), write one sandbox.run.refused audit row and never "
+            "start the helper. cancel is not gated by readiness. status() gains the additive key active (enabled and ready); reason stays the selftest's "
+            "plain reason. sandbox_unavailable stays for the helper's own runtime refusals. 1.17.118: the launch path (start returns a RunHandle, run "
+            "waits, cancel stops) and the slots_total, slots_used, canary_ok and canary_at keys."
         ),
     }
 
@@ -755,7 +763,7 @@ def register_core_sandbox_capability():
         module_id="core",
         version=CAPABILITY_VERSION,
         provider=_PROVIDER,
-        description="Runs a signed module's declared program as an unprivileged, resource-limited process. Launch path built in 1.17.118, still switched off.",
+        description="Runs a signed module's declared program as an unprivileged, resource-limited process. Switched off until AD-65's switch-on condition is met; once on, a server whose selftest is not ready refuses every run.",
         operations=OPERATIONS,
         metadata=sandbox_contract_metadata(),
     )

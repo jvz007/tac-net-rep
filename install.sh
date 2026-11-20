@@ -1297,9 +1297,9 @@ chmod 0755 "${SANDBOX_SLICE_DROPIN_DIR}"
 systemctl daemon-reload
 systemctl enable --now tec-tac-sandbox-sweep.timer >/dev/null
 log "Installed Core sandbox helper: ${SANDBOX_HELPER}"
-# The selftest probes this server. A failed or not-ready selftest never fails the Core install: the sandbox stays off, with its reason.
+# The selftest probes this server. A failed or not-ready selftest never fails the Core install: no run can start here (sandbox_not_ready), with its reason.
 if timeout "${SANDBOX_SELFTEST_TIMEOUT_SECONDS}s" /usr/bin/python3 -I "${SANDBOX_LIB}/sandbox-selftest.py" --selftest >/dev/null 2>&1; then
-    log "Sandbox selftest passed: this server can host the sandbox. It stays switched off in this Core release."
+    log "Sandbox selftest passed: this server can host the sandbox. The sandbox stays switched off in this Core release (AD-65 switch-on condition not met); once it is on, a run starts only while the selftest result says ready."
 else
     SANDBOX_OFF_REASON="$("${SANDBOX_HELPER}" --status 2>/dev/null | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["status"]["reason"])' 2>/dev/null || true)"
     [[ -n "${SANDBOX_OFF_REASON}" ]] || SANDBOX_OFF_REASON="the selftest did not finish"
@@ -1380,10 +1380,10 @@ log "Verifying Core Tactical websocket ticket capability registration."
 VERIFY_TACTICAL_WEBSOCKET_CODE="from tec_tac.capabilities import capability_status,get_capability; s=capability_status('core.tactical_websocket',version='>=1,<2'); assert s['available'], s; p=get_capability('core.tactical_websocket',version='>=1,<2'); assert hasattr(p,'issue_ticket'), 'core.tactical_websocket provider incomplete'; print('TEC-TAC core.tactical_websocket OK:', s['capability_version'])"
 run_verify_step "Core Tactical websocket ticket capability" "${VERIFY_TACTICAL_WEBSOCKET_CODE}"
 
-# 1.17.116: core.sandbox is registered, status() answers, and start refuses with sandbox_disabled (the kill switch is off). The inner exec keeps
+# 1.17.116: core.sandbox is registered, status() answers (enabled stays False until AD-65's condition is met), and start() from Core code is refused with not_owner (nothing is launched). The inner exec keeps
 # the try/except on one line of shell; it runs in the same namespace as this code.
 log "Verifying Core sandbox capability registration."
-VERIFY_SANDBOX_CODE="from tec_tac.capabilities import capability_status,get_capability; from tec_tac.sandbox import SandboxError; s=capability_status('core.sandbox',version='>=1,<2'); assert s['available'], s; p=get_capability('core.sandbox',version='>=1,<2'); st=p.status(); assert isinstance(st, dict) and st['enabled'] is False and 'ready' in st and isinstance(st['runners'], list), st; sandbox_code=None; exec('try:\n p.start()\nexcept SandboxError as e:\n sandbox_code=e.code'); assert sandbox_code=='sandbox_disabled', sandbox_code; print('TEC-TAC core.sandbox verification OK: ready=%s enabled=%s' % (st['ready'], st['enabled']))"
+VERIFY_SANDBOX_CODE="from tec_tac.capabilities import capability_status,get_capability; from tec_tac.sandbox import SandboxError, SANDBOX_ENABLED; s=capability_status('core.sandbox',version='>=1,<2'); assert s['available'], s; p=get_capability('core.sandbox',version='>=1,<2'); st=p.status(); assert isinstance(st, dict) and st['enabled'] is bool(SANDBOX_ENABLED) and 'active' in st and 'ready' in st and isinstance(st['runners'], list), st; sandbox_code=None; exec('try:\n p.start()\nexcept SandboxError as e:\n sandbox_code=e.code'); assert sandbox_code==('not_owner' if SANDBOX_ENABLED else 'sandbox_disabled'), sandbox_code; print('TEC-TAC core.sandbox verification OK: ready=%s enabled=%s' % (st['ready'], st['enabled']))"
 run_verify_step "Core sandbox capability" "${VERIFY_SANDBOX_CODE}"
 
 

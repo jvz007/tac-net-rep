@@ -12,8 +12,9 @@ a run has its own, empty network space and reaches only its runner's ``allowed_h
 * ``--status`` (the Tactical account, through sudo): read only, with slot numbers and the canary result;
 * ``--sweep`` (root: a boot and daily timer): re-verifies runtime folders; removes stray selftest folders, secrets folders, handoff and run
   files of units that are not active, and old canary markers;
-* ``--start`` and ``--stop`` (the Tactical account, through sudo): the launch path. While ``SANDBOX_ENABLED`` is False both refuse with the
-  ``sandbox_disabled`` frame BEFORE they read stdin. When on, ``--start`` reads one JSON header line and the input, re-checks the registry
+* ``--start`` and ``--stop`` (the Tactical account, through sudo): the launch path. ``SANDBOX_ENABLED`` is False until AD-65's switch-on condition is met, so both
+  refuse with the ``sandbox_disabled`` frame BEFORE they read stdin. ``--start`` refuses with ``sandbox_not_ready`` unless the
+  selftest's status.json says ready (read fresh on every start; ``--stop`` is never gated by readiness). ``--start`` reads one JSON header line and the input, re-checks the registry
   row, builds the unit itself from the row and Core constants, takes a server slot and a per-person slot, hands credentials in through
   LoadCredential from tmpfs, and streams one JSON frame per line (started, out, err, end). Closing its stdin or stdout stops the unit;
 * 1.18.14: no unit property runs a command (no ``ExecStartPost=+``, no ``ExecStopPost=+``): on systemd 255 such a command sees only the
@@ -53,7 +54,8 @@ try:  # Linux only; the tests load this file on other systems too
 except ImportError:  # pragma: no cover
     fcntl = None
 
-# The kill switch. It is switched on by a later Core release, only after the dev02 canary passes in full (AD-63). Not a setting.
+# The kill switch. It is switched on by a later Core release, only after AD-65's condition is met (the canary passes in full on dev02 and on a second kind
+# of server, or Johan's signed amendment is recorded in docs/review-accepted-decisions.md). Not a setting.
 SANDBOX_ENABLED = False
 
 DEFAULT_CONFIG = Path("/opt/tec-tac/etc/tec-tac.conf")
@@ -1014,11 +1016,11 @@ def read_status():
         data = _read_trusted_file(STATUS_FILE, "status file", max_bytes=64 * 1024)
         status = json.loads(data.decode("utf-8"))
         if isinstance(status, dict) and len(data) <= 64 * 1024:
-            status["enabled"] = False if not SANDBOX_ENABLED else bool(status.get("enabled"))
+            status["enabled"] = bool(SANDBOX_ENABLED)  # the constant counts; the file's value is information only
             return status
     except (RuntimeError, ValueError, OSError):
         pass
-    return {"ready": False, "reason": "the sandbox selftest has not run or its result cannot be read", "enabled": False}
+    return {"ready": False, "reason": "the sandbox selftest has not run or its result cannot be read", "enabled": bool(SANDBOX_ENABLED)}
 
 
 def registered_runners():
@@ -1072,7 +1074,7 @@ def _sweep_reasons(payload):
 
 # ============================================================================ Patch 2 (1.17.118): the launch path
 # ``--start`` and ``--stop`` (the Tactical account, through sudo), the unit builder, the slots, the
-# credential hand-in, the framing and the canary. SANDBOX_ENABLED stays False: ``--start`` and ``--stop`` refuse before they read stdin.
+# credential hand-in, the framing and the canary. SANDBOX_ENABLED stays False until AD-65's condition is met; once on, ``--start`` refuses with sandbox_not_ready when the selftest is not ready.
 LAUNCHER_FILE = LIB_ROOT / "sandbox-launcher.py"
 CANARY_DIR = LIB_ROOT / "canary"
 SLOTS_ROOT = RUN_ROOT / "slots"
@@ -1149,6 +1151,7 @@ CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt"
 
 _REFUSAL_TEXT = {
     "sandbox_unavailable": "this server cannot host a sandbox run right now",
+    "sandbox_not_ready": "the sandbox selftest has not passed on this server",
     "runtime_unverified": "the runner's runtime is not verified",
     "runner_unknown": "that runner is not registered",
     "invalid_input": "the start request is not valid",
@@ -1492,8 +1495,8 @@ def ready_status():
     status = read_status()
     if status.get("ready") is not True:
         if status.get("skeleton_changed") is True and isinstance(status.get("reason"), str):  # 1.18.13: a run left a new entry; name it
-            raise Refusal("sandbox_unavailable", status["reason"][:300])
-        raise Refusal("sandbox_unavailable", "the sandbox selftest has not passed on this server")
+            raise Refusal("sandbox_not_ready", status["reason"][:300])
+        raise Refusal("sandbox_not_ready", "the sandbox selftest has not passed on this server")
     return status
 
 
@@ -2270,10 +2273,13 @@ def dns_lookup_name(name, servers, *, sock_factory=None, clock=time.monotonic, p
                     randbits=secrets.randbits):
     """1.18.26: the addresses a name has in real DNS, asked of the upstream resolvers directly (a plain UDP query, A then AAAA), never from
     /etc/hosts. A random id is used per query; an answer with another id, another source or another question is ignored; a truncated answer is
-    ignored; 2 s per try and 5 s for the name. Returns ``(answered, addresses)``: ``answered`` is True when at least one valid answer came back."""
+    ignored; 2 s per try and 5 s for the name. Returns ``(answered, addresses)``. Since 1.18.27 ``answered`` is True only when BOTH the A and the AAAA
+    query got a valid answer (an empty set for NXDOMAIN or NODATA is valid; a timeout, SERVFAIL, truncated or mismatched reply is not), so a
+    partial answer never stands for the name. The reply source must be the queried server (compared as addresses, so a non-canonically written
+    IPv6 upstream matches) and port 53."""
     sock_factory = sock_factory or _udp_socket
     end = clock() + total
-    answered, found = False, set()
+    answered, found = True, set()
     for qtype in DNS_QTYPES:
         got = None
         for server in servers:
@@ -2293,7 +2299,11 @@ def dns_lookup_name(name, servers, *, sock_factory=None, clock=time.monotonic, p
                         data, source = sock.recvfrom(DNS_PACKET_MAX)
                     except OSError:  # a timeout or a refused port: the next resolver
                         break
-                    if str(source[0]).split("%", 1)[0] != server:
+                    try:
+                        same = ipaddress.ip_address(str(source[0]).split("%", 1)[0]) == ipaddress.ip_address(server) and source[1] == DNS_PORT
+                    except (ValueError, IndexError, TypeError):
+                        same = False
+                    if not same:
                         continue
                     got = dns_parse_answer(data, ident, name, qtype)
             except (OSError, ValueError):
@@ -2302,8 +2312,9 @@ def dns_lookup_name(name, servers, *, sock_factory=None, clock=time.monotonic, p
                 sock.close()
             if got is not None:
                 break
-        if got is not None:
-            answered = True
+        if got is None:
+            answered = False  # 1.18.27: one query type without a valid answer means the name is not answered
+        else:
             found |= got
     return answered, found
 
@@ -2331,7 +2342,7 @@ def resolve_own_names(names, *, lookup=None, servers=None, local_addresses=(), s
     reads /etc/hosts, where a Tactical server maps its own names to 127.0.1.1, so it never shows the public address). The names are looked up in
     worker threads for at most 5 s in all (cached 60 s). ``resolver`` (the old getaddrinfo hook, ``OWN_RESOLVER`` by default) may add its
     addresses but never replaces the real answer. Fail closed with Refusal sandbox_unavailable and a plain reason when (a) no resolver is usable,
-    (b) no own name got a DNS answer, or (c) no own name has a global address AND no local interface holds one (the public address is then
+    (b) any own name did not get a full DNS answer (A and AAAA, 1.18.27; nothing is cached then), or (c) no own name has a global address AND no local interface holds one (the public address is then
     unknown). Any unexpected fault is the same Refusal. Returns a sorted list of address strings."""
     try:
         return _resolve_own_names(sorted(names), lookup, servers, local_addresses, seconds, clock, resolver)
@@ -2385,8 +2396,8 @@ def _resolve_own_names(names, lookup, servers, local_addresses, seconds, clock, 
         thread.join(max(0.0, deadline - clock()))
     with lock:
         got = {name: set(results[name]) for name in answered if name in results}
-    if names and not got:
-        raise Refusal("sandbox_unavailable", "none of this server's own names could be looked up in DNS in time, so the egress door fails closed")
+    if len(got) != len(names):  # 1.18.27: every own name must be fully answered; a partial answer could hide a public address
+        raise Refusal("sandbox_unavailable", f"{len(names) - len(got)} of this server's {len(names)} own names did not get a full DNS answer (A and AAAA) in time, so the egress door fails closed")
     found = sorted(set().union(*got.values()) if got else set())
     if not any(_is_global(address) for address in found) and not any(_is_global(address) for address in local_addresses):
         raise Refusal("sandbox_unavailable", "this server's own names resolve only to private addresses and no local interface has a public one, so its public address is unknown and the egress door fails closed")
@@ -3034,6 +3045,8 @@ def start_command(stdin=None, *, row=None, out_stream=None):
                input_data=data, emit=emit, stdin_eof=eof)
         return 0
     except Refusal as exc:
+        if exc.code == "sandbox_not_ready":  # 1.18.27: a server whose selftest is not ready says so in its own log (other refusals already have run rows)
+            append_audit_safely("start.refused", {"code": exc.code})
         try:
             emit(exc.frame())
         except DeadMan:

@@ -231,7 +231,7 @@ def selftest(runner=None, *, resolv_conf_path="/etc/resolv.conf", run_root=None)
         fail("sandbox_root_after", f"{exc.message} (a probe unit changed the sandbox root folder)")
     ready = not reasons
     return {
-        "ready": ready, "reason": "ready" if ready else reasons[0], "enabled": False, "systemd_version": version,
+        "ready": ready, "reason": "ready" if ready else reasons[0], "enabled": bool(H.SANDBOX_ENABLED), "systemd_version": version,
         # 1.18.24: the old keys keep their names for every reader and change meaning: address_filter_ok = the network wall is proven,
         # dns_ok = the egress proxy resolves names and opens a tunnel; resolver, resolvers and dns_method stay as empty values.
         "address_filter_ok": network_ok, "dns_ok": egress_ok, "network_private_ok": network_ok, "egress_ok": egress_ok,
