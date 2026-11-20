@@ -1,4 +1,4 @@
-"""Core sandbox: ``core.sandbox`` 1.1.0 (Core 1.18.27: switch-on code and readiness gate built; the kill switch stays off until AD-65's condition is met).
+"""Core sandbox: ``core.sandbox`` 1.1.0 (Core 1.18.28: the kill switch is on, behind the 1.18.27 readiness gate; AD-65 amendment, Johan, 20 November 2026).
 
 core.sandbox runs a signed module's declared program as an unprivileged, resource-limited process that cannot see the server's files
 or reach the server itself or private networks (AD-63, docs/sandbox-capability.md).
@@ -9,8 +9,9 @@ or reach the server itself or private networks (AD-63, docs/sandbox-capability.m
 * ``start()`` returns a ``RunHandle`` (events, wait, cancel, close); ``run()`` is the blocking form; ``cancel(run_id)`` stops a run. Since
   1.17.118 these are built. Each is the owning module's call (AD-26) and each checks ``SANDBOX_ENABLED`` first.
 
-``SANDBOX_ENABLED`` is False here and in scripts/sandbox-helper.py (AD-65: the canary must pass in full on dev02 and on a second kind of server, or Johan's signed amendment
-must be recorded in docs/review-accepted-decisions.md, before the switch goes on). Core 1.18.27 builds the readiness gate; a later release flips the constant. There is no admin toggle.
+``SANDBOX_ENABLED`` is True here and in scripts/sandbox-helper.py since Core 1.18.28 (AD-65 amendment, Johan, 20 November 2026). ``active`` is ``enabled and ready and canary_ok``:
+the selftest is ready AND the last full canary passed for this Core build and this selftest run.
+Core 1.18.27 built the readiness gate; 1.18.28 flips the constant. There is no admin toggle.
 The switch alone runs nothing: start and run read the root selftest's status.json fresh on every call and refuse with ``sandbox_not_ready``
 (one ``sandbox.run.refused`` audit row) unless it says ready, and the root helper checks the same again. cancel() is never gated by readiness, so
 a live run can always be stopped. A run is recorded in Core's audit log (module core, object type sandbox_run; one strict
@@ -38,8 +39,11 @@ from .caller_identity import calling_module_for_core_provider
 
 logger = logging.getLogger("tec_tac.sandbox")
 
-# The kill switch of the Django side. Not a setting. The root helper has its own constant and is the one that counts.
-SANDBOX_ENABLED = False
+# The kill switch of the Django side (on since 1.18.28: AD-65 amendment, Johan, 20 November 2026; the readiness and canary gates still apply). Not a setting. The root helper has its own constant and is the one that counts.
+SANDBOX_ENABLED = True
+
+# The installed Core VERSION file. The canary counts only when it ran against exactly this text (the helper reads /opt/tec-tac/VERSION).
+VERSION_FILE = Path(__file__).resolve().parent.parent.parent / "VERSION"
 
 CAPABILITY_ID = "core.sandbox"
 CAPABILITY_VERSION = "1.1.0"
@@ -174,12 +178,13 @@ def status(live: bool = False) -> dict:
     ``{enabled, ready, active, reason, systemd_version, address_filter_ok, dns_ok, network_private_ok, egress_ok, selftest_at, slots_total, slots_used,
     canary_ok, canary_at, runners: [{id, owner, version, runtime_verified}]}``. Since 1.18.24 (AD-65 Patch B) ``address_filter_ok`` means the network
     wall is proven (a run has its own, empty network space) and ``dns_ok`` means the egress proxy resolves names and opens a tunnel; the additive keys
-    ``network_private_ok`` and ``egress_ok`` carry the same two answers under their own names. ``enabled`` is the kill-switch constant (False until AD-65's switch-on condition is met). ``active`` (additive, 1.18.27) is ``enabled and ready``: True means a run can start. ``ready`` is True only when
+    ``network_private_ok`` and ``egress_ok`` carry the same two answers under their own names. ``enabled`` is the kill-switch constant (True since 1.18.28; False only if forced off). ``active`` (additive, 1.18.27) is ``enabled and ready and canary_ok``: True means a run can start. ``ready`` is True only when
     the root selftest proved every wall works on this server; otherwise ``reason`` says why in plain words. A status file that is missing,
     not root-owned, writable by others, a link, too big or not JSON gives ``ready: false`` (``selftest_not_run`` when it is missing,
     ``status_unreadable`` otherwise). ``slots_total`` is the selftest's number (None when unknown); ``slots_used`` is None unless ``live`` is
     True, which makes one ``sudo --status`` call (3 s at most; its slot numbers then replace the selftest's). ``canary_ok`` is True only when the
-    last full canary passed and ``canary_at`` says when (None when it never ran). The four slot and canary keys are additive since 1.17.118.
+    last full canary passed for this Core build (its ``core_version`` equals the installed VERSION text) and this selftest run (its ``selftest_at``
+    equals the selftest's) and ``canary_at`` says when (None when it never ran). The four slot and canary keys are additive since 1.17.118.
     Never raises."""
     answer: dict[str, Any] = {
         "enabled": bool(SANDBOX_ENABLED), "ready": False, "active": False, "reason": "status_unreadable", "systemd_version": None,
@@ -207,8 +212,8 @@ def status(live: bool = False) -> dict:
         })
     try:
         canary = _read_json_trusted(CANARY_FILE, max_bytes=MAX_STATUS_BYTES)
-        answer["canary_ok"] = canary.get("ok") is True
         answer["canary_at"] = _text(canary.get("at"), 40) or None
+        answer["canary_ok"] = _canary_matches(canary, answer["selftest_at"])
     except _Unreadable:
         pass
     except Exception:
@@ -225,8 +230,24 @@ def status(live: bool = False) -> dict:
         ]
     except Exception:
         logger.warning("core.sandbox registry could not be listed.", exc_info=True)
-    answer["active"] = bool(answer["enabled"] and answer["ready"])
+    answer["active"] = bool(answer["enabled"] and answer["ready"] and answer["canary_ok"])
     return answer
+
+
+def _installed_core_version() -> str | None:
+    try:
+        return VERSION_FILE.read_text(encoding="utf-8").strip() or None
+    except (OSError, ValueError):
+        return None
+
+
+def _canary_matches(canary: dict, selftest_at: Any) -> bool:
+    """A canary counts only when ok is True, its core_version is the installed VERSION text and its selftest_at is the current selftest's
+    (exact text, all three). Anything missing, not text or different is not passed. The helper applies the same rule."""
+    version, ran_against = canary.get("core_version"), canary.get("selftest_at")
+    current = _installed_core_version()
+    return bool(canary.get("ok") is True and isinstance(version, str) and version and version == current
+                and isinstance(ran_against, str) and ran_against and isinstance(selftest_at, str) and ran_against == selftest_at)
 
 
 def describe(runner_id: Any) -> dict:
@@ -264,7 +285,7 @@ def describe(runner_id: Any) -> dict:
 def _check_enabled() -> None:
     """Every launch call ends here first, before it reads a file, a runner or an argument."""
     if not SANDBOX_ENABLED:
-        raise SandboxError("sandbox_disabled", "The sandbox is switched off in this Core release. Nothing can run in it.")
+        raise SandboxError("sandbox_disabled", "The sandbox kill switch is forced off on this server. Nothing can run in it.")
 
 
 # ------------------------------------------------------------------------------------------------------------------ audit rows
@@ -327,7 +348,7 @@ _FRAME_MESSAGES = {
     "runner_unknown": "That sandbox runner is not registered.", "invalid_input": "The helper refused the request as invalid.",
     "input_too_large": "The input is larger than the runner allows.", "credential_invalid": "A credential is not allowed for this runner.",
     "busy": "All sandbox slots are in use. Try again shortly.", "person_busy": "This person already has the most sandbox runs allowed at once.",
-    "start_failed": "The sandbox run could not be started.", "sandbox_disabled": "The sandbox is switched off.",
+    "start_failed": "The sandbox run could not be started.", "sandbox_disabled": "The sandbox kill switch is forced off.",
     "sandbox_not_ready": "This server's sandbox selftest is not ready, so no run can start.",
 }
 
@@ -585,7 +606,7 @@ def _first_frame(process, wait_seconds: float) -> dict:
 def start(runner_id: Any = None, *, input: Any = None, parameters: Any = None, credentials: Any = None, requested_by: Any = None, user: Any = None):
     """Start a run and return a RunHandle. Only the module that owns the runner may call it (found by Core from the call stack, AD-26).
 
-    While the kill-switch constant is off it raises ``sandbox_disabled`` before it reads anything. Otherwise: the caller, the runner, the server's
+    Only if the kill-switch constant is forced off does it raise ``sandbox_disabled`` before it reads anything. Otherwise: the caller, the runner, the server's
     readiness (read fresh from status.json on every call; not ready gives ``sandbox_not_ready`` and one ``sandbox.run.refused`` audit row, and the
     helper is never started), the runner's runtime, the input size, the parameters and the credential names are checked (the root helper checks every one
     again); one strict audit row ``sandbox.run.started`` is written BEFORE the launch (a run that cannot be audited does not start); the
@@ -610,6 +631,9 @@ def start(runner_id: Any = None, *, input: Any = None, parameters: Any = None, c
     if state["ready"] is not True:
         _refused_row(secrets.token_hex(16), runner_id, identity.module_id, "sandbox_not_ready", user, requested_by)
         raise SandboxError("sandbox_not_ready", "This server's sandbox is not ready, so no run can start: " + (state["reason"] or "not ready"))
+    if state.get("canary_ok") is not True:  # a passed canary for this Core build and selftest run is part of ready (AD-65)
+        _refused_row(secrets.token_hex(16), runner_id, identity.module_id, "sandbox_not_ready", user, requested_by)
+        raise SandboxError("sandbox_not_ready", "This server's sandbox is not ready, so no run can start: the sandbox canary has not passed on this server")
     if row.get("runtime_verified") is not True:
         raise SandboxError("runtime_unverified", "The runner's runtime is not verified. The module has to build it again.")
     limits = row.get("limits") if isinstance(row.get("limits"), dict) else {}
@@ -746,9 +770,9 @@ def sandbox_contract_metadata() -> dict:
         "routes": ["GET /api/tfd/system/sandbox/status/", "POST /api/tfd/system/sandbox/runs/<run_id>/cancel/"],
         "requires_framework": ">=1.17.116",
         "notes": (
-            "1.18.27: the readiness gate is built (AD-65). enabled stays False until the switch-on condition is met, there is no admin toggle and no new permission. start and run read the root selftest's "
+            "1.18.28: the kill switch is on (AD-65 amendment, Johan, 20 November 2026), so enabled is True; active is enabled and ready and canary_ok, and start and run refuse with sandbox_not_ready until the selftest is ready and a full canary has passed for this Core build and selftest run. 1.18.27: the readiness gate is built (AD-65). There is no admin toggle and no new permission. start and run read the root selftest's "
             "status.json fresh on every call; when it is not ready they raise sandbox_not_ready (503), write one sandbox.run.refused audit row and never "
-            "start the helper. cancel is not gated by readiness. status() gains the additive key active (enabled and ready); reason stays the selftest's "
+            "start the helper. cancel is not gated by readiness. status() gains the additive key active (enabled and ready and canary_ok); reason stays the selftest's "
             "plain reason. sandbox_unavailable stays for the helper's own runtime refusals. 1.17.118: the launch path (start returns a RunHandle, run "
             "waits, cancel stops) and the slots_total, slots_used, canary_ok and canary_at keys."
         ),
@@ -763,7 +787,7 @@ def register_core_sandbox_capability():
         module_id="core",
         version=CAPABILITY_VERSION,
         provider=_PROVIDER,
-        description="Runs a signed module's declared program as an unprivileged, resource-limited process. Switched off until AD-65's switch-on condition is met; once on, a server whose selftest is not ready refuses every run.",
+        description="Runs a signed module's declared program as an unprivileged, resource-limited process. On since Core 1.18.28; a server whose selftest is not ready, or with no passed canary for this Core build, refuses every run with sandbox_not_ready.",
         operations=OPERATIONS,
         metadata=sandbox_contract_metadata(),
     )

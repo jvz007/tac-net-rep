@@ -645,7 +645,7 @@ def read_cgroup_memory(run_id):
 # ======================================================================================================== the canary (attack test)
 # ``--selftest --canary`` (root only, never in the sudo rule) runs every wall of plan 8.2 and section 15 against this server with an
 # in-memory runner ``core.canary`` that is never written to the registry. It uses the same ``launch`` as ``--start`` and bypasses only
-# the kill-switch constant, because nothing else can start a run while the switch is off. The result table goes to stdout and a
+# the kill-switch constant, so the canary runs the same way when the switch is forced off. The result table goes to stdout and a
 # secret-free summary to /var/lib/tec-tac/sandbox/canary.json, which status() reports as canary_ok and canary_at.
 CANARY_RUNNER_ID = "core.canary"
 
@@ -807,11 +807,14 @@ def canary_summary(table):
     return counts["ATTACK SUCCEEDED"] == 0 and counts["NOT RUN"] == 0 and not _skipped_security(table), counts
 
 
-def canary_record(table, passed, counts):
-    """canary.json: counts and failing rows only. No marker, no credential, no path of a secret. A SKIPPED security row is listed as failing."""
+def canary_record(table, passed, counts, core_version=None, selftest_at=None):
+    """canary.json: counts and failing rows only, plus the Core build (``core_version``, the installed VERSION text) and the selftest run
+    (``selftest_at``) it ran against; the helper counts a canary only when both still match. No marker, no credential, no path of a secret.
+    A SKIPPED security row is listed as failing."""
     failing = [{"wall": e["wall"], "attack": e["attack"], "verdict": e["verdict"]} for e in table
                if e["verdict"] in ("ATTACK SUCCEEDED", "NOT RUN") or e in _skipped_security(table)]
-    return {"ok": bool(passed), "at": H.now(), "counts": counts, "failing": failing[:50], "skipped": [e["attack"] for e in table if e["verdict"] == "SKIPPED"][:20]}
+    return {"ok": bool(passed), "at": H.now(), "counts": counts, "failing": failing[:50], "skipped": [e["attack"] for e in table if e["verdict"] == "SKIPPED"][:20],
+            "core_version": core_version, "selftest_at": selftest_at}
 
 
 def parse_abstract_sockets(data):
@@ -908,7 +911,7 @@ def collect_run(group, plan, *, person="canary", slots_n=None, person_n=H.PERSON
     data = json.dumps(plan).encode("utf-8")
     try:
         H.launch(row, run_id=out["run_id"], person=person, parameters={"group": group}, credentials=credentials or {}, input_data=data,
-               emit=emit, slots_n=slots_n, person_n=person_n, status=status)
+               emit=emit, slots_n=slots_n, person_n=person_n, status=status, canary_required=False)
     except H.Refusal as exc:
         out["refused"] = exc.code
     return out
@@ -1526,7 +1529,7 @@ def _cancel_rows(collect, status):
         frames = []
         try:
             H.launch(row, run_id=run_id, person="canary-cancel", parameters={"group": "sleep"}, credentials={}, input_data=b'{"hold_seconds": 25}',
-                   emit=frames.append, status=status)
+                   emit=frames.append, status=status, canary_required=False)
         except H.Refusal as exc:
             box["refused"] = exc.code
         box["frames"] = frames
@@ -1666,6 +1669,8 @@ def detail_lines(table):
 
 def run_canary_command():
     H.ensure_layout()
+    selftest_before = H.read_status().get("selftest_at")  # the selftest run this canary belongs to (read before the canary starts)
+    selftest_at = selftest_before if isinstance(selftest_before, str) and selftest_before else None
     table = run_canary()
     passed, counts = canary_summary(table)
     print(format_table(table))
@@ -1675,7 +1680,7 @@ def run_canary_command():
         print(line)
     print(f"\n{counts['OK']} OK, {counts['ATTACK SUCCEEDED']} ATTACK SUCCEEDED, {counts['NOT RUN']} NOT RUN, {counts['SKIPPED']} SKIPPED, {counts['WARN']} WARN")
     print("CANARY PASSED" if passed else "CANARY FAILED")
-    H._write_root_file(H.CANARY_FILE, H._json_bytes(canary_record(table, passed, counts)), 0o644)
+    H._write_root_file(H.CANARY_FILE, H._json_bytes(canary_record(table, passed, counts, H.installed_core_version(), selftest_at)), 0o644)
     H.append_audit("canary", detail={"passed": passed, "counts": counts})
     return 0 if passed else 1
 

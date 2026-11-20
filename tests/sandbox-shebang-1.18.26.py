@@ -36,6 +36,6 @@ must('install_root_script "${REPO_ROOT}/scripts/sandbox-selftest.py" "${SANDBOX_
 must('ln -sfn "${SANDBOX_LIB}/sandbox-helper.py" "${SANDBOX_HELPER}"' in install, "the helper symlink is unchanged")
 must(re.search(r"^sed 's/\\r\$//'", "sed 's/\\r$//' x", re.M) is not None and "sed 's/\\r$//' \"${source}\"" in install, "install_root_script strips a CR")
 # the canary's first-line row must accept exactly this line and nothing looser
-driver = (ROOT / "tests" / "sandbox-canary-patchc-1.18.27.py").read_text(encoding="utf-8")
+driver = (ROOT / "tests" / "sandbox-canary-patchc-1.18.28.py").read_text(encoding="utf-8")
 must('SHEBANG = "#!/usr/bin/python3 -I"' in driver and "first == SHEBANG" in driver, "the canary row checks the exact line")
 print("[TEST] PASS sandbox shebang 1.18.26")

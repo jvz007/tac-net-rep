@@ -234,7 +234,7 @@ must(names == ["credential source folder is gone while the run is still active",
 
 # ---- (9) line endings: every touched file keeps its own (LF here unless it was CRLF before; no file may be mixed)
 for name in ("scripts/sandbox-helper.py", "docs/sandbox-capability.md", "VERSION", "tec_tac_package.json", "install.sh", "tests/sandbox-canary-1.18.14.sh",
-             "tests/sandbox-harness-1.17.118.py", "tests/sandbox-launch-1.18.27.py", "tests/sandbox-memory-1.17.124.py", "tests/sandbox-cgroup-evidence-1.18.8.py",
+             "tests/sandbox-harness-1.17.118.py", "tests/sandbox-launch-1.18.28.py", "tests/sandbox-memory-1.17.124.py", "tests/sandbox-cgroup-evidence-1.18.8.py",
              "tests/sandbox-unit-builder-1.18.27.py", "tests/sandbox-template-1.18.8.py", "tests/sandbox-skeleton-run-1.18.27.py",
              "tests/sandbox-fake-runner-1.17.120.py", "tests/sandbox-selftest-1.18.27.py", "tests/sandbox-credential-mode-1.17.120.py", f"RELEASE_NOTES_{(ROOT / 'VERSION').read_text().strip()}.md"):
     data = (ROOT / name).read_bytes()

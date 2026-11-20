@@ -69,7 +69,7 @@ class TecTacFrameworkConfig(AppConfig):
             register_core_client_address_capability()
         except Exception:
             logger.exception("Tec-Tac core.client_address capability registration failed")
-        # 1.17.116: core.sandbox (runs a signed module's program unprivileged; AD-63). Patch 1: status and describe only, the kill switch is off.
+        # 1.17.116: core.sandbox (runs a signed module's program unprivileged; AD-63). Patch 1: status and describe only; the kill switch is on since 1.18.28 (AD-65 amendment), behind the readiness and canary gates.
         # Guarded like core.secrets: a fault here never aborts start-up, and a module that finds no capability (has_capability) does not use it.
         try:
             from .sandbox import register_core_sandbox_capability

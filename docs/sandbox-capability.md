@@ -4,7 +4,7 @@ Core 1.17.116 (AD-63), launch path built in 1.17.118, allow-list file view and h
 
 Some modules need to run a program they did not write: a command line tool from an AI provider, for example. Core can run that program in a sandbox. A sandbox is a small, locked room. The program can do its work, and it cannot see the server's files or reach the server itself.
 
-**Since Core 1.18.27 the readiness gate is built; the switch stays off (AD-65).** 1.17.116 added the foundation: the manifest key, the publisher permission, the root helper that registers programs and tests the server, and the contract. 1.17.118 built the launch path (below) and the full attack test (the canary). 1.18.27 builds the gate: once the switch is on, `start` and `run` read the root selftest result fresh on every call and refuse with `sandbox_not_ready` unless this server's selftest is ready, and the root helper checks the same again. `SANDBOX_ENABLED` stays `False` in `framwork/tec_tac/sandbox.py` and `scripts/sandbox-helper.py` until AD-65's condition is met: the canary passes in full on dev02 and on a second kind of server, or Johan's signed amendment is recorded in `docs/review-accepted-decisions.md`. Until then `start`, `run` and `cancel` raise `sandbox_disabled`, `status()` answers `enabled` false and `active` false, and nothing runs. There is no admin toggle and no new permission. Once the switch is on, `cancel` is not gated by readiness, so a live run can always be stopped.
+**The switch is on since Core 1.18.28** (AD-65 amendment, Johan, 20 November 2026: Ubuntu 24.04 on dev02 is the baseline). The gates stay fail-closed. 1.17.116 added the foundation: the manifest key, the publisher permission, the root helper that registers programs and tests the server, and the contract. 1.17.118 built the launch path (below) and the full attack test (the canary). 1.18.27 builds the gate: `start` and `run` read the root selftest result fresh on every call and refuse with `sandbox_not_ready` unless this server's selftest is ready, and the root helper checks the same again. `SANDBOX_ENABLED` is `True` in `framwork/tec_tac/sandbox.py` and `scripts/sandbox-helper.py`, so `status()` answers `enabled` true. `start` and `run` raise `sandbox_not_ready` unless this server's selftest is ready and `canary.json` shows a passed canary for this Core build (its `core_version` equals the installed `VERSION` text) and this selftest run (its `selftest_at` equals the selftest's), and `status()` answers `active` false until both hold. `sandbox_disabled` is raised only if the constant is forced to `False`. There is no admin toggle and no new permission. `cancel` is not gated by readiness, so a live run can always be stopped.
 
 ## What a run will be
 
@@ -24,12 +24,12 @@ The network rule is small and has one door. Since Core 1.18.24 (AD-65 Patch B) a
 
 A run whose runner declares no `allowed_hosts` has no network at all. `allowed_hosts` needs `requires.framework >=1.18.24`: older Cores refuse the key. The proxy resolves each name itself and connects to the checked numeric address, so a second DNS answer cannot change where it goes. Section "The network of a run" below has the full rules.
 
-If the server cannot enforce this, no run starts: `status()` shows `ready` false and `active` false (and `enabled` true once the switch is on) with a plain reason. It never runs in a weaker mode.
+If the server cannot enforce this, no run starts: `status()` shows `ready` false and `active` false (and `enabled` true) with a plain reason. It never runs in a weaker mode.
 
 ## What this release installs
 
 - `/usr/local/sbin/tec-tac-sandbox`: the root helper. Root-owned, installed by `install.sh`.
-- One sudo rule for the Tactical service account with exactly three commands: `--start`, `--stop` and `--status`. `--start` refuses with `sandbox_not_ready` unless the selftest is ready (read fresh on every start); `--stop` is not gated by readiness and stops only a unit this helper started. The rule is unchanged since 1.17.118.
+- One sudo rule for the Tactical service account with exactly three commands: `--start`, `--stop` and `--status`. `--start` refuses with `sandbox_not_ready` unless the selftest is ready and the canary passed for this Core build and selftest run (read fresh on every start; `sandbox_disabled` only if the constant is forced off); `--stop` is not gated by readiness and stops only a unit this helper started. The rule is unchanged since 1.17.118.
 - `--register-module`, `--unregister-module` and `--sweep` are root only. Since 1.18.26 `--selftest` (with `--canary`) is no longer a mode of this helper: it is `sudo /usr/bin/python3 -I /usr/local/lib/tec-tac/sandbox/sandbox-selftest.py --selftest [--canary]`, a root-only file that is not in the sudo rule and not linked into `/usr/local/sbin` (see "The canary"). The module install helpers call the first two. Since 1.18.14 there is no `--finish` mode and no unit property runs a command (a `+` command on systemd 255 sees only the sandbox root, not the host); the helper builds the end frame's memory evidence from its own live cgroup poll.
 - 1.17.118 adds the in-unit launcher and the canary programs under `/usr/local/lib/tec-tac/sandbox/` (root-owned, 0755) and the run folders under `/run/tec-tac/sandbox/` (slots, secrets, handoff, runs; root, 0700).
 - `tec-tac-sandbox.slice`, a systemd group with a server-wide memory and task cap for all runs together.
@@ -40,7 +40,7 @@ The selftest checks: the systemd version (249 or newer), that cgroup v2 is in us
 
 ## The launch path (Core 1.17.118)
 
-With the switch on, a run goes like this.
+A run goes like this.
 
 1. The owning module calls `tec_tac.sandbox.start(runner_id, input=..., parameters=..., credentials=..., requested_by=..., user=...)`. Core finds the caller from the call stack (AD-26). Only the module that owns the runner may start it.
 2. Core checks the server is ready, the runner and its runtime, the input size, the parameters and the credential names, and writes one strict audit row `sandbox.run.started` **before** the launch. A run that cannot be audited does not start.
@@ -150,9 +150,9 @@ Check `has_capability('core.sandbox')` first and require framework >=1.17.116 (>
 
 | Call | What it does |
 |---|---|
-| `status(live=False)` | `{enabled, ready, active, reason, systemd_version, address_filter_ok, dns_ok, network_private_ok, egress_ok, selftest_at, slots_total, slots_used, canary_ok, canary_at, runners}`. Since 1.18.24 `address_filter_ok` means the network wall is proven and `dns_ok` means the egress proxy resolves names and opens a tunnel; `network_private_ok` and `egress_ok` are the same answers under their own names (additive). `enabled` is the kill-switch constant: `False` in 1.18.27, and it stays `False` until AD-65's condition is met. `ready` is `True` only when the selftest passed. `active` (new in 1.18.27, additive) is `enabled and ready`: a run can start now, so it is `False` while `enabled` is `False`. `slots_used` is `None` unless `live` is `True` (one `sudo --status` call, 3 seconds at most). `canary_ok` is `True` only when the last full canary passed. No secret. The last four keys and `live` are new in 1.17.118 and additive. |
+| `status(live=False)` | `{enabled, ready, active, reason, systemd_version, address_filter_ok, dns_ok, network_private_ok, egress_ok, selftest_at, slots_total, slots_used, canary_ok, canary_at, runners}`. Since 1.18.24 `address_filter_ok` means the network wall is proven and `dns_ok` means the egress proxy resolves names and opens a tunnel; `network_private_ok` and `egress_ok` are the same answers under their own names (additive). `enabled` is the kill-switch constant: `True` since 1.18.28. `ready` is `True` only when the selftest passed. `active` (new in 1.18.27, additive) is `enabled and ready and canary_ok` (canary added in 1.18.28): a run can start now. `slots_used` is `None` unless `live` is `True` (one `sudo --status` call, 3 seconds at most). `canary_ok` is `True` only when the last full canary passed for this Core build (`core_version` equals the installed `VERSION` text) and this selftest run (`selftest_at` equals the selftest's), so any later selftest makes it `False` until a full canary has run again. No secret. The last four keys and `live` are new in 1.17.118 and additive. |
 | `describe(runner_id)` | The declared limits, SHA-256, version and runtime state of one runner. The owning module only. |
-| `start(...)` | Returns a `RunHandle` (see the launch path). Raises `SandboxError` `sandbox_not_ready` (one `sandbox.run.refused` audit row, no helper started) when this server's selftest is not ready. |
+| `start(...)` | Returns a `RunHandle` (see the launch path). Raises `SandboxError` `sandbox_not_ready` (one `sandbox.run.refused` audit row, no helper started) when this server's selftest is not ready; `sandbox_disabled` appears only if the constant is forced off. |
 | `run(...)` | The blocking form of `start`. |
 | `cancel(run_id)` | Stops a run this process started. Another module's run, or one this process does not know, is `not_owner`. Not gated by readiness. |
 
@@ -162,11 +162,11 @@ Check `has_capability('core.sandbox')` first and require framework >=1.17.116 (>
 
 ### Errors
 
-`SandboxError` carries `code`, a plain `message` and `retry_after` (seconds; only for `busy` and `person_busy`). The codes: `sandbox_disabled`, `sandbox_unavailable` (the helper's own refusals at run time), `sandbox_not_ready` (1.18.27: the server's selftest is not ready; HTTP 503), `runner_unknown`, `runner_disabled`, `runtime_unverified`, `not_owner`, `invalid_input`, `input_too_large`, `credential_invalid`, `busy`, `person_busy`, `start_failed`, `timeout`, `output_limit`, `oom` and `cancelled`.
+`SandboxError` carries `code`, a plain `message` and `retry_after` (seconds; only for `busy` and `person_busy`). The codes: `sandbox_disabled`, `sandbox_unavailable` (the helper's own refusals at run time), `sandbox_not_ready` (1.18.27: the server's selftest is not ready, or since 1.18.28 no canary has passed here for this Core build and selftest run; HTTP 503), `runner_unknown`, `runner_disabled`, `runtime_unverified`, `not_owner`, `invalid_input`, `input_too_large`, `credential_invalid`, `busy`, `person_busy`, `start_failed`, `timeout`, `output_limit`, `oom` and `cancelled`.
 
 ## What is not in this release
 
-- The switch. `SANDBOX_ENABLED` is `False` in `tec_tac/sandbox.py` and in the helper. It is turned on by a separate patch after the dev02 canary passes in full.
+- The switch. `SANDBOX_ENABLED` is `True` in `tec_tac/sandbox.py` and in the helper (since 1.18.28). The readiness gate and the passed-canary check are the guard; the dev02 canary (`tests/sandbox-canary-1.18.28.sh`) is the exit check.
 - A setting to lower the slot count, and a status panel in the UI.
 - IPv6 for a run (`RestrictAddressFamilies` is `AF_INET` only since 1.17.124; there is no `AF_UNIX` either), an egress proxy, a host list, a warm pool.
 - Audit log rotation: the helper's own file `/var/lib/tec-tac/sandbox/audit.jsonl` grows by about 300 bytes a row and is not rotated yet.

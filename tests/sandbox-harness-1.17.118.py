@@ -100,6 +100,8 @@ sh.SLOTS_ROOT, sh.PERSON_SLOTS_ROOT = RUN / "slots", RUN / "slots" / "person"
 sh.SECRETS_ROOT, sh.HANDOFF_ROOT, sh.RUNS_ROOT = RUN / "secrets", RUN / "handoff", RUN / "runs"
 sh.CANARY_FILE, sh.CANARY_MARKERS_FILE = STATE / "canary.json", RUN / "canary-markers.json"
 sh.CANARY_DIR = LIB / "canary"
+sh.INSTALLED_VERSION_FILE = STATE / "VERSION"  # the Core build the canary must have run against
+TEST_CORE_VERSION = "1.18.28"
 sh.CANARY_RUNNER_FILE = sh.CANARY_DIR / "sandbox-canary-runner.py"
 sh.LAUNCHER_FILE = launcher_for_tests(ROOT, BASE)  # 1.18.26: a PC without /proc runs a copy that skips the leftover check
 sh.WORK_DIR = str(BASE / "work")
@@ -322,12 +324,17 @@ def make_runner(runner_id="ai.chat", *, body="print('hello')", limits=None, para
     return row
 
 
-def write_ready_status(**over):
+def write_ready_status(canary=True, **over):
+    """A real start needs a passed canary for this Core build and selftest run, so the harness writes a passing canary.json too (``canary=False``: none)."""
     status = {"ready": True, "reason": "ready", "enabled": False, "systemd_version": 252, "resolver": "9.9.9.9", "resolvers": ["9.9.9.9"],
               "address_filter_ok": True, "dns_ok": True, "selftest_at": "2026-11-11T10:00:00Z"}
     status.update(over)
     sh.STATE_ROOT.mkdir(parents=True, exist_ok=True)
     sh.write_status(status)
+    sh._write_root_file(sh.INSTALLED_VERSION_FILE, (TEST_CORE_VERSION + "\n").encode(), 0o644)
+    if canary:
+        sh._write_root_file(sh.CANARY_FILE, sh._json_bytes({"ok": True, "at": "2026-11-11T10:05:00Z", "counts": {}, "failing": [], "skipped": [],
+                                                           "core_version": TEST_CORE_VERSION, "selftest_at": status["selftest_at"]}), 0o644)
     return status
 
 

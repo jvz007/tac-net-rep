@@ -1,5 +1,5 @@
 #!/usr/bin/python3 -I
-"""Root-owned helper for core.sandbox (Core 1.18.26 shape; 1.18.8, Patch A: allow-list file view, fixed unit template, memory evidence and root audit rows; the kill switch is still off).
+"""Root-owned helper for core.sandbox (Core 1.18.26 shape; 1.18.8, Patch A: allow-list file view, fixed unit template, memory evidence and root audit rows; the kill switch is on since 1.18.28, behind the readiness and canary gates).
 
 core.sandbox runs a signed module's declared program as an unprivileged, resource-limited process that cannot see the server's files
 or reach the server itself or private networks (AD-63, docs/planning/sandbox/PLAN-CORE-SANDBOX.md sections 2, 3 and 15). Since 1.18.24 (AD-65 Patch B)
@@ -12,16 +12,16 @@ a run has its own, empty network space and reaches only its runner's ``allowed_h
 * ``--status`` (the Tactical account, through sudo): read only, with slot numbers and the canary result;
 * ``--sweep`` (root: a boot and daily timer): re-verifies runtime folders; removes stray selftest folders, secrets folders, handoff and run
   files of units that are not active, and old canary markers;
-* ``--start`` and ``--stop`` (the Tactical account, through sudo): the launch path. ``SANDBOX_ENABLED`` is False until AD-65's switch-on condition is met, so both
+* ``--start`` and ``--stop`` (the Tactical account, through sudo): the launch path. ``SANDBOX_ENABLED`` is True since 1.18.28. Only if the constant is forced to False do both
   refuse with the ``sandbox_disabled`` frame BEFORE they read stdin. ``--start`` refuses with ``sandbox_not_ready`` unless the
-  selftest's status.json says ready (read fresh on every start; ``--stop`` is never gated by readiness). ``--start`` reads one JSON header line and the input, re-checks the registry
+  selftest's status.json says ready and the last full canary passed for this Core build and this selftest run (read fresh on every start; ``--stop`` is never gated by readiness). ``--start`` reads one JSON header line and the input, re-checks the registry
   row, builds the unit itself from the row and Core constants, takes a server slot and a per-person slot, hands credentials in through
   LoadCredential from tmpfs, and streams one JSON frame per line (started, out, err, end). Closing its stdin or stdout stops the unit;
 * 1.18.14: no unit property runs a command (no ``ExecStartPost=+``, no ``ExecStopPost=+``): on systemd 255 such a command sees only the
   RootDirectory skeleton, not the host. The helper removes the run's credential folder itself once the unit holds its own copy, and builds
   the end frame's memory evidence from its own live cgroup poll.
 
-``SANDBOX_ENABLED`` is a constant in this file, so a fault in Django cannot switch the sandbox on. Nothing here reads a command, a path or a
+``SANDBOX_ENABLED`` is a constant in this file, so a fault in Django cannot change it. Nothing here reads a command, a path or a
 limit from a caller: every rule is applied again to the root-owned registry row.
 """
 from __future__ import annotations
@@ -54,9 +54,12 @@ try:  # Linux only; the tests load this file on other systems too
 except ImportError:  # pragma: no cover
     fcntl = None
 
-# The kill switch. It is switched on by a later Core release, only after AD-65's condition is met (the canary passes in full on dev02 and on a second kind
-# of server, or Johan's signed amendment is recorded in docs/review-accepted-decisions.md). Not a setting.
-SANDBOX_ENABLED = False
+# The kill switch. On since Core 1.18.28 (AD-65 amendment, Johan, 20 November 2026: Ubuntu 24.04 on dev02 is the baseline). Not a setting.
+# The readiness gate still applies: --start refuses with sandbox_not_ready unless this server's selftest is ready.
+SANDBOX_ENABLED = True
+
+# The installed Core VERSION file (root-owned, put there by install.sh). The canary must have run against exactly this text.
+INSTALLED_VERSION_FILE = Path("/opt/tec-tac/VERSION")
 
 DEFAULT_CONFIG = Path("/opt/tec-tac/etc/tec-tac.conf")
 CONFIG_POINTER = Path("/etc/tec-tac/config-path")
@@ -1074,7 +1077,7 @@ def _sweep_reasons(payload):
 
 # ============================================================================ Patch 2 (1.17.118): the launch path
 # ``--start`` and ``--stop`` (the Tactical account, through sudo), the unit builder, the slots, the
-# credential hand-in, the framing and the canary. SANDBOX_ENABLED stays False until AD-65's condition is met; once on, ``--start`` refuses with sandbox_not_ready when the selftest is not ready.
+# credential hand-in, the framing and the canary. SANDBOX_ENABLED is True since 1.18.28; ``--start`` refuses with sandbox_not_ready when the selftest or the canary is not ready.
 LAUNCHER_FILE = LIB_ROOT / "sandbox-launcher.py"
 CANARY_DIR = LIB_ROOT / "canary"
 SLOTS_ROOT = RUN_ROOT / "slots"
@@ -1491,12 +1494,50 @@ def check_runner_ready(row):
         raise Refusal("runtime_unverified", "the runner executable changed since it was registered")
 
 
-def ready_status():
+def installed_core_version():
+    """The text of the root-owned installed VERSION file, or None when it cannot be read (fail closed)."""
+    try:
+        text = _read_trusted_file(INSTALLED_VERSION_FILE, "Core VERSION file", max_bytes=256).decode("utf-8").strip()
+    except (RuntimeError, ValueError, OSError):
+        return None
+    return text or None
+
+
+def canary_record_state(status):
+    """``(passed, at)`` of canary.json against this Core build and this selftest run. Passed only when ok is True, core_version equals the
+    installed VERSION text and selftest_at equals status.json's selftest_at (all text). Anything else is not passed."""
+    try:
+        canary = json.loads(_read_trusted_file(CANARY_FILE, "canary file", max_bytes=64 * 1024).decode("utf-8"))
+    except (RuntimeError, ValueError, OSError):
+        return False, None
+    if not isinstance(canary, dict):
+        return False, None
+    at = canary.get("at") if isinstance(canary.get("at"), str) else None
+    version, selftest_at = canary.get("core_version"), canary.get("selftest_at")
+    current = installed_core_version()
+    current_selftest = status.get("selftest_at") if isinstance(status, dict) else None
+    passed = (canary.get("ok") is True and isinstance(version, str) and bool(version) and version == current
+              and isinstance(selftest_at, str) and bool(selftest_at) and selftest_at == current_selftest
+              and isinstance(current_selftest, str))
+    return passed, at
+
+
+def canary_passed(status):
+    return canary_record_state(status)[0]
+
+
+def ready_status(canary_required=True):
+    """The selftest must be ready AND, for a real run (``canary_required``), the last full canary on this server must have passed for this Core
+    build and this selftest run (AD-65). The canary's own runs and the root-only canary launch pass False: they are what makes the canary."""
     status = read_status()
     if status.get("ready") is not True:
         if status.get("skeleton_changed") is True and isinstance(status.get("reason"), str):  # 1.18.13: a run left a new entry; name it
             raise Refusal("sandbox_not_ready", status["reason"][:300])
         raise Refusal("sandbox_not_ready", "the sandbox selftest has not passed on this server")
+    if not canary_required:
+        return status
+    if not canary_passed(status):
+        raise Refusal("sandbox_not_ready", "the sandbox canary has not passed on this server")
     return status
 
 
@@ -2726,11 +2767,11 @@ class CgroupWatch:
 
 # ------------------------------------------------------------------------------------------------------------- the launch
 def launch(row, *, run_id, person, parameters, credentials, input_data, emit, stdin_eof=None, slots_n=None, person_n=PERSON_SLOTS,
-           status=None, clock=time.monotonic, sleep=time.sleep):
+           status=None, canary_required=True, clock=time.monotonic, sleep=time.sleep):
     """Start one run and stream it. ``emit(frame)`` writes one frame (and raises DeadMan when the caller is gone); ``stdin_eof`` is a
     threading.Event set when the caller closed its end. Used by ``--start`` and by the root-only canary. The kill switch is the caller's
     business. Returns the end frame."""
-    status = status or ready_status()
+    status = status or ready_status(canary_required)
     hosts = row_allowed_hosts(row)  # 1.18.24: a row with no allowed_hosts gets no door, no forwarder and no proxy variable
     local = None
     if hosts:
@@ -3018,11 +3059,12 @@ def start_command(stdin=None, *, row=None, out_stream=None):
     """``--start``: read the header and the input, re-check everything, launch, stream frames, always clean up. ``row`` is for the root-only
     selftest file (``sandbox-selftest.py --canary-launch``, 1.18.26): it hands in the canary's own row, and the header must name that row's id.
     ``main`` never passes it, so the sudo-reachable ``--start`` always reads the root-owned registry; the kill-switch constant is not asked on
-    the selftest path (main already refused the real ``--start`` while it is off)."""
+    the selftest path (main refuses the real ``--start`` only if the constant is forced off)."""
     stdin = stdin or sys.stdin.buffer
     emit = stdout_emitter(out_stream)
     try:
         ensure_layout()
+        row_given = row  # only the root-only canary launch hands a row in; it does not need a passed canary (it makes it)
         header, size = read_header(stdin)
         if row is not None:
             if header["runner_id"] != row.get("id"):
@@ -3042,7 +3084,7 @@ def start_command(stdin=None, *, row=None, out_stream=None):
             eof.set()
         threading.Thread(target=watch_stdin, daemon=True).start()
         launch(row, run_id=header["run_id"], person=header["person"], parameters=header.get("parameters", {}), credentials=credentials,
-               input_data=data, emit=emit, stdin_eof=eof)
+               input_data=data, emit=emit, stdin_eof=eof, canary_required=row_given is None)
         return 0
     except Refusal as exc:
         if exc.code == "sandbox_not_ready":  # 1.18.27: a server whose selftest is not ready says so in its own log (other refusals already have run rows)
@@ -3251,12 +3293,7 @@ def show_status():
     total = slot_count(mem_available_kib(), LIMITS["memory_mb"][0])
     status["slots_total"] = total
     status["slots_used"] = slots_in_use(total)
-    try:
-        canary = json.loads(_read_trusted_file(CANARY_FILE, "canary file", max_bytes=64 * 1024).decode("utf-8"))
-        status["canary_ok"] = canary.get("ok") is True
-        status["canary_at"] = canary.get("at") if isinstance(canary.get("at"), str) else None
-    except (RuntimeError, ValueError, OSError):
-        status["canary_ok"], status["canary_at"] = False, None
+    status["canary_ok"], status["canary_at"] = canary_record_state(status)
     print(json.dumps({"status": status, "runners": registered_runners()}, sort_keys=True))
     return 0
 
@@ -3416,7 +3453,7 @@ def sweep(min_age=STALE_SECONDS):
 
 
 def refuse_disabled():
-    """``--start`` and ``--stop`` while the kill switch is off: read nothing from stdin, start nothing, answer with the final refusal frame."""
+    """``--start`` and ``--stop`` only if the kill-switch constant is forced to False: read nothing from stdin, start nothing, answer with the final refusal frame."""
     sys.stdout.write(json.dumps({"t": "refused", "code": "sandbox_disabled"}, separators=(",", ":")) + "\n")
     sys.stdout.flush()
     return 3
