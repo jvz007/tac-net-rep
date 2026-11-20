@@ -92,7 +92,7 @@ must(first_row < last_row < first_detail < totals, (first_row, last_row, first_d
 must(lines[-1] in ("CANARY PASSED", "CANARY FAILED"), lines[-1])
 
 # the launcher wording: no 'program's own exit code', the launcher is named
-source = (ROOT / "scripts" / "sandbox-helper.py").read_text(encoding="utf-8")
+source = "\n".join((ROOT / "scripts" / name).read_text(encoding="utf-8") for name in ("sandbox-helper.py", "sandbox-selftest.py"))
 must("program's own exit code" not in source and "program's real end" not in source, "old wording is gone")
 must("sandbox-launcher.py" in source and "main process (the launcher" in source, "the launcher is named")
 

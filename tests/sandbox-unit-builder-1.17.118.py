@@ -46,6 +46,7 @@ joined_props = "\n".join(props)
 GOLDEN = [
     "DynamicUser=yes", "ProtectSystem=strict", "ProtectHome=yes", "PrivateTmp=yes", "PrivateDevices=yes", "PrivateIPC=yes", "NoNewPrivileges=yes",
     "CapabilityBoundingSet=", "AmbientCapabilities=", "SystemCallFilter=@system-service", "SystemCallFilter=~@privileged @resources",
+    "SystemCallFilter=~io_uring_setup io_uring_enter io_uring_register userfaultfd keyctl add_key request_key",
     "SystemCallArchitectures=native", "SystemCallErrorNumber=EPERM", "PrivateNetwork=yes", "RestrictAddressFamilies=AF_INET AF_UNIX", "RestrictNamespaces=yes",
     "RestrictRealtime=yes", "RestrictSUIDSGID=yes", "LockPersonality=yes", "MemoryDenyWriteExecute=no", "ProtectKernelTunables=yes",
     "ProtectKernelModules=yes", "ProtectKernelLogs=yes", "ProtectControlGroups=yes", "ProtectClock=yes", "ProtectHostname=yes",

@@ -23,6 +23,8 @@ import sys
 from pathlib import Path, PurePosixPath
 
 sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from sandbox_test_support import load_helper  # noqa: E402  (1.18.26: the helper and sandbox-selftest.py as one object)
 HERE = Path(__file__).resolve().parent
 
 
@@ -35,7 +37,7 @@ def load(name, path):
 
 H = load("sandbox_harness_188f", HERE / "sandbox-harness-1.17.118.py")
 sh, must, BASE = H.sh, H.must, H.BASE
-REAL_CHECK = load("sandbox_helper_188_real", HERE.parent / "scripts" / "sandbox-helper.py")  # an untouched copy: the harness replaced check_skeleton in ``sh``
+REAL_CHECK = load_helper(HERE.parent, "sandbox_helper_188_real")  # an untouched copy: the harness replaced check_skeleton in ``sh``
 check_skeleton, ensure_runtime_mountpoint = REAL_CHECK.check_skeleton, REAL_CHECK.ensure_runtime_mountpoint
 Refusal = REAL_CHECK.Refusal
 PLAIN = "the sandbox root folder does not match this server; run the Core install again"
@@ -62,7 +64,7 @@ view = sh.file_view_properties(EXISTS)
 for item in view:
     must(item in props, item)
 must(view[:3] == [f"RootDirectory={sh.SANDBOX_ROOT}", "MountAPIVFS=yes", "BindReadOnlyPaths=/usr"] and view[-1] == "TemporaryFileSystem=/usr/local:ro", view)
-helper_text = (HERE.parent / "scripts" / "sandbox-helper.py").read_text(encoding="utf-8")
+helper_text = "\n".join((HERE.parent / "scripts" / name).read_text(encoding="utf-8") for name in ("sandbox-helper.py", "sandbox-selftest.py"))
 must(helper_text.count("file_view_properties(") >= 4 and "HIDDEN_FOLDERS" not in helper_text, "one shared function, no deny list")
 # a host with real folders for the merged names: those are bound, read only
 real_view = sh.file_view_properties(lambda path: True)

@@ -81,9 +81,12 @@ os.chown = lambda path, uid, gid, *a, **k: CHOWNS.__setitem__(norm(path), (uid, 
 os.geteuid = lambda: 0
 
 HELPER = ROOT / "scripts" / "sandbox-helper.py"
-_SPEC = importlib.util.spec_from_file_location("sandbox_helper_118", HELPER)
-sh = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(sh)
+# 1.18.26 (Patch C): the selftest and canary code moved to scripts/sandbox-selftest.py. ``sh`` is the helper and that file as one object
+# (tests/sandbox_test_support.py), so every test keeps patching and calling the same names.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from sandbox_test_support import launcher_for_tests, load_helper  # noqa: E402
+
+sh = load_helper(ROOT, "sandbox_helper_118")
 
 EXT, LIB, STATE, RUN, ETC = BASE / "ext", BASE / "lib", BASE / "state", BASE / "run", BASE / "etc"
 for folder in (EXT, LIB, STATE, RUN, ETC):
@@ -98,7 +101,7 @@ sh.SECRETS_ROOT, sh.HANDOFF_ROOT, sh.RUNS_ROOT = RUN / "secrets", RUN / "handoff
 sh.CANARY_FILE, sh.CANARY_MARKERS_FILE = STATE / "canary.json", RUN / "canary-markers.json"
 sh.CANARY_DIR = LIB / "canary"
 sh.CANARY_RUNNER_FILE = sh.CANARY_DIR / "sandbox-canary-runner.py"
-sh.LAUNCHER_FILE = ROOT / "scripts" / "sandbox-launcher.py"
+sh.LAUNCHER_FILE = launcher_for_tests(ROOT, BASE)  # 1.18.26: a PC without /proc runs a copy that skips the leftover check
 sh.WORK_DIR = str(BASE / "work")
 sh.RESOLV_CONF = str(BASE / "resolv.conf")
 # 1.17.123: what `ip` would say about this server (a public address, its gateway, loopback); no real `ip` here

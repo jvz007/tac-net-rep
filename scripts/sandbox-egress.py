@@ -48,6 +48,7 @@ HOST_BLOCKED_SUFFIXES = (".local", ".internal", ".localhost", ".lan")
 HOST_LABEL_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 AUDIT_HOST_RE = re.compile(r"^[A-Za-z0-9.-]{1,253}$")
 AUDIT_ROWS_MAX = 400  # the root helper keeps 200 and marks the rest as truncated
+OWN_LOOKUP_SECONDS = 3.0  # 1.18.26: the proxy's own fallback lookup of the own names (only when the helper handed in none) has this total limit
 ALLOWED_PORT = 443
 BLOCKED_NETWORKS = tuple(ipaddress.ip_network(item) for item in (
     "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.0.0.0/24", "192.0.2.0/24",
@@ -155,15 +156,31 @@ class Egress:
         self.fqdn_addresses = self._fqdn_addresses()
 
     def _fqdn_addresses(self):
-        """Addresses of every own name, looked up once at start-up and merged with the ones the helper handed in (a NAT'd server's public address
-        is on no local interface, so only a name lookup finds it)."""
+        """Addresses of every own name. 1.18.26: the helper hands in the real-DNS answers (already bounded to 5 s), and those are used with no
+        lookup at all. Only when that list is empty does the proxy look the names up itself, in worker threads with a total deadline of
+        OWN_LOOKUP_SECONDS (3 s): a name that misses the deadline adds nothing (it stays refused by name), so start-up time is bounded."""
         found = set(self.own_name_addresses)
-        for name in sorted(self.own_names):
+        if found or not self.own_names:
+            return found
+        lock = threading.Lock()
+        gathered = set()
+
+        def work(name):
             try:
-                found |= {str(item[4][0]).split("%", 1)[0] for item in self.resolve(name, None)}
-            except OSError:
-                continue
-        return found
+                got = {str(item[4][0]).split("%", 1)[0] for item in self.resolve(name, None)}
+            except (OSError, ValueError, TypeError, RuntimeError, LookupError, AttributeError):  # a worker never dies with a traceback: a name that fails adds nothing
+                return
+            with lock:
+                gathered.update(got)
+
+        threads = [threading.Thread(target=work, args=(name,), daemon=True) for name in sorted(self.own_names)]
+        for thread in threads:
+            thread.start()
+        end = self.clock() + OWN_LOOKUP_SECONDS
+        for thread in threads:
+            thread.join(max(0.0, end - self.clock()))
+        with lock:
+            return found | set(gathered)
 
     @staticmethod
     def _dial(address, port, timeout):

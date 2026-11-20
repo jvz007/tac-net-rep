@@ -42,7 +42,7 @@ for counter in ("ATTACKS=", "NOTRUN=", "SKIPPED_SECURITY="):
     line = next(l for l in NEW.splitlines() if l.startswith(counter))
     must("$0 !~ /^DETAIL /" in line, counter)
 must("detail_lines" in NEW, "guard marker")
-must("detail_lines" in (ROOT / "scripts" / "sandbox-helper.py").read_text(encoding="utf-8"), "marker is real")
+must("detail_lines" in "\n".join((ROOT / "scripts" / name).read_text(encoding="utf-8") for name in ("sandbox-helper.py", "sandbox-selftest.py")), "marker is real")
 
 bash = shutil.which("bash")
 usable = False

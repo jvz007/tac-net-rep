@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 """In-unit attack program for the core.sandbox canary (Core 1.17.118, Patch 2, plan 8.2 and section 15).
 
-Runs inside a sandbox unit, as the unit's unprivileged user, started by ``tec-tac-sandbox --selftest --canary``. The first argument names
+Runs inside a sandbox unit, as the unit's unprivileged user, started by ``sandbox-selftest.py --selftest --canary`` (until 1.18.25: ``tec-tac-sandbox --selftest --canary``). The first argument names
 one group of attacks; the root helper's JSON plan (planted marker files, listening ports, resolver and gateway addresses) arrives on stdin.
 Each attack prints exactly one line
 
@@ -675,9 +675,10 @@ R_PROXY_OWN = "proxy refuses this server's own address"
 R_PROXY_80 = "proxy refuses the allowed host on port 80"
 R_PROXY_22 = "proxy refuses the allowed host on port 22"
 R_PROXY_OWN_NAME = "proxy refuses this server's own domain"  # 1.18.25
+R_PROXY_OWN_PUBLIC = "proxy refuses a name that answers this server's public address"  # 1.18.26
 NETWORK_ROW_NAMES = (R_PUB_443, R_PUB_80, R_PUB_OTHER, R_PUB_DIRECT, R_DNS_LISTED, R_DNS_GAI, R_DNS_LISTED_ASK, R_DNS_PUBLIC_ASK, R_LISTEN, R_PROC_TCP,
                      R_PROC_UDP, R_IFACES, R_ROUTE, R_PACKET, R_RAW, R_NETLINK, R_INET6, R_PING, R_V6_443, R_LOOPBACK, R_OWN, R_GATEWAY, R_PROXY_OK,
-                     R_PROXY_HOST, R_PROXY_IP, R_PROXY_PRIVATE, R_PROXY_OWN, R_PROXY_80, R_PROXY_22, R_PROXY_OWN_NAME)
+                     R_PROXY_HOST, R_PROXY_IP, R_PROXY_PRIVATE, R_PROXY_OWN, R_PROXY_80, R_PROXY_22, R_PROXY_OWN_NAME, R_PROXY_OWN_PUBLIC)
 
 
 def make_socket(family, kind, proto=0):
@@ -1010,10 +1011,26 @@ def _proxy_rows(plan, run):
             return "NOTRUN", NET_NO_DOOR
         return ("SUCCEEDED", f"the proxy opened a tunnel (200) to {name}:443") if status == 200 else ("OK", f"refused ({status or 'closed'})")
 
+    def own_public():
+        """1.18.26: CONNECT to a name that is NOT one of this server's names but whose public DNS answer is this server's public address (a
+        dashed-IP wildcard name, which the plan also lists in allowed_hosts). 403 is OK (the host driver then checks the audit reason is
+        address_blocked); 200 is SUCCEEDED (a hairpin back to this server through its public address). A plan with no such name is NOTRUN with
+        the host driver's plain reason."""
+        name = str(plan.get("own_public_name") or "")
+        if not name:
+            return "NOTRUN", str(plan.get("own_public_reason") or "the plan named no name that answers this server's public address")[:200]
+        if not up():
+            return "NOTRUN", NET_NO_DOOR
+        status = proxy_status(proxy, name, 443)
+        if status is None:
+            return "NOTRUN", NET_NO_DOOR
+        return ("SUCCEEDED", f"the proxy opened a tunnel (200) to {name}:443") if status == 200 else ("OK", f"refused ({status or 'closed'})")
+
     run(R_PROXY_OK, positive)
     for name, host, port in cases:
         run(name, lambda host=host, port=port: refusal(host, port))
     run(R_PROXY_OWN_NAME, own_domain)
+    run(R_PROXY_OWN_PUBLIC, own_public)
 
 
 def g_patchb_network(plan):
@@ -1172,8 +1189,12 @@ def g_patchc_syscalls(plan):
 
 
 def g_patchc_leftover(plan):
-    """Writes a credential, forks a leftover that outlives this runner and keeps replacing the credential file with a marker for a few seconds. The
-    host-side driver decides: a returned credential that carries the marker means the launcher read it while a leftover was alive."""
+    """Writes a credential, forks a leftover that outlives this runner and keeps replacing the credential file with ``<marker> <n>`` for a few
+    seconds, printing ``LEFTOVER <n>`` to the shared stdout after each replacement. The launcher reads the credential after the runner exits. The
+    host-side driver compares the two: the credential carries the last number the leftover wrote before the read (n_cred); a leftover that was
+    still alive after the read prints a number above n_cred (it was not stopped first, ATTACK SUCCEEDED). A leftover killed before the read can
+    print at most n_cred. (1.18.26: the 1.18.25 row looked only for the marker, which the leftover had already written by then, so it could never
+    turn OK.)"""
     marker = clean(plan.get("marker") or PC_LEFTOVER_MARKER, 64)
     try:
         seconds = max(1.0, min(float(plan.get("leftover_seconds") or 5), 10.0))
@@ -1194,11 +1215,12 @@ def g_patchc_leftover(plan):
                 tmp = os.path.join(folder, f".leftover-{count % 2}")
                 try:
                     with open(tmp, "w", encoding="utf-8") as handle:
-                        handle.write(marker)
+                        handle.write(f"{marker} {count}")
                     os.replace(tmp, target)
+                    os.write(1, (f"LEFTOVER {count}" + chr(10)).encode("ascii"))
                 except OSError:
                     pass
-                time.sleep(0.02)
+                time.sleep(0.001)
         finally:
             os._exit(0)
     time.sleep(0.3)  # the runner returns while the leftover is still alive

@@ -19,6 +19,8 @@ import sys
 from pathlib import Path
 
 sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from sandbox_test_support import load_helper  # noqa: E402  (1.18.26: the helper and sandbox-selftest.py as one object)
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -34,7 +36,7 @@ def load(name, path):
     return module
 
 
-sh = load("sandbox_helper_1815i", ROOT / "scripts" / "sandbox-helper.py")
+sh = load_helper(ROOT, "sandbox_helper_1815i")
 SCRIPT = (ROOT / "tests" / "sandbox-canary-1.18.15.sh").read_text(encoding="utf-8")
 LONG = "credential source folder is gone while the run is still active"
 must(len(LONG) == 62, len(LONG))  # over the 60-character cut (the plan said 69; it is 62)
@@ -60,7 +62,7 @@ must(ids[0] == "same-label" and ids[1] == "same-label-2" and ids[2] == "same-lab
 must(ids[3] == "x" * 40 and ids[4] == "x" * 38 + "-2", ids)
 
 # ---- every label of the helper and the runner is unique as an id
-helper_source = (ROOT / "scripts" / "sandbox-helper.py").read_text(encoding="utf-8")
+helper_source = "\n".join((ROOT / "scripts" / name).read_text(encoding="utf-8") for name in ("sandbox-helper.py", "sandbox-selftest.py"))
 runner_source = (ROOT / "scripts" / "sandbox-canary-runner.py").read_text(encoding="utf-8")
 labels = set(re.findall(r'"attack": "([^"]+)"', helper_source)) | set(re.findall(r'\brow\(\s*"([^"{]+)"', runner_source))
 labels |= {"view " + folder for folder in sh.CANARY_VIEW_FOLDERS} | {"/ lists only the allowed set", "write /run"}

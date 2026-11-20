@@ -302,6 +302,39 @@ def _sandbox_no_percent(schema: dict, label: str) -> dict:
     return schema
 
 
+SANDBOX_PATTERN_TEXT = "pattern is not supported; use enum choices or max_length"
+SANDBOX_MAX_LENGTH_LIMIT = 65536
+SANDBOX_INT_LIMIT = 2 ** 31
+
+
+def _sandbox_parameter_limits(schema, label: str):
+    """1.18.26 (AD-65 Patch C): a sandbox runner parameter's ``max_length``, ``minimum`` and ``maximum`` are real whole numbers (a bool or a
+    string is refused with a plain message, never an uncaught TypeError), ``max_length`` is 1 to 65536, and ``pattern`` is not a field at all
+    (the root helper refuses it again). Applies to ``sandbox_runners`` only: server_maintenance_actions keep their own rules. A value that is
+    not an object is left to ``_sm_parameters``, which gives its own message."""
+    if not isinstance(schema, dict):
+        return schema
+    for name, spec in schema.items():
+        if not isinstance(spec, dict):
+            continue
+        where = f"{label} parameter {name!r}"
+        if "pattern" in spec:
+            raise RegistryError(f"{where}: {SANDBOX_PATTERN_TEXT}.")
+        for key in ("max_length", "minimum", "maximum"):
+            if key not in spec:
+                continue
+            value = spec[key]
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise RegistryError(f"{where} {key} must be a whole number.")
+            if key == "max_length" and not 1 <= value <= SANDBOX_MAX_LENGTH_LIMIT:
+                raise RegistryError(f"{where} max_length must be 1 to {SANDBOX_MAX_LENGTH_LIMIT}.")
+            if key != "max_length" and abs(value) > SANDBOX_INT_LIMIT:
+                raise RegistryError(f"{where} {key} is out of range.")
+        if "minimum" in spec and "maximum" in spec and spec["minimum"] > spec["maximum"]:
+            raise RegistryError(f"{where} minimum may not be above maximum.")
+    return schema
+
+
 def _server_maintenance_actions(payload: dict, plugin_type: str, plugin_id: str, plugin_dir: Path,
                                 permission_groups, publisher_permissions) -> tuple[dict, ...]:
     """Parse the optional ``server_maintenance_actions`` key (1.17.17): the Core server-maintenance actions a signed module registers.
@@ -551,7 +584,7 @@ def _sandbox_runners(payload: dict, plugin_type: str, plugin_id: str, plugin_dir
                                             prefix=SANDBOX_EXECUTABLE_PREFIX, min_parts=3)
         if "%" in executable:
             raise RegistryError(f"{label} executable path {_SANDBOX_PERCENT_TEXT}.")
-        schema = _sandbox_no_percent(_sm_parameters(entry.get("parameters", {}), label), label)
+        schema = _sandbox_no_percent(_sm_parameters(_sandbox_parameter_limits(entry.get("parameters", {}), label), label), label)
         argv = entry.get("argv", [])
         if not isinstance(argv, list) or len(argv) > 64:
             raise RegistryError(f"{label} argv must be an array with at most 64 entries.")

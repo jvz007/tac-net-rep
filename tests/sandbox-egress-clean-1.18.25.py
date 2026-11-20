@@ -205,7 +205,7 @@ else:
     print("[INFO] real symlinks: not allowed here, stub layer used")
 
 # ---- the code itself: no resolve(), no os.path.realpath on the link, built only from the validated id
-text = (ROOT / "scripts" / "sandbox-helper.py").read_text(encoding="utf-8")
+text = "\n".join((ROOT / "scripts" / name).read_text(encoding="utf-8") for name in ("sandbox-helper.py", "sandbox-selftest.py"))
 start = text.index("def egress_remove_state")
 body = text[start:text.index("def egress_clean", start)]
 must("resolve(" not in body and "realpath" not in body, "the link is never resolved, only normalised")

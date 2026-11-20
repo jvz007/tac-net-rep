@@ -60,7 +60,7 @@ network_props = [call[1] for call in fake.calls if call[0] == "network_private"]
 must("PrivateNetwork=yes" in network_props and "RestrictAddressFamilies=AF_INET AF_UNIX" in network_props and any(p.startswith("RootDirectory=") for p in network_props), network_props)
 control_props = [call[1] for call in fake.calls if call[0] == "network_control"][0]
 must("PrivateNetwork=yes" not in control_props, "the control run has no wall")
-text = (H.ROOT / "scripts" / "sandbox-helper.py").read_text(encoding="utf-8")
+text = "\n".join((H.ROOT / "scripts" / name).read_text(encoding="utf-8") for name in ("sandbox-helper.py", "sandbox-selftest.py"))
 must("IPAddressDeny" not in text.split("def _probe_network")[0].split("PROBE_PROPERTIES")[1].split("DENIED_NETWORKS")[0], "no unit probe carries IPAddressDeny")
 
 # ---- a visible interface, a reachable address, a reachable loopback port or a resolv.conf: not ready, with a plain reason

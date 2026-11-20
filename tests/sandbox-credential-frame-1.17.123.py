@@ -369,7 +369,7 @@ lines = django.splitlines()
 start_end = next(n for n, line in enumerate(lines) if "def _end_event" in line)
 must(all(start_end <= n - 1 <= start_end + 8 for n in uses), "only the end-event builder touches credential_b64")
 must(not re.search(r"(logger|logging|log\.|print|audit)\w*\(.*credential", django), "no log, print or audit line names a credential value")
-helper = (H.ROOT / "scripts" / "sandbox-helper.py").read_text(encoding="utf-8")
+helper = "\n".join((H.ROOT / "scripts" / name).read_text(encoding="utf-8") for name in ("sandbox-helper.py", "sandbox-selftest.py"))
 must(len([line for line in helper.splitlines() if "credential_b64" in line and "emit" in line]) == 0 and helper.count('"credential_b64": base64') == 1, "the helper puts credential_b64 into the end frame only")
 
 print("[TEST] PASS sandbox credential frame 1.17.123")

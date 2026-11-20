@@ -215,7 +215,7 @@ if linked and hasattr(os, "O_NOFOLLOW"):
     must(sh.read_egress_audit(run_id) == ([], False), "a symlink is never followed")
 else:
     print("note: symlinks or O_NOFOLLOW are not available on this system; the symlink case runs on the server (the open uses O_NOFOLLOW)")
-text = (ROOT / "scripts" / "sandbox-helper.py").read_text(encoding="utf-8")
+text = "\n".join((ROOT / "scripts" / name).read_text(encoding="utf-8") for name in ("sandbox-helper.py", "sandbox-selftest.py"))
 must("getattr(os, \"O_NOFOLLOW\", 0)" in text.split("def read_egress_audit")[1].split("def egress_counts")[0], "the open asks for O_NOFOLLOW")
 shutil.rmtree(folder, ignore_errors=True)
 

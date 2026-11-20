@@ -24,6 +24,8 @@ import tempfile
 from pathlib import Path
 
 sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from sandbox_test_support import load_helper  # noqa: E402  (1.18.26: the helper and sandbox-selftest.py as one object)
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 INSTALL = (ROOT / "install.sh").read_text(encoding="utf-8")
@@ -34,9 +36,7 @@ def must(condition, detail=""):
         raise AssertionError(detail)
 
 
-spec = importlib.util.spec_from_file_location("sandbox_helper_1813", ROOT / "scripts" / "sandbox-helper.py")
-sh = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(sh)
+sh = load_helper(ROOT, "sandbox_helper_1813")
 
 # ---- constants
 must("run/systemd" in sh.SKELETON_DIRS and "run/systemd/incoming" in sh.SKELETON_DIRS, "listed")
@@ -228,7 +228,7 @@ except sh.Refusal as exc:
     must(exc.message == "the sandbox selftest has not passed on this server", exc.message)
 
 # ---- run.ended is written before the re-check (source order in launch)
-source = (ROOT / "scripts" / "sandbox-helper.py").read_text(encoding="utf-8")
+source = "\n".join((ROOT / "scripts" / name).read_text(encoding="utf-8") for name in ("sandbox-helper.py", "sandbox-selftest.py"))
 must(source.rindex('append_audit_safely("run.ended", run_ended_detail') < source.rindex("recheck_skeleton_after_run(row, run_id)"), "run.ended first")
 
 # ---- the selftest probe: take the harness of the 1.17.116 test up to its first case

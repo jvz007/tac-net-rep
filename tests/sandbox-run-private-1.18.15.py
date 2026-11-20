@@ -20,6 +20,8 @@ import types
 from pathlib import Path
 
 sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from sandbox_test_support import load_helper  # noqa: E402  (1.18.26: the helper and sandbox-selftest.py as one object)
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -35,7 +37,7 @@ def load(name, path):
     return module
 
 
-sh = load("sandbox_helper_1815a", ROOT / "scripts" / "sandbox-helper.py")
+sh = load_helper(ROOT, "sandbox_helper_1815a")
 runner = load("canary_runner_1815a", ROOT / "scripts" / "sandbox-canary-runner.py")
 TAB, NL = chr(9), chr(10)
 MARKER = sh.RUN_MARKER_PREFIX + "0123456789abcdef"
@@ -156,7 +158,7 @@ missing = sh.group_table("Writes", "writes", "e", [{"attack": "write /usr", "tag
 must(any(r["verdict"] == "NOT RUN" and "results" in r["actual"] for r in missing), missing)
 
 # ---- no unit property was added for /run, and the helper wires the proof into the Writes group
-source = (ROOT / "scripts" / "sandbox-helper.py").read_text(encoding="utf-8")
+source = "\n".join((ROOT / "scripts" / name).read_text(encoding="utf-8") for name in ("sandbox-helper.py", "sandbox-selftest.py"))
 must("TemporaryFileSystem=/run" not in source and "BindReadOnlyPaths=/run" not in source and "InaccessiblePaths=/run" not in source, "no /run property")
 must('"run_marker": marker' in source and "table_private_run(table, written, marker, collect, status)" in source, "wired into run_canary")
 must(sh.SANDBOX_ENABLED is False, "the kill switch stays off")

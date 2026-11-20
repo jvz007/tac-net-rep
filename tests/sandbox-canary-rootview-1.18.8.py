@@ -270,7 +270,7 @@ sh.remove_markers()
 must(not sh.CANARY_MARKERS_FILE.exists(), "a broken markers file is removed without an error")
 
 # ---- 9. the marker folder list names the new places, and the planting is only for folders that exist
-helper_text = (HERE.parent / "scripts" / "sandbox-helper.py").read_text(encoding="utf-8")
+helper_text = "\n".join((HERE.parent / "scripts" / name).read_text(encoding="utf-8") for name in ("sandbox-helper.py", "sandbox-selftest.py"))
 for name in ("/rmmbackups", "/backup", "/backups", "/snap", "/srv"):
     must(f'"{name}"' in helper_text.split("CANARY_MARKER_DIRS = (")[1].split(")")[0], name)
 must(sh.CANARY_STANDIN_PARENT == str(BASE) and "CANARY_STANDIN_PARENT = \"/\"" in helper_text, "the real parent is /, the harness moved it")

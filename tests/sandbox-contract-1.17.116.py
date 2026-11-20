@@ -161,7 +161,7 @@ def write_runner(runner_id="ai.claude", owner="ai", **over):
 # ------------------------------------------------------------------------------------------------ the kill switch
 must(sandbox.SANDBOX_ENABLED is False, "SANDBOX_ENABLED is False in sandbox.py")
 must(re.search(r"^SANDBOX_ENABLED = False$", (APP / "sandbox.py").read_text(encoding="utf-8"), re.MULTILINE), "a constant in the file")
-must(re.search(r"^SANDBOX_ENABLED = False$", (ROOT / "scripts" / "sandbox-helper.py").read_text(encoding="utf-8"), re.MULTILINE), "a constant in the helper")
+must(re.search(r"^SANDBOX_ENABLED = False$", "\n".join((ROOT / "scripts" / name).read_text(encoding="utf-8") for name in ("sandbox-helper.py", "sandbox-selftest.py")), re.MULTILINE), "a constant in the helper")
 
 # ------------------------------------------------------------------------------------------------ status()
 # a good file

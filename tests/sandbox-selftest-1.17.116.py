@@ -34,6 +34,8 @@ import types
 from pathlib import Path
 
 sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from sandbox_test_support import load_helper  # noqa: E402  (1.18.26: the helper and sandbox-selftest.py as one object)
 ROOT = Path(__file__).resolve().parents[1]
 BASE = Path(tempfile.mkdtemp(prefix="tectac-sandbox-selftest-"))
 
@@ -92,9 +94,7 @@ os.chown = lambda path, uid, gid, *a, **k: CHOWNS.__setitem__(norm(path), (uid, 
 os.geteuid = lambda: 0
 
 HELPER = ROOT / "scripts" / "sandbox-helper.py"
-sh = types.ModuleType("sandbox_helper_selftest")
-sh.__file__ = str(HELPER)
-exec(compile(HELPER.read_text(encoding="utf-8"), str(HELPER), "exec"), sh.__dict__)
+sh = load_helper(ROOT, "sandbox_helper_selftest")
 STATE, RUN, LIB = BASE / "state", BASE / "run", BASE / "lib"
 for folder in (STATE, RUN, LIB):
     folder.mkdir()

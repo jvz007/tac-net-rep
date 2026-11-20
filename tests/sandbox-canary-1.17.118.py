@@ -309,9 +309,9 @@ must("WALL" in table_text.splitlines()[0] and "VERDICT" in table_text.splitlines
 
 # ------------------------------------------------------------------------------------------------ root only, not in sudoers, never in the registry
 os.geteuid = lambda: 1000
-for argv in (["--selftest", "--canary"], ["--canary-launch"]):
+for argv in (["--selftest", "--canary"], ["--canary-launch"]):  # 1.18.26: these two modes now belong to sandbox-selftest.py (root only, outside sudoers)
     try:
-        sh.main(argv)
+        sh._selftest_module.main(argv)
         raise AssertionError(f"{argv} ran as a normal user")
     except SystemExit as exc:
         must("root" in str(exc), exc)
@@ -327,7 +327,7 @@ must(all(canary["limits"][k] <= sh.LIMITS[k][1] for k in sh.LIMITS), "under the 
 code, frames = start(header("core.canary"), hold=False)
 must(frames[0]["code"] == "runner_unknown", "the real --start never runs the canary")
 code_frames = io.BytesIO()
-sh.start_command(io.BytesIO(json.dumps(header("ai.other")).encode() + b"\n"), canary=True, out_stream=code_frames)
+sh.start_canary(io.BytesIO(json.dumps(header("ai.other")).encode() + b"\n"), out_stream=code_frames)
 must(json.loads(code_frames.getvalue().decode().splitlines()[0])["code"] == "runner_unknown", "--canary-launch runs core.canary and nothing else")
 # the switch stays off
 must(sh.SANDBOX_ENABLED is False and "SANDBOX_ENABLED = False" in HELPER.read_text(encoding="utf-8"), "the kill switch is still a constant and off")

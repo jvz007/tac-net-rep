@@ -94,7 +94,7 @@ must(len(logged) == 1 and logged[0]["detail"] == {"run_id": RID, "runner": RUNNE
 sh.remove_secrets(RID)
 
 # launch() uses the wrapper, with its own stop event, and still removes the folder on every path
-source = (H.ROOT / "scripts" / "sandbox-helper.py").read_text(encoding="utf-8")
+source = "\n".join((H.ROOT / "scripts" / name).read_text(encoding="utf-8") for name in ("sandbox-helper.py", "sandbox-selftest.py"))
 launch_source = source[source.index("def launch("):source.index("def run_ended_detail(")]
 must("target=remove_credentials_noted" in launch_source and "remove_credentials_when_active" not in launch_source, "launch starts the wrapper")
 real_root = sh.CREDENTIALS_RUNTIME

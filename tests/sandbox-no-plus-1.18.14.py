@@ -183,7 +183,7 @@ try:
     raise AssertionError("--finish was accepted")
 except SystemExit as exc:
     must("usage" in str(exc.code), exc.code)
-source = (ROOT / "scripts" / "sandbox-helper.py").read_text(encoding="utf-8")
+source = "\n".join((ROOT / "scripts" / name).read_text(encoding="utf-8") for name in ("sandbox-helper.py", "sandbox-selftest.py"))
 must('"--finish"' not in source and 'props.append(f"Exec' not in source and 'f"ExecStartPost' not in source and 'f"ExecStopPost' not in source,
      "no property command is built any more")
 install = (ROOT / "install.sh").read_text(encoding="utf-8")

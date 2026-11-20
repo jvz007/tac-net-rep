@@ -87,7 +87,7 @@ end = supervised(os.urandom(16).hex())
 must("memory_events" not in end, "no cgroup, no key")
 django_side = (H.ROOT / "framwork" / "tec_tac" / "sandbox.py").read_text(encoding="utf-8")
 must("memory_events" not in django_side, "Core's _end_event picks keys by name: the new key is dropped, the module-facing result is unchanged")
-helper_source = (H.ROOT / "scripts" / "sandbox-helper.py").read_text(encoding="utf-8")
+helper_source = "\n".join((H.ROOT / "scripts" / name).read_text(encoding="utf-8") for name in ("sandbox-helper.py", "sandbox-selftest.py"))
 must('"run.ended"' in helper_source and "memory_events" not in helper_source[helper_source.index('"run.ended", {'):][:700], "not in the run.ended audit row")
 
 

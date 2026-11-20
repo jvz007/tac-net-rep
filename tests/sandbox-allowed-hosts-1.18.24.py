@@ -24,6 +24,8 @@ import tempfile
 from pathlib import Path
 
 sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from sandbox_test_support import load_helper  # noqa: E402  (1.18.26: the helper and sandbox-selftest.py as one object)
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "framwork"))
 from tec_tac import registry  # noqa: E402
@@ -36,9 +38,7 @@ def must(condition, detail=""):
         raise AssertionError(detail)
 
 
-spec = importlib.util.spec_from_file_location("sandbox_helper_hosts", ROOT / "scripts" / "sandbox-helper.py")
-sh = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(sh)
+sh = load_helper(ROOT, "sandbox_helper_hosts")
 
 GOOD_LISTS = (
     [], ["api.anthropic.com"], ["api.openai.com", "chatgpt.com", "auth.openai.com"], ["a1.example.co.za"], ["xn--bcher-kva.example"],

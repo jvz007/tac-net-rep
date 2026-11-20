@@ -23,7 +23,8 @@ This small Core-owned program runs inside the unit, as the unit's own unprivileg
   switch beside the helper's own);
 * with ``--return-credential``: after the runner has exited, sends the refreshed ``$SANDBOX_OUT/credential`` (a regular file, no symlink, at
   most 16 KiB) as one final line ``\n<nonce> CRED <base64>\n``. The helper takes only that line and strips it from the output. A runner
-  cannot forge it: it does not know the nonce.
+  cannot forge it: it does not know the nonce. 1.18.26: before the file is read, every other process of the unit's own user is killed
+  and the launcher waits (about 2 seconds at most) until none is left; if one survives, no credential line is sent.
 
 Why this exists: the plan had the root ExecStopPost read SANDBOX_OUT, but a ``+`` ExecStopPost runs outside the unit's mount namespace and
 cannot see the unit's /work tmpfs.
@@ -322,6 +323,80 @@ def credential_line(nonce, data):
     return ("\n" + nonce + " CRED " + base64.b64encode(data).decode("ascii") + "\n").encode("ascii")
 
 
+LEFTOVER_SECONDS = 2.0  # 1.18.26: how long the launcher waits for the run's own leftover processes to be gone
+LEFTOVER_STEP = 0.02
+
+
+def _process_state(proc_root, pid):
+    """The one-letter state of a process from ``<proc_root>/<pid>/stat`` (the field after the closing bracket of the name), or None."""
+    try:
+        with open(os.path.join(proc_root, pid, "stat"), "rb") as handle:
+            data = handle.read(4096).decode("ascii", "replace")
+    except OSError:
+        return None
+    tail = data.rpartition(")")[2].split()
+    return tail[0] if tail else None
+
+
+def other_processes(proc_root="/proc", *, listdir=os.listdir, stat=os.stat, uid=None, own_pid=None):
+    """1.18.26: the live processes of this unit's own user other than this one. A unit's DynamicUser is unique to the unit, so every process
+    of that uid belongs to this run. A zombie or a process that has just gone is not counted (it can run nothing)."""
+    if uid is None:
+        if not hasattr(os, "getuid"):
+            return None  # no user ids here (tests on another system): not proven clean
+        uid = os.getuid()
+    own_pid = os.getpid() if own_pid is None else own_pid
+    found = []
+    try:
+        names = listdir(proc_root)
+    except OSError:
+        return None  # the table cannot be read: the caller must treat that as "not proven clean"
+    for name in names:
+        if not name.isdigit() or int(name) == own_pid:
+            continue
+        try:
+            if stat(os.path.join(proc_root, name)).st_uid != uid:
+                continue
+        except OSError:
+            continue
+        if _process_state(proc_root, name) in (None, "Z", "X"):
+            continue
+        found.append(int(name))
+    return found
+
+
+def _reap_children():
+    while True:
+        try:
+            pid, _status = os.waitpid(-1, os.WNOHANG)
+        except (OSError, AttributeError):
+            return
+        if pid == 0:
+            return
+
+
+def kill_leftovers(*, kill=os.kill, reap=_reap_children, others=other_processes, clock=time.monotonic, sleep=time.sleep,
+                   seconds=LEFTOVER_SECONDS):
+    """1.18.26 (AD-65 Patch C): the runner has exited, but it may have left a process behind that keeps writing ``$SANDBOX_OUT/credential``.
+    Kill every other process of the unit's own user (``kill(-1, SIGKILL)`` never signals the caller, and init is excluded; the DynamicUser is
+    unique to the unit, so only this run's processes are hit), reap what became a child of this one, and look again until none is left or the
+    short deadline passes. Returns True only when the table was read and held no other live process: otherwise the caller sends no credential."""
+    sig = getattr(signal, "SIGKILL", 9)  # 9 only where signal has no SIGKILL (tests on another system)
+    deadline = clock() + seconds
+    while True:
+        try:
+            kill(-1, sig)
+        except OSError:
+            pass  # ESRCH: nothing left to signal
+        reap()
+        left = others()
+        if left is not None and not left:
+            return True
+        if clock() >= deadline:
+            return False
+        sleep(LEFTOVER_STEP)
+
+
 def _watch_stdout(child, interval=0.5):
     try:
         import select
@@ -399,7 +474,9 @@ def main(argv=None):
     if code < 0:
         code = 128 - code
     if return_credential:
-        data = read_credential(out_dir)
+        # 1.18.26: a leftover of the runner could rewrite the credential file after it is read. Nothing else of this run may be alive first;
+        # when that is not proven inside the deadline, no credential frame is sent (the helper then reports no credentials_out).
+        data = read_credential(out_dir) if kill_leftovers() else None
         if data is not None:
             try:
                 _write_all(1, credential_line(nonce, data))

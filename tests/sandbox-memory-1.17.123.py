@@ -140,7 +140,7 @@ must(calls[0][0] == "mem" and calls[0][1] == {"alloc_mb": 256} and calls[0][2]["
 must(rows[0]["verdict"] == "OK" and rows[0]["actual"].startswith("allocated 112 MiB"), rows[0])
 must([r["attack"] for r in rows if r["verdict"] == "OK"].count("infinite loop") == 1 and any(r["attack"] == "stdout past its cap" and r["verdict"] == "OK" for r in rows), rows)
 # the old logic compared the reason with 'oom'; the source no longer does
-source = (H.ROOT / "scripts" / "sandbox-helper.py").read_text(encoding="utf-8")
+source = "\n".join((H.ROOT / "scripts" / name).read_text(encoding="utf-8") for name in ("sandbox-helper.py", "sandbox-selftest.py"))
 must('one("memory beyond MemoryMax"' not in source, "the label-only comparison is gone")
 
 print("[TEST] PASS sandbox memory 1.17.123")

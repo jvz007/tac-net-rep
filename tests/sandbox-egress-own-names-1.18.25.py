@@ -8,7 +8,8 @@ Django-free; the settings file is a temp file, the resolver is a stub, no socket
 * the file is parsed with ast and never run: a side-effect expression (and an assignment from a call) leaves a sentinel unwritten and adds nothing;
 * a missing file, a symlink, an oversized file, an unparsable file and a file that is not UTF-8 raise Refusal('sandbox_unavailable');
 * ``own_server_names`` adds the fqdn and a dotted host name, and raises Refusal when there is no dotted name at all;
-* ``resolve_own_names`` collects addresses, caches for 60 s, still returns when one name does not resolve, and raises Refusal when no lookup finishes in time;
+* ``resolve_own_names`` collects addresses, caches for 60 s, still returns when one name does not resolve, and raises Refusal when no lookup finishes in time
+  (1.18.26: it now asks real DNS through a ``lookup`` stub; the stubs below stand in for it, see sandbox-own-public-address-1.18.26.py);
 * ``egress_config_bytes`` carries own_names and own_name_addresses and still carries fqdn;
 * ``egress_start`` fails closed (Refusal, nothing created, no systemctl call) when the names cannot be read, and writes own_names into the config when they can.
 
@@ -91,7 +92,7 @@ try:
     must(not flag or refused(lambda: sh.read_tactical_names(link)), "a symlink is refused (O_NOFOLLOW)")
 except (OSError, NotImplementedError):
     print("note: symlinks are not allowed on this PC; the O_NOFOLLOW open is covered by the source check below")
-text = (ROOT / "scripts" / "sandbox-helper.py").read_text(encoding="utf-8")
+text = "\n".join((ROOT / "scripts" / name).read_text(encoding="utf-8") for name in ("sandbox-helper.py", "sandbox-selftest.py"))
 body = text[text.index("def read_tactical_names"):text.index("def own_server_names")]
 must("O_NOFOLLOW" in body and "ast.parse" in body and "literal_eval" in body and "exec(" not in body and "import_module" not in body, "ast only, no follow")
 
@@ -119,27 +120,32 @@ def resolver(name, port=None, *rest):
     return [(2, 1, 6, "", (f"198.51.100.{len(name) % 200 + 1}", 0)), (10, 1, 6, "", ("2001:db8::1%eth0", 0, 0, 0))]
 
 
+def dns(name, servers):  # 1.18.26: the real-DNS lookup stub (a public address, so the public address is known)
+    return (name != "gone.example.test"), ({"93.184.216.34"} if name != "gone.example.test" else set())
+
+
+KW = {"lookup": dns, "servers": ["192.0.2.53"]}
 sh._own_cache.update({"at": 0.0, "key": None, "value": None})
 now = [1000.0]
-got = sh.resolve_own_names(["api.example.test", "gone.example.test"], resolver=resolver, clock=lambda: now[0])
+got = sh.resolve_own_names(["api.example.test", "gone.example.test"], resolver=resolver, clock=lambda: now[0], **KW)
 must("2001:db8::1" in got and all("%" not in a for a in got) and len(calls) == 2, (got, calls))
-again = sh.resolve_own_names(["gone.example.test", "api.example.test"], resolver=resolver, clock=lambda: now[0] + 30)
+again = sh.resolve_own_names(["gone.example.test", "api.example.test"], resolver=resolver, clock=lambda: now[0] + 30, **KW)
 must(again == got and len(calls) == 2, "cached for 60 s")
 now[0] += 61
-sh.resolve_own_names(["api.example.test", "gone.example.test"], resolver=resolver, clock=lambda: now[0])
+sh.resolve_own_names(["api.example.test", "gone.example.test"], resolver=resolver, clock=lambda: now[0], **KW)
 must(len(calls) == 4, "looked up again after 60 s")
 # every lookup hangs: fail closed in about the limit
 release = threading.Event()
 
 
-def hang(name, port=None, *rest):
+def hang(name, servers):
     release.wait(10)
-    return []
+    return True, set()
 
 
 sh._own_cache.update({"at": 0.0, "key": None, "value": None})
 started = time.monotonic()
-must(refused(lambda: sh.resolve_own_names(["a.example.test", "b.example.test"], resolver=hang, seconds=0.3)), "all lookups time out: fail closed")
+must(refused(lambda: sh.resolve_own_names(["a.example.test", "b.example.test"], lookup=hang, servers=["192.0.2.53"], resolver=resolver, seconds=0.3)), "all lookups time out: fail closed")
 must(time.monotonic() - started < 3, "bounded")
 release.set()
 must(sh.OWN_RESOLVE_SECONDS == 5 and sh.OWN_CACHE_SECONDS == 60, "5 s and 60 s")
@@ -168,6 +174,8 @@ must(not cmds and not sh.EGRESS_DOOR_ROOT.exists() and not sh.EGRESS_CONFIG_ROOT
 sh.TACTICAL_LOCAL_SETTINGS = good
 sh.socket.getfqdn = lambda *a: "core.example.test"
 sh.OWN_RESOLVER = resolver
+sh.upstream_resolvers = lambda read=None: ["192.0.2.53"]
+sh.dns_lookup_name = dns
 sh._own_cache.update({"at": 0.0, "key": None, "value": None})
 try:
     sh.egress_start(row, rid, {"addresses": [], "gateways": []}, run_cmd=lambda c: cmds.append(c) or (0, "", ""))

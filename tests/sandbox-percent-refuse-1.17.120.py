@@ -64,8 +64,9 @@ raises(lambda: helper_parse(argv=["--lit", "100%"]), RuntimeError, "'%'")
 raises(lambda: helper_parse(parameters={"mode": {"type": "enum", "choices": ["a", "b%"]}}), RuntimeError, "'%'")
 raises(lambda: helper_parse(parameters={"mode": {"type": "string", "default": "50%"}}), RuntimeError, "'%'")
 raises(lambda: helper_parse(executable="sandbox/runners/ch%at.py"), RuntimeError, "'%'")
-# a '%' inside a pattern is a regex, not a command word: it is not refused (only the value that arrives is)
-must(helper_parse(parameters={"mode": {"type": "string", "pattern": "[0-9]+%?"}})[1], "'%' in a pattern is allowed at registration")
+# 1.18.26: there is no pattern field any more (Patch C), so a pattern is refused whatever it holds; max_length still registers
+raises(lambda: helper_parse(parameters={"mode": {"type": "string", "pattern": "[0-9]+%?"}}), RuntimeError, "pattern is not supported")
+must(helper_parse(parameters={"mode": {"type": "string", "max_length": 20}})[1], "max_length registers")
 
 # ---- 2. validate_run_parameters, render_command and build_argv
 schema = {"s": {"type": "string"}, "e": {"type": "enum", "choices": ["ok", "50%"]}, "i": {"type": "integer"}, "b": {"type": "boolean"}}
@@ -188,7 +189,7 @@ for label, bad, files in (
 # ---- 5. compatibility: server_maintenance_actions share the parameter parser and keep allowing '%'
 sm = {"id": "vendor.rotate", "description": "Rotate", "permission": "vendor.rotate", "executable": "server_maintenance/actions/rotate.sh",
       "argv": ["--fmt", "100%", {"param": "certificate_id"}],
-      "parameters": {"certificate_id": {"type": "string", "required": True, "pattern": "^[A-Za-z0-9_.%-]{1,64}$", "max_length": 64, "default": "x%y"},
+      "parameters": {"certificate_id": {"type": "string", "required": True, "max_length": 64, "default": "x%y"},
                      "unit": {"type": "enum", "choices": ["10%", "20%"]}},
       "timeout_seconds": 300, "success_exit_codes": [0], "revision": "1"}
 sm_payload = {"id": "vendor", "type": "extension", "version": "1.2.0", "category": "server", "publisher_permissions": ["server_maintenance.register"],

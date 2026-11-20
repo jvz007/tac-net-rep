@@ -67,7 +67,7 @@ rid, end, frames = once()
 args = H.unit_log(rid)["args"]
 must("--collect" not in args, args)
 must(all(flag in args for flag in ("--pipe", "--wait", "--quiet", f"--unit=tectac-sbx-{rid}", f"--slice={sh.SLICE}")), args)
-source = (H.ROOT / "scripts" / "sandbox-helper.py").read_text(encoding="utf-8")
+source = "\n".join((H.ROOT / "scripts" / name).read_text(encoding="utf-8") for name in ("sandbox-helper.py", "sandbox-selftest.py"))
 must('"--wait", "--collect", "--quiet", f"--unit={unit or' in source, "the selftest and canary probe units keep --collect")
 
 # ---- read_unit_result against real show text

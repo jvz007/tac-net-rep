@@ -34,7 +34,7 @@ WALL = "another dynamic user reads the credential file"
 SLEEP_BEFORE = 1.5  # the helper's own pause before the first check (read from the source below)
 HOLDERS, PROBE, READY = 3.0, 4.0, 0.5
 
-source = (Path(__file__).resolve().parents[1] / "scripts" / "sandbox-helper.py").read_text(encoding="utf-8")
+source = "".join((Path(__file__).resolve().parents[1] / "scripts" / name).read_text(encoding="utf-8") + chr(10) for name in ("sandbox-helper.py", "sandbox-selftest.py"))
 must("time.sleep(1.5)" in source[source.index("def _credential_rows"):source.index("def _unit_gone")], "the pause the test assumes is still 1.5 s")
 must('"hold_seconds": 3}' not in source[source.index("def _credential_rows"):source.index("def _unit_gone")], "no literal 3 s hold in the credential rows")
 must(sh.CANARY_CRED_HOLD_SECONDS >= 10, sh.CANARY_CRED_HOLD_SECONDS)

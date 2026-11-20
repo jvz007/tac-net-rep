@@ -73,7 +73,7 @@ status = selftest(F.Fake(systemctl=(127, "")))
 must("bpf_framework" in status["checks"] and status["checks"]["bpf_framework"]["ok"] is True and "BPF" not in status["reason"], status)
 
 # ---- the helper source no longer fails the selftest on the flag
-source = (H.ROOT / "scripts" / "sandbox-helper.py").read_text(encoding="utf-8")
+source = "\n".join((H.ROOT / "scripts" / name).read_text(encoding="utf-8") for name in ("sandbox-helper.py", "sandbox-selftest.py"))
 must('fail("bpf_framework"' not in source, "no fail() call for bpf_framework")
 
 print("[TEST] PASS sandbox bpf information 1.17.120")

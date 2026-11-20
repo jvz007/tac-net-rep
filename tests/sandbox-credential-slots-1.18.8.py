@@ -90,15 +90,21 @@ folder = launcher.link_credentials(["auth", "extra"], str(source), str(work))
 must(sorted(p.name for p in (work / "credentials").iterdir()) == ["extra"] and folder is not None, "a missing slot file is skipped")
 must(launcher.link_credentials([], str(source), str(work)) is None and launcher.link_credentials(["auth"], None, str(work)) is None, "nothing to do")
 must(launcher.CREDENTIAL_NAME_RE.pattern == r"^[a-z0-9][a-z0-9._-]{0,63}$" and launcher.CREDENTIAL_SLOTS_MAX == 2, "the same rule as the helper")
-helper_text = (HERE.parent / "scripts" / "sandbox-helper.py").read_text(encoding="utf-8")
+helper_text = "\n".join((HERE.parent / "scripts" / name).read_text(encoding="utf-8") for name in ("sandbox-helper.py", "sandbox-selftest.py"))
 must('CREDENTIAL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")' in helper_text and "CREDENTIAL_FILES_MAX = 2" in helper_text, "the helper uses the same rule and ceiling")
 
 
 # ---- the launcher as a program
+sys.path.insert(0, str(HERE))
+from sandbox_test_support import launcher_for_tests  # noqa: E402
+
+launcher_file = launcher_for_tests(HERE.parent, tempfile.mkdtemp(prefix="tectac-slots-launcher-"))  # 1.18.26: a PC without /proc runs a copy that skips the leftover check
+
+
 def run_launcher(args, env_extra, child_code):
     env = {k: v for k, v in os.environ.items() if k not in ("CREDENTIALS_DIRECTORY",)}
     env.update(env_extra)
-    command = [sys.executable, str(HERE.parent / "scripts" / "sandbox-launcher.py"), *args, "--", sys.executable, "-c", child_code]
+    command = [sys.executable, str(launcher_file), *args, "--", sys.executable, "-c", child_code]
     return subprocess.run(command, capture_output=True, text=True, env=env, timeout=60, check=False)
 
 

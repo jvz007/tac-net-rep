@@ -1088,6 +1088,11 @@ mkdir -p "${SANDBOX_LIB}/runners" "${SANDBOX_LIB}/registry" "${SANDBOX_STATE}" "
 chown root:root "${SANDBOX_LIB}" "${SANDBOX_LIB}/runners" "${SANDBOX_LIB}/registry" "${SANDBOX_STATE}"
 chmod 0755 "${SANDBOX_LIB}" "${SANDBOX_LIB}/runners" "${SANDBOX_LIB}/registry" "${SANDBOX_STATE}"
 install_root_script "${REPO_ROOT}/scripts/sandbox-helper.py" "${SANDBOX_LIB}/sandbox-helper.py"
+# 1.18.26 (AD-65 Patch C): the selftest and the canary are test code and no longer sit in the helper the sudo rule reaches. This file is root only
+# (0700), is never named in sudoers and is not linked into /usr/local/sbin; it loads the helper beside it by path.
+install_root_script "${REPO_ROOT}/scripts/sandbox-selftest.py" "${SANDBOX_LIB}/sandbox-selftest.py"
+chown root:root "${SANDBOX_LIB}/sandbox-selftest.py"
+chmod 0700 "${SANDBOX_LIB}/sandbox-selftest.py"
 # 1.17.118: the in-unit launcher (credential return, dead-man watch) and the canary's attack program. Both root-owned 0755, bound read-only into a unit.
 mkdir -p "${SANDBOX_LIB}/canary"
 chown root:root "${SANDBOX_LIB}/canary"
@@ -1293,7 +1298,7 @@ systemctl daemon-reload
 systemctl enable --now tec-tac-sandbox-sweep.timer >/dev/null
 log "Installed Core sandbox helper: ${SANDBOX_HELPER}"
 # The selftest probes this server. A failed or not-ready selftest never fails the Core install: the sandbox stays off, with its reason.
-if timeout "${SANDBOX_SELFTEST_TIMEOUT_SECONDS}s" "${SANDBOX_HELPER}" --selftest >/dev/null 2>&1; then
+if timeout "${SANDBOX_SELFTEST_TIMEOUT_SECONDS}s" /usr/bin/python3 -I "${SANDBOX_LIB}/sandbox-selftest.py" --selftest >/dev/null 2>&1; then
     log "Sandbox selftest passed: this server can host the sandbox. It stays switched off in this Core release."
 else
     SANDBOX_OFF_REASON="$("${SANDBOX_HELPER}" --status 2>/dev/null | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["status"]["reason"])' 2>/dev/null || true)"

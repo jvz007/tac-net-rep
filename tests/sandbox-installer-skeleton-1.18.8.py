@@ -70,7 +70,7 @@ must(re.fullmatch(sh.MODULE_ID_RE.pattern, "ai") and "{0,99}" in BLOCK and sh.MO
 
 # ---- the install still ends the same way
 tail = INSTALL[block_end:INSTALL.index("# Housekeeping trust boundary")]
-must('"${SANDBOX_HELPER}" --selftest >/dev/null 2>&1; then' in tail and 'log "WARNING: Sandbox is off: ${SANDBOX_OFF_REASON}. ai ChatGPT stays off."' in tail, "selftest and the WARNING line")
+must('/usr/bin/python3 -I "${SANDBOX_LIB}/sandbox-selftest.py" --selftest >/dev/null 2>&1; then' in tail and 'log "WARNING: Sandbox is off: ${SANDBOX_OFF_REASON}. ai ChatGPT stays off."' in tail, "selftest and the WARNING line")
 must("${TACTICAL_USER} ALL=(root) NOPASSWD: ${SANDBOX_HELPER} --start, ${SANDBOX_HELPER} --stop, ${SANDBOX_HELPER} --status" in tail, "the sudoers rule lists exactly --start, --stop and --status")
 must(not re.search(r"SANDBOX_ENABLED|enable.*sandbox\.enabled", BLOCK), "the block does not touch the kill switch")
 

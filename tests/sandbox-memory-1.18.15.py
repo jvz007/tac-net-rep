@@ -166,7 +166,7 @@ supervise(False)
 must(seen == [0.2] and waits and all(w == sh.FLUSH_SECONDS for w in waits), (seen, waits))
 supervise(True)
 must(seen == [0.02] and waits and all(w == 0.02 for w in waits), (seen, waits))
-source = (H.ROOT / "scripts" / "sandbox-helper.py").read_text(encoding="utf-8")
+source = "\n".join((H.ROOT / "scripts" / name).read_text(encoding="utf-8") for name in ("sandbox-helper.py", "sandbox-selftest.py"))
 must("progress=progress, canary=canary)" in source, "launch passes the canary flag")
 must('"--wait", "--collect", "--quiet", f"--unit={unit or' in source and '"--wait", "--quiet", f"--unit={unit_name(run_id)}"' in source, "1.18.17: --collect stays on the probe units and is gone from the run unit")
 

@@ -66,13 +66,13 @@ must('SANDBOX_LIB="/usr/local/lib/tec-tac/sandbox"' in INSTALL and 'SANDBOX_STAT
 must(INSTALL.index("Installed durable Core server-maintenance helper") < INSTALL.index("SANDBOX_HELPER=") < INSTALL.index("SCHEDULER_SERVICE="), "the block sits after the server-maintenance helper and before the scheduler timer")
 
 # ---- the selftest never fails the install
-selftest_block = between(INSTALL, 'if timeout "${SANDBOX_SELFTEST_TIMEOUT_SECONDS}s" "${SANDBOX_HELPER}" --selftest', "\nfi\n")
+selftest_block = between(INSTALL, 'if timeout "${SANDBOX_SELFTEST_TIMEOUT_SECONDS}s" /usr/bin/python3 -I "${SANDBOX_LIB}/sandbox-selftest.py" --selftest', "\nfi\n")
 must("fail " not in selftest_block and "exit " not in selftest_block and "refuse " not in selftest_block and "verify_fail" not in selftest_block, selftest_block)
 must('log "WARNING: Sandbox is off: ${SANDBOX_OFF_REASON}. ai ChatGPT stays off."' in selftest_block, "the plain warning")
 must("else" in selftest_block and "|| true" in selftest_block, "an else branch and a reason lookup that cannot fail")
 must(selftest_block.lstrip().startswith("if timeout"), "inside an if, so a non-zero status is a branch and not an exit")
-must("--selftest" in INSTALL and INSTALL.count('"${SANDBOX_HELPER}" --selftest') == 1, "the selftest is run once")
-must(INSTALL.index('"${SANDBOX_HELPER}" --selftest') > INSTALL.index('systemctl enable --now tec-tac-sandbox-sweep.timer'), "the selftest runs after the layout and timer")
+must("--selftest" in INSTALL and INSTALL.count('"${SANDBOX_LIB}/sandbox-selftest.py" --selftest') == 1, "the selftest is run once")
+must(INSTALL.index('"${SANDBOX_LIB}/sandbox-selftest.py" --selftest') > INSTALL.index('systemctl enable --now tec-tac-sandbox-sweep.timer'), "the selftest runs after the layout and timer")
 
 # ---- slice, sweep service and timer
 must('MemoryMax=' in INSTALL and 'TasksMax=' in INSTALL and "${SANDBOX_SLICE_DROPIN_DIR}/limits.conf" in INSTALL, "slice drop-in")

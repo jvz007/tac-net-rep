@@ -16,6 +16,8 @@ import sys
 from pathlib import Path
 
 sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from sandbox_test_support import load_helper  # noqa: E402  (1.18.26: the helper and sandbox-selftest.py as one object)
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -31,7 +33,7 @@ def load(name, path):
     return module
 
 
-sh = load("sandbox_helper_1816r", ROOT / "scripts" / "sandbox-helper.py")
+sh = load_helper(ROOT, "sandbox_helper_1816r")
 runner = load("canary_runner_1816r", ROOT / "scripts" / "sandbox-canary-runner.py")
 TAB, NL = chr(9), chr(10)
 MARKER = sh.RUN_MARKER_PREFIX + "0123456789abcdef"

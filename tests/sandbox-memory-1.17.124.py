@@ -233,7 +233,7 @@ def collect(group, plan, **kwargs):
 
 rows_out = sh._limit_rows(collect, {"ready": True})
 must(rows_out[0]["verdict"] == "ATTACK SUCCEEDED" and calls[0][2]["memory_mb"] == 128, rows_out[0])
-source = (H.ROOT / "scripts" / "sandbox-helper.py").read_text(encoding="utf-8")
+source = "\n".join((H.ROOT / "scripts" / name).read_text(encoding="utf-8") for name in ("sandbox-helper.py", "sandbox-selftest.py"))
 must("memory_mb + block" not in source, "the block tolerance is gone from the row")
 
 print("[TEST] PASS sandbox memory 1.17.124")

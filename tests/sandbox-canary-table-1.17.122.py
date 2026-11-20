@@ -22,6 +22,8 @@ import tempfile
 from pathlib import Path
 
 sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from sandbox_test_support import load_helper  # noqa: E402  (1.18.26: the helper and sandbox-selftest.py as one object)
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -30,9 +32,7 @@ def must(condition, detail=""):
         raise AssertionError(detail)
 
 
-spec = importlib.util.spec_from_file_location("sandbox_helper_122t", ROOT / "scripts" / "sandbox-helper.py")
-sh = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(sh)
+sh = load_helper(ROOT, "sandbox_helper_122t")
 SCRIPT = (ROOT / "tests" / "sandbox-canary-1.17.122.sh").read_text(encoding="utf-8")
 WALL = "another dynamic user reads the credential file"
 
