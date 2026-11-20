@@ -6,6 +6,8 @@ or reach the server itself or private networks (AD-63, docs/planning/sandbox/PLA
 a run has its own, empty network space and reaches only its runner's ``allowed_hosts`` on port 443, through a per-run egress proxy (the egress_* functions).
 
 * ``--register-module <id>`` and ``--unregister-module <id>`` (root callers: the module job helpers): the registry of declared runners;
+* ``--verify-module <id>`` (root only, 1.18.29: the server-maintenance worker, after a module's action job ends): re-verifies that module's runners
+  against the recorded listing hash, as the sweep does, and writes one ``module.runners_verified`` audit row. Not in sudoers;
 * 1.18.26 (AD-65 Patch C): the selftest and the canary (``--selftest``, ``--selftest --canary``, ``--canary-launch``) left this file. They are in
   ``sandbox-selftest.py``, which is root only, outside sudoers, and loads this file by path. This file keeps only what the Tactical account's
   sudo rule reaches (``--start``, ``--stop``, ``--status``) and the root registration and sweep modes;
@@ -3400,15 +3402,18 @@ def reset_failed_units(min_age=STALE_SECONDS):
     return reset
 
 
-def sweep(min_age=STALE_SECONDS):
-    """``--sweep`` (boot and daily): re-verify the runtime folders of every registered runner; remove stray selftest folders; remove
-    secrets folders, handoff files and run records whose unit ``tectac-sbx-<id>`` is not active; remove old canary markers."""
-    _require_layout()
+def reverify_runners(owner=None):
+    """Judge every registry row this helper wrote against its recorded listing hash and rewrite a row only when its state changed.
+
+    ``owner`` (a module id) limits the pass to that module's rows; other rows are not even read for change. Returns (checked, changed ids).
+    Shared by ``--sweep`` (no owner) and ``--verify-module`` so both apply the same rule and widen no trust."""
     checked, changed = 0, []
     if REGISTRY_ROOT.is_dir():
         for path in sorted(REGISTRY_ROOT.glob("*.json")):
             payload = _load_registry_file(path)
             if not payload or payload.get("registered_by") != REGISTERED_BY:
+                continue
+            if owner is not None and payload.get("owner_module") != owner:
                 continue
             checked += 1
             reasons = _sweep_reasons(payload)
@@ -3417,6 +3422,25 @@ def sweep(min_age=STALE_SECONDS):
                 payload.update({"runtime_verified": verified, "runtime_reason": reason, "runtime_checked_at": now()})
                 _write_root_file(path, _json_bytes(payload), 0o644)
                 changed.append(str(payload.get("id")))
+    return checked, changed
+
+
+def verify_module(module_id):
+    """``--verify-module <module-id>`` (root only, not in sudoers): re-verify one module's runners after its runtime action.
+
+    The same check as the sweep against the recorded listing hash, for that module's rows only. A module with no registered runners is a quiet no-op."""
+    module_id = _module_id(module_id)
+    _require_layout()
+    checked, changed = reverify_runners(module_id)
+    append_audit("module.runners_verified", detail={"module": module_id, "runners_checked": checked, "runtime_state_changed": changed})
+    print(json.dumps({"module": module_id, "checked": checked, "changed": changed}, sort_keys=True))
+
+
+def sweep(min_age=STALE_SECONDS):
+    """``--sweep`` (boot and daily): re-verify the runtime folders of every registered runner; remove stray selftest folders; remove
+    secrets folders, handoff files and run records whose unit ``tectac-sbx-<id>`` is not active; remove old canary markers."""
+    _require_layout()
+    checked, changed = reverify_runners()
     removed = []
     if RUN_ROOT.is_dir():
         for entry in sorted(RUN_ROOT.iterdir()):
@@ -3460,7 +3484,7 @@ def refuse_disabled():
 
 
 def usage():
-    raise SystemExit("usage: tec-tac-sandbox --start|--stop|--status | --sweep | --register-module|--unregister-module <module-id>")
+    raise SystemExit("usage: tec-tac-sandbox --start|--stop|--status | --sweep | --register-module|--unregister-module|--verify-module <module-id>")
 
 
 def main(argv=None):
@@ -3470,7 +3494,7 @@ def main(argv=None):
     if len(argv) not in (1, 2):
         usage()
     mode = argv[0]
-    if mode not in ("--start", "--stop", "--status", "--sweep", "--register-module", "--unregister-module"):
+    if mode not in ("--start", "--stop", "--status", "--sweep", "--register-module", "--unregister-module", "--verify-module"):
         usage()
     if os.geteuid() != 0:
         raise SystemExit("must run as root")
@@ -3488,6 +3512,9 @@ def main(argv=None):
         return 0
     if mode == "--unregister-module" and len(argv) == 2:
         unregister_module(argv[1])
+        return 0
+    if mode == "--verify-module" and len(argv) == 2:
+        verify_module(argv[1])
         return 0
     usage()
 

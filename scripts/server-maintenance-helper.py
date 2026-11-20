@@ -1160,10 +1160,64 @@ def _signal_cancel(signum, frame):
             pass
 
 
+SANDBOX_HELPER = Path("/usr/local/sbin/tec-tac-sandbox")
+SANDBOX_REVERIFY_TIMEOUT_SECONDS = 120
+_reverify_pending = {}
+
+
+def reverify_sandbox_runners(owner_module, lifecycle, job=None):
+    """After a module's action job ends: ask the root sandbox helper to re-verify that module's runners (``--verify-module``), so
+    ``runtime_verified`` is current right after an Install or Repair runtime action (1.18.29). Mirrors ``sync_sandbox_runners`` in
+    module-job-helper.py. No helper is a silent no-op; a helper that is not root-owned or is group/world writable is refused. Every
+    failure, non-zero exit or timeout becomes one lifecycle line and one audit row and NEVER changes the job's status or result."""
+    ok, code, note = False, None, ""
+    try:
+        helper = SANDBOX_HELPER
+        if not helper.is_file():
+            return False
+        info = helper.stat()
+        if info.st_uid != 0 or info.st_mode & 0o022:
+            note = "refused: the sandbox helper is not root-owned or is writable"
+        else:
+            result = subprocess.run([str(helper), "--verify-module", owner_module], stdin=subprocess.DEVNULL, stdout=lifecycle, stderr=subprocess.STDOUT,
+                                    timeout=SANDBOX_REVERIFY_TIMEOUT_SECONDS, check=False, env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8"})
+            code = result.returncode
+            ok = code == 0
+            note = "ok" if ok else f"exit {code}"
+    except subprocess.TimeoutExpired:
+        note = f"timed out after {SANDBOX_REVERIFY_TIMEOUT_SECONDS} s"
+    except Exception as exc:  # the hook must never change the job
+        note = f"error: {exc.__class__.__name__}"
+    try:
+        lifecycle.write(f"[{now()}] sandbox_reverify module={owner_module} ok={ok} {note}\n")
+        lifecycle.flush()
+    except Exception:
+        pass
+    try:
+        append_audit("job.sandbox_reverify", job=job, detail={"module": owner_module, "ok": ok, "exit_code": code})
+    except Exception:
+        pass
+    return ok
+
+
+def _finish_sandbox_reverify(job_id):
+    """Run the pending re-verify of this job once (the normal path and run_job's finally both call it)."""
+    pending = _reverify_pending.pop(job_id, None)
+    if not pending:
+        return
+    owner, lifecycle_path, job = pending
+    try:
+        with Path(lifecycle_path).open("a", encoding="utf-8") as lifecycle:
+            reverify_sandbox_runners(owner, lifecycle, job)
+    except Exception:
+        pass
+
+
 def run_job(job_id):
     try:
         _run_job(job_id)
     finally:
+        _finish_sandbox_reverify(job_id)  # a worker_error path: harmless twice, the verb is idempotent
         # 1.17.113: success, failure, timeout, cancel, cancelled before execution or a worker error: scrub the logs, remove the folder
         finish_secrets(job_id)
 
@@ -1256,6 +1310,9 @@ def _run_job(job_id):
     timed_out = False
     exit_code = None
     term_signal = None
+    owner_module = action.get("owner_module")
+    if action.get("registered_by") == "module-manifest" and isinstance(owner_module, str) and OWNER_MODULE_RE.fullmatch(owner_module):
+        _reverify_pending[job_id] = (owner_module, str(lifecycle_path), dict(job))
     try:
         with lifecycle_path.open("a", encoding="utf-8") as lifecycle, stdout_path.open("ab") as stdout, stderr_path.open("ab") as stderr:
             lifecycle.write(f"[{now()}] action={action['id']} revision={action['revision']} started\n")
@@ -1298,6 +1355,7 @@ def _run_job(job_id):
             except Exception: pass
             lock_handle.close()
 
+    _finish_sandbox_reverify(job_id)  # the child has ended and the lock is released; the job is not yet marked finished
     job = load_claimed_job(job_id)[1]
     cancelled = bool(job.get("cancel_requested_at")) or _cancel_requested
     success = (exit_code in set(action["success_exit_codes"])) and not timed_out and not cancelled

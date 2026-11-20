@@ -1486,6 +1486,69 @@ esac
 
 runtime_ownership_rule verify || fail "The Tec-Tac runtime does not match the ownership rule after installation."
 
+# --- sandbox canary begin (1.18.29) ---
+# Run the sandbox canary once, now that the services run again, and log exactly one result line ("Sandbox: active" or "Sandbox: not active: <reason>").
+# This is the same command the manual canary script runs in its step 4: it writes canary.json, which the sandbox gate needs for this Core build and
+# the selftest run above. It never fails the install: a failed, timed-out or crashed canary leaves the sandbox inactive (fail closed) and the
+# reason shows on the status route. It adds nothing to sudoers and does not touch rmm, daphne, celery, celerybeat or nginx.
+SANDBOX_SELFTEST_PY="${SANDBOX_LIB}/sandbox-selftest.py"
+SANDBOX_CANARY_TIMEOUT_SECONDS=900
+SANDBOX_CANARY_MIN_SECONDS=120
+SANDBOX_CANARY_INSTALL_BUDGET_SECONDS=1700   # the update worker bounds the whole installer at 1800 s
+
+# One line: <ready 0|1> <canary_ok 0|1> <enabled 0|1> <reason>, from the helper's --status. The reason is printable ASCII, at most 300 characters.
+sandbox_status_line() {
+    timeout 30s "${SANDBOX_HELPER}" --status 2>/dev/null | /usr/bin/python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)["status"]
+    reason = "".join(c for c in str(d.get("reason") or "") if 32 <= ord(c) < 127)[:300]
+    print(int(d.get("ready") is True), int(d.get("canary_ok") is True), int(d.get("enabled") is True), reason)
+except Exception:
+    print(0, 0, 0, "the sandbox status could not be read")
+' 2>/dev/null || echo "0 0 0 the sandbox status could not be read"
+}
+
+sandbox_canary_step() {
+    local line s_ready="0" s_canary="0" s_enabled="0" s_reason="" budget out rc failing
+    line="$(sandbox_status_line)" || true
+    read -r s_ready s_canary s_enabled s_reason <<<"${line}" || true
+    if [[ "${s_ready}" != "1" ]]; then
+        [[ -n "${s_reason}" ]] || s_reason="the selftest did not finish"
+        log "Sandbox: not active: ${s_reason}"
+        return 0
+    fi
+    budget="${SANDBOX_CANARY_TIMEOUT_SECONDS}"
+    if (( SANDBOX_CANARY_INSTALL_BUDGET_SECONDS - SECONDS < budget )); then
+        budget=$(( SANDBOX_CANARY_INSTALL_BUDGET_SECONDS - SECONDS ))
+    fi
+    if (( budget < SANDBOX_CANARY_MIN_SECONDS )); then
+        log "Sandbox: not active: not enough install time left to run the canary"
+        return 0
+    fi
+    out="$(mktemp)" || { log "Sandbox: not active: the canary output file could not be made"; return 0; }
+    rc=0
+    timeout "${budget}s" /usr/bin/python3 -I "${SANDBOX_SELFTEST_PY}" --selftest --canary >"${out}" 2>&1 || rc=$?
+    line="$(sandbox_status_line)" || true
+    s_ready="0"; s_canary="0"; s_enabled="0"; s_reason=""
+    read -r s_ready s_canary s_enabled s_reason <<<"${line}" || true
+    if [[ "${s_ready}" == "1" && "${s_canary}" == "1" && "${s_enabled}" == "1" ]]; then
+        log "Sandbox: active"
+    elif [[ "${rc}" -eq 124 ]]; then
+        log "Sandbox: not active: the canary did not finish in ${budget} s"
+    elif [[ "${s_ready}" != "1" && -n "${s_reason}" ]]; then
+        log "Sandbox: not active: ${s_reason}"
+    else
+        failing="$( { grep -E '^ROW [^ ]+ ' "${out}" | grep -Ev ' OK$' | awk '{print $2}' | head -n 8 | paste -sd, -; } 2>/dev/null | LC_ALL=C tr -cd '\040-\176' | cut -c1-200 || true)"
+        [[ -n "${failing}" ]] || failing="it ended with status ${rc}"
+        log "Sandbox: not active: the canary failed: ${failing}"
+    fi
+    rm -f "${out}" || true
+    return 0
+}
+sandbox_canary_step || true
+# --- sandbox canary end ---
+
 log "Installation complete."
 log "Framework source: ${RECORDED_FRAMEWORK_SOURCE}"
 log "Framework runtime: ${FRAMEWORK_DIR}"

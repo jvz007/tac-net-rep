@@ -32,6 +32,8 @@ A job of an action that needs a Tec-Tac permission is hidden from a caller who d
 - Errors: 400 `invalid_job_id` (or `invalid_part`), 404 `job_not_found`, 404 `no_log`, 503.
 - Show the text as text, never as HTML.
 
+From Core 1.18.29 an update takes a few minutes longer: at the end of `install.sh` Core runs the sandbox canary (bounded at 900 s and by the update worker's 1800 s limit) and logs `Sandbox: active` or `Sandbox: not active: <reason>`. The canary never fails an update.
+
 ## The audit row of a finished update
 
 The Scheduler tick writes one row per finished system update. The wording and the keys are in `docs/module-audit.md` ("Core's own rows for job log reads and finished system updates"). The root helper records the version that was installed before the update (`installed_version` in the job file) from Core 1.17.67 on. The update to 1.17.67 itself is run by the older helper, so that row reads `Update installed successfully to 1.17.67`. The next update reads `1.17.67 -> 1.17.68`.
