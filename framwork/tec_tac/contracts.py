@@ -2337,10 +2337,11 @@ HTTP_CONTRACT_DETAILS = {
     "/api/tfd/system/sandbox/status/": {
         "GET": {
             "authorization": "authenticated Tec-Tac session with core.sandbox.view (an effective superuser passes, AD-10)",
-            "response": "the same answer as tec_tac.sandbox.status(live=True): {enabled, ready, reason, systemd_version, address_filter_ok, dns_ok, selftest_at, slots_total, slots_used, canary_ok, canary_at, runners: [{id, owner, version, runtime_verified}]}. No secret, no path, no environment value.",
+            "response": "the same answer as tec_tac.sandbox.status(live=True): {enabled, ready, reason, systemd_version, address_filter_ok, dns_ok, network_private_ok, egress_ok, selftest_at, slots_total, slots_used, canary_ok, canary_at, runners: [{id, owner, version, runtime_verified}]}. No secret, no path, no environment value.",
             "errors": {"403": "no core.sandbox.view"},
             "notes": [
                 "Added in 1.17.118 (framework >=1.17.118). The plan named /api/tfd/core/sandbox/status/; every Core system route sits under system/, so the route is system/sandbox/status/. The capability core.sandbox stays 1.0.0.",
+                "Added in 1.18.25 text only; the keys exist since 1.18.24: network_private_ok (a run has its own, empty network space) and egress_ok (the egress proxy resolves names and opens a tunnel). No route, permission, key or value changed.",
             ],
         },
     },

@@ -12,6 +12,7 @@ Protocol: HTTP CONNECT only. A request is refused, with no upstream connection, 
 * the port is not 443 (403);
 * the host is an IP literal in any spelling (dotted, decimal, hex, octal, bracketed IPv6), a single label, or ends .local, .internal,
   .localhost or .lan (403);
+* the host is one of this server's own names (its FQDN, Tactical's API, RMM and Mesh names; reason ``own_name``, 403), even when it is listed (1.18.25);
 * the host is not an exact lower-case match in the run's ``allowed_hosts`` (403);
 * the run already has 16 live tunnels or has used 100 tunnels (403).
 
@@ -137,6 +138,9 @@ class Egress:
         self.allowed = {h for h in config.get("allowed_hosts", []) if isinstance(h, str)}
         self.own = {str(a) for a in config.get("own", [])} | {str(a) for a in config.get("gateways", [])}
         self.fqdn = str(config.get("fqdn") or "")
+        # 1.18.25: every name this server answers to (its own FQDN, Tactical's API, RMM and Mesh names) and the addresses the helper saw for them
+        self.own_names = {str(n).lower() for n in (config.get("own_names") or []) if isinstance(n, str) and n} | ({self.fqdn.lower()} if self.fqdn else set())
+        self.own_name_addresses = {str(a).split("%", 1)[0] for a in (config.get("own_name_addresses") or []) if isinstance(a, str)}
         self.audit_path = audit_path
         self.resolve = resolve or socket.getaddrinfo
         self.dial = dial or self._dial
@@ -151,12 +155,15 @@ class Egress:
         self.fqdn_addresses = self._fqdn_addresses()
 
     def _fqdn_addresses(self):
-        if not self.fqdn:
-            return set()
-        try:
-            return {item[4][0] for item in self.resolve(self.fqdn, None)}
-        except OSError:
-            return set()
+        """Addresses of every own name, looked up once at start-up and merged with the ones the helper handed in (a NAT'd server's public address
+        is on no local interface, so only a name lookup finds it)."""
+        found = set(self.own_name_addresses)
+        for name in sorted(self.own_names):
+            try:
+                found |= {str(item[4][0]).split("%", 1)[0] for item in self.resolve(name, None)}
+            except OSError:
+                continue
+        return found
 
     @staticmethod
     def _dial(address, port, timeout):
@@ -198,7 +205,11 @@ class Egress:
             return 403, "port", host, port
         if "." not in host.strip(".") or any(host.endswith(suffix) for suffix in HOST_BLOCKED_SUFFIXES):
             return 403, "local_name", host, port
-        if not all(HOST_LABEL_RE.fullmatch(label) for label in host.split(".")) or host not in self.allowed or host == self.fqdn:
+        if not all(HOST_LABEL_RE.fullmatch(label) for label in host.split(".")):
+            return 403, "not_listed", host, port
+        if host.lower() in self.own_names:
+            return 403, "own_name", host, port
+        if host not in self.allowed:
             return 403, "not_listed", host, port
         return 0, "listed", host, port
 

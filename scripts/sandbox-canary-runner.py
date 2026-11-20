@@ -674,9 +674,10 @@ R_PROXY_PRIVATE = "proxy refuses a private address"
 R_PROXY_OWN = "proxy refuses this server's own address"
 R_PROXY_80 = "proxy refuses the allowed host on port 80"
 R_PROXY_22 = "proxy refuses the allowed host on port 22"
+R_PROXY_OWN_NAME = "proxy refuses this server's own domain"  # 1.18.25
 NETWORK_ROW_NAMES = (R_PUB_443, R_PUB_80, R_PUB_OTHER, R_PUB_DIRECT, R_DNS_LISTED, R_DNS_GAI, R_DNS_LISTED_ASK, R_DNS_PUBLIC_ASK, R_LISTEN, R_PROC_TCP,
                      R_PROC_UDP, R_IFACES, R_ROUTE, R_PACKET, R_RAW, R_NETLINK, R_INET6, R_PING, R_V6_443, R_LOOPBACK, R_OWN, R_GATEWAY, R_PROXY_OK,
-                     R_PROXY_HOST, R_PROXY_IP, R_PROXY_PRIVATE, R_PROXY_OWN, R_PROXY_80, R_PROXY_22)
+                     R_PROXY_HOST, R_PROXY_IP, R_PROXY_PRIVATE, R_PROXY_OWN, R_PROXY_80, R_PROXY_22, R_PROXY_OWN_NAME)
 
 
 def make_socket(family, kind, proto=0):
@@ -996,9 +997,23 @@ def _proxy_rows(plan, run):
             return "NOTRUN", NET_NO_DOOR
         return ("SUCCEEDED", f"the proxy opened a tunnel (200) to {host}:{port}") if status == 200 else ("OK", f"refused ({status or 'closed'})")
 
+    def own_domain():
+        """1.18.25: CONNECT to one of this server's own names, which the plan also lists in allowed_hosts. 403 is OK (the host driver then checks the
+        audit reason is own_name); 200 is SUCCEEDED (a hairpin back to this server). A plan with no own domain is NOTRUN with the helper's plain reason."""
+        name = str(plan.get("own_domain") or "")
+        if not name:
+            return "NOTRUN", str(plan.get("own_domain_reason") or "the plan named no own domain of this server")[:200]
+        if not up():
+            return "NOTRUN", NET_NO_DOOR
+        status = proxy_status(proxy, name, 443)
+        if status is None:
+            return "NOTRUN", NET_NO_DOOR
+        return ("SUCCEEDED", f"the proxy opened a tunnel (200) to {name}:443") if status == 200 else ("OK", f"refused ({status or 'closed'})")
+
     run(R_PROXY_OK, positive)
     for name, host, port in cases:
         run(name, lambda host=host, port=port: refusal(host, port))
+    run(R_PROXY_OWN_NAME, own_domain)
 
 
 def g_patchb_network(plan):
@@ -1074,9 +1089,127 @@ def _quiet(work):
 NETWORK_GROUPS = {"patchb_network": g_patchb_network}
 
 
+# ------------------------------------------------------------------------------------------------ Patch C canary rows (1.18.25, AD-65 canary-first)
+# Rows only: nothing here fixes anything. These groups live in PATCHC_GROUPS, not GROUPS, so the root helper's CANARY_GROUPS and its normal canary are
+# unchanged and nothing reaches them through --start; the host-side driver tests/sandbox-canary-patchc-1.18.25.py adds the group choice to its own copy
+# of the canary row, exactly as the Patch B network group was added.
+PC_ARCH = {  # raw syscall numbers per machine: (io_uring_setup, userfaultfd, keyctl)
+    "x86_64": {"io_uring_setup": 425, "userfaultfd": 323, "keyctl": 250},
+    "aarch64": {"io_uring_setup": 425, "userfaultfd": 282, "keyctl": 219},
+}
+PC_IO_URING = "io_uring_setup reachable"
+PC_USERFAULTFD = "userfaultfd reachable"
+PC_KEYCTL = "keyctl reachable"
+PATCHC_SYSCALL_ROW_NAMES = (PC_IO_URING, PC_USERFAULTFD, PC_KEYCTL)
+PC_PARAMS_SIZE = 256  # struct io_uring_params is 120 bytes; the buffer is bigger, and it is the only pointer a probe passes
+PC_UFFD_USER_MODE_ONLY = 1  # UFFD_USER_MODE_ONLY: an unprivileged caller may use it even when vm.unprivileged_userfaultfd is 0, so EPERM then comes from the filter
+PC_KEY_SPEC_SESSION_KEYRING = -3
+PC_LEFTOVER_MARKER = "patchc-leftover-marker"
+
+
+def machine_name():
+    """The machine architecture (a test replaces this name)."""
+    try:
+        return os.uname().machine
+    except AttributeError:
+        return ""
+
+
+def raw_syscall(number, *args):
+    """One raw syscall through libc. Returns (result, errno). Arguments are integers or ctypes buffers; a test replaces this name."""
+    lib = libc()
+    lib.syscall.restype = ctypes.c_long
+    ctypes.set_errno(0)
+    result = lib.syscall(ctypes.c_long(number), *args)
+    return int(result), ctypes.get_errno()
+
+
+def _syscall_verdict(name, number, args, closes_fd, context=""):
+    """OK when the filter refused the call (EPERM), SUCCEEDED for any other answer that came from the kernel (success or an errno that is not EPERM),
+    SKIP when the kernel has no such call (ENOSYS)."""
+    result, err = raw_syscall(number, *args)
+    if result >= 0:
+        if closes_fd:
+            try:
+                os.close(result)
+            except OSError:
+                pass
+        return "SUCCEEDED", f"the call was not refused: it returned {result if not closes_fd else 'a descriptor (closed at once)'}"
+    if err == errno.ENOSYS:
+        return "NOTRUN", f"the kernel has no {name} (ENOSYS)"
+    if err == errno.EPERM:
+        return "OK", "refused (EPERM)" + context
+    return "SUCCEEDED", f"the filter did not refuse it: the kernel answered {errno.errorcode.get(err, err)}"
+
+
+def g_patchc_syscalls(plan):
+    numbers = PC_ARCH.get(machine_name())
+    if numbers is None:
+        for name in PATCHC_SYSCALL_ROW_NAMES:
+            row(name, "NOTRUN", f"unknown machine architecture {clean(machine_name(), 20)!r}: no syscall numbers for it")
+        return
+    disabled = (read_proc("/proc/sys/kernel/io_uring_disabled") or "").strip()
+
+    def io_uring():
+        if disabled == "2":
+            return "NOTRUN", "kernel.io_uring_disabled=2: the kernel itself refuses io_uring, so this row cannot show the filter"
+        params = ctypes.create_string_buffer(PC_PARAMS_SIZE)
+        return _syscall_verdict("io_uring_setup", numbers["io_uring_setup"], (ctypes.c_ulong(1), ctypes.byref(params)), True)
+
+    def userfaultfd():
+        return _syscall_verdict("userfaultfd", numbers["userfaultfd"], (ctypes.c_ulong(PC_UFFD_USER_MODE_ONLY),), True)
+
+    def keyctl():
+        # KEYCTL_GET_KEYRING_ID (0), the session keyring, create flag 0: reads nothing, creates nothing
+        return _syscall_verdict("keyctl", numbers["keyctl"], (ctypes.c_ulong(0), ctypes.c_ulong(PC_KEY_SPEC_SESSION_KEYRING & 0xFFFFFFFFFFFFFFFF), ctypes.c_ulong(0)), False)
+
+    for name, probe in ((PC_IO_URING, io_uring), (PC_USERFAULTFD, userfaultfd), (PC_KEYCTL, keyctl)):
+        try:
+            tag, actual = probe()
+        except (OSError, ValueError, TypeError, AttributeError) as exc:
+            tag, actual = "NOTRUN", f"the probe could not run ({type(exc).__name__})"
+        row(name, tag, actual)
+
+
+def g_patchc_leftover(plan):
+    """Writes a credential, forks a leftover that outlives this runner and keeps replacing the credential file with a marker for a few seconds. The
+    host-side driver decides: a returned credential that carries the marker means the launcher read it while a leftover was alive."""
+    marker = clean(plan.get("marker") or PC_LEFTOVER_MARKER, 64)
+    try:
+        seconds = max(1.0, min(float(plan.get("leftover_seconds") or 5), 10.0))
+    except (TypeError, ValueError):
+        seconds = 5.0
+    folder = os.environ.get("SANDBOX_OUT", "")
+    target = os.path.join(folder, "credential")
+    with open(target, "w", encoding="utf-8") as handle:
+        handle.write("original-" + marker[:8])
+    pid = os.fork()
+    if pid == 0:  # the leftover
+        try:
+            os.setsid()
+            end = time.monotonic() + seconds
+            count = 0
+            while time.monotonic() < end:
+                count += 1
+                tmp = os.path.join(folder, f".leftover-{count % 2}")
+                try:
+                    with open(tmp, "w", encoding="utf-8") as handle:
+                        handle.write(marker)
+                    os.replace(tmp, target)
+                except OSError:
+                    pass
+                time.sleep(0.02)
+        finally:
+            os._exit(0)
+    time.sleep(0.3)  # the runner returns while the leftover is still alive
+
+
+PATCHC_GROUPS = {"patchc_syscalls": g_patchc_syscalls, "patchc_leftover": g_patchc_leftover}
+
+
 def main(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
-    if len(args) != 1 or (args[0] not in GROUPS and args[0] not in NETWORK_GROUPS):
+    if len(args) != 1 or (args[0] not in GROUPS and args[0] not in NETWORK_GROUPS and args[0] not in PATCHC_GROUPS):
         print("usage: sandbox-canary-runner <group>", file=sys.stderr)
         return 64
     raw = sys.stdin.read(65536)
@@ -1087,7 +1220,7 @@ def main(argv=None):
     if not isinstance(plan, dict):  # 1.17.124: a plan cut at the 64 KiB read must never look like an absent row
         row("plan unreadable", "NOTRUN", f"the plan for {args[0]} did not parse ({len(raw)} characters read)")
         return 0
-    (GROUPS.get(args[0]) or NETWORK_GROUPS[args[0]])(plan)  # 1.18.23: the Patch B network group is kept out of GROUPS (the helper's CANARY_GROUPS)
+    (GROUPS.get(args[0]) or NETWORK_GROUPS.get(args[0]) or PATCHC_GROUPS[args[0]])(plan)  # the Patch B (1.18.23) and Patch C (1.18.25) groups are kept out of GROUPS (the helper's CANARY_GROUPS)
     return 0
 
 

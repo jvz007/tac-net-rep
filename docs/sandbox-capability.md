@@ -16,18 +16,13 @@ Some modules need to run a program they did not write: a command line tool from 
 
 ## The smaller sandbox (what the network rule is)
 
-The network rule is deliberately small. Core uses systemd's address filter (a built-in kernel feature that drops traffic to chosen addresses). A run cannot reach:
+The network rule is small and has one door. Since Core 1.18.24 (AD-65 Patch B) a run has its own, empty network space (`PrivateNetwork=yes`):
 
-- the server itself: loopback, and (from 1.17.123) every address of every local network interface and the default gateway(s), read again at each start,
-- link-local addresses, which include the cloud metadata address 169.254.169.254,
-- multicast,
-- private ranges: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10 and fc00::/7.
+- it sees only its own loopback, never the server's loopback or any other address of the server,
+- it has no route and no DNS: a name lookup fails at once,
+- its only way out is the per-run egress proxy door. The proxy takes HTTP `CONNECT` only, to the hosts the runner lists in `allowed_hosts`, on port 443 only. It refuses IP literals, private, link-local, multicast and other reserved addresses, and this server's own addresses and names (its own FQDN and Tactical's API, RMM and Mesh names). Every connection it handles is written to the audit log as one `run.egress` row.
 
-Public HTTPS stays open. There is no host list and no proxy. We accept that a run can reach any public site, because it has no files to read and no tools to act with.
-
-Name lookup still works, and nothing on the server is allowed for it (1.17.123). At each start Core writes its own `resolv.conf` (root-owned, mode 0644, at most three IPv4 `nameserver` lines) and the unit binds it read only over `/etc/resolv.conf`. The lines come from the server's real upstream name servers in `/run/systemd/resolve/resolv.conf` (when that file is missing, from `/etc/resolv.conf`, but only a regular file, never the link to the `127.0.0.53` stub). A public upstream needs no allow, so a run cannot reach the `127.0.0.53` stub on any port. If an upstream name server is loopback, private, link-local, carrier-grade NAT, one of the server's own addresses or its gateway, the sandbox stays off with a plain reason that names the address. Core never allows it automatically. IPv6 upstreams are skipped, because a run has IPv4 only.
-
-The filter judges the destination address, not the next hop, so the public internet keeps working while the server's own public address and its gateway are refused. Known limit: an address that appears after a run has started (a DHCP change) is covered from the next start.
+A run whose runner declares no `allowed_hosts` has no network at all. `allowed_hosts` needs `requires.framework >=1.18.24`: older Cores refuse the key. The proxy resolves each name itself and connects to the checked numeric address, so a second DNS answer cannot change where it goes. Section "The network of a run" below has the full rules.
 
 If the server cannot enforce this, the sandbox stays off with a plain reason. It never runs in a weaker mode.
 
@@ -116,9 +111,9 @@ Add the optional top-level key `sandbox_runners` to `tec_tac.json`. It is a list
 
 Before 1.18.24 a run kept the host's network and a filter (`IPAddressDeny`) denied private ranges. That filter could not show every way back to the server, so it is gone. A run now has **its own, empty network space** (`PrivateNetwork=yes`):
 
-* it sees only `lo` (its own loopback); there is no interface, no default route, no DNS and no `/etc/resolv.conf`; a name lookup fails at once;
+* it sees only `lo` (its own loopback); there is no interface, no default route, no DNS and no name-resolver file; a name lookup fails at once;
 * it reaches the network only through one door. For a runner that declares `allowed_hosts`, Core starts a small proxy on the host for that run alone (`tec-tac-sandbox-egress@<run id>.socket`, activated on the first connection, its own unprivileged user). Inside the run, the Core launcher listens on `127.0.0.1:3128` and relays each connection, byte for byte, to the proxy's Unix socket (the per-run folder is bound read only at `/run/egress`; only that path connects). Programs use `HTTPS_PROXY`, which Core sets;
-* the proxy accepts HTTP `CONNECT` only, to `<allowed host>:443` only. It refuses (403) any other method, any port but 443, an IP literal, a single-label or `.local` style name and any host that is not an exact match in `allowed_hosts`. It resolves the name itself (the run never does), requires every address to be global (no private, loopback, link-local, multicast, carrier-grade NAT or reserved range), refuses this server's own addresses, gateways and name, and then connects to the checked numeric address, never to the name again. Limits: 16 tunnels at once, 100 per run, 256 MiB per run, 10 s to connect, 60 s idle;
+* the proxy accepts HTTP `CONNECT` only, to `<allowed host>:443` only. It refuses (403) any other method, any port but 443, an IP literal, a single-label or `.local` style name and any host that is not an exact match in `allowed_hosts`. It resolves the name itself (the run never does), requires every address to be global (no private, loopback, link-local, multicast, carrier-grade NAT or reserved range), refuses this server's own addresses, gateways and names (since 1.18.25 every own name: its FQDN and the API, RMM and Mesh names from Tactical's settings file, audit reason `own_name`, even when a runner lists it), and then connects to the checked numeric address, never to the name again. Limits: 16 tunnels at once, 100 per run, 256 MiB per run, 10 s to connect, 60 s idle;
 * `AF_UNIX` is allowed in a run (`RestrictAddressFamilies=AF_INET AF_UNIX`) for the door only. Host pathname sockets are not in the run's file view and abstract sockets belong to the run's own network space, so the 13 host-path rows and the abstract group of the canary must still read OK. A runner that needed `AF_UNIX` for a host service is still refused by the file view;
 * the proxy writes one audit line per `CONNECT` (host, port, allowed or refused, a reason code, bytes up and down; never a payload, a header or a credential). After the run the root helper writes one audit row `run.egress` (counts and the capped rows) before `run.ended`; `run.ended` gains `egress_allowed`, `egress_refused` and `egress_bytes`;
 * a runner with no `allowed_hosts` still gets the empty network space but no proxy, no forwarder and no proxy variable.

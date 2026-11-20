@@ -26,6 +26,7 @@ limit from a caller: every rule is applied again to the root-owned registry row.
 """
 from __future__ import annotations
 
+import ast
 import base64
 import glob
 import hashlib
@@ -33,6 +34,7 @@ import io
 import ipaddress
 import json
 import os
+import posixpath
 import queue as queue_module
 import re
 import secrets
@@ -46,6 +48,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 try:  # Linux only; the tests load this file on other systems too
     import fcntl
@@ -1556,6 +1559,12 @@ RUNS_ROOT = RUN_ROOT / "runs"
 EGRESS_DOOR_ROOT = RUN_ROOT / "egress-door"  # root 0700; <run id>/door.sock is bound read only into the run at /run/egress
 EGRESS_CONFIG_ROOT = RUN_ROOT / "egress-config"  # root 0700; <run id>.json is the proxy's LoadCredential
 EGRESS_STATE_ROOT = Path("/run/tec-tac-sbx-egress")  # RuntimeDirectory of the proxy service: <run id>/audit.jsonl
+EGRESS_PRIVATE_ROOT = Path("/run/private/tec-tac-sbx-egress")  # 1.18.25: where systemd really keeps a DynamicUser's RuntimeDirectory (EGRESS_STATE_ROOT/<id> links here)
+TACTICAL_LOCAL_SETTINGS = Path("/rmm/api/tacticalrmm/tacticalrmm/local_settings.py")  # 1.18.25: read only, parsed with ast, never run (same file as install.sh LOCAL_SETTINGS)
+OWN_SETTINGS_MAX_BYTES = 256 * 1024
+OWN_SETTINGS_NAMES = ("ALLOWED_HOSTS", "CORS_ORIGIN_WHITELIST", "CORS_ALLOWED_ORIGINS", "MESH_SITE")
+OWN_RESOLVE_SECONDS = 5
+OWN_CACHE_SECONDS = 60
 EGRESS_BIND_TARGET = "/run/egress"
 EGRESS_UNIT_PREFIX = "tec-tac-sandbox-egress@"
 EGRESS_PROXY_PORT = 3128  # the in-unit forwarder's port (127.0.0.1, inside the run's own network space)
@@ -1568,7 +1577,7 @@ EGRESS_LIMITS = {"tunnels_live": 16, "tunnels_total": 100, "bytes_total": 256 * 
                  "head_seconds": 10}
 EGRESS_REASONS = frozenset({
     "listed", "method", "malformed", "head_too_large", "head_too_slow", "port", "ip_literal", "local_name", "not_listed", "limit",
-    "resolve_failed", "address_blocked", "connect_failed", "connect_timeout", "run_limit", "idle", "closed",
+    "resolve_failed", "address_blocked", "own_name", "connect_failed", "connect_timeout", "run_limit", "idle", "closed",
 })
 EGRESS_HOST_RE = re.compile(r"^[A-Za-z0-9.-]{1,253}$")
 PROXY_ENV_NAMES = ("HTTPS_PROXY", "https_proxy")  # set only for a run that has allowed_hosts
@@ -2558,11 +2567,137 @@ def egress_audit_path(run_id):
     return EGRESS_STATE_ROOT / _egress_id(run_id) / EGRESS_AUDIT_NAME
 
 
-def egress_config_bytes(hosts, local, fqdn):
+OWN_NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$")
+OWN_RESOLVER = socket.getaddrinfo  # a test replaces this
+_own_cache = {"at": 0.0, "key": None, "value": None}
+
+
+def _own_name(value):
+    """A valid lower-case dotted DNS name, or None. IP literals, single labels, empty labels and other characters are dropped."""
+    if not isinstance(value, str):
+        return None
+    name = value.strip().lower().lstrip(".")
+    if len(name) > 253 or not OWN_NAME_RE.fullmatch(name) or "." not in name or ".." in name:
+        return None
+    try:
+        ipaddress.ip_address(name)
+        return None
+    except ValueError:
+        pass
+    if name.rsplit(".", 1)[-1].isdigit():
+        return None
+    return name
+
+
+def _settings_hosts(name, value):
+    items = value if isinstance(value, (list, tuple, set)) else [value]
+    found = set()
+    for item in items:
+        if not isinstance(item, str) or item.strip() == "*":
+            continue
+        text = item.strip()
+        if name in ("CORS_ORIGIN_WHITELIST", "CORS_ALLOWED_ORIGINS", "MESH_SITE") or "://" in text:
+            try:
+                text = urlsplit(text if "://" in text else "//" + text).hostname or ""
+            except ValueError:
+                continue
+        valid = _own_name(text)
+        if valid:
+            found.add(valid)
+    return found
+
+
+def read_tactical_names(path=None):
+    """The host names in Tactical's settings file (ALLOWED_HOSTS, CORS_ORIGIN_WHITELIST, CORS_ALLOWED_ORIGINS, MESH_SITE). Read as root with
+    O_NOFOLLOW, a regular file of at most 256 KiB, parsed with ast and never imported or run: only top-level literal assignments count.
+    Raises Refusal when the file cannot be read or parsed."""
+    path = Path(path or TACTICAL_LOCAL_SETTINGS)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
+    try:
+        fd = os.open(str(path), flags)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_size > OWN_SETTINGS_MAX_BYTES:
+                raise OSError("not a plain small file")
+            with os.fdopen(os.dup(fd), "rb") as handle:
+                data = handle.read(OWN_SETTINGS_MAX_BYTES + 1)
+        finally:
+            os.close(fd)
+        if len(data) > OWN_SETTINGS_MAX_BYTES:
+            raise OSError("too large")
+        tree = ast.parse(data.decode("utf-8"), filename="local_settings.py")
+    except (OSError, ValueError, SyntaxError, RecursionError, MemoryError) as exc:
+        raise Refusal("sandbox_unavailable", "this server's own names could not be read from Tactical's settings file") from exc
+    names = set()
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id in OWN_SETTINGS_NAMES:
+                try:
+                    value = ast.literal_eval(node.value)
+                except (ValueError, SyntaxError, TypeError, MemoryError, RecursionError):
+                    continue
+                names |= _settings_hosts(target.id, value)
+    return names
+
+
+def own_server_names(settings_path=None):
+    """Every name this server answers to: its FQDN, its host name when it has a dot, and Tactical's own names. Raises Refusal (fail closed)
+    when the settings file cannot be read or no dotted name is found at all. Returns a sorted list."""
+    names = read_tactical_names(settings_path)
+    for getter in (socket.getfqdn, socket.gethostname):
+        try:
+            valid = _own_name(getter())
+        except OSError:
+            valid = None
+        if valid:
+            names.add(valid)
+    if not names:
+        raise Refusal("sandbox_unavailable", "no dotted name for this server could be found, so the egress door cannot tell its own names")
+    return sorted(names)
+
+
+def resolve_own_names(names, *, resolver=None, seconds=None, clock=time.monotonic):
+    """The addresses of the names, looked up in worker threads for at most 5 s in all (cached 60 s). A name that does not resolve adds nothing (it is
+    still refused by name). When no lookup finishes in time, fail closed with Refusal. Returns a sorted list of address strings."""
+    names = sorted(names)
+    resolver = resolver or OWN_RESOLVER
+    seconds = OWN_RESOLVE_SECONDS if seconds is None else seconds
+    key = tuple(names)
+    nowt = clock()
+    if _own_cache["key"] == key and _own_cache["value"] is not None and nowt - _own_cache["at"] < OWN_CACHE_SECONDS:
+        return list(_own_cache["value"])
+    results, done = {}, {}
+
+    def work(name):
+        try:
+            results[name] = {str(item[4][0]).split("%", 1)[0] for item in resolver(name, None)}
+        except (OSError, ValueError, IndexError, TypeError):
+            results[name] = set()
+        done[name] = True
+
+    threads = [threading.Thread(target=work, args=(name,), daemon=True) for name in names]
+    for thread in threads:
+        thread.start()
+    deadline = clock() + seconds
+    for thread in threads:
+        thread.join(max(0.0, deadline - clock()))
+    finished = list(done)
+    if names and not finished:
+        raise Refusal("sandbox_unavailable", "this server's own names could not be looked up in time, so the egress door fails closed")
+    found = sorted(set().union(*[results[name] for name in finished]) if finished else set())
+    _own_cache.update({"at": nowt, "key": key, "value": found})
+    return found
+
+
+def egress_config_bytes(hosts, local, fqdn, own_names=(), own_addresses=()):
     """The proxy's per-run configuration (root 0600, handed in through LoadCredential): the allowed hosts, this server's own addresses and
-    gateways, this server's own name, and the run limits. No credential, no module text beyond the validated host list."""
+    gateways, this server's own names and their addresses (1.18.25; ``fqdn`` stays for compatibility), and the run limits. No credential, no
+    module text beyond the validated host list."""
     payload = {"allowed_hosts": list(hosts), "own": list(local.get("addresses", [])), "gateways": list(local.get("gateways", [])),
-               "fqdn": str(fqdn or "")[:253], "limits": dict(EGRESS_LIMITS)}
+               "fqdn": str(fqdn or "")[:253], "own_names": sorted(str(n) for n in own_names), "own_name_addresses": sorted(str(a) for a in own_addresses),
+               "limits": dict(EGRESS_LIMITS)}
     return (json.dumps(payload, sort_keys=True) + "\n").encode("utf-8")
 
 
@@ -2582,17 +2717,49 @@ def egress_stop(run_id, *, run_cmd=None):
         pass
 
 
+def egress_remove_state(run_id):
+    """Remove the proxy's audit state for a run (1.18.25). With a DynamicUser RuntimeDirectory, systemd makes ``EGRESS_STATE_ROOT/<id>`` a symlink to
+    ``../private/tec-tac-sbx-egress/<id>``; rmtree refuses a symlink, so link and target both stayed. Built only from the validated 32-hex id.
+    A plain directory goes with rmtree. A symlink is followed only when, normalised lexically (never resolved), it points at exactly
+    ``EGRESS_PRIVATE_ROOT/<same id>`` and that target is a real directory: the target goes, then the link. Any other symlink is unlinked and nothing
+    it points to is touched. Never raises."""
+    try:
+        run_id = _egress_id(run_id)
+        link = EGRESS_STATE_ROOT / run_id
+        try:
+            info = _lstat(link)
+        except OSError:
+            return
+        if stat.S_ISDIR(info.st_mode):
+            shutil.rmtree(link, ignore_errors=True)
+            return
+        if stat.S_ISLNK(info.st_mode):
+            try:
+                raw = os.readlink(link)
+                if os.sep != "/":
+                    raw = raw.replace(os.sep, "/")
+                joined = posixpath.normpath(posixpath.join(posixpath.dirname(link.as_posix()), raw))
+                expected = (EGRESS_PRIVATE_ROOT / run_id).as_posix()
+                if joined == expected and stat.S_ISDIR(_lstat(EGRESS_PRIVATE_ROOT / run_id).st_mode):
+                    shutil.rmtree(EGRESS_PRIVATE_ROOT / run_id, ignore_errors=True)
+            except (OSError, ValueError):
+                pass
+        link.unlink(missing_ok=True)
+    except (Refusal, OSError, ValueError):
+        pass
+
+
 def egress_clean(run_id):
     """Remove the run's door folder, proxy configuration and audit state. Only paths built from the validated run id; never raises."""
     try:
         shutil.rmtree(egress_door_folder(run_id), ignore_errors=True)
         egress_config_path(run_id).unlink(missing_ok=True)
-        shutil.rmtree(EGRESS_STATE_ROOT / _egress_id(run_id), ignore_errors=True)
     except (Refusal, OSError):
         pass
+    egress_remove_state(run_id)
 
 
-def egress_start(row, run_id, local, *, run_cmd=None, fqdn=None):
+def egress_start(row, run_id, local, *, run_cmd=None, fqdn=None, own=None):
     """Start the one door for a run that has allowed_hosts (nothing for a run that has none: no proxy, no forwarder, no variable). Writes the proxy
     configuration and starts the socket unit before the run unit exists. Fail closed: a door that does not start is ``sandbox_unavailable`` and
     everything it made is removed. Returns True when a door was started."""
@@ -2600,6 +2767,10 @@ def egress_start(row, run_id, local, *, run_cmd=None, fqdn=None):
     if not hosts:
         return False
     _egress_id(run_id)
+    if own is None:  # 1.18.25: fail closed before anything is made when this server's own names are unknown
+        names = own_server_names()
+        own = (names, resolve_own_names(names))
+    own_names, own_addresses = own
     try:
         for folder, mode in ((EGRESS_DOOR_ROOT, 0o700), (EGRESS_CONFIG_ROOT, 0o700)):
             folder.mkdir(parents=True, exist_ok=True)
@@ -2612,7 +2783,7 @@ def egress_start(row, run_id, local, *, run_cmd=None, fqdn=None):
                 fqdn = socket.getfqdn()
             except OSError:
                 fqdn = ""
-        _write_root_file(egress_config_path(run_id), egress_config_bytes(hosts, local, fqdn), 0o600)
+        _write_root_file(egress_config_path(run_id), egress_config_bytes(hosts, local, fqdn, own_names, own_addresses), 0o600)
     except OSError as exc:
         egress_clean(run_id)
         raise Refusal("sandbox_unavailable", "the egress door folder could not be prepared") from exc
@@ -4402,7 +4573,9 @@ def sweep(min_age=STALE_SECONDS):
                 note_swept_run(entry)
             if folder in egress_folders and _plain_id(run_id, RUN_ID_RE):
                 egress_stop(run_id)  # a stale instance: its units are stopped before its files go
-            if entry.is_dir() and not entry.is_symlink():
+            if folder == EGRESS_STATE_ROOT and _plain_id(entry.name, RUN_ID_RE):
+                egress_remove_state(entry.name)  # 1.18.25: a stale link and its /run/private target both go
+            elif entry.is_dir() and not entry.is_symlink():
                 shutil.rmtree(entry, ignore_errors=True)
             else:
                 entry.unlink(missing_ok=True)
