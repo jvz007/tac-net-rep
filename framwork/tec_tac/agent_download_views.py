@@ -143,9 +143,11 @@ class InstallerDownloadView(APIView):
     """GET /api/tfd/endpoint-agent/installer.msi (1.18.39, AD-74): the one file the publisher module marked as the current installer.
 
     No sign-in, no code, no expiry and never a redirect. The MSI carries no secret: the agent it installs cannot connect without its own
-    token. Every serve re-verifies the path and recomputes the SHA-256 through the descriptor that is sent, so a changed file, a symlink or a
-    module that is no longer installed answers 404 with an empty body. Its own in-flight counter (8) keeps an anonymous flood away from the
-    device downloads. No audit row per download: the rate limit is the web application firewall's job. Reasons are logged as codes only."""
+    token. Core hashed the file once, at publish, and stored its size and modified time (1.18.40). A serve re-hashes only when either differs,
+    so a changed file, a symlink or a module that is no longer installed answers 404 with an empty body, and so does a disabled publisher
+    module (the row stays; the file is served again when the module is enabled). Its own in-flight counter (2) keeps an anonymous flood
+    away from the device downloads, and the slot is taken before anything else is read, so a refused request costs one cache increment.
+    No audit row per download. Reasons are logged as codes only."""
 
     authentication_classes = []
     permission_classes = [AllowAny]
@@ -156,14 +158,7 @@ class InstallerDownloadView(APIView):
         if et.forwarded_plaintext(_scope(request)):
             return _empty(403)
         try:
-            row = ad.load_installer()
-        except Exception:
-            logger.warning("Agent installer store unavailable.")
-            return _empty(503, 30)
-        if row is None:
-            return _empty(404)
-        try:
-            if not ad.acquire_slot(ad.INSTALLER_INFLIGHT_KEY):
+            if not ad.acquire_slot(ad.INSTALLER_INFLIGHT_KEY, limit=ad.INSTALLER_MAX_INFLIGHT):
                 return _empty(503, 30)
         except Exception:
             logger.warning("Agent installer slot store unavailable.")
@@ -173,7 +168,26 @@ class InstallerDownloadView(APIView):
             ad.release_slot(ad.INSTALLER_INFLIGHT_KEY)
 
         try:
-            handle, size, reason = ad.open_verified(row["module_id"], row["path"], row["sha256"], row["size"])
+            row = ad.load_installer()
+        except Exception:
+            logger.warning("Agent installer store unavailable.")
+            release()
+            return _empty(503, 30)
+        if row is None:
+            release()
+            return _empty(404)
+        try:
+            enabled = ad.installer_publisher_enabled(row["module_id"])
+        except Exception:
+            logger.warning("Agent installer publisher state unavailable.")
+            release()
+            return _empty(503, 30)
+        if not enabled:
+            logger.warning("Agent installer file refused (publisher_disabled).")
+            release()
+            return _empty(404)
+        try:
+            handle, size, reason = ad.open_verified(row["module_id"], row["path"], row["sha256"], row["size"], trusted_mtime_ns=row["mtime_ns"])
         except Exception:
             logger.warning("Agent installer file could not be read.")
             release()
@@ -188,9 +202,23 @@ class InstallerDownloadView(APIView):
             handle.close()
             release()
             return _empty(503, 30)
+        self._heal(row, handle)
         response["Content-Length"] = str(size)
         response["Content-Disposition"] = f'attachment; filename="{ad.safe_file_name(row["path"])}"'
         response["X-Content-SHA256"] = row["sha256"]
         response["Cache-Control"] = "no-store"
         response["X-Content-Type-Options"] = "nosniff"
         return response
+
+    @staticmethod
+    def _heal(row, handle):
+        """Best effort: after a good re-hash, store the file's modified time so the next serve skips the read pass (a row published by 1.18.39
+        has none). The filter on path and hash keeps a republish between the load and this write from receiving the old file's time. A fault
+        is logged and never fails the download."""
+        try:
+            current = int(ad._fstat(handle.fileno()).st_mtime_ns)
+            if row["mtime_ns"] == current:
+                return
+            ad._installer_model().objects.filter(slot=ad.INSTALLER_SLOT, path=row["path"], sha256=row["sha256"]).update(mtime_ns=current)
+        except Exception:
+            logger.warning("Agent installer modified time could not be stored.")

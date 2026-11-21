@@ -784,6 +784,7 @@ class TecTacPublishedInstaller(models.Model):
     sha256 = models.CharField(max_length=64)
     size = models.PositiveBigIntegerField()
     version = models.CharField(max_length=40)
+    mtime_ns = models.PositiveBigIntegerField(null=True)  # 1.18.40: the file's modified time when it was hashed; None for a row published by 1.18.39
     published_at = models.DateTimeField(auto_now=True)
 
     class Meta:

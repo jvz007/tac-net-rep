@@ -1,4 +1,5 @@
-"""Core's agent file download (Core 1.18.37, capability core.agent_downloads 1.0.0; 1.1.0 in Core 1.18.39 adds the public installer).
+"""Core's agent file download (Core 1.18.37, capability core.agent_downloads 1.0.0; 1.1.0 in Core 1.18.39 adds the public installer;
+Core 1.18.40 makes that route cheap).
 
 A verified module (for example Endpoint Agent Management) owns a file in its own folder, such as an agent MSI. It asks Core for a short
 link for ONE device and ONE file (``grant_download``). The device then fetches the file over HTTPS from Core's own host with the same
@@ -11,7 +12,11 @@ never serves anything the module did not grant to that device.
 Core 1.18.39 (AD-74, capability 1.1.0): ONE public installer. The one publisher module (INSTALLER_PUBLISHERS) marks one file of its own as the
 current Endpoint Agent installer (``publish_installer``); Core serves exactly that file, without sign-in, at the fixed route
 GET /api/tfd/endpoint-agent/installer.msi (agent_download_views.InstallerDownloadView). The file carries no secret: the agent it installs
-cannot connect without its own token. Core re-verifies path and SHA-256 at every serve and never redirects.
+cannot connect without its own token. Core never redirects.
+
+Core 1.18.40 (same capability version): the SHA-256 is computed once, at publish, and stored with the file's size and modified time
+(``mtime_ns``, migration 0047). A serve re-hashes only when the size or modified time differ from the published ones. The route has 2
+installer slots (INSTALLER_MAX_INFLIGHT), taken before the store is read, and answers 404 while the publisher module is disabled.
 
 Secrets: the link token is returned once to the caller and is never logged, audited or kept in the clear (the cache holds its SHA-256).
 Every refusal carries a reason code only. No Django import at the top of this file.
@@ -51,6 +56,7 @@ GRANT_PREFIX = "tec-tac:agentdl:grant:"
 SLOT_PREFIX = "tec-tac:agentdl:slot:"
 INFLIGHT_KEY = "tec-tac:agentdl:inflight"
 INSTALLER_INFLIGHT_KEY = "tec-tac:agentdl:installer-inflight"  # 1.18.39: its own counter, so an anonymous flood cannot starve device downloads
+INSTALLER_MAX_INFLIGHT = 2  # 1.18.40: below the smallest uwsgi worker count (6); a flood costs one cache increment once both are taken
 INSTALLER_ROUTE_PATH = "/api/tfd/endpoint-agent/installer.msi"
 INSTALLER_SLOT = "endpoint-agent"  # the one row of the installer store
 INSTALLER_PUBLISHERS = ("endpoint-agent-management",)  # the only module that may publish (AD-74 names it); widen by adding an id
@@ -190,12 +196,17 @@ def check_path(module_id: str, path) -> tuple[str | None, str | None]:
     return None, root[0]
 
 
-def open_verified(module_id: str, path: str, sha256: str, expected_size: int | None = None):
+def open_verified(module_id: str, path: str, sha256: str, expected_size: int | None = None, trusted_mtime_ns: int | None = None):
     """Open a granted file for hashing and serving: (file object, size, None) or (None, 0, reason).
 
     The path is checked again, the file is opened with O_NOFOLLOW, and the SHA-256 is computed through that same descriptor. The file
     object that is returned is that descriptor, rewound, so what is sent is what was hashed. A file problem is a reason code; an
-    unexpected OS error (for example no free descriptors) is raised, so the route can answer 503 and keep the grant."""
+    unexpected OS error (for example no free descriptors) is raised, so the route can answer 503 and keep the grant.
+
+    ``trusted_mtime_ns`` (1.18.40, public installer only): when it is given and the descriptor's size equals ``expected_size`` and its modified
+    time equals it, the read pass is skipped; the published hash was computed at publish from this same file. Any difference runs the full
+    re-hash as before. A file whose size or modified time moved while it was being read is a hash_mismatch, so the modified time that a
+    caller reads from the returned handle belongs to the bytes that were hashed."""
     reason, _root = check_path(module_id, path)
     if reason:
         return None, 0, reason
@@ -216,20 +227,27 @@ def open_verified(module_id: str, path: str, sha256: str, expected_size: int | N
         if expected_size is not None and info.st_size != expected_size:
             os.close(fd)
             return None, 0, "hash_mismatch"
-        digest = hashlib.sha256()
-        total = 0
-        while True:
-            chunk = os.read(fd, CHUNK_BYTES)
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > MAX_FILE_BYTES:
+        trusted = (trusted_mtime_ns is not None and expected_size is not None and info.st_size == expected_size
+                   and int(info.st_mtime_ns) == trusted_mtime_ns)
+        if not trusted:
+            digest = hashlib.sha256()
+            total = 0
+            while True:
+                chunk = os.read(fd, CHUNK_BYTES)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_FILE_BYTES:
+                    os.close(fd)
+                    return None, 0, "too_large"
+                digest.update(chunk)
+            if total != info.st_size or not hmac.compare_digest(digest.hexdigest().encode("ascii"), sha256.encode("ascii")):
                 os.close(fd)
-                return None, 0, "too_large"
-            digest.update(chunk)
-        if total != info.st_size or not hmac.compare_digest(digest.hexdigest().encode("ascii"), sha256.encode("ascii")):
-            os.close(fd)
-            return None, 0, "hash_mismatch"
+                return None, 0, "hash_mismatch"
+            after = _fstat(fd)
+            if after.st_size != info.st_size or after.st_mtime_ns != info.st_mtime_ns:
+                os.close(fd)
+                return None, 0, "hash_mismatch"
         os.lseek(fd, 0, os.SEEK_SET)
         handle = os.fdopen(fd, "rb")
     except BaseException:
@@ -424,10 +442,11 @@ def drop_grant(token: str, grant: dict) -> None:
         logger.warning("An agent download slot could not be removed.", exc_info=True)
 
 
-def acquire_slot(key: str = INFLIGHT_KEY) -> bool:
-    """Take one of the MAX_INFLIGHT serving slots (a cache counter shared by every process). False when all are taken. Raises on a cache fault.
+def acquire_slot(key: str = INFLIGHT_KEY, limit: int = MAX_INFLIGHT) -> bool:
+    """Take one of the ``limit`` serving slots (a cache counter shared by every process). False when all are taken. Raises on a cache fault.
 
-    ``key`` (1.18.39) names the counter: the default is the device download counter, INSTALLER_INFLIGHT_KEY is the public installer's own."""
+    ``key`` (1.18.39) names the counter: the default is the device download counter, INSTALLER_INFLIGHT_KEY is the public installer's own.
+    ``limit`` (1.18.40) defaults to MAX_INFLIGHT (8); the installer route passes INSTALLER_MAX_INFLIGHT (2)."""
     cache = _cache()
     cache.add(key, 0, timeout=INFLIGHT_TTL_SECONDS)
     try:
@@ -436,7 +455,7 @@ def acquire_slot(key: str = INFLIGHT_KEY) -> bool:
         cache.add(key, 1, timeout=INFLIGHT_TTL_SECONDS)
         return True
     cache.touch(key, INFLIGHT_TTL_SECONDS)  # 1.18.38: activity renews the lifetime, so the counter never expires under a running download
-    if used > MAX_INFLIGHT:
+    if used > limit:
         release_slot(key)
         return False
     return True
@@ -496,11 +515,20 @@ def _installer_result(outcome: str, reason: str | None = None) -> dict:
 
 
 def load_installer() -> dict | None:
-    """The one published installer as {module_id, path, sha256, size, version}, or None. Raises when the store cannot be read: the route answers 503."""
+    """The one published installer as {module_id, path, sha256, size, version, mtime_ns}, or None (mtime_ns is None for a row published by 1.18.39). Raises when the store cannot be read: the route answers 503."""
     row = _installer_model().objects.filter(slot=INSTALLER_SLOT).first()
     if row is None:
         return None
-    return {"module_id": row.module_id, "path": row.path, "sha256": row.sha256, "size": int(row.size), "version": row.version}
+    return {"module_id": row.module_id, "path": row.path, "sha256": row.sha256, "size": int(row.size), "version": row.version,
+            "mtime_ns": None if row.mtime_ns is None else int(row.mtime_ns)}
+
+
+def installer_publisher_enabled(module_id: str) -> bool:
+    """True when the publisher module is enabled (1.18.40). A module with no record is enabled by default; a corrupt state file is False (fail closed).
+    Raises when the state cannot be read: the route answers 503. The installer row is never touched, so the file returns when the module is enabled again."""
+    from . import module_state
+
+    return bool(module_state.is_enabled(module_id, module_state.load_state()))
 
 
 def publish_installer(module_id, *, path, sha256, version) -> dict:
@@ -536,7 +564,13 @@ def publish_installer(module_id, *, path, sha256, version) -> dict:
         return _installer_result("unavailable", "file_unavailable")
     if reason:
         return _installer_result("invalid", reason)
-    handle.close()
+    try:
+        mtime_ns = int(_fstat(handle.fileno()).st_mtime_ns)
+    except OSError:
+        logger.warning("The installer file could not be read.", exc_info=True)
+        return _installer_result("unavailable", "file_unavailable")
+    finally:
+        handle.close()
     file_name = safe_file_name(path)
     try:
         with _atomic():
@@ -545,7 +579,7 @@ def publish_installer(module_id, *, path, sha256, version) -> dict:
                 current = model.objects.filter(slot=INSTALLER_SLOT).first()
                 replaced_version = None if current is None else current.version
                 model.objects.update_or_create(slot=INSTALLER_SLOT, defaults={
-                    "module_id": caller, "path": path, "sha256": sha256, "size": size, "version": version,
+                    "module_id": caller, "path": path, "sha256": sha256, "size": size, "version": version, "mtime_ns": mtime_ns,
                 })
             except Exception as exc:
                 raise _StoreFault() from exc
@@ -641,17 +675,17 @@ def agent_downloads_contract_metadata() -> dict[str, Any]:
         "installer": {
             "route": {"method": "GET", "path": INSTALLER_ROUTE_PATH, "authorization": "none: no sign-in, no code, no expiry"},
             "publishers": list(INSTALLER_PUBLISHERS),
-            "limits": {"file_bytes": MAX_FILE_BYTES, "downloads_in_flight": MAX_INFLIGHT, "version_chars": INSTALLER_VERSION_MAX},
-            "verification": "Core re-checks the path and recomputes the SHA-256 through the descriptor it sends at every serve. Any mismatch, missing file, symlink or module no longer installed answers 404 with an empty body. Never a redirect.",
+            "limits": {"file_bytes": MAX_FILE_BYTES, "downloads_in_flight": MAX_INFLIGHT, "installer_in_flight": INSTALLER_MAX_INFLIGHT, "version_chars": INSTALLER_VERSION_MAX},
+            "verification": "Core computes the SHA-256 once, at publish, and stores it with the file size and modified time. At every serve it re-checks the path and the descriptor it sends, and recomputes the SHA-256 only when the size or modified time differ from the published ones. Any mismatch, missing file, symlink, module that is disabled or module no longer installed answers 404 with an empty body. Never a redirect.",
             "audit": "Strict rows on publish and unpublish (module core, provenance agent-downloads, object type agent-installer; the file name, size, SHA-256 and version, never a full path). No row per anonymous download: the rate limit belongs to the web application firewall.",
-            "errors": {"200": "the raw file", "403": "plain-text connection", "404": "nothing published, or the file no longer matches", "503": "all 8 installer slots are busy, or a server fault (Retry-After 30)"},
+            "errors": {"200": "the raw file", "403": "plain-text connection", "404": "nothing published, the file no longer matches, or the publisher module is disabled or no longer installed", "503": "both installer slots are busy, or a server fault (Retry-After 30)"},
         },
         "route": {"method": "GET", "path": ROUTE_PATH, "host": "the first Django ALLOWED_HOSTS entry, over HTTPS"},
         "identity": "The device sends Authorization: Token <Tactical agent token> and X-Agent-Id, checked exactly as the endpoint websocket checks them (AD-54 E5), and shares its failure counters. A leaked link alone serves nothing, and a link granted to one device never serves another.",
         "audit": "Strict Core rows (module core, provenance agent-downloads): custom:agent-download-granted before a link is returned, custom:agent-download-served before the first byte (the download started; it does not say it finished). Non-strict: custom:agent-download-revoked and custom:agent-download-refused (identity refusals only). Never the link token, the link or the full path.",
         "errors": {"200": "the raw file", "401": "identity refused", "403": "plain-text connection", "404": "unknown, expired or other device's link, or a changed file", "429": "too many failed checks (Retry-After 60)", "503": "busy or a server fault (Retry-After 30)"},
         "core_does_not": "Core does not know what the file means, keep a copy, redirect, resume or serve ranges, or choose which file a device gets.",
-        "added_in": "1.0.0 (Core 1.18.37). Needs framework >=1.18.37. 1.1.0 (Core 1.18.39) adds publish_installer, unpublish_installer and the public installer route; needs framework >=1.18.39. Additive: nothing existing changed.",
+        "added_in": "1.0.0 (Core 1.18.37). Needs framework >=1.18.37. 1.1.0 (Core 1.18.39) adds publish_installer, unpublish_installer and the public installer route; needs framework >=1.18.39. Additive: nothing existing changed. Core 1.18.40 keeps 1.1.0: hash once at publish, 2 installer slots, no serve while the publisher is disabled.",
     }
 
 

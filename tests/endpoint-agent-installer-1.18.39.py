@@ -81,8 +81,15 @@ class FakeRow:
 
 
 class FakeQuerySet:
-    def __init__(self, slot):
-        self.slot = slot
+    def __init__(self, slot, path=None, sha256=None):
+        self.slot, self.path, self.sha256 = slot, path, sha256
+
+    def update(self, **kw):  # 1.18.40: the heal write, filtered on path and sha256 as the real one is
+        row = STORE.get(self.slot)
+        if row is None or (self.path is not None and row["path"] != self.path) or (self.sha256 is not None and row["sha256"] != self.sha256):
+            return 0
+        row.update(kw)
+        return 1
 
     def first(self):
         if STORE_FAIL["read"]:
@@ -95,8 +102,8 @@ class FakeQuerySet:
 
 class FakeManager:
     @staticmethod
-    def filter(slot):
-        return FakeQuerySet(slot)
+    def filter(slot, path=None, sha256=None):
+        return FakeQuerySet(slot, path, sha256)
 
     @staticmethod
     def update_or_create(slot, defaults):
@@ -136,6 +143,9 @@ PLUGINS = [EAM, HALO]
 registry_stub = H.stub("tec_tac.registry", discover_plugins=lambda: list(PLUGINS))
 config_stub = H.stub("tec_tac.config", load_layout=lambda path=None: {"TEC_TAC_STATE_ROOT": STATE_ROOT})
 H.package.registry, H.package.config = registry_stub, config_stub
+# 1.18.40: the route asks module_state whether the publisher is enabled; here every module is (the default of the real one)
+module_state_stub = H.stub("tec_tac.module_state", load_state=lambda: {}, is_enabled=lambda module_id, state=None: True)
+H.package.module_state = module_state_stub
 
 AUD: list = []
 AUD_FAIL = [False]
@@ -408,6 +418,7 @@ put_file(MSI, MSI_BYTES + b"x")
 r = fetch()
 must(r.status_code == 404 and r.content == b"" and STORE and CACHE.data[ad.INSTALLER_INFLIGHT_KEY] == 0, "a size change is 404, the row is kept, the slot is free")
 put_file(MSI, bytes(reversed(MSI_BYTES)))
+os.utime(MSI, ns=(os.stat(MSI).st_mtime_ns + 3_000_000_000,) * 2)  # 1.18.40: a size and mtime match skips the hash, so make the time differ whatever the clock granularity
 must(len(bytes(reversed(MSI_BYTES))) == len(MSI_BYTES) and fetch().status_code == 404, "the same size with different bytes is 404")
 put_file(MSI)
 must(fetch().status_code == 200, "the original bytes serve again (the row was kept)")
@@ -428,13 +439,13 @@ must("refused (" in warning_text and TMP not in warning_text and PLUGIN_ROOT not
 reset()
 publish()
 held = []
-for _ in range(8):
+for _ in range(2):
     r = fetch()
-    must(r.status_code == 200, "the first 8 installer downloads are served")
+    must(r.status_code == 200, "the first 2 installer downloads are served")
     held.append(r)
 r = fetch()
-must(r.status_code == 503 and r.headers["Retry-After"] == "30" and r.content == b"", "the 9th installer download gets 503 with Retry-After 30")
-must(CACHE.data[ad.INSTALLER_INFLIGHT_KEY] == 8, "the refused one gave its slot back")
+must(r.status_code == 503 and r.headers["Retry-After"] == "30" and r.content == b"", "the 3rd installer download gets 503 with Retry-After 30")
+must(CACHE.data[ad.INSTALLER_INFLIGHT_KEY] == 2, "the refused one gave its slot back")
 must(ad.acquire_slot() is True, "a device download still gets a slot while the installer is full")
 ad.release_slot()
 held[0].close()
@@ -534,11 +545,11 @@ for node in ast.walk(mig_tree):
 must(mig_deps == [("tec_tac", "0045_communicator_service_user_retry")], f"migration depends only on 0045, no floating dependency: {mig_deps}")
 must(mig_options == {"db_table": "core_published_installer"} and model_table == "core_published_installer", "table name agrees")
 must(mig_fields.pop("id")[0] == "BigAutoField", "the migration creates the default id")
-must(mig_fields == model_fields, f"model and migration agree on every field:\n{model_fields}\n{mig_fields}")
+must(mig_fields == {k: v for k, v in model_fields.items() if k != "mtime_ns"}, f"1.18.40: model and migration 0046 agree on the fields 0046 created (0047 adds mtime_ns):\n{model_fields}\n{mig_fields}")
 must(model_fields["slot"] == ("CharField", {"max_length": 32, "unique": True}), "slot is unique")
-must(set(model_fields) == {"slot", "module_id", "path", "sha256", "size", "version", "published_at"}, "the model has the documented fields")
+must(set(model_fields) == {"slot", "module_id", "path", "sha256", "size", "version", "mtime_ns", "published_at"}, "the model has the documented fields")
 must("auto_now" in model_fields["published_at"][1], "published_at is set on every save")
-must(len(list((APP / "migrations").glob("0046_*.py"))) == 1 and not list((APP / "migrations").glob("0047_*.py")), "exactly one 0046")
+must(len(list((APP / "migrations").glob("0046_*.py"))) == 1 and len(list((APP / "migrations").glob("0047_*.py"))) == 1, "one 0046 and one 0047")  # 1.18.40: 0047 depends on 0046 (checked in installer-serve-cost-1.18.40.py)
 urls_src = (APP / "urls.py").read_text(encoding="utf-8")
 must('path("endpoint-agent/installer.msi", InstallerDownloadView.as_view()' in urls_src and "InstallerDownloadView" in urls_src.split("urlpatterns")[0], "the route is in urls.py")
 openapi_src = (APP / "openapi.py").read_text(encoding="utf-8")

@@ -111,7 +111,7 @@ Returns `{outcome, reason}`. `outcome` is `ok`, `denied`, `invalid` or `unavaila
 
 `unavailable` reasons: `store_unavailable`, `audit_unavailable`, `file_unavailable`, `path_unavailable`. Nothing is published.
 
-Only one installer exists. A new publish replaces the old one. It is kept in one database row (table `core_published_installer`, migration 0046), so it survives a restart and a cache flush. Core stores the path, not a copy of the file.
+Only one installer exists. A new publish replaces the old one. It is kept in one database row (table `core_published_installer`, migrations 0046 and 0047), so it survives a restart and a cache flush. Core stores the path, the size, the SHA-256 and the file's modified time (`mtime_ns`, migration 0047, Core 1.18.40), not a copy of the file.
 
 ### `unpublish_installer(module_id)`
 
@@ -127,11 +127,13 @@ No sign-in, no code, no expiry. The MSI holds no secret: the agent it installs c
 |---|---|
 | `200` | The raw file. Headers: `Content-Length`, `Content-Disposition: attachment` (the safe file name), `X-Content-SHA256` (the published hash), `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, `Content-Type: application/octet-stream`. |
 | `403` | The proxy says the connection was plain text. |
-| `404` | Nothing is published, or the file no longer matches: it changed, is a symlink now, is missing, or the publisher module is no longer installed. Empty body. |
+| `404` | Nothing is published, or the file no longer matches: it changed, is a symlink now, is missing, or the publisher module is disabled or no longer installed. Empty body. The row stays, so the file is served again when the module is enabled. |
 | `405` | Not a GET. |
-| `503` | All 8 installer slots are busy, or a server fault. `Retry-After: 30`. |
+| `503` | Both installer slots are busy, or a server fault. `Retry-After: 30`. |
 
-Core re-checks the path and recomputes the SHA-256 at every serve, through the same descriptor it then sends. That is one extra read pass of at most 100 MB per request. The route has its own counter of 8 downloads in flight, separate from the device route, so a flood of anonymous requests cannot block agent updates.
+Core hashes the file once, at publish, and stores its size and modified time with the hash. At every serve it re-checks the path and opens the file with the same descriptor it then sends. It reads the file again to recompute the SHA-256 only when the size or modified time differ from the published ones. A row published by 1.18.39 has no modified time: it is hashed once on its first serve, which stores the time. Someone who can write the publisher's folder and also set the modified time back could swap the bytes without a re-hash; that needs the same access that already controls the module's code.
+
+The route has its own counter of 2 downloads in flight (the device route keeps 8), separate from the device route, so a flood of anonymous requests cannot block agent updates. The slot is taken first: once both are busy, a request costs one cache increment and gets `503` with `Retry-After: 30`.
 
 ### What is audited, and what is not
 
