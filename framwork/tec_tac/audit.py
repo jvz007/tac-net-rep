@@ -384,6 +384,8 @@ SERVER_PROVENANCE_TACTICAL_OPERATION = "tactical-operation"
 SERVER_PROVENANCE_TACTICAL_WEBSOCKET = "tactical-websocket"
 # 1.17.90: provenance of the rows Core writes for the endpoint agent socket (tec_tac.endpoint_transport). Core-only.
 SERVER_PROVENANCE_ENDPOINT_TRANSPORT = "endpoint-transport"
+# 1.18.37: provenance of the rows Core writes for an agent file download (tec_tac.agent_downloads). Core-only.
+SERVER_PROVENANCE_AGENT_DOWNLOADS = "agent-downloads"
 # Core-internal authority. Passed only by Core's own executor to _record_row, never through the public record().
 _TACTICAL_OPERATION_AUTHORITY = object()
 
@@ -765,6 +767,36 @@ def _record_tactical_websocket(
         actor=actor, module_id=module_id, action=action, object_type=object_type, object_id=object_id,
         message=message, after=after, metadata=metadata, request=request, strict=strict,
         operation_context=context, authority=_TACTICAL_OPERATION_AUTHORITY, correlation_id=correlation_id,
+    )
+
+
+def _record_agent_download(
+    *,
+    action: str,
+    agent_id: str | None = None,
+    message: Any = None,
+    metadata: dict | None = None,
+    strict: bool = False,
+    actor: str = "service",
+    refusal: bool = False,
+) -> dict[str, Any]:
+    """Write a row for an agent file download Core grants or serves (1.18.37). Private: only tec_tac.agent_downloads calls it.
+
+    The module is core and the object is the agent. ``actor`` device (needs a valid agent id) records the device as the actor, else the
+    agent-downloads service does. ``strict`` raises AuditWriteError when the row cannot be written: a grant and a served download need
+    their row first. The row carries operation_context.server_provenance = agent-downloads, plus core_refusal for a refusal. Callers pass
+    only the fields listed in docs/agent-downloads.md: never the link token, the link, an Authorization header or a full path.
+    """
+    if agent_id and actor == "device":
+        row_actor = device_audit_actor(module_id="core", device_id=agent_id, service="agent-downloads")
+    else:
+        row_actor = service_audit_actor(module_id="core", service="agent-downloads")
+    context = {"server_provenance": SERVER_PROVENANCE_AGENT_DOWNLOADS}
+    if refusal:
+        context["core_refusal"] = True
+    return _record_row(
+        actor=row_actor, module_id="core", action=action, object_type="agent", object_id=agent_id,
+        message=message, metadata=metadata, strict=strict, operation_context=context, authority=_TACTICAL_OPERATION_AUTHORITY,
     )
 
 

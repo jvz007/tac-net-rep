@@ -1356,6 +1356,22 @@ CORE_CONTRACTS = (
         "audience": "backend/premium-owner",
     },
     {
+        "area": "agent-downloads",
+        "import_path": "tec_tac.agent_downloads",
+        "name": "grant_download",
+        "kind": "python",
+        "purpose": "grant_download(module_id, *, agent_id, path, sha256, ttl_seconds=600) -> {outcome: ok|denied|invalid|unavailable, url, path, expires, expires_in, reason} (1.18.37, capability core.agent_downloads 1.0.0, framework >=1.18.37). Grants ONE device ONE short HTTPS link to ONE file the calling module owns, for example an agent installer. Core does not know the file's meaning. The caller is verified by Core from the call stack (core.caller_identity) and must equal module_id: any enabled, non-legacy extension may call it for its own files only; Core itself, an unverifiable caller and a mismatch get denied. The file must lie inside the module's installed folder or /var/lib/tec-tac/<module id>/, as given, with no symlink anywhere below that folder (symlink_refused), be a regular file of 1 to 100 000 000 bytes, and hash to the given SHA-256 (hash_mismatch). ttl_seconds is clamped to 30..900 (15 minutes). A second grant for the same device and file replaces the first. A strict audit row (custom:agent-download-granted) is written before the link is returned; a cache fault, an unusable host or a failed audit write gives unavailable and stores nothing. Sync: call it from a Celery task or a request thread. See docs/agent-downloads.md.",
+        "audience": "module/backend",
+    },
+    {
+        "area": "agent-downloads",
+        "import_path": "tec_tac.agent_downloads",
+        "name": "revoke_download",
+        "kind": "python",
+        "purpose": "revoke_download(module_id, *, agent_id, path) -> {outcome: ok|denied|invalid|unavailable, revoked} (1.18.37, core.agent_downloads 1.0.0, framework >=1.18.37). Withdraws the calling module's own grant for one device and file; the caller is verified as for grant_download and no module can revoke another module's grant. A row (custom:agent-download-revoked) is written only when something was revoked.",
+        "audience": "module/backend",
+    },
+    {
         "area": "module-preferences",
         "import_path": "tec_tac.module_preferences",
         "name": "get",
@@ -1615,6 +1631,32 @@ HTTP_CONTRACT_DETAILS = {
                 "Kind server-terminal, added in 1.17.34 (module-facing, additive, capability core.tactical_websocket 1.1.0, AD-35): a shell on the server itself, run by Tactical's own consumer as the Tactical service user. The socket accepts the ticket once, checks Origin, the sign-in, superuser standing, Tactical's switch and can_use_webterm, then writes ONE strict row custom:server-terminal-start (object type server, module globalsettings) before the shell starts: no row means close 4502 and no shell. The watcher re-checks superuser standing every 30 seconds and kills the shell on loss (close 4003). Close codes: 4401, 4003, 4502, 4503. The agent-terminal body, codes and audit action are unchanged.",
                 "A 403 and an out-of-scope 404 write one Core deny row (reason, status and kind; no body values). A successful mint writes no audit row: the audit row is written once per session start by the relayed socket (custom:terminal-start).",
                 "Throttles: 30 requests per minute and 500 per day for each signed-in user and address.",
+            ],
+        },
+    },
+    "/api/tfd/agent-downloads/<str:token>/": {
+        "GET": {
+            "authorization": (
+                "the device's own agent token, not a Tec-Tac session: Authorization: Token <Tactical agent token> and X-Agent-Id, checked exactly as the endpoint websocket checks them (AD-54 E5: the token is a Tactical agent token, its user is linked to that agent and is active). The link token in the path must be a live grant made for that same device. The route takes no Tec-Tac or Tactical authenticator."
+            ),
+            "request": {
+                "token": "path: the 43-character link token from grant_download. Never put it in a log.",
+                "headers": "Authorization: Token <key> and X-Agent-Id: <agent id>, each exactly once",
+            },
+            "response": "200 the raw file (application/octet-stream) with Content-Length, Content-Disposition attachment, Cache-Control no-store and X-Content-Type-Options nosniff. Never a redirect.",
+            "errors": {
+                "401": "identity refused, or a missing, repeated or malformed header (empty body, counted against the address and the agent id)",
+                "403": "the proxy reports a plain-text connection (empty body)",
+                "404": "unknown, expired or malformed link, a link granted to another device, or a file that changed since the grant (empty body; the grant is withdrawn when the file changed)",
+                "405": "any method other than GET",
+                "429": "more than 10 failed checks a minute from one address or for one agent id (Retry-After 60)",
+                "503": "all 8 download slots are busy, a server fault, or the audit row could not be written, so no byte was sent (Retry-After 30)",
+            },
+            "notes": [
+                "Added in 1.18.37 (module-facing, additive, capability core.agent_downloads 1.0.0). Needs framework >=1.18.37. Nothing existing changed.",
+                "The file is limited to 100 000 000 bytes. Core re-hashes it at every serve and sends the same descriptor it hashed, so it cannot change between the check and the send.",
+                "The link stays valid until it expires (at most 15 minutes), is revoked or is replaced, so a download that broke can be retried. It serves only the device it was granted to.",
+                "The link token is never logged. One strict row custom:agent-download-served is written before the first byte; it says the download started, not that it finished. Identity refusals write one non-strict custom:agent-download-refused row.",
             ],
         },
     },
@@ -3172,6 +3214,7 @@ BROWSER_CONTRACTS = (
 )
 
 RULES = (
+    "Agent downloads (core.agent_downloads 1.0.0, Core 1.18.37): a module that must hand one of its own files (an agent installer) to one device calls tec_tac.agent_downloads.grant_download(module_id, agent_id=..., path=..., sha256=..., ttl_seconds=600) after has_capability('core.agent_downloads'), requires framework >=1.18.37 and lists the capability under dependencies. The file must sit in the module's own installed folder or /var/lib/tec-tac/<module id>/, with no symlink, up to 100 000 000 bytes; the link lasts 30 to 900 seconds and serves only that device, which proves itself with its agent token and X-Agent-Id. Keep the SHA-256 of each file yourself. Core verifies the caller from the call stack and never knows what the file means.",
     "Client address (core.client_address 1.0.0, Core 1.18.6): a module that needs the person's address for a request uses tec_tac.client_address.client_address(request) after has_capability('core.client_address'), requires framework >=1.18.6 and lists the capability under dependencies. It returns Core's own answer (Core's trusted proxy list, no policy argument); '' means unknown and the module must refuse. A loopback or private-proxy answer means Nginx did not forward the address: do not treat it as the person's address. See docs/client-address.md.",
     "System actions (core.system_actions 1.2.0 since Core 1.17.68, 1.1.0 since Core 1.17.66; first shipped in Core 1.17.61, AD-13): a module that needs Core to run typed Tactical work unattended for a named owner (a scheduled patch scan) lists the action ids in its manifest key `system_actions` (a JSON list of '<module id>.<name>', at most 20, extensions only) and registers each with tec_tac.system_actions.register_system_action from AppConfig.ready(). A manifest with the key needs requires.framework >=1.17.61: an older Core refuses an unknown manifest key. The function table is Core's: winupdate.scan and winupdate.install, Windows Patching's (patching, or the premium module that honourably replaces it; since 1.17.66 install is allowed for the replacement too, with a fixed plain warning, CQ173), and since 1.17.66 scripts.run, Script Execution's. A run of more than 2000 endpoints is split into groups of at most 2000 (CQ178), up to 20 groups. Since 1.17.66 a person who creates or edits a schedule for a system action passes the permission and scope checks and one plain Yes or No at that moment (POST /api/tfd/scheduler/system-actions/confirmation/); a scheduled run is not re-checked against its creator. There is no global off switch: disable the owning module or its schedule to stop a run. Since 1.17.68 (Johan, 21 October 2026): a schedule keeps the scope its person had when they created or last edited it, an unattended run reads that stored scope and not the person's live row (VerifiedSchedulerRun.held_at_creation and resolved_endpoints), and the next person who edits the schedule or profile through reconcile_schedule(confirmed_by_request=...) becomes its owner if their own scope covers every target; a module-owned target type reads as endpoints through the resolver its module registered (register_target_resolver); a module may start another module's scheduled install through a delegation grant a person confirmed once (describe_delegation, register_delegation_grant, issue_delegation_ticket, start_delegated_run), with run_system_action unchanged; and while an honoured replacement of Windows Patching is installed Tactical's own patch policy is switched off (core.patch_lockdown). Since 1.17.70 (CQ203, AD-45, framework >=1.17.70; core.system_actions is 1.3.0 from this release): the table has a second kind of row, a write, for the premium module that is the honoured replacement of Windows Patching. Its first and only row is winupdate.set_action (the approve, ignore or do-nothing decision of one Windows update). The module registers it with dangerous=True and no delegable_to, its manifest lists the action, and it calls run_system_write(context, action_id=, changes=[{update_id, action}]) from its own Scheduler handler; Core reads the endpoint of every update itself, judges that set like agent_ids, writes one strict audit row with the earlier and the new decision of every update BEFORE it writes, never overwrites a decision a person changed in the meantime, and writes at most once. Windows Patching does not register it. Tactical keeps the decisions if the module is later removed, and Tactical's own audit log does not show Core's write: Core's audit rows are the record. Since 1.17.74 (framework >=1.17.74; core.system_actions is 1.4.0 from this release): resolve_delegated_targets(ticket, *, action_id, endpoint_ids) tells the provider which endpoints a ticket covers. Core publishes no 'endpoint is back' event: polling Agents' get_reboot_status is the supported way to resume after a reboot (docs/system-actions.md, 'Durable runs with a reboot'). Since 1.17.111 (framework >=1.17.111; core.system_actions is 1.6.0 from this release, additive, the operations are unchanged): a module's own Scheduler person action, one its signed manifest lists under scheduler_person_actions, may be named in a delegation grant for the one pair Core's allow-list names (owner module maintenance, action wapm.profile-install, AD-43). The provider registers it with register_scheduled_action(..., delegable_to=('maintenance',)); the five delegation functions then accept it, with the same grant, ticket, 24 hour life, one run per ticket, stored scope, strict audit rows and revocation, and the person's own permission with no bypass for a scheduler manager (docs/system-actions.md, 'Delegating a person action').",
     "A permissionless extension that needs a browser audit trail declares audit_events in tec_tac.json: [{\"object_type\": \"agent\", \"actions\": [\"view\", \"run\"]}]. object_type is a lowercase slug; each action is a standard Tec-Tac audit action or custom:<slug>. For client, site and agent Core checks the signed-in user's scope; other types have no scope check. Core sets the actor and marks the row browser_provenance. A module that declares audit_events must require framework >=1.16.0, and >=1.17.0 when it declares an object type other than client, site or agent.",

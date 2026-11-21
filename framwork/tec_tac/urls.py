@@ -28,6 +28,7 @@ from .contract_views import ContractCatalogView, ContractExportView
 from .audit_views import AuditRecordView
 from .tactical_operation_views import TacticalOperationView
 from .tactical_websocket_views import TacticalWebSocketTicketView
+from .agent_download_views import AgentDownloadView
 from django.urls import path
 from .views import (
     ExtensionPermissionCatalogView, ModuleCatalogView, ModuleJobView,
@@ -103,6 +104,7 @@ urlpatterns = [
     path("audit/record/", AuditRecordView.as_view(), name="tec-tac-audit-record"),
     path("tactical-operations/<str:module_id>/<str:operation_id>/", TacticalOperationView.as_view(), name="tec-tac-tactical-operations"),
     path("tactical-websocket/<str:module_id>/<str:kind>/tickets/", TacticalWebSocketTicketView.as_view(), name="tec-tac-tactical-websocket-ticket"),
+    path("agent-downloads/<str:token>/", AgentDownloadView.as_view(), name="tec-tac-agent-download"),
     path("capabilities/", CapabilityListView.as_view(), name="tec-tac-capabilities"),
     path("capabilities/<str:capability_id>/", CapabilityDetailView.as_view(), name="tec-tac-capability-detail"),
     path("scheduler/actions/", SchedulerActionListView.as_view(), name="tec-tac-scheduler-actions"),
