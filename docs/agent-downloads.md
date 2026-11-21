@@ -76,7 +76,7 @@ Every refusal has an empty body. Core never sends a redirect. The link works aga
 * At most 8 downloads are served at once across Core. Over that, the answer is `503` with `Retry-After`.
 * Core hashes the file at every serve and sends the same open file it hashed. If the bytes, the size or the file itself changed since the grant, the answer is `404` and the grant is withdrawn.
 * Grants live in Django's cache (Redis on a Tactical server), keyed by the hash of the link token. A cache restart drops open links. The module grants again. Nothing is written to the database.
-* The link token is in the URL, so the web server's access log must not record this path in full. Core never logs it.
+* The link token is in the URL, so the web server's access log must not record this path in full. Core never logs it. Django's own request logger writes the path of a 5xx answer (the 503 case), so Core puts a filter on the `django.request` logger (`log_redaction.py`, 1.18.38) that rewrites `/api/tfd/agent-downloads/<token>/` to `/api/tfd/agent-downloads/<redacted>/` before any handler sees the record. It never drops a record: the status stays logged.
 
 ## Audit
 

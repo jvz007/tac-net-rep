@@ -251,6 +251,19 @@ def _recheck(allowed_body: dict, m: dict):
     return None
 
 
+def _recheck_upgrade(env, m: dict):
+    """1.18.38: an upgrade run follows its plan. (None, repository id) when the module may be staged now, else ((code, sentence), None).
+    The release is the one the single Upgrade selects (``env.upgrade_release``); the allowed list is not read."""
+    row = env.upgrade_release(m["id"])
+    if row is None or row.get("download_unavailable"):
+        return ("not_in_catalogue_cache", module_install_plan.TEXT["not_in_catalogue_cache"]), None
+    if str(row.get("version") or "") != str(m["version"]):
+        return ("version_changed", TEXT["version_changed"]), None
+    if not row.get("repository_id"):
+        return ("not_in_catalogue_cache", TEXT["no_repository"]), None
+    return None, row["repository_id"]
+
+
 def advance_run(env, run_id: str) -> bool:
     """One idempotent tick, without the seq check (a direct call). True when the run is final (or gone), False when another tick is needed
     (or the lock was busy)."""
@@ -299,13 +312,16 @@ def _advance(env, run_id: str, seq=None):
             if nxt is None:
                 _finish(env, run, "completed")
                 return True, None
-            if allowed_body is None:
-                allowed_body = env.allowed()
-            why = _recheck(allowed_body, nxt)
+            if run.get("purpose") == "upgrade":
+                why, repository_id = _recheck_upgrade(env, nxt)
+            else:
+                if allowed_body is None:
+                    allowed_body = env.allowed()
+                why = _recheck(allowed_body, nxt)
+                repository_id = None if why else env.repo_for(nxt["id"], nxt["version"])
             if why:
                 _conclude(env, run, nxt, "skipped", *why)
                 continue
-            repository_id = env.repo_for(nxt["id"], nxt["version"])
             if not repository_id:
                 _conclude(env, run, nxt, "skipped", "not_in_catalogue_cache", TEXT["no_repository"])
                 continue
@@ -586,6 +602,7 @@ def live_env() -> SimpleNamespace:
     return SimpleNamespace(
         now=time.time, load=store.load, save=store.save, ids=store.ids, forget=store.forget, lock=store.lock, start_lock=store.start_lock,
         plan=module_install_plan.plan_online_install, allowed=licensing_catalogue_source.read_allowed_modules, repo_for=repo_for,
+        upgrade_release=lambda module_id: module_repository.upgrade_selector()(module_id),
         stage=lambda repository_id, module_id, version: module_repository.stage_repository_package(repository_id, module_id, version, request=None),
         stage_in_run=lambda repository_id, module_id, version, run_id: module_repository.stage_repository_package(repository_id, module_id, version, request=None, correlation_id=run_id),
         queue=lambda upload_id, requested_by: module_manager_v2.queue_v2_install(upload_id, requested_by=requested_by),

@@ -53,6 +53,13 @@ class TecTacFrameworkConfig(AppConfig):
             register_core_agent_downloads_capability()
         except Exception:
             logger.exception("Tec-Tac core.agent_downloads capability registration failed")
+        # 1.18.38: the agent download link token never reaches a log file (django.request logs the path of a 5xx). Guarded like the others.
+        try:
+            from .log_redaction import install_log_redaction
+
+            install_log_redaction()
+        except Exception:
+            logger.exception("Tec-Tac log redaction install failed")
         # 1.17.35: core.module_preferences (one per-person choice a module keeps through Core). Guarded like core.accounts.
         try:
             from .module_preferences import register_core_module_preferences_capability

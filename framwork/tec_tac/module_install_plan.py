@@ -74,7 +74,7 @@ def _cut(value: Any, limit: int = 400) -> str:
     return " ".join(str(value or "").split())[:limit]
 
 
-def build_plan(selection, allowed_body, cache_rows, installed, resolve, satisfies, problem_text, refuse_disabled, protected, runtime_check, purpose="install", licensing_repo_ids=None):
+def build_plan(selection, allowed_body, cache_rows, installed, resolve, satisfies, problem_text, refuse_disabled, protected, runtime_check, purpose="install", licensing_repo_ids=None, upgrade_release=None):
     """The plan as a dict. Every collaborator is passed in, so this runs without Django.
 
     * ``allowed_body``: the whitelisted body of ``read_allowed_modules()``.
@@ -85,8 +85,13 @@ def build_plan(selection, allowed_body, cache_rows, installed, resolve, satisfie
     * ``protected``: ids that are never installed from here. ``runtime_check(requires)``: the runtime checks of a candidate.
     * ``purpose`` (1.18.35): "install" (default, nothing changes) or "upgrade": a module that is not installed is blocked ``not_installed``, one whose
       recorded source repository is not a licensing repository (``licensing_repo_ids``; None skips the check) is blocked ``other_source``, and no
-      dependency module is added (a missing one is reported by the shared resolver, as a single upgrade does)."""
+      dependency module is added (a missing one is reported by the shared resolver, as a single upgrade does).
+    * ``upgrade_release`` (1.18.38): required for purpose "upgrade". ``upgrade_release(module_id)`` gives the cache row the single Upgrade would
+      install (``module_repository.upgrade_selector()``) or None. An upgrade takes its release from it, never from the allowed list; the plan
+      still reads the allowed list for its state, revision and time and fails closed when that state is not ok. Install purpose is unchanged."""
     upgrade = purpose == "upgrade"
+    if upgrade and upgrade_release is None:
+        raise ValueError("purpose upgrade needs upgrade_release: an upgrade never falls back to the allowed list")
     top = {"plan_state": allowed_body.get("plan_state"), "plan_revision": allowed_body.get("plan_revision"), "fetched_at": allowed_body.get("fetched_at")}
     base = {"ok": False, "state": allowed_body.get("state"), "message": allowed_body.get("message"), "valid": False, "requested": list(selection),
             "purpose": purpose, "order": [], "added_dependencies": [], "will_disable": [], "conflicts": [], "blocked": [], "optional_dependencies": [],
@@ -111,22 +116,32 @@ def build_plan(selection, allowed_body, cache_rows, installed, resolve, satisfie
             pinned = ((have.get("source") or {}).get("repository_id"))
             if pinned and licensing_repo_ids is not None and pinned not in licensing_repo_ids:  # the stage step refuses a module pinned elsewhere
                 return None, ("other_source", {})
-        row = allowed.get(module_id)
-        if row is None:
-            return None, ("not_in_allowed_list", {})
-        release = row.get("release")
-        if not row.get("selected"):
-            return None, ("not_selected", {})
-        if not release:
-            return None, ("no_release", {})
-        if row.get("availability") != "available" or not row.get("entitled"):
-            return None, ("not_available", {"availability": row.get("availability")})
-        cache = cache_rows.get((module_id, release.get("release_id")))
-        if cache is None or cache.get("download_unavailable"):
-            return None, ("not_in_catalogue_cache", {})
-        version = str(release.get("version") or "")
-        if cache.get("version") and str(cache["version"]) != version:  # 1.18.20: the entry must be this release, not another one with the same id
-            return None, ("not_in_catalogue_cache", {})
+            # 1.18.38: the release is the one the single Upgrade selects, not a row of the allowed list.
+            cache = upgrade_release(module_id)
+            if cache is None or cache.get("download_unavailable"):
+                return None, ("not_in_catalogue_cache", {})
+            chosen_repo = cache.get("repository_id")
+            if (pinned and chosen_repo != pinned) or (licensing_repo_ids is not None and chosen_repo not in licensing_repo_ids):
+                return None, ("other_source", {})
+            version = str(cache.get("version") or "")
+            row = allowed.get(module_id) or {}
+        else:
+            row = allowed.get(module_id)
+            if row is None:
+                return None, ("not_in_allowed_list", {})
+            release = row.get("release")
+            if not row.get("selected"):
+                return None, ("not_selected", {})
+            if not release:
+                return None, ("no_release", {})
+            if row.get("availability") != "available" or not row.get("entitled"):
+                return None, ("not_available", {"availability": row.get("availability")})
+            cache = cache_rows.get((module_id, release.get("release_id")))
+            if cache is None or cache.get("download_unavailable"):
+                return None, ("not_in_catalogue_cache", {})
+            version = str(release.get("version") or "")
+            if cache.get("version") and str(cache["version"]) != version:  # 1.18.20: the entry must be this release, not another one with the same id
+                return None, ("not_in_catalogue_cache", {})
         candidate = {"id": module_id, "name": cache.get("name") or row.get("name") or module_id, "extension_version": version,
                      "dependencies": dict(cache.get("dependencies") or {}), "optional_dependencies": dict(cache.get("optional_dependencies") or {}),
                      "requires": dict(cache.get("requires") or {}), "category": cache.get("category") or row.get("category")}
@@ -289,15 +304,18 @@ def plan_online_install(selection: list[str], purpose: str = "install") -> dict:
     from .module_manager import PROTECTED_PLUGIN_IDS
     from .module_state import version_satisfies
 
+    upgrade = purpose == "upgrade"
     allowed_body = licensing_catalogue_source.read_allowed_modules()
     if allowed_body.get("state") != "ok":
-        return build_plan(selection, allowed_body, {}, {}, None, None, None, None, frozenset(), None, purpose=purpose)
+        return build_plan(selection, allowed_body, {}, {}, None, None, None, None, frozenset(), None, purpose=purpose,
+                          upgrade_release=(lambda _module_id: None) if upgrade else None)
     repos = [repo for repo in module_repository.list_repositories() if repo.get("kind") == "licensing" and repo.get("enabled", True)]
-    development = module_repository.is_development_server() if repos else False
     cache_rows: dict[tuple, dict] = {}
-    for repo in repos:
-        for item in module_repository._cached_modules(repo, development=development):
-            cache_rows.setdefault((item.get("id"), item.get("release_id")), item)
+    if not upgrade:  # an upgrade takes no allowed-list release, so it needs no release-id lookup
+        development = module_repository.is_development_server() if repos else False
+        for repo in repos:
+            for item in module_repository._cached_modules(repo, development=development):
+                cache_rows.setdefault((item.get("id"), item.get("release_id")), item)
     installed = {item["id"]: item for item in module_manager_v2.installed_catalog_v2() if not item.get("legacy")}
 
     def refuse_disabled(candidate):
@@ -309,4 +327,5 @@ def plan_online_install(selection: list[str], purpose: str = "install") -> dict:
 
     return build_plan(selection, allowed_body, cache_rows, installed, module_manager_v2.resolve_install_plan, version_satisfies,
                       module_manager_v2._problem_text, refuse_disabled, PROTECTED_PLUGIN_IDS, module_manager_v2._check_runtime_requirements,
-                      purpose=purpose, licensing_repo_ids=frozenset(repo.get("id") for repo in repos))
+                      purpose=purpose, licensing_repo_ids=frozenset(repo.get("id") for repo in repos),
+                      upgrade_release=module_repository.upgrade_selector() if upgrade else None)

@@ -420,6 +420,7 @@ def acquire_slot() -> bool:
     except ValueError:  # the counter expired between add and incr
         cache.add(INFLIGHT_KEY, 1, timeout=INFLIGHT_TTL_SECONDS)
         return True
+    cache.touch(INFLIGHT_KEY, INFLIGHT_TTL_SECONDS)  # 1.18.38: activity renews the lifetime, so the counter never expires under a running download
     if used > MAX_INFLIGHT:
         release_slot()
         return False
@@ -432,6 +433,8 @@ def release_slot() -> None:
         cache = _cache()
         if int(cache.decr(INFLIGHT_KEY)) < 0:
             cache.set(INFLIGHT_KEY, 0, timeout=INFLIGHT_TTL_SECONDS)
+        else:
+            cache.touch(INFLIGHT_KEY, INFLIGHT_TTL_SECONDS)  # 1.18.38: the other downloads still running keep the counter alive
     except ValueError:
         pass  # the counter expired: it heals itself
     except Exception:

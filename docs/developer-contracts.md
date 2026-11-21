@@ -131,7 +131,7 @@ Core owns Swagger grouping for the complete Tec-Tac HTTP surface. Module authors
 
 Module manifests may declare a readable `name` and `category: "core"`. Core uses `Core module · <name>` for Core modules and `Module · <name>` for all other modules. Older modules that omit `name` use their stable module ID.
 
-Core endpoints use explicit subsystem groups, including separate groups for System Updates, Backup & Restore, Server Maintenance, Storage, Module Repository and Module Hotfixes. There is no generic Framework catch-all: a new `/api/tfd/` Core surface must be explicitly classified so schema coverage detects drift. Tactical endpoints outside `/api/tfd/` are left unchanged.
+Core endpoints use explicit subsystem groups, including separate groups for System Updates, Backup & Restore, Server Maintenance, Storage, Module Repository, Module Hotfixes and Agent Downloads (1.18.38). There is no generic Framework catch-all: a new `/api/tfd/` Core surface must be explicitly classified so schema coverage detects drift. Tactical endpoints outside `/api/tfd/` are left unchanged.
 
 Modules still own useful summaries, request/response schemas and operation descriptions. Group ownership is supplied automatically by Core.
 

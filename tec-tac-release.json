@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.18.37",
+  "version": "1.18.38",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.18.37.md",
-      "size": 11959,
-      "sha256": "a438f6d0fa9ff1bcb528188a7e01f9fca2f5b6699a7b7e725e2f94c796f7562f"
+      "path": "RELEASE_NOTES_1.18.38.md",
+      "size": 10625,
+      "sha256": "72d2c6674fdb3294c4cedc9ce29f217bf38f5b113e0d3c8269421cc13f8d0630"
     },
     {
       "path": "VERSION",
       "size": 7,
-      "sha256": "376b237b4393787a668cbb804edc365ecdb2b7293799f7f79da8ae39bba4efb5"
+      "sha256": "5c033d0c9803d00f256e73774b340ca948ff92611ce0ca91fd926c72ff1bd888"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -68,8 +68,8 @@
     },
     {
       "path": "docs/agent-downloads.md",
-      "size": 5346,
-      "sha256": "42226897acfb8dce203b7287e387c7ea67399d2937441bc8a181f5b6029eed9c"
+      "size": 5683,
+      "sha256": "8560489ab3c11f9b066da6cd93273af2c69534e1419835656f093610ef52598e"
     },
     {
       "path": "docs/api-keys.md",
@@ -98,8 +98,8 @@
     },
     {
       "path": "docs/developer-contracts.md",
-      "size": 15441,
-      "sha256": "933624087dd160491aa656139e0651cb5c92e583a754b23607053e315cb37be8"
+      "size": 15468,
+      "sha256": "52611a5026e18ef34574e999dab388ecbb4a89be41b42b491c62c6aa593e9760"
     },
     {
       "path": "docs/endpoint-transport.md",
@@ -188,8 +188,8 @@
     },
     {
       "path": "docs/module-repositories.md",
-      "size": 39000,
-      "sha256": "8f8e952c3d4ec0db85154225dc6d0860c2a403eb29b0081ee8d157b82c810466"
+      "size": 39386,
+      "sha256": "befcebeec6e7122065ec061ccb09d056503e44fa52707fac4192c317e3b5b204"
     },
     {
       "path": "docs/module-routes.md",
@@ -218,8 +218,8 @@
     },
     {
       "path": "docs/openapi-grouping.md",
-      "size": 1850,
-      "sha256": "3fe3c6d5514d0fe829a45ffb40cafa1da87552939611cdeb25268a212b29096f"
+      "size": 1881,
+      "sha256": "e32b3fe4b08a5e4c6bccafa3334cb4c5a658b7a9b6c252e694178eedb07c0c7e"
     },
     {
       "path": "docs/optional-module-integrations.md",
@@ -1882,6 +1882,11 @@
       "sha256": "8f190dd97caf2acbaff98fb4efd27e066dcf3733eafc6a4f15febfcee478f8ee"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.18.37.md",
+      "size": 11959,
+      "sha256": "a438f6d0fa9ff1bcb528188a7e01f9fca2f5b6699a7b7e725e2f94c796f7562f"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.18.4.md",
       "size": 6634,
       "sha256": "8ca04cabd225dd9a84c0d2afbfcc0d8e7c840b8caa17a3cfb690865c16cc5bdd"
@@ -2293,13 +2298,13 @@
     },
     {
       "path": "framwork/tec_tac/agent_downloads.py",
-      "size": 23658,
-      "sha256": "a3a297b827def654984173efb6312761220a83fb1ed4bb1c20f0073892b1d118"
+      "size": 23949,
+      "sha256": "d3843ffd99750f941e93db002f04b8548a2911c673fdb33d11bcd6a3ee19faaa"
     },
     {
       "path": "framwork/tec_tac/apps.py",
-      "size": 13418,
-      "sha256": "8edd96390bb392644d2b6ba59ebc8794539e6c894a28f2011d43ae2567d5c36a"
+      "size": 13771,
+      "sha256": "3038d95f64814c718233a06db171e34761c97e731d0ae776939ef8e463c87ae7"
     },
     {
       "path": "framwork/tec_tac/audit.py",
@@ -2353,8 +2358,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 527035,
-      "sha256": "889e580552a351ea6e5cf137ec4ab9c14b38ab3f55f65da00c216b0e62118a5d"
+      "size": 527813,
+      "sha256": "1390558686518e57d939ff0c451ba3f1875abd669c877c0d453b1747119087fb"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -2445,6 +2450,11 @@
       "path": "framwork/tec_tac/log_negotiation.py",
       "size": 711,
       "sha256": "4ef42f6b97dd8eff3f3331ddee9ada4e3a2641cbe27662eade424f10aacf8244"
+    },
+    {
+      "path": "framwork/tec_tac/log_redaction.py",
+      "size": 4413,
+      "sha256": "b49c9e8461a64fb45f49c2b088208bf26b421b9e9cdfa89339ee6980c3cfac2c"
     },
     {
       "path": "framwork/tec_tac/management/__init__.py",
@@ -2768,13 +2778,13 @@
     },
     {
       "path": "framwork/tec_tac/module_install_plan.py",
-      "size": 17816,
-      "sha256": "5edf3e4c94e4b915c2f945479fa1d72852137039ea6dd345a6df134f2b145ccb"
+      "size": 19452,
+      "sha256": "b8604c8555cbf7d646073a310e2546ab31eb6f097812b77fcaa28754955c8def"
     },
     {
       "path": "framwork/tec_tac/module_install_run.py",
-      "size": 29064,
-      "sha256": "136e7165155d37e94ba105382878baa1979b827305b3557e701c7ae6b0ed64ad"
+      "size": 30072,
+      "sha256": "583bdffdb5b511ad2f85ad8993c5fe84c671d911e2e7c87d67d02cd037f09523"
     },
     {
       "path": "framwork/tec_tac/module_install_run_views.py",
@@ -2823,8 +2833,8 @@
     },
     {
       "path": "framwork/tec_tac/module_repository.py",
-      "size": 87361,
-      "sha256": "93257dbc12b8ec8778146862ca07a074af840844b03e9bacd9cbaa6ff13aa2f4"
+      "size": 89456,
+      "sha256": "6d42f2c544df00eb6b704138ff02a59647e66a375afb60f9c3e544170a23df99"
     },
     {
       "path": "framwork/tec_tac/module_repository_views.py",
@@ -2868,8 +2878,8 @@
     },
     {
       "path": "framwork/tec_tac/openapi.py",
-      "size": 13329,
-      "sha256": "ff82de061b934f581acc94bd58e3839d3aa402b1deb48ec558f4dc3f0d1b30b9"
+      "size": 13460,
+      "sha256": "1b138e9a9c9905f06d04dbcfb8563c5477ef44372de835fec12988a0d6acf107"
     },
     {
       "path": "framwork/tec_tac/patch_lockdown.py",
@@ -3349,7 +3359,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "db7e025d40755edd8d0938ad6fa6711a7c7c0667be06a8b665d29b5512bfdc52"
+      "sha256": "f00031e77ff7943a3a45975ab3c8a9feb883ecd0c56418a04f7aaf18d329f9d1"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -3420,6 +3430,11 @@
       "path": "tests/agent-downloads-1.18.37.py",
       "size": 29139,
       "sha256": "4f28e5d7c4d15b92bd475d4af2d757a6ce86d12ed773c1237dd0b7f3012c38eb"
+    },
+    {
+      "path": "tests/agent-downloads-fixes-1.18.38.py",
+      "size": 13861,
+      "sha256": "1e63e3987eae0d5f370cc00ceebbc759d0f297f7a206f989fc3f3d09c6666c4a"
     },
     {
       "path": "tests/allowed-modules-route-1.18.10.py",
@@ -4772,6 +4787,11 @@
       "sha256": "bd2431e2ad15d1a2b25e01af46ed7d8d413f8b851c1f2dd8065fec6c5fb56e6e"
     },
     {
+      "path": "tests/legacy/version-1.18.37.py",
+      "size": 4195,
+      "sha256": "1294e8ff35cd15e1fed41ebc86bda3475d88c4df2b9b5ed483fe372c7ed7ca25"
+    },
+    {
       "path": "tests/legacy/version-1.18.4.py",
       "size": 1735,
       "sha256": "1344f8ae4dd57049f9d89d02820fe822303592b782ca10eb362bf59d0309e5ec"
@@ -5382,9 +5402,14 @@
       "sha256": "607463e38e7c69b88276980116fac425ba087eecdda8a0734dff487688a4a1f8"
     },
     {
+      "path": "tests/online-upgrade-release-1.18.38.py",
+      "size": 17700,
+      "sha256": "cbf52805b117af19295297733eb568c4c6f7406325e957fe4d2d6b37e5cfff7a"
+    },
+    {
       "path": "tests/online-upgrade-run-1.18.35.py",
-      "size": 16463,
-      "sha256": "8f2101e9a7b4bf2fd20648301bb89f1df257ba59375b858c015a368343bdfd3a"
+      "size": 17300,
+      "sha256": "acd3d3158567dbe71d606eae8916c70b2e4929a76a1184dbab6033a1b44d06c1"
     },
     {
       "path": "tests/open-list-closure-1.15.117.py",
@@ -5513,8 +5538,8 @@
     },
     {
       "path": "tests/release-integrity.sh",
-      "size": 2279,
-      "sha256": "2b936e64da6ca7338a154d65ed06a5ce2d15f23a6d124712663b65a54bf13165"
+      "size": 2394,
+      "sha256": "6a166c819a770f795102b1692b9e0956262138b847893c647c007bd2986caee5"
     },
     {
       "path": "tests/replacement-registration-statement-1.17.68.py",
@@ -7887,9 +7912,9 @@
       "sha256": "9fc70da5923a2808e009896ff1fce0abb1ae507e847cf28b05faea1575d30714"
     },
     {
-      "path": "tests/version-1.18.37.py",
-      "size": 4195,
-      "sha256": "1294e8ff35cd15e1fed41ebc86bda3475d88c4df2b9b5ed483fe372c7ed7ca25"
+      "path": "tests/version-1.18.38.py",
+      "size": 4528,
+      "sha256": "d244956ff43f14c7efbea89d91bfeec59acd4999c6bc0757e359ba638edb167e"
     },
     {
       "path": "tests/version-rebuild-ordering.py",

@@ -1148,6 +1148,53 @@ def _development_for(repos: list[dict]) -> bool:
     return is_development_server() if any(repo.get("kind") == _lcs.KIND for repo in repos) else False
 
 
+def select_release(choices: list[dict], source_repo_id: str | None = None):
+    """The one release Core offers for a module (1.18.38: moved out of online_catalog without a change in behaviour, so the catalogue and the
+    bulk upgrade plan cannot drift). ``choices`` are the releases of every enabled repository for one module, download_unavailable rows already
+    left out. The repository the module is pinned to is the pool when it has a release, else every choice. Repository priority then repository id
+    pick the source, and the highest version inside that source wins. Returns the cache row (with repository_id) or None."""
+    ordered = sorted(choices, key=lambda item: (int(item.get("repository_priority", 100)), item.get("repository_id", ""), item.get("version", "")))
+    pinned = [item for item in ordered if item.get("repository_id") == source_repo_id] if source_repo_id else []
+    pool = pinned or ordered
+    # Repository priority selects the source first. The highest semantic
+    # version is then selected only inside that source. This prevents a
+    # second repository at the same priority from silently winning by version.
+    selected = None
+    if pool:
+        winning_repo = sorted(
+            {item["repository_id"] for item in pool},
+            key=lambda rid: min(
+                (int(item.get("repository_priority", 100)), rid)
+                for item in pool if item["repository_id"] == rid
+            ),
+        )[0]
+        cohort = [item for item in pool if item["repository_id"] == winning_repo]
+        for candidate in cohort:
+            if selected is None or version_satisfies(candidate["version"], f">{selected['version']}"):
+                selected = candidate
+    return selected
+
+
+def upgrade_selector():
+    """Core 1.18.38: ``select(module_id)`` gives the release the single Upgrade installs (the same selection as online_catalog) or None.
+    The enabled repositories' caches and the installed list are read once, with one development-server test, so the development channel and
+    the availability rules apply as in the single path. The bulk upgrade plan and run use it instead of the licence's allowed list."""
+    repos = [repo for repo in list_repositories() if repo.get("enabled", True)]
+    installed = {item["id"]: item for item in installed_catalog_v2() if not item.get("legacy")}
+    development = _development_for(repos)
+    by_module: dict[str, list[dict]] = {}
+    for repo in repos:
+        for item in _cached_modules(repo, development=development):
+            if not item.get("download_unavailable"):
+                by_module.setdefault(item["id"], []).append(item)
+
+    def select(module_id):
+        source = (installed.get(module_id) or {}).get("source") or {}
+        return select_release(by_module.get(module_id, []), source.get("repository_id"))
+
+    return select
+
+
 def online_catalog() -> dict:
     repos = [repo for repo in list_repositories() if repo.get("enabled", True)]
     installed_list = [item for item in installed_catalog_v2() if not item.get("legacy")]
@@ -1181,23 +1228,7 @@ def online_catalog() -> dict:
         choices.sort(key=lambda item: (int(item.get("repository_priority", 100)), item.get("repository_id", ""), item.get("version", "")))
         source_repo = source.get("repository_id")
         pinned = [item for item in choices if item.get("repository_id") == source_repo] if source_repo else []
-        pool = pinned or choices
-        # Repository priority selects the source first. The highest semantic
-        # version is then selected only inside that source. This prevents a
-        # second repository at the same priority from silently winning by version.
-        selected = None
-        if pool:
-            winning_repo = sorted(
-                {item["repository_id"] for item in pool},
-                key=lambda rid: min(
-                    (int(item.get("repository_priority", 100)), rid)
-                    for item in pool if item["repository_id"] == rid
-                ),
-            )[0]
-            cohort = [item for item in pool if item["repository_id"] == winning_repo]
-            for candidate in cohort:
-                if selected is None or version_satisfies(candidate["version"], f">{selected['version']}"):
-                    selected = candidate
+        selected = select_release(choices, source_repo)  # 1.18.38: shared with the bulk upgrade plan
         compatibility = _candidate_compatibility(selected, installed) if selected else None
         installed_version = current.get("extension_version") if current else None
         update_available = bool(selected and installed_version and version_satisfies(selected["version"], f">{installed_version}"))

@@ -73,7 +73,23 @@ def inst(mid, version, repo="lic"):
     return {"id": mid, "extension_version": version, "source": {"repository_id": repo} if repo else {}}
 
 
+def fake_upgrade_release(caches, installed):
+    """1.18.38: what module_repository.upgrade_selector gives the plan, built from the fake cache rows (the module's own repository, else lic)."""
+    by_id = {key[0]: dict(row) for key, row in caches}
+
+    def select(module_id):
+        row = by_id.get(module_id)
+        if row is None:
+            return None
+        pinned = ((installed.get(module_id) or {}).get("source") or {}).get("repository_id")
+        row["repository_id"] = pinned or "lic"
+        return row
+    return select
+
+
 def make(selection, rows, caches, installed, **kw):
+    if kw.get("purpose") == "upgrade" and "upgrade_release" not in kw:
+        kw["upgrade_release"] = fake_upgrade_release(caches, installed)
     body = {"state": "ok", "message": "ok", "plan_state": "valid", "plan_revision": 1, "fetched_at": "x", "modules": rows}
     return plan.build_plan(selection, body, dict(caches), installed, resolver_for(installed), satisfies, lambda p: "fake " + str(p.get("type")),
                            lambda cand: None, frozenset({"example"}), lambda requires: [], **kw)
@@ -178,6 +194,9 @@ class Env:
         return {"ok": True, "state": "ok", "message": "x", "blocked": [], "order": [
             {"id": m, "name": m, "version": "2.0.0", "action": "replace", "current_version": self.current.get(m, "1.0.0"),
              "dependencies": dict(self.deps.get(m, {}))} for m in self.order]}
+
+    def upgrade_release(self, module_id):
+        return {"id": module_id, "version": "2.0.0", "repository_id": "lic"} if module_id in self.order else None
 
     def allowed(self):
         return {"state": "ok", "modules": [{"id": m, "selected": True, "release": {"version": "2.0.0", "release_id": m}} for m in self.order]}
