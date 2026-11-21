@@ -306,13 +306,13 @@ SYSTEM_FUNCTIONS = MappingProxyType({
         kind=KIND_WRITE, replacement_only=True, confirmation_line=_winupdate_confirmation_line,
     ),
     # reference/tacticalrmm v1.5.2: agents/views.py send_raw_cmd (POST agents/<agent_id>/cmd/, SendCMDPerms = can_send_cmd): AgentHistory row, then the agent call for a raw command and wait.
-    # 1.17.76: Core copies none of its steps; system_commands.py runs this view in process as the least-privilege service user (Johan, 23 October 2026). Registered by remote-background (AD-45: it owns the piece); only a verified Communicator run may call it (CQ175, strictest).
+    # 1.17.76: Core copies none of its steps; system_commands.py runs this view in process as the least-privilege service user (Johan, 23 October 2026). Registered by remote-background (AD-45: it owns the piece); only a verified Scheduler run of a module on _sc.REGISTRANTS may call it (CQ175, strictest; 1.18.36: softwarerepository, communicator on a legacy path).
     "agent.command": SystemFunction(
         key="agent.command", module_path="agents.models", function_name="Agent", owner_module="remote-background",
         min_flags=(), accepts="command", takes_username=False, reapproves_by_policy=False,
         result_text="Sent through Tactical; the output text is in the result.",
         parameters=("allowed_templates", "template_hashes", "max_timeout"), validate_parameters=_sc.parameters, audit_extra=_sc.audit_extra,
-        kind=KIND_COMMAND, confirmation_line=_sc.confirmation_line, callers=("communicator",),
+        kind=KIND_COMMAND, confirmation_line=_sc.confirmation_line, callers=_sc.REGISTRANTS,
     ),
 })
 
@@ -625,7 +625,7 @@ def is_registered_system_action(module_id, action_id) -> bool:
 
 def declaring_module(module_id, action_id) -> str:
     """The module whose signed manifest lists a scheduled system action: the module itself, except that the command row (``agent.command``) is listed by its owner
-    (``remote-background``) while a module on its ``callers`` list (``communicator``) schedules it. Static: the id is exactly ``<owner>.command`` (the row's
+    (``remote-background``) while a module on its ``callers`` list (``softwarerepository``; ``communicator`` on a legacy path) schedules it. Static: the id is exactly ``<owner>.command`` (the row's
     own id), so it never depends on what has been registered or in which order."""
     entry = SYSTEM_FUNCTIONS.get("agent.command")
     if entry is not None and module_id in entry.callers and action_id == f"{entry.owner_module}.command":
@@ -994,7 +994,7 @@ def run_system_command(context, *, action_id, command) -> dict:
 
     ``command`` is exactly ``{"agent_id": int, "command_id": str, "template_id": str, "params": dict}`` (AD-49): there is no command text. Core renders the command itself from the
     fixed template the module registered with ``register_command_template`` and the typed params.
-    Call it from the verified Scheduler handler of a module on the row's ``callers`` list (``communicator``). Every check of ``run_system_action`` runs in the
+    Call it from the verified Scheduler handler of a module on the row's ``callers`` list (``softwarerepository``; ``communicator`` on a legacy path, Core 1.18.36). Every check of ``run_system_action`` runs in the
     same order, then the template id and its hash against what the person confirmed (``template_changed`` when the module was updated), the owner's stored scope (also for an unattended run) and ``can_send_cmd``. A repeated
     ``command_id`` for the same endpoint is refused (``duplicate_command``). A refusal of this call does NOT end the run: it is one endpoint of a batch.
     Returns ``{"outcome": "ran" | "unreachable" | "failed", "agent_id", "command_id", "output", "truncated", "message"}``; the output is cut at 1 MiB. A ``failed`` reply also carries ``status`` (the HTTP status of Tactical's
@@ -1108,22 +1108,22 @@ def _run(context, identity, action_id, agent_ids, parameters, *, writing=False, 
     call = None
     if command is not None:  # 1.17.75: exactly one endpoint and one command
         try:
-            call, agent_pk = _sc.resolve(command, cleaned)
+            call, agent_pk = _sc.resolve(command, cleaned, caller=identity.module_id)  # 1.18.36: a template of another module is action_not_allowed
         except _sc.CommandRefused as exc:
             _refuse(exc.reason, detail=exc.detail, **common)
         from .scheduler import CreationScopeUnavailable, SchedulerRunContextInvalid
 
-        # 1.17.76 (Johan, 23 October 2026, AD-50): the owner is NOT required to hold Tactical's can_send_cmd. The person's Communicator rights (communicator.send, and
-        # communicator.reboot for a restart template) are checked when the schedule is made and attested in the confirmed parameters (``rights``). Any flag the registering
+        # 1.17.76 (Johan, 23 October 2026, AD-50): the owner is NOT required to hold Tactical's can_send_cmd. The person's module rights (communicator.send, and
+        # communicator.reboot for a restart template; softwarerepository.deploy) are checked when the schedule is made and attested in the confirmed parameters (``rights``). Any flag the registering
         # module listed for the row is still held to what was stored (stricter than the other kinds: checked for an unattended run too). KNOWN ISSUE: docs/system-actions.md.
         try:
-            held = all(verified.held_at_creation(flag) for flag in definition.permissions)
+            held = all(verified.held_at_creation(flag) for flag in (*definition.permissions, *_sc.required_flags(identity.module_id)))  # 1.18.36: + the caller module's own flags
         except CreationScopeUnavailable:
             _refuse("creation_scope_unavailable", **common)
         if not held:
             _refuse("permission_lost", **common)
-        # 1.17.76 (AD-50): Core cannot read a module permission, so the Communicator rights are what the person attested in the confirmed parameters (checked by
-        # _sc.resolve above: communicator.send, and communicator.reboot for a restart template). The run re-checks that the owner still exists and is active.
+        # 1.17.76 (AD-50): Core cannot read a module permission, so the module's rights are what the person attested in the confirmed parameters (checked by
+        # _sc.resolve above: the base right of the template's module, and communicator.reboot for a Communicator restart template). The run re-checks that the owner still exists and is active.
         try:
             verified._owner_now()
         except SchedulerRunContextInvalid:
@@ -1483,10 +1483,12 @@ def system_actions_contract_metadata() -> dict:
             "(1.17.75, the third kind: one command on one endpoint; 1.17.76: Core runs Tactical's send_raw_cmd view in process as its own service user, after every check of run_system_command)"
         ),
         "command": {
-            "function": "agent.command", "registered_by": "remote-background", "callers": ["communicator"],
+            "function": "agent.command", "registered_by": "remote-background", "callers": list(_sc.CALLERS), "legacy_callers": list(_sc.LEGACY_CALLERS),
+            "legacy_callers_reason": "communicator was retired on 29 October 2026 (AD-54, sixth amendment; endpoint-comms took over); the installed 0.6.17 still works and is dropped when Johan says so",
+            "rights_by_module": {m: list(r) for m, r in _sc.RIGHTS_BY_MODULE.items()}, "one_module_per_schedule": True,
             "command": "{agent_id: int, command_id: str, template_id: str, params: {typed slots}}, exactly those keys; never a command text (AD-49)",
             "registration": "register_command_template(module_id, template_id, *, shell, text=None, file=None, slots=None, timeout=30) from AppConfig.ready(); module_id on the callers list only; immutable; Core hashes it",
-            "parameters": "allowed_templates, template_hashes (from template_hashes(ids)), rights (1.17.76, AD-50: communicator.send, and communicator.reboot for a restart template registered with right=) and max_timeout, confirmed by the person; a template outside them or whose hash changed is refused", "max_output_bytes": _sc.MAX_OUTPUT_BYTES,
+            "parameters": "allowed_templates, template_hashes (from template_hashes(ids)), rights (1.17.76, AD-50: the template module's base right, communicator.send or softwarerepository.deploy, and communicator.reboot for a Communicator restart template registered with right=; 1.18.36: all allowed templates belong to ONE module, the scheduling one) and max_timeout, confirmed by the person; a template outside them, of another module than the caller, or whose hash changed is refused", "max_output_bytes": _sc.MAX_OUTPUT_BYTES,
             "idempotency": "one command_id per endpoint, claimed with an atomic cache.add of 24 hours and checked against the durable strict audit row (1.17.76); an unreachable cache or a failed lookup refuses the call",
             "refusal_reasons": ["wrong_kind", "bad_command", "bad_agents", "duplicate_command", "too_many_commands", "action_not_allowed", "template_changed", "permission_lost", "out_of_scope"],
             "audit": "strict row before the send and a closing row after: run, schedule, endpoint, command_id, template id and hash, shell, timeout and lengths; never the command or the output",

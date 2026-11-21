@@ -68,9 +68,9 @@ def spy_run_one(**kw):
     return _run_one(**kw)
 
 
-def spy_resolve(command, cleaned):
+def spy_resolve(command, cleaned, **kw):
     SEEN["resolve"] += 1
-    return _resolve(command, cleaned)
+    return _resolve(command, cleaned, **kw)
 
 
 def fake_claim(agent_id, command_id):
@@ -82,6 +82,7 @@ sc.run_one, sc.resolve, sc.claim, sc.release, sc.available = spy_run_one, spy_re
 sc.count_run = lambda run_id: 1
 sc.route_agent_id = lambda pk: "A" * 21 + str(pk)
 sc._already_recorded = lambda a, c: False
+sc._check_route, sc._resolve_view = lambda path: None, lambda path: None  # 1.18.36: the route and view guards (1.17.79, 1.17.84) need Tactical's urls, which this harness does not have
 sc._service_user = lambda: object()  # 1.17.76: run_one reads the installed service user first; the dispatch itself is faked here
 sc._send = lambda route_agent, call, username, user=None: (SEEN["sent"].append((int(route_agent[21:]), call["shell"], call["command"], call["timeout"])), "done")[1]
 

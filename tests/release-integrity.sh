@@ -47,5 +47,7 @@ python3 "${ROOT}/tests/online-install-plan-1.18.19.py"
 python3 "${ROOT}/tests/online-install-run-1.18.20.py"
 python3 "${ROOT}/tests/online-install-chain-1.18.21.py"
 python3 "${ROOT}/tests/online-upgrade-run-1.18.35.py"
+python3 "${ROOT}/tests/system-command-callers-1.18.36.py"
+python3 "${ROOT}/tests/system-command-callers-integration-1.18.36.py"
 
 echo "[TEST] PASS release integrity ${VERSION}"

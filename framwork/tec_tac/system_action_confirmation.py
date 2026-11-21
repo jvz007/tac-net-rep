@@ -291,7 +291,8 @@ def _controls(user, action, targets, parameters, *, resolver_module=None) -> dic
         may_use = False
     if not may_use:
         _deny(user, "not_permitted", action)
-    for flag in sorted(set(entry.min_flags) | set(definition.permissions)):
+    required = sa._sc.required_flags(action.module_id) if entry.callers else ()  # 1.18.36: a caller of the command row also holds its module's flags (softwarerepository: can_send_cmd; AD-60)
+    for flag in sorted(set(entry.min_flags) | set(definition.permissions) | set(required)):
         try:
             held = _has_flag(user, flag)
         except Exception:
@@ -306,6 +307,8 @@ def _controls(user, action, targets, parameters, *, resolver_module=None) -> dic
     else:
         try:
             cleaned = entry.validate_parameters(confirmed if confirmed is not None else {})
+            if entry.callers:  # 1.18.36: a command row (the only row with callers): the templates are the scheduling module's own (the module of the schedule is the caller at run time)
+                sa._sc.templates_belong_to(cleaned, action.module_id)
         except ValueError:
             _deny(user, "bad_parameters", action)
     ids, vanished = _checked_target_ids(user, action, targets, resolver_module or action.module_id)

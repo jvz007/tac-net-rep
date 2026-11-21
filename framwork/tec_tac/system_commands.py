@@ -1,4 +1,4 @@
-"""System commands: the third kind of Tactical work Core does for a verified module (core.system_actions 1.5.0, Core 1.17.75, rebuilt 1.17.76, AD-45, AD-49).
+"""System commands: the third kind of Tactical work Core does for a verified module (core.system_actions 1.5.0, Core 1.17.75, rebuilt 1.17.76, AD-45, AD-49; Core 1.18.36: two callers).
 
 The first kind starts a Tactical Celery task; the second writes one fixed column. A command has no task and no column: Tactical's own route
 ``POST agents/<agent_id>/cmd/`` (``agents/views.py send_raw_cmd``, operation ``agents_cmd_create``, string agent id) runs one command on one endpoint and answers with
@@ -14,8 +14,14 @@ installer user, cannot sign in (unusable password, ``block_dashboard_login``), a
 Tactical's own scope check for that user is open (its role has no client or site limits); the endpoint was validated against the OWNER's creation-time scope
 before, and the string agent id is resolved from that one validated number. Known issue (Johan, fix next week): docs/system-actions.md.
 
+1.18.36 (ORDER of 21 November 2026, AD-13 check: CQ175 / AD-46 and AD-60 J2, J3 cover it): the row has two callers. ``CALLERS`` is ``softwarerepository`` (fixed launcher and
+check templates, per-device grant token as a typed slot; the module's right is ``softwarerepository.deploy``). ``LEGACY_CALLERS`` is ``communicator`` (retired 29 October 2026, AD-54
+sixth amendment; endpoint-comms took over): it stays accepted so the installed Communicator keeps working, and it is dropped later by emptying that one constant, once Johan says so.
+Rights are per module (``RIGHTS_BY_MODULE``). A schedule names the templates of ONE module only, and a run refuses a template that belongs to another module than its verified
+caller, so one module can never name another module's template or attest another module's right (no confused deputy). The service user is reused for both callers.
+
 What is fixed here
-    * Templates are registered at ``AppConfig.ready()`` through ``register_command_template`` by a module on REGISTRANTS only. A template is immutable: the same
+    * Templates are registered at ``AppConfig.ready()`` through ``register_command_template`` by a module on REGISTRANTS only (CALLERS, then LEGACY_CALLERS). A template is immutable: the same
       content again is accepted, different content under the same id is refused and logged. Core hashes each template (shell, fixed text or the SHA-256 of the
       file content, slot schema, timeout) at registration.
     * A template may be a code constant (``text``) or a file shipped in the module (``file``). A file is read again at every run; a content change makes its
@@ -24,8 +30,8 @@ What is fixed here
       current hash differs from the confirmed hash is refused (``template_changed``): a module update changed it and the person must confirm again.
     * Slots are typed: a whole number in a range, short text from an allowed character set that excludes quotes and shell metacharacters, or an enum.
       A text slot is ONE token unless its spec says ``spaces: true``; a value never starts with ``-`` or ``/`` or with a space, so a slot cannot add a flag or an argument.
-    * One endpoint per call, a timeout of 1 to 60 seconds, the caller on the row's allow-list (``communicator``), its Scheduler run being the run the context
-      belongs to (checked in ``_run``).
+    * One endpoint per call, a timeout of 1 to 60 seconds, the caller on the row's allow-list (REGISTRANTS), its Scheduler run being the run the context
+      belongs to (checked in ``_run``), and the template belonging to that caller (``resolve``).
     * One ``command_id`` per endpoint, once. The claim is ``cache.add`` with a 24-hour expiry: atomic, and shared by every worker when the cache is shared
       (Tactical's Redis). A cache that cannot be reached refuses the call (fail closed). Since 1.17.76 the claim is backed by the strict audit 'before' row, which
       is durable: after the claim Core looks for an earlier row of the same endpoint and command_id, and one that exists refuses the call (``duplicate_command``) even
@@ -49,7 +55,9 @@ logger = logging.getLogger("tec_tac.system_actions")
 
 OWNER_MODULE = "remote-background"  # owns agents/{}/cmd (tactical_operations route owners; AD-18, AD-45)
 SHELLS = ("cmd", "powershell", "/bin/bash", "/bin/sh")
-REGISTRANTS = ("communicator",)  # the row's allow-list: the only module ids that may register a template (and call the row)
+CALLERS = ("softwarerepository",)  # 1.18.36: the modules that call the row (the registering owner, remote-background, is not one)
+LEGACY_CALLERS = ("communicator",)  # 1.18.36: retired 29 October 2026 (AD-54), kept so the installed 0.6.17 works; Johan lifts it, then this is ()
+REGISTRANTS = CALLERS + LEGACY_CALLERS  # the row's allow-list: the only module ids that may register a template (and call the row); the order matters for the contract text only
 MIN_TIMEOUT = 1
 MAX_TIMEOUT = 60
 MAX_COMMAND_CHARS = 8000
@@ -70,7 +78,13 @@ SERVICE_USERNAME = "tectac-communicator"
 SERVICE_ROLE = "Tec-Tac Communicator (send commands only)"
 SERVICE_FLAG = "can_send_cmd"
 RIGHT_SEND, RIGHT_REBOOT = "communicator.send", "communicator.reboot"  # 1.17.76 (AD-50): the Communicator rights the person held when the schedule was made
-RIGHTS = (RIGHT_SEND, RIGHT_REBOOT)
+RIGHT_DEPLOY = "softwarerepository.deploy"  # 1.18.36: the Software Repository right the person held when the schedule was made
+RIGHTS_BY_MODULE = {"communicator": (RIGHT_SEND, RIGHT_REBOOT), "softwarerepository": (RIGHT_DEPLOY,)}  # the rights each module may attest and register a template with
+BASE_RIGHT = {"communicator": RIGHT_SEND, "softwarerepository": RIGHT_DEPLOY}  # always required, and the default right of a template of that module
+# 1.18.36 (AD-60, fail closed): the Tactical flags the OWNER must hold per calling module, when the schedule is made and (from the stored creation-time flags) at every run.
+# communicator keeps its signed AD-50 behaviour (no can_send_cmd); softwarerepository is a new caller and does not inherit that exemption (wider option: reviews/questions/core.md).
+REQUIRED_FLAGS = {"softwarerepository": (SERVICE_FLAG,)}
+RIGHTS = (RIGHT_SEND, RIGHT_REBOOT)  # kept for compatibility: the Communicator pair
 CLAIM_LOOKUP_DAYS = 7  # the durable claim lookup reads only this window of the audit log (the cache claim itself lasts 24 hours)
 MAX_COMMANDS_PER_RUN = 2000  # defense in depth (Communicator caps a call at 2 000 endpoints); one run sends at most this many, above it the call is refused
 RUN_COUNT_SECONDS = 2 * 24 * 3600
@@ -194,13 +208,14 @@ def _check_file_inside(module_id: str, file: str) -> None:
         raise CommandTemplateError("a template file must lie inside the module's install directory and may not be, or sit behind, a symlink.")
 
 
-def register_command_template(module_id, template_id, *, shell, text=None, file=None, slots=None, timeout=30, right=RIGHT_SEND) -> dict:
+def register_command_template(module_id, template_id, *, shell, text=None, file=None, slots=None, timeout=30, right=None) -> dict:
     """Register one fixed command template. Call it from ``AppConfig.ready()`` of a module on REGISTRANTS. Memory only.
 
     ``text`` is the fixed command with ``{slot}`` placeholders; ``file`` is the absolute path of a file shipped in the module (its content is the template,
     read and hashed again at every run). Exactly one of the two. ``slots`` maps a slot name to ``{"type": "int", "min", "max"}``,
-    ``{"type": "text", "max", "chars"}`` or ``{"type": "enum", "values"}``. ``right`` (1.17.76) is the Communicator right a person needs for this template: ``communicator.send`` (default) or
-    ``communicator.reboot`` for a restart template; Core refuses a run whose confirmed ``rights`` do not hold it. ``template_id`` is ``<module_id>.<name>``. Returns ``{id, hash}``.
+    ``{"type": "text", "max", "chars"}`` or ``{"type": "enum", "values"}``. ``right`` (1.17.76) is the right a person needs for this template. ``None`` (default, 1.18.36) is the module's base right
+    (``communicator.send``, ``softwarerepository.deploy``); ``communicator.reboot`` is for a Communicator restart template. A right of another module is refused.
+    Core refuses a run whose confirmed ``rights`` do not hold it. ``template_id`` is ``<module_id>.<name>``. Returns ``{id, hash}``.
     The same content again returns the same record; different content under the same id is refused (``CommandTemplateError``) and logged."""
     try:
         from .caller_identity import calling_module_for_core_provider
@@ -218,8 +233,10 @@ def register_command_template(module_id, template_id, *, shell, text=None, file=
             raise CommandTemplateError("timeout must be 1 to 60 seconds.")
         if (text is None) == (file is None):
             raise CommandTemplateError("give exactly one of text and file.")
-        if right not in RIGHTS:
-            raise CommandTemplateError("right must be communicator.send or communicator.reboot.")
+        if right is None:
+            right = BASE_RIGHT.get(module_id, RIGHT_SEND)
+        if right not in RIGHTS_BY_MODULE.get(module_id, ()):
+            raise CommandTemplateError("right must be one of this module's own rights.")
         clean = _clean_slots(slots)
         record = {"id": template_id, "module_id": module_id, "right": right, "shell": shell, "slots": clean, "timeout": timeout, "text": None, "file": None}
         if file is not None:
@@ -272,8 +289,9 @@ def template_hashes(template_ids) -> dict:
 # ------------------------------------------------------------------------------------------------ what the person confirms
 def parameters(values) -> dict:
     """What the person confirmed: ``allowed_templates`` (1 to 16 registered ids), their ``template_hashes`` (as Core showed them) and ``max_timeout`` (1 to 60), and since 1.17.76 ``rights``: the
-    Communicator rights the person held when the schedule was made (AD-50). Core cannot read a module permission, so the module attests them in what the person confirms;
-    ``communicator.send`` is always required, ``communicator.reboot`` too for a restart template, and a run refuses ``permission_lost`` without them."""
+    rights the person held when the schedule was made (AD-50). Core cannot read a module permission, so the module attests them in what the person confirms;
+    the module's base right is always required (``communicator.send``, ``softwarerepository.deploy``), ``communicator.reboot`` too for a Communicator restart template, and a run refuses
+    ``permission_lost`` without them. Since 1.18.36 every allowed template belongs to ONE module and the rights are that module's own."""
     if not isinstance(values, dict) or not {"allowed_templates", "template_hashes", "rights"} <= set(values) <= {"allowed_templates", "template_hashes", "max_timeout", "rights"}:
         raise ValueError("a command run takes allowed_templates, template_hashes, rights and max_timeout.")
     ids = values.get("allowed_templates")
@@ -287,18 +305,43 @@ def parameters(values) -> dict:
     with _LOCK:
         if not all(i in _TEMPLATES for i in ids):
             raise ValueError("an allowed template is not registered.")
+        records = [_TEMPLATES[i] for i in ids]
+    modules = {_module_of(r) for r in records}
+    if len(modules) != 1:
+        raise ValueError("allowed_templates must all belong to one module.")
+    module = next(iter(modules))
+    own = RIGHTS_BY_MODULE.get(module)
+    if own is None:
+        raise ValueError("allowed_templates must belong to a module that may send commands.")
     limit = values.get("max_timeout", MAX_TIMEOUT)
     if isinstance(limit, bool) or not isinstance(limit, int) or not MIN_TIMEOUT <= limit <= MAX_TIMEOUT:
         raise ValueError("max_timeout must be a whole number of seconds from 1 to 60.")
     rights = values.get("rights")
-    if isinstance(rights, (str, bytes, dict)) or not isinstance(rights, (list, tuple)) or not rights or not all(r in RIGHTS for r in rights) or len(set(rights)) != len(rights) \
-            or RIGHT_SEND not in rights:
-        raise ValueError("rights must list the Communicator rights the person holds: communicator.send, and communicator.reboot for a restart template.")
-    with _LOCK:
-        needed = {_TEMPLATES[i].get("right", RIGHT_SEND) for i in ids}
+    if isinstance(rights, (str, bytes, dict)) or not isinstance(rights, (list, tuple)) or not rights or not all(r in own for r in rights) or len(set(rights)) != len(rights) \
+            or BASE_RIGHT[module] not in rights:
+        raise ValueError("rights must list the rights the person holds for this module: its base right, and communicator.reboot for a Communicator restart template.")
+    needed = {r.get("right", BASE_RIGHT[module]) for r in records}
     if not needed <= set(rights):
         raise ValueError("rights must cover every allowed template.")
     return {"allowed_templates": sorted(ids), "template_hashes": {i: hashes[i] for i in sorted(ids)}, "max_timeout": limit, "rights": sorted(rights)}
+
+
+def _module_of(template) -> str:
+    """The module a registered template belongs to: its record's ``module_id``, else the prefix of its id (``<module_id>.<name>``)."""
+    module = template.get("module_id") if isinstance(template, dict) else None
+    if isinstance(module, str) and module:
+        return module
+    tid = template.get("id") if isinstance(template, dict) else template
+    return tid.split(".", 1)[0] if isinstance(tid, str) else ""
+
+
+def templates_belong_to(cleaned, module_id) -> None:
+    """1.18.36: ``ValueError`` unless every allowed template of the confirmed parameters belongs to ``module_id``: the module that schedules (and later runs) it."""
+    for tid in cleaned.get("allowed_templates", ()):
+        with _LOCK:
+            record = _TEMPLATES.get(tid) if isinstance(tid, str) else None
+        if record is None or _module_of(record) != module_id:
+            raise ValueError("an allowed template does not belong to the scheduling module.")
 
 
 def audit_extra(cleaned) -> dict:
@@ -327,8 +370,9 @@ def _slot_value(spec: dict, value) -> str:
     return value
 
 
-def resolve(command, cleaned) -> tuple[dict, int]:
-    """``(clean call, endpoint number)`` or ``CommandRefused``. Strict: exactly the four keys, no command text, nothing repaired. Core renders the command."""
+def resolve(command, cleaned, caller=None) -> tuple[dict, int]:
+    """``(clean call, endpoint number)`` or ``CommandRefused``. Strict: exactly the four keys, no command text, nothing repaired. Core renders the command.
+    ``caller`` (1.18.36) is the verified calling module: a template that belongs to another module is refused ``action_not_allowed``."""
     if not isinstance(command, dict) or set(command) != {"agent_id", "command_id", "template_id", "params"}:
         raise CommandRefused("bad_command")
     agent_id, command_id, template_id, params = (command[k] for k in ("agent_id", "command_id", "template_id", "params"))
@@ -342,6 +386,9 @@ def resolve(command, cleaned) -> tuple[dict, int]:
         record = _TEMPLATES.get(template_id)
     if record is None:
         raise CommandRefused("bad_command")
+    owner = _module_of(record)
+    if caller is not None and owner != caller:  # a module runs its own templates only; it cannot name another module's or attest its rights
+        raise CommandRefused("action_not_allowed")
     try:
         text, current = _load(record)
     except Exception:
@@ -350,7 +397,7 @@ def resolve(command, cleaned) -> tuple[dict, int]:
     if current != record["hash"] or current != cleaned["template_hashes"].get(template_id):
         logger.warning("Command template %r no longer matches what was registered or confirmed; the call is refused.", template_id)
         raise CommandRefused("template_changed")
-    if record.get("right", RIGHT_SEND) not in cleaned.get("rights", ()):  # the Communicator right the person attested when the schedule was made (AD-50)
+    if record.get("right", BASE_RIGHT.get(owner, RIGHT_SEND)) not in cleaned.get("rights", ()):  # the right the person attested when the schedule was made (AD-50)
         raise CommandRefused("permission_lost")
     slots = record["slots"]
     if set(params) != set(slots):
@@ -489,7 +536,7 @@ def _service_user():
     role = Role.objects.filter(name=SERVICE_ROLE).first()
     user = User.objects.filter(username=SERVICE_USERNAME).first()
     if role is None or user is None:
-        raise CommandRefused("function_unavailable", "The Communicator service user is not installed. Run Core's upgrade (database migration) again; nothing was sent.")
+        raise CommandRefused("function_unavailable", "The command service user (tectac-communicator) is not installed. Run Core's upgrade (database migration) again; nothing was sent.")
     for field in Role._meta.get_fields():
         if getattr(field, "get_internal_type", lambda: "")() == "BooleanField" and bool(getattr(role, field.name, False)) != (field.name == SERVICE_FLAG):
             raise CommandRefused("function_unavailable", "The service role holds more or less than can_send_cmd.")
@@ -589,8 +636,19 @@ def _send(route_agent: str, call: dict, username: str, user=None):
     raise SendFailed(status, " ".join(detail.split())[:160] if isinstance(detail, str) else "")
 
 
+def required_flags(module_id) -> tuple:
+    """The Tactical flags the owner must hold for a call of this module (``REQUIRED_FLAGS``); empty for communicator (AD-50)."""
+    return tuple(REQUIRED_FLAGS.get(str(module_id), ()))
+
+
+def _caller_of(call) -> str:
+    """The calling module of a clean call: the module of its template (``resolve`` guarantees it equals the verified caller)."""
+    return str(call["template_id"]).split(".", 1)[0]
+
+
 def _meta(definition, run, schedule_id, provenance, extra, agent_pk, call, number=0) -> dict:
-    return {"run_send_number": number, "run_as": "communicator", "service_user": SERVICE_USERNAME, "owner_username": str(provenance.get("creator") or "")[:150],
+    caller = _caller_of(call)
+    return {"run_send_number": number, "run_as": caller, "caller_module": caller, "service_user": SERVICE_USERNAME, "owner_username": str(provenance.get("creator") or "")[:150],
         "requested_by": "scheduler", "run_id": str(run.id), "schedule_id": str(schedule_id), "owner_module": definition.module_id, "action_id": definition.id,
         "function": definition.function, "kind": "command", "agent_id": agent_pk, "command_id": call["command_id"], "template_id": call["template_id"],
         "template_hash": call["template_hash"], "shell": call["shell"],
@@ -623,7 +681,7 @@ def run_one(*, definition, run, verified, owner, provenance, extra, agent_pk, ca
     try:
         _sa._audit().record(
             actor=actor, module_id="core", action="run", object_type="system_action", object_id=definition.id,
-            message=f"Run as the communicator module for {username[:100] or 'unknown'}: a scheduled command is being sent to one endpoint through Tactical.", metadata=_meta(definition, run, verified.schedule_id, provenance, extra, agent_pk, call, number),
+            message=f"Run as the {_caller_of(call)} module for {username[:100] or 'unknown'}: a scheduled command is being sent to one endpoint through Tactical.", metadata=_meta(definition, run, verified.schedule_id, provenance, extra, agent_pk, call, number),
             strict=True,
         )
     except Exception:
