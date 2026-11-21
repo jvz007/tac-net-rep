@@ -223,9 +223,9 @@ must(old.audit_object_field is None and old.audit_object_body_field is None, old
 must(declare(id="old", route_="agents/old/") == old, "the old declaration registers again unchanged")
 row = ops.get_operation("agents", "old")
 must(row["audit"] == {"action": "add", "object_type": "agent_thing", "audit_fields": ["kind"], "object_param": None, "before": None, "params": [],
-                      "object_field": None, "object_body_field": None, "lists": [], "list_masks": {}, "secret_fields": [], "object_id": None, "action_by_body": None}, row["audit"])  # 1.17.45: audit.action_by_body; 1.17.28: audit.lists; 1.17.44: audit.secret_fields and audit.object_id
+                      "object_field": None, "object_body_field": None, "lists": [], "list_masks": {}, "secret_fields": [], "object_id": None, "action_by_body": None, "transfer": None}, row["audit"])  # 1.18.33: audit.transfer; 1.17.45: audit.action_by_body; 1.17.28: audit.lists; 1.17.44: audit.secret_fields and audit.object_id
 must(set(row) == {"id", "module_id", "method", "route", "params", "permissions", "scope", "body_fields", "audit", "caller_scope", "server_only",
-                  "body_selector", "module_permission", "query_params", "upload", "permissions_any", "body_max_bytes", "file_response", "path_query_params"}, set(row))  # 1.17.26 added permissions_any and body_max_bytes, 1.17.41 file_response, 1.18.30 path_query_params
+                  "body_selector", "module_permission", "query_params", "upload", "permissions_any", "body_max_bytes", "file_response", "path_query_params", "binary_body", "binary_response"}, set(row))  # 1.18.33 binary_body and binary_response, 1.17.26 added permissions_any and body_max_bytes, 1.17.41 file_response, 1.18.30 path_query_params
 route("/agents/old/", FakeResponse(200, b'{"id": 5}'))
 call("old", body=BODY)
 must(oid(ROWS[0]) is None and "object_source" not in meta(ROWS[0]), "an operation with neither key writes the row it always wrote")
@@ -238,7 +238,7 @@ json.dumps(ops.list_operations())
 
 # ---- capability, docs and contract text
 meta_cap = ops.tactical_operations_contract_metadata()
-must(meta_cap["version"] == "1.17.0" and meta_cap["declaration_keys_added_in_1_7_0"] == ["audit.object_field", "audit.object_body_field"], meta_cap)
+must(meta_cap["version"] == "1.18.0" and meta_cap["declaration_keys_added_in_1_7_0"] == ["audit.object_field", "audit.object_body_field"], meta_cap)
 docs = (ROOT / "docs/tactical-operations.md").read_text(encoding="utf-8")
 for needle in ("audit.object_field", "audit.object_body_field", "object_source", "CQ66 b", "`audit.object_param` and no scope object", "original request asked for one key"):
     must(needle in docs, needle)

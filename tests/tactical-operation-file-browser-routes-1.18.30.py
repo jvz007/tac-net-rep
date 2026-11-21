@@ -215,14 +215,14 @@ must(ops.list_operations()[0]["path_query_params"] == ["path"], ops.list_operati
 register(id="plain", route="agents/{agent_id:agent}/file-browser-defaults/", query_params=["path"])
 must(ops.get_operation("remote-background", "plain")["path_query_params"] == [], "an operation without the key shows an empty list")
 meta = ops.tactical_operations_contract_metadata()
-must(ops.CAPABILITY_VERSION == "1.17.0" and meta["version"] == "1.17.0" and meta["version"].split(".")[0] == "1", meta["version"])
+must(ops.CAPABILITY_VERSION == "1.18.0" and meta["version"] == "1.18.0" and meta["version"].split(".")[0] == "1", meta["version"])
 must(meta["limits"]["path_query_value_chars"] == 4096 and meta["limits"]["query_value_chars"] == 512 and meta["limits"]["path_query_names"] == 4, meta["limits"])
 must(any("path_query_params" in item for item in meta["declaration_keys_added_in_1_17_0"]) and any("uuid" in item for item in meta["declaration_keys_added_in_1_17_0"]),
      meta["declaration_keys_added_in_1_17_0"])
 text = " ".join(meta["behaviour_added_in_1_17_0"])
 must("files/" in text and "file-browser-defaults/" in text and "4096" in text and "uuid" in text, text)
 must("path_query_params=None" in meta["declaration"], "the declaration line shows the keyword")
-print("       describe, list_operations, get_operation and the metadata show the new key, kind and limit; capability 1.17.0")
+print("       describe, list_operations, get_operation and the metadata show the new key, kind and limit; capability 1.18.0")
 
 # a 4096-character declared audit field is written to the success row without error
 fresh()
@@ -235,7 +235,7 @@ print("       a 4096-character audit field reaches the success row")
 # ---- docs and contract rows
 root = Path(__file__).resolve().parents[1]
 docs = (root / "docs" / "tactical-operations.md").read_text(encoding="utf-8")
-for needle in ("{name:uuid}", "path_query_params", "file-browser-defaults", "1.18.30", "`core.tactical_operations` 1.17.0"):
+for needle in ("{name:uuid}", "path_query_params", "file-browser-defaults", "1.18.30", "`core.tactical_operations` 1.18.0"):
     must(needle in docs, f"docs/tactical-operations.md lacks {needle!r}")
 contract = (root / "framwork" / "tec_tac" / "contracts.py").read_text(encoding="utf-8")
 for needle in ("Added in 1.18.30", "path_query_params", "{name:uuid}", "file-browser-defaults", "framework >=1.18.30"):
@@ -259,11 +259,11 @@ if MODULES.is_dir() and (MODULES / "catalog.toml").is_file():
             for node in ast.walk(tree):
                 if isinstance(node, ast.Constant) and isinstance(node.value, str) and "/" in node.value and node.value.split("/")[0] in GROUPS:
                     found.append((folder.name, node.value))
-                # nothing in modules/ may use the new keyword or kind yet: the only user is remote-background, in a later release
+                # 1.18.33: the new keyword and kind have one intended user, remote-background (it declares them now); any other module using them is a surprise
                 if isinstance(node, ast.keyword) and node.arg == "path_query_params":
-                    raise AssertionError(f"{folder.name} already uses path_query_params: re-check the compatibility of this release")
+                    must(folder.name == "remote-background", f"{folder.name} uses path_query_params: re-check the compatibility of this release")
                 if isinstance(node, ast.Constant) and isinstance(node.value, str) and ":uuid}" in node.value and "/" in node.value:
-                    raise AssertionError(f"{folder.name} already declares a uuid route {node.value!r}")
+                    must(folder.name == "remote-background", f"{folder.name} declares a uuid route {node.value!r}")
     found = sorted(set(found))
     must(found, "the scan found no declared routes: the extraction is broken")
     rules = dict(ops.ROUTE_OWNERS)
@@ -290,6 +290,8 @@ if MODULES.is_dir() and (MODULES / "catalog.toml").is_file():
             ops.ROUTE_OWNERS.clear(); ops.ROUTE_OWNERS.update(rules)
         if with_new == "unparsed":
             continue
+        if module_id == "remote-background" and with_new == "ok" and with_old != "ok" and ("/files" in route or "/file-browser-defaults" in route):
+            continue  # 1.18.33: remote-background declares its file routes now, which is what the two owner rules are for
         checked += 1
         must(with_new == with_old, f"{module_id} {route}: judged differently now. before: {with_old}; now: {with_new}")
         third = route.split("/")

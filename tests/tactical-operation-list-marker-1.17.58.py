@@ -257,7 +257,7 @@ print("       a marker secret and the digests never reach a row, a log line or t
 
 # (10) the contract names it
 meta = ops.tactical_operations_contract_metadata()
-must(ops.CAPABILITY_VERSION == "1.17.0" and meta["version"] == "1.17.0" and meta["version"].split(".")[0] == "1", meta["version"])
+must(ops.CAPABILITY_VERSION == "1.18.0" and meta["version"] == "1.18.0" and meta["version"].split(".")[0] == "1", meta["version"])
 must(meta["declaration_keys_added_in_1_16_0"] == [] and any("_changed" in text for text in meta["behaviour_added_in_1_16_0"]), meta.get("behaviour_added_in_1_16_0"))
 docs = (Path(__file__).resolve().parents[1] / "framwork" / "tec_tac" / "tactical_operations.py").read_text(encoding="utf-8")
 must("<list>_changed" in docs and "1.17.58" in docs, "module docstring")

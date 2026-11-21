@@ -2,7 +2,7 @@
 
 **Status:** Public Core developer contract, added in Core 1.17.7
 **Python:** `tec_tac.tactical_operations`
-**Capability:** `core.tactical_operations` 1.17.0 (1.16.0 before Core 1.18.30, 1.15.0 before Core 1.17.58, 1.14.0 before Core 1.17.52, 1.13.0 before Core 1.17.45, 1.12.0 before Core 1.17.44, 1.11.0 before Core 1.17.43, 1.10.0 before Core 1.17.41, 1.9.0 before Core 1.17.28, 1.8.0 before Core 1.17.26; major 1, additive since 1.0.0), owner `core`
+**Capability:** `core.tactical_operations` 1.18.0 (1.17.0 before Core 1.18.33, 1.16.0 before Core 1.18.30, 1.15.0 before Core 1.17.58, 1.14.0 before Core 1.17.52, 1.13.0 before Core 1.17.45, 1.12.0 before Core 1.17.44, 1.11.0 before Core 1.17.43, 1.10.0 before Core 1.17.41, 1.9.0 before Core 1.17.28, 1.8.0 before Core 1.17.26; major 1, additive since 1.0.0), owner `core`
 **HTTP:** `POST /api/tfd/tactical-operations/<module_id>/<operation_id>/`
 
 ## Why this exists
@@ -988,3 +988,31 @@ register_tactical_operation(
 A route such as `agents/{agent_id:agent}/files/{session_id:uuid}/chunks/` is judged against the files rule only. Register the file operations only when Tactical's Role has the flag (`can_use_file_browser`, Tactical 1.6.1): Core refuses an unknown flag.
 
 Tests: `tests/tactical-operation-file-browser-routes-1.18.30.py`.
+
+### File transfers: a binary chunk, a binary answer and one audit row per transfer (1.18.33)
+
+Capability `core.tactical_operations` 1.18.0 (still major 1, additive and opt-in; needs framework 1.18.33 or later, feature-detect with `core.tactical_operations` >= 1.18.0). A declaration made the 1.18.32 way registers and runs unchanged. Remote Background asked for this so it can move files through Tactical 1.6.1's file browser. Tactical 1.5.2 is not affected: nothing here calls a new Tactical route.
+
+**`binary_body=True`.** A PUT or POST operation whose whole body is one binary chunk with a `Content-Range` header. It is refused together with `upload`, `body_fields`, `file_response` and `body_selector`. `query_params` stay allowed.
+
+- A module's own route reads the chunk with `read_binary_body(request, module_id, operation_id)` and passes it on: `run_tactical_operation(request, module_id, operation_id, params, binary_body=chunk)`. `chunk` is `{content: bytes, content_range: str}`.
+- `read_binary_body` checks `Content-Length` before it reads a byte. A missing or invalid value is 411 `length_required`. A value over `MAX_BINARY_BODY_BYTES` (4 MiB and 64 KiB headroom, a Core constant; `limits.binary_body_bytes`) is 413 `body_too_large` and names the cap. It then reads at most that length plus one byte from the stream with `read()`. It never reads `request.body`, so Django's `DATA_UPLOAD_MAX_MEMORY_SIZE` (2.5 MiB by default on a Tactical 1.5.2 server) cannot refuse a 4 MiB chunk. A different byte count is 400 `content_length_mismatch`. Call it before anything touches `request.data` or `request.body`.
+- Core checks the range itself, after the permission, role, scope and module-permission checks: exactly `bytes <start>-<end>/<total>` in digits, `start <= end < total`, and `end - start + 1` equal to the size of the chunk. Anything else is 400 `invalid_content_range`.
+- A binary operation called without `binary_body` is 400 `binary_body_required`. `binary_body` given to an operation that does not declare it is 400 `binary_body_not_allowed`. Over Core's HTTP route a binary operation is always `binary_body_required`: the chunk is for a module's own backend only.
+- Tactical's view receives the exact bytes with `Content-Type: application/octet-stream`, `Content-Length` and `HTTP_CONTENT_RANGE` set from the validated range. A `Content-Range` that arrived on the inbound request never reaches any operation.
+- These refusals write no Core row (the call never reached Tactical, and a loop of bad chunks must not flood the audit log). The bytes never reach a log, a row or an error text.
+
+**`binary_response=True`.** A GET or POST operation (not with `file_response`). Core relays `Content-Range`, `X-Chunk-Start` and `X-Chunk-End` next to `Content-Type` and `Content-Disposition`. Each of the three is relayed only when it is digits (`bytes n-n/n`; the other two at most 19 digits). A header that fails the check is dropped. The body stays raw bytes in `result.content`, held to `limits.response_bytes`. Every other operation relays exactly the two headers it relayed before. A `binary_response` GET also works over Core's HTTP route.
+
+**`audit.transfer = {role, direction}` (AD-69).** `role` is `init`, `chunk`, `ack`, `status`, `complete`, `cancel` or `fail`. `direction` is `upload`, `download`, `archive` or `extract`.
+
+- Registration refuses: an unknown role or direction, a role other than `init` on a route with no `{session_id:uuid}` parameter, `init` on a route that has one, a GET `init`, `complete`, `cancel` or `fail`, `audit.action_by_body` next to `audit.transfer`, and `binary_body` on any role but `chunk`.
+- **Start row.** A 2xx `init` writes one row with `transfer_stage: start`, `transfer_role`, `transfer_direction`, `transfer_session` (the `session_id` of Tactical's answer when it is a canonical lowercase uuid, else null), `transfer_size` (a whole number from the answer's or the body's `total_size`, else left out) and the declared `audit_fields` in the after value. An `init` whose body carries a `session_id` (Tactical's resume of an open session) writes no row: the session's start row exists.
+- **End row.** A 2xx `complete`, `cancel` or `fail` writes one row with `transfer_stage: end`, `transfer_outcome` (`completed`; for `cancel` and `fail` the answer's `status` when it is `cancelled`, `failed` or `expired`, else `cancelled` or `failed` by role), `transfer_bytes` (the answer's `committed_offset`, a whole number, else left out), `transfer_reason` (`user` or `error`, only when the body's `reason` is exactly that) and `transfer_session`. A module that splits Tactical's cancel route with `body_selector` (reason `error` is `fail`, anything else `cancel`) records a failure as an end row.
+- **Once per session.** Before an end row Core does `cache.add("tectac:transfer-end:<session id>", 1, 7200)` on Django's cache (Tactical's shared Redis). A repeated `complete` or `cancel` for the same session is relayed and writes no second end row. A cache error fails open (the row is written). The key is deleted when the row write itself fails, so a retry can write it.
+- **Link.** Every row of a call that carries the session id in its path has the correlation id `transfer:<session id>` (45 characters), and so has the start row once Tactical answers. A `correlation_id` passed by the caller to a transfer operation is replaced by it.
+- **Chunk, ack and status** write no row on a 2xx or 204. When Core or Tactical refuses one, the usual `deny`, `custom:operation-failed` (non-GET) or `custom:outcome-unknown` row is written and carries `transfer_role`, `transfer_direction` and `transfer_session`.
+- **408 and 204.** For an operation that declares a transfer role, Tactical's 408 (`notify_retryable`: repeat the same request) is relayed unchanged and writes no row, and `result.audit` is empty. Tactical's 204 on a chunk read (not ready yet) is relayed and writes no row. An operation without a transfer role is audited exactly as before: a 408 on a change still writes `custom:operation-failed`, and a 204 on a DELETE still writes its success row.
+- File content and Tactical's own text never reach a row. An `extract` that finishes on its own has no end row: Tactical 1.6.1 has no `complete` call for it.
+
+Tests: `tests/tactical-operation-file-transfer-1.18.33.py`.
