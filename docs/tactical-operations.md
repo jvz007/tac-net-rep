@@ -2,7 +2,7 @@
 
 **Status:** Public Core developer contract, added in Core 1.17.7
 **Python:** `tec_tac.tactical_operations`
-**Capability:** `core.tactical_operations` 1.16.0 (1.15.0 before Core 1.17.58, 1.14.0 before Core 1.17.52, 1.13.0 before Core 1.17.45, 1.12.0 before Core 1.17.44, 1.11.0 before Core 1.17.43, 1.10.0 before Core 1.17.41, 1.9.0 before Core 1.17.28, 1.8.0 before Core 1.17.26; major 1, additive since 1.0.0), owner `core`
+**Capability:** `core.tactical_operations` 1.17.0 (1.16.0 before Core 1.18.30, 1.15.0 before Core 1.17.58, 1.14.0 before Core 1.17.52, 1.13.0 before Core 1.17.45, 1.12.0 before Core 1.17.44, 1.11.0 before Core 1.17.43, 1.10.0 before Core 1.17.41, 1.9.0 before Core 1.17.28, 1.8.0 before Core 1.17.26; major 1, additive since 1.0.0), owner `core`
 **HTTP:** `POST /api/tfd/tactical-operations/<module_id>/<operation_id>/`
 
 ## Why this exists
@@ -46,7 +46,7 @@ register_tactical_operation(
 | `id` | Lowercase slug, for example `reboot` or `wake-on-lan`. Unique within the module. |
 | `module_id` | The owning core module: its manifest says `category: core` and it owns the route in Core's route owner table (see "Who may declare where" below). Core refuses `core`, an unknown, legacy or disabled module, a module that is not a core module, and a core module on a route it does not own. The one named exception is Licensing, which owns `core/codesign/` (AD-16). |
 | `method` | `GET`, `POST`, `PUT`, `PATCH` or `DELETE`. |
-| `route` | Tactical's route as a template, no leading slash. `{name}` is a text parameter (letters, digits, `_`, `.`, `-`). `{name:int}` is a whole number. `{name:agent}` is an agent id (21 characters or more, as Tactical's `agent` converter needs). `{name:service}` is a Windows service name (since 1.17.41, see "Added in 1.17.41"). A route may not start with a parameter. |
+| `route` | Tactical's route as a template, no leading slash. `{name}` is a text parameter (letters, digits, `_`, `.`, `-`). `{name:int}` is a whole number. `{name:agent}` is an agent id (21 characters or more, as Tactical's `agent` converter needs). `{name:service}` is a Windows service name (since 1.17.41, see "Added in 1.17.41"). `{name:uuid}` is a lowercase canonical uuid (since 1.18.30). A route may not start with a parameter. |
 | `permissions` | Tactical Role flags, for example `can_reboot_agents`. Each must be a boolean `can_*` field on Tactical's Role. The caller needs all of them. At least one is required. |
 | `scope` | A list of `{type, source}`. `type` is `agent`, `client` or `site`. `source` is `path:<name>` or `body:<field>`. A list in a body field is checked id by id. May be empty for an operation with no object. |
 | `body_fields` | The whitelist of JSON body keys. Any other key is refused with 400. A `GET` takes none. |
@@ -72,7 +72,7 @@ Since 1.17.8 ownership is per route, not per Tactical group. Core holds an order
 | `agents/{}/{}/webvnc/` | `take-control` (AD-18) |
 | `agents/{}/runscript/` | `scriptexecution` |
 | `agents/{}/meshcentral/` (and `recover/`) | `take-control` |
-| `agents/{}/processes/`, `registry/`, `eventlog/`, `terminal-defaults/` | `remote-background` |
+| `agents/{}/processes/`, `registry/`, `eventlog/`, `terminal-defaults/`, `files/`, `file-browser-defaults/` | `remote-background` (`files/` and `file-browser-defaults/` since 1.18.30) |
 | `agents/update/`, `agents/versions/`, `agents/bulkrecovery/`, `agents/{}/recover/` | `agent-management` |
 | `agents/{}/tasks/` | `tasks` (1.17.18) |
 | `agents/{}/checks/` | `checks` (1.17.18) |
@@ -251,7 +251,7 @@ field. `type_map` maps each allowed value to `client` or `site`, with at most 8 
 `query_params` is a whitelist of up to 16 names. Until 1.17.41 only a `GET` operation could declare it. Any method may since then (Tactical's registry delete reads `request.query_params` on a `DELETE`). It is the new last argument of `register_tactical_operation`. A
 name may not look like a secret, because a query string is logged. The caller sends `query` (a flat object):
 
-- Each value is a string or a whole number of at most 512 characters.
+- Each value is a string or a whole number of at most 512 characters (4096 for a name the operation lists in `path_query_params`, since 1.18.30).
 - No control characters, and no `..` path segment (also after one level of percent-decoding).
 - A name outside the whitelist gives 400 `query_field_not_allowed`. A bad value gives 400 `invalid_query`.
 
@@ -732,7 +732,7 @@ Tactical answers some routes with a `FileResponse`: a report PDF, a report asset
 ### A query string on any method
 
 `query_params` may now be declared on a `DELETE`, `POST`, `PUT` or `PATCH` operation. The protections are the same: a whitelist of names, flat
-values of at most 512 characters, no control characters, no `..` path segment, and a name that looks like a secret is refused at registration.
+values of at most 512 characters (4096 for a `path_query_params` name, since 1.18.30), no control characters, no `..` path segment, and a name that looks like a secret is refused at registration.
 `audit_fields` may name a query parameter. A `GET` declaration behaves as before.
 
 ### A route parameter kind for a Windows service name: `{name:service}`
@@ -965,3 +965,26 @@ It is a bool and never a value.
 success, failed, Tactical-denied and outcome-unknown rows. The scope's own refusal rows keep the full count (see "A count of the ids a list scope names").
 
 Tests: `tests/tactical-operation-list-marker-1.17.58.py`, `tests/tactical-operation-object-count-1.17.58.py`.
+
+### File browser routes, a uuid kind and long path values (1.18.30)
+
+Capability `core.tactical_operations` 1.17.0 (still major 1, additive; needs framework 1.18.30 or later). A declaration that uses none of it behaves as before.
+
+- **Two route owners.** `agents/{}/files/` and `agents/{}/file-browser-defaults/` belong to `remote-background` (and an honoured AD-20 replacement). Agents, Agent Management, Take Control, Endpoints, Script Execution and every premium or server module are refused with the usual owner message. Core never declares anything itself: nothing exists until `remote-background` declares it.
+- **`{name:uuid}`.** A lowercase canonical uuid (`8-4-4-4-12` hex with hyphens), as Django's `<uuid:...>` converter in Tactical matches. Uppercase, a missing hyphen, 35 or 37 characters, a slash, `..` and an empty value are refused 400 `invalid_params`. It is built into the path unquoted. A uuid is never a scope source for an agent, client, site or `agent_pk` (refused at registration). `audit.params` and `audit.object_param` may name it.
+- **`path_query_params`.** A list of at most 4 query names, each also in `query_params`, no repeat, no secret-looking name. Those values may hold up to 4096 characters (`limits.path_query_value_chars`). Every other query value stays at 512. The other rules stay for both: a string or whole number, not blank, no control characters, no `..` segment (also percent-decoded). `list_operations` and `get_operation` show the list. There is no audit change: a declared audit field copied from such a query is stored by the existing row rules.
+
+How `remote-background` declares a file listing:
+
+```python
+register_tactical_operation(
+    "file-list", "remote-background", "GET", "agents/{agent_id:agent}/files/",
+    ["can_use_file_browser"], [{"type": "agent", "source": "path:agent_id"}], [],
+    {"action": "custom:file-list", "object_type": "agent", "audit_fields": []},
+    query_params=["path"], path_query_params=["path"],
+)
+```
+
+A route such as `agents/{agent_id:agent}/files/{session_id:uuid}/chunks/` is judged against the files rule only. Register the file operations only when Tactical's Role has the flag (`can_use_file_browser`, Tactical 1.6.1): Core refuses an unknown flag.
+
+Tests: `tests/tactical-operation-file-browser-routes-1.18.30.py`.

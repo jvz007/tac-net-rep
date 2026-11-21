@@ -173,7 +173,7 @@ from .lazy_patterns import lazy_pattern
 logger = logging.getLogger("tec_tac.tactical_operations")
 
 CAPABILITY_ID = "core.tactical_operations"
-CAPABILITY_VERSION = "1.16.0"  # 1.17.58: <list>_changed marker next to audit_list_masks; 1.17.52: audit_list_masks (names and *** for a list's keys) and scope names_object; 1.17.45: audit.action_by_body, a nested body scope source (body:<field>.<key>), object_id on early core_refused rows; 1.17.44: audit.object_id (a declared literal object id); 1.17.43: audit.secret_fields and metadata.object_count
+CAPABILITY_VERSION = "1.17.0"  # 1.18.30: route kind uuid, path_query_params (4096-character path values), route owners agents/{}/files and file-browser-defaults; 1.17.58: <list>_changed marker next to audit_list_masks; 1.17.52: audit_list_masks (names and *** for a list's keys) and scope names_object; 1.17.45: audit.action_by_body, a nested body scope source (body:<field>.<key>), object_id on early core_refused rows; 1.17.44: audit.object_id (a declared literal object id); 1.17.43: audit.secret_fields and metadata.object_count
 AUDIT_HEADER = "X-Tec-Tac-Audit"
 AUDIT_RECORDED = "recorded"
 AUDIT_NOT_RECORDED = "not-recorded"
@@ -188,6 +188,8 @@ MAX_QUERY_PARAMS = 16
 # after the cleaned file name.
 FILE_NAME_FIELD = "{file_name}"
 MAX_QUERY_VALUE = 512
+MAX_PATH_QUERY_VALUE = 4096  # 1.18.30: only for the (at most MAX_PATH_QUERY_NAMES) query names an operation declares in path_query_params
+MAX_PATH_QUERY_NAMES = 4
 RELAYED_HEADERS = ("Content-Type", "Content-Disposition")
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 BODY_METHODS = ("POST", "PUT", "PATCH", "DELETE")
@@ -202,7 +204,7 @@ FORBIDDEN_FIRST_TWO = (("api", "tfd"), ("api", "v3"), ("api", "v4"), ("agents", 
 
 _ID_RE = lazy_pattern(r"^[a-z][a-z0-9_-]{0,63}$")
 _LITERAL_RE = lazy_pattern(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}$")
-_PARAM_RE = lazy_pattern(r"^\{([a-z][a-z0-9_]{0,31})(?::(str|int|agent|service))?\}$")
+_PARAM_RE = lazy_pattern(r"^\{([a-z][a-z0-9_]{0,31})(?::(str|int|agent|service|uuid))?\}$")
 _FIELD_RE = lazy_pattern(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 _OBJECT_ID_RE = lazy_pattern(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")  # 1.17.44: audit.object_id, a fixed text such as tactical-server
 _CORRELATION_RE = lazy_pattern(r"^[A-Za-z0-9._:-]{1,128}$")
@@ -219,6 +221,9 @@ _PARAM_VALUE_RE = {
     # 1.17.41: a Windows service name (services/{agent_id:agent}/{svcname:service}/). It may hold a space and $ # ( ) , which the
     # str kind refuses, but never a slash or a leading dot or space. The value is checked for '..' as every kind is.
     "service": lazy_pattern(r"^[A-Za-z0-9_][A-Za-z0-9 $#().,_-]{0,255}$"),
+    # 1.18.30: a uuid (agents/{agent_id:agent}/files/{session_id:uuid}/chunks/). Lowercase canonical 8-4-4-4-12 only, which is what
+    # Django's <uuid:...> converter in Tactical matches. Never a scope source (a session id is not an agent, client or site id).
+    "uuid": lazy_pattern(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"),
 }
 _MAX_SEGMENTS = 12
 _MAX_ROUTE_LENGTH = 200
@@ -350,6 +355,7 @@ class TacticalOperation:
     audit_object_param: str | None = None
     before: BeforeSpec | None = None
     query_params: tuple = ()
+    path_query_params: tuple = ()  # 1.18.30: query names (a subset of query_params) whose value may hold up to MAX_PATH_QUERY_VALUE characters
     upload: UploadSpec | None = None
     caller_scope: str | None = None  # 1.17.18: "unrestricted" or None
     body_selector: tuple = ()  # 1.17.18: ((field, "present"|"equals", value), ...), all must hold
@@ -428,6 +434,7 @@ class TacticalOperation:
             ],
             "module_permission": self.module_permission,
             "query_params": list(self.query_params),
+            "path_query_params": list(self.path_query_params),
             "file_response": self.file_response,
             "upload": (
                 {"field": self.upload.field, "max_bytes": self.upload.max_bytes, "extensions": list(self.upload.extensions)}
@@ -487,7 +494,7 @@ def _parse_route(route: Any) -> tuple[tuple, bool]:
         if part.startswith("{") or part.endswith("}"):
             match = _PARAM_RE.match(part)
             if not match:
-                raise TacticalOperationRegistrationError(f"route parameter {part!r} must look like {{name}} or {{name:str|int|agent|service}}.")
+                raise TacticalOperationRegistrationError(f"route parameter {part!r} must look like {{name}} or {{name:str|int|agent|service|uuid}}.")
             name, kind = match.group(1), match.group(2) or "str"
             if name in seen:
                 raise TacticalOperationRegistrationError(f"route parameter {name!r} is repeated.")
@@ -564,6 +571,9 @@ _ROUTE_OWNER_RULES = (
     (("agents", "{}", "registry"), ("remote-background",)),
     (("agents", "{}", "eventlog"), ("remote-background",)),
     (("agents", "{}", "terminal-defaults"), ("remote-background",)),
+    # 1.18.30 (Johan, 21 November 2026): the file browser (Tactical 1.6.1) is Remote Background's, like processes and registry.
+    (("agents", "{}", "files"), ("remote-background",)),
+    (("agents", "{}", "file-browser-defaults"), ("remote-background",)),
     (("agents", "update"), ("agent-management",)),
     (("agents", "versions"), ("agent-management",)),
     (("agents", "bulkrecovery"), ("agent-management",)),
@@ -648,7 +658,7 @@ def _expansion_rules(segments: tuple) -> list[tuple]:
     """Every rule a concrete path built from this template can land on (1.17.8-1, parameter kinds since 1.17.9).
 
     A parameter segment can hold any value, so ``agents/{x}/`` reaches ``agents/update/`` as well as ``agents/<id>/``.
-    A parameter of kind ``agent`` (21 or more characters) or ``int`` (digits) can never hold a route word, so its only
+    A parameter of kind ``agent`` (21 or more characters), ``int`` (digits) or ``uuid`` (hex and hyphens, 36 characters) can never hold a route word, so its only
     expansion is the ordinary value. A plain ``str`` parameter is tried as every literal a rule has at that position and
     as a value no rule names, including expansions that run on past the matched rule (``agents/{a}/{p}/create-key/``
     reaches ``agents/<id>/registry/``). The longest matching rule of each expansion decides, exactly as it does at dispatch.
@@ -657,7 +667,7 @@ def _expansion_rules(segments: tuple) -> list[tuple]:
     for index, seg in enumerate(segments):
         if seg[0] == "lit":
             options.append([seg[1].lower()])
-        elif seg[2] in ("agent", "int"):
+        elif seg[2] in ("agent", "int", "uuid"):
             options.append(["*other*"])
         else:
             names = {rule[index] for rule in ROUTE_OWNERS if len(rule) > index and rule[index] != "{}"}
@@ -1017,8 +1027,14 @@ def register_tactical_operation(
     audit_lists=None,
     file_response=False,
     audit_list_masks=None,
+    path_query_params=None,
 ):
-    """Declare one Tactical operation. Call it from the owning module's ``AppConfig.ready()``.
+    """Declare one Tactical operation.
+
+    1.18.30 (optional, capability 1.17.0): ``path_query_params=[name, ...]`` (at most 4 names, each also listed in ``query_params``, none
+    secret-looking, no repeats) lets those query values hold up to ``MAX_PATH_QUERY_VALUE`` (4096) characters, for a file path; every other
+    query value stays at 512. The other value rules are unchanged. The route parameter kind ``{name:uuid}`` takes a lowercase canonical uuid
+    and is never a scope source. Call it from the owning module's ``AppConfig.ready()``.
 
     1.17.52 (both optional, capability 1.15.0): ``audit_list_masks={list name: {key: "names"|"mask"}}`` keeps a key's value out of a list
     named in ``audit_lists`` (``names`` records only the name part of each text item, ``mask`` records ``***``; see the module docstring
@@ -1195,6 +1211,8 @@ def register_tactical_operation(
         if where == "path":
             if name not in params:
                 raise TacticalOperationRegistrationError(f"scope source {source!r} is not a parameter of the route.")
+            if params[name] == "uuid":
+                raise TacticalOperationRegistrationError(f"scope source {source!r} is a uuid parameter: a uuid is never an agent, client, site or agent_pk id.")
             if kind in ("client", "site", "agent_pk") and params[name] != "int":
                 raise TacticalOperationRegistrationError(f"scope source {source!r} must be an int parameter for a {kind}.")
             if kind == "agent" and lookup_id is not None:
@@ -1238,6 +1256,7 @@ def register_tactical_operation(
     for name in query_names:
         if _SECRET_NAME_RE.search(name):
             raise TacticalOperationRegistrationError(f"query parameter {name!r} looks like a secret. A query string is logged; never put secrets in it.")
+    path_names = _clean_path_query_params(path_query_params, query_names)
     upload_spec = _parse_upload(upload, verb, fields)
 
     audit_fields = _clean_names(audit.get("audit_fields"), "audit_fields", maximum=_MAX_BODY_FIELDS)
@@ -1269,7 +1288,7 @@ def register_tactical_operation(
         id=op_id, module_id=owner, method=verb, route=route, segments=segments, trailing_slash=trailing,
         permissions=flags, scope=tuple(scope_specs), body_fields=fields, audit_action=action, audit_object_type=object_type,
         audit_fields=audit_fields, module_permission=codename, message=text,
-        audit_object_param=object_param, before=before, query_params=query_names, upload=upload_spec,
+        audit_object_param=object_param, before=before, query_params=query_names, path_query_params=path_names, upload=upload_spec,
         caller_scope=caller_scope, body_selector=selector, audit_params=audit_params, server_only=server_only,
         audit_object_field=object_field, audit_object_body_field=object_body_field,
         permissions_any=any_flags, body_max_bytes=body_cap, audit_lists=lists, file_response=file_response,
@@ -1556,6 +1575,28 @@ def _dotdot_segment(text: str) -> bool:
     return any(".." in re.split(r"[\\/]", candidate) for candidate in (text, _unquote(text)))
 
 
+def _clean_path_query_params(values: Any, query_names: tuple) -> tuple:
+    """1.18.30: the query names that may hold a long path. A list of at most MAX_PATH_QUERY_NAMES names, each also in query_params."""
+    if values is None:
+        return ()
+    if not isinstance(values, (list, tuple)):
+        raise TacticalOperationRegistrationError("path_query_params must be a list of query names.")
+    names = []
+    for value in values:
+        if not isinstance(value, str) or not _FIELD_RE.match(value):
+            raise TacticalOperationRegistrationError("path_query_params entries must be query names (letters, digits and _).")
+        if value in names:
+            raise TacticalOperationRegistrationError(f"path_query_params names {value!r} twice.")
+        if value not in query_names:
+            raise TacticalOperationRegistrationError(f"path_query_params name {value!r} is not in query_params.")
+        if _SECRET_NAME_RE.search(value):
+            raise TacticalOperationRegistrationError(f"path_query_params name {value!r} looks like a secret.")
+        names.append(value)
+    if len(names) > MAX_PATH_QUERY_NAMES:
+        raise TacticalOperationRegistrationError(f"path_query_params names at most {MAX_PATH_QUERY_NAMES} query names.")
+    return tuple(names)
+
+
 def _clean_query(operation: TacticalOperation, query: Any) -> dict[str, str]:
     """The query string of an operation (any method since 1.17.41): whitelisted names, flat string or whole-number values (1.17.13)."""
     if query is None:
@@ -1575,7 +1616,8 @@ def _clean_query(operation: TacticalOperation, query: Any) -> dict[str, str]:
         if value is None or isinstance(value, (bool, dict, list, float)):
             raise TacticalOperationError(f"Query field {name} must be a string or a whole number.", status=400, code="invalid_query")
         text = str(value)
-        if not text.strip() or len(text) > MAX_QUERY_VALUE or _has_control(text) or _dotdot_segment(text):
+        limit = MAX_PATH_QUERY_VALUE if name in operation.path_query_params else MAX_QUERY_VALUE
+        if not text.strip() or len(text) > limit or _has_control(text) or _dotdot_segment(text):
             raise TacticalOperationError(f"Query field {name} is not valid.", status=400, code="invalid_query")
         cleaned[name] = text
     return cleaned
@@ -2639,7 +2681,7 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
         "id": CAPABILITY_ID,
         "version": CAPABILITY_VERSION,
         "operations": ["run", "list_operations", "get_operation"],
-        "declaration": "tec_tac.tactical_operations.register_tactical_operation(id, module_id, method, route, permissions, scope, body_fields, audit, module_permission=None, message=None, query_params=None, upload=None, caller_scope=None, body_selector=None, server_only=False, permissions_any=None, body_max_bytes=None, audit_lists=None, file_response=False, audit_list_masks=None), called from AppConfig.ready(). A core module that names a row_lookup also calls tec_tac.tactical_operations.register_tactical_row_lookup(module_id, lookup_id, fn) from AppConfig.ready().",
+        "declaration": "tec_tac.tactical_operations.register_tactical_operation(id, module_id, method, route, permissions, scope, body_fields, audit, module_permission=None, message=None, query_params=None, upload=None, caller_scope=None, body_selector=None, server_only=False, permissions_any=None, body_max_bytes=None, audit_lists=None, file_response=False, audit_list_masks=None, path_query_params=None), called from AppConfig.ready(). A core module that names a row_lookup also calls tec_tac.tactical_operations.register_tactical_row_lookup(module_id, lookup_id, fn) from AppConfig.ready().",
         "http": "POST /api/tfd/tactical-operations/<module_id>/<operation_id>/ with {params, body, query} as JSON, or as multipart/form-data with the text parts params, body and query (each a JSON object) and one file part",
         "limits": {
             "body_bytes": MAX_BODY_BYTES, "response_bytes": MAX_RESPONSE_BYTES,
@@ -2648,6 +2690,7 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
             # 1.17.14 (CQ40): upload_bytes is the effective ceiling now (the system setting), with the default and the absolute maximum.
             "upload_bytes": upload_ceiling_bytes(), "upload_bytes_default": MAX_UPLOAD_BYTES, "upload_bytes_max": MAX_UPLOAD_ABSOLUTE_BYTES,
             "query_params": MAX_QUERY_PARAMS, "query_value_chars": MAX_QUERY_VALUE,
+            "path_query_value_chars": MAX_PATH_QUERY_VALUE, "path_query_names": MAX_PATH_QUERY_NAMES,
         },
         "declaration_keys_added_in_1_1_0": [
             "audit.object_param", "audit.before", "scope type body:<field> with type_map", "query_params", "upload",
@@ -2738,7 +2781,7 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
                 "a stream over the cap is cut, closed and refused as tactical_response_refused; without file_response a stream is refused as before"
             ),
             (
-                "query_params may be declared on a DELETE, POST, PUT or PATCH operation; names stay a whitelist, values stay flat (512 characters, "
+                "query_params may be declared on a DELETE, POST, PUT or PATCH operation; names stay a whitelist, values stay flat (512 characters, 4096 for a name in path_query_params since 1.18.30, "
                 "no control characters, no '..' segment), a secret-looking name is refused at registration"
             ),
             (
@@ -2833,6 +2876,26 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
             (
                 "metadata.object_count counts the first scope entry that names the row's object, so a scope entry marked names_object false is not counted on the "
                 "success, failed, tactical-denied and outcome-unknown rows; the scope's own refusal rows keep the full-scope count"
+            ),
+        ],
+        # 1.18.30 (capability 1.17.0, still major 1): all optional. A declaration that uses none behaves exactly as before.
+        "declaration_keys_added_in_1_17_0": [
+            "path_query_params (register_tactical_operation(path_query_params=)), shown as path_query_params",
+            "route parameter kind {name:uuid}",
+        ],
+        "behaviour_added_in_1_17_0": [
+            (
+                "route owners: agents/{}/files/ and agents/{}/file-browser-defaults/ belong to remote-background (and an honoured AD-20 replacement); "
+                "agents, agent-management, take-control, endpoints and every premium or server module are refused as before"
+            ),
+            (
+                "route parameter kind uuid: a lowercase canonical uuid (8-4-4-4-12 hex with hyphens, as Django's uuid converter matches), no '..', built "
+                "into the path unquoted; refused as a scope source; may be named in audit.params and audit.object_param"
+            ),
+            (
+                "path_query_params: up to 4 query names that are also in query_params may hold up to limits.path_query_value_chars (4096) characters; "
+                "every other query value stays at limits.query_value_chars (512); control characters, a '..' segment and a blank value are refused on both; "
+                "no audit change (a declared audit field is stored by the existing row rules)"
             ),
         ],
         "refusal_row_codes": list(CORE_REFUSAL_ROW_CODES),
