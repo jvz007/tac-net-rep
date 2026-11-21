@@ -20,6 +20,7 @@ from typing import Any
 MAX_SELECTION = 50
 MAX_CLOSURE = 100
 MAX_ROUNDS = 8
+PURPOSES = ("install", "upgrade")
 ID_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 # Checks that need the real package. The install path still runs them on the signed manifest.
 CHECKS_DEFERRED = ["replacement", "rename", "signature", "licence-in-manifest"]
@@ -38,6 +39,8 @@ TEXT = {
     "plan_unstable": "The plan did not settle, so nothing is offered. Plan again with fewer modules.",
     "dependency_blocked": "A module it needs cannot be installed.",
     "bad_version": "The version of this release could not be read.",
+    "not_installed": "This module is not installed, so there is nothing to upgrade. Install it on its own.",
+    "other_source": "This module comes from another repository. Upgrade it on its own.",
 }
 
 
@@ -58,11 +61,20 @@ def clean_selection(value: Any) -> list[str]:
     return seen
 
 
+def clean_purpose(value: Any) -> str:
+    """Core 1.18.35: "install" (the default when the field is missing or null) or "upgrade". Anything else raises BadSelection."""
+    if value is None:
+        return "install"
+    if not isinstance(value, str) or value not in PURPOSES:
+        raise BadSelection('purpose must be "install" or "upgrade"')
+    return value
+
+
 def _cut(value: Any, limit: int = 400) -> str:
     return " ".join(str(value or "").split())[:limit]
 
 
-def build_plan(selection, allowed_body, cache_rows, installed, resolve, satisfies, problem_text, refuse_disabled, protected, runtime_check):
+def build_plan(selection, allowed_body, cache_rows, installed, resolve, satisfies, problem_text, refuse_disabled, protected, runtime_check, purpose="install", licensing_repo_ids=None):
     """The plan as a dict. Every collaborator is passed in, so this runs without Django.
 
     * ``allowed_body``: the whitelisted body of ``read_allowed_modules()``.
@@ -70,10 +82,14 @@ def build_plan(selection, allowed_body, cache_rows, installed, resolve, satisfie
     * ``installed``: {module id: installed row with extension_version}.
     * ``resolve(candidates)``: ``resolve_install_plan``. ``satisfies(version, constraint)``: ``version_satisfies``.
     * ``problem_text(problem)``: the resolver's own sentence. ``refuse_disabled(candidate)``: a sentence or None.
-    * ``protected``: ids that are never installed from here. ``runtime_check(requires)``: the runtime checks of a candidate."""
+    * ``protected``: ids that are never installed from here. ``runtime_check(requires)``: the runtime checks of a candidate.
+    * ``purpose`` (1.18.35): "install" (default, nothing changes) or "upgrade": a module that is not installed is blocked ``not_installed``, one whose
+      recorded source repository is not a licensing repository (``licensing_repo_ids``; None skips the check) is blocked ``other_source``, and no
+      dependency module is added (a missing one is reported by the shared resolver, as a single upgrade does)."""
+    upgrade = purpose == "upgrade"
     top = {"plan_state": allowed_body.get("plan_state"), "plan_revision": allowed_body.get("plan_revision"), "fetched_at": allowed_body.get("fetched_at")}
     base = {"ok": False, "state": allowed_body.get("state"), "message": allowed_body.get("message"), "valid": False, "requested": list(selection),
-            "order": [], "added_dependencies": [], "will_disable": [], "conflicts": [], "blocked": [], "optional_dependencies": [],
+            "purpose": purpose, "order": [], "added_dependencies": [], "will_disable": [], "conflicts": [], "blocked": [], "optional_dependencies": [],
             **top, "checks_deferred": list(CHECKS_DEFERRED)}
     if allowed_body.get("state") != "ok":
         return base
@@ -88,6 +104,13 @@ def build_plan(selection, allowed_body, cache_rows, installed, resolve, satisfie
         """(candidate, None) for a module Core can plan, else (None, (code, detail))."""
         if module_id in protected:
             return None, ("protected", {})
+        if upgrade:
+            have = installed.get(module_id)
+            if have is None:
+                return None, ("not_installed", {})
+            pinned = ((have.get("source") or {}).get("repository_id"))
+            if pinned and licensing_repo_ids is not None and pinned not in licensing_repo_ids:  # the stage step refuses a module pinned elsewhere
+                return None, ("other_source", {})
         row = allowed.get(module_id)
         if row is None:
             return None, ("not_in_allowed_list", {})
@@ -149,8 +172,8 @@ def build_plan(selection, allowed_body, cache_rows, installed, resolve, satisfie
                         changed = True
                         break
                     if dep_id not in chosen:
-                        if len(chosen) >= MAX_CLOSURE:
-                            continue
+                        if upgrade or len(chosen) >= MAX_CLOSURE:
+                            continue  # an upgrade adds no module: a missing dependency is the resolver's to report
                         candidate, _why = offer(dep_id)
                         if candidate is None or not _fits(satisfies, candidate["extension_version"], constraint):
                             continue  # left out: the shared resolver reports it as missing or out of range
@@ -260,7 +283,7 @@ def _finish(base, selection, blocked, chosen, added_for, result, conflicts):
     return body
 
 
-def plan_online_install(selection: list[str]) -> dict:
+def plan_online_install(selection: list[str], purpose: str = "install") -> dict:
     """Wire the real collaborators and build the plan. Imports are lazy so the pure part above tests without Django."""
     from . import licensing_catalogue_source, module_manager_v2, module_repository
     from .module_manager import PROTECTED_PLUGIN_IDS
@@ -268,7 +291,7 @@ def plan_online_install(selection: list[str]) -> dict:
 
     allowed_body = licensing_catalogue_source.read_allowed_modules()
     if allowed_body.get("state") != "ok":
-        return build_plan(selection, allowed_body, {}, {}, None, None, None, None, frozenset(), None)
+        return build_plan(selection, allowed_body, {}, {}, None, None, None, None, frozenset(), None, purpose=purpose)
     repos = [repo for repo in module_repository.list_repositories() if repo.get("kind") == "licensing" and repo.get("enabled", True)]
     development = module_repository.is_development_server() if repos else False
     cache_rows: dict[tuple, dict] = {}
@@ -285,4 +308,5 @@ def plan_online_install(selection: list[str]) -> dict:
         return None
 
     return build_plan(selection, allowed_body, cache_rows, installed, module_manager_v2.resolve_install_plan, version_satisfies,
-                      module_manager_v2._problem_text, refuse_disabled, PROTECTED_PLUGIN_IDS, module_manager_v2._check_runtime_requirements)
+                      module_manager_v2._problem_text, refuse_disabled, PROTECTED_PLUGIN_IDS, module_manager_v2._check_runtime_requirements,
+                      purpose=purpose, licensing_repo_ids=frozenset(repo.get("id") for repo in repos))

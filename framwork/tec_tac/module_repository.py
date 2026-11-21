@@ -532,7 +532,7 @@ def _upsert_licensing(data: dict, repository_id: str, request=None) -> dict:
     return public_repository(record)
 
 
-def _licensing_audit(request, *, action: str, object_type: str, object_id, message: str, metadata: dict, strict: bool) -> None:
+def _licensing_audit(request, *, action: str, object_type: str, object_id, message: str, metadata: dict, strict: bool, correlation_id=None) -> None:
     """One audit row for the Licensing source: the person when there is a request, Core's service otherwise. Never a credential.
     Strict: a failed write raises ModuleRepositoryError and the caller does nothing. Not strict: a failed write is logged and ignored."""
     from .audit import record, service_audit_actor
@@ -540,9 +540,10 @@ def _licensing_audit(request, *, action: str, object_type: str, object_id, messa
     try:
         user = getattr(request, "user", None) if request is not None else None
         actor = user if user is not None else service_audit_actor(module_id="core", service="module-repository", identity="licensing-source")
+        extra = {"correlation_id": correlation_id} if correlation_id else {}  # 1.18.35: only an install run passes one
         record(
             actor=actor, module_id="core", action=action, object_type=object_type, object_id=object_id, message=message,
-            metadata=metadata, request=request, strict=strict,
+            metadata=metadata, request=request, strict=strict, **extra,
         )
     except Exception:
         if strict:
@@ -1253,7 +1254,7 @@ class _PathUpload:
                 yield chunk
 
 
-def stage_repository_package(repository_id: str, module_id: str, version: str | None = None, allow_source_change: bool = False, request=None) -> dict:
+def stage_repository_package(repository_id: str, module_id: str, version: str | None = None, allow_source_change: bool = False, request=None, correlation_id=None) -> dict:
     repo = _repo(repository_id)
     if not repo.get("enabled", True):
         raise ModuleRepositoryError("Repository is disabled.")
@@ -1288,7 +1289,8 @@ def stage_repository_package(repository_id: str, module_id: str, version: str | 
         if version_satisfies(item["version"], f">{candidate['version']}"):
             candidate = item
     if repo.get("kind") == "licensing":
-        return _stage_licensing_release(repo, repository_id, module_id, candidate, request=request)
+        extra = {"correlation_id": correlation_id} if correlation_id else {}  # 1.18.35: only an install run passes one
+        return _stage_licensing_release(repo, repository_id, module_id, candidate, request=request, **extra)
     data = _fetch(candidate["download_url"], MAX_PACKAGE_BYTES, trust=repo.get("trust", "custom"))
     digest = hashlib.sha256(data).hexdigest()
     if digest != candidate["sha256"]:
@@ -1355,7 +1357,7 @@ def stage_repository_package(repository_id: str, module_id: str, version: str | 
     return staged
 
 
-def _stage_licensing_release(repo: dict, repository_id: str, module_id: str, candidate: dict, request=None) -> dict:
+def _stage_licensing_release(repo: dict, repository_id: str, module_id: str, candidate: dict, request=None, correlation_id=None) -> dict:
     """Stage one licensed release (1.17.103, AD-56): grant, three downloads, Core's own checks, then the existing install queue.
 
     The audit row is written first and strict: no row, no grant. The files are fetched from the pinned Licensing Server address
@@ -1374,6 +1376,7 @@ def _stage_licensing_release(repo: dict, repository_id: str, module_id: str, can
     _licensing_audit(
         request, action="run", object_type="licensed_module_release", object_id=release_id, strict=True,
         message=f"Core started downloading licensed module {module_id} {candidate['version']}.", metadata={**meta, "result": "started"},
+        correlation_id=correlation_id,
     )
     result = "failed"
     try:
@@ -1439,6 +1442,7 @@ def _stage_licensing_release(repo: dict, repository_id: str, module_id: str, can
         _licensing_audit(
             request, action="run", object_type="licensed_module_release", object_id=release_id, strict=False,
             message=f"Licensed module {module_id} {candidate['version']} download ended: {result}.", metadata={**meta, "result": result},
+            correlation_id=correlation_id,
         )
 
 

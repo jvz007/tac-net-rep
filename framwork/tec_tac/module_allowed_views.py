@@ -31,13 +31,14 @@ def _allowed_http(state):
     return _ALLOWED_STATUS.get(state, 200)
 
 
-def _audit_allowed(request, *, action, object_type, object_id, message, before=None, after=None, metadata=None):
+def _audit_allowed(request, *, action, object_type, object_id, message, before=None, after=None, metadata=None, correlation_id=None):
     """One Core audit row. Never raises: a failed write is logged and the request still answers."""
     try:
         from . import audit
 
+        extra = {"correlation_id": correlation_id} if correlation_id else {}  # 1.18.35: only the Stop row of an install run passes one
         audit.record(actor=request.user, module_id="core", action=action, object_type=object_type, object_id=object_id,
-                     message=message, before=before, after=after, metadata=metadata or {}, request=request, strict=False)
+                     message=message, before=before, after=after, metadata=metadata or {}, request=request, strict=False, **extra)
     except Exception:
         logger.exception("Unable to persist an allowed-modules audit event")
 
@@ -104,7 +105,8 @@ class ModuleOnlineInstallPlanView(APIView):
         data = request.data if hasattr(request.data, "get") else {}
         try:
             selection = module_install_plan.clean_selection(data.get("modules"))
+            purpose = module_install_plan.clean_purpose(data.get("purpose"))
         except module_install_plan.BadSelection as exc:
             return Response({"ok": False, "state": "bad_request", "message": str(exc)}, status=400)
-        body = module_install_plan.plan_online_install(selection)
+        body = module_install_plan.plan_online_install(selection) if purpose == "install" else module_install_plan.plan_online_install(selection, purpose=purpose)
         return Response(body, status=_allowed_http(body["state"]))

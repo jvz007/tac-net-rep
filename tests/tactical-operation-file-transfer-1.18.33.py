@@ -71,6 +71,11 @@ class FakeCache:
         self.data[key] = value
         return True
 
+    def get(self, key, default=None):  # 1.18.35: the read-only check of the success end-row key
+        if self.mode == "raise":
+            raise RuntimeError("redis down")
+        return self.data.get(key, default)
+
     def delete(self, key):
         if self.mode == "raise":
             raise RuntimeError("redis down")

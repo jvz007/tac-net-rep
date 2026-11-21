@@ -2211,23 +2211,24 @@ HTTP_CONTRACT_DETAILS = {
     "/api/tfd/modules/catalog/online/plan/": {
         "POST": {
             "authorization": "authenticated Tec-Tac session with core.privileged_operations (module management); checked first, anyone else gets 403 and no plan",
-            "request": {"modules": "required list of 1 to 50 lower-case module ids; duplicates are dropped, order is kept"},
+            "request": {"modules": "required list of 1 to 50 lower-case module ids; duplicates are dropped, order is kept", "purpose": "optional, \"install\" (default) or \"upgrade\" (1.18.35); anything else is 400. With upgrade a module that is not installed is blocked not_installed, one installed from another repository is blocked other_source, and no dependency module is added"},
             "response": {
                 "ok": "boolean; true when Core built a plan (blocked modules can still be listed)",
                 "state": "ok, or the state of the allowed list when it gave no usable answer (not_fetched, a Licensing state, licensing_unavailable, invalid_response); then there is no plan",
                 "message": "one plain sentence", "valid": "boolean; true when none of the requested modules is blocked",
-                "requested": "the cleaned ids",
+                "requested": "the cleaned ids", "purpose": "install or upgrade (1.18.35)",
                 "order": "array of {id, name, version, action (install or replace), current_version, added, added_for, dependencies}; the install order Core's own resolver gives",
                 "added_dependencies": "array of {id, version, required_by}: licensed modules added because a requested module needs them",
                 "will_disable": "module ids a replacement would disable (empty for licensed releases today)",
                 "conflicts": "array of {type, module, dependency, constraint, version, message} the plan could not tie to one module",
-                "blocked": "array of {id, code, message, detail}; codes: not_in_allowed_list, not_selected, no_release, not_available, not_in_catalogue_cache, protected, already_installed, older_than_installed, disabled_install, dependency_blocked, plan_conflict, plan_unstable, or a resolver problem type (runtime, category_refused, replacement_conflict, ...)",
+                "blocked": "array of {id, code, message, detail}; codes: not_in_allowed_list, not_selected, no_release, not_available, not_in_catalogue_cache, protected, already_installed, older_than_installed, not_installed and other_source (purpose upgrade only, 1.18.35), disabled_install, dependency_blocked, plan_conflict, plan_unstable, or a resolver problem type (runtime, category_refused, replacement_conflict, ...)",
                 "optional_dependencies": "array of {module, dependency, constraint, installed, satisfied}",
                 "plan_state": "text", "plan_revision": "whole number, text or null", "fetched_at": "text or null",
                 "checks_deferred": "replacement, rename, signature and licence-in-manifest: they need the package and run at install",
             },
-            "errors": {"400": "bad_request: modules is not a list of 1 to 50 valid ids", "403": "no module management permission", "502": "invalid_response", "503": "licensing_unavailable"},
+            "errors": {"400": "bad_request: modules is not a list of 1 to 50 valid ids, or purpose is not install or upgrade", "403": "no module management permission", "502": "invalid_response", "503": "licensing_unavailable"},
             "notes": [
+                "1.18.35 (additive): the optional purpose field. An upgrade already passed through this plan as a newer-version install (action replace with current_version); purpose upgrade only stops the plan from installing a module that is not installed, and from adding dependency modules. Without the field the body is the one of 1.18.19, plus purpose install.",
                 "Added 1.18.19 (module-facing, additive; no module calls this route yet, the first reader is Welcome). Read-only and advisory: it starts no job, fetches no package, makes no network call and writes no audit row. The allowed list is read once through licensing_catalogue_source.py; the release facts the list does not carry come from the saved Licensing catalogue entry with the same module and release id, and a missing entry blocks the module (not_in_catalogue_cache). Every dependency, version, runtime, category, replacement and order rule is the one resolve_install_plan applies to a real install. The install re-checks the signed package and stays authoritative.",
             ],
         },
@@ -2235,16 +2236,16 @@ HTTP_CONTRACT_DETAILS = {
     "/api/tfd/modules/catalog/online/install/": {
         "POST": {
             "authorization": "authenticated Tec-Tac session with core.privileged_operations (module management); checked first, anyone else gets 403 and no run",
-            "request": {"modules": "required list of 1 to 50 lower-case module ids; Core plans again and ignores any order or version from the client. licence_override_reason and disable_replaced are refused with 400"},
-            "response": {"ok": "boolean", "run_id": "uuid", "status": "running", "started_by": "text", "started_at": "UTC time", "finished_at": "null", "stop_requested": "boolean", "counts": "{pending, downloading, installing, succeeded, failed, skipped, total}", "modules": "array of {id, name, version, action, state, reason ({code, message} or null), job_id, job_status, job_stage, started_at, ended_at}"},
+            "request": {"modules": "required list of 1 to 50 lower-case module ids; Core plans again and ignores any order or version from the client. licence_override_reason and disable_replaced are refused with 400", "purpose": "optional, install (default) or upgrade (1.18.35), as on the plan route; anything else is 400"},
+            "response": {"ok": "boolean", "run_id": "uuid", "status": "running", "purpose": "install or upgrade (1.18.35)", "started_by": "text", "started_at": "UTC time", "finished_at": "null", "stop_requested": "boolean", "counts": "{pending, downloading, installing, succeeded, failed, skipped, total}", "modules": "array of {id, name, version, action, current_version (1.18.35: the installed version for a replace, else null), state, reason ({code, message} or null), job_id, job_status, job_stage, started_at, ended_at}"},
             "errors": {"400": "bad_request or nothing_to_install (the plan body comes back)", "403": "no module management permission", "409": "run_in_progress with the run_id of the run that is going", "502": "invalid_response", "503": "licensing_unavailable or audit_not_saved"},
-            "notes": ["Added 1.18.20 (module-facing, additive; no module calls it yet, the first reader is Welcome 1.2.16). Installs through the same stage and queue calls as the single online install, one module at a time in plan order, by short Celery ticks (task tec_tac.advance_module_install_run, Core-internal). Nothing is removed, uninstalled, enabled or disabled; a module that needs a licence override or a confirmed replacement fails with its sentence."],
+            "notes": ["Added 1.18.20 (module-facing, additive; no module calls it yet, the first reader is Welcome 1.2.16). Installs through the same stage and queue calls as the single online install, one module at a time in plan order, by short Celery ticks (task tec_tac.advance_module_install_run, Core-internal). Nothing is removed, uninstalled, enabled or disabled; a module that needs a licence override or a confirmed replacement fails with its sentence.", "1.18.35 (additive): purpose, current_version and correlation. Every audit row of a run (start, each module outcome, end, Stop requested) and the licensed-release grant rows of its modules carry correlation_id equal to the run_id. A failed module does not stop the others; only its dependants are skipped (dependency_failed). The start row of an upgrade run reads Module upgrade run started and carries purpose."],
         },
     },
     "/api/tfd/modules/catalog/online/install/<uuid:run_id>/": {
         "GET": {
             "authorization": "authenticated Tec-Tac session with core.privileged_operations; checked first",
-            "response": {"ok": "boolean", "run_id": "uuid", "status": "running, stopping, completed, stopped or interrupted", "started_by": "text", "started_at": "UTC time", "finished_at": "UTC time or null", "stop_requested": "boolean", "counts": "{pending, downloading, installing, succeeded, failed, skipped, total}", "modules": "array of {id, name, version, action, state, reason, job_id, job_status, job_stage, started_at, ended_at}; no log tail, hash, URL, publisher or key id"},
+            "response": {"ok": "boolean", "run_id": "uuid", "status": "running, stopping, completed, stopped or interrupted", "purpose": "install or upgrade (1.18.35; a run file from before reads install)", "started_by": "text", "started_at": "UTC time", "finished_at": "UTC time or null", "stop_requested": "boolean", "counts": "{pending, downloading, installing, succeeded, failed, skipped, total}", "modules": "array of {id, name, version, action, current_version, state, reason, job_id, job_status, job_stage, started_at, ended_at}; no log tail, hash, URL, publisher or key id"},
             "errors": {"403": "no module management permission", "404": "not_found: unknown or malformed run id"},
             "notes": ["Added 1.18.20 (additive). Never starts a module. It reconciles a finished job, queues a tick again when none ran for 30 seconds, and closes a run with no step for 15 minutes and no active job as interrupted."],
         },

@@ -97,3 +97,6 @@ You need Core 1.18.34 on dev02. Remote Background 0.11.4 declares the upload ope
 ## Main stays held
 
 `main` stays at Core 1.17.110. Only Johan promotes.
+
+
+Changed in 1.18.35: the failed end row has its own once-only key (not the success key), a 404 takes none, and the old metadata key `refusal_codes_without_row_added_in_1_18_0` is back as an empty list. See `RELEASE_NOTES_1.18.35.md`.

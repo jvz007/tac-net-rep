@@ -60,6 +60,7 @@ STUBS["GRANTS"][limited.role.id] = {"licensing.manage"}
 
 REFUSAL_KEY = "tectac:transfer-refusal:{}:{}"
 END_KEY = "tectac:transfer-end:{}"
+FAILED_KEY = "tectac:transfer-end-failed:{}"  # 1.18.35: a failed end row has its own once-only key
 
 
 def reset():
@@ -448,16 +449,20 @@ def must_be_failed_end(row, role, action, status, session=SID, reason=None):
 
 
 for op, body, role in END_CASES:
-    for status in (400, 404, 409, 422):
+    for status in (400, 409, 422):
         result = end_run(op, body, status)
         must(result.status == status and result.audit.get("recorded"), (op, status, result.audit))
         m = must_be_failed_end(refusal_row(), role, "custom:operation-failed", status, reason=(body or {}).get("reason"))
         must(m["failure"] == "tactical_refused" and "transfer_bytes" not in m, m)
-        must(END_KEY.format(SID) in CACHE.data, "the once-only key is taken")
+        must(FAILED_KEY.format(SID) in CACHE.data and END_KEY.format(SID) not in CACHE.data, "the failed key is taken, never the success key")
+    result = end_run(op, body, 404)  # 1.18.35: a 404 writes the ordinary failure row, no end fields, takes no key
+    m = meta(refusal_row())
+    must(result.status == 404 and "transfer_stage" not in m and "transfer_outcome" not in m and m["failure"] == "tactical_refused" and m["transfer_session"] == SID, m)
+    must(END_KEY.format(SID) not in CACHE.data and FAILED_KEY.format(SID) not in CACHE.data, "a 404 takes no key")
     for status in (500, 502):
         result = end_run(op, body, status)
         must_be_failed_end(refusal_row(), role, "custom:outcome-unknown", status, reason=(body or {}).get("reason"))
-print("       complete, cancel and fail answered 400, 404, 409, 422 write custom:operation-failed with transfer_stage end and outcome failed; 500 and 502 write custom:outcome-unknown with the same end fields")
+print("       complete, cancel and fail answered 400, 409, 422 write custom:operation-failed with transfer_stage end and outcome failed; a 404 writes the plain failure row; 500 and 502 write custom:outcome-unknown with the same end fields")
 
 # transfer_bytes only from a whole-number committed_offset of a JSON answer
 for value, kept in ((12, True), (0, True), (-1, False), (True, False), (1.5, False), ("7", False), (None, False)):
@@ -481,7 +486,7 @@ for op, body, role in END_CASES:
             row = refusal_row()
             must(row["action"] == expect and "transfer_stage" not in meta(row) and "transfer_outcome" not in meta(row), (op, status, meta(row)))
             must(meta(row)["transfer_session"] == SID, meta(row))
-        must(END_KEY.format(SID) not in CACHE.data, (op, status, "no key"))
+        must(END_KEY.format(SID) not in CACHE.data and FAILED_KEY.format(SID) not in CACHE.data, (op, status, "no key"))
 print("       401 and 403 stay deny rows, 408 is relayed with no row and 429 is an ordinary failure row: none has end fields or takes the key")
 
 # a repeat of the failing call writes a failure row without end fields; the key is added once
@@ -492,16 +497,37 @@ must(first["transfer_stage"] == "end", first)
 end_run("upload-complete", None, 400, fresh_cache=False)
 second = meta(refusal_row())
 must("transfer_stage" not in second and "transfer_outcome" not in second and second["failure"] == "tactical_refused" and second["transfer_session"] == SID, second)
-must([key for key in CACHE.data if key.startswith("tectac:transfer-end:")] == [END_KEY.format(SID)], CACHE.data)
-# a failed end row followed by a cancel or a success writes no second end row (same once-only key, as ordered)
+must([key for key in CACHE.data if key.startswith("tectac:transfer-end")] == [FAILED_KEY.format(SID)], CACHE.data)
+# 1.18.35: a failed end row never takes the success key, so a later cancel or success still writes its own end row (once)
 end_run("upload-cancel", {"reason": "user"}, 200, {"status": "cancelled"}, fresh_cache=False)
-must(not ROWS, "a cancel after a failed end row writes no second end row")
+m = meta(refusal_row())
+must(ROWS[0]["action"] == "custom:file-transfer" and m["transfer_outcome"] == "cancelled", m)
 end_run("upload-complete", None, 200, {"status": "completed"}, fresh_cache=False)
-must(not ROWS, "a success after a failed end row writes no second end row")
+must(not ROWS, "after the cancelled row exists a second 2xx end writes none")
+# a failed complete after the success end row writes no failed end fields (read-only check of the success key)
+end_run("upload-complete", None, 400, fresh_cache=False)
+m = meta(refusal_row())
+must("transfer_stage" not in m and m["failure"] == "tactical_refused", m)
+end_run("upload-complete", None, 500, fresh_cache=False)
+m = meta(refusal_row())
+must("transfer_stage" not in m and ROWS[0]["action"] == "custom:outcome-unknown", m)
+# a 400 first, then a valid complete: the completed end row is written
+CACHE.data.clear()
+end_run("upload-complete", None, 400, {"detail": "bad sha256"}, fresh_cache=False)
+must(meta(refusal_row())["transfer_stage"] == "end", "the failed end row")
+end_run("upload-complete", None, 200, {"status": "completed", "committed_offset": 9}, fresh_cache=False)
+m = meta(refusal_row())
+must(ROWS[0]["action"] == "custom:file-transfer" and m["transfer_outcome"] == "completed" and m["transfer_bytes"] == 9, m)
+# a 404 first (a session of another person), then the owner valid complete: still writes the completed row
+CACHE.data.clear()
+end_run("upload-complete", None, 404, fresh_cache=False)
+must("transfer_stage" not in meta(refusal_row()), ROWS)
+end_run("upload-complete", None, 200, {"status": "completed"}, fresh_cache=False)
+must(meta(refusal_row())["transfer_outcome"] == "completed", ROWS)
 # another session is independent
 end_run("upload-complete", None, 400, session=SID2, fresh_cache=False)
 must(meta(refusal_row())["transfer_session"] == SID2 and meta(ROWS[0])["transfer_stage"] == "end", ROWS)
-print("       a repeat of the failing call writes its failure row without end fields (one key); a later success or cancel writes no second end row; another session is independent")
+print("       a repeat of the failing call writes its failure row without end fields (own key); a later success or cancel still writes its end row once; no failed end fields after the completed row; another session is independent")
 
 # the guard: cache raises, missing, and a failed audit write frees the key
 CACHE.data.clear()
@@ -520,7 +546,7 @@ for status, action in ((400, "custom:operation-failed"), (500, "custom:outcome-u
     CACHE.data.clear(), CACHE.deleted.clear()
     FakeAuditLog.objects.fail = True
     result = end_run("upload-complete", None, status, fresh_cache=False)
-    must(not result.audit.get("recorded") and CACHE.deleted == [END_KEY.format(SID)] and END_KEY.format(SID) not in CACHE.data, (status, result.audit, CACHE.deleted))
+    must(not result.audit.get("recorded") and CACHE.deleted == [FAILED_KEY.format(SID)] and FAILED_KEY.format(SID) not in CACHE.data, (status, result.audit, CACHE.deleted))
     FakeAuditLog.objects.fail = False
     end_run("upload-complete", None, status, fresh_cache=False)
     row = refusal_row()
@@ -547,7 +573,7 @@ run_as(tech, "remote-background", "download-status", PS)
 must(not ROWS, "a GET status writes nothing")
 serve("download-chunk", FakeResponse(400, b"{}"))
 run_as(tech, "remote-background", "download-chunk", PS)
-must(not ROWS and not any(k.startswith("tectac:transfer-end:") for k in CACHE.data), "a GET download answered 4xx writes nothing and takes no key")
+must(not ROWS and not any(k.startswith("tectac:transfer-end") for k in CACHE.data), "a GET download answered 4xx writes nothing and takes no key")
 must("cannot be a GET" in refused(id="get-complete", method="GET", route=SESSION_ROOT + "end/", audit=audit_of(transfer={"role": "complete", "direction": "download"})), "a GET cannot be an end role")
 register(id="plain-post", method="POST", route=ROOT_ + "plain-post/", body_fields=["a"], audit=audit_of(action="run"))
 ROUTES[f"/agents/{AGENT}/files/plain-post/"] = (seeing(FakeResponse(400, b'{"detail": "x"}')), (), {})
@@ -571,10 +597,10 @@ cap = ops.tactical_operations_contract_metadata()
 must(ops.CAPABILITY_VERSION == "1.18.0" and cap["version"] == "1.18.0", cap["version"])
 must(cap["refusal_row_codes"] == list(ops.CORE_REFUSAL_ROW_CODES) and len(cap["refusal_row_codes"]) == 6, cap["refusal_row_codes"])
 must(cap["chunk_refusal_row_codes"] == list(ops.CHUNK_REFUSAL_ROW_CODES), cap["chunk_refusal_row_codes"])
-must("refusal_codes_without_row_added_in_1_18_0" not in cap and "once per session and code" in cap["chunk_refusal_rows_added_in_1_18_0"], cap.keys())
+must(cap["refusal_codes_without_row_added_in_1_18_0"] == [] and "once per session and code" in cap["chunk_refusal_rows_added_in_1_18_0"], cap.keys())  # 1.18.35: the old key is back, empty
 must(any("read_binary_body(request, module_id, operation_id, *, params=None)" in item for item in cap["declaration_keys_added_in_1_18_0"]), cap["declaration_keys_added_in_1_18_0"])
 text = " ".join(cap["behaviour_added_in_1_18_0"])
-for needle in ("transfer_outcome failed", "transfer_session null", "caller_scope checks", "same once-only key"):
+for needle in ("transfer_outcome failed", "transfer_session null", "caller_scope checks", "own once-only key"):
     must(needle in text, f"behaviour text lacks {needle!r}")
 import inspect
 
@@ -591,7 +617,7 @@ must("These refusals write no Core row" not in contract and "These refusals writ
 src = (root / "framwork" / "tec_tac" / "tactical_operations.py").read_text(encoding="utf-8")
 must("writes no row for these refusals" not in src and "A refusal here writes no Core row" not in src, "the old docstrings are updated")
 must("which no module declares" not in src and "Remote Background 0.11.4 declares them and calls" in src, "the module docstring says Remote Background calls read_binary_body")
-notes = (root / "RELEASE_NOTES_1.18.34.md").read_text(encoding="utf-8")
+notes = (root / "docs" / "releases" / "RELEASE_NOTES_1.18.34.md").read_text(encoding="utf-8")
 must("does not call `read_binary_body`" not in notes and "calls `read_binary_body` without `params`" in notes and "tactical_permission_denied" in notes, "release notes state that Remote Background calls read_binary_body")
 print("       metadata lists chunk_refusal_row_codes and the six AD-19 codes; capability stays 1.18.0; docs and contracts.py carry the 1.18.34 text")
 

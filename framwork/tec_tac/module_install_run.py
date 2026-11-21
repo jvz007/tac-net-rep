@@ -87,11 +87,11 @@ def refused_fields(data) -> list[str]:
 
 def _module_record(item: dict, *, planned: bool, state: str, code: str | None = None, reason: str | None = None) -> dict:
     return {"id": item["id"], "name": item.get("name") or item["id"], "version": item.get("version"), "action": item.get("action") or "install",
-            "state": state, "code": code, "reason": reason, "planned": planned, "dependencies": sorted((item.get("dependencies") or {}).keys()),
+            "current_version": item.get("current_version"), "state": state, "code": code, "reason": reason, "planned": planned, "dependencies": sorted((item.get("dependencies") or {}).keys()),
             "job_id": None, "upload_id": None, "started_at": None, "ended_at": None, "job_missing": 0}
 
 
-def new_run(env, plan: dict, selection: list[str], username: str) -> dict:
+def new_run(env, plan: dict, selection: list[str], username: str, purpose: str = "install") -> dict:
     modules = []
     for blocked in plan.get("blocked") or []:
         modules.append(_module_record({"id": blocked["id"]}, planned=False, state="skipped", code=blocked.get("code"), reason=_cut(blocked.get("message"))))
@@ -99,7 +99,7 @@ def new_run(env, plan: dict, selection: list[str], username: str) -> dict:
         modules.append(_module_record(item, planned=True, state="pending"))
     now = env.now()
     return {"run_id": str(uuid.uuid4()), "status": "running", "started_by": username, "started_at": now, "finished_at": None, "heartbeat": now,
-            "stop_requested": False, "end_audited": False, "seq": 0, "requested": list(selection), "modules": modules}
+            "stop_requested": False, "end_audited": False, "seq": 0, "purpose": purpose, "requested": list(selection), "modules": modules}
 
 
 def public_run(env, run: dict) -> dict:
@@ -109,11 +109,11 @@ def public_run(env, run: dict) -> dict:
     for m in run["modules"]:
         counts[m["state"]] = counts.get(m["state"], 0) + 1
         job = env.job_status(m["job_id"]) if m.get("job_id") and m["state"] == "installing" else None
-        modules.append({"id": m["id"], "name": m["name"], "version": m["version"], "action": m["action"], "state": m["state"],
-                        "reason": {"code": m["code"], "message": m["reason"]} if m.get("code") or m.get("reason") else None, "job_id": m["job_id"],
+        modules.append({"id": m["id"], "name": m["name"], "version": m["version"], "action": m["action"], "current_version": m.get("current_version"),
+                        "state": m["state"], "reason": {"code": m["code"], "message": m["reason"]} if m.get("code") or m.get("reason") else None, "job_id": m["job_id"],
                         "job_status": (job or {}).get("status"), "job_stage": (job or {}).get("stage"),
                         "started_at": _iso(m["started_at"]), "ended_at": _iso(m["ended_at"])})
-    return {"ok": True, "run_id": run["run_id"], "status": run["status"], "started_by": run["started_by"], "started_at": _iso(run["started_at"]),
+    return {"ok": True, "run_id": run["run_id"], "status": run["status"], "started_by": run["started_by"], "purpose": run.get("purpose") or "install", "started_at": _iso(run["started_at"]),
             "finished_at": _iso(run["finished_at"]), "stop_requested": bool(run["stop_requested"]), "counts": {**counts, "total": len(run["modules"])},
             "modules": modules}
 
@@ -314,7 +314,8 @@ def _advance(env, run_id: str, seq=None):
             env.save(run)
             upload_id = None
             try:
-                staged = env.stage(repository_id, nxt["id"], nxt["version"])
+                stage = getattr(env, "stage_in_run", None)  # 1.18.35: the live wiring links the licence grant row to the run; a plain env has no such call
+                staged = stage(repository_id, nxt["id"], nxt["version"], run_id) if stage else env.stage(repository_id, nxt["id"], nxt["version"])
                 upload_id = staged["upload_id"]
                 job = env.queue(upload_id, run["started_by"])
             except env.known_errors as exc:
@@ -395,7 +396,7 @@ def _recover_dead_chain(env, run_id: str) -> None:
 # ------------------------------------------------------------------------------------------------------------------ routes' logic
 
 
-def start_run(env, selection: list[str], username: str, http_for_state, request=None) -> tuple[int, dict]:
+def start_run(env, selection: list[str], username: str, http_for_state, request=None, purpose: str = "install") -> tuple[int, dict]:
     """(http status, body) for POST install/."""
     active = _find_active(env)
     if active is not None:
@@ -403,7 +404,7 @@ def start_run(env, selection: list[str], username: str, http_for_state, request=
         active = _find_active(env)
     if active is not None:
         return 409, _in_progress(active)
-    plan = env.plan(selection)
+    plan = env.plan(selection) if purpose == "install" else env.plan(selection, purpose=purpose)
     if plan.get("state") != "ok":
         return http_for_state(plan.get("state")), plan
     if not plan.get("order"):
@@ -414,10 +415,10 @@ def start_run(env, selection: list[str], username: str, http_for_state, request=
         active = _find_active(env)
         if active is not None:
             return 409, _in_progress(active)
-        run = new_run(env, plan, selection, username)
+        run = new_run(env, plan, selection, username, purpose)
         try:
-            env.audit(run, "start", "Module install run started", {
-                "requested": list(selection), "order": [m["id"] for m in run["modules"] if m["planned"]],
+            env.audit(run, "start", "Module install run started" if purpose == "install" else "Module upgrade run started", {
+                "purpose": purpose, "requested": list(selection), "order": [m["id"] for m in run["modules"] if m["planned"]],
                 "skipped": [{"id": m["id"], "code": m["code"]} for m in run["modules"] if not m["planned"]]}, strict=True, request=request)
         except AuditNotSaved:
             return 503, {"ok": False, "state": "audit_not_saved", "message": "Core could not write the audit row, so nothing was started."}
@@ -563,7 +564,7 @@ def live_env() -> SimpleNamespace:
             person = getattr(request, "user", None) if request is not None else None
             actor = person or audit.service_audit_actor(module_id="core", service="module-install-run", identity="core.module-install-run")
             audit.record(actor=actor, module_id="core", action="run", object_type="module_install_run", object_id=run["run_id"], message=message,
-                         metadata={"kind": kind, "started_by": run["started_by"], **metadata}, request=request, strict=strict)
+                         metadata={"kind": kind, "started_by": run["started_by"], **metadata}, request=request, strict=strict, correlation_id=run["run_id"])
         except Exception as exc:
             if strict:
                 raise AuditNotSaved() from exc
@@ -586,6 +587,7 @@ def live_env() -> SimpleNamespace:
         now=time.time, load=store.load, save=store.save, ids=store.ids, forget=store.forget, lock=store.lock, start_lock=store.start_lock,
         plan=module_install_plan.plan_online_install, allowed=licensing_catalogue_source.read_allowed_modules, repo_for=repo_for,
         stage=lambda repository_id, module_id, version: module_repository.stage_repository_package(repository_id, module_id, version, request=None),
+        stage_in_run=lambda repository_id, module_id, version, run_id: module_repository.stage_repository_package(repository_id, module_id, version, request=None, correlation_id=run_id),
         queue=lambda upload_id, requested_by: module_manager_v2.queue_v2_install(upload_id, requested_by=requested_by),
         discard=module_manager_v2.discard_v2_stage, job_status=job_status, audit=write_audit, enqueue_tick=enqueue_tick,
         known_errors=(module_repository.ModuleRepositoryError, module_manager.ModuleManagerError),

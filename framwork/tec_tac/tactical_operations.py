@@ -176,9 +176,9 @@ file transfers for the file browser (Tactical 1.6.1), asked for by Remote Backgr
   down fails open). ``read_binary_body`` writes the same row for its own refusals. A JSON ``body_too_large`` still writes no row. The six
   AD-19 codes behave as before.
 * A complete, cancel or fail that Tactical answers 4xx or 5xx (except 401 and 403, which stay ``deny`` rows, 408, which is relayed with no
-  row, and 429, a request to retry) writes its failure row with ``transfer_stage: end`` and ``transfer_outcome: failed``, under the same
-  once-only key as the success end row, so a failed transfer has its end row. A later success for a session that has a failed end row writes no
-  second end row. For a 5xx the row action says ``custom:outcome-unknown`` next to ``failed``.
+  row, and 429, a request to retry) writes its failure row with ``transfer_stage: end`` and ``transfer_outcome: failed``, under its own
+  once-only key (1.18.35: not the success end row's key; a 404 takes none, and none is written once the completed row exists), so a failed
+  transfer has its end row. A later success for a session that has a failed end row still writes its completed or cancelled row. For a 5xx the row action says ``custom:outcome-unknown`` next to ``failed``.
 * ``read_binary_body`` runs the authentication, Tactical flag, module permission and ``caller_scope`` checks, and with ``params`` the role-scope
   check, before it reads the stream.
 * A row written before the path parameters are cleaned carries ``transfer_session`` null and no ``transfer:<id>`` correlation id.
@@ -2185,6 +2185,11 @@ def _end_row_key(session: str) -> str:
     return f"tectac:transfer-end:{session}"
 
 
+def _failed_end_row_key(session: str) -> str:
+    """1.18.35: the once-only key of a failed end row. A different key from ``_end_row_key``, so a failure never takes the success key."""
+    return f"tectac:transfer-end-failed:{session}"
+
+
 def _guard_once(key: str, ttl: int, what: str) -> bool:
     """True when ``key`` is new in Tactical's shared cache (an atomic ``cache.add``). A cache that is down fails open: True, so the row is
     written, because a missing audit row is worse than a repeated one (1.18.34: shared by the end-row and the chunk-refusal guards)."""
@@ -2219,6 +2224,23 @@ def _end_row_forget(session: str) -> None:
     _guard_release(_end_row_key(session), "end-row")
 
 
+def _failed_end_row_forget(session: str) -> None:
+    """The failed end row could not be written: free its key (1.18.35)."""
+    _guard_release(_failed_end_row_key(session), "failed-end-row")
+
+
+def _end_row_written(session: str) -> bool:
+    """True when the success end row of this session already exists (1.18.35). A read only: it never takes the key. A cache that is down
+    fails open to "not ended", so the failed row is still written."""
+    try:
+        from django.core.cache import cache
+
+        return cache.get(_end_row_key(session)) is not None
+    except Exception:
+        logger.warning("The transfer end-row guard could not be read.", exc_info=True)
+        return False
+
+
 def _end_row_extra(operation: TacticalOperation, data: Any, body: dict, session: str | None) -> dict:
     """The metadata of a transfer's end row: stage, outcome, bytes committed, a fixed reason word. Never Tactical's own text."""
     role = operation.audit_transfer[0]
@@ -2242,12 +2264,16 @@ def _failed_end_fields(operation: TacticalOperation, status: int, data: Any, bod
 
     For an operation whose role is complete, cancel or fail, answered 4xx or 5xx (401 and 403 are deny rows and 408 is relayed before this; 429
     asks the caller to retry, the session is still open), and a canonical session id, the failure row Core already writes takes
-    ``transfer_stage: end`` and ``transfer_outcome: failed``, under the same once-only key as the success end row. ``session`` is returned only when
-    this call took the key, so the caller can free it when the row does not record. A repeat (key taken) gets no end fields. Never Tactical's text."""
+    ``transfer_stage: end`` and ``transfer_outcome: failed``, under its own once-only key (1.18.35: not the success end row's key, so a 400 never
+    stops the later completed row). A 404 (another person's or an unknown session) takes no key and gets no end fields, and a session whose success
+    end row exists gets none. ``session`` is returned only when this call took the failed key, so the caller can free it when the row does not
+    record. A repeat (key taken) gets no end fields. Never Tactical's text."""
     transfer = operation.audit_transfer
-    if not transfer or transfer[0] not in _TRANSFER_END_ROLES or session is None or status == 429:
+    if not transfer or transfer[0] not in _TRANSFER_END_ROLES or session is None or status in (404, 429):
         return {}, None
-    if not _end_row_once(session):
+    if _end_row_written(session):
+        return {}, None
+    if not _guard_once(_failed_end_row_key(session), TRANSFER_END_TTL_SECONDS, "failed-end-row"):
         return {}, None
     return {**_end_row_extra(operation, data, body, session), "transfer_outcome": "failed"}, session
 
@@ -3100,7 +3126,7 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
             message=FAILED_MESSAGE.format(status=status), tactical_status=status, extra=failed_extra, correlation_id=correlation_id,
         )
         if end_session is not None and not audit.get("recorded"):
-            _end_row_forget(end_session)
+            _failed_end_row_forget(end_session)
     elif status >= 500 and operation.method != "GET":
         end_fields, end_session = _failed_end_fields(operation, status, data, body, transfer_session)  # 1.18.34 (AD-69)
         audit = _write_row(
@@ -3108,7 +3134,7 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
             correlation_id=correlation_id, extra={**unknown_extra, **end_fields},
         )
         if end_session is not None and not audit.get("recorded"):
-            _end_row_forget(end_session)
+            _failed_end_row_forget(end_session)
 
     headers = {}
     for name in RELAYED_HEADERS:
@@ -3375,6 +3401,8 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
         ],
         # 1.18.34: these six write one limited core_refused row (see chunk_refusal_row_codes); the old key that listed them as "without row" is gone.
         "chunk_refusal_row_codes": list(CHUNK_REFUSAL_ROW_CODES),
+        # 1.18.35: the old key is back (a module may read it), now empty: these codes no longer write "without row"; they write the limited core_refused row of chunk_refusal_row_codes.
+        "refusal_codes_without_row_added_in_1_18_0": [],
         "chunk_refusal_rows_added_in_1_18_0": (
             "A binary chunk refusal (the codes of chunk_refusal_row_codes, raised by run_tactical_operation for a chunk or by read_binary_body) writes one "
             "custom:operation-failed row with failure core_refused, the code, the status, transfer_role, transfer_direction and transfer_session, and "
@@ -3418,8 +3446,9 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
                 "transfer operation is replaced by it. A row written before the cleaning (server_only, a permission or caller-scope refusal, an invalid "
                 "correlation id, invalid_params) carries transfer_role and transfer_direction with transfer_session null and no transfer correlation id "
                 "(1.18.34). A complete, cancel or fail that Tactical answers 4xx or 5xx (except 401 and 403, which stay deny rows, 408 and 429) writes its "
-                "failure row (custom:operation-failed, or custom:outcome-unknown for 5xx) with transfer_stage end and transfer_outcome failed, under the "
-                "same once-only key as the success end row; a later success for that session writes no second end row (1.18.34). File content and "
+                "failure row (custom:operation-failed, or custom:outcome-unknown for 5xx) with transfer_stage end and transfer_outcome failed, under its "
+                "own once-only key, not the success end row's (1.18.35); a 404 takes no key and writes no end fields, none is written once the completed row exists, "
+                "and a later success for that session still writes its completed or cancelled row. File content and "
                 "Tactical's own text never reach a row"
             ),
             (

@@ -458,7 +458,7 @@ for cls_name, method in (("ModuleOnlineInstallRunView", "post"), ("ModuleOnlineI
 run_view = next(n for n in views_tree.body if isinstance(n, ast.ClassDef) and n.name == "ModuleOnlineInstallRunView")
 reads = [n.args[0].value for n in ast.walk(run_view) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "get" and n.args
          and isinstance(n.args[0], ast.Constant)]
-must(reads == ["modules"], "the start view reads only the module ids from the body: " + repr(reads))
+must(reads == ["modules", "purpose"], "the start view reads only the module ids and (1.18.35) the purpose from the body: " + repr(reads))
 
 urls_src = (PKG_DIR / "urls.py").read_text(encoding="utf-8")
 contracts_src = (PKG_DIR / "contracts.py").read_text(encoding="utf-8")
