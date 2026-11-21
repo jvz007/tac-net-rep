@@ -21,6 +21,62 @@ def create_service_user(apps, schema_editor):
         logger.exception("The Communicator service user could not be made (%s); agent.command refuses until the migration runs again.", type(exc).__name__)
 
 
+_INTEGER_KINDS = {"IntegerField", "BigIntegerField", "SmallIntegerField", "PositiveIntegerField", "PositiveSmallIntegerField", "PositiveBigIntegerField",
+                  "FloatField", "DecimalField", "AutoField", "BigAutoField", "SmallAutoField"}
+_TEXT_KINDS = {"CharField", "TextField", "SlugField", "EmailField", "URLField", "GenericIPAddressField"}
+
+
+def _row_values(columns, known, force_bool_false, now):
+    """Return {column: value} for one INSERT. columns: (name, kind, null_ok, has_default, is_pk) read from the live table, so a column the historical model
+    does not know (Tactical 1.6.1 adds some in accounts 0043 and 0044) is still filled and never trips a NOT NULL error. Pure function: tested without Django.
+    force_bool_false: every boolean column is false unless known says otherwise, even one whose database default is true (least privilege)."""
+    values = {}
+    for name, kind, null_ok, has_default, is_pk in columns:
+        if is_pk:
+            continue
+        if name in known:
+            values[name] = known[name]
+        elif kind == "BooleanField" and force_bool_false:
+            values[name] = False
+        elif null_ok or has_default:
+            continue
+        elif kind == "BooleanField":
+            values[name] = False
+        elif kind in _INTEGER_KINDS:
+            values[name] = 0
+        elif kind in _TEXT_KINDS:
+            values[name] = ""
+        elif kind == "JSONField":
+            values[name] = "{}"
+        elif kind == "DateTimeField":
+            values[name] = now
+        elif kind == "DateField":
+            values[name] = now.date()
+        elif kind == "UUIDField":
+            import uuid
+            values[name] = str(uuid.uuid4())
+        else:
+            raise ValueError(f"no safe value for the NOT NULL column {name} ({kind})")
+    return values
+
+
+def _insert(schema_editor, model, known, force_bool_false):
+    """INSERT one row into model's table with the live column list (not the historical model's)."""
+    from django.utils import timezone
+
+    conn = schema_editor.connection
+    table = model._meta.db_table
+    pk = model._meta.pk.column
+    with conn.cursor() as cursor:
+        desc = conn.introspection.get_table_description(cursor, table)
+        columns = [(d.name, conn.introspection.get_field_type(d.type_code, d), bool(d.null_ok), d.default is not None, d.name == pk) for d in desc]
+        values = _row_values(columns, known, force_bool_false, timezone.now())
+        names = list(values)
+        columns_sql = ", ".join(conn.ops.quote_name(n) for n in names)
+        sql = f"INSERT INTO {conn.ops.quote_name(table)} ({columns_sql}) VALUES ({', '.join(['%s'] * len(names))})"
+        cursor.execute(sql, [values[n] for n in names])
+
+
 def _make(apps, schema_editor):
     from django.contrib.auth.hashers import make_password
 
@@ -32,17 +88,21 @@ def _make(apps, schema_editor):
         return
     role = Role.objects.using(db).filter(name=ROLE).first()
     if role is None:
-        values = {f.name: (f.name == FLAG) for f in Role._meta.get_fields() if f.get_internal_type() == "BooleanField"}
-        role = Role.objects.using(db).create(name=ROLE, **values)
+        # Raw INSERT over the live columns: the historical Role (accounts 0042) lacks columns that 1.6.1 added as NOT NULL without a database default.
+        _insert(schema_editor, Role, {"name": ROLE, FLAG: True}, True)
+        role = Role.objects.using(db).filter(name=ROLE).first()
     if not User.objects.using(db).filter(username=USERNAME).exists():
-        User.objects.using(db).create(username=USERNAME, email="", password=make_password(None), is_active=True, is_superuser=False, is_staff=False,
-                                      block_dashboard_login=True, role=role)
+        _insert(schema_editor, User, {"username": USERNAME, "email": "", "password": make_password(None), "is_active": True, "is_superuser": False,
+                                      "is_staff": False, "block_dashboard_login": True, "role_id": role.pk}, False)
 
 
 class Migration(migrations.Migration):
     dependencies = [
         ("tec_tac", "0037_creation_scope_and_delegation"),
-        ("accounts", "__latest__"),
+        # Pinned, not "__latest__": a floating dependency resolves to accounts.0044 on Tactical 1.6.1 while
+        # tec_tac.0038 is already applied, and migrate then fails with InconsistentMigrationHistory.
+        # 0042 is the newest accounts migration in both Tactical 1.5.2 and 1.6.1 (can_send_cmd exists since 0017).
+        ("accounts", "0042_copy_mesh_permission_to_terminal"),
     ]
 
     operations = [

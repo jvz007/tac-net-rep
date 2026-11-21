@@ -38,5 +38,7 @@ printf '%s\n' "${ROOT_NOTES[@]}" | grep -Fxq "${CURRENT_NOTE}" || \
 
 bash "${ROOT}/tests/root-script-crlf-1.17.15.sh"
 python3 "${ROOT}/tests/release-archive-integrity.py"
+python3 "${ROOT}/tests/migration-no-floating-dependency-1.18.31.py"
+python3 "${ROOT}/tests/communicator-service-user-1.18.31.py"
 
 echo "[TEST] PASS release integrity ${VERSION}"

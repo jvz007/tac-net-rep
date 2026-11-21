@@ -396,7 +396,7 @@ ra = src.split("def run_one")[1]
 must(ra.index("_service_user()") < ra.index("count_run(") < ra.index("claim("), "run_one reads and checks the service user BEFORE the count, the claim and the audit row")
 must("get_or_create" not in code and "set_unusable_password" not in code and "Role.objects.create" not in code, "system_commands.py has no code that creates the service user or role")
 mig = (ROOT / "migrations" / "0038_communicator_service_user.py").read_text(encoding="utf-8")
-must(all(x in mig for x in (sc.SERVICE_USERNAME, sc.SERVICE_ROLE, sc.SERVICE_FLAG, "make_password(None)", "block_dashboard_login=True", "RunPython")), "migration 0038 makes the role and the user with the same names")
+must(all(x in mig for x in (sc.SERVICE_USERNAME, sc.SERVICE_ROLE, sc.SERVICE_FLAG, "make_password(None)", "\"block_dashboard_login\": True", "RunPython")), "migration 0038 makes the role and the user with the same names")
 must("entry_time__gte" in src and 'action="run"' in src, "the durable claim lookup is time-windowed and filtered by action")
 cx = (ROOT / "contracts.py").read_text(encoding="utf-8")
 must("then can_send_cmd as stored at creation" not in cx and "can_send_cmd is not checked (AD-50)" in cx, "the contract text matches the code (no can_send_cmd check)")
@@ -498,9 +498,17 @@ role_model = types.SimpleNamespace(_meta=types.SimpleNamespace(get_fields=lambda
 user_model = types.SimpleNamespace(objects=_Mgr([], created))
 apps = types.SimpleNamespace(get_model=lambda app, name: {"Role": role_model, "User": user_model}[name])
 editor = types.SimpleNamespace(connection=types.SimpleNamespace(alias="default"))
+# 1.18.31: the rows are inserted over the live columns by _insert (tested in communicator-service-user-1.18.31.py); here it records what it was told
+def _fake_insert(ed, model, known, force_bool_false):
+    created.append(dict(known, _force=force_bool_false))
+    if "name" in known:
+        role_model.objects.first = lambda: types.SimpleNamespace(pk=1)
+
+
+mg._insert = _fake_insert
 mg.create_service_user(apps, editor)
-must(len(created) == 2 and created[0]["name"] == mg.ROLE and created[0][mg.FLAG] is True and created[0]["can_run_scripts"] is False and created[1]["username"] == mg.USERNAME and created[1]["block_dashboard_login"] is True and created[1]["is_superuser"] is False, "migration 0038: role has only can_send_cmd; user has no sign-in and no admin flags")
-role_model.objects.first = lambda: types.SimpleNamespace()
+must(len(created) == 2 and created[0]["name"] == mg.ROLE and created[0][mg.FLAG] is True and created[0]["_force"] is True and created[1]["username"] == mg.USERNAME and created[1]["block_dashboard_login"] is True and created[1]["is_superuser"] is False, "migration 0038: role has only can_send_cmd; user has no sign-in and no admin flags")
+role_model.objects.first = lambda: types.SimpleNamespace(pk=1)
 n = len(created); role_model.objects.exists = lambda: True; user_model.objects.exists = lambda: True
 mg.create_service_user(apps, editor)
 must(len(created) == n, "migration 0038: existing rows are never changed")

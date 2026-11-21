@@ -570,7 +570,7 @@ for path in sorted((APP / "migrations").glob("[0-9]*.py")):
             deps = [d.elts[1].value for d in node.value.elts if isinstance(d, ast.Tuple) and d.elts[0].value == "tec_tac"]
     migrations[path.stem] = deps
 leaves = [name for name in migrations if not any(name in deps for deps in migrations.values())]
-must(leaves == ["0044_core_secret"], leaves)
+must(leaves == ["0045_communicator_service_user_retry"] and migrations["0045_communicator_service_user_retry"] == ["0044_core_secret"], leaves)  # 1.18.31: 0045 re-runs the idempotent service-user creation on top of 0044
 must(migrations["0044_core_secret"] == ["0043_removed_schedule_marker"], migrations["0044_core_secret"])
 mtree = ast.parse(read(APP / "migrations" / "0044_core_secret.py"))
 ops = [n for n in ast.walk(mtree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr in {
