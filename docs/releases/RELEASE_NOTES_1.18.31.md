@@ -1,6 +1,6 @@
 # Tec-Tac Framework 1.18.31
 
-Date: 21 November 2026. Tactical's own upgrade from 1.5.2 to 1.6.1 no longer trips over a Core migration. One dependency line changes. No behaviour changes. `main` stays held.
+Date: 21 November 2026. Tactical's own upgrade from 1.5.2 to 1.6.1 no longer trips over a Core migration. Migration 0038 is pinned to accounts `0042` and creates the Communicator role and user with a raw INSERT over the live table columns. A new idempotent migration, `0045`, retries that creation on servers where `0038` already failed. No contract, endpoint or screen changes. `main` stays held.
 
 ## Module-facing change
 
@@ -17,6 +17,8 @@ None. No contract, capability, endpoint or declared operation changes. No module
 - Why it is safe for installed servers: Django stores which migrations ran, not their dependencies. Changing the dependency of an applied migration changes nothing in the database. New installs now depend on a migration that exists in both Tactical versions.
 - `tests/migration-no-floating-dependency-1.18.31.py` (new) is called from `tests/release-integrity.sh`, so the check runs before every pack.
 - Version 1.18.31 in `VERSION` and `tec_tac_package.json`.
+- `framwork/tec_tac/migrations/0038_communicator_service_user.py` (second change, see "Fixed after review"): the role and user rows are inserted with SQL over the live table columns, not through the historical model.
+- `framwork/tec_tac/migrations/0045_communicator_service_user_retry.py` (new): the same idempotent creation, on top of `0044_core_secret`, for servers where `0038` failed and only logged.
 
 ## Assumptions
 
@@ -30,6 +32,7 @@ None. No contract, capability, endpoint or declared operation changes. No module
 ## New tests
 
 - `tests/migration-no-floating-dependency-1.18.31.py`: parses every Core migration with `ast` and fails on any `__latest__` or `__first__`. It checks that `0038` depends on exactly the pinned accounts migration, runs a negative self-test on synthetic sources, checks the pinned file and `can_send_cmd` in `reference/tacticalrmm` when present, and checks that `release-integrity.sh` calls it and that `0038` keeps LF.
+- `tests/communicator-service-user-1.18.31.py`: builds a real sqlite stand-in of the live accounts tables and checks the raw INSERT and the shape of `0045`.
 - `tests/version-1.18.31.py`: release bookkeeping.
 
 ## What could not be run here

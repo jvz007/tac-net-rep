@@ -26,10 +26,13 @@ _INTEGER_KINDS = {"IntegerField", "BigIntegerField", "SmallIntegerField", "Posit
 _TEXT_KINDS = {"CharField", "TextField", "SlugField", "EmailField", "URLField", "GenericIPAddressField"}
 
 
-def _row_values(columns, known, force_bool_false, now):
+def _row_values(columns, known, force_bool_false, now, model_defaults=None):
     """Return {column: value} for one INSERT. columns: (name, kind, null_ok, has_default, is_pk) read from the live table, so a column the historical model
     does not know (Tactical 1.6.1 adds some in accounts 0043 and 0044) is still filled and never trips a NOT NULL error. Pure function: tested without Django.
-    force_bool_false: every boolean column is false unless known says otherwise, even one whose database default is true (least privilege)."""
+    force_bool_false: every boolean column is false unless known says otherwise, even one whose database default is true (least privilege).
+    model_defaults: {column: value} the historical model's own defaults (what Django's create() wrote); used for a column the caller did not pass, after the
+    force_bool_false rule and before the neutral values, which remain for columns the model does not know."""
+    model_defaults = model_defaults or {}
     values = {}
     for name, kind, null_ok, has_default, is_pk in columns:
         if is_pk:
@@ -38,6 +41,8 @@ def _row_values(columns, known, force_bool_false, now):
             values[name] = known[name]
         elif kind == "BooleanField" and force_bool_false:
             values[name] = False
+        elif name in model_defaults:
+            values[name] = model_defaults[name]
         elif null_ok or has_default:
             continue
         elif kind == "BooleanField":
@@ -60,8 +65,19 @@ def _row_values(columns, known, force_bool_false, now):
     return values
 
 
+def _model_defaults(model, connection):
+    """{column: database-ready default} for every concrete field of the historical model that has a default and is not the pk. A model without
+    concrete_fields (an older stand-in) gives {}. Callable defaults (JSON dicts, choices) are evaluated, as Django's create() did."""
+    defaults = {}
+    for field in getattr(model._meta, "concrete_fields", ()):
+        if field.column == model._meta.pk.column or not field.has_default():
+            continue
+        defaults[field.column] = field.get_db_prep_save(field.get_default(), connection)
+    return defaults
+
+
 def _insert(schema_editor, model, known, force_bool_false):
-    """INSERT one row into model's table with the live column list (not the historical model's)."""
+    """INSERT one row into model's table with the live column list (not the historical model's). Columns the model knows get the model's defaults."""
     from django.utils import timezone
 
     conn = schema_editor.connection
@@ -70,7 +86,7 @@ def _insert(schema_editor, model, known, force_bool_false):
     with conn.cursor() as cursor:
         desc = conn.introspection.get_table_description(cursor, table)
         columns = [(d.name, conn.introspection.get_field_type(d.type_code, d), bool(d.null_ok), d.default is not None, d.name == pk) for d in desc]
-        values = _row_values(columns, known, force_bool_false, timezone.now())
+        values = _row_values(columns, known, force_bool_false, timezone.now(), _model_defaults(model, conn))
         names = list(values)
         columns_sql = ", ".join(conn.ops.quote_name(n) for n in names)
         sql = f"INSERT INTO {conn.ops.quote_name(table)} ({columns_sql}) VALUES ({', '.join(['%s'] * len(names))})"

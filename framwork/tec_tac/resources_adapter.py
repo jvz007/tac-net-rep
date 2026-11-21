@@ -6,6 +6,7 @@ must never import Tactical Client/Site/Agent models directly.
 """
 from __future__ import annotations
 
+import datetime
 from collections import Counter
 from typing import Any
 
@@ -753,6 +754,32 @@ def nest_sites(rows: list[dict[str, Any]], *, user=None, trusted: bool = False) 
     return attach_sites(rows, sites_by_client([row["id"] for row in rows], user=user, trusted=trusted))
 
 
+# Tactical v1.5.2 Agent.offline_time and Agent.overdue_time defaults (minutes), used when a row does not carry the columns.
+DEFAULT_OFFLINE_TIME = 4
+DEFAULT_OVERDUE_TIME = 30
+
+
+def agent_status(last_seen, offline_time=None, overdue_time=None, now=None) -> str:
+    """Tactical's own agent status word: "online", "offline" or "overdue". Same rule as Tactical's Agent.status (1.13.0), re-expressed from the columns:
+    never reported is offline; older than offline_time minutes and not older than overdue_time is offline; older than both is overdue; else online
+    (a last_seen exactly on a limit counts as online, as in Tactical). A missing limit takes Tactical's default; a last_seen that is not a datetime
+    is treated as never reported. Pure: pass ``now`` in tests."""
+    if not isinstance(last_seen, datetime.datetime):
+        return "offline"
+    offline = DEFAULT_OFFLINE_TIME if offline_time is None else offline_time
+    overdue = DEFAULT_OVERDUE_TIME if overdue_time is None else overdue_time
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    if last_seen.tzinfo is None:
+        last_seen = last_seen.replace(tzinfo=datetime.timezone.utc)
+    offline_at = now - datetime.timedelta(minutes=offline)
+    overdue_at = now - datetime.timedelta(minutes=overdue)
+    if last_seen < offline_at and last_seen > overdue_at:
+        return "offline"
+    if last_seen < offline_at and last_seen < overdue_at:
+        return "overdue"
+    return "online"
+
+
 def agent_row(row: dict[str, Any]) -> dict[str, Any]:
     last_seen = row.get("last_seen")
     return {
@@ -765,6 +792,8 @@ def agent_row(row: dict[str, Any]) -> dict[str, Any]:
         "platform": str(row.get("plat") or ""),
         "monitoring_type": str(row.get("monitoring_type") or ""),
         "last_seen": last_seen.isoformat() if hasattr(last_seen, "isoformat") else (str(last_seen) if last_seen else None),
+        "status": agent_status(last_seen, row.get("offline_time"), row.get("overdue_time")),
+        "version": str(row.get("version") or ""),
     }
 
 
@@ -784,7 +813,7 @@ def page_agents(queryset, *, offset: int, limit: int) -> tuple[list[dict[str, An
     total = queryset.count()
     rows = queryset.values(
         "agent_id", "hostname", "site_id", "site__client_id", "plat",
-        "monitoring_type", "last_seen",
+        "monitoring_type", "last_seen", "offline_time", "overdue_time", "version",
     )[offset : offset + limit]
     return [agent_row(row) for row in rows], total
 
@@ -802,7 +831,7 @@ def get_site_row(queryset, site_id: int) -> dict[str, Any] | None:
 def get_agent_row(queryset, agent_id: str) -> dict[str, Any] | None:
     row = queryset.filter(agent_id=agent_id).values(
         "agent_id", "hostname", "site_id", "site__client_id", "plat",
-        "monitoring_type", "last_seen",
+        "monitoring_type", "last_seen", "offline_time", "overdue_time", "version",
     ).first()
     return agent_row(row) if row else None
 

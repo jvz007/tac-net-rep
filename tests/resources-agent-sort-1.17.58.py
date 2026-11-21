@@ -127,7 +127,7 @@ admin = User(Role())
 site_11 = User(Role(sites=[11]))
 ctx = ctx_for(admin)
 
-must(resources.CONTRACT_VERSION == "1.12.0", resources.CONTRACT_VERSION)
+must(resources.CONTRACT_VERSION == "1.13.0", resources.CONTRACT_VERSION)
 
 # (1) the default order is the 1.17.57 order: client, site, hostname, agent id
 world()
@@ -218,5 +218,5 @@ world()
 must(resources.get_agent("a-3", context=ctx)["hostname"] == "charlie", "get_agent")
 agent_meta = resources.resource_contract_metadata()["resource_types"]["agent"]
 must(agent_meta["sort"]["sort_by"] == ["hostname", "client", "site", "platform", "last_seen"] and agent_meta["sort"]["sort_dir"] == ["asc", "desc"], agent_meta)
-must(resources.resource_contract_metadata()["version"] == "1.12.0", "metadata version")
+must(resources.resource_contract_metadata()["version"] == "1.13.0", "metadata version")
 print("[TEST] PASS resources agent sort 1.17.58")

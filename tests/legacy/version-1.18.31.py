@@ -35,7 +35,7 @@ for name in ("VERSION", "tec_tac_package.json", f"RELEASE_NOTES_{version}.md", "
     assert b"\r" not in (ROOT / name).read_bytes(), name + " must keep LF line endings"
 
 # No rebuild label (this version, a dash and a digit) in any file except VERSION, tec_tac_package.json and the release notes.
-label = re.compile("1" + r"\.18\.30" + "-" + r"\d")
+label = re.compile("1" + r"\.18\.31" + "-" + r"\d")
 names = subprocess.run(["git", "-C", str(ROOT), "ls-files", "-z", "--cached", "--others", "--exclude-standard"], capture_output=True, check=False).stdout.decode("utf-8", "replace").split("\0")
 if not any(names):
     names = [str(p.relative_to(ROOT)).replace("\\", "/") for p in ROOT.rglob("*") if p.is_file() and ".git" not in p.parts]

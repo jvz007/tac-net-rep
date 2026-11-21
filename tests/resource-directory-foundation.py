@@ -48,8 +48,8 @@ DATA = {
         {"type": "site", "id": 21, "name": "Beta One", "client_id": 2, "active": True, "alert_template_id": None, "client_name": "Beta"},
     ],
     "agents": [
-        {"type": "agent", "id": "a-1", "hostname": "ALPHA-PC", "client_id": 1, "site_id": 11, "active": True, "platform": "windows", "monitoring_type": "workstation", "last_seen": None},
-        {"type": "agent", "id": "a-2", "hostname": "BETA-SRV", "client_id": 2, "site_id": 21, "active": True, "platform": "linux", "monitoring_type": "server", "last_seen": None},
+        {"type": "agent", "id": "a-1", "hostname": "ALPHA-PC", "client_id": 1, "site_id": 11, "active": True, "platform": "windows", "monitoring_type": "workstation", "last_seen": None, "status": "offline", "version": ""},
+        {"type": "agent", "id": "a-2", "hostname": "BETA-SRV", "client_id": 2, "site_id": 21, "active": True, "platform": "linux", "monitoring_type": "server", "last_seen": None, "status": "offline", "version": ""},
     ],
 }
 
@@ -512,7 +512,7 @@ assert AUDITS[-1]["action"] == "delete" and AUDITS[-1]["metadata"]["destination_
 
 # Contract metadata is versioned and discoverable.
 meta = resources.resource_contract_metadata()
-assert meta["id"] == "core.resources" and meta["version"] == "1.12.0"
+assert meta["id"] == "core.resources" and meta["version"] == "1.13.0"
 assert meta["pagination"]["maximum_page_number"] == 10000
 assert meta["list_contracts"]["clients"]["http"] == "GET /api/tfd/resources/clients/"
 assert meta["list_contracts"]["sites"]["response"]["pages"] == "integer"

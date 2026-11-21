@@ -14,7 +14,7 @@ from . import resources_adapter as adapter
 from .capabilities import register_capability
 
 CONTRACT_ID = "core.resources"
-CONTRACT_VERSION = "1.12.0"
+CONTRACT_VERSION = "1.13.0"
 RESOURCE_TYPES = ("client", "site", "agent")
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 500
@@ -41,6 +41,9 @@ SITE_MANAGE_PERMISSION = "core.resources.sites.manage"
 # 1.12.0 (Core 1.17.58, Agent Management 0.15.0 request) lets list_agents take sort_by (hostname, client, site, platform, last_seen) and
 # sort_dir (asc, desc), validated strictly and applied inside the caller's scope before the page is cut. Additive; without sort_by the
 # order is the 1.11.0 order (client, site, hostname, agent id).
+# 1.13.0 (Core 1.18.32, remote-background 0.11.2 request) appends the read-only keys status and version to the agent record. status is Tactical's
+# own word (online, offline or overdue), worked out from the agent's last_seen, offline_time and overdue_time with the rule of Tactical's Agent.status;
+# version is Tactical's agent version text. Same scoped query as the other keys: no new route, permission or global read. Additive.
 AGENT_SORT_KEYS = ("hostname", "client", "site", "platform", "last_seen")
 AGENT_SORT_DIRS = ("asc", "desc")
 LIVE_FIELDS = ("failing_checks", "agent_count", "maintenance_mode")
@@ -48,7 +51,7 @@ CLIENT_FIELDS = ("type", "id", "name", "active", "alert_template_id", "sites", "
 SITE_FIELDS = ("type", "id", "name", "client_id", "active", "alert_template_id", "client_name", "workstation_policy_id", "server_policy_id", "block_policy_inheritance") + LIVE_FIELDS
 AGENT_FIELDS = (
     "type", "id", "hostname", "client_id", "site_id", "active",
-    "platform", "monitoring_type", "last_seen",
+    "platform", "monitoring_type", "last_seen", "status", "version",
 )
 
 

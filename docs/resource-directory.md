@@ -1,7 +1,7 @@
 # Core Resource Directory
 
 Contract ID: `core.resources`  
-Contract version: `1.12.0`  
+Contract version: `1.13.0`  
 Python namespace: `tec_tac.resources`
 
 ## Purpose
@@ -23,6 +23,8 @@ tec_tac.resources           <- stable public contract
         +-- Reporting
         +-- Alerts / Automation / other modules
 ```
+
+Contract 1.13 (Core 1.18.32, additive, still major 1) appends two read-only keys, `status` and `version`, to the agent record. `status` is Tactical's own word (`online`, `offline` or `overdue`), worked out from the agent's `last_seen`, `offline_time` and `overdue_time` with the rule of Tactical's `Agent.status`. `version` is Tactical's agent version text. Both come from the same scoped query as the other keys: no new route, permission or global read. See "Agent status and version (since 1.13.0)".
 
 Contract 1.12 (Core 1.17.58, additive, still major 1) lets `list_agents` take `sort_by` (hostname, client, site, platform, last_seen) and `sort_dir` (asc, desc). Without `sort_by` the order is the 1.11 order. See "Sort the agent list (since 1.12.0)".
 
@@ -100,11 +102,19 @@ The UI shows the Clients and Sites page when the role holds either flag (or is a
   "active": true,
   "platform": "windows",
   "monitoring_type": "workstation",
-  "last_seen": "2026-09-25T17:00:00+00:00"
+  "last_seen": "2026-09-25T17:00:00+00:00",
+  "status": "online",
+  "version": "2.9.0"
 }
 ```
 
-Stable fields: `type`, `id`, `hostname`, `client_id`, `site_id`, `active`, `platform`, `monitoring_type`, `last_seen`.
+Stable fields: `type`, `id`, `hostname`, `client_id`, `site_id`, `active`, `platform`, `monitoring_type`, `last_seen`, `status`, `version`.
+
+#### Agent status and version (since 1.13.0, Core 1.18.32)
+
+- `status`: `online`, `offline` or `overdue`. An agent that never reported is `offline`. An agent whose `last_seen` is older than its `offline_time` minutes (Tactical's default 4) and not older than its `overdue_time` minutes (default 30) is `offline`. Older than both is `overdue`. Anything else is `online`. A `last_seen` exactly on a limit counts as `online`, as in Tactical. Read-only. There is no sort or filter on it.
+- `version`: Tactical's agent version text; an empty string when Tactical holds none. Read-only.
+- Needs framework >=1.18.32. Feature-detect with `core.resources >= 1.13.0`. Test: `tests/resources-agent-status-version-1.18.32.py`.
 
 The public agent `id` is Tactical's stable `agent_id`, not Tactical's Django primary key.
 
@@ -447,6 +457,8 @@ If Tactical later changes model/table/field layout, update the Core adapter whil
 `core.resources` follows semantic contract versioning.
 
 Contract `1.1.0` is additive over `1.0.0`: it preserves all read operations and resource shapes while adding client/site create/update operations, write authorization metadata and stable conflict errors. A Tactical internal schema change alone is not a reason to change this contract version.
+
+Contract `1.13.0` (Core 1.18.32) is additive over `1.12.0`: agent records gain the read-only keys `status` and `version`, appended after `last_seen`. No keyword, route, permission or earlier error changed. Needs framework >=1.18.32.
 
 Contract `1.12.0` (Core 1.17.58) is additive over `1.11.0`: `list_agents` gains the optional keywords `sort_by` and `sort_dir`, and the agent list route accepts the same two query parameters. No record, route or earlier error changed. Needs framework >=1.17.58.
 
