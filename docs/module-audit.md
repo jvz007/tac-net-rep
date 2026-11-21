@@ -56,6 +56,20 @@ Three `operation_context` keys are Core-owned: `core_refusal`, `browser_provenan
 
 Core's own audit writers are Core-internal and a module must not call them: `record_browser_declared`, `record_core_refusal` and `_record_tactical_operation`. Since 1.17.8 the last one is private (`audit.record_tactical_operation` is gone, with no alias), so only Core's executor can write a `server_provenance` row. A module that needs a Tactical call audited declares a Tactical operation (`core.tactical_operations`).
 
+### Naming the device: `agent_id` (Core 1.18.39)
+
+`record()` takes one more optional keyword, `agent_id`. Pass the Tactical agent id of the device the row is about.
+
+```python
+record(actor=request.user, module_id="my-module", action="run", object_type="agent", object_id=agent_id, agent_id=agent_id, ...)
+```
+
+* It must match `^[A-Za-z0-9._-]{1,80}$`. Anything else is an `AuditContractError`, like other contract errors.
+* Core looks up the hostname with one indexed query and sets Tactical's `AuditLog.agent` (the hostname) and `AuditLog.agent_id`. The Audit page uses them to show Agent, Client and Site.
+* The lookup is fail soft. An unknown device (for example a deleted agent) keeps `agent_id` with no hostname. A lookup fault is logged and the row is still written, also with `strict=True`.
+* Without `agent_id` nothing changes and no lookup runs. `object_id` keeps its own meaning and is never overwritten.
+* Added in 1.18.39, additive, needs framework >=1.18.39. Rows with `agent_id` are filtered by the viewer's agent scope on the Audit page: a person who cannot see that device no longer sees its rows. Rows without `agent_id` stay visible as before.
+
 Backend authorization remains authoritative. Audit recording does not grant permission to perform the business action. Modules must authorize the action first, perform it, then record the event.
 
 ## Browser runtime

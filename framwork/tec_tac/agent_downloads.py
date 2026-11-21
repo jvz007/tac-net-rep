@@ -1,4 +1,4 @@
-"""Core's agent file download (Core 1.18.37, capability core.agent_downloads 1.0.0).
+"""Core's agent file download (Core 1.18.37, capability core.agent_downloads 1.0.0; 1.1.0 in Core 1.18.39 adds the public installer).
 
 A verified module (for example Endpoint Agent Management) owns a file in its own folder, such as an agent MSI. It asks Core for a short
 link for ONE device and ONE file (``grant_download``). The device then fetches the file over HTTPS from Core's own host with the same
@@ -7,6 +7,11 @@ agent token and agent id the websocket uses (route GET /api/tfd/agent-downloads/
 What Core does here: it checks who is calling, checks the file, hashes it, stores a short-lived grant (Django's cache, only the HASH of the
 link token is a key) and writes a strict audit row. What Core does not do: it never knows what the file means, never keeps a copy and
 never serves anything the module did not grant to that device.
+
+Core 1.18.39 (AD-74, capability 1.1.0): ONE public installer. The one publisher module (INSTALLER_PUBLISHERS) marks one file of its own as the
+current Endpoint Agent installer (``publish_installer``); Core serves exactly that file, without sign-in, at the fixed route
+GET /api/tfd/endpoint-agent/installer.msi (agent_download_views.InstallerDownloadView). The file carries no secret: the agent it installs
+cannot connect without its own token. Core re-verifies path and SHA-256 at every serve and never redirects.
 
 Secrets: the link token is returned once to the caller and is never logged, audited or kept in the clear (the cache holds its SHA-256).
 Every refusal carries a reason code only. No Django import at the top of this file.
@@ -30,7 +35,7 @@ from .endpoint_transport import AGENT_ID_PATTERN
 logger = logging.getLogger("tec_tac.agent_downloads")
 
 CAPABILITY_ID = "core.agent_downloads"
-CAPABILITY_VERSION = "1.0.0"
+CAPABILITY_VERSION = "1.1.0"
 ROUTE_PATTERN = "agent-downloads/<str:token>/"
 ROUTE_PATH = "/api/tfd/agent-downloads/<str:token>/"
 MIN_TTL_SECONDS = 30
@@ -45,6 +50,12 @@ CHUNK_BYTES = 1024 * 1024
 GRANT_PREFIX = "tec-tac:agentdl:grant:"
 SLOT_PREFIX = "tec-tac:agentdl:slot:"
 INFLIGHT_KEY = "tec-tac:agentdl:inflight"
+INSTALLER_INFLIGHT_KEY = "tec-tac:agentdl:installer-inflight"  # 1.18.39: its own counter, so an anonymous flood cannot starve device downloads
+INSTALLER_ROUTE_PATH = "/api/tfd/endpoint-agent/installer.msi"
+INSTALLER_SLOT = "endpoint-agent"  # the one row of the installer store
+INSTALLER_PUBLISHERS = ("endpoint-agent-management",)  # the only module that may publish (AD-74 names it); widen by adding an id
+INSTALLER_VERSION_PATTERN = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]{1,32})?$")
+INSTALLER_VERSION_MAX = 40
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 LINK_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{43}$")  # secrets.token_urlsafe(32)
 MODULE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
@@ -54,6 +65,8 @@ AUDIT_GRANTED = "custom:agent-download-granted"
 AUDIT_REVOKED = "custom:agent-download-revoked"
 AUDIT_SERVED = "custom:agent-download-served"
 AUDIT_REFUSED = "custom:agent-download-refused"
+AUDIT_INSTALLER_PUBLISHED = "custom:agent-installer-published"
+AUDIT_INSTALLER_UNPUBLISHED = "custom:agent-installer-unpublished"
 
 _now = time.time  # tests replace it
 _islink = os.path.islink
@@ -411,34 +424,177 @@ def drop_grant(token: str, grant: dict) -> None:
         logger.warning("An agent download slot could not be removed.", exc_info=True)
 
 
-def acquire_slot() -> bool:
-    """Take one of the MAX_INFLIGHT serving slots (a cache counter shared by every process). False when all are taken. Raises on a cache fault."""
+def acquire_slot(key: str = INFLIGHT_KEY) -> bool:
+    """Take one of the MAX_INFLIGHT serving slots (a cache counter shared by every process). False when all are taken. Raises on a cache fault.
+
+    ``key`` (1.18.39) names the counter: the default is the device download counter, INSTALLER_INFLIGHT_KEY is the public installer's own."""
     cache = _cache()
-    cache.add(INFLIGHT_KEY, 0, timeout=INFLIGHT_TTL_SECONDS)
+    cache.add(key, 0, timeout=INFLIGHT_TTL_SECONDS)
     try:
-        used = int(cache.incr(INFLIGHT_KEY))
+        used = int(cache.incr(key))
     except ValueError:  # the counter expired between add and incr
-        cache.add(INFLIGHT_KEY, 1, timeout=INFLIGHT_TTL_SECONDS)
+        cache.add(key, 1, timeout=INFLIGHT_TTL_SECONDS)
         return True
-    cache.touch(INFLIGHT_KEY, INFLIGHT_TTL_SECONDS)  # 1.18.38: activity renews the lifetime, so the counter never expires under a running download
+    cache.touch(key, INFLIGHT_TTL_SECONDS)  # 1.18.38: activity renews the lifetime, so the counter never expires under a running download
     if used > MAX_INFLIGHT:
-        release_slot()
+        release_slot(key)
         return False
     return True
 
 
-def release_slot() -> None:
+def release_slot(key: str = INFLIGHT_KEY) -> None:
     """Give a serving slot back. Never raises and never leaves the counter below zero."""
     try:
         cache = _cache()
-        if int(cache.decr(INFLIGHT_KEY)) < 0:
-            cache.set(INFLIGHT_KEY, 0, timeout=INFLIGHT_TTL_SECONDS)
+        if int(cache.decr(key)) < 0:
+            cache.set(key, 0, timeout=INFLIGHT_TTL_SECONDS)
         else:
-            cache.touch(INFLIGHT_KEY, INFLIGHT_TTL_SECONDS)  # 1.18.38: the other downloads still running keep the counter alive
+            cache.touch(key, INFLIGHT_TTL_SECONDS)  # 1.18.38: the other downloads still running keep the counter alive
     except ValueError:
         pass  # the counter expired: it heals itself
     except Exception:
         logger.warning("The agent download slot could not be released.", exc_info=True)
+
+
+# ------------------------------------------------------------------------------------------------ the public installer (1.18.39, AD-74)
+class _StoreFault(Exception):
+    """The installer row could not be read or written."""
+
+
+class _AuditFault(Exception):
+    """The strict installer audit row could not be written."""
+
+
+def _installer_model():
+    from .models import TecTacPublishedInstaller
+
+    return TecTacPublishedInstaller
+
+
+def _atomic():
+    from django.db import transaction
+
+    return transaction.atomic()
+
+
+def _installer_audit(action: str, *, message: str, metadata: dict) -> None:
+    from . import audit as audit_core
+
+    audit_core._record_agent_installer(action=action, message=message, metadata=metadata, strict=True)
+
+
+def _installer_caller(module_id) -> str | None:
+    """The verified caller when it is the module_id argument AND an installer publisher; None for everyone else (Core, unverifiable, mismatch)."""
+    caller = _verified_module_id()
+    if caller is None or module_id != caller or caller not in INSTALLER_PUBLISHERS:
+        return None
+    return caller
+
+
+def _installer_result(outcome: str, reason: str | None = None) -> dict:
+    return {"outcome": outcome, "reason": reason}
+
+
+def load_installer() -> dict | None:
+    """The one published installer as {module_id, path, sha256, size, version}, or None. Raises when the store cannot be read: the route answers 503."""
+    row = _installer_model().objects.filter(slot=INSTALLER_SLOT).first()
+    if row is None:
+        return None
+    return {"module_id": row.module_id, "path": row.path, "sha256": row.sha256, "size": int(row.size), "version": row.version}
+
+
+def publish_installer(module_id, *, path, sha256, version) -> dict:
+    """Make one file of the calling module the public Endpoint Agent installer. See docs/agent-downloads.md.
+
+    Returns {outcome: ok|denied|invalid|unavailable, reason}. The caller is verified from the call stack, must be ``module_id`` and must be
+    one of INSTALLER_PUBLISHERS. Only one installer exists: a new publish replaces the old one. The store write and the strict audit row
+    are one transaction, so no row means nothing is published."""
+    caller = _installer_caller(module_id)
+    if caller is None:
+        return _installer_result("denied")
+    if not isinstance(sha256, str) or not SHA256_PATTERN.fullmatch(sha256):
+        return _installer_result("invalid", "bad_sha256")
+    if not isinstance(version, str) or len(version) > INSTALLER_VERSION_MAX or not INSTALLER_VERSION_PATTERN.fullmatch(version):
+        return _installer_result("invalid", "bad_version")
+    reason = _syntax_reason(path)
+    if reason:
+        return _installer_result("invalid", reason)
+    name = os.path.basename(path.replace("\\", "/"))
+    if len(name) <= len(".msi") or not name.lower().endswith(".msi"):
+        return _installer_result("invalid", "not_msi")
+    try:
+        reason, _root = check_path(caller, path)
+    except Exception:
+        logger.warning("The installer path could not be checked.", exc_info=True)
+        return _installer_result("unavailable", "path_unavailable")
+    if reason:
+        return _installer_result("invalid", reason)
+    try:
+        handle, size, reason = open_verified(caller, path, sha256)
+    except OSError:
+        logger.warning("The installer file could not be read.", exc_info=True)
+        return _installer_result("unavailable", "file_unavailable")
+    if reason:
+        return _installer_result("invalid", reason)
+    handle.close()
+    file_name = safe_file_name(path)
+    try:
+        with _atomic():
+            try:
+                model = _installer_model()
+                current = model.objects.filter(slot=INSTALLER_SLOT).first()
+                replaced_version = None if current is None else current.version
+                model.objects.update_or_create(slot=INSTALLER_SLOT, defaults={
+                    "module_id": caller, "path": path, "sha256": sha256, "size": size, "version": version,
+                })
+            except Exception as exc:
+                raise _StoreFault() from exc
+            try:
+                _installer_audit(AUDIT_INSTALLER_PUBLISHED, message="Agent installer published.", metadata={
+                    "published_by_module": caller, "file": file_name, "size": size, "sha256": sha256, "version": version,
+                    "replaced_version": replaced_version,
+                })
+            except Exception as exc:
+                raise _AuditFault() from exc
+    except _AuditFault:
+        logger.warning("The installer audit row could not be written; the publish is rolled back.")
+        return _installer_result("unavailable", "audit_unavailable")
+    except Exception:
+        logger.warning("The installer could not be stored.", exc_info=True)
+        return _installer_result("unavailable", "store_unavailable")
+    return _installer_result("ok")
+
+
+def unpublish_installer(module_id) -> dict:
+    """Withdraw the public installer when it is the calling module's own. Returns {outcome: ok|denied|unavailable, unpublished}.
+    Nothing to remove (or a file another module published) is ok with unpublished False and writes no row."""
+    caller = _installer_caller(module_id)
+    if caller is None:
+        return {"outcome": "denied", "unpublished": False}
+    try:
+        with _atomic():
+            try:
+                model = _installer_model()
+                current = model.objects.filter(slot=INSTALLER_SLOT).first()
+                if current is None or current.module_id != caller:
+                    return {"outcome": "ok", "unpublished": False}
+                version, sha256, size, path = current.version, current.sha256, int(current.size), current.path
+                model.objects.filter(slot=INSTALLER_SLOT).delete()
+            except Exception as exc:
+                raise _StoreFault() from exc
+            try:
+                _installer_audit(AUDIT_INSTALLER_UNPUBLISHED, message="Agent installer unpublished.", metadata={
+                    "unpublished_by_module": caller, "file": safe_file_name(path), "size": size, "sha256": sha256, "version": version,
+                })
+            except Exception as exc:
+                raise _AuditFault() from exc
+    except _AuditFault:
+        logger.warning("The installer audit row could not be written; the installer stays published.")
+        return {"outcome": "unavailable", "unpublished": False}
+    except Exception:
+        logger.warning("The installer could not be withdrawn.", exc_info=True)
+        return {"outcome": "unavailable", "unpublished": False}
+    return {"outcome": "ok", "unpublished": True}
 
 
 # ------------------------------------------------------------------------------------------------ the capability
@@ -451,6 +607,12 @@ class AgentDownloadsProvider:
     def revoke_download(self, *, module_id, agent_id, path):
         return revoke_download(module_id, agent_id=agent_id, path=path)
 
+    def publish_installer(self, *, module_id, path, sha256, version):
+        return publish_installer(module_id, path=path, sha256=sha256, version=version)
+
+    def unpublish_installer(self, *, module_id):
+        return unpublish_installer(module_id)
+
 
 _PROVIDER = AgentDownloadsProvider()
 
@@ -459,21 +621,37 @@ def agent_downloads_contract_metadata() -> dict[str, Any]:
     return {
         "id": CAPABILITY_ID,
         "version": CAPABILITY_VERSION,
-        "operations": ["grant_download", "revoke_download"],
+        "operations": ["grant_download", "revoke_download", "publish_installer", "unpublish_installer"],
         "requires_framework": ">=1.18.37",
+        "operation_versions": {
+            "grant_download": {"added_in": "1.0.0", "requires_framework": ">=1.18.37"},
+            "revoke_download": {"added_in": "1.0.0", "requires_framework": ">=1.18.37"},
+            "publish_installer": {"added_in": "1.1.0", "requires_framework": ">=1.18.39"},
+            "unpublish_installer": {"added_in": "1.1.0", "requires_framework": ">=1.18.39"},
+        },
         "caller": "Any verified, enabled, non-legacy extension, for its own files only. Core verifies the caller from the call stack (core.caller_identity), never from the module_id argument, which must equal the verified id. Core itself, an unverifiable caller and any mismatch get outcome denied. No module id is named in Core.",
         "roots": "The file must lie, as given, inside the calling module's installed plugin folder or <TEC_TAC_STATE_ROOT>/<module id>/ (default /var/lib/tec-tac/<module id>/). No part of the path below that folder may be a symlink, and the path must be its own real path.",
         "limits": {"file_bytes": MAX_FILE_BYTES, "ttl_seconds": {"min": MIN_TTL_SECONDS, "default": DEFAULT_TTL_SECONDS, "max": MAX_TTL_SECONDS}, "downloads_in_flight": MAX_INFLIGHT},
         "operations_detail": {
             "grant_download": "grant_download(module_id, *, agent_id, path, sha256, ttl_seconds=600) -> {outcome: ok|denied|invalid|unavailable, url, path, expires, expires_in, reason}. Core checks the file, hashes it and refuses unless the SHA-256 matches. invalid reasons: bad_agent_id, bad_sha256, bad_ttl, bad_path, outside_module_folder, symlink_refused, not_a_file, too_large, hash_mismatch. unavailable reasons: cache_unavailable, host_unavailable, audit_unavailable, file_unavailable, path_unavailable. A second grant for the same device and file replaces the first. Sync: call it from a Celery task or a request thread.",
             "revoke_download": "revoke_download(module_id, *, agent_id, path) -> {outcome: ok|denied|invalid|unavailable, revoked}. Withdraws only the calling module's own grant for that device and file.",
+            "publish_installer": "publish_installer(module_id, *, path, sha256, version) -> {outcome: ok|denied|invalid|unavailable, reason}. Added in 1.1.0 (needs framework >=1.18.39). Makes one .msi file of the calling module the public Endpoint Agent installer. Only a module in installer.publishers may call it (today endpoint-agent-management); the caller is verified from the call stack. invalid reasons: bad_sha256, bad_version, bad_path, not_msi, outside_module_folder, symlink_refused, not_a_file, too_large, hash_mismatch. unavailable reasons: store_unavailable, audit_unavailable, file_unavailable, path_unavailable. One installer exists: a new publish replaces the old one. A strict audit row (custom:agent-installer-published) is written in the same transaction as the store, so no row means nothing is published. Sync: call it from a Celery task or a request thread.",
+            "unpublish_installer": "unpublish_installer(module_id) -> {outcome: ok|denied|unavailable, unpublished}. Added in 1.1.0 (needs framework >=1.18.39). Withdraws the public installer when it is the calling module's own; nothing to remove is ok, unpublished False, with no row. A strict row (custom:agent-installer-unpublished) is written in the same transaction.",
+        },
+        "installer": {
+            "route": {"method": "GET", "path": INSTALLER_ROUTE_PATH, "authorization": "none: no sign-in, no code, no expiry"},
+            "publishers": list(INSTALLER_PUBLISHERS),
+            "limits": {"file_bytes": MAX_FILE_BYTES, "downloads_in_flight": MAX_INFLIGHT, "version_chars": INSTALLER_VERSION_MAX},
+            "verification": "Core re-checks the path and recomputes the SHA-256 through the descriptor it sends at every serve. Any mismatch, missing file, symlink or module no longer installed answers 404 with an empty body. Never a redirect.",
+            "audit": "Strict rows on publish and unpublish (module core, provenance agent-downloads, object type agent-installer; the file name, size, SHA-256 and version, never a full path). No row per anonymous download: the rate limit belongs to the web application firewall.",
+            "errors": {"200": "the raw file", "403": "plain-text connection", "404": "nothing published, or the file no longer matches", "503": "all 8 installer slots are busy, or a server fault (Retry-After 30)"},
         },
         "route": {"method": "GET", "path": ROUTE_PATH, "host": "the first Django ALLOWED_HOSTS entry, over HTTPS"},
         "identity": "The device sends Authorization: Token <Tactical agent token> and X-Agent-Id, checked exactly as the endpoint websocket checks them (AD-54 E5), and shares its failure counters. A leaked link alone serves nothing, and a link granted to one device never serves another.",
         "audit": "Strict Core rows (module core, provenance agent-downloads): custom:agent-download-granted before a link is returned, custom:agent-download-served before the first byte (the download started; it does not say it finished). Non-strict: custom:agent-download-revoked and custom:agent-download-refused (identity refusals only). Never the link token, the link or the full path.",
         "errors": {"200": "the raw file", "401": "identity refused", "403": "plain-text connection", "404": "unknown, expired or other device's link, or a changed file", "429": "too many failed checks (Retry-After 60)", "503": "busy or a server fault (Retry-After 30)"},
         "core_does_not": "Core does not know what the file means, keep a copy, redirect, resume or serve ranges, or choose which file a device gets.",
-        "added_in": "1.0.0 (Core 1.18.37). Needs framework >=1.18.37. Additive: nothing existing changed.",
+        "added_in": "1.0.0 (Core 1.18.37). Needs framework >=1.18.37. 1.1.0 (Core 1.18.39) adds publish_installer, unpublish_installer and the public installer route; needs framework >=1.18.39. Additive: nothing existing changed.",
     }
 
 
@@ -485,7 +663,7 @@ def register_core_agent_downloads_capability():
         module_id="core",
         version=CAPABILITY_VERSION,
         provider=_PROVIDER,
-        description="A short, device-bound download link for a file a verified module owns (an agent installer), served by Core over HTTPS.",
-        operations=("grant_download", "revoke_download"),
+        description="A short, device-bound download link for a file a verified module owns (an agent installer), served by Core over HTTPS, and the one public Endpoint Agent installer address.",
+        operations=("grant_download", "revoke_download", "publish_installer", "unpublish_installer"),
         metadata=agent_downloads_contract_metadata(),
     )

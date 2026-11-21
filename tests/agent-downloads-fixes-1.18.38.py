@@ -298,6 +298,7 @@ cache.down = False
 
 acquire_src = func_src("framwork/tec_tac/agent_downloads.py", "acquire_slot")
 release_src = func_src("framwork/tec_tac/agent_downloads.py", "release_slot")
-must("cache.touch(INFLIGHT_KEY, INFLIGHT_TTL_SECONDS)" in acquire_src and "cache.touch(INFLIGHT_KEY, INFLIGHT_TTL_SECONDS)" in release_src, "touch in both functions")
-must(acquire_src.index("cache.touch") < acquire_src.index("release_slot()"), "touch comes before the over-limit release")
+# 1.18.39: both functions take an optional counter key (default INFLIGHT_KEY), so the touch and the release use ``key``.
+must("cache.touch(key, INFLIGHT_TTL_SECONDS)" in acquire_src and "cache.touch(key, INFLIGHT_TTL_SECONDS)" in release_src, "touch in both functions")
+must(acquire_src.index("cache.touch") < acquire_src.index("release_slot(key)"), "touch comes before the over-limit release")
 print("agent downloads fixes 1.18.38 regression: PASS")

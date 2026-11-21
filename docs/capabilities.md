@@ -308,7 +308,7 @@ Capability providers may also be owned directly by Tec-Tac Core rather than an i
 
 ## Core agent downloads
 
-`core.agent_downloads` 1.0.0 (framework >=1.18.37) hands one file a verified module owns to one device over HTTPS: `grant_download` and `revoke_download`. Any enabled extension may use it for its own files only (Core verifies the caller). The device proves itself with its agent token and agent id. See `docs/agent-downloads.md`.
+`core.agent_downloads` 1.0.0 (framework >=1.18.37) hands one file a verified module owns to one device over HTTPS: `grant_download` and `revoke_download`. Any enabled extension may use it for its own files only (Core verifies the caller). The device proves itself with its agent token and agent id. Since 1.1.0 (framework >=1.18.39, additive) Endpoint Agent Management alone may also `publish_installer` and `unpublish_installer`: one public `.msi` at `GET /api/tfd/endpoint-agent/installer.msi`, served without sign-in and re-hashed at every download. See `docs/agent-downloads.md`.
 
 ## Core sandbox
 

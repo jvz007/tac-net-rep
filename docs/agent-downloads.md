@@ -1,6 +1,8 @@
-# Agent downloads (Core 1.18.37)
+# Agent downloads (Core 1.18.37, public installer in 1.18.39)
 
 Core 1.18.37 lets a module hand one of its own files, such as an agent installer, to one device. The capability is `core.agent_downloads` 1.0.0. It needs framework >=1.18.37. It is additive: nothing existing changed.
+
+Core 1.18.39 raises the capability to 1.1.0 and adds the public Endpoint Agent installer (AD-74): `publish_installer`, `unpublish_installer` and one fixed address that needs no sign-in. See The public installer below. The 1.0.0 calls, route and error codes are unchanged.
 
 Core owns the check and the delivery. The module owns the file and what it means. Core never reads the file's meaning, keeps no copy and never chooses which file a device gets.
 
@@ -86,6 +88,64 @@ Strict Core rows (module `core`, object `agent`, provenance `agent-downloads`). 
 * `custom:agent-download-served`: the download started (the device is the actor). It does not say it finished.
 
 Non-strict rows: `custom:agent-download-revoked`, and `custom:agent-download-refused` for an identity refusal. Never the link token, the link or the full path.
+
+## The public installer (Core 1.18.39, capability 1.1.0)
+
+One Endpoint Agent installer can be public, so a technician can fetch it from a browser or a script with no sign-in. It needs framework >=1.18.39. It is additive.
+
+### Who may publish
+
+Only Endpoint Agent Management (`endpoint-agent-management`). Core keeps a short list of publisher ids in code (`INSTALLER_PUBLISHERS`) and verifies the caller from the call stack. The caller must equal `module_id` and be on that list. Core itself, an unverifiable caller, a mismatch and every other module get `denied`. A generic "any module may publish" call is not built: it would let any module make a file public at an address with no sign-in. Widening the list is a decision for Johan.
+
+### `publish_installer(module_id, *, path, sha256, version)`
+
+Returns `{outcome, reason}`. `outcome` is `ok`, `denied`, `invalid` or `unavailable`. Sync: call it from a Celery task or a request thread.
+
+| Argument | Rule |
+|---|---|
+| `path` | As for `grant_download`: inside your own folder, no symlink, a regular file of 1 to 100 000 000 bytes. The file name must end in `.msi` (any case). |
+| `sha256` | 64 lowercase hex characters. Core hashes the file and refuses unless it matches. |
+| `version` | A plain version such as `0.1.2` or `0.1.2-rc1`, up to 40 characters. |
+
+`invalid` reasons: `bad_sha256`, `bad_version`, `bad_path`, `not_msi`, `outside_module_folder`, `symlink_refused`, `not_a_file`, `too_large`, `hash_mismatch`.
+
+`unavailable` reasons: `store_unavailable`, `audit_unavailable`, `file_unavailable`, `path_unavailable`. Nothing is published.
+
+Only one installer exists. A new publish replaces the old one. It is kept in one database row (table `core_published_installer`, migration 0046), so it survives a restart and a cache flush. Core stores the path, not a copy of the file.
+
+### `unpublish_installer(module_id)`
+
+Returns `{outcome, unpublished}`. It removes the installer only when it is yours. Nothing to remove is `ok` with `unpublished` false and writes no row.
+
+### The address
+
+`GET https://<host>/api/tfd/endpoint-agent/installer.msi`
+
+No sign-in, no code, no expiry. The MSI holds no secret: the agent it installs cannot connect without its own token. Core never redirects.
+
+| Answer | Meaning |
+|---|---|
+| `200` | The raw file. Headers: `Content-Length`, `Content-Disposition: attachment` (the safe file name), `X-Content-SHA256` (the published hash), `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, `Content-Type: application/octet-stream`. |
+| `403` | The proxy says the connection was plain text. |
+| `404` | Nothing is published, or the file no longer matches: it changed, is a symlink now, is missing, or the publisher module is no longer installed. Empty body. |
+| `405` | Not a GET. |
+| `503` | All 8 installer slots are busy, or a server fault. `Retry-After: 30`. |
+
+Core re-checks the path and recomputes the SHA-256 at every serve, through the same descriptor it then sends. That is one extra read pass of at most 100 MB per request. The route has its own counter of 8 downloads in flight, separate from the device route, so a flood of anonymous requests cannot block agent updates.
+
+### What is audited, and what is not
+
+Publish and unpublish write strict rows (module `core`, object type `agent-installer`, provenance `agent-downloads`): `custom:agent-installer-published` (publisher module, file name, size, SHA-256, version, replaced version) and `custom:agent-installer-unpublished`. The row is written in the same transaction as the store. If it fails, the change is rolled back. Never a full path.
+
+An anonymous download writes no row. The per-address rate limit and buffering for this address belong to the web application firewall (securityWAF).
+
+### Web server
+
+nginx and uwsgi must pass `GET /api/tfd/endpoint-agent/installer.msi` to Django. A static-file rule for `.msi` must not catch it. Keep response buffering on.
+
+## Agent column on Core's own rows (Core 1.18.39)
+
+Core's rows for a download that is granted, revoked or started pass the device's agent id to the audit writer (`audit.record(..., agent_id=...)`, see `docs/module-audit.md`). The Audit page then shows Agent, Client and Site on them. Identity refusal rows carry it only when the id is well-formed. Publish and unpublish rows are not about a device and carry none.
 
 ## What Core does not do
 

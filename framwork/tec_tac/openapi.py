@@ -85,6 +85,7 @@ CORE_PATH_GROUPS = (
     ("/api/tfd/filter-sets/", "Tec-Tac · Filter Sets"),
     ("/api/tfd/filter-values/", "Tec-Tac · Filter Sets"),
     ("/api/tfd/agent-downloads/", "Tec-Tac · Agent Downloads"),
+    ("/api/tfd/endpoint-agent/", "Tec-Tac · Agent Downloads"),
     ("/api/tfd/contracts/", "Tec-Tac · Developer Contracts"),
     ("/api/tfd/resources/", "Tec-Tac · Clients, Sites & Agents"),
     ("/api/tfd/audit/", "Tec-Tac · Audit"),

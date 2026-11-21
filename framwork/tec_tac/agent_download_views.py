@@ -1,4 +1,6 @@
-"""GET /api/tfd/agent-downloads/<token>/ (Core 1.18.37, capability core.agent_downloads 1.0.0).
+"""GET /api/tfd/agent-downloads/<token>/ (Core 1.18.37, capability core.agent_downloads 1.0.0) and, since Core 1.18.39 (capability 1.1.0,
+AD-74), GET /api/tfd/endpoint-agent/installer.msi: the one public Endpoint Agent installer, with no sign-in (InstallerDownloadView, at the
+end of this file).
 
 Serves the one file a verified module granted to the one device that asks. The device proves who it is with the same headers as the
 endpoint websocket (Authorization: Token <Tactical agent token>, X-Agent-Id), checked by the same code (AD-54 E5) and counted by the same
@@ -132,6 +134,63 @@ class AgentDownloadView(APIView):
             return _empty(503, 30)
         response["Content-Length"] = str(size)
         response["Content-Disposition"] = f'attachment; filename="{ad.safe_file_name(grant["path"])}"'
+        response["Cache-Control"] = "no-store"
+        response["X-Content-Type-Options"] = "nosniff"
+        return response
+
+
+class InstallerDownloadView(APIView):
+    """GET /api/tfd/endpoint-agent/installer.msi (1.18.39, AD-74): the one file the publisher module marked as the current installer.
+
+    No sign-in, no code, no expiry and never a redirect. The MSI carries no secret: the agent it installs cannot connect without its own
+    token. Every serve re-verifies the path and recomputes the SHA-256 through the descriptor that is sent, so a changed file, a symlink or a
+    module that is no longer installed answers 404 with an empty body. Its own in-flight counter (8) keeps an anonymous flood away from the
+    device downloads. No audit row per download: the rate limit is the web application firewall's job. Reasons are logged as codes only."""
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+    throttle_classes = []
+    http_method_names = ["get"]
+
+    def get(self, request):
+        if et.forwarded_plaintext(_scope(request)):
+            return _empty(403)
+        try:
+            row = ad.load_installer()
+        except Exception:
+            logger.warning("Agent installer store unavailable.")
+            return _empty(503, 30)
+        if row is None:
+            return _empty(404)
+        try:
+            if not ad.acquire_slot(ad.INSTALLER_INFLIGHT_KEY):
+                return _empty(503, 30)
+        except Exception:
+            logger.warning("Agent installer slot store unavailable.")
+            return _empty(503, 30)
+
+        def release():
+            ad.release_slot(ad.INSTALLER_INFLIGHT_KEY)
+
+        try:
+            handle, size, reason = ad.open_verified(row["module_id"], row["path"], row["sha256"], row["size"])
+        except Exception:
+            logger.warning("Agent installer file could not be read.")
+            release()
+            return _empty(503, 30)
+        if reason:
+            logger.warning("Agent installer file refused (%s).", reason)
+            release()
+            return _empty(404)
+        try:
+            response = _SlotFileResponse(handle, content_type="application/octet-stream", release=release)
+        except Exception:
+            handle.close()
+            release()
+            return _empty(503, 30)
+        response["Content-Length"] = str(size)
+        response["Content-Disposition"] = f'attachment; filename="{ad.safe_file_name(row["path"])}"'
+        response["X-Content-SHA256"] = row["sha256"]
         response["Cache-Control"] = "no-store"
         response["X-Content-Type-Options"] = "nosniff"
         return response

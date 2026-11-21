@@ -770,6 +770,29 @@ class TecTacDelegationGrant(models.Model):
 
 
 
+class TecTacPublishedInstaller(models.Model):
+    """The one public Endpoint Agent installer (core.agent_downloads 1.1.0, Core 1.18.39, AD-74).
+
+    A single row (``slot`` is unique and always ``endpoint-agent``): a new publish replaces it. It names a file inside the publisher module's
+    own folder; Core never keeps a copy and re-verifies path and SHA-256 at every serve. A table, not the cache, so it survives a restart
+    or a Redis flush. See tec_tac/agent_downloads.py.
+    """
+
+    slot = models.CharField(max_length=32, unique=True)
+    module_id = models.CharField(max_length=100)
+    path = models.CharField(max_length=4096)
+    sha256 = models.CharField(max_length=64)
+    size = models.PositiveBigIntegerField()
+    version = models.CharField(max_length=40)
+    published_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "core_published_installer"
+
+    def __str__(self):
+        return f"{self.slot}:{self.version}"
+
+
 class TecTacSecret(models.Model):
     """One private value a module keeps through Core (core.secrets 1.0.0, Core 1.17.100, AD-57).
 

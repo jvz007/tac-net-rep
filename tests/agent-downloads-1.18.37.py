@@ -527,7 +527,7 @@ must(any("100 000 000" in n for n in detail["notes"]) and any("never logged" in 
 must(any(r.startswith("Agent downloads (core.agent_downloads 1.0.0, Core 1.18.37)") for r in rules), "the rule sentence exists")
 meta = ad.agent_downloads_contract_metadata()
 json.dumps(meta)
-must(meta["id"] == "core.agent_downloads" and meta["version"] == "1.0.0" and meta["operations"] == ["grant_download", "revoke_download"] and meta["requires_framework"] == ">=1.18.37", "metadata")
+must(meta["id"] == "core.agent_downloads" and meta["version"] == "1.1.0" and meta["operations"] == ["grant_download", "revoke_download", "publish_installer", "unpublish_installer"] and meta["requires_framework"] == ">=1.18.37", "metadata (1.1.0 since Core 1.18.39: two operations added, the 1.0.0 ones unchanged)")
 must(meta["limits"]["file_bytes"] == 100_000_000 and meta["limits"]["ttl_seconds"]["max"] == 900 and meta["route"]["path"] == "/api/tfd/agent-downloads/<str:token>/", "metadata limits and route")
 for key in ("caller", "roots", "identity", "audit", "errors", "added_in"):
     must(meta.get(key), f"metadata has {key}")

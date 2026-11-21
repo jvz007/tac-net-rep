@@ -588,6 +588,39 @@ def _auditlog_model():
     return AuditLog
 
 
+# 1.18.39: the Tactical agent id shape (a private copy of endpoint_transport.AGENT_ID_PATTERN, so this file does not import it).
+_AGENT_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
+_AGENT_HOSTNAME_MAX = 255
+
+
+def _agent_model():
+    # The Tactical import lives only inside Core. Extensions must never import it.
+    from agents.models import Agent
+    return Agent
+
+
+def _checked_agent_id(agent_id: Any) -> str | None:
+    """None stays None. Anything else must be a Tactical agent id string, or it is a contract error (1.18.39)."""
+    if agent_id is None:
+        return None
+    if not isinstance(agent_id, str) or not _AGENT_ID_PATTERN.fullmatch(agent_id):
+        raise AuditContractError("agent_id must be a Tactical agent id (letters, digits, dot, dash, underscore; 1 to 80 characters).")
+    return agent_id
+
+
+def _agent_hostname(agent_id: str) -> str | None:
+    """The hostname of one device, from one indexed query (Agent.agent_id is unique). Fail soft: an unknown device or a database fault
+    gives None, so the audit row is still written with the agent id alone and a strict write never fails because of this lookup."""
+    try:
+        hostname = _agent_model().objects.filter(agent_id=agent_id).values_list("hostname", flat=True).first()
+    except Exception:
+        logger.warning("Tec-Tac audit could not look up the device name for an audit row.", exc_info=True)
+        return None
+    if not isinstance(hostname, str) or not hostname:
+        return None
+    return hostname[:_AGENT_HOSTNAME_MAX]
+
+
 def record(
     *,
     actor,
@@ -604,6 +637,7 @@ def record(
     correlation_id: Any = None,
     strict: bool = False,
     verified_run=None,
+    agent_id: str | None = None,
 ) -> dict[str, Any]:
     """Persist one Tec-Tac event through Tactical's native AuditLog.
 
@@ -621,7 +655,14 @@ def record(
 
     verified_run (1.17.95, optional): the VerifiedSchedulerRun Core returned to the calling module, for a run or deny row of a verified
     module caller whose actor is the run owner (see _verified_caller_actor_allowed and docs/module-audit.md). Ignored in every other case.
+
+    agent_id (1.18.39, optional, additive): the Tactical agent id of the device the row is about. It must match ^[A-Za-z0-9._-]{1,80}$ or
+    AuditContractError is raised. Core looks up the hostname with one indexed query and sets Tactical's AuditLog.agent and AuditLog.agent_id,
+    which is what the Audit page uses to show Agent, Client and Site and to filter by the viewer's agent scope. The lookup is fail soft: an
+    unknown device keeps agent_id with no hostname, and a lookup fault never fails a write, strict or not. Without agent_id nothing changes
+    and no lookup runs. object_id keeps its own meaning.
     """
+    agent_id = _checked_agent_id(agent_id)
     if isinstance(operation_context, dict):
         for key in CORE_CONTEXT_KEYS:
             if key in operation_context:
@@ -630,7 +671,7 @@ def record(
     return _record_row(
         actor=actor, module_id=module_id, action=action, object_type=object_type, object_id=object_id,
         message=message, before=before, after=after, metadata=metadata, operation_context=operation_context,
-        request=request, correlation_id=correlation_id, strict=strict, verified_run=verified_run,
+        request=request, correlation_id=correlation_id, strict=strict, verified_run=verified_run, agent_id=agent_id,
     )
 
 
@@ -797,6 +838,29 @@ def _record_agent_download(
     return _record_row(
         actor=row_actor, module_id="core", action=action, object_type="agent", object_id=agent_id,
         message=message, metadata=metadata, strict=strict, operation_context=context, authority=_TACTICAL_OPERATION_AUTHORITY,
+        agent_id=agent_id,
+    )
+
+
+def _record_agent_installer(
+    *,
+    action: str,
+    message: Any = None,
+    metadata: dict | None = None,
+    strict: bool = True,
+) -> dict[str, Any]:
+    """Write a row for the public Endpoint Agent installer a module publishes or withdraws (1.18.39, AD-74). Private: only
+    tec_tac.agent_downloads calls it.
+
+    The module is core, the object type is agent-installer and the actor is the agent-downloads service. ``strict`` (the default) raises
+    AuditWriteError when the row cannot be written: a publish or an unpublish needs its row in the same transaction. The row carries
+    operation_context.server_provenance = agent-downloads. Callers pass only the fields listed in docs/agent-downloads.md: the file name,
+    never a full path, a link or a token. An anonymous download of the installer writes no row.
+    """
+    return _record_row(
+        actor=service_audit_actor(module_id="core", service="agent-downloads"), module_id="core", action=action,
+        object_type="agent-installer", object_id=None, message=message, metadata=metadata, strict=strict,
+        operation_context={"server_provenance": SERVER_PROVENANCE_AGENT_DOWNLOADS}, authority=_TACTICAL_OPERATION_AUTHORITY,
     )
 
 
@@ -846,7 +910,9 @@ def _record_row(
     authority=None,
     declared_owner_ok: bool = True,
     verified_run=None,
+    agent_id: str | None = None,
 ) -> dict[str, Any]:
+    agent_id = _checked_agent_id(agent_id)
     module = _resolve_module(module_id)
     username, actor_info = _actor_provenance(actor, module, authority, action, declared_owner_ok, request, verified_run)
     normalized_action = _normalize_action(action)
@@ -880,6 +946,8 @@ def _record_row(
     debug_info = {key: value for key, value in debug_info.items() if value is not None}
     debug_info = _fit_debug_info(debug_info)
 
+    # 1.18.39: the agent columns only when the caller names a device; no lookup and no extra key otherwise.
+    agent_columns = {} if agent_id is None else {"agent": _agent_hostname(agent_id), "agent_id": agent_id}
     try:
         row = _auditlog_model().objects.create(
             username=username,
@@ -889,6 +957,7 @@ def _record_row(
             after_value=after,
             message=None if message is None else str(message),
             debug_info=debug_info,
+            **agent_columns,
         )
         return {
             "recorded": True,
