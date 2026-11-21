@@ -166,6 +166,22 @@ file transfers for the file browser (Tactical 1.6.1), asked for by Remote Backgr
 * ``audit.transfer = {role, direction}`` (AD-69): one audit row to start a transfer and one to end it, joined by the correlation id
   ``transfer:<session id>``. A chunk, ack or status call writes no row unless Core or Tactical refuses it. Tactical's 408 (retry) is relayed and
   writes no row for a transfer operation, and so is a 204 on a chunk. An operation without a transfer role is audited exactly as before.
+
+1.18.34 (the capability stays 1.18.0: no declaration key is added; this fixes the audit trail of the 1.18.33 additions. Remote Background 0.11.4 declares them and calls
+``read_binary_body`` without ``params``; ``read_binary_body`` gains the optional keyword ``params``):
+
+* The refusals of a binary chunk (``invalid_content_range``, ``binary_body_required``, ``binary_body_not_allowed``, ``body_too_large`` for a
+  chunk, ``length_required``, ``content_length_mismatch``) write one ``custom:operation-failed`` row with failure ``core_refused``, at most one
+  per session and code (a once-only key ``tectac:transfer-refusal:<session>:<code>`` in Tactical's shared cache, kept two hours; a cache that is
+  down fails open). ``read_binary_body`` writes the same row for its own refusals. A JSON ``body_too_large`` still writes no row. The six
+  AD-19 codes behave as before.
+* A complete, cancel or fail that Tactical answers 4xx or 5xx (except 401 and 403, which stay ``deny`` rows, 408, which is relayed with no
+  row, and 429, a request to retry) writes its failure row with ``transfer_stage: end`` and ``transfer_outcome: failed``, under the same
+  once-only key as the success end row, so a failed transfer has its end row. A later success for a session that has a failed end row writes no
+  second end row. For a 5xx the row action says ``custom:outcome-unknown`` next to ``failed``.
+* ``read_binary_body`` runs the authentication, Tactical flag, module permission and ``caller_scope`` checks, and with ``params`` the role-scope
+  check, before it reads the stream.
+* A row written before the path parameters are cleaned carries ``transfer_session`` null and no ``transfer:<id>`` correlation id.
 """
 from __future__ import annotations
 
@@ -187,7 +203,7 @@ from .lazy_patterns import lazy_pattern
 logger = logging.getLogger("tec_tac.tactical_operations")
 
 CAPABILITY_ID = "core.tactical_operations"
-CAPABILITY_VERSION = "1.18.0"  # 1.18.33: binary_body, binary_response and audit.transfer (file transfers), read_binary_body; 1.18.30: route kind uuid, path_query_params (4096-character path values), route owners agents/{}/files and file-browser-defaults; 1.17.58: <list>_changed marker next to audit_list_masks; 1.17.52: audit_list_masks (names and *** for a list's keys) and scope names_object; 1.17.45: audit.action_by_body, a nested body scope source (body:<field>.<key>), object_id on early core_refused rows; 1.17.44: audit.object_id (a declared literal object id); 1.17.43: audit.secret_fields and metadata.object_count
+CAPABILITY_VERSION = "1.18.0"  # 1.18.34: chunk refusal rows, failed end rows, read_binary_body checks first (no new key, stays 1.18.0); 1.18.33: binary_body, binary_response and audit.transfer (file transfers), read_binary_body; 1.18.30: route kind uuid, path_query_params (4096-character path values), route owners agents/{}/files and file-browser-defaults; 1.17.58: <list>_changed marker next to audit_list_masks; 1.17.52: audit_list_masks (names and *** for a list's keys) and scope names_object; 1.17.45: audit.action_by_body, a nested body scope source (body:<field>.<key>), object_id on early core_refused rows; 1.17.44: audit.object_id (a declared literal object id); 1.17.43: audit.secret_fields and metadata.object_count
 AUDIT_HEADER = "X-Tec-Tac-Audit"
 AUDIT_RECORDED = "recorded"
 AUDIT_NOT_RECORDED = "not-recorded"
@@ -212,6 +228,7 @@ TRANSFER_DIRECTIONS = ("upload", "download", "archive", "extract")
 _TRANSFER_QUIET_ROLES = ("chunk", "ack", "status")  # write a row only when Core or Tactical refuses
 _TRANSFER_END_ROLES = ("complete", "cancel", "fail")
 TRANSFER_END_TTL_SECONDS = 7200
+TRANSFER_REFUSAL_TTL_SECONDS = 7200  # 1.18.34: the once-per-session-and-code key of a chunk refusal row
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 BODY_METHODS = ("POST", "PUT", "PATCH", "DELETE")
 SCOPE_TYPES = ("agent", "client", "site", "agent_pk")
@@ -304,9 +321,15 @@ FAILED_MESSAGE = "Tactical refused this change (HTTP {status}); nothing was chan
 # 1.17.21: Core's own refusal before dispatch. A fixed Core text; the code is one of CORE_REFUSAL_ROW_CODES, never caller text.
 CORE_REFUSED_MESSAGE = "Core refused this change before sending it to Tactical ({code}); nothing was changed."
 # The six refusals of a non-GET call that write one Core row (requests/core.md, globalsettings 0.4.0). The other validation
-# refusals (body_too_large, invalid_query, the upload codes, tactical_route_changed ...) write none in this release.
+# refusals (a JSON body_too_large, invalid_query, the upload codes, tactical_route_changed ...) write none.
 CORE_REFUSAL_ROW_CODES = (
     "body_field_not_allowed", "invalid_body", "invalid_params", "scope_field_required", "invalid_correlation_id", "invalid_audit_before",
+)
+# 1.18.34 (AD-69): the refusals of a binary chunk write one Core row too, limited to one per session and code so a retry loop cannot flood
+# the log. They count only where a chunk is checked: step 6a of run_tactical_operation and read_binary_body. A body_too_large from a JSON
+# body (_clean_body) is not one of them and still writes no row.
+CHUNK_REFUSAL_ROW_CODES = (
+    "invalid_content_range", "binary_body_required", "binary_body_not_allowed", "body_too_large", "length_required", "content_length_mismatch",
 )
 OUTCOME_UNKNOWN_MESSAGE = (
     "Core ran a Tactical operation and could not confirm the outcome. Tactical may have changed data."
@@ -1922,7 +1945,8 @@ def _encode_multipart(fields: dict[str, str], part: dict) -> tuple[bytes, str]:
 def _clean_binary_body(operation: TacticalOperation, binary_body: Any) -> dict | None:
     """Check the chunk a module passes as ``binary_body={content, content_range}`` (1.18.33). Returns the chunk with a canonical range, or None.
 
-    A refusal here writes no Core row: Tactical was never called, and a loop of bad chunks must not flood the audit log."""
+    A refusal here writes no row itself. ``run_tactical_operation`` writes one limited ``core_refused`` row for it (1.18.34): at most one per
+    session and code, so a loop of bad chunks cannot flood the audit log."""
     if not operation.binary_body:
         if binary_body is not None:
             raise TacticalOperationError("This operation takes no binary body.", status=400, code="binary_body_not_allowed")
@@ -1949,35 +1973,174 @@ def _clean_binary_body(operation: TacticalOperation, binary_body: Any) -> dict |
     return {"content": content, "content_range": f"bytes {start}-{end}/{total}"}
 
 
-def read_binary_body(request, module_id, operation_id) -> dict:
+def _deny_hint(operation: TacticalOperation, params: Any, body: Any) -> str | None:
+    """The object an early deny row names, from the raw path values (never checked): scope first, then the declared object id (1.17.45)."""
+    try:
+        hint_params = params if isinstance(params, dict) else {}
+        return _object_id(_scope_values(operation, hint_params, body if isinstance(body, dict) else {}), operation, hint_params)
+    except TacticalOperationError:
+        return _object_id([], operation, params if isinstance(params, dict) else {})
+
+
+def _check_caller_rights(request, operation: TacticalOperation, user, hint, correlation_id, early_meta: dict) -> None:
+    """Steps 3, 4 and 4a of ``run_tactical_operation``: the Tactical flags, the module permission and caller_scope (1.18.34: shared with
+    ``read_binary_body``). Raises the typed refusal with its ``deny`` row. ``early_meta`` is the transfer metadata that is known before the path
+    parameters are cleaned: role and direction, and a null session."""
+    from .rbac import has_extension_permission, tactical_permission_flags
+
+    early_extra = early_meta or None
+    flags = tactical_permission_flags(user, (*operation.permissions, *operation.permissions_any))  # 3. (1.17.26: all of permissions, one of permissions_any)
+    if not _permissions_hold(operation, flags):
+        raise _refuse(
+            request, operation, "permission_denied", 403, "tactical_permission_denied", hint, correlation_id,
+            text=_missing_flag_text(operation, flags),
+            row_extra={**early_meta, "needs_one_of": list(operation.permissions_any)} if operation.permissions_any else early_extra,
+        )
+    if operation.module_permission:  # 4.
+        try:
+            allowed = has_extension_permission(user, operation.module_permission)
+        except Exception:
+            logger.exception("Unable to check module permission %s for operation %s", operation.module_permission, operation.id)
+            allowed = False
+        if not allowed:
+            raise _refuse(request, operation, "module_permission_denied", 403, "module_permission_denied", hint, correlation_id, row_extra=early_extra)
+
+    if operation.caller_scope == "unrestricted" and not _caller_unrestricted(user):  # 4a. (1.17.18) only for no client or site limits
+        raise _refuse(request, operation, "scope_unrestricted_required", 403, "scope_unrestricted_required", hint, correlation_id, row_extra=early_extra)
+
+
+def _check_role_scope(request, operation: TacticalOperation, user, entries: list, scope_object_id, correlation_id, count_extra: dict, extra: dict) -> None:
+    """The role-scope loop of ``run_tactical_operation`` step 5 (1.18.34: shared with ``read_binary_body``). Raises the ``not_found`` deny.
+
+    ``extra`` is updated in place with ``scope_source`` and ``agentless`` for a row lookup."""
+    if not entries:
+        return
+    from . import resources_adapter as adapter
+
+    for spec, kind, ids in entries:
+        if spec.row_lookup:
+            # CQ56 a, CQ57: the owning module says which agent the row belongs to. A row with no agent is allowed to anyone
+            # who holds the Tactical flag (Tactical decides); a row with an agent is held to the caller's role scope.
+            agent_id = _row_lookup_agent(operation, spec, ids[0])
+            if agent_id is _LOOKUP_FAILED:
+                raise _refuse(request, operation, "not_found", 404, "object_not_found", scope_object_id, correlation_id, row_extra=count_extra)
+            extra["scope_source"] = "row_lookup"
+            extra["agentless"] = agent_id is None
+            if agent_id is not None and not adapter.objects_in_role_scope(user=user, resource_type="agent", identifiers=[agent_id]):
+                raise _refuse(request, operation, "not_found", 404, "object_not_found", scope_object_id, correlation_id, row_extra=count_extra)
+        elif kind == "agent_pk":
+            if not adapter.agent_pks_in_role_scope(user=user, pks=ids):
+                raise _refuse(request, operation, "not_found", 404, "object_not_found", scope_object_id, correlation_id, row_extra=count_extra)
+        elif not adapter.objects_in_role_scope(user=user, resource_type=kind, identifiers=ids):
+            raise _refuse(request, operation, "not_found", 404, "object_not_found", scope_object_id, correlation_id, row_extra=count_extra)
+
+
+def _refusal_row_key(session: str | None, code: str, fallback: str | None) -> str:
+    return f"tectac:transfer-refusal:{session or fallback or 'unknown'}:{code}"
+
+
+def _refusal_row_once(session: str | None, code: str, fallback: str | None = None) -> bool:
+    """True when this session has no row for this chunk refusal code yet (1.18.34). Tactical's shared cache holds the once-only key.
+
+    Without a session id the key is ``fallback`` (the user and the operation). A cache that is down fails open: the row is written."""
+    return _guard_once(_refusal_row_key(session, code, fallback), TRANSFER_REFUSAL_TTL_SECONDS, "chunk-refusal")
+
+
+def _refusal_row_forget(session: str | None, code: str, fallback: str | None = None) -> None:
+    """The refusal row could not be written: free the key so the next refusal can write it."""
+    _guard_release(_refusal_row_key(session, code, fallback), "chunk-refusal")
+
+
+def _refusal_fallback(request, operation: TacticalOperation) -> str:
+    """The once-only key part for a refusal that has no session id: the user's pk and the operation id, reduced to safe key characters."""
+    user = getattr(request, "user", None)
+    who = getattr(user, "pk", None) or getattr(user, "id", None) or "anon"
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", f"user{who}-{operation.module_id}.{operation.id}")[:120]
+
+
+def _write_chunk_refusal(request, operation: TacticalOperation, error: TacticalOperationError, session: str | None, object_id,
+                         correlation_id: str | None, row_meta: dict) -> dict | None:
+    """The limited row of a chunk refusal (1.18.34): one ``core_refused`` row per session and code, never for a GET.
+
+    Returns the audit verdict, or None when the row is a repeat. The row has a fixed Core text and the code, no chunk bytes and no caller text."""
+    if operation.method == "GET":
+        return None
+    fallback = _refusal_fallback(request, operation)
+    if not _refusal_row_once(session, error.code, fallback):
+        return None
+    audit = _write_core_refusal(request, operation, error, object_id, correlation_id, row_extra=row_meta or None)
+    if not audit.get("recorded"):
+        _refusal_row_forget(session, error.code, fallback)  # the row did not land: the next refusal may write it
+    return audit
+
+
+def read_binary_body(request, module_id, operation_id, *, params=None) -> dict:
     """Read one binary chunk from a module's own route (1.18.33). Returns ``{content, content_range}`` for ``run_tactical_operation(binary_body=)``.
 
-    Call it before anything touches ``request.data`` or ``request.body``. It refuses an operation that does not declare ``binary_body``
-    (400 ``binary_body_not_allowed``), a missing or invalid ``Content-Length`` (411 ``length_required``) and a length over
-    ``MAX_BINARY_BODY_BYTES`` (413 ``body_too_large``), all before a byte is read. It then reads at most that length plus one byte from the
-    request stream with ``read()``, never ``request.body``, so Django's ``DATA_UPLOAD_MAX_MEMORY_SIZE`` cannot refuse a chunk. The bytes read must
-    equal ``Content-Length`` (400 ``content_length_mismatch``). The ``Content-Range`` header is returned as sent: ``run_tactical_operation``
-    validates it. Nothing is written to the audit log and the bytes are never logged."""
+    Call it before anything touches ``request.data`` or ``request.body``. 1.18.34: it first runs the checks ``run_tactical_operation`` runs
+    before it reads anything: an authenticated request (401 ``authenticated_request_required`` or ``authentication_required``), the Tactical
+    flags, the module permission and ``caller_scope`` (403, each with its ``deny`` row). With the optional keyword ``params`` (the path
+    parameters, as given to ``run_tactical_operation``) it also checks the caller's role scope over the cleaned values (404 ``object_not_found``),
+    and the rows carry the session id. Without ``params`` the scope check stays in ``run_tactical_operation``. A refusal here never touches the stream.
+
+    It then refuses an operation that does not declare ``binary_body`` (400 ``binary_body_not_allowed``), a missing or invalid ``Content-Length``
+    (411 ``length_required``) and a length over ``MAX_BINARY_BODY_BYTES`` (413 ``body_too_large``), all before a byte is read. It reads at most
+    that length plus one byte from the request stream with ``read()``, never ``request.body``, so Django's ``DATA_UPLOAD_MAX_MEMORY_SIZE`` cannot
+    refuse a chunk. The bytes read must equal ``Content-Length`` (400 ``content_length_mismatch``). The ``Content-Range`` header is returned as
+    sent: ``run_tactical_operation`` validates it. Each of these five refusals writes one limited ``core_refused`` row (1.18.34, one per session
+    and code; without ``params`` per user and operation). The bytes are never logged and never reach a row."""
     operation = _lookup(module_id, operation_id)
-    if not operation.binary_body:
-        raise TacticalOperationError("This operation takes no binary body.", status=400, code="binary_body_not_allowed")
+    if not _is_real_request(request) or getattr(request, "tec_tac_session", None) is None:
+        raise _fail("authenticated_request_required", 401, "authenticated_request_required")
+    user = getattr(request, "user", None)
+    if user is None or not getattr(user, "is_authenticated", False):
+        raise _fail("unauthenticated", 401, "authentication_required")
+    early_meta = _transfer_meta(operation, None)
+    _check_caller_rights(request, operation, user, _deny_hint(operation, params, None), None, early_meta)
+    session = None
+    correlation_id = None
+    row_meta = early_meta
+    refusal_object_id = operation.audit_object_id
+    if params is not None:
+        try:
+            cleaned = _clean_params(operation, params)
+            session = _transfer_session(operation, cleaned)
+            correlation_id = _transfer_correlation(session)
+            row_meta = _transfer_meta(operation, session)
+            refusal_object_id = _refusal_object_id(operation, cleaned)
+            entries = _scope_entries(operation, cleaned, {})
+            scope = [(kind, ids) for _, kind, ids in entries]
+            scope_object_id = _object_id(scope, operation, cleaned)
+            count_extra = {**_object_count_extra(scope), **row_meta}
+            _check_role_scope(request, operation, user, entries, scope_object_id, correlation_id, count_extra, {})
+        except TacticalOperationError as exc:
+            if exc.audit is None and exc.code in CORE_REFUSAL_ROW_CODES and operation.method != "GET":
+                exc.audit = _write_core_refusal(request, operation, exc, refusal_object_id, correlation_id, row_extra=row_meta or None)
+            raise
     source = getattr(request, "_request", request)
     meta = getattr(source, "META", None) or {}
-    raw = meta.get("CONTENT_LENGTH")
-    text = raw.strip() if isinstance(raw, str) else ("" if raw is None or isinstance(raw, bool) else str(raw))
-    if not text or len(text) > 12 or not text.isascii() or not text.isdigit():
-        raise TacticalOperationError("The request needs a Content-Length.", status=411, code="length_required")
-    length = int(text)
-    if length > MAX_BINARY_BODY_BYTES:
-        raise TacticalOperationError(f"The chunk is larger than {MAX_BINARY_BODY_BYTES} bytes.", status=413, code="body_too_large")
-    buffer = bytearray()
-    while len(buffer) <= length:
-        piece = source.read(length + 1 - len(buffer))
-        if not piece:
-            break
-        buffer += piece
-    if len(buffer) != length:
-        raise TacticalOperationError("The chunk does not match its Content-Length.", status=400, code="content_length_mismatch")
+    try:
+        if not operation.binary_body:
+            raise TacticalOperationError("This operation takes no binary body.", status=400, code="binary_body_not_allowed")
+        raw = meta.get("CONTENT_LENGTH")
+        text = raw.strip() if isinstance(raw, str) else ("" if raw is None or isinstance(raw, bool) else str(raw))
+        if not text or len(text) > 12 or not text.isascii() or not text.isdigit():
+            raise TacticalOperationError("The request needs a Content-Length.", status=411, code="length_required")
+        length = int(text)
+        if length > MAX_BINARY_BODY_BYTES:
+            raise TacticalOperationError(f"The chunk is larger than {MAX_BINARY_BODY_BYTES} bytes.", status=413, code="body_too_large")
+        buffer = bytearray()
+        while len(buffer) <= length:
+            piece = source.read(length + 1 - len(buffer))
+            if not piece:
+                break
+            buffer += piece
+        if len(buffer) != length:
+            raise TacticalOperationError("The chunk does not match its Content-Length.", status=400, code="content_length_mismatch")
+    except TacticalOperationError as exc:
+        if exc.audit is None and exc.code in CHUNK_REFUSAL_ROW_CODES:
+            exc.audit = _write_chunk_refusal(request, operation, exc, session, refusal_object_id, correlation_id, row_meta)
+        raise
     header = meta.get("HTTP_CONTENT_RANGE")
     return {"content": bytes(buffer), "content_range": header if isinstance(header, str) else ""}
 
@@ -2022,27 +2185,38 @@ def _end_row_key(session: str) -> str:
     return f"tectac:transfer-end:{session}"
 
 
+def _guard_once(key: str, ttl: int, what: str) -> bool:
+    """True when ``key`` is new in Tactical's shared cache (an atomic ``cache.add``). A cache that is down fails open: True, so the row is
+    written, because a missing audit row is worse than a repeated one (1.18.34: shared by the end-row and the chunk-refusal guards)."""
+    try:
+        from django.core.cache import cache
+
+        return bool(cache.add(key, 1, ttl))
+    except Exception:
+        logger.warning("The transfer %s guard could not reach the cache; the row is written.", what, exc_info=True)
+        return True
+
+
+def _guard_release(key: str, what: str) -> None:
+    """The row could not be written: free the key so a retry can write it."""
+    try:
+        from django.core.cache import cache
+
+        cache.delete(key)
+    except Exception:
+        logger.warning("The transfer %s guard could not be released.", what, exc_info=True)
+
+
 def _end_row_once(session: str) -> bool:
     """True when the end row of this session is still to be written (1.18.33). Tactical's shared cache holds the once-only key.
 
     A cache that is down fails open: the row is written, because a missing end row is worse than a repeated one."""
-    try:
-        from django.core.cache import cache
-
-        return bool(cache.add(_end_row_key(session), 1, TRANSFER_END_TTL_SECONDS))
-    except Exception:
-        logger.warning("The transfer end-row guard could not reach the cache; the end row is written.", exc_info=True)
-        return True
+    return _guard_once(_end_row_key(session), TRANSFER_END_TTL_SECONDS, "end-row")
 
 
 def _end_row_forget(session: str) -> None:
     """The end row could not be written: free the key so a retry can write it."""
-    try:
-        from django.core.cache import cache
-
-        cache.delete(_end_row_key(session))
-    except Exception:
-        logger.warning("The transfer end-row guard could not be released.", exc_info=True)
+    _guard_release(_end_row_key(session), "end-row")
 
 
 def _end_row_extra(operation: TacticalOperation, data: Any, body: dict, session: str | None) -> dict:
@@ -2061,6 +2235,21 @@ def _end_row_extra(operation: TacticalOperation, data: Any, body: dict, session:
     if reason in ("user", "error"):
         extra["transfer_reason"] = reason
     return extra
+
+
+def _failed_end_fields(operation: TacticalOperation, status: int, data: Any, body: dict, session: str | None) -> tuple[dict, str | None]:
+    """The end fields of a transfer that fails at Tactical or the agent (1.18.34, AD-69). Returns ``(extra, session)``.
+
+    For an operation whose role is complete, cancel or fail, answered 4xx or 5xx (401 and 403 are deny rows and 408 is relayed before this; 429
+    asks the caller to retry, the session is still open), and a canonical session id, the failure row Core already writes takes
+    ``transfer_stage: end`` and ``transfer_outcome: failed``, under the same once-only key as the success end row. ``session`` is returned only when
+    this call took the key, so the caller can free it when the row does not record. A repeat (key taken) gets no end fields. Never Tactical's text."""
+    transfer = operation.audit_transfer
+    if not transfer or transfer[0] not in _TRANSFER_END_ROLES or session is None or status == 429:
+        return {}, None
+    if not _end_row_once(session):
+        return {}, None
+    return {**_end_row_extra(operation, data, body, session), "transfer_outcome": "failed"}, session
 
 
 def _text_part(value: Any) -> str:
@@ -2689,9 +2878,13 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
     1.18.33: ``binary_body={content, content_range}`` (bytes and ``'bytes <start>-<end>/<total>'``, as ``read_binary_body`` returns them) is
     the whole body of an operation declared ``binary_body=True``, and only of that one (400 ``binary_body_required`` or
     ``binary_body_not_allowed`` otherwise). Core checks the range (400 ``invalid_content_range``) and the size (413 ``body_too_large``) after the
-    scope checks, writes no row for these refusals, and sends Tactical exactly the bytes. It is a Python keyword, never available over HTTP.
+    scope checks, and sends Tactical exactly the bytes. 1.18.34: each of these refusals writes one limited ``core_refused`` row, one per session
+    and code. It is a Python keyword, never available over HTTP.
     An operation that declares ``audit.transfer`` writes the rows of AD-69 (see the module docstring), and the correlation id of such a
     call that carries a session id in its path is always ``transfer:<session id>``: a ``correlation_id`` passed by the caller is replaced.
+    1.18.34: that holds for every row written after the path parameters are cleaned. A row written before (server_only, a permission refusal,
+    invalid_params) carries ``transfer_session`` null and no transfer correlation id. A complete, cancel or fail that Tactical answers 4xx or 5xx
+    (except 401, 403, 408 and 429) puts the AD-69 end fields (``transfer_outcome: failed``) on its failure row.
 
     Raises TacticalOperationError (``status``, ``code``, ``message``, ``audit``) for Core's own refusals and for a
     failure around the call. A Tactical answer, whatever its status, comes back as the result.
@@ -2704,54 +2897,37 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
     correlation_id = _held_correlation_id(raw_correlation_id)
     operation = _lookup(module_id, operation_id)  # 1. exists and its module is enabled
     # 1.18.33 (AD-69): a transfer operation that acts on an open session joins every one of its rows to the session by the correlation id.
-    transfer_session = _transfer_session(operation, params)
-    transfer_link = _transfer_correlation(transfer_session)
-    transfer_meta = _transfer_meta(operation, transfer_session)
-    early_extra = transfer_meta or None
-    if transfer_link:
-        correlation_id = transfer_link
+    # 1.18.34: the session id is read from the CLEANED path parameters only (step 5). A row written before that (server_only, the permission
+    # refusals, an invalid correlation id, invalid_params) carries transfer_role and transfer_direction and a null transfer_session, and no
+    # transfer:<id> correlation id, so a caller who is refused can never write a row under someone else's session.
+    early_meta = _transfer_meta(operation, None)
+    transfer_session = None
+    transfer_link = None
+    transfer_meta = early_meta
+    early_extra = early_meta or None
     user = getattr(request, "user", None)
     if user is None or not getattr(user, "is_authenticated", False):  # 2.
         raise _fail("unauthenticated", 401, "authentication_required")
 
-    from .rbac import has_extension_permission, tactical_permission_flags
-
-    hint = None
-    try:
-        hint_params = params if isinstance(params, dict) else {}
-        hint = _object_id(_scope_values(operation, hint_params, body if isinstance(body, dict) else {}), operation, hint_params)
-    except TacticalOperationError:
-        hint = _object_id([], operation, params if isinstance(params, dict) else {})
+    hint = _deny_hint(operation, params, body)
     if _via_http_route and operation.server_only:  # 2a. (1.17.19) a server-only operation never runs from the browser route
         raise _refuse(request, operation, "server_only", 403, "operation_server_only", hint, correlation_id, row_extra=early_extra)
-    flags = tactical_permission_flags(user, (*operation.permissions, *operation.permissions_any))  # 3. (1.17.26: all of permissions, one of permissions_any)
-    if not _permissions_hold(operation, flags):
-        raise _refuse(
-            request, operation, "permission_denied", 403, "tactical_permission_denied", hint, correlation_id,
-            text=_missing_flag_text(operation, flags),
-            row_extra={**transfer_meta, "needs_one_of": list(operation.permissions_any)} if operation.permissions_any else early_extra,
-        )
-    if operation.module_permission:  # 4.
-        try:
-            allowed = has_extension_permission(user, operation.module_permission)
-        except Exception:
-            logger.exception("Unable to check module permission %s for operation %s", operation.module_permission, operation.id)
-            allowed = False
-        if not allowed:
-            raise _refuse(request, operation, "module_permission_denied", 403, "module_permission_denied", hint, correlation_id, row_extra=early_extra)
-
-    if operation.caller_scope == "unrestricted" and not _caller_unrestricted(user):  # 4a. (1.17.18) only for no client or site limits
-        raise _refuse(request, operation, "scope_unrestricted_required", 403, "scope_unrestricted_required", hint, correlation_id, row_extra=early_extra)
+    _check_caller_rights(request, operation, user, hint, correlation_id, early_meta)  # 3, 4, 4a. (1.18.34: shared with read_binary_body)
 
     # 1.17.22: a core_refused row names an object only after the path parameters were cleaned. 1.17.45: until then it carries the
     # declared audit.object_id (declared text, never caller input, AD-19 condition 4), so an early refusal still names its object.
     refusal_object_id = operation.audit_object_id
+    chunk_step = False  # 1.18.34: True only while the chunk of step 6a is checked, so a JSON body_too_large writes no row
     try:
         correlation_id = _clean_correlation_id(raw_correlation_id)  # 5. (1.17.21: the two cleaners run here) shape, then scope
-        if transfer_link:
-            correlation_id = transfer_link  # 1.18.33: the session decides; a caller's id was checked above and is replaced
         audit_before = _clean_audit_before(raw_audit_before)
         params = _clean_params(operation, params)  # 5. shape, then scope
+        transfer_session = _transfer_session(operation, params)  # 1.18.34: from the cleaned values; every row from here on carries it
+        transfer_link = _transfer_correlation(transfer_session)
+        transfer_meta = _transfer_meta(operation, transfer_session)
+        early_extra = transfer_meta or None
+        if transfer_link:
+            correlation_id = transfer_link  # 1.18.33: the session decides; a caller's id was checked above and is replaced
         refusal_object_id = _refusal_object_id(operation, params)
         body = _clean_body(operation, body)
         if operation.body_selector and not _selector_holds(operation, body):  # 5a. (1.17.18) never run under another operation's scope or verb
@@ -2773,31 +2949,19 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
         extra: dict = dict(named_count_extra)
         action_now = _action_for(operation, body)  # 1.17.45: the success row's action (audit.action_by_body)
         unknown_extra = {**named_count_extra, "declared_action": action_now} if operation.audit_action_by_body else named_count_extra
-        if entries:
-            from . import resources_adapter as adapter
-
-            for spec, kind, ids in entries:
-                if spec.row_lookup:
-                    # CQ56 a, CQ57: the owning module says which agent the row belongs to. A row with no agent is allowed to anyone
-                    # who holds the Tactical flag (Tactical decides); a row with an agent is held to the caller's role scope.
-                    agent_id = _row_lookup_agent(operation, spec, ids[0])
-                    if agent_id is _LOOKUP_FAILED:
-                        raise _refuse(request, operation, "not_found", 404, "object_not_found", scope_object_id, correlation_id, row_extra=count_extra)
-                    extra["scope_source"] = "row_lookup"
-                    extra["agentless"] = agent_id is None
-                    if agent_id is not None and not adapter.objects_in_role_scope(user=user, resource_type="agent", identifiers=[agent_id]):
-                        raise _refuse(request, operation, "not_found", 404, "object_not_found", scope_object_id, correlation_id, row_extra=count_extra)
-                elif kind == "agent_pk":
-                    if not adapter.agent_pks_in_role_scope(user=user, pks=ids):
-                        raise _refuse(request, operation, "not_found", 404, "object_not_found", scope_object_id, correlation_id, row_extra=count_extra)
-                elif not adapter.objects_in_role_scope(user=user, resource_type=kind, identifiers=ids):
-                    raise _refuse(request, operation, "not_found", 404, "object_not_found", scope_object_id, correlation_id, row_extra=count_extra)
+        _check_role_scope(request, operation, user, entries, scope_object_id, correlation_id, count_extra, extra)  # 1.18.34: shared with read_binary_body
         _check_whitelist(operation, body)  # 6.
-        binary = _clean_binary_body(operation, binary_body)  # 6a. (1.18.33) after the scope checks; these refusals write no row
+        chunk_step = True
+        binary = _clean_binary_body(operation, binary_body)  # 6a. (1.18.33) after the scope checks; 1.18.34: a refusal writes one limited row
     except TacticalOperationError as exc:
         # 1.17.21: Core's own refusal of a change writes one row. An error that already carries a verdict (a deny row) keeps it.
-        if exc.audit is None and exc.code in CORE_REFUSAL_ROW_CODES and operation.method != "GET":
-            exc.audit = _write_core_refusal(request, operation, exc, refusal_object_id, correlation_id, row_extra=early_extra)
+        # early_extra is the full transfer metadata once the path parameters were cleaned, and the early one (null session) when cleaning failed.
+        if exc.audit is None and operation.method != "GET":
+            if exc.code in CORE_REFUSAL_ROW_CODES:
+                exc.audit = _write_core_refusal(request, operation, exc, refusal_object_id, correlation_id, row_extra=early_extra)
+            elif chunk_step and exc.code in CHUNK_REFUSAL_ROW_CODES:
+                # 1.18.34 (AD-69): one row per session and code; a repeat leaves exc.audit None
+                exc.audit = _write_chunk_refusal(request, operation, exc, transfer_session, refusal_object_id, correlation_id, transfer_meta)
         raise
 
     from django.urls import resolve  # 7.
@@ -2929,15 +3093,22 @@ def run_tactical_operation(request, module_id, operation_id, params=None, body=N
         # carries no before or after value and none of Tactical's own text.
         failed_extra = {key: value for key, value in extra.items() if not key.startswith("before")}
         failed_extra.update(declared_action=action_now, result="failed", failure="tactical_refused")
+        end_fields, end_session = _failed_end_fields(operation, status, data, body, transfer_session)  # 1.18.34 (AD-69)
+        failed_extra.update(end_fields)
         audit = _write_row(
             request, operation, action=FAILED_ACTION, object_id=object_id,
             message=FAILED_MESSAGE.format(status=status), tactical_status=status, extra=failed_extra, correlation_id=correlation_id,
         )
+        if end_session is not None and not audit.get("recorded"):
+            _end_row_forget(end_session)
     elif status >= 500 and operation.method != "GET":
+        end_fields, end_session = _failed_end_fields(operation, status, data, body, transfer_session)  # 1.18.34 (AD-69)
         audit = _write_row(
             request, operation, action=OUTCOME_UNKNOWN_ACTION, object_id=object_id, message=OUTCOME_UNKNOWN_MESSAGE, tactical_status=status,
-            correlation_id=correlation_id, extra=unknown_extra,
+            correlation_id=correlation_id, extra={**unknown_extra, **end_fields},
         )
+        if end_session is not None and not audit.get("recorded"):
+            _end_row_forget(end_session)
 
     headers = {}
     for name in RELAYED_HEADERS:
@@ -3194,7 +3365,7 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
             "binary_body (register_tactical_operation(binary_body=)), shown as binary_body",
             "binary_response (register_tactical_operation(binary_response=)), shown as binary_response",
             "audit.transfer (register_tactical_operation audit={... 'transfer': {'role', 'direction'}}), shown as audit.transfer",
-            "run(binary_body=) and read_binary_body(request, module_id, operation_id) of tec_tac.tactical_operations",
+            "run(binary_body=) and read_binary_body(request, module_id, operation_id, *, params=None) of tec_tac.tactical_operations",
         ],
         "transfer_roles": list(TRANSFER_ROLES),
         "transfer_directions": list(TRANSFER_DIRECTIONS),
@@ -3202,9 +3373,15 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
             "invalid_content_range", "binary_body_required", "binary_body_not_allowed", "length_required", "content_length_mismatch",
             "body_too_large (a chunk over limits.binary_body_bytes)",
         ],
-        "refusal_codes_without_row_added_in_1_18_0": [
-            "invalid_content_range", "binary_body_required", "binary_body_not_allowed", "length_required", "content_length_mismatch", "body_too_large",
-        ],
+        # 1.18.34: these six write one limited core_refused row (see chunk_refusal_row_codes); the old key that listed them as "without row" is gone.
+        "chunk_refusal_row_codes": list(CHUNK_REFUSAL_ROW_CODES),
+        "chunk_refusal_rows_added_in_1_18_0": (
+            "A binary chunk refusal (the codes of chunk_refusal_row_codes, raised by run_tactical_operation for a chunk or by read_binary_body) writes one "
+            "custom:operation-failed row with failure core_refused, the code, the status, transfer_role, transfer_direction and transfer_session, and "
+            "the correlation id transfer:<session id>; once per session and code, so at most one row each (a once-only key in Tactical's shared cache, kept two hours, "
+            "failing open; without a session id, per user and operation). A repeat writes no row and the error carries no audit verdict. A body_too_large "
+            "of a JSON body writes no row. The row holds no chunk bytes, no Content-Range text and no caller text"
+        ),
         "behaviour_added_in_1_18_0": [
             (
                 "binary_body: a PUT or POST operation (not with upload, body_fields, file_response or body_selector) whose whole body is one binary chunk. "
@@ -3215,7 +3392,10 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
                 "after the permission, scope and role checks. Tactical receives the exact bytes as application/octet-stream with Content-Length and "
                 "HTTP_CONTENT_RANGE set from the validated value; a Content-Range of the inbound request never reaches any operation. A binary operation "
                 "called without binary_body is 400 binary_body_required, and binary_body given to any other operation is 400 binary_body_not_allowed. "
-                "The binary body is never available over Core's HTTP route. These refusals write no Core row, and the bytes never reach a log, a row or an error"
+                "The binary body is never available over Core's HTTP route. Since 1.18.34 these refusals write one limited core_refused row (see "
+                "chunk_refusal_rows_added_in_1_18_0), and the bytes never reach a log, a row or an error. Since 1.18.34 read_binary_body(request, "
+                "module_id, operation_id, *, params=None) first requires an authenticated request and runs the Tactical flag, module permission and "
+                "caller_scope checks, and with params the role-scope check, before it reads the stream, with the same deny rows as run_tactical_operation"
             ),
             (
                 "binary_response: a GET or POST operation (not with file_response) whose answer Core relays with Content-Range, X-Chunk-Start and X-Chunk-End "
@@ -3233,9 +3413,14 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
                 "transfer_reason user or error only when the body says exactly that). Once per session: a repeated complete or cancel writes no second "
                 "end row (a once-only key in Tactical's shared cache, kept two hours; a cache that is down fails open). A chunk, ack or status call writes "
                 "no row on success; when Core or Tactical refuses it, the usual deny, custom:operation-failed or custom:outcome-unknown row is written and "
-                "carries transfer_role, transfer_direction and transfer_session. Every row of a call that carries the session id in its path has the "
+                "carries transfer_role, transfer_direction and transfer_session. Every row written after the path parameters are cleaned has the "
                 "correlation id transfer:<session id>, and so has the init row once Tactical answers; a correlation_id passed by the caller to a "
-                "transfer operation is replaced by it. File content and Tactical's own text never reach a row"
+                "transfer operation is replaced by it. A row written before the cleaning (server_only, a permission or caller-scope refusal, an invalid "
+                "correlation id, invalid_params) carries transfer_role and transfer_direction with transfer_session null and no transfer correlation id "
+                "(1.18.34). A complete, cancel or fail that Tactical answers 4xx or 5xx (except 401 and 403, which stay deny rows, 408 and 429) writes its "
+                "failure row (custom:operation-failed, or custom:outcome-unknown for 5xx) with transfer_stage end and transfer_outcome failed, under the "
+                "same once-only key as the success end row; a later success for that session writes no second end row (1.18.34). File content and "
+                "Tactical's own text never reach a row"
             ),
             (
                 "an operation that declares audit.transfer relays Tactical's 408 (retry) unchanged and writes no row for it, and result.audit is empty; its 204 "
@@ -3243,7 +3428,7 @@ def tactical_operations_contract_metadata() -> dict[str, Any]:
                 "writes custom:operation-failed and a 204 on a DELETE still writes its success row"
             ),
         ],
-        "refusal_row_codes": list(CORE_REFUSAL_ROW_CODES),
+        "refusal_row_codes": list(CORE_REFUSAL_ROW_CODES),  # the six AD-19 codes, unchanged; the chunk codes are in chunk_refusal_row_codes
         "audit_actions_core_only": ["deny", OUTCOME_UNKNOWN_ACTION, FAILED_ACTION],
         "refusal_codes_added_in_1_3_0": ["authenticated_request_required", "invalid_correlation_id", "invalid_audit_before"],
         "refusal_codes_added_in_1_1_0": ["query_field_not_allowed", "invalid_query", "upload_not_allowed", "upload_too_large", "upload_type_not_allowed", "invalid_upload"],

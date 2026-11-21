@@ -42,5 +42,6 @@ python3 "${ROOT}/tests/migration-no-floating-dependency-1.18.31.py"
 python3 "${ROOT}/tests/communicator-service-user-1.18.31.py"
 python3 "${ROOT}/tests/communicator-service-user-defaults-1.18.32.py"
 python3 "${ROOT}/tests/tactical-operation-file-transfer-1.18.33.py"
+python3 "${ROOT}/tests/tactical-operation-file-transfer-audit-1.18.34.py"
 
 echo "[TEST] PASS release integrity ${VERSION}"

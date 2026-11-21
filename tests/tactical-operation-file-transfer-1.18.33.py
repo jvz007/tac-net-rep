@@ -305,11 +305,15 @@ def helper(request, op_id="upload-chunk"):
 
 
 def helper_error(request, status, code, op_id="upload-chunk"):
+    del ROWS[:]
+    CACHE.data.clear()
     try:
         helper(request, op_id)
     except ops.TacticalOperationError as exc:
         must(exc.status == status and exc.code == code, (exc.status, exc.code, exc.message))
-        must(exc.audit is None, "a helper refusal writes no row")
+        # 1.18.34: a helper refusal writes one limited core_refused row (was: no row in 1.18.33)
+        must(len(ROWS) == 1 and ROWS[0]["action"] == "custom:operation-failed" and meta(ROWS[0])["failure"] == "core_refused" and meta(ROWS[0])["code"] == code, ROWS)
+        must(exc.audit is not None and exc.audit.get("recorded"), exc.audit)
         return exc
     raise AssertionError(f"expected {status} {code}")
 
@@ -371,8 +375,10 @@ must("HTTP_AUTHORIZATION" not in sent.META and "HTTP_COOKIE" not in sent.META, "
 # 4 MiB + 64 KiB passes the run check too (the range matches it); one byte over is 413
 edge = chunk(CAP, start=0, total=CAP + 5)
 must(run("remote-background", "upload-chunk", PS, binary=edge).status == 200, "cap passes")
+CACHE.data.clear()
 refusal(lambda: run("remote-background", "upload-chunk", PS, binary=chunk(CAP + 1, start=0, total=CAP + 10)), 413, "body_too_large")
-must(not SEEN and not ROWS, "an oversize chunk never reaches Tactical and writes no row")
+# 1.18.34: the refusal writes one limited core_refused row (was: no row in 1.18.33)
+must(not SEEN and len(ROWS) == 1 and meta(ROWS[0])["failure"] == "core_refused" and meta(ROWS[0])["code"] == "body_too_large", "an oversize chunk never reaches Tactical and writes one row")
 # a bytearray and a memoryview are accepted and sent as bytes
 for kind in (bytearray, memoryview):
     item = {"content": kind(b"abc"), "content_range": "bytes 3-5/9"}
@@ -385,19 +391,27 @@ print("       binary_body: a 4 MiB chunk reaches Tactical's view byte for byte w
 
 # bad ranges: 400 invalid_content_range, Tactical never called, no row
 good = b"abcd"
+CACHE.data.clear()
+first_range = True
 for bad in ("bytes 0-3/3", "bytes 4-3/10", "bytes 0-4/10", "bytes 0-2/10", "bytes 0-3/*", "bytes */4", "bytes 0-3", "text", "", "bytes 0-3/10 ",
             " bytes 0-3/10", "bytes 0-3/10\n", "BYTES 0-3/10", "bytes 0 - 3/10", "bytes -1-3/10", "bytes 0-3/-10", "bytes 0-3/1e1", "bytes 0-3/" + "9" * 20,
             "bytes " + "9" * 20 + "-" + "9" * 20 + "/" + "9" * 20, "bytes ٠-٣/١٠", "items 0-3/10", "bytes 0-3/10/4", None, 7, b"bytes 0-3/10", ["bytes 0-3/10"]):
     refusal(lambda bad=bad: run("remote-background", "upload-chunk", PS, binary={"content": good, "content_range": bad}), 400, "invalid_content_range")
-    must(not SEEN and not ROWS, f"Tactical never called and no row for {bad!r}")
+    # 1.18.34: the first refusal of the session and code writes the row, every repeat writes none (was: no row in 1.18.33)
+    must(not SEEN and len(ROWS) == (1 if first_range else 0), f"Tactical never called; one row for the first refusal only: {bad!r}")
+    first_range = False
 run("remote-background", "upload-chunk", PS, binary={"content": good, "content_range": "bytes 0-3/4"})  # the edge: end == total - 1
 must(SEEN, "the exact fit passes")
 refusal(lambda: run("remote-background", "upload-chunk", PS, binary={"content": b"", "content_range": "bytes 0-0/1"}), 400, "invalid_content_range")
+must(not ROWS, "a repeat of the code in the same session writes no second row")
 print("       a bad Content-Range (end >= total, start > end, length mismatch, text, '*' total, 20 digits ...) is 400 invalid_content_range; Tactical never called")
 
 # required and not allowed
+CACHE.data.clear()
 refusal(lambda: run("remote-background", "upload-chunk", PS), 400, "binary_body_required")
+must(len(ROWS) == 1 and meta(ROWS[0])["code"] == "binary_body_required", ROWS)  # 1.18.34: one limited row
 refusal(lambda: run("remote-background", "upload-chunk", PS, body={"a": 1}), 400, "body_field_not_allowed")
+must(len(ROWS) == 1 and meta(ROWS[0])["code"] == "body_field_not_allowed", "an AD-19 code still writes its row")
 for bad in ("bytes", {"content": b"x"}, {"content": b"x", "content_range": "bytes 0-0/1", "extra": 1}, {"content": "text", "content_range": "bytes 0-3/4"},
             {"content": 5, "content_range": "bytes 0-0/1"}, [b"x"]):
     refusal(lambda bad=bad: run("remote-background", "upload-chunk", PS, binary=bad), 400, "binary_body_required")
@@ -405,8 +419,8 @@ must(not SEEN, "never called")
 serve("upload-complete", json_view(200, {"status": "completed", "committed_offset": 8}))
 refusal(lambda: run("remote-background", "upload-complete", PS, binary=chunk(4)), 400, "binary_body_not_allowed")
 refusal(lambda: run("remote-background", "upload-init", P, {"path": "C:\\x"}, binary=chunk(4)), 400, "binary_body_not_allowed")
-must(not SEEN and not ROWS, "no Tactical call and no row for these refusals")
-print("       binary_body_required (binary op without it) and binary_body_not_allowed (any other op with it), no row")
+must(not SEEN and len(ROWS) == 1 and meta(ROWS[0])["code"] == "binary_body_not_allowed" and meta(ROWS[0])["transfer_role"] == "init", ROWS)
+print("       binary_body_required (binary op without it) and binary_body_not_allowed (any other op with it), one limited row each, no Tactical call")
 
 # binary_body is checked after the scope: a caller out of scope is refused for scope, not for the chunk
 refusal(lambda: run("remote-background", "upload-chunk", {"agent_id": "z" * 21, "session_id": SID}, binary={"content": b"x", "content_range": "bad"}), 404, "object_not_found")
@@ -571,12 +585,14 @@ def boom(request, *a, **k):
 ROUTES[paths()["upload-chunk"]] = (boom, (), {})
 refusal(lambda: run("remote-background", "upload-chunk", PS, binary=chunk(10)), 502, "tactical_call_failed")
 must(len(ROWS) == 1 and ROWS[0]["action"] == "custom:outcome-unknown" and corr(ROWS[0]) == f"transfer:{SID}" and meta(ROWS[0])["transfer_role"] == "chunk", ROWS)
-# Core's own refusals of a chunk carry the session link as well (permission, module, scope)
+# Core's own refusals of a chunk: before the path is cleaned (permission) they carry role and direction only (1.18.34)
 poor = User("poor", Roleish())
 poor.sees = tech.sees
 del ROWS[:]
 refusal(lambda: ops.run_tactical_operation(Request(poor), "remote-background", "upload-chunk", PS, binary_body=chunk(10)), 403, "tactical_permission_denied")
-must(len(ROWS) == 1 and ROWS[0]["action"] == "deny" and corr(ROWS[0]) == f"transfer:{SID}" and meta(ROWS[0])["transfer_role"] == "chunk", ROWS)
+# 1.18.34: a row written before the path parameters are cleaned has a null session and no transfer correlation id (was: the session and the link)
+must(len(ROWS) == 1 and ROWS[0]["action"] == "deny" and corr(ROWS[0]) == "req-1" and meta(ROWS[0])["transfer_role"] == "chunk"
+     and meta(ROWS[0])["transfer_direction"] == "upload" and meta(ROWS[0])["transfer_session"] is None, ROWS)
 # a caller-supplied correlation_id is replaced
 serve("upload-chunk", FakeResponse(500, b"{}"))
 run("remote-background", "upload-chunk", PS, binary=chunk(10), correlation_id="caller-chose-this")
@@ -585,7 +601,7 @@ refusal(lambda: run("remote-background", "upload-chunk", PS, binary=chunk(10), c
 # an invalid session id: refused as invalid_params; the row (non-GET, core_refused) carries no link and no session
 refusal(lambda: run("remote-background", "upload-chunk", {"agent_id": AGENT, "session_id": "not-a-uuid"}, binary=chunk(10)), 400, "invalid_params")
 must(len(ROWS) == 1 and meta(ROWS[0])["transfer_session"] is None and corr(ROWS[0]) != "transfer:not-a-uuid", ROWS)
-print("       refusal rows of a chunk carry transfer_role, transfer_direction, transfer_session and the transfer correlation id; a caller's id is replaced")
+print("       refusal rows of a chunk carry transfer_role, transfer_direction, transfer_session and the transfer correlation id once the path is cleaned; a caller's id is replaced")
 
 # ===================================================================================== rows: a whole upload
 fresh()
@@ -855,9 +871,12 @@ if MODULES.is_dir() and (MODULES / "catalog.toml").is_file():
             if "tests" in file.parts:
                 continue
             text_ = file.read_text(encoding="utf-8")
-            for name in NEW_NAMES:
-                must(name not in text_, f"{folder.name} already uses {name}: re-check the compatibility of this release")
-            must("'transfer'" not in text_ and '"transfer"' not in text_, f"{folder.name} already declares audit.transfer")
+            # 1.18.34: remote-background 0.11.4 is the module these additions were made for and now declares them (re-checked for 1.18.34:
+            # it passes binary_body to run and declares audit.transfer; it does not call read_binary_body yet). Every other module must not.
+            if folder.name != "remote-background":
+                for name in NEW_NAMES:
+                    must(name not in text_, f"{folder.name} already uses {name}: re-check the compatibility of this release")
+                must("'transfer'" not in text_ and '"transfer"' not in text_, f"{folder.name} already declares audit.transfer")
             for node in ast.walk(ast.parse(text_)):
                 if isinstance(node, ast.Dict):
                     keys = [k.value for k in node.keys if isinstance(k, ast.Constant) and isinstance(k.value, str)]
@@ -869,7 +888,8 @@ if MODULES.is_dir() and (MODULES / "catalog.toml").is_file():
                         audit_node = node.values[[k.value if isinstance(k, ast.Constant) else None for k in node.keys].index("audit")]
                         if isinstance(audit_node, ast.Dict):
                             audit_keys = {k.value for k in audit_node.keys if isinstance(k, ast.Constant)}
-                            must(audit_keys <= OLD_AUDIT_KEYS, f"{folder.name} {file.name}: audit keys {sorted(audit_keys - OLD_AUDIT_KEYS)}")
+                            allowed_audit = OLD_AUDIT_KEYS | ({"transfer"} if folder.name == "remote-background" else set())
+                            must(audit_keys <= allowed_audit, f"{folder.name} {file.name}: audit keys {sorted(audit_keys - allowed_audit)}")
                 if isinstance(node, ast.Call) and getattr(node.func, "id", getattr(node.func, "attr", "")) == "register_tactical_operation":
                     names = {kw.arg for kw in node.keywords if kw.arg}
                     must(names <= set(sig), f"{folder.name}: register_tactical_operation keywords {sorted(names - set(sig))}")
