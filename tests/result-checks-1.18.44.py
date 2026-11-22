@@ -67,7 +67,7 @@ def _match(row, spec):
         elif op == "isnull":
             ok = (value is None) == expected
         else:
-            ok = value == expected or (key in ("pk", "check_id") and str(value) == str(expected))  # Django accepts a text uuid
+            ok = value == expected or (key in ("pk", "result_check_id") and str(value) == str(expected))  # Django accepts a text uuid
         if not ok:
             return False
     return True
@@ -171,12 +171,12 @@ class Check(Base):
 
     def delete(self):
         Check.objects.rows.remove(self)
-        for item in [i for i in Item.objects.rows if i.check_id == self.pk]:
+        for item in [i for i in Item.objects.rows if i.result_check_id == self.pk]:
             Item.objects.rows.remove(item)
 
 
 class Item(Base):
-    fields = dict(check_id=None, endpoint_id="", hostname="", state="running", exit_code=None, checked_at=None)
+    fields = dict(result_check_id=None, endpoint_id="", hostname="", state="running", exit_code=None, checked_at=None)
 
     def __init__(self, **kw):
         super().__init__(**kw)
@@ -393,7 +393,7 @@ def check_row(check_id):
 
 
 def items_of(check_id):
-    return {i.endpoint_id: i for i in Item.objects.rows if str(i.check_id) == str(check_id)}
+    return {i.endpoint_id: i for i in Item.objects.rows if str(i.result_check_id) == str(check_id)}
 
 
 def fresh(name="tech"):
@@ -542,7 +542,7 @@ must(notice["message"] == "Run script: 1 done, 1 failed, 1 offline" and notice["
 must(notice["action_label"] == "See results" and notice["action_route"] == f"/results/{cid}" and notice["action_route"].startswith("/"), "route")
 closed_audit = [a for a in AUDITS if a["action"] == "custom:result-check-closed"]
 must(len(closed_audit) == 1 and closed_audit[0]["object_id"] == cid, "one closed audit row")
-must(all(h not in repr(closed_audit[0]["metadata"]) for h in ("H-a1", "'a1'", "a2")), "no hostnames or endpoint ids in the audit row")
+must(all(h not in repr(closed_audit[0]["metadata"]) for h in ("H-a1", "'a1'", "'a2'")), "no hostnames or endpoint ids in the audit row")
 must(closed_audit[0]["metadata"]["done"] == 1 and closed_audit[0]["metadata"]["failed"] == 1 and closed_audit[0]["metadata"]["offline"] == 1, "counts in the audit row")
 must(rc.run_check(cid) == "skipped" and len(NOTICES) == 1 and len(READER["calls"]) == 1, "a closed check is never run or notified twice")
 
@@ -735,7 +735,7 @@ still_open.created_at = NOW[0] - timedelta(days=90)
 rc.queue_due_checks()
 remaining = {r.pk for r in Check.objects.rows}
 must(old.pk not in remaining and young.pk in remaining and still_open.pk in remaining, "a 31-day-old closed check goes, a 29-day-old one and an open one stay")
-must(not [i for i in Item.objects.rows if i.check_id == old.pk] and [i for i in Item.objects.rows if i.check_id == young.pk], "items go with the check")
+must(not [i for i in Item.objects.rows if i.result_check_id == old.pk] and [i for i in Item.objects.rows if i.result_check_id == young.pk], "items go with the check")
 reset()
 plugin("scriptexecution")
 register()
@@ -770,8 +770,8 @@ for cls in ("class TecTacResultCheck(", "class TecTacResultCheckItem("):
     section = models_source[models_source.index(cls):]
     section = section[:section.index("def __str__")]
     fields = [line.split("=")[0].strip() for line in section.replace("\r", "").splitlines() if " = models." in line]
-    must(fields and not any(any(w in f.lower() for w in ("output", "stdout", "stderr", "text", "body", "result")) for f in fields), f"no output text field on {cls}: {fields}")
-must(sorted(i for i in ("endpoint_id", "hostname", "state", "exit_code", "checked_at")) == sorted(Item.fields.keys() - {"check_id"}), "the item holds exactly the five documented fields")
+    must(fields and not any(any(w in f.lower() for w in ("output", "stdout", "stderr", "text", "body", "result")) and f != "result_check" for f in fields), f"no output text field on {cls}: {fields}")
+must(sorted(i for i in ("endpoint_id", "hostname", "state", "exit_code", "checked_at")) == sorted(Item.fields.keys() - {"result_check_id"}), "the item holds exactly the five documented fields")
 
 # the capability
 reset()

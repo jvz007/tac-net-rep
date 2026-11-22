@@ -47,7 +47,7 @@ class Migration(migrations.Migration):
                 ("state", models.CharField(default="running", max_length=16)),
                 ("exit_code", models.IntegerField(blank=True, null=True)),
                 ("checked_at", models.DateTimeField(blank=True, null=True)),
-                ("check", models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name="items", to="tec_tac.tectacresultcheck")),
+                ("result_check", models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name="items", to="tec_tac.tectacresultcheck")),
             ],
         ),
         migrations.AddIndex(
@@ -64,10 +64,10 @@ class Migration(migrations.Migration):
         ),
         migrations.AddConstraint(
             model_name="tectacresultcheckitem",
-            constraint=models.UniqueConstraint(fields=("check", "endpoint_id"), name="tectac_rescheckitem_unique"),
+            constraint=models.UniqueConstraint(fields=("result_check", "endpoint_id"), name="tectac_rescheckitem_unique"),
         ),
         migrations.AddIndex(
             model_name="tectacresultcheckitem",
-            index=models.Index(fields=["check", "state"], name="tectac_rescheckitem_state_idx"),
+            index=models.Index(fields=["result_check", "state"], name="tectac_rescheckitem_state_idx"),
         ),
     ]

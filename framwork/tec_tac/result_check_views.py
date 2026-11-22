@@ -53,9 +53,9 @@ class ResultCheckView(APIView):
             return _not_found()
         if page is None or page_size is None:
             return Response({"detail": f"page must be a positive whole number and page_size a whole number from 1 to {MAX_PAGE_SIZE}."}, status=400)
-        counts = result_checks.summarise(TecTacResultCheckItem.objects.filter(check_id=row.pk).values_list("state", flat=True))
+        counts = result_checks.summarise(TecTacResultCheckItem.objects.filter(result_check_id=row.pk).values_list("state", flat=True))
         offset = (page - 1) * page_size
-        rows = TecTacResultCheckItem.objects.filter(check_id=row.pk).order_by("hostname", "endpoint_id")[offset:offset + page_size]
+        rows = TecTacResultCheckItem.objects.filter(result_check_id=row.pk).order_by("hostname", "endpoint_id")[offset:offset + page_size]
         total = counts["total"]
         return Response({
             "id": str(row.pk),

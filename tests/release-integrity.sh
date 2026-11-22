@@ -58,6 +58,7 @@ python3 "${ROOT}/tests/online-upgrade-batch-1.18.42.py"
 python3 "${ROOT}/tests/module-dispatch-unit-1.18.42.py"
 python3 "${ROOT}/tests/system-version-picker-1.18.43.py"
 python3 "${ROOT}/tests/result-checks-1.18.44.py"
-python3 "${ROOT}/tests/version-1.18.44.py"
+python3 "${ROOT}/tests/result-checks-system-check-1.18.45.py"
+python3 "${ROOT}/tests/version-1.18.45.py"
 
 echo "[TEST] PASS release integrity ${VERSION}"

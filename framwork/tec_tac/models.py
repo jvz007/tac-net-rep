@@ -864,7 +864,7 @@ class TecTacResultCheck(models.Model):
 class TecTacResultCheckItem(models.Model):
     """One endpoint of a result check: its state, exit code and hostname. No output text is ever stored here."""
 
-    check = models.ForeignKey(TecTacResultCheck, on_delete=models.CASCADE, related_name="items")
+    result_check = models.ForeignKey(TecTacResultCheck, on_delete=models.CASCADE, related_name="items")
     endpoint_id = models.CharField(max_length=200)
     hostname = models.CharField(max_length=255, blank=True, default="")
     state = models.CharField(max_length=16, default="running")
@@ -873,10 +873,10 @@ class TecTacResultCheckItem(models.Model):
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=("check", "endpoint_id"), name="tectac_rescheckitem_unique"),
+            models.UniqueConstraint(fields=("result_check", "endpoint_id"), name="tectac_rescheckitem_unique"),
         ]
         indexes = [
-            models.Index(fields=("check", "state"), name="tectac_rescheckitem_state_idx"),
+            models.Index(fields=("result_check", "state"), name="tectac_rescheckitem_state_idx"),
         ]
 
     def __str__(self):

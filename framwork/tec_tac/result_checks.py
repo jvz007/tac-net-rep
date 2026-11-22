@@ -323,7 +323,7 @@ def start(user, *, reader_id, label, endpoint_ids, job_ref, deadline_seconds) ->
             user=locked, module_id=definition.module_id, reader_id=definition.id, label=text, job_ref=ref, status=OPEN,
             next_check_at=now + timedelta(seconds=FIRST_CHECK_SECONDS), deadline_at=now + timedelta(seconds=deadline_seconds),
         )
-        TecTacResultCheckItem.objects.bulk_create([TecTacResultCheckItem(check_id=check.pk, endpoint_id=item, state=RUNNING) for item in ids], batch_size=500)
+        TecTacResultCheckItem.objects.bulk_create([TecTacResultCheckItem(result_check_id=check.pk, endpoint_id=item, state=RUNNING) for item in ids], batch_size=500)
     return str(check.pk)
 
 
@@ -336,7 +336,7 @@ def _items_to_read(check_pk) -> list:
     """At most 500 running items, the ones checked longest ago first (never checked first), so a 1000-endpoint check rotates."""
     from .models import TecTacResultCheckItem
 
-    running = TecTacResultCheckItem.objects.filter(check_id=check_pk, state=RUNNING)
+    running = TecTacResultCheckItem.objects.filter(result_check_id=check_pk, state=RUNNING)
     items = list(running.filter(checked_at__isnull=True).order_by("id")[:READ_BATCH])
     if len(items) < READ_BATCH:
         items += list(running.filter(checked_at__isnull=False).order_by("checked_at")[:READ_BATCH - len(items)])
@@ -408,8 +408,8 @@ def _close(row, now, *, starter, reason: str) -> str:
         won = TecTacResultCheck.objects.filter(pk=row.pk, status=OPEN).update(status=CLOSED, closed_at=now, running_until=None, queued_until=None)
         if not won:
             return "skipped"
-        TecTacResultCheckItem.objects.filter(check_id=row.pk, state=RUNNING).update(state=NO_RESULT, checked_at=now)
-    counts = summarise(TecTacResultCheckItem.objects.filter(check_id=row.pk).values_list("state", flat=True))
+        TecTacResultCheckItem.objects.filter(result_check_id=row.pk, state=RUNNING).update(state=NO_RESULT, checked_at=now)
+    counts = summarise(TecTacResultCheckItem.objects.filter(result_check_id=row.pk).values_list("state", flat=True))
     notified = False
     if starter is not None:
         try:
@@ -447,7 +447,7 @@ def run_check(check_id, now=None) -> str:
         items = _items_to_read(row.pk)
         if items:
             _apply_answer(items, _ask_reader(row, starter, [item.endpoint_id for item in items]), now)
-        nothing_running = not TecTacResultCheckItem.objects.filter(check_id=row.pk, state=RUNNING).exists()
+        nothing_running = not TecTacResultCheckItem.objects.filter(result_check_id=row.pk, state=RUNNING).exists()
         if nothing_running or now >= row.deadline_at:
             return _close(row, now, starter=starter, reason="finished" if nothing_running else "deadline")
         TecTacResultCheck.objects.filter(pk=row.pk).update(next_check_at=now + timedelta(seconds=INTERVAL_SECONDS), running_until=None, queued_until=None)
